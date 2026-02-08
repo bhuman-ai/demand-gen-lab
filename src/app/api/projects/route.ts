@@ -12,6 +12,7 @@ type Project = {
   offers: string;
   proof: string;
   createdAt: string;
+  updatedAt?: string;
 };
 
 async function readProjects() {
@@ -58,4 +59,48 @@ export async function POST(request: Request) {
   await writeProjects(projects);
 
   return NextResponse.json({ project });
+}
+
+export async function PATCH(request: Request) {
+  const body = await request.json();
+  const id = String(body?.id ?? "").trim();
+  if (!id) {
+    return NextResponse.json({ error: "id is required" }, { status: 400 });
+  }
+
+  const projects = await readProjects();
+  const index = projects.findIndex((project) => project.id === id);
+  if (index < 0) {
+    return NextResponse.json({ error: "project not found" }, { status: 404 });
+  }
+
+  const next = { ...projects[index] } as Project;
+  const fields = ["website", "brandName", "tone", "targetBuyers", "offers", "proof"] as const;
+  for (const field of fields) {
+    if (field in body && typeof body[field] === "string") {
+      (next as any)[field] = String(body[field]);
+    }
+  }
+  next.updatedAt = new Date().toISOString();
+  projects[index] = next;
+  await writeProjects(projects);
+
+  return NextResponse.json({ project: next });
+}
+
+export async function DELETE(request: Request) {
+  const body = await request.json();
+  const id = String(body?.id ?? "").trim();
+  if (!id) {
+    return NextResponse.json({ error: "id is required" }, { status: 400 });
+  }
+
+  const projects = await readProjects();
+  const next = projects.filter((project) => project.id !== id);
+  if (next.length === projects.length) {
+    return NextResponse.json({ error: "project not found" }, { status: 404 });
+  }
+  await writeProjects(next);
+
+  return NextResponse.json({ deletedId: id });
 }

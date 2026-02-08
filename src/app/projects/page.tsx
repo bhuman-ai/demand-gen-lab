@@ -15,7 +15,7 @@ export default async function Page() {
   const projects = await loadProjects();
   return (
     <div className="space-y-4">
-      <h1 className="text-xl font-semibold text-[color:var(--foreground)]">Projects Hub</h1>
+      <h1 className="text-xl font-semibold text-[color:var(--foreground)]">Brands Hub</h1>
       <ProjectList projects={projects} />
     </div>
   );

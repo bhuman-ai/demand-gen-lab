@@ -2,17 +2,53 @@
 
 import { useState } from "react";
 
-const mockPrefill = {
-  brandName: "Example Artist Studio",
-  tone: "Precise, confident, technical",
-  targetBuyers: "Indie game studios, YouTube creators, small agencies",
-  offers: "Key art, thumbnail packs, character concepts",
-  proof: "5+ shipped indie titles, 2M+ thumbnail impressions",
+type Prefill = {
+  brandName: string;
+  tone: string;
+  targetBuyers: string;
+  offers: string;
+  proof: string;
 };
 
 export default function Page() {
   const [website, setWebsite] = useState("");
-  const [prefill, setPrefill] = useState<typeof mockPrefill | null>(null);
+  const [prefill, setPrefill] = useState<Prefill>({
+    brandName: "",
+    tone: "",
+    targetBuyers: "",
+    offers: "",
+    proof: "",
+  });
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+
+  const handleScrape = async () => {
+    setError("");
+    setLoading(true);
+    try {
+      const response = await fetch("/api/intake/prefill", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url: website }),
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        setError(data?.error ?? "Prefill failed");
+      } else {
+        setPrefill({
+          brandName: data?.prefill?.brandName ?? "",
+          tone: data?.prefill?.tone ?? "",
+          targetBuyers: data?.prefill?.targetBuyers ?? "",
+          offers: data?.prefill?.offers ?? "",
+          proof: data?.prefill?.proof ?? "",
+        });
+      }
+    } catch {
+      setError("Prefill failed");
+    } finally {
+      setLoading(false);
+    }
+  };
 
   return (
     <div className="space-y-6">
@@ -31,31 +67,61 @@ export default function Page() {
         </p>
         <button
           type="button"
-          onClick={() => setPrefill(mockPrefill)}
-          className="mt-4 rounded-md border border-[color:var(--border)] bg-[color:var(--background)]/80 px-4 py-2 text-xs text-[color:var(--foreground)]"
+          onClick={handleScrape}
+          disabled={!website.trim() || loading}
+          className="mt-4 rounded-md border border-[color:var(--border)] bg-[color:var(--background)]/80 px-4 py-2 text-xs text-[color:var(--foreground)] disabled:cursor-not-allowed disabled:opacity-60"
         >
-          Scrape & Prefill
+          {loading ? "Scraping..." : "Scrape & Prefill"}
         </button>
+        {error ? (
+          <p className="mt-2 text-xs text-[color:var(--danger)]">{error}</p>
+        ) : null}
       </div>
 
       <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--background-elevated)] p-5">
         <div className="text-xs uppercase tracking-[0.2em] text-[color:var(--muted)]">Step 2</div>
         <div className="mt-2 text-sm font-semibold text-[color:var(--foreground)]">Confirm context</div>
         <div className="mt-4 grid gap-4 md:grid-cols-2">
-          {[
-            { label: "Brand name", value: prefill?.brandName ?? "" },
-            { label: "Tone", value: prefill?.tone ?? "" },
-            { label: "Target buyers", value: prefill?.targetBuyers ?? "" },
-            { label: "Offers", value: prefill?.offers ?? "" },
-            { label: "Proof points", value: prefill?.proof ?? "" },
-          ].map((field) => (
-            <div key={field.label}>
-              <div className="text-xs text-[color:var(--muted)]">{field.label}</div>
-              <div className="mt-2 h-10 rounded-md border border-[color:var(--border)] bg-[color:var(--background)]/60 px-3 text-sm text-[color:var(--foreground)]">
-                {field.value}
-              </div>
-            </div>
-          ))}
+          <div>
+            <div className="text-xs text-[color:var(--muted)]">Brand name</div>
+            <input
+              value={prefill.brandName}
+              onChange={(event) => setPrefill({ ...prefill, brandName: event.target.value })}
+              className="mt-2 h-10 w-full rounded-md border border-[color:var(--border)] bg-[color:var(--background)]/60 px-3 text-sm text-[color:var(--foreground)]"
+            />
+          </div>
+          <div>
+            <div className="text-xs text-[color:var(--muted)]">Tone</div>
+            <input
+              value={prefill.tone}
+              onChange={(event) => setPrefill({ ...prefill, tone: event.target.value })}
+              className="mt-2 h-10 w-full rounded-md border border-[color:var(--border)] bg-[color:var(--background)]/60 px-3 text-sm text-[color:var(--foreground)]"
+            />
+          </div>
+          <div>
+            <div className="text-xs text-[color:var(--muted)]">Target buyers</div>
+            <input
+              value={prefill.targetBuyers}
+              onChange={(event) => setPrefill({ ...prefill, targetBuyers: event.target.value })}
+              className="mt-2 h-10 w-full rounded-md border border-[color:var(--border)] bg-[color:var(--background)]/60 px-3 text-sm text-[color:var(--foreground)]"
+            />
+          </div>
+          <div>
+            <div className="text-xs text-[color:var(--muted)]">Offers</div>
+            <input
+              value={prefill.offers}
+              onChange={(event) => setPrefill({ ...prefill, offers: event.target.value })}
+              className="mt-2 h-10 w-full rounded-md border border-[color:var(--border)] bg-[color:var(--background)]/60 px-3 text-sm text-[color:var(--foreground)]"
+            />
+          </div>
+          <div className="md:col-span-2">
+            <div className="text-xs text-[color:var(--muted)]">Proof points</div>
+            <textarea
+              value={prefill.proof}
+              onChange={(event) => setPrefill({ ...prefill, proof: event.target.value })}
+              className="mt-2 h-20 w-full resize-none rounded-md border border-[color:var(--border)] bg-[color:var(--background)]/60 px-3 py-2 text-sm text-[color:var(--foreground)]"
+            />
+          </div>
         </div>
         <p className="mt-4 text-xs text-[color:var(--muted)]">
           Edit the generated summary (target buyers, tone, offers, proof points).

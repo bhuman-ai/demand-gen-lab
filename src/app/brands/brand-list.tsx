@@ -3,7 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 
-type Project = {
+type Brand = {
   id: string;
   website: string;
   brandName: string;
@@ -15,24 +15,24 @@ type Project = {
   updatedAt?: string;
 };
 
-type ProjectListProps = {
-  projects: Project[];
+type BrandListProps = {
+  brands: Brand[];
 };
 
-export default function ProjectList({ projects }: ProjectListProps) {
-  const [items, setItems] = useState<Project[]>(projects);
+export default function BrandList({ brands }: BrandListProps) {
+  const [items, setItems] = useState<Brand[]>(brands);
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [form, setForm] = useState<Partial<Project>>({});
+  const [form, setForm] = useState<Partial<Brand>>({});
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
   const [undoQueue, setUndoQueue] = useState<{
-    project: Project;
+    brand: Brand;
     timeoutId: ReturnType<typeof setTimeout>;
   } | null>(null);
 
-  const beginEdit = (project: Project) => {
-    setEditingId(project.id);
-    setForm(project);
+  const beginEdit = (brand: Brand) => {
+    setEditingId(brand.id);
+    setForm(brand);
     setError("");
   };
 
@@ -42,7 +42,7 @@ export default function ProjectList({ projects }: ProjectListProps) {
     setError("");
   };
 
-  const updateField = (key: keyof Project, value: string) => {
+  const updateField = (key: keyof Brand, value: string) => {
     setForm((prev) => ({ ...prev, [key]: value }));
   };
 
@@ -51,7 +51,7 @@ export default function ProjectList({ projects }: ProjectListProps) {
     setSaving(true);
     setError("");
     try {
-      const response = await fetch("/api/projects", {
+      const response = await fetch("/api/brands", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -68,7 +68,7 @@ export default function ProjectList({ projects }: ProjectListProps) {
       if (!response.ok) {
         setError(data?.error ?? "Save failed");
       } else {
-        setItems((prev) => prev.map((item) => (item.id === editingId ? data.project : item)));
+        setItems((prev) => prev.map((item) => (item.id === editingId ? data.brand : item)));
         setEditingId(null);
         setForm({});
       }
@@ -79,39 +79,39 @@ export default function ProjectList({ projects }: ProjectListProps) {
     }
   };
 
-  const handleDelete = (project: Project) => {
+  const handleDelete = (brand: Brand) => {
     if (!window.confirm("Delete this brand?")) return;
     setError("");
-    setItems((prev) => prev.filter((item) => item.id !== project.id));
+    setItems((prev) => prev.filter((item) => item.id !== brand.id));
     if (undoQueue?.timeoutId) {
       clearTimeout(undoQueue.timeoutId);
     }
     const timeoutId = setTimeout(async () => {
       try {
-        const response = await fetch("/api/projects", {
+        const response = await fetch("/api/brands", {
           method: "DELETE",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ id: project.id }),
+          body: JSON.stringify({ id: brand.id }),
         });
         const data = await response.json();
         if (!response.ok) {
           setError(data?.error ?? "Delete failed");
-          setItems((prev) => [project, ...prev]);
+          setItems((prev) => [brand, ...prev]);
         }
       } catch {
         setError("Delete failed");
-        setItems((prev) => [project, ...prev]);
+        setItems((prev) => [brand, ...prev]);
       } finally {
         setUndoQueue(null);
       }
     }, 4000);
-    setUndoQueue({ project, timeoutId });
+    setUndoQueue({ brand, timeoutId });
   };
 
   const handleUndo = () => {
     if (!undoQueue) return;
     clearTimeout(undoQueue.timeoutId);
-    setItems((prev) => [undoQueue.project, ...prev]);
+    setItems((prev) => [undoQueue.brand, ...prev]);
     setUndoQueue(null);
   };
 
@@ -139,11 +139,11 @@ export default function ProjectList({ projects }: ProjectListProps) {
         </div>
       ) : null}
       <div className="grid gap-4 md:grid-cols-2">
-        {items.map((project) => {
-          const isEditing = editingId === project.id;
+        {items.map((brand) => {
+          const isEditing = editingId === brand.id;
           return (
             <div
-              key={project.id}
+              key={brand.id}
               className="rounded-xl border border-[color:var(--border)] bg-[color:var(--background-elevated)] p-5"
             >
               <div className="flex items-center justify-between">
@@ -155,7 +155,7 @@ export default function ProjectList({ projects }: ProjectListProps) {
                       className="h-8 w-full rounded-md border border-[color:var(--border)] bg-[color:var(--background)]/60 px-2 text-sm"
                     />
                   ) : (
-                    project.brandName
+                    brand.brandName
                   )}
                 </div>
                 <div className="flex gap-2">
@@ -180,21 +180,21 @@ export default function ProjectList({ projects }: ProjectListProps) {
                   ) : (
                     <>
                       <Link
-                        href={`/projects/${project.id}`}
+                        href={`/brands/${brand.id}`}
                         className="rounded-md border border-[color:var(--border)] px-2 py-1 text-[11px] text-[color:var(--accent)]"
                       >
                         View
                       </Link>
                       <button
                         type="button"
-                        onClick={() => beginEdit(project)}
+                        onClick={() => beginEdit(brand)}
                         className="rounded-md border border-[color:var(--border)] px-2 py-1 text-[11px] text-[color:var(--foreground)]"
                       >
                         Edit
                       </button>
                       <button
                         type="button"
-                        onClick={() => handleDelete(project)}
+                        onClick={() => handleDelete(brand)}
                         className="rounded-md border border-[color:var(--border)] px-2 py-1 text-[11px] text-[color:var(--danger)]"
                       >
                         Delete
@@ -211,7 +211,7 @@ export default function ProjectList({ projects }: ProjectListProps) {
                     className="h-8 w-full rounded-md border border-[color:var(--border)] bg-[color:var(--background)]/60 px-2 text-sm"
                   />
                 ) : (
-                  project.website
+                  brand.website
                 )}
               </div>
               <div className="mt-4 grid gap-2 text-[11px] text-[color:var(--muted)]">
@@ -223,12 +223,12 @@ export default function ProjectList({ projects }: ProjectListProps) {
                     {isEditing ? (
                       <input
                         value={(form as any)[field.key] ?? ""}
-                        onChange={(event) => updateField(field.key as keyof Project, event.target.value)}
+                        onChange={(event) => updateField(field.key as keyof Brand, event.target.value)}
                         className="h-7 w-56 rounded-md border border-[color:var(--border)] bg-[color:var(--background)]/60 px-2 text-[11px]"
                       />
                     ) : (
                       <span className="text-[color:var(--foreground)]">
-                        {(project as any)[field.key] || "—"}
+                        {(brand as any)[field.key] || "—"}
                       </span>
                     )}
                   </div>
@@ -243,7 +243,7 @@ export default function ProjectList({ projects }: ProjectListProps) {
                 />
               ) : (
                 <div className="mt-2 text-[11px] text-[color:var(--foreground)]">
-                  {project.proof || "—"}
+                  {brand.proof || "—"}
                 </div>
               )}
             </div>

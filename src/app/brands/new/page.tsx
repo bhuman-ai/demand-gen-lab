@@ -51,7 +51,7 @@ export default function Page() {
     setSaving(true);
     setSavedId("");
     try {
-      const response = await fetch("/api/projects", {
+      const response = await fetch("/api/brands", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -63,7 +63,7 @@ export default function Page() {
       if (!response.ok) {
         setError(data?.error ?? "Save failed");
       } else {
-        setSavedId(data?.project?.id ?? "");
+        setSavedId(data?.brand?.id ?? "");
       }
     } catch {
       setError("Save failed");

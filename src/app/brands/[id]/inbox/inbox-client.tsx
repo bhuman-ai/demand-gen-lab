@@ -10,18 +10,18 @@ type InboxMessage = {
   receivedAt: string;
 };
 
-type Project = {
+type Brand = {
   id: string;
   brandName: string;
   inbox?: InboxMessage[];
 };
 
 type InboxClientProps = {
-  project: Project;
+  brand: Brand;
 };
 
-export default function InboxClient({ project }: InboxClientProps) {
-  const [messages, setMessages] = useState<InboxMessage[]>(project.inbox ?? []);
+export default function InboxClient({ brand }: InboxClientProps) {
+  const [messages, setMessages] = useState<InboxMessage[]>(brand.inbox ?? []);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [newMessage, setNewMessage] = useState<InboxMessage>({
@@ -33,11 +33,11 @@ export default function InboxClient({ project }: InboxClientProps) {
   });
 
   const persistMessages = async (nextMessages: InboxMessage[]) => {
-    const response = await fetch("/api/projects", {
+    const response = await fetch("/api/brands", {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        id: project.id,
+        id: brand.id,
         inbox: nextMessages,
       }),
     });
@@ -45,7 +45,7 @@ export default function InboxClient({ project }: InboxClientProps) {
     if (!response.ok) {
       throw new Error(data?.error ?? "Save failed");
     }
-    const saved = Array.isArray(data?.project?.inbox) ? (data.project.inbox as InboxMessage[]) : [];
+    const saved = Array.isArray(data?.brand?.inbox) ? (data.brand.inbox as InboxMessage[]) : [];
     return saved;
   };
 

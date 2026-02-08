@@ -1,18 +1,24 @@
 import { readFile } from "fs/promises";
 import Link from "next/link";
 
-async function loadProjects() {
+async function loadBrands() {
   try {
-    const raw = await readFile(`${process.cwd()}/data/projects.json`, "utf-8");
+    const raw = await readFile(`${process.cwd()}/data/brands.json`, "utf-8");
     const data = JSON.parse(raw);
     return Array.isArray(data) ? data : [];
   } catch {
-    return [];
+    try {
+      const legacyRaw = await readFile(`${process.cwd()}/data/projects.json`, "utf-8");
+      const legacyData = JSON.parse(legacyRaw);
+      return Array.isArray(legacyData) ? legacyData : [];
+    } catch {
+      return [];
+    }
   }
 }
 
 export default async function Page() {
-  const projects = await loadProjects();
+  const brands = await loadBrands();
 
   return (
     <div className="space-y-4">
@@ -20,16 +26,16 @@ export default async function Page() {
       <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--background-elevated)] p-5">
         <p className="text-sm text-[color:var(--muted)]">Replies, sentiment, and battlecards.</p>
         <div className="mt-4 grid gap-3 md:grid-cols-3">
-          {projects.map((project: any) => (
+          {brands.map((brand: any) => (
             <Link
-              key={project.id}
-              href={`/projects/${project.id}/inbox`}
+              key={brand.id}
+              href={`/brands/${brand.id}/inbox`}
               className="rounded-md border border-[color:var(--border)] bg-[color:var(--background)]/40 px-4 py-3 text-xs text-[color:var(--foreground)]"
             >
-              {project.brandName}
+              {brand.brandName}
             </Link>
           ))}
-          {!projects.length ? (
+          {!brands.length ? (
             <div className="rounded-md border border-dashed border-[color:var(--border)] px-4 py-3 text-xs text-[color:var(--muted)]">
               No brands yet.
             </div>

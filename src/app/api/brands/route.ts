@@ -1,9 +1,10 @@
 import { NextResponse } from "next/server";
 import { readFile, writeFile, mkdir } from "fs/promises";
 
-const DATA_PATH = `${process.cwd()}/data/projects.json`;
+const DATA_PATH = `${process.cwd()}/data/brands.json`;
+const LEGACY_PATH = `${process.cwd()}/data/projects.json`;
 
-type Project = {
+type Brand = {
   id: string;
   website: string;
   brandName: string;
@@ -35,24 +36,34 @@ type Project = {
   domains: { domain: string; status: string; warmupStage: string; reputation: string }[];
 };
 
-async function readProjects() {
+async function readBrands() {
   try {
     const raw = await readFile(DATA_PATH, "utf-8");
     const data = JSON.parse(raw);
     return Array.isArray(data) ? data : [];
   } catch {
-    return [] as Project[];
+    try {
+      const legacyRaw = await readFile(LEGACY_PATH, "utf-8");
+      const legacyData = JSON.parse(legacyRaw);
+      if (Array.isArray(legacyData)) {
+        await writeBrands(legacyData as Brand[]);
+        return legacyData as Brand[];
+      }
+    } catch {
+      return [] as Brand[];
+    }
+    return [] as Brand[];
   }
 }
 
-async function writeProjects(projects: Project[]) {
+async function writeBrands(brands: Brand[]) {
   await mkdir(`${process.cwd()}/data`, { recursive: true });
-  await writeFile(DATA_PATH, JSON.stringify(projects, null, 2));
+  await writeFile(DATA_PATH, JSON.stringify(brands, null, 2));
 }
 
 export async function GET() {
-  const projects = await readProjects();
-  return NextResponse.json({ projects });
+  const brands = await readBrands();
+  return NextResponse.json({ brands });
 }
 
 export async function POST(request: Request) {
@@ -64,9 +75,9 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "website and brandName are required" }, { status: 400 });
   }
 
-  const projects = await readProjects();
-  const project: Project = {
-    id: `proj_${Date.now().toString(36)}`,
+  const brands = await readBrands();
+  const brand: Brand = {
+    id: `brand_${Date.now().toString(36)}`,
     website,
     brandName,
     tone: String(body?.tone ?? ""),
@@ -95,10 +106,10 @@ export async function POST(request: Request) {
     inbox: [],
     domains: [],
   };
-  projects.unshift(project);
-  await writeProjects(projects);
+  brands.unshift(brand);
+  await writeBrands(brands);
 
-  return NextResponse.json({ project });
+  return NextResponse.json({ brand });
 }
 
 export async function PATCH(request: Request) {
@@ -108,13 +119,13 @@ export async function PATCH(request: Request) {
     return NextResponse.json({ error: "id is required" }, { status: 400 });
   }
 
-  const projects = await readProjects();
-  const index = projects.findIndex((project) => project.id === id);
+  const brands = await readBrands();
+  const index = brands.findIndex((brand) => brand.id === id);
   if (index < 0) {
-    return NextResponse.json({ error: "project not found" }, { status: 404 });
+    return NextResponse.json({ error: "brand not found" }, { status: 404 });
   }
 
-  const next = { ...projects[index] } as Project;
+  const next = { ...brands[index] } as Brand;
   const fields = ["website", "brandName", "tone", "targetBuyers", "offers", "proof"] as const;
   for (const field of fields) {
     if (field in body && typeof body[field] === "string") {
@@ -196,10 +207,10 @@ export async function PATCH(request: Request) {
       .filter((domain: any) => domain.domain.length > 0);
   }
   next.updatedAt = new Date().toISOString();
-  projects[index] = next;
-  await writeProjects(projects);
+  brands[index] = next;
+  await writeBrands(brands);
 
-  return NextResponse.json({ project: next });
+  return NextResponse.json({ brand: next });
 }
 
 export async function DELETE(request: Request) {
@@ -209,12 +220,12 @@ export async function DELETE(request: Request) {
     return NextResponse.json({ error: "id is required" }, { status: 400 });
   }
 
-  const projects = await readProjects();
-  const next = projects.filter((project) => project.id !== id);
-  if (next.length === projects.length) {
-    return NextResponse.json({ error: "project not found" }, { status: 404 });
+  const brands = await readBrands();
+  const next = brands.filter((brand) => brand.id !== id);
+  if (next.length === brands.length) {
+    return NextResponse.json({ error: "brand not found" }, { status: 404 });
   }
-  await writeProjects(next);
+  await writeBrands(next);
 
   return NextResponse.json({ deletedId: id });
 }

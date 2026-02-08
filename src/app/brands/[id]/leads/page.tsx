@@ -1,26 +1,32 @@
 import { readFile } from "fs/promises";
 import Link from "next/link";
 
-async function loadProjects() {
+async function loadBrands() {
   try {
-    const raw = await readFile(`${process.cwd()}/data/projects.json`, "utf-8");
+    const raw = await readFile(`${process.cwd()}/data/brands.json`, "utf-8");
     const data = JSON.parse(raw);
     return Array.isArray(data) ? data : [];
   } catch {
-    return [];
+    try {
+      const legacyRaw = await readFile(`${process.cwd()}/data/projects.json`, "utf-8");
+      const legacyData = JSON.parse(legacyRaw);
+      return Array.isArray(legacyData) ? legacyData : [];
+    } catch {
+      return [];
+    }
   }
 }
 
 export default async function Page({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const projects = await loadProjects();
-  const project = projects.find((item: any) => item.id === id);
+  const brands = await loadBrands();
+  const brand = brands.find((item: any) => item.id === id);
 
-  if (!project) {
+  if (!brand) {
     return (
       <div className="space-y-4">
         <h1 className="text-xl font-semibold text-[color:var(--foreground)]">Brand Not Found</h1>
-        <Link className="text-xs text-[color:var(--accent)]" href="/projects">
+        <Link className="text-xs text-[color:var(--accent)]" href="/brands">
           Back to Brands
         </Link>
       </div>
@@ -30,8 +36,8 @@ export default async function Page({ params }: { params: Promise<{ id: string }>
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <h1 className="text-xl font-semibold text-[color:var(--foreground)]">{project.brandName} — Leads</h1>
-        <Link className="text-xs text-[color:var(--accent)]" href={`/projects/${project.id}`}>
+        <h1 className="text-xl font-semibold text-[color:var(--foreground)]">{brand.brandName} — Leads</h1>
+        <Link className="text-xs text-[color:var(--accent)]" href={`/brands/${brand.id}`}>
           Back to Brand
         </Link>
       </div>
@@ -45,7 +51,7 @@ export default async function Page({ params }: { params: Promise<{ id: string }>
               </div>
             ))}
           </div>
-          {(project.leads || []).map((row: any, index: number) => (
+          {(brand.leads || []).map((row: any, index: number) => (
             <div key={`${row.name}-${index}`} className="grid grid-cols-4 text-[11px] text-[color:var(--foreground)]">
               <div className="px-3 py-2">{row.name}</div>
               <div className="px-3 py-2">{row.channel}</div>
@@ -53,7 +59,7 @@ export default async function Page({ params }: { params: Promise<{ id: string }>
               <div className="px-3 py-2">{row.lastTouch}</div>
             </div>
           ))}
-          {!(project.leads || []).length ? (
+          {!(brand.leads || []).length ? (
             <div className="px-3 py-3 text-[11px] text-[color:var(--muted)]">No leads yet.</div>
           ) : null}
         </div>

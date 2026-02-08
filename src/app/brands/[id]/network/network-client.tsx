@@ -9,18 +9,18 @@ type DomainEntry = {
   reputation: string;
 };
 
-type Project = {
+type Brand = {
   id: string;
   brandName: string;
   domains?: DomainEntry[];
 };
 
 type NetworkClientProps = {
-  project: Project;
+  brand: Brand;
 };
 
-export default function NetworkClient({ project }: NetworkClientProps) {
-  const [domains, setDomains] = useState<DomainEntry[]>(project.domains ?? []);
+export default function NetworkClient({ brand }: NetworkClientProps) {
+  const [domains, setDomains] = useState<DomainEntry[]>(brand.domains ?? []);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [newDomain, setNewDomain] = useState<DomainEntry>({
@@ -31,11 +31,11 @@ export default function NetworkClient({ project }: NetworkClientProps) {
   });
 
   const persistDomains = async (nextDomains: DomainEntry[]) => {
-    const response = await fetch("/api/projects", {
+    const response = await fetch("/api/brands", {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        id: project.id,
+        id: brand.id,
         domains: nextDomains,
       }),
     });
@@ -43,7 +43,7 @@ export default function NetworkClient({ project }: NetworkClientProps) {
     if (!response.ok) {
       throw new Error(data?.error ?? "Save failed");
     }
-    const saved = Array.isArray(data?.project?.domains) ? (data.project.domains as DomainEntry[]) : [];
+    const saved = Array.isArray(data?.brand?.domains) ? (data.brand.domains as DomainEntry[]) : [];
     return saved;
   };
 

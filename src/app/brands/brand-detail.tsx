@@ -4,7 +4,7 @@ import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 
-type Project = {
+type Brand = {
   id: string;
   website: string;
   brandName: string;
@@ -34,9 +34,9 @@ type Project = {
   leads: { name: string; channel: string; status: string; lastTouch: string }[];
 };
 
-type ProjectDetailProps = {
-  project: Project;
-  projects: Project[];
+type BrandDetailProps = {
+  brand: Brand;
+  brands: Brand[];
 };
 
 type Idea = { title: string; channel: string; rationale: string };
@@ -45,9 +45,9 @@ type Lead = { name: string; channel: string; status: string; lastTouch: string }
 
 type Sequence = { name: string; status: string };
 
-export default function ProjectDetail({ project, projects }: ProjectDetailProps) {
+export default function BrandDetail({ brand, brands }: BrandDetailProps) {
   const router = useRouter();
-  const [form, setForm] = useState<Project>(project);
+  const [form, setForm] = useState<Brand>(brand);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [savedAt, setSavedAt] = useState("");
@@ -65,12 +65,12 @@ export default function ProjectDetail({ project, projects }: ProjectDetailProps)
     lastTouch: "",
   });
 
-  const updateField = (key: keyof Project, value: string) => {
+  const updateField = (key: keyof Brand, value: string) => {
     setForm((prev) => ({ ...prev, [key]: value }));
   };
 
-  const persistProject = async (next: Project) => {
-    const response = await fetch("/api/projects", {
+  const persistBrand = async (next: Brand) => {
+    const response = await fetch("/api/brands", {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -91,7 +91,7 @@ export default function ProjectDetail({ project, projects }: ProjectDetailProps)
     if (!response.ok) {
       throw new Error(data?.error ?? "Save failed");
     }
-    return data.project as Project;
+    return data.brand as Brand;
   };
 
   const handleSave = async () => {
@@ -99,7 +99,7 @@ export default function ProjectDetail({ project, projects }: ProjectDetailProps)
     setSaving(true);
     setSavedAt("");
     try {
-      const saved = await persistProject(form);
+      const saved = await persistBrand(form);
       setForm(saved);
       setSavedAt(new Date().toLocaleTimeString());
     } catch (err) {
@@ -145,7 +145,7 @@ export default function ProjectDetail({ project, projects }: ProjectDetailProps)
       } else {
         const nextIdeas = Array.isArray(data?.ideas) ? (data.ideas as Idea[]) : [];
         setForm((prev) => ({ ...prev, ideas: nextIdeas }));
-        const saved = await persistProject({ ...form, ideas: nextIdeas });
+        const saved = await persistBrand({ ...form, ideas: nextIdeas });
         setForm(saved);
       }
     } catch {
@@ -174,7 +174,7 @@ export default function ProjectDetail({ project, projects }: ProjectDetailProps)
     };
     setForm(next);
     setNewSequenceName("");
-    const saved = await persistProject(next);
+    const saved = await persistBrand(next);
     setForm(saved);
   };
 
@@ -198,7 +198,7 @@ export default function ProjectDetail({ project, projects }: ProjectDetailProps)
     };
     setForm(next);
     setNewLead({ name: "", channel: "", status: "New", lastTouch: "" });
-    const saved = await persistProject(next);
+    const saved = await persistBrand(next);
     setForm(saved);
   };
 
@@ -209,10 +209,10 @@ export default function ProjectDetail({ project, projects }: ProjectDetailProps)
           <h1 className="text-xl font-semibold text-[color:var(--foreground)]">{form.brandName}</h1>
           <select
             value={form.id}
-            onChange={(event) => router.push(`/projects/${event.target.value}`)}
+            onChange={(event) => router.push(`/brands/${event.target.value}`)}
             className="h-8 rounded-md border border-[color:var(--border)] bg-[color:var(--background)]/60 px-2 text-xs text-[color:var(--foreground)]"
           >
-            {projects.map((item) => (
+            {brands.map((item) => (
               <option key={item.id} value={item.id}>
                 {item.brandName}
               </option>
@@ -229,7 +229,7 @@ export default function ProjectDetail({ project, projects }: ProjectDetailProps)
           >
             {saving ? "Saving" : "Save"}
           </button>
-          <Link className="text-xs text-[color:var(--accent)]" href="/projects">
+          <Link className="text-xs text-[color:var(--accent)]" href="/brands">
             Back to Brands
           </Link>
         </div>
@@ -318,7 +318,7 @@ export default function ProjectDetail({ project, projects }: ProjectDetailProps)
                   ...prev.modules,
                   strategy: {
                     ...prev.modules.strategy,
-                    status: event.target.value as Project["modules"]["strategy"]["status"],
+                    status: event.target.value as Brand["modules"]["strategy"]["status"],
                   },
                 },
               }))
@@ -397,7 +397,7 @@ export default function ProjectDetail({ project, projects }: ProjectDetailProps)
                   ...prev.modules,
                   sequences: {
                     ...prev.modules.sequences,
-                    status: event.target.value as Project["modules"]["sequences"]["status"],
+                    status: event.target.value as Brand["modules"]["sequences"]["status"],
                   },
                 },
               }))
@@ -573,12 +573,12 @@ export default function ProjectDetail({ project, projects }: ProjectDetailProps)
         <div className="text-xs text-[color:var(--muted)]">Brand Modules</div>
         <div className="mt-3 grid gap-3 md:grid-cols-3">
           {[
-            { label: "Strategy", href: `/projects/${project.id}/strategy` },
-            { label: "Hypotheses", href: `/projects/${project.id}/hypotheses` },
-            { label: "Evolution", href: `/projects/${project.id}/evolution` },
-            { label: "Leads", href: `/projects/${project.id}/leads` },
-            { label: "Inbox", href: `/projects/${project.id}/inbox` },
-            { label: "Network", href: `/projects/${project.id}/network` },
+            { label: "Strategy", href: `/brands/${brand.id}/strategy` },
+            { label: "Hypotheses", href: `/brands/${brand.id}/hypotheses` },
+            { label: "Evolution", href: `/brands/${brand.id}/evolution` },
+            { label: "Leads", href: `/brands/${brand.id}/leads` },
+            { label: "Inbox", href: `/brands/${brand.id}/inbox` },
+            { label: "Network", href: `/brands/${brand.id}/network` },
           ].map((module) => (
             <Link
               key={module.label}
@@ -593,7 +593,7 @@ export default function ProjectDetail({ project, projects }: ProjectDetailProps)
 
       <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--background-elevated)] p-5">
         <div className="text-xs text-[color:var(--muted)]">Created</div>
-        <div className="mt-1 text-sm text-[color:var(--foreground)]">{project.createdAt}</div>
+        <div className="mt-1 text-sm text-[color:var(--foreground)]">{brand.createdAt}</div>
       </div>
     </div>
   );

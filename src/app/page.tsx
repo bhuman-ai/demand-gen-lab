@@ -1,3 +1,5 @@
+import Link from "next/link";
+
 export default function Home() {
   return (
     <div className="space-y-10">
@@ -13,14 +15,20 @@ export default function Home() {
             Customer.io-first delivery. Genetic sequencing. Conversion-aware global win.
           </p>
           <div className="mt-6 grid gap-3 sm:grid-cols-2">
-            <button className="rounded-lg border border-[color:var(--border)] bg-[color:var(--background-elevated)] px-4 py-3 text-left text-sm text-[color:var(--foreground)]">
+            <Link
+              href="/brands/new"
+              className="rounded-lg border border-[color:var(--border)] bg-[color:var(--background-elevated)] px-4 py-3 text-left text-sm text-[color:var(--foreground)]"
+            >
               + New Brand
               <div className="text-xs text-[color:var(--muted)]">Scrape site and inject context</div>
-            </button>
-            <button className="rounded-lg border border-[color:var(--border)] bg-[color:var(--background-elevated)] px-4 py-3 text-left text-sm text-[color:var(--foreground)]">
+            </Link>
+            <Link
+              href="/strategy"
+              className="rounded-lg border border-[color:var(--border)] bg-[color:var(--background-elevated)] px-4 py-3 text-left text-sm text-[color:var(--foreground)]"
+            >
               + New Strategy
               <div className="text-xs text-[color:var(--muted)]">Spin up hypotheses + sequences</div>
-            </button>
+            </Link>
           </div>
         </div>
         <div className="space-y-4">

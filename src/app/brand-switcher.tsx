@@ -31,6 +31,12 @@ export default function BrandSwitcher() {
     const savedBrandId = typeof window !== "undefined" ? localStorage.getItem(ACTIVE_BRAND_KEY) : "";
     if (savedBrandId) {
       setActiveBrandId(savedBrandId);
+    } else if (typeof window !== "undefined") {
+      const legacyBrandId = localStorage.getItem("factory.activeProjectId");
+      if (legacyBrandId) {
+        setActiveBrandId(legacyBrandId);
+        localStorage.setItem(ACTIVE_BRAND_KEY, legacyBrandId);
+      }
     }
     const savedTeamId = typeof window !== "undefined" ? localStorage.getItem(ACTIVE_TEAM_KEY) : "";
     if (savedTeamId) {

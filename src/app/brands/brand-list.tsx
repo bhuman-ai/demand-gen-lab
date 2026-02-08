@@ -4,14 +4,14 @@ import { useState } from "react";
 import Link from "next/link";
 
 type Brand = {
-  id: string;
-  website: string;
-  brandName: string;
-  tone: string;
-  targetBuyers: string;
-  offers: string;
-  proof: string;
-  createdAt: string;
+  id?: string;
+  website?: string;
+  brandName?: string;
+  tone?: string;
+  targetBuyers?: string;
+  offers?: string;
+  proof?: string;
+  createdAt?: string;
   updatedAt?: string;
 };
 
@@ -31,6 +31,7 @@ export default function BrandList({ brands }: BrandListProps) {
   } | null>(null);
 
   const beginEdit = (brand: Brand) => {
+    if (!brand.id) return;
     setEditingId(brand.id);
     setForm(brand);
     setError("");
@@ -139,7 +140,8 @@ export default function BrandList({ brands }: BrandListProps) {
         </div>
       ) : null}
       <div className="grid gap-4 md:grid-cols-2">
-        {items.map((brand) => {
+      {items.map((brand) => {
+          if (!brand.id) return null;
           const isEditing = editingId === brand.id;
           return (
             <div

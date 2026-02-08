@@ -1,24 +1,8 @@
-import { readFile } from "fs/promises";
 import Link from "next/link";
-
-async function loadBrands() {
-  try {
-    const raw = await readFile(`${process.cwd()}/data/brands.json`, "utf-8");
-    const data = JSON.parse(raw);
-    return Array.isArray(data) ? data : [];
-  } catch {
-    try {
-      const legacyRaw = await readFile(`${process.cwd()}/data/projects.json`, "utf-8");
-      const legacyData = JSON.parse(legacyRaw);
-      return Array.isArray(legacyData) ? legacyData : [];
-    } catch {
-      return [];
-    }
-  }
-}
+import { readBrands } from "@/lib/brand-storage";
 
 export default async function Page() {
-  const brands = await loadBrands();
+  const brands = await readBrands();
 
   return (
     <div className="space-y-4">

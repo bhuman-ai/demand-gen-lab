@@ -10,17 +10,29 @@ type DomainEntry = {
 };
 
 type Brand = {
-  id: string;
-  brandName: string;
-  domains?: DomainEntry[];
+  id?: string;
+  brandName?: string;
+  domains?: unknown[];
 };
 
 type NetworkClientProps = {
   brand: Brand;
 };
 
+const normalizeDomains = (rows: unknown[] = []): DomainEntry[] =>
+  rows
+    .map((row: any) => ({
+      domain: String(row?.domain ?? ""),
+      status: String(row?.status ?? "Active"),
+      warmupStage: String(row?.warmupStage ?? "Day 1"),
+      reputation: String(row?.reputation ?? "Low"),
+    }))
+    .filter((row) => row.domain.length > 0);
+
 export default function NetworkClient({ brand }: NetworkClientProps) {
-  const [domains, setDomains] = useState<DomainEntry[]>(brand.domains ?? []);
+  const [domains, setDomains] = useState<DomainEntry[]>(
+    normalizeDomains(Array.isArray(brand.domains) ? brand.domains : [])
+  );
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [newDomain, setNewDomain] = useState<DomainEntry>({
@@ -31,6 +43,9 @@ export default function NetworkClient({ brand }: NetworkClientProps) {
   });
 
   const persistDomains = async (nextDomains: DomainEntry[]) => {
+    if (!brand.id) {
+      throw new Error("Missing brand id");
+    }
     const response = await fetch("/api/brands", {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },

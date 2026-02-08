@@ -1,8 +1,5 @@
 import { NextResponse } from "next/server";
-import { readFile, writeFile, mkdir } from "fs/promises";
-
-const DATA_PATH = `${process.cwd()}/data/brands.json`;
-const LEGACY_PATH = `${process.cwd()}/data/projects.json`;
+import { readBrands, writeBrands } from "@/lib/brand-storage";
 
 type Brand = {
   id: string;
@@ -36,33 +33,8 @@ type Brand = {
   domains: { domain: string; status: string; warmupStage: string; reputation: string }[];
 };
 
-async function readBrands() {
-  try {
-    const raw = await readFile(DATA_PATH, "utf-8");
-    const data = JSON.parse(raw);
-    return Array.isArray(data) ? data : [];
-  } catch {
-    try {
-      const legacyRaw = await readFile(LEGACY_PATH, "utf-8");
-      const legacyData = JSON.parse(legacyRaw);
-      if (Array.isArray(legacyData)) {
-        await writeBrands(legacyData as Brand[]);
-        return legacyData as Brand[];
-      }
-    } catch {
-      return [] as Brand[];
-    }
-    return [] as Brand[];
-  }
-}
-
-async function writeBrands(brands: Brand[]) {
-  await mkdir(`${process.cwd()}/data`, { recursive: true });
-  await writeFile(DATA_PATH, JSON.stringify(brands, null, 2));
-}
-
 export async function GET() {
-  const brands = await readBrands();
+  const brands = (await readBrands()) as Brand[];
   return NextResponse.json({ brands });
 }
 
@@ -75,7 +47,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "website and brandName are required" }, { status: 400 });
   }
 
-  const brands = await readBrands();
+  const brands = (await readBrands()) as Brand[];
   const brand: Brand = {
     id: `brand_${Date.now().toString(36)}`,
     website,
@@ -119,7 +91,7 @@ export async function PATCH(request: Request) {
     return NextResponse.json({ error: "id is required" }, { status: 400 });
   }
 
-  const brands = await readBrands();
+  const brands = (await readBrands()) as Brand[];
   const index = brands.findIndex((brand) => brand.id === id);
   if (index < 0) {
     return NextResponse.json({ error: "brand not found" }, { status: 404 });
@@ -220,7 +192,7 @@ export async function DELETE(request: Request) {
     return NextResponse.json({ error: "id is required" }, { status: 400 });
   }
 
-  const brands = await readBrands();
+  const brands = (await readBrands()) as Brand[];
   const next = brands.filter((brand) => brand.id !== id);
   if (next.length === brands.length) {
     return NextResponse.json({ error: "brand not found" }, { status: 404 });

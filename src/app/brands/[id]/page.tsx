@@ -1,26 +1,10 @@
-import { readFile } from "fs/promises";
 import Link from "next/link";
 import BrandDetail from "../brand-detail";
-
-async function loadBrands() {
-  try {
-    const raw = await readFile(`${process.cwd()}/data/brands.json`, "utf-8");
-    const data = JSON.parse(raw);
-    return Array.isArray(data) ? data : [];
-  } catch {
-    try {
-      const legacyRaw = await readFile(`${process.cwd()}/data/projects.json`, "utf-8");
-      const legacyData = JSON.parse(legacyRaw);
-      return Array.isArray(legacyData) ? legacyData : [];
-    } catch {
-      return [];
-    }
-  }
-}
+import { readBrands } from "@/lib/brand-storage";
 
 export default async function Page({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const brands = await loadBrands();
+  const brands = await readBrands();
   const brand = brands.find((item: any) => item.id === id);
 
   if (!brand) {

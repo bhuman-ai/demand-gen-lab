@@ -34,9 +34,25 @@ type Brand = {
   leads: { name: string; channel: string; status: string; lastTouch: string }[];
 };
 
+type BrandInput = {
+  id?: string;
+  website?: string;
+  brandName?: string;
+  tone?: string;
+  targetBuyers?: string;
+  offers?: string;
+  proof?: string;
+  createdAt?: string;
+  updatedAt?: string;
+  modules?: Record<string, unknown>;
+  ideas?: unknown[];
+  sequences?: unknown[];
+  leads?: unknown[];
+};
+
 type BrandDetailProps = {
-  brand: Brand;
-  brands: Brand[];
+  brand: BrandInput;
+  brands: BrandInput[];
 };
 
 type Idea = { title: string; channel: string; rationale: string };
@@ -45,9 +61,64 @@ type Lead = { name: string; channel: string; status: string; lastTouch: string }
 
 type Sequence = { name: string; status: string };
 
+const normalizeIdeas = (rows: unknown[] = []): Idea[] =>
+  rows
+    .map((row: any) => ({
+      title: String(row?.title ?? ""),
+      channel: String(row?.channel ?? ""),
+      rationale: String(row?.rationale ?? ""),
+    }))
+    .filter((row) => row.title.length > 0);
+
+const normalizeSequences = (rows: unknown[] = []): Sequence[] =>
+  rows
+    .map((row: any) => ({
+      name: String(row?.name ?? ""),
+      status: String(row?.status ?? ""),
+    }))
+    .filter((row) => row.name.length > 0);
+
+const normalizeLeads = (rows: unknown[] = []): Lead[] =>
+  rows
+    .map((row: any) => ({
+      name: String(row?.name ?? ""),
+      channel: String(row?.channel ?? ""),
+      status: String(row?.status ?? ""),
+      lastTouch: String(row?.lastTouch ?? ""),
+    }))
+    .filter((row) => row.name.length > 0);
+
 export default function BrandDetail({ brand, brands }: BrandDetailProps) {
   const router = useRouter();
-  const [form, setForm] = useState<Brand>(brand);
+  const [form, setForm] = useState<Brand>({
+    id: brand.id ?? "",
+    website: brand.website ?? "",
+    brandName: brand.brandName ?? "",
+    tone: brand.tone ?? "",
+    targetBuyers: brand.targetBuyers ?? "",
+    offers: brand.offers ?? "",
+    proof: brand.proof ?? "",
+    createdAt: brand.createdAt ?? "",
+    updatedAt: brand.updatedAt,
+    modules: (brand.modules as Brand["modules"]) ?? {
+      strategy: {
+        status: "draft",
+        goal: "",
+        constraints: "",
+      },
+      sequences: {
+        status: "idle",
+        activeCount: 0,
+      },
+      leads: {
+        total: 0,
+        qualified: 0,
+      },
+    },
+    ideas: normalizeIdeas(Array.isArray(brand.ideas) ? brand.ideas : []),
+    sequences: normalizeSequences(Array.isArray(brand.sequences) ? brand.sequences : []),
+    leads: normalizeLeads(Array.isArray(brand.leads) ? brand.leads : []),
+  });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [savedAt, setSavedAt] = useState("");
@@ -573,12 +644,12 @@ export default function BrandDetail({ brand, brands }: BrandDetailProps) {
         <div className="text-xs text-[color:var(--muted)]">Brand Modules</div>
         <div className="mt-3 grid gap-3 md:grid-cols-3">
           {[
-            { label: "Strategy", href: `/brands/${brand.id}/strategy` },
-            { label: "Hypotheses", href: `/brands/${brand.id}/hypotheses` },
-            { label: "Evolution", href: `/brands/${brand.id}/evolution` },
-            { label: "Leads", href: `/brands/${brand.id}/leads` },
-            { label: "Inbox", href: `/brands/${brand.id}/inbox` },
-            { label: "Network", href: `/brands/${brand.id}/network` },
+            { label: "Strategy", href: `/brands/${form.id}/strategy` },
+            { label: "Hypotheses", href: `/brands/${form.id}/hypotheses` },
+            { label: "Evolution", href: `/brands/${form.id}/evolution` },
+            { label: "Leads", href: `/brands/${form.id}/leads` },
+            { label: "Inbox", href: `/brands/${form.id}/inbox` },
+            { label: "Network", href: `/brands/${form.id}/network` },
           ].map((module) => (
             <Link
               key={module.label}

@@ -11,17 +11,30 @@ type InboxMessage = {
 };
 
 type Brand = {
-  id: string;
-  brandName: string;
-  inbox?: InboxMessage[];
+  id?: string;
+  brandName?: string;
+  inbox?: unknown[];
 };
 
 type InboxClientProps = {
   brand: Brand;
 };
 
+const normalizeMessages = (rows: unknown[] = []): InboxMessage[] =>
+  rows
+    .map((row: any) => ({
+      from: String(row?.from ?? ""),
+      subject: String(row?.subject ?? ""),
+      sentiment: String(row?.sentiment ?? "Neutral"),
+      status: String(row?.status ?? "New"),
+      receivedAt: String(row?.receivedAt ?? ""),
+    }))
+    .filter((row) => row.subject.length > 0);
+
 export default function InboxClient({ brand }: InboxClientProps) {
-  const [messages, setMessages] = useState<InboxMessage[]>(brand.inbox ?? []);
+  const [messages, setMessages] = useState<InboxMessage[]>(
+    normalizeMessages(Array.isArray(brand.inbox) ? brand.inbox : [])
+  );
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [newMessage, setNewMessage] = useState<InboxMessage>({
@@ -33,6 +46,9 @@ export default function InboxClient({ brand }: InboxClientProps) {
   });
 
   const persistMessages = async (nextMessages: InboxMessage[]) => {
+    if (!brand.id) {
+      throw new Error("Missing brand id");
+    }
     const response = await fetch("/api/brands", {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },

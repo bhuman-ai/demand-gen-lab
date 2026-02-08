@@ -13,6 +13,8 @@ const teams = [
   { id: "team_bhuman", name: "Bhuman", color: "from-sky-400 to-violet-500" },
 ];
 
+const ACTIVE_PROJECT_KEY = "factory.activeProjectId";
+
 export default function BrandSwitcher() {
   const router = useRouter();
   const [open, setOpen] = useState(false);
@@ -24,6 +26,10 @@ export default function BrandSwitcher() {
 
   useEffect(() => {
     let mounted = true;
+    const savedProjectId = typeof window !== "undefined" ? localStorage.getItem(ACTIVE_PROJECT_KEY) : "";
+    if (savedProjectId) {
+      setActiveProjectId(savedProjectId);
+    }
     const loadProjects = async () => {
       try {
         const response = await fetch("/api/projects");
@@ -31,7 +37,14 @@ export default function BrandSwitcher() {
         if (!mounted) return;
         const list = Array.isArray(data?.projects) ? (data.projects as Project[]) : [];
         setProjects(list);
-        setActiveProjectId((prev) => (prev || list[0]?.id || ""));
+        setActiveProjectId((prev) => {
+          if (prev && list.some((item) => item.id === prev)) return prev;
+          const fallback = list[0]?.id || "";
+          if (fallback && typeof window !== "undefined") {
+            localStorage.setItem(ACTIVE_PROJECT_KEY, fallback);
+          }
+          return fallback;
+        });
       } catch {
         if (mounted) {
           setProjects([]);
@@ -139,6 +152,9 @@ export default function BrandSwitcher() {
                     onClick={() => {
                       setActiveProjectId(project.id);
                       setOpen(false);
+                      if (typeof window !== "undefined") {
+                        localStorage.setItem(ACTIVE_PROJECT_KEY, project.id);
+                      }
                       router.push(`/projects/${project.id}`);
                     }}
                     className={`flex w-full items-center justify-between rounded-md px-2 py-2 text-left text-xs ${

@@ -1,5 +1,6 @@
 import { readFile } from "fs/promises";
 import Link from "next/link";
+import InboxClient from "./inbox-client";
 
 async function loadProjects() {
   try {
@@ -35,12 +36,7 @@ export default async function Page({ params }: { params: Promise<{ id: string }>
           Back to Project
         </Link>
       </div>
-      <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--background-elevated)] p-5">
-        <div className="text-xs text-[color:var(--muted)]">Unified replies</div>
-        <div className="mt-4 rounded-md border border-[color:var(--border)] bg-[color:var(--background)]/40 px-3 py-6 text-center text-xs text-[color:var(--muted)]">
-          No replies yet. Connect inboxes to start ingesting responses.
-        </div>
-      </div>
+      <InboxClient project={project} />
     </div>
   );
 }

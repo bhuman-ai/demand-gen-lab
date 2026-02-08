@@ -31,6 +31,8 @@ type Project = {
   ideas: { title: string; channel: string; rationale: string }[];
   sequences: { name: string; status: string }[];
   leads: { name: string; channel: string; status: string; lastTouch: string }[];
+  inbox: { from: string; subject: string; sentiment: string; status: string; receivedAt: string }[];
+  domains: { domain: string; status: string; warmupStage: string; reputation: string }[];
 };
 
 async function readProjects() {
@@ -90,6 +92,8 @@ export async function POST(request: Request) {
     ideas: [],
     sequences: [],
     leads: [],
+    inbox: [],
+    domains: [],
   };
   projects.unshift(project);
   await writeProjects(projects);
@@ -169,6 +173,27 @@ export async function PATCH(request: Request) {
         lastTouch: String(lead?.lastTouch ?? ""),
       }))
       .filter((lead: any) => lead.name.length > 0);
+  }
+  if (Array.isArray(body?.inbox)) {
+    next.inbox = body.inbox
+      .map((message: any) => ({
+        from: String(message?.from ?? ""),
+        subject: String(message?.subject ?? ""),
+        sentiment: String(message?.sentiment ?? ""),
+        status: String(message?.status ?? ""),
+        receivedAt: String(message?.receivedAt ?? ""),
+      }))
+      .filter((message: any) => message.subject.length > 0);
+  }
+  if (Array.isArray(body?.domains)) {
+    next.domains = body.domains
+      .map((domain: any) => ({
+        domain: String(domain?.domain ?? ""),
+        status: String(domain?.status ?? ""),
+        warmupStage: String(domain?.warmupStage ?? ""),
+        reputation: String(domain?.reputation ?? ""),
+      }))
+      .filter((domain: any) => domain.domain.length > 0);
   }
   next.updatedAt = new Date().toISOString();
   projects[index] = next;

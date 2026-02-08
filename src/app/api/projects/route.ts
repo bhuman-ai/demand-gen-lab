@@ -28,6 +28,9 @@ type Project = {
       qualified: number;
     };
   };
+  ideas: { title: string; channel: string; rationale: string }[];
+  sequences: { name: string; status: string }[];
+  leads: { name: string; channel: string; status: string; lastTouch: string }[];
 };
 
 async function readProjects() {
@@ -84,6 +87,9 @@ export async function POST(request: Request) {
         qualified: 0,
       },
     },
+    ideas: [],
+    sequences: [],
+    leads: [],
   };
   projects.unshift(project);
   await writeProjects(projects);
@@ -136,6 +142,33 @@ export async function PATCH(request: Request) {
             : next.modules.leads.qualified,
       },
     };
+  }
+  if (Array.isArray(body?.ideas)) {
+    next.ideas = body.ideas
+      .map((idea: any) => ({
+        title: String(idea?.title ?? ""),
+        channel: String(idea?.channel ?? ""),
+        rationale: String(idea?.rationale ?? ""),
+      }))
+      .filter((idea: any) => idea.title.length > 0);
+  }
+  if (Array.isArray(body?.sequences)) {
+    next.sequences = body.sequences
+      .map((sequence: any) => ({
+        name: String(sequence?.name ?? ""),
+        status: String(sequence?.status ?? ""),
+      }))
+      .filter((sequence: any) => sequence.name.length > 0);
+  }
+  if (Array.isArray(body?.leads)) {
+    next.leads = body.leads
+      .map((lead: any) => ({
+        name: String(lead?.name ?? ""),
+        channel: String(lead?.channel ?? ""),
+        status: String(lead?.status ?? ""),
+        lastTouch: String(lead?.lastTouch ?? ""),
+      }))
+      .filter((lead: any) => lead.name.length > 0);
   }
   next.updatedAt = new Date().toISOString();
   projects[index] = next;

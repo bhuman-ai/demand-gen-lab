@@ -29,6 +29,9 @@ type Project = {
       qualified: number;
     };
   };
+  ideas: { title: string; channel: string; rationale: string }[];
+  sequences: { name: string; status: string }[];
+  leads: { name: string; channel: string; status: string; lastTouch: string }[];
 };
 
 type ProjectDetailProps = {
@@ -36,11 +39,11 @@ type ProjectDetailProps = {
   projects: Project[];
 };
 
-type Idea = {
-  title: string;
-  channel: string;
-  rationale: string;
-};
+type Idea = { title: string; channel: string; rationale: string };
+
+type Lead = { name: string; channel: string; status: string; lastTouch: string };
+
+type Sequence = { name: string; status: string };
 
 export default function ProjectDetail({ project, projects }: ProjectDetailProps) {
   const router = useRouter();
@@ -51,12 +54,44 @@ export default function ProjectDetail({ project, projects }: ProjectDetailProps)
   const [activeTab, setActiveTab] = useState<"overview" | "strategy" | "sequences" | "leads">(
     "overview"
   );
-  const [ideas, setIdeas] = useState<Idea[]>([]);
   const [ideasLoading, setIdeasLoading] = useState(false);
   const [ideasError, setIdeasError] = useState("");
+  const [newSequenceName, setNewSequenceName] = useState("");
+  const [newSequenceStatus, setNewSequenceStatus] = useState("idle");
+  const [newLead, setNewLead] = useState<Lead>({
+    name: "",
+    channel: "",
+    status: "New",
+    lastTouch: "",
+  });
 
   const updateField = (key: keyof Project, value: string) => {
     setForm((prev) => ({ ...prev, [key]: value }));
+  };
+
+  const persistProject = async (next: Project) => {
+    const response = await fetch("/api/projects", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        id: next.id,
+        brandName: next.brandName,
+        website: next.website,
+        tone: next.tone,
+        targetBuyers: next.targetBuyers,
+        offers: next.offers,
+        proof: next.proof,
+        modules: next.modules,
+        ideas: next.ideas,
+        sequences: next.sequences,
+        leads: next.leads,
+      }),
+    });
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data?.error ?? "Save failed");
+    }
+    return data.project as Project;
   };
 
   const handleSave = async () => {
@@ -64,29 +99,11 @@ export default function ProjectDetail({ project, projects }: ProjectDetailProps)
     setSaving(true);
     setSavedAt("");
     try {
-      const response = await fetch("/api/projects", {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          id: project.id,
-          brandName: form.brandName,
-          website: form.website,
-          tone: form.tone,
-          targetBuyers: form.targetBuyers,
-          offers: form.offers,
-          proof: form.proof,
-          modules: form.modules,
-        }),
-      });
-      const data = await response.json();
-      if (!response.ok) {
-        setError(data?.error ?? "Save failed");
-      } else {
-        setForm(data.project);
-        setSavedAt(new Date().toLocaleTimeString());
-      }
-    } catch {
-      setError("Save failed");
+      const saved = await persistProject(form);
+      setForm(saved);
+      setSavedAt(new Date().toLocaleTimeString());
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Save failed");
     } finally {
       setSaving(false);
     }
@@ -119,20 +136,70 @@ export default function ProjectDetail({ project, projects }: ProjectDetailProps)
           exclusions: {
             avoid: ["Etsy", "Fiverr", "Upwork"],
           },
-          existingIdeas: [],
+          existingIdeas: form.ideas,
         }),
       });
       const data = await response.json();
       if (!response.ok) {
         setIdeasError(data?.error ?? "Idea generation failed");
       } else {
-        setIdeas(Array.isArray(data?.ideas) ? data.ideas : []);
+        const nextIdeas = Array.isArray(data?.ideas) ? (data.ideas as Idea[]) : [];
+        setForm((prev) => ({ ...prev, ideas: nextIdeas }));
+        const saved = await persistProject({ ...form, ideas: nextIdeas });
+        setForm(saved);
       }
     } catch {
       setIdeasError("Idea generation failed");
     } finally {
       setIdeasLoading(false);
     }
+  };
+
+  const addSequence = async () => {
+    if (!newSequenceName.trim()) return;
+    const nextSequences: Sequence[] = [
+      { name: newSequenceName.trim(), status: newSequenceStatus },
+      ...form.sequences,
+    ];
+    const next = {
+      ...form,
+      sequences: nextSequences,
+      modules: {
+        ...form.modules,
+        sequences: {
+          ...form.modules.sequences,
+          activeCount: nextSequences.length,
+        },
+      },
+    };
+    setForm(next);
+    setNewSequenceName("");
+    const saved = await persistProject(next);
+    setForm(saved);
+  };
+
+  const addLead = async () => {
+    if (!newLead.name.trim()) return;
+    const nextLeads = [
+      { ...newLead, name: newLead.name.trim() },
+      ...form.leads,
+    ];
+    const qualifiedCount = nextLeads.filter((lead) => lead.status.toLowerCase() === "qualified").length;
+    const next = {
+      ...form,
+      leads: nextLeads,
+      modules: {
+        ...form.modules,
+        leads: {
+          total: nextLeads.length,
+          qualified: qualifiedCount,
+        },
+      },
+    };
+    setForm(next);
+    setNewLead({ name: "", channel: "", status: "New", lastTouch: "" });
+    const saved = await persistProject(next);
+    setForm(saved);
   };
 
   return (
@@ -301,9 +368,9 @@ export default function ProjectDetail({ project, projects }: ProjectDetailProps)
             </button>
             {ideasError ? <span className="text-xs text-[color:var(--danger)]">{ideasError}</span> : null}
           </div>
-          {ideas.length ? (
+          {form.ideas.length ? (
             <div className="mt-4 grid gap-3">
-              {ideas.slice(0, 6).map((idea) => (
+              {form.ideas.slice(0, 8).map((idea) => (
                 <div
                   key={idea.title}
                   className="rounded-md border border-[color:var(--border)] bg-[color:var(--background)]/40 px-3 py-2"
@@ -358,16 +425,48 @@ export default function ProjectDetail({ project, projects }: ProjectDetailProps)
             }
             className="mt-2 h-10 w-40 rounded-md border border-[color:var(--border)] bg-[color:var(--background)]/60 px-3 text-sm text-[color:var(--foreground)]"
           />
+          <div className="mt-4 flex flex-wrap items-end gap-3">
+            <div>
+              <div className="text-[11px] text-[color:var(--muted)]">Sequence name</div>
+              <input
+                value={newSequenceName}
+                onChange={(event) => setNewSequenceName(event.target.value)}
+                className="mt-2 h-9 w-56 rounded-md border border-[color:var(--border)] bg-[color:var(--background)]/60 px-2 text-xs text-[color:var(--foreground)]"
+              />
+            </div>
+            <div>
+              <div className="text-[11px] text-[color:var(--muted)]">Status</div>
+              <select
+                value={newSequenceStatus}
+                onChange={(event) => setNewSequenceStatus(event.target.value)}
+                className="mt-2 h-9 w-32 rounded-md border border-[color:var(--border)] bg-[color:var(--background)]/60 px-2 text-xs text-[color:var(--foreground)]"
+              >
+                <option value="idle">Idle</option>
+                <option value="testing">Testing</option>
+                <option value="scaling">Scaling</option>
+              </select>
+            </div>
+            <button
+              type="button"
+              onClick={addSequence}
+              className="rounded-md border border-[color:var(--border)] px-3 py-2 text-xs text-[color:var(--foreground)]"
+            >
+              Add sequence
+            </button>
+          </div>
           <div className="mt-4 grid gap-3 md:grid-cols-2">
-            {Array.from({ length: Math.max(2, form.modules.sequences.activeCount || 0) }).map((_, index) => (
+            {(form.sequences || []).map((sequence, index) => (
               <div
-                key={`seq-${index}`}
+                key={`${sequence.name}-${index}`}
                 className="rounded-md border border-[color:var(--border)] bg-[color:var(--background)]/40 px-3 py-2"
               >
-                <div className="text-xs text-[color:var(--muted)]">Sequence {index + 1}</div>
-                <div className="text-sm text-[color:var(--foreground)]">Status: {form.modules.sequences.status}</div>
+                <div className="text-xs text-[color:var(--muted)]">{sequence.status}</div>
+                <div className="text-sm text-[color:var(--foreground)]">{sequence.name}</div>
               </div>
             ))}
+            {!form.sequences.length ? (
+              <div className="text-xs text-[color:var(--muted)]">No sequences yet.</div>
+            ) : null}
           </div>
         </div>
       ) : null}
@@ -412,26 +511,60 @@ export default function ProjectDetail({ project, projects }: ProjectDetailProps)
               />
             </div>
           </div>
+          <div className="mt-4 grid gap-3 md:grid-cols-4">
+            <input
+              value={newLead.name}
+              onChange={(event) => setNewLead((prev) => ({ ...prev, name: event.target.value }))}
+              placeholder="Lead name"
+              className="h-9 rounded-md border border-[color:var(--border)] bg-[color:var(--background)]/60 px-2 text-xs text-[color:var(--foreground)]"
+            />
+            <input
+              value={newLead.channel}
+              onChange={(event) => setNewLead((prev) => ({ ...prev, channel: event.target.value }))}
+              placeholder="Channel"
+              className="h-9 rounded-md border border-[color:var(--border)] bg-[color:var(--background)]/60 px-2 text-xs text-[color:var(--foreground)]"
+            />
+            <input
+              value={newLead.status}
+              onChange={(event) => setNewLead((prev) => ({ ...prev, status: event.target.value }))}
+              placeholder="Status"
+              className="h-9 rounded-md border border-[color:var(--border)] bg-[color:var(--background)]/60 px-2 text-xs text-[color:var(--foreground)]"
+            />
+            <div className="flex gap-2">
+              <input
+                value={newLead.lastTouch}
+                onChange={(event) => setNewLead((prev) => ({ ...prev, lastTouch: event.target.value }))}
+                placeholder="Last touch"
+                className="h-9 flex-1 rounded-md border border-[color:var(--border)] bg-[color:var(--background)]/60 px-2 text-xs text-[color:var(--foreground)]"
+              />
+              <button
+                type="button"
+                onClick={addLead}
+                className="rounded-md border border-[color:var(--border)] px-3 text-xs text-[color:var(--foreground)]"
+              >
+                Add
+              </button>
+            </div>
+          </div>
           <div className="mt-5 overflow-hidden rounded-md border border-[color:var(--border)]">
             <div className="grid grid-cols-4 bg-[color:var(--background)]/60 text-[11px] text-[color:var(--muted)]">
-              {["Lead", "Channel", "Status", "Last Touch"].map((label) => (
+              {['Lead', 'Channel', 'Status', 'Last Touch'].map((label) => (
                 <div key={label} className="px-3 py-2">
                   {label}
                 </div>
               ))}
             </div>
-            {[
-              { lead: "Aurora Studios", channel: "Email", status: "Qualified", touch: "2d" },
-              { lead: "Void Signal", channel: "Instagram", status: "Pending", touch: "5d" },
-              { lead: "Helix Plays", channel: "YouTube", status: "New", touch: "1d" },
-            ].map((row) => (
-              <div key={row.lead} className="grid grid-cols-4 text-[11px] text-[color:var(--foreground)]">
-                <div className="px-3 py-2">{row.lead}</div>
+            {form.leads.map((row, index) => (
+              <div key={`${row.name}-${index}`} className="grid grid-cols-4 text-[11px] text-[color:var(--foreground)]">
+                <div className="px-3 py-2">{row.name}</div>
                 <div className="px-3 py-2">{row.channel}</div>
                 <div className="px-3 py-2">{row.status}</div>
-                <div className="px-3 py-2">{row.touch}</div>
+                <div className="px-3 py-2">{row.lastTouch}</div>
               </div>
             ))}
+            {!form.leads.length ? (
+              <div className="px-3 py-3 text-[11px] text-[color:var(--muted)]">No leads yet.</div>
+            ) : null}
           </div>
         </div>
       ) : null}
@@ -440,9 +573,9 @@ export default function ProjectDetail({ project, projects }: ProjectDetailProps)
         <div className="text-xs text-[color:var(--muted)]">Project Modules</div>
         <div className="mt-3 grid gap-3 md:grid-cols-3">
           {[
-            { label: "Strategy", href: "/strategy" },
-            { label: "Hypotheses", href: "/hypotheses" },
-            { label: "Evolution", href: "/evolution" },
+            { label: "Strategy", href: `/projects/${project.id}/strategy` },
+            { label: "Hypotheses", href: `/projects/${project.id}/hypotheses` },
+            { label: "Evolution", href: `/projects/${project.id}/evolution` },
             { label: "Leads", href: "/leads" },
             { label: "Inbox", href: "/inbox" },
             { label: "Network", href: "/network" },

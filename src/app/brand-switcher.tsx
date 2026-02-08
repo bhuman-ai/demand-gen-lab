@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 
 type Project = {
   id: string;
@@ -13,6 +14,7 @@ const teams = [
 ];
 
 export default function BrandSwitcher() {
+  const router = useRouter();
   const [open, setOpen] = useState(false);
   const [teamQuery, setTeamQuery] = useState("");
   const [projectQuery, setProjectQuery] = useState("");
@@ -137,6 +139,7 @@ export default function BrandSwitcher() {
                     onClick={() => {
                       setActiveProjectId(project.id);
                       setOpen(false);
+                      router.push(`/projects/${project.id}`);
                     }}
                     className={`flex w-full items-center justify-between rounded-md px-2 py-2 text-left text-xs ${
                       activeProjectId === project.id

@@ -36,6 +36,12 @@ type ProjectDetailProps = {
   projects: Project[];
 };
 
+type Idea = {
+  title: string;
+  channel: string;
+  rationale: string;
+};
+
 export default function ProjectDetail({ project, projects }: ProjectDetailProps) {
   const router = useRouter();
   const [form, setForm] = useState<Project>(project);
@@ -45,6 +51,9 @@ export default function ProjectDetail({ project, projects }: ProjectDetailProps)
   const [activeTab, setActiveTab] = useState<"overview" | "strategy" | "sequences" | "leads">(
     "overview"
   );
+  const [ideas, setIdeas] = useState<Idea[]>([]);
+  const [ideasLoading, setIdeasLoading] = useState(false);
+  const [ideasError, setIdeasError] = useState("");
 
   const updateField = (key: keyof Project, value: string) => {
     setForm((prev) => ({ ...prev, [key]: value }));
@@ -80,6 +89,49 @@ export default function ProjectDetail({ project, projects }: ProjectDetailProps)
       setError("Save failed");
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleGenerateIdeas = async () => {
+    setIdeasError("");
+    setIdeasLoading(true);
+    try {
+      const response = await fetch("/api/strategy/ideas", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          goal: form.modules.strategy.goal || "Generate outreach ideas",
+          context: {
+            website: form.website,
+            brandName: form.brandName,
+            tone: form.tone,
+          },
+          needs: {
+            targetBuyers: form.targetBuyers,
+            offers: form.offers,
+          },
+          constraints: {
+            maxDailyLeads: 50,
+          },
+          preferences: {
+            channels: ["YouTube", "Instagram", "Reddit", "LinkedIn", "X"],
+          },
+          exclusions: {
+            avoid: ["Etsy", "Fiverr", "Upwork"],
+          },
+          existingIdeas: [],
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        setIdeasError(data?.error ?? "Idea generation failed");
+      } else {
+        setIdeas(Array.isArray(data?.ideas) ? data.ideas : []);
+      }
+    } catch {
+      setIdeasError("Idea generation failed");
+    } finally {
+      setIdeasLoading(false);
     }
   };
 
@@ -238,6 +290,31 @@ export default function ProjectDetail({ project, projects }: ProjectDetailProps)
             }
             className="mt-2 h-20 w-full resize-none rounded-md border border-[color:var(--border)] bg-[color:var(--background)]/60 px-3 py-2 text-sm text-[color:var(--foreground)]"
           />
+          <div className="mt-4 flex items-center gap-3">
+            <button
+              type="button"
+              onClick={handleGenerateIdeas}
+              disabled={ideasLoading}
+              className="rounded-md border border-[color:var(--border)] px-3 py-2 text-xs text-[color:var(--foreground)]"
+            >
+              {ideasLoading ? "Generating..." : "Generate Ideas"}
+            </button>
+            {ideasError ? <span className="text-xs text-[color:var(--danger)]">{ideasError}</span> : null}
+          </div>
+          {ideas.length ? (
+            <div className="mt-4 grid gap-3">
+              {ideas.slice(0, 6).map((idea) => (
+                <div
+                  key={idea.title}
+                  className="rounded-md border border-[color:var(--border)] bg-[color:var(--background)]/40 px-3 py-2"
+                >
+                  <div className="text-xs text-[color:var(--muted)]">{idea.channel}</div>
+                  <div className="text-sm text-[color:var(--foreground)]">{idea.title}</div>
+                  <div className="mt-1 text-[11px] text-[color:var(--muted)]">{idea.rationale}</div>
+                </div>
+              ))}
+            </div>
+          ) : null}
         </div>
       ) : null}
 
@@ -281,6 +358,17 @@ export default function ProjectDetail({ project, projects }: ProjectDetailProps)
             }
             className="mt-2 h-10 w-40 rounded-md border border-[color:var(--border)] bg-[color:var(--background)]/60 px-3 text-sm text-[color:var(--foreground)]"
           />
+          <div className="mt-4 grid gap-3 md:grid-cols-2">
+            {Array.from({ length: Math.max(2, form.modules.sequences.activeCount || 0) }).map((_, index) => (
+              <div
+                key={`seq-${index}`}
+                className="rounded-md border border-[color:var(--border)] bg-[color:var(--background)]/40 px-3 py-2"
+              >
+                <div className="text-xs text-[color:var(--muted)]">Sequence {index + 1}</div>
+                <div className="text-sm text-[color:var(--foreground)]">Status: {form.modules.sequences.status}</div>
+              </div>
+            ))}
+          </div>
         </div>
       ) : null}
 
@@ -323,6 +411,27 @@ export default function ProjectDetail({ project, projects }: ProjectDetailProps)
                 className="mt-2 h-9 w-28 rounded-md border border-[color:var(--border)] bg-[color:var(--background)]/60 px-2 text-xs text-[color:var(--foreground)]"
               />
             </div>
+          </div>
+          <div className="mt-5 overflow-hidden rounded-md border border-[color:var(--border)]">
+            <div className="grid grid-cols-4 bg-[color:var(--background)]/60 text-[11px] text-[color:var(--muted)]">
+              {["Lead", "Channel", "Status", "Last Touch"].map((label) => (
+                <div key={label} className="px-3 py-2">
+                  {label}
+                </div>
+              ))}
+            </div>
+            {[
+              { lead: "Aurora Studios", channel: "Email", status: "Qualified", touch: "2d" },
+              { lead: "Void Signal", channel: "Instagram", status: "Pending", touch: "5d" },
+              { lead: "Helix Plays", channel: "YouTube", status: "New", touch: "1d" },
+            ].map((row) => (
+              <div key={row.lead} className="grid grid-cols-4 text-[11px] text-[color:var(--foreground)]">
+                <div className="px-3 py-2">{row.lead}</div>
+                <div className="px-3 py-2">{row.channel}</div>
+                <div className="px-3 py-2">{row.status}</div>
+                <div className="px-3 py-2">{row.touch}</div>
+              </div>
+            ))}
           </div>
         </div>
       ) : null}

@@ -14,6 +14,7 @@ const teams = [
 ];
 
 const ACTIVE_PROJECT_KEY = "factory.activeProjectId";
+const ACTIVE_TEAM_KEY = "factory.activeTeamId";
 
 export default function BrandSwitcher() {
   const router = useRouter();
@@ -29,6 +30,13 @@ export default function BrandSwitcher() {
     const savedProjectId = typeof window !== "undefined" ? localStorage.getItem(ACTIVE_PROJECT_KEY) : "";
     if (savedProjectId) {
       setActiveProjectId(savedProjectId);
+    }
+    const savedTeamId = typeof window !== "undefined" ? localStorage.getItem(ACTIVE_TEAM_KEY) : "";
+    if (savedTeamId) {
+      const savedTeam = teams.find((team) => team.id === savedTeamId);
+      if (savedTeam) {
+        setActiveTeam(savedTeam);
+      }
     }
     const loadProjects = async () => {
       try {
@@ -110,7 +118,12 @@ export default function BrandSwitcher() {
                   <button
                     key={team.id}
                     type="button"
-                    onClick={() => setActiveTeam(team)}
+                    onClick={() => {
+                      setActiveTeam(team);
+                      if (typeof window !== "undefined") {
+                        localStorage.setItem(ACTIVE_TEAM_KEY, team.id);
+                      }
+                    }}
                     className={`flex w-full items-center justify-between rounded-md px-2 py-2 text-left text-xs ${
                       activeTeam.id === team.id
                         ? "bg-[color:var(--background)]/60 text-[color:var(--foreground)]"

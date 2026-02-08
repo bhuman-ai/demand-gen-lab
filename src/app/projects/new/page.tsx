@@ -21,6 +21,8 @@ export default function Page() {
   });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [savedId, setSavedId] = useState("");
 
   const handleScrape = async () => {
     setError("");
@@ -47,6 +49,32 @@ export default function Page() {
       setError("Prefill failed");
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleSave = async () => {
+    setError("");
+    setSaving(true);
+    setSavedId("");
+    try {
+      const response = await fetch("/api/projects", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          website,
+          ...prefill,
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        setError(data?.error ?? "Save failed");
+      } else {
+        setSavedId(data?.project?.id ?? "");
+      }
+    } catch {
+      setError("Save failed");
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -126,6 +154,19 @@ export default function Page() {
         <p className="mt-4 text-xs text-[color:var(--muted)]">
           Edit the generated summary (target buyers, tone, offers, proof points).
         </p>
+        <div className="mt-4 flex flex-wrap items-center gap-3">
+          <button
+            type="button"
+            onClick={handleSave}
+            disabled={saving || !website.trim() || !prefill.brandName.trim()}
+            className="rounded-md border border-[color:var(--border)] bg-[color:var(--background)]/80 px-4 py-2 text-xs text-[color:var(--foreground)] disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {saving ? "Saving..." : "Save Project"}
+          </button>
+          {savedId ? (
+            <span className="text-xs text-[color:var(--success)]">Saved {savedId}</span>
+          ) : null}
+        </div>
       </div>
     </div>
   );

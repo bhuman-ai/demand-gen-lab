@@ -25,6 +25,10 @@ export default function ProjectList({ projects }: ProjectListProps) {
   const [form, setForm] = useState<Partial<Project>>({});
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
+  const [undoQueue, setUndoQueue] = useState<{
+    project: Project;
+    timeoutId: ReturnType<typeof setTimeout>;
+  } | null>(null);
 
   const beginEdit = (project: Project) => {
     setEditingId(project.id);
@@ -75,24 +79,40 @@ export default function ProjectList({ projects }: ProjectListProps) {
     }
   };
 
-  const handleDelete = async (id: string) => {
+  const handleDelete = (project: Project) => {
     if (!window.confirm("Delete this project?")) return;
     setError("");
-    try {
-      const response = await fetch("/api/projects", {
-        method: "DELETE",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id }),
-      });
-      const data = await response.json();
-      if (!response.ok) {
-        setError(data?.error ?? "Delete failed");
-      } else {
-        setItems((prev) => prev.filter((item) => item.id !== id));
-      }
-    } catch {
-      setError("Delete failed");
+    setItems((prev) => prev.filter((item) => item.id !== project.id));
+    if (undoQueue?.timeoutId) {
+      clearTimeout(undoQueue.timeoutId);
     }
+    const timeoutId = setTimeout(async () => {
+      try {
+        const response = await fetch("/api/projects", {
+          method: "DELETE",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ id: project.id }),
+        });
+        const data = await response.json();
+        if (!response.ok) {
+          setError(data?.error ?? "Delete failed");
+          setItems((prev) => [project, ...prev]);
+        }
+      } catch {
+        setError("Delete failed");
+        setItems((prev) => [project, ...prev]);
+      } finally {
+        setUndoQueue(null);
+      }
+    }, 4000);
+    setUndoQueue({ project, timeoutId });
+  };
+
+  const handleUndo = () => {
+    if (!undoQueue) return;
+    clearTimeout(undoQueue.timeoutId);
+    setItems((prev) => [undoQueue.project, ...prev]);
+    setUndoQueue(null);
   };
 
   if (!items.length) {
@@ -106,6 +126,18 @@ export default function ProjectList({ projects }: ProjectListProps) {
   return (
     <div className="space-y-4">
       {error ? <div className="text-xs text-[color:var(--danger)]">{error}</div> : null}
+      {undoQueue ? (
+        <div className="flex items-center justify-between rounded-md border border-[color:var(--border)] bg-[color:var(--background)]/70 px-3 py-2 text-xs text-[color:var(--foreground)]">
+          <span>Project deleted.</span>
+          <button
+            type="button"
+            onClick={handleUndo}
+            className="text-[color:var(--accent)]"
+          >
+            Undo
+          </button>
+        </div>
+      ) : null}
       <div className="grid gap-4 md:grid-cols-2">
         {items.map((project) => {
           const isEditing = editingId === project.id;
@@ -162,7 +194,7 @@ export default function ProjectList({ projects }: ProjectListProps) {
                       </button>
                       <button
                         type="button"
-                        onClick={() => handleDelete(project.id)}
+                        onClick={() => handleDelete(project)}
                         className="rounded-md border border-[color:var(--border)] px-2 py-1 text-[11px] text-[color:var(--danger)]"
                       >
                         Delete

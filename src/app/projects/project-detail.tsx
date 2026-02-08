@@ -576,9 +576,9 @@ export default function ProjectDetail({ project, projects }: ProjectDetailProps)
             { label: "Strategy", href: `/projects/${project.id}/strategy` },
             { label: "Hypotheses", href: `/projects/${project.id}/hypotheses` },
             { label: "Evolution", href: `/projects/${project.id}/evolution` },
-            { label: "Leads", href: "/leads" },
-            { label: "Inbox", href: "/inbox" },
-            { label: "Network", href: "/network" },
+            { label: "Leads", href: `/projects/${project.id}/leads` },
+            { label: "Inbox", href: `/projects/${project.id}/inbox` },
+            { label: "Network", href: `/projects/${project.id}/network` },
           ].map((module) => (
             <Link
               key={module.label}

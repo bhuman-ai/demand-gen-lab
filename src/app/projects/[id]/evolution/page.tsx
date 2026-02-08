@@ -19,9 +19,9 @@ export default async function Page({ params }: { params: Promise<{ id: string }>
   if (!project) {
     return (
       <div className="space-y-4">
-        <h1 className="text-xl font-semibold text-[color:var(--foreground)]">Project Not Found</h1>
+        <h1 className="text-xl font-semibold text-[color:var(--foreground)]">Brand Not Found</h1>
         <Link className="text-xs text-[color:var(--accent)]" href="/projects">
-          Back to Projects
+          Back to Brands
         </Link>
       </div>
     );
@@ -32,7 +32,7 @@ export default async function Page({ params }: { params: Promise<{ id: string }>
       <div className="flex items-center justify-between">
         <h1 className="text-xl font-semibold text-[color:var(--foreground)]">{project.brandName} — Evolution</h1>
         <Link className="text-xs text-[color:var(--accent)]" href={`/projects/${project.id}`}>
-          Back to Project
+          Back to Brand
         </Link>
       </div>
       <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--background-elevated)] p-5">

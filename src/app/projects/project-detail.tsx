@@ -230,7 +230,7 @@ export default function ProjectDetail({ project, projects }: ProjectDetailProps)
             {saving ? "Saving" : "Save"}
           </button>
           <Link className="text-xs text-[color:var(--accent)]" href="/projects">
-            Back
+            Back to Brands
           </Link>
         </div>
       </div>
@@ -570,7 +570,7 @@ export default function ProjectDetail({ project, projects }: ProjectDetailProps)
       ) : null}
 
       <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--background-elevated)] p-5">
-        <div className="text-xs text-[color:var(--muted)]">Project Modules</div>
+        <div className="text-xs text-[color:var(--muted)]">Brand Modules</div>
         <div className="mt-3 grid gap-3 md:grid-cols-3">
           {[
             { label: "Strategy", href: `/projects/${project.id}/strategy` },

@@ -95,7 +95,7 @@ export default function BrandSwitcher() {
           </span>
           <span className="text-[10px] text-[color:var(--muted)]">/</span>
           <span className="text-sm text-[color:var(--foreground)]">
-            {activeProject?.brandName ?? "Select project"}
+            {activeProject?.brandName ?? "Select brand"}
           </span>
         </span>
         <span className="text-[10px] text-[color:var(--muted)]">▾</span>
@@ -153,11 +153,11 @@ export default function BrandSwitcher() {
                 <input
                   value={projectQuery}
                   onChange={(event) => setProjectQuery(event.target.value)}
-                  placeholder="Find Project..."
+                  placeholder="Find Brand..."
                   className="w-full bg-transparent text-xs text-[color:var(--foreground)] placeholder:text-[color:var(--muted)] focus:outline-none"
                 />
               </div>
-              <div className="text-[11px] uppercase tracking-[0.2em] text-[color:var(--muted)]">Projects</div>
+              <div className="text-[11px] uppercase tracking-[0.2em] text-[color:var(--muted)]">Brands</div>
               <div className="space-y-2">
                 {filteredProjects.map((project) => (
                   <button
@@ -190,7 +190,7 @@ export default function BrandSwitcher() {
                 ))}
                 {!filteredProjects.length ? (
                   <div className="rounded-md border border-dashed border-[color:var(--border)] px-2 py-3 text-xs text-[color:var(--muted)]">
-                    No projects yet.
+                    No brands yet.
                   </div>
                 ) : null}
               </div>

@@ -80,7 +80,7 @@ export default function ProjectList({ projects }: ProjectListProps) {
   };
 
   const handleDelete = (project: Project) => {
-    if (!window.confirm("Delete this project?")) return;
+    if (!window.confirm("Delete this brand?")) return;
     setError("");
     setItems((prev) => prev.filter((item) => item.id !== project.id));
     if (undoQueue?.timeoutId) {
@@ -118,7 +118,7 @@ export default function ProjectList({ projects }: ProjectListProps) {
   if (!items.length) {
     return (
       <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--background-elevated)] p-5">
-        <div className="text-sm text-[color:var(--muted)]">No projects yet.</div>
+        <div className="text-sm text-[color:var(--muted)]">No brands yet.</div>
       </div>
     );
   }
@@ -128,7 +128,7 @@ export default function ProjectList({ projects }: ProjectListProps) {
       {error ? <div className="text-xs text-[color:var(--danger)]">{error}</div> : null}
       {undoQueue ? (
         <div className="flex items-center justify-between rounded-md border border-[color:var(--border)] bg-[color:var(--background)]/70 px-3 py-2 text-xs text-[color:var(--foreground)]">
-          <span>Project deleted.</span>
+          <span>Brand deleted.</span>
           <button
             type="button"
             onClick={handleUndo}
@@ -217,8 +217,6 @@ export default function ProjectList({ projects }: ProjectListProps) {
               <div className="mt-4 grid gap-2 text-[11px] text-[color:var(--muted)]">
                 {[
                   { label: "Tone", key: "tone" },
-                  { label: "Target buyers", key: "targetBuyers" },
-                  { label: "Offers", key: "offers" },
                 ].map((field) => (
                   <div key={field.key} className="flex justify-between gap-2">
                     <span>{field.label}</span>

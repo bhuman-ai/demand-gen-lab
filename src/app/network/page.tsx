@@ -31,7 +31,7 @@ export default async function Page() {
           ))}
           {!projects.length ? (
             <div className="rounded-md border border-dashed border-[color:var(--border)] px-4 py-3 text-xs text-[color:var(--muted)]">
-              No projects yet.
+              No brands yet.
             </div>
           ) : null}
         </div>

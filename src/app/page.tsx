@@ -14,7 +14,7 @@ export default function Home() {
           </p>
           <div className="mt-6 grid gap-3 sm:grid-cols-2">
             <button className="rounded-lg border border-[color:var(--border)] bg-[color:var(--background-elevated)] px-4 py-3 text-left text-sm text-[color:var(--foreground)]">
-              + Create Project
+              + New Brand
               <div className="text-xs text-[color:var(--muted)]">Scrape site and inject context</div>
             </button>
             <button className="rounded-lg border border-[color:var(--border)] bg-[color:var(--background-elevated)] px-4 py-3 text-left text-sm text-[color:var(--foreground)]">
@@ -25,7 +25,7 @@ export default function Home() {
         </div>
         <div className="space-y-4">
           {[
-            { label: "Active Projects", value: "0", tone: "text-[color:var(--foreground)]" },
+            { label: "Active Brands", value: "0", tone: "text-[color:var(--foreground)]" },
             { label: "Queued Experiments", value: "0", tone: "text-[color:var(--accent)]" },
             { label: "System Health", value: "Stable", tone: "text-[color:var(--success)]" },
           ].map((card) => (

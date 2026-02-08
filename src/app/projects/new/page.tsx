@@ -5,8 +5,6 @@ import { useState } from "react";
 type Prefill = {
   brandName: string;
   tone: string;
-  targetBuyers: string;
-  offers: string;
   proof: string;
 };
 
@@ -15,8 +13,6 @@ export default function Page() {
   const [prefill, setPrefill] = useState<Prefill>({
     brandName: "",
     tone: "",
-    targetBuyers: "",
-    offers: "",
     proof: "",
   });
   const [loading, setLoading] = useState(false);
@@ -40,8 +36,6 @@ export default function Page() {
         setPrefill({
           brandName: data?.prefill?.brandName ?? "",
           tone: data?.prefill?.tone ?? "",
-          targetBuyers: data?.prefill?.targetBuyers ?? "",
-          offers: data?.prefill?.offers ?? "",
           proof: data?.prefill?.proof ?? "",
         });
       }
@@ -80,7 +74,7 @@ export default function Page() {
 
   return (
     <div className="space-y-6">
-      <h1 className="text-xl font-semibold text-[color:var(--foreground)]">New Project</h1>
+      <h1 className="text-xl font-semibold text-[color:var(--foreground)]">New Brand</h1>
       <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--background-elevated)] p-5">
         <div className="text-xs uppercase tracking-[0.2em] text-[color:var(--muted)]">Step 1</div>
         <div className="mt-2 text-sm font-semibold text-[color:var(--foreground)]">Paste website URL</div>
@@ -108,7 +102,7 @@ export default function Page() {
 
       <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--background-elevated)] p-5">
         <div className="text-xs uppercase tracking-[0.2em] text-[color:var(--muted)]">Step 2</div>
-        <div className="mt-2 text-sm font-semibold text-[color:var(--foreground)]">Confirm context</div>
+        <div className="mt-2 text-sm font-semibold text-[color:var(--foreground)]">Confirm brand context</div>
         <div className="mt-4 grid gap-4 md:grid-cols-2">
           <div>
             <div className="text-xs text-[color:var(--muted)]">Brand name</div>
@@ -126,22 +120,6 @@ export default function Page() {
               className="mt-2 h-10 w-full rounded-md border border-[color:var(--border)] bg-[color:var(--background)]/60 px-3 text-sm text-[color:var(--foreground)]"
             />
           </div>
-          <div>
-            <div className="text-xs text-[color:var(--muted)]">Target buyers</div>
-            <input
-              value={prefill.targetBuyers}
-              onChange={(event) => setPrefill({ ...prefill, targetBuyers: event.target.value })}
-              className="mt-2 h-10 w-full rounded-md border border-[color:var(--border)] bg-[color:var(--background)]/60 px-3 text-sm text-[color:var(--foreground)]"
-            />
-          </div>
-          <div>
-            <div className="text-xs text-[color:var(--muted)]">Offers</div>
-            <input
-              value={prefill.offers}
-              onChange={(event) => setPrefill({ ...prefill, offers: event.target.value })}
-              className="mt-2 h-10 w-full rounded-md border border-[color:var(--border)] bg-[color:var(--background)]/60 px-3 text-sm text-[color:var(--foreground)]"
-            />
-          </div>
           <div className="md:col-span-2">
             <div className="text-xs text-[color:var(--muted)]">Proof points</div>
             <textarea
@@ -152,7 +130,7 @@ export default function Page() {
           </div>
         </div>
         <p className="mt-4 text-xs text-[color:var(--muted)]">
-          Edit the generated summary (target buyers, tone, offers, proof points).
+          Campaign targeting and offers get defined per campaign.
         </p>
         <div className="mt-4 flex flex-wrap items-center gap-3">
           <button
@@ -161,7 +139,7 @@ export default function Page() {
             disabled={saving || !website.trim() || !prefill.brandName.trim()}
             className="rounded-md border border-[color:var(--border)] bg-[color:var(--background)]/80 px-4 py-2 text-xs text-[color:var(--foreground)] disabled:cursor-not-allowed disabled:opacity-60"
           >
-            {saving ? "Saving..." : "Save Project"}
+            {saving ? "Saving..." : "Save Brand"}
           </button>
           {savedId ? (
             <span className="text-xs text-[color:var(--success)]">Saved {savedId}</span>

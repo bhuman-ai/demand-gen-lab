@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 
 type Project = {
   id: string;
@@ -193,6 +194,13 @@ export default function BrandSwitcher() {
                   </div>
                 ) : null}
               </div>
+              <Link
+                href="/projects/new"
+                onClick={() => setOpen(false)}
+                className="mt-2 flex items-center justify-center rounded-md border border-dashed border-[color:var(--border)] px-2 py-2 text-xs text-[color:var(--muted)]"
+              >
+                + New Brand
+              </Link>
             </div>
           </div>
         </div>

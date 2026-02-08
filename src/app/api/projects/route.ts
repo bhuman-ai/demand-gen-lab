@@ -13,6 +13,21 @@ type Project = {
   proof: string;
   createdAt: string;
   updatedAt?: string;
+  modules: {
+    strategy: {
+      status: "draft" | "active" | "paused";
+      goal: string;
+      constraints: string;
+    };
+    sequences: {
+      status: "idle" | "testing" | "scaling";
+      activeCount: number;
+    };
+    leads: {
+      total: number;
+      qualified: number;
+    };
+  };
 };
 
 async function readProjects() {
@@ -54,6 +69,21 @@ export async function POST(request: Request) {
     offers: String(body?.offers ?? ""),
     proof: String(body?.proof ?? ""),
     createdAt: new Date().toISOString(),
+    modules: {
+      strategy: {
+        status: "draft",
+        goal: "",
+        constraints: "",
+      },
+      sequences: {
+        status: "idle",
+        activeCount: 0,
+      },
+      leads: {
+        total: 0,
+        qualified: 0,
+      },
+    },
   };
   projects.unshift(project);
   await writeProjects(projects);
@@ -80,6 +110,32 @@ export async function PATCH(request: Request) {
     if (field in body && typeof body[field] === "string") {
       (next as any)[field] = String(body[field]);
     }
+  }
+  if (body?.modules && typeof body.modules === "object") {
+    next.modules = {
+      strategy: {
+        status: body.modules?.strategy?.status ?? next.modules.strategy.status,
+        goal: String(body.modules?.strategy?.goal ?? next.modules.strategy.goal),
+        constraints: String(body.modules?.strategy?.constraints ?? next.modules.strategy.constraints),
+      },
+      sequences: {
+        status: body.modules?.sequences?.status ?? next.modules.sequences.status,
+        activeCount:
+          typeof body.modules?.sequences?.activeCount === "number"
+            ? body.modules.sequences.activeCount
+            : next.modules.sequences.activeCount,
+      },
+      leads: {
+        total:
+          typeof body.modules?.leads?.total === "number"
+            ? body.modules.leads.total
+            : next.modules.leads.total,
+        qualified:
+          typeof body.modules?.leads?.qualified === "number"
+            ? body.modules.leads.qualified
+            : next.modules.leads.qualified,
+      },
+    };
   }
   next.updatedAt = new Date().toISOString();
   projects[index] = next;

@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 
 type Project = {
   id: string;
@@ -13,17 +14,37 @@ type Project = {
   proof: string;
   createdAt: string;
   updatedAt?: string;
+  modules: {
+    strategy: {
+      status: "draft" | "active" | "paused";
+      goal: string;
+      constraints: string;
+    };
+    sequences: {
+      status: "idle" | "testing" | "scaling";
+      activeCount: number;
+    };
+    leads: {
+      total: number;
+      qualified: number;
+    };
+  };
 };
 
 type ProjectDetailProps = {
   project: Project;
+  projects: Project[];
 };
 
-export default function ProjectDetail({ project }: ProjectDetailProps) {
+export default function ProjectDetail({ project, projects }: ProjectDetailProps) {
+  const router = useRouter();
   const [form, setForm] = useState<Project>(project);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [savedAt, setSavedAt] = useState("");
+  const [activeTab, setActiveTab] = useState<"overview" | "strategy" | "sequences" | "leads">(
+    "overview"
+  );
 
   const updateField = (key: keyof Project, value: string) => {
     setForm((prev) => ({ ...prev, [key]: value }));
@@ -45,6 +66,7 @@ export default function ProjectDetail({ project }: ProjectDetailProps) {
           targetBuyers: form.targetBuyers,
           offers: form.offers,
           proof: form.proof,
+          modules: form.modules,
         }),
       });
       const data = await response.json();
@@ -64,7 +86,20 @@ export default function ProjectDetail({ project }: ProjectDetailProps) {
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <h1 className="text-xl font-semibold text-[color:var(--foreground)]">{form.brandName}</h1>
+        <div className="flex flex-wrap items-center gap-3">
+          <h1 className="text-xl font-semibold text-[color:var(--foreground)]">{form.brandName}</h1>
+          <select
+            value={form.id}
+            onChange={(event) => router.push(`/projects/${event.target.value}`)}
+            className="h-8 rounded-md border border-[color:var(--border)] bg-[color:var(--background)]/60 px-2 text-xs text-[color:var(--foreground)]"
+          >
+            {projects.map((item) => (
+              <option key={item.id} value={item.id}>
+                {item.brandName}
+              </option>
+            ))}
+          </select>
+        </div>
         <div className="flex items-center gap-3">
           {savedAt ? <span className="text-xs text-[color:var(--success)]">Saved {savedAt}</span> : null}
           <button
@@ -82,49 +117,215 @@ export default function ProjectDetail({ project }: ProjectDetailProps) {
       </div>
       {error ? <div className="text-xs text-[color:var(--danger)]">{error}</div> : null}
 
-      <div className="grid gap-4 md:grid-cols-2">
-        <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--background-elevated)] p-5">
-          <div className="text-xs text-[color:var(--muted)]">Website</div>
-          <input
-            value={form.website}
-            onChange={(event) => updateField("website", event.target.value)}
-            className="mt-2 h-10 w-full rounded-md border border-[color:var(--border)] bg-[color:var(--background)]/60 px-3 text-sm text-[color:var(--foreground)]"
-          />
-        </div>
-        <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--background-elevated)] p-5">
-          <div className="text-xs text-[color:var(--muted)]">Tone</div>
-          <input
-            value={form.tone}
-            onChange={(event) => updateField("tone", event.target.value)}
-            className="mt-2 h-10 w-full rounded-md border border-[color:var(--border)] bg-[color:var(--background)]/60 px-3 text-sm text-[color:var(--foreground)]"
-          />
-        </div>
-        <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--background-elevated)] p-5">
-          <div className="text-xs text-[color:var(--muted)]">Target buyers</div>
-          <input
-            value={form.targetBuyers}
-            onChange={(event) => updateField("targetBuyers", event.target.value)}
-            className="mt-2 h-10 w-full rounded-md border border-[color:var(--border)] bg-[color:var(--background)]/60 px-3 text-sm text-[color:var(--foreground)]"
-          />
-        </div>
-        <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--background-elevated)] p-5">
-          <div className="text-xs text-[color:var(--muted)]">Offers</div>
-          <input
-            value={form.offers}
-            onChange={(event) => updateField("offers", event.target.value)}
-            className="mt-2 h-10 w-full rounded-md border border-[color:var(--border)] bg-[color:var(--background)]/60 px-3 text-sm text-[color:var(--foreground)]"
-          />
-        </div>
+      <div className="flex flex-wrap gap-2 text-xs">
+        {[
+          { id: "overview", label: "Overview" },
+          { id: "strategy", label: "Strategy" },
+          { id: "sequences", label: "Sequences" },
+          { id: "leads", label: "Leads" },
+        ].map((tab) => (
+          <button
+            key={tab.id}
+            type="button"
+            onClick={() => setActiveTab(tab.id as typeof activeTab)}
+            className={`rounded-md border px-3 py-1 ${
+              activeTab === tab.id
+                ? "border-[color:var(--accent)] text-[color:var(--foreground)]"
+                : "border-[color:var(--border)] text-[color:var(--muted)]"
+            }`}
+          >
+            {tab.label}
+          </button>
+        ))}
       </div>
 
-      <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--background-elevated)] p-5">
-        <div className="text-xs text-[color:var(--muted)]">Proof</div>
-        <textarea
-          value={form.proof}
-          onChange={(event) => updateField("proof", event.target.value)}
-          className="mt-2 h-24 w-full resize-none rounded-md border border-[color:var(--border)] bg-[color:var(--background)]/60 px-3 py-2 text-sm text-[color:var(--foreground)]"
-        />
-      </div>
+      {activeTab === "overview" ? (
+        <>
+          <div className="grid gap-4 md:grid-cols-2">
+            <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--background-elevated)] p-5">
+              <div className="text-xs text-[color:var(--muted)]">Website</div>
+              <input
+                value={form.website}
+                onChange={(event) => updateField("website", event.target.value)}
+                className="mt-2 h-10 w-full rounded-md border border-[color:var(--border)] bg-[color:var(--background)]/60 px-3 text-sm text-[color:var(--foreground)]"
+              />
+            </div>
+            <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--background-elevated)] p-5">
+              <div className="text-xs text-[color:var(--muted)]">Tone</div>
+              <input
+                value={form.tone}
+                onChange={(event) => updateField("tone", event.target.value)}
+                className="mt-2 h-10 w-full rounded-md border border-[color:var(--border)] bg-[color:var(--background)]/60 px-3 text-sm text-[color:var(--foreground)]"
+              />
+            </div>
+            <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--background-elevated)] p-5">
+              <div className="text-xs text-[color:var(--muted)]">Target buyers</div>
+              <input
+                value={form.targetBuyers}
+                onChange={(event) => updateField("targetBuyers", event.target.value)}
+                className="mt-2 h-10 w-full rounded-md border border-[color:var(--border)] bg-[color:var(--background)]/60 px-3 text-sm text-[color:var(--foreground)]"
+              />
+            </div>
+            <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--background-elevated)] p-5">
+              <div className="text-xs text-[color:var(--muted)]">Offers</div>
+              <input
+                value={form.offers}
+                onChange={(event) => updateField("offers", event.target.value)}
+                className="mt-2 h-10 w-full rounded-md border border-[color:var(--border)] bg-[color:var(--background)]/60 px-3 text-sm text-[color:var(--foreground)]"
+              />
+            </div>
+          </div>
+
+          <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--background-elevated)] p-5">
+            <div className="text-xs text-[color:var(--muted)]">Proof</div>
+            <textarea
+              value={form.proof}
+              onChange={(event) => updateField("proof", event.target.value)}
+              className="mt-2 h-24 w-full resize-none rounded-md border border-[color:var(--border)] bg-[color:var(--background)]/60 px-3 py-2 text-sm text-[color:var(--foreground)]"
+            />
+          </div>
+        </>
+      ) : null}
+
+      {activeTab === "strategy" ? (
+        <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--background-elevated)] p-5">
+          <div className="text-xs text-[color:var(--muted)]">Strategy status</div>
+          <select
+            value={form.modules.strategy.status}
+            onChange={(event) =>
+              setForm((prev) => ({
+                ...prev,
+                modules: {
+                  ...prev.modules,
+                  strategy: {
+                    ...prev.modules.strategy,
+                    status: event.target.value as Project["modules"]["strategy"]["status"],
+                  },
+                },
+              }))
+            }
+            className="mt-2 h-9 rounded-md border border-[color:var(--border)] bg-[color:var(--background)]/60 px-2 text-xs text-[color:var(--foreground)]"
+          >
+            <option value="draft">Draft</option>
+            <option value="active">Active</option>
+            <option value="paused">Paused</option>
+          </select>
+          <div className="mt-4 text-xs text-[color:var(--muted)]">Goal</div>
+          <input
+            value={form.modules.strategy.goal}
+            onChange={(event) =>
+              setForm((prev) => ({
+                ...prev,
+                modules: {
+                  ...prev.modules,
+                  strategy: { ...prev.modules.strategy, goal: event.target.value },
+                },
+              }))
+            }
+            className="mt-2 h-10 w-full rounded-md border border-[color:var(--border)] bg-[color:var(--background)]/60 px-3 text-sm text-[color:var(--foreground)]"
+          />
+          <div className="mt-4 text-xs text-[color:var(--muted)]">Constraints</div>
+          <textarea
+            value={form.modules.strategy.constraints}
+            onChange={(event) =>
+              setForm((prev) => ({
+                ...prev,
+                modules: {
+                  ...prev.modules,
+                  strategy: { ...prev.modules.strategy, constraints: event.target.value },
+                },
+              }))
+            }
+            className="mt-2 h-20 w-full resize-none rounded-md border border-[color:var(--border)] bg-[color:var(--background)]/60 px-3 py-2 text-sm text-[color:var(--foreground)]"
+          />
+        </div>
+      ) : null}
+
+      {activeTab === "sequences" ? (
+        <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--background-elevated)] p-5">
+          <div className="text-xs text-[color:var(--muted)]">Sequence status</div>
+          <select
+            value={form.modules.sequences.status}
+            onChange={(event) =>
+              setForm((prev) => ({
+                ...prev,
+                modules: {
+                  ...prev.modules,
+                  sequences: {
+                    ...prev.modules.sequences,
+                    status: event.target.value as Project["modules"]["sequences"]["status"],
+                  },
+                },
+              }))
+            }
+            className="mt-2 h-9 rounded-md border border-[color:var(--border)] bg-[color:var(--background)]/60 px-2 text-xs text-[color:var(--foreground)]"
+          >
+            <option value="idle">Idle</option>
+            <option value="testing">Testing</option>
+            <option value="scaling">Scaling</option>
+          </select>
+          <div className="mt-4 text-xs text-[color:var(--muted)]">Active sequences</div>
+          <input
+            value={form.modules.sequences.activeCount}
+            onChange={(event) =>
+              setForm((prev) => ({
+                ...prev,
+                modules: {
+                  ...prev.modules,
+                  sequences: {
+                    ...prev.modules.sequences,
+                    activeCount: Number(event.target.value || 0),
+                  },
+                },
+              }))
+            }
+            className="mt-2 h-10 w-40 rounded-md border border-[color:var(--border)] bg-[color:var(--background)]/60 px-3 text-sm text-[color:var(--foreground)]"
+          />
+        </div>
+      ) : null}
+
+      {activeTab === "leads" ? (
+        <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--background-elevated)] p-5">
+          <div className="text-xs text-[color:var(--muted)]">Lead totals</div>
+          <div className="mt-3 flex gap-4">
+            <div>
+              <div className="text-[11px] text-[color:var(--muted)]">Total</div>
+              <input
+                value={form.modules.leads.total}
+                onChange={(event) =>
+                  setForm((prev) => ({
+                    ...prev,
+                    modules: {
+                      ...prev.modules,
+                      leads: { ...prev.modules.leads, total: Number(event.target.value || 0) },
+                    },
+                  }))
+                }
+                className="mt-2 h-9 w-28 rounded-md border border-[color:var(--border)] bg-[color:var(--background)]/60 px-2 text-xs text-[color:var(--foreground)]"
+              />
+            </div>
+            <div>
+              <div className="text-[11px] text-[color:var(--muted)]">Qualified</div>
+              <input
+                value={form.modules.leads.qualified}
+                onChange={(event) =>
+                  setForm((prev) => ({
+                    ...prev,
+                    modules: {
+                      ...prev.modules,
+                      leads: {
+                        ...prev.modules.leads,
+                        qualified: Number(event.target.value || 0),
+                      },
+                    },
+                  }))
+                }
+                className="mt-2 h-9 w-28 rounded-md border border-[color:var(--border)] bg-[color:var(--background)]/60 px-2 text-xs text-[color:var(--foreground)]"
+              />
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--background-elevated)] p-5">
         <div className="text-xs text-[color:var(--muted)]">Project Modules</div>

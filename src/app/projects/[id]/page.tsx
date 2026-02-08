@@ -28,5 +28,5 @@ export default async function Page({ params }: { params: Promise<{ id: string }>
     );
   }
 
-  return <ProjectDetail project={project} />;
+  return <ProjectDetail project={project} projects={projects} />;
 }

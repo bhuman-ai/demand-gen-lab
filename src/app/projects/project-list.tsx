@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 
 type Project = {
   id: string;
@@ -146,6 +147,12 @@ export default function ProjectList({ projects }: ProjectListProps) {
                     </>
                   ) : (
                     <>
+                      <Link
+                        href={`/projects/${project.id}`}
+                        className="rounded-md border border-[color:var(--border)] px-2 py-1 text-[11px] text-[color:var(--accent)]"
+                      >
+                        View
+                      </Link>
                       <button
                         type="button"
                         onClick={() => beginEdit(project)}

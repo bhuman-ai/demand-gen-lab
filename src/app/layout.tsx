@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
+import BrandSwitcher from "./brand-switcher";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -62,7 +63,7 @@ export default function RootLayout({
             </aside>
             <main className="flex-1">
               <header className="flex items-center justify-between border-b border-[color:var(--border)] bg-[color:var(--glass)]/60 px-6 py-4">
-                <div className="text-xs text-[color:var(--muted)]">Glass & Graphite</div>
+                <BrandSwitcher />
                 <div className="text-xs text-[color:var(--muted)]">v0.1</div>
               </header>
               <div className="px-6 py-6">{children}</div>

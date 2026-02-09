@@ -1,8 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 
 type Brand = {
   id: string;
@@ -90,6 +90,7 @@ const normalizeLeads = (rows: unknown[] = []): Lead[] =>
 
 export default function BrandDetail({ brand, brands }: BrandDetailProps) {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [form, setForm] = useState<Brand>({
     id: brand.id ?? "",
     website: brand.website ?? "",
@@ -135,6 +136,17 @@ export default function BrandDetail({ brand, brands }: BrandDetailProps) {
     status: "New",
     lastTouch: "",
   });
+
+  useEffect(() => {
+    const tabParam = searchParams.get("tab");
+    if (
+      tabParam &&
+      ["overview", "strategy", "sequences", "leads"].includes(tabParam) &&
+      tabParam !== activeTab
+    ) {
+      setActiveTab(tabParam as typeof activeTab);
+    }
+  }, [searchParams, activeTab]);
 
   const updateField = (key: keyof Brand, value: string) => {
     setForm((prev) => ({ ...prev, [key]: value }));

@@ -35,6 +35,15 @@ export default async function Page({ params }: { params: Promise<{ id: string }>
       <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--background-elevated)] p-5">
         <div className="text-xs text-[color:var(--muted)]">Goal</div>
         <div className="mt-2 text-sm text-[color:var(--foreground)]">{brand.modules?.strategy?.goal || "—"}</div>
+        <div className="mt-4 flex flex-wrap items-center gap-3">
+          <Link
+            href={`/brands/${brand.id}?tab=strategy`}
+            className="rounded-md border border-[color:var(--border)] px-3 py-2 text-xs text-[color:var(--foreground)]"
+          >
+            {brand.modules?.strategy?.goal ? "Edit Strategy" : "Define Strategy"}
+          </Link>
+          <span className="text-[11px] text-[color:var(--muted)]">Strategy details live in the brand context.</span>
+        </div>
       </div>
       <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--background-elevated)] p-5">
         <div className="text-xs text-[color:var(--muted)]">Ideas</div>

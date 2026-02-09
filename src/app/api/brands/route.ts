@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { readBrands, writeBrands } from "@/lib/brand-storage";
+import { getSupabaseAdmin } from "@/lib/supabase-admin";
 
 type Brand = {
   id: string;
@@ -33,7 +34,40 @@ type Brand = {
   domains: { domain: string; status: string; warmupStage: string; reputation: string }[];
 };
 
+const TABLE_NAME = "demanddev_brands";
+
+const mapRowToBrand = (row: any): Brand => ({
+  id: row.id,
+  website: row.website ?? "",
+  brandName: row.brand_name ?? "",
+  tone: row.tone ?? "",
+  targetBuyers: row.target_buyers ?? "",
+  offers: row.offers ?? "",
+  proof: row.proof ?? "",
+  createdAt: row.created_at ?? "",
+  updatedAt: row.updated_at ?? "",
+  modules: row.modules ?? {
+    strategy: { status: "draft", goal: "", constraints: "" },
+    sequences: { status: "idle", activeCount: 0 },
+    leads: { total: 0, qualified: 0 },
+  },
+  ideas: row.ideas ?? [],
+  sequences: row.sequences ?? [],
+  leads: row.leads ?? [],
+  inbox: row.inbox ?? [],
+  domains: row.domains ?? [],
+});
+
 export async function GET() {
+  const supabase = getSupabaseAdmin();
+  if (supabase) {
+    const { data, error } = await supabase.from(TABLE_NAME).select("*").order("created_at", { ascending: false });
+    if (error) {
+      return NextResponse.json({ error: error.message }, { status: 500 });
+    }
+    return NextResponse.json({ brands: (data ?? []).map(mapRowToBrand) });
+  }
+
   const brands = (await readBrands()) as Brand[];
   return NextResponse.json({ brands });
 }
@@ -47,7 +81,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "website and brandName are required" }, { status: 400 });
   }
 
-  const brands = (await readBrands()) as Brand[];
+  const supabase = getSupabaseAdmin();
   const brand: Brand = {
     id: `brand_${Date.now().toString(36)}`,
     website,
@@ -78,6 +112,34 @@ export async function POST(request: Request) {
     inbox: [],
     domains: [],
   };
+
+  if (supabase) {
+    const { data, error } = await supabase
+      .from(TABLE_NAME)
+      .insert({
+        id: brand.id,
+        brand_name: brand.brandName,
+        website: brand.website,
+        tone: brand.tone,
+        target_buyers: brand.targetBuyers,
+        offers: brand.offers,
+        proof: brand.proof,
+        modules: brand.modules,
+        ideas: brand.ideas,
+        sequences: brand.sequences,
+        leads: brand.leads,
+        inbox: brand.inbox,
+        domains: brand.domains,
+      })
+      .select("*")
+      .single();
+    if (error) {
+      return NextResponse.json({ error: error.message }, { status: 500 });
+    }
+    return NextResponse.json({ brand: mapRowToBrand(data) });
+  }
+
+  const brands = (await readBrands()) as Brand[];
   brands.unshift(brand);
   await writeBrands(brands);
 
@@ -89,6 +151,29 @@ export async function PATCH(request: Request) {
   const id = String(body?.id ?? "").trim();
   if (!id) {
     return NextResponse.json({ error: "id is required" }, { status: 400 });
+  }
+
+  const supabase = getSupabaseAdmin();
+  if (supabase) {
+    const update: Record<string, any> = {};
+    if (typeof body?.website === "string") update.website = body.website;
+    if (typeof body?.brandName === "string") update.brand_name = body.brandName;
+    if (typeof body?.tone === "string") update.tone = body.tone;
+    if (typeof body?.targetBuyers === "string") update.target_buyers = body.targetBuyers;
+    if (typeof body?.offers === "string") update.offers = body.offers;
+    if (typeof body?.proof === "string") update.proof = body.proof;
+    if (body?.modules && typeof body.modules === "object") update.modules = body.modules;
+    if (Array.isArray(body?.ideas)) update.ideas = body.ideas;
+    if (Array.isArray(body?.sequences)) update.sequences = body.sequences;
+    if (Array.isArray(body?.leads)) update.leads = body.leads;
+    if (Array.isArray(body?.inbox)) update.inbox = body.inbox;
+    if (Array.isArray(body?.domains)) update.domains = body.domains;
+
+    const { data, error } = await supabase.from(TABLE_NAME).update(update).eq("id", id).select("*").single();
+    if (error) {
+      return NextResponse.json({ error: error.message }, { status: 500 });
+    }
+    return NextResponse.json({ brand: mapRowToBrand(data) });
   }
 
   const brands = (await readBrands()) as Brand[];
@@ -190,6 +275,15 @@ export async function DELETE(request: Request) {
   const id = String(body?.id ?? "").trim();
   if (!id) {
     return NextResponse.json({ error: "id is required" }, { status: 400 });
+  }
+
+  const supabase = getSupabaseAdmin();
+  if (supabase) {
+    const { error } = await supabase.from(TABLE_NAME).delete().eq("id", id);
+    if (error) {
+      return NextResponse.json({ error: error.message }, { status: 500 });
+    }
+    return NextResponse.json({ deletedId: id });
   }
 
   const brands = (await readBrands()) as Brand[];

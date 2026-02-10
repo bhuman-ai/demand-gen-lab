@@ -18,5 +18,15 @@ export default async function Page({ params }: { params: Promise<{ id: string }>
     );
   }
 
-  return <CampaignsClient brand={brand} />;
+  return (
+    <CampaignsClient
+      brand={{
+        id: brand.id ?? id,
+        brandName: brand.brandName ?? "Untitled brand",
+        website: brand.website ?? "",
+        tone: brand.tone ?? "",
+        objectives: Array.isArray(brand.objectives) ? brand.objectives : [],
+      }}
+    />
+  );
 }

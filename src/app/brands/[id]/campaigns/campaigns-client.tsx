@@ -60,7 +60,7 @@ type Brand = {
   brandName: string;
   website?: string;
   tone?: string;
-  objectives?: Objective[];
+  objectives?: unknown[];
 };
 
 const ACTIVE_BRAND_KEY = "factory.activeBrandId";
@@ -113,22 +113,28 @@ const createObjective = (input?: Partial<Objective>): Objective => ({
 
 export default function CampaignsClient({ brand }: { brand: Brand }) {
   const router = useRouter();
-  const normalizeObjective = (objective: Objective): Objective => ({
-    ...objective,
-    id: objective.id || createId(),
-    title: objective.title || "Untitled objective",
-    status: objective.status ?? "draft",
-    scoring: objective.scoring ?? {
-      replyWeight: 0.3,
-      conversionWeight: 0.6,
-      qualityWeight: 0.1,
-    },
-    hypotheses: objective.hypotheses ?? [],
-    experiments: objective.experiments ?? [],
-    evolution: objective.evolution ?? [],
-    createdAt: objective.createdAt ?? new Date().toISOString(),
-    updatedAt: objective.updatedAt ?? new Date().toISOString(),
-  });
+  const normalizeObjective = (value: unknown): Objective => {
+    const objective = (value ?? {}) as Partial<Objective>;
+    const scoring = (objective.scoring ?? {}) as Partial<Objective["scoring"]>;
+    return {
+      ...objective,
+      id: objective.id || createId(),
+      title: objective.title || "Untitled objective",
+      status: objective.status ?? "draft",
+      goal: objective.goal ?? "",
+      constraints: objective.constraints ?? "",
+      scoring: {
+        replyWeight: scoring.replyWeight ?? 0.3,
+        conversionWeight: scoring.conversionWeight ?? 0.6,
+        qualityWeight: scoring.qualityWeight ?? 0.1,
+      },
+      hypotheses: (Array.isArray(objective.hypotheses) ? objective.hypotheses : []) as Hypothesis[],
+      experiments: (Array.isArray(objective.experiments) ? objective.experiments : []) as Experiment[],
+      evolution: (Array.isArray(objective.evolution) ? objective.evolution : []) as EvolutionSnapshot[],
+      createdAt: objective.createdAt ?? new Date().toISOString(),
+      updatedAt: objective.updatedAt ?? new Date().toISOString(),
+    };
+  };
   const [objectives, setObjectives] = useState<Objective[]>(
     Array.isArray(brand.objectives) ? brand.objectives.map(normalizeObjective) : []
   );

@@ -32,10 +32,10 @@ export default async function Page({
 
   return (
     <ObjectiveDetail
-      brandId={brand.id}
-      brandName={brand.brandName}
-      website={brand.website}
-      tone={brand.tone}
+      brandId={brand.id ?? id}
+      brandName={brand.brandName ?? "Untitled brand"}
+      website={brand.website ?? ""}
+      tone={brand.tone ?? ""}
       objectives={objectives}
       initialObjective={objective}
     />

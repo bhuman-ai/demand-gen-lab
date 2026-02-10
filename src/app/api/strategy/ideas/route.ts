@@ -21,10 +21,22 @@ type RequestContext = {
 
 type ParsedIdea = {
   title?: unknown;
+  name?: unknown;
+  headline?: unknown;
   channel?: unknown;
+  platform?: unknown;
+  source?: unknown;
   rationale?: unknown;
+  reason?: unknown;
+  why?: unknown;
   actorQuery?: unknown;
+  actor_query?: unknown;
+  apifyQuery?: unknown;
+  apify_query?: unknown;
+  actorSearchQuery?: unknown;
   seedInputs?: unknown;
+  seed_keywords?: unknown;
+  keywords?: unknown;
 };
 
 function normalizeSeedInputs(value: unknown): string[] {
@@ -41,19 +53,83 @@ function normalizeSeedInputs(value: unknown): string[] {
   return [];
 }
 
-function normalizeIdeas(value: unknown): Idea[] {
-  if (!Array.isArray(value)) {
+function normalizeWords(value: string, maxWords: number) {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ")
+    .split(/\s+/)
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .slice(0, maxWords);
+}
+
+function inferChannelFromText(text: string) {
+  const lower = text.toLowerCase();
+  if (lower.includes("instagram")) return "Instagram";
+  if (lower.includes("youtube")) return "YouTube";
+  if (lower.includes("reddit")) return "Reddit";
+  if (lower.includes("linkedin")) return "LinkedIn";
+  if (lower.includes("tiktok")) return "TikTok";
+  if (lower.includes("twitter") || lower.includes("x.com") || lower.includes("x ")) return "X";
+  return "";
+}
+
+function buildActorQuery(channel: string, title: string, explicit: string) {
+  if (explicit.trim()) {
+    return normalizeWords(explicit, 6).join(" ");
+  }
+  const inferredChannel = channel || inferChannelFromText(title) || "web";
+  const titleWords = normalizeWords(title, 3).filter((word) => !["and", "for", "with", "the"].includes(word));
+  const queryWords = [...normalizeWords(inferredChannel, 2), ...titleWords].slice(0, 5);
+  const candidate = queryWords.join(" ").trim();
+  return candidate || "lead scraper";
+}
+
+function extractIdeasCandidate(payload: unknown): unknown[] {
+  if (Array.isArray(payload)) {
+    return payload;
+  }
+  if (!payload || typeof payload !== "object") {
     return [];
   }
+  const objectPayload = payload as Record<string, unknown>;
+  const keys = ["ideas", "hypotheses", "suggestions", "items", "variants", "results", "data"];
+  for (const key of keys) {
+    if (Array.isArray(objectPayload[key])) {
+      return objectPayload[key] as unknown[];
+    }
+  }
+  if (
+    objectPayload.title ||
+    objectPayload.name ||
+    objectPayload.headline ||
+    objectPayload.actorQuery ||
+    objectPayload.apifyQuery
+  ) {
+    return [objectPayload];
+  }
+  return [];
+}
+
+function normalizeIdeas(value: unknown): Idea[] {
+  const candidates = extractIdeasCandidate(value);
   const dedupe = new Set<string>();
   const ideas: Idea[] = [];
-  for (const item of value as ParsedIdea[]) {
-    const title = String(item?.title ?? "").trim();
-    const channel = String(item?.channel ?? "").trim();
-    const rationale = String(item?.rationale ?? "").trim();
-    const actorQuery = String(item?.actorQuery ?? "").trim();
-    const seedInputs = normalizeSeedInputs(item?.seedInputs);
-    if (!title || !channel || !rationale || !actorQuery) {
+  for (const item of candidates as ParsedIdea[]) {
+    const title = String(item?.title ?? item?.name ?? item?.headline ?? "").trim();
+    const channel = String(item?.channel ?? item?.platform ?? item?.source ?? "").trim() || inferChannelFromText(title);
+    const rationale = String(item?.rationale ?? item?.reason ?? item?.why ?? "").trim();
+    const actorQueryRaw = String(
+      item?.actorQuery ??
+        item?.actor_query ??
+        item?.apifyQuery ??
+        item?.apify_query ??
+        item?.actorSearchQuery ??
+        ""
+    ).trim();
+    const actorQuery = buildActorQuery(channel, title, actorQueryRaw);
+    const seedInputs = normalizeSeedInputs(item?.seedInputs ?? item?.seed_keywords ?? item?.keywords);
+    if (!title || !channel || !rationale) {
       continue;
     }
     const key = `${title.toLowerCase()}::${channel.toLowerCase()}`;
@@ -70,6 +146,37 @@ function normalizeIdeas(value: unknown): Idea[] {
     });
   }
   return ideas.slice(0, 8);
+}
+
+function extractResponsePayload(data: any): unknown {
+  if (data?.output_parsed && typeof data.output_parsed === "object") {
+    return data.output_parsed;
+  }
+  if (typeof data?.output_text === "string" && data.output_text.trim()) {
+    try {
+      return JSON.parse(data.output_text);
+    } catch {
+      return data.output_text;
+    }
+  }
+  if (Array.isArray(data?.output)) {
+    for (const chunk of data.output) {
+      const content = Array.isArray(chunk?.content) ? chunk.content : [];
+      for (const entry of content) {
+        if (entry?.json && typeof entry.json === "object") {
+          return entry.json;
+        }
+        if (typeof entry?.text === "string" && entry.text.trim()) {
+          try {
+            return JSON.parse(entry.text);
+          } catch {
+            return entry.text;
+          }
+        }
+      }
+    }
+  }
+  return {};
 }
 
 function extractResponseText(data: any): string {
@@ -183,15 +290,18 @@ export async function POST(request: Request) {
   } catch {
     data = {};
   }
+  const payload = extractResponsePayload(data);
   const content = extractResponseText(data);
-  let parsed: { ideas?: Idea[] } = {};
+  let parsed: unknown = payload;
   try {
-    parsed = JSON.parse(content);
+    if (!parsed || typeof parsed === "string") {
+      parsed = JSON.parse(content);
+    }
   } catch {
-    parsed = {};
+    parsed = payload;
   }
 
-  const ideas = normalizeIdeas(parsed?.ideas);
+  const ideas = normalizeIdeas(parsed);
   if (!ideas.length) {
     return NextResponse.json(
       { error: "Model returned no valid hypotheses for this objective. Refine objective details and retry." },

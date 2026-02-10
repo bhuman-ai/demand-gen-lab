@@ -14,6 +14,7 @@ type Hypothesis = {
 
 type Experiment = {
   id: string;
+  hypothesisId?: string;
   name: string;
   status: string;
   notes?: string;
@@ -264,13 +265,18 @@ export default function ObjectiveDetail({
   };
 
   const removeHypothesis = (index: number) => {
-    const next = objective.hypotheses.filter((_, idx) => idx !== index);
-    updateObjective({ hypotheses: next });
+    const target = objective.hypotheses[index];
+    const nextHypotheses = objective.hypotheses.filter((_, idx) => idx !== index);
+    const nextExperiments = target
+      ? objective.experiments.filter((experiment) => experiment.hypothesisId !== target.id)
+      : objective.experiments;
+    updateObjective({ hypotheses: nextHypotheses, experiments: nextExperiments });
   };
 
   const addExperiment = (experiment?: Partial<Experiment>) => {
     const next: Experiment = {
       id: createId(),
+      hypothesisId: experiment?.hypothesisId ?? "",
       name: experiment?.name ?? "New experiment",
       status: experiment?.status ?? "draft",
       notes: experiment?.notes ?? "",
@@ -278,33 +284,70 @@ export default function ObjectiveDetail({
     updateObjective({ experiments: [next, ...objective.experiments] });
   };
 
-  const updateExperiment = (index: number, patch: Partial<Experiment>) => {
-    const next = [...objective.experiments];
-    next[index] = { ...next[index], ...patch };
+  const updateExperiment = (experimentId: string, patch: Partial<Experiment>) => {
+    const next = objective.experiments.map((experiment) =>
+      experiment.id === experimentId ? { ...experiment, ...patch } : experiment
+    );
     updateObjective({ experiments: next });
   };
 
-  const removeExperiment = (index: number) => {
-    const next = objective.experiments.filter((_, idx) => idx !== index);
+  const removeExperiment = (experimentId: string) => {
+    const next = objective.experiments.filter((experiment) => experiment.id !== experimentId);
     updateObjective({ experiments: next });
+  };
+
+  const buildExperimentVariants = (hypothesis: Hypothesis) => {
+    const channel = (hypothesis.channel || "outbound").toLowerCase();
+    const existingNames = new Set(
+      objective.experiments
+        .filter((experiment) => experiment.hypothesisId === hypothesis.id)
+        .map((experiment) => experiment.name.toLowerCase())
+    );
+    const variants: Array<{ suffix: string; notes: string }> = [
+      {
+        suffix: "Hook-first",
+        notes: `Lead with a sharp ${channel} hook tied to ${hypothesis.title}. CTA: quick discovery call.`,
+      },
+      {
+        suffix: "Proof-first",
+        notes: `Open with proof and measurable outcomes. Emphasize ${hypothesis.rationale}. CTA: pilot proposal.`,
+      },
+      {
+        suffix: "Pain-first",
+        notes: `Start from buyer pain and urgency. Use ${hypothesis.actorQuery || "targeted lead pull"} for inputs.`,
+      },
+    ];
+    return variants
+      .map((variant) => {
+        const name = `Experiment: ${hypothesis.title} / ${variant.suffix}`;
+        return {
+          id: createId(),
+          hypothesisId: hypothesis.id,
+          name,
+          status: "draft",
+          notes: variant.notes,
+        } as Experiment;
+      })
+      .filter((experiment) => !existingNames.has(experiment.name.toLowerCase()));
+  };
+
+  const addExperimentsForHypothesis = (hypothesis: Hypothesis) => {
+    const variants = buildExperimentVariants(hypothesis);
+    if (!variants.length) {
+      return;
+    }
+    updateObjective({ experiments: [...variants, ...objective.experiments] });
   };
 
   const generateExperiments = () => {
     if (!objective.hypotheses.length) {
       return;
     }
-    const seeds = objective.hypotheses.map((hypothesis) => ({
-      name: `Experiment: ${hypothesis.title}`,
-      status: "draft",
-      notes: hypothesis.rationale,
-    }));
-    const next = seeds.map((seed) => ({
-      id: createId(),
-      name: seed.name,
-      status: seed.status,
-      notes: seed.notes,
-    }));
-    updateObjective({ experiments: [...next, ...objective.experiments] });
+    const variants = objective.hypotheses.flatMap((hypothesis) => buildExperimentVariants(hypothesis));
+    if (!variants.length) {
+      return;
+    }
+    updateObjective({ experiments: [...variants, ...objective.experiments] });
   };
 
   const addEvolution = (snapshot?: Partial<EvolutionSnapshot>) => {
@@ -340,6 +383,16 @@ export default function ObjectiveDetail({
     }));
     updateObjective({ evolution: [...snapshots, ...objective.evolution] });
   };
+
+  const groupedExperiments = objective.hypotheses.map((hypothesis) => ({
+    hypothesis,
+    experiments: objective.experiments.filter((experiment) => experiment.hypothesisId === hypothesis.id),
+  }));
+
+  const unlinkedExperiments = objective.experiments.filter(
+    (experiment) =>
+      !experiment.hypothesisId || !objective.hypotheses.some((hypothesis) => hypothesis.id === experiment.hypothesisId)
+  );
 
   return (
     <div className="space-y-6">
@@ -557,6 +610,23 @@ export default function ObjectiveDetail({
                   placeholder="Seed inputs (one per line)"
                   className="mt-3 h-20 w-full resize-none rounded-md border border-[color:var(--border)] bg-[color:var(--background)]/60 px-2 py-2 text-xs text-[color:var(--foreground)]"
                 />
+                <div className="mt-3 flex items-center justify-between text-[11px] text-[color:var(--muted)]">
+                  <span>
+                    {
+                      objective.experiments.filter(
+                        (experiment) => experiment.hypothesisId === hypothesis.id
+                      ).length
+                    }{" "}
+                    experiments linked
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => addExperimentsForHypothesis(hypothesis)}
+                    className="text-[11px] text-[color:var(--accent)]"
+                  >
+                    Generate 3 experiments
+                  </button>
+                </div>
               </div>
             ))}
             {!objective.hypotheses.length ? (
@@ -625,55 +695,161 @@ export default function ObjectiveDetail({
           <div className="flex items-center justify-between">
             <div className="text-xs text-[color:var(--muted)]">Experiments</div>
             <div className="flex items-center gap-3 text-[11px] text-[color:var(--muted)]">
-              <button type="button" onClick={() => addExperiment()} className="text-[color:var(--accent)]">
-                Add
+              <button type="button" onClick={() => addExperiment({ hypothesisId: "" })} className="text-[color:var(--accent)]">
+                Add unlinked
               </button>
               <button type="button" onClick={generateExperiments} className="text-[color:var(--muted)]">
-                Generate from hypotheses
+                Generate variants for all
               </button>
             </div>
           </div>
-          <div className="mt-4 grid gap-3">
-            {objective.experiments.map((experiment, index) => (
+          <div className="mt-4 space-y-4">
+            {groupedExperiments.map(({ hypothesis, experiments }) => (
               <div
-                key={experiment.id}
-                className="rounded-lg border border-[color:var(--border)] bg-[color:var(--background)]/40 px-3 py-3"
+                key={hypothesis.id}
+                className="rounded-lg border border-[color:var(--border)] bg-[color:var(--background)]/35 px-3 py-3"
               >
-                <div className="grid gap-3 md:grid-cols-[1fr_auto_auto]">
-                  <input
-                    value={experiment.name}
-                    onChange={(event) => updateExperiment(index, { name: event.target.value })}
-                    className="h-9 rounded-md border border-[color:var(--border)] bg-[color:var(--background)]/60 px-2 text-xs text-[color:var(--foreground)]"
-                  />
-                  <select
-                    value={experiment.status}
-                    onChange={(event) => updateExperiment(index, { status: event.target.value })}
-                    className="h-9 rounded-md border border-[color:var(--border)] bg-[color:var(--background)]/60 px-2 text-xs text-[color:var(--foreground)]"
-                  >
-                    <option value="draft">Draft</option>
-                    <option value="testing">Testing</option>
-                    <option value="scaling">Scaling</option>
-                    <option value="paused">Paused</option>
-                  </select>
-                  <button
-                    type="button"
-                    onClick={() => removeExperiment(index)}
-                    className="rounded-md border border-[color:var(--border)] px-3 py-2 text-[11px] text-[color:var(--danger)]"
-                  >
-                    Delete
-                  </button>
+                <div className="flex items-center justify-between">
+                  <div className="text-xs text-[color:var(--foreground)]">{hypothesis.title}</div>
+                  <div className="flex items-center gap-3 text-[11px] text-[color:var(--muted)]">
+                    <span>{experiments.length} experiments</span>
+                    <button
+                      type="button"
+                      onClick={() => addExperimentsForHypothesis(hypothesis)}
+                      className="text-[color:var(--accent)]"
+                    >
+                      Generate 3
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => addExperiment({ hypothesisId: hypothesis.id })}
+                      className="text-[color:var(--accent)]"
+                    >
+                      Add
+                    </button>
+                  </div>
                 </div>
-                <textarea
-                  value={experiment.notes ?? ""}
-                  onChange={(event) => updateExperiment(index, { notes: event.target.value })}
-                  placeholder="Notes or delivery constraints"
-                  className="mt-3 h-20 w-full resize-none rounded-md border border-[color:var(--border)] bg-[color:var(--background)]/60 px-2 py-2 text-xs text-[color:var(--foreground)]"
-                />
+                <div className="mt-3 grid gap-3">
+                  {experiments.map((experiment) => (
+                    <div
+                      key={experiment.id}
+                      className="rounded-lg border border-[color:var(--border)] bg-[color:var(--background)]/50 px-3 py-3"
+                    >
+                      <div className="grid gap-3 md:grid-cols-[1.2fr_auto_auto_auto]">
+                        <input
+                          value={experiment.name}
+                          onChange={(event) => updateExperiment(experiment.id, { name: event.target.value })}
+                          className="h-9 rounded-md border border-[color:var(--border)] bg-[color:var(--background)]/60 px-2 text-xs text-[color:var(--foreground)]"
+                        />
+                        <select
+                          value={experiment.hypothesisId ?? ""}
+                          onChange={(event) =>
+                            updateExperiment(experiment.id, { hypothesisId: event.target.value })
+                          }
+                          className="h-9 rounded-md border border-[color:var(--border)] bg-[color:var(--background)]/60 px-2 text-xs text-[color:var(--foreground)]"
+                        >
+                          <option value="">Unlinked</option>
+                          {objective.hypotheses.map((item) => (
+                            <option key={item.id} value={item.id}>
+                              {item.title}
+                            </option>
+                          ))}
+                        </select>
+                        <select
+                          value={experiment.status}
+                          onChange={(event) => updateExperiment(experiment.id, { status: event.target.value })}
+                          className="h-9 rounded-md border border-[color:var(--border)] bg-[color:var(--background)]/60 px-2 text-xs text-[color:var(--foreground)]"
+                        >
+                          <option value="draft">Draft</option>
+                          <option value="testing">Testing</option>
+                          <option value="scaling">Scaling</option>
+                          <option value="paused">Paused</option>
+                        </select>
+                        <button
+                          type="button"
+                          onClick={() => removeExperiment(experiment.id)}
+                          className="rounded-md border border-[color:var(--border)] px-3 py-2 text-[11px] text-[color:var(--danger)]"
+                        >
+                          Delete
+                        </button>
+                      </div>
+                      <textarea
+                        value={experiment.notes ?? ""}
+                        onChange={(event) => updateExperiment(experiment.id, { notes: event.target.value })}
+                        placeholder="Notes or delivery constraints"
+                        className="mt-3 h-20 w-full resize-none rounded-md border border-[color:var(--border)] bg-[color:var(--background)]/60 px-2 py-2 text-xs text-[color:var(--foreground)]"
+                      />
+                    </div>
+                  ))}
+                  {!experiments.length ? (
+                    <div className="rounded-md border border-dashed border-[color:var(--border)] px-3 py-3 text-xs text-[color:var(--muted)]">
+                      No experiments for this hypothesis yet.
+                    </div>
+                  ) : null}
+                </div>
               </div>
             ))}
+            {unlinkedExperiments.length ? (
+              <div className="rounded-lg border border-[color:var(--border)] bg-[color:var(--background)]/35 px-3 py-3">
+                <div className="text-xs text-[color:var(--foreground)]">Unlinked experiments</div>
+                <div className="mt-3 grid gap-3">
+                  {unlinkedExperiments.map((experiment) => (
+                    <div
+                      key={experiment.id}
+                      className="rounded-lg border border-[color:var(--border)] bg-[color:var(--background)]/50 px-3 py-3"
+                    >
+                      <div className="grid gap-3 md:grid-cols-[1.2fr_auto_auto_auto]">
+                        <input
+                          value={experiment.name}
+                          onChange={(event) => updateExperiment(experiment.id, { name: event.target.value })}
+                          className="h-9 rounded-md border border-[color:var(--border)] bg-[color:var(--background)]/60 px-2 text-xs text-[color:var(--foreground)]"
+                        />
+                        <select
+                          value={experiment.hypothesisId ?? ""}
+                          onChange={(event) =>
+                            updateExperiment(experiment.id, { hypothesisId: event.target.value })
+                          }
+                          className="h-9 rounded-md border border-[color:var(--border)] bg-[color:var(--background)]/60 px-2 text-xs text-[color:var(--foreground)]"
+                        >
+                          <option value="">Unlinked</option>
+                          {objective.hypotheses.map((item) => (
+                            <option key={item.id} value={item.id}>
+                              {item.title}
+                            </option>
+                          ))}
+                        </select>
+                        <select
+                          value={experiment.status}
+                          onChange={(event) => updateExperiment(experiment.id, { status: event.target.value })}
+                          className="h-9 rounded-md border border-[color:var(--border)] bg-[color:var(--background)]/60 px-2 text-xs text-[color:var(--foreground)]"
+                        >
+                          <option value="draft">Draft</option>
+                          <option value="testing">Testing</option>
+                          <option value="scaling">Scaling</option>
+                          <option value="paused">Paused</option>
+                        </select>
+                        <button
+                          type="button"
+                          onClick={() => removeExperiment(experiment.id)}
+                          className="rounded-md border border-[color:var(--border)] px-3 py-2 text-[11px] text-[color:var(--danger)]"
+                        >
+                          Delete
+                        </button>
+                      </div>
+                      <textarea
+                        value={experiment.notes ?? ""}
+                        onChange={(event) => updateExperiment(experiment.id, { notes: event.target.value })}
+                        placeholder="Notes or delivery constraints"
+                        className="mt-3 h-20 w-full resize-none rounded-md border border-[color:var(--border)] bg-[color:var(--background)]/60 px-2 py-2 text-xs text-[color:var(--foreground)]"
+                      />
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : null}
             {!objective.experiments.length ? (
               <div className="rounded-md border border-dashed border-[color:var(--border)] px-3 py-4 text-xs text-[color:var(--muted)]">
-                No experiments yet. Generate from hypotheses or add one manually.
+                No experiments yet. Generate variants from hypotheses or add one manually.
               </div>
             ) : null}
           </div>

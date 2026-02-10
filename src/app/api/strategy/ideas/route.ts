@@ -53,6 +53,26 @@ function normalizeSeedInputs(value: unknown): string[] {
   return [];
 }
 
+function asRecord(value: unknown): Record<string, unknown> {
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    return value as Record<string, unknown>;
+  }
+  return {};
+}
+
+function toText(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  if (Array.isArray(value)) return value.map((item) => toText(item)).filter(Boolean).join(" ");
+  if (value && typeof value === "object") {
+    return Object.values(value as Record<string, unknown>)
+      .map((item) => toText(item))
+      .filter(Boolean)
+      .join(" ");
+  }
+  return "";
+}
+
 function normalizeWords(value: string, maxWords: number) {
   return value
     .toLowerCase()
@@ -210,6 +230,113 @@ async function logLLM(event: string, payload: Record<string, unknown>) {
   }
 }
 
+async function requestIdeasOnce(
+  apiKey: string,
+  prompt: string,
+  runLabel: string
+): Promise<{ ok: boolean; status: number; ideas: Idea[]; raw: string }> {
+  const response = await fetch(OPENAI_API_BASE, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model: "gpt-5.2",
+      input: prompt,
+      text: { format: { type: "json_object" } },
+      max_output_tokens: 1800,
+    }),
+  });
+
+  const raw = await response.text();
+  await logLLM(`ideas_${runLabel}`, { prompt, response: raw });
+  if (!response.ok) {
+    return {
+      ok: false,
+      status: response.status,
+      ideas: [],
+      raw,
+    };
+  }
+
+  let data: any = {};
+  try {
+    data = JSON.parse(raw);
+  } catch {
+    data = {};
+  }
+  const payload = extractResponsePayload(data);
+  const content = extractResponseText(data);
+  let parsed: unknown = payload;
+  try {
+    if (!parsed || typeof parsed === "string") {
+      parsed = JSON.parse(content);
+    }
+  } catch {
+    parsed = payload;
+  }
+
+  return {
+    ok: true,
+    status: response.status,
+    ideas: normalizeIdeas(parsed),
+    raw,
+  };
+}
+
+function buildContextualFallbackIdeas(
+  goal: string,
+  requestContext: RequestContext,
+  existingIdeas: unknown[]
+): Idea[] {
+  const context = asRecord(requestContext.context);
+  const needs = asRecord(requestContext.needs);
+  const exclusions = toText(requestContext.exclusions).toLowerCase();
+  const combined = [
+    goal,
+    toText(needs.objectiveTitle),
+    toText(needs.objectiveGoal),
+    toText(needs.objectiveConstraints),
+    toText(context.targetBuyers),
+    toText(context.offers),
+    toText(context.proof),
+    toText(context.tone),
+  ]
+    .join(" ")
+    .trim();
+
+  const channelPool = ["LinkedIn", "Reddit", "YouTube", "Instagram", "TikTok", "X"];
+  const detected = channelPool.filter((channel) => combined.toLowerCase().includes(channel.toLowerCase()));
+  const channels = (detected.length ? detected : ["LinkedIn", "Reddit", "YouTube"]).filter(
+    (channel) => !exclusions.includes(channel.toLowerCase())
+  );
+  const goalKeywords = normalizeWords(combined || goal, 10);
+  const seedBase = goalKeywords.slice(0, 4);
+
+  const existingTitles = new Set(
+    existingIdeas
+      .map((idea) => (idea && typeof idea === "object" ? String((idea as any).title ?? "").toLowerCase().trim() : ""))
+      .filter(Boolean)
+  );
+
+  const output: Idea[] = [];
+  for (const channel of channels.slice(0, 4)) {
+    const title = `${channel} buyer-intent pull for ${goalKeywords.slice(0, 3).join(" ") || "objective"}`.trim();
+    if (existingTitles.has(title.toLowerCase())) {
+      continue;
+    }
+    output.push({
+      title,
+      channel,
+      rationale: `Built from your objective and constraints to source high-intent ${channel} prospects.`,
+      actorQuery: buildActorQuery(channel, title, ""),
+      seedInputs: [...seedBase, channel.toLowerCase()].filter(Boolean).slice(0, 6),
+    });
+  }
+  return output.slice(0, 6);
+}
+
 export async function POST(request: Request) {
   const body = await request.json();
   const goal = String(body?.goal ?? "");
@@ -261,56 +388,56 @@ export async function POST(request: Request) {
     JSON.stringify(existingIdeas, null, 2),
   ].join("\n");
 
-  const response = await fetch(OPENAI_API_BASE, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model: "gpt-5.2",
-      input: prompt,
-      text: { format: { type: "json_object" } },
-      max_output_tokens: 1400,
-    }),
-  });
-
-  const raw = await response.text();
-  await logLLM("ideas", { prompt, response: raw });
-  if (!response.ok) {
+  const firstAttempt = await requestIdeasOnce(apiKey, prompt, "primary");
+  if (!firstAttempt.ok) {
     return NextResponse.json(
-      { error: "Idea generation failed.", details: raw },
-      { status: response.status }
+      { error: "Idea generation failed.", details: firstAttempt.raw },
+      { status: firstAttempt.status }
     );
   }
-
-  let data: any = {};
-  try {
-    data = JSON.parse(raw);
-  } catch {
-    data = {};
-  }
-  const payload = extractResponsePayload(data);
-  const content = extractResponseText(data);
-  let parsed: unknown = payload;
-  try {
-    if (!parsed || typeof parsed === "string") {
-      parsed = JSON.parse(content);
-    }
-  } catch {
-    parsed = payload;
+  if (firstAttempt.ideas.length) {
+    return NextResponse.json({
+      ideas: firstAttempt.ideas,
+      mode: "openai_primary",
+    });
   }
 
-  const ideas = normalizeIdeas(parsed);
-  if (!ideas.length) {
+  const repairPrompt = [
+    "Repair and normalize hypotheses into strict JSON.",
+    "Output only a JSON object with key `ideas`.",
+    "Each idea requires non-empty: title, channel, rationale, actorQuery, seedInputs (string[]).",
+    "Return 5 to 8 ideas. No markdown.",
+    "Planning context:",
+    prompt,
+    "Previous model output to repair:",
+    firstAttempt.raw.slice(0, 6000),
+  ].join("\n");
+
+  const secondAttempt = await requestIdeasOnce(apiKey, repairPrompt, "repair");
+  if (!secondAttempt.ok) {
     return NextResponse.json(
-      { error: "Model returned no valid hypotheses for this objective. Refine objective details and retry." },
-      { status: 422 }
+      { error: "Idea generation failed on repair pass.", details: secondAttempt.raw },
+      { status: secondAttempt.status }
     );
   }
+  if (secondAttempt.ideas.length) {
+    return NextResponse.json({
+      ideas: secondAttempt.ideas,
+      mode: "openai_repair",
+    });
+  }
 
-  return NextResponse.json({
-    ideas,
-    mode: "openai",
-  });
+  const fallbackIdeas = buildContextualFallbackIdeas(goal, requestContext, existingIdeas);
+  if (fallbackIdeas.length) {
+    return NextResponse.json({
+      ideas: fallbackIdeas,
+      mode: "contextual_fallback",
+      warning: "Model output was malformed; generated context-based hypotheses.",
+    });
+  }
+
+  return NextResponse.json(
+    { error: "Model returned no valid hypotheses for this objective. Refine objective details and retry." },
+    { status: 422 }
+  );
 }

@@ -41,6 +41,7 @@ type Brand = {
 
 type StrategyEditorProps = {
   brand: Brand;
+  onSaved?: () => void;
 };
 
 const ACTIVE_BRAND_KEY = "factory.activeBrandId";
@@ -66,7 +67,7 @@ const fallbackVariants: StrategyVariant[] = [
   },
 ];
 
-export default function StrategyEditor({ brand }: StrategyEditorProps) {
+export default function StrategyEditor({ brand, onSaved }: StrategyEditorProps) {
   const [strategy, setStrategy] = useState<Strategy>({
     status: brand.modules?.strategy?.status ?? "draft",
     goal: brand.modules?.strategy?.goal ?? "",
@@ -154,6 +155,7 @@ export default function StrategyEditor({ brand }: StrategyEditorProps) {
         setError(data?.error ?? "Save failed");
       } else {
         setSavedAt(new Date().toLocaleTimeString());
+        onSaved?.();
       }
     } catch {
       setError("Save failed");

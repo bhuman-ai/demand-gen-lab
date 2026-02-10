@@ -139,12 +139,14 @@ export default function BrandDetail({ brand, brands }: BrandDetailProps) {
 
   useEffect(() => {
     const tabParam = searchParams.get("tab");
+    const normalized =
+      tabParam === "experiments" ? "sequences" : tabParam;
     if (
-      tabParam &&
-      ["overview", "strategy", "sequences", "leads"].includes(tabParam) &&
-      tabParam !== activeTab
+      normalized &&
+      ["overview", "strategy", "sequences", "leads"].includes(normalized) &&
+      normalized !== activeTab
     ) {
-      setActiveTab(tabParam as typeof activeTab);
+      setActiveTab(normalized as typeof activeTab);
     }
   }, [searchParams, activeTab]);
 

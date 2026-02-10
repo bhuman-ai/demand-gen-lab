@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { readBrands } from "@/lib/brand-storage";
+import ProgressRail from "../progress-rail";
 
 export default async function Page({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
@@ -25,6 +26,7 @@ export default async function Page({ params }: { params: Promise<{ id: string }>
           Back to Brand
         </Link>
       </div>
+      {brand.id ? <ProgressRail brandId={brand.id} /> : null}
       <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--background-elevated)] p-5">
         <div className="text-xs text-[color:var(--muted)]">Active experiments</div>
         <div className="mt-3 grid gap-2">

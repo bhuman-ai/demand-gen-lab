@@ -1,6 +1,8 @@
 import Link from "next/link";
 import { readBrands } from "@/lib/brand-storage";
 import StrategyEditor from "./strategy-editor";
+import ProgressRail from "../progress-rail";
+import NextStep from "./next-step";
 
 export default async function Page({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
@@ -44,40 +46,44 @@ export default async function Page({ params }: { params: Promise<{ id: string }>
           Back to Brand
         </Link>
       </div>
+      {brand.id ? <ProgressRail brandId={brand.id} /> : null}
       {brand.id ? (
-        <StrategyEditor
-          brand={{
-            id: brand.id,
-            brandName: brand.brandName ?? "",
-            website: brand.website ?? "",
-            tone: brand.tone ?? "",
-            modules: {
-              strategy: {
-                status: brand.modules?.strategy?.status ?? "draft",
-                goal: brand.modules?.strategy?.goal ?? "",
-                constraints: brand.modules?.strategy?.constraints ?? "",
-                scoring: {
-                  replyWeight: brand.modules?.strategy?.scoring?.replyWeight ?? 0.3,
-                  conversionWeight: brand.modules?.strategy?.scoring?.conversionWeight ?? 0.6,
-                  qualityWeight: brand.modules?.strategy?.scoring?.qualityWeight ?? 0.1,
+        <div className="space-y-4">
+          <StrategyEditor
+            brand={{
+              id: brand.id,
+              brandName: brand.brandName ?? "",
+              website: brand.website ?? "",
+              tone: brand.tone ?? "",
+              modules: {
+                strategy: {
+                  status: brand.modules?.strategy?.status ?? "draft",
+                  goal: brand.modules?.strategy?.goal ?? "",
+                  constraints: brand.modules?.strategy?.constraints ?? "",
+                  scoring: {
+                    replyWeight: brand.modules?.strategy?.scoring?.replyWeight ?? 0.3,
+                    conversionWeight: brand.modules?.strategy?.scoring?.conversionWeight ?? 0.6,
+                    qualityWeight: brand.modules?.strategy?.scoring?.qualityWeight ?? 0.1,
+                  },
+                },
+                sequences: {
+                  status: brand.modules?.sequences?.status ?? "idle",
+                  activeCount: brand.modules?.sequences?.activeCount ?? 0,
+                },
+                leads: {
+                  total: brand.modules?.leads?.total ?? 0,
+                  qualified: brand.modules?.leads?.qualified ?? 0,
                 },
               },
-              sequences: {
-                status: brand.modules?.sequences?.status ?? "idle",
-                activeCount: brand.modules?.sequences?.activeCount ?? 0,
-              },
-              leads: {
-                total: brand.modules?.leads?.total ?? 0,
-                qualified: brand.modules?.leads?.qualified ?? 0,
-              },
-            },
-            ideas: (brand.ideas || []).map((idea) => ({
-              title: idea.title ?? "",
-              channel: idea.channel ?? "",
-              rationale: idea.rationale ?? "",
-            })),
-          }}
-        />
+              ideas: (brand.ideas || []).map((idea) => ({
+                title: idea.title ?? "",
+                channel: idea.channel ?? "",
+                rationale: idea.rationale ?? "",
+              })),
+            }}
+          />
+          <NextStep brandId={brand.id} />
+        </div>
       ) : null}
       <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--background-elevated)] p-5">
         <div className="text-xs text-[color:var(--muted)]">Ideas</div>

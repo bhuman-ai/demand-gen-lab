@@ -49,6 +49,9 @@ type ObjectiveDetailProps = {
   brandName: string;
   website?: string;
   tone?: string;
+  targetBuyers?: string;
+  offers?: string;
+  proof?: string;
   objectives: Objective[];
   initialObjective: Objective;
 };
@@ -70,35 +73,14 @@ const createId = () => {
   return `id_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 };
 
-const fallbackIdeas: IdeaSuggestion[] = [
-  {
-    title: "Commission-ready Instagram hashtag harvest",
-    channel: "Instagram",
-    rationale: "Targets buyers browsing commission-focused tags.",
-    actorQuery: "Instagram hashtag scraper",
-    seedInputs: ["#commissionopen", "#illustration", "#artdirector"],
-  },
-  {
-    title: "YouTube creator business email pull",
-    channel: "YouTube",
-    rationale: "Finds creators hiring thumbnail or channel art support.",
-    actorQuery: "YouTube channel scraper",
-    seedInputs: ["thumbnail artist", "business inquiries"],
-  },
-  {
-    title: "Reddit hiring posts for concept art",
-    channel: "Reddit",
-    rationale: "Targets immediate hiring intent in niche subreddits.",
-    actorQuery: "Reddit scraper",
-    seedInputs: ["forhire", "gameDevClassifieds"],
-  },
-];
-
 export default function ObjectiveDetail({
   brandId,
   brandName,
   website,
   tone,
+  targetBuyers,
+  offers,
+  proof,
   objectives,
   initialObjective,
 }: ObjectiveDetailProps) {
@@ -125,7 +107,7 @@ export default function ObjectiveDetail({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [savedAt, setSavedAt] = useState("");
-  const [suggestions, setSuggestions] = useState<IdeaSuggestion[]>(fallbackIdeas);
+  const [suggestions, setSuggestions] = useState<IdeaSuggestion[]>([]);
   const [suggestionsLoading, setSuggestionsLoading] = useState(false);
   const [suggestionsError, setSuggestionsError] = useState("");
 
@@ -206,24 +188,56 @@ export default function ObjectiveDetail({
         body: JSON.stringify({
           goal: objective.goal || "Generate outreach hypotheses",
           existingIdeas: objective.hypotheses,
-          context: { brandName, website, tone },
-          needs: { objective: objective.goal, constraints: objective.constraints },
-          constraints: { scoring: objective.scoring },
+          context: {
+            brandName,
+            website,
+            tone,
+            targetBuyers: targetBuyers ?? "",
+            offers: offers ?? "",
+            proof: proof ?? "",
+          },
+          needs: {
+            objectiveTitle: objective.title,
+            objectiveGoal: objective.goal,
+            objectiveConstraints: objective.constraints,
+          },
+          constraints: {
+            scoring: objective.scoring,
+            status: objective.status,
+          },
         }),
       });
       const data = await response.json();
       if (!response.ok) {
         setSuggestionsError(data?.error ?? "Hypothesis generation failed");
+        setSuggestions([]);
         return;
       }
       const next = Array.isArray(data?.ideas) ? (data.ideas as IdeaSuggestion[]) : [];
-      setSuggestions(next.length ? next : fallbackIdeas);
+      setSuggestions(next);
+      if (!next.length) {
+        setSuggestionsError("No objective-aligned hypotheses returned.");
+      }
     } catch {
       setSuggestionsError("Hypothesis generation failed");
+      setSuggestions([]);
     } finally {
       setSuggestionsLoading(false);
     }
-  }, [brandName, objective.constraints, objective.goal, objective.hypotheses, objective.scoring, tone, website]);
+  }, [
+    brandName,
+    objective.constraints,
+    objective.goal,
+    objective.hypotheses,
+    objective.scoring,
+    objective.status,
+    objective.title,
+    offers,
+    proof,
+    targetBuyers,
+    tone,
+    website,
+  ]);
 
   useEffect(() => {
     if (!objective.hypotheses.length) {
@@ -567,7 +581,7 @@ export default function ObjectiveDetail({
           </div>
           {suggestionsError ? <div className="mt-3 text-xs text-[color:var(--danger)]">{suggestionsError}</div> : null}
           <div className="mt-4 grid gap-3">
-            {(suggestions.length ? suggestions : fallbackIdeas).map((idea) => (
+            {suggestions.map((idea) => (
               <div
                 key={idea.title}
                 className="rounded-md border border-[color:var(--border)] bg-[color:var(--background)]/40 px-3 py-3"
@@ -597,6 +611,11 @@ export default function ObjectiveDetail({
                 </div>
               </div>
             ))}
+            {!suggestions.length && !suggestionsLoading ? (
+              <div className="rounded-md border border-dashed border-[color:var(--border)] px-3 py-4 text-xs text-[color:var(--muted)]">
+                No suggestions yet. Add objective details and click Refresh.
+              </div>
+            ) : null}
           </div>
         </div>
       </div>

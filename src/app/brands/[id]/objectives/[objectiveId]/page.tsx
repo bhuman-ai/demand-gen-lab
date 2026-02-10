@@ -36,6 +36,9 @@ export default async function Page({
       brandName={brand.brandName ?? "Untitled brand"}
       website={brand.website ?? ""}
       tone={brand.tone ?? ""}
+      targetBuyers={brand.targetBuyers ?? ""}
+      offers={brand.offers ?? ""}
+      proof={brand.proof ?? ""}
       objectives={objectives}
       initialObjective={objective}
     />

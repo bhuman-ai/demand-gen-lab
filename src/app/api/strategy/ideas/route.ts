@@ -8,7 +8,7 @@ type Idea = {
   channel: string;
   rationale: string;
   actorQuery: string;
-  seedInputs: unknown;
+  seedInputs: string[];
 };
 
 type RequestContext = {
@@ -18,6 +18,75 @@ type RequestContext = {
   exclusions?: unknown;
   needs?: unknown;
 };
+
+type ParsedIdea = {
+  title?: unknown;
+  channel?: unknown;
+  rationale?: unknown;
+  actorQuery?: unknown;
+  seedInputs?: unknown;
+};
+
+function normalizeSeedInputs(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value.map((item) => String(item ?? "").trim()).filter(Boolean).slice(0, 12);
+  }
+  if (typeof value === "string") {
+    return value
+      .split(/\n|,/g)
+      .map((item) => item.trim())
+      .filter(Boolean)
+      .slice(0, 12);
+  }
+  return [];
+}
+
+function normalizeIdeas(value: unknown): Idea[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const dedupe = new Set<string>();
+  const ideas: Idea[] = [];
+  for (const item of value as ParsedIdea[]) {
+    const title = String(item?.title ?? "").trim();
+    const channel = String(item?.channel ?? "").trim();
+    const rationale = String(item?.rationale ?? "").trim();
+    const actorQuery = String(item?.actorQuery ?? "").trim();
+    const seedInputs = normalizeSeedInputs(item?.seedInputs);
+    if (!title || !channel || !rationale || !actorQuery) {
+      continue;
+    }
+    const key = `${title.toLowerCase()}::${channel.toLowerCase()}`;
+    if (dedupe.has(key)) {
+      continue;
+    }
+    dedupe.add(key);
+    ideas.push({
+      title,
+      channel,
+      rationale,
+      actorQuery,
+      seedInputs,
+    });
+  }
+  return ideas.slice(0, 8);
+}
+
+function extractResponseText(data: any): string {
+  if (typeof data?.output_text === "string" && data.output_text.trim()) {
+    return data.output_text;
+  }
+  const chunks = Array.isArray(data?.output) ? data.output : [];
+  for (const chunk of chunks) {
+    const content = Array.isArray(chunk?.content) ? chunk.content : [];
+    for (const entry of content) {
+      if (typeof entry?.text === "string" && entry.text.trim()) {
+        return entry.text;
+      }
+    }
+  }
+  return "{}";
+}
 
 async function logLLM(event: string, payload: Record<string, unknown>) {
   try {
@@ -61,39 +130,22 @@ export async function POST(request: Request) {
 
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) {
-    const fallback: Idea[] = [
-      {
-        title: "Commission-ready Instagram hashtag harvest",
-        channel: "Instagram",
-        rationale: "Targets buyers browsing commission-focused tags.",
-        actorQuery: "Instagram scraper",
-        seedInputs: ["#commissionopen", "#illustration", "#artdirector"],
-      },
-      {
-        title: "YouTube creator business email pull",
-        channel: "YouTube",
-        rationale: "Finds creators hiring thumbnail or channel art support.",
-        actorQuery: "YouTube channel scraper",
-        seedInputs: ["thumbnail artist", "business inquiries"],
-      },
-      {
-        title: "Reddit hiring posts for concept art",
-        channel: "Reddit",
-        rationale: "Targets immediate hiring intent in niche subreddits.",
-        actorQuery: "Reddit scraper",
-        seedInputs: ["forhire", "gameDevClassifieds"],
-      },
-    ];
-    return NextResponse.json({ ideas: fallback, mode: "fallback" });
+    return NextResponse.json(
+      { error: "OPENAI_API_KEY is not configured for hypothesis generation." },
+      { status: 503 }
+    );
   }
 
   const prompt = [
     "You are an adversarial brainstormer.",
-    "Generate 5-8 outreach acquisition ideas that are not similar to existing ideas.",
+    "Generate 5-8 outreach acquisition hypotheses that are tightly aligned to objective + brand context.",
     "At least 3 ideas must be scrapeable with Apify (Instagram, TikTok, YouTube, Reddit, X/Twitter, LinkedIn).",
     "Avoid marketplaces unless explicitly requested by the user.",
+    "Do not suggest generic channels without a concrete reason tied to objective constraints and brand ICP.",
+    "Do not repeat or paraphrase existing ideas.",
     "For scrapeable ideas, actorQuery must be a short Apify Store query (2-6 words).",
-    "Return JSON only as: { ideas: Idea[] } where Idea = { title, channel, rationale, actorQuery, seedInputs }",
+    "Return JSON only: { \"ideas\": Idea[] }",
+    "Idea schema: { title: string, channel: string, rationale: string, actorQuery: string, seedInputs: string[] }",
     "Goal:",
     goal,
     "User context:",
@@ -112,6 +164,7 @@ export async function POST(request: Request) {
       model: "gpt-5.2",
       input: prompt,
       text: { format: { type: "json_object" } },
+      max_output_tokens: 1400,
     }),
   });
 
@@ -130,7 +183,7 @@ export async function POST(request: Request) {
   } catch {
     data = {};
   }
-  const content = data?.output?.[0]?.content?.[0]?.text ?? "{}";
+  const content = extractResponseText(data);
   let parsed: { ideas?: Idea[] } = {};
   try {
     parsed = JSON.parse(content);
@@ -138,8 +191,16 @@ export async function POST(request: Request) {
     parsed = {};
   }
 
+  const ideas = normalizeIdeas(parsed?.ideas);
+  if (!ideas.length) {
+    return NextResponse.json(
+      { error: "Model returned no valid hypotheses for this objective. Refine objective details and retry." },
+      { status: 422 }
+    );
+  }
+
   return NextResponse.json({
-    ideas: Array.isArray(parsed.ideas) ? parsed.ideas : [],
+    ideas,
     mode: "openai",
   });
 }

@@ -36,6 +36,8 @@ export default function HypothesesClient({ brand }: { brand: Brand }) {
   );
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [editingIndex, setEditingIndex] = useState<number | null>(null);
+  const [editDraft, setEditDraft] = useState<Idea | null>(null);
 
   const generateIdeas = async () => {
     if (!brand.id) return;
@@ -96,6 +98,46 @@ export default function HypothesesClient({ brand }: { brand: Brand }) {
     }
   }, [brand.id, ideas.length, loading]);
 
+  const persistIdeas = async (nextIdeas: Idea[]) => {
+    if (!brand.id) return;
+    await fetch("/api/brands", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        id: brand.id,
+        ideas: nextIdeas,
+      }),
+    });
+  };
+
+  const startEdit = (index: number) => {
+    setEditingIndex(index);
+    setEditDraft({ ...ideas[index] });
+  };
+
+  const cancelEdit = () => {
+    setEditingIndex(null);
+    setEditDraft(null);
+  };
+
+  const saveEdit = async () => {
+    if (editingIndex === null || !editDraft) return;
+    const nextIdeas = ideas.map((idea, idx) => (idx === editingIndex ? editDraft : idea));
+    setIdeas(nextIdeas);
+    await persistIdeas(nextIdeas);
+    setEditingIndex(null);
+    setEditDraft(null);
+  };
+
+  const deleteIdea = async (index: number) => {
+    const nextIdeas = ideas.filter((_, idx) => idx !== index);
+    setIdeas(nextIdeas);
+    await persistIdeas(nextIdeas);
+    if (editingIndex === index) {
+      cancelEdit();
+    }
+  };
+
   return (
     <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--background-elevated)] p-5">
       <div className="flex items-center justify-between">
@@ -111,11 +153,69 @@ export default function HypothesesClient({ brand }: { brand: Brand }) {
       </div>
       {error ? <div className="mt-3 text-xs text-[color:var(--danger)]">{error}</div> : null}
       <div className="mt-3 grid gap-2">
-        {ideas.slice(0, 12).map((idea) => (
-          <div key={idea.title} className="rounded-md border border-[color:var(--border)] px-3 py-2">
-            <div className="text-xs text-[color:var(--muted)]">{idea.channel}</div>
-            <div className="text-sm text-[color:var(--foreground)]">{idea.title}</div>
-            <div className="mt-1 text-[11px] text-[color:var(--muted)]">{idea.rationale}</div>
+        {ideas.slice(0, 12).map((idea, index) => (
+          <div key={`${idea.title}-${index}`} className="rounded-md border border-[color:var(--border)] px-3 py-2">
+            {editingIndex === index && editDraft ? (
+              <div className="grid gap-2">
+                <input
+                  value={editDraft.channel}
+                  onChange={(event) => setEditDraft({ ...editDraft, channel: event.target.value })}
+                  className="h-8 rounded-md border border-[color:var(--border)] bg-[color:var(--background)]/60 px-2 text-xs text-[color:var(--foreground)]"
+                />
+                <input
+                  value={editDraft.title}
+                  onChange={(event) => setEditDraft({ ...editDraft, title: event.target.value })}
+                  className="h-8 rounded-md border border-[color:var(--border)] bg-[color:var(--background)]/60 px-2 text-xs text-[color:var(--foreground)]"
+                />
+                <textarea
+                  value={editDraft.rationale}
+                  onChange={(event) => setEditDraft({ ...editDraft, rationale: event.target.value })}
+                  className="h-16 resize-none rounded-md border border-[color:var(--border)] bg-[color:var(--background)]/60 px-2 py-1 text-xs text-[color:var(--foreground)]"
+                />
+                <div className="flex items-center gap-2 text-[11px]">
+                  <button
+                    type="button"
+                    onClick={saveEdit}
+                    className="rounded-md border border-[color:var(--border)] px-2 py-1 text-[color:var(--foreground)]"
+                  >
+                    Save
+                  </button>
+                  <button
+                    type="button"
+                    onClick={cancelEdit}
+                    className="rounded-md border border-[color:var(--border)] px-2 py-1 text-[color:var(--muted)]"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <>
+                <div className="flex items-start justify-between gap-2">
+                  <div>
+                    <div className="text-xs text-[color:var(--muted)]">{idea.channel}</div>
+                    <div className="text-sm text-[color:var(--foreground)]">{idea.title}</div>
+                  </div>
+                  <div className="flex items-center gap-2 text-[11px]">
+                    <button
+                      type="button"
+                      onClick={() => startEdit(index)}
+                      className="text-[color:var(--accent)]"
+                    >
+                      Edit
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => deleteIdea(index)}
+                      className="text-[color:var(--danger)]"
+                    >
+                      Delete
+                    </button>
+                  </div>
+                </div>
+                <div className="mt-1 text-[11px] text-[color:var(--muted)]">{idea.rationale}</div>
+              </>
+            )}
           </div>
         ))}
         {!ideas.length ? (

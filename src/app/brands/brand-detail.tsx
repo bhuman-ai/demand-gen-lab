@@ -130,6 +130,8 @@ export default function BrandDetail({ brand, brands }: BrandDetailProps) {
   const [ideasError, setIdeasError] = useState("");
   const [newSequenceName, setNewSequenceName] = useState("");
   const [newSequenceStatus, setNewSequenceStatus] = useState("idle");
+  const [editingSequenceIndex, setEditingSequenceIndex] = useState<number | null>(null);
+  const [sequenceDraft, setSequenceDraft] = useState<Sequence | null>(null);
   const [newLead, setNewLead] = useState<Lead>({
     name: "",
     channel: "",
@@ -261,6 +263,59 @@ export default function BrandDetail({ brand, brands }: BrandDetailProps) {
     setNewSequenceName("");
     const saved = await persistBrand(next);
     setForm(saved);
+  };
+
+  const startSequenceEdit = (index: number) => {
+    setEditingSequenceIndex(index);
+    setSequenceDraft({ ...form.sequences[index] });
+  };
+
+  const cancelSequenceEdit = () => {
+    setEditingSequenceIndex(null);
+    setSequenceDraft(null);
+  };
+
+  const saveSequenceEdit = async () => {
+    if (editingSequenceIndex === null || !sequenceDraft) return;
+    const nextSequences = form.sequences.map((sequence, index) =>
+      index === editingSequenceIndex ? sequenceDraft : sequence
+    );
+    const next = {
+      ...form,
+      sequences: nextSequences,
+      modules: {
+        ...form.modules,
+        sequences: {
+          ...form.modules.sequences,
+          activeCount: nextSequences.length,
+        },
+      },
+    };
+    setForm(next);
+    const saved = await persistBrand(next);
+    setForm(saved);
+    cancelSequenceEdit();
+  };
+
+  const deleteSequence = async (index: number) => {
+    const nextSequences = form.sequences.filter((_, idx) => idx !== index);
+    const next = {
+      ...form,
+      sequences: nextSequences,
+      modules: {
+        ...form.modules,
+        sequences: {
+          ...form.modules.sequences,
+          activeCount: nextSequences.length,
+        },
+      },
+    };
+    setForm(next);
+    const saved = await persistBrand(next);
+    setForm(saved);
+    if (editingSequenceIndex === index) {
+      cancelSequenceEdit();
+    }
   };
 
   const addLead = async () => {
@@ -545,8 +600,65 @@ export default function BrandDetail({ brand, brands }: BrandDetailProps) {
                 key={`${sequence.name}-${index}`}
                 className="rounded-md border border-[color:var(--border)] bg-[color:var(--background)]/40 px-3 py-2"
               >
-                <div className="text-xs text-[color:var(--muted)]">{sequence.status}</div>
-                <div className="text-sm text-[color:var(--foreground)]">{sequence.name}</div>
+                {editingSequenceIndex === index && sequenceDraft ? (
+                  <div className="space-y-2">
+                    <input
+                      value={sequenceDraft.name}
+                      onChange={(event) => setSequenceDraft({ ...sequenceDraft, name: event.target.value })}
+                      className="h-8 w-full rounded-md border border-[color:var(--border)] bg-[color:var(--background)]/60 px-2 text-xs text-[color:var(--foreground)]"
+                    />
+                    <select
+                      value={sequenceDraft.status}
+                      onChange={(event) => setSequenceDraft({ ...sequenceDraft, status: event.target.value })}
+                      className="h-8 w-full rounded-md border border-[color:var(--border)] bg-[color:var(--background)]/60 px-2 text-xs text-[color:var(--foreground)]"
+                    >
+                      <option value="idle">Idle</option>
+                      <option value="testing">Testing</option>
+                      <option value="scaling">Scaling</option>
+                    </select>
+                    <div className="flex items-center gap-2 text-[11px]">
+                      <button
+                        type="button"
+                        onClick={saveSequenceEdit}
+                        className="rounded-md border border-[color:var(--border)] px-2 py-1 text-[color:var(--foreground)]"
+                      >
+                        Save
+                      </button>
+                      <button
+                        type="button"
+                        onClick={cancelSequenceEdit}
+                        className="rounded-md border border-[color:var(--border)] px-2 py-1 text-[color:var(--muted)]"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <>
+                    <div className="flex items-start justify-between gap-2">
+                      <div>
+                        <div className="text-xs text-[color:var(--muted)]">{sequence.status}</div>
+                        <div className="text-sm text-[color:var(--foreground)]">{sequence.name}</div>
+                      </div>
+                      <div className="flex items-center gap-2 text-[11px]">
+                        <button
+                          type="button"
+                          onClick={() => startSequenceEdit(index)}
+                          className="text-[color:var(--accent)]"
+                        >
+                          Edit
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => deleteSequence(index)}
+                          className="text-[color:var(--danger)]"
+                        >
+                          Delete
+                        </button>
+                      </div>
+                    </div>
+                  </>
+                )}
               </div>
             ))}
             {!form.sequences.length ? (

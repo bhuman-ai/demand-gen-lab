@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 
 type BrandRedirectProps = {
-  target: "strategy" | "hypotheses" | "evolution";
+  target: "campaigns";
   title: string;
   description: string;
 };

@@ -12,6 +12,7 @@ type Brand = {
   proof: string;
   createdAt: string;
   updatedAt?: string;
+  objectives?: unknown[];
   modules: {
     strategy: {
       status: "draft" | "active" | "paused";
@@ -46,6 +47,7 @@ const mapRowToBrand = (row: any): Brand => ({
   proof: row.proof ?? "",
   createdAt: row.created_at ?? "",
   updatedAt: row.updated_at ?? "",
+  objectives: row.objectives ?? [],
   modules: row.modules ?? {
     strategy: { status: "draft", goal: "", constraints: "" },
     sequences: { status: "idle", activeCount: 0 },
@@ -91,6 +93,7 @@ export async function POST(request: Request) {
     offers: String(body?.offers ?? ""),
     proof: String(body?.proof ?? ""),
     createdAt: new Date().toISOString(),
+    objectives: [],
     modules: {
       strategy: {
         status: "draft",
@@ -124,6 +127,7 @@ export async function POST(request: Request) {
         target_buyers: brand.targetBuyers,
         offers: brand.offers,
         proof: brand.proof,
+        objectives: brand.objectives,
         modules: brand.modules,
         ideas: brand.ideas,
         sequences: brand.sequences,
@@ -162,6 +166,7 @@ export async function PATCH(request: Request) {
     if (typeof body?.targetBuyers === "string") update.target_buyers = body.targetBuyers;
     if (typeof body?.offers === "string") update.offers = body.offers;
     if (typeof body?.proof === "string") update.proof = body.proof;
+    if (Array.isArray(body?.objectives)) update.objectives = body.objectives;
     if (body?.modules && typeof body.modules === "object") update.modules = body.modules;
     if (Array.isArray(body?.ideas)) update.ideas = body.ideas;
     if (Array.isArray(body?.sequences)) update.sequences = body.sequences;
@@ -262,6 +267,9 @@ export async function PATCH(request: Request) {
         reputation: String(domain?.reputation ?? ""),
       }))
       .filter((domain: any) => domain.domain.length > 0);
+  }
+  if (Array.isArray(body?.objectives)) {
+    next.objectives = body.objectives;
   }
   next.updatedAt = new Date().toISOString();
   brands[index] = next;

@@ -9,6 +9,7 @@ export type Brand = {
   targetBuyers?: string;
   offers?: string;
   proof?: string;
+  objectives?: unknown[];
   modules?: Record<string, unknown>;
   ideas?: unknown[];
   sequences?: unknown[];
@@ -37,6 +38,7 @@ const mapRowToBrand = (row: any): Brand => ({
   targetBuyers: row?.target_buyers ?? "",
   offers: row?.offers ?? "",
   proof: row?.proof ?? "",
+  objectives: row?.objectives ?? [],
   modules: row?.modules ?? {},
   ideas: row?.ideas ?? [],
   sequences: row?.sequences ?? [],

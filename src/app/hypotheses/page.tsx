@@ -3,9 +3,9 @@ import BrandRedirect from "../brand-redirect";
 export default function Page() {
   return (
     <BrandRedirect
-      target="hypotheses"
-      title="Hypotheses"
-      description="Approve or deny AI-generated experiment ideas inside the active brand."
+      target="campaigns"
+      title="Campaigns"
+      description="Open campaigns to review hypotheses and experiments for the active brand."
     />
   );
 }

@@ -64,21 +64,13 @@ export default function BrandDetail({ brand, brands }: BrandDetailProps) {
 
       <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--background-elevated)] p-5">
         <div className="text-xs text-[color:var(--muted)]">Primary flow</div>
-        <div className="mt-3 grid gap-3 md:grid-cols-2">
-          {[
-            { label: "Objectives", href: `/brands/${brandId}/strategy` },
-            { label: "Hypotheses", href: `/brands/${brandId}/hypotheses` },
-            { label: "Experiments", href: `/brands/${brandId}/evolution` },
-            { label: "Evolution", href: `/brands/${brandId}/evolution` },
-          ].map((module) => (
-            <Link
-              key={module.label}
-              href={module.href}
-              className="rounded-lg border border-[color:var(--border)] bg-[color:var(--background)]/40 px-3 py-2 text-xs text-[color:var(--foreground)]"
-            >
-              {module.label}
-            </Link>
-          ))}
+        <div className="mt-3">
+          <Link
+            href={`/brands/${brandId}/campaigns`}
+            className="inline-flex rounded-lg border border-[color:var(--border)] bg-[color:var(--background)]/40 px-3 py-2 text-xs text-[color:var(--foreground)]"
+          >
+            Campaigns
+          </Link>
         </div>
       </div>
 

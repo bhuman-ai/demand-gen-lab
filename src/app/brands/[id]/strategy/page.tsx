@@ -12,7 +12,12 @@ export default async function Page({ params }: { params: Promise<{ id: string }>
         website?: string;
         tone?: string;
         modules?: {
-          strategy?: { status?: "draft" | "active" | "paused"; goal?: string; constraints?: string };
+          strategy?: {
+            status?: "draft" | "active" | "paused";
+            goal?: string;
+            constraints?: string;
+            scoring?: { replyWeight?: number; conversionWeight?: number; qualityWeight?: number };
+          };
           sequences?: { status?: "idle" | "testing" | "scaling"; activeCount?: number };
           leads?: { total?: number; qualified?: number };
         };
@@ -51,6 +56,11 @@ export default async function Page({ params }: { params: Promise<{ id: string }>
                 status: brand.modules?.strategy?.status ?? "draft",
                 goal: brand.modules?.strategy?.goal ?? "",
                 constraints: brand.modules?.strategy?.constraints ?? "",
+                scoring: {
+                  replyWeight: brand.modules?.strategy?.scoring?.replyWeight ?? 0.3,
+                  conversionWeight: brand.modules?.strategy?.scoring?.conversionWeight ?? 0.6,
+                  qualityWeight: brand.modules?.strategy?.scoring?.qualityWeight ?? 0.1,
+                },
               },
               sequences: {
                 status: brand.modules?.sequences?.status ?? "idle",

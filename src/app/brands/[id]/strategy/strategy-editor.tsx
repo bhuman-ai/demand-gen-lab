@@ -6,6 +6,11 @@ type Strategy = {
   status: "draft" | "active" | "paused";
   goal: string;
   constraints: string;
+  scoring: {
+    replyWeight: number;
+    conversionWeight: number;
+    qualityWeight: number;
+  };
 };
 
 type StrategyVariant = {
@@ -66,6 +71,11 @@ export default function StrategyEditor({ brand }: StrategyEditorProps) {
     status: brand.modules?.strategy?.status ?? "draft",
     goal: brand.modules?.strategy?.goal ?? "",
     constraints: brand.modules?.strategy?.constraints ?? "",
+    scoring: {
+      replyWeight: brand.modules?.strategy?.scoring?.replyWeight ?? 0.3,
+      conversionWeight: brand.modules?.strategy?.scoring?.conversionWeight ?? 0.6,
+      qualityWeight: brand.modules?.strategy?.scoring?.qualityWeight ?? 0.1,
+    },
   });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
@@ -187,6 +197,74 @@ export default function StrategyEditor({ brand }: StrategyEditorProps) {
               className="mt-2 h-20 w-full resize-none rounded-md border border-[color:var(--border)] bg-[color:var(--background)]/60 px-2 py-2 text-xs text-[color:var(--foreground)]"
             />
           </div>
+          <div className="md:col-span-3">
+            <div className="text-[11px] text-[color:var(--muted)]">Scoring weights</div>
+            <div className="mt-2 grid gap-3 md:grid-cols-3">
+              <label className="rounded-md border border-[color:var(--border)] bg-[color:var(--background)]/60 px-3 py-2 text-xs text-[color:var(--foreground)]">
+                <div className="text-[10px] text-[color:var(--muted)]">Conversion (C)</div>
+                <input
+                  type="number"
+                  min={0}
+                  max={1}
+                  step={0.05}
+                  value={strategy.scoring.conversionWeight}
+                  onChange={(event) =>
+                    setStrategy((prev) => ({
+                      ...prev,
+                      scoring: {
+                        ...prev.scoring,
+                        conversionWeight: Number(event.target.value || 0),
+                      },
+                    }))
+                  }
+                  className="mt-2 h-9 w-full rounded-md border border-[color:var(--border)] bg-[color:var(--background)]/40 px-2 text-xs"
+                />
+              </label>
+              <label className="rounded-md border border-[color:var(--border)] bg-[color:var(--background)]/60 px-3 py-2 text-xs text-[color:var(--foreground)]">
+                <div className="text-[10px] text-[color:var(--muted)]">Reply Quality (Q)</div>
+                <input
+                  type="number"
+                  min={0}
+                  max={1}
+                  step={0.05}
+                  value={strategy.scoring.qualityWeight}
+                  onChange={(event) =>
+                    setStrategy((prev) => ({
+                      ...prev,
+                      scoring: {
+                        ...prev.scoring,
+                        qualityWeight: Number(event.target.value || 0),
+                      },
+                    }))
+                  }
+                  className="mt-2 h-9 w-full rounded-md border border-[color:var(--border)] bg-[color:var(--background)]/40 px-2 text-xs"
+                />
+              </label>
+              <label className="rounded-md border border-[color:var(--border)] bg-[color:var(--background)]/60 px-3 py-2 text-xs text-[color:var(--foreground)]">
+                <div className="text-[10px] text-[color:var(--muted)]">Reply Rate (R)</div>
+                <input
+                  type="number"
+                  min={0}
+                  max={1}
+                  step={0.05}
+                  value={strategy.scoring.replyWeight}
+                  onChange={(event) =>
+                    setStrategy((prev) => ({
+                      ...prev,
+                      scoring: {
+                        ...prev.scoring,
+                        replyWeight: Number(event.target.value || 0),
+                      },
+                    }))
+                  }
+                  className="mt-2 h-9 w-full rounded-md border border-[color:var(--border)] bg-[color:var(--background)]/40 px-2 text-xs"
+                />
+              </label>
+            </div>
+            <div className="mt-2 text-[11px] text-[color:var(--muted)]">
+              C = conversion likelihood, Q = reply quality/intent, R = reply rate. Higher C is recommended.
+            </div>
+          </div>
         </div>
         <div className="mt-4 flex flex-wrap items-center gap-3">
           <button
@@ -229,7 +307,7 @@ export default function StrategyEditor({ brand }: StrategyEditorProps) {
               <div className="mt-2 flex items-center justify-between text-[11px] text-[color:var(--muted)]">
                 <span>
                   Score: {variant.scoring.conversionWeight.toFixed(1)}C /{" "}
-                  {variant.scoring.replyWeight.toFixed(1)}R / {variant.scoring.qualityWeight.toFixed(1)}Q
+                  {variant.scoring.qualityWeight.toFixed(1)}Q / {variant.scoring.replyWeight.toFixed(1)}R
                 </span>
                 <button
                   type="button"
@@ -238,6 +316,7 @@ export default function StrategyEditor({ brand }: StrategyEditorProps) {
                       ...prev,
                       goal: variant.goal,
                       constraints: variant.constraints,
+                      scoring: variant.scoring,
                     }))
                   }
                   className="text-[11px] text-[color:var(--accent)]"

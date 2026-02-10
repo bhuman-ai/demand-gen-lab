@@ -42,3 +42,6 @@ next-env.d.ts
 
 # Local logs
 logs/
+
+# Supabase temp
+supabase/.temp/

@@ -104,13 +104,13 @@ export default function StrategyEditor({ brand }: StrategyEditorProps) {
       });
       const data = await response.json();
       if (!response.ok) {
-        setVariantsError(data?.error ?? "Strategy generation failed");
+        setVariantsError(data?.error ?? "Objective generation failed");
         return;
       }
       const next = Array.isArray(data?.variants) ? (data.variants as StrategyVariant[]) : [];
       setVariants(next.length ? next : fallbackVariants);
     } catch {
-      setVariantsError("Strategy generation failed");
+      setVariantsError("Objective generation failed");
     } finally {
       setVariantsLoading(false);
     }
@@ -155,7 +155,7 @@ export default function StrategyEditor({ brand }: StrategyEditorProps) {
   return (
     <div className="grid gap-4 lg:grid-cols-[1.1fr_0.9fr]">
       <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--background-elevated)] p-5">
-        <div className="text-xs text-[color:var(--muted)]">Strategy definition</div>
+        <div className="text-xs text-[color:var(--muted)]">Objective definition</div>
         <div className="mt-4 grid gap-4 md:grid-cols-3">
           <div>
             <div className="text-[11px] text-[color:var(--muted)]">Status</div>
@@ -195,7 +195,7 @@ export default function StrategyEditor({ brand }: StrategyEditorProps) {
             disabled={saving}
             className="rounded-md border border-[color:var(--border)] px-3 py-2 text-xs text-[color:var(--foreground)]"
           >
-            {saving ? "Saving..." : "Save Strategy"}
+            {saving ? "Saving..." : "Save Objective"}
           </button>
           {savedAt ? <span className="text-xs text-[color:var(--success)]">Saved {savedAt}</span> : null}
           {error ? <span className="text-xs text-[color:var(--danger)]">{error}</span> : null}
@@ -204,7 +204,7 @@ export default function StrategyEditor({ brand }: StrategyEditorProps) {
 
       <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--background-elevated)] p-5">
         <div className="flex items-center justify-between">
-          <div className="text-xs text-[color:var(--muted)]">Strategy suggestions</div>
+          <div className="text-xs text-[color:var(--muted)]">Objective suggestions</div>
           <button
             type="button"
             onClick={loadVariants}

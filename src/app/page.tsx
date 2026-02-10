@@ -26,8 +26,8 @@ export default function Home() {
               href="/strategy"
               className="rounded-lg border border-[color:var(--border)] bg-[color:var(--background-elevated)] px-4 py-3 text-left text-sm text-[color:var(--foreground)]"
             >
-              + New Strategy
-              <div className="text-xs text-[color:var(--muted)]">Spin up hypotheses + sequences</div>
+              + New Objective
+              <div className="text-xs text-[color:var(--muted)]">Spin up hypotheses + experiments</div>
             </Link>
           </div>
         </div>

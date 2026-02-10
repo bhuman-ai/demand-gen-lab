@@ -4,8 +4,8 @@ export default function Page() {
   return (
     <BrandRedirect
       target="hypotheses"
-      title="Hypothesis Queue"
-      description="Approve or deny AI-generated sequence ideas inside the active brand."
+      title="Hypotheses"
+      description="Approve or deny AI-generated experiment ideas inside the active brand."
     />
   );
 }

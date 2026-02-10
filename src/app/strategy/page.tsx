@@ -4,8 +4,8 @@ export default function Page() {
   return (
     <BrandRedirect
       target="strategy"
-      title="Strategy Input"
-      description="Define objective, constraints, and scoring weights in the active brand workspace."
+      title="Objectives"
+      description="Define objectives, constraints, and scoring weights in the active brand workspace."
     />
   );
 }

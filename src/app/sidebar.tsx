@@ -44,7 +44,7 @@ export default function Sidebar() {
 
   const brandItems = activeBrandId
     ? [
-        { href: `/brands/${activeBrandId}/strategy`, label: "Strategy" },
+        { href: `/brands/${activeBrandId}/strategy`, label: "Objectives" },
         { href: `/brands/${activeBrandId}/hypotheses`, label: "Hypotheses" },
         { href: `/brands/${activeBrandId}/evolution`, label: "Evolution" },
         { href: `/brands/${activeBrandId}/network`, label: "Network" },

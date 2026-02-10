@@ -322,8 +322,8 @@ export default function BrandDetail({ brand, brands }: BrandDetailProps) {
       <div className="flex flex-wrap gap-2 text-xs">
         {[
           { id: "overview", label: "Overview" },
-          { id: "strategy", label: "Strategy" },
-          { id: "sequences", label: "Sequences" },
+          { id: "strategy", label: "Objectives" },
+          { id: "sequences", label: "Experiments" },
           { id: "leads", label: "Leads" },
         ].map((tab) => (
           <button
@@ -391,7 +391,7 @@ export default function BrandDetail({ brand, brands }: BrandDetailProps) {
 
       {activeTab === "strategy" ? (
         <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--background-elevated)] p-5">
-          <div className="text-xs text-[color:var(--muted)]">Strategy status</div>
+        <div className="text-xs text-[color:var(--muted)]">Objective status</div>
           <select
             value={form.modules.strategy.status}
             onChange={(event) =>
@@ -470,7 +470,7 @@ export default function BrandDetail({ brand, brands }: BrandDetailProps) {
 
       {activeTab === "sequences" ? (
         <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--background-elevated)] p-5">
-          <div className="text-xs text-[color:var(--muted)]">Sequence status</div>
+        <div className="text-xs text-[color:var(--muted)]">Experiment status</div>
           <select
             value={form.modules.sequences.status}
             onChange={(event) =>
@@ -491,7 +491,7 @@ export default function BrandDetail({ brand, brands }: BrandDetailProps) {
             <option value="testing">Testing</option>
             <option value="scaling">Scaling</option>
           </select>
-          <div className="mt-4 text-xs text-[color:var(--muted)]">Active sequences</div>
+          <div className="mt-4 text-xs text-[color:var(--muted)]">Active experiments</div>
           <input
             value={form.modules.sequences.activeCount}
             onChange={(event) =>
@@ -510,7 +510,7 @@ export default function BrandDetail({ brand, brands }: BrandDetailProps) {
           />
           <div className="mt-4 flex flex-wrap items-end gap-3">
             <div>
-              <div className="text-[11px] text-[color:var(--muted)]">Sequence name</div>
+              <div className="text-[11px] text-[color:var(--muted)]">Experiment name</div>
               <input
                 value={newSequenceName}
                 onChange={(event) => setNewSequenceName(event.target.value)}
@@ -534,7 +534,7 @@ export default function BrandDetail({ brand, brands }: BrandDetailProps) {
               onClick={addSequence}
               className="rounded-md border border-[color:var(--border)] px-3 py-2 text-xs text-[color:var(--foreground)]"
             >
-              Add sequence
+              Add experiment
             </button>
           </div>
           <div className="mt-4 grid gap-3 md:grid-cols-2">
@@ -548,7 +548,7 @@ export default function BrandDetail({ brand, brands }: BrandDetailProps) {
               </div>
             ))}
             {!form.sequences.length ? (
-              <div className="text-xs text-[color:var(--muted)]">No sequences yet.</div>
+              <div className="text-xs text-[color:var(--muted)]">No experiments yet.</div>
             ) : null}
           </div>
         </div>
@@ -656,7 +656,7 @@ export default function BrandDetail({ brand, brands }: BrandDetailProps) {
         <div className="text-xs text-[color:var(--muted)]">Brand Modules</div>
         <div className="mt-3 grid gap-3 md:grid-cols-3">
           {[
-            { label: "Strategy", href: `/brands/${form.id}/strategy` },
+            { label: "Objectives", href: `/brands/${form.id}/strategy` },
             { label: "Hypotheses", href: `/brands/${form.id}/hypotheses` },
             { label: "Evolution", href: `/brands/${form.id}/evolution` },
             { label: "Leads", href: `/brands/${form.id}/leads` },

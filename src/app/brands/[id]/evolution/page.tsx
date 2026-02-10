@@ -26,7 +26,7 @@ export default async function Page({ params }: { params: Promise<{ id: string }>
         </Link>
       </div>
       <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--background-elevated)] p-5">
-        <div className="text-xs text-[color:var(--muted)]">Active sequences</div>
+        <div className="text-xs text-[color:var(--muted)]">Active experiments</div>
         <div className="mt-3 grid gap-2">
           {(brand.sequences || []).slice(0, 12).map((sequence: any) => (
             <div key={sequence.name} className="rounded-md border border-[color:var(--border)] px-3 py-2">
@@ -35,7 +35,7 @@ export default async function Page({ params }: { params: Promise<{ id: string }>
             </div>
           ))}
           {!(brand.sequences || []).length ? (
-            <div className="text-xs text-[color:var(--muted)]">No sequences yet.</div>
+            <div className="text-xs text-[color:var(--muted)]">No experiments yet.</div>
           ) : null}
         </div>
       </div>

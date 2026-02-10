@@ -92,7 +92,7 @@ export async function POST(request: Request) {
   await logLLM("strategy_variants", { prompt, response: raw });
   if (!response.ok) {
     return NextResponse.json(
-      { error: "Strategy generation failed.", details: raw },
+      { error: "Objective generation failed.", details: raw },
       { status: response.status }
     );
   }

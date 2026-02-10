@@ -34,7 +34,7 @@ export default async function Page({ params }: { params: Promise<{ id: string }>
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <h1 className="text-xl font-semibold text-[color:var(--foreground)]">{brand.brandName} — Strategy</h1>
+        <h1 className="text-xl font-semibold text-[color:var(--foreground)]">{brand.brandName} — Objectives</h1>
         <Link className="text-xs text-[color:var(--accent)]" href={`/brands/${brand.id}`}>
           Back to Brand
         </Link>

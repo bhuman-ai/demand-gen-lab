@@ -4,7 +4,7 @@ export default function Page() {
   return (
     <BrandRedirect
       target="evolution"
-      title="Evolution Grid"
+      title="Evolution"
       description="Track experiment outcomes and scale winners inside the active brand."
     />
   );

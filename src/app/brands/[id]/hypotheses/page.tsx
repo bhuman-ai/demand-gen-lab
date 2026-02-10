@@ -26,7 +26,7 @@ export default async function Page({ params }: { params: Promise<{ id: string }>
         </Link>
       </div>
       <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--background-elevated)] p-5">
-        <div className="text-xs text-[color:var(--muted)]">Approved ideas</div>
+        <div className="text-xs text-[color:var(--muted)]">Approved hypotheses</div>
         <div className="mt-3 grid gap-2">
           {(brand.ideas || []).slice(0, 12).map((idea: any) => (
             <div key={idea.title} className="rounded-md border border-[color:var(--border)] px-3 py-2">

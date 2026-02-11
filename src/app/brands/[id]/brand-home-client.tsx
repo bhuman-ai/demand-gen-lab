@@ -180,8 +180,10 @@ export default function BrandHomeClient({ brandId }: { brandId: string }) {
 
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Outreach Account</CardTitle>
-          <CardDescription>Choose which configured account this brand uses for autopilot runs.</CardDescription>
+          <CardTitle className="text-base">Outreach Delivery Account</CardTitle>
+          <CardDescription>
+            Choose the delivery account for this brand. Reply mailbox assignment is managed in Outreach Settings.
+          </CardDescription>
         </CardHeader>
         <CardContent className="grid gap-3 md:grid-cols-[1fr_auto] md:items-center">
           <Select

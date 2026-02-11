@@ -26,6 +26,14 @@ function maybeDomain(email: string, fallback: string) {
   return fallback.trim().toLowerCase();
 }
 
+function customerIoApiKey(secrets: OutreachAccountSecrets) {
+  return (
+    secrets.customerIoApiKey.trim() ||
+    secrets.customerIoTrackApiKey.trim() ||
+    secrets.customerIoAppApiKey.trim()
+  );
+}
+
 function normalizeApifyLead(raw: unknown): ApifyLead | null {
   const row = raw && typeof raw === "object" && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
   const email = String(
@@ -56,11 +64,15 @@ export async function testOutreachProviders(
   account: OutreachAccount,
   secrets: OutreachAccountSecrets
 ): Promise<ProviderTestResult> {
-  const customerIoPass = Boolean(account.config.customerIo.siteId && secrets.customerIoTrackApiKey);
-  const apifyPass = Boolean(secrets.apifyToken);
-  const mailboxPass = Boolean(
-    account.config.mailbox.email && (secrets.mailboxAccessToken || secrets.mailboxPassword)
-  );
+  const requiresDelivery = account.accountType !== "mailbox";
+  const requiresMailbox = account.accountType !== "delivery";
+  const customerIoPass = requiresDelivery
+    ? Boolean(account.config.customerIo.siteId && account.config.customerIo.workspaceId && customerIoApiKey(secrets))
+    : true;
+  const apifyPass = requiresDelivery ? Boolean(secrets.apifyToken) : true;
+  const mailboxPass = requiresMailbox
+    ? Boolean(account.config.mailbox.email && (secrets.mailboxAccessToken || secrets.mailboxPassword))
+    : true;
 
   return {
     ok: customerIoPass && apifyPass && mailboxPass,
@@ -135,7 +147,7 @@ export async function sendCustomerIoEvent(params: {
   }
 
   const siteId = params.account.config.customerIo.siteId.trim();
-  const apiKey = params.secrets.customerIoTrackApiKey.trim();
+  const apiKey = customerIoApiKey(params.secrets);
 
   if (!siteId || !apiKey) {
     return {

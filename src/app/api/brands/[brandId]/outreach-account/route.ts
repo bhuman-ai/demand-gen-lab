@@ -19,11 +19,13 @@ export async function GET(
   const { brandId } = await context.params;
   const assignment = await getBrandOutreachAssignment(brandId);
   if (!assignment) {
-    return NextResponse.json({ assignment: null, account: null });
+    return NextResponse.json({ assignment: null, account: null, mailboxAccount: null });
   }
 
   const account = await getOutreachAccount(assignment.accountId);
-  return NextResponse.json({ assignment, account });
+  const mailboxAccountId = assignment.mailboxAccountId || assignment.accountId;
+  const mailboxAccount = mailboxAccountId ? await getOutreachAccount(mailboxAccountId) : null;
+  return NextResponse.json({ assignment, account, mailboxAccount });
 }
 
 export async function PUT(
@@ -33,6 +35,9 @@ export async function PUT(
   const { brandId } = await context.params;
   const body = asRecord(await request.json());
   const accountId = String(body.accountId ?? "").trim();
+  const mailboxAccountIdRaw = body.mailboxAccountId;
+  const mailboxAccountId =
+    typeof mailboxAccountIdRaw === "string" ? mailboxAccountIdRaw.trim() : undefined;
 
   if (accountId) {
     const account = await getOutreachAccount(accountId);
@@ -41,7 +46,20 @@ export async function PUT(
     }
   }
 
-  const assignment = await setBrandOutreachAssignment(brandId, accountId);
+  if (typeof mailboxAccountId === "string" && mailboxAccountId) {
+    const mailboxAccount = await getOutreachAccount(mailboxAccountId);
+    if (!mailboxAccount) {
+      return NextResponse.json({ error: "mailbox account not found" }, { status: 404 });
+    }
+  }
+
+  const assignment = await setBrandOutreachAssignment(
+    brandId,
+    typeof mailboxAccountId === "string" ? { accountId, mailboxAccountId } : { accountId }
+  );
   const account = assignment ? await getOutreachAccount(assignment.accountId) : null;
-  return NextResponse.json({ assignment, account });
+  const mailboxAccount = assignment
+    ? await getOutreachAccount(assignment.mailboxAccountId || assignment.accountId)
+    : null;
+  return NextResponse.json({ assignment, account, mailboxAccount });
 }

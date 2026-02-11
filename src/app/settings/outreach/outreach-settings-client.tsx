@@ -18,10 +18,16 @@ import {
 import { trackEvent } from "@/lib/telemetry-client";
 import type { BrandRecord, OutreachAccount } from "@/lib/factory-types";
 
-type AssignmentMap = Record<string, string>;
+type AssignmentChoice = {
+  accountId: string;
+  mailboxAccountId: string;
+};
+
+type AssignmentMap = Record<string, AssignmentChoice>;
 
 type FormState = {
   name: string;
+  accountType: "delivery" | "mailbox" | "hybrid";
   siteId: string;
   workspaceId: string;
   defaultActorId: string;
@@ -30,8 +36,7 @@ type FormState = {
   mailboxHost: string;
   mailboxPort: string;
   mailboxSecure: boolean;
-  customerIoTrackApiKey: string;
-  customerIoAppApiKey: string;
+  customerIoApiKey: string;
   apifyToken: string;
   mailboxAccessToken: string;
   mailboxRefreshToken: string;
@@ -40,6 +45,7 @@ type FormState = {
 
 const INITIAL_FORM: FormState = {
   name: "",
+  accountType: "hybrid",
   siteId: "",
   workspaceId: "",
   defaultActorId: "",
@@ -48,8 +54,7 @@ const INITIAL_FORM: FormState = {
   mailboxHost: "imap.gmail.com",
   mailboxPort: "993",
   mailboxSecure: true,
-  customerIoTrackApiKey: "",
-  customerIoAppApiKey: "",
+  customerIoApiKey: "",
   apifyToken: "",
   mailboxAccessToken: "",
   mailboxRefreshToken: "",
@@ -129,13 +134,20 @@ export default function OutreachSettingsClient() {
         const assignmentPairs = await Promise.all(
           brandRows.map(async (brand) => {
             const row = await fetchBrandOutreachAssignment(brand.id);
-            return { brandId: brand.id, accountId: row.assignment?.accountId ?? "" };
+            return {
+              brandId: brand.id,
+              accountId: row.assignment?.accountId ?? "",
+              mailboxAccountId: row.assignment?.mailboxAccountId ?? "",
+            };
           })
         );
         if (!mounted) return;
         const map: AssignmentMap = {};
         for (const row of assignmentPairs) {
-          map[row.brandId] = row.accountId;
+          map[row.brandId] = {
+            accountId: row.accountId,
+            mailboxAccountId: row.mailboxAccountId,
+          };
         }
         setAssignments(map);
       } catch (err) {
@@ -154,13 +166,27 @@ export default function OutreachSettingsClient() {
     () => accounts.filter((account) => account.status === "active").length,
     [accounts]
   );
+  const deliveryCapableAccounts = useMemo(
+    () => accounts.filter((account) => account.accountType !== "mailbox"),
+    [accounts]
+  );
+  const mailboxCapableAccounts = useMemo(
+    () => accounts.filter((account) => account.accountType !== "delivery"),
+    [accounts]
+  );
+  const showDeliveryFields = form.accountType !== "mailbox";
+  const showMailboxFields = form.accountType !== "delivery";
 
   const createAccount = async () => {
     setSaving(true);
     setError("");
     try {
+      const mailboxConnected = Boolean(
+        form.mailboxEmail.trim() && (form.mailboxAccessToken.trim() || form.mailboxPassword.trim())
+      );
       const created = await createOutreachAccountApi({
         name: form.name.trim(),
+        accountType: form.accountType,
         status: "active",
         config: {
           customerIo: {
@@ -176,12 +202,11 @@ export default function OutreachSettingsClient() {
             host: form.mailboxHost,
             port: Number(form.mailboxPort || 993),
             secure: form.mailboxSecure,
-            status: "connected",
+            status: mailboxConnected ? "connected" : "disconnected",
           },
         },
         credentials: {
-          customerIoTrackApiKey: form.customerIoTrackApiKey,
-          customerIoAppApiKey: form.customerIoAppApiKey,
+          customerIoApiKey: form.customerIoApiKey,
           apifyToken: form.apifyToken,
           mailboxAccessToken: form.mailboxAccessToken,
           mailboxRefreshToken: form.mailboxRefreshToken,
@@ -198,10 +223,12 @@ export default function OutreachSettingsClient() {
     }
   };
 
-  const onAssign = async (brandId: string, accountId: string) => {
-    setAssignments((prev) => ({ ...prev, [brandId]: accountId }));
+  const onAssign = async (brandId: string, patch: Partial<AssignmentChoice>) => {
+    const current = assignments[brandId] ?? { accountId: "", mailboxAccountId: "" };
+    const next = { ...current, ...patch };
+    setAssignments((prev) => ({ ...prev, [brandId]: next }));
     try {
-      await assignBrandOutreachAccount(brandId, accountId);
+      await assignBrandOutreachAccount(brandId, next);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to assign account");
     }
@@ -224,7 +251,7 @@ export default function OutreachSettingsClient() {
         <CardHeader>
           <CardTitle>Outreach Automation Settings</CardTitle>
           <CardDescription>
-            Manage Customer.io, Apify, and mailbox accounts. Assign one account per brand.
+            Manage delivery stacks and reply mailbox accounts, then assign both per brand.
           </CardDescription>
         </CardHeader>
         <CardContent className="grid gap-3 md:grid-cols-3">
@@ -249,7 +276,9 @@ export default function OutreachSettingsClient() {
       <Card>
         <CardHeader>
           <CardTitle className="text-base">Add Account</CardTitle>
-          <CardDescription>Store one reusable outbound stack and map it to brands.</CardDescription>
+          <CardDescription>
+            Store one reusable outbound stack and map it to brands.
+          </CardDescription>
         </CardHeader>
         <CardContent className="grid gap-3 md:grid-cols-2">
           <div className="grid gap-2">
@@ -267,184 +296,198 @@ export default function OutreachSettingsClient() {
           </div>
           <div className="grid gap-2">
             <FieldLabel
-              htmlFor="account-site-id"
-              label="Customer.io Site ID"
-              help="Customer.io Site ID used for Track API auth. Find it in Customer.io Settings > API credentials."
-            />
-            <Input
-              id="account-site-id"
-              value={form.siteId}
-              onChange={(event) => setForm((prev) => ({ ...prev, siteId: event.target.value }))}
-            />
-          </div>
-          <div className="grid gap-2">
-            <FieldLabel
-              htmlFor="account-workspace-id"
-              label="Customer.io Workspace"
-              help="Workspace identifier for this Customer.io account. Find it in Workspace settings or in the workspace URL."
-            />
-            <Input
-              id="account-workspace-id"
-              value={form.workspaceId}
-              onChange={(event) => setForm((prev) => ({ ...prev, workspaceId: event.target.value }))}
-            />
-          </div>
-          <div className="grid gap-2">
-            <FieldLabel
-              htmlFor="account-actor-id"
-              label="Default Apify Actor ID"
-              help="Fallback actor used for lead sourcing when a hypothesis does not set one. Copy actor ID from Apify actor page."
-            />
-            <Input
-              id="account-actor-id"
-              value={form.defaultActorId}
-              onChange={(event) => setForm((prev) => ({ ...prev, defaultActorId: event.target.value }))}
-              placeholder="apify/actor-name"
-            />
-          </div>
-          <div className="grid gap-2">
-            <FieldLabel
-              htmlFor="mailbox-provider"
-              label="Mailbox Provider"
-              help="How inbox replies are authenticated and synced. Use Gmail/Outlook for OAuth, or IMAP for host/port/password."
+              htmlFor="account-type"
+              label="Account Type"
+              help="Choose what this account is used for: Delivery (Customer.io + Apify), Reply Mailbox (inbox sync/replies), or Hybrid (both)."
             />
             <Select
-              id="mailbox-provider"
-              value={form.mailboxProvider}
+              id="account-type"
+              value={form.accountType}
               onChange={(event) =>
-                setProviderWithDefaults(event.target.value as FormState["mailboxProvider"])
+                setForm((prev) => ({
+                  ...prev,
+                  accountType: event.target.value as FormState["accountType"],
+                }))
               }
             >
-              <option value="gmail">gmail</option>
-              <option value="outlook">outlook</option>
-              <option value="imap">imap</option>
+              <option value="hybrid">hybrid (delivery + mailbox)</option>
+              <option value="delivery">delivery only</option>
+              <option value="mailbox">reply mailbox only</option>
             </Select>
-            <div className="text-[11px] text-[color:var(--muted-foreground)]">
-              Host and port auto-fill based on provider.
-            </div>
           </div>
-          <div className="grid gap-2">
-            <FieldLabel
-              htmlFor="mailbox-email"
-              label="Mailbox Email"
-              help="Sender mailbox address used for outreach identity and reply threading, for example sdr@yourdomain.com."
-            />
-            <Input
-              id="mailbox-email"
-              value={form.mailboxEmail}
-              onChange={(event) => setForm((prev) => ({ ...prev, mailboxEmail: event.target.value }))}
-            />
-          </div>
-          <div className="grid gap-2">
-            <FieldLabel
-              htmlFor="mailbox-host"
-              label="Mailbox Host"
-              help="IMAP server hostname, like imap.gmail.com or outlook.office365.com. Get this from your email provider IMAP docs."
-            />
-            <Input
-              id="mailbox-host"
-              value={form.mailboxHost}
-              onChange={(event) => setForm((prev) => ({ ...prev, mailboxHost: event.target.value }))}
-            />
-          </div>
-          <div className="grid gap-2">
-            <FieldLabel
-              htmlFor="mailbox-port"
-              label="Mailbox Port"
-              help="IMAP port number, usually 993 for secure SSL/TLS connections."
-            />
-            <Input
-              id="mailbox-port"
-              value={form.mailboxPort}
-              onChange={(event) => setForm((prev) => ({ ...prev, mailboxPort: event.target.value }))}
-            />
-          </div>
-          <div className="grid gap-2">
-            <FieldLabel
-              htmlFor="account-track-key"
-              label="Customer.io Track Key"
-              help="Track API key used to send customer events. Find it in Customer.io Settings > API credentials > Track API key."
-            />
-            <Input
-              id="account-track-key"
-              type="password"
-              value={form.customerIoTrackApiKey}
-              onChange={(event) =>
-                setForm((prev) => ({ ...prev, customerIoTrackApiKey: event.target.value }))
-              }
-            />
-          </div>
-          <div className="grid gap-2">
-            <FieldLabel
-              htmlFor="account-app-key"
-              label="Customer.io App Key"
-              help="App API key used for management-level API calls. Find it in Customer.io Settings > API credentials > App API key."
-            />
-            <Input
-              id="account-app-key"
-              type="password"
-              value={form.customerIoAppApiKey}
-              onChange={(event) =>
-                setForm((prev) => ({ ...prev, customerIoAppApiKey: event.target.value }))
-              }
-            />
-          </div>
-          <div className="grid gap-2">
-            <FieldLabel
-              htmlFor="account-apify-token"
-              label="Apify Token"
-              help="Personal Apify API token used to run actors. Get it from Apify Console > Settings > Integrations > API tokens."
-            />
-            <Input
-              id="account-apify-token"
-              type="password"
-              value={form.apifyToken}
-              onChange={(event) => setForm((prev) => ({ ...prev, apifyToken: event.target.value }))}
-            />
-          </div>
-          <div className="grid gap-2">
-            <FieldLabel
-              htmlFor="mailbox-access-token"
-              label="Mailbox Access Token"
-              help="OAuth access token for Gmail/Outlook mailbox auth. Generated by your OAuth app after user login consent."
-            />
-            <Input
-              id="mailbox-access-token"
-              type="password"
-              value={form.mailboxAccessToken}
-              onChange={(event) =>
-                setForm((prev) => ({ ...prev, mailboxAccessToken: event.target.value }))
-              }
-            />
-          </div>
-          <div className="grid gap-2">
-            <FieldLabel
-              htmlFor="mailbox-refresh-token"
-              label="Mailbox Refresh Token"
-              help="OAuth refresh token used to rotate new access tokens without logging in again. Issued during OAuth offline consent."
-            />
-            <Input
-              id="mailbox-refresh-token"
-              type="password"
-              value={form.mailboxRefreshToken}
-              onChange={(event) =>
-                setForm((prev) => ({ ...prev, mailboxRefreshToken: event.target.value }))
-              }
-            />
-          </div>
-          <div className="grid gap-2">
-            <FieldLabel
-              htmlFor="mailbox-password"
-              label="Mailbox Password"
-              help="IMAP password for mailbox auth. Prefer provider app passwords instead of your main login password."
-            />
-            <Input
-              id="mailbox-password"
-              type="password"
-              value={form.mailboxPassword}
-              onChange={(event) => setForm((prev) => ({ ...prev, mailboxPassword: event.target.value }))}
-            />
-          </div>
+          {showDeliveryFields ? (
+            <>
+              <div className="grid gap-2">
+                <FieldLabel
+                  htmlFor="account-site-id"
+                  label="Customer.io Site ID"
+                  help="Site ID used with your API key for Customer.io event sends. Find it in Customer.io Settings > API Credentials."
+                />
+                <Input
+                  id="account-site-id"
+                  value={form.siteId}
+                  onChange={(event) => setForm((prev) => ({ ...prev, siteId: event.target.value }))}
+                />
+              </div>
+              <div className="grid gap-2">
+                <FieldLabel
+                  htmlFor="account-workspace-id"
+                  label="Customer.io Workspace"
+                  help="Workspace identifier (often from the Customer.io workspace URL or workspace settings)."
+                />
+                <Input
+                  id="account-workspace-id"
+                  value={form.workspaceId}
+                  onChange={(event) => setForm((prev) => ({ ...prev, workspaceId: event.target.value }))}
+                />
+              </div>
+              <div className="grid gap-2">
+                <FieldLabel
+                  htmlFor="account-actor-id"
+                  label="Default Apify Actor ID"
+                  help="Fallback actor used for lead sourcing when a hypothesis does not provide one."
+                />
+                <Input
+                  id="account-actor-id"
+                  value={form.defaultActorId}
+                  onChange={(event) => setForm((prev) => ({ ...prev, defaultActorId: event.target.value }))}
+                  placeholder="apify/actor-name"
+                />
+              </div>
+              <div className="grid gap-2">
+                <FieldLabel
+                  htmlFor="account-customerio-api-key"
+                  label="Customer.io API Key"
+                  help="API key used for Customer.io event dispatch. Create it under Customer.io Settings > API Credentials."
+                />
+                <Input
+                  id="account-customerio-api-key"
+                  type="password"
+                  value={form.customerIoApiKey}
+                  onChange={(event) =>
+                    setForm((prev) => ({ ...prev, customerIoApiKey: event.target.value }))
+                  }
+                />
+              </div>
+              <div className="grid gap-2">
+                <FieldLabel
+                  htmlFor="account-apify-token"
+                  label="Apify Token"
+                  help="Personal Apify API token used to run actors. Find it in Apify Console > Settings > API."
+                />
+                <Input
+                  id="account-apify-token"
+                  type="password"
+                  value={form.apifyToken}
+                  onChange={(event) => setForm((prev) => ({ ...prev, apifyToken: event.target.value }))}
+                />
+              </div>
+            </>
+          ) : null}
+          {showMailboxFields ? (
+            <>
+              <div className="grid gap-2">
+                <FieldLabel
+                  htmlFor="mailbox-provider"
+                  label="Mailbox Provider"
+                  help="Mailbox provider for reply sync. Gmail/Outlook auto-fill IMAP defaults; IMAP lets you enter custom host/port."
+                />
+                <Select
+                  id="mailbox-provider"
+                  value={form.mailboxProvider}
+                  onChange={(event) =>
+                    setProviderWithDefaults(event.target.value as FormState["mailboxProvider"])
+                  }
+                >
+                  <option value="gmail">gmail</option>
+                  <option value="outlook">outlook</option>
+                  <option value="imap">imap</option>
+                </Select>
+                <div className="text-[11px] text-[color:var(--muted-foreground)]">
+                  Host and port auto-fill based on provider.
+                </div>
+              </div>
+              <div className="grid gap-2">
+                <FieldLabel
+                  htmlFor="mailbox-email"
+                  label="Mailbox Email"
+                  help="Mailbox used for reply threading and drafted responses, for example sdr@yourdomain.com."
+                />
+                <Input
+                  id="mailbox-email"
+                  value={form.mailboxEmail}
+                  onChange={(event) => setForm((prev) => ({ ...prev, mailboxEmail: event.target.value }))}
+                />
+              </div>
+              <div className="grid gap-2">
+                <FieldLabel
+                  htmlFor="mailbox-host"
+                  label="Mailbox Host"
+                  help="IMAP server hostname (for example imap.gmail.com or outlook.office365.com)."
+                />
+                <Input
+                  id="mailbox-host"
+                  value={form.mailboxHost}
+                  onChange={(event) => setForm((prev) => ({ ...prev, mailboxHost: event.target.value }))}
+                />
+              </div>
+              <div className="grid gap-2">
+                <FieldLabel
+                  htmlFor="mailbox-port"
+                  label="Mailbox Port"
+                  help="IMAP port number, typically 993 for SSL/TLS."
+                />
+                <Input
+                  id="mailbox-port"
+                  value={form.mailboxPort}
+                  onChange={(event) => setForm((prev) => ({ ...prev, mailboxPort: event.target.value }))}
+                />
+              </div>
+              <div className="grid gap-2">
+                <FieldLabel
+                  htmlFor="mailbox-access-token"
+                  label="Mailbox Access Token"
+                  help="OAuth access token for Gmail/Outlook mailbox auth, issued after your OAuth consent flow."
+                />
+                <Input
+                  id="mailbox-access-token"
+                  type="password"
+                  value={form.mailboxAccessToken}
+                  onChange={(event) =>
+                    setForm((prev) => ({ ...prev, mailboxAccessToken: event.target.value }))
+                  }
+                />
+              </div>
+              <div className="grid gap-2">
+                <FieldLabel
+                  htmlFor="mailbox-refresh-token"
+                  label="Mailbox Refresh Token"
+                  help="OAuth refresh token used to rotate access tokens without re-login."
+                />
+                <Input
+                  id="mailbox-refresh-token"
+                  type="password"
+                  value={form.mailboxRefreshToken}
+                  onChange={(event) =>
+                    setForm((prev) => ({ ...prev, mailboxRefreshToken: event.target.value }))
+                  }
+                />
+              </div>
+              <div className="grid gap-2">
+                <FieldLabel
+                  htmlFor="mailbox-password"
+                  label="Mailbox Password"
+                  help="IMAP password or app password (recommended) for non-OAuth mailbox auth."
+                />
+                <Input
+                  id="mailbox-password"
+                  type="password"
+                  value={form.mailboxPassword}
+                  onChange={(event) => setForm((prev) => ({ ...prev, mailboxPassword: event.target.value }))}
+                />
+              </div>
+            </>
+          ) : null}
           <div className="md:col-span-2 flex justify-end">
             <Button
               type="button"
@@ -472,7 +515,8 @@ export default function OutreachSettingsClient() {
                 <div>
                   <div className="text-sm font-semibold">{account.name}</div>
                   <div className="text-xs text-[color:var(--muted-foreground)]">
-                    Provider: {account.provider} · Mailbox: {account.config.mailbox.email || "not set"}
+                    Type: {account.accountType} · Provider: {account.provider} · Mailbox:{" "}
+                    {account.config.mailbox.email || "not set"}
                   </div>
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
@@ -525,31 +569,62 @@ export default function OutreachSettingsClient() {
       <Card>
         <CardHeader>
           <CardTitle className="text-base">Brand Assignments</CardTitle>
-          <CardDescription>Choose which account each brand should run outreach with.</CardDescription>
+          <CardDescription>
+            Choose one delivery account and one reply mailbox account per brand.
+          </CardDescription>
         </CardHeader>
         <CardContent className="grid gap-3">
-          {brands.map((brand) => (
-            <div
-              key={brand.id}
-              className="grid gap-2 rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3 md:grid-cols-[1fr_260px] md:items-center"
-            >
-              <div>
-                <div className="text-sm font-semibold">{brand.name}</div>
-                <div className="text-xs text-[color:var(--muted-foreground)]">{brand.website}</div>
-              </div>
-              <Select
-                value={assignments[brand.id] ?? ""}
-                onChange={(event) => void onAssign(brand.id, event.target.value)}
+          {brands.map((brand) => {
+            const assignment = assignments[brand.id] ?? {
+              accountId: "",
+              mailboxAccountId: "",
+            };
+            return (
+              <div
+                key={brand.id}
+                className="grid gap-2 rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3 md:grid-cols-[1fr_260px_260px] md:items-center"
               >
-                <option value="">Unassigned</option>
-                {accounts.map((account) => (
-                  <option key={account.id} value={account.id}>
-                    {account.name}
-                  </option>
-                ))}
-              </Select>
-            </div>
-          ))}
+                <div>
+                  <div className="text-sm font-semibold">{brand.name}</div>
+                  <div className="text-xs text-[color:var(--muted-foreground)]">{brand.website}</div>
+                </div>
+                <div className="grid gap-1">
+                  <div className="text-[11px] uppercase tracking-[0.08em] text-[color:var(--muted-foreground)]">
+                    Delivery Account
+                  </div>
+                  <Select
+                    value={assignment.accountId}
+                    onChange={(event) => void onAssign(brand.id, { accountId: event.target.value })}
+                  >
+                    <option value="">Unassigned</option>
+                    {deliveryCapableAccounts.map((account) => (
+                      <option key={account.id} value={account.id}>
+                        {account.name}
+                      </option>
+                    ))}
+                  </Select>
+                </div>
+                <div className="grid gap-1">
+                  <div className="text-[11px] uppercase tracking-[0.08em] text-[color:var(--muted-foreground)]">
+                    Reply Mailbox
+                  </div>
+                  <Select
+                    value={assignment.mailboxAccountId}
+                    onChange={(event) =>
+                      void onAssign(brand.id, { mailboxAccountId: event.target.value })
+                    }
+                  >
+                    <option value="">Use delivery account</option>
+                    {mailboxCapableAccounts.map((account) => (
+                      <option key={account.id} value={account.id}>
+                        {account.name}
+                      </option>
+                    ))}
+                  </Select>
+                </div>
+              </div>
+            );
+          })}
         </CardContent>
       </Card>
     </div>

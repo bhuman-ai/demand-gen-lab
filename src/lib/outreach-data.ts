@@ -16,6 +16,7 @@ import type {
 } from "@/lib/factory-types";
 
 export type OutreachAccountSecrets = {
+  customerIoApiKey: string;
   customerIoTrackApiKey: string;
   customerIoAppApiKey: string;
   apifyToken: string;
@@ -150,6 +151,7 @@ function sanitizeAccountConfig(value: unknown): OutreachAccountConfig {
 
 function defaultSecrets(): OutreachAccountSecrets {
   return {
+    customerIoApiKey: "",
     customerIoTrackApiKey: "",
     customerIoAppApiKey: "",
     apifyToken: "",
@@ -161,7 +163,11 @@ function defaultSecrets(): OutreachAccountSecrets {
 
 function sanitizeSecrets(value: unknown): OutreachAccountSecrets {
   const row = asRecord(value);
+  const customerIoApiKey = String(
+    row.customerIoApiKey ?? row.customerIoTrackApiKey ?? row.customerIoAppApiKey ?? ""
+  ).trim();
   return {
+    customerIoApiKey,
     customerIoTrackApiKey: String(row.customerIoTrackApiKey ?? "").trim(),
     customerIoAppApiKey: String(row.customerIoAppApiKey ?? "").trim(),
     apifyToken: String(row.apifyToken ?? "").trim(),
@@ -181,6 +187,7 @@ function mapStoredAccount(row: StoredAccount): OutreachAccount {
     id: row.id,
     name: row.name,
     provider: row.provider,
+    accountType: row.accountType,
     status: row.status,
     config: sanitizeAccountConfig(row.config),
     hasCredentials: hasSecretValues(secrets),
@@ -193,10 +200,16 @@ function mapStoredAccount(row: StoredAccount): OutreachAccount {
 
 function mapAccountRowFromDb(input: unknown): StoredAccount {
   const row = asRecord(input);
+  const accountType = ["delivery", "mailbox", "hybrid"].includes(
+    String(row.account_type ?? row.accountType ?? "hybrid")
+  )
+    ? (String(row.account_type ?? row.accountType ?? "hybrid") as OutreachAccount["accountType"])
+    : "hybrid";
   return {
     id: String(row.id ?? ""),
     name: String(row.name ?? ""),
     provider: "customerio",
+    accountType,
     status: String(row.status ?? "active") === "inactive" ? "inactive" : "active",
     config: sanitizeAccountConfig(row.config),
     credentialsEncrypted: String(row.credentials_encrypted ?? row.credentialsEncrypted ?? ""),
@@ -446,9 +459,12 @@ async function readLocalStore(): Promise<OutreachStore> {
       accounts: asArray(row.accounts).map((item) => mapAccountRowFromDb(item)),
       assignments: asArray(row.assignments).map((entry) => {
         const item = asRecord(entry);
+        const accountId = String(item.accountId ?? item.account_id ?? "");
+        const mailboxAccountId = String(item.mailboxAccountId ?? item.mailbox_account_id ?? "");
         return {
           brandId: String(item.brandId ?? item.brand_id ?? ""),
-          accountId: String(item.accountId ?? item.account_id ?? ""),
+          accountId,
+          mailboxAccountId,
           createdAt: String(item.createdAt ?? item.created_at ?? nowIso()),
           updatedAt: String(item.updatedAt ?? item.updated_at ?? nowIso()),
         };
@@ -478,6 +494,7 @@ async function writeLocalStore(store: OutreachStore) {
 function buildStoredAccount(input: {
   id?: string;
   name: string;
+  accountType?: OutreachAccount["accountType"];
   status?: OutreachAccount["status"];
   config?: unknown;
   credentialsEncrypted: string;
@@ -491,6 +508,7 @@ function buildStoredAccount(input: {
     id: input.id ?? createId("acct"),
     name: input.name.trim(),
     provider: "customerio",
+    accountType: input.accountType ?? "hybrid",
     status: input.status ?? "active",
     config: sanitizeAccountConfig(input.config),
     credentialsEncrypted: input.credentialsEncrypted,
@@ -559,6 +577,7 @@ export async function getOutreachAccountSecrets(accountId: string): Promise<Outr
 
 export async function createOutreachAccount(input: {
   name: string;
+  accountType?: OutreachAccount["accountType"];
   status?: OutreachAccount["status"];
   config?: unknown;
   credentials?: unknown;
@@ -567,6 +586,7 @@ export async function createOutreachAccount(input: {
   const secrets = sanitizeSecrets(input.credentials);
   const stored = buildStoredAccount({
     name: input.name,
+    accountType: input.accountType,
     status: input.status,
     config: input.config,
     credentialsEncrypted: encryptJson(secrets),
@@ -582,6 +602,7 @@ export async function createOutreachAccount(input: {
         id: stored.id,
         name: stored.name,
         provider: stored.provider,
+        account_type: stored.accountType,
         status: stored.status,
         config: stored.config,
         credentials_encrypted: stored.credentialsEncrypted,
@@ -605,6 +626,7 @@ export async function updateOutreachAccount(
   accountId: string,
   patch: {
     name?: string;
+    accountType?: OutreachAccount["accountType"];
     status?: OutreachAccount["status"];
     config?: unknown;
     credentials?: unknown;
@@ -617,6 +639,13 @@ export async function updateOutreachAccount(
   const existingSecrets = (await getOutreachAccountSecrets(accountId)) ?? defaultSecrets();
   const patchSecrets = sanitizeSecrets(patch.credentials);
   const mergedSecrets: OutreachAccountSecrets = {
+    customerIoApiKey:
+      patchSecrets.customerIoApiKey ||
+      patchSecrets.customerIoTrackApiKey ||
+      patchSecrets.customerIoAppApiKey ||
+      existingSecrets.customerIoApiKey ||
+      existingSecrets.customerIoTrackApiKey ||
+      existingSecrets.customerIoAppApiKey,
     customerIoTrackApiKey: patchSecrets.customerIoTrackApiKey || existingSecrets.customerIoTrackApiKey,
     customerIoAppApiKey: patchSecrets.customerIoAppApiKey || existingSecrets.customerIoAppApiKey,
     apifyToken: patchSecrets.apifyToken || existingSecrets.apifyToken,
@@ -638,6 +667,7 @@ export async function updateOutreachAccount(
       updated_at: now,
     };
     if (typeof patch.name === "string") update.name = patch.name.trim();
+    if (patch.accountType) update.account_type = patch.accountType;
     if (patch.status) update.status = patch.status;
     if (patch.lastTestAt !== undefined) update.last_test_at = patch.lastTestAt || null;
     if (patch.lastTestStatus) update.last_test_status = patch.lastTestStatus;
@@ -661,6 +691,7 @@ export async function updateOutreachAccount(
   const nextStored: StoredAccount = {
     ...current,
     name: typeof patch.name === "string" ? patch.name.trim() : current.name,
+    accountType: patch.accountType ?? current.accountType,
     status: patch.status ?? current.status,
     config: nextConfig,
     credentialsEncrypted: encryptJson(mergedSecrets),
@@ -676,6 +707,7 @@ export async function updateOutreachAccount(
 export async function deleteOutreachAccount(accountId: string): Promise<boolean> {
   const supabase = getSupabaseAdmin();
   if (supabase) {
+    await supabase.from(TABLE_ASSIGNMENT).update({ mailbox_account_id: null }).eq("mailbox_account_id", accountId);
     await supabase.from(TABLE_ASSIGNMENT).delete().eq("account_id", accountId);
     const { error } = await supabase.from(TABLE_ACCOUNT).delete().eq("id", accountId);
     if (!error) {
@@ -686,7 +718,17 @@ export async function deleteOutreachAccount(accountId: string): Promise<boolean>
   const store = await readLocalStore();
   const before = store.accounts.length;
   store.accounts = store.accounts.filter((row) => row.id !== accountId);
-  store.assignments = store.assignments.filter((row) => row.accountId !== accountId);
+  store.assignments = store.assignments
+    .filter((row) => row.accountId !== accountId)
+    .map((row) =>
+      row.mailboxAccountId === accountId
+        ? {
+            ...row,
+            mailboxAccountId: "",
+            updatedAt: nowIso(),
+          }
+        : row
+    );
   await writeLocalStore(store);
   return store.accounts.length !== before;
 }
@@ -703,9 +745,11 @@ export async function getBrandOutreachAssignment(
       .maybeSingle();
     if (!error && data) {
       const row = asRecord(data);
+      const accountId = String(row.account_id ?? "");
       return {
         brandId: String(row.brand_id ?? ""),
-        accountId: String(row.account_id ?? ""),
+        accountId,
+        mailboxAccountId: String(row.mailbox_account_id ?? ""),
         createdAt: String(row.created_at ?? nowIso()),
         updatedAt: String(row.updated_at ?? nowIso()),
       };
@@ -718,8 +762,11 @@ export async function getBrandOutreachAssignment(
 
 export async function setBrandOutreachAssignment(
   brandId: string,
-  accountId: string
+  input: { accountId?: string; mailboxAccountId?: string } | string
 ): Promise<BrandOutreachAssignment | null> {
+  const patch = typeof input === "string" ? { accountId: input } : input;
+  const accountId = String(patch.accountId ?? "").trim();
+
   if (!accountId.trim()) {
     const supabaseDelete = getSupabaseAdmin();
     if (supabaseDelete) {
@@ -733,10 +780,17 @@ export async function setBrandOutreachAssignment(
     return null;
   }
 
+  const existing = await getBrandOutreachAssignment(brandId);
+  const mailboxAccountId =
+    typeof patch.mailboxAccountId === "string"
+      ? patch.mailboxAccountId.trim()
+      : existing?.mailboxAccountId ?? "";
+
   const now = nowIso();
   const assignment: BrandOutreachAssignment = {
     brandId,
     accountId,
+    mailboxAccountId,
     createdAt: now,
     updatedAt: now,
   };
@@ -745,7 +799,14 @@ export async function setBrandOutreachAssignment(
   if (supabase) {
     const { data, error } = await supabase
       .from(TABLE_ASSIGNMENT)
-      .upsert({ brand_id: brandId, account_id: accountId }, { onConflict: "brand_id" })
+      .upsert(
+        {
+          brand_id: brandId,
+          account_id: accountId,
+          mailbox_account_id: mailboxAccountId || null,
+        },
+        { onConflict: "brand_id" }
+      )
       .select("*")
       .single();
     if (!error && data) {
@@ -753,6 +814,7 @@ export async function setBrandOutreachAssignment(
       return {
         brandId: String(row.brand_id ?? brandId),
         accountId: String(row.account_id ?? accountId),
+        mailboxAccountId: String(row.mailbox_account_id ?? ""),
         createdAt: String(row.created_at ?? now),
         updatedAt: String(row.updated_at ?? now),
       };
@@ -765,6 +827,7 @@ export async function setBrandOutreachAssignment(
     store.assignments[existingIndex] = {
       ...store.assignments[existingIndex],
       accountId,
+      mailboxAccountId,
       updatedAt: now,
     };
   } else {

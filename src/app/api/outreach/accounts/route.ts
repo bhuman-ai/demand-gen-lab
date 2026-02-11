@@ -23,6 +23,10 @@ export async function POST(request: Request) {
 
   const account = await createOutreachAccount({
     name,
+    accountType:
+      body.accountType === "delivery" || body.accountType === "mailbox" || body.accountType === "hybrid"
+        ? body.accountType
+        : "hybrid",
     status: String(body.status ?? "active") === "inactive" ? "inactive" : "active",
     config: body.config,
     credentials: body.credentials,

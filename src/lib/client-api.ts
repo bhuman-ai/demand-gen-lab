@@ -175,6 +175,7 @@ export async function fetchOutreachAccounts() {
 
 export async function createOutreachAccountApi(input: {
   name: string;
+  accountType?: "delivery" | "mailbox" | "hybrid";
   status?: "active" | "inactive";
   config?: unknown;
   credentials?: unknown;
@@ -192,6 +193,7 @@ export async function updateOutreachAccountApi(
   accountId: string,
   patch: {
     name?: string;
+    accountType?: "delivery" | "mailbox" | "hybrid";
     status?: "active" | "inactive";
     config?: unknown;
     credentials?: unknown;
@@ -223,16 +225,30 @@ export async function testOutreachAccount(accountId: string) {
   };
 }
 
-export async function assignBrandOutreachAccount(brandId: string, accountId: string) {
+export async function assignBrandOutreachAccount(
+  brandId: string,
+  input: string | { accountId?: string; mailboxAccountId?: string }
+) {
+  const payload =
+    typeof input === "string"
+      ? { accountId: input }
+      : {
+          accountId: input.accountId ?? "",
+          ...(typeof input.mailboxAccountId === "string"
+            ? { mailboxAccountId: input.mailboxAccountId }
+            : {}),
+        };
+
   const response = await fetch(`/api/brands/${brandId}/outreach-account`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ accountId }),
+    body: JSON.stringify(payload),
   });
   const data = await readJson(response);
   return {
     assignment: (data.assignment ?? null) as BrandOutreachAssignment | null,
     account: (data.account ?? null) as OutreachAccount | null,
+    mailboxAccount: (data.mailboxAccount ?? null) as OutreachAccount | null,
   };
 }
 
@@ -242,6 +258,7 @@ export async function fetchBrandOutreachAssignment(brandId: string) {
   return {
     assignment: (data.assignment ?? null) as BrandOutreachAssignment | null,
     account: (data.account ?? null) as OutreachAccount | null,
+    mailboxAccount: (data.mailboxAccount ?? null) as OutreachAccount | null,
   };
 }
 

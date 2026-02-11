@@ -129,6 +129,8 @@ export type MailboxProvider = "gmail" | "outlook" | "imap";
 
 export type MailboxStatus = "connected" | "disconnected" | "error";
 
+export type OutreachAccountType = "delivery" | "mailbox" | "hybrid";
+
 export type OutreachAccountConfig = {
   customerIo: {
     siteId: string;
@@ -151,6 +153,7 @@ export type OutreachAccount = {
   id: string;
   name: string;
   provider: OutreachProvider;
+  accountType: OutreachAccountType;
   status: "active" | "inactive";
   config: OutreachAccountConfig;
   hasCredentials: boolean;
@@ -163,6 +166,7 @@ export type OutreachAccount = {
 export type BrandOutreachAssignment = {
   brandId: string;
   accountId: string;
+  mailboxAccountId: string;
   createdAt: string;
   updatedAt: string;
 };

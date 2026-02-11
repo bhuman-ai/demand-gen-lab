@@ -78,31 +78,67 @@ function effectiveSourceConfig(hypothesis: Hypothesis, fallbackActorId: string) 
   };
 }
 
+type ResolvedAccount = NonNullable<Awaited<ReturnType<typeof getOutreachAccount>>>;
+type ResolvedSecrets = NonNullable<Awaited<ReturnType<typeof getOutreachAccountSecrets>>>;
+
+function effectiveCustomerIoApiKey(secrets: ResolvedSecrets) {
+  return (
+    secrets.customerIoApiKey.trim() ||
+    secrets.customerIoTrackApiKey.trim() ||
+    secrets.customerIoAppApiKey.trim()
+  );
+}
+
+function supportsDelivery(account: ResolvedAccount) {
+  return account.accountType !== "mailbox";
+}
+
+function supportsMailbox(account: ResolvedAccount) {
+  return account.accountType !== "delivery";
+}
+
 function preflightReason(input: {
-  account: NonNullable<Awaited<ReturnType<typeof getOutreachAccount>>>;
-  secrets: NonNullable<Awaited<ReturnType<typeof getOutreachAccountSecrets>>>;
+  deliveryAccount: ResolvedAccount;
+  deliverySecrets: ResolvedSecrets;
+  mailboxAccount: ResolvedAccount;
+  mailboxSecrets: ResolvedSecrets;
   hypothesis: Hypothesis;
 }) {
   const sourceConfig = effectiveSourceConfig(
     input.hypothesis,
-    input.account.config.apify.defaultActorId
+    input.deliveryAccount.config.apify.defaultActorId
   );
+  if (!supportsDelivery(input.deliveryAccount)) {
+    return "Assigned delivery account does not support outreach sending";
+  }
   if (!sourceConfig.actorId.trim()) {
     return "Apify actor is required on hypothesis source config or account defaults";
   }
-  if (!input.secrets.apifyToken.trim()) {
+  if (!input.deliverySecrets.apifyToken.trim()) {
     return "Apify token missing on outreach account";
   }
-  if (!input.account.config.customerIo.siteId.trim() || !input.account.config.customerIo.workspaceId.trim()) {
+  if (
+    !input.deliveryAccount.config.customerIo.siteId.trim() ||
+    !input.deliveryAccount.config.customerIo.workspaceId.trim()
+  ) {
     return "Customer.io site/workspace config is required";
   }
-  if (!input.secrets.customerIoTrackApiKey.trim() && !input.secrets.customerIoAppApiKey.trim()) {
+  if (!effectiveCustomerIoApiKey(input.deliverySecrets)) {
     return "Customer.io API key missing";
   }
-  if (input.account.config.mailbox.status !== "connected" || !input.account.config.mailbox.email.trim()) {
+  if (!supportsMailbox(input.mailboxAccount)) {
+    return "Assigned mailbox account does not support mailbox reply handling";
+  }
+  if (
+    input.mailboxAccount.config.mailbox.status !== "connected" ||
+    !input.mailboxAccount.config.mailbox.email.trim()
+  ) {
     return "Mailbox must be connected for automated reply triage";
   }
-  if (!input.secrets.mailboxAccessToken.trim() && !input.secrets.mailboxPassword.trim()) {
+  if (
+    !input.mailboxSecrets.mailboxAccessToken.trim() &&
+    !input.mailboxSecrets.mailboxPassword.trim()
+  ) {
     return "Mailbox credentials missing";
   }
   return "";
@@ -173,23 +209,88 @@ function calculateRunMetricsFromMessages(
   };
 }
 
-async function ensureBrandAccount(brandId: string) {
+async function ensureBrandAccount(brandId: string): Promise<{
+  ok: boolean;
+  reason: string;
+  accountId: string;
+  mailboxAccountId?: string;
+  deliveryAccount?: ResolvedAccount;
+  deliverySecrets?: ResolvedSecrets;
+  mailboxAccount?: ResolvedAccount;
+  mailboxSecrets?: ResolvedSecrets;
+}> {
   const assignment = await getBrandOutreachAssignment(brandId);
-  if (!assignment) {
-    return { ok: false, reason: "No outreach account assigned to brand", accountId: "" };
+  if (!assignment || !assignment.accountId.trim()) {
+    return { ok: false, reason: "No outreach delivery account assigned to brand", accountId: "" };
   }
 
-  const account = await getOutreachAccount(assignment.accountId);
-  if (!account || account.status !== "active") {
-    return { ok: false, reason: "Assigned outreach account is missing or inactive", accountId: assignment.accountId };
+  const deliveryAccount = await getOutreachAccount(assignment.accountId);
+  if (!deliveryAccount || deliveryAccount.status !== "active") {
+    return {
+      ok: false,
+      reason: "Assigned outreach delivery account is missing or inactive",
+      accountId: assignment.accountId,
+    };
   }
 
-  const secrets = await getOutreachAccountSecrets(account.id);
+  const deliverySecrets = await getOutreachAccountSecrets(deliveryAccount.id);
+  if (!deliverySecrets) {
+    return {
+      ok: false,
+      reason: "Assigned delivery account credentials are missing",
+      accountId: assignment.accountId,
+    };
+  }
+
+  const mailboxAccountId = assignment.mailboxAccountId || assignment.accountId;
+  const mailboxAccount =
+    mailboxAccountId === deliveryAccount.id
+      ? deliveryAccount
+      : await getOutreachAccount(mailboxAccountId);
+  if (!mailboxAccount || mailboxAccount.status !== "active") {
+    return {
+      ok: false,
+      reason: "Assigned mailbox account is missing or inactive",
+      accountId: assignment.accountId,
+    };
+  }
+
+  const mailboxSecrets =
+    mailboxAccount.id === deliveryAccount.id
+      ? deliverySecrets
+      : await getOutreachAccountSecrets(mailboxAccount.id);
+  if (!mailboxSecrets) {
+    return {
+      ok: false,
+      reason: "Assigned mailbox account credentials are missing",
+      accountId: assignment.accountId,
+    };
+  }
+
+  return {
+    ok: true,
+    reason: "",
+    accountId: assignment.accountId,
+    mailboxAccountId,
+    deliveryAccount,
+    deliverySecrets,
+    mailboxAccount,
+    mailboxSecrets,
+  };
+}
+
+async function resolveMailboxAccountForRun(run: { brandId: string; accountId: string }) {
+  const assignment = await getBrandOutreachAssignment(run.brandId);
+  const mailboxAccountId = assignment?.mailboxAccountId || assignment?.accountId || run.accountId;
+  const account = await getOutreachAccount(mailboxAccountId);
+  if (!account || account.status !== "active" || !supportsMailbox(account)) {
+    return null;
+  }
+  const secrets = await getOutreachAccountSecrets(mailboxAccountId);
   if (!secrets) {
-    return { ok: false, reason: "Assigned account credentials are missing", accountId: assignment.accountId };
+    return null;
   }
-
-  return { ok: true, reason: "", accountId: assignment.accountId, account, secrets };
+  return { account, secrets };
 }
 
 async function markExperimentExecutionStatus(
@@ -265,7 +366,13 @@ export async function launchExperimentRun(input: {
   }
 
   const brandAccount = await ensureBrandAccount(input.brandId);
-  if (!brandAccount.ok || !brandAccount.account || !brandAccount.secrets) {
+  if (
+    !brandAccount.ok ||
+    !brandAccount.deliveryAccount ||
+    !brandAccount.deliverySecrets ||
+    !brandAccount.mailboxAccount ||
+    !brandAccount.mailboxSecrets
+  ) {
     const failed = await createOutreachRun({
       brandId: input.brandId,
       campaignId: input.campaignId,
@@ -289,8 +396,10 @@ export async function launchExperimentRun(input: {
   }
 
   const reason = preflightReason({
-    account: brandAccount.account,
-    secrets: brandAccount.secrets,
+    deliveryAccount: brandAccount.deliveryAccount,
+    deliverySecrets: brandAccount.deliverySecrets,
+    mailboxAccount: brandAccount.mailboxAccount,
+    mailboxSecrets: brandAccount.mailboxSecrets,
     hypothesis,
   });
   if (reason) {
@@ -299,7 +408,7 @@ export async function launchExperimentRun(input: {
       campaignId: input.campaignId,
       experimentId: experiment.id,
       hypothesisId: hypothesis.id,
-      accountId: brandAccount.account.id,
+      accountId: brandAccount.deliveryAccount.id,
       status: "preflight_failed",
       dailyCap: experiment.runPolicy?.dailyCap ?? 30,
       hourlyCap: experiment.runPolicy?.hourlyCap ?? 6,
@@ -321,7 +430,7 @@ export async function launchExperimentRun(input: {
     campaignId: input.campaignId,
     experimentId: experiment.id,
     hypothesisId: hypothesis.id,
-    accountId: brandAccount.account.id,
+    accountId: brandAccount.deliveryAccount.id,
     status: "queued",
     dailyCap: experiment.runPolicy?.dailyCap ?? 30,
     hourlyCap: experiment.runPolicy?.hourlyCap ?? 6,
@@ -1090,10 +1199,9 @@ export async function approveReplyDraftAndSend(input: {
     return { ok: false, reason: "Run not found" };
   }
 
-  const account = await getOutreachAccount(run.accountId);
-  const secrets = await getOutreachAccountSecrets(run.accountId);
-  if (!account || !secrets) {
-    return { ok: false, reason: "Outreach account missing" };
+  const mailbox = await resolveMailboxAccountForRun(run);
+  if (!mailbox) {
+    return { ok: false, reason: "Reply mailbox account missing or invalid" };
   }
 
   const leads = await listRunLeads(run.id);
@@ -1104,8 +1212,8 @@ export async function approveReplyDraftAndSend(input: {
 
   const send = await sendReplyDraftAsEvent({
     draft,
-    account,
-    secrets,
+    account: mailbox.account,
+    secrets: mailbox.secrets,
     recipient: lead.email,
   });
 
@@ -1127,7 +1235,7 @@ export async function approveReplyDraftAndSend(input: {
     threadId: thread.id,
     runId: run.id,
     direction: "outbound",
-    from: account.config.mailbox.email,
+    from: mailbox.account.config.mailbox.email,
     to: lead.email,
     subject: draft.subject,
     body: draft.body,

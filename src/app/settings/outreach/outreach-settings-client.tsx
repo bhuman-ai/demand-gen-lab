@@ -45,7 +45,7 @@ const INITIAL_FORM: FormState = {
   defaultActorId: "",
   mailboxProvider: "gmail",
   mailboxEmail: "",
-  mailboxHost: "",
+  mailboxHost: "imap.gmail.com",
   mailboxPort: "993",
   mailboxSecure: true,
   customerIoTrackApiKey: "",
@@ -54,6 +54,27 @@ const INITIAL_FORM: FormState = {
   mailboxAccessToken: "",
   mailboxRefreshToken: "",
   mailboxPassword: "",
+};
+
+const MAILBOX_PROVIDER_DEFAULTS: Record<
+  FormState["mailboxProvider"],
+  { host: string; port: string; secure: boolean }
+> = {
+  gmail: {
+    host: "imap.gmail.com",
+    port: "993",
+    secure: true,
+  },
+  outlook: {
+    host: "outlook.office365.com",
+    port: "993",
+    secure: true,
+  },
+  imap: {
+    host: "",
+    port: "993",
+    secure: true,
+  },
 };
 
 function InfoHint({ text }: { text: string }) {
@@ -186,6 +207,17 @@ export default function OutreachSettingsClient() {
     }
   };
 
+  const setProviderWithDefaults = (provider: FormState["mailboxProvider"]) => {
+    const defaults = MAILBOX_PROVIDER_DEFAULTS[provider];
+    setForm((prev) => ({
+      ...prev,
+      mailboxProvider: provider,
+      mailboxHost: defaults.host,
+      mailboxPort: defaults.port,
+      mailboxSecure: defaults.secure,
+    }));
+  };
+
   return (
     <div className="space-y-5">
       <Card>
@@ -280,16 +312,16 @@ export default function OutreachSettingsClient() {
               id="mailbox-provider"
               value={form.mailboxProvider}
               onChange={(event) =>
-                setForm((prev) => ({
-                  ...prev,
-                  mailboxProvider: event.target.value as FormState["mailboxProvider"],
-                }))
+                setProviderWithDefaults(event.target.value as FormState["mailboxProvider"])
               }
             >
               <option value="gmail">gmail</option>
               <option value="outlook">outlook</option>
               <option value="imap">imap</option>
             </Select>
+            <div className="text-[11px] text-[color:var(--muted-foreground)]">
+              Host and port auto-fill based on provider.
+            </div>
           </div>
           <div className="grid gap-2">
             <FieldLabel

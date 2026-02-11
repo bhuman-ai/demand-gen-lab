@@ -154,6 +154,11 @@ function AccountListCard({ title, description, emptyMessage, accounts, setAccoun
                         accountId: account.id,
                         ok: result.ok,
                       });
+                      if (!result.ok) {
+                        setError(
+                          `Test failed for ${account.name}: customer.io=${result.checks.customerIo}, lead sourcing=${result.checks.apify}, mailbox=${result.checks.mailbox}. ${result.message}`
+                        );
+                      }
                       const refreshed = await fetchOutreachAccounts();
                       setAccounts(refreshed);
                     } catch (err) {

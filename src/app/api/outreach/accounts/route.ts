@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { createOutreachAccount, listOutreachAccounts } from "@/lib/outreach-data";
+import { createOutreachAccount, getOutreachAccountLookupDebug, listOutreachAccounts } from "@/lib/outreach-data";
 
 function asRecord(value: unknown): Record<string, unknown> {
   if (value && typeof value === "object" && !Array.isArray(value)) {
@@ -32,5 +32,11 @@ export async function POST(request: Request) {
     credentials: body.credentials,
   });
 
-  return NextResponse.json({ account }, { status: 201 });
+  const debug = await getOutreachAccountLookupDebug(account.id);
+  const hint =
+    debug.supabaseConfigured && !debug.supabaseHasAccount && debug.localHasAccount
+      ? "Created in local fallback only. This can cause cross-instance lookup failures on serverless. Check Supabase write errors/migrations."
+      : "";
+
+  return NextResponse.json({ account, debug, hint }, { status: 201 });
 }

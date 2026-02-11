@@ -56,6 +56,17 @@ export type OutreachEvent = {
   createdAt: string;
 };
 
+export type OutreachAccountLookupDebug = {
+  accountId: string;
+  runtime: "vercel" | "local";
+  supabaseConfigured: boolean;
+  supabaseHasAccount: boolean;
+  supabaseAccountCount: number;
+  supabaseError: string;
+  localHasAccount: boolean;
+  localAccountCount: number;
+};
+
 type StoredAccount = Omit<OutreachAccount, "hasCredentials"> & {
   credentialsEncrypted: string;
 };
@@ -489,6 +500,51 @@ async function writeLocalStore(store: OutreachStore) {
     await mkdir(`${process.cwd()}/data`, { recursive: true });
   }
   await writeFile(OUTREACH_PATH, JSON.stringify(store, null, 2));
+}
+
+export async function getOutreachAccountLookupDebug(accountId: string): Promise<OutreachAccountLookupDebug> {
+  const info: OutreachAccountLookupDebug = {
+    accountId,
+    runtime: isVercel ? "vercel" : "local",
+    supabaseConfigured: false,
+    supabaseHasAccount: false,
+    supabaseAccountCount: 0,
+    supabaseError: "",
+    localHasAccount: false,
+    localAccountCount: 0,
+  };
+
+  const supabase = getSupabaseAdmin();
+  if (supabase) {
+    info.supabaseConfigured = true;
+
+    const { data: accountRow, error: accountError } = await supabase
+      .from(TABLE_ACCOUNT)
+      .select("id")
+      .eq("id", accountId)
+      .maybeSingle();
+    if (!accountError && accountRow) {
+      info.supabaseHasAccount = true;
+    }
+    if (accountError) {
+      info.supabaseError = accountError.message;
+    }
+
+    const { count, error: countError } = await supabase
+      .from(TABLE_ACCOUNT)
+      .select("id", { count: "exact", head: true });
+    if (!countError) {
+      info.supabaseAccountCount = Number(count ?? 0);
+    } else if (!info.supabaseError) {
+      info.supabaseError = countError.message;
+    }
+  }
+
+  const localStore = await readLocalStore();
+  info.localAccountCount = localStore.accounts.length;
+  info.localHasAccount = localStore.accounts.some((row) => row.id === accountId);
+
+  return info;
 }
 
 function buildStoredAccount(input: {

@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import {
+  getOutreachAccountLookupDebug,
   getOutreachAccount,
   getOutreachAccountSecrets,
   updateOutreachAccount,
@@ -13,12 +14,29 @@ export async function POST(
   const { accountId } = await context.params;
   const account = await getOutreachAccount(accountId);
   if (!account) {
-    return NextResponse.json({ error: "account not found" }, { status: 404 });
+    const debug = await getOutreachAccountLookupDebug(accountId);
+    return NextResponse.json(
+      {
+        error: "account not found",
+        hint:
+          "Account lookup failed on this runtime. If credentials were just created, ensure Supabase writes are succeeding and schema migrations are applied.",
+        debug,
+      },
+      { status: 404 }
+    );
   }
 
   const secrets = await getOutreachAccountSecrets(accountId);
   if (!secrets) {
-    return NextResponse.json({ error: "account credentials missing" }, { status: 400 });
+    const debug = await getOutreachAccountLookupDebug(accountId);
+    return NextResponse.json(
+      {
+        error: "account credentials missing",
+        hint: "Account exists but encrypted credentials were not found for this record.",
+        debug,
+      },
+      { status: 400 }
+    );
   }
 
   const result = await testOutreachProviders(account, secrets);

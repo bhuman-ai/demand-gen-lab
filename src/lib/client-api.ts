@@ -29,7 +29,14 @@ async function readJson(response: Response) {
   }
   const record = asObject(data);
   if (!response.ok) {
-    throw new Error(String(record.error ?? "Request failed"));
+    const base = String(record.error ?? "Request failed");
+    const hint = typeof record.hint === "string" && record.hint.trim() ? ` Hint: ${record.hint}` : "";
+    const debugValue = record.debug;
+    const debug =
+      debugValue && typeof debugValue === "object" && !Array.isArray(debugValue)
+        ? ` Debug: ${JSON.stringify(debugValue)}`
+        : "";
+    throw new Error(`${base}${hint}${debug}`);
   }
   return record;
 }

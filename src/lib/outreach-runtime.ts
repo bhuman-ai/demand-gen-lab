@@ -47,6 +47,8 @@ import {
 } from "@/lib/outreach-providers";
 
 const DEFAULT_TIMEZONE = "America/Los_Angeles";
+const PLATFORM_SOURCING_TOKEN = String(process.env.APIFY_TOKEN ?? "").trim();
+const PLATFORM_SOURCING_PROFILE = String(process.env.APIFY_DEFAULT_ACTOR_ID ?? "").trim();
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -72,7 +74,7 @@ function findExperiment(campaign: CampaignRecord, experimentId: string) {
 
 function effectiveSourceConfig(hypothesis: Hypothesis, fallbackActorId: string) {
   return {
-    actorId: hypothesis.sourceConfig?.actorId?.trim() || fallbackActorId,
+    actorId: hypothesis.sourceConfig?.actorId?.trim() || fallbackActorId || PLATFORM_SOURCING_PROFILE,
     actorInput: hypothesis.sourceConfig?.actorInput ?? {},
     maxLeads: Number(hypothesis.sourceConfig?.maxLeads ?? 100),
   };
@@ -87,6 +89,10 @@ function effectiveCustomerIoApiKey(secrets: ResolvedSecrets) {
     secrets.customerIoTrackApiKey.trim() ||
     secrets.customerIoAppApiKey.trim()
   );
+}
+
+function effectiveSourcingToken(secrets: ResolvedSecrets) {
+  return secrets.apifyToken.trim() || PLATFORM_SOURCING_TOKEN;
 }
 
 function supportsDelivery(account: ResolvedAccount) {
@@ -112,10 +118,10 @@ function preflightReason(input: {
     return "Assigned delivery account does not support outreach sending";
   }
   if (!sourceConfig.actorId.trim()) {
-    return "Apify actor is required on hypothesis source config or account defaults";
+    return "Lead source is not configured for this hypothesis";
   }
-  if (!input.deliverySecrets.apifyToken.trim()) {
-    return "Apify token missing on outreach account";
+  if (!effectiveSourcingToken(input.deliverySecrets)) {
+    return "Lead sourcing credentials are missing";
   }
   if (
     !input.deliveryAccount.config.customerIo.siteId.trim() ||
@@ -524,11 +530,12 @@ async function processSourceLeadsJob(job: OutreachJob) {
   await createOutreachEvent({ runId: run.id, eventType: "run_started", payload: {} });
 
   const sourceConfig = effectiveSourceConfig(hypothesis, account.config.apify.defaultActorId);
+  const sourcingToken = effectiveSourcingToken(secrets);
   const sourced = await sourceLeadsFromApify({
     actorId: sourceConfig.actorId,
     actorInput: sourceConfig.actorInput,
     maxLeads: sourceConfig.maxLeads,
-    token: secrets.apifyToken,
+    token: sourcingToken,
   });
 
   let leads: ApifyLead[] = sourced;

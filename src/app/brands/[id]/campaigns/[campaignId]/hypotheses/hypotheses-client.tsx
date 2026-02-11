@@ -31,7 +31,6 @@ export default function HypothesesClient({ brandId, campaignId }: { brandId: str
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
-  const [actorInputDrafts, setActorInputDrafts] = useState<Record<string, string>>({});
 
   useEffect(() => {
     let mounted = true;
@@ -41,11 +40,6 @@ export default function HypothesesClient({ brandId, campaignId }: { brandId: str
         setBrand(brandRow);
         setCampaign(campaignRow);
         setHypotheses(campaignRow.hypotheses);
-        const nextDrafts: Record<string, string> = {};
-        for (const hypothesis of campaignRow.hypotheses) {
-          nextDrafts[hypothesis.id] = JSON.stringify(hypothesis.sourceConfig?.actorInput ?? {}, null, 2);
-        }
-        setActorInputDrafts(nextDrafts);
       })
       .catch((err: unknown) => {
         if (!mounted) return;
@@ -105,11 +99,6 @@ export default function HypothesesClient({ brandId, campaignId }: { brandId: str
         status: "draft" as const,
       }));
       setHypotheses(normalized);
-      const nextDrafts: Record<string, string> = {};
-      for (const hypothesis of normalized) {
-        nextDrafts[hypothesis.id] = JSON.stringify(hypothesis.sourceConfig?.actorInput ?? {}, null, 2);
-      }
-      setActorInputDrafts(nextDrafts);
     } catch (err) {
       trackEvent("generation_error", { brandId, campaignId, step: "hypotheses" });
       setError(err instanceof Error ? err.message : "Generation failed");
@@ -225,89 +214,26 @@ export default function HypothesesClient({ brandId, campaignId }: { brandId: str
                   </Select>
                 </div>
               </div>
-              <div className="grid gap-2">
-                <Label htmlFor={`hypothesis-actor-query-${index}`}>Actor Query</Label>
+              <div className="grid gap-2 md:max-w-[260px]">
+                <Label htmlFor={`hypothesis-max-leads-${index}`}>Lead Target</Label>
                 <Input
-                  id={`hypothesis-actor-query-${index}`}
-                  value={hypothesis.actorQuery}
+                  id={`hypothesis-max-leads-${index}`}
+                  type="number"
+                  min={1}
+                  max={500}
+                  value={hypothesis.sourceConfig?.maxLeads ?? 100}
                   onChange={(event) => {
                     const next = [...hypotheses];
-                    next[index] = { ...next[index], actorQuery: event.target.value };
+                    next[index] = {
+                      ...next[index],
+                      sourceConfig: {
+                        actorId: next[index].sourceConfig?.actorId ?? "",
+                        actorInput: next[index].sourceConfig?.actorInput ?? {},
+                        maxLeads: Number(event.target.value || 100),
+                      },
+                    };
                     setHypotheses(next);
                   }}
-                />
-              </div>
-              <div className="grid gap-3 md:grid-cols-3">
-                <div className="grid gap-2 md:col-span-2">
-                  <Label htmlFor={`hypothesis-actor-id-${index}`}>Apify Actor ID</Label>
-                  <Input
-                    id={`hypothesis-actor-id-${index}`}
-                    value={hypothesis.sourceConfig?.actorId ?? ""}
-                    onChange={(event) => {
-                      const next = [...hypotheses];
-                      next[index] = {
-                        ...next[index],
-                        sourceConfig: {
-                          actorId: event.target.value,
-                          actorInput: next[index].sourceConfig?.actorInput ?? {},
-                          maxLeads: next[index].sourceConfig?.maxLeads ?? 100,
-                        },
-                      };
-                      setHypotheses(next);
-                    }}
-                  />
-                </div>
-                <div className="grid gap-2">
-                  <Label htmlFor={`hypothesis-max-leads-${index}`}>Max Leads</Label>
-                  <Input
-                    id={`hypothesis-max-leads-${index}`}
-                    type="number"
-                    min={1}
-                    max={500}
-                    value={hypothesis.sourceConfig?.maxLeads ?? 100}
-                    onChange={(event) => {
-                      const next = [...hypotheses];
-                      next[index] = {
-                        ...next[index],
-                        sourceConfig: {
-                          actorId: next[index].sourceConfig?.actorId ?? "",
-                          actorInput: next[index].sourceConfig?.actorInput ?? {},
-                          maxLeads: Number(event.target.value || 100),
-                        },
-                      };
-                      setHypotheses(next);
-                    }}
-                  />
-                </div>
-              </div>
-              <div className="grid gap-2">
-                <Label htmlFor={`hypothesis-actor-input-${index}`}>Actor Input (JSON)</Label>
-                <Textarea
-                  id={`hypothesis-actor-input-${index}`}
-                  value={
-                    actorInputDrafts[hypothesis.id] ??
-                    JSON.stringify(hypothesis.sourceConfig?.actorInput ?? {}, null, 2)
-                  }
-                  onChange={(event) => {
-                    const nextText = event.target.value;
-                    setActorInputDrafts((prev) => ({ ...prev, [hypothesis.id]: nextText }));
-                    try {
-                      const parsed = JSON.parse(nextText) as Record<string, unknown>;
-                      const next = [...hypotheses];
-                      next[index] = {
-                        ...next[index],
-                        sourceConfig: {
-                          actorId: next[index].sourceConfig?.actorId ?? "",
-                          actorInput: parsed,
-                          maxLeads: next[index].sourceConfig?.maxLeads ?? 100,
-                        },
-                      };
-                      setHypotheses(next);
-                    } catch {
-                      // keep draft text until valid JSON
-                    }
-                  }}
-                  rows={5}
                 />
               </div>
               <div className="flex justify-end">

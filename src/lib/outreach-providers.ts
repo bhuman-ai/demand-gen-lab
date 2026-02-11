@@ -34,6 +34,10 @@ function customerIoApiKey(secrets: OutreachAccountSecrets) {
   );
 }
 
+function sourcingToken(secrets: OutreachAccountSecrets) {
+  return secrets.apifyToken.trim() || String(process.env.APIFY_TOKEN ?? "").trim();
+}
+
 function normalizeApifyLead(raw: unknown): ApifyLead | null {
   const row = raw && typeof raw === "object" && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
   const email = String(
@@ -69,7 +73,7 @@ export async function testOutreachProviders(
   const customerIoPass = requiresDelivery
     ? Boolean(account.config.customerIo.siteId && account.config.customerIo.workspaceId && customerIoApiKey(secrets))
     : true;
-  const apifyPass = requiresDelivery ? Boolean(secrets.apifyToken) : true;
+  const apifyPass = requiresDelivery ? Boolean(sourcingToken(secrets)) : true;
   const mailboxPass = requiresMailbox
     ? Boolean(account.config.mailbox.email && (secrets.mailboxAccessToken || secrets.mailboxPassword))
     : true;

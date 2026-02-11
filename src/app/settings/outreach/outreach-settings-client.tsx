@@ -56,6 +56,35 @@ const INITIAL_FORM: FormState = {
   mailboxPassword: "",
 };
 
+function InfoHint({ text }: { text: string }) {
+  return (
+    <span className="relative inline-flex items-center group">
+      <span
+        tabIndex={0}
+        aria-label="Field help"
+        className="inline-flex h-4 w-4 cursor-help items-center justify-center rounded-full border border-[color:var(--border)] text-[10px] font-semibold text-[color:var(--muted-foreground)] outline-none focus:ring-2 focus:ring-[color:var(--accent)]/40"
+      >
+        i
+      </span>
+      <span
+        role="tooltip"
+        className="pointer-events-none absolute left-1/2 top-[130%] z-20 w-72 -translate-x-1/2 rounded-md border border-[color:var(--border)] bg-[color:var(--surface)] px-2 py-1 text-[11px] leading-relaxed text-[color:var(--foreground)] opacity-0 shadow-lg transition-opacity group-hover:opacity-100 group-focus-within:opacity-100"
+      >
+        {text}
+      </span>
+    </span>
+  );
+}
+
+function FieldLabel({ htmlFor, label, help }: { htmlFor: string; label: string; help: string }) {
+  return (
+    <div className="flex items-center gap-1.5">
+      <Label htmlFor={htmlFor}>{label}</Label>
+      <InfoHint text={help} />
+    </div>
+  );
+}
+
 export default function OutreachSettingsClient() {
   const [accounts, setAccounts] = useState<OutreachAccount[]>([]);
   const [brands, setBrands] = useState<BrandRecord[]>([]);
@@ -192,7 +221,11 @@ export default function OutreachSettingsClient() {
         </CardHeader>
         <CardContent className="grid gap-3 md:grid-cols-2">
           <div className="grid gap-2">
-            <Label htmlFor="account-name">Account Name</Label>
+            <FieldLabel
+              htmlFor="account-name"
+              label="Account Name"
+              help="Internal nickname for this credential bundle. Pick any clear name, like US Outbound Stack."
+            />
             <Input
               id="account-name"
               value={form.name}
@@ -201,7 +234,11 @@ export default function OutreachSettingsClient() {
             />
           </div>
           <div className="grid gap-2">
-            <Label htmlFor="account-site-id">Customer.io Site ID</Label>
+            <FieldLabel
+              htmlFor="account-site-id"
+              label="Customer.io Site ID"
+              help="Customer.io Site ID used for Track API auth. Find it in Customer.io Settings > API credentials."
+            />
             <Input
               id="account-site-id"
               value={form.siteId}
@@ -209,7 +246,11 @@ export default function OutreachSettingsClient() {
             />
           </div>
           <div className="grid gap-2">
-            <Label htmlFor="account-workspace-id">Customer.io Workspace</Label>
+            <FieldLabel
+              htmlFor="account-workspace-id"
+              label="Customer.io Workspace"
+              help="Workspace identifier for this Customer.io account. Find it in Workspace settings or in the workspace URL."
+            />
             <Input
               id="account-workspace-id"
               value={form.workspaceId}
@@ -217,7 +258,11 @@ export default function OutreachSettingsClient() {
             />
           </div>
           <div className="grid gap-2">
-            <Label htmlFor="account-actor-id">Default Apify Actor ID</Label>
+            <FieldLabel
+              htmlFor="account-actor-id"
+              label="Default Apify Actor ID"
+              help="Fallback actor used for lead sourcing when a hypothesis does not set one. Copy actor ID from Apify actor page."
+            />
             <Input
               id="account-actor-id"
               value={form.defaultActorId}
@@ -226,7 +271,11 @@ export default function OutreachSettingsClient() {
             />
           </div>
           <div className="grid gap-2">
-            <Label htmlFor="mailbox-provider">Mailbox Provider</Label>
+            <FieldLabel
+              htmlFor="mailbox-provider"
+              label="Mailbox Provider"
+              help="How inbox replies are authenticated and synced. Use Gmail/Outlook for OAuth, or IMAP for host/port/password."
+            />
             <Select
               id="mailbox-provider"
               value={form.mailboxProvider}
@@ -243,7 +292,11 @@ export default function OutreachSettingsClient() {
             </Select>
           </div>
           <div className="grid gap-2">
-            <Label htmlFor="mailbox-email">Mailbox Email</Label>
+            <FieldLabel
+              htmlFor="mailbox-email"
+              label="Mailbox Email"
+              help="Sender mailbox address used for outreach identity and reply threading, for example sdr@yourdomain.com."
+            />
             <Input
               id="mailbox-email"
               value={form.mailboxEmail}
@@ -251,7 +304,11 @@ export default function OutreachSettingsClient() {
             />
           </div>
           <div className="grid gap-2">
-            <Label htmlFor="mailbox-host">Mailbox Host</Label>
+            <FieldLabel
+              htmlFor="mailbox-host"
+              label="Mailbox Host"
+              help="IMAP server hostname, like imap.gmail.com or outlook.office365.com. Get this from your email provider IMAP docs."
+            />
             <Input
               id="mailbox-host"
               value={form.mailboxHost}
@@ -259,7 +316,11 @@ export default function OutreachSettingsClient() {
             />
           </div>
           <div className="grid gap-2">
-            <Label htmlFor="mailbox-port">Mailbox Port</Label>
+            <FieldLabel
+              htmlFor="mailbox-port"
+              label="Mailbox Port"
+              help="IMAP port number, usually 993 for secure SSL/TLS connections."
+            />
             <Input
               id="mailbox-port"
               value={form.mailboxPort}
@@ -267,7 +328,11 @@ export default function OutreachSettingsClient() {
             />
           </div>
           <div className="grid gap-2">
-            <Label htmlFor="account-track-key">Customer.io Track Key</Label>
+            <FieldLabel
+              htmlFor="account-track-key"
+              label="Customer.io Track Key"
+              help="Track API key used to send customer events. Find it in Customer.io Settings > API credentials > Track API key."
+            />
             <Input
               id="account-track-key"
               type="password"
@@ -278,7 +343,11 @@ export default function OutreachSettingsClient() {
             />
           </div>
           <div className="grid gap-2">
-            <Label htmlFor="account-app-key">Customer.io App Key</Label>
+            <FieldLabel
+              htmlFor="account-app-key"
+              label="Customer.io App Key"
+              help="App API key used for management-level API calls. Find it in Customer.io Settings > API credentials > App API key."
+            />
             <Input
               id="account-app-key"
               type="password"
@@ -289,7 +358,11 @@ export default function OutreachSettingsClient() {
             />
           </div>
           <div className="grid gap-2">
-            <Label htmlFor="account-apify-token">Apify Token</Label>
+            <FieldLabel
+              htmlFor="account-apify-token"
+              label="Apify Token"
+              help="Personal Apify API token used to run actors. Get it from Apify Console > Settings > Integrations > API tokens."
+            />
             <Input
               id="account-apify-token"
               type="password"
@@ -298,7 +371,11 @@ export default function OutreachSettingsClient() {
             />
           </div>
           <div className="grid gap-2">
-            <Label htmlFor="mailbox-access-token">Mailbox Access Token</Label>
+            <FieldLabel
+              htmlFor="mailbox-access-token"
+              label="Mailbox Access Token"
+              help="OAuth access token for Gmail/Outlook mailbox auth. Generated by your OAuth app after user login consent."
+            />
             <Input
               id="mailbox-access-token"
               type="password"
@@ -309,7 +386,11 @@ export default function OutreachSettingsClient() {
             />
           </div>
           <div className="grid gap-2">
-            <Label htmlFor="mailbox-refresh-token">Mailbox Refresh Token</Label>
+            <FieldLabel
+              htmlFor="mailbox-refresh-token"
+              label="Mailbox Refresh Token"
+              help="OAuth refresh token used to rotate new access tokens without logging in again. Issued during OAuth offline consent."
+            />
             <Input
               id="mailbox-refresh-token"
               type="password"
@@ -320,7 +401,11 @@ export default function OutreachSettingsClient() {
             />
           </div>
           <div className="grid gap-2">
-            <Label htmlFor="mailbox-password">Mailbox Password</Label>
+            <FieldLabel
+              htmlFor="mailbox-password"
+              label="Mailbox Password"
+              help="IMAP password for mailbox auth. Prefer provider app passwords instead of your main login password."
+            />
             <Input
               id="mailbox-password"
               type="password"

@@ -1,10 +1,39 @@
-export default function Page() {
+"use client";
+
+import Link from "next/link";
+import { useState } from "react";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+
+export default function DoctorPage() {
+  const [brandId] = useState(() =>
+    typeof window !== "undefined" ? localStorage.getItem("factory.activeBrandId") || "" : ""
+  );
+
   return (
-    <div className="space-y-4">
-      <h1 className="text-xl font-semibold text-[color:var(--foreground)]">Campaign Doctor</h1>
-      <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--background-elevated)] p-5">
-        <p className="text-sm text-[color:var(--muted)]">AI diagnostics and recommended fixes.</p>
-      </div>
+    <div className="space-y-5">
+      <Card>
+        <CardHeader>
+          <CardTitle>Doctor</CardTitle>
+          <CardDescription>Diagnostics and recommended fixes across campaign funnels.</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <Badge variant="muted">Active brand context: {brandId || "none selected"}</Badge>
+          <p className="text-sm text-[color:var(--muted-foreground)]">
+            Monitor delivery quality, response sentiment shifts, and conversion bottlenecks.
+          </p>
+          {brandId ? (
+            <Button asChild>
+              <Link href={`/brands/${brandId}/inbox`}>Open Active Brand Inbox</Link>
+            </Button>
+          ) : (
+            <Button asChild>
+              <Link href="/brands">Select Brand</Link>
+            </Button>
+          )}
+        </CardContent>
+      </Card>
     </div>
   );
 }

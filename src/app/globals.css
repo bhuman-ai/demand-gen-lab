@@ -1,32 +1,116 @@
 @import "tailwindcss";
 
 :root {
-  --background: #0b0f14;
-  --background-elevated: #121821;
-  --foreground: #e6edf3;
-  --muted: #8b949e;
-  --border: #1f2a36;
-  --accent: #7aa2f7;
-  --accent-strong: #9db5ff;
-  --danger: #ff6b6b;
-  --success: #4cc38a;
-  --glass: rgba(15, 20, 28, 0.7);
-  --shadow: rgba(0, 0, 0, 0.5);
+  --font-sans: var(--font-display);
+  --font-mono: var(--font-mono);
+
+  --background: #f3f5f8;
+  --foreground: #0b1221;
+  --muted-foreground: #5a667d;
+
+  --surface: rgba(255, 255, 255, 0.9);
+  --surface-muted: #e9eef6;
+  --surface-hover: #dde6f3;
+  --sidebar: linear-gradient(180deg, #f9fbff 0%, #eef3fa 100%);
+  --input: #ffffff;
+
+  --border: #cfd8e6;
+  --ring: #3072ff;
+  --shadow: #243147;
+
+  --accent: #1f61f2;
+  --accent-foreground: #f8fbff;
+  --accent-soft: #dce8ff;
+  --accent-border: #8ab0ff;
+
+  --success: #1f8a56;
+  --success-soft: #d6f4e4;
+  --success-border: #8cd9b2;
+
+  --danger: #c43a3a;
+  --danger-soft: #ffe2e2;
+  --danger-border: #f1a4a4;
+}
+
+html[data-theme="dark"] {
+  --background: #0b1220;
+  --foreground: #ecf2ff;
+  --muted-foreground: #94a2c5;
+
+  --surface: rgba(16, 25, 42, 0.88);
+  --surface-muted: #14213a;
+  --surface-hover: #1b2b49;
+  --sidebar: linear-gradient(180deg, #0d172a 0%, #0a1322 100%);
+  --input: #111d33;
+
+  --border: #223559;
+  --ring: #79a2ff;
+  --shadow: #000813;
+
+  --accent: #7ca7ff;
+  --accent-foreground: #0a1224;
+  --accent-soft: #172848;
+  --accent-border: #3f64a6;
+
+  --success: #53d089;
+  --success-soft: #163d2a;
+  --success-border: #2b6b4a;
+
+  --danger: #ff8f8f;
+  --danger-soft: #452022;
+  --danger-border: #854449;
+}
+
+@media (prefers-color-scheme: dark) {
+  html:not([data-theme]) {
+    --background: #0b1220;
+    --foreground: #ecf2ff;
+    --muted-foreground: #94a2c5;
+
+    --surface: rgba(16, 25, 42, 0.88);
+    --surface-muted: #14213a;
+    --surface-hover: #1b2b49;
+    --sidebar: linear-gradient(180deg, #0d172a 0%, #0a1322 100%);
+    --input: #111d33;
+
+    --border: #223559;
+    --ring: #79a2ff;
+    --shadow: #000813;
+
+    --accent: #7ca7ff;
+    --accent-foreground: #0a1224;
+    --accent-soft: #172848;
+    --accent-border: #3f64a6;
+
+    --success: #53d089;
+    --success-soft: #163d2a;
+    --success-border: #2b6b4a;
+
+    --danger: #ff8f8f;
+    --danger-soft: #452022;
+    --danger-border: #854449;
+  }
 }
 
 @theme inline {
+  --font-sans: var(--font-display);
+  --font-mono: var(--font-mono);
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+}
+
+html,
+body {
+  min-height: 100%;
 }
 
 body {
-  background: radial-gradient(1200px 800px at 20% 10%, #101726 0%, var(--background) 55%);
+  background:
+    radial-gradient(circle at 15% 10%, color-mix(in srgb, var(--accent) 12%, transparent) 0%, transparent 40%),
+    radial-gradient(circle at 80% 0%, color-mix(in srgb, var(--success) 9%, transparent) 0%, transparent 34%),
+    var(--background);
   color: var(--foreground);
-  font-family: var(--font-mono), ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
-    "Courier New", monospace;
-  letter-spacing: 0.01em;
+  font-family: var(--font-display), "Avenir Next", "Segoe UI", sans-serif;
 }
 
 * {

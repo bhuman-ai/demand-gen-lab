@@ -1,0 +1,340 @@
+import type {
+  BrandOutreachAssignment,
+  BrandRecord,
+  CampaignRecord,
+  EvolutionSnapshot,
+  Experiment,
+  Hypothesis,
+  ObjectiveData,
+  OutreachAccount,
+  OutreachRun,
+  ReplyDraft,
+  ReplyThread,
+  RunAnomaly,
+} from "@/lib/factory-types";
+
+function asObject(value: unknown): Record<string, unknown> {
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    return value as Record<string, unknown>;
+  }
+  return {};
+}
+
+async function readJson(response: Response) {
+  let data: unknown = {};
+  try {
+    data = await response.json();
+  } catch {
+    data = {};
+  }
+  const record = asObject(data);
+  if (!response.ok) {
+    throw new Error(String(record.error ?? "Request failed"));
+  }
+  return record;
+}
+
+export async function fetchBrands() {
+  const response = await fetch("/api/brands", { cache: "no-store" });
+  const data = await readJson(response);
+  return (Array.isArray(data?.brands) ? data.brands : []) as BrandRecord[];
+}
+
+export async function fetchBrand(brandId: string) {
+  const response = await fetch(`/api/brands/${brandId}`, { cache: "no-store" });
+  const data = await readJson(response);
+  return data.brand as BrandRecord;
+}
+
+export async function createBrandApi(input: {
+  name: string;
+  website: string;
+  tone?: string;
+  notes?: string;
+}) {
+  const response = await fetch("/api/brands", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  const data = await readJson(response);
+  return data.brand as BrandRecord;
+}
+
+export async function updateBrandApi(
+  brandId: string,
+  patch: Partial<
+    Pick<BrandRecord, "name" | "website" | "tone" | "notes" | "domains" | "leads" | "inbox">
+  >
+) {
+  const response = await fetch(`/api/brands/${brandId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+  const data = await readJson(response);
+  return data.brand as BrandRecord;
+}
+
+export async function deleteBrandApi(brandId: string) {
+  const response = await fetch(`/api/brands/${brandId}`, {
+    method: "DELETE",
+  });
+  await readJson(response);
+}
+
+export async function fetchCampaigns(brandId: string) {
+  const response = await fetch(`/api/brands/${brandId}/campaigns`, { cache: "no-store" });
+  const data = await readJson(response);
+  return (Array.isArray(data?.campaigns) ? data.campaigns : []) as CampaignRecord[];
+}
+
+export async function fetchCampaign(brandId: string, campaignId: string) {
+  const response = await fetch(`/api/brands/${brandId}/campaigns/${campaignId}`, { cache: "no-store" });
+  const data = await readJson(response);
+  return data.campaign as CampaignRecord;
+}
+
+export async function createCampaignApi(brandId: string, input: { name: string }) {
+  const response = await fetch(`/api/brands/${brandId}/campaigns`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  const data = await readJson(response);
+  return data.campaign as CampaignRecord;
+}
+
+export async function updateCampaignApi(
+  brandId: string,
+  campaignId: string,
+  patch: Partial<
+    Pick<
+      CampaignRecord,
+      "name" | "status" | "objective" | "hypotheses" | "experiments" | "evolution" | "stepState"
+    >
+  >
+) {
+  const response = await fetch(`/api/brands/${brandId}/campaigns/${campaignId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+  const data = await readJson(response);
+  return data.campaign as CampaignRecord;
+}
+
+export async function deleteCampaignApi(brandId: string, campaignId: string) {
+  const response = await fetch(`/api/brands/${brandId}/campaigns/${campaignId}`, {
+    method: "DELETE",
+  });
+  await readJson(response);
+}
+
+export async function generateHypothesesApi(brandId: string, campaignId: string, payload: {
+  brandName: string;
+  goal: string;
+  constraints: string;
+}) {
+  const response = await fetch(
+    `/api/brands/${brandId}/campaigns/${campaignId}/hypotheses/generate`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    }
+  );
+  const data = await readJson(response);
+  return (Array.isArray(data?.hypotheses) ? data.hypotheses : []) as Hypothesis[];
+}
+
+export async function generateExperimentsApi(
+  brandId: string,
+  campaignId: string,
+  payload: { hypotheses: Hypothesis[] }
+) {
+  const response = await fetch(
+    `/api/brands/${brandId}/campaigns/${campaignId}/experiments/generate`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    }
+  );
+  const data = await readJson(response);
+  return (Array.isArray(data?.experiments) ? data.experiments : []) as Array<
+    Omit<Experiment, "id"> & { id?: string }
+  >;
+}
+
+export async function fetchOutreachAccounts() {
+  const response = await fetch("/api/outreach/accounts", { cache: "no-store" });
+  const data = await readJson(response);
+  return (Array.isArray(data?.accounts) ? data.accounts : []) as OutreachAccount[];
+}
+
+export async function createOutreachAccountApi(input: {
+  name: string;
+  status?: "active" | "inactive";
+  config?: unknown;
+  credentials?: unknown;
+}) {
+  const response = await fetch("/api/outreach/accounts", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  const data = await readJson(response);
+  return data.account as OutreachAccount;
+}
+
+export async function updateOutreachAccountApi(
+  accountId: string,
+  patch: {
+    name?: string;
+    status?: "active" | "inactive";
+    config?: unknown;
+    credentials?: unknown;
+  }
+) {
+  const response = await fetch(`/api/outreach/accounts/${accountId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+  const data = await readJson(response);
+  return data.account as OutreachAccount;
+}
+
+export async function testOutreachAccount(accountId: string) {
+  const response = await fetch(`/api/outreach/accounts/${accountId}/test`, {
+    method: "POST",
+  });
+  const data = await readJson(response);
+  return data.result as {
+    ok: boolean;
+    checks: {
+      customerIo: "pass" | "fail";
+      apify: "pass" | "fail";
+      mailbox: "pass" | "fail";
+    };
+    message: string;
+    testedAt: string;
+  };
+}
+
+export async function assignBrandOutreachAccount(brandId: string, accountId: string) {
+  const response = await fetch(`/api/brands/${brandId}/outreach-account`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ accountId }),
+  });
+  const data = await readJson(response);
+  return {
+    assignment: (data.assignment ?? null) as BrandOutreachAssignment | null,
+    account: (data.account ?? null) as OutreachAccount | null,
+  };
+}
+
+export async function fetchBrandOutreachAssignment(brandId: string) {
+  const response = await fetch(`/api/brands/${brandId}/outreach-account`, { cache: "no-store" });
+  const data = await readJson(response);
+  return {
+    assignment: (data.assignment ?? null) as BrandOutreachAssignment | null,
+    account: (data.account ?? null) as OutreachAccount | null,
+  };
+}
+
+export async function fetchCampaignRuns(brandId: string, campaignId: string) {
+  const response = await fetch(`/api/brands/${brandId}/campaigns/${campaignId}/runs`, {
+    cache: "no-store",
+  });
+  const data = await readJson(response);
+  return {
+    runs: (Array.isArray(data.runs) ? data.runs : []) as OutreachRun[],
+    anomalies: (Array.isArray(data.anomalies) ? data.anomalies : []) as RunAnomaly[],
+  };
+}
+
+export async function launchExperimentRun(
+  brandId: string,
+  campaignId: string,
+  experimentId: string
+) {
+  const response = await fetch(
+    `/api/brands/${brandId}/campaigns/${campaignId}/experiments/${experimentId}/runs`,
+    {
+      method: "POST",
+    }
+  );
+  const data = await readJson(response);
+  return {
+    runId: String(data.runId ?? ""),
+    status: String(data.status ?? ""),
+  };
+}
+
+export async function pauseRun(
+  brandId: string,
+  campaignId: string,
+  runId: string,
+  reason = "Paused by user"
+) {
+  const response = await fetch(`/api/brands/${brandId}/campaigns/${campaignId}/runs/${runId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action: "pause", reason }),
+  });
+  return await readJson(response);
+}
+
+export async function resumeRun(brandId: string, campaignId: string, runId: string) {
+  const response = await fetch(`/api/brands/${brandId}/campaigns/${campaignId}/runs/${runId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action: "resume" }),
+  });
+  return await readJson(response);
+}
+
+export async function fetchInboxThreads(brandId: string) {
+  const response = await fetch(`/api/brands/${brandId}/inbox/threads`, { cache: "no-store" });
+  const data = await readJson(response);
+  return {
+    threads: (Array.isArray(data.threads) ? data.threads : []) as ReplyThread[],
+    drafts: (Array.isArray(data.drafts) ? data.drafts : []) as ReplyDraft[],
+  };
+}
+
+export async function approveReplyDraftAndSend(brandId: string, draftId: string) {
+  const response = await fetch(`/api/brands/${brandId}/inbox/drafts/${draftId}/send`, {
+    method: "POST",
+  });
+  return await readJson(response);
+}
+
+export function completeStepState(step: "objective" | "hypotheses" | "experiments" | "evolution", current: CampaignRecord["stepState"]) {
+  const next = { ...current };
+  if (step === "objective") next.objectiveCompleted = true;
+  if (step === "hypotheses") next.hypothesesCompleted = true;
+  if (step === "experiments") next.experimentsCompleted = true;
+  if (step === "evolution") next.evolutionCompleted = true;
+  next.currentStep = step;
+  return next;
+}
+
+export function defaultObjective(): ObjectiveData {
+  return {
+    goal: "",
+    constraints: "",
+    scoring: {
+      conversionWeight: 0.6,
+      qualityWeight: 0.2,
+      replyWeight: 0.2,
+    },
+  };
+}
+
+export function summarizeWinners(rows: EvolutionSnapshot[]) {
+  return rows.filter((item) => item.status === "winner").length;
+}

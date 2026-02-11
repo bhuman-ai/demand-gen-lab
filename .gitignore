@@ -42,6 +42,8 @@ next-env.d.ts
 
 # Local logs
 logs/
+/data/
+output/playwright/
 
 # Supabase temp
 supabase/.temp/

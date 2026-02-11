@@ -1,44 +1,32 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
+import { IBM_Plex_Mono, Space_Grotesk } from "next/font/google";
 import "./globals.css";
-import BrandSwitcher from "./brand-switcher";
-import Sidebar from "./sidebar";
+import AppShell from "@/components/layout/app-shell";
+import { ThemeProvider } from "@/components/layout/theme-provider";
 
-const geistSans = Geist({
-  variable: "--font-geist-sans",
+const display = Space_Grotesk({
+  variable: "--font-display",
   subsets: ["latin"],
 });
 
-const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
+const mono = IBM_Plex_Mono({
+  variable: "--font-mono",
   subsets: ["latin"],
+  weight: ["400", "500", "600"],
 });
 
 export const metadata: Metadata = {
   title: "The Factory",
-  description: "Autonomous genetic outreach engine",
+  description: "Brand-first campaign operating system",
 };
 
-export default function RootLayout({
-  children,
-}: Readonly<{
-  children: React.ReactNode;
-}>) {
+export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
-    <html lang="en">
-      <body className={`${geistSans.variable} ${geistMono.variable} antialiased`}>
-        <div className="min-h-screen bg-[color:var(--background)] text-[color:var(--foreground)]">
-          <div className="flex min-h-screen">
-            <Sidebar />
-            <main className="flex-1">
-              <header className="flex items-center justify-between border-b border-[color:var(--border)] bg-[color:var(--glass)]/60 px-6 py-4">
-                <BrandSwitcher />
-                <div className="text-xs text-[color:var(--muted)]">v0.1</div>
-              </header>
-              <div className="px-6 py-6">{children}</div>
-            </main>
-          </div>
-        </div>
+    <html lang="en" suppressHydrationWarning>
+      <body className={`${display.variable} ${mono.variable} antialiased`}>
+        <ThemeProvider>
+          <AppShell>{children}</AppShell>
+        </ThemeProvider>
       </body>
     </html>
   );

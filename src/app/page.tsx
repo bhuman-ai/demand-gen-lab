@@ -1,79 +1,116 @@
-import Link from "next/link";
+"use client";
 
-export default function Home() {
+import Link from "next/link";
+import { useEffect, useState } from "react";
+import { ArrowRight, Rocket, Target } from "lucide-react";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { fetchBrands, fetchCampaigns } from "@/lib/client-api";
+import type { BrandRecord } from "@/lib/factory-types";
+
+export default function HomePage() {
+  const [brands, setBrands] = useState<BrandRecord[]>([]);
+  const [campaignCount, setCampaignCount] = useState(0);
+
+  useEffect(() => {
+    let mounted = true;
+    const load = async () => {
+      try {
+        const brandRows = await fetchBrands();
+        if (!mounted) return;
+        setBrands(brandRows);
+
+        const counts = await Promise.all(brandRows.map((row) => fetchCampaigns(row.id)));
+        if (!mounted) return;
+        setCampaignCount(counts.reduce((sum, rows) => sum + rows.length, 0));
+      } catch {
+        if (mounted) {
+          setBrands([]);
+          setCampaignCount(0);
+        }
+      }
+    };
+    load();
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
   return (
-    <div className="space-y-10">
-      <section className="grid gap-6 lg:grid-cols-[1.2fr_0.8fr]">
-        <div className="rounded-2xl border border-[color:var(--border)] bg-[color:var(--glass)]/80 p-7 shadow-[0_24px_80px_-50px_var(--shadow)]">
-          <div className="text-[11px] uppercase tracking-[0.35em] text-[color:var(--muted)]">
-            Protocol Genesis
-          </div>
-          <h1 className="mt-3 text-3xl font-semibold text-[color:var(--foreground)]">
-            Autonomous Outreach Engine
-          </h1>
-          <p className="mt-2 text-sm text-[color:var(--muted)]">
-            Customer.io-first delivery. Genetic sequencing. Conversion-aware global win.
-          </p>
-          <div className="mt-6 grid gap-3 sm:grid-cols-2">
-            <Link
-              href="/brands/new"
-              className="rounded-lg border border-[color:var(--border)] bg-[color:var(--background-elevated)] px-4 py-3 text-left text-sm text-[color:var(--foreground)]"
-            >
-              + New Brand
-              <div className="text-xs text-[color:var(--muted)]">Scrape site and inject context</div>
+    <div className="space-y-6">
+      <Card className="overflow-hidden">
+        <CardHeader>
+          <Badge variant="accent" className="w-fit">
+            Brand-first Flow
+          </Badge>
+          <CardTitle className="mt-2 text-2xl">Launch Campaigns Without Navigation Friction</CardTitle>
+          <CardDescription>
+            Start from a brand, build campaign steps in order, and move to operations without losing context.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-wrap gap-3">
+          <Button asChild>
+            <Link href="/brands/new">
+              <Rocket className="h-4 w-4" />
+              Create Brand
             </Link>
-            <Link
-              href="/strategy"
-              className="rounded-lg border border-[color:var(--border)] bg-[color:var(--background-elevated)] px-4 py-3 text-left text-sm text-[color:var(--foreground)]"
-            >
-              + New Objective
-              <div className="text-xs text-[color:var(--muted)]">Spin up hypotheses + experiments</div>
+          </Button>
+          <Button asChild variant="outline">
+            <Link href="/brands">
+              <Target className="h-4 w-4" />
+              Open Brand Directory
             </Link>
-          </div>
-        </div>
-        <div className="space-y-4">
-          {[
-            { label: "Active Brands", value: "0", tone: "text-[color:var(--foreground)]" },
-            { label: "Queued Experiments", value: "0", tone: "text-[color:var(--accent)]" },
-            { label: "System Health", value: "Stable", tone: "text-[color:var(--success)]" },
-          ].map((card) => (
-            <div
-              key={card.label}
-              className="rounded-xl border border-[color:var(--border)] bg-[color:var(--background-elevated)] p-5"
-            >
-              <div className="text-xs uppercase tracking-[0.2em] text-[color:var(--muted)]">
-                {card.label}
-              </div>
-              <div className={`mt-3 text-2xl font-semibold ${card.tone}`}>{card.value}</div>
-            </div>
-          ))}
-        </div>
-      </section>
+          </Button>
+        </CardContent>
+      </Card>
 
       <section className="grid gap-4 md:grid-cols-3">
-        {[
-          {
-            title: "Hypothesis Queue",
-            body: "Generate 50–200 ideas and approve/deny with hotkeys.",
-          },
-          {
-            title: "Evolution Grid",
-            body: "Track survivors, cull losers, auto-scale winners.",
-          },
-          {
-            title: "Network Hub",
-            body: "Domains, reputation, and burn/replace controls.",
-          },
-        ].map((card) => (
-          <div
-            key={card.title}
-            className="rounded-xl border border-[color:var(--border)] bg-[color:var(--background-elevated)] p-5"
-          >
-            <div className="text-sm font-semibold text-[color:var(--foreground)]">{card.title}</div>
-            <p className="mt-2 text-xs text-[color:var(--muted)]">{card.body}</p>
-          </div>
-        ))}
+        <Card>
+          <CardHeader>
+            <CardDescription>Brands</CardDescription>
+            <CardTitle>{brands.length}</CardTitle>
+          </CardHeader>
+        </Card>
+        <Card>
+          <CardHeader>
+            <CardDescription>Campaigns</CardDescription>
+            <CardTitle>{campaignCount}</CardTitle>
+          </CardHeader>
+        </Card>
+        <Card>
+          <CardHeader>
+            <CardDescription>Next Action</CardDescription>
+            <CardTitle className="text-base font-medium">
+              {brands.length ? "Open active brand and continue campaign steps" : "Create your first brand"}
+            </CardTitle>
+          </CardHeader>
+        </Card>
       </section>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-lg">Primary Journey</CardTitle>
+          <CardDescription>Designed for solo operators: fast setup, deterministic progression.</CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-wrap items-center gap-2 text-xs text-[color:var(--muted-foreground)]">
+          {[
+            "Create Brand",
+            "Create Campaign",
+            "Objective",
+            "Hypotheses",
+            "Experiments",
+            "Evolution",
+          ].map((step, index) => (
+            <div key={step} className="inline-flex items-center gap-2">
+              <span className="rounded-full border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-1.5">
+                {step}
+              </span>
+              {index < 5 ? <ArrowRight className="h-3.5 w-3.5" /> : null}
+            </div>
+          ))}
+        </CardContent>
+      </Card>
     </div>
   );
 }

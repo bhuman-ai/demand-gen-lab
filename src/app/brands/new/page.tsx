@@ -1,28 +1,30 @@
 "use client";
 
 import { useState } from "react";
+import { useRouter } from "next/navigation";
+import { Sparkles } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
+import { createBrandApi } from "@/lib/client-api";
+import { trackEvent } from "@/lib/telemetry-client";
 
-type Prefill = {
-  brandName: string;
-  tone: string;
-  proof: string;
-};
-
-export default function Page() {
+export default function NewBrandPage() {
+  const router = useRouter();
   const [website, setWebsite] = useState("");
-  const [prefill, setPrefill] = useState<Prefill>({
-    brandName: "",
-    tone: "",
-    proof: "",
-  });
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
+  const [name, setName] = useState("");
+  const [tone, setTone] = useState("");
+  const [notes, setNotes] = useState("");
+  const [prefillLoading, setPrefillLoading] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [savedId, setSavedId] = useState("");
+  const [error, setError] = useState("");
 
-  const handleScrape = async () => {
+  const runPrefill = async () => {
+    if (!website.trim()) return;
     setError("");
-    setLoading(true);
+    setPrefillLoading(true);
     try {
       const response = await fetch("/api/intake/prefill", {
         method: "POST",
@@ -32,120 +34,88 @@ export default function Page() {
       const data = await response.json();
       if (!response.ok) {
         setError(data?.error ?? "Prefill failed");
-      } else {
-        setPrefill({
-          brandName: data?.prefill?.brandName ?? "",
-          tone: data?.prefill?.tone ?? "",
-          proof: data?.prefill?.proof ?? "",
-        });
+        return;
       }
+      setName(String(data?.prefill?.brandName ?? name));
+      setTone(String(data?.prefill?.tone ?? tone));
+      setNotes(String(data?.prefill?.proof ?? notes));
     } catch {
       setError("Prefill failed");
     } finally {
-      setLoading(false);
+      setPrefillLoading(false);
     }
   };
 
-  const handleSave = async () => {
+  const save = async () => {
     setError("");
     setSaving(true);
-    setSavedId("");
     try {
-      const response = await fetch("/api/brands", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          website,
-          ...prefill,
-        }),
-      });
-      const data = await response.json();
-      if (!response.ok) {
-        setError(data?.error ?? "Save failed");
-      } else {
-        setSavedId(data?.brand?.id ?? "");
-      }
-    } catch {
-      setError("Save failed");
+      const brand = await createBrandApi({ name, website, tone, notes });
+      localStorage.setItem("factory.activeBrandId", brand.id);
+      trackEvent("brand_created", { brandId: brand.id, name: brand.name });
+      router.push(`/brands/${brand.id}`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Save failed");
     } finally {
       setSaving(false);
     }
   };
 
   return (
-    <div className="space-y-6">
-      <h1 className="text-xl font-semibold text-[color:var(--foreground)]">New Brand</h1>
-      <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--background-elevated)] p-5">
-        <div className="text-xs uppercase tracking-[0.2em] text-[color:var(--muted)]">Step 1</div>
-        <div className="mt-2 text-sm font-semibold text-[color:var(--foreground)]">Paste website URL</div>
-        <input
-          value={website}
-          onChange={(event) => setWebsite(event.target.value)}
-          placeholder="https://your-site.com"
-          className="mt-3 h-10 w-full rounded-md border border-[color:var(--border)] bg-[color:var(--background)]/60 px-3 text-sm text-[color:var(--foreground)] outline-none"
-        />
-        <p className="mt-3 text-xs text-[color:var(--muted)]">
-          We will scrape the site and prefill brand voice, product lines, and positioning.
-        </p>
-        <button
-          type="button"
-          onClick={handleScrape}
-          disabled={!website.trim() || loading}
-          className="mt-4 rounded-md border border-[color:var(--border)] bg-[color:var(--background)]/80 px-4 py-2 text-xs text-[color:var(--foreground)] disabled:cursor-not-allowed disabled:opacity-60"
-        >
-          {loading ? "Scraping..." : "Scrape & Prefill"}
-        </button>
-        {error ? (
-          <p className="mt-2 text-xs text-[color:var(--danger)]">{error}</p>
-        ) : null}
-      </div>
+    <div className="mx-auto grid max-w-3xl gap-5">
+      <Card>
+        <CardHeader>
+          <CardTitle>Create Brand</CardTitle>
+          <CardDescription>Use prefill to bootstrap context, then save and move into campaigns.</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="grid gap-2">
+            <Label htmlFor="website">Website</Label>
+            <Input
+              id="website"
+              value={website}
+              onChange={(event) => setWebsite(event.target.value)}
+              placeholder="https://example.com"
+            />
+          </div>
+          <div className="flex gap-2">
+            <Button type="button" variant="outline" onClick={runPrefill} disabled={prefillLoading || !website.trim()}>
+              <Sparkles className="h-4 w-4" />
+              {prefillLoading ? "Prefilling..." : "Scrape & Prefill"}
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
 
-      <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--background-elevated)] p-5">
-        <div className="text-xs uppercase tracking-[0.2em] text-[color:var(--muted)]">Step 2</div>
-        <div className="mt-2 text-sm font-semibold text-[color:var(--foreground)]">Confirm brand context</div>
-        <div className="mt-4 grid gap-4 md:grid-cols-2">
-          <div>
-            <div className="text-xs text-[color:var(--muted)]">Brand name</div>
-            <input
-              value={prefill.brandName}
-              onChange={(event) => setPrefill({ ...prefill, brandName: event.target.value })}
-              className="mt-2 h-10 w-full rounded-md border border-[color:var(--border)] bg-[color:var(--background)]/60 px-3 text-sm text-[color:var(--foreground)]"
-            />
+      <Card>
+        <CardHeader>
+          <CardTitle>Brand Context</CardTitle>
+          <CardDescription>These fields power campaign objective and generation quality.</CardDescription>
+        </CardHeader>
+        <CardContent className="grid gap-4">
+          <div className="grid gap-2">
+            <Label htmlFor="name">Name</Label>
+            <Input id="name" value={name} onChange={(event) => setName(event.target.value)} />
           </div>
-          <div>
-            <div className="text-xs text-[color:var(--muted)]">Tone</div>
-            <input
-              value={prefill.tone}
-              onChange={(event) => setPrefill({ ...prefill, tone: event.target.value })}
-              className="mt-2 h-10 w-full rounded-md border border-[color:var(--border)] bg-[color:var(--background)]/60 px-3 text-sm text-[color:var(--foreground)]"
-            />
+          <div className="grid gap-2">
+            <Label htmlFor="tone">Tone</Label>
+            <Input id="tone" value={tone} onChange={(event) => setTone(event.target.value)} />
           </div>
-          <div className="md:col-span-2">
-            <div className="text-xs text-[color:var(--muted)]">Proof points</div>
-            <textarea
-              value={prefill.proof}
-              onChange={(event) => setPrefill({ ...prefill, proof: event.target.value })}
-              className="mt-2 h-20 w-full resize-none rounded-md border border-[color:var(--border)] bg-[color:var(--background)]/60 px-3 py-2 text-sm text-[color:var(--foreground)]"
-            />
+          <div className="grid gap-2">
+            <Label htmlFor="notes">Proof / Notes</Label>
+            <Textarea id="notes" value={notes} onChange={(event) => setNotes(event.target.value)} />
           </div>
-        </div>
-        <p className="mt-4 text-xs text-[color:var(--muted)]">
-          Campaign targeting and offers get defined per campaign.
-        </p>
-        <div className="mt-4 flex flex-wrap items-center gap-3">
-          <button
-            type="button"
-            onClick={handleSave}
-            disabled={saving || !website.trim() || !prefill.brandName.trim()}
-            className="rounded-md border border-[color:var(--border)] bg-[color:var(--background)]/80 px-4 py-2 text-xs text-[color:var(--foreground)] disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            {saving ? "Saving..." : "Save Brand"}
-          </button>
-          {savedId ? (
-            <span className="text-xs text-[color:var(--success)]">Saved {savedId}</span>
-          ) : null}
-        </div>
-      </div>
+          {error ? <div className="text-sm text-[color:var(--danger)]">{error}</div> : null}
+          <div className="flex gap-2">
+            <Button type="button" onClick={save} disabled={saving || !name.trim() || !website.trim()}>
+              {saving ? "Saving..." : "Save Brand"}
+            </Button>
+            <Button type="button" variant="outline" onClick={() => router.push("/brands")}>
+              Cancel
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
     </div>
   );
 }

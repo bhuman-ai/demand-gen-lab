@@ -1,80 +1,44 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Select } from "@/components/ui/select";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { updateBrandApi } from "@/lib/client-api";
+import { trackEvent } from "@/lib/telemetry-client";
+import type { BrandRecord, DomainRow } from "@/lib/factory-types";
 
-type DomainEntry = {
-  domain: string;
-  status: string;
-  warmupStage: string;
-  reputation: string;
-};
+const makeId = () => `domain_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 
-type Brand = {
-  id?: string;
-  brandName?: string;
-  domains?: unknown[];
-};
-
-type NetworkClientProps = {
-  brand: Brand;
-};
-
-const normalizeDomains = (rows: unknown[] = []): DomainEntry[] =>
-  rows
-    .map((row: any) => ({
-      domain: String(row?.domain ?? ""),
-      status: String(row?.status ?? "Active"),
-      warmupStage: String(row?.warmupStage ?? "Day 1"),
-      reputation: String(row?.reputation ?? "Low"),
-    }))
-    .filter((row) => row.domain.length > 0);
-
-export default function NetworkClient({ brand }: NetworkClientProps) {
-  const [domains, setDomains] = useState<DomainEntry[]>(
-    normalizeDomains(Array.isArray(brand.domains) ? brand.domains : [])
-  );
+export default function NetworkClient({ brand }: { brand: BrandRecord }) {
+  const [domains, setDomains] = useState<DomainRow[]>(brand.domains || []);
+  const [query, setQuery] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
-  const [newDomain, setNewDomain] = useState<DomainEntry>({
+  const [draft, setDraft] = useState<DomainRow>({
+    id: makeId(),
     domain: "",
-    status: "Active",
+    status: "active",
     warmupStage: "Day 1",
-    reputation: "Low",
+    reputation: "low",
   });
 
-  const persistDomains = async (nextDomains: DomainEntry[]) => {
-    if (!brand.id) {
-      throw new Error("Missing brand id");
-    }
-    const response = await fetch("/api/brands", {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        id: brand.id,
-        domains: nextDomains,
-      }),
-    });
-    const data = await response.json();
-    if (!response.ok) {
-      throw new Error(data?.error ?? "Save failed");
-    }
-    const saved = Array.isArray(data?.brand?.domains) ? (data.brand.domains as DomainEntry[]) : [];
-    return saved;
-  };
+  const filtered = useMemo(() => {
+    const needle = query.trim().toLowerCase();
+    if (!needle) return domains;
+    return domains.filter((item) => item.domain.toLowerCase().includes(needle));
+  }, [domains, query]);
 
-  const addDomain = async () => {
-    if (!newDomain.domain.trim()) return;
+  const persist = async (next: DomainRow[]) => {
     setSaving(true);
     setError("");
-    const nextDomains = [
-      { ...newDomain, domain: newDomain.domain.trim() },
-      ...domains,
-    ];
-    setDomains(nextDomains);
     try {
-      const saved = await persistDomains(nextDomains);
-      setDomains(saved);
-      setNewDomain({ domain: "", status: "Active", warmupStage: "Day 1", reputation: "Low" });
+      const updated = await updateBrandApi(brand.id, { domains: next });
+      setDomains(updated.domains);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Save failed");
     } finally {
@@ -82,85 +46,136 @@ export default function NetworkClient({ brand }: NetworkClientProps) {
     }
   };
 
-  const active = domains.filter((item) => item.status.toLowerCase() === "active").length;
-  const warming = domains.filter((item) => item.status.toLowerCase().includes("warm")).length;
-  const risk = domains.some((item) => item.reputation.toLowerCase() === "high") ? "High" : "Low";
+  const riskyCount = domains.filter((item) => item.status === "risky").length;
+
+  useEffect(() => {
+    trackEvent("ops_module_opened", { module: "network", brandId: brand.id });
+  }, [brand.id]);
 
   return (
-    <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--background-elevated)] p-5">
-      <div className="text-xs text-[color:var(--muted)]">Domains & reputation</div>
-      <div className="mt-4 grid gap-3 md:grid-cols-3">
-        {[
-          { label: "Active domains", value: active },
-          { label: "Warming up", value: warming },
-          { label: "Reputation risk", value: risk },
-        ].map((item) => (
-          <div
-            key={item.label}
-            className="rounded-md border border-[color:var(--border)] bg-[color:var(--background)]/40 px-4 py-3"
-          >
-            <div className="text-[11px] text-[color:var(--muted)]">{item.label}</div>
-            <div className="mt-1 text-sm text-[color:var(--foreground)]">{item.value}</div>
+    <div className="space-y-5">
+      <Card>
+        <CardHeader>
+          <CardTitle>Network</CardTitle>
+          <CardDescription>Domains and reputation controls for {brand.name}.</CardDescription>
+        </CardHeader>
+        <CardContent className="grid gap-3 md:grid-cols-3">
+          <div>
+            <div className="text-xs text-[color:var(--muted-foreground)]">Domains</div>
+            <div className="text-lg font-semibold">{domains.length}</div>
           </div>
-        ))}
-      </div>
-      <div className="mt-4 grid gap-3 md:grid-cols-4">
-        <input
-          value={newDomain.domain}
-          onChange={(event) => setNewDomain((prev) => ({ ...prev, domain: event.target.value }))}
-          placeholder="Domain"
-          className="h-9 rounded-md border border-[color:var(--border)] bg-[color:var(--background)]/60 px-2 text-xs text-[color:var(--foreground)]"
-        />
-        <input
-          value={newDomain.status}
-          onChange={(event) => setNewDomain((prev) => ({ ...prev, status: event.target.value }))}
-          placeholder="Status"
-          className="h-9 rounded-md border border-[color:var(--border)] bg-[color:var(--background)]/60 px-2 text-xs text-[color:var(--foreground)]"
-        />
-        <input
-          value={newDomain.warmupStage}
-          onChange={(event) => setNewDomain((prev) => ({ ...prev, warmupStage: event.target.value }))}
-          placeholder="Warmup stage"
-          className="h-9 rounded-md border border-[color:var(--border)] bg-[color:var(--background)]/60 px-2 text-xs text-[color:var(--foreground)]"
-        />
-        <div className="flex gap-2">
-          <input
-            value={newDomain.reputation}
-            onChange={(event) => setNewDomain((prev) => ({ ...prev, reputation: event.target.value }))}
-            placeholder="Reputation"
-            className="h-9 flex-1 rounded-md border border-[color:var(--border)] bg-[color:var(--background)]/60 px-2 text-xs text-[color:var(--foreground)]"
+          <div>
+            <div className="text-xs text-[color:var(--muted-foreground)]">Warming</div>
+            <div className="text-lg font-semibold">{domains.filter((item) => item.status === "warming").length}</div>
+          </div>
+          <div>
+            <div className="text-xs text-[color:var(--muted-foreground)]">Risky</div>
+            <div className="text-lg font-semibold">{riskyCount}</div>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Add Domain</CardTitle>
+        </CardHeader>
+        <CardContent className="grid gap-3 md:grid-cols-5">
+          <div className="md:col-span-2">
+            <Label>Domain</Label>
+            <Input value={draft.domain} onChange={(event) => setDraft({ ...draft, domain: event.target.value })} />
+          </div>
+          <div>
+            <Label>Status</Label>
+            <Select
+              value={draft.status}
+              onChange={(event) =>
+                setDraft({
+                  ...draft,
+                  status: event.target.value as DomainRow["status"],
+                })
+              }
+            >
+              <option value="active">active</option>
+              <option value="warming">warming</option>
+              <option value="risky">risky</option>
+            </Select>
+          </div>
+          <div>
+            <Label>Warmup Stage</Label>
+            <Input value={draft.warmupStage} onChange={(event) => setDraft({ ...draft, warmupStage: event.target.value })} />
+          </div>
+          <div>
+            <Label>Reputation</Label>
+            <Input value={draft.reputation} onChange={(event) => setDraft({ ...draft, reputation: event.target.value })} />
+          </div>
+          <div className="md:col-span-5 flex justify-end">
+            <Button
+              type="button"
+              onClick={async () => {
+                if (!draft.domain.trim()) return;
+                const next = [{ ...draft, id: makeId(), domain: draft.domain.trim() }, ...domains];
+                await persist(next);
+                setDraft({ id: makeId(), domain: "", status: "active", warmupStage: "Day 1", reputation: "low" });
+              }}
+              disabled={saving}
+            >
+              Add Domain
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader className="flex flex-row items-center justify-between gap-3">
+          <CardTitle className="text-base">Domain Table</CardTitle>
+          <Input
+            placeholder="Filter domains"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            className="max-w-xs"
           />
-          <button
-            type="button"
-            onClick={addDomain}
-            disabled={saving}
-            className="rounded-md border border-[color:var(--border)] px-3 text-xs text-[color:var(--foreground)]"
-          >
-            {saving ? "Saving" : "Add"}
-          </button>
-        </div>
-      </div>
-      {error ? <div className="mt-3 text-xs text-[color:var(--danger)]">{error}</div> : null}
-      <div className="mt-5 overflow-hidden rounded-md border border-[color:var(--border)]">
-        <div className="grid grid-cols-4 bg-[color:var(--background)]/60 text-[11px] text-[color:var(--muted)]">
-          {["Domain", "Status", "Warmup", "Reputation"].map((label) => (
-            <div key={label} className="px-3 py-2">
-              {label}
-            </div>
-          ))}
-        </div>
-        {domains.map((row, index) => (
-          <div key={`${row.domain}-${index}`} className="grid grid-cols-4 text-[11px] text-[color:var(--foreground)]">
-            <div className="px-3 py-2">{row.domain}</div>
-            <div className="px-3 py-2">{row.status}</div>
-            <div className="px-3 py-2">{row.warmupStage}</div>
-            <div className="px-3 py-2">{row.reputation}</div>
-          </div>
-        ))}
-        {!domains.length ? (
-          <div className="px-3 py-3 text-[11px] text-[color:var(--muted)]">No domains assigned.</div>
-        ) : null}
-      </div>
+        </CardHeader>
+        <CardContent className="overflow-x-auto">
+          <table className="min-w-full text-sm">
+            <thead>
+              <tr className="text-left text-xs uppercase tracking-wide text-[color:var(--muted-foreground)]">
+                <th className="pb-2">Domain</th>
+                <th className="pb-2">Status</th>
+                <th className="pb-2">Warmup</th>
+                <th className="pb-2">Reputation</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.map((item) => (
+                <tr key={item.id} className="border-t border-[color:var(--border)]">
+                  <td className="py-2">{item.domain}</td>
+                  <td className="py-2">
+                    <Badge variant={item.status === "risky" ? "danger" : item.status === "active" ? "success" : "muted"}>
+                      {item.status}
+                    </Badge>
+                  </td>
+                  <td className="py-2">{item.warmupStage}</td>
+                  <td className="py-2">{item.reputation}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {!filtered.length ? <div className="py-6 text-sm text-[color:var(--muted-foreground)]">No domains found.</div> : null}
+        </CardContent>
+      </Card>
+
+      {error ? <div className="text-sm text-[color:var(--danger)]">{error}</div> : null}
+
+      <Card>
+        <CardContent className="flex flex-wrap gap-2 py-4">
+          <Button asChild variant="outline">
+            <Link href={`/brands/${brand.id}`}>Back to Brand Home</Link>
+          </Button>
+          <Button asChild>
+            <Link href={`/brands/${brand.id}/campaigns`}>Go to Campaigns</Link>
+          </Button>
+        </CardContent>
+      </Card>
     </div>
   );
 }

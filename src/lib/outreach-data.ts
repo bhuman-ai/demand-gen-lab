@@ -90,6 +90,23 @@ const OUTREACH_PATH = isVercel
   ? "/tmp/factory_outreach.v1.json"
   : `${process.cwd()}/data/outreach.v1.json`;
 
+export class OutreachDataError extends Error {
+  status: number;
+  hint: string;
+  debug: Record<string, unknown>;
+
+  constructor(
+    message: string,
+    options: { status?: number; hint?: string; debug?: Record<string, unknown> } = {}
+  ) {
+    super(message);
+    this.name = "OutreachDataError";
+    this.status = options.status ?? 500;
+    this.hint = options.hint ?? "";
+    this.debug = options.debug ?? {};
+  }
+}
+
 const TABLE_ACCOUNT = "demanddev_outreach_accounts";
 const TABLE_ASSIGNMENT = "demanddev_brand_outreach_assignments";
 const TABLE_RUN = "demanddev_outreach_runs";
@@ -103,6 +120,10 @@ const TABLE_JOB = "demanddev_outreach_job_queue";
 const TABLE_ANOMALY = "demanddev_run_anomalies";
 
 const nowIso = () => new Date().toISOString();
+
+function runtimeLabel(): "vercel" | "local" {
+  return isVercel ? "vercel" : "local";
+}
 
 function asRecord(value: unknown): Record<string, unknown> {
   if (value && typeof value === "object" && !Array.isArray(value)) {
@@ -129,6 +150,15 @@ function defaultOutreachStore(): OutreachStore {
     events: [],
     jobs: [],
   };
+}
+
+function deriveAccountType(config: OutreachAccountConfig): OutreachAccount["accountType"] {
+  const hasDelivery = Boolean(config.customerIo.siteId.trim() && config.customerIo.workspaceId.trim());
+  const hasMailbox = Boolean(config.mailbox.email.trim() && config.mailbox.host.trim());
+  if (hasDelivery && hasMailbox) return "hybrid";
+  if (hasDelivery) return "delivery";
+  if (hasMailbox) return "mailbox";
+  return "hybrid";
 }
 
 function sanitizeAccountConfig(value: unknown): OutreachAccountConfig {
@@ -211,18 +241,18 @@ function mapStoredAccount(row: StoredAccount): OutreachAccount {
 
 function mapAccountRowFromDb(input: unknown): StoredAccount {
   const row = asRecord(input);
-  const accountType = ["delivery", "mailbox", "hybrid"].includes(
-    String(row.account_type ?? row.accountType ?? "hybrid")
-  )
-    ? (String(row.account_type ?? row.accountType ?? "hybrid") as OutreachAccount["accountType"])
-    : "hybrid";
+  const config = sanitizeAccountConfig(row.config);
+  const rawType = String(row.account_type ?? row.accountType ?? "").trim();
+  const accountType = ["delivery", "mailbox", "hybrid"].includes(rawType)
+    ? (rawType as OutreachAccount["accountType"])
+    : deriveAccountType(config);
   return {
     id: String(row.id ?? ""),
     name: String(row.name ?? ""),
     provider: "customerio",
     accountType,
     status: String(row.status ?? "active") === "inactive" ? "inactive" : "active",
-    config: sanitizeAccountConfig(row.config),
+    config,
     credentialsEncrypted: String(row.credentials_encrypted ?? row.credentialsEncrypted ?? ""),
     lastTestAt: String(row.last_test_at ?? row.lastTestAt ?? ""),
     lastTestStatus: ["unknown", "pass", "fail"].includes(String(row.last_test_status ?? row.lastTestStatus))
@@ -575,34 +605,139 @@ function buildStoredAccount(input: {
   };
 }
 
-export async function listOutreachAccounts(): Promise<OutreachAccount[]> {
-  const supabase = getSupabaseAdmin();
-  if (supabase) {
-    const { data, error } = await supabase
-      .from(TABLE_ACCOUNT)
-      .select("*")
-      .order("updated_at", { ascending: false });
-    if (!error) {
-      return (data ?? []).map((row: unknown) => mapStoredAccount(mapAccountRowFromDb(row)));
-    }
+function supabaseConfigured(): boolean {
+  return Boolean(process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY);
+}
+
+function supabaseErrorDebug(error: unknown) {
+  const row = asRecord(error);
+  const message = typeof row.message === "string" ? row.message : String(error ?? "");
+  return {
+    message,
+    details: typeof row.details === "string" ? row.details : "",
+    hint: typeof row.hint === "string" ? row.hint : "",
+    code: typeof row.code === "string" ? row.code : "",
+  };
+}
+
+function isMissingColumnError(error: unknown, columnName: string) {
+  const dbg = supabaseErrorDebug(error);
+  const msg = dbg.message.toLowerCase();
+  const needle = columnName.toLowerCase();
+  return msg.includes(needle) && msg.includes("does not exist");
+}
+
+function hintForSupabaseWriteError(error: unknown) {
+  const dbg = supabaseErrorDebug(error);
+  const msg = dbg.message.toLowerCase();
+
+  if (msg.includes("relation") && msg.includes("does not exist")) {
+    return "Supabase tables are missing. Apply migrations in supabase/migrations to your Supabase project, then redeploy.";
   }
 
-  const store = await readLocalStore();
-  return store.accounts.map((row) => mapStoredAccount(row));
+  if (isMissingColumnError(error, "account_type")) {
+    return "Your Supabase schema is missing `demanddev_outreach_accounts.account_type`. Apply supabase/migrations/20260211152000_outreach_split_accounts.sql, then redeploy.";
+  }
+
+  if (isMissingColumnError(error, "mailbox_account_id")) {
+    return "Your Supabase schema is missing `demanddev_brand_outreach_assignments.mailbox_account_id`. Apply supabase/migrations/20260211152000_outreach_split_accounts.sql, then redeploy.";
+  }
+
+  return dbg.hint || "Supabase write failed. Check Supabase migrations and service-role permissions.";
+}
+
+export async function listOutreachAccounts(): Promise<OutreachAccount[]> {
+  const supabase = getSupabaseAdmin();
+  if (!supabase) {
+    if (isVercel) {
+      throw new OutreachDataError("Supabase is not configured for outreach storage.", {
+        status: 500,
+        hint: "Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY in Vercel environment variables, then redeploy.",
+        debug: {
+          operation: "listOutreachAccounts",
+          runtime: runtimeLabel(),
+          supabaseConfigured: supabaseConfigured(),
+        },
+      });
+    }
+
+    const store = await readLocalStore();
+    return store.accounts.map((row) => mapStoredAccount(row));
+  }
+
+  const { data, error } = await supabase
+    .from(TABLE_ACCOUNT)
+    .select("*")
+    .order("updated_at", { ascending: false });
+
+  if (error) {
+    if (isVercel) {
+      throw new OutreachDataError("Failed to load outreach accounts from Supabase.", {
+        status: 500,
+        hint: hintForSupabaseWriteError(error),
+        debug: {
+          operation: "listOutreachAccounts",
+          runtime: runtimeLabel(),
+          supabaseConfigured: supabaseConfigured(),
+          supabaseError: supabaseErrorDebug(error),
+        },
+      });
+    }
+
+    const store = await readLocalStore();
+    return store.accounts.map((row) => mapStoredAccount(row));
+  }
+
+  return (data ?? []).map((row: unknown) => mapStoredAccount(mapAccountRowFromDb(row)));
 }
 
 export async function getOutreachAccount(accountId: string): Promise<OutreachAccount | null> {
   const supabase = getSupabaseAdmin();
+  if (!supabase) {
+    if (isVercel) {
+      throw new OutreachDataError("Supabase is not configured for outreach storage.", {
+        status: 500,
+        hint: "Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY in Vercel environment variables, then redeploy.",
+        debug: {
+          operation: "getOutreachAccount",
+          runtime: runtimeLabel(),
+          supabaseConfigured: supabaseConfigured(),
+        },
+      });
+    }
+
+    const store = await readLocalStore();
+    const hit = store.accounts.find((row) => row.id === accountId);
+    return hit ? mapStoredAccount(hit) : null;
+  }
+
   if (supabase) {
     const { data, error } = await supabase
       .from(TABLE_ACCOUNT)
       .select("*")
       .eq("id", accountId)
       .maybeSingle();
-    if (!error && data) {
-      return mapStoredAccount(mapAccountRowFromDb(data));
+    if (error) {
+      if (isVercel) {
+        throw new OutreachDataError("Failed to load outreach account from Supabase.", {
+          status: 500,
+          hint: hintForSupabaseWriteError(error),
+          debug: {
+            operation: "getOutreachAccount",
+            runtime: runtimeLabel(),
+            supabaseConfigured: supabaseConfigured(),
+            accountId,
+            supabaseError: supabaseErrorDebug(error),
+          },
+        });
+      }
+      return null;
     }
+
+    if (data) return mapStoredAccount(mapAccountRowFromDb(data));
   }
+
+  if (isVercel) return null;
 
   const store = await readLocalStore();
   const hit = store.accounts.find((row) => row.id === accountId);
@@ -611,19 +746,57 @@ export async function getOutreachAccount(accountId: string): Promise<OutreachAcc
 
 export async function getOutreachAccountSecrets(accountId: string): Promise<OutreachAccountSecrets | null> {
   const supabase = getSupabaseAdmin();
+  if (!supabase) {
+    if (isVercel) {
+      throw new OutreachDataError("Supabase is not configured for outreach storage.", {
+        status: 500,
+        hint: "Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY in Vercel environment variables, then redeploy.",
+        debug: {
+          operation: "getOutreachAccountSecrets",
+          runtime: runtimeLabel(),
+          supabaseConfigured: supabaseConfigured(),
+          accountId,
+        },
+      });
+    }
+
+    const store = await readLocalStore();
+    const hit = store.accounts.find((row) => row.id === accountId);
+    if (!hit) return null;
+    return decryptJson<OutreachAccountSecrets>(hit.credentialsEncrypted, defaultSecrets());
+  }
+
   if (supabase) {
     const { data, error } = await supabase
       .from(TABLE_ACCOUNT)
       .select("id, credentials_encrypted")
       .eq("id", accountId)
       .maybeSingle();
-    if (!error && data) {
+    if (error) {
+      if (isVercel) {
+        throw new OutreachDataError("Failed to load outreach account credentials from Supabase.", {
+          status: 500,
+          hint: hintForSupabaseWriteError(error),
+          debug: {
+            operation: "getOutreachAccountSecrets",
+            runtime: runtimeLabel(),
+            supabaseConfigured: supabaseConfigured(),
+            accountId,
+            supabaseError: supabaseErrorDebug(error),
+          },
+        });
+      }
+      return null;
+    }
+    if (data) {
       return decryptJson<OutreachAccountSecrets>(
         String((data as Record<string, unknown>).credentials_encrypted ?? ""),
         defaultSecrets()
       );
     }
   }
+
+  if (isVercel) return null;
 
   const store = await readLocalStore();
   const hit = store.accounts.find((row) => row.id === accountId);
@@ -651,24 +824,69 @@ export async function createOutreachAccount(input: {
   });
 
   const supabase = getSupabaseAdmin();
+  if (!supabase) {
+    if (isVercel) {
+      throw new OutreachDataError("Supabase is not configured for outreach storage.", {
+        status: 500,
+        hint: "Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY in Vercel environment variables, then redeploy.",
+        debug: {
+          operation: "createOutreachAccount",
+          runtime: runtimeLabel(),
+          supabaseConfigured: supabaseConfigured(),
+        },
+      });
+    }
+
+    const store = await readLocalStore();
+    store.accounts.unshift(stored);
+    await writeLocalStore(store);
+    return mapStoredAccount(stored);
+  }
+
   if (supabase) {
-    const { data, error } = await supabase
+    const baseInsert = {
+      id: stored.id,
+      name: stored.name,
+      provider: stored.provider,
+      status: stored.status,
+      config: stored.config,
+      credentials_encrypted: stored.credentialsEncrypted,
+      last_test_at: null,
+      last_test_status: stored.lastTestStatus,
+    } satisfies Record<string, unknown>;
+
+    const insertWithType = {
+      ...baseInsert,
+      account_type: stored.accountType,
+    };
+
+    let { data, error } = await supabase
       .from(TABLE_ACCOUNT)
-      .insert({
-        id: stored.id,
-        name: stored.name,
-        provider: stored.provider,
-        account_type: stored.accountType,
-        status: stored.status,
-        config: stored.config,
-        credentials_encrypted: stored.credentialsEncrypted,
-        last_test_at: null,
-        last_test_status: stored.lastTestStatus,
-      })
+      .insert(insertWithType)
       .select("*")
       .single();
+
+    if (error && isMissingColumnError(error, "account_type")) {
+      // Backward compatible insert when the account_type migration hasn't been applied yet.
+      ({ data, error } = await supabase.from(TABLE_ACCOUNT).insert(baseInsert).select("*").single());
+    }
+
     if (!error && data) {
       return mapStoredAccount(mapAccountRowFromDb(data));
+    }
+
+    if (error && isVercel) {
+      throw new OutreachDataError("Failed to save outreach account to Supabase.", {
+        status: 500,
+        hint: hintForSupabaseWriteError(error),
+        debug: {
+          operation: "createOutreachAccount",
+          runtime: runtimeLabel(),
+          supabaseConfigured: supabaseConfigured(),
+          accountId: stored.id,
+          supabaseError: supabaseErrorDebug(error),
+        },
+      });
     }
   }
 
@@ -728,17 +946,45 @@ export async function updateOutreachAccount(
     if (patch.lastTestAt !== undefined) update.last_test_at = patch.lastTestAt || null;
     if (patch.lastTestStatus) update.last_test_status = patch.lastTestStatus;
 
-    const { data, error } = await supabase
+    let { data, error } = await supabase
       .from(TABLE_ACCOUNT)
       .update(update)
       .eq("id", accountId)
       .select("*")
       .maybeSingle();
 
+    if (error && isMissingColumnError(error, "account_type")) {
+      // Backward compatible update when the account_type migration hasn't been applied yet.
+      const withoutType = { ...update };
+      delete withoutType.account_type;
+      ({ data, error } = await supabase
+        .from(TABLE_ACCOUNT)
+        .update(withoutType)
+        .eq("id", accountId)
+        .select("*")
+        .maybeSingle());
+    }
+
     if (!error && data) {
       return mapStoredAccount(mapAccountRowFromDb(data));
     }
+
+    if (error && isVercel) {
+      throw new OutreachDataError("Failed to update outreach account in Supabase.", {
+        status: 500,
+        hint: hintForSupabaseWriteError(error),
+        debug: {
+          operation: "updateOutreachAccount",
+          runtime: runtimeLabel(),
+          supabaseConfigured: supabaseConfigured(),
+          accountId,
+          supabaseError: supabaseErrorDebug(error),
+        },
+      });
+    }
   }
+
+  if (isVercel) return null;
 
   const store = await readLocalStore();
   const idx = store.accounts.findIndex((row) => row.id === accountId);
@@ -763,13 +1009,46 @@ export async function updateOutreachAccount(
 export async function deleteOutreachAccount(accountId: string): Promise<boolean> {
   const supabase = getSupabaseAdmin();
   if (supabase) {
-    await supabase.from(TABLE_ASSIGNMENT).update({ mailbox_account_id: null }).eq("mailbox_account_id", accountId);
+    const mailboxClear = await supabase
+      .from(TABLE_ASSIGNMENT)
+      .update({ mailbox_account_id: null })
+      .eq("mailbox_account_id", accountId);
+    if (mailboxClear.error && isVercel && !isMissingColumnError(mailboxClear.error, "mailbox_account_id")) {
+      throw new OutreachDataError("Failed to clear mailbox assignment in Supabase.", {
+        status: 500,
+        hint: hintForSupabaseWriteError(mailboxClear.error),
+        debug: {
+          operation: "deleteOutreachAccount:clearMailbox",
+          runtime: runtimeLabel(),
+          supabaseConfigured: supabaseConfigured(),
+          accountId,
+          supabaseError: supabaseErrorDebug(mailboxClear.error),
+        },
+      });
+    }
+
     await supabase.from(TABLE_ASSIGNMENT).delete().eq("account_id", accountId);
     const { error } = await supabase.from(TABLE_ACCOUNT).delete().eq("id", accountId);
     if (!error) {
       return true;
     }
+
+    if (error && isVercel) {
+      throw new OutreachDataError("Failed to delete outreach account in Supabase.", {
+        status: 500,
+        hint: hintForSupabaseWriteError(error),
+        debug: {
+          operation: "deleteOutreachAccount",
+          runtime: runtimeLabel(),
+          supabaseConfigured: supabaseConfigured(),
+          accountId,
+          supabaseError: supabaseErrorDebug(error),
+        },
+      });
+    }
   }
+
+  if (isVercel) return false;
 
   const store = await readLocalStore();
   const before = store.accounts.length;
@@ -793,6 +1072,24 @@ export async function getBrandOutreachAssignment(
   brandId: string
 ): Promise<BrandOutreachAssignment | null> {
   const supabase = getSupabaseAdmin();
+  if (!supabase) {
+    if (isVercel) {
+      throw new OutreachDataError("Supabase is not configured for outreach storage.", {
+        status: 500,
+        hint: "Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY in Vercel environment variables, then redeploy.",
+        debug: {
+          operation: "getBrandOutreachAssignment",
+          runtime: runtimeLabel(),
+          supabaseConfigured: supabaseConfigured(),
+          brandId,
+        },
+      });
+    }
+
+    const store = await readLocalStore();
+    return store.assignments.find((row) => row.brandId === brandId) ?? null;
+  }
+
   if (supabase) {
     const { data, error } = await supabase
       .from(TABLE_ASSIGNMENT)
@@ -812,6 +1109,8 @@ export async function getBrandOutreachAssignment(
     }
   }
 
+  if (isVercel) return null;
+
   const store = await readLocalStore();
   return store.assignments.find((row) => row.brandId === brandId) ?? null;
 }
@@ -825,6 +1124,18 @@ export async function setBrandOutreachAssignment(
 
   if (!accountId.trim()) {
     const supabaseDelete = getSupabaseAdmin();
+    if (!supabaseDelete && isVercel) {
+      throw new OutreachDataError("Supabase is not configured for outreach storage.", {
+        status: 500,
+        hint: "Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY in Vercel environment variables, then redeploy.",
+        debug: {
+          operation: "setBrandOutreachAssignment:delete",
+          runtime: runtimeLabel(),
+          supabaseConfigured: supabaseConfigured(),
+          brandId,
+        },
+      });
+    }
     if (supabaseDelete) {
       await supabaseDelete.from(TABLE_ASSIGNMENT).delete().eq("brand_id", brandId);
       return null;
@@ -852,19 +1163,59 @@ export async function setBrandOutreachAssignment(
   };
 
   const supabase = getSupabaseAdmin();
+  if (!supabase && isVercel) {
+    throw new OutreachDataError("Supabase is not configured for outreach storage.", {
+      status: 500,
+      hint: "Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY in Vercel environment variables, then redeploy.",
+      debug: {
+        operation: "setBrandOutreachAssignment",
+        runtime: runtimeLabel(),
+        supabaseConfigured: supabaseConfigured(),
+        brandId,
+      },
+    });
+  }
   if (supabase) {
-    const { data, error } = await supabase
+    const baseUpsert = {
+      brand_id: brandId,
+      account_id: accountId,
+    } satisfies Record<string, unknown>;
+
+    const upsertWithMailbox = {
+      ...baseUpsert,
+      mailbox_account_id: mailboxAccountId || null,
+    };
+
+    let { data, error } = await supabase
       .from(TABLE_ASSIGNMENT)
-      .upsert(
-        {
-          brand_id: brandId,
-          account_id: accountId,
-          mailbox_account_id: mailboxAccountId || null,
-        },
-        { onConflict: "brand_id" }
-      )
+      .upsert(upsertWithMailbox, { onConflict: "brand_id" })
       .select("*")
       .single();
+
+    if (error && isMissingColumnError(error, "mailbox_account_id")) {
+      if (mailboxAccountId) {
+        throw new OutreachDataError("Reply mailbox assignment requires a database migration.", {
+          status: 500,
+          hint: hintForSupabaseWriteError(error),
+          debug: {
+            operation: "setBrandOutreachAssignment",
+            runtime: runtimeLabel(),
+            supabaseConfigured: supabaseConfigured(),
+            brandId,
+            accountId,
+            mailboxAccountId,
+            supabaseError: supabaseErrorDebug(error),
+          },
+        });
+      }
+
+      ({ data, error } = await supabase
+        .from(TABLE_ASSIGNMENT)
+        .upsert(baseUpsert, { onConflict: "brand_id" })
+        .select("*")
+        .single());
+    }
+
     if (!error && data) {
       const row = asRecord(data);
       return {
@@ -875,7 +1226,25 @@ export async function setBrandOutreachAssignment(
         updatedAt: String(row.updated_at ?? now),
       };
     }
+
+    if (error && isVercel) {
+      throw new OutreachDataError("Failed to save brand outreach assignment in Supabase.", {
+        status: 500,
+        hint: hintForSupabaseWriteError(error),
+        debug: {
+          operation: "setBrandOutreachAssignment",
+          runtime: runtimeLabel(),
+          supabaseConfigured: supabaseConfigured(),
+          brandId,
+          accountId,
+          mailboxAccountId,
+          supabaseError: supabaseErrorDebug(error),
+        },
+      });
+    }
   }
+
+  if (isVercel) return null;
 
   const store = await readLocalStore();
   const existingIndex = store.assignments.findIndex((row) => row.brandId === brandId);

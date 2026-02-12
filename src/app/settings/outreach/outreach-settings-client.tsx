@@ -117,12 +117,23 @@ type AccountListCardProps = {
   title: string;
   description: string;
   emptyMessage: string;
+  testScope: "full" | "customerio" | "mailbox";
   accounts: OutreachAccount[];
   setAccounts: Dispatch<SetStateAction<OutreachAccount[]>>;
   setError: Dispatch<SetStateAction<string>>;
 };
 
-function AccountListCard({ title, description, emptyMessage, accounts, setAccounts, setError }: AccountListCardProps) {
+function AccountListCard({
+  title,
+  description,
+  emptyMessage,
+  testScope,
+  accounts,
+  setAccounts,
+  setError,
+}: AccountListCardProps) {
+  const testLabel =
+    testScope === "customerio" ? "Test Customer.io" : testScope === "mailbox" ? "Test Email" : "Test";
   return (
     <Card>
       <CardHeader>
@@ -149,15 +160,24 @@ function AccountListCard({ title, description, emptyMessage, accounts, setAccoun
                   onClick={async () => {
                     setError("");
                     try {
-                      const result = await testOutreachAccount(account.id);
+                      const result = await testOutreachAccount(account.id, testScope);
                       trackEvent("outreach_account_tested", {
                         accountId: account.id,
                         ok: result.ok,
+                        scope: result.scope,
                       });
                       if (!result.ok) {
-                        setError(
-                          `Test failed for ${account.name}: customer.io=${result.checks.customerIo}, lead sourcing=${result.checks.apify}, mailbox=${result.checks.mailbox}. ${result.message}`
-                        );
+                        if (result.scope === "customerio") {
+                          setError(
+                            `Customer.io test failed for ${account.name}: ${result.message}`
+                          );
+                        } else if (result.scope === "mailbox") {
+                          setError(`Mailbox test failed for ${account.name}: ${result.message}`);
+                        } else {
+                          setError(
+                            `Test failed for ${account.name}: customer.io=${result.checks.customerIo}, lead sourcing=${result.checks.apify}, mailbox=${result.checks.mailbox}. ${result.message}`
+                          );
+                        }
                       }
                       const refreshed = await fetchOutreachAccounts();
                       setAccounts(refreshed);
@@ -165,8 +185,8 @@ function AccountListCard({ title, description, emptyMessage, accounts, setAccoun
                       setError(err instanceof Error ? err.message : "Account test failed");
                     }
                   }}
-                >
-                  Test
+                > 
+                  {testLabel}
                 </Button>
                 <Select
                   value={account.status}
@@ -638,6 +658,7 @@ export default function OutreachSettingsClient() {
         title="Customer.io Delivery Accounts"
         description="Delivery accounts used to orchestrate outbound sends."
         emptyMessage="No delivery accounts yet."
+        testScope="customerio"
         accounts={deliveryAccounts}
         setAccounts={setAccounts}
         setError={setError}
@@ -647,6 +668,7 @@ export default function OutreachSettingsClient() {
         title="Email Reply Accounts"
         description="Mailbox accounts used for reply sync and human-approved replies."
         emptyMessage="No email accounts yet."
+        testScope="mailbox"
         accounts={mailboxAccounts}
         setAccounts={setAccounts}
         setError={setError}

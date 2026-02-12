@@ -215,13 +215,17 @@ export async function updateOutreachAccountApi(
   return data.account as OutreachAccount;
 }
 
-export async function testOutreachAccount(accountId: string) {
-  const response = await fetch(`/api/outreach/accounts/${accountId}/test`, {
+export async function testOutreachAccount(
+  accountId: string,
+  scope: "full" | "customerio" | "mailbox" = "full"
+) {
+  const response = await fetch(`/api/outreach/accounts/${accountId}/test?scope=${encodeURIComponent(scope)}`, {
     method: "POST",
   });
   const data = await readJson(response);
   return data.result as {
     ok: boolean;
+    scope: "full" | "customerio" | "mailbox";
     checks: {
       customerIo: "pass" | "fail";
       apify: "pass" | "fail";

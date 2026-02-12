@@ -3,6 +3,7 @@ import type { OutreachAccountSecrets } from "@/lib/outreach-data";
 
 export type ProviderTestResult = {
   ok: boolean;
+  scope: ProviderTestScope;
   checks: {
     customerIo: "pass" | "fail";
     apify: "pass" | "fail";
@@ -10,6 +11,8 @@ export type ProviderTestResult = {
   };
   message: string;
 };
+
+export type ProviderTestScope = "full" | "customerio" | "mailbox";
 
 export type ApifyLead = {
   email: string;
@@ -66,26 +69,50 @@ function normalizeApifyLead(raw: unknown): ApifyLead | null {
 
 export async function testOutreachProviders(
   account: OutreachAccount,
-  secrets: OutreachAccountSecrets
+  secrets: OutreachAccountSecrets,
+  scope: ProviderTestScope = "full"
 ): Promise<ProviderTestResult> {
   const requiresDelivery = account.accountType !== "mailbox";
   const requiresMailbox = account.accountType !== "delivery";
-  const customerIoPass = requiresDelivery
+  const shouldTestCustomerIo = scope === "full" || scope === "customerio";
+  const shouldTestMailbox = scope === "full" || scope === "mailbox";
+  const shouldTestSourcing = scope === "full";
+
+  const rawCustomerIoPass = requiresDelivery
     ? Boolean(account.config.customerIo.siteId && account.config.customerIo.workspaceId && customerIoApiKey(secrets))
     : true;
-  const apifyPass = requiresDelivery ? Boolean(sourcingToken(secrets)) : true;
-  const mailboxPass = requiresMailbox
+
+  const rawSourcingPass = requiresDelivery ? Boolean(sourcingToken(secrets)) : true;
+  const rawMailboxPass = requiresMailbox
     ? Boolean(account.config.mailbox.email && (secrets.mailboxAccessToken || secrets.mailboxPassword))
     : true;
 
+  const customerIoPass = shouldTestCustomerIo ? rawCustomerIoPass : true;
+  const apifyPass = shouldTestSourcing ? rawSourcingPass : true;
+  const mailboxPass = shouldTestMailbox ? rawMailboxPass : true;
+
+  const message =
+    scope === "customerio"
+      ? customerIoPass
+        ? "Customer.io check passed"
+        : "Customer.io check failed"
+      : scope === "mailbox"
+        ? mailboxPass
+          ? "Mailbox check passed"
+          : "Mailbox check failed"
+        : customerIoPass && apifyPass && mailboxPass
+          ? "All checks passed"
+          : "One or more checks failed";
+
   return {
     ok: customerIoPass && apifyPass && mailboxPass,
+    scope,
     checks: {
-      customerIo: customerIoPass ? "pass" : "fail",
-      apify: apifyPass ? "pass" : "fail",
-      mailbox: mailboxPass ? "pass" : "fail",
+      customerIo: rawCustomerIoPass ? "pass" : "fail",
+      apify: rawSourcingPass ? "pass" : "fail",
+      mailbox: rawMailboxPass ? "pass" : "fail",
     },
-    message: customerIoPass && apifyPass && mailboxPass ? "All checks passed" : "One or more checks failed",
+    message,
   };
 }
 

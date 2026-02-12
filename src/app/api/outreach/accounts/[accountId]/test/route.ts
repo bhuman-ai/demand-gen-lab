@@ -5,10 +5,10 @@ import {
   getOutreachAccountSecrets,
   updateOutreachAccount,
 } from "@/lib/outreach-data";
-import { testOutreachProviders } from "@/lib/outreach-providers";
+import { testOutreachProviders, type ProviderTestScope } from "@/lib/outreach-providers";
 
 export async function POST(
-  _: Request,
+  request: Request,
   context: { params: Promise<{ accountId: string }> }
 ) {
   const { accountId } = await context.params;
@@ -39,7 +39,12 @@ export async function POST(
     );
   }
 
-  const result = await testOutreachProviders(account, secrets);
+  const url = new URL(request.url);
+  const scopeParam = String(url.searchParams.get("scope") ?? "").trim();
+  const scope: ProviderTestScope =
+    scopeParam === "customerio" || scopeParam === "mailbox" ? scopeParam : "full";
+
+  const result = await testOutreachProviders(account, secrets, scope);
   const now = new Date().toISOString();
 
   await updateOutreachAccount(accountId, {

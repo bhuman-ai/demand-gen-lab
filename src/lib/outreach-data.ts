@@ -632,6 +632,9 @@ function hintForSupabaseWriteError(error: unknown) {
   const msg = dbg.message.toLowerCase();
 
   if (msg.includes("relation") && msg.includes("does not exist")) {
+    if (msg.includes("demanddev_outreach_accounts")) {
+      return "Outreach tables are missing. In Supabase SQL Editor, run supabase/migrations/20260211103000_outreach_autopilot.sql and supabase/migrations/20260211152000_outreach_split_accounts.sql.";
+    }
     return "Supabase tables are missing. Apply migrations in supabase/migrations to your Supabase project, then redeploy.";
   }
 

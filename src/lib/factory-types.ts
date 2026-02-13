@@ -135,6 +135,8 @@ export type OutreachAccountConfig = {
   customerIo: {
     siteId: string;
     workspaceId: string;
+    fromEmail: string;
+    replyToEmail: string;
   };
   apify: {
     defaultActorId: string;

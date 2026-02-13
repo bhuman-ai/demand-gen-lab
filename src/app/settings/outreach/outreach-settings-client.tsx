@@ -28,8 +28,9 @@ type AssignmentMap = Record<string, AssignmentChoice>;
 type DeliveryFormState = {
   name: string;
   siteId: string;
-  workspaceId: string;
   customerIoApiKey: string;
+  fromEmail: string;
+  replyToEmail: string;
 };
 
 type MailboxFormState = {
@@ -47,8 +48,9 @@ type MailboxFormState = {
 const INITIAL_DELIVERY_FORM: DeliveryFormState = {
   name: "",
   siteId: "",
-  workspaceId: "",
   customerIoApiKey: "",
+  fromEmail: "",
+  replyToEmail: "",
 };
 
 const INITIAL_MAILBOX_FORM: MailboxFormState = {
@@ -150,7 +152,17 @@ function AccountListCard({
               <div>
                 <div className="text-sm font-semibold">{account.name}</div>
                 <div className="text-xs text-[color:var(--muted-foreground)]">
-                  Type: {account.accountType} · Provider: {account.provider} · Mailbox: {account.config.mailbox.email || "not set"}
+                  Type: {account.accountType} · Provider: {account.provider}
+                  {account.accountType !== "mailbox" ? (
+                    <>
+                      {" "}
+                      · From: {account.config.customerIo.fromEmail || "not set"} · Reply-To:{" "}
+                      {account.config.customerIo.replyToEmail || "not set"}
+                    </>
+                  ) : null}
+                  {account.accountType !== "delivery" ? (
+                    <> · Inbox: {account.config.mailbox.email || "not set"}</>
+                  ) : null}
                 </div>
               </div>
               <div className="flex flex-wrap items-center gap-2">
@@ -288,11 +300,12 @@ export default function OutreachSettingsClient() {
     const required = [
       deliveryForm.name.trim(),
       deliveryForm.siteId.trim(),
-      deliveryForm.workspaceId.trim(),
       deliveryForm.customerIoApiKey.trim(),
+      deliveryForm.fromEmail.trim(),
+      deliveryForm.replyToEmail.trim(),
     ];
     if (required.some((value) => !value)) {
-      setError("Delivery account requires name, Customer.io Site ID, Workspace, and API Key.");
+      setError("Delivery account requires name, Customer.io Site ID, API Key, From Email, and Reply-To Email.");
       return;
     }
 
@@ -306,7 +319,9 @@ export default function OutreachSettingsClient() {
         config: {
           customerIo: {
             siteId: deliveryForm.siteId,
-            workspaceId: deliveryForm.workspaceId,
+            workspaceId: "",
+            fromEmail: deliveryForm.fromEmail,
+            replyToEmail: deliveryForm.replyToEmail,
           },
           apify: {
             defaultActorId: "",
@@ -366,6 +381,8 @@ export default function OutreachSettingsClient() {
           customerIo: {
             siteId: "",
             workspaceId: "",
+            fromEmail: "",
+            replyToEmail: "",
           },
           apify: {
             defaultActorId: "",
@@ -472,7 +489,7 @@ export default function OutreachSettingsClient() {
             <FieldLabel
               htmlFor="delivery-site-id"
               label="Customer.io Site ID"
-              help="Found in Customer.io Settings > API Credentials."
+              help="Found in Customer.io Settings > API Credentials > Track API Keys."
             />
             <Input
               id="delivery-site-id"
@@ -484,23 +501,9 @@ export default function OutreachSettingsClient() {
           </div>
           <div className="grid gap-2">
             <FieldLabel
-              htmlFor="delivery-workspace"
-              label="Customer.io Workspace"
-              help="Workspace identifier from Customer.io workspace settings or URL."
-            />
-            <Input
-              id="delivery-workspace"
-              value={deliveryForm.workspaceId}
-              onChange={(event) =>
-                setDeliveryForm((prev) => ({ ...prev, workspaceId: event.target.value }))
-              }
-            />
-          </div>
-          <div className="grid gap-2">
-            <FieldLabel
               htmlFor="delivery-api-key"
               label="Customer.io API Key"
-              help="Create an API key in Customer.io Settings > API Credentials."
+              help="Create an API key in Customer.io Settings > API Credentials > Track API Keys."
             />
             <Input
               id="delivery-api-key"
@@ -509,6 +512,32 @@ export default function OutreachSettingsClient() {
               onChange={(event) =>
                 setDeliveryForm((prev) => ({ ...prev, customerIoApiKey: event.target.value }))
               }
+            />
+          </div>
+          <div className="grid gap-2">
+            <FieldLabel
+              htmlFor="delivery-from-email"
+              label="From Email"
+              help="Sender address recipients will see (From header). Must be on a verified sending domain in Customer.io (Email > Sending domains). Example: zeynep@bhumanai.com."
+            />
+            <Input
+              id="delivery-from-email"
+              value={deliveryForm.fromEmail}
+              onChange={(event) => setDeliveryForm((prev) => ({ ...prev, fromEmail: event.target.value }))}
+              placeholder="zeynep@bhumanai.com"
+            />
+          </div>
+          <div className="grid gap-2">
+            <FieldLabel
+              htmlFor="delivery-reply-to-email"
+              label="Reply-To Email"
+              help="Replies will go to this address (Reply-To header). Set this to the mailbox you connect below. Example: zeynep@bhuman.ai."
+            />
+            <Input
+              id="delivery-reply-to-email"
+              value={deliveryForm.replyToEmail}
+              onChange={(event) => setDeliveryForm((prev) => ({ ...prev, replyToEmail: event.target.value }))}
+              placeholder="zeynep@bhuman.ai"
             />
           </div>
           <div className="md:col-span-2 flex justify-end">

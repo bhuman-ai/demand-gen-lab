@@ -153,7 +153,8 @@ function defaultOutreachStore(): OutreachStore {
 }
 
 function deriveAccountType(config: OutreachAccountConfig): OutreachAccount["accountType"] {
-  const hasDelivery = Boolean(config.customerIo.siteId.trim() && config.customerIo.workspaceId.trim());
+  // Workspace is optional; presence of a site id indicates delivery capability.
+  const hasDelivery = Boolean(config.customerIo.siteId.trim());
   const hasMailbox = Boolean(config.mailbox.email.trim() && config.mailbox.host.trim());
   if (hasDelivery && hasMailbox) return "hybrid";
   if (hasDelivery) return "delivery";
@@ -171,6 +172,8 @@ function sanitizeAccountConfig(value: unknown): OutreachAccountConfig {
     customerIo: {
       siteId: String(customerIo.siteId ?? "").trim(),
       workspaceId: String(customerIo.workspaceId ?? "").trim(),
+      fromEmail: String(customerIo.fromEmail ?? customerIo.from_email ?? "").trim(),
+      replyToEmail: String(customerIo.replyToEmail ?? customerIo.reply_to_email ?? customerIo.replyTo ?? "").trim(),
     },
     apify: {
       defaultActorId: String(apify.defaultActorId ?? "").trim(),

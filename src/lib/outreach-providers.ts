@@ -23,6 +23,16 @@ export type ApifyLead = {
   sourceUrl: string;
 };
 
+function customerIoTrackBaseUrl() {
+  const explicit = String(process.env.CUSTOMER_IO_TRACK_BASE_URL ?? "").trim();
+  if (explicit) return explicit.replace(/\/+$/, "");
+
+  const region = String(process.env.CUSTOMER_IO_REGION ?? "").trim().toLowerCase();
+  if (region === "eu") return "https://track-eu.customer.io";
+
+  return "https://track.customer.io";
+}
+
 function maybeDomain(email: string, fallback: string) {
   const parts = email.split("@");
   if (parts.length === 2) return parts[1].toLowerCase();
@@ -35,6 +45,57 @@ function customerIoApiKey(secrets: OutreachAccountSecrets) {
     secrets.customerIoTrackApiKey.trim() ||
     secrets.customerIoAppApiKey.trim()
   );
+}
+
+async function testCustomerIoTrackCredentials(input: {
+  siteId: string;
+  apiKey: string;
+}): Promise<{ ok: boolean; error: string; region: string }> {
+  if (process.env.CUSTOMER_IO_SIMULATE === "1") {
+    return { ok: true, error: "", region: "simulated" };
+  }
+
+  const siteId = input.siteId.trim();
+  const apiKey = input.apiKey.trim();
+  if (!siteId || !apiKey) {
+    return { ok: false, error: "Missing Customer.io Site ID or API key.", region: "" };
+  }
+
+  try {
+    const auth = Buffer.from(`${siteId}:${apiKey}`).toString("base64");
+    const response = await fetch(`${customerIoTrackBaseUrl()}/api/v1/accounts/region`, {
+      method: "GET",
+      headers: {
+        Authorization: `Basic ${auth}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      let body = "";
+      try {
+        body = (await response.text()).trim();
+      } catch {
+        body = "";
+      }
+      return {
+        ok: false,
+        error: `Customer.io auth failed (HTTP ${response.status}).${body ? ` ${body.slice(0, 160)}` : ""}`,
+        region: "",
+      };
+    }
+
+    const payload: unknown = await response.json().catch(() => ({}));
+    const row = payload && typeof payload === "object" && !Array.isArray(payload) ? (payload as Record<string, unknown>) : {};
+    const region = String(row.region ?? "").trim();
+    return { ok: true, error: "", region };
+  } catch (error) {
+    return {
+      ok: false,
+      error: error instanceof Error ? error.message : "Customer.io auth failed",
+      region: "",
+    };
+  }
 }
 
 function sourcingToken(secrets: OutreachAccountSecrets) {
@@ -78,8 +139,10 @@ export async function testOutreachProviders(
   const shouldTestMailbox = scope === "full" || scope === "mailbox";
   const shouldTestSourcing = scope === "full";
 
+  const fromEmail = account.config.customerIo.fromEmail.trim();
+  const replyToEmail = account.config.customerIo.replyToEmail.trim();
   const rawCustomerIoPass = requiresDelivery
-    ? Boolean(account.config.customerIo.siteId && account.config.customerIo.workspaceId && customerIoApiKey(secrets))
+    ? Boolean(account.config.customerIo.siteId && customerIoApiKey(secrets) && fromEmail && replyToEmail)
     : true;
 
   const rawSourcingPass = requiresDelivery ? Boolean(sourcingToken(secrets)) : true;
@@ -87,15 +150,43 @@ export async function testOutreachProviders(
     ? Boolean(account.config.mailbox.email && (secrets.mailboxAccessToken || secrets.mailboxPassword))
     : true;
 
-  const customerIoPass = shouldTestCustomerIo ? rawCustomerIoPass : true;
+  let customerIoPass = shouldTestCustomerIo ? rawCustomerIoPass : true;
+  let customerIoDetail = "";
+  if (requiresDelivery && shouldTestCustomerIo) {
+    if (!rawCustomerIoPass) {
+      const missing: string[] = [];
+      if (!account.config.customerIo.siteId.trim()) missing.push("Site ID");
+      if (!customerIoApiKey(secrets)) missing.push("API key");
+      if (!fromEmail) missing.push("From Email");
+      if (!replyToEmail) missing.push("Reply-To Email");
+      customerIoDetail = missing.length ? `Missing: ${missing.join(", ")}` : "Customer.io config missing";
+      customerIoPass = false;
+    } else {
+      const auth = await testCustomerIoTrackCredentials({
+        siteId: account.config.customerIo.siteId,
+        apiKey: customerIoApiKey(secrets),
+      });
+      customerIoPass = auth.ok;
+      if (!auth.ok) {
+        customerIoDetail = auth.error;
+      } else if (auth.region) {
+        customerIoDetail = `Region: ${auth.region}`;
+      }
+    }
+  }
+
   const apifyPass = shouldTestSourcing ? rawSourcingPass : true;
   const mailboxPass = shouldTestMailbox ? rawMailboxPass : true;
 
   const message =
     scope === "customerio"
       ? customerIoPass
-        ? "Customer.io check passed"
-        : "Customer.io check failed"
+        ? customerIoDetail
+          ? `Customer.io check passed. ${customerIoDetail}`
+          : "Customer.io check passed"
+        : customerIoDetail
+          ? `Customer.io check failed. ${customerIoDetail}`
+          : "Customer.io check failed"
       : scope === "mailbox"
         ? mailboxPass
           ? "Mailbox check passed"
@@ -182,16 +273,16 @@ export async function sendCustomerIoEvent(params: {
 
   if (!siteId || !apiKey) {
     return {
-      ok: true,
-      providerMessageId: `sim_${Date.now().toString(36)}`,
-      error: "",
+      ok: false,
+      providerMessageId: "",
+      error: "Customer.io Site ID/API key missing",
     };
   }
 
   try {
     const auth = Buffer.from(`${siteId}:${apiKey}`).toString("base64");
     const response = await fetch(
-      `https://track.customer.io/api/v1/customers/${encodeURIComponent(params.customerId)}/events`,
+      `${customerIoTrackBaseUrl()}/api/v1/customers/${encodeURIComponent(params.customerId)}/events`,
       {
         method: "POST",
         headers: {
@@ -206,10 +297,16 @@ export async function sendCustomerIoEvent(params: {
     );
 
     if (!response.ok) {
+      let detail = "";
+      try {
+        detail = (await response.text()).trim();
+      } catch {
+        detail = "";
+      }
       return {
         ok: false,
         providerMessageId: "",
-        error: `Customer.io HTTP ${response.status}`,
+        error: `Customer.io HTTP ${response.status}${detail ? `: ${detail.slice(0, 200)}` : ""}`,
       };
     }
 
@@ -274,12 +371,18 @@ export async function sendOutreachMessage(params: {
   runId: string;
   experimentId: string;
 }): Promise<{ ok: boolean; providerMessageId: string; error: string }> {
+  const fromEmail = params.account.config.customerIo.fromEmail.trim();
+  const replyToEmail = params.account.config.customerIo.replyToEmail.trim();
   return sendCustomerIoEvent({
     account: params.account,
     secrets: params.secrets,
     customerId: params.recipient,
     eventName: "factory_outreach_touch",
     data: {
+      // Reserved properties (Customer.io track) override campaign From/To/Reply-To.
+      recipient: params.recipient,
+      ...(fromEmail ? { from_address: fromEmail } : {}),
+      ...(replyToEmail ? { reply_to: replyToEmail } : {}),
       runId: params.runId,
       experimentId: params.experimentId,
       messageId: params.message.id,

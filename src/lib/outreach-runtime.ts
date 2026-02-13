@@ -124,13 +124,18 @@ function preflightReason(input: {
     return "Lead sourcing credentials are missing";
   }
   if (
-    !input.deliveryAccount.config.customerIo.siteId.trim() ||
-    !input.deliveryAccount.config.customerIo.workspaceId.trim()
+    !input.deliveryAccount.config.customerIo.siteId.trim()
   ) {
-    return "Customer.io site/workspace config is required";
+    return "Customer.io site config is required";
   }
   if (!effectiveCustomerIoApiKey(input.deliverySecrets)) {
     return "Customer.io API key missing";
+  }
+  if (!input.deliveryAccount.config.customerIo.fromEmail.trim()) {
+    return "Customer.io From Email is required";
+  }
+  if (!input.deliveryAccount.config.customerIo.replyToEmail.trim()) {
+    return "Customer.io Reply-To Email is required";
   }
   if (!supportsMailbox(input.mailboxAccount)) {
     return "Assigned mailbox account does not support mailbox reply handling";

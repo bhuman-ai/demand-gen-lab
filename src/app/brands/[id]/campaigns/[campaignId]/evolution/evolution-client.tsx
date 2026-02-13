@@ -176,8 +176,40 @@ export default function EvolutionClient({ brandId, campaignId }: { brandId: stri
 
         {!rows.length ? (
           <Card>
-            <CardContent className="py-8 text-sm text-[color:var(--muted-foreground)]">
-              No evolution snapshots yet. Add one when experiments begin producing outcomes.
+            <CardHeader>
+              <CardTitle className="text-base">Start Here</CardTitle>
+              <CardDescription>
+                Capture what worked, what failed, and what to do next. Add one snapshot per learning cycle.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="grid gap-3">
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="secondary"
+                  onClick={() =>
+                    setRows((prev) => [
+                      {
+                        id: makeId(),
+                        title: "Week 1 learnings",
+                        summary: "What did we learn? What should we change next week?",
+                        status: "observing",
+                      },
+                      ...prev,
+                    ])
+                  }
+                >
+                  <Plus className="h-4 w-4" />
+                  Add First Snapshot
+                </Button>
+                <Button asChild size="sm" variant="outline">
+                  <Link href={`/brands/${brandId}/campaigns/${campaignId}/experiments`}>Go to Experiments</Link>
+                </Button>
+              </div>
+              <div className="text-xs text-[color:var(--muted-foreground)]">
+                Tip: promote winners only after consistent positive replies and low anomaly rates.
+              </div>
             </CardContent>
           </Card>
         ) : null}
@@ -218,6 +250,11 @@ export default function EvolutionClient({ brandId, campaignId }: { brandId: stri
           {!runs.length ? (
             <div className="py-4 text-sm text-[color:var(--muted-foreground)]">
               No autopilot runs yet. Launch runs from experiments.
+              <div className="mt-2">
+                <Button asChild size="sm" variant="outline">
+                  <Link href={`/brands/${brandId}/campaigns/${campaignId}/experiments`}>Launch a Run</Link>
+                </Button>
+              </div>
             </div>
           ) : null}
         </CardContent>

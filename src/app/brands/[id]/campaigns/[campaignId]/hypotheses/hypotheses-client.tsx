@@ -58,6 +58,27 @@ export default function HypothesesClient({ brandId, campaignId }: { brandId: str
     return <div className="text-sm text-[color:var(--muted-foreground)]">Loading hypotheses...</div>;
   }
 
+  const hypothesisTemplates: Array<Pick<Hypothesis, "title" | "channel" | "rationale">> = [
+    {
+      title: "ICP pain: stop doing X manually",
+      channel: "Email",
+      rationale:
+        "If we target a single role at a narrow company type and lead with a specific pain, we should see higher reply quality and faster learning.",
+    },
+    {
+      title: "Offer test: the 10-minute teardown",
+      channel: "Email",
+      rationale:
+        "If we offer a short, concrete artifact (teardown/audit) with a low-friction CTA, we should increase positive replies without lowering lead quality.",
+    },
+    {
+      title: "Trigger-based: new hire or funding",
+      channel: "Email",
+      rationale:
+        "If we filter to prospects with an obvious trigger, we should improve relevance and reduce negative replies.",
+    },
+  ];
+
   const save = async (completeStep: boolean) => {
     setSaving(true);
     setError("");
@@ -107,6 +128,26 @@ export default function HypothesesClient({ brandId, campaignId }: { brandId: str
     }
   };
 
+  const addManual = (input?: Partial<Pick<Hypothesis, "title" | "channel" | "rationale">>) => {
+    setHypotheses((prev) => [
+      {
+        id: makeId(),
+        title: input?.title ?? "New hypothesis",
+        channel: input?.channel ?? "Email",
+        rationale: input?.rationale ?? "",
+        actorQuery: "",
+        sourceConfig: {
+          actorId: "",
+          actorInput: {},
+          maxLeads: 100,
+        },
+        seedInputs: [],
+        status: "draft",
+      },
+      ...prev,
+    ]);
+  };
+
   return (
     <div className="space-y-5">
       <Card>
@@ -122,25 +163,7 @@ export default function HypothesesClient({ brandId, campaignId }: { brandId: str
           <Button
             type="button"
             variant="outline"
-            onClick={() =>
-              setHypotheses((prev) => [
-                {
-                  id: makeId(),
-                  title: "New hypothesis",
-                  channel: "LinkedIn",
-                  rationale: "",
-                  actorQuery: "",
-                  sourceConfig: {
-                    actorId: "",
-                    actorInput: {},
-                    maxLeads: 100,
-                  },
-                  seedInputs: [],
-                  status: "draft",
-                },
-                ...prev,
-              ])
-            }
+            onClick={() => addManual()}
           >
             <Plus className="h-4 w-4" />
             Add Manual
@@ -251,8 +274,56 @@ export default function HypothesesClient({ brandId, campaignId }: { brandId: str
 
         {!hypotheses.length ? (
           <Card>
-            <CardContent className="py-8 text-sm text-[color:var(--muted-foreground)]">
-              No hypotheses yet. Generate ideas or add one manually.
+            <CardHeader>
+              <CardTitle className="text-base">Start Here</CardTitle>
+              <CardDescription>
+                You can generate from your objective, or start from a template and edit.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="grid gap-3">
+              {!campaign.objective.goal.trim() ? (
+                <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3 text-sm">
+                  Objective goal is empty. Hypothesis generation works best after you define a clear goal.
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    <Button asChild size="sm" variant="outline">
+                      <Link href={`/brands/${brandId}/campaigns/${campaignId}/objective`}>Go to Objective</Link>
+                    </Button>
+                    <Button size="sm" variant="secondary" type="button" onClick={generate} disabled={loading}>
+                      <Sparkles className="h-4 w-4" />
+                      {loading ? "Generating..." : "Generate Anyway"}
+                    </Button>
+                  </div>
+                </div>
+              ) : (
+                <div className="flex flex-wrap gap-2">
+                  <Button size="sm" variant="secondary" type="button" onClick={generate} disabled={loading}>
+                    <Sparkles className="h-4 w-4" />
+                    {loading ? "Generating..." : "Generate From Objective"}
+                  </Button>
+                  <Button size="sm" variant="outline" type="button" onClick={() => addManual()}>
+                    <Plus className="h-4 w-4" />
+                    Add Manual
+                  </Button>
+                </div>
+              )}
+
+              <div className="grid gap-2">
+                <div className="text-xs font-semibold text-[color:var(--muted-foreground)]">Templates</div>
+                <div className="flex flex-wrap gap-2">
+                  {hypothesisTemplates.map((template) => (
+                    <Button
+                      key={template.title}
+                      size="sm"
+                      variant="outline"
+                      type="button"
+                      title={template.rationale}
+                      onClick={() => addManual(template)}
+                    >
+                      {template.title}
+                    </Button>
+                  ))}
+                </div>
+              </div>
             </CardContent>
           </Card>
         ) : null}

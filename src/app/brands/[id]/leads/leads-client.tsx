@@ -75,6 +75,25 @@ export default function LeadsClient({ brand }: { brand: BrandRecord }) {
         </CardContent>
       </Card>
 
+      {!leads.length ? (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Start Here</CardTitle>
+            <CardDescription>
+              This table is your lightweight pipeline. Add leads manually, or run outreach to start conversations.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="flex flex-wrap gap-2">
+            <Button asChild size="sm" variant="outline">
+              <Link href={`/brands/${brand.id}/campaigns`}>Go to Campaigns</Link>
+            </Button>
+            <Button asChild size="sm" variant="outline">
+              <Link href="/settings/outreach">Outreach Settings</Link>
+            </Button>
+          </CardContent>
+        </Card>
+      ) : null}
+
       <Card>
         <CardHeader>
           <CardTitle className="text-base">Quick Add Lead</CardTitle>

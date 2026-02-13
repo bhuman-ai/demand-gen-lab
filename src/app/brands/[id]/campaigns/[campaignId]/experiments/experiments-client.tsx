@@ -144,6 +144,23 @@ export default function ExperimentsClient({ brandId, campaignId }: { brandId: st
     }
   };
 
+  const createBaselines = () => {
+    if (!hypotheses.length) {
+      setError("Add hypotheses before creating experiments.");
+      return;
+    }
+    const normalized = hypotheses.map((hypothesis) => ({
+      id: makeId(),
+      hypothesisId: hypothesis.id,
+      name: `Baseline: ${hypothesis.title}`.slice(0, 80),
+      status: "draft" as const,
+      notes: "",
+      runPolicy: defaultRunPolicy,
+      executionStatus: "idle" as const,
+    }));
+    setExperiments(normalized);
+  };
+
   return (
     <div className="space-y-5">
       <Card>
@@ -456,8 +473,42 @@ export default function ExperimentsClient({ brandId, campaignId }: { brandId: st
 
         {!experiments.length ? (
           <Card>
-            <CardContent className="py-8 text-sm text-[color:var(--muted-foreground)]">
-              No experiments yet. Generate variants from hypotheses.
+            <CardHeader>
+              <CardTitle className="text-base">Start Here</CardTitle>
+              <CardDescription>
+                Experiments turn hypotheses into runnable variants. Launch runs only after you have delivery and reply accounts configured.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="grid gap-3">
+              {!hypotheses.length ? (
+                <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3 text-sm">
+                  No hypotheses yet. Add or generate hypotheses first.
+                  <div className="mt-2">
+                    <Button asChild size="sm" variant="outline">
+                      <Link href={`/brands/${brandId}/campaigns/${campaignId}/hypotheses`}>Go to Hypotheses</Link>
+                    </Button>
+                  </div>
+                </div>
+              ) : (
+                <div className="flex flex-wrap gap-2">
+                  <Button size="sm" variant="secondary" type="button" onClick={generate} disabled={loading}>
+                    <Sparkles className="h-4 w-4" />
+                    {loading ? "Generating..." : "Generate Variants"}
+                  </Button>
+                  <Button size="sm" variant="outline" type="button" onClick={createBaselines}>
+                    Create Baselines
+                  </Button>
+                  <Button asChild size="sm" variant="outline">
+                    <Link href={`/brands/${brandId}`}>Check Brand Setup</Link>
+                  </Button>
+                  <Button asChild size="sm" variant="outline">
+                    <Link href="/settings/outreach">Outreach Settings</Link>
+                  </Button>
+                </div>
+              )}
+              <div className="text-xs text-[color:var(--muted-foreground)]">
+                Tip: start with one hypothesis, two variants, and conservative caps. Scale only after you see positive replies.
+              </div>
             </CardContent>
           </Card>
         ) : null}

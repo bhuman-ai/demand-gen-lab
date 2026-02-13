@@ -75,6 +75,25 @@ export default function NetworkClient({ brand }: { brand: BrandRecord }) {
         </CardContent>
       </Card>
 
+      {!domains.length ? (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Start Here</CardTitle>
+            <CardDescription>
+              Add the sending domains you care about and track warmup and reputation.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="flex flex-wrap gap-2">
+            <Button asChild size="sm" variant="outline">
+              <Link href="/settings/outreach">Outreach Settings</Link>
+            </Button>
+            <Button asChild size="sm" variant="outline">
+              <Link href={`/brands/${brand.id}/campaigns`}>Go to Campaigns</Link>
+            </Button>
+          </CardContent>
+        </Card>
+      ) : null}
+
       <Card>
         <CardHeader>
           <CardTitle className="text-base">Add Domain</CardTitle>

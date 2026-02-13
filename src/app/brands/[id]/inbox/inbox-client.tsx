@@ -61,6 +61,7 @@ export default function InboxClient({ brand }: { brand: BrandRecord }) {
 
   const openCount = threads.filter((item) => item.status !== "closed").length;
   const positiveCount = threads.filter((item) => item.sentiment === "positive").length;
+  const draftQueueCount = drafts.filter((item) => item.status === "draft").length;
 
   return (
     <div className="space-y-5">
@@ -84,7 +85,7 @@ export default function InboxClient({ brand }: { brand: BrandRecord }) {
           </div>
           <div>
             <div className="text-xs text-[color:var(--muted-foreground)]">Draft Queue</div>
-            <div className="text-lg font-semibold">{drafts.filter((item) => item.status === "draft").length}</div>
+            <div className="text-lg font-semibold">{draftQueueCount}</div>
           </div>
         </CardContent>
       </Card>
@@ -93,6 +94,25 @@ export default function InboxClient({ brand }: { brand: BrandRecord }) {
         <div className="text-sm text-[color:var(--muted-foreground)]">Loading inbox...</div>
       ) : null}
       {error ? <div className="text-sm text-[color:var(--danger)]">{error}</div> : null}
+
+      {!loading && !error && threads.length === 0 && draftQueueCount === 0 ? (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Nothing Here Yet</CardTitle>
+            <CardDescription>
+              Replies appear after you connect a reply mailbox and launch an outreach run.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="flex flex-wrap gap-2">
+            <Button asChild size="sm" variant="outline">
+              <Link href="/settings/outreach">Connect Reply Mailbox</Link>
+            </Button>
+            <Button asChild size="sm" variant="outline">
+              <Link href={`/brands/${brand.id}/campaigns`}>Launch a Campaign Run</Link>
+            </Button>
+          </CardContent>
+        </Card>
+      ) : null}
 
       <Card>
         <CardHeader>
@@ -136,7 +156,9 @@ export default function InboxClient({ brand }: { brand: BrandRecord }) {
             ))}
 
           {!drafts.filter((item) => item.status === "draft").length ? (
-            <div className="text-sm text-[color:var(--muted-foreground)]">No pending drafts.</div>
+            <div className="text-sm text-[color:var(--muted-foreground)]">
+              No pending drafts. When replies arrive, we will draft suggested responses here.
+            </div>
           ) : null}
         </CardContent>
       </Card>

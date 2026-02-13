@@ -19,13 +19,6 @@ import {
 import { trackEvent } from "@/lib/telemetry-client";
 import type { BrandRecord, CampaignRecord, ObjectiveData } from "@/lib/factory-types";
 
-type ObjectiveTemplate = {
-  label: string;
-  goal: string;
-  constraints: string;
-  scoring?: ObjectiveData["scoring"];
-};
-
 type ObjectiveSuggestion = {
   title: string;
   goal: string;
@@ -33,22 +26,6 @@ type ObjectiveSuggestion = {
   scoring: ObjectiveData["scoring"];
   rationale: string;
 };
-
-function normalizeWeights(scoring: ObjectiveData["scoring"]): ObjectiveData["scoring"] {
-  const conversionWeight = Number(scoring.conversionWeight ?? 0);
-  const qualityWeight = Number(scoring.qualityWeight ?? 0);
-  const replyWeight = Number(scoring.replyWeight ?? 0);
-  const sum = conversionWeight + qualityWeight + replyWeight;
-  if (!sum) {
-    return { conversionWeight: 0.6, qualityWeight: 0.2, replyWeight: 0.2 };
-  }
-  const round = (value: number) => Math.round(value * 100) / 100;
-  return {
-    conversionWeight: round(conversionWeight / sum),
-    qualityWeight: round(qualityWeight / sum),
-    replyWeight: round(replyWeight / sum),
-  };
-}
 
 export default function ObjectiveClient({ brandId, campaignId }: { brandId: string; campaignId: string }) {
   const router = useRouter();
@@ -101,8 +78,6 @@ export default function ObjectiveClient({ brandId, campaignId }: { brandId: stri
 
   useEffect(() => {
     if (!objective || !campaign) return;
-    const needsObjectiveHelp = !objective.goal.trim() || !objective.constraints.trim();
-    if (!needsObjectiveHelp) return;
     if (suggestionsLoadedOnce) return;
     void loadSuggestions();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -112,68 +87,7 @@ export default function ObjectiveClient({ brandId, campaignId }: { brandId: stri
     return <div className="text-sm text-[color:var(--muted-foreground)]">Loading objective...</div>;
   }
 
-  const needsObjectiveHelp = !objective.goal.trim() || !objective.constraints.trim();
-
   const brandName = brand?.name?.trim() || "your brand";
-  const templates: ObjectiveTemplate[] = [
-    {
-      label: "Book Demos",
-      goal: `Book 10 qualified demos in 14 days with ${brandName}'s ideal buyers.`,
-      constraints:
-        "Email only. Keep copy under 90 words. Target a single ICP (role + company type). Start conservative: 30 sends/day per mailbox, 6/hour, 8+ minutes between touches. Unsubscribe always on.",
-      scoring: { conversionWeight: 0.7, qualityWeight: 0.2, replyWeight: 0.1 },
-    },
-    {
-      label: "Validate Offer",
-      goal: `Validate that ${brandName} has a compelling offer by earning 20 replies and 3 intro calls in 10 days.`,
-      constraints:
-        "Email only. Keep one offer per message. Include a simple CTA (one question). Target 1-2 verticals max. Start conservative with caps; pause on complaints or bounces.",
-      scoring: { conversionWeight: 0.55, qualityWeight: 0.25, replyWeight: 0.2 },
-    },
-    {
-      label: "Max Replies",
-      goal: `Generate 25 positive replies from a single ICP in 7 days (as fast feedback for ${brandName}).`,
-      constraints:
-        "Email only. Short messages (50-80 words). Personalize first line. Avoid links on touch 1. Conservative sending caps. Stop sequence after any reply.",
-      scoring: { conversionWeight: 0.4, qualityWeight: 0.2, replyWeight: 0.4 },
-    },
-  ];
-
-  const goalSuggestions: Array<{ label: string; text: string }> = [
-    {
-      label: "Book demos",
-      text: `Book 10 qualified demos in 14 days with ${brandName}'s ideal buyers.`,
-    },
-    {
-      label: "Positive replies",
-      text: `Generate 20 positive replies from a single ICP in 7 days for ${brandName}.`,
-    },
-    {
-      label: "Validate PMF",
-      text: "Validate product-market fit by securing 3 intro calls and 15 replies in 10 days.",
-    },
-  ];
-
-  const constraintSuggestions: Array<{ label: string; text: string }> = [
-    {
-      label: "Conservative sending",
-      text: "Email only. Cap: 30 sends/day per mailbox, 6 sends/hour, 8+ minutes spacing. Unsubscribe always on.",
-    },
-    {
-      label: "Tight targeting",
-      text: "Targeting: 1 ICP (role + company size + industry). Exclude existing customers, unsubscribes, and previous bounces.",
-    },
-    {
-      label: "Message rules",
-      text: "Messaging: 50-90 words. One offer per email. One clear CTA. Stop after any reply.",
-    },
-  ];
-
-  const scoringPresets: Array<{ label: string; scoring: ObjectiveData["scoring"] }> = [
-    { label: "Pipeline", scoring: { conversionWeight: 0.7, qualityWeight: 0.2, replyWeight: 0.1 } },
-    { label: "Balanced", scoring: { conversionWeight: 0.6, qualityWeight: 0.2, replyWeight: 0.2 } },
-    { label: "Replies", scoring: { conversionWeight: 0.4, qualityWeight: 0.2, replyWeight: 0.4 } },
-  ];
 
   const save = async (markComplete: boolean) => {
     setSaving(true);
@@ -210,15 +124,28 @@ export default function ObjectiveClient({ brandId, campaignId }: { brandId: stri
           <CardTitle className="text-base">Objective Setup</CardTitle>
         </CardHeader>
         <CardContent className="grid gap-4">
-          {needsObjectiveHelp ? (
-            <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3">
-              <div className="flex flex-wrap items-start justify-between gap-2">
-                <div>
-                  <div className="text-sm font-semibold">Suggestions</div>
-                  <div className="mt-1 text-xs text-[color:var(--muted-foreground)]">
-                    Click an AI card to fill your objective, or use templates and presets. You can edit everything.
-                  </div>
+          <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3">
+            <div className="flex flex-wrap items-start justify-between gap-2">
+              <div>
+                <div className="text-sm font-semibold">AI Suggestions</div>
+                <div className="mt-1 text-xs text-[color:var(--muted-foreground)]">
+                  Click a card to fill your objective. You can edit everything below.
                 </div>
+              </div>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={loadSuggestions}
+                disabled={suggestionsLoading}
+              >
+                {suggestionsLoading ? "Generating..." : suggestions.length ? "Refresh AI" : "Generate AI"}
+              </Button>
+            </div>
+
+            {suggestionsError ? (
+              <div className="mt-2 flex flex-wrap items-center gap-2">
+                <div className="text-xs text-[color:var(--danger)]">{suggestionsError}</div>
                 <Button
                   type="button"
                   size="sm"
@@ -226,143 +153,54 @@ export default function ObjectiveClient({ brandId, campaignId }: { brandId: stri
                   onClick={loadSuggestions}
                   disabled={suggestionsLoading}
                 >
-                  {suggestionsLoading ? "Generating..." : suggestions.length ? "Refresh AI" : "Generate AI"}
+                  Retry
                 </Button>
               </div>
+            ) : null}
 
-              {suggestionsError ? (
-                <div className="mt-2 text-xs text-[color:var(--danger)]">{suggestionsError}</div>
-              ) : null}
-
-              {suggestionsLoading && !suggestions.length ? (
-                <div className="mt-3 text-xs text-[color:var(--muted-foreground)]">
-                  Generating tailored options for {brandName}...
-                </div>
-              ) : null}
-
-              {suggestions.length ? (
-                <div className="mt-3 grid gap-3 md:grid-cols-2">
-                  {suggestions.map((item) => (
-                    <button
-                      key={item.title}
-                      type="button"
-                      className="group rounded-xl border border-[color:var(--border)] bg-[color:var(--surface)] p-3 text-left shadow-sm transition hover:-translate-y-[1px] hover:shadow-md focus:outline-none focus:ring-2 focus:ring-[color:var(--accent)]/40"
-                      onClick={() =>
-                        setObjective({
-                          ...objective,
-                          goal: item.goal,
-                          constraints: item.constraints,
-                          scoring: item.scoring ?? objective.scoring,
-                        })
-                      }
-                    >
-                      <div className="text-sm font-semibold">{item.title}</div>
-                      {item.rationale ? (
-                        <div className="mt-1 text-xs text-[color:var(--muted-foreground)]">
-                          {item.rationale}
-                        </div>
-                      ) : null}
-                      <div className="mt-2 text-xs text-[color:var(--muted-foreground)]">
-                        <span className="font-semibold text-[color:var(--foreground)]">Goal:</span>{" "}
-                        {item.goal}
-                      </div>
-                    </button>
-                  ))}
-                </div>
-              ) : null}
-
-              <div className="mt-3 grid gap-3 md:grid-cols-2">
-                <div className="grid gap-2">
-                  <div className="text-xs font-semibold text-[color:var(--muted-foreground)]">Templates</div>
-                  <div className="flex flex-wrap gap-2">
-                    {templates.map((template) => (
-                      <Button
-                        key={template.label}
-                        type="button"
-                        size="sm"
-                        variant="secondary"
-                        onClick={() =>
-                          setObjective({
-                            ...objective,
-                            goal: template.goal,
-                            constraints: template.constraints,
-                            scoring: template.scoring ?? objective.scoring,
-                          })
-                        }
-                      >
-                        {template.label}
-                      </Button>
-                    ))}
-                  </div>
-                </div>
-
-                <div className="grid gap-2">
-                  <div className="text-xs font-semibold text-[color:var(--muted-foreground)]">Scoring Presets</div>
-                  <div className="flex flex-wrap gap-2">
-                    {scoringPresets.map((preset) => (
-                      <Button
-                        key={preset.label}
-                        type="button"
-                        size="sm"
-                        variant="secondary"
-                        onClick={() => setObjective({ ...objective, scoring: preset.scoring })}
-                      >
-                        {preset.label}
-                      </Button>
-                    ))}
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="outline"
-                      onClick={() => setObjective({ ...objective, scoring: normalizeWeights(objective.scoring) })}
-                    >
-                      Normalize
-                    </Button>
-                  </div>
-                </div>
+            {suggestionsLoading && !suggestions.length ? (
+              <div className="mt-3 text-xs text-[color:var(--muted-foreground)]">
+                Generating tailored options for {brandName}...
               </div>
+            ) : null}
 
-              {!objective.goal.trim() ? (
-                <div className="mt-3 grid gap-2">
-                  <div className="text-xs font-semibold text-[color:var(--muted-foreground)]">Goal Starters</div>
-                  <div className="flex flex-wrap gap-2">
-                    {goalSuggestions.map((item) => (
-                      <Button
-                        key={item.label}
-                        type="button"
-                        size="sm"
-                        variant="outline"
-                        title={item.text}
-                        onClick={() => setObjective({ ...objective, goal: item.text })}
-                      >
-                        {item.label}
-                      </Button>
-                    ))}
-                  </div>
-                </div>
-              ) : null}
+            {!suggestionsLoading && !suggestionsError && !suggestions.length ? (
+              <div className="mt-3 text-xs text-[color:var(--muted-foreground)]">
+                No suggestions yet. Click Generate AI to load premade objective cards.
+              </div>
+            ) : null}
 
-              {!objective.constraints.trim() ? (
-                <div className="mt-3 grid gap-2">
-                  <div className="text-xs font-semibold text-[color:var(--muted-foreground)]">Constraint Starters</div>
-                  <div className="flex flex-wrap gap-2">
-                    {constraintSuggestions.map((item) => (
-                      <Button
-                        key={item.label}
-                        type="button"
-                        size="sm"
-                        variant="outline"
-                        title={item.text}
-                        onClick={() => setObjective({ ...objective, constraints: item.text })}
-                      >
-                        {item.label}
-                      </Button>
-                    ))}
-                  </div>
-                </div>
-              ) : null}
-            </div>
-          ) : null}
+            {suggestions.length ? (
+              <div className="mt-3 grid gap-3 md:grid-cols-2">
+                {suggestions.map((item) => (
+                  <button
+                    key={item.title}
+                    type="button"
+                    className="group rounded-xl border border-[color:var(--border)] bg-[color:var(--surface)] p-3 text-left shadow-sm transition hover:-translate-y-[1px] hover:shadow-md focus:outline-none focus:ring-2 focus:ring-[color:var(--accent)]/40"
+                    onClick={() =>
+                      setObjective({
+                        ...objective,
+                        goal: item.goal,
+                        constraints: item.constraints,
+                        scoring: item.scoring ?? objective.scoring,
+                      })
+                    }
+                  >
+                    <div className="text-sm font-semibold">{item.title}</div>
+                    {item.rationale ? (
+                      <div className="mt-1 text-xs text-[color:var(--muted-foreground)]">
+                        {item.rationale}
+                      </div>
+                    ) : null}
+                    <div className="mt-2 text-xs text-[color:var(--muted-foreground)]">
+                      <span className="font-semibold text-[color:var(--foreground)]">Goal:</span>{" "}
+                      {item.goal}
+                    </div>
+                  </button>
+                ))}
+              </div>
+            ) : null}
+          </div>
 
           <div className="grid gap-2">
             <Label htmlFor="objective-goal">Goal</Label>

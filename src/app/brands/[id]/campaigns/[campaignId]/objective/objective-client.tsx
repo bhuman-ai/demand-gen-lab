@@ -9,7 +9,13 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { fetchBrand, fetchCampaign, updateCampaignApi, completeStepState } from "@/lib/client-api";
+import {
+  fetchBrand,
+  fetchCampaign,
+  updateCampaignApi,
+  completeStepState,
+  suggestObjectiveApi,
+} from "@/lib/client-api";
 import { trackEvent } from "@/lib/telemetry-client";
 import type { BrandRecord, CampaignRecord, ObjectiveData } from "@/lib/factory-types";
 
@@ -18,6 +24,14 @@ type ObjectiveTemplate = {
   goal: string;
   constraints: string;
   scoring?: ObjectiveData["scoring"];
+};
+
+type ObjectiveSuggestion = {
+  title: string;
+  goal: string;
+  constraints: string;
+  scoring: ObjectiveData["scoring"];
+  rationale: string;
 };
 
 function normalizeWeights(scoring: ObjectiveData["scoring"]): ObjectiveData["scoring"] {
@@ -41,6 +55,10 @@ export default function ObjectiveClient({ brandId, campaignId }: { brandId: stri
   const [brand, setBrand] = useState<BrandRecord | null>(null);
   const [campaign, setCampaign] = useState<CampaignRecord | null>(null);
   const [objective, setObjective] = useState<ObjectiveData | null>(null);
+  const [suggestions, setSuggestions] = useState<ObjectiveSuggestion[]>([]);
+  const [suggestionsLoading, setSuggestionsLoading] = useState(false);
+  const [suggestionsLoadedOnce, setSuggestionsLoadedOnce] = useState(false);
+  const [suggestionsError, setSuggestionsError] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
@@ -67,9 +85,34 @@ export default function ObjectiveClient({ brandId, campaignId }: { brandId: stri
     trackEvent("campaign_step_viewed", { brandId, campaignId, step: "objective" });
   }, [brandId, campaignId]);
 
+  const loadSuggestions = async () => {
+    setSuggestionsLoading(true);
+    setSuggestionsError("");
+    try {
+      const rows = await suggestObjectiveApi(brandId, campaignId);
+      setSuggestions(rows);
+    } catch (err) {
+      setSuggestionsError(err instanceof Error ? err.message : "Failed to load suggestions");
+    } finally {
+      setSuggestionsLoading(false);
+      setSuggestionsLoadedOnce(true);
+    }
+  };
+
+  useEffect(() => {
+    if (!objective || !campaign) return;
+    const needsObjectiveHelp = !objective.goal.trim() || !objective.constraints.trim();
+    if (!needsObjectiveHelp) return;
+    if (suggestionsLoadedOnce) return;
+    void loadSuggestions();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [objective, campaign, suggestionsLoadedOnce, brandId, campaignId]);
+
   if (!objective || !campaign) {
     return <div className="text-sm text-[color:var(--muted-foreground)]">Loading objective...</div>;
   }
+
+  const needsObjectiveHelp = !objective.goal.trim() || !objective.constraints.trim();
 
   const brandName = brand?.name?.trim() || "your brand";
   const templates: ObjectiveTemplate[] = [
@@ -167,12 +210,66 @@ export default function ObjectiveClient({ brandId, campaignId }: { brandId: stri
           <CardTitle className="text-base">Objective Setup</CardTitle>
         </CardHeader>
         <CardContent className="grid gap-4">
-          {!objective.goal.trim() || !objective.constraints.trim() ? (
+          {needsObjectiveHelp ? (
             <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3">
-              <div className="text-sm font-semibold">Suggestions</div>
-              <div className="mt-1 text-xs text-[color:var(--muted-foreground)]">
-                Pick a template or one-click fill pieces. You can edit everything.
+              <div className="flex flex-wrap items-start justify-between gap-2">
+                <div>
+                  <div className="text-sm font-semibold">Suggestions</div>
+                  <div className="mt-1 text-xs text-[color:var(--muted-foreground)]">
+                    Click an AI card to fill your objective, or use templates and presets. You can edit everything.
+                  </div>
+                </div>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={loadSuggestions}
+                  disabled={suggestionsLoading}
+                >
+                  {suggestionsLoading ? "Generating..." : suggestions.length ? "Refresh AI" : "Generate AI"}
+                </Button>
               </div>
+
+              {suggestionsError ? (
+                <div className="mt-2 text-xs text-[color:var(--danger)]">{suggestionsError}</div>
+              ) : null}
+
+              {suggestionsLoading && !suggestions.length ? (
+                <div className="mt-3 text-xs text-[color:var(--muted-foreground)]">
+                  Generating tailored options for {brandName}...
+                </div>
+              ) : null}
+
+              {suggestions.length ? (
+                <div className="mt-3 grid gap-3 md:grid-cols-2">
+                  {suggestions.map((item) => (
+                    <button
+                      key={item.title}
+                      type="button"
+                      className="group rounded-xl border border-[color:var(--border)] bg-[color:var(--surface)] p-3 text-left shadow-sm transition hover:-translate-y-[1px] hover:shadow-md focus:outline-none focus:ring-2 focus:ring-[color:var(--accent)]/40"
+                      onClick={() =>
+                        setObjective({
+                          ...objective,
+                          goal: item.goal,
+                          constraints: item.constraints,
+                          scoring: item.scoring ?? objective.scoring,
+                        })
+                      }
+                    >
+                      <div className="text-sm font-semibold">{item.title}</div>
+                      {item.rationale ? (
+                        <div className="mt-1 text-xs text-[color:var(--muted-foreground)]">
+                          {item.rationale}
+                        </div>
+                      ) : null}
+                      <div className="mt-2 text-xs text-[color:var(--muted-foreground)]">
+                        <span className="font-semibold text-[color:var(--foreground)]">Goal:</span>{" "}
+                        {item.goal}
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              ) : null}
 
               <div className="mt-3 grid gap-3 md:grid-cols-2">
                 <div className="grid gap-2">

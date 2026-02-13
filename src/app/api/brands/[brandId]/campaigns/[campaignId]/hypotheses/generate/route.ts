@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getCampaignById } from "@/lib/factory-data";
+import { sanitizeAiText } from "@/lib/ai-sanitize";
 
 type GeneratedHypothesis = {
   title: string;
@@ -27,12 +28,13 @@ function normalizeHypotheses(value: unknown): GeneratedHypothesis[] {
   const rows: GeneratedHypothesis[] = [];
   for (const entry of value) {
     const item = asRecord(entry);
-    const title = String(item.title ?? item.name ?? "").trim();
-    const channel = String(item.channel ?? item.platform ?? "").trim();
-    const rationale = String(item.rationale ?? item.reason ?? "").trim();
-    const actorQuery = String(item.actorQuery ?? item.actor_query ?? "").trim();
+    const title = sanitizeAiText(String(item.title ?? item.name ?? "")).trim();
+    const channel = sanitizeAiText(String(item.channel ?? item.platform ?? "Email")).trim() || "Email";
+    const rationale = sanitizeAiText(String(item.rationale ?? item.reason ?? "")).trim();
+    const leadTarget = sanitizeAiText(String(item.leadTarget ?? item.target ?? item.icp ?? "")).trim();
+    const actorQuery = sanitizeAiText(String(item.actorQuery ?? item.actor_query ?? leadTarget)).trim();
     const sourceConfig = asRecord(item.sourceConfig ?? item.source_config);
-    const actorId = String(sourceConfig.actorId ?? sourceConfig.actor_id ?? "").trim();
+    const actorId = sanitizeAiText(String(sourceConfig.actorId ?? sourceConfig.actor_id ?? "")).trim();
     const actorInput =
       sourceConfig.actorInput && typeof sourceConfig.actorInput === "object"
         ? (sourceConfig.actorInput as Record<string, unknown>)
@@ -51,9 +53,11 @@ function normalizeHypotheses(value: unknown): GeneratedHypothesis[] {
       title,
       channel,
       rationale,
-      actorQuery: actorQuery || `${channel} prospects`,
+      // Back-compat field: store lead targeting hint here (not shown in the UI).
+      actorQuery: actorQuery || leadTarget || "",
       sourceConfig: {
-        actorId: actorId || actorQuery || "",
+        // Lead sourcing is platform-managed; keep provider identifiers out of payloads.
+        actorId: actorId || "",
         actorInput,
         maxLeads: Number.isFinite(maxLeads) ? Math.max(1, Math.min(500, maxLeads)) : 100,
       },
@@ -64,43 +68,43 @@ function normalizeHypotheses(value: unknown): GeneratedHypothesis[] {
 }
 
 function fallbackHypotheses(goal: string, brandName: string): GeneratedHypothesis[] {
-  const keyword = goal.trim() || `growth for ${brandName}`;
+  const keyword = sanitizeAiText(goal.trim() || `growth for ${brandName}`);
   return [
     {
-      title: `Founder signal mining for ${keyword}`,
-      channel: "LinkedIn",
-      rationale: "Identify operators posting buying signals, then send tightly scoped outreach tied to objective constraints.",
-      actorQuery: "linkedin leads scraper",
+      title: `ICP pain test for ${keyword}`,
+      channel: "Email",
+      rationale: "Target one role at a narrow company type and lead with a specific pain tied to the objective constraints.",
+      actorQuery: "Head of Growth at B2B SaaS (11-200 employees)",
       sourceConfig: {
-        actorId: "apify/linkedin-scraper",
-        actorInput: { search: keyword },
-        maxLeads: 120,
+        actorId: "",
+        actorInput: {},
+        maxLeads: 100,
       },
-      seedInputs: [brandName, "operator", "buyer signal"],
+      seedInputs: [brandName, "role", "pain signal"],
     },
     {
-      title: `Community-intent pull for ${keyword}`,
-      channel: "Reddit",
-      rationale: "Find active threads with stated pain and engage with proof-led messaging variants.",
-      actorQuery: "reddit post commenters",
+      title: `Offer artifact test for ${keyword}`,
+      channel: "Email",
+      rationale: "Offer a concrete artifact (audit/teardown) with a low-friction CTA to increase positive replies.",
+      actorQuery: "Founder at B2B SaaS (1-50 employees)",
       sourceConfig: {
-        actorId: "apify/reddit-comment-scraper",
-        actorInput: { query: keyword },
+        actorId: "",
+        actorInput: {},
         maxLeads: 80,
       },
-      seedInputs: [brandName, "pain", "discussion"],
+      seedInputs: [brandName, "offer", "artifact"],
     },
     {
-      title: `Creator workflow wedge for ${keyword}`,
-      channel: "YouTube",
-      rationale: "Source creators discussing scaling friction and position offer as workflow acceleration.",
-      actorQuery: "youtube channel scraper",
+      title: `Trigger-based timing for ${keyword}`,
+      channel: "Email",
+      rationale: "Focus on prospects with an obvious trigger to improve relevance and reduce negative replies.",
+      actorQuery: "RevOps leader at fast-growing SaaS",
       sourceConfig: {
-        actorId: "apify/youtube-scraper",
-        actorInput: { query: keyword },
-        maxLeads: 60,
+        actorId: "",
+        actorInput: {},
+        maxLeads: 120,
       },
-      seedInputs: [brandName, "creator ops", "workflow"],
+      seedInputs: [brandName, "trigger", "timing"],
     },
   ];
 }
@@ -126,13 +130,15 @@ export async function POST(
   }
 
   const prompt = [
-    "Generate 5-8 outreach hypotheses for a campaign objective.",
-    "Output JSON only: { hypotheses: [{ title, channel, rationale, actorQuery, sourceConfig{actorId,actorInput,maxLeads}, seedInputs[] }] }",
-    "At least 3 hypotheses should target scrapeable channels (LinkedIn, Reddit, YouTube, Instagram, TikTok, X).",
+    "Generate 5-8 email outreach hypotheses for a campaign objective.",
+    "Channel is email-only. Set channel to \"Email\" for every hypothesis.",
+    "Output JSON only: { hypotheses: [{ title, channel, rationale, leadTarget, maxLeads, seedInputs[] }] }",
     "Avoid generic repeated ideas.",
-    `Brand: ${brandName}`,
-    `Goal: ${goal}`,
-    `Constraints: ${constraints}`,
+    "Do not mention internal tools, vendors, scraping, or implementation details.",
+    "Do not use the words 'apify' or 'actor'.",
+    `Brand: ${sanitizeAiText(brandName)}`,
+    `Goal: ${sanitizeAiText(goal)}`,
+    `Constraints: ${sanitizeAiText(constraints)}`,
   ].join("\n");
 
   const response = await fetch("https://api.openai.com/v1/responses", {

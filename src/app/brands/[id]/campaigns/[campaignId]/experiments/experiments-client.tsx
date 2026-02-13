@@ -16,7 +16,7 @@ import {
   fetchBrand,
   fetchCampaign,
   fetchCampaignRuns,
-  generateExperimentsApi,
+  suggestExperimentsApi,
   launchExperimentRun,
   pauseRun,
   resumeRun,
@@ -46,9 +46,12 @@ export default function ExperimentsClient({ brandId, campaignId }: { brandId: st
   const [brand, setBrand] = useState<BrandRecord | null>(null);
   const [campaign, setCampaign] = useState<CampaignRecord | null>(null);
   const [experiments, setExperiments] = useState<Experiment[]>([]);
+  const [suggestions, setSuggestions] = useState<Array<Omit<Experiment, "id">>>([]);
+  const [suggestionsLoading, setSuggestionsLoading] = useState(false);
+  const [suggestionsLoadedOnce, setSuggestionsLoadedOnce] = useState(false);
+  const [suggestionsError, setSuggestionsError] = useState("");
   const [runs, setRuns] = useState<OutreachRun[]>([]);
   const [anomalies, setAnomalies] = useState<RunAnomaly[]>([]);
-  const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
@@ -88,6 +91,34 @@ export default function ExperimentsClient({ brandId, campaignId }: { brandId: st
 
   const hypotheses = useMemo(() => campaign?.hypotheses ?? [], [campaign]);
 
+  const loadSuggestions = async () => {
+    if (!campaign || !campaign.hypotheses.length) {
+      setSuggestionsError("Add hypotheses before generating experiments.");
+      return;
+    }
+    setSuggestionsLoading(true);
+    setSuggestionsError("");
+    try {
+      const rows = await suggestExperimentsApi(brandId, campaignId);
+      setSuggestions(rows);
+    } catch (err) {
+      trackEvent("generation_error", { brandId, campaignId, step: "experiments" });
+      setSuggestionsError(err instanceof Error ? err.message : "Failed to load suggestions");
+    } finally {
+      setSuggestionsLoading(false);
+      setSuggestionsLoadedOnce(true);
+    }
+  };
+
+  useEffect(() => {
+    if (!campaign) return;
+    if (campaign.experiments.length) return;
+    if (!campaign.hypotheses.length) return;
+    if (suggestionsLoadedOnce) return;
+    void loadSuggestions();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [campaign, suggestionsLoadedOnce, brandId, campaignId]);
+
   if (!campaign) {
     return <div className="text-sm text-[color:var(--muted-foreground)]">Loading experiments...</div>;
   }
@@ -114,34 +145,33 @@ export default function ExperimentsClient({ brandId, campaignId }: { brandId: st
     }
   };
 
-  const generate = async () => {
-    if (!campaign.hypotheses.length) {
-      setError("Add hypotheses before generating experiments.");
-      return;
-    }
+  const addFromSuggestion = (suggestion: Omit<Experiment, "id">) => {
+    setExperiments((prev) => [
+      {
+        id: makeId(),
+        hypothesisId: suggestion.hypothesisId,
+        name: suggestion.name,
+        notes: suggestion.notes,
+        status: suggestion.status,
+        runPolicy: suggestion.runPolicy ?? defaultRunPolicy,
+        executionStatus: suggestion.executionStatus ?? "idle",
+      },
+      ...prev,
+    ]);
+  };
 
-    setLoading(true);
-    setError("");
-    try {
-      const generated = await generateExperimentsApi(brandId, campaignId, {
-        hypotheses: campaign.hypotheses,
-      });
-      const normalized: Experiment[] = generated.map((item) => ({
-        id: item.id ?? makeId(),
-        hypothesisId: item.hypothesisId,
-        name: item.name,
-        notes: item.notes,
-        status: item.status,
-        runPolicy: item.runPolicy ?? defaultRunPolicy,
-        executionStatus: item.executionStatus ?? "idle",
-      }));
-      setExperiments(normalized);
-    } catch (err) {
-      trackEvent("generation_error", { brandId, campaignId, step: "experiments" });
-      setError(err instanceof Error ? err.message : "Generation failed");
-    } finally {
-      setLoading(false);
-    }
+  const applyAllSuggestions = () => {
+    setExperiments(
+      suggestions.map((suggestion) => ({
+        id: makeId(),
+        hypothesisId: suggestion.hypothesisId,
+        name: suggestion.name,
+        notes: suggestion.notes,
+        status: suggestion.status,
+        runPolicy: suggestion.runPolicy ?? defaultRunPolicy,
+        executionStatus: suggestion.executionStatus ?? "idle",
+      }))
+    );
   };
 
   const createBaselines = () => {
@@ -171,9 +201,9 @@ export default function ExperimentsClient({ brandId, campaignId }: { brandId: st
           <CardDescription>Step 3 of 4: build experiment variants and set run status.</CardDescription>
         </CardHeader>
         <CardContent className="flex flex-wrap gap-2">
-          <Button type="button" variant="outline" onClick={generate} disabled={loading}>
+          <Button type="button" variant="outline" onClick={loadSuggestions} disabled={suggestionsLoading}>
             <Sparkles className="h-4 w-4" />
-            {loading ? "Generating..." : "Generate Variants"}
+            {suggestionsLoading ? "Generating..." : "Generate Variants"}
           </Button>
           <Button
             type="button"
@@ -195,6 +225,58 @@ export default function ExperimentsClient({ brandId, campaignId }: { brandId: st
           >
             <Plus className="h-4 w-4" /> Add Manual
           </Button>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">AI Suggestions</CardTitle>
+          <CardDescription>
+            Click a card to add it as a draft experiment. Variants are tailored to your hypotheses.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="grid gap-3">
+          <div className="flex flex-wrap gap-2">
+            <Button
+              type="button"
+              size="sm"
+              variant="secondary"
+              onClick={loadSuggestions}
+              disabled={suggestionsLoading}
+            >
+              <Sparkles className="h-4 w-4" />
+              {suggestionsLoading ? "Generating..." : suggestions.length ? "Refresh Suggestions" : "Generate Suggestions"}
+            </Button>
+            {suggestions.length ? (
+              <Button type="button" size="sm" variant="outline" onClick={applyAllSuggestions} disabled={suggestionsLoading}>
+                Use All (Replace List)
+              </Button>
+            ) : null}
+          </div>
+
+          {suggestionsError ? <div className="text-xs text-[color:var(--danger)]">{suggestionsError}</div> : null}
+          {suggestionsLoading && !suggestions.length ? (
+            <div className="text-xs text-[color:var(--muted-foreground)]">Generating experiment cards...</div>
+          ) : null}
+
+          {suggestions.length ? (
+            <div className="grid gap-3 md:grid-cols-2">
+              {suggestions.map((suggestion) => (
+                <button
+                  key={`${suggestion.hypothesisId}:${suggestion.name}`}
+                  type="button"
+                  className="group rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3 text-left transition hover:bg-[color:var(--surface)] focus:outline-none focus:ring-2 focus:ring-[color:var(--accent)]/40"
+                  onClick={() => addFromSuggestion(suggestion)}
+                >
+                  <div className="text-sm font-semibold">{suggestion.name}</div>
+                  <div className="mt-1 text-xs text-[color:var(--muted-foreground)]">{suggestion.notes || "Draft notes"}</div>
+                  <div className="mt-2 text-xs text-[color:var(--muted-foreground)]">
+                    Daily cap {suggestion.runPolicy?.dailyCap ?? 30} · Hourly cap {suggestion.runPolicy?.hourlyCap ?? 6} · Timezone {suggestion.runPolicy?.timezone ?? "America/Los_Angeles"}
+                  </div>
+                </button>
+              ))}
+            </div>
+          ) : null}
         </CardContent>
       </Card>
 
@@ -491,9 +573,9 @@ export default function ExperimentsClient({ brandId, campaignId }: { brandId: st
                 </div>
               ) : (
                 <div className="flex flex-wrap gap-2">
-                  <Button size="sm" variant="secondary" type="button" onClick={generate} disabled={loading}>
+                  <Button size="sm" variant="secondary" type="button" onClick={loadSuggestions} disabled={suggestionsLoading}>
                     <Sparkles className="h-4 w-4" />
-                    {loading ? "Generating..." : "Generate Variants"}
+                    {suggestionsLoading ? "Generating..." : "Generate Variants"}
                   </Button>
                   <Button size="sm" variant="outline" type="button" onClick={createBaselines}>
                     Create Baselines

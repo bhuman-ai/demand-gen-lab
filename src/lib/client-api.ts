@@ -155,6 +155,37 @@ export async function generateHypothesesApi(brandId: string, campaignId: string,
   return (Array.isArray(data?.hypotheses) ? data.hypotheses : []) as Hypothesis[];
 }
 
+export async function suggestObjectiveApi(brandId: string, campaignId: string) {
+  const response = await fetch(
+    `/api/brands/${brandId}/campaigns/${campaignId}/objective/suggest`,
+    { method: "POST" }
+  );
+  const data = await readJson(response);
+  return (Array.isArray(data?.suggestions) ? data.suggestions : []) as Array<{
+    title: string;
+    goal: string;
+    constraints: string;
+    scoring: ObjectiveData["scoring"];
+    rationale: string;
+  }>;
+}
+
+export async function suggestHypothesesApi(brandId: string, campaignId: string) {
+  const response = await fetch(
+    `/api/brands/${brandId}/campaigns/${campaignId}/hypotheses/suggest`,
+    { method: "POST" }
+  );
+  const data = await readJson(response);
+  return (Array.isArray(data?.suggestions) ? data.suggestions : []) as Array<{
+    title: string;
+    channel: "Email";
+    rationale: string;
+    leadTarget: string;
+    maxLeads: number;
+    seedInputs: string[];
+  }>;
+}
+
 export async function generateExperimentsApi(
   brandId: string,
   campaignId: string,
@@ -172,6 +203,30 @@ export async function generateExperimentsApi(
   return (Array.isArray(data?.experiments) ? data.experiments : []) as Array<
     Omit<Experiment, "id"> & { id?: string }
   >;
+}
+
+export async function suggestExperimentsApi(brandId: string, campaignId: string) {
+  const response = await fetch(
+    `/api/brands/${brandId}/campaigns/${campaignId}/experiments/suggest`,
+    { method: "POST" }
+  );
+  const data = await readJson(response);
+  return (Array.isArray(data?.suggestions) ? data.suggestions : []) as Array<
+    Omit<Experiment, "id">
+  >;
+}
+
+export async function suggestEvolutionApi(brandId: string, campaignId: string) {
+  const response = await fetch(
+    `/api/brands/${brandId}/campaigns/${campaignId}/evolution/suggest`,
+    { method: "POST" }
+  );
+  const data = await readJson(response);
+  return (Array.isArray(data?.suggestions) ? data.suggestions : []) as Array<{
+    title: string;
+    summary: string;
+    status: "observing" | "winner" | "killed";
+  }>;
 }
 
 export async function fetchOutreachAccounts() {

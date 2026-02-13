@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getCampaignById } from "@/lib/factory-data";
+import { sanitizeAiText } from "@/lib/ai-sanitize";
 
 type ExperimentDraft = {
   hypothesisId: string;
@@ -49,16 +50,16 @@ function normalizeExperiments(value: unknown): ExperimentDraft[] {
 }
 
 function fallbackExperiments(
-  hypotheses: { id: string; title: string; rationale: string; actorQuery?: string }[]
+  hypotheses: { id: string; title: string; rationale: string }[]
 ): ExperimentDraft[] {
   return hypotheses.flatMap((hypothesis) => {
-    const base = hypothesis.title || "Hypothesis";
+    const base = sanitizeAiText(hypothesis.title || "Hypothesis");
     return [
       {
         hypothesisId: hypothesis.id,
         name: `${base} / Hook-first`,
         status: "draft" as const,
-        notes: `Lead with a sharp hook tied to: ${hypothesis.rationale || "core problem"}.`,
+        notes: `Lead with a sharp hook tied to: ${sanitizeAiText(hypothesis.rationale || "core problem")}.`,
         runPolicy: {
           cadence: "3_step_7_day",
           dailyCap: 30,
@@ -86,7 +87,7 @@ function fallbackExperiments(
         hypothesisId: hypothesis.id,
         name: `${base} / Pain-first`,
         status: "draft" as const,
-        notes: `Start with urgent pain signal and include sourcing angle (${hypothesis.actorQuery || "targeted list"}).`,
+        notes: "Start with an urgent pain signal and end with a one-question CTA.",
         runPolicy: {
           cadence: "3_step_7_day",
           dailyCap: 30,
@@ -113,8 +114,8 @@ export async function POST(
   const body = asRecord(await request.json());
   const bodyHypotheses = Array.isArray(body.hypotheses) ? body.hypotheses : [];
   const hypotheses = bodyHypotheses.length
-    ? (bodyHypotheses as { id: string; title: string; rationale: string; actorQuery?: string }[])
-    : campaign.hypotheses;
+    ? (bodyHypotheses as { id: string; title: string; rationale: string }[])
+    : campaign.hypotheses.map((h) => ({ id: h.id, title: h.title, rationale: h.rationale }));
 
   if (!hypotheses.length) {
     return NextResponse.json({ experiments: [], mode: "empty" });
@@ -130,7 +131,17 @@ export async function POST(
     "Output JSON only as: { experiments: [{ hypothesisId, name, status, notes, dailyCap, hourlyCap, timezone, minSpacingMinutes }] }",
     "Create 2-3 variants per hypothesis.",
     "status must be draft.",
-    JSON.stringify(hypotheses, null, 2),
+    "Do not mention internal tools, vendors, or implementation details.",
+    "Do not use the words 'apify' or 'actor'.",
+    JSON.stringify(
+      hypotheses.map((h) => ({
+        id: h.id,
+        title: sanitizeAiText(h.title),
+        rationale: sanitizeAiText(h.rationale),
+      })),
+      null,
+      2
+    ),
   ].join("\n");
 
   const response = await fetch("https://api.openai.com/v1/responses", {

@@ -15,6 +15,7 @@ import {
   fetchBrand,
   fetchCampaign,
   fetchCampaignRuns,
+  suggestEvolutionApi,
   summarizeWinners,
   updateCampaignApi,
 } from "@/lib/client-api";
@@ -23,11 +24,21 @@ import type { BrandRecord, CampaignRecord, EvolutionSnapshot, OutreachRun } from
 
 const makeId = () => `evo_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 
+type EvolutionSuggestion = {
+  title: string;
+  summary: string;
+  status: "observing" | "winner" | "killed";
+};
+
 export default function EvolutionClient({ brandId, campaignId }: { brandId: string; campaignId: string }) {
   const [brand, setBrand] = useState<BrandRecord | null>(null);
   const [campaign, setCampaign] = useState<CampaignRecord | null>(null);
   const [runs, setRuns] = useState<OutreachRun[]>([]);
   const [rows, setRows] = useState<EvolutionSnapshot[]>([]);
+  const [suggestions, setSuggestions] = useState<EvolutionSuggestion[]>([]);
+  const [suggestionsLoading, setSuggestionsLoading] = useState(false);
+  const [suggestionsLoadedOnce, setSuggestionsLoadedOnce] = useState(false);
+  const [suggestionsError, setSuggestionsError] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
@@ -55,6 +66,28 @@ export default function EvolutionClient({ brandId, campaignId }: { brandId: stri
   }, [brandId, campaignId]);
 
   const winners = useMemo(() => summarizeWinners(rows), [rows]);
+
+  const loadSuggestions = async () => {
+    setSuggestionsLoading(true);
+    setSuggestionsError("");
+    try {
+      const suggested = await suggestEvolutionApi(brandId, campaignId);
+      setSuggestions(suggested);
+    } catch (err) {
+      setSuggestionsError(err instanceof Error ? err.message : "Failed to load suggestions");
+    } finally {
+      setSuggestionsLoading(false);
+      setSuggestionsLoadedOnce(true);
+    }
+  };
+
+  useEffect(() => {
+    if (!campaign) return;
+    if (rows.length) return;
+    if (suggestionsLoadedOnce) return;
+    void loadSuggestions();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [campaign, rows.length, suggestionsLoadedOnce, brandId, campaignId]);
 
   if (!campaign) {
     return <div className="text-sm text-[color:var(--muted-foreground)]">Loading evolution...</div>;
@@ -113,6 +146,57 @@ export default function EvolutionClient({ brandId, campaignId }: { brandId: stri
             <Plus className="h-4 w-4" />
             Add Snapshot
           </Button>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">AI Suggestions</CardTitle>
+          <CardDescription>
+            Click a card to add it as an evolution snapshot. Suggestions use your campaign context and run outcomes.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="grid gap-3">
+          <div className="flex flex-wrap gap-2">
+            <Button type="button" size="sm" variant="secondary" onClick={loadSuggestions} disabled={suggestionsLoading}>
+              <Plus className="h-4 w-4" />
+              {suggestionsLoading ? "Generating..." : suggestions.length ? "Refresh Suggestions" : "Generate Suggestions"}
+            </Button>
+          </div>
+          {suggestionsError ? <div className="text-xs text-[color:var(--danger)]">{suggestionsError}</div> : null}
+          {suggestionsLoading && !suggestions.length ? (
+            <div className="text-xs text-[color:var(--muted-foreground)]">Generating snapshot cards...</div>
+          ) : null}
+          {suggestions.length ? (
+            <div className="grid gap-3 md:grid-cols-2">
+              {suggestions.map((suggestion) => (
+                <button
+                  key={suggestion.title}
+                  type="button"
+                  className="group rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3 text-left transition hover:bg-[color:var(--surface)] focus:outline-none focus:ring-2 focus:ring-[color:var(--accent)]/40"
+                  onClick={() =>
+                    setRows((prev) => [
+                      {
+                        id: makeId(),
+                        title: suggestion.title,
+                        summary: suggestion.summary,
+                        status: suggestion.status,
+                      },
+                      ...prev,
+                    ])
+                  }
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="text-sm font-semibold">{suggestion.title}</div>
+                    <Badge variant={suggestion.status === "winner" ? "success" : suggestion.status === "killed" ? "danger" : "muted"}>
+                      {suggestion.status}
+                    </Badge>
+                  </div>
+                  <div className="mt-1 text-xs text-[color:var(--muted-foreground)]">{suggestion.summary}</div>
+                </button>
+              ))}
+            </div>
+          ) : null}
         </CardContent>
       </Card>
 

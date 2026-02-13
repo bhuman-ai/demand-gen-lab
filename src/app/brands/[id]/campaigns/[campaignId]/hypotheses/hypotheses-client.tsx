@@ -15,7 +15,7 @@ import {
   completeStepState,
   fetchBrand,
   fetchCampaign,
-  generateHypothesesApi,
+  suggestHypothesesApi,
   updateCampaignApi,
 } from "@/lib/client-api";
 import { trackEvent } from "@/lib/telemetry-client";
@@ -23,12 +23,24 @@ import type { BrandRecord, CampaignRecord, Hypothesis } from "@/lib/factory-type
 
 const makeId = () => `hyp_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 
+type HypothesisSuggestion = {
+  title: string;
+  channel: "Email";
+  rationale: string;
+  leadTarget: string;
+  maxLeads: number;
+  seedInputs: string[];
+};
+
 export default function HypothesesClient({ brandId, campaignId }: { brandId: string; campaignId: string }) {
   const router = useRouter();
   const [brand, setBrand] = useState<BrandRecord | null>(null);
   const [campaign, setCampaign] = useState<CampaignRecord | null>(null);
   const [hypotheses, setHypotheses] = useState<Hypothesis[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [suggestions, setSuggestions] = useState<HypothesisSuggestion[]>([]);
+  const [suggestionsLoading, setSuggestionsLoading] = useState(false);
+  const [suggestionsLoadedOnce, setSuggestionsLoadedOnce] = useState(false);
+  const [suggestionsError, setSuggestionsError] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
@@ -53,6 +65,28 @@ export default function HypothesesClient({ brandId, campaignId }: { brandId: str
   useEffect(() => {
     trackEvent("campaign_step_viewed", { brandId, campaignId, step: "hypotheses" });
   }, [brandId, campaignId]);
+
+  const loadSuggestions = async () => {
+    setSuggestionsLoading(true);
+    setSuggestionsError("");
+    try {
+      const rows = await suggestHypothesesApi(brandId, campaignId);
+      setSuggestions(rows);
+    } catch (err) {
+      setSuggestionsError(err instanceof Error ? err.message : "Failed to load suggestions");
+    } finally {
+      setSuggestionsLoading(false);
+      setSuggestionsLoadedOnce(true);
+    }
+  };
+
+  useEffect(() => {
+    if (!campaign) return;
+    if (campaign.hypotheses.length) return;
+    if (suggestionsLoadedOnce) return;
+    void loadSuggestions();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [campaign, suggestionsLoadedOnce, brandId, campaignId]);
 
   if (!campaign) {
     return <div className="text-sm text-[color:var(--muted-foreground)]">Loading hypotheses...</div>;
@@ -100,32 +134,43 @@ export default function HypothesesClient({ brandId, campaignId }: { brandId: str
     }
   };
 
-  const generate = async () => {
-    setLoading(true);
-    setError("");
-    try {
-      const generated = await generateHypothesesApi(brandId, campaignId, {
-        brandName: brand?.name ?? "Brand",
-        goal: campaign.objective.goal,
-        constraints: campaign.objective.constraints,
-      });
-      const normalized = generated.map((item) => ({
-        ...item,
+  const addFromSuggestion = (suggestion: HypothesisSuggestion) => {
+    setHypotheses((prev) => [
+      {
         id: makeId(),
+        title: suggestion.title,
+        channel: suggestion.channel ?? "Email",
+        rationale: suggestion.rationale,
+        actorQuery: suggestion.leadTarget ?? "",
         sourceConfig: {
-          actorId: item.sourceConfig?.actorId ?? item.actorQuery ?? "",
-          actorInput: item.sourceConfig?.actorInput ?? {},
-          maxLeads: item.sourceConfig?.maxLeads ?? 100,
+          actorId: "",
+          actorInput: {},
+          maxLeads: Number.isFinite(suggestion.maxLeads) ? suggestion.maxLeads : 100,
         },
+        seedInputs: Array.isArray(suggestion.seedInputs) ? suggestion.seedInputs : [],
+        status: "draft",
+      },
+      ...prev,
+    ]);
+  };
+
+  const applyAllSuggestions = () => {
+    setHypotheses(
+      suggestions.map((suggestion) => ({
+        id: makeId(),
+        title: suggestion.title,
+        channel: suggestion.channel ?? "Email",
+        rationale: suggestion.rationale,
+        actorQuery: suggestion.leadTarget ?? "",
+        sourceConfig: {
+          actorId: "",
+          actorInput: {},
+          maxLeads: Number.isFinite(suggestion.maxLeads) ? suggestion.maxLeads : 100,
+        },
+        seedInputs: Array.isArray(suggestion.seedInputs) ? suggestion.seedInputs : [],
         status: "draft" as const,
-      }));
-      setHypotheses(normalized);
-    } catch (err) {
-      trackEvent("generation_error", { brandId, campaignId, step: "hypotheses" });
-      setError(err instanceof Error ? err.message : "Generation failed");
-    } finally {
-      setLoading(false);
-    }
+      }))
+    );
   };
 
   const addManual = (input?: Partial<Pick<Hypothesis, "title" | "channel" | "rationale">>) => {
@@ -156,9 +201,9 @@ export default function HypothesesClient({ brandId, campaignId }: { brandId: str
           <CardDescription>Step 2 of 4: generate and approve hypotheses.</CardDescription>
         </CardHeader>
         <CardContent className="flex flex-wrap gap-2">
-          <Button type="button" variant="outline" onClick={generate} disabled={loading}>
+          <Button type="button" variant="outline" onClick={loadSuggestions} disabled={suggestionsLoading}>
             <Sparkles className="h-4 w-4" />
-            {loading ? "Generating..." : "Generate Hypotheses"}
+            {suggestionsLoading ? "Generating..." : "Generate Hypotheses"}
           </Button>
           <Button
             type="button"
@@ -168,6 +213,58 @@ export default function HypothesesClient({ brandId, campaignId }: { brandId: str
             <Plus className="h-4 w-4" />
             Add Manual
           </Button>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">AI Suggestions</CardTitle>
+          <CardDescription>
+            Click a card to add it as a draft hypothesis. These are tailored to your brand and objective.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="grid gap-3">
+          <div className="flex flex-wrap gap-2">
+            <Button type="button" size="sm" variant="secondary" onClick={loadSuggestions} disabled={suggestionsLoading}>
+              <Sparkles className="h-4 w-4" />
+              {suggestionsLoading ? "Generating..." : suggestions.length ? "Refresh Suggestions" : "Generate Suggestions"}
+            </Button>
+            {suggestions.length ? (
+              <Button type="button" size="sm" variant="outline" onClick={applyAllSuggestions} disabled={suggestionsLoading}>
+                Use All (Replace List)
+              </Button>
+            ) : null}
+          </div>
+
+          {suggestionsError ? (
+            <div className="text-xs text-[color:var(--danger)]">{suggestionsError}</div>
+          ) : null}
+
+          {suggestionsLoading && !suggestions.length ? (
+            <div className="text-xs text-[color:var(--muted-foreground)]">Generating hypothesis cards...</div>
+          ) : null}
+
+          {suggestions.length ? (
+            <div className="grid gap-3 md:grid-cols-2">
+              {suggestions.map((suggestion) => (
+                <button
+                  key={suggestion.title}
+                  type="button"
+                  className="group rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3 text-left transition hover:bg-[color:var(--surface)] focus:outline-none focus:ring-2 focus:ring-[color:var(--accent)]/40"
+                  onClick={() => addFromSuggestion(suggestion)}
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="text-sm font-semibold">{suggestion.title}</div>
+                    <Badge variant="muted">{suggestion.channel}</Badge>
+                  </div>
+                  <div className="mt-1 text-xs text-[color:var(--muted-foreground)]">{suggestion.rationale}</div>
+                  <div className="mt-2 text-xs text-[color:var(--muted-foreground)]">
+                    Target: {suggestion.leadTarget || "Choose an ICP"} · Leads: {suggestion.maxLeads ?? 100}
+                  </div>
+                </button>
+              ))}
+            </div>
+          ) : null}
         </CardContent>
       </Card>
 
@@ -288,17 +385,17 @@ export default function HypothesesClient({ brandId, campaignId }: { brandId: str
                     <Button asChild size="sm" variant="outline">
                       <Link href={`/brands/${brandId}/campaigns/${campaignId}/objective`}>Go to Objective</Link>
                     </Button>
-                    <Button size="sm" variant="secondary" type="button" onClick={generate} disabled={loading}>
+                    <Button size="sm" variant="secondary" type="button" onClick={loadSuggestions} disabled={suggestionsLoading}>
                       <Sparkles className="h-4 w-4" />
-                      {loading ? "Generating..." : "Generate Anyway"}
+                      {suggestionsLoading ? "Generating..." : "Generate Anyway"}
                     </Button>
                   </div>
                 </div>
               ) : (
                 <div className="flex flex-wrap gap-2">
-                  <Button size="sm" variant="secondary" type="button" onClick={generate} disabled={loading}>
+                  <Button size="sm" variant="secondary" type="button" onClick={loadSuggestions} disabled={suggestionsLoading}>
                     <Sparkles className="h-4 w-4" />
-                    {loading ? "Generating..." : "Generate From Objective"}
+                    {suggestionsLoading ? "Generating..." : "Generate From Objective"}
                   </Button>
                   <Button size="sm" variant="outline" type="button" onClick={() => addManual()}>
                     <Plus className="h-4 w-4" />

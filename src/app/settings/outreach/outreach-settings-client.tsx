@@ -258,7 +258,6 @@ export default function OutreachSettingsClient() {
   const [mailboxForm, setMailboxForm] = useState<MailboxFormState>(INITIAL_MAILBOX_FORM);
   const [mailboxAuthMethod, setMailboxAuthMethod] = useState<MailboxAuthMethod>("app_password");
   const [showMailboxAdvanced, setShowMailboxAdvanced] = useState(false);
-  const [showAssignmentAdvanced, setShowAssignmentAdvanced] = useState(false);
 
   const [deliveryErrors, setDeliveryErrors] = useState<FieldErrors<DeliveryFormState>>({});
   const [mailboxErrors, setMailboxErrors] = useState<FieldErrors<MailboxFormState>>({});
@@ -958,15 +957,6 @@ export default function OutreachSettingsClient() {
           </CardDescription>
         </CardHeader>
         <CardContent className="grid gap-3">
-          <div className="flex justify-end">
-            <button
-              type="button"
-              className="text-xs font-medium text-[color:var(--muted-foreground)] underline decoration-dotted underline-offset-4"
-              onClick={() => setShowAssignmentAdvanced((prev) => !prev)}
-            >
-              {showAssignmentAdvanced ? "Hide advanced" : "Show advanced"}
-            </button>
-          </div>
           {brands.map((brand) => {
             const assignment = assignments[brand.id] ?? {
               accountId: "",
@@ -1011,20 +1001,10 @@ export default function OutreachSettingsClient() {
                     Reply Mailbox
                   </div>
                   <Select
-                    value={
-                      !assignment.mailboxAccountId && showAssignmentAdvanced ? "__use_delivery_legacy__" : assignment.mailboxAccountId
-                    }
-                    onChange={(event) => {
-                      const value = event.target.value;
-                      void onAssign(brand.id, {
-                        mailboxAccountId: value === "__use_delivery_legacy__" ? "" : value,
-                      });
-                    }}
+                    value={assignment.mailboxAccountId}
+                    onChange={(event) => void onAssign(brand.id, { mailboxAccountId: event.target.value })}
                   >
                     <option value="">Unassigned</option>
-                    {showAssignmentAdvanced ? (
-                      <option value="__use_delivery_legacy__">Use delivery account (legacy)</option>
-                    ) : null}
                     {mailboxAccounts.map((account) => (
                       <option key={account.id} value={account.id}>
                         {account.name}

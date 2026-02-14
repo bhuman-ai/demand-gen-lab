@@ -18,6 +18,8 @@ import {
 import { trackEvent } from "@/lib/telemetry-client";
 import type { BrandRecord, OutreachAccount } from "@/lib/factory-types";
 
+type FieldErrors<T> = Partial<Record<keyof T, string>>;
+
 type AssignmentChoice = {
   accountId: string;
   mailboxAccountId: string;
@@ -31,6 +33,8 @@ type DeliveryFormState = {
   customerIoApiKey: string;
   fromEmail: string;
 };
+
+type MailboxAuthMethod = "app_password" | "oauth_tokens";
 
 type MailboxFormState = {
   name: string;
@@ -113,6 +117,15 @@ function FieldLabel({ htmlFor, label, help }: { htmlFor: string; label: string; 
   );
 }
 
+function FieldError({ message }: { message?: string }) {
+  if (!message) return null;
+  return <div className="text-xs text-[color:var(--danger)]">{message}</div>;
+}
+
+function invalidFieldClass(isInvalid: boolean) {
+  return isInvalid ? "border-[color:var(--danger-border)] focus-visible:ring-[color:var(--danger)]" : "";
+}
+
 type AccountListCardProps = {
   title: string;
   description: string;
@@ -134,6 +147,12 @@ function AccountListCard({
 }: AccountListCardProps) {
   const testLabel =
     testScope === "customerio" ? "Test Customer.io" : testScope === "mailbox" ? "Test Email" : "Test";
+
+  const [testStateByAccountId, setTestStateByAccountId] = useState<
+    Record<string, { ok: boolean; message: string; testedAt: string }>
+  >({});
+  const [testingByAccountId, setTestingByAccountId] = useState<Record<string, boolean>>({});
+
   return (
     <Card>
       <CardHeader>
@@ -167,36 +186,31 @@ function AccountListCard({
                 <Button
                   type="button"
                   variant="outline"
+                  disabled={Boolean(testingByAccountId[account.id])}
                   onClick={async () => {
                     setError("");
                     try {
+                      setTestingByAccountId((prev) => ({ ...prev, [account.id]: true }));
                       const result = await testOutreachAccount(account.id, testScope);
                       trackEvent("outreach_account_tested", {
                         accountId: account.id,
                         ok: result.ok,
                         scope: result.scope,
                       });
-                      if (!result.ok) {
-                        if (result.scope === "customerio") {
-                          setError(
-                            `Customer.io test failed for ${account.name}: ${result.message}`
-                          );
-                        } else if (result.scope === "mailbox") {
-                          setError(`Mailbox test failed for ${account.name}: ${result.message}`);
-                        } else {
-                          setError(
-                            `Test failed for ${account.name}: customer.io=${result.checks.customerIo}, lead sourcing=${result.checks.apify}, mailbox=${result.checks.mailbox}. ${result.message}`
-                          );
-                        }
-                      }
+                      setTestStateByAccountId((prev) => ({
+                        ...prev,
+                        [account.id]: { ok: result.ok, message: result.message, testedAt: result.testedAt },
+                      }));
                       const refreshed = await fetchOutreachAccounts();
                       setAccounts(refreshed);
                     } catch (err) {
                       setError(err instanceof Error ? err.message : "Account test failed");
+                    } finally {
+                      setTestingByAccountId((prev) => ({ ...prev, [account.id]: false }));
                     }
                   }}
                 > 
-                  {testLabel}
+                  {testingByAccountId[account.id] ? "Testing..." : testLabel}
                 </Button>
                 <Select
                   value={account.status}
@@ -214,6 +228,17 @@ function AccountListCard({
             <div className="mt-2 text-xs text-[color:var(--muted-foreground)]">
               Last test: {account.lastTestAt ? `${account.lastTestStatus} · ${account.lastTestAt}` : "never"}
             </div>
+            {testStateByAccountId[account.id] ? (
+              <div
+                className={`mt-2 rounded-lg border px-2 py-1 text-xs ${
+                  testStateByAccountId[account.id].ok
+                    ? "border-[color:var(--success-border)] bg-[color:var(--success-soft)] text-[color:var(--success)]"
+                    : "border-[color:var(--danger-border)] bg-[color:var(--danger-soft)] text-[color:var(--danger)]"
+                }`}
+              >
+                {testStateByAccountId[account.id].message}
+              </div>
+            ) : null}
           </div>
         ))}
         {!accounts.length ? (
@@ -231,6 +256,12 @@ export default function OutreachSettingsClient() {
 
   const [deliveryForm, setDeliveryForm] = useState<DeliveryFormState>(INITIAL_DELIVERY_FORM);
   const [mailboxForm, setMailboxForm] = useState<MailboxFormState>(INITIAL_MAILBOX_FORM);
+  const [mailboxAuthMethod, setMailboxAuthMethod] = useState<MailboxAuthMethod>("app_password");
+  const [showMailboxAdvanced, setShowMailboxAdvanced] = useState(false);
+  const [showAssignmentAdvanced, setShowAssignmentAdvanced] = useState(false);
+
+  const [deliveryErrors, setDeliveryErrors] = useState<FieldErrors<DeliveryFormState>>({});
+  const [mailboxErrors, setMailboxErrors] = useState<FieldErrors<MailboxFormState>>({});
 
   const [savingDelivery, setSavingDelivery] = useState(false);
   const [savingMailbox, setSavingMailbox] = useState(false);
@@ -295,14 +326,14 @@ export default function OutreachSettingsClient() {
   );
 
   const createDeliveryAccount = async () => {
-    const required = [
-      deliveryForm.name.trim(),
-      deliveryForm.siteId.trim(),
-      deliveryForm.customerIoApiKey.trim(),
-      deliveryForm.fromEmail.trim(),
-    ];
-    if (required.some((value) => !value)) {
-      setError("Delivery account requires name, Customer.io Site ID, API Key, and From Email.");
+    const nextErrors: FieldErrors<DeliveryFormState> = {};
+    if (!deliveryForm.name.trim()) nextErrors.name = "Required.";
+    if (!deliveryForm.siteId.trim()) nextErrors.siteId = "Required.";
+    if (!deliveryForm.customerIoApiKey.trim()) nextErrors.customerIoApiKey = "Required.";
+    if (!deliveryForm.fromEmail.trim()) nextErrors.fromEmail = "Required.";
+    setDeliveryErrors(nextErrors);
+    if (Object.keys(nextErrors).length) {
+      setError("Fix the highlighted fields in the delivery account section.");
       return;
     }
 
@@ -339,6 +370,7 @@ export default function OutreachSettingsClient() {
 
       setAccounts((prev) => [created, ...prev]);
       setDeliveryForm(INITIAL_DELIVERY_FORM);
+      setDeliveryErrors({});
       trackEvent("outreach_account_connected", { accountId: created.id });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to create delivery account");
@@ -348,21 +380,29 @@ export default function OutreachSettingsClient() {
   };
 
   const createMailboxAccount = async () => {
-    const hasBaseFields =
-      mailboxForm.name.trim() &&
-      mailboxForm.mailboxEmail.trim() &&
-      mailboxForm.mailboxHost.trim() &&
-      mailboxForm.mailboxPort.trim();
+    const nextErrors: FieldErrors<MailboxFormState> = {};
+    if (!mailboxForm.name.trim()) nextErrors.name = "Required.";
+    if (!mailboxForm.mailboxEmail.trim()) nextErrors.mailboxEmail = "Required.";
+    if (!mailboxForm.mailboxPort.trim()) nextErrors.mailboxPort = "Required.";
 
-    const hasAuthPath = mailboxForm.mailboxAccessToken.trim() || mailboxForm.mailboxPassword.trim();
-
-    if (!hasBaseFields) {
-      setError("Email account requires name, mailbox email, host, and port.");
-      return;
+    const port = Number(mailboxForm.mailboxPort || 0);
+    if (mailboxForm.mailboxPort.trim() && (!Number.isFinite(port) || port <= 0)) {
+      nextErrors.mailboxPort = "Port must be a number.";
     }
 
-    if (!hasAuthPath) {
-      setError("Email account requires either an access token or mailbox password.");
+    const needsHost = mailboxForm.mailboxProvider === "imap" || showMailboxAdvanced;
+    if (needsHost && !mailboxForm.mailboxHost.trim()) nextErrors.mailboxHost = "Required.";
+
+    if (mailboxAuthMethod === "app_password") {
+      if (!mailboxForm.mailboxPassword.trim()) nextErrors.mailboxPassword = "App password required.";
+    } else {
+      if (!mailboxForm.mailboxAccessToken.trim()) nextErrors.mailboxAccessToken = "Access token required.";
+    }
+
+    setMailboxErrors(nextErrors);
+    if (Object.keys(nextErrors).length) {
+      setError("Fix the highlighted fields in the email reply account section.");
+      if (nextErrors.mailboxHost || nextErrors.mailboxPort) setShowMailboxAdvanced(true);
       return;
     }
 
@@ -402,6 +442,7 @@ export default function OutreachSettingsClient() {
 
       setAccounts((prev) => [created, ...prev]);
       setMailboxForm(INITIAL_MAILBOX_FORM);
+      setMailboxErrors({});
       trackEvent("outreach_account_connected", { accountId: created.id });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to create email account");
@@ -431,7 +472,42 @@ export default function OutreachSettingsClient() {
       mailboxPort: defaults.port,
       mailboxSecure: defaults.secure,
     }));
+    setMailboxErrors((prev) => ({ ...prev, mailboxProvider: undefined }));
+    if (provider === "imap") setShowMailboxAdvanced(true);
   };
+
+  const brandReadiness = useMemo(() => {
+    return brands.map((brand) => {
+      const assignment = assignments[brand.id] ?? { accountId: "", mailboxAccountId: "" };
+      const delivery = assignment.accountId
+        ? deliveryAccounts.find((account) => account.id === assignment.accountId) ?? null
+        : null;
+      const mailbox = assignment.mailboxAccountId
+        ? mailboxAccounts.find((account) => account.id === assignment.mailboxAccountId) ?? null
+        : null;
+
+      const deliveryAssigned = Boolean(delivery && delivery.status === "active");
+      const mailboxAssigned = Boolean(mailbox && mailbox.status === "active");
+      const deliveryTested = Boolean(delivery && delivery.lastTestAt);
+      const mailboxTested = Boolean(mailbox && mailbox.lastTestAt);
+      const deliveryPass = Boolean(delivery && delivery.lastTestStatus === "pass");
+      const mailboxPass = Boolean(mailbox && mailbox.lastTestStatus === "pass");
+
+      return {
+        brand,
+        assignment,
+        delivery,
+        mailbox,
+        deliveryAssigned,
+        mailboxAssigned,
+        deliveryTested,
+        mailboxTested,
+        deliveryPass,
+        mailboxPass,
+        ready: deliveryAssigned && mailboxAssigned && deliveryPass && mailboxPass,
+      };
+    });
+  }, [brands, assignments, deliveryAccounts, mailboxAccounts]);
 
   return (
     <div className="space-y-5">
@@ -463,6 +539,122 @@ export default function OutreachSettingsClient() {
 
       <Card>
         <CardHeader>
+          <CardTitle className="text-base">Brand Readiness</CardTitle>
+          <CardDescription>
+            Each brand needs a delivery account + reply inbox. Run tests to confirm everything is connected.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="grid gap-3">
+          {brandReadiness.map((row) => {
+            const deliveryLabel = row.deliveryAssigned
+              ? row.deliveryPass
+                ? "Delivery: ready"
+                : row.deliveryTested
+                  ? "Delivery: needs attention"
+                  : "Delivery: not tested"
+              : "Delivery: unassigned";
+            const mailboxLabel = row.mailboxAssigned
+              ? row.mailboxPass
+                ? "Reply inbox: ready"
+                : row.mailboxTested
+                  ? "Reply inbox: needs attention"
+                  : "Reply inbox: not tested"
+              : "Reply inbox: unassigned";
+
+            const statusPill = (ok: boolean, warn: boolean) =>
+              ok
+                ? "border-[color:var(--success-border)] bg-[color:var(--success-soft)] text-[color:var(--success)]"
+                : warn
+                  ? "border-[color:var(--danger-border)] bg-[color:var(--danger-soft)] text-[color:var(--danger)]"
+                  : "border-[color:var(--border)] bg-[color:var(--surface)] text-[color:var(--muted-foreground)]";
+
+            return (
+              <div
+                key={row.brand.id}
+                className="grid gap-2 rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3 md:grid-cols-[1fr_auto] md:items-center"
+              >
+                <div className="min-w-0">
+                  <div className="text-sm font-semibold truncate">{row.brand.name}</div>
+                  <div className="mt-1 flex flex-wrap gap-2">
+                    <span
+                      className={`rounded-full border px-2 py-0.5 text-xs ${statusPill(
+                        row.deliveryPass,
+                        row.deliveryAssigned && row.deliveryTested && !row.deliveryPass
+                      )}`}
+                    >
+                      {deliveryLabel}
+                    </span>
+                    <span
+                      className={`rounded-full border px-2 py-0.5 text-xs ${statusPill(
+                        row.mailboxPass,
+                        row.mailboxAssigned && row.mailboxTested && !row.mailboxPass
+                      )}`}
+                    >
+                      {mailboxLabel}
+                    </span>
+                    {row.ready ? (
+                      <span className="rounded-full border border-[color:var(--success-border)] bg-[color:var(--success-soft)] px-2 py-0.5 text-xs text-[color:var(--success)]">
+                        Ready to run
+                      </span>
+                    ) : null}
+                  </div>
+                </div>
+                <div className="flex flex-wrap gap-2 md:justify-end">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => document.getElementById("brand-assignments")?.scrollIntoView({ behavior: "smooth" })}
+                  >
+                    Assign
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    disabled={!row.delivery}
+                    onClick={async () => {
+                      if (!row.delivery) return;
+                      setError("");
+                      try {
+                        await testOutreachAccount(row.delivery.id, "customerio");
+                        const refreshed = await fetchOutreachAccounts();
+                        setAccounts(refreshed);
+                      } catch (err) {
+                        setError(err instanceof Error ? err.message : "Customer.io test failed");
+                      }
+                    }}
+                  >
+                    Test Customer.io
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    disabled={!row.mailbox}
+                    onClick={async () => {
+                      if (!row.mailbox) return;
+                      setError("");
+                      try {
+                        await testOutreachAccount(row.mailbox.id, "mailbox");
+                        const refreshed = await fetchOutreachAccounts();
+                        setAccounts(refreshed);
+                      } catch (err) {
+                        setError(err instanceof Error ? err.message : "Email test failed");
+                      }
+                    }}
+                  >
+                    Test Email
+                  </Button>
+                </div>
+              </div>
+            );
+          })}
+          {!brandReadiness.length ? (
+            <div className="text-sm text-[color:var(--muted-foreground)]">No brands yet.</div>
+          ) : null}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
           <CardTitle className="text-base">Add Customer.io Delivery Account</CardTitle>
           <CardDescription>
             Connect Customer.io credentials used for automated outreach delivery. Reply-To is set automatically by the
@@ -483,7 +675,10 @@ export default function OutreachSettingsClient() {
                 setDeliveryForm((prev) => ({ ...prev, name: event.target.value }))
               }
               placeholder="Main Delivery"
+              aria-invalid={Boolean(deliveryErrors.name)}
+              className={invalidFieldClass(Boolean(deliveryErrors.name))}
             />
+            <FieldError message={deliveryErrors.name} />
           </div>
           <div className="grid gap-2">
             <FieldLabel
@@ -497,13 +692,16 @@ export default function OutreachSettingsClient() {
               onChange={(event) =>
                 setDeliveryForm((prev) => ({ ...prev, siteId: event.target.value }))
               }
+              aria-invalid={Boolean(deliveryErrors.siteId)}
+              className={invalidFieldClass(Boolean(deliveryErrors.siteId))}
             />
+            <FieldError message={deliveryErrors.siteId} />
           </div>
           <div className="grid gap-2">
             <FieldLabel
               htmlFor="delivery-api-key"
-              label="Customer.io API Key"
-              help="Create an API key in Customer.io Settings > API Credentials > Track API Keys."
+              label="Customer.io Track API Key"
+              help="Customer.io: Settings > API Credentials > Track API Keys. Paste the API key value."
             />
             <Input
               id="delivery-api-key"
@@ -512,7 +710,10 @@ export default function OutreachSettingsClient() {
               onChange={(event) =>
                 setDeliveryForm((prev) => ({ ...prev, customerIoApiKey: event.target.value }))
               }
+              aria-invalid={Boolean(deliveryErrors.customerIoApiKey)}
+              className={invalidFieldClass(Boolean(deliveryErrors.customerIoApiKey))}
             />
+            <FieldError message={deliveryErrors.customerIoApiKey} />
           </div>
           <div className="grid gap-2">
             <FieldLabel
@@ -525,7 +726,10 @@ export default function OutreachSettingsClient() {
               value={deliveryForm.fromEmail}
               onChange={(event) => setDeliveryForm((prev) => ({ ...prev, fromEmail: event.target.value }))}
               placeholder="zeynep@bhumanai.com"
+              aria-invalid={Boolean(deliveryErrors.fromEmail)}
+              className={invalidFieldClass(Boolean(deliveryErrors.fromEmail))}
             />
+            <FieldError message={deliveryErrors.fromEmail} />
           </div>
           <div className="md:col-span-2 flex justify-end">
             <Button
@@ -542,7 +746,10 @@ export default function OutreachSettingsClient() {
       <Card>
         <CardHeader>
           <CardTitle className="text-base">Add Email Reply Account</CardTitle>
-          <CardDescription>Connect mailbox credentials for reply sync and draft sending.</CardDescription>
+          <CardDescription>
+            Connect the inbox that will receive replies. The platform automatically sets outbound Reply-To to this inbox
+            when assigned to a brand.
+          </CardDescription>
         </CardHeader>
         <CardContent className="grid gap-3 md:grid-cols-2">
           <div className="grid gap-2">
@@ -556,13 +763,16 @@ export default function OutreachSettingsClient() {
               value={mailboxForm.name}
               onChange={(event) => setMailboxForm((prev) => ({ ...prev, name: event.target.value }))}
               placeholder="Sales Inbox"
+              aria-invalid={Boolean(mailboxErrors.name)}
+              className={invalidFieldClass(Boolean(mailboxErrors.name))}
             />
+            <FieldError message={mailboxErrors.name} />
           </div>
           <div className="grid gap-2">
             <FieldLabel
               htmlFor="mailbox-provider"
               label="Mailbox Provider"
-              help="Choose Gmail, Outlook, or IMAP. Host and port auto-fill for Gmail and Outlook."
+              help="Choose Gmail or Outlook for defaults. Choose IMAP if you need custom server settings."
             />
             <Select
               id="mailbox-provider"
@@ -575,9 +785,26 @@ export default function OutreachSettingsClient() {
               <option value="outlook">outlook</option>
               <option value="imap">imap</option>
             </Select>
-            <div className="text-[11px] text-[color:var(--muted-foreground)]">
-              Host and port auto-fill based on provider.
-            </div>
+            {mailboxForm.mailboxProvider !== "imap" ? (
+              <div className="text-[11px] text-[color:var(--muted-foreground)]">
+                Using {mailboxForm.mailboxHost}:{mailboxForm.mailboxPort} (edit in Advanced).
+              </div>
+            ) : null}
+          </div>
+          <div className="grid gap-2">
+            <FieldLabel
+              htmlFor="mailbox-auth-method"
+              label="Connection Method"
+              help="App password is the easiest setup for Gmail/Workspace and Outlook. OAuth tokens are advanced."
+            />
+            <Select
+              id="mailbox-auth-method"
+              value={mailboxAuthMethod}
+              onChange={(event) => setMailboxAuthMethod(event.target.value as MailboxAuthMethod)}
+            >
+              <option value="app_password">App password (recommended)</option>
+              <option value="oauth_tokens">OAuth tokens (advanced)</option>
+            </Select>
           </div>
           <div className="grid gap-2">
             <FieldLabel
@@ -589,75 +816,108 @@ export default function OutreachSettingsClient() {
               id="mailbox-email"
               value={mailboxForm.mailboxEmail}
               onChange={(event) => setMailboxForm((prev) => ({ ...prev, mailboxEmail: event.target.value }))}
+              aria-invalid={Boolean(mailboxErrors.mailboxEmail)}
+              className={invalidFieldClass(Boolean(mailboxErrors.mailboxEmail))}
             />
-          </div>
-          <div className="grid gap-2">
-            <FieldLabel
-              htmlFor="mailbox-host"
-              label="Mailbox Host"
-              help="IMAP server host, for example imap.gmail.com or outlook.office365.com."
-            />
-            <Input
-              id="mailbox-host"
-              value={mailboxForm.mailboxHost}
-              onChange={(event) => setMailboxForm((prev) => ({ ...prev, mailboxHost: event.target.value }))}
-            />
-          </div>
-          <div className="grid gap-2">
-            <FieldLabel
-              htmlFor="mailbox-port"
-              label="Mailbox Port"
-              help="Usually 993 for secure IMAP."
-            />
-            <Input
-              id="mailbox-port"
-              value={mailboxForm.mailboxPort}
-              onChange={(event) => setMailboxForm((prev) => ({ ...prev, mailboxPort: event.target.value }))}
-            />
-          </div>
-          <div className="grid gap-2">
-            <FieldLabel
-              htmlFor="mailbox-access-token"
-              label="Mailbox Access Token"
-              help="OAuth access token (optional if using app password)."
-            />
-            <Input
-              id="mailbox-access-token"
-              type="password"
-              value={mailboxForm.mailboxAccessToken}
-              onChange={(event) =>
-                setMailboxForm((prev) => ({ ...prev, mailboxAccessToken: event.target.value }))
-              }
-            />
-          </div>
-          <div className="grid gap-2">
-            <FieldLabel
-              htmlFor="mailbox-refresh-token"
-              label="Mailbox Refresh Token"
-              help="OAuth refresh token used to renew access tokens."
-            />
-            <Input
-              id="mailbox-refresh-token"
-              type="password"
-              value={mailboxForm.mailboxRefreshToken}
-              onChange={(event) =>
-                setMailboxForm((prev) => ({ ...prev, mailboxRefreshToken: event.target.value }))
-              }
-            />
+            <FieldError message={mailboxErrors.mailboxEmail} />
           </div>
           <div className="grid gap-2">
             <FieldLabel
               htmlFor="mailbox-password"
-              label="Mailbox Password"
-              help="Mailbox password or app password (recommended)."
+              label="App Password"
+              help="Gmail/Workspace: Google Account > Security > 2-Step Verification > App passwords. Use an app password, not your normal password."
             />
             <Input
               id="mailbox-password"
               type="password"
               value={mailboxForm.mailboxPassword}
               onChange={(event) => setMailboxForm((prev) => ({ ...prev, mailboxPassword: event.target.value }))}
+              disabled={mailboxAuthMethod !== "app_password"}
+              aria-invalid={Boolean(mailboxErrors.mailboxPassword)}
+              className={invalidFieldClass(Boolean(mailboxErrors.mailboxPassword))}
             />
+            <FieldError message={mailboxErrors.mailboxPassword} />
           </div>
+          {mailboxAuthMethod === "oauth_tokens" ? (
+            <>
+              <div className="grid gap-2">
+                <FieldLabel
+                  htmlFor="mailbox-access-token"
+                  label="OAuth Access Token (advanced)"
+                  help="If you already have OAuth tokens for this mailbox, paste the access token here."
+                />
+                <Input
+                  id="mailbox-access-token"
+                  type="password"
+                  value={mailboxForm.mailboxAccessToken}
+                  onChange={(event) =>
+                    setMailboxForm((prev) => ({ ...prev, mailboxAccessToken: event.target.value }))
+                  }
+                  aria-invalid={Boolean(mailboxErrors.mailboxAccessToken)}
+                  className={invalidFieldClass(Boolean(mailboxErrors.mailboxAccessToken))}
+                />
+                <FieldError message={mailboxErrors.mailboxAccessToken} />
+              </div>
+              <div className="grid gap-2">
+                <FieldLabel
+                  htmlFor="mailbox-refresh-token"
+                  label="OAuth Refresh Token (advanced)"
+                  help="Optional. Used to refresh access tokens automatically."
+                />
+                <Input
+                  id="mailbox-refresh-token"
+                  type="password"
+                  value={mailboxForm.mailboxRefreshToken}
+                  onChange={(event) =>
+                    setMailboxForm((prev) => ({ ...prev, mailboxRefreshToken: event.target.value }))
+                  }
+                />
+              </div>
+            </>
+          ) : null}
+          <div className="md:col-span-2">
+            <button
+              type="button"
+              className="text-xs font-medium text-[color:var(--muted-foreground)] underline decoration-dotted underline-offset-4"
+              onClick={() => setShowMailboxAdvanced((prev) => !prev)}
+            >
+              {showMailboxAdvanced ? "Hide advanced IMAP settings" : "Show advanced IMAP settings"}
+            </button>
+          </div>
+          {showMailboxAdvanced || mailboxForm.mailboxProvider === "imap" ? (
+            <>
+              <div className="grid gap-2">
+                <FieldLabel
+                  htmlFor="mailbox-host"
+                  label="IMAP Host (advanced)"
+                  help="IMAP server host. Gmail: imap.gmail.com. Outlook: outlook.office365.com."
+                />
+                <Input
+                  id="mailbox-host"
+                  value={mailboxForm.mailboxHost}
+                  onChange={(event) => setMailboxForm((prev) => ({ ...prev, mailboxHost: event.target.value }))}
+                  aria-invalid={Boolean(mailboxErrors.mailboxHost)}
+                  className={invalidFieldClass(Boolean(mailboxErrors.mailboxHost))}
+                />
+                <FieldError message={mailboxErrors.mailboxHost} />
+              </div>
+              <div className="grid gap-2">
+                <FieldLabel
+                  htmlFor="mailbox-port"
+                  label="IMAP Port (advanced)"
+                  help="Usually 993 for secure IMAP."
+                />
+                <Input
+                  id="mailbox-port"
+                  value={mailboxForm.mailboxPort}
+                  onChange={(event) => setMailboxForm((prev) => ({ ...prev, mailboxPort: event.target.value }))}
+                  aria-invalid={Boolean(mailboxErrors.mailboxPort)}
+                  className={invalidFieldClass(Boolean(mailboxErrors.mailboxPort))}
+                />
+                <FieldError message={mailboxErrors.mailboxPort} />
+              </div>
+            </>
+          ) : null}
           <div className="md:col-span-2 flex justify-end">
             <Button
               type="button"
@@ -691,13 +951,22 @@ export default function OutreachSettingsClient() {
       />
 
       <Card>
-        <CardHeader>
+        <CardHeader id="brand-assignments">
           <CardTitle className="text-base">Brand Assignments</CardTitle>
           <CardDescription>
             Choose one delivery account and one reply mailbox account per brand.
           </CardDescription>
         </CardHeader>
         <CardContent className="grid gap-3">
+          <div className="flex justify-end">
+            <button
+              type="button"
+              className="text-xs font-medium text-[color:var(--muted-foreground)] underline decoration-dotted underline-offset-4"
+              onClick={() => setShowAssignmentAdvanced((prev) => !prev)}
+            >
+              {showAssignmentAdvanced ? "Hide advanced" : "Show advanced"}
+            </button>
+          </div>
           {brands.map((brand) => {
             const assignment = assignments[brand.id] ?? {
               accountId: "",
@@ -742,10 +1011,20 @@ export default function OutreachSettingsClient() {
                     Reply Mailbox
                   </div>
                   <Select
-                    value={assignment.mailboxAccountId}
-                    onChange={(event) => void onAssign(brand.id, { mailboxAccountId: event.target.value })}
+                    value={
+                      !assignment.mailboxAccountId && showAssignmentAdvanced ? "__use_delivery_legacy__" : assignment.mailboxAccountId
+                    }
+                    onChange={(event) => {
+                      const value = event.target.value;
+                      void onAssign(brand.id, {
+                        mailboxAccountId: value === "__use_delivery_legacy__" ? "" : value,
+                      });
+                    }}
                   >
-                    <option value="">Use delivery account (legacy)</option>
+                    <option value="">Unassigned</option>
+                    {showAssignmentAdvanced ? (
+                      <option value="__use_delivery_legacy__">Use delivery account (legacy)</option>
+                    ) : null}
                     {mailboxAccounts.map((account) => (
                       <option key={account.id} value={account.id}>
                         {account.name}

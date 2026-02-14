@@ -134,9 +134,6 @@ function preflightReason(input: {
   if (!input.deliveryAccount.config.customerIo.fromEmail.trim()) {
     return "Customer.io From Email is required";
   }
-  if (!input.deliveryAccount.config.customerIo.replyToEmail.trim()) {
-    return "Customer.io Reply-To Email is required";
-  }
   if (!supportsMailbox(input.mailboxAccount)) {
     return "Assigned mailbox account does not support mailbox reply handling";
   }
@@ -709,6 +706,21 @@ async function processDispatchMessagesJob(job: OutreachJob) {
     return;
   }
 
+  const assignment = await getBrandOutreachAssignment(run.brandId);
+  const mailboxAccountId = String(assignment?.mailboxAccountId ?? "").trim();
+  let replyToEmail = "";
+  if (mailboxAccountId) {
+    const mailboxAccount =
+      mailboxAccountId === account.id ? account : await getOutreachAccount(mailboxAccountId);
+    replyToEmail = mailboxAccount?.config.mailbox.email?.trim() ?? "";
+  }
+  if (!replyToEmail) {
+    replyToEmail = account.config.customerIo.replyToEmail.trim();
+  }
+  if (!replyToEmail) {
+    replyToEmail = account.config.customerIo.fromEmail.trim();
+  }
+
   await updateOutreachRun(run.id, { status: "sending" });
   await markExperimentExecutionStatus(run.brandId, run.campaignId, run.experimentId, "sending");
 
@@ -777,6 +789,7 @@ async function processDispatchMessagesJob(job: OutreachJob) {
       message,
       account,
       secrets,
+      replyToEmail,
       recipient: lead.email,
       runId: run.id,
       experimentId: run.experimentId,

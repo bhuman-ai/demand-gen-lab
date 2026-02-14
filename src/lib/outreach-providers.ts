@@ -140,9 +140,8 @@ export async function testOutreachProviders(
   const shouldTestSourcing = scope === "full";
 
   const fromEmail = account.config.customerIo.fromEmail.trim();
-  const replyToEmail = account.config.customerIo.replyToEmail.trim();
   const rawCustomerIoPass = requiresDelivery
-    ? Boolean(account.config.customerIo.siteId && customerIoApiKey(secrets) && fromEmail && replyToEmail)
+    ? Boolean(account.config.customerIo.siteId && customerIoApiKey(secrets) && fromEmail)
     : true;
 
   const rawSourcingPass = requiresDelivery ? Boolean(sourcingToken(secrets)) : true;
@@ -158,7 +157,6 @@ export async function testOutreachProviders(
       if (!account.config.customerIo.siteId.trim()) missing.push("Site ID");
       if (!customerIoApiKey(secrets)) missing.push("API key");
       if (!fromEmail) missing.push("From Email");
-      if (!replyToEmail) missing.push("Reply-To Email");
       customerIoDetail = missing.length ? `Missing: ${missing.join(", ")}` : "Customer.io config missing";
       customerIoPass = false;
     } else {
@@ -367,12 +365,13 @@ export async function sendOutreachMessage(params: {
   message: OutreachMessage;
   account: OutreachAccount;
   secrets: OutreachAccountSecrets;
+  replyToEmail: string;
   recipient: string;
   runId: string;
   experimentId: string;
 }): Promise<{ ok: boolean; providerMessageId: string; error: string }> {
   const fromEmail = params.account.config.customerIo.fromEmail.trim();
-  const replyToEmail = params.account.config.customerIo.replyToEmail.trim();
+  const replyToEmail = params.replyToEmail.trim();
   return sendCustomerIoEvent({
     account: params.account,
     secrets: params.secrets,

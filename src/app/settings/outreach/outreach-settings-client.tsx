@@ -30,7 +30,6 @@ type DeliveryFormState = {
   siteId: string;
   customerIoApiKey: string;
   fromEmail: string;
-  replyToEmail: string;
 };
 
 type MailboxFormState = {
@@ -50,7 +49,6 @@ const INITIAL_DELIVERY_FORM: DeliveryFormState = {
   siteId: "",
   customerIoApiKey: "",
   fromEmail: "",
-  replyToEmail: "",
 };
 
 const INITIAL_MAILBOX_FORM: MailboxFormState = {
@@ -156,8 +154,8 @@ function AccountListCard({
                   {account.accountType !== "mailbox" ? (
                     <>
                       {" "}
-                      · From: {account.config.customerIo.fromEmail || "not set"} · Reply-To:{" "}
-                      {account.config.customerIo.replyToEmail || "not set"}
+                      · From: {account.config.customerIo.fromEmail || "not set"} · Reply-To: set per brand via Reply
+                      Mailbox
                     </>
                   ) : null}
                   {account.accountType !== "delivery" ? (
@@ -302,10 +300,9 @@ export default function OutreachSettingsClient() {
       deliveryForm.siteId.trim(),
       deliveryForm.customerIoApiKey.trim(),
       deliveryForm.fromEmail.trim(),
-      deliveryForm.replyToEmail.trim(),
     ];
     if (required.some((value) => !value)) {
-      setError("Delivery account requires name, Customer.io Site ID, API Key, From Email, and Reply-To Email.");
+      setError("Delivery account requires name, Customer.io Site ID, API Key, and From Email.");
       return;
     }
 
@@ -321,7 +318,7 @@ export default function OutreachSettingsClient() {
             siteId: deliveryForm.siteId,
             workspaceId: "",
             fromEmail: deliveryForm.fromEmail,
-            replyToEmail: deliveryForm.replyToEmail,
+            replyToEmail: "",
           },
           apify: {
             defaultActorId: "",
@@ -467,7 +464,10 @@ export default function OutreachSettingsClient() {
       <Card>
         <CardHeader>
           <CardTitle className="text-base">Add Customer.io Delivery Account</CardTitle>
-          <CardDescription>Connect Customer.io credentials used for automated outreach delivery.</CardDescription>
+          <CardDescription>
+            Connect Customer.io credentials used for automated outreach delivery. Reply-To is set automatically by the
+            Reply Mailbox you assign to each brand.
+          </CardDescription>
         </CardHeader>
         <CardContent className="grid gap-3 md:grid-cols-2">
           <div className="grid gap-2">
@@ -527,19 +527,6 @@ export default function OutreachSettingsClient() {
               placeholder="zeynep@bhumanai.com"
             />
           </div>
-          <div className="grid gap-2">
-            <FieldLabel
-              htmlFor="delivery-reply-to-email"
-              label="Reply-To Email"
-              help="Replies will go to this address (Reply-To header). Set this to the mailbox you connect below. Example: zeynep@bhuman.ai."
-            />
-            <Input
-              id="delivery-reply-to-email"
-              value={deliveryForm.replyToEmail}
-              onChange={(event) => setDeliveryForm((prev) => ({ ...prev, replyToEmail: event.target.value }))}
-              placeholder="zeynep@bhuman.ai"
-            />
-          </div>
           <div className="md:col-span-2 flex justify-end">
             <Button
               type="button"
@@ -595,8 +582,8 @@ export default function OutreachSettingsClient() {
           <div className="grid gap-2">
             <FieldLabel
               htmlFor="mailbox-email"
-              label="Mailbox Email"
-              help="Address used for reply threading and human-approved responses."
+              label="Reply Inbox Email"
+              help="This is the inbox where replies arrive. When you assign this mailbox to a brand, the platform automatically sets outbound Reply-To to this email."
             />
             <Input
               id="mailbox-email"
@@ -716,6 +703,15 @@ export default function OutreachSettingsClient() {
               accountId: "",
               mailboxAccountId: "",
             };
+            const assignedMailbox = assignment.mailboxAccountId
+              ? mailboxAccounts.find((account) => account.id === assignment.mailboxAccountId) ?? null
+              : null;
+            const assignedMailboxEmail = assignedMailbox?.config.mailbox.email?.trim() ?? "";
+            const assignedDelivery = assignment.accountId
+              ? deliveryAccounts.find((account) => account.id === assignment.accountId) ?? null
+              : null;
+            const needsReplyMailbox =
+              !assignment.mailboxAccountId && (!assignedDelivery || assignedDelivery.accountType === "delivery");
             return (
               <div
                 key={brand.id}
@@ -749,13 +745,25 @@ export default function OutreachSettingsClient() {
                     value={assignment.mailboxAccountId}
                     onChange={(event) => void onAssign(brand.id, { mailboxAccountId: event.target.value })}
                   >
-                    <option value="">Use delivery account</option>
+                    <option value="">Use delivery account (legacy)</option>
                     {mailboxAccounts.map((account) => (
                       <option key={account.id} value={account.id}>
                         {account.name}
                       </option>
                     ))}
                   </Select>
+                  {assignment.mailboxAccountId ? (
+                    <div className="text-xs text-[color:var(--muted-foreground)]">
+                      Reply-To will be:{" "}
+                      <span className="font-medium text-[color:var(--foreground)]">
+                        {assignedMailboxEmail || "not set"}
+                      </span>
+                    </div>
+                  ) : needsReplyMailbox ? (
+                    <div className="rounded-md border border-[color:var(--border)] bg-[color:var(--surface)] px-2 py-1 text-xs text-[color:var(--muted-foreground)]">
+                      Autopilot requires a reply mailbox to run. Assign one to enable sending.
+                    </div>
+                  ) : null}
                 </div>
               </div>
             );

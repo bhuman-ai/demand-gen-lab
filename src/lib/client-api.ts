@@ -270,6 +270,14 @@ export async function updateOutreachAccountApi(
   return data.account as OutreachAccount;
 }
 
+export async function deleteOutreachAccountApi(accountId: string) {
+  const response = await fetch(`/api/outreach/accounts/${accountId}`, {
+    method: "DELETE",
+  });
+  const data = await readJson(response);
+  return String(data.deletedId ?? accountId);
+}
+
 export async function testOutreachAccount(
   accountId: string,
   scope: "full" | "customerio" | "mailbox" = "full"

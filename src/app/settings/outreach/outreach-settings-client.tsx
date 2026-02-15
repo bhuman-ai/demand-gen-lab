@@ -9,6 +9,7 @@ import { Select } from "@/components/ui/select";
 import {
   assignBrandOutreachAccount,
   createOutreachAccountApi,
+  deleteOutreachAccountApi,
   fetchBrandOutreachAssignment,
   fetchBrands,
   fetchOutreachAccounts,
@@ -136,6 +137,7 @@ type AccountListCardProps = {
   accounts: OutreachAccount[];
   setAccounts: Dispatch<SetStateAction<OutreachAccount[]>>;
   setError: Dispatch<SetStateAction<string>>;
+  onDeleteAccount: (accountId: string) => Promise<void>;
 };
 
 function AccountListCard({
@@ -148,6 +150,7 @@ function AccountListCard({
   accounts,
   setAccounts,
   setError,
+  onDeleteAccount,
 }: AccountListCardProps) {
   const testLabel =
     testScope === "customerio" ? "Test Customer.io" : testScope === "mailbox" ? "Test Email" : "Test";
@@ -156,6 +159,7 @@ function AccountListCard({
     Record<string, { ok: boolean; message: string; testedAt: string }>
   >({});
   const [testingByAccountId, setTestingByAccountId] = useState<Record<string, boolean>>({});
+  const [deletingByAccountId, setDeletingByAccountId] = useState<Record<string, boolean>>({});
 
   return (
     <Card>
@@ -197,7 +201,7 @@ function AccountListCard({
                 <Button
                   type="button"
                   variant="outline"
-                  disabled={Boolean(testingByAccountId[account.id])}
+                  disabled={Boolean(testingByAccountId[account.id] || deletingByAccountId[account.id])}
                   onClick={async () => {
                     setError("");
                     try {
@@ -220,11 +224,37 @@ function AccountListCard({
                       setTestingByAccountId((prev) => ({ ...prev, [account.id]: false }));
                     }
                   }}
-                > 
+                >
                   {testingByAccountId[account.id] ? "Testing..." : testLabel}
+                </Button>
+                <Button
+                  type="button"
+                  variant="danger"
+                  disabled={Boolean(deletingByAccountId[account.id] || testingByAccountId[account.id])}
+                  onClick={async () => {
+                    const confirmed = window.confirm(`Delete account "${account.name}"?`);
+                    if (!confirmed) return;
+                    setError("");
+                    try {
+                      setDeletingByAccountId((prev) => ({ ...prev, [account.id]: true }));
+                      await onDeleteAccount(account.id);
+                      setTestStateByAccountId((prev) => {
+                        const next = { ...prev };
+                        delete next[account.id];
+                        return next;
+                      });
+                    } catch (err) {
+                      setError(err instanceof Error ? err.message : "Failed to delete account");
+                    } finally {
+                      setDeletingByAccountId((prev) => ({ ...prev, [account.id]: false }));
+                    }
+                  }}
+                >
+                  {deletingByAccountId[account.id] ? "Deleting..." : "Delete"}
                 </Button>
                 <Select
                   value={account.status}
+                  disabled={Boolean(deletingByAccountId[account.id])}
                   onChange={async (event) => {
                     const status = event.target.value === "inactive" ? "inactive" : "active";
                     const updated = await updateOutreachAccountApi(account.id, { status });
@@ -508,6 +538,44 @@ export default function OutreachSettingsClient() {
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to assign account");
     }
+  };
+
+  const onDeleteAccount = async (accountId: string) => {
+    const deletedId = await deleteOutreachAccountApi(accountId);
+    setAccounts((prev) => prev.filter((account) => account.id !== deletedId));
+
+    setAssignments((prev) => {
+      const next: AssignmentMap = {};
+      for (const [brandId, row] of Object.entries(prev)) {
+        if (row.accountId === deletedId) {
+          next[brandId] = { accountId: "", mailboxAccountId: "" };
+        } else if (row.mailboxAccountId === deletedId) {
+          next[brandId] = { ...row, mailboxAccountId: "" };
+        } else {
+          next[brandId] = row;
+        }
+      }
+      return next;
+    });
+
+    const assignmentPairs = await Promise.all(
+      brands.map(async (brand) => {
+        const row = await fetchBrandOutreachAssignment(brand.id);
+        return {
+          brandId: brand.id,
+          accountId: row.assignment?.accountId ?? "",
+          mailboxAccountId: row.assignment?.mailboxAccountId ?? "",
+        };
+      })
+    );
+    const map: AssignmentMap = {};
+    for (const row of assignmentPairs) {
+      map[row.brandId] = {
+        accountId: row.accountId,
+        mailboxAccountId: row.mailboxAccountId,
+      };
+    }
+    setAssignments(map);
   };
 
   const setMailboxProviderWithDefaults = (provider: MailboxFormState["mailboxProvider"]) => {
@@ -1027,6 +1095,7 @@ export default function OutreachSettingsClient() {
         accounts={deliveryAccounts}
         setAccounts={setAccounts}
         setError={setError}
+        onDeleteAccount={onDeleteAccount}
       />
 
       <AccountListCard
@@ -1039,6 +1108,7 @@ export default function OutreachSettingsClient() {
         accounts={mailboxAccounts}
         setAccounts={setAccounts}
         setError={setError}
+        onDeleteAccount={onDeleteAccount}
       />
 
       <Card>

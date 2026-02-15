@@ -104,7 +104,7 @@ async function testCustomerIoTrackCredentials(input: {
       if (alternate.ok) {
         return {
           ok: false,
-          error: `Customer.io auth failed (HTTP 401) on ${baseUrl}, but succeeded on ${alternateBase}. Your account may be in a different region.`,
+          error: `Customer.io auth failed (HTTP 401) on ${baseUrl}, but succeeded on ${alternateBase}. Your account may be in a different region. Also confirm you used a Tracking API key (not an App API key).`,
           region: alternate.region,
           baseUrl,
         };
@@ -118,7 +118,7 @@ async function testCustomerIoTrackCredentials(input: {
     const bodyText = primary.body ? ` ${primary.body.slice(0, 160)}` : "";
     return {
       ok: false,
-      error: `Customer.io auth failed (HTTP ${primary.status}) on ${baseUrl}.${bodyText}${siteIdHint}`,
+      error: `Customer.io auth failed (HTTP ${primary.status}) on ${baseUrl}.${bodyText}${siteIdHint} Use a Tracking API key (not an App API key).`,
       region: "",
       baseUrl,
     };

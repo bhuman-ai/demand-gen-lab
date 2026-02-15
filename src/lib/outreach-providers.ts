@@ -50,20 +50,22 @@ function customerIoApiKey(secrets: OutreachAccountSecrets) {
 async function testCustomerIoTrackCredentials(input: {
   siteId: string;
   apiKey: string;
-}): Promise<{ ok: boolean; error: string; region: string }> {
+}): Promise<{ ok: boolean; error: string; region: string; baseUrl: string }> {
   if (process.env.CUSTOMER_IO_SIMULATE === "1") {
-    return { ok: true, error: "", region: "simulated" };
+    return { ok: true, error: "", region: "simulated", baseUrl: "simulated" };
   }
 
   const siteId = input.siteId.trim();
   const apiKey = input.apiKey.trim();
   if (!siteId || !apiKey) {
-    return { ok: false, error: "Missing Customer.io Site ID or API key.", region: "" };
+    return { ok: false, error: "Missing Customer.io Site ID or API key.", region: "", baseUrl: customerIoTrackBaseUrl() };
   }
 
-  try {
+  const baseUrl = customerIoTrackBaseUrl();
+
+  async function attempt(url: string) {
     const auth = Buffer.from(`${siteId}:${apiKey}`).toString("base64");
-    const response = await fetch(`${customerIoTrackBaseUrl()}/api/v1/accounts/region`, {
+    const response = await fetch(`${url}/api/v1/accounts/region`, {
       method: "GET",
       headers: {
         Authorization: `Basic ${auth}`,
@@ -78,22 +80,54 @@ async function testCustomerIoTrackCredentials(input: {
       } catch {
         body = "";
       }
-      return {
-        ok: false,
-        error: `Customer.io auth failed (HTTP ${response.status}).${body ? ` ${body.slice(0, 160)}` : ""}`,
-        region: "",
-      };
+      return { ok: false as const, status: response.status, body };
     }
 
     const payload: unknown = await response.json().catch(() => ({}));
     const row = payload && typeof payload === "object" && !Array.isArray(payload) ? (payload as Record<string, unknown>) : {};
     const region = String(row.region ?? "").trim();
-    return { ok: true, error: "", region };
+    return { ok: true as const, status: 200, region, body: "" };
+  }
+
+  try {
+    const primary = await attempt(baseUrl);
+    if (primary.ok) {
+      return { ok: true, error: "", region: primary.region, baseUrl };
+    }
+
+    // If the account lives in the other region, try the alternate Track base URL to produce a useful hint.
+    const explicitBase = String(process.env.CUSTOMER_IO_TRACK_BASE_URL ?? "").trim();
+    if (!explicitBase && primary.status === 401) {
+      const alternateBase =
+        baseUrl === "https://track-eu.customer.io" ? "https://track.customer.io" : "https://track-eu.customer.io";
+      const alternate = await attempt(alternateBase);
+      if (alternate.ok) {
+        return {
+          ok: false,
+          error: `Customer.io auth failed (HTTP 401) on ${baseUrl}, but succeeded on ${alternateBase}. Your account may be in a different region.`,
+          region: alternate.region,
+          baseUrl,
+        };
+      }
+    }
+
+    const siteIdLooksWrong = siteId.includes("@") || siteId.includes(".") || siteId.includes(" ");
+    const siteIdHint = siteIdLooksWrong
+      ? " Site ID looks wrong (it should be the Site ID value, not a workspace/name)."
+      : "";
+    const bodyText = primary.body ? ` ${primary.body.slice(0, 160)}` : "";
+    return {
+      ok: false,
+      error: `Customer.io auth failed (HTTP ${primary.status}) on ${baseUrl}.${bodyText}${siteIdHint}`,
+      region: "",
+      baseUrl,
+    };
   } catch (error) {
     return {
       ok: false,
       error: error instanceof Error ? error.message : "Customer.io auth failed",
       region: "",
+      baseUrl,
     };
   }
 }
@@ -167,8 +201,11 @@ export async function testOutreachProviders(
       customerIoPass = auth.ok;
       if (!auth.ok) {
         customerIoDetail = auth.error;
-      } else if (auth.region) {
-        customerIoDetail = `Region: ${auth.region}`;
+      } else {
+        const detailParts: string[] = [];
+        if (auth.region) detailParts.push(`Region: ${auth.region}`);
+        if (auth.baseUrl) detailParts.push(`Base: ${auth.baseUrl.replace(/^https?:\/\//, "")}`);
+        customerIoDetail = detailParts.join(" · ");
       }
     }
   }
@@ -197,9 +234,9 @@ export async function testOutreachProviders(
     ok: customerIoPass && apifyPass && mailboxPass,
     scope,
     checks: {
-      customerIo: rawCustomerIoPass ? "pass" : "fail",
-      apify: rawSourcingPass ? "pass" : "fail",
-      mailbox: rawMailboxPass ? "pass" : "fail",
+      customerIo: customerIoPass ? "pass" : "fail",
+      apify: apifyPass ? "pass" : "fail",
+      mailbox: mailboxPass ? "pass" : "fail",
     },
     message,
   };

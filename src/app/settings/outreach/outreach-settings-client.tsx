@@ -353,6 +353,12 @@ export default function OutreachSettingsClient() {
     if (!deliveryForm.siteId.trim()) nextErrors.siteId = "Required.";
     if (!deliveryForm.customerIoApiKey.trim()) nextErrors.customerIoApiKey = "Required.";
     if (!deliveryForm.fromEmail.trim()) nextErrors.fromEmail = "Required.";
+
+    const siteId = deliveryForm.siteId.trim();
+    // Catch the most common mis-paste: users paste Workspace/Name (often a domain) instead of Site ID.
+    if (siteId && (siteId.includes("@") || siteId.includes(".") || siteId.includes(" "))) {
+      nextErrors.siteId = "This looks like a workspace/name. Paste the Site ID value (looks like 9336ae1a489137ebb1e5).";
+    }
     setDeliveryErrors(nextErrors);
     if (Object.keys(nextErrors).length) {
       setError("Fix the highlighted fields in the delivery account section.");
@@ -759,7 +765,7 @@ export default function OutreachSettingsClient() {
             <FieldLabel
               htmlFor="delivery-site-id"
               label="Customer.io Site ID"
-              help="Found in Customer.io Settings > API Credentials > Track API Keys."
+              help="Customer.io: Settings > API Credentials. Copy the Site ID column value (looks like 9336ae1a489137ebb1e5)."
             />
             <Input
               id="delivery-site-id"
@@ -767,6 +773,7 @@ export default function OutreachSettingsClient() {
               onChange={(event) =>
                 setDeliveryForm((prev) => ({ ...prev, siteId: event.target.value }))
               }
+              placeholder="9336ae1a489137ebb1e5"
               aria-invalid={Boolean(deliveryErrors.siteId)}
               className={invalidFieldClass(Boolean(deliveryErrors.siteId))}
             />
@@ -775,8 +782,8 @@ export default function OutreachSettingsClient() {
           <div className="grid gap-2">
             <FieldLabel
               htmlFor="delivery-api-key"
-              label="Customer.io Track API Key"
-              help="Customer.io: Settings > API Credentials > Track API Keys. Paste the API key value."
+              label="Customer.io API Key"
+              help="Customer.io: Settings > API Credentials. Copy the API Key value from the same row as your Site ID."
             />
             <Input
               id="delivery-api-key"
@@ -785,6 +792,7 @@ export default function OutreachSettingsClient() {
               onChange={(event) =>
                 setDeliveryForm((prev) => ({ ...prev, customerIoApiKey: event.target.value }))
               }
+              placeholder="3a50ad6998b2fd842b5f"
               aria-invalid={Boolean(deliveryErrors.customerIoApiKey)}
               className={invalidFieldClass(Boolean(deliveryErrors.customerIoApiKey))}
             />

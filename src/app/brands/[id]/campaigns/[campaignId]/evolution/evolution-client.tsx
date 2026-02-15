@@ -83,11 +83,10 @@ export default function EvolutionClient({ brandId, campaignId }: { brandId: stri
 
   useEffect(() => {
     if (!campaign) return;
-    if (rows.length) return;
     if (suggestionsLoadedOnce) return;
     void loadSuggestions();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [campaign, rows.length, suggestionsLoadedOnce, brandId, campaignId]);
+  }, [campaign, suggestionsLoadedOnce, brandId, campaignId]);
 
   if (!campaign) {
     return <div className="text-sm text-[color:var(--muted-foreground)]">Loading evolution...</div>;

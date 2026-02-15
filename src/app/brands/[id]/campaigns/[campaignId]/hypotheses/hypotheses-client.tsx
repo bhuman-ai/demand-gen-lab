@@ -82,7 +82,6 @@ export default function HypothesesClient({ brandId, campaignId }: { brandId: str
 
   useEffect(() => {
     if (!campaign) return;
-    if (campaign.hypotheses.length) return;
     if (suggestionsLoadedOnce) return;
     void loadSuggestions();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -91,27 +90,6 @@ export default function HypothesesClient({ brandId, campaignId }: { brandId: str
   if (!campaign) {
     return <div className="text-sm text-[color:var(--muted-foreground)]">Loading hypotheses...</div>;
   }
-
-  const hypothesisTemplates: Array<Pick<Hypothesis, "title" | "channel" | "rationale">> = [
-    {
-      title: "ICP pain: stop doing X manually",
-      channel: "Email",
-      rationale:
-        "If we target a single role at a narrow company type and lead with a specific pain, we should see higher reply quality and faster learning.",
-    },
-    {
-      title: "Offer test: the 10-minute teardown",
-      channel: "Email",
-      rationale:
-        "If we offer a short, concrete artifact (teardown/audit) with a low-friction CTA, we should increase positive replies without lowering lead quality.",
-    },
-    {
-      title: "Trigger-based: new hire or funding",
-      channel: "Email",
-      rationale:
-        "If we filter to prospects with an obvious trigger, we should improve relevance and reduce negative replies.",
-    },
-  ];
 
   const save = async (completeStep: boolean) => {
     setSaving(true);
@@ -303,7 +281,7 @@ export default function HypothesesClient({ brandId, campaignId }: { brandId: str
                       next[index] = { ...next[index], rationale: event.target.value };
                       setHypotheses(next);
                     }}
-                  />
+                    />
                 </div>
                 <div className="grid gap-2">
                   <Label htmlFor={`hypothesis-channel-${index}`}>Channel</Label>
@@ -334,8 +312,24 @@ export default function HypothesesClient({ brandId, campaignId }: { brandId: str
                   </Select>
                 </div>
               </div>
+              <div className="grid gap-2">
+                <Label htmlFor={`hypothesis-target-${index}`}>Target Audience</Label>
+                <Textarea
+                  id={`hypothesis-target-${index}`}
+                  value={hypothesis.actorQuery}
+                  onChange={(event) => {
+                    const next = [...hypotheses];
+                    next[index] = { ...next[index], actorQuery: event.target.value };
+                    setHypotheses(next);
+                  }}
+                  placeholder="Who should we reach? Example: VP Marketing at SaaS (20-200 employees) using HubSpot"
+                />
+                <div className="text-xs text-[color:var(--muted-foreground)]">
+                  This is used to source leads for outreach when you approve and run this hypothesis.
+                </div>
+              </div>
               <div className="grid gap-2 md:max-w-[260px]">
-                <Label htmlFor={`hypothesis-max-leads-${index}`}>Lead Target</Label>
+                <Label htmlFor={`hypothesis-max-leads-${index}`}>Max Leads</Label>
                 <Input
                   id={`hypothesis-max-leads-${index}`}
                   type="number"
@@ -374,7 +368,7 @@ export default function HypothesesClient({ brandId, campaignId }: { brandId: str
             <CardHeader>
               <CardTitle className="text-base">Start Here</CardTitle>
               <CardDescription>
-                You can generate from your objective, or start from a template and edit.
+                Generate tailored hypothesis cards, then click one to add it to your list. You can edit everything.
               </CardDescription>
             </CardHeader>
             <CardContent className="grid gap-3">
@@ -403,24 +397,6 @@ export default function HypothesesClient({ brandId, campaignId }: { brandId: str
                   </Button>
                 </div>
               )}
-
-              <div className="grid gap-2">
-                <div className="text-xs font-semibold text-[color:var(--muted-foreground)]">Templates</div>
-                <div className="flex flex-wrap gap-2">
-                  {hypothesisTemplates.map((template) => (
-                    <Button
-                      key={template.title}
-                      size="sm"
-                      variant="outline"
-                      type="button"
-                      title={template.rationale}
-                      onClick={() => addManual(template)}
-                    >
-                      {template.title}
-                    </Button>
-                  ))}
-                </div>
-              </div>
             </CardContent>
           </Card>
         ) : null}

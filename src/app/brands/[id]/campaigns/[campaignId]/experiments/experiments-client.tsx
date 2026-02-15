@@ -112,7 +112,6 @@ export default function ExperimentsClient({ brandId, campaignId }: { brandId: st
 
   useEffect(() => {
     if (!campaign) return;
-    if (campaign.experiments.length) return;
     if (!campaign.hypotheses.length) return;
     if (suggestionsLoadedOnce) return;
     void loadSuggestions();
@@ -201,7 +200,7 @@ export default function ExperimentsClient({ brandId, campaignId }: { brandId: st
           <CardDescription>Step 3 of 4: build experiment variants and set run status.</CardDescription>
         </CardHeader>
         <CardContent className="flex flex-wrap gap-2">
-          <Button type="button" variant="outline" onClick={loadSuggestions} disabled={suggestionsLoading}>
+          <Button type="button" variant="outline" onClick={loadSuggestions} disabled={suggestionsLoading || !hypotheses.length}>
             <Sparkles className="h-4 w-4" />
             {suggestionsLoading ? "Generating..." : "Generate Variants"}
           </Button>
@@ -236,13 +235,23 @@ export default function ExperimentsClient({ brandId, campaignId }: { brandId: st
           </CardDescription>
         </CardHeader>
         <CardContent className="grid gap-3">
+          {!hypotheses.length ? (
+            <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3 text-sm">
+              Add hypotheses first to generate experiment variants.
+              <div className="mt-2">
+                <Button asChild size="sm" variant="outline">
+                  <Link href={`/brands/${brandId}/campaigns/${campaignId}/hypotheses`}>Go to Hypotheses</Link>
+                </Button>
+              </div>
+            </div>
+          ) : null}
           <div className="flex flex-wrap gap-2">
             <Button
               type="button"
               size="sm"
               variant="secondary"
               onClick={loadSuggestions}
-              disabled={suggestionsLoading}
+              disabled={suggestionsLoading || !hypotheses.length}
             >
               <Sparkles className="h-4 w-4" />
               {suggestionsLoading ? "Generating..." : suggestions.length ? "Refresh Suggestions" : "Generate Suggestions"}

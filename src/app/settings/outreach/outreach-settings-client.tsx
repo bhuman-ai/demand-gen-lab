@@ -980,7 +980,7 @@ export default function OutreachSettingsClient() {
             <FieldLabel
               htmlFor="mailbox-password"
               label="App Password"
-              help="Gmail/Workspace: Google Account > Security > 2-Step Verification > App passwords. Use an app password, not your normal password."
+              help="For Gmail/Workspace, first enable 2-Step Verification, then create an App Password. Paste the 16-character app password here (not your regular login password)."
             />
             <Input
               id="mailbox-password"
@@ -992,6 +992,31 @@ export default function OutreachSettingsClient() {
               className={invalidFieldClass(Boolean(mailboxErrors.mailboxPassword))}
             />
             <FieldError message={mailboxErrors.mailboxPassword} />
+            {mailboxForm.mailboxProvider === "gmail" && mailboxAuthMethod === "app_password" ? (
+              <div className="rounded-lg border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-2 text-xs text-[color:var(--muted-foreground)]">
+                <div className="font-medium text-[color:var(--foreground)]">Gmail setup guide</div>
+                <ol className="mt-1 list-decimal space-y-0.5 pl-4">
+                  <li>Open Google Account Security and turn on 2-Step Verification.</li>
+                  <li>Open App Passwords and create a new app password for Mail.</li>
+                  <li>Copy the 16-character password and paste it here (no spaces).</li>
+                  <li>If App Passwords is unavailable, your Workspace admin may have disabled it.</li>
+                </ol>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  <a
+                    className="underline decoration-dotted underline-offset-4"
+                    href="https://myaccount.google.com/security"
+                  >
+                    Open Google Security
+                  </a>
+                  <a
+                    className="underline decoration-dotted underline-offset-4"
+                    href="https://myaccount.google.com/apppasswords"
+                  >
+                    Open App Passwords
+                  </a>
+                </div>
+              </div>
+            ) : null}
           </div>
           {mailboxAuthMethod === "oauth_tokens" ? (
             <>

@@ -20,6 +20,18 @@ export function getActiveBrandIdFromPath(pathname: string): string {
   return "";
 }
 
+function hasBrandId(rows: Brand[], brandId: string) {
+  return rows.some((brand) => brand.id === brandId);
+}
+
+function buildPathWithBrandId(pathname: string, brandId: string) {
+  const parts = pathname.split("/").filter(Boolean);
+  if (parts[0] !== "brands") return `/brands/${brandId}`;
+  const next = [...parts];
+  next[1] = brandId;
+  return `/${next.join("/")}`;
+}
+
 export default function BrandSwitcher() {
   const router = useRouter();
   const pathname = usePathname();
@@ -57,6 +69,26 @@ export default function BrandSwitcher() {
       mounted = false;
     };
   }, [activeBrandId, pathBrandId]);
+
+  useEffect(() => {
+    if (!brands.length) return;
+
+    const storedBrandId = typeof window !== "undefined" ? localStorage.getItem(ACTIVE_BRAND_KEY) ?? "" : "";
+    const validStoredBrandId = hasBrandId(brands, storedBrandId) ? storedBrandId : "";
+    const fallbackBrandId = validStoredBrandId || brands[0]?.id || "";
+
+    if (pathBrandId && !hasBrandId(brands, pathBrandId) && fallbackBrandId) {
+      localStorage.setItem(ACTIVE_BRAND_KEY, fallbackBrandId);
+      router.replace(buildPathWithBrandId(pathname, fallbackBrandId));
+      return;
+    }
+
+    if (!pathBrandId) {
+      if (fallbackBrandId) {
+        localStorage.setItem(ACTIVE_BRAND_KEY, fallbackBrandId);
+      }
+    }
+  }, [brands, pathBrandId, activeBrandId, pathname, router]);
 
   const selectedBrandId = pathBrandId || activeBrandId;
 

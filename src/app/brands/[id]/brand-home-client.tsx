@@ -11,6 +11,7 @@ import {
   assignBrandOutreachAccount,
   createCampaignApi,
   fetchBrand,
+  fetchBrands,
   fetchBrandOutreachAssignment,
   fetchCampaigns,
   fetchOutreachAccounts,
@@ -57,7 +58,23 @@ export default function BrandHomeClient({ brandId }: { brandId: string }) {
       })
       .catch((err: unknown) => {
         if (!mounted) return;
-        setError(err instanceof Error ? err.message : "Failed to load brand");
+        const message = err instanceof Error ? err.message : "Failed to load brand";
+
+        if (message.toLowerCase().includes("brand not found")) {
+          void fetchBrands()
+            .then((rows) => {
+              if (!mounted) return;
+              const fallbackBrandId = rows[0]?.id ?? "";
+              if (!fallbackBrandId || fallbackBrandId === brandId) return;
+              localStorage.setItem("factory.activeBrandId", fallbackBrandId);
+              router.replace(`/brands/${fallbackBrandId}`);
+            })
+            .catch(() => {
+              // Keep the original error state if fallback lookup fails.
+            });
+        }
+
+        setError(message);
         setBrand(null);
         setCampaigns([]);
       })
@@ -67,7 +84,7 @@ export default function BrandHomeClient({ brandId }: { brandId: string }) {
     return () => {
       mounted = false;
     };
-  }, [brandId]);
+  }, [brandId, router]);
 
   const activeCampaign = useMemo(() => campaigns[0] ?? null, [campaigns]);
 

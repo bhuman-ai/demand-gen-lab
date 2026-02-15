@@ -747,7 +747,7 @@ export default function OutreachSettingsClient() {
           <CardTitle className="text-base">Add Email Reply Account</CardTitle>
           <CardDescription>
             Connect the inbox that will receive replies. The platform automatically sets outbound Reply-To to this inbox
-            when assigned to a brand.
+            when assigned to a brand. (Your sender address is set separately in the Customer.io Delivery Account.)
           </CardDescription>
         </CardHeader>
         <CardContent className="grid gap-3 md:grid-cols-2">
@@ -819,6 +819,10 @@ export default function OutreachSettingsClient() {
               className={invalidFieldClass(Boolean(mailboxErrors.mailboxEmail))}
             />
             <FieldError message={mailboxErrors.mailboxEmail} />
+            <div className="text-xs text-[color:var(--muted-foreground)]">
+              Sending address comes from your assigned delivery account’s{" "}
+              <span className="font-medium text-[color:var(--foreground)]">From Email</span>.
+            </div>
           </div>
           <div className="grid gap-2">
             <FieldLabel
@@ -995,6 +999,14 @@ export default function OutreachSettingsClient() {
                       </option>
                     ))}
                   </Select>
+                  {assignedDelivery ? (
+                    <div className="text-xs text-[color:var(--muted-foreground)]">
+                      From will be:{" "}
+                      <span className="font-medium text-[color:var(--foreground)]">
+                        {assignedDelivery.config.customerIo.fromEmail || "not set"}
+                      </span>
+                    </div>
+                  ) : null}
                 </div>
                 <div className="grid gap-1">
                   <div className="text-[11px] uppercase tracking-[0.08em] text-[color:var(--muted-foreground)]">

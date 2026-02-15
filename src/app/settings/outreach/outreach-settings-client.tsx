@@ -287,6 +287,9 @@ export default function OutreachSettingsClient() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
+  const scrollToId = (id: string) =>
+    document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
+
   useEffect(() => {
     let mounted = true;
     void (async () => {
@@ -391,6 +394,16 @@ export default function OutreachSettingsClient() {
       setDeliveryForm(INITIAL_DELIVERY_FORM);
       setDeliveryErrors({});
       trackEvent("outreach_account_connected", { accountId: created.id });
+
+      // Common case: new user has exactly 1 brand and just wants to get running fast.
+      if (brands.length === 1) {
+        const onlyBrand = brands[0];
+        const current = assignments[onlyBrand.id]?.accountId ?? "";
+        if (!current) {
+          await onAssign(onlyBrand.id, { accountId: created.id });
+          scrollToId("brand-assignments");
+        }
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to create delivery account");
     } finally {
@@ -463,6 +476,15 @@ export default function OutreachSettingsClient() {
       setMailboxForm(INITIAL_MAILBOX_FORM);
       setMailboxErrors({});
       trackEvent("outreach_account_connected", { accountId: created.id });
+
+      if (brands.length === 1) {
+        const onlyBrand = brands[0];
+        const current = assignments[onlyBrand.id]?.mailboxAccountId ?? "";
+        if (!current) {
+          await onAssign(onlyBrand.id, { mailboxAccountId: created.id });
+          scrollToId("brand-assignments");
+        }
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to create email account");
     } finally {
@@ -564,6 +586,30 @@ export default function OutreachSettingsClient() {
           </CardDescription>
         </CardHeader>
         <CardContent className="grid gap-3">
+          {!deliveryAccounts.length || !mailboxAccounts.length ? (
+            <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface)] p-3 text-sm">
+              <div className="font-semibold">Start Here</div>
+              <div className="mt-1 text-xs text-[color:var(--muted-foreground)]">
+                1) Add a delivery account (Customer.io + sender address). 2) Add a reply mailbox (where replies land).
+                3) Assign both to your brand.
+              </div>
+              <div className="mt-2 flex flex-wrap gap-2">
+                {!deliveryAccounts.length ? (
+                  <Button type="button" size="sm" variant="secondary" onClick={() => scrollToId("add-delivery-account")}>
+                    Add delivery account
+                  </Button>
+                ) : null}
+                {!mailboxAccounts.length ? (
+                  <Button type="button" size="sm" variant="secondary" onClick={() => scrollToId("add-email-reply-account")}>
+                    Add reply mailbox
+                  </Button>
+                ) : null}
+                <Button type="button" size="sm" variant="outline" onClick={() => scrollToId("brand-assignments")}>
+                  Assign to brand
+                </Button>
+              </div>
+            </div>
+          ) : null}
           {brandReadiness.map((row) => {
             const deliveryLabel = row.deliveryAssigned
               ? row.deliveryPass
@@ -622,9 +668,19 @@ export default function OutreachSettingsClient() {
                   <Button
                     type="button"
                     variant="outline"
-                    onClick={() => document.getElementById("brand-assignments")?.scrollIntoView({ behavior: "smooth" })}
+                    onClick={() => {
+                      if (!deliveryAccounts.length) {
+                        scrollToId("add-delivery-account");
+                        return;
+                      }
+                      if (!mailboxAccounts.length) {
+                        scrollToId("add-email-reply-account");
+                        return;
+                      }
+                      scrollToId("brand-assignments");
+                    }}
                   >
-                    Assign
+                    {!deliveryAccounts.length || !mailboxAccounts.length ? "Setup" : "Assign"}
                   </Button>
                   <Button
                     type="button"

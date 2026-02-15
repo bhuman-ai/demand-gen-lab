@@ -131,6 +131,8 @@ type AccountListCardProps = {
   description: string;
   emptyMessage: string;
   testScope: "full" | "customerio" | "mailbox";
+  createHref?: string;
+  createLabel?: string;
   accounts: OutreachAccount[];
   setAccounts: Dispatch<SetStateAction<OutreachAccount[]>>;
   setError: Dispatch<SetStateAction<string>>;
@@ -141,6 +143,8 @@ function AccountListCard({
   description,
   emptyMessage,
   testScope,
+  createHref,
+  createLabel,
   accounts,
   setAccounts,
   setError,
@@ -155,9 +159,16 @@ function AccountListCard({
 
   return (
     <Card>
-      <CardHeader>
-        <CardTitle className="text-base">{title}</CardTitle>
-        <CardDescription>{description}</CardDescription>
+      <CardHeader className="flex flex-row items-start justify-between gap-3 space-y-0">
+        <div className="space-y-1">
+          <CardTitle className="text-base">{title}</CardTitle>
+          <CardDescription>{description}</CardDescription>
+        </div>
+        {createHref ? (
+          <Button asChild type="button" size="sm" variant="outline">
+            <a href={createHref}>{createLabel ?? "Add account"}</a>
+          </Button>
+        ) : null}
       </CardHeader>
       <CardContent className="grid gap-3">
         {accounts.map((account) => (
@@ -242,7 +253,16 @@ function AccountListCard({
           </div>
         ))}
         {!accounts.length ? (
-          <div className="text-sm text-[color:var(--muted-foreground)]">{emptyMessage}</div>
+          <div className="grid gap-2">
+            <div className="text-sm text-[color:var(--muted-foreground)]">{emptyMessage}</div>
+            {createHref ? (
+              <div>
+                <Button asChild type="button" size="sm" variant="secondary">
+                  <a href={createHref}>{createLabel ?? "Add account"}</a>
+                </Button>
+              </div>
+            ) : null}
+          </div>
         ) : null}
       </CardContent>
     </Card>
@@ -652,7 +672,7 @@ export default function OutreachSettingsClient() {
         </CardContent>
       </Card>
 
-      <Card>
+      <Card id="add-delivery-account">
         <CardHeader>
           <CardTitle className="text-base">Add Customer.io Delivery Account</CardTitle>
           <CardDescription>
@@ -742,7 +762,7 @@ export default function OutreachSettingsClient() {
         </CardContent>
       </Card>
 
-      <Card>
+      <Card id="add-email-reply-account">
         <CardHeader>
           <CardTitle className="text-base">Add Email Reply Account</CardTitle>
           <CardDescription>
@@ -938,6 +958,8 @@ export default function OutreachSettingsClient() {
         description="Delivery accounts used to orchestrate outbound sends."
         emptyMessage="No delivery accounts yet."
         testScope="customerio"
+        createHref="#add-delivery-account"
+        createLabel="Add delivery account"
         accounts={deliveryAccounts}
         setAccounts={setAccounts}
         setError={setError}
@@ -948,6 +970,8 @@ export default function OutreachSettingsClient() {
         description="Mailbox accounts used for reply sync and human-approved replies."
         emptyMessage="No email accounts yet."
         testScope="mailbox"
+        createHref="#add-email-reply-account"
+        createLabel="Add reply mailbox"
         accounts={mailboxAccounts}
         setAccounts={setAccounts}
         setError={setError}
@@ -999,6 +1023,17 @@ export default function OutreachSettingsClient() {
                       </option>
                     ))}
                   </Select>
+                  {!deliveryAccounts.length ? (
+                    <Button
+                      asChild
+                      type="button"
+                      size="sm"
+                      variant="ghost"
+                      className="h-auto justify-start px-0 py-0 underline"
+                    >
+                      <a href="#add-delivery-account">Create a delivery account</a>
+                    </Button>
+                  ) : null}
                   {assignedDelivery ? (
                     <div className="text-xs text-[color:var(--muted-foreground)]">
                       From will be:{" "}
@@ -1023,6 +1058,17 @@ export default function OutreachSettingsClient() {
                       </option>
                     ))}
                   </Select>
+                  {!mailboxAccounts.length ? (
+                    <Button
+                      asChild
+                      type="button"
+                      size="sm"
+                      variant="ghost"
+                      className="h-auto justify-start px-0 py-0 underline"
+                    >
+                      <a href="#add-email-reply-account">Create a reply mailbox</a>
+                    </Button>
+                  ) : null}
                   {assignment.mailboxAccountId ? (
                     <div className="text-xs text-[color:var(--muted-foreground)]">
                       Reply-To will be:{" "}

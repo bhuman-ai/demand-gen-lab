@@ -23,7 +23,15 @@ export async function POST(
   });
 
   if (!result.ok) {
-    return NextResponse.json({ error: result.reason, runId: result.runId }, { status: 400 });
+    return NextResponse.json(
+      {
+        error: result.reason,
+        runId: result.runId,
+        hint: result.hint,
+        debug: result.debug,
+      },
+      { status: 400 }
+    );
   }
 
   return NextResponse.json({ runId: result.runId, status: "queued" }, { status: 201 });

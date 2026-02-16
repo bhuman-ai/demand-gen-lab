@@ -118,7 +118,7 @@ function preflightReason(input: {
     return "Assigned delivery account does not support outreach sending";
   }
   if (!sourceConfig.actorId.trim()) {
-    return "Lead source is not configured for this hypothesis";
+    return "Lead sourcing is not enabled for this workspace";
   }
   if (!effectiveSourcingToken(input.deliverySecrets)) {
     return "Lead sourcing credentials are missing";
@@ -150,6 +150,42 @@ function preflightReason(input: {
     return "Mailbox credentials missing";
   }
   return "";
+}
+
+function preflightDiagnostic(input: {
+  reason: string;
+  hypothesis: Hypothesis;
+  deliveryAccount: ResolvedAccount;
+  deliverySecrets: ResolvedSecrets;
+}) {
+  const sourceConfig = effectiveSourceConfig(
+    input.hypothesis,
+    input.deliveryAccount.config.apify.defaultActorId
+  );
+
+  const debug = {
+    reason: input.reason,
+    hypothesisId: input.hypothesis.id,
+    hypothesisHasLeadSourceProfile: Boolean(input.hypothesis.sourceConfig?.actorId?.trim()),
+    deliveryAccountHasLeadSourceProfile: Boolean(input.deliveryAccount.config.apify.defaultActorId.trim()),
+    platformHasLeadSourceProfile: Boolean(PLATFORM_SOURCING_PROFILE),
+    resolvedLeadSourceProfile: sourceConfig.actorId || "",
+    hasLeadSourcingToken: Boolean(effectiveSourcingToken(input.deliverySecrets)),
+  } as const;
+
+  if (input.reason === "Lead sourcing is not enabled for this workspace") {
+    return {
+      hint: "Workspace lead sourcing profile is missing. This is platform-managed (not per-user).",
+      debug,
+    };
+  }
+  if (input.reason === "Lead sourcing credentials are missing") {
+    return {
+      hint: "Workspace lead sourcing credentials are missing. This is platform-managed (not per-user).",
+      debug,
+    };
+  }
+  return { hint: "", debug };
 }
 
 function classifySentiment(body: string): ReplyThread["sentiment"] {
@@ -345,7 +381,13 @@ export async function launchExperimentRun(input: {
   campaignId: string;
   experimentId: string;
   trigger: "manual" | "hypothesis_approved";
-}): Promise<{ ok: boolean; runId: string; reason: string }> {
+}): Promise<{
+  ok: boolean;
+  runId: string;
+  reason: string;
+  hint?: string;
+  debug?: Record<string, unknown>;
+}> {
   const campaign = await getCampaignById(input.brandId, input.campaignId);
   if (!campaign) {
     return { ok: false, runId: "", reason: "Campaign not found" };
@@ -411,6 +453,12 @@ export async function launchExperimentRun(input: {
     hypothesis,
   });
   if (reason) {
+    const diagnostic = preflightDiagnostic({
+      reason,
+      hypothesis,
+      deliveryAccount: brandAccount.deliveryAccount,
+      deliverySecrets: brandAccount.deliverySecrets,
+    });
     const failed = await createOutreachRun({
       brandId: input.brandId,
       campaignId: input.campaignId,
@@ -430,7 +478,13 @@ export async function launchExperimentRun(input: {
       eventType: "hypothesis_approved_auto_run_queued",
       payload: { trigger: input.trigger, outcome: "preflight_failed", reason },
     });
-    return { ok: false, runId: failed.id, reason };
+    return {
+      ok: false,
+      runId: failed.id,
+      reason,
+      hint: diagnostic.hint,
+      debug: diagnostic.debug,
+    };
   }
 
   const run = await createOutreachRun({

@@ -136,6 +136,51 @@ function sourcingToken(secrets: OutreachAccountSecrets) {
   return secrets.apifyToken.trim() || String(process.env.APIFY_TOKEN ?? "").trim();
 }
 
+const SOURCE_DISCOVERY_CANDIDATES = [
+  String(process.env.APIFY_DEFAULT_ACTOR_ID ?? "").trim(),
+  "apify/google-search-scraper",
+  "apify/web-scraper",
+];
+
+let cachedAutoSourceActorId = "";
+
+async function actorExists(actorId: string, token: string) {
+  if (!actorId.trim() || !token.trim()) return false;
+  try {
+    const response = await fetch(
+      `https://api.apify.com/v2/acts/${encodeURIComponent(actorId)}?token=${encodeURIComponent(token)}`
+    );
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
+
+async function resolveSourceActorId(input: { preferredActorId: string; token: string }) {
+  const preferred = input.preferredActorId.trim();
+  const token = input.token.trim();
+  if (!token) return "";
+  if (preferred) return preferred;
+
+  if (cachedAutoSourceActorId) {
+    const cachedOk = await actorExists(cachedAutoSourceActorId, token);
+    if (cachedOk) return cachedAutoSourceActorId;
+  }
+
+  const seen = new Set<string>();
+  for (const candidate of SOURCE_DISCOVERY_CANDIDATES) {
+    const actorId = candidate.trim();
+    if (!actorId || seen.has(actorId)) continue;
+    seen.add(actorId);
+    if (await actorExists(actorId, token)) {
+      cachedAutoSourceActorId = actorId;
+      return actorId;
+    }
+  }
+
+  return "";
+}
+
 function normalizeApifyLead(raw: unknown): ApifyLead | null {
   const row = raw && typeof raw === "object" && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
   const email = String(
@@ -248,9 +293,16 @@ export async function sourceLeadsFromApify(params: {
   maxLeads: number;
   token: string;
 }): Promise<ApifyLead[]> {
-  const actorId = params.actorId.trim();
   const token = params.token.trim();
-  if (!actorId || !token) {
+  if (!token) {
+    return [];
+  }
+
+  const actorId = await resolveSourceActorId({
+    preferredActorId: params.actorId,
+    token,
+  });
+  if (!actorId) {
     return [];
   }
 

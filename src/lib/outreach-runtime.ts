@@ -110,15 +110,8 @@ function preflightReason(input: {
   mailboxSecrets: ResolvedSecrets;
   hypothesis: Hypothesis;
 }) {
-  const sourceConfig = effectiveSourceConfig(
-    input.hypothesis,
-    input.deliveryAccount.config.apify.defaultActorId
-  );
   if (!supportsDelivery(input.deliveryAccount)) {
     return "Assigned delivery account does not support outreach sending";
-  }
-  if (!sourceConfig.actorId.trim()) {
-    return "Lead sourcing is not enabled for this workspace";
   }
   if (!effectiveSourcingToken(input.deliverySecrets)) {
     return "Lead sourcing credentials are missing";
@@ -166,22 +159,16 @@ function preflightDiagnostic(input: {
   const debug = {
     reason: input.reason,
     hypothesisId: input.hypothesis.id,
-    hypothesisHasLeadSourceProfile: Boolean(input.hypothesis.sourceConfig?.actorId?.trim()),
-    deliveryAccountHasLeadSourceProfile: Boolean(input.deliveryAccount.config.apify.defaultActorId.trim()),
-    platformHasLeadSourceProfile: Boolean(PLATFORM_SOURCING_PROFILE),
-    resolvedLeadSourceProfile: sourceConfig.actorId || "",
+    hypothesisHasLeadSourceOverride: Boolean(input.hypothesis.sourceConfig?.actorId?.trim()),
+    deliveryAccountHasLeadSourceDefault: Boolean(input.deliveryAccount.config.apify.defaultActorId.trim()),
+    deploymentHasLeadSourceDefault: Boolean(PLATFORM_SOURCING_PROFILE),
+    hasResolvedLeadSource: Boolean(sourceConfig.actorId),
     hasLeadSourcingToken: Boolean(effectiveSourcingToken(input.deliverySecrets)),
   } as const;
 
-  if (input.reason === "Lead sourcing is not enabled for this workspace") {
-    return {
-      hint: "Workspace lead sourcing profile is missing. This is platform-managed (not per-user).",
-      debug,
-    };
-  }
   if (input.reason === "Lead sourcing credentials are missing") {
     return {
-      hint: "Workspace lead sourcing credentials are missing. This is platform-managed (not per-user).",
+      hint: "Platform lead sourcing credentials are missing in this deployment. This is platform-managed (not per-user).",
       debug,
     };
   }

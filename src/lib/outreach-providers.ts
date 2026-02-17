@@ -133,7 +133,12 @@ async function testCustomerIoTrackCredentials(input: {
 }
 
 function sourcingToken(secrets: OutreachAccountSecrets) {
-  return secrets.apifyToken.trim() || String(process.env.APIFY_TOKEN ?? "").trim();
+  return (
+    secrets.apifyToken.trim() ||
+    String(process.env.APIFY_TOKEN ?? "").trim() ||
+    String(process.env.APIFY_API_TOKEN ?? "").trim() ||
+    String(process.env.APIFY_API_KEY ?? "").trim()
+  );
 }
 
 const SOURCE_DISCOVERY_CANDIDATES = [

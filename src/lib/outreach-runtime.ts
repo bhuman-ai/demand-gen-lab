@@ -47,7 +47,6 @@ import {
 } from "@/lib/outreach-providers";
 
 const DEFAULT_TIMEZONE = "America/Los_Angeles";
-const PLATFORM_SOURCING_TOKEN = String(process.env.APIFY_TOKEN ?? "").trim();
 const PLATFORM_SOURCING_PROFILE = String(process.env.APIFY_DEFAULT_ACTOR_ID ?? "").trim();
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -80,6 +79,14 @@ function effectiveSourceConfig(hypothesis: Hypothesis, fallbackActorId: string) 
   };
 }
 
+function platformSourcingToken() {
+  return (
+    String(process.env.APIFY_TOKEN ?? "").trim() ||
+    String(process.env.APIFY_API_TOKEN ?? "").trim() ||
+    String(process.env.APIFY_API_KEY ?? "").trim()
+  );
+}
+
 type ResolvedAccount = NonNullable<Awaited<ReturnType<typeof getOutreachAccount>>>;
 type ResolvedSecrets = NonNullable<Awaited<ReturnType<typeof getOutreachAccountSecrets>>>;
 
@@ -92,7 +99,7 @@ function effectiveCustomerIoApiKey(secrets: ResolvedSecrets) {
 }
 
 function effectiveSourcingToken(secrets: ResolvedSecrets) {
-  return secrets.apifyToken.trim() || PLATFORM_SOURCING_TOKEN;
+  return secrets.apifyToken.trim() || platformSourcingToken();
 }
 
 function supportsDelivery(account: ResolvedAccount) {

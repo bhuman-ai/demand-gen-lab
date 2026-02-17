@@ -41,6 +41,33 @@ const defaultRunPolicy = {
   minSpacingMinutes: 8,
 };
 
+const RUN_PAUSABLE_STATUSES: OutreachRun["status"][] = [
+  "queued",
+  "sourcing",
+  "scheduled",
+  "sending",
+  "monitoring",
+];
+
+function runStatusVariant(status: OutreachRun["status"]) {
+  if (status === "completed") return "success" as const;
+  if (status === "paused" || status === "failed" || status === "preflight_failed" || status === "canceled") {
+    return "danger" as const;
+  }
+  return "muted" as const;
+}
+
+function friendlyRunLaunchError(error: unknown) {
+  const message = error instanceof Error ? error.message : "Failed to launch run";
+  if (message.includes("Lead sourcing is not enabled for this workspace")) {
+    return "Run did not start: platform lead sourcing is not configured in this deployment yet.";
+  }
+  if (message.includes("Lead sourcing credentials are missing")) {
+    return "Run did not start: platform lead sourcing credentials are missing in this deployment.";
+  }
+  return message;
+}
+
 export default function ExperimentsClient({ brandId, campaignId }: { brandId: string; campaignId: string }) {
   const router = useRouter();
   const [brand, setBrand] = useState<BrandRecord | null>(null);
@@ -471,13 +498,7 @@ export default function ExperimentsClient({ brandId, campaignId }: { brandId: st
                         <div className="flex flex-wrap items-center justify-between gap-2">
                           <div>Run {run.id.slice(-6)}</div>
                           <Badge
-                            variant={
-                              run.status === "paused"
-                                ? "danger"
-                                : run.status === "completed"
-                                ? "success"
-                                : "muted"
-                            }
+                            variant={runStatusVariant(run.status)}
                           >
                             {run.status}
                           </Badge>
@@ -485,6 +506,15 @@ export default function ExperimentsClient({ brandId, campaignId }: { brandId: st
                         <div className="mt-1 text-[color:var(--muted-foreground)]">
                           Leads {run.metrics.sourcedLeads} · Sent {run.metrics.sentMessages} · Replies {run.metrics.replies}
                         </div>
+                        {run.lastError ? (
+                          <div className="mt-1 text-[color:var(--danger)]">Reason: {run.lastError}</div>
+                        ) : null}
+                        {run.status === "preflight_failed" &&
+                        run.lastError.includes("Lead sourcing is not enabled for this workspace") ? (
+                          <div className="mt-1 rounded-md border border-[color:var(--danger-border)] bg-[color:var(--danger-soft)] px-2 py-1 text-[color:var(--danger)]">
+                            Setup required: platform lead sourcing is not configured in this deployment yet.
+                          </div>
+                        ) : null}
                         {run.pauseReason ? (
                           <div className="mt-1 text-[color:var(--danger)]">Pause: {run.pauseReason}</div>
                         ) : null}
@@ -508,7 +538,7 @@ export default function ExperimentsClient({ brandId, campaignId }: { brandId: st
                               <Play className="h-3.5 w-3.5" />
                               Resume
                             </Button>
-                          ) : (
+                          ) : RUN_PAUSABLE_STATUSES.includes(run.status) ? (
                             <Button
                               type="button"
                               size="sm"
@@ -521,7 +551,7 @@ export default function ExperimentsClient({ brandId, campaignId }: { brandId: st
                               <Pause className="h-3.5 w-3.5" />
                               Pause
                             </Button>
-                          )}
+                          ) : null}
                         </div>
                       </div>
                     );
@@ -531,16 +561,18 @@ export default function ExperimentsClient({ brandId, campaignId }: { brandId: st
                     type="button"
                     size="sm"
                     onClick={async () => {
+                      setError("");
                       try {
                         await save(false);
                         await launchExperimentRun(brandId, campaignId, experiment.id);
+                        trackEvent("run_started", { brandId, campaignId, experimentId: experiment.id });
+                      } catch (err) {
+                        setError(friendlyRunLaunchError(err));
+                      } finally {
                         const refreshedCampaign = await fetchCampaign(brandId, campaignId);
                         setCampaign(refreshedCampaign);
                         setExperiments(refreshedCampaign.experiments);
                         await refreshRuns();
-                        trackEvent("run_started", { brandId, campaignId, experimentId: experiment.id });
-                      } catch (err) {
-                        setError(err instanceof Error ? err.message : "Failed to launch run");
                       }
                     }}
                   >

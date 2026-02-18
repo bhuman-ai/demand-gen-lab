@@ -722,7 +722,7 @@ async function processSourceLeadsJob(job: OutreachJob) {
     ? domainsRaw.map((item) => String(item ?? "").trim().toLowerCase()).filter(Boolean)
     : [];
   const cursor = Math.max(0, Number((payload as Record<string, unknown>).cursor ?? 0) || 0);
-  const chunkSize = Math.max(3, Math.min(12, Number((payload as Record<string, unknown>).chunkSize ?? 6) || 6));
+  const chunkSize = Math.max(2, Math.min(6, Number((payload as Record<string, unknown>).chunkSize ?? 3) || 3));
 
   if (!stage) {
     const search = await runPlatformLeadDomainSearch({
@@ -794,7 +794,8 @@ async function processSourceLeadsJob(job: OutreachJob) {
       return;
     }
 
-    const maxRequestsPerCrawl = Math.max(20, Math.min(80, chunk.length * 12));
+    // Keep discovery conservative: this is platform-managed and must not run up costs.
+    const maxRequestsPerCrawl = Math.max(15, Math.min(40, chunk.length * 8));
     const started = await startPlatformEmailDiscovery({
       token: sourcingToken,
       domains: chunk,
@@ -874,16 +875,16 @@ async function processSourceLeadsJob(job: OutreachJob) {
       return;
     }
 
-    if (!poll.ok && poll.status !== "succeeded") {
+    const resolvedDatasetId = poll.datasetId || datasetId;
+    if (!resolvedDatasetId) {
       await failRunWithDiagnostics({
         run,
-        reason: `Email discovery failed: ${poll.error}`,
+        reason: poll.ok ? "Email discovery finished, but no dataset id was returned" : `Email discovery failed: ${poll.error}`,
         eventType: "lead_sourcing_failed",
       });
       return;
     }
 
-    const resolvedDatasetId = poll.datasetId || datasetId;
     const fetched = await fetchPlatformEmailDiscoveryResults({
       token: sourcingToken,
       datasetId: resolvedDatasetId,
@@ -894,6 +895,8 @@ async function processSourceLeadsJob(job: OutreachJob) {
       eventType: "lead_sourcing_email_discovery_completed",
       payload: {
         ok: fetched.ok,
+        providerStatus: poll.status,
+        providerOk: poll.ok,
         datasetRows: fetched.rows.length,
         error: fetched.error,
       },
@@ -917,6 +920,15 @@ async function processSourceLeadsJob(job: OutreachJob) {
         strategy: "platform_search_then_email_discovery",
       },
     });
+
+    if (!discovered.length && !poll.ok) {
+      await failRunWithDiagnostics({
+        run,
+        reason: `Email discovery failed: ${poll.error}`,
+        eventType: "lead_sourcing_failed",
+      });
+      return;
+    }
 
     if (!discovered.length) {
       await enqueueOutreachJob({
@@ -990,6 +1002,18 @@ async function finishSourcingWithLeads(run: NonNullable<Awaited<ReturnType<typeo
       sourceUrl: lead.sourceUrl,
     }))
   );
+
+  if (!upserted.length) {
+    await failRunWithDiagnostics({
+      run,
+      reason: "Lead persistence failed (0 leads stored)",
+      eventType: "lead_sourcing_failed",
+      payload: {
+        attempted: filteredLeads.length,
+      },
+    });
+    return;
+  }
 
   await updateOutreachRun(run.id, {
     status: "scheduled",

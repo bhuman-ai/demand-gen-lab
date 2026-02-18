@@ -181,7 +181,12 @@ function normalizeApifyActorId(actorId: string) {
 }
 
 const PLATFORM_SEARCH_ACTOR_ID = "apify~google-search-scraper";
-const PLATFORM_EMAIL_DISCOVERY_ACTOR_ID = String(process.env.PLATFORM_EMAIL_DISCOVERY_ACTOR_ID ?? "").trim() || "9Sk4JJhEma9vBKqrg";
+const PLATFORM_EMAIL_DISCOVERY_ACTOR_ID =
+  String(process.env.PLATFORM_EMAIL_DISCOVERY_ACTOR_ID ?? "").trim() || "9Sk4JJhEma9vBKqrg";
+const PLATFORM_EMAIL_DISCOVERY_MAX_CHARGE_USD = Math.max(
+  0.5,
+  Math.min(25, Number(process.env.PLATFORM_EMAIL_DISCOVERY_MAX_CHARGE_USD ?? 0.5) || 0.5)
+);
 
 const BLOCKED_SEARCH_DOMAINS = new Set<string>([
   "linkedin.com",
@@ -270,6 +275,7 @@ async function apifyStartRun(input: {
   actorId: string;
   actorInput: Record<string, unknown>;
   token: string;
+  maxTotalChargeUsd?: number;
 }): Promise<LeadSourcingEmailDiscoveryRun> {
   const token = input.token.trim();
   const actorId = normalizeApifyActorId(input.actorId);
@@ -278,9 +284,13 @@ async function apifyStartRun(input: {
   }
 
   try {
+    const maxTotalChargeUsd =
+      input.maxTotalChargeUsd === undefined
+        ? null
+        : Math.max(0.5, Math.min(25, Number(input.maxTotalChargeUsd) || PLATFORM_EMAIL_DISCOVERY_MAX_CHARGE_USD));
     const url = `https://api.apify.com/v2/acts/${encodeURIComponent(actorId)}/runs?token=${encodeURIComponent(
       token
-    )}&waitForFinish=0`;
+    )}&waitForFinish=0${maxTotalChargeUsd ? `&maxTotalChargeUsd=${encodeURIComponent(String(maxTotalChargeUsd))}` : ""}`;
     const response = await fetch(url, {
       method: "POST",
       headers: {
@@ -477,10 +487,11 @@ export async function startPlatformEmailDiscovery(params: {
   return apifyStartRun({
     actorId: PLATFORM_EMAIL_DISCOVERY_ACTOR_ID,
     token: params.token,
+    maxTotalChargeUsd: PLATFORM_EMAIL_DISCOVERY_MAX_CHARGE_USD,
     actorInput: {
       startUrls: unique.map((domain) => ({ url: `https://${domain}` })),
       maxRequestsPerCrawl,
-      maxConcurrency: 10,
+      maxConcurrency: 6,
       maxDepth: 2,
     },
   });

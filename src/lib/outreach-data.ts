@@ -1489,11 +1489,26 @@ export async function upsertRunLeads(
   const supabase = getSupabaseAdmin();
   if (supabase) {
     if (rows.length > 0) {
-      const { error } = await supabase
-        .from(TABLE_RUN_LEAD)
-        .upsert(rows, { onConflict: "run_id,email" });
+      const { error } = await supabase.from(TABLE_RUN_LEAD).upsert(rows, { onConflict: "run_id,email" });
       if (error) {
-        // fallback below
+        // Existing schema may only have a unique index on (run_id, lower(email)), which PostgREST can't target.
+        // Fall back to a safe two-step insert to avoid dropping leads on the floor.
+        const existing = await supabase
+          .from(TABLE_RUN_LEAD)
+          .select("email")
+          .eq("run_id", runId);
+        const existingEmails = new Set(
+          (existing.data ?? [])
+            .map((row: unknown) => {
+              const r = asRecord(row);
+              return String(r.email ?? "").trim().toLowerCase();
+            })
+            .filter(Boolean)
+        );
+        const missing = rows.filter((row) => !existingEmails.has(String(row.email ?? "").trim().toLowerCase()));
+        if (missing.length > 0) {
+          await supabase.from(TABLE_RUN_LEAD).insert(missing);
+        }
       }
     }
 

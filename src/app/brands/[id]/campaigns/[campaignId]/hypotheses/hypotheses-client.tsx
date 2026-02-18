@@ -189,7 +189,7 @@ export default function HypothesesClient({ brandId, campaignId }: { brandId: str
             onClick={() => addManual()}
           >
             <Plus className="h-4 w-4" />
-            Add Manual
+            Add Hypothesis
           </Button>
         </CardContent>
       </Card>

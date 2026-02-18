@@ -85,7 +85,7 @@ export default function LeadsClient({ brand }: { brand: BrandRecord }) {
           </CardHeader>
           <CardContent className="flex flex-wrap gap-2">
             <Button asChild size="sm" variant="outline">
-              <Link href={`/brands/${brand.id}/campaigns`}>Go to Campaigns</Link>
+              <Link href={`/brands/${brand.id}/campaigns`}>Open Campaigns</Link>
             </Button>
             <Button asChild size="sm" variant="outline">
               <Link href="/settings/outreach">Outreach Settings</Link>

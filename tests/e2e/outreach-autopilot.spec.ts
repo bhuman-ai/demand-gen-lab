@@ -47,6 +47,7 @@ async function setupAutopilotContext(request: import("@playwright/test").APIRequ
         customerIo: {
           siteId: "site_123",
           workspaceId: "ws_123",
+          fromEmail: "sender@example.com",
         },
         apify: {
           defaultActorId: "apify/mock-actor",

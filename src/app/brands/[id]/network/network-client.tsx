@@ -88,7 +88,7 @@ export default function NetworkClient({ brand }: { brand: BrandRecord }) {
               <Link href="/settings/outreach">Outreach Settings</Link>
             </Button>
             <Button asChild size="sm" variant="outline">
-              <Link href={`/brands/${brand.id}/campaigns`}>Go to Campaigns</Link>
+              <Link href={`/brands/${brand.id}/campaigns`}>Open Campaigns</Link>
             </Button>
           </CardContent>
         </Card>

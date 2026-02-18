@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getCampaignById } from "@/lib/factory-data";
-import { listCampaignRuns, listRunAnomalies } from "@/lib/outreach-data";
+import { listCampaignRuns, listRunAnomalies, listRunEvents, listRunJobs } from "@/lib/outreach-data";
 import { runOutreachTick } from "@/lib/outreach-runtime";
 
 export async function GET(
@@ -21,9 +21,15 @@ export async function GET(
   }
 
   const runs = await listCampaignRuns(brandId, campaignId);
-  const anomalies = (
-    await Promise.all(runs.map((run) => listRunAnomalies(run.id)))
-  ).flat();
+  const [anomaliesByRun, eventsByRunEntries, jobsByRunEntries] = await Promise.all([
+    Promise.all(runs.map((run) => listRunAnomalies(run.id))),
+    Promise.all(runs.map(async (run) => [run.id, await listRunEvents(run.id)] as const)),
+    Promise.all(runs.map(async (run) => [run.id, await listRunJobs(run.id, 25)] as const)),
+  ]);
 
-  return NextResponse.json({ runs, anomalies });
+  const anomalies = anomaliesByRun.flat();
+  const eventsByRun = Object.fromEntries(eventsByRunEntries);
+  const jobsByRun = Object.fromEntries(jobsByRunEntries);
+
+  return NextResponse.json({ runs, anomalies, eventsByRun, jobsByRun });
 }

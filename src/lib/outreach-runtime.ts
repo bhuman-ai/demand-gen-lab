@@ -220,6 +220,24 @@ function addHours(dateIso: string, hours: number) {
   return new Date(date.getTime() + hours * 60 * 60 * 1000).toISOString();
 }
 
+async function failRunWithDiagnostics(input: {
+  run: { id: string; brandId: string; campaignId: string; experimentId: string };
+  reason: string;
+  eventType?: string;
+  payload?: Record<string, unknown>;
+}) {
+  await updateOutreachRun(input.run.id, { status: "failed", lastError: input.reason });
+  await markExperimentExecutionStatus(input.run.brandId, input.run.campaignId, input.run.experimentId, "failed");
+  await createOutreachEvent({
+    runId: input.run.id,
+    eventType: input.eventType ?? "run_failed",
+    payload: {
+      reason: input.reason,
+      ...(input.payload ?? {}),
+    },
+  });
+}
+
 function calculateRunMetricsFromMessages(
   runId: string,
   messages: Awaited<ReturnType<typeof listRunMessages>>,
@@ -556,22 +574,33 @@ async function processSourceLeadsJob(job: OutreachJob) {
 
   const campaign = await getCampaignById(run.brandId, run.campaignId);
   if (!campaign) {
-    await updateOutreachRun(run.id, { status: "failed", lastError: "Campaign not found" });
+    await failRunWithDiagnostics({
+      run,
+      reason: "Campaign not found",
+      eventType: "lead_sourcing_failed",
+    });
     return;
   }
 
   const hypothesis = findHypothesis(campaign, run.hypothesisId);
   const experiment = findExperiment(campaign, run.experimentId);
   if (!hypothesis || !experiment) {
-    await updateOutreachRun(run.id, { status: "failed", lastError: "Hypothesis or experiment missing" });
+    await failRunWithDiagnostics({
+      run,
+      reason: "Hypothesis or experiment missing",
+      eventType: "lead_sourcing_failed",
+    });
     return;
   }
 
   const account = await getOutreachAccount(run.accountId);
   const secrets = await getOutreachAccountSecrets(run.accountId);
   if (!account || !secrets) {
-    await updateOutreachRun(run.id, { status: "failed", lastError: "Outreach account missing" });
-    await markExperimentExecutionStatus(run.brandId, run.campaignId, run.experimentId, "failed");
+    await failRunWithDiagnostics({
+      run,
+      reason: "Outreach account missing",
+      eventType: "lead_sourcing_failed",
+    });
     return;
   }
 
@@ -581,11 +610,33 @@ async function processSourceLeadsJob(job: OutreachJob) {
 
   const sourceConfig = effectiveSourceConfig(hypothesis, account.config.apify.defaultActorId);
   const sourcingToken = effectiveSourcingToken(secrets);
+  await createOutreachEvent({
+    runId: run.id,
+    eventType: "lead_sourcing_requested",
+    payload: {
+      sourceId: sourceConfig.actorId || "platform_default",
+      maxLeads: sourceConfig.maxLeads,
+      hasSourceInput: Boolean(
+        sourceConfig.actorInput &&
+        typeof sourceConfig.actorInput === "object" &&
+        Object.keys(sourceConfig.actorInput).length
+      ),
+    },
+  });
+
   const sourced = await sourceLeadsFromApify({
     actorId: sourceConfig.actorId,
     actorInput: sourceConfig.actorInput,
     maxLeads: sourceConfig.maxLeads,
     token: sourcingToken,
+  });
+  await createOutreachEvent({
+    runId: run.id,
+    eventType: "lead_sourcing_completed",
+    payload: {
+      sourcedCount: sourced.length,
+      sourceId: sourceConfig.actorId || "platform_default",
+    },
   });
 
   let leads: ApifyLead[] = sourced;
@@ -618,11 +669,15 @@ async function processSourceLeadsJob(job: OutreachJob) {
   }
   const filteredLeads = leads.filter((lead) => !blockedEmails.has(lead.email.toLowerCase()));
   if (!filteredLeads.length) {
-    await updateOutreachRun(run.id, {
-      status: "failed",
-      lastError: "All sourced leads were suppressed by 14-day duplicate policy",
+    await failRunWithDiagnostics({
+      run,
+      reason: "All sourced leads were suppressed by 14-day duplicate policy",
+      eventType: "lead_sourcing_failed",
+      payload: {
+        sourcedCount: leads.length,
+        blockedCount: leads.length,
+      },
     });
-    await markExperimentExecutionStatus(run.brandId, run.campaignId, run.experimentId, "failed");
     return;
   }
 
@@ -650,7 +705,10 @@ async function processSourceLeadsJob(job: OutreachJob) {
   await createOutreachEvent({
     runId: run.id,
     eventType: "lead_sourced_apify",
-    payload: { count: upserted.length },
+    payload: {
+      count: upserted.length,
+      blockedCount: Math.max(0, leads.length - filteredLeads.length),
+    },
   });
 
   await enqueueOutreachJob({
@@ -666,7 +724,11 @@ async function processScheduleMessagesJob(job: OutreachJob) {
 
   const campaign = await getCampaignById(run.brandId, run.campaignId);
   if (!campaign) {
-    await updateOutreachRun(run.id, { status: "failed", lastError: "Campaign not found" });
+    await failRunWithDiagnostics({
+      run,
+      reason: "Campaign not found",
+      eventType: "schedule_failed",
+    });
     return;
   }
 
@@ -674,15 +736,22 @@ async function processScheduleMessagesJob(job: OutreachJob) {
   const hypothesis = findHypothesis(campaign, run.hypothesisId);
   const experiment = findExperiment(campaign, run.experimentId);
   if (!hypothesis || !experiment) {
-    await updateOutreachRun(run.id, { status: "failed", lastError: "Hypothesis or experiment missing" });
-    await markExperimentExecutionStatus(run.brandId, run.campaignId, run.experimentId, "failed");
+    await failRunWithDiagnostics({
+      run,
+      reason: "Hypothesis or experiment missing",
+      eventType: "schedule_failed",
+    });
     return;
   }
 
   const leads = await listRunLeads(run.id);
   if (!leads.length) {
-    await updateOutreachRun(run.id, { status: "failed", lastError: "No leads sourced" });
-    await markExperimentExecutionStatus(run.brandId, run.campaignId, run.experimentId, "failed");
+    await failRunWithDiagnostics({
+      run,
+      reason: "No leads sourced",
+      eventType: "schedule_failed",
+      payload: { sourcedLeads: run.metrics.sourcedLeads },
+    });
     return;
   }
 
@@ -749,8 +818,11 @@ async function processDispatchMessagesJob(job: OutreachJob) {
   const account = await getOutreachAccount(run.accountId);
   const secrets = await getOutreachAccountSecrets(run.accountId);
   if (!account || !secrets) {
-    await updateOutreachRun(run.id, { status: "failed", lastError: "Account credentials missing" });
-    await markExperimentExecutionStatus(run.brandId, run.campaignId, run.experimentId, "failed");
+    await failRunWithDiagnostics({
+      run,
+      reason: "Account credentials missing",
+      eventType: "dispatch_failed",
+    });
     return;
   }
 
@@ -1058,12 +1130,31 @@ export async function runOutreachTick(limit = 20): Promise<{
   for (const job of jobs) {
     const attempts = job.attempts + 1;
     await updateOutreachJob(job.id, { status: "running", attempts });
+    await createOutreachEvent({
+      runId: job.runId,
+      eventType: "job_started",
+      payload: {
+        jobId: job.id,
+        jobType: job.jobType,
+        attempt: attempts,
+        maxAttempts: job.maxAttempts,
+      },
+    });
 
     try {
       await processOutreachJob(job);
       await updateOutreachJob(job.id, {
         status: "completed",
         lastError: "",
+      });
+      await createOutreachEvent({
+        runId: job.runId,
+        eventType: "job_completed",
+        payload: {
+          jobId: job.id,
+          jobType: job.jobType,
+          attempt: attempts,
+        },
       });
       completed += 1;
     } catch (error) {
@@ -1082,6 +1173,18 @@ export async function runOutreachTick(limit = 20): Promise<{
           lastError: message,
         });
       }
+      await createOutreachEvent({
+        runId: job.runId,
+        eventType: "job_failed",
+        payload: {
+          jobId: job.id,
+          jobType: job.jobType,
+          attempt: attempts,
+          maxAttempts: job.maxAttempts,
+          error: message,
+          willRetry: attempts < job.maxAttempts,
+        },
+      });
       failed += 1;
     }
   }

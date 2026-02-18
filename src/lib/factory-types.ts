@@ -322,3 +322,34 @@ export type RunAnomaly = {
   createdAt: string;
   updatedAt: string;
 };
+
+export type OutreachRunEvent = {
+  id: string;
+  runId: string;
+  eventType: string;
+  payload: Record<string, unknown>;
+  createdAt: string;
+};
+
+export type OutreachRunJobType =
+  | "source_leads"
+  | "schedule_messages"
+  | "dispatch_messages"
+  | "sync_replies"
+  | "analyze_run";
+
+export type OutreachRunJobStatus = "queued" | "running" | "completed" | "failed";
+
+export type OutreachRunJob = {
+  id: string;
+  runId: string;
+  jobType: OutreachRunJobType;
+  status: OutreachRunJobStatus;
+  executeAfter: string;
+  attempts: number;
+  maxAttempts: number;
+  payload: Record<string, unknown>;
+  lastError: string;
+  createdAt: string;
+  updatedAt: string;
+};

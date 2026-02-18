@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { ArrowRight, Pause, Play, Plus, Sparkles, Trash2 } from "lucide-react";
+import { ArrowRight, ChevronDown, ChevronUp, Pause, Play, Plus, Sparkles, Trash2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -28,6 +28,8 @@ import type {
   CampaignRecord,
   Experiment,
   OutreachRun,
+  OutreachRunEvent,
+  OutreachRunJob,
   RunAnomaly,
 } from "@/lib/factory-types";
 
@@ -68,6 +70,91 @@ function friendlyRunLaunchError(error: unknown) {
   return message;
 }
 
+function asNumber(value: unknown) {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function asText(value: unknown) {
+  return typeof value === "string" ? value : "";
+}
+
+function formatDateTime(value: string) {
+  if (!value) return "n/a";
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return value;
+  return parsed.toLocaleString();
+}
+
+function friendlyJobType(jobType: OutreachRunJob["jobType"]) {
+  if (jobType === "source_leads") return "Lead sourcing";
+  if (jobType === "schedule_messages") return "Message scheduling";
+  if (jobType === "dispatch_messages") return "Message dispatch";
+  if (jobType === "sync_replies") return "Reply sync";
+  return "Run analysis";
+}
+
+function friendlyEventName(eventType: string) {
+  if (eventType === "hypothesis_approved_auto_run_queued") return "Run queued";
+  if (eventType === "run_started") return "Run started";
+  if (eventType === "lead_sourcing_requested") return "Lead sourcing requested";
+  if (eventType === "lead_sourcing_completed") return "Lead sourcing completed";
+  if (eventType === "lead_sourced_apify") return "Leads stored";
+  if (eventType === "schedule_failed") return "Scheduling failed";
+  if (eventType === "lead_sourcing_failed") return "Lead sourcing failed";
+  if (eventType === "message_scheduled") return "Messages scheduled";
+  if (eventType === "dispatch_failed") return "Dispatch failed";
+  if (eventType === "message_sent") return "Message sent";
+  if (eventType === "reply_sync_tick") return "Reply sync tick";
+  if (eventType === "run_paused_auto") return "Auto-paused";
+  if (eventType === "run_resumed_manual") return "Resumed";
+  if (eventType === "job_started") return "Worker job started";
+  if (eventType === "job_completed") return "Worker job completed";
+  if (eventType === "job_failed") return "Worker job failed";
+  if (eventType === "reply_ingested") return "Reply ingested";
+  if (eventType === "reply_draft_created") return "Reply draft created";
+  if (eventType === "reply_draft_sent") return "Reply sent";
+  return eventType.replaceAll("_", " ");
+}
+
+function summarizeEvent(event: OutreachRunEvent) {
+  const reason = asText(event.payload.reason);
+  if (reason) return reason;
+
+  if (event.eventType === "lead_sourcing_requested") {
+    const maxLeads = asNumber(event.payload.maxLeads);
+    return `Requested up to ${maxLeads ?? "?"} leads`;
+  }
+  if (event.eventType === "lead_sourcing_completed") {
+    const sourcedCount = asNumber(event.payload.sourcedCount);
+    return `Provider returned ${sourcedCount ?? 0} leads`;
+  }
+  if (event.eventType === "lead_sourced_apify") {
+    const count = asNumber(event.payload.count);
+    const blockedCount = asNumber(event.payload.blockedCount);
+    return `Stored ${count ?? 0} leads${blockedCount ? ` (${blockedCount} suppressed)` : ""}`;
+  }
+  if (event.eventType === "message_scheduled") {
+    const count = asNumber(event.payload.count);
+    return `Scheduled ${count ?? 0} messages`;
+  }
+  if (event.eventType === "job_failed") {
+    const error = asText(event.payload.error);
+    return error || "Worker job failed";
+  }
+  if (event.eventType === "job_started" || event.eventType === "job_completed") {
+    const jobType = asText(event.payload.jobType);
+    const attempt = asNumber(event.payload.attempt);
+    if (jobType) {
+      return `${friendlyJobType(jobType as OutreachRunJob["jobType"])} (attempt ${attempt ?? 1})`;
+    }
+  }
+
+  const notes = asText(event.payload.note);
+  if (notes) return notes;
+
+  return "";
+}
+
 export default function ExperimentsClient({ brandId, campaignId }: { brandId: string; campaignId: string }) {
   const router = useRouter();
   const [brand, setBrand] = useState<BrandRecord | null>(null);
@@ -79,6 +166,9 @@ export default function ExperimentsClient({ brandId, campaignId }: { brandId: st
   const [suggestionsError, setSuggestionsError] = useState("");
   const [runs, setRuns] = useState<OutreachRun[]>([]);
   const [anomalies, setAnomalies] = useState<RunAnomaly[]>([]);
+  const [eventsByRun, setEventsByRun] = useState<Record<string, OutreachRunEvent[]>>({});
+  const [jobsByRun, setJobsByRun] = useState<Record<string, OutreachRunJob[]>>({});
+  const [expandedRuns, setExpandedRuns] = useState<Record<string, boolean>>({});
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
@@ -86,6 +176,8 @@ export default function ExperimentsClient({ brandId, campaignId }: { brandId: st
     const runRows = await fetchCampaignRuns(brandId, campaignId);
     setRuns(runRows.runs);
     setAnomalies(runRows.anomalies);
+    setEventsByRun(runRows.eventsByRun);
+    setJobsByRun(runRows.jobsByRun);
   };
 
   useEffect(() => {
@@ -102,6 +194,8 @@ export default function ExperimentsClient({ brandId, campaignId }: { brandId: st
         setExperiments(campaignRow.experiments);
         setRuns(runRows.runs);
         setAnomalies(runRows.anomalies);
+        setEventsByRun(runRows.eventsByRun);
+        setJobsByRun(runRows.jobsByRun);
       })
       .catch((err: unknown) => {
         if (!mounted) return;
@@ -490,6 +584,12 @@ export default function ExperimentsClient({ brandId, campaignId }: { brandId: st
                     const runAnomalies = anomalies.filter(
                       (row) => row.runId === run.id && row.status === "active"
                     );
+                    const runEvents = eventsByRun[run.id] ?? [];
+                    const runJobs = jobsByRun[run.id] ?? [];
+                    const showDetails = Boolean(expandedRuns[run.id]);
+                    const latestEvent = runEvents[0] ?? null;
+                    const nextQueuedJob = runJobs.find((job) => job.status === "queued") ?? null;
+                    const mostRecentJobError = runJobs.find((job) => job.lastError.trim()) ?? null;
                     return (
                       <div
                         key={run.id}
@@ -521,6 +621,116 @@ export default function ExperimentsClient({ brandId, campaignId }: { brandId: st
                         {runAnomalies.length ? (
                           <div className="mt-1 text-[color:var(--danger)]">
                             Active anomalies: {runAnomalies.map((item) => item.type).join(", ")}
+                          </div>
+                        ) : null}
+                        {latestEvent ? (
+                          <div className="mt-1 text-[color:var(--muted-foreground)]">
+                            Latest activity: {friendlyEventName(latestEvent.eventType)}
+                            {summarizeEvent(latestEvent) ? ` · ${summarizeEvent(latestEvent)}` : ""}
+                            {` · ${formatDateTime(latestEvent.createdAt)}`}
+                          </div>
+                        ) : null}
+                        {nextQueuedJob ? (
+                          <div className="mt-1 text-[color:var(--muted-foreground)]">
+                            Next attempt: {friendlyJobType(nextQueuedJob.jobType)} at {formatDateTime(nextQueuedJob.executeAfter)} (attempt{" "}
+                            {Math.max(1, nextQueuedJob.attempts + (nextQueuedJob.status === "queued" ? 1 : 0))}/
+                            {nextQueuedJob.maxAttempts})
+                          </div>
+                        ) : null}
+                        {mostRecentJobError && run.status !== "failed" ? (
+                          <div className="mt-1 text-[color:var(--danger)]">Last worker error: {mostRecentJobError.lastError}</div>
+                        ) : null}
+
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="ghost"
+                          className="mt-2 h-7 px-2 text-[11px]"
+                          onClick={() =>
+                            setExpandedRuns((prev) => ({
+                              ...prev,
+                              [run.id]: !prev[run.id],
+                            }))
+                          }
+                        >
+                          {showDetails ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+                          {showDetails ? "Hide details" : "Show details"}
+                        </Button>
+
+                        {showDetails ? (
+                          <div className="mt-2 grid gap-2 rounded-md border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-2">
+                            <div className="text-[11px] font-medium uppercase tracking-wide text-[color:var(--muted-foreground)]">
+                              What it tried
+                            </div>
+                            {runJobs.length ? (
+                              runJobs.slice(0, 8).map((job) => (
+                                <div
+                                  key={job.id}
+                                  className="rounded border border-[color:var(--border)] bg-[color:var(--surface)] p-2"
+                                >
+                                  <div className="flex flex-wrap items-center justify-between gap-2">
+                                    <div>{friendlyJobType(job.jobType)}</div>
+                                    <Badge
+                                      variant={
+                                        job.status === "failed"
+                                          ? "danger"
+                                          : job.status === "completed"
+                                            ? "success"
+                                            : "muted"
+                                      }
+                                    >
+                                      {job.status}
+                                    </Badge>
+                                  </div>
+                                  <div className="mt-1 text-[color:var(--muted-foreground)]">
+                                    Attempt {Math.max(1, job.attempts)}/{job.maxAttempts} · scheduled {formatDateTime(job.executeAfter)}
+                                  </div>
+                                  {job.lastError ? (
+                                    <div className="mt-1 text-[color:var(--danger)]">{job.lastError}</div>
+                                  ) : null}
+                                </div>
+                              ))
+                            ) : (
+                              <div className="rounded border border-[color:var(--border)] bg-[color:var(--surface)] p-2 text-[color:var(--muted-foreground)]">
+                                No worker jobs recorded yet.
+                              </div>
+                            )}
+
+                            <div className="text-[11px] font-medium uppercase tracking-wide text-[color:var(--muted-foreground)]">
+                              Timeline
+                            </div>
+                            {runEvents.length ? (
+                              runEvents.slice(0, 12).map((event) => (
+                                <div
+                                  key={event.id}
+                                  className="rounded border border-[color:var(--border)] bg-[color:var(--surface)] p-2"
+                                >
+                                  <div className="flex flex-wrap items-center justify-between gap-2">
+                                    <div>{friendlyEventName(event.eventType)}</div>
+                                    <div className="text-[color:var(--muted-foreground)]">
+                                      {formatDateTime(event.createdAt)}
+                                    </div>
+                                  </div>
+                                  {summarizeEvent(event) ? (
+                                    <div className="mt-1 text-[color:var(--muted-foreground)]">{summarizeEvent(event)}</div>
+                                  ) : null}
+                                  {Object.keys(event.payload).length ? (
+                                    <details className="mt-1 text-[11px]">
+                                      <summary className="cursor-pointer text-[color:var(--muted-foreground)]">
+                                        Payload
+                                      </summary>
+                                      <pre className="mt-1 overflow-x-auto whitespace-pre-wrap rounded border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-2">
+                                        {JSON.stringify(event.payload, null, 2)}
+                                      </pre>
+                                    </details>
+                                  ) : null}
+                                </div>
+                              ))
+                            ) : (
+                              <div className="rounded border border-[color:var(--border)] bg-[color:var(--surface)] p-2 text-[color:var(--muted-foreground)]">
+                                No run events yet.
+                              </div>
+                            )}
                           </div>
                         ) : null}
 

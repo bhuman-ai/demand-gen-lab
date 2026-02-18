@@ -7,6 +7,8 @@ import type {
   Hypothesis,
   ObjectiveData,
   OutreachAccount,
+  OutreachRunEvent,
+  OutreachRunJob,
   OutreachRun,
   ReplyDraft,
   ReplyThread,
@@ -341,9 +343,26 @@ export async function fetchCampaignRuns(brandId: string, campaignId: string) {
     cache: "no-store",
   });
   const data = await readJson(response);
+  const eventsByRunRecord = asObject(data.eventsByRun);
+  const jobsByRunRecord = asObject(data.jobsByRun);
+  const eventsByRun = Object.fromEntries(
+    Object.entries(eventsByRunRecord).map(([runId, value]) => [
+      runId,
+      (Array.isArray(value) ? value : []) as OutreachRunEvent[],
+    ])
+  ) as Record<string, OutreachRunEvent[]>;
+  const jobsByRun = Object.fromEntries(
+    Object.entries(jobsByRunRecord).map(([runId, value]) => [
+      runId,
+      (Array.isArray(value) ? value : []) as OutreachRunJob[],
+    ])
+  ) as Record<string, OutreachRunJob[]>;
+
   return {
     runs: (Array.isArray(data.runs) ? data.runs : []) as OutreachRun[],
     anomalies: (Array.isArray(data.anomalies) ? data.anomalies : []) as RunAnomaly[],
+    eventsByRun,
+    jobsByRun,
   };
 }
 

@@ -2079,6 +2079,27 @@ export async function listRunEvents(runId: string): Promise<OutreachEvent[]> {
   return store.events.filter((row) => row.runId === runId).sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
 }
 
+export async function listRunJobs(runId: string, limit = 50): Promise<OutreachJob[]> {
+  const supabase = getSupabaseAdmin();
+  if (supabase) {
+    const { data, error } = await supabase
+      .from(TABLE_JOB)
+      .select("*")
+      .eq("run_id", runId)
+      .order("created_at", { ascending: false })
+      .limit(limit);
+    if (!error) {
+      return (data ?? []).map((row: unknown) => mapJobRow(row));
+    }
+  }
+
+  const store = await readLocalStore();
+  return store.jobs
+    .filter((row) => row.runId === runId)
+    .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1))
+    .slice(0, limit);
+}
+
 export async function enqueueOutreachJob(input: {
   runId: string;
   jobType: OutreachJobType;

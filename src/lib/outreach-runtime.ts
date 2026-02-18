@@ -571,6 +571,32 @@ export async function autoQueueApprovedHypothesisRuns(input: {
 async function processSourceLeadsJob(job: OutreachJob) {
   const run = await getOutreachRun(job.runId);
   if (!run) return;
+  if (!["queued", "sourcing"].includes(run.status)) {
+    return;
+  }
+
+  const existingLeads = await listRunLeads(run.id);
+  if (existingLeads.length) {
+    await updateOutreachRun(run.id, {
+      status: run.status === "queued" || run.status === "sourcing" ? "scheduled" : run.status,
+      lastError: "",
+      metrics: {
+        ...run.metrics,
+        sourcedLeads: existingLeads.length,
+      },
+    });
+    await createOutreachEvent({
+      runId: run.id,
+      eventType: "lead_sourcing_skipped",
+      payload: { reason: "leads_already_present", count: existingLeads.length },
+    });
+    await enqueueOutreachJob({
+      runId: run.id,
+      jobType: "schedule_messages",
+      executeAfter: nowIso(),
+    });
+    return;
+  }
 
   const campaign = await getCampaignById(run.brandId, run.campaignId);
   if (!campaign) {
@@ -639,18 +665,19 @@ async function processSourceLeadsJob(job: OutreachJob) {
     },
   });
 
-  let leads: ApifyLead[] = sourced;
+  const leads: ApifyLead[] = sourced;
   if (!leads.length) {
-    leads = [
-      {
-        email: `seed+${Date.now().toString(36)}@example.com`,
-        name: "Seed Prospect",
-        company: "Example Co",
-        title: "Operator",
-        domain: "example.com",
-        sourceUrl: "",
+    await failRunWithDiagnostics({
+      run,
+      reason: "No leads sourced",
+      eventType: "lead_sourcing_failed",
+      payload: {
+        sourcedCount: 0,
+        sourceId: sourceConfig.actorId || "platform_default",
+        maxLeads: sourceConfig.maxLeads,
       },
-    ];
+    });
+    return;
   }
 
   const recentRuns = (await listCampaignRuns(run.brandId, run.campaignId)).filter((item) => {
@@ -721,6 +748,24 @@ async function processSourceLeadsJob(job: OutreachJob) {
 async function processScheduleMessagesJob(job: OutreachJob) {
   const run = await getOutreachRun(job.runId);
   if (!run) return;
+  if (["paused", "completed", "canceled", "failed", "preflight_failed"].includes(run.status)) return;
+
+  const existingMessages = await listRunMessages(run.id);
+  if (existingMessages.length) {
+    await updateOutreachRun(run.id, {
+      lastError: "",
+      metrics: {
+        ...run.metrics,
+        scheduledMessages: Math.max(run.metrics.scheduledMessages, existingMessages.length),
+      },
+    });
+    await createOutreachEvent({
+      runId: run.id,
+      eventType: "message_scheduling_skipped",
+      payload: { reason: "messages_already_exist", count: existingMessages.length },
+    });
+    return;
+  }
 
   const campaign = await getCampaignById(run.brandId, run.campaignId);
   if (!campaign) {

@@ -122,6 +122,23 @@ test.beforeEach(async ({ context, page }) => {
 test("approved hypothesis auto-queues and progresses run on worker tick", async ({ request }) => {
   const { brandId, campaignId, runId } = await setupAutopilotContext(request);
 
+  const apifyWebhook = await request.post("/api/webhooks/apify/run-complete", {
+    data: {
+      runId,
+      leads: [
+        {
+          email: "lead-1@example.com",
+          name: "Lead One",
+          company: "Example Co",
+          title: "Founder",
+          domain: "example.com",
+          sourceUrl: "https://example.com/profile/lead-1",
+        },
+      ],
+    },
+  });
+  expect(apifyWebhook.ok()).toBeTruthy();
+
   const tick1 = await request.post("/api/internal/outreach/tick");
   expect(tick1.ok()).toBeTruthy();
 

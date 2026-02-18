@@ -23,6 +23,35 @@ export type ApifyLead = {
   sourceUrl: string;
 };
 
+type LeadSourcingSearchResult = {
+  ok: boolean;
+  query: string;
+  domains: string[];
+  rawResultCount: number;
+  filteredCount: number;
+  error: string;
+};
+
+type LeadSourcingEmailDiscoveryRun = {
+  ok: boolean;
+  runId: string;
+  datasetId: string;
+  error: string;
+};
+
+type LeadSourcingEmailDiscoveryPoll = {
+  ok: boolean;
+  status: "ready" | "running" | "succeeded" | "failed";
+  datasetId: string;
+  error: string;
+};
+
+type LeadSourcingDatasetFetch = {
+  ok: boolean;
+  rows: unknown[];
+  error: string;
+};
+
 function customerIoTrackBaseUrl() {
   const explicit = String(process.env.CUSTOMER_IO_TRACK_BASE_URL ?? "").trim();
   if (explicit) return explicit.replace(/\/+$/, "");
@@ -141,49 +170,365 @@ function sourcingToken(secrets: OutreachAccountSecrets) {
   );
 }
 
-const SOURCE_DISCOVERY_CANDIDATES = [
-  String(process.env.APIFY_DEFAULT_ACTOR_ID ?? "").trim(),
-  "apify/google-search-scraper",
-  "apify/web-scraper",
-];
+function normalizeApifyActorId(actorId: string) {
+  const trimmed = actorId.trim();
+  // Apify API expects "username~actorName". Historically we stored "username/actorName".
+  if (trimmed.includes("/") && !trimmed.includes("~")) {
+    const [username, actorName] = trimmed.split("/", 2);
+    if (username && actorName) return `${username}~${actorName}`;
+  }
+  return trimmed;
+}
 
-let cachedAutoSourceActorId = "";
+const PLATFORM_SEARCH_ACTOR_ID = "apify~google-search-scraper";
+const PLATFORM_EMAIL_DISCOVERY_ACTOR_ID = String(process.env.PLATFORM_EMAIL_DISCOVERY_ACTOR_ID ?? "").trim() || "9Sk4JJhEma9vBKqrg";
 
-async function actorExists(actorId: string, token: string) {
-  if (!actorId.trim() || !token.trim()) return false;
+const BLOCKED_SEARCH_DOMAINS = new Set<string>([
+  "linkedin.com",
+  "twitter.com",
+  "x.com",
+  "facebook.com",
+  "instagram.com",
+  "tiktok.com",
+  "youtube.com",
+  "reddit.com",
+  "medium.com",
+  "quora.com",
+  "saastr.com",
+  "glassdoor.com",
+  "indeed.com",
+  "angel.co",
+  "wellfound.com",
+  "crunchbase.com",
+  "wikipedia.org",
+]);
+
+function safeHostname(input: string) {
   try {
-    const response = await fetch(
-      `https://api.apify.com/v2/acts/${encodeURIComponent(actorId)}?token=${encodeURIComponent(token)}`
-    );
-    return response.ok;
+    const url = new URL(input);
+    return url.hostname.replace(/^www\./, "").toLowerCase();
   } catch {
-    return false;
+    return "";
   }
 }
 
-async function resolveSourceActorId(input: { preferredActorId: string; token: string }) {
-  const preferred = input.preferredActorId.trim();
-  const token = input.token.trim();
-  if (!token) return "";
-  if (preferred) return preferred;
+function toRegistrableDomain(hostname: string) {
+  const normalized = hostname.replace(/^www\./, "").toLowerCase();
+  if (!normalized) return "";
+  return normalized;
+}
 
-  if (cachedAutoSourceActorId) {
-    const cachedOk = await actorExists(cachedAutoSourceActorId, token);
-    if (cachedOk) return cachedAutoSourceActorId;
+async function apifyRunSyncGetDatasetItems(input: {
+  actorId: string;
+  actorInput: Record<string, unknown>;
+  token: string;
+  timeoutSeconds?: number;
+}): Promise<{ ok: boolean; status: number; rows: unknown[]; error: string }> {
+  const token = input.token.trim();
+  const actorId = normalizeApifyActorId(input.actorId);
+  if (!token || !actorId) {
+    return { ok: false, status: 0, rows: [], error: "Missing token or actor id" };
   }
 
+  try {
+    const timeout = Math.max(10, Math.min(120, Number(input.timeoutSeconds ?? 60)));
+    const url = `https://api.apify.com/v2/acts/${encodeURIComponent(
+      actorId
+    )}/run-sync-get-dataset-items?token=${encodeURIComponent(token)}&timeout=${timeout}`;
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(input.actorInput ?? {}),
+    });
+
+    if (!response.ok) {
+      let body = "";
+      try {
+        body = (await response.text()).trim();
+      } catch {
+        body = "";
+      }
+      return {
+        ok: false,
+        status: response.status,
+        rows: [],
+        error: `HTTP ${response.status}${body ? `: ${body.slice(0, 160)}` : ""}`,
+      };
+    }
+
+    const payload: unknown = await response.json();
+    const rows = Array.isArray(payload) ? payload : [];
+    return { ok: true, status: 200, rows, error: "" };
+  } catch (error) {
+    return { ok: false, status: 0, rows: [], error: error instanceof Error ? error.message : "Apify request failed" };
+  }
+}
+
+async function apifyStartRun(input: {
+  actorId: string;
+  actorInput: Record<string, unknown>;
+  token: string;
+}): Promise<LeadSourcingEmailDiscoveryRun> {
+  const token = input.token.trim();
+  const actorId = normalizeApifyActorId(input.actorId);
+  if (!token || !actorId) {
+    return { ok: false, runId: "", datasetId: "", error: "Missing token or actor id" };
+  }
+
+  try {
+    const url = `https://api.apify.com/v2/acts/${encodeURIComponent(actorId)}/runs?token=${encodeURIComponent(
+      token
+    )}&waitForFinish=0`;
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(input.actorInput ?? {}),
+    });
+    const payload: unknown = await response.json().catch(() => ({}));
+    const row = payload && typeof payload === "object" && !Array.isArray(payload) ? (payload as Record<string, unknown>) : {};
+    const data =
+      row.data && typeof row.data === "object" && !Array.isArray(row.data) ? (row.data as Record<string, unknown>) : row;
+    const runId = String(data.id ?? "").trim();
+    const datasetId = String(data.defaultDatasetId ?? data.default_dataset_id ?? "").trim();
+    if (!response.ok || !runId) {
+      return {
+        ok: false,
+        runId,
+        datasetId,
+        error: `HTTP ${response.status}${runId ? "" : ": Missing run id"}`,
+      };
+    }
+    return { ok: true, runId, datasetId, error: "" };
+  } catch (error) {
+    return { ok: false, runId: "", datasetId: "", error: error instanceof Error ? error.message : "Apify run start failed" };
+  }
+}
+
+async function apifyPollRun(input: { token: string; runId: string }): Promise<LeadSourcingEmailDiscoveryPoll> {
+  const token = input.token.trim();
+  const runId = input.runId.trim();
+  if (!token || !runId) {
+    return { ok: false, status: "failed", datasetId: "", error: "Missing token or run id" };
+  }
+
+  try {
+    const url = `https://api.apify.com/v2/actor-runs/${encodeURIComponent(runId)}?token=${encodeURIComponent(token)}`;
+    const response = await fetch(url);
+    const payload: unknown = await response.json().catch(() => ({}));
+    const row = payload && typeof payload === "object" && !Array.isArray(payload) ? (payload as Record<string, unknown>) : {};
+    const data =
+      row.data && typeof row.data === "object" && !Array.isArray(row.data) ? (row.data as Record<string, unknown>) : row;
+    const statusRaw = String(data.status ?? "").trim().toUpperCase();
+    const datasetId = String(data.defaultDatasetId ?? "").trim();
+
+    if (!response.ok) {
+      return { ok: false, status: "failed", datasetId, error: `HTTP ${response.status}` };
+    }
+
+    if (["READY", "RUNNING"].includes(statusRaw)) {
+      return { ok: true, status: statusRaw === "READY" ? "ready" : "running", datasetId, error: "" };
+    }
+    if (statusRaw === "SUCCEEDED") {
+      return { ok: true, status: "succeeded", datasetId, error: "" };
+    }
+    return { ok: false, status: "failed", datasetId, error: `Run ${statusRaw || "UNKNOWN"}` };
+  } catch (error) {
+    return { ok: false, status: "failed", datasetId: "", error: error instanceof Error ? error.message : "Poll failed" };
+  }
+}
+
+async function apifyFetchDatasetItems(input: {
+  token: string;
+  datasetId: string;
+  limit?: number;
+}): Promise<LeadSourcingDatasetFetch> {
+  const token = input.token.trim();
+  const datasetId = input.datasetId.trim();
+  if (!token || !datasetId) {
+    return { ok: false, rows: [], error: "Missing token or dataset id" };
+  }
+
+  const limit = Math.max(1, Math.min(500, Number(input.limit ?? 200)));
+  try {
+    const url = `https://api.apify.com/v2/datasets/${encodeURIComponent(
+      datasetId
+    )}/items?token=${encodeURIComponent(token)}&clean=true&format=json&limit=${limit}`;
+    const response = await fetch(url);
+    if (!response.ok) {
+      let body = "";
+      try {
+        body = (await response.text()).trim();
+      } catch {
+        body = "";
+      }
+      return { ok: false, rows: [], error: `HTTP ${response.status}${body ? `: ${body.slice(0, 160)}` : ""}` };
+    }
+    const payload: unknown = await response.json();
+    return { ok: true, rows: Array.isArray(payload) ? payload : [], error: "" };
+  } catch (error) {
+    return { ok: false, rows: [], error: error instanceof Error ? error.message : "Dataset fetch failed" };
+  }
+}
+
+export async function runPlatformLeadDomainSearch(params: {
+  token: string;
+  query: string;
+  maxResults?: number;
+  excludeDomains?: string[];
+}): Promise<LeadSourcingSearchResult> {
+  const query = params.query.trim();
+  if (!query) {
+    return { ok: false, query: "", domains: [], rawResultCount: 0, filteredCount: 0, error: "Search query is empty" };
+  }
+
+  const maxResults = Math.max(5, Math.min(50, Number(params.maxResults ?? 15)));
+  const exclude = new Set((params.excludeDomains ?? []).map((d) => d.replace(/^www\./, "").toLowerCase()));
+
+  const response = await apifyRunSyncGetDatasetItems({
+    actorId: PLATFORM_SEARCH_ACTOR_ID,
+    token: params.token,
+    timeoutSeconds: 60,
+    actorInput: {
+      queries: query,
+      maxPagesPerQuery: 1,
+      resultsPerPage: Math.min(10, maxResults),
+      languageCode: "en",
+    },
+  });
+
+  if (!response.ok) {
+    return {
+      ok: false,
+      query,
+      domains: [],
+      rawResultCount: 0,
+      filteredCount: 0,
+      error: response.error || "Search failed",
+    };
+  }
+
+  const firstRow =
+    response.rows.find((row) => row && typeof row === "object" && !Array.isArray(row)) ??
+    (response.rows.length ? response.rows[0] : null);
+  const row = firstRow && typeof firstRow === "object" && !Array.isArray(firstRow) ? (firstRow as Record<string, unknown>) : {};
+  const organic = Array.isArray(row.organicResults) ? (row.organicResults as unknown[]) : [];
+  const rawUrls = organic
+    .map((item) => {
+      const r = item && typeof item === "object" && !Array.isArray(item) ? (item as Record<string, unknown>) : {};
+      return String(r.url ?? "").trim();
+    })
+    .filter(Boolean);
+
+  const domains: string[] = [];
   const seen = new Set<string>();
-  for (const candidate of SOURCE_DISCOVERY_CANDIDATES) {
-    const actorId = candidate.trim();
-    if (!actorId || seen.has(actorId)) continue;
-    seen.add(actorId);
-    if (await actorExists(actorId, token)) {
-      cachedAutoSourceActorId = actorId;
-      return actorId;
+  let filtered = 0;
+  for (const url of rawUrls) {
+    const hostname = safeHostname(url);
+    const domain = toRegistrableDomain(hostname);
+    if (!domain) continue;
+
+    const parts = domain.split(".");
+    const root = parts.slice(-2).join(".");
+    const blocked = BLOCKED_SEARCH_DOMAINS.has(domain) || BLOCKED_SEARCH_DOMAINS.has(root);
+    if (blocked || exclude.has(domain) || exclude.has(root)) {
+      filtered += 1;
+      continue;
+    }
+    if (seen.has(domain)) continue;
+    seen.add(domain);
+    domains.push(domain);
+    if (domains.length >= maxResults) break;
+  }
+
+  return {
+    ok: true,
+    query,
+    domains,
+    rawResultCount: rawUrls.length,
+    filteredCount: filtered,
+    error: "",
+  };
+}
+
+export async function startPlatformEmailDiscovery(params: {
+  token: string;
+  domains: string[];
+  maxRequestsPerCrawl?: number;
+}): Promise<LeadSourcingEmailDiscoveryRun> {
+  const domains = (params.domains ?? [])
+    .map((d) => d.replace(/^www\./, "").trim().toLowerCase())
+    .filter(Boolean);
+  const unique: string[] = [];
+  const seen = new Set<string>();
+  for (const domain of domains) {
+    if (seen.has(domain)) continue;
+    seen.add(domain);
+    unique.push(domain);
+  }
+  if (!unique.length) {
+    return { ok: false, runId: "", datasetId: "", error: "No domains provided for email discovery" };
+  }
+
+  const maxRequestsPerCrawl = Math.max(10, Math.min(120, Number(params.maxRequestsPerCrawl ?? 40)));
+  return apifyStartRun({
+    actorId: PLATFORM_EMAIL_DISCOVERY_ACTOR_ID,
+    token: params.token,
+    actorInput: {
+      startUrls: unique.map((domain) => ({ url: `https://${domain}` })),
+      maxRequestsPerCrawl,
+      maxConcurrency: 10,
+      maxDepth: 2,
+    },
+  });
+}
+
+export async function pollPlatformEmailDiscovery(params: {
+  token: string;
+  runId: string;
+}): Promise<LeadSourcingEmailDiscoveryPoll> {
+  return apifyPollRun({ token: params.token, runId: params.runId });
+}
+
+export async function fetchPlatformEmailDiscoveryResults(params: {
+  token: string;
+  datasetId: string;
+  limit?: number;
+}): Promise<LeadSourcingDatasetFetch> {
+  return apifyFetchDatasetItems({ token: params.token, datasetId: params.datasetId, limit: params.limit });
+}
+
+export function leadsFromEmailDiscoveryRows(rows: unknown[], maxLeads: number): ApifyLead[] {
+  const limit = Math.max(1, Math.min(500, Number(maxLeads || 100)));
+  const leads: ApifyLead[] = [];
+  const seen = new Set<string>();
+
+  for (const raw of rows) {
+    const row = raw && typeof raw === "object" && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
+    const domain = String(row.domain ?? "").trim().toLowerCase();
+    const sourceUrl = String(row.originalStartUrl ?? row.original_start_url ?? "").trim();
+    const emailsRaw = row.emails;
+    const emails = Array.isArray(emailsRaw) ? emailsRaw.map((item) => String(item ?? "").trim().toLowerCase()) : [];
+    for (const email of emails) {
+      if (!email || !email.includes("@")) continue;
+      if (seen.has(email)) continue;
+      seen.add(email);
+      leads.push({
+        email,
+        name: "",
+        company: domain || maybeDomain(email, ""),
+        title: "",
+        domain: maybeDomain(email, domain),
+        sourceUrl: sourceUrl || (domain ? `https://${domain}` : ""),
+      });
+      if (leads.length >= limit) return leads;
     }
   }
 
-  return "";
+  return leads;
 }
 
 function normalizeApifyLead(raw: unknown): ApifyLead | null {
@@ -303,13 +648,8 @@ export async function sourceLeadsFromApify(params: {
     return [];
   }
 
-  const actorId = await resolveSourceActorId({
-    preferredActorId: params.actorId,
-    token,
-  });
-  if (!actorId) {
-    return [];
-  }
+  const actorId = normalizeApifyActorId(params.actorId);
+  if (!actorId) return [];
 
   try {
     const url = `https://api.apify.com/v2/acts/${encodeURIComponent(

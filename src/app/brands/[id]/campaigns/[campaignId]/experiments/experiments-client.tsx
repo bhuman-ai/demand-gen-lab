@@ -97,6 +97,10 @@ function friendlyEventName(eventType: string) {
   if (eventType === "hypothesis_approved_auto_run_queued") return "Run queued";
   if (eventType === "run_started") return "Run started";
   if (eventType === "lead_sourcing_requested") return "Lead sourcing requested";
+  if (eventType === "lead_sourcing_search_completed") return "Lead search results";
+  if (eventType === "lead_sourcing_email_discovery_started") return "Email discovery started";
+  if (eventType === "lead_sourcing_email_discovery_polled") return "Email discovery status";
+  if (eventType === "lead_sourcing_email_discovery_completed") return "Email discovery results";
   if (eventType === "lead_sourcing_completed") return "Lead sourcing completed";
   if (eventType === "lead_sourced_apify") return "Leads stored";
   if (eventType === "schedule_failed") return "Scheduling failed";
@@ -123,6 +127,39 @@ function summarizeEvent(event: OutreachRunEvent) {
   if (event.eventType === "lead_sourcing_requested") {
     const maxLeads = asNumber(event.payload.maxLeads);
     return `Requested up to ${maxLeads ?? "?"} leads`;
+  }
+  if (event.eventType === "lead_sourcing_search_completed") {
+    const ok = Boolean(event.payload.ok);
+    const domainsFound = asNumber(event.payload.domainsFound);
+    const rawResultCount = asNumber(event.payload.rawResultCount);
+    if (!ok) {
+      const error = asText(event.payload.error);
+      return error ? `Search failed: ${error}` : "Search failed";
+    }
+    return `Found ${domainsFound ?? 0} domains from ${rawResultCount ?? 0} results`;
+  }
+  if (event.eventType === "lead_sourcing_email_discovery_started") {
+    const ok = Boolean(event.payload.ok);
+    const chunkSize = asNumber(event.payload.chunkSize);
+    const cursor = asNumber(event.payload.cursor);
+    if (!ok) {
+      const error = asText(event.payload.error);
+      return error ? `Start failed: ${error}` : "Start failed";
+    }
+    return `Scanning ${chunkSize ?? 0} domains (offset ${cursor ?? 0})`;
+  }
+  if (event.eventType === "lead_sourcing_email_discovery_polled") {
+    const status = asText(event.payload.status);
+    if (status) return `Status: ${status}`;
+  }
+  if (event.eventType === "lead_sourcing_email_discovery_completed") {
+    const ok = Boolean(event.payload.ok);
+    const datasetRows = asNumber(event.payload.datasetRows);
+    if (!ok) {
+      const error = asText(event.payload.error);
+      return error ? `Fetch failed: ${error}` : "Fetch failed";
+    }
+    return `Retrieved ${datasetRows ?? 0} rows`;
   }
   if (event.eventType === "lead_sourcing_completed") {
     const sourcedCount = asNumber(event.payload.sourcedCount);

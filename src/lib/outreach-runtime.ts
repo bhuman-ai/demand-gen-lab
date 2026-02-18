@@ -42,6 +42,11 @@ import {
   buildOutreachMessageBody,
   sendOutreachMessage,
   sendReplyDraftAsEvent,
+  fetchPlatformEmailDiscoveryResults,
+  leadsFromEmailDiscoveryRows,
+  pollPlatformEmailDiscovery,
+  runPlatformLeadDomainSearch,
+  startPlatformEmailDiscovery,
   sourceLeadsFromApify,
   type ApifyLead,
 } from "@/lib/outreach-providers";
@@ -119,6 +124,9 @@ function preflightReason(input: {
 }) {
   if (!supportsDelivery(input.deliveryAccount)) {
     return "Assigned delivery account does not support outreach sending";
+  }
+  if (!input.hypothesis.actorQuery.trim()) {
+    return "Target Audience is required for lead sourcing";
   }
   if (!effectiveSourcingToken(input.deliverySecrets)) {
     return "Lead sourcing credentials are missing";
@@ -630,56 +638,316 @@ async function processSourceLeadsJob(job: OutreachJob) {
     return;
   }
 
-  await updateOutreachRun(run.id, { status: "sourcing", lastError: "" });
-  await markExperimentExecutionStatus(run.brandId, run.campaignId, run.experimentId, "sourcing");
-  await createOutreachEvent({ runId: run.id, eventType: "run_started", payload: {} });
+  const payload = job.payload && typeof job.payload === "object" && !Array.isArray(job.payload) ? job.payload : {};
+  const stage = String((payload as Record<string, unknown>).stage ?? "").trim();
 
   const sourceConfig = effectiveSourceConfig(hypothesis, account.config.apify.defaultActorId);
   const sourcingToken = effectiveSourcingToken(secrets);
-  await createOutreachEvent({
-    runId: run.id,
-    eventType: "lead_sourcing_requested",
-    payload: {
-      sourceId: sourceConfig.actorId || "platform_default",
-      maxLeads: sourceConfig.maxLeads,
-      hasSourceInput: Boolean(
-        sourceConfig.actorInput &&
-        typeof sourceConfig.actorInput === "object" &&
-        Object.keys(sourceConfig.actorInput).length
-      ),
-    },
-  });
+  const maxLeads = Math.max(1, Math.min(500, Number(sourceConfig.maxLeads ?? 100)));
+  const targetAudience = hypothesis.actorQuery.trim();
 
-  const sourced = await sourceLeadsFromApify({
-    actorId: sourceConfig.actorId,
-    actorInput: sourceConfig.actorInput,
-    maxLeads: sourceConfig.maxLeads,
-    token: sourcingToken,
-  });
-  await createOutreachEvent({
-    runId: run.id,
-    eventType: "lead_sourcing_completed",
-    payload: {
-      sourcedCount: sourced.length,
-      sourceId: sourceConfig.actorId || "platform_default",
-    },
-  });
+  const brand = await getBrandById(run.brandId);
+  const excludeDomains: string[] = [];
+  if (brand?.website) {
+    try {
+      excludeDomains.push(new URL(brand.website).hostname.replace(/^www\./, "").toLowerCase());
+    } catch {
+      // ignore invalid
+    }
+  }
 
-  const leads: ApifyLead[] = sourced;
-  if (!leads.length) {
+  if (run.status === "queued") {
+    await updateOutreachRun(run.id, { status: "sourcing", lastError: "" });
+    await markExperimentExecutionStatus(run.brandId, run.campaignId, run.experimentId, "sourcing");
+    await createOutreachEvent({ runId: run.id, eventType: "run_started", payload: {} });
+    await createOutreachEvent({
+      runId: run.id,
+      eventType: "lead_sourcing_requested",
+      payload: {
+        strategy: sourceConfig.actorId ? "custom_actor" : "platform_search_then_email_discovery",
+        maxLeads,
+      },
+    });
+  }
+
+  // Custom override: for backward compatibility (not exposed in UI).
+  if (sourceConfig.actorId.trim()) {
+    const sourced = await sourceLeadsFromApify({
+      actorId: sourceConfig.actorId,
+      actorInput: sourceConfig.actorInput,
+      maxLeads,
+      token: sourcingToken,
+    });
+    await createOutreachEvent({
+      runId: run.id,
+      eventType: "lead_sourcing_completed",
+      payload: {
+        sourcedCount: sourced.length,
+        strategy: "custom_actor",
+      },
+    });
+
+    if (!sourced.length) {
+      await failRunWithDiagnostics({
+        run,
+        reason: "No leads sourced",
+        eventType: "lead_sourcing_failed",
+        payload: {
+          sourcedCount: 0,
+          maxLeads,
+        },
+      });
+      return;
+    }
+
+    await finishSourcingWithLeads(run, sourced);
+    return;
+  }
+
+  if (!targetAudience) {
     await failRunWithDiagnostics({
       run,
-      reason: "No leads sourced",
+      reason: "Target Audience is empty for this hypothesis",
       eventType: "lead_sourcing_failed",
+    });
+    return;
+  }
+
+  const searchQuery =
+    String((payload as Record<string, unknown>).searchQuery ?? "").trim() ||
+    `${targetAudience} company website contact -site:linkedin.com -site:twitter.com -site:x.com -site:facebook.com -site:instagram.com -site:medium.com -site:quora.com -site:saastr.com -site:reddit.com -site:glassdoor.com -site:indeed.com -site:wikipedia.org -site:crunchbase.com`;
+
+  const domainsRaw = (payload as Record<string, unknown>).domains;
+  const domains = Array.isArray(domainsRaw)
+    ? domainsRaw.map((item) => String(item ?? "").trim().toLowerCase()).filter(Boolean)
+    : [];
+  const cursor = Math.max(0, Number((payload as Record<string, unknown>).cursor ?? 0) || 0);
+  const chunkSize = Math.max(3, Math.min(12, Number((payload as Record<string, unknown>).chunkSize ?? 6) || 6));
+
+  if (!stage) {
+    const search = await runPlatformLeadDomainSearch({
+      token: sourcingToken,
+      query: searchQuery,
+      maxResults: 30,
+      excludeDomains,
+    });
+    await createOutreachEvent({
+      runId: run.id,
+      eventType: "lead_sourcing_search_completed",
       payload: {
-        sourcedCount: 0,
-        sourceId: sourceConfig.actorId || "platform_default",
-        maxLeads: sourceConfig.maxLeads,
+        ok: search.ok,
+        query: search.query,
+        rawResultCount: search.rawResultCount,
+        domainsFound: search.domains.length,
+        filteredCount: search.filteredCount,
+        error: search.error,
+      },
+    });
+
+    if (!search.ok || !search.domains.length) {
+      await failRunWithDiagnostics({
+        run,
+        reason: search.ok ? "No candidate domains found from lead search" : `Lead search failed: ${search.error}`,
+        eventType: "lead_sourcing_failed",
+        payload: {
+          query: search.query,
+          rawResultCount: search.rawResultCount,
+        },
+      });
+      return;
+    }
+
+    await enqueueOutreachJob({
+      runId: run.id,
+      jobType: "source_leads",
+      executeAfter: nowIso(),
+      payload: {
+        stage: "start_email_discovery",
+        searchQuery: search.query,
+        domains: search.domains,
+        cursor: 0,
+        chunkSize,
+        maxLeads,
       },
     });
     return;
   }
 
+  if (stage === "start_email_discovery") {
+    if (!domains.length) {
+      await failRunWithDiagnostics({
+        run,
+        reason: "No domains available for email discovery",
+        eventType: "lead_sourcing_failed",
+      });
+      return;
+    }
+
+    const chunk = domains.slice(cursor, cursor + chunkSize);
+    if (!chunk.length) {
+      await failRunWithDiagnostics({
+        run,
+        reason: "No leads sourced (exhausted discovered domains)",
+        eventType: "lead_sourcing_failed",
+        payload: { domains: domains.length },
+      });
+      return;
+    }
+
+    const maxRequestsPerCrawl = Math.max(20, Math.min(80, chunk.length * 12));
+    const started = await startPlatformEmailDiscovery({
+      token: sourcingToken,
+      domains: chunk,
+      maxRequestsPerCrawl,
+    });
+    await createOutreachEvent({
+      runId: run.id,
+      eventType: "lead_sourcing_email_discovery_started",
+      payload: {
+        ok: started.ok,
+        cursor,
+        chunkSize: chunk.length,
+        maxRequestsPerCrawl,
+        error: started.error,
+      },
+    });
+
+    if (!started.ok) {
+      await failRunWithDiagnostics({
+        run,
+        reason: `Email discovery failed to start: ${started.error}`,
+        eventType: "lead_sourcing_failed",
+      });
+      return;
+    }
+
+    await updateOutreachRun(run.id, { externalRef: started.runId });
+
+    await enqueueOutreachJob({
+      runId: run.id,
+      jobType: "source_leads",
+      executeAfter: new Date(Date.now() + 30_000).toISOString(),
+      payload: {
+        stage: "poll_email_discovery",
+        searchQuery,
+        domains,
+        cursor,
+        nextCursor: cursor + chunk.length,
+        chunkSize,
+        maxLeads,
+        emailDiscoveryRunId: started.runId,
+        emailDiscoveryDatasetId: started.datasetId,
+      },
+    });
+    return;
+  }
+
+  if (stage === "poll_email_discovery") {
+    const runId = String((payload as Record<string, unknown>).emailDiscoveryRunId ?? "").trim();
+    const datasetId = String((payload as Record<string, unknown>).emailDiscoveryDatasetId ?? "").trim();
+    const nextCursor = Math.max(0, Number((payload as Record<string, unknown>).nextCursor ?? cursor) || 0);
+
+    const poll = await pollPlatformEmailDiscovery({ token: sourcingToken, runId });
+    await createOutreachEvent({
+      runId: run.id,
+      eventType: "lead_sourcing_email_discovery_polled",
+      payload: {
+        ok: poll.ok,
+        status: poll.status,
+        error: poll.error,
+      },
+    });
+
+    if (poll.ok && (poll.status === "ready" || poll.status === "running")) {
+      await enqueueOutreachJob({
+        runId: run.id,
+        jobType: "source_leads",
+        executeAfter: new Date(Date.now() + 30_000).toISOString(),
+        payload: {
+          ...payload,
+          stage: "poll_email_discovery",
+          emailDiscoveryDatasetId: poll.datasetId || datasetId,
+          cursor,
+          nextCursor,
+        },
+      });
+      return;
+    }
+
+    if (!poll.ok && poll.status !== "succeeded") {
+      await failRunWithDiagnostics({
+        run,
+        reason: `Email discovery failed: ${poll.error}`,
+        eventType: "lead_sourcing_failed",
+      });
+      return;
+    }
+
+    const resolvedDatasetId = poll.datasetId || datasetId;
+    const fetched = await fetchPlatformEmailDiscoveryResults({
+      token: sourcingToken,
+      datasetId: resolvedDatasetId,
+      limit: 200,
+    });
+    await createOutreachEvent({
+      runId: run.id,
+      eventType: "lead_sourcing_email_discovery_completed",
+      payload: {
+        ok: fetched.ok,
+        datasetRows: fetched.rows.length,
+        error: fetched.error,
+      },
+    });
+
+    if (!fetched.ok) {
+      await failRunWithDiagnostics({
+        run,
+        reason: `Email discovery results fetch failed: ${fetched.error}`,
+        eventType: "lead_sourcing_failed",
+      });
+      return;
+    }
+
+    const discovered = leadsFromEmailDiscoveryRows(fetched.rows, maxLeads);
+    await createOutreachEvent({
+      runId: run.id,
+      eventType: "lead_sourcing_completed",
+      payload: {
+        sourcedCount: discovered.length,
+        strategy: "platform_search_then_email_discovery",
+      },
+    });
+
+    if (!discovered.length) {
+      await enqueueOutreachJob({
+        runId: run.id,
+        jobType: "source_leads",
+        executeAfter: nowIso(),
+        payload: {
+          stage: "start_email_discovery",
+          searchQuery,
+          domains,
+          cursor: nextCursor,
+          chunkSize,
+          maxLeads,
+        },
+      });
+      return;
+    }
+
+    await finishSourcingWithLeads(run, discovered);
+    return;
+  }
+
+  await failRunWithDiagnostics({
+    run,
+    reason: `Unknown lead sourcing stage: ${stage}`,
+    eventType: "lead_sourcing_failed",
+  });
+  return;
+}
+
+async function finishSourcingWithLeads(run: NonNullable<Awaited<ReturnType<typeof getOutreachRun>>>, leads: ApifyLead[]) {
   const recentRuns = (await listCampaignRuns(run.brandId, run.campaignId)).filter((item) => {
     if (item.id === run.id) return false;
     const ageMs = Date.now() - new Date(item.createdAt).getTime();
@@ -694,6 +962,7 @@ async function processSourceLeadsJob(job: OutreachJob) {
       }
     }
   }
+
   const filteredLeads = leads.filter((lead) => !blockedEmails.has(lead.email.toLowerCase()));
   if (!filteredLeads.length) {
     await failRunWithDiagnostics({
@@ -724,6 +993,7 @@ async function processSourceLeadsJob(job: OutreachJob) {
 
   await updateOutreachRun(run.id, {
     status: "scheduled",
+    lastError: "",
     metrics: {
       ...run.metrics,
       sourcedLeads: upserted.length,

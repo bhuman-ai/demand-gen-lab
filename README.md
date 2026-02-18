@@ -18,6 +18,7 @@ Copy `.env.example` to `.env.local` and fill values:
 - `SUPABASE_SERVICE_ROLE_KEY` (optional)
 - `OUTREACH_ENCRYPTION_KEY` (required for secure account secret storage)
 - `OUTREACH_CRON_TOKEN` (optional, protects cron tick endpoint)
+- `CRON_SECRET` (optional, Vercel-native cron auth token; also accepted by tick endpoint)
 - `CUSTOMER_IO_WEBHOOK_SECRET` (optional)
 - `APIFY_WEBHOOK_SECRET` (optional)
 
@@ -48,6 +49,7 @@ Copy `.env.example` to `.env.local` and fill values:
 - `POST /api/webhooks/customerio/events` — delivery/reply webhook intake
 - `POST /api/webhooks/apify/run-complete` — lead sourcing webhook intake
 - `POST /api/internal/outreach/tick` — cron worker tick
+  - `GET` is also supported so Vercel Cron can call it directly.
 
 ## UI routes
 

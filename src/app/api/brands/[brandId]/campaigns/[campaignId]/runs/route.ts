@@ -1,11 +1,19 @@
 import { NextResponse } from "next/server";
 import { getCampaignById } from "@/lib/factory-data";
 import { listCampaignRuns, listRunAnomalies } from "@/lib/outreach-data";
+import { runOutreachTick } from "@/lib/outreach-runtime";
 
 export async function GET(
   _: Request,
   context: { params: Promise<{ brandId: string; campaignId: string }> }
 ) {
+  // Best-effort queue drain to avoid runs appearing stuck when cron is delayed/misconfigured.
+  try {
+    await runOutreachTick(10);
+  } catch {
+    // Ignore tick errors for this read endpoint; we still return current run state.
+  }
+
   const { brandId, campaignId } = await context.params;
   const campaign = await getCampaignById(brandId, campaignId);
   if (!campaign) {

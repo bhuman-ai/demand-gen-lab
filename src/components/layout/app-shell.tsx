@@ -12,7 +12,7 @@ import {
   Settings,
   Target,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo } from "react";
 import { cn } from "@/lib/utils";
 import { trackEvent } from "@/lib/telemetry-client";
 import BrandSwitcher, { getActiveBrandIdFromPath } from "./brand-switcher";
@@ -64,17 +64,16 @@ function breadcrumb(pathname: string) {
 
 export default function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
-  const [storedBrandId] = useState(() =>
-    typeof window !== "undefined" ? localStorage.getItem(ACTIVE_BRAND_KEY) || "" : ""
-  );
-  const activeBrandId = getActiveBrandIdFromPath(pathname) || storedBrandId;
+  const pathBrandId = getActiveBrandIdFromPath(pathname);
+  const storedBrandId =
+    typeof window !== "undefined" ? localStorage.getItem(ACTIVE_BRAND_KEY) || "" : "";
+  const activeBrandId = pathBrandId || storedBrandId;
 
   useEffect(() => {
-    const fromPath = getActiveBrandIdFromPath(pathname);
-    if (fromPath) {
-      localStorage.setItem(ACTIVE_BRAND_KEY, fromPath);
+    if (pathBrandId) {
+      localStorage.setItem(ACTIVE_BRAND_KEY, pathBrandId);
     }
-  }, [pathname]);
+  }, [pathBrandId]);
 
   useEffect(() => {
     const previous = sessionStorage.getItem("factory.previousPath");

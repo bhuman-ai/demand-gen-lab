@@ -84,6 +84,29 @@ export default function ObjectiveClient({ brandId, campaignId }: { brandId: stri
   }, [objective, campaign, suggestionsLoadedOnce, brandId, campaignId]);
 
   if (!objective || !campaign) {
+    if (error) {
+      return (
+        <div className="space-y-4">
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Could not load objective</CardTitle>
+              <CardDescription className="text-[color:var(--danger)]">{error}</CardDescription>
+            </CardHeader>
+            <CardContent className="flex flex-wrap gap-2">
+              <Button type="button" onClick={() => window.location.reload()}>
+                Reload
+              </Button>
+              <Button asChild type="button" variant="outline">
+                <Link href={`/brands/${brandId}/campaigns`}>Back to Campaigns</Link>
+              </Button>
+              <Button asChild type="button" variant="ghost">
+                <Link href={`/brands/${brandId}`}>Back to Brand Home</Link>
+              </Button>
+            </CardContent>
+          </Card>
+        </div>
+      );
+    }
     return <div className="text-sm text-[color:var(--muted-foreground)]">Loading objective...</div>;
   }
 

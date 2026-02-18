@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { ArrowRight, ChevronDown, ChevronUp, Pause, Play, Plus, Sparkles, Trash2 } from "lucide-react";
+import { ArrowRight, ChevronDown, ChevronUp, Pause, Play, Plus, Sparkles, Trash2, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -18,6 +18,7 @@ import {
   fetchCampaignRuns,
   suggestExperimentsApi,
   launchExperimentRun,
+  cancelRun,
   pauseRun,
   resumeRun,
   updateCampaignApi,
@@ -66,6 +67,9 @@ function friendlyRunLaunchError(error: unknown) {
   }
   if (message.includes("Lead sourcing credentials are missing")) {
     return "Run did not start: platform lead sourcing credentials are missing in this deployment.";
+  }
+  if (message.includes("Experiment already has an active run")) {
+    return "This experiment already has an active run. Cancel it to restart, or wait for it to finish.";
   }
   return message;
 }
@@ -277,6 +281,29 @@ export default function ExperimentsClient({ brandId, campaignId }: { brandId: st
   }, [campaign, suggestionsLoadedOnce, brandId, campaignId]);
 
   if (!campaign) {
+    if (error) {
+      return (
+        <div className="space-y-4">
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Could not load experiments</CardTitle>
+              <CardDescription className="text-[color:var(--danger)]">{error}</CardDescription>
+            </CardHeader>
+            <CardContent className="flex flex-wrap gap-2">
+              <Button type="button" onClick={() => window.location.reload()}>
+                Reload
+              </Button>
+              <Button asChild type="button" variant="outline">
+                <Link href={`/brands/${brandId}/campaigns`}>Back to Campaigns</Link>
+              </Button>
+              <Button asChild type="button" variant="ghost">
+                <Link href={`/brands/${brandId}`}>Back to Brand Home</Link>
+              </Button>
+            </CardContent>
+          </Card>
+        </div>
+      );
+    }
     return <div className="text-sm text-[color:var(--muted-foreground)]">Loading experiments...</div>;
   }
 
@@ -799,6 +826,24 @@ export default function ExperimentsClient({ brandId, campaignId }: { brandId: st
                               Pause
                             </Button>
                           ) : null}
+                          {["queued", "sourcing", "scheduled", "sending", "monitoring", "paused"].includes(run.status) ? (
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="danger"
+                              onClick={async () => {
+                                const confirmed = window.confirm(
+                                  `Cancel run ${run.id.slice(-6)}? This stops any further sends for this run.`
+                                );
+                                if (!confirmed) return;
+                                await cancelRun(brandId, campaignId, run.id, "Canceled from experiments page");
+                                await refreshRuns();
+                              }}
+                            >
+                              <X className="h-3.5 w-3.5" />
+                              Cancel
+                            </Button>
+                          ) : null}
                         </div>
                       </div>
                     );
@@ -811,6 +856,17 @@ export default function ExperimentsClient({ brandId, campaignId }: { brandId: st
                       setError("");
                       try {
                         await save(false);
+                        const openRun =
+                          experimentRuns.find((run) =>
+                            ["queued", "sourcing", "scheduled", "sending", "monitoring", "paused"].includes(run.status)
+                          ) ?? null;
+                        if (openRun) {
+                          const confirmed = window.confirm(
+                            `This experiment already has an active run (${openRun.id.slice(-6)} · ${openRun.status}). Cancel it and restart?`
+                          );
+                          if (!confirmed) return;
+                          await cancelRun(brandId, campaignId, openRun.id, "Restarted from experiments page");
+                        }
                         await launchExperimentRun(brandId, campaignId, experiment.id);
                         trackEvent("run_started", { brandId, campaignId, experimentId: experiment.id });
                       } catch (err) {
@@ -823,7 +879,13 @@ export default function ExperimentsClient({ brandId, campaignId }: { brandId: st
                       }
                     }}
                   >
-                    Launch Autopilot Run
+                    {experimentRuns.some((run) =>
+                      ["queued", "sourcing", "scheduled", "sending", "monitoring", "paused"].includes(run.status)
+                    )
+                      ? "Restart Autopilot Run"
+                      : experimentRuns.some((run) => ["failed", "preflight_failed"].includes(run.status))
+                        ? "Retry Autopilot Run"
+                        : "Launch Autopilot Run"}
                   </Button>
                 </div>
 

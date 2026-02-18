@@ -850,7 +850,7 @@ export default function OutreachSettingsClient() {
           <div className="grid gap-2">
             <FieldLabel
               htmlFor="delivery-api-key"
-              label="Customer.io Tracking API Key"
+              label="Customer.io API Key"
               help="Customer.io: Settings > API Credentials. Use the Tracking API key from the same row as your Site ID (do not use an App API key)."
             />
             <Input

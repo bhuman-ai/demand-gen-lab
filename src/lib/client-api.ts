@@ -407,6 +407,20 @@ export async function resumeRun(brandId: string, campaignId: string, runId: stri
   return await readJson(response);
 }
 
+export async function cancelRun(
+  brandId: string,
+  campaignId: string,
+  runId: string,
+  reason = "Canceled by user"
+) {
+  const response = await fetch(`/api/brands/${brandId}/campaigns/${campaignId}/runs/${runId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action: "cancel", reason }),
+  });
+  return await readJson(response);
+}
+
 export async function fetchInboxThreads(brandId: string) {
   const response = await fetch(`/api/brands/${brandId}/inbox/threads`, { cache: "no-store" });
   const data = await readJson(response);

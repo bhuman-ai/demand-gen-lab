@@ -428,11 +428,16 @@ export async function launchExperimentRun(input: {
   }
 
   const activeRuns = await listExperimentRuns(input.brandId, input.campaignId, experiment.id);
-  const hasOpenRun = activeRuns.some((run) =>
-    ["queued", "sourcing", "scheduled", "sending", "monitoring", "paused"].includes(run.status)
-  );
-  if (hasOpenRun) {
-    return { ok: false, runId: "", reason: "Experiment already has an active run" };
+  const openRun =
+    activeRuns.find((run) => ["queued", "sourcing", "scheduled", "sending", "monitoring", "paused"].includes(run.status)) ??
+    null;
+  if (openRun) {
+    return {
+      ok: false,
+      runId: openRun.id,
+      reason: "Experiment already has an active run",
+      hint: `Active run ${openRun.id.slice(-6)} is ${openRun.status}. Pause/cancel it to restart.`,
+    };
   }
 
   const brandAccount = await ensureBrandAccount(input.brandId);

@@ -32,10 +32,13 @@ function pageTitle(pathname: string) {
   if (pathname === "/brands") return "Brands";
   if (pathname === "/brands/new") return "New Brand";
   if (pathname.endsWith("/campaigns")) return "Campaigns";
-  if (pathname.includes("/campaigns/") && pathname.endsWith("/objective")) return "Campaign Objective";
-  if (pathname.includes("/campaigns/") && pathname.endsWith("/hypotheses")) return "Campaign Hypotheses";
-  if (pathname.includes("/campaigns/") && pathname.endsWith("/experiments")) return "Campaign Experiments";
-  if (pathname.includes("/campaigns/") && pathname.endsWith("/evolution")) return "Campaign Evolution";
+  if (pathname.includes("/campaigns/") && pathname.endsWith("/build")) return "Campaign Build";
+  if (pathname.includes("/campaigns/") && pathname.endsWith("/run")) return "Campaign Run";
+  if (pathname.includes("/campaigns/") && pathname.endsWith("/run/overview")) return "Run Overview";
+  if (pathname.includes("/campaigns/") && pathname.endsWith("/run/variants")) return "Run Variants";
+  if (pathname.includes("/campaigns/") && pathname.endsWith("/run/leads")) return "Run Leads";
+  if (pathname.includes("/campaigns/") && pathname.endsWith("/run/inbox")) return "Run Inbox";
+  if (pathname.includes("/campaigns/") && pathname.endsWith("/run/insights")) return "Run Insights";
   if (pathname.endsWith("/network")) return "Network";
   if (pathname.endsWith("/leads")) return "Leads";
   if (pathname.endsWith("/inbox")) return "Inbox";
@@ -54,6 +57,9 @@ function breadcrumb(pathname: string) {
     normalized.push("Campaigns");
     if (parts[3]) normalized.push("Campaign");
     if (parts[4]) normalized.push(parts[4][0].toUpperCase() + parts[4].slice(1));
+    if (parts[4] === "run" && parts[5]) {
+      normalized.push(parts[5][0].toUpperCase() + parts[5].slice(1));
+    }
     return normalized.join(" > ");
   }
   if (parts[2]) {

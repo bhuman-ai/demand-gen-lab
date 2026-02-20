@@ -82,7 +82,7 @@ export default function HomePage() {
           <CardHeader>
             <CardDescription>Next Action</CardDescription>
             <CardTitle className="text-base font-medium">
-              {brands.length ? "Open active brand and continue campaign steps" : "Create your first brand"}
+              {brands.length ? "Open active brand and continue Build or Run" : "Create your first brand"}
             </CardTitle>
           </CardHeader>
         </Card>
@@ -97,16 +97,14 @@ export default function HomePage() {
           {[
             "Create Brand",
             "Create Campaign",
-            "Objective",
-            "Hypotheses",
-            "Experiments",
-            "Evolution",
+            "Build",
+            "Run",
           ].map((step, index) => (
             <div key={step} className="inline-flex items-center gap-2">
               <span className="rounded-full border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-1.5">
                 {step}
               </span>
-              {index < 5 ? <ArrowRight className="h-3.5 w-3.5" /> : null}
+              {index < 3 ? <ArrowRight className="h-3.5 w-3.5" /> : null}
             </div>
           ))}
         </CardContent>

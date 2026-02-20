@@ -20,12 +20,12 @@ import { trackEvent } from "@/lib/telemetry-client";
 import type { BrandRecord, CampaignRecord, OutreachAccount } from "@/lib/factory-types";
 import { Select } from "@/components/ui/select";
 
-function nextStep(campaign: CampaignRecord) {
+function nextWorkspace(campaign: CampaignRecord) {
   const state = campaign.stepState;
-  if (!state.objectiveCompleted) return "objective";
-  if (!state.hypothesesCompleted) return "hypotheses";
-  if (!state.experimentsCompleted) return "experiments";
-  return "evolution";
+  if (!state.objectiveCompleted || !state.hypothesesCompleted || !state.experimentsCompleted) {
+    return "build";
+  }
+  return "run/overview";
 }
 
 export default function BrandHomeClient({ brandId }: { brandId: string }) {
@@ -104,7 +104,7 @@ export default function BrandHomeClient({ brandId }: { brandId: string }) {
               try {
                 const created = await createCampaignApi(brand.id, { name: `Campaign ${campaigns.length + 1}` });
                 trackEvent("campaign_created", { brandId: brand.id, campaignId: created.id });
-                router.push(`/brands/${brand.id}/campaigns/${created.id}/objective`);
+                router.push(`/brands/${brand.id}/campaigns/${created.id}/build`);
               } finally {
                 setCreating(false);
               }
@@ -138,17 +138,17 @@ export default function BrandHomeClient({ brandId }: { brandId: string }) {
         <Card>
           <CardHeader>
             <CardTitle className="text-base">Next Action</CardTitle>
-            <CardDescription>Resume the highest priority campaign step.</CardDescription>
+            <CardDescription>Resume the highest priority campaign workspace.</CardDescription>
           </CardHeader>
           <CardContent>
             {activeCampaign ? (
               <div className="space-y-3">
                 <Badge variant="accent">{activeCampaign.name}</Badge>
                 <div className="text-sm text-[color:var(--muted-foreground)]">
-                  Continue at <strong>{nextStep(activeCampaign)}</strong>.
+                  Continue in <strong>{nextWorkspace(activeCampaign).startsWith("run") ? "Run" : "Build"}</strong>.
                 </div>
                 <Button asChild>
-                  <Link href={`/brands/${brandId}/campaigns/${activeCampaign.id}/${nextStep(activeCampaign)}`}>
+                  <Link href={`/brands/${brandId}/campaigns/${activeCampaign.id}/${nextWorkspace(activeCampaign)}`}>
                     Continue Campaign
                     <ArrowRight className="h-4 w-4" />
                   </Link>
@@ -156,7 +156,7 @@ export default function BrandHomeClient({ brandId }: { brandId: string }) {
               </div>
             ) : (
               <div className="space-y-3 text-sm text-[color:var(--muted-foreground)]">
-                <p>No campaign yet. Create one to begin the step-by-step workflow.</p>
+                <p>No campaign yet. Create one to start with Build.</p>
                 <Button asChild>
                   <Link href={`/brands/${brandId}/campaigns`}>Open Campaigns</Link>
                 </Button>
@@ -232,18 +232,18 @@ export default function BrandHomeClient({ brandId }: { brandId: string }) {
         <Card>
           <CardHeader>
             <CardTitle className="text-base">Recent Campaigns</CardTitle>
-            <CardDescription>Each campaign follows objective to hypotheses to experiments to evolution.</CardDescription>
+            <CardDescription>Each campaign runs through Build and Run.</CardDescription>
           </CardHeader>
           <CardContent className="grid gap-2">
             {campaigns.slice(0, 5).map((campaign) => {
-              const step = nextStep(campaign);
+              const workspace = nextWorkspace(campaign);
               return (
                 <Link
                   key={campaign.id}
-                  href={`/brands/${brandId}/campaigns/${campaign.id}/${step}`}
+                  href={`/brands/${brandId}/campaigns/${campaign.id}/${workspace}`}
                   className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-2 text-sm hover:bg-[color:var(--surface-hover)]"
                 >
-                  {campaign.name} · continue {step}
+                  {campaign.name} · continue {workspace.startsWith("run") ? "run" : "build"}
                 </Link>
               );
             })}

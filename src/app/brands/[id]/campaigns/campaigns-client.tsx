@@ -16,13 +16,6 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 
-function nextStep(campaign: CampaignRecord) {
-  if (!campaign.stepState.objectiveCompleted) return "objective";
-  if (!campaign.stepState.hypothesesCompleted) return "hypotheses";
-  if (!campaign.stepState.experimentsCompleted) return "experiments";
-  return "evolution";
-}
-
 export default function CampaignsClient({ brandId }: { brandId: string }) {
   const [brand, setBrand] = useState<BrandRecord | null>(null);
   const [campaigns, setCampaigns] = useState<CampaignRecord[]>([]);
@@ -58,7 +51,7 @@ export default function CampaignsClient({ brandId }: { brandId: string }) {
       <Card>
         <CardHeader>
           <CardTitle>{brand?.name || "Brand"} Campaigns</CardTitle>
-          <CardDescription>Create and manage campaigns, then execute step-by-step.</CardDescription>
+          <CardDescription>Create campaigns, then move between Build and Run.</CardDescription>
         </CardHeader>
         <CardContent className="grid gap-3 md:grid-cols-[1fr_auto]">
           <Input
@@ -118,7 +111,6 @@ export default function CampaignsClient({ brandId }: { brandId: string }) {
 
       <div className="grid gap-4 md:grid-cols-2">
         {campaigns.map((campaign) => {
-          const step = nextStep(campaign);
           return (
             <Card key={campaign.id}>
               <CardHeader className="space-y-2">
@@ -126,14 +118,14 @@ export default function CampaignsClient({ brandId }: { brandId: string }) {
                   <CardTitle className="text-base">{campaign.name}</CardTitle>
                   <Badge variant={campaign.status === "active" ? "success" : "muted"}>{campaign.status}</Badge>
                 </div>
-                <CardDescription>Continue at step: {step}</CardDescription>
+                <CardDescription>Build setup, then run execution from one workspace.</CardDescription>
               </CardHeader>
               <CardContent className="flex flex-wrap gap-2">
                 <Button size="sm" asChild>
-                  <Link href={`/brands/${brandId}/campaigns/${campaign.id}/${step}`}>Open</Link>
+                  <Link href={`/brands/${brandId}/campaigns/${campaign.id}/build`}>Open Build</Link>
                 </Button>
                 <Button size="sm" variant="outline" asChild>
-                  <Link href={`/brands/${brandId}/campaigns/${campaign.id}/objective`}>Objective</Link>
+                  <Link href={`/brands/${brandId}/campaigns/${campaign.id}/run/overview`}>Open Run</Link>
                 </Button>
                 <Button
                   size="sm"
@@ -156,7 +148,7 @@ export default function CampaignsClient({ brandId }: { brandId: string }) {
       {!campaigns.length ? (
         <Card>
           <CardContent className="py-8 text-sm text-[color:var(--muted-foreground)]">
-            No campaigns yet. Create one and start with Objective.
+            No campaigns yet. Create one and start in Build.
           </CardContent>
         </Card>
       ) : null}

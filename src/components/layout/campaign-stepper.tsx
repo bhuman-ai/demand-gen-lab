@@ -5,10 +5,8 @@ import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
 
 const steps = [
-  { id: "objective", label: "Objective" },
-  { id: "hypotheses", label: "Hypotheses" },
-  { id: "experiments", label: "Experiments" },
-  { id: "evolution", label: "Evolution" },
+  { id: "build", label: "Build" },
+  { id: "run", label: "Run" },
 ] as const;
 
 function parseCampaignPath(pathname: string) {
@@ -18,7 +16,7 @@ function parseCampaignPath(pathname: string) {
   }
   const brandId = parts[1];
   const campaignId = parts[3];
-  const step = parts[4];
+  const step = parts[4] === "build" || parts[4] === "run" ? parts[4] : "";
   if (!steps.some((candidate) => candidate.id === step)) return null;
   return { brandId, campaignId, step };
 }

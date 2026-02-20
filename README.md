@@ -34,6 +34,9 @@ Copy `.env.example` to `.env.local` and fill values:
 - `GET /api/brands/:brandId/campaigns/:campaignId` — read campaign
 - `PATCH /api/brands/:brandId/campaigns/:campaignId` — update campaign step data
 - `DELETE /api/brands/:brandId/campaigns/:campaignId` — delete campaign
+- `GET/PATCH /api/brands/:brandId/campaigns/:campaignId/build` — Build facade (objective + angles + variants)
+- `POST /api/brands/:brandId/campaigns/:campaignId/build/suggest` — AI build bundle suggestions
+- `GET /api/brands/:brandId/campaigns/:campaignId/run` — Run facade (runs + leads + inbox + insights)
 - `POST /api/brands/:brandId/campaigns/:campaignId/hypotheses/generate` — generate hypothesis suggestions
 - `POST /api/brands/:brandId/campaigns/:campaignId/experiments/generate` — generate experiment variants
 - `POST /api/telemetry` — event intake
@@ -58,10 +61,12 @@ Copy `.env.example` to `.env.local` and fill values:
 - `/brands/new` — brand onboarding
 - `/brands/:brandId` — brand home
 - `/brands/:brandId/campaigns` — campaign list
-- `/brands/:brandId/campaigns/:campaignId/objective` — step 1
-- `/brands/:brandId/campaigns/:campaignId/hypotheses` — step 2
-- `/brands/:brandId/campaigns/:campaignId/experiments` — step 3
-- `/brands/:brandId/campaigns/:campaignId/evolution` — step 4
+- `/brands/:brandId/campaigns/:campaignId/build` — Build workspace
+- `/brands/:brandId/campaigns/:campaignId/run/overview` — Run overview
+- `/brands/:brandId/campaigns/:campaignId/run/variants` — Run variants
+- `/brands/:brandId/campaigns/:campaignId/run/leads` — Run leads
+- `/brands/:brandId/campaigns/:campaignId/run/inbox` — Run inbox
+- `/brands/:brandId/campaigns/:campaignId/run/insights` — Run insights
 - `/brands/:brandId/network`, `/brands/:brandId/leads`, `/brands/:brandId/inbox`
 - `/logic`, `/doctor`
 - `/settings/outreach`

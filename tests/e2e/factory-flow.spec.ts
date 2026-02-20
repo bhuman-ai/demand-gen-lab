@@ -45,7 +45,7 @@ async function createCampaign(page: import("@playwright/test").Page) {
   const button = page.getByRole("button", { name: "New Campaign" });
   await expect(button).toBeEnabled();
   await button.click();
-  await expect(page).toHaveURL(/\/brands\/[^/]+\/campaigns\/[^/]+\/objective$/);
+  await expect(page).toHaveURL(/\/brands\/[^/]+\/campaigns\/[^/]+\/build$/);
   const ids = parseIdsFromUrl(page.url());
   expect(ids.campaignId).toBeTruthy();
   return ids;
@@ -60,7 +60,7 @@ test.beforeEach(async ({ page, context }) => {
   });
 });
 
-test("new user can onboard and land on campaign objective", async ({ page }) => {
+test("new user can onboard and land on campaign build", async ({ page }) => {
   await page.goto("/");
   await page.getByRole("link", { name: /Create Brand/i }).click();
 
@@ -70,38 +70,29 @@ test("new user can onboard and land on campaign objective", async ({ page }) => 
   const ids = await createCampaign(page);
   expect(ids.brandId).toBe(brandId);
 
-  await expect(page.getByText("Step 1 of 4", { exact: false })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Campaign Objective" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Campaign Build" })).toBeVisible();
+  await expect(page.getByText("Build your campaign in one place", { exact: false })).toBeVisible();
 });
 
-test("user can complete objective-hypotheses-experiments-evolution and resume", async ({ page }) => {
+test("user can complete build-run journey and resume", async ({ page }) => {
   const brandId = await createBrand(page, "complete");
   const { campaignId } = await createCampaign(page);
   expect(campaignId).toBeTruthy();
 
   await page.getByLabel("Goal").fill("Book 10 qualified demos");
   await page.getByLabel("Constraints").fill("Max 60 outbound/day, no generic copy");
-  await page.getByRole("button", { name: "Save & Continue" }).click();
-  await expect(page).toHaveURL(new RegExp(`/brands/${brandId}/campaigns/${campaignId}/hypotheses$`));
-
-  await page.getByRole("button", { name: "Add Manual" }).click();
-  await page.getByLabel("Title").first().fill("Founder-led wedge");
-  await page.getByLabel("Rationale").first().fill("Founder context improves reply quality.");
-  await page.getByRole("button", { name: "Save & Continue" }).click();
-  await expect(page).toHaveURL(new RegExp(`/brands/${brandId}/campaigns/${campaignId}/experiments$`));
-
-  await page.getByRole("button", { name: "Add Manual" }).click();
-  await page.getByLabel("Name").first().fill("Founder-led wedge / Hook-first");
-  await page.getByRole("button", { name: "Save & Continue" }).click();
-  await expect(page).toHaveURL(new RegExp(`/brands/${brandId}/campaigns/${campaignId}/evolution$`));
-
-  await page.getByRole("button", { name: "Add Snapshot" }).click();
-  await page.getByLabel("Title").first().fill("Week 1 snapshot");
-  await page.getByRole("button", { name: "Mark Step Complete" }).click();
+  await page.getByRole("button", { name: "Add Angle" }).click();
+  await page.getByLabel("Angle Title").first().fill("Founder wedge");
+  await page.getByLabel("Target Segment").first().fill("B2B SaaS founders, 10-100 employees");
+  await page.getByRole("button", { name: "Add Variant" }).click();
+  await page.getByLabel("Variant Name").first().fill("Founder wedge / fast hook");
+  await page.getByRole("button", { name: "Save Build" }).click();
+  await page.getByRole("link", { name: "Go to Run" }).click();
+  await expect(page).toHaveURL(new RegExp(`/brands/${brandId}/campaigns/${campaignId}/run/overview$`));
 
   await page.goto(`/brands/${brandId}/campaigns`);
-  await page.getByRole("link", { name: "Open" }).first().click();
-  await expect(page).toHaveURL(new RegExp(`/brands/${brandId}/campaigns/${campaignId}/evolution$`));
+  await page.getByRole("link", { name: "Open Run" }).first().click();
+  await expect(page).toHaveURL(new RegExp(`/brands/${brandId}/campaigns/${campaignId}/run/overview$`));
 });
 
 test("user can navigate campaign and ops modules without losing brand context", async ({ page }) => {
@@ -116,8 +107,8 @@ test("user can navigate campaign and ops modules without losing brand context", 
   await page.getByRole("link", { name: "Go to Campaigns" }).click();
   await expect(page).toHaveURL(`/brands/${brandId}/campaigns`);
 
-  await page.getByRole("link", { name: /^Open$/ }).first().click();
-  await expect(page).toHaveURL(new RegExp(`/brands/${brandId}/campaigns/${campaignId}/objective$`));
+  await page.getByRole("link", { name: /^Open Build$/ }).first().click();
+  await expect(page).toHaveURL(new RegExp(`/brands/${brandId}/campaigns/${campaignId}/build$`));
 
   await page.locator("aside").getByRole("link", { name: /^Inbox$/ }).click();
   await expect(page).toHaveURL(`/brands/${brandId}/inbox`);
@@ -132,15 +123,26 @@ test("legacy removed route returns not found behavior", async ({ page }) => {
 test.describe("mobile core journey", () => {
   test.use({ viewport: { width: 390, height: 844 } });
 
-  test("mobile user can create brand and reach hypotheses step", async ({ page }) => {
+  test("mobile user can create brand and reach build workspace", async ({ page }) => {
     const brandId = await createBrand(page, "mobile");
     const { campaignId } = await createCampaign(page);
 
     await page.getByLabel("Goal").fill("Validate mobile execution flow");
     await page.getByLabel("Constraints").fill("Keep interactions short and deterministic");
-    await page.getByRole("button", { name: "Save & Continue" }).click();
 
-    await expect(page).toHaveURL(new RegExp(`/brands/${brandId}/campaigns/${campaignId}/hypotheses$`));
-    await expect(page.getByRole("heading", { name: "Campaign Hypotheses" })).toBeVisible();
+    await expect(page).toHaveURL(new RegExp(`/brands/${brandId}/campaigns/${campaignId}/build$`));
+    await expect(page.getByRole("heading", { name: "Campaign Build" })).toBeVisible();
   });
+});
+
+test("old step routes return not found behavior", async ({ page }) => {
+  const brandId = await createBrand(page, "legacy");
+  const { campaignId } = await createCampaign(page);
+  expect(campaignId).toBeTruthy();
+
+  await page.goto(`/brands/${brandId}/campaigns/${campaignId}/objective`, { waitUntil: "domcontentloaded" });
+  await expect(page.getByText(/404|not found/i)).toBeVisible();
+
+  await page.goto(`/brands/${brandId}/campaigns/${campaignId}/hypotheses`, { waitUntil: "domcontentloaded" });
+  await expect(page.getByText(/404|not found/i)).toBeVisible();
 });

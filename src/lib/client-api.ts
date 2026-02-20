@@ -1,4 +1,5 @@
 import type {
+  BuildViewModel,
   BrandOutreachAssignment,
   BrandRecord,
   CampaignRecord,
@@ -10,6 +11,7 @@ import type {
   OutreachRunEvent,
   OutreachRunJob,
   OutreachRun,
+  RunViewModel,
   ReplyDraft,
   ReplyThread,
   RunAnomaly,
@@ -102,6 +104,72 @@ export async function fetchCampaign(brandId: string, campaignId: string) {
   const response = await fetch(`/api/brands/${brandId}/campaigns/${campaignId}`, { cache: "no-store" });
   const data = await readJson(response);
   return data.campaign as CampaignRecord;
+}
+
+export async function fetchBuildView(brandId: string, campaignId: string) {
+  const response = await fetch(`/api/brands/${brandId}/campaigns/${campaignId}/build`, {
+    cache: "no-store",
+  });
+  const data = await readJson(response);
+  return data.build as BuildViewModel;
+}
+
+export async function updateBuildView(
+  brandId: string,
+  campaignId: string,
+  patch: Partial<BuildViewModel>
+) {
+  const response = await fetch(`/api/brands/${brandId}/campaigns/${campaignId}/build`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+  const data = await readJson(response);
+  return data.build as BuildViewModel;
+}
+
+export async function suggestBuildApi(brandId: string, campaignId: string) {
+  const response = await fetch(`/api/brands/${brandId}/campaigns/${campaignId}/build/suggest`, {
+    method: "POST",
+  });
+  const data = await readJson(response);
+  return (Array.isArray(data.suggestions) ? data.suggestions : []) as Array<{
+    title: string;
+    rationale: string;
+    objective: {
+      goal: string;
+      constraints: string;
+      scoring: ObjectiveData["scoring"];
+    };
+    angle: {
+      title: string;
+      rationale: string;
+      channel: "Email";
+      actorQuery: string;
+      maxLeads: number;
+      seedInputs: string[];
+    };
+    variants: Array<{
+      name: string;
+      notes: string;
+      status: "draft" | "testing" | "scaling" | "paused";
+      runPolicy: {
+        cadence: "3_step_7_day";
+        dailyCap: number;
+        hourlyCap: number;
+        timezone: string;
+        minSpacingMinutes: number;
+      };
+    }>;
+  }>;
+}
+
+export async function fetchRunView(brandId: string, campaignId: string) {
+  const response = await fetch(`/api/brands/${brandId}/campaigns/${campaignId}/run`, {
+    cache: "no-store",
+  });
+  const data = await readJson(response);
+  return data.run as RunViewModel;
 }
 
 export async function createCampaignApi(brandId: string, input: { name: string }) {

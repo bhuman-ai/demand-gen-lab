@@ -1,4 +1,5 @@
 export type CampaignStep = "objective" | "hypotheses" | "experiments" | "evolution";
+export type CampaignFlowStep = "build" | "run";
 
 export type ObjectiveData = {
   goal: string;
@@ -26,6 +27,8 @@ export type Hypothesis = {
   seedInputs: string[];
   status: "draft" | "approved";
 };
+
+export type Angle = Hypothesis;
 
 export type RunCadence = "3_step_7_day";
 
@@ -58,6 +61,8 @@ export type Experiment = {
   executionStatus: ExperimentExecutionStatus;
 };
 
+export type Variant = Experiment;
+
 export type EvolutionSnapshot = {
   id: string;
   title: string;
@@ -83,6 +88,12 @@ export type CampaignRecord = {
   };
   createdAt: string;
   updatedAt: string;
+};
+
+export type BuildViewModel = {
+  objective: ObjectiveData;
+  angles: Angle[];
+  variants: Variant[];
 };
 
 export type DomainRow = {
@@ -352,4 +363,15 @@ export type OutreachRunJob = {
   lastError: string;
   createdAt: string;
   updatedAt: string;
+};
+
+export type RunViewModel = {
+  runs: OutreachRun[];
+  leads: OutreachRunLead[];
+  threads: ReplyThread[];
+  drafts: ReplyDraft[];
+  insights: EvolutionSnapshot[];
+  anomalies: RunAnomaly[];
+  eventsByRun: Record<string, OutreachRunEvent[]>;
+  jobsByRun: Record<string, OutreachRunJob[]>;
 };

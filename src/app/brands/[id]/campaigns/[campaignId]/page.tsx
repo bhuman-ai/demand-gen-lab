@@ -11,14 +11,20 @@ export default async function CampaignLandingPage({
     <div className="space-y-4">
       <h2 className="text-lg font-semibold">Campaign Workspace</h2>
       <p className="text-sm text-[color:var(--muted-foreground)]">
-        Open a specific campaign step to continue.
+        Open Build to define campaign setup, or Run to launch and monitor execution.
       </p>
       <div className="flex gap-2">
         <Link
-          href={`/brands/${id}/campaigns/${campaignId}/objective`}
+          href={`/brands/${id}/campaigns/${campaignId}/build`}
           className="rounded-xl border border-[color:var(--border)] px-4 py-2 text-sm"
         >
-          Go to Objective
+          Open Build
+        </Link>
+        <Link
+          href={`/brands/${id}/campaigns/${campaignId}/run/overview`}
+          className="rounded-xl border border-[color:var(--border)] px-4 py-2 text-sm"
+        >
+          Open Run
         </Link>
         <Link
           href={`/brands/${id}/campaigns`}

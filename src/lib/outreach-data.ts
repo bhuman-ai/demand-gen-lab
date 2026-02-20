@@ -609,7 +609,24 @@ function buildStoredAccount(input: {
 }
 
 function supabaseConfigured(): boolean {
-  return Boolean(process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY);
+  const hasServiceKey = Boolean(
+    process.env.SUPABASE_SERVICE_ROLE_KEY ||
+      process.env.SUPABASE_SERVICE_KEY ||
+      process.env.SUPABASE_SECRET_KEY
+  );
+  return Boolean(
+    process.env.SUPABASE_URL && hasServiceKey
+  );
+}
+
+function supabaseHostFromEnv(): string {
+  const raw = String(process.env.SUPABASE_URL ?? "").trim();
+  if (!raw) return "";
+  try {
+    return new URL(raw).host;
+  } catch {
+    return raw;
+  }
 }
 
 function supabaseErrorDebug(error: unknown) {
@@ -633,6 +650,16 @@ function isMissingColumnError(error: unknown, columnName: string) {
 function hintForSupabaseWriteError(error: unknown) {
   const dbg = supabaseErrorDebug(error);
   const msg = dbg.message.toLowerCase();
+  const details = dbg.details.toLowerCase();
+  const combined = `${msg}\n${details}`;
+
+  if (
+    combined.includes("enotfound") ||
+    combined.includes("getaddrinfo") ||
+    combined.includes("fetch failed")
+  ) {
+    return "Supabase host is unreachable from this deployment. Verify SUPABASE_URL in Vercel uses your live project URL exactly: https://<project-ref>.supabase.co (no typos), then redeploy.";
+  }
 
   if (msg.includes("relation") && msg.includes("does not exist")) {
     if (msg.includes("demanddev_outreach_accounts")) {
@@ -649,7 +676,7 @@ function hintForSupabaseWriteError(error: unknown) {
     return "Your Supabase schema is missing `demanddev_brand_outreach_assignments.mailbox_account_id`. Apply supabase/migrations/20260211152000_outreach_split_accounts.sql, then redeploy.";
   }
 
-  return dbg.hint || "Supabase write failed. Check Supabase migrations and service-role permissions.";
+  return dbg.hint || "Supabase request failed. Check SUPABASE_URL, service-role permissions, and migrations.";
 }
 
 export async function listOutreachAccounts(): Promise<OutreachAccount[]> {
@@ -663,6 +690,7 @@ export async function listOutreachAccounts(): Promise<OutreachAccount[]> {
           operation: "listOutreachAccounts",
           runtime: runtimeLabel(),
           supabaseConfigured: supabaseConfigured(),
+          supabaseHost: supabaseHostFromEnv(),
         },
       });
     }
@@ -685,6 +713,7 @@ export async function listOutreachAccounts(): Promise<OutreachAccount[]> {
           operation: "listOutreachAccounts",
           runtime: runtimeLabel(),
           supabaseConfigured: supabaseConfigured(),
+          supabaseHost: supabaseHostFromEnv(),
           supabaseError: supabaseErrorDebug(error),
         },
       });

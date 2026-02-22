@@ -93,6 +93,7 @@ function friendlyJobType(jobType: OutreachRunJob["jobType"]) {
   if (jobType === "schedule_messages") return "Message scheduling";
   if (jobType === "dispatch_messages") return "Message dispatch";
   if (jobType === "sync_replies") return "Reply sync";
+  if (jobType === "conversation_tick") return "Conversation branching";
   return "Run analysis";
 }
 
@@ -112,6 +113,7 @@ function friendlyEventName(eventType: string) {
   if (eventType === "reply_ingested") return "Reply ingested";
   if (eventType === "reply_draft_created") return "Reply draft created";
   if (eventType === "reply_draft_sent") return "Reply sent";
+  if (eventType === "conversation_tick_processed") return "Conversation tick";
   if (eventType === "job_started") return "Worker job started";
   if (eventType === "job_completed") return "Worker job completed";
   if (eventType === "job_failed") return "Worker job failed";
@@ -153,6 +155,12 @@ function summarizeEvent(event: OutreachRunEvent) {
   if (event.eventType === "message_scheduled") {
     const count = asNumber(event.payload.count);
     return `Scheduled ${count ?? 0} messages`;
+  }
+  if (event.eventType === "conversation_tick_processed") {
+    const scheduled = asNumber(event.payload.scheduledCount);
+    const completed = asNumber(event.payload.completedCount);
+    const failed = asNumber(event.payload.failedCount);
+    return `Tick processed · scheduled ${scheduled ?? 0} · completed ${completed ?? 0} · failed ${failed ?? 0}`;
   }
   if (event.eventType === "job_started" || event.eventType === "job_completed") {
     const jobType = asText(event.payload.jobType);
@@ -726,6 +734,11 @@ export default function RunClient({
                 </Button>
                 <Button asChild type="button" size="sm" variant="outline">
                   <Link href={`/brands/${brandId}/campaigns/${campaignId}/build`}>Edit in Build</Link>
+                </Button>
+                <Button asChild type="button" size="sm" variant="outline">
+                  <Link href={`/brands/${brandId}/campaigns/${campaignId}/build/flows/${variant.id}`}>
+                    Conversation Map
+                  </Link>
                 </Button>
               </div>
             </div>

@@ -263,6 +263,10 @@ export type OutreachMessage = {
   step: number;
   subject: string;
   body: string;
+  sourceType: "cadence" | "conversation";
+  sessionId: string;
+  nodeId: string;
+  parentMessageId: string;
   status: OutreachMessageStatus;
   providerMessageId: string;
   scheduledAt: string;
@@ -347,7 +351,8 @@ export type OutreachRunJobType =
   | "schedule_messages"
   | "dispatch_messages"
   | "sync_replies"
-  | "analyze_run";
+  | "analyze_run"
+  | "conversation_tick";
 
 export type OutreachRunJobStatus = "queued" | "running" | "completed" | "failed";
 
@@ -374,4 +379,79 @@ export type RunViewModel = {
   anomalies: RunAnomaly[];
   eventsByRun: Record<string, OutreachRunEvent[]>;
   jobsByRun: Record<string, OutreachRunJob[]>;
+};
+
+export type ConversationNodeKind = "message" | "terminal";
+export type ConversationEdgeTrigger = "intent" | "timer" | "fallback";
+
+export type ConversationFlowNode = {
+  id: string;
+  kind: ConversationNodeKind;
+  title: string;
+  body: string;
+  subject: string;
+  autoSend: boolean;
+  delayMinutes: number;
+};
+
+export type ConversationFlowEdge = {
+  id: string;
+  fromNodeId: string;
+  toNodeId: string;
+  trigger: ConversationEdgeTrigger;
+  intent: "question" | "interest" | "objection" | "unsubscribe" | "other" | "";
+  waitMinutes: number;
+  confidenceThreshold: number;
+  priority: number;
+};
+
+export type ConversationFlowGraph = {
+  version: 1;
+  maxDepth: number;
+  startNodeId: string;
+  nodes: ConversationFlowNode[];
+  edges: ConversationFlowEdge[];
+};
+
+export type ConversationMap = {
+  id: string;
+  brandId: string;
+  campaignId: string;
+  experimentId: string;
+  name: string;
+  status: "draft" | "published" | "archived";
+  draftGraph: ConversationFlowGraph;
+  publishedGraph: ConversationFlowGraph;
+  publishedRevision: number;
+  publishedAt: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type ConversationSession = {
+  id: string;
+  runId: string;
+  brandId: string;
+  campaignId: string;
+  leadId: string;
+  mapId: string;
+  mapRevision: number;
+  state: "active" | "waiting_manual" | "completed" | "failed";
+  currentNodeId: string;
+  turnCount: number;
+  lastIntent: "question" | "interest" | "objection" | "unsubscribe" | "other" | "";
+  lastConfidence: number;
+  lastNodeEnteredAt: string;
+  endedReason: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type ConversationEvent = {
+  id: string;
+  sessionId: string;
+  runId: string;
+  eventType: string;
+  payload: Record<string, unknown>;
+  createdAt: string;
 };

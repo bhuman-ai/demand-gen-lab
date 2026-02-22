@@ -649,23 +649,30 @@ export default function BuildClient({ brandId, campaignId }: { brandId: string; 
             <div key={variant.id} className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3">
               <div className="mb-3 flex items-center justify-between gap-2">
                 <div className="text-sm font-semibold">Variant {index + 1}</div>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="ghost"
-                  onClick={() =>
-                    setBuild((prev) =>
-                      prev
-                        ? {
-                            ...prev,
-                            variants: prev.variants.filter((row) => row.id !== variant.id),
-                          }
-                        : prev
-                    )
-                  }
-                >
-                  <Trash2 className="h-4 w-4" />
-                </Button>
+                <div className="flex items-center gap-1">
+                  <Button asChild type="button" size="sm" variant="outline">
+                    <Link href={`/brands/${brandId}/campaigns/${campaignId}/build/flows/${variant.id}`}>
+                      Conversation Map
+                    </Link>
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    onClick={() =>
+                      setBuild((prev) =>
+                        prev
+                          ? {
+                              ...prev,
+                              variants: prev.variants.filter((row) => row.id !== variant.id),
+                            }
+                          : prev
+                      )
+                    }
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </Button>
+                </div>
               </div>
               <div className="grid gap-3 md:grid-cols-2">
                 <div className="grid gap-2">

@@ -3,6 +3,8 @@ import type {
   BrandOutreachAssignment,
   BrandRecord,
   CampaignRecord,
+  ConversationMap,
+  ConversationFlowGraph,
   EvolutionSnapshot,
   Experiment,
   Hypothesis,
@@ -170,6 +172,68 @@ export async function fetchRunView(brandId: string, campaignId: string) {
   });
   const data = await readJson(response);
   return data.run as RunViewModel;
+}
+
+export async function fetchConversationMapApi(
+  brandId: string,
+  campaignId: string,
+  experimentId: string
+) {
+  const response = await fetch(
+    `/api/brands/${brandId}/campaigns/${campaignId}/experiments/${experimentId}/conversation-map`,
+    { cache: "no-store" }
+  );
+  const data = await readJson(response);
+  return (data.map ?? null) as ConversationMap | null;
+}
+
+export async function saveConversationMapDraftApi(input: {
+  brandId: string;
+  campaignId: string;
+  experimentId: string;
+  name?: string;
+  draftGraph: ConversationFlowGraph;
+}) {
+  const response = await fetch(
+    `/api/brands/${input.brandId}/campaigns/${input.campaignId}/experiments/${input.experimentId}/conversation-map`,
+    {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: input.name ?? "", draftGraph: input.draftGraph }),
+    }
+  );
+  const data = await readJson(response);
+  return data.map as ConversationMap;
+}
+
+export async function publishConversationMapApi(
+  brandId: string,
+  campaignId: string,
+  experimentId: string
+) {
+  const response = await fetch(
+    `/api/brands/${brandId}/campaigns/${campaignId}/experiments/${experimentId}/conversation-map/publish`,
+    {
+      method: "POST",
+    }
+  );
+  const data = await readJson(response);
+  return data.map as ConversationMap;
+}
+
+export async function suggestConversationMapApi(
+  brandId: string,
+  campaignId: string,
+  experimentId: string
+) {
+  const response = await fetch(
+    `/api/brands/${brandId}/campaigns/${campaignId}/experiments/${experimentId}/conversation-map/suggest`,
+    {
+      method: "POST",
+    }
+  );
+  const data = await readJson(response);
+  return data.graph as ConversationFlowGraph;
 }
 
 export async function createCampaignApi(brandId: string, input: { name: string }) {

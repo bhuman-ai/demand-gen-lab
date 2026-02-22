@@ -7,7 +7,15 @@ import {
   type Experiment,
   type Hypothesis,
 } from "@/lib/factory-data";
-import type { ReplyThread } from "@/lib/factory-types";
+import type { ConversationFlowGraph, ConversationFlowNode, ReplyThread } from "@/lib/factory-types";
+import {
+  createConversationEvent,
+  createConversationSession,
+  getConversationSessionByLead,
+  getPublishedConversationMapForExperiment,
+  listConversationSessionsByRun,
+  updateConversationSession,
+} from "@/lib/conversation-flow-data";
 import {
   createOutreachEvent,
   createOutreachRun,
@@ -55,6 +63,7 @@ const DEFAULT_TIMEZONE = "America/Los_Angeles";
 const PLATFORM_SOURCING_PROFILE = String(process.env.APIFY_DEFAULT_ACTOR_ID ?? "").trim();
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+const CONVERSATION_TICK_MINUTES = 15;
 
 function nowIso() {
   return new Date().toISOString();
@@ -218,6 +227,113 @@ function classifyIntent(body: string): ReplyThread["intent"] {
   return "other";
 }
 
+function classifyIntentConfidence(body: string): { intent: ReplyThread["intent"]; confidence: number } {
+  const intent = classifyIntent(body);
+  if (intent === "unsubscribe") return { intent, confidence: 0.95 };
+  if (intent === "interest") return { intent, confidence: 0.85 };
+  if (intent === "question") return { intent, confidence: 0.82 };
+  if (intent === "objection") return { intent, confidence: 0.8 };
+  return { intent, confidence: 0.55 };
+}
+
+function addMinutes(dateIso: string, minutes: number) {
+  const date = new Date(dateIso);
+  return new Date(date.getTime() + Math.max(0, minutes) * 60 * 1000).toISOString();
+}
+
+function conversationNodeById(graph: ConversationFlowGraph, nodeId: string): ConversationFlowNode | null {
+  return graph.nodes.find((node) => node.id === nodeId) ?? null;
+}
+
+function pickIntentEdge(input: {
+  graph: ConversationFlowGraph;
+  currentNodeId: string;
+  intent: ReplyThread["intent"];
+  confidence: number;
+}) {
+  const candidates = input.graph.edges
+    .filter(
+      (edge) =>
+        edge.fromNodeId === input.currentNodeId &&
+        edge.trigger === "intent" &&
+        edge.intent === input.intent &&
+        input.confidence >= edge.confidenceThreshold
+    )
+    .sort((a, b) => a.priority - b.priority);
+  return candidates[0] ?? null;
+}
+
+function pickFallbackEdge(graph: ConversationFlowGraph, currentNodeId: string) {
+  return (
+    graph.edges
+      .filter((edge) => edge.fromNodeId === currentNodeId && edge.trigger === "fallback")
+      .sort((a, b) => a.priority - b.priority)[0] ?? null
+  );
+}
+
+function pickDueTimerEdge(input: {
+  graph: ConversationFlowGraph;
+  currentNodeId: string;
+  lastNodeEnteredAt: string;
+}) {
+  const elapsedMs = Math.max(0, Date.now() - toDate(input.lastNodeEnteredAt).getTime());
+  return (
+    input.graph.edges
+      .filter((edge) => edge.fromNodeId === input.currentNodeId && edge.trigger === "timer")
+      .sort((a, b) => a.priority - b.priority)
+      .find((edge) => elapsedMs >= edge.waitMinutes * 60 * 1000) ?? null
+  );
+}
+
+function renderConversationTemplate(
+  template: string,
+  vars: {
+    firstName: string;
+    brandName: string;
+    campaignGoal: string;
+    variantName: string;
+    replyPreview: string;
+    shortAnswer: string;
+  }
+) {
+  return template
+    .replaceAll("{{firstName}}", vars.firstName)
+    .replaceAll("{{brandName}}", vars.brandName)
+    .replaceAll("{{campaignGoal}}", vars.campaignGoal)
+    .replaceAll("{{variantName}}", vars.variantName)
+    .replaceAll("{{replyPreview}}", vars.replyPreview)
+    .replaceAll("{{shortAnswer}}", vars.shortAnswer);
+}
+
+function renderConversationNode(input: {
+  node: ConversationFlowNode;
+  leadName: string;
+  brandName: string;
+  campaignGoal: string;
+  variantName: string;
+  replyPreview?: string;
+}) {
+  const firstName = input.leadName.trim().split(/\s+/)[0] || "there";
+  const replyPreview = input.replyPreview?.trim() || "Thanks for sharing that context.";
+  const shortAnswer = replyPreview.split(/\n+/)[0]?.slice(0, 180) || "Thanks for sharing that context.";
+  const vars = {
+    firstName,
+    brandName: input.brandName || "Brand",
+    campaignGoal: input.campaignGoal || "your current goal",
+    variantName: input.variantName || "this approach",
+    replyPreview,
+    shortAnswer,
+  };
+
+  const subject = renderConversationTemplate(input.node.subject || "Quick follow-up", vars).trim();
+  const body = renderConversationTemplate(input.node.body, vars).trim();
+
+  return {
+    subject,
+    body: body || `Hi ${firstName},\n\nQuick follow-up on ${vars.brandName}.`,
+  };
+}
+
 function threadDraftBody(input: { from: string; subject: string; body: string }) {
   const summaryLine = input.body.split("\n")[0]?.slice(0, 180) || "Thanks for your reply.";
   return `Thanks ${input.from.split("@")[0]},\n\nAppreciate the response on \"${input.subject}\".\n\n${summaryLine}\n\nWould a short 15-minute call next week be useful?`;
@@ -271,6 +387,73 @@ function calculateRunMetricsFromMessages(
     positiveReplies,
     negativeReplies,
   };
+}
+
+async function scheduleConversationNodeMessage(input: {
+  run: {
+    id: string;
+    brandId: string;
+    campaignId: string;
+    dailyCap: number;
+    hourlyCap: number;
+    minSpacingMinutes: number;
+  };
+  lead: { id: string; email: string; name: string; status: string };
+  sessionId: string;
+  node: ConversationFlowNode;
+  step: number;
+  parentMessageId?: string;
+  brandName: string;
+  campaignGoal: string;
+  variantName: string;
+  waitMinutes?: number;
+  replyPreview?: string;
+  existingMessages: Awaited<ReturnType<typeof listRunMessages>>;
+}): Promise<boolean> {
+  if (input.node.kind !== "message" || !input.node.body.trim()) return false;
+  if (!input.lead.email.trim()) return false;
+  if (["unsubscribed", "bounced", "suppressed"].includes(input.lead.status)) return false;
+
+  const alreadyExists = input.existingMessages.some(
+    (message) =>
+      message.sessionId === input.sessionId &&
+      message.nodeId === input.node.id &&
+      ["scheduled", "sent"].includes(message.status)
+  );
+  if (alreadyExists) return false;
+
+  const composed = renderConversationNode({
+    node: input.node,
+    leadName: input.lead.name,
+    brandName: input.brandName,
+    campaignGoal: input.campaignGoal,
+    variantName: input.variantName,
+    replyPreview: input.replyPreview,
+  });
+
+  const totalDelay = Math.max(0, input.node.delayMinutes + (input.waitMinutes ?? 0));
+  const created = await createRunMessages([
+    {
+      runId: input.run.id,
+      brandId: input.run.brandId,
+      campaignId: input.run.campaignId,
+      leadId: input.lead.id,
+      step: Math.max(1, input.step),
+      subject: composed.subject,
+      body: composed.body,
+      status: "scheduled",
+      scheduledAt: addMinutes(nowIso(), totalDelay),
+      sourceType: "conversation",
+      sessionId: input.sessionId,
+      nodeId: input.node.id,
+      parentMessageId: input.parentMessageId ?? "",
+    },
+  ]);
+  if (!created.length) return false;
+
+  input.existingMessages.push(created[0]);
+  await updateRunLead(input.lead.id, { status: "scheduled" });
+  return true;
 }
 
 async function ensureBrandAccount(brandId: string): Promise<{
@@ -1099,48 +1282,178 @@ async function processScheduleMessagesJob(job: OutreachJob) {
     return;
   }
 
-  const offsets = [0, 2, 7];
-  const now = Date.now();
-  const messages = leads.flatMap((lead) =>
-    offsets.map((offsetDays, index) => {
-      const scheduledAt = new Date(now + offsetDays * DAY_MS + index * run.minSpacingMinutes * 60 * 1000).toISOString();
-      const composed = buildOutreachMessageBody({
-        brandName: brand?.name || "Brand",
-        experimentName: experiment.name,
-        hypothesisTitle: hypothesis.title,
-        step: index + 1,
-        recipientName: lead.name,
-      });
-      return {
-        runId: run.id,
-        brandId: run.brandId,
-        campaignId: run.campaignId,
-        leadId: lead.id,
-        step: index + 1,
-        subject: composed.subject,
-        body: composed.body,
-        status: "scheduled" as const,
-        scheduledAt,
-      };
-    })
-  );
+  const flowMap = await getPublishedConversationMapForExperiment(run.brandId, run.campaignId, run.experimentId);
+  const hasConversationMap = Boolean(flowMap?.publishedRevision);
+  let scheduledMessagesCount = 0;
 
-  await createRunMessages(messages);
-  for (const lead of leads) {
-    await updateRunLead(lead.id, { status: "scheduled" });
+  if (hasConversationMap && flowMap) {
+    const graph = flowMap.publishedGraph;
+    const startNode = conversationNodeById(graph, graph.startNodeId);
+    if (!startNode) {
+      await failRunWithDiagnostics({
+        run,
+        reason: "Conversation flow start node is invalid",
+        eventType: "schedule_failed",
+      });
+      return;
+    }
+
+    const existingConversationMessages = await listRunMessages(run.id);
+    const campaignGoal = campaign.objective.goal.trim();
+    const brandName = brand?.name || "Brand";
+
+    for (const [index, lead] of leads.entries()) {
+      let session = await getConversationSessionByLead({ runId: run.id, leadId: lead.id });
+      if (!session) {
+        session = await createConversationSession({
+          runId: run.id,
+          brandId: run.brandId,
+          campaignId: run.campaignId,
+          leadId: lead.id,
+          mapId: flowMap.id,
+          mapRevision: flowMap.publishedRevision,
+          startNodeId: graph.startNodeId,
+        });
+        await createConversationEvent({
+          sessionId: session.id,
+          runId: run.id,
+          eventType: "session_started",
+          payload: {
+            nodeId: graph.startNodeId,
+            mapRevision: flowMap.publishedRevision,
+          },
+        });
+      }
+
+      if (session.state === "completed" || session.state === "failed") continue;
+      if (startNode.kind === "terminal") {
+        await updateConversationSession(session.id, {
+          state: "completed",
+          endedReason: "start_node_terminal",
+          currentNodeId: startNode.id,
+          turnCount: Math.max(session.turnCount, 1),
+          lastNodeEnteredAt: nowIso(),
+        });
+        await createConversationEvent({
+          sessionId: session.id,
+          runId: run.id,
+          eventType: "session_completed",
+          payload: {
+            reason: "start_node_terminal",
+          },
+        });
+        continue;
+      }
+
+      if (!startNode.autoSend) {
+        await updateConversationSession(session.id, {
+          state: "waiting_manual",
+          currentNodeId: startNode.id,
+          turnCount: Math.max(session.turnCount, 1),
+          lastNodeEnteredAt: nowIso(),
+        });
+        await createConversationEvent({
+          sessionId: session.id,
+          runId: run.id,
+          eventType: "manual_node_required",
+          payload: {
+            nodeId: startNode.id,
+            reason: "start_node_auto_send_disabled",
+          },
+        });
+        continue;
+      }
+
+      const scheduled = await scheduleConversationNodeMessage({
+        run,
+        lead,
+        sessionId: session.id,
+        node: startNode,
+        step: 1,
+        brandName,
+        campaignGoal,
+        variantName: experiment.name,
+        waitMinutes: index * run.minSpacingMinutes,
+        existingMessages: existingConversationMessages,
+      });
+      if (scheduled) {
+        scheduledMessagesCount += 1;
+        await updateConversationSession(session.id, {
+          state: "active",
+          currentNodeId: startNode.id,
+          turnCount: Math.max(session.turnCount, 1),
+          lastNodeEnteredAt: nowIso(),
+        });
+        await createConversationEvent({
+          sessionId: session.id,
+          runId: run.id,
+          eventType: "node_message_scheduled",
+          payload: {
+            nodeId: startNode.id,
+            autoSend: true,
+          },
+        });
+      }
+    }
+
+    await createOutreachEvent({
+      runId: run.id,
+      eventType: "message_scheduled",
+      payload: {
+        count: scheduledMessagesCount,
+        mode: "conversation_map",
+      },
+    });
+  } else {
+    const offsets = [0, 2, 7];
+    const now = Date.now();
+    const messages = leads.flatMap((lead) =>
+      offsets.map((offsetDays, index) => {
+        const scheduledAt = new Date(now + offsetDays * DAY_MS + index * run.minSpacingMinutes * 60 * 1000).toISOString();
+        const composed = buildOutreachMessageBody({
+          brandName: brand?.name || "Brand",
+          experimentName: experiment.name,
+          hypothesisTitle: hypothesis.title,
+          step: index + 1,
+          recipientName: lead.name,
+        });
+        return {
+          runId: run.id,
+          brandId: run.brandId,
+          campaignId: run.campaignId,
+          leadId: lead.id,
+          step: index + 1,
+          subject: composed.subject,
+          body: composed.body,
+          status: "scheduled" as const,
+          scheduledAt,
+        };
+      })
+    );
+
+    await createRunMessages(messages);
+    for (const lead of leads) {
+      await updateRunLead(lead.id, { status: "scheduled" });
+    }
+    scheduledMessagesCount = messages.length;
   }
 
   await updateOutreachRun(run.id, {
     status: "scheduled",
     metrics: {
       ...run.metrics,
-      scheduledMessages: messages.length,
+      scheduledMessages: Math.max(run.metrics.scheduledMessages, scheduledMessagesCount),
     },
   });
   await markExperimentExecutionStatus(run.brandId, run.campaignId, run.experimentId, "scheduled");
-  await createOutreachEvent({ runId: run.id, eventType: "message_scheduled", payload: { count: messages.length } });
-
   await enqueueOutreachJob({ runId: run.id, jobType: "dispatch_messages", executeAfter: nowIso() });
+  if (hasConversationMap) {
+    await enqueueOutreachJob({
+      runId: run.id,
+      jobType: "conversation_tick",
+      executeAfter: addMinutes(nowIso(), CONVERSATION_TICK_MINUTES),
+    });
+  }
   await enqueueOutreachJob({ runId: run.id, jobType: "analyze_run", executeAfter: addHours(nowIso(), 1) });
   await enqueueOutreachJob({ runId: run.id, jobType: "sync_replies", executeAfter: addHours(nowIso(), 1) });
 }
@@ -1267,11 +1580,31 @@ async function processDispatchMessagesJob(job: OutreachJob) {
         lastError: "",
       });
       await updateRunLead(lead.id, { status: "sent" });
-      await createOutreachEvent({ runId: run.id, eventType: "message_sent", payload: { messageId: message.id } });
+      await createOutreachEvent({
+        runId: run.id,
+        eventType: "message_sent",
+        payload: {
+          messageId: message.id,
+          sourceType: message.sourceType,
+          nodeId: message.nodeId,
+          sessionId: message.sessionId,
+        },
+      });
     } else {
       await updateRunMessage(message.id, {
         status: "failed",
         lastError: send.error || "Send failed",
+      });
+      await createOutreachEvent({
+        runId: run.id,
+        eventType: "dispatch_failed",
+        payload: {
+          messageId: message.id,
+          sourceType: message.sourceType,
+          nodeId: message.nodeId,
+          sessionId: message.sessionId,
+          error: send.error || "Send failed",
+        },
       });
     }
   }
@@ -1322,6 +1655,205 @@ async function processSyncRepliesJob(job: OutreachJob) {
     runId: run.id,
     jobType: "sync_replies",
     executeAfter: addHours(nowIso(), 1),
+  });
+}
+
+async function processConversationTickJob(job: OutreachJob) {
+  const run = await getOutreachRun(job.runId);
+  if (!run) return;
+  if (["paused", "completed", "canceled", "failed", "preflight_failed"].includes(run.status)) return;
+
+  const map = await getPublishedConversationMapForExperiment(run.brandId, run.campaignId, run.experimentId);
+  if (!map?.publishedRevision) return;
+
+  const graph = map.publishedGraph;
+  const sessions = await listConversationSessionsByRun(run.id);
+  if (!sessions.length) return;
+
+  const leads = await listRunLeads(run.id);
+  const leadsById = new Map(leads.map((lead) => [lead.id, lead]));
+  const messages = await listRunMessages(run.id);
+  const [brand, campaign] = await Promise.all([
+    getBrandById(run.brandId),
+    getCampaignById(run.brandId, run.campaignId),
+  ]);
+  const brandName = brand?.name || "Brand";
+  const campaignGoal = campaign?.objective.goal || "";
+  const variantName =
+    campaign?.experiments.find((item) => item.id === run.experimentId)?.name || "Variant";
+
+  let scheduledCount = 0;
+  let completedCount = 0;
+  let failedCount = 0;
+
+  for (const session of sessions) {
+    if (session.state !== "active") continue;
+
+    const currentNode = conversationNodeById(graph, session.currentNodeId);
+    if (!currentNode) {
+      await updateConversationSession(session.id, {
+        state: "failed",
+        endedReason: "current_node_missing",
+      });
+      await createConversationEvent({
+        sessionId: session.id,
+        runId: run.id,
+        eventType: "session_failed",
+        payload: {
+          reason: "current_node_missing",
+          nodeId: session.currentNodeId,
+        },
+      });
+      failedCount += 1;
+      continue;
+    }
+
+    const timerEdge = pickDueTimerEdge({
+      graph,
+      currentNodeId: currentNode.id,
+      lastNodeEnteredAt: session.lastNodeEnteredAt,
+    });
+    if (!timerEdge) continue;
+
+    const nextNode = conversationNodeById(graph, timerEdge.toNodeId);
+    if (!nextNode) {
+      await updateConversationSession(session.id, {
+        state: "failed",
+        endedReason: "timer_target_missing",
+      });
+      await createConversationEvent({
+        sessionId: session.id,
+        runId: run.id,
+        eventType: "session_failed",
+        payload: {
+          reason: "timer_target_missing",
+          edgeId: timerEdge.id,
+        },
+      });
+      failedCount += 1;
+      continue;
+    }
+
+    const nextTurn = session.turnCount + 1;
+    const maxDepthReached = nextTurn >= graph.maxDepth;
+
+    if (nextNode.kind === "terminal" || maxDepthReached) {
+      await updateConversationSession(session.id, {
+        state: "completed",
+        currentNodeId: nextNode.id,
+        turnCount: nextTurn,
+        lastNodeEnteredAt: nowIso(),
+        endedReason: maxDepthReached ? "max_depth_reached" : "terminal_node",
+      });
+      await createConversationEvent({
+        sessionId: session.id,
+        runId: run.id,
+        eventType: "session_completed",
+        payload: {
+          reason: maxDepthReached ? "max_depth_reached" : "terminal_node",
+          nodeId: nextNode.id,
+        },
+      });
+      completedCount += 1;
+      continue;
+    }
+
+    const nextState = nextNode.autoSend ? "active" : "waiting_manual";
+    await updateConversationSession(session.id, {
+      state: nextState,
+      currentNodeId: nextNode.id,
+      turnCount: nextTurn,
+      lastNodeEnteredAt: nowIso(),
+      endedReason: "",
+    });
+    await createConversationEvent({
+      sessionId: session.id,
+      runId: run.id,
+      eventType: "session_transition",
+      payload: {
+        trigger: "timer",
+        fromNodeId: currentNode.id,
+        toNodeId: nextNode.id,
+        edgeId: timerEdge.id,
+      },
+    });
+
+    if (!nextNode.autoSend) {
+      await createConversationEvent({
+        sessionId: session.id,
+        runId: run.id,
+        eventType: "manual_node_required",
+        payload: {
+          nodeId: nextNode.id,
+          reason: "auto_send_disabled",
+        },
+      });
+      continue;
+    }
+
+    const lead = leadsById.get(session.leadId);
+    if (!lead) continue;
+
+    const scheduled = await scheduleConversationNodeMessage({
+      run,
+      lead,
+      sessionId: session.id,
+      node: nextNode,
+      step: nextTurn,
+      brandName,
+      campaignGoal,
+      variantName,
+      waitMinutes: 0,
+      existingMessages: messages,
+    });
+    if (scheduled) {
+      scheduledCount += 1;
+      await createConversationEvent({
+        sessionId: session.id,
+        runId: run.id,
+        eventType: "node_message_scheduled",
+        payload: {
+          nodeId: nextNode.id,
+          trigger: "timer",
+        },
+      });
+    }
+  }
+
+  if (scheduledCount > 0) {
+    await updateOutreachRun(run.id, {
+      metrics: {
+        ...run.metrics,
+        scheduledMessages: Math.max(run.metrics.scheduledMessages, messages.length),
+      },
+    });
+    await enqueueOutreachJob({
+      runId: run.id,
+      jobType: "dispatch_messages",
+      executeAfter: nowIso(),
+    });
+  }
+
+  const refreshedSessions = await listConversationSessionsByRun(run.id);
+  const shouldContinue = refreshedSessions.some((session) => session.state === "active");
+  if (shouldContinue) {
+    await enqueueOutreachJob({
+      runId: run.id,
+      jobType: "conversation_tick",
+      executeAfter: addMinutes(nowIso(), CONVERSATION_TICK_MINUTES),
+    });
+  }
+
+  await createOutreachEvent({
+    runId: run.id,
+    eventType: "conversation_tick_processed",
+    payload: {
+      sessions: refreshedSessions.length,
+      scheduledCount,
+      completedCount,
+      failedCount,
+      continuing: shouldContinue,
+    },
   });
 }
 
@@ -1458,6 +1990,10 @@ async function processOutreachJob(job: OutreachJob) {
     await processSyncRepliesJob(job);
     return;
   }
+  if (job.jobType === "conversation_tick") {
+    await processConversationTickJob(job);
+    return;
+  }
   await processAnalyzeRunJob(job);
 }
 
@@ -1575,6 +2111,14 @@ export async function updateRunControl(input: {
       jobType: "dispatch_messages",
       executeAfter: nowIso(),
     });
+    const map = await getPublishedConversationMapForExperiment(run.brandId, run.campaignId, run.experimentId);
+    if (map?.publishedRevision) {
+      await enqueueOutreachJob({
+        runId: run.id,
+        jobType: "conversation_tick",
+        executeAfter: addMinutes(nowIso(), CONVERSATION_TICK_MINUTES),
+      });
+    }
     await createOutreachEvent({ runId: run.id, eventType: "run_resumed_manual", payload: {} });
     return { ok: true, reason: "Run resumed" };
   }
@@ -1615,7 +2159,7 @@ export async function ingestInboundReply(input: {
   }
 
   const sentiment = classifySentiment(input.body);
-  const intent = classifyIntent(input.body);
+  const { intent, confidence } = classifyIntentConfidence(input.body);
 
   const { threads } = await listReplyThreadsByBrand(brandId);
   let thread = threads.find(
@@ -1648,7 +2192,7 @@ export async function ingestInboundReply(input: {
     }
   }
 
-  await createReplyMessage({
+  const inboundMessage = await createReplyMessage({
     threadId: thread.id,
     runId: run.id,
     direction: "inbound",
@@ -1659,14 +2203,190 @@ export async function ingestInboundReply(input: {
     providerMessageId: input.providerMessageId ?? "",
   });
 
-  const draft = await createReplyDraft({
-    threadId: thread.id,
-    brandId: run.brandId,
-    runId: run.id,
-    subject: `Re: ${input.subject}`,
-    body: threadDraftBody({ from: input.from, subject: input.subject, body: input.body }),
-    reason: `Auto-generated from ${intent} reply`,
-  });
+  let draftId = "";
+  let autoBranchScheduled = false;
+  const [brand, campaign] = await Promise.all([
+    getBrandById(run.brandId),
+    getCampaignById(run.brandId, run.campaignId),
+  ]);
+
+  const flowMap = await getPublishedConversationMapForExperiment(run.brandId, run.campaignId, run.experimentId);
+  const session = flowMap ? await getConversationSessionByLead({ runId: run.id, leadId: lead.id }) : null;
+
+  if (flowMap?.publishedRevision && session && session.state !== "completed" && session.state !== "failed") {
+    const graph = flowMap.publishedGraph;
+    const currentNode = conversationNodeById(graph, session.currentNodeId);
+    if (currentNode) {
+      const intentEdge = pickIntentEdge({
+        graph,
+        currentNodeId: currentNode.id,
+        intent,
+        confidence,
+      });
+      const fallbackEdge = pickFallbackEdge(graph, currentNode.id);
+      const selectedEdge = intentEdge ?? fallbackEdge;
+
+      await createConversationEvent({
+        sessionId: session.id,
+        runId: run.id,
+        eventType: "reply_classified",
+        payload: {
+          intent,
+          confidence,
+          fromNodeId: currentNode.id,
+          selectedEdgeId: selectedEdge?.id ?? "",
+        },
+      });
+
+      if (selectedEdge) {
+        const nextNode = conversationNodeById(graph, selectedEdge.toNodeId);
+        if (nextNode) {
+          const nextTurn = session.turnCount + 1;
+          const maxDepthReached = nextTurn >= graph.maxDepth;
+          const shouldComplete =
+            intent === "unsubscribe" || nextNode.kind === "terminal" || maxDepthReached;
+
+          if (shouldComplete) {
+            await updateConversationSession(session.id, {
+              state: "completed",
+              currentNodeId: nextNode.id,
+              turnCount: nextTurn,
+              lastIntent: intent,
+              lastConfidence: confidence,
+              lastNodeEnteredAt: nowIso(),
+              endedReason:
+                intent === "unsubscribe"
+                  ? "unsubscribe"
+                  : maxDepthReached
+                    ? "max_depth_reached"
+                    : "terminal_node",
+            });
+            await createConversationEvent({
+              sessionId: session.id,
+              runId: run.id,
+              eventType: "session_completed",
+              payload: {
+                reason:
+                  intent === "unsubscribe"
+                    ? "unsubscribe"
+                    : maxDepthReached
+                      ? "max_depth_reached"
+                      : "terminal_node",
+                nodeId: nextNode.id,
+              },
+            });
+          } else {
+            const nextState = nextNode.autoSend ? "active" : "waiting_manual";
+            await updateConversationSession(session.id, {
+              state: nextState,
+              currentNodeId: nextNode.id,
+              turnCount: nextTurn,
+              lastIntent: intent,
+              lastConfidence: confidence,
+              lastNodeEnteredAt: nowIso(),
+              endedReason: "",
+            });
+            await createConversationEvent({
+              sessionId: session.id,
+              runId: run.id,
+              eventType: "session_transition",
+              payload: {
+                trigger: selectedEdge.trigger,
+                fromNodeId: currentNode.id,
+                toNodeId: nextNode.id,
+                edgeId: selectedEdge.id,
+              },
+            });
+
+            if (nextNode.autoSend) {
+              const messages = await listRunMessages(run.id);
+              autoBranchScheduled = await scheduleConversationNodeMessage({
+                run,
+                lead,
+                sessionId: session.id,
+                node: nextNode,
+                step: nextTurn,
+                parentMessageId: inboundMessage.id,
+                brandName: brand?.name || "Brand",
+                campaignGoal: campaign?.objective.goal || "",
+                variantName:
+                  campaign?.experiments.find((item) => item.id === run.experimentId)?.name ||
+                  "Variant",
+                waitMinutes: selectedEdge.waitMinutes,
+                replyPreview: input.body,
+                existingMessages: messages,
+              });
+              if (autoBranchScheduled) {
+                await enqueueOutreachJob({
+                  runId: run.id,
+                  jobType: "dispatch_messages",
+                  executeAfter: nowIso(),
+                });
+                await createConversationEvent({
+                  sessionId: session.id,
+                  runId: run.id,
+                  eventType: "node_message_scheduled",
+                  payload: {
+                    nodeId: nextNode.id,
+                    trigger: selectedEdge.trigger,
+                  },
+                });
+                await createOutreachEvent({
+                  runId: run.id,
+                  eventType: "message_scheduled",
+                  payload: {
+                    count: 1,
+                    mode: "conversation_branch",
+                  },
+                });
+              }
+            } else {
+              const composed = renderConversationNode({
+                node: nextNode,
+                leadName: lead.name,
+                brandName: brand?.name || "Brand",
+                campaignGoal: campaign?.objective.goal || "",
+                variantName:
+                  campaign?.experiments.find((item) => item.id === run.experimentId)?.name ||
+                  "Variant",
+                replyPreview: input.body,
+              });
+              const draft = await createReplyDraft({
+                threadId: thread.id,
+                brandId: run.brandId,
+                runId: run.id,
+                subject: composed.subject || `Re: ${input.subject}`,
+                body: composed.body,
+                reason: `Manual branch: ${nextNode.title || "follow-up"}`,
+              });
+              draftId = draft.id;
+              await createConversationEvent({
+                sessionId: session.id,
+                runId: run.id,
+                eventType: "manual_node_required",
+                payload: {
+                  nodeId: nextNode.id,
+                  reason: "auto_send_disabled",
+                },
+              });
+            }
+          }
+        }
+      }
+    }
+  }
+
+  if (!draftId && !autoBranchScheduled) {
+    const draft = await createReplyDraft({
+      threadId: thread.id,
+      brandId: run.brandId,
+      runId: run.id,
+      subject: `Re: ${input.subject}`,
+      body: threadDraftBody({ from: input.from, subject: input.subject, body: input.body }),
+      reason: `Auto-generated from ${intent} reply`,
+    });
+    draftId = draft.id;
+  }
 
   await updateRunLead(lead.id, { status: intent === "unsubscribe" ? "unsubscribed" : "replied" });
 
@@ -1686,13 +2406,23 @@ export async function ingestInboundReply(input: {
     },
   });
 
-  await createOutreachEvent({ runId: run.id, eventType: "reply_ingested", payload: { threadId: thread.id } });
-  await createOutreachEvent({ runId: run.id, eventType: "reply_draft_created", payload: { draftId: draft.id } });
+  await createOutreachEvent({
+    runId: run.id,
+    eventType: "reply_ingested",
+    payload: {
+      threadId: thread.id,
+      intent,
+      confidence,
+    },
+  });
+  if (draftId) {
+    await createOutreachEvent({ runId: run.id, eventType: "reply_draft_created", payload: { draftId } });
+  }
 
   return {
     ok: true,
     threadId: thread.id,
-    draftId: draft.id,
+    draftId,
     reason: "Reply ingested",
   };
 }

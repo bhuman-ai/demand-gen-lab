@@ -30,7 +30,8 @@ export type OutreachJobType =
   | "schedule_messages"
   | "dispatch_messages"
   | "sync_replies"
-  | "analyze_run";
+  | "analyze_run"
+  | "conversation_tick";
 
 export type OutreachJobStatus = "queued" | "running" | "completed" | "failed";
 
@@ -366,6 +367,10 @@ function mapMessageRow(input: unknown): OutreachMessage {
     step: Number(row.step ?? 1),
     subject: String(row.subject ?? ""),
     body: String(row.body ?? ""),
+    sourceType: String(row.source_type ?? row.sourceType ?? "cadence") === "conversation" ? "conversation" : "cadence",
+    sessionId: String(row.session_id ?? row.sessionId ?? ""),
+    nodeId: String(row.node_id ?? row.nodeId ?? ""),
+    parentMessageId: String(row.parent_message_id ?? row.parentMessageId ?? ""),
     status: ["scheduled", "sent", "failed", "bounced", "replied", "canceled"].includes(String(row.status))
       ? (String(row.status) as OutreachMessage["status"])
       : "scheduled",
@@ -465,7 +470,7 @@ function mapJobRow(input: unknown): OutreachJob {
   return {
     id: String(row.id ?? ""),
     runId: String(row.run_id ?? row.runId ?? ""),
-    jobType: ["source_leads", "schedule_messages", "dispatch_messages", "sync_replies", "analyze_run"].includes(
+    jobType: ["source_leads", "schedule_messages", "dispatch_messages", "sync_replies", "analyze_run", "conversation_tick"].includes(
       String(row.job_type ?? row.jobType)
     )
       ? (String(row.job_type ?? row.jobType) as OutreachJobType)
@@ -766,7 +771,10 @@ export async function getOutreachAccount(accountId: string): Promise<OutreachAcc
           },
         });
       }
-      return null;
+
+      const store = await readLocalStore();
+      const hit = store.accounts.find((row) => row.id === accountId);
+      return hit ? mapStoredAccount(hit) : null;
     }
 
     if (data) return mapStoredAccount(mapAccountRowFromDb(data));
@@ -821,7 +829,11 @@ export async function getOutreachAccountSecrets(accountId: string): Promise<Outr
           },
         });
       }
-      return null;
+
+      const store = await readLocalStore();
+      const hit = store.accounts.find((row) => row.id === accountId);
+      if (!hit) return null;
+      return decryptJson<OutreachAccountSecrets>(hit.credentialsEncrypted, defaultSecrets());
     }
     if (data) {
       return decryptJson<OutreachAccountSecrets>(
@@ -1647,7 +1659,8 @@ export async function createRunMessages(
       | "body"
       | "status"
       | "scheduledAt"
-    >
+    > &
+      Partial<Pick<OutreachMessage, "sourceType" | "sessionId" | "nodeId" | "parentMessageId">>
   >
 ): Promise<OutreachMessage[]> {
   const now = nowIso();
@@ -1660,6 +1673,10 @@ export async function createRunMessages(
     step: item.step,
     subject: item.subject,
     body: item.body,
+    source_type: item.sourceType || "cadence",
+    session_id: item.sessionId || null,
+    node_id: item.nodeId || "",
+    parent_message_id: item.parentMessageId || "",
     status: item.status,
     provider_message_id: "",
     scheduled_at: item.scheduledAt,
@@ -1690,6 +1707,10 @@ export async function createRunMessages(
       brandId: row.brand_id,
       campaignId: row.campaign_id,
       leadId: row.lead_id,
+      sourceType: row.source_type,
+      sessionId: row.session_id ?? "",
+      nodeId: row.node_id,
+      parentMessageId: row.parent_message_id,
       providerMessageId: row.provider_message_id,
       scheduledAt: row.scheduled_at,
       sentAt: row.sent_at,
@@ -2091,17 +2112,20 @@ export async function createOutreachEvent(input: {
 
   const supabase = getSupabaseAdmin();
   if (supabase) {
-    await supabase.from(TABLE_EVENT).insert({
+    const { error } = await supabase.from(TABLE_EVENT).insert({
       id: event.id,
       run_id: event.runId,
       event_type: event.eventType,
       payload: event.payload,
     });
-  } else {
-    const store = await readLocalStore();
-    store.events.unshift(event);
-    await writeLocalStore(store);
+    if (!error) {
+      return event;
+    }
   }
+
+  const store = await readLocalStore();
+  store.events.unshift(event);
+  await writeLocalStore(store);
 
   return event;
 }

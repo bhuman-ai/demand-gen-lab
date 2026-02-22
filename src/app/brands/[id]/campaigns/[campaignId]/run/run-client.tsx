@@ -176,6 +176,78 @@ function summarizeEvent(event: OutreachRunEvent) {
   return "";
 }
 
+type OutcomeTone = "normal" | "muted" | "danger";
+
+function outcomeToneClass(tone: OutcomeTone) {
+  if (tone === "danger") return "text-[color:var(--danger)]";
+  if (tone === "muted") return "text-[color:var(--muted-foreground)]";
+  return "text-[color:var(--foreground)]";
+}
+
+function summarizeSendOutcome(run: OutreachRun) {
+  if (run.metrics.sentMessages > 0) {
+    return {
+      headline: "Yes",
+      detail: `${run.metrics.sentMessages} emails sent`,
+      tone: "normal" as OutcomeTone,
+    };
+  }
+
+  if (["queued", "sourcing", "scheduled", "sending", "monitoring", "paused"].includes(run.status)) {
+    return {
+      headline: "Not yet",
+      detail: "Run is active but no sends have completed yet",
+      tone: "muted" as OutcomeTone,
+    };
+  }
+
+  if (["preflight_failed", "failed", "canceled"].includes(run.status)) {
+    return {
+      headline: "No",
+      detail: "Run stopped before sending",
+      tone: "danger" as OutcomeTone,
+    };
+  }
+
+  return {
+    headline: "No",
+    detail: "0 emails sent so far",
+    tone: "muted" as OutcomeTone,
+  };
+}
+
+function summarizeReplyOutcome(run: OutreachRun) {
+  if (run.metrics.replies > 0) {
+    return {
+      headline: "Yes",
+      detail: `${run.metrics.replies} replies received`,
+      tone: "normal" as OutcomeTone,
+    };
+  }
+
+  if (run.metrics.sentMessages > 0 && ["monitoring", "sending", "scheduled", "paused"].includes(run.status)) {
+    return {
+      headline: "Not yet",
+      detail: "No replies so far; inbox sync is still running",
+      tone: "muted" as OutcomeTone,
+    };
+  }
+
+  if (run.metrics.sentMessages === 0) {
+    return {
+      headline: "No",
+      detail: "No replies because no emails have sent yet",
+      tone: "muted" as OutcomeTone,
+    };
+  }
+
+  return {
+    headline: "No",
+    detail: "No replies recorded for this run",
+    tone: "muted" as OutcomeTone,
+  };
+}
+
 function friendlyRunLaunchError(error: unknown) {
   const message = error instanceof Error ? error.message : "Failed to launch run";
   if (message.includes("Lead source is not configured for this hypothesis")) {
@@ -321,6 +393,8 @@ export default function RunClient({
   const totalReplies = runView.threads.length;
   const totalSent = runs.reduce((sum, run) => sum + run.metrics.sentMessages, 0);
   const totalPositiveReplies = runs.reduce((sum, run) => sum + run.metrics.positiveReplies, 0);
+  const hasAnySent = totalSent > 0;
+  const hasAnyReplies = totalReplies > 0;
 
   const launchForVariant = async (experimentId: string) => {
     setLaunching(true);
@@ -490,6 +564,10 @@ export default function RunClient({
           <div className="mt-1 text-[color:var(--muted-foreground)]">
             Status {latestRun.status} · leads {latestRun.metrics.sourcedLeads} · sent {latestRun.metrics.sentMessages} · replies {latestRun.metrics.replies}
           </div>
+          <div className="mt-1 text-[color:var(--muted-foreground)]">
+            Did emails send? {latestRun.metrics.sentMessages > 0 ? "Yes" : "No"} · Did we get replies?{" "}
+            {latestRun.metrics.replies > 0 ? "Yes" : "No"}
+          </div>
           {latestRun.lastError ? (
             <div className="mt-1 text-[color:var(--danger)]">Reason: {latestRun.lastError}</div>
           ) : null}
@@ -501,9 +579,9 @@ export default function RunClient({
   const visibility = (
     <Card>
       <CardHeader>
-        <CardTitle className="text-base">Run Visibility</CardTitle>
+        <CardTitle className="text-base">Run Results & Activity</CardTitle>
         <CardDescription>
-          Timeline, worker jobs, and payload details for each run.
+          Outcome first, then worker timeline and payload details when you need to debug.
         </CardDescription>
       </CardHeader>
       <CardContent className="grid gap-3">
@@ -514,6 +592,11 @@ export default function RunClient({
           const latestEvent = runEvents[0] ?? null;
           const nextQueuedJob = runJobs.find((job) => job.status === "queued") ?? null;
           const mostRecentJobError = runJobs.find((job) => job.lastError.trim()) ?? null;
+          const lastSentEvent = runEvents.find((event) => event.eventType === "message_sent") ?? null;
+          const lastReplyEvent = runEvents.find((event) => event.eventType === "reply_ingested") ?? null;
+          const lastDispatchFailure = runEvents.find((event) => event.eventType === "dispatch_failed") ?? null;
+          const sendOutcome = summarizeSendOutcome(run);
+          const replyOutcome = summarizeReplyOutcome(run);
           const expanded = Boolean(expandedRuns[run.id]);
 
           return (
@@ -525,10 +608,42 @@ export default function RunClient({
               <div className="mt-1 text-[color:var(--muted-foreground)]">
                 Leads {run.metrics.sourcedLeads} · Sent {run.metrics.sentMessages} · Replies {run.metrics.replies}
               </div>
+              <div className="mt-2 grid gap-2 md:grid-cols-2">
+                <div className="rounded-lg border border-[color:var(--border)] bg-[color:var(--surface)] p-2">
+                  <div className="text-[11px] font-medium uppercase tracking-wide text-[color:var(--muted-foreground)]">
+                    Did emails send?
+                  </div>
+                  <div className={cn("mt-1 text-sm font-semibold", outcomeToneClass(sendOutcome.tone))}>
+                    {sendOutcome.headline}
+                  </div>
+                  <div className="text-xs text-[color:var(--muted-foreground)]">{sendOutcome.detail}</div>
+                  <div className="mt-1 text-xs text-[color:var(--muted-foreground)]">
+                    Last send event: {lastSentEvent ? formatDateTime(lastSentEvent.createdAt) : "none yet"}
+                  </div>
+                </div>
+                <div className="rounded-lg border border-[color:var(--border)] bg-[color:var(--surface)] p-2">
+                  <div className="text-[11px] font-medium uppercase tracking-wide text-[color:var(--muted-foreground)]">
+                    Did we get replies?
+                  </div>
+                  <div className={cn("mt-1 text-sm font-semibold", outcomeToneClass(replyOutcome.tone))}>
+                    {replyOutcome.headline}
+                  </div>
+                  <div className="text-xs text-[color:var(--muted-foreground)]">{replyOutcome.detail}</div>
+                  <div className="mt-1 text-xs text-[color:var(--muted-foreground)]">
+                    Last reply event: {lastReplyEvent ? formatDateTime(lastReplyEvent.createdAt) : "none yet"}
+                  </div>
+                </div>
+              </div>
               {run.lastError ? <div className="mt-1 text-[color:var(--danger)]">Reason: {run.lastError}</div> : null}
               {run.pauseReason ? <div className="mt-1 text-[color:var(--danger)]">Pause: {run.pauseReason}</div> : null}
               {runAnomalies.length ? (
                 <div className="mt-1 text-[color:var(--danger)]">Active anomalies: {runAnomalies.map((item) => item.type).join(", ")}</div>
+              ) : null}
+              {lastDispatchFailure ? (
+                <div className="mt-1 text-[color:var(--danger)]">
+                  Last send failure: {summarizeEvent(lastDispatchFailure) || "Dispatch failed"} ·{" "}
+                  {formatDateTime(lastDispatchFailure.createdAt)}
+                </div>
               ) : null}
               {latestEvent ? (
                 <div className="mt-1 text-[color:var(--muted-foreground)]">
@@ -591,7 +706,7 @@ export default function RunClient({
               {expanded ? (
                 <div className="mt-3 grid gap-2 rounded-lg border border-[color:var(--border)] bg-[color:var(--surface)] p-2">
                   <div className="text-[11px] font-medium uppercase tracking-wide text-[color:var(--muted-foreground)]">
-                    What it tried
+                    Worker Activity (advanced)
                   </div>
                   {runJobs.length ? (
                     runJobs.slice(0, 8).map((job) => (
@@ -666,17 +781,25 @@ export default function RunClient({
   );
 
   const overviewPanel = (
-    <div className="grid gap-4 lg:grid-cols-3">
+    <div className="grid gap-4 lg:grid-cols-4">
       <Card>
         <CardHeader>
-          <CardDescription>Total Sent</CardDescription>
-          <CardTitle>{totalSent}</CardTitle>
+          <CardDescription>Did Emails Send?</CardDescription>
+          <CardTitle>{hasAnySent ? "Yes" : "No"}</CardTitle>
+          <CardDescription>{hasAnySent ? `${totalSent} total sent` : "No send events yet"}</CardDescription>
         </CardHeader>
       </Card>
       <Card>
         <CardHeader>
-          <CardDescription>Positive Replies</CardDescription>
-          <CardTitle>{totalPositiveReplies}</CardTitle>
+          <CardDescription>Did We Get Replies?</CardDescription>
+          <CardTitle>{hasAnyReplies ? "Yes" : "No"}</CardTitle>
+          <CardDescription>{hasAnyReplies ? `${totalReplies} reply thread(s)` : "No replies yet"}</CardDescription>
+        </CardHeader>
+      </Card>
+      <Card>
+        <CardHeader>
+          <CardDescription>Total Sent</CardDescription>
+          <CardTitle>{totalSent}</CardTitle>
         </CardHeader>
       </Card>
       <Card>

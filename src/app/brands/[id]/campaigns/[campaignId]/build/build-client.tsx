@@ -324,7 +324,7 @@ export default function BuildClient({ brandId, campaignId }: { brandId: string; 
       <Card>
         <CardHeader>
           <CardTitle className="text-base">Objective</CardTitle>
-          <CardDescription>Define the business outcome and scoring model.</CardDescription>
+          <CardDescription>Define the business outcome and key constraints.</CardDescription>
         </CardHeader>
         <CardContent className="grid gap-3">
           <div className="grid gap-2">
@@ -356,89 +356,6 @@ export default function BuildClient({ brandId, campaignId }: { brandId: string; 
               }
               placeholder="Volume, targeting, message constraints"
             />
-          </div>
-          <div className="grid gap-3 md:grid-cols-3">
-            <div className="grid gap-2">
-              <Label htmlFor="build-conversion-weight">Conversion Weight</Label>
-              <Input
-                id="build-conversion-weight"
-                type="number"
-                min={0}
-                max={1}
-                step={0.05}
-                value={build.objective.scoring.conversionWeight}
-                onChange={(event) =>
-                  setBuild((prev) =>
-                    prev
-                      ? {
-                          ...prev,
-                          objective: {
-                            ...prev.objective,
-                            scoring: {
-                              ...prev.objective.scoring,
-                              conversionWeight: Number(event.target.value || 0),
-                            },
-                          },
-                        }
-                      : prev
-                  )
-                }
-              />
-            </div>
-            <div className="grid gap-2">
-              <Label htmlFor="build-quality-weight">Quality Weight</Label>
-              <Input
-                id="build-quality-weight"
-                type="number"
-                min={0}
-                max={1}
-                step={0.05}
-                value={build.objective.scoring.qualityWeight}
-                onChange={(event) =>
-                  setBuild((prev) =>
-                    prev
-                      ? {
-                          ...prev,
-                          objective: {
-                            ...prev.objective,
-                            scoring: {
-                              ...prev.objective.scoring,
-                              qualityWeight: Number(event.target.value || 0),
-                            },
-                          },
-                        }
-                      : prev
-                  )
-                }
-              />
-            </div>
-            <div className="grid gap-2">
-              <Label htmlFor="build-reply-weight">Reply Weight</Label>
-              <Input
-                id="build-reply-weight"
-                type="number"
-                min={0}
-                max={1}
-                step={0.05}
-                value={build.objective.scoring.replyWeight}
-                onChange={(event) =>
-                  setBuild((prev) =>
-                    prev
-                      ? {
-                          ...prev,
-                          objective: {
-                            ...prev.objective,
-                            scoring: {
-                              ...prev.objective.scoring,
-                              replyWeight: Number(event.target.value || 0),
-                            },
-                          },
-                        }
-                      : prev
-                  )
-                }
-              />
-            </div>
           </div>
         </CardContent>
       </Card>

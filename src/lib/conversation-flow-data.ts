@@ -67,7 +67,7 @@ function defaultNode(position: { x: number; y: number }): ConversationFlowNode {
     kind: "message",
     title: "Message",
     subject: "Quick question",
-    body: "Hi {{firstName}},\n\nQuick question on {{brandName}}.",
+    body: "Hi {{firstName}},\n\nSaw {{company}} and wanted to ask one quick thing about {{campaignGoal}}.",
     autoSend: true,
     delayMinutes: 0,
     x: position.x,
@@ -89,35 +89,98 @@ function defaultTerminalNode(position: { x: number; y: number }): ConversationFl
   };
 }
 
+function upgradeLegacyNodeCopy(node: ConversationFlowNode): ConversationFlowNode {
+  if (node.kind !== "message") return node;
+  let subject = node.subject;
+  let body = node.body;
+
+  if (subject === "Quick question" && body === "Hi {{firstName}},\n\nQuick question on {{brandName}}.") {
+    subject = "Quick question on {{campaignGoal}}";
+    body =
+      "Hi {{firstName}},\n\nNoticed {{company}} and wanted to ask: are you actively working on {{campaignGoal}} right now?\n\nIf yes, I can share a short example from similar teams.";
+  }
+  if (
+    subject === "Quick question" &&
+    body === "Hi {{firstName}},\n\nQuick question: are you currently focused on {{campaignGoal}}?"
+  ) {
+    subject = "Quick question on {{campaignGoal}}";
+    body =
+      "Hi {{firstName}},\n\nNoticed {{company}} and wanted to ask: are you actively working on {{campaignGoal}} right now?\n\nIf yes, I can share a short example from similar teams.";
+  }
+  if (
+    subject === "Great to hear" &&
+    body === "Great to hear, {{firstName}}.\n\nBased on your note, want a short 10-minute walkthrough?"
+  ) {
+    subject = "Worth a 10-minute walkthrough?";
+    body =
+      "Great to hear, {{firstName}}.\n\nI can show a focused walkthrough for {{company}} on how teams improve {{campaignGoal}} with {{brandName}}.\n\nWould Tuesday or Wednesday be better?";
+  }
+  if (
+    subject === "Answering your question" &&
+    body === "Great question.\n\nHere is the shortest answer for your context: {{shortAnswer}}."
+  ) {
+    subject = "Short answer";
+    body =
+      "Great question, {{firstName}}.\n\nShort answer: {{shortAnswer}}\n\nIf useful, I can send one concrete example for {{company}}.";
+  }
+  if (
+    subject === "Makes sense" &&
+    body === "Totally fair.\n\nIf timing is the blocker, would revisiting in a few weeks help?"
+  ) {
+    subject = "Totally fair";
+    body =
+      "Makes sense. If timing is the blocker, I can send a one-page summary now and check back next month.\n\nWould that be more useful?";
+  }
+  if (
+    subject === "Worth a quick check" &&
+    body === "Just circling back in case this slipped.\n\nShould I close this out for now?"
+  ) {
+    subject = "Close the loop?";
+    body =
+      "Just checking once more, {{firstName}}.\n\nShould I close this out, or is there someone else at {{company}} who owns {{campaignGoal}}?";
+  }
+
+  return {
+    ...node,
+    subject,
+    body,
+  };
+}
+
 export function defaultConversationGraph(): ConversationFlowGraph {
   const start = defaultNode({ x: 60, y: 220 });
   start.title = "Start question";
-  start.subject = "Quick question";
-  start.body = "Hi {{firstName}},\n\nQuick question: are you currently focused on {{campaignGoal}}?";
+  start.subject = "Quick question on {{campaignGoal}}";
+  start.body =
+    "Hi {{firstName}},\n\nNoticed {{company}} and wanted to ask: are you actively working on {{campaignGoal}} right now?\n\nIf yes, I can share a short example from similar teams.";
 
   const interest = defaultNode({ x: 420, y: 80 });
   interest.title = "Interest follow-up";
-  interest.subject = "Great to hear";
-  interest.body = "Great to hear, {{firstName}}.\n\nBased on your note, want a short 10-minute walkthrough?";
+  interest.subject = "Worth a 10-minute walkthrough?";
+  interest.body =
+    "Great to hear, {{firstName}}.\n\nI can show a focused walkthrough for {{company}} on how teams improve {{campaignGoal}} with {{brandName}}.\n\nWould Tuesday or Wednesday be better?";
   interest.autoSend = true;
   interest.delayMinutes = 0;
 
   const question = defaultNode({ x: 420, y: 220 });
   question.title = "Question answer";
-  question.subject = "Answering your question";
-  question.body = "Great question.\n\nHere is the shortest answer for your context: {{shortAnswer}}.";
+  question.subject = "Short answer";
+  question.body =
+    "Great question, {{firstName}}.\n\nShort answer: {{shortAnswer}}\n\nIf useful, I can send one concrete example for {{company}}.";
   question.autoSend = false;
 
   const objection = defaultNode({ x: 420, y: 360 });
   objection.title = "Objection handling";
-  objection.subject = "Makes sense";
-  objection.body = "Totally fair.\n\nIf timing is the blocker, would revisiting in a few weeks help?";
+  objection.subject = "Totally fair";
+  objection.body =
+    "Makes sense. If timing is the blocker, I can send a one-page summary now and check back next month.\n\nWould that be more useful?";
   objection.autoSend = false;
 
   const noReply = defaultNode({ x: 780, y: 220 });
   noReply.title = "No-reply nudge";
-  noReply.subject = "Worth a quick check";
-  noReply.body = "Just circling back in case this slipped.\n\nShould I close this out for now?";
+  noReply.subject = "Close the loop?";
+  noReply.body =
+    "Just checking once more, {{firstName}}.\n\nShould I close this out, or is there someone else at {{company}} who owns {{campaignGoal}}?";
   noReply.autoSend = true;
   noReply.delayMinutes = 1440;
 
@@ -236,8 +299,7 @@ function normalizeNode(value: unknown): ConversationFlowNode | null {
   const y = Number(row.y);
 
   if (kind === "message" && !body) return null;
-
-  return {
+  const node: ConversationFlowNode = {
     id,
     kind,
     title,
@@ -248,6 +310,7 @@ function normalizeNode(value: unknown): ConversationFlowNode | null {
     x: Number.isFinite(x) ? x : 0,
     y: Number.isFinite(y) ? y : 0,
   };
+  return upgradeLegacyNodeCopy(node);
 }
 
 function normalizeEdge(value: unknown): ConversationFlowEdge | null {
@@ -281,7 +344,10 @@ function normalizeEdge(value: unknown): ConversationFlowEdge | null {
   };
 }
 
-export function normalizeConversationGraph(value: unknown): ConversationFlowGraph {
+export function normalizeConversationGraph(
+  value: unknown,
+  options: { strict?: boolean } = {}
+): ConversationFlowGraph {
   const row = asRecord(value);
   const nodes = asArray(row.nodes).map(normalizeNode).filter((item): item is ConversationFlowNode => Boolean(item));
   const nodeIds = new Set(nodes.map((item) => item.id));
@@ -291,13 +357,19 @@ export function normalizeConversationGraph(value: unknown): ConversationFlowGrap
     .filter((edge) => nodeIds.has(edge.fromNodeId) && nodeIds.has(edge.toNodeId));
 
   const fallback = defaultConversationGraph();
+  const strict = options.strict === true;
   const startNodeIdCandidate = String(row.startNodeId ?? row.start_node_id ?? "").trim();
   const startNodeId = nodeIds.has(startNodeIdCandidate)
     ? startNodeIdCandidate
     : nodes[0]?.id || fallback.startNodeId;
   const maxDepth = Math.max(1, Math.min(5, Number(row.maxDepth ?? fallback.maxDepth) || fallback.maxDepth));
 
-  if (!nodes.length) return fallback;
+  if (!nodes.length) {
+    if (strict) {
+      throw new Error("Conversation graph has no valid message nodes");
+    }
+    return fallback;
+  }
 
   return {
     version: 1,

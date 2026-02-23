@@ -281,6 +281,8 @@ function renderConversationTemplate(
   template: string,
   vars: {
     firstName: string;
+    company: string;
+    leadTitle: string;
     brandName: string;
     campaignGoal: string;
     variantName: string;
@@ -290,6 +292,8 @@ function renderConversationTemplate(
 ) {
   return template
     .replaceAll("{{firstName}}", vars.firstName)
+    .replaceAll("{{company}}", vars.company)
+    .replaceAll("{{leadTitle}}", vars.leadTitle)
     .replaceAll("{{brandName}}", vars.brandName)
     .replaceAll("{{campaignGoal}}", vars.campaignGoal)
     .replaceAll("{{variantName}}", vars.variantName)
@@ -301,9 +305,34 @@ function hasUnresolvedTemplateToken(text: string) {
   return /{{\s*[^}]+\s*}}/.test(text);
 }
 
+function normalizeWhitespace(text: string) {
+  return text
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .replace(/[ \t]{2,}/g, " ")
+    .replace(/\s+\?/g, "?")
+    .replace(/\s+\./g, ".")
+    .trim();
+}
+
+function firstNameFromLead(leadName: string) {
+  const token = leadName.trim().split(/\s+/)[0] ?? "";
+  return token || "there";
+}
+
+function effectiveCampaignGoal(goal: string, variantName: string) {
+  const trimmedGoal = goal.trim();
+  if (trimmedGoal) return trimmedGoal;
+  const trimmedVariant = variantName.trim();
+  if (trimmedVariant) return trimmedVariant;
+  return "outbound pipeline performance";
+}
+
 function renderConversationNode(input: {
   node: ConversationFlowNode;
   leadName: string;
+  leadCompany?: string;
+  leadTitle?: string;
   brandName: string;
   campaignGoal: string;
   variantName: string;
@@ -328,20 +357,24 @@ function renderConversationNode(input: {
     };
   }
 
-  const firstName = input.leadName.trim().split(/\s+/)[0] ?? "";
+  const firstName = firstNameFromLead(input.leadName);
+  const company = input.leadCompany?.trim() || "your team";
+  const leadTitle = input.leadTitle?.trim() || "your role";
   const replyPreview = input.replyPreview?.trim() ?? "";
-  const shortAnswer = replyPreview.split(/\n+/)[0]?.slice(0, 180) ?? "";
+  const shortAnswer = replyPreview.split(/\n+/)[0]?.slice(0, 180) || "happy to share the exact details";
   const vars = {
     firstName,
+    company,
+    leadTitle,
     brandName: input.brandName.trim(),
-    campaignGoal: input.campaignGoal.trim(),
+    campaignGoal: effectiveCampaignGoal(input.campaignGoal, input.variantName),
     variantName: input.variantName.trim(),
     replyPreview,
     shortAnswer,
   };
 
-  const subject = renderConversationTemplate(subjectTemplate, vars).trim();
-  const body = renderConversationTemplate(bodyTemplate, vars).trim();
+  const subject = normalizeWhitespace(renderConversationTemplate(subjectTemplate, vars));
+  const body = normalizeWhitespace(renderConversationTemplate(bodyTemplate, vars));
   if (!subject) {
     return {
       ok: false as const,
@@ -434,7 +467,7 @@ async function scheduleConversationNodeMessage(input: {
     hourlyCap: number;
     minSpacingMinutes: number;
   };
-  lead: { id: string; email: string; name: string; status: string };
+  lead: { id: string; email: string; name: string; status: string; company?: string; title?: string };
   sessionId: string;
   node: ConversationFlowNode;
   step: number;
@@ -469,6 +502,8 @@ async function scheduleConversationNodeMessage(input: {
   const composed = renderConversationNode({
     node: input.node,
     leadName: input.lead.name,
+    leadCompany: input.lead.company ?? "",
+    leadTitle: input.lead.title ?? "",
     brandName: input.brandName,
     campaignGoal: input.campaignGoal,
     variantName: input.variantName,
@@ -2554,6 +2589,8 @@ export async function ingestInboundReply(input: {
               const composed = renderConversationNode({
                 node: nextNode,
                 leadName: lead.name,
+                leadCompany: lead.company,
+                leadTitle: lead.title,
                 brandName: brand?.name ?? "",
                 campaignGoal: campaign?.objective.goal ?? "",
                 variantName:

@@ -1,7 +1,6 @@
 import { NextResponse } from "next/server";
 import { getBrandById, getCampaignById } from "@/lib/factory-data";
 import {
-  defaultConversationGraph,
   normalizeConversationGraph,
 } from "@/lib/conversation-flow-data";
 
@@ -31,19 +30,27 @@ export async function POST(
   }
 
   const hypothesis = campaign.hypotheses.find((item) => item.id === experiment.hypothesisId) ?? null;
-  const fallback = defaultConversationGraph();
 
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) {
-    return NextResponse.json({ graph: fallback, mode: "fallback" });
+    return NextResponse.json(
+      { error: "OPENAI_API_KEY is missing. Conversation map generation requires model output." },
+      { status: 503 }
+    );
   }
 
   const prompt = [
-    "You design outbound reply conversation maps for email outreach.",
+    "You write high-performing B2B outbound email conversation maps.",
     "Generate one practical branching map with up to 5 turns.",
-    "Goal: convert replies while handling questions, objections, and unsubscribe safely.",
-    "Use plain language. Keep copy concise and human.",
-    "Output JSON only.",
+    "Goal: book qualified calls while handling questions, objections, and unsubscribe safely.",
+    "Hard requirements:",
+    "- Plain, concrete language. No buzzwords, no vague claims, no filler.",
+    "- Never use phrases like: 'quick question', 'just circling back', 'great to hear', 'worth a quick check'.",
+    "- Every message must include exactly one clear CTA.",
+    "- Subject lines <= 7 words. Body <= 90 words.",
+    "- Use only these variables when needed: {{firstName}}, {{company}}, {{brandName}}, {{campaignGoal}}, {{shortAnswer}}.",
+    "- If you cannot infer specifics, write specific but safe copy without placeholders.",
+    "Return JSON only with no markdown.",
     "Shape:",
     '{ "graph": { "version": 1, "maxDepth": number, "startNodeId": string, "nodes": [{ "id": string, "kind": "message"|"terminal", "title": string, "subject": string, "body": string, "autoSend": boolean, "delayMinutes": number }], "edges": [{ "id": string, "fromNodeId": string, "toNodeId": string, "trigger": "intent"|"timer"|"fallback", "intent": "question"|"interest"|"objection"|"unsubscribe"|"other"|"" , "waitMinutes": number, "confidenceThreshold": number, "priority": number }] } }',
     `BrandContext: ${JSON.stringify({
@@ -79,7 +86,14 @@ export async function POST(
 
   const raw = await response.text();
   if (!response.ok) {
-    return NextResponse.json({ graph: fallback, mode: "fallback" });
+    return NextResponse.json(
+      {
+        error: "OpenAI conversation-map generation failed",
+        details: raw.slice(0, 500),
+        status: response.status,
+      },
+      { status: 502 }
+    );
   }
 
   let payload: unknown = {};
@@ -106,14 +120,37 @@ export async function POST(
   try {
     parsed = JSON.parse(text);
   } catch {
-    parsed = {};
+    return NextResponse.json(
+      {
+        error: "Conversation-map model output was not valid JSON",
+        details: text.slice(0, 500),
+      },
+      { status: 502 }
+    );
   }
 
   const rawGraph = asRecord(asRecord(parsed).graph);
-  const hasModelGraph = Object.keys(rawGraph).length > 0;
-  const graph = hasModelGraph ? normalizeConversationGraph(rawGraph) : fallback;
-  return NextResponse.json({
-    graph,
-    mode: hasModelGraph ? "openai" : "fallback",
-  });
+  if (!Object.keys(rawGraph).length) {
+    return NextResponse.json(
+      {
+        error: "Conversation-map model output did not include graph",
+      },
+      { status: 502 }
+    );
+  }
+
+  let graph: ReturnType<typeof normalizeConversationGraph>;
+  try {
+    graph = normalizeConversationGraph(rawGraph, { strict: true });
+  } catch (error) {
+    return NextResponse.json(
+      {
+        error: "Conversation-map model output was structurally invalid",
+        details: error instanceof Error ? error.message : "Unknown normalization error",
+      },
+      { status: 502 }
+    );
+  }
+
+  return NextResponse.json({ graph, mode: "openai" });
 }

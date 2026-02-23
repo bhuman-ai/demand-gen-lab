@@ -1,10 +1,16 @@
-import RunClient from "../run-client";
+import RouteReplacedCard from "@/components/layout/route-replaced-card";
 
-export default async function RunInsightsPage({
+export default async function RunInsightsReplacedPage({
   params,
 }: {
-  params: Promise<{ id: string; campaignId: string }>;
+  params: Promise<{ id: string }>;
 }) {
-  const { id, campaignId } = await params;
-  return <RunClient brandId={id} campaignId={campaignId} tab="insights" />;
+  const { id } = await params;
+  return (
+    <RouteReplacedCard
+      title="Run insights replaced"
+      description="Insights are now shown directly on promoted Campaign pages."
+      brandId={id}
+    />
+  );
 }

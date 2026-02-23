@@ -1,10 +1,16 @@
-import RunClient from "../run-client";
+import RouteReplacedCard from "@/components/layout/route-replaced-card";
 
-export default async function RunVariantsPage({
+export default async function RunVariantsReplacedPage({
   params,
 }: {
-  params: Promise<{ id: string; campaignId: string }>;
+  params: Promise<{ id: string }>;
 }) {
-  const { id, campaignId } = await params;
-  return <RunClient brandId={id} campaignId={campaignId} tab="variants" />;
+  const { id } = await params;
+  return (
+    <RouteReplacedCard
+      title="Run variants replaced"
+      description="Variant controls now live in Experiment detail."
+      brandId={id}
+    />
+  );
 }

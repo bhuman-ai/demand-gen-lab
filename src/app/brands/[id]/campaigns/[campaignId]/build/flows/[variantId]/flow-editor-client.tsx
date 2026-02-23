@@ -39,10 +39,12 @@ export default function FlowEditorClient({
   brandId,
   campaignId,
   variantId,
+  backHref,
 }: {
   brandId: string;
   campaignId: string;
   variantId: string;
+  backHref?: string;
 }) {
   const [brandName, setBrandName] = useState("Brand");
   const [campaignName, setCampaignName] = useState("Campaign");
@@ -175,7 +177,7 @@ export default function FlowEditorClient({
         </CardHeader>
         <CardContent>
           <Button asChild type="button" variant="outline">
-            <Link href={`/brands/${brandId}/campaigns/${campaignId}/build`}>Back to Build</Link>
+            <Link href={backHref || `/brands/${brandId}/campaigns/${campaignId}/build`}>Back</Link>
           </Button>
         </CardContent>
       </Card>
@@ -213,7 +215,7 @@ export default function FlowEditorClient({
             {publishing ? "Publishing..." : "Publish"}
           </Button>
           <Button asChild type="button" variant="ghost">
-            <Link href={`/brands/${brandId}/campaigns/${campaignId}/build`}>Back to Build</Link>
+            <Link href={backHref || `/brands/${brandId}/campaigns/${campaignId}/build`}>Back</Link>
           </Button>
         </CardContent>
         {statusMessage ? (

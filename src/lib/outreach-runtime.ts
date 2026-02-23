@@ -633,6 +633,8 @@ export async function launchExperimentRun(input: {
   campaignId: string;
   experimentId: string;
   trigger: "manual" | "hypothesis_approved";
+  ownerType?: "experiment" | "campaign";
+  ownerId?: string;
 }): Promise<{
   ok: boolean;
   runId: string;
@@ -685,6 +687,8 @@ export async function launchExperimentRun(input: {
       campaignId: input.campaignId,
       experimentId: experiment.id,
       hypothesisId: hypothesis.id,
+      ownerType: input.ownerType,
+      ownerId: input.ownerId,
       accountId: brandAccount.accountId || "",
       status: "preflight_failed",
       dailyCap: experiment.runPolicy?.dailyCap ?? 30,
@@ -720,6 +724,8 @@ export async function launchExperimentRun(input: {
       campaignId: input.campaignId,
       experimentId: experiment.id,
       hypothesisId: hypothesis.id,
+      ownerType: input.ownerType,
+      ownerId: input.ownerId,
       accountId: brandAccount.deliveryAccount.id,
       status: "preflight_failed",
       dailyCap: experiment.runPolicy?.dailyCap ?? 30,
@@ -770,6 +776,8 @@ export async function launchExperimentRun(input: {
       campaignId: input.campaignId,
       experimentId: experiment.id,
       hypothesisId: hypothesis.id,
+      ownerType: input.ownerType,
+      ownerId: input.ownerId,
       accountId: brandAccount.deliveryAccount.id,
       status: "preflight_failed",
       dailyCap: experiment.runPolicy?.dailyCap ?? 30,
@@ -809,6 +817,8 @@ export async function launchExperimentRun(input: {
     campaignId: input.campaignId,
     experimentId: experiment.id,
     hypothesisId: hypothesis.id,
+    ownerType: input.ownerType,
+    ownerId: input.ownerId,
     accountId: brandAccount.deliveryAccount.id,
     status: "queued",
     dailyCap: experiment.runPolicy?.dailyCap ?? 30,

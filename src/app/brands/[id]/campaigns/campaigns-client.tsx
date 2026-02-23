@@ -2,43 +2,48 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
-import { Plus, Trash2 } from "lucide-react";
+import { ArrowRight, Rocket, Trash2 } from "lucide-react";
 import {
-  createCampaignApi,
-  deleteCampaignApi,
-  fetchCampaigns,
   fetchBrand,
+  fetchScaleCampaigns,
 } from "@/lib/client-api";
-import { trackEvent } from "@/lib/telemetry-client";
-import type { BrandRecord, CampaignRecord } from "@/lib/factory-types";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import type { BrandRecord, ScaleCampaignRecord } from "@/lib/factory-types";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+
+function statusVariant(status: ScaleCampaignRecord["status"]) {
+  if (status === "active") return "accent" as const;
+  if (status === "completed") return "success" as const;
+  if (status === "paused") return "danger" as const;
+  return "muted" as const;
+}
 
 export default function CampaignsClient({ brandId }: { brandId: string }) {
   const [brand, setBrand] = useState<BrandRecord | null>(null);
-  const [campaigns, setCampaigns] = useState<CampaignRecord[]>([]);
-  const [name, setName] = useState("");
+  const [campaigns, setCampaigns] = useState<ScaleCampaignRecord[]>([]);
   const [error, setError] = useState("");
-  const [saving, setSaving] = useState(false);
+
+  const refresh = async () => {
+    const [brandRow, campaignRows] = await Promise.all([
+      fetchBrand(brandId),
+      fetchScaleCampaigns(brandId),
+    ]);
+    setBrand(brandRow);
+    setCampaigns(campaignRows);
+    localStorage.setItem("factory.activeBrandId", brandId);
+  };
 
   useEffect(() => {
     let mounted = true;
-    void Promise.all([fetchBrand(brandId), fetchCampaigns(brandId)])
-      .then(([brandRow, campaignRows]) => {
-        if (!mounted) return;
-        setBrand(brandRow);
-        setCampaigns(campaignRows);
-        localStorage.setItem("factory.activeBrandId", brandId);
-      })
-      .catch((err: unknown) => {
-        if (!mounted) return;
-        setError(err instanceof Error ? err.message : "Failed to load campaigns");
-      });
+    void refresh().catch((err: unknown) => {
+      if (!mounted) return;
+      setError(err instanceof Error ? err.message : "Failed to load campaigns");
+    });
     return () => {
       mounted = false;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [brandId]);
 
   const activeCount = useMemo(
@@ -51,37 +56,21 @@ export default function CampaignsClient({ brandId }: { brandId: string }) {
       <Card>
         <CardHeader>
           <CardTitle>{brand?.name || "Brand"} Campaigns</CardTitle>
-          <CardDescription>Create campaigns, then move between Build and Run.</CardDescription>
+          <CardDescription>
+            Campaigns are scale engines promoted from validated experiments.
+          </CardDescription>
         </CardHeader>
-        <CardContent className="grid gap-3 md:grid-cols-[1fr_auto]">
-          <Input
-            placeholder="Campaign name"
-            value={name}
-            onChange={(event) => setName(event.target.value)}
-          />
-          <Button
-            type="button"
-            disabled={saving}
-            onClick={async () => {
-              setSaving(true);
-              setError("");
-              try {
-                const created = await createCampaignApi(brandId, {
-                  name: name.trim() || `Campaign ${campaigns.length + 1}`,
-                });
-                trackEvent("campaign_created", { brandId, campaignId: created.id });
-                setName("");
-                const refreshed = await fetchCampaigns(brandId);
-                setCampaigns(refreshed);
-              } catch (err) {
-                setError(err instanceof Error ? err.message : "Create failed");
-              } finally {
-                setSaving(false);
-              }
-            }}
-          >
-            <Plus className="h-4 w-4" />
-            {saving ? "Creating..." : "Create Campaign"}
+        <CardContent className="flex flex-wrap gap-2">
+          <Button asChild>
+            <Link href={`/brands/${brandId}/experiments`}>
+              Open Experiments
+              <ArrowRight className="h-4 w-4" />
+            </Link>
+          </Button>
+          <Button asChild variant="outline">
+            <Link href={`/brands/${brandId}/experiments`}>
+              Promote an experiment
+            </Link>
           </Button>
         </CardContent>
       </Card>
@@ -101,57 +90,60 @@ export default function CampaignsClient({ brandId }: { brandId: string }) {
         </Card>
         <Card>
           <CardHeader>
-            <CardDescription>Draft</CardDescription>
-            <CardTitle>{campaigns.length - activeCount}</CardTitle>
+            <CardDescription>Completed</CardDescription>
+            <CardTitle>{campaigns.filter((row) => row.status === "completed").length}</CardTitle>
           </CardHeader>
         </Card>
       </div>
 
       {error ? <div className="text-sm text-[color:var(--danger)]">{error}</div> : null}
 
-      <div className="grid gap-4 md:grid-cols-2">
-        {campaigns.map((campaign) => {
-          return (
+      {campaigns.length ? (
+        <div className="grid gap-4 md:grid-cols-2">
+          {campaigns.map((campaign) => (
             <Card key={campaign.id}>
               <CardHeader className="space-y-2">
                 <div className="flex items-center justify-between gap-2">
                   <CardTitle className="text-base">{campaign.name}</CardTitle>
-                  <Badge variant={campaign.status === "active" ? "success" : "muted"}>{campaign.status}</Badge>
+                  <Badge variant={statusVariant(campaign.status)}>{campaign.status}</Badge>
                 </div>
-                <CardDescription>Build setup, then run execution from one workspace.</CardDescription>
+                <CardDescription>
+                  Source experiment: {campaign.sourceExperimentId.slice(-6)}
+                </CardDescription>
               </CardHeader>
-              <CardContent className="flex flex-wrap gap-2">
-                <Button size="sm" asChild>
-                  <Link href={`/brands/${brandId}/campaigns/${campaign.id}/build`}>Open Build</Link>
-                </Button>
-                <Button size="sm" variant="outline" asChild>
-                  <Link href={`/brands/${brandId}/campaigns/${campaign.id}/run/overview`}>Open Run</Link>
-                </Button>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={async () => {
-                    if (!window.confirm("Delete this campaign?")) return;
-                    await deleteCampaignApi(brandId, campaign.id);
-                    const refreshed = await fetchCampaigns(brandId);
-                    setCampaigns(refreshed);
-                  }}
-                >
-                  <Trash2 className="h-4 w-4" />
-                </Button>
+              <CardContent className="space-y-3">
+                <div className="text-xs text-[color:var(--muted-foreground)]">
+                  Snapshot: {campaign.snapshot.offer || "No offer"}
+                </div>
+                <div className="text-xs text-[color:var(--muted-foreground)]">
+                  Sent {campaign.metricsSummary.sent} · Replies {campaign.metricsSummary.replies} · Positive {campaign.metricsSummary.positiveReplies}
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <Button size="sm" asChild>
+                    <Link href={`/brands/${brandId}/campaigns/${campaign.id}`}>
+                      <Rocket className="h-4 w-4" /> Open Campaign
+                    </Link>
+                  </Button>
+                  <Button size="sm" variant="outline" asChild>
+                    <Link href={`/brands/${brandId}/experiments/${campaign.sourceExperimentId}`}>
+                      View Source Experiment
+                    </Link>
+                  </Button>
+                  <Button size="sm" variant="ghost" disabled>
+                    <Trash2 className="h-4 w-4" />
+                  </Button>
+                </div>
               </CardContent>
             </Card>
-          );
-        })}
-      </div>
-
-      {!campaigns.length ? (
+          ))}
+        </div>
+      ) : (
         <Card>
           <CardContent className="py-8 text-sm text-[color:var(--muted-foreground)]">
-            No campaigns yet. Create one and start in Build.
+            No campaigns yet. Promote a winning experiment to create one.
           </CardContent>
         </Card>
-      ) : null}
+      )}
     </div>
   );
 }

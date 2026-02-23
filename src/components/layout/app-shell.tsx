@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
   Activity,
+  FolderKanban,
   FlaskConical,
   Inbox,
   LayoutGrid,
@@ -16,7 +17,6 @@ import { useEffect, useMemo } from "react";
 import { cn } from "@/lib/utils";
 import { trackEvent } from "@/lib/telemetry-client";
 import BrandSwitcher, { getActiveBrandIdFromPath } from "./brand-switcher";
-import { CampaignStepper } from "./campaign-stepper";
 import ThemeToggle from "./theme-toggle";
 
 const ACTIVE_BRAND_KEY = "factory.activeBrandId";
@@ -31,14 +31,11 @@ function pageTitle(pathname: string) {
   if (pathname === "/") return "Launcher";
   if (pathname === "/brands") return "Brands";
   if (pathname === "/brands/new") return "New Brand";
+  if (pathname.endsWith("/experiments")) return "Experiments";
+  if (pathname.includes("/experiments/") && pathname.endsWith("/flow")) return "Message Flow";
+  if (pathname.includes("/experiments/")) return "Experiment";
   if (pathname.endsWith("/campaigns")) return "Campaigns";
-  if (pathname.includes("/campaigns/") && pathname.endsWith("/build")) return "Campaign Build";
-  if (pathname.includes("/campaigns/") && pathname.endsWith("/run")) return "Campaign Run";
-  if (pathname.includes("/campaigns/") && pathname.endsWith("/run/overview")) return "Run Overview";
-  if (pathname.includes("/campaigns/") && pathname.endsWith("/run/variants")) return "Run Variants";
-  if (pathname.includes("/campaigns/") && pathname.endsWith("/run/leads")) return "Run Leads";
-  if (pathname.includes("/campaigns/") && pathname.endsWith("/run/inbox")) return "Run Inbox";
-  if (pathname.includes("/campaigns/") && pathname.endsWith("/run/insights")) return "Run Insights";
+  if (pathname.includes("/campaigns/")) return "Campaign";
   if (pathname.endsWith("/network")) return "Network";
   if (pathname.endsWith("/leads")) return "Leads";
   if (pathname.endsWith("/inbox")) return "Inbox";
@@ -53,13 +50,17 @@ function breadcrumb(pathname: string) {
   if (!parts.length) return "Factory";
   if (parts[0] !== "brands") return `Factory > ${parts[0]}`;
   const normalized = ["Factory", "Brand"];
+  if (parts[2] === "experiments") {
+    normalized.push("Experiments");
+    if (parts[3]) normalized.push("Experiment");
+    if (parts[4]) {
+      normalized.push(parts[4][0].toUpperCase() + parts[4].slice(1));
+    }
+    return normalized.join(" > ");
+  }
   if (parts[2] === "campaigns") {
     normalized.push("Campaigns");
     if (parts[3]) normalized.push("Campaign");
-    if (parts[4]) normalized.push(parts[4][0].toUpperCase() + parts[4].slice(1));
-    if (parts[4] === "run" && parts[5]) {
-      normalized.push(parts[5][0].toUpperCase() + parts[5].slice(1));
-    }
     return normalized.join(" > ");
   }
   if (parts[2]) {
@@ -97,7 +98,8 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   const mainItems = useMemo<NavItem[]>(
     () => [
       { label: "Brand", href: brandRoot, icon: LayoutGrid },
-      { label: "Campaigns", href: hasActiveBrand ? `${brandRoot}/campaigns` : "/brands", icon: Target },
+      { label: "Experiments", href: hasActiveBrand ? `${brandRoot}/experiments` : "/brands", icon: Target },
+      { label: "Campaigns", href: hasActiveBrand ? `${brandRoot}/campaigns` : "/brands", icon: FolderKanban },
       { label: "Network", href: hasActiveBrand ? `${brandRoot}/network` : "/brands", icon: Network },
       { label: "Leads", href: hasActiveBrand ? `${brandRoot}/leads` : "/brands", icon: Mail },
       { label: "Inbox", href: hasActiveBrand ? `${brandRoot}/inbox` : "/brands", icon: Inbox },
@@ -186,9 +188,6 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
                 <BrandSwitcher />
                 <ThemeToggle />
               </div>
-            </div>
-            <div className="mt-3">
-              <CampaignStepper />
             </div>
           </header>
           <div className="p-4 md:p-6">{children}</div>

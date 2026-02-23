@@ -1,8 +1,5 @@
 import { NextResponse } from "next/server";
-import {
-  getExperimentRecordById,
-  getScaleCampaignRecordById,
-} from "@/lib/experiment-data";
+import { getExperimentRecordById } from "@/lib/experiment-data";
 import { getOutreachRun } from "@/lib/outreach-data";
 import { updateRunControl } from "@/lib/outreach-runtime";
 
@@ -15,12 +12,12 @@ function asRecord(value: unknown): Record<string, unknown> {
 
 export async function PATCH(
   request: Request,
-  context: { params: Promise<{ brandId: string; campaignId: string; runId: string }> }
+  context: { params: Promise<{ brandId: string; experimentId: string; runId: string }> }
 ) {
-  const { brandId, campaignId, runId } = await context.params;
-  const campaign = await getScaleCampaignRecordById(brandId, campaignId);
-  if (!campaign) {
-    return NextResponse.json({ error: "campaign not found" }, { status: 404 });
+  const { brandId, experimentId, runId } = await context.params;
+  const experiment = await getExperimentRecordById(brandId, experimentId);
+  if (!experiment) {
+    return NextResponse.json({ error: "experiment not found" }, { status: 404 });
   }
 
   const run = await getOutreachRun(runId);
@@ -28,17 +25,13 @@ export async function PATCH(
     return NextResponse.json({ error: "run not found" }, { status: 404 });
   }
 
-  const sourceExperiment = await getExperimentRecordById(
-    brandId,
-    campaign.sourceExperimentId
-  );
-  const ownedByCampaign =
-    (run.ownerType === "campaign" && run.ownerId === campaign.id) ||
-    (Boolean(sourceExperiment?.runtime.campaignId) &&
-      run.campaignId === sourceExperiment?.runtime.campaignId &&
-      run.experimentId === sourceExperiment?.runtime.experimentId);
-  if (!ownedByCampaign) {
-    return NextResponse.json({ error: "run does not belong to this campaign" }, { status: 400 });
+  const ownedByExperiment =
+    (run.ownerType === "experiment" && run.ownerId === experiment.id) ||
+    (experiment.runtime.campaignId === run.campaignId &&
+      experiment.runtime.experimentId === run.experimentId);
+
+  if (!ownedByExperiment) {
+    return NextResponse.json({ error: "run does not belong to this experiment" }, { status: 400 });
   }
 
   const body = asRecord(await request.json());

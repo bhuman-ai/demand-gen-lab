@@ -29,23 +29,23 @@ Copy `.env.example` to `.env.local` and fill values:
 - `GET /api/brands/:brandId` — read brand
 - `PATCH /api/brands/:brandId` — update brand modules
 - `DELETE /api/brands/:brandId` — delete brand
-- `GET /api/brands/:brandId/campaigns` — list campaigns for brand
-- `POST /api/brands/:brandId/campaigns` — create campaign
-- `GET /api/brands/:brandId/campaigns/:campaignId` — read campaign
-- `PATCH /api/brands/:brandId/campaigns/:campaignId` — update campaign step data
-- `DELETE /api/brands/:brandId/campaigns/:campaignId` — delete campaign
-- `GET/PATCH /api/brands/:brandId/campaigns/:campaignId/build` — Build facade (objective + angles + variants)
-- `POST /api/brands/:brandId/campaigns/:campaignId/build/suggest` — AI build bundle suggestions
-- `GET /api/brands/:brandId/campaigns/:campaignId/run` — Run facade (runs + leads + inbox + insights)
-- `POST /api/brands/:brandId/campaigns/:campaignId/hypotheses/generate` — generate hypothesis suggestions
-- `POST /api/brands/:brandId/campaigns/:campaignId/experiments/generate` — generate experiment variants
+- `GET /api/brands/:brandId/experiments` — list experiments
+- `POST /api/brands/:brandId/experiments` — create experiment
+- `GET/PATCH/DELETE /api/brands/:brandId/experiments/:experimentId` — experiment CRUD
+- `POST /api/brands/:brandId/experiments/:experimentId/launch` — launch experiment test
+- `POST /api/brands/:brandId/experiments/:experimentId/promote` — promote experiment to scale campaign
+- `GET /api/brands/:brandId/experiments/:experimentId/runs` — experiment run visibility
+- `PATCH /api/brands/:brandId/experiments/:experimentId/runs/:runId` — pause/resume/cancel experiment run
+- `GET /api/brands/:brandId/campaigns` — list promoted scale campaigns
+- `POST /api/brands/:brandId/campaigns` — create campaign by promoting `sourceExperimentId`
+- `GET/PATCH/DELETE /api/brands/:brandId/campaigns/:campaignId` — scale campaign detail and scale-policy updates
+- `POST /api/brands/:brandId/campaigns/:campaignId/launch` — launch scale campaign
 - `POST /api/telemetry` — event intake
 - `GET/POST /api/outreach/accounts` — outreach account pool
 - `PATCH/DELETE /api/outreach/accounts/:accountId` — account management
 - `POST /api/outreach/accounts/:accountId/test` — account connectivity test
 - `GET/PUT /api/brands/:brandId/outreach-account` — brand-to-account assignment
 - `GET /api/brands/:brandId/campaigns/:campaignId/runs` — run + anomaly list
-- `POST /api/brands/:brandId/campaigns/:campaignId/experiments/:experimentId/runs` — launch experiment run
 - `PATCH /api/brands/:brandId/campaigns/:campaignId/runs/:runId` — pause/resume/cancel
 - `GET /api/brands/:brandId/inbox/threads` — reply threads + draft queue
 - `POST /api/brands/:brandId/inbox/drafts/:draftId/send` — human-approved draft send
@@ -60,16 +60,16 @@ Copy `.env.example` to `.env.local` and fill values:
 - `/brands` — brand directory
 - `/brands/new` — brand onboarding
 - `/brands/:brandId` — brand home
-- `/brands/:brandId/campaigns` — campaign list
-- `/brands/:brandId/campaigns/:campaignId/build` — Build workspace
-- `/brands/:brandId/campaigns/:campaignId/run/overview` — Run overview
-- `/brands/:brandId/campaigns/:campaignId/run/variants` — Run variants
-- `/brands/:brandId/campaigns/:campaignId/run/leads` — Run leads
-- `/brands/:brandId/campaigns/:campaignId/run/inbox` — Run inbox
-- `/brands/:brandId/campaigns/:campaignId/run/insights` — Run insights
+- `/brands/:brandId/experiments` — experiment list
+- `/brands/:brandId/experiments/:experimentId` — experiment workspace
+- `/brands/:brandId/experiments/:experimentId/flow` — conversation flow editor
+- `/brands/:brandId/campaigns` — promoted scale campaign list
+- `/brands/:brandId/campaigns/:campaignId` — scale campaign workspace
 - `/brands/:brandId/network`, `/brands/:brandId/leads`, `/brands/:brandId/inbox`
 - `/logic`, `/doctor`
 - `/settings/outreach`
+
+Legacy campaign step routes (`/build`, `/run/*`, `/objective`, `/hypotheses`, `/experiments`, `/evolution`) now render explicit route-replaced UX with links to Experiments/Campaigns.
 
 ## E2E tests (Playwright)
 

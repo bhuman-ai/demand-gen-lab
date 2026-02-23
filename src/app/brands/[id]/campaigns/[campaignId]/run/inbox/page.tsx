@@ -1,10 +1,16 @@
-import RunClient from "../run-client";
+import RouteReplacedCard from "@/components/layout/route-replaced-card";
 
-export default async function RunInboxPage({
+export default async function RunInboxReplacedPage({
   params,
 }: {
-  params: Promise<{ id: string; campaignId: string }>;
+  params: Promise<{ id: string }>;
 }) {
-  const { id, campaignId } = await params;
-  return <RunClient brandId={id} campaignId={campaignId} tab="inbox" />;
+  const { id } = await params;
+  return (
+    <RouteReplacedCard
+      title="Run inbox replaced"
+      description="Inbox handling is now consolidated in Experiment/Campaign run visibility and Brand Inbox."
+      brandId={id}
+    />
+  );
 }

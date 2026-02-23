@@ -296,12 +296,22 @@ function defaultRunMetrics(): OutreachRun["metrics"] {
 
 function mapRunRow(input: unknown): OutreachRun {
   const row = asRecord(input);
+  const campaignId = String(row.campaign_id ?? row.campaignId ?? "");
+  const experimentId = String(row.experiment_id ?? row.experimentId ?? "");
+  const ownerTypeRaw = String(row.owner_type ?? row.ownerType ?? "").trim();
+  const ownerType: OutreachRun["ownerType"] =
+    ownerTypeRaw === "campaign" || ownerTypeRaw === "experiment"
+      ? (ownerTypeRaw as OutreachRun["ownerType"])
+      : "experiment";
+  const ownerIdFallback = ownerType === "campaign" ? campaignId : experimentId || campaignId;
   return {
     id: String(row.id ?? ""),
     brandId: String(row.brand_id ?? row.brandId ?? ""),
-    campaignId: String(row.campaign_id ?? row.campaignId ?? ""),
-    experimentId: String(row.experiment_id ?? row.experimentId ?? ""),
+    campaignId,
+    experimentId,
     hypothesisId: String(row.hypothesis_id ?? row.hypothesisId ?? ""),
+    ownerType,
+    ownerId: String(row.owner_id ?? row.ownerId ?? ownerIdFallback),
     accountId: String(row.account_id ?? row.accountId ?? ""),
     status: [
       "queued",
@@ -1314,6 +1324,8 @@ export async function createOutreachRun(input: {
   campaignId: string;
   experimentId: string;
   hypothesisId: string;
+  ownerType?: OutreachRun["ownerType"];
+  ownerId?: string;
   accountId: string;
   status?: OutreachRun["status"];
   cadence?: OutreachRun["cadence"];
@@ -1332,6 +1344,12 @@ export async function createOutreachRun(input: {
     campaignId: input.campaignId,
     experimentId: input.experimentId,
     hypothesisId: input.hypothesisId,
+    ownerType: input.ownerType ?? "experiment",
+    ownerId:
+      input.ownerId ??
+      (input.ownerType === "campaign"
+        ? input.campaignId
+        : input.experimentId || input.campaignId),
     accountId: input.accountId,
     status: input.status ?? "queued",
     cadence: input.cadence ?? "3_step_7_day",
@@ -1359,6 +1377,8 @@ export async function createOutreachRun(input: {
         campaign_id: run.campaignId,
         experiment_id: run.experimentId,
         hypothesis_id: run.hypothesisId,
+        owner_type: run.ownerType,
+        owner_id: run.ownerId,
         account_id: run.accountId,
         status: run.status,
         cadence: run.cadence,
@@ -1489,6 +1509,36 @@ export async function listExperimentRuns(
 ): Promise<OutreachRun[]> {
   const all = await listCampaignRuns(brandId, campaignId);
   return all.filter((row) => row.experimentId === experimentId);
+}
+
+export async function listOwnerRuns(
+  brandId: string,
+  ownerType: OutreachRun["ownerType"],
+  ownerId: string
+): Promise<OutreachRun[]> {
+  const supabase = getSupabaseAdmin();
+  if (supabase) {
+    const { data, error } = await supabase
+      .from(TABLE_RUN)
+      .select("*")
+      .eq("brand_id", brandId)
+      .eq("owner_type", ownerType)
+      .eq("owner_id", ownerId)
+      .order("created_at", { ascending: false });
+    if (!error) {
+      return (data ?? []).map((row: unknown) => mapRunRow(row));
+    }
+  }
+
+  const store = await readLocalStore();
+  return store.runs
+    .filter(
+      (row) =>
+        row.brandId === brandId &&
+        row.ownerType === ownerType &&
+        row.ownerId === ownerId
+    )
+    .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
 }
 
 export async function upsertRunLeads(

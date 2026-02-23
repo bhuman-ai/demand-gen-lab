@@ -1,10 +1,16 @@
-import RunClient from "../run-client";
+import RouteReplacedCard from "@/components/layout/route-replaced-card";
 
-export default async function RunOverviewPage({
+export default async function RunOverviewReplacedPage({
   params,
 }: {
-  params: Promise<{ id: string; campaignId: string }>;
+  params: Promise<{ id: string }>;
 }) {
-  const { id, campaignId } = await params;
-  return <RunClient brandId={id} campaignId={campaignId} tab="overview" />;
+  const { id } = await params;
+  return (
+    <RouteReplacedCard
+      title="Run overview replaced"
+      description="Open the Experiment or Campaign page for live run visibility, logs, and controls."
+      brandId={id}
+    />
+  );
 }

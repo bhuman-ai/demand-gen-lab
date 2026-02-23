@@ -63,6 +63,103 @@ export type Experiment = {
 
 export type Variant = Experiment;
 
+export type ExperimentRecordStatus =
+  | "draft"
+  | "ready"
+  | "running"
+  | "paused"
+  | "completed"
+  | "promoted"
+  | "archived";
+
+export type ExperimentMessageFlow = {
+  mapId: string;
+  publishedRevision: number;
+};
+
+export type ExperimentTestEnvelope = {
+  sampleSize: number;
+  durationDays: number;
+  dailyCap: number;
+  hourlyCap: number;
+  timezone: string;
+  minSpacingMinutes: number;
+};
+
+export type ExperimentSuccessMetric = {
+  metric: "reply_rate";
+  thresholdPct: number;
+};
+
+export type ExperimentMetricsSummary = {
+  sent: number;
+  replies: number;
+  positiveReplies: number;
+  failed: number;
+};
+
+export type ExperimentRuntimeRef = {
+  campaignId: string;
+  hypothesisId: string;
+  experimentId: string;
+};
+
+export type ExperimentRecord = {
+  id: string;
+  brandId: string;
+  name: string;
+  status: ExperimentRecordStatus;
+  offer: string;
+  audience: string;
+  messageFlow: ExperimentMessageFlow;
+  testEnvelope: ExperimentTestEnvelope;
+  successMetric: ExperimentSuccessMetric;
+  lastRunId: string;
+  metricsSummary: ExperimentMetricsSummary;
+  promotedCampaignId: string;
+  runtime: ExperimentRuntimeRef;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type ScaleCampaignStatus =
+  | "draft"
+  | "active"
+  | "paused"
+  | "completed"
+  | "archived";
+
+export type CampaignSnapshot = {
+  offer: string;
+  audience: string;
+  mapId: string;
+  publishedRevision: number;
+};
+
+export type CampaignScalePolicy = {
+  dailyCap: number;
+  hourlyCap: number;
+  timezone: string;
+  minSpacingMinutes: number;
+  accountId: string;
+  mailboxAccountId: string;
+  safetyMode: "strict" | "balanced";
+};
+
+export type ScaleCampaignRecord = {
+  id: string;
+  brandId: string;
+  name: string;
+  status: ScaleCampaignStatus;
+  sourceExperimentId: string;
+  snapshot: CampaignSnapshot;
+  scalePolicy: CampaignScalePolicy;
+  lastRunId: string;
+  metricsSummary: ExperimentMetricsSummary;
+  createdAt: string;
+  updatedAt: string;
+};
+
 export type EvolutionSnapshot = {
   id: string;
   title: string;
@@ -213,6 +310,8 @@ export type OutreachRun = {
   campaignId: string;
   experimentId: string;
   hypothesisId: string;
+  ownerType: "experiment" | "campaign";
+  ownerId: string;
   accountId: string;
   status: OutreachRunStatus;
   cadence: RunCadence;

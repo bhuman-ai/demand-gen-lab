@@ -1,10 +1,16 @@
-import BuildClient from "./build-client";
+import RouteReplacedCard from "@/components/layout/route-replaced-card";
 
-export default async function CampaignBuildPage({
+export default async function CampaignBuildReplacedPage({
   params,
 }: {
-  params: Promise<{ id: string; campaignId: string }>;
+  params: Promise<{ id: string }>;
 }) {
-  const { id, campaignId } = await params;
-  return <BuildClient brandId={id} campaignId={campaignId} />;
+  const { id } = await params;
+  return (
+    <RouteReplacedCard
+      title="Build route replaced"
+      description="Campaign setup now lives in Experiments. Create or edit an experiment, then launch tests from there."
+      brandId={id}
+    />
+  );
 }

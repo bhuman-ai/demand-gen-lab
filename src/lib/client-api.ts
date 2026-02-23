@@ -3,10 +3,12 @@ import type {
   BrandOutreachAssignment,
   BrandRecord,
   CampaignRecord,
+  CampaignScalePolicy,
   ConversationMap,
   ConversationFlowGraph,
   EvolutionSnapshot,
   Experiment,
+  ExperimentRecord,
   Hypothesis,
   ObjectiveData,
   OutreachAccount,
@@ -17,6 +19,7 @@ import type {
   ReplyDraft,
   ReplyThread,
   RunAnomaly,
+  ScaleCampaignRecord,
 } from "@/lib/factory-types";
 
 function asObject(value: unknown): Record<string, unknown> {
@@ -106,6 +109,178 @@ export async function fetchCampaign(brandId: string, campaignId: string) {
   const response = await fetch(`/api/brands/${brandId}/campaigns/${campaignId}`, { cache: "no-store" });
   const data = await readJson(response);
   return data.campaign as CampaignRecord;
+}
+
+export async function fetchExperiments(brandId: string) {
+  const response = await fetch(`/api/brands/${brandId}/experiments`, { cache: "no-store" });
+  const data = await readJson(response);
+  return (Array.isArray(data?.experiments) ? data.experiments : []) as ExperimentRecord[];
+}
+
+export async function fetchExperiment(brandId: string, experimentId: string) {
+  const response = await fetch(`/api/brands/${brandId}/experiments/${experimentId}`, {
+    cache: "no-store",
+  });
+  const data = await readJson(response);
+  return data.experiment as ExperimentRecord;
+}
+
+export async function createExperimentApi(
+  brandId: string,
+  input: {
+    name: string;
+    offer?: string;
+    audience?: string;
+  }
+) {
+  const response = await fetch(`/api/brands/${brandId}/experiments`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  const data = await readJson(response);
+  return data.experiment as ExperimentRecord;
+}
+
+export async function updateExperimentApi(
+  brandId: string,
+  experimentId: string,
+  patch: Partial<
+    Pick<
+      ExperimentRecord,
+      "name" | "status" | "offer" | "audience" | "testEnvelope" | "successMetric" | "promotedCampaignId"
+    >
+  >
+) {
+  const response = await fetch(`/api/brands/${brandId}/experiments/${experimentId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+  const data = await readJson(response);
+  return data.experiment as ExperimentRecord;
+}
+
+export async function deleteExperimentApi(brandId: string, experimentId: string) {
+  const response = await fetch(`/api/brands/${brandId}/experiments/${experimentId}`, {
+    method: "DELETE",
+  });
+  await readJson(response);
+}
+
+export async function launchExperimentTestApi(brandId: string, experimentId: string) {
+  const response = await fetch(`/api/brands/${brandId}/experiments/${experimentId}/launch`, {
+    method: "POST",
+  });
+  const data = await readJson(response);
+  return {
+    runId: String(data.runId ?? ""),
+    status: String(data.status ?? ""),
+  };
+}
+
+export async function promoteExperimentApi(
+  brandId: string,
+  experimentId: string,
+  input?: { campaignName?: string }
+) {
+  const response = await fetch(`/api/brands/${brandId}/experiments/${experimentId}/promote`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input ?? {}),
+  });
+  const data = await readJson(response);
+  return data.campaign as ScaleCampaignRecord;
+}
+
+export async function fetchExperimentRunView(brandId: string, experimentId: string) {
+  const response = await fetch(`/api/brands/${brandId}/experiments/${experimentId}/runs`, {
+    cache: "no-store",
+  });
+  const data = await readJson(response);
+  return data.run as RunViewModel;
+}
+
+export async function controlExperimentRunApi(
+  brandId: string,
+  experimentId: string,
+  runId: string,
+  action: "pause" | "resume" | "cancel",
+  reason?: string
+) {
+  const response = await fetch(
+    `/api/brands/${brandId}/experiments/${experimentId}/runs/${runId}`,
+    {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action, reason }),
+    }
+  );
+  return await readJson(response);
+}
+
+export async function fetchScaleCampaigns(brandId: string) {
+  const response = await fetch(`/api/brands/${brandId}/campaigns`, { cache: "no-store" });
+  const data = await readJson(response);
+  return (Array.isArray(data?.campaigns) ? data.campaigns : []) as ScaleCampaignRecord[];
+}
+
+export async function fetchScaleCampaign(brandId: string, campaignId: string) {
+  const response = await fetch(`/api/brands/${brandId}/campaigns/${campaignId}`, {
+    cache: "no-store",
+  });
+  const data = await readJson(response);
+  return data.campaign as ScaleCampaignRecord;
+}
+
+export async function updateScaleCampaignApi(
+  brandId: string,
+  campaignId: string,
+  patch: Partial<Pick<ScaleCampaignRecord, "name" | "status">> & {
+    scalePolicy?: Partial<CampaignScalePolicy>;
+  }
+) {
+  const response = await fetch(`/api/brands/${brandId}/campaigns/${campaignId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+  const data = await readJson(response);
+  return data.campaign as ScaleCampaignRecord;
+}
+
+export async function launchScaleCampaignApi(brandId: string, campaignId: string) {
+  const response = await fetch(`/api/brands/${brandId}/campaigns/${campaignId}/launch`, {
+    method: "POST",
+  });
+  const data = await readJson(response);
+  return {
+    runId: String(data.runId ?? ""),
+    status: String(data.status ?? ""),
+  };
+}
+
+export async function fetchScaleCampaignRunView(brandId: string, campaignId: string) {
+  const response = await fetch(`/api/brands/${brandId}/campaigns/${campaignId}/runs`, {
+    cache: "no-store",
+  });
+  const data = await readJson(response);
+  return data.run as RunViewModel;
+}
+
+export async function controlScaleCampaignRunApi(
+  brandId: string,
+  campaignId: string,
+  runId: string,
+  action: "pause" | "resume" | "cancel",
+  reason?: string
+) {
+  const response = await fetch(`/api/brands/${brandId}/campaigns/${campaignId}/runs/${runId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action, reason }),
+  });
+  return await readJson(response);
 }
 
 export async function fetchBuildView(brandId: string, campaignId: string) {

@@ -38,14 +38,25 @@ export async function POST(request: Request) {
   }
 
   if (eventType === "reply" || eventType === "message_replied") {
+    const from = String(body.from ?? "").trim();
+    const to = String(body.to ?? "").trim();
+    const subject = String(body.subject ?? "").trim();
+    const messageBody = String(body.body ?? "").trim();
+    if (!from || !to || !subject || !messageBody) {
+      return NextResponse.json(
+        { error: "reply webhook requires from, to, subject, and body" },
+        { status: 400 }
+      );
+    }
+
     const result = await ingestInboundReply({
       brandId: String(body.brandId ?? body.brand_id ?? ""),
       campaignId: String(body.campaignId ?? body.campaign_id ?? ""),
       runId,
-      from: String(body.from ?? ""),
-      to: String(body.to ?? ""),
-      subject: String(body.subject ?? "Re: Outreach"),
-      body: String(body.body ?? ""),
+      from,
+      to,
+      subject,
+      body: messageBody,
       providerMessageId: String(body.messageId ?? body.message_id ?? ""),
     });
 

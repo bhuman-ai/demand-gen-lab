@@ -60,8 +60,6 @@ import {
 } from "@/lib/outreach-providers";
 
 const DEFAULT_TIMEZONE = "America/Los_Angeles";
-const PLATFORM_SOURCING_PROFILE = String(process.env.APIFY_DEFAULT_ACTOR_ID ?? "").trim();
-
 const DAY_MS = 24 * 60 * 60 * 1000;
 const CONVERSATION_TICK_MINUTES = 15;
 
@@ -85,9 +83,9 @@ function findExperiment(campaign: CampaignRecord, experimentId: string) {
   return campaign.experiments.find((item) => item.id === experimentId) ?? null;
 }
 
-function effectiveSourceConfig(hypothesis: Hypothesis, fallbackActorId: string) {
+function effectiveSourceConfig(hypothesis: Hypothesis) {
   return {
-    actorId: hypothesis.sourceConfig?.actorId?.trim() || fallbackActorId || PLATFORM_SOURCING_PROFILE,
+    actorId: hypothesis.sourceConfig?.actorId?.trim() || "",
     actorInput: hypothesis.sourceConfig?.actorInput ?? {},
     maxLeads: Number(hypothesis.sourceConfig?.maxLeads ?? 100),
   };
@@ -172,20 +170,14 @@ function preflightReason(input: {
 function preflightDiagnostic(input: {
   reason: string;
   hypothesis: Hypothesis;
-  deliveryAccount: ResolvedAccount;
   deliverySecrets: ResolvedSecrets;
 }) {
-  const sourceConfig = effectiveSourceConfig(
-    input.hypothesis,
-    input.deliveryAccount.config.apify.defaultActorId
-  );
+  const sourceConfig = effectiveSourceConfig(input.hypothesis);
 
   const debug = {
     reason: input.reason,
     hypothesisId: input.hypothesis.id,
     hypothesisHasLeadSourceOverride: Boolean(input.hypothesis.sourceConfig?.actorId?.trim()),
-    deliveryAccountHasLeadSourceDefault: Boolean(input.deliveryAccount.config.apify.defaultActorId.trim()),
-    deploymentHasLeadSourceDefault: Boolean(PLATFORM_SOURCING_PROFILE),
     hasResolvedLeadSource: Boolean(sourceConfig.actorId),
     hasLeadSourcingToken: Boolean(effectiveSourcingToken(input.deliverySecrets)),
   } as const;
@@ -305,6 +297,10 @@ function renderConversationTemplate(
     .replaceAll("{{shortAnswer}}", vars.shortAnswer);
 }
 
+function hasUnresolvedTemplateToken(text: string) {
+  return /{{\s*[^}]+\s*}}/.test(text);
+}
+
 function renderConversationNode(input: {
   node: ConversationFlowNode;
   leadName: string;
@@ -313,30 +309,70 @@ function renderConversationNode(input: {
   variantName: string;
   replyPreview?: string;
 }) {
-  const firstName = input.leadName.trim().split(/\s+/)[0] || "there";
-  const replyPreview = input.replyPreview?.trim() || "Thanks for sharing that context.";
-  const shortAnswer = replyPreview.split(/\n+/)[0]?.slice(0, 180) || "Thanks for sharing that context.";
+  const subjectTemplate = input.node.subject.trim();
+  const bodyTemplate = input.node.body.trim();
+  if (!subjectTemplate) {
+    return {
+      ok: false as const,
+      reason: "Conversation node subject is empty",
+      subject: "",
+      body: "",
+    };
+  }
+  if (!bodyTemplate) {
+    return {
+      ok: false as const,
+      reason: "Conversation node body is empty",
+      subject: "",
+      body: "",
+    };
+  }
+
+  const firstName = input.leadName.trim().split(/\s+/)[0] ?? "";
+  const replyPreview = input.replyPreview?.trim() ?? "";
+  const shortAnswer = replyPreview.split(/\n+/)[0]?.slice(0, 180) ?? "";
   const vars = {
     firstName,
-    brandName: input.brandName || "Brand",
-    campaignGoal: input.campaignGoal || "your current goal",
-    variantName: input.variantName || "this approach",
+    brandName: input.brandName.trim(),
+    campaignGoal: input.campaignGoal.trim(),
+    variantName: input.variantName.trim(),
     replyPreview,
     shortAnswer,
   };
 
-  const subject = renderConversationTemplate(input.node.subject || "Quick follow-up", vars).trim();
-  const body = renderConversationTemplate(input.node.body, vars).trim();
+  const subject = renderConversationTemplate(subjectTemplate, vars).trim();
+  const body = renderConversationTemplate(bodyTemplate, vars).trim();
+  if (!subject) {
+    return {
+      ok: false as const,
+      reason: "Conversation node subject rendered empty",
+      subject: "",
+      body: "",
+    };
+  }
+  if (!body) {
+    return {
+      ok: false as const,
+      reason: "Conversation node body rendered empty",
+      subject: "",
+      body: "",
+    };
+  }
+  if (hasUnresolvedTemplateToken(subject) || hasUnresolvedTemplateToken(body)) {
+    return {
+      ok: false as const,
+      reason: "Conversation node contains unresolved template tokens",
+      subject: "",
+      body: "",
+    };
+  }
 
   return {
+    ok: true as const,
+    reason: "",
     subject,
-    body: body || `Hi ${firstName},\n\nQuick follow-up on ${vars.brandName}.`,
+    body,
   };
-}
-
-function threadDraftBody(input: { from: string; subject: string; body: string }) {
-  const summaryLine = input.body.split("\n")[0]?.slice(0, 180) || "Thanks for your reply.";
-  return `Thanks ${input.from.split("@")[0]},\n\nAppreciate the response on \"${input.subject}\".\n\n${summaryLine}\n\nWould a short 15-minute call next week be useful?`;
 }
 
 function addHours(dateIso: string, hours: number) {
@@ -409,10 +445,16 @@ async function scheduleConversationNodeMessage(input: {
   waitMinutes?: number;
   replyPreview?: string;
   existingMessages: Awaited<ReturnType<typeof listRunMessages>>;
-}): Promise<boolean> {
-  if (input.node.kind !== "message" || !input.node.body.trim()) return false;
-  if (!input.lead.email.trim()) return false;
-  if (["unsubscribed", "bounced", "suppressed"].includes(input.lead.status)) return false;
+}): Promise<{ ok: boolean; reason: string; messageId: string }> {
+  if (input.node.kind !== "message" || !input.node.body.trim()) {
+    return { ok: false, reason: "Node is not a valid message node", messageId: "" };
+  }
+  if (!input.lead.email.trim()) {
+    return { ok: false, reason: "Lead email is empty", messageId: "" };
+  }
+  if (["unsubscribed", "bounced", "suppressed"].includes(input.lead.status)) {
+    return { ok: false, reason: "Lead is suppressed for outreach", messageId: "" };
+  }
 
   const alreadyExists = input.existingMessages.some(
     (message) =>
@@ -420,7 +462,9 @@ async function scheduleConversationNodeMessage(input: {
       message.nodeId === input.node.id &&
       ["scheduled", "sent"].includes(message.status)
   );
-  if (alreadyExists) return false;
+  if (alreadyExists) {
+    return { ok: false, reason: "Message already scheduled for this node", messageId: "" };
+  }
 
   const composed = renderConversationNode({
     node: input.node,
@@ -430,6 +474,9 @@ async function scheduleConversationNodeMessage(input: {
     variantName: input.variantName,
     replyPreview: input.replyPreview,
   });
+  if (!composed.ok) {
+    return { ok: false, reason: composed.reason, messageId: "" };
+  }
 
   const totalDelay = Math.max(0, input.node.delayMinutes + (input.waitMinutes ?? 0));
   const created = await createRunMessages([
@@ -449,11 +496,13 @@ async function scheduleConversationNodeMessage(input: {
       parentMessageId: input.parentMessageId ?? "",
     },
   ]);
-  if (!created.length) return false;
+  if (!created.length) {
+    return { ok: false, reason: "Failed to persist scheduled message", messageId: "" };
+  }
 
   input.existingMessages.push(created[0]);
   await updateRunLead(input.lead.id, { status: "scheduled" });
-  return true;
+  return { ok: true, reason: "", messageId: created[0].id };
 }
 
 async function ensureBrandAccount(brandId: string): Promise<{
@@ -664,7 +713,6 @@ export async function launchExperimentRun(input: {
     const diagnostic = preflightDiagnostic({
       reason,
       hypothesis,
-      deliveryAccount: brandAccount.deliveryAccount,
       deliverySecrets: brandAccount.deliverySecrets,
     });
     const failed = await createOutreachRun({
@@ -890,7 +938,7 @@ async function processSourceLeadsJob(job: OutreachJob) {
   const payload = job.payload && typeof job.payload === "object" && !Array.isArray(job.payload) ? job.payload : {};
   const stage = String((payload as Record<string, unknown>).stage ?? "").trim();
 
-  const sourceConfig = effectiveSourceConfig(hypothesis, account.config.apify.defaultActorId);
+  const sourceConfig = effectiveSourceConfig(hypothesis);
   const sourcingToken = effectiveSourcingToken(secrets);
   const maxLeads = Math.max(1, Math.min(500, Number(sourceConfig.maxLeads ?? 100)));
   const targetAudience = hypothesis.actorQuery.trim();
@@ -1384,8 +1432,9 @@ async function processScheduleMessagesJob(job: OutreachJob) {
 
     const existingConversationMessages = await listRunMessages(run.id);
     const campaignGoal = campaign.objective.goal.trim();
-    const brandName = brand?.name || "Brand";
+    const brandName = brand?.name ?? "";
 
+    let firstScheduleFailureReason = "";
     for (const [index, lead] of leads.entries()) {
       let session = await getConversationSessionByLead({ runId: run.id, leadId: lead.id });
       if (!session) {
@@ -1460,7 +1509,7 @@ async function processScheduleMessagesJob(job: OutreachJob) {
         waitMinutes: index * run.minSpacingMinutes,
         existingMessages: existingConversationMessages,
       });
-      if (scheduled) {
+      if (scheduled.ok) {
         scheduledMessagesCount += 1;
         await updateConversationSession(session.id, {
           state: "active",
@@ -1477,7 +1526,20 @@ async function processScheduleMessagesJob(job: OutreachJob) {
             autoSend: true,
           },
         });
+      } else if (!firstScheduleFailureReason) {
+        firstScheduleFailureReason = scheduled.reason;
       }
+    }
+
+    if (scheduledMessagesCount === 0) {
+      await failRunWithDiagnostics({
+        run,
+        reason:
+          firstScheduleFailureReason ||
+          "No valid messages were scheduled from the published Conversation Map",
+        eventType: "schedule_failed",
+      });
+      return;
     }
 
     await createOutreachEvent({
@@ -1549,17 +1611,40 @@ async function processDispatchMessagesJob(job: OutreachJob) {
 
   const assignment = await getBrandOutreachAssignment(run.brandId);
   const mailboxAccountId = String(assignment?.mailboxAccountId ?? "").trim();
-  let replyToEmail = "";
-  if (mailboxAccountId) {
-    const mailboxAccount =
-      mailboxAccountId === account.id ? account : await getOutreachAccount(mailboxAccountId);
-    replyToEmail = mailboxAccount?.config.mailbox.email?.trim() ?? "";
+  if (!mailboxAccountId) {
+    await failRunWithDiagnostics({
+      run,
+      reason: "Reply mailbox assignment is required for sending",
+      eventType: "dispatch_failed",
+    });
+    return;
   }
-  if (!replyToEmail) {
-    replyToEmail = account.config.customerIo.replyToEmail.trim();
+  const mailboxAccount =
+    mailboxAccountId === account.id ? account : await getOutreachAccount(mailboxAccountId);
+  if (!mailboxAccount || mailboxAccount.status !== "active") {
+    await failRunWithDiagnostics({
+      run,
+      reason: "Assigned reply mailbox account is missing or inactive",
+      eventType: "dispatch_failed",
+    });
+    return;
   }
+  const replyToEmail = mailboxAccount.config.mailbox.email.trim();
   if (!replyToEmail) {
-    replyToEmail = account.config.customerIo.fromEmail.trim();
+    await failRunWithDiagnostics({
+      run,
+      reason: "Assigned reply mailbox email is empty",
+      eventType: "dispatch_failed",
+    });
+    return;
+  }
+  if (!account.config.customerIo.fromEmail.trim()) {
+    await failRunWithDiagnostics({
+      run,
+      reason: "Customer.io From Email is empty",
+      eventType: "dispatch_failed",
+    });
+    return;
   }
 
   await updateOutreachRun(run.id, { status: "sending" });
@@ -1682,7 +1767,7 @@ async function processDispatchMessagesJob(job: OutreachJob) {
     } else {
       await updateRunMessage(message.id, {
         status: "failed",
-        lastError: send.error || "Send failed",
+        lastError: send.error,
       });
       await createOutreachEvent({
         runId: run.id,
@@ -1692,7 +1777,7 @@ async function processDispatchMessagesJob(job: OutreachJob) {
           sourceType: message.sourceType,
           nodeId: message.nodeId,
           sessionId: message.sessionId,
-          error: send.error || "Send failed",
+          error: send.error,
         },
       });
     }
@@ -1766,10 +1851,10 @@ async function processConversationTickJob(job: OutreachJob) {
     getBrandById(run.brandId),
     getCampaignById(run.brandId, run.campaignId),
   ]);
-  const brandName = brand?.name || "Brand";
-  const campaignGoal = campaign?.objective.goal || "";
+  const brandName = brand?.name ?? "";
+  const campaignGoal = campaign?.objective.goal ?? "";
   const variantName =
-    campaign?.experiments.find((item) => item.id === run.experimentId)?.name || "Variant";
+    campaign?.experiments.find((item) => item.id === run.experimentId)?.name ?? "";
 
   let scheduledCount = 0;
   let completedCount = 0;
@@ -1895,7 +1980,7 @@ async function processConversationTickJob(job: OutreachJob) {
       waitMinutes: 0,
       existingMessages: messages,
     });
-    if (scheduled) {
+    if (scheduled.ok) {
       scheduledCount += 1;
       await createConversationEvent({
         sessionId: session.id,
@@ -1904,6 +1989,17 @@ async function processConversationTickJob(job: OutreachJob) {
         payload: {
           nodeId: nextNode.id,
           trigger: "timer",
+        },
+      });
+    } else {
+      await createConversationEvent({
+        sessionId: session.id,
+        runId: run.id,
+        eventType: "node_schedule_failed",
+        payload: {
+          nodeId: nextNode.id,
+          trigger: "timer",
+          reason: scheduled.reason,
         },
       });
     }
@@ -2235,14 +2331,14 @@ export async function ingestInboundReply(input: {
   if (!run) {
     return { ok: false, threadId: "", draftId: "", reason: "Run not found" };
   }
-  const brandId = input.brandId?.trim() || run.brandId;
-  const campaignId = input.campaignId?.trim() || run.campaignId;
+  const brandId = input.brandId?.trim() ?? run.brandId;
+  const campaignId = input.campaignId?.trim() ?? run.campaignId;
   if (run.brandId !== brandId || run.campaignId !== campaignId) {
     return { ok: false, threadId: "", draftId: "", reason: "Run/brand/campaign mismatch" };
   }
 
   const leads = await listRunLeads(run.id);
-  const lead = leads.find((item) => item.email.toLowerCase() === input.from.toLowerCase()) ?? leads[0];
+  const lead = leads.find((item) => item.email.toLowerCase() === input.from.toLowerCase()) ?? null;
   if (!lead) {
     return { ok: false, threadId: "", draftId: "", reason: "No lead matched for reply" };
   }
@@ -2293,7 +2389,11 @@ export async function ingestInboundReply(input: {
   });
 
   let draftId = "";
-  let autoBranchScheduled = false;
+  let autoBranchScheduled: { ok: boolean; reason: string; messageId: string } = {
+    ok: false,
+    reason: "",
+    messageId: "",
+  };
   const [brand, campaign] = await Promise.all([
     getBrandById(run.brandId),
     getCampaignById(run.brandId, run.campaignId),
@@ -2396,16 +2496,16 @@ export async function ingestInboundReply(input: {
                 node: nextNode,
                 step: nextTurn,
                 parentMessageId: inboundMessage.id,
-                brandName: brand?.name || "Brand",
-                campaignGoal: campaign?.objective.goal || "",
+                brandName: brand?.name ?? "",
+                campaignGoal: campaign?.objective.goal ?? "",
                 variantName:
-                  campaign?.experiments.find((item) => item.id === run.experimentId)?.name ||
-                  "Variant",
+                  campaign?.experiments.find((item) => item.id === run.experimentId)?.name ??
+                  "",
                 waitMinutes: selectedEdge.waitMinutes,
                 replyPreview: input.body,
                 existingMessages: messages,
               });
-              if (autoBranchScheduled) {
+              if (autoBranchScheduled.ok) {
                 await enqueueOutreachJob({
                   runId: run.id,
                   jobType: "dispatch_messages",
@@ -2428,36 +2528,59 @@ export async function ingestInboundReply(input: {
                     mode: "conversation_branch",
                   },
                 });
+              } else {
+                await createConversationEvent({
+                  sessionId: session.id,
+                  runId: run.id,
+                  eventType: "node_schedule_failed",
+                  payload: {
+                    nodeId: nextNode.id,
+                    trigger: selectedEdge.trigger,
+                    reason: autoBranchScheduled.reason,
+                  },
+                });
               }
             } else {
               const composed = renderConversationNode({
                 node: nextNode,
                 leadName: lead.name,
-                brandName: brand?.name || "Brand",
-                campaignGoal: campaign?.objective.goal || "",
+                brandName: brand?.name ?? "",
+                campaignGoal: campaign?.objective.goal ?? "",
                 variantName:
-                  campaign?.experiments.find((item) => item.id === run.experimentId)?.name ||
-                  "Variant",
+                  campaign?.experiments.find((item) => item.id === run.experimentId)?.name ??
+                  "",
                 replyPreview: input.body,
               });
-              const draft = await createReplyDraft({
-                threadId: thread.id,
-                brandId: run.brandId,
-                runId: run.id,
-                subject: composed.subject || `Re: ${input.subject}`,
-                body: composed.body,
-                reason: `Manual branch: ${nextNode.title || "follow-up"}`,
-              });
-              draftId = draft.id;
-              await createConversationEvent({
-                sessionId: session.id,
-                runId: run.id,
-                eventType: "manual_node_required",
-                payload: {
-                  nodeId: nextNode.id,
-                  reason: "auto_send_disabled",
-                },
-              });
+              if (!composed.ok) {
+                await createConversationEvent({
+                  sessionId: session.id,
+                  runId: run.id,
+                  eventType: "manual_node_invalid",
+                  payload: {
+                    nodeId: nextNode.id,
+                    reason: composed.reason,
+                  },
+                });
+              } else {
+                const draft = await createReplyDraft({
+                  threadId: thread.id,
+                  brandId: run.brandId,
+                  runId: run.id,
+                  subject: composed.subject,
+                  body: composed.body,
+                  reason: `Manual branch: ${nextNode.title}`,
+                });
+                draftId = draft.id;
+                await createConversationEvent({
+                  sessionId: session.id,
+                  runId: run.id,
+                  eventType: "manual_node_required",
+                  payload: {
+                    nodeId: nextNode.id,
+                    reason: "auto_send_disabled",
+                  },
+                });
+              }
             }
           }
         }
@@ -2465,16 +2588,15 @@ export async function ingestInboundReply(input: {
     }
   }
 
-  if (!draftId && !autoBranchScheduled) {
-    const draft = await createReplyDraft({
-      threadId: thread.id,
-      brandId: run.brandId,
+  if (!draftId && !autoBranchScheduled.ok) {
+    await createOutreachEvent({
       runId: run.id,
-      subject: `Re: ${input.subject}`,
-      body: threadDraftBody({ from: input.from, subject: input.subject, body: input.body }),
-      reason: `Auto-generated from ${intent} reply`,
+      eventType: "reply_draft_skipped",
+      payload: {
+        reason: "No valid conversation branch produced a reply draft",
+        intent,
+      },
     });
-    draftId = draft.id;
   }
 
   await updateRunLead(lead.id, { status: intent === "unsubscribe" ? "unsubscribed" : "replied" });
@@ -2557,7 +2679,7 @@ export async function approveReplyDraftAndSend(input: {
   });
 
   if (!send.ok) {
-    return { ok: false, reason: send.error || "Failed to send reply draft" };
+    return { ok: false, reason: send.error };
   }
 
   await updateReplyDraft(draft.id, {

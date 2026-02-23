@@ -844,21 +844,6 @@ export async function sendCustomerIoEvent(params: {
   }
 }
 
-export function buildOutreachMessageBody(input: {
-  brandName: string;
-  experimentName: string;
-  hypothesisTitle: string;
-  step: number;
-  recipientName: string;
-}): { subject: string; body: string } {
-  const name = input.recipientName || "there";
-  const stepLabel = input.step === 1 ? "Intro" : input.step === 2 ? "Follow-up" : "Close-out";
-  return {
-    subject: `${stepLabel}: ${input.hypothesisTitle}`,
-    body: `Hi ${name},\n\nRunning ${input.experimentName} for ${input.brandName}. This touch is part of ${input.hypothesisTitle}.\n\nIf relevant, reply and I can share specifics.`,
-  };
-}
-
 export async function sendReplyDraftAsEvent(params: {
   draft: ReplyDraft;
   account: OutreachAccount;
@@ -894,6 +879,12 @@ export async function sendOutreachMessage(params: {
 }): Promise<{ ok: boolean; providerMessageId: string; error: string }> {
   const fromEmail = params.account.config.customerIo.fromEmail.trim();
   const replyToEmail = params.replyToEmail.trim();
+  if (!fromEmail) {
+    return { ok: false, providerMessageId: "", error: "Customer.io From Email missing" };
+  }
+  if (!replyToEmail) {
+    return { ok: false, providerMessageId: "", error: "Reply-To email missing" };
+  }
   return sendCustomerIoEvent({
     account: params.account,
     secrets: params.secrets,
@@ -902,8 +893,8 @@ export async function sendOutreachMessage(params: {
     data: {
       // Reserved properties (Customer.io track) override campaign From/To/Reply-To.
       recipient: params.recipient,
-      ...(fromEmail ? { from_address: fromEmail } : {}),
-      ...(replyToEmail ? { reply_to: replyToEmail } : {}),
+      from_address: fromEmail,
+      reply_to: replyToEmail,
       runId: params.runId,
       experimentId: params.experimentId,
       messageId: params.message.id,

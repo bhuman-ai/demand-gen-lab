@@ -37,6 +37,9 @@ const NODE_HEIGHT = 220;
 const CANVAS_MIN_HEIGHT = 760;
 const GRID_X = 460;
 const GRID_Y = 300;
+const LEGACY_SPREAD_SCALE_X = 1.3;
+const LEGACY_SPREAD_SCALE_Y = 1.45;
+const LEGACY_LAYOUT_PADDING = 120;
 
 type Viewport = {
   x: number;
@@ -85,16 +88,49 @@ function defaultNode(kind: "message" | "terminal" = "message", x = 80, y = 160):
   };
 }
 
+function nodesNeedSpacing(nodes: ConversationFlowNode[]) {
+  const padding = 18;
+  for (let i = 0; i < nodes.length; i += 1) {
+    const a = nodes[i];
+    const ax1 = a.x - padding;
+    const ay1 = a.y - padding;
+    const ax2 = a.x + NODE_WIDTH + padding;
+    const ay2 = a.y + NODE_HEIGHT + padding;
+    for (let j = i + 1; j < nodes.length; j += 1) {
+      const b = nodes[j];
+      const bx1 = b.x - padding;
+      const by1 = b.y - padding;
+      const bx2 = b.x + NODE_WIDTH + padding;
+      const by2 = b.y + NODE_HEIGHT + padding;
+      const overlaps = ax1 < bx2 && ax2 > bx1 && ay1 < by2 && ay2 > by1;
+      if (overlaps) return true;
+    }
+  }
+  return false;
+}
+
+function spreadLegacyLayout(nodes: ConversationFlowNode[]) {
+  if (!nodes.length) return nodes;
+  const minX = Math.min(...nodes.map((node) => node.x));
+  const minY = Math.min(...nodes.map((node) => node.y));
+  return nodes.map((node) => ({
+    ...node,
+    x: LEGACY_LAYOUT_PADDING + (node.x - minX) * LEGACY_SPREAD_SCALE_X,
+    y: LEGACY_LAYOUT_PADDING + (node.y - minY) * LEGACY_SPREAD_SCALE_Y,
+  }));
+}
+
 function withLayout(graph: ConversationFlowGraph): ConversationFlowGraph {
   const hasPlacedNode = graph.nodes.some((node) => Number.isFinite(node.x) && Number.isFinite(node.y) && (node.x !== 0 || node.y !== 0));
   if (hasPlacedNode) {
+    const normalizedNodes = graph.nodes.map((node) => ({
+      ...node,
+      x: Number.isFinite(node.x) ? node.x : 0,
+      y: Number.isFinite(node.y) ? node.y : 0,
+    }));
     return {
       ...graph,
-      nodes: graph.nodes.map((node) => ({
-        ...node,
-        x: Number.isFinite(node.x) ? node.x : 0,
-        y: Number.isFinite(node.y) ? node.y : 0,
-      })),
+      nodes: nodesNeedSpacing(normalizedNodes) ? spreadLegacyLayout(normalizedNodes) : normalizedNodes,
     };
   }
 
@@ -509,7 +545,7 @@ export default function FlowEditorClient({
 
     const width = Math.max(1, maxX - minX);
     const height = Math.max(1, maxY - minY);
-    const scale = clamp(Math.min((rect.width - 120) / width, (rect.height - 120) / height), 0.7, 1.25);
+    const scale = clamp(Math.min((rect.width - 120) / width, (rect.height - 120) / height), 0.45, 1.25);
 
     setViewport({
       scale,
@@ -533,7 +569,7 @@ export default function FlowEditorClient({
       const maxY = Math.max(...graph.nodes.map((node) => node.y + NODE_HEIGHT));
       const width = Math.max(1, maxX - minX);
       const height = Math.max(1, maxY - minY);
-      const scale = clamp(Math.min((rect.width - 120) / width, (rect.height - 120) / height), 0.7, 1.25);
+      const scale = clamp(Math.min((rect.width - 120) / width, (rect.height - 120) / height), 0.45, 1.25);
 
       setViewport({
         scale,

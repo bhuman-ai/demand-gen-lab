@@ -9,6 +9,7 @@ import type {
   EvolutionSnapshot,
   Experiment,
   ExperimentRecord,
+  ExperimentSuggestionRecord,
   Hypothesis,
   ObjectiveData,
   OutreachAccount,
@@ -134,6 +135,50 @@ export async function fetchExperiments(brandId: string) {
   const response = await fetch(`/api/brands/${brandId}/experiments`, { cache: "no-store" });
   const data = await readJson(response);
   return (Array.isArray(data?.experiments) ? data.experiments : []) as ExperimentRecord[];
+}
+
+export async function fetchExperimentSuggestions(brandId: string) {
+  const response = await fetch(`/api/brands/${brandId}/experiments/suggestions`, {
+    cache: "no-store",
+  });
+  const data = await readJson(response);
+  return (Array.isArray(data?.suggestions) ? data.suggestions : []) as ExperimentSuggestionRecord[];
+}
+
+export async function generateExperimentSuggestions(brandId: string, refresh = false) {
+  const response = await fetch(`/api/brands/${brandId}/experiments/suggestions`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ refresh }),
+  });
+  const data = await readJson(response);
+  return (Array.isArray(data?.suggestions) ? data.suggestions : []) as ExperimentSuggestionRecord[];
+}
+
+export async function applyExperimentSuggestion(brandId: string, suggestionId: string) {
+  const response = await fetch(
+    `/api/brands/${brandId}/experiments/suggestions/${suggestionId}`,
+    {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "accept" }),
+    }
+  );
+  const data = await readJson(response);
+  return data.experiment as ExperimentRecord;
+}
+
+export async function dismissExperimentSuggestion(brandId: string, suggestionId: string) {
+  const response = await fetch(
+    `/api/brands/${brandId}/experiments/suggestions/${suggestionId}`,
+    {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "dismiss" }),
+    }
+  );
+  const data = await readJson(response);
+  return data.suggestion as ExperimentSuggestionRecord;
 }
 
 export async function fetchExperiment(brandId: string, experimentId: string) {

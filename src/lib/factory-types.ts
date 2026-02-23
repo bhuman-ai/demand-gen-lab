@@ -122,6 +122,24 @@ export type ExperimentRecord = {
   updatedAt: string;
 };
 
+export type ExperimentSuggestionStatus = "suggested" | "accepted" | "dismissed";
+
+export type ExperimentSuggestionSource = "ai" | "system";
+
+export type ExperimentSuggestionRecord = {
+  id: string;
+  brandId: string;
+  name: string;
+  offer: string;
+  audience: string;
+  rationale: string;
+  status: ExperimentSuggestionStatus;
+  source: ExperimentSuggestionSource;
+  acceptedExperimentId: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
 export type ScaleCampaignStatus =
   | "draft"
   | "active"

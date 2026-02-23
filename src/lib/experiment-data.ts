@@ -584,18 +584,36 @@ async function persistScaleCampaign(record: ScaleCampaignRecord): Promise<ScaleC
 }
 
 export async function listExperimentRecords(brandId: string): Promise<ExperimentRecord[]> {
+  return listExperimentRecordsWithOptions(brandId, {});
+}
+
+export function isExperimentSuggestionRecord(record: ExperimentRecord) {
+  return !record.runtime.campaignId && !record.runtime.experimentId;
+}
+
+export async function listExperimentRecordsWithOptions(
+  brandId: string,
+  options: { includeSuggestions?: boolean }
+): Promise<ExperimentRecord[]> {
+  const includeSuggestions = Boolean(options.includeSuggestions);
   const records = await listExperimentRowsFromStore(brandId);
-  return Promise.all(records.map((record) => hydrateExperimentRecord(record)));
+  const hydrated = await Promise.all(records.map((record) => hydrateExperimentRecord(record)));
+  if (includeSuggestions) return hydrated;
+  return hydrated.filter((record) => !isExperimentSuggestionRecord(record));
 }
 
 export async function getExperimentRecordById(
   brandId: string,
-  experimentId: string
+  experimentId: string,
+  options: { includeSuggestions?: boolean } = {}
 ): Promise<ExperimentRecord | null> {
+  const includeSuggestions = Boolean(options.includeSuggestions);
   const rows = await listExperimentRowsFromStore(brandId);
   const hit = rows.find((row) => row.id === experimentId) ?? null;
   if (!hit) return null;
-  return hydrateExperimentRecord(hit);
+  const hydrated = await hydrateExperimentRecord(hit);
+  if (!includeSuggestions && isExperimentSuggestionRecord(hydrated)) return null;
+  return hydrated;
 }
 
 export async function createExperimentRecord(input: {
@@ -603,16 +621,24 @@ export async function createExperimentRecord(input: {
   name: string;
   offer?: string;
   audience?: string;
+  createRuntime?: boolean;
 }): Promise<ExperimentRecord> {
   const now = nowIso();
   const testEnvelope = defaultTestEnvelope();
-  const runtime = await createRuntimeRef({
-    brandId: input.brandId,
-    name: input.name.trim() || "New Experiment",
-    offer: String(input.offer ?? "").trim(),
-    audience: String(input.audience ?? "").trim(),
-    testEnvelope,
-  });
+  const shouldCreateRuntime = input.createRuntime !== false;
+  const runtime = shouldCreateRuntime
+    ? await createRuntimeRef({
+        brandId: input.brandId,
+        name: input.name.trim() || "New Experiment",
+        offer: String(input.offer ?? "").trim(),
+        audience: String(input.audience ?? "").trim(),
+        testEnvelope,
+      })
+    : {
+        campaignId: "",
+        hypothesisId: "",
+        experimentId: "",
+      };
 
   const row: ExperimentRecord = {
     id: createId("expt"),
@@ -636,7 +662,9 @@ export async function createExperimentRecord(input: {
   };
 
   const persisted = await persistExperiment(row);
-  await syncRuntimeFromExperiment(persisted);
+  if (shouldCreateRuntime) {
+    await syncRuntimeFromExperiment(persisted);
+  }
   return hydrateExperimentRecord(persisted);
 }
 
@@ -648,9 +676,12 @@ export async function updateExperimentRecord(
       ExperimentRecord,
       "name" | "status" | "offer" | "audience" | "testEnvelope" | "successMetric" | "promotedCampaignId"
     >
-  >
+  >,
+  options: { includeSuggestions?: boolean } = {}
 ): Promise<ExperimentRecord | null> {
-  const existing = await getExperimentRecordById(brandId, experimentId);
+  const existing = await getExperimentRecordById(brandId, experimentId, {
+    includeSuggestions: options.includeSuggestions,
+  });
   if (!existing) return null;
 
   const now = nowIso();

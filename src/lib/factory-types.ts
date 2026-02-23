@@ -373,7 +373,9 @@ export type OutreachRunJob = {
 export type RunViewModel = {
   runs: OutreachRun[];
   leads: OutreachRunLead[];
+  messages: OutreachMessage[];
   threads: ReplyThread[];
+  replyMessages: ReplyMessage[];
   drafts: ReplyDraft[];
   insights: EvolutionSnapshot[];
   anomalies: RunAnomaly[];

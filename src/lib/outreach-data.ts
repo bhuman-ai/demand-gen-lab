@@ -1979,6 +1979,25 @@ export async function listReplyThreadsByBrand(
   };
 }
 
+export async function listReplyMessagesByRun(runId: string): Promise<ReplyMessage[]> {
+  const supabase = getSupabaseAdmin();
+  if (supabase) {
+    const { data, error } = await supabase
+      .from(TABLE_REPLY_MESSAGE)
+      .select("*")
+      .eq("run_id", runId)
+      .order("received_at", { ascending: false });
+    if (!error) {
+      return (data ?? []).map((row: unknown) => mapReplyMessageRow(row));
+    }
+  }
+
+  const store = await readLocalStore();
+  return store.replyMessages
+    .filter((row) => row.runId === runId)
+    .sort((a, b) => (a.receivedAt < b.receivedAt ? 1 : -1));
+}
+
 export async function getReplyThread(threadId: string): Promise<ReplyThread | null> {
   const supabase = getSupabaseAdmin();
   if (supabase) {

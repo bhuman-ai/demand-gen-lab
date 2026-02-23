@@ -36,6 +36,7 @@ import type {
   BrandRecord,
   CampaignRecord,
   EvolutionSnapshot,
+  OutreachMessage,
   OutreachRun,
   OutreachRunEvent,
   OutreachRunJob,
@@ -73,6 +74,13 @@ function runStatusVariant(status: OutreachRun["status"]) {
   return "muted" as const;
 }
 
+function messageStatusVariant(status: OutreachMessage["status"]) {
+  if (status === "sent" || status === "replied") return "success" as const;
+  if (status === "failed" || status === "bounced") return "danger" as const;
+  if (status === "scheduled") return "accent" as const;
+  return "muted" as const;
+}
+
 function formatDateTime(value: string) {
   if (!value) return "n/a";
   const parsed = new Date(value);
@@ -86,6 +94,13 @@ function asText(value: unknown) {
 
 function asNumber(value: unknown) {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function previewText(text: string, max = 140) {
+  const trimmed = text.trim();
+  if (!trimmed) return "—";
+  if (trimmed.length <= max) return trimmed;
+  return `${trimmed.slice(0, max)}...`;
 }
 
 function friendlyJobType(jobType: OutreachRunJob["jobType"]) {
@@ -395,6 +410,15 @@ export default function RunClient({
   const totalPositiveReplies = runs.reduce((sum, run) => sum + run.metrics.positiveReplies, 0);
   const hasAnySent = totalSent > 0;
   const hasAnyReplies = totalReplies > 0;
+  const leadById = new Map(runView.leads.map((lead) => [lead.id, lead]));
+  const outboundMessages = [...runView.messages].sort((a, b) => {
+    const aTime = a.sentAt || a.scheduledAt || a.createdAt;
+    const bTime = b.sentAt || b.scheduledAt || b.createdAt;
+    return aTime < bTime ? 1 : -1;
+  });
+  const inboundReplyMessages = runView.replyMessages
+    .filter((message) => message.direction === "inbound")
+    .sort((a, b) => (a.receivedAt < b.receivedAt ? 1 : -1));
 
   const launchForVariant = async (experimentId: string) => {
     setLaunching(true);
@@ -781,32 +805,140 @@ export default function RunClient({
   );
 
   const overviewPanel = (
-    <div className="grid gap-4 lg:grid-cols-4">
+    <div className="grid gap-4">
+      <div className="grid gap-4 lg:grid-cols-4">
+        <Card>
+          <CardHeader>
+            <CardDescription>Did Emails Send?</CardDescription>
+            <CardTitle>{hasAnySent ? "Yes" : "No"}</CardTitle>
+            <CardDescription>{hasAnySent ? `${totalSent} total sent` : "No send events yet"}</CardDescription>
+          </CardHeader>
+        </Card>
+        <Card>
+          <CardHeader>
+            <CardDescription>Did We Get Replies?</CardDescription>
+            <CardTitle>{hasAnyReplies ? "Yes" : "No"}</CardTitle>
+            <CardDescription>{hasAnyReplies ? `${totalReplies} reply thread(s)` : "No replies yet"}</CardDescription>
+          </CardHeader>
+        </Card>
+        <Card>
+          <CardHeader>
+            <CardDescription>Total Sent</CardDescription>
+            <CardTitle>{totalSent}</CardTitle>
+          </CardHeader>
+        </Card>
+        <Card>
+          <CardHeader>
+            <CardDescription>Anomalies</CardDescription>
+            <CardTitle>{runView.anomalies.filter((item) => item.status === "active").length}</CardTitle>
+          </CardHeader>
+        </Card>
+      </div>
+
       <Card>
         <CardHeader>
-          <CardDescription>Did Emails Send?</CardDescription>
-          <CardTitle>{hasAnySent ? "Yes" : "No"}</CardTitle>
-          <CardDescription>{hasAnySent ? `${totalSent} total sent` : "No send events yet"}</CardDescription>
+          <CardTitle className="text-base">Outbound Email Log</CardTitle>
+          <CardDescription>
+            Every outbound message attempt: who it went to, what was sent, and current delivery status.
+          </CardDescription>
         </CardHeader>
+        <CardContent className="overflow-x-auto">
+          <table className="min-w-full text-sm">
+            <thead>
+              <tr className="text-left text-xs uppercase tracking-wide text-[color:var(--muted-foreground)]">
+                <th className="pb-2">To</th>
+                <th className="pb-2">Subject</th>
+                <th className="pb-2">Message</th>
+                <th className="pb-2">Status</th>
+                <th className="pb-2">Sent / Scheduled</th>
+                <th className="pb-2">Run</th>
+              </tr>
+            </thead>
+            <tbody>
+              {outboundMessages.map((message) => {
+                const lead = leadById.get(message.leadId);
+                return (
+                  <tr key={message.id} className="border-t border-[color:var(--border)] align-top">
+                    <td className="py-2">
+                      <div>{lead?.email || "Unknown lead"}</div>
+                      {lead?.name ? (
+                        <div className="text-xs text-[color:var(--muted-foreground)]">{lead.name}</div>
+                      ) : null}
+                    </td>
+                    <td className="py-2">{message.subject || "(No subject)"}</td>
+                    <td className="py-2">
+                      <details className="max-w-xl">
+                        <summary className="cursor-pointer text-[color:var(--muted-foreground)]">
+                          {previewText(message.body)}
+                        </summary>
+                        <div className="mt-2 whitespace-pre-wrap rounded border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-2 text-xs">
+                          {message.body || "(No body)"}
+                        </div>
+                      </details>
+                    </td>
+                    <td className="py-2">
+                      <Badge variant={messageStatusVariant(message.status)}>{message.status}</Badge>
+                    </td>
+                    <td className="py-2">
+                      {formatDateTime(message.sentAt || message.scheduledAt || message.createdAt)}
+                    </td>
+                    <td className="py-2">{message.runId.slice(-6)}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+          {!outboundMessages.length ? (
+            <div className="py-6 text-sm text-[color:var(--muted-foreground)]">
+              No outbound messages yet.
+            </div>
+          ) : null}
+        </CardContent>
       </Card>
+
       <Card>
         <CardHeader>
-          <CardDescription>Did We Get Replies?</CardDescription>
-          <CardTitle>{hasAnyReplies ? "Yes" : "No"}</CardTitle>
-          <CardDescription>{hasAnyReplies ? `${totalReplies} reply thread(s)` : "No replies yet"}</CardDescription>
+          <CardTitle className="text-base">Reply Message Log</CardTitle>
+          <CardDescription>What prospects actually said in inbound replies.</CardDescription>
         </CardHeader>
-      </Card>
-      <Card>
-        <CardHeader>
-          <CardDescription>Total Sent</CardDescription>
-          <CardTitle>{totalSent}</CardTitle>
-        </CardHeader>
-      </Card>
-      <Card>
-        <CardHeader>
-          <CardDescription>Anomalies</CardDescription>
-          <CardTitle>{runView.anomalies.filter((item) => item.status === "active").length}</CardTitle>
-        </CardHeader>
+        <CardContent className="overflow-x-auto">
+          <table className="min-w-full text-sm">
+            <thead>
+              <tr className="text-left text-xs uppercase tracking-wide text-[color:var(--muted-foreground)]">
+                <th className="pb-2">From</th>
+                <th className="pb-2">Subject</th>
+                <th className="pb-2">Reply</th>
+                <th className="pb-2">Received</th>
+                <th className="pb-2">Run</th>
+              </tr>
+            </thead>
+            <tbody>
+              {inboundReplyMessages.map((message) => (
+                <tr key={message.id} className="border-t border-[color:var(--border)] align-top">
+                  <td className="py-2">{message.from || "-"}</td>
+                  <td className="py-2">{message.subject || "(No subject)"}</td>
+                  <td className="py-2">
+                    <details className="max-w-xl">
+                      <summary className="cursor-pointer text-[color:var(--muted-foreground)]">
+                        {previewText(message.body)}
+                      </summary>
+                      <div className="mt-2 whitespace-pre-wrap rounded border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-2 text-xs">
+                        {message.body || "(No body)"}
+                      </div>
+                    </details>
+                  </td>
+                  <td className="py-2">{formatDateTime(message.receivedAt)}</td>
+                  <td className="py-2">{message.runId.slice(-6)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {!inboundReplyMessages.length ? (
+            <div className="py-6 text-sm text-[color:var(--muted-foreground)]">
+              No inbound replies yet.
+            </div>
+          ) : null}
+        </CardContent>
       </Card>
     </div>
   );

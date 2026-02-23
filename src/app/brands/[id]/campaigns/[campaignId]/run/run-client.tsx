@@ -124,6 +124,7 @@ function friendlyEventName(eventType: string) {
   if (eventType === "message_scheduled") return "Messages scheduled";
   if (eventType === "message_sent") return "Message sent";
   if (eventType === "dispatch_failed") return "Dispatch failed";
+  if (eventType === "lead_suppressed_before_send") return "Lead suppressed before send";
   if (eventType === "schedule_failed") return "Scheduling failed";
   if (eventType === "reply_ingested") return "Reply ingested";
   if (eventType === "reply_draft_created") return "Reply draft created";
@@ -858,9 +859,9 @@ export default function RunClient({
               {outboundMessages.map((message) => {
                 const lead = leadById.get(message.leadId);
                 return (
-                  <tr key={message.id} className="border-t border-[color:var(--border)] align-top">
+                <tr key={message.id} className="border-t border-[color:var(--border)] align-top">
                     <td className="py-2">
-                      <div>{lead?.email || "Unknown lead"}</div>
+                      <div className="break-all">{lead?.email || "Unknown lead"}</div>
                       {lead?.name ? (
                         <div className="text-xs text-[color:var(--muted-foreground)]">{lead.name}</div>
                       ) : null}

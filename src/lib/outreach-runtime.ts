@@ -48,6 +48,7 @@ import {
 } from "@/lib/outreach-data";
 import {
   buildOutreachMessageBody,
+  getLeadEmailSuppressionReason,
   sendOutreachMessage,
   sendReplyDraftAsEvent,
   fetchPlatformEmailDiscoveryResults,
@@ -1163,15 +1164,37 @@ async function finishSourcingWithLeads(run: NonNullable<Awaited<ReturnType<typeo
     }
   }
 
-  const filteredLeads = leads.filter((lead) => !blockedEmails.has(lead.email.toLowerCase()));
+  const suppressionCounts: Record<string, number> = {
+    duplicate_14_day: 0,
+    invalid_email: 0,
+    placeholder_domain: 0,
+    role_account: 0,
+  };
+
+  const filteredLeads: ApifyLead[] = [];
+  for (const lead of leads) {
+    const normalizedEmail = lead.email.toLowerCase();
+    const suppressionReason = getLeadEmailSuppressionReason(normalizedEmail);
+    if (suppressionReason) {
+      suppressionCounts[suppressionReason] = (suppressionCounts[suppressionReason] ?? 0) + 1;
+      continue;
+    }
+    if (blockedEmails.has(normalizedEmail)) {
+      suppressionCounts.duplicate_14_day += 1;
+      continue;
+    }
+    filteredLeads.push(lead);
+  }
+
   if (!filteredLeads.length) {
     await failRunWithDiagnostics({
       run,
-      reason: "All sourced leads were suppressed by 14-day duplicate policy",
+      reason: "All sourced leads were suppressed by quality/duplicate rules",
       eventType: "lead_sourcing_failed",
       payload: {
         sourcedCount: leads.length,
         blockedCount: leads.length,
+        suppressionCounts,
       },
     });
     return;
@@ -1217,6 +1240,7 @@ async function finishSourcingWithLeads(run: NonNullable<Awaited<ReturnType<typeo
     payload: {
       count: upserted.length,
       blockedCount: Math.max(0, leads.length - filteredLeads.length),
+      suppressionCounts,
     },
   });
 
@@ -1551,6 +1575,31 @@ async function processDispatchMessagesJob(job: OutreachJob) {
       await updateRunMessage(message.id, {
         status: "failed",
         lastError: "Lead email missing",
+      });
+      continue;
+    }
+    const suppressionReason = getLeadEmailSuppressionReason(lead.email);
+    if (suppressionReason) {
+      const reasonText =
+        suppressionReason === "role_account"
+          ? "Lead blocked: role-based inbox"
+          : suppressionReason === "placeholder_domain"
+            ? "Lead blocked: placeholder/test domain"
+            : "Lead blocked: invalid email";
+      await updateRunMessage(message.id, {
+        status: "canceled",
+        lastError: reasonText,
+      });
+      await updateRunLead(lead.id, { status: "suppressed" });
+      await createOutreachEvent({
+        runId: run.id,
+        eventType: "lead_suppressed_before_send",
+        payload: {
+          reason: reasonText,
+          suppressionReason,
+          email: lead.email,
+          messageId: message.id,
+        },
       });
       continue;
     }

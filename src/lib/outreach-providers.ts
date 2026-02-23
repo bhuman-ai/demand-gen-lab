@@ -23,6 +23,79 @@ export type ApifyLead = {
   sourceUrl: string;
 };
 
+export type LeadEmailSuppressionReason = "invalid_email" | "placeholder_domain" | "role_account";
+
+const ROLE_ACCOUNT_LOCALS = new Set([
+  "info",
+  "hello",
+  "hi",
+  "support",
+  "help",
+  "contact",
+  "team",
+  "sales",
+  "legal",
+  "marketing",
+  "admin",
+  "office",
+  "ops",
+  "operations",
+  "billing",
+  "accounts",
+  "careers",
+  "jobs",
+  "hr",
+  "press",
+  "media",
+  "news",
+  "events",
+  "security",
+  "privacy",
+  "compliance",
+  "noreply",
+  "no-reply",
+  "donotreply",
+  "do-not-reply",
+]);
+
+const PLACEHOLDER_EMAIL_DOMAINS = new Set([
+  "yourcompany.com",
+  "example.com",
+  "example.org",
+  "example.net",
+  "test.com",
+  "invalid.com",
+  "domain.com",
+]);
+
+function isRoleAccountLocal(local: string) {
+  if (!local) return true;
+  if (ROLE_ACCOUNT_LOCALS.has(local)) return true;
+  for (const role of ROLE_ACCOUNT_LOCALS) {
+    if (
+      local.startsWith(`${role}.`) ||
+      local.startsWith(`${role}_`) ||
+      local.startsWith(`${role}-`) ||
+      local.startsWith(`${role}+`)
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+export function getLeadEmailSuppressionReason(email: string): LeadEmailSuppressionReason | "" {
+  const normalized = email.trim().toLowerCase();
+  const match = normalized.match(/^([^@\s]+)@([^@\s]+\.[^@\s]+)$/);
+  if (!match) return "invalid_email";
+
+  const local = match[1];
+  const domain = match[2].replace(/\.+$/, "");
+  if (PLACEHOLDER_EMAIL_DOMAINS.has(domain)) return "placeholder_domain";
+  if (isRoleAccountLocal(local)) return "role_account";
+  return "";
+}
+
 type LeadSourcingSearchResult = {
   ok: boolean;
   query: string;
@@ -525,6 +598,7 @@ export function leadsFromEmailDiscoveryRows(rows: unknown[], maxLeads: number): 
     const emails = Array.isArray(emailsRaw) ? emailsRaw.map((item) => String(item ?? "").trim().toLowerCase()) : [];
     for (const email of emails) {
       if (!email || !email.includes("@")) continue;
+      if (getLeadEmailSuppressionReason(email)) continue;
       if (seen.has(email)) continue;
       seen.add(email);
       leads.push({
@@ -550,6 +624,9 @@ function normalizeApifyLead(raw: unknown): ApifyLead | null {
     .trim()
     .toLowerCase();
   if (!email || !email.includes("@")) {
+    return null;
+  }
+  if (getLeadEmailSuppressionReason(email)) {
     return null;
   }
 

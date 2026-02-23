@@ -7,7 +7,6 @@ import {
   FolderKanban,
   FlaskConical,
   Inbox,
-  LayoutGrid,
   Mail,
   Network,
   Settings,
@@ -28,7 +27,7 @@ type NavItem = {
 };
 
 type MainNavItem = NavItem & {
-  id: "brand" | "experiments" | "campaigns" | "network" | "leads" | "inbox";
+  id: "experiments" | "campaigns" | "network" | "leads" | "inbox";
 };
 
 function pageTitle(pathname: string) {
@@ -101,7 +100,6 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
 
   const mainItems = useMemo<MainNavItem[]>(
     () => [
-      { id: "brand", label: "Brand", href: brandRoot, icon: LayoutGrid },
       { id: "experiments", label: "Experiments", href: hasActiveBrand ? `${brandRoot}/experiments` : "/brands", icon: Target },
       { id: "campaigns", label: "Campaigns", href: hasActiveBrand ? `${brandRoot}/campaigns` : "/brands", icon: FolderKanban },
       { id: "network", label: "Network", href: hasActiveBrand ? `${brandRoot}/network` : "/brands", icon: Network },
@@ -118,9 +116,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
       if (pathname === `${brandRoot}/network` || pathname.startsWith(`${brandRoot}/network/`)) return "network";
       if (pathname === `${brandRoot}/leads` || pathname.startsWith(`${brandRoot}/leads/`)) return "leads";
       if (pathname === `${brandRoot}/inbox` || pathname.startsWith(`${brandRoot}/inbox/`)) return "inbox";
-      if (pathname === brandRoot) return "brand";
     }
-    if (pathname === "/brands" || pathname === "/brands/new" || pathname.startsWith("/brands/")) return "brand";
     return "";
   }, [pathname, brandRoot, hasActiveBrand]);
 
@@ -190,7 +186,10 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
         <main className="min-w-0">
           <header className="sticky top-0 z-20 border-b border-[color:var(--border)] bg-[color:var(--surface)]/95 px-4 py-3 backdrop-blur md:px-6">
             <div className="flex flex-wrap items-center justify-between gap-3">
-              <div>
+              <div className="min-w-[260px]">
+                <div className="mb-2">
+                  <BrandSwitcher />
+                </div>
                 <div className="text-xs text-[color:var(--muted-foreground)]">{breadcrumb(pathname)}</div>
                 <h1 className="text-lg font-semibold text-[color:var(--foreground)]">{pageTitle(pathname)}</h1>
               </div>
@@ -202,7 +201,6 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
                   <Settings className="h-3.5 w-3.5" />
                   Settings
                 </Link>
-                <BrandSwitcher />
                 <ThemeToggle />
               </div>
             </div>

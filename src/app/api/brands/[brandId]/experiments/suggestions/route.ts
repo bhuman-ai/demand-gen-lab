@@ -6,10 +6,14 @@ import {
   listExperimentSuggestions,
 } from "@/lib/experiment-suggestion-data";
 
-type SuggestionSeed = {
+type StructuredSuggestion = {
   name: string;
-  offer: string;
   audience: string;
+  trigger: string;
+  offer: string;
+  cta: string;
+  emailPreview: string;
+  successTarget: string;
   rationale: string;
 };
 
@@ -20,21 +24,34 @@ function asRecord(value: unknown): Record<string, unknown> {
   return {};
 }
 
-function normalizeSuggestions(value: unknown): SuggestionSeed[] {
+function normalizeSuggestions(value: unknown): StructuredSuggestion[] {
   if (!Array.isArray(value)) return [];
-  const rows: SuggestionSeed[] = [];
+  const rows: StructuredSuggestion[] = [];
   const seen = new Set<string>();
   for (const entry of value) {
     const row = asRecord(entry);
-    const name = sanitizeAiText(String(row.name ?? row.title ?? "").trim());
-    const offer = sanitizeAiText(String(row.offer ?? row.angle ?? "").trim());
-    const audience = sanitizeAiText(String(row.audience ?? row.icp ?? "").trim());
+    const name = sanitizeAiText(String(row.name ?? row.campaignIdea ?? row.title ?? "").trim());
+    const audience = sanitizeAiText(String(row.audience ?? row.who ?? row.icp ?? "").trim());
+    const trigger = sanitizeAiText(String(row.trigger ?? "").trim());
+    const offer = sanitizeAiText(String(row.offer ?? "").trim());
+    const cta = sanitizeAiText(String(row.cta ?? row.ask ?? "").trim());
+    const emailPreview = sanitizeAiText(String(row.emailPreview ?? row.preview ?? "").trim());
+    const successTarget = sanitizeAiText(String(row.successTarget ?? row.metric ?? "").trim());
     const rationale = sanitizeAiText(String(row.rationale ?? row.why ?? "").trim());
-    if (!name || !offer || !audience) continue;
-    const key = `${name.toLowerCase()}::${offer.toLowerCase()}::${audience.toLowerCase()}`;
+    if (!name || !audience || !offer || !cta) continue;
+    const key = `${name.toLowerCase()}::${audience.toLowerCase()}::${offer.toLowerCase()}`;
     if (seen.has(key)) continue;
     seen.add(key);
-    rows.push({ name, offer, audience, rationale });
+    rows.push({
+      name,
+      audience,
+      trigger,
+      offer,
+      cta,
+      emailPreview,
+      successTarget: successTarget || ">=8 positive replies from first 150 sends",
+      rationale,
+    });
   }
   return rows.slice(0, 8);
 }
@@ -45,37 +62,60 @@ function systemSuggestions(input: {
   markets: string[];
   icps: string[];
   benefits: string[];
-}): SuggestionSeed[] {
+  features: string[];
+}): StructuredSuggestion[] {
   const brandName = input.brandName.trim() || "your brand";
-  const markets = input.markets.length ? input.markets : ["mid-market B2B teams"];
-  const icps = input.icps.length ? input.icps : ["Revenue leaders at B2B software companies"];
-  const primaryBenefit = input.benefits[0] || "improved outbound reply rates";
-  const product = input.product.trim() || `${brandName}'s product`;
+  const marketA = input.markets[0] || "mid-market B2B SaaS";
+  const marketB = input.markets[1] || marketA;
+  const icpA = input.icps[0] || "VP Sales at 50-300 employee B2B software companies";
+  const icpB = input.icps[1] || "Head of Growth at founder-led B2B software companies";
+  const benefit = input.benefits[0] || "higher outbound reply rates";
+  const feature = input.features[0] || input.product || `${brandName} product`;
 
   return [
     {
-      name: `${brandName} · Problem-first intro`,
-      offer: `Offer a short diagnostic to uncover the biggest blocker preventing ${primaryBenefit}.`,
-      audience: `${icps[0]} in ${markets[0]}.`,
-      rationale: "Fast signal on pain intensity and willingness to engage.",
+      name: `${icpA}: 90-second outbound teardown offer`,
+      audience: `${icpA} in ${marketA}`,
+      trigger: "Recently hiring SDRs or AEs",
+      offer: `Offer a 90-second teardown showing 3 concrete fixes to improve ${benefit}.`,
+      cta: "Ask if they want the teardown sent this week.",
+      emailPreview:
+        "Noticed you’re hiring outbound reps. I recorded a 90-sec teardown with 3 fixes to lift replies quickly.",
+      successTarget: ">=10 positive replies from first 200 sends",
+      rationale: "Specific offer + hiring trigger makes the message concrete and timely.",
     },
     {
-      name: `${brandName} · Proof-first teardown`,
-      offer: `Offer a 2-minute teardown showing how peers use ${product} to get faster pipeline results.`,
-      audience: `${icps[Math.min(1, icps.length - 1)]} in ${markets[0]}.`,
-      rationale: "Tests whether social proof and concrete examples increase replies.",
+      name: `${icpB}: first-100-target campaign blueprint`,
+      audience: `${icpB} in ${marketB}`,
+      trigger: "New quarter planning or pipeline target increase",
+      offer: `Offer a first-100-target outreach blueprint using ${feature}.`,
+      cta: "Ask if they want the one-page blueprint.",
+      emailPreview:
+        "If pipeline goals just went up this quarter, I can share a first-100-target blueprint tailored to your team.",
+      successTarget: ">=8 positive replies from first 150 sends",
+      rationale: "Turns a broad promise into a tangible artifact with a clear ask.",
     },
     {
-      name: `${brandName} · Trigger-based outreach`,
-      offer: `Lead with a timing trigger and offer a simple next step tied to ${primaryBenefit}.`,
-      audience: `${icps[0]} at companies in ${markets[Math.min(1, markets.length - 1)]}.`,
-      rationale: "Measures response lift from relevance + urgency framing.",
+      name: `${icpA}: objection-first diagnostic`,
+      audience: `${icpA} in ${marketA}`,
+      trigger: "Teams saying outbound is low quality or too manual",
+      offer: "Lead with the top outbound objection and offer a short diagnostic call.",
+      cta: "Ask for a 15-minute diagnostic this week.",
+      emailPreview:
+        "Most teams tell us outbound feels manual and low-converting. We run a 15-min diagnostic that surfaces 2 immediate fixes.",
+      successTarget: ">=6 meetings booked from first 200 sends",
+      rationale: "Acknowledging the objection first reduces friction and builds trust quickly.",
     },
     {
-      name: `${brandName} · Objection-handling angle`,
-      offer: `Address the most likely objection up front and propose a low-friction test.`,
-      audience: `${icps[Math.min(1, icps.length - 1)]} in ${markets[Math.min(2, markets.length - 1)]}.`,
-      rationale: "Checks if objection-first messaging reduces friction to reply.",
+      name: `${icpB}: proof-first peer benchmark`,
+      audience: `${icpB} in ${marketB}`,
+      trigger: "Teams with visible outbound activity but low engagement",
+      offer: "Share a peer benchmark snapshot and one gap they can close this month.",
+      cta: "Ask permission to send the benchmark snapshot.",
+      emailPreview:
+        "We benchmarked similar teams and found one repeatable gap hurting replies. Want me to send the snapshot?",
+      successTarget: ">=12 replies from first 180 sends",
+      rationale: "Peer proof + low-friction CTA improves curiosity and response intent.",
     },
   ];
 }
@@ -90,21 +130,28 @@ async function openAiSuggestions(input: {
   icps: string[];
   features: string[];
   benefits: string[];
-}): Promise<SuggestionSeed[]> {
+}): Promise<StructuredSuggestion[]> {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) return [];
 
   const prompt = [
-    "You generate B2B outbound experiment suggestions.",
-    "Return JSON only.",
-    "Do not mention internal tooling or vendor names.",
-    "Each suggestion must be concrete and immediately testable.",
+    "You generate concrete B2B outbound experiment ideas.",
+    "Avoid buzzwords and generic phrases.",
+    "Every suggestion must state exactly WHO, WHAT offer, WHAT CTA, and expected success target.",
+    "No provider/tool names.",
     "",
-    "Schema:",
-    '{ "suggestions": [{ "name": string, "offer": string, "audience": string, "rationale": string }] }',
+    "Return strict JSON in this shape:",
+    '{ "suggestions": [{ "name": string, "audience": string, "trigger": string, "offer": string, "cta": string, "emailPreview": string, "successTarget": string, "rationale": string }] }',
+    "",
+    "Rules:",
+    "- name must read like a concrete campaign idea, not a generic angle label.",
+    "- audience must include role + company type/size.",
+    "- cta must be a single ask.",
+    "- emailPreview should be one short first-line preview (max ~25 words).",
+    "- successTarget must be measurable (e.g. >=8 positive replies from 150 sends).",
     "",
     "Generate 6 suggestions.",
-    `Brand: ${JSON.stringify(input)}`,
+    `BrandContext: ${JSON.stringify(input)}`,
   ].join("\n");
 
   const response = await fetch("https://api.openai.com/v1/responses", {
@@ -117,7 +164,7 @@ async function openAiSuggestions(input: {
       model: "gpt-5.2",
       input: prompt,
       text: { format: { type: "json_object" } },
-      max_output_tokens: 1400,
+      max_output_tokens: 1600,
     }),
   });
 
@@ -174,14 +221,14 @@ export async function POST(request: Request, context: { params: Promise<{ brandI
     return NextResponse.json({ suggestions: existing, mode: "cached" });
   }
 
-  const seed = {
+  const system = systemSuggestions({
     brandName: brand.name,
     product: brand.product,
     markets: brand.targetMarkets,
     icps: brand.idealCustomerProfiles,
     benefits: brand.keyBenefits,
-  };
-  const system = systemSuggestions(seed);
+    features: brand.keyFeatures,
+  });
   const ai = await openAiSuggestions({
     brandName: brand.name,
     website: brand.website,
@@ -193,11 +240,21 @@ export async function POST(request: Request, context: { params: Promise<{ brandI
     features: brand.keyFeatures,
     benefits: brand.keyBenefits,
   });
+  const concrete = ai.length ? [...ai, ...system] : system;
 
   const created = await createExperimentSuggestions({
     brandId,
     source: ai.length ? "ai" : "system",
-    suggestions: ai.length ? [...ai, ...system] : system,
+    suggestions: concrete.map((row) => ({
+      name: row.name,
+      offer: row.offer,
+      audience: row.audience,
+      cta: row.cta,
+      trigger: row.trigger,
+      emailPreview: row.emailPreview,
+      successTarget: row.successTarget,
+      rationale: row.rationale,
+    })),
   });
 
   const suggestions = await listExperimentSuggestions(brandId, "suggested");

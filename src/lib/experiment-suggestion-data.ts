@@ -14,16 +14,62 @@ function suggestionKey(input: Pick<ExperimentSuggestionRecord, "name" | "offer" 
     .join("::");
 }
 
+function readLabeledLine(value: string, label: string) {
+  const regex = new RegExp(`^${label}:\\s*(.+)$`, "im");
+  const match = value.match(regex);
+  return match ? match[1].trim() : "";
+}
+
+function buildOfferBlob(input: {
+  offer: string;
+  cta?: string;
+  emailPreview?: string;
+  successTarget?: string;
+  rationale?: string;
+}) {
+  return [
+    `Offer: ${input.offer.trim()}`,
+    input.cta?.trim() ? `CTA: ${input.cta.trim()}` : "",
+    input.emailPreview?.trim() ? `EmailPreview: ${input.emailPreview.trim()}` : "",
+    input.successTarget?.trim() ? `SuccessTarget: ${input.successTarget.trim()}` : "",
+    input.rationale?.trim() ? `Why: ${input.rationale.trim()}` : "",
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+function buildAudienceBlob(input: { audience: string; trigger?: string }) {
+  return [
+    `Who: ${input.audience.trim()}`,
+    input.trigger?.trim() ? `Trigger: ${input.trigger.trim()}` : "",
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
 function mapToSuggestion(record: Awaited<ReturnType<typeof getExperimentRecordById>>): ExperimentSuggestionRecord | null {
   if (!record) return null;
   if (!isExperimentSuggestionRecord(record)) return null;
+
+  const parsedOffer = readLabeledLine(record.offer, "Offer") || record.offer.trim();
+  const cta = readLabeledLine(record.offer, "CTA");
+  const emailPreview = readLabeledLine(record.offer, "EmailPreview");
+  const successTarget = readLabeledLine(record.offer, "SuccessTarget");
+  const rationale = readLabeledLine(record.offer, "Why");
+  const parsedAudience = readLabeledLine(record.audience, "Who") || record.audience.trim();
+  const trigger = readLabeledLine(record.audience, "Trigger");
+
   return {
     id: record.id,
     brandId: record.brandId,
     name: record.name,
-    offer: record.offer,
-    audience: record.audience,
-    rationale: "",
+    offer: parsedOffer,
+    audience: parsedAudience,
+    cta,
+    trigger,
+    emailPreview,
+    successTarget,
+    rationale,
     status: record.status === "archived" ? "dismissed" : "suggested",
     source: "system",
     acceptedExperimentId: "",
@@ -63,7 +109,12 @@ export async function getExperimentSuggestionById(
 export async function createExperimentSuggestions(input: {
   brandId: string;
   source: ExperimentSuggestionRecord["source"];
-  suggestions: Array<Pick<ExperimentSuggestionRecord, "name" | "offer" | "audience" | "rationale">>;
+  suggestions: Array<
+    Pick<
+      ExperimentSuggestionRecord,
+      "name" | "offer" | "audience" | "rationale" | "cta" | "trigger" | "emailPreview" | "successTarget"
+    >
+  >;
 }): Promise<ExperimentSuggestionRecord[]> {
   const existing = await listExperimentSuggestions(input.brandId, "suggested");
   const seen = new Set(existing.map((row) => suggestionKey(row)));
@@ -81,8 +132,17 @@ export async function createExperimentSuggestions(input: {
     const record = await createExperimentRecord({
       brandId: input.brandId,
       name,
-      offer,
-      audience,
+      offer: buildOfferBlob({
+        offer,
+        cta: item.cta,
+        emailPreview: item.emailPreview,
+        successTarget: item.successTarget,
+        rationale: item.rationale,
+      }),
+      audience: buildAudienceBlob({
+        audience,
+        trigger: item.trigger,
+      }),
       createRuntime: false,
     });
     const mapped = mapToSuggestion(record);
@@ -91,6 +151,10 @@ export async function createExperimentSuggestions(input: {
         ...mapped,
         source: input.source,
         rationale: item.rationale.trim(),
+        cta: item.cta?.trim() || mapped.cta,
+        trigger: item.trigger?.trim() || mapped.trigger,
+        emailPreview: item.emailPreview?.trim() || mapped.emailPreview,
+        successTarget: item.successTarget?.trim() || mapped.successTarget,
       });
     }
   }
@@ -121,14 +185,39 @@ export async function updateExperimentSuggestion(
   }
 
   if (patch.status === "accepted") {
-    const accepted = await ensureRuntimeForExperiment(existing);
+    const mapped = mapToSuggestion(existing);
+    if (!mapped) return null;
+    const cleanOffer = [mapped.offer, mapped.cta ? `CTA: ${mapped.cta}` : ""]
+      .filter(Boolean)
+      .join(" ");
+    const cleanAudience = [mapped.audience, mapped.trigger ? `Trigger: ${mapped.trigger}` : ""]
+      .filter(Boolean)
+      .join(" ");
+
+    const normalized =
+      (await updateExperimentRecord(
+        brandId,
+        suggestionId,
+        {
+          offer: cleanOffer,
+          audience: cleanAudience,
+          status: "draft",
+        },
+        { includeSuggestions: true }
+      )) ?? existing;
+
+    const accepted = await ensureRuntimeForExperiment(normalized);
     return {
       id: accepted.id,
       brandId: accepted.brandId,
       name: accepted.name,
-      offer: accepted.offer,
-      audience: accepted.audience,
-      rationale: "",
+      offer: mapped.offer,
+      audience: mapped.audience,
+      cta: mapped.cta,
+      trigger: mapped.trigger,
+      emailPreview: mapped.emailPreview,
+      successTarget: mapped.successTarget,
+      rationale: mapped.rationale,
       status: "accepted",
       source: "system",
       acceptedExperimentId: accepted.id,

@@ -27,6 +27,24 @@ function statusVariant(status: ExperimentRecord["status"]) {
   return "muted" as const;
 }
 
+function pickLine(value: string, label: string) {
+  const regex = new RegExp(`^${label}:\\s*(.+)$`, "im");
+  return value.match(regex)?.[1]?.trim() ?? "";
+}
+
+function suggestionDetails(suggestion: ExperimentSuggestionRecord) {
+  return {
+    campaignIdea: suggestion.name,
+    who: suggestion.audience || pickLine(suggestion.audience, "Who"),
+    trigger: suggestion.trigger || pickLine(suggestion.audience, "Trigger"),
+    offer: suggestion.offer || pickLine(suggestion.offer, "Offer"),
+    cta: suggestion.cta || pickLine(suggestion.offer, "CTA"),
+    emailPreview: suggestion.emailPreview || pickLine(suggestion.offer, "EmailPreview"),
+    successTarget: suggestion.successTarget || pickLine(suggestion.offer, "SuccessTarget"),
+    rationale: suggestion.rationale || pickLine(suggestion.offer, "Why"),
+  };
+}
+
 export default function ExperimentsClient({ brandId }: { brandId: string }) {
   const [brand, setBrand] = useState<BrandRecord | null>(null);
   const [experiments, setExperiments] = useState<ExperimentRecord[]>([]);
@@ -184,18 +202,43 @@ export default function ExperimentsClient({ brandId }: { brandId: string }) {
             </div>
           ) : suggestions.length ? (
             <div className="grid gap-3 md:grid-cols-2">
-              {suggestions.map((suggestion) => (
+              {suggestions.map((suggestion) => {
+                const detail = suggestionDetails(suggestion);
+                return (
                 <Card key={suggestion.id} className="border-[color:var(--border)] bg-[color:var(--surface-muted)]">
-                  <CardHeader className="space-y-1">
-                    <CardTitle className="text-sm">{suggestion.name}</CardTitle>
-                    <CardDescription>{suggestion.rationale || "Suggested starter experiment."}</CardDescription>
+                  <CardHeader className="space-y-2">
+                    <CardTitle className="text-sm">{detail.campaignIdea}</CardTitle>
+                    <CardDescription>
+                      {detail.rationale || "Concrete test idea generated from your brand context."}
+                    </CardDescription>
                   </CardHeader>
                   <CardContent className="space-y-2">
                     <div className="text-xs text-[color:var(--muted-foreground)]">
-                      <strong className="text-[color:var(--foreground)]">Offer:</strong> {suggestion.offer}
+                      <strong className="text-[color:var(--foreground)]">Who:</strong>{" "}
+                      {detail.who || "Define role + company segment"}
+                    </div>
+                    {detail.trigger ? (
+                      <div className="text-xs text-[color:var(--muted-foreground)]">
+                        <strong className="text-[color:var(--foreground)]">Trigger:</strong> {detail.trigger}
+                      </div>
+                    ) : null}
+                    <div className="text-xs text-[color:var(--muted-foreground)]">
+                      <strong className="text-[color:var(--foreground)]">Offer:</strong>{" "}
+                      {detail.offer || "Define concrete offer"}
                     </div>
                     <div className="text-xs text-[color:var(--muted-foreground)]">
-                      <strong className="text-[color:var(--foreground)]">Audience:</strong> {suggestion.audience}
+                      <strong className="text-[color:var(--foreground)]">CTA:</strong>{" "}
+                      {detail.cta || "Define one clear ask"}
+                    </div>
+                    {detail.emailPreview ? (
+                      <div className="rounded-md border border-[color:var(--border)] bg-[color:var(--surface)] px-2 py-1 text-xs text-[color:var(--muted-foreground)]">
+                        <strong className="text-[color:var(--foreground)]">Email #1 Preview:</strong>{" "}
+                        {detail.emailPreview}
+                      </div>
+                    ) : null}
+                    <div className="text-xs text-[color:var(--muted-foreground)]">
+                      <strong className="text-[color:var(--foreground)]">Success target:</strong>{" "}
+                      {detail.successTarget || ">=8 positive replies from first 150 sends"}
                     </div>
                     <div className="flex flex-wrap gap-2 pt-1">
                       <Button
@@ -243,7 +286,8 @@ export default function ExperimentsClient({ brandId }: { brandId: string }) {
                     </div>
                   </CardContent>
                 </Card>
-              ))}
+                );
+              })}
             </div>
           ) : (
             <div className="flex items-center gap-2 text-sm text-[color:var(--muted-foreground)]">

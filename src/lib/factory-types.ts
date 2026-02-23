@@ -132,6 +132,10 @@ export type ExperimentSuggestionRecord = {
   name: string;
   offer: string;
   audience: string;
+  cta?: string;
+  trigger?: string;
+  emailPreview?: string;
+  successTarget?: string;
   rationale: string;
   status: ExperimentSuggestionStatus;
   source: ExperimentSuggestionSource;

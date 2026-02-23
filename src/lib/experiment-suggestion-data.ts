@@ -6,6 +6,10 @@ import {
   listExperimentRecordsWithOptions,
   updateExperimentRecord,
 } from "@/lib/experiment-data";
+import {
+  isConcreteSuggestion as isConcreteSuggestionFields,
+  validateConcreteSuggestion,
+} from "@/lib/experiment-suggestion-quality";
 import type { ExperimentSuggestionRecord } from "@/lib/factory-types";
 
 function suggestionKey(input: Pick<ExperimentSuggestionRecord, "name" | "offer" | "audience">) {
@@ -78,6 +82,18 @@ function mapToSuggestion(record: Awaited<ReturnType<typeof getExperimentRecordBy
   };
 }
 
+export function isConcreteSuggestion(suggestion: ExperimentSuggestionRecord) {
+  return isConcreteSuggestionFields({
+    name: suggestion.name.trim(),
+    audience: suggestion.audience.trim(),
+    offer: suggestion.offer.trim(),
+    cta: suggestion.cta?.trim() || "",
+    emailPreview: suggestion.emailPreview?.trim() || "",
+    successTarget: suggestion.successTarget?.trim() || "",
+    rationale: suggestion.rationale?.trim() || "",
+  });
+}
+
 export async function listExperimentSuggestions(
   brandId: string,
   status?: ExperimentSuggestionRecord["status"]
@@ -92,6 +108,7 @@ export async function listExperimentSuggestions(
     })
     .map((row) => mapToSuggestion(row))
     .filter((row): row is ExperimentSuggestionRecord => Boolean(row))
+    .filter((row) => isConcreteSuggestion(row))
     .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1));
   return suggestions;
 }
@@ -103,7 +120,9 @@ export async function getExperimentSuggestionById(
   const record = await getExperimentRecordById(brandId, suggestionId, {
     includeSuggestions: true,
   });
-  return mapToSuggestion(record);
+  const mapped = mapToSuggestion(record);
+  if (!mapped) return null;
+  return isConcreteSuggestion(mapped) ? mapped : null;
 }
 
 export async function createExperimentSuggestions(input: {
@@ -124,7 +143,20 @@ export async function createExperimentSuggestions(input: {
     const name = item.name.trim();
     const offer = item.offer.trim();
     const audience = item.audience.trim();
-    if (!name || !offer || !audience) continue;
+    const cta = item.cta?.trim() || "";
+    const emailPreview = item.emailPreview?.trim() || "";
+    const successTarget = item.successTarget?.trim() || "";
+    const rationale = item.rationale?.trim() || "";
+    const qualityErrors = validateConcreteSuggestion({
+      name,
+      audience,
+      offer,
+      cta,
+      emailPreview,
+      successTarget,
+      rationale,
+    });
+    if (qualityErrors.length) continue;
     const key = suggestionKey({ name, offer, audience });
     if (seen.has(key)) continue;
     seen.add(key);
@@ -134,10 +166,10 @@ export async function createExperimentSuggestions(input: {
       name,
       offer: buildOfferBlob({
         offer,
-        cta: item.cta,
-        emailPreview: item.emailPreview,
-        successTarget: item.successTarget,
-        rationale: item.rationale,
+        cta,
+        emailPreview,
+        successTarget,
+        rationale,
       }),
       audience: buildAudienceBlob({
         audience,
@@ -147,14 +179,15 @@ export async function createExperimentSuggestions(input: {
     });
     const mapped = mapToSuggestion(record);
     if (mapped) {
+      if (!isConcreteSuggestion(mapped)) continue;
       created.push({
         ...mapped,
         source: input.source,
-        rationale: item.rationale.trim(),
-        cta: item.cta?.trim() || mapped.cta,
+        rationale,
+        cta: cta || mapped.cta,
         trigger: item.trigger?.trim() || mapped.trigger,
-        emailPreview: item.emailPreview?.trim() || mapped.emailPreview,
-        successTarget: item.successTarget?.trim() || mapped.successTarget,
+        emailPreview: emailPreview || mapped.emailPreview,
+        successTarget: successTarget || mapped.successTarget,
       });
     }
   }
@@ -186,7 +219,7 @@ export async function updateExperimentSuggestion(
 
   if (patch.status === "accepted") {
     const mapped = mapToSuggestion(existing);
-    if (!mapped) return null;
+    if (!mapped || !isConcreteSuggestion(mapped)) return null;
     const cleanOffer = [mapped.offer, mapped.cta ? `CTA: ${mapped.cta}` : ""]
       .filter(Boolean)
       .join(" ");

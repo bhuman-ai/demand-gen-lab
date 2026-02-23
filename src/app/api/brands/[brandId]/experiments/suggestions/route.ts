@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { sanitizeAiText } from "@/lib/ai-sanitize";
 import { getBrandById } from "@/lib/factory-data";
+import { validateConcreteSuggestion } from "@/lib/experiment-suggestion-quality";
 import {
   createExperimentSuggestions,
   listExperimentSuggestions,
@@ -39,7 +40,16 @@ function normalizeSuggestions(value: unknown): StructuredSuggestion[] {
     const emailPreview = sanitizeAiText(String(row.emailPreview ?? row.preview ?? "").trim());
     const successTarget = sanitizeAiText(String(row.successTarget ?? row.metric ?? "").trim());
     const rationale = sanitizeAiText(String(row.rationale ?? row.why ?? "").trim());
-    if (!name || !audience || !offer || !cta) continue;
+    const qualityErrors = validateConcreteSuggestion({
+      name,
+      audience,
+      offer,
+      cta,
+      emailPreview,
+      successTarget,
+      rationale,
+    });
+    if (qualityErrors.length) continue;
     const key = `${name.toLowerCase()}::${audience.toLowerCase()}::${offer.toLowerCase()}`;
     if (seen.has(key)) continue;
     seen.add(key);
@@ -50,75 +60,11 @@ function normalizeSuggestions(value: unknown): StructuredSuggestion[] {
       offer,
       cta,
       emailPreview,
-      successTarget: successTarget || ">=8 positive replies from first 150 sends",
+      successTarget,
       rationale,
     });
   }
   return rows.slice(0, 8);
-}
-
-function systemSuggestions(input: {
-  brandName: string;
-  product: string;
-  markets: string[];
-  icps: string[];
-  benefits: string[];
-  features: string[];
-}): StructuredSuggestion[] {
-  const brandName = input.brandName.trim() || "your brand";
-  const marketA = input.markets[0] || "mid-market B2B SaaS";
-  const marketB = input.markets[1] || marketA;
-  const icpA = input.icps[0] || "VP Sales at 50-300 employee B2B software companies";
-  const icpB = input.icps[1] || "Head of Growth at founder-led B2B software companies";
-  const benefit = input.benefits[0] || "higher outbound reply rates";
-  const feature = input.features[0] || input.product || `${brandName} product`;
-
-  return [
-    {
-      name: `${icpA}: 90-second outbound teardown offer`,
-      audience: `${icpA} in ${marketA}`,
-      trigger: "Recently hiring SDRs or AEs",
-      offer: `Offer a 90-second teardown showing 3 concrete fixes to improve ${benefit}.`,
-      cta: "Ask if they want the teardown sent this week.",
-      emailPreview:
-        "Noticed you’re hiring outbound reps. I recorded a 90-sec teardown with 3 fixes to lift replies quickly.",
-      successTarget: ">=10 positive replies from first 200 sends",
-      rationale: "Specific offer + hiring trigger makes the message concrete and timely.",
-    },
-    {
-      name: `${icpB}: first-100-target campaign blueprint`,
-      audience: `${icpB} in ${marketB}`,
-      trigger: "New quarter planning or pipeline target increase",
-      offer: `Offer a first-100-target outreach blueprint using ${feature}.`,
-      cta: "Ask if they want the one-page blueprint.",
-      emailPreview:
-        "If pipeline goals just went up this quarter, I can share a first-100-target blueprint tailored to your team.",
-      successTarget: ">=8 positive replies from first 150 sends",
-      rationale: "Turns a broad promise into a tangible artifact with a clear ask.",
-    },
-    {
-      name: `${icpA}: objection-first diagnostic`,
-      audience: `${icpA} in ${marketA}`,
-      trigger: "Teams saying outbound is low quality or too manual",
-      offer: "Lead with the top outbound objection and offer a short diagnostic call.",
-      cta: "Ask for a 15-minute diagnostic this week.",
-      emailPreview:
-        "Most teams tell us outbound feels manual and low-converting. We run a 15-min diagnostic that surfaces 2 immediate fixes.",
-      successTarget: ">=6 meetings booked from first 200 sends",
-      rationale: "Acknowledging the objection first reduces friction and builds trust quickly.",
-    },
-    {
-      name: `${icpB}: proof-first peer benchmark`,
-      audience: `${icpB} in ${marketB}`,
-      trigger: "Teams with visible outbound activity but low engagement",
-      offer: "Share a peer benchmark snapshot and one gap they can close this month.",
-      cta: "Ask permission to send the benchmark snapshot.",
-      emailPreview:
-        "We benchmarked similar teams and found one repeatable gap hurting replies. Want me to send the snapshot?",
-      successTarget: ">=12 replies from first 180 sends",
-      rationale: "Peer proof + low-friction CTA improves curiosity and response intent.",
-    },
-  ];
 }
 
 async function openAiSuggestions(input: {
@@ -133,7 +79,9 @@ async function openAiSuggestions(input: {
   benefits: string[];
 }): Promise<StructuredSuggestion[]> {
   const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) return [];
+  if (!apiKey) {
+    throw new Error("OPENAI_API_KEY is not configured");
+  }
 
   const prompt = [
     "You generate concrete B2B outbound experiment ideas.",
@@ -169,7 +117,10 @@ async function openAiSuggestions(input: {
     }),
   });
 
-  if (!response.ok) return [];
+  if (!response.ok) {
+    const reason = await response.text().catch(() => "");
+    throw new Error(`OpenAI API error (${response.status}): ${reason.slice(0, 600) || "unknown error"}`);
+  }
   const raw = await response.text();
 
   let payload: unknown = {};
@@ -194,7 +145,11 @@ async function openAiSuggestions(input: {
     parsed = {};
   }
   const parsedRecord = asRecord(parsed);
-  return normalizeSuggestions(parsedRecord.suggestions);
+  const suggestions = normalizeSuggestions(parsedRecord.suggestions);
+  if (!suggestions.length) {
+    throw new Error("OpenAI returned no concrete suggestions");
+  }
+  return suggestions;
 }
 
 export async function GET(_: Request, context: { params: Promise<{ brandId: string }> }) {
@@ -229,31 +184,36 @@ export async function POST(request: Request, context: { params: Promise<{ brandI
     );
   }
 
-  const system = systemSuggestions({
-    brandName: brand.name,
-    product: brand.product,
-    markets: brand.targetMarkets,
-    icps: brand.idealCustomerProfiles,
-    benefits: brand.keyBenefits,
-    features: brand.keyFeatures,
-  });
-  const ai = await openAiSuggestions({
-    brandName: brand.name,
-    website: brand.website,
-    tone: brand.tone,
-    product: brand.product,
-    notes: brand.notes,
-    markets: brand.targetMarkets,
-    icps: brand.idealCustomerProfiles,
-    features: brand.keyFeatures,
-    benefits: brand.keyBenefits,
-  });
-  const concrete = ai.length ? [...ai, ...system] : system;
+  let ai: StructuredSuggestion[] = [];
+  try {
+    ai = await openAiSuggestions({
+      brandName: brand.name,
+      website: brand.website,
+      tone: brand.tone,
+      product: brand.product,
+      notes: brand.notes,
+      markets: brand.targetMarkets,
+      icps: brand.idealCustomerProfiles,
+      features: brand.keyFeatures,
+      benefits: brand.keyBenefits,
+    });
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : "Unknown suggestion generation error";
+    const status = reason.includes("OPENAI_API_KEY") ? 503 : 502;
+    return NextResponse.json(
+      {
+        error: "Failed to generate concrete suggestions",
+        hint: "No fallback is enabled. Update brand context and retry generation.",
+        debug: { reason },
+      },
+      { status }
+    );
+  }
 
   const created = await createExperimentSuggestions({
     brandId,
-    source: ai.length ? "ai" : "system",
-    suggestions: concrete.map((row) => ({
+    source: "ai",
+    suggestions: ai.map((row) => ({
       name: row.name,
       offer: row.offer,
       audience: row.audience,
@@ -264,11 +224,29 @@ export async function POST(request: Request, context: { params: Promise<{ brandI
       rationale: row.rationale,
     })),
   });
+  if (!created.length) {
+    return NextResponse.json(
+      {
+        error: "No concrete suggestions were saved",
+        hint: "No fallback is enabled. Regenerate with richer brand context.",
+      },
+      { status: 422 }
+    );
+  }
 
   const suggestions = await listExperimentSuggestions(brandId, "suggested");
+  if (!suggestions.length) {
+    return NextResponse.json(
+      {
+        error: "No concrete suggestions available",
+        hint: "No fallback is enabled. Try Generate Suggestions again.",
+      },
+      { status: 422 }
+    );
+  }
   return NextResponse.json({
     suggestions,
-    mode: ai.length ? "openai" : "system",
+    mode: "openai",
     created: created.length,
   });
 }

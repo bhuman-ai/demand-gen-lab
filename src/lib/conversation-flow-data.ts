@@ -61,7 +61,7 @@ function clampConfidence(value: unknown, fallback = 0.7) {
   return Math.max(0, Math.min(1, num));
 }
 
-function defaultNode(): ConversationFlowNode {
+function defaultNode(position: { x: number; y: number }): ConversationFlowNode {
   return {
     id: createId("node"),
     kind: "message",
@@ -70,10 +70,12 @@ function defaultNode(): ConversationFlowNode {
     body: "Hi {{firstName}},\n\nQuick question on {{brandName}}.",
     autoSend: true,
     delayMinutes: 0,
+    x: position.x,
+    y: position.y,
   };
 }
 
-function defaultTerminalNode(): ConversationFlowNode {
+function defaultTerminalNode(position: { x: number; y: number }): ConversationFlowNode {
   return {
     id: createId("node"),
     kind: "terminal",
@@ -82,42 +84,44 @@ function defaultTerminalNode(): ConversationFlowNode {
     body: "",
     autoSend: false,
     delayMinutes: 0,
+    x: position.x,
+    y: position.y,
   };
 }
 
 export function defaultConversationGraph(): ConversationFlowGraph {
-  const start = defaultNode();
+  const start = defaultNode({ x: 60, y: 220 });
   start.title = "Start question";
   start.subject = "Quick question";
   start.body = "Hi {{firstName}},\n\nQuick question: are you currently focused on {{campaignGoal}}?";
 
-  const interest = defaultNode();
+  const interest = defaultNode({ x: 420, y: 80 });
   interest.title = "Interest follow-up";
   interest.subject = "Great to hear";
   interest.body = "Great to hear, {{firstName}}.\n\nBased on your note, want a short 10-minute walkthrough?";
   interest.autoSend = true;
   interest.delayMinutes = 0;
 
-  const question = defaultNode();
+  const question = defaultNode({ x: 420, y: 220 });
   question.title = "Question answer";
   question.subject = "Answering your question";
   question.body = "Great question.\n\nHere is the shortest answer for your context: {{shortAnswer}}.";
   question.autoSend = false;
 
-  const objection = defaultNode();
+  const objection = defaultNode({ x: 420, y: 360 });
   objection.title = "Objection handling";
   objection.subject = "Makes sense";
   objection.body = "Totally fair.\n\nIf timing is the blocker, would revisiting in a few weeks help?";
   objection.autoSend = false;
 
-  const noReply = defaultNode();
+  const noReply = defaultNode({ x: 780, y: 220 });
   noReply.title = "No-reply nudge";
   noReply.subject = "Worth a quick check";
   noReply.body = "Just circling back in case this slipped.\n\nShould I close this out for now?";
   noReply.autoSend = true;
   noReply.delayMinutes = 1440;
 
-  const end = defaultTerminalNode();
+  const end = defaultTerminalNode({ x: 1120, y: 220 });
 
   return {
     version: 1,
@@ -228,6 +232,8 @@ function normalizeNode(value: unknown): ConversationFlowNode | null {
   const body = String(row.body ?? "").trim();
   const autoSend = Boolean(row.autoSend ?? true);
   const delayMinutes = Math.max(0, Math.min(10080, Number(row.delayMinutes ?? 0) || 0));
+  const x = Number(row.x);
+  const y = Number(row.y);
 
   if (kind === "message" && !body) return null;
 
@@ -239,6 +245,8 @@ function normalizeNode(value: unknown): ConversationFlowNode | null {
     body,
     autoSend,
     delayMinutes,
+    x: Number.isFinite(x) ? x : 0,
+    y: Number.isFinite(y) ? y : 0,
   };
 }
 

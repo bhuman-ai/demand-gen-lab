@@ -520,6 +520,8 @@ export type ConversationFlowNode = {
   subject: string;
   autoSend: boolean;
   delayMinutes: number;
+  x: number;
+  y: number;
 };
 
 export type ConversationFlowEdge = {

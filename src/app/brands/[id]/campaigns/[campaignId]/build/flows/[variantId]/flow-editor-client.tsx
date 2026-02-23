@@ -1,8 +1,20 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
-import { Plus, RefreshCw, Save, Trash2, Upload } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  Hand,
+  LayoutGrid,
+  Link2,
+  Plus,
+  RefreshCw,
+  Save,
+  Target,
+  Trash2,
+  Upload,
+  ZoomIn,
+  ZoomOut,
+} from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -18,12 +30,48 @@ import {
   saveConversationMapDraftApi,
   suggestConversationMapApi,
 } from "@/lib/client-api";
-import type { ConversationFlowGraph, ConversationFlowNode, ConversationMap } from "@/lib/factory-types";
+import type { ConversationFlowEdge, ConversationFlowGraph, ConversationFlowNode, ConversationMap } from "@/lib/factory-types";
+
+const NODE_WIDTH = 280;
+const NODE_HEIGHT = 170;
+const CANVAS_MIN_HEIGHT = 700;
+const GRID_X = 360;
+const GRID_Y = 230;
+
+type Viewport = {
+  x: number;
+  y: number;
+  scale: number;
+};
+
+type DragState = {
+  nodeId: string;
+  pointerId: number;
+  offsetX: number;
+  offsetY: number;
+};
+
+type PanState = {
+  pointerId: number;
+  startX: number;
+  startY: number;
+  originX: number;
+  originY: number;
+};
+
+type ConnectState = {
+  fromNodeId: string;
+  pointerId: number;
+};
 
 const makeNodeId = () => `node_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 const makeEdgeId = () => `edge_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 
-function defaultNode(kind: "message" | "terminal" = "message"): ConversationFlowNode {
+function clamp(value: number, min: number, max: number) {
+  return Math.max(min, Math.min(max, value));
+}
+
+function defaultNode(kind: "message" | "terminal" = "message", x = 80, y = 160): ConversationFlowNode {
   return {
     id: makeNodeId(),
     kind,
@@ -32,7 +80,66 @@ function defaultNode(kind: "message" | "terminal" = "message"): ConversationFlow
     body: kind === "terminal" ? "" : "Hi {{firstName}},\n\nQuick follow-up on {{brandName}}.",
     autoSend: kind === "message",
     delayMinutes: 0,
+    x,
+    y,
   };
+}
+
+function withLayout(graph: ConversationFlowGraph): ConversationFlowGraph {
+  const hasPlacedNode = graph.nodes.some((node) => Number.isFinite(node.x) && Number.isFinite(node.y) && (node.x !== 0 || node.y !== 0));
+  if (hasPlacedNode) {
+    return {
+      ...graph,
+      nodes: graph.nodes.map((node) => ({
+        ...node,
+        x: Number.isFinite(node.x) ? node.x : 0,
+        y: Number.isFinite(node.y) ? node.y : 0,
+      })),
+    };
+  }
+
+  return {
+    ...graph,
+    nodes: graph.nodes.map((node, index) => {
+      const col = Math.floor(index / 3);
+      const row = index % 3;
+      return {
+        ...node,
+        x: 80 + col * GRID_X,
+        y: 80 + row * GRID_Y,
+      };
+    }),
+  };
+}
+
+function autoLayout(graph: ConversationFlowGraph): ConversationFlowGraph {
+  return {
+    ...graph,
+    nodes: graph.nodes.map((node, index) => {
+      const col = Math.floor(index / 3);
+      const row = index % 3;
+      return {
+        ...node,
+        x: 80 + col * GRID_X,
+        y: 80 + row * GRID_Y,
+      };
+    }),
+  };
+}
+
+function nodeById(graph: ConversationFlowGraph | null, nodeId: string) {
+  if (!graph) return null;
+  return graph.nodes.find((node) => node.id === nodeId) ?? null;
+}
+
+function edgeById(graph: ConversationFlowGraph | null, edgeId: string) {
+  if (!graph) return null;
+  return graph.edges.find((edge) => edge.id === edgeId) ?? null;
+}
+
+function bezierPath(fromX: number, fromY: number, toX: number, toY: number) {
+  const curve = Math.max(120, Math.abs(toX - fromX) * 0.45);
+  return `M ${fromX} ${fromY} C ${fromX + curve} ${fromY}, ${toX - curve} ${toY}, ${toX} ${toY}`;
 }
 
 export default function FlowEditorClient({
@@ -46,11 +153,23 @@ export default function FlowEditorClient({
   variantId: string;
   backHref?: string;
 }) {
+  const canvasRef = useRef<HTMLDivElement | null>(null);
+
   const [brandName, setBrandName] = useState("Brand");
   const [campaignName, setCampaignName] = useState("Campaign");
   const [variantName, setVariantName] = useState("Variant");
   const [map, setMap] = useState<ConversationMap | null>(null);
   const [graph, setGraph] = useState<ConversationFlowGraph | null>(null);
+
+  const [viewport, setViewport] = useState<Viewport>({ x: 60, y: 80, scale: 1 });
+  const [pointerWorld, setPointerWorld] = useState({ x: 0, y: 0 });
+  const [dragState, setDragState] = useState<DragState | null>(null);
+  const [panState, setPanState] = useState<PanState | null>(null);
+  const [connectState, setConnectState] = useState<ConnectState | null>(null);
+
+  const [selectedNodeId, setSelectedNodeId] = useState("");
+  const [selectedEdgeId, setSelectedEdgeId] = useState("");
+
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [publishing, setPublishing] = useState(false);
@@ -65,16 +184,27 @@ export default function FlowEditorClient({
       fetchCampaign(brandId, campaignId),
       fetchConversationMapApi(brandId, campaignId, variantId),
     ]);
+
     const variant = campaign.experiments.find((item) => item.id === variantId);
     if (!variant) {
       throw new Error("Variant not found. Save Build first, then open Conversation Map.");
     }
 
+    const nextGraph = withLayout(mapRow?.draftGraph ?? {
+      version: 1,
+      maxDepth: 5,
+      startNodeId: "",
+      nodes: [],
+      edges: [],
+    });
+
     setBrandName(brand.name || "Brand");
     setCampaignName(campaign.name || "Campaign");
     setVariantName(variant.name || "Variant");
     setMap(mapRow);
-    setGraph(mapRow?.draftGraph ?? null);
+    setGraph(nextGraph);
+    setSelectedNodeId(nextGraph.startNodeId || nextGraph.nodes[0]?.id || "");
+    setSelectedEdgeId("");
   };
 
   useEffect(() => {
@@ -94,9 +224,14 @@ export default function FlowEditorClient({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [brandId, campaignId, variantId]);
 
-  const sortedNodes = useMemo(() => {
-    if (!graph) return [];
-    return [...graph.nodes].sort((a, b) => a.title.localeCompare(b.title));
+  const selectedNode = useMemo(() => nodeById(graph, selectedNodeId), [graph, selectedNodeId]);
+  const selectedEdge = useMemo(() => edgeById(graph, selectedEdgeId), [graph, selectedEdgeId]);
+
+  const nodeLookup = useMemo(() => {
+    const next = new Map<string, ConversationFlowNode>();
+    if (!graph) return next;
+    for (const node of graph.nodes) next.set(node.id, node);
+    return next;
   }, [graph]);
 
   const saveDraft = async () => {
@@ -113,7 +248,7 @@ export default function FlowEditorClient({
         draftGraph: graph,
       });
       setMap(next);
-      setGraph(next.draftGraph);
+      setGraph(withLayout(next.draftGraph));
       setStatusMessage("Draft saved.");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to save draft");
@@ -138,7 +273,7 @@ export default function FlowEditorClient({
       }
       const next = await publishConversationMapApi(brandId, campaignId, variantId);
       setMap(next);
-      setGraph(next.draftGraph);
+      setGraph(withLayout(next.draftGraph));
       setStatusMessage(`Published revision ${next.publishedRevision}.`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to publish map");
@@ -153,13 +288,245 @@ export default function FlowEditorClient({
     setStatusMessage("");
     try {
       const suggested = await suggestConversationMapApi(brandId, campaignId, variantId);
-      setGraph(suggested);
+      const next = withLayout(suggested);
+      setGraph(next);
+      setSelectedNodeId(next.startNodeId || next.nodes[0]?.id || "");
+      setSelectedEdgeId("");
       setStatusMessage("AI map generated. Save draft to keep it.");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to generate map");
     } finally {
       setGenerating(false);
     }
+  };
+
+  const screenToWorld = (clientX: number, clientY: number) => {
+    const rect = canvasRef.current?.getBoundingClientRect();
+    if (!rect) return { x: 0, y: 0 };
+    return {
+      x: (clientX - rect.left - viewport.x) / viewport.scale,
+      y: (clientY - rect.top - viewport.y) / viewport.scale,
+    };
+  };
+
+  const onCanvasPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0) return;
+    const target = event.target as HTMLElement;
+    if (target.closest("[data-node-card='true']")) return;
+    if (target.closest("[data-edge-path='true']")) return;
+
+    event.currentTarget.setPointerCapture(event.pointerId);
+    setPanState({
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      originX: viewport.x,
+      originY: viewport.y,
+    });
+    setSelectedNodeId("");
+    setSelectedEdgeId("");
+  };
+
+  const onCanvasPointerMove = (event: React.PointerEvent<HTMLDivElement>) => {
+    const world = screenToWorld(event.clientX, event.clientY);
+    setPointerWorld(world);
+
+    if (panState && event.pointerId === panState.pointerId) {
+      setViewport((prev) => ({
+        ...prev,
+        x: panState.originX + (event.clientX - panState.startX),
+        y: panState.originY + (event.clientY - panState.startY),
+      }));
+      return;
+    }
+
+    if (dragState && event.pointerId === dragState.pointerId) {
+      setGraph((prev) => {
+        if (!prev) return prev;
+        return {
+          ...prev,
+          nodes: prev.nodes.map((node) =>
+            node.id === dragState.nodeId
+              ? {
+                  ...node,
+                  x: world.x - dragState.offsetX,
+                  y: world.y - dragState.offsetY,
+                }
+              : node
+          ),
+        };
+      });
+    }
+  };
+
+  const onCanvasPointerUp = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (panState && event.pointerId === panState.pointerId) {
+      setPanState(null);
+    }
+    if (dragState && event.pointerId === dragState.pointerId) {
+      setDragState(null);
+    }
+    if (connectState && event.pointerId === connectState.pointerId) {
+      setConnectState(null);
+    }
+  };
+
+  const startNodeDrag = (event: React.PointerEvent<HTMLDivElement>, nodeId: string) => {
+    event.stopPropagation();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    const world = screenToWorld(event.clientX, event.clientY);
+    const node = nodeById(graph, nodeId);
+    if (!node) return;
+
+    setDragState({
+      nodeId,
+      pointerId: event.pointerId,
+      offsetX: world.x - node.x,
+      offsetY: world.y - node.y,
+    });
+    setSelectedNodeId(nodeId);
+    setSelectedEdgeId("");
+  };
+
+  const startConnect = (event: React.PointerEvent<HTMLButtonElement>, fromNodeId: string) => {
+    event.stopPropagation();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    setConnectState({ fromNodeId, pointerId: event.pointerId });
+    setSelectedNodeId(fromNodeId);
+    setSelectedEdgeId("");
+  };
+
+  const completeConnect = (event: React.PointerEvent<HTMLButtonElement>, toNodeId: string) => {
+    event.stopPropagation();
+    if (!connectState || !graph) return;
+    if (connectState.fromNodeId === toNodeId) {
+      setConnectState(null);
+      return;
+    }
+
+    const exists = graph.edges.some(
+      (edge) => edge.fromNodeId === connectState.fromNodeId && edge.toNodeId === toNodeId
+    );
+    if (exists) {
+      setConnectState(null);
+      return;
+    }
+
+    const nextEdge: ConversationFlowEdge = {
+      id: makeEdgeId(),
+      fromNodeId: connectState.fromNodeId,
+      toNodeId,
+      trigger: "fallback",
+      intent: "",
+      waitMinutes: 0,
+      confidenceThreshold: 0.7,
+      priority: graph.edges.length + 1,
+    };
+
+    setGraph({ ...graph, edges: [...graph.edges, nextEdge] });
+    setSelectedEdgeId(nextEdge.id);
+    setSelectedNodeId("");
+    setConnectState(null);
+  };
+
+  const addMessageNode = () => {
+    setGraph((prev) => {
+      if (!prev) return prev;
+      const next = defaultNode("message", 120 + prev.nodes.length * 40, 120 + prev.nodes.length * 30);
+      return {
+        ...prev,
+        nodes: [...prev.nodes, next],
+        startNodeId: prev.startNodeId || next.id,
+      };
+    });
+  };
+
+  const addTerminalNode = () => {
+    setGraph((prev) => {
+      if (!prev) return prev;
+      const next = defaultNode("terminal", 120 + prev.nodes.length * 40, 120 + prev.nodes.length * 30);
+      return {
+        ...prev,
+        nodes: [...prev.nodes, next],
+        startNodeId: prev.startNodeId || next.id,
+      };
+    });
+  };
+
+  const deleteNode = (nodeId: string) => {
+    setGraph((prev) => {
+      if (!prev) return prev;
+      const nodes = prev.nodes.filter((node) => node.id !== nodeId);
+      const edges = prev.edges.filter((edge) => edge.fromNodeId !== nodeId && edge.toNodeId !== nodeId);
+      const startNodeId = prev.startNodeId === nodeId ? nodes[0]?.id || "" : prev.startNodeId;
+      return {
+        ...prev,
+        nodes,
+        edges,
+        startNodeId,
+      };
+    });
+
+    if (selectedNodeId === nodeId) setSelectedNodeId("");
+    if (connectState?.fromNodeId === nodeId) setConnectState(null);
+  };
+
+  const deleteEdge = (edgeId: string) => {
+    setGraph((prev) => (prev ? { ...prev, edges: prev.edges.filter((edge) => edge.id !== edgeId) } : prev));
+    if (selectedEdgeId === edgeId) setSelectedEdgeId("");
+  };
+
+  const setNodePatch = (nodeId: string, patch: Partial<ConversationFlowNode>) => {
+    setGraph((prev) => {
+      if (!prev) return prev;
+      return {
+        ...prev,
+        nodes: prev.nodes.map((node) => (node.id === nodeId ? { ...node, ...patch } : node)),
+      };
+    });
+  };
+
+  const setEdgePatch = (edgeId: string, patch: Partial<ConversationFlowEdge>) => {
+    setGraph((prev) => {
+      if (!prev) return prev;
+      return {
+        ...prev,
+        edges: prev.edges.map((edge) => (edge.id === edgeId ? { ...edge, ...patch } : edge)),
+      };
+    });
+  };
+
+  const fitView = () => {
+    if (!graph || !graph.nodes.length || !canvasRef.current) return;
+    const rect = canvasRef.current.getBoundingClientRect();
+    const minX = Math.min(...graph.nodes.map((node) => node.x));
+    const minY = Math.min(...graph.nodes.map((node) => node.y));
+    const maxX = Math.max(...graph.nodes.map((node) => node.x + NODE_WIDTH));
+    const maxY = Math.max(...graph.nodes.map((node) => node.y + NODE_HEIGHT));
+
+    const width = Math.max(1, maxX - minX);
+    const height = Math.max(1, maxY - minY);
+    const scale = clamp(Math.min((rect.width - 80) / width, (rect.height - 80) / height), 0.5, 1.4);
+
+    setViewport({
+      scale,
+      x: (rect.width - width * scale) / 2 - minX * scale,
+      y: (rect.height - height * scale) / 2 - minY * scale,
+    });
+  };
+
+  const zoom = (delta: number) => {
+    setViewport((prev) => ({ ...prev, scale: clamp(prev.scale + delta, 0.4, 1.8) }));
+  };
+
+  const onWheel = (event: React.WheelEvent<HTMLDivElement>) => {
+    if (event.ctrlKey || event.metaKey) {
+      event.preventDefault();
+      const zoomDelta = event.deltaY > 0 ? -0.08 : 0.08;
+      zoom(zoomDelta);
+      return;
+    }
+    setViewport((prev) => ({ ...prev, x: prev.x - event.deltaX, y: prev.y - event.deltaY }));
   };
 
   if (loading) {
@@ -171,9 +538,7 @@ export default function FlowEditorClient({
       <Card>
         <CardHeader>
           <CardTitle className="text-base">Conversation map unavailable</CardTitle>
-          <CardDescription className="text-[color:var(--danger)]">
-            {error || "Could not initialize map."}
-          </CardDescription>
+          <CardDescription className="text-[color:var(--danger)]">{error || "Could not initialize map."}</CardDescription>
         </CardHeader>
         <CardContent>
           <Button asChild type="button" variant="outline">
@@ -189,15 +554,13 @@ export default function FlowEditorClient({
       <Card>
         <CardHeader className="flex flex-row items-start justify-between gap-3">
           <div>
-            <CardTitle className="text-base">Conversation Map</CardTitle>
+            <CardTitle className="text-base">Conversation Map Canvas</CardTitle>
             <CardDescription>
               {brandName} - {campaignName} - {variantName}
             </CardDescription>
           </div>
           <div className="flex flex-wrap gap-2">
-            <Badge variant={map?.status === "published" ? "success" : "muted"}>
-              {map?.status || "draft"}
-            </Badge>
+            <Badge variant={map?.status === "published" ? "success" : "muted"}>{map?.status || "draft"}</Badge>
             <Badge variant="muted">Revision {map?.publishedRevision ?? 0}</Badge>
           </div>
         </CardHeader>
@@ -218,415 +581,374 @@ export default function FlowEditorClient({
             <Link href={backHref || `/brands/${brandId}/campaigns/${campaignId}/build`}>Back</Link>
           </Button>
         </CardContent>
-        {statusMessage ? (
-          <CardContent className="pt-0 text-sm text-[color:var(--accent)]">{statusMessage}</CardContent>
-        ) : null}
-        {error ? (
-          <CardContent className="pt-0 text-sm text-[color:var(--danger)]">{error}</CardContent>
-        ) : null}
+        {statusMessage ? <CardContent className="pt-0 text-sm text-[color:var(--accent)]">{statusMessage}</CardContent> : null}
+        {error ? <CardContent className="pt-0 text-sm text-[color:var(--danger)]">{error}</CardContent> : null}
       </Card>
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Map Settings</CardTitle>
-          <CardDescription>Set global constraints for this variant conversation.</CardDescription>
-        </CardHeader>
-        <CardContent className="grid gap-3 md:grid-cols-2">
-          <div className="grid gap-2">
-            <Label htmlFor="map-max-depth">Max Depth (turns)</Label>
-            <Input
-              id="map-max-depth"
-              type="number"
-              min={1}
-              max={5}
-              value={graph.maxDepth}
-              onChange={(event) =>
-                setGraph((prev) =>
-                  prev
-                    ? {
-                        ...prev,
-                        maxDepth: Math.max(1, Math.min(5, Number(event.target.value || prev.maxDepth))),
-                      }
-                    : prev
-                )
-              }
-            />
-          </div>
-          <div className="grid gap-2">
-            <Label htmlFor="map-start-node">Start Node</Label>
-            <Select
-              id="map-start-node"
-              value={graph.startNodeId}
-              onChange={(event) =>
-                setGraph((prev) => (prev ? { ...prev, startNodeId: event.target.value } : prev))
-              }
+      <div className="grid gap-4 xl:grid-cols-[1fr_360px]">
+        <Card className="overflow-hidden">
+          <CardHeader className="flex flex-row items-center justify-between gap-3 border-b border-[color:var(--border)] pb-3">
+            <div>
+              <CardTitle className="text-base">Canvas</CardTitle>
+              <CardDescription>Drag nodes, connect handles, pan with mouse drag, zoom with wheel + ctrl/cmd.</CardDescription>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <Button type="button" size="sm" variant="outline" onClick={addMessageNode}>
+                <Plus className="h-4 w-4" />
+                Message
+              </Button>
+              <Button type="button" size="sm" variant="outline" onClick={addTerminalNode}>
+                <Target className="h-4 w-4" />
+                End Node
+              </Button>
+              <Button type="button" size="sm" variant="outline" onClick={() => setGraph((prev) => (prev ? autoLayout(prev) : prev))}>
+                <LayoutGrid className="h-4 w-4" />
+                Auto Layout
+              </Button>
+              <Button type="button" size="sm" variant="outline" onClick={fitView}>
+                Fit
+              </Button>
+              <Button type="button" size="icon" variant="outline" onClick={() => zoom(0.08)}>
+                <ZoomIn className="h-4 w-4" />
+              </Button>
+              <Button type="button" size="icon" variant="outline" onClick={() => zoom(-0.08)}>
+                <ZoomOut className="h-4 w-4" />
+              </Button>
+            </div>
+          </CardHeader>
+
+          <CardContent className="p-0">
+            <div
+              ref={canvasRef}
+              className="relative w-full cursor-grab overflow-hidden bg-[radial-gradient(circle_at_center,_rgba(59,130,246,0.08),transparent_55%)]"
+              style={{ minHeight: `${CANVAS_MIN_HEIGHT}px` }}
+              onPointerDown={onCanvasPointerDown}
+              onPointerMove={onCanvasPointerMove}
+              onPointerUp={onCanvasPointerUp}
+              onPointerCancel={onCanvasPointerUp}
+              onWheel={onWheel}
             >
-              {sortedNodes.map((node) => (
-                <option key={node.id} value={node.id}>
-                  {node.title} ({node.id.slice(-4)})
-                </option>
-              ))}
-            </Select>
-          </div>
-        </CardContent>
-      </Card>
+              <svg className="pointer-events-none absolute inset-0 h-full w-full">
+                <g transform={`translate(${viewport.x} ${viewport.y}) scale(${viewport.scale})`}>
+                  {graph.edges.map((edge) => {
+                    const from = nodeLookup.get(edge.fromNodeId);
+                    const to = nodeLookup.get(edge.toNodeId);
+                    if (!from || !to) return null;
 
-      <Card>
-        <CardHeader className="flex flex-row items-start justify-between gap-3">
-          <div>
-            <CardTitle className="text-base">Nodes</CardTitle>
-            <CardDescription>Define each message and whether it can auto-send.</CardDescription>
-          </div>
-          <Button
-            type="button"
-            variant="outline"
-            onClick={() =>
-              setGraph((prev) =>
-                prev
-                  ? {
-                      ...prev,
-                      nodes: [...prev.nodes, defaultNode("message")],
-                    }
-                  : prev
-              )
-            }
-          >
-            <Plus className="h-4 w-4" />
-            Add Node
-          </Button>
-        </CardHeader>
-        <CardContent className="grid gap-3">
-          {graph.nodes.map((node, index) => (
-            <div key={node.id} className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3">
-              <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-                <div className="text-sm font-semibold">Node {index + 1}</div>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="ghost"
-                  onClick={() =>
-                    setGraph((prev) => {
-                      if (!prev) return prev;
-                      const remainingNodes = prev.nodes.filter((item) => item.id !== node.id);
-                      const remainingEdges = prev.edges.filter(
-                        (edge) => edge.fromNodeId !== node.id && edge.toNodeId !== node.id
-                      );
-                      const nextStart = prev.startNodeId === node.id ? remainingNodes[0]?.id ?? "" : prev.startNodeId;
-                      return {
-                        ...prev,
-                        startNodeId: nextStart,
-                        nodes: remainingNodes,
-                        edges: remainingEdges,
-                      };
-                    })
-                  }
-                >
-                  <Trash2 className="h-4 w-4" />
-                </Button>
+                    const fromX = from.x + NODE_WIDTH;
+                    const fromY = from.y + NODE_HEIGHT / 2;
+                    const toX = to.x;
+                    const toY = to.y + NODE_HEIGHT / 2;
+                    const selected = selectedEdgeId === edge.id;
+
+                    return (
+                      <g key={edge.id}>
+                        <path
+                          data-edge-path="true"
+                          d={bezierPath(fromX, fromY, toX, toY)}
+                          fill="none"
+                          stroke={selected ? "var(--accent)" : "var(--border-strong)"}
+                          strokeWidth={selected ? 3 : 2}
+                          strokeLinecap="round"
+                          className="pointer-events-auto cursor-pointer"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            setSelectedEdgeId(edge.id);
+                            setSelectedNodeId("");
+                          }}
+                        />
+                        <text
+                          x={(fromX + toX) / 2}
+                          y={(fromY + toY) / 2 - 8}
+                          textAnchor="middle"
+                          fill="var(--muted-foreground)"
+                          fontSize="11"
+                          className="pointer-events-none"
+                        >
+                          {edge.trigger}{edge.intent ? `:${edge.intent}` : ""}
+                        </text>
+                      </g>
+                    );
+                  })}
+
+                  {connectState ? (() => {
+                    const from = nodeLookup.get(connectState.fromNodeId);
+                    if (!from) return null;
+                    const fromX = from.x + NODE_WIDTH;
+                    const fromY = from.y + NODE_HEIGHT / 2;
+                    return (
+                      <path
+                        d={bezierPath(fromX, fromY, pointerWorld.x, pointerWorld.y)}
+                        fill="none"
+                        stroke="var(--accent)"
+                        strokeDasharray="6 6"
+                        strokeWidth={2}
+                        strokeLinecap="round"
+                      />
+                    );
+                  })() : null}
+                </g>
+              </svg>
+
+              <div
+                className="absolute left-0 top-0"
+                style={{
+                  transform: `translate(${viewport.x}px, ${viewport.y}px) scale(${viewport.scale})`,
+                  transformOrigin: "0 0",
+                }}
+              >
+                {graph.nodes.map((node) => {
+                  const isSelected = selectedNodeId === node.id;
+                  const isStart = graph.startNodeId === node.id;
+                  return (
+                    <div
+                      key={node.id}
+                      data-node-card="true"
+                      className="absolute rounded-xl border bg-[color:var(--surface)] shadow-sm"
+                      style={{
+                        width: `${NODE_WIDTH}px`,
+                        minHeight: `${NODE_HEIGHT}px`,
+                        left: `${node.x}px`,
+                        top: `${node.y}px`,
+                        borderColor: isSelected ? "var(--accent)" : "var(--border)",
+                      }}
+                      onPointerDown={(event) => startNodeDrag(event, node.id)}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        setSelectedNodeId(node.id);
+                        setSelectedEdgeId("");
+                      }}
+                    >
+                      <button
+                        type="button"
+                        className="absolute -left-2 top-1/2 h-4 w-4 -translate-y-1/2 rounded-full border border-[color:var(--border-strong)] bg-[color:var(--surface)]"
+                        title="Connect here"
+                        onPointerUp={(event) => completeConnect(event, node.id)}
+                        onPointerDown={(event) => event.stopPropagation()}
+                      />
+
+                      <button
+                        type="button"
+                        className="absolute -right-2 top-1/2 h-4 w-4 -translate-y-1/2 rounded-full border border-[color:var(--accent)] bg-[color:var(--accent)]"
+                        title="Start connection"
+                        onPointerDown={(event) => startConnect(event, node.id)}
+                      />
+
+                      <div className="border-b border-[color:var(--border)] px-3 py-2">
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="truncate text-sm font-semibold">{node.title || "Untitled"}</div>
+                          <div className="flex items-center gap-1">
+                            {isStart ? <Badge variant="accent">Start</Badge> : null}
+                            <Badge variant={node.kind === "terminal" ? "muted" : "default"}>{node.kind}</Badge>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="space-y-2 px-3 py-2 text-xs text-[color:var(--muted-foreground)]">
+                        <div className="line-clamp-1"><strong>Subject:</strong> {node.subject || "(none)"}</div>
+                        <div className="line-clamp-3">{node.body || "No body"}</div>
+                        <div className="flex items-center justify-between">
+                          <span>{node.autoSend ? "Auto-send" : "Manual send"}</span>
+                          <span>Delay {node.delayMinutes}m</span>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
-              <div className="grid gap-3 md:grid-cols-2">
+
+              <div className="pointer-events-none absolute bottom-3 left-3 rounded-lg border border-[color:var(--border)] bg-[color:var(--surface)] px-2 py-1 text-xs text-[color:var(--muted-foreground)]">
+                <span className="inline-flex items-center gap-1"><Hand className="h-3 w-3" /> Pan: drag background</span>
+                <span className="mx-2">|</span>
+                <span>Zoom: ctrl/cmd + wheel</span>
+                <span className="mx-2">|</span>
+                <span className="inline-flex items-center gap-1"><Link2 className="h-3 w-3" /> Connect: drag from right dot to left dot</span>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Inspector</CardTitle>
+            <CardDescription>Edit selected node/edge details and map settings.</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="grid gap-2">
+              <Label htmlFor="map-max-depth">Max Depth (turns)</Label>
+              <Input
+                id="map-max-depth"
+                type="number"
+                min={1}
+                max={5}
+                value={graph.maxDepth}
+                onChange={(event) =>
+                  setGraph((prev) =>
+                    prev
+                      ? {
+                          ...prev,
+                          maxDepth: clamp(Number(event.target.value || prev.maxDepth), 1, 5),
+                        }
+                      : prev
+                  )
+                }
+              />
+            </div>
+
+            {selectedNode ? (
+              <div className="space-y-3 rounded-xl border border-[color:var(--border)] p-3">
+                <div className="flex items-center justify-between">
+                  <div className="text-sm font-semibold">Node</div>
+                  <Button type="button" size="sm" variant="ghost" onClick={() => deleteNode(selectedNode.id)}>
+                    <Trash2 className="h-4 w-4" />
+                  </Button>
+                </div>
+
                 <div className="grid gap-2">
                   <Label>Title</Label>
-                  <Input
-                    value={node.title}
-                    onChange={(event) =>
-                      setGraph((prev) =>
-                        prev
-                          ? {
-                              ...prev,
-                              nodes: prev.nodes.map((item) =>
-                                item.id === node.id ? { ...item, title: event.target.value } : item
-                              ),
-                            }
-                          : prev
-                      )
-                    }
-                  />
+                  <Input value={selectedNode.title} onChange={(event) => setNodePatch(selectedNode.id, { title: event.target.value })} />
                 </div>
+
                 <div className="grid gap-2">
                   <Label>Kind</Label>
                   <Select
-                    value={node.kind}
-                    onChange={(event) =>
-                      setGraph((prev) =>
-                        prev
-                          ? {
-                              ...prev,
-                              nodes: prev.nodes.map((item) =>
-                                item.id === node.id
-                                  ? {
-                                      ...item,
-                                      kind: event.target.value === "terminal" ? "terminal" : "message",
-                                      autoSend:
-                                        event.target.value === "terminal" ? false : item.autoSend,
-                                    }
-                                  : item
-                              ),
-                            }
-                          : prev
-                      )
-                    }
+                    value={selectedNode.kind}
+                    onChange={(event) => {
+                      const kind = event.target.value === "terminal" ? "terminal" : "message";
+                      setNodePatch(selectedNode.id, {
+                        kind,
+                        autoSend: kind === "terminal" ? false : selectedNode.autoSend,
+                        subject: kind === "terminal" ? "" : selectedNode.subject,
+                        body: kind === "terminal" ? "" : selectedNode.body,
+                      });
+                    }}
                   >
                     <option value="message">message</option>
                     <option value="terminal">terminal</option>
                   </Select>
                 </div>
+
                 <div className="grid gap-2">
                   <Label>Subject</Label>
                   <Input
-                    value={node.subject}
-                    onChange={(event) =>
-                      setGraph((prev) =>
-                        prev
-                          ? {
-                              ...prev,
-                              nodes: prev.nodes.map((item) =>
-                                item.id === node.id ? { ...item, subject: event.target.value } : item
-                              ),
-                            }
-                          : prev
-                      )
-                    }
+                    value={selectedNode.subject}
+                    disabled={selectedNode.kind === "terminal"}
+                    onChange={(event) => setNodePatch(selectedNode.id, { subject: event.target.value })}
                   />
                 </div>
+
+                <div className="grid gap-2">
+                  <Label>Body</Label>
+                  <Textarea
+                    value={selectedNode.body}
+                    disabled={selectedNode.kind === "terminal"}
+                    onChange={(event) => setNodePatch(selectedNode.id, { body: event.target.value })}
+                  />
+                </div>
+
                 <div className="grid gap-2">
                   <Label>Delay (minutes)</Label>
                   <Input
                     type="number"
                     min={0}
                     max={10080}
-                    value={node.delayMinutes}
+                    value={selectedNode.delayMinutes}
                     onChange={(event) =>
-                      setGraph((prev) =>
-                        prev
-                          ? {
-                              ...prev,
-                              nodes: prev.nodes.map((item) =>
-                                item.id === node.id
-                                  ? {
-                                      ...item,
-                                      delayMinutes: Math.max(
-                                        0,
-                                        Math.min(10080, Number(event.target.value || item.delayMinutes))
-                                      ),
-                                    }
-                                  : item
-                              ),
-                            }
-                          : prev
-                      )
+                      setNodePatch(selectedNode.id, {
+                        delayMinutes: clamp(Number(event.target.value || selectedNode.delayMinutes), 0, 10080),
+                      })
                     }
                   />
                 </div>
-                <div className="grid gap-2 md:col-span-2">
-                  <Label>Body</Label>
-                  <Textarea
-                    value={node.body}
-                    onChange={(event) =>
-                      setGraph((prev) =>
-                        prev
-                          ? {
-                              ...prev,
-                              nodes: prev.nodes.map((item) =>
-                                item.id === node.id ? { ...item, body: event.target.value } : item
-                              ),
-                            }
-                          : prev
-                      )
-                    }
-                  />
-                </div>
+
                 <label className="inline-flex items-center gap-2 text-sm">
                   <input
                     type="checkbox"
-                    checked={node.autoSend}
-                    disabled={node.kind === "terminal"}
-                    onChange={(event) =>
-                      setGraph((prev) =>
-                        prev
-                          ? {
-                              ...prev,
-                              nodes: prev.nodes.map((item) =>
-                                item.id === node.id ? { ...item, autoSend: event.target.checked } : item
-                              ),
-                            }
-                          : prev
-                      )
-                    }
+                    checked={selectedNode.autoSend}
+                    disabled={selectedNode.kind === "terminal"}
+                    onChange={(event) => setNodePatch(selectedNode.id, { autoSend: event.target.checked })}
                   />
                   Auto-send
                 </label>
-              </div>
-            </div>
-          ))}
-        </CardContent>
-      </Card>
 
-      <Card>
-        <CardHeader className="flex flex-row items-start justify-between gap-3">
-          <div>
-            <CardTitle className="text-base">Edges</CardTitle>
-            <CardDescription>Define branching rules between nodes.</CardDescription>
-          </div>
-          <Button
-            type="button"
-            variant="outline"
-            onClick={() =>
-              setGraph((prev) =>
-                prev
-                  ? {
-                      ...prev,
-                      edges: [
-                        ...prev.edges,
-                        {
-                          id: makeEdgeId(),
-                          fromNodeId: prev.nodes[0]?.id ?? "",
-                          toNodeId: prev.nodes[1]?.id ?? prev.nodes[0]?.id ?? "",
-                          trigger: "fallback",
-                          intent: "",
-                          waitMinutes: 0,
-                          confidenceThreshold: 0.7,
-                          priority: 1,
-                        },
-                      ],
-                    }
-                  : prev
-              )
-            }
-          >
-            <Plus className="h-4 w-4" />
-            Add Edge
-          </Button>
-        </CardHeader>
-        <CardContent className="grid gap-3">
-          {graph.edges.map((edge, index) => (
-            <div key={edge.id} className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3">
-              <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-                <div className="text-sm font-semibold">Edge {index + 1}</div>
                 <Button
                   type="button"
                   size="sm"
-                  variant="ghost"
-                  onClick={() =>
-                    setGraph((prev) =>
-                      prev ? { ...prev, edges: prev.edges.filter((item) => item.id !== edge.id) } : prev
-                    )
-                  }
+                  variant={graph.startNodeId === selectedNode.id ? "default" : "outline"}
+                  onClick={() => setGraph((prev) => (prev ? { ...prev, startNodeId: selectedNode.id } : prev))}
                 >
-                  <Trash2 className="h-4 w-4" />
+                  Set As Start Node
                 </Button>
               </div>
-              <div className="grid gap-3 md:grid-cols-3">
+            ) : null}
+
+            {selectedEdge ? (
+              <div className="space-y-3 rounded-xl border border-[color:var(--border)] p-3">
+                <div className="flex items-center justify-between">
+                  <div className="text-sm font-semibold">Edge</div>
+                  <Button type="button" size="sm" variant="ghost" onClick={() => deleteEdge(selectedEdge.id)}>
+                    <Trash2 className="h-4 w-4" />
+                  </Button>
+                </div>
+
                 <div className="grid gap-2">
                   <Label>From</Label>
-                  <Select
-                    value={edge.fromNodeId}
-                    onChange={(event) =>
-                      setGraph((prev) =>
-                        prev
-                          ? {
-                              ...prev,
-                              edges: prev.edges.map((item) =>
-                                item.id === edge.id ? { ...item, fromNodeId: event.target.value } : item
-                              ),
-                            }
-                          : prev
-                      )
-                    }
-                  >
-                    {sortedNodes.map((node) => (
-                      <option key={node.id} value={node.id}>
-                        {node.title}
-                      </option>
+                  <Select value={selectedEdge.fromNodeId} onChange={(event) => setEdgePatch(selectedEdge.id, { fromNodeId: event.target.value })}>
+                    {graph.nodes.map((node) => (
+                      <option key={node.id} value={node.id}>{node.title}</option>
                     ))}
                   </Select>
                 </div>
+
                 <div className="grid gap-2">
                   <Label>To</Label>
-                  <Select
-                    value={edge.toNodeId}
-                    onChange={(event) =>
-                      setGraph((prev) =>
-                        prev
-                          ? {
-                              ...prev,
-                              edges: prev.edges.map((item) =>
-                                item.id === edge.id ? { ...item, toNodeId: event.target.value } : item
-                              ),
-                            }
-                          : prev
-                      )
-                    }
-                  >
-                    {sortedNodes.map((node) => (
-                      <option key={node.id} value={node.id}>
-                        {node.title}
-                      </option>
+                  <Select value={selectedEdge.toNodeId} onChange={(event) => setEdgePatch(selectedEdge.id, { toNodeId: event.target.value })}>
+                    {graph.nodes.map((node) => (
+                      <option key={node.id} value={node.id}>{node.title}</option>
                     ))}
                   </Select>
                 </div>
+
                 <div className="grid gap-2">
                   <Label>Trigger</Label>
                   <Select
-                    value={edge.trigger}
-                    onChange={(event) =>
-                      setGraph((prev) =>
-                        prev
-                          ? {
-                              ...prev,
-                              edges: prev.edges.map((item) =>
-                                item.id === edge.id
-                                  ? {
-                                      ...item,
-                                      trigger:
-                                        event.target.value === "intent"
-                                          ? "intent"
-                                          : event.target.value === "timer"
-                                            ? "timer"
-                                            : "fallback",
-                                      intent: event.target.value === "intent" ? item.intent || "interest" : "",
-                                    }
-                                  : item
-                              ),
-                            }
-                          : prev
-                      )
-                    }
+                    value={selectedEdge.trigger}
+                    onChange={(event) => {
+                      const trigger =
+                        event.target.value === "intent"
+                          ? "intent"
+                          : event.target.value === "timer"
+                            ? "timer"
+                            : "fallback";
+                      setEdgePatch(selectedEdge.id, {
+                        trigger,
+                        intent: trigger === "intent" ? selectedEdge.intent || "interest" : "",
+                      });
+                    }}
                   >
                     <option value="intent">intent</option>
                     <option value="timer">timer</option>
                     <option value="fallback">fallback</option>
                   </Select>
                 </div>
+
                 <div className="grid gap-2">
                   <Label>Intent</Label>
                   <Select
-                    value={edge.intent}
-                    disabled={edge.trigger !== "intent"}
-                    onChange={(event) =>
-                      setGraph((prev) =>
-                        prev
-                          ? {
-                              ...prev,
-                              edges: prev.edges.map((item) =>
-                                item.id === edge.id
-                                  ? {
-                                      ...item,
-                                      intent:
-                                        event.target.value === "question" ||
-                                        event.target.value === "interest" ||
-                                        event.target.value === "objection" ||
-                                        event.target.value === "unsubscribe" ||
-                                        event.target.value === "other"
-                                          ? event.target.value
-                                          : "",
-                                    }
-                                  : item
-                              ),
-                            }
-                          : prev
-                      )
-                    }
+                    value={selectedEdge.intent}
+                    disabled={selectedEdge.trigger !== "intent"}
+                    onChange={(event) => {
+                      const value = event.target.value;
+                      const intent =
+                        value === "question" ||
+                        value === "interest" ||
+                        value === "objection" ||
+                        value === "unsubscribe" ||
+                        value === "other"
+                          ? value
+                          : "";
+                      setEdgePatch(selectedEdge.id, { intent });
+                    }}
                   >
                     <option value="">none</option>
                     <option value="interest">interest</option>
@@ -636,64 +958,29 @@ export default function FlowEditorClient({
                     <option value="other">other</option>
                   </Select>
                 </div>
+
                 <div className="grid gap-2">
                   <Label>Wait (minutes)</Label>
                   <Input
                     type="number"
                     min={0}
                     max={10080}
-                    value={edge.waitMinutes}
-                    onChange={(event) =>
-                      setGraph((prev) =>
-                        prev
-                          ? {
-                              ...prev,
-                              edges: prev.edges.map((item) =>
-                                item.id === edge.id
-                                  ? {
-                                      ...item,
-                                      waitMinutes: Math.max(
-                                        0,
-                                        Math.min(10080, Number(event.target.value || item.waitMinutes))
-                                      ),
-                                    }
-                                  : item
-                              ),
-                            }
-                          : prev
-                      )
-                    }
+                    value={selectedEdge.waitMinutes}
+                    onChange={(event) => setEdgePatch(selectedEdge.id, { waitMinutes: clamp(Number(event.target.value || selectedEdge.waitMinutes), 0, 10080) })}
                   />
                 </div>
+
                 <div className="grid gap-2">
                   <Label>Priority</Label>
                   <Input
                     type="number"
                     min={1}
                     max={100}
-                    value={edge.priority}
-                    onChange={(event) =>
-                      setGraph((prev) =>
-                        prev
-                          ? {
-                              ...prev,
-                              edges: prev.edges.map((item) =>
-                                item.id === edge.id
-                                  ? {
-                                      ...item,
-                                      priority: Math.max(
-                                        1,
-                                        Math.min(100, Number(event.target.value || item.priority))
-                                      ),
-                                    }
-                                  : item
-                              ),
-                            }
-                          : prev
-                      )
-                    }
+                    value={selectedEdge.priority}
+                    onChange={(event) => setEdgePatch(selectedEdge.id, { priority: clamp(Number(event.target.value || selectedEdge.priority), 1, 100) })}
                   />
                 </div>
+
                 <div className="grid gap-2">
                   <Label>Confidence Threshold</Label>
                   <Input
@@ -701,39 +988,21 @@ export default function FlowEditorClient({
                     min={0}
                     max={1}
                     step={0.05}
-                    value={edge.confidenceThreshold}
-                    onChange={(event) =>
-                      setGraph((prev) =>
-                        prev
-                          ? {
-                              ...prev,
-                              edges: prev.edges.map((item) =>
-                                item.id === edge.id
-                                  ? {
-                                      ...item,
-                                      confidenceThreshold: Math.max(
-                                        0,
-                                        Math.min(1, Number(event.target.value || item.confidenceThreshold))
-                                      ),
-                                    }
-                                  : item
-                              ),
-                            }
-                          : prev
-                      )
-                    }
+                    value={selectedEdge.confidenceThreshold}
+                    onChange={(event) => setEdgePatch(selectedEdge.id, { confidenceThreshold: clamp(Number(event.target.value || selectedEdge.confidenceThreshold), 0, 1) })}
                   />
                 </div>
               </div>
-            </div>
-          ))}
-          {!graph.edges.length ? (
-            <div className="text-sm text-[color:var(--muted-foreground)]">
-              No edges yet. Add at least one branch from the start node.
-            </div>
-          ) : null}
-        </CardContent>
-      </Card>
+            ) : null}
+
+            {!selectedNode && !selectedEdge ? (
+              <div className="rounded-xl border border-dashed border-[color:var(--border)] p-3 text-sm text-[color:var(--muted-foreground)]">
+                Select a node or edge on the canvas to edit it. Start a connection by dragging from a node’s right dot to another node’s left dot.
+              </div>
+            ) : null}
+          </CardContent>
+        </Card>
+      </div>
     </div>
   );
 }

@@ -32,11 +32,11 @@ import {
 } from "@/lib/client-api";
 import type { ConversationFlowEdge, ConversationFlowGraph, ConversationFlowNode, ConversationMap } from "@/lib/factory-types";
 
-const NODE_WIDTH = 280;
-const NODE_HEIGHT = 170;
-const CANVAS_MIN_HEIGHT = 700;
-const GRID_X = 360;
-const GRID_Y = 230;
+const NODE_WIDTH = 340;
+const NODE_HEIGHT = 220;
+const CANVAS_MIN_HEIGHT = 760;
+const GRID_X = 460;
+const GRID_Y = 300;
 
 type Viewport = {
   x: number;
@@ -161,7 +161,7 @@ export default function FlowEditorClient({
   const [map, setMap] = useState<ConversationMap | null>(null);
   const [graph, setGraph] = useState<ConversationFlowGraph | null>(null);
 
-  const [viewport, setViewport] = useState<Viewport>({ x: 60, y: 80, scale: 1 });
+  const [viewport, setViewport] = useState<Viewport>({ x: 80, y: 96, scale: 1 });
   const [pointerWorld, setPointerWorld] = useState({ x: 0, y: 0 });
   const [dragState, setDragState] = useState<DragState | null>(null);
   const [panState, setPanState] = useState<PanState | null>(null);
@@ -176,6 +176,7 @@ export default function FlowEditorClient({
   const [generating, setGenerating] = useState(false);
   const [error, setError] = useState("");
   const [statusMessage, setStatusMessage] = useState("");
+  const [hasFittedInitialView, setHasFittedInitialView] = useState(false);
 
   const load = async () => {
     setError("");
@@ -203,6 +204,7 @@ export default function FlowEditorClient({
     setVariantName(variant.name || "Variant");
     setMap(mapRow);
     setGraph(nextGraph);
+    setHasFittedInitialView(false);
     setSelectedNodeId(nextGraph.startNodeId || nextGraph.nodes[0]?.id || "");
     setSelectedEdgeId("");
   };
@@ -290,6 +292,7 @@ export default function FlowEditorClient({
       const suggested = await suggestConversationMapApi(brandId, campaignId, variantId);
       const next = withLayout(suggested);
       setGraph(next);
+      setHasFittedInitialView(false);
       setSelectedNodeId(next.startNodeId || next.nodes[0]?.id || "");
       setSelectedEdgeId("");
       setStatusMessage("AI map generated. Save draft to keep it.");
@@ -506,7 +509,7 @@ export default function FlowEditorClient({
 
     const width = Math.max(1, maxX - minX);
     const height = Math.max(1, maxY - minY);
-    const scale = clamp(Math.min((rect.width - 80) / width, (rect.height - 80) / height), 0.5, 1.4);
+    const scale = clamp(Math.min((rect.width - 120) / width, (rect.height - 120) / height), 0.7, 1.25);
 
     setViewport({
       scale,
@@ -514,6 +517,34 @@ export default function FlowEditorClient({
       y: (rect.height - height * scale) / 2 - minY * scale,
     });
   };
+
+  useEffect(() => {
+    if (!graph?.nodes.length || loading || hasFittedInitialView || !canvasRef.current) {
+      return;
+    }
+
+    const frame = requestAnimationFrame(() => {
+      const rect = canvasRef.current?.getBoundingClientRect();
+      if (!rect) return;
+
+      const minX = Math.min(...graph.nodes.map((node) => node.x));
+      const minY = Math.min(...graph.nodes.map((node) => node.y));
+      const maxX = Math.max(...graph.nodes.map((node) => node.x + NODE_WIDTH));
+      const maxY = Math.max(...graph.nodes.map((node) => node.y + NODE_HEIGHT));
+      const width = Math.max(1, maxX - minX);
+      const height = Math.max(1, maxY - minY);
+      const scale = clamp(Math.min((rect.width - 120) / width, (rect.height - 120) / height), 0.7, 1.25);
+
+      setViewport({
+        scale,
+        x: (rect.width - width * scale) / 2 - minX * scale,
+        y: (rect.height - height * scale) / 2 - minY * scale,
+      });
+      setHasFittedInitialView(true);
+    });
+
+    return () => cancelAnimationFrame(frame);
+  }, [graph, loading, hasFittedInitialView]);
 
   const zoom = (delta: number) => {
     setViewport((prev) => ({ ...prev, scale: clamp(prev.scale + delta, 0.4, 1.8) }));
@@ -585,7 +616,7 @@ export default function FlowEditorClient({
         {error ? <CardContent className="pt-0 text-sm text-[color:var(--danger)]">{error}</CardContent> : null}
       </Card>
 
-      <div className="grid gap-4 xl:grid-cols-[1fr_360px]">
+      <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_320px]">
         <Card className="overflow-hidden">
           <CardHeader className="flex flex-row items-center justify-between gap-3 border-b border-[color:var(--border)] pb-3">
             <div>
@@ -662,7 +693,7 @@ export default function FlowEditorClient({
                           y={(fromY + toY) / 2 - 8}
                           textAnchor="middle"
                           fill="var(--muted-foreground)"
-                          fontSize="11"
+                          fontSize="12"
                           className="pointer-events-none"
                         >
                           {edge.trigger}{edge.intent ? `:${edge.intent}` : ""}
@@ -704,7 +735,7 @@ export default function FlowEditorClient({
                     <div
                       key={node.id}
                       data-node-card="true"
-                      className="absolute rounded-xl border bg-[color:var(--surface)] shadow-sm"
+                      className="absolute rounded-2xl border bg-[color:var(--surface)] shadow-lg"
                       style={{
                         width: `${NODE_WIDTH}px`,
                         minHeight: `${NODE_HEIGHT}px`,
@@ -721,7 +752,7 @@ export default function FlowEditorClient({
                     >
                       <button
                         type="button"
-                        className="absolute -left-2 top-1/2 h-4 w-4 -translate-y-1/2 rounded-full border border-[color:var(--border-strong)] bg-[color:var(--surface)]"
+                        className="absolute -left-2.5 top-1/2 h-5 w-5 -translate-y-1/2 rounded-full border-2 border-[color:var(--border-strong)] bg-[color:var(--surface)]"
                         title="Connect here"
                         onPointerUp={(event) => completeConnect(event, node.id)}
                         onPointerDown={(event) => event.stopPropagation()}
@@ -729,14 +760,14 @@ export default function FlowEditorClient({
 
                       <button
                         type="button"
-                        className="absolute -right-2 top-1/2 h-4 w-4 -translate-y-1/2 rounded-full border border-[color:var(--accent)] bg-[color:var(--accent)]"
+                        className="absolute -right-2.5 top-1/2 h-5 w-5 -translate-y-1/2 rounded-full border-2 border-[color:var(--accent)] bg-[color:var(--accent)]"
                         title="Start connection"
                         onPointerDown={(event) => startConnect(event, node.id)}
                       />
 
-                      <div className="border-b border-[color:var(--border)] px-3 py-2">
+                      <div className="border-b border-[color:var(--border)] px-4 py-3">
                         <div className="flex items-center justify-between gap-2">
-                          <div className="truncate text-sm font-semibold">{node.title || "Untitled"}</div>
+                          <div className="truncate text-base font-semibold">{node.title || "Untitled"}</div>
                           <div className="flex items-center gap-1">
                             {isStart ? <Badge variant="accent">Start</Badge> : null}
                             <Badge variant={node.kind === "terminal" ? "muted" : "default"}>{node.kind}</Badge>
@@ -744,9 +775,9 @@ export default function FlowEditorClient({
                         </div>
                       </div>
 
-                      <div className="space-y-2 px-3 py-2 text-xs text-[color:var(--muted-foreground)]">
-                        <div className="line-clamp-1"><strong>Subject:</strong> {node.subject || "(none)"}</div>
-                        <div className="line-clamp-3">{node.body || "No body"}</div>
+                      <div className="space-y-3 px-4 py-3 text-sm leading-6 text-[color:var(--muted-foreground)]">
+                        <div className="line-clamp-2"><strong>Subject:</strong> {node.subject || "(none)"}</div>
+                        <div className="line-clamp-4">{node.body || "No body"}</div>
                         <div className="flex items-center justify-between">
                           <span>{node.autoSend ? "Auto-send" : "Manual send"}</span>
                           <span>Delay {node.delayMinutes}m</span>
@@ -757,7 +788,7 @@ export default function FlowEditorClient({
                 })}
               </div>
 
-              <div className="pointer-events-none absolute bottom-3 left-3 rounded-lg border border-[color:var(--border)] bg-[color:var(--surface)] px-2 py-1 text-xs text-[color:var(--muted-foreground)]">
+              <div className="pointer-events-none absolute bottom-4 left-4 rounded-xl border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-2 text-[13px] text-[color:var(--muted-foreground)] shadow-sm">
                 <span className="inline-flex items-center gap-1"><Hand className="h-3 w-3" /> Pan: drag background</span>
                 <span className="mx-2">|</span>
                 <span>Zoom: ctrl/cmd + wheel</span>
@@ -996,7 +1027,7 @@ export default function FlowEditorClient({
             ) : null}
 
             {!selectedNode && !selectedEdge ? (
-              <div className="rounded-xl border border-dashed border-[color:var(--border)] p-3 text-sm text-[color:var(--muted-foreground)]">
+              <div className="rounded-xl border border-dashed border-[color:var(--border)] p-4 text-sm leading-6 text-[color:var(--muted-foreground)]">
                 Select a node or edge on the canvas to edit it. Start a connection by dragging from a node’s right dot to another node’s left dot.
               </div>
             ) : null}

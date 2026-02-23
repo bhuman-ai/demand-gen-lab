@@ -266,6 +266,21 @@ function summarizeReplyOutcome(run: OutreachRun) {
 
 function friendlyRunLaunchError(error: unknown) {
   const message = error instanceof Error ? error.message : "Failed to launch run";
+  if (message.includes("No published conversation map for this variant")) {
+    return "Run did not start: publish a Conversation Map for this variant first.";
+  }
+  if (message.includes("Conversation map start node is invalid")) {
+    return "Run did not start: Conversation Map start node is invalid.";
+  }
+  if (message.includes("Conversation map start node must be a message")) {
+    return "Run did not start: start node must be a message.";
+  }
+  if (message.includes("Conversation map start node must auto-send to start outreach")) {
+    return "Run did not start: start node must be set to auto-send.";
+  }
+  if (message.includes("Conversation map start message body is empty")) {
+    return "Run did not start: start message body is empty.";
+  }
   if (message.includes("Lead source is not configured for this hypothesis")) {
     return "Run did not start: this angle has no lead source yet. Save Build, then retry.";
   }

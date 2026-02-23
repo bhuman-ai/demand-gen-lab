@@ -47,7 +47,6 @@ import {
   type OutreachJob,
 } from "@/lib/outreach-data";
 import {
-  buildOutreachMessageBody,
   getLeadEmailSuppressionReason,
   sendOutreachMessage,
   sendReplyDraftAsEvent,
@@ -693,6 +692,67 @@ export async function launchExperimentRun(input: {
       reason,
       hint: diagnostic.hint,
       debug: diagnostic.debug,
+    };
+  }
+
+  const publishedFlowMap = await getPublishedConversationMapForExperiment(
+    input.brandId,
+    input.campaignId,
+    experiment.id
+  );
+  const flowStartNode = publishedFlowMap
+    ? conversationNodeById(publishedFlowMap.publishedGraph, publishedFlowMap.publishedGraph.startNodeId)
+    : null;
+  const conversationPreflightReason =
+    !publishedFlowMap || !publishedFlowMap.publishedRevision
+      ? "No published conversation map for this variant"
+      : !flowStartNode
+        ? "Conversation map start node is invalid"
+        : flowStartNode.kind !== "message"
+          ? "Conversation map start node must be a message"
+          : !flowStartNode.autoSend
+            ? "Conversation map start node must auto-send to start outreach"
+            : !flowStartNode.body.trim()
+              ? "Conversation map start message body is empty"
+              : "";
+
+  if (conversationPreflightReason) {
+    const failed = await createOutreachRun({
+      brandId: input.brandId,
+      campaignId: input.campaignId,
+      experimentId: experiment.id,
+      hypothesisId: hypothesis.id,
+      accountId: brandAccount.deliveryAccount.id,
+      status: "preflight_failed",
+      dailyCap: experiment.runPolicy?.dailyCap ?? 30,
+      hourlyCap: experiment.runPolicy?.hourlyCap ?? 6,
+      timezone: experiment.runPolicy?.timezone || DEFAULT_TIMEZONE,
+      minSpacingMinutes: experiment.runPolicy?.minSpacingMinutes ?? 8,
+      lastError: conversationPreflightReason,
+    });
+    await markExperimentExecutionStatus(input.brandId, input.campaignId, experiment.id, "failed");
+    await createOutreachEvent({
+      runId: failed.id,
+      eventType: "hypothesis_approved_auto_run_queued",
+      payload: {
+        trigger: input.trigger,
+        outcome: "preflight_failed",
+        reason: conversationPreflightReason,
+        hasPublishedConversationMap: Boolean(publishedFlowMap?.publishedRevision),
+      },
+    });
+    return {
+      ok: false,
+      runId: failed.id,
+      reason: conversationPreflightReason,
+      hint: "Open Build > Conversation Map, publish a valid start message, then relaunch.",
+      debug: {
+        hasPublishedConversationMap: Boolean(publishedFlowMap?.publishedRevision),
+        hasStartNode: Boolean(flowStartNode),
+        startNodeKind: flowStartNode?.kind ?? "",
+        startNodeAutoSend: Boolean(flowStartNode?.autoSend),
+        startNodeHasBody: Boolean(flowStartNode?.body?.trim()),
+      },
     };
   }
 
@@ -1429,37 +1489,17 @@ async function processScheduleMessagesJob(job: OutreachJob) {
       },
     });
   } else {
-    const offsets = [0, 2, 7];
-    const now = Date.now();
-    const messages = leads.flatMap((lead) =>
-      offsets.map((offsetDays, index) => {
-        const scheduledAt = new Date(now + offsetDays * DAY_MS + index * run.minSpacingMinutes * 60 * 1000).toISOString();
-        const composed = buildOutreachMessageBody({
-          brandName: brand?.name || "Brand",
-          experimentName: experiment.name,
-          hypothesisTitle: hypothesis.title,
-          step: index + 1,
-          recipientName: lead.name,
-        });
-        return {
-          runId: run.id,
-          brandId: run.brandId,
-          campaignId: run.campaignId,
-          leadId: lead.id,
-          step: index + 1,
-          subject: composed.subject,
-          body: composed.body,
-          status: "scheduled" as const,
-          scheduledAt,
-        };
-      })
-    );
-
-    await createRunMessages(messages);
-    for (const lead of leads) {
-      await updateRunLead(lead.id, { status: "scheduled" });
-    }
-    scheduledMessagesCount = messages.length;
+    await failRunWithDiagnostics({
+      run,
+      reason:
+        "No published conversation map for this variant. Build and publish a Conversation Map before launching.",
+      eventType: "schedule_failed",
+      payload: {
+        hasConversationMap: false,
+        experimentId: run.experimentId,
+      },
+    });
+    return;
   }
 
   await updateOutreachRun(run.id, {

@@ -224,6 +224,11 @@ export type BrandRecord = {
   website: string;
   tone: string;
   notes: string;
+  product: string;
+  targetMarkets: string[];
+  idealCustomerProfiles: string[];
+  keyFeatures: string[];
+  keyBenefits: string[];
   domains: DomainRow[];
   leads: LeadRow[];
   inbox: InboxRow[];

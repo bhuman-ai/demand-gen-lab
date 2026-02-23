@@ -93,6 +93,21 @@ const asRecord = (value: unknown): Record<string, unknown> => {
   return {};
 };
 
+const normalizeStringArray = (value: unknown): string[] => {
+  if (Array.isArray(value)) {
+    return value
+      .map((entry) => String(entry ?? "").trim())
+      .filter((entry) => entry.length > 0);
+  }
+  if (typeof value === "string") {
+    return value
+      .split(/\n|,/)
+      .map((entry) => entry.trim())
+      .filter((entry) => entry.length > 0);
+  }
+  return [];
+};
+
 const mapBrandRow = (input: unknown): BrandRecord => {
   const row = asRecord(input);
   return {
@@ -101,6 +116,13 @@ const mapBrandRow = (input: unknown): BrandRecord => {
     website: String(row.website ?? ""),
     tone: String(row.tone ?? ""),
     notes: String(row.notes ?? ""),
+    product: String(row.product ?? ""),
+    targetMarkets: normalizeStringArray(row.target_markets ?? row.targetMarkets),
+    idealCustomerProfiles: normalizeStringArray(
+      row.ideal_customer_profiles ?? row.idealCustomerProfiles ?? row.target_buyers
+    ),
+    keyFeatures: normalizeStringArray(row.key_features ?? row.keyFeatures),
+    keyBenefits: normalizeStringArray(row.key_benefits ?? row.keyBenefits ?? row.offers),
     domains: Array.isArray(row.domains) ? (row.domains as DomainRow[]) : [],
     leads: Array.isArray(row.leads) ? (row.leads as LeadRow[]) : [],
     inbox: Array.isArray(row.inbox) ? (row.inbox as InboxRow[]) : [],
@@ -219,6 +241,11 @@ export async function createBrand(input: {
   website: string;
   tone?: string;
   notes?: string;
+  product?: string;
+  targetMarkets?: string[];
+  idealCustomerProfiles?: string[];
+  keyFeatures?: string[];
+  keyBenefits?: string[];
 }): Promise<BrandRecord> {
   const now = nowIso();
   const brand: BrandRecord = {
@@ -227,6 +254,11 @@ export async function createBrand(input: {
     website: input.website.trim(),
     tone: String(input.tone ?? "").trim(),
     notes: String(input.notes ?? "").trim(),
+    product: String(input.product ?? "").trim(),
+    targetMarkets: normalizeStringArray(input.targetMarkets),
+    idealCustomerProfiles: normalizeStringArray(input.idealCustomerProfiles),
+    keyFeatures: normalizeStringArray(input.keyFeatures),
+    keyBenefits: normalizeStringArray(input.keyBenefits),
     domains: [],
     leads: [],
     inbox: [],
@@ -244,6 +276,11 @@ export async function createBrand(input: {
         website: brand.website,
         tone: brand.tone,
         notes: brand.notes,
+        product: brand.product,
+        target_markets: brand.targetMarkets,
+        ideal_customer_profiles: brand.idealCustomerProfiles,
+        key_features: brand.keyFeatures,
+        key_benefits: brand.keyBenefits,
         domains: brand.domains,
         leads: brand.leads,
         inbox: brand.inbox,
@@ -263,7 +300,23 @@ export async function createBrand(input: {
 
 export async function updateBrand(
   brandId: string,
-  patch: Partial<Pick<BrandRecord, "name" | "website" | "tone" | "notes" | "domains" | "leads" | "inbox">>
+  patch: Partial<
+    Pick<
+      BrandRecord,
+      | "name"
+      | "website"
+      | "tone"
+      | "notes"
+      | "product"
+      | "targetMarkets"
+      | "idealCustomerProfiles"
+      | "keyFeatures"
+      | "keyBenefits"
+      | "domains"
+      | "leads"
+      | "inbox"
+    >
+  >
 ): Promise<BrandRecord | null> {
   const supabase = getSupabaseAdmin();
   if (supabase) {
@@ -272,6 +325,13 @@ export async function updateBrand(
     if (typeof patch.website === "string") update.website = patch.website;
     if (typeof patch.tone === "string") update.tone = patch.tone;
     if (typeof patch.notes === "string") update.notes = patch.notes;
+    if (typeof patch.product === "string") update.product = patch.product;
+    if (Array.isArray(patch.targetMarkets)) update.target_markets = patch.targetMarkets;
+    if (Array.isArray(patch.idealCustomerProfiles)) {
+      update.ideal_customer_profiles = patch.idealCustomerProfiles;
+    }
+    if (Array.isArray(patch.keyFeatures)) update.key_features = patch.keyFeatures;
+    if (Array.isArray(patch.keyBenefits)) update.key_benefits = patch.keyBenefits;
     if (Array.isArray(patch.domains)) update.domains = patch.domains;
     if (Array.isArray(patch.leads)) update.leads = patch.leads;
     if (Array.isArray(patch.inbox)) update.inbox = patch.inbox;

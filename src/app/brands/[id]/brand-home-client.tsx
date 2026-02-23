@@ -16,10 +16,13 @@ import {
   fetchExperiments,
   fetchOutreachAccounts,
   fetchScaleCampaigns,
+  updateBrandApi,
 } from "@/lib/client-api";
 import { trackEvent } from "@/lib/telemetry-client";
 import type { BrandRecord, ExperimentRecord, OutreachAccount, ScaleCampaignRecord } from "@/lib/factory-types";
 import { Select } from "@/components/ui/select";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 
 function nextWorkspace(experiment: ExperimentRecord | null) {
   if (!experiment) return "experiments";
@@ -35,7 +38,13 @@ export default function BrandHomeClient({ brandId }: { brandId: string }) {
   const [assignedAccountId, setAssignedAccountId] = useState("");
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
+  const [profileSaving, setProfileSaving] = useState(false);
   const [error, setError] = useState("");
+  const [product, setProduct] = useState("");
+  const [targetMarketsText, setTargetMarketsText] = useState("");
+  const [icpText, setIcpText] = useState("");
+  const [featuresText, setFeaturesText] = useState("");
+  const [benefitsText, setBenefitsText] = useState("");
 
   useEffect(() => {
     let mounted = true;
@@ -55,6 +64,11 @@ export default function BrandHomeClient({ brandId }: { brandId: string }) {
         setCampaigns(campaignRows);
         setAccounts(accountRows);
         setAssignedAccountId(assignment.assignment?.accountId ?? "");
+        setProduct(brandRow.product || "");
+        setTargetMarketsText((brandRow.targetMarkets ?? []).join("\n"));
+        setIcpText((brandRow.idealCustomerProfiles ?? []).join("\n"));
+        setFeaturesText((brandRow.keyFeatures ?? []).join("\n"));
+        setBenefitsText((brandRow.keyBenefits ?? []).join("\n"));
         localStorage.setItem("factory.activeBrandId", brandId);
       })
       .catch((err: unknown) => {
@@ -132,6 +146,10 @@ export default function BrandHomeClient({ brandId }: { brandId: string }) {
             <div className="mt-1 text-sm">{brand?.tone || "Not set"}</div>
           </div>
           <div>
+            <div className="text-xs text-[color:var(--muted-foreground)]">Target markets</div>
+            <div className="mt-1 text-sm">{brand?.targetMarkets?.length ?? 0}</div>
+          </div>
+          <div>
             <div className="text-xs text-[color:var(--muted-foreground)]">Experiments</div>
             <div className="mt-1 text-sm">{experiments.length}</div>
           </div>
@@ -142,6 +160,96 @@ export default function BrandHomeClient({ brandId }: { brandId: string }) {
           <div>
             <div className="text-xs text-[color:var(--muted-foreground)]">Notes</div>
             <div className="mt-1 text-sm">{brand?.notes || "No notes"}</div>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Brand profile</CardTitle>
+          <CardDescription>
+            Manage target markets, ICPs, and product context after onboarding.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="grid gap-4">
+          <div className="grid gap-2">
+            <Label htmlFor="product">Product summary</Label>
+            <Textarea
+              id="product"
+              value={product}
+              onChange={(event) => setProduct(event.target.value)}
+              placeholder="What the product does and why it matters."
+            />
+          </div>
+          <div className="grid gap-4 md:grid-cols-2">
+            <div className="grid gap-2">
+              <Label htmlFor="targetMarkets">Target markets (one per line)</Label>
+              <Textarea
+                id="targetMarkets"
+                value={targetMarketsText}
+                onChange={(event) => setTargetMarketsText(event.target.value)}
+                placeholder="Mid-market B2B SaaS&#10;Agencies"
+              />
+            </div>
+            <div className="grid gap-2">
+              <Label htmlFor="icps">Ideal customer profiles (one per line)</Label>
+              <Textarea
+                id="icps"
+                value={icpText}
+                onChange={(event) => setIcpText(event.target.value)}
+                placeholder="VP Sales at 50-500 employee SaaS&#10;Founder-led teams"
+              />
+            </div>
+            <div className="grid gap-2">
+              <Label htmlFor="features">Key features (one per line)</Label>
+              <Textarea
+                id="features"
+                value={featuresText}
+                onChange={(event) => setFeaturesText(event.target.value)}
+                placeholder="AI-personalized video&#10;Automated outreach orchestration"
+              />
+            </div>
+            <div className="grid gap-2">
+              <Label htmlFor="benefits">Key benefits (one per line)</Label>
+              <Textarea
+                id="benefits"
+                value={benefitsText}
+                onChange={(event) => setBenefitsText(event.target.value)}
+                placeholder="Higher reply rates&#10;Lower manual workload"
+              />
+            </div>
+          </div>
+          <div className="flex gap-2">
+            <Button
+              type="button"
+              disabled={!brand || profileSaving}
+              onClick={async () => {
+                if (!brand) return;
+                const normalize = (value: string) =>
+                  value
+                    .split("\n")
+                    .map((line) => line.trim())
+                    .filter((line) => line.length > 0);
+                setProfileSaving(true);
+                setError("");
+                try {
+                  const updated = await updateBrandApi(brand.id, {
+                    product: product.trim(),
+                    targetMarkets: normalize(targetMarketsText),
+                    idealCustomerProfiles: normalize(icpText),
+                    keyFeatures: normalize(featuresText),
+                    keyBenefits: normalize(benefitsText),
+                  });
+                  setBrand(updated);
+                } catch (err) {
+                  setError(err instanceof Error ? err.message : "Failed to save brand profile");
+                } finally {
+                  setProfileSaving(false);
+                }
+              }}
+            >
+              {profileSaving ? "Saving profile..." : "Save Brand Profile"}
+            </Button>
           </div>
         </CardContent>
       </Card>

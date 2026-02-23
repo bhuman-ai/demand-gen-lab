@@ -67,6 +67,11 @@ export async function createBrandApi(input: {
   website: string;
   tone?: string;
   notes?: string;
+  product?: string;
+  targetMarkets?: string[];
+  idealCustomerProfiles?: string[];
+  keyFeatures?: string[];
+  keyBenefits?: string[];
 }) {
   const response = await fetch("/api/brands", {
     method: "POST",
@@ -80,7 +85,21 @@ export async function createBrandApi(input: {
 export async function updateBrandApi(
   brandId: string,
   patch: Partial<
-    Pick<BrandRecord, "name" | "website" | "tone" | "notes" | "domains" | "leads" | "inbox">
+    Pick<
+      BrandRecord,
+      | "name"
+      | "website"
+      | "tone"
+      | "notes"
+      | "product"
+      | "targetMarkets"
+      | "idealCustomerProfiles"
+      | "keyFeatures"
+      | "keyBenefits"
+      | "domains"
+      | "leads"
+      | "inbox"
+    >
   >
 ) {
   const response = await fetch(`/api/brands/${brandId}`, {

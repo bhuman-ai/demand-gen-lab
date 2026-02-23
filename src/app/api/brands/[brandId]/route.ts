@@ -72,6 +72,13 @@ function normalizeInbox(value: unknown): InboxRow[] {
     .filter((row) => row.subject.length > 0);
 }
 
+function normalizeStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((entry) => String(entry ?? "").trim())
+    .filter((entry) => entry.length > 0);
+}
+
 export async function GET(_: Request, context: { params: Promise<{ brandId: string }> }) {
   const { brandId } = await context.params;
   const brand = await getBrandById(brandId);
@@ -92,6 +99,13 @@ export async function PATCH(request: Request, context: { params: Promise<{ brand
   if (typeof body.tone === "string") patch.tone = body.tone.trim();
   if (typeof body.notes === "string") patch.notes = body.notes.trim();
   if (typeof body.proof === "string") patch.notes = body.proof.trim();
+  if (typeof body.product === "string") patch.product = body.product.trim();
+  if (Array.isArray(body.targetMarkets)) patch.targetMarkets = normalizeStringArray(body.targetMarkets);
+  if (Array.isArray(body.idealCustomerProfiles)) {
+    patch.idealCustomerProfiles = normalizeStringArray(body.idealCustomerProfiles);
+  }
+  if (Array.isArray(body.keyFeatures)) patch.keyFeatures = normalizeStringArray(body.keyFeatures);
+  if (Array.isArray(body.keyBenefits)) patch.keyBenefits = normalizeStringArray(body.keyBenefits);
   if (Array.isArray(body.domains)) patch.domains = normalizeDomains(body.domains);
   if (Array.isArray(body.leads)) patch.leads = normalizeLeads(body.leads);
   if (Array.isArray(body.inbox)) patch.inbox = normalizeInbox(body.inbox);

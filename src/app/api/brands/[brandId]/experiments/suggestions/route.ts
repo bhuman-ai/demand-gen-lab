@@ -4,6 +4,7 @@ import { getBrandById } from "@/lib/factory-data";
 import {
   createExperimentSuggestions,
   listExperimentSuggestions,
+  updateExperimentSuggestion,
 } from "@/lib/experiment-suggestion-data";
 
 type StructuredSuggestion = {
@@ -219,6 +220,13 @@ export async function POST(request: Request, context: { params: Promise<{ brandI
   const existing = await listExperimentSuggestions(brandId, "suggested");
   if (!refresh && existing.length >= 4) {
     return NextResponse.json({ suggestions: existing, mode: "cached" });
+  }
+  if (refresh && existing.length) {
+    await Promise.all(
+      existing.map((row) =>
+        updateExperimentSuggestion(brandId, row.id, { status: "dismissed" })
+      )
+    );
   }
 
   const system = systemSuggestions({

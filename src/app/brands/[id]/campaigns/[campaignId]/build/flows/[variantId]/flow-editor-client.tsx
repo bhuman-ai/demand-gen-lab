@@ -40,6 +40,12 @@ const GRID_Y = 300;
 const LEGACY_SPREAD_SCALE_X = 1.3;
 const LEGACY_SPREAD_SCALE_Y = 1.45;
 const LEGACY_LAYOUT_PADDING = 120;
+const MIN_ZOOM = 0.4;
+const MAX_ZOOM = 1.8;
+const WHEEL_ZOOM_SENSITIVITY = 0.0009;
+const MAX_WHEEL_ZOOM_STEP = 0.025;
+const BUTTON_ZOOM_STEP = 0.04;
+const ZOOM_EASING = 0.22;
 
 type Viewport = {
   x: number;
@@ -196,6 +202,8 @@ export default function FlowEditorClient({
   backHref?: string;
 }) {
   const canvasRef = useRef<HTMLDivElement | null>(null);
+  const zoomFrameRef = useRef<number | null>(null);
+  const zoomTargetRef = useRef<number | null>(null);
 
   const [brandName, setBrandName] = useState("Brand");
   const [campaignName, setCampaignName] = useState("Campaign");
@@ -588,14 +596,49 @@ export default function FlowEditorClient({
     return () => cancelAnimationFrame(frame);
   }, [graph, loading, hasFittedInitialView]);
 
+  useEffect(() => {
+    return () => {
+      if (zoomFrameRef.current !== null) {
+        cancelAnimationFrame(zoomFrameRef.current);
+      }
+    };
+  }, []);
+
+  const animateZoomTo = (targetScale: number) => {
+    zoomTargetRef.current = clamp(targetScale, MIN_ZOOM, MAX_ZOOM);
+    if (zoomFrameRef.current !== null) return;
+
+    const tick = () => {
+      let done = false;
+      setViewport((prev) => {
+        const target = zoomTargetRef.current ?? prev.scale;
+        const diff = target - prev.scale;
+        if (Math.abs(diff) < 0.001) {
+          done = true;
+          return { ...prev, scale: target };
+        }
+        return { ...prev, scale: prev.scale + diff * ZOOM_EASING };
+      });
+
+      if (done) {
+        zoomFrameRef.current = null;
+        return;
+      }
+      zoomFrameRef.current = requestAnimationFrame(tick);
+    };
+
+    zoomFrameRef.current = requestAnimationFrame(tick);
+  };
+
   const zoom = (delta: number) => {
-    setViewport((prev) => ({ ...prev, scale: clamp(prev.scale + delta, 0.4, 1.8) }));
+    const baseScale = zoomTargetRef.current ?? viewport.scale;
+    animateZoomTo(baseScale + delta);
   };
 
   const onWheel = (event: React.WheelEvent<HTMLDivElement>) => {
     if (event.ctrlKey || event.metaKey) {
       event.preventDefault();
-      const zoomDelta = event.deltaY > 0 ? -0.08 : 0.08;
+      const zoomDelta = clamp(-event.deltaY * WHEEL_ZOOM_SENSITIVITY, -MAX_WHEEL_ZOOM_STEP, MAX_WHEEL_ZOOM_STEP);
       zoom(zoomDelta);
       return;
     }
@@ -681,10 +724,10 @@ export default function FlowEditorClient({
               <Button type="button" size="sm" variant="outline" onClick={fitView}>
                 Fit
               </Button>
-              <Button type="button" size="icon" variant="outline" onClick={() => zoom(0.08)}>
+              <Button type="button" size="icon" variant="outline" onClick={() => zoom(BUTTON_ZOOM_STEP)}>
                 <ZoomIn className="h-4 w-4" />
               </Button>
-              <Button type="button" size="icon" variant="outline" onClick={() => zoom(-0.08)}>
+              <Button type="button" size="icon" variant="outline" onClick={() => zoom(-BUTTON_ZOOM_STEP)}>
                 <ZoomOut className="h-4 w-4" />
               </Button>
             </div>

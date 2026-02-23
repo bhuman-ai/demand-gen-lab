@@ -27,6 +27,10 @@ type NavItem = {
   icon: React.ComponentType<{ className?: string }>;
 };
 
+type MainNavItem = NavItem & {
+  id: "brand" | "experiments" | "campaigns" | "network" | "leads" | "inbox";
+};
+
 function pageTitle(pathname: string) {
   if (pathname === "/") return "Launcher";
   if (pathname === "/brands") return "Brands";
@@ -95,17 +99,30 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   const hasActiveBrand = Boolean(activeBrandId);
   const brandRoot = hasActiveBrand ? `/brands/${activeBrandId}` : "/brands";
 
-  const mainItems = useMemo<NavItem[]>(
+  const mainItems = useMemo<MainNavItem[]>(
     () => [
-      { label: "Brand", href: brandRoot, icon: LayoutGrid },
-      { label: "Experiments", href: hasActiveBrand ? `${brandRoot}/experiments` : "/brands", icon: Target },
-      { label: "Campaigns", href: hasActiveBrand ? `${brandRoot}/campaigns` : "/brands", icon: FolderKanban },
-      { label: "Network", href: hasActiveBrand ? `${brandRoot}/network` : "/brands", icon: Network },
-      { label: "Leads", href: hasActiveBrand ? `${brandRoot}/leads` : "/brands", icon: Mail },
-      { label: "Inbox", href: hasActiveBrand ? `${brandRoot}/inbox` : "/brands", icon: Inbox },
+      { id: "brand", label: "Brand", href: brandRoot, icon: LayoutGrid },
+      { id: "experiments", label: "Experiments", href: hasActiveBrand ? `${brandRoot}/experiments` : "/brands", icon: Target },
+      { id: "campaigns", label: "Campaigns", href: hasActiveBrand ? `${brandRoot}/campaigns` : "/brands", icon: FolderKanban },
+      { id: "network", label: "Network", href: hasActiveBrand ? `${brandRoot}/network` : "/brands", icon: Network },
+      { id: "leads", label: "Leads", href: hasActiveBrand ? `${brandRoot}/leads` : "/brands", icon: Mail },
+      { id: "inbox", label: "Inbox", href: hasActiveBrand ? `${brandRoot}/inbox` : "/brands", icon: Inbox },
     ],
     [brandRoot, hasActiveBrand]
   );
+
+  const activeMainItem = useMemo(() => {
+    if (hasActiveBrand) {
+      if (pathname === `${brandRoot}/experiments` || pathname.startsWith(`${brandRoot}/experiments/`)) return "experiments";
+      if (pathname === `${brandRoot}/campaigns` || pathname.startsWith(`${brandRoot}/campaigns/`)) return "campaigns";
+      if (pathname === `${brandRoot}/network` || pathname.startsWith(`${brandRoot}/network/`)) return "network";
+      if (pathname === `${brandRoot}/leads` || pathname.startsWith(`${brandRoot}/leads/`)) return "leads";
+      if (pathname === `${brandRoot}/inbox` || pathname.startsWith(`${brandRoot}/inbox/`)) return "inbox";
+      if (pathname === brandRoot) return "brand";
+    }
+    if (pathname === "/brands" || pathname === "/brands/new" || pathname.startsWith("/brands/")) return "brand";
+    return "";
+  }, [pathname, brandRoot, hasActiveBrand]);
 
   const toolItems: NavItem[] = [
     { label: "Settings", href: "/settings/outreach", icon: Settings },
@@ -124,11 +141,11 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
 
           <nav className="mt-6 grid gap-1">
             {mainItems.map((item) => {
-              const active = pathname === item.href || pathname.startsWith(`${item.href}/`);
+              const active = item.id === activeMainItem;
               const Icon = item.icon;
               return (
                 <Link
-                  key={item.href}
+                  key={item.id}
                   href={item.href}
                   className={cn(
                     "inline-flex items-center gap-2 rounded-xl px-3 py-2 text-sm transition",

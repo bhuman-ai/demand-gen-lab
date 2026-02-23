@@ -153,100 +153,126 @@ async function openAiSuggestions(input: {
 }
 
 export async function GET(_: Request, context: { params: Promise<{ brandId: string }> }) {
-  const { brandId } = await context.params;
-  const brand = await getBrandById(brandId);
-  if (!brand) {
-    return NextResponse.json({ error: "brand not found" }, { status: 404 });
+  try {
+    const { brandId } = await context.params;
+    const brand = await getBrandById(brandId);
+    if (!brand) {
+      return NextResponse.json({ error: "brand not found" }, { status: 404 });
+    }
+    const suggestions = await listExperimentSuggestions(brandId, "suggested");
+    return NextResponse.json({ suggestions, mode: "stored" });
+  } catch (error) {
+    return NextResponse.json(
+      {
+        error: "Failed to load experiment suggestions",
+        hint: "No fallback is enabled. Fix the underlying data/runtime issue and retry.",
+        debug: {
+          reason: error instanceof Error ? error.message : "Unknown error",
+        },
+      },
+      { status: 500 }
+    );
   }
-  const suggestions = await listExperimentSuggestions(brandId, "suggested");
-  return NextResponse.json({ suggestions, mode: "stored" });
 }
 
 export async function POST(request: Request, context: { params: Promise<{ brandId: string }> }) {
-  const { brandId } = await context.params;
-  const brand = await getBrandById(brandId);
-  if (!brand) {
-    return NextResponse.json({ error: "brand not found" }, { status: 404 });
-  }
-
-  const body = asRecord(await request.json().catch(() => ({})));
-  const refresh = Boolean(body.refresh);
-
-  const existing = await listExperimentSuggestions(brandId, "suggested");
-  if (!refresh && existing.length >= 4) {
-    return NextResponse.json({ suggestions: existing, mode: "cached" });
-  }
-  if (refresh && existing.length) {
-    await Promise.all(
-      existing.map((row) =>
-        updateExperimentSuggestion(brandId, row.id, { status: "dismissed" })
-      )
-    );
-  }
-
-  let ai: StructuredSuggestion[] = [];
   try {
-    ai = await openAiSuggestions({
-      brandName: brand.name,
-      website: brand.website,
-      tone: brand.tone,
-      product: brand.product,
-      notes: brand.notes,
-      markets: brand.targetMarkets,
-      icps: brand.idealCustomerProfiles,
-      features: brand.keyFeatures,
-      benefits: brand.keyBenefits,
+    const { brandId } = await context.params;
+    const brand = await getBrandById(brandId);
+    if (!brand) {
+      return NextResponse.json({ error: "brand not found" }, { status: 404 });
+    }
+
+    const body = asRecord(await request.json().catch(() => ({})));
+    const refresh = Boolean(body.refresh);
+
+    const existing = await listExperimentSuggestions(brandId, "suggested");
+    if (!refresh && existing.length >= 4) {
+      return NextResponse.json({ suggestions: existing, mode: "cached" });
+    }
+    if (refresh && existing.length) {
+      await Promise.all(
+        existing.map((row) =>
+          updateExperimentSuggestion(brandId, row.id, { status: "dismissed" })
+        )
+      );
+    }
+
+    let ai: StructuredSuggestion[] = [];
+    try {
+      ai = await openAiSuggestions({
+        brandName: brand.name,
+        website: brand.website,
+        tone: brand.tone,
+        product: brand.product,
+        notes: brand.notes,
+        markets: brand.targetMarkets,
+        icps: brand.idealCustomerProfiles,
+        features: brand.keyFeatures,
+        benefits: brand.keyBenefits,
+      });
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : "Unknown suggestion generation error";
+      const status = reason.includes("OPENAI_API_KEY") ? 503 : 502;
+      return NextResponse.json(
+        {
+          error: "Failed to generate concrete suggestions",
+          hint: "No fallback is enabled. Update brand context and retry generation.",
+          debug: { reason },
+        },
+        { status }
+      );
+    }
+
+    const created = await createExperimentSuggestions({
+      brandId,
+      source: "ai",
+      suggestions: ai.map((row) => ({
+        name: row.name,
+        offer: row.offer,
+        audience: row.audience,
+        cta: row.cta,
+        trigger: row.trigger,
+        emailPreview: row.emailPreview,
+        successTarget: row.successTarget,
+        rationale: row.rationale,
+      })),
+    });
+    if (!created.length) {
+      return NextResponse.json(
+        {
+          error: "No concrete suggestions were saved",
+          hint: "No fallback is enabled. Regenerate with richer brand context.",
+        },
+        { status: 422 }
+      );
+    }
+
+    const suggestions = await listExperimentSuggestions(brandId, "suggested");
+    if (!suggestions.length) {
+      return NextResponse.json(
+        {
+          error: "No concrete suggestions available",
+          hint: "No fallback is enabled. Try Generate Suggestions again.",
+        },
+        { status: 422 }
+      );
+    }
+    return NextResponse.json({
+      suggestions,
+      mode: "openai",
+      created: created.length,
     });
   } catch (error) {
-    const reason = error instanceof Error ? error.message : "Unknown suggestion generation error";
-    const status = reason.includes("OPENAI_API_KEY") ? 503 : 502;
     return NextResponse.json(
       {
-        error: "Failed to generate concrete suggestions",
-        hint: "No fallback is enabled. Update brand context and retry generation.",
-        debug: { reason },
+        error: "Failed to process suggestion request",
+        hint: "No fallback is enabled. Fix the underlying issue and retry.",
+        debug: {
+          reason: error instanceof Error ? error.message : "Unknown error",
+        },
       },
-      { status }
+      { status: 500 }
     );
   }
-
-  const created = await createExperimentSuggestions({
-    brandId,
-    source: "ai",
-    suggestions: ai.map((row) => ({
-      name: row.name,
-      offer: row.offer,
-      audience: row.audience,
-      cta: row.cta,
-      trigger: row.trigger,
-      emailPreview: row.emailPreview,
-      successTarget: row.successTarget,
-      rationale: row.rationale,
-    })),
-  });
-  if (!created.length) {
-    return NextResponse.json(
-      {
-        error: "No concrete suggestions were saved",
-        hint: "No fallback is enabled. Regenerate with richer brand context.",
-      },
-      { status: 422 }
-    );
-  }
-
-  const suggestions = await listExperimentSuggestions(brandId, "suggested");
-  if (!suggestions.length) {
-    return NextResponse.json(
-      {
-        error: "No concrete suggestions available",
-        hint: "No fallback is enabled. Try Generate Suggestions again.",
-      },
-      { status: 422 }
-    );
-  }
-  return NextResponse.json({
-    suggestions,
-    mode: "openai",
-    created: created.length,
-  });
 }

@@ -597,7 +597,15 @@ export async function listExperimentRecordsWithOptions(
 ): Promise<ExperimentRecord[]> {
   const includeSuggestions = Boolean(options.includeSuggestions);
   const records = await listExperimentRowsFromStore(brandId);
-  const hydrated = await Promise.all(records.map((record) => hydrateExperimentRecord(record)));
+  const hydrated = await Promise.all(
+    records.map(async (record) => {
+      try {
+        return await hydrateExperimentRecord(record);
+      } catch {
+        return record;
+      }
+    })
+  );
   if (includeSuggestions) return hydrated;
   return hydrated.filter((record) => !isExperimentSuggestionRecord(record));
 }
@@ -611,7 +619,12 @@ export async function getExperimentRecordById(
   const rows = await listExperimentRowsFromStore(brandId);
   const hit = rows.find((row) => row.id === experimentId) ?? null;
   if (!hit) return null;
-  const hydrated = await hydrateExperimentRecord(hit);
+  let hydrated: ExperimentRecord = hit;
+  try {
+    hydrated = await hydrateExperimentRecord(hit);
+  } catch {
+    hydrated = hit;
+  }
   if (!includeSuggestions && isExperimentSuggestionRecord(hydrated)) return null;
   return hydrated;
 }

@@ -392,21 +392,37 @@ async function hydrateExperimentRecord(record: ExperimentRecord): Promise<Experi
   let publishedRevision = record.messageFlow.publishedRevision;
 
   if (runtimeCampaignId && runtimeExperimentId) {
-    const publishedMap = await getPublishedConversationMapForExperiment(
-      record.brandId,
-      runtimeCampaignId,
-      runtimeExperimentId
-    );
-    if (publishedMap) {
-      publishedMapId = publishedMap.id;
-      publishedRevision = publishedMap.publishedRevision;
+    try {
+      const publishedMap = await getPublishedConversationMapForExperiment(
+        record.brandId,
+        runtimeCampaignId,
+        runtimeExperimentId
+      );
+      if (publishedMap) {
+        publishedMapId = publishedMap.id;
+        publishedRevision = publishedMap.publishedRevision;
+      }
+    } catch {
+      // Keep existing message flow values if conversation map storage is unavailable.
     }
   }
 
-  const ownerRuns = await listOwnerRuns(record.brandId, "experiment", record.id);
+  let ownerRuns = [] as Awaited<ReturnType<typeof listOwnerRuns>>;
+  try {
+    ownerRuns = await listOwnerRuns(record.brandId, "experiment", record.id);
+  } catch {
+    ownerRuns = [];
+  }
+
   const fallbackRuns =
     ownerRuns.length === 0 && runtimeCampaignId && runtimeExperimentId
-      ? await listExperimentRuns(record.brandId, runtimeCampaignId, runtimeExperimentId)
+      ? await (async () => {
+          try {
+            return await listExperimentRuns(record.brandId, runtimeCampaignId, runtimeExperimentId);
+          } catch {
+            return [];
+          }
+        })()
       : ownerRuns;
 
   const latestRun = fallbackRuns[0] ?? null;
@@ -435,7 +451,12 @@ async function hydrateExperimentRecord(record: ExperimentRecord): Promise<Experi
 }
 
 async function hydrateScaleCampaignRecord(record: ScaleCampaignRecord): Promise<ScaleCampaignRecord> {
-  const runs = await listOwnerRuns(record.brandId, "campaign", record.id);
+  let runs = [] as Awaited<ReturnType<typeof listOwnerRuns>>;
+  try {
+    runs = await listOwnerRuns(record.brandId, "campaign", record.id);
+  } catch {
+    runs = [];
+  }
   const latestRun = runs[0] ?? null;
 
   if (!latestRun) {
@@ -860,10 +881,21 @@ export async function promoteExperimentRecordToCampaign(input: {
     throw new Error("experiment runtime is not configured");
   }
 
-  const runs = await listOwnerRuns(input.brandId, "experiment", experiment.id);
+  let runs = [] as Awaited<ReturnType<typeof listOwnerRuns>>;
+  try {
+    runs = await listOwnerRuns(input.brandId, "experiment", experiment.id);
+  } catch {
+    runs = [];
+  }
   const fallbackRuns =
     runs.length === 0
-      ? await listExperimentRuns(input.brandId, runtimeCampaignId, runtimeExperimentId)
+      ? await (async () => {
+          try {
+            return await listExperimentRuns(input.brandId, runtimeCampaignId, runtimeExperimentId);
+          } catch {
+            return [];
+          }
+        })()
       : runs;
   if (!fallbackRuns.length) {
     throw new Error("Cannot promote before at least one test run exists");

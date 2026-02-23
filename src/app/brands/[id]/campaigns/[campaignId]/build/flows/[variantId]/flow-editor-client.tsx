@@ -178,6 +178,12 @@ function bezierPath(fromX: number, fromY: number, toX: number, toY: number) {
   return `M ${fromX} ${fromY} C ${fromX + curve} ${fromY}, ${toX - curve} ${toY}, ${toX} ${toY}`;
 }
 
+function edgeLabel(edge: ConversationFlowEdge) {
+  if (edge.trigger === "intent") return edge.intent || "reply";
+  if (edge.trigger === "timer") return `wait ${edge.waitMinutes}m`;
+  return "fallback";
+}
+
 export default function FlowEditorClient({
   brandId,
   campaignId,
@@ -711,11 +717,19 @@ export default function FlowEditorClient({
                     return (
                       <g key={edge.id}>
                         <path
+                          d={bezierPath(fromX, fromY, toX, toY)}
+                          fill="none"
+                          stroke={selected ? "rgba(96,165,250,0.5)" : "rgba(147,197,253,0.3)"}
+                          strokeWidth={selected ? 8 : 6}
+                          strokeLinecap="round"
+                          className="pointer-events-none"
+                        />
+                        <path
                           data-edge-path="true"
                           d={bezierPath(fromX, fromY, toX, toY)}
                           fill="none"
-                          stroke={selected ? "var(--accent)" : "var(--border-strong)"}
-                          strokeWidth={selected ? 3 : 2}
+                          stroke={selected ? "#60a5fa" : "#93c5fd"}
+                          strokeWidth={selected ? 3.2 : 2.5}
                           strokeLinecap="round"
                           className="pointer-events-auto cursor-pointer"
                           onClick={(event) => {
@@ -728,11 +742,11 @@ export default function FlowEditorClient({
                           x={(fromX + toX) / 2}
                           y={(fromY + toY) / 2 - 8}
                           textAnchor="middle"
-                          fill="var(--muted-foreground)"
+                          fill="#c7ddff"
                           fontSize="12"
                           className="pointer-events-none"
                         >
-                          {edge.trigger}{edge.intent ? `:${edge.intent}` : ""}
+                          {edgeLabel(edge)}
                         </text>
                       </g>
                     );

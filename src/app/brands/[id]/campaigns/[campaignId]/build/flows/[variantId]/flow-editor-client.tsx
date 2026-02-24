@@ -3,15 +3,19 @@
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
+  CheckCircle2,
   Hand,
   LayoutGrid,
+  Loader2,
   Link2,
   Plus,
   RefreshCw,
   Save,
+  Sparkles,
   Target,
   Trash2,
   Upload,
+  XCircle,
   ZoomIn,
   ZoomOut,
 } from "lucide-react";
@@ -46,6 +50,21 @@ const WHEEL_ZOOM_SENSITIVITY = 0.0009;
 const MAX_WHEEL_ZOOM_STEP = 0.025;
 const BUTTON_ZOOM_STEP = 0.04;
 const ZOOM_EASING = 0.22;
+const ROLEPLAY_PASSING_SCORE = 75;
+const ROLEPLAY_CANDIDATES = [
+  { id: "cand_1", title: "Personalized Hook", score: 84 },
+  { id: "cand_2", title: "Pain-Led Opener", score: 62 },
+  { id: "cand_3", title: "Offer-First Ask", score: 79 },
+  { id: "cand_4", title: "Trigger + Proof", score: 68 },
+  { id: "cand_5", title: "Use-Case Teardown", score: 87 },
+  { id: "cand_6", title: "Objection-First", score: 71 },
+];
+const ROLEPLAY_PHASES = [
+  "Generating candidate flow ideas",
+  "Roleplaying busy and skeptical personas",
+  "Scoring clarity, reply likelihood, and risk",
+  "Rejecting weak variants and selecting winner",
+];
 
 type Viewport = {
   x: number;
@@ -190,6 +209,129 @@ function edgeLabel(edge: ConversationFlowEdge) {
   return "fallback";
 }
 
+function RoleplayScreeningLoader({
+  tick,
+  variantName,
+  compact = false,
+}: {
+  tick: number;
+  variantName: string;
+  compact?: boolean;
+}) {
+  const cycleTick = tick % 64;
+  const phaseIndex = Math.min(ROLEPLAY_PHASES.length - 1, Math.floor(cycleTick / 4));
+  const phaseLabel = ROLEPLAY_PHASES[phaseIndex] || ROLEPLAY_PHASES[0];
+  const scoredCount = Math.min(ROLEPLAY_CANDIDATES.length, Math.floor(cycleTick / 2));
+  const scoringIndex = cycleTick % 2 === 1 && scoredCount < ROLEPLAY_CANDIDATES.length ? scoredCount : -1;
+  const winnerIndex = ROLEPLAY_CANDIDATES.reduce((best, row, index, array) =>
+    row.score > array[best].score ? index : best
+  , 0);
+  const progress = Math.min(100, Math.round((cycleTick / 24) * 100));
+
+  return (
+    <div
+      className={[
+        "rounded-2xl border border-[color:var(--border)] bg-[color:var(--surface)]/95 shadow-xl",
+        compact ? "w-full max-w-2xl p-4" : "p-5",
+      ].join(" ")}
+    >
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2 text-sm font-semibold text-[color:var(--foreground)]">
+            <Sparkles className="h-4 w-4 text-[color:var(--accent)]" />
+            Roleplay Screening In Progress
+          </div>
+          <div className="truncate text-sm text-[color:var(--muted-foreground)]">
+            {variantName || "Variant"} - {phaseLabel}
+          </div>
+        </div>
+        <div className="flex items-center gap-1 text-sm text-[color:var(--accent)]">
+          <Loader2 className="h-4 w-4 animate-spin" />
+          {progress}%
+        </div>
+      </div>
+
+      <div className="mb-4 h-2 w-full overflow-hidden rounded-full bg-[color:var(--surface-muted)]">
+        <div
+          className="h-full rounded-full bg-[color:var(--accent)] transition-all duration-500 ease-out"
+          style={{ width: `${Math.max(8, progress)}%` }}
+        />
+      </div>
+
+      <div className="grid gap-2 md:grid-cols-2">
+        {ROLEPLAY_CANDIDATES.map((candidate, index) => {
+          const isScoring = index === scoringIndex;
+          const isScored = index < scoredCount && !isScoring;
+          const isAccepted = isScored && candidate.score >= ROLEPLAY_PASSING_SCORE;
+          const stateLabel = isScoring
+            ? "scoring"
+            : isScored
+              ? isAccepted
+                ? "accepted"
+                : "rejected"
+              : "queued";
+
+          return (
+            <div
+              key={candidate.id}
+              className={[
+                "rounded-xl border px-3 py-2 transition-all duration-300",
+                isScoring
+                  ? "border-[color:var(--accent-border)] bg-[color:var(--accent-soft)] animate-pulse"
+                  : isAccepted
+                    ? "border-[color:var(--success-border)] bg-[color:var(--success-soft)]"
+                    : isScored
+                      ? "border-[color:var(--danger-border)] bg-[color:var(--danger-soft)]"
+                      : "border-[color:var(--border)] bg-[color:var(--surface)]",
+              ].join(" ")}
+            >
+              <div className="flex items-center justify-between gap-2">
+                <div className="truncate text-sm font-medium text-[color:var(--foreground)]">
+                  {candidate.title}
+                </div>
+                <div className="flex items-center gap-1">
+                  {isScoring ? (
+                    <Badge variant="accent">scoring</Badge>
+                  ) : isAccepted ? (
+                    <Badge variant="success">accepted</Badge>
+                  ) : isScored ? (
+                    <Badge variant="danger">rejected</Badge>
+                  ) : (
+                    <Badge variant="muted">queued</Badge>
+                  )}
+                </div>
+              </div>
+              <div className="mt-1 flex items-center justify-between text-xs text-[color:var(--muted-foreground)]">
+                <span className="truncate">
+                  {stateLabel === "accepted" && index === winnerIndex ? "selected winner" : `state: ${stateLabel}`}
+                </span>
+                <span>
+                  {isScored || isScoring ? `score ${candidate.score}` : "--"}
+                </span>
+              </div>
+              {isScored ? (
+                <div className="mt-1 flex items-center gap-1 text-xs">
+                  {isAccepted ? (
+                    <>
+                      <CheckCircle2 className="h-3.5 w-3.5 text-[color:var(--success)]" />
+                      <span className="text-[color:var(--success)]">Passes quality gate</span>
+                    </>
+                  ) : (
+                    <>
+                      <XCircle className="h-3.5 w-3.5 text-[color:var(--danger)]" />
+                      <span className="text-[color:var(--danger)]">Rejected for weak intent/risk profile</span>
+                    </>
+                  )}
+                </div>
+              ) : null}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 export default function FlowEditorClient({
   brandId,
   campaignId,
@@ -224,6 +366,7 @@ export default function FlowEditorClient({
   const [saving, setSaving] = useState(false);
   const [publishing, setPublishing] = useState(false);
   const [generating, setGenerating] = useState(false);
+  const [roleplayTick, setRoleplayTick] = useState(0);
   const [error, setError] = useState("");
   const [statusMessage, setStatusMessage] = useState("");
   const [hasFittedInitialView, setHasFittedInitialView] = useState(false);
@@ -275,6 +418,15 @@ export default function FlowEditorClient({
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [brandId, campaignId, variantId]);
+
+  useEffect(() => {
+    if (!loading && !generating) return;
+    setRoleplayTick(0);
+    const interval = window.setInterval(() => {
+      setRoleplayTick((prev) => Math.min(prev + 1, 64));
+    }, 650);
+    return () => window.clearInterval(interval);
+  }, [loading, generating]);
 
   const selectedNode = useMemo(() => nodeById(graph, selectedNodeId), [graph, selectedNodeId]);
   const selectedEdge = useMemo(() => edgeById(graph, selectedEdgeId), [graph, selectedEdgeId]);
@@ -646,7 +798,11 @@ export default function FlowEditorClient({
   };
 
   if (loading) {
-    return <div className="text-sm text-[color:var(--muted-foreground)]">Loading conversation map...</div>;
+    return (
+      <div className="mx-auto w-full max-w-5xl px-2 py-6">
+        <RoleplayScreeningLoader tick={roleplayTick} variantName={variantName} />
+      </div>
+    );
   }
 
   if (!graph) {
@@ -683,7 +839,7 @@ export default function FlowEditorClient({
         <CardContent className="flex flex-wrap items-center gap-2">
           <Button type="button" variant="outline" onClick={generate} disabled={generating}>
             <RefreshCw className="h-4 w-4" />
-            {generating ? "Generating..." : "Generate AI Map"}
+            {generating ? "Roleplay screening..." : "Generate AI Map"}
           </Button>
           <Button type="button" variant="outline" onClick={saveDraft} disabled={saving}>
             <Save className="h-4 w-4" />
@@ -880,6 +1036,12 @@ export default function FlowEditorClient({
                   );
                 })}
               </div>
+
+              {generating ? (
+                <div className="absolute inset-0 z-20 flex items-center justify-center bg-[color:var(--surface)]/82 px-4 py-6 backdrop-blur-sm">
+                  <RoleplayScreeningLoader tick={roleplayTick} variantName={variantName} compact />
+                </div>
+              ) : null}
 
               <div className="pointer-events-none absolute bottom-4 left-4 rounded-xl border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-2 text-[13px] text-[color:var(--muted-foreground)] shadow-sm">
                 <span className="inline-flex items-center gap-1"><Hand className="h-3 w-3" /> Pan: drag background</span>

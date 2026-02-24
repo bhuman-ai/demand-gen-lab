@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getBrandById, getCampaignById } from "@/lib/factory-data";
+import { getExperimentRecordByRuntimeRef } from "@/lib/experiment-data";
 import {
   normalizeConversationGraph,
 } from "@/lib/conversation-flow-data";
@@ -9,6 +10,15 @@ function asRecord(value: unknown): Record<string, unknown> {
     return value as Record<string, unknown>;
   }
   return {};
+}
+
+function parseOfferAndCta(rawOffer: string) {
+  const text = String(rawOffer ?? "").trim();
+  if (!text) return { offer: "", cta: "" };
+  const ctaMatch = text.match(/\bCTA\s*:\s*([^\n]+)/i);
+  const cta = ctaMatch ? ctaMatch[1].trim() : "";
+  const offer = text.replace(/\bCTA\s*:\s*[^\n]+/gi, "").replace(/\s{2,}/g, " ").trim();
+  return { offer, cta };
 }
 
 export async function POST(
@@ -28,6 +38,8 @@ export async function POST(
   if (!experiment) {
     return NextResponse.json({ error: "variant not found" }, { status: 404 });
   }
+  const sourceExperiment = await getExperimentRecordByRuntimeRef(brandId, campaignId, experimentId);
+  const parsedContext = parseOfferAndCta(sourceExperiment?.offer ?? "");
 
   const hypothesis = campaign.hypotheses.find((item) => item.id === experiment.hypothesisId) ?? null;
 
@@ -50,6 +62,8 @@ export async function POST(
     "- Subject lines <= 7 words. Body <= 90 words.",
     "- Use only these variables when needed: {{firstName}}, {{company}}, {{brandName}}, {{campaignGoal}}, {{shortAnswer}}.",
     "- If you cannot infer specifics, write specific but safe copy without placeholders.",
+    "- Every non-terminal message MUST directly reflect the specific experiment offer and CTA context provided below.",
+    "- Do not output a generic outreach flow. If context is weak, still ground copy in provided offer/cta words.",
     "Return JSON only with no markdown.",
     "Shape:",
     '{ "graph": { "version": 1, "maxDepth": number, "startNodeId": string, "nodes": [{ "id": string, "kind": "message"|"terminal", "title": string, "subject": string, "body": string, "autoSend": boolean, "delayMinutes": number }], "edges": [{ "id": string, "fromNodeId": string, "toNodeId": string, "trigger": "intent"|"timer"|"fallback", "intent": "question"|"interest"|"objection"|"unsubscribe"|"other"|"" , "waitMinutes": number, "confidenceThreshold": number, "priority": number }] } }',
@@ -67,6 +81,13 @@ export async function POST(
       targetAudience: hypothesis?.actorQuery ?? "",
       variantName: experiment.name,
       variantNotes: experiment.notes,
+    })}`,
+    `ExperimentContext: ${JSON.stringify({
+      experimentRecordName: sourceExperiment?.name ?? "",
+      offer: parsedContext.offer || sourceExperiment?.offer || "",
+      cta: parsedContext.cta || "",
+      audience: sourceExperiment?.audience || "",
+      testEnvelope: sourceExperiment?.testEnvelope ?? null,
     })}`,
   ].join("\n");
 

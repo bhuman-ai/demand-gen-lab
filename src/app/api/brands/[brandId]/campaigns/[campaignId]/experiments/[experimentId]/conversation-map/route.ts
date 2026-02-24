@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getCampaignById } from "@/lib/factory-data";
+import { getExperimentRecordByRuntimeRef } from "@/lib/experiment-data";
 import {
   ConversationFlowDataError,
   defaultConversationGraph,
@@ -13,6 +14,15 @@ function asRecord(value: unknown): Record<string, unknown> {
     return value as Record<string, unknown>;
   }
   return {};
+}
+
+function parseOfferAndCta(rawOffer: string) {
+  const text = String(rawOffer ?? "").trim();
+  if (!text) return { offer: "", cta: "" };
+  const ctaMatch = text.match(/\bCTA\s*:\s*([^\n]+)/i);
+  const cta = ctaMatch ? ctaMatch[1].trim() : "";
+  const offer = text.replace(/\bCTA\s*:\s*[^\n]+/gi, "").replace(/\s{2,}/g, " ").trim();
+  return { offer, cta };
 }
 
 export async function GET(
@@ -31,6 +41,15 @@ export async function GET(
     return NextResponse.json({ error: "variant not found" }, { status: 404 });
   }
 
+  const sourceExperiment = await getExperimentRecordByRuntimeRef(brandId, campaignId, experimentId);
+  const parsed = parseOfferAndCta(sourceExperiment?.offer ?? "");
+  const seedGraph = defaultConversationGraph({
+    offer: parsed.offer || campaign.objective.goal || "",
+    cta: parsed.cta,
+    audience: sourceExperiment?.audience || "",
+    campaignGoal: campaign.objective.goal || "",
+  });
+
   try {
     const map = await getConversationMapByExperiment(brandId, campaignId, experimentId);
     if (map) {
@@ -45,8 +64,8 @@ export async function GET(
         experimentId,
         name: `${experiment.name || "Variant"} Conversation Flow`,
         status: "draft",
-        draftGraph: defaultConversationGraph(),
-        publishedGraph: defaultConversationGraph(),
+        draftGraph: seedGraph,
+        publishedGraph: seedGraph,
         publishedRevision: 0,
         publishedAt: "",
         createdAt: "",

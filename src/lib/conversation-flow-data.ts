@@ -44,6 +44,13 @@ type LocalStore = {
   events: ConversationEvent[];
 };
 
+type ConversationSeedContext = {
+  offer?: string;
+  cta?: string;
+  audience?: string;
+  campaignGoal?: string;
+};
+
 function asRecord(value: unknown): Record<string, unknown> {
   if (value && typeof value === "object" && !Array.isArray(value)) {
     return value as Record<string, unknown>;
@@ -87,6 +94,21 @@ function defaultTerminalNode(position: { x: number; y: number }): ConversationFl
     x: position.x,
     y: position.y,
   };
+}
+
+function oneLine(value: string) {
+  return value.replace(/\s+/g, " ").trim();
+}
+
+function truncate(value: string, max = 180) {
+  const text = oneLine(value);
+  if (text.length <= max) return text;
+  return `${text.slice(0, Math.max(0, max - 1)).trimEnd()}…`;
+}
+
+function extractInlineCta(value: string) {
+  const match = value.match(/\bCTA\s*:\s*([^\n]+)/i);
+  return match ? oneLine(match[1]) : "";
 }
 
 function upgradeLegacyNodeCopy(node: ConversationFlowNode): ConversationFlowNode {
@@ -147,18 +169,36 @@ function upgradeLegacyNodeCopy(node: ConversationFlowNode): ConversationFlowNode
   };
 }
 
-export function defaultConversationGraph(): ConversationFlowGraph {
+export function defaultConversationGraph(context: ConversationSeedContext = {}): ConversationFlowGraph {
+  const offerFromContext = oneLine(context.offer ?? "");
+  const inferredCta = oneLine(context.cta ?? "") || extractInlineCta(offerFromContext);
+  const cleanOffer = truncate(offerFromContext.replace(/\bCTA\s*:\s*[^\n]+/gi, "").trim(), 220);
+  const campaignGoal = truncate(
+    oneLine(context.campaignGoal ?? "") || cleanOffer || "outbound pipeline performance",
+    140
+  );
+  const audienceHint = oneLine(context.audience ?? "");
+
   const start = defaultNode({ x: 60, y: 220 });
   start.title = "Start question";
-  start.subject = "Quick question on {{campaignGoal}}";
-  start.body =
-    "Hi {{firstName}},\n\nNoticed {{company}} and wanted to ask: are you actively working on {{campaignGoal}} right now?\n\nIf yes, I can share a short example from similar teams.";
+  start.subject = cleanOffer
+    ? `Idea: ${truncate(cleanOffer, 58)}`
+    : "Quick question on {{campaignGoal}}";
+  start.body = cleanOffer
+    ? `Hi {{firstName}},\n\nQuick idea for {{company}}: ${cleanOffer}\n\n${
+        inferredCta || "If this is relevant, open to a short walkthrough?"
+      }`
+    : "Hi {{firstName}},\n\nNoticed {{company}} and wanted to ask: are you actively working on {{campaignGoal}} right now?\n\nIf yes, I can share a short example from similar teams.";
 
   const interest = defaultNode({ x: 420, y: 80 });
   interest.title = "Interest follow-up";
-  interest.subject = "Worth a 10-minute walkthrough?";
+  interest.subject = inferredCta
+    ? truncate(inferredCta.replace(/\?+$/g, ""), 58)
+    : "Worth a 10-minute walkthrough?";
   interest.body =
-    "Great to hear, {{firstName}}.\n\nI can show a focused walkthrough for {{company}} on how teams improve {{campaignGoal}} with {{brandName}}.\n\nWould Tuesday or Wednesday be better?";
+    `Great to hear, {{firstName}}.\n\nI can show how this would work for ${audienceHint || "{{company}}"} and tie it directly to ${campaignGoal}.\n\n${
+      inferredCta || "Would Tuesday or Wednesday be better for 10 minutes?"
+    }`;
   interest.autoSend = true;
   interest.delayMinutes = 0;
 
@@ -166,21 +206,21 @@ export function defaultConversationGraph(): ConversationFlowGraph {
   question.title = "Question answer";
   question.subject = "Short answer";
   question.body =
-    "Great question, {{firstName}}.\n\nShort answer: {{shortAnswer}}\n\nIf useful, I can send one concrete example for {{company}}.";
+    "Great question, {{firstName}}.\n\nShort answer: {{shortAnswer}}\n\nIf useful, I can send one concrete example using your use case for {{company}}.";
   question.autoSend = false;
 
   const objection = defaultNode({ x: 420, y: 360 });
   objection.title = "Objection handling";
   objection.subject = "Totally fair";
   objection.body =
-    "Makes sense. If timing is the blocker, I can send a one-page summary now and check back next month.\n\nWould that be more useful?";
+    `Makes sense. If timing is the blocker, I can send a concise one-pager on ${campaignGoal} and you can review async.\n\nWould that be more useful?`;
   objection.autoSend = false;
 
   const noReply = defaultNode({ x: 780, y: 220 });
   noReply.title = "No-reply nudge";
   noReply.subject = "Close the loop?";
   noReply.body =
-    "Just checking once more, {{firstName}}.\n\nShould I close this out, or is there someone else at {{company}} who owns {{campaignGoal}}?";
+    `Just checking once more, {{firstName}}.\n\nShould I close this out, or is there someone else at {{company}} who owns ${campaignGoal}?`;
   noReply.autoSend = true;
   noReply.delayMinutes = 1440;
 

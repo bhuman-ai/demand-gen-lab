@@ -650,6 +650,21 @@ export async function getExperimentRecordById(
   return hydrated;
 }
 
+export async function getExperimentRecordByRuntimeRef(
+  brandId: string,
+  runtimeCampaignId: string,
+  runtimeExperimentId: string
+): Promise<ExperimentRecord | null> {
+  const records = await listExperimentRecordsWithOptions(brandId, {});
+  return (
+    records.find(
+      (record) =>
+        record.runtime.campaignId === runtimeCampaignId &&
+        record.runtime.experimentId === runtimeExperimentId
+    ) ?? null
+  );
+}
+
 export async function createExperimentRecord(input: {
   brandId: string;
   name: string;

@@ -475,6 +475,48 @@ export async function suggestConversationMapApi(
   return data.graph as ConversationFlowGraph;
 }
 
+export async function previewConversationNodeApi(input: {
+  brandId: string;
+  campaignId: string;
+  experimentId: string;
+  nodeId: string;
+  sampleLead?: {
+    name?: string;
+    email?: string;
+    company?: string;
+    title?: string;
+    domain?: string;
+  };
+  sampleReply?: {
+    subject?: string;
+    body?: string;
+    intent?: "question" | "interest" | "objection" | "unsubscribe" | "other" | "";
+    confidence?: number;
+  };
+}) {
+  const response = await fetch(
+    `/api/brands/${input.brandId}/campaigns/${input.campaignId}/experiments/${input.experimentId}/conversation-map/preview`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        nodeId: input.nodeId,
+        sampleLead: input.sampleLead ?? {},
+        sampleReply: input.sampleReply ?? {},
+      }),
+    }
+  );
+  const data = await readJson(response);
+  return {
+    subject: String(data.subject ?? ""),
+    body: String(data.body ?? ""),
+    trace:
+      data.trace && typeof data.trace === "object" && !Array.isArray(data.trace)
+        ? (data.trace as Record<string, unknown>)
+        : {},
+  };
+}
+
 export async function createCampaignApi(brandId: string, input: { name: string }) {
   const response = await fetch(`/api/brands/${brandId}/campaigns`, {
     method: "POST",

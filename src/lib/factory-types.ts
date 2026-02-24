@@ -398,6 +398,7 @@ export type OutreachMessage = {
   scheduledAt: string;
   sentAt: string;
   lastError: string;
+  generationMeta: Record<string, unknown>;
   createdAt: string;
   updatedAt: string;
 };
@@ -511,11 +512,22 @@ export type RunViewModel = {
 
 export type ConversationNodeKind = "message" | "terminal";
 export type ConversationEdgeTrigger = "intent" | "timer" | "fallback";
+export type ConversationCopyMode = "prompt_v1" | "legacy_template";
+
+export type ConversationPromptPolicy = {
+  subjectMaxWords: number;
+  bodyMaxWords: number;
+  exactlyOneCta: boolean;
+};
 
 export type ConversationFlowNode = {
   id: string;
   kind: ConversationNodeKind;
   title: string;
+  copyMode: ConversationCopyMode;
+  promptTemplate: string;
+  promptVersion: number;
+  promptPolicy: ConversationPromptPolicy;
   body: string;
   subject: string;
   autoSend: boolean;

@@ -129,6 +129,9 @@ function friendlyEventName(eventType: string) {
   if (eventType === "reply_ingested") return "Reply ingested";
   if (eventType === "reply_draft_created") return "Reply draft created";
   if (eventType === "reply_draft_sent") return "Reply sent";
+  if (eventType === "conversation_prompt_generated") return "Prompt generated";
+  if (eventType === "conversation_prompt_rejected") return "Prompt rejected";
+  if (eventType === "conversation_prompt_failed") return "Prompt failed";
   if (eventType === "conversation_tick_processed") return "Conversation tick";
   if (eventType === "job_started") return "Worker job started";
   if (eventType === "job_completed") return "Worker job completed";
@@ -278,8 +281,8 @@ function friendlyRunLaunchError(error: unknown) {
   if (message.includes("Conversation map start node must auto-send to start outreach")) {
     return "Run did not start: start node must be set to auto-send.";
   }
-  if (message.includes("Conversation map start message body is empty")) {
-    return "Run did not start: start message body is empty.";
+  if (message.includes("Conversation map start prompt is empty")) {
+    return "Run did not start: start node prompt is empty.";
   }
   if (message.includes("Lead source is not configured for this hypothesis")) {
     return "Run did not start: this angle has no lead source yet. Save Build, then retry.";
@@ -891,6 +894,16 @@ export default function RunClient({
                           {message.body || "(No body)"}
                         </div>
                       </details>
+                      {Object.keys(message.generationMeta ?? {}).length ? (
+                        <details className="mt-2 max-w-xl text-xs">
+                          <summary className="cursor-pointer text-[color:var(--muted-foreground)]">
+                            Generation Trace
+                          </summary>
+                          <pre className="mt-1 overflow-x-auto whitespace-pre-wrap rounded border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-2">
+                            {JSON.stringify(message.generationMeta, null, 2)}
+                          </pre>
+                        </details>
+                      ) : null}
                     </td>
                     <td className="py-2">
                       <Badge variant={messageStatusVariant(message.status)}>{message.status}</Badge>

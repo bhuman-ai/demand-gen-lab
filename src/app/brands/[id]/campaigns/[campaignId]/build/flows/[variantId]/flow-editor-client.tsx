@@ -31,9 +31,11 @@ import {
   fetchCampaign,
   fetchConversationMapApi,
   publishConversationMapApi,
+  previewConversationNodeApi,
   saveConversationMapDraftApi,
   suggestConversationMapApi,
 } from "@/lib/client-api";
+import { trackEvent } from "@/lib/telemetry-client";
 import type { ConversationFlowEdge, ConversationFlowGraph, ConversationFlowNode, ConversationMap } from "@/lib/factory-types";
 
 const NODE_WIDTH = 340;
@@ -100,12 +102,31 @@ function clamp(value: number, min: number, max: number) {
 }
 
 function defaultNode(kind: "message" | "terminal" = "message", x = 80, y = 160): ConversationFlowNode {
+  const subject = kind === "terminal" ? "" : "Quick follow-up";
+  const body = kind === "terminal" ? "" : "Hi {{firstName}},\n\nQuick follow-up on {{brandName}}.";
   return {
     id: makeNodeId(),
     kind,
     title: kind === "terminal" ? "End" : "Message",
-    subject: kind === "terminal" ? "" : "Quick follow-up",
-    body: kind === "terminal" ? "" : "Hi {{firstName}},\n\nQuick follow-up on {{brandName}}.",
+    copyMode: "prompt_v1",
+    promptTemplate:
+      kind === "terminal"
+        ? ""
+        : [
+            "Write a concise follow-up email for this node.",
+            "Use concrete language and include exactly one clear CTA.",
+            "Reference context variables only if relevant.",
+            `Legacy subject example: ${subject}`,
+            `Legacy body example:\n${body}`,
+          ].join("\n"),
+    promptVersion: 1,
+    promptPolicy: {
+      subjectMaxWords: 8,
+      bodyMaxWords: 120,
+      exactlyOneCta: true,
+    },
+    subject,
+    body,
     autoSend: kind === "message",
     delayMinutes: 0,
     x,
@@ -207,6 +228,13 @@ function edgeLabel(edge: ConversationFlowEdge) {
   if (edge.trigger === "intent") return edge.intent || "reply";
   if (edge.trigger === "timer") return `wait ${edge.waitMinutes}m`;
   return "fallback";
+}
+
+function promptSnippet(value: string, max = 180) {
+  const oneLine = value.replace(/\s+/g, " ").trim();
+  if (!oneLine) return "Prompt not set";
+  if (oneLine.length <= max) return oneLine;
+  return `${oneLine.slice(0, Math.max(0, max - 1)).trimEnd()}…`;
 }
 
 function RoleplayScreeningLoader({
@@ -367,6 +395,14 @@ export default function FlowEditorClient({
   const [publishing, setPublishing] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [roleplayTick, setRoleplayTick] = useState(0);
+  const [previewingNodeId, setPreviewingNodeId] = useState("");
+  const [previewResult, setPreviewResult] = useState<{
+    nodeId: string;
+    subject: string;
+    body: string;
+    trace: Record<string, unknown>;
+  } | null>(null);
+  const [previewError, setPreviewError] = useState("");
   const [error, setError] = useState("");
   const [statusMessage, setStatusMessage] = useState("");
   const [hasFittedInitialView, setHasFittedInitialView] = useState(false);
@@ -430,6 +466,12 @@ export default function FlowEditorClient({
 
   const selectedNode = useMemo(() => nodeById(graph, selectedNodeId), [graph, selectedNodeId]);
   const selectedEdge = useMemo(() => edgeById(graph, selectedEdgeId), [graph, selectedEdgeId]);
+
+  useEffect(() => {
+    if (!selectedNode || !previewResult || previewResult.nodeId === selectedNode.id) return;
+    setPreviewResult(null);
+    setPreviewError("");
+  }, [selectedNode, previewResult]);
 
   const nodeLookup = useMemo(() => {
     const next = new Map<string, ConversationFlowNode>();
@@ -502,6 +544,58 @@ export default function FlowEditorClient({
       setError(err instanceof Error ? err.message : "Failed to generate map");
     } finally {
       setGenerating(false);
+    }
+  };
+
+  const generatePreview = async () => {
+    if (!selectedNode || selectedNode.kind !== "message") return;
+    setPreviewingNodeId(selectedNode.id);
+    setPreviewError("");
+    try {
+      const preview = await previewConversationNodeApi({
+        brandId,
+        campaignId,
+        experimentId: variantId,
+        nodeId: selectedNode.id,
+        sampleLead: {
+          name: "Jordan Lee",
+          email: "jordan@acme.com",
+          company: "Acme Inc",
+          title: "VP Revenue",
+          domain: "acme.com",
+        },
+        sampleReply: {
+          intent: "question",
+          confidence: 0.78,
+          subject: "Re: quick question",
+          body: "Can you share a concrete example relevant to our team?",
+        },
+      });
+      setPreviewResult({
+        nodeId: selectedNode.id,
+        subject: preview.subject,
+        body: preview.body,
+        trace: preview.trace,
+      });
+      trackEvent("conversation_prompt_previewed", {
+        brandId,
+        campaignId,
+        experimentId: variantId,
+        nodeId: selectedNode.id,
+        ok: true,
+      });
+      setStatusMessage("Preview generated.");
+    } catch (err) {
+      trackEvent("conversation_prompt_previewed", {
+        brandId,
+        campaignId,
+        experimentId: variantId,
+        nodeId: selectedNode.id,
+        ok: false,
+      });
+      setPreviewError(err instanceof Error ? err.message : "Failed to generate preview");
+    } finally {
+      setPreviewingNodeId("");
     }
   };
 
@@ -1019,14 +1113,16 @@ export default function FlowEditorClient({
                           <div className="truncate text-base font-semibold">{node.title || "Untitled"}</div>
                           <div className="flex items-center gap-1">
                             {isStart ? <Badge variant="accent">Start</Badge> : null}
+                            {node.kind === "message" ? <Badge variant="success">prompt</Badge> : null}
                             <Badge variant={node.kind === "terminal" ? "muted" : "default"}>{node.kind}</Badge>
                           </div>
                         </div>
                       </div>
 
                       <div className="space-y-3 px-4 py-3 text-sm leading-6 text-[color:var(--muted-foreground)]">
-                        <div className="line-clamp-2"><strong>Subject:</strong> {node.subject || "(none)"}</div>
-                        <div className="line-clamp-4">{node.body || "No body"}</div>
+                        <div className="line-clamp-5">
+                          <strong>Prompt:</strong> {node.kind === "terminal" ? "Terminal node" : promptSnippet(node.promptTemplate)}
+                        </div>
                         <div className="flex items-center justify-between">
                           <span>{node.autoSend ? "Auto-send" : "Manual send"}</span>
                           <span>Delay {node.delayMinutes}m</span>
@@ -1103,9 +1199,18 @@ export default function FlowEditorClient({
                       const kind = event.target.value === "terminal" ? "terminal" : "message";
                       setNodePatch(selectedNode.id, {
                         kind,
+                        copyMode: "prompt_v1",
+                        promptTemplate:
+                          kind === "terminal"
+                            ? ""
+                            : selectedNode.promptTemplate ||
+                              [
+                                `Write this node message for "${selectedNode.title || "Message"}".`,
+                                "Keep it concrete and include exactly one CTA.",
+                              ].join("\n"),
+                        promptVersion: Math.max(1, Number(selectedNode.promptVersion || 1)),
+                        promptPolicy: selectedNode.promptPolicy,
                         autoSend: kind === "terminal" ? false : selectedNode.autoSend,
-                        subject: kind === "terminal" ? "" : selectedNode.subject,
-                        body: kind === "terminal" ? "" : selectedNode.body,
                       });
                     }}
                   >
@@ -1115,22 +1220,109 @@ export default function FlowEditorClient({
                 </div>
 
                 <div className="grid gap-2">
-                  <Label>Subject</Label>
-                  <Input
-                    value={selectedNode.subject}
+                  <Label>Prompt Template</Label>
+                  <Textarea
+                    value={selectedNode.promptTemplate}
                     disabled={selectedNode.kind === "terminal"}
-                    onChange={(event) => setNodePatch(selectedNode.id, { subject: event.target.value })}
+                    rows={8}
+                    onChange={(event) => setNodePatch(selectedNode.id, { promptTemplate: event.target.value })}
                   />
                 </div>
 
-                <div className="grid gap-2">
-                  <Label>Body</Label>
-                  <Textarea
-                    value={selectedNode.body}
-                    disabled={selectedNode.kind === "terminal"}
-                    onChange={(event) => setNodePatch(selectedNode.id, { body: event.target.value })}
-                  />
-                </div>
+                {selectedNode.kind === "message" ? (
+                  <div className="grid gap-2 rounded-lg border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3">
+                    <div className="text-xs font-medium uppercase tracking-wide text-[color:var(--muted-foreground)]">
+                      Prompt Policy
+                    </div>
+                    <div className="grid gap-2">
+                      <Label>Subject Max Words</Label>
+                      <Input
+                        type="number"
+                        min={3}
+                        max={20}
+                        value={selectedNode.promptPolicy.subjectMaxWords}
+                        onChange={(event) =>
+                          setNodePatch(selectedNode.id, {
+                            promptPolicy: {
+                              ...selectedNode.promptPolicy,
+                              subjectMaxWords: clamp(Number(event.target.value || selectedNode.promptPolicy.subjectMaxWords), 3, 20),
+                            },
+                          })
+                        }
+                      />
+                    </div>
+                    <div className="grid gap-2">
+                      <Label>Body Max Words</Label>
+                      <Input
+                        type="number"
+                        min={40}
+                        max={260}
+                        value={selectedNode.promptPolicy.bodyMaxWords}
+                        onChange={(event) =>
+                          setNodePatch(selectedNode.id, {
+                            promptPolicy: {
+                              ...selectedNode.promptPolicy,
+                              bodyMaxWords: clamp(Number(event.target.value || selectedNode.promptPolicy.bodyMaxWords), 40, 260),
+                            },
+                          })
+                        }
+                      />
+                    </div>
+                    <label className="inline-flex items-center gap-2 text-sm">
+                      <input
+                        type="checkbox"
+                        checked={selectedNode.promptPolicy.exactlyOneCta}
+                        onChange={(event) =>
+                          setNodePatch(selectedNode.id, {
+                            promptPolicy: {
+                              ...selectedNode.promptPolicy,
+                              exactlyOneCta: event.target.checked,
+                            },
+                          })
+                        }
+                      />
+                      Require exactly one CTA
+                    </label>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      onClick={() => void generatePreview()}
+                      disabled={previewingNodeId === selectedNode.id}
+                    >
+                      {previewingNodeId === selectedNode.id ? (
+                        <>
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                          Generating Preview...
+                        </>
+                      ) : (
+                        <>
+                          <Sparkles className="h-3.5 w-3.5" />
+                          Generate Preview
+                        </>
+                      )}
+                    </Button>
+                    {previewError && previewingNodeId !== selectedNode.id ? (
+                      <div className="text-xs text-[color:var(--danger)]">{previewError}</div>
+                    ) : null}
+                    {previewResult && previewResult.nodeId === selectedNode.id ? (
+                      <div className="grid gap-2 rounded-md border border-[color:var(--border)] bg-[color:var(--surface)] p-2 text-xs">
+                        <div>
+                          <span className="font-medium">Subject:</span> {previewResult.subject || "(empty)"}
+                        </div>
+                        <div className="whitespace-pre-wrap">
+                          <span className="font-medium">Body:</span> {previewResult.body || "(empty)"}
+                        </div>
+                        <details>
+                          <summary className="cursor-pointer text-[color:var(--muted-foreground)]">Trace</summary>
+                          <pre className="mt-1 overflow-x-auto whitespace-pre-wrap rounded border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-2">
+                            {JSON.stringify(previewResult.trace, null, 2)}
+                          </pre>
+                        </details>
+                      </div>
+                    ) : null}
+                  </div>
+                ) : null}
 
                 <div className="grid gap-2">
                   <Label>Delay (minutes)</Label>

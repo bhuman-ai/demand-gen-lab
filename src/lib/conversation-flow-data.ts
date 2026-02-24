@@ -6,6 +6,7 @@ import type {
   ConversationFlowEdge,
   ConversationFlowGraph,
   ConversationFlowNode,
+  ConversationPromptPolicy,
   ConversationMap,
   ConversationSession,
 } from "@/lib/factory-types";
@@ -51,6 +52,12 @@ type ConversationSeedContext = {
   campaignGoal?: string;
 };
 
+const DEFAULT_PROMPT_POLICY: ConversationPromptPolicy = {
+  subjectMaxWords: 8,
+  bodyMaxWords: 120,
+  exactlyOneCta: true,
+};
+
 function asRecord(value: unknown): Record<string, unknown> {
   if (value && typeof value === "object" && !Array.isArray(value)) {
     return value as Record<string, unknown>;
@@ -68,13 +75,62 @@ function clampConfidence(value: unknown, fallback = 0.7) {
   return Math.max(0, Math.min(1, num));
 }
 
+function clampWords(value: unknown, fallback: number, min: number, max: number) {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return fallback;
+  return Math.max(min, Math.min(max, Math.round(num)));
+}
+
+function normalizePromptPolicy(value: unknown): ConversationPromptPolicy {
+  const row = asRecord(value);
+  return {
+    subjectMaxWords: clampWords(row.subjectMaxWords, DEFAULT_PROMPT_POLICY.subjectMaxWords, 3, 20),
+    bodyMaxWords: clampWords(row.bodyMaxWords, DEFAULT_PROMPT_POLICY.bodyMaxWords, 40, 260),
+    exactlyOneCta: row.exactlyOneCta !== false,
+  };
+}
+
+function synthesizePromptTemplateFromLegacyCopy(input: {
+  title: string;
+  subject: string;
+  body: string;
+}) {
+  const title = oneLine(input.title) || "Message";
+  const subject = oneLine(input.subject);
+  const body = String(input.body ?? "").trim();
+  const styleSubject = subject ? `Legacy subject example: ${subject}` : "";
+  const styleBody = body ? `Legacy body example:\n${body}` : "";
+
+  return [
+    `Write this node message for "${title}".`,
+    "Keep it concrete, specific, and easy to understand.",
+    "Use context variables only when available: {{firstName}}, {{company}}, {{leadTitle}}, {{brandName}}, {{campaignGoal}}, {{variantName}}, {{replyPreview}}, {{shortAnswer}}.",
+    "Do not leave unresolved placeholders.",
+    "Include exactly one clear CTA sentence.",
+    styleSubject,
+    styleBody,
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
 function defaultNode(position: { x: number; y: number }): ConversationFlowNode {
+  const subject = "Quick question";
+  const body = "Hi {{firstName}},\n\nSaw {{company}} and wanted to ask one quick thing about {{campaignGoal}}.";
   return {
     id: createId("node"),
     kind: "message",
     title: "Message",
-    subject: "Quick question",
-    body: "Hi {{firstName}},\n\nSaw {{company}} and wanted to ask one quick thing about {{campaignGoal}}.",
+    copyMode: "prompt_v1",
+    promptTemplate: synthesizePromptTemplateFromLegacyCopy({
+      title: "Message",
+      subject,
+      body,
+    }),
+    promptVersion: 1,
+    promptPolicy: { ...DEFAULT_PROMPT_POLICY },
+    subject,
+    body,
     autoSend: true,
     delayMinutes: 0,
     x: position.x,
@@ -87,6 +143,10 @@ function defaultTerminalNode(position: { x: number; y: number }): ConversationFl
     id: createId("node"),
     kind: "terminal",
     title: "End",
+    copyMode: "prompt_v1",
+    promptTemplate: "",
+    promptVersion: 1,
+    promptPolicy: { ...DEFAULT_PROMPT_POLICY },
     subject: "",
     body: "",
     autoSend: false,
@@ -166,6 +226,16 @@ function upgradeLegacyNodeCopy(node: ConversationFlowNode): ConversationFlowNode
     ...node,
     subject,
     body,
+    copyMode: "prompt_v1",
+    promptTemplate:
+      node.promptTemplate?.trim() ||
+      synthesizePromptTemplateFromLegacyCopy({
+        title: node.title,
+        subject,
+        body,
+      }),
+    promptVersion: Math.max(1, Number(node.promptVersion || 1)),
+    promptPolicy: normalizePromptPolicy(node.promptPolicy),
   };
 }
 
@@ -189,6 +259,11 @@ export function defaultConversationGraph(context: ConversationSeedContext = {}):
         inferredCta || "If this is relevant, open to a short walkthrough?"
       }`
     : "Hi {{firstName}},\n\nNoticed {{company}} and wanted to ask: are you actively working on {{campaignGoal}} right now?\n\nIf yes, I can share a short example from similar teams.";
+  start.promptTemplate = synthesizePromptTemplateFromLegacyCopy({
+    title: start.title,
+    subject: start.subject,
+    body: start.body,
+  });
 
   const interest = defaultNode({ x: 420, y: 80 });
   interest.title = "Interest follow-up";
@@ -201,6 +276,11 @@ export function defaultConversationGraph(context: ConversationSeedContext = {}):
     }`;
   interest.autoSend = true;
   interest.delayMinutes = 0;
+  interest.promptTemplate = synthesizePromptTemplateFromLegacyCopy({
+    title: interest.title,
+    subject: interest.subject,
+    body: interest.body,
+  });
 
   const question = defaultNode({ x: 420, y: 220 });
   question.title = "Question answer";
@@ -208,6 +288,11 @@ export function defaultConversationGraph(context: ConversationSeedContext = {}):
   question.body =
     "Great question, {{firstName}}.\n\nShort answer: {{shortAnswer}}\n\nIf useful, I can send one concrete example using your use case for {{company}}.";
   question.autoSend = false;
+  question.promptTemplate = synthesizePromptTemplateFromLegacyCopy({
+    title: question.title,
+    subject: question.subject,
+    body: question.body,
+  });
 
   const objection = defaultNode({ x: 420, y: 360 });
   objection.title = "Objection handling";
@@ -215,6 +300,11 @@ export function defaultConversationGraph(context: ConversationSeedContext = {}):
   objection.body =
     `Makes sense. If timing is the blocker, I can send a concise one-pager on ${campaignGoal} and you can review async.\n\nWould that be more useful?`;
   objection.autoSend = false;
+  objection.promptTemplate = synthesizePromptTemplateFromLegacyCopy({
+    title: objection.title,
+    subject: objection.subject,
+    body: objection.body,
+  });
 
   const noReply = defaultNode({ x: 780, y: 220 });
   noReply.title = "No-reply nudge";
@@ -223,6 +313,11 @@ export function defaultConversationGraph(context: ConversationSeedContext = {}):
     `Just checking once more, {{firstName}}.\n\nShould I close this out, or is there someone else at {{company}} who owns ${campaignGoal}?`;
   noReply.autoSend = true;
   noReply.delayMinutes = 1440;
+  noReply.promptTemplate = synthesizePromptTemplateFromLegacyCopy({
+    title: noReply.title,
+    subject: noReply.subject,
+    body: noReply.body,
+  });
 
   const end = defaultTerminalNode({ x: 1120, y: 220 });
 
@@ -331,6 +426,10 @@ function normalizeNode(value: unknown): ConversationFlowNode | null {
   const id = String(row.id ?? "").trim() || createId("node");
   const kind = String(row.kind ?? "message") === "terminal" ? "terminal" : "message";
   const title = String(row.title ?? "").trim() || (kind === "terminal" ? "End" : "Message");
+  const copyMode = String(row.copyMode ?? row.copy_mode ?? "").trim() === "legacy_template" ? "legacy_template" : "prompt_v1";
+  const promptTemplateRaw = String(row.promptTemplate ?? row.prompt_template ?? "").trim();
+  const promptVersion = Math.max(1, Number(row.promptVersion ?? row.prompt_version ?? 1) || 1);
+  const promptPolicy = normalizePromptPolicy(row.promptPolicy ?? row.prompt_policy);
   const subject = String(row.subject ?? "").trim();
   const body = String(row.body ?? "").trim();
   const autoSend = Boolean(row.autoSend ?? true);
@@ -338,11 +437,14 @@ function normalizeNode(value: unknown): ConversationFlowNode | null {
   const x = Number(row.x);
   const y = Number(row.y);
 
-  if (kind === "message" && !body) return null;
-  const node: ConversationFlowNode = {
+  let node: ConversationFlowNode = {
     id,
     kind,
     title,
+    copyMode,
+    promptTemplate: promptTemplateRaw,
+    promptVersion,
+    promptPolicy,
     subject,
     body,
     autoSend,
@@ -350,7 +452,19 @@ function normalizeNode(value: unknown): ConversationFlowNode | null {
     x: Number.isFinite(x) ? x : 0,
     y: Number.isFinite(y) ? y : 0,
   };
-  return upgradeLegacyNodeCopy(node);
+  node = upgradeLegacyNodeCopy(node);
+  if (node.kind === "message" && !node.promptTemplate.trim()) {
+    node = {
+      ...node,
+      promptTemplate: synthesizePromptTemplateFromLegacyCopy({
+        title: node.title,
+        subject: node.subject,
+        body: node.body,
+      }),
+    };
+  }
+  if (node.kind === "message" && !node.promptTemplate.trim()) return null;
+  return node;
 }
 
 function normalizeEdge(value: unknown): ConversationFlowEdge | null {
@@ -439,6 +553,28 @@ function mapMapRow(value: unknown): ConversationMap {
     createdAt: String(row.created_at ?? row.createdAt ?? nowIso()),
     updatedAt: String(row.updated_at ?? row.updatedAt ?? nowIso()),
   };
+}
+
+function graphNeedsPromptUpgrade(graphRaw: unknown): boolean {
+  const graph = asRecord(graphRaw);
+  const nodes = asArray(graph.nodes);
+  if (!nodes.length) return false;
+
+  return nodes.some((item) => {
+    const row = asRecord(item);
+    const kind = String(row.kind ?? "message") === "terminal" ? "terminal" : "message";
+    if (kind !== "message") return false;
+    const copyMode = String(row.copyMode ?? row.copy_mode ?? "").trim();
+    const promptTemplate = String(row.promptTemplate ?? row.prompt_template ?? "").trim();
+    const promptPolicy = asRecord(row.promptPolicy ?? row.prompt_policy);
+    return (
+      copyMode !== "prompt_v1" ||
+      !promptTemplate ||
+      !Number.isFinite(Number(row.promptVersion ?? row.prompt_version ?? 0)) ||
+      !Number.isFinite(Number(promptPolicy.subjectMaxWords ?? NaN)) ||
+      !Number.isFinite(Number(promptPolicy.bodyMaxWords ?? NaN))
+    );
+  });
 }
 
 function mapSessionRow(value: unknown): ConversationSession {
@@ -554,7 +690,27 @@ export async function getConversationMapByExperiment(
       });
     }
 
-    if (!error && data) return mapMapRow(data);
+    if (!error && data) {
+      let mapped = mapMapRow(data);
+      const needsDraftUpgrade = graphNeedsPromptUpgrade(data.draft_graph ?? data.draftGraph);
+      const needsPublishedUpgrade = graphNeedsPromptUpgrade(data.published_graph ?? data.publishedGraph);
+      if (needsDraftUpgrade || needsPublishedUpgrade) {
+        const { data: upgraded, error: upgradeError } = await supabase
+          .from(TABLE_MAP)
+          .update({
+            draft_graph: mapped.draftGraph,
+            published_graph: mapped.publishedGraph,
+            updated_at: nowIso(),
+          })
+          .eq("id", mapped.id)
+          .select("*")
+          .maybeSingle();
+        if (!upgradeError && upgraded) {
+          mapped = mapMapRow(upgraded);
+        }
+      }
+      return mapped;
+    }
   }
 
   const store = await readStore();

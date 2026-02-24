@@ -368,6 +368,11 @@ function mapRunLeadRow(input: unknown): OutreachRunLead {
 
 function mapMessageRow(input: unknown): OutreachMessage {
   const row = asRecord(input);
+  const generationMetaRaw = row.generation_meta ?? row.generationMeta;
+  const generationMeta =
+    generationMetaRaw && typeof generationMetaRaw === "object" && !Array.isArray(generationMetaRaw)
+      ? (generationMetaRaw as Record<string, unknown>)
+      : {};
   return {
     id: String(row.id ?? ""),
     runId: String(row.run_id ?? row.runId ?? ""),
@@ -388,6 +393,7 @@ function mapMessageRow(input: unknown): OutreachMessage {
     scheduledAt: String(row.scheduled_at ?? row.scheduledAt ?? nowIso()),
     sentAt: String(row.sent_at ?? row.sentAt ?? ""),
     lastError: String(row.last_error ?? row.lastError ?? ""),
+    generationMeta,
     createdAt: String(row.created_at ?? row.createdAt ?? nowIso()),
     updatedAt: String(row.updated_at ?? row.updatedAt ?? nowIso()),
   };
@@ -1710,7 +1716,12 @@ export async function createRunMessages(
       | "status"
       | "scheduledAt"
     > &
-      Partial<Pick<OutreachMessage, "sourceType" | "sessionId" | "nodeId" | "parentMessageId">>
+      Partial<
+        Pick<
+          OutreachMessage,
+          "sourceType" | "sessionId" | "nodeId" | "parentMessageId" | "lastError" | "generationMeta"
+        >
+      >
   >
 ): Promise<OutreachMessage[]> {
   const now = nowIso();
@@ -1731,7 +1742,8 @@ export async function createRunMessages(
     provider_message_id: "",
     scheduled_at: item.scheduledAt,
     sent_at: null,
-    last_error: "",
+    last_error: item.lastError ?? "",
+    generation_meta: item.generationMeta ?? {},
     created_at: now,
     updated_at: now,
   }));
@@ -1765,6 +1777,7 @@ export async function createRunMessages(
       scheduledAt: row.scheduled_at,
       sentAt: row.sent_at,
       lastError: row.last_error,
+      generationMeta: row.generation_meta,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
     })
@@ -1812,7 +1825,9 @@ export async function getRunMessage(messageId: string): Promise<OutreachMessage 
 
 export async function updateRunMessage(
   messageId: string,
-  patch: Partial<Pick<OutreachMessage, "status" | "providerMessageId" | "sentAt" | "lastError">>
+  patch: Partial<
+    Pick<OutreachMessage, "status" | "providerMessageId" | "sentAt" | "lastError" | "generationMeta">
+  >
 ): Promise<OutreachMessage | null> {
   const now = nowIso();
   const supabase = getSupabaseAdmin();
@@ -1822,6 +1837,7 @@ export async function updateRunMessage(
     if (patch.providerMessageId !== undefined) update.provider_message_id = patch.providerMessageId;
     if (patch.sentAt !== undefined) update.sent_at = patch.sentAt || null;
     if (patch.lastError !== undefined) update.last_error = patch.lastError;
+    if (patch.generationMeta !== undefined) update.generation_meta = patch.generationMeta;
 
     const { data, error } = await supabase
       .from(TABLE_MESSAGE)

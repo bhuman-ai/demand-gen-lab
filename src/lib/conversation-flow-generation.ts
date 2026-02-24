@@ -253,7 +253,7 @@ async function generateCandidateGraphs(input: { context: GenerationContext; cand
     "- No provider/tool implementation terms.",
     "",
     "Return JSON only:",
-    '{ "candidates": [{ "index": number, "rationale": string, "graph": { "version": 1, "maxDepth": number, "startNodeId": string, "nodes": [{ "id": string, "kind": "message"|"terminal", "title": string, "subject": string, "body": string, "autoSend": boolean, "delayMinutes": number, "x": number, "y": number }], "edges": [{ "id": string, "fromNodeId": string, "toNodeId": string, "trigger": "intent"|"timer"|"fallback", "intent": "question"|"interest"|"objection"|"unsubscribe"|"other"|\"\", "waitMinutes": number, "confidenceThreshold": number, "priority": number }] } }] }',
+    '{ "candidates": [{ "index": number, "rationale": string, "graph": { "version": 1, "maxDepth": number, "startNodeId": string, "nodes": [{ "id": string, "kind": "message"|"terminal", "title": string, "copyMode": "prompt_v1", "promptTemplate": string, "promptVersion": 1, "promptPolicy": { "subjectMaxWords": number, "bodyMaxWords": number, "exactlyOneCta": boolean }, "subject": string, "body": string, "autoSend": boolean, "delayMinutes": number, "x": number, "y": number }], "edges": [{ "id": string, "fromNodeId": string, "toNodeId": string, "trigger": "intent"|"timer"|"fallback", "intent": "question"|"interest"|"objection"|"unsubscribe"|"other"|\"\", "waitMinutes": number, "confidenceThreshold": number, "priority": number }] } }] }',
     `Context: ${JSON.stringify(input.context)}`,
   ].join("\n");
 

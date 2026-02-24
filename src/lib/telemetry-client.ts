@@ -34,7 +34,11 @@ export type TelemetryEvent =
   | "reply_ingested"
   | "reply_draft_created"
   | "reply_draft_sent"
-  | "outreach_anomaly_detected";
+  | "outreach_anomaly_detected"
+  | "conversation_prompt_generated"
+  | "conversation_prompt_rejected"
+  | "conversation_prompt_failed"
+  | "conversation_prompt_previewed";
 
 export async function trackEvent(event: TelemetryEvent, payload: Record<string, unknown> = {}) {
   if (typeof window === "undefined") return;

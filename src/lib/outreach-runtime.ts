@@ -16,6 +16,12 @@ import {
   listConversationSessionsByRun,
   updateConversationSession,
 } from "@/lib/conversation-flow-data";
+import { getExperimentRecordByRuntimeRef } from "@/lib/experiment-data";
+import {
+  conversationPromptModeEnabled,
+  generateConversationPromptMessage,
+  type ConversationPromptRenderContext,
+} from "@/lib/conversation-prompt-render";
 import {
   createOutreachEvent,
   createOutreachRun,
@@ -328,6 +334,12 @@ function effectiveCampaignGoal(goal: string, variantName: string) {
   return "outbound pipeline performance";
 }
 
+function clampConfidenceValue(value: unknown, fallback = 0) {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return fallback;
+  return Math.max(0, Math.min(1, num));
+}
+
 function renderConversationNode(input: {
   node: ConversationFlowNode;
   leadName: string;
@@ -408,6 +420,228 @@ function renderConversationNode(input: {
   };
 }
 
+function parseOfferAndCta(rawOffer: string) {
+  const text = String(rawOffer ?? "").trim();
+  if (!text) return { offer: "", cta: "" };
+  const ctaMatch = text.match(/\bCTA\s*:\s*([^\n]+)/i);
+  const cta = ctaMatch ? ctaMatch[1].trim() : "";
+  const offer = text.replace(/\bCTA\s*:\s*[^\n]+/gi, "").replace(/\s{2,}/g, " ").trim();
+  return { offer, cta };
+}
+
+function buildConversationPromptContext(input: {
+  run: {
+    id: string;
+    brandId: string;
+    campaignId: string;
+    dailyCap: number;
+    hourlyCap: number;
+    minSpacingMinutes: number;
+    timezone: string;
+  };
+  lead: { id: string; email: string; name: string; status: string; company?: string; title?: string; domain?: string };
+  sessionId: string;
+  nodeId: string;
+  parentMessageId?: string;
+  brandName: string;
+  brandWebsite?: string;
+  brandTone?: string;
+  brandNotes?: string;
+  campaignName?: string;
+  campaignGoal: string;
+  campaignConstraints?: string;
+  variantId?: string;
+  variantName: string;
+  experimentOffer?: string;
+  experimentCta?: string;
+  experimentAudience?: string;
+  experimentNotes?: string;
+  latestInboundSubject?: string;
+  latestInboundBody?: string;
+  intent?: ReplyThread["intent"] | "";
+  intentConfidence?: number;
+  priorNodePath?: string[];
+  maxDepth?: number;
+}): ConversationPromptRenderContext {
+  return {
+    brand: {
+      id: input.run.brandId,
+      name: input.brandName.trim(),
+      website: String(input.brandWebsite ?? "").trim(),
+      tone: String(input.brandTone ?? "").trim(),
+      notes: String(input.brandNotes ?? "").trim(),
+    },
+    campaign: {
+      id: input.run.campaignId,
+      name: String(input.campaignName ?? "").trim(),
+      objectiveGoal: effectiveCampaignGoal(input.campaignGoal, input.variantName),
+      objectiveConstraints: String(input.campaignConstraints ?? "").trim(),
+    },
+    experiment: {
+      id: String(input.variantId ?? "").trim(),
+      name: input.variantName.trim(),
+      offer: String(input.experimentOffer ?? "").trim(),
+      cta: String(input.experimentCta ?? "").trim(),
+      audience: String(input.experimentAudience ?? "").trim(),
+      notes: String(input.experimentNotes ?? "").trim(),
+    },
+    lead: {
+      id: input.lead.id,
+      email: input.lead.email.trim(),
+      name: input.lead.name.trim(),
+      company: String(input.lead.company ?? "").trim(),
+      title: String(input.lead.title ?? "").trim(),
+      domain: String(input.lead.domain ?? input.lead.email.split("@")[1] ?? "").trim().toLowerCase(),
+      status: input.lead.status,
+    },
+    thread: {
+      sessionId: input.sessionId,
+      nodeId: input.nodeId,
+      parentMessageId: String(input.parentMessageId ?? "").trim(),
+      latestInboundSubject: String(input.latestInboundSubject ?? "").trim(),
+      latestInboundBody: String(input.latestInboundBody ?? "").trim(),
+      intent: input.intent ?? "",
+      confidence: clampConfidenceValue(input.intentConfidence ?? 0, 0),
+      priorNodePath: Array.isArray(input.priorNodePath)
+        ? input.priorNodePath.map((value) => String(value ?? "").trim()).filter(Boolean)
+        : [],
+    },
+    safety: {
+      maxDepth: Math.max(1, Math.min(12, Number(input.maxDepth ?? 5) || 5)),
+      dailyCap: Math.max(1, Number(input.run.dailyCap || 30)),
+      hourlyCap: Math.max(1, Number(input.run.hourlyCap || 6)),
+      minSpacingMinutes: Math.max(1, Number(input.run.minSpacingMinutes || 8)),
+      timezone: input.run.timezone || DEFAULT_TIMEZONE,
+    },
+  };
+}
+
+async function generateConversationNodeContent(input: {
+  node: ConversationFlowNode;
+  run: {
+    id: string;
+    brandId: string;
+    campaignId: string;
+    dailyCap: number;
+    hourlyCap: number;
+    minSpacingMinutes: number;
+    timezone: string;
+  };
+  lead: { id: string; email: string; name: string; status: string; company?: string; title?: string; domain?: string };
+  sessionId: string;
+  parentMessageId?: string;
+  brandName: string;
+  brandWebsite?: string;
+  brandTone?: string;
+  brandNotes?: string;
+  campaignName?: string;
+  campaignGoal: string;
+  campaignConstraints?: string;
+  variantId?: string;
+  variantName: string;
+  experimentOffer?: string;
+  experimentCta?: string;
+  experimentAudience?: string;
+  experimentNotes?: string;
+  latestInboundSubject?: string;
+  latestInboundBody?: string;
+  intent?: ReplyThread["intent"] | "";
+  intentConfidence?: number;
+  priorNodePath?: string[];
+  maxDepth?: number;
+}): Promise<
+  | { ok: true; subject: string; body: string; trace: Record<string, unknown> }
+  | { ok: false; reason: string; trace: Record<string, unknown> }
+> {
+  if (conversationPromptModeEnabled()) {
+    if (input.node.copyMode !== "prompt_v1") {
+      return {
+        ok: false,
+        reason: "Conversation node must use prompt mode",
+        trace: {
+          mode: "prompt_v1",
+          validation: { passed: false, reason: "node_copy_mode_invalid" },
+        },
+      };
+    }
+
+    const promptContext = buildConversationPromptContext({
+      run: input.run,
+      lead: input.lead,
+      sessionId: input.sessionId,
+      nodeId: input.node.id,
+      parentMessageId: input.parentMessageId,
+      brandName: input.brandName,
+      brandWebsite: input.brandWebsite,
+      brandTone: input.brandTone,
+      brandNotes: input.brandNotes,
+      campaignName: input.campaignName,
+      campaignGoal: input.campaignGoal,
+      campaignConstraints: input.campaignConstraints,
+      variantId: input.variantId,
+      variantName: input.variantName,
+      experimentOffer: input.experimentOffer,
+      experimentCta: input.experimentCta,
+      experimentAudience: input.experimentAudience,
+      experimentNotes: input.experimentNotes,
+      latestInboundSubject: input.latestInboundSubject,
+      latestInboundBody: input.latestInboundBody,
+      intent: input.intent,
+      intentConfidence: input.intentConfidence,
+      priorNodePath: input.priorNodePath,
+      maxDepth: input.maxDepth,
+    });
+
+    const generated = await generateConversationPromptMessage({
+      node: input.node,
+      context: promptContext,
+    });
+    if (!generated.ok) {
+      return {
+        ok: false,
+        reason: generated.reason,
+        trace: generated.trace,
+      };
+    }
+    return {
+      ok: true,
+      subject: generated.subject,
+      body: generated.body,
+      trace: generated.trace,
+    };
+  }
+
+  const rendered = renderConversationNode({
+    node: input.node,
+    leadName: input.lead.name,
+    leadCompany: input.lead.company ?? "",
+    leadTitle: input.lead.title ?? "",
+    brandName: input.brandName,
+    campaignGoal: input.campaignGoal,
+    variantName: input.variantName,
+    replyPreview: input.latestInboundBody,
+  });
+  if (!rendered.ok) {
+    return {
+      ok: false,
+      reason: rendered.reason,
+      trace: {
+        mode: "legacy_template",
+        validation: { passed: false, reason: rendered.reason },
+      },
+    };
+  }
+  return {
+    ok: true,
+    subject: rendered.subject,
+    body: rendered.body,
+    trace: {
+      mode: "legacy_template",
+      validation: { passed: true, reason: "" },
+    },
+  };
+}
+
 function addHours(dateIso: string, hours: number) {
   const date = new Date(dateIso);
   return new Date(date.getTime() + hours * 60 * 60 * 1000).toISOString();
@@ -466,20 +700,36 @@ async function scheduleConversationNodeMessage(input: {
     dailyCap: number;
     hourlyCap: number;
     minSpacingMinutes: number;
+    timezone: string;
   };
-  lead: { id: string; email: string; name: string; status: string; company?: string; title?: string };
+  lead: { id: string; email: string; name: string; status: string; company?: string; title?: string; domain?: string };
   sessionId: string;
   node: ConversationFlowNode;
   step: number;
   parentMessageId?: string;
   brandName: string;
+  brandWebsite?: string;
+  brandTone?: string;
+  brandNotes?: string;
+  campaignName?: string;
   campaignGoal: string;
+  campaignConstraints?: string;
+  variantId?: string;
   variantName: string;
+  experimentOffer?: string;
+  experimentCta?: string;
+  experimentAudience?: string;
+  experimentNotes?: string;
+  intent?: ReplyThread["intent"] | "";
+  intentConfidence?: number;
+  priorNodePath?: string[];
+  maxDepth?: number;
   waitMinutes?: number;
-  replyPreview?: string;
+  latestInboundSubject?: string;
+  latestInboundBody?: string;
   existingMessages: Awaited<ReturnType<typeof listRunMessages>>;
 }): Promise<{ ok: boolean; reason: string; messageId: string }> {
-  if (input.node.kind !== "message" || !input.node.body.trim()) {
+  if (input.node.kind !== "message") {
     return { ok: false, reason: "Node is not a valid message node", messageId: "" };
   }
   if (!input.lead.email.trim()) {
@@ -499,18 +749,86 @@ async function scheduleConversationNodeMessage(input: {
     return { ok: false, reason: "Message already scheduled for this node", messageId: "" };
   }
 
-  const composed = renderConversationNode({
+  const composed = await generateConversationNodeContent({
     node: input.node,
-    leadName: input.lead.name,
-    leadCompany: input.lead.company ?? "",
-    leadTitle: input.lead.title ?? "",
+    run: input.run,
+    lead: input.lead,
+    sessionId: input.sessionId,
+    parentMessageId: input.parentMessageId,
     brandName: input.brandName,
+    brandWebsite: input.brandWebsite,
+    brandTone: input.brandTone,
+    brandNotes: input.brandNotes,
+    campaignName: input.campaignName,
     campaignGoal: input.campaignGoal,
+    campaignConstraints: input.campaignConstraints,
+    variantId: input.variantId,
     variantName: input.variantName,
-    replyPreview: input.replyPreview,
+    experimentOffer: input.experimentOffer,
+    experimentCta: input.experimentCta,
+    experimentAudience: input.experimentAudience,
+    experimentNotes: input.experimentNotes,
+    latestInboundSubject: input.latestInboundSubject,
+    latestInboundBody: input.latestInboundBody,
+    intent: input.intent,
+    intentConfidence: input.intentConfidence,
+    priorNodePath: input.priorNodePath,
+    maxDepth: input.maxDepth,
   });
   if (!composed.ok) {
-    return { ok: false, reason: composed.reason, messageId: "" };
+    const failedRows = await createRunMessages([
+      {
+        runId: input.run.id,
+        brandId: input.run.brandId,
+        campaignId: input.run.campaignId,
+        leadId: input.lead.id,
+        step: Math.max(1, input.step),
+        subject: "",
+        body: "",
+        status: "failed",
+        scheduledAt: nowIso(),
+        sourceType: "conversation",
+        sessionId: input.sessionId,
+        nodeId: input.node.id,
+        parentMessageId: input.parentMessageId ?? "",
+        lastError: composed.reason,
+        generationMeta: composed.trace,
+      },
+    ]);
+    const failedMessageId = failedRows[0]?.id ?? "";
+    if (failedRows[0]) {
+      input.existingMessages.push(failedRows[0]);
+    }
+    await createConversationEvent({
+      sessionId: input.sessionId,
+      runId: input.run.id,
+      eventType: "conversation_prompt_rejected",
+      payload: {
+        nodeId: input.node.id,
+        reason: composed.reason,
+        messageId: failedMessageId,
+        trace: composed.trace,
+      },
+    });
+    await createOutreachEvent({
+      runId: input.run.id,
+      eventType: "conversation_prompt_rejected",
+      payload: {
+        nodeId: input.node.id,
+        reason: composed.reason,
+        messageId: failedMessageId,
+      },
+    });
+    await createOutreachEvent({
+      runId: input.run.id,
+      eventType: "conversation_prompt_failed",
+      payload: {
+        nodeId: input.node.id,
+        reason: composed.reason,
+        messageId: failedMessageId,
+      },
+    });
+    return { ok: false, reason: composed.reason, messageId: failedMessageId };
   }
 
   const totalDelay = Math.max(0, input.node.delayMinutes + (input.waitMinutes ?? 0));
@@ -529,6 +847,7 @@ async function scheduleConversationNodeMessage(input: {
       sessionId: input.sessionId,
       nodeId: input.node.id,
       parentMessageId: input.parentMessageId ?? "",
+      generationMeta: composed.trace,
     },
   ]);
   if (!created.length) {
@@ -537,6 +856,24 @@ async function scheduleConversationNodeMessage(input: {
 
   input.existingMessages.push(created[0]);
   await updateRunLead(input.lead.id, { status: "scheduled" });
+  await createConversationEvent({
+    sessionId: input.sessionId,
+    runId: input.run.id,
+    eventType: "conversation_prompt_generated",
+    payload: {
+      nodeId: input.node.id,
+      messageId: created[0].id,
+      trace: composed.trace,
+    },
+  });
+  await createOutreachEvent({
+    runId: input.run.id,
+    eventType: "conversation_prompt_generated",
+    payload: {
+      nodeId: input.node.id,
+      messageId: created[0].id,
+    },
+  });
   return { ok: true, reason: "", messageId: created[0].id };
 }
 
@@ -801,8 +1138,8 @@ export async function launchExperimentRun(input: {
           ? "Conversation map start node must be a message"
           : !flowStartNode.autoSend
             ? "Conversation map start node must auto-send to start outreach"
-            : !flowStartNode.body.trim()
-              ? "Conversation map start message body is empty"
+            : !flowStartNode.promptTemplate.trim()
+              ? "Conversation map start prompt is empty"
               : "";
 
   if (conversationPreflightReason) {
@@ -842,7 +1179,7 @@ export async function launchExperimentRun(input: {
         hasStartNode: Boolean(flowStartNode),
         startNodeKind: flowStartNode?.kind ?? "",
         startNodeAutoSend: Boolean(flowStartNode?.autoSend),
-        startNodeHasBody: Boolean(flowStartNode?.body?.trim()),
+        startNodeHasPrompt: Boolean(flowStartNode?.promptTemplate?.trim()),
       },
     };
   }
@@ -1447,6 +1784,11 @@ async function processScheduleMessagesJob(job: OutreachJob) {
     });
     return;
   }
+  const runtimeExperiment = await getExperimentRecordByRuntimeRef(run.brandId, run.campaignId, run.experimentId);
+  const parsedOffer = parseOfferAndCta(runtimeExperiment?.offer ?? "");
+  const experimentOffer = parsedOffer.offer || runtimeExperiment?.offer || "";
+  const experimentCta = parsedOffer.cta;
+  const experimentAudience = runtimeExperiment?.audience || hypothesis.actorQuery;
 
   const leads = await listRunLeads(run.id);
   if (!leads.length) {
@@ -1549,8 +1891,19 @@ async function processScheduleMessagesJob(job: OutreachJob) {
         node: startNode,
         step: 1,
         brandName,
+        brandWebsite: brand?.website ?? "",
+        brandTone: brand?.tone ?? "",
+        brandNotes: brand?.notes ?? "",
+        campaignName: campaign.name,
         campaignGoal,
+        campaignConstraints: campaign.objective.constraints ?? "",
+        variantId: experiment.id,
         variantName: experiment.name,
+        experimentOffer,
+        experimentCta,
+        experimentAudience,
+        experimentNotes: experiment.notes ?? "",
+        maxDepth: graph.maxDepth,
         waitMinutes: index * run.minSpacingMinutes,
         existingMessages: existingConversationMessages,
       });
@@ -1898,8 +2251,16 @@ async function processConversationTickJob(job: OutreachJob) {
   ]);
   const brandName = brand?.name ?? "";
   const campaignGoal = campaign?.objective.goal ?? "";
-  const variantName =
-    campaign?.experiments.find((item) => item.id === run.experimentId)?.name ?? "";
+  const variant = campaign?.experiments.find((item) => item.id === run.experimentId) ?? null;
+  const variantName = variant?.name ?? "";
+  const hypothesis = variant
+    ? campaign?.hypotheses.find((item) => item.id === variant.hypothesisId) ?? null
+    : null;
+  const runtimeExperiment = await getExperimentRecordByRuntimeRef(run.brandId, run.campaignId, run.experimentId);
+  const parsedOffer = parseOfferAndCta(runtimeExperiment?.offer ?? "");
+  const experimentOffer = parsedOffer.offer || runtimeExperiment?.offer || "";
+  const experimentCta = parsedOffer.cta;
+  const experimentAudience = runtimeExperiment?.audience || hypothesis?.actorQuery || "";
 
   let scheduledCount = 0;
   let completedCount = 0;
@@ -2020,8 +2381,19 @@ async function processConversationTickJob(job: OutreachJob) {
       node: nextNode,
       step: nextTurn,
       brandName,
+      brandWebsite: brand?.website ?? "",
+      brandTone: brand?.tone ?? "",
+      brandNotes: brand?.notes ?? "",
+      campaignName: campaign?.name ?? "",
       campaignGoal,
+      campaignConstraints: campaign?.objective.constraints ?? "",
+      variantId: variant?.id ?? "",
       variantName,
+      experimentOffer,
+      experimentCta,
+      experimentAudience,
+      experimentNotes: variant?.notes ?? "",
+      maxDepth: graph.maxDepth,
       waitMinutes: 0,
       existingMessages: messages,
     });
@@ -2443,6 +2815,15 @@ export async function ingestInboundReply(input: {
     getBrandById(run.brandId),
     getCampaignById(run.brandId, run.campaignId),
   ]);
+  const variant = campaign?.experiments.find((item) => item.id === run.experimentId) ?? null;
+  const hypothesis = variant
+    ? campaign?.hypotheses.find((item) => item.id === variant.hypothesisId) ?? null
+    : null;
+  const runtimeExperiment = await getExperimentRecordByRuntimeRef(run.brandId, run.campaignId, run.experimentId);
+  const parsedOffer = parseOfferAndCta(runtimeExperiment?.offer ?? "");
+  const experimentOffer = parsedOffer.offer || runtimeExperiment?.offer || "";
+  const experimentCta = parsedOffer.cta;
+  const experimentAudience = runtimeExperiment?.audience || hypothesis?.actorQuery || "";
 
   const flowMap = await getPublishedConversationMapForExperiment(run.brandId, run.campaignId, run.experimentId);
   const session = flowMap ? await getConversationSessionByLead({ runId: run.id, leadId: lead.id }) : null;
@@ -2542,12 +2923,25 @@ export async function ingestInboundReply(input: {
                 step: nextTurn,
                 parentMessageId: inboundMessage.id,
                 brandName: brand?.name ?? "",
+                brandWebsite: brand?.website ?? "",
+                brandTone: brand?.tone ?? "",
+                brandNotes: brand?.notes ?? "",
+                campaignName: campaign?.name ?? "",
                 campaignGoal: campaign?.objective.goal ?? "",
-                variantName:
-                  campaign?.experiments.find((item) => item.id === run.experimentId)?.name ??
-                  "",
+                campaignConstraints: campaign?.objective.constraints ?? "",
+                variantId: variant?.id ?? "",
+                variantName: variant?.name ?? "",
+                experimentOffer,
+                experimentCta,
+                experimentAudience,
+                experimentNotes: variant?.notes ?? "",
+                intent,
+                intentConfidence: confidence,
+                priorNodePath: [session.currentNodeId, nextNode.id],
+                maxDepth: graph.maxDepth,
                 waitMinutes: selectedEdge.waitMinutes,
-                replyPreview: input.body,
+                latestInboundSubject: input.subject,
+                latestInboundBody: input.body,
                 existingMessages: messages,
               });
               if (autoBranchScheduled.ok) {
@@ -2586,23 +2980,64 @@ export async function ingestInboundReply(input: {
                 });
               }
             } else {
-              const composed = renderConversationNode({
+              const composed = await generateConversationNodeContent({
                 node: nextNode,
-                leadName: lead.name,
-                leadCompany: lead.company,
-                leadTitle: lead.title,
+                run,
+                lead,
+                sessionId: session.id,
+                parentMessageId: inboundMessage.id,
                 brandName: brand?.name ?? "",
+                brandWebsite: brand?.website ?? "",
+                brandTone: brand?.tone ?? "",
+                brandNotes: brand?.notes ?? "",
+                campaignName: campaign?.name ?? "",
                 campaignGoal: campaign?.objective.goal ?? "",
-                variantName:
-                  campaign?.experiments.find((item) => item.id === run.experimentId)?.name ??
-                  "",
-                replyPreview: input.body,
+                campaignConstraints: campaign?.objective.constraints ?? "",
+                variantId: variant?.id ?? "",
+                variantName: variant?.name ?? "",
+                experimentOffer,
+                experimentCta,
+                experimentAudience,
+                experimentNotes: variant?.notes ?? "",
+                latestInboundSubject: input.subject,
+                latestInboundBody: input.body,
+                intent,
+                intentConfidence: confidence,
+                priorNodePath: [session.currentNodeId, nextNode.id],
+                maxDepth: graph.maxDepth,
               });
               if (!composed.ok) {
                 await createConversationEvent({
                   sessionId: session.id,
                   runId: run.id,
                   eventType: "manual_node_invalid",
+                  payload: {
+                    nodeId: nextNode.id,
+                    reason: composed.reason,
+                    trace: composed.trace,
+                  },
+                });
+                await createConversationEvent({
+                  sessionId: session.id,
+                  runId: run.id,
+                  eventType: "conversation_prompt_rejected",
+                  payload: {
+                    nodeId: nextNode.id,
+                    reason: composed.reason,
+                    trace: composed.trace,
+                  },
+                });
+                await createOutreachEvent({
+                  runId: run.id,
+                  eventType: "conversation_prompt_rejected",
+                  payload: {
+                    nodeId: nextNode.id,
+                    reason: composed.reason,
+                  },
+                });
+                await createOutreachEvent({
+                  runId: run.id,
+                  eventType: "conversation_prompt_failed",
                   payload: {
                     nodeId: nextNode.id,
                     reason: composed.reason,
@@ -2618,6 +3053,24 @@ export async function ingestInboundReply(input: {
                   reason: `Manual branch: ${nextNode.title}`,
                 });
                 draftId = draft.id;
+                await createConversationEvent({
+                  sessionId: session.id,
+                  runId: run.id,
+                  eventType: "conversation_prompt_generated",
+                  payload: {
+                    nodeId: nextNode.id,
+                    draftId,
+                    trace: composed.trace,
+                  },
+                });
+                await createOutreachEvent({
+                  runId: run.id,
+                  eventType: "conversation_prompt_generated",
+                  payload: {
+                    nodeId: nextNode.id,
+                    draftId,
+                  },
+                });
                 await createConversationEvent({
                   sessionId: session.id,
                   runId: run.id,

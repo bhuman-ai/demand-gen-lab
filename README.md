@@ -18,9 +18,27 @@ Copy `.env.example` to `.env.local` and fill values:
 - `SUPABASE_SERVICE_ROLE_KEY` (optional)
 - `OUTREACH_ENCRYPTION_KEY` (required for secure account secret storage)
 - `OUTREACH_CRON_TOKEN` (optional, protects cron tick endpoint)
-- `CRON_SECRET` (optional, Vercel-native cron auth token; also accepted by tick endpoint)
+- `CRON_SECRET` (optional legacy alias for tick auth token)
 - `CUSTOMER_IO_WEBHOOK_SECRET` (optional)
 - `APIFY_WEBHOOK_SECRET` (optional)
+
+## Scheduler (Cloudflare Worker)
+
+Vercel cron is intentionally disabled in this repo (`/Users/don/factory-platform/vercel.json`) so Hobby deploys are not blocked.
+
+Use Cloudflare Worker cron instead:
+
+```bash
+cd /Users/don/factory-platform/cloudflare/outreach-cron
+wrangler login
+wrangler secret put OUTREACH_CRON_TOKEN
+wrangler secret put MANUAL_TRIGGER_TOKEN
+wrangler deploy
+```
+
+The worker schedule is configured in:
+
+- `/Users/don/factory-platform/cloudflare/outreach-cron/wrangler.toml`
 
 ## API endpoints
 

@@ -1,8 +1,1 @@
-{
-  "crons": [
-    {
-      "path": "/api/internal/outreach/tick",
-      "schedule": "*/5 * * * *"
-    }
-  ]
-}
+{}

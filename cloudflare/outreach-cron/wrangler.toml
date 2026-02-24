@@ -1,0 +1,10 @@
+name = "factory-outreach-cron"
+main = "src/index.ts"
+compatibility_date = "2026-02-24"
+
+[triggers]
+crons = ["*/5 * * * *"]
+
+[vars]
+# Set this to your deployed app URL.
+OUTREACH_TICK_URL = "https://factory-platform.vercel.app/api/internal/outreach/tick"

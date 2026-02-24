@@ -1,10 +1,13 @@
 import { NextResponse } from "next/server";
-import { getCampaignById } from "@/lib/factory-data";
+import { getBrandById, getCampaignById } from "@/lib/factory-data";
+import {
+  ConversationFlowGenerationError,
+  generateScreenedConversationFlowGraph,
+} from "@/lib/conversation-flow-generation";
 import { getExperimentRecordByRuntimeRef } from "@/lib/experiment-data";
 import type { ConversationFlowGraph, ConversationMap } from "@/lib/factory-types";
 import {
   ConversationFlowDataError,
-  defaultConversationGraph,
   getConversationMapByExperiment,
   normalizeConversationGraph,
   upsertConversationMapDraft,
@@ -58,7 +61,7 @@ export async function GET(
 ) {
   const { brandId, campaignId, experimentId } = await context.params;
 
-  const campaign = await getCampaignById(brandId, campaignId);
+  const [brand, campaign] = await Promise.all([getBrandById(brandId), getCampaignById(brandId, campaignId)]);
   if (!campaign) {
     return NextResponse.json({ error: "campaign not found" }, { status: 404 });
   }
@@ -70,47 +73,90 @@ export async function GET(
 
   const sourceExperiment = await getExperimentRecordByRuntimeRef(brandId, campaignId, experimentId);
   const parsed = parseOfferAndCta(sourceExperiment?.offer ?? "");
-  const seedGraph = defaultConversationGraph({
-    offer: parsed.offer || campaign.objective.goal || "",
-    cta: parsed.cta,
-    audience: sourceExperiment?.audience || "",
-    campaignGoal: campaign.objective.goal || "",
-  });
+  const hypothesis = campaign.hypotheses.find((item) => item.id === experiment.hypothesisId) ?? null;
 
   try {
     const map = await getConversationMapByExperiment(brandId, campaignId, experimentId);
     if (map) {
       if (shouldAutoReseedLegacyDraft(map, parsed)) {
+        const generated = await generateScreenedConversationFlowGraph({
+          context: {
+            brand: {
+              name: brand?.name ?? "",
+              website: brand?.website ?? "",
+              tone: brand?.tone ?? "",
+              notes: brand?.notes ?? "",
+            },
+            campaign: {
+              campaignName: campaign.name,
+              objectiveGoal: campaign.objective?.goal ?? "",
+              objectiveConstraints: campaign.objective?.constraints ?? "",
+              angleTitle: hypothesis?.title ?? "",
+              angleRationale: hypothesis?.rationale ?? "",
+              targetAudience: hypothesis?.actorQuery ?? "",
+              variantName: experiment.name,
+              variantNotes: experiment.notes ?? "",
+            },
+            experiment: {
+              experimentRecordName: sourceExperiment?.name ?? "",
+              offer: parsed.offer || sourceExperiment?.offer || campaign.objective.goal || "",
+              cta: parsed.cta || "",
+              audience: sourceExperiment?.audience || "",
+              testEnvelope: sourceExperiment?.testEnvelope ?? null,
+            },
+          },
+        });
         const reseeded = await upsertConversationMapDraft({
           brandId,
           campaignId,
           experimentId,
           name: map.name,
-          draftGraph: seedGraph,
+          draftGraph: generated.graph,
         });
         return NextResponse.json({ map: reseeded, reseeded: true });
       }
       return NextResponse.json({ map });
     }
 
-    return NextResponse.json({
-      map: {
-        id: "",
-        brandId,
-        campaignId,
-        experimentId,
-        name: `${experiment.name || "Variant"} Conversation Flow`,
-        status: "draft",
-        draftGraph: seedGraph,
-        publishedGraph: seedGraph,
-        publishedRevision: 0,
-        publishedAt: "",
-        createdAt: "",
-        updatedAt: "",
+    const generated = await generateScreenedConversationFlowGraph({
+      context: {
+        brand: {
+          name: brand?.name ?? "",
+          website: brand?.website ?? "",
+          tone: brand?.tone ?? "",
+          notes: brand?.notes ?? "",
+        },
+        campaign: {
+          campaignName: campaign.name,
+          objectiveGoal: campaign.objective?.goal ?? "",
+          objectiveConstraints: campaign.objective?.constraints ?? "",
+          angleTitle: hypothesis?.title ?? "",
+          angleRationale: hypothesis?.rationale ?? "",
+          targetAudience: hypothesis?.actorQuery ?? "",
+          variantName: experiment.name,
+          variantNotes: experiment.notes ?? "",
+        },
+        experiment: {
+          experimentRecordName: sourceExperiment?.name ?? "",
+          offer: parsed.offer || sourceExperiment?.offer || campaign.objective.goal || "",
+          cta: parsed.cta || "",
+          audience: sourceExperiment?.audience || "",
+          testEnvelope: sourceExperiment?.testEnvelope ?? null,
+        },
       },
-      empty: true,
     });
+    const created = await upsertConversationMapDraft({
+      brandId,
+      campaignId,
+      experimentId,
+      name: `${experiment.name || "Variant"} Conversation Flow`,
+      draftGraph: generated.graph,
+    });
+    return NextResponse.json({ map: created, generated: true, mode: generated.mode });
   } catch (error) {
+    if (error instanceof ConversationFlowGenerationError) {
+      return NextResponse.json({ error: error.message, details: error.details }, { status: error.status });
+    }
     if (error instanceof ConversationFlowDataError) {
       return NextResponse.json({ error: error.message, hint: error.hint, debug: error.debug }, { status: error.status });
     }

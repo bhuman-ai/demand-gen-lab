@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getCampaignById } from "@/lib/factory-data";
 import { getExperimentRecordByRuntimeRef } from "@/lib/experiment-data";
+import type { ConversationFlowGraph, ConversationMap } from "@/lib/factory-types";
 import {
   ConversationFlowDataError,
   defaultConversationGraph,
@@ -23,6 +24,32 @@ function parseOfferAndCta(rawOffer: string) {
   const cta = ctaMatch ? ctaMatch[1].trim() : "";
   const offer = text.replace(/\bCTA\s*:\s*[^\n]+/gi, "").replace(/\s{2,}/g, " ").trim();
   return { offer, cta };
+}
+
+function graphContainsLegacyGenericCopy(graph: ConversationFlowGraph): boolean {
+  return graph.nodes.some((node) => {
+    if (node.kind !== "message") return false;
+    const subject = node.subject.trim().toLowerCase();
+    const body = node.body.trim().toLowerCase();
+    return (
+      subject.includes("{{campaigngoal}}") ||
+      body.includes("{{campaigngoal}}") ||
+      subject.includes("quick question") ||
+      subject.includes("worth a 10-minute walkthrough") ||
+      subject.includes("close the loop?")
+    );
+  });
+}
+
+function shouldAutoReseedLegacyDraft(
+  map: ConversationMap,
+  parsedOffer: { offer: string; cta: string }
+): boolean {
+  if (!parsedOffer.offer.trim()) return false;
+  if (map.status === "published" || map.publishedRevision > 0) return false;
+  if (!map.createdAt || !map.updatedAt) return false;
+  if (map.createdAt !== map.updatedAt) return false;
+  return graphContainsLegacyGenericCopy(map.draftGraph);
 }
 
 export async function GET(
@@ -53,6 +80,16 @@ export async function GET(
   try {
     const map = await getConversationMapByExperiment(brandId, campaignId, experimentId);
     if (map) {
+      if (shouldAutoReseedLegacyDraft(map, parsed)) {
+        const reseeded = await upsertConversationMapDraft({
+          brandId,
+          campaignId,
+          experimentId,
+          name: map.name,
+          draftGraph: seedGraph,
+        });
+        return NextResponse.json({ map: reseeded, reseeded: true });
+      }
       return NextResponse.json({ map });
     }
 

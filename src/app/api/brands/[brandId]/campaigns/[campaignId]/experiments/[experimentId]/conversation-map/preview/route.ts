@@ -81,6 +81,24 @@ export async function POST(
 
   const sampleLead = asRecord(body.sampleLead);
   const sampleReply = asRecord(body.sampleReply);
+  const graphLead =
+    graph.previewLeads.find((lead) => lead.id === graph.previewLeadId) ??
+    graph.previewLeads[0] ??
+    null;
+  const sampleLeadEmail = String(sampleLead.email ?? graphLead?.email ?? "").trim();
+  const sampleLeadName = String(sampleLead.name ?? graphLead?.name ?? "").trim();
+  const sampleLeadCompany = String(sampleLead.company ?? graphLead?.company ?? "").trim();
+  const sampleLeadTitle = String(sampleLead.title ?? graphLead?.title ?? "").trim();
+  const sampleLeadDomain = String(sampleLead.domain ?? graphLead?.domain ?? "").trim();
+  if (!sampleLeadEmail || !sampleLeadName || !sampleLeadCompany) {
+    return NextResponse.json(
+      {
+        error: "Preview lead is incomplete",
+        hint: "Add at least one demo lead with name, email, and company before generating preview.",
+      },
+      { status: 422 }
+    );
+  }
   const intentRaw = String(sampleReply.intent ?? "").trim();
   const intent: ReplyThread["intent"] | "" =
     intentRaw === "question" ||
@@ -116,12 +134,12 @@ export async function POST(
         notes: variant.notes ?? "",
       },
       lead: {
-        id: String(sampleLead.id ?? "sample_lead"),
-        email: String(sampleLead.email ?? "sample@target.com"),
-        name: String(sampleLead.name ?? "Jordan Lee"),
-        company: String(sampleLead.company ?? "Acme Inc"),
-        title: String(sampleLead.title ?? "VP Revenue"),
-        domain: String(sampleLead.domain ?? "acme.com"),
+        id: String(sampleLead.id ?? graphLead?.id ?? "sample_lead"),
+        email: sampleLeadEmail,
+        name: sampleLeadName,
+        company: sampleLeadCompany,
+        title: sampleLeadTitle,
+        domain: sampleLeadDomain,
         status: "new",
       },
       thread: {

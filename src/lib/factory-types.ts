@@ -547,12 +547,24 @@ export type ConversationFlowEdge = {
   priority: number;
 };
 
+export type ConversationDemoLead = {
+  id: string;
+  name: string;
+  email: string;
+  company: string;
+  title: string;
+  domain: string;
+  source: "seeded" | "manual" | "sourced";
+};
+
 export type ConversationFlowGraph = {
   version: 1;
   maxDepth: number;
   startNodeId: string;
   nodes: ConversationFlowNode[];
   edges: ConversationFlowEdge[];
+  previewLeads: ConversationDemoLead[];
+  previewLeadId: string;
 };
 
 export type ConversationMap = {

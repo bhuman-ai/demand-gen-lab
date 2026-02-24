@@ -481,6 +481,7 @@ export async function previewConversationNodeApi(input: {
   experimentId: string;
   nodeId: string;
   sampleLead?: {
+    id?: string;
     name?: string;
     email?: string;
     company?: string;

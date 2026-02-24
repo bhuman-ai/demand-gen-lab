@@ -36,7 +36,13 @@ import {
   suggestConversationMapApi,
 } from "@/lib/client-api";
 import { trackEvent } from "@/lib/telemetry-client";
-import type { ConversationFlowEdge, ConversationFlowGraph, ConversationFlowNode, ConversationMap } from "@/lib/factory-types";
+import type {
+  ConversationDemoLead,
+  ConversationFlowEdge,
+  ConversationFlowGraph,
+  ConversationFlowNode,
+  ConversationMap,
+} from "@/lib/factory-types";
 
 const NODE_WIDTH = 340;
 const NODE_HEIGHT = 220;
@@ -96,6 +102,7 @@ type ConnectState = {
 
 const makeNodeId = () => `node_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 const makeEdgeId = () => `edge_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+const makeDemoLeadId = () => `demo_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 
 function clamp(value: number, min: number, max: number) {
   return Math.max(min, Math.min(max, value));
@@ -132,6 +139,38 @@ function defaultNode(kind: "message" | "terminal" = "message", x = 80, y = 160):
     x,
     y,
   };
+}
+
+function defaultPreviewLeads(): ConversationDemoLead[] {
+  return [
+    {
+      id: makeDemoLeadId(),
+      name: "Jordan Lee",
+      email: "jordan.lee@northlane.com",
+      company: "Northlane",
+      title: "VP Revenue",
+      domain: "northlane.com",
+      source: "seeded",
+    },
+    {
+      id: makeDemoLeadId(),
+      name: "Maya Patel",
+      email: "maya.patel@brightpath.com",
+      company: "Brightpath",
+      title: "Demand Gen Manager",
+      domain: "brightpath.com",
+      source: "seeded",
+    },
+    {
+      id: makeDemoLeadId(),
+      name: "Alex Morgan",
+      email: "alex.morgan@summitflow.com",
+      company: "SummitFlow",
+      title: "Head of Growth",
+      domain: "summitflow.com",
+      source: "seeded",
+    },
+  ];
 }
 
 function nodesNeedSpacing(nodes: ConversationFlowNode[]) {
@@ -206,6 +245,20 @@ function autoLayout(graph: ConversationFlowGraph): ConversationFlowGraph {
         y: 80 + row * GRID_Y,
       };
     }),
+  };
+}
+
+function withPreviewLeadState(graph: ConversationFlowGraph): ConversationFlowGraph {
+  const previewLeads = Array.isArray(graph.previewLeads) && graph.previewLeads.length
+    ? graph.previewLeads
+    : defaultPreviewLeads();
+  const previewLeadId = previewLeads.some((lead) => lead.id === graph.previewLeadId)
+    ? graph.previewLeadId
+    : previewLeads[0]?.id ?? "";
+  return {
+    ...graph,
+    previewLeads,
+    previewLeadId,
   };
 }
 
@@ -420,13 +473,15 @@ export default function FlowEditorClient({
       throw new Error("Variant not found. Save Build first, then open Conversation Map.");
     }
 
-    const nextGraph = withLayout(mapRow?.draftGraph ?? {
+    const nextGraph = withPreviewLeadState(withLayout(mapRow?.draftGraph ?? {
       version: 1,
       maxDepth: 5,
       startNodeId: "",
       nodes: [],
       edges: [],
-    });
+      previewLeads: defaultPreviewLeads(),
+      previewLeadId: "",
+    }));
 
     setBrandName(brand.name || "Brand");
     setCampaignName(campaign.name || "Campaign");
@@ -466,6 +521,14 @@ export default function FlowEditorClient({
 
   const selectedNode = useMemo(() => nodeById(graph, selectedNodeId), [graph, selectedNodeId]);
   const selectedEdge = useMemo(() => edgeById(graph, selectedEdgeId), [graph, selectedEdgeId]);
+  const selectedPreviewLead = useMemo(() => {
+    if (!graph?.previewLeads?.length) return null;
+    return (
+      graph.previewLeads.find((lead) => lead.id === graph.previewLeadId) ??
+      graph.previewLeads[0] ??
+      null
+    );
+  }, [graph]);
 
   useEffect(() => {
     if (!selectedNode || !previewResult || previewResult.nodeId === selectedNode.id) return;
@@ -479,6 +542,70 @@ export default function FlowEditorClient({
     for (const node of graph.nodes) next.set(node.id, node);
     return next;
   }, [graph]);
+
+  const setPreviewLeadPatch = (
+    leadId: string,
+    patch: Partial<Pick<ConversationDemoLead, "name" | "email" | "company" | "title" | "domain">>
+  ) => {
+    setGraph((prev) => {
+      if (!prev) return prev;
+      const nextLeads = prev.previewLeads.map((lead) => {
+        if (lead.id !== leadId) return lead;
+        const email = patch.email !== undefined ? patch.email.trim().toLowerCase() : lead.email;
+        const domainFromEmail = email.includes("@") ? email.split("@")[1] ?? "" : "";
+        const domain =
+          patch.domain !== undefined
+            ? patch.domain.trim().toLowerCase()
+            : domainFromEmail || lead.domain;
+        return {
+          ...lead,
+          ...patch,
+          email,
+          domain: domain || lead.domain,
+        };
+      });
+      return {
+        ...prev,
+        previewLeads: nextLeads,
+      };
+    });
+  };
+
+  const addPreviewLead = () => {
+    const lead: ConversationDemoLead = {
+      id: makeDemoLeadId(),
+      name: "New Lead",
+      email: "new.lead@example.com",
+      company: "New Company",
+      title: "Decision Maker",
+      domain: "example.com",
+      source: "manual",
+    };
+    setGraph((prev) => {
+      if (!prev) return prev;
+      return {
+        ...prev,
+        previewLeads: [...prev.previewLeads, lead].slice(0, 20),
+        previewLeadId: lead.id,
+      };
+    });
+    setStatusMessage("Demo lead added. Save Draft to persist.");
+  };
+
+  const removePreviewLead = (leadId: string) => {
+    setGraph((prev) => {
+      if (!prev) return prev;
+      const nextLeads = prev.previewLeads.filter((lead) => lead.id !== leadId);
+      if (!nextLeads.length) return prev;
+      const nextSelected = prev.previewLeadId === leadId ? nextLeads[0].id : prev.previewLeadId;
+      return {
+        ...prev,
+        previewLeads: nextLeads,
+        previewLeadId: nextSelected,
+      };
+    });
+    setStatusMessage("Demo lead removed. Save Draft to persist.");
+  };
 
   const saveDraft = async () => {
     if (!graph) return;
@@ -494,7 +621,7 @@ export default function FlowEditorClient({
         draftGraph: graph,
       });
       setMap(next);
-      setGraph(withLayout(next.draftGraph));
+      setGraph(withPreviewLeadState(withLayout(next.draftGraph)));
       setStatusMessage("Draft saved.");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to save draft");
@@ -519,7 +646,7 @@ export default function FlowEditorClient({
       }
       const next = await publishConversationMapApi(brandId, campaignId, variantId);
       setMap(next);
-      setGraph(withLayout(next.draftGraph));
+      setGraph(withPreviewLeadState(withLayout(next.draftGraph)));
       setStatusMessage(`Published revision ${next.publishedRevision}.`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to publish map");
@@ -534,7 +661,7 @@ export default function FlowEditorClient({
     setStatusMessage("");
     try {
       const suggested = await suggestConversationMapApi(brandId, campaignId, variantId);
-      const next = withLayout(suggested);
+      const next = withPreviewLeadState(withLayout(suggested));
       setGraph(next);
       setHasFittedInitialView(false);
       setSelectedNodeId(next.startNodeId || next.nodes[0]?.id || "");
@@ -549,6 +676,11 @@ export default function FlowEditorClient({
 
   const generatePreview = async () => {
     if (!selectedNode || selectedNode.kind !== "message") return;
+    const lead = selectedPreviewLead;
+    if (!lead) {
+      setPreviewError("Add at least one demo lead to generate a preview.");
+      return;
+    }
     setPreviewingNodeId(selectedNode.id);
     setPreviewError("");
     try {
@@ -558,11 +690,12 @@ export default function FlowEditorClient({
         experimentId: variantId,
         nodeId: selectedNode.id,
         sampleLead: {
-          name: "Jordan Lee",
-          email: "jordan@acme.com",
-          company: "Acme Inc",
-          title: "VP Revenue",
-          domain: "acme.com",
+          id: lead.id,
+          name: lead.name,
+          email: lead.email,
+          company: lead.company,
+          title: lead.title,
+          domain: lead.domain,
         },
         sampleReply: {
           intent: "question",
@@ -951,6 +1084,76 @@ export default function FlowEditorClient({
         {error ? <CardContent className="pt-0 text-sm text-[color:var(--danger)]">{error}</CardContent> : null}
       </Card>
 
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-base">Data-First Preview Leads</CardTitle>
+          <CardDescription>
+            Messaging preview uses a selected demo lead row. Add a few realistic leads first, then generate prompt previews.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <Button type="button" size="sm" variant="outline" onClick={addPreviewLead}>
+              <Plus className="h-4 w-4" />
+              Add Demo Lead
+            </Button>
+            <Badge variant="muted">{graph.previewLeads.length} lead{graph.previewLeads.length === 1 ? "" : "s"}</Badge>
+            {selectedPreviewLead ? (
+              <Badge variant="accent">Using: {selectedPreviewLead.name}</Badge>
+            ) : null}
+          </div>
+
+          <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+            {graph.previewLeads.map((lead) => {
+              const selected = lead.id === graph.previewLeadId;
+              return (
+                <div
+                  key={lead.id}
+                  className="rounded-lg border px-3 py-2"
+                  style={{
+                    borderColor: selected ? "var(--accent)" : "var(--border)",
+                    background: selected ? "color-mix(in oklab, var(--accent) 9%, transparent)" : "var(--surface)",
+                  }}
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <button
+                      type="button"
+                      className="text-left text-sm font-semibold"
+                      onClick={() =>
+                        setGraph((prev) =>
+                          prev
+                            ? {
+                                ...prev,
+                                previewLeadId: lead.id,
+                              }
+                            : prev
+                        )
+                      }
+                    >
+                      {lead.name}
+                    </button>
+                    {graph.previewLeads.length > 1 ? (
+                      <button
+                        type="button"
+                        className="text-[color:var(--muted-foreground)] transition hover:text-[color:var(--danger)]"
+                        onClick={() => removePreviewLead(lead.id)}
+                        aria-label={`Remove ${lead.name}`}
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </button>
+                    ) : null}
+                  </div>
+                  <div className="text-xs text-[color:var(--muted-foreground)]">{lead.email}</div>
+                  <div className="text-xs text-[color:var(--muted-foreground)]">
+                    {lead.title} at {lead.company}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </CardContent>
+      </Card>
+
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_320px]">
         <Card className="overflow-hidden">
           <CardHeader className="flex flex-row items-center justify-between gap-3 border-b border-[color:var(--border)] pb-3">
@@ -1176,6 +1379,50 @@ export default function FlowEditorClient({
                 }
               />
             </div>
+
+            {selectedPreviewLead ? (
+              <div className="space-y-3 rounded-xl border border-[color:var(--border)] p-3">
+                <div className="flex items-center justify-between">
+                  <div className="text-sm font-semibold">Preview Lead</div>
+                  <Badge variant="muted">{selectedPreviewLead.source}</Badge>
+                </div>
+                <div className="grid gap-2">
+                  <Label>Name</Label>
+                  <Input
+                    value={selectedPreviewLead.name}
+                    onChange={(event) => setPreviewLeadPatch(selectedPreviewLead.id, { name: event.target.value })}
+                  />
+                </div>
+                <div className="grid gap-2">
+                  <Label>Email</Label>
+                  <Input
+                    value={selectedPreviewLead.email}
+                    onChange={(event) => setPreviewLeadPatch(selectedPreviewLead.id, { email: event.target.value })}
+                  />
+                </div>
+                <div className="grid gap-2">
+                  <Label>Company</Label>
+                  <Input
+                    value={selectedPreviewLead.company}
+                    onChange={(event) => setPreviewLeadPatch(selectedPreviewLead.id, { company: event.target.value })}
+                  />
+                </div>
+                <div className="grid gap-2">
+                  <Label>Title</Label>
+                  <Input
+                    value={selectedPreviewLead.title}
+                    onChange={(event) => setPreviewLeadPatch(selectedPreviewLead.id, { title: event.target.value })}
+                  />
+                </div>
+                <div className="grid gap-2">
+                  <Label>Domain</Label>
+                  <Input
+                    value={selectedPreviewLead.domain}
+                    onChange={(event) => setPreviewLeadPatch(selectedPreviewLead.id, { domain: event.target.value })}
+                  />
+                </div>
+              </div>
+            ) : null}
 
             {selectedNode ? (
               <div className="space-y-3 rounded-xl border border-[color:var(--border)] p-3">

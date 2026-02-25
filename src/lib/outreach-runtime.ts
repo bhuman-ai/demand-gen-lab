@@ -41,7 +41,6 @@ import {
   listDueOutreachJobs,
   listExperimentRuns,
   listReplyThreadsByBrand,
-  listRunEvents,
   listRunLeads,
   listRunMessages,
   updateOutreachJob,
@@ -57,13 +56,13 @@ import {
   getLeadEmailSuppressionReason,
   sendOutreachMessage,
   sendReplyDraftAsEvent,
-  fetchPlatformEmailDiscoveryResults,
-  leadsFromEmailDiscoveryRows,
-  pollPlatformEmailDiscovery,
-  getPlatformEmailDiscoveryActorCandidates,
-  runPlatformLeadDomainSearch,
-  startPlatformEmailDiscovery,
+  fetchApifyActorDatasetItems,
+  leadsFromApifyRows,
+  pollApifyActorRun,
+  searchApifyStoreActors,
+  startApifyActorRun,
   sourceLeadsFromApify,
+  type ApifyStoreActor,
   type ApifyLead,
 } from "@/lib/outreach-providers";
 
@@ -122,151 +121,505 @@ function effectiveSourcingToken(secrets: ResolvedSecrets) {
   return secrets.apifyToken.trim() || platformSourcingToken();
 }
 
-type PlatformActorStats = {
+type LeadChainStepStage = "prospect_discovery" | "website_enrichment" | "email_discovery";
+
+type LeadSourcingChainStep = {
+  id: string;
+  stage: LeadChainStepStage;
+  purpose: string;
   actorId: string;
-  attempts: number;
-  successfulRuns: number;
-  failedRuns: number;
-  sourcedLeads: number;
+  backupActorIds: string[];
+  queryHint: string;
 };
 
-type PlatformActorSelection = {
-  ok: boolean;
-  actorId: string;
-  reason: string;
-  candidates: string[];
-  stats: PlatformActorStats[];
+type LeadSourcingChainPlan = {
+  strategy: string;
+  rationale: string;
+  steps: LeadSourcingChainStep[];
 };
 
-function emptyPlatformActorStats(actorId: string): PlatformActorStats {
+type LeadSourcingChainData = {
+  queries: string[];
+  companies: string[];
+  websites: string[];
+  domains: string[];
+  emails: string[];
+};
+
+const APIFY_CHAIN_MAX_STEPS = 3;
+const APIFY_CHAIN_MAX_STEP_CANDIDATES = 4;
+const APIFY_CHAIN_MAX_ITEMS_PER_STEP = 200;
+const APIFY_CHAIN_MAX_CHARGE_USD = Math.max(
+  0.2,
+  Math.min(5, Number(process.env.PLATFORM_APIFY_CHAIN_MAX_CHARGE_USD ?? 0.8) || 0.8)
+);
+
+function asRecord(value: unknown): Record<string, unknown> {
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    return value as Record<string, unknown>;
+  }
+  return {};
+}
+
+function listFromPayload(value: unknown) {
+  return Array.isArray(value) ? value.map((item) => String(item ?? "").trim()).filter(Boolean) : [];
+}
+
+function uniqueTrimmed(values: string[], max = 200) {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const value of values) {
+    const trimmed = value.trim();
+    if (!trimmed) continue;
+    const key = trimmed.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(trimmed);
+    if (out.length >= max) break;
+  }
+  return out;
+}
+
+function trimText(value: unknown, max = 180) {
+  return String(value ?? "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, max);
+}
+
+function extractOutputText(payloadRaw: unknown) {
+  const payload = asRecord(payloadRaw);
+  const output = Array.isArray(payload.output) ? payload.output : [];
+  const firstOutput = asRecord(output[0]);
+  const content = Array.isArray(firstOutput.content) ? firstOutput.content : [];
+  return (
+    String(payload.output_text ?? "") ||
+    String(
+      content
+        .map((item) => asRecord(item))
+        .find((item) => typeof item.text === "string")?.text ?? ""
+    ) ||
+    "{}"
+  );
+}
+
+function stageFromValue(value: string): LeadChainStepStage | null {
+  if (value === "prospect_discovery") return "prospect_discovery";
+  if (value === "website_enrichment") return "website_enrichment";
+  if (value === "email_discovery") return "email_discovery";
+  return null;
+}
+
+function isLikelyUrl(value: string) {
+  const lower = value.trim().toLowerCase();
+  return lower.startsWith("http://") || lower.startsWith("https://") || lower.startsWith("www.");
+}
+
+function parseDomainFromUrl(input: string) {
+  try {
+    const withProto = input.startsWith("http://") || input.startsWith("https://") ? input : `https://${input}`;
+    const hostname = new URL(withProto).hostname.replace(/^www\./, "").toLowerCase();
+    return hostname;
+  } catch {
+    return "";
+  }
+}
+
+function isLikelyDomain(value: string) {
+  const v = value.trim().toLowerCase();
+  if (!v || v.includes("@") || v.includes(" ")) return false;
+  return /^[a-z0-9-]+(\.[a-z0-9-]+)+$/.test(v);
+}
+
+function collectSignalsFromUnknown(
+  value: unknown,
+  sink: {
+    emails: Set<string>;
+    domains: Set<string>;
+    websites: Set<string>;
+    companies: Set<string>;
+    queries: Set<string>;
+  },
+  contextKey = "",
+  depth = 0
+) {
+  if (depth > 4) return;
+  if (typeof value === "string") {
+    const text = value.trim();
+    if (!text) return;
+
+    const emailMatches = text.toLowerCase().match(/[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/g) ?? [];
+    for (const email of emailMatches) {
+      if (!getLeadEmailSuppressionReason(email)) sink.emails.add(email);
+      const domain = parseDomainFromUrl(email.split("@")[1] ?? "");
+      if (domain) sink.domains.add(domain);
+    }
+
+    if (isLikelyUrl(text)) {
+      const normalized = text.startsWith("http://") || text.startsWith("https://") ? text : `https://${text}`;
+      sink.websites.add(normalized);
+      const domain = parseDomainFromUrl(normalized);
+      if (domain) sink.domains.add(domain);
+    } else if (isLikelyDomain(text)) {
+      sink.domains.add(text.toLowerCase());
+      sink.websites.add(`https://${text.toLowerCase()}`);
+    }
+
+    if (contextKey && /(company|organization|org|brand|seller|store|business|name)/i.test(contextKey)) {
+      sink.companies.add(text.slice(0, 140));
+      sink.queries.add(text.slice(0, 140));
+    }
+    return;
+  }
+
+  if (Array.isArray(value)) {
+    for (const item of value) collectSignalsFromUnknown(item, sink, contextKey, depth + 1);
+    return;
+  }
+
+  if (value && typeof value === "object") {
+    const row = value as Record<string, unknown>;
+    for (const [key, entry] of Object.entries(row)) {
+      collectSignalsFromUnknown(entry, sink, key, depth + 1);
+    }
+  }
+}
+
+function mergeChainData(base: LeadSourcingChainData, rows: unknown[]): LeadSourcingChainData {
+  const sink = {
+    emails: new Set(base.emails.map((item) => item.toLowerCase())),
+    domains: new Set(base.domains.map((item) => item.toLowerCase())),
+    websites: new Set(base.websites),
+    companies: new Set(base.companies),
+    queries: new Set(base.queries),
+  };
+
+  for (const row of rows) {
+    collectSignalsFromUnknown(row, sink);
+  }
+
   return {
-    actorId,
-    attempts: 0,
-    successfulRuns: 0,
-    failedRuns: 0,
-    sourcedLeads: 0,
+    queries: uniqueTrimmed(Array.from(sink.queries), 120),
+    companies: uniqueTrimmed(Array.from(sink.companies), 120),
+    websites: uniqueTrimmed(Array.from(sink.websites), 200),
+    domains: uniqueTrimmed(Array.from(sink.domains), 200).map((item) => item.toLowerCase()),
+    emails: uniqueTrimmed(Array.from(sink.emails), 400).map((item) => item.toLowerCase()),
   };
 }
 
-function actorStatsFromMap(candidates: string[], map: Map<string, PlatformActorStats>) {
-  return candidates.map((actorId) => map.get(actorId) ?? emptyPlatformActorStats(actorId));
+function chainDataFromPayload(payload: Record<string, unknown>, targetAudience: string): LeadSourcingChainData {
+  return {
+    queries: uniqueTrimmed(listFromPayload(payload.chainQueries), 120).length
+      ? uniqueTrimmed(listFromPayload(payload.chainQueries), 120)
+      : uniqueTrimmed([targetAudience], 120),
+    companies: uniqueTrimmed(listFromPayload(payload.chainCompanies), 120),
+    websites: uniqueTrimmed(listFromPayload(payload.chainWebsites), 200),
+    domains: uniqueTrimmed(listFromPayload(payload.chainDomains), 200).map((item) => item.toLowerCase()),
+    emails: uniqueTrimmed(listFromPayload(payload.chainEmails), 400).map((item) => item.toLowerCase()),
+  };
 }
 
-function pickBestActorFromStats(stats: PlatformActorStats[]): PlatformActorStats | null {
-  if (!stats.length) return null;
-  const ranked = [...stats].sort((a, b) => {
-    const aSuccessRate = a.attempts > 0 ? a.successfulRuns / a.attempts : 0;
-    const bSuccessRate = b.attempts > 0 ? b.successfulRuns / b.attempts : 0;
-    if (bSuccessRate !== aSuccessRate) return bSuccessRate - aSuccessRate;
-
-    const aAvgSourced = a.successfulRuns > 0 ? a.sourcedLeads / a.successfulRuns : 0;
-    const bAvgSourced = b.successfulRuns > 0 ? b.sourcedLeads / b.successfulRuns : 0;
-    if (bAvgSourced !== aAvgSourced) return bAvgSourced - aAvgSourced;
-
-    if (a.failedRuns !== b.failedRuns) return a.failedRuns - b.failedRuns;
-    if (a.attempts !== b.attempts) return a.attempts - b.attempts;
-    return a.actorId.localeCompare(b.actorId);
-  });
-  return ranked[0] ?? null;
+function chainDataToPayload(data: LeadSourcingChainData) {
+  return {
+    chainQueries: data.queries.slice(0, 120),
+    chainCompanies: data.companies.slice(0, 120),
+    chainWebsites: data.websites.slice(0, 200),
+    chainDomains: data.domains.slice(0, 200),
+    chainEmails: data.emails.slice(0, 400),
+  };
 }
 
-async function choosePlatformDiscoveryActor(input: {
-  run: { id: string; brandId: string; campaignId: string; experimentId: string };
-  candidates: string[];
-  preselectedActorId?: string;
-}) {
-  const candidates = input.candidates.map((item) => item.trim()).filter(Boolean);
-  if (!candidates.length) {
-    return {
-      ok: false,
-      actorId: "",
-      reason: "No platform discovery actors configured (set PLATFORM_EMAIL_DISCOVERY_ACTOR_ID)",
-      candidates: [],
-      stats: [],
-    } satisfies PlatformActorSelection;
-  }
-
-  const preselected = input.preselectedActorId?.trim() ?? "";
-  if (preselected) {
-    const selected =
-      candidates.find((actorId) => actorId.toLowerCase() === preselected.toLowerCase()) ?? preselected;
-    return {
-      ok: true,
-      actorId: selected,
-      reason: "selected_from_job_payload",
-      candidates,
-      stats: candidates.map((actorId) => emptyPlatformActorStats(actorId)),
-    } satisfies PlatformActorSelection;
-  }
-
-  const statsMap = new Map<string, PlatformActorStats>();
-  for (const actorId of candidates) {
-    statsMap.set(actorId, emptyPlatformActorStats(actorId));
-  }
-
-  const recentRuns = (await listCampaignRuns(input.run.brandId, input.run.campaignId))
-    .filter((item) => item.id !== input.run.id && item.experimentId === input.run.experimentId)
-    .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1))
-    .slice(0, 20);
-
-  for (const priorRun of recentRuns) {
-    const events = await listRunEvents(priorRun.id);
-    const actorEvent = events.find((event) => {
-      if (event.eventType !== "lead_sourcing_actor_selected") return false;
-      const actorId = String((event.payload?.actorId ?? "") as string).trim();
-      return Boolean(actorId);
-    });
-    if (!actorEvent) continue;
-
-    const selectedActorId = String((actorEvent.payload?.actorId ?? "") as string).trim();
-    const stats = statsMap.get(selectedActorId);
-    if (!stats) continue;
-    stats.attempts += 1;
-
-    const sourcedEvent = events.find((event) => event.eventType === "lead_sourced_apify");
-    if (sourcedEvent) {
-      stats.successfulRuns += 1;
-      const count = Math.max(0, Number((sourcedEvent.payload?.count ?? 0) as number) || 0);
-      stats.sourcedLeads += count;
+function summarizeActorInput(input: Record<string, unknown>) {
+  const summary: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(input)) {
+    if (Array.isArray(value)) {
+      summary[key] = { type: "array", count: value.length };
       continue;
     }
+    if (value && typeof value === "object") {
+      summary[key] = "object";
+      continue;
+    }
+    summary[key] = value;
+  }
+  return summary;
+}
 
-    const failedEvent = events.find((event) => event.eventType === "lead_sourcing_failed");
-    if (failedEvent) {
-      stats.failedRuns += 1;
+function stageFromActor(actor: ApifyStoreActor): LeadChainStepStage {
+  const blob = `${actor.title} ${actor.description} ${actor.categories.join(" ")}`.toLowerCase();
+  if (/(email|mailbox|contact\s+email|email\s+finder|hunter)/.test(blob)) return "email_discovery";
+  if (/(website|domain|company\s+site|url|crawler|crawl|web\s+scrap)/.test(blob)) return "website_enrichment";
+  return "prospect_discovery";
+}
+
+function actorScore(actor: ApifyStoreActor) {
+  return actor.users30Days * 1.2 + actor.rating * 40;
+}
+
+async function buildApifyActorPool(input: {
+  targetAudience: string;
+  offer: string;
+}) {
+  const seedQueries = uniqueTrimmed(
+    [
+      input.targetAudience,
+      `${input.targetAudience} leads`,
+      `${input.targetAudience} prospects`,
+      `${input.targetAudience} company websites`,
+      `${input.targetAudience} contact emails`,
+      "website email scraper",
+      "email finder domain",
+      "company website scraper",
+      input.offer,
+    ],
+    10
+  );
+
+  const pooled = new Map<string, ApifyStoreActor>();
+  const searchDiagnostics: Array<Record<string, unknown>> = [];
+
+  for (const query of seedQueries) {
+    const search = await searchApifyStoreActors({ query, limit: 35 });
+    searchDiagnostics.push({
+      query,
+      ok: search.ok,
+      total: search.total,
+      count: search.actors.length,
+      error: search.error,
+    });
+    if (!search.ok) continue;
+    for (const actor of search.actors) {
+      if (!actor.actorId) continue;
+      const existing = pooled.get(actor.actorId);
+      if (!existing || actorScore(actor) > actorScore(existing)) {
+        pooled.set(actor.actorId, actor);
+      }
     }
   }
 
-  const stats = actorStatsFromMap(candidates, statsMap);
-  const untested = stats.find((item) => item.attempts === 0);
-  if (untested) {
-    return {
-      ok: true,
-      actorId: untested.actorId,
-      reason: "explore_untested_actor",
-      candidates,
-      stats,
-    } satisfies PlatformActorSelection;
+  const actors = Array.from(pooled.values())
+    .sort((a, b) => actorScore(b) - actorScore(a))
+    .slice(0, 120);
+
+  return { actors, searchDiagnostics };
+}
+
+async function planApifyLeadChain(input: {
+  targetAudience: string;
+  brandName: string;
+  brandWebsite: string;
+  experimentName: string;
+  offer: string;
+  actorPool: ApifyStoreActor[];
+}) {
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) {
+    throw new Error("OPENAI_API_KEY is missing");
+  }
+  if (!input.actorPool.length) {
+    throw new Error("No actor candidates available from Apify Store");
   }
 
-  const best = pickBestActorFromStats(stats);
-  if (!best) {
-    return {
-      ok: true,
-      actorId: candidates[0],
-      reason: "fallback_first_candidate",
-      candidates,
-      stats,
-    } satisfies PlatformActorSelection;
+  const actorRows = input.actorPool.map((actor) => ({
+    actorId: actor.actorId,
+    title: actor.title,
+    description: actor.description,
+    categories: actor.categories,
+    users30Days: actor.users30Days,
+    stageHint: stageFromActor(actor),
+  }));
+
+  const prompt = [
+    "You plan an Apify actor chain for B2B outreach lead sourcing.",
+    "Goal: choose a 2-3 step chain that can produce real people + emails from the provided target audience.",
+    "Rules:",
+    "- Use only actorIds from actorPool.",
+    "- Stage order must be: prospect_discovery -> website_enrichment (optional) -> email_discovery.",
+    "- Final step must be email_discovery.",
+    "- Include backupActorIds per step (0-3) from actorPool.",
+    "- queryHint must be concrete and directly relevant to the experiment.",
+    "- No placeholders or generic buzzword text.",
+    "",
+    "Return JSON only:",
+    '{ "strategy": string, "rationale": string, "steps": [{ "id": string, "stage": "prospect_discovery"|"website_enrichment"|"email_discovery", "purpose": string, "actorId": string, "backupActorIds": string[], "queryHint": string }] }',
+    `Context: ${JSON.stringify({
+      targetAudience: input.targetAudience,
+      brandName: input.brandName,
+      brandWebsite: input.brandWebsite,
+      experimentName: input.experimentName,
+      offer: input.offer,
+    })}`,
+    `actorPool: ${JSON.stringify(actorRows)}`,
+  ].join("\n");
+
+  const response = await fetch("https://api.openai.com/v1/responses", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model: "gpt-5.2",
+      input: prompt,
+      text: { format: { type: "json_object" } },
+      max_output_tokens: 2600,
+    }),
+  });
+
+  const raw = await response.text();
+  if (!response.ok) {
+    throw new Error(`Apify chain planning failed: HTTP ${response.status} ${raw.slice(0, 240)}`);
+  }
+
+  let payload: unknown = {};
+  try {
+    payload = JSON.parse(raw);
+  } catch {
+    payload = {};
+  }
+  const outputText = extractOutputText(payload);
+  let parsed: unknown = {};
+  try {
+    parsed = JSON.parse(outputText);
+  } catch {
+    throw new Error("Apify chain planning returned non-JSON output");
+  }
+
+  const row = asRecord(parsed);
+  const strategy = trimText(row.strategy, 200);
+  const rationale = trimText(row.rationale, 360);
+  const stepsRaw = Array.isArray(row.steps) ? row.steps : [];
+  const allowed = new Set(input.actorPool.map((actor) => actor.actorId.toLowerCase()));
+  const steps: LeadSourcingChainStep[] = [];
+  const seenIds = new Set<string>();
+
+  for (let index = 0; index < stepsRaw.length; index += 1) {
+    const stepRow = asRecord(stepsRaw[index]);
+    const stage = stageFromValue(String(stepRow.stage ?? "").trim().toLowerCase());
+    if (!stage) continue;
+    const actorId = String(stepRow.actorId ?? "").trim();
+    if (!actorId || !allowed.has(actorId.toLowerCase())) continue;
+    const id = trimText(stepRow.id || `${stage}_${index + 1}`, 60).replace(/\s+/g, "_");
+    const dedupeId = id.toLowerCase();
+    if (seenIds.has(dedupeId)) continue;
+    seenIds.add(dedupeId);
+    const backupActorIds = uniqueTrimmed(
+      listFromPayload(stepRow.backupActorIds)
+        .filter((candidate) => allowed.has(candidate.toLowerCase()) && candidate.toLowerCase() !== actorId.toLowerCase()),
+      APIFY_CHAIN_MAX_STEP_CANDIDATES - 1
+    );
+
+    steps.push({
+      id,
+      stage,
+      purpose: trimText(stepRow.purpose, 180),
+      actorId,
+      backupActorIds,
+      queryHint: trimText(stepRow.queryHint, 200),
+    });
+  }
+
+  if (steps.length < 2 || steps.length > APIFY_CHAIN_MAX_STEPS) {
+    throw new Error(`Apify chain planner returned ${steps.length} steps; expected 2-3`);
+  }
+  const stageOrder = steps.map((step) => step.stage);
+  if (stageOrder[0] !== "prospect_discovery") {
+    throw new Error("Apify chain must start with prospect_discovery");
+  }
+  if (stageOrder[stageOrder.length - 1] !== "email_discovery") {
+    throw new Error("Apify chain must end with email_discovery");
+  }
+  for (let i = 1; i < stageOrder.length; i += 1) {
+    const prev = stageOrder[i - 1];
+    const current = stageOrder[i];
+    if (prev === "email_discovery" && current !== "email_discovery") {
+      throw new Error("Invalid chain order after email_discovery");
+    }
+    if (prev === "website_enrichment" && current === "prospect_discovery") {
+      throw new Error("Invalid chain order: website_enrichment -> prospect_discovery");
+    }
   }
 
   return {
-    ok: true,
-    actorId: best.actorId,
-    reason: "exploit_best_historical_actor",
-    candidates,
-    stats,
-  } satisfies PlatformActorSelection;
+    strategy,
+    rationale,
+    steps: steps.slice(0, APIFY_CHAIN_MAX_STEPS),
+  } satisfies LeadSourcingChainPlan;
+}
+
+function leadChainStepCandidates(step: LeadSourcingChainStep) {
+  return uniqueTrimmed([step.actorId, ...step.backupActorIds], APIFY_CHAIN_MAX_STEP_CANDIDATES);
+}
+
+function buildChainStepInput(input: {
+  step: LeadSourcingChainStep;
+  chainData: LeadSourcingChainData;
+  targetAudience: string;
+  maxLeads: number;
+}) {
+  const querySeed = uniqueTrimmed(
+    [input.step.queryHint, ...input.chainData.queries, ...input.chainData.companies, input.targetAudience],
+    30
+  );
+  const domains = uniqueTrimmed(input.chainData.domains, 100).map((item) => item.toLowerCase());
+  const websites = uniqueTrimmed(
+    [
+      ...input.chainData.websites,
+      ...domains.map((domain) => `https://${domain}`),
+    ],
+    120
+  );
+
+  const base = {
+    maxItems: Math.max(20, Math.min(APIFY_CHAIN_MAX_ITEMS_PER_STEP, input.maxLeads)),
+    limit: Math.max(20, Math.min(APIFY_CHAIN_MAX_ITEMS_PER_STEP, input.maxLeads)),
+    maxResults: Math.max(20, Math.min(APIFY_CHAIN_MAX_ITEMS_PER_STEP, input.maxLeads)),
+    maxRequestsPerCrawl: 60,
+    maxConcurrency: 8,
+    maxDepth: 2,
+    includeSubdomains: false,
+  };
+
+  if (input.step.stage === "prospect_discovery") {
+    return {
+      ...base,
+      query: querySeed[0] ?? input.targetAudience,
+      queries: querySeed,
+      search: querySeed[0] ?? input.targetAudience,
+      searchTerms: querySeed,
+      searchStringsArray: querySeed,
+      keyword: querySeed[0] ?? input.targetAudience,
+      keywords: querySeed,
+      phrases: querySeed,
+    } satisfies Record<string, unknown>;
+  }
+
+  if (input.step.stage === "website_enrichment") {
+    return {
+      ...base,
+      query: querySeed[0] ?? input.targetAudience,
+      queries: querySeed,
+      companies: input.chainData.companies.slice(0, 80),
+      companyNames: input.chainData.companies.slice(0, 80),
+      websites,
+      urls: websites,
+      domains,
+      domainNames: domains,
+      startUrls: websites.slice(0, 60).map((url) => ({ url })),
+    } satisfies Record<string, unknown>;
+  }
+
+  return {
+    ...base,
+    query: querySeed[0] ?? input.targetAudience,
+    queries: querySeed,
+    websites,
+    urls: websites,
+    domains,
+    domainNames: domains,
+    startUrls: websites.slice(0, 80).map((url) => ({ url })),
+    emails: input.chainData.emails.slice(0, 150),
+  } satisfies Record<string, unknown>;
 }
 
 function supportsDelivery(account: ResolvedAccount) {
@@ -1466,25 +1819,18 @@ async function processSourceLeadsJob(job: OutreachJob) {
     return;
   }
 
-  const payload = job.payload && typeof job.payload === "object" && !Array.isArray(job.payload) ? job.payload : {};
-  const stage = String((payload as Record<string, unknown>).stage ?? "").trim();
-  const selectedActorIdFromPayload = String((payload as Record<string, unknown>).selectedActorId ?? "").trim();
+  const payload =
+    job.payload && typeof job.payload === "object" && !Array.isArray(job.payload)
+      ? (job.payload as Record<string, unknown>)
+      : {};
+  const stage = String(payload.stage ?? "").trim();
+  const selectedActorIdFromPayload = String(payload.selectedActorId ?? "").trim();
 
   const sourceConfig = effectiveSourceConfig(hypothesis);
   const sourcingToken = effectiveSourcingToken(secrets);
   const maxLeads = Math.max(1, Math.min(500, Number(sourceConfig.maxLeads ?? 100)));
   const targetAudience = hypothesis.actorQuery.trim();
-  const platformActorCandidates = getPlatformEmailDiscoveryActorCandidates();
-
   const brand = await getBrandById(run.brandId);
-  const excludeDomains: string[] = [];
-  if (brand?.website) {
-    try {
-      excludeDomains.push(new URL(brand.website).hostname.replace(/^www\./, "").toLowerCase());
-    } catch {
-      // ignore invalid
-    }
-  }
 
   if (run.status === "queued") {
     await updateOutreachRun(run.id, { status: "sourcing", lastError: "" });
@@ -1494,9 +1840,9 @@ async function processSourceLeadsJob(job: OutreachJob) {
       runId: run.id,
       eventType: "lead_sourcing_requested",
       payload: {
-        strategy: sourceConfig.actorId ? "custom_actor" : "platform_search_then_email_discovery",
+        strategy: sourceConfig.actorId ? "custom_actor" : "platform_store_actor_chain",
         maxLeads,
-        actorCandidates: sourceConfig.actorId ? [sourceConfig.actorId] : platformActorCandidates,
+        actorCandidates: sourceConfig.actorId ? [sourceConfig.actorId] : [],
       },
     });
   }
@@ -1554,196 +1900,285 @@ async function processSourceLeadsJob(job: OutreachJob) {
     return;
   }
 
-  const searchQuery =
-    String((payload as Record<string, unknown>).searchQuery ?? "").trim() ||
-    `${targetAudience} company website contact -site:linkedin.com -site:twitter.com -site:x.com -site:facebook.com -site:instagram.com -site:medium.com -site:quora.com -site:saastr.com -site:reddit.com -site:glassdoor.com -site:indeed.com -site:wikipedia.org -site:crunchbase.com`;
-
-  const domainsRaw = (payload as Record<string, unknown>).domains;
-  const domains = Array.isArray(domainsRaw)
-    ? domainsRaw.map((item) => String(item ?? "").trim().toLowerCase()).filter(Boolean)
-    : [];
-  const cursor = Math.max(0, Number((payload as Record<string, unknown>).cursor ?? 0) || 0);
-  const chunkSize = Math.max(2, Math.min(6, Number((payload as Record<string, unknown>).chunkSize ?? 3) || 3));
-
-  if (!stage) {
-    const search = await runPlatformLeadDomainSearch({
-      token: sourcingToken,
-      query: searchQuery,
-      maxResults: 30,
-      excludeDomains,
-    });
-    await createOutreachEvent({
-      runId: run.id,
-      eventType: "lead_sourcing_search_completed",
-      payload: {
-        ok: search.ok,
-        query: search.query,
-        rawResultCount: search.rawResultCount,
-        domainsFound: search.domains.length,
-        filteredCount: search.filteredCount,
-        error: search.error,
-      },
-    });
-
-    if (!search.ok || !search.domains.length) {
-      await failRunWithDiagnostics({
-        run,
-        reason: search.ok ? "No candidate domains found from lead search" : `Lead search failed: ${search.error}`,
-        eventType: "lead_sourcing_failed",
-        payload: {
-          query: search.query,
-          rawResultCount: search.rawResultCount,
-        },
+  const parseChainPlan = () => {
+    const root = asRecord(payload.chainPlan);
+    const stepsRaw = Array.isArray(root.steps) ? root.steps : [];
+    const steps: LeadSourcingChainStep[] = [];
+    for (let index = 0; index < stepsRaw.length; index += 1) {
+      const row = asRecord(stepsRaw[index]);
+      const stageValue = stageFromValue(String(row.stage ?? "").trim());
+      if (!stageValue) continue;
+      const actorId = String(row.actorId ?? "").trim();
+      if (!actorId) continue;
+      steps.push({
+        id: trimText(row.id || `${stageValue}_${index + 1}`, 60).replace(/\s+/g, "_"),
+        stage: stageValue,
+        purpose: trimText(row.purpose, 180),
+        actorId,
+        backupActorIds: uniqueTrimmed(listFromPayload(row.backupActorIds), APIFY_CHAIN_MAX_STEP_CANDIDATES - 1),
+        queryHint: trimText(row.queryHint, 180),
       });
-      return;
     }
+    if (!steps.length) return null;
+    return {
+      strategy: trimText(root.strategy, 200),
+      rationale: trimText(root.rationale, 320),
+      steps,
+    } satisfies LeadSourcingChainPlan;
+  };
 
-    const actorSelection = await choosePlatformDiscoveryActor({
-      run: {
-        id: run.id,
-        brandId: run.brandId,
-        campaignId: run.campaignId,
-        experimentId: run.experimentId,
-      },
-      candidates: platformActorCandidates,
-      preselectedActorId: selectedActorIdFromPayload,
-    });
-    if (!actorSelection.ok || !actorSelection.actorId) {
-      await failRunWithDiagnostics({
-        run,
-        reason: actorSelection.reason || "No platform discovery actor selected",
-        eventType: "lead_sourcing_failed",
-        payload: {
-          candidates: actorSelection.candidates,
-          stats: actorSelection.stats,
-        },
-      });
-      return;
-    }
-
-    await createOutreachEvent({
-      runId: run.id,
-      eventType: "lead_sourcing_actor_selected",
-      payload: {
-        actorId: actorSelection.actorId,
-        reason: actorSelection.reason,
-        candidates: actorSelection.candidates,
-        stats: actorSelection.stats,
-      },
-    });
-
+  const enqueueChainStepStart = async (input: {
+    chainPlan: LeadSourcingChainPlan;
+    chainData: LeadSourcingChainData;
+    stepIndex: number;
+    candidateIndex: number;
+  }) => {
     await enqueueOutreachJob({
       runId: run.id,
       jobType: "source_leads",
       executeAfter: nowIso(),
       payload: {
-        stage: "start_email_discovery",
-        searchQuery: search.query,
-        domains: search.domains,
-        cursor: 0,
-        chunkSize,
+        stage: "start_chain_step",
+        chainPlan: input.chainPlan,
+        chainStepIndex: input.stepIndex,
+        chainCandidateIndex: input.candidateIndex,
         maxLeads,
-        selectedActorId: actorSelection.actorId,
+        ...chainDataToPayload(input.chainData),
       },
+    });
+  };
+
+  const chainStepIndex = Math.max(0, Number(payload.chainStepIndex ?? 0) || 0);
+  const chainCandidateIndex = Math.max(0, Number(payload.chainCandidateIndex ?? 0) || 0);
+  const chainData = chainDataFromPayload(payload, targetAudience);
+  const existingChainPlan = parseChainPlan();
+
+  if (!stage) {
+    const actorPoolResult = await buildApifyActorPool({
+      targetAudience,
+      offer: experiment.notes || hypothesis.rationale || "",
+    });
+    await createOutreachEvent({
+      runId: run.id,
+      eventType: "lead_sourcing_actor_pool_built",
+      payload: {
+        queriesTried: actorPoolResult.searchDiagnostics,
+        actorCount: actorPoolResult.actors.length,
+      },
+    });
+
+    if (!actorPoolResult.actors.length) {
+      await failRunWithDiagnostics({
+        run,
+        reason: "No Apify actors found for this experiment audience",
+        eventType: "lead_sourcing_failed",
+        payload: {
+          queriesTried: actorPoolResult.searchDiagnostics,
+        },
+      });
+      return;
+    }
+
+    let chainPlan: LeadSourcingChainPlan;
+    try {
+      chainPlan = await planApifyLeadChain({
+        targetAudience,
+        brandName: brand?.name ?? "",
+        brandWebsite: brand?.website ?? "",
+        experimentName: experiment.name ?? "",
+        offer: experiment.notes || hypothesis.rationale || "",
+        actorPool: actorPoolResult.actors,
+      });
+    } catch (error) {
+      await failRunWithDiagnostics({
+        run,
+        reason: `Lead-sourcing chain planning failed: ${error instanceof Error ? error.message : "Unknown error"}`,
+        eventType: "lead_sourcing_failed",
+        payload: {
+          actorPoolCount: actorPoolResult.actors.length,
+        },
+      });
+      return;
+    }
+
+    await createOutreachEvent({
+      runId: run.id,
+      eventType: "lead_sourcing_chain_planned",
+      payload: {
+        strategy: chainPlan.strategy,
+        rationale: chainPlan.rationale,
+        steps: chainPlan.steps.map((step) => ({
+          id: step.id,
+          stage: step.stage,
+          actorId: step.actorId,
+          backups: step.backupActorIds,
+          purpose: step.purpose,
+          queryHint: step.queryHint,
+        })),
+      },
+    });
+
+    await enqueueChainStepStart({
+      chainPlan,
+      chainData,
+      stepIndex: 0,
+      candidateIndex: 0,
     });
     return;
   }
 
-  if (stage === "start_email_discovery") {
-    const selectedActorId = selectedActorIdFromPayload;
-    if (!selectedActorId) {
+  if (stage === "start_chain_step") {
+    if (!existingChainPlan) {
       await failRunWithDiagnostics({
         run,
-        reason: "No selected discovery actor for this run",
+        reason: "Lead-sourcing chain plan is missing from job payload",
+        eventType: "lead_sourcing_failed",
+      });
+      return;
+    }
+    const step = existingChainPlan.steps[chainStepIndex];
+    if (!step) {
+      await failRunWithDiagnostics({
+        run,
+        reason: `Lead-sourcing chain step ${chainStepIndex} is invalid`,
         eventType: "lead_sourcing_failed",
       });
       return;
     }
 
-    if (!domains.length) {
+    const candidates = leadChainStepCandidates(step);
+    const actorId =
+      selectedActorIdFromPayload ||
+      candidates[chainCandidateIndex] ||
+      candidates[0] ||
+      "";
+    if (!actorId) {
       await failRunWithDiagnostics({
         run,
-        reason: "No domains available for email discovery",
+        reason: `No actor available for chain step ${step.id}`,
         eventType: "lead_sourcing_failed",
       });
       return;
     }
 
-    const chunk = domains.slice(cursor, cursor + chunkSize);
-    if (!chunk.length) {
-      await failRunWithDiagnostics({
-        run,
-        reason: "No leads sourced (exhausted discovered domains)",
-        eventType: "lead_sourcing_failed",
-        payload: { domains: domains.length },
-      });
-      return;
-    }
-
-    // Keep discovery conservative: this is platform-managed and must not run up costs.
-    const maxRequestsPerCrawl = Math.max(15, Math.min(40, chunk.length * 8));
-    const started = await startPlatformEmailDiscovery({
+    const actorInput = buildChainStepInput({
+      step,
+      chainData,
+      targetAudience,
+      maxLeads,
+    });
+    const started = await startApifyActorRun({
       token: sourcingToken,
-      domains: chunk,
-      maxRequestsPerCrawl,
-      actorId: selectedActorId,
+      actorId,
+      actorInput,
+      maxTotalChargeUsd: APIFY_CHAIN_MAX_CHARGE_USD,
     });
     await createOutreachEvent({
       runId: run.id,
-      eventType: "lead_sourcing_email_discovery_started",
+      eventType: "lead_sourcing_chain_step_started",
       payload: {
-        actorId: selectedActorId,
+        stepIndex: chainStepIndex,
+        candidateIndex: chainCandidateIndex,
+        stepId: step.id,
+        stage: step.stage,
+        actorId,
+        actorCandidates: candidates,
+        inputSummary: summarizeActorInput(actorInput),
         ok: started.ok,
-        cursor,
-        chunkSize: chunk.length,
-        maxRequestsPerCrawl,
         error: started.error,
       },
     });
 
     if (!started.ok) {
+      if (chainCandidateIndex + 1 < candidates.length) {
+        await createOutreachEvent({
+          runId: run.id,
+          eventType: "lead_sourcing_chain_step_retry",
+          payload: {
+            stepIndex: chainStepIndex,
+            fromCandidateIndex: chainCandidateIndex,
+            toCandidateIndex: chainCandidateIndex + 1,
+            actorId,
+            reason: started.error,
+          },
+        });
+        await enqueueChainStepStart({
+          chainPlan: existingChainPlan,
+          chainData,
+          stepIndex: chainStepIndex,
+          candidateIndex: chainCandidateIndex + 1,
+        });
+        return;
+      }
+
       await failRunWithDiagnostics({
         run,
-        reason: `Email discovery failed to start: ${started.error}`,
+        reason: `Chain step failed to start (${step.id}): ${started.error}`,
         eventType: "lead_sourcing_failed",
+        payload: {
+          stepId: step.id,
+          actorId,
+          candidateIndex: chainCandidateIndex,
+          candidates,
+        },
       });
       return;
     }
 
     await updateOutreachRun(run.id, { externalRef: started.runId });
-
     await enqueueOutreachJob({
       runId: run.id,
       jobType: "source_leads",
       executeAfter: new Date(Date.now() + 30_000).toISOString(),
       payload: {
-        stage: "poll_email_discovery",
-        searchQuery,
-        domains,
-        cursor,
-        nextCursor: cursor + chunk.length,
-        chunkSize,
+        stage: "poll_chain_step",
+        chainPlan: existingChainPlan,
+        chainStepIndex,
+        chainCandidateIndex,
+        selectedActorId: actorId,
+        chainRunId: started.runId,
+        chainDatasetId: started.datasetId,
         maxLeads,
-        selectedActorId,
-        emailDiscoveryRunId: started.runId,
-        emailDiscoveryDatasetId: started.datasetId,
+        ...chainDataToPayload(chainData),
       },
     });
     return;
   }
 
-  if (stage === "poll_email_discovery") {
-    const selectedActorId = selectedActorIdFromPayload;
-    const runId = String((payload as Record<string, unknown>).emailDiscoveryRunId ?? "").trim();
-    const datasetId = String((payload as Record<string, unknown>).emailDiscoveryDatasetId ?? "").trim();
-    const nextCursor = Math.max(0, Number((payload as Record<string, unknown>).nextCursor ?? cursor) || 0);
+  if (stage === "poll_chain_step") {
+    if (!existingChainPlan) {
+      await failRunWithDiagnostics({
+        run,
+        reason: "Lead-sourcing chain plan is missing from poll payload",
+        eventType: "lead_sourcing_failed",
+      });
+      return;
+    }
+    const step = existingChainPlan.steps[chainStepIndex];
+    if (!step) {
+      await failRunWithDiagnostics({
+        run,
+        reason: `Lead-sourcing chain step ${chainStepIndex} is invalid`,
+        eventType: "lead_sourcing_failed",
+      });
+      return;
+    }
 
-    const poll = await pollPlatformEmailDiscovery({ token: sourcingToken, runId });
+    const runId = String(payload.chainRunId ?? "").trim();
+    const datasetId = String(payload.chainDatasetId ?? "").trim();
+    const actorId = selectedActorIdFromPayload;
+    const candidates = leadChainStepCandidates(step);
+
+    const poll = await pollApifyActorRun({ token: sourcingToken, runId });
     await createOutreachEvent({
       runId: run.id,
-      eventType: "lead_sourcing_email_discovery_polled",
+      eventType: "lead_sourcing_chain_step_polled",
       payload: {
-        actorId: selectedActorId,
+        stepIndex: chainStepIndex,
+        candidateIndex: chainCandidateIndex,
+        stepId: step.id,
+        stage: step.stage,
+        actorId,
         ok: poll.ok,
         status: poll.status,
         error: poll.error,
@@ -1757,11 +2192,9 @@ async function processSourceLeadsJob(job: OutreachJob) {
         executeAfter: new Date(Date.now() + 30_000).toISOString(),
         payload: {
           ...payload,
-          stage: "poll_email_discovery",
-          emailDiscoveryDatasetId: poll.datasetId || datasetId,
-          cursor,
-          nextCursor,
-          selectedActorId,
+          stage: "poll_chain_step",
+          chainDatasetId: poll.datasetId || datasetId,
+          selectedActorId: actorId,
         },
       });
       return;
@@ -1771,78 +2204,158 @@ async function processSourceLeadsJob(job: OutreachJob) {
     if (!resolvedDatasetId) {
       await failRunWithDiagnostics({
         run,
-        reason: poll.ok ? "Email discovery finished, but no dataset id was returned" : `Email discovery failed: ${poll.error}`,
+        reason: poll.ok
+          ? `Chain step ${step.id} finished without dataset`
+          : `Chain step ${step.id} failed: ${poll.error}`,
         eventType: "lead_sourcing_failed",
-      });
-      return;
-    }
-
-    const fetched = await fetchPlatformEmailDiscoveryResults({
-      token: sourcingToken,
-      datasetId: resolvedDatasetId,
-      limit: 200,
-    });
-    await createOutreachEvent({
-      runId: run.id,
-      eventType: "lead_sourcing_email_discovery_completed",
-      payload: {
-        actorId: selectedActorId,
-        ok: fetched.ok,
-        providerStatus: poll.status,
-        providerOk: poll.ok,
-        datasetRows: fetched.rows.length,
-        error: fetched.error,
-      },
-    });
-
-    if (!fetched.ok) {
-      await failRunWithDiagnostics({
-        run,
-        reason: `Email discovery results fetch failed: ${fetched.error}`,
-        eventType: "lead_sourcing_failed",
-      });
-      return;
-    }
-
-    const discovered = leadsFromEmailDiscoveryRows(fetched.rows, maxLeads);
-    await createOutreachEvent({
-      runId: run.id,
-      eventType: "lead_sourcing_completed",
-      payload: {
-        sourcedCount: discovered.length,
-        strategy: "platform_search_then_email_discovery",
-        actorId: selectedActorId,
-      },
-    });
-
-    if (!discovered.length && !poll.ok) {
-      await failRunWithDiagnostics({
-        run,
-        reason: `Email discovery failed: ${poll.error}`,
-        eventType: "lead_sourcing_failed",
-      });
-      return;
-    }
-
-    if (!discovered.length) {
-      await enqueueOutreachJob({
-        runId: run.id,
-        jobType: "source_leads",
-        executeAfter: nowIso(),
         payload: {
-          stage: "start_email_discovery",
-          searchQuery,
-          domains,
-          cursor: nextCursor,
-          chunkSize,
-          maxLeads,
-          selectedActorId,
+          stepId: step.id,
+          actorId,
         },
       });
       return;
     }
 
-    await finishSourcingWithLeads(run, discovered);
+    const fetched = await fetchApifyActorDatasetItems({
+      token: sourcingToken,
+      datasetId: resolvedDatasetId,
+      limit: APIFY_CHAIN_MAX_ITEMS_PER_STEP,
+    });
+    if (!fetched.ok) {
+      if (chainCandidateIndex + 1 < candidates.length) {
+        await createOutreachEvent({
+          runId: run.id,
+          eventType: "lead_sourcing_chain_step_retry",
+          payload: {
+            stepIndex: chainStepIndex,
+            fromCandidateIndex: chainCandidateIndex,
+            toCandidateIndex: chainCandidateIndex + 1,
+            actorId,
+            reason: `Dataset fetch failed: ${fetched.error}`,
+          },
+        });
+        await enqueueChainStepStart({
+          chainPlan: existingChainPlan,
+          chainData,
+          stepIndex: chainStepIndex,
+          candidateIndex: chainCandidateIndex + 1,
+        });
+        return;
+      }
+
+      await failRunWithDiagnostics({
+        run,
+        reason: `Chain step dataset fetch failed (${step.id}): ${fetched.error}`,
+        eventType: "lead_sourcing_failed",
+        payload: {
+          stepId: step.id,
+          actorId,
+          candidateIndex: chainCandidateIndex,
+        },
+      });
+      return;
+    }
+
+    const mergedData = mergeChainData(chainData, fetched.rows);
+    await createOutreachEvent({
+      runId: run.id,
+      eventType: "lead_sourcing_chain_step_completed",
+      payload: {
+        stepIndex: chainStepIndex,
+        candidateIndex: chainCandidateIndex,
+        stepId: step.id,
+        stage: step.stage,
+        actorId,
+        rowCount: fetched.rows.length,
+        signals: {
+          queries: mergedData.queries.length,
+          companies: mergedData.companies.length,
+          websites: mergedData.websites.length,
+          domains: mergedData.domains.length,
+          emails: mergedData.emails.length,
+        },
+      },
+    });
+
+    const hadSignalDelta =
+      mergedData.emails.length > chainData.emails.length ||
+      mergedData.domains.length > chainData.domains.length ||
+      mergedData.websites.length > chainData.websites.length ||
+      mergedData.queries.length > chainData.queries.length;
+
+    if (!hadSignalDelta && chainCandidateIndex + 1 < candidates.length) {
+      await createOutreachEvent({
+        runId: run.id,
+        eventType: "lead_sourcing_chain_step_retry",
+        payload: {
+          stepIndex: chainStepIndex,
+          fromCandidateIndex: chainCandidateIndex,
+          toCandidateIndex: chainCandidateIndex + 1,
+          actorId,
+          reason: "No new usable signals produced",
+        },
+      });
+      await enqueueChainStepStart({
+        chainPlan: existingChainPlan,
+        chainData,
+        stepIndex: chainStepIndex,
+        candidateIndex: chainCandidateIndex + 1,
+      });
+      return;
+    }
+
+    const isFinalStep = chainStepIndex >= existingChainPlan.steps.length - 1;
+    if (isFinalStep) {
+      const discovered = leadsFromApifyRows(fetched.rows, maxLeads);
+      const withSignalFallback = discovered.length
+        ? discovered
+        : mergedData.emails.slice(0, maxLeads).map((email) => ({
+            email,
+            name: "",
+            title: "",
+            company: mergedData.companies[0] ?? "",
+            domain: email.split("@")[1] ?? "",
+            sourceUrl: mergedData.websites[0] ?? "",
+          }));
+
+      await createOutreachEvent({
+        runId: run.id,
+        eventType: "lead_sourcing_completed",
+        payload: {
+          sourcedCount: withSignalFallback.length,
+          strategy: "platform_store_actor_chain",
+          chainSteps: existingChainPlan.steps.map((item) => ({
+            id: item.id,
+            stage: item.stage,
+            actorId: item.actorId,
+          })),
+        },
+      });
+
+      if (!withSignalFallback.length) {
+        await failRunWithDiagnostics({
+          run,
+          reason: "No leads sourced from actor chain",
+          eventType: "lead_sourcing_failed",
+          payload: {
+            stepId: step.id,
+            actorId,
+            rowCount: fetched.rows.length,
+          },
+        });
+        return;
+      }
+
+      await finishSourcingWithLeads(run, withSignalFallback);
+      return;
+    }
+
+    await enqueueChainStepStart({
+      chainPlan: existingChainPlan,
+      chainData: mergedData,
+      stepIndex: chainStepIndex + 1,
+      candidateIndex: 0,
+    });
     return;
   }
 

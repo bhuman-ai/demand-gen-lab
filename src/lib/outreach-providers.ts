@@ -23,6 +23,15 @@ export type ApifyLead = {
   sourceUrl: string;
 };
 
+export type ApifyStoreActor = {
+  actorId: string;
+  title: string;
+  description: string;
+  categories: string[];
+  users30Days: number;
+  rating: number;
+};
+
 export type LeadEmailSuppressionReason = "invalid_email" | "placeholder_domain" | "role_account";
 
 const ROLE_ACCOUNT_LOCALS = new Set([
@@ -122,6 +131,14 @@ type LeadSourcingEmailDiscoveryPoll = {
 type LeadSourcingDatasetFetch = {
   ok: boolean;
   rows: unknown[];
+  error: string;
+};
+
+type ApifyStoreSearchResult = {
+  ok: boolean;
+  query: string;
+  total: number;
+  actors: ApifyStoreActor[];
   error: string;
 };
 
@@ -253,6 +270,13 @@ function normalizeApifyActorId(actorId: string) {
   return trimmed;
 }
 
+function sanitizeStoreText(value: unknown, max = 500) {
+  return String(value ?? "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, max);
+}
+
 const PLATFORM_SEARCH_ACTOR_ID = "apify~google-search-scraper";
 const PLATFORM_EMAIL_DISCOVERY_ACTOR_ID = String(process.env.PLATFORM_EMAIL_DISCOVERY_ACTOR_ID ?? "").trim();
 const PLATFORM_EMAIL_DISCOVERY_ACTOR_CANDIDATES = String(
@@ -346,6 +370,94 @@ async function apifyRunSyncGetDatasetItems(input: {
   }
 }
 
+export async function searchApifyStoreActors(params: {
+  query: string;
+  limit?: number;
+  offset?: number;
+}): Promise<ApifyStoreSearchResult> {
+  const query = params.query.trim();
+  if (!query) {
+    return {
+      ok: false,
+      query: "",
+      total: 0,
+      actors: [],
+      error: "Store search query is empty",
+    };
+  }
+
+  const limit = Math.max(1, Math.min(100, Number(params.limit ?? 40)));
+  const offset = Math.max(0, Number(params.offset ?? 0) || 0);
+
+  try {
+    const url = `https://api.apify.com/v2/store?search=${encodeURIComponent(query)}&limit=${limit}&offset=${offset}`;
+    const response = await fetch(url);
+    if (!response.ok) {
+      let body = "";
+      try {
+        body = (await response.text()).trim();
+      } catch {
+        body = "";
+      }
+      return {
+        ok: false,
+        query,
+        total: 0,
+        actors: [],
+        error: `HTTP ${response.status}${body ? `: ${body.slice(0, 180)}` : ""}`,
+      };
+    }
+    const payload: unknown = await response.json();
+    const root = payload && typeof payload === "object" && !Array.isArray(payload) ? (payload as Record<string, unknown>) : {};
+    const data =
+      root.data && typeof root.data === "object" && !Array.isArray(root.data)
+        ? (root.data as Record<string, unknown>)
+        : {};
+    const total = Math.max(0, Number(data.total ?? 0) || 0);
+    const items = Array.isArray(data.items) ? data.items : [];
+    const actors: ApifyStoreActor[] = [];
+
+    for (const item of items) {
+      const row = item && typeof item === "object" && !Array.isArray(item) ? (item as Record<string, unknown>) : {};
+      const username = sanitizeStoreText(row.username, 120);
+      const name = sanitizeStoreText(row.name, 120);
+      if (!username || !name) continue;
+
+      const stats = row.stats && typeof row.stats === "object" && !Array.isArray(row.stats)
+        ? (row.stats as Record<string, unknown>)
+        : {};
+      const categories = Array.isArray(row.categories)
+        ? row.categories.map((entry) => sanitizeStoreText(entry, 80)).filter(Boolean).slice(0, 8)
+        : [];
+
+      actors.push({
+        actorId: normalizeApifyActorId(`${username}~${name}`),
+        title: sanitizeStoreText(row.title ?? name, 180),
+        description: sanitizeStoreText(row.description ?? row.readmeSummary ?? "", 500),
+        categories,
+        users30Days: Math.max(0, Number(stats.totalUsers30Days ?? 0) || 0),
+        rating: Math.max(0, Math.min(5, Number(row.actorReviewRating ?? stats.actorReviewRating ?? 0) || 0)),
+      });
+    }
+
+    return {
+      ok: true,
+      query,
+      total,
+      actors,
+      error: "",
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      query,
+      total: 0,
+      actors: [],
+      error: error instanceof Error ? error.message : "Store search failed",
+    };
+  }
+}
+
 async function apifyStartRun(input: {
   actorId: string;
   actorInput: Record<string, unknown>;
@@ -393,6 +505,15 @@ async function apifyStartRun(input: {
   }
 }
 
+export async function startApifyActorRun(input: {
+  actorId: string;
+  actorInput: Record<string, unknown>;
+  token: string;
+  maxTotalChargeUsd?: number;
+}) {
+  return apifyStartRun(input);
+}
+
 async function apifyPollRun(input: { token: string; runId: string }): Promise<LeadSourcingEmailDiscoveryPoll> {
   const token = input.token.trim();
   const runId = input.runId.trim();
@@ -426,6 +547,10 @@ async function apifyPollRun(input: { token: string; runId: string }): Promise<Le
   }
 }
 
+export async function pollApifyActorRun(input: { token: string; runId: string }) {
+  return apifyPollRun(input);
+}
+
 async function apifyFetchDatasetItems(input: {
   token: string;
   datasetId: string;
@@ -457,6 +582,14 @@ async function apifyFetchDatasetItems(input: {
   } catch (error) {
     return { ok: false, rows: [], error: error instanceof Error ? error.message : "Dataset fetch failed" };
   }
+}
+
+export async function fetchApifyActorDatasetItems(input: {
+  token: string;
+  datasetId: string;
+  limit?: number;
+}) {
+  return apifyFetchDatasetItems(input);
 }
 
 export async function runPlatformLeadDomainSearch(params: {
@@ -649,6 +782,72 @@ export function leadsFromEmailDiscoveryRows(rows: unknown[], maxLeads: number): 
   }
 
   return leads;
+}
+
+function extractEmailsFromUnknown(value: unknown, sink: Set<string>, depth = 0) {
+  if (depth > 4 || sink.size > 1000) return;
+  if (typeof value === "string") {
+    const matches = value
+      .toLowerCase()
+      .match(/[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/g);
+    if (!matches) return;
+    for (const email of matches) {
+      if (!getLeadEmailSuppressionReason(email)) {
+        sink.add(email);
+      }
+    }
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) extractEmailsFromUnknown(item, sink, depth + 1);
+    return;
+  }
+  if (value && typeof value === "object") {
+    for (const entry of Object.values(value as Record<string, unknown>)) {
+      extractEmailsFromUnknown(entry, sink, depth + 1);
+    }
+  }
+}
+
+export function leadsFromApifyRows(rows: unknown[], maxLeads: number): ApifyLead[] {
+  const limit = Math.max(1, Math.min(500, Number(maxLeads || 100)));
+  const out: ApifyLead[] = [];
+  const seen = new Set<string>();
+
+  for (const row of rows) {
+    const normalized = normalizeApifyLead(row);
+    if (!normalized || seen.has(normalized.email)) continue;
+    seen.add(normalized.email);
+    out.push(normalized);
+    if (out.length >= limit) return out;
+  }
+
+  if (out.length >= limit) return out;
+
+  for (const row of rows) {
+    const record = row && typeof row === "object" && !Array.isArray(row) ? (row as Record<string, unknown>) : {};
+    const emails = new Set<string>();
+    extractEmailsFromUnknown(row, emails);
+    const company = String(record.company ?? record.companyName ?? record.organization ?? "").trim();
+    const name = String(record.name ?? record.fullName ?? "").trim();
+    const title = String(record.title ?? record.jobTitle ?? "").trim();
+    const sourceUrl = String(record.url ?? record.website ?? record.profileUrl ?? "").trim();
+    for (const email of emails) {
+      if (seen.has(email)) continue;
+      seen.add(email);
+      out.push({
+        email,
+        name,
+        company,
+        title,
+        domain: maybeDomain(email, ""),
+        sourceUrl,
+      });
+      if (out.length >= limit) return out;
+    }
+  }
+
+  return out;
 }
 
 function normalizeApifyLead(raw: unknown): ApifyLead | null {

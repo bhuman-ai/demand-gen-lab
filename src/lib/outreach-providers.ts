@@ -55,12 +55,20 @@ const ROLE_ACCOUNT_LOCALS = new Set([
   "jobs",
   "hr",
   "press",
+  "pr",
   "media",
   "news",
   "events",
   "security",
   "privacy",
   "compliance",
+  "dpo",
+  "gdpr",
+  "datarequest",
+  "success",
+  "customersuccess",
+  "customer-success",
+  "customer_success",
   "noreply",
   "no-reply",
   "donotreply",
@@ -70,8 +78,10 @@ const ROLE_ACCOUNT_LOCALS = new Set([
 const PLACEHOLDER_EMAIL_DOMAINS = new Set([
   "yourcompany.com",
   "example.com",
+  "example.io",
   "example.org",
   "example.net",
+  "company.com",
   "test.com",
   "invalid.com",
   "domain.com",
@@ -92,6 +102,29 @@ function isRoleAccountLocal(local: string) {
     ) {
       return true;
     }
+  }
+  const compact = local.replace(/[._+-]/g, "");
+  const heuristics = [
+    "support",
+    "legal",
+    "info",
+    "contact",
+    "billing",
+    "security",
+    "privacy",
+    "compliance",
+    "gdpr",
+    "dpo",
+    "datarequest",
+    "noreply",
+    "donotreply",
+    "helpdesk",
+    "customersuccess",
+  ];
+  for (const token of heuristics) {
+    if (compact === token) return true;
+    if (compact.startsWith(token) || compact.endsWith(token)) return true;
+    if (compact.includes(token) && compact.length - token.length <= 3) return true;
   }
   return false;
 }

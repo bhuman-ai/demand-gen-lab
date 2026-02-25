@@ -4,7 +4,7 @@ import type {
   OutreachRunLead,
 } from "@/lib/factory-types";
 import { getExperimentRecordByRuntimeRef } from "@/lib/experiment-data";
-import { extractFirstEmailAddress } from "@/lib/outreach-providers";
+import { extractFirstEmailAddress, getLeadEmailSuppressionReason } from "@/lib/outreach-providers";
 import { listExperimentRuns, listOwnerRuns, listRunLeads } from "@/lib/outreach-data";
 
 export type SourcedConversationPreviewLead = ConversationPreviewLead & {
@@ -63,10 +63,12 @@ function dedupeAndNormalizeLeads(input: {
   const seen = new Set<string>();
 
   for (const row of input.rows) {
+    if (["suppressed", "bounced", "unsubscribed"].includes(String(row.lead.status ?? "").toLowerCase())) continue;
     const rawEmail = String(row.lead.email ?? "").trim();
     const sourceUrl = String(row.lead.sourceUrl ?? "").trim();
     const email = extractFirstEmailAddress(rawEmail || sourceUrl);
     if (!email || seen.has(email)) continue;
+    if (getLeadEmailSuppressionReason(email)) continue;
 
     const domainFromEmail = email.includes("@") ? email.split("@")[1] ?? "" : "";
     const domain = String(row.lead.domain ?? "").trim().toLowerCase() || domainFromEmail;

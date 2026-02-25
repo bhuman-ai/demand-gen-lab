@@ -77,6 +77,9 @@ const PLACEHOLDER_EMAIL_DOMAINS = new Set([
   "domain.com",
 ]);
 
+const STRICT_EMAIL_PATTERN = /^([a-z0-9._%+-]+)@([a-z0-9.-]+\.[a-z]{2,})$/i;
+const EMBEDDED_EMAIL_PATTERN = /([a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,})/i;
+
 function isRoleAccountLocal(local: string) {
   if (!local) return true;
   if (ROLE_ACCOUNT_LOCALS.has(local)) return true;
@@ -95,7 +98,7 @@ function isRoleAccountLocal(local: string) {
 
 export function getLeadEmailSuppressionReason(email: string): LeadEmailSuppressionReason | "" {
   const normalized = email.trim().toLowerCase();
-  const match = normalized.match(/^([^@\s]+)@([^@\s]+\.[^@\s]+)$/);
+  const match = normalized.match(STRICT_EMAIL_PATTERN);
   if (!match) return "invalid_email";
 
   const local = match[1];
@@ -103,6 +106,24 @@ export function getLeadEmailSuppressionReason(email: string): LeadEmailSuppressi
   if (PLACEHOLDER_EMAIL_DOMAINS.has(domain)) return "placeholder_domain";
   if (isRoleAccountLocal(local)) return "role_account";
   return "";
+}
+
+export function extractFirstEmailAddress(value: unknown): string {
+  const raw = String(value ?? "").trim();
+  if (!raw) return "";
+
+  const direct = raw.toLowerCase().match(STRICT_EMAIL_PATTERN);
+  if (direct) {
+    return `${direct[1]}@${direct[2].replace(/\.+$/, "").toLowerCase()}`;
+  }
+
+  const embedded = raw.match(EMBEDDED_EMAIL_PATTERN);
+  if (!embedded) return "";
+
+  const candidate = String(embedded[1] ?? "").trim().toLowerCase();
+  const strict = candidate.match(STRICT_EMAIL_PATTERN);
+  if (!strict) return "";
+  return `${strict[1]}@${strict[2].replace(/\.+$/, "").toLowerCase()}`;
 }
 
 type LeadSourcingSearchResult = {
@@ -763,9 +784,9 @@ export function leadsFromEmailDiscoveryRows(rows: unknown[], maxLeads: number): 
     const domain = String(row.domain ?? "").trim().toLowerCase();
     const sourceUrl = String(row.originalStartUrl ?? row.original_start_url ?? "").trim();
     const emailsRaw = row.emails;
-    const emails = Array.isArray(emailsRaw) ? emailsRaw.map((item) => String(item ?? "").trim().toLowerCase()) : [];
+    const emails = Array.isArray(emailsRaw) ? emailsRaw.map((item) => extractFirstEmailAddress(item)) : [];
     for (const email of emails) {
-      if (!email || !email.includes("@")) continue;
+      if (!email) continue;
       if (getLeadEmailSuppressionReason(email)) continue;
       if (seen.has(email)) continue;
       seen.add(email);
@@ -852,12 +873,10 @@ export function leadsFromApifyRows(rows: unknown[], maxLeads: number): ApifyLead
 
 function normalizeApifyLead(raw: unknown): ApifyLead | null {
   const row = raw && typeof raw === "object" && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
-  const email = String(
+  const email = extractFirstEmailAddress(
     row.email ?? row.workEmail ?? row.businessEmail ?? row.contactEmail ?? row.emailAddress ?? ""
-  )
-    .trim()
-    .toLowerCase();
-  if (!email || !email.includes("@")) {
+  );
+  if (!email) {
     return null;
   }
   if (getLeadEmailSuppressionReason(email)) {

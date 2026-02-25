@@ -4,6 +4,7 @@ import type {
   OutreachRunLead,
 } from "@/lib/factory-types";
 import { getExperimentRecordByRuntimeRef } from "@/lib/experiment-data";
+import { extractFirstEmailAddress } from "@/lib/outreach-providers";
 import { listExperimentRuns, listOwnerRuns, listRunLeads } from "@/lib/outreach-data";
 
 export type SourcedConversationPreviewLead = ConversationPreviewLead & {
@@ -26,6 +27,34 @@ function safeDateValue(value: string) {
   return Number.isFinite(time) ? time : 0;
 }
 
+function extractNameFromUrl(urlLike: string) {
+  const raw = String(urlLike ?? "").trim();
+  if (!raw) return "";
+  const query = raw.includes("?") ? raw.slice(raw.indexOf("?") + 1) : raw;
+  const params = new URLSearchParams(query);
+  const firstName =
+    params.get("firstName") ??
+    params.get("firstname") ??
+    params.get("first_name") ??
+    params.get("fname") ??
+    "";
+  const lastName =
+    params.get("lastName") ??
+    params.get("lastname") ??
+    params.get("last_name") ??
+    params.get("lname") ??
+    "";
+
+  const normalizedFirst = firstName.trim();
+  const normalizedLast = lastName.trim();
+  const combined = `${normalizedFirst} ${normalizedLast}`.trim();
+  if (!combined) return "";
+  return combined
+    .split(/\s+/)
+    .map((part) => (part ? `${part[0].toUpperCase()}${part.slice(1)}` : ""))
+    .join(" ");
+}
+
 function dedupeAndNormalizeLeads(input: {
   rows: Array<{ run: OutreachRun; lead: OutreachRunLead }>;
   limit: number;
@@ -34,12 +63,16 @@ function dedupeAndNormalizeLeads(input: {
   const seen = new Set<string>();
 
   for (const row of input.rows) {
-    const email = String(row.lead.email ?? "").trim().toLowerCase();
+    const rawEmail = String(row.lead.email ?? "").trim();
+    const sourceUrl = String(row.lead.sourceUrl ?? "").trim();
+    const email = extractFirstEmailAddress(rawEmail || sourceUrl);
     if (!email || seen.has(email)) continue;
 
     const domainFromEmail = email.includes("@") ? email.split("@")[1] ?? "" : "";
     const domain = String(row.lead.domain ?? "").trim().toLowerCase() || domainFromEmail;
     if (!domain) continue;
+
+    const name = String(row.lead.name ?? "").trim() || extractNameFromUrl(rawEmail) || extractNameFromUrl(sourceUrl);
 
     seen.add(email);
     out.push({
@@ -47,11 +80,11 @@ function dedupeAndNormalizeLeads(input: {
       runId: row.run.id,
       runCreatedAt: row.run.createdAt,
       email,
-      name: String(row.lead.name ?? "").trim(),
+      name,
       company: String(row.lead.company ?? "").trim(),
       title: String(row.lead.title ?? "").trim(),
       domain,
-      sourceUrl: String(row.lead.sourceUrl ?? "").trim(),
+      sourceUrl,
       source: "sourced",
     });
     if (out.length >= input.limit) break;

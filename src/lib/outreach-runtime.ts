@@ -211,6 +211,40 @@ function stageFromValue(value: string): LeadChainStepStage | null {
   return null;
 }
 
+function validateLeadChainStageOrder(stageOrder: LeadChainStepStage[]) {
+  if (!stageOrder.length) {
+    return "Apify chain returned zero stages";
+  }
+  if (stageOrder.length > APIFY_CHAIN_MAX_STEPS) {
+    return `Apify chain returned ${stageOrder.length} steps; max is ${APIFY_CHAIN_MAX_STEPS}`;
+  }
+  if (stageOrder[stageOrder.length - 1] !== "email_discovery") {
+    return "Apify chain must end with email_discovery";
+  }
+  if (stageOrder.length === 1) {
+    return stageOrder[0] === "email_discovery"
+      ? ""
+      : "Single-step chain must use email_discovery";
+  }
+  if (stageOrder[0] !== "prospect_discovery") {
+    return "Multi-step chain must start with prospect_discovery";
+  }
+  for (let i = 1; i < stageOrder.length; i += 1) {
+    const prev = stageOrder[i - 1];
+    const current = stageOrder[i];
+    if (prev === "email_discovery") {
+      return "Invalid chain order after email_discovery";
+    }
+    if (prev === "website_enrichment" && current === "prospect_discovery") {
+      return "Invalid chain order: website_enrichment -> prospect_discovery";
+    }
+    if (prev === current) {
+      return `Duplicate stage not allowed: ${current}`;
+    }
+  }
+  return "";
+}
+
 function isLikelyUrl(value: string) {
   const lower = value.trim().toLowerCase();
   return lower.startsWith("http://") || lower.startsWith("https://") || lower.startsWith("www.");
@@ -357,52 +391,348 @@ function actorScore(actor: ApifyStoreActor) {
   return actor.users30Days * 1.2 + actor.rating * 40;
 }
 
-async function buildApifyActorPool(input: {
+type ActorDiscoveryQueryPlan = {
+  prospectQueries: string[];
+  websiteQueries: string[];
+  emailQueries: string[];
+};
+
+type ActorQueryPlanMode = "openai" | "baseline";
+
+const APIFY_STORE_SEARCH_LIMIT = 40;
+const APIFY_STORE_MAX_QUERIES_PER_STAGE = 8;
+const APIFY_STORE_MAX_RESULTS = 160;
+
+const STORE_QUERY_STOP_WORDS = new Set([
+  "the",
+  "and",
+  "for",
+  "with",
+  "from",
+  "that",
+  "this",
+  "your",
+  "their",
+  "about",
+  "into",
+  "across",
+  "teams",
+  "team",
+  "help",
+  "build",
+  "growth",
+]);
+
+function tokenizeQueryTerms(value: string, max = 10) {
+  return uniqueTrimmed(
+    value
+      .toLowerCase()
+      .split(/[^a-z0-9]+/)
+      .map((term) => term.trim())
+      .filter((term) => term.length >= 4 && !STORE_QUERY_STOP_WORDS.has(term)),
+    max
+  );
+}
+
+function normalizeQueryList(value: unknown, fallback: string[], max = APIFY_STORE_MAX_QUERIES_PER_STAGE) {
+  const fromValue = Array.isArray(value)
+    ? value.map((row) => trimText(row, 120))
+    : typeof value === "string"
+      ? value
+          .split("\n")
+          .map((row) => trimText(row, 120))
+      : [];
+  const cleaned = uniqueTrimmed(fromValue, max);
+  if (cleaned.length) return cleaned;
+  return fallback.slice(0, max);
+}
+
+function baselineActorDiscoveryQueryPlan(input: {
   targetAudience: string;
   offer: string;
-}) {
-  const seedQueries = uniqueTrimmed(
+  brandName: string;
+  brandWebsite: string;
+  experimentName: string;
+}): ActorDiscoveryQueryPlan {
+  const domain = parseDomainFromUrl(input.brandWebsite);
+  const audienceTerms = tokenizeQueryTerms(input.targetAudience, 8);
+  const offerTerms = tokenizeQueryTerms(input.offer, 6);
+  const experimentTerms = tokenizeQueryTerms(input.experimentName, 6);
+  const anchor = uniqueTrimmed(
     [
-      input.targetAudience,
-      `${input.targetAudience} leads`,
-      `${input.targetAudience} prospects`,
-      `${input.targetAudience} company websites`,
-      `${input.targetAudience} contact emails`,
-      "website email scraper",
-      "email finder domain",
-      "company website scraper",
-      input.offer,
+      ...audienceTerms,
+      ...offerTerms,
+      ...experimentTerms,
+      trimText(input.targetAudience, 120),
+      trimText(input.offer, 120),
+      trimText(input.brandName, 120),
     ],
     10
   );
+  const firstAnchor = anchor[0] || input.targetAudience || "B2B prospecting";
 
-  const pooled = new Map<string, ApifyStoreActor>();
+  return {
+    prospectQueries: uniqueTrimmed(
+      [
+        input.targetAudience,
+        `${firstAnchor} leads`,
+        `${firstAnchor} decision makers`,
+        `${firstAnchor} companies`,
+        `${firstAnchor} prospects`,
+        "linkedin people scraper",
+        "sales navigator leads scraper",
+        "crunchbase companies scraper",
+        "apollo leads export",
+      ],
+      APIFY_STORE_MAX_QUERIES_PER_STAGE
+    ),
+    websiteQueries: uniqueTrimmed(
+      [
+        `${firstAnchor} company websites`,
+        `${firstAnchor} domains`,
+        "company website finder",
+        "domain enrichment from company names",
+        "linkedin company website scraper",
+        "crunchbase company website extractor",
+        domain ? `${domain} similar companies websites` : "",
+      ],
+      APIFY_STORE_MAX_QUERIES_PER_STAGE
+    ),
+    emailQueries: uniqueTrimmed(
+      [
+        `${firstAnchor} contact emails`,
+        `${firstAnchor} work emails`,
+        "domain email finder",
+        "email finder by name and company",
+        "linkedin email finder",
+        "crunchbase email finder",
+        "website contact email extractor",
+        "b2b verified emails",
+      ],
+      APIFY_STORE_MAX_QUERIES_PER_STAGE
+    ),
+  };
+}
+
+async function planActorDiscoveryQueries(input: {
+  targetAudience: string;
+  offer: string;
+  brandName: string;
+  brandWebsite: string;
+  experimentName: string;
+}): Promise<{ mode: ActorQueryPlanMode; plan: ActorDiscoveryQueryPlan; error: string }> {
+  const baseline = baselineActorDiscoveryQueryPlan(input);
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) {
+    return { mode: "baseline", plan: baseline, error: "OPENAI_API_KEY missing" };
+  }
+
+  const prompt = [
+    "You plan discovery queries to search the Apify Actor Store for lead-sourcing pipelines.",
+    "Goal: high recall + high relevance across all potential actors (single-step or multi-step chains).",
+    "Return distinct searches for three stages: prospect_discovery, website_enrichment, email_discovery.",
+    "Use concrete query terms a human would search in a marketplace.",
+    "Include keyword variants that can surface actors tied to data sources (for example LinkedIn, Crunchbase, Apollo, websites, domains, email finding), when relevant.",
+    "No placeholders. No generic buzzwords.",
+    "",
+    "Return strict JSON only:",
+    '{ "prospectQueries": string[], "websiteQueries": string[], "emailQueries": string[] }',
+    `Context: ${JSON.stringify({
+      targetAudience: input.targetAudience,
+      offer: input.offer,
+      brandName: input.brandName,
+      brandWebsite: input.brandWebsite,
+      experimentName: input.experimentName,
+    })}`,
+  ].join("\n");
+
+  const model = resolveLlmModel("lead_actor_query_planning", { prompt });
+  const response = await fetch("https://api.openai.com/v1/responses", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model,
+      input: prompt,
+      text: { format: { type: "json_object" } },
+      max_output_tokens: 1800,
+    }),
+  });
+
+  const raw = await response.text();
+  if (!response.ok) {
+    return {
+      mode: "baseline",
+      plan: baseline,
+      error: `HTTP ${response.status}: ${raw.slice(0, 240)}`,
+    };
+  }
+
+  let payload: unknown = {};
+  try {
+    payload = JSON.parse(raw);
+  } catch {
+    payload = {};
+  }
+
+  let parsed: unknown = {};
+  try {
+    parsed = JSON.parse(extractOutputText(payload));
+  } catch {
+    parsed = {};
+  }
+
+  const row = asRecord(parsed);
+  const queriesRoot = asRecord(row.queries);
+  const plan: ActorDiscoveryQueryPlan = {
+    prospectQueries: normalizeQueryList(
+      row.prospectQueries ?? queriesRoot.prospectQueries ?? queriesRoot.prospect,
+      baseline.prospectQueries
+    ),
+    websiteQueries: normalizeQueryList(
+      row.websiteQueries ?? queriesRoot.websiteQueries ?? queriesRoot.website,
+      baseline.websiteQueries
+    ),
+    emailQueries: normalizeQueryList(
+      row.emailQueries ?? queriesRoot.emailQueries ?? queriesRoot.email,
+      baseline.emailQueries
+    ),
+  };
+
+  return { mode: "openai", plan, error: "" };
+}
+
+function actorCandidateScore(input: {
+  actor: ApifyStoreActor;
+  matchedQueries: number;
+  requestedStages: number;
+}) {
+  const stageHint = stageFromActor(input.actor);
+  const stageBoost = stageHint === "email_discovery" ? 22 : stageHint === "prospect_discovery" ? 14 : 10;
+  return actorScore(input.actor) + input.matchedQueries * 6 + input.requestedStages * 15 + stageBoost;
+}
+
+async function buildApifyActorPool(input: {
+  targetAudience: string;
+  offer: string;
+  brandName: string;
+  brandWebsite: string;
+  experimentName: string;
+}) {
+  const queryPlanResult = await planActorDiscoveryQueries({
+    targetAudience: input.targetAudience,
+    offer: input.offer,
+    brandName: input.brandName,
+    brandWebsite: input.brandWebsite,
+    experimentName: input.experimentName,
+  });
+  const stageQueries: Array<{ stage: LeadChainStepStage; queries: string[] }> = [
+    { stage: "prospect_discovery", queries: queryPlanResult.plan.prospectQueries },
+    { stage: "website_enrichment", queries: queryPlanResult.plan.websiteQueries },
+    { stage: "email_discovery", queries: queryPlanResult.plan.emailQueries },
+  ];
+
+  const pooled = new Map<
+    string,
+    {
+      actor: ApifyStoreActor;
+      matchedQueryKeys: Set<string>;
+      requestedStages: Set<LeadChainStepStage>;
+    }
+  >();
   const searchDiagnostics: Array<Record<string, unknown>> = [];
 
-  for (const query of seedQueries) {
-    const search = await searchApifyStoreActors({ query, limit: 35 });
-    searchDiagnostics.push({
-      query,
-      ok: search.ok,
-      total: search.total,
-      count: search.actors.length,
-      error: search.error,
-    });
-    if (!search.ok) continue;
-    for (const actor of search.actors) {
-      if (!actor.actorId) continue;
-      const existing = pooled.get(actor.actorId);
-      if (!existing || actorScore(actor) > actorScore(existing)) {
-        pooled.set(actor.actorId, actor);
+  for (const stageQuerySet of stageQueries) {
+    const queries = stageQuerySet.queries.slice(0, APIFY_STORE_MAX_QUERIES_PER_STAGE);
+    for (let queryIndex = 0; queryIndex < queries.length; queryIndex += 1) {
+      const query = queries[queryIndex];
+      const offsets = [0];
+      if (queryIndex < 3) {
+        offsets.push(APIFY_STORE_SEARCH_LIMIT);
+      }
+
+      for (const offset of offsets) {
+        const search = await searchApifyStoreActors({
+          query,
+          limit: APIFY_STORE_SEARCH_LIMIT,
+          offset,
+        });
+        searchDiagnostics.push({
+          stage: stageQuerySet.stage,
+          query,
+          offset,
+          ok: search.ok,
+          total: search.total,
+          count: search.actors.length,
+          error: search.error,
+        });
+        if (!search.ok) break;
+
+        for (const actor of search.actors) {
+          if (!actor.actorId) continue;
+          const existing = pooled.get(actor.actorId);
+          if (!existing) {
+            pooled.set(actor.actorId, {
+              actor,
+              matchedQueryKeys: new Set([`${stageQuerySet.stage}:${query.toLowerCase()}`]),
+              requestedStages: new Set([stageQuerySet.stage]),
+            });
+            continue;
+          }
+          if (actorScore(actor) > actorScore(existing.actor)) {
+            existing.actor = actor;
+          }
+          existing.matchedQueryKeys.add(`${stageQuerySet.stage}:${query.toLowerCase()}`);
+          existing.requestedStages.add(stageQuerySet.stage);
+        }
+
+        if (search.actors.length < APIFY_STORE_SEARCH_LIMIT) {
+          break;
+        }
       }
     }
   }
 
-  const actors = Array.from(pooled.values())
-    .sort((a, b) => actorScore(b) - actorScore(a))
-    .slice(0, 120);
+  const ranked = Array.from(pooled.values())
+    .map((entry) => ({
+      actor: entry.actor,
+      stageHint: stageFromActor(entry.actor),
+      score: actorCandidateScore({
+        actor: entry.actor,
+        matchedQueries: entry.matchedQueryKeys.size,
+        requestedStages: entry.requestedStages.size,
+      }),
+    }))
+    .sort((a, b) => b.score - a.score);
 
-  return { actors, searchDiagnostics };
+  const selected = new Set<string>();
+  for (const stage of ["prospect_discovery", "website_enrichment", "email_discovery"] as const) {
+    const stageTop = ranked.filter((row) => row.stageHint === stage).slice(0, 22);
+    for (const row of stageTop) {
+      selected.add(row.actor.actorId);
+      if (selected.size >= APIFY_STORE_MAX_RESULTS) break;
+    }
+    if (selected.size >= APIFY_STORE_MAX_RESULTS) break;
+  }
+  for (const row of ranked) {
+    if (selected.size >= APIFY_STORE_MAX_RESULTS) break;
+    selected.add(row.actor.actorId);
+  }
+
+  const actors = ranked
+    .filter((row) => selected.has(row.actor.actorId))
+    .map((row) => row.actor)
+    .slice(0, APIFY_STORE_MAX_RESULTS);
+
+  return {
+    actors,
+    searchDiagnostics,
+    queryPlanMode: queryPlanResult.mode,
+    queryPlan: queryPlanResult.plan,
+    queryPlanError: queryPlanResult.error,
+  };
 }
 
 async function planApifyLeadChain(input: {
@@ -432,10 +762,13 @@ async function planApifyLeadChain(input: {
 
   const prompt = [
     "You plan an Apify actor chain for B2B outreach lead sourcing.",
-    "Goal: choose a 2-3 step chain that can produce real people + emails from the provided target audience.",
+    "Goal: choose a 1-3 step chain that can produce real people + emails from the provided target audience.",
     "Rules:",
     "- Use only actorIds from actorPool.",
-    "- Stage order must be: prospect_discovery -> website_enrichment (optional) -> email_discovery.",
+    "- Valid stage orders are:",
+    "  1) email_discovery (single-step actor that already returns people + emails),",
+    "  2) prospect_discovery -> email_discovery,",
+    "  3) prospect_discovery -> website_enrichment -> email_discovery.",
     "- Final step must be email_discovery.",
     "- Include backupActorIds per step (0-3) from actorPool.",
     "- queryHint must be concrete and directly relevant to the experiment.",
@@ -547,25 +880,10 @@ async function planApifyLeadChain(input: {
     step.backupActorIds = filled;
   }
 
-  if (steps.length < 2 || steps.length > APIFY_CHAIN_MAX_STEPS) {
-    throw new Error(`Apify chain planner returned ${steps.length} steps; expected 2-3`);
-  }
   const stageOrder = steps.map((step) => step.stage);
-  if (stageOrder[0] !== "prospect_discovery") {
-    throw new Error("Apify chain must start with prospect_discovery");
-  }
-  if (stageOrder[stageOrder.length - 1] !== "email_discovery") {
-    throw new Error("Apify chain must end with email_discovery");
-  }
-  for (let i = 1; i < stageOrder.length; i += 1) {
-    const prev = stageOrder[i - 1];
-    const current = stageOrder[i];
-    if (prev === "email_discovery" && current !== "email_discovery") {
-      throw new Error("Invalid chain order after email_discovery");
-    }
-    if (prev === "website_enrichment" && current === "prospect_discovery") {
-      throw new Error("Invalid chain order: website_enrichment -> prospect_discovery");
-    }
+  const stageOrderError = validateLeadChainStageOrder(stageOrder);
+  if (stageOrderError) {
+    throw new Error(stageOrderError);
   }
 
   return {
@@ -1985,11 +2303,17 @@ async function processSourceLeadsJob(job: OutreachJob) {
     const actorPoolResult = await buildApifyActorPool({
       targetAudience,
       offer: experiment.notes || hypothesis.rationale || "",
+      brandName: brand?.name ?? "",
+      brandWebsite: brand?.website ?? "",
+      experimentName: experiment.name ?? "",
     });
     await createOutreachEvent({
       runId: run.id,
       eventType: "lead_sourcing_actor_pool_built",
       payload: {
+        queryPlanMode: actorPoolResult.queryPlanMode,
+        queryPlanError: actorPoolResult.queryPlanError,
+        queryPlan: actorPoolResult.queryPlan,
         queriesTried: actorPoolResult.searchDiagnostics,
         actorCount: actorPoolResult.actors.length,
       },

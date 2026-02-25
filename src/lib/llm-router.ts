@@ -12,7 +12,8 @@ export type LlmTask =
   | "conversation_flow_generation"
   | "conversation_flow_roleplay"
   | "conversation_prompt_render"
-  | "lead_chain_planning";
+  | "lead_chain_planning"
+  | "lead_actor_query_planning";
 
 type ModelTier = "fast" | "default" | "high";
 
@@ -33,6 +34,7 @@ const TASK_BASE_TIER: Record<LlmTask, ModelTier> = {
   conversation_flow_roleplay: "high",
   conversation_prompt_render: "high",
   lead_chain_planning: "high",
+  lead_actor_query_planning: "high",
 };
 
 function normalizeModelName(value: unknown) {

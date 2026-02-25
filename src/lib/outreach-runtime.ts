@@ -41,6 +41,7 @@ import {
   listDueOutreachJobs,
   listExperimentRuns,
   listReplyThreadsByBrand,
+  listRunEvents,
   listRunLeads,
   listRunMessages,
   updateOutreachJob,
@@ -59,6 +60,7 @@ import {
   fetchPlatformEmailDiscoveryResults,
   leadsFromEmailDiscoveryRows,
   pollPlatformEmailDiscovery,
+  getPlatformEmailDiscoveryActorCandidates,
   runPlatformLeadDomainSearch,
   startPlatformEmailDiscovery,
   sourceLeadsFromApify,
@@ -118,6 +120,153 @@ function effectiveCustomerIoApiKey(secrets: ResolvedSecrets) {
 
 function effectiveSourcingToken(secrets: ResolvedSecrets) {
   return secrets.apifyToken.trim() || platformSourcingToken();
+}
+
+type PlatformActorStats = {
+  actorId: string;
+  attempts: number;
+  successfulRuns: number;
+  failedRuns: number;
+  sourcedLeads: number;
+};
+
+type PlatformActorSelection = {
+  ok: boolean;
+  actorId: string;
+  reason: string;
+  candidates: string[];
+  stats: PlatformActorStats[];
+};
+
+function emptyPlatformActorStats(actorId: string): PlatformActorStats {
+  return {
+    actorId,
+    attempts: 0,
+    successfulRuns: 0,
+    failedRuns: 0,
+    sourcedLeads: 0,
+  };
+}
+
+function actorStatsFromMap(candidates: string[], map: Map<string, PlatformActorStats>) {
+  return candidates.map((actorId) => map.get(actorId) ?? emptyPlatformActorStats(actorId));
+}
+
+function pickBestActorFromStats(stats: PlatformActorStats[]): PlatformActorStats | null {
+  if (!stats.length) return null;
+  const ranked = [...stats].sort((a, b) => {
+    const aSuccessRate = a.attempts > 0 ? a.successfulRuns / a.attempts : 0;
+    const bSuccessRate = b.attempts > 0 ? b.successfulRuns / b.attempts : 0;
+    if (bSuccessRate !== aSuccessRate) return bSuccessRate - aSuccessRate;
+
+    const aAvgSourced = a.successfulRuns > 0 ? a.sourcedLeads / a.successfulRuns : 0;
+    const bAvgSourced = b.successfulRuns > 0 ? b.sourcedLeads / b.successfulRuns : 0;
+    if (bAvgSourced !== aAvgSourced) return bAvgSourced - aAvgSourced;
+
+    if (a.failedRuns !== b.failedRuns) return a.failedRuns - b.failedRuns;
+    if (a.attempts !== b.attempts) return a.attempts - b.attempts;
+    return a.actorId.localeCompare(b.actorId);
+  });
+  return ranked[0] ?? null;
+}
+
+async function choosePlatformDiscoveryActor(input: {
+  run: { id: string; brandId: string; campaignId: string; experimentId: string };
+  candidates: string[];
+  preselectedActorId?: string;
+}) {
+  const candidates = input.candidates.map((item) => item.trim()).filter(Boolean);
+  if (!candidates.length) {
+    return {
+      ok: false,
+      actorId: "",
+      reason: "No platform discovery actors configured (set PLATFORM_EMAIL_DISCOVERY_ACTOR_ID)",
+      candidates: [],
+      stats: [],
+    } satisfies PlatformActorSelection;
+  }
+
+  const preselected = input.preselectedActorId?.trim() ?? "";
+  if (preselected) {
+    const selected =
+      candidates.find((actorId) => actorId.toLowerCase() === preselected.toLowerCase()) ?? preselected;
+    return {
+      ok: true,
+      actorId: selected,
+      reason: "selected_from_job_payload",
+      candidates,
+      stats: candidates.map((actorId) => emptyPlatformActorStats(actorId)),
+    } satisfies PlatformActorSelection;
+  }
+
+  const statsMap = new Map<string, PlatformActorStats>();
+  for (const actorId of candidates) {
+    statsMap.set(actorId, emptyPlatformActorStats(actorId));
+  }
+
+  const recentRuns = (await listCampaignRuns(input.run.brandId, input.run.campaignId))
+    .filter((item) => item.id !== input.run.id && item.experimentId === input.run.experimentId)
+    .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1))
+    .slice(0, 20);
+
+  for (const priorRun of recentRuns) {
+    const events = await listRunEvents(priorRun.id);
+    const actorEvent = events.find((event) => {
+      if (event.eventType !== "lead_sourcing_actor_selected") return false;
+      const actorId = String((event.payload?.actorId ?? "") as string).trim();
+      return Boolean(actorId);
+    });
+    if (!actorEvent) continue;
+
+    const selectedActorId = String((actorEvent.payload?.actorId ?? "") as string).trim();
+    const stats = statsMap.get(selectedActorId);
+    if (!stats) continue;
+    stats.attempts += 1;
+
+    const sourcedEvent = events.find((event) => event.eventType === "lead_sourced_apify");
+    if (sourcedEvent) {
+      stats.successfulRuns += 1;
+      const count = Math.max(0, Number((sourcedEvent.payload?.count ?? 0) as number) || 0);
+      stats.sourcedLeads += count;
+      continue;
+    }
+
+    const failedEvent = events.find((event) => event.eventType === "lead_sourcing_failed");
+    if (failedEvent) {
+      stats.failedRuns += 1;
+    }
+  }
+
+  const stats = actorStatsFromMap(candidates, statsMap);
+  const untested = stats.find((item) => item.attempts === 0);
+  if (untested) {
+    return {
+      ok: true,
+      actorId: untested.actorId,
+      reason: "explore_untested_actor",
+      candidates,
+      stats,
+    } satisfies PlatformActorSelection;
+  }
+
+  const best = pickBestActorFromStats(stats);
+  if (!best) {
+    return {
+      ok: true,
+      actorId: candidates[0],
+      reason: "fallback_first_candidate",
+      candidates,
+      stats,
+    } satisfies PlatformActorSelection;
+  }
+
+  return {
+    ok: true,
+    actorId: best.actorId,
+    reason: "exploit_best_historical_actor",
+    candidates,
+    stats,
+  } satisfies PlatformActorSelection;
 }
 
 function supportsDelivery(account: ResolvedAccount) {
@@ -1319,11 +1468,13 @@ async function processSourceLeadsJob(job: OutreachJob) {
 
   const payload = job.payload && typeof job.payload === "object" && !Array.isArray(job.payload) ? job.payload : {};
   const stage = String((payload as Record<string, unknown>).stage ?? "").trim();
+  const selectedActorIdFromPayload = String((payload as Record<string, unknown>).selectedActorId ?? "").trim();
 
   const sourceConfig = effectiveSourceConfig(hypothesis);
   const sourcingToken = effectiveSourcingToken(secrets);
   const maxLeads = Math.max(1, Math.min(500, Number(sourceConfig.maxLeads ?? 100)));
   const targetAudience = hypothesis.actorQuery.trim();
+  const platformActorCandidates = getPlatformEmailDiscoveryActorCandidates();
 
   const brand = await getBrandById(run.brandId);
   const excludeDomains: string[] = [];
@@ -1345,12 +1496,22 @@ async function processSourceLeadsJob(job: OutreachJob) {
       payload: {
         strategy: sourceConfig.actorId ? "custom_actor" : "platform_search_then_email_discovery",
         maxLeads,
+        actorCandidates: sourceConfig.actorId ? [sourceConfig.actorId] : platformActorCandidates,
       },
     });
   }
 
   // Custom override: for backward compatibility (not exposed in UI).
   if (sourceConfig.actorId.trim()) {
+    await createOutreachEvent({
+      runId: run.id,
+      eventType: "lead_sourcing_actor_selected",
+      payload: {
+        actorId: sourceConfig.actorId,
+        reason: "hypothesis_override",
+      },
+    });
+
     const sourced = await sourceLeadsFromApify({
       actorId: sourceConfig.actorId,
       actorInput: sourceConfig.actorInput,
@@ -1363,6 +1524,7 @@ async function processSourceLeadsJob(job: OutreachJob) {
       payload: {
         sourcedCount: sourced.length,
         strategy: "custom_actor",
+        actorId: sourceConfig.actorId,
       },
     });
 
@@ -1436,6 +1598,40 @@ async function processSourceLeadsJob(job: OutreachJob) {
       return;
     }
 
+    const actorSelection = await choosePlatformDiscoveryActor({
+      run: {
+        id: run.id,
+        brandId: run.brandId,
+        campaignId: run.campaignId,
+        experimentId: run.experimentId,
+      },
+      candidates: platformActorCandidates,
+      preselectedActorId: selectedActorIdFromPayload,
+    });
+    if (!actorSelection.ok || !actorSelection.actorId) {
+      await failRunWithDiagnostics({
+        run,
+        reason: actorSelection.reason || "No platform discovery actor selected",
+        eventType: "lead_sourcing_failed",
+        payload: {
+          candidates: actorSelection.candidates,
+          stats: actorSelection.stats,
+        },
+      });
+      return;
+    }
+
+    await createOutreachEvent({
+      runId: run.id,
+      eventType: "lead_sourcing_actor_selected",
+      payload: {
+        actorId: actorSelection.actorId,
+        reason: actorSelection.reason,
+        candidates: actorSelection.candidates,
+        stats: actorSelection.stats,
+      },
+    });
+
     await enqueueOutreachJob({
       runId: run.id,
       jobType: "source_leads",
@@ -1447,12 +1643,23 @@ async function processSourceLeadsJob(job: OutreachJob) {
         cursor: 0,
         chunkSize,
         maxLeads,
+        selectedActorId: actorSelection.actorId,
       },
     });
     return;
   }
 
   if (stage === "start_email_discovery") {
+    const selectedActorId = selectedActorIdFromPayload;
+    if (!selectedActorId) {
+      await failRunWithDiagnostics({
+        run,
+        reason: "No selected discovery actor for this run",
+        eventType: "lead_sourcing_failed",
+      });
+      return;
+    }
+
     if (!domains.length) {
       await failRunWithDiagnostics({
         run,
@@ -1479,11 +1686,13 @@ async function processSourceLeadsJob(job: OutreachJob) {
       token: sourcingToken,
       domains: chunk,
       maxRequestsPerCrawl,
+      actorId: selectedActorId,
     });
     await createOutreachEvent({
       runId: run.id,
       eventType: "lead_sourcing_email_discovery_started",
       payload: {
+        actorId: selectedActorId,
         ok: started.ok,
         cursor,
         chunkSize: chunk.length,
@@ -1515,6 +1724,7 @@ async function processSourceLeadsJob(job: OutreachJob) {
         nextCursor: cursor + chunk.length,
         chunkSize,
         maxLeads,
+        selectedActorId,
         emailDiscoveryRunId: started.runId,
         emailDiscoveryDatasetId: started.datasetId,
       },
@@ -1523,6 +1733,7 @@ async function processSourceLeadsJob(job: OutreachJob) {
   }
 
   if (stage === "poll_email_discovery") {
+    const selectedActorId = selectedActorIdFromPayload;
     const runId = String((payload as Record<string, unknown>).emailDiscoveryRunId ?? "").trim();
     const datasetId = String((payload as Record<string, unknown>).emailDiscoveryDatasetId ?? "").trim();
     const nextCursor = Math.max(0, Number((payload as Record<string, unknown>).nextCursor ?? cursor) || 0);
@@ -1532,6 +1743,7 @@ async function processSourceLeadsJob(job: OutreachJob) {
       runId: run.id,
       eventType: "lead_sourcing_email_discovery_polled",
       payload: {
+        actorId: selectedActorId,
         ok: poll.ok,
         status: poll.status,
         error: poll.error,
@@ -1549,6 +1761,7 @@ async function processSourceLeadsJob(job: OutreachJob) {
           emailDiscoveryDatasetId: poll.datasetId || datasetId,
           cursor,
           nextCursor,
+          selectedActorId,
         },
       });
       return;
@@ -1573,6 +1786,7 @@ async function processSourceLeadsJob(job: OutreachJob) {
       runId: run.id,
       eventType: "lead_sourcing_email_discovery_completed",
       payload: {
+        actorId: selectedActorId,
         ok: fetched.ok,
         providerStatus: poll.status,
         providerOk: poll.ok,
@@ -1597,6 +1811,7 @@ async function processSourceLeadsJob(job: OutreachJob) {
       payload: {
         sourcedCount: discovered.length,
         strategy: "platform_search_then_email_discovery",
+        actorId: selectedActorId,
       },
     });
 
@@ -1621,6 +1836,7 @@ async function processSourceLeadsJob(job: OutreachJob) {
           cursor: nextCursor,
           chunkSize,
           maxLeads,
+          selectedActorId,
         },
       });
       return;

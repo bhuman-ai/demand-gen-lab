@@ -254,8 +254,10 @@ function normalizeApifyActorId(actorId: string) {
 }
 
 const PLATFORM_SEARCH_ACTOR_ID = "apify~google-search-scraper";
-const PLATFORM_EMAIL_DISCOVERY_ACTOR_ID =
-  String(process.env.PLATFORM_EMAIL_DISCOVERY_ACTOR_ID ?? "").trim() || "9Sk4JJhEma9vBKqrg";
+const PLATFORM_EMAIL_DISCOVERY_ACTOR_ID = String(process.env.PLATFORM_EMAIL_DISCOVERY_ACTOR_ID ?? "").trim();
+const PLATFORM_EMAIL_DISCOVERY_ACTOR_CANDIDATES = String(
+  process.env.PLATFORM_EMAIL_DISCOVERY_ACTOR_CANDIDATES ?? ""
+).trim();
 const PLATFORM_EMAIL_DISCOVERY_MAX_CHARGE_USD = Math.max(
   0.5,
   Math.min(25, Number(process.env.PLATFORM_EMAIL_DISCOVERY_MAX_CHARGE_USD ?? 0.5) || 0.5)
@@ -541,7 +543,18 @@ export async function startPlatformEmailDiscovery(params: {
   token: string;
   domains: string[];
   maxRequestsPerCrawl?: number;
+  actorId?: string;
 }): Promise<LeadSourcingEmailDiscoveryRun> {
+  const selectedActorId = normalizeApifyActorId(params.actorId ?? PLATFORM_EMAIL_DISCOVERY_ACTOR_ID);
+  if (!selectedActorId) {
+    return {
+      ok: false,
+      runId: "",
+      datasetId: "",
+      error: "PLATFORM_EMAIL_DISCOVERY_ACTOR_ID is not configured",
+    };
+  }
+
   const domains = (params.domains ?? [])
     .map((d) => d.replace(/^www\./, "").trim().toLowerCase())
     .filter(Boolean);
@@ -558,7 +571,7 @@ export async function startPlatformEmailDiscovery(params: {
 
   const maxRequestsPerCrawl = Math.max(10, Math.min(120, Number(params.maxRequestsPerCrawl ?? 40)));
   return apifyStartRun({
-    actorId: PLATFORM_EMAIL_DISCOVERY_ACTOR_ID,
+    actorId: selectedActorId,
     token: params.token,
     maxTotalChargeUsd: PLATFORM_EMAIL_DISCOVERY_MAX_CHARGE_USD,
     actorInput: {
@@ -568,6 +581,28 @@ export async function startPlatformEmailDiscovery(params: {
       maxDepth: 2,
     },
   });
+}
+
+export function getPlatformEmailDiscoveryActorCandidates(): string[] {
+  const candidates: string[] = [];
+  const seen = new Set<string>();
+
+  const pushCandidate = (actorId: string) => {
+    const normalized = normalizeApifyActorId(actorId);
+    if (!normalized || seen.has(normalized)) return;
+    seen.add(normalized);
+    candidates.push(normalized);
+  };
+
+  pushCandidate(PLATFORM_EMAIL_DISCOVERY_ACTOR_ID);
+
+  if (PLATFORM_EMAIL_DISCOVERY_ACTOR_CANDIDATES) {
+    for (const actorId of PLATFORM_EMAIL_DISCOVERY_ACTOR_CANDIDATES.split(/[\n,]/g)) {
+      pushCandidate(actorId);
+    }
+  }
+
+  return candidates;
 }
 
 export async function pollPlatformEmailDiscovery(params: {

@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { sanitizeAiText } from "@/lib/ai-sanitize";
 import { getBrandById } from "@/lib/factory-data";
 import { validateConcreteSuggestion } from "@/lib/experiment-suggestion-quality";
+import { resolveLlmModel } from "@/lib/llm-router";
 import {
   createExperimentSuggestions,
   listExperimentSuggestions,
@@ -201,6 +202,7 @@ async function openAiRoleplayEvaluate(input: {
     `Suggestions: ${JSON.stringify(input.suggestions.map((suggestion, index) => ({ index, ...suggestion })))}`,
   ].join("\n");
 
+  const model = resolveLlmModel("experiment_suggestions_roleplay", { prompt });
   const response = await fetch("https://api.openai.com/v1/responses", {
     method: "POST",
     headers: {
@@ -208,7 +210,7 @@ async function openAiRoleplayEvaluate(input: {
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      model: "gpt-5.2",
+      model,
       input: prompt,
       text: { format: { type: "json_object" } },
       max_output_tokens: 2200,
@@ -288,6 +290,7 @@ async function openAiSuggestions(input: {
     `BrandContext: ${JSON.stringify(input)}`,
   ].join("\n");
 
+  const model = resolveLlmModel("experiment_suggestions_generate", { prompt });
   const response = await fetch("https://api.openai.com/v1/responses", {
     method: "POST",
     headers: {
@@ -295,7 +298,7 @@ async function openAiSuggestions(input: {
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      model: "gpt-5.2",
+      model,
       input: prompt,
       text: { format: { type: "json_object" } },
       max_output_tokens: 1600,

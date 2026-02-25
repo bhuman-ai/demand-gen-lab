@@ -1,6 +1,7 @@
 import { sanitizeAiText } from "@/lib/ai-sanitize";
 import { normalizeConversationGraph } from "@/lib/conversation-flow-data";
 import type { ConversationFlowGraph } from "@/lib/factory-types";
+import { resolveLlmModel, type LlmTask } from "@/lib/llm-router";
 
 type GenerationContext = {
   brand: {
@@ -89,12 +90,17 @@ function extractOutputText(payloadRaw: unknown) {
   );
 }
 
-async function openAiJsonCall(input: { prompt: string; maxOutputTokens: number }): Promise<Record<string, unknown>> {
+async function openAiJsonCall(input: {
+  prompt: string;
+  maxOutputTokens: number;
+  task: LlmTask;
+}): Promise<Record<string, unknown>> {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) {
     throw new ConversationFlowGenerationError("OPENAI_API_KEY is missing.", { status: 503 });
   }
 
+  const model = resolveLlmModel(input.task, { prompt: input.prompt });
   const response = await fetch("https://api.openai.com/v1/responses", {
     method: "POST",
     headers: {
@@ -102,7 +108,7 @@ async function openAiJsonCall(input: { prompt: string; maxOutputTokens: number }
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      model: "gpt-5.2",
+      model,
       input: input.prompt,
       text: { format: { type: "json_object" } },
       max_output_tokens: input.maxOutputTokens,
@@ -257,7 +263,11 @@ async function generateCandidateGraphs(input: { context: GenerationContext; cand
     `Context: ${JSON.stringify(input.context)}`,
   ].join("\n");
 
-  const parsed = await openAiJsonCall({ prompt, maxOutputTokens: 7000 });
+  const parsed = await openAiJsonCall({
+    prompt,
+    maxOutputTokens: 7000,
+    task: "conversation_flow_generation",
+  });
   const candidates = normalizeCandidateGraphs(parsed.candidates);
   if (candidates.length < 3) {
     throw new ConversationFlowGenerationError("Model returned too few valid conversation-map candidates.", {
@@ -301,7 +311,11 @@ async function roleplayEvaluateCandidates(input: {
     )}`,
   ].join("\n");
 
-  const parsed = await openAiJsonCall({ prompt, maxOutputTokens: 2600 });
+  const parsed = await openAiJsonCall({
+    prompt,
+    maxOutputTokens: 2600,
+    task: "conversation_flow_roleplay",
+  });
   const evaluations = normalizeEvaluations(
     parsed.evaluations,
     new Set(input.candidates.map((candidate) => candidate.index))

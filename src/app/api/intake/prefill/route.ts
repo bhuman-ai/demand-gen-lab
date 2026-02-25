@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { resolveLlmModel } from "@/lib/llm-router";
 
 function extractMeta(html: string, name: string) {
   const regex = new RegExp(
@@ -139,6 +140,7 @@ export async function POST(request: Request) {
       `PageExcerpt: ${pageExcerpt}`,
     ].join("\n");
 
+    const model = resolveLlmModel("intake_prefill", { prompt });
     const aiResponse = await fetch("https://api.openai.com/v1/responses", {
       method: "POST",
       headers: {
@@ -146,7 +148,7 @@ export async function POST(request: Request) {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        model: "gpt-5.2",
+        model,
         input: prompt,
         text: { format: { type: "json_object" } },
         max_output_tokens: 1200,

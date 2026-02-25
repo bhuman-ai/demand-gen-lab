@@ -1,6 +1,7 @@
 import { createHash } from "crypto";
 import { sanitizeAiText } from "@/lib/ai-sanitize";
 import type { ConversationFlowNode, ConversationPromptPolicy } from "@/lib/factory-types";
+import { resolveLlmModel } from "@/lib/llm-router";
 
 export type ConversationPromptIntent =
   | "question"
@@ -398,7 +399,10 @@ export async function generateConversationPromptMessage(input: {
   context: ConversationPromptRenderContext;
   model?: string;
 }): Promise<ConversationPromptRenderResult> {
-  const model = String(input.model ?? process.env.CONVERSATION_PROMPT_MODEL ?? "gpt-5.2").trim() || "gpt-5.2";
+  const model = resolveLlmModel("conversation_prompt_render", {
+    overrideModel: input.model,
+    legacyModelEnv: process.env.CONVERSATION_PROMPT_MODEL,
+  });
   const trace = defaultTrace(input.node, model);
 
   if (input.node.kind !== "message") {

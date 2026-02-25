@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getBrandById, getCampaignById } from "@/lib/factory-data";
 import { sanitizeAiText } from "@/lib/ai-sanitize";
+import { resolveLlmModel } from "@/lib/llm-router";
 
 type ExperimentSuggestion = {
   hypothesisId: string;
@@ -142,6 +143,7 @@ export async function POST(
     JSON.stringify(hypotheses, null, 2),
   ].join("\n");
 
+  const model = resolveLlmModel("experiments_suggest", { prompt });
   const response = await fetch("https://api.openai.com/v1/responses", {
     method: "POST",
     headers: {
@@ -149,7 +151,7 @@ export async function POST(
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      model: "gpt-5.2",
+      model,
       input: prompt,
       text: { format: { type: "json_object" } },
       max_output_tokens: 1800,

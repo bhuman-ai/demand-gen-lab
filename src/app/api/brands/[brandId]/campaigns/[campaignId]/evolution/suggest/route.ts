@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getBrandById, getCampaignById } from "@/lib/factory-data";
 import { listCampaignRuns } from "@/lib/outreach-data";
 import { sanitizeAiText } from "@/lib/ai-sanitize";
+import { resolveLlmModel } from "@/lib/llm-router";
 
 type EvolutionSuggestion = {
   title: string;
@@ -122,6 +123,7 @@ export async function POST(
     `RunMetrics: ${JSON.stringify(runSummaries)}`,
   ].join("\n");
 
+  const model = resolveLlmModel("evolution_suggest", { prompt });
   const response = await fetch("https://api.openai.com/v1/responses", {
     method: "POST",
     headers: {
@@ -129,7 +131,7 @@ export async function POST(
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      model: "gpt-5.2",
+      model,
       input: prompt,
       text: { format: { type: "json_object" } },
       max_output_tokens: 1600,
@@ -173,4 +175,3 @@ export async function POST(
     mode: suggestions.length ? "openai" : "fallback",
   });
 }
-

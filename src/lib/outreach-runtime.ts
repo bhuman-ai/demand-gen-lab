@@ -65,6 +65,7 @@ import {
   type ApifyStoreActor,
   type ApifyLead,
 } from "@/lib/outreach-providers";
+import { resolveLlmModel } from "@/lib/llm-router";
 
 const DEFAULT_TIMEZONE = "America/Los_Angeles";
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -452,6 +453,7 @@ async function planApifyLeadChain(input: {
     `actorPool: ${JSON.stringify(actorRows)}`,
   ].join("\n");
 
+  const model = resolveLlmModel("lead_chain_planning", { prompt });
   const response = await fetch("https://api.openai.com/v1/responses", {
     method: "POST",
     headers: {
@@ -459,7 +461,7 @@ async function planApifyLeadChain(input: {
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      model: "gpt-5.2",
+      model,
       input: prompt,
       text: { format: { type: "json_object" } },
       max_output_tokens: 2600,

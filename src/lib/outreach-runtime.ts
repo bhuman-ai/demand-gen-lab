@@ -519,6 +519,32 @@ async function planApifyLeadChain(input: {
     });
   }
 
+  const stagePools: Record<LeadChainStepStage, string[]> = {
+    prospect_discovery: input.actorPool
+      .filter((actor) => stageFromActor(actor) === "prospect_discovery")
+      .sort((a, b) => actorScore(b) - actorScore(a))
+      .map((actor) => actor.actorId),
+    website_enrichment: input.actorPool
+      .filter((actor) => stageFromActor(actor) === "website_enrichment")
+      .sort((a, b) => actorScore(b) - actorScore(a))
+      .map((actor) => actor.actorId),
+    email_discovery: input.actorPool
+      .filter((actor) => stageFromActor(actor) === "email_discovery")
+      .sort((a, b) => actorScore(b) - actorScore(a))
+      .map((actor) => actor.actorId),
+  };
+
+  for (const step of steps) {
+    const filled = uniqueTrimmed(
+      [
+        ...step.backupActorIds,
+        ...stagePools[step.stage].filter((candidate) => candidate.toLowerCase() !== step.actorId.toLowerCase()),
+      ],
+      APIFY_CHAIN_MAX_STEP_CANDIDATES - 1
+    );
+    step.backupActorIds = filled;
+  }
+
   if (steps.length < 2 || steps.length > APIFY_CHAIN_MAX_STEPS) {
     throw new Error(`Apify chain planner returned ${steps.length} steps; expected 2-3`);
   }

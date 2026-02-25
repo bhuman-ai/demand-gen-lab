@@ -6,6 +6,7 @@ import type {
   CampaignScalePolicy,
   ConversationMap,
   ConversationFlowGraph,
+  ConversationPreviewLead,
   EvolutionSnapshot,
   Experiment,
   ExperimentRecord,
@@ -424,6 +425,26 @@ export async function fetchConversationMapApi(
   );
   const data = await readJson(response);
   return (data.map ?? null) as ConversationMap | null;
+}
+
+export async function fetchConversationPreviewLeadsApi(
+  brandId: string,
+  campaignId: string,
+  experimentId: string
+) {
+  const response = await fetch(
+    `/api/brands/${brandId}/campaigns/${campaignId}/experiments/${experimentId}/conversation-map/preview-leads`,
+    { cache: "no-store" }
+  );
+  const data = await readJson(response);
+  return {
+    leads: (Array.isArray(data.leads) ? data.leads : []) as Array<
+      ConversationPreviewLead & { runId?: string; runCreatedAt?: string; sourceUrl?: string }
+    >,
+    runsChecked: Math.max(0, Number(data.runsChecked ?? 0) || 0),
+    runtimeRefFound: Boolean(data.runtimeRefFound),
+    sourceExperimentId: String(data.sourceExperimentId ?? ""),
+  };
 }
 
 export async function saveConversationMapDraftApi(input: {

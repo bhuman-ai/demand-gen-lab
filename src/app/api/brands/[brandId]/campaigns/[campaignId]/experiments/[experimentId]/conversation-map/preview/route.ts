@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getBrandById, getCampaignById } from "@/lib/factory-data";
 import { getExperimentRecordByRuntimeRef } from "@/lib/experiment-data";
 import { getConversationMapByExperiment } from "@/lib/conversation-flow-data";
+import { listConversationPreviewLeads } from "@/lib/conversation-preview-leads";
 import {
   conversationPromptModeEnabled,
   generateConversationPromptMessage,
@@ -78,23 +79,26 @@ export async function POST(
   const sourceExperiment = await getExperimentRecordByRuntimeRef(brandId, campaignId, experimentId);
   const parsed = parseOfferAndCta(sourceExperiment?.offer ?? "");
   const hypothesis = campaign.hypotheses.find((item) => item.id === variant.hypothesisId) ?? null;
+  const sourcedPreviewLeads = await listConversationPreviewLeads({
+    brandId,
+    campaignId,
+    experimentId,
+    limit: 1,
+  });
 
   const sampleLead = asRecord(body.sampleLead);
   const sampleReply = asRecord(body.sampleReply);
-  const graphLead =
-    graph.previewLeads.find((lead) => lead.id === graph.previewLeadId) ??
-    graph.previewLeads[0] ??
-    null;
-  const sampleLeadEmail = String(sampleLead.email ?? graphLead?.email ?? "").trim();
-  const sampleLeadName = String(sampleLead.name ?? graphLead?.name ?? "").trim();
-  const sampleLeadCompany = String(sampleLead.company ?? graphLead?.company ?? "").trim();
-  const sampleLeadTitle = String(sampleLead.title ?? graphLead?.title ?? "").trim();
-  const sampleLeadDomain = String(sampleLead.domain ?? graphLead?.domain ?? "").trim();
-  if (!sampleLeadEmail || !sampleLeadName || !sampleLeadCompany) {
+  const sourcedLead = sourcedPreviewLeads.leads[0] ?? null;
+  const sampleLeadEmail = String(sampleLead.email ?? sourcedLead?.email ?? "").trim();
+  const sampleLeadName = String(sampleLead.name ?? sourcedLead?.name ?? "").trim();
+  const sampleLeadCompany = String(sampleLead.company ?? sourcedLead?.company ?? "").trim();
+  const sampleLeadTitle = String(sampleLead.title ?? sourcedLead?.title ?? "").trim();
+  const sampleLeadDomain = String(sampleLead.domain ?? sourcedLead?.domain ?? "").trim();
+  if (!sampleLeadEmail) {
     return NextResponse.json(
       {
-        error: "Preview lead is incomplete",
-        hint: "Add at least one demo lead with name, email, and company before generating preview.",
+        error: "No sourced leads available for preview",
+        hint: "Launch lead sourcing for this experiment, then retry preview once real leads are ingested.",
       },
       { status: 422 }
     );
@@ -134,7 +138,7 @@ export async function POST(
         notes: variant.notes ?? "",
       },
       lead: {
-        id: String(sampleLead.id ?? graphLead?.id ?? "sample_lead"),
+        id: String(sampleLead.id ?? sourcedLead?.id ?? "sample_lead"),
         email: sampleLeadEmail,
         name: sampleLeadName,
         company: sampleLeadCompany,

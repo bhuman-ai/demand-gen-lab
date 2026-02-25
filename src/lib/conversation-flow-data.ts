@@ -172,13 +172,6 @@ function domainFromEmail(email: string) {
   return domain.trim().toLowerCase();
 }
 
-function slugFromText(value: string) {
-  return value
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "")
-    .trim();
-}
-
 function normalizeDemoLead(value: unknown, index: number): ConversationDemoLead | null {
   const row = asRecord(value);
   const emailRaw = String(row.email ?? "").trim().toLowerCase();
@@ -205,47 +198,13 @@ function normalizeDemoLead(value: unknown, index: number): ConversationDemoLead 
   };
 }
 
-function seedDemoLeads(context: ConversationSeedContext = {}): ConversationDemoLead[] {
-  const audience = oneLine(context.audience ?? "");
-  const campaignGoal = oneLine(context.campaignGoal ?? "");
-  const audienceHint = audience || campaignGoal || "B2B growth";
-
-  const roleHints = [
-    audience.includes("revenue") ? "VP Revenue" : "Head of Growth",
-    audience.includes("marketing") ? "Demand Gen Manager" : "Director of Marketing",
-    audience.includes("sales") ? "Sales Ops Lead" : "Lifecycle Marketing Lead",
-  ];
-
-  const companySeeds = [
-    "Northlane",
-    "Brightpath",
-    "SummitFlow",
-  ];
-
-  return roleHints.map((title, index) => {
-    const firstName = ["Maya", "Jordan", "Alex"][index] ?? `Lead${index + 1}`;
-    const lastName = ["Patel", "Lee", "Morgan"][index] ?? "User";
-    const company = companySeeds[index] ?? `Company ${index + 1}`;
-    const domain = `${slugFromText(company) || `company${index + 1}`}.com`;
-    return {
-      id: createId("demo"),
-      name: `${firstName} ${lastName}`,
-      email: `${firstName.toLowerCase()}.${lastName.toLowerCase()}@${domain}`,
-      company: `${company} (${audienceHint.slice(0, 48)})`,
-      title,
-      domain,
-      source: "seeded",
-    };
-  });
-}
-
-function normalizePreviewLeads(graphRow: Record<string, unknown>, context: ConversationSeedContext = {}) {
+function normalizePreviewLeads(graphRow: Record<string, unknown>) {
   const normalized = asArray(graphRow.previewLeads ?? graphRow.preview_leads)
     .map((row, index) => normalizeDemoLead(row, index))
     .filter((item): item is ConversationDemoLead => Boolean(item))
     .slice(0, 12);
 
-  const previewLeads = normalized.length ? normalized : seedDemoLeads(context);
+  const previewLeads = normalized;
   const previewLeadIdRaw = String(graphRow.previewLeadId ?? graphRow.preview_lead_id ?? "").trim();
   const previewLeadId = previewLeads.some((lead) => lead.id === previewLeadIdRaw)
     ? previewLeadIdRaw
@@ -407,7 +366,6 @@ export function defaultConversationGraph(context: ConversationSeedContext = {}):
   });
 
   const end = defaultTerminalNode({ x: 1120, y: 220 });
-  const previewLeads = seedDemoLeads(context);
 
   return {
     version: 1,
@@ -506,8 +464,8 @@ export function defaultConversationGraph(context: ConversationSeedContext = {}):
         priority: 1,
       },
     ],
-    previewLeads,
-    previewLeadId: previewLeads[0]?.id ?? "",
+    previewLeads: [],
+    previewLeadId: "",
   };
 }
 
@@ -670,18 +628,6 @@ function graphNeedsPromptUpgrade(graphRaw: unknown): boolean {
   });
 }
 
-function graphNeedsPreviewLeadUpgrade(graphRaw: unknown): boolean {
-  const graph = asRecord(graphRaw);
-  const leads = asArray(graph.previewLeads ?? graph.preview_leads);
-  if (!leads.length) return true;
-  const validLeadCount = leads
-    .map((row, index) => normalizeDemoLead(row, index))
-    .filter((item) => Boolean(item)).length;
-  if (!validLeadCount) return true;
-  const previewLeadId = String(graph.previewLeadId ?? graph.preview_lead_id ?? "").trim();
-  return !previewLeadId;
-}
-
 function mapSessionRow(value: unknown): ConversationSession {
   const row = asRecord(value);
   return {
@@ -799,9 +745,7 @@ export async function getConversationMapByExperiment(
       let mapped = mapMapRow(data);
       const needsDraftUpgrade = graphNeedsPromptUpgrade(data.draft_graph ?? data.draftGraph);
       const needsPublishedUpgrade = graphNeedsPromptUpgrade(data.published_graph ?? data.publishedGraph);
-      const needsDraftLeadsUpgrade = graphNeedsPreviewLeadUpgrade(data.draft_graph ?? data.draftGraph);
-      const needsPublishedLeadsUpgrade = graphNeedsPreviewLeadUpgrade(data.published_graph ?? data.publishedGraph);
-      if (needsDraftUpgrade || needsPublishedUpgrade || needsDraftLeadsUpgrade || needsPublishedLeadsUpgrade) {
+      if (needsDraftUpgrade || needsPublishedUpgrade) {
         const { data: upgraded, error: upgradeError } = await supabase
           .from(TABLE_MAP)
           .update({

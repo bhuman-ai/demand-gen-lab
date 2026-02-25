@@ -547,7 +547,7 @@ export type ConversationFlowEdge = {
   priority: number;
 };
 
-export type ConversationDemoLead = {
+export type ConversationPreviewLead = {
   id: string;
   name: string;
   email: string;
@@ -557,13 +557,16 @@ export type ConversationDemoLead = {
   source: "seeded" | "manual" | "sourced";
 };
 
+// Legacy alias kept for compatibility with older code paths.
+export type ConversationDemoLead = ConversationPreviewLead;
+
 export type ConversationFlowGraph = {
   version: 1;
   maxDepth: number;
   startNodeId: string;
   nodes: ConversationFlowNode[];
   edges: ConversationFlowEdge[];
-  previewLeads: ConversationDemoLead[];
+  previewLeads: ConversationPreviewLead[];
   previewLeadId: string;
 };
 

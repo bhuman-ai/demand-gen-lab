@@ -30,6 +30,7 @@ import {
   fetchBrand,
   fetchCampaign,
   fetchConversationMapApi,
+  fetchConversationPreviewLeadsApi,
   publishConversationMapApi,
   previewConversationNodeApi,
   saveConversationMapDraftApi,
@@ -37,11 +38,11 @@ import {
 } from "@/lib/client-api";
 import { trackEvent } from "@/lib/telemetry-client";
 import type {
-  ConversationDemoLead,
   ConversationFlowEdge,
   ConversationFlowGraph,
   ConversationFlowNode,
   ConversationMap,
+  ConversationPreviewLead,
 } from "@/lib/factory-types";
 
 const NODE_WIDTH = 340;
@@ -102,7 +103,6 @@ type ConnectState = {
 
 const makeNodeId = () => `node_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 const makeEdgeId = () => `edge_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
-const makeDemoLeadId = () => `demo_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 
 function clamp(value: number, min: number, max: number) {
   return Math.max(min, Math.min(max, value));
@@ -139,38 +139,6 @@ function defaultNode(kind: "message" | "terminal" = "message", x = 80, y = 160):
     x,
     y,
   };
-}
-
-function defaultPreviewLeads(): ConversationDemoLead[] {
-  return [
-    {
-      id: makeDemoLeadId(),
-      name: "Jordan Lee",
-      email: "jordan.lee@northlane.com",
-      company: "Northlane",
-      title: "VP Revenue",
-      domain: "northlane.com",
-      source: "seeded",
-    },
-    {
-      id: makeDemoLeadId(),
-      name: "Maya Patel",
-      email: "maya.patel@brightpath.com",
-      company: "Brightpath",
-      title: "Demand Gen Manager",
-      domain: "brightpath.com",
-      source: "seeded",
-    },
-    {
-      id: makeDemoLeadId(),
-      name: "Alex Morgan",
-      email: "alex.morgan@summitflow.com",
-      company: "SummitFlow",
-      title: "Head of Growth",
-      domain: "summitflow.com",
-      source: "seeded",
-    },
-  ];
 }
 
 function nodesNeedSpacing(nodes: ConversationFlowNode[]) {
@@ -248,17 +216,11 @@ function autoLayout(graph: ConversationFlowGraph): ConversationFlowGraph {
   };
 }
 
-function withPreviewLeadState(graph: ConversationFlowGraph): ConversationFlowGraph {
-  const previewLeads = Array.isArray(graph.previewLeads) && graph.previewLeads.length
-    ? graph.previewLeads
-    : defaultPreviewLeads();
-  const previewLeadId = previewLeads.some((lead) => lead.id === graph.previewLeadId)
-    ? graph.previewLeadId
-    : previewLeads[0]?.id ?? "";
+function withoutPreviewLeadState(graph: ConversationFlowGraph): ConversationFlowGraph {
   return {
     ...graph,
-    previewLeads,
-    previewLeadId,
+    previewLeads: [],
+    previewLeadId: "",
   };
 }
 
@@ -459,6 +421,13 @@ export default function FlowEditorClient({
   const [error, setError] = useState("");
   const [statusMessage, setStatusMessage] = useState("");
   const [hasFittedInitialView, setHasFittedInitialView] = useState(false);
+  const [previewLeads, setPreviewLeads] = useState<
+    Array<ConversationPreviewLead & { runId?: string; runCreatedAt?: string; sourceUrl?: string }>
+  >([]);
+  const [selectedPreviewLeadId, setSelectedPreviewLeadId] = useState("");
+  const [previewLeadsLoading, setPreviewLeadsLoading] = useState(false);
+  const [previewLeadsError, setPreviewLeadsError] = useState("");
+  const [previewLeadRunsChecked, setPreviewLeadRunsChecked] = useState(0);
 
   const load = async () => {
     setError("");
@@ -468,29 +437,71 @@ export default function FlowEditorClient({
       fetchConversationMapApi(brandId, campaignId, variantId),
     ]);
 
+    let previewLeadData: Awaited<ReturnType<typeof fetchConversationPreviewLeadsApi>> = {
+      leads: [],
+      runsChecked: 0,
+      runtimeRefFound: true,
+      sourceExperimentId: "",
+    };
+    try {
+      previewLeadData = await fetchConversationPreviewLeadsApi(brandId, campaignId, variantId);
+      setPreviewLeadsError("");
+    } catch (err) {
+      setPreviewLeadsError(err instanceof Error ? err.message : "Failed to load sourced leads");
+    }
+
     const variant = campaign.experiments.find((item) => item.id === variantId);
     if (!variant) {
       throw new Error("Variant not found. Save Build first, then open Conversation Map.");
     }
 
-    const nextGraph = withPreviewLeadState(withLayout(mapRow?.draftGraph ?? {
+    const nextGraph = withoutPreviewLeadState(withLayout(mapRow?.draftGraph ?? {
       version: 1,
       maxDepth: 5,
       startNodeId: "",
       nodes: [],
       edges: [],
-      previewLeads: defaultPreviewLeads(),
+      previewLeads: [],
       previewLeadId: "",
     }));
 
     setBrandName(brand.name || "Brand");
     setCampaignName(campaign.name || "Campaign");
     setVariantName(variant.name || "Variant");
+    setPreviewLeads(previewLeadData.leads);
+    setPreviewLeadRunsChecked(previewLeadData.runsChecked);
+    setSelectedPreviewLeadId((prev) =>
+      previewLeadData.leads.some((lead) => lead.id === prev)
+        ? prev
+        : previewLeadData.leads[0]?.id ?? ""
+    );
     setMap(mapRow);
     setGraph(nextGraph);
     setHasFittedInitialView(false);
     setSelectedNodeId(nextGraph.startNodeId || nextGraph.nodes[0]?.id || "");
     setSelectedEdgeId("");
+  };
+
+  const refreshPreviewLeads = async () => {
+    setPreviewLeadsLoading(true);
+    setPreviewLeadsError("");
+    try {
+      const next = await fetchConversationPreviewLeadsApi(brandId, campaignId, variantId);
+      setPreviewLeads(next.leads);
+      setPreviewLeadRunsChecked(next.runsChecked);
+      setSelectedPreviewLeadId((prev) =>
+        next.leads.some((lead) => lead.id === prev) ? prev : next.leads[0]?.id ?? ""
+      );
+      setStatusMessage(
+        next.leads.length
+          ? `Loaded ${next.leads.length} sourced lead${next.leads.length === 1 ? "" : "s"} for preview.`
+          : "No sourced leads found yet for this experiment."
+      );
+    } catch (err) {
+      setPreviewLeadsError(err instanceof Error ? err.message : "Failed to load sourced leads");
+    } finally {
+      setPreviewLeadsLoading(false);
+    }
   };
 
   useEffect(() => {
@@ -522,13 +533,9 @@ export default function FlowEditorClient({
   const selectedNode = useMemo(() => nodeById(graph, selectedNodeId), [graph, selectedNodeId]);
   const selectedEdge = useMemo(() => edgeById(graph, selectedEdgeId), [graph, selectedEdgeId]);
   const selectedPreviewLead = useMemo(() => {
-    if (!graph?.previewLeads?.length) return null;
-    return (
-      graph.previewLeads.find((lead) => lead.id === graph.previewLeadId) ??
-      graph.previewLeads[0] ??
-      null
-    );
-  }, [graph]);
+    if (!previewLeads.length) return null;
+    return previewLeads.find((lead) => lead.id === selectedPreviewLeadId) ?? previewLeads[0] ?? null;
+  }, [previewLeads, selectedPreviewLeadId]);
 
   useEffect(() => {
     if (!selectedNode || !previewResult || previewResult.nodeId === selectedNode.id) return;
@@ -542,70 +549,6 @@ export default function FlowEditorClient({
     for (const node of graph.nodes) next.set(node.id, node);
     return next;
   }, [graph]);
-
-  const setPreviewLeadPatch = (
-    leadId: string,
-    patch: Partial<Pick<ConversationDemoLead, "name" | "email" | "company" | "title" | "domain">>
-  ) => {
-    setGraph((prev) => {
-      if (!prev) return prev;
-      const nextLeads = prev.previewLeads.map((lead) => {
-        if (lead.id !== leadId) return lead;
-        const email = patch.email !== undefined ? patch.email.trim().toLowerCase() : lead.email;
-        const domainFromEmail = email.includes("@") ? email.split("@")[1] ?? "" : "";
-        const domain =
-          patch.domain !== undefined
-            ? patch.domain.trim().toLowerCase()
-            : domainFromEmail || lead.domain;
-        return {
-          ...lead,
-          ...patch,
-          email,
-          domain: domain || lead.domain,
-        };
-      });
-      return {
-        ...prev,
-        previewLeads: nextLeads,
-      };
-    });
-  };
-
-  const addPreviewLead = () => {
-    const lead: ConversationDemoLead = {
-      id: makeDemoLeadId(),
-      name: "New Lead",
-      email: "new.lead@example.com",
-      company: "New Company",
-      title: "Decision Maker",
-      domain: "example.com",
-      source: "manual",
-    };
-    setGraph((prev) => {
-      if (!prev) return prev;
-      return {
-        ...prev,
-        previewLeads: [...prev.previewLeads, lead].slice(0, 20),
-        previewLeadId: lead.id,
-      };
-    });
-    setStatusMessage("Demo lead added. Save Draft to persist.");
-  };
-
-  const removePreviewLead = (leadId: string) => {
-    setGraph((prev) => {
-      if (!prev) return prev;
-      const nextLeads = prev.previewLeads.filter((lead) => lead.id !== leadId);
-      if (!nextLeads.length) return prev;
-      const nextSelected = prev.previewLeadId === leadId ? nextLeads[0].id : prev.previewLeadId;
-      return {
-        ...prev,
-        previewLeads: nextLeads,
-        previewLeadId: nextSelected,
-      };
-    });
-    setStatusMessage("Demo lead removed. Save Draft to persist.");
-  };
 
   const saveDraft = async () => {
     if (!graph) return;
@@ -621,7 +564,7 @@ export default function FlowEditorClient({
         draftGraph: graph,
       });
       setMap(next);
-      setGraph(withPreviewLeadState(withLayout(next.draftGraph)));
+      setGraph(withoutPreviewLeadState(withLayout(next.draftGraph)));
       setStatusMessage("Draft saved.");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to save draft");
@@ -646,7 +589,7 @@ export default function FlowEditorClient({
       }
       const next = await publishConversationMapApi(brandId, campaignId, variantId);
       setMap(next);
-      setGraph(withPreviewLeadState(withLayout(next.draftGraph)));
+      setGraph(withoutPreviewLeadState(withLayout(next.draftGraph)));
       setStatusMessage(`Published revision ${next.publishedRevision}.`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to publish map");
@@ -661,7 +604,7 @@ export default function FlowEditorClient({
     setStatusMessage("");
     try {
       const suggested = await suggestConversationMapApi(brandId, campaignId, variantId);
-      const next = withPreviewLeadState(withLayout(suggested));
+      const next = withoutPreviewLeadState(withLayout(suggested));
       setGraph(next);
       setHasFittedInitialView(false);
       setSelectedNodeId(next.startNodeId || next.nodes[0]?.id || "");
@@ -678,7 +621,7 @@ export default function FlowEditorClient({
     if (!selectedNode || selectedNode.kind !== "message") return;
     const lead = selectedPreviewLead;
     if (!lead) {
-      setPreviewError("Add at least one demo lead to generate a preview.");
+      setPreviewError("No sourced leads available. Launch lead sourcing for this experiment first.");
       return;
     }
     setPreviewingNodeId(selectedNode.id);
@@ -1086,26 +1029,39 @@ export default function FlowEditorClient({
 
       <Card>
         <CardHeader className="pb-3">
-          <CardTitle className="text-base">Data-First Preview Leads</CardTitle>
+          <CardTitle className="text-base">Sourced Preview Leads</CardTitle>
           <CardDescription>
-            Messaging preview uses a selected demo lead row. Add a few realistic leads first, then generate prompt previews.
+            Preview generation uses real leads ingested by this experiment. No demo data is used.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
           <div className="flex flex-wrap items-center gap-2">
-            <Button type="button" size="sm" variant="outline" onClick={addPreviewLead}>
-              <Plus className="h-4 w-4" />
-              Add Demo Lead
+            <Button type="button" size="sm" variant="outline" onClick={() => void refreshPreviewLeads()} disabled={previewLeadsLoading}>
+              <RefreshCw className={`h-4 w-4 ${previewLeadsLoading ? "animate-spin" : ""}`} />
+              {previewLeadsLoading ? "Refreshing..." : "Refresh Sourced Leads"}
             </Button>
-            <Badge variant="muted">{graph.previewLeads.length} lead{graph.previewLeads.length === 1 ? "" : "s"}</Badge>
+            <Badge variant="muted">{previewLeads.length} lead{previewLeads.length === 1 ? "" : "s"}</Badge>
+            <Badge variant="muted">Runs checked: {previewLeadRunsChecked}</Badge>
             {selectedPreviewLead ? (
-              <Badge variant="accent">Using: {selectedPreviewLead.name}</Badge>
+              <Badge variant="accent">Using: {selectedPreviewLead.name || selectedPreviewLead.email}</Badge>
             ) : null}
           </div>
 
+          {previewLeadsError ? (
+            <div className="rounded-lg border border-[color:var(--danger-border)] bg-[color:var(--danger-soft)] px-3 py-2 text-sm text-[color:var(--danger)]">
+              {previewLeadsError}
+            </div>
+          ) : null}
+
+          {!previewLeads.length ? (
+            <div className="rounded-lg border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-2 text-sm text-[color:var(--muted-foreground)]">
+              No sourced leads yet. Launch this experiment so lead sourcing ingests real rows, then click refresh.
+            </div>
+          ) : null}
+
           <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
-            {graph.previewLeads.map((lead) => {
-              const selected = lead.id === graph.previewLeadId;
+            {previewLeads.map((lead) => {
+              const selected = lead.id === selectedPreviewLeadId;
               return (
                 <div
                   key={lead.id}
@@ -1119,33 +1075,15 @@ export default function FlowEditorClient({
                     <button
                       type="button"
                       className="text-left text-sm font-semibold"
-                      onClick={() =>
-                        setGraph((prev) =>
-                          prev
-                            ? {
-                                ...prev,
-                                previewLeadId: lead.id,
-                              }
-                            : prev
-                        )
-                      }
+                      onClick={() => setSelectedPreviewLeadId(lead.id)}
                     >
-                      {lead.name}
+                      {lead.name || lead.email}
                     </button>
-                    {graph.previewLeads.length > 1 ? (
-                      <button
-                        type="button"
-                        className="text-[color:var(--muted-foreground)] transition hover:text-[color:var(--danger)]"
-                        onClick={() => removePreviewLead(lead.id)}
-                        aria-label={`Remove ${lead.name}`}
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </button>
-                    ) : null}
+                    <Badge variant="muted">{lead.source}</Badge>
                   </div>
                   <div className="text-xs text-[color:var(--muted-foreground)]">{lead.email}</div>
                   <div className="text-xs text-[color:var(--muted-foreground)]">
-                    {lead.title} at {lead.company}
+                    {lead.title || "Unknown title"} at {lead.company || lead.domain}
                   </div>
                 </div>
               );
@@ -1388,38 +1326,33 @@ export default function FlowEditorClient({
                 </div>
                 <div className="grid gap-2">
                   <Label>Name</Label>
-                  <Input
-                    value={selectedPreviewLead.name}
-                    onChange={(event) => setPreviewLeadPatch(selectedPreviewLead.id, { name: event.target.value })}
-                  />
+                  <div className="rounded-md border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-2 text-sm">
+                    {selectedPreviewLead.name || "(missing)"}
+                  </div>
                 </div>
                 <div className="grid gap-2">
                   <Label>Email</Label>
-                  <Input
-                    value={selectedPreviewLead.email}
-                    onChange={(event) => setPreviewLeadPatch(selectedPreviewLead.id, { email: event.target.value })}
-                  />
+                  <div className="rounded-md border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-2 text-sm">
+                    {selectedPreviewLead.email}
+                  </div>
                 </div>
                 <div className="grid gap-2">
                   <Label>Company</Label>
-                  <Input
-                    value={selectedPreviewLead.company}
-                    onChange={(event) => setPreviewLeadPatch(selectedPreviewLead.id, { company: event.target.value })}
-                  />
+                  <div className="rounded-md border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-2 text-sm">
+                    {selectedPreviewLead.company || "(missing)"}
+                  </div>
                 </div>
                 <div className="grid gap-2">
                   <Label>Title</Label>
-                  <Input
-                    value={selectedPreviewLead.title}
-                    onChange={(event) => setPreviewLeadPatch(selectedPreviewLead.id, { title: event.target.value })}
-                  />
+                  <div className="rounded-md border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-2 text-sm">
+                    {selectedPreviewLead.title || "(missing)"}
+                  </div>
                 </div>
                 <div className="grid gap-2">
                   <Label>Domain</Label>
-                  <Input
-                    value={selectedPreviewLead.domain}
-                    onChange={(event) => setPreviewLeadPatch(selectedPreviewLead.id, { domain: event.target.value })}
-                  />
+                  <div className="rounded-md border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-2 text-sm">
+                    {selectedPreviewLead.domain || "(missing)"}
+                  </div>
                 </div>
               </div>
             ) : null}

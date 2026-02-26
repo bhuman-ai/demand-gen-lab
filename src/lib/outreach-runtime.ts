@@ -61,6 +61,7 @@ import {
   updateOutreachRun,
   updateReplyDraft,
   updateReplyThread,
+  updateSourcingChainDecision,
   updateRunLead,
   updateRunMessage,
   upsertSourcingActorMemory,
@@ -3051,64 +3052,23 @@ async function processSourceLeadsJob(job: OutreachJob) {
     return;
   }
 
-  let selectedPlanMeta: { selectedPlanId: string; rationale: string };
-  try {
-    selectedPlanMeta = await selectBestProbedChain({
-      targetAudience,
-      offer: offerContext,
-      candidates: probedCandidates,
-    });
-  } catch (error) {
-    await setTrace({
-      phase: "failed",
-      failureStep: "probe_chain",
-      lastActorInputError: error instanceof Error ? error.message : "chain_selection_failed",
-      budgetUsedUsd,
-    });
-    await failRunWithDiagnostics({
-      run,
-      reason: `Chain selection failed: ${error instanceof Error ? error.message : "Unknown error"}`,
-      eventType: "lead_sourcing_failed",
-      payload: {
-        candidateCount: probedCandidates.length,
-        budgetUsedUsd,
-      },
-    });
-    return;
-  }
-
-  const selectedProbed = probedCandidates.find((candidate) => candidate.plan.id === selectedPlanMeta.selectedPlanId);
-  if (!selectedProbed) {
-    await setTrace({
-      phase: "failed",
-      failureStep: "probe_chain",
-      lastActorInputError: "selected_plan_missing",
-      budgetUsedUsd,
-    });
-    await failRunWithDiagnostics({
-      run,
-      reason: "Selected sourcing chain is not available after probing",
-      eventType: "lead_sourcing_failed",
-    });
-    return;
-  }
-
   const decision = await createSourcingChainDecision({
     brandId: run.brandId,
     experimentOwnerId: run.ownerId,
     runtimeCampaignId: run.campaignId,
     runtimeExperimentId: run.experimentId,
     runId: run.id,
-    strategy: selectedProbed.plan.strategy,
-    rationale: selectedPlanMeta.rationale || selectedProbed.plan.rationale,
+    strategy: "pending_selection",
+    rationale: "Probe completed. Awaiting chain selection.",
     budgetUsedUsd,
     qualityPolicy,
-    selectedChain: normalizeSourcingChainSteps(selectedProbed.plan.steps),
+    selectedChain: [],
     probeSummary: {
       candidateCount: chainCandidates.length,
       probedCount: probedCandidates.length,
       budgetCapUsd: APIFY_PROBE_BUDGET_USD,
-      selectedPlanId: selectedProbed.plan.id,
+      selectedPlanId: "",
+      selectionStatus: "pending",
     },
   });
 
@@ -3139,6 +3099,87 @@ async function processSourceLeadsJob(job: OutreachJob) {
   if (flattenedProbeRows.length) {
     await createSourcingProbeResults(flattenedProbeRows);
   }
+
+  let selectedPlanMeta: { selectedPlanId: string; rationale: string };
+  try {
+    selectedPlanMeta = await selectBestProbedChain({
+      targetAudience,
+      offer: offerContext,
+      candidates: probedCandidates,
+    });
+  } catch (error) {
+    await updateSourcingChainDecision(decision.id, {
+      rationale: error instanceof Error ? error.message : "chain_selection_failed",
+      probeSummary: {
+        candidateCount: chainCandidates.length,
+        probedCount: probedCandidates.length,
+        budgetCapUsd: APIFY_PROBE_BUDGET_USD,
+        selectedPlanId: "",
+        selectionStatus: "failed",
+        selectionReason: error instanceof Error ? error.message : "chain_selection_failed",
+      },
+    });
+    await setTrace({
+      phase: "failed",
+      failureStep: "probe_chain",
+      lastActorInputError: error instanceof Error ? error.message : "chain_selection_failed",
+      budgetUsedUsd,
+    });
+    await failRunWithDiagnostics({
+      run,
+      reason: `Chain selection failed: ${error instanceof Error ? error.message : "Unknown error"}`,
+      eventType: "lead_sourcing_failed",
+      payload: {
+        decisionId: decision.id,
+        candidateCount: probedCandidates.length,
+        budgetUsedUsd,
+      },
+    });
+    return;
+  }
+
+  const selectedProbed = probedCandidates.find((candidate) => candidate.plan.id === selectedPlanMeta.selectedPlanId);
+  if (!selectedProbed) {
+    await updateSourcingChainDecision(decision.id, {
+      rationale: "Selected plan id missing from probed candidates",
+      probeSummary: {
+        candidateCount: chainCandidates.length,
+        probedCount: probedCandidates.length,
+        budgetCapUsd: APIFY_PROBE_BUDGET_USD,
+        selectedPlanId: selectedPlanMeta.selectedPlanId,
+        selectionStatus: "failed",
+        selectionReason: "selected_plan_missing",
+      },
+    });
+    await setTrace({
+      phase: "failed",
+      failureStep: "probe_chain",
+      lastActorInputError: "selected_plan_missing",
+      budgetUsedUsd,
+    });
+    await failRunWithDiagnostics({
+      run,
+      reason: "Selected sourcing chain is not available after probing",
+      eventType: "lead_sourcing_failed",
+      payload: { decisionId: decision.id },
+    });
+    return;
+  }
+
+  await updateSourcingChainDecision(decision.id, {
+    strategy: selectedProbed.plan.strategy,
+    rationale: selectedPlanMeta.rationale || selectedProbed.plan.rationale,
+    budgetUsedUsd,
+    qualityPolicy,
+    selectedChain: normalizeSourcingChainSteps(selectedProbed.plan.steps),
+    probeSummary: {
+      candidateCount: chainCandidates.length,
+      probedCount: probedCandidates.length,
+      budgetCapUsd: APIFY_PROBE_BUDGET_USD,
+      selectedPlanId: selectedProbed.plan.id,
+      selectionStatus: "selected",
+    },
+  });
 
   await setTrace({
     phase: "execute_chain",

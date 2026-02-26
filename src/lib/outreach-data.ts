@@ -2891,6 +2891,65 @@ export async function listSourcingChainDecisions(input: {
     .slice(0, limit);
 }
 
+export async function updateSourcingChainDecision(
+  decisionId: string,
+  patch: Partial<
+    Pick<
+      SourcingChainDecision,
+      "strategy" | "rationale" | "budgetUsedUsd" | "qualityPolicy" | "selectedChain" | "probeSummary"
+    >
+  >
+): Promise<SourcingChainDecision | null> {
+  const supabase = getSupabaseAdmin();
+  if (supabase) {
+    const payload: Record<string, unknown> = {};
+    if (patch.strategy !== undefined) payload.strategy = patch.strategy;
+    if (patch.rationale !== undefined) payload.rationale = patch.rationale;
+    if (patch.budgetUsedUsd !== undefined) payload.budget_used_usd = patch.budgetUsedUsd;
+    if (patch.qualityPolicy !== undefined) payload.quality_policy = patch.qualityPolicy;
+    if (patch.selectedChain !== undefined) payload.selected_chain = patch.selectedChain;
+    if (patch.probeSummary !== undefined) payload.probe_summary = patch.probeSummary;
+    if (Object.keys(payload).length) {
+      const { data, error } = await supabase
+        .from(TABLE_SOURCING_CHAIN_DECISION)
+        .update(payload)
+        .eq("id", decisionId)
+        .select("*")
+        .maybeSingle();
+      if (!error && data) {
+        return mapSourcingChainDecisionRow(data);
+      }
+    }
+    const { data, error } = await supabase
+      .from(TABLE_SOURCING_CHAIN_DECISION)
+      .select("*")
+      .eq("id", decisionId)
+      .maybeSingle();
+    if (!error && data) {
+      return mapSourcingChainDecisionRow(data);
+    }
+    return null;
+  }
+
+  const store = await readLocalStore();
+  const index = store.sourcingChainDecisions.findIndex((row) => row.id === decisionId);
+  if (index < 0) return null;
+  const existing = store.sourcingChainDecisions[index];
+  const updated: SourcingChainDecision = {
+    ...existing,
+    strategy: patch.strategy ?? existing.strategy,
+    rationale: patch.rationale ?? existing.rationale,
+    budgetUsedUsd: patch.budgetUsedUsd ?? existing.budgetUsedUsd,
+    qualityPolicy: patch.qualityPolicy ?? existing.qualityPolicy,
+    selectedChain: patch.selectedChain ?? existing.selectedChain,
+    probeSummary: patch.probeSummary ?? existing.probeSummary,
+    updatedAt: nowIso(),
+  };
+  store.sourcingChainDecisions[index] = updated;
+  await writeLocalStore(store);
+  return updated;
+}
+
 export async function createSourcingProbeResults(
   rows: Array<{
     decisionId: string;

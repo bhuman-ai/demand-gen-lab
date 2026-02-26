@@ -1134,29 +1134,35 @@ function fallbackValueForSchemaKey(input: {
     }
     return undefined;
   };
+  const pickLinkedinUrl = () => {
+    const sources = [
+      ...toStringArray(pick("urls")),
+      ...toStringArray(pick("websites")),
+      ...toStringArray(pick("startUrls")),
+    ];
+    const matched = sources.find((value) => value.toLowerCase().includes("linkedin.com"));
+    return matched || undefined;
+  };
 
   if (keyLower.includes("query") || keyLower.includes("search") || keyLower.includes("keyword")) {
     return pick("query", "queries", "search", "searchTerms", "searchStringsArray", "keyword", "keywords", "phrases");
   }
+  if (keyLower.includes("linkedin") && keyLower.includes("url")) {
+    return pickLinkedinUrl();
+  }
   if (keyLower.includes("domain")) {
-    return pick("domains", "domainNames", "websites", "urls");
+    return pick("domains", "domainNames");
   }
   if (keyLower.includes("url") || keyLower.includes("site") || keyLower.includes("web")) {
-    return pick("startUrls", "urls", "websites", "domains");
+    return pick("startUrls", "urls", "websites");
   }
   if (keyLower.includes("email") || keyLower.includes("mail")) {
     return pick("emails");
   }
   if (keyLower.includes("compan")) {
-    return pick("companies", "companyNames", "query", "queries");
+    return pick("companies", "companyNames");
   }
-  if (input.stage === "prospect_discovery") {
-    return pick("query", "queries", "searchTerms");
-  }
-  if (input.stage === "website_enrichment") {
-    return pick("websites", "urls", "domains", "startUrls", "query");
-  }
-  return pick("emails", "domains", "websites", "query");
+  return undefined;
 }
 
 function normalizeActorInputForSchema(input: {
@@ -1198,6 +1204,12 @@ function normalizeActorInputForSchema(input: {
     let nextValue: unknown = rawValue;
     if (types.includes("string")) {
       nextValue = firstString(rawValue);
+      if (Array.isArray(propertySchema.enum) && propertySchema.enum.length) {
+        const enumValues = propertySchema.enum.map((value) => String(value ?? "").trim());
+        if (!enumValues.includes(String(nextValue))) {
+          nextValue = enumValues[0] ?? nextValue;
+        }
+      }
     } else if (types.includes("array")) {
       const values = toStringArray(rawValue);
       const itemsSchema =
@@ -1213,7 +1225,12 @@ function normalizeActorInputForSchema(input: {
     } else if (types.includes("number") || types.includes("integer")) {
       const numeric = Number(firstString(rawValue));
       if (Number.isFinite(numeric)) {
-        nextValue = types.includes("integer") ? Math.round(numeric) : numeric;
+        const min = Number(propertySchema.minimum);
+        const max = Number(propertySchema.maximum);
+        let normalizedNumeric = types.includes("integer") ? Math.round(numeric) : numeric;
+        if (Number.isFinite(min)) normalizedNumeric = Math.max(normalizedNumeric, min);
+        if (Number.isFinite(max)) normalizedNumeric = Math.min(normalizedNumeric, max);
+        nextValue = normalizedNumeric;
       } else {
         continue;
       }

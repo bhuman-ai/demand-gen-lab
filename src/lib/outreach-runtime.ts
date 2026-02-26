@@ -1187,6 +1187,15 @@ function repairActorInputFromProviderError(input: {
   return { repaired: false, actorInput: input.actorInput, reason: "unsupported_predicate" };
 }
 
+function isApifyQuotaExceededErrorText(text: unknown) {
+  const normalized = String(text ?? "").toLowerCase();
+  return (
+    normalized.includes("platform-feature-disabled") ||
+    normalized.includes("monthly usage hard limit exceeded") ||
+    normalized.includes("usage hard limit exceeded")
+  );
+}
+
 function hashProbeInput(input: Record<string, unknown>) {
   return createHash("sha256").update(JSON.stringify(input)).digest("hex");
 }
@@ -3442,6 +3451,7 @@ async function processSourceLeadsJob(job: OutreachJob) {
 
   const probedCandidates: ProbedSourcingPlan[] = [];
   let budgetUsedUsd = 0;
+  let apifyQuotaHardStop = false;
   for (const planCandidate of chainCandidates) {
     const remainingBudget = APIFY_PROBE_BUDGET_USD - budgetUsedUsd;
     if (remainingBudget < APIFY_PROBE_STEP_COST_ESTIMATE_USD) {
@@ -3471,6 +3481,17 @@ async function processSourceLeadsJob(job: OutreachJob) {
         topRejections: summarizeTopReasons(probed.rejectedLeads),
       },
     });
+
+    if (
+      probed.probeResults.some(
+        (result) =>
+          result.outcome === "fail" &&
+          isApifyQuotaExceededErrorText((result.details as Record<string, unknown>)?.error)
+      )
+    ) {
+      apifyQuotaHardStop = true;
+      break;
+    }
   }
 
   await setTrace({ phase: "probe_chain", budgetUsedUsd });
@@ -3540,6 +3561,14 @@ async function processSourceLeadsJob(job: OutreachJob) {
 
   let selectedPlanMeta: { selectedPlanId: string; rationale: string };
   try {
+    const hasViableCandidate = probedCandidates.some(
+      (candidate) => candidate.acceptedCount > 0 && candidate.reason === ""
+    );
+    if (!hasViableCandidate && apifyQuotaHardStop) {
+      throw new Error(
+        "Apify account monthly usage hard limit exceeded. Increase Apify usage limits or switch to a funded Apify account."
+      );
+    }
     selectedPlanMeta = await selectBestProbedChain({
       targetAudience,
       offer: offerContext,

@@ -253,6 +253,38 @@ function extractOutputText(payloadRaw: unknown) {
   );
 }
 
+function parseLooseJsonObject(rawText: string): unknown {
+  const direct = rawText.trim();
+  if (!direct) return {};
+  try {
+    return JSON.parse(direct);
+  } catch {
+    // continue
+  }
+
+  const noFence = direct.replace(/```json/gi, "```").replace(/```/g, "").trim();
+  if (noFence !== direct) {
+    try {
+      return JSON.parse(noFence);
+    } catch {
+      // continue
+    }
+  }
+
+  const firstBrace = noFence.indexOf("{");
+  const lastBrace = noFence.lastIndexOf("}");
+  if (firstBrace >= 0 && lastBrace > firstBrace) {
+    const candidate = noFence.slice(firstBrace, lastBrace + 1);
+    try {
+      return JSON.parse(candidate);
+    } catch {
+      // continue
+    }
+  }
+
+  throw new Error("Model returned non-JSON output");
+}
+
 function stageFromValue(value: string): LeadChainStepStage | null {
   if (value === "prospect_discovery") return "prospect_discovery";
   if (value === "website_enrichment") return "website_enrichment";
@@ -472,12 +504,7 @@ async function planActorDiscoveryQueries(input: {
     payload = {};
   }
 
-  let parsed: unknown = {};
-  try {
-    parsed = JSON.parse(extractOutputText(payload));
-  } catch {
-    parsed = {};
-  }
+  const parsed = parseLooseJsonObject(extractOutputText(payload));
 
   const row = asRecord(parsed);
   const queriesRoot = asRecord(row.queries);
@@ -786,11 +813,15 @@ async function planApifyLeadChainCandidates(input: {
     payload = {};
   }
   const outputText = extractOutputText(payload);
-  let parsed: unknown = {};
+  let parsed: unknown;
   try {
-    parsed = JSON.parse(outputText);
-  } catch {
-    throw new Error("Apify chain planning returned non-JSON output");
+    parsed = parseLooseJsonObject(outputText);
+  } catch (error) {
+    throw new Error(
+      `Apify chain planning returned non-JSON output: ${
+        error instanceof Error ? error.message : "invalid_json"
+      }`
+    );
   }
 
   const root = asRecord(parsed);
@@ -1313,12 +1344,7 @@ async function generateAdaptiveLeadQualityPolicy(input: {
   } catch {
     payload = {};
   }
-  let parsed: unknown = {};
-  try {
-    parsed = JSON.parse(extractOutputText(payload));
-  } catch {
-    parsed = {};
-  }
+  const parsed = parseLooseJsonObject(extractOutputText(payload));
 
   const row = asRecord(parsed);
   const policy: LeadQualityPolicy = {
@@ -1402,12 +1428,7 @@ async function selectBestProbedChain(input: {
   } catch {
     payload = {};
   }
-  let parsed: unknown = {};
-  try {
-    parsed = JSON.parse(extractOutputText(payload));
-  } catch {
-    parsed = {};
-  }
+  const parsed = parseLooseJsonObject(extractOutputText(payload));
   const row = asRecord(parsed);
   const selectedPlanId = String(row.selectedPlanId ?? "").trim();
   const rationale = trimText(row.rationale, 400);

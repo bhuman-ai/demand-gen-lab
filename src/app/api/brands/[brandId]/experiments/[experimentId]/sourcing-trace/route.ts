@@ -36,7 +36,10 @@ export async function GET(
     experimentOwnerId: experiment.id,
     limit: 10,
   });
-  const latestDecision = decisions[0] ?? null;
+  const latestDecision =
+    (latestRun
+      ? decisions.find((decision) => decision.runId === latestRun.id) ?? null
+      : null) ?? decisions[0] ?? null;
   const probeResults = latestDecision ? await listSourcingProbeResults(latestDecision.id) : [];
 
   const run = latestRun ? await getOutreachRun(latestRun.id) : null;

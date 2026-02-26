@@ -410,12 +410,6 @@ function isLikelyFreeDomain(domain: string) {
   return FREE_EMAIL_DOMAINS.has(domain.trim().toLowerCase());
 }
 
-function normalizedLeadConfidence(value: unknown) {
-  const numeric = Number(value);
-  if (!Number.isFinite(numeric)) return 0.5;
-  return Math.max(0, Math.min(1, numeric));
-}
-
 function compactText(value: unknown, max = 220) {
   return String(value ?? "")
     .replace(/\s+/g, " ")
@@ -821,7 +815,15 @@ export function evaluateLeadAgainstQualityPolicy(input: {
   const normalizedName = String(input.lead.name ?? "").trim();
   const normalizedCompany = String(input.lead.company ?? "").trim();
   const normalizedTitle = String(input.lead.title ?? "").trim();
-  const explicitConfidence = normalizedLeadConfidence((input.lead as unknown as Record<string, unknown>).confidence);
+  const hasSourceUrl = Boolean(String(input.lead.sourceUrl ?? "").trim());
+  const rawConfidence = Number((input.lead as unknown as Record<string, unknown>).confidence);
+  const hasExplicitConfidence = Number.isFinite(rawConfidence);
+  const explicitConfidence = hasExplicitConfidence ? Math.max(0, Math.min(1, rawConfidence)) : 0;
+  const inferredName = inferNameFromEmail(email);
+  const nameLikelyEmailDerived =
+    Boolean(normalizedName) &&
+    Boolean(inferredName) &&
+    normalizedName.toLowerCase() === inferredName.toLowerCase();
 
   if (!input.policy.allowFreeDomains && isLikelyFreeDomain(domain)) {
     return {
@@ -869,9 +871,33 @@ export function evaluateLeadAgainstQualityPolicy(input: {
     };
   }
 
-  const heuristicConfidence =
-    Math.max(0, Math.min(1, (normalizedName ? 0.35 : 0.12) + (normalizedCompany ? 0.35 : 0.15) + (normalizedTitle ? 0.2 : 0.08)));
-  const confidence = Math.max(explicitConfidence, heuristicConfidence);
+  if (!hasSourceUrl && !normalizedTitle && nameLikelyEmailDerived) {
+    return {
+      email,
+      accepted: false,
+      confidence: hasExplicitConfidence ? explicitConfidence : 0.22,
+      reason: "insufficient_person_evidence",
+      details: {
+        hasSourceUrl,
+        titlePresent: false,
+        nameLikelyEmailDerived,
+      },
+    };
+  }
+
+  const heuristicConfidence = Math.max(
+    0,
+    Math.min(
+      1,
+      (normalizedName ? (nameLikelyEmailDerived ? 0.2 : 0.34) : 0.08) +
+        (normalizedCompany ? 0.3 : 0.12) +
+        (normalizedTitle ? 0.24 : 0.04) +
+        (hasSourceUrl ? 0.12 : 0)
+    )
+  );
+  const confidence = hasExplicitConfidence
+    ? Math.max(0, Math.min(1, explicitConfidence * 0.6 + heuristicConfidence * 0.4))
+    : heuristicConfidence;
   const minConfidence = Math.max(0, Math.min(1, Number(input.policy.minConfidenceScore ?? 0) || 0));
   if (confidence < minConfidence) {
     return {

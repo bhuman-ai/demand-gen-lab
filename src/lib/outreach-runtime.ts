@@ -1036,7 +1036,9 @@ function normalizeActorInputForSchema(input: {
   const properties = getSchemaProperties(schema);
   const knownKeys = input.actorProfile.knownKeys;
   const requiredKeys = input.actorProfile.requiredKeys;
-  const restrictUnknown = schema.additionalProperties === false && knownKeys.length > 0;
+  // Prefer strict known-key input when schema keys are available; this avoids
+  // "Property input.X is not allowed" failures on actors that enforce closed schemas.
+  const restrictUnknown = knownKeys.length > 0;
   const keysToProcess = new Set<string>([
     ...Object.keys(input.actorInput),
     ...knownKeys,
@@ -1118,13 +1120,32 @@ function normalizeActorInputForSchema(input: {
 
 function parseApifyInputFieldError(errorText: string) {
   const normalized = String(errorText ?? "");
-  const match = normalized.match(/Field input\.([a-zA-Z0-9_]+)\s+(must be|is required|required)(?:\s+([a-zA-Z_]+))?/i);
-  if (!match) return null;
-  const key = String(match[1] ?? "").trim();
-  const predicate = String(match[2] ?? "").trim().toLowerCase();
-  const expectedType = String(match[3] ?? "").trim().toLowerCase();
-  if (!key) return null;
-  return { key, predicate, expectedType };
+  const fieldMatch = normalized.match(
+    /Field input\.([a-zA-Z0-9_.]+)\s+(must be|is required|required)(?:\s+([a-zA-Z_]+))?/i
+  );
+  if (fieldMatch) {
+    const fieldPath = String(fieldMatch[1] ?? "").trim();
+    const predicate = String(fieldMatch[2] ?? "").trim().toLowerCase();
+    const expectedType = String(fieldMatch[3] ?? "").trim().toLowerCase();
+    const key = fieldPath.split(".")[0]?.trim() ?? "";
+    if (!key) return null;
+    return { key, fieldPath, predicate, expectedType };
+  }
+
+  const notAllowedMatch = normalized.match(/Property input\.([a-zA-Z0-9_.]+)\s+is not allowed/i);
+  if (notAllowedMatch) {
+    const fieldPath = String(notAllowedMatch[1] ?? "").trim();
+    const key = fieldPath.split(".")[0]?.trim() ?? "";
+    if (!key) return null;
+    return {
+      key,
+      fieldPath,
+      predicate: "not_allowed",
+      expectedType: "",
+    };
+  }
+
+  return null;
 }
 
 function coerceValueToExpectedType(input: { value: unknown; expectedType: string; key: string }) {
@@ -1161,6 +1182,14 @@ function repairActorInputFromProviderError(input: {
   if (!parsed) return { repaired: false, actorInput: input.actorInput, reason: "unparsed_error" };
 
   const next = { ...input.actorInput };
+  if (parsed.predicate === "not_allowed") {
+    if (!Object.prototype.hasOwnProperty.call(next, parsed.key)) {
+      return { repaired: false, actorInput: input.actorInput, reason: `not_allowed_missing_key:${parsed.key}` };
+    }
+    delete next[parsed.key];
+    return { repaired: true, actorInput: next, reason: `removed_not_allowed:${parsed.key}` };
+  }
+
   const currentValue = next[parsed.key];
   const fallbackValue = fallbackValueForSchemaKey({
     key: parsed.key,
@@ -1176,7 +1205,25 @@ function repairActorInputFromProviderError(input: {
     if (Array.isArray(sourceValue) && !sourceValue.length) {
       return { repaired: false, actorInput: input.actorInput, reason: `missing_required:${parsed.key}` };
     }
-    next[parsed.key] = sourceValue;
+    let requiredValue: unknown = sourceValue;
+    if (parsed.expectedType) {
+      const coerced = coerceValueToExpectedType({
+        value: sourceValue,
+        expectedType: parsed.expectedType,
+        key: parsed.key,
+      });
+      if (coerced !== undefined && coerced !== null && (!(typeof coerced === "string") || coerced.trim())) {
+        requiredValue = coerced;
+      }
+    } else if (Array.isArray(sourceValue) && !/s$/i.test(parsed.key)) {
+      const first = firstString(sourceValue);
+      if (!first) {
+        return { repaired: false, actorInput: input.actorInput, reason: `required_no_scalar:${parsed.key}` };
+      }
+      requiredValue = first;
+    }
+
+    next[parsed.key] = requiredValue;
     return { repaired: true, actorInput: next, reason: `filled_required:${parsed.key}` };
   }
 
@@ -1636,23 +1683,27 @@ async function probeSourcingPlanCandidate(input: {
       token: input.token,
       timeoutSeconds: 60,
     });
-    if (!run.ok) {
+    for (let repairAttempt = 0; repairAttempt < 2 && !run.ok; repairAttempt += 1) {
       const repaired = repairActorInputFromProviderError({
         actorInput: actorInputForRun,
         errorText: run.error,
         stage: step.stage,
       });
-      if (repaired.repaired) {
-        actorInputForRun = repaired.actorInput;
-        probeInputHash = hashProbeInput(actorInputForRun);
-        repairReason = repaired.reason;
-        run = await runApifyActorSyncGetDatasetItems({
-          actorId: step.actorId,
-          actorInput: actorInputForRun,
-          token: input.token,
-          timeoutSeconds: 60,
-        });
-      }
+      if (!repaired.repaired) break;
+
+      const beforeHash = hashProbeInput(actorInputForRun);
+      const afterHash = hashProbeInput(repaired.actorInput);
+      if (beforeHash === afterHash) break;
+
+      actorInputForRun = repaired.actorInput;
+      probeInputHash = hashProbeInput(actorInputForRun);
+      repairReason = repairReason ? `${repairReason};${repaired.reason}` : repaired.reason;
+      run = await runApifyActorSyncGetDatasetItems({
+        actorId: step.actorId,
+        actorInput: actorInputForRun,
+        token: input.token,
+        timeoutSeconds: 60,
+      });
     }
     budgetUsedUsd += APIFY_PROBE_STEP_COST_ESTIMATE_USD;
     if (!run.ok) {
@@ -1854,22 +1905,23 @@ async function executeSourcingPlan(input: {
     let runResult = run;
     let repairReason = "";
     let actorInputForRun = normalizedInput.input;
-    if (!runResult.ok || !runResult.runId) {
+    for (let repairAttempt = 0; repairAttempt < 2 && (!runResult.ok || !runResult.runId); repairAttempt += 1) {
       const repaired = repairActorInputFromProviderError({
         actorInput: actorInputForRun,
         errorText: runResult.error,
         stage: step.stage,
       });
-      if (repaired.repaired) {
-        actorInputForRun = repaired.actorInput;
-        repairReason = repaired.reason;
-        runResult = await startApifyActorRun({
-          token: input.token,
-          actorId: step.actorId,
-          actorInput: actorInputForRun,
-          maxTotalChargeUsd: APIFY_CHAIN_EXEC_MAX_CHARGE_USD,
-        });
-      }
+      if (!repaired.repaired) break;
+
+      if (JSON.stringify(repaired.actorInput) === JSON.stringify(actorInputForRun)) break;
+      actorInputForRun = repaired.actorInput;
+      repairReason = repairReason ? `${repairReason};${repaired.reason}` : repaired.reason;
+      runResult = await startApifyActorRun({
+        token: input.token,
+        actorId: step.actorId,
+        actorInput: actorInputForRun,
+        maxTotalChargeUsd: APIFY_CHAIN_EXEC_MAX_CHARGE_USD,
+      });
     }
     if (!runResult.ok || !runResult.runId) {
       lastActorInputError = runResult.error;

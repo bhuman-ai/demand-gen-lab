@@ -689,6 +689,83 @@ async function buildApifyActorPool(input: {
   };
 }
 
+async function selectPlanningActorsWithLlm(input: {
+  actors: ApifyStoreActor[];
+  targetAudience: string;
+  offer: string;
+  brandName: string;
+  brandWebsite: string;
+  experimentName: string;
+}) {
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey || !input.actors.length) return [] as string[];
+  try {
+    const shortlist = input.actors.slice(0, 110).map((actor) => ({
+      actorId: actor.actorId,
+      stageHint: stageFromActor(actor),
+      title: trimText(actor.title, 120),
+      description: trimText(actor.description, 180),
+      categories: actor.categories.slice(0, 5),
+      users30Days: actor.users30Days,
+      rating: actor.rating,
+      pricingModel: actor.pricingModel,
+      pricePerUnitUsd: actor.pricePerUnitUsd,
+      trialMinutes: actor.trialMinutes,
+    }));
+
+    const prompt = [
+      "Select Apify actors for B2B outreach lead sourcing chain planning.",
+      "Goal: maximize real people + business-email lead yield with high run compatibility.",
+      "Use only provided actorIds. Return JSON only.",
+      "Prioritize actors that can run with public inputs and produce lead/company/email signals.",
+      "Avoid actors likely unrelated to B2B lead sourcing for this experiment.",
+      "Return at most 45 actorIds with stage diversity.",
+      '{ "selectedActorIds": string[] }',
+      `Context: ${JSON.stringify({
+        targetAudience: input.targetAudience,
+        offer: input.offer,
+        brandName: input.brandName,
+        brandWebsite: input.brandWebsite,
+        experimentName: input.experimentName,
+      })}`,
+      `actorPool: ${JSON.stringify(shortlist)}`,
+    ].join("\n");
+
+    const model = resolveLlmModel("lead_chain_planning", { prompt });
+    const response = await fetch("https://api.openai.com/v1/responses", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model,
+        input: prompt,
+        text: { format: { type: "json_object" } },
+        max_output_tokens: 1800,
+      }),
+    });
+    const raw = await response.text();
+    if (!response.ok) return [] as string[];
+
+    let payload: unknown = {};
+    try {
+      payload = JSON.parse(raw);
+    } catch {
+      payload = {};
+    }
+    const parsed = parseLooseJsonObject(extractOutputText(payload));
+    const row = asRecord(parsed);
+    const selectedIds = Array.isArray(row.selectedActorIds)
+      ? row.selectedActorIds.map((value) => String(value ?? "").trim()).filter(Boolean)
+      : [];
+    const allowed = new Set(input.actors.map((actor) => actor.actorId.toLowerCase()));
+    return uniqueTrimmed(selectedIds, 45).filter((actorId) => allowed.has(actorId.toLowerCase()));
+  } catch {
+    return [] as string[];
+  }
+}
+
 function parseLeadChainPlanCandidate(input: {
   raw: unknown;
   allowedActorIds: Set<string>;
@@ -749,7 +826,7 @@ async function planApifyLeadChainCandidates(input: {
     throw new Error("No actor candidates available from Apify Store");
   }
 
-  const planningPool = (() => {
+  let planningPool = (() => {
     const selected: ApifyStoreActor[] = [];
     const seen = new Set<string>();
     const push = (actor: ApifyStoreActor) => {
@@ -779,6 +856,22 @@ async function planApifyLeadChainCandidates(input: {
     }
     return selected.slice(0, 90);
   })();
+
+  const llmSelectedActorIds = await selectPlanningActorsWithLlm({
+    actors: planningPool,
+    targetAudience: input.targetAudience,
+    offer: input.offer,
+    brandName: input.brandName,
+    brandWebsite: input.brandWebsite,
+    experimentName: input.experimentName,
+  });
+  if (llmSelectedActorIds.length >= 12) {
+    const picked = new Set(llmSelectedActorIds.map((id) => id.toLowerCase()));
+    const llmFiltered = planningPool.filter((actor) => picked.has(actor.actorId.toLowerCase()));
+    if (llmFiltered.length >= 12) {
+      planningPool = llmFiltered;
+    }
+  }
 
   const actorRows = planningPool.map((actor) => ({
     actorId: actor.actorId,

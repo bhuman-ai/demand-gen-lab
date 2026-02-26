@@ -1085,6 +1085,108 @@ function normalizeActorInputForSchema(input: {
   };
 }
 
+function parseApifyInputFieldError(errorText: string) {
+  const normalized = String(errorText ?? "");
+  const match = normalized.match(/Field input\.([a-zA-Z0-9_]+)\s+(must be|is required|required)(?:\s+([a-zA-Z_]+))?/i);
+  if (!match) return null;
+  const key = String(match[1] ?? "").trim();
+  const predicate = String(match[2] ?? "").trim().toLowerCase();
+  const expectedType = String(match[3] ?? "").trim().toLowerCase();
+  if (!key) return null;
+  return { key, predicate, expectedType };
+}
+
+function coerceValueToExpectedType(input: { value: unknown; expectedType: string; key: string }) {
+  const type = input.expectedType.toLowerCase();
+  if (type === "string") return firstString(input.value);
+  if (type === "array") return toStringArray(input.value);
+  if (type === "number") {
+    const value = Number(firstString(input.value));
+    return Number.isFinite(value) ? value : undefined;
+  }
+  if (type === "integer") {
+    const value = Number(firstString(input.value));
+    return Number.isFinite(value) ? Math.round(value) : undefined;
+  }
+  if (type === "boolean") {
+    return ["1", "true", "yes", "on"].includes(firstString(input.value).toLowerCase());
+  }
+  if (type === "object") {
+    if (input.value && typeof input.value === "object" && !Array.isArray(input.value)) return input.value;
+    const str = firstString(input.value);
+    if (!str) return undefined;
+    if (input.key.toLowerCase().includes("url")) return { url: str };
+    return { value: str };
+  }
+  return input.value;
+}
+
+function repairActorInputFromProviderError(input: {
+  actorInput: Record<string, unknown>;
+  errorText: string;
+  stage: LeadChainStepStage;
+}) {
+  const parsed = parseApifyInputFieldError(input.errorText);
+  if (!parsed) return { repaired: false, actorInput: input.actorInput, reason: "unparsed_error" };
+
+  const next = { ...input.actorInput };
+  const currentValue = next[parsed.key];
+  const fallbackValue = fallbackValueForSchemaKey({
+    key: parsed.key,
+    actorInput: input.actorInput,
+    stage: input.stage,
+  });
+  const sourceValue = currentValue ?? fallbackValue;
+
+  if (parsed.predicate.includes("required")) {
+    if (sourceValue === undefined || sourceValue === null || (typeof sourceValue === "string" && !sourceValue.trim())) {
+      return { repaired: false, actorInput: input.actorInput, reason: `missing_required:${parsed.key}` };
+    }
+    if (Array.isArray(sourceValue) && !sourceValue.length) {
+      return { repaired: false, actorInput: input.actorInput, reason: `missing_required:${parsed.key}` };
+    }
+    next[parsed.key] = sourceValue;
+    return { repaired: true, actorInput: next, reason: `filled_required:${parsed.key}` };
+  }
+
+  if (parsed.predicate.includes("must be")) {
+    const coerced = coerceValueToExpectedType({
+      value: sourceValue,
+      expectedType: parsed.expectedType,
+      key: parsed.key,
+    });
+    if (coerced === undefined || coerced === null) {
+      return {
+        repaired: false,
+        actorInput: input.actorInput,
+        reason: `coercion_failed:${parsed.key}:${parsed.expectedType || "unknown"}`,
+      };
+    }
+    if (typeof coerced === "string" && !coerced.trim()) {
+      return {
+        repaired: false,
+        actorInput: input.actorInput,
+        reason: `coercion_empty_string:${parsed.key}`,
+      };
+    }
+    if (Array.isArray(coerced) && !coerced.length) {
+      return {
+        repaired: false,
+        actorInput: input.actorInput,
+        reason: `coercion_empty_array:${parsed.key}`,
+      };
+    }
+    next[parsed.key] = coerced;
+    return {
+      repaired: true,
+      actorInput: next,
+      reason: `coerced:${parsed.key}:${parsed.expectedType || "unknown"}`,
+    };
+  }
+
+  return { repaired: false, actorInput: input.actorInput, reason: "unsupported_predicate" };
+}
+
 function hashProbeInput(input: Record<string, unknown>) {
   return createHash("sha256").update(JSON.stringify(input)).digest("hex");
 }
@@ -1451,7 +1553,7 @@ async function probeSourcingPlanCandidate(input: {
       actorInput,
       stage: step.stage,
     });
-    const probeInputHash = hashProbeInput(normalizedInput.input);
+    let probeInputHash = hashProbeInput(normalizedInput.input);
 
     const compatibility = evaluateActorCompatibility({
       actorProfile: profile.profile,
@@ -1477,12 +1579,32 @@ async function probeSourcingPlanCandidate(input: {
       break;
     }
 
-    const run = await runApifyActorSyncGetDatasetItems({
+    let actorInputForRun = { ...normalizedInput.input };
+    let repairReason = "";
+    let run = await runApifyActorSyncGetDatasetItems({
       actorId: step.actorId,
-      actorInput: normalizedInput.input,
+      actorInput: actorInputForRun,
       token: input.token,
       timeoutSeconds: 60,
     });
+    if (!run.ok) {
+      const repaired = repairActorInputFromProviderError({
+        actorInput: actorInputForRun,
+        errorText: run.error,
+        stage: step.stage,
+      });
+      if (repaired.repaired) {
+        actorInputForRun = repaired.actorInput;
+        probeInputHash = hashProbeInput(actorInputForRun);
+        repairReason = repaired.reason;
+        run = await runApifyActorSyncGetDatasetItems({
+          actorId: step.actorId,
+          actorInput: actorInputForRun,
+          token: input.token,
+          timeoutSeconds: 60,
+        });
+      }
+    }
     budgetUsedUsd += APIFY_PROBE_STEP_COST_ESTIMATE_USD;
     if (!run.ok) {
       reason = `probe_run_failed:${step.actorId}`;
@@ -1494,7 +1616,12 @@ async function probeSourcingPlanCandidate(input: {
         probeInputHash,
         qualityMetrics: { compatibilityScore: compatibility.score },
         costEstimateUsd: APIFY_PROBE_STEP_COST_ESTIMATE_USD,
-        details: { reason, error: run.error, normalizedInputAdjustments: normalizedInput.adjustments },
+        details: {
+          reason,
+          error: run.error,
+          normalizedInputAdjustments: normalizedInput.adjustments,
+          repairReason,
+        },
       });
       break;
     }
@@ -1545,6 +1672,7 @@ async function probeSourcingPlanCandidate(input: {
         stage: step.stage,
         rowCount: run.rows.length,
         normalizedInputAdjustments: normalizedInput.adjustments,
+        repairReason,
       },
     });
 
@@ -1674,20 +1802,41 @@ async function executeSourcingPlan(input: {
       actorInput: normalizedInput.input,
       maxTotalChargeUsd: APIFY_CHAIN_EXEC_MAX_CHARGE_USD,
     });
-    if (!run.ok || !run.runId) {
-      lastActorInputError = run.error;
+    let runResult = run;
+    let repairReason = "";
+    let actorInputForRun = normalizedInput.input;
+    if (!runResult.ok || !runResult.runId) {
+      const repaired = repairActorInputFromProviderError({
+        actorInput: actorInputForRun,
+        errorText: runResult.error,
+        stage: step.stage,
+      });
+      if (repaired.repaired) {
+        actorInputForRun = repaired.actorInput;
+        repairReason = repaired.reason;
+        runResult = await startApifyActorRun({
+          token: input.token,
+          actorId: step.actorId,
+          actorInput: actorInputForRun,
+          maxTotalChargeUsd: APIFY_CHAIN_EXEC_MAX_CHARGE_USD,
+        });
+      }
+    }
+    if (!runResult.ok || !runResult.runId) {
+      lastActorInputError = runResult.error;
       stepDiagnostics.push({
         stepIndex,
         stage: step.stage,
         actorId: step.actorId,
         ok: false,
         reason: "actor_run_start_failed",
-        error: run.error,
+        error: runResult.error,
         normalizedInputAdjustments: normalizedInput.adjustments,
+        repairReason,
       });
       return {
         ok: false,
-        reason: `Failed to start actor ${step.actorId}: ${run.error}`,
+        reason: `Failed to start actor ${step.actorId}: ${runResult.error}`,
         leads: [],
         rejectedLeads: [],
         stepDiagnostics,
@@ -1696,11 +1845,11 @@ async function executeSourcingPlan(input: {
     }
 
     let pollStatus = "ready";
-    let datasetId = run.datasetId;
+    let datasetId = runResult.datasetId;
     for (let pollAttempt = 0; pollAttempt < 30; pollAttempt += 1) {
       const poll = await pollApifyActorRun({
         token: input.token,
-        runId: run.runId,
+        runId: runResult.runId,
       });
       if (!poll.ok) {
         lastActorInputError = poll.error;

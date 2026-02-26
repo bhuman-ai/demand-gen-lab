@@ -158,7 +158,15 @@ export async function listConversationPreviewLeads(input: PreviewLeadQueryInput)
       !["failed", "preflight_failed", "canceled"].includes(String(run.status ?? "").toLowerCase()) &&
       Number(run.metrics?.sourcedLeads ?? 0) > 0
   );
-  const selectedRuns = (sourceRuns.length ? sourceRuns : recentRuns).slice(0, maxRuns);
+  if (!sourceRuns.length) {
+    return {
+      leads: [] as SourcedConversationPreviewLead[],
+      sourceExperimentId: sourceExperiment.id,
+      runtimeRefFound: true,
+      runsChecked: recentRuns.length,
+    };
+  }
+  const selectedRuns = sourceRuns.slice(0, maxRuns);
 
   const runLeads = await Promise.all(
     selectedRuns.map(async (run) => ({

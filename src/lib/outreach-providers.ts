@@ -334,28 +334,72 @@ function flattenSchemaKeys(schema: Record<string, unknown>) {
 }
 
 function extractApifyErrorDetail(raw: string, payload: unknown) {
+  const firstReadable = (value: unknown, depth = 0): string => {
+    if (depth > 4 || value === null || value === undefined) return "";
+    if (typeof value === "string") {
+      const normalized = value.replace(/\s+/g, " ").trim();
+      return normalized && normalized !== "[object Object]" ? normalized : "";
+    }
+    if (typeof value === "number" || typeof value === "boolean") {
+      return String(value);
+    }
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        const resolved = firstReadable(item, depth + 1);
+        if (resolved) return resolved;
+      }
+      return "";
+    }
+    if (typeof value === "object") {
+      const row = value as Record<string, unknown>;
+      const preferredKeys = [
+        "message",
+        "error",
+        "description",
+        "detail",
+        "statusMessage",
+        "userMessage",
+        "title",
+        "hint",
+        "reason",
+      ];
+      for (const key of preferredKeys) {
+        if (!(key in row)) continue;
+        const resolved = firstReadable(row[key], depth + 1);
+        if (resolved) return resolved;
+      }
+      for (const value of Object.values(row)) {
+        const resolved = firstReadable(value, depth + 1);
+        if (resolved) return resolved;
+      }
+      return "";
+    }
+    return "";
+  };
+
   if (payload && typeof payload === "object" && !Array.isArray(payload)) {
     const root = payload as Record<string, unknown>;
     const data =
       root.data && typeof root.data === "object" && !Array.isArray(root.data)
         ? (root.data as Record<string, unknown>)
         : {};
-    const hints = [
-      root.error,
-      root.message,
-      data.error,
-      data.message,
-      data.description,
-      data.statusMessage,
-      data.userMessage,
-    ]
-      .map((value) => String(value ?? "").trim())
+    const hints = [root.error, root.message, data.error, data.message, data.description, data.statusMessage, data.userMessage]
+      .map((value) => firstReadable(value))
       .filter(Boolean);
     if (hints.length) return hints[0];
   }
   const normalizedRaw = raw.trim();
   if (!normalizedRaw) return "";
-  return normalizedRaw.slice(0, 280);
+  if (normalizedRaw.startsWith("{") || normalizedRaw.startsWith("[")) {
+    try {
+      const parsed = JSON.parse(normalizedRaw) as unknown;
+      const fromParsed = firstReadable(parsed);
+      if (fromParsed) return fromParsed.slice(0, 280);
+    } catch {
+      // ignore parse errors and return raw text below
+    }
+  }
+  return normalizedRaw.replace(/\s+/g, " ").slice(0, 280);
 }
 
 function isLikelyRoleInbox(local: string) {

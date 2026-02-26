@@ -15,6 +15,7 @@ import type {
   LeadAcceptanceDecision,
   LeadQualityPolicy,
   ReplyThread,
+  SourcingActorMemory,
   SourcingChainDecision,
   SourcingChainStep,
   SourcingTraceSummary,
@@ -430,6 +431,182 @@ function stageFromActor(actor: ApifyStoreActor): LeadChainStepStage {
   return "prospect_discovery";
 }
 
+function schemaSummaryKeys(summary: Record<string, unknown> | undefined) {
+  if (!summary) {
+    return { requiredKeys: [] as string[], knownKeys: [] as string[] };
+  }
+  const requiredKeys = Array.isArray(summary.requiredKeys)
+    ? summary.requiredKeys.map((value) => trimText(value, 80)).filter(Boolean)
+    : [];
+  const knownKeys = Array.isArray(summary.knownKeys)
+    ? summary.knownKeys.map((value) => trimText(value, 80)).filter(Boolean)
+    : [];
+  return { requiredKeys, knownKeys };
+}
+
+function normalizeSchemaKeyToken(key: string) {
+  return key.toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+const RUNTIME_AUTH_KEY_HINTS = [
+  "apikey",
+  "apitoken",
+  "token",
+  "secret",
+  "password",
+  "cookie",
+  "session",
+  "bearer",
+  "authorization",
+  "auth",
+  "clientid",
+  "clientsecret",
+  "proxy",
+  "username",
+  "login",
+  "captcha",
+  "recaptcha",
+];
+
+const RUNTIME_FILE_INPUT_KEY_HINTS = [
+  "file",
+  "filepath",
+  "upload",
+  "csv",
+  "excel",
+  "xlsx",
+  "jsonl",
+];
+
+function isRuntimeUnsafeRequiredKey(token: string) {
+  if (!token) return false;
+  if (RUNTIME_AUTH_KEY_HINTS.some((hint) => token.includes(hint))) return true;
+  if (RUNTIME_FILE_INPUT_KEY_HINTS.some((hint) => token.includes(hint))) return true;
+  if (token.includes("datasetid") || token.includes("runid")) return true;
+  return false;
+}
+
+function canRuntimePopulateRequiredKey(stage: LeadChainStepStage, token: string) {
+  if (!token) return false;
+  if (
+    token.includes("query") ||
+    token.includes("search") ||
+    token.includes("keyword") ||
+    token.includes("phrase") ||
+    token.includes("term") ||
+    token.includes("limit") ||
+    token.includes("maxitem") ||
+    token.includes("maxresult") ||
+    token.includes("maxrequest") ||
+    token.includes("maxdepth") ||
+    token.includes("maxconcurrency") ||
+    token.includes("page") ||
+    token.includes("country") ||
+    token.includes("location") ||
+    token.includes("language")
+  ) {
+    return true;
+  }
+  if (token.includes("domain") || token.includes("website") || token.includes("site") || token.includes("starturl")) {
+    return stage !== "prospect_discovery";
+  }
+  if (token.includes("email") || token.includes("mailbox")) {
+    return stage === "email_discovery";
+  }
+  if (token.includes("company") || token.includes("organization") || token.includes("org")) {
+    return stage !== "prospect_discovery";
+  }
+  if (token.includes("url")) {
+    return stage !== "prospect_discovery";
+  }
+  return false;
+}
+
+function stageKeywordScore(stage: LeadChainStepStage, blob: string) {
+  if (stage === "email_discovery") {
+    return /(email|mailbox|contact|enrich|finder|verify)/.test(blob) ? 0.25 : 0;
+  }
+  if (stage === "website_enrichment") {
+    return /(website|domain|crawl|scrap|url|company)/.test(blob) ? 0.2 : 0;
+  }
+  return /(lead|prospect|people|linkedin|company)/.test(blob) ? 0.18 : 0;
+}
+
+function estimateActorStageViability(input: {
+  stage: LeadChainStepStage;
+  actor: ApifyStoreActor;
+  actorProfile?: ActorCapabilityProfile;
+}) {
+  const schemaKeys = schemaSummaryKeys(input.actorProfile?.schemaSummary);
+  const requiredTokens = uniqueTrimmed(schemaKeys.requiredKeys, 80).map(normalizeSchemaKeyToken);
+  const knownTokens = uniqueTrimmed(schemaKeys.knownKeys, 200).map(normalizeSchemaKeyToken);
+  const metadataBlob = `${input.actor.title} ${input.actor.description} ${input.actor.categories.join(" ")}`.toLowerCase();
+  const keySet = new Set<string>(requiredTokens.length ? requiredTokens : knownTokens.slice(0, 24));
+
+  if (!keySet.size) {
+    return 0.45 + stageKeywordScore(input.stage, metadataBlob);
+  }
+
+  let supported = 0;
+  let unknown = 0;
+  let unsafe = 0;
+  for (const token of keySet) {
+    if (!token) continue;
+    if (isRuntimeUnsafeRequiredKey(token)) {
+      unsafe += 1;
+      continue;
+    }
+    if (canRuntimePopulateRequiredKey(input.stage, token)) {
+      supported += 1;
+    } else {
+      unknown += 1;
+    }
+  }
+
+  const total = keySet.size || 1;
+  const supportRatio = supported / total;
+  const unknownPenalty = (unknown / total) * 0.22;
+  const unsafePenalty = (unsafe / total) * 0.65;
+  const keywordBonus = stageKeywordScore(input.stage, metadataBlob);
+  return Math.max(0, Math.min(1, 0.5 + supportRatio * 0.45 + keywordBonus - unknownPenalty - unsafePenalty));
+}
+
+function filterPlanningPoolBySchemaViability(input: {
+  actors: ApifyStoreActor[];
+  actorProfiles: Map<string, ActorCapabilityProfile>;
+  actorMemoryById: Map<string, SourcingActorMemory>;
+}) {
+  const rows = input.actors.map((actor) => {
+    const profile = input.actorProfiles.get(actor.actorId);
+    const hintStage = stageFromActor(actor);
+    const stageScores = {
+      prospect_discovery: estimateActorStageViability({ stage: "prospect_discovery", actor, actorProfile: profile }),
+      website_enrichment: estimateActorStageViability({ stage: "website_enrichment", actor, actorProfile: profile }),
+      email_discovery: estimateActorStageViability({ stage: "email_discovery", actor, actorProfile: profile }),
+    };
+    const memory = input.actorMemoryById.get(actor.actorId.toLowerCase());
+    const reliabilityPenalty = memory ? Math.min(0.35, memory.compatibilityFailCount * 0.05 + memory.failCount * 0.02) : 0;
+    const bestStage = (Object.keys(stageScores) as LeadChainStepStage[]).sort(
+      (a, b) => stageScores[b] - stageScores[a]
+    )[0];
+    const bestScore = stageScores[bestStage];
+    const hintedScore = stageScores[hintStage];
+    const viability = Math.max(bestScore, hintedScore) - reliabilityPenalty;
+    return {
+      actor,
+      viability,
+      bestStage,
+      hintStage,
+    };
+  });
+
+  const filtered = rows
+    .filter((row) => row.viability >= 0.34)
+    .sort((a, b) => b.viability - a.viability)
+    .map((row) => row.actor);
+  return filtered.length >= Math.min(18, Math.max(6, Math.floor(input.actors.length * 0.15))) ? filtered : input.actors;
+}
+
 function actorScore(actor: ApifyStoreActor) {
   return actor.users30Days * 1.2 + actor.rating * 40;
 }
@@ -696,11 +873,33 @@ async function selectPlanningActorsWithLlm(input: {
   brandName: string;
   brandWebsite: string;
   experimentName: string;
+  actorProfilesById: Map<string, ActorCapabilityProfile>;
+  actorMemoryById: Map<string, SourcingActorMemory>;
 }) {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey || !input.actors.length) return [] as string[];
   try {
     const shortlist = input.actors.slice(0, 110).map((actor) => ({
+      ...(() => {
+        const profile = input.actorProfilesById.get(actor.actorId);
+        const schemaKeys = schemaSummaryKeys(profile?.schemaSummary);
+        const memory = input.actorMemoryById.get(actor.actorId.toLowerCase());
+        const requiredTokens = schemaKeys.requiredKeys.map(normalizeSchemaKeyToken).filter(Boolean);
+        const runtimeUnsafeRequired = requiredTokens.some((token) => isRuntimeUnsafeRequiredKey(token));
+        return {
+          requiredKeys: schemaKeys.requiredKeys.slice(0, 12),
+          knownKeyCount: schemaKeys.knownKeys.length,
+          runtimeUnsafeRequired,
+          memory: memory
+            ? {
+                successCount: memory.successCount,
+                failCount: memory.failCount,
+                compatibilityFailCount: memory.compatibilityFailCount,
+                avgQuality: memory.avgQuality,
+              }
+            : null,
+        };
+      })(),
       actorId: actor.actorId,
       stageHint: stageFromActor(actor),
       title: trimText(actor.title, 120),
@@ -718,6 +917,7 @@ async function selectPlanningActorsWithLlm(input: {
       "Goal: maximize real people + business-email lead yield with high run compatibility.",
       "Use only provided actorIds. Return JSON only.",
       "Prioritize actors that can run with public inputs and produce lead/company/email signals.",
+      "Avoid actors requiring runtime auth/cookies/files, and deprioritize actors with high compatibility failures in memory.",
       "Avoid actors likely unrelated to B2B lead sourcing for this experiment.",
       "Return at most 45 actorIds with stage diversity.",
       '{ "selectedActorIds": string[] }',
@@ -816,6 +1016,8 @@ async function planApifyLeadChainCandidates(input: {
   experimentName: string;
   offer: string;
   actorPool: ApifyStoreActor[];
+  actorProfilesById: Map<string, ActorCapabilityProfile>;
+  actorMemoryRows: SourcingActorMemory[];
   maxCandidates?: number;
 }) {
   const apiKey = process.env.OPENAI_API_KEY;
@@ -864,6 +1066,8 @@ async function planApifyLeadChainCandidates(input: {
     brandName: input.brandName,
     brandWebsite: input.brandWebsite,
     experimentName: input.experimentName,
+    actorProfilesById: input.actorProfilesById,
+    actorMemoryById: new Map(input.actorMemoryRows.map((row) => [row.actorId.toLowerCase(), row])),
   });
   if (llmSelectedActorIds.length >= 12) {
     const picked = new Set(llmSelectedActorIds.map((id) => id.toLowerCase()));
@@ -1439,6 +1643,21 @@ function summarizeTopReasons(rejected: LeadAcceptanceDecision[], max = 5) {
     .map(([reason, count]) => ({ reason, count }));
 }
 
+function looksLikeActorInputCompatibilityError(text: unknown) {
+  const normalized = String(text ?? "").toLowerCase();
+  if (!normalized) return false;
+  return (
+    normalized.includes("field input.") ||
+    normalized.includes("property input.") ||
+    normalized.includes("required property") ||
+    normalized.includes("is required") ||
+    normalized.includes("must be") ||
+    normalized.includes("invalid input") ||
+    normalized.includes("input validation") ||
+    normalized.includes("not allowed")
+  );
+}
+
 function buildProbeMemoryUpdates(candidates: ProbedSourcingPlan[]) {
   const bucket = new Map<
     string,
@@ -1463,8 +1682,15 @@ function buildProbeMemoryUpdates(candidates: ProbedSourcingPlan[]) {
       if (probe.outcome === "pass") current.successDelta += 1;
       else current.failDelta += 1;
 
-      const reasonBlob = JSON.stringify(probe.details ?? {}).toLowerCase();
-      if (reasonBlob.includes("incompatible_actor_input") || reasonBlob.includes("missing required input keys")) {
+      const reasonBlob = JSON.stringify({
+        candidateReason: candidate.reason,
+        probeDetails: probe.details ?? {},
+      }).toLowerCase();
+      if (
+        reasonBlob.includes("incompatible_actor_input") ||
+        reasonBlob.includes("missing required input keys") ||
+        looksLikeActorInputCompatibilityError(reasonBlob)
+      ) {
         current.compatibilityFailDelta += 1;
       }
       if (probe.stage === "email_discovery" && probe.outcome === "pass" && denominator > 0) {
@@ -3617,6 +3843,11 @@ async function processSourceLeadsJob(job: OutreachJob) {
     topActorPool.map((actor) => actor.actorId),
     sourcingToken
   );
+  const planningActorPool = filterPlanningPoolBySchemaViability({
+    actors: topActorPool,
+    actorProfiles,
+    actorMemoryById: new Map(actorMemory.map((row) => [row.actorId.toLowerCase(), row])),
+  });
 
   await createOutreachEvent({
     runId: run.id,
@@ -3626,6 +3857,7 @@ async function processSourceLeadsJob(job: OutreachJob) {
       queryPlan: actorPoolResult.queryPlan,
       queriesTried: actorPoolResult.searchDiagnostics,
       actorCount: topActorPool.length,
+      planningActorCount: planningActorPool.length,
       actorProfiles: actorProfiles.size,
       qualityPolicy,
     },
@@ -3639,7 +3871,9 @@ async function processSourceLeadsJob(job: OutreachJob) {
       brandWebsite: brand?.website ?? "",
       experimentName: experiment.name ?? "",
       offer: offerContext,
-      actorPool: topActorPool,
+      actorPool: planningActorPool,
+      actorProfilesById: actorProfiles,
+      actorMemoryRows: actorMemory,
       maxCandidates: APIFY_CHAIN_MAX_CANDIDATES,
     });
   } catch (error) {
@@ -3902,14 +4136,51 @@ async function processSourceLeadsJob(job: OutreachJob) {
   });
 
   if (!execution.ok) {
-    await upsertSourcingActorMemory(
-      selectedProbed.plan.steps.map((step) => ({
-        actorId: step.actorId,
-        failDelta: 1,
-        compatibilityFailDelta: execution.reason.includes("incompatible") ? 1 : 0,
-        qualitySample: 0,
-      }))
+    const failedActorIds = new Set(
+      execution.stepDiagnostics
+        .filter((row) => row.ok === false)
+        .map((row) => String(row.actorId ?? "").trim())
+        .filter(Boolean)
     );
+    const compatibilityByActor = new Set(
+      execution.stepDiagnostics
+        .filter((row) => row.ok === false)
+        .filter((row) =>
+          looksLikeActorInputCompatibilityError(
+            JSON.stringify({
+              reason: row.reason,
+              error: row.error,
+              missingRequired: row.missingRequired,
+            })
+          )
+        )
+        .map((row) => String(row.actorId ?? "").trim())
+        .filter(Boolean)
+    );
+    const fallbackCompatibility = looksLikeActorInputCompatibilityError(
+      JSON.stringify({
+        reason: execution.reason,
+        lastActorInputError: execution.lastActorInputError,
+      })
+    );
+    const memoryUpdates = selectedProbed.plan.steps
+      .map((step) => {
+        const failed = failedActorIds.has(step.actorId);
+        const compatibilityFailed = compatibilityByActor.has(step.actorId) || (failed && fallbackCompatibility);
+        if (!failed && !compatibilityFailed) return null;
+        return {
+          actorId: step.actorId,
+          failDelta: failed ? 1 : 0,
+          compatibilityFailDelta: compatibilityFailed ? 1 : 0,
+          qualitySample: 0,
+        };
+      })
+      .filter((row): row is { actorId: string; failDelta: number; compatibilityFailDelta: number; qualitySample: number } =>
+        Boolean(row)
+      );
+    if (memoryUpdates.length) {
+      await upsertSourcingActorMemory(memoryUpdates);
+    }
     await setTrace({
       phase: "failed",
       failureStep: "execute_chain",

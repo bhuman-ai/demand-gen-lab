@@ -228,6 +228,25 @@ function inferNameFromEmail(email: string) {
     .join(" ");
 }
 
+function inferCompanyFromDomain(input: string) {
+  const raw = String(input ?? "").trim().toLowerCase();
+  if (!raw) return "";
+  const domain = raw.includes("@") ? raw.split("@")[1] ?? "" : raw;
+  const normalized = domain.replace(/^www\./, "");
+  if (!normalized || isLikelyFreeDomain(normalized)) return "";
+  const root = normalized.split(".")[0] ?? "";
+  if (!root || root.length < 2) return "";
+  if (["mail", "smtp", "mx", "email", "contact"].includes(root)) return "";
+
+  return root
+    .replace(/[-_]+/g, " ")
+    .split(" ")
+    .map((token) => token.trim())
+    .filter(Boolean)
+    .map((token) => token.charAt(0).toUpperCase() + token.slice(1))
+    .join(" ");
+}
+
 type LeadSourcingSearchResult = {
   ok: boolean;
   query: string;
@@ -1251,12 +1270,13 @@ export function leadsFromEmailDiscoveryRows(rows: unknown[], maxLeads: number): 
       if (getLeadEmailSuppressionReason(email)) continue;
       if (seen.has(email)) continue;
       seen.add(email);
+      const resolvedDomain = maybeDomain(email, domain);
       leads.push({
         email,
         name: inferNameFromEmail(email),
-        company: domain || maybeDomain(email, ""),
+        company: inferCompanyFromDomain(domain) || inferCompanyFromDomain(resolvedDomain),
         title: "",
-        domain: maybeDomain(email, domain),
+        domain: resolvedDomain,
         sourceUrl: sourceUrl || (domain ? `https://${domain}` : ""),
       });
       if (leads.length >= limit) return leads;
@@ -1317,12 +1337,13 @@ export function leadsFromApifyRows(rows: unknown[], maxLeads: number): ApifyLead
     for (const email of emails) {
       if (seen.has(email)) continue;
       seen.add(email);
+      const resolvedDomain = maybeDomain(email, "");
       out.push({
         email,
         name: name || inferNameFromEmail(email),
-        company,
+        company: company || inferCompanyFromDomain(resolvedDomain),
         title,
-        domain: maybeDomain(email, ""),
+        domain: resolvedDomain,
         sourceUrl,
       });
       if (out.length >= limit) return out;
@@ -1349,12 +1370,13 @@ function normalizeApifyLead(raw: unknown): ApifyLead | null {
   const title = String(row.title ?? row.jobTitle ?? "").trim();
   const sourceUrl = String(row.url ?? row.profileUrl ?? row.linkedinUrl ?? row.website ?? "").trim();
 
+  const resolvedDomain = maybeDomain(email, String(row.domain ?? ""));
   return {
     email,
     name: name || inferNameFromEmail(email),
-    company,
+    company: company || inferCompanyFromDomain(resolvedDomain),
     title,
-    domain: maybeDomain(email, String(row.domain ?? "")),
+    domain: resolvedDomain,
     sourceUrl,
   };
 }

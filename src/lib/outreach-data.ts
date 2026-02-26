@@ -3,12 +3,18 @@ import { createId } from "@/lib/factory-data";
 import { decryptJson, encryptJson } from "@/lib/outreach-encryption";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import type {
+  ActorCapabilityProfile,
   BrandOutreachAssignment,
+  LeadQualityPolicy,
   OutreachAccount,
   OutreachAccountConfig,
   OutreachMessage,
   OutreachRun,
   OutreachRunLead,
+  SourcingActorMemory,
+  SourcingChainDecision,
+  SourcingChainStep,
+  SourcingProbeResult,
   ReplyDraft,
   ReplyMessage,
   ReplyThread,
@@ -84,6 +90,10 @@ type OutreachStore = {
   anomalies: RunAnomaly[];
   events: OutreachEvent[];
   jobs: OutreachJob[];
+  sourcingActorProfiles: ActorCapabilityProfile[];
+  sourcingChainDecisions: SourcingChainDecision[];
+  sourcingProbeResults: SourcingProbeResult[];
+  sourcingActorMemory: SourcingActorMemory[];
 };
 
 const isVercel = Boolean(process.env.VERCEL);
@@ -119,6 +129,10 @@ const TABLE_REPLY_DRAFT = "demanddev_reply_drafts";
 const TABLE_EVENT = "demanddev_outreach_events";
 const TABLE_JOB = "demanddev_outreach_job_queue";
 const TABLE_ANOMALY = "demanddev_run_anomalies";
+const TABLE_SOURCING_ACTOR_PROFILE = "demanddev_sourcing_actor_profiles";
+const TABLE_SOURCING_CHAIN_DECISION = "demanddev_sourcing_chain_decisions";
+const TABLE_SOURCING_PROBE_RESULT = "demanddev_sourcing_probe_results";
+const TABLE_SOURCING_ACTOR_MEMORY = "demanddev_sourcing_actor_memory";
 
 const nowIso = () => new Date().toISOString();
 
@@ -150,6 +164,10 @@ function defaultOutreachStore(): OutreachStore {
     anomalies: [],
     events: [],
     jobs: [],
+    sourcingActorProfiles: [],
+    sourcingChainDecisions: [],
+    sourcingProbeResults: [],
+    sourcingActorMemory: [],
   };
 }
 
@@ -336,6 +354,38 @@ function mapRunRow(input: unknown): OutreachRun {
     lastError: String(row.last_error ?? row.lastError ?? ""),
     externalRef: String(row.external_ref ?? row.externalRef ?? ""),
     metrics: row.metrics ? mapRunMetrics(row.metrics) : defaultRunMetrics(),
+    sourcingTraceSummary:
+      row.sourcing_trace_summary && typeof row.sourcing_trace_summary === "object"
+        ? ({
+            phase: String((row.sourcing_trace_summary as Record<string, unknown>).phase ?? "plan_sourcing") as
+              | "plan_sourcing"
+              | "probe_chain"
+              | "execute_chain"
+              | "completed"
+              | "failed",
+            selectedActorIds: Array.isArray(
+              (row.sourcing_trace_summary as Record<string, unknown>).selectedActorIds
+            )
+              ? ((row.sourcing_trace_summary as Record<string, unknown>).selectedActorIds as unknown[])
+                  .map((value) => String(value ?? "").trim())
+                  .filter(Boolean)
+              : [],
+            lastActorInputError: String(
+              (row.sourcing_trace_summary as Record<string, unknown>).lastActorInputError ?? ""
+            ),
+            failureStep: String((row.sourcing_trace_summary as Record<string, unknown>).failureStep ?? ""),
+            budgetUsedUsd: Math.max(
+              0,
+              Number((row.sourcing_trace_summary as Record<string, unknown>).budgetUsedUsd ?? 0) || 0
+            ),
+          })
+        : {
+            phase: "plan_sourcing",
+            selectedActorIds: [],
+            lastActorInputError: "",
+            failureStep: "",
+            budgetUsedUsd: 0,
+          },
     startedAt: String(row.started_at ?? row.startedAt ?? ""),
     completedAt: String(row.completed_at ?? row.completedAt ?? ""),
     createdAt: String(row.created_at ?? row.createdAt ?? nowIso()),
@@ -515,6 +565,123 @@ function mapEventRow(input: unknown): OutreachEvent {
   };
 }
 
+function mapSourcingActorProfileRow(input: unknown): ActorCapabilityProfile {
+  const row = asRecord(input);
+  const stageHintsRaw = row.stage_hints ?? row.stageHints;
+  const stageHints = Array.isArray(stageHintsRaw)
+    ? stageHintsRaw
+        .map((item) => String(item ?? "").trim())
+        .filter((item) => ["prospect_discovery", "website_enrichment", "email_discovery"].includes(item))
+    : [];
+  return {
+    actorId: String(row.actor_id ?? row.actorId ?? ""),
+    stageHints: stageHints as ActorCapabilityProfile["stageHints"],
+    schemaSummary:
+      row.schema_summary && typeof row.schema_summary === "object" && !Array.isArray(row.schema_summary)
+        ? (row.schema_summary as Record<string, unknown>)
+        : row.schemaSummary && typeof row.schemaSummary === "object" && !Array.isArray(row.schemaSummary)
+          ? (row.schemaSummary as Record<string, unknown>)
+          : {},
+    compatibilityScore: Number(row.compatibility_score ?? row.compatibilityScore ?? 0) || 0,
+    lastSeenMetadata:
+      row.last_seen_metadata && typeof row.last_seen_metadata === "object" && !Array.isArray(row.last_seen_metadata)
+        ? (row.last_seen_metadata as Record<string, unknown>)
+        : row.lastSeenMetadata && typeof row.lastSeenMetadata === "object" && !Array.isArray(row.lastSeenMetadata)
+          ? (row.lastSeenMetadata as Record<string, unknown>)
+          : {},
+    createdAt: String(row.created_at ?? row.createdAt ?? nowIso()),
+    updatedAt: String(row.updated_at ?? row.updatedAt ?? nowIso()),
+  };
+}
+
+function mapSourcingChainDecisionRow(input: unknown): SourcingChainDecision {
+  const row = asRecord(input);
+  const selectedChainRaw = Array.isArray(row.selected_chain)
+    ? row.selected_chain
+    : Array.isArray(row.selectedChain)
+      ? row.selectedChain
+      : [];
+  const selectedChain: SourcingChainStep[] = selectedChainRaw
+    .map((item) => asRecord(item))
+    .map((item, index) => ({
+      id: String(item.id ?? `step_${index + 1}`).trim(),
+      stage: ["prospect_discovery", "website_enrichment", "email_discovery"].includes(String(item.stage))
+        ? (String(item.stage) as SourcingChainStep["stage"])
+        : "prospect_discovery",
+      actorId: String(item.actorId ?? item.actor_id ?? "").trim(),
+      purpose: String(item.purpose ?? "").trim(),
+      queryHint: String(item.queryHint ?? item.query_hint ?? "").trim(),
+    }))
+    .filter((item) => item.id && item.actorId);
+
+  const qualityPolicyRaw = asRecord(row.quality_policy ?? row.qualityPolicy);
+  const qualityPolicy: LeadQualityPolicy = {
+    allowFreeDomains: Boolean(qualityPolicyRaw.allowFreeDomains ?? false),
+    allowRoleInboxes: Boolean(qualityPolicyRaw.allowRoleInboxes ?? false),
+    requirePersonName: Boolean(qualityPolicyRaw.requirePersonName ?? true),
+    requireCompany: Boolean(qualityPolicyRaw.requireCompany ?? true),
+    requireTitle: Boolean(qualityPolicyRaw.requireTitle ?? false),
+    minConfidenceScore: Math.max(0, Math.min(1, Number(qualityPolicyRaw.minConfidenceScore ?? 0.55) || 0.55)),
+  };
+
+  return {
+    id: String(row.id ?? ""),
+    brandId: String(row.brand_id ?? row.brandId ?? ""),
+    experimentOwnerId: String(row.experiment_owner_id ?? row.experimentOwnerId ?? ""),
+    runtimeCampaignId: String(row.runtime_campaign_id ?? row.runtimeCampaignId ?? ""),
+    runtimeExperimentId: String(row.runtime_experiment_id ?? row.runtimeExperimentId ?? ""),
+    runId: String(row.run_id ?? row.runId ?? ""),
+    strategy: String(row.strategy ?? "").trim(),
+    rationale: String(row.rationale ?? "").trim(),
+    budgetUsedUsd: Math.max(0, Number(row.budget_used_usd ?? row.budgetUsedUsd ?? 0) || 0),
+    qualityPolicy,
+    selectedChain,
+    probeSummary: asRecord(row.probe_summary ?? row.probeSummary),
+    createdAt: String(row.created_at ?? row.createdAt ?? nowIso()),
+    updatedAt: String(row.updated_at ?? row.updatedAt ?? nowIso()),
+  };
+}
+
+function mapSourcingProbeResultRow(input: unknown): SourcingProbeResult {
+  const row = asRecord(input);
+  return {
+    id: String(row.id ?? ""),
+    decisionId: String(row.decision_id ?? row.decisionId ?? ""),
+    brandId: String(row.brand_id ?? row.brandId ?? ""),
+    experimentOwnerId: String(row.experiment_owner_id ?? row.experimentOwnerId ?? ""),
+    runId: String(row.run_id ?? row.runId ?? ""),
+    stepIndex: Math.max(0, Number(row.step_index ?? row.stepIndex ?? 0) || 0),
+    actorId: String(row.actor_id ?? row.actorId ?? ""),
+    stage: ["prospect_discovery", "website_enrichment", "email_discovery"].includes(String(row.stage))
+      ? (String(row.stage) as SourcingProbeResult["stage"])
+      : "prospect_discovery",
+    probeInputHash: String(row.probe_input_hash ?? row.probeInputHash ?? ""),
+    outcome: String(row.outcome) === "pass" ? "pass" : "fail",
+    qualityMetrics: asRecord(row.quality_metrics ?? row.qualityMetrics),
+    costEstimateUsd: Math.max(0, Number(row.cost_estimate_usd ?? row.costEstimateUsd ?? 0) || 0),
+    details: asRecord(row.details),
+    createdAt: String(row.created_at ?? row.createdAt ?? nowIso()),
+  };
+}
+
+function mapSourcingActorMemoryRow(input: unknown): SourcingActorMemory {
+  const row = asRecord(input);
+  return {
+    actorId: String(row.actor_id ?? row.actorId ?? ""),
+    successCount: Math.max(0, Number(row.success_count ?? row.successCount ?? 0) || 0),
+    failCount: Math.max(0, Number(row.fail_count ?? row.failCount ?? 0) || 0),
+    compatibilityFailCount: Math.max(
+      0,
+      Number(row.compatibility_fail_count ?? row.compatibilityFailCount ?? 0) || 0
+    ),
+    leadsAccepted: Math.max(0, Number(row.leads_accepted ?? row.leadsAccepted ?? 0) || 0),
+    leadsRejected: Math.max(0, Number(row.leads_rejected ?? row.leadsRejected ?? 0) || 0),
+    avgQuality: Math.max(0, Math.min(1, Number(row.avg_quality ?? row.avgQuality ?? 0) || 0)),
+    createdAt: String(row.created_at ?? row.createdAt ?? nowIso()),
+    updatedAt: String(row.updated_at ?? row.updatedAt ?? nowIso()),
+  };
+}
+
 async function readLocalStore(): Promise<OutreachStore> {
   try {
     const raw = await readFile(OUTREACH_PATH, "utf8");
@@ -543,6 +710,10 @@ async function readLocalStore(): Promise<OutreachStore> {
       anomalies: asArray(row.anomalies).map((item) => mapAnomalyRow(item)),
       events: asArray(row.events).map((item) => mapEventRow(item)),
       jobs: asArray(row.jobs).map((item) => mapJobRow(item)),
+      sourcingActorProfiles: asArray(row.sourcingActorProfiles).map((item) => mapSourcingActorProfileRow(item)),
+      sourcingChainDecisions: asArray(row.sourcingChainDecisions).map((item) => mapSourcingChainDecisionRow(item)),
+      sourcingProbeResults: asArray(row.sourcingProbeResults).map((item) => mapSourcingProbeResultRow(item)),
+      sourcingActorMemory: asArray(row.sourcingActorMemory).map((item) => mapSourcingActorMemoryRow(item)),
     };
   } catch {
     return defaultOutreachStore();
@@ -1367,6 +1538,13 @@ export async function createOutreachRun(input: {
     lastError: input.lastError ?? "",
     externalRef: input.externalRef ?? "",
     metrics: defaultRunMetrics(),
+    sourcingTraceSummary: {
+      phase: "plan_sourcing",
+      selectedActorIds: [],
+      lastActorInputError: "",
+      failureStep: "",
+      budgetUsedUsd: 0,
+    },
     startedAt: now,
     completedAt: "",
     createdAt: now,
@@ -1396,6 +1574,7 @@ export async function createOutreachRun(input: {
         last_error: run.lastError,
         external_ref: run.externalRef,
         metrics: run.metrics,
+        sourcing_trace_summary: run.sourcingTraceSummary,
         started_at: run.startedAt,
       })
       .select("*")
@@ -1425,6 +1604,7 @@ export async function updateOutreachRun(
       | "lastError"
       | "externalRef"
       | "metrics"
+      | "sourcingTraceSummary"
       | "completedAt"
     >
   >
@@ -1443,6 +1623,7 @@ export async function updateOutreachRun(
     if (patch.lastError !== undefined) update.last_error = patch.lastError;
     if (patch.externalRef !== undefined) update.external_ref = patch.externalRef;
     if (patch.metrics) update.metrics = patch.metrics;
+    if (patch.sourcingTraceSummary !== undefined) update.sourcing_trace_summary = patch.sourcingTraceSummary;
     if (patch.completedAt !== undefined) update.completed_at = patch.completedAt || null;
 
     const { data, error } = await supabase
@@ -2427,4 +2608,371 @@ export async function listRunAnomalies(runId: string): Promise<RunAnomaly[]> {
 
   const store = await readLocalStore();
   return store.anomalies.filter((row) => row.runId === runId).sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
+}
+
+export async function upsertSourcingActorProfiles(
+  profiles: Array<{
+    actorId: string;
+    stageHints: Array<"prospect_discovery" | "website_enrichment" | "email_discovery">;
+    schemaSummary?: Record<string, unknown>;
+    compatibilityScore?: number;
+    lastSeenMetadata?: Record<string, unknown>;
+  }>
+): Promise<ActorCapabilityProfile[]> {
+  const now = nowIso();
+  const sanitized = profiles
+    .map((row) => ({
+      actorId: String(row.actorId ?? "").trim(),
+      stageHints: Array.from(new Set((row.stageHints ?? []).filter(Boolean))),
+      schemaSummary: row.schemaSummary ?? {},
+      compatibilityScore: Number(row.compatibilityScore ?? 0) || 0,
+      lastSeenMetadata: row.lastSeenMetadata ?? {},
+    }))
+    .filter((row) => row.actorId);
+  if (!sanitized.length) return [];
+
+  const supabase = getSupabaseAdmin();
+  if (supabase) {
+    const rows = sanitized.map((row) => ({
+      actor_id: row.actorId,
+      stage_hints: row.stageHints,
+      schema_summary: row.schemaSummary,
+      compatibility_score: row.compatibilityScore,
+      last_seen_metadata: row.lastSeenMetadata,
+      updated_at: now,
+    }));
+    const { data, error } = await supabase
+      .from(TABLE_SOURCING_ACTOR_PROFILE)
+      .upsert(rows, { onConflict: "actor_id" })
+      .select("*");
+    if (!error) {
+      return (data ?? []).map((row: unknown) => mapSourcingActorProfileRow(row));
+    }
+  }
+
+  const store = await readLocalStore();
+  for (const row of sanitized) {
+    const index = store.sourcingActorProfiles.findIndex((item) => item.actorId === row.actorId);
+    const next: ActorCapabilityProfile = {
+      actorId: row.actorId,
+      stageHints: row.stageHints as ActorCapabilityProfile["stageHints"],
+      schemaSummary: row.schemaSummary,
+      compatibilityScore: row.compatibilityScore,
+      lastSeenMetadata: row.lastSeenMetadata,
+      createdAt: index >= 0 ? store.sourcingActorProfiles[index].createdAt : now,
+      updatedAt: now,
+    };
+    if (index >= 0) store.sourcingActorProfiles[index] = next;
+    else store.sourcingActorProfiles.unshift(next);
+  }
+  await writeLocalStore(store);
+  return store.sourcingActorProfiles;
+}
+
+export async function listSourcingActorProfiles(actorIds?: string[]): Promise<ActorCapabilityProfile[]> {
+  const ids = (actorIds ?? []).map((row) => String(row ?? "").trim()).filter(Boolean);
+  const supabase = getSupabaseAdmin();
+  if (supabase) {
+    let query = supabase
+      .from(TABLE_SOURCING_ACTOR_PROFILE)
+      .select("*")
+      .order("updated_at", { ascending: false });
+    if (ids.length) query = query.in("actor_id", ids);
+    const { data, error } = await query;
+    if (!error) {
+      return (data ?? []).map((row: unknown) => mapSourcingActorProfileRow(row));
+    }
+  }
+
+  const store = await readLocalStore();
+  const filtered = ids.length
+    ? store.sourcingActorProfiles.filter((row) => ids.includes(row.actorId))
+    : store.sourcingActorProfiles;
+  return [...filtered].sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1));
+}
+
+export async function upsertSourcingActorMemory(
+  updates: Array<{
+    actorId: string;
+    successDelta?: number;
+    failDelta?: number;
+    compatibilityFailDelta?: number;
+    leadsAcceptedDelta?: number;
+    leadsRejectedDelta?: number;
+    qualitySample?: number;
+  }>
+): Promise<SourcingActorMemory[]> {
+  if (!updates.length) return [];
+  const now = nowIso();
+  const byActor = new Map<string, (typeof updates)[number]>();
+  for (const row of updates) {
+    const actorId = String(row.actorId ?? "").trim();
+    if (!actorId) continue;
+    const existing = byActor.get(actorId);
+    if (existing) {
+      existing.successDelta = (existing.successDelta ?? 0) + (row.successDelta ?? 0);
+      existing.failDelta = (existing.failDelta ?? 0) + (row.failDelta ?? 0);
+      existing.compatibilityFailDelta =
+        (existing.compatibilityFailDelta ?? 0) + (row.compatibilityFailDelta ?? 0);
+      existing.leadsAcceptedDelta = (existing.leadsAcceptedDelta ?? 0) + (row.leadsAcceptedDelta ?? 0);
+      existing.leadsRejectedDelta = (existing.leadsRejectedDelta ?? 0) + (row.leadsRejectedDelta ?? 0);
+      if (row.qualitySample !== undefined) existing.qualitySample = row.qualitySample;
+      continue;
+    }
+    byActor.set(actorId, { ...row, actorId });
+  }
+  const merged = Array.from(byActor.values());
+
+  const existing = await getSourcingActorMemory(merged.map((row) => row.actorId));
+  const existingById = new Map(existing.map((row) => [row.actorId, row]));
+
+  const nextRows = merged.map((row) => {
+    const prev = existingById.get(row.actorId);
+    const successCount = Math.max(0, (prev?.successCount ?? 0) + (row.successDelta ?? 0));
+    const failCount = Math.max(0, (prev?.failCount ?? 0) + (row.failDelta ?? 0));
+    const compatibilityFailCount = Math.max(
+      0,
+      (prev?.compatibilityFailCount ?? 0) + (row.compatibilityFailDelta ?? 0)
+    );
+    const leadsAccepted = Math.max(0, (prev?.leadsAccepted ?? 0) + (row.leadsAcceptedDelta ?? 0));
+    const leadsRejected = Math.max(0, (prev?.leadsRejected ?? 0) + (row.leadsRejectedDelta ?? 0));
+    const qualityValue = Math.max(0, Math.min(1, Number(row.qualitySample ?? prev?.avgQuality ?? 0) || 0));
+    const samples = Math.max(1, successCount + failCount);
+    const avgQuality = prev ? ((prev.avgQuality * (samples - 1) + qualityValue) / samples) : qualityValue;
+    return {
+      actorId: row.actorId,
+      successCount,
+      failCount,
+      compatibilityFailCount,
+      leadsAccepted,
+      leadsRejected,
+      avgQuality,
+      createdAt: prev?.createdAt ?? now,
+      updatedAt: now,
+    } satisfies SourcingActorMemory;
+  });
+
+  const supabase = getSupabaseAdmin();
+  if (supabase) {
+    const payload = nextRows.map((row) => ({
+      actor_id: row.actorId,
+      success_count: row.successCount,
+      fail_count: row.failCount,
+      compatibility_fail_count: row.compatibilityFailCount,
+      leads_accepted: row.leadsAccepted,
+      leads_rejected: row.leadsRejected,
+      avg_quality: row.avgQuality,
+      updated_at: now,
+    }));
+    const { data, error } = await supabase
+      .from(TABLE_SOURCING_ACTOR_MEMORY)
+      .upsert(payload, { onConflict: "actor_id" })
+      .select("*");
+    if (!error) {
+      return (data ?? []).map((row: unknown) => mapSourcingActorMemoryRow(row));
+    }
+  }
+
+  const store = await readLocalStore();
+  for (const row of nextRows) {
+    const index = store.sourcingActorMemory.findIndex((item) => item.actorId === row.actorId);
+    if (index >= 0) store.sourcingActorMemory[index] = row;
+    else store.sourcingActorMemory.unshift(row);
+  }
+  await writeLocalStore(store);
+  return nextRows;
+}
+
+export async function getSourcingActorMemory(actorIds: string[]): Promise<SourcingActorMemory[]> {
+  const ids = actorIds.map((row) => String(row ?? "").trim()).filter(Boolean);
+  if (!ids.length) return [];
+
+  const supabase = getSupabaseAdmin();
+  if (supabase) {
+    const { data, error } = await supabase
+      .from(TABLE_SOURCING_ACTOR_MEMORY)
+      .select("*")
+      .in("actor_id", ids);
+    if (!error) {
+      return (data ?? []).map((row: unknown) => mapSourcingActorMemoryRow(row));
+    }
+  }
+
+  const store = await readLocalStore();
+  return store.sourcingActorMemory.filter((row) => ids.includes(row.actorId));
+}
+
+export async function createSourcingChainDecision(input: {
+  brandId: string;
+  experimentOwnerId: string;
+  runtimeCampaignId: string;
+  runtimeExperimentId: string;
+  runId: string;
+  strategy: string;
+  rationale: string;
+  budgetUsedUsd: number;
+  qualityPolicy: LeadQualityPolicy;
+  selectedChain: SourcingChainStep[];
+  probeSummary?: Record<string, unknown>;
+}): Promise<SourcingChainDecision> {
+  const now = nowIso();
+  const decision: SourcingChainDecision = {
+    id: createId("srcdec"),
+    brandId: input.brandId,
+    experimentOwnerId: input.experimentOwnerId,
+    runtimeCampaignId: input.runtimeCampaignId,
+    runtimeExperimentId: input.runtimeExperimentId,
+    runId: input.runId,
+    strategy: input.strategy,
+    rationale: input.rationale,
+    budgetUsedUsd: Math.max(0, Number(input.budgetUsedUsd ?? 0) || 0),
+    qualityPolicy: input.qualityPolicy,
+    selectedChain: input.selectedChain,
+    probeSummary: input.probeSummary ?? {},
+    createdAt: now,
+    updatedAt: now,
+  };
+
+  const supabase = getSupabaseAdmin();
+  if (supabase) {
+    const { data, error } = await supabase
+      .from(TABLE_SOURCING_CHAIN_DECISION)
+      .insert({
+        id: decision.id,
+        brand_id: decision.brandId,
+        experiment_owner_id: decision.experimentOwnerId,
+        runtime_campaign_id: decision.runtimeCampaignId,
+        runtime_experiment_id: decision.runtimeExperimentId,
+        run_id: decision.runId || null,
+        strategy: decision.strategy,
+        rationale: decision.rationale,
+        budget_used_usd: decision.budgetUsedUsd,
+        quality_policy: decision.qualityPolicy,
+        selected_chain: decision.selectedChain,
+        probe_summary: decision.probeSummary,
+      })
+      .select("*")
+      .single();
+    if (!error && data) {
+      return mapSourcingChainDecisionRow(data);
+    }
+  }
+
+  const store = await readLocalStore();
+  store.sourcingChainDecisions.unshift(decision);
+  await writeLocalStore(store);
+  return decision;
+}
+
+export async function listSourcingChainDecisions(input: {
+  brandId: string;
+  experimentOwnerId: string;
+  limit?: number;
+}): Promise<SourcingChainDecision[]> {
+  const limit = Math.max(1, Math.min(50, Number(input.limit ?? 10) || 10));
+  const supabase = getSupabaseAdmin();
+  if (supabase) {
+    const { data, error } = await supabase
+      .from(TABLE_SOURCING_CHAIN_DECISION)
+      .select("*")
+      .eq("brand_id", input.brandId)
+      .eq("experiment_owner_id", input.experimentOwnerId)
+      .order("created_at", { ascending: false })
+      .limit(limit);
+    if (!error) {
+      return (data ?? []).map((row: unknown) => mapSourcingChainDecisionRow(row));
+    }
+  }
+
+  const store = await readLocalStore();
+  return store.sourcingChainDecisions
+    .filter((row) => row.brandId === input.brandId && row.experimentOwnerId === input.experimentOwnerId)
+    .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1))
+    .slice(0, limit);
+}
+
+export async function createSourcingProbeResults(
+  rows: Array<{
+    decisionId: string;
+    brandId: string;
+    experimentOwnerId: string;
+    runId: string;
+    stepIndex: number;
+    actorId: string;
+    stage: SourcingProbeResult["stage"];
+    probeInputHash: string;
+    outcome: SourcingProbeResult["outcome"];
+    qualityMetrics?: Record<string, unknown>;
+    costEstimateUsd?: number;
+    details?: Record<string, unknown>;
+  }>
+): Promise<SourcingProbeResult[]> {
+  if (!rows.length) return [];
+  const now = nowIso();
+  const probeRows: SourcingProbeResult[] = rows.map((row) => ({
+    id: createId("srcprobe"),
+    decisionId: row.decisionId,
+    brandId: row.brandId,
+    experimentOwnerId: row.experimentOwnerId,
+    runId: row.runId,
+    stepIndex: Math.max(0, Number(row.stepIndex ?? 0) || 0),
+    actorId: String(row.actorId ?? "").trim(),
+    stage: row.stage,
+    probeInputHash: String(row.probeInputHash ?? "").trim(),
+    outcome: row.outcome,
+    qualityMetrics: row.qualityMetrics ?? {},
+    costEstimateUsd: Math.max(0, Number(row.costEstimateUsd ?? 0) || 0),
+    details: row.details ?? {},
+    createdAt: now,
+  }));
+
+  const supabase = getSupabaseAdmin();
+  if (supabase) {
+    const payload = probeRows.map((row) => ({
+      id: row.id,
+      decision_id: row.decisionId,
+      brand_id: row.brandId,
+      experiment_owner_id: row.experimentOwnerId,
+      run_id: row.runId || null,
+      step_index: row.stepIndex,
+      actor_id: row.actorId,
+      stage: row.stage,
+      probe_input_hash: row.probeInputHash,
+      outcome: row.outcome,
+      quality_metrics: row.qualityMetrics,
+      cost_estimate_usd: row.costEstimateUsd,
+      details: row.details,
+    }));
+    const { data, error } = await supabase
+      .from(TABLE_SOURCING_PROBE_RESULT)
+      .insert(payload)
+      .select("*");
+    if (!error) {
+      return (data ?? []).map((row: unknown) => mapSourcingProbeResultRow(row));
+    }
+  }
+
+  const store = await readLocalStore();
+  store.sourcingProbeResults = [...probeRows, ...store.sourcingProbeResults];
+  await writeLocalStore(store);
+  return probeRows;
+}
+
+export async function listSourcingProbeResults(decisionId: string): Promise<SourcingProbeResult[]> {
+  const supabase = getSupabaseAdmin();
+  if (supabase) {
+    const { data, error } = await supabase
+      .from(TABLE_SOURCING_PROBE_RESULT)
+      .select("*")
+      .eq("decision_id", decisionId)
+      .order("created_at", { ascending: true });
+    if (!error) {
+      return (data ?? []).map((row: unknown) => mapSourcingProbeResultRow(row));
+    }
+  }
+
+  const store = await readLocalStore();
+  return store.sourcingProbeResults
+    .filter((row) => row.decisionId === decisionId)
+    .sort((a, b) => (a.createdAt < b.createdAt ? -1 : 1));
 }

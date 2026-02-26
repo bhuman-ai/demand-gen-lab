@@ -331,6 +331,95 @@ export type OutreachRunMetrics = {
   negativeReplies: number;
 };
 
+export type LeadQualityPolicy = {
+  allowFreeDomains: boolean;
+  allowRoleInboxes: boolean;
+  requirePersonName: boolean;
+  requireCompany: boolean;
+  requireTitle: boolean;
+  minConfidenceScore: number;
+};
+
+export type ActorCapabilityProfile = {
+  actorId: string;
+  stageHints: Array<"prospect_discovery" | "website_enrichment" | "email_discovery">;
+  schemaSummary: Record<string, unknown>;
+  compatibilityScore: number;
+  lastSeenMetadata: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type SourcingChainStep = {
+  id: string;
+  stage: "prospect_discovery" | "website_enrichment" | "email_discovery";
+  actorId: string;
+  purpose: string;
+  queryHint: string;
+};
+
+export type SourcingChainDecision = {
+  id: string;
+  brandId: string;
+  experimentOwnerId: string;
+  runtimeCampaignId: string;
+  runtimeExperimentId: string;
+  runId: string;
+  strategy: string;
+  rationale: string;
+  budgetUsedUsd: number;
+  qualityPolicy: LeadQualityPolicy;
+  selectedChain: SourcingChainStep[];
+  probeSummary: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type SourcingProbeResult = {
+  id: string;
+  decisionId: string;
+  brandId: string;
+  experimentOwnerId: string;
+  runId: string;
+  stepIndex: number;
+  actorId: string;
+  stage: "prospect_discovery" | "website_enrichment" | "email_discovery";
+  probeInputHash: string;
+  outcome: "pass" | "fail";
+  qualityMetrics: Record<string, unknown>;
+  costEstimateUsd: number;
+  details: Record<string, unknown>;
+  createdAt: string;
+};
+
+export type SourcingActorMemory = {
+  actorId: string;
+  successCount: number;
+  failCount: number;
+  compatibilityFailCount: number;
+  leadsAccepted: number;
+  leadsRejected: number;
+  avgQuality: number;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type LeadAcceptanceDecision = {
+  email: string;
+  accepted: boolean;
+  confidence: number;
+  reason: string;
+  details: Record<string, unknown>;
+};
+
+export type SourcingTraceSummary = {
+  phase: "plan_sourcing" | "probe_chain" | "execute_chain" | "completed" | "failed";
+  selectedActorIds: string[];
+  lastActorInputError: string;
+  failureStep: string;
+  budgetUsedUsd: number;
+};
+
 export type OutreachRun = {
   id: string;
   brandId: string;
@@ -350,6 +439,7 @@ export type OutreachRun = {
   lastError: string;
   externalRef: string;
   metrics: OutreachRunMetrics;
+  sourcingTraceSummary: SourcingTraceSummary;
   startedAt: string;
   completedAt: string;
   createdAt: string;

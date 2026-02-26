@@ -22,6 +22,8 @@ import type {
   ReplyThread,
   RunAnomaly,
   ScaleCampaignRecord,
+  SourcingChainDecision,
+  SourcingProbeResult,
 } from "@/lib/factory-types";
 
 function asObject(value: unknown): Record<string, unknown> {
@@ -264,6 +266,50 @@ export async function fetchExperimentRunView(brandId: string, experimentId: stri
   });
   const data = await readJson(response);
   return data.run as RunViewModel;
+}
+
+export async function fetchExperimentSourcingTraceApi(brandId: string, experimentId: string) {
+  const response = await fetch(
+    `/api/brands/${brandId}/experiments/${experimentId}/sourcing-trace`,
+    { cache: "no-store" }
+  );
+  const data = await readJson(response);
+  const trace = asObject(data.trace);
+  return {
+    latestRun:
+      trace.latestRun && typeof trace.latestRun === "object" && !Array.isArray(trace.latestRun)
+        ? (trace.latestRun as OutreachRun)
+        : null,
+    latestDecision:
+      trace.latestDecision && typeof trace.latestDecision === "object" && !Array.isArray(trace.latestDecision)
+        ? (trace.latestDecision as SourcingChainDecision)
+        : null,
+    probeResults: (Array.isArray(trace.probeResults) ? trace.probeResults : []) as SourcingProbeResult[],
+    runEvents: (Array.isArray(trace.runEvents) ? trace.runEvents : []) as OutreachRunEvent[],
+    runJobs: (Array.isArray(trace.runJobs) ? trace.runJobs : []) as OutreachRunJob[],
+    decisions: (Array.isArray(trace.decisions) ? trace.decisions : []) as SourcingChainDecision[],
+  };
+}
+
+export async function sourceExperimentSampleLeadsApi(
+  brandId: string,
+  experimentId: string,
+  sampleSize = 20
+) {
+  const response = await fetch(
+    `/api/brands/${brandId}/experiments/${experimentId}/source-sample-leads`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sampleSize }),
+    }
+  );
+  const data = await readJson(response);
+  return {
+    runId: String(data.runId ?? ""),
+    status: String(data.status ?? ""),
+    sampleSize: Math.max(1, Number(data.sampleSize ?? sampleSize) || sampleSize),
+  };
 }
 
 export async function controlExperimentRunApi(

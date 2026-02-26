@@ -7,9 +7,11 @@ import {
   controlExperimentRunApi,
   fetchBrand,
   fetchExperiment,
+  fetchExperimentSourcingTraceApi,
   fetchExperimentRunView,
   launchExperimentTestApi,
   promoteExperimentApi,
+  sourceExperimentSampleLeadsApi,
   updateExperimentApi,
 } from "@/lib/client-api";
 import type { BrandRecord, ExperimentRecord, OutreachRun, RunViewModel } from "@/lib/factory-types";
@@ -54,24 +56,28 @@ export default function ExperimentClient({
   const [brand, setBrand] = useState<BrandRecord | null>(null);
   const [experiment, setExperiment] = useState<ExperimentRecord | null>(null);
   const [runView, setRunView] = useState<RunViewModel | null>(null);
+  const [sourcingTrace, setSourcingTrace] = useState<Awaited<ReturnType<typeof fetchExperimentSourcingTraceApi>> | null>(null);
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [launching, setLaunching] = useState(false);
+  const [sampling, setSampling] = useState(false);
   const [promoting, setPromoting] = useState(false);
   const [error, setError] = useState("");
 
   const refresh = async (showSpinner = true) => {
     if (showSpinner) setLoading(true);
     try {
-      const [brandRow, experimentRow, runRow] = await Promise.all([
+      const [brandRow, experimentRow, runRow, traceRow] = await Promise.all([
         fetchBrand(brandId),
         fetchExperiment(brandId, experimentId),
         fetchExperimentRunView(brandId, experimentId),
+        fetchExperimentSourcingTraceApi(brandId, experimentId),
       ]);
       setBrand(brandRow);
       setExperiment(experimentRow);
       setRunView(runRow);
+      setSourcingTrace(traceRow);
       localStorage.setItem("factory.activeBrandId", brandId);
     } finally {
       if (showSpinner) setLoading(false);
@@ -395,6 +401,25 @@ export default function ExperimentClient({
           <Button
             type="button"
             variant="outline"
+            disabled={sampling}
+            onClick={async () => {
+              setSampling(true);
+              setError("");
+              try {
+                await sourceExperimentSampleLeadsApi(brandId, experiment.id, Math.min(30, experiment.testEnvelope.sampleSize || 20));
+                await refresh(false);
+              } catch (err) {
+                setError(err instanceof Error ? err.message : "Failed to source sample leads");
+              } finally {
+                setSampling(false);
+              }
+            }}
+          >
+            {sampling ? "Sourcing..." : "Source Sample Leads"}
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
             disabled={promoting || runView.runs.length === 0 || Boolean(experiment.promotedCampaignId)}
             onClick={async () => {
               setPromoting(true);
@@ -430,6 +455,59 @@ export default function ExperimentClient({
           <CardDescription>Sent, replies, outcomes, and run timeline/debug events.</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
+          <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3">
+            <div className="text-sm font-medium">Sourcing Trace</div>
+            {sourcingTrace?.latestDecision ? (
+              <div className="mt-2 space-y-2 text-xs text-[color:var(--muted-foreground)]">
+                <div>
+                  Selected chain:{" "}
+                  <span className="font-medium text-[color:var(--foreground)]">
+                    {sourcingTrace.latestDecision.selectedChain
+                      .map((step) => `${step.stage}:${step.actorId}`)
+                      .join(" -> ")}
+                  </span>
+                </div>
+                <div>
+                  Budget used: ${Number(sourcingTrace.latestDecision.budgetUsedUsd || 0).toFixed(2)}
+                </div>
+                <div>
+                  Latest phase:{" "}
+                  <span className="font-medium text-[color:var(--foreground)]">
+                    {sourcingTrace.latestRun?.sourcingTraceSummary?.phase || "n/a"}
+                  </span>
+                </div>
+                {sourcingTrace.latestRun?.sourcingTraceSummary?.lastActorInputError ? (
+                  <div className="text-[color:var(--danger)]">
+                    Last actor error: {sourcingTrace.latestRun.sourcingTraceSummary.lastActorInputError}
+                  </div>
+                ) : null}
+                {sourcingTrace.probeResults.length ? (
+                  <div className="rounded-lg border border-[color:var(--border)] p-2">
+                    <div className="font-medium text-[color:var(--foreground)]">Probe outcomes</div>
+                    <div className="mt-1 space-y-1">
+                      {sourcingTrace.probeResults.slice(0, 8).map((row) => (
+                        <div key={row.id}>
+                          {row.stage} · {row.actorId} ·{" "}
+                          <span
+                            className={
+                              row.outcome === "pass" ? "text-[color:var(--success)]" : "text-[color:var(--danger)]"
+                            }
+                          >
+                            {row.outcome}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+            ) : (
+              <div className="mt-2 text-xs text-[color:var(--muted-foreground)]">
+                No sourcing decision yet. Launch test or source sample leads to generate trace.
+              </div>
+            )}
+          </div>
+
           {latestRun ? (
             <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3">
               <div className="flex flex-wrap items-center justify-between gap-2">

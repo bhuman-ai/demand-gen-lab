@@ -1,3 +1,4 @@
+import { createHash } from "crypto";
 import {
   defaultExperimentRunPolicy,
   getBrandById,
@@ -7,7 +8,17 @@ import {
   type Experiment,
   type Hypothesis,
 } from "@/lib/factory-data";
-import type { ConversationFlowGraph, ConversationFlowNode, ReplyThread } from "@/lib/factory-types";
+import type {
+  ActorCapabilityProfile,
+  ConversationFlowGraph,
+  ConversationFlowNode,
+  LeadAcceptanceDecision,
+  LeadQualityPolicy,
+  ReplyThread,
+  SourcingChainDecision,
+  SourcingChainStep,
+  SourcingTraceSummary,
+} from "@/lib/factory-types";
 import {
   createConversationEvent,
   createConversationSession,
@@ -28,6 +39,8 @@ import {
   createReplyDraft,
   createReplyMessage,
   createReplyThread,
+  createSourcingChainDecision,
+  createSourcingProbeResults,
   createRunAnomaly,
   createRunMessages,
   enqueueOutreachJob,
@@ -37,6 +50,7 @@ import {
   getOutreachRun,
   getReplyDraft,
   getReplyThread,
+  getSourcingActorMemory,
   listCampaignRuns,
   listDueOutreachJobs,
   listExperimentRuns,
@@ -49,19 +63,24 @@ import {
   updateReplyThread,
   updateRunLead,
   updateRunMessage,
+  upsertSourcingActorMemory,
+  upsertSourcingActorProfiles,
   upsertRunLeads,
   type OutreachJob,
 } from "@/lib/outreach-data";
 import {
+  evaluateActorCompatibility,
+  evaluateLeadAgainstQualityPolicy,
+  fetchApifyActorDatasetItems,
+  fetchApifyActorSchemaProfile,
   getLeadEmailSuppressionReason,
+  pollApifyActorRun,
+  runApifyActorSyncGetDatasetItems,
+  leadsFromApifyRows,
   sendOutreachMessage,
   sendReplyDraftAsEvent,
-  fetchApifyActorDatasetItems,
-  leadsFromApifyRows,
-  pollApifyActorRun,
   searchApifyStoreActors,
   startApifyActorRun,
-  sourceLeadsFromApify,
   type ApifyStoreActor,
   type ApifyLead,
 } from "@/lib/outreach-providers";
@@ -129,14 +148,35 @@ type LeadSourcingChainStep = {
   stage: LeadChainStepStage;
   purpose: string;
   actorId: string;
-  backupActorIds: string[];
   queryHint: string;
 };
 
 type LeadSourcingChainPlan = {
+  id: string;
   strategy: string;
   rationale: string;
   steps: LeadSourcingChainStep[];
+};
+
+type ProbedSourcingPlan = {
+  plan: LeadSourcingChainPlan;
+  probeResults: Array<{
+    stepIndex: number;
+    actorId: string;
+    stage: LeadChainStepStage;
+    outcome: "pass" | "fail";
+    probeInputHash: string;
+    qualityMetrics: Record<string, unknown>;
+    costEstimateUsd: number;
+    details: Record<string, unknown>;
+  }>;
+  acceptedLeads: ApifyLead[];
+  rejectedLeads: LeadAcceptanceDecision[];
+  acceptedCount: number;
+  rejectedCount: number;
+  score: number;
+  budgetUsedUsd: number;
+  reason: string;
 };
 
 type LeadSourcingChainData = {
@@ -148,11 +188,23 @@ type LeadSourcingChainData = {
 };
 
 const APIFY_CHAIN_MAX_STEPS = 3;
-const APIFY_CHAIN_MAX_STEP_CANDIDATES = 4;
+const APIFY_CHAIN_MAX_CANDIDATES = 6;
 const APIFY_CHAIN_MAX_ITEMS_PER_STEP = 200;
-const APIFY_CHAIN_MAX_CHARGE_USD = Math.max(
-  0.2,
-  Math.min(5, Number(process.env.PLATFORM_APIFY_CHAIN_MAX_CHARGE_USD ?? 0.8) || 0.8)
+const APIFY_CHAIN_EXEC_MAX_CHARGE_USD = Math.max(
+  0.25,
+  Math.min(5, Number(process.env.PLATFORM_APIFY_CHAIN_EXEC_MAX_CHARGE_USD ?? 1.2) || 1.2)
+);
+const APIFY_PROBE_BUDGET_USD = Math.max(
+  0.5,
+  Math.min(5, Number(process.env.PLATFORM_APIFY_PROBE_BUDGET_USD ?? 2) || 2)
+);
+const APIFY_PROBE_STEP_COST_ESTIMATE_USD = Math.max(
+  0.05,
+  Math.min(1, Number(process.env.PLATFORM_APIFY_PROBE_STEP_COST_ESTIMATE_USD ?? 0.25) || 0.25)
+);
+const APIFY_PROBE_MAX_LEADS = Math.max(
+  5,
+  Math.min(40, Number(process.env.PLATFORM_APIFY_PROBE_MAX_LEADS ?? 15) || 15)
 );
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -160,10 +212,6 @@ function asRecord(value: unknown): Record<string, unknown> {
     return value as Record<string, unknown>;
   }
   return {};
-}
-
-function listFromPayload(value: unknown) {
-  return Array.isArray(value) ? value.map((item) => String(item ?? "").trim()).filter(Boolean) : [];
 }
 
 function uniqueTrimmed(values: string[], max = 200) {
@@ -342,44 +390,6 @@ function mergeChainData(base: LeadSourcingChainData, rows: unknown[]): LeadSourc
   };
 }
 
-function chainDataFromPayload(payload: Record<string, unknown>, targetAudience: string): LeadSourcingChainData {
-  return {
-    queries: uniqueTrimmed(listFromPayload(payload.chainQueries), 120).length
-      ? uniqueTrimmed(listFromPayload(payload.chainQueries), 120)
-      : uniqueTrimmed([targetAudience], 120),
-    companies: uniqueTrimmed(listFromPayload(payload.chainCompanies), 120),
-    websites: uniqueTrimmed(listFromPayload(payload.chainWebsites), 200),
-    domains: uniqueTrimmed(listFromPayload(payload.chainDomains), 200).map((item) => item.toLowerCase()),
-    emails: uniqueTrimmed(listFromPayload(payload.chainEmails), 400).map((item) => item.toLowerCase()),
-  };
-}
-
-function chainDataToPayload(data: LeadSourcingChainData) {
-  return {
-    chainQueries: data.queries.slice(0, 120),
-    chainCompanies: data.companies.slice(0, 120),
-    chainWebsites: data.websites.slice(0, 200),
-    chainDomains: data.domains.slice(0, 200),
-    chainEmails: data.emails.slice(0, 400),
-  };
-}
-
-function summarizeActorInput(input: Record<string, unknown>) {
-  const summary: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(input)) {
-    if (Array.isArray(value)) {
-      summary[key] = { type: "array", count: value.length };
-      continue;
-    }
-    if (value && typeof value === "object") {
-      summary[key] = "object";
-      continue;
-    }
-    summary[key] = value;
-  }
-  return summary;
-}
-
 function stageFromActor(actor: ApifyStoreActor): LeadChainStepStage {
   const blob = `${actor.title} ${actor.description} ${actor.categories.join(" ")}`.toLowerCase();
   if (/(email|mailbox|contact\s+email|email\s+finder|hunter)/.test(blob)) return "email_discovery";
@@ -397,122 +407,11 @@ type ActorDiscoveryQueryPlan = {
   emailQueries: string[];
 };
 
-type ActorQueryPlanMode = "openai" | "baseline";
+type ActorQueryPlanMode = "openai";
 
 const APIFY_STORE_SEARCH_LIMIT = 40;
 const APIFY_STORE_MAX_QUERIES_PER_STAGE = 8;
 const APIFY_STORE_MAX_RESULTS = 160;
-
-const STORE_QUERY_STOP_WORDS = new Set([
-  "the",
-  "and",
-  "for",
-  "with",
-  "from",
-  "that",
-  "this",
-  "your",
-  "their",
-  "about",
-  "into",
-  "across",
-  "teams",
-  "team",
-  "help",
-  "build",
-  "growth",
-]);
-
-function tokenizeQueryTerms(value: string, max = 10) {
-  return uniqueTrimmed(
-    value
-      .toLowerCase()
-      .split(/[^a-z0-9]+/)
-      .map((term) => term.trim())
-      .filter((term) => term.length >= 4 && !STORE_QUERY_STOP_WORDS.has(term)),
-    max
-  );
-}
-
-function normalizeQueryList(value: unknown, fallback: string[], max = APIFY_STORE_MAX_QUERIES_PER_STAGE) {
-  const fromValue = Array.isArray(value)
-    ? value.map((row) => trimText(row, 120))
-    : typeof value === "string"
-      ? value
-          .split("\n")
-          .map((row) => trimText(row, 120))
-      : [];
-  const cleaned = uniqueTrimmed(fromValue, max);
-  if (cleaned.length) return cleaned;
-  return fallback.slice(0, max);
-}
-
-function baselineActorDiscoveryQueryPlan(input: {
-  targetAudience: string;
-  offer: string;
-  brandName: string;
-  brandWebsite: string;
-  experimentName: string;
-}): ActorDiscoveryQueryPlan {
-  const domain = parseDomainFromUrl(input.brandWebsite);
-  const audienceTerms = tokenizeQueryTerms(input.targetAudience, 8);
-  const offerTerms = tokenizeQueryTerms(input.offer, 6);
-  const experimentTerms = tokenizeQueryTerms(input.experimentName, 6);
-  const anchor = uniqueTrimmed(
-    [
-      ...audienceTerms,
-      ...offerTerms,
-      ...experimentTerms,
-      trimText(input.targetAudience, 120),
-      trimText(input.offer, 120),
-      trimText(input.brandName, 120),
-    ],
-    10
-  );
-  const firstAnchor = anchor[0] || input.targetAudience || "B2B prospecting";
-
-  return {
-    prospectQueries: uniqueTrimmed(
-      [
-        input.targetAudience,
-        `${firstAnchor} leads`,
-        `${firstAnchor} decision makers`,
-        `${firstAnchor} companies`,
-        `${firstAnchor} prospects`,
-        "linkedin people scraper",
-        "sales navigator leads scraper",
-        "crunchbase companies scraper",
-        "apollo leads export",
-      ],
-      APIFY_STORE_MAX_QUERIES_PER_STAGE
-    ),
-    websiteQueries: uniqueTrimmed(
-      [
-        `${firstAnchor} company websites`,
-        `${firstAnchor} domains`,
-        "company website finder",
-        "domain enrichment from company names",
-        "linkedin company website scraper",
-        "crunchbase company website extractor",
-        domain ? `${domain} similar companies websites` : "",
-      ],
-      APIFY_STORE_MAX_QUERIES_PER_STAGE
-    ),
-    emailQueries: uniqueTrimmed(
-      [
-        `${firstAnchor} contact emails`,
-        `${firstAnchor} work emails`,
-        "domain email finder",
-        "email finder by name and company",
-        "linkedin email finder",
-        "crunchbase email finder",
-        "website contact email extractor",
-        "b2b verified emails",
-      ],
-      APIFY_STORE_MAX_QUERIES_PER_STAGE
-    ),
-  };
-}
 
 async function planActorDiscoveryQueries(input: {
   targetAudience: string;
@@ -520,11 +419,10 @@ async function planActorDiscoveryQueries(input: {
   brandName: string;
   brandWebsite: string;
   experimentName: string;
-}): Promise<{ mode: ActorQueryPlanMode; plan: ActorDiscoveryQueryPlan; error: string }> {
-  const baseline = baselineActorDiscoveryQueryPlan(input);
+}): Promise<{ mode: ActorQueryPlanMode; plan: ActorDiscoveryQueryPlan }> {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) {
-    return { mode: "baseline", plan: baseline, error: "OPENAI_API_KEY missing" };
+    throw new Error("OPENAI_API_KEY missing for actor discovery planning");
   }
 
   const prompt = [
@@ -563,11 +461,7 @@ async function planActorDiscoveryQueries(input: {
 
   const raw = await response.text();
   if (!response.ok) {
-    return {
-      mode: "baseline",
-      plan: baseline,
-      error: `HTTP ${response.status}: ${raw.slice(0, 240)}`,
-    };
+    throw new Error(`Actor discovery query planning failed: HTTP ${response.status} ${raw.slice(0, 240)}`);
   }
 
   let payload: unknown = {};
@@ -586,22 +480,36 @@ async function planActorDiscoveryQueries(input: {
 
   const row = asRecord(parsed);
   const queriesRoot = asRecord(row.queries);
+  const strictQueryList = (value: unknown, label: string) => {
+    const fromValue = Array.isArray(value)
+      ? value.map((entry) => trimText(entry, 120))
+      : typeof value === "string"
+        ? value
+            .split("\n")
+            .map((entry) => trimText(entry, 120))
+        : [];
+    const cleaned = uniqueTrimmed(fromValue, APIFY_STORE_MAX_QUERIES_PER_STAGE);
+    if (!cleaned.length) {
+      throw new Error(`Actor discovery planning returned no ${label} queries`);
+    }
+    return cleaned;
+  };
   const plan: ActorDiscoveryQueryPlan = {
-    prospectQueries: normalizeQueryList(
+    prospectQueries: strictQueryList(
       row.prospectQueries ?? queriesRoot.prospectQueries ?? queriesRoot.prospect,
-      baseline.prospectQueries
+      "prospect"
     ),
-    websiteQueries: normalizeQueryList(
+    websiteQueries: strictQueryList(
       row.websiteQueries ?? queriesRoot.websiteQueries ?? queriesRoot.website,
-      baseline.websiteQueries
+      "website"
     ),
-    emailQueries: normalizeQueryList(
+    emailQueries: strictQueryList(
       row.emailQueries ?? queriesRoot.emailQueries ?? queriesRoot.email,
-      baseline.emailQueries
+      "email"
     ),
   };
 
-  return { mode: "openai", plan, error: "" };
+  return { mode: "openai", plan };
 }
 
 function actorCandidateScore(input: {
@@ -731,17 +639,60 @@ async function buildApifyActorPool(input: {
     searchDiagnostics,
     queryPlanMode: queryPlanResult.mode,
     queryPlan: queryPlanResult.plan,
-    queryPlanError: queryPlanResult.error,
   };
 }
 
-async function planApifyLeadChain(input: {
+function parseLeadChainPlanCandidate(input: {
+  raw: unknown;
+  allowedActorIds: Set<string>;
+  fallbackId: string;
+}) {
+  const row = asRecord(input.raw);
+  const strategy = trimText(row.strategy, 200) || "actor_chain";
+  const rationale = trimText(row.rationale, 360);
+  const stepsRaw = Array.isArray(row.steps) ? row.steps : [];
+  const steps: LeadSourcingChainStep[] = [];
+  const seenIds = new Set<string>();
+
+  for (let index = 0; index < stepsRaw.length; index += 1) {
+    const stepRow = asRecord(stepsRaw[index]);
+    const stage = stageFromValue(String(stepRow.stage ?? "").trim().toLowerCase());
+    if (!stage) continue;
+    const actorId = String(stepRow.actorId ?? "").trim();
+    if (!actorId || !input.allowedActorIds.has(actorId.toLowerCase())) continue;
+    const id = trimText(stepRow.id || `${stage}_${index + 1}`, 60).replace(/\s+/g, "_");
+    if (!id || seenIds.has(id.toLowerCase())) continue;
+    seenIds.add(id.toLowerCase());
+    steps.push({
+      id,
+      stage,
+      purpose: trimText(stepRow.purpose, 180),
+      actorId,
+      queryHint: trimText(stepRow.queryHint, 200),
+    });
+  }
+
+  const stageOrder = steps.map((step) => step.stage);
+  const stageOrderError = validateLeadChainStageOrder(stageOrder);
+  if (stageOrderError) return null;
+  if (!steps.length) return null;
+
+  return {
+    id: trimText(row.id || input.fallbackId, 80).replace(/\s+/g, "_"),
+    strategy,
+    rationale,
+    steps: steps.slice(0, APIFY_CHAIN_MAX_STEPS),
+  } satisfies LeadSourcingChainPlan;
+}
+
+async function planApifyLeadChainCandidates(input: {
   targetAudience: string;
   brandName: string;
   brandWebsite: string;
   experimentName: string;
   offer: string;
   actorPool: ApifyStoreActor[];
+  maxCandidates?: number;
 }) {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) {
@@ -760,9 +711,10 @@ async function planApifyLeadChain(input: {
     stageHint: stageFromActor(actor),
   }));
 
+  const maxCandidates = Math.max(2, Math.min(APIFY_CHAIN_MAX_CANDIDATES, Number(input.maxCandidates ?? 4) || 4));
   const prompt = [
     "You plan an Apify actor chain for B2B outreach lead sourcing.",
-    "Goal: choose a 1-3 step chain that can produce real people + emails from the provided target audience.",
+    "Goal: produce multiple high-quality 1-3 step chains that can source real people + business emails for the provided target audience.",
     "Rules:",
     "- Use only actorIds from actorPool.",
     "- Valid stage orders are:",
@@ -770,12 +722,13 @@ async function planApifyLeadChain(input: {
     "  2) prospect_discovery -> email_discovery,",
     "  3) prospect_discovery -> website_enrichment -> email_discovery.",
     "- Final step must be email_discovery.",
-    "- Include backupActorIds per step (0-3) from actorPool.",
+    "- Do NOT include backup actors.",
+    `- Return ${maxCandidates} distinct chain candidates with varied strategy.`,
     "- queryHint must be concrete and directly relevant to the experiment.",
     "- No placeholders or generic buzzword text.",
     "",
     "Return JSON only:",
-    '{ "strategy": string, "rationale": string, "steps": [{ "id": string, "stage": "prospect_discovery"|"website_enrichment"|"email_discovery", "purpose": string, "actorId": string, "backupActorIds": string[], "queryHint": string }] }',
+    '{ "candidates": [{ "id": string, "strategy": string, "rationale": string, "steps": [{ "id": string, "stage": "prospect_discovery"|"website_enrichment"|"email_discovery", "purpose": string, "actorId": string, "queryHint": string }] }] }',
     `Context: ${JSON.stringify({
       targetAudience: input.targetAudience,
       brandName: input.brandName,
@@ -820,81 +773,44 @@ async function planApifyLeadChain(input: {
     throw new Error("Apify chain planning returned non-JSON output");
   }
 
-  const row = asRecord(parsed);
-  const strategy = trimText(row.strategy, 200);
-  const rationale = trimText(row.rationale, 360);
-  const stepsRaw = Array.isArray(row.steps) ? row.steps : [];
-  const allowed = new Set(input.actorPool.map((actor) => actor.actorId.toLowerCase()));
-  const steps: LeadSourcingChainStep[] = [];
-  const seenIds = new Set<string>();
+  const root = asRecord(parsed);
+  const candidatesRaw =
+    Array.isArray(root.candidates) && root.candidates.length
+      ? root.candidates
+      : Array.isArray(root.chains)
+        ? root.chains
+        : [];
+  const allowedActorIds = new Set(input.actorPool.map((actor) => actor.actorId.toLowerCase()));
+  const parsedCandidates = candidatesRaw
+    .map((row, index) =>
+      parseLeadChainPlanCandidate({
+        raw: row,
+        allowedActorIds,
+        fallbackId: `candidate_${index + 1}`,
+      })
+    )
+    .filter((row): row is LeadSourcingChainPlan => Boolean(row));
 
-  for (let index = 0; index < stepsRaw.length; index += 1) {
-    const stepRow = asRecord(stepsRaw[index]);
-    const stage = stageFromValue(String(stepRow.stage ?? "").trim().toLowerCase());
-    if (!stage) continue;
-    const actorId = String(stepRow.actorId ?? "").trim();
-    if (!actorId || !allowed.has(actorId.toLowerCase())) continue;
-    const id = trimText(stepRow.id || `${stage}_${index + 1}`, 60).replace(/\s+/g, "_");
-    const dedupeId = id.toLowerCase();
-    if (seenIds.has(dedupeId)) continue;
-    seenIds.add(dedupeId);
-    const backupActorIds = uniqueTrimmed(
-      listFromPayload(stepRow.backupActorIds)
-        .filter((candidate) => allowed.has(candidate.toLowerCase()) && candidate.toLowerCase() !== actorId.toLowerCase()),
-      APIFY_CHAIN_MAX_STEP_CANDIDATES - 1
-    );
-
-    steps.push({
-      id,
-      stage,
-      purpose: trimText(stepRow.purpose, 180),
-      actorId,
-      backupActorIds,
-      queryHint: trimText(stepRow.queryHint, 200),
-    });
+  if (!parsedCandidates.length) {
+    throw new Error("Chain planning produced no valid candidates");
   }
 
-  const stagePools: Record<LeadChainStepStage, string[]> = {
-    prospect_discovery: input.actorPool
-      .filter((actor) => stageFromActor(actor) === "prospect_discovery")
-      .sort((a, b) => actorScore(b) - actorScore(a))
-      .map((actor) => actor.actorId),
-    website_enrichment: input.actorPool
-      .filter((actor) => stageFromActor(actor) === "website_enrichment")
-      .sort((a, b) => actorScore(b) - actorScore(a))
-      .map((actor) => actor.actorId),
-    email_discovery: input.actorPool
-      .filter((actor) => stageFromActor(actor) === "email_discovery")
-      .sort((a, b) => actorScore(b) - actorScore(a))
-      .map((actor) => actor.actorId),
-  };
-
-  for (const step of steps) {
-    const filled = uniqueTrimmed(
-      [
-        ...step.backupActorIds,
-        ...stagePools[step.stage].filter((candidate) => candidate.toLowerCase() !== step.actorId.toLowerCase()),
-      ],
-      APIFY_CHAIN_MAX_STEP_CANDIDATES - 1
-    );
-    step.backupActorIds = filled;
+  const deduped = [] as LeadSourcingChainPlan[];
+  const seenKeys = new Set<string>();
+  for (const candidate of parsedCandidates) {
+    const key = candidate.steps
+      .map((step) => `${step.stage}:${step.actorId.toLowerCase()}`)
+      .join("->");
+    if (!key || seenKeys.has(key)) continue;
+    seenKeys.add(key);
+    deduped.push(candidate);
+    if (deduped.length >= APIFY_CHAIN_MAX_CANDIDATES) break;
   }
 
-  const stageOrder = steps.map((step) => step.stage);
-  const stageOrderError = validateLeadChainStageOrder(stageOrder);
-  if (stageOrderError) {
-    throw new Error(stageOrderError);
+  if (!deduped.length) {
+    throw new Error("Chain planning candidates were duplicates/invalid");
   }
-
-  return {
-    strategy,
-    rationale,
-    steps: steps.slice(0, APIFY_CHAIN_MAX_STEPS),
-  } satisfies LeadSourcingChainPlan;
-}
-
-function leadChainStepCandidates(step: LeadSourcingChainStep) {
-  return uniqueTrimmed([step.actorId, ...step.backupActorIds], APIFY_CHAIN_MAX_STEP_CANDIDATES);
+  return deduped;
 }
 
 function buildChainStepInput(input: {
@@ -902,6 +818,7 @@ function buildChainStepInput(input: {
   chainData: LeadSourcingChainData;
   targetAudience: string;
   maxLeads: number;
+  probeMode?: boolean;
 }) {
   const querySeed = uniqueTrimmed(
     [input.step.queryHint, ...input.chainData.queries, ...input.chainData.companies, input.targetAudience],
@@ -916,13 +833,16 @@ function buildChainStepInput(input: {
     120
   );
 
+  const itemCap = input.probeMode
+    ? Math.max(5, Math.min(APIFY_PROBE_MAX_LEADS, input.maxLeads))
+    : Math.max(20, Math.min(APIFY_CHAIN_MAX_ITEMS_PER_STEP, input.maxLeads));
   const base = {
-    maxItems: Math.max(20, Math.min(APIFY_CHAIN_MAX_ITEMS_PER_STEP, input.maxLeads)),
-    limit: Math.max(20, Math.min(APIFY_CHAIN_MAX_ITEMS_PER_STEP, input.maxLeads)),
-    maxResults: Math.max(20, Math.min(APIFY_CHAIN_MAX_ITEMS_PER_STEP, input.maxLeads)),
-    maxRequestsPerCrawl: 60,
-    maxConcurrency: 8,
-    maxDepth: 2,
+    maxItems: itemCap,
+    limit: itemCap,
+    maxResults: itemCap,
+    maxRequestsPerCrawl: input.probeMode ? 20 : 60,
+    maxConcurrency: input.probeMode ? 4 : 8,
+    maxDepth: input.probeMode ? 1 : 2,
     includeSubdomains: false,
   };
 
@@ -966,6 +886,691 @@ function buildChainStepInput(input: {
     startUrls: websites.slice(0, 80).map((url) => ({ url })),
     emails: input.chainData.emails.slice(0, 150),
   } satisfies Record<string, unknown>;
+}
+
+function hashProbeInput(input: Record<string, unknown>) {
+  return createHash("sha256").update(JSON.stringify(input)).digest("hex");
+}
+
+function summarizeTopReasons(rejected: LeadAcceptanceDecision[], max = 5) {
+  const counts = new Map<string, number>();
+  for (const row of rejected) {
+    const key = row.reason || "rejected";
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  return Array.from(counts.entries())
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, max)
+    .map(([reason, count]) => ({ reason, count }));
+}
+
+async function generateAdaptiveLeadQualityPolicy(input: {
+  brandName: string;
+  brandWebsite: string;
+  targetAudience: string;
+  offer: string;
+  experimentName: string;
+}): Promise<LeadQualityPolicy> {
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) {
+    throw new Error("OPENAI_API_KEY missing for adaptive lead quality policy");
+  }
+
+  const prompt = [
+    "Generate a strict B2B lead quality policy for outbound outreach.",
+    "Optimize for quality over quantity. Return JSON only.",
+    "Policy fields:",
+    "- allowFreeDomains (boolean)",
+    "- allowRoleInboxes (boolean)",
+    "- requirePersonName (boolean)",
+    "- requireCompany (boolean)",
+    "- requireTitle (boolean)",
+    "- minConfidenceScore (number 0..1)",
+    "Rules:",
+    "- default to rejecting low-signal generic emails when unsure.",
+    "- minConfidenceScore should usually be between 0.55 and 0.9.",
+    `Context: ${JSON.stringify(input)}`,
+  ].join("\n");
+
+  const model = resolveLlmModel("lead_quality_policy", { prompt });
+  const response = await fetch("https://api.openai.com/v1/responses", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model,
+      input: prompt,
+      text: { format: { type: "json_object" } },
+      max_output_tokens: 900,
+    }),
+  });
+
+  const raw = await response.text();
+  if (!response.ok) {
+    throw new Error(`Lead quality policy generation failed: HTTP ${response.status} ${raw.slice(0, 240)}`);
+  }
+
+  let payload: unknown = {};
+  try {
+    payload = JSON.parse(raw);
+  } catch {
+    payload = {};
+  }
+  let parsed: unknown = {};
+  try {
+    parsed = JSON.parse(extractOutputText(payload));
+  } catch {
+    parsed = {};
+  }
+
+  const row = asRecord(parsed);
+  const policy: LeadQualityPolicy = {
+    allowFreeDomains: Boolean(row.allowFreeDomains ?? false),
+    allowRoleInboxes: Boolean(row.allowRoleInboxes ?? false),
+    requirePersonName: Boolean(row.requirePersonName ?? true),
+    requireCompany: Boolean(row.requireCompany ?? true),
+    requireTitle: Boolean(row.requireTitle ?? false),
+    minConfidenceScore: Math.max(0, Math.min(1, Number(row.minConfidenceScore ?? 0.65) || 0.65)),
+  };
+  return policy;
+}
+
+function normalizeSourcingChainSteps(steps: LeadSourcingChainStep[]): SourcingChainStep[] {
+  return steps.map((step) => ({
+    id: step.id,
+    stage: step.stage,
+    actorId: step.actorId,
+    purpose: step.purpose,
+    queryHint: step.queryHint,
+  }));
+}
+
+async function selectBestProbedChain(input: {
+  targetAudience: string;
+  offer: string;
+  candidates: ProbedSourcingPlan[];
+}): Promise<{ selectedPlanId: string; rationale: string }> {
+  const viable = input.candidates.filter((row) => row.acceptedCount > 0 && row.reason === "");
+  if (!viable.length) {
+    throw new Error("No viable probed chain candidates with accepted leads");
+  }
+
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) {
+    throw new Error("OPENAI_API_KEY missing for chain selection");
+  }
+
+  const prompt = [
+    "Choose the best lead-sourcing chain candidate for launch.",
+    "Optimize for lead quality first, then deliverability safety, then volume.",
+    "Return strict JSON only: { selectedPlanId: string, rationale: string }",
+    `Context: ${JSON.stringify({
+      targetAudience: input.targetAudience,
+      offer: input.offer,
+      candidates: viable.map((row) => ({
+        planId: row.plan.id,
+        strategy: row.plan.strategy,
+        rationale: row.plan.rationale,
+        steps: row.plan.steps,
+        acceptedCount: row.acceptedCount,
+        rejectedCount: row.rejectedCount,
+        score: row.score,
+        reason: row.reason,
+      })),
+    })}`,
+  ].join("\n");
+
+  const model = resolveLlmModel("lead_chain_selection", { prompt });
+  const response = await fetch("https://api.openai.com/v1/responses", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model,
+      input: prompt,
+      text: { format: { type: "json_object" } },
+      max_output_tokens: 800,
+    }),
+  });
+
+  const raw = await response.text();
+  if (!response.ok) {
+    throw new Error(`Chain selection failed: HTTP ${response.status} ${raw.slice(0, 220)}`);
+  }
+  let payload: unknown = {};
+  try {
+    payload = JSON.parse(raw);
+  } catch {
+    payload = {};
+  }
+  let parsed: unknown = {};
+  try {
+    parsed = JSON.parse(extractOutputText(payload));
+  } catch {
+    parsed = {};
+  }
+  const row = asRecord(parsed);
+  const selectedPlanId = String(row.selectedPlanId ?? "").trim();
+  const rationale = trimText(row.rationale, 400);
+  if (!selectedPlanId) {
+    throw new Error("Chain selection returned empty selectedPlanId");
+  }
+  if (!viable.some((candidate) => candidate.plan.id === selectedPlanId)) {
+    throw new Error("Chain selection returned unknown candidate id");
+  }
+  return { selectedPlanId, rationale };
+}
+
+async function fetchActorProfiles(
+  actorIds: string[],
+  token: string
+): Promise<Map<string, ActorCapabilityProfile>> {
+  const uniqueActorIds = uniqueTrimmed(actorIds, 300);
+  if (!uniqueActorIds.length) return new Map();
+
+  const rows: ActorCapabilityProfile[] = [];
+  for (const actorId of uniqueActorIds) {
+    const detail = await fetchApifyActorSchemaProfile({ actorId, token });
+    if (!detail.ok || !detail.profile) continue;
+    const profile: ActorCapabilityProfile = {
+      actorId: detail.profile.actorId,
+      stageHints: [],
+      schemaSummary: {
+        requiredKeys: detail.profile.requiredKeys,
+        knownKeys: detail.profile.knownKeys,
+      },
+      compatibilityScore: 0,
+      lastSeenMetadata: {
+        title: detail.profile.title,
+        description: detail.profile.description,
+      },
+      createdAt: nowIso(),
+      updatedAt: nowIso(),
+    };
+    rows.push(profile);
+  }
+
+  if (rows.length) {
+    await upsertSourcingActorProfiles(rows);
+  }
+  return new Map(rows.map((row) => [row.actorId, row]));
+}
+
+type ActorSchemaProfileCache = Map<string, Awaited<ReturnType<typeof fetchApifyActorSchemaProfile>>>;
+
+async function getActorSchemaProfileCached(input: {
+  cache: ActorSchemaProfileCache;
+  actorId: string;
+  token: string;
+}) {
+  const key = input.actorId.toLowerCase();
+  const existing = input.cache.get(key);
+  if (existing) return existing;
+  const fetched = await fetchApifyActorSchemaProfile({ actorId: input.actorId, token: input.token });
+  input.cache.set(key, fetched);
+  return fetched;
+}
+
+function rankActorPoolWithMemory(input: {
+  actors: ApifyStoreActor[];
+  memoryRows: Awaited<ReturnType<typeof getSourcingActorMemory>>;
+}) {
+  const memoryById = new Map(input.memoryRows.map((row) => [row.actorId.toLowerCase(), row]));
+  return [...input.actors].sort((a, b) => {
+    const scoreA = actorScore(a);
+    const scoreB = actorScore(b);
+    const memoryA = memoryById.get(a.actorId.toLowerCase());
+    const memoryB = memoryById.get(b.actorId.toLowerCase());
+    const adjustedA =
+      scoreA +
+      (memoryA ? memoryA.successCount * 4 + memoryA.avgQuality * 25 - memoryA.compatibilityFailCount * 6 : 0);
+    const adjustedB =
+      scoreB +
+      (memoryB ? memoryB.successCount * 4 + memoryB.avgQuality * 25 - memoryB.compatibilityFailCount * 6 : 0);
+    return adjustedB - adjustedA;
+  });
+}
+
+async function probeSourcingPlanCandidate(input: {
+  plan: LeadSourcingChainPlan;
+  targetAudience: string;
+  token: string;
+  qualityPolicy: LeadQualityPolicy;
+  remainingBudgetUsd: number;
+  actorSchemaCache: ActorSchemaProfileCache;
+}): Promise<ProbedSourcingPlan> {
+  let budgetUsedUsd = 0;
+  let chainData: LeadSourcingChainData = {
+    queries: uniqueTrimmed([input.targetAudience], 120),
+    companies: [],
+    websites: [],
+    domains: [],
+    emails: [],
+  };
+  const acceptedLeads: ApifyLead[] = [];
+  const rejectedLeads: LeadAcceptanceDecision[] = [];
+  const probeResults: ProbedSourcingPlan["probeResults"] = [];
+  let reason = "";
+
+  for (let stepIndex = 0; stepIndex < input.plan.steps.length; stepIndex += 1) {
+    const step = input.plan.steps[stepIndex];
+    if (budgetUsedUsd + APIFY_PROBE_STEP_COST_ESTIMATE_USD > input.remainingBudgetUsd) {
+      reason = "probe_budget_exhausted";
+      probeResults.push({
+        stepIndex,
+        actorId: step.actorId,
+        stage: step.stage,
+        outcome: "fail",
+        probeInputHash: "",
+        qualityMetrics: {},
+        costEstimateUsd: 0,
+        details: { reason },
+      });
+      break;
+    }
+
+    const actorInput = buildChainStepInput({
+      step,
+      chainData,
+      targetAudience: input.targetAudience,
+      maxLeads: APIFY_PROBE_MAX_LEADS,
+      probeMode: true,
+    });
+    const probeInputHash = hashProbeInput(actorInput);
+
+    const profile = await getActorSchemaProfileCached({
+      cache: input.actorSchemaCache,
+      actorId: step.actorId,
+      token: input.token,
+    });
+    if (!profile.ok || !profile.profile) {
+      reason = `actor_profile_unavailable:${step.actorId}`;
+      probeResults.push({
+        stepIndex,
+        actorId: step.actorId,
+        stage: step.stage,
+        outcome: "fail",
+        probeInputHash,
+        qualityMetrics: {},
+        costEstimateUsd: 0,
+        details: { reason, error: profile.error },
+      });
+      break;
+    }
+
+    const compatibility = evaluateActorCompatibility({
+      actorProfile: profile.profile,
+      actorInput,
+      stage: step.stage,
+    });
+    if (!compatibility.ok) {
+      reason = `incompatible_actor_input:${step.actorId}`;
+      probeResults.push({
+        stepIndex,
+        actorId: step.actorId,
+        stage: step.stage,
+        outcome: "fail",
+        probeInputHash,
+        qualityMetrics: { compatibilityScore: compatibility.score },
+        costEstimateUsd: 0,
+        details: { reason: compatibility.reason, missingRequired: compatibility.missingRequired },
+      });
+      break;
+    }
+
+    const run = await runApifyActorSyncGetDatasetItems({
+      actorId: step.actorId,
+      actorInput,
+      token: input.token,
+      timeoutSeconds: 60,
+    });
+    budgetUsedUsd += APIFY_PROBE_STEP_COST_ESTIMATE_USD;
+    if (!run.ok) {
+      reason = `probe_run_failed:${step.actorId}`;
+      probeResults.push({
+        stepIndex,
+        actorId: step.actorId,
+        stage: step.stage,
+        outcome: "fail",
+        probeInputHash,
+        qualityMetrics: { compatibilityScore: compatibility.score },
+        costEstimateUsd: APIFY_PROBE_STEP_COST_ESTIMATE_USD,
+        details: { reason, error: run.error },
+      });
+      break;
+    }
+
+    chainData = mergeChainData(chainData, run.rows);
+    const qualityMetrics: Record<string, unknown> = {
+      rowCount: run.rows.length,
+      compatibilityScore: compatibility.score,
+      signals: {
+        queries: chainData.queries.length,
+        companies: chainData.companies.length,
+        websites: chainData.websites.length,
+        domains: chainData.domains.length,
+        emails: chainData.emails.length,
+      },
+    };
+
+    if (stepIndex === input.plan.steps.length - 1) {
+      const leads = leadsFromApifyRows(run.rows, APIFY_PROBE_MAX_LEADS);
+      for (const lead of leads) {
+        const decision = evaluateLeadAgainstQualityPolicy({
+          lead,
+          policy: input.qualityPolicy,
+        });
+        if (decision.accepted) {
+          acceptedLeads.push(lead);
+        } else {
+          rejectedLeads.push(decision);
+        }
+      }
+      qualityMetrics.acceptedLeads = acceptedLeads.length;
+      qualityMetrics.rejectedLeads = rejectedLeads.length;
+      qualityMetrics.topRejections = summarizeTopReasons(rejectedLeads, 4);
+      if (!acceptedLeads.length) {
+        reason = "probe_no_accepted_leads";
+      }
+    }
+
+    probeResults.push({
+      stepIndex,
+      actorId: step.actorId,
+      stage: step.stage,
+      outcome: reason ? "fail" : "pass",
+      probeInputHash,
+      qualityMetrics,
+      costEstimateUsd: APIFY_PROBE_STEP_COST_ESTIMATE_USD,
+      details: {
+        stage: step.stage,
+        rowCount: run.rows.length,
+      },
+    });
+
+    if (reason) break;
+  }
+
+  const acceptedRatio =
+    acceptedLeads.length + rejectedLeads.length > 0
+      ? acceptedLeads.length / (acceptedLeads.length + rejectedLeads.length)
+      : 0;
+  const score = Number(
+    (
+      acceptedLeads.length * 4 +
+      acceptedRatio * 35 +
+      Math.max(0, 12 - budgetUsedUsd * 10) -
+      (reason ? 14 : 0)
+    ).toFixed(4)
+  );
+
+  return {
+    plan: input.plan,
+    probeResults,
+    acceptedLeads,
+    rejectedLeads,
+    acceptedCount: acceptedLeads.length,
+    rejectedCount: rejectedLeads.length,
+    score,
+    budgetUsedUsd,
+    reason,
+  };
+}
+
+async function executeSourcingPlan(input: {
+  plan: LeadSourcingChainPlan;
+  targetAudience: string;
+  token: string;
+  maxLeads: number;
+  qualityPolicy: LeadQualityPolicy;
+  actorSchemaCache: ActorSchemaProfileCache;
+}): Promise<{
+  ok: boolean;
+  reason: string;
+  leads: ApifyLead[];
+  rejectedLeads: LeadAcceptanceDecision[];
+  stepDiagnostics: Array<Record<string, unknown>>;
+  lastActorInputError: string;
+}> {
+  let chainData: LeadSourcingChainData = {
+    queries: uniqueTrimmed([input.targetAudience], 120),
+    companies: [],
+    websites: [],
+    domains: [],
+    emails: [],
+  };
+  const stepDiagnostics: Array<Record<string, unknown>> = [];
+  let lastActorInputError = "";
+
+  for (let stepIndex = 0; stepIndex < input.plan.steps.length; stepIndex += 1) {
+    const step = input.plan.steps[stepIndex];
+    const actorInput = buildChainStepInput({
+      step,
+      chainData,
+      targetAudience: input.targetAudience,
+      maxLeads: input.maxLeads,
+    });
+
+    const profile = await getActorSchemaProfileCached({
+      cache: input.actorSchemaCache,
+      actorId: step.actorId,
+      token: input.token,
+    });
+    if (!profile.ok || !profile.profile) {
+      lastActorInputError = profile.error || "actor_profile_unavailable";
+      stepDiagnostics.push({
+        stepIndex,
+        stage: step.stage,
+        actorId: step.actorId,
+        ok: false,
+        reason: "actor_profile_unavailable",
+        error: profile.error,
+      });
+      return {
+        ok: false,
+        reason: `Actor profile unavailable for ${step.actorId}`,
+        leads: [],
+        rejectedLeads: [],
+        stepDiagnostics,
+        lastActorInputError,
+      };
+    }
+
+    const compatibility = evaluateActorCompatibility({
+      actorProfile: profile.profile,
+      actorInput,
+      stage: step.stage,
+    });
+    if (!compatibility.ok) {
+      lastActorInputError = compatibility.reason;
+      stepDiagnostics.push({
+        stepIndex,
+        stage: step.stage,
+        actorId: step.actorId,
+        ok: false,
+        reason: "actor_input_incompatible",
+        missingRequired: compatibility.missingRequired,
+      });
+      return {
+        ok: false,
+        reason: `Actor input incompatible for ${step.actorId}: ${compatibility.reason}`,
+        leads: [],
+        rejectedLeads: [],
+        stepDiagnostics,
+        lastActorInputError,
+      };
+    }
+
+    const run = await startApifyActorRun({
+      token: input.token,
+      actorId: step.actorId,
+      actorInput,
+      maxTotalChargeUsd: APIFY_CHAIN_EXEC_MAX_CHARGE_USD,
+    });
+    if (!run.ok || !run.runId) {
+      lastActorInputError = run.error;
+      stepDiagnostics.push({
+        stepIndex,
+        stage: step.stage,
+        actorId: step.actorId,
+        ok: false,
+        reason: "actor_run_start_failed",
+        error: run.error,
+      });
+      return {
+        ok: false,
+        reason: `Failed to start actor ${step.actorId}: ${run.error}`,
+        leads: [],
+        rejectedLeads: [],
+        stepDiagnostics,
+        lastActorInputError,
+      };
+    }
+
+    let pollStatus = "ready";
+    let datasetId = run.datasetId;
+    for (let pollAttempt = 0; pollAttempt < 30; pollAttempt += 1) {
+      const poll = await pollApifyActorRun({
+        token: input.token,
+        runId: run.runId,
+      });
+      if (!poll.ok) {
+        lastActorInputError = poll.error;
+        stepDiagnostics.push({
+          stepIndex,
+          stage: step.stage,
+          actorId: step.actorId,
+          ok: false,
+          reason: "actor_poll_failed",
+          error: poll.error,
+        });
+        return {
+          ok: false,
+          reason: `Actor ${step.actorId} failed while polling: ${poll.error}`,
+          leads: [],
+          rejectedLeads: [],
+          stepDiagnostics,
+          lastActorInputError,
+        };
+      }
+      pollStatus = poll.status;
+      datasetId = poll.datasetId || datasetId;
+      if (poll.status === "succeeded") break;
+      if (poll.status === "ready" || poll.status === "running") {
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+        continue;
+      }
+    }
+
+    if (pollStatus !== "succeeded") {
+      return {
+        ok: false,
+        reason: `Actor ${step.actorId} did not finish successfully`,
+        leads: [],
+        rejectedLeads: [],
+        stepDiagnostics,
+        lastActorInputError,
+      };
+    }
+    if (!datasetId) {
+      return {
+        ok: false,
+        reason: `Actor ${step.actorId} completed without dataset`,
+        leads: [],
+        rejectedLeads: [],
+        stepDiagnostics,
+        lastActorInputError,
+      };
+    }
+
+    const fetched = await fetchApifyActorDatasetItems({
+      token: input.token,
+      datasetId,
+      limit: Math.max(20, Math.min(APIFY_CHAIN_MAX_ITEMS_PER_STEP, input.maxLeads)),
+    });
+    if (!fetched.ok) {
+      lastActorInputError = fetched.error;
+      stepDiagnostics.push({
+        stepIndex,
+        stage: step.stage,
+        actorId: step.actorId,
+        ok: false,
+        reason: "dataset_fetch_failed",
+        error: fetched.error,
+      });
+      return {
+        ok: false,
+        reason: `Dataset fetch failed for ${step.actorId}: ${fetched.error}`,
+        leads: [],
+        rejectedLeads: [],
+        stepDiagnostics,
+        lastActorInputError,
+      };
+    }
+
+    chainData = mergeChainData(chainData, fetched.rows);
+    stepDiagnostics.push({
+      stepIndex,
+      stage: step.stage,
+      actorId: step.actorId,
+      ok: true,
+      rowCount: fetched.rows.length,
+      signals: {
+        queries: chainData.queries.length,
+        companies: chainData.companies.length,
+        websites: chainData.websites.length,
+        domains: chainData.domains.length,
+        emails: chainData.emails.length,
+      },
+    });
+
+    if (stepIndex === input.plan.steps.length - 1) {
+      const rawLeads = leadsFromApifyRows(fetched.rows, input.maxLeads);
+      const accepted: ApifyLead[] = [];
+      const rejected: LeadAcceptanceDecision[] = [];
+      for (const lead of rawLeads) {
+        const decision = evaluateLeadAgainstQualityPolicy({
+          lead,
+          policy: input.qualityPolicy,
+        });
+        if (decision.accepted) accepted.push(lead);
+        else rejected.push(decision);
+      }
+
+      if (!accepted.length) {
+        return {
+          ok: false,
+          reason: "No leads passed adaptive quality policy",
+          leads: [],
+          rejectedLeads: rejected,
+          stepDiagnostics,
+          lastActorInputError,
+        };
+      }
+
+      return {
+        ok: true,
+        reason: "",
+        leads: accepted,
+        rejectedLeads: rejected,
+        stepDiagnostics,
+        lastActorInputError,
+      };
+    }
+  }
+
+  return {
+    ok: false,
+    reason: "Sourcing chain returned no final lead-producing step",
+    leads: [],
+    rejectedLeads: [],
+    stepDiagnostics,
+    lastActorInputError,
+  };
 }
 
 function supportsDelivery(account: ResolvedAccount) {
@@ -1855,6 +2460,8 @@ export async function launchExperimentRun(input: {
   trigger: "manual" | "hypothesis_approved";
   ownerType?: "experiment" | "campaign";
   ownerId?: string;
+  sampleOnly?: boolean;
+  maxLeadsOverride?: number;
 }): Promise<{
   ok: boolean;
   runId: string;
@@ -1977,8 +2584,9 @@ export async function launchExperimentRun(input: {
   const flowStartNode = publishedFlowMap
     ? conversationNodeById(publishedFlowMap.publishedGraph, publishedFlowMap.publishedGraph.startNodeId)
     : null;
-  const conversationPreflightReason =
-    !publishedFlowMap || !publishedFlowMap.publishedRevision
+  const conversationPreflightReason = input.sampleOnly
+    ? ""
+    : !publishedFlowMap || !publishedFlowMap.publishedRevision
       ? "No published conversation map for this variant"
       : !flowStartNode
         ? "Conversation map start node is invalid"
@@ -2051,12 +2659,19 @@ export async function launchExperimentRun(input: {
     runId: run.id,
     jobType: "source_leads",
     executeAfter: nowIso(),
+    payload: {
+      sampleOnly: input.sampleOnly === true,
+      maxLeadsOverride:
+        input.maxLeadsOverride !== undefined
+          ? Math.max(1, Math.min(500, Number(input.maxLeadsOverride) || 0))
+          : undefined,
+    },
   });
   await markExperimentExecutionStatus(input.brandId, input.campaignId, experiment.id, "queued");
   await createOutreachEvent({
     runId: run.id,
     eventType: "hypothesis_approved_auto_run_queued",
-    payload: { trigger: input.trigger },
+    payload: { trigger: input.trigger, sampleOnly: input.sampleOnly === true },
   });
 
   return { ok: true, runId: run.id, reason: "Run queued" };
@@ -2111,10 +2726,22 @@ async function processSourceLeadsJob(job: OutreachJob) {
   }
 
   const existingLeads = await listRunLeads(run.id);
+  const payload =
+    job.payload && typeof job.payload === "object" && !Array.isArray(job.payload)
+      ? (job.payload as Record<string, unknown>)
+      : {};
+  const sampleOnly = payload.sampleOnly === true;
+
   if (existingLeads.length) {
     await updateOutreachRun(run.id, {
-      status: run.status === "queued" || run.status === "sourcing" ? "scheduled" : run.status,
+      status:
+        run.status === "queued" || run.status === "sourcing"
+          ? sampleOnly
+            ? "completed"
+            : "scheduled"
+          : run.status,
       lastError: "",
+      completedAt: sampleOnly ? nowIso() : "",
       metrics: {
         ...run.metrics,
         sourcedLeads: existingLeads.length,
@@ -2123,13 +2750,15 @@ async function processSourceLeadsJob(job: OutreachJob) {
     await createOutreachEvent({
       runId: run.id,
       eventType: "lead_sourcing_skipped",
-      payload: { reason: "leads_already_present", count: existingLeads.length },
+      payload: { reason: "leads_already_present", count: existingLeads.length, sampleOnly },
     });
-    await enqueueOutreachJob({
-      runId: run.id,
-      jobType: "schedule_messages",
-      executeAfter: nowIso(),
-    });
+    if (!sampleOnly) {
+      await enqueueOutreachJob({
+        runId: run.id,
+        jobType: "schedule_messages",
+        executeAfter: nowIso(),
+      });
+    }
     return;
   }
 
@@ -2165,18 +2794,33 @@ async function processSourceLeadsJob(job: OutreachJob) {
     return;
   }
 
-  const payload =
-    job.payload && typeof job.payload === "object" && !Array.isArray(job.payload)
-      ? (job.payload as Record<string, unknown>)
-      : {};
-  const stage = String(payload.stage ?? "").trim();
-  const selectedActorIdFromPayload = String(payload.selectedActorId ?? "").trim();
-
   const sourceConfig = effectiveSourceConfig(hypothesis);
   const sourcingToken = effectiveSourcingToken(secrets);
-  const maxLeads = Math.max(1, Math.min(500, Number(sourceConfig.maxLeads ?? 100)));
-  const targetAudience = hypothesis.actorQuery.trim();
+  const maxLeads = Math.max(
+    1,
+    Math.min(
+      500,
+      Number(payload.maxLeadsOverride ?? sourceConfig.maxLeads ?? (sampleOnly ? APIFY_PROBE_MAX_LEADS : 100)) || 100
+    )
+  );
+  const targetAudience = hypothesis.actorQuery.trim() || experiment.notes.trim();
   const brand = await getBrandById(run.brandId);
+  const offerContext = experiment.notes || hypothesis.rationale || "";
+  const traceBase = run.sourcingTraceSummary;
+  let traceSummary: SourcingTraceSummary = {
+    phase: "plan_sourcing",
+    selectedActorIds: [],
+    lastActorInputError: "",
+    failureStep: "",
+    budgetUsedUsd: 0,
+  };
+
+  const setTrace = async (patch: Partial<typeof traceSummary>) => {
+    traceSummary = { ...traceSummary, ...patch };
+    await updateOutreachRun(run.id, {
+      sourcingTraceSummary: traceSummary,
+    });
+  };
 
   if (run.status === "queued") {
     await updateOutreachRun(run.id, { status: "sourcing", lastError: "" });
@@ -2186,58 +2830,30 @@ async function processSourceLeadsJob(job: OutreachJob) {
       runId: run.id,
       eventType: "lead_sourcing_requested",
       payload: {
-        strategy: sourceConfig.actorId ? "custom_actor" : "platform_store_actor_chain",
+        strategy: "dynamic_store_chain",
         maxLeads,
-        actorCandidates: sourceConfig.actorId ? [sourceConfig.actorId] : [],
+        sampleOnly,
       },
     });
-  }
-
-  // Custom override: for backward compatibility (not exposed in UI).
-  if (sourceConfig.actorId.trim()) {
-    await createOutreachEvent({
-      runId: run.id,
-      eventType: "lead_sourcing_actor_selected",
-      payload: {
-        actorId: sourceConfig.actorId,
-        reason: "hypothesis_override",
-      },
+    await setTrace({
+      phase: "plan_sourcing",
+      selectedActorIds: [],
+      lastActorInputError: "",
+      failureStep: "",
+      budgetUsedUsd: 0,
     });
-
-    const sourced = await sourceLeadsFromApify({
-      actorId: sourceConfig.actorId,
-      actorInput: sourceConfig.actorInput,
-      maxLeads,
-      token: sourcingToken,
-    });
-    await createOutreachEvent({
-      runId: run.id,
-      eventType: "lead_sourcing_completed",
-      payload: {
-        sourcedCount: sourced.length,
-        strategy: "custom_actor",
-        actorId: sourceConfig.actorId,
-      },
-    });
-
-    if (!sourced.length) {
-      await failRunWithDiagnostics({
-        run,
-        reason: "No leads sourced",
-        eventType: "lead_sourcing_failed",
-        payload: {
-          sourcedCount: 0,
-          maxLeads,
-        },
-      });
-      return;
-    }
-
-    await finishSourcingWithLeads(run, sourced);
-    return;
+  } else if (traceBase) {
+    traceSummary = {
+      phase: traceBase.phase,
+      selectedActorIds: [...traceBase.selectedActorIds],
+      lastActorInputError: traceBase.lastActorInputError,
+      failureStep: traceBase.failureStep,
+      budgetUsedUsd: traceBase.budgetUsedUsd,
+    };
   }
 
   if (!targetAudience) {
+    await setTrace({ phase: "failed", failureStep: "plan_sourcing" });
     await failRunWithDiagnostics({
       run,
       reason: "Target Audience is empty for this hypothesis",
@@ -2246,480 +2862,397 @@ async function processSourceLeadsJob(job: OutreachJob) {
     return;
   }
 
-  const parseChainPlan = () => {
-    const root = asRecord(payload.chainPlan);
-    const stepsRaw = Array.isArray(root.steps) ? root.steps : [];
-    const steps: LeadSourcingChainStep[] = [];
-    for (let index = 0; index < stepsRaw.length; index += 1) {
-      const row = asRecord(stepsRaw[index]);
-      const stageValue = stageFromValue(String(row.stage ?? "").trim());
-      if (!stageValue) continue;
-      const actorId = String(row.actorId ?? "").trim();
-      if (!actorId) continue;
-      steps.push({
-        id: trimText(row.id || `${stageValue}_${index + 1}`, 60).replace(/\s+/g, "_"),
-        stage: stageValue,
-        purpose: trimText(row.purpose, 180),
-        actorId,
-        backupActorIds: uniqueTrimmed(listFromPayload(row.backupActorIds), APIFY_CHAIN_MAX_STEP_CANDIDATES - 1),
-        queryHint: trimText(row.queryHint, 180),
-      });
-    }
-    if (!steps.length) return null;
-    return {
-      strategy: trimText(root.strategy, 200),
-      rationale: trimText(root.rationale, 320),
-      steps,
-    } satisfies LeadSourcingChainPlan;
-  };
-
-  const enqueueChainStepStart = async (input: {
-    chainPlan: LeadSourcingChainPlan;
-    chainData: LeadSourcingChainData;
-    stepIndex: number;
-    candidateIndex: number;
-  }) => {
-    await enqueueOutreachJob({
-      runId: run.id,
-      jobType: "source_leads",
-      executeAfter: nowIso(),
-      payload: {
-        stage: "start_chain_step",
-        chainPlan: input.chainPlan,
-        chainStepIndex: input.stepIndex,
-        chainCandidateIndex: input.candidateIndex,
-        maxLeads,
-        ...chainDataToPayload(input.chainData),
-      },
+  if (!sourcingToken) {
+    await setTrace({
+      phase: "failed",
+      failureStep: "plan_sourcing",
+      lastActorInputError: "Lead sourcing credentials are missing",
     });
-  };
+    await failRunWithDiagnostics({
+      run,
+      reason: "Lead sourcing credentials are missing",
+      eventType: "lead_sourcing_failed",
+    });
+    return;
+  }
 
-  const chainStepIndex = Math.max(0, Number(payload.chainStepIndex ?? 0) || 0);
-  const chainCandidateIndex = Math.max(0, Number(payload.chainCandidateIndex ?? 0) || 0);
-  const chainData = chainDataFromPayload(payload, targetAudience);
-  const existingChainPlan = parseChainPlan();
+  const actorSchemaCache: ActorSchemaProfileCache = new Map();
 
-  if (!stage) {
-    const actorPoolResult = await buildApifyActorPool({
+  let qualityPolicy: LeadQualityPolicy;
+  try {
+    qualityPolicy = await generateAdaptiveLeadQualityPolicy({
+      brandName: brand?.name ?? "",
+      brandWebsite: brand?.website ?? "",
       targetAudience,
-      offer: experiment.notes || hypothesis.rationale || "",
+      offer: offerContext,
+      experimentName: experiment.name ?? "",
+    });
+  } catch (error) {
+    await setTrace({
+      phase: "failed",
+      failureStep: "plan_sourcing",
+      lastActorInputError: error instanceof Error ? error.message : "quality_policy_failed",
+    });
+    await failRunWithDiagnostics({
+      run,
+      reason: `Adaptive lead quality policy generation failed: ${
+        error instanceof Error ? error.message : "Unknown error"
+      }`,
+      eventType: "lead_sourcing_failed",
+    });
+    return;
+  }
+
+  let actorPoolResult: Awaited<ReturnType<typeof buildApifyActorPool>>;
+  try {
+    actorPoolResult = await buildApifyActorPool({
+      targetAudience,
+      offer: offerContext,
       brandName: brand?.name ?? "",
       brandWebsite: brand?.website ?? "",
       experimentName: experiment.name ?? "",
     });
-    await createOutreachEvent({
-      runId: run.id,
-      eventType: "lead_sourcing_actor_pool_built",
+  } catch (error) {
+    await setTrace({
+      phase: "failed",
+      failureStep: "plan_sourcing",
+      lastActorInputError: error instanceof Error ? error.message : "actor_pool_failed",
+    });
+    await failRunWithDiagnostics({
+      run,
+      reason: `Actor discovery failed: ${error instanceof Error ? error.message : "Unknown error"}`,
+      eventType: "lead_sourcing_failed",
+    });
+    return;
+  }
+
+  if (!actorPoolResult.actors.length) {
+    await setTrace({ phase: "failed", failureStep: "plan_sourcing" });
+    await failRunWithDiagnostics({
+      run,
+      reason: "No Apify actors found for this experiment audience",
+      eventType: "lead_sourcing_failed",
       payload: {
-        queryPlanMode: actorPoolResult.queryPlanMode,
-        queryPlanError: actorPoolResult.queryPlanError,
-        queryPlan: actorPoolResult.queryPlan,
         queriesTried: actorPoolResult.searchDiagnostics,
-        actorCount: actorPoolResult.actors.length,
       },
-    });
-
-    if (!actorPoolResult.actors.length) {
-      await failRunWithDiagnostics({
-        run,
-        reason: "No Apify actors found for this experiment audience",
-        eventType: "lead_sourcing_failed",
-        payload: {
-          queriesTried: actorPoolResult.searchDiagnostics,
-        },
-      });
-      return;
-    }
-
-    let chainPlan: LeadSourcingChainPlan;
-    try {
-      chainPlan = await planApifyLeadChain({
-        targetAudience,
-        brandName: brand?.name ?? "",
-        brandWebsite: brand?.website ?? "",
-        experimentName: experiment.name ?? "",
-        offer: experiment.notes || hypothesis.rationale || "",
-        actorPool: actorPoolResult.actors,
-      });
-    } catch (error) {
-      await failRunWithDiagnostics({
-        run,
-        reason: `Lead-sourcing chain planning failed: ${error instanceof Error ? error.message : "Unknown error"}`,
-        eventType: "lead_sourcing_failed",
-        payload: {
-          actorPoolCount: actorPoolResult.actors.length,
-        },
-      });
-      return;
-    }
-
-    await createOutreachEvent({
-      runId: run.id,
-      eventType: "lead_sourcing_chain_planned",
-      payload: {
-        strategy: chainPlan.strategy,
-        rationale: chainPlan.rationale,
-        steps: chainPlan.steps.map((step) => ({
-          id: step.id,
-          stage: step.stage,
-          actorId: step.actorId,
-          backups: step.backupActorIds,
-          purpose: step.purpose,
-          queryHint: step.queryHint,
-        })),
-      },
-    });
-
-    await enqueueChainStepStart({
-      chainPlan,
-      chainData,
-      stepIndex: 0,
-      candidateIndex: 0,
     });
     return;
   }
 
-  if (stage === "start_chain_step") {
-    if (!existingChainPlan) {
-      await failRunWithDiagnostics({
-        run,
-        reason: "Lead-sourcing chain plan is missing from job payload",
-        eventType: "lead_sourcing_failed",
-      });
-      return;
-    }
-    const step = existingChainPlan.steps[chainStepIndex];
-    if (!step) {
-      await failRunWithDiagnostics({
-        run,
-        reason: `Lead-sourcing chain step ${chainStepIndex} is invalid`,
-        eventType: "lead_sourcing_failed",
-      });
-      return;
-    }
+  const actorMemory = await getSourcingActorMemory(actorPoolResult.actors.map((actor) => actor.actorId));
+  const rankedActorPool = rankActorPoolWithMemory({
+    actors: actorPoolResult.actors,
+    memoryRows: actorMemory,
+  });
+  const topActorPool = rankedActorPool.slice(0, APIFY_STORE_MAX_RESULTS);
+  const actorProfiles = await fetchActorProfiles(
+    topActorPool.map((actor) => actor.actorId),
+    sourcingToken
+  );
 
-    const candidates = leadChainStepCandidates(step);
-    const actorId =
-      selectedActorIdFromPayload ||
-      candidates[chainCandidateIndex] ||
-      candidates[0] ||
-      "";
-    if (!actorId) {
-      await failRunWithDiagnostics({
-        run,
-        reason: `No actor available for chain step ${step.id}`,
-        eventType: "lead_sourcing_failed",
-      });
-      return;
-    }
+  await createOutreachEvent({
+    runId: run.id,
+    eventType: "lead_sourcing_actor_pool_built",
+    payload: {
+      queryPlanMode: actorPoolResult.queryPlanMode,
+      queryPlan: actorPoolResult.queryPlan,
+      queriesTried: actorPoolResult.searchDiagnostics,
+      actorCount: topActorPool.length,
+      actorProfiles: actorProfiles.size,
+      qualityPolicy,
+    },
+  });
 
-    const actorInput = buildChainStepInput({
-      step,
-      chainData,
+  let chainCandidates: LeadSourcingChainPlan[];
+  try {
+    chainCandidates = await planApifyLeadChainCandidates({
       targetAudience,
-      maxLeads,
+      brandName: brand?.name ?? "",
+      brandWebsite: brand?.website ?? "",
+      experimentName: experiment.name ?? "",
+      offer: offerContext,
+      actorPool: topActorPool,
+      maxCandidates: APIFY_CHAIN_MAX_CANDIDATES,
     });
-    const started = await startApifyActorRun({
+  } catch (error) {
+    await setTrace({
+      phase: "failed",
+      failureStep: "plan_sourcing",
+      lastActorInputError: error instanceof Error ? error.message : "chain_plan_failed",
+    });
+    await failRunWithDiagnostics({
+      run,
+      reason: `Lead-sourcing chain planning failed: ${error instanceof Error ? error.message : "Unknown error"}`,
+      eventType: "lead_sourcing_failed",
+      payload: { actorPoolCount: topActorPool.length },
+    });
+    return;
+  }
+
+  await createOutreachEvent({
+    runId: run.id,
+    eventType: "lead_sourcing_chain_planned",
+    payload: {
+      candidateCount: chainCandidates.length,
+      candidates: chainCandidates.map((candidate) => ({
+        id: candidate.id,
+        strategy: candidate.strategy,
+        rationale: candidate.rationale,
+        steps: candidate.steps,
+      })),
+    },
+  });
+
+  await setTrace({ phase: "probe_chain" });
+
+  const probedCandidates: ProbedSourcingPlan[] = [];
+  let budgetUsedUsd = 0;
+  for (const planCandidate of chainCandidates) {
+    const remainingBudget = APIFY_PROBE_BUDGET_USD - budgetUsedUsd;
+    if (remainingBudget < APIFY_PROBE_STEP_COST_ESTIMATE_USD) {
+      break;
+    }
+    const probed = await probeSourcingPlanCandidate({
+      plan: planCandidate,
+      targetAudience,
       token: sourcingToken,
-      actorId,
-      actorInput,
-      maxTotalChargeUsd: APIFY_CHAIN_MAX_CHARGE_USD,
+      qualityPolicy,
+      remainingBudgetUsd: remainingBudget,
+      actorSchemaCache,
     });
+    probedCandidates.push(probed);
+    budgetUsedUsd += probed.budgetUsedUsd;
     await createOutreachEvent({
       runId: run.id,
-      eventType: "lead_sourcing_chain_step_started",
+      eventType: "lead_sourcing_probe_completed",
       payload: {
-        stepIndex: chainStepIndex,
-        candidateIndex: chainCandidateIndex,
-        stepId: step.id,
-        stage: step.stage,
-        actorId,
-        actorCandidates: candidates,
-        inputSummary: summarizeActorInput(actorInput),
-        ok: started.ok,
-        error: started.error,
+        candidateId: planCandidate.id,
+        strategy: planCandidate.strategy,
+        acceptedCount: probed.acceptedCount,
+        rejectedCount: probed.rejectedCount,
+        score: probed.score,
+        budgetUsedUsd: probed.budgetUsedUsd,
+        reason: probed.reason,
+        topRejections: summarizeTopReasons(probed.rejectedLeads),
       },
     });
+  }
 
-    if (!started.ok) {
-      if (chainCandidateIndex + 1 < candidates.length) {
-        await createOutreachEvent({
-          runId: run.id,
-          eventType: "lead_sourcing_chain_step_retry",
-          payload: {
-            stepIndex: chainStepIndex,
-            fromCandidateIndex: chainCandidateIndex,
-            toCandidateIndex: chainCandidateIndex + 1,
-            actorId,
-            reason: started.error,
-          },
-        });
-        await enqueueChainStepStart({
-          chainPlan: existingChainPlan,
-          chainData,
-          stepIndex: chainStepIndex,
-          candidateIndex: chainCandidateIndex + 1,
-        });
-        return;
-      }
+  await setTrace({ phase: "probe_chain", budgetUsedUsd });
 
-      await failRunWithDiagnostics({
-        run,
-        reason: `Chain step failed to start (${step.id}): ${started.error}`,
-        eventType: "lead_sourcing_failed",
-        payload: {
-          stepId: step.id,
-          actorId,
-          candidateIndex: chainCandidateIndex,
-          candidates,
-        },
-      });
-      return;
-    }
+  if (!probedCandidates.length) {
+    await setTrace({ phase: "failed", failureStep: "probe_chain", budgetUsedUsd });
+    await failRunWithDiagnostics({
+      run,
+      reason: "No chain candidate could be probed within the budget cap",
+      eventType: "lead_sourcing_failed",
+      payload: { budgetUsedUsd, budgetCapUsd: APIFY_PROBE_BUDGET_USD },
+    });
+    return;
+  }
 
-    await updateOutreachRun(run.id, { externalRef: started.runId });
-    await enqueueOutreachJob({
-      runId: run.id,
-      jobType: "source_leads",
-      executeAfter: new Date(Date.now() + 30_000).toISOString(),
+  let selectedPlanMeta: { selectedPlanId: string; rationale: string };
+  try {
+    selectedPlanMeta = await selectBestProbedChain({
+      targetAudience,
+      offer: offerContext,
+      candidates: probedCandidates,
+    });
+  } catch (error) {
+    await setTrace({
+      phase: "failed",
+      failureStep: "probe_chain",
+      lastActorInputError: error instanceof Error ? error.message : "chain_selection_failed",
+      budgetUsedUsd,
+    });
+    await failRunWithDiagnostics({
+      run,
+      reason: `Chain selection failed: ${error instanceof Error ? error.message : "Unknown error"}`,
+      eventType: "lead_sourcing_failed",
       payload: {
-        stage: "poll_chain_step",
-        chainPlan: existingChainPlan,
-        chainStepIndex,
-        chainCandidateIndex,
-        selectedActorId: actorId,
-        chainRunId: started.runId,
-        chainDatasetId: started.datasetId,
-        maxLeads,
-        ...chainDataToPayload(chainData),
+        candidateCount: probedCandidates.length,
+        budgetUsedUsd,
       },
     });
     return;
   }
 
-  if (stage === "poll_chain_step") {
-    if (!existingChainPlan) {
-      await failRunWithDiagnostics({
-        run,
-        reason: "Lead-sourcing chain plan is missing from poll payload",
-        eventType: "lead_sourcing_failed",
-      });
-      return;
-    }
-    const step = existingChainPlan.steps[chainStepIndex];
-    if (!step) {
-      await failRunWithDiagnostics({
-        run,
-        reason: `Lead-sourcing chain step ${chainStepIndex} is invalid`,
-        eventType: "lead_sourcing_failed",
-      });
-      return;
-    }
-
-    const runId = String(payload.chainRunId ?? "").trim();
-    const datasetId = String(payload.chainDatasetId ?? "").trim();
-    const actorId = selectedActorIdFromPayload;
-    const candidates = leadChainStepCandidates(step);
-
-    const poll = await pollApifyActorRun({ token: sourcingToken, runId });
-    await createOutreachEvent({
-      runId: run.id,
-      eventType: "lead_sourcing_chain_step_polled",
-      payload: {
-        stepIndex: chainStepIndex,
-        candidateIndex: chainCandidateIndex,
-        stepId: step.id,
-        stage: step.stage,
-        actorId,
-        ok: poll.ok,
-        status: poll.status,
-        error: poll.error,
-      },
+  const selectedProbed = probedCandidates.find((candidate) => candidate.plan.id === selectedPlanMeta.selectedPlanId);
+  if (!selectedProbed) {
+    await setTrace({
+      phase: "failed",
+      failureStep: "probe_chain",
+      lastActorInputError: "selected_plan_missing",
+      budgetUsedUsd,
     });
-
-    if (poll.ok && (poll.status === "ready" || poll.status === "running")) {
-      await enqueueOutreachJob({
-        runId: run.id,
-        jobType: "source_leads",
-        executeAfter: new Date(Date.now() + 30_000).toISOString(),
-        payload: {
-          ...payload,
-          stage: "poll_chain_step",
-          chainDatasetId: poll.datasetId || datasetId,
-          selectedActorId: actorId,
-        },
-      });
-      return;
-    }
-
-    const resolvedDatasetId = poll.datasetId || datasetId;
-    if (!resolvedDatasetId) {
-      await failRunWithDiagnostics({
-        run,
-        reason: poll.ok
-          ? `Chain step ${step.id} finished without dataset`
-          : `Chain step ${step.id} failed: ${poll.error}`,
-        eventType: "lead_sourcing_failed",
-        payload: {
-          stepId: step.id,
-          actorId,
-        },
-      });
-      return;
-    }
-
-    const fetched = await fetchApifyActorDatasetItems({
-      token: sourcingToken,
-      datasetId: resolvedDatasetId,
-      limit: APIFY_CHAIN_MAX_ITEMS_PER_STEP,
-    });
-    if (!fetched.ok) {
-      if (chainCandidateIndex + 1 < candidates.length) {
-        await createOutreachEvent({
-          runId: run.id,
-          eventType: "lead_sourcing_chain_step_retry",
-          payload: {
-            stepIndex: chainStepIndex,
-            fromCandidateIndex: chainCandidateIndex,
-            toCandidateIndex: chainCandidateIndex + 1,
-            actorId,
-            reason: `Dataset fetch failed: ${fetched.error}`,
-          },
-        });
-        await enqueueChainStepStart({
-          chainPlan: existingChainPlan,
-          chainData,
-          stepIndex: chainStepIndex,
-          candidateIndex: chainCandidateIndex + 1,
-        });
-        return;
-      }
-
-      await failRunWithDiagnostics({
-        run,
-        reason: `Chain step dataset fetch failed (${step.id}): ${fetched.error}`,
-        eventType: "lead_sourcing_failed",
-        payload: {
-          stepId: step.id,
-          actorId,
-          candidateIndex: chainCandidateIndex,
-        },
-      });
-      return;
-    }
-
-    const mergedData = mergeChainData(chainData, fetched.rows);
-    await createOutreachEvent({
-      runId: run.id,
-      eventType: "lead_sourcing_chain_step_completed",
-      payload: {
-        stepIndex: chainStepIndex,
-        candidateIndex: chainCandidateIndex,
-        stepId: step.id,
-        stage: step.stage,
-        actorId,
-        rowCount: fetched.rows.length,
-        signals: {
-          queries: mergedData.queries.length,
-          companies: mergedData.companies.length,
-          websites: mergedData.websites.length,
-          domains: mergedData.domains.length,
-          emails: mergedData.emails.length,
-        },
-      },
-    });
-
-    const hadSignalDelta =
-      mergedData.emails.length > chainData.emails.length ||
-      mergedData.domains.length > chainData.domains.length ||
-      mergedData.websites.length > chainData.websites.length ||
-      mergedData.queries.length > chainData.queries.length;
-
-    if (!hadSignalDelta && chainCandidateIndex + 1 < candidates.length) {
-      await createOutreachEvent({
-        runId: run.id,
-        eventType: "lead_sourcing_chain_step_retry",
-        payload: {
-          stepIndex: chainStepIndex,
-          fromCandidateIndex: chainCandidateIndex,
-          toCandidateIndex: chainCandidateIndex + 1,
-          actorId,
-          reason: "No new usable signals produced",
-        },
-      });
-      await enqueueChainStepStart({
-        chainPlan: existingChainPlan,
-        chainData,
-        stepIndex: chainStepIndex,
-        candidateIndex: chainCandidateIndex + 1,
-      });
-      return;
-    }
-
-    const isFinalStep = chainStepIndex >= existingChainPlan.steps.length - 1;
-    if (isFinalStep) {
-      const discovered = leadsFromApifyRows(fetched.rows, maxLeads);
-      const withSignalFallback = discovered.length
-        ? discovered
-        : mergedData.emails.slice(0, maxLeads).map((email) => ({
-            email,
-            name: "",
-            title: "",
-            company: mergedData.companies[0] ?? "",
-            domain: email.split("@")[1] ?? "",
-            sourceUrl: mergedData.websites[0] ?? "",
-          }));
-
-      await createOutreachEvent({
-        runId: run.id,
-        eventType: "lead_sourcing_completed",
-        payload: {
-          sourcedCount: withSignalFallback.length,
-          strategy: "platform_store_actor_chain",
-          chainSteps: existingChainPlan.steps.map((item) => ({
-            id: item.id,
-            stage: item.stage,
-            actorId: item.actorId,
-          })),
-        },
-      });
-
-      if (!withSignalFallback.length) {
-        await failRunWithDiagnostics({
-          run,
-          reason: "No leads sourced from actor chain",
-          eventType: "lead_sourcing_failed",
-          payload: {
-            stepId: step.id,
-            actorId,
-            rowCount: fetched.rows.length,
-          },
-        });
-        return;
-      }
-
-      await finishSourcingWithLeads(run, withSignalFallback);
-      return;
-    }
-
-    await enqueueChainStepStart({
-      chainPlan: existingChainPlan,
-      chainData: mergedData,
-      stepIndex: chainStepIndex + 1,
-      candidateIndex: 0,
+    await failRunWithDiagnostics({
+      run,
+      reason: "Selected sourcing chain is not available after probing",
+      eventType: "lead_sourcing_failed",
     });
     return;
   }
 
-  await failRunWithDiagnostics({
-    run,
-    reason: `Unknown lead sourcing stage: ${stage}`,
-    eventType: "lead_sourcing_failed",
+  const decision = await createSourcingChainDecision({
+    brandId: run.brandId,
+    experimentOwnerId: run.ownerId,
+    runtimeCampaignId: run.campaignId,
+    runtimeExperimentId: run.experimentId,
+    runId: run.id,
+    strategy: selectedProbed.plan.strategy,
+    rationale: selectedPlanMeta.rationale || selectedProbed.plan.rationale,
+    budgetUsedUsd,
+    qualityPolicy,
+    selectedChain: normalizeSourcingChainSteps(selectedProbed.plan.steps),
+    probeSummary: {
+      candidateCount: chainCandidates.length,
+      probedCount: probedCandidates.length,
+      budgetCapUsd: APIFY_PROBE_BUDGET_USD,
+      selectedPlanId: selectedProbed.plan.id,
+    },
+  });
+
+  const flattenedProbeRows = probedCandidates.flatMap((candidate) =>
+    candidate.probeResults.map((result) => ({
+      decisionId: decision.id,
+      brandId: run.brandId,
+      experimentOwnerId: run.ownerId,
+      runId: run.id,
+      stepIndex: result.stepIndex,
+      actorId: result.actorId,
+      stage: result.stage,
+      probeInputHash: result.probeInputHash,
+      outcome: result.outcome,
+      qualityMetrics: {
+        ...result.qualityMetrics,
+        candidateId: candidate.plan.id,
+        candidateScore: candidate.score,
+        candidateReason: candidate.reason,
+      },
+      costEstimateUsd: result.costEstimateUsd,
+      details: {
+        ...result.details,
+        strategy: candidate.plan.strategy,
+      },
+    }))
+  );
+  if (flattenedProbeRows.length) {
+    await createSourcingProbeResults(flattenedProbeRows);
+  }
+
+  await setTrace({
+    phase: "execute_chain",
+    selectedActorIds: selectedProbed.plan.steps.map((step) => step.actorId),
+    budgetUsedUsd,
+    failureStep: "",
+    lastActorInputError: "",
+  });
+
+  await createOutreachEvent({
+    runId: run.id,
+    eventType: "lead_sourcing_chain_selected",
+    payload: {
+      decisionId: decision.id,
+      selectedPlanId: selectedProbed.plan.id,
+      selectedRationale: selectedPlanMeta.rationale,
+      selectedChain: selectedProbed.plan.steps,
+      budgetUsedUsd,
+    },
+  });
+
+  const execution = await executeSourcingPlan({
+    plan: selectedProbed.plan,
+    targetAudience,
+    token: sourcingToken,
+    maxLeads,
+    qualityPolicy,
+    actorSchemaCache,
+  });
+
+  if (!execution.ok) {
+    await upsertSourcingActorMemory(
+      selectedProbed.plan.steps.map((step) => ({
+        actorId: step.actorId,
+        failDelta: 1,
+        compatibilityFailDelta: execution.reason.includes("incompatible") ? 1 : 0,
+        qualitySample: 0,
+      }))
+    );
+    await setTrace({
+      phase: "failed",
+      failureStep: "execute_chain",
+      lastActorInputError: execution.lastActorInputError || execution.reason,
+      budgetUsedUsd,
+    });
+    await failRunWithDiagnostics({
+      run,
+      reason: execution.reason,
+      eventType: "lead_sourcing_failed",
+      payload: {
+        decisionId: decision.id,
+        selectedPlanId: selectedProbed.plan.id,
+        stepDiagnostics: execution.stepDiagnostics,
+        topRejections: summarizeTopReasons(execution.rejectedLeads),
+      },
+    });
+    return;
+  }
+
+  const acceptanceRatio =
+    execution.leads.length + execution.rejectedLeads.length > 0
+      ? execution.leads.length / (execution.leads.length + execution.rejectedLeads.length)
+      : 0;
+  await upsertSourcingActorMemory(
+    selectedProbed.plan.steps.map((step) => ({
+      actorId: step.actorId,
+      successDelta: 1,
+      leadsAcceptedDelta: execution.leads.length,
+      leadsRejectedDelta: execution.rejectedLeads.length,
+      qualitySample: acceptanceRatio,
+    }))
+  );
+
+  await createOutreachEvent({
+    runId: run.id,
+    eventType: "lead_sourcing_completed",
+    payload: {
+      decisionId: decision.id,
+      strategy: selectedProbed.plan.strategy,
+      selectedChain: selectedProbed.plan.steps,
+      sourcedCount: execution.leads.length,
+      rejectedCount: execution.rejectedLeads.length,
+      topRejections: summarizeTopReasons(execution.rejectedLeads),
+      stepDiagnostics: execution.stepDiagnostics,
+    },
+  });
+
+  await setTrace({
+    phase: "completed",
+    selectedActorIds: selectedProbed.plan.steps.map((step) => step.actorId),
+    budgetUsedUsd,
+    failureStep: "",
+    lastActorInputError: "",
+  });
+
+  await finishSourcingWithLeads(run, execution.leads, {
+    sampleOnly,
+    qualityPolicy,
+    rejectedDecisions: execution.rejectedLeads,
+    decision,
   });
   return;
 }
 
-async function finishSourcingWithLeads(run: NonNullable<Awaited<ReturnType<typeof getOutreachRun>>>, leads: ApifyLead[]) {
+async function finishSourcingWithLeads(
+  run: NonNullable<Awaited<ReturnType<typeof getOutreachRun>>>,
+  leads: ApifyLead[],
+  options: {
+    sampleOnly?: boolean;
+    qualityPolicy?: LeadQualityPolicy;
+    rejectedDecisions?: LeadAcceptanceDecision[];
+    decision?: SourcingChainDecision | null;
+  } = {}
+) {
   const recentRuns = (await listCampaignRuns(run.brandId, run.campaignId)).filter((item) => {
     if (item.id === run.id) return false;
     const ageMs = Date.now() - new Date(item.createdAt).getTime();
@@ -2740,9 +3273,11 @@ async function finishSourcingWithLeads(run: NonNullable<Awaited<ReturnType<typeo
     invalid_email: 0,
     placeholder_domain: 0,
     role_account: 0,
+    policy_rejected: 0,
   };
 
   const filteredLeads: ApifyLead[] = [];
+  const policyRejections = options.rejectedDecisions ?? [];
   for (const lead of leads) {
     const normalizedEmail = lead.email.toLowerCase();
     const suppressionReason = getLeadEmailSuppressionReason(normalizedEmail);
@@ -2753,6 +3288,17 @@ async function finishSourcingWithLeads(run: NonNullable<Awaited<ReturnType<typeo
     if (blockedEmails.has(normalizedEmail)) {
       suppressionCounts.duplicate_14_day += 1;
       continue;
+    }
+    if (options.qualityPolicy) {
+      const decision = evaluateLeadAgainstQualityPolicy({
+        lead,
+        policy: options.qualityPolicy,
+      });
+      if (!decision.accepted) {
+        suppressionCounts.policy_rejected += 1;
+        policyRejections.push(decision);
+        continue;
+      }
     }
     filteredLeads.push(lead);
   }
@@ -2766,6 +3312,8 @@ async function finishSourcingWithLeads(run: NonNullable<Awaited<ReturnType<typeo
         sourcedCount: leads.length,
         blockedCount: leads.length,
         suppressionCounts,
+        topPolicyRejections: summarizeTopReasons(policyRejections),
+        decisionId: options.decision?.id ?? "",
       },
     });
     return;
@@ -2798,8 +3346,9 @@ async function finishSourcingWithLeads(run: NonNullable<Awaited<ReturnType<typeo
   }
 
   await updateOutreachRun(run.id, {
-    status: "scheduled",
+    status: options.sampleOnly ? "completed" : "scheduled",
     lastError: "",
+    completedAt: options.sampleOnly ? nowIso() : "",
     metrics: {
       ...run.metrics,
       sourcedLeads: upserted.length,
@@ -2812,14 +3361,21 @@ async function finishSourcingWithLeads(run: NonNullable<Awaited<ReturnType<typeo
       count: upserted.length,
       blockedCount: Math.max(0, leads.length - filteredLeads.length),
       suppressionCounts,
+      topPolicyRejections: summarizeTopReasons(policyRejections),
+      sampleOnly: options.sampleOnly === true,
+      decisionId: options.decision?.id ?? "",
     },
   });
 
-  await enqueueOutreachJob({
-    runId: run.id,
-    jobType: "schedule_messages",
-    executeAfter: nowIso(),
-  });
+  if (!options.sampleOnly) {
+    await enqueueOutreachJob({
+      runId: run.id,
+      jobType: "schedule_messages",
+      executeAfter: nowIso(),
+    });
+  } else {
+    await markExperimentExecutionStatus(run.brandId, run.campaignId, run.experimentId, "completed");
+  }
 }
 
 async function processScheduleMessagesJob(job: OutreachJob) {

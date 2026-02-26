@@ -1,4 +1,10 @@
-import type { OutreachAccount, OutreachMessage, ReplyDraft } from "@/lib/factory-types";
+import type {
+  LeadAcceptanceDecision,
+  LeadQualityPolicy,
+  OutreachAccount,
+  OutreachMessage,
+  ReplyDraft,
+} from "@/lib/factory-types";
 import type { OutreachAccountSecrets } from "@/lib/outreach-data";
 
 export type ProviderTestResult = {
@@ -31,6 +37,25 @@ export type ApifyStoreActor = {
   users30Days: number;
   rating: number;
 };
+
+export type ApifyActorSchemaProfile = {
+  actorId: string;
+  title: string;
+  description: string;
+  inputSchema: Record<string, unknown>;
+  requiredKeys: string[];
+  knownKeys: string[];
+  supportsRunSync: boolean;
+};
+
+export type ActorCompatibilityDecision = {
+  ok: boolean;
+  missingRequired: string[];
+  score: number;
+  reason: string;
+};
+
+export type LeadQualityDecision = LeadAcceptanceDecision;
 
 export type LeadEmailSuppressionReason = "invalid_email" | "placeholder_domain" | "role_account";
 
@@ -85,6 +110,28 @@ const PLACEHOLDER_EMAIL_DOMAINS = new Set([
   "test.com",
   "invalid.com",
   "domain.com",
+]);
+
+const FREE_EMAIL_DOMAINS = new Set([
+  "gmail.com",
+  "googlemail.com",
+  "yahoo.com",
+  "ymail.com",
+  "outlook.com",
+  "hotmail.com",
+  "live.com",
+  "icloud.com",
+  "me.com",
+  "aol.com",
+  "protonmail.com",
+  "proton.me",
+  "gmx.com",
+  "yandex.com",
+  "mail.com",
+  "zoho.com",
+  "qq.com",
+  "163.com",
+  "126.com",
 ]);
 
 const STRICT_EMAIL_PATTERN = /^([a-z0-9._%+-]+)@([a-z0-9.-]+\.[a-z]{2,})$/i;
@@ -210,6 +257,85 @@ function maybeDomain(email: string, fallback: string) {
   const parts = email.split("@");
   if (parts.length === 2) return parts[1].toLowerCase();
   return fallback.trim().toLowerCase();
+}
+
+function parseSchemaRequiredKeys(schema: Record<string, unknown>) {
+  if (Array.isArray(schema.required)) {
+    return schema.required
+      .map((value) => String(value ?? "").trim())
+      .filter(Boolean);
+  }
+
+  const properties =
+    schema.properties && typeof schema.properties === "object" && !Array.isArray(schema.properties)
+      ? (schema.properties as Record<string, unknown>)
+      : {};
+  const requiredFromProperties = Object.entries(properties)
+    .filter(([, value]) => {
+      if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+      const row = value as Record<string, unknown>;
+      return row.required === true;
+    })
+    .map(([key]) => key.trim())
+    .filter(Boolean);
+  return requiredFromProperties;
+}
+
+function flattenSchemaKeys(schema: Record<string, unknown>) {
+  const properties =
+    schema.properties && typeof schema.properties === "object" && !Array.isArray(schema.properties)
+      ? (schema.properties as Record<string, unknown>)
+      : {};
+  const keys = Object.keys(properties)
+    .map((value) => value.trim())
+    .filter(Boolean);
+  return keys;
+}
+
+function extractApifyErrorDetail(raw: string, payload: unknown) {
+  if (payload && typeof payload === "object" && !Array.isArray(payload)) {
+    const root = payload as Record<string, unknown>;
+    const data =
+      root.data && typeof root.data === "object" && !Array.isArray(root.data)
+        ? (root.data as Record<string, unknown>)
+        : {};
+    const hints = [
+      root.error,
+      root.message,
+      data.error,
+      data.message,
+      data.description,
+      data.statusMessage,
+      data.userMessage,
+    ]
+      .map((value) => String(value ?? "").trim())
+      .filter(Boolean);
+    if (hints.length) return hints[0];
+  }
+  const normalizedRaw = raw.trim();
+  if (!normalizedRaw) return "";
+  return normalizedRaw.slice(0, 280);
+}
+
+function isLikelyRoleInbox(local: string) {
+  return isRoleAccountLocal(local);
+}
+
+function isLikelyFreeDomain(domain: string) {
+  return FREE_EMAIL_DOMAINS.has(domain.trim().toLowerCase());
+}
+
+function normalizedLeadConfidence(value: unknown) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return 0.5;
+  return Math.max(0, Math.min(1, numeric));
+}
+
+function compactText(value: unknown, max = 220) {
+  return String(value ?? "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, max);
 }
 
 function customerIoApiKey(secrets: OutreachAccountSecrets) {
@@ -424,6 +550,267 @@ async function apifyRunSyncGetDatasetItems(input: {
   }
 }
 
+export async function runApifyActorSyncGetDatasetItems(input: {
+  actorId: string;
+  actorInput: Record<string, unknown>;
+  token: string;
+  timeoutSeconds?: number;
+}) {
+  return apifyRunSyncGetDatasetItems(input);
+}
+
+export async function fetchApifyActorSchemaProfile(input: {
+  actorId: string;
+  token?: string;
+}): Promise<{ ok: boolean; profile: ApifyActorSchemaProfile | null; error: string }> {
+  const actorId = normalizeApifyActorId(input.actorId);
+  if (!actorId) {
+    return { ok: false, profile: null, error: "Missing actor id" };
+  }
+  const token = String(input.token ?? "").trim();
+
+  try {
+    const url = `https://api.apify.com/v2/acts/${encodeURIComponent(actorId)}${
+      token ? `?token=${encodeURIComponent(token)}` : ""
+    }`;
+    const response = await fetch(url);
+    const raw = await response.text();
+    let payload: unknown = {};
+    try {
+      payload = raw ? JSON.parse(raw) : {};
+    } catch {
+      payload = {};
+    }
+
+    if (!response.ok) {
+      return {
+        ok: false,
+        profile: null,
+        error: `HTTP ${response.status}${raw ? `: ${compactText(raw, 200)}` : ""}`,
+      };
+    }
+
+    const root =
+      payload && typeof payload === "object" && !Array.isArray(payload)
+        ? (payload as Record<string, unknown>)
+        : {};
+    const data =
+      root.data && typeof root.data === "object" && !Array.isArray(root.data)
+        ? (root.data as Record<string, unknown>)
+        : root;
+    const versions = Array.isArray(data.versions) ? data.versions : [];
+    const firstVersion =
+      versions.find((row) => row && typeof row === "object" && !Array.isArray(row)) ??
+      (versions.length ? versions[0] : {});
+    const versionRow =
+      firstVersion && typeof firstVersion === "object" && !Array.isArray(firstVersion)
+        ? (firstVersion as Record<string, unknown>)
+        : {};
+
+    const inputSchemaRaw =
+      (data.inputSchema && typeof data.inputSchema === "object" && !Array.isArray(data.inputSchema)
+        ? data.inputSchema
+        : null) ||
+      (versionRow.inputSchema &&
+      typeof versionRow.inputSchema === "object" &&
+      !Array.isArray(versionRow.inputSchema)
+        ? versionRow.inputSchema
+        : null) ||
+      {};
+    const inputSchema =
+      inputSchemaRaw && typeof inputSchemaRaw === "object" && !Array.isArray(inputSchemaRaw)
+        ? (inputSchemaRaw as Record<string, unknown>)
+        : {};
+
+    const requiredKeys = parseSchemaRequiredKeys(inputSchema);
+    const knownKeys = flattenSchemaKeys(inputSchema);
+    const profile: ApifyActorSchemaProfile = {
+      actorId,
+      title: compactText(data.title ?? data.name ?? actorId, 180),
+      description: compactText(data.description ?? data.readme ?? "", 700),
+      inputSchema,
+      requiredKeys,
+      knownKeys,
+      supportsRunSync: true,
+    };
+    return { ok: true, profile, error: "" };
+  } catch (error) {
+    return {
+      ok: false,
+      profile: null,
+      error: error instanceof Error ? error.message : "Failed to fetch actor profile",
+    };
+  }
+}
+
+export function evaluateActorCompatibility(input: {
+  actorProfile: ApifyActorSchemaProfile;
+  actorInput: Record<string, unknown>;
+  stage: "prospect_discovery" | "website_enrichment" | "email_discovery";
+}): ActorCompatibilityDecision {
+  const required = input.actorProfile.requiredKeys;
+  const missingRequired: string[] = [];
+  for (const key of required) {
+    const value = input.actorInput[key];
+    if (value === undefined || value === null) {
+      missingRequired.push(key);
+      continue;
+    }
+    if (typeof value === "string" && !value.trim()) {
+      missingRequired.push(key);
+      continue;
+    }
+    if (Array.isArray(value) && value.length === 0) {
+      missingRequired.push(key);
+      continue;
+    }
+  }
+
+  const knownKeys = new Set(input.actorProfile.knownKeys.map((value) => value.toLowerCase()));
+  const submittedKeys = Object.keys(input.actorInput);
+  const knownHitCount = submittedKeys.filter((value) => knownKeys.has(value.toLowerCase())).length;
+  const knownCoverage = input.actorProfile.knownKeys.length
+    ? knownHitCount / input.actorProfile.knownKeys.length
+    : 1;
+  const requiredPenalty = required.length ? missingRequired.length / required.length : 0;
+
+  const stageHints = `${input.actorProfile.title} ${input.actorProfile.description}`.toLowerCase();
+  const stageBonus =
+    input.stage === "email_discovery"
+      ? /(email|contact|mailbox|enrich)/.test(stageHints)
+        ? 0.2
+        : 0
+      : input.stage === "website_enrichment"
+        ? /(website|domain|company|crawl|scrape)/.test(stageHints)
+          ? 0.2
+          : 0
+        : /(lead|prospect|people|linkedin|company)/.test(stageHints)
+          ? 0.2
+          : 0;
+
+  const score = Math.max(0, Math.min(1, 0.65 * knownCoverage + stageBonus - 0.7 * requiredPenalty));
+  if (missingRequired.length) {
+    return {
+      ok: false,
+      missingRequired,
+      score,
+      reason: `Missing required input keys: ${missingRequired.join(", ")}`,
+    };
+  }
+
+  if (score < 0.25) {
+    return {
+      ok: false,
+      missingRequired,
+      score,
+      reason: "Actor schema fit is too weak for this stage",
+    };
+  }
+
+  return {
+    ok: true,
+    missingRequired,
+    score,
+    reason: "",
+  };
+}
+
+export function evaluateLeadAgainstQualityPolicy(input: {
+  lead: ApifyLead;
+  policy: LeadQualityPolicy;
+}): LeadQualityDecision {
+  const email = extractFirstEmailAddress(input.lead.email);
+  const floorReason = getLeadEmailSuppressionReason(email);
+  if (!email || floorReason) {
+    return {
+      email: email || String(input.lead.email ?? "").trim().toLowerCase(),
+      accepted: false,
+      confidence: 0,
+      reason: floorReason || "invalid_email",
+      details: { floorReason: floorReason || "invalid_email" },
+    };
+  }
+
+  const local = email.split("@")[0] ?? "";
+  const domain = email.split("@")[1] ?? "";
+  const normalizedName = String(input.lead.name ?? "").trim();
+  const normalizedCompany = String(input.lead.company ?? "").trim();
+  const normalizedTitle = String(input.lead.title ?? "").trim();
+  const explicitConfidence = normalizedLeadConfidence((input.lead as unknown as Record<string, unknown>).confidence);
+
+  if (!input.policy.allowFreeDomains && isLikelyFreeDomain(domain)) {
+    return {
+      email,
+      accepted: false,
+      confidence: 0.1,
+      reason: "free_domain_blocked",
+      details: { domain, policy: "allowFreeDomains=false" },
+    };
+  }
+  if (!input.policy.allowRoleInboxes && isLikelyRoleInbox(local)) {
+    return {
+      email,
+      accepted: false,
+      confidence: 0.1,
+      reason: "role_inbox_blocked",
+      details: { local, policy: "allowRoleInboxes=false" },
+    };
+  }
+  if (input.policy.requirePersonName && !normalizedName) {
+    return {
+      email,
+      accepted: false,
+      confidence: 0.15,
+      reason: "missing_name",
+      details: { policy: "requirePersonName=true" },
+    };
+  }
+  if (input.policy.requireCompany && !normalizedCompany) {
+    return {
+      email,
+      accepted: false,
+      confidence: 0.15,
+      reason: "missing_company",
+      details: { policy: "requireCompany=true" },
+    };
+  }
+  if (input.policy.requireTitle && !normalizedTitle) {
+    return {
+      email,
+      accepted: false,
+      confidence: 0.15,
+      reason: "missing_title",
+      details: { policy: "requireTitle=true" },
+    };
+  }
+
+  const heuristicConfidence =
+    Math.max(0, Math.min(1, (normalizedName ? 0.35 : 0.12) + (normalizedCompany ? 0.35 : 0.15) + (normalizedTitle ? 0.2 : 0.08)));
+  const confidence = Math.max(explicitConfidence, heuristicConfidence);
+  const minConfidence = Math.max(0, Math.min(1, Number(input.policy.minConfidenceScore ?? 0) || 0));
+  if (confidence < minConfidence) {
+    return {
+      email,
+      accepted: false,
+      confidence,
+      reason: "below_confidence_threshold",
+      details: { confidence, minConfidence },
+    };
+  }
+
+  return {
+    email,
+    accepted: true,
+    confidence,
+    reason: "accepted",
+    details: {
+      namePresent: Boolean(normalizedName),
+      companyPresent: Boolean(normalizedCompany),
+      titlePresent: Boolean(normalizedTitle),
+    },
+  };
+}
+
 export async function searchApifyStoreActors(params: {
   query: string;
   limit?: number;
@@ -539,18 +926,25 @@ async function apifyStartRun(input: {
       },
       body: JSON.stringify(input.actorInput ?? {}),
     });
-    const payload: unknown = await response.json().catch(() => ({}));
+    const raw = await response.text();
+    let payload: unknown = {};
+    try {
+      payload = raw ? JSON.parse(raw) : {};
+    } catch {
+      payload = {};
+    }
     const row = payload && typeof payload === "object" && !Array.isArray(payload) ? (payload as Record<string, unknown>) : {};
     const data =
       row.data && typeof row.data === "object" && !Array.isArray(row.data) ? (row.data as Record<string, unknown>) : row;
     const runId = String(data.id ?? "").trim();
     const datasetId = String(data.defaultDatasetId ?? data.default_dataset_id ?? "").trim();
+    const detail = extractApifyErrorDetail(raw, payload);
     if (!response.ok || !runId) {
       return {
         ok: false,
         runId,
         datasetId,
-        error: `HTTP ${response.status}${runId ? "" : ": Missing run id"}`,
+        error: `HTTP ${response.status}${detail ? `: ${detail}` : runId ? "" : ": Missing run id"}`,
       };
     }
     return { ok: true, runId, datasetId, error: "" };

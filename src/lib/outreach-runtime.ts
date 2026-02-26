@@ -1466,17 +1466,36 @@ function rankActorPoolWithMemory(input: {
   memoryRows: Awaited<ReturnType<typeof getSourcingActorMemory>>;
 }) {
   const memoryById = new Map(input.memoryRows.map((row) => [row.actorId.toLowerCase(), row]));
-  return [...input.actors].sort((a, b) => {
+  const filtered = [...input.actors].filter((actor) => {
+    const memory = memoryById.get(actor.actorId.toLowerCase());
+    if (!memory) return true;
+    const hardFailing = memory.failCount >= 3 && memory.successCount === 0;
+    const veryLowQuality = memory.avgQuality <= 0.05 && memory.leadsAccepted === 0 && memory.failCount >= 2;
+    return !(hardFailing || veryLowQuality);
+  });
+  const rankingPool = filtered.length ? filtered : [...input.actors];
+
+  return rankingPool.sort((a, b) => {
     const scoreA = actorScore(a);
     const scoreB = actorScore(b);
     const memoryA = memoryById.get(a.actorId.toLowerCase());
     const memoryB = memoryById.get(b.actorId.toLowerCase());
     const adjustedA =
       scoreA +
-      (memoryA ? memoryA.successCount * 4 + memoryA.avgQuality * 25 - memoryA.compatibilityFailCount * 6 : 0);
+      (memoryA
+        ? memoryA.successCount * 5 +
+          memoryA.avgQuality * 30 -
+          memoryA.failCount * 8 -
+          memoryA.compatibilityFailCount * 12
+        : 0);
     const adjustedB =
       scoreB +
-      (memoryB ? memoryB.successCount * 4 + memoryB.avgQuality * 25 - memoryB.compatibilityFailCount * 6 : 0);
+      (memoryB
+        ? memoryB.successCount * 5 +
+          memoryB.avgQuality * 30 -
+          memoryB.failCount * 8 -
+          memoryB.compatibilityFailCount * 12
+        : 0);
     return adjustedB - adjustedA;
   });
 }

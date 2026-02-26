@@ -749,7 +749,38 @@ async function planApifyLeadChainCandidates(input: {
     throw new Error("No actor candidates available from Apify Store");
   }
 
-  const actorRows = input.actorPool.map((actor) => ({
+  const planningPool = (() => {
+    const selected: ApifyStoreActor[] = [];
+    const seen = new Set<string>();
+    const push = (actor: ApifyStoreActor) => {
+      const key = actor.actorId.toLowerCase();
+      if (!key || seen.has(key)) return;
+      seen.add(key);
+      selected.push(actor);
+    };
+
+    const stageCaps: Record<LeadChainStepStage, number> = {
+      prospect_discovery: 26,
+      website_enrichment: 22,
+      email_discovery: 32,
+    };
+    for (const stage of ["prospect_discovery", "website_enrichment", "email_discovery"] as const) {
+      let count = 0;
+      for (const actor of input.actorPool) {
+        if (stageFromActor(actor) !== stage) continue;
+        push(actor);
+        count += 1;
+        if (count >= stageCaps[stage]) break;
+      }
+    }
+    for (const actor of input.actorPool) {
+      if (selected.length >= 90) break;
+      push(actor);
+    }
+    return selected.slice(0, 90);
+  })();
+
+  const actorRows = planningPool.map((actor) => ({
     actorId: actor.actorId,
     title: actor.title,
     description: actor.description,
@@ -787,41 +818,49 @@ async function planApifyLeadChainCandidates(input: {
   ].join("\n");
 
   const model = resolveLlmModel("lead_chain_planning", { prompt });
-  const response = await fetch("https://api.openai.com/v1/responses", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model,
-      input: prompt,
-      text: { format: { type: "json_object" } },
-      max_output_tokens: 2600,
-    }),
-  });
+  let parsed: unknown = {};
+  let planningError = "";
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const promptWithRetryNote =
+      attempt === 0
+        ? prompt
+        : `${prompt}\n\nRetry instruction: previous response was not valid JSON. Return only a valid JSON object.`;
+    const response = await fetch("https://api.openai.com/v1/responses", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model,
+        input: promptWithRetryNote,
+        text: { format: { type: "json_object" } },
+        max_output_tokens: 2600,
+      }),
+    });
 
-  const raw = await response.text();
-  if (!response.ok) {
-    throw new Error(`Apify chain planning failed: HTTP ${response.status} ${raw.slice(0, 240)}`);
-  }
+    const raw = await response.text();
+    if (!response.ok) {
+      throw new Error(`Apify chain planning failed: HTTP ${response.status} ${raw.slice(0, 240)}`);
+    }
 
-  let payload: unknown = {};
-  try {
-    payload = JSON.parse(raw);
-  } catch {
-    payload = {};
+    let payload: unknown = {};
+    try {
+      payload = JSON.parse(raw);
+    } catch {
+      payload = {};
+    }
+    const outputText = extractOutputText(payload);
+    try {
+      parsed = parseLooseJsonObject(outputText);
+      planningError = "";
+      break;
+    } catch (error) {
+      planningError = error instanceof Error ? error.message : "invalid_json";
+    }
   }
-  const outputText = extractOutputText(payload);
-  let parsed: unknown;
-  try {
-    parsed = parseLooseJsonObject(outputText);
-  } catch (error) {
-    throw new Error(
-      `Apify chain planning returned non-JSON output: ${
-        error instanceof Error ? error.message : "invalid_json"
-      }`
-    );
+  if (planningError) {
+    throw new Error(`Apify chain planning returned non-JSON output: ${planningError}`);
   }
 
   const root = asRecord(parsed);
@@ -831,7 +870,7 @@ async function planApifyLeadChainCandidates(input: {
       : Array.isArray(root.chains)
         ? root.chains
         : [];
-  const allowedActorIds = new Set(input.actorPool.map((actor) => actor.actorId.toLowerCase()));
+  const allowedActorIds = new Set(planningPool.map((actor) => actor.actorId.toLowerCase()));
   const parsedCandidates = candidatesRaw
     .map((row, index) =>
       parseLeadChainPlanCandidate({
@@ -1351,7 +1390,8 @@ async function generateAdaptiveLeadQualityPolicy(input: {
 
   const prompt = [
     "Generate a strict B2B lead quality policy for outbound outreach.",
-    "Optimize for quality over quantity. Return JSON only.",
+    "Optimize for quality over quantity, but keep policy feasible for real-world actor outputs.",
+    "Return JSON only.",
     "Policy fields:",
     "- allowFreeDomains (boolean)",
     "- allowRoleInboxes (boolean)",
@@ -1361,7 +1401,8 @@ async function generateAdaptiveLeadQualityPolicy(input: {
     "- minConfidenceScore (number 0..1)",
     "Rules:",
     "- default to rejecting low-signal generic emails when unsure.",
-    "- minConfidenceScore should usually be between 0.55 and 0.9.",
+    "- requireTitle should default to false unless title is mission-critical for this specific experiment.",
+    "- minConfidenceScore should usually be between 0.5 and 0.75.",
     `Context: ${JSON.stringify(input)}`,
   ].join("\n");
 
@@ -1400,7 +1441,7 @@ async function generateAdaptiveLeadQualityPolicy(input: {
     requirePersonName: Boolean(row.requirePersonName ?? true),
     requireCompany: Boolean(row.requireCompany ?? true),
     requireTitle: Boolean(row.requireTitle ?? false),
-    minConfidenceScore: Math.max(0, Math.min(1, Number(row.minConfidenceScore ?? 0.65) || 0.65)),
+    minConfidenceScore: Math.max(0.45, Math.min(0.75, Number(row.minConfidenceScore ?? 0.62) || 0.62)),
   };
   return policy;
 }

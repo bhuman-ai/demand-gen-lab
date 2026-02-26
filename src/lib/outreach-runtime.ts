@@ -52,6 +52,7 @@ import {
   getReplyDraft,
   getReplyThread,
   getSourcingActorMemory,
+  listSourcingChainDecisions,
   listCampaignRuns,
   listDueOutreachJobs,
   listExperimentRuns,
@@ -1009,6 +1010,33 @@ function parseLeadChainPlanCandidate(input: {
   } satisfies LeadSourcingChainPlan;
 }
 
+function sourcingCandidateKey(steps: Array<{ stage: LeadChainStepStage; actorId: string }>) {
+  return steps.map((step) => `${step.stage}:${step.actorId.toLowerCase()}`).join("->");
+}
+
+function historicalDecisionToPlanCandidate(decision: SourcingChainDecision) {
+  const steps = Array.isArray(decision.selectedChain)
+    ? decision.selectedChain
+        .map((step, index) => ({
+          id: trimText(step.id || `historical_step_${index + 1}`, 60).replace(/\s+/g, "_"),
+          stage: stageFromValue(String(step.stage ?? "").trim().toLowerCase()),
+          actorId: trimText(step.actorId, 160),
+          purpose: trimText(step.purpose, 180),
+          queryHint: trimText(step.queryHint, 240),
+        }))
+        .filter((step): step is LeadSourcingChainStep => Boolean(step.stage && step.actorId))
+    : [];
+  if (!steps.length) return null;
+  const stageOrderError = validateLeadChainStageOrder(steps.map((step) => step.stage));
+  if (stageOrderError) return null;
+  return {
+    id: `memory_${decision.id}`,
+    strategy: trimText(decision.strategy, 180) || "historical_chain",
+    rationale: trimText(decision.rationale, 360),
+    steps,
+  } satisfies LeadSourcingChainPlan;
+}
+
 async function planApifyLeadChainCandidates(input: {
   targetAudience: string;
   brandName: string;
@@ -1185,9 +1213,7 @@ async function planApifyLeadChainCandidates(input: {
   const deduped = [] as LeadSourcingChainPlan[];
   const seenKeys = new Set<string>();
   for (const candidate of parsedCandidates) {
-    const key = candidate.steps
-      .map((step) => `${step.stage}:${step.actorId.toLowerCase()}`)
-      .join("->");
+    const key = sourcingCandidateKey(candidate.steps);
     if (!key || seenKeys.has(key)) continue;
     seenKeys.add(key);
     deduped.push(candidate);
@@ -3891,11 +3917,35 @@ async function processSourceLeadsJob(job: OutreachJob) {
     return;
   }
 
+  const priorDecisions = await listSourcingChainDecisions({
+    brandId: run.brandId,
+    experimentOwnerId: run.ownerId,
+    limit: 12,
+  });
+  const historicalCandidates = priorDecisions
+    .map((decision) => historicalDecisionToPlanCandidate(decision))
+    .filter((candidate): candidate is LeadSourcingChainPlan => Boolean(candidate))
+    .slice(0, 3);
+  if (historicalCandidates.length) {
+    const deduped = [] as LeadSourcingChainPlan[];
+    const seen = new Set<string>();
+    const push = (candidate: LeadSourcingChainPlan) => {
+      const key = sourcingCandidateKey(candidate.steps);
+      if (!key || seen.has(key)) return;
+      seen.add(key);
+      deduped.push(candidate);
+    };
+    for (const candidate of historicalCandidates) push(candidate);
+    for (const candidate of chainCandidates) push(candidate);
+    chainCandidates = deduped.slice(0, Math.max(APIFY_CHAIN_MAX_CANDIDATES, 8));
+  }
+
   await createOutreachEvent({
     runId: run.id,
     eventType: "lead_sourcing_chain_planned",
     payload: {
       candidateCount: chainCandidates.length,
+      historicalCandidateCount: historicalCandidates.length,
       candidates: chainCandidates.map((candidate) => ({
         id: candidate.id,
         strategy: candidate.strategy,

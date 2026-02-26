@@ -1764,7 +1764,7 @@ async function generateAdaptiveLeadQualityPolicy(input: {
     "Rules:",
     "- default to rejecting low-signal generic emails when unsure.",
     "- requireTitle should default to false unless title is mission-critical for this specific experiment.",
-    "- minConfidenceScore should usually be between 0.5 and 0.75.",
+    "- minConfidenceScore should usually be between 0.52 and 0.68.",
     `Context: ${JSON.stringify(input)}`,
   ].join("\n");
 
@@ -1803,7 +1803,7 @@ async function generateAdaptiveLeadQualityPolicy(input: {
     requirePersonName: Boolean(row.requirePersonName ?? true),
     requireCompany: Boolean(row.requireCompany ?? true),
     requireTitle: Boolean(row.requireTitle ?? false),
-    minConfidenceScore: Math.max(0.45, Math.min(0.75, Number(row.minConfidenceScore ?? 0.62) || 0.62)),
+    minConfidenceScore: Math.max(0.5, Math.min(0.68, Number(row.minConfidenceScore ?? 0.6) || 0.6)),
   };
   return policy;
 }

@@ -209,6 +209,25 @@ export function extractFirstEmailAddress(value: unknown): string {
   return `${strict[1]}@${strict[2].replace(/\.+$/, "").toLowerCase()}`;
 }
 
+function inferNameFromEmail(email: string) {
+  const normalized = String(email ?? "").trim().toLowerCase();
+  const local = normalized.split("@")[0] ?? "";
+  if (!local || isRoleAccountLocal(local)) return "";
+  if (/[0-9]{3,}/.test(local)) return "";
+
+  const cleaned = local.replace(/[._-]+/g, " ").replace(/\s+/g, " ").trim();
+  if (!cleaned) return "";
+  const tokens = cleaned
+    .split(" ")
+    .map((token) => token.trim())
+    .filter((token) => token.length >= 2 && /^[a-z]+$/.test(token));
+  if (!tokens.length || tokens.length > 3) return "";
+
+  return tokens
+    .map((token) => token.charAt(0).toUpperCase() + token.slice(1))
+    .join(" ");
+}
+
 type LeadSourcingSearchResult = {
   ok: boolean;
   query: string;
@@ -1234,7 +1253,7 @@ export function leadsFromEmailDiscoveryRows(rows: unknown[], maxLeads: number): 
       seen.add(email);
       leads.push({
         email,
-        name: "",
+        name: inferNameFromEmail(email),
         company: domain || maybeDomain(email, ""),
         title: "",
         domain: maybeDomain(email, domain),
@@ -1300,7 +1319,7 @@ export function leadsFromApifyRows(rows: unknown[], maxLeads: number): ApifyLead
       seen.add(email);
       out.push({
         email,
-        name,
+        name: name || inferNameFromEmail(email),
         company,
         title,
         domain: maybeDomain(email, ""),
@@ -1332,7 +1351,7 @@ function normalizeApifyLead(raw: unknown): ApifyLead | null {
 
   return {
     email,
-    name,
+    name: name || inferNameFromEmail(email),
     company,
     title,
     domain: maybeDomain(email, String(row.domain ?? "")),

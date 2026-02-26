@@ -22,6 +22,18 @@ type PreviewLeadQueryInput = {
   maxRuns?: number;
 };
 
+const FREE_EMAIL_DOMAINS = new Set([
+  "gmail.com",
+  "googlemail.com",
+  "outlook.com",
+  "hotmail.com",
+  "live.com",
+  "icloud.com",
+  "yahoo.com",
+  "aol.com",
+  "protonmail.com",
+]);
+
 function safeDateValue(value: string) {
   const time = Date.parse(value);
   return Number.isFinite(time) ? time : 0;
@@ -73,8 +85,11 @@ function dedupeAndNormalizeLeads(input: {
     const domainFromEmail = email.includes("@") ? email.split("@")[1] ?? "" : "";
     const domain = String(row.lead.domain ?? "").trim().toLowerCase() || domainFromEmail;
     if (!domain) continue;
+    if (FREE_EMAIL_DOMAINS.has(domain)) continue;
 
     const name = String(row.lead.name ?? "").trim() || extractNameFromUrl(rawEmail) || extractNameFromUrl(sourceUrl);
+    const company = String(row.lead.company ?? "").trim();
+    if (!name || !company) continue;
 
     seen.add(email);
     out.push({
@@ -83,7 +98,7 @@ function dedupeAndNormalizeLeads(input: {
       runCreatedAt: row.run.createdAt,
       email,
       name,
-      company: String(row.lead.company ?? "").trim(),
+      company,
       title: String(row.lead.title ?? "").trim(),
       domain,
       sourceUrl,
@@ -97,7 +112,7 @@ function dedupeAndNormalizeLeads(input: {
 
 export async function listConversationPreviewLeads(input: PreviewLeadQueryInput) {
   const limit = Math.max(1, Math.min(50, Number(input.limit ?? 12) || 12));
-  const maxRuns = Math.max(1, Math.min(30, Number(input.maxRuns ?? 10) || 10));
+  const maxRuns = Math.max(1, Math.min(30, Number(input.maxRuns ?? 1) || 1));
 
   const sourceExperiment = await getExperimentRecordByRuntimeRef(
     input.brandId,
@@ -138,9 +153,15 @@ export async function listConversationPreviewLeads(input: PreviewLeadQueryInput)
   const recentRuns = [...runs]
     .sort((a, b) => safeDateValue(b.createdAt) - safeDateValue(a.createdAt))
     .slice(0, maxRuns);
+  const sourceRuns = recentRuns.filter(
+    (run) =>
+      !["failed", "preflight_failed", "canceled"].includes(String(run.status ?? "").toLowerCase()) &&
+      Number(run.metrics?.sourcedLeads ?? 0) > 0
+  );
+  const selectedRuns = (sourceRuns.length ? sourceRuns : recentRuns).slice(0, maxRuns);
 
   const runLeads = await Promise.all(
-    recentRuns.map(async (run) => ({
+    selectedRuns.map(async (run) => ({
       run,
       leads: await listRunLeads(run.id),
     }))
@@ -158,6 +179,6 @@ export async function listConversationPreviewLeads(input: PreviewLeadQueryInput)
     leads,
     sourceExperimentId: sourceExperiment.id,
     runtimeRefFound: true,
-    runsChecked: recentRuns.length,
+    runsChecked: selectedRuns.length,
   };
 }

@@ -36,6 +36,9 @@ export type ApifyStoreActor = {
   categories: string[];
   users30Days: number;
   rating: number;
+  pricingModel: string;
+  pricePerUnitUsd: number;
+  trialMinutes: number;
 };
 
 export type ApifyActorSchemaProfile = {
@@ -878,6 +881,18 @@ export async function searchApifyStoreActors(params: {
         categories,
         users30Days: Math.max(0, Number(stats.totalUsers30Days ?? 0) || 0),
         rating: Math.max(0, Math.min(5, Number(row.actorReviewRating ?? stats.actorReviewRating ?? 0) || 0)),
+        pricingModel: sanitizeStoreText(
+          (row.currentPricingInfo as Record<string, unknown> | null)?.pricingModel ?? "",
+          80
+        ).toUpperCase(),
+        pricePerUnitUsd: Math.max(
+          0,
+          Number((row.currentPricingInfo as Record<string, unknown> | null)?.pricePerUnitUsd ?? 0) || 0
+        ),
+        trialMinutes: Math.max(
+          0,
+          Number((row.currentPricingInfo as Record<string, unknown> | null)?.trialMinutes ?? 0) || 0
+        ),
       });
     }
 

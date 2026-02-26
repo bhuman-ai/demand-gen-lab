@@ -520,7 +520,20 @@ function actorCandidateScore(input: {
 }) {
   const stageHint = stageFromActor(input.actor);
   const stageBoost = stageHint === "email_discovery" ? 22 : stageHint === "prospect_discovery" ? 14 : 10;
-  return actorScore(input.actor) + input.matchedQueries * 6 + input.requestedStages * 15 + stageBoost;
+  const pricingModel = String(input.actor.pricingModel ?? "").toUpperCase();
+  const monthlyPenalty =
+    pricingModel.includes("FLAT_PRICE_PER_MONTH") || pricingModel.includes("SUBSCRIPTION") ? 60 : 0;
+  const expensiveRunPenalty = input.actor.pricePerUnitUsd > 2 ? Math.min(40, input.actor.pricePerUnitUsd * 6) : 0;
+  const freeTrialBoost = input.actor.trialMinutes > 0 ? 8 : 0;
+  return (
+    actorScore(input.actor) +
+    input.matchedQueries * 6 +
+    input.requestedStages * 15 +
+    stageBoost +
+    freeTrialBoost -
+    monthlyPenalty -
+    expensiveRunPenalty
+  );
 }
 
 async function buildApifyActorPool(input: {
@@ -616,21 +629,27 @@ async function buildApifyActorPool(input: {
     }))
     .sort((a, b) => b.score - a.score);
 
+  const pricingSafeRanked = ranked.filter((row) => {
+    const pricingModel = String(row.actor.pricingModel ?? "").toUpperCase();
+    return !pricingModel.includes("FLAT_PRICE_PER_MONTH") && !pricingModel.includes("SUBSCRIPTION");
+  });
+  const rankingPool = pricingSafeRanked.length ? pricingSafeRanked : ranked;
+
   const selected = new Set<string>();
   for (const stage of ["prospect_discovery", "website_enrichment", "email_discovery"] as const) {
-    const stageTop = ranked.filter((row) => row.stageHint === stage).slice(0, 22);
+    const stageTop = rankingPool.filter((row) => row.stageHint === stage).slice(0, 22);
     for (const row of stageTop) {
       selected.add(row.actor.actorId);
       if (selected.size >= APIFY_STORE_MAX_RESULTS) break;
     }
     if (selected.size >= APIFY_STORE_MAX_RESULTS) break;
   }
-  for (const row of ranked) {
+  for (const row of rankingPool) {
     if (selected.size >= APIFY_STORE_MAX_RESULTS) break;
     selected.add(row.actor.actorId);
   }
 
-  const actors = ranked
+  const actors = rankingPool
     .filter((row) => selected.has(row.actor.actorId))
     .map((row) => row.actor)
     .slice(0, APIFY_STORE_MAX_RESULTS);
@@ -889,6 +908,183 @@ function buildChainStepInput(input: {
   } satisfies Record<string, unknown>;
 }
 
+function getSchemaProperties(schema: Record<string, unknown>) {
+  if (schema.properties && typeof schema.properties === "object" && !Array.isArray(schema.properties)) {
+    return schema.properties as Record<string, unknown>;
+  }
+  return {};
+}
+
+function getSchemaTypes(propertySchema: Record<string, unknown>) {
+  const raw = propertySchema.type;
+  if (Array.isArray(raw)) {
+    return raw.map((value) => String(value ?? "").trim().toLowerCase()).filter(Boolean);
+  }
+  if (typeof raw === "string") {
+    return [raw.trim().toLowerCase()];
+  }
+  return [];
+}
+
+function firstString(value: unknown): string {
+  if (typeof value === "string") return value.trim();
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const resolved = firstString(item);
+      if (resolved) return resolved;
+    }
+    return "";
+  }
+  if (value && typeof value === "object") {
+    const row = value as Record<string, unknown>;
+    if (typeof row.url === "string" && row.url.trim()) return row.url.trim();
+    if (typeof row.value === "string" && row.value.trim()) return row.value.trim();
+    return "";
+  }
+  return "";
+}
+
+function toStringArray(value: unknown) {
+  const out: string[] = [];
+  const push = (entry: unknown) => {
+    const resolved = firstString(entry);
+    if (resolved) out.push(resolved);
+  };
+  if (Array.isArray(value)) {
+    for (const item of value) push(item);
+  } else {
+    push(value);
+  }
+  return uniqueTrimmed(out, 200);
+}
+
+function fallbackValueForSchemaKey(input: {
+  key: string;
+  actorInput: Record<string, unknown>;
+  stage: LeadChainStepStage;
+}) {
+  const keyLower = input.key.toLowerCase();
+  const pick = (...keys: string[]) => {
+    for (const key of keys) {
+      if (input.actorInput[key] !== undefined) return input.actorInput[key];
+    }
+    return undefined;
+  };
+
+  if (keyLower.includes("query") || keyLower.includes("search") || keyLower.includes("keyword")) {
+    return pick("query", "queries", "search", "searchTerms", "searchStringsArray", "keyword", "keywords", "phrases");
+  }
+  if (keyLower.includes("domain")) {
+    return pick("domains", "domainNames", "websites", "urls");
+  }
+  if (keyLower.includes("url") || keyLower.includes("site") || keyLower.includes("web")) {
+    return pick("startUrls", "urls", "websites", "domains");
+  }
+  if (keyLower.includes("email") || keyLower.includes("mail")) {
+    return pick("emails");
+  }
+  if (keyLower.includes("compan")) {
+    return pick("companies", "companyNames", "query", "queries");
+  }
+  if (input.stage === "prospect_discovery") {
+    return pick("query", "queries", "searchTerms");
+  }
+  if (input.stage === "website_enrichment") {
+    return pick("websites", "urls", "domains", "startUrls", "query");
+  }
+  return pick("emails", "domains", "websites", "query");
+}
+
+function normalizeActorInputForSchema(input: {
+  actorProfile: { inputSchema: Record<string, unknown>; requiredKeys: string[]; knownKeys: string[] };
+  actorInput: Record<string, unknown>;
+  stage: LeadChainStepStage;
+}) {
+  const schema = input.actorProfile.inputSchema;
+  const properties = getSchemaProperties(schema);
+  const knownKeys = input.actorProfile.knownKeys;
+  const requiredKeys = input.actorProfile.requiredKeys;
+  const restrictUnknown = schema.additionalProperties === false && knownKeys.length > 0;
+  const keysToProcess = new Set<string>([
+    ...Object.keys(input.actorInput),
+    ...knownKeys,
+    ...requiredKeys,
+  ]);
+  const normalized: Record<string, unknown> = {};
+  const adjustments: Array<Record<string, unknown>> = [];
+
+  for (const key of keysToProcess) {
+    if (!key) continue;
+    if (restrictUnknown && !knownKeys.some((known) => known.toLowerCase() === key.toLowerCase())) {
+      continue;
+    }
+
+    const propertySchema =
+      properties[key] && typeof properties[key] === "object" && !Array.isArray(properties[key])
+        ? (properties[key] as Record<string, unknown>)
+        : {};
+    const types = getSchemaTypes(propertySchema);
+    const hadRaw = Object.prototype.hasOwnProperty.call(input.actorInput, key);
+    const rawValue =
+      hadRaw ? input.actorInput[key] : fallbackValueForSchemaKey({ key, actorInput: input.actorInput, stage: input.stage });
+    if (rawValue === undefined || rawValue === null) continue;
+
+    let nextValue: unknown = rawValue;
+    if (types.includes("string")) {
+      nextValue = firstString(rawValue);
+    } else if (types.includes("array")) {
+      const values = toStringArray(rawValue);
+      const itemsSchema =
+        propertySchema.items && typeof propertySchema.items === "object" && !Array.isArray(propertySchema.items)
+          ? (propertySchema.items as Record<string, unknown>)
+          : {};
+      const itemTypes = getSchemaTypes(itemsSchema);
+      if (itemTypes.includes("object") || key.toLowerCase().includes("starturl")) {
+        nextValue = values.map((value) => ({ url: value }));
+      } else {
+        nextValue = values;
+      }
+    } else if (types.includes("number") || types.includes("integer")) {
+      const numeric = Number(firstString(rawValue));
+      if (Number.isFinite(numeric)) {
+        nextValue = types.includes("integer") ? Math.round(numeric) : numeric;
+      } else {
+        continue;
+      }
+    } else if (types.includes("boolean")) {
+      const value = firstString(rawValue).toLowerCase();
+      nextValue = ["1", "true", "yes", "on"].includes(value);
+    } else if (types.includes("object")) {
+      if (rawValue && typeof rawValue === "object" && !Array.isArray(rawValue)) {
+        nextValue = rawValue;
+      } else {
+        const asString = firstString(rawValue);
+        if (!asString) continue;
+        nextValue = { value: asString };
+      }
+    }
+
+    if (typeof nextValue === "string" && !nextValue.trim()) continue;
+    if (Array.isArray(nextValue) && !nextValue.length) continue;
+    normalized[key] = nextValue;
+
+    if (nextValue !== rawValue || !hadRaw) {
+      adjustments.push({
+        key,
+        fromFallback: !hadRaw,
+        fromType: Array.isArray(rawValue) ? "array" : typeof rawValue,
+        toType: Array.isArray(nextValue) ? "array" : typeof nextValue,
+      });
+    }
+  }
+
+  return {
+    input: normalized,
+    adjustments,
+  };
+}
+
 function hashProbeInput(input: Record<string, unknown>) {
   return createHash("sha256").update(JSON.stringify(input)).digest("hex");
 }
@@ -903,6 +1099,53 @@ function summarizeTopReasons(rejected: LeadAcceptanceDecision[], max = 5) {
     .sort((a, b) => b[1] - a[1])
     .slice(0, max)
     .map(([reason, count]) => ({ reason, count }));
+}
+
+function buildProbeMemoryUpdates(candidates: ProbedSourcingPlan[]) {
+  const bucket = new Map<
+    string,
+    { actorId: string; successDelta: number; failDelta: number; compatibilityFailDelta: number; qualitySamples: number[] }
+  >();
+
+  for (const candidate of candidates) {
+    const denominator = candidate.acceptedCount + candidate.rejectedCount;
+    const candidateQuality = denominator > 0 ? candidate.acceptedCount / denominator : 0;
+    for (const probe of candidate.probeResults) {
+      const actorId = probe.actorId;
+      if (!actorId) continue;
+      const current =
+        bucket.get(actorId.toLowerCase()) ??
+        {
+          actorId,
+          successDelta: 0,
+          failDelta: 0,
+          compatibilityFailDelta: 0,
+          qualitySamples: [],
+        };
+      if (probe.outcome === "pass") current.successDelta += 1;
+      else current.failDelta += 1;
+
+      const reasonBlob = JSON.stringify(probe.details ?? {}).toLowerCase();
+      if (reasonBlob.includes("incompatible_actor_input") || reasonBlob.includes("missing required input keys")) {
+        current.compatibilityFailDelta += 1;
+      }
+      if (probe.stage === "email_discovery" && probe.outcome === "pass" && denominator > 0) {
+        current.qualitySamples.push(candidateQuality);
+      }
+      bucket.set(actorId.toLowerCase(), current);
+    }
+  }
+
+  return Array.from(bucket.values()).map((row) => ({
+    actorId: row.actorId,
+    successDelta: row.successDelta,
+    failDelta: row.failDelta,
+    compatibilityFailDelta: row.compatibilityFailDelta,
+    qualitySample:
+      row.qualitySamples.length > 0
+        ? row.qualitySamples.reduce((sum, value) => sum + value, 0) / row.qualitySamples.length
+        : 0,
+  }));
 }
 
 async function generateAdaptiveLeadQualityPolicy(input: {
@@ -1181,7 +1424,7 @@ async function probeSourcingPlanCandidate(input: {
       maxLeads: APIFY_PROBE_MAX_LEADS,
       probeMode: true,
     });
-    const probeInputHash = hashProbeInput(actorInput);
+    const initialProbeInputHash = hashProbeInput(actorInput);
 
     const profile = await getActorSchemaProfileCached({
       cache: input.actorSchemaCache,
@@ -1195,7 +1438,7 @@ async function probeSourcingPlanCandidate(input: {
         actorId: step.actorId,
         stage: step.stage,
         outcome: "fail",
-        probeInputHash,
+        probeInputHash: initialProbeInputHash,
         qualityMetrics: {},
         costEstimateUsd: 0,
         details: { reason, error: profile.error },
@@ -1203,9 +1446,16 @@ async function probeSourcingPlanCandidate(input: {
       break;
     }
 
-    const compatibility = evaluateActorCompatibility({
+    const normalizedInput = normalizeActorInputForSchema({
       actorProfile: profile.profile,
       actorInput,
+      stage: step.stage,
+    });
+    const probeInputHash = hashProbeInput(normalizedInput.input);
+
+    const compatibility = evaluateActorCompatibility({
+      actorProfile: profile.profile,
+      actorInput: normalizedInput.input,
       stage: step.stage,
     });
     if (!compatibility.ok) {
@@ -1218,14 +1468,18 @@ async function probeSourcingPlanCandidate(input: {
         probeInputHash,
         qualityMetrics: { compatibilityScore: compatibility.score },
         costEstimateUsd: 0,
-        details: { reason: compatibility.reason, missingRequired: compatibility.missingRequired },
+        details: {
+          reason: compatibility.reason,
+          missingRequired: compatibility.missingRequired,
+          normalizedInputAdjustments: normalizedInput.adjustments,
+        },
       });
       break;
     }
 
     const run = await runApifyActorSyncGetDatasetItems({
       actorId: step.actorId,
-      actorInput,
+      actorInput: normalizedInput.input,
       token: input.token,
       timeoutSeconds: 60,
     });
@@ -1240,7 +1494,7 @@ async function probeSourcingPlanCandidate(input: {
         probeInputHash,
         qualityMetrics: { compatibilityScore: compatibility.score },
         costEstimateUsd: APIFY_PROBE_STEP_COST_ESTIMATE_USD,
-        details: { reason, error: run.error },
+        details: { reason, error: run.error, normalizedInputAdjustments: normalizedInput.adjustments },
       });
       break;
     }
@@ -1290,6 +1544,7 @@ async function probeSourcingPlanCandidate(input: {
       details: {
         stage: step.stage,
         rowCount: run.rows.length,
+        normalizedInputAdjustments: normalizedInput.adjustments,
       },
     });
 
@@ -1381,9 +1636,15 @@ async function executeSourcingPlan(input: {
       };
     }
 
-    const compatibility = evaluateActorCompatibility({
+    const normalizedInput = normalizeActorInputForSchema({
       actorProfile: profile.profile,
       actorInput,
+      stage: step.stage,
+    });
+
+    const compatibility = evaluateActorCompatibility({
+      actorProfile: profile.profile,
+      actorInput: normalizedInput.input,
       stage: step.stage,
     });
     if (!compatibility.ok) {
@@ -1395,6 +1656,7 @@ async function executeSourcingPlan(input: {
         ok: false,
         reason: "actor_input_incompatible",
         missingRequired: compatibility.missingRequired,
+        normalizedInputAdjustments: normalizedInput.adjustments,
       });
       return {
         ok: false,
@@ -1409,7 +1671,7 @@ async function executeSourcingPlan(input: {
     const run = await startApifyActorRun({
       token: input.token,
       actorId: step.actorId,
-      actorInput,
+      actorInput: normalizedInput.input,
       maxTotalChargeUsd: APIFY_CHAIN_EXEC_MAX_CHARGE_USD,
     });
     if (!run.ok || !run.runId) {
@@ -1421,6 +1683,7 @@ async function executeSourcingPlan(input: {
         ok: false,
         reason: "actor_run_start_failed",
         error: run.error,
+        normalizedInputAdjustments: normalizedInput.adjustments,
       });
       return {
         ok: false,
@@ -1444,11 +1707,12 @@ async function executeSourcingPlan(input: {
         stepDiagnostics.push({
           stepIndex,
           stage: step.stage,
-          actorId: step.actorId,
-          ok: false,
-          reason: "actor_poll_failed",
-          error: poll.error,
-        });
+        actorId: step.actorId,
+        ok: false,
+        reason: "actor_poll_failed",
+        error: poll.error,
+        normalizedInputAdjustments: normalizedInput.adjustments,
+      });
         return {
           ok: false,
           reason: `Actor ${step.actorId} failed while polling: ${poll.error}`,
@@ -1502,6 +1766,7 @@ async function executeSourcingPlan(input: {
         ok: false,
         reason: "dataset_fetch_failed",
         error: fetched.error,
+        normalizedInputAdjustments: normalizedInput.adjustments,
       });
       return {
         ok: false,
@@ -1520,6 +1785,7 @@ async function executeSourcingPlan(input: {
       actorId: step.actorId,
       ok: true,
       rowCount: fetched.rows.length,
+      normalizedInputAdjustments: normalizedInput.adjustments,
       signals: {
         queries: chainData.queries.length,
         companies: chainData.companies.length,
@@ -3098,6 +3364,10 @@ async function processSourceLeadsJob(job: OutreachJob) {
   );
   if (flattenedProbeRows.length) {
     await createSourcingProbeResults(flattenedProbeRows);
+  }
+  const probeMemoryUpdates = buildProbeMemoryUpdates(probedCandidates);
+  if (probeMemoryUpdates.length) {
+    await upsertSourcingActorMemory(probeMemoryUpdates);
   }
 
   let selectedPlanMeta: { selectedPlanId: string; rationale: string };

@@ -2606,16 +2606,39 @@ function rankActorPoolWithMemory(input: {
   memoryRows: Awaited<ReturnType<typeof getSourcingActorMemory>>;
 }) {
   const memoryById = new Map(input.memoryRows.map((row) => [row.actorId.toLowerCase(), row]));
-  const filtered = [...input.actors].filter((actor) => {
+  const blockedByCompatibility: string[] = [];
+  const blockedHardFailure: string[] = [];
+  const softSuppressedLowQuality: string[] = [];
+  const eligible: ApifyStoreActor[] = [];
+  const fallbackLowQuality: ApifyStoreActor[] = [];
+
+  for (const actor of input.actors) {
     const memory = memoryById.get(actor.actorId.toLowerCase());
-    if (!memory) return true;
+    if (!memory) {
+      eligible.push(actor);
+      continue;
+    }
+    const compatibilityBlocked = memory.compatibilityFailCount >= 1 && memory.successCount === 0;
     const hardFailing = memory.failCount >= 3 && memory.successCount === 0;
     const veryLowQuality = memory.avgQuality <= 0.05 && memory.leadsAccepted === 0 && memory.failCount >= 2;
-    return !(hardFailing || veryLowQuality);
-  });
-  const rankingPool = filtered.length ? filtered : [...input.actors];
+    if (compatibilityBlocked) {
+      blockedByCompatibility.push(actor.actorId);
+      continue;
+    }
+    if (hardFailing) {
+      blockedHardFailure.push(actor.actorId);
+      continue;
+    }
+    if (veryLowQuality) {
+      softSuppressedLowQuality.push(actor.actorId);
+      fallbackLowQuality.push(actor);
+      continue;
+    }
+    eligible.push(actor);
+  }
 
-  return rankingPool.sort((a, b) => {
+  const rankingPool = eligible.length ? eligible : fallbackLowQuality;
+  const rankedActors = [...rankingPool].sort((a, b) => {
     const scoreA = actorScore(a);
     const scoreB = actorScore(b);
     const memoryA = memoryById.get(a.actorId.toLowerCase());
@@ -2638,6 +2661,18 @@ function rankActorPoolWithMemory(input: {
         : 0);
     return adjustedB - adjustedA;
   });
+
+  return {
+    rankedActors,
+    diagnostics: {
+      discoveredCount: input.actors.length,
+      eligibleCount: eligible.length,
+      fallbackLowQualityCount: fallbackLowQuality.length,
+      blockedByCompatibility,
+      blockedHardFailure,
+      softSuppressedLowQuality,
+    },
+  };
 }
 
 async function probeSourcingPlanCandidate(input: {
@@ -4534,11 +4569,23 @@ async function processSourceLeadsJob(job: OutreachJob) {
   }
 
   const actorMemory = await getSourcingActorMemory(actorPoolResult.actors.map((actor) => actor.actorId));
-  const rankedActorPool = rankActorPoolWithMemory({
+  const rankedActorPoolResult = rankActorPoolWithMemory({
     actors: actorPoolResult.actors,
     memoryRows: actorMemory,
   });
-  const topActorPool = rankedActorPool.slice(0, APIFY_STORE_MAX_RESULTS);
+  const topActorPool = rankedActorPoolResult.rankedActors.slice(0, APIFY_STORE_MAX_RESULTS);
+  if (!topActorPool.length) {
+    await setTrace({ phase: "failed", failureStep: "plan_sourcing" });
+    await failRunWithDiagnostics({
+      run,
+      reason: "No eligible actors remain after compatibility filtering",
+      eventType: "lead_sourcing_failed",
+      payload: {
+        memoryFilter: rankedActorPoolResult.diagnostics,
+      },
+    });
+    return;
+  }
   const actorProfiles = await fetchActorProfiles(
     topActorPool.map((actor) => actor.actorId),
     sourcingToken
@@ -4560,7 +4607,8 @@ async function processSourceLeadsJob(job: OutreachJob) {
         actorCount: topActorPool.length,
         planningActorCount: planningActorPool.length,
         actorProfiles: actorProfiles.size,
-      qualityPolicy,
+        memoryFilter: rankedActorPoolResult.diagnostics,
+        qualityPolicy,
     },
   });
 

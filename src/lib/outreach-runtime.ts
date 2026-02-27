@@ -973,6 +973,8 @@ async function selectPlanningActorsWithLlm(input: {
       "Goal: maximize real people + business-email lead yield with high run compatibility.",
       "Targeting rule: prioritize actor relevance to role/company ICP in targetAudience.",
       "Treat triggerContext as secondary context; do not over-weight behavior/event phrases during actor selection.",
+      "Prefer people-source and professional contact data actors (e.g. LinkedIn/Sales Navigator/company DB/email finder) over generic social, jobs-only, or broad website contact scrapers.",
+      "Penalize actors that primarily scrape consumer/social feeds unless they clearly return B2B person+company+email records.",
       "Use only provided actorIds. Return JSON only.",
       "Prioritize actors that can run with public inputs and produce lead/company/email signals.",
       "Avoid actors requiring runtime auth/cookies/files, and deprioritize actors with high compatibility failures in memory.",
@@ -1252,6 +1254,8 @@ async function planApifyLeadChainCandidates(input: {
     "Targeting rule: use role/company ICP in targetAudience as the primary retrieval constraint.",
     "Use triggerContext only as a secondary prioritization signal and not as the core retrieval keyword set.",
     "Avoid literal trigger-only query hints (for example: pure \"demo request\" keyword mining) unless paired with strong role/company filters.",
+    "Prefer chains where step 1 starts from person/company discovery in B2B data sources, not generic social/activity scraping.",
+    "Avoid jobs-only and generic website contact scrapers unless they are strictly supporting enrichment for a strong people-source first step.",
     "Rules:",
     "- Use only actorIds from actorPool.",
     "- Valid stage orders are:",
@@ -2271,7 +2275,7 @@ async function probeSourcingPlanCandidate(input: {
       token: input.token,
       timeoutSeconds: 60,
     });
-    for (let repairAttempt = 0; repairAttempt < 2 && !run.ok; repairAttempt += 1) {
+    for (let repairAttempt = 0; repairAttempt < 8 && !run.ok; repairAttempt += 1) {
       const repaired = repairActorInputFromProviderError({
         actorInput: actorInputForRun,
         errorText: run.error,
@@ -2493,7 +2497,7 @@ async function executeSourcingPlan(input: {
     let runResult = run;
     let repairReason = "";
     let actorInputForRun = normalizedInput.input;
-    for (let repairAttempt = 0; repairAttempt < 2 && (!runResult.ok || !runResult.runId); repairAttempt += 1) {
+    for (let repairAttempt = 0; repairAttempt < 8 && (!runResult.ok || !runResult.runId); repairAttempt += 1) {
       const repaired = repairActorInputFromProviderError({
         actorInput: actorInputForRun,
         errorText: runResult.error,

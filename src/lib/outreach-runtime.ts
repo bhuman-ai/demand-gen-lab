@@ -16,6 +16,7 @@ import type {
   LeadQualityPolicy,
   ReplyThread,
   SourcingActorMemory,
+  SourcingChainDecision,
   SourcingChainStep,
   SourcingTraceSummary,
 } from "@/lib/factory-types";

@@ -1072,6 +1072,77 @@ function sourcingCandidateKey(steps: Array<{ stage: LeadChainStepStage; actorId:
   return steps.map((step) => `${step.stage}:${step.actorId.toLowerCase()}`).join("->");
 }
 
+function tokenizeAudienceTerms(raw: string) {
+  const stop = new Set([
+    "the",
+    "and",
+    "for",
+    "with",
+    "that",
+    "this",
+    "from",
+    "into",
+    "then",
+    "their",
+    "they",
+    "them",
+    "you",
+    "your",
+    "are",
+    "was",
+    "were",
+    "have",
+    "has",
+    "had",
+    "not",
+    "did",
+    "does",
+    "will",
+    "would",
+    "should",
+    "can",
+    "could",
+    "at",
+    "in",
+    "on",
+    "to",
+    "of",
+    "or",
+    "by",
+    "as",
+    "a",
+    "an",
+    "is",
+    "be",
+  ]);
+  return Array.from(
+    new Set(
+      normalizeText(raw)
+        .toLowerCase()
+        .replace(/[^a-z0-9\s]/g, " ")
+        .split(/\s+/)
+        .map((token) => token.trim())
+        .filter((token) => token.length >= 4 && !stop.has(token) && !/^\d+$/.test(token))
+    )
+  );
+}
+
+function historicalCandidateMatchesAudience(candidate: LeadSourcingChainPlan, targetAudience: string) {
+  const tokens = tokenizeAudienceTerms(targetAudience);
+  if (!tokens.length) return true;
+  const prospectStep =
+    candidate.steps.find((step) => step.stage === "prospect_discovery") ??
+    candidate.steps[0];
+  if (!prospectStep) return false;
+  const blob = normalizeText(`${prospectStep.queryHint} ${prospectStep.purpose} ${candidate.strategy}`).toLowerCase();
+  let overlap = 0;
+  for (const token of tokens) {
+    if (blob.includes(token)) overlap += 1;
+    if (overlap >= 2) return true;
+  }
+  return false;
+}
+
 function historicalDecisionToPlanCandidate(decision: SourcingChainDecision) {
   const steps = Array.isArray(decision.selectedChain)
     ? decision.selectedChain
@@ -4005,6 +4076,7 @@ async function processSourceLeadsJob(job: OutreachJob) {
   const historicalCandidates = priorDecisions
     .map((decision) => historicalDecisionToPlanCandidate(decision))
     .filter((candidate): candidate is LeadSourcingChainPlan => Boolean(candidate))
+    .filter((candidate) => historicalCandidateMatchesAudience(candidate, targetAudience))
     .slice(0, 3);
   if (historicalCandidates.length) {
     const deduped = [] as LeadSourcingChainPlan[];

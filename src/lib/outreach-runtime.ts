@@ -1659,6 +1659,25 @@ function parseApifyInputFieldError(errorText: string) {
     };
   }
 
+  const numericBoundMatch = normalized.match(
+    /Field input\.([a-zA-Z0-9_.]+)\s+must be\s*(>=|<=|>|<)\s*([0-9]+(?:\.[0-9]+)?)/i
+  );
+  if (numericBoundMatch) {
+    const fieldPath = String(numericBoundMatch[1] ?? "").trim();
+    const key = fieldPath.split(".")[0]?.trim() ?? "";
+    if (!key) return null;
+    const operator = String(numericBoundMatch[2] ?? "").trim();
+    const value = Number(numericBoundMatch[3] ?? "");
+    return {
+      key,
+      fieldPath,
+      predicate: "numeric_bound",
+      expectedType: "number",
+      boundOperator: operator,
+      boundValue: Number.isFinite(value) ? value : undefined,
+    };
+  }
+
   return null;
 }
 
@@ -1773,6 +1792,37 @@ function repairActorInputFromProviderError(input: {
       repaired: true,
       actorInput: next,
       reason: `coerced:${parsed.key}:${parsed.expectedType || "unknown"}`,
+    };
+  }
+
+  if (parsed.predicate === "numeric_bound") {
+    const sourceValue = next[parsed.key] ?? fallbackValueForSchemaKey({
+      key: parsed.key,
+      actorInput: input.actorInput,
+      stage: input.stage,
+    });
+    let numeric = Number(firstString(sourceValue));
+    const bound = Number((parsed as { boundValue?: number }).boundValue);
+    if (!Number.isFinite(numeric)) numeric = Number.isFinite(bound) ? bound : 1;
+    const operator = String((parsed as { boundOperator?: string }).boundOperator ?? "");
+    if (Number.isFinite(bound)) {
+      if (operator === ">=") numeric = Math.max(numeric, bound);
+      if (operator === ">") numeric = Math.max(numeric, bound + 1);
+      if (operator === "<=") numeric = Math.min(numeric, bound);
+      if (operator === "<") numeric = Math.min(numeric, bound - 1);
+    }
+    if (!Number.isFinite(numeric)) {
+      return {
+        repaired: false,
+        actorInput: input.actorInput,
+        reason: `numeric_bound_coercion_failed:${parsed.key}`,
+      };
+    }
+    next[parsed.key] = numeric;
+    return {
+      repaired: true,
+      actorInput: next,
+      reason: `coerced_numeric_bound:${parsed.key}:${operator}${Number.isFinite(bound) ? bound : ""}`,
     };
   }
 

@@ -206,6 +206,15 @@ type SemanticSignal =
   | "auth_token"
   | "file_upload";
 
+type SourcingStartState = {
+  availableSignals: SemanticSignal[];
+  inferredSeeds: {
+    domainCount: number;
+    websiteCount: number;
+    emailCount: number;
+  };
+};
+
 type ActorSemanticContract = {
   actorId: string;
   requiredInputs: SemanticSignal[];
@@ -815,6 +824,41 @@ function defaultStageOutputs(stage: LeadChainStepStage): SemanticSignal[] {
   return ["email_list"];
 }
 
+function deriveSourcingStartState(input: {
+  targetAudience: string;
+  triggerContext?: string;
+  offer: string;
+}): SourcingStartState {
+  const sink = {
+    emails: new Set<string>(),
+    domains: new Set<string>(),
+    websites: new Set<string>(),
+    companies: new Set<string>(),
+    queries: new Set<string>(),
+  };
+  collectSignalsFromUnknown(
+    {
+      targetAudience: input.targetAudience,
+      triggerContext: input.triggerContext ?? "",
+      offer: input.offer,
+    },
+    sink
+  );
+  const signals = new Set<SemanticSignal>(["query"]);
+  if (sink.domains.size) signals.add("domain_list");
+  if (sink.websites.size) signals.add("website_list");
+  if (sink.emails.size) signals.add("email_list");
+  if (sink.companies.size) signals.add("company_list");
+  return {
+    availableSignals: Array.from(signals),
+    inferredSeeds: {
+      domainCount: sink.domains.size,
+      websiteCount: sink.websites.size,
+      emailCount: sink.emails.size,
+    },
+  };
+}
+
 function buildHeuristicSemanticContract(input: {
   actor: ApifyStoreActor;
   profile?: ActorCapabilityProfile;
@@ -833,12 +877,38 @@ function buildHeuristicSemanticContract(input: {
   }
   if (/(company|organization|org)/.test(metadataBlob)) producedOutputs.add("company_list");
 
-  const mergedRequired = Array.from(new Set([...requiredInputs, ...knownSignals.slice(0, 2)]));
-  const requiresAuth = mergedRequired.includes("auth_token");
-  const requiresFileInput = mergedRequired.includes("file_upload");
+  const mergedRequired = new Set<SemanticSignal>([...requiredInputs, ...knownSignals.slice(0, 2)]);
+
+  // Tighten contract inference when actor metadata implies hidden prerequisites.
+  const salesNavLike = /(sales\s*navigator|salesnav)/.test(metadataBlob);
+  const authLike = /(cookie|session|login|credential|authenticated|auth)/.test(metadataBlob);
+  const profileUrlSeedLike =
+    /(linkedin[^a-z0-9]*to[^a-z0-9]*email|bulk[^a-z0-9]*linkedin[^a-z0-9]*email|profile[^a-z0-9]*url|from[^a-z0-9]*linkedin[^a-z0-9]*url)/.test(
+      metadataBlob
+    );
+  const domainSeedLike = /(name[^a-z0-9]*and[^a-z0-9]*domain|domain[^a-z0-9]*finder|email[^a-z0-9]*by[^a-z0-9]*domain)/.test(
+    metadataBlob
+  );
+
+  if (salesNavLike) {
+    mergedRequired.add("auth_token");
+    if (/(url|lead\s*search|saved\s*search)/.test(metadataBlob)) {
+      mergedRequired.add("sales_nav_url");
+    }
+  }
+  if (profileUrlSeedLike && input.stage === "email_discovery") {
+    mergedRequired.add("profile_url_list");
+  }
+  if (domainSeedLike && input.stage === "email_discovery") {
+    mergedRequired.add("domain_list");
+  }
+
+  const mergedRequiredList = Array.from(mergedRequired);
+  const requiresAuth = mergedRequiredList.includes("auth_token") || authLike;
+  const requiresFileInput = mergedRequiredList.includes("file_upload");
   return {
     actorId: input.actor.actorId,
-    requiredInputs: mergedRequired,
+    requiredInputs: mergedRequiredList,
     producedOutputs: Array.from(producedOutputs),
     requiresAuth,
     requiresFileInput,
@@ -1057,8 +1127,11 @@ async function inferActorSemanticContracts(input: {
 function evaluateCandidateFeasibility(input: {
   candidate: LeadSourcingChainPlan;
   contractsByActorId: Map<string, ActorSemanticContract>;
+  startState: SourcingStartState;
 }): CandidateFeasibility {
-  const available = new Set<SemanticSignal>(["query"]);
+  const available = new Set<SemanticSignal>(
+    input.startState.availableSignals.length ? input.startState.availableSignals : ["query"]
+  );
   const steps: CandidateFeasibilityStep[] = [];
   let score = 1;
 
@@ -1146,6 +1219,7 @@ async function critiqueCandidateFeasibilityWithLlm(input: {
   targetAudience: string;
   triggerContext?: string;
   offer: string;
+  startState: SourcingStartState;
 }) {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey || !input.candidates.length) return new Map<string, { feasible: boolean; score: number; reason: string }>();
@@ -1161,6 +1235,7 @@ async function critiqueCandidateFeasibilityWithLlm(input: {
       targetAudience: input.targetAudience,
       triggerContext: input.triggerContext ?? "",
       offer: input.offer,
+      startState: input.startState,
     })}`,
     `deterministic: ${JSON.stringify(input.deterministic)}`,
     `contracts: ${JSON.stringify(
@@ -1244,6 +1319,7 @@ async function planActorDiscoveryQueries(input: {
   brandName: string;
   brandWebsite: string;
   experimentName: string;
+  startState: SourcingStartState;
 }): Promise<{ mode: ActorQueryPlanMode; plan: ActorDiscoveryQueryPlan }> {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) {
@@ -1255,6 +1331,8 @@ async function planActorDiscoveryQueries(input: {
     "Goal: high recall + high relevance across all potential actors (single-step or multi-step chains).",
     "Targeting rule: prioritize role/company ICP fit from targetAudience.",
     "Treat triggerContext as secondary ranking context. Do not anchor store searches on trigger phrases unless they are required to find the ICP.",
+    "Initial runtime inputs at step 0 are limited to startState.availableSignals.",
+    "If startState has only query (and no profile/domain/email seeds), avoid searches biased toward actors that require pre-existing LinkedIn URLs, Sales Navigator URLs, uploaded files, or user auth cookies.",
     "Return distinct searches for three stages: prospect_discovery, website_enrichment, email_discovery.",
     "Use concrete query terms a human would search in a marketplace.",
     "Include keyword variants that can surface actors tied to data sources (for example LinkedIn, Crunchbase, Apollo, websites, domains, email finding), when relevant.",
@@ -1269,6 +1347,7 @@ async function planActorDiscoveryQueries(input: {
       brandName: input.brandName,
       brandWebsite: input.brandWebsite,
       experimentName: input.experimentName,
+      startState: input.startState,
     })}`,
   ].join("\n");
 
@@ -1365,6 +1444,7 @@ async function buildApifyActorPool(input: {
   brandName: string;
   brandWebsite: string;
   experimentName: string;
+  startState: SourcingStartState;
 }) {
   const queryPlanResult = await planActorDiscoveryQueries({
     targetAudience: input.targetAudience,
@@ -1373,6 +1453,7 @@ async function buildApifyActorPool(input: {
     brandName: input.brandName,
     brandWebsite: input.brandWebsite,
     experimentName: input.experimentName,
+    startState: input.startState,
   });
   const stageQueries: Array<{ stage: LeadChainStepStage; queries: string[] }> = [
     { stage: "prospect_discovery", queries: queryPlanResult.plan.prospectQueries },
@@ -1494,6 +1575,7 @@ async function selectPlanningActorsWithLlm(input: {
   brandName: string;
   brandWebsite: string;
   experimentName: string;
+  startState: SourcingStartState;
   actorProfilesById: Map<string, ActorCapabilityProfile>;
   actorMemoryById: Map<string, SourcingActorMemory>;
 }) {
@@ -1538,6 +1620,7 @@ async function selectPlanningActorsWithLlm(input: {
       "Goal: maximize real people + business-email lead yield with high run compatibility.",
       "Targeting rule: prioritize actor relevance to role/company ICP in targetAudience.",
       "Treat triggerContext as secondary context; do not over-weight behavior/event phrases during actor selection.",
+      "Assume only startState.availableSignals exist at step 0; if profile/sales-nav/file/auth signals are absent, deprioritize actors that likely require them.",
       "Prefer people-source and professional contact data actors (e.g. LinkedIn/Sales Navigator/company DB/email finder) over generic social, jobs-only, or broad website contact scrapers.",
       "Penalize actors that primarily scrape consumer/social feeds unless they clearly return B2B person+company+email records.",
       "Use only provided actorIds. Return JSON only.",
@@ -1553,6 +1636,7 @@ async function selectPlanningActorsWithLlm(input: {
         brandName: input.brandName,
         brandWebsite: input.brandWebsite,
         experimentName: input.experimentName,
+        startState: input.startState,
       })}`,
       `actorPool: ${JSON.stringify(shortlist)}`,
     ].join("\n");
@@ -1646,6 +1730,7 @@ async function planApifyLeadChainCandidates(input: {
   brandWebsite: string;
   experimentName: string;
   offer: string;
+  startState: SourcingStartState;
   actorPool: ApifyStoreActor[];
   actorProfilesById: Map<string, ActorCapabilityProfile>;
   actorMemoryRows: SourcingActorMemory[];
@@ -1698,6 +1783,7 @@ async function planApifyLeadChainCandidates(input: {
     brandName: input.brandName,
     brandWebsite: input.brandWebsite,
     experimentName: input.experimentName,
+    startState: input.startState,
     actorProfilesById: input.actorProfilesById,
     actorMemoryById: new Map(input.actorMemoryRows.map((row) => [row.actorId.toLowerCase(), row])),
   });
@@ -1722,6 +1808,8 @@ async function planApifyLeadChainCandidates(input: {
   const prompt = [
     "You plan an Apify actor chain for B2B outreach lead sourcing.",
     "Goal: produce multiple high-quality 1-3 step chains that can source real people + business emails for the provided target audience.",
+    "Step-0 runtime inputs are constrained by startState.availableSignals.",
+    "Do not propose a first step that needs profile URLs, Sales Navigator URLs, uploaded files, or auth if startState does not include those signals.",
     "Targeting rule: use role/company ICP in targetAudience as the primary retrieval constraint.",
     "Use triggerContext only as a secondary prioritization signal and not as the core retrieval keyword set.",
     "Avoid literal trigger-only query hints (for example: pure \"demo request\" keyword mining) unless paired with strong role/company filters.",
@@ -1748,6 +1836,7 @@ async function planApifyLeadChainCandidates(input: {
       brandWebsite: input.brandWebsite,
       experimentName: input.experimentName,
       offer: input.offer,
+      startState: input.startState,
     })}`,
     `actorPool: ${JSON.stringify(actorRows)}`,
   ].join("\n");
@@ -4434,6 +4523,11 @@ async function processSourceLeadsJob(job: OutreachJob) {
   const triggerContext = audienceContext.triggerContext;
   const brand = await getBrandById(run.brandId);
   const offerContext = runtimeExperiment?.offer?.trim() || experiment.notes || hypothesis.rationale || "";
+  const startState = deriveSourcingStartState({
+    targetAudience,
+    triggerContext,
+    offer: offerContext,
+  });
   const traceBase = run.sourcingTraceSummary;
   let traceSummary: SourcingTraceSummary = {
     phase: "plan_sourcing",
@@ -4461,6 +4555,7 @@ async function processSourceLeadsJob(job: OutreachJob) {
         strategy: "dynamic_store_chain",
         maxLeads,
         sampleOnly,
+        startState,
       },
     });
     await setTrace({
@@ -4540,6 +4635,7 @@ async function processSourceLeadsJob(job: OutreachJob) {
       brandName: brand?.name ?? "",
       brandWebsite: brand?.website ?? "",
       experimentName: experiment.name ?? "",
+      startState,
     });
   } catch (error) {
     await setTrace({
@@ -4608,6 +4704,7 @@ async function processSourceLeadsJob(job: OutreachJob) {
         planningActorCount: planningActorPool.length,
         actorProfiles: actorProfiles.size,
         memoryFilter: rankedActorPoolResult.diagnostics,
+        startState,
         qualityPolicy,
     },
   });
@@ -4621,6 +4718,7 @@ async function processSourceLeadsJob(job: OutreachJob) {
       brandWebsite: brand?.website ?? "",
       experimentName: experiment.name ?? "",
       offer: offerContext,
+      startState,
       actorPool: planningActorPool,
       actorProfilesById: actorProfiles,
       actorMemoryRows: actorMemory,
@@ -4653,6 +4751,7 @@ async function processSourceLeadsJob(job: OutreachJob) {
     evaluateCandidateFeasibility({
       candidate,
       contractsByActorId: semanticContractsByActorId,
+      startState,
     })
   );
   const llmFeasibility = await critiqueCandidateFeasibilityWithLlm({
@@ -4662,6 +4761,7 @@ async function processSourceLeadsJob(job: OutreachJob) {
     targetAudience,
     triggerContext,
     offer: offerContext,
+    startState,
   });
 
   const feasibilityById = new Map(deterministicFeasibility.map((row) => [row.candidateId, row]));

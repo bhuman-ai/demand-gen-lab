@@ -16,7 +16,6 @@ import type {
   LeadQualityPolicy,
   ReplyThread,
   SourcingActorMemory,
-  SourcingChainDecision,
   SourcingChainStep,
   SourcingTraceSummary,
 } from "@/lib/factory-types";
@@ -52,7 +51,6 @@ import {
   getReplyDraft,
   getReplyThread,
   getSourcingActorMemory,
-  listSourcingChainDecisions,
   listCampaignRuns,
   listDueOutreachJobs,
   listExperimentRuns,
@@ -1072,100 +1070,6 @@ function parseLeadChainPlanCandidate(input: {
 
 function sourcingCandidateKey(steps: Array<{ stage: LeadChainStepStage; actorId: string }>) {
   return steps.map((step) => `${step.stage}:${step.actorId.toLowerCase()}`).join("->");
-}
-
-function tokenizeAudienceTerms(raw: string) {
-  const stop = new Set([
-    "the",
-    "and",
-    "for",
-    "with",
-    "that",
-    "this",
-    "from",
-    "into",
-    "then",
-    "their",
-    "they",
-    "them",
-    "you",
-    "your",
-    "are",
-    "was",
-    "were",
-    "have",
-    "has",
-    "had",
-    "not",
-    "did",
-    "does",
-    "will",
-    "would",
-    "should",
-    "can",
-    "could",
-    "at",
-    "in",
-    "on",
-    "to",
-    "of",
-    "or",
-    "by",
-    "as",
-    "a",
-    "an",
-    "is",
-    "be",
-  ]);
-  return Array.from(
-    new Set(
-      normalizeText(raw)
-        .toLowerCase()
-        .replace(/[^a-z0-9\s]/g, " ")
-        .split(/\s+/)
-        .map((token) => token.trim())
-        .filter((token) => token.length >= 4 && !stop.has(token) && !/^\d+$/.test(token))
-    )
-  );
-}
-
-function historicalCandidateMatchesAudience(candidate: LeadSourcingChainPlan, targetAudience: string) {
-  const tokens = tokenizeAudienceTerms(targetAudience);
-  if (!tokens.length) return true;
-  const prospectStep =
-    candidate.steps.find((step) => step.stage === "prospect_discovery") ??
-    candidate.steps[0];
-  if (!prospectStep) return false;
-  const blob = normalizeText(prospectStep.queryHint).toLowerCase();
-  let overlap = 0;
-  for (const token of tokens) {
-    if (blob.includes(token)) overlap += 1;
-    if (overlap >= 2) return true;
-  }
-  return false;
-}
-
-function historicalDecisionToPlanCandidate(decision: SourcingChainDecision) {
-  const steps = Array.isArray(decision.selectedChain)
-    ? decision.selectedChain
-        .map((step, index) => ({
-          id: trimText(step.id || `historical_step_${index + 1}`, 60).replace(/\s+/g, "_"),
-          stage: stageFromValue(String(step.stage ?? "").trim().toLowerCase()),
-          actorId: trimText(step.actorId, 160),
-          purpose: trimText(step.purpose, 180),
-          queryHint: trimText(step.queryHint, 240),
-        }))
-        .filter((step): step is LeadSourcingChainStep => Boolean(step.stage && step.actorId))
-    : [];
-  if (!steps.length) return null;
-  const stageOrderError = validateLeadChainStageOrder(steps.map((step) => step.stage));
-  if (stageOrderError) return null;
-  return {
-    id: `memory_${decision.id}`,
-    strategy: trimText(decision.strategy, 180) || "historical_chain",
-    rationale: trimText(decision.rationale, 360),
-    steps,
-  } satisfies LeadSourcingChainPlan;
 }
 
 async function planApifyLeadChainCandidates(input: {
@@ -4122,29 +4026,7 @@ async function processSourceLeadsJob(job: OutreachJob) {
     return;
   }
 
-  const priorDecisions = await listSourcingChainDecisions({
-    brandId: run.brandId,
-    experimentOwnerId: run.ownerId,
-    limit: 12,
-  });
-  const historicalCandidates = priorDecisions
-    .map((decision) => historicalDecisionToPlanCandidate(decision))
-    .filter((candidate): candidate is LeadSourcingChainPlan => Boolean(candidate))
-    .filter((candidate) => historicalCandidateMatchesAudience(candidate, targetAudience))
-    .slice(0, 3);
-  if (historicalCandidates.length) {
-    const deduped = [] as LeadSourcingChainPlan[];
-    const seen = new Set<string>();
-    const push = (candidate: LeadSourcingChainPlan) => {
-      const key = sourcingCandidateKey(candidate.steps);
-      if (!key || seen.has(key)) return;
-      seen.add(key);
-      deduped.push(candidate);
-    };
-    for (const candidate of chainCandidates) push(candidate);
-    for (const candidate of historicalCandidates) push(candidate);
-    chainCandidates = deduped.slice(0, Math.max(APIFY_CHAIN_MAX_CANDIDATES, 8));
-  }
+  const historicalCandidates: LeadSourcingChainPlan[] = [];
 
   await createOutreachEvent({
     runId: run.id,

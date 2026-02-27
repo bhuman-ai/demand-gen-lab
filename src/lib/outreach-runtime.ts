@@ -1134,7 +1134,7 @@ function historicalCandidateMatchesAudience(candidate: LeadSourcingChainPlan, ta
     candidate.steps.find((step) => step.stage === "prospect_discovery") ??
     candidate.steps[0];
   if (!prospectStep) return false;
-  const blob = normalizeText(`${prospectStep.queryHint} ${prospectStep.purpose} ${candidate.strategy}`).toLowerCase();
+  const blob = normalizeText(prospectStep.queryHint).toLowerCase();
   let overlap = 0;
   for (const token of tokens) {
     if (blob.includes(token)) overlap += 1;

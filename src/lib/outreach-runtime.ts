@@ -4601,9 +4601,9 @@ async function processSourceLeadsJob(job: OutreachJob) {
         (llm ? llm.score : deterministic?.score ?? 0) * 0.35
       ).toFixed(4)
     );
-    const reason = feasible
-      ? "feasible"
-      : [deterministic?.reason, llm?.reason].filter(Boolean).join(" | ") || "preprobe_infeasible";
+    const deterministicReason =
+      deterministic?.reason && deterministic.reason !== "feasible" ? deterministic.reason : "";
+    const reason = feasible ? "feasible" : llm?.reason || deterministicReason || "preprobe_infeasible";
     return { candidate, deterministic, llm, feasible, score, reason };
   });
 
@@ -4645,10 +4645,10 @@ async function processSourceLeadsJob(job: OutreachJob) {
     const topRejections = candidateScored
       .filter((row) => !row.feasible)
       .slice(0, 3)
-      .map((row) => `${row.candidate.id}: ${row.reason}`);
+      .map((row) => `${row.candidate.id}: ${trimText(row.reason, 180)}`);
     await failRunWithDiagnostics({
       run,
-      reason: `No feasible chain candidates after semantic preflight. ${topRejections.join(" | ")}`,
+      reason: `No feasible chain candidates after semantic preflight. ${topRejections.join(" | ") || "See sourcing trace."}`,
       eventType: "lead_sourcing_failed",
       payload: {
         feasibilityRejected: candidateScored.length,

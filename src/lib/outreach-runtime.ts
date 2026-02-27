@@ -190,6 +190,12 @@ type LeadSourcingChainData = {
   emails: string[];
 };
 
+type SourcingAudienceContext = {
+  rawAudience: string;
+  targetAudience: string;
+  triggerContext: string;
+};
+
 const APIFY_CHAIN_MAX_STEPS = 3;
 const APIFY_CHAIN_MAX_CANDIDATES = 6;
 const APIFY_CHAIN_MAX_ITEMS_PER_STEP = 200;
@@ -232,11 +238,53 @@ function uniqueTrimmed(values: string[], max = 200) {
   return out;
 }
 
+function normalizeText(value: string) {
+  return value.replace(/\s+/g, " ").trim();
+}
+
 function trimText(value: unknown, max = 180) {
   return String(value ?? "")
     .replace(/\s+/g, " ")
     .trim()
     .slice(0, max);
+}
+
+function splitAudienceAndTrigger(raw: string): Pick<SourcingAudienceContext, "targetAudience" | "triggerContext"> {
+  const normalized = normalizeText(raw);
+  if (!normalized) {
+    return { targetAudience: "", triggerContext: "" };
+  }
+
+  const marker = normalized.match(/^(.*?)(?:\btrigger\b\s*[:\-]\s*|\btrigger\b\s+)(.+)$/i);
+  if (marker) {
+    const targetAudience = normalizeText(marker[1] ?? "");
+    const triggerContext = normalizeText(marker[2] ?? "");
+    return {
+      targetAudience: targetAudience || normalized,
+      triggerContext,
+    };
+  }
+
+  return {
+    targetAudience: normalized,
+    triggerContext: "",
+  };
+}
+
+function buildSourcingAudienceContext(input: {
+  runtimeAudience?: string;
+  hypothesisAudience?: string;
+  experimentNotes?: string;
+}) {
+  const rawAudience = normalizeText(
+    input.runtimeAudience?.trim() || input.hypothesisAudience?.trim() || input.experimentNotes?.trim() || ""
+  );
+  const split = splitAudienceAndTrigger(rawAudience);
+  return {
+    rawAudience,
+    targetAudience: split.targetAudience,
+    triggerContext: split.triggerContext,
+  } satisfies SourcingAudienceContext;
 }
 
 function extractOutputText(payloadRaw: unknown) {
@@ -626,6 +674,7 @@ const APIFY_STORE_MAX_RESULTS = 160;
 
 async function planActorDiscoveryQueries(input: {
   targetAudience: string;
+  triggerContext?: string;
   offer: string;
   brandName: string;
   brandWebsite: string;
@@ -639,6 +688,8 @@ async function planActorDiscoveryQueries(input: {
   const prompt = [
     "You plan discovery queries to search the Apify Actor Store for lead-sourcing pipelines.",
     "Goal: high recall + high relevance across all potential actors (single-step or multi-step chains).",
+    "Targeting rule: prioritize role/company ICP fit from targetAudience.",
+    "Treat triggerContext as secondary ranking context. Do not anchor store searches on trigger phrases unless they are required to find the ICP.",
     "Return distinct searches for three stages: prospect_discovery, website_enrichment, email_discovery.",
     "Use concrete query terms a human would search in a marketplace.",
     "Include keyword variants that can surface actors tied to data sources (for example LinkedIn, Crunchbase, Apollo, websites, domains, email finding), when relevant.",
@@ -648,6 +699,7 @@ async function planActorDiscoveryQueries(input: {
     '{ "prospectQueries": string[], "websiteQueries": string[], "emailQueries": string[] }',
     `Context: ${JSON.stringify({
       targetAudience: input.targetAudience,
+      triggerContext: input.triggerContext ?? "",
       offer: input.offer,
       brandName: input.brandName,
       brandWebsite: input.brandWebsite,
@@ -743,6 +795,7 @@ function actorCandidateScore(input: {
 
 async function buildApifyActorPool(input: {
   targetAudience: string;
+  triggerContext?: string;
   offer: string;
   brandName: string;
   brandWebsite: string;
@@ -750,6 +803,7 @@ async function buildApifyActorPool(input: {
 }) {
   const queryPlanResult = await planActorDiscoveryQueries({
     targetAudience: input.targetAudience,
+    triggerContext: input.triggerContext ?? "",
     offer: input.offer,
     brandName: input.brandName,
     brandWebsite: input.brandWebsite,
@@ -870,6 +924,7 @@ async function buildApifyActorPool(input: {
 async function selectPlanningActorsWithLlm(input: {
   actors: ApifyStoreActor[];
   targetAudience: string;
+  triggerContext?: string;
   offer: string;
   brandName: string;
   brandWebsite: string;
@@ -916,6 +971,8 @@ async function selectPlanningActorsWithLlm(input: {
     const prompt = [
       "Select Apify actors for B2B outreach lead sourcing chain planning.",
       "Goal: maximize real people + business-email lead yield with high run compatibility.",
+      "Targeting rule: prioritize actor relevance to role/company ICP in targetAudience.",
+      "Treat triggerContext as secondary context; do not over-weight behavior/event phrases during actor selection.",
       "Use only provided actorIds. Return JSON only.",
       "Prioritize actors that can run with public inputs and produce lead/company/email signals.",
       "Avoid actors requiring runtime auth/cookies/files, and deprioritize actors with high compatibility failures in memory.",
@@ -924,6 +981,7 @@ async function selectPlanningActorsWithLlm(input: {
       '{ "selectedActorIds": string[] }',
       `Context: ${JSON.stringify({
         targetAudience: input.targetAudience,
+        triggerContext: input.triggerContext ?? "",
         offer: input.offer,
         brandName: input.brandName,
         brandWebsite: input.brandWebsite,
@@ -1039,6 +1097,7 @@ function historicalDecisionToPlanCandidate(decision: SourcingChainDecision) {
 
 async function planApifyLeadChainCandidates(input: {
   targetAudience: string;
+  triggerContext?: string;
   brandName: string;
   brandWebsite: string;
   experimentName: string;
@@ -1090,6 +1149,7 @@ async function planApifyLeadChainCandidates(input: {
   const llmSelectedActorIds = await selectPlanningActorsWithLlm({
     actors: planningPool,
     targetAudience: input.targetAudience,
+    triggerContext: input.triggerContext ?? "",
     offer: input.offer,
     brandName: input.brandName,
     brandWebsite: input.brandWebsite,
@@ -1118,6 +1178,9 @@ async function planApifyLeadChainCandidates(input: {
   const prompt = [
     "You plan an Apify actor chain for B2B outreach lead sourcing.",
     "Goal: produce multiple high-quality 1-3 step chains that can source real people + business emails for the provided target audience.",
+    "Targeting rule: use role/company ICP in targetAudience as the primary retrieval constraint.",
+    "Use triggerContext only as a secondary prioritization signal and not as the core retrieval keyword set.",
+    "Avoid literal trigger-only query hints (for example: pure \"demo request\" keyword mining) unless paired with strong role/company filters.",
     "Rules:",
     "- Use only actorIds from actorPool.",
     "- Valid stage orders are:",
@@ -1134,6 +1197,7 @@ async function planApifyLeadChainCandidates(input: {
     '{ "candidates": [{ "id": string, "strategy": string, "rationale": string, "steps": [{ "id": string, "stage": "prospect_discovery"|"website_enrichment"|"email_discovery", "purpose": string, "actorId": string, "queryHint": string }] }] }',
     `Context: ${JSON.stringify({
       targetAudience: input.targetAudience,
+      triggerContext: input.triggerContext ?? "",
       brandName: input.brandName,
       brandWebsite: input.brandWebsite,
       experimentName: input.experimentName,
@@ -2506,12 +2570,12 @@ function preflightReason(input: {
   deliverySecrets: ResolvedSecrets;
   mailboxAccount: ResolvedAccount;
   mailboxSecrets: ResolvedSecrets;
-  hypothesis: Hypothesis;
+  targetAudience: string;
 }) {
   if (!supportsDelivery(input.deliveryAccount)) {
     return "Assigned delivery account does not support outreach sending";
   }
-  if (!input.hypothesis.actorQuery.trim()) {
+  if (!input.targetAudience.trim()) {
     return "Target Audience is required for lead sourcing";
   }
   if (!effectiveSourcingToken(input.deliverySecrets)) {
@@ -3403,6 +3467,12 @@ export async function launchExperimentRun(input: {
   if (!hypothesis) {
     return { ok: false, runId: "", reason: "Linked hypothesis not found" };
   }
+  const runtimeExperiment = await getExperimentRecordByRuntimeRef(input.brandId, input.campaignId, experiment.id);
+  const audienceContext = buildSourcingAudienceContext({
+    runtimeAudience: runtimeExperiment?.audience ?? "",
+    hypothesisAudience: hypothesis.actorQuery,
+    experimentNotes: experiment.notes,
+  });
 
   if (hypothesis.status !== "approved" && input.trigger !== "manual") {
     return { ok: false, runId: "", reason: "Hypothesis must be approved before auto-run" };
@@ -3458,7 +3528,7 @@ export async function launchExperimentRun(input: {
     deliverySecrets: brandAccount.deliverySecrets,
     mailboxAccount: brandAccount.mailboxAccount,
     mailboxSecrets: brandAccount.mailboxSecrets,
-    hypothesis,
+    targetAudience: audienceContext.targetAudience,
   });
   if (reason) {
     const diagnostic = preflightDiagnostic({
@@ -3723,9 +3793,16 @@ async function processSourceLeadsJob(job: OutreachJob) {
       Number(payload.maxLeadsOverride ?? sourceConfig.maxLeads ?? (sampleOnly ? APIFY_PROBE_MAX_LEADS : 100)) || 100
     )
   );
-  const targetAudience = hypothesis.actorQuery.trim() || experiment.notes.trim();
+  const runtimeExperiment = await getExperimentRecordByRuntimeRef(run.brandId, run.campaignId, run.experimentId);
+  const audienceContext = buildSourcingAudienceContext({
+    runtimeAudience: runtimeExperiment?.audience ?? "",
+    hypothesisAudience: hypothesis.actorQuery,
+    experimentNotes: experiment.notes,
+  });
+  const targetAudience = audienceContext.targetAudience;
+  const triggerContext = audienceContext.triggerContext;
   const brand = await getBrandById(run.brandId);
-  const offerContext = experiment.notes || hypothesis.rationale || "";
+  const offerContext = runtimeExperiment?.offer?.trim() || experiment.notes || hypothesis.rationale || "";
   const traceBase = run.sourcingTraceSummary;
   let traceSummary: SourcingTraceSummary = {
     phase: "plan_sourcing",
@@ -3827,6 +3904,7 @@ async function processSourceLeadsJob(job: OutreachJob) {
   try {
     actorPoolResult = await buildApifyActorPool({
       targetAudience,
+      triggerContext,
       offer: offerContext,
       brandName: brand?.name ?? "",
       brandWebsite: brand?.website ?? "",
@@ -3878,13 +3956,14 @@ async function processSourceLeadsJob(job: OutreachJob) {
   await createOutreachEvent({
     runId: run.id,
     eventType: "lead_sourcing_actor_pool_built",
-    payload: {
-      queryPlanMode: actorPoolResult.queryPlanMode,
-      queryPlan: actorPoolResult.queryPlan,
-      queriesTried: actorPoolResult.searchDiagnostics,
-      actorCount: topActorPool.length,
-      planningActorCount: planningActorPool.length,
-      actorProfiles: actorProfiles.size,
+      payload: {
+        queryPlanMode: actorPoolResult.queryPlanMode,
+        queryPlan: actorPoolResult.queryPlan,
+        audienceContext,
+        queriesTried: actorPoolResult.searchDiagnostics,
+        actorCount: topActorPool.length,
+        planningActorCount: planningActorPool.length,
+        actorProfiles: actorProfiles.size,
       qualityPolicy,
     },
   });
@@ -3893,6 +3972,7 @@ async function processSourceLeadsJob(job: OutreachJob) {
   try {
     chainCandidates = await planApifyLeadChainCandidates({
       targetAudience,
+      triggerContext,
       brandName: brand?.name ?? "",
       brandWebsite: brand?.website ?? "",
       experimentName: experiment.name ?? "",
@@ -3935,8 +4015,8 @@ async function processSourceLeadsJob(job: OutreachJob) {
       seen.add(key);
       deduped.push(candidate);
     };
-    for (const candidate of historicalCandidates) push(candidate);
     for (const candidate of chainCandidates) push(candidate);
+    for (const candidate of historicalCandidates) push(candidate);
     chainCandidates = deduped.slice(0, Math.max(APIFY_CHAIN_MAX_CANDIDATES, 8));
   }
 

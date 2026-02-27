@@ -1011,13 +1011,23 @@ async function inferActorSemanticContracts(input: {
   }> = [];
 
   for (const row of pending) {
-    const inferred =
-      byActorId.get(row.actor.actorId) ??
-      buildHeuristicSemanticContract({
-        actor: row.actor,
-        profile: row.profile,
-        stage: stageFromActor(row.actor),
-      });
+    const heuristic = buildHeuristicSemanticContract({
+      actor: row.actor,
+      profile: row.profile,
+      stage: stageFromActor(row.actor),
+    });
+    const fromModel = byActorId.get(row.actor.actorId);
+    const inferred = fromModel
+      ? {
+          actorId: row.actor.actorId,
+          requiredInputs: fromModel.requiredInputs.length ? fromModel.requiredInputs : heuristic.requiredInputs,
+          producedOutputs: fromModel.producedOutputs.length ? fromModel.producedOutputs : heuristic.producedOutputs,
+          requiresAuth: fromModel.requiresAuth || heuristic.requiresAuth,
+          requiresFileInput: fromModel.requiresFileInput || heuristic.requiresFileInput,
+          confidence: fromModel.confidence > 0 ? fromModel.confidence : heuristic.confidence,
+          rationale: fromModel.rationale || heuristic.rationale,
+        }
+      : heuristic;
     output.set(row.actor.actorId, inferred);
     upsertRows.push({
       actorId: row.actor.actorId,
@@ -1110,6 +1120,23 @@ function evaluateCandidateFeasibility(input: {
     reason: feasible ? "feasible" : "failed",
     steps,
   };
+}
+
+function hasHardPreflightBlock(reason: string) {
+  const normalized = String(reason ?? "").toLowerCase();
+  if (!normalized) return false;
+  return (
+    normalized.includes("sales nav") ||
+    normalized.includes("salesnav") ||
+    normalized.includes("auth") ||
+    normalized.includes("cookie") ||
+    normalized.includes("credential") ||
+    normalized.includes("file upload") ||
+    normalized.includes("file") ||
+    normalized.includes("missing required") ||
+    normalized.includes("unsatisfied prerequisite") ||
+    normalized.includes("not possible")
+  );
 }
 
 async function critiqueCandidateFeasibilityWithLlm(input: {
@@ -4593,8 +4620,7 @@ async function processSourceLeadsJob(job: OutreachJob) {
   const candidateScored = chainCandidates.map((candidate) => {
     const deterministic = feasibilityById.get(candidate.id);
     const llm = llmFeasibility.get(candidate.id);
-    const llmPass = !llm || (llm.feasible && llm.score >= 0.55);
-    const feasible = Boolean(deterministic?.feasible) && llmPass;
+    const llmStrongPass = !llm || (llm.feasible && llm.score >= 0.55);
     const score = Number(
       (
         (deterministic?.score ?? 0) * 0.65 +
@@ -4603,7 +4629,10 @@ async function processSourceLeadsJob(job: OutreachJob) {
     );
     const deterministicReason =
       deterministic?.reason && deterministic.reason !== "feasible" ? deterministic.reason : "";
-    const reason = feasible ? "feasible" : llm?.reason || deterministicReason || "preprobe_infeasible";
+    const llmReason = trimText(llm?.reason, 240);
+    const hardBlocked = hasHardPreflightBlock(`${deterministicReason} ${llmReason}`.trim());
+    const feasible = Boolean(deterministic?.feasible) && (llmStrongPass || !hardBlocked);
+    const reason = feasible ? "feasible" : llmReason || deterministicReason || "preprobe_infeasible";
     return { candidate, deterministic, llm, feasible, score, reason };
   });
 

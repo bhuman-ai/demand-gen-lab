@@ -195,6 +195,46 @@ type SourcingAudienceContext = {
   triggerContext: string;
 };
 
+type SemanticSignal =
+  | "query"
+  | "company_list"
+  | "domain_list"
+  | "website_list"
+  | "profile_url_list"
+  | "email_list"
+  | "sales_nav_url"
+  | "auth_token"
+  | "file_upload";
+
+type ActorSemanticContract = {
+  actorId: string;
+  requiredInputs: SemanticSignal[];
+  producedOutputs: SemanticSignal[];
+  requiresAuth: boolean;
+  requiresFileInput: boolean;
+  confidence: number;
+  rationale: string;
+};
+
+type CandidateFeasibilityStep = {
+  stepIndex: number;
+  actorId: string;
+  stage: LeadChainStepStage;
+  feasible: boolean;
+  unresolved: string[];
+  requiredInputs: SemanticSignal[];
+  producedOutputs: SemanticSignal[];
+  reason: string;
+};
+
+type CandidateFeasibility = {
+  candidateId: string;
+  feasible: boolean;
+  score: number;
+  reason: string;
+  steps: CandidateFeasibilityStep[];
+};
+
 const APIFY_CHAIN_MAX_STEPS = 3;
 const APIFY_CHAIN_MAX_CANDIDATES = 6;
 const APIFY_CHAIN_MAX_ITEMS_PER_STEP = 200;
@@ -653,6 +693,505 @@ function filterPlanningPoolBySchemaViability(input: {
     .sort((a, b) => b.viability - a.viability)
     .map((row) => row.actor);
   return filtered.length >= Math.min(18, Math.max(6, Math.floor(input.actors.length * 0.15))) ? filtered : input.actors;
+}
+
+const SEMANTIC_SIGNAL_VALUES: SemanticSignal[] = [
+  "query",
+  "company_list",
+  "domain_list",
+  "website_list",
+  "profile_url_list",
+  "email_list",
+  "sales_nav_url",
+  "auth_token",
+  "file_upload",
+];
+
+function normalizeSemanticSignal(value: unknown): SemanticSignal | null {
+  const raw = String(value ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_]/g, "_");
+  if (!raw) return null;
+  const aliases: Record<string, SemanticSignal> = {
+    query: "query",
+    search_query: "query",
+    keyword_query: "query",
+    companies: "company_list",
+    company_list: "company_list",
+    company_names: "company_list",
+    domains: "domain_list",
+    domain_list: "domain_list",
+    websites: "website_list",
+    website_list: "website_list",
+    urls: "website_list",
+    profile_urls: "profile_url_list",
+    linkedin_profile_urls: "profile_url_list",
+    profile_url_list: "profile_url_list",
+    emails: "email_list",
+    email_list: "email_list",
+    salesnav_url: "sales_nav_url",
+    sales_nav_url: "sales_nav_url",
+    salesnavigator_url: "sales_nav_url",
+    auth: "auth_token",
+    auth_token: "auth_token",
+    api_key: "auth_token",
+    token: "auth_token",
+    file: "file_upload",
+    file_upload: "file_upload",
+    csv_file: "file_upload",
+  };
+  const direct = aliases[raw];
+  if (direct) return direct;
+  return SEMANTIC_SIGNAL_VALUES.includes(raw as SemanticSignal) ? (raw as SemanticSignal) : null;
+}
+
+function semanticSignalsFromSchemaTokens(tokens: string[]): SemanticSignal[] {
+  const out = new Set<SemanticSignal>();
+  for (const token of tokens) {
+    const normalized = normalizeSchemaKeyToken(token);
+    if (!normalized) continue;
+    if (
+      normalized.includes("query") ||
+      normalized.includes("search") ||
+      normalized.includes("keyword") ||
+      normalized.includes("phrase")
+    ) {
+      out.add("query");
+      continue;
+    }
+    if (normalized.includes("salesnav") || normalized.includes("salesnavigator")) {
+      out.add("sales_nav_url");
+      continue;
+    }
+    if (normalized.includes("linkedin") && normalized.includes("url")) {
+      out.add("profile_url_list");
+      continue;
+    }
+    if (normalized.includes("company") || normalized.includes("organization")) {
+      out.add("company_list");
+      continue;
+    }
+    if (normalized.includes("domain")) {
+      out.add("domain_list");
+      continue;
+    }
+    if (
+      normalized.includes("website") ||
+      normalized.includes("url") ||
+      normalized.includes("starturl") ||
+      normalized.includes("site")
+    ) {
+      out.add("website_list");
+      continue;
+    }
+    if (normalized.includes("email") || normalized.includes("mailbox")) {
+      out.add("email_list");
+      continue;
+    }
+    if (
+      normalized.includes("file") ||
+      normalized.includes("upload") ||
+      normalized.includes("csv") ||
+      normalized.includes("xlsx")
+    ) {
+      out.add("file_upload");
+      continue;
+    }
+    if (isRuntimeUnsafeRequiredKey(normalized)) {
+      out.add("auth_token");
+    }
+  }
+  return Array.from(out);
+}
+
+function defaultStageOutputs(stage: LeadChainStepStage): SemanticSignal[] {
+  if (stage === "prospect_discovery") {
+    return ["company_list", "website_list", "profile_url_list"];
+  }
+  if (stage === "website_enrichment") {
+    return ["company_list", "website_list", "domain_list"];
+  }
+  return ["email_list"];
+}
+
+function buildHeuristicSemanticContract(input: {
+  actor: ApifyStoreActor;
+  profile?: ActorCapabilityProfile;
+  stage: LeadChainStepStage;
+}): ActorSemanticContract {
+  const schemaKeys = schemaSummaryKeys(input.profile?.schemaSummary);
+  const requiredInputs = semanticSignalsFromSchemaTokens(schemaKeys.requiredKeys);
+  const knownSignals = semanticSignalsFromSchemaTokens(schemaKeys.knownKeys);
+  const metadataBlob = `${input.actor.title} ${input.actor.description} ${input.actor.categories.join(" ")}`.toLowerCase();
+  const producedOutputs = new Set<SemanticSignal>(defaultStageOutputs(input.stage));
+  if (/(email|mail|contact|finder|verify|enrich)/.test(metadataBlob)) producedOutputs.add("email_list");
+  if (/(linkedin|profile)/.test(metadataBlob)) producedOutputs.add("profile_url_list");
+  if (/(domain|website|site|crawl|scrap)/.test(metadataBlob)) {
+    producedOutputs.add("website_list");
+    producedOutputs.add("domain_list");
+  }
+  if (/(company|organization|org)/.test(metadataBlob)) producedOutputs.add("company_list");
+
+  const mergedRequired = Array.from(new Set([...requiredInputs, ...knownSignals.slice(0, 2)]));
+  const requiresAuth = mergedRequired.includes("auth_token");
+  const requiresFileInput = mergedRequired.includes("file_upload");
+  return {
+    actorId: input.actor.actorId,
+    requiredInputs: mergedRequired,
+    producedOutputs: Array.from(producedOutputs),
+    requiresAuth,
+    requiresFileInput,
+    confidence: 0.45,
+    rationale: "heuristic_contract",
+  };
+}
+
+function parseStoredSemanticContract(profile?: ActorCapabilityProfile): ActorSemanticContract | null {
+  const stored = asRecord(profile?.schemaSummary).semanticContract;
+  const row = asRecord(stored);
+  const actorId = String(row.actorId ?? profile?.actorId ?? "").trim();
+  if (!actorId) return null;
+  const requiredInputs = Array.isArray(row.requiredInputs)
+    ? row.requiredInputs.map((value) => normalizeSemanticSignal(value)).filter((value): value is SemanticSignal => Boolean(value))
+    : [];
+  const producedOutputs = Array.isArray(row.producedOutputs)
+    ? row.producedOutputs.map((value) => normalizeSemanticSignal(value)).filter((value): value is SemanticSignal => Boolean(value))
+    : [];
+  return {
+    actorId,
+    requiredInputs,
+    producedOutputs,
+    requiresAuth: Boolean(row.requiresAuth),
+    requiresFileInput: Boolean(row.requiresFileInput),
+    confidence: Math.max(0, Math.min(1, Number(row.confidence ?? 0) || 0)),
+    rationale: trimText(row.rationale, 220),
+  };
+}
+
+async function inferActorSemanticContracts(input: {
+  actors: ApifyStoreActor[];
+  actorProfilesById: Map<string, ActorCapabilityProfile>;
+  targetAudience: string;
+  triggerContext?: string;
+  offer: string;
+}) {
+  const existing = new Map<string, ActorSemanticContract>();
+  const pending: Array<{ actor: ApifyStoreActor; profile?: ActorCapabilityProfile }> = [];
+  for (const actor of input.actors) {
+    const profile = input.actorProfilesById.get(actor.actorId);
+    const stored = parseStoredSemanticContract(profile);
+    if (stored && stored.actorId === actor.actorId) {
+      existing.set(actor.actorId, stored);
+    } else {
+      pending.push({ actor, profile });
+    }
+  }
+
+  const output = new Map(existing);
+  if (!pending.length) return output;
+
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) {
+    for (const row of pending) {
+      output.set(
+        row.actor.actorId,
+        buildHeuristicSemanticContract({
+          actor: row.actor,
+          profile: row.profile,
+          stage: stageFromActor(row.actor),
+        })
+      );
+    }
+    return output;
+  }
+
+  const shortlist = pending.slice(0, 48).map((row) => {
+    const schemaKeys = schemaSummaryKeys(row.profile?.schemaSummary);
+    return {
+      actorId: row.actor.actorId,
+      title: trimText(row.actor.title, 120),
+      description: trimText(row.actor.description, 220),
+      categories: row.actor.categories.slice(0, 8),
+      stageHint: stageFromActor(row.actor),
+      requiredKeys: schemaKeys.requiredKeys.slice(0, 30),
+      knownKeys: schemaKeys.knownKeys.slice(0, 80),
+      metadata: row.profile?.lastSeenMetadata ?? {},
+    };
+  });
+
+  const prompt = [
+    "Classify runtime semantic input/output contracts for Apify actors used in B2B lead sourcing.",
+    "Goal: prevent expensive probe runs by identifying hidden unsatisfied prerequisites before execution.",
+    "Return JSON only.",
+    "Rules:",
+    "- Use only these semantic signals:",
+    `  ${SEMANTIC_SIGNAL_VALUES.join(", ")}`,
+    "- requiredInputs should represent what must exist before actor run (not optional knobs).",
+    "- producedOutputs should represent likely output signals this actor emits on success.",
+    "- requiresAuth=true for actors needing non-platform user credentials, cookies, or interactive sessions.",
+    "- requiresFileInput=true for actors requiring uploaded files or pre-built CSVs.",
+    "- sales_nav_url should be required when actor needs Sales Navigator URL.",
+    "- Keep results conservative: if uncertain, mark confidence low and include rationale.",
+    "Response shape:",
+    '{ "contracts": [{ "actorId": string, "requiredInputs": string[], "producedOutputs": string[], "requiresAuth": boolean, "requiresFileInput": boolean, "confidence": number, "rationale": string }] }',
+    `Context: ${JSON.stringify({
+      targetAudience: input.targetAudience,
+      triggerContext: input.triggerContext ?? "",
+      offer: input.offer,
+    })}`,
+    `actors: ${JSON.stringify(shortlist)}`,
+  ].join("\n");
+
+  const model = resolveLlmModel("lead_chain_planning", { prompt });
+  let parsed: unknown = {};
+  try {
+    const response = await fetch("https://api.openai.com/v1/responses", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model,
+        input: prompt,
+        text: { format: { type: "json_object" } },
+        max_output_tokens: 3200,
+      }),
+    });
+    const raw = await response.text();
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status} ${raw.slice(0, 220)}`);
+    }
+    let payload: unknown = {};
+    try {
+      payload = JSON.parse(raw);
+    } catch {
+      payload = {};
+    }
+    parsed = parseLooseJsonObject(extractOutputText(payload));
+  } catch {
+    parsed = {};
+  }
+
+  const root = asRecord(parsed);
+  const contractsRaw = Array.isArray(root.contracts) ? root.contracts : [];
+  const byActorId = new Map<string, ActorSemanticContract>();
+  for (const rowRaw of contractsRaw) {
+    const row = asRecord(rowRaw);
+    const actorId = String(row.actorId ?? "").trim();
+    if (!actorId) continue;
+    const requiredInputs = Array.isArray(row.requiredInputs)
+      ? row.requiredInputs
+          .map((value) => normalizeSemanticSignal(value))
+          .filter((value): value is SemanticSignal => Boolean(value))
+      : [];
+    const producedOutputs = Array.isArray(row.producedOutputs)
+      ? row.producedOutputs
+          .map((value) => normalizeSemanticSignal(value))
+          .filter((value): value is SemanticSignal => Boolean(value))
+      : [];
+    byActorId.set(actorId, {
+      actorId,
+      requiredInputs,
+      producedOutputs,
+      requiresAuth: Boolean(row.requiresAuth),
+      requiresFileInput: Boolean(row.requiresFileInput),
+      confidence: Math.max(0, Math.min(1, Number(row.confidence ?? 0) || 0)),
+      rationale: trimText(row.rationale, 240),
+    });
+  }
+
+  const upsertRows: Array<{
+    actorId: string;
+    stageHints: Array<"prospect_discovery" | "website_enrichment" | "email_discovery">;
+    schemaSummary: Record<string, unknown>;
+    compatibilityScore: number;
+    lastSeenMetadata: Record<string, unknown>;
+  }> = [];
+
+  for (const row of pending) {
+    const inferred =
+      byActorId.get(row.actor.actorId) ??
+      buildHeuristicSemanticContract({
+        actor: row.actor,
+        profile: row.profile,
+        stage: stageFromActor(row.actor),
+      });
+    output.set(row.actor.actorId, inferred);
+    upsertRows.push({
+      actorId: row.actor.actorId,
+      stageHints: row.profile?.stageHints?.length
+        ? row.profile.stageHints
+        : [stageFromActor(row.actor)],
+      schemaSummary: {
+        ...asRecord(row.profile?.schemaSummary),
+        semanticContract: inferred,
+      },
+      compatibilityScore: Number(row.profile?.compatibilityScore ?? 0) || 0,
+      lastSeenMetadata: {
+        ...asRecord(row.profile?.lastSeenMetadata),
+        title: row.actor.title,
+        description: row.actor.description,
+      },
+    });
+  }
+
+  if (upsertRows.length) {
+    await upsertSourcingActorProfiles(upsertRows);
+  }
+
+  return output;
+}
+
+function evaluateCandidateFeasibility(input: {
+  candidate: LeadSourcingChainPlan;
+  contractsByActorId: Map<string, ActorSemanticContract>;
+}): CandidateFeasibility {
+  const available = new Set<SemanticSignal>(["query"]);
+  const steps: CandidateFeasibilityStep[] = [];
+  let score = 1;
+
+  for (let stepIndex = 0; stepIndex < input.candidate.steps.length; stepIndex += 1) {
+    const step = input.candidate.steps[stepIndex];
+    const contract = input.contractsByActorId.get(step.actorId);
+    const fallbackContract: ActorSemanticContract = contract ?? {
+      actorId: step.actorId,
+      requiredInputs: [],
+      producedOutputs: defaultStageOutputs(step.stage),
+      requiresAuth: false,
+      requiresFileInput: false,
+      confidence: 0.35,
+      rationale: "missing_contract_fallback",
+    };
+
+    const unresolved = new Set<string>();
+    if (fallbackContract.requiresAuth) unresolved.add("auth_token");
+    if (fallbackContract.requiresFileInput) unresolved.add("file_upload");
+    for (const req of fallbackContract.requiredInputs) {
+      if (!available.has(req)) unresolved.add(req);
+    }
+    const unresolvedList = Array.from(unresolved);
+    const feasible = unresolvedList.length === 0;
+    if (!feasible) score -= 0.45 + unresolvedList.length * 0.08;
+    score -= Math.max(0, 0.55 - fallbackContract.confidence) * 0.2;
+
+    steps.push({
+      stepIndex,
+      actorId: step.actorId,
+      stage: step.stage,
+      feasible,
+      unresolved: unresolvedList,
+      requiredInputs: fallbackContract.requiredInputs,
+      producedOutputs: fallbackContract.producedOutputs,
+      reason: feasible ? "ok" : `missing:${unresolvedList.join(",")}`,
+    });
+
+    if (!feasible) {
+      return {
+        candidateId: input.candidate.id,
+        feasible: false,
+        score: Math.max(0, Number(score.toFixed(4))),
+        reason: `step_${stepIndex + 1}_${step.actorId}_unresolved_${unresolvedList.join("_")}`,
+        steps,
+      };
+    }
+
+    for (const produced of fallbackContract.producedOutputs) {
+      available.add(produced);
+    }
+  }
+
+  const feasible = steps.length > 0 && steps.every((step) => step.feasible);
+  return {
+    candidateId: input.candidate.id,
+    feasible,
+    score: Math.max(0, Number(score.toFixed(4))),
+    reason: feasible ? "feasible" : "failed",
+    steps,
+  };
+}
+
+async function critiqueCandidateFeasibilityWithLlm(input: {
+  candidates: LeadSourcingChainPlan[];
+  deterministic: CandidateFeasibility[];
+  contractsByActorId: Map<string, ActorSemanticContract>;
+  targetAudience: string;
+  triggerContext?: string;
+  offer: string;
+}) {
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey || !input.candidates.length) return new Map<string, { feasible: boolean; score: number; reason: string }>();
+
+  const prompt = [
+    "Critique lead-sourcing chain feasibility before paid probes.",
+    "Goal: reject chains that are likely to fail due to unsatisfied prerequisites or wrong dataflow.",
+    "Treat this as strict preflight. No optimism.",
+    "Return JSON only with this shape:",
+    '{ "candidates": [{ "id": string, "feasible": boolean, "score": number, "reason": string }] }',
+    "Scoring: 0..1 where >=0.55 is acceptable.",
+    `Context: ${JSON.stringify({
+      targetAudience: input.targetAudience,
+      triggerContext: input.triggerContext ?? "",
+      offer: input.offer,
+    })}`,
+    `deterministic: ${JSON.stringify(input.deterministic)}`,
+    `contracts: ${JSON.stringify(
+      Array.from(input.contractsByActorId.values()).map((row) => ({
+        actorId: row.actorId,
+        requiredInputs: row.requiredInputs,
+        producedOutputs: row.producedOutputs,
+        requiresAuth: row.requiresAuth,
+        requiresFileInput: row.requiresFileInput,
+        confidence: row.confidence,
+      }))
+    )}`,
+    `candidates: ${JSON.stringify(input.candidates)}`,
+  ].join("\n");
+
+  const model = resolveLlmModel("lead_chain_selection", { prompt });
+  try {
+    const response = await fetch("https://api.openai.com/v1/responses", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model,
+        input: prompt,
+        text: { format: { type: "json_object" } },
+        max_output_tokens: 1800,
+      }),
+    });
+    const raw = await response.text();
+    if (!response.ok) {
+      return new Map();
+    }
+    let payload: unknown = {};
+    try {
+      payload = JSON.parse(raw);
+    } catch {
+      payload = {};
+    }
+    const parsed = parseLooseJsonObject(extractOutputText(payload));
+    const root = asRecord(parsed);
+    const rows = Array.isArray(root.candidates) ? root.candidates : [];
+    const result = new Map<string, { feasible: boolean; score: number; reason: string }>();
+    for (const rowRaw of rows) {
+      const row = asRecord(rowRaw);
+      const id = String(row.id ?? "").trim();
+      if (!id) continue;
+      result.set(id, {
+        feasible: Boolean(row.feasible),
+        score: Math.max(0, Math.min(1, Number(row.score ?? 0) || 0)),
+        reason: trimText(row.reason, 260),
+      });
+    }
+    return result;
+  } catch {
+    return new Map<string, { feasible: boolean; score: number; reason: string }>();
+  }
 }
 
 function actorScore(actor: ApifyStoreActor) {
@@ -4028,13 +4567,70 @@ async function processSourceLeadsJob(job: OutreachJob) {
   }
 
   const historicalCandidates: LeadSourcingChainPlan[] = [];
+  const semanticContractsByActorId = await inferActorSemanticContracts({
+    actors: planningActorPool,
+    actorProfilesById: actorProfiles,
+    targetAudience,
+    triggerContext,
+    offer: offerContext,
+  });
+  const deterministicFeasibility = chainCandidates.map((candidate) =>
+    evaluateCandidateFeasibility({
+      candidate,
+      contractsByActorId: semanticContractsByActorId,
+    })
+  );
+  const llmFeasibility = await critiqueCandidateFeasibilityWithLlm({
+    candidates: chainCandidates,
+    deterministic: deterministicFeasibility,
+    contractsByActorId: semanticContractsByActorId,
+    targetAudience,
+    triggerContext,
+    offer: offerContext,
+  });
+
+  const feasibilityById = new Map(deterministicFeasibility.map((row) => [row.candidateId, row]));
+  const candidateScored = chainCandidates.map((candidate) => {
+    const deterministic = feasibilityById.get(candidate.id);
+    const llm = llmFeasibility.get(candidate.id);
+    const llmPass = !llm || (llm.feasible && llm.score >= 0.55);
+    const feasible = Boolean(deterministic?.feasible) && llmPass;
+    const score = Number(
+      (
+        (deterministic?.score ?? 0) * 0.65 +
+        (llm ? llm.score : deterministic?.score ?? 0) * 0.35
+      ).toFixed(4)
+    );
+    const reason = feasible
+      ? "feasible"
+      : [deterministic?.reason, llm?.reason].filter(Boolean).join(" | ") || "preprobe_infeasible";
+    return { candidate, deterministic, llm, feasible, score, reason };
+  });
+
+  const feasibleChainCandidates = candidateScored
+    .filter((row) => row.feasible)
+    .sort((a, b) => b.score - a.score)
+    .map((row) => row.candidate);
+  chainCandidates = feasibleChainCandidates;
 
   await createOutreachEvent({
     runId: run.id,
     eventType: "lead_sourcing_chain_planned",
     payload: {
       candidateCount: chainCandidates.length,
+      candidateCountBeforeFeasibility: candidateScored.length,
       historicalCandidateCount: historicalCandidates.length,
+      contractsAnalyzed: semanticContractsByActorId.size,
+      rejectedCandidates: candidateScored
+        .filter((row) => !row.feasible)
+        .slice(0, 12)
+        .map((row) => ({
+          id: row.candidate.id,
+          strategy: row.candidate.strategy,
+          reason: row.reason,
+          deterministic: row.deterministic,
+          llm: row.llm ?? null,
+        })),
       candidates: chainCandidates.map((candidate) => ({
         id: candidate.id,
         strategy: candidate.strategy,
@@ -4043,6 +4639,24 @@ async function processSourceLeadsJob(job: OutreachJob) {
       })),
     },
   });
+
+  if (!chainCandidates.length) {
+    await setTrace({ phase: "failed", failureStep: "plan_sourcing" });
+    const topRejections = candidateScored
+      .filter((row) => !row.feasible)
+      .slice(0, 3)
+      .map((row) => `${row.candidate.id}: ${row.reason}`);
+    await failRunWithDiagnostics({
+      run,
+      reason: `No feasible chain candidates after semantic preflight. ${topRejections.join(" | ")}`,
+      eventType: "lead_sourcing_failed",
+      payload: {
+        feasibilityRejected: candidateScored.length,
+        topRejections,
+      },
+    });
+    return;
+  }
 
   await setTrace({ phase: "probe_chain" });
 

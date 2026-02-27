@@ -583,6 +583,39 @@ function isRuntimeUnsafeRequiredKey(token: string) {
   return false;
 }
 
+function looksLikeProviderSecretRequirementInMetadata(actor: ApifyStoreActor, metadataBlob: string) {
+  const actorId = actor.actorId.toLowerCase();
+  const providerNamedActor =
+    /(^|~)(tomba|hunter|snov|clearbit|rocketreach|dropcontact|apollo|crunchbase|zoominfo|lusha)(~|$)/.test(
+      actorId
+    ) || /(sales\s*navigator|salesnav)/.test(metadataBlob);
+  const authPhrase =
+    /(api\s*key|apikey|access\s*token|token required|client secret|oauth|credentials|session cookie|cookie|login)/.test(
+      metadataBlob
+    );
+  return providerNamedActor || authPhrase;
+}
+
+function looksLikeProviderSecretRequiredError(text: unknown) {
+  const normalized = String(text ?? "").toLowerCase();
+  if (!normalized) return false;
+  return (
+    /input\.[a-z0-9_]*(apikey|api_key|token|clientsecret|client_secret|password|cookie|session)[a-z0-9_]*\s+is\s+required/.test(
+      normalized
+    ) ||
+    normalized.includes("api key is required") ||
+    normalized.includes("access token is required") ||
+    normalized.includes("token is required") ||
+    normalized.includes("client secret is required") ||
+    normalized.includes("credentials are required") ||
+    normalized.includes("authentication required") ||
+    normalized.includes("requires auth") ||
+    normalized.includes("requires authentication") ||
+    normalized.includes("session cookie") ||
+    normalized.includes("login required")
+  );
+}
+
 function canRuntimePopulateRequiredKey(stage: LeadChainStepStage, token: string) {
   if (!token) return false;
   if (
@@ -882,6 +915,7 @@ function buildHeuristicSemanticContract(input: {
   // Tighten contract inference when actor metadata implies hidden prerequisites.
   const salesNavLike = /(sales\s*navigator|salesnav)/.test(metadataBlob);
   const authLike = /(cookie|session|login|credential|authenticated|auth)/.test(metadataBlob);
+  const providerSecretLike = looksLikeProviderSecretRequirementInMetadata(input.actor, metadataBlob);
   const profileUrlSeedLike =
     /(linkedin[^a-z0-9]*to[^a-z0-9]*email|bulk[^a-z0-9]*linkedin[^a-z0-9]*email|profile[^a-z0-9]*url|from[^a-z0-9]*linkedin[^a-z0-9]*url)/.test(
       metadataBlob
@@ -901,6 +935,9 @@ function buildHeuristicSemanticContract(input: {
   }
   if (domainSeedLike && input.stage === "email_discovery") {
     mergedRequired.add("domain_list");
+  }
+  if (providerSecretLike) {
+    mergedRequired.add("auth_token");
   }
 
   const mergedRequiredList = Array.from(mergedRequired);
@@ -951,7 +988,15 @@ async function inferActorSemanticContracts(input: {
   for (const actor of input.actors) {
     const profile = input.actorProfilesById.get(actor.actorId);
     const stored = parseStoredSemanticContract(profile);
-    if (stored && stored.actorId === actor.actorId) {
+    const storedUsable =
+      stored &&
+      stored.actorId === actor.actorId &&
+      (stored.confidence >= 0.6 ||
+        stored.requiresAuth ||
+        stored.requiresFileInput ||
+        stored.requiredInputs.length > 0 ||
+        stored.producedOutputs.length > 0);
+    if (storedUsable && stored) {
       existing.set(actor.actorId, stored);
     } else {
       pending.push({ actor, profile });
@@ -4840,7 +4885,38 @@ async function processSourceLeadsJob(job: OutreachJob) {
   const probedCandidates: ProbedSourcingPlan[] = [];
   let budgetUsedUsd = 0;
   let apifyQuotaHardStop = false;
+  const runtimeBlockedActors = new Set<string>();
+  const runtimeBlockedReasons = new Map<string, string>();
   for (const planCandidate of chainCandidates) {
+    const blockedStep = planCandidate.steps.find((step) => runtimeBlockedActors.has(step.actorId.toLowerCase()));
+    if (blockedStep) {
+      const blockedReason =
+        runtimeBlockedReasons.get(blockedStep.actorId.toLowerCase()) || "provider_secret_requirement_detected";
+      const skipped: ProbedSourcingPlan = {
+        plan: planCandidate,
+        probeResults: [],
+        acceptedLeads: [],
+        rejectedLeads: [],
+        acceptedCount: 0,
+        rejectedCount: 0,
+        budgetUsedUsd: 0,
+        score: -8,
+        reason: `blocked_actor:${blockedStep.actorId}:${blockedReason}`,
+      };
+      probedCandidates.push(skipped);
+      await createOutreachEvent({
+        runId: run.id,
+        eventType: "lead_sourcing_probe_skipped",
+        payload: {
+          candidateId: planCandidate.id,
+          strategy: planCandidate.strategy,
+          actorId: blockedStep.actorId,
+          reason: blockedReason,
+        },
+      });
+      continue;
+    }
+
     const remainingBudget = APIFY_PROBE_BUDGET_USD - budgetUsedUsd;
     if (remainingBudget < APIFY_PROBE_STEP_COST_ESTIMATE_USD) {
       break;
@@ -4855,6 +4931,36 @@ async function processSourceLeadsJob(job: OutreachJob) {
     });
     probedCandidates.push(probed);
     budgetUsedUsd += probed.budgetUsedUsd;
+
+    const secretRequirementFailures = probed.probeResults
+      .filter((result) => result.outcome === "fail")
+      .map((result) => ({
+        actorId: result.actorId,
+        reason: String((result.details as Record<string, unknown>)?.reason ?? ""),
+        error: String((result.details as Record<string, unknown>)?.error ?? ""),
+      }))
+      .filter((row) => looksLikeProviderSecretRequiredError(`${row.reason} ${row.error}`.trim()));
+    if (secretRequirementFailures.length) {
+      const memoryUpdates = secretRequirementFailures.map((row) => ({
+        actorId: row.actorId,
+        failDelta: 1,
+        compatibilityFailDelta: 1,
+        qualitySample: 0,
+      }));
+      await upsertSourcingActorMemory(memoryUpdates);
+      for (const failure of secretRequirementFailures) {
+        const key = failure.actorId.toLowerCase();
+        runtimeBlockedActors.add(key);
+        runtimeBlockedReasons.set(
+          key,
+          trimText(
+            failure.error || failure.reason || "provider_secret_requirement_detected",
+            180
+          )
+        );
+      }
+    }
+
     await createOutreachEvent({
       runId: run.id,
       eventType: "lead_sourcing_probe_completed",
@@ -4867,6 +4973,7 @@ async function processSourceLeadsJob(job: OutreachJob) {
         budgetUsedUsd: probed.budgetUsedUsd,
         reason: probed.reason,
         topRejections: summarizeTopReasons(probed.rejectedLeads),
+        runtimeBlockedActors: Array.from(runtimeBlockedActors),
       },
     });
 

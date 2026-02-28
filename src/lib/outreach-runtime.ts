@@ -926,6 +926,8 @@ function filterPlanningPoolBySchemaViability(input: {
 }) {
   const rows = input.actors.map((actor) => {
     const profile = input.actorProfiles.get(actor.actorId);
+    const schemaKeys = schemaSummaryKeys(profile?.schemaSummary);
+    const hasSchemaSurface = schemaKeys.requiredKeys.length > 0 || schemaKeys.knownKeys.length > 0;
     const hintStage = stageFromActor(actor);
     const stageScores = {
       prospect_discovery: estimateActorStageViability({ stage: "prospect_discovery", actor, actorProfile: profile }),
@@ -933,18 +935,22 @@ function filterPlanningPoolBySchemaViability(input: {
       email_discovery: estimateActorStageViability({ stage: "email_discovery", actor, actorProfile: profile }),
     };
     const memory = input.actorMemoryById.get(actor.actorId.toLowerCase());
+    const hasProvenSuccess = Boolean(memory && memory.successCount > 0);
     const reliabilityPenalty = memory ? Math.min(0.35, memory.compatibilityFailCount * 0.05 + memory.failCount * 0.02) : 0;
+    const missingSchemaPenalty = !hasSchemaSurface && !hasProvenSuccess ? 0.42 : !hasSchemaSurface ? 0.2 : 0;
     const bestStage = (Object.keys(stageScores) as LeadChainStepStage[]).sort(
       (a, b) => stageScores[b] - stageScores[a]
     )[0];
     const bestScore = stageScores[bestStage];
     const hintedScore = stageScores[hintStage];
-    const viability = Math.max(bestScore, hintedScore) - reliabilityPenalty;
+    const viability = Math.max(bestScore, hintedScore) - reliabilityPenalty - missingSchemaPenalty;
     return {
       actor,
       viability,
       bestStage,
       hintStage,
+      hasSchemaSurface,
+      hasProvenSuccess,
     };
   });
 
@@ -952,7 +958,18 @@ function filterPlanningPoolBySchemaViability(input: {
     .filter((row) => row.viability >= 0.34)
     .sort((a, b) => b.viability - a.viability)
     .map((row) => row.actor);
-  return filtered.length >= Math.min(18, Math.max(6, Math.floor(input.actors.length * 0.15))) ? filtered : input.actors;
+  if (filtered.length) return filtered;
+
+  const provenNoSchema = rows
+    .filter((row) => row.hasProvenSuccess)
+    .sort((a, b) => b.viability - a.viability)
+    .map((row) => row.actor);
+  if (provenNoSchema.length) return provenNoSchema;
+
+  return rows
+    .filter((row) => row.hasSchemaSurface)
+    .sort((a, b) => b.viability - a.viability)
+    .map((row) => row.actor);
 }
 
 const SEMANTIC_SIGNAL_VALUES: SemanticSignal[] = [

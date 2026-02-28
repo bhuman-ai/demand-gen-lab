@@ -301,36 +301,128 @@ function maybeDomain(email: string, fallback: string) {
 }
 
 function parseSchemaRequiredKeys(schema: Record<string, unknown>) {
-  if (Array.isArray(schema.required)) {
-    return schema.required
-      .map((value) => String(value ?? "").trim())
-      .filter(Boolean);
-  }
+  const asObject = (value: unknown) =>
+    value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
+  const keyPrefixJoin = (prefix: string, key: string) => (prefix ? `${prefix}.${key}` : key);
+  const collectVariants = (row: Record<string, unknown>) => {
+    const variants: Record<string, unknown>[] = [row];
+    for (const key of ["allOf", "anyOf", "oneOf"] as const) {
+      const branch = row[key];
+      if (!Array.isArray(branch)) continue;
+      for (const item of branch) {
+        const itemObj = asObject(item);
+        if (itemObj) variants.push(itemObj);
+      }
+    }
+    return variants;
+  };
+  const propertiesOf = (row: Record<string, unknown>) => {
+    const properties = asObject(row.properties) ?? {};
+    const keys = Object.keys(properties);
+    if (
+      keys.length === 1 &&
+      keys[0] === "input" &&
+      asObject(properties.input) &&
+      (asObject(properties.input)?.properties || Array.isArray(asObject(properties.input)?.required))
+    ) {
+      return asObject(properties.input) ?? {};
+    }
+    return row;
+  };
 
-  const properties =
-    schema.properties && typeof schema.properties === "object" && !Array.isArray(schema.properties)
-      ? (schema.properties as Record<string, unknown>)
-      : {};
-  const requiredFromProperties = Object.entries(properties)
-    .filter(([, value]) => {
-      if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-      const row = value as Record<string, unknown>;
-      return row.required === true;
-    })
-    .map(([key]) => key.trim())
-    .filter(Boolean);
-  return requiredFromProperties;
+  const visited = new Set<string>();
+  const required = new Set<string>();
+  const walk = (raw: unknown, prefix = "") => {
+    const base = asObject(raw);
+    if (!base) return;
+    const row = propertiesOf(base);
+    const variants = collectVariants(row);
+    for (const variant of variants) {
+      const key = JSON.stringify(variant);
+      if (visited.has(`${prefix}:${key}`)) continue;
+      visited.add(`${prefix}:${key}`);
+
+      if (Array.isArray(variant.required)) {
+        for (const value of variant.required) {
+          const requiredKey = String(value ?? "").trim();
+          if (!requiredKey) continue;
+          required.add(keyPrefixJoin(prefix, requiredKey));
+        }
+      }
+
+      const properties = asObject(variant.properties) ?? {};
+      for (const [propKey, propSchemaRaw] of Object.entries(properties)) {
+        const propSchema = asObject(propSchemaRaw);
+        if (!propSchema) continue;
+        const fullKey = keyPrefixJoin(prefix, propKey.trim());
+        if (!fullKey) continue;
+        if (propSchema.required === true) {
+          required.add(fullKey);
+        }
+        if (propSchema.properties || Array.isArray(propSchema.required) || propSchema.allOf || propSchema.anyOf || propSchema.oneOf) {
+          walk(propSchema, fullKey);
+        }
+      }
+    }
+  };
+
+  walk(schema, "");
+  return Array.from(required);
 }
 
 function flattenSchemaKeys(schema: Record<string, unknown>) {
-  const properties =
-    schema.properties && typeof schema.properties === "object" && !Array.isArray(schema.properties)
-      ? (schema.properties as Record<string, unknown>)
-      : {};
-  const keys = Object.keys(properties)
-    .map((value) => value.trim())
-    .filter(Boolean);
-  return keys;
+  const asObject = (value: unknown) =>
+    value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
+  const keyPrefixJoin = (prefix: string, key: string) => (prefix ? `${prefix}.${key}` : key);
+  const collectVariants = (row: Record<string, unknown>) => {
+    const variants: Record<string, unknown>[] = [row];
+    for (const key of ["allOf", "anyOf", "oneOf"] as const) {
+      const branch = row[key];
+      if (!Array.isArray(branch)) continue;
+      for (const item of branch) {
+        const itemObj = asObject(item);
+        if (itemObj) variants.push(itemObj);
+      }
+    }
+    return variants;
+  };
+  const propertiesOf = (row: Record<string, unknown>) => {
+    const properties = asObject(row.properties) ?? {};
+    const keys = Object.keys(properties);
+    if (
+      keys.length === 1 &&
+      keys[0] === "input" &&
+      asObject(properties.input) &&
+      (asObject(properties.input)?.properties || Array.isArray(asObject(properties.input)?.required))
+    ) {
+      return asObject(properties.input) ?? {};
+    }
+    return row;
+  };
+
+  const seen = new Set<string>();
+  const walk = (raw: unknown, prefix = "") => {
+    const base = asObject(raw);
+    if (!base) return;
+    const row = propertiesOf(base);
+    const variants = collectVariants(row);
+    for (const variant of variants) {
+      const properties = asObject(variant.properties) ?? {};
+      for (const [propKey, propSchemaRaw] of Object.entries(properties)) {
+        const fullKey = keyPrefixJoin(prefix, propKey.trim());
+        if (!fullKey) continue;
+        seen.add(fullKey);
+        const propSchema = asObject(propSchemaRaw);
+        if (!propSchema) continue;
+        if (propSchema.properties || Array.isArray(propSchema.required) || propSchema.allOf || propSchema.anyOf || propSchema.oneOf) {
+          walk(propSchema, fullKey);
+        }
+      }
+    }
+  };
+
+  walk(schema, "");
+  return Array.from(seen);
 }
 
 function extractApifyErrorDetail(raw: string, payload: unknown) {
@@ -727,10 +819,27 @@ export function evaluateActorCompatibility(input: {
   actorInput: Record<string, unknown>;
   stage: "prospect_discovery" | "website_enrichment" | "email_discovery";
 }): ActorCompatibilityDecision {
+  const resolvePathValue = (row: Record<string, unknown>, key: string): unknown => {
+    if (Object.prototype.hasOwnProperty.call(row, key)) return row[key];
+    if (key.includes(".")) {
+      const parts = key.split(".").filter(Boolean);
+      let cursor: unknown = row;
+      for (const part of parts) {
+        if (!cursor || typeof cursor !== "object" || Array.isArray(cursor)) return undefined;
+        cursor = (cursor as Record<string, unknown>)[part];
+      }
+      if (cursor !== undefined) return cursor;
+    }
+    if (key.startsWith("input.") && Object.prototype.hasOwnProperty.call(row, key.slice("input.".length))) {
+      return row[key.slice("input.".length)];
+    }
+    return undefined;
+  };
+
   const required = input.actorProfile.requiredKeys;
   const missingRequired: string[] = [];
   for (const key of required) {
-    const value = input.actorInput[key];
+    const value = resolvePathValue(input.actorInput, key);
     if (value === undefined || value === null) {
       missingRequired.push(key);
       continue;

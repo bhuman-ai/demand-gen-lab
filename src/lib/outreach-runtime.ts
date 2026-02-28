@@ -244,6 +244,25 @@ type CandidateFeasibility = {
   steps: CandidateFeasibilityStep[];
 };
 
+type CandidateSchemaPreflightStep = {
+  stepIndex: number;
+  actorId: string;
+  stage: LeadChainStepStage;
+  ok: boolean;
+  reason: string;
+  missingRequired: string[];
+  requiredKeys: string[];
+  inputKeys: string[];
+  normalizedInputAdjustments: Array<Record<string, unknown>>;
+};
+
+type CandidateSchemaPreflight = {
+  candidateId: string;
+  feasible: boolean;
+  reason: string;
+  steps: CandidateSchemaPreflightStep[];
+};
+
 const APIFY_CHAIN_MAX_STEPS = 3;
 const APIFY_CHAIN_MAX_CANDIDATES = 6;
 const APIFY_CHAIN_MAX_ITEMS_PER_STEP = 200;
@@ -521,6 +540,200 @@ function mergeChainData(base: LeadSourcingChainData, rows: unknown[]): LeadSourc
   };
 }
 
+function preflightSeedChainDataFromStartState(input: {
+  targetAudience: string;
+  startState: SourcingStartState;
+}): LeadSourcingChainData {
+  const slug = trimText(input.targetAudience, 80)
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 36);
+  const baseDomain = `${slug || "target"}-seed.com`;
+  const query = trimText(input.targetAudience, 140) || "b2b software revenue teams";
+  const data: LeadSourcingChainData = {
+    queries: uniqueTrimmed([query], 120),
+    companies: [],
+    websites: [],
+    domains: [],
+    emails: [],
+  };
+  const signals = new Set(input.startState.availableSignals);
+  if (signals.has("company_list")) {
+    data.companies = uniqueTrimmed([`${slug || "Target"} Company`], 120);
+  }
+  if (signals.has("domain_list")) {
+    data.domains = uniqueTrimmed([baseDomain], 120).map((value) => value.toLowerCase());
+  }
+  if (signals.has("website_list")) {
+    data.websites = uniqueTrimmed([`https://${baseDomain}`], 120);
+  }
+  if (signals.has("email_list")) {
+    data.emails = uniqueTrimmed([`sample@${baseDomain}`], 120).map((value) => value.toLowerCase());
+  }
+  return data;
+}
+
+function syntheticSignalRowsForPreflight(input: {
+  targetAudience: string;
+  step: LeadSourcingChainStep;
+  producedSignals: SemanticSignal[];
+}) {
+  const seed = trimText(`${input.step.queryHint} ${input.targetAudience}`, 120)
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 36);
+  const domain = `${seed || "candidate"}-signal.com`;
+  const company = `${(seed || "target").replace(/-/g, " ").trim()} company`;
+  const linkedinProfile = `https://www.linkedin.com/in/${seed || "target-person"}`;
+  const salesNavUrl = `https://www.linkedin.com/sales/search/people?keywords=${encodeURIComponent(
+    trimText(input.targetAudience, 120) || "revenue leaders"
+  )}`;
+  const row: Record<string, unknown> = {};
+  const signals = new Set(input.producedSignals);
+  if (signals.has("query")) {
+    row.query = trimText(input.step.queryHint || input.targetAudience, 140) || "b2b software revenue teams";
+  }
+  if (signals.has("company_list")) {
+    row.company = company;
+    row.organization = company;
+    row.companyName = company;
+  }
+  if (signals.has("website_list")) {
+    row.website = `https://${domain}`;
+    row.url = `https://${domain}`;
+    row.startUrl = `https://${domain}`;
+  }
+  if (signals.has("domain_list")) {
+    row.domain = domain;
+    row.domainName = domain;
+  }
+  if (signals.has("email_list")) {
+    row.email = `contact@${domain}`;
+    row.workEmail = `hello@${domain}`;
+  }
+  if (signals.has("profile_url_list")) {
+    row.linkedinProfileUrl = linkedinProfile;
+    row.profileUrl = linkedinProfile;
+  }
+  if (signals.has("sales_nav_url")) {
+    row.salesNavUrl = salesNavUrl;
+  }
+  return Object.keys(row).length ? [row] : [];
+}
+
+async function preflightSourcingPlanCandidate(input: {
+  candidate: LeadSourcingChainPlan;
+  targetAudience: string;
+  startState: SourcingStartState;
+  token: string;
+  actorSchemaCache: ActorSchemaProfileCache;
+  contractsByActorId: Map<string, ActorSemanticContract>;
+}): Promise<CandidateSchemaPreflight> {
+  let chainData = preflightSeedChainDataFromStartState({
+    targetAudience: input.targetAudience,
+    startState: input.startState,
+  });
+  const steps: CandidateSchemaPreflightStep[] = [];
+
+  for (let stepIndex = 0; stepIndex < input.candidate.steps.length; stepIndex += 1) {
+    const step = input.candidate.steps[stepIndex];
+    const profile = await getActorSchemaProfileCached({
+      cache: input.actorSchemaCache,
+      actorId: step.actorId,
+      token: input.token,
+    });
+    if (!profile.ok || !profile.profile) {
+      steps.push({
+        stepIndex,
+        actorId: step.actorId,
+        stage: step.stage,
+        ok: false,
+        reason: "actor_profile_unavailable",
+        missingRequired: [],
+        requiredKeys: [],
+        inputKeys: [],
+        normalizedInputAdjustments: [],
+      });
+      return {
+        candidateId: input.candidate.id,
+        feasible: false,
+        reason: `schema_preflight_actor_profile_unavailable:${step.actorId}`,
+        steps,
+      };
+    }
+
+    const actorInput = buildChainStepInput({
+      step,
+      chainData,
+      targetAudience: input.targetAudience,
+      maxLeads: APIFY_PROBE_MAX_LEADS,
+      probeMode: true,
+    });
+    const normalizedInput = normalizeActorInputForSchema({
+      actorProfile: profile.profile,
+      actorInput,
+      stage: step.stage,
+    });
+    const compatibility = evaluateActorCompatibility({
+      actorProfile: profile.profile,
+      actorInput: normalizedInput.input,
+      stage: step.stage,
+    });
+
+    const requiredKeys = profile.profile.requiredKeys;
+    const inputKeys = Object.keys(normalizedInput.input);
+    if (!compatibility.ok) {
+      steps.push({
+        stepIndex,
+        actorId: step.actorId,
+        stage: step.stage,
+        ok: false,
+        reason: compatibility.reason,
+        missingRequired: compatibility.missingRequired,
+        requiredKeys,
+        inputKeys,
+        normalizedInputAdjustments: normalizedInput.adjustments,
+      });
+      return {
+        candidateId: input.candidate.id,
+        feasible: false,
+        reason: `schema_preflight_incompatible:${step.actorId}:${trimText(compatibility.reason, 220)}`,
+        steps,
+      };
+    }
+
+    steps.push({
+      stepIndex,
+      actorId: step.actorId,
+      stage: step.stage,
+      ok: true,
+      reason: "ok",
+      missingRequired: [],
+      requiredKeys,
+      inputKeys,
+      normalizedInputAdjustments: normalizedInput.adjustments,
+    });
+
+    const contract = input.contractsByActorId.get(step.actorId);
+    const producedSignals = contract?.producedOutputs?.length ? contract.producedOutputs : defaultStageOutputs(step.stage);
+    const syntheticRows = syntheticSignalRowsForPreflight({
+      targetAudience: input.targetAudience,
+      step,
+      producedSignals,
+    });
+    chainData = mergeChainData(chainData, syntheticRows);
+  }
+
+  return {
+    candidateId: input.candidate.id,
+    feasible: true,
+    reason: "schema_preflight_pass",
+    steps,
+  };
+}
+
 function stageFromActor(actor: ApifyStoreActor): LeadChainStepStage {
   const blob = `${actor.title} ${actor.description} ${actor.categories.join(" ")}`.toLowerCase();
   if (/(email|mailbox|contact\s+email|email\s+finder|hunter)/.test(blob)) return "email_discovery";
@@ -672,6 +885,7 @@ function estimateActorStageViability(input: {
   const knownTokens = uniqueTrimmed(schemaKeys.knownKeys, 200).map(normalizeSchemaKeyToken);
   const metadataBlob = `${input.actor.title} ${input.actor.description} ${input.actor.categories.join(" ")}`.toLowerCase();
   const keySet = new Set<string>(requiredTokens.length ? requiredTokens : knownTokens.slice(0, 24));
+  const providerSecretLike = looksLikeProviderSecretRequirementInMetadata(input.actor, metadataBlob);
 
   if (!keySet.size) {
     return 0.45 + stageKeywordScore(input.stage, metadataBlob);
@@ -697,8 +911,12 @@ function estimateActorStageViability(input: {
   const supportRatio = supported / total;
   const unknownPenalty = (unknown / total) * 0.22;
   const unsafePenalty = (unsafe / total) * 0.65;
+  const providerPenalty = providerSecretLike ? 0.45 : 0;
   const keywordBonus = stageKeywordScore(input.stage, metadataBlob);
-  return Math.max(0, Math.min(1, 0.5 + supportRatio * 0.45 + keywordBonus - unknownPenalty - unsafePenalty));
+  return Math.max(
+    0,
+    Math.min(1, 0.5 + supportRatio * 0.45 + keywordBonus - unknownPenalty - unsafePenalty - providerPenalty)
+  );
 }
 
 function filterPlanningPoolBySchemaViability(input: {
@@ -4828,8 +5046,76 @@ async function processSourceLeadsJob(job: OutreachJob) {
     const reason = feasible ? "feasible" : llmReason || deterministicReason || "preprobe_infeasible";
     return { candidate, deterministic, llm, feasible, score, reason };
   });
+  const schemaPreflightRows = await Promise.all(
+    candidateScored.map(async (row) => {
+      if (!row.feasible) {
+        return {
+          candidateId: row.candidate.id,
+          feasible: false,
+          reason: `skipped_schema_preflight:${row.reason}`,
+          steps: [],
+        } satisfies CandidateSchemaPreflight;
+      }
+      return preflightSourcingPlanCandidate({
+        candidate: row.candidate,
+        targetAudience,
+        startState,
+        token: sourcingToken,
+        actorSchemaCache,
+        contractsByActorId: semanticContractsByActorId,
+      });
+    })
+  );
+  const schemaPreflightById = new Map(schemaPreflightRows.map((row) => [row.candidateId, row]));
+  let candidateScoredWithSchema = candidateScored.map((row) => {
+    const schemaPreflight = schemaPreflightById.get(row.candidate.id);
+    const schemaFeasible = Boolean(schemaPreflight?.feasible);
+    const feasible = row.feasible && schemaFeasible;
+    const reason = feasible
+      ? "feasible"
+      : schemaPreflight && !schemaPreflight.feasible
+        ? schemaPreflight.reason
+        : row.reason;
+    return { ...row, schemaPreflight, feasible, reason };
+  });
+  const schemaBlockedActors = new Map<string, { actorId: string; reason: string }>();
+  for (const row of candidateScoredWithSchema) {
+    const schemaPreflight = row.schemaPreflight;
+    if (!schemaPreflight || schemaPreflight.feasible) continue;
+    const failedStep = schemaPreflight.steps.find((step) => !step.ok);
+    if (!failedStep) continue;
+    const secretSignalText = `${failedStep.reason} ${failedStep.missingRequired.join(",")} ${failedStep.requiredKeys.join(",")}`;
+    if (!looksLikeProviderSecretRequiredError(secretSignalText)) continue;
+    const key = failedStep.actorId.toLowerCase();
+    const reason = trimText(
+      failedStep.reason || failedStep.missingRequired.join(",") || "provider_secret_requirement_detected",
+      180
+    );
+    schemaBlockedActors.set(key, { actorId: failedStep.actorId, reason });
+  }
+  if (schemaBlockedActors.size) {
+    await upsertSourcingActorMemory(
+      Array.from(schemaBlockedActors.values()).map((row) => ({
+        actorId: row.actorId,
+        failDelta: 1,
+        compatibilityFailDelta: 1,
+        qualitySample: 0,
+      }))
+    );
+    candidateScoredWithSchema = candidateScoredWithSchema.map((row) => {
+      const blockedStep = row.candidate.steps.find((step) => schemaBlockedActors.has(step.actorId.toLowerCase()));
+      if (!blockedStep) return row;
+      const blockedReason =
+        schemaBlockedActors.get(blockedStep.actorId.toLowerCase())?.reason || "provider_secret_requirement_detected";
+      return {
+        ...row,
+        feasible: false,
+        reason: `blocked_actor:${blockedStep.actorId}:${blockedReason}`,
+      };
+    });
+  }
 
-  const feasibleChainCandidates = candidateScored
+  const feasibleChainCandidates = candidateScoredWithSchema
     .filter((row) => row.feasible)
     .sort((a, b) => b.score - a.score)
     .map((row) => row.candidate);
@@ -4840,10 +5126,14 @@ async function processSourceLeadsJob(job: OutreachJob) {
     eventType: "lead_sourcing_chain_planned",
     payload: {
       candidateCount: chainCandidates.length,
-      candidateCountBeforeFeasibility: candidateScored.length,
+      candidateCountBeforeFeasibility: candidateScoredWithSchema.length,
       historicalCandidateCount: historicalCandidates.length,
       contractsAnalyzed: semanticContractsByActorId.size,
-      rejectedCandidates: candidateScored
+      schemaBlockedActors: Array.from(schemaBlockedActors.values()).map((row) => ({
+        actorId: row.actorId,
+        reason: row.reason,
+      })),
+      rejectedCandidates: candidateScoredWithSchema
         .filter((row) => !row.feasible)
         .slice(0, 12)
         .map((row) => ({
@@ -4852,6 +5142,7 @@ async function processSourceLeadsJob(job: OutreachJob) {
           reason: row.reason,
           deterministic: row.deterministic,
           llm: row.llm ?? null,
+          schemaPreflight: row.schemaPreflight ?? null,
         })),
       candidates: chainCandidates.map((candidate) => ({
         id: candidate.id,
@@ -4864,7 +5155,7 @@ async function processSourceLeadsJob(job: OutreachJob) {
 
   if (!chainCandidates.length) {
     await setTrace({ phase: "failed", failureStep: "plan_sourcing" });
-    const topRejections = candidateScored
+    const topRejections = candidateScoredWithSchema
       .filter((row) => !row.feasible)
       .slice(0, 3)
       .map((row) => `${row.candidate.id}: ${trimText(row.reason, 180)}`);
@@ -4873,7 +5164,7 @@ async function processSourceLeadsJob(job: OutreachJob) {
       reason: `No feasible chain candidates after semantic preflight. ${topRejections.join(" | ") || "See sourcing trace."}`,
       eventType: "lead_sourcing_failed",
       payload: {
-        feasibilityRejected: candidateScored.length,
+        feasibilityRejected: candidateScoredWithSchema.length,
         topRejections,
       },
     });

@@ -928,6 +928,8 @@ function filterPlanningPoolBySchemaViability(input: {
     const profile = input.actorProfiles.get(actor.actorId);
     const schemaKeys = schemaSummaryKeys(profile?.schemaSummary);
     const hasSchemaSurface = schemaKeys.requiredKeys.length > 0 || schemaKeys.knownKeys.length > 0;
+    const metadataBlob = `${actor.title} ${actor.description} ${actor.categories.join(" ")}`.toLowerCase();
+    const providerSecretLike = looksLikeProviderSecretRequirementInMetadata(actor, metadataBlob);
     const hintStage = stageFromActor(actor);
     const stageScores = {
       prospect_discovery: estimateActorStageViability({ stage: "prospect_discovery", actor, actorProfile: profile }),
@@ -936,6 +938,11 @@ function filterPlanningPoolBySchemaViability(input: {
     };
     const memory = input.actorMemoryById.get(actor.actorId.toLowerCase());
     const hasProvenSuccess = Boolean(memory && memory.successCount > 0);
+    const repeatedHardFailure = Boolean(
+      memory &&
+        memory.successCount === 0 &&
+        (memory.failCount >= 3 || memory.compatibilityFailCount >= 2)
+    );
     const reliabilityPenalty = memory ? Math.min(0.35, memory.compatibilityFailCount * 0.05 + memory.failCount * 0.02) : 0;
     const missingSchemaPenalty = !hasSchemaSurface && !hasProvenSuccess ? 0.42 : !hasSchemaSurface ? 0.2 : 0;
     const bestStage = (Object.keys(stageScores) as LeadChainStepStage[]).sort(
@@ -943,7 +950,12 @@ function filterPlanningPoolBySchemaViability(input: {
     )[0];
     const bestScore = stageScores[bestStage];
     const hintedScore = stageScores[hintStage];
-    const viability = Math.max(bestScore, hintedScore) - reliabilityPenalty - missingSchemaPenalty;
+    const viability =
+      Math.max(bestScore, hintedScore) -
+      reliabilityPenalty -
+      missingSchemaPenalty -
+      (providerSecretLike && !hasProvenSuccess ? 0.35 : 0) -
+      (repeatedHardFailure ? 0.5 : 0);
     return {
       actor,
       viability,
@@ -951,14 +963,29 @@ function filterPlanningPoolBySchemaViability(input: {
       hintStage,
       hasSchemaSurface,
       hasProvenSuccess,
+      repeatedHardFailure,
+      providerSecretLike,
     };
   });
 
-  const filtered = rows
+  const filteredRows = rows
     .filter((row) => row.viability >= 0.34)
-    .sort((a, b) => b.viability - a.viability)
-    .map((row) => row.actor);
-  if (filtered.length) return filtered;
+    .sort((a, b) => b.viability - a.viability);
+  if (filteredRows.length) {
+    const targetCount = Math.min(28, Math.max(12, Math.floor(rows.length * 0.2)));
+    const selected = [...filteredRows];
+    if (selected.length < targetCount) {
+      const seen = new Set(selected.map((row) => row.actor.actorId.toLowerCase()));
+      const extras = rows
+        .filter((row) => !seen.has(row.actor.actorId.toLowerCase()))
+        .filter((row) => !row.repeatedHardFailure)
+        .filter((row) => !row.providerSecretLike || row.hasProvenSuccess)
+        .sort((a, b) => b.viability - a.viability)
+        .slice(0, targetCount - selected.length);
+      selected.push(...extras);
+    }
+    return selected.map((row) => row.actor);
+  }
 
   const provenNoSchema = rows
     .filter((row) => row.hasProvenSuccess)

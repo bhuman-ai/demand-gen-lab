@@ -2949,7 +2949,17 @@ async function selectBestProbedChain(input: {
 
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) {
-    throw new Error("OPENAI_API_KEY missing for chain selection");
+    const fallback = viable
+      .slice()
+      .sort((a, b) => {
+        const aRatio = a.acceptedCount + a.rejectedCount > 0 ? a.acceptedCount / (a.acceptedCount + a.rejectedCount) : 0;
+        const bRatio = b.acceptedCount + b.rejectedCount > 0 ? b.acceptedCount / (b.acceptedCount + b.rejectedCount) : 0;
+        return b.acceptedCount - a.acceptedCount || bRatio - aRatio || b.score - a.score;
+      })[0];
+    return {
+      selectedPlanId: fallback.plan.id,
+      rationale: `Deterministic selection (OPENAI_API_KEY missing): accepted=${fallback.acceptedCount}, rejected=${fallback.rejectedCount}, score=${fallback.score}`,
+    };
   }
 
   const prompt = [
@@ -2973,41 +2983,64 @@ async function selectBestProbedChain(input: {
   ].join("\n");
 
   const model = resolveLlmModel("lead_chain_selection", { prompt });
-  const response = await fetch("https://api.openai.com/v1/responses", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model,
-      input: prompt,
-      text: { format: { type: "json_object" } },
-      max_output_tokens: 800,
-    }),
-  });
+  const deterministic = viable
+    .slice()
+    .sort((a, b) => {
+      const aRatio = a.acceptedCount + a.rejectedCount > 0 ? a.acceptedCount / (a.acceptedCount + a.rejectedCount) : 0;
+      const bRatio = b.acceptedCount + b.rejectedCount > 0 ? b.acceptedCount / (b.acceptedCount + b.rejectedCount) : 0;
+      return b.acceptedCount - a.acceptedCount || bRatio - aRatio || b.score - a.score;
+    })[0];
 
-  const raw = await response.text();
-  if (!response.ok) {
-    throw new Error(`Chain selection failed: HTTP ${response.status} ${raw.slice(0, 220)}`);
+  let lastSelectionError = "";
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const response = await fetch("https://api.openai.com/v1/responses", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model,
+        input: attempt === 0 ? prompt : `${prompt}\nRetry: previous attempt failed. Return strict JSON only.`,
+        text: { format: { type: "json_object" } },
+        max_output_tokens: 800,
+      }),
+    });
+
+    const raw = await response.text();
+    if (!response.ok) {
+      lastSelectionError = `HTTP ${response.status} ${raw.slice(0, 220)}`;
+      continue;
+    }
+    let payload: unknown = {};
+    try {
+      payload = JSON.parse(raw);
+    } catch {
+      payload = {};
+    }
+    try {
+      const parsed = parseLooseJsonObject(extractOutputText(payload));
+      const row = asRecord(parsed);
+      const selectedPlanId = String(row.selectedPlanId ?? "").trim();
+      const rationale = trimText(row.rationale, 400);
+      if (!selectedPlanId) {
+        lastSelectionError = "empty_selected_plan_id";
+        continue;
+      }
+      if (!viable.some((candidate) => candidate.plan.id === selectedPlanId)) {
+        lastSelectionError = "unknown_selected_plan_id";
+        continue;
+      }
+      return { selectedPlanId, rationale };
+    } catch (error) {
+      lastSelectionError = error instanceof Error ? error.message : "invalid_selection_json";
+    }
   }
-  let payload: unknown = {};
-  try {
-    payload = JSON.parse(raw);
-  } catch {
-    payload = {};
-  }
-  const parsed = parseLooseJsonObject(extractOutputText(payload));
-  const row = asRecord(parsed);
-  const selectedPlanId = String(row.selectedPlanId ?? "").trim();
-  const rationale = trimText(row.rationale, 400);
-  if (!selectedPlanId) {
-    throw new Error("Chain selection returned empty selectedPlanId");
-  }
-  if (!viable.some((candidate) => candidate.plan.id === selectedPlanId)) {
-    throw new Error("Chain selection returned unknown candidate id");
-  }
-  return { selectedPlanId, rationale };
+
+  return {
+    selectedPlanId: deterministic.plan.id,
+    rationale: `Deterministic selection after selector failure (${trimText(lastSelectionError, 180)}): accepted=${deterministic.acceptedCount}, rejected=${deterministic.rejectedCount}, score=${deterministic.score}`,
+  };
 }
 
 async function fetchActorProfiles(

@@ -1565,6 +1565,43 @@ function hasHardPreflightBlock(reason: string) {
   );
 }
 
+function isRoleCompanyIcpAudience(targetAudience: string) {
+  const normalized = String(targetAudience ?? "").toLowerCase();
+  if (!normalized) return false;
+  const roleSignals = /(manager|director|head|vp|chief|owner|founder|revenue|marketing|sales|growth|demand gen)/.test(normalized);
+  const orgSignals = /(company|companies|team|organization|org|employee|employees|b2b|saas|software|enterprise|mid[- ]?market)/.test(
+    normalized
+  );
+  return roleSignals && orgSignals;
+}
+
+function firstStepAudienceMismatchReason(input: {
+  targetAudience: string;
+  candidate: LeadSourcingChainPlan;
+  actorById: Map<string, ApifyStoreActor>;
+}) {
+  if (!isRoleCompanyIcpAudience(input.targetAudience)) return "";
+  const firstStep = input.candidate.steps[0];
+  if (!firstStep) return "";
+  const actor = input.actorById.get(firstStep.actorId);
+  if (!actor) return "";
+  const blob = `${actor.title} ${actor.description} ${actor.categories.join(" ")}`.toLowerCase();
+  const consumerOrLocalSurface = /(google maps|places|yelp|meta ads|facebook ads|instagram|tiktok|influencer|shopify|amazon|etsy|aliexpress|local business|store listing|social media)/.test(
+    blob
+  );
+  const emailValidationOnly = /(email validator|verify email|bounce checker|deliverability checker)/.test(blob);
+  const b2bLeadSurface = /(b2b|saas|software|linkedin|crunchbase|apollo|decision maker|lead|company|domain|contact)/.test(
+    blob
+  );
+  if (emailValidationOnly) {
+    return `audience_actor_mismatch:${firstStep.actorId}:validator_not_source`;
+  }
+  if (consumerOrLocalSurface && !b2bLeadSurface) {
+    return `audience_actor_mismatch:${firstStep.actorId}:consumer_or_local_surface`;
+  }
+  return "";
+}
+
 async function critiqueCandidateFeasibilityWithLlm(input: {
   candidates: LeadSourcingChainPlan[];
   deterministic: CandidateFeasibility[];
@@ -2568,6 +2605,25 @@ function normalizeActorInputForSchema(input: {
 
 function parseApifyInputFieldError(errorText: string) {
   const normalized = String(errorText ?? "");
+  const numericBoundMatch = normalized.match(
+    /Field input\.([a-zA-Z0-9_.]+)\s+must be\s*(>=|<=|>|<)\s*([0-9]+(?:\.[0-9]+)?)/i
+  );
+  if (numericBoundMatch) {
+    const fieldPath = String(numericBoundMatch[1] ?? "").trim();
+    const key = fieldPath.split(".")[0]?.trim() ?? "";
+    if (!key) return null;
+    const operator = String(numericBoundMatch[2] ?? "").trim();
+    const value = Number(numericBoundMatch[3] ?? "");
+    return {
+      key,
+      fieldPath,
+      predicate: "numeric_bound",
+      expectedType: "number",
+      boundOperator: operator,
+      boundValue: Number.isFinite(value) ? value : undefined,
+    };
+  }
+
   const fieldMatch = normalized.match(
     /Field input\.([a-zA-Z0-9_.]+)\s+(must be|is required|required)(?:\s+([a-zA-Z_]+))?/i
   );
@@ -2590,25 +2646,6 @@ function parseApifyInputFieldError(errorText: string) {
       fieldPath,
       predicate: "not_allowed",
       expectedType: "",
-    };
-  }
-
-  const numericBoundMatch = normalized.match(
-    /Field input\.([a-zA-Z0-9_.]+)\s+must be\s*(>=|<=|>|<)\s*([0-9]+(?:\.[0-9]+)?)/i
-  );
-  if (numericBoundMatch) {
-    const fieldPath = String(numericBoundMatch[1] ?? "").trim();
-    const key = fieldPath.split(".")[0]?.trim() ?? "";
-    if (!key) return null;
-    const operator = String(numericBoundMatch[2] ?? "").trim();
-    const value = Number(numericBoundMatch[3] ?? "");
-    return {
-      key,
-      fieldPath,
-      predicate: "numeric_bound",
-      expectedType: "number",
-      boundOperator: operator,
-      boundValue: Number.isFinite(value) ? value : undefined,
     };
   }
 
@@ -5141,6 +5178,7 @@ async function processSourceLeadsJob(job: OutreachJob) {
     contractsByActorId: semanticContractsByActorId,
     startState,
   });
+  const planningActorById = new Map(startStateFilteredPool.allowed.map((actor) => [actor.actorId, actor]));
   if (!startStateFilteredPool.allowed.length) {
     await setTrace({ phase: "failed", failureStep: "plan_sourcing" });
     await failRunWithDiagnostics({
@@ -5237,6 +5275,11 @@ async function processSourceLeadsJob(job: OutreachJob) {
   const candidateScored = chainCandidates.map((candidate) => {
     const deterministic = feasibilityById.get(candidate.id);
     const llm = llmFeasibility.get(candidate.id);
+    const audienceMismatchReason = firstStepAudienceMismatchReason({
+      targetAudience,
+      candidate,
+      actorById: planningActorById,
+    });
     const llmStrongPass = !llm || (llm.feasible && llm.score >= 0.55);
     const score = Number(
       (
@@ -5248,8 +5291,10 @@ async function processSourceLeadsJob(job: OutreachJob) {
       deterministic?.reason && deterministic.reason !== "feasible" ? deterministic.reason : "";
     const llmReason = trimText(llm?.reason, 240);
     const hardBlocked = hasHardPreflightBlock(`${deterministicReason} ${llmReason}`.trim());
-    const feasible = Boolean(deterministic?.feasible) && (llmStrongPass || !hardBlocked);
-    const reason = feasible ? "feasible" : llmReason || deterministicReason || "preprobe_infeasible";
+    const feasible = Boolean(deterministic?.feasible) && (llmStrongPass || !hardBlocked) && !audienceMismatchReason;
+    const reason = feasible
+      ? "feasible"
+      : audienceMismatchReason || llmReason || deterministicReason || "preprobe_infeasible";
     return { candidate, deterministic, llm, feasible, score, reason };
   });
   const schemaPreflightRows = await Promise.all(

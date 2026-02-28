@@ -1599,6 +1599,11 @@ function firstStepAudienceMismatchReason(input: {
     blob
   );
   const seoSurface = /(backlink|seo audit|seo prospecting|link building)/.test(blob);
+  const jobsSurface = /(job scraper|jobs scraper|job board|hiring scraper|career scraper|vacancy)/.test(blob);
+  const pluginSurface = /(wordpress plugin|plugin scraper|theme scraper|chrome extension scraper)/.test(blob);
+  const coreLeadSurface = /(lead|contact|prospect|company|email|linkedin|business|domain|enrich|finder|decision maker|crm)/.test(
+    blob
+  );
   const emailValidationOnly = /(email validator|verify email|bounce checker|deliverability checker)/.test(blob);
   if (emailValidationOnly) {
     return `audience_actor_mismatch:${firstStep.actorId}:validator_not_source`;
@@ -1615,8 +1620,17 @@ function firstStepAudienceMismatchReason(input: {
   if (seoSurface) {
     return `audience_actor_mismatch:${firstStep.actorId}:seo_backlink_surface`;
   }
+  if (jobsSurface) {
+    return `audience_actor_mismatch:${firstStep.actorId}:jobs_surface`;
+  }
+  if (pluginSurface) {
+    return `audience_actor_mismatch:${firstStep.actorId}:plugin_surface`;
+  }
   if (consumerSurface) {
     return `audience_actor_mismatch:${firstStep.actorId}:consumer_or_local_surface`;
+  }
+  if (!coreLeadSurface) {
+    return `audience_actor_mismatch:${firstStep.actorId}:generic_non_lead_surface`;
   }
   return "";
 }

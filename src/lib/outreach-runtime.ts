@@ -1580,23 +1580,37 @@ function firstStepAudienceMismatchReason(input: {
   candidate: LeadSourcingChainPlan;
   actorById: Map<string, ApifyStoreActor>;
 }) {
-  if (!isRoleCompanyIcpAudience(input.targetAudience)) return "";
+  const normalizedAudience = String(input.targetAudience ?? "").toLowerCase();
+  if (!isRoleCompanyIcpAudience(normalizedAudience)) return "";
   const firstStep = input.candidate.steps[0];
   if (!firstStep) return "";
   const actor = input.actorById.get(firstStep.actorId);
   if (!actor) return "";
   const blob = `${actor.title} ${actor.description} ${actor.categories.join(" ")}`.toLowerCase();
-  const consumerOrLocalSurface = /(google maps|places|yelp|meta ads|facebook ads|instagram|tiktok|influencer|shopify|amazon|etsy|aliexpress|local business|store listing|social media)/.test(
+  const audienceWantsLocal = /(local|near me|nearby|by city|by state|by country|geo[- ]?target|regional|territory)/.test(
+    normalizedAudience
+  );
+  const audienceWantsEvents = /(event|conference|webinar|summit|exhibitor|trade show|tradeshow)/.test(normalizedAudience);
+  const localSurface = /(google maps|places|yelp|gmb|google business profile|store listing|local business)/.test(blob);
+  const eventSurface = /(event exhibitor|conference exhibitor|trade show|tradeshow|attendee list|event sponsor)/.test(blob);
+  const consumerSurface = /(meta ads|facebook ads|instagram|tiktok|influencer|shopify|amazon|etsy|aliexpress|social media)/.test(
     blob
   );
+  const seoSurface = /(backlink|seo audit|seo prospecting|link building)/.test(blob);
   const emailValidationOnly = /(email validator|verify email|bounce checker|deliverability checker)/.test(blob);
-  const b2bLeadSurface = /(b2b|saas|software|linkedin|crunchbase|apollo|decision maker|lead|company|domain|contact)/.test(
-    blob
-  );
   if (emailValidationOnly) {
     return `audience_actor_mismatch:${firstStep.actorId}:validator_not_source`;
   }
-  if (consumerOrLocalSurface && !b2bLeadSurface) {
+  if (localSurface && !audienceWantsLocal) {
+    return `audience_actor_mismatch:${firstStep.actorId}:local_business_surface_for_nonlocal_icp`;
+  }
+  if (eventSurface && !audienceWantsEvents) {
+    return `audience_actor_mismatch:${firstStep.actorId}:event_surface_without_event_icp`;
+  }
+  if (seoSurface) {
+    return `audience_actor_mismatch:${firstStep.actorId}:seo_backlink_surface`;
+  }
+  if (consumerSurface) {
     return `audience_actor_mismatch:${firstStep.actorId}:consumer_or_local_surface`;
   }
   return "";

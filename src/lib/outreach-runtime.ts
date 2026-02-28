@@ -1075,6 +1075,15 @@ function defaultStageOutputs(stage: LeadChainStepStage): SemanticSignal[] {
   return ["email_list"];
 }
 
+function availableSignalsFromChainData(chainData: LeadSourcingChainData) {
+  const available = new Set<SemanticSignal>(["query"]);
+  if (chainData.companies.length) available.add("company_list");
+  if (chainData.domains.length) available.add("domain_list");
+  if (chainData.websites.length) available.add("website_list");
+  if (chainData.emails.length) available.add("email_list");
+  return available;
+}
+
 function deriveSourcingStartState(input: {
   targetAudience: string;
   triggerContext?: string;
@@ -2209,14 +2218,14 @@ function buildChainStepInput(input: {
   );
 
   const itemCap = input.probeMode
-    ? Math.max(5, Math.min(APIFY_PROBE_MAX_LEADS, input.maxLeads))
+    ? Math.max(1, Math.min(6, input.maxLeads))
     : Math.max(20, Math.min(APIFY_CHAIN_MAX_ITEMS_PER_STEP, input.maxLeads));
   const base = {
     maxItems: itemCap,
     limit: itemCap,
     maxResults: itemCap,
-    maxRequestsPerCrawl: input.probeMode ? 20 : 60,
-    maxConcurrency: input.probeMode ? 4 : 8,
+    maxRequestsPerCrawl: input.probeMode ? 8 : 60,
+    maxConcurrency: input.probeMode ? 2 : 8,
     maxDepth: input.probeMode ? 1 : 2,
     includeSubdomains: false,
   };
@@ -3034,6 +3043,7 @@ async function probeSourcingPlanCandidate(input: {
   qualityPolicy: LeadQualityPolicy;
   remainingBudgetUsd: number;
   actorSchemaCache: ActorSchemaProfileCache;
+  contractsByActorId: Map<string, ActorSemanticContract>;
 }): Promise<ProbedSourcingPlan> {
   let budgetUsedUsd = 0;
   let chainData: LeadSourcingChainData = {
@@ -3131,7 +3141,7 @@ async function probeSourcingPlanCandidate(input: {
       actorId: step.actorId,
       actorInput: actorInputForRun,
       token: input.token,
-      timeoutSeconds: 60,
+      timeoutSeconds: 35,
     });
     for (let repairAttempt = 0; repairAttempt < 8 && !run.ok; repairAttempt += 1) {
       const repaired = repairActorInputFromProviderError({
@@ -3152,7 +3162,7 @@ async function probeSourcingPlanCandidate(input: {
         actorId: step.actorId,
         actorInput: actorInputForRun,
         token: input.token,
-        timeoutSeconds: 60,
+        timeoutSeconds: 35,
       });
     }
     budgetUsedUsd += APIFY_PROBE_STEP_COST_ESTIMATE_USD;
@@ -3208,13 +3218,47 @@ async function probeSourcingPlanCandidate(input: {
       if (!acceptedLeads.length) {
         reason = "probe_no_accepted_leads";
       }
+    } else {
+      const nextStep = input.plan.steps[stepIndex + 1];
+      const nextContract = input.contractsByActorId.get(nextStep.actorId);
+      const requiredNextSignals = new Set<SemanticSignal>(nextContract?.requiredInputs ?? []);
+      if (nextContract?.requiresAuth) requiredNextSignals.add("auth_token");
+      if (nextContract?.requiresFileInput) requiredNextSignals.add("file_upload");
+      const availableSignals = availableSignalsFromChainData(chainData);
+      const unresolvedSignals = Array.from(requiredNextSignals).filter((signal) => !availableSignals.has(signal));
+      qualityMetrics.availableSignalsAfterStep = Array.from(availableSignals);
+      qualityMetrics.nextStepRequiredSignals = Array.from(requiredNextSignals);
+      if (requiredNextSignals.size > 0 && unresolvedSignals.length > 0) {
+        reason = `probe_missing_next_step_inputs:${nextStep.actorId}`;
+        probeResults.push({
+          stepIndex: stepIndex + 1,
+          actorId: nextStep.actorId,
+          stage: nextStep.stage,
+          outcome: "fail",
+          probeInputHash: "",
+          qualityMetrics: {
+            availableSignals: Array.from(availableSignals),
+            requiredSignals: Array.from(requiredNextSignals),
+          },
+          costEstimateUsd: 0,
+          details: {
+            reason,
+            missingRequiredSignals: unresolvedSignals,
+            blockingStepActorId: step.actorId,
+          },
+        });
+      }
     }
 
+    const stepOutcome =
+      reason && (!reason.startsWith("probe_missing_next_step_inputs:") || stepIndex === input.plan.steps.length - 1)
+        ? "fail"
+        : "pass";
     probeResults.push({
       stepIndex,
       actorId: step.actorId,
       stage: step.stage,
-      outcome: reason ? "fail" : "pass",
+      outcome: stepOutcome,
       probeInputHash,
       qualityMetrics,
       costEstimateUsd: APIFY_PROBE_STEP_COST_ESTIMATE_USD,
@@ -5219,6 +5263,7 @@ async function processSourceLeadsJob(job: OutreachJob) {
       qualityPolicy,
       remainingBudgetUsd: remainingBudget,
       actorSchemaCache,
+      contractsByActorId: semanticContractsByActorId,
     });
     probedCandidates.push(probed);
     budgetUsedUsd += probed.budgetUsedUsd;

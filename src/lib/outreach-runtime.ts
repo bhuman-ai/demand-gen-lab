@@ -1591,9 +1591,11 @@ function firstStepAudienceMismatchReason(input: {
     normalizedAudience
   );
   const audienceWantsEvents = /(event|conference|webinar|summit|exhibitor|trade show|tradeshow)/.test(normalizedAudience);
+  const audienceWantsDirectory = /(directory|marketplace|vendor list|listing|catalog)/.test(normalizedAudience);
   const localSurface = /(google maps|places|yelp|gmb|google business profile|store listing|local business)/.test(blob);
   const eventSurface = /(event exhibitor|conference exhibitor|trade show|tradeshow|attendee list|event sponsor)/.test(blob);
-  const consumerSurface = /(meta ads|facebook ads|instagram|tiktok|influencer|shopify|amazon|etsy|aliexpress|social media)/.test(
+  const directorySurface = /(europages|yellow pages|business directory|vendor directory|clutch|g2|appsumo|capterra)/.test(blob);
+  const consumerSurface = /(meta ads|facebook|instagram|tiktok|twitter|x\/twitter|reddit|youtube|influencer|shopify|amazon|etsy|aliexpress|social media)/.test(
     blob
   );
   const seoSurface = /(backlink|seo audit|seo prospecting|link building)/.test(blob);
@@ -1606,6 +1608,9 @@ function firstStepAudienceMismatchReason(input: {
   }
   if (eventSurface && !audienceWantsEvents) {
     return `audience_actor_mismatch:${firstStep.actorId}:event_surface_without_event_icp`;
+  }
+  if (directorySurface && !audienceWantsDirectory) {
+    return `audience_actor_mismatch:${firstStep.actorId}:directory_surface_without_directory_icp`;
   }
   if (seoSurface) {
     return `audience_actor_mismatch:${firstStep.actorId}:seo_backlink_surface`;

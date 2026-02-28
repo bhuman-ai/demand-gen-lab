@@ -1858,6 +1858,7 @@ function actorCandidateScore(input: {
   actor: ApifyStoreActor;
   matchedQueries: number;
   requestedStages: number;
+  targetAudience: string;
 }) {
   const stageHint = stageFromActor(input.actor);
   const stageBoost = stageHint === "email_discovery" ? 22 : stageHint === "prospect_discovery" ? 14 : 10;
@@ -1866,6 +1867,15 @@ function actorCandidateScore(input: {
     pricingModel.includes("FLAT_PRICE_PER_MONTH") || pricingModel.includes("SUBSCRIPTION") ? 60 : 0;
   const expensiveRunPenalty = input.actor.pricePerUnitUsd > 2 ? Math.min(40, input.actor.pricePerUnitUsd * 6) : 0;
   const freeTrialBoost = input.actor.trialMinutes > 0 ? 8 : 0;
+  const metadataBlob = `${input.actor.title} ${input.actor.description} ${input.actor.categories.join(" ")}`.toLowerCase();
+  const icpRoleCompany = isRoleCompanyIcpAudience(input.targetAudience);
+  const leadSurface = /(b2b|saas|software|linkedin|crunchbase|apollo|company|contact|email|domain|prospect|decision maker|enrich)/.test(
+    metadataBlob
+  );
+  const offSurface = /(facebook|instagram|tiktok|twitter|x\/twitter|google maps|places|yelp|directory|jobs|plugin|wordpress|backlink|seo)/.test(
+    metadataBlob
+  );
+  const audienceFitBoost = icpRoleCompany ? (leadSurface ? 22 : 0) - (offSurface ? 34 : 0) : 0;
   return (
     actorScore(input.actor) +
     input.matchedQueries * 6 +
@@ -1873,7 +1883,8 @@ function actorCandidateScore(input: {
     stageBoost +
     freeTrialBoost -
     monthlyPenalty -
-    expensiveRunPenalty
+    expensiveRunPenalty +
+    audienceFitBoost
   );
 }
 
@@ -1970,6 +1981,7 @@ async function buildApifyActorPool(input: {
         actor: entry.actor,
         matchedQueries: entry.matchedQueryKeys.size,
         requestedStages: entry.requestedStages.size,
+        targetAudience: input.targetAudience,
       }),
     }))
     .sort((a, b) => b.score - a.score);

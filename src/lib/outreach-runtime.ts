@@ -1569,6 +1569,7 @@ async function critiqueCandidateFeasibilityWithLlm(input: {
   candidates: LeadSourcingChainPlan[];
   deterministic: CandidateFeasibility[];
   contractsByActorId: Map<string, ActorSemanticContract>;
+  actorHintsById: Map<string, { title: string; description: string; categories: string[] }>;
   targetAudience: string;
   triggerContext?: string;
   offer: string;
@@ -1581,6 +1582,9 @@ async function critiqueCandidateFeasibilityWithLlm(input: {
     "Critique lead-sourcing chain feasibility before paid probes.",
     "Goal: reject chains that are likely to fail due to unsatisfied prerequisites or wrong dataflow.",
     "Treat this as strict preflight. No optimism.",
+    "Hard reject chains whose first step is clearly mismatched to targetAudience intent.",
+    "Examples of mismatch unless explicitly requested by targetAudience: local business/maps scraping, social ad lead scraping, e-commerce seller scraping, generic app-store scraping.",
+    "If targetAudience is role/company ICP driven (e.g. B2B/SaaS role titles), prioritize company/person lead sources and reject consumer/local-business actor paths.",
     "Return JSON only with this shape:",
     '{ "candidates": [{ "id": string, "feasible": boolean, "score": number, "reason": string }] }',
     "Scoring: 0..1 where >=0.55 is acceptable.",
@@ -1600,6 +1604,19 @@ async function critiqueCandidateFeasibilityWithLlm(input: {
         requiresFileInput: row.requiresFileInput,
         confidence: row.confidence,
       }))
+    )}`,
+    `actorHints: ${JSON.stringify(
+      Array.from(
+        new Set(input.candidates.flatMap((candidate) => candidate.steps.map((step) => step.actorId)))
+      ).map((actorId) => {
+        const hint = input.actorHintsById.get(actorId);
+        return {
+          actorId,
+          title: hint?.title ?? "",
+          description: hint?.description ?? "",
+          categories: hint?.categories ?? [],
+        };
+      })
     )}`,
     `candidates: ${JSON.stringify(input.candidates)}`,
   ].join("\n");
@@ -5162,10 +5179,21 @@ async function processSourceLeadsJob(job: OutreachJob) {
       startState,
     })
   );
+  const actorHintsById = new Map(
+    startStateFilteredPool.allowed.map((actor) => [
+      actor.actorId,
+      {
+        title: trimText(actor.title, 120),
+        description: trimText(actor.description, 260),
+        categories: actor.categories.slice(0, 6),
+      },
+    ])
+  );
   const llmFeasibility = await critiqueCandidateFeasibilityWithLlm({
     candidates: chainCandidates,
     deterministic: deterministicFeasibility,
     contractsByActorId: semanticContractsByActorId,
+    actorHintsById,
     targetAudience,
     triggerContext,
     offer: offerContext,

@@ -1484,6 +1484,43 @@ function evaluateCandidateFeasibility(input: {
   };
 }
 
+function filterPlanningActorsByStartStatePrereqs(input: {
+  actors: ApifyStoreActor[];
+  contractsByActorId: Map<string, ActorSemanticContract>;
+  startState: SourcingStartState;
+}) {
+  const availableSignals = new Set<SemanticSignal>(
+    input.startState.availableSignals.length ? input.startState.availableSignals : ["query"]
+  );
+  const allowed: ApifyStoreActor[] = [];
+  const rejected: Array<{ actorId: string; reason: string }> = [];
+
+  for (const actor of input.actors) {
+    const contract = input.contractsByActorId.get(actor.actorId);
+    if (!contract) {
+      allowed.push(actor);
+      continue;
+    }
+    const missing: string[] = [];
+    if (contract.requiresAuth && !availableSignals.has("auth_token")) {
+      missing.push("auth_token");
+    }
+    if (contract.requiresFileInput && !availableSignals.has("file_upload")) {
+      missing.push("file_upload");
+    }
+    if (missing.length) {
+      rejected.push({
+        actorId: actor.actorId,
+        reason: `missing_start_state:${missing.join(",")}`,
+      });
+      continue;
+    }
+    allowed.push(actor);
+  }
+
+  return { allowed, rejected };
+}
+
 function hasHardPreflightBlock(reason: string) {
   const normalized = String(reason ?? "").toLowerCase();
   if (!normalized) return false;
@@ -5015,6 +5052,31 @@ async function processSourceLeadsJob(job: OutreachJob) {
     actorProfiles,
     actorMemoryById: new Map(actorMemory.map((row) => [row.actorId.toLowerCase(), row])),
   });
+  const semanticContractsByActorId = await inferActorSemanticContracts({
+    actors: planningActorPool,
+    actorProfilesById: actorProfiles,
+    targetAudience,
+    triggerContext,
+    offer: offerContext,
+  });
+  const startStateFilteredPool = filterPlanningActorsByStartStatePrereqs({
+    actors: planningActorPool,
+    contractsByActorId: semanticContractsByActorId,
+    startState,
+  });
+  if (!startStateFilteredPool.allowed.length) {
+    await setTrace({ phase: "failed", failureStep: "plan_sourcing" });
+    await failRunWithDiagnostics({
+      run,
+      reason: "No actors can run from current start-state prerequisites (auth/file requirements blocked all candidates)",
+      eventType: "lead_sourcing_failed",
+      payload: {
+        startState,
+        blockedActors: startStateFilteredPool.rejected.slice(0, 60),
+      },
+    });
+    return;
+  }
 
   await createOutreachEvent({
     runId: run.id,
@@ -5026,6 +5088,8 @@ async function processSourceLeadsJob(job: OutreachJob) {
         queriesTried: actorPoolResult.searchDiagnostics,
         actorCount: topActorPool.length,
         planningActorCount: planningActorPool.length,
+        startStateFilteredActorCount: startStateFilteredPool.allowed.length,
+        startStateBlockedActors: startStateFilteredPool.rejected.slice(0, 40),
         actorProfiles: actorProfiles.size,
         memoryFilter: rankedActorPoolResult.diagnostics,
         startState,
@@ -5043,7 +5107,7 @@ async function processSourceLeadsJob(job: OutreachJob) {
       experimentName: experiment.name ?? "",
       offer: offerContext,
       startState,
-      actorPool: planningActorPool,
+      actorPool: startStateFilteredPool.allowed,
       actorProfilesById: actorProfiles,
       actorMemoryRows: actorMemory,
       maxCandidates: APIFY_CHAIN_MAX_CANDIDATES,
@@ -5064,13 +5128,6 @@ async function processSourceLeadsJob(job: OutreachJob) {
   }
 
   const historicalCandidates: LeadSourcingChainPlan[] = [];
-  const semanticContractsByActorId = await inferActorSemanticContracts({
-    actors: planningActorPool,
-    actorProfilesById: actorProfiles,
-    targetAudience,
-    triggerContext,
-    offer: offerContext,
-  });
   const deterministicFeasibility = chainCandidates.map((candidate) =>
     evaluateCandidateFeasibility({
       candidate,

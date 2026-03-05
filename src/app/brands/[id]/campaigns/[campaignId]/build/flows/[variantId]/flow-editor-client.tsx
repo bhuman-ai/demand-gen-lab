@@ -31,6 +31,7 @@ import {
   fetchCampaign,
   fetchConversationMapApi,
   fetchConversationPreviewLeadsApi,
+  fetchExperimentSourcingTraceApi,
   publishConversationMapApi,
   previewConversationNodeApi,
   saveConversationMapDraftApi,
@@ -108,6 +109,25 @@ function clamp(value: number, min: number, max: number) {
   return Math.max(min, Math.min(max, value));
 }
 
+function formatDateLabel(value?: string) {
+  if (!value) return "n/a";
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return value;
+  return parsed.toLocaleString();
+}
+
+function defaultMessagePromptTemplate(title: string) {
+  const safeTitle = title.trim() || "Message";
+  return [
+    `Write outbound email copy for node "${safeTitle}".`,
+    "Goal: earn a simple positive reply and continue the thread.",
+    "Keep it short and concrete: 2-3 short paragraphs, plain language, no hype.",
+    "Use variables only when available: {{firstName}}, {{company}}, {{leadTitle}}, {{brandName}}, {{campaignGoal}}, {{variantName}}, {{replyPreview}}, {{shortAnswer}}.",
+    "Never output unresolved placeholders.",
+    "Include exactly one low-friction CTA sentence (prefer yes/no).",
+  ].join("\n");
+}
+
 function defaultNode(kind: "message" | "terminal" = "message", x = 80, y = 160): ConversationFlowNode {
   const subject = kind === "terminal" ? "" : "Quick follow-up";
   const body = kind === "terminal" ? "" : "Hi {{firstName}},\n\nQuick follow-up on {{brandName}}.";
@@ -119,13 +139,7 @@ function defaultNode(kind: "message" | "terminal" = "message", x = 80, y = 160):
     promptTemplate:
       kind === "terminal"
         ? ""
-        : [
-            "Write a concise follow-up email for this node.",
-            "Use concrete language and include exactly one clear CTA.",
-            "Reference context variables only if relevant.",
-            `Legacy subject example: ${subject}`,
-            `Legacy body example:\n${body}`,
-          ].join("\n"),
+        : defaultMessagePromptTemplate("Message"),
     promptVersion: 1,
     promptPolicy: {
       subjectMaxWords: 8,
@@ -428,6 +442,29 @@ export default function FlowEditorClient({
   const [previewLeadsLoading, setPreviewLeadsLoading] = useState(false);
   const [previewLeadsError, setPreviewLeadsError] = useState("");
   const [previewLeadRunsChecked, setPreviewLeadRunsChecked] = useState(0);
+  const [sourceExperimentId, setSourceExperimentId] = useState("");
+  const [sourcingTrace, setSourcingTrace] = useState<Awaited<ReturnType<typeof fetchExperimentSourcingTraceApi>> | null>(null);
+  const [sourcingTraceLoading, setSourcingTraceLoading] = useState(false);
+  const [sourcingTraceError, setSourcingTraceError] = useState("");
+
+  const refreshSourcingTrace = async (ownerExperimentId?: string) => {
+    const targetExperimentId = String(ownerExperimentId ?? sourceExperimentId ?? "").trim();
+    if (!targetExperimentId) {
+      setSourcingTrace(null);
+      setSourcingTraceError("");
+      return;
+    }
+    setSourcingTraceLoading(true);
+    setSourcingTraceError("");
+    try {
+      const nextTrace = await fetchExperimentSourcingTraceApi(brandId, targetExperimentId);
+      setSourcingTrace(nextTrace);
+    } catch (err) {
+      setSourcingTraceError(err instanceof Error ? err.message : "Failed to load sourcing trace");
+    } finally {
+      setSourcingTraceLoading(false);
+    }
+  };
 
   const load = async () => {
     setError("");
@@ -442,6 +479,16 @@ export default function FlowEditorClient({
       runsChecked: 0,
       runtimeRefFound: true,
       sourceExperimentId: "",
+      qualifiedLeadCount: 0,
+      qualifiedLeadWithEmailCount: 0,
+      qualifiedLeadWithoutEmailCount: 0,
+      previewEmailEnrichment: {
+        attempted: 0,
+        matched: 0,
+        failed: 0,
+        provider: "emailfinder.batch",
+        error: "",
+      },
     };
     try {
       previewLeadData = await fetchConversationPreviewLeadsApi(brandId, campaignId, variantId);
@@ -470,6 +517,7 @@ export default function FlowEditorClient({
     setVariantName(variant.name || "Variant");
     setPreviewLeads(previewLeadData.leads);
     setPreviewLeadRunsChecked(previewLeadData.runsChecked);
+    setSourceExperimentId(previewLeadData.sourceExperimentId || "");
     setSelectedPreviewLeadId((prev) =>
       previewLeadData.leads.some((lead) => lead.id === prev)
         ? prev
@@ -489,6 +537,7 @@ export default function FlowEditorClient({
       const next = await fetchConversationPreviewLeadsApi(brandId, campaignId, variantId);
       setPreviewLeads(next.leads);
       setPreviewLeadRunsChecked(next.runsChecked);
+      setSourceExperimentId(next.sourceExperimentId || "");
       setSelectedPreviewLeadId((prev) =>
         next.leads.some((lead) => lead.id === prev) ? prev : next.leads[0]?.id ?? ""
       );
@@ -503,6 +552,11 @@ export default function FlowEditorClient({
       setPreviewLeadsLoading(false);
     }
   };
+
+  useEffect(() => {
+    void refreshSourcingTrace(sourceExperimentId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [brandId, sourceExperimentId]);
 
   useEffect(() => {
     let mounted = true;
@@ -1040,10 +1094,95 @@ export default function FlowEditorClient({
               <RefreshCw className={`h-4 w-4 ${previewLeadsLoading ? "animate-spin" : ""}`} />
               {previewLeadsLoading ? "Refreshing..." : "Refresh Sourced Leads"}
             </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              onClick={() => void refreshSourcingTrace()}
+              disabled={sourcingTraceLoading || !sourceExperimentId}
+            >
+              <RefreshCw className={`h-4 w-4 ${sourcingTraceLoading ? "animate-spin" : ""}`} />
+              {sourcingTraceLoading ? "Refreshing Trace..." : "Refresh Sourcing Trace"}
+            </Button>
             <Badge variant="muted">{previewLeads.length} lead{previewLeads.length === 1 ? "" : "s"}</Badge>
             <Badge variant="muted">Runs checked: {previewLeadRunsChecked}</Badge>
             {selectedPreviewLead ? (
               <Badge variant="accent">Using: {selectedPreviewLead.name || selectedPreviewLead.email}</Badge>
+            ) : null}
+          </div>
+
+          <div className="rounded-lg border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-2 text-xs">
+            <div className="font-medium text-[color:var(--foreground)]">Sourcing Trace</div>
+            {sourceExperimentId ? (
+              <div className="mt-1 text-[color:var(--muted-foreground)]">Owner experiment: {sourceExperimentId}</div>
+            ) : (
+              <div className="mt-1 text-[color:var(--muted-foreground)]">
+                Owner experiment ID not resolved yet. Launch/source leads first.
+              </div>
+            )}
+            {sourcingTraceError ? (
+              <div className="mt-2 text-[color:var(--danger)]">{sourcingTraceError}</div>
+            ) : null}
+            {sourcingTrace?.latestDecision ? (
+              <div className="mt-2 space-y-2 text-[color:var(--muted-foreground)]">
+                <div>
+                  Strategy:{" "}
+                  <span className="font-medium text-[color:var(--foreground)]">
+                    {sourcingTrace.latestDecision.strategy || "n/a"}
+                  </span>
+                </div>
+                <div>
+                  Budget used:{" "}
+                  <span className="font-medium text-[color:var(--foreground)]">
+                    ${Number(sourcingTrace.latestDecision.budgetUsedUsd || 0).toFixed(2)}
+                  </span>
+                </div>
+                <div className="rounded-md border border-[color:var(--border)] bg-[color:var(--surface)] px-2 py-2">
+                  <div className="font-medium text-[color:var(--foreground)]">Selected actor chain</div>
+                  <div className="mt-1 space-y-1">
+                    {sourcingTrace.latestDecision.selectedChain.map((step, index) => (
+                      <div key={`${step.id}:${step.actorId}:${index}`}>
+                        {index + 1}. {step.stage} {"->"} <span className="text-[color:var(--foreground)]">{step.actorId}</span>
+                        {step.queryHint ? ` (${step.queryHint})` : ""}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+                {sourcingTrace.latestRun ? (
+                  <div>
+                    Latest run:{" "}
+                    <span className="font-medium text-[color:var(--foreground)]">
+                      {sourcingTrace.latestRun.id}
+                    </span>{" "}
+                    · {sourcingTrace.latestRun.status}
+                    {sourcingTrace.latestRun.lastError ? (
+                      <>
+                        {" "}
+                        · <span className="text-[color:var(--danger)]">{sourcingTrace.latestRun.lastError}</span>
+                      </>
+                    ) : null}
+                  </div>
+                ) : null}
+                {sourcingTrace.probeResults.length ? (
+                  <div className="rounded-md border border-[color:var(--border)] bg-[color:var(--surface)] px-2 py-2">
+                    <div className="font-medium text-[color:var(--foreground)]">Probe results</div>
+                    <div className="mt-1 space-y-1">
+                      {sourcingTrace.probeResults.slice(0, 10).map((probe) => (
+                        <div key={probe.id}>
+                          {probe.stage} · {probe.actorId} ·{" "}
+                          <span className={probe.outcome === "pass" ? "text-[color:var(--success)]" : "text-[color:var(--danger)]"}>
+                            {probe.outcome}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+            ) : !sourcingTraceLoading && !sourcingTraceError ? (
+              <div className="mt-2 text-[color:var(--muted-foreground)]">
+                No sourcing decision available yet.
+              </div>
             ) : null}
           </div>
 
@@ -1077,14 +1216,26 @@ export default function FlowEditorClient({
                       className="text-left text-sm font-semibold"
                       onClick={() => setSelectedPreviewLeadId(lead.id)}
                     >
-                      {lead.name || lead.email}
+                      {lead.name || lead.email || lead.domain || "Lead"}
                     </button>
                     <Badge variant="muted">{lead.source}</Badge>
                   </div>
-                  <div className="text-xs text-[color:var(--muted-foreground)]">{lead.email}</div>
+                  <div className="text-xs text-[color:var(--muted-foreground)]">
+                    {lead.email || "Email pending (name + domain only)"}
+                  </div>
                   <div className="text-xs text-[color:var(--muted-foreground)]">
                     {lead.title || "Unknown title"} at {lead.company || lead.domain}
                   </div>
+                  {lead.runId ? (
+                    <div className="text-[11px] text-[color:var(--muted-foreground)]">
+                      Run {lead.runId} · {formatDateLabel(lead.runCreatedAt)}
+                    </div>
+                  ) : null}
+                  {lead.sourceUrl ? (
+                    <div className="line-clamp-1 text-[11px] text-[color:var(--muted-foreground)]" title={lead.sourceUrl}>
+                      Source URL: {lead.sourceUrl}
+                    </div>
+                  ) : null}
                 </div>
               );
             })}
@@ -1354,6 +1505,18 @@ export default function FlowEditorClient({
                     {selectedPreviewLead.domain || "(missing)"}
                   </div>
                 </div>
+                <div className="grid gap-2">
+                  <Label>Source Run</Label>
+                  <div className="rounded-md border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-2 text-sm">
+                    {selectedPreviewLead.runId || "(missing)"} · {formatDateLabel(selectedPreviewLead.runCreatedAt)}
+                  </div>
+                </div>
+                <div className="grid gap-2">
+                  <Label>Source URL</Label>
+                  <div className="max-h-24 overflow-auto rounded-md border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-2 text-xs leading-5 text-[color:var(--muted-foreground)]">
+                    {selectedPreviewLead.sourceUrl || "(missing)"}
+                  </div>
+                </div>
               </div>
             ) : null}
 
@@ -1384,10 +1547,7 @@ export default function FlowEditorClient({
                           kind === "terminal"
                             ? ""
                             : selectedNode.promptTemplate ||
-                              [
-                                `Write this node message for "${selectedNode.title || "Message"}".`,
-                                "Keep it concrete and include exactly one CTA.",
-                              ].join("\n"),
+                              defaultMessagePromptTemplate(selectedNode.title || "Message"),
                         promptVersion: Math.max(1, Number(selectedNode.promptVersion || 1)),
                         promptPolicy: selectedNode.promptPolicy,
                         autoSend: kind === "terminal" ? false : selectedNode.autoSend,

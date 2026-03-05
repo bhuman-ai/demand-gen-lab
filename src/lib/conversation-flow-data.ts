@@ -98,18 +98,20 @@ function synthesizePromptTemplateFromLegacyCopy(input: {
 }) {
   const title = oneLine(input.title) || "Message";
   const subject = oneLine(input.subject);
-  const body = String(input.body ?? "").trim();
-  const styleSubject = subject ? `Legacy subject example: ${subject}` : "";
-  const styleBody = body ? `Legacy body example:\n${body}` : "";
+  const body = oneLine(String(input.body ?? ""));
+  const contextLines = [
+    subject ? `Subject intent: ${subject}` : "",
+    body ? `Body intent: ${truncate(body, 180)}` : "",
+  ].filter(Boolean);
 
   return [
-    `Write this node message for "${title}".`,
-    "Keep it concrete, specific, and easy to understand.",
-    "Use context variables only when available: {{firstName}}, {{company}}, {{leadTitle}}, {{brandName}}, {{campaignGoal}}, {{variantName}}, {{replyPreview}}, {{shortAnswer}}.",
-    "Do not leave unresolved placeholders.",
-    "Include exactly one clear CTA sentence.",
-    styleSubject,
-    styleBody,
+    `Write outbound email copy for node "${title}".`,
+    "Goal: earn a simple positive reply and continue the thread.",
+    "Keep it short and concrete: 2-3 short paragraphs, plain language, no hype.",
+    "Use variables only when available: {{firstName}}, {{company}}, {{leadTitle}}, {{brandName}}, {{campaignGoal}}, {{variantName}}, {{replyPreview}}, {{shortAnswer}}.",
+    "Never output unresolved placeholders.",
+    "Include exactly one low-friction CTA sentence (prefer yes/no).",
+    contextLines.length ? `Context:\n${contextLines.join("\n")}` : "",
   ]
     .filter(Boolean)
     .join("\n");

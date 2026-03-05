@@ -1716,8 +1716,7 @@ export default function ExperimentClient({
               </div>
             )}
             <style jsx global>{`
-              [data-messaging-canvas-only] > div > :nth-child(1),
-              [data-messaging-canvas-only] > div > :nth-child(2) {
+              [data-messaging-canvas-only] > div > :nth-child(1) {
                 display: none;
               }
             `}</style>

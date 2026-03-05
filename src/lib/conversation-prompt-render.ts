@@ -150,6 +150,14 @@ function normalizeWhitespace(value: string) {
     .trim();
 }
 
+function sanitizeNodePromptTemplate(value: string) {
+  return normalizeWhitespace(
+    value
+      .replace(/legacy subject example:[^\n]*(\n|$)/gi, "\n")
+      .replace(/legacy body example:[\s\S]*$/gi, "")
+  );
+}
+
 function wordCount(text: string) {
   return text
     .trim()
@@ -194,6 +202,26 @@ function resolvePolicy(node: ConversationFlowNode): ConversationPromptPolicy {
   };
 }
 
+function hasInboundContext(context: ConversationPromptRenderContext) {
+  return Boolean(
+    context.thread.latestInboundSubject.trim() ||
+      context.thread.latestInboundBody.trim() ||
+      context.thread.intent
+  );
+}
+
+function effectivePolicyForContext(
+  policy: ConversationPromptPolicy,
+  context: ConversationPromptRenderContext
+): ConversationPromptPolicy {
+  if (hasInboundContext(context)) return policy;
+  return {
+    ...policy,
+    subjectMaxWords: Math.min(policy.subjectMaxWords, 6),
+    bodyMaxWords: Math.min(policy.bodyMaxWords, 72),
+  };
+}
+
 function defaultTrace(node: ConversationFlowNode, model: string): ConversationPromptTrace {
   const policy = resolvePolicy(node);
   return {
@@ -223,8 +251,10 @@ function buildPrompt(input: {
   node: ConversationFlowNode;
   policy: ConversationPromptPolicy;
   context: ConversationPromptRenderContext;
+  previousFailureReason?: string;
 }) {
-  const nodePrompt = input.node.promptTemplate.trim();
+  const nodePrompt = sanitizeNodePromptTemplate(input.node.promptTemplate.trim());
+  const replyContext = hasInboundContext(input.context);
   return [
     "You are an outbound email copywriter for managed B2B outreach automation.",
     "Write ONE outbound email for the given node.",
@@ -236,10 +266,24 @@ function buildPrompt(input: {
     `- Body must be <= ${input.policy.bodyMaxWords} words.`,
     "- Body must be specific, concrete, and easy to understand.",
     "- No buzzwords, no placeholder tokens, no unresolved variables.",
-    "- If context includes prior inbound message, respond to that context.",
+    "- Treat node prompt template as direction only. Do not copy any example text verbatim.",
+    replyContext
+      ? "- Context includes prior inbound message, so respond directly to it."
+      : "- This is first-touch outbound. Do not imply a prior conversation.",
+    replyContext
+      ? "- Keep response-focused and concise."
+      : "- Do not start with 'yes', 'great question', 'totally fair', or similar reply-style openers.",
+    replyContext
+      ? "- Avoid repeating the inbound message back verbatim."
+      : "- Do not include procedural checklists or long field lists.",
+    replyContext ? "" : "- Keep first-touch copy to 2-3 short paragraphs and ~55-75 words.",
+    replyContext ? "" : "- Include one concrete example or proof, then ask one simple next-step CTA.",
     input.policy.exactlyOneCta
       ? "- Include exactly one explicit CTA sentence in the body, and make the same CTA text available in the cta field."
       : "- Include a clear CTA in the body.",
+    input.previousFailureReason
+      ? `- Previous attempt failed: ${input.previousFailureReason}. Fix this issue in the next draft.`
+      : "",
     "",
     `Node title: ${input.node.title}`,
     `Node kind: ${input.node.kind}`,
@@ -297,6 +341,7 @@ function validateOutput(input: {
   body: string;
   cta: string;
   policy: ConversationPromptPolicy;
+  isReplyContext: boolean;
 }) {
   const subjectWords = wordCount(input.subject);
   const bodyWords = wordCount(input.body);
@@ -386,6 +431,35 @@ function validateOutput(input: {
     }
   }
 
+  if (!input.isReplyContext) {
+    const firstLine = oneLine(input.body.split("\n")[0] || "").toLowerCase();
+    if (
+      /\b(yes\.?|great question|totally fair|makes sense|thanks for)\b/.test(firstLine)
+    ) {
+      return {
+        ok: false as const,
+        reason: "First-touch email starts like a reply, not an initial outbound.",
+        subjectWords,
+        bodyWords,
+        ctaOccurrences,
+        unresolved,
+        bannedPhrase,
+      };
+    }
+
+    if (/:\s*[^.\n]*,\s*[^.\n]*,\s*[^.\n]*/.test(input.body)) {
+      return {
+        ok: false as const,
+        reason: "First-touch email is too list-heavy; keep it simple and conversational.",
+        subjectWords,
+        bodyWords,
+        ctaOccurrences,
+        unresolved,
+        bannedPhrase,
+      };
+    }
+  }
+
   return { ok: true as const, subjectWords, bodyWords, ctaOccurrences, unresolved, bannedPhrase };
 }
 
@@ -414,57 +488,74 @@ export async function generateConversationPromptMessage(input: {
     return { ok: false, reason: "Node prompt template is empty", trace };
   }
 
-  const policy = resolvePolicy(input.node);
-  const prompt = buildPrompt({ node: input.node, policy, context: input.context });
+  const policy = effectivePolicyForContext(resolvePolicy(input.node), input.context);
   trace.policy = policy;
-  trace.promptHash = createHash("sha256").update(prompt).digest("hex").slice(0, 24);
+  const isReplyContext = hasInboundContext(input.context);
 
-  try {
-    const parsed = await openAiJsonCall({ prompt, model });
-    const qualityRaw = asRecord(parsed.quality);
-    trace.quality = {
-      clarity: clampQuality(qualityRaw.clarity, 0),
-      specificity: clampQuality(qualityRaw.specificity, 0),
-      risk: clampQuality(qualityRaw.risk, 1),
-    };
+  let lastError = "";
+  const maxAttempts = 2;
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    const prompt = buildPrompt({
+      node: input.node,
+      policy,
+      context: input.context,
+      previousFailureReason: lastError || undefined,
+    });
+    trace.promptHash = createHash("sha256").update(prompt).digest("hex").slice(0, 24);
 
-    const subject = sanitizeAiText(normalizeWhitespace(String(parsed.subject ?? "")));
-    const body = sanitizeAiText(normalizeWhitespace(String(parsed.body ?? "")));
-    const cta = sanitizeAiText(oneLine(String(parsed.cta ?? "")));
-    const validation = validateOutput({ subject, body, cta, policy });
+    try {
+      const parsed = await openAiJsonCall({ prompt, model });
+      const qualityRaw = asRecord(parsed.quality);
+      trace.quality = {
+        clarity: clampQuality(qualityRaw.clarity, 0),
+        specificity: clampQuality(qualityRaw.specificity, 0),
+        risk: clampQuality(qualityRaw.risk, 1),
+      };
 
-    trace.validation = {
-      passed: validation.ok,
-      reason: validation.ok ? "" : validation.reason,
-      subjectWords: validation.subjectWords,
-      bodyWords: validation.bodyWords,
-      ctaOccurrences: validation.ctaOccurrences,
-      unresolvedTemplateTokens: validation.unresolved,
-      bannedPhrase: validation.bannedPhrase,
-    };
+      const subject = sanitizeAiText(normalizeWhitespace(String(parsed.subject ?? "")));
+      const body = sanitizeAiText(normalizeWhitespace(String(parsed.body ?? "")));
+      const cta = sanitizeAiText(oneLine(String(parsed.cta ?? "")));
+      const validation = validateOutput({
+        subject,
+        body,
+        cta,
+        policy,
+        isReplyContext,
+      });
 
-    if (!validation.ok) {
-      return { ok: false, reason: validation.reason, trace };
+      trace.validation = {
+        passed: validation.ok,
+        reason: validation.ok ? "" : validation.reason,
+        subjectWords: validation.subjectWords,
+        bodyWords: validation.bodyWords,
+        ctaOccurrences: validation.ctaOccurrences,
+        unresolvedTemplateTokens: validation.unresolved,
+        bannedPhrase: validation.bannedPhrase,
+      };
+
+      if (validation.ok) {
+        return {
+          ok: true,
+          subject,
+          body,
+          cta,
+          trace,
+        };
+      }
+      lastError = validation.reason;
+    } catch (error) {
+      lastError = error instanceof Error ? error.message : "Conversation prompt generation failed";
+      trace.validation = {
+        ...trace.validation,
+        passed: false,
+        reason: lastError,
+      };
     }
-
-    return {
-      ok: true,
-      subject,
-      body,
-      cta,
-      trace,
-    };
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "Conversation prompt generation failed";
-    trace.validation = {
-      ...trace.validation,
-      passed: false,
-      reason: message,
-    };
-    return {
-      ok: false,
-      reason: message,
-      trace,
-    };
   }
+
+  return {
+    ok: false,
+    reason: lastError || "Conversation prompt generation failed",
+    trace,
+  };
 }

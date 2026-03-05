@@ -673,11 +673,60 @@ export default function FlowEditorClient({
 
   const generatePreview = async () => {
     if (!selectedNode || selectedNode.kind !== "message") return;
+    if (!graph) {
+      setPreviewError("Conversation map is still loading. Try preview again in a moment.");
+      return;
+    }
     const lead = selectedPreviewLead;
     if (!lead) {
       setPreviewError("No sourced leads available. Launch lead sourcing for this experiment first.");
       return;
     }
+
+    const inboundIntentEdge = graph.edges
+      .filter((edge) => edge.toNodeId === selectedNode.id && edge.trigger === "intent" && edge.intent)
+      .sort((a, b) => a.priority - b.priority)[0];
+    const sampleReplyByIntent: Record<
+      "question" | "interest" | "objection" | "unsubscribe" | "other",
+      { subject: string; body: string; confidence: number }
+    > = {
+      question: {
+        subject: "Re: quick question",
+        body: "Can you share one concrete example relevant to our team?",
+        confidence: 0.78,
+      },
+      interest: {
+        subject: "Re: this looks useful",
+        body: "This sounds relevant. Can you share the next step?",
+        confidence: 0.81,
+      },
+      objection: {
+        subject: "Re: concerns",
+        body: "Not sure this fits our process right now. Why this approach?",
+        confidence: 0.79,
+      },
+      unsubscribe: {
+        subject: "Re: remove me",
+        body: "Please remove me from this sequence.",
+        confidence: 0.98,
+      },
+      other: {
+        subject: "Re: follow-up",
+        body: "Can you clarify this for me?",
+        confidence: 0.7,
+      },
+    };
+    const sampleReply =
+      inboundIntentEdge &&
+      sampleReplyByIntent[inboundIntentEdge.intent as keyof typeof sampleReplyByIntent]
+        ? {
+            intent: inboundIntentEdge.intent,
+            confidence: sampleReplyByIntent[inboundIntentEdge.intent as keyof typeof sampleReplyByIntent].confidence,
+            subject: sampleReplyByIntent[inboundIntentEdge.intent as keyof typeof sampleReplyByIntent].subject,
+            body: sampleReplyByIntent[inboundIntentEdge.intent as keyof typeof sampleReplyByIntent].body,
+          }
+        : undefined;
+
     setPreviewingNodeId(selectedNode.id);
     setPreviewError("");
     try {
@@ -694,12 +743,7 @@ export default function FlowEditorClient({
           title: lead.title,
           domain: lead.domain,
         },
-        sampleReply: {
-          intent: "question",
-          confidence: 0.78,
-          subject: "Re: quick question",
-          body: "Can you share a concrete example relevant to our team?",
-        },
+        sampleReply,
       });
       setPreviewResult({
         nodeId: selectedNode.id,

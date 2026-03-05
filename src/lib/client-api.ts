@@ -294,21 +294,70 @@ export async function fetchExperimentSourcingTraceApi(brandId: string, experimen
 export async function sourceExperimentSampleLeadsApi(
   brandId: string,
   experimentId: string,
-  sampleSize = 20
+  sampleSize = 20,
+  options?: { timeoutMs?: number; signal?: AbortSignal }
+) {
+  const timeoutMs = Math.max(5_000, Number(options?.timeoutMs ?? 25_000) || 25_000);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => {
+    controller.abort("request_timeout");
+  }, timeoutMs);
+
+  const forwardAbort = () => controller.abort("upstream_abort");
+  options?.signal?.addEventListener("abort", forwardAbort, { once: true });
+  if (options?.signal?.aborted) {
+    controller.abort("upstream_abort");
+  }
+
+  try {
+    const response = await fetch(
+      `/api/brands/${brandId}/experiments/${experimentId}/source-sample-leads`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sampleSize }),
+        signal: controller.signal,
+      }
+    );
+    const data = await readJson(response);
+    return {
+      runId: String(data.runId ?? ""),
+      status: String(data.status ?? ""),
+      sampleSize: Math.max(1, Number(data.sampleSize ?? sampleSize) || sampleSize),
+    };
+  } catch (err) {
+    if (err instanceof Error && err.name === "AbortError") {
+      throw new Error("Sourcing request timed out");
+    }
+    throw err;
+  } finally {
+    clearTimeout(timeout);
+    options?.signal?.removeEventListener("abort", forwardAbort);
+  }
+}
+
+export async function importExperimentProspectsCsvApi(
+  brandId: string,
+  experimentId: string,
+  csvText: string
 ) {
   const response = await fetch(
-    `/api/brands/${brandId}/experiments/${experimentId}/source-sample-leads`,
+    `/api/brands/${brandId}/experiments/${experimentId}/import-prospects`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ sampleSize }),
+      body: JSON.stringify({ csvText }),
     }
   );
   const data = await readJson(response);
   return {
     runId: String(data.runId ?? ""),
     status: String(data.status ?? ""),
-    sampleSize: Math.max(1, Number(data.sampleSize ?? sampleSize) || sampleSize),
+    importedCount: Number(data.importedCount ?? 0),
+    parseErrorCount: Number(data.parseErrorCount ?? 0),
+    parseErrors: Array.isArray(data.parseErrors)
+      ? data.parseErrors.map((value) => String(value ?? ""))
+      : ([] as string[]),
   };
 }
 
@@ -476,10 +525,15 @@ export async function fetchConversationMapApi(
 export async function fetchConversationPreviewLeadsApi(
   brandId: string,
   campaignId: string,
-  experimentId: string
+  experimentId: string,
+  options?: { limit?: number; maxRuns?: number }
 ) {
+  const params = new URLSearchParams();
+  if (options?.limit !== undefined) params.set("limit", String(options.limit));
+  if (options?.maxRuns !== undefined) params.set("maxRuns", String(options.maxRuns));
+  const suffix = params.toString() ? `?${params.toString()}` : "";
   const response = await fetch(
-    `/api/brands/${brandId}/campaigns/${campaignId}/experiments/${experimentId}/conversation-map/preview-leads`,
+    `/api/brands/${brandId}/campaigns/${campaignId}/experiments/${experimentId}/conversation-map/preview-leads${suffix}`,
     { cache: "no-store" }
   );
   const data = await readJson(response);
@@ -490,6 +544,36 @@ export async function fetchConversationPreviewLeadsApi(
     runsChecked: Math.max(0, Number(data.runsChecked ?? 0) || 0),
     runtimeRefFound: Boolean(data.runtimeRefFound),
     sourceExperimentId: String(data.sourceExperimentId ?? ""),
+    qualifiedLeadCount: Math.max(0, Number(data.qualifiedLeadCount ?? 0) || 0),
+    qualifiedLeadWithEmailCount: Math.max(0, Number(data.qualifiedLeadWithEmailCount ?? 0) || 0),
+    qualifiedLeadWithoutEmailCount: Math.max(0, Number(data.qualifiedLeadWithoutEmailCount ?? 0) || 0),
+    previewEmailEnrichment:
+      data.previewEmailEnrichment && typeof data.previewEmailEnrichment === "object"
+        ? {
+            attempted: Math.max(
+              0,
+              Number((data.previewEmailEnrichment as Record<string, unknown>).attempted ?? 0) || 0
+            ),
+            matched: Math.max(
+              0,
+              Number((data.previewEmailEnrichment as Record<string, unknown>).matched ?? 0) || 0
+            ),
+            failed: Math.max(
+              0,
+              Number((data.previewEmailEnrichment as Record<string, unknown>).failed ?? 0) || 0
+            ),
+            provider: String(
+              (data.previewEmailEnrichment as Record<string, unknown>).provider ?? "emailfinder.batch"
+            ),
+            error: String((data.previewEmailEnrichment as Record<string, unknown>).error ?? ""),
+          }
+        : {
+            attempted: 0,
+            matched: 0,
+            failed: 0,
+            provider: "emailfinder.batch",
+            error: "",
+          },
   };
 }
 

@@ -37,6 +37,7 @@ export default function BrandSwitcher() {
   const pathname = usePathname();
   const pathBrandId = getActiveBrandIdFromPath(pathname);
   const [brands, setBrands] = useState<Brand[]>([]);
+  const [loadingBrands, setLoadingBrands] = useState(true);
   const [activeBrandId, setActiveBrandId] = useState(() =>
     pathBrandId || (typeof window !== "undefined" ? localStorage.getItem(ACTIVE_BRAND_KEY) ?? "" : "")
   );
@@ -49,6 +50,7 @@ export default function BrandSwitcher() {
 
   useEffect(() => {
     let mounted = true;
+    setLoadingBrands(true);
     const load = async () => {
       try {
         const response = await fetch("/api/brands", { cache: "no-store" });
@@ -62,6 +64,8 @@ export default function BrandSwitcher() {
         }
       } catch {
         if (mounted) setBrands([]);
+      } finally {
+        if (mounted) setLoadingBrands(false);
       }
     };
     load();
@@ -109,7 +113,8 @@ export default function BrandSwitcher() {
           router.push(`/brands/${brandId}`);
         }}
       >
-        {!brands.length ? <option value="">No brands</option> : null}
+        {loadingBrands && !brands.length ? <option value="">Loading brands...</option> : null}
+        {!loadingBrands && !brands.length ? <option value="">No brands</option> : null}
         {brands.map((brand) => (
           <option key={brand.id} value={brand.id}>
             {brand.name}

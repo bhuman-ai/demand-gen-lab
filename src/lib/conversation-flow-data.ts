@@ -223,6 +223,12 @@ function upgradeLegacyNodeCopy(node: ConversationFlowNode): ConversationFlowNode
   if (node.kind !== "message") return node;
   let subject = node.subject;
   let body = node.body;
+  const currentPromptTemplate = String(node.promptTemplate ?? "").trim();
+  const hasLegacyPromptScaffold =
+    !currentPromptTemplate ||
+    /write this node message for|use context variables only when available|legacy subject example|legacy body example|include exactly one clear cta sentence/i.test(
+      currentPromptTemplate
+    );
 
   if (subject === "Quick question" && body === "Hi {{firstName}},\n\nQuick question on {{brandName}}.") {
     subject = "Quick question on {{campaignGoal}}";
@@ -275,13 +281,13 @@ function upgradeLegacyNodeCopy(node: ConversationFlowNode): ConversationFlowNode
     subject,
     body,
     copyMode: "prompt_v1",
-    promptTemplate:
-      node.promptTemplate?.trim() ||
-      synthesizePromptTemplateFromLegacyCopy({
+    promptTemplate: hasLegacyPromptScaffold
+      ? synthesizePromptTemplateFromLegacyCopy({
         title: node.title,
         subject,
         body,
-      }),
+      })
+      : currentPromptTemplate,
     promptVersion: Math.max(1, Number(node.promptVersion || 1)),
     promptPolicy: normalizePromptPolicy(node.promptPolicy),
   };

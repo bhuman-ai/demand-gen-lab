@@ -58,7 +58,13 @@ function isRenderableSuggestion(suggestion: ExperimentSuggestionRecord) {
   );
 }
 
-export default function ExperimentsClient({ brandId }: { brandId: string }) {
+export default function ExperimentsClient({
+  brandId,
+  showFeedHint = false,
+}: {
+  brandId: string;
+  showFeedHint?: boolean;
+}) {
   const [brand, setBrand] = useState<BrandRecord | null>(null);
   const [experiments, setExperiments] = useState<ExperimentRecord[]>([]);
   const [suggestions, setSuggestions] = useState<ExperimentSuggestionRecord[]>([]);
@@ -159,6 +165,17 @@ export default function ExperimentsClient({ brandId }: { brandId: string }) {
           </Button>
         </CardContent>
       </Card>
+
+      {showFeedHint ? (
+        <Card className="border-[color:var(--accent)]/40 bg-[color:var(--surface-muted)]">
+          <CardHeader>
+            <CardTitle className="text-base">Quiz Completed: Strategy Feed Ready</CardTitle>
+            <CardDescription>
+              We generated experiment suggestions from your quiz + website context. Pick any card below to create a live experiment.
+            </CardDescription>
+          </CardHeader>
+        </Card>
+      ) : null}
 
       <div className="grid gap-4 md:grid-cols-3">
         <Card>

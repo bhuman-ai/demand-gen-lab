@@ -1699,7 +1699,10 @@ export default function ExperimentClient({
               </div>
             )}
             {experiment.runtime.campaignId && experiment.runtime.experimentId ? (
-              <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3">
+              <div
+                data-messaging-canvas-only
+                className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3"
+              >
                 <FlowEditorClient
                   brandId={brandId}
                   campaignId={experiment.runtime.campaignId}
@@ -1712,6 +1715,12 @@ export default function ExperimentClient({
                 Flow editor is unavailable until runtime mapping exists. Source prospects once, then reopen Messaging.
               </div>
             )}
+            <style jsx global>{`
+              [data-messaging-canvas-only] > div > :nth-child(1),
+              [data-messaging-canvas-only] > div > :nth-child(2) {
+                display: none;
+              }
+            `}</style>
           </CardContent>
         </Card>
       ) : null}

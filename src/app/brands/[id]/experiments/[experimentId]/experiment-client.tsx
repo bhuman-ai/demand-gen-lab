@@ -1672,7 +1672,7 @@ export default function ExperimentClient({
                       <div className="text-sm font-medium">Sourcing Trace</div>
                       {sourcingTrace?.latestDecision ? (
                         <div className="mt-2 space-y-2 text-xs text-[color:var(--muted-foreground)]">
-                          <div>Provider: Exa (no Apify fallback)</div>
+                          <div>Provider: Exa only</div>
                           <div className="rounded-lg border border-[color:var(--border)] p-2">
                             <div className="font-medium text-[color:var(--foreground)]">Selected chain</div>
                             <div className="mt-1 space-y-1">

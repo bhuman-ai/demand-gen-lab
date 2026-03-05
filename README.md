@@ -20,7 +20,6 @@ Copy `.env.example` to `.env.local` and fill values:
 - `OUTREACH_CRON_TOKEN` (optional, protects cron tick endpoint)
 - `CRON_SECRET` (optional legacy alias for tick auth token)
 - `CUSTOMER_IO_WEBHOOK_SECRET` (optional)
-- `APIFY_WEBHOOK_SECRET` (optional)
 
 ## Scheduler (Cloudflare Worker)
 
@@ -68,7 +67,6 @@ The worker schedule is configured in:
 - `GET /api/brands/:brandId/inbox/threads` — reply threads + draft queue
 - `POST /api/brands/:brandId/inbox/drafts/:draftId/send` — human-approved draft send
 - `POST /api/webhooks/customerio/events` — delivery/reply webhook intake
-- `POST /api/webhooks/apify/run-complete` — lead sourcing webhook intake
 - `POST /api/internal/outreach/tick` — cron worker tick
   - `GET` is also supported so Vercel Cron can call it directly.
 
@@ -95,3 +93,33 @@ Legacy campaign step routes (`/build`, `/run/*`, `/objective`, `/hypotheses`, `/
 npm run test:e2e:install
 npm run test:e2e
 ```
+
+## Product plan pipeline (ICP -> UX -> Critic -> optional UI review)
+
+Generate a build-ready `plan.md` from one idea:
+
+```bash
+npm run plan:generate -- --idea "AI platform that converts podcasts into viral short clips"
+```
+
+Generate from a brief file:
+
+```bash
+npm run plan:generate -- --brief /Users/don/factory-platform/FACTORY_PROJECT_BRIEF.md
+```
+
+Run with UI review using current app routes (captures desktop + mobile screenshots first):
+
+```bash
+npm run plan:generate -- \
+  --idea "Factory onboarding and campaign setup UX" \
+  --base-url http://localhost:3000 \
+  --routes "/,/brands,/brands/new,/logic"
+```
+
+Outputs:
+
+- `/Users/don/factory-platform/output/plan.md` (final plan)
+- `/Users/don/factory-platform/output/plan.icp.md` (ICP draft)
+- `/Users/don/factory-platform/output/plan.ux.md` (UX draft)
+- `/Users/don/factory-platform/output/ui-review.md` (only when screenshots are provided)

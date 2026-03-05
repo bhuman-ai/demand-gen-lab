@@ -1198,12 +1198,9 @@ async function testCustomerIoTrackCredentials(input: {
 }
 
 function sourcingToken(secrets: OutreachAccountSecrets) {
-  return (
-    secrets.apifyToken.trim() ||
-    String(process.env.APIFY_TOKEN ?? "").trim() ||
-    String(process.env.APIFY_API_TOKEN ?? "").trim() ||
-    String(process.env.APIFY_API_KEY ?? "").trim()
-  );
+  void secrets;
+  // Hard-disabled: platform no longer uses Apify for sourcing.
+  return "";
 }
 
 function normalizeApifyActorId(actorId: string) {
@@ -2339,7 +2336,7 @@ export async function testOutreachProviders(
     ? Boolean(account.config.customerIo.siteId && customerIoApiKey(secrets) && fromEmail)
     : true;
 
-  const rawSourcingPass = requiresDelivery ? Boolean(sourcingToken(secrets)) : true;
+  const rawSourcingPass = true;
   const rawMailboxPass = requiresMailbox
     ? Boolean(account.config.mailbox.email && (secrets.mailboxAccessToken || secrets.mailboxPassword))
     : true;

@@ -91,27 +91,22 @@ function normalizePromptPolicy(value: unknown): ConversationPromptPolicy {
   };
 }
 
-function synthesizePromptTemplateFromLegacyCopy(input: {
+function buildNodePromptTemplate(input: {
   title: string;
-  subject: string;
-  body: string;
+  hint?: string;
 }) {
   const title = oneLine(input.title) || "Message";
-  const subject = oneLine(input.subject);
-  const body = oneLine(String(input.body ?? ""));
-  const contextLines = [
-    subject ? `Subject intent: ${subject}` : "",
-    body ? `Body intent: ${truncate(body, 180)}` : "",
-  ].filter(Boolean);
+  const hint = truncate(oneLine(String(input.hint ?? "")), 180);
 
   return [
     `Write outbound email copy for node "${title}".`,
-    "Goal: earn a simple positive reply and continue the thread.",
+    "Primary goal: earn a simple positive reply and continue the thread.",
+    "Use campaign, experiment, and lead context dynamically; do not invent unavailable facts.",
     "Keep it short and concrete: 2-3 short paragraphs, plain language, no hype.",
     "Use variables only when available: {{firstName}}, {{company}}, {{leadTitle}}, {{brandName}}, {{campaignGoal}}, {{variantName}}, {{replyPreview}}, {{shortAnswer}}.",
     "Never output unresolved placeholders.",
     "Include exactly one low-friction CTA sentence (prefer yes/no).",
-    contextLines.length ? `Context:\n${contextLines.join("\n")}` : "",
+    hint ? `Node angle hint: ${hint}` : "",
   ]
     .filter(Boolean)
     .join("\n");
@@ -125,10 +120,9 @@ function defaultNode(position: { x: number; y: number }): ConversationFlowNode {
     kind: "message",
     title: "Message",
     copyMode: "prompt_v1",
-    promptTemplate: synthesizePromptTemplateFromLegacyCopy({
+    promptTemplate: buildNodePromptTemplate({
       title: "Message",
-      subject,
-      body,
+      hint: body,
     }),
     promptVersion: 1,
     promptPolicy: { ...DEFAULT_PROMPT_POLICY },
@@ -219,73 +213,22 @@ function extractInlineCta(value: string) {
   return match ? oneLine(match[1]) : "";
 }
 
-function upgradeLegacyNodeCopy(node: ConversationFlowNode): ConversationFlowNode {
+function normalizeMessageNodePromptTemplate(node: ConversationFlowNode): ConversationFlowNode {
   if (node.kind !== "message") return node;
-  let subject = node.subject;
-  let body = node.body;
   const currentPromptTemplate = String(node.promptTemplate ?? "").trim();
-  const hasLegacyPromptScaffold =
+  const hasDeprecatedPromptScaffold =
     !currentPromptTemplate ||
-    /write this node message for|use context variables only when available|legacy subject example|legacy body example|include exactly one clear cta sentence/i.test(
+    /subject intent:|body intent:|legacy subject example|legacy body example|write this node message for/i.test(
       currentPromptTemplate
     );
 
-  if (subject === "Quick question" && body === "Hi {{firstName}},\n\nQuick question on {{brandName}}.") {
-    subject = "Quick question on {{campaignGoal}}";
-    body =
-      "Hi {{firstName}},\n\nNoticed {{company}} and wanted to ask: are you actively working on {{campaignGoal}} right now?\n\nIf yes, I can share a short example from similar teams.";
-  }
-  if (
-    subject === "Quick question" &&
-    body === "Hi {{firstName}},\n\nQuick question: are you currently focused on {{campaignGoal}}?"
-  ) {
-    subject = "Quick question on {{campaignGoal}}";
-    body =
-      "Hi {{firstName}},\n\nNoticed {{company}} and wanted to ask: are you actively working on {{campaignGoal}} right now?\n\nIf yes, I can share a short example from similar teams.";
-  }
-  if (
-    subject === "Great to hear" &&
-    body === "Great to hear, {{firstName}}.\n\nBased on your note, want a short 10-minute walkthrough?"
-  ) {
-    subject = "Worth a 10-minute walkthrough?";
-    body =
-      "Great to hear, {{firstName}}.\n\nI can show a focused walkthrough for {{company}} on how teams improve {{campaignGoal}} with {{brandName}}.\n\nWould Tuesday or Wednesday be better?";
-  }
-  if (
-    subject === "Answering your question" &&
-    body === "Great question.\n\nHere is the shortest answer for your context: {{shortAnswer}}."
-  ) {
-    subject = "Short answer";
-    body =
-      "Great question, {{firstName}}.\n\nShort answer: {{shortAnswer}}\n\nIf useful, I can send one concrete example for {{company}}.";
-  }
-  if (
-    subject === "Makes sense" &&
-    body === "Totally fair.\n\nIf timing is the blocker, would revisiting in a few weeks help?"
-  ) {
-    subject = "Totally fair";
-    body =
-      "Makes sense. If timing is the blocker, I can send a one-page summary now and check back next month.\n\nWould that be more useful?";
-  }
-  if (
-    subject === "Worth a quick check" &&
-    body === "Just circling back in case this slipped.\n\nShould I close this out for now?"
-  ) {
-    subject = "Close the loop?";
-    body =
-      "Just checking once more, {{firstName}}.\n\nShould I close this out, or is there someone else at {{company}} who owns {{campaignGoal}}?";
-  }
-
   return {
     ...node,
-    subject,
-    body,
     copyMode: "prompt_v1",
-    promptTemplate: hasLegacyPromptScaffold
-      ? synthesizePromptTemplateFromLegacyCopy({
+    promptTemplate: hasDeprecatedPromptScaffold
+      ? buildNodePromptTemplate({
         title: node.title,
-        subject,
-        body,
+        hint: node.body || node.subject,
       })
       : currentPromptTemplate,
     promptVersion: Math.max(1, Number(node.promptVersion || 1)),
@@ -313,10 +256,9 @@ export function defaultConversationGraph(context: ConversationSeedContext = {}):
         inferredCta || "If this is relevant, open to a short walkthrough?"
       }`
     : "Hi {{firstName}},\n\nNoticed {{company}} and wanted to ask: are you actively working on {{campaignGoal}} right now?\n\nIf yes, I can share a short example from similar teams.";
-  start.promptTemplate = synthesizePromptTemplateFromLegacyCopy({
+  start.promptTemplate = buildNodePromptTemplate({
     title: start.title,
-    subject: start.subject,
-    body: start.body,
+    hint: start.body,
   });
 
   const interest = defaultNode({ x: 420, y: 80 });
@@ -330,10 +272,9 @@ export function defaultConversationGraph(context: ConversationSeedContext = {}):
     }`;
   interest.autoSend = true;
   interest.delayMinutes = 0;
-  interest.promptTemplate = synthesizePromptTemplateFromLegacyCopy({
+  interest.promptTemplate = buildNodePromptTemplate({
     title: interest.title,
-    subject: interest.subject,
-    body: interest.body,
+    hint: interest.body,
   });
 
   const question = defaultNode({ x: 420, y: 220 });
@@ -342,10 +283,9 @@ export function defaultConversationGraph(context: ConversationSeedContext = {}):
   question.body =
     "Great question, {{firstName}}.\n\nShort answer: {{shortAnswer}}\n\nIf useful, I can send one concrete example using your use case for {{company}}.";
   question.autoSend = false;
-  question.promptTemplate = synthesizePromptTemplateFromLegacyCopy({
+  question.promptTemplate = buildNodePromptTemplate({
     title: question.title,
-    subject: question.subject,
-    body: question.body,
+    hint: question.body,
   });
 
   const objection = defaultNode({ x: 420, y: 360 });
@@ -354,10 +294,9 @@ export function defaultConversationGraph(context: ConversationSeedContext = {}):
   objection.body =
     `Makes sense. If timing is the blocker, I can send a concise one-pager on ${campaignGoal} and you can review async.\n\nWould that be more useful?`;
   objection.autoSend = false;
-  objection.promptTemplate = synthesizePromptTemplateFromLegacyCopy({
+  objection.promptTemplate = buildNodePromptTemplate({
     title: objection.title,
-    subject: objection.subject,
-    body: objection.body,
+    hint: objection.body,
   });
 
   const noReply = defaultNode({ x: 780, y: 220 });
@@ -367,10 +306,9 @@ export function defaultConversationGraph(context: ConversationSeedContext = {}):
     `Just checking once more, {{firstName}}.\n\nShould I close this out, or is there someone else at {{company}} who owns ${campaignGoal}?`;
   noReply.autoSend = true;
   noReply.delayMinutes = 1440;
-  noReply.promptTemplate = synthesizePromptTemplateFromLegacyCopy({
+  noReply.promptTemplate = buildNodePromptTemplate({
     title: noReply.title,
-    subject: noReply.subject,
-    body: noReply.body,
+    hint: noReply.body,
   });
 
   const end = defaultTerminalNode({ x: 1120, y: 220 });
@@ -508,14 +446,13 @@ function normalizeNode(value: unknown): ConversationFlowNode | null {
     x: Number.isFinite(x) ? x : 0,
     y: Number.isFinite(y) ? y : 0,
   };
-  node = upgradeLegacyNodeCopy(node);
+  node = normalizeMessageNodePromptTemplate(node);
   if (node.kind === "message" && !node.promptTemplate.trim()) {
     node = {
       ...node,
-      promptTemplate: synthesizePromptTemplateFromLegacyCopy({
+      promptTemplate: buildNodePromptTemplate({
         title: node.title,
-        subject: node.subject,
-        body: node.body,
+        hint: node.body || node.subject,
       }),
     };
   }

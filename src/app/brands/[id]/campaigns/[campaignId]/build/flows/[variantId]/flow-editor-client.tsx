@@ -401,11 +401,13 @@ export default function FlowEditorClient({
   campaignId,
   variantId,
   backHref,
+  hideOverviewCard = false,
 }: {
   brandId: string;
   campaignId: string;
   variantId: string;
   backHref?: string;
+  hideOverviewCard?: boolean;
 }) {
   const canvasRef = useRef<HTMLDivElement | null>(null);
   const zoomFrameRef = useRef<number | null>(null);
@@ -1065,39 +1067,41 @@ export default function FlowEditorClient({
 
   return (
     <div className="grid gap-4">
-      <Card>
-        <CardHeader className="flex flex-row items-start justify-between gap-3">
-          <div>
-            <CardTitle className="text-base">Conversation Map Canvas</CardTitle>
-            <CardDescription>
-              {brandName} - {campaignName} - {variantName}
-            </CardDescription>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            <Badge variant={map?.status === "published" ? "success" : "muted"}>{map?.status || "draft"}</Badge>
-            <Badge variant="muted">Revision {map?.publishedRevision ?? 0}</Badge>
-          </div>
-        </CardHeader>
-        <CardContent className="flex flex-wrap items-center gap-2">
-          <Button type="button" variant="outline" onClick={generate} disabled={generating}>
-            <RefreshCw className="h-4 w-4" />
-            {generating ? "Roleplay screening..." : "Generate AI Map"}
-          </Button>
-          <Button type="button" variant="outline" onClick={saveDraft} disabled={saving}>
-            <Save className="h-4 w-4" />
-            {saving ? "Saving..." : "Save Draft"}
-          </Button>
-          <Button type="button" onClick={publish} disabled={publishing}>
-            <Upload className="h-4 w-4" />
-            {publishing ? "Publishing..." : "Publish"}
-          </Button>
-          <Button asChild type="button" variant="ghost">
-            <Link href={backHref || `/brands/${brandId}/campaigns/${campaignId}/build`}>Back</Link>
-          </Button>
-        </CardContent>
-        {statusMessage ? <CardContent className="pt-0 text-sm text-[color:var(--accent)]">{statusMessage}</CardContent> : null}
-        {error ? <CardContent className="pt-0 text-sm text-[color:var(--danger)]">{error}</CardContent> : null}
-      </Card>
+      {!hideOverviewCard ? (
+        <Card>
+          <CardHeader className="flex flex-row items-start justify-between gap-3">
+            <div>
+              <CardTitle className="text-base">Conversation Map Canvas</CardTitle>
+              <CardDescription>
+                {brandName} - {campaignName} - {variantName}
+              </CardDescription>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <Badge variant={map?.status === "published" ? "success" : "muted"}>{map?.status || "draft"}</Badge>
+              <Badge variant="muted">Revision {map?.publishedRevision ?? 0}</Badge>
+            </div>
+          </CardHeader>
+          <CardContent className="flex flex-wrap items-center gap-2">
+            <Button type="button" variant="outline" onClick={generate} disabled={generating}>
+              <RefreshCw className="h-4 w-4" />
+              {generating ? "Roleplay screening..." : "Generate AI Map"}
+            </Button>
+            <Button type="button" variant="outline" onClick={saveDraft} disabled={saving}>
+              <Save className="h-4 w-4" />
+              {saving ? "Saving..." : "Save Draft"}
+            </Button>
+            <Button type="button" onClick={publish} disabled={publishing}>
+              <Upload className="h-4 w-4" />
+              {publishing ? "Publishing..." : "Publish"}
+            </Button>
+            <Button asChild type="button" variant="ghost">
+              <Link href={backHref || `/brands/${brandId}/campaigns/${campaignId}/build`}>Back</Link>
+            </Button>
+          </CardContent>
+          {statusMessage ? <CardContent className="pt-0 text-sm text-[color:var(--accent)]">{statusMessage}</CardContent> : null}
+          {error ? <CardContent className="pt-0 text-sm text-[color:var(--danger)]">{error}</CardContent> : null}
+        </Card>
+      ) : null}
 
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_320px]">
         <Card className="overflow-hidden">

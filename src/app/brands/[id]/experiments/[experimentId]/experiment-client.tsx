@@ -29,10 +29,8 @@ import { Textarea } from "@/components/ui/textarea";
 const PROSPECT_VALIDATION_TARGET = 20;
 const PROSPECT_VALIDATION_MIN_READY = PROSPECT_VALIDATION_TARGET;
 const STAGE_COUNT = 4;
-const AUTO_SOURCE_MAX_ATTEMPTS = 6;
-const AUTO_SOURCE_POLL_ROUNDS = 30;
 const AUTO_SOURCE_POLL_INTERVAL_MS = 2000;
-const AUTO_SOURCE_STALE_ATTEMPT_LIMIT = 2;
+const AUTO_SOURCE_RETRY_DELAY_MS = 1500;
 const CSV_MAX_CHARS = 2_000_000;
 
 type StageIndex = 0 | 1 | 2 | 3;
@@ -300,6 +298,7 @@ export default function ExperimentClient({
   const [samplingRunsLaunched, setSamplingRunsLaunched] = useState(0);
   const [samplingActiveRunId, setSamplingActiveRunId] = useState("");
   const [samplingHeartbeatAt, setSamplingHeartbeatAt] = useState("");
+  const [autoSourcePaused, setAutoSourcePaused] = useState(false);
   const [prospectInputMode, setProspectInputMode] = useState<ProspectInputMode>("need_data");
   const [csvFileName, setCsvFileName] = useState("");
   const [csvText, setCsvText] = useState("");
@@ -706,11 +705,16 @@ export default function ExperimentClient({
   const goPrev = () => setCurrentStage((prev) => asStageIndex(prev - 1));
 
   const stopAutoSource = async () => {
-    if (!sampling || !experiment) return;
+    if (!experiment) return;
+    setAutoSourcePaused(true);
+    if (!sampling) {
+      setSamplingSummary("Auto-source paused.");
+      return;
+    }
     samplingStopRequestedRef.current = true;
     samplingAbortRef.current?.abort();
     setSamplingStatus("Stopping auto-source...");
-    setSamplingSummary("Stop requested. Finishing current sync and refreshing latest run status.");
+    setSamplingSummary("Auto-source paused. Finishing current sync and refreshing latest run status.");
 
     const activeRunId = samplingActiveRunIdRef.current;
     if (!activeRunId) return;
@@ -728,14 +732,15 @@ export default function ExperimentClient({
   };
 
   const autoSourceProspects = async () => {
-    if (!experiment || sampling) return;
+    if (!experiment || sampling || prospectsReady || prospectInputMode !== "need_data") return;
     const abortController = new AbortController();
     samplingAbortRef.current = abortController;
     samplingStopRequestedRef.current = false;
     samplingActiveRunIdRef.current = "";
+    setAutoSourcePaused(false);
     setSampling(true);
     setError("");
-    setSamplingStatus("Starting automatic sourcing...");
+    setSamplingStatus("Starting continuous auto-sourcing...");
     setSamplingSummary("");
     setSamplingAttempt(0);
     setSamplingRunsLaunched(0);
@@ -750,10 +755,9 @@ export default function ExperimentClient({
 
     let attempts = 0;
     let bestLeadCount = realEmailLeadCount;
-    let staleAttempts = 0;
 
     try {
-      while (attempts < AUTO_SOURCE_MAX_ATTEMPTS && bestLeadCount < targetLeads) {
+      while (bestLeadCount < targetLeads) {
         if (samplingStopRequestedRef.current || abortController.signal.aborted) {
           setSamplingSummary(
             `Auto-sourcing stopped by user after ${attempts} attempt${attempts === 1 ? "" : "s"}.`
@@ -763,17 +767,30 @@ export default function ExperimentClient({
 
         attempts += 1;
         setSamplingAttempt(attempts);
-        setSamplingStatus(
-          `Attempt ${attempts}/${AUTO_SOURCE_MAX_ATTEMPTS}: launching sourcing run...`
-        );
+        setSamplingStatus(`Attempt ${attempts}: launching sourcing run...`);
         setSamplingHeartbeatAt(new Date().toISOString());
 
-        const launch = await sourceExperimentSampleLeadsApi(
-          brandId,
-          experiment.id,
-          sampleSize,
-          { timeoutMs: 25_000, signal: abortController.signal }
-        );
+        let launch: Awaited<ReturnType<typeof sourceExperimentSampleLeadsApi>>;
+        try {
+          launch = await sourceExperimentSampleLeadsApi(
+            brandId,
+            experiment.id,
+            sampleSize,
+            { timeoutMs: 25_000, signal: abortController.signal }
+          );
+        } catch (err) {
+          const launchError = err instanceof Error ? err.message : "Failed to launch sourcing run";
+          if (samplingStopRequestedRef.current || abortController.signal.aborted || /aborted/i.test(launchError)) {
+            setSamplingSummary(
+              `Auto-sourcing stopped by user after ${attempts} attempt${attempts === 1 ? "" : "s"}.`
+            );
+            return;
+          }
+          setSamplingStatus(`Attempt ${attempts}: launch failed, retrying...`);
+          setSamplingSummary(`Attempt ${attempts} failed (${launchError}). Retrying automatically...`);
+          await wait(AUTO_SOURCE_RETRY_DELAY_MS);
+          continue;
+        }
         setSamplingRunsLaunched((prev) => prev + 1);
         setSamplingActiveRunId(launch.runId);
         samplingActiveRunIdRef.current = launch.runId;
@@ -781,12 +798,10 @@ export default function ExperimentClient({
         let attemptBestCount = bestLeadCount;
         let latestRunStatus: OutreachRun["status"] | null = null;
         let latestRunPhase = "";
-        setSamplingStatus(
-          `Attempt ${attempts}/${AUTO_SOURCE_MAX_ATTEMPTS}: run ${launch.runId.slice(-6) || "started"} in progress...`
-        );
+        setSamplingStatus(`Attempt ${attempts}: run ${launch.runId.slice(-6) || "started"} in progress...`);
         setSamplingHeartbeatAt(new Date().toISOString());
 
-        for (let poll = 0; poll < AUTO_SOURCE_POLL_ROUNDS; poll += 1) {
+        while (attemptBestCount < targetLeads) {
           if (samplingStopRequestedRef.current || abortController.signal.aborted) {
             setSamplingSummary(
               `Auto-sourcing stopped by user after ${attempts} attempt${attempts === 1 ? "" : "s"}.`
@@ -794,12 +809,21 @@ export default function ExperimentClient({
             return;
           }
           await wait(AUTO_SOURCE_POLL_INTERVAL_MS);
-          const snapshot = await refresh(false);
+          let snapshot: RefreshSnapshot;
+          try {
+            snapshot = await refresh(false);
+          } catch (err) {
+            const pollError = err instanceof Error ? err.message : "Refresh failed";
+            setSamplingStatus(`Attempt ${attempts}: polling error, retrying...`);
+            setSamplingSummary(`Attempt ${attempts}: ${pollError}. Continuing to monitor...`);
+            setSamplingHeartbeatAt(new Date().toISOString());
+            continue;
+          }
           attemptBestCount = Math.max(attemptBestCount, snapshot.sourcedLeadWithEmailCount);
           latestRunStatus = snapshot.runView.runs[0]?.status ?? null;
           latestRunPhase = snapshot.runView.runs[0]?.sourcingTraceSummary?.phase ?? "";
           setSamplingStatus(
-            `Attempt ${attempts}/${AUTO_SOURCE_MAX_ATTEMPTS}: ${attemptBestCount}/${targetLeads} quality leads with real emails (${latestRunPhase || latestRunStatus || "processing"})`
+            `Attempt ${attempts}: ${attemptBestCount}/${targetLeads} quality leads with real emails (${latestRunPhase || latestRunStatus || "processing"})`
           );
           setSamplingHeartbeatAt(new Date().toISOString());
 
@@ -811,9 +835,7 @@ export default function ExperimentClient({
           }
         }
 
-        const improvedThisAttempt = attemptBestCount > bestLeadCount;
         bestLeadCount = Math.max(bestLeadCount, attemptBestCount);
-        staleAttempts = improvedThisAttempt ? 0 : staleAttempts + 1;
 
         if (bestLeadCount >= targetLeads) {
           setSamplingSummary(
@@ -822,31 +844,15 @@ export default function ExperimentClient({
           return;
         }
 
-        if (latestRunStatus && !isRunTerminal(latestRunStatus)) {
-          setSamplingSummary(
-            `Run ${launch.runId.slice(-6) || "active"} is still in progress (${latestRunPhase || latestRunStatus}). Refresh snapshot in 20-30s, or stop and retry.`
-          );
-          return;
-        }
-
-        if (staleAttempts >= AUTO_SOURCE_STALE_ATTEMPT_LIMIT) {
-          setSamplingSummary(
-            `Stopped after ${attempts} attempts: still ${bestLeadCount}/${targetLeads} leads (no quality increase across the last ${AUTO_SOURCE_STALE_ATTEMPT_LIMIT} attempts).`
-          );
-          return;
-        }
-
+        setSamplingSummary(
+          `Attempt ${attempts} completed: ${bestLeadCount}/${targetLeads} verified leads. Continuing...`
+        );
+        await wait(AUTO_SOURCE_RETRY_DELAY_MS);
       }
 
-      if (bestLeadCount >= targetLeads) {
-        setSamplingSummary(
-            `Prospect validation passed automatically: ${bestLeadCount}/${targetLeads} quality leads with real emails.`
-        );
-      } else {
-        setSamplingSummary(
-          `Stopped after ${AUTO_SOURCE_MAX_ATTEMPTS} attempts: ${bestLeadCount}/${targetLeads} quality leads with real emails. Check the Sourcing Trace and adjust audience/offer constraints if needed.`
-        );
-      }
+      setSamplingSummary(
+        `Prospect validation passed automatically: ${bestLeadCount}/${targetLeads} quality leads with real emails.`
+      );
     } catch (err) {
       const message = err instanceof Error ? err.message : "Failed to auto-source prospects";
       if (samplingStopRequestedRef.current || /aborted/i.test(message)) {
@@ -875,6 +881,25 @@ export default function ExperimentClient({
       }
     }
   };
+
+  useEffect(() => {
+    if (loading || !experiment) return;
+    if (currentStage !== 1) return;
+    if (prospectInputMode !== "need_data") return;
+    if (!prospectsUnlocked || prospectsReady) return;
+    if (sampling || autoSourcePaused) return;
+    void autoSourceProspects();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    loading,
+    experiment?.id,
+    currentStage,
+    prospectInputMode,
+    prospectsUnlocked,
+    prospectsReady,
+    sampling,
+    autoSourcePaused,
+  ]);
 
   if (loading || !experiment || !runView) {
     return <div className="text-sm text-[color:var(--muted-foreground)]">Loading experiment...</div>;
@@ -1127,12 +1152,13 @@ export default function ExperimentClient({
                   ) : null}
                   {samplingAttempt > 0 ? (
                     <Badge variant="muted">
-                      Session attempts: {samplingAttempt}/{AUTO_SOURCE_MAX_ATTEMPTS}
+                      Session attempts: {samplingAttempt}
                     </Badge>
                   ) : null}
                   {samplingRunsLaunched > 0 ? (
                     <Badge variant="muted">Runs launched: {samplingRunsLaunched}</Badge>
                   ) : null}
+                  {autoSourcePaused ? <Badge variant="accent">Auto-source paused</Badge> : null}
                 </div>
               </details>
             </div>
@@ -1179,20 +1205,21 @@ export default function ExperimentClient({
                   <div>
                     <div className="text-sm font-medium">Auto-source prospects</div>
                     <div className="text-xs text-[color:var(--muted-foreground)]">
-                      Runs repeated attempts until quality target is met or a stop condition is reached.
+                      Keeps running automatically until {PROSPECT_VALIDATION_TARGET} verified work emails are found.
                     </div>
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
                     <Button
                       type="button"
                       variant="outline"
-                      disabled={sampling}
+                      disabled={sampling || prospectsReady}
                       onClick={() => {
+                        setAutoSourcePaused(false);
                         void autoSourceProspects();
                       }}
                     >
                       <RefreshCw className={`h-4 w-4 ${sampling ? "animate-spin" : ""}`} />
-                      {sampling ? "Auto-sourcing..." : "Source Prospects"}
+                      {sampling ? "Auto-sourcing..." : autoSourcePaused ? "Resume Auto-source" : "Start now"}
                     </Button>
                     <Button
                       type="button"
@@ -1216,8 +1243,32 @@ export default function ExperimentClient({
                   </div>
                 </div>
 
+                <div className="rounded-lg border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-2">
+                  <div className="flex items-center justify-between gap-2 text-xs">
+                    <span className="font-medium text-[color:var(--foreground)]">Auto-source progress</span>
+                    <span className="text-[color:var(--muted-foreground)]">
+                      {realEmailLeadCount}/{PROSPECT_VALIDATION_TARGET}
+                    </span>
+                  </div>
+                  <div className="mt-2 h-2 overflow-hidden rounded-full bg-[color:var(--surface-muted)]">
+                    <div
+                      className={`h-full rounded-full ${prospectsReady ? "bg-[color:var(--success)]" : "bg-[color:var(--accent)]"} ${sampling ? "animate-pulse" : ""}`}
+                      style={{ width: `${gateProgressPct}%` }}
+                    />
+                  </div>
+                  <div className="mt-2 text-xs text-[color:var(--muted-foreground)]">
+                    {prospectsReady
+                      ? "Target reached."
+                      : autoSourcePaused
+                        ? "Auto-source is paused. Click Resume to continue."
+                        : sampling
+                          ? "Auto-source is actively running and retrying until target is reached."
+                          : "Auto-source will run automatically in this stage."}
+                  </div>
+                </div>
+
                 <div className="rounded-lg border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-2 text-xs text-[color:var(--muted-foreground)]">
-                  If status does not change for 30s, use <strong>Stop</strong>, then rerun.
+                  If status does not change for 30s, use <strong>Stop</strong>, then <strong>Resume</strong>.
                   {samplingActiveRunId ? ` Active run: ${samplingActiveRunId.slice(-6)}.` : ""}
                   {samplingHeartbeatAt ? ` Last update: ${formatDate(samplingHeartbeatAt)}.` : ""}
                 </div>

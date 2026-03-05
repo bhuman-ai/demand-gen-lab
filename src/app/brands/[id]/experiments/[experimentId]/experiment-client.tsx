@@ -445,6 +445,10 @@ export default function ExperimentClient({
   const launchActive = launchUnlocked && Boolean(latestRun && !isRunTerminal(latestRun.status));
   const highestUnlockedStage = launchUnlocked ? 3 : messagingUnlocked ? 2 : prospectsUnlocked ? 1 : 0;
   const remainingProspectLeads = Math.max(0, PROSPECT_VALIDATION_TARGET - realEmailLeadCount);
+  const gateProgressPct = Math.max(
+    0,
+    Math.min(100, Math.round((realEmailLeadCount / Math.max(1, PROSPECT_VALIDATION_TARGET)) * 100))
+  );
 
   const progressDoneCount =
     (setupComplete ? 1 : 0) +
@@ -1078,7 +1082,7 @@ export default function ExperimentClient({
                 <div>
                   <div className="text-sm font-medium">Prospect Gate</div>
                   <div className="text-xs text-[color:var(--muted-foreground)]">
-                    Only leads with real work emails count.
+                    {realEmailLeadCount}/{PROSPECT_VALIDATION_TARGET} verified work emails
                   </div>
                 </div>
                 <Badge variant={prospectsReady ? "success" : "accent"}>
@@ -1086,51 +1090,20 @@ export default function ExperimentClient({
                 </Badge>
               </div>
 
-              <div className="mt-3 grid gap-2 md:grid-cols-2">
-                <div className="rounded-lg border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-2">
-                  <div className="text-xs text-[color:var(--muted-foreground)]">Gate requirement</div>
-                  <div className="text-sm font-medium">
-                    {PROSPECT_VALIDATION_TARGET} verified work emails required
-                  </div>
+              <div className="mt-3">
+                <div className="h-2 overflow-hidden rounded-full bg-[color:var(--surface)]">
+                  <div
+                    className={`h-full rounded-full ${prospectsReady ? "bg-[color:var(--success)]" : "bg-[color:var(--accent)]"}`}
+                    style={{ width: `${gateProgressPct}%` }}
+                  />
                 </div>
-                <div className="rounded-lg border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-2">
-                  <div className="text-xs text-[color:var(--muted-foreground)]">Current gate outcome</div>
-                  <div className="text-sm font-medium">
-                    {prospectsReady ? "Messaging unlocked" : `${remainingProspectLeads} more needed`}
-                  </div>
-                </div>
-              </div>
-
-              <div className="mt-3 grid gap-2 md:grid-cols-3">
-                <div className="rounded-lg border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-2">
-                  <div className="text-xs text-[color:var(--muted-foreground)]">Valid leads</div>
-                  <div className={`text-lg font-semibold ${prospectsReady ? "text-[color:var(--success)]" : "text-[color:var(--warning)]"}`}>
-                    {realEmailLeadCount}
-                  </div>
-                </div>
-                <div className="rounded-lg border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-2">
-                  <div className="text-xs text-[color:var(--muted-foreground)]">Remaining</div>
-                  <div className="text-lg font-semibold">{remainingProspectLeads}</div>
-                </div>
-                <div className="rounded-lg border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-2">
-                  <div className="text-xs text-[color:var(--muted-foreground)]">Total candidates</div>
-                  <div className="text-lg font-semibold">{sourcedLeadCount}</div>
-                </div>
-              </div>
-
-              <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-[color:var(--muted-foreground)]">
-                <Badge variant="muted">Preview runs scanned: {sampleLeadRunsChecked}</Badge>
-                {sampleLeadSourceExperimentId ? (
-                  <Badge variant="muted">Source owner: {sampleLeadSourceExperimentId}</Badge>
-                ) : null}
-                {samplingAttempt > 0 ? (
-                  <Badge variant="muted">
-                    Session attempts: {samplingAttempt}/{AUTO_SOURCE_MAX_ATTEMPTS}
+                <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
+                  <Badge variant={prospectsReady ? "success" : "muted"}>Valid: {realEmailLeadCount}</Badge>
+                  <Badge variant={remainingProspectLeads === 0 ? "success" : "muted"}>
+                    Remaining: {remainingProspectLeads}
                   </Badge>
-                ) : null}
-                {samplingRunsLaunched > 0 ? (
-                  <Badge variant="muted">Runs launched: {samplingRunsLaunched}</Badge>
-                ) : null}
+                  <Badge variant="muted">Candidates: {sourcedLeadCount}</Badge>
+                </div>
               </div>
 
               {!prospectsReady ? (
@@ -1139,9 +1112,29 @@ export default function ExperimentClient({
                 </div>
               ) : !samplingSummary ? (
                 <div className="mt-3 rounded-lg border border-[color:var(--success)]/40 bg-[color:var(--success-soft)] px-3 py-2 text-sm text-[color:var(--success)]">
-                  Gate passed. You can move to Messaging.
+                  Gate passed. Messaging is unlocked.
                 </div>
               ) : null}
+
+              <details className="mt-3 rounded-lg border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-2 text-xs text-[color:var(--muted-foreground)]">
+                <summary className="cursor-pointer list-none font-medium text-[color:var(--foreground)]">
+                  Run context
+                </summary>
+                <div className="mt-2 flex flex-wrap items-center gap-2">
+                  <Badge variant="muted">Preview runs scanned: {sampleLeadRunsChecked}</Badge>
+                  {sampleLeadSourceExperimentId ? (
+                    <Badge variant="muted">Source owner: {sampleLeadSourceExperimentId}</Badge>
+                  ) : null}
+                  {samplingAttempt > 0 ? (
+                    <Badge variant="muted">
+                      Session attempts: {samplingAttempt}/{AUTO_SOURCE_MAX_ATTEMPTS}
+                    </Badge>
+                  ) : null}
+                  {samplingRunsLaunched > 0 ? (
+                    <Badge variant="muted">Runs launched: {samplingRunsLaunched}</Badge>
+                  ) : null}
+                </div>
+              </details>
             </div>
 
             <div className="space-y-2">
@@ -1177,9 +1170,6 @@ export default function ExperimentClient({
                     </div>
                   </button>
                 </div>
-              </div>
-              <div className="text-xs text-[color:var(--muted-foreground)]">
-                Pick one path first. You can switch at any time.
               </div>
             </div>
 
@@ -1370,20 +1360,20 @@ export default function ExperimentClient({
 
             {sampleLeadError ? <div className="text-sm text-[color:var(--danger)]">{sampleLeadError}</div> : null}
 
-            <div className="space-y-2">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <div className="text-sm font-medium">Current Leads</div>
-                <div className="flex flex-wrap items-center gap-2 text-xs">
-                  <Badge variant="success">Verified in preview: {previewValidLeadCount}</Badge>
+            <details className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3">
+              <summary className="flex cursor-pointer list-none flex-wrap items-center justify-between gap-2">
+                <span className="text-sm font-medium text-[color:var(--foreground)]">Current Leads</span>
+                <span className="flex flex-wrap items-center gap-2 text-xs">
+                  <Badge variant="success">Verified: {previewValidLeadCount}</Badge>
                   <Badge variant="muted">Missing email: {previewMissingLeadCount}</Badge>
                   <span className="text-[color:var(--muted-foreground)]">
-                    Preview rows: {sampleLeads.length}/{Math.max(sampleLeads.length, sourcedLeadCount)}
+                    Rows: {sampleLeads.length}/{Math.max(sampleLeads.length, sourcedLeadCount)}
                   </span>
-                </div>
-              </div>
+                </span>
+              </summary>
               {sampleLeads.length ? (
-                <div className="grid gap-2 md:grid-cols-2">
-                  {sampleLeads.slice(0, 20).map((lead) => (
+                <div className="mt-3 grid gap-2 md:grid-cols-2">
+                  {sampleLeads.slice(0, 8).map((lead) => (
                     <div key={`${lead.id}:${lead.email}`} className="rounded-lg border border-[color:var(--border)] p-3 text-xs">
                       <div className="flex items-center justify-between gap-2">
                         <div className="font-medium text-sm">{lead.name || "(missing name)"}</div>
@@ -1401,13 +1391,13 @@ export default function ExperimentClient({
                   ))}
                 </div>
               ) : (
-                <div className="rounded-lg border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-2 text-sm text-[color:var(--muted-foreground)]">
+                <div className="mt-3 rounded-lg border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-2 text-sm text-[color:var(--muted-foreground)]">
                   {hasLeadDiagnostics
-                    ? "No accepted leads in the latest run. Open Advanced Diagnostics below for rejection and verification details."
+                    ? "No accepted leads in the latest run. Open Advanced Diagnostics for rejection and verification details."
                     : "No sample leads yet."}
                 </div>
               )}
-            </div>
+            </details>
 
             <details className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3">
               <summary className="flex cursor-pointer list-none items-center justify-between gap-2 text-sm font-medium text-[color:var(--foreground)]">

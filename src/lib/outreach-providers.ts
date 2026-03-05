@@ -27,6 +27,7 @@ export type ApifyLead = {
   title: string;
   domain: string;
   sourceUrl: string;
+  realVerifiedEmail?: boolean;
 };
 
 export type ApifyStoreActor = {
@@ -39,6 +40,30 @@ export type ApifyStoreActor = {
   pricingModel: string;
   pricePerUnitUsd: number;
   trialMinutes: number;
+};
+
+export type EmailFinderVerificationMode = "validatedmails";
+
+export type EmailFinderBatchEnrichmentResult = {
+  ok: boolean;
+  leads: ApifyLead[];
+  attempted: number;
+  matched: number;
+  failed: number;
+  provider: string;
+  error: string;
+  failureSummary: Array<{ reason: string; count: number }>;
+  failedSamples: Array<{
+    id: string;
+    name: string;
+    domain: string;
+    reason: string;
+    error: string;
+    topAttemptEmail: string;
+    topAttemptVerdict: string;
+    topAttemptConfidence: string;
+    topAttemptReason: string;
+  }>;
 };
 
 export type ApifyActorSchemaProfile = {
@@ -61,6 +86,7 @@ export type ActorCompatibilityDecision = {
 export type LeadQualityDecision = LeadAcceptanceDecision;
 
 export type LeadEmailSuppressionReason = "invalid_email" | "placeholder_domain" | "role_account";
+const PREVIEW_PLACEHOLDER_EMAIL_PREFIX = "preview-missing-email+";
 
 const ROLE_ACCOUNT_LOCALS = new Set([
   "info",
@@ -137,8 +163,21 @@ const FREE_EMAIL_DOMAINS = new Set([
   "126.com",
 ]);
 
+const NON_COMPANY_PROFILE_DOMAIN_ROOTS = new Set([
+  "linkedin.com",
+  "linkedin.co",
+  "facebook.com",
+  "x.com",
+  "twitter.com",
+  "instagram.com",
+]);
+
 const STRICT_EMAIL_PATTERN = /^([a-z0-9._%+-]+)@([a-z0-9.-]+\.[a-z]{2,})$/i;
 const EMBEDDED_EMAIL_PATTERN = /([a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,})/i;
+
+export function isPreviewPlaceholderEmail(email: string) {
+  return extractFirstEmailAddress(email).startsWith(PREVIEW_PLACEHOLDER_EMAIL_PREFIX);
+}
 
 function isRoleAccountLocal(local: string) {
   if (!local) return true;
@@ -179,14 +218,28 @@ function isRoleAccountLocal(local: string) {
   return false;
 }
 
+function isNonCompanyProfileDomain(domain: string) {
+  const normalized = domain
+    .trim()
+    .toLowerCase()
+    .replace(/^www\./, "")
+    .replace(/\.+$/, "");
+  if (!normalized) return false;
+  for (const root of NON_COMPANY_PROFILE_DOMAIN_ROOTS) {
+    if (normalized === root || normalized.endsWith(`.${root}`)) return true;
+  }
+  return false;
+}
+
 export function getLeadEmailSuppressionReason(email: string): LeadEmailSuppressionReason | "" {
   const normalized = email.trim().toLowerCase();
+  if (normalized.startsWith(PREVIEW_PLACEHOLDER_EMAIL_PREFIX)) return "invalid_email";
   const match = normalized.match(STRICT_EMAIL_PATTERN);
   if (!match) return "invalid_email";
 
   const local = match[1];
   const domain = match[2].replace(/\.+$/, "");
-  if (PLACEHOLDER_EMAIL_DOMAINS.has(domain)) return "placeholder_domain";
+  if (PLACEHOLDER_EMAIL_DOMAINS.has(domain) || isNonCompanyProfileDomain(domain)) return "placeholder_domain";
   if (isRoleAccountLocal(local)) return "role_account";
   return "";
 }
@@ -233,7 +286,7 @@ function inferCompanyFromDomain(input: string) {
   if (!raw) return "";
   const domain = raw.includes("@") ? raw.split("@")[1] ?? "" : raw;
   const normalized = domain.replace(/^www\./, "");
-  if (!normalized || isLikelyFreeDomain(normalized)) return "";
+  if (!normalized || isLikelyFreeDomain(normalized) || isNonCompanyProfileDomain(normalized)) return "";
   const root = normalized.split(".")[0] ?? "";
   if (!root || root.length < 2) return "";
   if (["mail", "smtp", "mx", "email", "contact"].includes(root)) return "";
@@ -502,11 +555,557 @@ function isLikelyFreeDomain(domain: string) {
   return FREE_EMAIL_DOMAINS.has(domain.trim().toLowerCase());
 }
 
+function isLikelyHumanName(name: string) {
+  const normalized = String(name ?? "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!normalized) return false;
+  if (normalized.length > 80) return false;
+  const tokens = normalized
+    .split(" ")
+    .map((token) => token.trim())
+    .filter(Boolean);
+  if (tokens.length === 0 || tokens.length > 4) return false;
+  const roleLikeTokens = new Set([
+    "team",
+    "support",
+    "sales",
+    "marketing",
+    "legal",
+    "security",
+    "privacy",
+    "compliance",
+    "contact",
+    "admin",
+    "operations",
+    "ops",
+    "success",
+    "customer",
+    "service",
+    "services",
+    "desk",
+    "inbox",
+    "mailbox",
+  ]);
+  let alphaTokenCount = 0;
+  for (const token of tokens) {
+    const cleaned = token.toLowerCase().replace(/[^a-z'-]/g, "");
+    if (!cleaned) continue;
+    if (cleaned.length < 2) return false;
+    if (roleLikeTokens.has(cleaned)) return false;
+    if (/^[a-z]+$/i.test(cleaned)) alphaTokenCount += 1;
+  }
+  return alphaTokenCount >= 1;
+}
+
 function compactText(value: unknown, max = 220) {
   return String(value ?? "")
     .replace(/\s+/g, " ")
     .trim()
     .slice(0, max);
+}
+
+function coerceRecord(value: unknown) {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+export function resolveEmailFinderApiBaseUrl(explicit?: string) {
+  const internalHost = String(
+    process.env.EMAIL_FINDER_INTERNAL_HOST ??
+      process.env.NEXT_PUBLIC_SITE_URL ??
+      process.env.VERCEL_PROJECT_PRODUCTION_URL ??
+      process.env.VERCEL_URL ??
+      ""
+  )
+    .trim()
+    .replace(/^https?:\/\//, "")
+    .replace(/\/+$/, "");
+  const internalBaseUrl = internalHost
+    ? `https://${internalHost}/api/internal/email-finder`
+    : "";
+  const candidates = [
+    explicit,
+    process.env.EMAIL_FINDER_API_BASE_URL,
+    process.env.EMAIL_FINDER_BASE_URL,
+    process.env.NEXT_PUBLIC_EMAIL_FINDER_API_BASE_URL,
+    process.env.EMAIL_FINDER_URL,
+    internalBaseUrl,
+  ];
+
+  for (const candidate of candidates) {
+    const normalized = String(candidate ?? "")
+      .trim()
+      .replace(/\/+$/, "");
+    if (normalized) return normalized;
+  }
+
+  return "";
+}
+
+function parseEmailFinderBestGuessEmail(result: unknown) {
+  const root = coerceRecord(result);
+  const routing = coerceRecord(root.routing);
+  const queues = coerceRecord(routing.queues);
+  const eligible = Array.isArray(queues.eligible_send_now) ? queues.eligible_send_now : [];
+  const risky = Array.isArray(queues.risky_queue) ? queues.risky_queue : [];
+  const attempts = Array.isArray(root.attempts) ? root.attempts : [];
+
+  const toCandidate = (row: unknown) => {
+    const candidate = coerceRecord(row);
+    const email = extractFirstEmailAddress(candidate.email);
+    const verdict = String(candidate.verdict ?? "")
+      .trim()
+      .toLowerCase();
+    const confidence = String(candidate.confidence ?? "")
+      .trim()
+      .toLowerCase();
+    const details = coerceRecord(candidate.details);
+    const pValidRaw =
+      typeof candidate.p_valid === "number"
+        ? candidate.p_valid
+        : typeof details.p_valid === "number"
+          ? details.p_valid
+          : null;
+    const pValid = typeof pValidRaw === "number" && Number.isFinite(pValidRaw) ? pValidRaw : -1;
+    const attemptRaw = Number(candidate.attempt ?? 0);
+    const attempt = Number.isFinite(attemptRaw) ? attemptRaw : 0;
+    return { email, verdict, confidence, pValid, attempt };
+  };
+
+  // Treat any validator-positive result as acceptable.
+  const allowedVerdicts = new Set(["likely-valid", "risky-valid", "valid", "accepted", "deliverable"]);
+  const isValidatorPositiveCandidate = (item: {
+    email: string;
+    verdict: string;
+    confidence: string;
+    pValid: number;
+    attempt: number;
+  }) => Boolean(item.email) && allowedVerdicts.has(item.verdict);
+
+  const confidenceScore = (level: string) => {
+    if (level === "high") return 2;
+    if (level === "medium") return 1;
+    return 0;
+  };
+  const verdictScore = (verdict: string) => {
+    if (
+      verdict === "likely-valid" ||
+      verdict === "valid" ||
+      verdict === "accepted" ||
+      verdict === "deliverable"
+    ) {
+      return 1;
+    }
+    if (verdict === "risky-valid") return 0;
+    return -1;
+  };
+
+  const candidateRows = [...eligible, ...risky, root.best_guess, ...attempts];
+  const candidates = candidateRows
+    .map(toCandidate)
+    .filter(isValidatorPositiveCandidate)
+    .sort((left, right) => {
+      const confidenceDelta = confidenceScore(right.confidence) - confidenceScore(left.confidence);
+      if (confidenceDelta !== 0) return confidenceDelta;
+      const verdictDelta = verdictScore(right.verdict) - verdictScore(left.verdict);
+      if (verdictDelta !== 0) return verdictDelta;
+      const pValidDelta = right.pValid - left.pValid;
+      if (pValidDelta !== 0) return pValidDelta;
+      return left.attempt - right.attempt;
+    });
+
+  for (const candidate of candidates) {
+    const suppressionReason = getLeadEmailSuppressionReason(candidate.email);
+    if (suppressionReason) continue;
+    return {
+      email: candidate.email,
+      realVerifiedEmail: true,
+    };
+  }
+
+  return {
+    email: "",
+    realVerifiedEmail: false,
+  };
+}
+
+function summarizeNoHitFromBatchResult(result: unknown) {
+  const root = coerceRecord(result);
+  const attempts = Array.isArray(root.attempts) ? root.attempts.map((row) => coerceRecord(row)) : [];
+  const verification = coerceRecord(root.verification);
+  const routing = coerceRecord(root.routing);
+  const queues = coerceRecord(routing.queues);
+
+  const mxStatus = String(verification.mx_status ?? "")
+    .trim()
+    .toLowerCase();
+  const validatorPositiveAttempts = attempts.filter((row) =>
+    ["likely-valid", "risky-valid", "valid", "accepted", "deliverable"].includes(
+      String(row.verdict ?? "").trim().toLowerCase()
+    )
+  ).length;
+  const invalidAttempts = attempts.filter(
+    (row) => String(row.verdict ?? "").trim().toLowerCase() === "invalid"
+  ).length;
+  const riskyQueueCount = Array.isArray(queues.risky_queue) ? queues.risky_queue.length : 0;
+
+  let reason = "no_high_confidence_candidate";
+  if (mxStatus === "no-mail-route") {
+    reason = "no_mail_route";
+  } else if (attempts.length > 0 && invalidAttempts === attempts.length) {
+    reason = "all_candidates_invalid";
+  } else if (validatorPositiveAttempts > 0 || riskyQueueCount > 0) {
+    reason = "only_risky_candidates";
+  } else if (attempts.length === 0) {
+    reason = "no_attempts";
+  }
+
+  const topAttempt = attempts[0] ?? {};
+  const topDetails = coerceRecord(topAttempt.details);
+  return {
+    reason,
+    error: String(root.error ?? topDetails.reason ?? "").trim(),
+    topAttemptEmail: extractFirstEmailAddress(topAttempt.email),
+    topAttemptVerdict: String(topAttempt.verdict ?? "").trim().toLowerCase(),
+    topAttemptConfidence: String(topAttempt.confidence ?? "").trim().toLowerCase(),
+    topAttemptReason: String(topDetails.reason ?? "").trim(),
+  };
+}
+
+export async function enrichLeadsWithEmailFinderBatch(params: {
+  leads: ApifyLead[];
+  apiBaseUrl: string;
+  verificationMode?: EmailFinderVerificationMode;
+  validatedMailsApiKey?: string;
+  maxCandidates?: number;
+  maxCredits?: number;
+  timeoutMs?: number;
+  concurrency?: number;
+}): Promise<EmailFinderBatchEnrichmentResult> {
+  const apiBaseUrl = resolveEmailFinderApiBaseUrl(params.apiBaseUrl);
+  if (!apiBaseUrl) {
+    return {
+      ok: false,
+      leads: params.leads,
+      attempted: 0,
+      matched: 0,
+      failed: 0,
+      provider: "emailfinder.batch",
+      error: "EMAIL_FINDER_API_BASE_URL is missing",
+      failureSummary: [{ reason: "missing_api_base_url", count: 1 }],
+      failedSamples: [],
+    };
+  }
+
+  const items: Array<{ id: string; name: string; domain: string }> = [];
+  for (const [index, lead] of params.leads.entries()) {
+    const existingEmail = extractFirstEmailAddress(lead.email);
+    if (existingEmail) continue;
+    const name = String(lead.name ?? "").trim();
+    const domain = String(lead.domain ?? "")
+      .trim()
+      .toLowerCase()
+      .replace(/^www\./, "");
+    if (!name || !domain || !domain.includes(".") || isNonCompanyProfileDomain(domain)) continue;
+    items.push({
+      id: `lead-${index}`,
+      name,
+      domain,
+    });
+  }
+
+  if (!items.length) {
+    return {
+      ok: true,
+      leads: params.leads,
+      attempted: 0,
+      matched: 0,
+      failed: 0,
+      provider: "emailfinder.batch",
+      error: "",
+      failureSummary: [],
+      failedSamples: [],
+    };
+  }
+
+  const verificationMode: EmailFinderVerificationMode = "validatedmails";
+  const requestedMode = String(params.verificationMode ?? "validatedmails")
+    .trim()
+    .toLowerCase();
+  if (requestedMode && requestedMode !== "validatedmails") {
+    return {
+      ok: false,
+      leads: params.leads,
+      attempted: items.length,
+      matched: 0,
+      failed: items.length,
+      provider: "emailfinder.batch",
+      error: "Only real verification mode 'validatedmails' is supported",
+      failureSummary: [{ reason: "unsupported_verification_mode", count: items.length }],
+      failedSamples: [],
+    };
+  }
+  const apiKey = String(params.validatedMailsApiKey ?? "").trim();
+  if (!apiKey) {
+    return {
+      ok: false,
+      leads: params.leads,
+      attempted: items.length,
+      matched: 0,
+      failed: items.length,
+      provider: "emailfinder.batch",
+      error: "validatedmails API key is required for real verification",
+      failureSummary: [{ reason: "missing_validatedmails_api_key", count: items.length }],
+      failedSamples: [],
+    };
+  }
+  const maxCandidates = Math.max(4, Math.min(20, Number(params.maxCandidates ?? 12) || 12));
+  const maxCredits = Math.max(1, Math.min(25, Number(params.maxCredits ?? 7) || 7));
+  const requestedConcurrency = Math.max(1, Math.min(10, Number(params.concurrency ?? 4) || 4));
+  const concurrency = requestedConcurrency;
+  const effectiveMaxCandidates = maxCandidates;
+  const verifierProbeTimeoutSeconds = 8;
+  const defaultItem: Record<string, unknown> = {
+    verification_mode: verificationMode,
+    max_candidates: effectiveMaxCandidates,
+    stop_on_first_hit: true,
+    stop_on_min_confidence: "high",
+    high_confidence_only: true,
+    enable_risky_queue: true,
+  };
+  defaultItem.max_credits = maxCredits;
+  defaultItem.validatedmails_api_key = apiKey;
+  defaultItem.timeout_seconds = verifierProbeTimeoutSeconds;
+
+  const itemById = new Map(items.map((item) => [item.id, item] as const));
+
+  const buildResultFromEmailMap = (
+    emailByIndex: Map<number, { email: string; realVerifiedEmail: boolean }>,
+    attempted: number,
+    failed: number,
+    error = "",
+    failureSummary: Array<{ reason: string; count: number }> = [],
+    failedSamples: Array<{
+      id: string;
+      name: string;
+      domain: string;
+      reason: string;
+      error: string;
+      topAttemptEmail: string;
+      topAttemptVerdict: string;
+      topAttemptConfidence: string;
+      topAttemptReason: string;
+    }> = []
+  ) => {
+    const leads = params.leads.map((lead, index) => {
+      const enriched = emailByIndex.get(index);
+      if (!enriched?.email) return lead;
+      return {
+        ...lead,
+        email: enriched.email,
+        domain: enriched.email.split("@")[1] || lead.domain,
+        realVerifiedEmail: enriched.realVerifiedEmail,
+      };
+    });
+    return {
+      ok: !error,
+      leads,
+      attempted,
+      matched: emailByIndex.size,
+      failed,
+      provider: "emailfinder.batch",
+      error,
+      failureSummary,
+      failedSamples,
+    } satisfies EmailFinderBatchEnrichmentResult;
+  };
+
+  const effectiveConcurrency = Math.max(1, Math.min(3, concurrency));
+  const configuredTimeoutMs = Number(params.timeoutMs ?? 0);
+  const baseTimeoutMs = Number.isFinite(configuredTimeoutMs) && configuredTimeoutMs > 0 ? configuredTimeoutMs : 0;
+  const estimatedWorstCaseMs = Math.ceil(
+    (Math.ceil(items.length / effectiveConcurrency) * maxCredits * verifierProbeTimeoutSeconds * 1000 * 3) / 4 + 15_000
+  );
+  const batchTimeoutMs = Math.max(30_000, Math.min(600_000, Math.max(baseTimeoutMs, estimatedWorstCaseMs)));
+
+  const buildResultFromBatchRows = (
+    results: unknown[],
+    batchLevelError = ""
+  ) => {
+    const emailByIndex = new Map<number, { email: string; realVerifiedEmail: boolean }>();
+    const failureCounts = new Map<string, number>();
+    const failedSamples: Array<{
+      id: string;
+      name: string;
+      domain: string;
+      reason: string;
+      error: string;
+      topAttemptEmail: string;
+      topAttemptVerdict: string;
+      topAttemptConfidence: string;
+      topAttemptReason: string;
+    }> = [];
+    let failed = 0;
+    let firstError = "";
+
+    for (const row of results) {
+      const item = coerceRecord(row);
+      const itemId = String(item.id ?? "").trim();
+      const itemMeta = itemById.get(itemId);
+      const pushFailure = (input: {
+        reason: string;
+        error: string;
+        topAttemptEmail?: string;
+        topAttemptVerdict?: string;
+        topAttemptConfidence?: string;
+        topAttemptReason?: string;
+      }) => {
+        const reason = input.reason || "unknown_failure";
+        failureCounts.set(reason, (failureCounts.get(reason) ?? 0) + 1);
+        if (failedSamples.length >= 12) return;
+        failedSamples.push({
+          id: itemId,
+          name: String(itemMeta?.name ?? ""),
+          domain: String(itemMeta?.domain ?? ""),
+          reason,
+          error: input.error,
+          topAttemptEmail: input.topAttemptEmail ?? "",
+          topAttemptVerdict: input.topAttemptVerdict ?? "",
+          topAttemptConfidence: input.topAttemptConfidence ?? "",
+          topAttemptReason: input.topAttemptReason ?? "",
+        });
+      };
+
+      if (!Boolean(item.ok)) {
+        failed += 1;
+        const itemError = String(item.error ?? "").trim();
+        if (!firstError && itemError) firstError = itemError;
+        pushFailure({ reason: "item_error", error: itemError });
+        continue;
+      }
+
+      const resolved = parseEmailFinderBestGuessEmail(item.result);
+      if (!resolved.email) {
+        failed += 1;
+        const summary = summarizeNoHitFromBatchResult(item.result);
+        if (!firstError && summary.error) firstError = summary.error;
+        pushFailure(summary);
+        continue;
+      }
+
+      const numericIndex = Number(itemId.replace("lead-", ""));
+      if (Number.isInteger(numericIndex) && numericIndex >= 0 && numericIndex < params.leads.length) {
+        emailByIndex.set(numericIndex, resolved);
+      } else {
+        failed += 1;
+        const parseError = `Unable to parse numeric lead index from id '${itemId}'`;
+        if (!firstError) firstError = parseError;
+        pushFailure({
+          reason: "invalid_item_id",
+          error: parseError,
+        });
+      }
+    }
+
+    const error = emailByIndex.size > 0 ? "" : firstError || batchLevelError || "No high-confidence email could be resolved";
+    const failureSummary = Array.from(failureCounts.entries())
+      .map(([reason, count]) => ({ reason, count }))
+      .sort((a, b) => b.count - a.count || a.reason.localeCompare(b.reason));
+    return buildResultFromEmailMap(emailByIndex, items.length, failed, error, failureSummary, failedSamples);
+  };
+
+  const runBatchGuessPass = async (input: { timeoutMs: number; requestConcurrency: number }) => {
+    const controller = new AbortController();
+    let timedOut = false;
+    const timeoutHandle = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, input.timeoutMs);
+    try {
+      const response = await fetch(`${apiBaseUrl}/v1/guess/batch`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        signal: controller.signal,
+        body: JSON.stringify({
+          concurrency: input.requestConcurrency,
+          continue_on_error: true,
+          default_item: defaultItem,
+          items,
+        }),
+      });
+      const raw = await response.text();
+      let payload: unknown = {};
+      try {
+        payload = raw ? JSON.parse(raw) : {};
+      } catch {
+        payload = {};
+      }
+      const batch = coerceRecord(payload);
+      const results = Array.isArray(batch.results) ? batch.results : null;
+      if (!results) {
+        const nonOkReason =
+          !response.ok && (String(batch.error ?? "").trim() || `EmailFinder batch request failed (${response.status})`);
+        return buildResultFromEmailMap(
+          new Map<number, { email: string; realVerifiedEmail: boolean }>(),
+          items.length,
+          items.length,
+          nonOkReason || "EmailFinder batch response was malformed"
+        );
+      }
+      const batchLevelError =
+        !response.ok && (String(batch.error ?? "").trim() || `EmailFinder batch request failed (${response.status})`);
+      return buildResultFromBatchRows(results, batchLevelError || "");
+    } catch (error) {
+      const message = error instanceof Error ? compactText(error.message, 180) : compactText(String(error ?? ""), 180);
+      const isAbortError = timedOut || String((error as { name?: unknown })?.name ?? "").toLowerCase() === "aborterror";
+      const reason = isAbortError
+        ? `EmailFinder batch timed out after ${input.timeoutMs}ms`
+        : message
+          ? `EmailFinder batch request failed: ${message}`
+          : "EmailFinder batch request failed";
+      return buildResultFromEmailMap(
+        new Map<number, { email: string; realVerifiedEmail: boolean }>(),
+        items.length,
+        items.length,
+        reason,
+        [{ reason: isAbortError ? "timeout" : "request_failed", count: items.length }]
+      );
+    } finally {
+      clearTimeout(timeoutHandle);
+    }
+  };
+
+  const initial = await runBatchGuessPass({
+    timeoutMs: batchTimeoutMs,
+    requestConcurrency: effectiveConcurrency,
+  });
+  const initialError = initial.error.trim().toLowerCase();
+  const shouldRetry =
+    initial.matched === 0 &&
+    initial.attempted > 0 &&
+    Boolean(initialError) &&
+    (initialError.includes("timed out") || initialError.includes("request failed"));
+
+  if (!shouldRetry) return initial;
+
+  const retryTimeoutMs = Math.max(batchTimeoutMs, Math.min(900_000, Math.round(batchTimeoutMs * 1.5)));
+  const retry = await runBatchGuessPass({
+    timeoutMs: retryTimeoutMs,
+    requestConcurrency: Math.max(1, Math.min(2, effectiveConcurrency)),
+  });
+  if (retry.matched > initial.matched) return retry;
+  if (retry.matched > 0) return retry;
+  if (!retry.error.trim()) return retry;
+  if (!initial.error.trim() || retry.error.trim() === initial.error.trim()) return retry;
+
+  return {
+    ...retry,
+    error: `${retry.error.trim()} (initial: ${initial.error.trim()})`,
+  };
 }
 
 function customerIoApiKey(secrets: OutreachAccountSecrets) {
@@ -521,10 +1120,6 @@ async function testCustomerIoTrackCredentials(input: {
   siteId: string;
   apiKey: string;
 }): Promise<{ ok: boolean; error: string; region: string; baseUrl: string }> {
-  if (process.env.CUSTOMER_IO_SIMULATE === "1") {
-    return { ok: true, error: "", region: "simulated", baseUrl: "simulated" };
-  }
-
   const siteId = input.siteId.trim();
   const apiKey = input.apiKey.trim();
   if (!siteId || !apiKey) {
@@ -906,33 +1501,57 @@ export function evaluateActorCompatibility(input: {
 export function evaluateLeadAgainstQualityPolicy(input: {
   lead: ApifyLead;
   policy: LeadQualityPolicy;
+  allowMissingEmail?: boolean;
 }): LeadQualityDecision {
-  const email = extractFirstEmailAddress(input.lead.email);
-  const floorReason = getLeadEmailSuppressionReason(email);
-  if (!email || floorReason) {
-    return {
-      email: email || String(input.lead.email ?? "").trim().toLowerCase(),
-      accepted: false,
-      confidence: 0,
-      reason: floorReason || "invalid_email",
-      details: { floorReason: floorReason || "invalid_email" },
-    };
-  }
-
-  const local = email.split("@")[0] ?? "";
-  const domain = email.split("@")[1] ?? "";
+  const allowMissingEmail = input.allowMissingEmail === true;
+  const rawEmail = extractFirstEmailAddress(input.lead.email);
+  const floorReason = rawEmail ? getLeadEmailSuppressionReason(rawEmail) : "";
+  const sourceUrl = String(input.lead.sourceUrl ?? "").trim();
+  const hasSourceUrl = Boolean(sourceUrl);
+  const sourceHostname = safeHostname(sourceUrl);
+  const sourceDomain = toRegistrableDomain(sourceHostname);
   const normalizedName = String(input.lead.name ?? "").trim();
   const normalizedCompany = String(input.lead.company ?? "").trim();
   const normalizedTitle = String(input.lead.title ?? "").trim();
-  const hasSourceUrl = Boolean(String(input.lead.sourceUrl ?? "").trim());
+  const hasTwoPartName = normalizedName.split(/\s+/).filter(Boolean).length >= 2;
+  const fallbackDomainRaw = String(input.lead.domain ?? "").trim().toLowerCase();
+  const fallbackDomain = isNonCompanyProfileDomain(fallbackDomainRaw) ? "" : fallbackDomainRaw;
+  const fallbackProfileReady = Boolean(hasTwoPartName && fallbackDomain);
+
+  if ((!rawEmail || floorReason) && !(allowMissingEmail && fallbackProfileReady)) {
+    return {
+      email: rawEmail || String(input.lead.email ?? "").trim().toLowerCase(),
+      accepted: false,
+      confidence: 0,
+      reason: floorReason || "invalid_email",
+      details: {
+        floorReason: floorReason || "invalid_email",
+        allowMissingEmail,
+        hasTwoPartName,
+        fallbackDomain,
+      },
+    };
+  }
+
+  const email = !floorReason ? rawEmail : "";
+  const local = email ? email.split("@")[0] ?? "" : "";
+  const domain = email ? email.split("@")[1] ?? "" : fallbackDomain;
+  const sourceDomainMatchesLead =
+    Boolean(sourceDomain) &&
+    (domain === sourceDomain || domain.endsWith(`.${sourceDomain}`) || sourceDomain.endsWith(`.${domain}`));
+  const hasRealVerifiedEmail = input.lead.realVerifiedEmail === true;
   const rawConfidence = Number((input.lead as unknown as Record<string, unknown>).confidence);
   const hasExplicitConfidence = Number.isFinite(rawConfidence);
   const explicitConfidence = hasExplicitConfidence ? Math.max(0, Math.min(1, rawConfidence)) : 0;
   const inferredName = inferNameFromEmail(email);
   const nameLikelyEmailDerived =
+    Boolean(email) &&
     Boolean(normalizedName) &&
     Boolean(inferredName) &&
     normalizedName.toLowerCase() === inferredName.toLowerCase();
+  const humanName = isLikelyHumanName(normalizedName);
+  const hasIndependentPersonEvidence =
+    (Boolean(normalizedName) && humanName && !nameLikelyEmailDerived) || Boolean(normalizedTitle);
 
   if (!input.policy.allowFreeDomains && isLikelyFreeDomain(domain)) {
     return {
@@ -943,13 +1562,62 @@ export function evaluateLeadAgainstQualityPolicy(input: {
       details: { domain, policy: "allowFreeDomains=false" },
     };
   }
-  if (!input.policy.allowRoleInboxes && isLikelyRoleInbox(local)) {
+  if (email && !input.policy.allowRoleInboxes && isLikelyRoleInbox(local)) {
     return {
       email,
       accepted: false,
       confidence: 0.1,
       reason: "role_inbox_blocked",
       details: { local, policy: "allowRoleInboxes=false" },
+    };
+  }
+  // Real verified emails bypass heuristic policy scoring (title/company keyword penalties, confidence threshold).
+  if (hasRealVerifiedEmail) {
+    return {
+      email,
+      accepted: true,
+      confidence: 1,
+      reason: "accepted",
+      details: {
+        realVerifiedEmail: true,
+        policyBypass: "heuristic_confidence",
+      },
+    };
+  }
+  if (email && isLikelyRoleInbox(local) && !hasIndependentPersonEvidence) {
+    return {
+      email,
+      accepted: false,
+      confidence: 0.08,
+      reason: "role_inbox_low_evidence",
+      details: { local, normalizedName, titlePresent: Boolean(normalizedTitle) },
+    };
+  }
+  if (normalizedName && !humanName && !normalizedTitle) {
+    return {
+      email,
+      accepted: false,
+      confidence: 0.12,
+      reason: "non_person_name",
+      details: { normalizedName },
+    };
+  }
+  if (domain && isLikelyFreeDomain(domain) && input.policy.allowFreeDomains && !hasIndependentPersonEvidence) {
+    return {
+      email,
+      accepted: false,
+      confidence: 0.12,
+      reason: "free_domain_low_evidence",
+      details: { domain, normalizedName, titlePresent: Boolean(normalizedTitle) },
+    };
+  }
+  if (sourceDomain && !sourceDomainMatchesLead && !normalizedTitle && nameLikelyEmailDerived) {
+    return {
+      email,
+      accepted: false,
+      confidence: hasExplicitConfidence ? explicitConfidence : 0.2,
+      reason: "source_domain_mismatch",
+      details: { sourceDomain, leadDomain: domain, normalizedName, titlePresent: false },
     };
   }
   if (input.policy.requirePersonName && !normalizedName) {
@@ -980,6 +1648,71 @@ export function evaluateLeadAgainstQualityPolicy(input: {
     };
   }
 
+  const titleKeywords = Array.isArray(input.policy.requiredTitleKeywords)
+    ? input.policy.requiredTitleKeywords
+        .map((item) => String(item ?? "").trim().toLowerCase())
+        .filter(Boolean)
+    : [];
+  let titleKeywordPenalty = 0;
+  if (titleKeywords.length) {
+    const titleLower = normalizedTitle.toLowerCase();
+    if (!titleLower) {
+      return {
+        email,
+        accepted: false,
+        confidence: 0.1,
+        reason: "missing_title_for_icp",
+        details: { requiredTitleKeywords: titleKeywords },
+      };
+    }
+    const matchesTitleKeyword = titleKeywords.some((keyword) => titleLower.includes(keyword));
+    if (!matchesTitleKeyword) {
+      titleKeywordPenalty = 0.18;
+    }
+  }
+
+  const companyContext = [
+    normalizedCompany,
+    domain,
+    String(input.lead.domain ?? "").trim(),
+    sourceHostname,
+    sourceDomain,
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+
+  const requiredCompanyKeywords = Array.isArray(input.policy.requiredCompanyKeywords)
+    ? input.policy.requiredCompanyKeywords
+        .map((item) => String(item ?? "").trim().toLowerCase())
+        .filter(Boolean)
+    : [];
+  let companyKeywordPenalty = 0;
+  if (requiredCompanyKeywords.length) {
+    const matchesRequired = requiredCompanyKeywords.some((keyword) => companyContext.includes(keyword));
+    if (!matchesRequired) {
+      companyKeywordPenalty = 0.2;
+    }
+  }
+
+  const excludedCompanyKeywords = Array.isArray(input.policy.excludedCompanyKeywords)
+    ? input.policy.excludedCompanyKeywords
+        .map((item) => String(item ?? "").trim().toLowerCase())
+        .filter(Boolean)
+    : [];
+  if (excludedCompanyKeywords.length) {
+    const hit = excludedCompanyKeywords.find((keyword) => companyContext.includes(keyword));
+    if (hit) {
+      return {
+        email,
+        accepted: false,
+        confidence: 0.05,
+        reason: "excluded_company_keyword",
+        details: { company: normalizedCompany, excludedKeyword: hit },
+      };
+    }
+  }
+
   if (!hasSourceUrl && !normalizedTitle && nameLikelyEmailDerived) {
     return {
       email,
@@ -988,6 +1721,8 @@ export function evaluateLeadAgainstQualityPolicy(input: {
       reason: "insufficient_person_evidence",
       details: {
         hasSourceUrl,
+        sourceDomain,
+        sourceDomainMatchesLead,
         titlePresent: false,
         nameLikelyEmailDerived,
       },
@@ -1001,7 +1736,10 @@ export function evaluateLeadAgainstQualityPolicy(input: {
       (normalizedName ? (nameLikelyEmailDerived ? 0.2 : 0.34) : 0.08) +
         (normalizedCompany ? 0.3 : 0.12) +
         (normalizedTitle ? 0.24 : 0.04) +
-        (hasSourceUrl ? 0.12 : 0)
+        (hasSourceUrl ? 0.12 : 0) +
+        (sourceDomainMatchesLead ? 0.07 : 0) -
+        titleKeywordPenalty -
+        companyKeywordPenalty
     )
   );
   const confidence = hasExplicitConfidence
@@ -1024,9 +1762,13 @@ export function evaluateLeadAgainstQualityPolicy(input: {
     confidence,
     reason: "accepted",
     details: {
+      emailPresent: Boolean(email),
       namePresent: Boolean(normalizedName),
       companyPresent: Boolean(normalizedCompany),
       titlePresent: Boolean(normalizedTitle),
+      domainPresent: Boolean(domain),
+      titleKeywordPenalty,
+      companyKeywordPenalty,
     },
   };
 }
@@ -1495,10 +2237,23 @@ export function leadsFromApifyRows(rows: unknown[], maxLeads: number): ApifyLead
   const out: ApifyLead[] = [];
   const seen = new Set<string>();
 
+  const dedupeKey = (lead: ApifyLead) => {
+    const normalizedEmail = extractFirstEmailAddress(lead.email);
+    if (normalizedEmail) return `email:${normalizedEmail}`;
+    const normalizedName = String(lead.name ?? "").trim().toLowerCase();
+    const normalizedDomain = String(lead.domain ?? "").trim().toLowerCase();
+    if (normalizedName && normalizedDomain) return `name_domain:${normalizedName}:${normalizedDomain}`;
+    const normalizedSource = String(lead.sourceUrl ?? "").trim().toLowerCase();
+    if (normalizedSource) return `source:${normalizedSource}`;
+    return "";
+  };
+
   for (const row of rows) {
     const normalized = normalizeApifyLead(row);
-    if (!normalized || seen.has(normalized.email)) continue;
-    seen.add(normalized.email);
+    if (!normalized) continue;
+    const key = dedupeKey(normalized);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
     out.push(normalized);
     if (out.length >= limit) return out;
   }
@@ -1514,17 +2269,19 @@ export function leadsFromApifyRows(rows: unknown[], maxLeads: number): ApifyLead
     const title = String(record.title ?? record.jobTitle ?? "").trim();
     const sourceUrl = String(record.url ?? record.website ?? record.profileUrl ?? "").trim();
     for (const email of emails) {
-      if (seen.has(email)) continue;
-      seen.add(email);
       const resolvedDomain = maybeDomain(email, "");
-      out.push({
+      const candidate: ApifyLead = {
         email,
         name: name || inferNameFromEmail(email),
         company: company || inferCompanyFromDomain(resolvedDomain),
         title,
         domain: resolvedDomain,
         sourceUrl,
-      });
+      };
+      const key = dedupeKey(candidate);
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      out.push(candidate);
       if (out.length >= limit) return out;
     }
   }
@@ -1534,25 +2291,31 @@ export function leadsFromApifyRows(rows: unknown[], maxLeads: number): ApifyLead
 
 function normalizeApifyLead(raw: unknown): ApifyLead | null {
   const row = raw && typeof raw === "object" && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
-  const email = extractFirstEmailAddress(
+  const rawEmail = extractFirstEmailAddress(
     row.email ?? row.workEmail ?? row.businessEmail ?? row.contactEmail ?? row.emailAddress ?? ""
   );
-  if (!email) {
-    return null;
-  }
-  if (getLeadEmailSuppressionReason(email)) {
-    return null;
-  }
-
-  const name = String(row.name ?? row.fullName ?? `${row.firstName ?? ""} ${row.lastName ?? ""}`).trim();
+  const emailFloorReason = rawEmail ? getLeadEmailSuppressionReason(rawEmail) : "";
+  const email = emailFloorReason ? "" : rawEmail;
+  const firstName = String(row.firstName ?? row.firstname ?? "").trim();
+  const lastName = String(row.lastName ?? row.lastname ?? "").trim();
+  const name = String(row.name ?? row.fullName ?? `${firstName} ${lastName}`).trim();
   const company = String(row.company ?? row.companyName ?? row.organization ?? "").trim();
   const title = String(row.title ?? row.jobTitle ?? "").trim();
-  const sourceUrl = String(row.url ?? row.profileUrl ?? row.linkedinUrl ?? row.website ?? "").trim();
-
-  const resolvedDomain = maybeDomain(email, String(row.domain ?? ""));
+  const sourceUrl = String(
+    row.url ?? row.profileUrl ?? row.linkedinUrl ?? row.website ?? row.companyWebsite ?? ""
+  ).trim();
+  const sourceDomain = toRegistrableDomain(safeHostname(sourceUrl));
+  const fallbackDomainRaw = String(row.domain ?? row.companyDomain ?? sourceDomain ?? "")
+    .trim()
+    .toLowerCase();
+  const fallbackDomain = isNonCompanyProfileDomain(fallbackDomainRaw) ? "" : fallbackDomainRaw;
+  const resolvedDomain = email ? maybeDomain(email, fallbackDomain) : fallbackDomain;
+  if (!email && (!name || !resolvedDomain)) {
+    return null;
+  }
   return {
     email,
-    name: name || inferNameFromEmail(email),
+    name: name || (email ? inferNameFromEmail(email) : ""),
     company: company || inferCompanyFromDomain(resolvedDomain),
     title,
     domain: resolvedDomain,
@@ -1695,14 +2458,6 @@ export async function sendCustomerIoEvent(params: {
   eventName: string;
   data: Record<string, unknown>;
 }): Promise<{ ok: boolean; providerMessageId: string; error: string }> {
-  if (process.env.CUSTOMER_IO_SIMULATE === "1") {
-    return {
-      ok: true,
-      providerMessageId: `sim_${Date.now().toString(36)}`,
-      error: "",
-    };
-  }
-
   const siteId = params.account.config.customerIo.siteId.trim();
   const apiKey = customerIoApiKey(params.secrets);
 

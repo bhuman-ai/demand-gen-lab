@@ -31,7 +31,6 @@ import {
   fetchCampaign,
   fetchConversationMapApi,
   fetchConversationPreviewLeadsApi,
-  fetchExperimentSourcingTraceApi,
   publishConversationMapApi,
   previewConversationNodeApi,
   saveConversationMapDraftApi,
@@ -107,13 +106,6 @@ const makeEdgeId = () => `edge_${Date.now().toString(36)}_${Math.random().toStri
 
 function clamp(value: number, min: number, max: number) {
   return Math.max(min, Math.min(max, value));
-}
-
-function formatDateLabel(value?: string) {
-  if (!value) return "n/a";
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) return value;
-  return parsed.toLocaleString();
 }
 
 function defaultMessagePromptTemplate(title: string) {
@@ -254,9 +246,24 @@ function bezierPath(fromX: number, fromY: number, toX: number, toY: number) {
 }
 
 function edgeLabel(edge: ConversationFlowEdge) {
-  if (edge.trigger === "intent") return edge.intent || "reply";
-  if (edge.trigger === "timer") return `wait ${edge.waitMinutes}m`;
-  return "fallback";
+  if (edge.trigger === "intent") {
+    switch (edge.intent) {
+      case "question":
+        return "Person asked a question";
+      case "interest":
+        return "Person said yes / interested";
+      case "objection":
+        return "Person raised an objection";
+      case "unsubscribe":
+        return "Person asked to stop";
+      case "other":
+        return "Person replied (other)";
+      default:
+        return "Person replied";
+    }
+  }
+  if (edge.trigger === "timer") return `After ${edge.waitMinutes} min`;
+  return "Default path";
 }
 
 function promptSnippet(value: string, max = 180) {
@@ -441,30 +448,6 @@ export default function FlowEditorClient({
   const [selectedPreviewLeadId, setSelectedPreviewLeadId] = useState("");
   const [previewLeadsLoading, setPreviewLeadsLoading] = useState(false);
   const [previewLeadsError, setPreviewLeadsError] = useState("");
-  const [previewLeadRunsChecked, setPreviewLeadRunsChecked] = useState(0);
-  const [sourceExperimentId, setSourceExperimentId] = useState("");
-  const [sourcingTrace, setSourcingTrace] = useState<Awaited<ReturnType<typeof fetchExperimentSourcingTraceApi>> | null>(null);
-  const [sourcingTraceLoading, setSourcingTraceLoading] = useState(false);
-  const [sourcingTraceError, setSourcingTraceError] = useState("");
-
-  const refreshSourcingTrace = async (ownerExperimentId?: string) => {
-    const targetExperimentId = String(ownerExperimentId ?? sourceExperimentId ?? "").trim();
-    if (!targetExperimentId) {
-      setSourcingTrace(null);
-      setSourcingTraceError("");
-      return;
-    }
-    setSourcingTraceLoading(true);
-    setSourcingTraceError("");
-    try {
-      const nextTrace = await fetchExperimentSourcingTraceApi(brandId, targetExperimentId);
-      setSourcingTrace(nextTrace);
-    } catch (err) {
-      setSourcingTraceError(err instanceof Error ? err.message : "Failed to load sourcing trace");
-    } finally {
-      setSourcingTraceLoading(false);
-    }
-  };
 
   const load = async () => {
     setError("");
@@ -516,8 +499,6 @@ export default function FlowEditorClient({
     setCampaignName(campaign.name || "Campaign");
     setVariantName(variant.name || "Variant");
     setPreviewLeads(previewLeadData.leads);
-    setPreviewLeadRunsChecked(previewLeadData.runsChecked);
-    setSourceExperimentId(previewLeadData.sourceExperimentId || "");
     setSelectedPreviewLeadId((prev) =>
       previewLeadData.leads.some((lead) => lead.id === prev)
         ? prev
@@ -536,8 +517,6 @@ export default function FlowEditorClient({
     try {
       const next = await fetchConversationPreviewLeadsApi(brandId, campaignId, variantId);
       setPreviewLeads(next.leads);
-      setPreviewLeadRunsChecked(next.runsChecked);
-      setSourceExperimentId(next.sourceExperimentId || "");
       setSelectedPreviewLeadId((prev) =>
         next.leads.some((lead) => lead.id === prev) ? prev : next.leads[0]?.id ?? ""
       );
@@ -552,11 +531,6 @@ export default function FlowEditorClient({
       setPreviewLeadsLoading(false);
     }
   };
-
-  useEffect(() => {
-    void refreshSourcingTrace(sourceExperimentId);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [brandId, sourceExperimentId]);
 
   useEffect(() => {
     let mounted = true;
@@ -1125,168 +1099,6 @@ export default function FlowEditorClient({
         {error ? <CardContent className="pt-0 text-sm text-[color:var(--danger)]">{error}</CardContent> : null}
       </Card>
 
-      <Card>
-        <CardHeader className="pb-3">
-          <CardTitle className="text-base">Sourced Preview Leads</CardTitle>
-          <CardDescription>
-            Preview generation uses real leads ingested by this experiment. No demo data is used.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          <div className="flex flex-wrap items-center gap-2">
-            <Button type="button" size="sm" variant="outline" onClick={() => void refreshPreviewLeads()} disabled={previewLeadsLoading}>
-              <RefreshCw className={`h-4 w-4 ${previewLeadsLoading ? "animate-spin" : ""}`} />
-              {previewLeadsLoading ? "Refreshing..." : "Refresh Sourced Leads"}
-            </Button>
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              onClick={() => void refreshSourcingTrace()}
-              disabled={sourcingTraceLoading || !sourceExperimentId}
-            >
-              <RefreshCw className={`h-4 w-4 ${sourcingTraceLoading ? "animate-spin" : ""}`} />
-              {sourcingTraceLoading ? "Refreshing Trace..." : "Refresh Sourcing Trace"}
-            </Button>
-            <Badge variant="muted">{previewLeads.length} lead{previewLeads.length === 1 ? "" : "s"}</Badge>
-            <Badge variant="muted">Runs checked: {previewLeadRunsChecked}</Badge>
-            {selectedPreviewLead ? (
-              <Badge variant="accent">Using: {selectedPreviewLead.name || selectedPreviewLead.email}</Badge>
-            ) : null}
-          </div>
-
-          <div className="rounded-lg border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-2 text-xs">
-            <div className="font-medium text-[color:var(--foreground)]">Sourcing Trace</div>
-            {sourceExperimentId ? (
-              <div className="mt-1 text-[color:var(--muted-foreground)]">Owner experiment: {sourceExperimentId}</div>
-            ) : (
-              <div className="mt-1 text-[color:var(--muted-foreground)]">
-                Owner experiment ID not resolved yet. Launch/source leads first.
-              </div>
-            )}
-            {sourcingTraceError ? (
-              <div className="mt-2 text-[color:var(--danger)]">{sourcingTraceError}</div>
-            ) : null}
-            {sourcingTrace?.latestDecision ? (
-              <div className="mt-2 space-y-2 text-[color:var(--muted-foreground)]">
-                <div>
-                  Strategy:{" "}
-                  <span className="font-medium text-[color:var(--foreground)]">
-                    {sourcingTrace.latestDecision.strategy || "n/a"}
-                  </span>
-                </div>
-                <div>
-                  Budget used:{" "}
-                  <span className="font-medium text-[color:var(--foreground)]">
-                    ${Number(sourcingTrace.latestDecision.budgetUsedUsd || 0).toFixed(2)}
-                  </span>
-                </div>
-                <div className="rounded-md border border-[color:var(--border)] bg-[color:var(--surface)] px-2 py-2">
-                  <div className="font-medium text-[color:var(--foreground)]">Selected actor chain</div>
-                  <div className="mt-1 space-y-1">
-                    {sourcingTrace.latestDecision.selectedChain.map((step, index) => (
-                      <div key={`${step.id}:${step.actorId}:${index}`}>
-                        {index + 1}. {step.stage} {"->"} <span className="text-[color:var(--foreground)]">{step.actorId}</span>
-                        {step.queryHint ? ` (${step.queryHint})` : ""}
-                      </div>
-                    ))}
-                  </div>
-                </div>
-                {sourcingTrace.latestRun ? (
-                  <div>
-                    Latest run:{" "}
-                    <span className="font-medium text-[color:var(--foreground)]">
-                      {sourcingTrace.latestRun.id}
-                    </span>{" "}
-                    · {sourcingTrace.latestRun.status}
-                    {sourcingTrace.latestRun.lastError ? (
-                      <>
-                        {" "}
-                        · <span className="text-[color:var(--danger)]">{sourcingTrace.latestRun.lastError}</span>
-                      </>
-                    ) : null}
-                  </div>
-                ) : null}
-                {sourcingTrace.probeResults.length ? (
-                  <div className="rounded-md border border-[color:var(--border)] bg-[color:var(--surface)] px-2 py-2">
-                    <div className="font-medium text-[color:var(--foreground)]">Probe results</div>
-                    <div className="mt-1 space-y-1">
-                      {sourcingTrace.probeResults.slice(0, 10).map((probe) => (
-                        <div key={probe.id}>
-                          {probe.stage} · {probe.actorId} ·{" "}
-                          <span className={probe.outcome === "pass" ? "text-[color:var(--success)]" : "text-[color:var(--danger)]"}>
-                            {probe.outcome}
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                ) : null}
-              </div>
-            ) : !sourcingTraceLoading && !sourcingTraceError ? (
-              <div className="mt-2 text-[color:var(--muted-foreground)]">
-                No sourcing decision available yet.
-              </div>
-            ) : null}
-          </div>
-
-          {previewLeadsError ? (
-            <div className="rounded-lg border border-[color:var(--danger-border)] bg-[color:var(--danger-soft)] px-3 py-2 text-sm text-[color:var(--danger)]">
-              {previewLeadsError}
-            </div>
-          ) : null}
-
-          {!previewLeads.length ? (
-            <div className="rounded-lg border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-2 text-sm text-[color:var(--muted-foreground)]">
-              No sourced leads yet. Launch this experiment so lead sourcing ingests real rows, then click refresh.
-            </div>
-          ) : null}
-
-          <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
-            {previewLeads.map((lead) => {
-              const selected = lead.id === selectedPreviewLeadId;
-              return (
-                <div
-                  key={lead.id}
-                  className="rounded-lg border px-3 py-2"
-                  style={{
-                    borderColor: selected ? "var(--accent)" : "var(--border)",
-                    background: selected ? "color-mix(in oklab, var(--accent) 9%, transparent)" : "var(--surface)",
-                  }}
-                >
-                  <div className="flex items-start justify-between gap-2">
-                    <button
-                      type="button"
-                      className="text-left text-sm font-semibold"
-                      onClick={() => setSelectedPreviewLeadId(lead.id)}
-                    >
-                      {lead.name || lead.email || lead.domain || "Lead"}
-                    </button>
-                    <Badge variant="muted">{lead.source}</Badge>
-                  </div>
-                  <div className="text-xs text-[color:var(--muted-foreground)]">
-                    {lead.email || "Email pending (name + domain only)"}
-                  </div>
-                  <div className="text-xs text-[color:var(--muted-foreground)]">
-                    {lead.title || "Unknown title"} at {lead.company || lead.domain}
-                  </div>
-                  {lead.runId ? (
-                    <div className="text-[11px] text-[color:var(--muted-foreground)]">
-                      Run {lead.runId} · {formatDateLabel(lead.runCreatedAt)}
-                    </div>
-                  ) : null}
-                  {lead.sourceUrl ? (
-                    <div className="line-clamp-1 text-[11px] text-[color:var(--muted-foreground)]" title={lead.sourceUrl}>
-                      Source URL: {lead.sourceUrl}
-                    </div>
-                  ) : null}
-                </div>
-              );
-            })}
-          </div>
-        </CardContent>
-      </Card>
-
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_320px]">
         <Card className="overflow-hidden">
           <CardHeader className="flex flex-row items-center justify-between gap-3 border-b border-[color:var(--border)] pb-3">
@@ -1407,9 +1219,10 @@ export default function FlowEditorClient({
                   transformOrigin: "0 0",
                 }}
               >
-                {graph.nodes.map((node) => {
+                {graph.nodes.map((node, nodeIndex) => {
                   const isSelected = selectedNodeId === node.id;
                   const isStart = graph.startNodeId === node.id;
+                  const cardTitle = node.kind === "terminal" ? "End" : `Message ${nodeIndex + 1}`;
                   return (
                     <div
                       key={node.id}
@@ -1446,22 +1259,20 @@ export default function FlowEditorClient({
 
                       <div className="border-b border-[color:var(--border)] px-4 py-3">
                         <div className="flex items-center justify-between gap-2">
-                          <div className="truncate text-base font-semibold">{node.title || "Untitled"}</div>
+                          <div className="truncate text-base font-semibold">{cardTitle}</div>
                           <div className="flex items-center gap-1">
                             {isStart ? <Badge variant="accent">Start</Badge> : null}
-                            {node.kind === "message" ? <Badge variant="success">prompt</Badge> : null}
-                            <Badge variant={node.kind === "terminal" ? "muted" : "default"}>{node.kind}</Badge>
+                            <Badge variant={node.kind === "terminal" ? "muted" : "success"}>
+                              {node.kind === "terminal" ? "End" : "Message"}
+                            </Badge>
                           </div>
                         </div>
                       </div>
 
                       <div className="space-y-3 px-4 py-3 text-sm leading-6 text-[color:var(--muted-foreground)]">
                         <div className="line-clamp-5">
-                          <strong>Prompt:</strong> {node.kind === "terminal" ? "Terminal node" : promptSnippet(node.promptTemplate)}
-                        </div>
-                        <div className="flex items-center justify-between">
-                          <span>{node.autoSend ? "Auto-send" : "Manual send"}</span>
-                          <span>Delay {node.delayMinutes}m</span>
+                          <strong>{node.kind === "terminal" ? "Flow:" : "Prompt:"}</strong>{" "}
+                          {node.kind === "terminal" ? "Sequence stops here." : promptSnippet(node.promptTemplate)}
                         </div>
                       </div>
                     </div>
@@ -1488,250 +1299,127 @@ export default function FlowEditorClient({
 
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">Inspector</CardTitle>
-            <CardDescription>Edit selected node/edge details and map settings.</CardDescription>
+            <CardTitle className="text-base">Editor</CardTitle>
+            <CardDescription>Click a message node to edit prompt and generate preview.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
-            <div className="grid gap-2">
-              <Label htmlFor="map-max-depth">Max Depth (turns)</Label>
-              <Input
-                id="map-max-depth"
-                type="number"
-                min={1}
-                max={5}
-                value={graph.maxDepth}
-                onChange={(event) =>
-                  setGraph((prev) =>
-                    prev
-                      ? {
-                          ...prev,
-                          maxDepth: clamp(Number(event.target.value || prev.maxDepth), 1, 5),
-                        }
-                      : prev
-                  )
-                }
-              />
-            </div>
-
-            {selectedPreviewLead ? (
-              <div className="space-y-3 rounded-xl border border-[color:var(--border)] p-3">
-                <div className="flex items-center justify-between">
-                  <div className="text-sm font-semibold">Preview Lead</div>
-                  <Badge variant="muted">{selectedPreviewLead.source}</Badge>
-                </div>
-                <div className="grid gap-2">
-                  <Label>Name</Label>
-                  <div className="rounded-md border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-2 text-sm">
-                    {selectedPreviewLead.name || "(missing)"}
-                  </div>
-                </div>
-                <div className="grid gap-2">
-                  <Label>Email</Label>
-                  <div className="rounded-md border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-2 text-sm">
-                    {selectedPreviewLead.email}
-                  </div>
-                </div>
-                <div className="grid gap-2">
-                  <Label>Company</Label>
-                  <div className="rounded-md border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-2 text-sm">
-                    {selectedPreviewLead.company || "(missing)"}
-                  </div>
-                </div>
-                <div className="grid gap-2">
-                  <Label>Title</Label>
-                  <div className="rounded-md border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-2 text-sm">
-                    {selectedPreviewLead.title || "(missing)"}
-                  </div>
-                </div>
-                <div className="grid gap-2">
-                  <Label>Domain</Label>
-                  <div className="rounded-md border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-2 text-sm">
-                    {selectedPreviewLead.domain || "(missing)"}
-                  </div>
-                </div>
-                <div className="grid gap-2">
-                  <Label>Source Run</Label>
-                  <div className="rounded-md border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-2 text-sm">
-                    {selectedPreviewLead.runId || "(missing)"} · {formatDateLabel(selectedPreviewLead.runCreatedAt)}
-                  </div>
-                </div>
-                <div className="grid gap-2">
-                  <Label>Source URL</Label>
-                  <div className="max-h-24 overflow-auto rounded-md border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-2 text-xs leading-5 text-[color:var(--muted-foreground)]">
-                    {selectedPreviewLead.sourceUrl || "(missing)"}
-                  </div>
-                </div>
-              </div>
-            ) : null}
-
             {selectedNode ? (
               <div className="space-y-3 rounded-xl border border-[color:var(--border)] p-3">
                 <div className="flex items-center justify-between">
-                  <div className="text-sm font-semibold">Node</div>
+                  <div className="text-sm font-semibold">
+                    {selectedNode.kind === "terminal" ? "End Node" : "Message Node"}
+                  </div>
                   <Button type="button" size="sm" variant="ghost" onClick={() => deleteNode(selectedNode.id)}>
                     <Trash2 className="h-4 w-4" />
                   </Button>
                 </div>
 
-                <div className="grid gap-2">
-                  <Label>Title</Label>
-                  <Input value={selectedNode.title} onChange={(event) => setNodePatch(selectedNode.id, { title: event.target.value })} />
-                </div>
-
-                <div className="grid gap-2">
-                  <Label>Kind</Label>
-                  <Select
-                    value={selectedNode.kind}
-                    onChange={(event) => {
-                      const kind = event.target.value === "terminal" ? "terminal" : "message";
-                      setNodePatch(selectedNode.id, {
-                        kind,
-                        copyMode: "prompt_v1",
-                        promptTemplate:
-                          kind === "terminal"
-                            ? ""
-                            : selectedNode.promptTemplate ||
-                              defaultMessagePromptTemplate(selectedNode.title || "Message"),
-                        promptVersion: Math.max(1, Number(selectedNode.promptVersion || 1)),
-                        promptPolicy: selectedNode.promptPolicy,
-                        autoSend: kind === "terminal" ? false : selectedNode.autoSend,
-                      });
-                    }}
-                  >
-                    <option value="message">message</option>
-                    <option value="terminal">terminal</option>
-                  </Select>
-                </div>
-
-                <div className="grid gap-2">
-                  <Label>Prompt Template</Label>
-                  <Textarea
-                    value={selectedNode.promptTemplate}
-                    disabled={selectedNode.kind === "terminal"}
-                    rows={8}
-                    onChange={(event) => setNodePatch(selectedNode.id, { promptTemplate: event.target.value })}
-                  />
-                </div>
-
                 {selectedNode.kind === "message" ? (
-                  <div className="grid gap-2 rounded-lg border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3">
-                    <div className="text-xs font-medium uppercase tracking-wide text-[color:var(--muted-foreground)]">
-                      Prompt Policy
-                    </div>
+                  <>
                     <div className="grid gap-2">
-                      <Label>Subject Max Words</Label>
-                      <Input
-                        type="number"
-                        min={3}
-                        max={20}
-                        value={selectedNode.promptPolicy.subjectMaxWords}
-                        onChange={(event) =>
-                          setNodePatch(selectedNode.id, {
-                            promptPolicy: {
-                              ...selectedNode.promptPolicy,
-                              subjectMaxWords: clamp(Number(event.target.value || selectedNode.promptPolicy.subjectMaxWords), 3, 20),
-                            },
-                          })
-                        }
+                      <Label>Prompt Template</Label>
+                      <Textarea
+                        value={selectedNode.promptTemplate}
+                        rows={10}
+                        onChange={(event) => setNodePatch(selectedNode.id, { promptTemplate: event.target.value })}
                       />
                     </div>
-                    <div className="grid gap-2">
-                      <Label>Body Max Words</Label>
-                      <Input
-                        type="number"
-                        min={40}
-                        max={260}
-                        value={selectedNode.promptPolicy.bodyMaxWords}
-                        onChange={(event) =>
-                          setNodePatch(selectedNode.id, {
-                            promptPolicy: {
-                              ...selectedNode.promptPolicy,
-                              bodyMaxWords: clamp(Number(event.target.value || selectedNode.promptPolicy.bodyMaxWords), 40, 260),
-                            },
-                          })
-                        }
-                      />
-                    </div>
-                    <label className="inline-flex items-center gap-2 text-sm">
-                      <input
-                        type="checkbox"
-                        checked={selectedNode.promptPolicy.exactlyOneCta}
-                        onChange={(event) =>
-                          setNodePatch(selectedNode.id, {
-                            promptPolicy: {
-                              ...selectedNode.promptPolicy,
-                              exactlyOneCta: event.target.checked,
-                            },
-                          })
-                        }
-                      />
-                      Require exactly one CTA
-                    </label>
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="outline"
-                      onClick={() => void generatePreview()}
-                      disabled={previewingNodeId === selectedNode.id}
-                    >
-                      {previewingNodeId === selectedNode.id ? (
-                        <>
-                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                          Generating Preview...
-                        </>
-                      ) : (
-                        <>
-                          <Sparkles className="h-3.5 w-3.5" />
-                          Generate Preview
-                        </>
-                      )}
-                    </Button>
-                    {previewError && previewingNodeId !== selectedNode.id ? (
-                      <div className="text-xs text-[color:var(--danger)]">{previewError}</div>
-                    ) : null}
-                    {previewResult && previewResult.nodeId === selectedNode.id ? (
-                      <div className="grid gap-2 rounded-md border border-[color:var(--border)] bg-[color:var(--surface)] p-2 text-xs">
-                        <div>
-                          <span className="font-medium">Subject:</span> {previewResult.subject || "(empty)"}
+
+                    <div className="grid gap-2 rounded-lg border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3">
+                      <div className="flex items-center justify-between">
+                        <div className="text-xs font-medium uppercase tracking-wide text-[color:var(--muted-foreground)]">
+                          Preview
                         </div>
-                        <div className="whitespace-pre-wrap">
-                          <span className="font-medium">Body:</span> {previewResult.body || "(empty)"}
-                        </div>
-                        <details>
-                          <summary className="cursor-pointer text-[color:var(--muted-foreground)]">Trace</summary>
-                          <pre className="mt-1 overflow-x-auto whitespace-pre-wrap rounded border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-2">
-                            {JSON.stringify(previewResult.trace, null, 2)}
-                          </pre>
-                        </details>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          onClick={() => void refreshPreviewLeads()}
+                          disabled={previewLeadsLoading}
+                        >
+                          <RefreshCw className={`h-3.5 w-3.5 ${previewLeadsLoading ? "animate-spin" : ""}`} />
+                          {previewLeadsLoading ? "Refreshing..." : "Refresh Leads"}
+                        </Button>
                       </div>
-                    ) : null}
+
+                      <div className="grid gap-2">
+                        <Label>Preview Lead</Label>
+                        <Select
+                          value={selectedPreviewLeadId}
+                          onChange={(event) => setSelectedPreviewLeadId(event.target.value)}
+                          disabled={!previewLeads.length}
+                        >
+                          {!previewLeads.length ? <option value="">No leads yet</option> : null}
+                          {previewLeads.map((lead) => (
+                            <option key={lead.id} value={lead.id}>
+                              {lead.name || lead.email || lead.domain || "Lead"}
+                            </option>
+                          ))}
+                        </Select>
+                        {selectedPreviewLead ? (
+                          <div className="rounded-md border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-2 text-xs">
+                            <div>{selectedPreviewLead.name || "(missing name)"}</div>
+                            <div className="text-[color:var(--muted-foreground)]">
+                              {selectedPreviewLead.title || "Unknown title"} at {selectedPreviewLead.company || selectedPreviewLead.domain}
+                            </div>
+                            <div className="text-[color:var(--muted-foreground)]">{selectedPreviewLead.email || "(missing email)"}</div>
+                          </div>
+                        ) : null}
+                        {previewLeadsError ? (
+                          <div className="text-xs text-[color:var(--danger)]">{previewLeadsError}</div>
+                        ) : null}
+                        {!previewLeads.length ? (
+                          <div className="text-xs text-[color:var(--muted-foreground)]">
+                            No sourced leads yet. Run sourcing first, then refresh leads.
+                          </div>
+                        ) : null}
+                      </div>
+
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        onClick={() => void generatePreview()}
+                        disabled={previewingNodeId === selectedNode.id || !selectedPreviewLead}
+                      >
+                        {previewingNodeId === selectedNode.id ? (
+                          <>
+                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                            Generating Preview...
+                          </>
+                        ) : (
+                          <>
+                            <Sparkles className="h-3.5 w-3.5" />
+                            Generate Preview
+                          </>
+                        )}
+                      </Button>
+                      {previewError && previewingNodeId !== selectedNode.id ? (
+                        <div className="text-xs text-[color:var(--danger)]">{previewError}</div>
+                      ) : null}
+                      {previewResult && previewResult.nodeId === selectedNode.id ? (
+                        <div className="grid gap-2 rounded-md border border-[color:var(--border)] bg-[color:var(--surface)] p-2 text-xs">
+                          <div>
+                            <span className="font-medium">Subject:</span> {previewResult.subject || "(empty)"}
+                          </div>
+                          <div className="whitespace-pre-wrap">
+                            <span className="font-medium">Body:</span> {previewResult.body || "(empty)"}
+                          </div>
+                          <details>
+                            <summary className="cursor-pointer text-[color:var(--muted-foreground)]">Trace</summary>
+                            <pre className="mt-1 overflow-x-auto whitespace-pre-wrap rounded border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-2">
+                              {JSON.stringify(previewResult.trace, null, 2)}
+                            </pre>
+                          </details>
+                        </div>
+                      ) : null}
+                    </div>
+                  </>
+                ) : (
+                  <div className="rounded-lg border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-2 text-sm text-[color:var(--muted-foreground)]">
+                    This is an end node. It does not send a message.
                   </div>
-                ) : null}
-
-                <div className="grid gap-2">
-                  <Label>Delay (minutes)</Label>
-                  <Input
-                    type="number"
-                    min={0}
-                    max={10080}
-                    value={selectedNode.delayMinutes}
-                    onChange={(event) =>
-                      setNodePatch(selectedNode.id, {
-                        delayMinutes: clamp(Number(event.target.value || selectedNode.delayMinutes), 0, 10080),
-                      })
-                    }
-                  />
-                </div>
-
-                <label className="inline-flex items-center gap-2 text-sm">
-                  <input
-                    type="checkbox"
-                    checked={selectedNode.autoSend}
-                    disabled={selectedNode.kind === "terminal"}
-                    onChange={(event) => setNodePatch(selectedNode.id, { autoSend: event.target.checked })}
-                  />
-                  Auto-send
-                </label>
+                )}
 
                 <Button
                   type="button"
@@ -1747,32 +1435,19 @@ export default function FlowEditorClient({
             {selectedEdge ? (
               <div className="space-y-3 rounded-xl border border-[color:var(--border)] p-3">
                 <div className="flex items-center justify-between">
-                  <div className="text-sm font-semibold">Edge</div>
+                  <div className="text-sm font-semibold">Path</div>
                   <Button type="button" size="sm" variant="ghost" onClick={() => deleteEdge(selectedEdge.id)}>
                     <Trash2 className="h-4 w-4" />
                   </Button>
                 </div>
 
-                <div className="grid gap-2">
-                  <Label>From</Label>
-                  <Select value={selectedEdge.fromNodeId} onChange={(event) => setEdgePatch(selectedEdge.id, { fromNodeId: event.target.value })}>
-                    {graph.nodes.map((node) => (
-                      <option key={node.id} value={node.id}>{node.title}</option>
-                    ))}
-                  </Select>
+                <div className="rounded-md border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-2 text-xs text-[color:var(--muted-foreground)]">
+                  {(nodeLookup.get(selectedEdge.fromNodeId)?.title || "From node")} {"->"}{" "}
+                  {(nodeLookup.get(selectedEdge.toNodeId)?.title || "To node")}
                 </div>
 
                 <div className="grid gap-2">
-                  <Label>To</Label>
-                  <Select value={selectedEdge.toNodeId} onChange={(event) => setEdgePatch(selectedEdge.id, { toNodeId: event.target.value })}>
-                    {graph.nodes.map((node) => (
-                      <option key={node.id} value={node.id}>{node.title}</option>
-                    ))}
-                  </Select>
-                </div>
-
-                <div className="grid gap-2">
-                  <Label>Trigger</Label>
+                  <Label>When should this path run?</Label>
                   <Select
                     value={selectedEdge.trigger}
                     onChange={(event) => {
@@ -1788,78 +1463,62 @@ export default function FlowEditorClient({
                       });
                     }}
                   >
-                    <option value="intent">intent</option>
-                    <option value="timer">timer</option>
-                    <option value="fallback">fallback</option>
+                    <option value="intent">When person replies</option>
+                    <option value="timer">After waiting</option>
+                    <option value="fallback">Default path</option>
                   </Select>
                 </div>
 
-                <div className="grid gap-2">
-                  <Label>Intent</Label>
-                  <Select
-                    value={selectedEdge.intent}
-                    disabled={selectedEdge.trigger !== "intent"}
-                    onChange={(event) => {
-                      const value = event.target.value;
-                      const intent =
-                        value === "question" ||
-                        value === "interest" ||
-                        value === "objection" ||
-                        value === "unsubscribe" ||
-                        value === "other"
-                          ? value
-                          : "";
-                      setEdgePatch(selectedEdge.id, { intent });
-                    }}
-                  >
-                    <option value="">none</option>
-                    <option value="interest">interest</option>
-                    <option value="question">question</option>
-                    <option value="objection">objection</option>
-                    <option value="unsubscribe">unsubscribe</option>
-                    <option value="other">other</option>
-                  </Select>
-                </div>
+                {selectedEdge.trigger === "intent" ? (
+                  <div className="grid gap-2">
+                    <Label>What did the person say?</Label>
+                    <Select
+                      value={selectedEdge.intent}
+                      onChange={(event) => {
+                        const value = event.target.value;
+                        const intent =
+                          value === "question" ||
+                          value === "interest" ||
+                          value === "objection" ||
+                          value === "unsubscribe" ||
+                          value === "other"
+                            ? value
+                            : "";
+                        setEdgePatch(selectedEdge.id, { intent });
+                      }}
+                    >
+                      <option value="">Person replied (unspecified)</option>
+                      <option value="interest">Person said yes / interested</option>
+                      <option value="question">Person asked a question</option>
+                      <option value="objection">Person raised an objection</option>
+                      <option value="unsubscribe">Person asked to stop emails</option>
+                      <option value="other">Person replied with something else</option>
+                    </Select>
+                  </div>
+                ) : null}
 
-                <div className="grid gap-2">
-                  <Label>Wait (minutes)</Label>
-                  <Input
-                    type="number"
-                    min={0}
-                    max={10080}
-                    value={selectedEdge.waitMinutes}
-                    onChange={(event) => setEdgePatch(selectedEdge.id, { waitMinutes: clamp(Number(event.target.value || selectedEdge.waitMinutes), 0, 10080) })}
-                  />
-                </div>
-
-                <div className="grid gap-2">
-                  <Label>Priority</Label>
-                  <Input
-                    type="number"
-                    min={1}
-                    max={100}
-                    value={selectedEdge.priority}
-                    onChange={(event) => setEdgePatch(selectedEdge.id, { priority: clamp(Number(event.target.value || selectedEdge.priority), 1, 100) })}
-                  />
-                </div>
-
-                <div className="grid gap-2">
-                  <Label>Confidence Threshold</Label>
-                  <Input
-                    type="number"
-                    min={0}
-                    max={1}
-                    step={0.05}
-                    value={selectedEdge.confidenceThreshold}
-                    onChange={(event) => setEdgePatch(selectedEdge.id, { confidenceThreshold: clamp(Number(event.target.value || selectedEdge.confidenceThreshold), 0, 1) })}
-                  />
-                </div>
+                {selectedEdge.trigger === "timer" ? (
+                  <div className="grid gap-2">
+                    <Label>Wait (minutes)</Label>
+                    <Input
+                      type="number"
+                      min={0}
+                      max={10080}
+                      value={selectedEdge.waitMinutes}
+                      onChange={(event) =>
+                        setEdgePatch(selectedEdge.id, {
+                          waitMinutes: clamp(Number(event.target.value || selectedEdge.waitMinutes), 0, 10080),
+                        })
+                      }
+                    />
+                  </div>
+                ) : null}
               </div>
             ) : null}
 
             {!selectedNode && !selectedEdge ? (
               <div className="rounded-xl border border-dashed border-[color:var(--border)] p-4 text-sm leading-6 text-[color:var(--muted-foreground)]">
-                Select a node or edge on the canvas to edit it. Start a connection by dragging from a node’s right dot to another node’s left dot.
+                Select a message node to edit its prompt. Select a connector to define what the person said.
               </div>
             ) : null}
           </CardContent>

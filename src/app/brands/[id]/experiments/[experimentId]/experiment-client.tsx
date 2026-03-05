@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowLeft, ArrowRight, Pause, Play, RefreshCw, Rocket, Save, SquareArrowOutUpRight, Upload } from "lucide-react";
+import { ArrowLeft, ArrowRight, Pause, Play, RefreshCw, Rocket, Save, Upload } from "lucide-react";
 import {
   controlExperimentRunApi,
   fetchBrand,
@@ -18,6 +18,7 @@ import {
 } from "@/lib/client-api";
 import type { BrandRecord, ExperimentRecord, OutreachRun, RunViewModel } from "@/lib/factory-types";
 import { trackEvent } from "@/lib/telemetry-client";
+import FlowEditorClient from "@/app/brands/[id]/campaigns/[campaignId]/build/flows/[variantId]/flow-editor-client";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -1678,7 +1679,7 @@ export default function ExperimentClient({
             <CardTitle className="text-base">{stageTitle(2)}</CardTitle>
             <CardDescription>Edit and publish the conversation flow before launching.</CardDescription>
           </CardHeader>
-          <CardContent className="space-y-3">
+          <CardContent className="space-y-4">
             <div className="text-sm">
               {experiment.messageFlow.publishedRevision > 0 ? (
                 <span>
@@ -1688,14 +1689,6 @@ export default function ExperimentClient({
                 <span className="text-[color:var(--danger)]">No published flow yet.</span>
               )}
             </div>
-            <div className="flex flex-wrap gap-2">
-              <Button asChild variant="outline">
-                <Link href={`/brands/${brandId}/experiments/${experiment.id}/flow`}>
-                  Open Flow Editor
-                  <SquareArrowOutUpRight className="h-4 w-4" />
-                </Link>
-              </Button>
-            </div>
             {!messagingReady ? (
               <div className="rounded-lg border border-[color:var(--danger-border)] bg-[color:var(--danger-soft)] px-3 py-2 text-sm text-[color:var(--danger)]">
                 Publish a flow revision to pass Messaging stage.
@@ -1703,6 +1696,20 @@ export default function ExperimentClient({
             ) : (
               <div className="rounded-lg border border-[color:var(--success)]/40 bg-[color:var(--success-soft)] px-3 py-2 text-sm text-[color:var(--success)]">
                 Messaging stage passed.
+              </div>
+            )}
+            {experiment.runtime.campaignId && experiment.runtime.experimentId ? (
+              <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3">
+                <FlowEditorClient
+                  brandId={brandId}
+                  campaignId={experiment.runtime.campaignId}
+                  variantId={experiment.runtime.experimentId}
+                  backHref={`/brands/${brandId}/experiments/${experiment.id}`}
+                />
+              </div>
+            ) : (
+              <div className="rounded-lg border border-[color:var(--warning)]/40 bg-[color:var(--warning-soft)] px-3 py-2 text-sm text-[color:var(--warning)]">
+                Flow editor is unavailable until runtime mapping exists. Source prospects once, then reopen Messaging.
               </div>
             )}
           </CardContent>

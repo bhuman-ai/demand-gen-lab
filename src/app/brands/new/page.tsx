@@ -121,6 +121,18 @@ export default function NewBrandPage() {
   const [error, setError] = useState("");
 
   const selectedPrimaryNiche = NICHE_OPTIONS.find((row) => row.id === selectedPrimaryNicheId) ?? null;
+  const stepProgress = {
+    website: Boolean(website.trim()),
+    niche: Boolean(selectedPrimaryNicheId),
+    subniches: selectedSubniches.length > 0,
+    personas: selectedPersonas.length > 0,
+  };
+  const previewTargetMarkets = dedupeLines([
+    selectedPrimaryNiche?.label ?? "",
+    ...selectedSubniches,
+    ...targetMarkets,
+  ]);
+  const previewIcps = dedupeLines([...selectedPersonas, ...idealCustomerProfiles]);
 
   const runPrefill = async () => {
     if (!website.trim()) return;
@@ -215,7 +227,19 @@ export default function NewBrandPage() {
   };
 
   return (
-    <div className="mx-auto grid max-w-4xl gap-5">
+    <div className="mx-auto grid max-w-4xl gap-5 pb-28">
+      <div className="rounded-2xl border border-[color:var(--border)] bg-[color:var(--surface)] px-4 py-3">
+        <div className="flex flex-wrap items-center gap-2">
+          <Badge variant={stepProgress.website ? "success" : "muted"}>1 Website</Badge>
+          <Badge variant={stepProgress.niche ? "success" : "muted"}>2 Primary niche</Badge>
+          <Badge variant={stepProgress.subniches ? "success" : "muted"}>3 Subniches</Badge>
+          <Badge variant={stepProgress.personas ? "success" : "muted"}>4 Personas</Badge>
+        </div>
+        <div className="mt-2 text-xs text-[color:var(--muted-foreground)]">
+          Mobbin-inspired setup: compact steps, chip selection, then one sticky action rail.
+        </div>
+      </div>
+
       <Card>
         <CardHeader>
           <CardTitle>Brand Setup Quiz</CardTitle>
@@ -253,15 +277,15 @@ export default function NewBrandPage() {
         <CardContent className="grid gap-4">
           <div className="grid gap-2">
             <Label>1) Primary niche</Label>
-            <div className="grid gap-2 md:grid-cols-2">
+            <div className="flex flex-wrap gap-2">
               {NICHE_OPTIONS.map((option) => (
                 <button
                   key={option.id}
                   type="button"
-                  className={`rounded-xl border px-3 py-2 text-left text-sm transition ${
+                  className={`rounded-full border px-4 py-2 text-sm transition ${
                     selectedPrimaryNicheId === option.id
-                      ? "border-[color:var(--accent)] bg-[color:var(--surface)]"
-                      : "border-[color:var(--border)] bg-[color:var(--surface-muted)]"
+                      ? "border-[color:var(--foreground)] bg-[color:var(--surface)] text-[color:var(--foreground)]"
+                      : "border-[color:var(--border)] bg-[color:var(--surface-muted)] text-[color:var(--muted-foreground)]"
                   }`}
                   onClick={() => {
                     setSelectedPrimaryNicheId(option.id);
@@ -284,9 +308,9 @@ export default function NewBrandPage() {
                     <button
                       key={subniche}
                       type="button"
-                      className={`rounded-full border px-3 py-1 text-xs transition ${
+                      className={`rounded-full border px-3 py-1 text-xs font-medium transition ${
                         selected
-                          ? "border-[color:var(--accent)] bg-[color:var(--surface)] text-[color:var(--foreground)]"
+                          ? "border-[color:var(--foreground)] bg-[color:var(--surface)] text-[color:var(--foreground)]"
                           : "border-[color:var(--border)] bg-[color:var(--surface-muted)] text-[color:var(--muted-foreground)]"
                       }`}
                       onClick={() => toggleSubniche(subniche)}
@@ -312,9 +336,9 @@ export default function NewBrandPage() {
                   <button
                     key={persona}
                     type="button"
-                    className={`rounded-full border px-3 py-1 text-xs transition ${
+                    className={`rounded-full border px-3 py-1 text-xs font-medium transition ${
                       selected
-                        ? "border-[color:var(--accent)] bg-[color:var(--surface)] text-[color:var(--foreground)]"
+                        ? "border-[color:var(--foreground)] bg-[color:var(--surface)] text-[color:var(--foreground)]"
                         : "border-[color:var(--border)] bg-[color:var(--surface-muted)] text-[color:var(--muted-foreground)]"
                     }`}
                     onClick={() => togglePersona(persona)}
@@ -334,6 +358,45 @@ export default function NewBrandPage() {
               onChange={(event) => setOneInputContext(event.target.value)}
               placeholder="Anything specific we should prioritize in outreach?"
             />
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Live Feed Inputs Preview</CardTitle>
+          <CardDescription>
+            This is exactly what will be used to generate your experiment suggestion feed.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="grid gap-3 md:grid-cols-2">
+          <div className="space-y-2">
+            <div className="text-xs uppercase tracking-wide text-[color:var(--muted-foreground)]">Target markets</div>
+            <div className="flex flex-wrap gap-2">
+              {previewTargetMarkets.length ? (
+                previewTargetMarkets.map((item) => (
+                  <Badge key={item} variant="muted">
+                    {item}
+                  </Badge>
+                ))
+              ) : (
+                <span className="text-xs text-[color:var(--muted-foreground)]">No markets selected yet.</span>
+              )}
+            </div>
+          </div>
+          <div className="space-y-2">
+            <div className="text-xs uppercase tracking-wide text-[color:var(--muted-foreground)]">ICPs / personas</div>
+            <div className="flex flex-wrap gap-2">
+              {previewIcps.length ? (
+                previewIcps.map((item) => (
+                  <Badge key={item} variant="muted">
+                    {item}
+                  </Badge>
+                ))
+              ) : (
+                <span className="text-xs text-[color:var(--muted-foreground)]">No personas selected yet.</span>
+              )}
+            </div>
           </div>
         </CardContent>
       </Card>
@@ -394,16 +457,24 @@ export default function NewBrandPage() {
           </div>
 
           {error ? <div className="text-sm text-[color:var(--danger)]">{error}</div> : null}
+        </CardContent>
+      </Card>
+
+      <div className="sticky bottom-4 z-20 rounded-2xl border border-[color:var(--border)] bg-[color:var(--surface)] px-4 py-3 shadow-[0_12px_32px_-20px_rgba(0,0,0,0.45)] backdrop-blur">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="text-xs text-[color:var(--muted-foreground)]">
+            Showing setup completeness: {Number(stepProgress.website) + Number(stepProgress.niche) + Number(stepProgress.subniches) + Number(stepProgress.personas)}/4
+          </div>
           <div className="flex gap-2">
-            <Button type="button" onClick={save} disabled={saving || !website.trim()}>
-              {saving ? "Creating brand and feed..." : "Finish Quiz & Generate Feed"}
-            </Button>
             <Button type="button" variant="outline" onClick={() => router.push("/brands")}>
               Cancel
             </Button>
+            <Button type="button" onClick={save} disabled={saving || !website.trim()}>
+              {saving ? "Creating brand and feed..." : "Finish Quiz & Generate Feed"}
+            </Button>
           </div>
-        </CardContent>
-      </Card>
+        </div>
+      </div>
     </div>
   );
 }

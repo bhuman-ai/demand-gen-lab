@@ -2,7 +2,18 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowLeft, ArrowRight, Pause, Play, RefreshCw, Rocket, Save, Upload } from "lucide-react";
+import {
+  ArrowLeft,
+  ArrowRight,
+  CheckCircle2,
+  Lock,
+  Pause,
+  Play,
+  RefreshCw,
+  Rocket,
+  Save,
+  Upload,
+} from "lucide-react";
 import {
   controlExperimentRunApi,
   fetchBrand,
@@ -224,6 +235,20 @@ function stageTitle(index: StageIndex) {
   if (index === 1) return "Stage 1 · Prospects";
   if (index === 2) return "Stage 2 · Messaging";
   return "Stage 3 · Launch";
+}
+
+function stageName(index: StageIndex) {
+  if (index === 0) return "Setup";
+  if (index === 1) return "Prospects";
+  if (index === 2) return "Messaging";
+  return "Launch";
+}
+
+function stageSummary(index: StageIndex) {
+  if (index === 0) return "Define offer, audience, and test envelope.";
+  if (index === 1) return "Collect verified work emails.";
+  if (index === 2) return "Edit and publish flow canvas.";
+  return "Start outbound and monitor outcomes.";
 }
 
 function asStageIndex(value: number): StageIndex {
@@ -615,7 +640,7 @@ export default function ExperimentClient({
       [
         {
           index: 0 as StageIndex,
-          label: "0. Setup",
+          label: stageName(0),
           disabled: false,
           status: setupComplete
             ? ("done" as WorkflowStageStatus)
@@ -625,7 +650,7 @@ export default function ExperimentClient({
         },
         {
           index: 1 as StageIndex,
-          label: "1. Prospects",
+          label: stageName(1),
           disabled: !prospectsUnlocked,
           status: !prospectsUnlocked
             ? ("locked" as WorkflowStageStatus)
@@ -637,7 +662,7 @@ export default function ExperimentClient({
         },
         {
           index: 2 as StageIndex,
-          label: "2. Messaging",
+          label: stageName(2),
           disabled: !messagingUnlocked,
           status: !messagingUnlocked
             ? ("locked" as WorkflowStageStatus)
@@ -649,7 +674,7 @@ export default function ExperimentClient({
         },
         {
           index: 3 as StageIndex,
-          label: "3. Launch",
+          label: stageName(3),
           disabled: !launchUnlocked,
           status: !launchUnlocked
             ? ("locked" as WorkflowStageStatus)
@@ -929,27 +954,26 @@ export default function ExperimentClient({
       {error ? <div className="text-sm text-[color:var(--danger)]">{error}</div> : null}
 
       <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Workflow</CardTitle>
-          <CardDescription>
-            {messagingFocus ? "Messaging focus mode." : "Only current stage content is shown below."}
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          {!messagingFocus ? (
-            <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-2 text-xs">
-              <div className="font-medium text-[color:var(--foreground)]">
+        <CardHeader className="border-b border-[color:var(--border)]">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <CardTitle className="text-base">Workflow</CardTitle>
+              <CardDescription>
+                {messagingFocus ? "Messaging focus mode." : "Progressive stage flow with one clear next action."}
+              </CardDescription>
+            </div>
+            <div className="flex flex-wrap items-center gap-2 text-xs">
+              <Badge variant="muted">
                 {progressDoneCount}/{STAGE_COUNT} stages complete
-              </div>
-              <div className="text-[color:var(--muted-foreground)]">{progressPercent}% complete</div>
+              </Badge>
+              <Badge variant="muted">{progressPercent}% complete</Badge>
             </div>
-          ) : null}
-          {!messagingFocus ? (
-            <div className="rounded-lg border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-2 text-xs text-[color:var(--muted-foreground)]">
-              {nextGateHint}
-            </div>
-          ) : null}
-          <div className="grid gap-2 md:grid-cols-4">
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="relative">
+            <div className="pointer-events-none absolute left-10 right-10 top-7 hidden h-px bg-[color:var(--border)] md:block" />
+            <div className="grid gap-2 md:grid-cols-4">
             {workflowStages.map((stage) => (
               <button
                 key={stage.index}
@@ -959,18 +983,34 @@ export default function ExperimentClient({
                   if (stage.disabled) return;
                   setCurrentStage(stage.index);
                 }}
-                className={`rounded-lg border p-3 text-left transition ${
+                className={`relative rounded-2xl border p-3 text-left transition ${
                   currentStage === stage.index
-                    ? "border-[color:var(--accent)] bg-[color:var(--accent-soft)]"
-                    : "border-[color:var(--border)]"
+                    ? "border-[color:var(--accent)] bg-[color:var(--accent-soft)] shadow-[0_12px_28px_-22px_color-mix(in_srgb,var(--shadow)_95%,transparent)]"
+                    : stage.status === "done"
+                      ? "border-[color:var(--success-border)] bg-[color:var(--success-soft)]/60"
+                      : "border-[color:var(--border)] bg-[color:var(--surface-muted)]"
                 } ${stage.disabled ? "cursor-not-allowed opacity-60" : ""}`}
               >
-                <div className="flex items-center justify-between">
-                  <span className="text-sm font-medium">{stage.label}</span>
-                  <Badge variant={stageBadgeVariant(stage.status)}>{stageBadgeLabel(stage.status)}</Badge>
+                <div className="flex items-center justify-between gap-2">
+                  <div className="inline-flex h-6 min-w-6 items-center justify-center rounded-full border border-[color:var(--border)] bg-[color:var(--surface)] px-2 text-[11px] font-semibold">
+                    {stage.index + 1}
+                  </div>
+                  {stage.status === "done" ? (
+                    <CheckCircle2 className="h-4 w-4 text-[color:var(--success)]" />
+                  ) : stage.status === "locked" ? (
+                    <Lock className="h-3.5 w-3.5 text-[color:var(--muted-foreground)]" />
+                  ) : (
+                    <Badge variant={stageBadgeVariant(stage.status)}>{stageBadgeLabel(stage.status)}</Badge>
+                  )}
                 </div>
+                <div className="mt-2 text-sm font-semibold">{stage.label}</div>
+                <div className="mt-1 text-xs text-[color:var(--muted-foreground)]">{stageSummary(stage.index)}</div>
               </button>
             ))}
+            </div>
+          </div>
+          <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-2 text-xs text-[color:var(--muted-foreground)]">
+            {nextGateHint}
           </div>
         </CardContent>
       </Card>
@@ -1954,9 +1994,12 @@ export default function ExperimentClient({
         </Card>
       ) : null}
 
-      <Card>
-        <CardContent className="flex flex-wrap items-center justify-between gap-2 py-4">
-          <div className="text-xs text-[color:var(--muted-foreground)]">{stageTitle(currentStage)}</div>
+      <Card className="sticky bottom-4 z-10 border-[color:var(--border)]/90 bg-[color:var(--surface)]/95 backdrop-blur">
+        <CardContent className="flex flex-wrap items-center justify-between gap-3 py-4">
+          <div>
+            <div className="text-xs font-medium text-[color:var(--foreground)]">{stageTitle(currentStage)}</div>
+            <div className="text-xs text-[color:var(--muted-foreground)]">{nextGateHint}</div>
+          </div>
           <div className="flex flex-wrap gap-2">
             <Button type="button" variant="outline" onClick={goPrev} disabled={currentStage === 0}>
               <ArrowLeft className="h-4 w-4" />

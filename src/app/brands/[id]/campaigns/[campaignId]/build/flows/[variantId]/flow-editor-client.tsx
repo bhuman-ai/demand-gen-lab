@@ -1068,48 +1068,46 @@ export default function FlowEditorClient({
 
   return (
     <div className="grid gap-4">
-      {!hideOverviewCard ? (
-        <Card>
-          <CardHeader className="flex flex-row items-start justify-between gap-3">
-            <div>
-              <CardTitle className="text-base">Conversation Map Canvas</CardTitle>
-              <CardDescription>
-                {brandName} - {campaignName} - {variantName}
-              </CardDescription>
+      <Card className={hideOverviewCard ? "sticky top-20 z-20 border-[color:var(--border)]/90 bg-[color:var(--surface)]/95 backdrop-blur" : ""}>
+        <CardContent className="flex flex-wrap items-center justify-between gap-3 py-4">
+          <div className="min-w-[220px]">
+            <div className="text-sm font-semibold">Conversation Flow Canvas</div>
+            <div className="text-xs text-[color:var(--muted-foreground)]">
+              {brandName} · {campaignName} · {variantName}
             </div>
-            <div className="flex flex-wrap gap-2">
-              <Badge variant={map?.status === "published" ? "success" : "muted"}>{map?.status || "draft"}</Badge>
-              <Badge variant="muted">Revision {map?.publishedRevision ?? 0}</Badge>
-            </div>
-          </CardHeader>
-          <CardContent className="flex flex-wrap items-center gap-2">
-            <Button type="button" variant="outline" onClick={generate} disabled={generating}>
+          </div>
+          <div className="flex flex-wrap items-center gap-2 text-xs">
+            <Badge variant={map?.status === "published" ? "success" : "muted"}>{map?.status || "draft"}</Badge>
+            <Badge variant="muted">Revision {map?.publishedRevision ?? 0}</Badge>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button type="button" size="sm" variant="outline" onClick={generate} disabled={generating}>
               <RefreshCw className="h-4 w-4" />
-              {generating ? "Roleplay screening..." : "Generate AI Map"}
+              {generating ? "Screening..." : "Generate"}
             </Button>
-            <Button type="button" variant="outline" onClick={saveDraft} disabled={saving}>
+            <Button type="button" size="sm" variant="outline" onClick={saveDraft} disabled={saving}>
               <Save className="h-4 w-4" />
-              {saving ? "Saving..." : "Save Draft"}
+              {saving ? "Saving..." : "Save"}
             </Button>
-            <Button type="button" onClick={publish} disabled={publishing}>
+            <Button type="button" size="sm" onClick={publish} disabled={publishing}>
               <Upload className="h-4 w-4" />
               {publishing ? "Publishing..." : "Publish"}
             </Button>
-            <Button asChild type="button" variant="ghost">
+            <Button asChild size="sm" type="button" variant="ghost">
               <Link href={backHref || `/brands/${brandId}/campaigns/${campaignId}/build`}>Back</Link>
             </Button>
-          </CardContent>
-          {statusMessage ? <CardContent className="pt-0 text-sm text-[color:var(--accent)]">{statusMessage}</CardContent> : null}
-          {error ? <CardContent className="pt-0 text-sm text-[color:var(--danger)]">{error}</CardContent> : null}
-        </Card>
-      ) : null}
+          </div>
+        </CardContent>
+        {statusMessage ? <CardContent className="pt-0 text-sm text-[color:var(--accent)]">{statusMessage}</CardContent> : null}
+        {error ? <CardContent className="pt-0 text-sm text-[color:var(--danger)]">{error}</CardContent> : null}
+      </Card>
 
-      <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_320px]">
+      <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_340px]">
         <Card className="overflow-hidden">
           <CardHeader className="flex flex-row items-center justify-between gap-3 border-b border-[color:var(--border)] pb-3">
             <div>
-              <CardTitle className="text-base">Canvas</CardTitle>
-              <CardDescription>Drag nodes, connect handles, pan with mouse drag, zoom with wheel + ctrl/cmd.</CardDescription>
+              <CardTitle className="text-base">Flow Canvas</CardTitle>
+              <CardDescription>Drag cards, connect handles, pan on background, zoom with ctrl/cmd + wheel.</CardDescription>
             </div>
             <div className="flex flex-wrap gap-2">
               <Button type="button" size="sm" variant="outline" onClick={addMessageNode}>

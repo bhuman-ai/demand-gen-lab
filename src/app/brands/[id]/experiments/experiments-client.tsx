@@ -196,30 +196,40 @@ export default function ExperimentsClient({ brandId }: { brandId: string }) {
           <CardDescription>Execution-first list with plain-language status and recent activity.</CardDescription>
         </CardHeader>
         <CardContent className="overflow-x-auto">
-          <table className="min-w-full text-sm">
+          <table className="w-full min-w-[1120px] text-sm">
+            <colgroup>
+              <col className="w-[27%]" />
+              <col className="w-[10%]" />
+              <col className="w-[31%]" />
+              <col className="w-[6%]" />
+              <col className="w-[6%]" />
+              <col className="w-[7%]" />
+              <col className="w-[9%]" />
+              <col className="w-[14%]" />
+            </colgroup>
             <thead>
               <tr className="text-left text-xs uppercase tracking-wide text-[color:var(--muted-foreground)]">
-                <th className="pb-2">Name</th>
-                <th className="pb-2">Status</th>
-                <th className="pb-2">Audience</th>
-                <th className="pb-2">Leads</th>
-                <th className="pb-2">Replies</th>
-                <th className="pb-2">Positive</th>
-                <th className="pb-2">Last active</th>
-                <th className="pb-2 text-right">Actions</th>
+                <th className="pb-2 pr-4">Name</th>
+                <th className="pb-2 pr-4">Status</th>
+                <th className="pb-2 pr-4">Audience</th>
+                <th className="pb-2 px-2 text-right whitespace-nowrap">Leads</th>
+                <th className="pb-2 px-2 text-right whitespace-nowrap">Replies</th>
+                <th className="pb-2 px-2 text-right whitespace-nowrap">Positive</th>
+                <th className="pb-2 px-2 whitespace-nowrap">Last active</th>
+                <th className="pb-2 pl-4 text-right whitespace-nowrap">Actions</th>
               </tr>
             </thead>
             <tbody>
               {filtered.map((item) => (
                 <tr key={item.id} className="group border-t border-[color:var(--border)]">
-                  <td className="py-2 font-medium">{item.name}</td>
-                  <td className="py-2">{item.status}</td>
-                  <td className="py-2 text-[color:var(--muted-foreground)]">{item.audience || "—"}</td>
-                  <td className="py-2">{leadsCell(item) || "—"}</td>
-                  <td className="py-2">{item.replies || "—"}</td>
-                  <td className="py-2">{item.positiveReplies || "—"}</td>
-                  <td className="py-2 text-[color:var(--muted-foreground)]">{item.lastActivityLabel}</td>
-                  <td className="py-2">
+                  <td className="py-2 pr-4 align-top font-medium">{item.name}</td>
+                  <td className="py-2 pr-4 align-top">{item.status}</td>
+                  <td className="py-2 pr-4 align-top text-[color:var(--muted-foreground)]">{item.audience || "—"}</td>
+                  <td className="py-2 px-2 align-top text-right">{leadsCell(item) || "—"}</td>
+                  <td className="py-2 px-2 align-top text-right">{item.replies || "—"}</td>
+                  <td className="py-2 px-2 align-top text-right">{item.positiveReplies || "—"}</td>
+                  <td className="py-2 px-2 align-top text-[color:var(--muted-foreground)] whitespace-nowrap">{item.lastActivityLabel}</td>
+                  <td className="py-2 pl-4 align-top">
                     <div className="flex justify-end gap-1 opacity-0 transition group-hover:opacity-100">
                       <Button size="sm" variant="outline" asChild>
                         <Link href={item.openHref}>Open</Link>

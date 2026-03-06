@@ -15,7 +15,6 @@ import type { BrandRecord, ExperimentListItem } from "@/lib/factory-types";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { Select } from "@/components/ui/select";
 
 const STATUS_OPTIONS: Array<"all" | ExperimentListItem["status"]> = [
   "all",
@@ -28,6 +27,10 @@ const STATUS_OPTIONS: Array<"all" | ExperimentListItem["status"]> = [
   "Promoted",
   "Blocked",
 ];
+
+function statusLabel(status: (typeof STATUS_OPTIONS)[number]) {
+  return status === "all" ? "All statuses" : status;
+}
 
 function leadsCell(item: ExperimentListItem) {
   if (item.sourcedLeads > 0) return item.sourcedLeads;
@@ -43,7 +46,6 @@ export default function ExperimentsClient({ brandId }: { brandId: string }) {
   const [duplicatingId, setDuplicatingId] = useState("");
   const [error, setError] = useState("");
   const [statusFilter, setStatusFilter] = useState<(typeof STATUS_OPTIONS)[number]>("all");
-  const [ownerFilter, setOwnerFilter] = useState("all");
   const [query, setQuery] = useState("");
 
   const refresh = async () => {
@@ -76,14 +78,12 @@ export default function ExperimentsClient({ brandId }: { brandId: string }) {
   }, [brandId]);
 
   const filtered = useMemo(() => {
-    const rows = filterExperimentListItems({
+    return filterExperimentListItems({
       items,
       status: statusFilter,
       query,
     });
-    if (ownerFilter === "all") return rows;
-    return rows.filter((item) => item.owner.toLowerCase() === ownerFilter.toLowerCase());
-  }, [items, ownerFilter, query, statusFilter]);
+  }, [items, query, statusFilter]);
 
   const activeNow = useMemo(
     () => filtered.filter((item) => item.isActiveNow),
@@ -128,20 +128,27 @@ export default function ExperimentsClient({ brandId }: { brandId: string }) {
             </Button>
           </div>
         </CardHeader>
-        <CardContent className="grid gap-3 md:grid-cols-[220px_220px_1fr]">
-          <Select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as (typeof STATUS_OPTIONS)[number])}>
-            {STATUS_OPTIONS.map((status) => (
-              <option key={status} value={status}>
-                {status === "all" ? "All statuses" : status}
-              </option>
-            ))}
-          </Select>
-
-          <Select value={ownerFilter} onChange={(event) => setOwnerFilter(event.target.value)}>
-            <option value="all">All owners</option>
-            <option value="unassigned">Unassigned</option>
-          </Select>
-
+        <CardContent className="space-y-3">
+          <div className="flex flex-wrap gap-2">
+            {STATUS_OPTIONS.map((status) => {
+              const active = statusFilter === status;
+              return (
+                <button
+                  key={status}
+                  type="button"
+                  aria-pressed={active}
+                  onClick={() => setStatusFilter(status)}
+                  className={`rounded-full border px-3 py-1.5 text-sm transition ${
+                    active
+                      ? "border-[color:var(--accent)] bg-[color:var(--accent-soft)] text-[color:var(--foreground)]"
+                      : "border-[color:var(--border)] bg-[color:var(--surface)] text-[color:var(--muted-foreground)] hover:bg-[color:var(--surface-muted)]"
+                  }`}
+                >
+                  {statusLabel(status)}
+                </button>
+              );
+            })}
+          </div>
           <div className="relative">
             <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-[color:var(--muted-foreground)]" />
             <Input

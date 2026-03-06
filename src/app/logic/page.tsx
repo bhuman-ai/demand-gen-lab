@@ -16,12 +16,12 @@ export default function LogicPage() {
       <Card>
         <CardHeader>
           <CardTitle>Logic</CardTitle>
-          <CardDescription>Global campaign automation and execution rules.</CardDescription>
+          <CardDescription>Tools: automation logic and execution guardrails.</CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
           <Badge variant="muted">Active brand context: {brandId || "none selected"}</Badge>
           <p className="text-sm text-[color:var(--muted-foreground)]">
-            Use this surface for sequencing logic, guardrails, and cross-campaign conditions.
+            Use this tool surface for sequencing rules, guardrails, and cross-campaign conditions.
           </p>
           {brandId ? (
             <Button asChild>

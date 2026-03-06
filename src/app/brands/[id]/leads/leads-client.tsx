@@ -57,7 +57,7 @@ export default function LeadsClient({ brand }: { brand: BrandRecord }) {
       <Card>
         <CardHeader>
           <CardTitle>Leads</CardTitle>
-          <CardDescription>Pipeline view for {brand.name}.</CardDescription>
+          <CardDescription>Operational lead database for {brand.name}.</CardDescription>
         </CardHeader>
         <CardContent className="grid gap-3 md:grid-cols-3">
           <div>
@@ -80,7 +80,7 @@ export default function LeadsClient({ brand }: { brand: BrandRecord }) {
           <CardHeader>
             <CardTitle className="text-base">Start Here</CardTitle>
             <CardDescription>
-              This table is your lightweight pipeline. Add leads manually, or run outreach to start conversations.
+              This table is your lead pool. Add leads manually, or run outreach to start conversations.
             </CardDescription>
           </CardHeader>
           <CardContent className="flex flex-wrap gap-2">
@@ -96,7 +96,7 @@ export default function LeadsClient({ brand }: { brand: BrandRecord }) {
 
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Quick Add Lead</CardTitle>
+          <CardTitle className="text-base">Add Lead</CardTitle>
         </CardHeader>
         <CardContent className="grid gap-3 md:grid-cols-5">
           <div className="md:col-span-2">

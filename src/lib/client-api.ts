@@ -9,6 +9,7 @@ import type {
   ConversationPreviewLead,
   EvolutionSnapshot,
   Experiment,
+  ExperimentListItem,
   ExperimentRecord,
   ExperimentSuggestionRecord,
   Hypothesis,
@@ -25,6 +26,10 @@ import type {
   SourcingChainDecision,
   SourcingProbeResult,
 } from "@/lib/factory-types";
+import {
+  clampExperimentSampleSize,
+  EXPERIMENT_MIN_VERIFIED_EMAIL_LEADS,
+} from "@/lib/experiment-policy";
 
 function asObject(value: unknown): Record<string, unknown> {
   if (value && typeof value === "object" && !Array.isArray(value)) {
@@ -138,6 +143,12 @@ export async function fetchExperiments(brandId: string) {
   const response = await fetch(`/api/brands/${brandId}/experiments`, { cache: "no-store" });
   const data = await readJson(response);
   return (Array.isArray(data?.experiments) ? data.experiments : []) as ExperimentRecord[];
+}
+
+export async function fetchExperimentListView(brandId: string) {
+  const response = await fetch(`/api/brands/${brandId}/experiments/list-view`, { cache: "no-store" });
+  const data = await readJson(response);
+  return (Array.isArray(data?.items) ? data.items : []) as ExperimentListItem[];
 }
 
 export async function fetchExperimentSuggestions(brandId: string) {
@@ -294,7 +305,7 @@ export async function fetchExperimentSourcingTraceApi(brandId: string, experimen
 export async function sourceExperimentSampleLeadsApi(
   brandId: string,
   experimentId: string,
-  sampleSize = 20,
+  sampleSize = EXPERIMENT_MIN_VERIFIED_EMAIL_LEADS,
   options?: { timeoutMs?: number; signal?: AbortSignal }
 ) {
   const timeoutMs = Math.max(5_000, Number(options?.timeoutMs ?? 25_000) || 25_000);
@@ -323,7 +334,7 @@ export async function sourceExperimentSampleLeadsApi(
     return {
       runId: String(data.runId ?? ""),
       status: String(data.status ?? ""),
-      sampleSize: Math.max(1, Number(data.sampleSize ?? sampleSize) || sampleSize),
+      sampleSize: clampExperimentSampleSize(data.sampleSize ?? sampleSize, sampleSize),
     };
   } catch (err) {
     if (err instanceof Error && err.name === "AbortError") {

@@ -1,4 +1,5 @@
 import ExperimentsClient from "./experiments-client";
+import { redirect } from "next/navigation";
 
 export default async function ExperimentsPage({
   params,
@@ -9,5 +10,8 @@ export default async function ExperimentsPage({
 }) {
   const { id } = await params;
   const query = await searchParams;
-  return <ExperimentsClient brandId={id} showFeedHint={query?.from === "quiz"} />;
+  if (query?.from === "quiz") {
+    redirect(`/brands/${id}/experiments/suggestions?from=quiz`);
+  }
+  return <ExperimentsClient brandId={id} />;
 }

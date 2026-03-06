@@ -57,7 +57,7 @@ export default function NetworkClient({ brand }: { brand: BrandRecord }) {
       <Card>
         <CardHeader>
           <CardTitle>Network</CardTitle>
-          <CardDescription>Domains and reputation controls for {brand.name}.</CardDescription>
+          <CardDescription>Data sources, domains, and reputation controls for {brand.name}.</CardDescription>
         </CardHeader>
         <CardContent className="grid gap-3 md:grid-cols-3">
           <div>
@@ -80,7 +80,7 @@ export default function NetworkClient({ brand }: { brand: BrandRecord }) {
           <CardHeader>
             <CardTitle className="text-base">Start Here</CardTitle>
             <CardDescription>
-              Add the sending domains you care about and track warmup and reputation.
+              Add the sending domains you care about and monitor warmup and reputation.
             </CardDescription>
           </CardHeader>
           <CardContent className="flex flex-wrap gap-2">

@@ -122,6 +122,41 @@ export type ExperimentRecord = {
   updatedAt: string;
 };
 
+export type ExperimentListItemStatus =
+  | "Draft"
+  | "Sourcing"
+  | "Ready"
+  | "Running"
+  | "Paused"
+  | "Completed"
+  | "Promoted"
+  | "Blocked";
+
+export type ExperimentListItem = {
+  id: string;
+  brandId: string;
+  name: string;
+  status: ExperimentListItemStatus;
+  audience: string;
+  offer: string;
+  owner: string;
+  flowRevision: number;
+  sourcedLeads: number;
+  scheduledMessages: number;
+  sentMessages: number;
+  replies: number;
+  positiveReplies: number;
+  isActiveNow: boolean;
+  activeActionLabel: "Open Run" | "Open Prospects" | "Open";
+  openHref: string;
+  editHref: string;
+  duplicateHref: string;
+  activeHref: string;
+  lastActivityAt: string;
+  lastActivityLabel: string;
+  promotedCampaignId: string;
+};
+
 export type ExperimentSuggestionStatus = "suggested" | "accepted" | "dismissed";
 
 export type ExperimentSuggestionSource = "ai" | "system";
@@ -337,6 +372,9 @@ export type LeadQualityPolicy = {
   requirePersonName: boolean;
   requireCompany: boolean;
   requireTitle: boolean;
+  requiredTitleKeywords?: string[];
+  requiredCompanyKeywords?: string[];
+  excludedCompanyKeywords?: string[];
   minConfidenceScore: number;
 };
 

@@ -630,7 +630,7 @@ export default function OutreachSettingsClient() {
         <CardHeader>
           <CardTitle>Outreach Automation Settings</CardTitle>
           <CardDescription>
-            Manage Customer.io delivery accounts and email reply accounts, then assign both per brand.
+            Tools for sending accounts, mailbox identity, and readiness checks.
           </CardDescription>
         </CardHeader>
         <CardContent className="grid gap-3 md:grid-cols-3">
@@ -656,7 +656,7 @@ export default function OutreachSettingsClient() {
         <CardHeader>
           <CardTitle className="text-base">Brand Readiness</CardTitle>
           <CardDescription>
-            Each brand needs a delivery account + reply inbox. Run tests to confirm everything is connected.
+            Each brand needs a sending account and a reply inbox. Run tests to confirm everything is connected.
           </CardDescription>
         </CardHeader>
         <CardContent className="grid gap-3">

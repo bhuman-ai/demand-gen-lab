@@ -250,21 +250,21 @@ function edgeLabel(edge: ConversationFlowEdge) {
   if (edge.trigger === "intent") {
     switch (edge.intent) {
       case "question":
-        return "Person asked for details";
+        return "Asked for more info";
       case "interest":
-        return "Person said yes, go ahead";
+        return "Interested";
       case "objection":
-        return "Person pushed back";
+        return "Not now";
       case "unsubscribe":
-        return "Person said stop";
+        return "Negative response";
       case "other":
-        return "Person replied (other)";
+        return "Wrong person";
       default:
-        return "Person replied";
+        return "No reply";
     }
   }
-  if (edge.trigger === "timer") return `After ${edge.waitMinutes} min`;
-  return "Default path";
+  if (edge.trigger === "timer") return `No reply (${edge.waitMinutes} min)`;
+  return "No reply";
 }
 
 function promptSnippet(value: string, max = 180) {
@@ -903,6 +903,25 @@ export default function FlowEditorClient({
     });
   };
 
+  const duplicateNode = (nodeId: string) => {
+    setGraph((prev) => {
+      if (!prev) return prev;
+      const source = prev.nodes.find((node) => node.id === nodeId);
+      if (!source) return prev;
+      const duplicate: ConversationFlowNode = {
+        ...source,
+        id: makeNodeId(),
+        title: `${source.title} Copy`,
+        x: source.x + 48,
+        y: source.y + 48,
+      };
+      return {
+        ...prev,
+        nodes: [...prev.nodes, duplicate],
+      };
+    });
+  };
+
   const deleteNode = (nodeId: string) => {
     setGraph((prev) => {
       if (!prev) return prev;
@@ -1299,29 +1318,45 @@ export default function FlowEditorClient({
 
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">Selected Item</CardTitle>
-            <CardDescription>Select a node or connector on the canvas to edit it.</CardDescription>
+            <CardTitle className="text-base">Node Inspector</CardTitle>
+            <CardDescription>Edit the selected node. Advanced routing is hidden by default.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             {selectedNode ? (
               <div className="space-y-3 rounded-xl border border-[color:var(--border)] p-3">
                 <div className="flex items-center justify-between">
                   <div className="text-sm font-semibold">
-                    {selectedNode.kind === "terminal" ? "Stop Node" : "Message Prompt"}
+                    Node: {selectedNode.title || (selectedNode.kind === "terminal" ? "End" : "Message")}
                   </div>
-                  <Button type="button" size="sm" variant="ghost" onClick={() => deleteNode(selectedNode.id)}>
-                    <Trash2 className="h-4 w-4" />
-                  </Button>
+                  <div className="flex items-center gap-1">
+                    {selectedNode.kind === "message" ? (
+                      <Button type="button" size="sm" variant="ghost" onClick={() => duplicateNode(selectedNode.id)}>
+                        Duplicate
+                      </Button>
+                    ) : null}
+                    <Button type="button" size="sm" variant="ghost" onClick={() => deleteNode(selectedNode.id)}>
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  </div>
                 </div>
 
                 {selectedNode.kind === "message" ? (
                   <>
                     <div className="grid gap-2">
-                      <Label>Prompt Template</Label>
+                      <Label>Subject</Label>
+                      <Input
+                        value={selectedNode.subject}
+                        onChange={(event) => setNodePatch(selectedNode.id, { subject: event.target.value })}
+                        placeholder="Quick question about your pipeline"
+                      />
+                    </div>
+                    <div className="grid gap-2">
+                      <Label>Body</Label>
                       <Textarea
-                        value={selectedNode.promptTemplate}
-                        rows={11}
-                        onChange={(event) => setNodePatch(selectedNode.id, { promptTemplate: event.target.value })}
+                        value={selectedNode.body}
+                        rows={9}
+                        onChange={(event) => setNodePatch(selectedNode.id, { body: event.target.value })}
+                        placeholder="Hi {{firstName}}, ..."
                       />
                     </div>
 
@@ -1365,19 +1400,19 @@ export default function FlowEditorClient({
                       <Button
                         type="button"
                         size="sm"
-                        variant="outline"
+                        variant="default"
                         onClick={() => void generatePreview()}
                         disabled={previewingNodeId === selectedNode.id || !selectedPreviewLead}
                       >
                         {previewingNodeId === selectedNode.id ? (
                           <>
                             <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                            Generating Preview...
+                            Regenerating...
                           </>
                         ) : (
                           <>
                             <Sparkles className="h-3.5 w-3.5" />
-                            Generate Preview
+                            Regenerate draft
                           </>
                         )}
                       </Button>
@@ -1401,6 +1436,18 @@ export default function FlowEditorClient({
                         </div>
                       ) : null}
                     </div>
+
+                    <details className="rounded-lg border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-2">
+                      <summary className="cursor-pointer text-sm font-medium">Advanced</summary>
+                      <div className="mt-2 grid gap-2">
+                        <Label>Prompt Template</Label>
+                        <Textarea
+                          value={selectedNode.promptTemplate}
+                          rows={8}
+                          onChange={(event) => setNodePatch(selectedNode.id, { promptTemplate: event.target.value })}
+                        />
+                      </div>
+                    </details>
                   </>
                 ) : (
                   <div className="rounded-lg border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-2 text-sm text-[color:var(--muted-foreground)]">
@@ -1421,91 +1468,95 @@ export default function FlowEditorClient({
 
             {selectedEdge ? (
               <div className="space-y-3 rounded-xl border border-[color:var(--border)] p-3">
-                <div className="flex items-center justify-between">
-                  <div className="text-sm font-semibold">Path</div>
-                  <Button type="button" size="sm" variant="ghost" onClick={() => deleteEdge(selectedEdge.id)}>
-                    <Trash2 className="h-4 w-4" />
-                  </Button>
-                </div>
-
                 <div className="rounded-md border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-2 text-xs text-[color:var(--muted-foreground)]">
-                  {(nodeLookup.get(selectedEdge.fromNodeId)?.title || "From node")} {"->"}{" "}
+                  Path: {(nodeLookup.get(selectedEdge.fromNodeId)?.title || "From node")} {"->"}{" "}
                   {(nodeLookup.get(selectedEdge.toNodeId)?.title || "To node")}
                 </div>
 
-                <div className="grid gap-2">
-                  <Label>When should this path run?</Label>
-                  <Select
-                    value={selectedEdge.trigger}
-                    onChange={(event) => {
-                      const trigger =
-                        event.target.value === "intent"
-                          ? "intent"
-                          : event.target.value === "timer"
-                            ? "timer"
-                            : "fallback";
-                      setEdgePatch(selectedEdge.id, {
-                        trigger,
-                        intent: trigger === "intent" ? selectedEdge.intent || "interest" : "",
-                      });
-                    }}
-                  >
-                    <option value="intent">When person replies</option>
-                    <option value="timer">After waiting</option>
-                    <option value="fallback">Default path</option>
-                  </Select>
-                </div>
+                <details>
+                  <summary className="cursor-pointer text-sm font-medium">Advanced routing</summary>
+                  <div className="mt-3 space-y-3">
+                    <div className="flex justify-end">
+                      <Button type="button" size="sm" variant="ghost" onClick={() => deleteEdge(selectedEdge.id)}>
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    </div>
 
-                {selectedEdge.trigger === "intent" ? (
-                  <div className="grid gap-2">
-                    <Label>What did the person say?</Label>
-                    <Select
-                      value={selectedEdge.intent}
-                      onChange={(event) => {
-                        const value = event.target.value;
-                        const intent =
-                          value === "question" ||
-                          value === "interest" ||
-                          value === "objection" ||
-                          value === "unsubscribe" ||
-                          value === "other"
-                            ? value
-                            : "";
-                        setEdgePatch(selectedEdge.id, { intent });
-                      }}
-                    >
-                      <option value="">Person replied (unspecified)</option>
-                      <option value="interest">Person said yes, go ahead</option>
-                      <option value="question">Person asked for details</option>
-                      <option value="objection">Person pushed back / objection</option>
-                      <option value="unsubscribe">Person said stop emailing</option>
-                      <option value="other">Person replied with something else</option>
-                    </Select>
-                  </div>
-                ) : null}
+                    <div className="grid gap-2">
+                      <Label>When should this path run?</Label>
+                      <Select
+                        value={selectedEdge.trigger}
+                        onChange={(event) => {
+                          const trigger =
+                            event.target.value === "intent"
+                              ? "intent"
+                              : event.target.value === "timer"
+                                ? "timer"
+                                : "fallback";
+                          setEdgePatch(selectedEdge.id, {
+                            trigger,
+                            intent: trigger === "intent" ? selectedEdge.intent || "interest" : "",
+                          });
+                        }}
+                      >
+                        <option value="intent">When a reply arrives</option>
+                        <option value="timer">No reply after waiting</option>
+                        <option value="fallback">No reply fallback</option>
+                      </Select>
+                    </div>
 
-                {selectedEdge.trigger === "timer" ? (
-                  <div className="grid gap-2">
-                    <Label>Wait (minutes)</Label>
-                    <Input
-                      type="number"
-                      min={0}
-                      max={10080}
-                      value={selectedEdge.waitMinutes}
-                      onChange={(event) =>
-                        setEdgePatch(selectedEdge.id, {
-                          waitMinutes: clamp(Number(event.target.value || selectedEdge.waitMinutes), 0, 10080),
-                        })
-                      }
-                    />
+                    {selectedEdge.trigger === "intent" ? (
+                      <div className="grid gap-2">
+                        <Label>Reply category</Label>
+                        <Select
+                          value={selectedEdge.intent}
+                          onChange={(event) => {
+                            const value = event.target.value;
+                            const intent =
+                              value === "question" ||
+                              value === "interest" ||
+                              value === "objection" ||
+                              value === "unsubscribe" ||
+                              value === "other"
+                                ? value
+                                : "";
+                            setEdgePatch(selectedEdge.id, { intent });
+                          }}
+                        >
+                          <option value="">No reply</option>
+                          <option value="question">Asked for more info</option>
+                          <option value="interest">Interested</option>
+                          <option value="objection">Not now</option>
+                          <option value="other">Wrong person</option>
+                          <option value="unsubscribe">Negative response</option>
+                        </Select>
+                      </div>
+                    ) : null}
+
+                    {selectedEdge.trigger === "timer" ? (
+                      <div className="grid gap-2">
+                        <Label>Wait (minutes)</Label>
+                        <Input
+                          type="number"
+                          min={0}
+                          max={10080}
+                          value={selectedEdge.waitMinutes}
+                          onChange={(event) =>
+                            setEdgePatch(selectedEdge.id, {
+                              waitMinutes: clamp(Number(event.target.value || selectedEdge.waitMinutes), 0, 10080),
+                            })
+                          }
+                        />
+                      </div>
+                    ) : null}
                   </div>
-                ) : null}
+                </details>
               </div>
             ) : null}
 
             {!selectedNode && !selectedEdge ? (
               <div className="rounded-xl border border-dashed border-[color:var(--border)] p-4 text-sm leading-6 text-[color:var(--muted-foreground)]">
-                Select a message node to edit its prompt. Select a connector to define what the person said.
+                Select a node to edit subject, body, and preview. Select a connector for advanced routing.
               </div>
             ) : null}
           </CardContent>

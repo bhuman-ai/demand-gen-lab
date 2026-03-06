@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowLeft,
@@ -17,6 +18,7 @@ import {
 import {
   controlExperimentRunApi,
   fetchBrand,
+  fetchBrandOutreachAssignment,
   fetchConversationPreviewLeadsApi,
   fetchExperiment,
   fetchExperimentRunView,
@@ -27,7 +29,18 @@ import {
   sourceExperimentSampleLeadsApi,
   updateExperimentApi,
 } from "@/lib/client-api";
-import type { BrandRecord, ExperimentRecord, OutreachRun, RunViewModel } from "@/lib/factory-types";
+import type {
+  BrandOutreachAssignment,
+  BrandRecord,
+  ExperimentRecord,
+  OutreachAccount,
+  OutreachRun,
+  RunViewModel,
+} from "@/lib/factory-types";
+import {
+  clampExperimentSampleSize,
+  EXPERIMENT_MIN_VERIFIED_EMAIL_LEADS,
+} from "@/lib/experiment-policy";
 import { trackEvent } from "@/lib/telemetry-client";
 import FlowEditorClient from "@/app/brands/[id]/campaigns/[campaignId]/build/flows/[variantId]/flow-editor-client";
 import { Badge } from "@/components/ui/badge";
@@ -37,7 +50,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 
-const PROSPECT_VALIDATION_TARGET = 20;
+const PROSPECT_VALIDATION_TARGET = EXPERIMENT_MIN_VERIFIED_EMAIL_LEADS;
 const PROSPECT_VALIDATION_MIN_READY = PROSPECT_VALIDATION_TARGET;
 const STAGE_COUNT = 4;
 const AUTO_SOURCE_POLL_INTERVAL_MS = 2000;
@@ -47,6 +60,7 @@ const CSV_MAX_CHARS = 2_000_000;
 type StageIndex = 0 | 1 | 2 | 3;
 type WorkflowStageStatus = "done" | "current" | "waiting" | "locked" | "active";
 type ProspectInputMode = "need_data" | "have_data";
+type ExperimentView = "setup" | "prospects" | "messaging" | "launch" | "run";
 type RejectionSummaryRow = { reason: string; count: number };
 type EmailFailureSample = {
   id: string;
@@ -231,10 +245,10 @@ function wait(ms: number) {
 }
 
 function stageTitle(index: StageIndex) {
-  if (index === 0) return "Stage 0 · Setup";
-  if (index === 1) return "Stage 1 · Prospects";
-  if (index === 2) return "Stage 2 · Messaging";
-  return "Stage 3 · Launch";
+  if (index === 0) return "Setup";
+  if (index === 1) return "Prospects";
+  if (index === 2) return "Messaging";
+  return "Launch";
 }
 
 function stageName(index: StageIndex) {
@@ -249,6 +263,13 @@ function stageSummary(index: StageIndex) {
   if (index === 1) return "Collect verified work emails.";
   if (index === 2) return "Edit and publish flow canvas.";
   return "Start outbound and monitor outcomes.";
+}
+
+function stagePath(brandId: string, experimentId: string, stage: StageIndex) {
+  if (stage === 0) return `/brands/${brandId}/experiments/${experimentId}/setup`;
+  if (stage === 1) return `/brands/${brandId}/experiments/${experimentId}/prospects`;
+  if (stage === 2) return `/brands/${brandId}/experiments/${experimentId}/messaging`;
+  return `/brands/${brandId}/experiments/${experimentId}/launch`;
 }
 
 function asStageIndex(value: number): StageIndex {
@@ -272,9 +293,11 @@ function stageBadgeLabel(status: WorkflowStageStatus) {
 export default function ExperimentClient({
   brandId,
   experimentId,
+  view,
 }: {
   brandId: string;
   experimentId: string;
+  view?: ExperimentView;
 }) {
   type RefreshSnapshot = {
     brand: BrandRecord | null;
@@ -291,6 +314,9 @@ export default function ExperimentClient({
   const [brand, setBrand] = useState<BrandRecord | null>(null);
   const [experiment, setExperiment] = useState<ExperimentRecord | null>(null);
   const [runView, setRunView] = useState<RunViewModel | null>(null);
+  const [outreachAssignment, setOutreachAssignment] = useState<BrandOutreachAssignment | null>(null);
+  const [deliveryAccount, setDeliveryAccount] = useState<OutreachAccount | null>(null);
+  const [replyMailboxAccount, setReplyMailboxAccount] = useState<OutreachAccount | null>(null);
   const [sourcingTrace, setSourcingTrace] = useState<Awaited<ReturnType<typeof fetchExperimentSourcingTraceApi>> | null>(null);
   const [sampleLeads, setSampleLeads] = useState<
     Awaited<ReturnType<typeof fetchConversationPreviewLeadsApi>>["leads"]
@@ -316,7 +342,9 @@ export default function ExperimentClient({
   const [sampling, setSampling] = useState(false);
   const [promoting, setPromoting] = useState(false);
   const [error, setError] = useState("");
-  const [currentStage, setCurrentStage] = useState<StageIndex>(0);
+  const [currentStage, setCurrentStage] = useState<StageIndex>(
+    view === "prospects" ? 1 : view === "messaging" ? 2 : view === "launch" ? 3 : 0
+  );
   const [samplingStatus, setSamplingStatus] = useState("");
   const [samplingSummary, setSamplingSummary] = useState("");
   const [samplingAttempt, setSamplingAttempt] = useState(0);
@@ -330,18 +358,26 @@ export default function ExperimentClient({
   const [importingCsv, setImportingCsv] = useState(false);
   const [csvImportSummary, setCsvImportSummary] = useState("");
   const [csvImportErrors, setCsvImportErrors] = useState<string[]>([]);
+  const router = useRouter();
   const samplingAbortRef = useRef<AbortController | null>(null);
   const samplingStopRequestedRef = useRef(false);
   const samplingActiveRunIdRef = useRef("");
+  const routeStage: StageIndex | null =
+    view === "setup" ? 0 : view === "prospects" ? 1 : view === "messaging" ? 2 : view === "launch" ? 3 : null;
 
   const refresh = async (showSpinner = true): Promise<RefreshSnapshot> => {
     if (showSpinner) setLoading(true);
     try {
-      const [brandRow, experimentRow, runRow, traceRow] = await Promise.all([
+      const [brandRow, experimentRow, runRow, traceRow, outreachAssignmentRow] = await Promise.all([
         fetchBrand(brandId),
         fetchExperiment(brandId, experimentId),
         fetchExperimentRunView(brandId, experimentId),
         fetchExperimentSourcingTraceApi(brandId, experimentId),
+        fetchBrandOutreachAssignment(brandId).catch(() => ({
+          assignment: null,
+          account: null,
+          mailboxAccount: null,
+        })),
       ]);
 
       let previewLeadsData: Awaited<ReturnType<typeof fetchConversationPreviewLeadsApi>> = {
@@ -380,6 +416,9 @@ export default function ExperimentClient({
       setBrand(brandRow);
       setExperiment(experimentRow);
       setRunView(runRow);
+      setOutreachAssignment(outreachAssignmentRow.assignment);
+      setDeliveryAccount(outreachAssignmentRow.account);
+      setReplyMailboxAccount(outreachAssignmentRow.mailboxAccount);
       setSourcingTrace(traceRow);
       setSampleLeads(previewLeadsData.leads);
       setSampleLeadRunsChecked(previewLeadsData.runsChecked);
@@ -426,6 +465,11 @@ export default function ExperimentClient({
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [brandId, experimentId]);
+
+  useEffect(() => {
+    if (routeStage === null) return;
+    setCurrentStage(routeStage);
+  }, [routeStage]);
 
   const latestRun = useMemo(() => runView?.runs?.[0] ?? null, [runView]);
   const latestEvents = useMemo(
@@ -501,7 +545,7 @@ export default function ExperimentClient({
     if (latestRun.status === "completed" && sourced > 0 && sent === 0) {
       return {
         headline: "Sourcing completed, but no emails were sent in this run.",
-        detail: `Accepted leads: ${sourced}. Click Launch Test to start sending.`,
+        detail: `Accepted leads: ${sourced}. Click Launch Experiment to start sending.`,
       };
     }
     if (latestRun.status === "completed" && sent > 0 && replies === 0) {
@@ -714,9 +758,10 @@ export default function ExperimentClient({
   }, [launchComplete, messagingComplete, prospectsComplete, remainingProspectLeads, setupComplete]);
 
   useEffect(() => {
+    if (routeStage !== null) return;
     const nextStage = asStageIndex(Math.min(currentStage, highestUnlockedStage));
     if (nextStage !== currentStage) setCurrentStage(nextStage);
-  }, [currentStage, highestUnlockedStage]);
+  }, [currentStage, highestUnlockedStage, routeStage]);
 
   const canGoNext = useMemo(() => {
     if (currentStage === 0) return setupComplete;
@@ -728,6 +773,41 @@ export default function ExperimentClient({
   const goNext = () =>
     setCurrentStage((prev) => asStageIndex(Math.min(highestUnlockedStage, prev + 1)));
   const goPrev = () => setCurrentStage((prev) => asStageIndex(prev - 1));
+
+  const launchFromEmail = String(deliveryAccount?.config.customerIo.fromEmail ?? "").trim();
+  const launchReplyToEmail = String(
+    replyMailboxAccount?.config.mailbox.email || deliveryAccount?.config.customerIo.replyToEmail || ""
+  ).trim();
+  const launchIdentityIssues = [
+    !outreachAssignment?.accountId ? "delivery account not assigned" : "",
+    !launchFromEmail ? "from email missing" : "",
+    !launchReplyToEmail ? "reply-to mailbox missing" : "",
+  ].filter(Boolean);
+  const launchIdentityReady = launchIdentityIssues.length === 0;
+  const launchBlocked = !launchUnlocked || !launchIdentityReady;
+
+  const saveSetup = async () => {
+    if (!experiment) return null;
+    setSaving(true);
+    setError("");
+    try {
+      const saved = await updateExperimentApi(brandId, experiment.id, {
+        name: experiment.name,
+        offer: experiment.offer,
+        audience: experiment.audience,
+        testEnvelope: experiment.testEnvelope,
+        successMetric: experiment.successMetric,
+      });
+      setExperiment(saved);
+      trackEvent("experiment_saved", { brandId, experimentId: experiment.id });
+      return saved;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to save setup");
+      return null;
+    } finally {
+      setSaving(false);
+    }
+  };
 
   const stopAutoSource = async () => {
     if (!experiment) return;
@@ -773,10 +853,7 @@ export default function ExperimentClient({
     setSamplingHeartbeatAt(new Date().toISOString());
 
     const targetLeads = PROSPECT_VALIDATION_TARGET;
-    const sampleSize = Math.max(
-      targetLeads,
-      Math.min(60, Number(experiment.testEnvelope.sampleSize || targetLeads))
-    );
+    const sampleSize = clampExperimentSampleSize(experiment.testEnvelope.sampleSize, targetLeads);
 
     let attempts = 0;
     let bestLeadCount = realEmailLeadCount;
@@ -930,10 +1007,245 @@ export default function ExperimentClient({
     return <div className="text-sm text-[color:var(--muted-foreground)]">Loading experiment...</div>;
   }
 
+  const showLiveRunOverview = Boolean(
+    latestRun &&
+      (view === "run" ||
+        ["queued", "sourcing", "scheduled", "sending", "monitoring", "paused"].includes(latestRun.status))
+  );
+  const latestRunMessages = latestRun ? runView.messages.filter((message) => message.runId === latestRun.id) : [];
+  const nextScheduledAt = latestRunMessages
+    .filter((message) => message.status === "scheduled" && message.scheduledAt)
+    .map((message) => message.scheduledAt)
+    .sort((a, b) => (a < b ? -1 : 1))[0];
+  const liveFunnelSteps = latestRun
+    ? [
+        { label: "Leads sourced", count: Number(latestRun.metrics.sourcedLeads ?? 0) },
+        { label: "Messages scheduled", count: Number(latestRun.metrics.scheduledMessages ?? 0) },
+        { label: "Messages sent", count: Number(latestRun.metrics.sentMessages ?? 0) },
+        { label: "Replies", count: Number(latestRun.metrics.replies ?? 0) },
+        { label: "Positive replies", count: Number(latestRun.metrics.positiveReplies ?? 0) },
+      ]
+    : [];
+  const liveFunnelBase = Math.max(1, Number(liveFunnelSteps[0]?.count ?? 0));
+
+  if (view === "run" && !latestRun) {
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Run Dashboard</CardTitle>
+          <CardDescription>No run exists yet for this experiment.</CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-wrap gap-2">
+          <Button asChild>
+            <Link href={`/brands/${brandId}/experiments/${experimentId}/launch`}>Open Launch Readiness</Link>
+          </Button>
+          <Button asChild variant="outline">
+            <Link href={`/brands/${brandId}/experiments/${experimentId}/messaging`}>Open Messaging</Link>
+          </Button>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  if (showLiveRunOverview && latestRun) {
+    return (
+      <div className="space-y-5">
+        {error ? <div className="text-sm text-[color:var(--danger)]">{error}</div> : null}
+
+        <Card>
+          <CardHeader>
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <CardTitle>{brand?.name || "Brand"} · {experiment.name}</CardTitle>
+                <CardDescription>{latestRunNarrative.detail}</CardDescription>
+              </div>
+              <Badge variant={runStatusVariant(latestRun.status)}>{latestRun.status}</Badge>
+            </div>
+          </CardHeader>
+          <CardContent className="grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
+            <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-2">
+              <div className="text-xs text-[color:var(--muted-foreground)]">Run</div>
+              <div className="text-sm font-semibold">{latestRun.id.slice(-8)}</div>
+            </div>
+            <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-2">
+              <div className="text-xs text-[color:var(--muted-foreground)]">Sent</div>
+              <div className="text-sm font-semibold">{latestRun.metrics.sentMessages}</div>
+            </div>
+            <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-2">
+              <div className="text-xs text-[color:var(--muted-foreground)]">Replies</div>
+              <div className="text-sm font-semibold">{latestRun.metrics.replies}</div>
+            </div>
+            <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-2">
+              <div className="text-xs text-[color:var(--muted-foreground)]">Positive</div>
+              <div className="text-sm font-semibold">{latestRun.metrics.positiveReplies}</div>
+            </div>
+            <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-2">
+              <div className="text-xs text-[color:var(--muted-foreground)]">Next send</div>
+              <div className="text-sm font-semibold">{nextScheduledAt ? formatDate(nextScheduledAt) : "Pending tick"}</div>
+            </div>
+          </CardContent>
+        </Card>
+
+        <div className="grid gap-4 lg:grid-cols-5">
+          <Card className="lg:col-span-3">
+            <CardHeader>
+              <CardTitle className="text-base">Funnel</CardTitle>
+              <CardDescription>How leads are flowing through this run right now.</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              {liveFunnelSteps.map((step, index) => {
+                const previous = index === 0 ? liveFunnelBase : Math.max(1, Number(liveFunnelSteps[index - 1]?.count ?? 0));
+                const stagePct = Math.round((Math.max(0, step.count) / previous) * 100);
+                const normalizedCount = Math.max(0, step.count);
+                const widthPct =
+                  normalizedCount <= 0
+                    ? 0
+                    : Math.max(2, Math.min(100, Math.round((normalizedCount / liveFunnelBase) * 100)));
+                return (
+                  <div key={step.label} className="space-y-1">
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="font-medium text-[color:var(--foreground)]">{step.label}</span>
+                      <span className="text-[color:var(--muted-foreground)]">
+                        {step.count} {index === 0 ? "" : `(${stagePct}% of previous)`}
+                      </span>
+                    </div>
+                    <div className="h-2 rounded-full bg-[color:var(--surface-muted)]">
+                      <div
+                        className="h-2 rounded-full bg-gradient-to-r from-[color:var(--accent)] to-[color:var(--success)]"
+                        style={{ width: `${widthPct}%` }}
+                      />
+                    </div>
+                  </div>
+                );
+              })}
+            </CardContent>
+          </Card>
+
+          <Card className="lg:col-span-2">
+            <CardHeader>
+              <CardTitle className="text-base">Approach</CardTitle>
+              <CardDescription>What this experiment is testing.</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-3 text-sm">
+              <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-2">
+                <div className="text-xs text-[color:var(--muted-foreground)]">Offer</div>
+                <div className="line-clamp-4">{experiment.offer || "Not set"}</div>
+              </div>
+              <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-2">
+                <div className="text-xs text-[color:var(--muted-foreground)]">Audience</div>
+                <div className="line-clamp-4">{experiment.audience || "Not set"}</div>
+              </div>
+              <div className="grid grid-cols-2 gap-2 text-xs">
+                <div className="rounded-lg border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-2 py-1">
+                  <span className="text-[color:var(--muted-foreground)]">Flow rev</span> #{experiment.messageFlow.publishedRevision}
+                </div>
+                <div className="rounded-lg border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-2 py-1">
+                  <span className="text-[color:var(--muted-foreground)]">Cadence</span> {latestRun.cadence}
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">What&apos;s Happening Now</CardTitle>
+            <CardDescription>Current run activity and direct operator actions.</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <div className="grid gap-2 sm:grid-cols-2 text-xs">
+              <div className="rounded-lg border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-2">
+                <div className="text-[color:var(--muted-foreground)]">From email</div>
+                <div className="font-medium text-[color:var(--foreground)]">{launchFromEmail || "Not configured"}</div>
+              </div>
+              <div className="rounded-lg border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-2">
+                <div className="text-[color:var(--muted-foreground)]">Reply-to</div>
+                <div className="font-medium text-[color:var(--foreground)]">{launchReplyToEmail || "Not configured"}</div>
+              </div>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <Button asChild type="button">
+                <Link href={`/brands/${brandId}/inbox`}>Open Inbox</Link>
+              </Button>
+              <Button type="button" variant="outline" onClick={() => void refresh(false)}>
+                <RefreshCw className="h-4 w-4" /> Refresh
+              </Button>
+              {canPause(latestRun.status) ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={async () => {
+                    await controlExperimentRunApi(brandId, experiment.id, latestRun.id, "pause");
+                    await refresh(false);
+                  }}
+                >
+                  <Pause className="h-4 w-4" /> Pause
+                </Button>
+              ) : null}
+              {canResume(latestRun.status) ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={async () => {
+                    await controlExperimentRunApi(brandId, experiment.id, latestRun.id, "resume");
+                    await refresh(false);
+                  }}
+                >
+                  <Play className="h-4 w-4" /> Resume
+                </Button>
+              ) : null}
+              {canCancel(latestRun.status) ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={async () => {
+                    await controlExperimentRunApi(brandId, experiment.id, latestRun.id, "cancel");
+                    await refresh(false);
+                  }}
+                >
+                  Cancel
+                </Button>
+              ) : null}
+              {experiment.runtime.campaignId && experiment.runtime.experimentId ? (
+                <Button asChild type="button" variant="outline">
+                  <Link href={`/brands/${brandId}/experiments/${experiment.id}/messaging`}>Open Messaging Canvas</Link>
+                </Button>
+              ) : null}
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Recent Signals</CardTitle>
+            <CardDescription>Latest run events and failure reasons.</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-2">
+            {latestEvents.length ? (
+              latestEvents.slice(0, 12).map((event) => (
+                <div key={event.id} className="rounded-lg border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-2 text-xs">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="font-medium text-[color:var(--foreground)]">{event.eventType}</div>
+                    <div className="text-[color:var(--muted-foreground)]">{formatDate(event.createdAt)}</div>
+                  </div>
+                  {event.payload.reason ? (
+                    <div className="mt-1 text-[color:var(--danger)]">{String(event.payload.reason)}</div>
+                  ) : null}
+                </div>
+              ))
+            ) : (
+              <div className="text-xs text-[color:var(--muted-foreground)]">No activity yet.</div>
+            )}
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
   const messagingFocus = currentStage === 2;
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-4 sm:space-y-5">
       {!messagingFocus ? (
         <Card>
           <CardHeader>
@@ -981,6 +1293,10 @@ export default function ExperimentClient({
                 disabled={stage.disabled}
                 onClick={() => {
                   if (stage.disabled) return;
+                  if (routeStage !== null) {
+                    router.push(stagePath(brandId, experiment.id, stage.index));
+                    return;
+                  }
                   setCurrentStage(stage.index);
                 }}
                 className={`relative rounded-2xl border p-3 text-left transition ${
@@ -1053,7 +1369,7 @@ export default function ExperimentClient({
                 <Label>Lead sample size</Label>
                 <Input
                   type="number"
-                  min={1}
+                  min={EXPERIMENT_MIN_VERIFIED_EMAIL_LEADS}
                   value={experiment.testEnvelope.sampleSize}
                   onChange={(event) =>
                     setExperiment((prev) =>
@@ -1062,7 +1378,7 @@ export default function ExperimentClient({
                             ...prev,
                             testEnvelope: {
                               ...prev.testEnvelope,
-                              sampleSize: Math.max(1, Number(event.target.value || 1)),
+                              sampleSize: clampExperimentSampleSize(event.target.value, prev.testEnvelope.sampleSize),
                             },
                           }
                         : prev
@@ -1111,32 +1427,28 @@ export default function ExperimentClient({
                 />
               </div>
             </div>
-            <div className="flex flex-wrap gap-2">
+            <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-between">
               <Button
                 type="button"
+                variant="outline"
                 disabled={saving}
-                onClick={async () => {
-                  setSaving(true);
-                  setError("");
-                  try {
-                    const saved = await updateExperimentApi(brandId, experiment.id, {
-                      name: experiment.name,
-                      offer: experiment.offer,
-                      audience: experiment.audience,
-                      testEnvelope: experiment.testEnvelope,
-                      successMetric: experiment.successMetric,
-                    });
-                    setExperiment(saved);
-                    trackEvent("experiment_saved", { brandId, experimentId: experiment.id });
-                  } catch (err) {
-                    setError(err instanceof Error ? err.message : "Failed to save setup");
-                  } finally {
-                    setSaving(false);
-                  }
+                onClick={() => {
+                  void saveSetup();
                 }}
               >
                 <Save className="h-4 w-4" />
                 {saving ? "Saving..." : "Save Setup"}
+              </Button>
+              <Button
+                type="button"
+                disabled={saving || !setupComplete}
+                onClick={async () => {
+                  const saved = await saveSetup();
+                  if (!saved) return;
+                  router.push(stagePath(brandId, saved.id, 1));
+                }}
+              >
+                Continue to Prospects
               </Button>
             </div>
           </CardContent>
@@ -1148,20 +1460,20 @@ export default function ExperimentClient({
           <CardHeader>
             <CardTitle className="text-base">{stageTitle(1)}</CardTitle>
             <CardDescription>
-              Reach {PROSPECT_VALIDATION_TARGET} qualified leads with real work emails to pass this gate.
+              Reach {PROSPECT_VALIDATION_TARGET} verified work emails. Sourcing runs automatically.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3">
               <div className="flex flex-wrap items-start justify-between gap-2">
                 <div>
-                  <div className="text-sm font-medium">Prospect Gate</div>
+                  <div className="text-sm font-medium">Verified Lead Progress</div>
                   <div className="text-xs text-[color:var(--muted-foreground)]">
                     {realEmailLeadCount}/{PROSPECT_VALIDATION_TARGET} verified work emails
                   </div>
                 </div>
                 <Badge variant={prospectsReady ? "success" : "accent"}>
-                  {prospectsReady ? "Passed" : "In progress"}
+                  {prospectsReady ? "Ready" : "In progress"}
                 </Badge>
               </div>
 
@@ -1183,11 +1495,11 @@ export default function ExperimentClient({
 
               {!prospectsReady ? (
                 <div className="mt-3 rounded-lg border border-[color:var(--danger-border)] bg-[color:var(--danger-soft)] px-3 py-2 text-sm text-[color:var(--danger)]">
-                  Gate blocked. {remainingProspectLeads} more verified work emails needed.
+                  Needs attention: {remainingProspectLeads} more verified work emails needed.
                 </div>
               ) : !samplingSummary ? (
                 <div className="mt-3 rounded-lg border border-[color:var(--success)]/40 bg-[color:var(--success-soft)] px-3 py-2 text-sm text-[color:var(--success)]">
-                  Gate passed. Messaging is unlocked.
+                  Ready for messaging.
                 </div>
               ) : null}
 
@@ -1760,6 +2072,13 @@ export default function ExperimentClient({
                 </details>
               </div>
             </details>
+            <div className="flex flex-col gap-2 sm:flex-row sm:justify-end">
+              <Button asChild type="button" disabled={!prospectsReady}>
+                <Link href={`/brands/${brandId}/experiments/${experiment.id}/messaging`}>
+                  Continue to Messaging
+                </Link>
+              </Button>
+            </div>
           </CardContent>
         </Card>
       ) : null}
@@ -1783,7 +2102,11 @@ export default function ExperimentClient({
               </div>
               {experiment.runtime.campaignId && experiment.runtime.experimentId ? (
                 <Button asChild size="sm" variant="outline">
-                  <Link href={`/brands/${brandId}/experiments/${experiment.id}/flow`}>Open full canvas</Link>
+                  <Link
+                    href={`/brands/${brandId}/campaigns/${experiment.runtime.campaignId}/build/flows/${experiment.runtime.experimentId}`}
+                  >
+                    Open in Builder
+                  </Link>
                 </Button>
               ) : null}
             </div>
@@ -1807,6 +2130,18 @@ export default function ExperimentClient({
                 Flow editor is unavailable until runtime mapping exists. Run Stage 1 sourcing once, then reopen Messaging.
               </div>
             )}
+            <div className="flex flex-col gap-2 sm:flex-row sm:justify-end">
+              <Button asChild type="button" variant="outline">
+                <Link href={`/brands/${brandId}/experiments/${experiment.id}/prospects`}>
+                  Back to Prospects
+                </Link>
+              </Button>
+              <Button asChild type="button" disabled={!messagingReady}>
+                <Link href={`/brands/${brandId}/experiments/${experiment.id}/launch`}>
+                  Continue to Launch
+                </Link>
+              </Button>
+            </div>
           </CardContent>
         </Card>
       ) : null}
@@ -1814,14 +2149,84 @@ export default function ExperimentClient({
       {currentStage === 3 ? (
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">{stageTitle(3)}</CardTitle>
-            <CardDescription>Start outbound sending and monitor run outcomes.</CardDescription>
+            <CardTitle className="text-base">Launch Readiness</CardTitle>
+            <CardDescription>Review setup and start this experiment.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
-            <div className="flex flex-wrap gap-2">
+            <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="text-sm font-medium">Sending Account</div>
+                <Badge variant={launchIdentityReady ? "success" : "danger"}>
+                  {launchIdentityReady ? "ready" : "setup needed"}
+                </Badge>
+              </div>
+              <div className="mt-2 grid gap-2 sm:grid-cols-2 text-xs">
+                <div className="rounded-lg border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-2">
+                  <div className="text-[color:var(--muted-foreground)]">From email</div>
+                  <div className="font-medium text-[color:var(--foreground)]">{launchFromEmail || "Not configured"}</div>
+                </div>
+                <div className="rounded-lg border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-2">
+                  <div className="text-[color:var(--muted-foreground)]">Reply-to email</div>
+                  <div className="font-medium text-[color:var(--foreground)]">{launchReplyToEmail || "Not configured"}</div>
+                </div>
+                <div className="rounded-lg border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-2">
+                  <div className="text-[color:var(--muted-foreground)]">Delivery account</div>
+                  <div className="font-medium text-[color:var(--foreground)]">
+                    {deliveryAccount ? `${deliveryAccount.name} (${deliveryAccount.status})` : "Not assigned"}
+                  </div>
+                </div>
+                <div className="rounded-lg border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-2">
+                  <div className="text-[color:var(--muted-foreground)]">Reply mailbox</div>
+                  <div className="font-medium text-[color:var(--foreground)]">
+                    {replyMailboxAccount
+                      ? `${replyMailboxAccount.name} (${replyMailboxAccount.status})`
+                      : "Not assigned"}
+                  </div>
+                </div>
+              </div>
+              {launchIdentityReady ? (
+                <div className="mt-2 text-xs text-[color:var(--muted-foreground)]">
+                  Launch will send from <span className="font-medium text-[color:var(--foreground)]">{launchFromEmail}</span>{" "}
+                  and route replies to{" "}
+                  <span className="font-medium text-[color:var(--foreground)]">{launchReplyToEmail}</span>.
+                </div>
+              ) : (
+                <div className="mt-2 text-xs text-[color:var(--warning)]">
+                  Fix before launch: {launchIdentityIssues.join(" · ")}.{" "}
+                  <Link className="underline underline-offset-4" href="/settings/outreach">
+                    Open Outreach Settings
+                  </Link>
+                </div>
+              )}
+            </div>
+
+            <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3">
+              <div className="text-sm font-medium">Send Plan</div>
+              <div className="mt-2 grid gap-2 sm:grid-cols-3 text-xs">
+                <div className="rounded-lg border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-2">
+                  <div className="text-[color:var(--muted-foreground)]">Daily send limit</div>
+                  <div className="font-medium text-[color:var(--foreground)]">{experiment.testEnvelope.dailyCap}</div>
+                </div>
+                <div className="rounded-lg border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-2">
+                  <div className="text-[color:var(--muted-foreground)]">Hourly send limit</div>
+                  <div className="font-medium text-[color:var(--foreground)]">{experiment.testEnvelope.hourlyCap}</div>
+                </div>
+                <div className="rounded-lg border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-2">
+                  <div className="text-[color:var(--muted-foreground)]">Time zone</div>
+                  <div className="font-medium text-[color:var(--foreground)]">{experiment.testEnvelope.timezone}</div>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
+              <Button asChild type="button" variant="outline">
+                <Link href={`/brands/${brandId}/experiments/${experiment.id}/messaging`}>
+                  Back to Messaging
+                </Link>
+              </Button>
               <Button
                 type="button"
-                disabled={launching || !launchUnlocked}
+                disabled={launching || launchBlocked}
                 onClick={async () => {
                   setLaunching(true);
                   setError("");
@@ -1848,7 +2253,7 @@ export default function ExperimentClient({
                 }}
               >
                 <Rocket className="h-4 w-4" />
-                {launching ? "Launching..." : "Launch Test"}
+                {launching ? "Launching..." : launchBlocked ? "Finish required items" : "Launch Experiment"}
               </Button>
 
               <Button
@@ -1994,24 +2399,26 @@ export default function ExperimentClient({
         </Card>
       ) : null}
 
-      <Card className="sticky bottom-4 z-10 border-[color:var(--border)]/90 bg-[color:var(--surface)]/95 backdrop-blur">
-        <CardContent className="flex flex-wrap items-center justify-between gap-3 py-4">
-          <div>
-            <div className="text-xs font-medium text-[color:var(--foreground)]">{stageTitle(currentStage)}</div>
-            <div className="text-xs text-[color:var(--muted-foreground)]">{nextGateHint}</div>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            <Button type="button" variant="outline" onClick={goPrev} disabled={currentStage === 0}>
-              <ArrowLeft className="h-4 w-4" />
-              Back
-            </Button>
-            <Button type="button" onClick={goNext} disabled={currentStage === 3 || !canGoNext}>
-              Next
-              <ArrowRight className="h-4 w-4" />
-            </Button>
-          </div>
-        </CardContent>
-      </Card>
+      {!view ? (
+        <Card className="sticky bottom-4 z-10 border-[color:var(--border)]/90 bg-[color:var(--surface)]/95 backdrop-blur">
+          <CardContent className="flex flex-wrap items-center justify-between gap-3 py-4">
+            <div>
+              <div className="text-xs font-medium text-[color:var(--foreground)]">{stageTitle(currentStage)}</div>
+              <div className="text-xs text-[color:var(--muted-foreground)]">{nextGateHint}</div>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <Button type="button" variant="outline" onClick={goPrev} disabled={currentStage === 0}>
+                <ArrowLeft className="h-4 w-4" />
+                Back
+              </Button>
+              <Button type="button" onClick={goNext} disabled={currentStage === 3 || !canGoNext}>
+                Next
+                <ArrowRight className="h-4 w-4" />
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      ) : null}
     </div>
   );
 }

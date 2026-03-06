@@ -5,6 +5,7 @@ import {
   getExperimentRecordById,
   updateExperimentRecord,
 } from "@/lib/experiment-data";
+import { clampExperimentSampleSize } from "@/lib/experiment-policy";
 import type { ExperimentRecord } from "@/lib/factory-types";
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -64,7 +65,7 @@ export async function PATCH(
   if (body.testEnvelope && typeof body.testEnvelope === "object") {
     const row = asRecord(body.testEnvelope);
     patch.testEnvelope = {
-      sampleSize: Math.max(1, Number(row.sampleSize ?? 200)),
+      sampleSize: clampExperimentSampleSize(row.sampleSize),
       durationDays: Math.max(1, Number(row.durationDays ?? 7)),
       dailyCap: Math.max(1, Number(row.dailyCap ?? 30)),
       hourlyCap: Math.max(1, Number(row.hourlyCap ?? 6)),

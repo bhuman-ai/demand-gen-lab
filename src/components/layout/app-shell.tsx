@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
   Activity,
+  CircleUserRound,
   FolderKanban,
   FlaskConical,
   Inbox,
@@ -16,7 +17,7 @@ import { useEffect, useMemo } from "react";
 import { cn } from "@/lib/utils";
 import { trackEvent } from "@/lib/telemetry-client";
 import BrandSwitcher, { getActiveBrandIdFromPath } from "./brand-switcher";
-import ThemeToggle from "./theme-toggle";
+import GlobalCommandPalette from "./global-command-palette";
 
 const ACTIVE_BRAND_KEY = "factory.activeBrandId";
 
@@ -34,8 +35,14 @@ function pageTitle(pathname: string) {
   if (pathname === "/") return "Launcher";
   if (pathname === "/brands") return "Brands";
   if (pathname === "/brands/new") return "New Brand";
+  if (pathname.endsWith("/experiments/suggestions")) return "Experiment Suggestions";
   if (pathname.endsWith("/experiments")) return "Experiments";
-  if (pathname.includes("/experiments/") && pathname.endsWith("/flow")) return "Message Flow";
+  if (pathname.includes("/experiments/") && pathname.endsWith("/setup")) return "Experiment Setup";
+  if (pathname.includes("/experiments/") && pathname.endsWith("/prospects")) return "Prospects";
+  if (pathname.includes("/experiments/") && pathname.endsWith("/messaging")) return "Messaging";
+  if (pathname.includes("/experiments/") && pathname.endsWith("/launch")) return "Launch";
+  if (pathname.includes("/experiments/") && pathname.endsWith("/run")) return "Run Dashboard";
+  if (pathname.includes("/experiments/") && pathname.endsWith("/flow")) return "Messaging";
   if (pathname.includes("/experiments/")) return "Experiment";
   if (pathname.endsWith("/campaigns")) return "Campaigns";
   if (pathname.includes("/campaigns/")) return "Campaign";
@@ -55,6 +62,10 @@ function breadcrumb(pathname: string) {
   const normalized = ["Factory", "Brand"];
   if (parts[2] === "experiments") {
     normalized.push("Experiments");
+    if (parts[3] === "suggestions") {
+      normalized.push("Suggestions");
+      return normalized.join(" > ");
+    }
     if (parts[3]) normalized.push("Experiment");
     if (parts[4]) {
       normalized.push(parts[4][0].toUpperCase() + parts[4].slice(1));
@@ -132,7 +143,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
         <aside className="border-b border-[color:var(--border)] bg-[color:var(--sidebar)]/90 p-4 md:border-b-0 md:border-r md:p-5">
           <Link href="/" className="block">
             <div className="text-[11px] uppercase tracking-[0.28em] text-[color:var(--muted-foreground)]">Factory</div>
-            <div className="mt-1 text-lg font-semibold">Brand Command</div>
+            <div className="mt-1 text-lg font-semibold">Factory Platform</div>
           </Link>
 
           <nav className="mt-6 grid gap-1.5">
@@ -196,14 +207,14 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
                 <h1 className="mt-1 text-lg font-semibold text-[color:var(--foreground)]">{pageTitle(pathname)}</h1>
               </div>
               <div className="flex items-center gap-2">
-                <Link
-                  href="/settings/outreach"
+                <GlobalCommandPalette activeBrandId={activeBrandId} />
+                <button
+                  type="button"
                   className="inline-flex items-center gap-1 rounded-full border border-[color:var(--border)] px-3 py-1.5 text-xs text-[color:var(--muted-foreground)] hover:bg-[color:var(--surface-muted)] hover:text-[color:var(--foreground)]"
                 >
-                  <Settings className="h-3.5 w-3.5" />
-                  Settings
-                </Link>
-                <ThemeToggle />
+                  <CircleUserRound className="h-3.5 w-3.5" />
+                  User
+                </button>
               </div>
             </div>
           </header>

@@ -16,12 +16,12 @@ export default function DoctorPage() {
       <Card>
         <CardHeader>
           <CardTitle>Doctor</CardTitle>
-          <CardDescription>Diagnostics and recommended fixes across campaign funnels.</CardDescription>
+          <CardDescription>Tools: diagnostics and recommended fixes across campaign funnels.</CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
           <Badge variant="muted">Active brand context: {brandId || "none selected"}</Badge>
           <p className="text-sm text-[color:var(--muted-foreground)]">
-            Monitor delivery quality, response sentiment shifts, and conversion bottlenecks.
+            Monitor delivery quality, response shifts, and conversion bottlenecks.
           </p>
           {brandId ? (
             <Button asChild>

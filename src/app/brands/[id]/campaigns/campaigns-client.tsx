@@ -57,19 +57,19 @@ export default function CampaignsClient({ brandId }: { brandId: string }) {
         <CardHeader>
           <CardTitle>{brand?.name || "Brand"} Campaigns</CardTitle>
           <CardDescription>
-            Campaigns are scale engines promoted from validated experiments.
+            Scaled execution from promoted winning experiments.
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-wrap gap-2">
           <Button asChild>
             <Link href={`/brands/${brandId}/experiments`}>
-              Open Experiments
+              Promote Winner
               <ArrowRight className="h-4 w-4" />
             </Link>
           </Button>
           <Button asChild variant="outline">
             <Link href={`/brands/${brandId}/experiments`}>
-              Promote an experiment
+              Open Experiments
             </Link>
           </Button>
         </CardContent>

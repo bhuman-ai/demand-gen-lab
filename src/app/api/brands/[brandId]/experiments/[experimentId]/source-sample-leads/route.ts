@@ -4,6 +4,7 @@ import {
   getExperimentRecordById,
   updateExperimentRecord,
 } from "@/lib/experiment-data";
+import { clampExperimentSampleSize } from "@/lib/experiment-policy";
 import { launchExperimentRun, runOutreachTick } from "@/lib/outreach-runtime";
 
 export async function POST(
@@ -28,7 +29,7 @@ export async function POST(
     body = {};
   }
 
-  const sampleSize = Math.max(5, Math.min(100, Number(body.sampleSize ?? 20) || 20));
+  const sampleSize = clampExperimentSampleSize(body.sampleSize ?? 0);
 
   const result = await launchExperimentRun({
     brandId,
@@ -42,6 +43,21 @@ export async function POST(
   });
 
   if (!result.ok) {
+    const isAlreadyRunning =
+      result.reason.toLowerCase().includes("active run") && Boolean(result.runId);
+    if (isAlreadyRunning) {
+      await runOutreachTick(8);
+      return NextResponse.json(
+        {
+          runId: result.runId,
+          status: "sourcing",
+          sampleSize,
+          hint: "A sourcing run is already in progress for this experiment.",
+        },
+        { status: 200 }
+      );
+    }
+
     await updateExperimentRecord(brandId, experiment.id, {
       status: "ready",
     });

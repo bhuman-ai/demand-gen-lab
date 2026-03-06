@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { ArrowRight, FolderKanban, FlaskConical, Inbox, Mail, Network, Plus } from "lucide-react";
+import { ArrowRight, FolderKanban, FlaskConical, Inbox, Mail, Plus } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -110,6 +110,10 @@ export default function BrandHomeClient({ brandId }: { brandId: string }) {
       null,
     [experiments]
   );
+  const activeExperiments = useMemo(
+    () => experiments.filter((row) => ["running", "ready", "paused", "draft"].includes(row.status)).slice(0, 4),
+    [experiments]
+  );
 
   return (
     <div className="space-y-5">
@@ -117,7 +121,7 @@ export default function BrandHomeClient({ brandId }: { brandId: string }) {
         <CardHeader className="flex flex-row items-start justify-between gap-4">
           <div>
             <CardTitle>{brand?.name || "Brand"}</CardTitle>
-            <CardDescription>{brand?.website || "No website"}</CardDescription>
+            <CardDescription>Outbound experimentation workspace · {brand?.website || "No website"}</CardDescription>
           </div>
           <Button
             type="button"
@@ -166,7 +170,7 @@ export default function BrandHomeClient({ brandId }: { brandId: string }) {
 
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Brand profile</CardTitle>
+          <CardTitle className="text-base">Brand Profile</CardTitle>
           <CardDescription>
             Manage target markets, ICPs, and product context after onboarding.
           </CardDescription>
@@ -260,8 +264,8 @@ export default function BrandHomeClient({ brandId }: { brandId: string }) {
       <div className="grid gap-4 lg:grid-cols-[1.2fr_0.8fr]">
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">Next action</CardTitle>
-            <CardDescription>Keep momentum by continuing one concrete experiment.</CardDescription>
+            <CardTitle className="text-base">Next Best Action</CardTitle>
+            <CardDescription>Continue the most important experiment now.</CardDescription>
           </CardHeader>
           <CardContent>
             {activeExperiment ? (
@@ -290,33 +294,72 @@ export default function BrandHomeClient({ brandId }: { brandId: string }) {
 
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">Operations</CardTitle>
-            <CardDescription>Brand-scoped modules with consistent context.</CardDescription>
+            <CardTitle className="text-base">Active Experiments</CardTitle>
+            <CardDescription>Running, sourcing, ready, or paused experiments.</CardDescription>
           </CardHeader>
           <CardContent className="grid gap-2">
+            {activeExperiments.length ? (
+              activeExperiments.map((item) => (
+                <Link
+                  key={item.id}
+                  href={`/brands/${brandId}/experiments/${item.id}`}
+                  className="rounded-lg border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-2 text-sm hover:bg-[color:var(--surface-hover)]"
+                >
+                  <div className="font-medium">{item.name}</div>
+                  <div className="text-xs text-[color:var(--muted-foreground)]">{item.status}</div>
+                </Link>
+              ))
+            ) : (
+              <div className="text-sm text-[color:var(--muted-foreground)]">No active experiments yet.</div>
+            )}
             <Button asChild variant="outline" className="justify-start">
               <Link href={`/brands/${brandId}/experiments`}>
-                <FlaskConical className="h-4 w-4" /> Experiments
+                <FlaskConical className="h-4 w-4" /> Open Experiments
               </Link>
             </Button>
-            <Button asChild variant="outline" className="justify-start">
+          </CardContent>
+        </Card>
+      </div>
+
+      <div className="grid gap-4 md:grid-cols-3">
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Campaigns Snapshot</CardTitle>
+            <CardDescription>Scale programs promoted from experiment winners.</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-2">
+            <div className="text-2xl font-semibold">{campaigns.length}</div>
+            <Button asChild variant="outline">
               <Link href={`/brands/${brandId}/campaigns`}>
-                <FolderKanban className="h-4 w-4" /> Campaigns
+                <FolderKanban className="h-4 w-4" /> Open Campaigns
               </Link>
             </Button>
-            <Button asChild variant="outline" className="justify-start">
-              <Link href={`/brands/${brandId}/network`}>
-                <Network className="h-4 w-4" /> Network
-              </Link>
-            </Button>
-            <Button asChild variant="outline" className="justify-start">
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Lead Pool</CardTitle>
+            <CardDescription>Verified and operational leads in this brand workspace.</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-2">
+            <div className="text-2xl font-semibold">{brand?.leads?.length ?? 0}</div>
+            <Button asChild variant="outline">
               <Link href={`/brands/${brandId}/leads`}>
-                <Mail className="h-4 w-4" /> Leads
+                <Mail className="h-4 w-4" /> Open Leads
               </Link>
             </Button>
-            <Button asChild variant="outline" className="justify-start">
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Reply Signals</CardTitle>
+            <CardDescription>Recent conversations and action-ready replies.</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-2">
+            <div className="text-2xl font-semibold">{brand?.inbox?.length ?? 0}</div>
+            <Button asChild variant="outline">
               <Link href={`/brands/${brandId}/inbox`}>
-                <Inbox className="h-4 w-4" /> Inbox
+                <Inbox className="h-4 w-4" /> Open Inbox
               </Link>
             </Button>
           </CardContent>

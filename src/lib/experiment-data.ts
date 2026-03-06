@@ -11,6 +11,10 @@ import {
   type Hypothesis,
 } from "@/lib/factory-data";
 import { getPublishedConversationMapForExperiment } from "@/lib/conversation-flow-data";
+import {
+  clampExperimentSampleSize,
+  EXPERIMENT_MIN_VERIFIED_EMAIL_LEADS,
+} from "@/lib/experiment-policy";
 import { listExperimentRuns, listOwnerRuns } from "@/lib/outreach-data";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import type {
@@ -59,7 +63,7 @@ function defaultMetricsSummary(): ExperimentMetricsSummary {
 
 function defaultTestEnvelope(): ExperimentTestEnvelope {
   return {
-    sampleSize: 200,
+    sampleSize: EXPERIMENT_MIN_VERIFIED_EMAIL_LEADS,
     durationDays: 7,
     dailyCap: 30,
     hourlyCap: 6,
@@ -111,7 +115,7 @@ function mapExperimentRow(input: unknown): ExperimentRecord {
       publishedRevision: Math.max(0, asNumber(messageFlow.publishedRevision, 0)),
     },
     testEnvelope: {
-      sampleSize: Math.max(1, asNumber(testEnvelope.sampleSize, 200)),
+      sampleSize: clampExperimentSampleSize(testEnvelope.sampleSize),
       durationDays: Math.max(1, asNumber(testEnvelope.durationDays, 7)),
       dailyCap: Math.max(1, asNumber(testEnvelope.dailyCap, 30)),
       hourlyCap: Math.max(1, asNumber(testEnvelope.hourlyCap, 6)),
@@ -261,7 +265,7 @@ async function createRuntimeRef(input: {
     sourceConfig: {
       actorId: "",
       actorInput: {},
-      maxLeads: Math.max(1, input.testEnvelope.sampleSize),
+      maxLeads: clampExperimentSampleSize(input.testEnvelope.sampleSize),
     },
     seedInputs: [],
     status: "approved",
@@ -334,7 +338,7 @@ async function syncRuntimeFromExperiment(experiment: ExperimentRecord): Promise<
     sourceConfig: {
       actorId: "",
       actorInput: {},
-      maxLeads: Math.max(1, experiment.testEnvelope.sampleSize),
+      maxLeads: clampExperimentSampleSize(experiment.testEnvelope.sampleSize),
     },
     seedInputs: [],
     status: "approved",
@@ -748,7 +752,9 @@ export async function updateExperimentRecord(
     audience: typeof patch.audience === "string" ? patch.audience.trim() : existing.audience,
     testEnvelope: patch.testEnvelope
       ? {
-          sampleSize: Math.max(1, Number(patch.testEnvelope.sampleSize ?? existing.testEnvelope.sampleSize)),
+          sampleSize: clampExperimentSampleSize(
+            patch.testEnvelope.sampleSize ?? existing.testEnvelope.sampleSize
+          ),
           durationDays: Math.max(1, Number(patch.testEnvelope.durationDays ?? existing.testEnvelope.durationDays)),
           dailyCap: Math.max(1, Number(patch.testEnvelope.dailyCap ?? existing.testEnvelope.dailyCap)),
           hourlyCap: Math.max(1, Number(patch.testEnvelope.hourlyCap ?? existing.testEnvelope.hourlyCap)),

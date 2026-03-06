@@ -3,10 +3,13 @@ import { getCampaignById } from "@/lib/factory-data";
 import { listConversationPreviewLeads } from "@/lib/conversation-preview-leads";
 
 export async function GET(
-  _request: Request,
+  request: Request,
   context: { params: Promise<{ brandId: string; campaignId: string; experimentId: string }> }
 ) {
   const { brandId, campaignId, experimentId } = await context.params;
+  const url = new URL(request.url);
+  const limit = Math.max(1, Math.min(50, Number(url.searchParams.get("limit") ?? 20) || 20));
+  const maxRuns = Math.max(1, Math.min(30, Number(url.searchParams.get("maxRuns") ?? 1) || 1));
 
   const campaign = await getCampaignById(brandId, campaignId);
   if (!campaign) {
@@ -22,6 +25,8 @@ export async function GET(
     brandId,
     campaignId,
     experimentId,
+    limit,
+    maxRuns,
   });
 
   return NextResponse.json({
@@ -29,5 +34,9 @@ export async function GET(
     runsChecked: result.runsChecked,
     sourceExperimentId: result.sourceExperimentId,
     runtimeRefFound: result.runtimeRefFound,
+    qualifiedLeadCount: result.qualifiedLeadCount,
+    qualifiedLeadWithEmailCount: result.qualifiedLeadWithEmailCount,
+    qualifiedLeadWithoutEmailCount: result.qualifiedLeadWithoutEmailCount,
+    previewEmailEnrichment: result.previewEmailEnrichment,
   });
 }

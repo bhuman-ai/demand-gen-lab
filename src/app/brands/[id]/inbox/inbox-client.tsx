@@ -68,7 +68,7 @@ export default function InboxClient({ brand }: { brand: BrandRecord }) {
       <Card>
         <CardHeader>
           <CardTitle>Inbox</CardTitle>
-          <CardDescription>Reply triage and human-approved draft sending for {brand.name}.</CardDescription>
+          <CardDescription>Reply management and human-approved sending for {brand.name}.</CardDescription>
         </CardHeader>
         <CardContent className="grid gap-3 md:grid-cols-4">
           <div>
@@ -165,7 +165,7 @@ export default function InboxClient({ brand }: { brand: BrandRecord }) {
 
       <Card>
         <CardHeader className="flex flex-row items-center justify-between gap-3">
-          <CardTitle className="text-base">Thread Table</CardTitle>
+          <CardTitle className="text-base">Recent Signals</CardTitle>
           <Input
             placeholder="Filter inbox threads"
             value={query}

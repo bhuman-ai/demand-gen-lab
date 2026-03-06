@@ -2,387 +2,273 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
-import { FlaskConical, Lightbulb, Plus, RefreshCcw, Trash2 } from "lucide-react";
+import { CopyPlus, Plus, Search } from "lucide-react";
 import {
-  applyExperimentSuggestion,
   createExperimentApi,
-  deleteExperimentApi,
-  dismissExperimentSuggestion,
   fetchBrand,
-  fetchExperiments,
-  fetchExperimentSuggestions,
-  generateExperimentSuggestions,
+  fetchExperiment,
+  fetchExperimentListView,
 } from "@/lib/client-api";
+import { filterExperimentListItems } from "@/lib/experiment-list-view";
 import { trackEvent } from "@/lib/telemetry-client";
-import type { BrandRecord, ExperimentRecord, ExperimentSuggestionRecord } from "@/lib/factory-types";
-import { Badge } from "@/components/ui/badge";
+import type { BrandRecord, ExperimentListItem } from "@/lib/factory-types";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { Select } from "@/components/ui/select";
 
-function statusVariant(status: ExperimentRecord["status"]) {
-  if (status === "running") return "accent" as const;
-  if (status === "completed" || status === "promoted") return "success" as const;
-  if (status === "paused") return "danger" as const;
-  return "muted" as const;
+const STATUS_OPTIONS: Array<"all" | ExperimentListItem["status"]> = [
+  "all",
+  "Draft",
+  "Sourcing",
+  "Ready",
+  "Running",
+  "Paused",
+  "Completed",
+  "Promoted",
+  "Blocked",
+];
+
+function leadsCell(item: ExperimentListItem) {
+  if (item.sourcedLeads > 0) return item.sourcedLeads;
+  if (item.scheduledMessages > 0) return item.scheduledMessages;
+  return item.sentMessages;
 }
 
-function pickLine(value: string, label: string) {
-  const regex = new RegExp(`^${label}:\\s*(.+)$`, "im");
-  return value.match(regex)?.[1]?.trim() ?? "";
-}
-
-function suggestionDetails(suggestion: ExperimentSuggestionRecord) {
-  return {
-    campaignIdea: suggestion.name,
-    who: suggestion.audience || pickLine(suggestion.audience, "Who"),
-    trigger: suggestion.trigger || pickLine(suggestion.audience, "Trigger"),
-    offer: suggestion.offer || pickLine(suggestion.offer, "Offer"),
-    cta: suggestion.cta || pickLine(suggestion.offer, "CTA"),
-    emailPreview: suggestion.emailPreview || pickLine(suggestion.offer, "EmailPreview"),
-    successTarget: suggestion.successTarget || pickLine(suggestion.offer, "SuccessTarget"),
-    rationale: suggestion.rationale || pickLine(suggestion.offer, "Why"),
-  };
-}
-
-function isRenderableSuggestion(suggestion: ExperimentSuggestionRecord) {
-  const detail = suggestionDetails(suggestion);
-  return Boolean(
-    detail.campaignIdea &&
-      detail.who &&
-      detail.offer &&
-      detail.cta &&
-      detail.emailPreview &&
-      detail.successTarget &&
-      detail.rationale
-  );
-}
-
-export default function ExperimentsClient({
-  brandId,
-  showFeedHint = false,
-}: {
-  brandId: string;
-  showFeedHint?: boolean;
-}) {
+export default function ExperimentsClient({ brandId }: { brandId: string }) {
   const [brand, setBrand] = useState<BrandRecord | null>(null);
-  const [experiments, setExperiments] = useState<ExperimentRecord[]>([]);
-  const [suggestions, setSuggestions] = useState<ExperimentSuggestionRecord[]>([]);
-  const [name, setName] = useState("");
+  const [items, setItems] = useState<ExperimentListItem[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [creating, setCreating] = useState(false);
+  const [duplicatingId, setDuplicatingId] = useState("");
   const [error, setError] = useState("");
-  const [saving, setSaving] = useState(false);
-  const [suggestionsLoading, setSuggestionsLoading] = useState(false);
-  const [suggestionBusyId, setSuggestionBusyId] = useState("");
+  const [statusFilter, setStatusFilter] = useState<(typeof STATUS_OPTIONS)[number]>("all");
+  const [ownerFilter, setOwnerFilter] = useState("all");
+  const [query, setQuery] = useState("");
 
   const refresh = async () => {
-    const [brandRow, experimentRows, suggestionRows] = await Promise.all([
+    const [brandRow, listRows] = await Promise.all([
       fetchBrand(brandId),
-      fetchExperiments(brandId),
-      fetchExperimentSuggestions(brandId),
+      fetchExperimentListView(brandId),
     ]);
     setBrand(brandRow);
-    setExperiments(experimentRows);
-    setSuggestions(suggestionRows);
+    setItems(listRows);
     localStorage.setItem("factory.activeBrandId", brandId);
-    return { experimentRows, suggestionRows };
   };
 
   useEffect(() => {
     let mounted = true;
+    setLoading(true);
     setError("");
     void refresh()
-      .then(async ({ suggestionRows }) => {
-        if (!mounted) return;
-        if (suggestionRows.length) return;
-        setSuggestionsLoading(true);
-        try {
-          const generated = await generateExperimentSuggestions(brandId);
-          if (!mounted) return;
-          setSuggestions(generated);
-        } catch (err) {
-          if (!mounted) return;
-          setError(err instanceof Error ? err.message : "Failed to generate suggestions");
-        } finally {
-          if (mounted) setSuggestionsLoading(false);
-        }
-      })
       .catch((err: unknown) => {
         if (!mounted) return;
         setError(err instanceof Error ? err.message : "Failed to load experiments");
+      })
+      .finally(() => {
+        if (mounted) setLoading(false);
       });
+
     return () => {
       mounted = false;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [brandId]);
 
-  const promotedCount = useMemo(
-    () => experiments.filter((row) => row.status === "promoted").length,
-    [experiments]
-  );
-  const renderableSuggestions = useMemo(
-    () => suggestions.filter((row) => isRenderableSuggestion(row)),
-    [suggestions]
+  const filtered = useMemo(() => {
+    const rows = filterExperimentListItems({
+      items,
+      status: statusFilter,
+      query,
+    });
+    if (ownerFilter === "all") return rows;
+    return rows.filter((item) => item.owner.toLowerCase() === ownerFilter.toLowerCase());
+  }, [items, ownerFilter, query, statusFilter]);
+
+  const activeNow = useMemo(
+    () => filtered.filter((item) => item.isActiveNow),
+    [filtered]
   );
 
   return (
     <div className="space-y-5">
       <Card>
-        <CardHeader>
-          <CardTitle>{brand?.name || "Brand"} Experiments</CardTitle>
-          <CardDescription>
-            One experiment = one audience + one offer + one flow + one test envelope.
-          </CardDescription>
+        <CardHeader className="flex flex-row items-start justify-between gap-3">
+          <div>
+            <CardTitle>{brand?.name || "Brand"} Experiments</CardTitle>
+            <CardDescription>
+              Run outbound tests, validate winners, and promote them into campaigns.
+            </CardDescription>
+          </div>
+          <div className="flex items-center gap-2">
+            <Button asChild variant="outline">
+              <Link href={`/brands/${brandId}/experiments/suggestions`}>Suggestions</Link>
+            </Button>
+            <Button
+              type="button"
+              disabled={creating}
+              onClick={async () => {
+                setCreating(true);
+                setError("");
+                try {
+                  const created = await createExperimentApi(brandId, {
+                    name: `Experiment ${items.length + 1}`,
+                  });
+                  trackEvent("experiment_created", { brandId, experimentId: created.id });
+                  await refresh();
+                } catch (err) {
+                  setError(err instanceof Error ? err.message : "Failed to create experiment");
+                } finally {
+                  setCreating(false);
+                }
+              }}
+            >
+              <Plus className="h-4 w-4" />
+              {creating ? "Creating..." : "New Experiment"}
+            </Button>
+          </div>
         </CardHeader>
-        <CardContent className="grid gap-3 md:grid-cols-[1fr_auto]">
-          <Input
-            placeholder="Experiment name"
-            value={name}
-            onChange={(event) => setName(event.target.value)}
-          />
-          <Button
-            type="button"
-            disabled={saving}
-            onClick={async () => {
-              setSaving(true);
-              setError("");
-              try {
-                const created = await createExperimentApi(brandId, {
-                  name: name.trim() || `Experiment ${experiments.length + 1}`,
-                });
-                trackEvent("experiment_created", { brandId, experimentId: created.id });
-                setName("");
-                await refresh();
-              } catch (err) {
-                setError(err instanceof Error ? err.message : "Failed to create experiment");
-              } finally {
-                setSaving(false);
-              }
-            }}
-          >
-            <Plus className="h-4 w-4" />
-            {saving ? "Creating..." : "Create Experiment"}
-          </Button>
+        <CardContent className="grid gap-3 md:grid-cols-[220px_220px_1fr]">
+          <Select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as (typeof STATUS_OPTIONS)[number])}>
+            {STATUS_OPTIONS.map((status) => (
+              <option key={status} value={status}>
+                {status === "all" ? "All statuses" : status}
+              </option>
+            ))}
+          </Select>
+
+          <Select value={ownerFilter} onChange={(event) => setOwnerFilter(event.target.value)}>
+            <option value="all">All owners</option>
+            <option value="unassigned">Unassigned</option>
+          </Select>
+
+          <div className="relative">
+            <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-[color:var(--muted-foreground)]" />
+            <Input
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="Search experiments"
+              className="pl-9"
+            />
+          </div>
         </CardContent>
       </Card>
 
-      {showFeedHint ? (
-        <Card className="border-[color:var(--accent)]/40 bg-[color:var(--surface-muted)]">
-          <CardHeader>
-            <CardTitle className="text-base">Quiz Completed: Strategy Feed Ready</CardTitle>
-            <CardDescription>
-              We generated experiment suggestions from your quiz + website context. Pick any card below to create a live experiment.
-            </CardDescription>
-          </CardHeader>
-        </Card>
-      ) : null}
-
-      <div className="grid gap-4 md:grid-cols-3">
-        <Card>
-          <CardHeader>
-            <CardDescription>Total Experiments</CardDescription>
-            <CardTitle>{experiments.length}</CardTitle>
-          </CardHeader>
-        </Card>
-        <Card>
-          <CardHeader>
-            <CardDescription>Running</CardDescription>
-            <CardTitle>{experiments.filter((row) => row.status === "running").length}</CardTitle>
-          </CardHeader>
-        </Card>
-        <Card>
-          <CardHeader>
-            <CardDescription>Promoted</CardDescription>
-            <CardTitle>{promotedCount}</CardTitle>
-          </CardHeader>
-        </Card>
-      </div>
-
       {error ? <div className="text-sm text-[color:var(--danger)]">{error}</div> : null}
+      {loading ? <div className="text-sm text-[color:var(--muted-foreground)]">Loading experiments...</div> : null}
 
       <Card>
-        <CardHeader className="flex flex-row items-start justify-between gap-4">
-          <div>
-            <CardTitle className="text-base">Suggested Experiments</CardTitle>
-            <CardDescription>
-              Generated from your brand profile. Suggestions are saved so you can return later.
-            </CardDescription>
-          </div>
-          <Button
-            type="button"
-            variant="outline"
-            disabled={suggestionsLoading}
-            onClick={async () => {
-              setSuggestionsLoading(true);
-              setError("");
-              try {
-                const generated = await generateExperimentSuggestions(brandId, true);
-                setSuggestions(generated);
-              } catch (err) {
-                setError(err instanceof Error ? err.message : "Failed to generate suggestions");
-              } finally {
-                setSuggestionsLoading(false);
-              }
-            }}
-          >
-            <RefreshCcw className="h-4 w-4" />
-            {suggestionsLoading ? "Generating..." : "Generate Suggestions"}
-          </Button>
+        <CardHeader>
+          <CardTitle className="text-base">Active Now</CardTitle>
+          <CardDescription>Operational experiments that need active oversight.</CardDescription>
         </CardHeader>
-        <CardContent>
-          {suggestionsLoading ? (
-            <div className="text-sm text-[color:var(--muted-foreground)]">
-              Generating suggested experiments from your brand context...
-            </div>
-          ) : renderableSuggestions.length ? (
-            <div className="grid gap-3 md:grid-cols-2">
-              {renderableSuggestions.map((suggestion) => {
-                const detail = suggestionDetails(suggestion);
-                return (
-                <Card key={suggestion.id} className="border-[color:var(--border)] bg-[color:var(--surface-muted)]">
-                  <CardHeader className="space-y-2">
-                    <CardTitle className="text-sm">{detail.campaignIdea}</CardTitle>
-                    <CardDescription>{detail.rationale}</CardDescription>
-                  </CardHeader>
-                  <CardContent className="space-y-2">
-                    <div className="text-xs text-[color:var(--muted-foreground)]">
-                      <strong className="text-[color:var(--foreground)]">Who:</strong>{" "}
-                      {detail.who}
-                    </div>
-                    {detail.trigger ? (
-                      <div className="text-xs text-[color:var(--muted-foreground)]">
-                        <strong className="text-[color:var(--foreground)]">Trigger:</strong> {detail.trigger}
-                      </div>
-                    ) : null}
-                    <div className="text-xs text-[color:var(--muted-foreground)]">
-                      <strong className="text-[color:var(--foreground)]">Offer:</strong>{" "}
-                      {detail.offer}
-                    </div>
-                    <div className="text-xs text-[color:var(--muted-foreground)]">
-                      <strong className="text-[color:var(--foreground)]">CTA:</strong>{" "}
-                      {detail.cta}
-                    </div>
-                    <div className="rounded-md border border-[color:var(--border)] bg-[color:var(--surface)] px-2 py-1 text-xs text-[color:var(--muted-foreground)]">
-                      <strong className="text-[color:var(--foreground)]">Email #1 Preview:</strong>{" "}
-                      {detail.emailPreview}
-                    </div>
-                    <div className="text-xs text-[color:var(--muted-foreground)]">
-                      <strong className="text-[color:var(--foreground)]">Success target:</strong>{" "}
-                      {detail.successTarget}
-                    </div>
-                    <div className="flex flex-wrap gap-2 pt-1">
-                      <Button
-                        size="sm"
-                        disabled={Boolean(suggestionBusyId)}
-                        onClick={async () => {
-                          setSuggestionBusyId(suggestion.id);
-                          setError("");
-                          try {
-                            const experiment = await applyExperimentSuggestion(brandId, suggestion.id);
-                            trackEvent("experiment_created", {
-                              brandId,
-                              experimentId: experiment.id,
-                              source: "suggestion",
-                            });
-                            await refresh();
-                          } catch (err) {
-                            setError(err instanceof Error ? err.message : "Failed to create experiment");
-                          } finally {
-                            setSuggestionBusyId("");
-                          }
-                        }}
-                      >
-                        {suggestionBusyId === suggestion.id ? "Creating..." : "Create From Suggestion"}
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        disabled={Boolean(suggestionBusyId)}
-                        onClick={async () => {
-                          setSuggestionBusyId(suggestion.id);
-                          setError("");
-                          try {
-                            await dismissExperimentSuggestion(brandId, suggestion.id);
-                            await refresh();
-                          } catch (err) {
-                            setError(err instanceof Error ? err.message : "Failed to dismiss suggestion");
-                          } finally {
-                            setSuggestionBusyId("");
-                          }
-                        }}
-                      >
-                        Dismiss
-                      </Button>
-                    </div>
-                  </CardContent>
-                </Card>
-                );
-              })}
-            </div>
+        <CardContent className="space-y-3">
+          {activeNow.length ? (
+            activeNow.map((item) => (
+              <div key={item.id} className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-4 py-3">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <div className="text-sm font-semibold">{item.name}</div>
+                    <div className="text-xs text-[color:var(--muted-foreground)]">{item.status}</div>
+                  </div>
+                  <Button asChild size="sm">
+                    <Link href={item.activeHref}>{item.activeActionLabel}</Link>
+                  </Button>
+                </div>
+                <div className="mt-2 text-xs text-[color:var(--muted-foreground)]">
+                  Audience: {item.audience || "Not set"} · Offer: {item.offer || "Not set"} · Flow: V{Math.max(1, item.flowRevision)}
+                </div>
+                <div className="mt-1 text-xs text-[color:var(--muted-foreground)]">
+                  Funnel: {item.sourcedLeads} sourced → {item.scheduledMessages} scheduled → {item.sentMessages} sent → {item.replies} replies → {item.positiveReplies} positive
+                </div>
+                <div className="mt-1 text-xs text-[color:var(--muted-foreground)]">Last activity: {item.lastActivityLabel}</div>
+              </div>
+            ))
           ) : (
-            <div className="flex items-center gap-2 text-sm text-[color:var(--muted-foreground)]">
-              <Lightbulb className="h-4 w-4" />
-              No concrete suggestions saved yet. Click Generate Suggestions.
-            </div>
+            <div className="text-sm text-[color:var(--muted-foreground)]">No running or sourcing experiments right now.</div>
           )}
         </CardContent>
       </Card>
 
-      {experiments.length ? (
-        <div className="grid gap-4 md:grid-cols-2">
-          {experiments.map((experiment) => (
-            <Card key={experiment.id}>
-              <CardHeader className="space-y-2">
-                <div className="flex items-center justify-between gap-2">
-                  <CardTitle className="text-base">{experiment.name}</CardTitle>
-                  <Badge variant={statusVariant(experiment.status)}>{experiment.status}</Badge>
-                </div>
-                <CardDescription>
-                  {experiment.offer || "No offer yet"}
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-3">
-                <div className="text-xs text-[color:var(--muted-foreground)]">
-                  Audience: {experiment.audience || "Not set"}
-                </div>
-                <div className="text-xs text-[color:var(--muted-foreground)]">
-                  Sent {experiment.metricsSummary.sent} · Replies {experiment.metricsSummary.replies} · Positive {experiment.metricsSummary.positiveReplies}
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  <Button size="sm" asChild>
-                    <Link href={`/brands/${brandId}/experiments/${experiment.id}`}>Open Experiment</Link>
-                  </Button>
-                  {experiment.promotedCampaignId ? (
-                    <Button size="sm" variant="outline" asChild>
-                      <Link href={`/brands/${brandId}/campaigns/${experiment.promotedCampaignId}`}>Open Campaign</Link>
-                    </Button>
-                  ) : null}
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    onClick={async () => {
-                      if (!window.confirm("Delete this experiment?")) return;
-                      await deleteExperimentApi(brandId, experiment.id);
-                      await refresh();
-                    }}
-                  >
-                    <Trash2 className="h-4 w-4" />
-                  </Button>
-                </div>
-              </CardContent>
-            </Card>
-          ))}
-        </div>
-      ) : (
-        <Card>
-          <CardContent className="py-10 text-sm text-[color:var(--muted-foreground)]">
-            <div className="flex items-center gap-2">
-              <FlaskConical className="h-4 w-4" />
-              No experiments launched yet. Start from a suggestion above or create one manually.
-            </div>
-          </CardContent>
-        </Card>
-      )}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">All Experiments</CardTitle>
+          <CardDescription>Execution-first list with plain-language status and recent activity.</CardDescription>
+        </CardHeader>
+        <CardContent className="overflow-x-auto">
+          <table className="min-w-full text-sm">
+            <thead>
+              <tr className="text-left text-xs uppercase tracking-wide text-[color:var(--muted-foreground)]">
+                <th className="pb-2">Name</th>
+                <th className="pb-2">Status</th>
+                <th className="pb-2">Audience</th>
+                <th className="pb-2">Leads</th>
+                <th className="pb-2">Replies</th>
+                <th className="pb-2">Positive</th>
+                <th className="pb-2">Last active</th>
+                <th className="pb-2 text-right">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.map((item) => (
+                <tr key={item.id} className="group border-t border-[color:var(--border)]">
+                  <td className="py-2 font-medium">{item.name}</td>
+                  <td className="py-2">{item.status}</td>
+                  <td className="py-2 text-[color:var(--muted-foreground)]">{item.audience || "—"}</td>
+                  <td className="py-2">{leadsCell(item) || "—"}</td>
+                  <td className="py-2">{item.replies || "—"}</td>
+                  <td className="py-2">{item.positiveReplies || "—"}</td>
+                  <td className="py-2 text-[color:var(--muted-foreground)]">{item.lastActivityLabel}</td>
+                  <td className="py-2">
+                    <div className="flex justify-end gap-1 opacity-0 transition group-hover:opacity-100">
+                      <Button size="sm" variant="outline" asChild>
+                        <Link href={item.openHref}>Open</Link>
+                      </Button>
+                      <Button size="sm" variant="outline" asChild>
+                        <Link href={item.editHref}>Edit</Link>
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={duplicatingId === item.id}
+                        onClick={async () => {
+                          setDuplicatingId(item.id);
+                          setError("");
+                          try {
+                            const source = await fetchExperiment(brandId, item.id);
+                            const duplicate = await createExperimentApi(brandId, {
+                              name: `${source.name} Copy`,
+                              offer: source.offer,
+                              audience: source.audience,
+                            });
+                            trackEvent("experiment_created", {
+                              brandId,
+                              experimentId: duplicate.id,
+                              source: "duplicate",
+                              fromExperimentId: item.id,
+                            });
+                            await refresh();
+                          } catch (err) {
+                            setError(err instanceof Error ? err.message : "Failed to duplicate experiment");
+                          } finally {
+                            setDuplicatingId("");
+                          }
+                        }}
+                      >
+                        <CopyPlus className="h-3.5 w-3.5" />
+                        {duplicatingId === item.id ? "Duplicating..." : "Duplicate"}
+                      </Button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {!filtered.length ? (
+            <div className="py-6 text-sm text-[color:var(--muted-foreground)]">No experiments match your filters.</div>
+          ) : null}
+        </CardContent>
+      </Card>
     </div>
   );
 }

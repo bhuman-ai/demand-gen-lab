@@ -120,7 +120,7 @@ function friendlyEventName(eventType: string) {
   if (eventType === "lead_sourcing_email_discovery_polled") return "Email discovery status";
   if (eventType === "lead_sourcing_email_discovery_completed") return "Email discovery results";
   if (eventType === "lead_sourcing_completed") return "Lead sourcing completed";
-  if (eventType === "lead_sourced_apify") return "Leads stored";
+  if (eventType === "lead_sourced" || eventType === "lead_sourced_apify") return "Leads stored";
   if (eventType === "message_scheduled") return "Messages scheduled";
   if (eventType === "message_sent") return "Message sent";
   if (eventType === "dispatch_failed") return "Dispatch failed";
@@ -166,7 +166,7 @@ function summarizeEvent(event: OutreachRunEvent) {
     }
     return `Retrieved ${datasetRows ?? 0} rows`;
   }
-  if (event.eventType === "lead_sourced_apify") {
+  if (event.eventType === "lead_sourced" || event.eventType === "lead_sourced_apify") {
     const count = asNumber(event.payload.count);
     const blockedCount = asNumber(event.payload.blockedCount);
     return `Stored ${count ?? 0} leads${blockedCount ? ` (${blockedCount} suppressed)` : ""}`;
@@ -1323,7 +1323,7 @@ export default function RunClient({
     <div className="space-y-5">
       {header}
       {tabs}
-      {controls}
+      {tab === "overview" || tab === "variants" ? controls : null}
 
       {tab === "overview" ? overviewPanel : null}
       {tab === "variants" ? variantsPanel : null}
@@ -1331,7 +1331,7 @@ export default function RunClient({
       {tab === "inbox" ? inboxPanel : null}
       {tab === "insights" ? insightsPanel : null}
 
-      {visibility}
+      {tab === "overview" ? visibility : null}
 
       {error ? <div className="text-sm text-[color:var(--danger)]">{error}</div> : null}
     </div>

@@ -905,40 +905,50 @@ export default function ExperimentClient({
     return <div className="text-sm text-[color:var(--muted-foreground)]">Loading experiment...</div>;
   }
 
+  const messagingFocus = currentStage === 2;
+
   return (
     <div className="space-y-5">
-      <Card>
-        <CardHeader>
-          <CardTitle>{brand?.name || "Brand"} · {experiment.name}</CardTitle>
-          <CardDescription>
-            Stage-based flow: Setup {"->"} Prospects {"->"} Messaging {"->"} Launch.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="flex flex-wrap items-center gap-2 text-xs">
-          <Badge variant="muted">Status: {experiment.status}</Badge>
-          <Badge variant="muted">Sent: {experiment.metricsSummary.sent}</Badge>
-          <Badge variant="muted">Replies: {experiment.metricsSummary.replies}</Badge>
-          <Badge variant="muted">Positive: {experiment.metricsSummary.positiveReplies}</Badge>
-        </CardContent>
-      </Card>
+      {!messagingFocus ? (
+        <Card>
+          <CardHeader>
+            <CardTitle>{brand?.name || "Brand"} · {experiment.name}</CardTitle>
+            <CardDescription>
+              Stage-based flow: Setup {"->"} Prospects {"->"} Messaging {"->"} Launch.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="flex flex-wrap items-center gap-2 text-xs">
+            <Badge variant="muted">Status: {experiment.status}</Badge>
+            <Badge variant="muted">Sent: {experiment.metricsSummary.sent}</Badge>
+            <Badge variant="muted">Replies: {experiment.metricsSummary.replies}</Badge>
+            <Badge variant="muted">Positive: {experiment.metricsSummary.positiveReplies}</Badge>
+          </CardContent>
+        </Card>
+      ) : null}
 
       {error ? <div className="text-sm text-[color:var(--danger)]">{error}</div> : null}
 
       <Card>
         <CardHeader>
           <CardTitle className="text-base">Workflow</CardTitle>
-          <CardDescription>Only current stage content is shown below.</CardDescription>
+          <CardDescription>
+            {messagingFocus ? "Messaging focus mode." : "Only current stage content is shown below."}
+          </CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
-          <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-2 text-xs">
-            <div className="font-medium text-[color:var(--foreground)]">
-              {progressDoneCount}/{STAGE_COUNT} stages complete
+          {!messagingFocus ? (
+            <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-2 text-xs">
+              <div className="font-medium text-[color:var(--foreground)]">
+                {progressDoneCount}/{STAGE_COUNT} stages complete
+              </div>
+              <div className="text-[color:var(--muted-foreground)]">{progressPercent}% complete</div>
             </div>
-            <div className="text-[color:var(--muted-foreground)]">{progressPercent}% complete</div>
-          </div>
-          <div className="rounded-lg border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-2 text-xs text-[color:var(--muted-foreground)]">
-            {nextGateHint}
-          </div>
+          ) : null}
+          {!messagingFocus ? (
+            <div className="rounded-lg border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-2 text-xs text-[color:var(--muted-foreground)]">
+              {nextGateHint}
+            </div>
+          ) : null}
           <div className="grid gap-2 md:grid-cols-4">
             {workflowStages.map((stage) => (
               <button
@@ -1718,27 +1728,30 @@ export default function ExperimentClient({
         <Card>
           <CardHeader>
             <CardTitle className="text-base">{stageTitle(2)}</CardTitle>
-            <CardDescription>Edit and publish the conversation flow before launching.</CardDescription>
+            <CardDescription>Focus mode: edit the conversation canvas, publish, then continue.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
-            <div className="text-sm">
-              {experiment.messageFlow.publishedRevision > 0 ? (
-                <span>
-                  Published revision <strong>#{experiment.messageFlow.publishedRevision}</strong>
-                </span>
-              ) : (
-                <span className="text-[color:var(--danger)]">No published flow yet.</span>
-              )}
+            <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-2 text-sm">
+              <div>
+                {experiment.messageFlow.publishedRevision > 0 ? (
+                  <span>
+                    Published revision <strong>#{experiment.messageFlow.publishedRevision}</strong>
+                  </span>
+                ) : (
+                  <span className="text-[color:var(--danger)]">No published flow yet.</span>
+                )}
+              </div>
+              {experiment.runtime.campaignId && experiment.runtime.experimentId ? (
+                <Button asChild size="sm" variant="outline">
+                  <Link href={`/brands/${brandId}/experiments/${experiment.id}/flow`}>Open full canvas</Link>
+                </Button>
+              ) : null}
             </div>
             {!messagingReady ? (
               <div className="rounded-lg border border-[color:var(--danger-border)] bg-[color:var(--danger-soft)] px-3 py-2 text-sm text-[color:var(--danger)]">
-                Publish a flow revision to pass Messaging stage.
+                Publish at least one revision before launch.
               </div>
-            ) : (
-              <div className="rounded-lg border border-[color:var(--success)]/40 bg-[color:var(--success-soft)] px-3 py-2 text-sm text-[color:var(--success)]">
-                Messaging stage passed.
-              </div>
-            )}
+            ) : null}
             {experiment.runtime.campaignId && experiment.runtime.experimentId ? (
               <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3">
                 <FlowEditorClient
@@ -1751,7 +1764,7 @@ export default function ExperimentClient({
               </div>
             ) : (
               <div className="rounded-lg border border-[color:var(--warning)]/40 bg-[color:var(--warning-soft)] px-3 py-2 text-sm text-[color:var(--warning)]">
-                Flow editor is unavailable until runtime mapping exists. Source prospects once, then reopen Messaging.
+                Flow editor is unavailable until runtime mapping exists. Run Stage 1 sourcing once, then reopen Messaging.
               </div>
             )}
           </CardContent>

@@ -112,11 +112,12 @@ function defaultMessagePromptTemplate(title: string) {
   const safeTitle = title.trim() || "Message";
   return [
     `Write outbound email copy for node "${safeTitle}".`,
-    "Goal: earn a simple positive reply and continue the thread.",
-    "Keep it short and concrete: 2-3 short paragraphs, plain language, no hype.",
+    "Goal: earn a clear positive reply and continue the thread.",
+    "Keep it concrete, specific, and easy to understand.",
+    "Use plain language. Avoid buzzwords and filler.",
     "Use variables only when available: {{firstName}}, {{company}}, {{leadTitle}}, {{brandName}}, {{campaignGoal}}, {{variantName}}, {{replyPreview}}, {{shortAnswer}}.",
     "Never output unresolved placeholders.",
-    "Include exactly one low-friction CTA sentence (prefer yes/no).",
+    "End with one low-friction CTA sentence (yes/no preferred).",
   ].join("\n");
 }
 
@@ -134,9 +135,9 @@ function defaultNode(kind: "message" | "terminal" = "message", x = 80, y = 160):
         : defaultMessagePromptTemplate("Message"),
     promptVersion: 1,
     promptPolicy: {
-      subjectMaxWords: 8,
-      bodyMaxWords: 120,
-      exactlyOneCta: true,
+      subjectMaxWords: 0,
+      bodyMaxWords: 0,
+      exactlyOneCta: false,
     },
     subject,
     body,
@@ -249,13 +250,13 @@ function edgeLabel(edge: ConversationFlowEdge) {
   if (edge.trigger === "intent") {
     switch (edge.intent) {
       case "question":
-        return "Person asked a question";
+        return "Person asked for details";
       case "interest":
-        return "Person said yes / interested";
+        return "Person said yes, go ahead";
       case "objection":
-        return "Person raised an objection";
+        return "Person pushed back";
       case "unsubscribe":
-        return "Person asked to stop";
+        return "Person said stop";
       case "other":
         return "Person replied (other)";
       default:
@@ -1266,9 +1267,6 @@ export default function FlowEditorClient({
                           <div className="truncate text-base font-semibold">{cardTitle}</div>
                           <div className="flex items-center gap-1">
                             {isStart ? <Badge variant="accent">Start</Badge> : null}
-                            <Badge variant={node.kind === "terminal" ? "muted" : "success"}>
-                              {node.kind === "terminal" ? "End" : "Message"}
-                            </Badge>
                           </div>
                         </div>
                       </div>
@@ -1303,15 +1301,15 @@ export default function FlowEditorClient({
 
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">Editor</CardTitle>
-            <CardDescription>Click a message node to edit prompt and generate preview.</CardDescription>
+            <CardTitle className="text-base">Selected Item</CardTitle>
+            <CardDescription>Select a node or connector on the canvas to edit it.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             {selectedNode ? (
               <div className="space-y-3 rounded-xl border border-[color:var(--border)] p-3">
                 <div className="flex items-center justify-between">
                   <div className="text-sm font-semibold">
-                    {selectedNode.kind === "terminal" ? "End Node" : "Message Node"}
+                    {selectedNode.kind === "terminal" ? "Stop Node" : "Message Prompt"}
                   </div>
                   <Button type="button" size="sm" variant="ghost" onClick={() => deleteNode(selectedNode.id)}>
                     <Trash2 className="h-4 w-4" />
@@ -1324,15 +1322,15 @@ export default function FlowEditorClient({
                       <Label>Prompt Template</Label>
                       <Textarea
                         value={selectedNode.promptTemplate}
-                        rows={10}
+                        rows={11}
                         onChange={(event) => setNodePatch(selectedNode.id, { promptTemplate: event.target.value })}
                       />
                     </div>
 
                     <div className="grid gap-2 rounded-lg border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3">
-                      <div className="flex items-center justify-between">
-                        <div className="text-xs font-medium uppercase tracking-wide text-[color:var(--muted-foreground)]">
-                          Preview
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div className="text-xs text-[color:var(--muted-foreground)]">
+                          Preview uses one sourced sample lead for context.
                         </div>
                         <Button
                           type="button"
@@ -1342,42 +1340,29 @@ export default function FlowEditorClient({
                           disabled={previewLeadsLoading}
                         >
                           <RefreshCw className={`h-3.5 w-3.5 ${previewLeadsLoading ? "animate-spin" : ""}`} />
-                          {previewLeadsLoading ? "Refreshing..." : "Refresh Leads"}
+                          {previewLeadsLoading ? "Refreshing..." : "Refresh lead context"}
                         </Button>
                       </div>
 
-                      <div className="grid gap-2">
-                        <Label>Preview Lead</Label>
-                        <Select
-                          value={selectedPreviewLeadId}
-                          onChange={(event) => setSelectedPreviewLeadId(event.target.value)}
-                          disabled={!previewLeads.length}
-                        >
-                          {!previewLeads.length ? <option value="">No leads yet</option> : null}
-                          {previewLeads.map((lead) => (
-                            <option key={lead.id} value={lead.id}>
-                              {lead.name || lead.email || lead.domain || "Lead"}
-                            </option>
-                          ))}
-                        </Select>
-                        {selectedPreviewLead ? (
-                          <div className="rounded-md border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-2 text-xs">
-                            <div>{selectedPreviewLead.name || "(missing name)"}</div>
-                            <div className="text-[color:var(--muted-foreground)]">
-                              {selectedPreviewLead.title || "Unknown title"} at {selectedPreviewLead.company || selectedPreviewLead.domain}
-                            </div>
-                            <div className="text-[color:var(--muted-foreground)]">{selectedPreviewLead.email || "(missing email)"}</div>
+                      {selectedPreviewLead ? (
+                        <details className="rounded-md border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-2 text-xs">
+                          <summary className="cursor-pointer font-medium text-[color:var(--foreground)]">
+                            Sample lead: {selectedPreviewLead.name || selectedPreviewLead.email || selectedPreviewLead.domain}
+                          </summary>
+                          <div className="mt-2 text-[color:var(--muted-foreground)]">
+                            {selectedPreviewLead.title || "Unknown title"} at {selectedPreviewLead.company || selectedPreviewLead.domain}
                           </div>
-                        ) : null}
-                        {previewLeadsError ? (
-                          <div className="text-xs text-[color:var(--danger)]">{previewLeadsError}</div>
-                        ) : null}
-                        {!previewLeads.length ? (
-                          <div className="text-xs text-[color:var(--muted-foreground)]">
-                            No sourced leads yet. Run sourcing first, then refresh leads.
-                          </div>
-                        ) : null}
-                      </div>
+                          <div className="text-[color:var(--muted-foreground)]">{selectedPreviewLead.email || "(missing email)"}</div>
+                        </details>
+                      ) : null}
+                      {previewLeadsError ? (
+                        <div className="text-xs text-[color:var(--danger)]">{previewLeadsError}</div>
+                      ) : null}
+                      {!previewLeads.length ? (
+                        <div className="text-xs text-[color:var(--muted-foreground)]">
+                          No sourced leads yet. Run sourcing first, then refresh lead context.
+                        </div>
+                      ) : null}
 
                       <Button
                         type="button"
@@ -1431,7 +1416,7 @@ export default function FlowEditorClient({
                   variant={graph.startNodeId === selectedNode.id ? "default" : "outline"}
                   onClick={() => setGraph((prev) => (prev ? { ...prev, startNodeId: selectedNode.id } : prev))}
                 >
-                  Set As Start Node
+                  {graph.startNodeId === selectedNode.id ? "Start Node" : "Set As Start Node"}
                 </Button>
               </div>
             ) : null}
@@ -1492,10 +1477,10 @@ export default function FlowEditorClient({
                       }}
                     >
                       <option value="">Person replied (unspecified)</option>
-                      <option value="interest">Person said yes / interested</option>
-                      <option value="question">Person asked a question</option>
-                      <option value="objection">Person raised an objection</option>
-                      <option value="unsubscribe">Person asked to stop emails</option>
+                      <option value="interest">Person said yes, go ahead</option>
+                      <option value="question">Person asked for details</option>
+                      <option value="objection">Person pushed back / objection</option>
+                      <option value="unsubscribe">Person said stop emailing</option>
                       <option value="other">Person replied with something else</option>
                     </Select>
                   </div>

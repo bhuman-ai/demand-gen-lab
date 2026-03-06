@@ -128,14 +128,14 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
 
   return (
     <div className="min-h-screen bg-[color:var(--background)] text-[color:var(--foreground)]">
-      <div className="grid min-h-screen grid-cols-1 md:grid-cols-[260px_1fr]">
-        <aside className="border-b border-[color:var(--border)] bg-[color:var(--sidebar)] p-4 md:border-b-0 md:border-r md:p-5">
+      <div className="grid min-h-screen grid-cols-1 md:grid-cols-[240px_1fr]">
+        <aside className="border-b border-[color:var(--border)] bg-[color:var(--sidebar)]/90 p-4 md:border-b-0 md:border-r md:p-5">
           <Link href="/" className="block">
             <div className="text-[11px] uppercase tracking-[0.28em] text-[color:var(--muted-foreground)]">Factory</div>
             <div className="mt-1 text-lg font-semibold">Brand Command</div>
           </Link>
 
-          <nav className="mt-6 grid gap-1">
+          <nav className="mt-6 grid gap-1.5">
             {mainItems.map((item) => {
               const active = item.id === activeMainItem;
               const Icon = item.icon;
@@ -144,9 +144,9 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
                   key={item.id}
                   href={item.href}
                   className={cn(
-                    "inline-flex items-center gap-2 rounded-xl px-3 py-2 text-sm transition",
+                    "inline-flex items-center gap-2 rounded-full px-3 py-2 text-sm transition",
                     active
-                      ? "bg-[color:var(--accent-soft)] text-[color:var(--accent)]"
+                      ? "border border-[color:var(--foreground)]/20 bg-[color:var(--surface)] text-[color:var(--foreground)] shadow-[0_6px_24px_-18px_color-mix(in_srgb,var(--shadow)_90%,transparent)]"
                       : "text-[color:var(--muted-foreground)] hover:bg-[color:var(--surface-muted)] hover:text-[color:var(--foreground)]"
                   )}
                 >
@@ -159,7 +159,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
 
           <div className="mt-6 border-t border-[color:var(--border)] pt-5">
             <div className="mb-2 text-[11px] uppercase tracking-[0.2em] text-[color:var(--muted-foreground)]">Tools</div>
-            <nav className="grid gap-1">
+            <nav className="grid gap-1.5">
               {toolItems.map((item) => {
                 const active = pathname === item.href;
                 const Icon = item.icon;
@@ -168,9 +168,9 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
                     key={item.href}
                     href={item.href}
                     className={cn(
-                      "inline-flex items-center gap-2 rounded-xl px-3 py-2 text-sm transition",
+                      "inline-flex items-center gap-2 rounded-full px-3 py-2 text-sm transition",
                       active
-                        ? "bg-[color:var(--accent-soft)] text-[color:var(--accent)]"
+                        ? "border border-[color:var(--foreground)]/20 bg-[color:var(--surface)] text-[color:var(--foreground)] shadow-[0_6px_24px_-18px_color-mix(in_srgb,var(--shadow)_90%,transparent)]"
                         : "text-[color:var(--muted-foreground)] hover:bg-[color:var(--surface-muted)] hover:text-[color:var(--foreground)]"
                     )}
                   >
@@ -184,19 +184,21 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
         </aside>
 
         <main className="min-w-0">
-          <header className="sticky top-0 z-20 border-b border-[color:var(--border)] bg-[color:var(--surface)]/95 px-4 py-3 backdrop-blur md:px-6">
+          <header className="sticky top-0 z-20 border-b border-[color:var(--border)] bg-[color:var(--surface)]/92 px-4 py-3 backdrop-blur md:px-6">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div className="min-w-[260px]">
                 <div className="mb-2">
                   <BrandSwitcher />
                 </div>
-                <div className="text-xs text-[color:var(--muted-foreground)]">{breadcrumb(pathname)}</div>
-                <h1 className="text-lg font-semibold text-[color:var(--foreground)]">{pageTitle(pathname)}</h1>
+                <div className="inline-flex rounded-full border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-2.5 py-1 text-[11px] text-[color:var(--muted-foreground)]">
+                  {breadcrumb(pathname)}
+                </div>
+                <h1 className="mt-1 text-lg font-semibold text-[color:var(--foreground)]">{pageTitle(pathname)}</h1>
               </div>
               <div className="flex items-center gap-2">
                 <Link
                   href="/settings/outreach"
-                  className="inline-flex items-center gap-1 rounded-lg border border-[color:var(--border)] px-2 py-1 text-xs text-[color:var(--muted-foreground)] hover:bg-[color:var(--surface-muted)] hover:text-[color:var(--foreground)]"
+                  className="inline-flex items-center gap-1 rounded-full border border-[color:var(--border)] px-3 py-1.5 text-xs text-[color:var(--muted-foreground)] hover:bg-[color:var(--surface-muted)] hover:text-[color:var(--foreground)]"
                 >
                   <Settings className="h-3.5 w-3.5" />
                   Settings

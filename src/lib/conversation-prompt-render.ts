@@ -98,9 +98,9 @@ export type ConversationPromptRenderResult =
     };
 
 const DEFAULT_POLICY: ConversationPromptPolicy = {
-  subjectMaxWords: 8,
-  bodyMaxWords: 120,
-  exactlyOneCta: true,
+  subjectMaxWords: 0,
+  bodyMaxWords: 0,
+  exactlyOneCta: false,
 };
 
 const BANNED_VAGUE_PHRASES = [
@@ -196,9 +196,9 @@ function findBannedPhrase(subject: string, body: string) {
 function resolvePolicy(node: ConversationFlowNode): ConversationPromptPolicy {
   const row = node.promptPolicy ?? DEFAULT_POLICY;
   return {
-    subjectMaxWords: clampInt(row.subjectMaxWords, DEFAULT_POLICY.subjectMaxWords, 3, 20),
-    bodyMaxWords: clampInt(row.bodyMaxWords, DEFAULT_POLICY.bodyMaxWords, 40, 260),
-    exactlyOneCta: row.exactlyOneCta !== false,
+    subjectMaxWords: clampInt(row.subjectMaxWords, DEFAULT_POLICY.subjectMaxWords, 0, 24),
+    bodyMaxWords: clampInt(row.bodyMaxWords, DEFAULT_POLICY.bodyMaxWords, 0, 320),
+    exactlyOneCta: row.exactlyOneCta === true,
   };
 }
 
@@ -215,11 +215,7 @@ function effectivePolicyForContext(
   context: ConversationPromptRenderContext
 ): ConversationPromptPolicy {
   if (hasInboundContext(context)) return policy;
-  return {
-    ...policy,
-    subjectMaxWords: Math.min(policy.subjectMaxWords, 6),
-    bodyMaxWords: Math.min(policy.bodyMaxWords, 72),
-  };
+  return policy;
 }
 
 function defaultTrace(node: ConversationFlowNode, model: string): ConversationPromptTrace {
@@ -262,8 +258,6 @@ function buildPrompt(input: {
     '{"subject":"...","body":"...","cta":"...","quality":{"clarity":0-1,"specificity":0-1,"risk":0-1}}',
     "",
     "Hard constraints:",
-    `- Subject must be <= ${input.policy.subjectMaxWords} words.`,
-    `- Body must be <= ${input.policy.bodyMaxWords} words.`,
     "- Body must be specific, concrete, and easy to understand.",
     "- No buzzwords, no placeholder tokens, no unresolved variables.",
     "- Treat node prompt template as direction only. Do not copy any example text verbatim.",
@@ -278,9 +272,13 @@ function buildPrompt(input: {
       : "- Do not include procedural checklists or long field lists.",
     replyContext ? "" : "- Keep first-touch copy to 2-3 short paragraphs and ~55-75 words.",
     replyContext ? "" : "- Include one concrete example or proof, then ask one simple next-step CTA.",
-    input.policy.exactlyOneCta
-      ? "- Include exactly one explicit CTA sentence in the body, and make the same CTA text available in the cta field."
-      : "- Include a clear CTA in the body.",
+    input.policy.subjectMaxWords > 0
+      ? `- Keep subject concise (max ${input.policy.subjectMaxWords} words).`
+      : "",
+    input.policy.bodyMaxWords > 0
+      ? `- Keep body concise (max ${input.policy.bodyMaxWords} words).`
+      : "",
+    "- Include a clear CTA in the body.",
     input.previousFailureReason
       ? `- Previous attempt failed: ${input.previousFailureReason}. Fix this issue in the next draft.`
       : "",
@@ -362,7 +360,7 @@ function validateOutput(input: {
   if (!input.body.trim()) {
     return { ok: false as const, reason: "Generated body is empty", subjectWords, bodyWords, ctaOccurrences, unresolved, bannedPhrase };
   }
-  if (subjectWords > input.policy.subjectMaxWords) {
+  if (input.policy.subjectMaxWords > 0 && subjectWords > input.policy.subjectMaxWords) {
     return {
       ok: false as const,
       reason: `Subject exceeds max words (${subjectWords}/${input.policy.subjectMaxWords})`,
@@ -373,7 +371,7 @@ function validateOutput(input: {
       bannedPhrase,
     };
   }
-  if (bodyWords > input.policy.bodyMaxWords) {
+  if (input.policy.bodyMaxWords > 0 && bodyWords > input.policy.bodyMaxWords) {
     return {
       ok: false as const,
       reason: `Body exceeds max words (${bodyWords}/${input.policy.bodyMaxWords})`,
@@ -406,29 +404,16 @@ function validateOutput(input: {
       bannedPhrase,
     };
   }
-  if (input.policy.exactlyOneCta) {
-    if (!cta) {
-      return {
-        ok: false as const,
-        reason: "Generated output is missing CTA text",
-        subjectWords,
-        bodyWords,
-        ctaOccurrences,
-        unresolved,
-        bannedPhrase,
-      };
-    }
-    if (ctaOccurrences !== 1) {
-      return {
-        ok: false as const,
-        reason: `Generated output must include exactly one CTA occurrence (found ${ctaOccurrences})`,
-        subjectWords,
-        bodyWords,
-        ctaOccurrences,
-        unresolved,
-        bannedPhrase,
-      };
-    }
+  if (!cta) {
+    return {
+      ok: false as const,
+      reason: "Generated output is missing CTA text",
+      subjectWords,
+      bodyWords,
+      ctaOccurrences,
+      unresolved,
+      bannedPhrase,
+    };
   }
 
   if (!input.isReplyContext) {

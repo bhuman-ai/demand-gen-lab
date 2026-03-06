@@ -54,9 +54,9 @@ type ConversationSeedContext = {
 };
 
 const DEFAULT_PROMPT_POLICY: ConversationPromptPolicy = {
-  subjectMaxWords: 8,
-  bodyMaxWords: 120,
-  exactlyOneCta: true,
+  subjectMaxWords: 0,
+  bodyMaxWords: 0,
+  exactlyOneCta: false,
 };
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -85,9 +85,9 @@ function clampWords(value: unknown, fallback: number, min: number, max: number) 
 function normalizePromptPolicy(value: unknown): ConversationPromptPolicy {
   const row = asRecord(value);
   return {
-    subjectMaxWords: clampWords(row.subjectMaxWords, DEFAULT_PROMPT_POLICY.subjectMaxWords, 3, 20),
-    bodyMaxWords: clampWords(row.bodyMaxWords, DEFAULT_PROMPT_POLICY.bodyMaxWords, 40, 260),
-    exactlyOneCta: row.exactlyOneCta !== false,
+    subjectMaxWords: clampWords(row.subjectMaxWords, DEFAULT_PROMPT_POLICY.subjectMaxWords, 0, 24),
+    bodyMaxWords: clampWords(row.bodyMaxWords, DEFAULT_PROMPT_POLICY.bodyMaxWords, 0, 320),
+    exactlyOneCta: row.exactlyOneCta === true,
   };
 }
 
@@ -102,10 +102,10 @@ function buildNodePromptTemplate(input: {
     `Write outbound email copy for node "${title}".`,
     "Primary goal: earn a simple positive reply and continue the thread.",
     "Use campaign, experiment, and lead context dynamically; do not invent unavailable facts.",
-    "Keep it short and concrete: 2-3 short paragraphs, plain language, no hype.",
+    "Keep it short and concrete: plain language, no hype, no fluff.",
     "Use variables only when available: {{firstName}}, {{company}}, {{leadTitle}}, {{brandName}}, {{campaignGoal}}, {{variantName}}, {{replyPreview}}, {{shortAnswer}}.",
     "Never output unresolved placeholders.",
-    "Include exactly one low-friction CTA sentence (prefer yes/no).",
+    "End with one low-friction CTA sentence (yes/no is preferred).",
     hint ? `Node angle hint: ${hint}` : "",
   ]
     .filter(Boolean)

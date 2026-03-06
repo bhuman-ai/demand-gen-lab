@@ -102,7 +102,7 @@ export default function BrandSwitcher() {
   );
 
   return (
-    <div className="flex min-w-[260px] items-center gap-2">
+    <div className="flex w-full items-center gap-2">
       <Select
         value={selectedBrandId}
         onChange={(event) => {

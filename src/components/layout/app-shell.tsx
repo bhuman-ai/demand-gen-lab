@@ -146,6 +146,10 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
             <div className="mt-1 text-lg font-semibold">Factory Platform</div>
           </Link>
 
+          <div className="mt-4">
+            <BrandSwitcher />
+          </div>
+
           <nav className="mt-6 grid gap-1.5">
             {mainItems.map((item) => {
               const active = item.id === activeMainItem;
@@ -198,9 +202,6 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
           <header className="sticky top-0 z-20 border-b border-[color:var(--border)] bg-[color:var(--surface)]/92 px-4 py-3 backdrop-blur md:px-6">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div className="min-w-[260px]">
-                <div className="mb-2">
-                  <BrandSwitcher />
-                </div>
                 <div className="inline-flex rounded-full border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-2.5 py-1 text-[11px] text-[color:var(--muted-foreground)]">
                   {breadcrumb(pathname)}
                 </div>

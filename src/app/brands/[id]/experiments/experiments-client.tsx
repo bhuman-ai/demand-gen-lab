@@ -85,19 +85,19 @@ export default function ExperimentsClient({ brandId }: { brandId: string }) {
     });
   }, [items, query, statusFilter]);
 
-  const activeNow = useMemo(
-    () => filtered.filter((item) => item.isActiveNow),
-    [filtered]
-  );
-
   return (
     <div className="space-y-5">
+      {error ? <div className="text-sm text-[color:var(--danger)]">{error}</div> : null}
+      {loading ? <div className="text-sm text-[color:var(--muted-foreground)]">Loading experiments...</div> : null}
+
       <Card>
         <CardHeader className="flex flex-row items-start justify-between gap-3">
           <div>
-            <CardTitle>{brand?.name || "Brand"} Experiments</CardTitle>
+            <CardTitle>
+              {brand?.name || "Brand"} · All Experiments
+            </CardTitle>
             <CardDescription>
-              Run outbound tests, validate winners, and promote them into campaigns.
+              Show every experiment for this brand and quickly jump into execution.
             </CardDescription>
           </div>
           <div className="flex items-center gap-2">
@@ -128,7 +128,7 @@ export default function ExperimentsClient({ brandId }: { brandId: string }) {
             </Button>
           </div>
         </CardHeader>
-        <CardContent className="space-y-3">
+        <CardContent className="space-y-4">
           <div className="flex flex-wrap gap-2">
             {STATUS_OPTIONS.map((status) => {
               const active = statusFilter === status;
@@ -158,52 +158,8 @@ export default function ExperimentsClient({ brandId }: { brandId: string }) {
               className="pl-9"
             />
           </div>
-        </CardContent>
-      </Card>
-
-      {error ? <div className="text-sm text-[color:var(--danger)]">{error}</div> : null}
-      {loading ? <div className="text-sm text-[color:var(--muted-foreground)]">Loading experiments...</div> : null}
-
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Active Now</CardTitle>
-          <CardDescription>Operational experiments that need active oversight.</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          {activeNow.length ? (
-            activeNow.map((item) => (
-              <div key={item.id} className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-4 py-3">
-                <div className="flex flex-wrap items-start justify-between gap-3">
-                  <div>
-                    <div className="text-sm font-semibold">{item.name}</div>
-                    <div className="text-xs text-[color:var(--muted-foreground)]">{item.status}</div>
-                  </div>
-                  <Button asChild size="sm">
-                    <Link href={item.activeHref}>{item.activeActionLabel}</Link>
-                  </Button>
-                </div>
-                <div className="mt-2 text-xs text-[color:var(--muted-foreground)]">
-                  Audience: {item.audience || "Not set"} · Offer: {item.offer || "Not set"} · Flow: V{Math.max(1, item.flowRevision)}
-                </div>
-                <div className="mt-1 text-xs text-[color:var(--muted-foreground)]">
-                  Funnel: {item.sourcedLeads} sourced → {item.scheduledMessages} scheduled → {item.sentMessages} sent → {item.replies} replies → {item.positiveReplies} positive
-                </div>
-                <div className="mt-1 text-xs text-[color:var(--muted-foreground)]">Last activity: {item.lastActivityLabel}</div>
-              </div>
-            ))
-          ) : (
-            <div className="text-sm text-[color:var(--muted-foreground)]">No running or sourcing experiments right now.</div>
-          )}
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">All Experiments</CardTitle>
-          <CardDescription>Execution-first list with plain-language status and recent activity.</CardDescription>
-        </CardHeader>
-        <CardContent className="overflow-x-auto">
-          <table className="w-full min-w-[1120px] text-sm">
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[1120px] text-sm">
             <colgroup>
               <col className="w-[27%]" />
               <col className="w-[10%]" />
@@ -280,10 +236,11 @@ export default function ExperimentsClient({ brandId }: { brandId: string }) {
                 </tr>
               ))}
             </tbody>
-          </table>
-          {!filtered.length ? (
-            <div className="py-6 text-sm text-[color:var(--muted-foreground)]">No experiments match your filters.</div>
-          ) : null}
+            </table>
+            {!filtered.length ? (
+              <div className="py-6 text-sm text-[color:var(--muted-foreground)]">No experiments match your filters.</div>
+            ) : null}
+          </div>
         </CardContent>
       </Card>
     </div>

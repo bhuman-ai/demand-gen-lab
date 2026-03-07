@@ -104,6 +104,7 @@ export default function BrandSwitcher() {
   return (
     <div className="flex w-full items-center gap-2">
       <Select
+        className="border-[color:var(--accent-border)] bg-[color:var(--surface)] shadow-[0_16px_36px_-28px_color-mix(in_srgb,var(--accent)_70%,transparent)]"
         value={selectedBrandId}
         onChange={(event) => {
           const brandId = event.target.value;

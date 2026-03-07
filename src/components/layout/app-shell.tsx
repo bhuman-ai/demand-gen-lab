@@ -140,9 +140,11 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   return (
     <div className="min-h-screen bg-[color:var(--background)] text-[color:var(--foreground)]">
       <div className="grid min-h-screen grid-cols-1 md:grid-cols-[240px_1fr]">
-        <aside className="border-b border-[color:var(--border)] bg-[color:var(--sidebar)]/90 p-4 md:border-b-0 md:border-r md:p-5">
+        <aside className="relative overflow-hidden border-b border-[color:var(--border)] bg-[color:var(--sidebar)]/90 p-4 md:border-b-0 md:border-r md:p-5">
+          <div className="pointer-events-none absolute -left-10 top-10 h-36 w-36 rounded-full bg-[color:var(--accent-soft)]/80 blur-3xl" />
+          <div className="pointer-events-none absolute -right-10 top-60 h-32 w-32 rounded-full bg-[color:var(--success-soft)]/70 blur-3xl" />
           <Link href="/" className="block">
-            <div className="text-[11px] uppercase tracking-[0.28em] text-[color:var(--muted-foreground)]">Factory</div>
+            <div className="text-[11px] uppercase tracking-[0.28em] text-[color:var(--accent)]">Factory</div>
             <div className="mt-1 text-lg font-semibold">Factory Platform</div>
           </Link>
 
@@ -161,8 +163,8 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
                   className={cn(
                     "inline-flex items-center gap-2 rounded-full px-3 py-2 text-sm transition",
                     active
-                      ? "border border-[color:var(--foreground)]/20 bg-[color:var(--surface)] text-[color:var(--foreground)] shadow-[0_6px_24px_-18px_color-mix(in_srgb,var(--shadow)_90%,transparent)]"
-                      : "text-[color:var(--muted-foreground)] hover:bg-[color:var(--surface-muted)] hover:text-[color:var(--foreground)]"
+                      ? "border border-[color:var(--accent-border)] bg-[color:var(--accent-soft)] text-[color:var(--accent)] shadow-[0_10px_26px_-20px_color-mix(in_srgb,var(--accent)_75%,transparent)]"
+                      : "text-[color:var(--muted-foreground)] hover:bg-[color:var(--accent-soft)]/55 hover:text-[color:var(--foreground)]"
                   )}
                 >
                   <Icon className="h-4 w-4" />
@@ -185,8 +187,8 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
                     className={cn(
                       "inline-flex items-center gap-2 rounded-full px-3 py-2 text-sm transition",
                       active
-                        ? "border border-[color:var(--foreground)]/20 bg-[color:var(--surface)] text-[color:var(--foreground)] shadow-[0_6px_24px_-18px_color-mix(in_srgb,var(--shadow)_90%,transparent)]"
-                        : "text-[color:var(--muted-foreground)] hover:bg-[color:var(--surface-muted)] hover:text-[color:var(--foreground)]"
+                        ? "border border-[color:var(--accent-border)] bg-[color:var(--accent-soft)] text-[color:var(--accent)] shadow-[0_10px_26px_-20px_color-mix(in_srgb,var(--accent)_75%,transparent)]"
+                        : "text-[color:var(--muted-foreground)] hover:bg-[color:var(--accent-soft)]/55 hover:text-[color:var(--foreground)]"
                     )}
                   >
                     <Icon className="h-4 w-4" />

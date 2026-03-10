@@ -405,7 +405,7 @@ export async function testNamecheapProvisioningConnection(input: {
       command: "namecheap.domains.getList",
     }),
     Page: "1",
-    PageSize: "1",
+    PageSize: "20",
     SortBy: "NAME",
   });
 

@@ -334,12 +334,36 @@ export type MailboxStatus = "connected" | "disconnected" | "error";
 
 export type OutreachAccountType = "delivery" | "mailbox" | "hybrid";
 
+export type CustomerIoBillingConfig = {
+  monthlyProfileLimit: number;
+  billingCycleAnchorDay: number;
+  currentPeriodStart: string;
+  currentPeriodBaselineProfiles: number;
+  currentPeriodBaselineSyncedAt: string;
+  lastWorkspacePeopleCount: number;
+  lastWorkspacePeopleCountAt: string;
+};
+
+export type CustomerIoBillingSummary = {
+  monthlyProfileLimit: number;
+  billingCycleAnchorDay: number;
+  billingPeriodStart: string;
+  baselineReady: boolean;
+  currentPeriodBaselineProfiles: number;
+  currentPeriodAdmittedProfiles: number;
+  observedWorkspaceProfiles: number;
+  observedWorkspaceProfilesAt: string;
+  projectedProfiles: number;
+  remainingProfiles: number;
+};
+
 export type OutreachAccountConfig = {
   customerIo: {
     siteId: string;
     workspaceId: string;
     fromEmail: string;
     replyToEmail: string;
+    billing: CustomerIoBillingConfig;
   };
   apify: {
     defaultActorId: string;
@@ -361,6 +385,7 @@ export type OutreachAccount = {
   accountType: OutreachAccountType;
   status: "active" | "inactive";
   config: OutreachAccountConfig;
+  customerIoBilling?: CustomerIoBillingSummary;
   hasCredentials: boolean;
   lastTestAt: string;
   lastTestStatus: "unknown" | "pass" | "fail";

@@ -18,6 +18,7 @@ import {
   getOutreachProvisioningSettings,
   getOutreachProvisioningSettingsSecrets,
 } from "@/lib/outreach-provider-settings";
+import { sanitizeCustomerIoBillingConfig } from "@/lib/outreach-customerio-billing";
 import { testOutreachProviders } from "@/lib/outreach-providers";
 
 type NamecheapHostRecord = {
@@ -763,6 +764,7 @@ async function ensureCustomerIoDeliveryAccount(input: {
         workspaceId: "",
         fromEmail: input.fromEmail.trim(),
         replyToEmail: input.replyToEmail.trim(),
+        billing: sanitizeCustomerIoBillingConfig({}),
       },
       apify: {
         defaultActorId: "",
@@ -912,6 +914,7 @@ export async function provisionCustomerIoSender(
         workspaceId: "",
         fromEmail,
         replyToEmail: replyMailboxEmail,
+        billing: sanitizeCustomerIoBillingConfig({}),
       },
       apify: {
         defaultActorId: "",

@@ -35,6 +35,7 @@ type DeliveryFormState = {
   name: string;
   siteId: string;
   customerIoApiKey: string;
+  customerIoAppApiKey: string;
   fromEmail: string;
 };
 
@@ -56,6 +57,7 @@ const INITIAL_DELIVERY_FORM: DeliveryFormState = {
   name: "",
   siteId: "",
   customerIoApiKey: "",
+  customerIoAppApiKey: "",
   fromEmail: "",
 };
 
@@ -178,113 +180,125 @@ function AccountListCard({
         ) : null}
       </CardHeader>
       <CardContent className="grid gap-3">
-        {accounts.map((account) => (
-          <div
-            key={account.id}
-            className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3"
-          >
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div>
-                <div className="text-sm font-semibold">{account.name}</div>
-                <div className="text-xs text-[color:var(--muted-foreground)]">
-                  Type: {account.accountType} · Provider: {account.provider}
-                  {account.accountType !== "mailbox" ? (
-                    <>
-                      {" "}
-                      · From: {account.config.customerIo.fromEmail || "not set"} · Reply-To: set per brand via Reply
-                      Mailbox
-                    </>
-                  ) : null}
-                  {account.accountType !== "delivery" ? (
-                    <> · Inbox: {account.config.mailbox.email || "not set"}</>
-                  ) : null}
+        {accounts.map((account) => {
+          const budget = account.customerIoBilling;
+          const budgetLine =
+            account.accountType === "mailbox" || !budget
+              ? ""
+              : budget.baselineReady
+                ? `Profile budget: ${budget.projectedProfiles}/${budget.monthlyProfileLimit} this period · ${budget.remainingProfiles} left`
+                : `Profile budget: waiting for baseline sync for period starting ${budget.billingPeriodStart}`;
+          return (
+            <div
+              key={account.id}
+              className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3"
+            >
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <div className="text-sm font-semibold">{account.name}</div>
+                  <div className="text-xs text-[color:var(--muted-foreground)]">
+                    Type: {account.accountType} · Provider: {account.provider}
+                    {account.accountType !== "mailbox" ? (
+                      <>
+                        {" "}
+                        · From: {account.config.customerIo.fromEmail || "not set"} · Reply-To: set per brand via Reply
+                        Mailbox
+                      </>
+                    ) : null}
+                    {account.accountType !== "delivery" ? (
+                      <> · Inbox: {account.config.mailbox.email || "not set"}</>
+                    ) : null}
+                  </div>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    disabled={Boolean(testingByAccountId[account.id] || deletingByAccountId[account.id])}
+                    onClick={async () => {
+                      setError("");
+                      try {
+                        setTestingByAccountId((prev) => ({ ...prev, [account.id]: true }));
+                        const result = await testOutreachAccount(account.id, testScope);
+                        trackEvent("outreach_account_tested", {
+                          accountId: account.id,
+                          ok: result.ok,
+                          scope: result.scope,
+                        });
+                        setTestStateByAccountId((prev) => ({
+                          ...prev,
+                          [account.id]: { ok: result.ok, message: result.message, testedAt: result.testedAt },
+                        }));
+                        const refreshed = await fetchOutreachAccounts();
+                        setAccounts(refreshed);
+                      } catch (err) {
+                        setError(err instanceof Error ? err.message : "Account test failed");
+                      } finally {
+                        setTestingByAccountId((prev) => ({ ...prev, [account.id]: false }));
+                      }
+                    }}
+                  >
+                    {testingByAccountId[account.id] ? "Testing..." : testLabel}
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="danger"
+                    disabled={Boolean(deletingByAccountId[account.id] || testingByAccountId[account.id])}
+                    onClick={async () => {
+                      const confirmed = window.confirm(`Delete account "${account.name}"?`);
+                      if (!confirmed) return;
+                      setError("");
+                      try {
+                        setDeletingByAccountId((prev) => ({ ...prev, [account.id]: true }));
+                        await onDeleteAccount(account.id);
+                        setTestStateByAccountId((prev) => {
+                          const next = { ...prev };
+                          delete next[account.id];
+                          return next;
+                        });
+                      } catch (err) {
+                        setError(err instanceof Error ? err.message : "Failed to delete account");
+                      } finally {
+                        setDeletingByAccountId((prev) => ({ ...prev, [account.id]: false }));
+                      }
+                    }}
+                  >
+                    {deletingByAccountId[account.id] ? "Deleting..." : "Delete"}
+                  </Button>
+                  <Select
+                    value={account.status}
+                    disabled={Boolean(deletingByAccountId[account.id])}
+                    onChange={async (event) => {
+                      const status = event.target.value === "inactive" ? "inactive" : "active";
+                      const updated = await updateOutreachAccountApi(account.id, { status });
+                      setAccounts((prev) => prev.map((row) => (row.id === account.id ? updated : row)));
+                    }}
+                  >
+                    <option value="active">active</option>
+                    <option value="inactive">inactive</option>
+                  </Select>
                 </div>
               </div>
-              <div className="flex flex-wrap items-center gap-2">
-                <Button
-                  type="button"
-                  variant="outline"
-                  disabled={Boolean(testingByAccountId[account.id] || deletingByAccountId[account.id])}
-                  onClick={async () => {
-                    setError("");
-                    try {
-                      setTestingByAccountId((prev) => ({ ...prev, [account.id]: true }));
-                      const result = await testOutreachAccount(account.id, testScope);
-                      trackEvent("outreach_account_tested", {
-                        accountId: account.id,
-                        ok: result.ok,
-                        scope: result.scope,
-                      });
-                      setTestStateByAccountId((prev) => ({
-                        ...prev,
-                        [account.id]: { ok: result.ok, message: result.message, testedAt: result.testedAt },
-                      }));
-                      const refreshed = await fetchOutreachAccounts();
-                      setAccounts(refreshed);
-                    } catch (err) {
-                      setError(err instanceof Error ? err.message : "Account test failed");
-                    } finally {
-                      setTestingByAccountId((prev) => ({ ...prev, [account.id]: false }));
-                    }
-                  }}
-                >
-                  {testingByAccountId[account.id] ? "Testing..." : testLabel}
-                </Button>
-                <Button
-                  type="button"
-                  variant="danger"
-                  disabled={Boolean(deletingByAccountId[account.id] || testingByAccountId[account.id])}
-                  onClick={async () => {
-                    const confirmed = window.confirm(`Delete account "${account.name}"?`);
-                    if (!confirmed) return;
-                    setError("");
-                    try {
-                      setDeletingByAccountId((prev) => ({ ...prev, [account.id]: true }));
-                      await onDeleteAccount(account.id);
-                      setTestStateByAccountId((prev) => {
-                        const next = { ...prev };
-                        delete next[account.id];
-                        return next;
-                      });
-                    } catch (err) {
-                      setError(err instanceof Error ? err.message : "Failed to delete account");
-                    } finally {
-                      setDeletingByAccountId((prev) => ({ ...prev, [account.id]: false }));
-                    }
-                  }}
-                >
-                  {deletingByAccountId[account.id] ? "Deleting..." : "Delete"}
-                </Button>
-                <Select
-                  value={account.status}
-                  disabled={Boolean(deletingByAccountId[account.id])}
-                  onChange={async (event) => {
-                    const status = event.target.value === "inactive" ? "inactive" : "active";
-                    const updated = await updateOutreachAccountApi(account.id, { status });
-                    setAccounts((prev) => prev.map((row) => (row.id === account.id ? updated : row)));
-                  }}
-                >
-                  <option value="active">active</option>
-                  <option value="inactive">inactive</option>
-                </Select>
+              <div className="mt-2 text-xs text-[color:var(--muted-foreground)]">
+                Last test: {account.lastTestAt ? `${account.lastTestStatus} · ${account.lastTestAt}` : "never"}
               </div>
+              {budgetLine ? (
+                <div className="mt-1 text-xs text-[color:var(--muted-foreground)]">{budgetLine}</div>
+              ) : null}
+              {testStateByAccountId[account.id] ? (
+                <div
+                  className={`mt-2 rounded-lg border px-2 py-1 text-xs ${
+                    testStateByAccountId[account.id].ok
+                      ? "border-[color:var(--success-border)] bg-[color:var(--success-soft)] text-[color:var(--success)]"
+                      : "border-[color:var(--danger-border)] bg-[color:var(--danger-soft)] text-[color:var(--danger)]"
+                  }`}
+                >
+                  {testStateByAccountId[account.id].message}
+                </div>
+              ) : null}
             </div>
-            <div className="mt-2 text-xs text-[color:var(--muted-foreground)]">
-              Last test: {account.lastTestAt ? `${account.lastTestStatus} · ${account.lastTestAt}` : "never"}
-            </div>
-            {testStateByAccountId[account.id] ? (
-              <div
-                className={`mt-2 rounded-lg border px-2 py-1 text-xs ${
-                  testStateByAccountId[account.id].ok
-                    ? "border-[color:var(--success-border)] bg-[color:var(--success-soft)] text-[color:var(--success)]"
-                    : "border-[color:var(--danger-border)] bg-[color:var(--danger-soft)] text-[color:var(--danger)]"
-                }`}
-              >
-                {testStateByAccountId[account.id].message}
-              </div>
-            ) : null}
-          </div>
-        ))}
+          );
+        })}
         {!accounts.length ? (
           <div className="grid gap-2">
             <div className="text-sm text-[color:var(--muted-foreground)]">{emptyMessage}</div>
@@ -432,6 +446,8 @@ export default function OutreachSettingsClient() {
         },
         credentials: {
           customerIoApiKey: deliveryForm.customerIoApiKey,
+          customerIoTrackApiKey: deliveryForm.customerIoApiKey,
+          customerIoAppApiKey: deliveryForm.customerIoAppApiKey,
         },
       });
 
@@ -906,6 +922,22 @@ export default function OutreachSettingsClient() {
               className={invalidFieldClass(Boolean(deliveryErrors.customerIoApiKey))}
             />
             <FieldError message={deliveryErrors.customerIoApiKey} />
+          </div>
+          <div className="grid gap-2">
+            <FieldLabel
+              htmlFor="delivery-app-api-key"
+              label="Customer.io App API Key"
+              help="Optional but recommended. The monthly profile guard uses this to read workspace people counts and stop cold sends before you cross your billing cap."
+            />
+            <Input
+              id="delivery-app-api-key"
+              type="password"
+              value={deliveryForm.customerIoAppApiKey}
+              onChange={(event) =>
+                setDeliveryForm((prev) => ({ ...prev, customerIoAppApiKey: event.target.value }))
+              }
+              placeholder="Optional App API key"
+            />
           </div>
           <div className="grid gap-2">
             <FieldLabel

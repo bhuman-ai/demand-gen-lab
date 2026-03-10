@@ -1,5 +1,12 @@
 import { mkdir, readFile, writeFile } from "fs/promises";
 import { createId } from "@/lib/factory-data";
+import {
+  buildCustomerIoBillingSummary,
+  currentCustomerIoBillingPeriodStart,
+  mergeOutreachAccountConfig,
+  normalizeCustomerIoProfileIdentifier,
+  sanitizeCustomerIoBillingConfig,
+} from "@/lib/outreach-customerio-billing";
 import { decryptJson, encryptJson } from "@/lib/outreach-encryption";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import type {
@@ -63,6 +70,16 @@ export type OutreachEvent = {
   createdAt: string;
 };
 
+export type CustomerIoProfileAdmission = {
+  id: string;
+  accountId: string;
+  billingPeriodStart: string;
+  profileIdentifier: string;
+  sourceRunId: string;
+  sourceMessageId: string;
+  createdAt: string;
+};
+
 export type OutreachAccountLookupDebug = {
   accountId: string;
   runtime: "vercel" | "local";
@@ -80,6 +97,7 @@ type StoredAccount = Omit<OutreachAccount, "hasCredentials"> & {
 
 type OutreachStore = {
   accounts: StoredAccount[];
+  customerIoProfileAdmissions: CustomerIoProfileAdmission[];
   assignments: BrandOutreachAssignment[];
   runs: OutreachRun[];
   runLeads: OutreachRunLead[];
@@ -119,6 +137,7 @@ export class OutreachDataError extends Error {
 }
 
 const TABLE_ACCOUNT = "demanddev_outreach_accounts";
+const TABLE_CUSTOMER_IO_PROFILE_ADMISSION = "demanddev_customerio_profile_admissions";
 const TABLE_ASSIGNMENT = "demanddev_brand_outreach_assignments";
 const TABLE_RUN = "demanddev_outreach_runs";
 const TABLE_RUN_LEAD = "demanddev_outreach_run_leads";
@@ -154,6 +173,7 @@ function asArray(value: unknown): unknown[] {
 function defaultOutreachStore(): OutreachStore {
   return {
     accounts: [],
+    customerIoProfileAdmissions: [],
     assignments: [],
     runs: [],
     runLeads: [],
@@ -193,6 +213,7 @@ function sanitizeAccountConfig(value: unknown): OutreachAccountConfig {
       workspaceId: String(customerIo.workspaceId ?? "").trim(),
       fromEmail: String(customerIo.fromEmail ?? customerIo.from_email ?? "").trim(),
       replyToEmail: String(customerIo.replyToEmail ?? customerIo.reply_to_email ?? customerIo.replyTo ?? "").trim(),
+      billing: sanitizeCustomerIoBillingConfig(customerIo.billing),
     },
     apify: {
       defaultActorId: String(apify.defaultActorId ?? "").trim(),
@@ -565,6 +586,21 @@ function mapEventRow(input: unknown): OutreachEvent {
   };
 }
 
+function mapCustomerIoProfileAdmissionRow(input: unknown): CustomerIoProfileAdmission {
+  const row = asRecord(input);
+  return {
+    id: String(row.id ?? ""),
+    accountId: String(row.account_id ?? row.accountId ?? "").trim(),
+    billingPeriodStart: String(row.billing_period_start ?? row.billingPeriodStart ?? "").trim(),
+    profileIdentifier: normalizeCustomerIoProfileIdentifier(
+      String(row.profile_identifier ?? row.profileIdentifier ?? "")
+    ),
+    sourceRunId: String(row.source_run_id ?? row.sourceRunId ?? "").trim(),
+    sourceMessageId: String(row.source_message_id ?? row.sourceMessageId ?? "").trim(),
+    createdAt: String(row.created_at ?? row.createdAt ?? nowIso()),
+  };
+}
+
 function mapSourcingActorProfileRow(input: unknown): ActorCapabilityProfile {
   const row = asRecord(input);
   const stageHintsRaw = row.stage_hints ?? row.stageHints;
@@ -689,6 +725,9 @@ async function readLocalStore(): Promise<OutreachStore> {
     const row = asRecord(parsed);
     return {
       accounts: asArray(row.accounts).map((item) => mapAccountRowFromDb(item)),
+      customerIoProfileAdmissions: asArray(row.customerIoProfileAdmissions).map((item) =>
+        mapCustomerIoProfileAdmissionRow(item)
+      ),
       assignments: asArray(row.assignments).map((entry) => {
         const item = asRecord(entry);
         const accountId = String(item.accountId ?? item.account_id ?? "");
@@ -857,6 +896,9 @@ function hintForSupabaseWriteError(error: unknown) {
     if (msg.includes("demanddev_outreach_accounts")) {
       return "Outreach tables are missing. In Supabase SQL Editor, run supabase/migrations/20260211103000_outreach_autopilot.sql and supabase/migrations/20260211152000_outreach_split_accounts.sql.";
     }
+    if (msg.includes("demanddev_customerio_profile_admissions")) {
+      return "Customer.io profile budget tables are missing. Apply supabase/migrations/20260310143000_customerio_profile_budget.sql, then redeploy.";
+    }
     return "Supabase tables are missing. Apply migrations in supabase/migrations to your Supabase project, then redeploy.";
   }
 
@@ -868,7 +910,249 @@ function hintForSupabaseWriteError(error: unknown) {
     return "Your Supabase schema is missing `demanddev_brand_outreach_assignments.mailbox_account_id`. Apply supabase/migrations/20260211152000_outreach_split_accounts.sql, then redeploy.";
   }
 
+  if (msg.includes("demanddev_claim_customerio_profile_admission")) {
+    return "Your Supabase schema is missing the Customer.io profile budget RPC. Apply supabase/migrations/20260310143000_customerio_profile_budget.sql, then redeploy.";
+  }
+
   return dbg.hint || "Supabase request failed. Check SUPABASE_URL, service-role permissions, and migrations.";
+}
+
+function isMissingRelationError(error: unknown, relationName: string) {
+  const dbg = supabaseErrorDebug(error);
+  const message = `${dbg.message}\n${dbg.details}`.toLowerCase();
+  return message.includes(relationName.toLowerCase()) && message.includes("does not exist");
+}
+
+async function hydrateOutreachAccountCustomerIoBilling(account: OutreachAccount): Promise<OutreachAccount> {
+  if (!account.config.customerIo.siteId.trim()) {
+    return account;
+  }
+  const billingPeriodStart = currentCustomerIoBillingPeriodStart(account.config.customerIo.billing.billingCycleAnchorDay);
+  const admittedProfiles = await countCustomerIoProfileAdmissions(account.id, billingPeriodStart, {
+    allowMissingTable: true,
+  });
+  return {
+    ...account,
+    customerIoBilling: buildCustomerIoBillingSummary({
+      config: account.config.customerIo.billing,
+      admittedProfiles,
+    }),
+  };
+}
+
+export async function countCustomerIoProfileAdmissions(
+  accountId: string,
+  billingPeriodStart: string,
+  options: { allowMissingTable?: boolean } = {}
+): Promise<number> {
+  const periodStart = billingPeriodStart.trim();
+  if (!periodStart) return 0;
+
+  const supabase = getSupabaseAdmin();
+  if (supabase) {
+    const { count, error } = await supabase
+      .from(TABLE_CUSTOMER_IO_PROFILE_ADMISSION)
+      .select("id", { count: "exact", head: true })
+      .eq("account_id", accountId)
+      .eq("billing_period_start", periodStart);
+    if (!error) {
+      return Math.max(0, Number(count ?? 0));
+    }
+    if (options.allowMissingTable && isMissingRelationError(error, TABLE_CUSTOMER_IO_PROFILE_ADMISSION)) {
+      return 0;
+    }
+    if (isVercel) {
+      throw new OutreachDataError("Failed to count Customer.io profile admissions from Supabase.", {
+        status: 500,
+        hint: hintForSupabaseWriteError(error),
+        debug: {
+          operation: "countCustomerIoProfileAdmissions",
+          runtime: runtimeLabel(),
+          supabaseConfigured: supabaseConfigured(),
+          accountId,
+          billingPeriodStart: periodStart,
+          supabaseError: supabaseErrorDebug(error),
+        },
+      });
+    }
+  }
+
+  const store = await readLocalStore();
+  return store.customerIoProfileAdmissions.filter(
+    (row) => row.accountId === accountId && row.billingPeriodStart === periodStart
+  ).length;
+}
+
+export async function findCustomerIoProfileAdmission(
+  accountId: string,
+  billingPeriodStart: string,
+  profileIdentifier: string,
+  options: { allowMissingTable?: boolean } = {}
+): Promise<CustomerIoProfileAdmission | null> {
+  const periodStart = billingPeriodStart.trim();
+  const normalizedIdentifier = normalizeCustomerIoProfileIdentifier(profileIdentifier);
+  if (!periodStart || !normalizedIdentifier) return null;
+
+  const supabase = getSupabaseAdmin();
+  if (supabase) {
+    const { data, error } = await supabase
+      .from(TABLE_CUSTOMER_IO_PROFILE_ADMISSION)
+      .select("*")
+      .eq("account_id", accountId)
+      .eq("billing_period_start", periodStart)
+      .eq("profile_identifier", normalizedIdentifier)
+      .maybeSingle();
+    if (!error) {
+      return data ? mapCustomerIoProfileAdmissionRow(data) : null;
+    }
+    if (options.allowMissingTable && isMissingRelationError(error, TABLE_CUSTOMER_IO_PROFILE_ADMISSION)) {
+      return null;
+    }
+    if (isVercel) {
+      throw new OutreachDataError("Failed to load Customer.io profile admission from Supabase.", {
+        status: 500,
+        hint: hintForSupabaseWriteError(error),
+        debug: {
+          operation: "findCustomerIoProfileAdmission",
+          runtime: runtimeLabel(),
+          supabaseConfigured: supabaseConfigured(),
+          accountId,
+          billingPeriodStart: periodStart,
+          profileIdentifier: normalizedIdentifier,
+          supabaseError: supabaseErrorDebug(error),
+        },
+      });
+    }
+  }
+
+  const store = await readLocalStore();
+  return (
+    store.customerIoProfileAdmissions.find(
+      (row) =>
+        row.accountId === accountId &&
+        row.billingPeriodStart === periodStart &&
+        row.profileIdentifier === normalizedIdentifier
+    ) ?? null
+  );
+}
+
+export async function claimCustomerIoProfileAdmission(input: {
+  accountId: string;
+  billingPeriodStart: string;
+  profileIdentifier: string;
+  sourceRunId: string;
+  sourceMessageId: string;
+  effectiveLimit: number;
+}): Promise<{
+  status: "existing" | "admitted" | "blocked";
+  currentCount: number;
+  admission: CustomerIoProfileAdmission | null;
+}> {
+  const periodStart = input.billingPeriodStart.trim();
+  const normalizedIdentifier = normalizeCustomerIoProfileIdentifier(input.profileIdentifier);
+  const effectiveLimit = Math.max(0, Math.floor(Number(input.effectiveLimit ?? 0) || 0));
+  if (!periodStart || !normalizedIdentifier) {
+    return {
+      status: "blocked",
+      currentCount: 0,
+      admission: null,
+    };
+  }
+
+  const supabase = getSupabaseAdmin();
+  if (supabase) {
+    const { data, error } = await supabase.rpc("demanddev_claim_customerio_profile_admission", {
+      p_account_id: input.accountId,
+      p_billing_period_start: periodStart,
+      p_profile_identifier: normalizedIdentifier,
+      p_source_run_id: input.sourceRunId,
+      p_source_message_id: input.sourceMessageId,
+      p_effective_limit: effectiveLimit,
+    });
+    if (!error) {
+      const row = Array.isArray(data) ? asRecord(data[0]) : asRecord(data);
+      const status = String(row.status ?? "").trim();
+      const currentCount = Math.max(0, Number(row.current_count ?? row.currentCount ?? 0) || 0);
+      const admissionId = String(row.admission_id ?? row.admissionId ?? "").trim();
+      const createdAt = String(row.created_at ?? row.createdAt ?? nowIso()).trim();
+      return {
+        status: status === "existing" || status === "blocked" ? status : "admitted",
+        currentCount,
+        admission:
+          admissionId && status !== "blocked"
+            ? {
+                id: admissionId,
+                accountId: input.accountId,
+                billingPeriodStart: periodStart,
+                profileIdentifier: normalizedIdentifier,
+                sourceRunId: input.sourceRunId,
+                sourceMessageId: input.sourceMessageId,
+                createdAt,
+              }
+            : null,
+      };
+    }
+
+    if (isVercel) {
+      throw new OutreachDataError("Failed to claim Customer.io profile admission in Supabase.", {
+        status: 500,
+        hint: hintForSupabaseWriteError(error),
+        debug: {
+          operation: "claimCustomerIoProfileAdmission",
+          runtime: runtimeLabel(),
+          supabaseConfigured: supabaseConfigured(),
+          accountId: input.accountId,
+          billingPeriodStart: periodStart,
+          profileIdentifier: normalizedIdentifier,
+          effectiveLimit,
+          supabaseError: supabaseErrorDebug(error),
+        },
+      });
+    }
+  }
+
+  const store = await readLocalStore();
+  const currentCount = store.customerIoProfileAdmissions.filter(
+    (row) => row.accountId === input.accountId && row.billingPeriodStart === periodStart
+  ).length;
+  const existing =
+    store.customerIoProfileAdmissions.find(
+      (row) =>
+        row.accountId === input.accountId &&
+        row.billingPeriodStart === periodStart &&
+        row.profileIdentifier === normalizedIdentifier
+    ) ?? null;
+  if (existing) {
+    return {
+      status: "existing",
+      currentCount,
+      admission: existing,
+    };
+  }
+  if (currentCount >= effectiveLimit) {
+    return {
+      status: "blocked",
+      currentCount,
+      admission: null,
+    };
+  }
+
+  const admission: CustomerIoProfileAdmission = {
+    id: createId("cioadm"),
+    accountId: input.accountId,
+    billingPeriodStart: periodStart,
+    profileIdentifier: normalizedIdentifier,
+    sourceRunId: input.sourceRunId,
+    sourceMessageId: input.sourceMessageId,
+    createdAt: nowIso(),
+  };
+  store.customerIoProfileAdmissions.unshift(admission);
+  await writeLocalStore(store);
+  return {
+    status: "admitted",
+    currentCount: currentCount + 1,
+    admission,
+  };
 }
 
 export async function listOutreachAccounts(): Promise<OutreachAccount[]> {
@@ -888,7 +1172,7 @@ export async function listOutreachAccounts(): Promise<OutreachAccount[]> {
     }
 
     const store = await readLocalStore();
-    return store.accounts.map((row) => mapStoredAccount(row));
+    return Promise.all(store.accounts.map((row) => hydrateOutreachAccountCustomerIoBilling(mapStoredAccount(row))));
   }
 
   const { data, error } = await supabase
@@ -912,10 +1196,12 @@ export async function listOutreachAccounts(): Promise<OutreachAccount[]> {
     }
 
     const store = await readLocalStore();
-    return store.accounts.map((row) => mapStoredAccount(row));
+    return Promise.all(store.accounts.map((row) => hydrateOutreachAccountCustomerIoBilling(mapStoredAccount(row))));
   }
 
-  return (data ?? []).map((row: unknown) => mapStoredAccount(mapAccountRowFromDb(row)));
+  return Promise.all(
+    (data ?? []).map((row: unknown) => hydrateOutreachAccountCustomerIoBilling(mapStoredAccount(mapAccountRowFromDb(row))))
+  );
 }
 
 export async function getOutreachAccount(accountId: string): Promise<OutreachAccount | null> {
@@ -935,7 +1221,7 @@ export async function getOutreachAccount(accountId: string): Promise<OutreachAcc
 
     const store = await readLocalStore();
     const hit = store.accounts.find((row) => row.id === accountId);
-    return hit ? mapStoredAccount(hit) : null;
+    return hit ? hydrateOutreachAccountCustomerIoBilling(mapStoredAccount(hit)) : null;
   }
 
   if (supabase) {
@@ -961,17 +1247,17 @@ export async function getOutreachAccount(accountId: string): Promise<OutreachAcc
 
       const store = await readLocalStore();
       const hit = store.accounts.find((row) => row.id === accountId);
-      return hit ? mapStoredAccount(hit) : null;
+      return hit ? hydrateOutreachAccountCustomerIoBilling(mapStoredAccount(hit)) : null;
     }
 
-    if (data) return mapStoredAccount(mapAccountRowFromDb(data));
+    if (data) return hydrateOutreachAccountCustomerIoBilling(mapStoredAccount(mapAccountRowFromDb(data)));
   }
 
   if (isVercel) return null;
 
   const store = await readLocalStore();
   const hit = store.accounts.find((row) => row.id === accountId);
-  return hit ? mapStoredAccount(hit) : null;
+  return hit ? hydrateOutreachAccountCustomerIoBilling(mapStoredAccount(hit)) : null;
 }
 
 export async function getOutreachAccountSecrets(accountId: string): Promise<OutreachAccountSecrets | null> {
@@ -1074,7 +1360,7 @@ export async function createOutreachAccount(input: {
     const store = await readLocalStore();
     store.accounts.unshift(stored);
     await writeLocalStore(store);
-    return mapStoredAccount(stored);
+    return hydrateOutreachAccountCustomerIoBilling(mapStoredAccount(stored));
   }
 
   if (supabase) {
@@ -1106,7 +1392,7 @@ export async function createOutreachAccount(input: {
     }
 
     if (!error && data) {
-      return mapStoredAccount(mapAccountRowFromDb(data));
+      return hydrateOutreachAccountCustomerIoBilling(mapStoredAccount(mapAccountRowFromDb(data)));
     }
 
     if (error && isVercel) {
@@ -1127,7 +1413,7 @@ export async function createOutreachAccount(input: {
   const store = await readLocalStore();
   store.accounts.unshift(stored);
   await writeLocalStore(store);
-  return mapStoredAccount(stored);
+  return hydrateOutreachAccountCustomerIoBilling(mapStoredAccount(stored));
 }
 
 export async function updateOutreachAccount(
@@ -1163,7 +1449,7 @@ export async function updateOutreachAccount(
   };
 
   const nextConfig = patch.config
-    ? sanitizeAccountConfig({ ...existingAccount.config, ...asRecord(patch.config) })
+    ? sanitizeAccountConfig(mergeOutreachAccountConfig(existingAccount.config, patch.config))
     : existingAccount.config;
   const now = nowIso();
 
@@ -1200,7 +1486,7 @@ export async function updateOutreachAccount(
     }
 
     if (!error && data) {
-      return mapStoredAccount(mapAccountRowFromDb(data));
+      return hydrateOutreachAccountCustomerIoBilling(mapStoredAccount(mapAccountRowFromDb(data)));
     }
 
     if (error && isVercel) {
@@ -1237,7 +1523,7 @@ export async function updateOutreachAccount(
   };
   store.accounts[idx] = nextStored;
   await writeLocalStore(store);
-  return mapStoredAccount(nextStored);
+  return hydrateOutreachAccountCustomerIoBilling(mapStoredAccount(nextStored));
 }
 
 export async function deleteOutreachAccount(accountId: string): Promise<boolean> {
@@ -1287,6 +1573,7 @@ export async function deleteOutreachAccount(accountId: string): Promise<boolean>
   const store = await readLocalStore();
   const before = store.accounts.length;
   store.accounts = store.accounts.filter((row) => row.id !== accountId);
+  store.customerIoProfileAdmissions = store.customerIoProfileAdmissions.filter((row) => row.accountId !== accountId);
   store.assignments = store.assignments
     .filter((row) => row.accountId !== accountId)
     .map((row) =>

@@ -86,6 +86,7 @@ import {
   type ApifyStoreActor,
   type ApifyLead,
 } from "@/lib/outreach-providers";
+import { admitCustomerIoProfileForSend } from "@/lib/outreach-customerio-budget";
 import { resolveLlmModel } from "@/lib/llm-router";
 
 const DEFAULT_TIMEZONE = "America/Los_Angeles";
@@ -5013,7 +5014,7 @@ async function processSourceLeadsJob(job: OutreachJob) {
     return;
   }
 
-  const account = await getOutreachAccount(run.accountId);
+  let account = await getOutreachAccount(run.accountId);
   const secrets = await getOutreachAccountSecrets(run.accountId);
   if (!account || !secrets) {
     await failRunWithDiagnostics({
@@ -6261,7 +6262,7 @@ async function processDispatchMessagesJob(job: OutreachJob) {
     return;
   }
 
-  const account = await getOutreachAccount(run.accountId);
+  let account = await getOutreachAccount(run.accountId);
   const secrets = await getOutreachAccountSecrets(run.accountId);
   if (!account || !secrets) {
     await failRunWithDiagnostics({
@@ -6397,6 +6398,39 @@ async function processDispatchMessagesJob(job: OutreachJob) {
         lastError: `Lead blocked by suppression status: ${lead.status}`,
       });
       continue;
+    }
+
+    const budgetAdmission = await admitCustomerIoProfileForSend({
+      account,
+      secrets,
+      profileIdentifier: lead.email,
+      sourceRunId: run.id,
+      sourceMessageId: message.id,
+    });
+    account = budgetAdmission.account;
+    if (!budgetAdmission.ok) {
+      const pauseReason = `${budgetAdmission.reason} Next reset: ${budgetAdmission.nextBillingPeriodStart}.`;
+      await updateOutreachRun(run.id, {
+        status: "paused",
+        pauseReason,
+        lastError: pauseReason,
+      });
+      await markExperimentExecutionStatus(run.brandId, run.campaignId, run.experimentId, "paused");
+      await createOutreachEvent({
+        runId: run.id,
+        eventType: "run_paused_customerio_profile_budget",
+        payload: {
+          reason: budgetAdmission.reason,
+          messageId: message.id,
+          email: lead.email,
+          billingPeriodStart: budgetAdmission.billingPeriodStart,
+          nextBillingPeriodStart: budgetAdmission.nextBillingPeriodStart,
+          admittedProfiles: budgetAdmission.currentCount,
+          projectedProfiles: budgetAdmission.projectedProfiles,
+          remainingProfiles: budgetAdmission.remainingProfiles,
+        },
+      });
+      return;
     }
 
     const send = await sendOutreachMessage({

@@ -28,7 +28,7 @@ import type {
   SourcingProbeResult,
 } from "@/lib/factory-types";
 import {
-  clampExperimentSampleSize,
+  EXPERIMENT_MAX_SAMPLE_SIZE,
   EXPERIMENT_MIN_VERIFIED_EMAIL_LEADS,
 } from "@/lib/experiment-policy";
 
@@ -37,6 +37,15 @@ function asObject(value: unknown): Record<string, unknown> {
     return value as Record<string, unknown>;
   }
   return {};
+}
+
+function clampSourcingRequestSampleSize(
+  value: unknown,
+  fallback = EXPERIMENT_MIN_VERIFIED_EMAIL_LEADS
+) {
+  const parsed = Math.round(Number(value));
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.max(1, Math.min(EXPERIMENT_MAX_SAMPLE_SIZE, parsed));
 }
 
 async function readJson(response: Response) {
@@ -307,8 +316,10 @@ export async function sourceExperimentSampleLeadsApi(
   brandId: string,
   experimentId: string,
   sampleSize = EXPERIMENT_MIN_VERIFIED_EMAIL_LEADS,
-  options?: { timeoutMs?: number; signal?: AbortSignal }
+  options?: { timeoutMs?: number; signal?: AbortSignal; autoSend?: boolean }
 ) {
+  const requestedSampleSize = clampSourcingRequestSampleSize(sampleSize);
+  const autoSend = options?.autoSend === true;
   const timeoutMs = Math.max(5_000, Number(options?.timeoutMs ?? 25_000) || 25_000);
   const controller = new AbortController();
   const timeout = setTimeout(() => {
@@ -327,7 +338,7 @@ export async function sourceExperimentSampleLeadsApi(
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ sampleSize }),
+        body: JSON.stringify({ sampleSize: requestedSampleSize, autoSend }),
         signal: controller.signal,
       }
     );
@@ -335,7 +346,8 @@ export async function sourceExperimentSampleLeadsApi(
     return {
       runId: String(data.runId ?? ""),
       status: String(data.status ?? ""),
-      sampleSize: clampExperimentSampleSize(data.sampleSize ?? sampleSize, sampleSize),
+      sampleSize: clampSourcingRequestSampleSize(data.sampleSize ?? requestedSampleSize, requestedSampleSize),
+      autoSend: data.autoSend !== false,
     };
   } catch (err) {
     if (err instanceof Error && err.name === "AbortError") {
@@ -865,6 +877,25 @@ export async function testOutreachProvisioningSettings(provider: "customerio" | 
   };
 }
 
+export async function fetchSavedNamecheapDomains() {
+  const response = await fetch("/api/outreach/provisioning/namecheap-domains", {
+    cache: "no-store",
+  });
+  const data = await readJson(response);
+  return {
+    configured: Boolean(data.configured),
+    domains: (Array.isArray(data.domains) ? data.domains : []) as Array<{
+      domain: string;
+      createdAt: string;
+      expiresAt: string;
+      isExpired: boolean;
+      autoRenew: boolean;
+      isOurDns: boolean;
+      whoisGuardEnabled: boolean;
+    }>,
+  };
+}
+
 export async function provisionSenderDomain(
   brandId: string,
   input: {
@@ -874,6 +905,9 @@ export async function provisionSenderDomain(
     domainMode: "existing" | "register";
     domain: string;
     fromLocalPart: string;
+    autoPickCustomerIoAccount?: boolean;
+    customerIoSourceAccountId?: string;
+    forwardingTargetUrl?: string;
     customerIoSiteId: string;
     customerIoTrackingApiKey: string;
     customerIoAppApiKey?: string;
@@ -914,10 +948,14 @@ export async function provisionSenderDomain(
       domainStatus: "existing" | "registered";
       existingRecordCount: number;
       appliedRecordCount: number;
+      forwardingEnabled: boolean;
+      forwardingTargetUrl: string;
     };
     customerIo: {
       senderIdentityStatus: "existing" | "created" | "manual_required" | "error";
       dnsRecordCount: number;
+      sourceAccountId: string;
+      sourceAccountName: string;
     };
     warnings: string[];
     nextSteps: string[];

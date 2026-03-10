@@ -84,6 +84,10 @@ export type ExperimentTestEnvelope = {
   hourlyCap: number;
   timezone: string;
   minSpacingMinutes: number;
+  businessHoursEnabled?: boolean;
+  businessHoursStartHour?: number;
+  businessHoursEndHour?: number;
+  businessDays?: number[];
 };
 
 export type ExperimentSuccessMetric = {
@@ -256,11 +260,15 @@ export type DomainRow = {
   status: "active" | "warming" | "risky";
   warmupStage: string;
   reputation: string;
+  role?: "brand" | "sender";
   registrar?: "namecheap" | "manual";
   provider?: "customerio" | "manual";
   dnsStatus?: "pending" | "configured" | "verified" | "error";
   fromEmail?: string;
   replyMailboxEmail?: string;
+  forwardingTargetUrl?: string;
+  customerIoAccountId?: string;
+  customerIoAccountName?: string;
   notes?: string;
   lastProvisionedAt?: string;
 };

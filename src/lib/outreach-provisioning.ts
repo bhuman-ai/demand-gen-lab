@@ -6,9 +6,15 @@ import type {
   OutreachAccount,
 } from "@/lib/factory-types";
 import {
+  buildCustomerIoCapacityPools,
+  findBestCustomerIoCapacityPool,
+  type CustomerIoCapacityPool,
+} from "@/lib/outreach-customerio-capacity";
+import {
   createOutreachAccount,
   getBrandOutreachAssignment,
   getOutreachAccount,
+  getOutreachAccountSecrets,
   listOutreachAccounts,
   setBrandOutreachAssignment,
   updateOutreachAccount,
@@ -47,6 +53,9 @@ export type ProvisionSenderInput = {
   domainMode: "existing" | "register";
   domain: string;
   fromLocalPart: string;
+  autoPickCustomerIoAccount?: boolean;
+  customerIoSourceAccountId?: string;
+  forwardingTargetUrl?: string;
   customerIoSiteId: string;
   customerIoTrackingApiKey: string;
   customerIoAppApiKey?: string;
@@ -81,13 +90,27 @@ export type ProvisionSenderResult = {
     domainStatus: "existing" | "registered";
     existingRecordCount: number;
     appliedRecordCount: number;
+    forwardingEnabled: boolean;
+    forwardingTargetUrl: string;
   };
   customerIo: {
     senderIdentityStatus: CustomerIoSenderIdentityStatus;
     dnsRecordCount: number;
+    sourceAccountId: string;
+    sourceAccountName: string;
   };
   warnings: string[];
   nextSteps: string[];
+};
+
+export type NamecheapDomainInventoryItem = {
+  domain: string;
+  createdAt: string;
+  expiresAt: string;
+  isExpired: boolean;
+  autoRenew: boolean;
+  isOurDns: boolean;
+  whoisGuardEnabled: boolean;
 };
 
 export type ProvisioningProviderTestResult = {
@@ -162,6 +185,11 @@ function toNumber(value: string, fallback: number) {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
+function parseXmlText(xml: string, tagName: string) {
+  const match = xml.match(new RegExp(`<${tagName}>([\\s\\S]*?)<\\/${tagName}>`, "i"));
+  return decodeXmlEntities(String(match?.[1] ?? "")).trim();
+}
+
 async function namecheapRequest(command: string, params: Record<string, string>) {
   const query = new URLSearchParams(params);
   const response = await fetch(`${NAMECHEAP_BASE_URL}?${query.toString()}`, {
@@ -193,6 +221,59 @@ function namecheapBaseParams(input: {
     ClientIp: input.clientIp.trim(),
     Command: input.command,
   };
+}
+
+async function namecheapListDomains(input: {
+  apiUser: string;
+  userName?: string;
+  apiKey: string;
+  clientIp: string;
+}) {
+  const pageSize = 100;
+  const domains: NamecheapDomainInventoryItem[] = [];
+  let page = 1;
+  let totalItems = Number.POSITIVE_INFINITY;
+
+  while (domains.length < totalItems) {
+    const xml = await namecheapRequest("namecheap.domains.getList", {
+      ...namecheapBaseParams({
+        apiUser: input.apiUser,
+        userName: input.userName,
+        apiKey: input.apiKey,
+        clientIp: input.clientIp,
+        command: "namecheap.domains.getList",
+      }),
+      Page: String(page),
+      PageSize: String(pageSize),
+      SortBy: "NAME",
+    });
+
+    const rows = [...xml.matchAll(/<Domain\b([^>]+?)\/>/gi)].map((match) => {
+      const attrs = parseXmlAttributes(match[1]);
+      return {
+        domain: String(attrs.Name ?? "").trim().toLowerCase(),
+        createdAt: String(attrs.Created ?? "").trim(),
+        expiresAt: String(attrs.Expires ?? "").trim(),
+        isExpired: String(attrs.IsExpired ?? "").trim().toLowerCase() === "true",
+        autoRenew: String(attrs.AutoRenew ?? "").trim().toLowerCase() === "true",
+        isOurDns: String(attrs.IsOurDNS ?? "").trim().toLowerCase() === "true",
+        whoisGuardEnabled: String(attrs.WhoisGuard ?? "").trim().toUpperCase() === "ENABLED",
+      } satisfies NamecheapDomainInventoryItem;
+    });
+    const parsedTotalItems = toNumber(parseXmlText(xml, "TotalItems"), -1);
+    totalItems =
+      parsedTotalItems > 0
+        ? parsedTotalItems
+        : domains.length + rows.length + (rows.length === pageSize ? 1 : 0);
+
+    domains.push(...rows.filter((row) => row.domain));
+    if (!rows.length || rows.length < pageSize) {
+      break;
+    }
+    page += 1;
+  }
+
+  return domains.sort((left, right) => left.domain.localeCompare(right.domain));
 }
 
 async function namecheapGetHosts(input: {
@@ -358,6 +439,58 @@ function mergeNamecheapHosts(existing: NamecheapHostRecord[], desired: DnsRecord
   return merged;
 }
 
+function normalizeForwardingTargetUrl(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed) return "";
+
+  const candidate = /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
+  try {
+    const parsed = new URL(candidate);
+    parsed.hash = "";
+    return parsed.toString();
+  } catch {
+    throw new Error("Forwarding target must be a valid URL or hostname");
+  }
+}
+
+function mergeNamecheapForwardingHosts(
+  existing: NamecheapHostRecord[],
+  targetUrl: string
+) {
+  const normalizedTarget = normalizeForwardingTargetUrl(targetUrl);
+  if (!normalizedTarget) return existing;
+
+  const shouldReplace = (record: NamecheapHostRecord) => {
+    const label = record.name.trim().toLowerCase();
+    if (label === "@") {
+      return record.type === "URL" || record.type === "URL301";
+    }
+    if (label === "www") {
+      return record.type === "URL" || record.type === "URL301" || record.type === "CNAME" || record.type === "A";
+    }
+    return false;
+  };
+
+  const merged = existing.filter((record) => !shouldReplace(record));
+  merged.push(
+    {
+      type: "URL301",
+      name: "@",
+      value: normalizedTarget,
+      ttl: DEFAULT_NAMECHEAP_TTL,
+      mxPref: 10,
+    },
+    {
+      type: "URL301",
+      name: "www",
+      value: normalizedTarget,
+      ttl: DEFAULT_NAMECHEAP_TTL,
+      mxPref: 10,
+    }
+  );
+  return merged;
+}
+
 async function namecheapSetHosts(input: {
   apiUser: string;
   userName?: string;
@@ -419,6 +552,28 @@ export async function testNamecheapProvisioningConnection(input: {
       clientIp: input.clientIp.trim(),
     },
   };
+}
+
+export async function listSavedNamecheapDomains(): Promise<NamecheapDomainInventoryItem[]> {
+  const [savedSettings, savedSecrets] = await Promise.all([
+    getOutreachProvisioningSettings(),
+    getOutreachProvisioningSettingsSecrets(),
+  ]);
+  const apiUser = savedSettings.namecheap.apiUser.trim();
+  const userName = savedSettings.namecheap.userName.trim() || apiUser;
+  const apiKey = savedSecrets.namecheapApiKey.trim();
+  const clientIp = savedSettings.namecheap.clientIp.trim();
+
+  if (!apiUser || !apiKey || !clientIp) {
+    return [];
+  }
+
+  return namecheapListDomains({
+    apiUser,
+    userName,
+    apiKey,
+    clientIp,
+  });
 }
 
 function customerIoTrackHeaders(siteId: string, trackingApiKey: string) {
@@ -740,6 +895,8 @@ async function bootstrapCustomerIoSender(input: {
 async function ensureCustomerIoDeliveryAccount(input: {
   accountName: string;
   siteId: string;
+  workspaceId?: string;
+  billing?: unknown;
   trackingApiKey: string;
   appApiKey?: string;
   fromEmail: string;
@@ -761,10 +918,10 @@ async function ensureCustomerIoDeliveryAccount(input: {
     config: {
       customerIo: {
         siteId: input.siteId.trim(),
-        workspaceId: "",
+        workspaceId: String(input.workspaceId ?? "").trim(),
         fromEmail: input.fromEmail.trim(),
         replyToEmail: input.replyToEmail.trim(),
-        billing: sanitizeCustomerIoBillingConfig({}),
+        billing: sanitizeCustomerIoBillingConfig(input.billing),
       },
       apify: {
         defaultActorId: "",
@@ -799,6 +956,9 @@ function updateBrandDomainRow(input: {
   fromEmail: string;
   replyMailboxEmail: string;
   dnsStatus: DomainRow["dnsStatus"];
+  forwardingTargetUrl: string;
+  customerIoAccountId: string;
+  customerIoAccountName: string;
   notes: string;
 }) {
   const now = nowIso();
@@ -811,11 +971,15 @@ function updateBrandDomainRow(input: {
     status: "warming",
     warmupStage: input.dnsStatus === "verified" ? "Day 1 · ready" : "Day 1 · provisioning",
     reputation: "new",
+    role: "sender",
     registrar: "namecheap",
     provider: "customerio",
     dnsStatus: input.dnsStatus,
     fromEmail: input.fromEmail,
     replyMailboxEmail: input.replyMailboxEmail,
+    forwardingTargetUrl: input.forwardingTargetUrl,
+    customerIoAccountId: input.customerIoAccountId,
+    customerIoAccountName: input.customerIoAccountName,
     notes: input.notes,
     lastProvisionedAt: now,
   };
@@ -832,30 +996,61 @@ function updateBrandDomainRow(input: {
   return nextDomains;
 }
 
-async function resolveProvisioningCredentials(input: ProvisionSenderInput) {
+function upsertProtectedBrandDomainRow(input: {
+  domains: DomainRow[];
+  protectedDomain: string;
+  protectedUrl: string;
+}) {
+  const protectedDomain = normalizeDomain(input.protectedDomain);
+  if (!protectedDomain) {
+    return input.domains;
+  }
+
+  const existingIndex = input.domains.findIndex(
+    (row) => normalizeDomain(row.domain) === protectedDomain
+  );
+  const nextRow: DomainRow = {
+    id: existingIndex >= 0 ? input.domains[existingIndex].id : createId("domain"),
+    domain: protectedDomain,
+    status: "active",
+    warmupStage: "Protected destination",
+    reputation: "protected",
+    role: "brand",
+    registrar: existingIndex >= 0 ? input.domains[existingIndex].registrar : "manual",
+    provider: existingIndex >= 0 ? input.domains[existingIndex].provider : "manual",
+    forwardingTargetUrl: input.protectedUrl,
+    notes: "Protected brand domain. Satellite sender domains forward here.",
+    lastProvisionedAt: nowIso(),
+  };
+
+  const nextDomains = [...input.domains];
+  if (existingIndex >= 0) {
+    nextDomains[existingIndex] = {
+      ...nextDomains[existingIndex],
+      ...nextRow,
+    };
+  } else {
+    nextDomains.unshift(nextRow);
+  }
+  return nextDomains;
+}
+
+function effectiveCustomerIoTrackingApiKey(secrets: OutreachAccountSecrets) {
+  return secrets.customerIoTrackApiKey.trim() || secrets.customerIoApiKey.trim();
+}
+
+async function resolveNamecheapCredentials(input: ProvisionSenderInput) {
   const [savedSettings, savedSecrets] = await Promise.all([
     getOutreachProvisioningSettings(),
     getOutreachProvisioningSettingsSecrets(),
   ]);
 
-  const customerIoSiteId = input.customerIoSiteId.trim() || savedSettings.customerIo.siteId.trim();
-  const customerIoTrackingApiKey =
-    input.customerIoTrackingApiKey.trim() || savedSecrets.customerIoTrackingApiKey.trim();
-  const customerIoAppApiKey = String(input.customerIoAppApiKey ?? "").trim() || savedSecrets.customerIoAppApiKey.trim();
   const namecheapApiUser = input.namecheapApiUser.trim() || savedSettings.namecheap.apiUser.trim();
   const namecheapUserName =
     input.namecheapUserName?.trim() || savedSettings.namecheap.userName.trim() || namecheapApiUser;
   const namecheapApiKey = input.namecheapApiKey.trim() || savedSecrets.namecheapApiKey.trim();
   const namecheapClientIp = input.namecheapClientIp.trim() || savedSettings.namecheap.clientIp.trim();
 
-  if (!customerIoSiteId) {
-    throw new Error("Customer.io Site ID is required. Save provider defaults in outreach settings or enter it here.");
-  }
-  if (!customerIoTrackingApiKey) {
-    throw new Error(
-      "Customer.io Tracking API key is required. Save provider defaults in outreach settings or enter it here."
-    );
-  }
   if (!namecheapApiUser) {
     throw new Error("Namecheap API user is required. Save provider defaults in outreach settings or enter it here.");
   }
@@ -867,13 +1062,105 @@ async function resolveProvisioningCredentials(input: ProvisionSenderInput) {
   }
 
   return {
-    customerIoSiteId,
-    customerIoTrackingApiKey,
-    customerIoAppApiKey,
     namecheapApiUser,
     namecheapUserName,
     namecheapApiKey,
     namecheapClientIp,
+  };
+}
+
+type ResolvedCustomerIoProvisioningConnection = {
+  siteId: string;
+  workspaceId: string;
+  trackingApiKey: string;
+  appApiKey: string;
+  billing: NonNullable<OutreachAccount["config"]["customerIo"]["billing"]>;
+  sourceAccountId: string;
+  sourceAccountName: string;
+  sourcePool: CustomerIoCapacityPool | null;
+};
+
+async function resolveManualCustomerIoConnection(
+  input: ProvisionSenderInput
+): Promise<ResolvedCustomerIoProvisioningConnection> {
+  const [savedSettings, savedSecrets] = await Promise.all([
+    getOutreachProvisioningSettings(),
+    getOutreachProvisioningSettingsSecrets(),
+  ]);
+
+  const siteId = input.customerIoSiteId.trim() || savedSettings.customerIo.siteId.trim();
+  const trackingApiKey =
+    input.customerIoTrackingApiKey.trim() || savedSecrets.customerIoTrackingApiKey.trim();
+  const appApiKey = String(input.customerIoAppApiKey ?? "").trim() || savedSecrets.customerIoAppApiKey.trim();
+
+  if (!siteId) {
+    throw new Error("Customer.io Site ID is required. Save provider defaults or select an existing Customer.io account.");
+  }
+  if (!trackingApiKey) {
+    throw new Error(
+      "Customer.io Tracking API key is required. Save provider defaults or select an existing Customer.io account."
+    );
+  }
+
+  return {
+    siteId,
+    workspaceId: "",
+    trackingApiKey,
+    appApiKey,
+    billing: sanitizeCustomerIoBillingConfig({}),
+    sourceAccountId: "",
+    sourceAccountName: "Saved defaults",
+    sourcePool: null,
+  };
+}
+
+async function resolveCustomerIoProvisioningConnection(
+  input: ProvisionSenderInput
+): Promise<ResolvedCustomerIoProvisioningConnection> {
+  const selectedAccountId = input.customerIoSourceAccountId?.trim() || "";
+  if (!selectedAccountId && !input.autoPickCustomerIoAccount) {
+    return resolveManualCustomerIoConnection(input);
+  }
+
+  const accounts = await listOutreachAccounts();
+  const pools = buildCustomerIoCapacityPools(accounts);
+  const selectedPool = selectedAccountId
+    ? pools.find((pool) => pool.sourceAccountId === selectedAccountId) ?? null
+    : findBestCustomerIoCapacityPool(pools);
+
+  if (!selectedPool) {
+    if (selectedAccountId) {
+      throw new Error("Selected Customer.io account could not be found.");
+    }
+    if (pools.length) {
+      throw new Error("No Customer.io account has monthly profile capacity left right now.");
+    }
+    return resolveManualCustomerIoConnection(input);
+  }
+  if (!selectedPool.canProvision) {
+    throw new Error(selectedPool.warning || "Selected Customer.io account has no monthly profile capacity left.");
+  }
+
+  const sourceAccount = await getOutreachAccount(selectedPool.sourceAccountId);
+  const sourceSecrets = await getOutreachAccountSecrets(selectedPool.sourceAccountId);
+  if (!sourceAccount || !sourceSecrets) {
+    throw new Error("Customer.io account credentials are missing for the selected pool.");
+  }
+
+  const trackingApiKey = effectiveCustomerIoTrackingApiKey(sourceSecrets);
+  if (!trackingApiKey) {
+    throw new Error("Customer.io tracking API key is missing on the selected account.");
+  }
+
+  return {
+    siteId: sourceAccount.config.customerIo.siteId.trim(),
+    workspaceId: sourceAccount.config.customerIo.workspaceId.trim(),
+    trackingApiKey,
+    appApiKey: sourceSecrets.customerIoAppApiKey.trim(),
+    billing: sanitizeCustomerIoBillingConfig(sourceAccount.config.customerIo.billing),
+    sourceAccountId: sourceAccount.id,
+    sourceAccountName: sourceAccount.name,
+    sourcePool: selectedPool,
   };
 }
 
@@ -895,7 +1182,13 @@ export async function provisionCustomerIoSender(
     throw new Error("Sender local-part is required");
   }
   const fromEmail = `${fromLocalPart}@${domain}`;
-  const resolvedCredentials = await resolveProvisioningCredentials(input);
+  const customerIoConnection = await resolveCustomerIoProvisioningConnection(input);
+  const namecheapCredentials = await resolveNamecheapCredentials(input);
+  const forwardingTargetUrl = input.forwardingTargetUrl?.trim()
+    ? normalizeForwardingTargetUrl(input.forwardingTargetUrl)
+    : brand.website.trim()
+      ? normalizeForwardingTargetUrl(brand.website)
+      : "";
 
   const mailboxSelection =
     input.selectedMailboxAccountId?.trim() || (await getBrandOutreachAssignment(brand.id))?.mailboxAccountId || "";
@@ -910,11 +1203,11 @@ export async function provisionCustomerIoSender(
     status: "active",
     config: {
       customerIo: {
-        siteId: resolvedCredentials.customerIoSiteId,
-        workspaceId: "",
+        siteId: customerIoConnection.siteId,
+        workspaceId: customerIoConnection.workspaceId,
         fromEmail,
         replyToEmail: replyMailboxEmail,
-        billing: sanitizeCustomerIoBillingConfig({}),
+        billing: customerIoConnection.billing,
       },
       apify: {
         defaultActorId: "",
@@ -937,9 +1230,9 @@ export async function provisionCustomerIoSender(
   const connectivityCheck = await testOutreachProviders(
     connectivityAccount,
     {
-      customerIoApiKey: resolvedCredentials.customerIoTrackingApiKey,
-      customerIoTrackApiKey: resolvedCredentials.customerIoTrackingApiKey,
-      customerIoAppApiKey: resolvedCredentials.customerIoAppApiKey,
+      customerIoApiKey: customerIoConnection.trackingApiKey,
+      customerIoTrackApiKey: customerIoConnection.trackingApiKey,
+      customerIoAppApiKey: customerIoConnection.appApiKey,
       apifyToken: "",
       mailboxAccessToken: "",
       mailboxRefreshToken: "",
@@ -956,40 +1249,43 @@ export async function provisionCustomerIoSender(
       throw new Error("Registrant contact information is required to buy a new domain");
     }
     await namecheapRegisterDomain({
-      apiUser: resolvedCredentials.namecheapApiUser,
-      userName: resolvedCredentials.namecheapUserName,
-      apiKey: resolvedCredentials.namecheapApiKey,
-      clientIp: resolvedCredentials.namecheapClientIp,
+      apiUser: namecheapCredentials.namecheapApiUser,
+      userName: namecheapCredentials.namecheapUserName,
+      apiKey: namecheapCredentials.namecheapApiKey,
+      clientIp: namecheapCredentials.namecheapClientIp,
       domain,
       registrant: input.registrant,
     });
   }
 
   const existingHosts = await namecheapGetHosts({
-    apiUser: resolvedCredentials.namecheapApiUser,
-    userName: resolvedCredentials.namecheapUserName,
-    apiKey: resolvedCredentials.namecheapApiKey,
-    clientIp: resolvedCredentials.namecheapClientIp,
+    apiUser: namecheapCredentials.namecheapApiUser,
+    userName: namecheapCredentials.namecheapUserName,
+    apiKey: namecheapCredentials.namecheapApiKey,
+    clientIp: namecheapCredentials.namecheapClientIp,
     domain,
   });
 
   const senderBootstrap = await bootstrapCustomerIoSender({
-    siteId: resolvedCredentials.customerIoSiteId,
-    trackingApiKey: resolvedCredentials.customerIoTrackingApiKey,
-    appApiKey: resolvedCredentials.customerIoAppApiKey,
+    siteId: customerIoConnection.siteId,
+    trackingApiKey: customerIoConnection.trackingApiKey,
+    appApiKey: customerIoConnection.appApiKey,
     fromEmail,
     senderName: brand.name || input.accountName || domain,
     domain,
   });
 
   const desiredDnsRecords = senderBootstrap.dnsRecords;
-  if (desiredDnsRecords.length) {
-    const nextHosts = mergeNamecheapHosts(existingHosts, desiredDnsRecords, domain);
+  if (desiredDnsRecords.length || forwardingTargetUrl) {
+    let nextHosts = desiredDnsRecords.length ? mergeNamecheapHosts(existingHosts, desiredDnsRecords, domain) : existingHosts;
+    if (forwardingTargetUrl) {
+      nextHosts = mergeNamecheapForwardingHosts(nextHosts, forwardingTargetUrl);
+    }
     await namecheapSetHosts({
-      apiUser: resolvedCredentials.namecheapApiUser,
-      userName: resolvedCredentials.namecheapUserName,
-      apiKey: resolvedCredentials.namecheapApiKey,
-      clientIp: resolvedCredentials.namecheapClientIp,
+      apiUser: namecheapCredentials.namecheapApiUser,
+      userName: namecheapCredentials.namecheapUserName,
+      apiKey: namecheapCredentials.namecheapApiKey,
+      clientIp: namecheapCredentials.namecheapClientIp,
       domain,
       hosts: nextHosts,
     });
@@ -997,9 +1293,11 @@ export async function provisionCustomerIoSender(
 
   const account = await ensureCustomerIoDeliveryAccount({
     accountName: input.accountName.trim() || `${brand.name} ${domain}`,
-    siteId: resolvedCredentials.customerIoSiteId,
-    trackingApiKey: resolvedCredentials.customerIoTrackingApiKey,
-    appApiKey: resolvedCredentials.customerIoAppApiKey,
+    siteId: customerIoConnection.siteId,
+    workspaceId: customerIoConnection.workspaceId,
+    billing: customerIoConnection.billing,
+    trackingApiKey: customerIoConnection.trackingApiKey,
+    appApiKey: customerIoConnection.appApiKey,
     fromEmail,
     replyToEmail: replyMailboxEmail,
   });
@@ -1027,24 +1325,43 @@ export async function provisionCustomerIoSender(
   if (!desiredDnsRecords.length) {
     warnings.push("No Customer.io DNS records were applied automatically. Verify the sender identity in Customer.io before sending.");
   }
+  if (!forwardingTargetUrl) {
+    warnings.push("No forwarding target is set for this domain yet.");
+  }
+
+  let nextDomains = updateBrandDomainRow({
+    brand,
+    domain,
+    fromEmail,
+    replyMailboxEmail,
+    dnsStatus,
+    forwardingTargetUrl,
+    customerIoAccountId: customerIoConnection.sourceAccountId || account.id,
+    customerIoAccountName: customerIoConnection.sourceAccountName || account.name,
+    notes:
+      desiredDnsRecords.length > 0
+        ? "Provisioned through outreach settings."
+        : "Provisioned partially. Customer.io sender verification still needs attention.",
+  });
+  const protectedDomain = forwardingTargetUrl ? normalizeDomain(forwardingTargetUrl) : "";
+  if (protectedDomain && protectedDomain !== domain) {
+    nextDomains = upsertProtectedBrandDomainRow({
+      domains: nextDomains,
+      protectedDomain,
+      protectedUrl: forwardingTargetUrl,
+    });
+  }
 
   const updatedBrand = await updateBrand(brand.id, {
-    domains: updateBrandDomainRow({
-      brand,
-      domain,
-      fromEmail,
-      replyMailboxEmail,
-      dnsStatus,
-      notes:
-        desiredDnsRecords.length > 0
-          ? "Provisioned through outreach settings."
-          : "Provisioned partially. Customer.io sender verification still needs attention.",
-    }),
+    domains: nextDomains,
   });
 
   const nextSteps: string[] = [];
   if (!desiredDnsRecords.length) {
     nextSteps.push("Open Customer.io sender identities and finish verification for this domain.");
+  }
+  if (!forwardingTargetUrl) {
+    nextSteps.push("Set a forwarding target so this domain redirects to the protected brand site.");
   }
   if (!replyMailboxEmail) {
     nextSteps.push("Assign a reply mailbox to the brand before launching outreach.");
@@ -1064,10 +1381,14 @@ export async function provisionCustomerIoSender(
       domainStatus: input.domainMode === "register" ? "registered" : "existing",
       existingRecordCount: existingHosts.length,
       appliedRecordCount: desiredDnsRecords.length,
+      forwardingEnabled: Boolean(forwardingTargetUrl),
+      forwardingTargetUrl,
     },
     customerIo: {
       senderIdentityStatus: senderBootstrap.status,
       dnsRecordCount: desiredDnsRecords.length,
+      sourceAccountId: customerIoConnection.sourceAccountId || account.id,
+      sourceAccountName: customerIoConnection.sourceAccountName || account.name,
     },
     warnings,
     nextSteps,

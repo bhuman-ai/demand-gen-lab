@@ -657,6 +657,15 @@ function mapSourcingChainDecisionRow(input: unknown): SourcingChainDecision {
     requirePersonName: Boolean(qualityPolicyRaw.requirePersonName ?? true),
     requireCompany: Boolean(qualityPolicyRaw.requireCompany ?? true),
     requireTitle: Boolean(qualityPolicyRaw.requireTitle ?? false),
+    requiredTitleKeywords: Array.isArray(qualityPolicyRaw.requiredTitleKeywords)
+      ? qualityPolicyRaw.requiredTitleKeywords.map((item) => String(item).trim()).filter(Boolean)
+      : [],
+    requiredCompanyKeywords: Array.isArray(qualityPolicyRaw.requiredCompanyKeywords)
+      ? qualityPolicyRaw.requiredCompanyKeywords.map((item) => String(item).trim()).filter(Boolean)
+      : [],
+    excludedCompanyKeywords: Array.isArray(qualityPolicyRaw.excludedCompanyKeywords)
+      ? qualityPolicyRaw.excludedCompanyKeywords.map((item) => String(item).trim()).filter(Boolean)
+      : [],
     minConfidenceScore: Math.max(0, Math.min(1, Number(qualityPolicyRaw.minConfidenceScore ?? 0.55) || 0.55)),
   };
 
@@ -2138,6 +2147,84 @@ export async function listRunLeads(runId: string): Promise<OutreachRunLead[]> {
   return store.runLeads.filter((row) => row.runId === runId);
 }
 
+export async function loadHistoricalCompanyDomains(
+  companies: string[]
+): Promise<Array<{ company: string; domain: string; sampleCount: number; updatedAt: string }>> {
+  const requested = Array.from(
+    new Set(
+      companies
+        .map((value) => String(value ?? "").trim())
+        .filter(Boolean)
+    )
+  );
+  if (!requested.length) return [];
+
+  const pairMap = new Map<string, { company: string; domain: string; sampleCount: number; updatedAt: string }>();
+  const absorbRow = (company: unknown, domain: unknown, updatedAt: unknown) => {
+    const nextCompany = String(company ?? "").trim();
+    const nextDomain = String(domain ?? "").trim().toLowerCase();
+    const nextUpdatedAt = String(updatedAt ?? "");
+    if (!nextCompany || !nextDomain) return;
+    const key = `${nextCompany.toLowerCase()}|${nextDomain}`;
+    const current = pairMap.get(key);
+    if (current) {
+      current.sampleCount += 1;
+      if (nextUpdatedAt > current.updatedAt) current.updatedAt = nextUpdatedAt;
+      return;
+    }
+    pairMap.set(key, {
+      company: nextCompany,
+      domain: nextDomain,
+      sampleCount: 1,
+      updatedAt: nextUpdatedAt,
+    });
+  };
+
+  const supabase = getSupabaseAdmin();
+  if (supabase) {
+    for (let index = 0; index < requested.length; index += 100) {
+      const batch = requested.slice(index, index + 100);
+      const { data, error } = await supabase
+        .from(TABLE_RUN_LEAD)
+        .select("company,domain,updated_at")
+        .in("company", batch)
+        .neq("domain", "");
+      if (error) {
+        return [];
+      }
+      for (const row of data ?? []) {
+        const record = asRecord(row);
+        absorbRow(record.company, record.domain, record.updated_at);
+      }
+    }
+  } else {
+    const store = await readLocalStore();
+    const requestedSet = new Set(requested.map((value) => value.toLowerCase()));
+    for (const row of store.runLeads) {
+      if (!row.company || !row.domain) continue;
+      if (!requestedSet.has(row.company.toLowerCase())) continue;
+      absorbRow(row.company, row.domain, row.updatedAt);
+    }
+  }
+
+  const bestByCompany = new Map<string, { company: string; domain: string; sampleCount: number; updatedAt: string }>();
+  for (const row of pairMap.values()) {
+    const key = row.company.toLowerCase();
+    const current = bestByCompany.get(key);
+    if (
+      !current ||
+      row.sampleCount > current.sampleCount ||
+      (row.sampleCount === current.sampleCount && row.updatedAt > current.updatedAt)
+    ) {
+      bestByCompany.set(key, row);
+    }
+  }
+
+  return requested
+    .map((company) => bestByCompany.get(company.toLowerCase()) ?? null)
+    .filter(Boolean) as Array<{ company: string; domain: string; sampleCount: number; updatedAt: string }>;
+}
+
 export async function updateRunLead(
   leadId: string,
   patch: Partial<Pick<OutreachRunLead, "status">>
@@ -2792,6 +2879,76 @@ export async function listDueOutreachJobs(limit = 25): Promise<OutreachJob[]> {
     .filter((row) => row.status === "queued" && row.executeAfter <= now)
     .sort((a, b) => (a.executeAfter < b.executeAfter ? -1 : 1))
     .slice(0, limit);
+}
+
+export async function reclaimStaleRunningOutreachJobs(input?: {
+  staleAfterMinutes?: number;
+  limit?: number;
+}): Promise<OutreachJob[]> {
+  const staleAfterMinutes = Math.max(1, Math.min(120, Number(input?.staleAfterMinutes ?? 6) || 6));
+  const limit = Math.max(1, Math.min(200, Number(input?.limit ?? 25) || 25));
+  const now = new Date();
+  const nowValue = now.toISOString();
+  const staleBefore = new Date(now.getTime() - staleAfterMinutes * 60_000).toISOString();
+  const recovered: OutreachJob[] = [];
+
+  const supabase = getSupabaseAdmin();
+  if (supabase) {
+    const { data, error } = await supabase
+      .from(TABLE_JOB)
+      .select("*")
+      .eq("status", "running")
+      .lte("updated_at", staleBefore)
+      .order("updated_at", { ascending: true })
+      .limit(limit);
+    if (!error) {
+      for (const row of data ?? []) {
+        const mapped = mapJobRow(row);
+        const patchError = mapped.lastError
+          ? `${mapped.lastError}; requeued stale running job`
+          : "requeued stale running job";
+        const { data: updated, error: updateError } = await supabase
+          .from(TABLE_JOB)
+          .update({
+            status: "queued",
+            execute_after: nowValue,
+            last_error: patchError,
+            updated_at: nowValue,
+          })
+          .eq("id", mapped.id)
+          .select("*")
+          .maybeSingle();
+        if (!updateError && updated) {
+          recovered.push(mapJobRow(updated));
+        }
+      }
+      return recovered;
+    }
+  }
+
+  const store = await readLocalStore();
+  for (let index = 0; index < store.jobs.length; index += 1) {
+    if (recovered.length >= limit) break;
+    const job = store.jobs[index];
+    if (job.status !== "running") continue;
+    if (job.updatedAt > staleBefore) continue;
+    const patchError = job.lastError
+      ? `${job.lastError}; requeued stale running job`
+      : "requeued stale running job";
+    const updated: OutreachJob = {
+      ...job,
+      status: "queued",
+      executeAfter: nowValue,
+      lastError: patchError,
+      updatedAt: nowValue,
+    };
+    store.jobs[index] = updated;
+    recovered.push(updated);
+  }
+  if (recovered.length) {
+    await writeLocalStore(store);
+  }
+  return recovered;
 }
 
 export async function updateOutreachJob(

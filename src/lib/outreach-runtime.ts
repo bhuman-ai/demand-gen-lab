@@ -3,6 +3,7 @@ import {
   defaultExperimentRunPolicy,
   getBrandById,
   getCampaignById,
+  listBrands,
   updateCampaign,
   type CampaignRecord,
   type Experiment,
@@ -28,7 +29,15 @@ import {
   listConversationSessionsByRun,
   updateConversationSession,
 } from "@/lib/conversation-flow-data";
-import { getExperimentRecordByRuntimeRef } from "@/lib/experiment-data";
+import {
+  ensureRuntimeForExperiment,
+  getExperimentRecordById,
+  getExperimentRecordByRuntimeRef,
+  getScaleCampaignRecordById,
+  listScaleCampaignRecords,
+  updateExperimentRecord,
+  updateScaleCampaignRecord,
+} from "@/lib/experiment-data";
 import {
   conversationPromptModeEnabled,
   generateConversationPromptMessage,
@@ -49,6 +58,7 @@ import {
   getOutreachAccount,
   getOutreachAccountSecrets,
   getOutreachRun,
+  loadHistoricalCompanyDomains,
   getReplyDraft,
   getReplyThread,
   getSourcingActorMemory,
@@ -56,8 +66,12 @@ import {
   listDueOutreachJobs,
   listExperimentRuns,
   listReplyThreadsByBrand,
+  listReplyMessagesByRun,
+  reclaimStaleRunningOutreachJobs,
   listRunLeads,
   listRunMessages,
+  listOwnerRuns,
+  setBrandOutreachAssignment,
   updateOutreachJob,
   updateOutreachRun,
   updateReplyDraft,
@@ -71,14 +85,17 @@ import {
   type OutreachJob,
 } from "@/lib/outreach-data";
 import {
+  enrichLeadsWithEmailFinderBatch,
   evaluateActorCompatibility,
   evaluateLeadAgainstQualityPolicy,
+  extractFirstEmailAddress,
   fetchApifyActorDatasetItems,
   fetchApifyActorSchemaProfile,
   getLeadEmailSuppressionReason,
   pollApifyActorRun,
   runApifyActorSyncGetDatasetItems,
   leadsFromApifyRows,
+  resolveEmailFinderApiBaseUrl,
   sendOutreachMessage,
   sendReplyDraftAsEvent,
   searchApifyStoreActors,
@@ -105,6 +122,141 @@ function toDate(value: string) {
   return parsed;
 }
 
+function timeZoneDateKey(input: Date, timeZone: string) {
+  const zone = timeZone.trim() || DEFAULT_TIMEZONE;
+  try {
+    return new Intl.DateTimeFormat("en-CA", {
+      timeZone: zone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).format(input);
+  } catch {
+    return new Intl.DateTimeFormat("en-CA", {
+      timeZone: DEFAULT_TIMEZONE,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).format(input);
+  }
+}
+
+type BusinessWindowPolicy = {
+  enabled: boolean;
+  startHour: number;
+  endHour: number;
+  days: number[];
+};
+
+const DEFAULT_BUSINESS_WINDOW: BusinessWindowPolicy = {
+  enabled: true,
+  startHour: 9,
+  endHour: 17,
+  days: [1, 2, 3, 4, 5],
+};
+
+const WEEKDAY_INDEX: Record<string, number> = {
+  sun: 0,
+  mon: 1,
+  tue: 2,
+  wed: 3,
+  thu: 4,
+  fri: 5,
+  sat: 6,
+};
+
+function clampBusinessHour(value: unknown, fallback: number) {
+  const parsed = Math.round(Number(value));
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.max(0, Math.min(23, parsed));
+}
+
+function clampBusinessEndHour(value: unknown, fallback: number) {
+  const parsed = Math.round(Number(value));
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.max(1, Math.min(24, parsed));
+}
+
+function normalizeBusinessDays(value: unknown) {
+  if (!Array.isArray(value)) return DEFAULT_BUSINESS_WINDOW.days;
+  const days = value
+    .map((entry) => Math.round(Number(entry)))
+    .filter((entry) => Number.isFinite(entry) && entry >= 0 && entry <= 6);
+  const unique = Array.from(new Set(days)).sort((a, b) => a - b);
+  return unique.length ? unique : DEFAULT_BUSINESS_WINDOW.days;
+}
+
+function businessWindowFromExperimentEnvelope(testEnvelope: unknown): BusinessWindowPolicy {
+  const row = asRecord(testEnvelope);
+  return {
+    enabled: row.businessHoursEnabled !== false,
+    startHour: clampBusinessHour(row.businessHoursStartHour, DEFAULT_BUSINESS_WINDOW.startHour),
+    endHour: clampBusinessEndHour(row.businessHoursEndHour, DEFAULT_BUSINESS_WINDOW.endHour),
+    days: normalizeBusinessDays(row.businessDays),
+  };
+}
+
+function localHourInTimeZone(input: Date, timeZone: string) {
+  try {
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone: timeZone.trim() || DEFAULT_TIMEZONE,
+      hour: "2-digit",
+      hourCycle: "h23",
+    }).formatToParts(input);
+    const hourPart = parts.find((part) => part.type === "hour")?.value ?? "0";
+    const parsed = Number(hourPart);
+    return Number.isFinite(parsed) ? parsed : 0;
+  } catch {
+    return input.getUTCHours();
+  }
+}
+
+function localWeekdayInTimeZone(input: Date, timeZone: string) {
+  try {
+    const day = new Intl.DateTimeFormat("en-US", {
+      timeZone: timeZone.trim() || DEFAULT_TIMEZONE,
+      weekday: "short",
+    })
+      .format(input)
+      .toLowerCase()
+      .slice(0, 3);
+    return WEEKDAY_INDEX[day] ?? 1;
+  } catch {
+    return input.getUTCDay();
+  }
+}
+
+function isInsideBusinessWindow(input: Date, timeZone: string, policy: BusinessWindowPolicy) {
+  if (!policy.enabled) return true;
+  const weekday = localWeekdayInTimeZone(input, timeZone);
+  if (!policy.days.includes(weekday)) return false;
+  const hour = localHourInTimeZone(input, timeZone);
+  if (policy.startHour === policy.endHour) return true;
+  if (policy.startHour < policy.endHour) {
+    return hour >= policy.startHour && hour < policy.endHour;
+  }
+  return hour >= policy.startHour || hour < policy.endHour;
+}
+
+function nextBusinessWindowCheckIso(input: Date, timeZone: string, policy: BusinessWindowPolicy) {
+  if (!policy.enabled) return nowIso();
+  if (isInsideBusinessWindow(input, timeZone, policy)) {
+    return nowIso();
+  }
+  let probe = new Date(input.getTime() + 60 * 60 * 1000);
+  for (let steps = 0; steps < 24 * 14; steps += 1) {
+    if (isInsideBusinessWindow(probe, timeZone, policy)) {
+      return probe.toISOString();
+    }
+    probe = new Date(probe.getTime() + 60 * 60 * 1000);
+  }
+  return addHours(nowIso(), 1);
+}
+
+function isRunOpen(status: string) {
+  return ["queued", "sourcing", "scheduled", "sending", "monitoring", "paused"].includes(status);
+}
+
 function findHypothesis(campaign: CampaignRecord, hypothesisId: string) {
   return campaign.hypotheses.find((item) => item.id === hypothesisId) ?? null;
 }
@@ -121,12 +273,29 @@ function effectiveSourceConfig(hypothesis: Hypothesis) {
   };
 }
 
-function platformSourcingToken() {
+function platformExaApiKey() {
   return (
-    String(process.env.APIFY_TOKEN ?? "").trim() ||
-    String(process.env.APIFY_API_TOKEN ?? "").trim() ||
-    String(process.env.APIFY_API_KEY ?? "").trim()
+    String(process.env.EXA_API_KEY ?? "").trim() ||
+    String(process.env.EXA_API_TOKEN ?? "").trim()
   );
+}
+
+type DataForSeoCredentials = {
+  login: string;
+  password: string;
+};
+
+function platformDataForSeoCredentials(): DataForSeoCredentials | null {
+  const login = (
+    String(process.env.DATAFORSEO_LOGIN ?? "").trim() ||
+    String(process.env.DATAFORSEO_USERNAME ?? "").trim() ||
+    String(process.env.DATAFORSEO_EMAIL ?? "").trim()
+  );
+  const password = (
+    String(process.env.DATAFORSEO_PASSWORD ?? "").trim() ||
+    String(process.env.DATAFORSEO_API_PASSWORD ?? "").trim()
+  );
+  return login && password ? { login, password } : null;
 }
 
 type ResolvedAccount = NonNullable<Awaited<ReturnType<typeof getOutreachAccount>>>;
@@ -138,10 +307,6 @@ function effectiveCustomerIoApiKey(secrets: ResolvedSecrets) {
     secrets.customerIoTrackApiKey.trim() ||
     secrets.customerIoAppApiKey.trim()
   );
-}
-
-function effectiveSourcingToken(secrets: ResolvedSecrets) {
-  return secrets.apifyToken.trim() || platformSourcingToken();
 }
 
 type LeadChainStepStage = "prospect_discovery" | "website_enrichment" | "email_discovery";
@@ -187,13 +352,21 @@ type LeadSourcingChainData = {
   companies: string[];
   websites: string[];
   domains: string[];
+  profileUrls: string[];
   emails: string[];
+  phones: string[];
 };
 
 type SourcingAudienceContext = {
   rawAudience: string;
   targetAudience: string;
   triggerContext: string;
+};
+
+type ResolvedSourcingAudienceContext = SourcingAudienceContext & {
+  resolutionMode: "direct" | "inferred";
+  confidence: number;
+  rationale: string;
 };
 
 type SemanticSignal =
@@ -203,6 +376,7 @@ type SemanticSignal =
   | "website_list"
   | "profile_url_list"
   | "email_list"
+  | "phone_list"
   | "sales_nav_url"
   | "auth_token"
   | "file_upload";
@@ -213,6 +387,7 @@ type SourcingStartState = {
     domainCount: number;
     websiteCount: number;
     emailCount: number;
+    phoneCount: number;
   };
 };
 
@@ -264,6 +439,26 @@ type CandidateSchemaPreflight = {
   steps: CandidateSchemaPreflightStep[];
 };
 
+type SourcingBootstrapAttempt = {
+  actorId: string;
+  stage: LeadChainStepStage;
+  outcome: "pass" | "fail";
+  probeInputHash: string;
+  reason: string;
+  costEstimateUsd: number;
+  rowCount: number;
+  details: Record<string, unknown>;
+};
+
+type SourcingBootstrapResult = {
+  chainData: LeadSourcingChainData;
+  startState: SourcingStartState;
+  attempts: SourcingBootstrapAttempt[];
+  selectedActorIds: string[];
+  budgetUsedUsd: number;
+  reason: string;
+};
+
 const APIFY_CHAIN_MAX_STEPS = 3;
 const APIFY_CHAIN_MAX_CANDIDATES = 6;
 const APIFY_CHAIN_MAX_ITEMS_PER_STEP = 200;
@@ -271,17 +466,40 @@ const APIFY_CHAIN_EXEC_MAX_CHARGE_USD = Math.max(
   0.25,
   Math.min(5, Number(process.env.PLATFORM_APIFY_CHAIN_EXEC_MAX_CHARGE_USD ?? 1.2) || 1.2)
 );
-const APIFY_PROBE_BUDGET_USD = Math.max(
-  0.5,
-  Math.min(5, Number(process.env.PLATFORM_APIFY_PROBE_BUDGET_USD ?? 2) || 2)
-);
 const APIFY_PROBE_STEP_COST_ESTIMATE_USD = Math.max(
   0.05,
   Math.min(1, Number(process.env.PLATFORM_APIFY_PROBE_STEP_COST_ESTIMATE_USD ?? 0.25) || 0.25)
 );
+const APIFY_DISCOVERY_TOTAL_BUDGET_USD = Math.max(
+  APIFY_PROBE_STEP_COST_ESTIMATE_USD,
+  Math.min(
+    8,
+    Number(process.env.PLATFORM_APIFY_DISCOVERY_TOTAL_BUDGET_USD ?? process.env.PLATFORM_APIFY_PROBE_BUDGET_USD ?? 2) ||
+      2
+  )
+);
+const APIFY_BOOTSTRAP_PROBE_BUDGET_USD = Math.max(
+  APIFY_PROBE_STEP_COST_ESTIMATE_USD,
+  Math.min(
+    Math.max(APIFY_PROBE_STEP_COST_ESTIMATE_USD, APIFY_DISCOVERY_TOTAL_BUDGET_USD - APIFY_PROBE_STEP_COST_ESTIMATE_USD),
+    Number(process.env.PLATFORM_APIFY_BOOTSTRAP_PROBE_BUDGET_USD ?? 0.75) || 0.75
+  )
+);
+const APIFY_BOOTSTRAP_MAX_STEPS = Math.max(
+  1,
+  Math.min(4, Number(process.env.PLATFORM_APIFY_BOOTSTRAP_MAX_STEPS ?? 3) || 3)
+);
 const APIFY_PROBE_MAX_LEADS = Math.max(
   5,
   Math.min(40, Number(process.env.PLATFORM_APIFY_PROBE_MAX_LEADS ?? 15) || 15)
+);
+const PROBE_ICP_ALIGNMENT_MIN_SCORE = Math.max(
+  0.35,
+  Math.min(0.9, Number(process.env.PLATFORM_PROBE_ICP_ALIGNMENT_MIN_SCORE ?? 0.56) || 0.56)
+);
+const PROBE_ICP_ALIGNMENT_SAMPLE_SIZE = Math.max(
+  6,
+  Math.min(20, Number(process.env.PLATFORM_PROBE_ICP_ALIGNMENT_SAMPLE_SIZE ?? 12) || 12)
 );
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -289,6 +507,88 @@ function asRecord(value: unknown): Record<string, unknown> {
     return value as Record<string, unknown>;
   }
   return {};
+}
+
+function parseDeferredSourcingState(value: unknown): DeferredSourcingState | null {
+  const row = asRecord(value);
+  if (row.phase !== "waiting_dataforseo") return null;
+  const pendingDataForSeoTasks = Array.isArray(row.pendingDataForSeoTasks)
+    ? row.pendingDataForSeoTasks
+        .map((entry) => asRecord(entry))
+        .map(
+          (entry) =>
+            ({
+              company: trimText(entry.company, 180),
+              taskId: trimText(entry.taskId, 120),
+              query: trimText(entry.query, 220),
+              examples: Array.isArray(entry.examples)
+                ? entry.examples
+                    .map((example) => asRecord(example))
+                    .map(
+                      (example) =>
+                        ({
+                          name: trimText(example.name, 120),
+                          title: trimText(example.title, 140),
+                          sourceUrl: trimText(example.sourceUrl, 260),
+                          company: trimText(example.company, 180),
+                        }) satisfies CompanyLookupExample
+                    )
+                    .filter((example) => example.company)
+                : [],
+              pollAttempts: Math.max(0, Number(entry.pollAttempts ?? 0) || 0),
+              submittedAt: trimText(entry.submittedAt, 60) || nowIso(),
+            }) satisfies DataForSeoPendingTask
+        )
+        .filter((entry) => entry.company && entry.taskId)
+    : [];
+  return {
+    version: 1,
+    phase: "waiting_dataforseo",
+    queryPlan: (row.queryPlan as ExaPeopleQueryPlan) ?? ({
+      rationale: "",
+      mode: "people_first",
+      fallbackReason: "",
+      searchSpec: {
+        rationale: "",
+        regions: [],
+        roleTitles: [],
+        companyKeywords: [],
+        eventSignals: [],
+        companySizeHint: "",
+        includeIndustries: [],
+        excludeIndustries: [],
+      },
+      companyRequests: [],
+      peopleRequests: [],
+      directPeopleRequests: [],
+      companyQueries: [],
+      peopleQueries: [],
+      directPeopleQueries: [],
+      qualifiedCompanyNames: [],
+      probeMetrics: {
+        candidateCount: 0,
+        resolvedDomainCount: 0,
+        resolvedDomainRate: 0,
+        enrichmentEligibleCount: 0,
+        enrichmentEligibleRate: 0,
+        existingEmailCount: 0,
+        uniqueCompanyCount: 0,
+        icpAlignmentScore: 0,
+        titleMatchRate: 0,
+        companyKeywordMatchRate: 0,
+        excludedKeywordHitRate: 0,
+      },
+    } satisfies ExaPeopleQueryPlan),
+    rawLeads: Array.isArray(row.rawLeads) ? (row.rawLeads as ExaLeadCandidate[]) : [],
+    diagnostics: Array.isArray(row.diagnostics) ? (row.diagnostics as ExaQueryDiagnostic[]) : [],
+    companyDomainEntries: Array.isArray(row.companyDomainEntries)
+      ? (row.companyDomainEntries as Array<[string, string]>)
+      : [],
+    pendingDataForSeoTasks,
+    observedExaCostUsd: Number(row.observedExaCostUsd ?? 0) || 0,
+    observedDataForSeoCostUsd: Number(row.observedDataForSeoCostUsd ?? 0) || 0,
+    officialWebsiteQueryLimit: Math.max(0, Number(row.officialWebsiteQueryLimit ?? 0) || 0),
+  };
 }
 
 function uniqueTrimmed(values: string[], max = 200) {
@@ -355,18 +655,158 @@ function buildSourcingAudienceContext(input: {
   } satisfies SourcingAudienceContext;
 }
 
+function hasRoleCompanyIcpSignal(text: string) {
+  const normalized = normalizeText(text).toLowerCase();
+  if (!normalized) return false;
+  const roleSignals =
+    /\b(cro|cmo|ceo|coo|founder|owner|head|vp|director|manager|leader|revenue|sales|marketing|growth|demand gen|revops|operations)\b/.test(
+      normalized
+    );
+  const companySignals =
+    /\b(company|companies|team|teams|organization|b2b|saas|software|enterprise|mid[- ]?market|startup|business|businesses)\b/.test(
+      normalized
+    );
+  return roleSignals && companySignals;
+}
+
+function likelyTriggerOnlyAudience(text: string) {
+  const normalized = normalizeText(text).toLowerCase();
+  if (!normalized) return false;
+  return (
+    /\b(trigger|demo request|abandoned demo|trial signup|sign[- ]?up|webinar attendee|event attendee|downloaded|visited)\b/.test(
+      normalized
+    ) &&
+    !hasRoleCompanyIcpSignal(normalized)
+  );
+}
+
+async function resolveSourcingAudienceContext(input: {
+  base: SourcingAudienceContext;
+  brandName: string;
+  brandWebsite: string;
+  experimentName: string;
+  offer: string;
+  notes: string;
+}) {
+  const baseTarget = normalizeText(input.base.targetAudience);
+  if (baseTarget && hasRoleCompanyIcpSignal(baseTarget) && !likelyTriggerOnlyAudience(baseTarget)) {
+    return {
+      ...input.base,
+      resolutionMode: "direct",
+      confidence: 0.95,
+      rationale: "existing_audience_has_icp_signal",
+    } satisfies ResolvedSourcingAudienceContext;
+  }
+
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) {
+    return {
+      ...input.base,
+      resolutionMode: "direct",
+      confidence: 0.2,
+      rationale: "openai_api_key_missing_for_audience_inference",
+    } satisfies ResolvedSourcingAudienceContext;
+  }
+
+  const prompt = [
+    "Infer outreach ICP audience and trigger context for B2B lead sourcing.",
+    "Return concise, concrete audience text suitable for actor discovery.",
+    "Audience must be role/company ICP style (who at what type of companies).",
+    "If a provided audience looks like a behavioral trigger (e.g. demo signup), move that to triggerContext and derive ICP from offer/brand context.",
+    "No placeholders. No buzzwords. Keep audience under 20 words.",
+    "Return strict JSON only:",
+    '{ "targetAudience": string, "triggerContext": string, "confidence": number, "rationale": string }',
+    `Context: ${JSON.stringify({
+      rawAudience: input.base.rawAudience,
+      targetAudience: input.base.targetAudience,
+      triggerContext: input.base.triggerContext,
+      brandName: input.brandName,
+      brandWebsite: input.brandWebsite,
+      experimentName: input.experimentName,
+      offer: input.offer,
+      notes: input.notes,
+    })}`,
+  ].join("\n");
+
+  try {
+    const model = resolveLlmModel("lead_actor_query_planning", { prompt });
+    const response = await fetch("https://api.openai.com/v1/responses", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model,
+        input: prompt,
+        text: { format: { type: "json_object" } },
+        max_output_tokens: 800,
+      }),
+    });
+    const raw = await response.text();
+    if (!response.ok) {
+      return {
+        ...input.base,
+        resolutionMode: "direct",
+        confidence: 0.2,
+        rationale: `audience_inference_http_${response.status}`,
+      } satisfies ResolvedSourcingAudienceContext;
+    }
+    let payload: unknown = {};
+    try {
+      payload = JSON.parse(raw);
+    } catch {
+      payload = {};
+    }
+    const parsed = parseLooseJsonObject(extractOutputText(payload));
+    const row = asRecord(parsed);
+    const targetAudience = normalizeText(String(row.targetAudience ?? ""));
+    const triggerContext = normalizeText(String(row.triggerContext ?? input.base.triggerContext));
+    const confidence = Math.max(0, Math.min(1, Number(row.confidence ?? 0) || 0));
+    const rationale = trimText(row.rationale, 220) || "llm_inferred_audience";
+
+    if (!targetAudience || !hasRoleCompanyIcpSignal(targetAudience)) {
+      return {
+        ...input.base,
+        resolutionMode: "direct",
+        confidence: 0.25,
+        rationale: "llm_audience_not_role_company_icp",
+      } satisfies ResolvedSourcingAudienceContext;
+    }
+
+    return {
+      rawAudience: input.base.rawAudience,
+      targetAudience,
+      triggerContext,
+      resolutionMode: "inferred",
+      confidence: confidence || 0.7,
+      rationale,
+    } satisfies ResolvedSourcingAudienceContext;
+  } catch {
+    return {
+      ...input.base,
+      resolutionMode: "direct",
+      confidence: 0.2,
+      rationale: "audience_inference_failed",
+    } satisfies ResolvedSourcingAudienceContext;
+  }
+}
+
 function extractOutputText(payloadRaw: unknown) {
   const payload = asRecord(payloadRaw);
   const output = Array.isArray(payload.output) ? payload.output : [];
-  const firstOutput = asRecord(output[0]);
-  const content = Array.isArray(firstOutput.content) ? firstOutput.content : [];
+  const contentTexts = output
+    .map((item) => asRecord(item))
+    .flatMap((item) => {
+      const content = Array.isArray(item.content) ? item.content : [];
+      return content
+        .map((entry) => asRecord(entry))
+        .map((entry) => String(entry.text ?? ""))
+        .filter(Boolean);
+    });
   return (
     String(payload.output_text ?? "") ||
-    String(
-      content
-        .map((item) => asRecord(item))
-        .find((item) => typeof item.text === "string")?.text ?? ""
-    ) ||
+    String(contentTexts[0] ?? "") ||
     "{}"
   );
 }
@@ -403,6 +843,2840 @@ function parseLooseJsonObject(rawText: string): unknown {
   throw new Error("Model returned non-JSON output");
 }
 
+type ExaSearchHit = {
+  title: string;
+  url: string;
+  author: string;
+  entities: Array<Record<string, unknown>>;
+  highlights: string[];
+  summary: string;
+};
+
+type ExaSearchResponse = {
+  hits: ExaSearchHit[];
+  output: unknown;
+  costUsd: number;
+};
+
+type ExaSearchSpec = {
+  rationale: string;
+  regions: string[];
+  roleTitles: string[];
+  companyKeywords: string[];
+  eventSignals: string[];
+  companySizeHint: string;
+  includeIndustries: string[];
+  excludeIndustries: string[];
+};
+
+type ExaCompiledRequest = {
+  stage: "company" | "people";
+  category: "company" | "people";
+  query: string;
+  numResults: number;
+  userLocation?: string;
+  additionalQueries?: string[];
+};
+
+type QualifiedCompany = {
+  name: string;
+  domain: string;
+  entityId: string;
+  sourceUrl: string;
+  userLocation: string;
+  score: number;
+  evidence: string[];
+};
+
+type ExaPeopleQueryPlan = {
+  rationale: string;
+  mode: "people_first" | "people_then_company";
+  fallbackReason: string;
+  searchSpec: ExaSearchSpec;
+  companyRequests: ExaCompiledRequest[];
+  peopleRequests: ExaCompiledRequest[];
+  directPeopleRequests: ExaCompiledRequest[];
+  companyQueries: string[];
+  peopleQueries: string[];
+  directPeopleQueries: string[];
+  qualifiedCompanyNames: string[];
+  probeMetrics: {
+    candidateCount: number;
+    resolvedDomainCount: number;
+    resolvedDomainRate: number;
+    enrichmentEligibleCount: number;
+    enrichmentEligibleRate: number;
+    existingEmailCount: number;
+    uniqueCompanyCount: number;
+    icpAlignmentScore: number;
+    titleMatchRate: number;
+    companyKeywordMatchRate: number;
+    excludedKeywordHitRate: number;
+  };
+};
+
+const NON_COMPANY_PROFILE_DOMAIN_ROOTS = new Set([
+  "linkedin.com",
+  "linkedin.co",
+  "facebook.com",
+  "x.com",
+  "twitter.com",
+  "instagram.com",
+]);
+
+type ExaPeopleSourcingResult = {
+  queryPlan: ExaPeopleQueryPlan;
+  acceptedLeads: ApifyLead[];
+  rejectedLeads: LeadAcceptanceDecision[];
+  diagnostics: ExaQueryDiagnostic[];
+  emailEnrichment: {
+    attempted: number;
+    matched: number;
+    failed: number;
+    provider: string;
+    error: string;
+    failureSummary: Array<{ reason: string; count: number }>;
+    failedSamples: Array<{
+      id: string;
+      name: string;
+      domain: string;
+      reason: string;
+      error: string;
+      topAttemptEmail: string;
+      topAttemptVerdict: string;
+      topAttemptConfidence: string;
+      topAttemptReason: string;
+    }>;
+  };
+  budgetUsedUsd: number;
+  exaSpendUsd: number;
+  dataForSeoSpendUsd: number;
+  pendingDataForSeo?: DeferredSourcingState | null;
+};
+
+type ExaLeadCandidate = ApifyLead & {
+  companyEntityId?: string;
+};
+
+type CompanyLookupExample = {
+  name: string;
+  title: string;
+  sourceUrl: string;
+  company: string;
+};
+
+type UnresolvedCompanyGroup = {
+  company: string;
+  key: string;
+  count: number;
+  examples: CompanyLookupExample[];
+};
+
+type ExaQueryDiagnostic = {
+  stage: "company" | "people" | "email_enrichment";
+  provider: "exa" | "clearout" | "dataforseo";
+  query: string;
+  count: number;
+  includeDomainsCount: number;
+  structuredCount?: number;
+  userLocation?: string;
+  costUsd?: number;
+  lookupCompany?: string;
+  lookupExamples?: CompanyLookupExample[];
+  resolvedDomain?: string;
+  resolutionSource?:
+    | "historical_memory"
+    | "clearout"
+    | "dataforseo_organic"
+    | "exa_official_website";
+  error?: string;
+};
+
+type ClearoutCompanyCandidate = {
+  name: string;
+  domain: string;
+  confidenceScore: number;
+  matchScore: number;
+};
+
+type DataForSeoOrganicCandidate = {
+  title: string;
+  url: string;
+  domain: string;
+  description: string;
+  breadcrumb: string;
+  rankAbsolute: number;
+  matchScore: number;
+};
+
+type DataForSeoCompanyDecision = {
+  matchFound: boolean;
+  candidateIndex: number;
+  domain: string;
+  confidenceScore: number;
+  reasoning: string;
+};
+
+type DataForSeoPendingTask = {
+  company: string;
+  taskId: string;
+  query: string;
+  examples: CompanyLookupExample[];
+  pollAttempts: number;
+  submittedAt: string;
+};
+
+type DeferredSourcingState = {
+  version: 1;
+  phase: "waiting_dataforseo";
+  queryPlan: ExaPeopleQueryPlan;
+  rawLeads: ExaLeadCandidate[];
+  diagnostics: ExaQueryDiagnostic[];
+  companyDomainEntries: Array<[string, string]>;
+  pendingDataForSeoTasks: DataForSeoPendingTask[];
+  observedExaCostUsd: number;
+  observedDataForSeoCostUsd: number;
+  officialWebsiteQueryLimit: number;
+};
+
+const DATAFORSEO_AGGREGATOR_DOMAIN_ROOTS = new Set([
+  "linkedin.com",
+  "bloomberg.com",
+  "crunchbase.com",
+  "zoominfo.com",
+  "rocketreach.co",
+  "theorg.com",
+  "pitchbook.com",
+  "craft.co",
+  "owler.com",
+  "glassdoor.com",
+  "apollo.io",
+  "lead411.com",
+  "signalhire.com",
+  "contactout.com",
+]);
+const DATAFORSEO_ASYNC_REQUEUE_SECONDS = Math.max(
+  15,
+  Math.min(300, Number(process.env.DATAFORSEO_ASYNC_REQUEUE_SECONDS ?? 30) || 30)
+);
+const DATAFORSEO_ASYNC_MAX_POLLS = Math.max(
+  3,
+  Math.min(60, Number(process.env.DATAFORSEO_ASYNC_MAX_POLLS ?? 12) || 12)
+);
+
+const REGION_ALIASES = new Map<string, string>([
+  ["united states", "us"],
+  ["u.s.", "us"],
+  ["u.s", "us"],
+  ["usa", "us"],
+  ["us", "us"],
+  ["canada", "ca"],
+  ["ca", "ca"],
+  ["united kingdom", "gb"],
+  ["uk", "gb"],
+  ["great britain", "gb"],
+  ["britain", "gb"],
+  ["england", "gb"],
+  ["gb", "gb"],
+  ["ireland", "ie"],
+  ["ie", "ie"],
+  ["germany", "de"],
+  ["de", "de"],
+  ["france", "fr"],
+  ["fr", "fr"],
+  ["netherlands", "nl"],
+  ["holland", "nl"],
+  ["nl", "nl"],
+  ["spain", "es"],
+  ["es", "es"],
+  ["italy", "it"],
+  ["it", "it"],
+  ["australia", "au"],
+  ["au", "au"],
+  ["new zealand", "nz"],
+  ["nz", "nz"],
+]);
+
+const DEFAULT_EXA_EVENT_SIGNALS = [
+  "webinars",
+  "virtual events",
+  "on-demand webinars",
+  "event marketing",
+];
+
+const DEFAULT_EXA_COMPANY_KEYWORDS = ["B2B software", "SaaS", "cloud platform"];
+const DEFAULT_EXA_ROLE_TITLES = ["Demand Generation Manager", "Growth Marketing Manager"];
+const MAX_COMPANY_NAMES_PER_PEOPLE_QUERY = 4;
+const TITLE_HINT_TOKENS = new Set([
+  "manager",
+  "director",
+  "head",
+  "lead",
+  "vp",
+  "chief",
+  "specialist",
+  "executive",
+  "coordinator",
+  "owner",
+  "founder",
+  "president",
+]);
+
+function humanList(values: string[], limit: number, conjunction: "and" | "or" = "and") {
+  const items = uniqueTrimmed(
+    values
+      .map((value) => normalizeText(value))
+      .filter(Boolean),
+    limit
+  );
+  if (!items.length) return "";
+  if (items.length === 1) return items[0] ?? "";
+  if (items.length === 2) return `${items[0]} ${conjunction} ${items[1]}`;
+  return `${items.slice(0, -1).join(", ")}, ${conjunction} ${items[items.length - 1]}`;
+}
+
+function isLikelyTitlePhrase(value: string) {
+  const normalized = normalizeText(value).toLowerCase();
+  if (!normalized) return false;
+  return Array.from(TITLE_HINT_TOKENS).some((token) => normalized.includes(token));
+}
+
+function extractAudienceCompanyDescriptorSegment(targetAudience: string) {
+  const normalized = normalizeText(targetAudience);
+  if (!normalized) return "";
+  const afterAt = normalized.split(/\bat\b/i).slice(1).join(" at ").trim();
+  if (!afterAt) return "";
+  const cut = afterAt
+    .split(/\b(?:who|that|which|running|run|using|with|where|active|actively|focused|focus)\b/i)[0]
+    ?.trim() ?? "";
+  return normalizeText(
+    cut
+      .replace(/\([^)]*employees[^)]*\)/gi, " ")
+      .replace(/\b\d[\d,\s-–to]{1,20}\s+employees\b/gi, " ")
+      .replace(/\b(company|companies|team|teams|organization|organizations|business|businesses)\b/gi, " ")
+      .replace(/\s+/g, " ")
+  );
+}
+
+function deriveAudienceCompanyDescriptors(targetAudience: string, limit = 6) {
+  const segment = extractAudienceCompanyDescriptorSegment(targetAudience);
+  if (!segment) return [] as string[];
+  const rawParts = segment
+    .split(/\s*,\s*|\s+\bor\b\s+|\s+\band\b\s+/i)
+    .map((part) =>
+      normalizeText(
+        part
+          .replace(/^[^a-z0-9]+/i, "")
+          .replace(/\b(company|companies|team|teams|organization|organizations|business|businesses)\b/gi, " ")
+          .replace(/\s+/g, " ")
+      )
+    )
+    .filter(Boolean)
+    .filter((part) => !AUDIENCE_COMPANY_KEYWORD_STOPWORDS.has(part.toLowerCase()))
+    .filter((part) => part.length >= 3)
+    .filter((part) => !["b2b", "tech", "technology"].includes(part.toLowerCase()));
+
+  const descriptors = uniqueTrimmed(rawParts, limit);
+  if (descriptors.length) return descriptors;
+  const fallback = normalizeText(segment);
+  return fallback ? [trimText(fallback, 48)] : [];
+}
+
+function deriveExplicitRegionCodes(...parts: Array<string | undefined>) {
+  const text = parts
+    .map((value) => normalizeText(value ?? ""))
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+  if (!text) return [] as string[];
+  const seen = new Set<string>();
+  for (const [alias, code] of REGION_ALIASES.entries()) {
+    const escaped = alias.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const pattern = new RegExp(
+      `\\b(?:in|across|within|throughout|from|based in|located in|covering|serving)\\s+${escaped}\\b`,
+      "i"
+    );
+    if (!pattern.test(text)) continue;
+    seen.add(code);
+    if (seen.size >= 3) break;
+  }
+  return Array.from(seen);
+}
+
+function sanitizeSearchSpec(input: {
+  spec: ExaSearchSpec;
+  targetAudience: string;
+  triggerContext: string;
+}) {
+  const combined = `${input.targetAudience} ${input.triggerContext}`.toLowerCase();
+  const wantsB2BSoftware =
+    combined.includes("b2b software") ||
+    combined.includes("b2b saas") ||
+    combined.includes("saas") ||
+    combined.includes("software");
+  const includesWebinars =
+    combined.includes("webinar") ||
+    combined.includes("virtual event") ||
+    combined.includes("on-demand webinar") ||
+    combined.includes("webinars");
+
+  const cleanedCompanyKeywords = uniqueTrimmed(
+    input.spec.companyKeywords
+      .map((item) => normalizeText(item))
+      .filter(Boolean)
+      .map((item) => {
+        const lowered = item.toLowerCase();
+        if (wantsB2BSoftware && (lowered === "b2b tech" || lowered === "tech" || lowered === "technology")) {
+          return "B2B software";
+        }
+        return item;
+      })
+      .filter((item) => !["tech", "technology"].includes(item.toLowerCase())),
+    6
+  );
+
+  let companyKeywords = cleanedCompanyKeywords;
+  if (!companyKeywords.length) {
+    const derived = deriveAudienceCompanyDescriptors(input.targetAudience, 6);
+    companyKeywords = derived.length ? derived : DEFAULT_EXA_COMPANY_KEYWORDS;
+  }
+
+  let eventSignals = input.spec.eventSignals.length ? input.spec.eventSignals : DEFAULT_EXA_EVENT_SIGNALS;
+  if (includesWebinars && !eventSignals.some((item) => item.toLowerCase().includes("webinar"))) {
+    eventSignals = uniqueTrimmed([...eventSignals, "webinars"], 6);
+  }
+
+  return {
+    ...input.spec,
+    companyKeywords,
+    includeIndustries: companyKeywords.length ? companyKeywords : input.spec.includeIndustries,
+    eventSignals,
+  } satisfies ExaSearchSpec;
+}
+
+function buildPeopleSearchAdditionalQueries(input: {
+  spec: ExaSearchSpec;
+  roleTitles: string[];
+  companyNames?: string[];
+  includeCompanySentence?: boolean;
+}) {
+  const roles = humanList(input.roleTitles, 4, "or");
+  const companyProfile = humanList(input.spec.companyKeywords.length ? input.spec.companyKeywords : input.spec.includeIndustries, 3, "or");
+  const companyNames = humanList(input.companyNames ?? [], MAX_COMPANY_NAMES_PER_PEOPLE_QUERY, "or");
+  const target = input.includeCompanySentence && companyNames
+    ? `at ${companyNames}`
+    : companyProfile
+      ? `at ${companyProfile} companies`
+      : "at companies";
+  const variants = uniqueTrimmed(
+    [
+      [roles || "Demand Generation Manager", target].filter(Boolean).join(" "),
+      [roles || "Demand Generation Manager", target, input.spec.companySizeHint || ""].filter(Boolean).join(" "),
+      ...input.spec.eventSignals.slice(0, 2).map((signal) =>
+        [roles || "Demand Generation Manager", target, signal].filter(Boolean).join(" ")
+      ),
+    ],
+    4
+  );
+  const primary = variants[0] ?? "";
+  return variants.filter((query) => query && query !== primary).map((query) => trimText(query, 320));
+}
+
+function buildHumanCompanySearchQuery(spec: ExaSearchSpec) {
+  const companyProfile = humanList(
+    spec.companyKeywords.length ? spec.companyKeywords : spec.includeIndustries,
+    4,
+    "or"
+  );
+  const eventSignals = humanList(spec.eventSignals, 3, "or");
+  const excludedIndustries = humanList(spec.excludeIndustries, 3, "or");
+  const parts = [
+    companyProfile ? `${companyProfile} companies` : "companies",
+    eventSignals ? `running ${eventSignals}` : "",
+    spec.companySizeHint || "",
+    excludedIndustries ? `excluding ${excludedIndustries}` : "",
+    "official websites",
+  ];
+  return trimText(parts.filter(Boolean).join(" "), 460);
+}
+
+function buildHumanPeopleSearchQuery(input: {
+  spec: ExaSearchSpec;
+  roleTitles: string[];
+  companyNames?: string[];
+  includeCompanySentence?: boolean;
+  includeMotionSignals?: boolean;
+  includeExclusions?: boolean;
+}) {
+  const roles = humanList(input.roleTitles, 4, "or");
+  const eventSignals = input.includeMotionSignals ? humanList(input.spec.eventSignals, 3, "or") : "";
+  const industries = humanList(
+    input.spec.companyKeywords.length ? input.spec.companyKeywords : input.spec.includeIndustries,
+    3,
+    "or"
+  );
+  const companyNames = humanList(input.companyNames ?? [], MAX_COMPANY_NAMES_PER_PEOPLE_QUERY, "or");
+  const excludedIndustries = input.includeExclusions ? humanList(input.spec.excludeIndustries, 3, "or") : "";
+  const target = input.includeCompanySentence && companyNames
+    ? `at ${companyNames}`
+    : industries
+      ? `at ${industries} companies`
+      : "at companies";
+  const parts = [
+    roles || "marketing leaders",
+    target,
+    eventSignals ? `running ${eventSignals}` : "",
+    input.spec.companySizeHint || "",
+    excludedIndustries ? `excluding ${excludedIndustries}` : "",
+  ];
+  return trimText(parts.filter(Boolean).join(" "), 520);
+}
+
+function normalizeRegionCode(value: string) {
+  const normalized = normalizeText(value).toLowerCase();
+  if (!normalized) return "";
+  if (REGION_ALIASES.has(normalized)) return REGION_ALIASES.get(normalized) ?? "";
+  if (/^[a-z]{2}$/.test(normalized)) return normalized;
+  return "";
+}
+
+function inferRegionCodes(text: string, limit: number) {
+  const haystack = normalizeText(text).toLowerCase();
+  const seen = new Set<string>();
+  for (const [alias, code] of REGION_ALIASES.entries()) {
+    if (!haystack.includes(alias)) continue;
+    if (seen.has(code)) continue;
+    seen.add(code);
+    if (seen.size >= limit) break;
+  }
+  return Array.from(seen);
+}
+
+function extractCompanySizeHint(text: string) {
+  const normalized = normalizeText(text);
+  const rangeMatch = normalized.match(/\b(\d{2,3}(?:,\d{3})?)\s*[–-]\s*(\d{2,3}(?:,\d{3})?)\b/);
+  if (rangeMatch) {
+    return `${rangeMatch[1]}-${rangeMatch[2]} employees`;
+  }
+  const employeesMatch = normalized.match(/\b\d{2,3}(?:,\d{3})?\s*(?:to|–|-)\s*\d{2,3}(?:,\d{3})?\s+employees\b/i);
+  if (employeesMatch) {
+    return trimText(employeesMatch[0], 48);
+  }
+  return "";
+}
+
+function fallbackRoleTitles(targetAudience: string, qualityPolicy?: LeadQualityPolicy) {
+  const roleFromAudience = trimText(targetAudience.split(/\s+at\s+/i)[0] ?? "", 80);
+  const titles = roleFromAudience && isLikelyTitlePhrase(roleFromAudience) ? [roleFromAudience] : [];
+  if (qualityPolicy?.requiredTitleKeywords?.length) {
+    for (const keyword of qualityPolicy.requiredTitleKeywords) {
+      const normalized = normalizeText(keyword);
+      if (!normalized) continue;
+       if (!isLikelyTitlePhrase(normalized)) continue;
+      titles.push(normalized);
+    }
+  }
+  const uniqueTitles = uniqueTrimmed(titles, 6);
+  return uniqueTitles.length ? uniqueTitles : DEFAULT_EXA_ROLE_TITLES;
+}
+
+function buildFallbackExaSearchSpec(input: {
+  targetAudience: string;
+  triggerContext: string;
+  qualityPolicy?: LeadQualityPolicy;
+}) {
+  const combined = `${input.targetAudience} ${input.triggerContext}`.trim();
+  const regions = deriveExplicitRegionCodes(input.targetAudience, input.triggerContext);
+  const roleTitles = fallbackRoleTitles(input.targetAudience, input.qualityPolicy);
+  const audienceCompanyDescriptors = deriveAudienceCompanyDescriptors(input.targetAudience, 6);
+  const companyKeywords = audienceCompanyDescriptors.length
+    ? audienceCompanyDescriptors
+    : uniqueTrimmed(
+        [
+          ...(input.qualityPolicy?.requiredCompanyKeywords ?? []).filter((keyword) => keyword.split(/\s+/).length > 1),
+          ...DEFAULT_EXA_COMPANY_KEYWORDS,
+        ],
+        6
+      );
+  const eventSignals = uniqueTrimmed(
+    [
+      ...DEFAULT_EXA_EVENT_SIGNALS,
+      ...(combined.toLowerCase().includes("recording") ? ["recordings"] : []),
+      ...(combined.toLowerCase().includes("deck") ? ["decks"] : []),
+    ],
+    6
+  );
+  const excludeIndustries = uniqueTrimmed(input.qualityPolicy?.excludedCompanyKeywords ?? [], 8);
+  const spec = {
+    rationale: "deterministic_search_spec_fallback",
+    regions,
+    roleTitles: roleTitles.length ? roleTitles : DEFAULT_EXA_ROLE_TITLES,
+    companyKeywords: companyKeywords.length ? companyKeywords : DEFAULT_EXA_COMPANY_KEYWORDS,
+    eventSignals: eventSignals.length ? eventSignals : DEFAULT_EXA_EVENT_SIGNALS,
+    companySizeHint: extractCompanySizeHint(combined),
+    includeIndustries: companyKeywords.length ? companyKeywords : DEFAULT_EXA_COMPANY_KEYWORDS,
+    excludeIndustries,
+  } satisfies ExaSearchSpec;
+  return sanitizeSearchSpec({
+    spec,
+    targetAudience: input.targetAudience,
+    triggerContext: input.triggerContext,
+  });
+}
+
+function buildExaSearchSpecFromModel(
+  root: Record<string, unknown>,
+  input: { targetAudience: string; triggerContext: string; qualityPolicy?: LeadQualityPolicy }
+) {
+  const fallback = buildFallbackExaSearchSpec(input);
+  const regions = uniqueTrimmed(
+    (Array.isArray(root.regions) ? root.regions : [])
+      .map((item) => normalizeRegionCode(String(item ?? "")))
+      .filter(Boolean),
+    3
+  );
+  const roleTitles = uniqueTrimmed(
+    (Array.isArray(root.roleTitles) ? root.roleTitles : [])
+      .map((item) => normalizeText(String(item ?? "")))
+      .filter(Boolean),
+    6
+  );
+  const companyKeywords = uniqueTrimmed(
+    (Array.isArray(root.companyKeywords) ? root.companyKeywords : [])
+      .map((item) => normalizeText(String(item ?? "")))
+      .filter(Boolean),
+    6
+  );
+  const eventSignals = uniqueTrimmed(
+    (Array.isArray(root.eventSignals) ? root.eventSignals : [])
+      .map((item) => normalizeText(String(item ?? "")))
+      .filter(Boolean),
+    6
+  );
+  const includeIndustries = uniqueTrimmed(
+    (Array.isArray(root.includeIndustries) ? root.includeIndustries : [])
+      .map((item) => normalizeText(String(item ?? "")))
+      .filter(Boolean),
+    6
+  );
+  const excludeIndustries = uniqueTrimmed(
+    (Array.isArray(root.excludeIndustries) ? root.excludeIndustries : [])
+      .map((item) => normalizeText(String(item ?? "")))
+      .filter(Boolean),
+    8
+  );
+  const companySizeHint =
+    trimText(normalizeText(String(root.companySizeHint ?? "")), 48) || fallback.companySizeHint;
+
+  const spec = {
+    rationale: trimText(normalizeText(String(root.rationale ?? "")), 240) || fallback.rationale,
+    regions: regions.length ? regions : fallback.regions,
+    roleTitles: roleTitles.length ? roleTitles : fallback.roleTitles,
+    companyKeywords: companyKeywords.length ? companyKeywords : fallback.companyKeywords,
+    eventSignals: eventSignals.length ? eventSignals : fallback.eventSignals,
+    companySizeHint,
+    includeIndustries: includeIndustries.length ? includeIndustries : fallback.includeIndustries,
+    excludeIndustries: excludeIndustries.length ? excludeIndustries : fallback.excludeIndustries,
+  } satisfies ExaSearchSpec;
+  return sanitizeSearchSpec({
+    spec,
+    targetAudience: input.targetAudience,
+    triggerContext: input.triggerContext,
+  });
+}
+
+function buildCompanySearchRequests(input: {
+  spec: ExaSearchSpec;
+  maxRequests: number;
+  numResults: number;
+}) {
+  const regions = input.spec.regions.length ? input.spec.regions : [""];
+  const requests: ExaCompiledRequest[] = [];
+  for (const region of regions.slice(0, Math.max(1, input.maxRequests))) {
+    requests.push({
+      stage: "company",
+      category: "company",
+      query: buildHumanCompanySearchQuery(input.spec),
+      numResults: input.numResults,
+      userLocation: region || undefined,
+    });
+  }
+  return requests;
+}
+
+function matchesAnyPhrase(haystack: string, phrases: string[]) {
+  const lowered = haystack.toLowerCase();
+  return phrases.filter((phrase) => {
+    const normalized = normalizeText(phrase).toLowerCase();
+    return normalized && lowered.includes(normalized);
+  });
+}
+
+function scoreQualifiedCompany(input: {
+  hit: ExaSearchHit;
+  userLocation: string;
+  spec: ExaSearchSpec;
+  qualityPolicy: LeadQualityPolicy;
+}) {
+  const companyEntity =
+    input.hit.entities.find((entry) => String(entry.type ?? "").toLowerCase() === "company") ?? {};
+  const companyEntityRecord = asRecord(companyEntity);
+  const companyEntityProps = asRecord(companyEntityRecord.properties);
+  const entityName = normalizeText(String(companyEntityProps.name ?? ""));
+  const entityId = String(companyEntityRecord.id ?? "").trim();
+  const domain = registrableDomainFromUrl(input.hit.url);
+  const name = entityName || normalizeText(input.hit.title.split(/[-|–—]/)[0] ?? "") || normalizeText(input.hit.title);
+  const haystack = [
+    input.hit.title,
+    input.hit.url,
+    entityName,
+    ...input.hit.highlights,
+    input.hit.summary,
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+
+  let score = 0;
+  const evidence: string[] = [];
+  if (!domain || isNonCompanyProfileDomain(domain) || !name) {
+    return { company: null, score: 0, evidence } as const;
+  }
+
+  score += 0.2;
+  evidence.push(`domain:${domain}`);
+  if (entityId) {
+    score += 0.08;
+    evidence.push("entity-id");
+  }
+
+  const companyMatches = matchesAnyPhrase(haystack, input.spec.companyKeywords);
+  if (companyMatches.length) {
+    score += Math.min(0.22, companyMatches.length * 0.08);
+    evidence.push(`company:${companyMatches.slice(0, 2).join(",")}`);
+  }
+
+  const eventMatches = matchesAnyPhrase(haystack, input.spec.eventSignals);
+  if (eventMatches.length) {
+    score += Math.min(0.22, eventMatches.length * 0.1);
+    evidence.push(`events:${eventMatches.slice(0, 2).join(",")}`);
+  }
+
+  const requiredMatches = matchesAnyPhrase(haystack, input.qualityPolicy.requiredCompanyKeywords ?? []);
+  if (requiredMatches.length) {
+    score += Math.min(0.18, requiredMatches.length * 0.06);
+    evidence.push(`policy:${requiredMatches.slice(0, 2).join(",")}`);
+  }
+
+  const excludedMatches = matchesAnyPhrase(haystack, input.qualityPolicy.excludedCompanyKeywords ?? []);
+  if (excludedMatches.length) {
+    score -= Math.min(0.4, excludedMatches.length * 0.16);
+    evidence.push(`excluded:${excludedMatches.slice(0, 2).join(",")}`);
+  }
+
+  const companyKey = normalizeCompanyKey(name);
+  const root = domainRoot(domain);
+  if (companyKey && root) {
+    const compact = companyTokens(companyKey).join("");
+    if (compact && (root === compact || root.startsWith(compact) || compact.startsWith(root))) {
+      score += 0.1;
+      evidence.push("name-domain-aligned");
+    }
+  }
+
+  const normalizedScore = Math.max(0, Math.min(1, Number(score.toFixed(3))));
+  return {
+    company: {
+      name: trimText(name, 140),
+      domain,
+      entityId,
+      sourceUrl: input.hit.url,
+      userLocation: input.userLocation,
+      score: normalizedScore,
+      evidence,
+    } satisfies QualifiedCompany,
+    score: normalizedScore,
+    evidence,
+  } as const;
+}
+
+function qualifyCompanyHits(input: {
+  hits: Array<{ hit: ExaSearchHit; userLocation: string }>;
+  spec: ExaSearchSpec;
+  qualityPolicy: LeadQualityPolicy;
+  limit: number;
+}) {
+  const ranked = new Map<string, QualifiedCompany>();
+  for (const row of input.hits) {
+    const scored = scoreQualifiedCompany({
+      hit: row.hit,
+      userLocation: row.userLocation,
+      spec: input.spec,
+      qualityPolicy: input.qualityPolicy,
+    });
+    if (!scored.company || scored.score < 0.24) continue;
+    const dedupeKey = scored.company.entityId || `${normalizeCompanyKey(scored.company.name)}|${scored.company.domain}`;
+    const existing = ranked.get(dedupeKey);
+    if (!existing || scored.company.score > existing.score) {
+      ranked.set(dedupeKey, scored.company);
+    }
+  }
+  return Array.from(ranked.values())
+    .sort((left, right) => right.score - left.score || left.name.localeCompare(right.name))
+    .slice(0, Math.max(4, input.limit));
+}
+
+function chunkArray<T>(items: T[], size: number) {
+  const chunks: T[][] = [];
+  for (let index = 0; index < items.length; index += size) {
+    chunks.push(items.slice(index, index + size));
+  }
+  return chunks;
+}
+
+function buildPeopleSearchRequests(input: {
+  spec: ExaSearchSpec;
+  qualifiedCompanies: QualifiedCompany[];
+  maxRequests: number;
+  numResults: number;
+}) {
+  const requests: ExaCompiledRequest[] = [];
+  const grouped = new Map<string, QualifiedCompany[]>();
+  for (const company of input.qualifiedCompanies) {
+    const key = company.userLocation || "";
+    const bucket = grouped.get(key) ?? [];
+    bucket.push(company);
+    grouped.set(key, bucket);
+  }
+
+  for (const [userLocation, companies] of grouped.entries()) {
+    const sorted = [...companies].sort((left, right) => right.score - left.score || left.name.localeCompare(right.name));
+    const chunks = chunkArray(sorted.slice(0, input.maxRequests * MAX_COMPANY_NAMES_PER_PEOPLE_QUERY), MAX_COMPANY_NAMES_PER_PEOPLE_QUERY);
+    for (const companyChunk of chunks) {
+      if (requests.length >= input.maxRequests) break;
+      requests.push({
+        stage: "people",
+        category: "people",
+        query: buildHumanPeopleSearchQuery({
+          spec: input.spec,
+          roleTitles: input.spec.roleTitles,
+          companyNames: companyChunk.map((company) => company.name),
+          includeCompanySentence: true,
+          includeMotionSignals: true,
+          includeExclusions: false,
+        }),
+        numResults: input.numResults,
+        userLocation: userLocation || undefined,
+        additionalQueries: buildPeopleSearchAdditionalQueries({
+          spec: input.spec,
+          roleTitles: input.spec.roleTitles,
+          companyNames: companyChunk.map((company) => company.name),
+          includeCompanySentence: true,
+        }),
+      });
+    }
+  }
+
+  if (requests.length) return requests.slice(0, input.maxRequests);
+
+  const fallbackRegions = input.spec.regions.length ? input.spec.regions : [""];
+  for (const userLocation of fallbackRegions.slice(0, Math.max(1, input.maxRequests))) {
+    requests.push({
+      stage: "people",
+      category: "people",
+      query: buildHumanPeopleSearchQuery({
+        spec: input.spec,
+        roleTitles: input.spec.roleTitles,
+        includeMotionSignals: true,
+        includeExclusions: false,
+      }),
+      numResults: input.numResults,
+      userLocation: userLocation || undefined,
+      additionalQueries: buildPeopleSearchAdditionalQueries({
+        spec: input.spec,
+        roleTitles: input.spec.roleTitles,
+      }),
+    });
+  }
+  return requests;
+}
+
+function buildDirectPeopleSearchRequests(input: {
+  spec: ExaSearchSpec;
+  maxRequests: number;
+  numResults: number;
+}) {
+  const requests: ExaCompiledRequest[] = [];
+  const fallbackRegions = input.spec.regions.length ? input.spec.regions : [""];
+  const roleChunks = chunkArray(
+    uniqueTrimmed(input.spec.roleTitles, Math.max(4, input.maxRequests * 4)),
+    4
+  );
+
+  for (const userLocation of fallbackRegions.slice(0, Math.max(1, input.maxRequests))) {
+    for (const roleChunk of roleChunks) {
+      if (requests.length >= input.maxRequests) break;
+      requests.push({
+        stage: "people",
+        category: "people",
+        query: buildHumanPeopleSearchQuery({
+          spec: input.spec,
+          roleTitles: roleChunk.length ? roleChunk : input.spec.roleTitles,
+          includeMotionSignals: true,
+          includeExclusions: false,
+        }),
+        numResults: input.numResults,
+        userLocation: userLocation || undefined,
+        additionalQueries: buildPeopleSearchAdditionalQueries({
+          spec: input.spec,
+          roleTitles: roleChunk.length ? roleChunk : input.spec.roleTitles,
+        }),
+      });
+    }
+  }
+
+  return requests.slice(0, Math.max(1, input.maxRequests));
+}
+
+function registrableDomainFromUrl(rawUrl: string) {
+  const trimmed = String(rawUrl ?? "").trim();
+  if (!trimmed) return "";
+  try {
+    const normalized = /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
+    const host = new URL(normalized).hostname.toLowerCase();
+    if (!host) return "";
+    if (host.endsWith(".")) return "";
+    const pieces = host.split(".").filter(Boolean);
+    if (pieces.length <= 2) {
+      const domain = pieces.join(".");
+      return isBarePublicSuffix(domain) ? "" : domain;
+    }
+    const suffix = `${pieces[pieces.length - 2]}.${pieces[pieces.length - 1]}`;
+    if (MULTI_LEVEL_TLDS.has(suffix) && pieces.length >= 3) {
+      const domain = pieces.slice(-3).join(".");
+      return isBarePublicSuffix(domain) ? "" : domain;
+    }
+    const domain = pieces.slice(-2).join(".");
+    return isBarePublicSuffix(domain) ? "" : domain;
+  } catch {
+    return "";
+  }
+}
+
+const MULTI_LEVEL_TLDS = new Set([
+  "co.uk",
+  "org.uk",
+  "ac.uk",
+  "gov.uk",
+  "com.au",
+  "net.au",
+  "org.au",
+  "co.nz",
+  "co.in",
+  "co.jp",
+  "co.kr",
+  "com.br",
+  "com.mx",
+  "com.ar",
+  "com.tr",
+  "com.sg",
+  "com.cn",
+  "com.hk",
+  "com.tw",
+  "com.sa",
+]);
+
+const SINGLE_LEVEL_TLDS = new Set([
+  "com",
+  "net",
+  "org",
+  "gov",
+  "edu",
+  "ac",
+  "co",
+]);
+
+function isBarePublicSuffix(domain: string) {
+  const normalized = String(domain ?? "").trim().toLowerCase().replace(/^www\./, "");
+  if (!normalized) return false;
+  if (MULTI_LEVEL_TLDS.has(normalized)) return true;
+  if (SINGLE_LEVEL_TLDS.has(normalized)) return true;
+  return false;
+}
+
+function inferDomainFromCompanyString(companyName: string) {
+  const raw = normalizeText(companyName)
+    .trim()
+    .replace(/^@+/, "")
+    .replace(/[)\],;:!?]+$/g, "");
+  if (!raw) return "";
+
+  const candidates = new Set<string>([raw]);
+  for (const token of raw.split(/\s+/)) {
+    if (token.includes(".")) candidates.add(token);
+  }
+
+  for (const candidate of candidates) {
+    if (!/^[a-z0-9-]+(\.[a-z0-9-]+)+$/i.test(candidate)) continue;
+    const domain = registrableDomainFromUrl(candidate);
+    if (!domain || isNonCompanyProfileDomain(domain)) continue;
+    const root = domainRoot(domain);
+    if (!root || root.length < 2) continue;
+    return domain;
+  }
+
+  return "";
+}
+
+function isUsableCompanyDomain(domain: string) {
+  const normalized = String(domain ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/^www\./, "");
+  return Boolean(
+    normalized &&
+      normalized.includes(".") &&
+      !isNonCompanyProfileDomain(normalized) &&
+      !isBarePublicSuffix(normalized)
+  );
+}
+
+function isNonCompanyProfileDomain(domain: string) {
+  const normalized = String(domain ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/^www\./, "")
+    .replace(/\.+$/, "");
+  if (!normalized) return false;
+  for (const root of NON_COMPANY_PROFILE_DOMAIN_ROOTS) {
+    if (normalized === root || normalized.endsWith(`.${root}`)) return true;
+  }
+  return false;
+}
+
+function exaHitsFromPayload(payloadRaw: unknown): ExaSearchHit[] {
+  const payload = asRecord(payloadRaw);
+  const results = Array.isArray(payload.results) ? payload.results : [];
+  const hits: ExaSearchHit[] = [];
+  for (const row of results) {
+    const item = asRecord(row);
+    const title = trimText(item.title, 220);
+    const url = String(item.url ?? "").trim();
+    if (!url) continue;
+    const author = trimText(item.author, 120);
+    const entities = Array.isArray(item.entities) ? item.entities.map((entry) => asRecord(entry)) : [];
+    const highlights = Array.isArray(item.highlights)
+      ? item.highlights.map((entry) => trimText(String(entry ?? ""), 320)).filter(Boolean)
+      : [];
+    const summary = trimText(String(item.summary ?? ""), 600);
+    hits.push({ title, url, author, entities, highlights, summary });
+  }
+  return hits;
+}
+
+async function exaSearch(input: {
+  apiKey: string;
+  query: string;
+  category: "people" | "company";
+  numResults: number;
+  includeDomains?: string[];
+  userLocation?: string;
+  livecrawl?: "always" | "fallback" | "never";
+  searchType?: "auto" | "deep" | "deep-reasoning";
+  outputSchema?: Record<string, unknown>;
+  additionalQueries?: string[];
+}): Promise<ExaSearchResponse> {
+  const payload: Record<string, unknown> = {
+    query: input.query,
+    type: input.searchType ?? "auto",
+    category: input.category,
+    numResults: input.numResults,
+    livecrawl: input.livecrawl ?? "never",
+    contents: {
+      highlights: {
+        maxCharacters: 1200,
+      },
+    },
+  };
+  if (input.userLocation) {
+    payload.userLocation = input.userLocation;
+  }
+  if (Array.isArray(input.includeDomains) && input.includeDomains.length) {
+    payload.includeDomains = uniqueTrimmed(input.includeDomains, 100);
+  }
+  if (Array.isArray(input.additionalQueries) && input.additionalQueries.length) {
+    payload.additionalQueries = uniqueTrimmed(input.additionalQueries, 8);
+  }
+  if (input.outputSchema && typeof input.outputSchema === "object" && !Array.isArray(input.outputSchema)) {
+    payload.outputSchema = input.outputSchema;
+  }
+
+  const response = await fetch("https://api.exa.ai/search", {
+    method: "POST",
+    headers: {
+      "x-api-key": input.apiKey,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+  const raw = await response.text();
+  if (!response.ok) {
+    throw new Error(`Exa search failed (${response.status}): ${trimText(raw, 240)}`);
+  }
+  let parsed: unknown = {};
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    parsed = {};
+  }
+  const payloadRecord = asRecord(parsed);
+  const costRecord = asRecord(payloadRecord.costDollars);
+  const costUsd = Number(costRecord.total ?? costRecord.search ?? 0) || 0;
+  const output = payloadRecord.output ?? null;
+  return {
+    hits: exaHitsFromPayload(parsed),
+    output,
+    costUsd,
+  };
+}
+
+function exaDirectPeopleOutputSchema() {
+  return {
+    type: "object",
+    description: "Structured people leads with company and domain data for outbound prospecting.",
+    properties: {
+      leads: {
+        type: "array",
+        description: "List of matching people leads.",
+        items: {
+          type: "object",
+          properties: {
+            first_name: { type: "string", description: "Lead first name." },
+            last_name: { type: "string", description: "Lead last name." },
+            title: { type: "string", description: "Current job title." },
+            company_name: { type: "string", description: "Current employer name." },
+            company_domain: { type: "string", description: "Official employer website domain." },
+            source_url: { type: "string", description: "Source page URL supporting this lead." },
+          },
+        },
+      },
+    },
+  } as Record<string, unknown>;
+}
+
+function parseExaStructuredLeads(output: unknown) {
+  const outputRecord = asRecord(output);
+  let content: unknown = outputRecord.content ?? outputRecord;
+  if (typeof content === "string") {
+    try {
+      content = JSON.parse(content);
+    } catch {
+      content = {};
+    }
+  }
+
+  const contentRecord = asRecord(content);
+  const nestedContentRecord = asRecord(contentRecord.content);
+  const leads = Array.isArray(contentRecord.leads)
+    ? contentRecord.leads
+    : Array.isArray(nestedContentRecord.leads)
+      ? nestedContentRecord.leads
+      : [];
+  return leads
+    .map((entry) => asRecord(entry))
+    .map((entry) => {
+      const firstName = normalizeText(String(entry.first_name ?? ""));
+      const lastName = normalizeText(String(entry.last_name ?? ""));
+      const title = normalizeText(String(entry.title ?? ""));
+      const companyName = normalizeText(String(entry.company_name ?? ""));
+      const companyDomain = registrableDomainFromUrl(String(entry.company_domain ?? ""));
+      const sourceUrl = String(entry.source_url ?? "").trim();
+      const name = normalizeText(`${firstName} ${lastName}`.trim());
+      return {
+        name,
+        firstName,
+        lastName,
+        title,
+        companyName,
+        companyDomain,
+        sourceUrl,
+      };
+    })
+    .filter(
+      (entry) =>
+        entry.name &&
+        entry.companyName &&
+        entry.companyDomain &&
+        !isNonCompanyProfileDomain(entry.companyDomain)
+    );
+}
+
+async function planExaPeopleQueries(input: {
+  targetAudience: string;
+  triggerContext: string;
+  offer: string;
+  maxCompanyQueries: number;
+  maxPeopleQueries: number;
+  companyResultsPerQuery: number;
+  peopleResultsPerQuery: number;
+  qualityPolicy: LeadQualityPolicy;
+}): Promise<ExaPeopleQueryPlan> {
+  const apiKey = process.env.OPENAI_API_KEY;
+  const fallbackSpec = buildFallbackExaSearchSpec({
+    targetAudience: input.targetAudience,
+    triggerContext: input.triggerContext,
+    qualityPolicy: input.qualityPolicy,
+  });
+  const deterministicOnly =
+    hasRoleCompanyIcpSignal(input.targetAudience) && !likelyTriggerOnlyAudience(input.targetAudience);
+  if (!apiKey || deterministicOnly) {
+    const companyRequests = buildCompanySearchRequests({
+      spec: fallbackSpec,
+      maxRequests: input.maxCompanyQueries,
+      numResults: input.companyResultsPerQuery,
+    });
+    return {
+      rationale: fallbackSpec.rationale,
+      mode: "people_first",
+      fallbackReason: "",
+      searchSpec: fallbackSpec,
+      companyRequests,
+      peopleRequests: [] as ExaCompiledRequest[],
+      directPeopleRequests: [] as ExaCompiledRequest[],
+      companyQueries: [] as string[],
+      peopleQueries: [] as string[],
+      directPeopleQueries: [] as string[],
+      qualifiedCompanyNames: [] as string[],
+      probeMetrics: {
+        candidateCount: 0,
+        resolvedDomainCount: 0,
+        resolvedDomainRate: 0,
+        enrichmentEligibleCount: 0,
+        enrichmentEligibleRate: 0,
+        existingEmailCount: 0,
+        uniqueCompanyCount: 0,
+        icpAlignmentScore: 0,
+        titleMatchRate: 0,
+        companyKeywordMatchRate: 0,
+        excludedKeywordHitRate: 0,
+      },
+    } satisfies ExaPeopleQueryPlan;
+  }
+  const prompt = [
+    "You design structured Exa sourcing specs for B2B outreach.",
+    "Goal: find real decision-makers matching targetAudience at ICP companies.",
+    "Rules:",
+    "- Return structured fields only. Do not write final search strings.",
+    "- regions must be ISO 3166-1 alpha-2 country codes, e.g. us, ca, gb.",
+    "- roleTitles should be real job titles, not generic role fragments.",
+    "- companyKeywords should describe the ICP company type only.",
+    "- eventSignals should describe observable webinar/virtual-event evidence.",
+    "- companySizeHint should be a compact phrase like '100-1000 employees' when relevant.",
+    "- includeIndustries should be B2B company descriptors.",
+    "- excludeIndustries should be major false-positive sectors to avoid.",
+    "- Default to the fewest regions needed.",
+    "- Never output generic broad phrases like 'technology companies' unless the context is truly broad.",
+    "Return JSON only:",
+    '{ "rationale": string, "regions": string[], "roleTitles": string[], "companyKeywords": string[], "eventSignals": string[], "companySizeHint": string, "includeIndustries": string[], "excludeIndustries": string[] }',
+    `Context: ${JSON.stringify({
+      targetAudience: input.targetAudience,
+      triggerContext: input.triggerContext,
+      offer: input.offer,
+      maxCompanyQueries: input.maxCompanyQueries,
+      maxPeopleQueries: input.maxPeopleQueries,
+      qualityPolicy: input.qualityPolicy,
+    })}`,
+  ].join("\n");
+  let searchSpec = fallbackSpec;
+  try {
+    const model = resolveLlmModel("lead_actor_query_planning", { prompt });
+    const response = await fetch("https://api.openai.com/v1/responses", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model,
+        input: prompt,
+        text: { format: { type: "json_object" } },
+        max_output_tokens: 700,
+      }),
+    });
+    const raw = await response.text();
+    if (!response.ok) {
+      throw new Error(`LLM query planner failed (${response.status}): ${trimText(raw, 220)}`);
+    }
+    const payload = JSON.parse(raw) as unknown;
+    const parsed = parseLooseJsonObject(extractOutputText(payload));
+    searchSpec = buildExaSearchSpecFromModel(asRecord(parsed), {
+      targetAudience: input.targetAudience,
+      triggerContext: input.triggerContext,
+      qualityPolicy: input.qualityPolicy,
+    });
+  } catch {
+    searchSpec = fallbackSpec;
+  }
+
+  const companyRequests = buildCompanySearchRequests({
+    spec: searchSpec,
+    maxRequests: input.maxCompanyQueries,
+    numResults: input.companyResultsPerQuery,
+  });
+
+  return {
+    rationale: searchSpec.rationale || "structured_exa_search_spec",
+    mode: "people_first",
+    fallbackReason: "",
+    searchSpec,
+    companyRequests,
+    peopleRequests: [] as ExaCompiledRequest[],
+    directPeopleRequests: [] as ExaCompiledRequest[],
+    companyQueries: [] as string[],
+    peopleQueries: [] as string[],
+    directPeopleQueries: [] as string[],
+    qualifiedCompanyNames: [] as string[],
+    probeMetrics: {
+      candidateCount: 0,
+      resolvedDomainCount: 0,
+      resolvedDomainRate: 0,
+      enrichmentEligibleCount: 0,
+      enrichmentEligibleRate: 0,
+      existingEmailCount: 0,
+      uniqueCompanyCount: 0,
+      icpAlignmentScore: 0,
+      titleMatchRate: 0,
+      companyKeywordMatchRate: 0,
+      excludedKeywordHitRate: 0,
+    },
+  } satisfies ExaPeopleQueryPlan;
+}
+
+function normalizeCompanyKey(value: string) {
+  const normalized = normalizeText(value)
+    .toLowerCase()
+    .replace(/&/g, " and ");
+  const withoutParentheticals = normalized.replace(/\([^)]*\)/g, " ");
+  const firstSegment = withoutParentheticals.split(/\s+[|–—-]\s+/)[0] ?? withoutParentheticals;
+  const beforeComma = firstSegment.split(",")[0] ?? firstSegment;
+  const tokens = beforeComma
+    .replace(/[^\w\s]/g, " ")
+    .split(/\s+/)
+    .map((token) => token.trim())
+    .filter(Boolean);
+
+  while (tokens.length > 1 && GENERIC_COMPANY_TOKENS.has(tokens[tokens.length - 1] ?? "")) {
+    tokens.pop();
+  }
+
+  return tokens.join(" ").trim();
+}
+
+const GENERIC_COMPANY_TOKENS = new Set([
+  "saas",
+  "software",
+  "tech",
+  "technology",
+  "cloud",
+  "b2b",
+  "inc",
+  "llc",
+  "ltd",
+  "co",
+  "company",
+  "group",
+  "solutions",
+  "services",
+  "systems",
+]);
+
+function companyTokens(value: string) {
+  return normalizeCompanyKey(value)
+    .split(" ")
+    .map((token) => token.trim())
+    .filter((token) => token.length >= 3 && !GENERIC_COMPANY_TOKENS.has(token));
+}
+
+function companyAliasKeys(value: string) {
+  const raw = normalizeText(value)
+    .toLowerCase()
+    .replace(/&/g, " and ");
+  if (!raw) return [] as string[];
+
+  const variants = new Set<string>([
+    raw,
+    normalizeCompanyKey(raw),
+    raw.replace(/\([^)]*\)/g, " ").replace(/\s+/g, " ").trim(),
+  ]);
+  const noParentheticals = raw.replace(/\([^)]*\)/g, " ").replace(/\s+/g, " ").trim();
+
+  if (noParentheticals.includes("/")) {
+    for (const part of noParentheticals.split("/")) variants.add(part.trim());
+  }
+  for (const separator of ["|", " - ", " – ", " — ", ","]) {
+    if (noParentheticals.includes(separator)) {
+      variants.add((noParentheticals.split(separator)[0] ?? "").trim());
+    }
+  }
+  for (const match of raw.matchAll(/\(([^)]+)\)/g)) {
+    const alias = normalizeText(match[1] ?? "")
+      .toLowerCase()
+      .replace(/[^\w\s/]/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+    if (!alias) continue;
+    variants.add(alias);
+    if (alias.includes("/")) {
+      for (const part of alias.split("/")) variants.add(part.trim());
+    }
+  }
+
+  const keys = new Set<string>();
+  for (const variant of variants) {
+    const normalized = normalizeText(variant)
+      .toLowerCase()
+      .replace(/[^\w\s]/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+    if (!normalized) continue;
+    const tokens = normalized
+      .split(" ")
+      .map((token) => token.trim())
+      .filter(Boolean);
+    while (tokens.length > 1 && GENERIC_COMPANY_TOKENS.has(tokens[tokens.length - 1] ?? "")) {
+      tokens.pop();
+    }
+    const tokenKey = tokens.join(" ").trim();
+    if (!tokenKey) continue;
+    keys.add(tokenKey);
+    const compact = tokens.join("");
+    if (compact && compact !== tokenKey) keys.add(compact);
+  }
+
+  return [...keys];
+}
+
+function setCompanyDomainMappings(
+  companyName: string,
+  domain: string,
+  companyDomainByName: Map<string, string>
+) {
+  const normalizedDomain = String(domain ?? "").trim().toLowerCase();
+  if (!normalizedDomain || isNonCompanyProfileDomain(normalizedDomain)) return;
+  for (const key of companyAliasKeys(companyName)) {
+    companyDomainByName.set(key, normalizedDomain);
+  }
+}
+
+function resolveCompanyDomainByName(
+  companyName: string,
+  companyDomainByName: Map<string, string>
+) {
+  const inferredFromCompanyString = inferDomainFromCompanyString(companyName);
+  if (inferredFromCompanyString) return inferredFromCompanyString;
+  const aliasKeys = companyAliasKeys(companyName);
+  for (const key of aliasKeys) {
+    const exact = companyDomainByName.get(key);
+    if (exact) return exact;
+  }
+  const keyTokens = uniqueTrimmed(aliasKeys.flatMap((key) => companyTokens(key)), 30);
+  if (!keyTokens.length) return "";
+  for (const [candidate, domain] of companyDomainByName.entries()) {
+    const candidateTokens = companyTokens(candidate);
+    if (!candidateTokens.length) continue;
+    const overlap = keyTokens.filter((token) => candidateTokens.includes(token)).length;
+    if (overlap >= 2) {
+      return domain;
+    }
+    if (overlap === 1 && keyTokens.length === 1 && candidateTokens.length === 1) {
+      return domain;
+    }
+  }
+  return "";
+}
+
+function domainRoot(domain: string) {
+  const normalized = String(domain ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/^www\./, "");
+  if (!normalized) return "";
+  return normalized.split(".", 1)[0] ?? "";
+}
+
+function scoreCompanyNameMatch(companyName: string, candidateName: string, candidateDomain: string) {
+  const queryKey = normalizeCompanyKey(companyName);
+  const candidateKey = normalizeCompanyKey(candidateName);
+  if (!queryKey || !candidateKey) return 0;
+  if (queryKey === candidateKey) return 1;
+  const queryAliases = companyAliasKeys(companyName);
+  const candidateAliases = companyAliasKeys(candidateName);
+  if (queryAliases.some((alias) => candidateAliases.includes(alias))) {
+    return 0.98;
+  }
+
+  const queryTokens = companyTokens(queryKey);
+  const candidateTokens = companyTokens(candidateKey);
+  if (!queryTokens.length || !candidateTokens.length) {
+    return 0;
+  }
+
+  const overlap = queryTokens.filter((token) => candidateTokens.includes(token)).length;
+  const recall = overlap / queryTokens.length;
+  const precision = overlap / candidateTokens.length;
+  let score = 0.65 * recall + 0.35 * precision;
+
+  if (queryTokens.length >= 2 && queryTokens.every((token) => candidateTokens.includes(token))) {
+    score += 0.15;
+  }
+
+  const queryCompact = queryTokens.join("");
+  const candidateRoot = domainRoot(candidateDomain);
+  if (candidateRoot && queryCompact && (candidateRoot === queryCompact || candidateRoot.startsWith(queryCompact))) {
+    score += 0.1;
+  }
+
+  return Math.max(0, Math.min(1, Number(score.toFixed(3))));
+}
+
+async function resolveCompanyDomainWithClearout(companyName: string) {
+  const query = normalizeCompanyKey(companyName) || normalizeText(companyName);
+  if (!query) return null;
+
+  const response = await fetch(
+    `https://api.clearout.io/public/companies/autocomplete?query=${encodeURIComponent(query)}`
+  );
+  const raw = await response.text();
+  if (!response.ok) {
+    throw new Error(`Clearout autocomplete failed (${response.status}): ${trimText(raw, 220)}`);
+  }
+
+  let payload: unknown = {};
+  try {
+    payload = raw ? JSON.parse(raw) : {};
+  } catch {
+    payload = {};
+  }
+
+  const root = asRecord(payload);
+  const data = Array.isArray(root.data) ? root.data : [];
+  const candidates = data
+    .map((entry) => asRecord(entry))
+    .map((entry) => {
+      const name = normalizeText(String(entry.name ?? ""));
+      const domain = registrableDomainFromUrl(String(entry.domain ?? ""));
+      const confidenceScore = Number(entry.confidence_score ?? 0) || 0;
+      const matchScore = scoreCompanyNameMatch(query, name, domain);
+      return {
+        name,
+        domain,
+        confidenceScore,
+        matchScore,
+      } satisfies ClearoutCompanyCandidate;
+    })
+    .filter((entry) => entry.name && entry.domain && !isNonCompanyProfileDomain(entry.domain))
+    .sort((left, right) => {
+      const combinedLeft = left.matchScore * 100 + left.confidenceScore;
+      const combinedRight = right.matchScore * 100 + right.confidenceScore;
+      return combinedRight - combinedLeft;
+    });
+
+  const top = candidates[0] ?? null;
+  if (!top) return null;
+  if (top.matchScore < 0.85) return null;
+  return top;
+}
+
+function dataForSeoTaskCostUsd() {
+  return Math.max(
+    0,
+    Math.min(1, Number(process.env.DATAFORSEO_STANDARD_QUEUE_TASK_COST_USD ?? 0.00465) || 0.00465)
+  );
+}
+
+async function submitDataForSeoStandardTask(companyName: string, credentials: DataForSeoCredentials) {
+  const query = normalizeCompanyKey(companyName) || normalizeText(companyName);
+  if (!query) return null;
+
+  const postPayload = [
+    {
+      keyword: `${query} official website`,
+      location_name: "United States",
+      language_name: "English",
+      device: "desktop",
+      os: "windows",
+      depth: 10,
+    },
+  ];
+  const postResponse = await dataForSeoRequest({
+    credentials,
+    path: "/v3/serp/google/organic/task_post",
+    method: "POST",
+    body: postPayload,
+  });
+  const task = asRecord((Array.isArray(postResponse.tasks) ? postResponse.tasks : [])[0]);
+  const taskId = String(task.id ?? "").trim();
+  if (!taskId) {
+    throw new Error(`DataForSEO task_post returned no task id for ${trimText(companyName, 80)}`);
+  }
+  return {
+    taskId,
+    query: `${query} official website`,
+  };
+}
+
+function dataForSeoAuthorizationHeader(credentials: DataForSeoCredentials) {
+  return `Basic ${Buffer.from(`${credentials.login}:${credentials.password}`).toString("base64")}`;
+}
+
+async function dataForSeoRequest(input: {
+  credentials: DataForSeoCredentials;
+  path: string;
+  method?: "GET" | "POST";
+  body?: unknown;
+}) {
+  const response = await fetch(`https://api.dataforseo.com${input.path}`, {
+    method: input.method ?? "GET",
+    headers: {
+      Authorization: dataForSeoAuthorizationHeader(input.credentials),
+      "Content-Type": "application/json",
+    },
+    body: input.body === undefined ? undefined : JSON.stringify(input.body),
+  });
+  const raw = await response.text();
+  if (!response.ok) {
+    throw new Error(`DataForSEO request failed (${response.status}): ${trimText(raw, 220)}`);
+  }
+  let payload: unknown = {};
+  try {
+    payload = raw ? JSON.parse(raw) : {};
+  } catch {
+    payload = {};
+  }
+  return asRecord(payload);
+}
+
+function parseDataForSeoOrganicCandidates(companyName: string, payload: Record<string, unknown>) {
+  const tasks = Array.isArray(payload.tasks) ? payload.tasks : [];
+  const task = asRecord(tasks[0]);
+  const results = Array.isArray(task.result) ? task.result : [];
+  const candidates: DataForSeoOrganicCandidate[] = [];
+
+  for (const result of results) {
+    const resultRecord = asRecord(result);
+    const items = Array.isArray(resultRecord.items) ? resultRecord.items : [];
+    for (const itemRaw of items) {
+      const item = asRecord(itemRaw);
+      const type = String(item.type ?? "").trim().toLowerCase();
+      if (type && type !== "organic") continue;
+      const url = String(item.url ?? "").trim();
+      const domain = registrableDomainFromUrl(String(item.domain ?? "") || url);
+      if (!domain || isNonCompanyProfileDomain(domain)) continue;
+      const title = normalizeText(String(item.title ?? ""));
+      const description = trimText(item.description, 260);
+      const breadcrumb = trimText(item.breadcrumb, 180);
+      const rankAbsolute = Number(item.rank_absolute ?? item.rank_group ?? 999) || 999;
+      const matchScore = scoreCompanyNameMatch(companyName, title || domain, domain);
+      candidates.push({
+        title,
+        url,
+        domain,
+        description,
+        breadcrumb,
+        rankAbsolute,
+        matchScore,
+      });
+    }
+  }
+
+  return candidates.sort((left, right) => {
+    if (right.matchScore !== left.matchScore) return right.matchScore - left.matchScore;
+    return left.rankAbsolute - right.rankAbsolute;
+  });
+}
+
+async function openAiJsonObjectCall(input: { prompt: string; model: string; maxOutputTokens?: number }) {
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) {
+    throw new Error("OPENAI_API_KEY is missing.");
+  }
+
+  const response = await fetch("https://api.openai.com/v1/responses", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model: input.model,
+      input: input.prompt,
+      text: { format: { type: "json_object" } },
+      reasoning: { effort: "minimal" },
+      max_output_tokens: input.maxOutputTokens ?? 700,
+    }),
+  });
+
+  const raw = await response.text();
+  if (!response.ok) {
+    throw new Error(`OpenAI JSON call failed (HTTP ${response.status}): ${trimText(raw, 260)}`);
+  }
+
+  let payload: unknown = {};
+  try {
+    payload = JSON.parse(raw);
+  } catch {
+    payload = {};
+  }
+  return asRecord(parseLooseJsonObject(extractOutputText(payload)));
+}
+
+function isAggregatorSerpDomain(domain: string) {
+  const normalized = String(domain ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/^www\./, "");
+  if (!normalized) return false;
+  for (const root of DATAFORSEO_AGGREGATOR_DOMAIN_ROOTS) {
+    if (normalized === root || normalized.endsWith(`.${root}`)) return true;
+  }
+  return false;
+}
+
+async function selectCompanyDomainFromSerpWithLlm(input: {
+  companyName: string;
+  candidates: DataForSeoOrganicCandidate[];
+}): Promise<DataForSeoOrganicCandidate | null> {
+  const filtered = input.candidates
+    .filter((candidate) => !isAggregatorSerpDomain(candidate.domain))
+    .slice(0, 5);
+  const candidates = filtered.length ? filtered : input.candidates.slice(0, 5);
+  if (!candidates.length) return null;
+
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) {
+    const top = candidates[0] ?? null;
+    return top && top.matchScore >= 0.82 ? top : null;
+  }
+
+  const prompt = [
+    "Decide whether one SERP result is the official website for the target company.",
+    "Use only the provided company name and SERP results.",
+    "Do not guess a domain that is not present in the candidates.",
+    "Treat aggregators, investor pages, directories, news coverage, LinkedIn, Crunchbase, and Wikipedia as non-matches unless the target company itself uses that domain.",
+    "Return strict JSON only.",
+    '{ "match_found": boolean, "candidate_index": number, "domain": string, "confidence_score": number, "reasoning": string }',
+    `Target company: ${input.companyName}`,
+    `Candidates: ${JSON.stringify(
+      candidates.map((candidate, index) => ({
+        candidate_index: index,
+        domain: candidate.domain,
+        title: candidate.title,
+        snippet: candidate.description,
+        breadcrumb: candidate.breadcrumb,
+        rank_absolute: candidate.rankAbsolute,
+      }))
+    )}`,
+  ].join("\n");
+
+  try {
+    const model = resolveLlmModel("company_domain_matcher", {
+      prompt,
+      legacyModelEnv: process.env.OPENAI_MODEL_COMPANY_DOMAIN_MATCHER || "gpt-5-nano",
+    });
+    const row = await openAiJsonObjectCall({ prompt, model, maxOutputTokens: 700 });
+    const rawConfidence = Number(row.confidence_score ?? 0) || 0;
+    const normalizedConfidence =
+      rawConfidence > 0 && rawConfidence <= 1 ? rawConfidence * 100 : rawConfidence;
+    const decision: DataForSeoCompanyDecision = {
+      matchFound: row.match_found === true,
+      candidateIndex: Math.round(Number(row.candidate_index ?? -1)),
+      domain: registrableDomainFromUrl(String(row.domain ?? "")),
+      confidenceScore: Math.max(0, Math.min(100, normalizedConfidence)),
+      reasoning: trimText(row.reasoning, 260),
+    };
+    if (!decision.matchFound) return null;
+    if (!Number.isFinite(decision.candidateIndex) || decision.candidateIndex < 0) return null;
+    const selected = candidates[decision.candidateIndex] ?? null;
+    if (!selected) return null;
+    if (!decision.domain || decision.domain !== selected.domain) return null;
+    if (decision.confidenceScore < 70) return null;
+    return selected;
+  } catch {
+    const top = candidates[0] ?? null;
+    return top && top.matchScore >= 0.82 ? top : null;
+  }
+}
+
+async function pollDataForSeoStandardTask(input: {
+  companyName: string;
+  taskId: string;
+  credentials: DataForSeoCredentials;
+}) {
+  const taskPayload = await dataForSeoRequest({
+    credentials: input.credentials,
+    path: `/v3/serp/google/organic/task_get/regular/${encodeURIComponent(input.taskId)}`,
+  });
+  const taskRow = asRecord((Array.isArray(taskPayload.tasks) ? taskPayload.tasks : [])[0]);
+  const taskCostUsd = Number(taskRow.cost ?? 0) || dataForSeoTaskCostUsd();
+  const statusCode = Number(taskRow.status_code ?? taskPayload.status_code ?? 0) || 0;
+  const statusMessage = trimText(String(taskRow.status_message ?? taskPayload.status_message ?? ""), 160);
+  const isPendingQueueStatus = statusCode === 40601 || statusCode === 40602;
+  if (statusCode >= 40000 && !isPendingQueueStatus) {
+    throw new Error(`DataForSEO task_get failed (${statusCode}): ${statusMessage || "unknown"}`);
+  }
+  const candidates = parseDataForSeoOrganicCandidates(input.companyName, taskPayload);
+  if (isPendingQueueStatus) {
+    return {
+      status: "pending" as const,
+      costUsd: taskCostUsd,
+      statusCode,
+      statusMessage,
+    };
+  }
+  if (!candidates.length) {
+    return {
+      status: "completed" as const,
+      costUsd: taskCostUsd,
+      match: null,
+    };
+  }
+  const top = await selectCompanyDomainFromSerpWithLlm({
+    companyName: input.companyName,
+    candidates,
+  });
+  return {
+    status: "completed" as const,
+    costUsd: taskCostUsd,
+    match: top
+      ? {
+          ...top,
+          costUsd: taskCostUsd,
+          taskId: input.taskId,
+        }
+      : null,
+  };
+}
+
+function pickCurrentCompanyFromEntity(entity: Record<string, unknown>) {
+  const props = asRecord(entity.properties);
+  const workHistory = Array.isArray(props.workHistory) ? props.workHistory : [];
+  for (const entry of workHistory) {
+    const row = asRecord(entry);
+    const dates = asRecord(row.dates);
+    const to = String(dates.to ?? "").trim();
+    const company = asRecord(row.company);
+    const companyName = normalizeText(String(company.name ?? ""));
+    const companyEntityId = String(company.id ?? "").trim();
+    const title = normalizeText(String(row.title ?? ""));
+    if (companyName && !to) {
+      return { companyName, companyEntityId, title };
+    }
+  }
+  const first = asRecord(workHistory[0]);
+  if (Object.keys(first).length) {
+    const company = asRecord(first.company);
+    return {
+      companyName: normalizeText(String(company.name ?? "")),
+      companyEntityId: String(company.id ?? "").trim(),
+      title: normalizeText(String(first.title ?? "")),
+    };
+  }
+  return { companyName: "", companyEntityId: "", title: "" };
+}
+
+function backfillLeadDomains(input: {
+  rawLeads: ExaLeadCandidate[];
+  companyDomainByEntityId: Map<string, string>;
+  companyDomainByName: Map<string, string>;
+}) {
+  for (const lead of input.rawLeads) {
+    if (lead.domain) continue;
+    const resolved =
+      (lead.companyEntityId ? input.companyDomainByEntityId.get(lead.companyEntityId) ?? "" : "") ||
+      resolveCompanyDomainByName(lead.company, input.companyDomainByName);
+    if (!resolved || isNonCompanyProfileDomain(resolved)) continue;
+    lead.domain = resolved;
+  }
+}
+
+function appendPeopleHitsToLeadPool(input: {
+  hits: ExaSearchHit[];
+  rawLeads: ExaLeadCandidate[];
+  seen: Set<string>;
+  maxRaw: number;
+  companyDomains: Set<string>;
+  companyDomainByName: Map<string, string>;
+  companyDomainByEntityId: Map<string, string>;
+  qualifiedCompanyKeySet?: Set<string>;
+  qualifiedCompanyEntityIdSet?: Set<string>;
+}) {
+  for (const hit of input.hits) {
+    if (input.rawLeads.length >= input.maxRaw) break;
+    const personEntity =
+      hit.entities.find((entry) => String(entry.type ?? "").toLowerCase() === "person") ?? {};
+    const person = asRecord(asRecord(personEntity).properties);
+    const name = normalizeText(
+      String(person.name ?? "") || String(hit.author ?? "") || String(hit.title ?? "")
+    );
+    const { companyName, companyEntityId, title } = pickCurrentCompanyFromEntity(asRecord(personEntity));
+    const email = extractFirstEmailAddress(String(person.email ?? ""));
+    const company = companyName || normalizeText(String(person.currentCompany ?? ""));
+    if (!name || !company) continue;
+
+    const emailDomain = email.includes("@") ? (email.split("@")[1] || "").trim().toLowerCase() : "";
+    if (emailDomain && !isNonCompanyProfileDomain(emailDomain)) {
+      input.companyDomains.add(emailDomain);
+      if (companyEntityId) input.companyDomainByEntityId.set(companyEntityId, emailDomain);
+      setCompanyDomainMappings(company, emailDomain, input.companyDomainByName);
+    }
+    const companyStringDomain = inferDomainFromCompanyString(company);
+    if (companyStringDomain) {
+      input.companyDomains.add(companyStringDomain);
+      if (companyEntityId) input.companyDomainByEntityId.set(companyEntityId, companyStringDomain);
+      setCompanyDomainMappings(company, companyStringDomain, input.companyDomainByName);
+    }
+
+    const inferredDomain =
+      (companyEntityId ? input.companyDomainByEntityId.get(companyEntityId) ?? "" : "") ||
+      resolveCompanyDomainByName(company, input.companyDomainByName) ||
+      "";
+    const companyKeys = companyAliasKeys(company);
+    const restrictToQualifiedCompanies =
+      Boolean(input.qualifiedCompanyKeySet?.size) || Boolean(input.qualifiedCompanyEntityIdSet?.size);
+    const matchedQualifiedCompany =
+      (companyEntityId && input.qualifiedCompanyEntityIdSet?.has(companyEntityId)) ||
+      companyKeys.some((key) => input.qualifiedCompanyKeySet?.has(key)) ||
+      Boolean(inferredDomain);
+    if (restrictToQualifiedCompanies && !matchedQualifiedCompany) continue;
+
+    const dedupeKey = `${name.toLowerCase()}|${company.toLowerCase()}`;
+    if (input.seen.has(dedupeKey)) continue;
+    input.seen.add(dedupeKey);
+
+    input.rawLeads.push({
+      email,
+      name: trimText(name, 120),
+      company: trimText(company, 140),
+      title: trimText(title, 140),
+      domain: emailDomain || inferredDomain,
+      sourceUrl: hit.url,
+      companyEntityId,
+    });
+  }
+}
+
+function buildUnresolvedCompanyGroups(input: {
+  rawLeads: ExaLeadCandidate[];
+  companyDomainByName: Map<string, string>;
+}) {
+  const groups = new Map<string, UnresolvedCompanyGroup>();
+  for (const lead of input.rawLeads) {
+    if (lead.domain || !lead.company) continue;
+    if (resolveCompanyDomainByName(lead.company, input.companyDomainByName)) continue;
+    const key = normalizeCompanyKey(lead.company);
+    if (!key) continue;
+    const current =
+      groups.get(key) ??
+      ({
+        company: lead.company,
+        key,
+        count: 0,
+        examples: [],
+      } satisfies UnresolvedCompanyGroup);
+    current.count += 1;
+    if (
+      current.examples.length < 3 &&
+      !current.examples.some(
+        (entry) =>
+          entry.name === lead.name &&
+          entry.title === lead.title &&
+          entry.sourceUrl === lead.sourceUrl
+      )
+    ) {
+      current.examples.push({
+        name: lead.name,
+        title: lead.title,
+        sourceUrl: lead.sourceUrl,
+        company: lead.company,
+      });
+    }
+    groups.set(key, current);
+  }
+
+  return [...groups.values()].sort(
+    (left, right) => right.count - left.count || left.company.localeCompare(right.company)
+  );
+}
+
+function companyDomainEntriesFromMap(companyDomainByName: Map<string, string>) {
+  return [...companyDomainByName.entries()]
+    .map(([companyKey, domain]) => [String(companyKey ?? ""), String(domain ?? "")] as [string, string])
+    .filter(([companyKey, domain]) => Boolean(companyKey) && Boolean(domain));
+}
+
+function companyDomainMapFromEntries(entries: Array<[string, string]>) {
+  const map = new Map<string, string>();
+  for (const [companyKey, domain] of entries) {
+    const normalizedDomain = registrableDomainFromUrl(domain);
+    if (!companyKey || !normalizedDomain || isNonCompanyProfileDomain(normalizedDomain)) continue;
+    map.set(companyKey, normalizedDomain);
+  }
+  return map;
+}
+
+async function resolveCompanyDomainsWithHistoricalAndClearout(input: {
+  rawLeads: ExaLeadCandidate[];
+  companyDomainByName: Map<string, string>;
+  diagnostics: ExaQueryDiagnostic[];
+}) {
+  const initialGroups = buildUnresolvedCompanyGroups({
+    rawLeads: input.rawLeads,
+    companyDomainByName: input.companyDomainByName,
+  });
+
+  if (initialGroups.length) {
+    const historicalMatches = await loadHistoricalCompanyDomains(
+      uniqueTrimmed(
+        initialGroups.flatMap((group) => companyAliasKeys(group.company)),
+        Math.max(initialGroups.length * 8, 100)
+      )
+    );
+    for (const row of historicalMatches) {
+      const resolvedDomain = registrableDomainFromUrl(row.domain);
+      if (!resolvedDomain || isNonCompanyProfileDomain(resolvedDomain)) continue;
+      setCompanyDomainMappings(row.company, resolvedDomain, input.companyDomainByName);
+    }
+    if (historicalMatches.length) {
+      backfillLeadDomains({
+        rawLeads: input.rawLeads,
+        companyDomainByEntityId: new Map<string, string>(),
+        companyDomainByName: input.companyDomainByName,
+      });
+    }
+  }
+
+  const unresolvedGroups = buildUnresolvedCompanyGroups({
+    rawLeads: input.rawLeads,
+    companyDomainByName: input.companyDomainByName,
+  });
+  const unresolvedAfterClearout: UnresolvedCompanyGroup[] = [];
+
+  for (const batch of chunkArray(unresolvedGroups, 8)) {
+    const results = await Promise.all(
+      batch.map(async (group) => {
+        try {
+          const clearoutMatch = await resolveCompanyDomainWithClearout(group.company);
+          return { group, clearoutMatch } as const;
+        } catch {
+          return { group, clearoutMatch: null } as const;
+        }
+      })
+    );
+
+    for (const result of results) {
+      const clearoutQuery = `Clearout autocomplete: ${result.group.company}`;
+      if (result.clearoutMatch?.domain) {
+        setCompanyDomainMappings(result.group.company, result.clearoutMatch.domain, input.companyDomainByName);
+        input.diagnostics.push({
+          stage: "company",
+          provider: "clearout",
+          query: clearoutQuery,
+          count: 1,
+          includeDomainsCount: 0,
+          lookupCompany: result.group.company,
+          lookupExamples: result.group.examples,
+          resolvedDomain: result.clearoutMatch.domain,
+          resolutionSource: "clearout",
+        });
+        continue;
+      }
+
+      input.diagnostics.push({
+        stage: "company",
+        provider: "clearout",
+        query: clearoutQuery,
+        count: 0,
+        includeDomainsCount: 0,
+        lookupCompany: result.group.company,
+        lookupExamples: result.group.examples,
+      });
+      unresolvedAfterClearout.push(result.group);
+    }
+  }
+
+  return unresolvedAfterClearout;
+}
+
+async function submitPendingDataForSeoTasks(input: {
+  unresolvedGroups: UnresolvedCompanyGroup[];
+  credentials: DataForSeoCredentials | null;
+  diagnostics: ExaQueryDiagnostic[];
+}) {
+  if (!input.credentials) return [] as DataForSeoPendingTask[];
+  const pendingTasks: DataForSeoPendingTask[] = [];
+
+  for (const batch of chunkArray(input.unresolvedGroups, 6)) {
+    const results = await Promise.all(
+      batch.map(async (group) => {
+        try {
+          const submitted = await submitDataForSeoStandardTask(group.company, input.credentials as DataForSeoCredentials);
+          return { group, submitted, error: "" } as const;
+        } catch (error) {
+          return {
+            group,
+            submitted: null,
+            error:
+              error instanceof Error
+                ? trimText(error.message, 260)
+                : trimText(String(error ?? ""), 260),
+          } as const;
+        }
+      })
+    );
+
+    for (const result of results) {
+      const query = `DataForSEO standard queue: ${result.group.company} official website`;
+      if (result.submitted?.taskId) {
+        pendingTasks.push({
+          company: result.group.company,
+          taskId: result.submitted.taskId,
+          query,
+          examples: result.group.examples,
+          pollAttempts: 0,
+          submittedAt: nowIso(),
+        });
+        continue;
+      }
+
+      input.diagnostics.push({
+        stage: "company",
+        provider: "dataforseo",
+        query,
+        count: 0,
+        includeDomainsCount: 0,
+        costUsd: 0,
+        lookupCompany: result.group.company,
+        lookupExamples: result.group.examples,
+        error: result.error || undefined,
+      });
+    }
+  }
+
+  return pendingTasks;
+}
+
+async function pollPendingDataForSeoTasks(input: {
+  pendingTasks: DataForSeoPendingTask[];
+  credentials: DataForSeoCredentials;
+  companyDomainByName: Map<string, string>;
+  diagnostics: ExaQueryDiagnostic[];
+  onDataForSeoCost?: (costUsd: number) => void;
+}) {
+  const stillPending: DataForSeoPendingTask[] = [];
+  const terminalUnresolvedCompanies = new Set<string>();
+
+  for (const batch of chunkArray(input.pendingTasks, 6)) {
+    const results = await Promise.all(
+      batch.map(async (pending) => {
+        try {
+          const polled = await pollDataForSeoStandardTask({
+            companyName: pending.company,
+            taskId: pending.taskId,
+            credentials: input.credentials,
+          });
+          return { pending, polled, error: "" } as const;
+        } catch (error) {
+          return {
+            pending,
+            polled: null,
+            error:
+              error instanceof Error
+                ? trimText(error.message, 260)
+                : trimText(String(error ?? ""), 260),
+          } as const;
+        }
+      })
+    );
+
+    for (const result of results) {
+      const query = result.pending.query;
+      if (result.error) {
+        input.diagnostics.push({
+          stage: "company",
+          provider: "dataforseo",
+          query,
+          count: 0,
+          includeDomainsCount: 0,
+          costUsd: 0,
+          lookupCompany: result.pending.company,
+          lookupExamples: result.pending.examples,
+          error: result.error,
+        });
+        terminalUnresolvedCompanies.add(result.pending.company);
+        continue;
+      }
+
+      if (!result.polled) {
+        terminalUnresolvedCompanies.add(result.pending.company);
+        continue;
+      }
+
+      if (result.polled.status === "pending") {
+        const nextPollAttempts = result.pending.pollAttempts + 1;
+        if (nextPollAttempts >= DATAFORSEO_ASYNC_MAX_POLLS) {
+          input.diagnostics.push({
+            stage: "company",
+            provider: "dataforseo",
+            query,
+            count: 0,
+            includeDomainsCount: 0,
+            costUsd: 0,
+            lookupCompany: result.pending.company,
+            lookupExamples: result.pending.examples,
+            error: `task_pending_timeout:${result.polled.statusCode}`,
+          });
+          terminalUnresolvedCompanies.add(result.pending.company);
+          continue;
+        }
+        stillPending.push({
+          ...result.pending,
+          pollAttempts: nextPollAttempts,
+        });
+        continue;
+      }
+
+      input.onDataForSeoCost?.(result.polled.costUsd);
+      if (result.polled.match?.domain) {
+        setCompanyDomainMappings(result.pending.company, result.polled.match.domain, input.companyDomainByName);
+        input.diagnostics.push({
+          stage: "company",
+          provider: "dataforseo",
+          query,
+          count: 1,
+          includeDomainsCount: 0,
+          costUsd: result.polled.costUsd,
+          lookupCompany: result.pending.company,
+          lookupExamples: result.pending.examples,
+          resolvedDomain: result.polled.match.domain,
+          resolutionSource: "dataforseo_organic",
+        });
+        continue;
+      }
+
+      input.diagnostics.push({
+        stage: "company",
+        provider: "dataforseo",
+        query,
+        count: 0,
+        includeDomainsCount: 0,
+        costUsd: result.polled.costUsd,
+        lookupCompany: result.pending.company,
+        lookupExamples: result.pending.examples,
+      });
+      terminalUnresolvedCompanies.add(result.pending.company);
+    }
+  }
+
+  return {
+    stillPending,
+    terminalUnresolvedCompanies,
+  };
+}
+
+async function runExaFallbackCompanyResolution(input: {
+  unresolvedGroups: UnresolvedCompanyGroup[];
+  exaApiKey: string;
+  companyDomainByName: Map<string, string>;
+  diagnostics: ExaQueryDiagnostic[];
+  exaFallbackLimit: number;
+  onExaCost?: (costUsd: number) => void;
+}) {
+  if (input.exaFallbackLimit <= 0) return;
+  for (const group of input.unresolvedGroups.slice(0, input.exaFallbackLimit)) {
+    try {
+      const query = `${group.company} official website`;
+      const response = await exaSearch({
+        apiKey: input.exaApiKey,
+        query,
+        category: "company",
+        numResults: 1,
+      });
+      input.onExaCost?.(response.costUsd);
+      const resolvedDomain = registrableDomainFromUrl(response.hits[0]?.url ?? "");
+      if (resolvedDomain && !isNonCompanyProfileDomain(resolvedDomain)) {
+        setCompanyDomainMappings(group.company, resolvedDomain, input.companyDomainByName);
+      }
+      input.diagnostics.push({
+        stage: "company",
+        provider: "exa",
+        query,
+        count: response.hits.length,
+        includeDomainsCount: 0,
+        costUsd: response.costUsd,
+        lookupCompany: group.company,
+        lookupExamples: group.examples,
+        resolvedDomain: resolvedDomain || undefined,
+        resolutionSource: resolvedDomain ? "exa_official_website" : undefined,
+      });
+    } catch {
+      input.diagnostics.push({
+        stage: "company",
+        provider: "exa",
+        query: `${group.company} official website`,
+        count: 0,
+        includeDomainsCount: 0,
+        lookupCompany: group.company,
+        lookupExamples: group.examples,
+      });
+    }
+  }
+}
+
+async function sourceLeadsFromExa(input: {
+  exaApiKey: string;
+  dataForSeoCredentials: DataForSeoCredentials | null;
+  targetAudience: string;
+  triggerContext: string;
+  offer: string;
+  qualityPolicy: LeadQualityPolicy;
+  maxLeads: number;
+  allowMissingEmail: boolean;
+  emailFinderApiBaseUrl?: string;
+  emailFinderVerificationMode?: "validatedmails";
+  emailFinderValidatedMailsApiKey?: string;
+  resumeState?: DeferredSourcingState | null;
+}) {
+  const companyQueryLimit = Math.max(1, Math.min(2, input.maxLeads <= 50 ? 1 : 2));
+  const peopleQueryLimit = Math.max(1, Math.min(2, input.maxLeads <= 50 ? 1 : 2));
+  const directPeopleProbeLimit = 1;
+  const companyResultsPerQuery = input.maxLeads <= 50 ? 15 : 20;
+  const peopleResultsPerQuery = input.maxLeads <= 50 ? 60 : 100;
+  const officialWebsiteQueryLimit =
+    input.resumeState?.officialWebsiteQueryLimit ??
+    (input.maxLeads <= 50 ? 3 : input.maxLeads <= 150 ? 4 : 5);
+
+  let queryPlan: ExaPeopleQueryPlan;
+  let diagnostics: ExaQueryDiagnostic[];
+  let rawLeads: ExaLeadCandidate[];
+  const companyDomainByName = input.resumeState
+    ? companyDomainMapFromEntries(input.resumeState.companyDomainEntries)
+    : new Map<string, string>();
+  const companyDomainByEntityId = new Map<string, string>();
+  let observedExaCostUsd = Number(input.resumeState?.observedExaCostUsd ?? 0) || 0;
+  let observedDataForSeoCostUsd = Number(input.resumeState?.observedDataForSeoCostUsd ?? 0) || 0;
+
+  if (input.resumeState?.phase === "waiting_dataforseo") {
+    queryPlan = input.resumeState.queryPlan;
+    diagnostics = [...input.resumeState.diagnostics];
+    rawLeads = input.resumeState.rawLeads.map((lead) => ({ ...lead }));
+    backfillLeadDomains({ rawLeads, companyDomainByEntityId, companyDomainByName });
+
+    const pendingDataForSeoTasks = input.resumeState.pendingDataForSeoTasks ?? [];
+    if (input.dataForSeoCredentials && pendingDataForSeoTasks.length) {
+      const polled = await pollPendingDataForSeoTasks({
+        pendingTasks: pendingDataForSeoTasks,
+        credentials: input.dataForSeoCredentials,
+        companyDomainByName,
+        diagnostics,
+        onDataForSeoCost: (costUsd) => {
+          observedDataForSeoCostUsd += costUsd;
+        },
+      });
+      backfillLeadDomains({ rawLeads, companyDomainByEntityId, companyDomainByName });
+      if (polled.stillPending.length) {
+        return {
+          queryPlan,
+          acceptedLeads: [],
+          rejectedLeads: [],
+          diagnostics,
+          emailEnrichment: {
+            attempted: 0,
+            matched: 0,
+            failed: 0,
+            provider: "emailfinder.batch",
+            error: "",
+            failureSummary: [],
+            failedSamples: [],
+          },
+          budgetUsedUsd: Number((observedExaCostUsd + observedDataForSeoCostUsd).toFixed(3)),
+          exaSpendUsd: Number(observedExaCostUsd.toFixed(3)),
+          dataForSeoSpendUsd: Number(observedDataForSeoCostUsd.toFixed(3)),
+          pendingDataForSeo: {
+            version: 1,
+            phase: "waiting_dataforseo",
+            queryPlan,
+            rawLeads,
+            diagnostics,
+            companyDomainEntries: companyDomainEntriesFromMap(companyDomainByName),
+            pendingDataForSeoTasks: polled.stillPending,
+            observedExaCostUsd,
+            observedDataForSeoCostUsd,
+            officialWebsiteQueryLimit,
+          },
+        } satisfies ExaPeopleSourcingResult;
+      }
+    }
+
+    const unresolvedAfterDataForSeo = buildUnresolvedCompanyGroups({
+      rawLeads,
+      companyDomainByName,
+    });
+    await runExaFallbackCompanyResolution({
+      unresolvedGroups: unresolvedAfterDataForSeo,
+      exaApiKey: input.exaApiKey,
+      companyDomainByName,
+      diagnostics,
+      exaFallbackLimit: officialWebsiteQueryLimit,
+      onExaCost: (costUsd) => {
+        observedExaCostUsd += costUsd;
+      },
+    });
+    backfillLeadDomains({ rawLeads, companyDomainByEntityId, companyDomainByName });
+  } else {
+    queryPlan = await planExaPeopleQueries({
+      targetAudience: input.targetAudience,
+      triggerContext: input.triggerContext,
+      offer: input.offer,
+      maxCompanyQueries: companyQueryLimit,
+      maxPeopleQueries: peopleQueryLimit,
+      companyResultsPerQuery,
+      peopleResultsPerQuery,
+      qualityPolicy: input.qualityPolicy,
+    });
+
+    diagnostics = [];
+    rawLeads = [];
+    const seen = new Set<string>();
+    const maxRaw = Number.POSITIVE_INFINITY;
+    const companyDomains = new Set<string>();
+    const plannedCompanyRequests = [...queryPlan.companyRequests];
+    queryPlan.companyRequests = [] as ExaCompiledRequest[];
+    queryPlan.companyQueries = [] as string[];
+
+    const directPeopleRequests = buildDirectPeopleSearchRequests({
+      spec: queryPlan.searchSpec,
+      maxRequests: directPeopleProbeLimit,
+      numResults: peopleResultsPerQuery,
+    });
+    queryPlan.directPeopleRequests = directPeopleRequests;
+    queryPlan.directPeopleQueries = directPeopleRequests.map((request) => request.query);
+    queryPlan.peopleRequests = [...directPeopleRequests];
+    queryPlan.peopleQueries = [...queryPlan.directPeopleQueries];
+
+    for (const request of directPeopleRequests) {
+      if (rawLeads.length >= maxRaw) break;
+      const response = await exaSearch({
+        apiKey: input.exaApiKey,
+        query: request.query,
+        category: request.category,
+        numResults: 100,
+        userLocation: request.userLocation,
+        searchType: "deep-reasoning",
+        outputSchema: exaDirectPeopleOutputSchema(),
+        additionalQueries: request.additionalQueries,
+      });
+      observedExaCostUsd += response.costUsd;
+      const structuredLeads = parseExaStructuredLeads(response.output);
+      for (const lead of structuredLeads) {
+        if (rawLeads.length >= maxRaw) break;
+        const dedupeKey = `${lead.name.toLowerCase()}|${lead.companyName.toLowerCase()}`;
+        if (seen.has(dedupeKey)) continue;
+        seen.add(dedupeKey);
+        companyDomains.add(lead.companyDomain);
+        setCompanyDomainMappings(lead.companyName, lead.companyDomain, companyDomainByName);
+        rawLeads.push({
+          email: "",
+          name: trimText(lead.name, 120),
+          company: trimText(lead.companyName, 140),
+          title: trimText(lead.title, 140),
+          domain: lead.companyDomain,
+          sourceUrl: lead.sourceUrl,
+          companyEntityId: "",
+        });
+      }
+      appendPeopleHitsToLeadPool({
+        hits: response.hits,
+        rawLeads,
+        seen,
+        maxRaw,
+        companyDomains,
+        companyDomainByName,
+        companyDomainByEntityId,
+      });
+      diagnostics.push({
+        stage: "people",
+        provider: "exa",
+        query: request.query,
+        count: response.hits.length || structuredLeads.length,
+        includeDomainsCount: structuredLeads.filter((lead) => Boolean(lead.companyDomain)).length,
+        structuredCount: structuredLeads.length,
+        userLocation: request.userLocation,
+        costUsd: response.costUsd,
+      });
+    }
+
+    await resolveCompanyDomainsWithHistoricalAndClearout({
+      rawLeads,
+      companyDomainByName,
+      diagnostics,
+    });
+    backfillLeadDomains({ rawLeads, companyDomainByEntityId, companyDomainByName });
+
+    const directProbeAlignment = deterministicProbeIcpAlignment({
+      leads: rawLeads,
+      qualityPolicy: input.qualityPolicy,
+    });
+    const directResolvedDomainCount = rawLeads.filter((lead) => isUsableCompanyDomain(String(lead.domain ?? ""))).length;
+    const directResolvedDomainRate = rawLeads.length
+      ? Number((directResolvedDomainCount / rawLeads.length).toFixed(3))
+      : 0;
+    const directExistingEmailCount = rawLeads.filter((lead) => Boolean(extractFirstEmailAddress(lead.email))).length;
+    const directEnrichmentEligibleCount = rawLeads.filter((lead) => {
+      if (extractFirstEmailAddress(lead.email)) return false;
+      return Boolean(String(lead.name ?? "").trim()) && isUsableCompanyDomain(String(lead.domain ?? ""));
+    }).length;
+    const directEnrichmentEligibleRate = rawLeads.length
+      ? Number((directEnrichmentEligibleCount / rawLeads.length).toFixed(3))
+      : 0;
+    const directUniqueCompanyCount = new Set(
+      rawLeads.map((lead) => normalizeCompanyKey(lead.company)).filter(Boolean)
+    ).size;
+    queryPlan.probeMetrics = {
+      candidateCount: rawLeads.length,
+      resolvedDomainCount: directResolvedDomainCount,
+      resolvedDomainRate: directResolvedDomainRate,
+      enrichmentEligibleCount: directEnrichmentEligibleCount,
+      enrichmentEligibleRate: directEnrichmentEligibleRate,
+      existingEmailCount: directExistingEmailCount,
+      uniqueCompanyCount: directUniqueCompanyCount,
+      icpAlignmentScore: Number(directProbeAlignment.score.toFixed(3)),
+      titleMatchRate: Number(directProbeAlignment.titleMatchRate.toFixed(3)),
+      companyKeywordMatchRate: Number(directProbeAlignment.companyKeywordMatchRate.toFixed(3)),
+      excludedKeywordHitRate: Number(directProbeAlignment.excludedKeywordHitRate.toFixed(3)),
+    };
+
+    const directCandidateFloor = input.maxLeads <= 50 ? 4 : input.maxLeads <= 150 ? 6 : 8;
+    const directResolvedDomainFloor = input.maxLeads <= 50 ? 0.45 : 0.55;
+    const fallbackReasons: string[] = [];
+    if (rawLeads.length < directCandidateFloor) {
+      fallbackReasons.push(`candidate_floor_miss:${rawLeads.length}/${directCandidateFloor}`);
+    }
+    if (directResolvedDomainRate < directResolvedDomainFloor) {
+      fallbackReasons.push(`domain_resolution_low:${directResolvedDomainRate}`);
+    }
+    if (directProbeAlignment.score < PROBE_ICP_ALIGNMENT_MIN_SCORE) {
+      fallbackReasons.push(`icp_alignment_low:${Number(directProbeAlignment.score.toFixed(3))}`);
+    }
+
+    if (fallbackReasons.length) {
+      queryPlan.mode = "people_then_company";
+      queryPlan.fallbackReason = fallbackReasons.join("; ");
+
+      const companySearchHits: Array<{ hit: ExaSearchHit; userLocation: string }> = [];
+      queryPlan.companyRequests = plannedCompanyRequests;
+      queryPlan.companyQueries = plannedCompanyRequests.map((request) => request.query);
+
+      for (const request of plannedCompanyRequests) {
+        const response = await exaSearch({
+          apiKey: input.exaApiKey,
+          query: request.query,
+          category: request.category,
+          numResults: request.numResults,
+          userLocation: request.userLocation,
+          additionalQueries: request.additionalQueries,
+        });
+        observedExaCostUsd += response.costUsd;
+        diagnostics.push({
+          stage: "company",
+          provider: "exa",
+          query: request.query,
+          count: response.hits.length,
+          includeDomainsCount: 0,
+          userLocation: request.userLocation,
+          costUsd: response.costUsd,
+        });
+
+        for (const hit of response.hits) {
+          companySearchHits.push({ hit, userLocation: request.userLocation || "" });
+        }
+      }
+
+      const qualifiedCompanies = qualifyCompanyHits({
+        hits: companySearchHits,
+        spec: queryPlan.searchSpec,
+        qualityPolicy: input.qualityPolicy,
+        limit: Math.max(peopleQueryLimit * MAX_COMPANY_NAMES_PER_PEOPLE_QUERY, 12),
+      });
+      const qualifiedCompanyKeySet = new Set(
+        qualifiedCompanies.flatMap((company) => companyAliasKeys(company.name)).filter(Boolean)
+      );
+      const qualifiedCompanyEntityIdSet = new Set(
+        qualifiedCompanies.map((company) => company.entityId).filter(Boolean)
+      );
+
+      for (const company of qualifiedCompanies) {
+        if (!company.domain || isNonCompanyProfileDomain(company.domain)) continue;
+        companyDomains.add(company.domain);
+        if (company.entityId) companyDomainByEntityId.set(company.entityId, company.domain);
+        setCompanyDomainMappings(company.name, company.domain, companyDomainByName);
+      }
+
+      queryPlan.qualifiedCompanyNames = qualifiedCompanies.map((company) => company.name);
+      const companyPeopleRequests = buildPeopleSearchRequests({
+        spec: queryPlan.searchSpec,
+        qualifiedCompanies,
+        maxRequests: peopleQueryLimit,
+        numResults: peopleResultsPerQuery,
+      });
+      queryPlan.peopleRequests = [...directPeopleRequests, ...companyPeopleRequests];
+      queryPlan.peopleQueries = queryPlan.peopleRequests.map((request) => request.query);
+
+      for (const request of companyPeopleRequests) {
+        if (rawLeads.length >= maxRaw) break;
+        const response = await exaSearch({
+          apiKey: input.exaApiKey,
+          query: request.query,
+          category: request.category,
+          numResults: request.numResults,
+          userLocation: request.userLocation,
+        });
+        observedExaCostUsd += response.costUsd;
+        diagnostics.push({
+          stage: "people",
+          provider: "exa",
+          query: request.query,
+          count: response.hits.length,
+          includeDomainsCount: qualifiedCompanies.length,
+          userLocation: request.userLocation,
+          costUsd: response.costUsd,
+        });
+        appendPeopleHitsToLeadPool({
+          hits: response.hits,
+          rawLeads,
+          seen,
+          maxRaw,
+          companyDomains,
+          companyDomainByName,
+          companyDomainByEntityId,
+          qualifiedCompanyKeySet,
+          qualifiedCompanyEntityIdSet,
+        });
+      }
+
+      await resolveCompanyDomainsWithHistoricalAndClearout({
+        rawLeads,
+        companyDomainByName,
+        diagnostics,
+      });
+      backfillLeadDomains({ rawLeads, companyDomainByEntityId, companyDomainByName });
+    } else {
+      queryPlan.mode = "people_first";
+      queryPlan.fallbackReason = "";
+      queryPlan.qualifiedCompanyNames = uniqueTrimmed(
+        rawLeads.map((lead) => normalizeText(lead.company)).filter(Boolean),
+        12
+      );
+    }
+
+    if (input.dataForSeoCredentials) {
+      const unresolvedAfterClearout = buildUnresolvedCompanyGroups({
+        rawLeads,
+        companyDomainByName,
+      });
+      const pendingTasks = await submitPendingDataForSeoTasks({
+        unresolvedGroups: unresolvedAfterClearout,
+        credentials: input.dataForSeoCredentials,
+        diagnostics,
+      });
+      if (pendingTasks.length) {
+        return {
+          queryPlan,
+          acceptedLeads: [],
+          rejectedLeads: [],
+          diagnostics,
+          emailEnrichment: {
+            attempted: 0,
+            matched: 0,
+            failed: 0,
+            provider: "emailfinder.batch",
+            error: "",
+            failureSummary: [],
+            failedSamples: [],
+          },
+          budgetUsedUsd: Number((observedExaCostUsd + observedDataForSeoCostUsd).toFixed(3)),
+          exaSpendUsd: Number(observedExaCostUsd.toFixed(3)),
+          dataForSeoSpendUsd: Number(observedDataForSeoCostUsd.toFixed(3)),
+          pendingDataForSeo: {
+            version: 1,
+            phase: "waiting_dataforseo",
+            queryPlan,
+            rawLeads,
+            diagnostics,
+            companyDomainEntries: companyDomainEntriesFromMap(companyDomainByName),
+            pendingDataForSeoTasks: pendingTasks,
+            observedExaCostUsd,
+            observedDataForSeoCostUsd,
+            officialWebsiteQueryLimit,
+          },
+        } satisfies ExaPeopleSourcingResult;
+      }
+    }
+
+    const unresolvedAfterDataForSeo = buildUnresolvedCompanyGroups({
+      rawLeads,
+      companyDomainByName,
+    });
+    await runExaFallbackCompanyResolution({
+      unresolvedGroups: unresolvedAfterDataForSeo,
+      exaApiKey: input.exaApiKey,
+      companyDomainByName,
+      diagnostics,
+      exaFallbackLimit: officialWebsiteQueryLimit,
+      onExaCost: (costUsd) => {
+        observedExaCostUsd += costUsd;
+      },
+    });
+    backfillLeadDomains({ rawLeads, companyDomainByEntityId, companyDomainByName });
+  }
+
+  const emailEnrichment = {
+    attempted: 0,
+    matched: 0,
+    failed: 0,
+    provider: "emailfinder.batch",
+    error: "",
+    failureSummary: [] as Array<{ reason: string; count: number }>,
+    failedSamples: [] as Array<{
+      id: string;
+      name: string;
+      domain: string;
+      reason: string;
+      error: string;
+      topAttemptEmail: string;
+      topAttemptVerdict: string;
+      topAttemptConfidence: string;
+      topAttemptReason: string;
+    }>,
+  };
+  const emailFinderApiBaseUrl = resolveEmailFinderApiBaseUrl(input.emailFinderApiBaseUrl);
+  const leadsNeedingEmailEnrichment = rawLeads.filter((lead) => !extractFirstEmailAddress(lead.email)).length;
+  const enrichmentEligibleLeads = rawLeads.filter((lead) => {
+    if (extractFirstEmailAddress(lead.email)) return false;
+    return Boolean(String(lead.name ?? "").trim()) && isUsableCompanyDomain(String(lead.domain ?? ""));
+  });
+  diagnostics.push({
+    stage: "email_enrichment",
+    provider: "exa",
+    query: `EmailFinder preflight: eligible ${enrichmentEligibleLeads.length}/${rawLeads.length}, existing_email ${rawLeads.length - leadsNeedingEmailEnrichment}, usable_domain ${rawLeads.filter((lead) => isUsableCompanyDomain(String(lead.domain ?? ""))).length}`,
+    count: enrichmentEligibleLeads.length,
+    includeDomainsCount: rawLeads.length,
+  });
+  if (leadsNeedingEmailEnrichment > 0 && !emailFinderApiBaseUrl) {
+    emailEnrichment.error = "EMAIL_FINDER_API_BASE_URL is missing";
+      diagnostics.push({
+        stage: "email_enrichment",
+        provider: "exa",
+        query: `EmailFinder batch skipped: ${emailEnrichment.error}`,
+        count: 0,
+        includeDomainsCount: leadsNeedingEmailEnrichment,
+    });
+  }
+  if (emailFinderApiBaseUrl) {
+    const enrichment = await enrichLeadsWithEmailFinderBatch({
+      leads: rawLeads,
+      apiBaseUrl: emailFinderApiBaseUrl,
+      verificationMode: input.emailFinderVerificationMode,
+      validatedMailsApiKey: input.emailFinderValidatedMailsApiKey,
+      maxCandidates: 12,
+      maxCredits: 7,
+      concurrency: 4,
+      timeoutMs: Math.max(
+        20_000,
+        Math.min(180_000, Number(process.env.EMAIL_FINDER_TIMEOUT_MS ?? 90_000) || 90_000)
+      ),
+    });
+    emailEnrichment.attempted = enrichment.attempted;
+    emailEnrichment.matched = enrichment.matched;
+    emailEnrichment.failed = enrichment.failed;
+    emailEnrichment.provider = enrichment.provider;
+    emailEnrichment.error = enrichment.error;
+    emailEnrichment.failureSummary = enrichment.failureSummary;
+    emailEnrichment.failedSamples = enrichment.failedSamples;
+    rawLeads.splice(0, rawLeads.length, ...enrichment.leads);
+    if (enrichment.attempted > 0 || enrichment.error) {
+      diagnostics.push({
+        stage: "email_enrichment",
+        provider: "exa",
+        query: enrichment.ok
+          ? `EmailFinder batch matched ${enrichment.matched}/${enrichment.attempted}`
+          : `EmailFinder batch failed: ${trimText(enrichment.error, 180)}`,
+        count: enrichment.matched,
+        includeDomainsCount: enrichment.attempted,
+      });
+    }
+  }
+
+  const acceptedLeads: ApifyLead[] = [];
+  const rejectedLeads: LeadAcceptanceDecision[] = [];
+  for (const lead of rawLeads) {
+    if (acceptedLeads.length >= input.maxLeads) break;
+    const domain =
+      (lead.email.includes("@") ? lead.email.split("@")[1] || "" : "") ||
+      resolveCompanyDomainByName(lead.company, companyDomainByName) ||
+      (isNonCompanyProfileDomain(lead.domain) ? "" : String(lead.domain ?? "").trim().toLowerCase()) ||
+      "";
+    const candidate: ApifyLead = {
+      ...lead,
+      domain,
+    };
+    const decision = evaluateLeadAgainstQualityPolicy({
+      lead: candidate,
+      policy: input.qualityPolicy,
+      allowMissingEmail: input.allowMissingEmail,
+    });
+    if (decision.accepted) {
+      acceptedLeads.push(candidate);
+    } else {
+      rejectedLeads.push(decision);
+    }
+  }
+
+  const exaQueryCount = diagnostics.filter(
+    (row) => row.provider === "exa" && row.stage !== "email_enrichment"
+  ).length;
+  const exaQueryCostUsd = Math.max(
+    0,
+    Math.min(0.05, Number(process.env.EXA_QUERY_COST_USD ?? 0.001) || 0.001)
+  );
+  const emailFinderLookupCostUsd = Math.max(
+    0,
+    Math.min(0.1, Number(process.env.EMAIL_FINDER_LOOKUP_COST_USD ?? 0) || 0)
+  );
+  const budgetUsedUsd = Number(
+    (
+      (observedExaCostUsd > 0 ? observedExaCostUsd : exaQueryCount * exaQueryCostUsd) +
+      observedDataForSeoCostUsd +
+      emailEnrichment.attempted * emailFinderLookupCostUsd
+    ).toFixed(3)
+  );
+  const exaSpendUsd = Number(
+    (observedExaCostUsd > 0 ? observedExaCostUsd : exaQueryCount * exaQueryCostUsd).toFixed(3)
+  );
+  const dataForSeoSpendUsd = Number(observedDataForSeoCostUsd.toFixed(3));
+
+  return {
+    queryPlan,
+    acceptedLeads,
+    rejectedLeads,
+    diagnostics,
+    emailEnrichment,
+    budgetUsedUsd,
+    exaSpendUsd,
+    dataForSeoSpendUsd,
+    pendingDataForSeo: null,
+  } satisfies ExaPeopleSourcingResult;
+}
+
 function stageFromValue(value: string): LeadChainStepStage | null {
   if (value === "prospect_discovery") return "prospect_discovery";
   if (value === "website_enrichment") return "website_enrichment";
@@ -421,12 +3695,12 @@ function validateLeadChainStageOrder(stageOrder: LeadChainStepStage[]) {
     return "Apify chain must end with email_discovery";
   }
   if (stageOrder.length === 1) {
-    return stageOrder[0] === "email_discovery"
+    return stageOrder[0] === "email_discovery" || stageOrder[0] === "website_enrichment"
       ? ""
-      : "Single-step chain must use email_discovery";
+      : "Single-step chain must use email_discovery or website_enrichment";
   }
-  if (stageOrder[0] !== "prospect_discovery") {
-    return "Multi-step chain must start with prospect_discovery";
+  if (stageOrder[0] !== "prospect_discovery" && stageOrder[0] !== "website_enrichment") {
+    return "Multi-step chain must start with prospect_discovery or website_enrichment";
   }
   for (let i = 1; i < stageOrder.length; i += 1) {
     const prev = stageOrder[i - 1];
@@ -469,8 +3743,10 @@ function collectSignalsFromUnknown(
   value: unknown,
   sink: {
     emails: Set<string>;
+    phones: Set<string>;
     domains: Set<string>;
     websites: Set<string>;
+    profileUrls: Set<string>;
     companies: Set<string>;
     queries: Set<string>;
   },
@@ -488,12 +3764,22 @@ function collectSignalsFromUnknown(
       const domain = parseDomainFromUrl(email.split("@")[1] ?? "");
       if (domain) sink.domains.add(domain);
     }
+    const phoneMatches = text.match(/\+?[0-9][0-9()\-\s]{7,}[0-9]/g) ?? [];
+    for (const phoneRaw of phoneMatches) {
+      const normalizedPhone = phoneRaw.replace(/[^0-9+]/g, "");
+      if (normalizedPhone.length >= 8) {
+        sink.phones.add(normalizedPhone);
+      }
+    }
 
     if (isLikelyUrl(text)) {
       const normalized = text.startsWith("http://") || text.startsWith("https://") ? text : `https://${text}`;
       sink.websites.add(normalized);
       const domain = parseDomainFromUrl(normalized);
       if (domain) sink.domains.add(domain);
+      if (/linkedin\.com\//i.test(normalized) || /(profile|person)/i.test(contextKey)) {
+        sink.profileUrls.add(normalized);
+      }
     } else if (isLikelyDomain(text)) {
       sink.domains.add(text.toLowerCase());
       sink.websites.add(`https://${text.toLowerCase()}`);
@@ -522,8 +3808,10 @@ function collectSignalsFromUnknown(
 function mergeChainData(base: LeadSourcingChainData, rows: unknown[]): LeadSourcingChainData {
   const sink = {
     emails: new Set(base.emails.map((item) => item.toLowerCase())),
+    phones: new Set(base.phones),
     domains: new Set(base.domains.map((item) => item.toLowerCase())),
     websites: new Set(base.websites),
+    profileUrls: new Set(base.profileUrls),
     companies: new Set(base.companies),
     queries: new Set(base.queries),
   };
@@ -537,7 +3825,9 @@ function mergeChainData(base: LeadSourcingChainData, rows: unknown[]): LeadSourc
     companies: uniqueTrimmed(Array.from(sink.companies), 120),
     websites: uniqueTrimmed(Array.from(sink.websites), 200),
     domains: uniqueTrimmed(Array.from(sink.domains), 200).map((item) => item.toLowerCase()),
+    profileUrls: uniqueTrimmed(Array.from(sink.profileUrls), 300),
     emails: uniqueTrimmed(Array.from(sink.emails), 400).map((item) => item.toLowerCase()),
+    phones: uniqueTrimmed(Array.from(sink.phones), 250),
   };
 }
 
@@ -545,83 +3835,17 @@ function preflightSeedChainDataFromStartState(input: {
   targetAudience: string;
   startState: SourcingStartState;
 }): LeadSourcingChainData {
-  const slug = trimText(input.targetAudience, 80)
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 36);
-  const baseDomain = `${slug || "target"}-seed.com`;
   const query = trimText(input.targetAudience, 140) || "b2b software revenue teams";
-  const data: LeadSourcingChainData = {
+  // Real-only preflight: never synthesize seed entities (domains/emails/phones/profiles).
+  return {
     queries: uniqueTrimmed([query], 120),
     companies: [],
     websites: [],
     domains: [],
+    profileUrls: [],
     emails: [],
+    phones: [],
   };
-  const signals = new Set(input.startState.availableSignals);
-  if (signals.has("company_list")) {
-    data.companies = uniqueTrimmed([`${slug || "Target"} Company`], 120);
-  }
-  if (signals.has("domain_list")) {
-    data.domains = uniqueTrimmed([baseDomain], 120).map((value) => value.toLowerCase());
-  }
-  if (signals.has("website_list")) {
-    data.websites = uniqueTrimmed([`https://${baseDomain}`], 120);
-  }
-  if (signals.has("email_list")) {
-    data.emails = uniqueTrimmed([`sample@${baseDomain}`], 120).map((value) => value.toLowerCase());
-  }
-  return data;
-}
-
-function syntheticSignalRowsForPreflight(input: {
-  targetAudience: string;
-  step: LeadSourcingChainStep;
-  producedSignals: SemanticSignal[];
-}) {
-  const seed = trimText(`${input.step.queryHint} ${input.targetAudience}`, 120)
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 36);
-  const domain = `${seed || "candidate"}-signal.com`;
-  const company = `${(seed || "target").replace(/-/g, " ").trim()} company`;
-  const linkedinProfile = `https://www.linkedin.com/in/${seed || "target-person"}`;
-  const salesNavUrl = `https://www.linkedin.com/sales/search/people?keywords=${encodeURIComponent(
-    trimText(input.targetAudience, 120) || "revenue leaders"
-  )}`;
-  const row: Record<string, unknown> = {};
-  const signals = new Set(input.producedSignals);
-  if (signals.has("query")) {
-    row.query = trimText(input.step.queryHint || input.targetAudience, 140) || "b2b software revenue teams";
-  }
-  if (signals.has("company_list")) {
-    row.company = company;
-    row.organization = company;
-    row.companyName = company;
-  }
-  if (signals.has("website_list")) {
-    row.website = `https://${domain}`;
-    row.url = `https://${domain}`;
-    row.startUrl = `https://${domain}`;
-  }
-  if (signals.has("domain_list")) {
-    row.domain = domain;
-    row.domainName = domain;
-  }
-  if (signals.has("email_list")) {
-    row.email = `contact@${domain}`;
-    row.workEmail = `hello@${domain}`;
-  }
-  if (signals.has("profile_url_list")) {
-    row.linkedinProfileUrl = linkedinProfile;
-    row.profileUrl = linkedinProfile;
-  }
-  if (signals.has("sales_nav_url")) {
-    row.salesNavUrl = salesNavUrl;
-  }
-  return Object.keys(row).length ? [row] : [];
 }
 
 async function preflightSourcingPlanCandidate(input: {
@@ -719,12 +3943,9 @@ async function preflightSourcingPlanCandidate(input: {
 
     const contract = input.contractsByActorId.get(step.actorId);
     const producedSignals = contract?.producedOutputs?.length ? contract.producedOutputs : defaultStageOutputs(step.stage);
-    const syntheticRows = syntheticSignalRowsForPreflight({
-      targetAudience: input.targetAudience,
-      step,
-      producedSignals,
-    });
-    chainData = mergeChainData(chainData, syntheticRows);
+    if (producedSignals.includes("query")) {
+      chainData = mergeChainData(chainData, [{ query: step.queryHint || input.targetAudience }]);
+    }
   }
 
   return {
@@ -856,6 +4077,9 @@ function canRuntimePopulateRequiredKey(stage: LeadChainStepStage, token: string)
   }
   if (token.includes("email") || token.includes("mailbox")) {
     return stage === "email_discovery";
+  }
+  if (token.includes("phone") || token.includes("mobile") || token.includes("whatsapp")) {
+    return stage !== "email_discovery";
   }
   if (token.includes("company") || token.includes("organization") || token.includes("org")) {
     return stage !== "prospect_discovery";
@@ -1007,6 +4231,7 @@ const SEMANTIC_SIGNAL_VALUES: SemanticSignal[] = [
   "website_list",
   "profile_url_list",
   "email_list",
+  "phone_list",
   "sales_nav_url",
   "auth_token",
   "file_upload",
@@ -1035,6 +4260,13 @@ function normalizeSemanticSignal(value: unknown): SemanticSignal | null {
     profile_url_list: "profile_url_list",
     emails: "email_list",
     email_list: "email_list",
+    phone: "phone_list",
+    phones: "phone_list",
+    phonenumber: "phone_list",
+    phone_numbers: "phone_list",
+    phone_list: "phone_list",
+    mobile: "phone_list",
+    mobile_number: "phone_list",
     salesnav_url: "sales_nav_url",
     sales_nav_url: "sales_nav_url",
     salesnavigator_url: "sales_nav_url",
@@ -1094,6 +4326,10 @@ function semanticSignalsFromSchemaTokens(tokens: string[]): SemanticSignal[] {
       out.add("email_list");
       continue;
     }
+    if (normalized.includes("phone") || normalized.includes("mobile") || normalized.includes("whatsapp")) {
+      out.add("phone_list");
+      continue;
+    }
     if (
       normalized.includes("file") ||
       normalized.includes("upload") ||
@@ -1112,7 +4348,7 @@ function semanticSignalsFromSchemaTokens(tokens: string[]): SemanticSignal[] {
 
 function defaultStageOutputs(stage: LeadChainStepStage): SemanticSignal[] {
   if (stage === "prospect_discovery") {
-    return ["company_list", "website_list", "profile_url_list"];
+    return ["company_list", "website_list", "profile_url_list", "phone_list"];
   }
   if (stage === "website_enrichment") {
     return ["company_list", "website_list", "domain_list"];
@@ -1125,7 +4361,9 @@ function availableSignalsFromChainData(chainData: LeadSourcingChainData) {
   if (chainData.companies.length) available.add("company_list");
   if (chainData.domains.length) available.add("domain_list");
   if (chainData.websites.length) available.add("website_list");
+  if (chainData.profileUrls.length) available.add("profile_url_list");
   if (chainData.emails.length) available.add("email_list");
+  if (chainData.phones.length) available.add("phone_list");
   return available;
 }
 
@@ -1136,8 +4374,10 @@ function deriveSourcingStartState(input: {
 }): SourcingStartState {
   const sink = {
     emails: new Set<string>(),
+    phones: new Set<string>(),
     domains: new Set<string>(),
     websites: new Set<string>(),
+    profileUrls: new Set<string>(),
     companies: new Set<string>(),
     queries: new Set<string>(),
   };
@@ -1152,7 +4392,9 @@ function deriveSourcingStartState(input: {
   const signals = new Set<SemanticSignal>(["query"]);
   if (sink.domains.size) signals.add("domain_list");
   if (sink.websites.size) signals.add("website_list");
+  if (sink.profileUrls.size) signals.add("profile_url_list");
   if (sink.emails.size) signals.add("email_list");
+  if (sink.phones.size) signals.add("phone_list");
   if (sink.companies.size) signals.add("company_list");
   return {
     availableSignals: Array.from(signals),
@@ -1160,8 +4402,60 @@ function deriveSourcingStartState(input: {
       domainCount: sink.domains.size,
       websiteCount: sink.websites.size,
       emailCount: sink.emails.size,
+      phoneCount: sink.phones.size,
     },
   };
+}
+
+function buildInitialChainData(input: {
+  targetAudience: string;
+  triggerContext?: string;
+  offer?: string;
+}): LeadSourcingChainData {
+  const peopleQuery = derivePeopleDiscoveryQuery(input.targetAudience);
+  const companyQuery = deriveCompanyDiscoveryQuery(input.targetAudience);
+  const sanitizedOffer = sanitizeLeadDiscoveryQuery(input.offer ?? "");
+  return {
+    queries: uniqueTrimmed(
+      [peopleQuery, companyQuery, sanitizedOffer]
+        .filter(Boolean)
+        .map((item) => trimText(item, 180)),
+      120
+    ),
+    companies: [],
+    websites: [],
+    domains: [],
+    profileUrls: [],
+    emails: [],
+    phones: [],
+  };
+}
+
+function mergeStartStateWithChainData(input: {
+  startState: SourcingStartState;
+  chainData: LeadSourcingChainData;
+}) {
+  const availableSignals = new Set<SemanticSignal>(input.startState.availableSignals);
+  for (const signal of availableSignalsFromChainData(input.chainData)) {
+    availableSignals.add(signal);
+  }
+
+  return {
+    availableSignals: Array.from(availableSignals),
+    inferredSeeds: {
+      domainCount: Math.max(input.startState.inferredSeeds.domainCount, input.chainData.domains.length),
+      websiteCount: Math.max(input.startState.inferredSeeds.websiteCount, input.chainData.websites.length),
+      emailCount: Math.max(input.startState.inferredSeeds.emailCount, input.chainData.emails.length),
+      phoneCount: Math.max(input.startState.inferredSeeds.phoneCount, input.chainData.phones.length),
+    },
+  } satisfies SourcingStartState;
+}
+
+function hasBootstrapCoverage(chainData: LeadSourcingChainData) {
+  return (
+    chainData.companies.length >= 3 &&
+    (chainData.domains.length >= 2 || chainData.websites.length >= 2 || chainData.profileUrls.length >= 2)
+  );
 }
 
 function buildHeuristicSemanticContract(input: {
@@ -1171,10 +4465,10 @@ function buildHeuristicSemanticContract(input: {
 }): ActorSemanticContract {
   const schemaKeys = schemaSummaryKeys(input.profile?.schemaSummary);
   const requiredInputs = semanticSignalsFromSchemaTokens(schemaKeys.requiredKeys);
-  const knownSignals = semanticSignalsFromSchemaTokens(schemaKeys.knownKeys);
   const metadataBlob = `${input.actor.title} ${input.actor.description} ${input.actor.categories.join(" ")}`.toLowerCase();
   const producedOutputs = new Set<SemanticSignal>(defaultStageOutputs(input.stage));
   if (/(email|mail|contact|finder|verify|enrich)/.test(metadataBlob)) producedOutputs.add("email_list");
+  if (/(phone|mobile|whatsapp|contact number|telephone)/.test(metadataBlob)) producedOutputs.add("phone_list");
   if (/(linkedin|profile)/.test(metadataBlob)) producedOutputs.add("profile_url_list");
   if (/(domain|website|site|crawl|scrap)/.test(metadataBlob)) {
     producedOutputs.add("website_list");
@@ -1182,7 +4476,7 @@ function buildHeuristicSemanticContract(input: {
   }
   if (/(company|organization|org)/.test(metadataBlob)) producedOutputs.add("company_list");
 
-  const mergedRequired = new Set<SemanticSignal>([...requiredInputs, ...knownSignals.slice(0, 2)]);
+  const mergedRequired = new Set<SemanticSignal>(requiredInputs);
 
   // Tighten contract inference when actor metadata implies hidden prerequisites.
   const salesNavLike = /(sales\s*navigator|salesnav)/.test(metadataBlob);
@@ -1576,64 +4870,89 @@ function isRoleCompanyIcpAudience(targetAudience: string) {
   return roleSignals && orgSignals;
 }
 
+function actorSurfaceSignals(actor: ApifyStoreActor) {
+  const blob = `${actor.title} ${actor.description} ${actor.categories.join(" ")}`.toLowerCase();
+  return {
+    localSurface: /(google maps|places|yelp|gmb|google business profile|store listing|local business)/.test(blob),
+    bootstrapSearchSurface:
+      /(google search scraper|serp scraper|search results scraper|search engine results|bing search scraper|duckduckgo scraper)/.test(
+        blob
+      ),
+    eventSurface: /(event exhibitor|conference exhibitor|trade show|tradeshow|attendee list|event sponsor)/.test(blob),
+    directorySurface: /(europages|yellow pages|pages jaunes|thomasnet|business directory|vendor directory|clutch|g2|appsumo|capterra)/.test(
+      blob
+    ),
+    legalSurface: /(lawyer|attorney|law firm|legal services|justia|avvo|bar association|legal directory)/.test(blob),
+    realEstateSurface: /(real estate|realtor|brokerage|property listing|zillow|domain\.com\.au|mls)/.test(blob),
+    classifiedSurface: /(gumtree|craigslist|classified|for sale|buy and sell|marketplace listing|listing ads)/.test(blob),
+    consumerSurface:
+      /(meta ads|facebook|instagram|tiktok|twitter|x\/twitter|reddit|youtube|influencer|shopify|amazon|etsy|aliexpress|social media)/.test(
+        blob
+      ),
+    seoSurface: /(backlink|seo audit|seo prospecting|link building)/.test(blob),
+    jobsSurface: /(job scraper|jobs scraper|job board|job listing|hiring scraper|career scraper|vacancy|career site)/.test(blob),
+    pluginSurface: /(wordpress plugin|plugin scraper|theme scraper|chrome extension scraper)/.test(blob),
+    researchSurface: /(research organization registry|ror scraper|academic|university|scholar|lab directory)/.test(blob),
+    toolingSurface:
+      /(campaign creator|lead formatter|formatter|qualifier|validator|verification|bounce checker|email campaign|template generator)/.test(
+        blob
+      ),
+    regionalMismatchedSurface:
+      /(german|deutsch|impressum|siret|immobilienscout|immonet|propertyfinder|yandex maps|fmcsa|texas state|kleinanzeigen|dot crawler)/.test(
+        blob
+      ),
+    coreLeadSurface: /(lead|contact|prospect|company|email|linkedin|business|domain|enrich|finder|decision maker|crm)/.test(
+      blob
+    ),
+    emailValidationOnly: /(email validator|verify email|bounce checker|deliverability checker)/.test(blob),
+  };
+}
+
+function audienceSurfaceMismatchReasonForActor(targetAudience: string, actor: ApifyStoreActor) {
+  const normalizedAudience = String(targetAudience ?? "").toLowerCase();
+  if (!isRoleCompanyIcpAudience(normalizedAudience)) return "";
+  const audienceWantsLocal = /(local|near me|nearby|by city|by state|by country|geo[- ]?target|regional|territory)/.test(
+    normalizedAudience
+  );
+  const audienceWantsRegional = /(german|deutsch|dach|france|french|uk|united kingdom|europe|emea|latam|apac)/.test(
+    normalizedAudience
+  );
+  const audienceWantsEvents = /(event|conference|webinar|summit|exhibitor|trade show|tradeshow)/.test(normalizedAudience);
+  const audienceWantsDirectory = /(directory|marketplace|vendor list|listing|catalog)/.test(normalizedAudience);
+  const audienceWantsResearch = /(research|university|academic|lab|institute|scholar)/.test(normalizedAudience);
+  const audienceWantsLegal = /(legal|law|attorney|law firm|compliance counsel)/.test(normalizedAudience);
+  const audienceWantsRealEstate = /(real estate|realtor|brokerage|property|mortgage broker)/.test(normalizedAudience);
+  const surface = actorSurfaceSignals(actor);
+  if (surface.emailValidationOnly) return "validator_not_source";
+  if (surface.bootstrapSearchSurface) return "";
+  if (surface.localSurface && !audienceWantsLocal) return "local_business_surface_for_nonlocal_icp";
+  if (surface.eventSurface && !audienceWantsEvents) return "event_surface_without_event_icp";
+  if (surface.directorySurface && !audienceWantsDirectory) return "directory_surface_without_directory_icp";
+  if (surface.legalSurface && !audienceWantsLegal) return "legal_surface_without_legal_icp";
+  if (surface.realEstateSurface && !audienceWantsRealEstate) return "real_estate_surface_without_real_estate_icp";
+  if (surface.classifiedSurface) return "classified_surface";
+  if (surface.toolingSurface) return "tooling_not_data_source";
+  if (surface.researchSurface && !audienceWantsResearch) return "research_surface_without_research_icp";
+  if (surface.regionalMismatchedSurface && !audienceWantsRegional) return "regional_surface_without_matching_geo_icp";
+  if (surface.seoSurface) return "seo_backlink_surface";
+  if (surface.jobsSurface) return "jobs_surface";
+  if (surface.pluginSurface) return "plugin_surface";
+  if (surface.consumerSurface) return "consumer_or_local_surface";
+  if (!surface.coreLeadSurface) return "generic_non_lead_surface";
+  return "";
+}
+
 function firstStepAudienceMismatchReason(input: {
   targetAudience: string;
   candidate: LeadSourcingChainPlan;
   actorById: Map<string, ApifyStoreActor>;
 }) {
-  const normalizedAudience = String(input.targetAudience ?? "").toLowerCase();
-  if (!isRoleCompanyIcpAudience(normalizedAudience)) return "";
   const firstStep = input.candidate.steps[0];
   if (!firstStep) return "";
   const actor = input.actorById.get(firstStep.actorId);
   if (!actor) return "";
-  const blob = `${actor.title} ${actor.description} ${actor.categories.join(" ")}`.toLowerCase();
-  const audienceWantsLocal = /(local|near me|nearby|by city|by state|by country|geo[- ]?target|regional|territory)/.test(
-    normalizedAudience
-  );
-  const audienceWantsEvents = /(event|conference|webinar|summit|exhibitor|trade show|tradeshow)/.test(normalizedAudience);
-  const audienceWantsDirectory = /(directory|marketplace|vendor list|listing|catalog)/.test(normalizedAudience);
-  const localSurface = /(google maps|places|yelp|gmb|google business profile|store listing|local business)/.test(blob);
-  const eventSurface = /(event exhibitor|conference exhibitor|trade show|tradeshow|attendee list|event sponsor)/.test(blob);
-  const directorySurface = /(europages|yellow pages|business directory|vendor directory|clutch|g2|appsumo|capterra)/.test(blob);
-  const consumerSurface = /(meta ads|facebook|instagram|tiktok|twitter|x\/twitter|reddit|youtube|influencer|shopify|amazon|etsy|aliexpress|social media)/.test(
-    blob
-  );
-  const seoSurface = /(backlink|seo audit|seo prospecting|link building)/.test(blob);
-  const jobsSurface = /(job scraper|jobs scraper|job board|hiring scraper|career scraper|vacancy)/.test(blob);
-  const pluginSurface = /(wordpress plugin|plugin scraper|theme scraper|chrome extension scraper)/.test(blob);
-  const coreLeadSurface = /(lead|contact|prospect|company|email|linkedin|business|domain|enrich|finder|decision maker|crm)/.test(
-    blob
-  );
-  const emailValidationOnly = /(email validator|verify email|bounce checker|deliverability checker)/.test(blob);
-  if (emailValidationOnly) {
-    return `audience_actor_mismatch:${firstStep.actorId}:validator_not_source`;
-  }
-  if (localSurface && !audienceWantsLocal) {
-    return `audience_actor_mismatch:${firstStep.actorId}:local_business_surface_for_nonlocal_icp`;
-  }
-  if (eventSurface && !audienceWantsEvents) {
-    return `audience_actor_mismatch:${firstStep.actorId}:event_surface_without_event_icp`;
-  }
-  if (directorySurface && !audienceWantsDirectory) {
-    return `audience_actor_mismatch:${firstStep.actorId}:directory_surface_without_directory_icp`;
-  }
-  if (seoSurface) {
-    return `audience_actor_mismatch:${firstStep.actorId}:seo_backlink_surface`;
-  }
-  if (jobsSurface) {
-    return `audience_actor_mismatch:${firstStep.actorId}:jobs_surface`;
-  }
-  if (pluginSurface) {
-    return `audience_actor_mismatch:${firstStep.actorId}:plugin_surface`;
-  }
-  if (consumerSurface) {
-    return `audience_actor_mismatch:${firstStep.actorId}:consumer_or_local_surface`;
-  }
-  if (!coreLeadSurface) {
-    return `audience_actor_mismatch:${firstStep.actorId}:generic_non_lead_surface`;
-  }
-  return "";
+  const mismatchReason = audienceSurfaceMismatchReasonForActor(input.targetAudience, actor);
+  return mismatchReason ? `audience_actor_mismatch:${firstStep.actorId}:${mismatchReason}` : "";
 }
 
 async function critiqueCandidateFeasibilityWithLlm(input: {
@@ -1753,6 +5072,126 @@ const APIFY_STORE_SEARCH_LIMIT = 40;
 const APIFY_STORE_MAX_QUERIES_PER_STAGE = 8;
 const APIFY_STORE_MAX_RESULTS = 160;
 
+function queryHasIcpAnchor(text: string) {
+  return hasRoleCompanyIcpSignal(text);
+}
+
+function compactAudienceAnchor(targetAudience: string) {
+  const normalized = normalizeText(targetAudience).toLowerCase();
+  const roleMatch = normalized.match(
+    /\b(cro|cmo|ceo|coo|founder|owner|head|vp|director|manager|leader|revenue|sales|marketing|growth|demand gen|revops)\b/
+  );
+  const companyBits = [
+    /\bb2b\b/.test(normalized) ? "b2b" : "",
+    /\bsaas\b/.test(normalized) ? "saas" : "",
+    /\bsoftware\b/.test(normalized) ? "software" : "",
+    /\benterprise\b/.test(normalized) ? "enterprise" : "",
+    /\bmid[- ]?market\b/.test(normalized) ? "mid-market" : "",
+  ].filter(Boolean);
+  const tokens = [roleMatch?.[1] ?? "", ...companyBits].filter(Boolean);
+  return trimText(tokens.join(" "), 36);
+}
+
+const ROLE_KEYWORD_PATTERN =
+  /\b(cro|cmo|ceo|coo|founder|owner|head|vp|director|manager|leader|revenue|sales|marketing|growth|demand gen|revops|operations)\b/gi;
+
+const TRIGGER_LIKE_TEST_PATTERN =
+  /\b(demo request|requested demo|book(ed)? demo|started demo|abandoned demo|trial signup|signed up|no show|did not book|not book(ed)?|within 24 hours|within 48 hours)\b/i;
+const TRIGGER_LIKE_REPLACE_PATTERN =
+  /\b(demo request|requested demo|book(ed)? demo|started demo|abandoned demo|trial signup|signed up|no show|did not book|not book(ed)?|within 24 hours|within 48 hours)\b/gi;
+
+function sanitizeLeadDiscoveryQuery(raw: string) {
+  if (!raw) return "";
+  let text = normalizeText(raw);
+  text = text.replace(/\btrigger\b\s*[:\-].*$/i, "").trim();
+  if (!text) return "";
+  if (TRIGGER_LIKE_TEST_PATTERN.test(text) && !hasRoleCompanyIcpSignal(text)) {
+    return "";
+  }
+  text = text.replace(TRIGGER_LIKE_REPLACE_PATTERN, " ").replace(/\s+/g, " ").trim();
+  return trimText(text, 140);
+}
+
+function deriveCompanyDiscoveryQuery(targetAudience: string) {
+  const normalized = sanitizeLeadDiscoveryQuery(targetAudience);
+  if (!normalized) return "";
+  let companyFocus = normalized.replace(ROLE_KEYWORD_PATTERN, " ").replace(/\s+/g, " ").trim();
+  if (!companyFocus) {
+    companyFocus = normalized;
+  }
+  if (!/\b(compan(y|ies)|team|teams|organization|organizations|business|businesses|saas|software|enterprise|startup|startups)\b/i.test(companyFocus)) {
+    companyFocus = `${companyFocus} companies`;
+  }
+  return trimText(companyFocus, 140);
+}
+
+function derivePeopleDiscoveryQuery(targetAudience: string) {
+  const normalized = sanitizeLeadDiscoveryQuery(targetAudience);
+  return normalized || trimText(targetAudience, 140);
+}
+
+function anchorQueriesToAudience(queries: string[], targetAudience: string, stage: LeadChainStepStage) {
+  const audience = trimText(targetAudience, 80);
+  const compactAnchor = compactAudienceAnchor(targetAudience) || "b2b saas";
+  const suffix =
+    stage === "email_discovery"
+      ? `${compactAnchor} work email`
+      : stage === "website_enrichment"
+        ? `${compactAnchor} company website`
+        : compactAnchor;
+  const expanded: string[] = [];
+  for (const query of queries) {
+    const normalized = sanitizeLeadDiscoveryQuery(query) || normalizeText(query);
+    if (!normalized) continue;
+    expanded.push(normalized);
+    if (queryHasIcpAnchor(normalized)) continue;
+    expanded.push(trimText(`${normalized} ${suffix}`, 96));
+    if (audience) {
+      expanded.push(trimText(`${normalized} ${audience}`, 110));
+    }
+  }
+  return uniqueTrimmed(expanded, APIFY_STORE_MAX_QUERIES_PER_STAGE);
+}
+
+function addCoverageQueries(input: {
+  queries: string[];
+  targetAudience: string;
+  stage: LeadChainStepStage;
+}) {
+  const anchor = compactAudienceAnchor(input.targetAudience) || "b2b saas";
+  const roleCue = anchor.includes("manager") || anchor.includes("director") || anchor.includes("vp") ? anchor : `${anchor} manager`;
+  const companyQuery = deriveCompanyDiscoveryQuery(input.targetAudience);
+  const peopleQuery = derivePeopleDiscoveryQuery(input.targetAudience);
+  const coverage =
+    input.stage === "prospect_discovery"
+      ? [
+          peopleQuery,
+          companyQuery,
+          `linkedin leads scraper ${roleCue}`,
+          `b2b decision maker leads ${anchor}`,
+          `company employee scraper ${anchor}`,
+          `google search results scraper ${anchor}`,
+        ]
+      : input.stage === "website_enrichment"
+        ? [
+          `company domain enrichment ${anchor}`,
+          `company website finder ${anchor}`,
+          `domain from company name ${anchor}`,
+          `serp scraper company websites ${anchor}`,
+        ]
+      : [
+            peopleQuery,
+            companyQuery,
+            `linkedin to work email ${anchor}`,
+            `business email finder ${anchor}`,
+            `email from domain and name ${anchor}`,
+          ];
+  return uniqueTrimmed(
+    [...input.queries.map((query) => sanitizeLeadDiscoveryQuery(query) || query), ...coverage],
+    APIFY_STORE_MAX_QUERIES_PER_STAGE
+  );
+}
+
 async function planActorDiscoveryQueries(input: {
   targetAudience: string;
   triggerContext?: string;
@@ -1772,6 +5211,8 @@ async function planActorDiscoveryQueries(input: {
     "Goal: high recall + high relevance across all potential actors (single-step or multi-step chains).",
     "Targeting rule: prioritize role/company ICP fit from targetAudience.",
     "Treat triggerContext as secondary ranking context. Do not anchor store searches on trigger phrases unless they are required to find the ICP.",
+    "For broad audiences, split retrieval into two families: company-discovery queries first, then people-discovery queries constrained by company context.",
+    "Use geo/segment partitions when needed to keep each query focused (for example city/region/sub-vertical slices).",
     "Initial runtime inputs at step 0 are limited to startState.availableSignals.",
     "If startState has only query (and no profile/domain/email seeds), avoid searches biased toward actors that require pre-existing LinkedIn URLs, Sales Navigator URLs, uploaded files, or user auth cookies.",
     "Return distinct searches for three stages: prospect_discovery, website_enrichment, email_discovery.",
@@ -1852,6 +5293,25 @@ async function planActorDiscoveryQueries(input: {
     ),
   };
 
+  plan.prospectQueries = anchorQueriesToAudience(plan.prospectQueries, input.targetAudience, "prospect_discovery");
+  plan.websiteQueries = anchorQueriesToAudience(plan.websiteQueries, input.targetAudience, "website_enrichment");
+  plan.emailQueries = anchorQueriesToAudience(plan.emailQueries, input.targetAudience, "email_discovery");
+  plan.prospectQueries = addCoverageQueries({
+    queries: plan.prospectQueries,
+    targetAudience: input.targetAudience,
+    stage: "prospect_discovery",
+  });
+  plan.websiteQueries = addCoverageQueries({
+    queries: plan.websiteQueries,
+    targetAudience: input.targetAudience,
+    stage: "website_enrichment",
+  });
+  plan.emailQueries = addCoverageQueries({
+    queries: plan.emailQueries,
+    targetAudience: input.targetAudience,
+    stage: "email_discovery",
+  });
+
   return { mode: "openai", plan };
 }
 
@@ -1868,15 +5328,12 @@ function actorCandidateScore(input: {
     pricingModel.includes("FLAT_PRICE_PER_MONTH") || pricingModel.includes("SUBSCRIPTION") ? 60 : 0;
   const expensiveRunPenalty = input.actor.pricePerUnitUsd > 2 ? Math.min(40, input.actor.pricePerUnitUsd * 6) : 0;
   const freeTrialBoost = input.actor.trialMinutes > 0 ? 8 : 0;
-  const metadataBlob = `${input.actor.title} ${input.actor.description} ${input.actor.categories.join(" ")}`.toLowerCase();
   const icpRoleCompany = isRoleCompanyIcpAudience(input.targetAudience);
-  const leadSurface = /(b2b|saas|software|linkedin|crunchbase|apollo|company|contact|email|domain|prospect|decision maker|enrich)/.test(
-    metadataBlob
-  );
-  const offSurface = /(facebook|instagram|tiktok|twitter|x\/twitter|google maps|places|yelp|directory|jobs|plugin|wordpress|backlink|seo)/.test(
-    metadataBlob
-  );
-  const audienceFitBoost = icpRoleCompany ? (leadSurface ? 22 : 0) - (offSurface ? 34 : 0) : 0;
+  const surface = actorSurfaceSignals(input.actor);
+  const mismatchReason = audienceSurfaceMismatchReasonForActor(input.targetAudience, input.actor);
+  const leadSurfaceBoost = icpRoleCompany && surface.coreLeadSurface ? 26 : 0;
+  const offSurfacePenalty = icpRoleCompany && !surface.coreLeadSurface ? 36 : 0;
+  const mismatchPenalty = icpRoleCompany && mismatchReason ? 220 : 0;
   return (
     actorScore(input.actor) +
     input.matchedQueries * 6 +
@@ -1885,7 +5342,9 @@ function actorCandidateScore(input: {
     freeTrialBoost -
     monthlyPenalty -
     expensiveRunPenalty +
-    audienceFitBoost
+    leadSurfaceBoost -
+    offSurfacePenalty -
+    mismatchPenalty
   );
 }
 
@@ -1991,7 +5450,12 @@ async function buildApifyActorPool(input: {
     const pricingModel = String(row.actor.pricingModel ?? "").toUpperCase();
     return !pricingModel.includes("FLAT_PRICE_PER_MONTH") && !pricingModel.includes("SUBSCRIPTION");
   });
-  const rankingPool = pricingSafeRanked.length ? pricingSafeRanked : ranked;
+  const rankingPoolBase = pricingSafeRanked.length ? pricingSafeRanked : ranked;
+  const roleCompanyIcp = isRoleCompanyIcpAudience(input.targetAudience);
+  const audienceScopedPool = roleCompanyIcp
+    ? rankingPoolBase.filter((row) => !audienceSurfaceMismatchReasonForActor(input.targetAudience, row.actor))
+    : rankingPoolBase;
+  const rankingPool = audienceScopedPool;
 
   const selected = new Set<string>();
   for (const stage of ["prospect_discovery", "website_enrichment", "email_discovery"] as const) {
@@ -2017,6 +5481,8 @@ async function buildApifyActorPool(input: {
     searchDiagnostics,
     queryPlanMode: queryPlanResult.mode,
     queryPlan: queryPlanResult.plan,
+    audienceScopedActorCount: audienceScopedPool.length,
+    audienceScopedRejectedCount: rankingPoolBase.length - audienceScopedPool.length,
   };
 }
 
@@ -2129,6 +5595,512 @@ async function selectPlanningActorsWithLlm(input: {
   }
 }
 
+async function scoreFirstStepActorsWithLlm(input: {
+  actors: ApifyStoreActor[];
+  targetAudience: string;
+  triggerContext?: string;
+  offer: string;
+  startState: SourcingStartState;
+  contractsByActorId: Map<string, ActorSemanticContract>;
+}) {
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey || !input.actors.length) {
+    return new Map<string, { suitable: boolean; score: number; reason: string }>();
+  }
+
+  try {
+    const shortlist = input.actors.slice(0, 120).map((actor) => {
+      const contract = input.contractsByActorId.get(actor.actorId);
+      return {
+        actorId: actor.actorId,
+        stageHint: stageFromActor(actor),
+        title: trimText(actor.title, 120),
+        description: trimText(actor.description, 220),
+        categories: actor.categories.slice(0, 6),
+        requiredInputs: contract?.requiredInputs ?? [],
+        producedOutputs: contract?.producedOutputs ?? [],
+        requiresAuth: Boolean(contract?.requiresAuth),
+        requiresFileInput: Boolean(contract?.requiresFileInput),
+      };
+    });
+
+    const prompt = [
+      "Score whether each actor is suitable as STEP 1 for B2B lead sourcing.",
+      "Goal: avoid expensive probes on actors that cannot start from current inputs or are irrelevant to ICP.",
+      "Targeting rule: targetAudience role/company ICP is primary; triggerContext is secondary.",
+      "First-step actor should discover target people/companies for outreach (not generic local/business directories, jobs boards, or unrelated data surfaces).",
+      "If actor requires missing startState signals (auth/file/profile/sales nav) mark unsuitable.",
+      "Return strict JSON only.",
+      '{ "actors": [{ "actorId": string, "suitable": boolean, "score": number, "reason": string }] }',
+      `Context: ${JSON.stringify({
+        targetAudience: input.targetAudience,
+        triggerContext: input.triggerContext ?? "",
+        offer: input.offer,
+        startState: input.startState,
+      })}`,
+      `actorPool: ${JSON.stringify(shortlist)}`,
+    ].join("\n");
+
+    const model = resolveLlmModel("lead_chain_selection", { prompt });
+    const response = await fetch("https://api.openai.com/v1/responses", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model,
+        input: prompt,
+        text: { format: { type: "json_object" } },
+        max_output_tokens: 2200,
+      }),
+    });
+    const raw = await response.text();
+    if (!response.ok) {
+      return new Map<string, { suitable: boolean; score: number; reason: string }>();
+    }
+
+    let payload: unknown = {};
+    try {
+      payload = JSON.parse(raw);
+    } catch {
+      payload = {};
+    }
+    const parsed = parseLooseJsonObject(extractOutputText(payload));
+    const root = asRecord(parsed);
+    const rows = Array.isArray(root.actors) ? root.actors : [];
+    const decisions = new Map<string, { suitable: boolean; score: number; reason: string }>();
+    for (const rowRaw of rows) {
+      const row = asRecord(rowRaw);
+      const actorId = String(row.actorId ?? "").trim();
+      if (!actorId) continue;
+      decisions.set(actorId.toLowerCase(), {
+        suitable: Boolean(row.suitable),
+        score: Math.max(0, Math.min(1, Number(row.score ?? 0) || 0)),
+        reason: trimText(row.reason, 220),
+      });
+    }
+    return decisions;
+  } catch {
+    return new Map<string, { suitable: boolean; score: number; reason: string }>();
+  }
+}
+
+function bootstrapCandidateScore(input: {
+  actor: ApifyStoreActor;
+  stage: LeadChainStepStage;
+  contract?: ActorSemanticContract;
+}) {
+  const outputSignals = new Set(input.contract?.producedOutputs ?? defaultStageOutputs(input.stage));
+  const signalScore =
+    (outputSignals.has("company_list") ? 16 : 0) +
+    (outputSignals.has("domain_list") ? 14 : 0) +
+    (outputSignals.has("website_list") ? 12 : 0) +
+    (outputSignals.has("profile_url_list") ? 8 : 0) +
+    (outputSignals.has("email_list") ? 4 : 0);
+  const stageScore = input.stage === "prospect_discovery" ? 24 : input.stage === "website_enrichment" ? 18 : 8;
+  return actorScore(input.actor) + signalScore + stageScore;
+}
+
+async function selectBootstrapActorsWithLlm(input: {
+  actors: ApifyStoreActor[];
+  contractsByActorId: Map<string, ActorSemanticContract>;
+  startState: SourcingStartState;
+  targetAudience: string;
+  triggerContext?: string;
+  offer: string;
+}) {
+  const eligibleRows = input.actors
+    .map((actor) => {
+      const contract = input.contractsByActorId.get(actor.actorId);
+      const stage = stageFromActor(actor);
+      const missingStep0Signals = missingSignalsAtStepZero({
+        contract,
+        startState: input.startState,
+      });
+      const mismatchReason = audienceSurfaceMismatchReasonForActor(input.targetAudience, actor);
+      const outputSignals = contract?.producedOutputs?.length
+        ? contract.producedOutputs
+        : defaultStageOutputs(stage);
+      const outputSignalSet = new Set(outputSignals);
+      const providesBootstrapSignals =
+        outputSignalSet.has("company_list") ||
+        outputSignalSet.has("domain_list") ||
+        outputSignalSet.has("website_list") ||
+        outputSignalSet.has("profile_url_list");
+      return {
+        actor,
+        contract,
+        stage,
+        missingStep0Signals,
+        mismatchReason,
+        providesBootstrapSignals,
+      };
+    })
+    .filter((row) => !row.missingStep0Signals.length)
+    .filter((row) => !row.contract?.requiresAuth && !row.contract?.requiresFileInput)
+    .sort((a, b) => {
+      const aScore =
+        bootstrapCandidateScore({ actor: a.actor, stage: a.stage, contract: a.contract }) -
+        (a.mismatchReason ? 80 : 0) +
+        (a.providesBootstrapSignals ? 18 : 0);
+      const bScore =
+        bootstrapCandidateScore({ actor: b.actor, stage: b.stage, contract: b.contract }) -
+        (b.mismatchReason ? 80 : 0) +
+        (b.providesBootstrapSignals ? 18 : 0);
+      return bScore - aScore;
+    });
+
+  const pickDiverse = (
+    rows: Array<{
+      actor: ApifyStoreActor;
+      stage: LeadChainStepStage;
+      mismatchReason: string;
+      providesBootstrapSignals: boolean;
+    }>,
+    max: number
+  ) => {
+    const out: string[] = [];
+    const stageCaps: Record<LeadChainStepStage, number> = {
+      prospect_discovery: 5,
+      website_enrichment: 5,
+      email_discovery: 3,
+    };
+    const stageCounts: Record<LeadChainStepStage, number> = {
+      prospect_discovery: 0,
+      website_enrichment: 0,
+      email_discovery: 0,
+    };
+    for (const row of rows) {
+      if (out.length >= max) break;
+      if (stageCounts[row.stage] >= stageCaps[row.stage]) continue;
+      if (row.stage === "email_discovery" && !row.providesBootstrapSignals && out.length < 5) continue;
+      stageCounts[row.stage] += 1;
+      out.push(row.actor.actorId);
+    }
+    return uniqueTrimmed(out, max);
+  };
+
+  let fallback = pickDiverse(eligibleRows, 12);
+  if (fallback.length < 3) {
+    const relaxedRows = input.actors
+      .map((actor) => {
+        const contract = input.contractsByActorId.get(actor.actorId);
+        const stage = stageFromActor(actor);
+        const missingStep0Signals = missingSignalsAtStepZero({
+          contract,
+          startState: input.startState,
+        });
+        return {
+          actor,
+          contract,
+          stage,
+          missingStep0Signals,
+          mismatchReason: audienceSurfaceMismatchReasonForActor(input.targetAudience, actor),
+          providesBootstrapSignals: new Set(contract?.producedOutputs ?? defaultStageOutputs(stage)).has("company_list"),
+        };
+      })
+      .filter((row) => !row.missingStep0Signals.length)
+      .filter((row) => !row.contract?.requiresAuth && !row.contract?.requiresFileInput)
+      .sort(
+        (a, b) =>
+          bootstrapCandidateScore({ actor: b.actor, stage: b.stage, contract: b.contract }) -
+          bootstrapCandidateScore({ actor: a.actor, stage: a.stage, contract: a.contract })
+      );
+    fallback = pickDiverse(relaxedRows, 12);
+  }
+  if (!eligibleRows.length) {
+    return fallback;
+  }
+
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) {
+    return fallback;
+  }
+
+  const shortlist = eligibleRows.slice(0, 40).map((row) => ({
+    actorId: row.actor.actorId,
+    stage: row.stage,
+    title: trimText(row.actor.title, 120),
+    description: trimText(row.actor.description, 180),
+    categories: row.actor.categories.slice(0, 6),
+    producedOutputs: row.contract?.producedOutputs ?? defaultStageOutputs(row.stage),
+    requiredInputs: row.contract?.requiredInputs ?? [],
+    users30Days: row.actor.users30Days,
+    rating: row.actor.rating,
+    trialMinutes: row.actor.trialMinutes,
+  }));
+
+  try {
+    const prompt = [
+      "Select bootstrap Apify actors to generate real seed signals for chain planning.",
+      "Goal: from query-first context, quickly produce company/domain/website/person signals for downstream enrichment actors.",
+      "Choose actors that can run immediately from startState without auth/file/profile-url prerequisites.",
+      "Prefer actors that return company/domain/website signals using broad search + ICP context.",
+      "Prefer geographically compatible actors when geography is implied by targetAudience; avoid country-locked actors that mismatch the ICP market.",
+      "Avoid tools/validators and any actor that does not source raw lead/company data.",
+      "Return strict JSON only.",
+      '{ "selectedActorIds": string[] }',
+      `Context: ${JSON.stringify({
+        targetAudience: input.targetAudience,
+        triggerContext: input.triggerContext ?? "",
+        offer: input.offer,
+        startState: input.startState,
+      })}`,
+      `actorPool: ${JSON.stringify(shortlist)}`,
+    ].join("\n");
+    const model = resolveLlmModel("lead_chain_selection", { prompt });
+    const response = await fetch("https://api.openai.com/v1/responses", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model,
+        input: prompt,
+        text: { format: { type: "json_object" } },
+        max_output_tokens: 900,
+      }),
+    });
+    const raw = await response.text();
+    if (!response.ok) {
+      return fallback;
+    }
+    let payload: unknown = {};
+    try {
+      payload = JSON.parse(raw);
+    } catch {
+      payload = {};
+    }
+    const parsed = parseLooseJsonObject(extractOutputText(payload));
+    const row = asRecord(parsed);
+    const selected = Array.isArray(row.selectedActorIds)
+      ? row.selectedActorIds.map((value) => String(value ?? "").trim()).filter(Boolean)
+      : [];
+    const allowed = new Set(fallback.map((actorId) => actorId.toLowerCase()));
+    const picked = uniqueTrimmed(selected, 12).filter((actorId) => allowed.has(actorId.toLowerCase()));
+    return picked.length ? picked : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+async function runBootstrapSourcingSignals(input: {
+  targetAudience: string;
+  triggerContext?: string;
+  offer: string;
+  startState: SourcingStartState;
+  actorPool: ApifyStoreActor[];
+  contractsByActorId: Map<string, ActorSemanticContract>;
+  token: string;
+  actorSchemaCache: ActorSchemaProfileCache;
+}) {
+  let chainData = buildInitialChainData({
+    targetAudience: input.targetAudience,
+    triggerContext: input.triggerContext ?? "",
+    offer: input.offer,
+  });
+  let currentStartState = input.startState;
+  let budgetUsedUsd = 0;
+  const attempts: SourcingBootstrapAttempt[] = [];
+  let reason = "";
+
+  const selectedActorIds = await selectBootstrapActorsWithLlm({
+    actors: input.actorPool,
+    contractsByActorId: input.contractsByActorId,
+    startState: currentStartState,
+    targetAudience: input.targetAudience,
+    triggerContext: input.triggerContext,
+    offer: input.offer,
+  });
+
+  if (!selectedActorIds.length) {
+    return {
+      chainData,
+      startState: currentStartState,
+      attempts,
+      selectedActorIds: [],
+      budgetUsedUsd,
+      reason: "no_bootstrap_actors_selected",
+    } satisfies SourcingBootstrapResult;
+  }
+
+  for (const actorId of selectedActorIds) {
+    if (attempts.length >= APIFY_BOOTSTRAP_MAX_STEPS) break;
+    if (budgetUsedUsd + APIFY_PROBE_STEP_COST_ESTIMATE_USD > APIFY_BOOTSTRAP_PROBE_BUDGET_USD) {
+      reason = "bootstrap_budget_exhausted";
+      break;
+    }
+    const actor = input.actorPool.find((item) => item.actorId.toLowerCase() === actorId.toLowerCase());
+    if (!actor) continue;
+    const stage = stageFromActor(actor);
+    const step: LeadSourcingChainStep = {
+      id: `bootstrap_${attempts.length + 1}`,
+      stage,
+      actorId: actor.actorId,
+      purpose: "Bootstrap real seed signals for dynamic chain planning.",
+      queryHint: trimText([input.targetAudience, input.triggerContext ?? "", input.offer].filter(Boolean).join(" | "), 180),
+    };
+    const actorInput = buildChainStepInput({
+      step,
+      chainData,
+      targetAudience: input.targetAudience,
+      maxLeads: APIFY_PROBE_MAX_LEADS,
+      probeMode: true,
+    });
+    const profile = await getActorSchemaProfileCached({
+      cache: input.actorSchemaCache,
+      actorId: actor.actorId,
+      token: input.token,
+    });
+    if (!profile.ok || !profile.profile) {
+      attempts.push({
+        actorId: actor.actorId,
+        stage,
+        outcome: "fail",
+        probeInputHash: "",
+        reason: "actor_profile_unavailable",
+        costEstimateUsd: 0,
+        rowCount: 0,
+        details: { error: profile.error },
+      });
+      continue;
+    }
+
+    const normalizedInput = normalizeActorInputForSchema({
+      actorProfile: profile.profile,
+      actorInput,
+      stage,
+    });
+    let actorInputForRun = { ...normalizedInput.input };
+    let probeInputHash = hashProbeInput(actorInputForRun);
+    const compatibility = evaluateActorCompatibility({
+      actorProfile: profile.profile,
+      actorInput: actorInputForRun,
+      stage,
+    });
+    if (!compatibility.ok) {
+      attempts.push({
+        actorId: actor.actorId,
+        stage,
+        outcome: "fail",
+        probeInputHash,
+        reason: "actor_input_incompatible",
+        costEstimateUsd: 0,
+        rowCount: 0,
+        details: {
+          compatibilityReason: compatibility.reason,
+          missingRequired: compatibility.missingRequired,
+          normalizedInputAdjustments: normalizedInput.adjustments,
+        },
+      });
+      continue;
+    }
+
+    let repairReason = "";
+    let run = await runApifyActorSyncGetDatasetItems({
+      actorId: actor.actorId,
+      actorInput: actorInputForRun,
+      token: input.token,
+      timeoutSeconds: 35,
+    });
+    for (let repairAttempt = 0; repairAttempt < 8 && !run.ok; repairAttempt += 1) {
+      const repaired = repairActorInputFromProviderError({
+        actorInput: actorInputForRun,
+        errorText: run.error,
+        stage,
+      });
+      if (!repaired.repaired) break;
+      const beforeHash = hashProbeInput(actorInputForRun);
+      const afterHash = hashProbeInput(repaired.actorInput);
+      if (beforeHash === afterHash) break;
+      actorInputForRun = repaired.actorInput;
+      probeInputHash = afterHash;
+      repairReason = repairReason ? `${repairReason};${repaired.reason}` : repaired.reason;
+      run = await runApifyActorSyncGetDatasetItems({
+        actorId: actor.actorId,
+        actorInput: actorInputForRun,
+        token: input.token,
+        timeoutSeconds: 35,
+      });
+    }
+    budgetUsedUsd += APIFY_PROBE_STEP_COST_ESTIMATE_USD;
+
+    if (!run.ok) {
+      attempts.push({
+        actorId: actor.actorId,
+        stage,
+        outcome: "fail",
+        probeInputHash,
+        reason: "bootstrap_run_failed",
+        costEstimateUsd: APIFY_PROBE_STEP_COST_ESTIMATE_USD,
+        rowCount: 0,
+        details: {
+          error: run.error,
+          normalizedInputAdjustments: normalizedInput.adjustments,
+          repairReason,
+        },
+      });
+      continue;
+    }
+
+    const beforeSignals = {
+      companies: chainData.companies.length,
+      websites: chainData.websites.length,
+      domains: chainData.domains.length,
+      profileUrls: chainData.profileUrls.length,
+      emails: chainData.emails.length,
+      phones: chainData.phones.length,
+    };
+    chainData = mergeChainData(chainData, run.rows);
+    currentStartState = mergeStartStateWithChainData({
+      startState: currentStartState,
+      chainData,
+    });
+
+    attempts.push({
+      actorId: actor.actorId,
+      stage,
+      outcome: "pass",
+      probeInputHash,
+      reason: "",
+      costEstimateUsd: APIFY_PROBE_STEP_COST_ESTIMATE_USD,
+      rowCount: run.rows.length,
+      details: {
+        signalDelta: {
+          companies: chainData.companies.length - beforeSignals.companies,
+          websites: chainData.websites.length - beforeSignals.websites,
+          domains: chainData.domains.length - beforeSignals.domains,
+          profileUrls: chainData.profileUrls.length - beforeSignals.profileUrls,
+          emails: chainData.emails.length - beforeSignals.emails,
+          phones: chainData.phones.length - beforeSignals.phones,
+        },
+        normalizedInputAdjustments: normalizedInput.adjustments,
+        repairReason,
+      },
+    });
+
+    if (hasBootstrapCoverage(chainData)) {
+      reason = "bootstrap_signal_coverage_reached";
+      break;
+    }
+  }
+
+  if (!reason) {
+    reason = hasBootstrapCoverage(chainData) ? "bootstrap_signal_coverage_reached" : "bootstrap_completed_partial";
+  }
+
+  return {
+    chainData,
+    startState: currentStartState,
+    attempts,
+    selectedActorIds,
+    budgetUsedUsd,
+    reason,
+  } satisfies SourcingBootstrapResult;
+}
+
 function parseLeadChainPlanCandidate(input: {
   raw: unknown;
   allowedActorIds: Set<string>;
@@ -2176,6 +6148,60 @@ function sourcingCandidateKey(steps: Array<{ stage: LeadChainStepStage; actorId:
   return steps.map((step) => `${step.stage}:${step.actorId.toLowerCase()}`).join("->");
 }
 
+function missingSignalsAtStepZero(input: {
+  contract: ActorSemanticContract | undefined;
+  startState: SourcingStartState;
+}) {
+  if (!input.contract) return [];
+  const availableSignals = new Set<SemanticSignal>(
+    input.startState.availableSignals.length ? input.startState.availableSignals : ["query"]
+  );
+  const missing = new Set<SemanticSignal>();
+  if (input.contract.requiresAuth && !availableSignals.has("auth_token")) {
+    missing.add("auth_token");
+  }
+  if (input.contract.requiresFileInput && !availableSignals.has("file_upload")) {
+    missing.add("file_upload");
+  }
+  for (const signal of input.contract.requiredInputs) {
+    if (!availableSignals.has(signal)) {
+      missing.add(signal);
+    }
+  }
+  return Array.from(missing);
+}
+
+const QUERY_COMPATIBLE_REQUIRED_SIGNALS = new Set<SemanticSignal>([
+  "company_list",
+  "domain_list",
+  "website_list",
+  "profile_url_list",
+  "email_list",
+  "phone_list",
+]);
+
+const QUERY_INPUT_KEY_HINTS = [
+  "query",
+  "search",
+  "keyword",
+  "keywords",
+  "title",
+  "jobtitle",
+  "role",
+  "company",
+  "industry",
+  "segment",
+  "location",
+];
+
+function actorHasQueryInputCapability(profile: ActorCapabilityProfile | undefined) {
+  const schemaKeys = schemaSummaryKeys(profile?.schemaSummary);
+  const tokens = [...schemaKeys.requiredKeys, ...schemaKeys.knownKeys]
+    .map(normalizeSchemaKeyToken)
+    .filter(Boolean);
+  return tokens.some((token) => QUERY_INPUT_KEY_HINTS.some((hint) => token.includes(hint)));
+}
+
 async function planApifyLeadChainCandidates(input: {
   targetAudience: string;
   triggerContext?: string;
@@ -2186,6 +6212,7 @@ async function planApifyLeadChainCandidates(input: {
   startState: SourcingStartState;
   actorPool: ApifyStoreActor[];
   actorProfilesById: Map<string, ActorCapabilityProfile>;
+  contractsByActorId: Map<string, ActorSemanticContract>;
   actorMemoryRows: SourcingActorMemory[];
   maxCandidates?: number;
 }) {
@@ -2244,18 +6271,325 @@ async function planApifyLeadChainCandidates(input: {
     const picked = new Set(llmSelectedActorIds.map((id) => id.toLowerCase()));
     const llmFiltered = planningPool.filter((actor) => picked.has(actor.actorId.toLowerCase()));
     if (llmFiltered.length >= 12) {
-      planningPool = llmFiltered;
+      const stageDiversity = new Set(llmFiltered.map((actor) => stageFromActor(actor))).size;
+      const mismatchCount = llmFiltered.filter((actor) =>
+        Boolean(audienceSurfaceMismatchReasonForActor(input.targetAudience, actor))
+      ).length;
+      const leadSurfaceCount = llmFiltered.filter((actor) => actorSurfaceSignals(actor).coreLeadSurface).length;
+      const mismatchRatio = mismatchCount / Math.max(1, llmFiltered.length);
+      const leadSurfaceRatio = leadSurfaceCount / Math.max(1, llmFiltered.length);
+      if (stageDiversity >= 2 && mismatchRatio <= 0.35 && leadSurfaceRatio >= 0.6) {
+        planningPool = llmFiltered;
+      }
     }
   }
 
-  const actorRows = planningPool.map((actor) => ({
-    actorId: actor.actorId,
-    title: actor.title,
-    description: actor.description,
-    categories: actor.categories,
-    users30Days: actor.users30Days,
-    stageHint: stageFromActor(actor),
-  }));
+  const firstStepSuitability = await scoreFirstStepActorsWithLlm({
+    actors: planningPool,
+    targetAudience: input.targetAudience,
+    triggerContext: input.triggerContext ?? "",
+    offer: input.offer,
+    startState: input.startState,
+    contractsByActorId: input.contractsByActorId,
+  });
+
+  const firstStepBlockedActors: Array<{ actorId: string; reason: string }> = [];
+  const actorRows = planningPool.map((actor) => {
+    const stageHint = stageFromActor(actor);
+    const contract = input.contractsByActorId.get(actor.actorId);
+    const profile = input.actorProfilesById.get(actor.actorId);
+    const mismatchReason = audienceSurfaceMismatchReasonForActor(input.targetAudience, actor);
+    const rawMissingAtStepZero = missingSignalsAtStepZero({ contract, startState: input.startState });
+    const queryAvailableAtStepZero = (input.startState.availableSignals.length
+      ? input.startState.availableSignals
+      : ["query"]
+    ).includes("query");
+    const canStartFromQuery =
+      queryAvailableAtStepZero &&
+      actorHasQueryInputCapability(profile) &&
+      rawMissingAtStepZero.length > 0 &&
+      rawMissingAtStepZero.every((signal) => QUERY_COMPATIBLE_REQUIRED_SIGNALS.has(signal));
+    const missingAtStepZero = canStartFromQuery ? [] : rawMissingAtStepZero;
+    const llmSuitability = firstStepSuitability.get(actor.actorId.toLowerCase());
+    const blockedReason = mismatchReason
+      ? `audience_mismatch:${mismatchReason}`
+      : missingAtStepZero.length
+        ? `missing_step0_signals:${missingAtStepZero.join(",")}`
+        : "";
+    if (blockedReason) {
+      firstStepBlockedActors.push({
+        actorId: actor.actorId,
+        reason: blockedReason,
+      });
+    }
+    return {
+      actorId: actor.actorId,
+      title: actor.title,
+      description: actor.description,
+      categories: actor.categories,
+      users30Days: actor.users30Days,
+      rating: actor.rating,
+      stageHint,
+      requiredInputs: contract?.requiredInputs ?? [],
+      producedOutputs: contract?.producedOutputs ?? [],
+      mismatchReason,
+      step0MissingSignals: missingAtStepZero,
+      step0RelaxedFromQuery: canStartFromQuery,
+      step0EligibleForFirstStep: blockedReason === "",
+      firstStepSuitabilityScore: llmSuitability?.score ?? null,
+      firstStepSuitabilityReason: llmSuitability?.reason ?? "",
+    };
+  });
+  const synthesizeDeterministicCandidates = (limit: number): LeadSourcingChainPlan[] => {
+    const baseQuery = trimText(
+      [input.targetAudience, input.triggerContext, input.offer].filter(Boolean).join(" | "),
+      180
+    );
+    const actorScore = (row: (typeof actorRows)[number]) => {
+      const suitability = typeof row.firstStepSuitabilityScore === "number" ? row.firstStepSuitabilityScore : 0.45;
+      const usage = Math.log10(Math.max(1, Number(row.users30Days ?? 0)));
+      const rating = Number.isFinite(Number(row.rating)) ? Number(row.rating) : 0;
+      return suitability * 0.6 + usage * 0.28 + rating * 0.12;
+    };
+    const minSuitability = 0.58;
+    const minRelaxedSuitability = 0.35;
+    const isEligible = (row: (typeof actorRows)[number], threshold: number) =>
+      row.step0EligibleForFirstStep &&
+      !row.mismatchReason &&
+      (typeof row.firstStepSuitabilityScore !== "number" || row.firstStepSuitabilityScore >= threshold);
+
+    const pickTop = (rows: (typeof actorRows), max: number) =>
+      rows
+        .slice()
+        .sort((a, b) => actorScore(b) - actorScore(a))
+        .slice(0, max);
+
+    const selectStageActors = (stage: LeadChainStepStage) => {
+      const strict = pickTop(actorRows.filter((row) => row.stageHint === stage && isEligible(row, minSuitability)), 12);
+      if (strict.length) return strict;
+      const relaxed = pickTop(
+        actorRows.filter((row) => row.stageHint === stage && isEligible(row, minRelaxedSuitability)),
+        12
+      );
+      if (relaxed.length) return relaxed;
+      return pickTop(actorRows.filter((row) => row.stageHint === stage && row.step0EligibleForFirstStep && !row.mismatchReason), 12);
+    };
+
+    const eligibleEmailFirstStep = selectStageActors("email_discovery");
+    const eligibleProspectFirstStep = selectStageActors("prospect_discovery");
+    const websiteMiddle = pickTop(
+      actorRows.filter(
+        (row) =>
+          row.stageHint === "website_enrichment" &&
+          (typeof row.firstStepSuitabilityScore !== "number" || row.firstStepSuitabilityScore >= 0.45)
+      ),
+      8
+    );
+    const emailFinal = pickTop(
+      actorRows.filter(
+        (row) =>
+          row.stageHint === "email_discovery" &&
+          (typeof row.firstStepSuitabilityScore !== "number" || row.firstStepSuitabilityScore >= 0.45)
+      ),
+      12
+    );
+
+    const out: LeadSourcingChainPlan[] = [];
+    const pushCandidate = (candidate: LeadSourcingChainPlan) => {
+      if (out.length >= limit) return;
+      out.push(candidate);
+    };
+
+    for (const row of eligibleEmailFirstStep.slice(0, Math.max(2, Math.floor(limit / 3)))) {
+      pushCandidate({
+        id: `det_single_${row.actorId.replace(/[^a-z0-9]+/gi, "_").slice(0, 40)}`,
+        strategy: "Deterministic single-step email discovery",
+        rationale: "Auto-synthesized from top step-0 eligible email-discovery actors.",
+        steps: [
+          {
+            id: "s1_email_discovery",
+            stage: "email_discovery",
+            actorId: row.actorId,
+            purpose: "Find business emails for ICP-matching contacts in one step.",
+            queryHint: baseQuery,
+          },
+        ],
+      });
+    }
+
+    for (const first of websiteMiddle) {
+      if (out.length >= limit) break;
+      const final = emailFinal.find((row) => row.actorId.toLowerCase() !== first.actorId.toLowerCase());
+      if (!final) continue;
+      pushCandidate({
+        id: `det_web_email_${first.actorId.replace(/[^a-z0-9]+/gi, "_").slice(0, 20)}_${final.actorId
+          .replace(/[^a-z0-9]+/gi, "_")
+          .slice(0, 20)}`,
+        strategy: "Deterministic website -> email chain",
+        rationale: "Auto-synthesized website-first path for query-only starts when direct prospect actors are weak.",
+        steps: [
+          {
+            id: "s1_website_enrichment",
+            stage: "website_enrichment",
+            actorId: first.actorId,
+            purpose: "Discover company websites/domains from query-driven ICP search.",
+            queryHint: trimText(`${input.targetAudience} company websites`, 180),
+          },
+          {
+            id: "s2_email_discovery",
+            stage: "email_discovery",
+            actorId: final.actorId,
+            purpose: "Enrich website/domain outputs into business emails.",
+            queryHint: trimText(`${input.targetAudience} business email`, 180),
+          },
+        ],
+      });
+    }
+
+    for (const first of eligibleProspectFirstStep) {
+      if (out.length >= limit) break;
+      const final = emailFinal.find((row) => row.actorId.toLowerCase() !== first.actorId.toLowerCase());
+      if (!final) continue;
+      pushCandidate({
+        id: `det_two_${first.actorId.replace(/[^a-z0-9]+/gi, "_").slice(0, 20)}_${final.actorId
+          .replace(/[^a-z0-9]+/gi, "_")
+          .slice(0, 20)}`,
+        strategy: "Deterministic prospect -> email chain",
+        rationale: "Auto-synthesized to preserve deterministic stage flow and seed compatibility.",
+        steps: [
+          {
+            id: "s1_prospect_discovery",
+            stage: "prospect_discovery",
+            actorId: first.actorId,
+            purpose: "Discover ICP-aligned people or companies from query-driven sources.",
+            queryHint: trimText(input.targetAudience, 180),
+          },
+          {
+            id: "s2_email_discovery",
+            stage: "email_discovery",
+            actorId: final.actorId,
+            purpose: "Enrich discovered prospects/companies into business emails.",
+            queryHint: trimText(`${input.targetAudience} work email`, 180),
+          },
+        ],
+      });
+    }
+
+    for (const first of eligibleProspectFirstStep) {
+      if (out.length >= limit) break;
+      const middle = websiteMiddle.find((row) => row.actorId.toLowerCase() !== first.actorId.toLowerCase());
+      const final = emailFinal.find(
+        (row) =>
+          row.actorId.toLowerCase() !== first.actorId.toLowerCase() &&
+          row.actorId.toLowerCase() !== middle?.actorId.toLowerCase()
+      );
+      if (!middle || !final) continue;
+      pushCandidate({
+        id: `det_three_${first.actorId.replace(/[^a-z0-9]+/gi, "_").slice(0, 16)}_${middle.actorId
+          .replace(/[^a-z0-9]+/gi, "_")
+          .slice(0, 16)}_${final.actorId.replace(/[^a-z0-9]+/gi, "_").slice(0, 16)}`,
+        strategy: "Deterministic prospect -> website -> email chain",
+        rationale: "Auto-synthesized multi-step chain to increase schema-compatible enrichment paths.",
+        steps: [
+          {
+            id: "s1_prospect_discovery",
+            stage: "prospect_discovery",
+            actorId: first.actorId,
+            purpose: "Discover ICP companies/contacts from queryable sources.",
+            queryHint: trimText(input.targetAudience, 180),
+          },
+          {
+            id: "s2_website_enrichment",
+            stage: "website_enrichment",
+            actorId: middle.actorId,
+            purpose: "Resolve websites/domains for discovered entities.",
+            queryHint: trimText(`${input.targetAudience} company website`, 180),
+          },
+          {
+            id: "s3_email_discovery",
+            stage: "email_discovery",
+            actorId: final.actorId,
+            purpose: "Extract business emails from enriched entities.",
+            queryHint: trimText(`${input.targetAudience} business email`, 180),
+          },
+        ],
+      });
+    }
+
+    if (!out.length) {
+      const emergencyFirst =
+        pickTop(actorRows.filter((row) => !row.mismatchReason), 1)[0] ??
+        pickTop(actorRows, 1)[0];
+      const emergencyEmail = emailFinal[0] ?? pickTop(actorRows.filter((row) => row.stageHint === "email_discovery"), 1)[0];
+      if (emergencyFirst) {
+        if (emergencyFirst.stageHint === "email_discovery" || !emergencyEmail) {
+          pushCandidate({
+            id: `det_emergency_single_${emergencyFirst.actorId.replace(/[^a-z0-9]+/gi, "_").slice(0, 30)}`,
+            strategy: "Deterministic emergency single-step",
+            rationale: "Emergency fallback when no higher-confidence chains can be synthesized.",
+            steps: [
+              {
+                id: "s1_email_discovery",
+                stage: "email_discovery",
+                actorId: emergencyFirst.actorId,
+                purpose: "Attempt query-driven lead discovery in one step.",
+                queryHint: trimText(input.targetAudience, 180),
+              },
+            ],
+          });
+        } else if (emergencyFirst.stageHint === "website_enrichment") {
+          pushCandidate({
+            id: `det_emergency_web_email_${emergencyFirst.actorId.replace(/[^a-z0-9]+/gi, "_").slice(0, 16)}_${emergencyEmail.actorId
+              .replace(/[^a-z0-9]+/gi, "_")
+              .slice(0, 16)}`,
+            strategy: "Deterministic emergency website -> email",
+            rationale: "Emergency fallback when no higher-confidence chains can be synthesized.",
+            steps: [
+              {
+                id: "s1_website_enrichment",
+                stage: "website_enrichment",
+                actorId: emergencyFirst.actorId,
+                purpose: "Find websites/domains from query context.",
+                queryHint: trimText(`${input.targetAudience} company website`, 180),
+              },
+              {
+                id: "s2_email_discovery",
+                stage: "email_discovery",
+                actorId: emergencyEmail.actorId,
+                purpose: "Extract business emails from enriched sites/domains.",
+                queryHint: trimText(`${input.targetAudience} business email`, 180),
+              },
+            ],
+          });
+        } else {
+          pushCandidate({
+            id: `det_emergency_prospect_email_${emergencyFirst.actorId.replace(/[^a-z0-9]+/gi, "_").slice(0, 16)}_${emergencyEmail.actorId
+              .replace(/[^a-z0-9]+/gi, "_")
+              .slice(0, 16)}`,
+            strategy: "Deterministic emergency prospect -> email",
+            rationale: "Emergency fallback when no higher-confidence chains can be synthesized.",
+            steps: [
+              {
+                id: "s1_prospect_discovery",
+                stage: "prospect_discovery",
+                actorId: emergencyFirst.actorId,
+                purpose: "Discover candidate companies/contacts from query context.",
+                queryHint: trimText(input.targetAudience, 180),
+              },
+              {
+                id: "s2_email_discovery",
+                stage: "email_discovery",
+                actorId: emergencyEmail.actorId,
+                purpose: "Enrich discovered entities into business emails.",
+                queryHint: trimText(`${input.targetAudience} work email`, 180),
+              },
+            ],
+          });
+        }
+      }
+    }
+    return out.slice(0, limit);
+  };
 
   const maxCandidates = Math.max(2, Math.min(APIFY_CHAIN_MAX_CANDIDATES, Number(input.maxCandidates ?? 4) || 4));
   const prompt = [
@@ -2263,6 +6597,7 @@ async function planApifyLeadChainCandidates(input: {
     "Goal: produce multiple high-quality 1-3 step chains that can source real people + business emails for the provided target audience.",
     "Step-0 runtime inputs are constrained by startState.availableSignals.",
     "Do not propose a first step that needs profile URLs, Sales Navigator URLs, uploaded files, or auth if startState does not include those signals.",
+    "Each actor has step0EligibleForFirstStep and step0MissingSignals metadata. Never use a first-step actor where step0EligibleForFirstStep=false.",
     "Targeting rule: use role/company ICP in targetAudience as the primary retrieval constraint.",
     "Use triggerContext only as a secondary prioritization signal and not as the core retrieval keyword set.",
     "Avoid literal trigger-only query hints (for example: pure \"demo request\" keyword mining) unless paired with strong role/company filters.",
@@ -2272,8 +6607,9 @@ async function planApifyLeadChainCandidates(input: {
     "- Use only actorIds from actorPool.",
     "- Valid stage orders are:",
     "  1) email_discovery (single-step actor that already returns people + emails),",
-    "  2) prospect_discovery -> email_discovery,",
-    "  3) prospect_discovery -> website_enrichment -> email_discovery.",
+    "  2) website_enrichment -> email_discovery,",
+    "  3) prospect_discovery -> email_discovery,",
+    "  4) prospect_discovery -> website_enrichment -> email_discovery.",
     "- Final step must be email_discovery.",
     "- Do NOT include backup actors.",
     `- Return ${maxCandidates} distinct chain candidates with varied strategy.`,
@@ -2290,6 +6626,7 @@ async function planApifyLeadChainCandidates(input: {
       experimentName: input.experimentName,
       offer: input.offer,
       startState: input.startState,
+      firstStepBlockedActors: firstStepBlockedActors.slice(0, 40),
     })}`,
     `actorPool: ${JSON.stringify(actorRows)}`,
   ].join("\n");
@@ -2348,7 +6685,7 @@ async function planApifyLeadChainCandidates(input: {
         ? root.chains
         : [];
   const allowedActorIds = new Set(planningPool.map((actor) => actor.actorId.toLowerCase()));
-  const parsedCandidates = candidatesRaw
+  let parsedCandidates = candidatesRaw
     .map((row, index) =>
       parseLeadChainPlanCandidate({
         raw: row,
@@ -2359,7 +6696,12 @@ async function planApifyLeadChainCandidates(input: {
     .filter((row): row is LeadSourcingChainPlan => Boolean(row));
 
   if (!parsedCandidates.length) {
-    throw new Error("Chain planning produced no valid candidates");
+    const deterministicCandidates = synthesizeDeterministicCandidates(maxCandidates * 2);
+    if (deterministicCandidates.length) {
+      parsedCandidates = deterministicCandidates;
+    } else {
+      throw new Error("Chain planning produced no valid candidates");
+    }
   }
 
   const deduped = [] as LeadSourcingChainPlan[];
@@ -2375,7 +6717,31 @@ async function planApifyLeadChainCandidates(input: {
   if (!deduped.length) {
     throw new Error("Chain planning candidates were duplicates/invalid");
   }
-  return deduped;
+  if (deduped.length < maxCandidates) {
+    const deterministicCandidates = synthesizeDeterministicCandidates(maxCandidates * 2);
+    const existingKeys = new Set(deduped.map((candidate) => sourcingCandidateKey(candidate.steps)));
+    for (const candidate of deterministicCandidates) {
+      if (deduped.length >= APIFY_CHAIN_MAX_CANDIDATES) break;
+      const key = sourcingCandidateKey(candidate.steps);
+      if (!key || existingKeys.has(key)) continue;
+      existingKeys.add(key);
+      deduped.push(candidate);
+    }
+  }
+  const firstStepBlockedReasonByActorId = new Map(firstStepBlockedActors.map((row) => [row.actorId.toLowerCase(), row.reason]));
+  const firstStepFiltered = deduped.filter((candidate) => {
+    const firstStep = candidate.steps[0];
+    if (!firstStep) return false;
+    return !firstStepBlockedReasonByActorId.has(firstStep.actorId.toLowerCase());
+  });
+  if (!firstStepFiltered.length) {
+    const topReasons = firstStepBlockedActors
+      .slice(0, 6)
+      .map((row) => `${row.actorId}:${row.reason}`)
+      .join(" | ");
+    throw new Error(`All planned candidates used blocked first-step actors (${topReasons || "none"})`);
+  }
+  return firstStepFiltered;
 }
 
 function buildChainStepInput(input: {
@@ -2385,14 +6751,46 @@ function buildChainStepInput(input: {
   maxLeads: number;
   probeMode?: boolean;
 }) {
+  const normalizedAudience = input.targetAudience.toLowerCase();
+  const locationHint = /europe|emea|eu\b/.test(normalizedAudience)
+    ? "Europe"
+    : /united kingdom|\buk\b|britain|england/.test(normalizedAudience)
+      ? "United Kingdom"
+      : /canada/.test(normalizedAudience)
+        ? "Canada"
+        : /australia|anz/.test(normalizedAudience)
+          ? "Australia"
+          : "United States";
+  const countryCodeHint =
+    locationHint === "Europe"
+      ? "EU"
+      : locationHint === "United Kingdom"
+        ? "GB"
+        : locationHint === "Canada"
+          ? "CA"
+          : locationHint === "Australia"
+            ? "AU"
+            : "US";
+  const peopleQuery = derivePeopleDiscoveryQuery(input.targetAudience);
+  const companyQuery = deriveCompanyDiscoveryQuery(input.targetAudience);
   const querySeed = uniqueTrimmed(
-    [input.step.queryHint, ...input.chainData.queries, ...input.chainData.companies, input.targetAudience],
+    [
+      peopleQuery,
+      companyQuery,
+      sanitizeLeadDiscoveryQuery(input.step.queryHint),
+      ...input.chainData.queries.map((query) => sanitizeLeadDiscoveryQuery(query) || query),
+      ...input.chainData.companies,
+      sanitizeLeadDiscoveryQuery(input.targetAudience),
+    ].filter(Boolean),
     30
   );
   const domains = uniqueTrimmed(input.chainData.domains, 100).map((item) => item.toLowerCase());
+  const phones = uniqueTrimmed(input.chainData.phones, 120);
+  const profileUrls = uniqueTrimmed(input.chainData.profileUrls, 200);
   const websites = uniqueTrimmed(
     [
       ...input.chainData.websites,
+      ...profileUrls,
       ...domains.map((domain) => `https://${domain}`),
     ],
     120
@@ -2409,6 +6807,13 @@ function buildChainStepInput(input: {
     maxConcurrency: input.probeMode ? 2 : 8,
     maxDepth: input.probeMode ? 1 : 2,
     includeSubdomains: false,
+    location: locationHint,
+    country: locationHint,
+    countryCode: countryCodeHint,
+    region: locationHint,
+    locale: countryCodeHint === "US" ? "en-US" : "en",
+    language: "en",
+    languageCode: "en",
   };
 
   if (input.step.stage === "prospect_discovery") {
@@ -2422,6 +6827,22 @@ function buildChainStepInput(input: {
       keyword: querySeed[0] ?? input.targetAudience,
       keywords: querySeed,
       phrases: querySeed,
+      companies: input.chainData.companies.slice(0, 80),
+      companyNames: input.chainData.companies.slice(0, 80),
+      domains,
+      domainNames: domains,
+      startUrls: websites
+        .slice(0, 20)
+        .map((url) => ({ url }))
+        .concat(
+          websites.length
+            ? []
+            : [{ url: `https://www.google.com/search?q=${encodeURIComponent(querySeed[0] ?? input.targetAudience)}` }]
+        ),
+      phoneNumbers: phones.slice(0, 80),
+      phones: phones.slice(0, 80),
+      profileUrls: profileUrls.slice(0, 120),
+      linkedinProfileUrls: profileUrls.slice(0, 120),
     } satisfies Record<string, unknown>;
   }
 
@@ -2437,6 +6858,10 @@ function buildChainStepInput(input: {
       domains,
       domainNames: domains,
       startUrls: websites.slice(0, 60).map((url) => ({ url })),
+      phoneNumbers: phones.slice(0, 80),
+      phones: phones.slice(0, 80),
+      profileUrls: profileUrls.slice(0, 120),
+      linkedinProfileUrls: profileUrls.slice(0, 120),
     } satisfies Record<string, unknown>;
   }
 
@@ -2450,6 +6875,10 @@ function buildChainStepInput(input: {
     domainNames: domains,
     startUrls: websites.slice(0, 80).map((url) => ({ url })),
     emails: input.chainData.emails.slice(0, 150),
+    phoneNumbers: phones.slice(0, 120),
+    phones: phones.slice(0, 120),
+    profileUrls: profileUrls.slice(0, 160),
+    linkedinProfileUrls: profileUrls.slice(0, 160),
   } satisfies Record<string, unknown>;
 }
 
@@ -2518,6 +6947,8 @@ function fallbackValueForSchemaKey(input: {
   };
   const pickLinkedinUrl = () => {
     const sources = [
+      ...toStringArray(pick("profileUrls")),
+      ...toStringArray(pick("linkedinProfileUrls")),
       ...toStringArray(pick("urls")),
       ...toStringArray(pick("websites")),
       ...toStringArray(pick("startUrls")),
@@ -2528,6 +6959,24 @@ function fallbackValueForSchemaKey(input: {
 
   if (keyLower.includes("query") || keyLower.includes("search") || keyLower.includes("keyword")) {
     return pick("query", "queries", "search", "searchTerms", "searchStringsArray", "keyword", "keywords", "phrases");
+  }
+  if (keyLower.includes("profile") || (keyLower.includes("linkedin") && !keyLower.includes("url"))) {
+    return pick("profileUrls", "linkedinProfileUrls", "urls", "websites");
+  }
+  if (keyLower.includes("name") && !keyLower.includes("domain")) {
+    return pick("names", "companies", "companyNames", "queries", "query", "keywords", "keyword");
+  }
+  if (
+    keyLower.includes("location") ||
+    keyLower.includes("country") ||
+    keyLower.includes("region") ||
+    keyLower.includes("city") ||
+    keyLower.includes("state")
+  ) {
+    return pick("location", "country", "countryCode", "region", "locale");
+  }
+  if (keyLower.includes("language") || keyLower.includes("locale")) {
+    return pick("languageCode", "language", "locale", "countryCode");
   }
   if (keyLower.includes("linkedin") && keyLower.includes("url")) {
     return pickLinkedinUrl();
@@ -2540,6 +6989,9 @@ function fallbackValueForSchemaKey(input: {
   }
   if (keyLower.includes("email") || keyLower.includes("mail")) {
     return pick("emails");
+  }
+  if (keyLower.includes("phone") || keyLower.includes("mobile") || keyLower.includes("whatsapp")) {
+    return pick("phoneNumbers", "phones");
   }
   if (keyLower.includes("compan")) {
     return pick("companies", "companyNames");
@@ -2940,6 +7392,164 @@ function buildProbeMemoryUpdates(candidates: ProbedSourcingPlan[]) {
   }));
 }
 
+function isLikelyB2BOutreachContext(input: {
+  brandWebsite: string;
+  targetAudience: string;
+  offer: string;
+  experimentName: string;
+}) {
+  const blob = [
+    input.brandWebsite,
+    input.targetAudience,
+    input.offer,
+    input.experimentName,
+  ]
+    .join(" ")
+    .toLowerCase();
+  if (!blob) return false;
+  const b2bSignals = [
+    "b2b",
+    "sdr",
+    "revops",
+    "revenue",
+    "pipeline",
+    "demo",
+    "booked meeting",
+    "book meeting",
+    "vp ",
+    "director",
+    "head of",
+    "founder",
+    "ceo",
+    "cro",
+    "cmo",
+    "buyer",
+    "account executive",
+    "sales leader",
+    "software company",
+    "saas",
+    "enterprise",
+    "mid-market",
+    "abm",
+    "gtm",
+    "outbound",
+    "inbound signup",
+    ".io",
+    ".ai",
+    ".com",
+  ];
+  return b2bSignals.some((signal) => blob.includes(signal));
+}
+
+const AUDIENCE_COMPANY_KEYWORD_STOPWORDS = new Set([
+  "at",
+  "for",
+  "the",
+  "a",
+  "an",
+  "and",
+  "or",
+  "of",
+  "to",
+  "in",
+  "on",
+  "with",
+  "without",
+  "who",
+  "that",
+  "which",
+  "their",
+  "company",
+  "companies",
+  "team",
+  "teams",
+  "employee",
+  "employees",
+  "people",
+  "running",
+  "run",
+  "using",
+  "focused",
+  "focus",
+  "active",
+  "actively",
+  "virtual",
+  "event",
+  "events",
+  "webinar",
+  "webinars",
+  "upcoming",
+  "manager",
+  "managers",
+  "director",
+  "directors",
+  "head",
+  "vp",
+  "lead",
+  "specialist",
+]);
+
+function deriveTargetCompanyKeywords(...parts: Array<string | undefined>) {
+  const text = parts
+    .map((value) => normalizeText(value ?? ""))
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+  if (!text) return [] as string[];
+
+  const source = text.includes(" at ")
+    ? normalizeText(text.split(/\bat\b/i).slice(1).join(" at "))
+    : text;
+  const tokens = source
+    .replace(/\([^)]*\)/g, " ")
+    .replace(/[^\w\s/-]/g, " ")
+    .split(/\s+/)
+    .map((token) => token.trim().toLowerCase())
+    .filter(Boolean)
+    .filter((token) => !AUDIENCE_COMPANY_KEYWORD_STOPWORDS.has(token))
+    .filter((token) => !/^\d+$/.test(token))
+    .filter((token) => token.length >= 3 || token === "b2b")
+    .filter((token) => !/^\d+[kmb]?(-\d+[kmb]?)?$/.test(token));
+
+  return uniqueTrimmed(tokens, 8);
+}
+
+function deriveExplicitAudienceExclusions(...parts: Array<string | undefined>) {
+  const text = parts
+    .map((value) => normalizeText(value ?? ""))
+    .filter(Boolean)
+    .join(" ");
+  if (!text) return [] as string[];
+
+  const exclusions: string[] = [];
+  const patterns = [
+    /\bexcluding\s+([^.;:]+)/gi,
+    /\bexclude\s+([^.;:]+)/gi,
+    /\bexcept\s+([^.;:]+)/gi,
+    /\bavoid\s+([^.;:]+)/gi,
+  ];
+
+  for (const pattern of patterns) {
+    for (const match of text.matchAll(pattern)) {
+      const raw = normalizeText(match[1] ?? "")
+        .toLowerCase()
+        .replace(/[()]/g, " ");
+      if (!raw) continue;
+      for (const part of raw.split(/,|\/|\bor\b|\band\b/)) {
+        const value = normalizeText(part)
+          .toLowerCase()
+          .replace(/[^\w\s-]/g, " ")
+          .replace(/\s+/g, " ")
+          .trim();
+        if (!value || value.split(" ").length > 4) continue;
+        exclusions.push(value);
+      }
+    }
+  }
+
+  return uniqueTrimmed(exclusions, 12);
+}
+
 async function generateAdaptiveLeadQualityPolicy(input: {
   brandName: string;
   brandWebsite: string;
@@ -2962,10 +7572,15 @@ async function generateAdaptiveLeadQualityPolicy(input: {
     "- requirePersonName (boolean)",
     "- requireCompany (boolean)",
     "- requireTitle (boolean)",
+    "- requiredTitleKeywords (string[])",
+    "- requiredCompanyKeywords (string[])",
+    "- excludedCompanyKeywords (string[])",
     "- minConfidenceScore (number 0..1)",
     "Rules:",
     "- default to rejecting low-signal generic emails when unsure.",
-    "- requireTitle should default to false unless title is mission-critical for this specific experiment.",
+    "- if targetAudience references a specific role/persona (e.g. manager/director/head/vp/chief), requireTitle should be true and requiredTitleKeywords should capture that role intent.",
+    "- requiredCompanyKeywords should only be used when explicitly supported by targetAudience or offer; otherwise return [].",
+    "- excludedCompanyKeywords should only contain exclusions explicitly stated or directly implied by the original targetAudience/offer context. Do not invent sector exclusions.",
     "- minConfidenceScore should usually be between 0.52 and 0.68.",
     `Context: ${JSON.stringify(input)}`,
   ].join("\n");
@@ -2999,15 +7614,122 @@ async function generateAdaptiveLeadQualityPolicy(input: {
   const parsed = parseLooseJsonObject(extractOutputText(payload));
 
   const row = asRecord(parsed);
+  const likelyB2B = isLikelyB2BOutreachContext({
+    brandWebsite: input.brandWebsite,
+    targetAudience: input.targetAudience,
+    offer: input.offer,
+    experimentName: input.experimentName,
+  });
+  const requestedAllowFreeDomains = Boolean(row.allowFreeDomains ?? false);
+  const requestedAllowRoleInboxes = Boolean(row.allowRoleInboxes ?? false);
+  const requestedRequirePersonName = Boolean(row.requirePersonName ?? true);
+  const requestedRequireCompany = Boolean(row.requireCompany ?? true);
+  const requestedRequireTitle = Boolean(row.requireTitle ?? false);
+  const requestedMinConfidence = Number(row.minConfidenceScore ?? 0.6) || 0.6;
+  const requestedTitleKeywords = Array.isArray(row.requiredTitleKeywords)
+    ? row.requiredTitleKeywords.map((item) => normalizeText(item)).filter(Boolean)
+    : [];
+  const requestedCompanyKeywords = Array.isArray(row.requiredCompanyKeywords)
+    ? row.requiredCompanyKeywords.map((item) => normalizeText(item)).filter(Boolean)
+    : [];
+  const requestedExcludedCompanyKeywords = Array.isArray(row.excludedCompanyKeywords)
+    ? row.excludedCompanyKeywords.map((item) => normalizeText(item)).filter(Boolean)
+    : [];
+
+  const rolePersonaCue = /\b(manager|director|head|vp|chief|owner|founder|lead|specialist)\b/i.test(
+    input.targetAudience
+  );
+  const audienceBeforeAt = normalizeText(input.targetAudience.split(/\bat\b/i)[0] ?? "");
+  const fallbackRoleHint = audienceBeforeAt
+    .replace(/\b(manager|director|head|vp|chief|owner|founder|lead|specialist)\b/gi, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+  const fallbackRoleTokens = fallbackRoleHint.split(" ").filter(Boolean);
+  const fallbackRolePhrase =
+    fallbackRoleTokens.length > 4
+      ? fallbackRoleTokens.slice(0, 3).join(" ")
+      : fallbackRoleHint;
+  const fallbackTitleKeywords = fallbackRolePhrase ? [trimText(fallbackRolePhrase, 32)] : [];
+  const requiredTitleKeywords = Array.from(
+    new Set([...(requestedTitleKeywords.length ? requestedTitleKeywords : fallbackTitleKeywords)].map((item) => item.toLowerCase()))
+  ).slice(0, 6);
+
+  const minFloor = likelyB2B ? 0.58 : 0.5;
+  const maxCap = likelyB2B ? 0.78 : 0.68;
+  const defaultConfidence = likelyB2B ? 0.62 : 0.6;
+  const normalizedCompanyKeywords = Array.from(
+    new Set(
+      [
+        ...requestedCompanyKeywords.map((item) => item.toLowerCase()),
+        ...deriveTargetCompanyKeywords(input.targetAudience),
+      ].filter(Boolean)
+    )
+  ).slice(0, 8);
+  const companyKeywordPolicy = normalizedCompanyKeywords;
+  const explicitExcludedKeywords = Array.from(
+    new Set(
+      [
+        ...requestedExcludedCompanyKeywords.map((item) => item.toLowerCase()),
+        ...deriveExplicitAudienceExclusions(input.targetAudience, input.offer, input.experimentName),
+      ].filter(Boolean)
+    )
+  ).slice(0, 16);
+
   const policy: LeadQualityPolicy = {
-    allowFreeDomains: Boolean(row.allowFreeDomains ?? false),
-    allowRoleInboxes: Boolean(row.allowRoleInboxes ?? false),
-    requirePersonName: Boolean(row.requirePersonName ?? true),
-    requireCompany: Boolean(row.requireCompany ?? true),
-    requireTitle: Boolean(row.requireTitle ?? false),
-    minConfidenceScore: Math.max(0.5, Math.min(0.68, Number(row.minConfidenceScore ?? 0.6) || 0.6)),
+    allowFreeDomains: likelyB2B ? false : requestedAllowFreeDomains,
+    allowRoleInboxes: likelyB2B ? false : requestedAllowRoleInboxes,
+    requirePersonName: likelyB2B ? true : requestedRequirePersonName,
+    requireCompany: likelyB2B ? true : requestedRequireCompany,
+    requireTitle: likelyB2B ? rolePersonaCue || requestedRequireTitle || requiredTitleKeywords.length > 0 : requestedRequireTitle,
+    requiredTitleKeywords: requiredTitleKeywords.slice(0, 4),
+    requiredCompanyKeywords: companyKeywordPolicy,
+    excludedCompanyKeywords: explicitExcludedKeywords,
+    minConfidenceScore: Math.max(minFloor, Math.min(maxCap, requestedMinConfidence || defaultConfidence)),
   };
   return policy;
+}
+
+function buildFallbackLeadQualityPolicy(input: {
+  brandWebsite: string;
+  targetAudience: string;
+  offer: string;
+  experimentName: string;
+}): LeadQualityPolicy {
+  const likelyB2B = isLikelyB2BOutreachContext({
+    brandWebsite: input.brandWebsite,
+    targetAudience: input.targetAudience,
+    offer: input.offer,
+    experimentName: input.experimentName,
+  });
+  const rolePersonaCue = /\b(manager|director|head|vp|chief|owner|founder|lead|specialist)\b/i.test(
+    input.targetAudience
+  );
+  const audienceBeforeAt = normalizeText(input.targetAudience.split(/\bat\b/i)[0] ?? "");
+  const roleHint = audienceBeforeAt
+    .replace(/\b(manager|director|head|vp|chief|owner|founder|lead|specialist)\b/gi, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+  const roleTokens = roleHint.split(" ").filter(Boolean);
+  const rolePhrase = roleTokens.length > 4 ? roleTokens.slice(0, 3).join(" ") : roleHint;
+  const requiredTitleKeywords = rolePhrase ? [trimText(rolePhrase, 32)] : [];
+
+  return {
+    allowFreeDomains: false,
+    allowRoleInboxes: false,
+    requirePersonName: true,
+    requireCompany: true,
+    requireTitle: rolePersonaCue || requiredTitleKeywords.length > 0,
+    requiredTitleKeywords: requiredTitleKeywords.slice(0, 4),
+    requiredCompanyKeywords: deriveTargetCompanyKeywords(input.targetAudience),
+    excludedCompanyKeywords: deriveExplicitAudienceExclusions(
+      input.targetAudience,
+      input.offer,
+      input.experimentName
+    ),
+    minConfidenceScore: likelyB2B ? 0.62 : 0.58,
+  };
 }
 
 function normalizeSourcingChainSteps(steps: LeadSourcingChainStep[]): SourcingChainStep[] {
@@ -3193,7 +7915,7 @@ function rankActorPoolWithMemory(input: {
       eligible.push(actor);
       continue;
     }
-    const compatibilityBlocked = memory.compatibilityFailCount >= 1 && memory.successCount === 0;
+    const compatibilityBlocked = memory.compatibilityFailCount >= 2 && memory.successCount === 0;
     const hardFailing = memory.failCount >= 3 && memory.successCount === 0;
     const veryLowQuality = memory.avgQuality <= 0.05 && memory.leadsAccepted === 0 && memory.failCount >= 2;
     if (compatibilityBlocked) {
@@ -3250,23 +7972,235 @@ function rankActorPoolWithMemory(input: {
   };
 }
 
+type ProbeIcpAlignmentAssessment = {
+  pass: boolean;
+  threshold: number;
+  finalScore: number;
+  deterministicScore: number;
+  llmScore: number;
+  llmVerdict: "strong_match" | "partial_match" | "mismatch" | "not_evaluated";
+  rationale: string;
+  sampleSize: number;
+  titleMatchRate: number;
+  companyKeywordMatchRate: number;
+  excludedKeywordHitRate: number;
+};
+
+function deterministicProbeIcpAlignment(input: {
+  leads: ApifyLead[];
+  qualityPolicy: LeadQualityPolicy;
+}) {
+  const sample = input.leads.slice(0, PROBE_ICP_ALIGNMENT_SAMPLE_SIZE);
+  if (!sample.length) {
+    return {
+      score: 0,
+      sampleSize: 0,
+      titleMatchRate: 0,
+      companyKeywordMatchRate: 0,
+      excludedKeywordHitRate: 0,
+    };
+  }
+
+  const requiredTitleKeywords = Array.isArray(input.qualityPolicy.requiredTitleKeywords)
+    ? input.qualityPolicy.requiredTitleKeywords.map((value) => normalizeText(String(value ?? "")).toLowerCase()).filter(Boolean)
+    : [];
+  const requiredCompanyKeywords = Array.isArray(input.qualityPolicy.requiredCompanyKeywords)
+    ? input.qualityPolicy.requiredCompanyKeywords.map((value) => normalizeText(String(value ?? "")).toLowerCase()).filter(Boolean)
+    : [];
+  const excludedCompanyKeywords = Array.isArray(input.qualityPolicy.excludedCompanyKeywords)
+    ? input.qualityPolicy.excludedCompanyKeywords.map((value) => normalizeText(String(value ?? "")).toLowerCase()).filter(Boolean)
+    : [];
+
+  let titleMatches = 0;
+  let companyMatches = 0;
+  let excludedHits = 0;
+  for (const lead of sample) {
+    const title = normalizeText(lead.title ?? "").toLowerCase();
+    const companyContext = normalizeText(`${lead.company ?? ""} ${lead.domain ?? ""}`).toLowerCase();
+    const titleOk = requiredTitleKeywords.length
+      ? requiredTitleKeywords.some((keyword) => title.includes(keyword))
+      : input.qualityPolicy.requireTitle
+        ? Boolean(title)
+        : true;
+    if (titleOk) titleMatches += 1;
+
+    const companyOk = requiredCompanyKeywords.length
+      ? requiredCompanyKeywords.some((keyword) => companyContext.includes(keyword))
+      : true;
+    if (companyOk) companyMatches += 1;
+
+    const excludedHit = excludedCompanyKeywords.some((keyword) => companyContext.includes(keyword));
+    if (excludedHit) excludedHits += 1;
+  }
+
+  const sampleSize = sample.length;
+  const titleMatchRate = titleMatches / sampleSize;
+  const companyKeywordMatchRate = companyMatches / sampleSize;
+  const excludedKeywordHitRate = excludedHits / sampleSize;
+  const score = clampConfidenceValue(
+    titleMatchRate * 0.45 + companyKeywordMatchRate * 0.35 + (1 - excludedKeywordHitRate) * 0.2,
+    0
+  );
+
+  return {
+    score,
+    sampleSize,
+    titleMatchRate,
+    companyKeywordMatchRate,
+    excludedKeywordHitRate,
+  };
+}
+
+async function assessProbeIcpAlignment(input: {
+  targetAudience: string;
+  triggerContext: string;
+  offer: string;
+  step: LeadSourcingChainStep;
+  leads: ApifyLead[];
+  qualityPolicy: LeadQualityPolicy;
+}): Promise<ProbeIcpAlignmentAssessment> {
+  const deterministic = deterministicProbeIcpAlignment({
+    leads: input.leads,
+    qualityPolicy: input.qualityPolicy,
+  });
+  const threshold = input.qualityPolicy.requireTitle
+    ? Math.max(PROBE_ICP_ALIGNMENT_MIN_SCORE, 0.58)
+    : PROBE_ICP_ALIGNMENT_MIN_SCORE;
+  if (!deterministic.sampleSize) {
+    return {
+      pass: false,
+      threshold,
+      finalScore: 0,
+      deterministicScore: 0,
+      llmScore: 0,
+      llmVerdict: "not_evaluated",
+      rationale: "No probe leads available for ICP relevance assessment.",
+      sampleSize: 0,
+      titleMatchRate: 0,
+      companyKeywordMatchRate: 0,
+      excludedKeywordHitRate: 0,
+    };
+  }
+
+  const sampleLeads = input.leads.slice(0, PROBE_ICP_ALIGNMENT_SAMPLE_SIZE).map((lead) => ({
+    name: trimText(lead.name, 80),
+    title: trimText(lead.title, 120),
+    company: trimText(lead.company, 120),
+    domain: trimText(lead.domain, 120),
+    email: trimText(lead.email, 140),
+  }));
+
+  let llmScore = deterministic.score;
+  let llmVerdict: ProbeIcpAlignmentAssessment["llmVerdict"] = "not_evaluated";
+  let llmRationale = "";
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (apiKey) {
+    const prompt = [
+      "Score whether these probe leads match the intended outreach ICP.",
+      "Return strict JSON only: { score: number, verdict: \"strong_match\"|\"partial_match\"|\"mismatch\", rationale: string }",
+      "Rules:",
+      "- score must be between 0 and 1",
+      "- strong_match means clearly aligned to ICP",
+      "- partial_match means mixed quality",
+      "- mismatch means mostly wrong audience/industry/role",
+      `Context: ${JSON.stringify({
+        targetAudience: input.targetAudience,
+        triggerContext: input.triggerContext,
+        offer: input.offer,
+        stage: input.step.stage,
+        actorId: input.step.actorId,
+        queryHint: input.step.queryHint,
+        qualityPolicy: input.qualityPolicy,
+        leads: sampleLeads,
+      })}`,
+    ].join("\n");
+
+    try {
+      const model = resolveLlmModel("lead_chain_selection", { prompt });
+      const response = await fetch("https://api.openai.com/v1/responses", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          model,
+          input: prompt,
+          text: { format: { type: "json_object" } },
+          max_output_tokens: 500,
+        }),
+      });
+      const raw = await response.text();
+      if (response.ok) {
+        const payload: unknown = JSON.parse(raw);
+        const parsed = parseLooseJsonObject(extractOutputText(payload));
+        const row = asRecord(parsed);
+        llmScore = clampConfidenceValue(row.score, deterministic.score);
+        const verdictRaw = String(row.verdict ?? "").trim().toLowerCase();
+        if (verdictRaw === "strong_match" || verdictRaw === "partial_match" || verdictRaw === "mismatch") {
+          llmVerdict = verdictRaw;
+        } else {
+          llmVerdict = llmScore >= 0.72 ? "strong_match" : llmScore >= 0.5 ? "partial_match" : "mismatch";
+        }
+        llmRationale = trimText(row.rationale, 240);
+      } else {
+        llmRationale = `llm_probe_icp_eval_failed:${response.status}`;
+      }
+    } catch (error) {
+      llmRationale = `llm_probe_icp_eval_failed:${error instanceof Error ? trimText(error.message, 120) : "unknown"}`;
+    }
+  }
+
+  const finalScore = clampConfidenceValue(deterministic.score * 0.6 + llmScore * 0.4, deterministic.score);
+  const pass = finalScore >= threshold && llmVerdict !== "mismatch";
+  const rationale = pass
+    ? llmRationale || "Probe leads align with ICP constraints."
+    : llmRationale || "Probe leads do not align strongly enough with ICP constraints.";
+
+  return {
+    pass,
+    threshold,
+    finalScore,
+    deterministicScore: deterministic.score,
+    llmScore,
+    llmVerdict,
+    rationale,
+    sampleSize: deterministic.sampleSize,
+    titleMatchRate: deterministic.titleMatchRate,
+    companyKeywordMatchRate: deterministic.companyKeywordMatchRate,
+    excludedKeywordHitRate: deterministic.excludedKeywordHitRate,
+  };
+}
+
 async function probeSourcingPlanCandidate(input: {
   plan: LeadSourcingChainPlan;
   targetAudience: string;
+  triggerContext?: string;
+  offer?: string;
   token: string;
   qualityPolicy: LeadQualityPolicy;
+  allowMissingEmail?: boolean;
   remainingBudgetUsd: number;
   actorSchemaCache: ActorSchemaProfileCache;
   contractsByActorId: Map<string, ActorSemanticContract>;
+  initialChainData?: LeadSourcingChainData;
 }): Promise<ProbedSourcingPlan> {
   let budgetUsedUsd = 0;
-  let chainData: LeadSourcingChainData = {
-    queries: uniqueTrimmed([input.targetAudience], 120),
-    companies: [],
-    websites: [],
-    domains: [],
-    emails: [],
-  };
+  let chainData: LeadSourcingChainData = input.initialChainData
+    ? {
+        queries: [...input.initialChainData.queries],
+        companies: [...input.initialChainData.companies],
+        websites: [...input.initialChainData.websites],
+        domains: [...input.initialChainData.domains],
+        profileUrls: [...input.initialChainData.profileUrls],
+        emails: [...input.initialChainData.emails],
+        phones: [...input.initialChainData.phones],
+      }
+    : buildInitialChainData({
+        targetAudience: input.targetAudience,
+        triggerContext: input.triggerContext ?? "",
+        offer: input.offer ?? "",
+      });
   const acceptedLeads: ApifyLead[] = [];
   const rejectedLeads: LeadAcceptanceDecision[] = [];
   const probeResults: ProbedSourcingPlan["probeResults"] = [];
@@ -3404,14 +8338,16 @@ async function probeSourcingPlanCandidate(input: {
     const qualityMetrics: Record<string, unknown> = {
       rowCount: run.rows.length,
       compatibilityScore: compatibility.score,
-      signals: {
-        queries: chainData.queries.length,
-        companies: chainData.companies.length,
-        websites: chainData.websites.length,
-        domains: chainData.domains.length,
-        emails: chainData.emails.length,
-      },
-    };
+        signals: {
+          queries: chainData.queries.length,
+          companies: chainData.companies.length,
+          websites: chainData.websites.length,
+          domains: chainData.domains.length,
+          profileUrls: chainData.profileUrls.length,
+          emails: chainData.emails.length,
+          phones: chainData.phones.length,
+        },
+      };
 
     if (stepIndex === input.plan.steps.length - 1) {
       const leads = leadsFromApifyRows(run.rows, APIFY_PROBE_MAX_LEADS);
@@ -3419,6 +8355,7 @@ async function probeSourcingPlanCandidate(input: {
         const decision = evaluateLeadAgainstQualityPolicy({
           lead,
           policy: input.qualityPolicy,
+          allowMissingEmail: input.allowMissingEmail === true,
         });
         if (decision.accepted) {
           acceptedLeads.push(lead);
@@ -3429,8 +8366,31 @@ async function probeSourcingPlanCandidate(input: {
       qualityMetrics.acceptedLeads = acceptedLeads.length;
       qualityMetrics.rejectedLeads = rejectedLeads.length;
       qualityMetrics.topRejections = summarizeTopReasons(rejectedLeads, 4);
+      const icpAlignment = await assessProbeIcpAlignment({
+        targetAudience: input.targetAudience,
+        triggerContext: input.triggerContext ?? "",
+        offer: input.offer ?? "",
+        step,
+        leads: acceptedLeads.length ? acceptedLeads : leads,
+        qualityPolicy: input.qualityPolicy,
+      });
+      qualityMetrics.icpAlignment = {
+        pass: icpAlignment.pass,
+        threshold: icpAlignment.threshold,
+        finalScore: icpAlignment.finalScore,
+        deterministicScore: icpAlignment.deterministicScore,
+        llmScore: icpAlignment.llmScore,
+        llmVerdict: icpAlignment.llmVerdict,
+        rationale: icpAlignment.rationale,
+        sampleSize: icpAlignment.sampleSize,
+        titleMatchRate: icpAlignment.titleMatchRate,
+        companyKeywordMatchRate: icpAlignment.companyKeywordMatchRate,
+        excludedKeywordHitRate: icpAlignment.excludedKeywordHitRate,
+      };
       if (!acceptedLeads.length) {
         reason = "probe_no_accepted_leads";
+      } else if (!icpAlignment.pass) {
+        reason = `probe_icp_mismatch:${step.actorId}`;
       }
     } else {
       const nextStep = input.plan.steps[stepIndex + 1];
@@ -3516,10 +8476,14 @@ async function probeSourcingPlanCandidate(input: {
 async function executeSourcingPlan(input: {
   plan: LeadSourcingChainPlan;
   targetAudience: string;
+  triggerContext?: string;
+  offer?: string;
   token: string;
   maxLeads: number;
   qualityPolicy: LeadQualityPolicy;
+  allowMissingEmail?: boolean;
   actorSchemaCache: ActorSchemaProfileCache;
+  initialChainData?: LeadSourcingChainData;
 }): Promise<{
   ok: boolean;
   reason: string;
@@ -3528,13 +8492,21 @@ async function executeSourcingPlan(input: {
   stepDiagnostics: Array<Record<string, unknown>>;
   lastActorInputError: string;
 }> {
-  let chainData: LeadSourcingChainData = {
-    queries: uniqueTrimmed([input.targetAudience], 120),
-    companies: [],
-    websites: [],
-    domains: [],
-    emails: [],
-  };
+  let chainData: LeadSourcingChainData = input.initialChainData
+    ? {
+        queries: [...input.initialChainData.queries],
+        companies: [...input.initialChainData.companies],
+        websites: [...input.initialChainData.websites],
+        domains: [...input.initialChainData.domains],
+        profileUrls: [...input.initialChainData.profileUrls],
+        emails: [...input.initialChainData.emails],
+        phones: [...input.initialChainData.phones],
+      }
+    : buildInitialChainData({
+        targetAudience: input.targetAudience,
+        triggerContext: input.triggerContext ?? "",
+        offer: input.offer ?? "",
+      });
   const stepDiagnostics: Array<Record<string, unknown>> = [];
   let lastActorInputError = "";
 
@@ -3749,7 +8721,9 @@ async function executeSourcingPlan(input: {
         companies: chainData.companies.length,
         websites: chainData.websites.length,
         domains: chainData.domains.length,
+        profileUrls: chainData.profileUrls.length,
         emails: chainData.emails.length,
+        phones: chainData.phones.length,
       },
     });
 
@@ -3761,6 +8735,7 @@ async function executeSourcingPlan(input: {
         const decision = evaluateLeadAgainstQualityPolicy({
           lead,
           policy: input.qualityPolicy,
+          allowMissingEmail: input.allowMissingEmail === true,
         });
         if (decision.accepted) accepted.push(lead);
         else rejected.push(decision);
@@ -3812,6 +8787,7 @@ function preflightReason(input: {
   mailboxAccount: ResolvedAccount;
   mailboxSecrets: ResolvedSecrets;
   targetAudience: string;
+  hasPlatformExaKey: boolean;
 }) {
   if (!supportsDelivery(input.deliveryAccount)) {
     return "Assigned delivery account does not support outreach sending";
@@ -3819,8 +8795,8 @@ function preflightReason(input: {
   if (!input.targetAudience.trim()) {
     return "Target Audience is required for lead sourcing";
   }
-  if (!effectiveSourcingToken(input.deliverySecrets)) {
-    return "Lead sourcing credentials are missing";
+  if (!input.hasPlatformExaKey) {
+    return "Platform lead sourcing is not configured (EXA_API_KEY missing)";
   }
   if (
     !input.deliveryAccount.config.customerIo.siteId.trim()
@@ -3854,7 +8830,7 @@ function preflightReason(input: {
 function preflightDiagnostic(input: {
   reason: string;
   hypothesis: Hypothesis;
-  deliverySecrets: ResolvedSecrets;
+  hasPlatformExaKey: boolean;
 }) {
   const sourceConfig = effectiveSourceConfig(input.hypothesis);
 
@@ -3863,12 +8839,12 @@ function preflightDiagnostic(input: {
     hypothesisId: input.hypothesis.id,
     hypothesisHasLeadSourceOverride: Boolean(input.hypothesis.sourceConfig?.actorId?.trim()),
     hasResolvedLeadSource: Boolean(sourceConfig.actorId),
-    hasLeadSourcingToken: Boolean(effectiveSourcingToken(input.deliverySecrets)),
+    hasPlatformExaKey: input.hasPlatformExaKey,
   } as const;
 
-  if (input.reason === "Lead sourcing credentials are missing") {
+  if (input.reason === "Platform lead sourcing is not configured (EXA_API_KEY missing)") {
     return {
-      hint: "Platform lead sourcing credentials are missing in this deployment. This is platform-managed (not per-user).",
+      hint: "Platform lead sourcing is not configured in this deployment. Set EXA_API_KEY in project environment variables.",
       debug,
     };
   }
@@ -4107,6 +9083,64 @@ function parseOfferAndCta(rawOffer: string) {
   return { offer, cta };
 }
 
+type ConversationThreadHistoryItem = {
+  direction: "inbound" | "outbound";
+  subject: string;
+  body: string;
+  at: string;
+  nodeId?: string;
+  messageId?: string;
+};
+
+async function buildConversationThreadHistory(input: {
+  runId: string;
+  leadId: string;
+  leadEmail: string;
+  sessionId: string;
+  threadId?: string;
+  runMessages?: Awaited<ReturnType<typeof listRunMessages>>;
+  replyMessages?: Awaited<ReturnType<typeof listReplyMessagesByRun>>;
+}): Promise<ConversationThreadHistoryItem[]> {
+  const runMessages = input.runMessages ?? (await listRunMessages(input.runId));
+  const replyMessages = input.replyMessages ?? (await listReplyMessagesByRun(input.runId));
+
+  const outboundHistory = runMessages
+    .filter(
+      (message) =>
+        message.leadId === input.leadId &&
+        message.sessionId === input.sessionId &&
+        message.sourceType === "conversation" &&
+        (message.status === "sent" || message.status === "replied")
+    )
+    .map((message) => ({
+      direction: "outbound" as const,
+      subject: String(message.subject ?? "").trim(),
+      body: String(message.body ?? "").trim(),
+      at: String(message.sentAt || message.scheduledAt || message.createdAt || "").trim(),
+      nodeId: String(message.nodeId ?? "").trim(),
+      messageId: String(message.id ?? "").trim(),
+    }));
+
+  const leadEmailLower = input.leadEmail.trim().toLowerCase();
+  const inboundHistory = replyMessages
+    .filter((message) => {
+      if (message.direction !== "inbound") return false;
+      if (input.threadId) return message.threadId === input.threadId;
+      return String(message.from ?? "").trim().toLowerCase() === leadEmailLower;
+    })
+    .map((message) => ({
+      direction: "inbound" as const,
+      subject: String(message.subject ?? "").trim(),
+      body: String(message.body ?? "").trim(),
+      at: String(message.receivedAt || message.createdAt || "").trim(),
+      messageId: String(message.id ?? "").trim(),
+    }));
+
+  return [...outboundHistory, ...inboundHistory]
+    .filter((row) => row.body || row.subject)
+    .sort((a, b) => (toDate(a.at).getTime() > toDate(b.at).getTime() ? 1 : -1));
+}
+
 function buildConversationPromptContext(input: {
   run: {
     id: string;
@@ -4139,6 +9173,7 @@ function buildConversationPromptContext(input: {
   intent?: ReplyThread["intent"] | "";
   intentConfidence?: number;
   priorNodePath?: string[];
+  threadHistory?: ConversationThreadHistoryItem[];
   maxDepth?: number;
 }): ConversationPromptRenderContext {
   return {
@@ -4183,6 +9218,20 @@ function buildConversationPromptContext(input: {
       priorNodePath: Array.isArray(input.priorNodePath)
         ? input.priorNodePath.map((value) => String(value ?? "").trim()).filter(Boolean)
         : [],
+      history: Array.isArray(input.threadHistory)
+        ? input.threadHistory
+            .map((row) => ({
+              direction: (row.direction === "inbound" ? "inbound" : "outbound") as
+                | "inbound"
+                | "outbound",
+              subject: String(row.subject ?? "").trim(),
+              body: String(row.body ?? "").trim(),
+              at: String(row.at ?? "").trim(),
+              nodeId: String(row.nodeId ?? "").trim(),
+              messageId: String(row.messageId ?? "").trim(),
+            }))
+            .filter((row) => row.subject || row.body)
+        : [],
     },
     safety: {
       maxDepth: Math.max(1, Math.min(12, Number(input.maxDepth ?? 5) || 5)),
@@ -4226,6 +9275,7 @@ async function generateConversationNodeContent(input: {
   intent?: ReplyThread["intent"] | "";
   intentConfidence?: number;
   priorNodePath?: string[];
+  threadHistory?: ConversationThreadHistoryItem[];
   maxDepth?: number;
 }): Promise<
   | { ok: true; subject: string; body: string; trace: Record<string, unknown> }
@@ -4267,6 +9317,7 @@ async function generateConversationNodeContent(input: {
       intent: input.intent,
       intentConfidence: input.intentConfidence,
       priorNodePath: input.priorNodePath,
+      threadHistory: input.threadHistory,
       maxDepth: input.maxDepth,
     });
 
@@ -4401,6 +9452,7 @@ async function scheduleConversationNodeMessage(input: {
   intent?: ReplyThread["intent"] | "";
   intentConfidence?: number;
   priorNodePath?: string[];
+  threadHistory?: ConversationThreadHistoryItem[];
   maxDepth?: number;
   waitMinutes?: number;
   latestInboundSubject?: string;
@@ -4451,6 +9503,7 @@ async function scheduleConversationNodeMessage(input: {
     intent: input.intent,
     intentConfidence: input.intentConfidence,
     priorNodePath: input.priorNodePath,
+    threadHistory: input.threadHistory,
     maxDepth: input.maxDepth,
   });
   if (!composed.ok) {
@@ -4770,12 +9823,13 @@ export async function launchExperimentRun(input: {
     mailboxAccount: brandAccount.mailboxAccount,
     mailboxSecrets: brandAccount.mailboxSecrets,
     targetAudience: audienceContext.targetAudience,
+    hasPlatformExaKey: Boolean(platformExaApiKey()),
   });
   if (reason) {
     const diagnostic = preflightDiagnostic({
       reason,
       hypothesis,
-      deliverySecrets: brandAccount.deliverySecrets,
+      hasPlatformExaKey: Boolean(platformExaApiKey()),
     });
     const failed = await createOutreachRun({
       brandId: input.brandId,
@@ -4908,6 +9962,193 @@ export async function launchExperimentRun(input: {
   return { ok: true, runId: run.id, reason: "Run queued" };
 }
 
+export async function launchScaleCampaignRun(input: {
+  brandId: string;
+  scaleCampaignId: string;
+  trigger?: "manual" | "auto_hopper";
+}): Promise<{
+  ok: boolean;
+  runId: string;
+  reason: string;
+  hint?: string;
+  debug?: Record<string, unknown>;
+}> {
+  const scaleCampaign = await getScaleCampaignRecordById(input.brandId, input.scaleCampaignId);
+  if (!scaleCampaign) {
+    return { ok: false, runId: "", reason: "campaign not found" };
+  }
+
+  const sourceExperiment = await getExperimentRecordById(input.brandId, scaleCampaign.sourceExperimentId);
+  if (!sourceExperiment) {
+    return { ok: false, runId: "", reason: "source experiment not found" };
+  }
+
+  const experiment = await ensureRuntimeForExperiment(sourceExperiment);
+  if (!experiment.runtime.campaignId || !experiment.runtime.experimentId) {
+    return { ok: false, runId: "", reason: "experiment runtime is not configured" };
+  }
+
+  if (scaleCampaign.scalePolicy.accountId) {
+    await setBrandOutreachAssignment(input.brandId, {
+      accountId: scaleCampaign.scalePolicy.accountId,
+      mailboxAccountId:
+        scaleCampaign.scalePolicy.mailboxAccountId || scaleCampaign.scalePolicy.accountId,
+    });
+  }
+
+  const runtimeCampaign = await getCampaignById(input.brandId, experiment.runtime.campaignId);
+  if (!runtimeCampaign) {
+    return { ok: false, runId: "", reason: "runtime campaign not found" };
+  }
+
+  const runtimeVariant = runtimeCampaign.experiments.find(
+    (item) => item.id === experiment.runtime.experimentId
+  );
+  if (!runtimeVariant) {
+    return { ok: false, runId: "", reason: "runtime variant mapping is invalid" };
+  }
+
+  await updateCampaign(input.brandId, runtimeCampaign.id, {
+    experiments: runtimeCampaign.experiments.map((variant) =>
+      variant.id === runtimeVariant.id
+        ? {
+            ...variant,
+            runPolicy: {
+              ...variant.runPolicy,
+              dailyCap: scaleCampaign.scalePolicy.dailyCap,
+              hourlyCap: scaleCampaign.scalePolicy.hourlyCap,
+              timezone: scaleCampaign.scalePolicy.timezone,
+              minSpacingMinutes: scaleCampaign.scalePolicy.minSpacingMinutes,
+            },
+          }
+        : variant
+    ),
+  });
+
+  const result = await launchExperimentRun({
+    brandId: input.brandId,
+    campaignId: runtimeCampaign.id,
+    experimentId: runtimeVariant.id,
+    trigger: "manual",
+    ownerType: "campaign",
+    ownerId: scaleCampaign.id,
+  });
+
+  if (!result.ok) {
+    return result;
+  }
+
+  await Promise.all([
+    updateScaleCampaignRecord(input.brandId, scaleCampaign.id, { status: "active" }),
+    updateExperimentRecord(input.brandId, experiment.id, { status: "promoted" }),
+  ]);
+
+  return result;
+}
+
+async function countOwnerSentUsage(input: {
+  brandId: string;
+  ownerType: "experiment" | "campaign";
+  ownerId: string;
+  timezone: string;
+  currentRunId?: string;
+  currentRunMessages?: Awaited<ReturnType<typeof listRunMessages>>;
+}) {
+  const ownerRuns = await listOwnerRuns(input.brandId, input.ownerType, input.ownerId);
+  const recentRuns = ownerRuns.filter((run) => {
+    if (isRunOpen(run.status)) return true;
+    return Date.now() - toDate(run.createdAt).getTime() <= 3 * DAY_MS;
+  });
+  const messagesByRun = await Promise.all(
+    recentRuns.map((run) =>
+      run.id === input.currentRunId && input.currentRunMessages
+        ? Promise.resolve(input.currentRunMessages)
+        : listRunMessages(run.id)
+    )
+  );
+  const allMessages = messagesByRun.flat();
+  const sentMessages = allMessages.filter((message) => message.status === "sent" && Boolean(message.sentAt));
+  const oneHourAgo = Date.now() - 60 * 60 * 1000;
+  const todayKey = timeZoneDateKey(new Date(), input.timezone || DEFAULT_TIMEZONE);
+  const hourlySent = sentMessages.filter(
+    (message) => message.sentAt && toDate(message.sentAt).getTime() >= oneHourAgo
+  ).length;
+  const dailySent = sentMessages.filter(
+    (message) =>
+      message.sentAt &&
+      timeZoneDateKey(toDate(message.sentAt), input.timezone || DEFAULT_TIMEZONE) === todayKey
+  ).length;
+
+  return {
+    ownerRuns,
+    hourlySent,
+    dailySent,
+  };
+}
+
+async function ensureActiveCampaignHoppers() {
+  const brands = await listBrands();
+  let campaignsEvaluated = 0;
+  let campaignsLaunched = 0;
+  let campaignsBlocked = 0;
+
+  for (const brand of brands) {
+    const campaigns = await listScaleCampaignRecords(brand.id);
+    for (const campaign of campaigns) {
+      if (campaign.status !== "active") continue;
+      campaignsEvaluated += 1;
+
+      const usage = await countOwnerSentUsage({
+        brandId: brand.id,
+        ownerType: "campaign",
+        ownerId: campaign.id,
+        timezone: campaign.scalePolicy.timezone || DEFAULT_TIMEZONE,
+      });
+      const openRun = usage.ownerRuns.find((run) => isRunOpen(run.status)) ?? null;
+      if (openRun) {
+        continue;
+      }
+
+      const latestRun = usage.ownerRuns[0] ?? null;
+      if (latestRun && ["failed", "preflight_failed", "paused"].includes(latestRun.status)) {
+        campaignsBlocked += 1;
+        continue;
+      }
+
+      const dailyTarget = Math.max(1, Number(campaign.scalePolicy.dailyCap || 30));
+      if (usage.dailySent >= dailyTarget) {
+        continue;
+      }
+
+      if (latestRun && latestRun.status === "completed" && latestRun.metrics.sentMessages === 0) {
+        const cooloffMs = Date.now() - toDate(latestRun.updatedAt).getTime();
+        if (cooloffMs < 30 * 60 * 1000) {
+          campaignsBlocked += 1;
+          continue;
+        }
+      }
+
+      const launch = await launchScaleCampaignRun({
+        brandId: brand.id,
+        scaleCampaignId: campaign.id,
+        trigger: "auto_hopper",
+      });
+
+      if (launch.ok) {
+        campaignsLaunched += 1;
+      } else {
+        campaignsBlocked += 1;
+      }
+    }
+  }
+
+  return {
+    campaignsEvaluated,
+    campaignsLaunched,
+    campaignsBlocked,
+  };
+}
+
 export async function autoQueueApprovedHypothesisRuns(input: {
   brandId: string;
   campaignId: string;
@@ -4962,6 +10203,7 @@ async function processSourceLeadsJob(job: OutreachJob) {
       ? (job.payload as Record<string, unknown>)
       : {};
   const sampleOnly = payload.sampleOnly === true;
+  const resumeState = parseDeferredSourcingState(payload.resumeState);
 
   if (existingLeads.length) {
     await updateOutreachRun(run.id, {
@@ -5013,6 +10255,7 @@ async function processSourceLeadsJob(job: OutreachJob) {
     });
     return;
   }
+  const activeExperiment = experiment;
 
   let account = await getOutreachAccount(run.accountId);
   const secrets = await getOutreachAccountSecrets(run.accountId);
@@ -5026,7 +10269,8 @@ async function processSourceLeadsJob(job: OutreachJob) {
   }
 
   const sourceConfig = effectiveSourceConfig(hypothesis);
-  const sourcingToken = effectiveSourcingToken(secrets);
+  const exaApiKey = platformExaApiKey();
+  const dataForSeoCredentials = platformDataForSeoCredentials();
   const maxLeads = Math.max(
     1,
     Math.min(
@@ -5035,16 +10279,24 @@ async function processSourceLeadsJob(job: OutreachJob) {
     )
   );
   const runtimeExperiment = await getExperimentRecordByRuntimeRef(run.brandId, run.campaignId, run.experimentId);
-  const audienceContext = buildSourcingAudienceContext({
+  const baseAudienceContext = buildSourcingAudienceContext({
     runtimeAudience: runtimeExperiment?.audience ?? "",
     hypothesisAudience: hypothesis.actorQuery,
-    experimentNotes: experiment.notes,
+    experimentNotes: activeExperiment.notes,
+  });
+  const brand = await getBrandById(run.brandId);
+  const offerContext = runtimeExperiment?.offer?.trim() || activeExperiment.notes || hypothesis.rationale || "";
+  const audienceContext = await resolveSourcingAudienceContext({
+    base: baseAudienceContext,
+    brandName: brand?.name ?? "",
+    brandWebsite: brand?.website ?? "",
+    experimentName: runtimeExperiment?.name?.trim() || activeExperiment.name,
+    offer: offerContext,
+    notes: [activeExperiment.notes, hypothesis.rationale, runtimeExperiment?.audience ?? ""].filter(Boolean).join(" | "),
   });
   const targetAudience = audienceContext.targetAudience;
   const triggerContext = audienceContext.triggerContext;
-  const brand = await getBrandById(run.brandId);
-  const offerContext = runtimeExperiment?.offer?.trim() || experiment.notes || hypothesis.rationale || "";
-  const startState = deriveSourcingStartState({
+  const baseStartState = deriveSourcingStartState({
     targetAudience,
     triggerContext,
     offer: offerContext,
@@ -5073,10 +10325,11 @@ async function processSourceLeadsJob(job: OutreachJob) {
       runId: run.id,
       eventType: "lead_sourcing_requested",
       payload: {
-        strategy: "dynamic_store_chain",
+        strategy: "exa_people_dynamic_queries",
         maxLeads,
         sampleOnly,
-        startState,
+        startState: baseStartState,
+        audienceContext,
       },
     });
     await setTrace({
@@ -5106,21 +10359,19 @@ async function processSourceLeadsJob(job: OutreachJob) {
     return;
   }
 
-  if (!sourcingToken) {
+  if (!exaApiKey) {
     await setTrace({
       phase: "failed",
       failureStep: "plan_sourcing",
-      lastActorInputError: "Lead sourcing credentials are missing",
+      lastActorInputError: "EXA_API_KEY is missing",
     });
     await failRunWithDiagnostics({
       run,
-      reason: "Lead sourcing credentials are missing",
+      reason: "Exa API key is missing. Set EXA_API_KEY in the deployment environment.",
       eventType: "lead_sourcing_failed",
     });
     return;
   }
-
-  const actorSchemaCache: ActorSchemaProfileCache = new Map();
 
   let qualityPolicy: LeadQualityPolicy;
   try {
@@ -5129,747 +10380,381 @@ async function processSourceLeadsJob(job: OutreachJob) {
       brandWebsite: brand?.website ?? "",
       targetAudience,
       offer: offerContext,
-      experimentName: experiment.name ?? "",
+      experimentName: activeExperiment.name ?? "",
     });
   } catch (error) {
-    await setTrace({
-      phase: "failed",
-      failureStep: "plan_sourcing",
-      lastActorInputError: error instanceof Error ? error.message : "quality_policy_failed",
-    });
-    await failRunWithDiagnostics({
-      run,
-      reason: `Adaptive lead quality policy generation failed: ${
-        error instanceof Error ? error.message : "Unknown error"
-      }`,
-      eventType: "lead_sourcing_failed",
-    });
-    return;
-  }
-
-  let actorPoolResult: Awaited<ReturnType<typeof buildApifyActorPool>>;
-  try {
-    actorPoolResult = await buildApifyActorPool({
-      targetAudience,
-      triggerContext,
-      offer: offerContext,
-      brandName: brand?.name ?? "",
+    const fallbackReason = error instanceof Error ? error.message : "quality_policy_failed";
+    qualityPolicy = buildFallbackLeadQualityPolicy({
       brandWebsite: brand?.website ?? "",
-      experimentName: experiment.name ?? "",
-      startState,
-    });
-  } catch (error) {
-    await setTrace({
-      phase: "failed",
-      failureStep: "plan_sourcing",
-      lastActorInputError: error instanceof Error ? error.message : "actor_pool_failed",
-    });
-    await failRunWithDiagnostics({
-      run,
-      reason: `Actor discovery failed: ${error instanceof Error ? error.message : "Unknown error"}`,
-      eventType: "lead_sourcing_failed",
-    });
-    return;
-  }
-
-  if (!actorPoolResult.actors.length) {
-    await setTrace({ phase: "failed", failureStep: "plan_sourcing" });
-    await failRunWithDiagnostics({
-      run,
-      reason: "No Apify actors found for this experiment audience",
-      eventType: "lead_sourcing_failed",
-      payload: {
-        queriesTried: actorPoolResult.searchDiagnostics,
-      },
-    });
-    return;
-  }
-
-  const actorMemory = await getSourcingActorMemory(actorPoolResult.actors.map((actor) => actor.actorId));
-  const rankedActorPoolResult = rankActorPoolWithMemory({
-    actors: actorPoolResult.actors,
-    memoryRows: actorMemory,
-  });
-  const topActorPool = rankedActorPoolResult.rankedActors.slice(0, APIFY_STORE_MAX_RESULTS);
-  if (!topActorPool.length) {
-    await setTrace({ phase: "failed", failureStep: "plan_sourcing" });
-    await failRunWithDiagnostics({
-      run,
-      reason: "No eligible actors remain after compatibility filtering",
-      eventType: "lead_sourcing_failed",
-      payload: {
-        memoryFilter: rankedActorPoolResult.diagnostics,
-      },
-    });
-    return;
-  }
-  const actorProfiles = await fetchActorProfiles(
-    topActorPool.map((actor) => actor.actorId),
-    sourcingToken
-  );
-  const planningActorPool = filterPlanningPoolBySchemaViability({
-    actors: topActorPool,
-    actorProfiles,
-    actorMemoryById: new Map(actorMemory.map((row) => [row.actorId.toLowerCase(), row])),
-  });
-  const semanticContractsByActorId = await inferActorSemanticContracts({
-    actors: planningActorPool,
-    actorProfilesById: actorProfiles,
-    targetAudience,
-    triggerContext,
-    offer: offerContext,
-  });
-  const startStateFilteredPool = filterPlanningActorsByStartStatePrereqs({
-    actors: planningActorPool,
-    contractsByActorId: semanticContractsByActorId,
-    startState,
-  });
-  const planningActorById = new Map(startStateFilteredPool.allowed.map((actor) => [actor.actorId, actor]));
-  if (!startStateFilteredPool.allowed.length) {
-    await setTrace({ phase: "failed", failureStep: "plan_sourcing" });
-    await failRunWithDiagnostics({
-      run,
-      reason: "No actors can run from current start-state prerequisites (auth/file requirements blocked all candidates)",
-      eventType: "lead_sourcing_failed",
-      payload: {
-        startState,
-        blockedActors: startStateFilteredPool.rejected.slice(0, 60),
-      },
-    });
-    return;
-  }
-
-  await createOutreachEvent({
-    runId: run.id,
-    eventType: "lead_sourcing_actor_pool_built",
-      payload: {
-        queryPlanMode: actorPoolResult.queryPlanMode,
-        queryPlan: actorPoolResult.queryPlan,
-        audienceContext,
-        queriesTried: actorPoolResult.searchDiagnostics,
-        actorCount: topActorPool.length,
-        planningActorCount: planningActorPool.length,
-        startStateFilteredActorCount: startStateFilteredPool.allowed.length,
-        startStateBlockedActors: startStateFilteredPool.rejected.slice(0, 40),
-        actorProfiles: actorProfiles.size,
-        memoryFilter: rankedActorPoolResult.diagnostics,
-        startState,
-        qualityPolicy,
-    },
-  });
-
-  let chainCandidates: LeadSourcingChainPlan[];
-  try {
-    chainCandidates = await planApifyLeadChainCandidates({
       targetAudience,
-      triggerContext,
-      brandName: brand?.name ?? "",
-      brandWebsite: brand?.website ?? "",
-      experimentName: experiment.name ?? "",
       offer: offerContext,
-      startState,
-      actorPool: startStateFilteredPool.allowed,
-      actorProfilesById: actorProfiles,
-      actorMemoryRows: actorMemory,
-      maxCandidates: APIFY_CHAIN_MAX_CANDIDATES,
+      experimentName: activeExperiment.name ?? "",
     });
-  } catch (error) {
-    await setTrace({
-      phase: "failed",
-      failureStep: "plan_sourcing",
-      lastActorInputError: error instanceof Error ? error.message : "chain_plan_failed",
-    });
-    await failRunWithDiagnostics({
-      run,
-      reason: `Lead-sourcing chain planning failed: ${error instanceof Error ? error.message : "Unknown error"}`,
-      eventType: "lead_sourcing_failed",
-      payload: { actorPoolCount: topActorPool.length },
-    });
-    return;
-  }
-
-  const historicalCandidates: LeadSourcingChainPlan[] = [];
-  const deterministicFeasibility = chainCandidates.map((candidate) =>
-    evaluateCandidateFeasibility({
-      candidate,
-      contractsByActorId: semanticContractsByActorId,
-      startState,
-    })
-  );
-  const actorHintsById = new Map(
-    startStateFilteredPool.allowed.map((actor) => [
-      actor.actorId,
-      {
-        title: trimText(actor.title, 120),
-        description: trimText(actor.description, 260),
-        categories: actor.categories.slice(0, 6),
-      },
-    ])
-  );
-  const llmFeasibility = await critiqueCandidateFeasibilityWithLlm({
-    candidates: chainCandidates,
-    deterministic: deterministicFeasibility,
-    contractsByActorId: semanticContractsByActorId,
-    actorHintsById,
-    targetAudience,
-    triggerContext,
-    offer: offerContext,
-    startState,
-  });
-
-  const feasibilityById = new Map(deterministicFeasibility.map((row) => [row.candidateId, row]));
-  const candidateScored = chainCandidates.map((candidate) => {
-    const deterministic = feasibilityById.get(candidate.id);
-    const llm = llmFeasibility.get(candidate.id);
-    const audienceMismatchReason = firstStepAudienceMismatchReason({
-      targetAudience,
-      candidate,
-      actorById: planningActorById,
-    });
-    const llmStrongPass = !llm || (llm.feasible && llm.score >= 0.55);
-    const score = Number(
-      (
-        (deterministic?.score ?? 0) * 0.65 +
-        (llm ? llm.score : deterministic?.score ?? 0) * 0.35
-      ).toFixed(4)
-    );
-    const deterministicReason =
-      deterministic?.reason && deterministic.reason !== "feasible" ? deterministic.reason : "";
-    const llmReason = trimText(llm?.reason, 240);
-    const hardBlocked = hasHardPreflightBlock(`${deterministicReason} ${llmReason}`.trim());
-    const feasible = Boolean(deterministic?.feasible) && (llmStrongPass || !hardBlocked) && !audienceMismatchReason;
-    const reason = feasible
-      ? "feasible"
-      : audienceMismatchReason || llmReason || deterministicReason || "preprobe_infeasible";
-    return { candidate, deterministic, llm, feasible, score, reason };
-  });
-  const schemaPreflightRows = await Promise.all(
-    candidateScored.map(async (row) => {
-      if (!row.feasible) {
-        return {
-          candidateId: row.candidate.id,
-          feasible: false,
-          reason: `skipped_schema_preflight:${row.reason}`,
-          steps: [],
-        } satisfies CandidateSchemaPreflight;
-      }
-      return preflightSourcingPlanCandidate({
-        candidate: row.candidate,
-        targetAudience,
-        startState,
-        token: sourcingToken,
-        actorSchemaCache,
-        contractsByActorId: semanticContractsByActorId,
-      });
-    })
-  );
-  const schemaPreflightById = new Map(schemaPreflightRows.map((row) => [row.candidateId, row]));
-  let candidateScoredWithSchema = candidateScored.map((row) => {
-    const schemaPreflight = schemaPreflightById.get(row.candidate.id);
-    const schemaFeasible = Boolean(schemaPreflight?.feasible);
-    const feasible = row.feasible && schemaFeasible;
-    const reason = feasible
-      ? "feasible"
-      : schemaPreflight && !schemaPreflight.feasible
-        ? schemaPreflight.reason
-        : row.reason;
-    return { ...row, schemaPreflight, feasible, reason };
-  });
-  const schemaBlockedActors = new Map<string, { actorId: string; reason: string }>();
-  for (const row of candidateScoredWithSchema) {
-    const schemaPreflight = row.schemaPreflight;
-    if (!schemaPreflight || schemaPreflight.feasible) continue;
-    const failedStep = schemaPreflight.steps.find((step) => !step.ok);
-    if (!failedStep) continue;
-    const secretSignalText = `${failedStep.reason} ${failedStep.missingRequired.join(",")} ${failedStep.requiredKeys.join(",")}`;
-    if (!looksLikeProviderSecretRequiredError(secretSignalText)) continue;
-    const key = failedStep.actorId.toLowerCase();
-    const reason = trimText(
-      failedStep.reason || failedStep.missingRequired.join(",") || "provider_secret_requirement_detected",
-      180
-    );
-    schemaBlockedActors.set(key, { actorId: failedStep.actorId, reason });
-  }
-  if (schemaBlockedActors.size) {
-    await upsertSourcingActorMemory(
-      Array.from(schemaBlockedActors.values()).map((row) => ({
-        actorId: row.actorId,
-        failDelta: 1,
-        compatibilityFailDelta: 1,
-        qualitySample: 0,
-      }))
-    );
-    candidateScoredWithSchema = candidateScoredWithSchema.map((row) => {
-      const blockedStep = row.candidate.steps.find((step) => schemaBlockedActors.has(step.actorId.toLowerCase()));
-      if (!blockedStep) return row;
-      const blockedReason =
-        schemaBlockedActors.get(blockedStep.actorId.toLowerCase())?.reason || "provider_secret_requirement_detected";
-      return {
-        ...row,
-        feasible: false,
-        reason: `blocked_actor:${blockedStep.actorId}:${blockedReason}`,
-      };
-    });
-  }
-
-  const feasibleChainCandidates = candidateScoredWithSchema
-    .filter((row) => row.feasible)
-    .sort((a, b) => b.score - a.score)
-    .map((row) => row.candidate);
-  chainCandidates = feasibleChainCandidates;
-
-  await createOutreachEvent({
-    runId: run.id,
-    eventType: "lead_sourcing_chain_planned",
-    payload: {
-      candidateCount: chainCandidates.length,
-      candidateCountBeforeFeasibility: candidateScoredWithSchema.length,
-      historicalCandidateCount: historicalCandidates.length,
-      contractsAnalyzed: semanticContractsByActorId.size,
-      schemaBlockedActors: Array.from(schemaBlockedActors.values()).map((row) => ({
-        actorId: row.actorId,
-        reason: row.reason,
-      })),
-      rejectedCandidates: candidateScoredWithSchema
-        .filter((row) => !row.feasible)
-        .slice(0, 12)
-        .map((row) => ({
-          id: row.candidate.id,
-          strategy: row.candidate.strategy,
-          reason: row.reason,
-          deterministic: row.deterministic,
-          llm: row.llm ?? null,
-          schemaPreflight: row.schemaPreflight ?? null,
-        })),
-      candidates: chainCandidates.map((candidate) => ({
-        id: candidate.id,
-        strategy: candidate.strategy,
-        rationale: candidate.rationale,
-        steps: candidate.steps,
-      })),
-    },
-  });
-
-  if (!chainCandidates.length) {
-    await setTrace({ phase: "failed", failureStep: "plan_sourcing" });
-    const topRejections = candidateScoredWithSchema
-      .filter((row) => !row.feasible)
-      .slice(0, 3)
-      .map((row) => `${row.candidate.id}: ${trimText(row.reason, 180)}`);
-    await failRunWithDiagnostics({
-      run,
-      reason: `No feasible chain candidates after semantic preflight. ${topRejections.join(" | ") || "See sourcing trace."}`,
-      eventType: "lead_sourcing_failed",
-      payload: {
-        feasibilityRejected: candidateScoredWithSchema.length,
-        topRejections,
-      },
-    });
-    return;
-  }
-
-  await setTrace({ phase: "probe_chain" });
-
-  const probedCandidates: ProbedSourcingPlan[] = [];
-  let budgetUsedUsd = 0;
-  let apifyQuotaHardStop = false;
-  const runtimeBlockedActors = new Set<string>();
-  const runtimeBlockedReasons = new Map<string, string>();
-  for (const planCandidate of chainCandidates) {
-    const blockedStep = planCandidate.steps.find((step) => runtimeBlockedActors.has(step.actorId.toLowerCase()));
-    if (blockedStep) {
-      const blockedReason =
-        runtimeBlockedReasons.get(blockedStep.actorId.toLowerCase()) || "provider_secret_requirement_detected";
-      const skipped: ProbedSourcingPlan = {
-        plan: planCandidate,
-        probeResults: [],
-        acceptedLeads: [],
-        rejectedLeads: [],
-        acceptedCount: 0,
-        rejectedCount: 0,
-        budgetUsedUsd: 0,
-        score: -8,
-        reason: `blocked_actor:${blockedStep.actorId}:${blockedReason}`,
-      };
-      probedCandidates.push(skipped);
-      await createOutreachEvent({
-        runId: run.id,
-        eventType: "lead_sourcing_probe_skipped",
-        payload: {
-          candidateId: planCandidate.id,
-          strategy: planCandidate.strategy,
-          actorId: blockedStep.actorId,
-          reason: blockedReason,
-        },
-      });
-      continue;
-    }
-
-    const remainingBudget = APIFY_PROBE_BUDGET_USD - budgetUsedUsd;
-    if (remainingBudget < APIFY_PROBE_STEP_COST_ESTIMATE_USD) {
-      break;
-    }
-    const probed = await probeSourcingPlanCandidate({
-      plan: planCandidate,
-      targetAudience,
-      token: sourcingToken,
-      qualityPolicy,
-      remainingBudgetUsd: remainingBudget,
-      actorSchemaCache,
-      contractsByActorId: semanticContractsByActorId,
-    });
-    probedCandidates.push(probed);
-    budgetUsedUsd += probed.budgetUsedUsd;
-
-    const secretRequirementFailures = probed.probeResults
-      .filter((result) => result.outcome === "fail")
-      .map((result) => ({
-        actorId: result.actorId,
-        reason: String((result.details as Record<string, unknown>)?.reason ?? ""),
-        error: String((result.details as Record<string, unknown>)?.error ?? ""),
-      }))
-      .filter((row) => looksLikeProviderSecretRequiredError(`${row.reason} ${row.error}`.trim()));
-    if (secretRequirementFailures.length) {
-      const memoryUpdates = secretRequirementFailures.map((row) => ({
-        actorId: row.actorId,
-        failDelta: 1,
-        compatibilityFailDelta: 1,
-        qualitySample: 0,
-      }));
-      await upsertSourcingActorMemory(memoryUpdates);
-      for (const failure of secretRequirementFailures) {
-        const key = failure.actorId.toLowerCase();
-        runtimeBlockedActors.add(key);
-        runtimeBlockedReasons.set(
-          key,
-          trimText(
-            failure.error || failure.reason || "provider_secret_requirement_detected",
-            180
-          )
-        );
-      }
-    }
-
     await createOutreachEvent({
       runId: run.id,
-      eventType: "lead_sourcing_probe_completed",
+      eventType: "lead_quality_policy_fallback",
       payload: {
-        candidateId: planCandidate.id,
-        strategy: planCandidate.strategy,
-        acceptedCount: probed.acceptedCount,
-        rejectedCount: probed.rejectedCount,
-        score: probed.score,
-        budgetUsedUsd: probed.budgetUsedUsd,
-        reason: probed.reason,
-        topRejections: summarizeTopReasons(probed.rejectedLeads),
-        runtimeBlockedActors: Array.from(runtimeBlockedActors),
+        reason: fallbackReason,
+        fallbackPolicy: qualityPolicy,
       },
     });
-
-    if (
-      probed.probeResults.some(
-        (result) =>
-          result.outcome === "fail" &&
-          isApifyQuotaExceededErrorText((result.details as Record<string, unknown>)?.error)
-      )
-    ) {
-      apifyQuotaHardStop = true;
-      break;
-    }
+    await setTrace({
+      phase: "plan_sourcing",
+      failureStep: "",
+      lastActorInputError: `quality_policy_fallback:${trimText(fallbackReason, 160)}`,
+    });
   }
 
-  await setTrace({ phase: "probe_chain", budgetUsedUsd });
+  await setTrace({
+    phase: "probe_chain",
+    budgetUsedUsd: 0,
+  });
 
-  if (!probedCandidates.length) {
-    await setTrace({ phase: "failed", failureStep: "probe_chain", budgetUsedUsd });
+  let exaSourcing: ExaPeopleSourcingResult;
+  try {
+    exaSourcing = await sourceLeadsFromExa({
+      exaApiKey,
+      dataForSeoCredentials,
+      targetAudience,
+      triggerContext,
+      offer: offerContext,
+      qualityPolicy,
+      maxLeads,
+      allowMissingEmail: sampleOnly,
+      emailFinderApiBaseUrl: resolveEmailFinderApiBaseUrl(),
+      emailFinderVerificationMode: "validatedmails",
+      emailFinderValidatedMailsApiKey: String(
+        process.env.EMAIL_FINDER_VALIDATEDMAILS_API_KEY ?? process.env.VALIDATEDMAILS_API_KEY ?? ""
+      ).trim(),
+      resumeState,
+    });
+  } catch (error) {
+    await setTrace({
+      phase: "failed",
+      failureStep: "probe_chain",
+      lastActorInputError: error instanceof Error ? error.message : "exa_sourcing_failed",
+      budgetUsedUsd: 0,
+    });
     await failRunWithDiagnostics({
       run,
-      reason: "No chain candidate could be probed within the budget cap",
+      reason: `Exa sourcing failed: ${error instanceof Error ? error.message : "Unknown error"}`,
       eventType: "lead_sourcing_failed",
-      payload: { budgetUsedUsd, budgetCapUsd: APIFY_PROBE_BUDGET_USD },
+      payload: {
+        targetAudience,
+        triggerContext,
+      },
     });
     return;
   }
 
-  const decision = await createSourcingChainDecision({
+  if (exaSourcing.pendingDataForSeo?.pendingDataForSeoTasks?.length) {
+    const pendingCount = exaSourcing.pendingDataForSeo.pendingDataForSeoTasks.length;
+    await setTrace({
+      phase: "probe_chain",
+      failureStep: "",
+      lastActorInputError: `waiting_dataforseo:${pendingCount}`,
+      budgetUsedUsd: exaSourcing.budgetUsedUsd,
+    });
+    await createOutreachEvent({
+      runId: run.id,
+      eventType: "lead_sourcing_waiting_dataforseo",
+      payload: {
+        pendingCount,
+        nextPollSeconds: DATAFORSEO_ASYNC_REQUEUE_SECONDS,
+        maxPolls: DATAFORSEO_ASYNC_MAX_POLLS,
+      },
+    });
+    await enqueueOutreachJob({
+      runId: run.id,
+      jobType: "source_leads",
+      executeAfter: new Date(Date.now() + DATAFORSEO_ASYNC_REQUEUE_SECONDS * 1000).toISOString(),
+      payload: {
+        ...payload,
+        resumeState: exaSourcing.pendingDataForSeo,
+      },
+    });
+    await updateOutreachRun(run.id, {
+      status: "sourcing",
+      lastError: "",
+    });
+    return;
+  }
+
+  const fallbackPeopleQueries = exaSourcing.queryPlan.peopleQueries.slice(
+    exaSourcing.queryPlan.directPeopleQueries.length
+  );
+  const firstClearoutQuery = exaSourcing.diagnostics.find((row) => row.provider === "clearout")?.query ?? "";
+  const firstDataForSeoQuery = exaSourcing.diagnostics.find((row) => row.provider === "dataforseo")?.query ?? "";
+  const exaSelectedChain: SourcingChainStep[] = [
+    ...(exaSourcing.queryPlan.directPeopleQueries.length
+      ? [
+          {
+            id: "exa_people_probe",
+            stage: "prospect_discovery",
+            actorId: "exa.people.search",
+            purpose: "Probe ICP people directly from role + trigger signals",
+            queryHint: exaSourcing.queryPlan.directPeopleQueries[0] ?? targetAudience,
+          } satisfies SourcingChainStep,
+        ]
+      : []),
+    ...(firstClearoutQuery
+      ? [
+          {
+            id: "clearout_company_autocomplete",
+            stage: "website_enrichment",
+            actorId: "clearout.company.autocomplete",
+            purpose: "Resolve company domains for candidate people",
+            queryHint: firstClearoutQuery,
+          } satisfies SourcingChainStep,
+        ]
+      : []),
+    ...(firstDataForSeoQuery
+      ? [
+          {
+            id: "dataforseo_google_organic",
+            stage: "website_enrichment",
+            actorId: "dataforseo.google.organic",
+            purpose: "Fallback: resolve official company websites from search results",
+            queryHint: firstDataForSeoQuery,
+          } satisfies SourcingChainStep,
+        ]
+      : []),
+    ...(exaSourcing.queryPlan.mode === "people_then_company" && exaSourcing.queryPlan.companyQueries.length
+      ? [
+          {
+            id: "exa_company_search",
+            stage: "prospect_discovery",
+            actorId: "exa.company.search",
+            purpose: "Fallback: find qualified companies to tighten people search",
+            queryHint: exaSourcing.queryPlan.companyQueries[0] ?? targetAudience,
+          } satisfies SourcingChainStep,
+        ]
+      : []),
+    ...(fallbackPeopleQueries.length
+      ? [
+          {
+            id: "exa_people_search_fallback",
+            stage: "prospect_discovery",
+            actorId: "exa.people.search",
+            purpose: "Find ICP people at qualified fallback companies",
+            queryHint: fallbackPeopleQueries[0] ?? targetAudience,
+          } satisfies SourcingChainStep,
+        ]
+      : exaSourcing.queryPlan.mode === "people_first" &&
+          exaSourcing.queryPlan.peopleQueries.length &&
+          !exaSourcing.queryPlan.directPeopleQueries.length
+        ? [
+            {
+              id: "exa_people_search",
+              stage: "prospect_discovery",
+              actorId: "exa.people.search",
+              purpose: "Find ICP people directly from role + trigger signals",
+              queryHint: exaSourcing.queryPlan.peopleQueries[0] ?? targetAudience,
+            } satisfies SourcingChainStep,
+          ]
+        : []),
+    ...(exaSourcing.emailEnrichment.attempted > 0
+      ? [
+          {
+            id: "emailfinder_batch",
+            stage: "email_discovery",
+            actorId: "emailfinder.batch",
+            purpose: "Resolve work emails from person name + company domain",
+            queryHint: "emailfinder batch enrichment",
+          } satisfies SourcingChainStep,
+        ]
+      : []),
+  ];
+
+  const exaDecision = await createSourcingChainDecision({
     brandId: run.brandId,
     experimentOwnerId: run.ownerId,
     runtimeCampaignId: run.campaignId,
     runtimeExperimentId: run.experimentId,
     runId: run.id,
-    strategy: "pending_selection",
-    rationale: "Probe completed. Awaiting chain selection.",
-    budgetUsedUsd,
+    strategy: "exa_people_dynamic_queries",
+    rationale: exaSourcing.queryPlan.rationale || "Dynamic Exa people query planning",
+    budgetUsedUsd: exaSourcing.budgetUsedUsd,
     qualityPolicy,
-    selectedChain: [],
+    selectedChain: exaSelectedChain,
     probeSummary: {
-      candidateCount: chainCandidates.length,
-      probedCount: probedCandidates.length,
-      budgetCapUsd: APIFY_PROBE_BUDGET_USD,
-      selectedPlanId: "",
-      selectionStatus: "pending",
-    },
-  });
-
-  const flattenedProbeRows = probedCandidates.flatMap((candidate) =>
-    candidate.probeResults.map((result) => ({
-      decisionId: decision.id,
-      brandId: run.brandId,
-      experimentOwnerId: run.ownerId,
-      runId: run.id,
-      stepIndex: result.stepIndex,
-      actorId: result.actorId,
-      stage: result.stage,
-      probeInputHash: result.probeInputHash,
-      outcome: result.outcome,
-      qualityMetrics: {
-        ...result.qualityMetrics,
-        candidateId: candidate.plan.id,
-        candidateScore: candidate.score,
-        candidateReason: candidate.reason,
-      },
-      costEstimateUsd: result.costEstimateUsd,
-      details: {
-        ...result.details,
-        strategy: candidate.plan.strategy,
-      },
-    }))
-  );
-  if (flattenedProbeRows.length) {
-    await createSourcingProbeResults(flattenedProbeRows);
-  }
-  const probeMemoryUpdates = buildProbeMemoryUpdates(probedCandidates);
-  if (probeMemoryUpdates.length) {
-    await upsertSourcingActorMemory(probeMemoryUpdates);
-  }
-
-  let selectedPlanMeta: { selectedPlanId: string; rationale: string };
-  try {
-    const hasViableCandidate = probedCandidates.some(
-      (candidate) => candidate.acceptedCount > 0 && candidate.reason === ""
-    );
-    if (!hasViableCandidate && apifyQuotaHardStop) {
-      throw new Error(
-        "Apify account monthly usage hard limit exceeded. Increase Apify usage limits or switch to a funded Apify account."
-      );
-    }
-    selectedPlanMeta = await selectBestProbedChain({
-      targetAudience,
-      offer: offerContext,
-      candidates: probedCandidates,
-    });
-  } catch (error) {
-    await updateSourcingChainDecision(decision.id, {
-      rationale: error instanceof Error ? error.message : "chain_selection_failed",
-      probeSummary: {
-        candidateCount: chainCandidates.length,
-        probedCount: probedCandidates.length,
-        budgetCapUsd: APIFY_PROBE_BUDGET_USD,
-        selectedPlanId: "",
-        selectionStatus: "failed",
-        selectionReason: error instanceof Error ? error.message : "chain_selection_failed",
-      },
-    });
-    await setTrace({
-      phase: "failed",
-      failureStep: "probe_chain",
-      lastActorInputError: error instanceof Error ? error.message : "chain_selection_failed",
-      budgetUsedUsd,
-    });
-    await failRunWithDiagnostics({
-      run,
-      reason: `Chain selection failed: ${error instanceof Error ? error.message : "Unknown error"}`,
-      eventType: "lead_sourcing_failed",
-      payload: {
-        decisionId: decision.id,
-        candidateCount: probedCandidates.length,
-        budgetUsedUsd,
-      },
-    });
-    return;
-  }
-
-  const selectedProbed = probedCandidates.find((candidate) => candidate.plan.id === selectedPlanMeta.selectedPlanId);
-  if (!selectedProbed) {
-    await updateSourcingChainDecision(decision.id, {
-      rationale: "Selected plan id missing from probed candidates",
-      probeSummary: {
-        candidateCount: chainCandidates.length,
-        probedCount: probedCandidates.length,
-        budgetCapUsd: APIFY_PROBE_BUDGET_USD,
-        selectedPlanId: selectedPlanMeta.selectedPlanId,
-        selectionStatus: "failed",
-        selectionReason: "selected_plan_missing",
-      },
-    });
-    await setTrace({
-      phase: "failed",
-      failureStep: "probe_chain",
-      lastActorInputError: "selected_plan_missing",
-      budgetUsedUsd,
-    });
-    await failRunWithDiagnostics({
-      run,
-      reason: "Selected sourcing chain is not available after probing",
-      eventType: "lead_sourcing_failed",
-      payload: { decisionId: decision.id },
-    });
-    return;
-  }
-
-  await updateSourcingChainDecision(decision.id, {
-    strategy: selectedProbed.plan.strategy,
-    rationale: selectedPlanMeta.rationale || selectedProbed.plan.rationale,
-    budgetUsedUsd,
-    qualityPolicy,
-    selectedChain: normalizeSourcingChainSteps(selectedProbed.plan.steps),
-    probeSummary: {
-      candidateCount: chainCandidates.length,
-      probedCount: probedCandidates.length,
-      budgetCapUsd: APIFY_PROBE_BUDGET_USD,
-      selectedPlanId: selectedProbed.plan.id,
+      candidateCount:
+        exaSourcing.queryPlan.companyQueries.length + exaSourcing.queryPlan.peopleQueries.length,
+      probedCount: exaSourcing.diagnostics.length,
+      budgetCapUsd: APIFY_DISCOVERY_TOTAL_BUDGET_USD,
+      selectedPlanId: "exa_dynamic_people_v1",
       selectionStatus: "selected",
+      mode: exaSourcing.queryPlan.mode,
+      fallbackReason: exaSourcing.queryPlan.fallbackReason,
+      directPeopleQueries: exaSourcing.queryPlan.directPeopleQueries,
+      companyQueries: exaSourcing.queryPlan.companyQueries,
+      peopleQueries: exaSourcing.queryPlan.peopleQueries,
+      qualifiedCompanyNames: exaSourcing.queryPlan.qualifiedCompanyNames,
+      probeMetrics: exaSourcing.queryPlan.probeMetrics,
+      queryDiagnostics: exaSourcing.diagnostics,
     },
   });
 
-  await setTrace({
-    phase: "execute_chain",
-    selectedActorIds: selectedProbed.plan.steps.map((step) => step.actorId),
-    budgetUsedUsd,
-    failureStep: "",
-    lastActorInputError: "",
+  if (exaSourcing.diagnostics.length) {
+    await createSourcingProbeResults(
+      exaSourcing.diagnostics.map((row, index) => ({
+        decisionId: exaDecision.id,
+        brandId: run.brandId,
+        experimentOwnerId: run.ownerId,
+        runId: run.id,
+        stepIndex: index,
+        actorId:
+          row.stage === "company"
+            ? row.provider === "clearout"
+              ? "clearout.company.autocomplete"
+              : row.provider === "dataforseo"
+                ? "dataforseo.google.organic"
+              : "exa.company.search"
+            : row.stage === "people"
+              ? "exa.people.search"
+              : "emailfinder.batch",
+        stage:
+          row.stage === "company"
+            ? "prospect_discovery"
+            : row.stage === "people"
+              ? "prospect_discovery"
+              : "email_discovery",
+        probeInputHash: hashProbeInput({ query: row.query }),
+        outcome: row.count > 0 ? "pass" : "fail",
+        qualityMetrics: {
+          query: row.query,
+          hitCount: row.count,
+          stage: row.stage,
+          provider: row.provider,
+          includeDomainsCount: row.includeDomainsCount,
+          ...(row.lookupCompany ? { lookupCompany: row.lookupCompany } : {}),
+          ...(typeof row.structuredCount === "number" ? { structuredCount: row.structuredCount } : {}),
+          ...(row.userLocation ? { userLocation: row.userLocation } : {}),
+        },
+        costEstimateUsd:
+          row.provider === "clearout"
+            ? 0
+            : Math.max(
+                0,
+                Number(row.costUsd ?? 0) ||
+                  (row.provider === "dataforseo" ? dataForSeoTaskCostUsd() : 0.001)
+              ),
+        details: {
+          strategy: "exa_people_dynamic_queries",
+          query: row.query,
+          hits: row.count,
+          stage: row.stage,
+          provider: row.provider,
+          includeDomainsCount: row.includeDomainsCount,
+          ...(row.lookupCompany ? { lookupCompany: row.lookupCompany } : {}),
+          ...(row.lookupExamples?.length ? { lookupExamples: row.lookupExamples } : {}),
+          ...(row.resolvedDomain ? { resolvedDomain: row.resolvedDomain } : {}),
+          ...(row.resolutionSource ? { resolutionSource: row.resolutionSource } : {}),
+          ...(typeof row.structuredCount === "number" ? { structuredCount: row.structuredCount } : {}),
+          ...(typeof row.costUsd === "number" ? { costUsd: row.costUsd } : {}),
+          ...(row.userLocation ? { userLocation: row.userLocation } : {}),
+        },
+      }))
+    );
+  }
+
+  await createOutreachEvent({
+    runId: run.id,
+    eventType: "lead_sourcing_actor_pool_built",
+    payload: {
+      provider: "exa",
+      queryPlan: exaSourcing.queryPlan,
+      diagnostics: exaSourcing.diagnostics,
+      emailEnrichment: exaSourcing.emailEnrichment,
+      costBreakdown: {
+        totalUsd: exaSourcing.budgetUsedUsd,
+        exaSpendUsd: exaSourcing.exaSpendUsd,
+        exaQueryCount: exaSourcing.diagnostics.filter(
+          (row) => row.provider === "exa" && row.stage !== "email_enrichment"
+        ).length,
+        clearoutLookupCount: exaSourcing.diagnostics.filter((row) => row.provider === "clearout").length,
+        dataForSeoSpendUsd: exaSourcing.dataForSeoSpendUsd,
+        dataForSeoLookupCount: exaSourcing.diagnostics.filter((row) => row.provider === "dataforseo").length,
+        emailFinderAttempted: exaSourcing.emailEnrichment.attempted,
+        emailFinderCostPerLookupUsd: Math.max(
+          0,
+          Math.min(0.1, Number(process.env.EMAIL_FINDER_LOOKUP_COST_USD ?? 0) || 0)
+        ),
+      },
+      actorCount: exaSelectedChain.length,
+      qualityPolicy,
+      audienceContext,
+    },
   });
 
   await createOutreachEvent({
     runId: run.id,
     eventType: "lead_sourcing_chain_selected",
     payload: {
-      decisionId: decision.id,
-      selectedPlanId: selectedProbed.plan.id,
-      selectedRationale: selectedPlanMeta.rationale,
-      selectedChain: selectedProbed.plan.steps,
-      budgetUsedUsd,
+      decisionId: exaDecision.id,
+      selectedPlanId: "exa_dynamic_people_v1",
+      selectedRationale: exaSourcing.queryPlan.rationale,
+      selectedChain: exaSelectedChain,
+      budgetUsedUsd: exaSourcing.budgetUsedUsd,
+      emailEnrichment: exaSourcing.emailEnrichment,
     },
   });
 
-  const execution = await executeSourcingPlan({
-    plan: selectedProbed.plan,
-    targetAudience,
-    token: sourcingToken,
-    maxLeads,
-    qualityPolicy,
-    actorSchemaCache,
-  });
-
-  if (!execution.ok) {
-    const failedActorIds = new Set(
-      execution.stepDiagnostics
-        .filter((row) => row.ok === false)
-        .map((row) => String(row.actorId ?? "").trim())
-        .filter(Boolean)
-    );
-    const compatibilityByActor = new Set(
-      execution.stepDiagnostics
-        .filter((row) => row.ok === false)
-        .filter((row) =>
-          looksLikeActorInputCompatibilityError(
-            JSON.stringify({
-              reason: row.reason,
-              error: row.error,
-              missingRequired: row.missingRequired,
-            })
-          )
-        )
-        .map((row) => String(row.actorId ?? "").trim())
-        .filter(Boolean)
-    );
-    const fallbackCompatibility = looksLikeActorInputCompatibilityError(
-      JSON.stringify({
-        reason: execution.reason,
-        lastActorInputError: execution.lastActorInputError,
-      })
-    );
-    const memoryUpdates = selectedProbed.plan.steps
-      .map((step) => {
-        const failed = failedActorIds.has(step.actorId);
-        const compatibilityFailed = compatibilityByActor.has(step.actorId) || (failed && fallbackCompatibility);
-        if (!failed && !compatibilityFailed) return null;
-        return {
-          actorId: step.actorId,
-          failDelta: failed ? 1 : 0,
-          compatibilityFailDelta: compatibilityFailed ? 1 : 0,
-          qualitySample: 0,
-        };
-      })
-      .filter((row): row is { actorId: string; failDelta: number; compatibilityFailDelta: number; qualitySample: number } =>
-        Boolean(row)
-      );
-    if (memoryUpdates.length) {
-      await upsertSourcingActorMemory(memoryUpdates);
-    }
+  if (!exaSourcing.acceptedLeads.length) {
     await setTrace({
       phase: "failed",
       failureStep: "execute_chain",
-      lastActorInputError: execution.lastActorInputError || execution.reason,
-      budgetUsedUsd,
+      lastActorInputError: "No quality leads accepted from Exa queries",
+      budgetUsedUsd: exaSourcing.budgetUsedUsd,
     });
     await failRunWithDiagnostics({
       run,
-      reason: execution.reason,
+      reason: "No quality leads accepted from Exa queries",
       eventType: "lead_sourcing_failed",
       payload: {
-        decisionId: decision.id,
-        selectedPlanId: selectedProbed.plan.id,
-        stepDiagnostics: execution.stepDiagnostics,
-        topRejections: summarizeTopReasons(execution.rejectedLeads),
+        decisionId: exaDecision.id,
+        queryDiagnostics: exaSourcing.diagnostics,
+        emailEnrichment: exaSourcing.emailEnrichment,
+        topRejections: summarizeTopReasons(exaSourcing.rejectedLeads),
       },
     });
     return;
   }
 
-  const acceptanceRatio =
-    execution.leads.length + execution.rejectedLeads.length > 0
-      ? execution.leads.length / (execution.leads.length + execution.rejectedLeads.length)
-      : 0;
-  await upsertSourcingActorMemory(
-    selectedProbed.plan.steps.map((step) => ({
-      actorId: step.actorId,
-      successDelta: 1,
-      leadsAcceptedDelta: execution.leads.length,
-      leadsRejectedDelta: execution.rejectedLeads.length,
-      qualitySample: acceptanceRatio,
-    }))
-  );
-
   await createOutreachEvent({
     runId: run.id,
     eventType: "lead_sourcing_completed",
     payload: {
-      decisionId: decision.id,
-      strategy: selectedProbed.plan.strategy,
-      selectedChain: selectedProbed.plan.steps,
-      sourcedCount: execution.leads.length,
-      rejectedCount: execution.rejectedLeads.length,
-      topRejections: summarizeTopReasons(execution.rejectedLeads),
-      stepDiagnostics: execution.stepDiagnostics,
+      decisionId: exaDecision.id,
+      strategy: "exa_people_dynamic_queries",
+      selectedChain: exaSelectedChain,
+      sourcedCount: exaSourcing.acceptedLeads.length,
+      rejectedCount: exaSourcing.rejectedLeads.length,
+      topRejections: summarizeTopReasons(exaSourcing.rejectedLeads),
+      queryDiagnostics: exaSourcing.diagnostics,
+      emailEnrichment: exaSourcing.emailEnrichment,
     },
   });
 
   await setTrace({
     phase: "completed",
-    selectedActorIds: selectedProbed.plan.steps.map((step) => step.actorId),
-    budgetUsedUsd,
+    selectedActorIds: exaSelectedChain.map((step) => step.actorId),
+    budgetUsedUsd: exaSourcing.budgetUsedUsd,
     failureStep: "",
     lastActorInputError: "",
   });
 
-  await finishSourcingWithLeads(run, execution.leads, {
+  await finishSourcingWithLeads(run, exaSourcing.acceptedLeads, {
     sampleOnly,
+    allowMissingEmail: sampleOnly,
     qualityPolicy,
-    rejectedDecisions: execution.rejectedLeads,
-    decision,
+    rejectedDecisions: exaSourcing.rejectedLeads,
+    decision: exaDecision,
+    emailEnrichment: exaSourcing.emailEnrichment,
   });
   return;
+
+  // Apify chain execution removed. Sourcing is Exa-first and fail-fast above.
 }
 
 async function finishSourcingWithLeads(
@@ -5877,9 +10762,11 @@ async function finishSourcingWithLeads(
   leads: ApifyLead[],
   options: {
     sampleOnly?: boolean;
+    allowMissingEmail?: boolean;
     qualityPolicy?: LeadQualityPolicy;
     rejectedDecisions?: LeadAcceptanceDecision[];
     decision?: SourcingChainDecision | null;
+    emailEnrichment?: ExaPeopleSourcingResult["emailEnrichment"] | null;
   } = {}
 ) {
   const recentRuns = (await listCampaignRuns(run.brandId, run.campaignId)).filter((item) => {
@@ -5903,18 +10790,58 @@ async function finishSourcingWithLeads(
     placeholder_domain: 0,
     role_account: 0,
     policy_rejected: 0,
+    verification_unavailable: 0,
   };
 
   const filteredLeads: ApifyLead[] = [];
   const policyRejections = options.rejectedDecisions ?? [];
+  const allowMissingEmail = options.allowMissingEmail === true;
+  const emailEnrichmentError = String(options.emailEnrichment?.error ?? "").trim();
+  const verificationUnavailable =
+    Boolean(emailEnrichmentError) &&
+    Number(options.emailEnrichment?.attempted ?? 0) > 0 &&
+    Number(options.emailEnrichment?.matched ?? 0) === 0;
   for (const lead of leads) {
-    const normalizedEmail = lead.email.toLowerCase();
-    const suppressionReason = getLeadEmailSuppressionReason(normalizedEmail);
-    if (suppressionReason) {
-      suppressionCounts[suppressionReason] = (suppressionCounts[suppressionReason] ?? 0) + 1;
+    const normalizedDomain = String(lead.domain ?? "").trim().toLowerCase();
+    const normalizedRealEmail = extractFirstEmailAddress(lead.email);
+    const persistenceEmail = normalizedRealEmail;
+    if (!persistenceEmail) {
+      if (verificationUnavailable) {
+        suppressionCounts.verification_unavailable = (suppressionCounts.verification_unavailable ?? 0) + 1;
+        policyRejections.push({
+          email: "",
+          accepted: false,
+          confidence: 0,
+          reason: "verification_unavailable",
+          details: {
+            hasName: Boolean(String(lead.name ?? "").trim()),
+            hasDomain: Boolean(normalizedDomain),
+            emailEnrichmentError,
+          },
+        });
+      } else {
+        suppressionCounts.invalid_email = (suppressionCounts.invalid_email ?? 0) + 1;
+        policyRejections.push({
+          email: "",
+          accepted: false,
+          confidence: 0,
+          reason: "missing_email_or_domain",
+          details: {
+            hasName: Boolean(String(lead.name ?? "").trim()),
+            hasDomain: Boolean(normalizedDomain),
+          },
+        });
+      }
       continue;
     }
-    if (blockedEmails.has(normalizedEmail)) {
+    if (normalizedRealEmail) {
+      const suppressionReason = getLeadEmailSuppressionReason(normalizedRealEmail);
+      if (suppressionReason) {
+        suppressionCounts[suppressionReason] = (suppressionCounts[suppressionReason] ?? 0) + 1;
+        continue;
+      }
+    }
+    if (blockedEmails.has(persistenceEmail.toLowerCase())) {
       suppressionCounts.duplicate_14_day += 1;
       continue;
     }
@@ -5922,6 +10849,7 @@ async function finishSourcingWithLeads(
       const decision = evaluateLeadAgainstQualityPolicy({
         lead,
         policy: options.qualityPolicy,
+        allowMissingEmail,
       });
       if (!decision.accepted) {
         suppressionCounts.policy_rejected += 1;
@@ -5929,13 +10857,19 @@ async function finishSourcingWithLeads(
         continue;
       }
     }
-    filteredLeads.push(lead);
+    filteredLeads.push({
+      ...lead,
+      email: persistenceEmail,
+      domain: normalizedDomain,
+    });
   }
 
   if (!filteredLeads.length) {
     await failRunWithDiagnostics({
       run,
-      reason: "All sourced leads were suppressed by quality/duplicate rules",
+      reason: verificationUnavailable
+        ? "Email verification unavailable; no leads could be verified"
+        : "All sourced leads were suppressed by quality/duplicate rules",
       eventType: "lead_sourcing_failed",
       payload: {
         sourcedCount: leads.length,
@@ -5943,6 +10877,8 @@ async function finishSourcingWithLeads(
         suppressionCounts,
         topPolicyRejections: summarizeTopReasons(policyRejections),
         decisionId: options.decision?.id ?? "",
+        verificationUnavailable,
+        emailEnrichmentError,
       },
     });
     return;
@@ -5985,7 +10921,7 @@ async function finishSourcingWithLeads(
   });
   await createOutreachEvent({
     runId: run.id,
-    eventType: "lead_sourced_apify",
+    eventType: "lead_sourced",
     payload: {
       count: upserted.length,
       blockedCount: Math.max(0, leads.length - filteredLeads.length),
@@ -5993,6 +10929,8 @@ async function finishSourcingWithLeads(
       topPolicyRejections: summarizeTopReasons(policyRejections),
       sampleOnly: options.sampleOnly === true,
       decisionId: options.decision?.id ?? "",
+      verificationUnavailable,
+      emailEnrichmentError,
     },
   });
 
@@ -6316,6 +11254,29 @@ async function processDispatchMessagesJob(job: OutreachJob) {
 
   const messages = await listRunMessages(run.id);
   const leads = await listRunLeads(run.id);
+  const runtimeExperiment = await getExperimentRecordByRuntimeRef(run.brandId, run.campaignId, run.experimentId);
+  const businessWindow = businessWindowFromExperimentEnvelope(runtimeExperiment?.testEnvelope);
+  if (!isInsideBusinessWindow(new Date(), run.timezone || DEFAULT_TIMEZONE, businessWindow)) {
+    const resumeAt = nextBusinessWindowCheckIso(new Date(), run.timezone || DEFAULT_TIMEZONE, businessWindow);
+    await createOutreachEvent({
+      runId: run.id,
+      eventType: "dispatch_waiting_business_hours",
+      payload: {
+        timezone: run.timezone || DEFAULT_TIMEZONE,
+        businessHoursEnabled: businessWindow.enabled,
+        businessHoursStartHour: businessWindow.startHour,
+        businessHoursEndHour: businessWindow.endHour,
+        businessDays: businessWindow.days,
+        resumeAt,
+      },
+    });
+    await enqueueOutreachJob({
+      runId: run.id,
+      jobType: "dispatch_messages",
+      executeAfter: resumeAt,
+    });
+    return;
+  }
   const due = messages.filter(
     (message) => message.status === "scheduled" && toDate(message.scheduledAt).getTime() <= Date.now()
   );
@@ -6334,16 +11295,34 @@ async function processDispatchMessagesJob(job: OutreachJob) {
     return;
   }
 
-  const oneHourAgo = Date.now() - 60 * 60 * 1000;
-  const startOfDay = new Date();
-  startOfDay.setUTCHours(0, 0, 0, 0);
-
-  const hourlySent = messages.filter(
-    (message) => message.status === "sent" && message.sentAt && toDate(message.sentAt).getTime() >= oneHourAgo
-  ).length;
-  const dailySent = messages.filter(
-    (message) => message.status === "sent" && message.sentAt && toDate(message.sentAt).getTime() >= startOfDay.getTime()
-  ).length;
+  const ownerUsage =
+    run.ownerType === "campaign"
+      ? await countOwnerSentUsage({
+          brandId: run.brandId,
+          ownerType: "campaign",
+          ownerId: run.ownerId,
+          timezone: run.timezone || DEFAULT_TIMEZONE,
+          currentRunId: run.id,
+          currentRunMessages: messages,
+        })
+      : null;
+  const hourlySent =
+    ownerUsage?.hourlySent ??
+    messages.filter(
+      (message) =>
+        message.status === "sent" &&
+        message.sentAt &&
+        toDate(message.sentAt).getTime() >= Date.now() - 60 * 60 * 1000
+    ).length;
+  const runDayKey = timeZoneDateKey(new Date(), run.timezone || DEFAULT_TIMEZONE);
+  const dailySent =
+    ownerUsage?.dailySent ??
+    messages.filter(
+      (message) =>
+        message.status === "sent" &&
+        message.sentAt &&
+        timeZoneDateKey(toDate(message.sentAt), run.timezone || DEFAULT_TIMEZONE) === runDayKey
+    ).length;
 
   const hourlySlots = Math.max(0, run.hourlyCap - hourlySent);
   const dailySlots = Math.max(0, run.dailyCap - dailySent);
@@ -6544,6 +11523,7 @@ async function processConversationTickJob(job: OutreachJob) {
   const leads = await listRunLeads(run.id);
   const leadsById = new Map(leads.map((lead) => [lead.id, lead]));
   const messages = await listRunMessages(run.id);
+  const replyMessages = await listReplyMessagesByRun(run.id);
   const [brand, campaign] = await Promise.all([
     getBrandById(run.brandId),
     getCampaignById(run.brandId, run.campaignId),
@@ -6672,6 +11652,14 @@ async function processConversationTickJob(job: OutreachJob) {
 
     const lead = leadsById.get(session.leadId);
     if (!lead) continue;
+    const threadHistory = await buildConversationThreadHistory({
+      runId: run.id,
+      leadId: lead.id,
+      leadEmail: lead.email,
+      sessionId: session.id,
+      runMessages: messages,
+      replyMessages,
+    });
 
     const scheduled = await scheduleConversationNodeMessage({
       run,
@@ -6692,6 +11680,7 @@ async function processConversationTickJob(job: OutreachJob) {
       experimentCta,
       experimentAudience,
       experimentNotes: variant?.notes ?? "",
+      threadHistory,
       maxDepth: graph.maxDepth,
       waitMinutes: 0,
       existingMessages: messages,
@@ -6898,11 +11887,33 @@ async function processOutreachJob(job: OutreachJob) {
   await processAnalyzeRunJob(job);
 }
 
-export async function runOutreachTick(limit = 20): Promise<{
+export async function runOutreachTick(
+  limit = 20,
+  options: { includeCampaignHopper?: boolean } = {}
+): Promise<{
   processed: number;
   completed: number;
   failed: number;
+  campaignsEvaluated: number;
+  campaignsLaunched: number;
+  campaignsBlocked: number;
 }> {
+  const reclaimed = await reclaimStaleRunningOutreachJobs({
+    staleAfterMinutes: 6,
+    limit,
+  });
+  for (const job of reclaimed) {
+    await createOutreachEvent({
+      runId: job.runId,
+      eventType: "job_requeued_stale",
+      payload: {
+        jobId: job.id,
+        jobType: job.jobType,
+        reason: "stale_running_job",
+      },
+    });
+  }
+
   const jobs = await listDueOutreachJobs(limit);
 
   let completed = 0;
@@ -6970,10 +11981,18 @@ export async function runOutreachTick(limit = 20): Promise<{
     }
   }
 
+  const hopper =
+    options.includeCampaignHopper === false
+      ? { campaignsEvaluated: 0, campaignsLaunched: 0, campaignsBlocked: 0 }
+      : await ensureActiveCampaignHoppers();
+
   return {
     processed: jobs.length,
     completed,
     failed,
+    campaignsEvaluated: hopper.campaignsEvaluated,
+    campaignsLaunched: hopper.campaignsLaunched,
+    campaignsBlocked: hopper.campaignsBlocked,
   };
 }
 
@@ -7212,8 +12231,19 @@ export async function ingestInboundReply(input: {
               },
             });
 
+            const runMessages = await listRunMessages(run.id);
+            const replyMessages = await listReplyMessagesByRun(run.id);
+            const threadHistory = await buildConversationThreadHistory({
+              runId: run.id,
+              leadId: lead.id,
+              leadEmail: lead.email,
+              sessionId: session.id,
+              threadId: thread.id,
+              runMessages,
+              replyMessages,
+            });
+
             if (nextNode.autoSend) {
-              const messages = await listRunMessages(run.id);
               autoBranchScheduled = await scheduleConversationNodeMessage({
                 run,
                 lead,
@@ -7237,11 +12267,12 @@ export async function ingestInboundReply(input: {
                 intent,
                 intentConfidence: confidence,
                 priorNodePath: [session.currentNodeId, nextNode.id],
+                threadHistory,
                 maxDepth: graph.maxDepth,
                 waitMinutes: selectedEdge.waitMinutes,
                 latestInboundSubject: input.subject,
                 latestInboundBody: input.body,
-                existingMessages: messages,
+                existingMessages: runMessages,
               });
               if (autoBranchScheduled.ok) {
                 await enqueueOutreachJob({
@@ -7303,6 +12334,7 @@ export async function ingestInboundReply(input: {
                 intent,
                 intentConfidence: confidence,
                 priorNodePath: [session.currentNodeId, nextNode.id],
+                threadHistory,
                 maxDepth: graph.maxDepth,
               });
               if (!composed.ok) {
@@ -7536,7 +12568,7 @@ export async function ingestApifyRunComplete(input: {
 
   await createOutreachEvent({
     runId: run.id,
-    eventType: "lead_sourced_apify",
+    eventType: "lead_sourced",
     payload: { count: input.leads.length, source: "webhook" },
   });
 

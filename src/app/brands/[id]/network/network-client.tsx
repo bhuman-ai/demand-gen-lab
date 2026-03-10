@@ -48,6 +48,13 @@ export default function NetworkClient({ brand }: { brand: BrandRecord }) {
 
   const riskyCount = domains.filter((item) => item.status === "risky").length;
 
+  const roleLabel = (domain: DomainRow) => {
+    if (domain.role === "brand") return "Protected brand";
+    if (domain.forwardingTargetUrl) return "Sender + forwarder";
+    if (domain.role === "sender") return "Sender";
+    return "Manual";
+  };
+
   useEffect(() => {
     trackEvent("ops_module_opened", { module: "network", brandId: brand.id });
   }, [brand.id]);
@@ -159,6 +166,9 @@ export default function NetworkClient({ brand }: { brand: BrandRecord }) {
             <thead>
               <tr className="text-left text-xs uppercase tracking-wide text-[color:var(--muted-foreground)]">
                 <th className="pb-2">Domain</th>
+                <th className="pb-2">Role</th>
+                <th className="pb-2">Forwarding</th>
+                <th className="pb-2">Customer.io</th>
                 <th className="pb-2">Status</th>
                 <th className="pb-2">Warmup</th>
                 <th className="pb-2">Reputation</th>
@@ -168,6 +178,9 @@ export default function NetworkClient({ brand }: { brand: BrandRecord }) {
               {filtered.map((item) => (
                 <tr key={item.id} className="border-t border-[color:var(--border)]">
                   <td className="py-2">{item.domain}</td>
+                  <td className="py-2">{roleLabel(item)}</td>
+                  <td className="py-2">{item.forwardingTargetUrl || "n/a"}</td>
+                  <td className="py-2">{item.customerIoAccountName || item.fromEmail || "n/a"}</td>
                   <td className="py-2">
                     <Badge variant={item.status === "risky" ? "danger" : item.status === "active" ? "success" : "muted"}>
                       {item.status}

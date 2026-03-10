@@ -6,7 +6,15 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
-import { provisionSenderDomain } from "@/lib/client-api";
+import {
+  fetchSavedNamecheapDomains,
+  provisionSenderDomain,
+} from "@/lib/client-api";
+import {
+  buildCustomerIoCapacityPools,
+  findBestCustomerIoCapacityPool,
+  type CustomerIoCapacityPool,
+} from "@/lib/outreach-customerio-capacity";
 import type { BrandRecord, OutreachAccount, OutreachProvisioningSettings } from "@/lib/factory-types";
 
 type AssignmentMap = Record<
@@ -19,21 +27,24 @@ type AssignmentMap = Record<
 
 type ProvisionResult = Awaited<ReturnType<typeof provisionSenderDomain>>;
 
-type ProvisionState = {
+type CustomerIoStrategy = "auto" | "specific" | "defaults";
+
+type SetupState = {
   brandId: string;
-  accountName: string;
+  fromLocalPart: string;
   assignToBrand: boolean;
   selectedMailboxAccountId: string;
-  domainMode: "existing" | "register";
-  domain: string;
-  fromLocalPart: string;
+  forwardingTargetUrl: string;
+  accountName: string;
+  customerIoStrategy: CustomerIoStrategy;
+  customerIoSourceAccountId: string;
   customerIoSiteId: string;
   customerIoTrackingApiKey: string;
   customerIoAppApiKey: string;
-  namecheapApiUser: string;
-  namecheapUserName: string;
-  namecheapApiKey: string;
-  namecheapClientIp: string;
+};
+
+type RegisterState = {
+  domain: string;
   registrantFirstName: string;
   registrantLastName: string;
   registrantOrganizationName: string;
@@ -46,23 +57,24 @@ type ProvisionState = {
   registrantCountry: string;
 };
 
-type FieldErrors = Partial<Record<keyof ProvisionState, string>>;
+type NamecheapInventoryItem = Awaited<ReturnType<typeof fetchSavedNamecheapDomains>>["domains"][number];
 
-const INITIAL_FORM: ProvisionState = {
+const INITIAL_SETUP: SetupState = {
   brandId: "",
-  accountName: "",
+  fromLocalPart: "hello",
   assignToBrand: true,
   selectedMailboxAccountId: "",
-  domainMode: "existing",
-  domain: "",
-  fromLocalPart: "hello",
+  forwardingTargetUrl: "",
+  accountName: "",
+  customerIoStrategy: "auto",
+  customerIoSourceAccountId: "",
   customerIoSiteId: "",
   customerIoTrackingApiKey: "",
   customerIoAppApiKey: "",
-  namecheapApiUser: "",
-  namecheapUserName: "",
-  namecheapApiKey: "",
-  namecheapClientIp: "",
+};
+
+const INITIAL_REGISTER: RegisterState = {
+  domain: "",
   registrantFirstName: "",
   registrantLastName: "",
   registrantOrganizationName: "",
@@ -75,144 +87,374 @@ const INITIAL_FORM: ProvisionState = {
   registrantCountry: "US",
 };
 
-function FieldError({ message }: { message?: string }) {
-  if (!message) return null;
-  return <div className="text-xs text-[color:var(--danger)]">{message}</div>;
+function normalizeDomain(value: string) {
+  return value.trim().toLowerCase().replace(/^https?:\/\//, "").replace(/^www\./, "").replace(/\/.*$/, "");
 }
 
-function invalidFieldClass(isInvalid: boolean) {
-  return isInvalid ? "border-[color:var(--danger-border)] focus-visible:ring-[color:var(--danger)]" : "";
+function formatDateLabel(value: string) {
+  if (!value) return "n/a";
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return value;
+  return parsed.toLocaleDateString();
+}
+
+function CapacityBar({ ratio }: { ratio: number }) {
+  const width = `${Math.max(0, Math.min(100, Math.round(ratio * 100)))}%`;
+  return (
+    <div className="h-2 overflow-hidden rounded-full bg-[color:var(--surface)]">
+      <div
+        className="h-full rounded-full bg-[color:var(--accent)] transition-[width]"
+        style={{ width }}
+      />
+    </div>
+  );
+}
+
+function PoolCard({
+  pool,
+  selected,
+  disabled,
+  onSelect,
+}: {
+  pool: CustomerIoCapacityPool;
+  selected: boolean;
+  disabled: boolean;
+  onSelect: () => void;
+}) {
+  const toneClass = pool.canProvision
+    ? "border-[color:var(--border)] bg-[color:var(--surface-muted)]"
+    : "border-[color:var(--danger-border)] bg-[color:var(--danger-soft)]";
+
+  return (
+    <button
+      type="button"
+      disabled={disabled}
+      onClick={onSelect}
+      className={`grid gap-2 rounded-xl border p-3 text-left transition hover:border-[color:var(--accent)] ${
+        selected ? "border-[color:var(--accent)] bg-[color:var(--surface)]" : toneClass
+      } ${disabled ? "cursor-not-allowed opacity-60" : ""}`}
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <div className="text-sm font-semibold">{pool.sourceAccountName}</div>
+          <div className="text-[11px] text-[color:var(--muted-foreground)]">
+            Site {pool.siteId}
+            {pool.senderCount > 1 ? ` · ${pool.senderCount} sender accounts` : ""}
+          </div>
+        </div>
+        <div className="text-xs font-semibold">
+          {pool.projectedProfiles.toLocaleString()}/{pool.monthlyProfileLimit.toLocaleString()}
+        </div>
+      </div>
+      <CapacityBar ratio={pool.usageRatio} />
+      <div className="flex flex-wrap gap-2 text-[11px] text-[color:var(--muted-foreground)]">
+        <span>{pool.remainingProfiles.toLocaleString()} left this month</span>
+        <span>Baseline: {pool.baselineReady ? "ready" : "waiting"}</span>
+        {pool.lastTestAt ? <span>Last test: {pool.lastTestStatus}</span> : null}
+      </div>
+      {pool.fromEmailSamples.length ? (
+        <div className="text-[11px] text-[color:var(--muted-foreground)]">
+          Existing senders: {pool.fromEmailSamples.join(" · ")}
+        </div>
+      ) : null}
+      {pool.warning ? <div className="text-[11px] text-[color:var(--muted-foreground)]">{pool.warning}</div> : null}
+    </button>
+  );
 }
 
 export default function SenderProvisionCard({
   brands,
   mailboxAccounts,
+  customerIoAccounts,
   assignments,
   provisioningSettings,
   onProvisioned,
 }: {
   brands: BrandRecord[];
   mailboxAccounts: OutreachAccount[];
+  customerIoAccounts: OutreachAccount[];
   assignments: AssignmentMap;
   provisioningSettings: OutreachProvisioningSettings | null;
   onProvisioned: (result: ProvisionResult) => void;
 }) {
-  const [form, setForm] = useState<ProvisionState>(() => ({
-    ...INITIAL_FORM,
+  const [setup, setSetup] = useState<SetupState>(() => ({
+    ...INITIAL_SETUP,
     brandId: brands[0]?.id ?? "",
+    selectedMailboxAccountId: brands[0] ? assignments[brands[0].id]?.mailboxAccountId ?? "" : "",
+    forwardingTargetUrl: brands[0]?.website ?? "",
   }));
-  const [errors, setErrors] = useState<FieldErrors>({});
-  const [saving, setSaving] = useState(false);
+  const [register, setRegister] = useState<RegisterState>(INITIAL_REGISTER);
+  const [inventory, setInventory] = useState<{
+    configured: boolean;
+    loading: boolean;
+    domains: NamecheapInventoryItem[];
+    error: string;
+  }>({
+    configured: false,
+    loading: true,
+    domains: [],
+    error: "",
+  });
+  const [inventoryQuery, setInventoryQuery] = useState("");
+  const [busyKey, setBusyKey] = useState("");
   const [error, setError] = useState("");
   const [result, setResult] = useState<ProvisionResult | null>(null);
 
   useEffect(() => {
-    setForm((prev) => {
-      if (prev.brandId) return prev;
-      return { ...prev, brandId: brands[0]?.id ?? "" };
-    });
-  }, [brands]);
+    let active = true;
+    void (async () => {
+      try {
+        const next = await fetchSavedNamecheapDomains();
+        if (!active) return;
+        setInventory({
+          configured: next.configured,
+          loading: false,
+          domains: next.domains,
+          error: "",
+        });
+      } catch (err) {
+        if (!active) return;
+        setInventory({
+          configured: false,
+          loading: false,
+          domains: [],
+          error: err instanceof Error ? err.message : "Failed to load Namecheap domains",
+        });
+      }
+    })();
+
+    return () => {
+      active = false;
+    };
+  }, []);
 
   useEffect(() => {
-    if (!form.brandId) return;
-    const mailboxAccountId = assignments[form.brandId]?.mailboxAccountId ?? "";
-    setForm((prev) => {
-      if (prev.selectedMailboxAccountId) return prev;
+    if (!brands.length) return;
+    setSetup((prev) => {
+      if (prev.brandId) return prev;
       return {
         ...prev,
-        selectedMailboxAccountId: mailboxAccountId,
+        brandId: brands[0].id,
+        selectedMailboxAccountId: assignments[brands[0].id]?.mailboxAccountId ?? "",
+        forwardingTargetUrl: brands[0].website ?? "",
       };
     });
-  }, [assignments, form.brandId]);
+  }, [assignments, brands]);
+
+  const selectedBrand = useMemo(
+    () => brands.find((brand) => brand.id === setup.brandId) ?? null,
+    [brands, setup.brandId]
+  );
+  const selectedMailbox = useMemo(
+    () => mailboxAccounts.find((account) => account.id === setup.selectedMailboxAccountId) ?? null,
+    [mailboxAccounts, setup.selectedMailboxAccountId]
+  );
+  const customerIoPools = useMemo(
+    () => buildCustomerIoCapacityPools(customerIoAccounts),
+    [customerIoAccounts]
+  );
+  const recommendedPool = useMemo(
+    () => findBestCustomerIoCapacityPool(customerIoPools),
+    [customerIoPools]
+  );
+  const selectedPool = useMemo(
+    () => customerIoPools.find((pool) => pool.sourceAccountId === setup.customerIoSourceAccountId) ?? null,
+    [customerIoPools, setup.customerIoSourceAccountId]
+  );
 
   useEffect(() => {
-    if (!provisioningSettings) return;
-    setForm((prev) => ({
-      ...prev,
-      customerIoSiteId: prev.customerIoSiteId || provisioningSettings.customerIo.siteId,
-      namecheapApiUser: prev.namecheapApiUser || provisioningSettings.namecheap.apiUser,
-      namecheapUserName: prev.namecheapUserName || provisioningSettings.namecheap.userName,
-      namecheapClientIp: prev.namecheapClientIp || provisioningSettings.namecheap.clientIp,
-    }));
-  }, [provisioningSettings]);
+    if (!recommendedPool) return;
+    setSetup((prev) => {
+      if (prev.customerIoSourceAccountId) return prev;
+      return {
+        ...prev,
+        customerIoSourceAccountId: recommendedPool.sourceAccountId,
+      };
+    });
+  }, [recommendedPool]);
 
-  const currentAssignment = assignments[form.brandId] ?? { accountId: "", mailboxAccountId: "" };
-  const selectedMailbox = useMemo(
-    () => mailboxAccounts.find((account) => account.id === form.selectedMailboxAccountId) ?? null,
-    [mailboxAccounts, form.selectedMailboxAccountId]
-  );
-  const savedCustomerIo = provisioningSettings?.customerIo ?? null;
-  const savedNamecheap = provisioningSettings?.namecheap ?? null;
+  const domainOwnerByName = useMemo(() => {
+    const map = new Map<string, { brandId: string; brandName: string }>();
+    for (const brand of brands) {
+      for (const domain of brand.domains) {
+        const key = normalizeDomain(domain.domain);
+        if (!key || map.has(key)) continue;
+        map.set(key, {
+          brandId: brand.id,
+          brandName: brand.name,
+        });
+      }
+    }
+    return map;
+  }, [brands]);
 
-  const validate = () => {
-    const nextErrors: FieldErrors = {};
-    if (!form.brandId) nextErrors.brandId = "Required.";
-    if (!form.accountName.trim()) nextErrors.accountName = "Required.";
-    if (!form.domain.trim()) nextErrors.domain = "Required.";
-    if (!form.fromLocalPart.trim()) nextErrors.fromLocalPart = "Required.";
-    if (!form.customerIoSiteId.trim() && !savedCustomerIo?.siteId.trim()) {
-      nextErrors.customerIoSiteId = "Required.";
-    }
-    if (!form.customerIoTrackingApiKey.trim() && !savedCustomerIo?.hasTrackingApiKey) {
-      nextErrors.customerIoTrackingApiKey = "Required.";
-    }
-    if (!form.namecheapApiUser.trim() && !savedNamecheap?.apiUser.trim()) {
-      nextErrors.namecheapApiUser = "Required.";
-    }
-    if (!form.namecheapApiKey.trim() && !savedNamecheap?.hasApiKey) {
-      nextErrors.namecheapApiKey = "Required.";
-    }
-    if (!form.namecheapClientIp.trim() && !savedNamecheap?.clientIp.trim()) {
-      nextErrors.namecheapClientIp = "Required.";
-    }
+  const filteredDomains = useMemo(() => {
+    const needle = inventoryQuery.trim().toLowerCase();
+    if (!needle) return inventory.domains;
+    return inventory.domains.filter((item) => item.domain.includes(needle));
+  }, [inventory.domains, inventoryQuery]);
 
-    if (form.domainMode === "register") {
-      if (!form.registrantFirstName.trim()) nextErrors.registrantFirstName = "Required.";
-      if (!form.registrantLastName.trim()) nextErrors.registrantLastName = "Required.";
-      if (!form.registrantEmailAddress.trim()) nextErrors.registrantEmailAddress = "Required.";
-      if (!form.registrantPhone.trim()) nextErrors.registrantPhone = "Required.";
-      if (!form.registrantAddress1.trim()) nextErrors.registrantAddress1 = "Required.";
-      if (!form.registrantCity.trim()) nextErrors.registrantCity = "Required.";
-      if (!form.registrantStateProvince.trim()) nextErrors.registrantStateProvince = "Required.";
-      if (!form.registrantPostalCode.trim()) nextErrors.registrantPostalCode = "Required.";
-      if (!form.registrantCountry.trim()) nextErrors.registrantCountry = "Required.";
-    }
-
-    setErrors(nextErrors);
-    return Object.keys(nextErrors).length === 0;
-  };
+  const manualDefaultsReady =
+    Boolean(setup.customerIoSiteId.trim() || provisioningSettings?.customerIo.siteId.trim()) &&
+    Boolean(setup.customerIoTrackingApiKey.trim() || provisioningSettings?.customerIo.hasTrackingApiKey);
 
   const mailboxHint = selectedMailbox
     ? `Replies will route to ${selectedMailbox.config.mailbox.email || "the selected mailbox"}.`
-    : currentAssignment.mailboxAccountId
-      ? "The assigned reply mailbox will be preserved."
-      : "No mailbox selected. Provisioning will work, but send preflight will still fail until you assign one.";
+    : assignments[setup.brandId]?.mailboxAccountId
+      ? "The brand already has a reply mailbox assignment. Leave this alone to keep it."
+      : "No reply mailbox selected yet. Setup will work, but launch preflight will still fail until you assign one.";
+
+  function validateCommon() {
+    if (!setup.brandId) {
+      setError("Pick a brand first.");
+      return false;
+    }
+    if (!setup.fromLocalPart.trim()) {
+      setError("Sender local-part is required.");
+      return false;
+    }
+    if (!inventory.configured) {
+      setError("Save Namecheap credentials in provisioning settings before using one-click domain setup.");
+      return false;
+    }
+    if (setup.customerIoStrategy === "specific") {
+      if (!setup.customerIoSourceAccountId) {
+        setError("Pick a specific Customer.io account.");
+        return false;
+      }
+      if (selectedPool && !selectedPool.canProvision) {
+        setError(selectedPool.warning || "The selected Customer.io account cannot take more profiles this month.");
+        return false;
+      }
+    }
+    if (setup.customerIoStrategy === "auto" && !recommendedPool) {
+      if (customerIoPools.length) {
+        setError("No Customer.io account has monthly profile capacity left right now. Pick a different account strategy.");
+        return false;
+      }
+      if (!manualDefaultsReady) {
+        setError("No Customer.io account with available capacity was found. Switch to a specific account or saved defaults.");
+        return false;
+      }
+    }
+    if (setup.customerIoStrategy === "defaults" && !manualDefaultsReady) {
+      setError("Saved Customer.io defaults are incomplete. Either add an account above or enter the defaults here.");
+      return false;
+    }
+    return true;
+  }
+
+  function validateRegistrant() {
+    if (!register.domain.trim()) {
+      setError("Enter a domain to buy.");
+      return false;
+    }
+    const requiredFields = [
+      register.registrantFirstName,
+      register.registrantLastName,
+      register.registrantEmailAddress,
+      register.registrantPhone,
+      register.registrantAddress1,
+      register.registrantCity,
+      register.registrantStateProvince,
+      register.registrantPostalCode,
+      register.registrantCountry,
+    ];
+    if (requiredFields.some((value) => !value.trim())) {
+      setError("Registrant contact information is required to buy a new domain.");
+      return false;
+    }
+    return true;
+  }
+
+  async function runProvision(domain: string, domainMode: "existing" | "register") {
+    const normalizedDomain = normalizeDomain(domain);
+    if (!normalizedDomain || !normalizedDomain.includes(".")) {
+      setError("Pick a valid domain.");
+      return;
+    }
+    if (!validateCommon()) return;
+    if (domainMode === "register" && !validateRegistrant()) return;
+
+    setBusyKey(`${domainMode}:${normalizedDomain}`);
+    setError("");
+    setResult(null);
+
+    try {
+      const provisioned = await provisionSenderDomain(setup.brandId, {
+        accountName: setup.accountName.trim() || `${selectedBrand?.name ?? "Brand"} ${normalizedDomain}`,
+        assignToBrand: setup.assignToBrand,
+        selectedMailboxAccountId: setup.selectedMailboxAccountId,
+        domainMode,
+        domain: normalizedDomain,
+        fromLocalPart: setup.fromLocalPart.trim(),
+        autoPickCustomerIoAccount: setup.customerIoStrategy === "auto",
+        customerIoSourceAccountId:
+          setup.customerIoStrategy === "specific" ? setup.customerIoSourceAccountId : "",
+        forwardingTargetUrl: setup.forwardingTargetUrl.trim(),
+        customerIoSiteId: setup.customerIoStrategy === "defaults" ? setup.customerIoSiteId.trim() : "",
+        customerIoTrackingApiKey:
+          setup.customerIoStrategy === "defaults" ? setup.customerIoTrackingApiKey.trim() : "",
+        customerIoAppApiKey: setup.customerIoStrategy === "defaults" ? setup.customerIoAppApiKey.trim() : "",
+        namecheapApiUser: "",
+        namecheapUserName: "",
+        namecheapApiKey: "",
+        namecheapClientIp: "",
+        registrant:
+          domainMode === "register"
+            ? {
+                firstName: register.registrantFirstName.trim(),
+                lastName: register.registrantLastName.trim(),
+                organizationName: register.registrantOrganizationName.trim(),
+                emailAddress: register.registrantEmailAddress.trim(),
+                phone: register.registrantPhone.trim(),
+                address1: register.registrantAddress1.trim(),
+                city: register.registrantCity.trim(),
+                stateProvince: register.registrantStateProvince.trim(),
+                postalCode: register.registrantPostalCode.trim(),
+                country: register.registrantCountry.trim(),
+              }
+            : undefined,
+      });
+
+      setResult(provisioned);
+      onProvisioned(provisioned);
+      if (domainMode === "register") {
+        setRegister(INITIAL_REGISTER);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Domain setup failed");
+    } finally {
+      setBusyKey("");
+    }
+  }
 
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="text-base">One-Button Sender Provisioning</CardTitle>
+        <CardTitle className="text-base">Brand Domain Setup</CardTitle>
         <CardDescription>
-          Provision or reuse a Namecheap domain, bootstrap the Customer.io delivery account, and attach the sender to a
-          brand in one action.
+          Pick a brand, choose a Namecheap domain, forward it to the protected brand site, and attach it to the
+          Customer.io account with room this month.
         </CardDescription>
       </CardHeader>
-      <CardContent className="grid gap-4">
-        <div className="grid gap-3 md:grid-cols-3">
+      <CardContent className="grid gap-5">
+        <div className="grid gap-3 md:grid-cols-4">
           <div className="grid gap-2">
-            <Label htmlFor="provision-brand">Brand</Label>
+            <Label htmlFor="setup-brand">Brand</Label>
             <Select
-              id="provision-brand"
-              value={form.brandId}
+              id="setup-brand"
+              value={setup.brandId}
               onChange={(event) => {
                 const brandId = event.target.value;
-                setForm((prev) => ({
+                const brand = brands.find((item) => item.id === brandId) ?? null;
+                setSetup((prev) => ({
                   ...prev,
                   brandId,
                   selectedMailboxAccountId: assignments[brandId]?.mailboxAccountId ?? "",
+                  forwardingTargetUrl: brand?.website ?? "",
                 }));
               }}
-              className={invalidFieldClass(Boolean(errors.brandId))}
             >
               <option value="">Select brand</option>
               {brands.map((brand) => (
@@ -221,30 +463,22 @@ export default function SenderProvisionCard({
                 </option>
               ))}
             </Select>
-            <FieldError message={errors.brandId} />
           </div>
           <div className="grid gap-2">
-            <Label htmlFor="provision-domain-mode">Domain Mode</Label>
-            <Select
-              id="provision-domain-mode"
-              value={form.domainMode}
-              onChange={(event) =>
-                setForm((prev) => ({
-                  ...prev,
-                  domainMode: event.target.value === "register" ? "register" : "existing",
-                }))
-              }
-            >
-              <option value="existing">Use existing Namecheap domain</option>
-              <option value="register">Register new Namecheap domain</option>
-            </Select>
+            <Label htmlFor="setup-local-part">Sender Local-Part</Label>
+            <Input
+              id="setup-local-part"
+              value={setup.fromLocalPart}
+              onChange={(event) => setSetup((prev) => ({ ...prev, fromLocalPart: event.target.value }))}
+              placeholder="hello"
+            />
           </div>
           <div className="grid gap-2">
-            <Label htmlFor="provision-mailbox">Reply Mailbox</Label>
+            <Label htmlFor="setup-mailbox">Reply Mailbox</Label>
             <Select
-              id="provision-mailbox"
-              value={form.selectedMailboxAccountId}
-              onChange={(event) => setForm((prev) => ({ ...prev, selectedMailboxAccountId: event.target.value }))}
+              id="setup-mailbox"
+              value={setup.selectedMailboxAccountId}
+              onChange={(event) => setSetup((prev) => ({ ...prev, selectedMailboxAccountId: event.target.value }))}
             >
               <option value="">Leave unchanged / none</option>
               {mailboxAccounts.map((account) => (
@@ -256,302 +490,338 @@ export default function SenderProvisionCard({
             <div className="text-[11px] text-[color:var(--muted-foreground)]">{mailboxHint}</div>
           </div>
           <div className="grid gap-2">
-            <Label htmlFor="provision-domain">Domain</Label>
+            <Label htmlFor="setup-account-name">Sender Account Name</Label>
             <Input
-              id="provision-domain"
-              value={form.domain}
-              onChange={(event) => setForm((prev) => ({ ...prev, domain: event.target.value }))}
-              placeholder="example.com"
-              className={invalidFieldClass(Boolean(errors.domain))}
+              id="setup-account-name"
+              value={setup.accountName}
+              onChange={(event) => setSetup((prev) => ({ ...prev, accountName: event.target.value }))}
+              placeholder={selectedBrand ? `${selectedBrand.name} sender` : "Optional"}
             />
-            <FieldError message={errors.domain} />
-          </div>
-          <div className="grid gap-2">
-            <Label htmlFor="provision-local-part">Sender Local-Part</Label>
-            <Input
-              id="provision-local-part"
-              value={form.fromLocalPart}
-              onChange={(event) => setForm((prev) => ({ ...prev, fromLocalPart: event.target.value }))}
-              placeholder="hello"
-              className={invalidFieldClass(Boolean(errors.fromLocalPart))}
-            />
-            <FieldError message={errors.fromLocalPart} />
-          </div>
-          <div className="grid gap-2">
-            <Label htmlFor="provision-account-name">Delivery Account Name</Label>
-            <Input
-              id="provision-account-name"
-              value={form.accountName}
-              onChange={(event) => setForm((prev) => ({ ...prev, accountName: event.target.value }))}
-              placeholder="Main Customer.io Sender"
-              className={invalidFieldClass(Boolean(errors.accountName))}
-            />
-            <FieldError message={errors.accountName} />
           </div>
         </div>
 
-        {form.domainMode === "register" ? (
-          <div className="grid gap-3 rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3 md:grid-cols-3">
-            <div className="md:col-span-3 text-sm font-semibold">Registrant Contact</div>
-            <div className="grid gap-2">
-              <Label htmlFor="registrant-first-name">First Name</Label>
-              <Input
-                id="registrant-first-name"
-                value={form.registrantFirstName}
-                onChange={(event) => setForm((prev) => ({ ...prev, registrantFirstName: event.target.value }))}
-                className={invalidFieldClass(Boolean(errors.registrantFirstName))}
-              />
-              <FieldError message={errors.registrantFirstName} />
-            </div>
-            <div className="grid gap-2">
-              <Label htmlFor="registrant-last-name">Last Name</Label>
-              <Input
-                id="registrant-last-name"
-                value={form.registrantLastName}
-                onChange={(event) => setForm((prev) => ({ ...prev, registrantLastName: event.target.value }))}
-                className={invalidFieldClass(Boolean(errors.registrantLastName))}
-              />
-              <FieldError message={errors.registrantLastName} />
-            </div>
-            <div className="grid gap-2">
-              <Label htmlFor="registrant-org">Organization</Label>
-              <Input
-                id="registrant-org"
-                value={form.registrantOrganizationName}
-                onChange={(event) => setForm((prev) => ({ ...prev, registrantOrganizationName: event.target.value }))}
-              />
-            </div>
-            <div className="grid gap-2">
-              <Label htmlFor="registrant-email">Email</Label>
-              <Input
-                id="registrant-email"
-                value={form.registrantEmailAddress}
-                onChange={(event) => setForm((prev) => ({ ...prev, registrantEmailAddress: event.target.value }))}
-                className={invalidFieldClass(Boolean(errors.registrantEmailAddress))}
-              />
-              <FieldError message={errors.registrantEmailAddress} />
-            </div>
-            <div className="grid gap-2">
-              <Label htmlFor="registrant-phone">Phone</Label>
-              <Input
-                id="registrant-phone"
-                value={form.registrantPhone}
-                onChange={(event) => setForm((prev) => ({ ...prev, registrantPhone: event.target.value }))}
-                placeholder="+1.5555555555"
-                className={invalidFieldClass(Boolean(errors.registrantPhone))}
-              />
-              <FieldError message={errors.registrantPhone} />
-            </div>
-            <div className="grid gap-2">
-              <Label htmlFor="registrant-country">Country</Label>
-              <Input
-                id="registrant-country"
-                value={form.registrantCountry}
-                onChange={(event) => setForm((prev) => ({ ...prev, registrantCountry: event.target.value }))}
-                placeholder="US"
-                className={invalidFieldClass(Boolean(errors.registrantCountry))}
-              />
-              <FieldError message={errors.registrantCountry} />
-            </div>
-            <div className="grid gap-2 md:col-span-2">
-              <Label htmlFor="registrant-address1">Address</Label>
-              <Input
-                id="registrant-address1"
-                value={form.registrantAddress1}
-                onChange={(event) => setForm((prev) => ({ ...prev, registrantAddress1: event.target.value }))}
-                className={invalidFieldClass(Boolean(errors.registrantAddress1))}
-              />
-              <FieldError message={errors.registrantAddress1} />
-            </div>
-            <div className="grid gap-2">
-              <Label htmlFor="registrant-city">City</Label>
-              <Input
-                id="registrant-city"
-                value={form.registrantCity}
-                onChange={(event) => setForm((prev) => ({ ...prev, registrantCity: event.target.value }))}
-                className={invalidFieldClass(Boolean(errors.registrantCity))}
-              />
-              <FieldError message={errors.registrantCity} />
-            </div>
-            <div className="grid gap-2">
-              <Label htmlFor="registrant-state">State / Province</Label>
-              <Input
-                id="registrant-state"
-                value={form.registrantStateProvince}
-                onChange={(event) => setForm((prev) => ({ ...prev, registrantStateProvince: event.target.value }))}
-                className={invalidFieldClass(Boolean(errors.registrantStateProvince))}
-              />
-              <FieldError message={errors.registrantStateProvince} />
-            </div>
-            <div className="grid gap-2">
-              <Label htmlFor="registrant-postal">Postal Code</Label>
-              <Input
-                id="registrant-postal"
-                value={form.registrantPostalCode}
-                onChange={(event) => setForm((prev) => ({ ...prev, registrantPostalCode: event.target.value }))}
-                className={invalidFieldClass(Boolean(errors.registrantPostalCode))}
-              />
-              <FieldError message={errors.registrantPostalCode} />
-            </div>
-          </div>
-        ) : null}
-
-        <div className="grid gap-3 rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3 md:grid-cols-3">
-          <div className="md:col-span-3 text-sm font-semibold">Customer.io</div>
-          <div className="md:col-span-3 text-[11px] text-[color:var(--muted-foreground)]">
-            {savedCustomerIo?.siteId || savedCustomerIo?.hasTrackingApiKey
-              ? `Saved defaults will be used for any blank fields. Region: ${savedCustomerIo.workspaceRegion.toUpperCase()}.`
-              : "No saved Customer.io defaults yet. Fill these fields once or save defaults above."}
-          </div>
+        <div className="grid gap-3 rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3 md:grid-cols-[1fr_auto] md:items-end">
           <div className="grid gap-2">
-            <Label htmlFor="cio-site-id">Site ID</Label>
+            <Label htmlFor="setup-forwarding-target">Protected Brand Destination</Label>
             <Input
-              id="cio-site-id"
-              value={form.customerIoSiteId}
-              onChange={(event) => setForm((prev) => ({ ...prev, customerIoSiteId: event.target.value }))}
-              placeholder={savedCustomerIo?.siteId || ""}
-              className={invalidFieldClass(Boolean(errors.customerIoSiteId))}
-            />
-            <FieldError message={errors.customerIoSiteId} />
-          </div>
-          <div className="grid gap-2">
-            <Label htmlFor="cio-track-key">Tracking API Key</Label>
-            <Input
-              id="cio-track-key"
-              type="password"
-              value={form.customerIoTrackingApiKey}
-              onChange={(event) => setForm((prev) => ({ ...prev, customerIoTrackingApiKey: event.target.value }))}
-              placeholder={savedCustomerIo?.hasTrackingApiKey ? "Leave blank to use saved key" : ""}
-              className={invalidFieldClass(Boolean(errors.customerIoTrackingApiKey))}
-            />
-            <FieldError message={errors.customerIoTrackingApiKey} />
-          </div>
-          <div className="grid gap-2">
-            <Label htmlFor="cio-app-key">App API Key</Label>
-            <Input
-              id="cio-app-key"
-              type="password"
-              value={form.customerIoAppApiKey}
-              onChange={(event) => setForm((prev) => ({ ...prev, customerIoAppApiKey: event.target.value }))}
-              placeholder={savedCustomerIo?.hasAppApiKey ? "Leave blank to use saved app key" : "Optional but recommended"}
+              id="setup-forwarding-target"
+              value={setup.forwardingTargetUrl}
+              onChange={(event) => setSetup((prev) => ({ ...prev, forwardingTargetUrl: event.target.value }))}
+              placeholder="https://brand.com"
             />
             <div className="text-[11px] text-[color:var(--muted-foreground)]">
-              Used to bootstrap sender identities and try to fetch DNS records automatically.
+              Every sender domain can 301 here so the protected brand domain stays the main destination and never has to
+              send email itself.
             </div>
           </div>
-        </div>
-
-        <div className="grid gap-3 rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3 md:grid-cols-4">
-          <div className="md:col-span-4 text-sm font-semibold">Namecheap</div>
-          <div className="md:col-span-4 text-[11px] text-[color:var(--muted-foreground)]">
-            {savedNamecheap?.apiUser || savedNamecheap?.hasApiKey
-              ? "Saved Namecheap defaults will be used for any blank fields."
-              : "No saved Namecheap defaults yet. Fill these fields once or save defaults above."}
-          </div>
-          <div className="grid gap-2">
-            <Label htmlFor="nc-api-user">API User</Label>
-            <Input
-              id="nc-api-user"
-              value={form.namecheapApiUser}
-              onChange={(event) => setForm((prev) => ({ ...prev, namecheapApiUser: event.target.value }))}
-              placeholder={savedNamecheap?.apiUser || ""}
-              className={invalidFieldClass(Boolean(errors.namecheapApiUser))}
-            />
-            <FieldError message={errors.namecheapApiUser} />
-          </div>
-          <div className="grid gap-2">
-            <Label htmlFor="nc-username">User Name</Label>
-            <Input
-              id="nc-username"
-              value={form.namecheapUserName}
-              onChange={(event) => setForm((prev) => ({ ...prev, namecheapUserName: event.target.value }))}
-              placeholder={savedNamecheap?.userName || "Optional if same as API User"}
-            />
-          </div>
-          <div className="grid gap-2">
-            <Label htmlFor="nc-api-key">API Key</Label>
-            <Input
-              id="nc-api-key"
-              type="password"
-              value={form.namecheapApiKey}
-              onChange={(event) => setForm((prev) => ({ ...prev, namecheapApiKey: event.target.value }))}
-              placeholder={savedNamecheap?.hasApiKey ? "Leave blank to use saved key" : ""}
-              className={invalidFieldClass(Boolean(errors.namecheapApiKey))}
-            />
-            <FieldError message={errors.namecheapApiKey} />
-          </div>
-          <div className="grid gap-2">
-            <Label htmlFor="nc-client-ip">Whitelisted Client IP</Label>
-            <Input
-              id="nc-client-ip"
-              value={form.namecheapClientIp}
-              onChange={(event) => setForm((prev) => ({ ...prev, namecheapClientIp: event.target.value }))}
-              placeholder={savedNamecheap?.clientIp || ""}
-              className={invalidFieldClass(Boolean(errors.namecheapClientIp))}
-            />
-            <FieldError message={errors.namecheapClientIp} />
-          </div>
-        </div>
-
-        <div className="flex flex-wrap items-center justify-between gap-3">
           <Label className="flex items-center gap-2 text-sm font-normal">
             <input
               type="checkbox"
-              checked={form.assignToBrand}
-              onChange={(event) => setForm((prev) => ({ ...prev, assignToBrand: event.target.checked }))}
+              checked={setup.assignToBrand}
+              onChange={(event) => setSetup((prev) => ({ ...prev, assignToBrand: event.target.checked }))}
             />
-            Auto-assign this delivery account to the selected brand
+            Auto-assign sender to brand
           </Label>
-          <Button
-            type="button"
-            disabled={saving || !brands.length}
-            onClick={async () => {
-              if (!validate()) return;
-              setSaving(true);
-              setError("");
-              setResult(null);
-              try {
-                const provisioned = await provisionSenderDomain(form.brandId, {
-                  accountName: form.accountName.trim(),
-                  assignToBrand: form.assignToBrand,
-                  selectedMailboxAccountId: form.selectedMailboxAccountId,
-                  domainMode: form.domainMode,
-                  domain: form.domain.trim(),
-                  fromLocalPart: form.fromLocalPart.trim(),
-                  customerIoSiteId: form.customerIoSiteId.trim(),
-                  customerIoTrackingApiKey: form.customerIoTrackingApiKey.trim(),
-                  customerIoAppApiKey: form.customerIoAppApiKey.trim(),
-                  namecheapApiUser: form.namecheapApiUser.trim(),
-                  namecheapUserName: form.namecheapUserName.trim(),
-                  namecheapApiKey: form.namecheapApiKey.trim(),
-                  namecheapClientIp: form.namecheapClientIp.trim(),
-                  registrant:
-                    form.domainMode === "register"
-                      ? {
-                          firstName: form.registrantFirstName.trim(),
-                          lastName: form.registrantLastName.trim(),
-                          organizationName: form.registrantOrganizationName.trim(),
-                          emailAddress: form.registrantEmailAddress.trim(),
-                          phone: form.registrantPhone.trim(),
-                          address1: form.registrantAddress1.trim(),
-                          city: form.registrantCity.trim(),
-                          stateProvince: form.registrantStateProvince.trim(),
-                          postalCode: form.registrantPostalCode.trim(),
-                          country: form.registrantCountry.trim(),
-                        }
-                      : undefined,
-                });
-                setResult(provisioned);
-                onProvisioned(provisioned);
-              } catch (err) {
-                setError(err instanceof Error ? err.message : "Provisioning failed");
-              } finally {
-                setSaving(false);
+        </div>
+
+        <div className="grid gap-3 rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <div className="text-sm font-semibold">Customer.io Capacity</div>
+              <div className="text-[11px] text-[color:var(--muted-foreground)]">
+                Auto-pick will choose the account with baseline sync complete and the most remaining profiles.
+              </div>
+            </div>
+            <Select
+              value={setup.customerIoStrategy}
+              onChange={(event) =>
+                setSetup((prev) => ({
+                  ...prev,
+                  customerIoStrategy:
+                    event.target.value === "specific"
+                      ? "specific"
+                      : event.target.value === "defaults"
+                        ? "defaults"
+                        : "auto",
+                }))
               }
-            }}
-          >
-            {saving ? "Provisioning..." : "Provision Sender"}
-          </Button>
+              className="w-full max-w-xs"
+            >
+              <option value="auto">Auto-pick best account</option>
+              <option value="specific">Choose a specific account</option>
+              <option value="defaults">Use saved defaults</option>
+            </Select>
+          </div>
+
+          {customerIoPools.length ? (
+            <div className="grid gap-3 md:grid-cols-2">
+              {customerIoPools.map((pool) => (
+                <PoolCard
+                  key={pool.id}
+                  pool={pool}
+                  selected={setup.customerIoSourceAccountId === pool.sourceAccountId}
+                  disabled={setup.customerIoStrategy !== "specific"}
+                  onSelect={() =>
+                    setSetup((prev) => ({
+                      ...prev,
+                      customerIoSourceAccountId: pool.sourceAccountId,
+                    }))
+                  }
+                />
+              ))}
+            </div>
+          ) : (
+            <div className="text-sm text-[color:var(--muted-foreground)]">
+              No Customer.io sender accounts exist yet. Add one above or use saved defaults below.
+            </div>
+          )}
+
+          {setup.customerIoStrategy === "auto" && recommendedPool ? (
+            <div className="rounded-xl border border-[color:var(--success-border)] bg-[color:var(--success-soft)] px-3 py-2 text-sm text-[color:var(--success)]">
+              Auto-pick target: {recommendedPool.sourceAccountName} with{" "}
+              {recommendedPool.remainingProfiles.toLocaleString()} profiles left this month.
+            </div>
+          ) : null}
+
+          {setup.customerIoStrategy === "defaults" ? (
+            <div className="grid gap-3 md:grid-cols-3">
+              <div className="grid gap-2">
+                <Label htmlFor="setup-default-site-id">Customer.io Site ID</Label>
+                <Input
+                  id="setup-default-site-id"
+                  value={setup.customerIoSiteId}
+                  onChange={(event) => setSetup((prev) => ({ ...prev, customerIoSiteId: event.target.value }))}
+                  placeholder={provisioningSettings?.customerIo.siteId || "Saved default"}
+                />
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor="setup-default-track-key">Tracking API Key</Label>
+                <Input
+                  id="setup-default-track-key"
+                  type="password"
+                  value={setup.customerIoTrackingApiKey}
+                  onChange={(event) =>
+                    setSetup((prev) => ({ ...prev, customerIoTrackingApiKey: event.target.value }))
+                  }
+                  placeholder={provisioningSettings?.customerIo.hasTrackingApiKey ? "Leave blank to use saved key" : ""}
+                />
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor="setup-default-app-key">App API Key</Label>
+                <Input
+                  id="setup-default-app-key"
+                  type="password"
+                  value={setup.customerIoAppApiKey}
+                  onChange={(event) => setSetup((prev) => ({ ...prev, customerIoAppApiKey: event.target.value }))}
+                  placeholder={provisioningSettings?.customerIo.hasAppApiKey ? "Leave blank to use saved key" : "Optional"}
+                />
+              </div>
+            </div>
+          ) : null}
+        </div>
+
+        <div className="grid gap-3">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <div className="text-sm font-semibold">Namecheap Inventory</div>
+              <div className="text-[11px] text-[color:var(--muted-foreground)]">
+                One click will connect the domain, apply forwarding, and create the sender inside Customer.io.
+              </div>
+            </div>
+            <Input
+              value={inventoryQuery}
+              onChange={(event) => setInventoryQuery(event.target.value)}
+              placeholder="Filter domains"
+              className="w-full max-w-xs"
+            />
+          </div>
+
+          {inventory.loading ? (
+            <div className="text-sm text-[color:var(--muted-foreground)]">Loading Namecheap domains...</div>
+          ) : null}
+          {inventory.error ? <div className="text-sm text-[color:var(--danger)]">{inventory.error}</div> : null}
+          {!inventory.loading && !inventory.configured ? (
+            <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3 text-sm">
+              Save platform Namecheap credentials above first. Once that is done, this section will list every owned
+              domain with a setup button.
+            </div>
+          ) : null}
+
+          {inventory.configured ? (
+            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+              {filteredDomains.map((item) => {
+                const owner = domainOwnerByName.get(item.domain) ?? null;
+                const alreadyOnThisBrand = owner?.brandId === setup.brandId;
+                const assignedElsewhere = owner && owner.brandId !== setup.brandId;
+                const key = `existing:${item.domain}`;
+
+                return (
+                  <div
+                    key={item.domain}
+                    className={`grid gap-3 rounded-xl border p-3 ${
+                      assignedElsewhere
+                        ? "border-[color:var(--danger-border)] bg-[color:var(--danger-soft)]"
+                        : "border-[color:var(--border)] bg-[color:var(--surface-muted)]"
+                    }`}
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <div className="text-sm font-semibold">{item.domain}</div>
+                        <div className="text-[11px] text-[color:var(--muted-foreground)]">
+                          Expires {formatDateLabel(item.expiresAt)}
+                        </div>
+                      </div>
+                      <div className="text-[11px] text-[color:var(--muted-foreground)]">
+                        {item.autoRenew ? "Auto-renew" : "Manual renew"}
+                      </div>
+                    </div>
+                    <div className="flex flex-wrap gap-2 text-[11px] text-[color:var(--muted-foreground)]">
+                      <span>{item.isOurDns ? "Namecheap DNS" : "External DNS"}</span>
+                      <span>{item.whoisGuardEnabled ? "WhoisGuard on" : "WhoisGuard off"}</span>
+                    </div>
+                    {assignedElsewhere ? (
+                      <div className="text-[11px] text-[color:var(--muted-foreground)]">
+                        Already attached to {owner.brandName}.
+                      </div>
+                    ) : alreadyOnThisBrand ? (
+                      <div className="text-[11px] text-[color:var(--muted-foreground)]">
+                        Already on this brand. Re-run setup to refresh DNS and forwarding.
+                      </div>
+                    ) : null}
+                    <Button
+                      type="button"
+                      disabled={Boolean(busyKey) || Boolean(assignedElsewhere)}
+                      onClick={() => void runProvision(item.domain, "existing")}
+                    >
+                      {busyKey === key ? "Setting Up..." : alreadyOnThisBrand ? "Re-run Setup" : "Set Up"}
+                    </Button>
+                  </div>
+                );
+              })}
+              {!filteredDomains.length ? (
+                <div className="text-sm text-[color:var(--muted-foreground)]">No domains found.</div>
+              ) : null}
+            </div>
+          ) : null}
+        </div>
+
+        <div className="grid gap-3 rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3">
+          <div>
+            <div className="text-sm font-semibold">Buy New Domain + Set Up</div>
+            <div className="text-[11px] text-[color:var(--muted-foreground)]">
+              If the domain is available in Namecheap, this will buy it and run the same setup flow automatically.
+            </div>
+          </div>
+          <div className="grid gap-3 md:grid-cols-3">
+            <div className="grid gap-2">
+              <Label htmlFor="register-domain">Domain</Label>
+              <Input
+                id="register-domain"
+                value={register.domain}
+                onChange={(event) => setRegister((prev) => ({ ...prev, domain: event.target.value }))}
+                placeholder="example.com"
+              />
+            </div>
+            <div className="grid gap-2">
+              <Label htmlFor="register-first-name">First Name</Label>
+              <Input
+                id="register-first-name"
+                value={register.registrantFirstName}
+                onChange={(event) => setRegister((prev) => ({ ...prev, registrantFirstName: event.target.value }))}
+              />
+            </div>
+            <div className="grid gap-2">
+              <Label htmlFor="register-last-name">Last Name</Label>
+              <Input
+                id="register-last-name"
+                value={register.registrantLastName}
+                onChange={(event) => setRegister((prev) => ({ ...prev, registrantLastName: event.target.value }))}
+              />
+            </div>
+            <div className="grid gap-2">
+              <Label htmlFor="register-org">Organization</Label>
+              <Input
+                id="register-org"
+                value={register.registrantOrganizationName}
+                onChange={(event) =>
+                  setRegister((prev) => ({ ...prev, registrantOrganizationName: event.target.value }))
+                }
+              />
+            </div>
+            <div className="grid gap-2">
+              <Label htmlFor="register-email">Email</Label>
+              <Input
+                id="register-email"
+                value={register.registrantEmailAddress}
+                onChange={(event) =>
+                  setRegister((prev) => ({ ...prev, registrantEmailAddress: event.target.value }))
+                }
+              />
+            </div>
+            <div className="grid gap-2">
+              <Label htmlFor="register-phone">Phone</Label>
+              <Input
+                id="register-phone"
+                value={register.registrantPhone}
+                onChange={(event) => setRegister((prev) => ({ ...prev, registrantPhone: event.target.value }))}
+                placeholder="+1.5555555555"
+              />
+            </div>
+            <div className="grid gap-2 md:col-span-2">
+              <Label htmlFor="register-address">Address</Label>
+              <Input
+                id="register-address"
+                value={register.registrantAddress1}
+                onChange={(event) => setRegister((prev) => ({ ...prev, registrantAddress1: event.target.value }))}
+              />
+            </div>
+            <div className="grid gap-2">
+              <Label htmlFor="register-city">City</Label>
+              <Input
+                id="register-city"
+                value={register.registrantCity}
+                onChange={(event) => setRegister((prev) => ({ ...prev, registrantCity: event.target.value }))}
+              />
+            </div>
+            <div className="grid gap-2">
+              <Label htmlFor="register-state">State / Province</Label>
+              <Input
+                id="register-state"
+                value={register.registrantStateProvince}
+                onChange={(event) =>
+                  setRegister((prev) => ({ ...prev, registrantStateProvince: event.target.value }))
+                }
+              />
+            </div>
+            <div className="grid gap-2">
+              <Label htmlFor="register-postal">Postal Code</Label>
+              <Input
+                id="register-postal"
+                value={register.registrantPostalCode}
+                onChange={(event) =>
+                  setRegister((prev) => ({ ...prev, registrantPostalCode: event.target.value }))
+                }
+              />
+            </div>
+            <div className="grid gap-2">
+              <Label htmlFor="register-country">Country</Label>
+              <Input
+                id="register-country"
+                value={register.registrantCountry}
+                onChange={(event) => setRegister((prev) => ({ ...prev, registrantCountry: event.target.value }))}
+                placeholder="US"
+              />
+            </div>
+          </div>
+          <div className="flex justify-end">
+            <Button
+              type="button"
+              disabled={Boolean(busyKey)}
+              onClick={() => void runProvision(register.domain, "register")}
+            >
+              {busyKey === `register:${normalizeDomain(register.domain)}` ? "Buying + Setting Up..." : "Buy + Set Up"}
+            </Button>
+          </div>
         </div>
 
         {error ? <div className="text-sm text-[color:var(--danger)]">{error}</div> : null}
@@ -568,8 +838,8 @@ export default function SenderProvisionCard({
               {result.readyToSend ? "Sender is ready" : "Sender provisioned with follow-up needed"}
             </div>
             <div className="mt-1 text-[color:var(--muted-foreground)]">
-              {result.fromEmail} · Namecheap records applied: {result.namecheap.appliedRecordCount} · Customer.io
-              identity: {result.customerIo.senderIdentityStatus}
+              {result.fromEmail} · Customer.io: {result.customerIo.sourceAccountName} · Forwarding:{" "}
+              {result.namecheap.forwardingEnabled ? result.namecheap.forwardingTargetUrl : "not set"}
             </div>
             {result.warnings.length ? (
               <div className="mt-2 space-y-1 text-xs text-[color:var(--muted-foreground)]">

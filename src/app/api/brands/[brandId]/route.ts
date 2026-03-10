@@ -28,6 +28,9 @@ function normalizeDomains(value: unknown): DomainRow[] {
           : "active",
         warmupStage: String(row.warmupStage ?? ""),
         reputation: String(row.reputation ?? ""),
+        role: ["brand", "sender"].includes(String(row.role ?? "").toLowerCase())
+          ? (String(row.role).toLowerCase() as DomainRow["role"])
+          : undefined,
         registrar:
           String(row.registrar ?? "").toLowerCase() === "namecheap"
             ? ("namecheap" as DomainRow["registrar"])
@@ -41,6 +44,9 @@ function normalizeDomains(value: unknown): DomainRow[] {
           : "pending",
         fromEmail: String(row.fromEmail ?? "").trim(),
         replyMailboxEmail: String(row.replyMailboxEmail ?? "").trim(),
+        forwardingTargetUrl: String(row.forwardingTargetUrl ?? row.forwarding_target_url ?? "").trim(),
+        customerIoAccountId: String(row.customerIoAccountId ?? row.customer_io_account_id ?? "").trim(),
+        customerIoAccountName: String(row.customerIoAccountName ?? row.customer_io_account_name ?? "").trim(),
         notes: String(row.notes ?? "").trim(),
         lastProvisionedAt: String(row.lastProvisionedAt ?? "").trim(),
       };

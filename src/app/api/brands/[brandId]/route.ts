@@ -28,6 +28,21 @@ function normalizeDomains(value: unknown): DomainRow[] {
           : "active",
         warmupStage: String(row.warmupStage ?? ""),
         reputation: String(row.reputation ?? ""),
+        registrar:
+          String(row.registrar ?? "").toLowerCase() === "namecheap"
+            ? ("namecheap" as DomainRow["registrar"])
+            : ("manual" as DomainRow["registrar"]),
+        provider:
+          String(row.provider ?? "").toLowerCase() === "customerio"
+            ? ("customerio" as DomainRow["provider"])
+            : ("manual" as DomainRow["provider"]),
+        dnsStatus: ["pending", "configured", "verified", "error"].includes(String(row.dnsStatus ?? "").toLowerCase())
+          ? (String(row.dnsStatus).toLowerCase() as DomainRow["dnsStatus"])
+          : "pending",
+        fromEmail: String(row.fromEmail ?? "").trim(),
+        replyMailboxEmail: String(row.replyMailboxEmail ?? "").trim(),
+        notes: String(row.notes ?? "").trim(),
+        lastProvisionedAt: String(row.lastProvisionedAt ?? "").trim(),
       };
     })
     .filter((row) => row.domain.length > 0);

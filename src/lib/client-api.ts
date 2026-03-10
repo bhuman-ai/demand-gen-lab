@@ -813,6 +813,65 @@ export async function fetchOutreachAccounts() {
   return (Array.isArray(data?.accounts) ? data.accounts : []) as OutreachAccount[];
 }
 
+export async function provisionSenderDomain(
+  brandId: string,
+  input: {
+    accountName: string;
+    assignToBrand?: boolean;
+    selectedMailboxAccountId?: string;
+    domainMode: "existing" | "register";
+    domain: string;
+    fromLocalPart: string;
+    customerIoSiteId: string;
+    customerIoTrackingApiKey: string;
+    customerIoAppApiKey?: string;
+    namecheapApiUser: string;
+    namecheapUserName?: string;
+    namecheapApiKey: string;
+    namecheapClientIp: string;
+    registrant?: {
+      firstName: string;
+      lastName: string;
+      organizationName?: string;
+      emailAddress: string;
+      phone: string;
+      address1: string;
+      city: string;
+      stateProvince: string;
+      postalCode: string;
+      country: string;
+    };
+  }
+) {
+  const response = await fetch(`/api/brands/${brandId}/outreach/provision-sender`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  const data = await readJson(response);
+  return data.result as {
+    ok: boolean;
+    readyToSend: boolean;
+    domain: string;
+    fromEmail: string;
+    brand: BrandRecord;
+    account: OutreachAccount;
+    assignment: BrandOutreachAssignment | null;
+    namecheap: {
+      mode: "existing" | "register";
+      domainStatus: "existing" | "registered";
+      existingRecordCount: number;
+      appliedRecordCount: number;
+    };
+    customerIo: {
+      senderIdentityStatus: "existing" | "created" | "manual_required" | "error";
+      dnsRecordCount: number;
+    };
+    warnings: string[];
+    nextSteps: string[];
+  };
+}
+
 export async function createOutreachAccountApi(input: {
   name: string;
   accountType?: "delivery" | "mailbox" | "hybrid";

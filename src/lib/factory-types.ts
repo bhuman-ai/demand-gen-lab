@@ -256,6 +256,13 @@ export type DomainRow = {
   status: "active" | "warming" | "risky";
   warmupStage: string;
   reputation: string;
+  registrar?: "namecheap" | "manual";
+  provider?: "customerio" | "manual";
+  dnsStatus?: "pending" | "configured" | "verified" | "error";
+  fromEmail?: string;
+  replyMailboxEmail?: string;
+  notes?: string;
+  lastProvisionedAt?: string;
 };
 
 export type LeadRow = {

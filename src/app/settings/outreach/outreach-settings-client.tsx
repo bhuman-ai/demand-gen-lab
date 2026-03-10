@@ -18,6 +18,7 @@ import {
 } from "@/lib/client-api";
 import { trackEvent } from "@/lib/telemetry-client";
 import type { BrandRecord, OutreachAccount } from "@/lib/factory-types";
+import SenderProvisionCard from "./sender-provision-card";
 
 type FieldErrors<T> = Partial<Record<keyof T, string>>;
 
@@ -651,6 +652,28 @@ export default function OutreachSettingsClient() {
 
       {error ? <div className="text-sm text-[color:var(--danger)]">{error}</div> : null}
       {loading ? <div className="text-sm text-[color:var(--muted-foreground)]">Loading outreach settings...</div> : null}
+
+      <SenderProvisionCard
+        brands={brands}
+        mailboxAccounts={mailboxAccounts}
+        assignments={assignments}
+        onProvisioned={(result) => {
+          setAccounts((prev) => {
+            const next = prev.filter((row) => row.id !== result.account.id);
+            return [result.account, ...next];
+          });
+          setBrands((prev) => prev.map((row) => (row.id === result.brand.id ? result.brand : row)));
+          if (result.assignment) {
+            setAssignments((prev) => ({
+              ...prev,
+              [result.brand.id]: {
+                accountId: result.assignment?.accountId ?? "",
+                mailboxAccountId: result.assignment?.mailboxAccountId ?? "",
+              },
+            }));
+          }
+        }}
+      />
 
       <Card>
         <CardHeader>

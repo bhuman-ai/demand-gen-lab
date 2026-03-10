@@ -87,6 +87,7 @@ export type ProvisionSenderResult = {
 
 const NAMECHEAP_BASE_URL = "https://api.namecheap.com/xml.response";
 const CUSTOMER_IO_API_BASE_URL = "https://api.customer.io/v1";
+const CUSTOMER_IO_EU_API_BASE_URL = "https://api-eu.customer.io/v1";
 const DEFAULT_NAMECHEAP_TTL = 1800;
 
 function nowIso() {
@@ -378,11 +379,38 @@ async function namecheapSetHosts(input: {
   await namecheapRequest("namecheap.domains.dns.setHosts", params);
 }
 
-function customerIoHeaders(apiKey: string) {
+function customerIoTrackHeaders(siteId: string, trackingApiKey: string) {
   return {
-    Authorization: `Bearer ${apiKey.trim()}`,
+    Authorization: `Basic ${Buffer.from(`${siteId.trim()}:${trackingApiKey.trim()}`).toString("base64")}`,
     "Content-Type": "application/json",
   };
+}
+
+function customerIoAppHeaders(appApiKey: string) {
+  return {
+    Authorization: `Basic ${Buffer.from(`${appApiKey.trim()}:`).toString("base64")}`,
+    "Content-Type": "application/json",
+  };
+}
+
+async function detectCustomerIoRegion(input: { siteId: string; trackingApiKey: string }) {
+  const response = await fetch("https://track.customer.io/api/v1/accounts/region", {
+    method: "GET",
+    headers: customerIoTrackHeaders(input.siteId, input.trackingApiKey),
+    cache: "no-store",
+  });
+  const raw = await response.text();
+  if (!response.ok) {
+    throw new Error(`Customer.io region lookup failed (HTTP ${response.status}): ${raw.slice(0, 200)}`);
+  }
+  const payload: unknown = raw ? JSON.parse(raw) : {};
+  const row = payload && typeof payload === "object" && !Array.isArray(payload) ? (payload as Record<string, unknown>) : {};
+  const region = String(row.region ?? "").trim().toLowerCase();
+  return region === "eu" ? "eu" : "us";
+}
+
+function customerIoAppBaseUrl(region: "eu" | "us") {
+  return region === "eu" ? CUSTOMER_IO_EU_API_BASE_URL : CUSTOMER_IO_API_BASE_URL;
 }
 
 function collectRecordsFromUnknown(value: unknown, sink: DnsRecord[], seen: Set<string>) {
@@ -465,10 +493,10 @@ function collectSenderIdentities(value: unknown, sink: Array<Record<string, unkn
   }
 }
 
-async function listCustomerIoSenderIdentities(apiKey: string) {
-  const response = await fetch(`${CUSTOMER_IO_API_BASE_URL}/sender_identities`, {
+async function listCustomerIoSenderIdentities(input: { baseUrl: string; appApiKey: string }) {
+  const response = await fetch(`${input.baseUrl}/sender_identities`, {
     method: "GET",
-    headers: customerIoHeaders(apiKey),
+    headers: customerIoAppHeaders(input.appApiKey),
     cache: "no-store",
   });
   const raw = await response.text();
@@ -502,7 +530,8 @@ function matchingSenderIdentity(
 }
 
 async function createCustomerIoSenderIdentity(input: {
-  apiKey: string;
+  baseUrl: string;
+  appApiKey: string;
   fromEmail: string;
   senderName: string;
 }) {
@@ -515,9 +544,9 @@ async function createCustomerIoSenderIdentity(input: {
 
   let lastError = "";
   for (const body of attempts) {
-    const response = await fetch(`${CUSTOMER_IO_API_BASE_URL}/sender_identities`, {
+    const response = await fetch(`${input.baseUrl}/sender_identities`, {
       method: "POST",
-      headers: customerIoHeaders(input.apiKey),
+      headers: customerIoAppHeaders(input.appApiKey),
       body: JSON.stringify(body),
       cache: "no-store",
     });
@@ -535,6 +564,8 @@ async function createCustomerIoSenderIdentity(input: {
 }
 
 async function bootstrapCustomerIoSender(input: {
+  siteId: string;
+  trackingApiKey: string;
   appApiKey?: string;
   fromEmail: string;
   senderName: string;
@@ -549,7 +580,15 @@ async function bootstrapCustomerIoSender(input: {
   }
 
   try {
-    const listed = await listCustomerIoSenderIdentities(input.appApiKey);
+    const region = await detectCustomerIoRegion({
+      siteId: input.siteId,
+      trackingApiKey: input.trackingApiKey,
+    });
+    const baseUrl = customerIoAppBaseUrl(region);
+    const listed = await listCustomerIoSenderIdentities({
+      baseUrl,
+      appApiKey: input.appApiKey,
+    });
     const existing = matchingSenderIdentity(listed.identities, input.fromEmail, input.domain);
     if (existing) {
       return {
@@ -560,7 +599,8 @@ async function bootstrapCustomerIoSender(input: {
     }
 
     const created = await createCustomerIoSenderIdentity({
-      apiKey: input.appApiKey,
+      baseUrl,
+      appApiKey: input.appApiKey,
       fromEmail: input.fromEmail,
       senderName: input.senderName,
     });
@@ -777,6 +817,8 @@ export async function provisionCustomerIoSender(
   });
 
   const senderBootstrap = await bootstrapCustomerIoSender({
+    siteId: input.customerIoSiteId,
+    trackingApiKey: input.customerIoTrackingApiKey,
     appApiKey: input.customerIoAppApiKey,
     fromEmail,
     senderName: brand.name || input.accountName || domain,

@@ -259,6 +259,9 @@ async function getStoredProvisioningSettings(): Promise<StoredOutreachProvisioni
   if (!error && data) {
     return mapProvisioningSettingsRowFromDb(data);
   }
+  if (error && isMissingConfigTableError(error)) {
+    return null;
+  }
   if (error && isVercel) {
     throw new OutreachDataError("Failed to load outreach provisioning settings from Supabase.", {
       status: 500,

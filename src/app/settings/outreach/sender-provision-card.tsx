@@ -7,7 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
 import { provisionSenderDomain } from "@/lib/client-api";
-import type { BrandRecord, OutreachAccount } from "@/lib/factory-types";
+import type { BrandRecord, OutreachAccount, OutreachProvisioningSettings } from "@/lib/factory-types";
 
 type AssignmentMap = Record<
   string,
@@ -88,11 +88,13 @@ export default function SenderProvisionCard({
   brands,
   mailboxAccounts,
   assignments,
+  provisioningSettings,
   onProvisioned,
 }: {
   brands: BrandRecord[];
   mailboxAccounts: OutreachAccount[];
   assignments: AssignmentMap;
+  provisioningSettings: OutreachProvisioningSettings | null;
   onProvisioned: (result: ProvisionResult) => void;
 }) {
   const [form, setForm] = useState<ProvisionState>(() => ({
@@ -123,11 +125,24 @@ export default function SenderProvisionCard({
     });
   }, [assignments, form.brandId]);
 
+  useEffect(() => {
+    if (!provisioningSettings) return;
+    setForm((prev) => ({
+      ...prev,
+      customerIoSiteId: prev.customerIoSiteId || provisioningSettings.customerIo.siteId,
+      namecheapApiUser: prev.namecheapApiUser || provisioningSettings.namecheap.apiUser,
+      namecheapUserName: prev.namecheapUserName || provisioningSettings.namecheap.userName,
+      namecheapClientIp: prev.namecheapClientIp || provisioningSettings.namecheap.clientIp,
+    }));
+  }, [provisioningSettings]);
+
   const currentAssignment = assignments[form.brandId] ?? { accountId: "", mailboxAccountId: "" };
   const selectedMailbox = useMemo(
     () => mailboxAccounts.find((account) => account.id === form.selectedMailboxAccountId) ?? null,
     [mailboxAccounts, form.selectedMailboxAccountId]
   );
+  const savedCustomerIo = provisioningSettings?.customerIo ?? null;
+  const savedNamecheap = provisioningSettings?.namecheap ?? null;
 
   const validate = () => {
     const nextErrors: FieldErrors = {};
@@ -135,11 +150,21 @@ export default function SenderProvisionCard({
     if (!form.accountName.trim()) nextErrors.accountName = "Required.";
     if (!form.domain.trim()) nextErrors.domain = "Required.";
     if (!form.fromLocalPart.trim()) nextErrors.fromLocalPart = "Required.";
-    if (!form.customerIoSiteId.trim()) nextErrors.customerIoSiteId = "Required.";
-    if (!form.customerIoTrackingApiKey.trim()) nextErrors.customerIoTrackingApiKey = "Required.";
-    if (!form.namecheapApiUser.trim()) nextErrors.namecheapApiUser = "Required.";
-    if (!form.namecheapApiKey.trim()) nextErrors.namecheapApiKey = "Required.";
-    if (!form.namecheapClientIp.trim()) nextErrors.namecheapClientIp = "Required.";
+    if (!form.customerIoSiteId.trim() && !savedCustomerIo?.siteId.trim()) {
+      nextErrors.customerIoSiteId = "Required.";
+    }
+    if (!form.customerIoTrackingApiKey.trim() && !savedCustomerIo?.hasTrackingApiKey) {
+      nextErrors.customerIoTrackingApiKey = "Required.";
+    }
+    if (!form.namecheapApiUser.trim() && !savedNamecheap?.apiUser.trim()) {
+      nextErrors.namecheapApiUser = "Required.";
+    }
+    if (!form.namecheapApiKey.trim() && !savedNamecheap?.hasApiKey) {
+      nextErrors.namecheapApiKey = "Required.";
+    }
+    if (!form.namecheapClientIp.trim() && !savedNamecheap?.clientIp.trim()) {
+      nextErrors.namecheapClientIp = "Required.";
+    }
 
     if (form.domainMode === "register") {
       if (!form.registrantFirstName.trim()) nextErrors.registrantFirstName = "Required.";
@@ -373,12 +398,18 @@ export default function SenderProvisionCard({
 
         <div className="grid gap-3 rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3 md:grid-cols-3">
           <div className="md:col-span-3 text-sm font-semibold">Customer.io</div>
+          <div className="md:col-span-3 text-[11px] text-[color:var(--muted-foreground)]">
+            {savedCustomerIo?.siteId || savedCustomerIo?.hasTrackingApiKey
+              ? `Saved defaults will be used for any blank fields. Region: ${savedCustomerIo.workspaceRegion.toUpperCase()}.`
+              : "No saved Customer.io defaults yet. Fill these fields once or save defaults above."}
+          </div>
           <div className="grid gap-2">
             <Label htmlFor="cio-site-id">Site ID</Label>
             <Input
               id="cio-site-id"
               value={form.customerIoSiteId}
               onChange={(event) => setForm((prev) => ({ ...prev, customerIoSiteId: event.target.value }))}
+              placeholder={savedCustomerIo?.siteId || ""}
               className={invalidFieldClass(Boolean(errors.customerIoSiteId))}
             />
             <FieldError message={errors.customerIoSiteId} />
@@ -390,6 +421,7 @@ export default function SenderProvisionCard({
               type="password"
               value={form.customerIoTrackingApiKey}
               onChange={(event) => setForm((prev) => ({ ...prev, customerIoTrackingApiKey: event.target.value }))}
+              placeholder={savedCustomerIo?.hasTrackingApiKey ? "Leave blank to use saved key" : ""}
               className={invalidFieldClass(Boolean(errors.customerIoTrackingApiKey))}
             />
             <FieldError message={errors.customerIoTrackingApiKey} />
@@ -401,7 +433,7 @@ export default function SenderProvisionCard({
               type="password"
               value={form.customerIoAppApiKey}
               onChange={(event) => setForm((prev) => ({ ...prev, customerIoAppApiKey: event.target.value }))}
-              placeholder="Optional but recommended"
+              placeholder={savedCustomerIo?.hasAppApiKey ? "Leave blank to use saved app key" : "Optional but recommended"}
             />
             <div className="text-[11px] text-[color:var(--muted-foreground)]">
               Used to bootstrap sender identities and try to fetch DNS records automatically.
@@ -411,12 +443,18 @@ export default function SenderProvisionCard({
 
         <div className="grid gap-3 rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3 md:grid-cols-4">
           <div className="md:col-span-4 text-sm font-semibold">Namecheap</div>
+          <div className="md:col-span-4 text-[11px] text-[color:var(--muted-foreground)]">
+            {savedNamecheap?.apiUser || savedNamecheap?.hasApiKey
+              ? "Saved Namecheap defaults will be used for any blank fields."
+              : "No saved Namecheap defaults yet. Fill these fields once or save defaults above."}
+          </div>
           <div className="grid gap-2">
             <Label htmlFor="nc-api-user">API User</Label>
             <Input
               id="nc-api-user"
               value={form.namecheapApiUser}
               onChange={(event) => setForm((prev) => ({ ...prev, namecheapApiUser: event.target.value }))}
+              placeholder={savedNamecheap?.apiUser || ""}
               className={invalidFieldClass(Boolean(errors.namecheapApiUser))}
             />
             <FieldError message={errors.namecheapApiUser} />
@@ -427,7 +465,7 @@ export default function SenderProvisionCard({
               id="nc-username"
               value={form.namecheapUserName}
               onChange={(event) => setForm((prev) => ({ ...prev, namecheapUserName: event.target.value }))}
-              placeholder="Optional if same as API User"
+              placeholder={savedNamecheap?.userName || "Optional if same as API User"}
             />
           </div>
           <div className="grid gap-2">
@@ -437,6 +475,7 @@ export default function SenderProvisionCard({
               type="password"
               value={form.namecheapApiKey}
               onChange={(event) => setForm((prev) => ({ ...prev, namecheapApiKey: event.target.value }))}
+              placeholder={savedNamecheap?.hasApiKey ? "Leave blank to use saved key" : ""}
               className={invalidFieldClass(Boolean(errors.namecheapApiKey))}
             />
             <FieldError message={errors.namecheapApiKey} />
@@ -447,6 +486,7 @@ export default function SenderProvisionCard({
               id="nc-client-ip"
               value={form.namecheapClientIp}
               onChange={(event) => setForm((prev) => ({ ...prev, namecheapClientIp: event.target.value }))}
+              placeholder={savedNamecheap?.clientIp || ""}
               className={invalidFieldClass(Boolean(errors.namecheapClientIp))}
             />
             <FieldError message={errors.namecheapClientIp} />

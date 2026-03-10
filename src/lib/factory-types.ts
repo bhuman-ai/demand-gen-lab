@@ -302,6 +302,32 @@ export type BrandRecord = {
 
 export type OutreachProvider = "customerio";
 
+export type ProvisioningValidationStatus = "unknown" | "pass" | "fail";
+
+export type OutreachProvisioningSettings = {
+  id: string;
+  customerIo: {
+    siteId: string;
+    workspaceRegion: "unknown" | "us" | "eu";
+    hasTrackingApiKey: boolean;
+    hasAppApiKey: boolean;
+    lastValidatedAt: string;
+    lastValidatedStatus: ProvisioningValidationStatus;
+    lastValidationMessage: string;
+  };
+  namecheap: {
+    apiUser: string;
+    userName: string;
+    clientIp: string;
+    hasApiKey: boolean;
+    lastValidatedAt: string;
+    lastValidatedStatus: ProvisioningValidationStatus;
+    lastValidationMessage: string;
+  };
+  createdAt: string;
+  updatedAt: string;
+};
+
 export type MailboxProvider = "gmail" | "outlook" | "imap";
 
 export type MailboxStatus = "connected" | "disconnected" | "error";

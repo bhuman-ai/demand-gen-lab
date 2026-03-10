@@ -14,6 +14,10 @@ import {
   updateOutreachAccount,
   type OutreachAccountSecrets,
 } from "@/lib/outreach-data";
+import {
+  getOutreachProvisioningSettings,
+  getOutreachProvisioningSettingsSecrets,
+} from "@/lib/outreach-provider-settings";
 import { testOutreachProviders } from "@/lib/outreach-providers";
 
 type NamecheapHostRecord = {
@@ -83,6 +87,13 @@ export type ProvisionSenderResult = {
   };
   warnings: string[];
   nextSteps: string[];
+};
+
+export type ProvisioningProviderTestResult = {
+  provider: "customerio" | "namecheap";
+  ok: boolean;
+  message: string;
+  details: Record<string, unknown>;
 };
 
 const NAMECHEAP_BASE_URL = "https://api.namecheap.com/xml.response";
@@ -379,6 +390,36 @@ async function namecheapSetHosts(input: {
   await namecheapRequest("namecheap.domains.dns.setHosts", params);
 }
 
+export async function testNamecheapProvisioningConnection(input: {
+  apiUser: string;
+  userName?: string;
+  apiKey: string;
+  clientIp: string;
+}): Promise<ProvisioningProviderTestResult> {
+  await namecheapRequest("namecheap.domains.getList", {
+    ...namecheapBaseParams({
+      apiUser: input.apiUser,
+      userName: input.userName,
+      apiKey: input.apiKey,
+      clientIp: input.clientIp,
+      command: "namecheap.domains.getList",
+    }),
+    Page: "1",
+    PageSize: "1",
+    SortBy: "NAME",
+  });
+
+  return {
+    provider: "namecheap",
+    ok: true,
+    message: "Namecheap API credentials are working.",
+    details: {
+      apiUser: input.apiUser.trim(),
+      clientIp: input.clientIp.trim(),
+    },
+  };
+}
+
 function customerIoTrackHeaders(siteId: string, trackingApiKey: string) {
   return {
     Authorization: `Basic ${Buffer.from(`${siteId.trim()}:${trackingApiKey.trim()}`).toString("base64")}`,
@@ -388,7 +429,7 @@ function customerIoTrackHeaders(siteId: string, trackingApiKey: string) {
 
 function customerIoAppHeaders(appApiKey: string) {
   return {
-    Authorization: `Basic ${Buffer.from(`${appApiKey.trim()}:`).toString("base64")}`,
+    Authorization: `Bearer ${appApiKey.trim()}`,
     "Content-Type": "application/json",
   };
 }
@@ -409,8 +450,50 @@ async function detectCustomerIoRegion(input: { siteId: string; trackingApiKey: s
   return region === "eu" ? "eu" : "us";
 }
 
-function customerIoAppBaseUrl(region: "eu" | "us") {
-  return region === "eu" ? CUSTOMER_IO_EU_API_BASE_URL : CUSTOMER_IO_API_BASE_URL;
+function customerIoAppBaseUrls(region: "eu" | "us") {
+  return region === "eu"
+    ? [CUSTOMER_IO_EU_API_BASE_URL, CUSTOMER_IO_API_BASE_URL]
+    : [CUSTOMER_IO_API_BASE_URL, CUSTOMER_IO_EU_API_BASE_URL];
+}
+
+export async function testCustomerIoProvisioningConnection(input: {
+  siteId: string;
+  trackingApiKey: string;
+  appApiKey?: string;
+}): Promise<ProvisioningProviderTestResult> {
+  const region = await detectCustomerIoRegion({
+    siteId: input.siteId,
+    trackingApiKey: input.trackingApiKey,
+  });
+  const details: Record<string, unknown> = {
+    siteId: input.siteId.trim(),
+    region,
+  };
+
+  if (!input.appApiKey?.trim()) {
+    return {
+      provider: "customerio",
+      ok: true,
+      message: "Customer.io tracking credentials are working. App API key is not saved yet.",
+      details,
+    };
+  }
+
+  const resolvedAppConnection = await resolveCustomerIoAppConnection({
+    region,
+    appApiKey: input.appApiKey,
+  });
+
+  return {
+    provider: "customerio",
+    ok: true,
+    message: "Customer.io tracking and App API credentials are working.",
+    details: {
+      ...details,
+      appBaseUrl: resolvedAppConnection.baseUrl,
+      senderIdentityCount: resolvedAppConnection.listed.identities.length,
+    },
+  };
 }
 
 function collectRecordsFromUnknown(value: unknown, sink: DnsRecord[], seen: Set<string>) {
@@ -509,6 +592,25 @@ async function listCustomerIoSenderIdentities(input: { baseUrl: string; appApiKe
   return { payload, identities };
 }
 
+async function resolveCustomerIoAppConnection(input: { region: "eu" | "us"; appApiKey: string }) {
+  let lastError: unknown = null;
+  for (const baseUrl of customerIoAppBaseUrls(input.region)) {
+    try {
+      const listed = await listCustomerIoSenderIdentities({
+        baseUrl,
+        appApiKey: input.appApiKey,
+      });
+      return {
+        baseUrl,
+        listed,
+      };
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error("Customer.io sender identity lookup failed");
+}
+
 function matchingSenderIdentity(
   identities: Array<Record<string, unknown>>,
   fromEmail: string,
@@ -584,22 +686,28 @@ async function bootstrapCustomerIoSender(input: {
       siteId: input.siteId,
       trackingApiKey: input.trackingApiKey,
     });
-    const baseUrl = customerIoAppBaseUrl(region);
-    const listed = await listCustomerIoSenderIdentities({
-      baseUrl,
+    const resolvedAppConnection = await resolveCustomerIoAppConnection({
+      region,
       appApiKey: input.appApiKey,
     });
-    const existing = matchingSenderIdentity(listed.identities, input.fromEmail, input.domain);
+    const existing = matchingSenderIdentity(
+      resolvedAppConnection.listed.identities,
+      input.fromEmail,
+      input.domain
+    );
     if (existing) {
       return {
         status: "existing" as const,
-        dnsRecords: extractDnsRecords(existing).length ? extractDnsRecords(existing) : extractDnsRecords(listed.payload),
+        dnsRecords:
+          extractDnsRecords(existing).length
+            ? extractDnsRecords(existing)
+            : extractDnsRecords(resolvedAppConnection.listed.payload),
         warnings: [] as string[],
       };
     }
 
     const created = await createCustomerIoSenderIdentity({
-      baseUrl,
+      baseUrl: resolvedAppConnection.baseUrl,
       appApiKey: input.appApiKey,
       fromEmail: input.fromEmail,
       senderName: input.senderName,
@@ -722,6 +830,51 @@ function updateBrandDomainRow(input: {
   return nextDomains;
 }
 
+async function resolveProvisioningCredentials(input: ProvisionSenderInput) {
+  const [savedSettings, savedSecrets] = await Promise.all([
+    getOutreachProvisioningSettings(),
+    getOutreachProvisioningSettingsSecrets(),
+  ]);
+
+  const customerIoSiteId = input.customerIoSiteId.trim() || savedSettings.customerIo.siteId.trim();
+  const customerIoTrackingApiKey =
+    input.customerIoTrackingApiKey.trim() || savedSecrets.customerIoTrackingApiKey.trim();
+  const customerIoAppApiKey = String(input.customerIoAppApiKey ?? "").trim() || savedSecrets.customerIoAppApiKey.trim();
+  const namecheapApiUser = input.namecheapApiUser.trim() || savedSettings.namecheap.apiUser.trim();
+  const namecheapUserName =
+    input.namecheapUserName?.trim() || savedSettings.namecheap.userName.trim() || namecheapApiUser;
+  const namecheapApiKey = input.namecheapApiKey.trim() || savedSecrets.namecheapApiKey.trim();
+  const namecheapClientIp = input.namecheapClientIp.trim() || savedSettings.namecheap.clientIp.trim();
+
+  if (!customerIoSiteId) {
+    throw new Error("Customer.io Site ID is required. Save provider defaults in outreach settings or enter it here.");
+  }
+  if (!customerIoTrackingApiKey) {
+    throw new Error(
+      "Customer.io Tracking API key is required. Save provider defaults in outreach settings or enter it here."
+    );
+  }
+  if (!namecheapApiUser) {
+    throw new Error("Namecheap API user is required. Save provider defaults in outreach settings or enter it here.");
+  }
+  if (!namecheapApiKey) {
+    throw new Error("Namecheap API key is required. Save provider defaults in outreach settings or enter it here.");
+  }
+  if (!namecheapClientIp) {
+    throw new Error("Namecheap client IP is required. Save provider defaults in outreach settings or enter it here.");
+  }
+
+  return {
+    customerIoSiteId,
+    customerIoTrackingApiKey,
+    customerIoAppApiKey,
+    namecheapApiUser,
+    namecheapUserName,
+    namecheapApiKey,
+    namecheapClientIp,
+  };
+}
+
 export async function provisionCustomerIoSender(
   input: ProvisionSenderInput
 ): Promise<ProvisionSenderResult> {
@@ -740,6 +893,7 @@ export async function provisionCustomerIoSender(
     throw new Error("Sender local-part is required");
   }
   const fromEmail = `${fromLocalPart}@${domain}`;
+  const resolvedCredentials = await resolveProvisioningCredentials(input);
 
   const mailboxSelection =
     input.selectedMailboxAccountId?.trim() || (await getBrandOutreachAssignment(brand.id))?.mailboxAccountId || "";
@@ -754,7 +908,7 @@ export async function provisionCustomerIoSender(
     status: "active",
     config: {
       customerIo: {
-        siteId: input.customerIoSiteId.trim(),
+        siteId: resolvedCredentials.customerIoSiteId,
         workspaceId: "",
         fromEmail,
         replyToEmail: replyMailboxEmail,
@@ -780,9 +934,9 @@ export async function provisionCustomerIoSender(
   const connectivityCheck = await testOutreachProviders(
     connectivityAccount,
     {
-      customerIoApiKey: input.customerIoTrackingApiKey.trim(),
-      customerIoTrackApiKey: input.customerIoTrackingApiKey.trim(),
-      customerIoAppApiKey: String(input.customerIoAppApiKey ?? "").trim(),
+      customerIoApiKey: resolvedCredentials.customerIoTrackingApiKey,
+      customerIoTrackApiKey: resolvedCredentials.customerIoTrackingApiKey,
+      customerIoAppApiKey: resolvedCredentials.customerIoAppApiKey,
       apifyToken: "",
       mailboxAccessToken: "",
       mailboxRefreshToken: "",
@@ -799,27 +953,27 @@ export async function provisionCustomerIoSender(
       throw new Error("Registrant contact information is required to buy a new domain");
     }
     await namecheapRegisterDomain({
-      apiUser: input.namecheapApiUser,
-      userName: input.namecheapUserName,
-      apiKey: input.namecheapApiKey,
-      clientIp: input.namecheapClientIp,
+      apiUser: resolvedCredentials.namecheapApiUser,
+      userName: resolvedCredentials.namecheapUserName,
+      apiKey: resolvedCredentials.namecheapApiKey,
+      clientIp: resolvedCredentials.namecheapClientIp,
       domain,
       registrant: input.registrant,
     });
   }
 
   const existingHosts = await namecheapGetHosts({
-    apiUser: input.namecheapApiUser,
-    userName: input.namecheapUserName,
-    apiKey: input.namecheapApiKey,
-    clientIp: input.namecheapClientIp,
+    apiUser: resolvedCredentials.namecheapApiUser,
+    userName: resolvedCredentials.namecheapUserName,
+    apiKey: resolvedCredentials.namecheapApiKey,
+    clientIp: resolvedCredentials.namecheapClientIp,
     domain,
   });
 
   const senderBootstrap = await bootstrapCustomerIoSender({
-    siteId: input.customerIoSiteId,
-    trackingApiKey: input.customerIoTrackingApiKey,
-    appApiKey: input.customerIoAppApiKey,
+    siteId: resolvedCredentials.customerIoSiteId,
+    trackingApiKey: resolvedCredentials.customerIoTrackingApiKey,
+    appApiKey: resolvedCredentials.customerIoAppApiKey,
     fromEmail,
     senderName: brand.name || input.accountName || domain,
     domain,
@@ -829,10 +983,10 @@ export async function provisionCustomerIoSender(
   if (desiredDnsRecords.length) {
     const nextHosts = mergeNamecheapHosts(existingHosts, desiredDnsRecords, domain);
     await namecheapSetHosts({
-      apiUser: input.namecheapApiUser,
-      userName: input.namecheapUserName,
-      apiKey: input.namecheapApiKey,
-      clientIp: input.namecheapClientIp,
+      apiUser: resolvedCredentials.namecheapApiUser,
+      userName: resolvedCredentials.namecheapUserName,
+      apiKey: resolvedCredentials.namecheapApiKey,
+      clientIp: resolvedCredentials.namecheapClientIp,
       domain,
       hosts: nextHosts,
     });
@@ -840,9 +994,9 @@ export async function provisionCustomerIoSender(
 
   const account = await ensureCustomerIoDeliveryAccount({
     accountName: input.accountName.trim() || `${brand.name} ${domain}`,
-    siteId: input.customerIoSiteId,
-    trackingApiKey: input.customerIoTrackingApiKey,
-    appApiKey: input.customerIoAppApiKey,
+    siteId: resolvedCredentials.customerIoSiteId,
+    trackingApiKey: resolvedCredentials.customerIoTrackingApiKey,
+    appApiKey: resolvedCredentials.customerIoAppApiKey,
     fromEmail,
     replyToEmail: replyMailboxEmail,
   });

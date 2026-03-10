@@ -13,11 +13,13 @@ import {
   fetchBrandOutreachAssignment,
   fetchBrands,
   fetchOutreachAccounts,
+  fetchOutreachProvisioningSettings,
   testOutreachAccount,
   updateOutreachAccountApi,
 } from "@/lib/client-api";
 import { trackEvent } from "@/lib/telemetry-client";
-import type { BrandRecord, OutreachAccount } from "@/lib/factory-types";
+import type { BrandRecord, OutreachAccount, OutreachProvisioningSettings } from "@/lib/factory-types";
+import ProvisioningProviderSettingsCard from "./provisioning-provider-settings-card";
 import SenderProvisionCard from "./sender-provision-card";
 
 type FieldErrors<T> = Partial<Record<keyof T, string>>;
@@ -303,6 +305,7 @@ function AccountListCard({
 export default function OutreachSettingsClient() {
   const [accounts, setAccounts] = useState<OutreachAccount[]>([]);
   const [brands, setBrands] = useState<BrandRecord[]>([]);
+  const [provisioningSettings, setProvisioningSettings] = useState<OutreachProvisioningSettings | null>(null);
   const [assignments, setAssignments] = useState<AssignmentMap>({});
 
   const [deliveryForm, setDeliveryForm] = useState<DeliveryFormState>(INITIAL_DELIVERY_FORM);
@@ -327,10 +330,15 @@ export default function OutreachSettingsClient() {
       setLoading(true);
       setError("");
       try {
-        const [accountsRows, brandRows] = await Promise.all([fetchOutreachAccounts(), fetchBrands()]);
+        const [accountsRows, brandRows, providerSettings] = await Promise.all([
+          fetchOutreachAccounts(),
+          fetchBrands(),
+          fetchOutreachProvisioningSettings(),
+        ]);
         if (!mounted) return;
         setAccounts(accountsRows);
         setBrands(brandRows);
+        setProvisioningSettings(providerSettings);
 
         const assignmentPairs = await Promise.all(
           brandRows.map(async (brand) => {
@@ -653,10 +661,20 @@ export default function OutreachSettingsClient() {
       {error ? <div className="text-sm text-[color:var(--danger)]">{error}</div> : null}
       {loading ? <div className="text-sm text-[color:var(--muted-foreground)]">Loading outreach settings...</div> : null}
 
+      {provisioningSettings ? (
+        <ProvisioningProviderSettingsCard
+          settings={provisioningSettings}
+          onSaved={(next) => {
+            setProvisioningSettings(next);
+          }}
+        />
+      ) : null}
+
       <SenderProvisionCard
         brands={brands}
         mailboxAccounts={mailboxAccounts}
         assignments={assignments}
+        provisioningSettings={provisioningSettings}
         onProvisioned={(result) => {
           setAccounts((prev) => {
             const next = prev.filter((row) => row.id !== result.account.id);

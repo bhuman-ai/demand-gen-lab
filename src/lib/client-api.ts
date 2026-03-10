@@ -15,6 +15,7 @@ import type {
   Hypothesis,
   ObjectiveData,
   OutreachAccount,
+  OutreachProvisioningSettings,
   OutreachRunEvent,
   OutreachRunJob,
   OutreachRun,
@@ -811,6 +812,57 @@ export async function fetchOutreachAccounts() {
   const response = await fetch("/api/outreach/accounts", { cache: "no-store" });
   const data = await readJson(response);
   return (Array.isArray(data?.accounts) ? data.accounts : []) as OutreachAccount[];
+}
+
+export async function fetchOutreachProvisioningSettings() {
+  const response = await fetch("/api/outreach/provisioning-settings", { cache: "no-store" });
+  const data = await readJson(response);
+  return data.settings as OutreachProvisioningSettings;
+}
+
+export async function updateOutreachProvisioningSettingsApi(input: {
+  customerIo?: {
+    siteId?: string;
+    trackingApiKey?: string;
+    appApiKey?: string;
+  };
+  namecheap?: {
+    apiUser?: string;
+    userName?: string;
+    clientIp?: string;
+    apiKey?: string;
+  };
+}) {
+  const response = await fetch("/api/outreach/provisioning-settings", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  const data = await readJson(response);
+  return data.settings as OutreachProvisioningSettings;
+}
+
+export async function testOutreachProvisioningSettings(provider: "customerio" | "namecheap" | "all" = "all") {
+  const response = await fetch("/api/outreach/provisioning-settings/test", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ provider }),
+  });
+  const data = await readJson(response);
+  return {
+    settings: data.settings as OutreachProvisioningSettings,
+    tests: (data.tests ?? {}) as Partial<
+      Record<
+        "customerIo" | "namecheap",
+        {
+          provider: "customerio" | "namecheap";
+          ok: boolean;
+          message: string;
+          details: Record<string, unknown>;
+        }
+      >
+    >,
+  };
 }
 
 export async function provisionSenderDomain(

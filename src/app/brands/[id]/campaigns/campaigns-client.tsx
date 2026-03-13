@@ -35,6 +35,7 @@ export default function CampaignsClient({ brandId }: { brandId: string }) {
   const router = useRouter();
   const [brand, setBrand] = useState<BrandRecord | null>(null);
   const [campaigns, setCampaigns] = useState<ScaleCampaignRecord[]>([]);
+  const [statusFilter, setStatusFilter] = useState<"all" | ScaleCampaignRecord["status"]>("all");
   const [deliverability, setDeliverability] = useState<{
     provider: "none" | "google_postmaster";
     lastHealthStatus: "unknown" | "healthy" | "warning" | "critical";
@@ -78,6 +79,10 @@ export default function CampaignsClient({ brandId }: { brandId: string }) {
     () => campaigns.filter((campaign) => campaign.status === "active").length,
     [campaigns]
   );
+  const filteredCampaigns = useMemo(
+    () => campaigns.filter((campaign) => statusFilter === "all" || campaign.status === statusFilter),
+    [campaigns, statusFilter]
+  );
 
   const openFlow = async (campaign: ScaleCampaignRecord) => {
     setFlowModalOpen(true);
@@ -101,8 +106,8 @@ export default function CampaignsClient({ brandId }: { brandId: string }) {
     <div className="space-y-8">
       <PageIntro
         eyebrow={`${brand?.name || "Brand"} / campaigns`}
-        title="Scale only what proved itself."
-        description="Promoted campaigns carry the winning experiment, sender health, and conversation logic forward so scale never gets detached from proof."
+        title="Campaigns"
+        description="Scale promoted winners and monitor sender health, placement, and replies."
         actions={
           <>
             <Button asChild>
@@ -120,19 +125,28 @@ export default function CampaignsClient({ brandId }: { brandId: string }) {
           <StatLedger
             items={[
               {
-                label: "Campaigns",
+                label: "All",
                 value: formatCount(campaigns.length),
-                detail: campaigns.length ? "Promoted programs remain tied to the originating proof." : "Nothing has been promoted yet.",
+                active: statusFilter === "all",
+                onClick: () => setStatusFilter("all"),
               },
               {
                 label: "Active",
                 value: formatCount(activeCount),
-                detail: activeCount ? "Runs currently in market." : "No campaign is active right now.",
+                active: statusFilter === "active",
+                onClick: () => setStatusFilter("active"),
+              },
+              {
+                label: "Paused",
+                value: formatCount(campaigns.filter((row) => row.status === "paused").length),
+                active: statusFilter === "paused",
+                onClick: () => setStatusFilter("paused"),
               },
               {
                 label: "Completed",
                 value: formatCount(campaigns.filter((row) => row.status === "completed").length),
-                detail: "Completed scale runs preserved for reference.",
+                active: statusFilter === "completed",
+                onClick: () => setStatusFilter("completed"),
               },
             ]}
           />
@@ -141,9 +155,9 @@ export default function CampaignsClient({ brandId }: { brandId: string }) {
 
       {error ? <div className="text-sm text-[color:var(--danger)]">{error}</div> : null}
 
-      {campaigns.length ? (
+      {filteredCampaigns.length ? (
         <div className="grid gap-4 md:grid-cols-2">
-          {campaigns.map((campaign) => (
+          {filteredCampaigns.map((campaign) => (
             <SectionPanel
               key={campaign.id}
               title={campaign.name}
@@ -198,8 +212,12 @@ export default function CampaignsClient({ brandId }: { brandId: string }) {
         </div>
       ) : (
         <EmptyState
-          title="No campaigns yet."
-          description="Promote a winning experiment and it will appear here with its sender, flow, and reply performance intact."
+          title={campaigns.length ? "No campaigns match this filter." : "No campaigns yet."}
+          description={
+            campaigns.length
+              ? "Pick a different campaign state or clear the filter."
+              : "Promote a winning experiment and it will appear here with its sender, flow, and reply performance intact."
+          }
           actions={
             <Link href={`/brands/${brandId}/experiments`}>
               <Button>

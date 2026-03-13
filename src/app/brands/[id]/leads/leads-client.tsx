@@ -67,8 +67,8 @@ export default function LeadsClient({ brand }: { brand: BrandRecord }) {
     <div className="space-y-8">
       <PageIntro
         eyebrow={`${brand.name} / leads`}
-        title="Keep every prospect in the same operating record."
-        description="Lead status, channel, and recent touchpoints should live beside the experiment and campaign work that depends on them."
+        title="Leads"
+        description="Lead status, source, and last touch."
         aside={
           <StatLedger
             items={[

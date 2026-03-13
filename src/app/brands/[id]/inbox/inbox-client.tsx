@@ -78,8 +78,8 @@ export default function InboxClient({ brand }: { brand: BrandRecord }) {
     <div className="space-y-8">
       <PageIntro
         eyebrow={`${brand.name} / inbox`}
-        title="Keep the reply trail close to the campaigns that created it."
-        description="Threads, drafted responses, and final human approval all belong in the same product as the experiment and campaign work behind them."
+        title="Inbox"
+        description="Threads, drafts, and reply state."
         aside={
           <StatLedger
             items={[

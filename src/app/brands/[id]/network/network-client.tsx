@@ -74,8 +74,8 @@ export default function NetworkClient({ brand }: { brand: BrandRecord }) {
     <div className="space-y-8">
       <PageIntro
         eyebrow={`${brand.name} / network`}
-        title="Track the sender infrastructure that outbound depends on."
-        description="Domains, warmup state, forwarding, and reputation need to live in the same product as the campaigns using them."
+        title="Sending infrastructure"
+        description="Domains, reputation, forwarding, and warmup state."
         aside={
           <StatLedger
             items={[

@@ -70,6 +70,11 @@ function formatCount(value: number) {
   return value.toString().padStart(2, "0");
 }
 
+function countForStatus(items: ExperimentListItem[], status: (typeof STATUS_OPTIONS)[number]) {
+  if (status === "all") return items.length;
+  return items.filter((item) => item.status === status).length;
+}
+
 export default function ExperimentsClient({ brandId }: { brandId: string }) {
   const [brand, setBrand] = useState<BrandRecord | null>(null);
   const [items, setItems] = useState<ExperimentListItem[]>([]);
@@ -116,6 +121,33 @@ export default function ExperimentsClient({ brandId }: { brandId: string }) {
     [items, query, statusFilter]
   );
 
+  const quickFilters = useMemo(
+    () => [
+      { label: "All", status: "all" as const, count: items.length },
+      {
+        label: "Running",
+        status: "Running" as const,
+        count: items.filter((item) => item.status === "Running").length,
+      },
+      {
+        label: "Draft",
+        status: "Draft" as const,
+        count: items.filter((item) => item.status === "Draft").length,
+      },
+      {
+        label: "Completed",
+        status: "Completed" as const,
+        count: items.filter((item) => item.status === "Completed").length,
+      },
+      {
+        label: "Promoted",
+        status: "Promoted" as const,
+        count: items.filter((item) => item.status === "Promoted").length,
+      },
+    ],
+    [items]
+  );
+
   return (
     <div className="space-y-8">
       {error ? <div className="text-sm text-[color:var(--danger)]">{error}</div> : null}
@@ -123,13 +155,10 @@ export default function ExperimentsClient({ brandId }: { brandId: string }) {
 
       <PageIntro
         eyebrow={`${brand?.name || "Brand"} / experiments`}
-        title="Test the message before it earns the right to scale."
-        description="Every experiment stays attached to audience, signal, and reply performance so you can decide with evidence instead of memory."
+        title="Experiments"
+        description="Test new offers and audiences before promoting them to campaigns."
         actions={
           <>
-            <Button asChild variant="outline">
-              <Link href={`/brands/${brandId}/experiments/suggestions`}>Suggestions</Link>
-            </Button>
             <Button
               type="button"
               disabled={creating}
@@ -150,39 +179,29 @@ export default function ExperimentsClient({ brandId }: { brandId: string }) {
               }}
             >
               <Plus className="h-4 w-4" />
-              {creating ? "Creating..." : "New experiment"}
+              {creating ? "Creating..." : "Create experiment"}
+            </Button>
+            <Button asChild variant="outline">
+              <Link href={`/brands/${brandId}/experiments/suggestions`}>View suggestions</Link>
             </Button>
           </>
         }
         aside={
           <StatLedger
-            items={[
-              {
-                label: "All experiments",
-                value: formatCount(items.length),
-                detail: items.length ? "Work is visible across the full test pipeline." : "No experiment exists yet.",
-              },
-              {
-                label: "Running",
-                value: formatCount(items.filter((item) => item.status === "Running").length),
-                detail: "Experiments currently producing live signal.",
-              },
-              {
-                label: "Promoted",
-                value: formatCount(items.filter((item) => item.status === "Promoted").length),
-                detail: "Tests already graduated into campaigns.",
-              },
-            ]}
+            items={quickFilters.map((item) => ({
+              label: item.label,
+              value: formatCount(item.count),
+              active: statusFilter === item.status,
+              onClick: () => setStatusFilter(item.status),
+            }))}
           />
         }
       />
 
-      <SectionPanel
-        title="Experiment register"
-        description="Filter by status, search by name or audience, then open, edit, or duplicate the exact test you need."
-      >
+      <SectionPanel className="border-[color:var(--border-strong)]">
         <div className="space-y-4">
-          <div className="flex flex-wrap gap-2">
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+            <div className="flex flex-wrap gap-2">
             {STATUS_OPTIONS.map((status) => {
               const active = statusFilter === status;
               return (
@@ -200,20 +219,21 @@ export default function ExperimentsClient({ brandId }: { brandId: string }) {
                       : "border-[color:var(--border)] bg-[color:var(--surface)] text-[color:var(--muted-foreground)] hover:bg-[color:var(--surface-muted)] hover:text-[color:var(--foreground)]"
                   )}
                 >
-                  {statusLabel(status)}
+                  {`${statusLabel(status)} (${countForStatus(items, status)})`}
                 </button>
               );
             })}
-          </div>
+            </div>
 
-          <div className="relative max-w-md">
-            <Search className="pointer-events-none absolute left-3 top-3.5 h-4 w-4 text-[color:var(--muted-foreground)]" />
-            <Input
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-              placeholder="Search experiments"
-              className="pl-9"
-            />
+            <div className="relative max-w-md">
+              <Search className="pointer-events-none absolute left-3 top-3.5 h-4 w-4 text-[color:var(--muted-foreground)]" />
+              <Input
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                placeholder="Search experiments"
+                className="pl-9"
+              />
+            </div>
           </div>
 
           {filtered.length ? (

@@ -124,7 +124,7 @@ export default function BrandHomeClient({ brandId }: { brandId: string }) {
       <PageIntro
         eyebrow={brand?.website || "Brand workspace"}
         title={brand?.name || "Brand"}
-        description={`Operate experiments, campaigns, inbox, and sender context for ${brand?.name || "this brand"} without splitting the proof from the work.`}
+        description="Brand record, sending context, and active work."
         actions={
           <Button
             type="button"

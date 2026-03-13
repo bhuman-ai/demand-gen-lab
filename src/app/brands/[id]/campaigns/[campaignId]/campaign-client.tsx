@@ -31,6 +31,7 @@ import CampaignOperationsChain, {
   buildCampaignOperationsChain,
   type CampaignChainPlacement,
 } from "@/components/campaign-operations-chain";
+import LiveProspectTableEmbed from "@/components/experiments/live-prospect-table-embed";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -583,6 +584,19 @@ export default function CampaignClient({
             ]}
           />
         </div>
+      </SectionPanel>
+
+      <SectionPanel
+        title="Prospects"
+        description="This live table keeps gathering matching prospects while the campaign is active."
+      >
+        <LiveProspectTableEmbed
+          initPath={`/api/brands/${brandId}/campaigns/${campaign.id}/prospect-table`}
+          importPath={`/api/brands/${brandId}/campaigns/${campaign.id}/import-prospects/selection`}
+          onImported={async () => {
+            await refresh(false);
+          }}
+        />
       </SectionPanel>
 
       <Card>

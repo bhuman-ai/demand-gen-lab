@@ -1,5 +1,4 @@
 import ExperimentClient from "./experiment-client";
-import { resolveEnrichAnythingAppUrl } from "@/lib/enrichanything-app-url";
 
 export default async function ExperimentPage({
   params,
@@ -7,11 +6,5 @@ export default async function ExperimentPage({
   params: Promise<{ id: string; experimentId: string }>;
 }) {
   const { id, experimentId } = await params;
-  return (
-    <ExperimentClient
-      brandId={id}
-      experimentId={experimentId}
-      enrichAnythingAppUrl={resolveEnrichAnythingAppUrl()}
-    />
-  );
+  return <ExperimentClient brandId={id} experimentId={experimentId} />;
 }

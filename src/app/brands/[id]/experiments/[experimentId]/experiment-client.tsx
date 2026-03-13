@@ -16,10 +16,12 @@ import {
   Rocket,
   Search,
   Save,
+  Sparkles,
   Upload,
 } from "lucide-react";
 import {
   controlExperimentRunApi,
+  draftExperimentFromPromptApi,
   fetchBrand,
   fetchBrandOutreachAssignment,
   fetchConversationPreviewLeadsApi,
@@ -48,7 +50,7 @@ import { trackEvent } from "@/lib/telemetry-client";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import LeadFinderEmbed from "@/components/experiments/lead-finder-embed";
+import LiveProspectTableEmbed from "@/components/experiments/live-prospect-table-embed";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
@@ -358,12 +360,10 @@ export default function ExperimentClient({
   brandId,
   experimentId,
   view,
-  enrichAnythingAppUrl = "",
 }: {
   brandId: string;
   experimentId: string;
   view?: ExperimentView;
-  enrichAnythingAppUrl?: string;
 }) {
   type RefreshSnapshot = {
     brand: BrandRecord | null;
@@ -425,6 +425,9 @@ export default function ExperimentClient({
   const [csvImportSummary, setCsvImportSummary] = useState("");
   const [csvImportErrors, setCsvImportErrors] = useState<string[]>([]);
   const [showCsvImport, setShowCsvImport] = useState(false);
+  const [aiSetupPrompt, setAiSetupPrompt] = useState("");
+  const [draftingSetupFromAi, setDraftingSetupFromAi] = useState(false);
+  const [aiSetupNotice, setAiSetupNotice] = useState("");
   const router = useRouter();
   const samplingAbortRef = useRef<AbortController | null>(null);
   const samplingStopRequestedRef = useRef(false);
@@ -993,6 +996,38 @@ export default function ExperimentClient({
       return null;
     } finally {
       setSaving(false);
+    }
+  };
+
+  const fillSetupFromPrompt = async () => {
+    if (!experiment || !aiSetupPrompt.trim()) return;
+    setDraftingSetupFromAi(true);
+    setError("");
+    setAiSetupNotice("");
+    try {
+      const draft = await draftExperimentFromPromptApi(brandId, {
+        prompt: aiSetupPrompt.trim(),
+        current: {
+          name: experiment.name,
+          audience: experiment.audience,
+          offer: experiment.offer,
+        },
+      });
+      setExperiment((prev) =>
+        prev
+          ? {
+              ...prev,
+              name: draft.name || prev.name,
+              audience: draft.audience || prev.audience,
+              offer: draft.offer || prev.offer,
+            }
+          : prev
+      );
+      setAiSetupNotice("AI filled the setup below. Edit anything you want, then save.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to write setup from prompt");
+    } finally {
+      setDraftingSetupFromAi(false);
     }
   };
 
@@ -1863,6 +1898,14 @@ export default function ExperimentClient({
               </Button>
             </div>
 
+            <LiveProspectTableEmbed
+              initPath={`/api/brands/${brandId}/experiments/${experiment.id}/prospect-table`}
+              importPath={`/api/brands/${brandId}/experiments/${experiment.id}/import-prospects/selection`}
+              onImported={async () => {
+                await refresh(false);
+              }}
+            />
+
             {prospectInputMode === "need_data" ? (
               <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3">
                 <div className="flex flex-wrap items-center justify-between gap-3">
@@ -1880,17 +1923,12 @@ export default function ExperimentClient({
             ) : (
               <div className="space-y-3 rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3">
                 <div className="text-sm font-medium">
-                  {showCsvImport ? "Upload your lead list" : "Search for leads"}
+                  {showCsvImport ? "Upload your lead list" : "Use the live prospect table"}
                 </div>
                 {!showCsvImport ? (
-                  <LeadFinderEmbed
-                    brandId={brandId}
-                    experimentId={experiment.id}
-                    enrichAnythingAppUrl={enrichAnythingAppUrl}
-                    onImported={async () => {
-                      await refresh(false);
-                    }}
-                  />
+                  <div className="text-xs text-[color:var(--muted-foreground)]">
+                    The live table above keeps growing during the experiment. Use CSV only if you already have a list.
+                  </div>
                 ) : null}
                 <div className="rounded-lg border border-[color:var(--border)] bg-[color:var(--surface)]">
                   <div className="flex flex-wrap items-center justify-between gap-3 px-3 py-3">
@@ -2298,9 +2336,48 @@ export default function ExperimentClient({
         <Card>
           <CardHeader>
             <CardTitle className="text-base">{stageTitle(0)}</CardTitle>
-            <CardDescription>Define experiment basics before sourcing prospects.</CardDescription>
+            <CardDescription>
+              Choose who this is for and what you want to offer first. You will write the email copy in the next
+              step.
+            </CardDescription>
           </CardHeader>
           <CardContent className="grid gap-4">
+            <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-4">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <div className="text-sm font-medium">Tell AI what you want</div>
+                  <div className="mt-1 text-xs text-[color:var(--muted-foreground)]">
+                    Describe the people you want to reach and what you want to offer. AI will fill the setup for you.
+                  </div>
+                </div>
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={draftingSetupFromAi || !aiSetupPrompt.trim()}
+                  onClick={() => {
+                    void fillSetupFromPrompt();
+                  }}
+                >
+                  <Sparkles className="h-4 w-4" />
+                  {draftingSetupFromAi ? "Writing..." : "Write this for me"}
+                </Button>
+              </div>
+              <Textarea
+                className="mt-3"
+                rows={4}
+                value={aiSetupPrompt}
+                onChange={(event) => setAiSetupPrompt(event.target.value)}
+                placeholder="Example: Reach bootstrapped SaaS founders who might qualify for AWS credits and offer a short eligibility review plus a checklist they can use."
+              />
+              <div className="mt-2 text-xs text-[color:var(--muted-foreground)]">
+                AI fills the experiment name, target audience, and offer. You can still edit everything below.
+              </div>
+              {aiSetupNotice ? (
+                <div className="mt-3 rounded-lg border border-[color:var(--success)]/40 bg-[color:var(--success-soft)] px-3 py-2 text-sm text-[color:var(--success)]">
+                  {aiSetupNotice}
+                </div>
+              ) : null}
+            </div>
             <div className="grid gap-2">
               <Label htmlFor="experiment-name">Experiment Name</Label>
               <Input
@@ -2622,6 +2699,14 @@ export default function ExperimentClient({
               </div>
             </div>
 
+            <LiveProspectTableEmbed
+              initPath={`/api/brands/${brandId}/experiments/${experiment.id}/prospect-table`}
+              importPath={`/api/brands/${brandId}/experiments/${experiment.id}/import-prospects/selection`}
+              onImported={async () => {
+                await refresh(false);
+              }}
+            />
+
             {prospectInputMode === "need_data" ? (
               <div className="space-y-3 rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3">
                 <div className="flex flex-wrap items-center justify-between gap-2">
@@ -2690,16 +2775,8 @@ export default function ExperimentClient({
               <div className="space-y-3 rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3">
                 <div className="text-sm font-medium">Choose leads yourself</div>
                 <div className="text-xs text-[color:var(--muted-foreground)]">
-                  Type who you want, press Search, then press <code>Add leads</code>. If you already have a list, you can upload a CSV below.
+                  The live table above stays open for this experiment and keeps collecting new prospects over time. If you already have a list, you can upload a CSV below.
                 </div>
-                <LeadFinderEmbed
-                  brandId={brandId}
-                  experimentId={experiment.id}
-                  enrichAnythingAppUrl={enrichAnythingAppUrl}
-                  onImported={async () => {
-                    await refresh(false);
-                  }}
-                />
                 <div className="rounded-lg border border-[color:var(--border)] bg-[color:var(--surface)]">
                   <div className="flex flex-wrap items-center justify-between gap-3 px-3 py-3">
                     <div>

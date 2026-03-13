@@ -1,5 +1,4 @@
 import ExperimentClient from "../experiment-client";
-import { resolveEnrichAnythingAppUrl } from "@/lib/enrichanything-app-url";
 
 export default async function ExperimentProspectsPage({
   params,
@@ -12,7 +11,6 @@ export default async function ExperimentProspectsPage({
       brandId={id}
       experimentId={experimentId}
       view="prospects"
-      enrichAnythingAppUrl={resolveEnrichAnythingAppUrl()}
     />
   );
 }

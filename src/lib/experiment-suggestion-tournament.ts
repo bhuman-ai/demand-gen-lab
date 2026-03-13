@@ -130,6 +130,11 @@ type TournamentOutput = {
   screenedCount: number;
 };
 
+type OpenAiJsonResult = {
+  record: Record<string, unknown>;
+  outputText: string;
+};
+
 type SuggestionGenerationErrorInput = {
   message: string;
   status: number;
@@ -274,6 +279,69 @@ function normalizeSuggestions(value: unknown, limit = 8): StructuredSuggestion[]
     });
   }
   return rows.slice(0, limit);
+}
+
+function parseLooseJsonObject(value: string) {
+  const raw = String(value ?? "").trim();
+  if (!raw) return {};
+
+  const candidates = [raw];
+  const fenced = raw.match(/```(?:json)?\s*([\s\S]+?)```/i)?.[1]?.trim();
+  if (fenced) candidates.push(fenced);
+
+  const firstBrace = raw.indexOf("{");
+  const lastBrace = raw.lastIndexOf("}");
+  if (firstBrace >= 0 && lastBrace > firstBrace) {
+    candidates.push(raw.slice(firstBrace, lastBrace + 1));
+  }
+
+  for (const candidate of candidates) {
+    try {
+      return asRecord(JSON.parse(candidate));
+    } catch {
+      continue;
+    }
+  }
+
+  return {};
+}
+
+function hasSparseBrandContext(brand: BrandContext) {
+  const scalarSignals = [brand.name, brand.website, brand.tone, brand.product, brand.notes].filter((value) =>
+    String(value ?? "").trim()
+  ).length;
+  const listSignals =
+    brand.markets.filter(Boolean).length +
+    brand.icps.filter(Boolean).length +
+    brand.features.filter(Boolean).length +
+    brand.benefits.filter(Boolean).length;
+  return scalarSignals <= 3 && listSignals < 3;
+}
+
+function concreteSuggestionExample() {
+  return JSON.stringify(
+    {
+      suggestions: [
+        {
+          name: "Renewal Rescue Scorecard for PLG SaaS Teams",
+          audience:
+            "Head of RevOps at a 25-200 employee product-led SaaS company managing multiple annual software renewals",
+          trigger:
+            "Their team is entering renewal season and finance is asking for tighter justification before approving another year of tool spend.",
+          offer:
+            "A one-page renewal scorecard that highlights overlap, usage gaps, and the 3 renewals most likely to be renegotiated this quarter.",
+          cta: "Want me to send the one-page scorecard template?",
+          emailPreview:
+            "If renewal approvals are getting tighter, I can send the 1-page scorecard we use to spot overlap fast.",
+          successTarget: "18% reply rate and 6 scorecard requests per 100 targeted sends",
+          rationale:
+            "The timing is specific, the deliverable is tangible, and the ask is low-friction enough for a cold outbound first touch.",
+        },
+      ],
+    },
+    null,
+    2
+  );
 }
 
 function normalizeRoleplayEvaluations(
@@ -505,7 +573,7 @@ async function requestOpenAiJson(input: {
   maxOutputTokens: number;
   label: string;
   signal?: AbortSignal;
-}) {
+}): Promise<OpenAiJsonResult> {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) {
     throw new Error("OPENAI_API_KEY is not configured");
@@ -551,14 +619,10 @@ async function requestOpenAiJson(input: {
     String(content.map((item) => asRecord(item)).find((item) => typeof item.text === "string")?.text ?? "") ||
     "{}";
 
-  let parsed: unknown = {};
-  try {
-    parsed = JSON.parse(outputText);
-  } catch {
-    parsed = {};
-  }
-
-  return asRecord(parsed);
+  return {
+    record: parseLooseJsonObject(outputText),
+    outputText,
+  };
 }
 
 async function openAiRoleplayEvaluate(input: {
@@ -601,7 +665,7 @@ async function openAiRoleplayEvaluate(input: {
     `Suggestions: ${JSON.stringify(input.suggestions.map((suggestion, index) => ({ index, ...suggestion })))}`,
   ].join("\n");
 
-  const parsedRecord = await requestOpenAiJson({
+  const { record: parsedRecord } = await requestOpenAiJson({
     modelKey: "experiment_suggestions_roleplay",
     prompt,
     maxOutputTokens: 2200,
@@ -624,6 +688,7 @@ async function openAiSuggestionsForAgent(input: {
   priorCandidates: ReviewCandidateInternal[];
   signal?: AbortSignal;
 }): Promise<StructuredSuggestion[]> {
+  const sparseBrandContext = hasSparseBrandContext(input.brand);
   const prompt = [
     "You are one agent inside an adversarial brainstorming tournament for B2B outbound experiments.",
     "You only score points when the downstream roleplay filter accepts your ideas.",
@@ -648,13 +713,18 @@ async function openAiSuggestionsForAgent(input: {
     "- Avoid vague claims, buzzwords, and generic personalization.",
     "- The ideas must be materially different from each other.",
     "- The ideas must be materially different from all occupied territory below.",
+    sparseBrandContext
+      ? "- Brand context is sparse. Do not refuse, ask for more info, or stay generic. Infer the most plausible concrete outbound angle from the brand name, website, notes, and whatever context exists."
+      : "",
+    "",
+    `ExampleOutput: ${concreteSuggestionExample()}`,
     "",
     `OccupiedTerritory: ${JSON.stringify(summarizeOccupiedTerritories(input.priorCandidates))}`,
     `PriorIdeas: ${JSON.stringify(summarizePromptLedger(input.priorCandidates))}`,
     `BrandContext: ${JSON.stringify(input.brand)}`,
   ].join("\n");
 
-  const parsedRecord = await requestOpenAiJson({
+  const { record: parsedRecord, outputText } = await requestOpenAiJson({
     modelKey: "experiment_suggestions_generate",
     prompt,
     maxOutputTokens: 1800,
@@ -663,10 +733,82 @@ async function openAiSuggestionsForAgent(input: {
   });
 
   const suggestions = normalizeSuggestions(parsedRecord.suggestions, IDEAS_REQUESTED_PER_AGENT);
-  if (!suggestions.length) {
+  if (suggestions.length >= IDEAS_REQUESTED_PER_AGENT) {
+    return suggestions;
+  }
+
+  const repairedSuggestions = await repairOpenAiSuggestionsForAgent({
+    brand: input.brand,
+    agent: input.agent,
+    priorCandidates: input.priorCandidates,
+    failedOutput: outputText,
+    signal: input.signal,
+  });
+
+  const merged = [...suggestions];
+  for (const suggestion of repairedSuggestions) {
+    if (merged.length >= IDEAS_REQUESTED_PER_AGENT) break;
+    if (!isNovelSuggestion(suggestion, merged)) continue;
+    merged.push(suggestion);
+  }
+
+  if (!merged.length) {
     throw new Error("OpenAI returned no concrete suggestions");
   }
-  return suggestions;
+  return merged.slice(0, IDEAS_REQUESTED_PER_AGENT);
+}
+
+async function repairOpenAiSuggestionsForAgent(input: {
+  brand: BrandContext;
+  agent: BrainstormAgent;
+  priorCandidates: ReviewCandidateInternal[];
+  failedOutput: string;
+  signal?: AbortSignal;
+}): Promise<StructuredSuggestion[]> {
+  const sparseBrandContext = hasSparseBrandContext(input.brand);
+  const prompt = [
+    "You are repairing a failed brainstorm response for a B2B outbound experiment tournament.",
+    "The first output either broke JSON, missed required fields, or stayed too generic to pass validation.",
+    "Repair it into strict JSON. If the failed draft is unusable, generate fresh suggestions from scratch.",
+    "",
+    `AgentName: ${input.agent.name}`,
+    `AgentStyle: ${input.agent.style}`,
+    `AgentBrief: ${input.agent.brief}`,
+    "",
+    "Return strict JSON in this shape:",
+    '{ "suggestions": [{ "name": string, "audience": string, "trigger": string, "offer": string, "cta": string, "emailPreview": string, "successTarget": string, "rationale": string }] }',
+    "",
+    "Validation reminders:",
+    `- Return exactly ${IDEAS_REQUESTED_PER_AGENT} concrete suggestions.`,
+    "- audience must include role plus company type or size.",
+    "- offer must describe a tangible artifact, diagnostic, teardown, audit, checklist, scorecard, plan, review, benchmark, or blueprint.",
+    "- cta must contain one clear action.",
+    "- emailPreview must stay between 8 and 30 words.",
+    "- successTarget must include a number and a measurable metric such as reply rate, meetings, or conversions.",
+    "- No vague placeholders. No angle labels. No generic 'optimize growth' language.",
+    "- Do not repeat or paraphrase occupied territory.",
+    sparseBrandContext
+      ? "- Brand context is sparse. Infer the most plausible concrete angle from the brand name, website, notes, and whatever context exists. Do not ask for more info."
+      : "",
+    "",
+    `ExampleOutput: ${concreteSuggestionExample()}`,
+    "",
+    `OccupiedTerritory: ${JSON.stringify(summarizeOccupiedTerritories(input.priorCandidates))}`,
+    `PriorIdeas: ${JSON.stringify(summarizePromptLedger(input.priorCandidates))}`,
+    `BrandContext: ${JSON.stringify(input.brand)}`,
+    `FailedDraft: ${sanitizeAiText(input.failedOutput || "").slice(0, 4000) || "[empty]"}`,
+  ].join("\n");
+
+  const { record, outputText } = await requestOpenAiJson({
+    modelKey: "experiment_suggestions_generate",
+    prompt,
+    maxOutputTokens: 2000,
+    label: "OpenAI brainstorm repair API error",
+    signal: input.signal,
+  });
+
+  const repairedRecord = Object.keys(record).length ? record : parseLooseJsonObject(outputText);
+  return normalizeSuggestions(repairedRecord.suggestions, IDEAS_REQUESTED_PER_AGENT);
 }
 
 async function emitEvent(

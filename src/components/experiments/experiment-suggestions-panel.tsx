@@ -224,6 +224,83 @@ function bestDraftIdea(turn: ExperimentSuggestionBrainstormTurn) {
   return turn.draftIdeas[0] ?? null;
 }
 
+function summarizeTournamentProgress(input: {
+  turns: ExperimentSuggestionBrainstormTurn[];
+  placeholderAgentIndex: number;
+  preparing: boolean;
+}) {
+  const totalTurns = PLACEHOLDER_AGENTS.length;
+  const totalPhases = totalTurns * 2;
+
+  if (!input.preparing) {
+    return {
+      percent: 100,
+      label: "Suggestion bank ready",
+      detail: "Tournament finished",
+    };
+  }
+
+  if (!input.turns.length) {
+    const stagedPercent = Math.max(
+      8,
+      Math.min(18, Math.round(((input.placeholderAgentIndex + 1) / totalTurns) * 18))
+    );
+    return {
+      percent: stagedPercent,
+      label: "Warming up the tournament",
+      detail: `${Math.min(input.placeholderAgentIndex + 1, totalTurns)} of ${totalTurns} agents queued`,
+    };
+  }
+
+  const completedPhases = input.turns.reduce((total, turn) => {
+    if (turn.status === "drafting") return total + 1;
+    if (turn.status === "reviewing") return total + 1.5;
+    return total + 2;
+  }, 0);
+
+  const activeTurn = input.turns[input.turns.length - 1] ?? null;
+  const currentTurn = activeTurn?.turn ?? input.turns.length;
+  const percent = Math.max(10, Math.min(98, Math.round((completedPhases / totalPhases) * 100)));
+
+  if (!activeTurn) {
+    return {
+      percent,
+      label: "Preparing suggestions",
+      detail: `${input.turns.length} turns observed`,
+    };
+  }
+
+  if (activeTurn.status === "drafting") {
+    return {
+      percent,
+      label: `${activeTurn.agentName} is drafting`,
+      detail: `Turn ${currentTurn} of ${totalTurns}`,
+    };
+  }
+
+  if (activeTurn.status === "reviewing") {
+    return {
+      percent,
+      label: `${activeTurn.agentName} is under prospect review`,
+      detail: `Turn ${currentTurn} of ${totalTurns}`,
+    };
+  }
+
+  if (activeTurn.status === "failed") {
+    return {
+      percent,
+      label: `${activeTurn.agentName} stalled`,
+      detail: `Moving to turn ${Math.min(currentTurn + 1, totalTurns)}`,
+    };
+  }
+
+  return {
+    percent,
+    label: `${activeTurn.agentName} scored ${activeTurn.acceptedCount} accepted`,
+    detail: `Turn ${currentTurn} of ${totalTurns}`,
+  };
+}
+
 function upsertTurn(
   turns: ExperimentSuggestionBrainstormTurn[],
   nextTurn: ExperimentSuggestionBrainstormTurn
@@ -283,6 +360,15 @@ export default function ExperimentSuggestionsPanel({ brandId }: { brandId: strin
   const activeBestDraftIdea =
     activeTurn && activeTurn.status !== "completed" ? bestDraftIdea(activeTurn) : null;
   const activeBestIdea = activeBestCompletedIdea ?? activeBestDraftIdea;
+  const tournamentProgress = useMemo(
+    () =>
+      summarizeTournamentProgress({
+        turns: streamTurns,
+        placeholderAgentIndex,
+        preparing: isPreparing,
+      }),
+    [streamTurns, placeholderAgentIndex, isPreparing]
+  );
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -455,6 +541,34 @@ export default function ExperimentSuggestionsPanel({ brandId }: { brandId: strin
             ) : null}
           </div>
         </div>
+        {isPreparing ? (
+          <div className="mt-4">
+            <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] font-medium uppercase tracking-[0.16em] text-[color:var(--muted-foreground)]">
+              <span>{tournamentProgress.label}</span>
+              <span>{tournamentProgress.detail}</span>
+            </div>
+            <div className="relative mt-2 h-2.5 overflow-hidden rounded-full border border-[color:var(--border)] bg-[color:var(--surface)]">
+              <div
+                className={cn(
+                  "absolute inset-y-0 left-0 rounded-full bg-[color:var(--accent)] transition-[width] duration-500",
+                  TURN_EASE
+                )}
+                style={{ width: `${tournamentProgress.percent}%` }}
+              />
+              {!prefersReducedMotion ? (
+                <div
+                  className={cn(
+                    "absolute inset-y-0 w-20 rounded-full bg-gradient-to-r from-transparent via-white/45 to-transparent transition-[left] duration-700",
+                    TURN_EASE
+                  )}
+                  style={{
+                    left: `max(calc(${tournamentProgress.percent}% - 5rem), 0px)`,
+                  }}
+                />
+              ) : null}
+            </div>
+          </div>
+        ) : null}
       </section>
 
       {error ? <div className="text-sm text-[color:var(--danger)]">{error}</div> : null}

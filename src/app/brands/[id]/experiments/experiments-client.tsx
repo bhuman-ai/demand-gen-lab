@@ -16,6 +16,7 @@ import type { ExperimentListItem } from "@/lib/factory-types";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import ExperimentSuggestionsPanel from "@/components/experiments/experiment-suggestions-panel";
 import {
   EmptyState,
   PageIntro,
@@ -24,6 +25,7 @@ import {
   TableHeaderCell,
   TableShell,
 } from "@/components/ui/page-layout";
+import { SettingsModal } from "@/app/settings/outreach/settings-primitives";
 
 const STATUS_OPTIONS: Array<"all" | ExperimentListItem["status"]> = [
   "all",
@@ -75,7 +77,13 @@ function countForStatus(items: ExperimentListItem[], status: (typeof STATUS_OPTI
   return items.filter((item) => item.status === status).length;
 }
 
-export default function ExperimentsClient({ brandId }: { brandId: string }) {
+export default function ExperimentsClient({
+  brandId,
+  openSuggestionsOnLoad = false,
+}: {
+  brandId: string;
+  openSuggestionsOnLoad?: boolean;
+}) {
   const router = useRouter();
   const [items, setItems] = useState<ExperimentListItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -84,6 +92,7 @@ export default function ExperimentsClient({ brandId }: { brandId: string }) {
   const [error, setError] = useState("");
   const [statusFilter, setStatusFilter] = useState<(typeof STATUS_OPTIONS)[number]>("all");
   const [query, setQuery] = useState("");
+  const [suggestionsOpen, setSuggestionsOpen] = useState(openSuggestionsOnLoad);
 
   const refresh = async () => {
     const listRows = await fetchExperimentListView(brandId);
@@ -109,6 +118,11 @@ export default function ExperimentsClient({ brandId }: { brandId: string }) {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [brandId]);
+
+  useEffect(() => {
+    if (!openSuggestionsOnLoad) return;
+    router.replace(`/brands/${brandId}/experiments`, { scroll: false });
+  }, [brandId, openSuggestionsOnLoad, router]);
 
   const filtered = useMemo(
     () =>
@@ -179,8 +193,8 @@ export default function ExperimentsClient({ brandId }: { brandId: string }) {
               <Plus className="h-4 w-4" />
               {creating ? "Creating..." : "Create experiment"}
             </Button>
-            <Button asChild variant="outline">
-              <Link href={`/brands/${brandId}/experiments/suggestions`}>View suggestions</Link>
+            <Button type="button" variant="outline" onClick={() => setSuggestionsOpen(true)}>
+              View suggestions
             </Button>
           </>
         }
@@ -372,6 +386,17 @@ export default function ExperimentsClient({ brandId }: { brandId: string }) {
           )}
         </div>
       </SectionPanel>
+
+      <SettingsModal
+        open={suggestionsOpen}
+        title="Suggested experiments"
+        description="Pick a strong idea and jump straight into the experiment instead of starting from scratch."
+        panelClassName="max-w-6xl"
+        bodyClassName="p-0"
+        onOpenChange={setSuggestionsOpen}
+      >
+        <ExperimentSuggestionsPanel brandId={brandId} />
+      </SettingsModal>
     </div>
   );
 }

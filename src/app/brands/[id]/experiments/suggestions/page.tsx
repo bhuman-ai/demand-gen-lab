@@ -1,4 +1,4 @@
-import SuggestionsClient from "./suggestions-client";
+import { redirect } from "next/navigation";
 
 export default async function ExperimentSuggestionsPage({
   params,
@@ -6,5 +6,5 @@ export default async function ExperimentSuggestionsPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-  return <SuggestionsClient brandId={id} />;
+  redirect(`/brands/${id}/experiments?suggestions=1`);
 }

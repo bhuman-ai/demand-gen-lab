@@ -7,6 +7,7 @@ import {
   applyExperimentSuggestion,
   dismissExperimentSuggestion,
   fetchExperimentSuggestions,
+  generateExperimentSuggestions,
   generateExperimentSuggestionsDetailed,
 } from "@/lib/client-api";
 import { trackEvent } from "@/lib/telemetry-client";

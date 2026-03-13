@@ -138,6 +138,8 @@ function friendlyEventName(eventType: string) {
   if (eventType === "deliverability_probe_waiting") return "Inbox placement pending";
   if (eventType === "deliverability_probe_result") return "Inbox placement result";
   if (eventType === "deliverability_probe_failed") return "Inbox placement failed";
+  if (eventType === "sender_deliverability_cooled_auto") return "Sender cooled off";
+  if (eventType === "sender_route_changed_auto") return "Sender rerouted";
   if (eventType === "conversation_prompt_generated") return "Prompt generated";
   if (eventType === "conversation_prompt_rejected") return "Prompt rejected";
   if (eventType === "conversation_prompt_failed") return "Prompt failed";
@@ -242,6 +244,20 @@ function summarizeEvent(event: OutreachRunEvent) {
         ? `Probe not found across seed group${summaryText ? ` (${summaryText})` : ""}`
         : "Probe not found in monitor mailbox";
     }
+  }
+  if (event.eventType === "sender_route_changed_auto") {
+    const fromEmail = asText(event.payload.fromEmail);
+    const toEmail = asText(event.payload.toEmail);
+    const summary = asText(event.payload.summary);
+    if (fromEmail && toEmail) {
+      return `Switched from ${fromEmail} to ${toEmail}${summary ? ` · ${summary}` : ""}`;
+    }
+    return summary || "Sender route changed automatically";
+  }
+  if (event.eventType === "sender_deliverability_cooled_auto") {
+    const fromEmail = asText(event.payload.fromEmail);
+    const reason = asText(event.payload.reason);
+    return reason ? `${fromEmail || "Sender"} cooled off · ${reason}` : "Sender cooled off automatically";
   }
   if (event.eventType === "conversation_tick_processed") {
     const scheduled = asNumber(event.payload.scheduledCount);

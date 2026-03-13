@@ -16,6 +16,7 @@ import { SettingsModal } from "@/app/settings/outreach/settings-primitives";
 import { buildCampaignOperationsChain } from "@/components/campaign-operations-chain";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { ExplainableHint } from "@/components/ui/explainable-hint";
 import { EmptyState, PageIntro } from "@/components/ui/page-layout";
 import {
   buildSenderRoutingSignalFromDomainRow,
@@ -234,8 +235,21 @@ export default function CampaignsClient({ brandId }: { brandId: string }) {
   return (
     <div className="space-y-8">
       <PageIntro
-        title="Campaigns"
-        description="Promoted experiments running in production."
+        title={
+          <span className="inline-flex items-center gap-2">
+            <span>Campaigns</span>
+            <ExplainableHint
+              label="Explain Campaigns"
+              title="What this page shows"
+            >
+              <p>Campaigns are experiments that graduated into live production sending.</p>
+              <p>
+                The system keeps choosing the healthiest sender route, watches deliverability automatically, and pauses
+                or reroutes when a sender or message starts to degrade.
+              </p>
+            </ExplainableHint>
+          </span>
+        }
         actions={
           <>
             <Button asChild>
@@ -277,7 +291,21 @@ export default function CampaignsClient({ brandId }: { brandId: string }) {
 
       <div className="grid gap-3 rounded-[10px] border border-[color:var(--border)] bg-[color:var(--surface)] px-4 py-3 lg:grid-cols-[minmax(0,1.5fr)_repeat(3,minmax(0,0.7fr))]">
         <div className="min-w-0">
-          <div className="text-[12px] text-[color:var(--muted-foreground)]">Preferred sender</div>
+          <div className="inline-flex items-center gap-1.5 text-[12px] text-[color:var(--muted-foreground)]">
+            <span>Preferred sender</span>
+            <ExplainableHint
+              label="Explain preferred sender"
+              title="Preferred sender"
+            >
+              <p>
+                This is the sender mailbox currently at the top of the health-first route order for production sends.
+              </p>
+              <p>
+                The system prefers senders that are ready, have stronger inbox placement, and show healthier domain,
+                mailbox, transport, and message signals.
+              </p>
+            </ExplainableHint>
+          </div>
           <div className="mt-1 font-medium text-[color:var(--foreground)]">
             {preferredRoutingSignal?.fromEmail || "No sender ready"}
           </div>
@@ -290,21 +318,62 @@ export default function CampaignsClient({ brandId }: { brandId: string }) {
           </div>
         </div>
         <div>
-          <div className="text-[12px] text-[color:var(--muted-foreground)]">Auto-routed</div>
+          <div className="inline-flex items-center gap-1.5 text-[12px] text-[color:var(--muted-foreground)]">
+            <span>Auto-routed</span>
+            <ExplainableHint
+              label="Explain auto-routed campaigns"
+              title="Auto-routed"
+            >
+              <p>
+                These campaigns are not pinned to a sender. The system can choose the best available route on each
+                dispatch and fail over if the current route degrades.
+              </p>
+            </ExplainableHint>
+          </div>
           <div className="mt-1 font-medium text-[color:var(--foreground)]">{formatRoutingCount(autoRoutedCampaignCount)}</div>
           <div className="mt-1 text-xs leading-5 text-[color:var(--muted-foreground)]">
             Campaigns using health-first sender selection.
           </div>
         </div>
         <div>
-          <div className="text-[12px] text-[color:var(--muted-foreground)]">Locked</div>
+          <div className="inline-flex items-center gap-1.5 text-[12px] text-[color:var(--muted-foreground)]">
+            <span>Locked</span>
+            <ExplainableHint
+              label="Explain locked campaigns"
+              title="Locked route"
+            >
+              <p>
+                Locked campaigns are pinned to a specific sender account instead of following the default health-first
+                route order.
+              </p>
+              <p>
+                If the locked sender becomes risky, the campaign can still be paused or rerouted automatically to avoid
+                bad placement.
+              </p>
+            </ExplainableHint>
+          </div>
           <div className="mt-1 font-medium text-[color:var(--foreground)]">{formatRoutingCount(lockedCampaignCount)}</div>
           <div className="mt-1 text-xs leading-5 text-[color:var(--muted-foreground)]">
             Campaigns pinned to a specific sender account.
           </div>
         </div>
         <div>
-          <div className="text-[12px] text-[color:var(--muted-foreground)]">Blocked routes</div>
+          <div className="inline-flex items-center gap-1.5 text-[12px] text-[color:var(--muted-foreground)]">
+            <span>Blocked routes</span>
+            <ExplainableHint
+              label="Explain blocked routes"
+              title="Blocked routes"
+              align="right"
+            >
+              <p>
+                A blocked route is outside production rotation because one or more signals look unsafe, such as domain,
+                mailbox, transport, or message health.
+              </p>
+              <p>
+                The system keeps testing those senders and can bring them back once they recover.
+              </p>
+            </ExplainableHint>
+          </div>
           <div className="mt-1 font-medium text-[color:var(--foreground)]">{formatRoutingCount(blockedRoutingSignals.length)}</div>
           <div className="mt-1 text-xs leading-5 text-[color:var(--muted-foreground)]">
             {standbyRoutingSignals.length
@@ -359,7 +428,22 @@ export default function CampaignsClient({ brandId }: { brandId: string }) {
 
                   <div className="grid gap-2 border-t border-[color:var(--border)] pt-3 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center">
                     <div className="min-w-0">
-                      <div className="text-[12px] text-[color:var(--muted-foreground)]">Dispatch route</div>
+                      <div className="inline-flex items-center gap-1.5 text-[12px] text-[color:var(--muted-foreground)]">
+                        <span>Dispatch route</span>
+                        <ExplainableHint
+                          label={`Explain dispatch route for ${campaign.name}`}
+                          title="Dispatch route"
+                        >
+                          <p>
+                            This shows which sender the campaign will use right now, and whether that choice is
+                            automatic, locked, or blocked.
+                          </p>
+                          <p>
+                            Auto route follows the current health-first ranking. Locked routes are pinned. Blocked means
+                            the selected sender is unsafe and the campaign needs another route.
+                          </p>
+                        </ExplainableHint>
+                      </div>
                       <div className="mt-1 flex flex-wrap items-center gap-2">
                         <Badge variant={senderRouteSelectionVariant(routeSummary.state)}>{routeSummary.label}</Badge>
                         <span className="font-medium text-[color:var(--foreground)]">{routeSummary.title}</span>

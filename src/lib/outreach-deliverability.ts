@@ -154,6 +154,10 @@ export function buildSenderDeliverabilityScorecards(input: {
   );
   const latestBySenderKey = new Map<string, SenderDeliverabilityScorecard>();
   const latestManualResumeBySenderKey = new Map<string, string>();
+  const latestAutoCooldownBySenderKey = new Map<
+    string,
+    { createdAt: string; until: string; reason: string }
+  >();
 
   const manualResumeEvents = [...events]
     .filter((event) => event.eventType === "sender_deliverability_resumed_manual")
@@ -167,6 +171,25 @@ export function buildSenderDeliverabilityScorecards(input: {
     });
     if (!senderKey || latestManualResumeBySenderKey.has(senderKey)) continue;
     latestManualResumeBySenderKey.set(senderKey, event.createdAt);
+  }
+
+  const autoCooldownEvents = [...events]
+    .filter((event) => event.eventType === "sender_deliverability_cooled_auto")
+    .sort((left, right) => (left.createdAt < right.createdAt ? 1 : -1));
+
+  for (const event of autoCooldownEvents) {
+    const { senderKey } = resolveSenderKey({
+      event,
+      accountsById,
+      accountIdByFromEmail,
+    });
+    if (!senderKey || latestAutoCooldownBySenderKey.has(senderKey)) continue;
+    const payload = asRecord(event.payload);
+    latestAutoCooldownBySenderKey.set(senderKey, {
+      createdAt: event.createdAt,
+      until: asText(payload.autoPauseUntil),
+      reason: asText(payload.reason),
+    });
   }
 
   const probeRows =
@@ -208,15 +231,23 @@ export function buildSenderDeliverabilityScorecards(input: {
     const inboxRate = total > 0 ? counts.inbox / total : 0;
     const autoPauseUntil = addHoursIso(checkedAt, SENDER_DELIVERABILITY_COOLDOWN_HOURS);
     const manualOverrideAt = latestManualResumeBySenderKey.get(senderKey) ?? "";
+    const latestAutoCooldown = latestAutoCooldownBySenderKey.get(senderKey) ?? null;
+    const latestGuardAt = Math.max(
+      new Date(checkedAt).getTime(),
+      latestAutoCooldown ? new Date(latestAutoCooldown.createdAt).getTime() : 0
+    );
     const manualOverrideActive =
       Boolean(manualOverrideAt) &&
-      new Date(manualOverrideAt).getTime() >= new Date(checkedAt).getTime();
-    const autoPaused =
-      !manualOverrideActive &&
+      new Date(manualOverrideAt).getTime() >= latestGuardAt;
+    const thresholdAutoPaused =
       total >= SENDER_DELIVERABILITY_MIN_MONITORS &&
       spamRate >= SENDER_DELIVERABILITY_SPAM_RATE_THRESHOLD &&
       Boolean(autoPauseUntil) &&
       new Date(autoPauseUntil).getTime() > now.getTime();
+    const cooldownAutoPaused = latestAutoCooldown?.until
+      ? new Date(latestAutoCooldown.until).getTime() > now.getTime()
+      : false;
+    const autoPaused = !manualOverrideActive && (thresholdAutoPaused || cooldownAutoPaused);
 
     latestBySenderKey.set(senderKey, {
       senderAccountId,
@@ -235,9 +266,15 @@ export function buildSenderDeliverabilityScorecards(input: {
       summaryText,
       autoPaused,
       autoPauseReason: autoPaused
-        ? `Spam ${(spamRate * 100).toFixed(0)}% across ${total} seed inboxes`
+        ? cooldownAutoPaused && latestAutoCooldown?.reason
+          ? latestAutoCooldown.reason
+          : `Spam ${(spamRate * 100).toFixed(0)}% across ${total} seed inboxes`
         : "",
-      autoPauseUntil: autoPaused ? autoPauseUntil : "",
+      autoPauseUntil: autoPaused
+        ? cooldownAutoPaused && latestAutoCooldown?.until
+          ? latestAutoCooldown.until
+          : autoPauseUntil
+        : "",
       manualOverrideActive,
       manualOverrideAt,
     });
@@ -246,6 +283,17 @@ export function buildSenderDeliverabilityScorecards(input: {
   for (const account of input.senderAccounts) {
     const senderKey = account.id;
     if (latestBySenderKey.has(senderKey)) continue;
+    const latestAutoCooldown = latestAutoCooldownBySenderKey.get(senderKey) ?? null;
+    const manualOverrideAt = latestManualResumeBySenderKey.get(senderKey) ?? "";
+    const cooldownCreatedAt = latestAutoCooldown?.createdAt ?? "";
+    const cooldownUntil = latestAutoCooldown?.until ?? "";
+    const manualOverrideActive =
+      Boolean(manualOverrideAt) && Boolean(cooldownCreatedAt)
+        ? new Date(manualOverrideAt).getTime() >= new Date(cooldownCreatedAt).getTime()
+        : false;
+    const autoPaused = cooldownUntil
+      ? new Date(cooldownUntil).getTime() > now.getTime() && !manualOverrideActive
+      : false;
     latestBySenderKey.set(senderKey, {
       senderAccountId: account.id,
       senderAccountName: account.name,
@@ -261,11 +309,11 @@ export function buildSenderDeliverabilityScorecards(input: {
       inboxRate: 0,
       spamRate: 0,
       summaryText: "No seed-group check yet",
-      autoPaused: false,
-      autoPauseReason: "",
-      autoPauseUntil: "",
-      manualOverrideActive: false,
-      manualOverrideAt: "",
+      autoPaused,
+      autoPauseReason: autoPaused ? latestAutoCooldown?.reason ?? "Sender cooled off automatically" : "",
+      autoPauseUntil: autoPaused ? cooldownUntil : "",
+      manualOverrideActive,
+      manualOverrideAt,
     });
   }
 

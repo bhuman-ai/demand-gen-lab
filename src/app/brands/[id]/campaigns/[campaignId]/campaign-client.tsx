@@ -34,6 +34,7 @@ import CampaignOperationsChain, {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { ExplainableHint } from "@/components/ui/explainable-hint";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { PageIntro, SectionPanel, StatLedger } from "@/components/ui/page-layout";
@@ -453,7 +454,27 @@ export default function CampaignClient({
 
       {error ? <div className="text-sm text-[color:var(--danger)]">{error}</div> : null}
 
-      <SectionPanel title="Dispatch route" contentClassName="space-y-4">
+      <SectionPanel
+        title={
+          <span className="inline-flex items-center gap-2">
+            <span>Dispatch route</span>
+            <ExplainableHint
+              label="Explain campaign dispatch route"
+              title="How this campaign is routed"
+            >
+              <p>
+                This section shows which sender the campaign uses now, how many healthy backups exist, and whether any
+                configured senders are blocked.
+              </p>
+              <p>
+                The system can keep the route automatic, honor a locked sender, or fail over to a healthier standby
+                sender when the current route degrades.
+              </p>
+            </ExplainableHint>
+          </span>
+        }
+        contentClassName="space-y-4"
+      >
         <div className="grid gap-3 lg:grid-cols-[minmax(0,1.45fr)_minmax(0,0.8fr)_minmax(0,0.8fr)]">
           <div className="border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-4 py-4">
             <div className="flex flex-wrap items-center gap-2">
@@ -779,18 +800,6 @@ export default function CampaignClient({
               <Play className="h-4 w-4" /> Resume
             </Button>
           ) : null}
-          {latestRun ? (
-            <Button
-              type="button"
-              variant="outline"
-              onClick={async () => {
-                await controlScaleCampaignRunApi(brandId, campaign.id, latestRun.id, "probe_deliverability");
-                await refresh(false);
-              }}
-            >
-              Run spam check group
-            </Button>
-          ) : null}
         </CardContent>
       </Card>
 
@@ -798,7 +807,7 @@ export default function CampaignClient({
         <CardHeader>
           <CardTitle className="text-base">Deliverability view</CardTitle>
           <CardDescription>
-            Latest seed-group result, split by inbox provider, so you can see whether the problem is broad or provider-specific.
+            Seed probes now run automatically on scheduled content, live sends, and sender failover. This view stays focused on the latest result by inbox provider.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">

@@ -21,6 +21,7 @@ import {
   TableHeaderCell,
   TableShell,
 } from "@/components/ui/page-layout";
+import { ExplainableHint } from "@/components/ui/explainable-hint";
 
 const makeId = () => `domain_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 const FILTERS = ["all", "queued", "warming", "attention", "ready"] as const;
@@ -349,7 +350,24 @@ export default function NetworkClient({ brand }: { brand: BrandRecord }) {
       {error ? <div className="text-sm text-[color:var(--danger)]">{error}</div> : null}
 
       <PageIntro
-        title="Senders"
+        title={
+          <span className="inline-flex items-center gap-2">
+            <span>Senders</span>
+            <ExplainableHint
+              label="Explain Senders"
+              title="What happens here"
+            >
+              <p>
+                Add a sender domain and the system handles the rest: DNS checks, warmup, control probes, live-content
+                probes, routing, and automatic pauses.
+              </p>
+              <p>
+                Health is separated into four signals so problems are easier to isolate: domain, mailbox, transport,
+                and message.
+              </p>
+            </ExplainableHint>
+          </span>
+        }
         actions={
           <Button type="button" onClick={() => domainInputRef.current?.focus()}>
             Add sender domain
@@ -361,8 +379,24 @@ export default function NetworkClient({ brand }: { brand: BrandRecord }) {
       />
 
       <SectionPanel
-        title="Routing priority"
-        description="Health-first sender order for new dispatches."
+        title={
+          <span className="inline-flex items-center gap-2">
+            <span>Routing priority</span>
+            <ExplainableHint
+              label="Explain routing priority"
+              title="How sender routing works"
+            >
+              <p>
+                The system ranks sender mailboxes by automation state, recent inbox or spam placement, and separate
+                health signals for domain, email, transport, and message.
+              </p>
+              <p>
+                The top healthy sender becomes the primary route. Healthy backups stay on standby. Blocked senders stay
+                out of rotation until they recover.
+              </p>
+            </ExplainableHint>
+          </span>
+        }
         className="border-[color:var(--border-strong)]"
       >
         <div className="grid gap-4 lg:grid-cols-[minmax(0,1.3fr)_minmax(0,0.7fr)]">
@@ -427,8 +461,24 @@ export default function NetworkClient({ brand }: { brand: BrandRecord }) {
       </SectionPanel>
 
       <SectionPanel
-        title="Add sender domain"
-        description="Enter the domain. DNS verification, warmup, and isolated seed checks run automatically."
+        title={
+          <span className="inline-flex items-center gap-2">
+            <span>Add sender domain</span>
+            <ExplainableHint
+              label="Explain sender setup"
+              title="What happens after you add a domain"
+            >
+              <p>
+                The system starts DNS verification immediately, then waits for a sender mailbox before it begins warmup
+                and deliverability checks.
+              </p>
+              <p>
+                Control probes test infrastructure without campaign copy. Production probes test the exact subject and
+                body that the campaign will send.
+              </p>
+            </ExplainableHint>
+          </span>
+        }
       >
         <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_auto]">
           <div>
@@ -484,15 +534,27 @@ export default function NetworkClient({ brand }: { brand: BrandRecord }) {
             </Button>
           </div>
         </div>
-        <p className="mt-3 text-sm leading-6 text-[color:var(--muted-foreground)]">
-          Domain health starts immediately. Mailbox, IP, and message checks start when a sender mailbox is attached.
-          Seed probes use untouched or rotated inboxes per sender mailbox, and used mailbox/inbox pairs are retired.
-        </p>
       </SectionPanel>
 
       <SectionPanel
-        title="Sender queue"
-        description="Operational state across every sender domain, mailbox, route, and probe policy."
+        title={
+          <span className="inline-flex items-center gap-2">
+            <span>Sender queue</span>
+            <ExplainableHint
+              label="Explain sender queue"
+              title="How to read this table"
+            >
+              <p>
+                Each row shows one sender domain and its mailbox. The system keeps testing, warming, and routing that
+                sender without asking the operator to manage the steps manually.
+              </p>
+              <p>
+                Use the columns to see what is healthy, what is blocked, how the sender ranks for dispatch, and whether
+                its seed pool is still clean.
+              </p>
+            </ExplainableHint>
+          </span>
+        }
         className="border-[color:var(--border-strong)]"
         actions={
           <Input
@@ -509,11 +571,81 @@ export default function NetworkClient({ brand }: { brand: BrandRecord }) {
               <tr>
                 <TableHeaderCell>Sender</TableHeaderCell>
                 <TableHeaderCell>Mailbox</TableHeaderCell>
-                <TableHeaderCell>Automation</TableHeaderCell>
-                <TableHeaderCell>Health signals</TableHeaderCell>
+                <TableHeaderCell>
+                  <span className="inline-flex items-center gap-1.5">
+                    <span>Automation</span>
+                    <ExplainableHint
+                      label="Explain automation state"
+                      title="Automation state"
+                    >
+                      <p>
+                        This is the sender lifecycle: queued, testing, warming, ready, or attention. The system moves
+                        the sender forward automatically as checks pass.
+                      </p>
+                      <p>
+                        Attention means the sender is blocked by a domain, mailbox, transport, or message issue and
+                        should stay out of rotation.
+                      </p>
+                    </ExplainableHint>
+                  </span>
+                </TableHeaderCell>
+                <TableHeaderCell>
+                  <span className="inline-flex items-center gap-1.5">
+                    <span>Health signals</span>
+                    <ExplainableHint
+                      label="Explain health signals"
+                      title="Why there are four health signals"
+                      align="center"
+                    >
+                      <p>
+                        Domain health asks whether the domain itself is dragging placement down. Email health isolates
+                        one mailbox against sibling mailboxes on the same domain.
+                      </p>
+                      <p>
+                        Transport health reflects the shared sending route. Message health compares neutral control copy
+                        against the real campaign subject and body to isolate content risk.
+                      </p>
+                    </ExplainableHint>
+                  </span>
+                </TableHeaderCell>
                 <TableHeaderCell>Warmup</TableHeaderCell>
-                <TableHeaderCell>Routing</TableHeaderCell>
-                <TableHeaderCell>Seed policy</TableHeaderCell>
+                <TableHeaderCell>
+                  <span className="inline-flex items-center gap-1.5">
+                    <span>Routing</span>
+                    <ExplainableHint
+                      label="Explain sender routing"
+                      title="Routing role"
+                    >
+                      <p>
+                        Primary means new sends go here first. Standby means the sender is healthy enough to use, but a
+                        stronger sender currently outranks it.
+                      </p>
+                      <p>
+                        Blocked means the sender is outside rotation until its health recovers. Pending means it is not
+                        ready for routing yet.
+                      </p>
+                    </ExplainableHint>
+                  </span>
+                </TableHeaderCell>
+                <TableHeaderCell>
+                  <span className="inline-flex items-center gap-1.5">
+                    <span>Seed policy</span>
+                    <ExplainableHint
+                      label="Explain seed policy"
+                      title="Seed inbox rules"
+                      align="right"
+                    >
+                      <p>
+                        Probe inboxes are treated as consumables. Once a sender mailbox touches a seed inbox, that pair
+                        is retired so later checks stay clean.
+                      </p>
+                      <p>
+                        Fresh pool means the next probe still has untouched capacity. Rotating pool means the system is
+                        using clean alternates. Pair retired means that mailbox needs a new seed pair.
+                      </p>
+                    </ExplainableHint>
+                  </span>
+                </TableHeaderCell>
               </tr>
             </thead>
             <tbody>

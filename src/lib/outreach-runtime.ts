@@ -17,6 +17,7 @@ import type {
   LeadAcceptanceDecision,
   LeadQualityPolicy,
   OutreachMessage,
+  OutreachRun,
   ReplyThread,
   SourcingActorMemory,
   SourcingChainDecision,
@@ -128,6 +129,7 @@ import {
 import {
   buildSenderDeliverabilityScorecards,
   fetchGooglePostmasterHealth,
+  SENDER_DELIVERABILITY_COOLDOWN_HOURS,
   SENDER_DELIVERABILITY_MIN_MONITORS,
   type SenderDeliverabilityScorecard,
 } from "@/lib/outreach-deliverability";
@@ -11496,6 +11498,8 @@ async function queueDeliverabilityProbe(input: {
     const requestedSourceMessageId = String(requestedPayload.sourceMessageId ?? "").trim();
     const requestedContentHash = String(requestedPayload.contentHash ?? "").trim();
     const requestedVariant = readDeliverabilityProbeVariant(requestedPayload.probeVariant);
+    const requestedSenderAccountId = String(requestedPayload.senderAccountId ?? "").trim();
+    const requestedFromEmail = String(requestedPayload.fromEmail ?? "").trim().toLowerCase();
     const activeProbes = jobs.filter(
       (job) => job.jobType === "monitor_deliverability" && ["queued", "running"].includes(job.status)
     );
@@ -11504,7 +11508,15 @@ async function queueDeliverabilityProbe(input: {
       const activeSourceMessageId = String(jobPayload.sourceMessageId ?? "").trim();
       const activeContentHash = String(jobPayload.contentHash ?? "").trim();
       const activeVariant = readDeliverabilityProbeVariant(jobPayload.probeVariant);
+      const activeSenderAccountId = String(jobPayload.senderAccountId ?? "").trim();
+      const activeFromEmail = String(jobPayload.fromEmail ?? "").trim().toLowerCase();
       if (requestedVariant !== activeVariant) {
+        return false;
+      }
+      if (requestedSenderAccountId && activeSenderAccountId && requestedSenderAccountId !== activeSenderAccountId) {
+        return false;
+      }
+      if (requestedFromEmail && activeFromEmail && requestedFromEmail !== activeFromEmail) {
         return false;
       }
       if (requestedSourceMessageId && activeSourceMessageId === requestedSourceMessageId) {
@@ -11527,6 +11539,97 @@ async function queueDeliverabilityProbe(input: {
   });
 }
 
+async function findRecentDeliverabilityProbeForSender(input: {
+  runId: string;
+  senderAccountId: string;
+  fromEmail: string;
+  probeVariant: DeliverabilityProbeVariant;
+  contentHash: string;
+  sourceMessageId: string;
+}) {
+  const probeRuns = await listDeliverabilityProbeRuns({
+    runId: input.runId,
+    senderAccountId: input.senderAccountId,
+    fromEmail: input.fromEmail,
+    probeVariant: input.probeVariant,
+    statuses: ["queued", "sent", "waiting", "completed"],
+    limit: 25,
+  });
+  return (
+    probeRuns.find((probeRun) => {
+      if (probeRun.contentHash && input.contentHash && probeRun.contentHash === input.contentHash) {
+        return true;
+      }
+      if (probeRun.sourceMessageId && input.sourceMessageId && probeRun.sourceMessageId === input.sourceMessageId) {
+        return true;
+      }
+      return false;
+    }) ?? null
+  );
+}
+
+async function maybeQueueAutomaticDeliverabilityProbeSet(
+  run: {
+    id: string;
+    brandId: string;
+    campaignId: string;
+    experimentId: string;
+  },
+  input: {
+    referenceMessage: DeliverabilityProbeReferenceMessage;
+    senderAccountId: string;
+    senderAccountName: string;
+    senderFromEmail: string;
+    triggerStage: "schedule" | "send" | "failover";
+  }
+) {
+  const senderAccountId = input.senderAccountId.trim();
+  const senderFromEmail = input.senderFromEmail.trim().toLowerCase();
+  if (!senderAccountId || !senderFromEmail) return;
+
+  const baselineContentHash = buildDeliverabilityBaselineProbe({
+    brandName: "",
+    senderDomain: senderDomainFromEmail(senderFromEmail),
+    probeToken: "control",
+  }).contentHash;
+
+  const queueVariant = async (variant: DeliverabilityProbeVariant, contentHash: string) => {
+    const recentProbe = await findRecentDeliverabilityProbeForSender({
+      runId: run.id,
+      senderAccountId,
+      fromEmail: senderFromEmail,
+      probeVariant: variant,
+      contentHash,
+      sourceMessageId: input.referenceMessage.id,
+    });
+    if (recentProbe) {
+      const referenceTimestamp =
+        recentProbe.completedAt || recentProbe.updatedAt || recentProbe.createdAt;
+      const elapsed = Date.now() - toDate(referenceTimestamp).getTime();
+      if (elapsed < DELIVERABILITY_PROBE_REPEAT_HOURS * 60 * 60 * 1000) {
+        return null;
+      }
+    }
+    return queueDeliverabilityProbe({
+      runId: run.id,
+      payload: {
+        stage: "send",
+        triggerStage: input.triggerStage,
+        probeToken: generateDeliverabilityProbeToken(),
+        probeVariant: variant,
+        sourceMessageId: input.referenceMessage.id,
+        contentHash,
+        senderAccountId,
+        senderAccountName: input.senderAccountName,
+        fromEmail: senderFromEmail,
+      },
+    });
+  };
+
+  await queueVariant("production", input.referenceMessage.contentHash);
+  return queueVariant("baseline", baselineContentHash);
+}
+
 async function maybeQueueAutomaticDeliverabilityProbe(run: {
   id: string;
   brandId: string;
@@ -11539,52 +11642,209 @@ async function maybeQueueAutomaticDeliverabilityProbe(run: {
   senderFromEmail: string;
 }) {
   const referenceMessage = buildDeliverabilityProbeReferenceMessage(input.message);
-  const baselineContentHash = buildDeliverabilityBaselineProbe({
-    brandName: "",
-    senderDomain: senderDomainFromEmail(input.senderFromEmail),
-    probeToken: "control",
-  }).contentHash;
-  const events = await listRunEvents(run.id);
-  const queueVariant = async (variant: DeliverabilityProbeVariant, contentHash: string) => {
-    const latestResult =
-      events.find(
-        (event) =>
-          event.eventType === "deliverability_probe_result" &&
-          readDeliverabilityProbeVariant(asRecord(event.payload).probeVariant) === variant
-      ) ?? null;
-    const latestSent =
-      events.find(
-        (event) =>
-          event.eventType === "deliverability_probe_sent" &&
-          readDeliverabilityProbeVariant(asRecord(event.payload).probeVariant) === variant
-      ) ?? null;
-    const referenceEvent = latestResult ?? latestSent;
-    if (referenceEvent) {
-      const referencePayload = asRecord(referenceEvent.payload);
-      const lastContentHash = String(referencePayload.contentHash ?? "").trim();
-      const sameContent = lastContentHash && lastContentHash === contentHash;
-      const elapsed = Date.now() - toDate(referenceEvent.createdAt).getTime();
-      if (sameContent && elapsed < DELIVERABILITY_PROBE_REPEAT_HOURS * 60 * 60 * 1000) {
-        return null;
-      }
-    }
-    return queueDeliverabilityProbe({
-      runId: run.id,
-      payload: {
-        stage: "send",
-        probeToken: generateDeliverabilityProbeToken(),
-        probeVariant: variant,
-        sourceMessageId: referenceMessage.id,
-        contentHash,
-        senderAccountId: input.senderAccountId,
-        senderAccountName: input.senderAccountName,
-        fromEmail: input.senderFromEmail,
-      },
-    });
-  };
+  return maybeQueueAutomaticDeliverabilityProbeSet(run, {
+    referenceMessage,
+    senderAccountId: input.senderAccountId,
+    senderAccountName: input.senderAccountName,
+    senderFromEmail: input.senderFromEmail,
+    triggerStage: "send",
+  });
+}
 
-  await queueVariant("production", referenceMessage.contentHash);
-  return queueVariant("baseline", baselineContentHash);
+async function maybeQueueScheduledDeliverabilityProbe(run: OutreachRun) {
+  const referenceMessage = await resolveDeliverabilityProbeReferenceMessage({
+    runId: run.id,
+    preferScheduled: true,
+  });
+  if (!referenceMessage) return null;
+
+  const routingContext = await buildRunSenderRoutingContext(run, {
+    preferredAccountId: run.accountId,
+  });
+  const senderSlot =
+    routingContext.primarySender ??
+    routingContext.senderPoolState.pool.find((slot) => slot.account.id === run.accountId) ??
+    null;
+  if (!senderSlot) return null;
+
+  return maybeQueueAutomaticDeliverabilityProbeSet(run, {
+    referenceMessage,
+    senderAccountId: senderSlot.account.id,
+    senderAccountName: senderSlot.account.name,
+    senderFromEmail: senderSlot.account.config.customerIo.fromEmail.trim(),
+    triggerStage: "schedule",
+  });
+}
+
+async function buildRunSenderRoutingContext(run: OutreachRun, input?: { preferredAccountId?: string }) {
+  const preferredAccountId = String(input?.preferredAccountId ?? run.accountId).trim();
+  const runtimeExperiment = await getExperimentRecordByRuntimeRef(run.brandId, run.campaignId, run.experimentId);
+  const businessWindow = businessWindowFromExperimentEnvelope(runtimeExperiment?.testEnvelope);
+  const senderPoolState = await resolveSenderPoolForBrand({
+    brandId: run.brandId,
+    preferredAccountId: preferredAccountId || run.accountId,
+    timeZone: run.timezone || DEFAULT_TIMEZONE,
+    businessWindow,
+  });
+  const requireReady = run.ownerType === "campaign";
+  const senderHealthState =
+    senderPoolState.pool.length > 0
+      ? await resolveBrandSenderHealth({
+          brandId: run.brandId,
+          accountId: preferredAccountId || run.accountId,
+          requireInfrastructureReady: requireReady,
+          requireMessageReady: requireReady,
+        })
+      : null;
+  const healthBlockedBySenderId = new Map<string, SenderHealthGateSnapshot>();
+  if (senderHealthState?.brand) {
+    for (const slot of senderPoolState.pool) {
+      const fromEmail = slot.account.config.customerIo.fromEmail.trim().toLowerCase();
+      const gate = evaluateSenderHealthGate({
+        domains: senderHealthState.brand.domains,
+        accountId: slot.account.id,
+        fromEmail,
+        requireInfrastructureReady: requireReady,
+        requireMessageReady: requireReady,
+      });
+      if (!gate.blockers.length && !gate.pending.length) continue;
+      healthBlockedBySenderId.set(slot.account.id, {
+        senderAccountId: slot.account.id,
+        senderAccountName: slot.account.name,
+        fromEmail,
+        blockers: gate.blockers,
+        pending: gate.pending,
+      });
+    }
+  }
+
+  const senderScorecards = senderPoolState.pool.length
+    ? await scoreSenderPoolDeliverability({
+        brandId: run.brandId,
+        campaignId: run.campaignId,
+        pool: senderPoolState.pool,
+      })
+    : [];
+  const autoPausedBySenderId = new Map(
+    senderScorecards
+      .filter((scorecard) => scorecard.autoPaused && scorecard.senderAccountId)
+      .map((scorecard) => [scorecard.senderAccountId, scorecard] as const)
+  );
+  const routingSignalsBySenderId = buildSenderRoutingSignals({
+    domains: senderHealthState?.brand?.domains,
+    scorecards: senderScorecards,
+  });
+  const dispatchPool = senderPoolState.pool.filter(
+    (slot) => !autoPausedBySenderId.has(slot.account.id) && !healthBlockedBySenderId.has(slot.account.id)
+  );
+  const senderUsage =
+    senderPoolState.pool.length > 0
+      ? await countCampaignSenderUsage({
+          brandId: run.brandId,
+          campaignId: run.campaignId,
+          timezone: run.timezone || DEFAULT_TIMEZONE,
+        })
+      : {};
+  const primarySender =
+    dispatchPool.length > 0
+      ? pickSenderForMessage({
+          pool: dispatchPool,
+          usage: senderUsage,
+          preferredAccountId: preferredAccountId || run.accountId,
+          routingSignalsBySenderId,
+        })?.slot ??
+        dispatchPool.find((slot) => slot.account.id === (preferredAccountId || run.accountId)) ??
+        dispatchPool[0]
+      : null;
+
+  return {
+    businessWindow,
+    senderPoolState,
+    senderHealthState,
+    healthBlockedBySenderId,
+    senderScorecards,
+    autoPausedBySenderId,
+    routingSignalsBySenderId,
+    dispatchPool,
+    senderUsage,
+    primarySender,
+  };
+}
+
+async function autoFailoverRunSender(input: {
+  run: OutreachRun;
+  reason: string;
+  summary: string;
+  currentAccountId?: string;
+  excludeCurrent?: boolean;
+}) {
+  const currentAccountId = String(input.currentAccountId ?? input.run.accountId).trim();
+  const routingContext = await buildRunSenderRoutingContext(input.run, {
+    preferredAccountId: currentAccountId || input.run.accountId,
+  });
+  const eligiblePool = input.excludeCurrent
+    ? routingContext.dispatchPool.filter((slot) => slot.account.id !== currentAccountId)
+    : routingContext.dispatchPool;
+  const nextSender =
+    eligiblePool.length > 0
+      ? pickSenderForMessage({
+          pool: eligiblePool,
+          usage: routingContext.senderUsage,
+          preferredAccountId: currentAccountId || input.run.accountId,
+          routingSignalsBySenderId: routingContext.routingSignalsBySenderId,
+        })?.slot ??
+        eligiblePool[0]
+      : null;
+  if (!nextSender || !currentAccountId || nextSender.account.id === currentAccountId) {
+    return {
+      switched: false,
+      nextSender: null,
+      routingContext,
+    };
+  }
+
+  const previousAccount = await getOutreachAccount(currentAccountId);
+  await updateOutreachRun(input.run.id, {
+    accountId: nextSender.account.id,
+    pauseReason: "",
+    lastError: "",
+  });
+  await createOutreachEvent({
+    runId: input.run.id,
+    eventType: "sender_route_changed_auto",
+    payload: {
+      reason: input.reason,
+      summary: input.summary,
+      fromAccountId: currentAccountId,
+      fromAccountName: previousAccount?.name ?? "",
+      fromEmail: previousAccount?.config.customerIo.fromEmail.trim() ?? "",
+      toAccountId: nextSender.account.id,
+      toAccountName: nextSender.account.name,
+      toEmail: nextSender.account.config.customerIo.fromEmail.trim(),
+      standbyCount: Math.max(0, routingContext.dispatchPool.length - 1),
+      blockedCount: routingContext.autoPausedBySenderId.size + routingContext.healthBlockedBySenderId.size,
+    },
+  });
+
+  const referenceMessage = await resolveDeliverabilityProbeReferenceMessage({
+    runId: input.run.id,
+    preferScheduled: true,
+  });
+  if (referenceMessage) {
+    await maybeQueueAutomaticDeliverabilityProbeSet(input.run, {
+      referenceMessage,
+      senderAccountId: nextSender.account.id,
+      senderAccountName: nextSender.account.name,
+      senderFromEmail: nextSender.account.config.customerIo.fromEmail.trim(),
+      triggerStage: "failover",
+    });
+  }
+
+  return {
+    switched: true,
+    nextSender,
+    routingContext,
+  };
 }
 
 async function processMonitorDeliverabilityJob(job: OutreachJob) {
@@ -12271,6 +12531,36 @@ async function processMonitorDeliverabilityJob(job: OutreachJob) {
   }
 
   if (aggregate.counts.spam > 0 && aggregate.counts.inbox === 0) {
+    const autoPauseUntil = addHours(nowIso(), SENDER_DELIVERABILITY_COOLDOWN_HOURS);
+    await createOutreachEvent({
+      runId: run.id,
+      eventType: "sender_deliverability_cooled_auto",
+      payload: {
+        senderAccountId: senderChoice.slot.account.id,
+        senderAccountName: senderChoice.slot.account.name,
+        fromEmail: senderChoice.slot.account.config.customerIo.fromEmail.trim(),
+        autoPauseUntil,
+        reason: `Seed placement failed (${aggregate.summaryText})`,
+        placement: aggregate.placement,
+        counts: aggregate.counts,
+        summaryText: aggregate.summaryText,
+      },
+    });
+    const failover = await autoFailoverRunSender({
+      run,
+      currentAccountId: senderChoice.slot.account.id,
+      reason: "deliverability_probe_spam",
+      summary: "Seed placement failed for the active sender and the system attempted to switch to the healthiest standby sender.",
+      excludeCurrent: true,
+    });
+    if (failover.switched) {
+      await enqueueOutreachJob({
+        runId: run.id,
+        jobType: "dispatch_messages",
+        executeAfter: nowIso(),
+      });
+      return;
+    }
     const reason = `Auto-paused: seed monitor group saw no inbox placement (${aggregate.summaryText})`;
     await updateOutreachRun(run.id, {
       status: "paused",
@@ -13175,6 +13465,7 @@ async function processScheduleMessagesJob(job: OutreachJob) {
 
   const existingMessages = await listRunMessages(run.id);
   if (existingMessages.length) {
+    await maybeQueueScheduledDeliverabilityProbe(run);
     await updateOutreachRun(run.id, {
       lastError: "",
       metrics: {
@@ -13398,6 +13689,7 @@ async function processScheduleMessagesJob(job: OutreachJob) {
       scheduledMessages: Math.max(run.metrics.scheduledMessages, scheduledMessagesCount),
     },
   });
+  await maybeQueueScheduledDeliverabilityProbe(run);
   await markExperimentExecutionStatus(run.brandId, run.campaignId, run.experimentId, "scheduled");
   await enqueueOutreachJob({ runId: run.id, jobType: "dispatch_messages", executeAfter: nowIso() });
   if (hasConversationMap) {
@@ -13425,14 +13717,16 @@ async function processDispatchMessagesJob(job: OutreachJob) {
     return;
   }
 
-  const runtimeExperiment = await getExperimentRecordByRuntimeRef(run.brandId, run.campaignId, run.experimentId);
-  const businessWindow = businessWindowFromExperimentEnvelope(runtimeExperiment?.testEnvelope);
-  const senderPoolState = await resolveSenderPoolForBrand({
-    brandId: run.brandId,
-    preferredAccountId: run.accountId,
-    timeZone: run.timezone || DEFAULT_TIMEZONE,
+  const routingContext = await buildRunSenderRoutingContext(run);
+  const {
     businessWindow,
-  });
+    senderPoolState,
+    healthBlockedBySenderId,
+    autoPausedBySenderId,
+    routingSignalsBySenderId,
+    dispatchPool,
+    senderUsage,
+  } = routingContext;
   if (!senderPoolState.pool.length) {
     await failRunWithDiagnostics({
       run,
@@ -13441,51 +13735,6 @@ async function processDispatchMessagesJob(job: OutreachJob) {
     });
     return;
   }
-  const requireReady = run.ownerType === "campaign";
-  const senderHealthState = await resolveBrandSenderHealth({
-    brandId: run.brandId,
-    accountId: run.accountId,
-    requireInfrastructureReady: requireReady,
-    requireMessageReady: requireReady,
-  });
-  const healthBlockedBySenderId = new Map<string, SenderHealthGateSnapshot>();
-  if (senderHealthState?.brand) {
-    for (const slot of senderPoolState.pool) {
-      const fromEmail = slot.account.config.customerIo.fromEmail.trim().toLowerCase();
-      const gate = evaluateSenderHealthGate({
-        domains: senderHealthState.brand.domains,
-        accountId: slot.account.id,
-        fromEmail,
-        requireInfrastructureReady: requireReady,
-        requireMessageReady: requireReady,
-      });
-      if (!gate.blockers.length && !gate.pending.length) continue;
-      healthBlockedBySenderId.set(slot.account.id, {
-        senderAccountId: slot.account.id,
-        senderAccountName: slot.account.name,
-        fromEmail,
-        blockers: gate.blockers,
-        pending: gate.pending,
-      });
-    }
-  }
-  const senderScorecards = await scoreSenderPoolDeliverability({
-    brandId: run.brandId,
-    campaignId: run.campaignId,
-    pool: senderPoolState.pool,
-  });
-  const autoPausedBySenderId = new Map(
-    senderScorecards
-      .filter((scorecard) => scorecard.autoPaused && scorecard.senderAccountId)
-      .map((scorecard) => [scorecard.senderAccountId, scorecard] as const)
-  );
-  const routingSignalsBySenderId = buildSenderRoutingSignals({
-    domains: senderHealthState?.brand?.domains,
-    scorecards: senderScorecards,
-  });
-  const dispatchPool = senderPoolState.pool.filter(
-    (slot) => !autoPausedBySenderId.has(slot.account.id) && !healthBlockedBySenderId.has(slot.account.id)
-  );
   if (!dispatchPool.length) {
     const healthBlocked = Array.from(healthBlockedBySenderId.values());
     const pausedSenders = Array.from(autoPausedBySenderId.values()).map((scorecard) => ({
@@ -13525,20 +13774,24 @@ async function processDispatchMessagesJob(job: OutreachJob) {
     });
     return;
   }
-  const senderUsage = await countCampaignSenderUsage({
-    brandId: run.brandId,
-    campaignId: run.campaignId,
-    timezone: run.timezone || DEFAULT_TIMEZONE,
-  });
-  const primarySender =
-    pickSenderForMessage({
-      pool: dispatchPool,
-      usage: senderUsage,
-      preferredAccountId: run.accountId,
-      routingSignalsBySenderId,
-    })?.slot ??
+  let primarySender =
+    routingContext.primarySender ??
     dispatchPool.find((slot) => slot.account.id === run.accountId) ??
     dispatchPool[0];
+  const currentHealthBlock = healthBlockedBySenderId.get(run.accountId) ?? null;
+  const currentSpamBlock = autoPausedBySenderId.get(run.accountId) ?? null;
+  if ((currentHealthBlock || currentSpamBlock) && primarySender.account.id !== run.accountId) {
+    const failover = await autoFailoverRunSender({
+      run,
+      reason: currentHealthBlock ? "sender_health_gate" : "sender_spam_risk",
+      summary: currentHealthBlock
+        ? "Current sender failed health checks and was replaced by the healthiest standby sender."
+        : "Current sender was removed from rotation for spam risk and replaced by the healthiest standby sender.",
+    });
+    if (failover.nextSender) {
+      primarySender = failover.nextSender;
+    }
+  }
   const assignment = await getBrandOutreachAssignment(run.brandId);
   const mailboxAccountId = String(assignment?.mailboxAccountId ?? "").trim();
   if (!mailboxAccountId) {
@@ -14096,6 +14349,7 @@ async function processConversationTickJob(job: OutreachJob) {
   }
 
   if (scheduledCount > 0) {
+    await maybeQueueScheduledDeliverabilityProbe(run);
     await updateOutreachRun(run.id, {
       metrics: {
         ...run.metrics,
@@ -14150,6 +14404,19 @@ async function processAnalyzeRunJob(job: OutreachJob) {
       : null;
   const senderHealthGate = senderHealthState?.gate ?? { row: null, blockers: [], pending: [] };
   if (senderHealthGate.blockers.length) {
+    const failover = await autoFailoverRunSender({
+      run,
+      reason: "sender_health_gate",
+      summary: "Current sender failed health checks and the system attempted to switch to the healthiest standby sender.",
+    });
+    if (failover.switched) {
+      await enqueueOutreachJob({
+        runId: run.id,
+        jobType: "dispatch_messages",
+        executeAfter: nowIso(),
+      });
+      return;
+    }
     const pauseReason = `Auto-paused due to sender health: ${describeSenderHealthIssues(senderHealthGate.blockers)}.`;
     await updateOutreachRun(run.id, {
       status: "paused",

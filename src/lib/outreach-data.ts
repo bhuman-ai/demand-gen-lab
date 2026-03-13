@@ -2125,6 +2125,7 @@ export async function updateOutreachRun(
   patch: Partial<
     Pick<
       OutreachRun,
+      | "accountId"
       | "status"
       | "dailyCap"
       | "hourlyCap"
@@ -2144,6 +2145,7 @@ export async function updateOutreachRun(
   const supabase = getSupabaseAdmin();
   if (supabase) {
     const update: Record<string, unknown> = { updated_at: now };
+    if (patch.accountId !== undefined) update.account_id = patch.accountId;
     if (patch.status) update.status = patch.status;
     if (patch.dailyCap !== undefined) update.daily_cap = patch.dailyCap;
     if (patch.hourlyCap !== undefined) update.hourly_cap = patch.hourlyCap;

@@ -2,7 +2,7 @@ import * as React from "react";
 import { cn } from "@/lib/utils";
 
 export function PageIntro({
-  eyebrow: _eyebrow,
+  eyebrow,
   title,
   description,
   actions,
@@ -10,12 +10,14 @@ export function PageIntro({
   className,
 }: {
   eyebrow?: string;
-  title: string;
+  title: React.ReactNode;
   description?: string;
   actions?: React.ReactNode;
   aside?: React.ReactNode;
   className?: string;
 }) {
+  void eyebrow;
+
   return (
     <section className={cn("space-y-3", className)}>
       <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">

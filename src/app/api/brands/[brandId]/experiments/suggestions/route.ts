@@ -9,6 +9,9 @@ import {
   updateExperimentSuggestion,
 } from "@/lib/experiment-suggestion-data";
 
+const MIN_READY_SUGGESTIONS = 3;
+const MAX_READY_SUGGESTIONS = 6;
+
 type StructuredSuggestion = {
   name: string;
   audience: string;
@@ -32,6 +35,11 @@ type RoleplayEvaluation = {
   strengths: string[];
   risks: string[];
 };
+
+type ReviewCandidate = StructuredSuggestion &
+  RoleplayEvaluation & {
+    accepted: boolean;
+  };
 
 function asRecord(value: unknown): Record<string, unknown> {
   if (value && typeof value === "object" && !Array.isArray(value)) {
@@ -375,7 +383,7 @@ export async function POST(request: Request, context: { params: Promise<{ brandI
     const refresh = Boolean(body.refresh);
 
     const existing = await listExperimentSuggestions(brandId, "suggested");
-    if (!refresh && existing.length >= 4) {
+    if (!refresh && existing.length >= MIN_READY_SUGGESTIONS) {
       return NextResponse.json({ suggestions: existing, mode: "cached" });
     }
     if (refresh && existing.length) {
@@ -436,7 +444,7 @@ export async function POST(request: Request, context: { params: Promise<{ brandI
     }
 
     const evaluationsByIndex = new Map(roleplayEvaluations.map((row) => [row.index, row]));
-    const screened = ai
+    const rankedCandidates = ai
       .map((suggestion, index) => {
         const evaluation = evaluationsByIndex.get(index);
         if (!evaluation) return null;
@@ -447,15 +455,40 @@ export async function POST(request: Request, context: { params: Promise<{ brandI
         };
       })
       .filter((row): row is { suggestion: StructuredSuggestion; evaluation: RoleplayEvaluation; rankScore: number } => Boolean(row))
-      .filter((row) => passesRoleplayGate(row.evaluation))
-      .sort((a, b) => b.rankScore - a.rankScore)
-      .slice(0, 6)
+      .sort((a, b) => b.rankScore - a.rankScore);
+
+    const preferred = rankedCandidates.filter((row) => passesRoleplayGate(row.evaluation));
+    const selected = [...preferred];
+
+    if (selected.length < MIN_READY_SUGGESTIONS) {
+      for (const candidate of rankedCandidates) {
+        if (selected.includes(candidate)) continue;
+        selected.push(candidate);
+        if (selected.length >= MIN_READY_SUGGESTIONS) {
+          break;
+        }
+      }
+    }
+
+    const screened = selected
+      .slice(0, MAX_READY_SUGGESTIONS)
       .map((row) => ({
         ...row.suggestion,
         rationale: sanitizeAiText(
           [row.suggestion.rationale, row.evaluation.summary].filter(Boolean).join(" ")
         ),
       }));
+
+    const acceptedKeys = new Set(
+      screened.map((row) => `${row.name.toLowerCase()}::${row.audience.toLowerCase()}::${row.offer.toLowerCase()}`)
+    );
+    const reviewCandidates: ReviewCandidate[] = rankedCandidates.slice(0, MAX_READY_SUGGESTIONS).map((row) => ({
+      ...row.suggestion,
+      ...row.evaluation,
+      accepted: acceptedKeys.has(
+        `${row.suggestion.name.toLowerCase()}::${row.suggestion.audience.toLowerCase()}::${row.suggestion.offer.toLowerCase()}`
+      ),
+    }));
 
     if (!screened.length) {
       const topRejected = roleplayEvaluations
@@ -520,6 +553,7 @@ export async function POST(request: Request, context: { params: Promise<{ brandI
       screened: ai.length,
       kept: screened.length,
       created: created.length,
+      reviewCandidates,
     });
   } catch (error) {
     return NextResponse.json(

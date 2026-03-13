@@ -2,18 +2,24 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Lightbulb, RefreshCcw } from "lucide-react";
+import { Lightbulb, RefreshCcw, Sparkles, UserRound, WandSparkles } from "lucide-react";
 import {
   applyExperimentSuggestion,
   dismissExperimentSuggestion,
   fetchExperimentSuggestions,
-  generateExperimentSuggestions,
+  generateExperimentSuggestionsDetailed,
 } from "@/lib/client-api";
 import { trackEvent } from "@/lib/telemetry-client";
 import { cn } from "@/lib/utils";
-import type { ExperimentSuggestionRecord } from "@/lib/factory-types";
+import type {
+  ExperimentSuggestionGenerationResult,
+  ExperimentSuggestionRecord,
+  ExperimentSuggestionReviewCandidate,
+} from "@/lib/factory-types";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+
+const MIN_READY_SUGGESTIONS = 3;
 
 function pickLine(value: string, label: string) {
   const regex = new RegExp(`^${label}:\\s*(.+)$`, "im");
@@ -70,11 +76,92 @@ function SuggestionField({
   );
 }
 
+function suggestionErrorMessage(error: unknown, fallback: string) {
+  const message = error instanceof Error ? error.message : fallback;
+  if (message === "Failed to fetch") {
+    return "Could not reach the suggestion service. Retry in a moment.";
+  }
+  return message || fallback;
+}
+
+function selectPlaybackCandidates(candidates: ExperimentSuggestionReviewCandidate[]) {
+  const shortlisted = candidates.filter((candidate) => candidate.accepted).slice(0, 2);
+  const pushback =
+    candidates.find((candidate) => !candidate.accepted) ??
+    candidates.find((candidate) => candidate.decision !== "promote") ??
+    null;
+
+  const ordered = [...shortlisted];
+  if (pushback) {
+    ordered.push(pushback);
+  }
+  for (const candidate of candidates) {
+    if (ordered.some((row) => row.index === candidate.index)) continue;
+    ordered.push(candidate);
+    if (ordered.length >= 4) break;
+  }
+  return ordered.slice(0, 4);
+}
+
+function statusBadgeVariant(candidate: ExperimentSuggestionReviewCandidate) {
+  if (candidate.accepted) return "success";
+  if (candidate.decision === "revise") return "accent";
+  return "danger";
+}
+
+function statusLabel(candidate: ExperimentSuggestionReviewCandidate) {
+  if (candidate.accepted) return "Shortlisted";
+  if (candidate.decision === "revise") return "Needs rewrite";
+  return "Rejected";
+}
+
+function prospectPushback(candidate: ExperimentSuggestionReviewCandidate) {
+  return (
+    candidate.risks[0] ||
+    candidate.summary ||
+    "Not interested. This does not feel specific enough to stop the scroll."
+  );
+}
+
+function strategistResponse(candidate: ExperimentSuggestionReviewCandidate) {
+  if (candidate.accepted) {
+    return candidate.strengths[0] || "Keep this one. The angle is specific enough to earn a reply.";
+  }
+  if (candidate.decision === "revise") {
+    return candidate.strengths[0] || "The core idea works, but the ask still needs to tighten.";
+  }
+  return "Drop it. The prospect pushback is too strong for first-touch outbound.";
+}
+
+function reviewNarrative(candidate: ExperimentSuggestionReviewCandidate) {
+  return [
+    {
+      role: "strategist" as const,
+      label: "Strategist",
+      message: candidate.name,
+    },
+    {
+      role: "prospect" as const,
+      label: "Prospect roleplay",
+      message: prospectPushback(candidate),
+    },
+    {
+      role: "strategist" as const,
+      label: statusLabel(candidate),
+      message: strategistResponse(candidate),
+    },
+  ];
+}
+
 export default function ExperimentSuggestionsPanel({ brandId }: { brandId: string }) {
   const router = useRouter();
   const [suggestions, setSuggestions] = useState<ExperimentSuggestionRecord[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [generating, setGenerating] = useState(false);
+  const [bootstrapping, setBootstrapping] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [playbackActive, setPlaybackActive] = useState(false);
+  const [playbackIndex, setPlaybackIndex] = useState(0);
+  const [playbackCandidates, setPlaybackCandidates] = useState<ExperimentSuggestionReviewCandidate[]>([]);
+  const [prefersReducedMotion, setPrefersReducedMotion] = useState(false);
   const [busyId, setBusyId] = useState("");
   const [error, setError] = useState("");
 
@@ -89,34 +176,104 @@ export default function ExperimentSuggestionsPanel({ brandId }: { brandId: strin
     () => suggestions.filter((row) => isRenderableSuggestion(row)),
     [suggestions]
   );
+  const readySuggestionCount = renderableSuggestions.length;
+  const hasRenderableSuggestions = readySuggestionCount > 0;
+  const isPreparing = bootstrapping || (refreshing && !hasRenderableSuggestions) || playbackActive;
+  const activePlaybackCandidate =
+    playbackCandidates[Math.min(playbackIndex, Math.max(0, playbackCandidates.length - 1))] ?? null;
+  const playbackNarrative = activePlaybackCandidate ? reviewNarrative(activePlaybackCandidate) : [];
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const media = window.matchMedia("(prefers-reduced-motion: reduce)");
+    const update = () => setPrefersReducedMotion(media.matches);
+    update();
+    media.addEventListener("change", update);
+    return () => media.removeEventListener("change", update);
+  }, []);
+
+  useEffect(() => {
+    if (!playbackActive || !playbackCandidates.length) return;
+
+    setPlaybackIndex(0);
+
+    if (prefersReducedMotion) {
+      const timeout = window.setTimeout(() => {
+        setPlaybackActive(false);
+      }, 900);
+      return () => window.clearTimeout(timeout);
+    }
+
+    let nextIndex = 0;
+    const interval = window.setInterval(() => {
+      nextIndex += 1;
+      if (nextIndex < playbackCandidates.length) {
+        setPlaybackIndex(nextIndex);
+        return;
+      }
+      window.clearInterval(interval);
+      window.setTimeout(() => {
+        setPlaybackActive(false);
+      }, 720);
+    }, 1400);
+
+    return () => window.clearInterval(interval);
+  }, [playbackActive, playbackCandidates, prefersReducedMotion]);
+
+  const startPlayback = (result: ExperimentSuggestionGenerationResult) => {
+    const candidates = selectPlaybackCandidates(result.reviewCandidates ?? []);
+    if (!candidates.length) {
+      setPlaybackCandidates([]);
+      setPlaybackIndex(0);
+      setPlaybackActive(false);
+      return;
+    }
+
+    setPlaybackCandidates(candidates);
+    setPlaybackIndex(0);
+    setPlaybackActive(true);
+  };
+
+  const regenerateSuggestions = async (refresh = true) => {
+    setRefreshing(true);
+    setError("");
+    try {
+      const result = await generateExperimentSuggestionsDetailed(brandId, refresh);
+      setSuggestions(result.suggestions);
+      startPlayback(result);
+      return result.suggestions;
+    } catch (err) {
+      setError(suggestionErrorMessage(err, "Failed to generate suggestions"));
+      return [];
+    } finally {
+      setRefreshing(false);
+    }
+  };
 
   useEffect(() => {
     let mounted = true;
-    setLoading(true);
+    setBootstrapping(true);
     setError("");
 
     void refresh()
       .then(async (rows) => {
         if (!mounted) return;
-        if (rows.some((row) => isRenderableSuggestion(row))) return;
-        setGenerating(true);
+        if (rows.filter((row) => isRenderableSuggestion(row)).length >= MIN_READY_SUGGESTIONS) return;
         try {
           const generated = await generateExperimentSuggestions(brandId);
           if (!mounted) return;
           setSuggestions(generated);
         } catch (err) {
           if (!mounted) return;
-          setError(err instanceof Error ? err.message : "Failed to generate suggestions");
-        } finally {
-          if (mounted) setGenerating(false);
+          setError(suggestionErrorMessage(err, "Failed to generate suggestions"));
         }
       })
       .catch((err: unknown) => {
         if (!mounted) return;
-        setError(err instanceof Error ? err.message : "Failed to load suggestions");
+        setError(suggestionErrorMessage(err, "Failed to load suggestions"));
       })
       .finally(() => {
-        if (mounted) setLoading(false);
+        if (mounted) setBootstrapping(false);
       });
 
     return () => {
@@ -141,37 +298,167 @@ export default function ExperimentSuggestionsPanel({ brandId }: { brandId: strin
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <Badge variant={renderableSuggestions.length ? "accent" : "muted"}>
-              {renderableSuggestions.length} ready
+            <Badge variant={hasRenderableSuggestions ? "accent" : "muted"}>
+              {readySuggestionCount} ready
             </Badge>
-            <Button
-              type="button"
-              variant="outline"
-              disabled={generating}
-              onClick={async () => {
-                setGenerating(true);
-                setError("");
-                try {
-                  const generated = await generateExperimentSuggestions(brandId, true);
-                  setSuggestions(generated);
-                } catch (err) {
-                  setError(err instanceof Error ? err.message : "Failed to generate suggestions");
-                } finally {
-                  setGenerating(false);
-                }
-              }}
-            >
-              <RefreshCcw className={`h-4 w-4 ${generating ? "animate-spin" : ""}`} />
-              {generating ? "Refreshing..." : "Refresh ideas"}
-            </Button>
+            {!isPreparing ? (
+              <Button
+                type="button"
+                variant="outline"
+                disabled={refreshing}
+                onClick={async () => {
+                  await regenerateSuggestions(true);
+                }}
+              >
+                <RefreshCcw className={`h-4 w-4 ${refreshing ? "animate-spin" : ""}`} />
+                {refreshing ? "Refreshing..." : "Refresh ideas"}
+              </Button>
+            ) : null}
           </div>
         </div>
       </section>
 
-      {loading ? <div className="text-sm text-[color:var(--muted-foreground)]">Loading suggestions...</div> : null}
       {error ? <div className="text-sm text-[color:var(--danger)]">{error}</div> : null}
 
-      {renderableSuggestions.length ? (
+      {isPreparing ? (
+        playbackCandidates.length && activePlaybackCandidate ? (
+          <section className="grid gap-4 rounded-[22px] border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-4 md:p-5 xl:grid-cols-[minmax(280px,0.88fr)_minmax(0,1.12fr)]">
+            <div className="rounded-[18px] border border-[color:var(--border)] bg-[color:var(--surface)] p-4">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-[11px] font-medium uppercase tracking-[0.2em] text-[color:var(--muted-foreground)]">
+                    Idea queue
+                  </p>
+                  <h3 className="mt-1 text-sm font-semibold text-[color:var(--foreground)]">
+                    Reviewing real drafts
+                  </h3>
+                </div>
+                <Badge variant="muted">{playbackIndex + 1} / {playbackCandidates.length}</Badge>
+              </div>
+
+              <div className="mt-4 space-y-2">
+                {playbackCandidates.map((candidate, index) => {
+                  const active = index === playbackIndex;
+                  return (
+                    <div
+                      key={`${candidate.index}:${candidate.name}`}
+                      className={cn(
+                        "rounded-[16px] border px-3 py-3 transition-all duration-300 motion-reduce:transition-none",
+                        active
+                          ? "border-[color:var(--accent-border)] bg-[color:var(--accent-soft)] shadow-[0_12px_28px_-20px_color-mix(in_srgb,var(--accent)_35%,transparent)]"
+                          : "border-[color:var(--border)] bg-[color:var(--surface-muted)] opacity-70"
+                      )}
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <p className="text-sm font-semibold leading-5 text-[color:var(--foreground)]">{candidate.name}</p>
+                          <p className="mt-1 line-clamp-2 text-xs leading-5 text-[color:var(--muted-foreground)]">
+                            {candidate.audience}
+                          </p>
+                        </div>
+                        <Badge variant={statusBadgeVariant(candidate)}>{statusLabel(candidate)}</Badge>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div className="rounded-[18px] border border-[color:var(--border)] bg-[color:var(--surface)] p-4">
+              <div className="flex flex-wrap items-center gap-2">
+                <Badge variant={statusBadgeVariant(activePlaybackCandidate)}>{statusLabel(activePlaybackCandidate)}</Badge>
+                <Badge variant="muted">Reply {activePlaybackCandidate.replyLikelihood}%</Badge>
+                <Badge variant="muted">Positive {activePlaybackCandidate.positiveReplyLikelihood}%</Badge>
+                <Badge variant="muted">Risk {activePlaybackCandidate.unsubscribeRisk}%</Badge>
+              </div>
+
+              <div className="mt-4 space-y-3">
+                {playbackNarrative.map((entry, index) => (
+                  <div
+                    key={`${activePlaybackCandidate.index}:${entry.label}:${index}`}
+                    className={cn(
+                      "flex transition-all duration-300 motion-reduce:transition-none",
+                      entry.role === "prospect" ? "justify-start" : "justify-end",
+                      index === playbackNarrative.length - 1 ? "motion-safe:animate-pulse" : ""
+                    )}
+                  >
+                    <div
+                      className={cn(
+                        "max-w-[88%] rounded-[18px] px-4 py-3 shadow-[0_12px_32px_-24px_color-mix(in_srgb,var(--shadow)_45%,transparent)]",
+                        entry.role === "prospect"
+                          ? "border border-[color:var(--danger-border)] bg-[color:var(--danger-soft)] text-[color:var(--danger)]"
+                          : "border border-[color:var(--accent-border)] bg-[color:var(--accent-soft)] text-[color:var(--foreground)]"
+                      )}
+                    >
+                      <div className="mb-2 flex items-center gap-2 text-[11px] font-medium uppercase tracking-[0.16em]">
+                        {entry.role === "prospect" ? <UserRound className="h-3.5 w-3.5" /> : <WandSparkles className="h-3.5 w-3.5" />}
+                        {entry.label}
+                      </div>
+                      <p className="text-sm leading-6">{entry.message}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              <div className="mt-4 rounded-[16px] border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-4 py-3">
+                <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-[color:var(--muted-foreground)]">
+                  First-line preview
+                </p>
+                <p className="mt-2 text-sm leading-6 text-[color:var(--foreground)]">
+                  {activePlaybackCandidate.emailPreview}
+                </p>
+              </div>
+            </div>
+          </section>
+        ) : (
+          <section className="rounded-[20px] border border-dashed border-[color:var(--border)] bg-[color:var(--surface-muted)] px-5 py-14">
+            <div className="mx-auto grid max-w-4xl gap-4 xl:grid-cols-[minmax(240px,0.75fr)_minmax(0,1.25fr)]">
+              <div className="rounded-[18px] border border-[color:var(--border)] bg-[color:var(--surface)] p-4">
+                <p className="text-[11px] font-medium uppercase tracking-[0.22em] text-[color:var(--muted-foreground)]">
+                  Pipeline
+                </p>
+                <div className="mt-4 space-y-3">
+                  {[
+                    "Drafting audience + offer pairs",
+                    "Pressure-testing the first-line hook",
+                    "Simulating prospect replies and objections",
+                  ].map((label, index) => (
+                    <div key={label} className="flex items-center gap-3">
+                      <div className="flex h-8 w-8 items-center justify-center rounded-full border border-[color:var(--border)] bg-[color:var(--surface-muted)]">
+                        {index === 2 ? (
+                          <Sparkles className="h-4 w-4 text-[color:var(--muted-foreground)]" />
+                        ) : (
+                          <RefreshCcw className="h-4 w-4 animate-spin text-[color:var(--muted-foreground)]" />
+                        )}
+                      </div>
+                      <div className="text-sm text-[color:var(--foreground)]">{label}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="rounded-[18px] border border-[color:var(--border)] bg-[color:var(--surface)] p-4">
+                <div className="flex items-center gap-2 text-[11px] font-medium uppercase tracking-[0.18em] text-[color:var(--muted-foreground)]">
+                  <WandSparkles className="h-3.5 w-3.5" />
+                  Live review
+                </div>
+                <div className="mt-4 space-y-3">
+                  <div className="flex justify-end">
+                    <div className="max-w-[84%] rounded-[18px] border border-[color:var(--accent-border)] bg-[color:var(--accent-soft)] px-4 py-3 text-sm leading-6 text-[color:var(--foreground)]">
+                      Building the strongest experiment angles from this brand profile.
+                    </div>
+                  </div>
+                  <div className="flex justify-start">
+                    <div className="max-w-[84%] rounded-[18px] border border-[color:var(--danger-border)] bg-[color:var(--danger-soft)] px-4 py-3 text-sm leading-6 text-[color:var(--danger)]">
+                      Stress-testing whether the prospect would ignore it, push back, or actually reply.
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </section>
+        )
+      ) : hasRenderableSuggestions ? (
         <div className="space-y-3">
           {renderableSuggestions.map((suggestion, index) => {
             const detail = suggestionDetails(suggestion);
@@ -200,7 +487,7 @@ export default function ExperimentSuggestionsPanel({ brandId }: { brandId: strin
                   <div className="flex flex-wrap gap-2 xl:justify-end">
                     <Button
                       type="button"
-                      disabled={Boolean(busyId) || generating}
+                      disabled={Boolean(busyId) || refreshing}
                       onClick={async () => {
                         setBusyId(suggestion.id);
                         setError("");
@@ -224,7 +511,7 @@ export default function ExperimentSuggestionsPanel({ brandId }: { brandId: strin
                     <Button
                       type="button"
                       variant="outline"
-                      disabled={Boolean(busyId) || generating}
+                      disabled={Boolean(busyId) || refreshing}
                       onClick={async () => {
                         setBusyId(suggestion.id);
                         setError("");
@@ -275,22 +562,13 @@ export default function ExperimentSuggestionsPanel({ brandId }: { brandId: strin
             <Button
               type="button"
               variant="outline"
-              disabled={generating}
+              disabled={refreshing}
               onClick={async () => {
-                setGenerating(true);
-                setError("");
-                try {
-                  const generated = await generateExperimentSuggestions(brandId, true);
-                  setSuggestions(generated);
-                } catch (err) {
-                  setError(err instanceof Error ? err.message : "Failed to generate suggestions");
-                } finally {
-                  setGenerating(false);
-                }
+                await regenerateSuggestions(true);
               }}
             >
-              <RefreshCcw className={`h-4 w-4 ${generating ? "animate-spin" : ""}`} />
-              {generating ? "Generating..." : "Generate suggestions"}
+              <RefreshCcw className={`h-4 w-4 ${refreshing ? "animate-spin" : ""}`} />
+              Generate suggestions
             </Button>
           </div>
         </section>

@@ -13,6 +13,7 @@ import type {
   Experiment,
   ExperimentListItem,
   ExperimentRecord,
+  ExperimentSuggestionGenerationResult,
   ExperimentSuggestionRecord,
   Hypothesis,
   ObjectiveData,
@@ -172,13 +173,25 @@ export async function fetchExperimentSuggestions(brandId: string) {
 }
 
 export async function generateExperimentSuggestions(brandId: string, refresh = false) {
+  const result = await generateExperimentSuggestionsDetailed(brandId, refresh);
+  return result.suggestions;
+}
+
+export async function generateExperimentSuggestionsDetailed(brandId: string, refresh = false) {
   const response = await fetch(`/api/brands/${brandId}/experiments/suggestions`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ refresh }),
   });
   const data = await readJson(response);
-  return (Array.isArray(data?.suggestions) ? data.suggestions : []) as ExperimentSuggestionRecord[];
+  return {
+    suggestions: (Array.isArray(data?.suggestions) ? data.suggestions : []) as ExperimentSuggestionRecord[],
+    mode: typeof data?.mode === "string" ? data.mode : undefined,
+    screened: typeof data?.screened === "number" ? data.screened : undefined,
+    kept: typeof data?.kept === "number" ? data.kept : undefined,
+    created: typeof data?.created === "number" ? data.created : undefined,
+    reviewCandidates: Array.isArray(data?.reviewCandidates) ? data.reviewCandidates : [],
+  } as ExperimentSuggestionGenerationResult;
 }
 
 export async function applyExperimentSuggestion(brandId: string, suggestionId: string) {

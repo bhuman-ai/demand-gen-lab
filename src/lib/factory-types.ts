@@ -183,6 +183,37 @@ export type ExperimentSuggestionRecord = {
   updatedAt: string;
 };
 
+export type ExperimentSuggestionReviewCandidate = {
+  index: number;
+  name: string;
+  audience: string;
+  trigger: string;
+  offer: string;
+  cta: string;
+  emailPreview: string;
+  successTarget: string;
+  rationale: string;
+  decision: "promote" | "revise" | "reject";
+  summary: string;
+  strengths: string[];
+  risks: string[];
+  score: number;
+  openLikelihood: number;
+  replyLikelihood: number;
+  positiveReplyLikelihood: number;
+  unsubscribeRisk: number;
+  accepted: boolean;
+};
+
+export type ExperimentSuggestionGenerationResult = {
+  suggestions: ExperimentSuggestionRecord[];
+  mode?: string;
+  screened?: number;
+  kept?: number;
+  created?: number;
+  reviewCandidates?: ExperimentSuggestionReviewCandidate[];
+};
+
 export type ScaleCampaignStatus =
   | "draft"
   | "active"

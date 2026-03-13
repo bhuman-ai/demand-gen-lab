@@ -1,0 +1,67 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e3]:
+    - complementary [ref=e4]:
+      - link "Factory Brand Command" [ref=e5] [cursor=pointer]:
+        - /url: /
+        - generic [ref=e6]: Factory
+        - generic [ref=e7]: Brand Command
+      - navigation [ref=e8]:
+        - link "Experiments" [ref=e9] [cursor=pointer]:
+          - /url: /brands/brand_mlg68b9l/experiments
+          - img [ref=e10]
+          - text: Experiments
+        - link "Campaigns" [ref=e14] [cursor=pointer]:
+          - /url: /brands/brand_mlg68b9l/campaigns
+          - img [ref=e15]
+          - text: Campaigns
+        - link "Network" [ref=e17] [cursor=pointer]:
+          - /url: /brands/brand_mlg68b9l/network
+          - img [ref=e18]
+          - text: Network
+        - link "Leads" [ref=e23] [cursor=pointer]:
+          - /url: /brands/brand_mlg68b9l/leads
+          - img [ref=e24]
+          - text: Leads
+        - link "Inbox" [ref=e27] [cursor=pointer]:
+          - /url: /brands/brand_mlg68b9l/inbox
+          - img [ref=e28]
+          - text: Inbox
+      - generic [ref=e31]:
+        - generic [ref=e32]: Tools
+        - navigation [ref=e33]:
+          - link "Settings" [ref=e34] [cursor=pointer]:
+            - /url: /settings/outreach
+            - img [ref=e35]
+            - text: Settings
+          - link "Logic" [ref=e38] [cursor=pointer]:
+            - /url: /logic
+            - img [ref=e39]
+            - text: Logic
+          - link "Doctor" [ref=e41] [cursor=pointer]:
+            - /url: /doctor
+            - img [ref=e42]
+            - text: Doctor
+    - main [ref=e44]:
+      - generic [ref=e46]:
+        - generic [ref=e47]:
+          - generic [ref=e49]:
+            - combobox [ref=e50]:
+              - option "No brands" [selected]
+            - button "New Brand" [ref=e51]
+          - generic [ref=e52]: Factory > Brand > Experiments > Experiment
+          - heading "Experiment" [level=1] [ref=e53]
+        - generic [ref=e54]:
+          - link "Settings" [ref=e55] [cursor=pointer]:
+            - /url: /settings/outreach
+            - img [ref=e56]
+            - text: Settings
+          - generic [ref=e59]:
+            - button "Light theme" [ref=e60]:
+              - img [ref=e61]
+            - button "Dark theme" [ref=e67]:
+              - img [ref=e68]
+            - button "System theme" [ref=e70]:
+              - img [ref=e71]
+      - generic [ref=e83]: Loading experiment...
+  - button "Open Next.js Dev Tools" [ref=e89] [cursor=pointer]:
+    - img [ref=e90]

@@ -1,0 +1,289 @@
+- generic [ref=e1]:
+  - generic [ref=e3]:
+    - complementary [ref=e4]:
+      - link "Factory Brand Command" [ref=e5] [cursor=pointer]:
+        - /url: /
+        - generic [ref=e6]: Factory
+        - generic [ref=e7]: Brand Command
+      - navigation [ref=e8]:
+        - link "Experiments" [ref=e9] [cursor=pointer]:
+          - /url: /brands/brand_mlg68b9l/experiments
+          - img [ref=e10]
+          - text: Experiments
+        - link "Campaigns" [ref=e14] [cursor=pointer]:
+          - /url: /brands/brand_mlg68b9l/campaigns
+          - img [ref=e15]
+          - text: Campaigns
+        - link "Network" [ref=e17] [cursor=pointer]:
+          - /url: /brands/brand_mlg68b9l/network
+          - img [ref=e18]
+          - text: Network
+        - link "Leads" [ref=e23] [cursor=pointer]:
+          - /url: /brands/brand_mlg68b9l/leads
+          - img [ref=e24]
+          - text: Leads
+        - link "Inbox" [ref=e27] [cursor=pointer]:
+          - /url: /brands/brand_mlg68b9l/inbox
+          - img [ref=e28]
+          - text: Inbox
+      - generic [ref=e31]:
+        - generic [ref=e32]: Tools
+        - navigation [ref=e33]:
+          - link "Settings" [ref=e34] [cursor=pointer]:
+            - /url: /settings/outreach
+            - img [ref=e35]
+            - text: Settings
+          - link "Logic" [ref=e38] [cursor=pointer]:
+            - /url: /logic
+            - img [ref=e39]
+            - text: Logic
+          - link "Doctor" [ref=e41] [cursor=pointer]:
+            - /url: /doctor
+            - img [ref=e42]
+            - text: Doctor
+    - main [ref=e44]:
+      - generic [ref=e46]:
+        - generic [ref=e47]:
+          - combobox [ref=e50]:
+            - option "BHuman | AI personalized videos at scale" [selected]
+          - generic [ref=e52]: Factory > Brand > Experiments > Experiment
+          - heading "Experiment" [level=1] [ref=e53]
+        - generic [ref=e54]:
+          - link "Settings" [ref=e55] [cursor=pointer]:
+            - /url: /settings/outreach
+            - img [ref=e56]
+            - text: Settings
+          - generic [ref=e59]:
+            - button "Light theme" [ref=e60]:
+              - img [ref=e61]
+            - button "Dark theme" [ref=e67]:
+              - img [ref=e68]
+            - button "System theme" [ref=e70]:
+              - img [ref=e71]
+      - generic [ref=e83]:
+        - generic [ref=e85]:
+          - generic [ref=e86]:
+            - heading "BHuman | AI personalized videos at scale · Abandoned demo signup → 30-sec personal video follow-up" [level=3] [ref=e87]
+            - paragraph [ref=e88]: "Stage-based flow: Setup -> Prospects -> Messaging -> Launch."
+          - generic [ref=e89]:
+            - generic [ref=e90]: "Status: completed"
+            - generic [ref=e91]: "Sent: 0"
+            - generic [ref=e92]: "Replies: 0"
+            - generic [ref=e93]: "Positive: 0"
+        - generic [ref=e94]:
+          - generic [ref=e95]:
+            - heading "Workflow" [level=3] [ref=e96]
+            - paragraph [ref=e97]: Only current stage content is shown below.
+          - generic [ref=e98]:
+            - generic [ref=e99]:
+              - generic [ref=e100]: 4/4 stages complete
+              - generic [ref=e101]: 100% complete
+            - generic [ref=e102]:
+              - button "0. Setup done" [ref=e103]:
+                - generic [ref=e104]:
+                  - generic [ref=e105]: 0. Setup
+                  - generic [ref=e106]: done
+              - button "1. Prospects done" [active] [ref=e925]:
+                - generic [ref=e108]:
+                  - generic [ref=e109]: 1. Prospects
+                  - generic [ref=e110]: done
+              - button "2. Messaging done" [ref=e111]:
+                - generic [ref=e112]:
+                  - generic [ref=e113]: 2. Messaging
+                  - generic [ref=e114]: done
+              - button "3. Launch done" [ref=e115]:
+                - generic [ref=e116]:
+                  - generic [ref=e117]: 3. Launch
+                  - generic [ref=e118]: done
+        - generic [ref=e926]:
+          - generic [ref=e927]:
+            - heading "Stage 1 · Prospects" [level=3] [ref=e928]
+            - paragraph [ref=e929]: Reach 20 qualified leads with real work emails to pass this gate.
+          - generic [ref=e930]:
+            - generic [ref=e931]:
+              - generic [ref=e932]:
+                - generic [ref=e933]:
+                  - generic [ref=e934]: Prospect Gate
+                  - generic [ref=e935]: Only leads with real work emails count.
+                - generic [ref=e936]: Passed
+              - generic [ref=e938]:
+                - generic [ref=e941]: 100%
+                - generic [ref=e942]:
+                  - generic [ref=e943]: 28/20 verified leads
+                  - generic [ref=e944]: 0 remaining to unlock Messaging
+              - generic [ref=e945]:
+                - generic [ref=e946]:
+                  - generic [ref=e947]: Valid leads
+                  - generic [ref=e948]: "28"
+                - generic [ref=e949]:
+                  - generic [ref=e950]: Remaining
+                  - generic [ref=e951]: "0"
+                - generic [ref=e952]:
+                  - generic [ref=e953]: Total candidates
+                  - generic [ref=e954]: "28"
+              - generic [ref=e955]:
+                - generic [ref=e956]: "Runs checked: 1"
+                - generic [ref=e957]: "Source owner: expt_bf7ab31d5ac44d91"
+            - generic [ref=e958]:
+              - generic [ref=e959]: Lead Input
+              - generic [ref=e961]:
+                - button "Source Automatically Platform finds and verifies prospects." [ref=e962]:
+                  - generic [ref=e963]: Source Automatically
+                  - generic [ref=e964]: Platform finds and verifies prospects.
+                - button "Import CSV Upload your own leads with identity data." [ref=e965]:
+                  - generic [ref=e966]: Import CSV
+                  - generic [ref=e967]: Upload your own leads with identity data.
+              - generic [ref=e968]: Pick one path first. You can switch at any time.
+            - generic [ref=e969]:
+              - generic [ref=e970]:
+                - generic [ref=e971]:
+                  - generic [ref=e972]: Auto-source prospects
+                  - generic [ref=e973]: Runs repeated attempts until quality target is met or a stop condition is reached.
+                - button "Source Prospects" [ref=e974]:
+                  - img [ref=e975]
+                  - text: Source Prospects
+              - generic [ref=e980]: "Prospect validation passed automatically: 28/20 quality leads with real emails."
+            - generic [ref=e981]:
+              - generic [ref=e982]:
+                - generic [ref=e983]: Current Leads
+                - generic [ref=e984]:
+                  - generic [ref=e985]: "Valid in preview: 20"
+                  - generic [ref=e986]: "Missing email: 0"
+                  - generic [ref=e987]: Showing up to 20 rows
+              - generic [ref=e988]:
+                - generic [ref=e989]:
+                  - generic [ref=e990]:
+                    - generic [ref=e991]: Alex Bramos
+                    - generic [ref=e992]: Valid
+                  - generic [ref=e993]: alex.bramos@clio.com
+                  - generic [ref=e994]: Senior Demand Generation Manager at Clio - Cloud-Based Legal Technology
+                - generic [ref=e995]:
+                  - generic [ref=e996]:
+                    - generic [ref=e997]: Alex Mickle
+                    - generic [ref=e998]: Valid
+                  - generic [ref=e999]: alex.mickle@getaccept.com
+                  - generic [ref=e1000]: Director, Existing Sales at GetAccept
+                - generic [ref=e1001]:
+                  - generic [ref=e1002]:
+                    - generic [ref=e1003]: Anne-Marie Lessard
+                    - generic [ref=e1004]: Valid
+                  - generic [ref=e1005]: anne-marie@247.ai
+                  - generic [ref=e1006]: Demand Generation Manager at [24]7.ai
+                - generic [ref=e1007]:
+                  - generic [ref=e1008]:
+                    - generic [ref=e1009]: Ashley Duffy
+                    - generic [ref=e1010]: Valid
+                  - generic [ref=e1011]: ashley.duffy@clio.com
+                  - generic [ref=e1012]: Senior Demand Generation Manager, Mid-Market at Clio - Cloud-Based Legal Technology
+                - generic [ref=e1013]:
+                  - generic [ref=e1014]:
+                    - generic [ref=e1015]: Calle Svan
+                    - generic [ref=e1016]: Valid
+                  - generic [ref=e1017]: calle.svan@getaccept.com
+                  - generic [ref=e1018]: Demand Generation Manager at GetAccept
+                - generic [ref=e1019]:
+                  - generic [ref=e1020]:
+                    - generic [ref=e1021]: Christofer Rasmusson
+                    - generic [ref=e1022]: Valid
+                  - generic [ref=e1023]: christofer.rasmusson@getaccept.com
+                  - generic [ref=e1024]: Product Support Professional at GetAccept
+                - generic [ref=e1025]:
+                  - generic [ref=e1026]:
+                    - generic [ref=e1027]: Christoffer Kvarnmark
+                    - generic [ref=e1028]: Valid
+                  - generic [ref=e1029]: christoffer.kvarnmark@getaccept.com
+                  - generic [ref=e1030]: Revenue Operations Manager at GetAccept
+                - generic [ref=e1031]:
+                  - generic [ref=e1032]:
+                    - generic [ref=e1033]: Daniel Ostojic
+                    - generic [ref=e1034]: Valid
+                  - generic [ref=e1035]: daniel.ostojic@getaccept.com
+                  - generic [ref=e1036]: GTM Specialist at GetAccept
+                - generic [ref=e1037]:
+                  - generic [ref=e1038]:
+                    - generic [ref=e1039]: Emil Karlsson
+                    - generic [ref=e1040]: Valid
+                  - generic [ref=e1041]: emil.karlsson@getaccept.com
+                  - generic [ref=e1042]: Account Manager at GetAccept
+                - generic [ref=e1043]:
+                  - generic [ref=e1044]:
+                    - generic [ref=e1045]: Erik Persson
+                    - generic [ref=e1046]: Valid
+                  - generic [ref=e1047]: erik.persson@getaccept.com
+                  - generic [ref=e1048]: Head Of Sales Account Management at GetAccept
+                - generic [ref=e1049]:
+                  - generic [ref=e1050]:
+                    - generic [ref=e1051]: Fredric Larsén
+                    - generic [ref=e1052]: Valid
+                  - generic [ref=e1053]: fredric.larsen@getaccept.com
+                  - generic [ref=e1054]: Senior Account Executive Pre-Sales at GetAccept
+                - generic [ref=e1055]:
+                  - generic [ref=e1056]:
+                    - generic [ref=e1057]: Frida Ek
+                    - generic [ref=e1058]: Valid
+                  - generic [ref=e1059]: frida.ek@getaccept.com
+                  - generic [ref=e1060]: Software Engineer at GetAccept
+                - generic [ref=e1061]:
+                  - generic [ref=e1062]:
+                    - generic [ref=e1063]: Ida Oscarsson
+                    - generic [ref=e1064]: Valid
+                  - generic [ref=e1065]: ida.oscarsson@getaccept.com
+                  - generic [ref=e1066]: Head Of Customer Success at GetAccept
+                - generic [ref=e1067]:
+                  - generic [ref=e1068]:
+                    - generic [ref=e1069]: Isac Ljung
+                    - generic [ref=e1070]: Valid
+                  - generic [ref=e1071]: isac.ljung@getaccept.com
+                  - generic [ref=e1072]: Senior Frontend Developer at GetAccept
+                - generic [ref=e1073]:
+                  - generic [ref=e1074]:
+                    - generic [ref=e1075]: Jeanette Stepanchuk
+                    - generic [ref=e1076]: Valid
+                  - generic [ref=e1077]: jeanette@upwind.io
+                  - generic [ref=e1078]: Head Of Demand Generation at Upwind Security
+                - generic [ref=e1079]:
+                  - generic [ref=e1080]:
+                    - generic [ref=e1081]: Jeff West
+                    - generic [ref=e1082]: Valid
+                  - generic [ref=e1083]: jwest@tvscientific.com
+                  - generic [ref=e1084]: Demand Generation Manager at tvScientific
+                - generic [ref=e1085]:
+                  - generic [ref=e1086]:
+                    - generic [ref=e1087]: John De Guzman
+                    - generic [ref=e1088]: Valid
+                  - generic [ref=e1089]: john@zeroriskgrowth.com
+                  - generic [ref=e1090]: Head Of Account Management at Zero Risk Growth
+                - generic [ref=e1091]:
+                  - generic [ref=e1092]:
+                    - generic [ref=e1093]: Jonathan Fournier
+                    - generic [ref=e1094]: Valid
+                  - generic [ref=e1095]: jonathan.fournier@getaccept.com
+                  - generic [ref=e1096]: Enterprise Account Manager at GetAccept
+                - generic [ref=e1097]:
+                  - generic [ref=e1098]:
+                    - generic [ref=e1099]: Kristen Spence
+                    - generic [ref=e1100]: Valid
+                  - generic [ref=e1101]: kristen@rebus.io
+                  - generic [ref=e1102]: Demand Generation Manager at Rebus
+                - generic [ref=e1103]:
+                  - generic [ref=e1104]:
+                    - generic [ref=e1105]: Kyle Hansen
+                    - generic [ref=e1106]: Valid
+                  - generic [ref=e1107]: kyle.hansen@clickup.com
+                  - generic [ref=e1108]: Demand Generation Manager at ClickUp
+            - group [ref=e1109]:
+              - generic "Advanced Diagnostics completed Rejections, verifier failures, run trace" [ref=e1110] [cursor=pointer]:
+                - generic [ref=e1111]:
+                  - text: Advanced Diagnostics
+                  - generic [ref=e1112]: completed
+                - generic [ref=e1113]: Rejections, verifier failures, run trace
+        - generic [ref=e150]:
+          - generic [ref=e151]: Stage 1 · Prospects
+          - generic [ref=e152]:
+            - button "Back" [ref=e261]:
+              - img [ref=e262]
+              - text: Back
+            - button "Next" [ref=e153]:
+              - text: Next
+              - img [ref=e154]
+  - alert [ref=e84]

@@ -347,6 +347,46 @@ function customerIoTrackBaseUrl() {
   return "https://track.customer.io";
 }
 
+function customerIoAppBaseUrl() {
+  const explicit = String(process.env.CUSTOMER_IO_APP_BASE_URL ?? "").trim();
+  if (explicit) return explicit.replace(/\/+$/, "");
+
+  const region = String(process.env.CUSTOMER_IO_REGION ?? "").trim().toLowerCase();
+  if (region === "eu") return "https://api-eu.customer.io/v1";
+
+  return "https://api.customer.io/v1";
+}
+
+function configuredCustomerIoRegion(): "eu" | "us" | "unknown" {
+  const explicitAppBase = String(process.env.CUSTOMER_IO_APP_BASE_URL ?? "").trim().toLowerCase();
+  if (explicitAppBase.includes("api-eu.customer.io")) return "eu";
+  if (explicitAppBase.includes("api.customer.io")) return "us";
+
+  const explicitTrackBase = String(process.env.CUSTOMER_IO_TRACK_BASE_URL ?? "").trim().toLowerCase();
+  if (explicitTrackBase.includes("track-eu.customer.io")) return "eu";
+  if (explicitTrackBase.includes("track.customer.io")) return "us";
+
+  const region = String(process.env.CUSTOMER_IO_REGION ?? "").trim().toLowerCase();
+  if (region === "eu" || region === "us") return region;
+
+  return "unknown";
+}
+
+function customerIoAppBaseUrls() {
+  const explicit = String(process.env.CUSTOMER_IO_APP_BASE_URL ?? "").trim();
+  if (explicit) return [explicit.replace(/\/+$/, "")];
+
+  const preferredRegion = configuredCustomerIoRegion();
+  const ordered =
+    preferredRegion === "eu"
+      ? ["https://api-eu.customer.io/v1", "https://api.customer.io/v1"]
+      : preferredRegion === "us"
+        ? ["https://api.customer.io/v1", "https://api-eu.customer.io/v1"]
+        : [customerIoAppBaseUrl(), "https://api-eu.customer.io/v1", "https://api.customer.io/v1"];
+
+  return Array.from(new Set(ordered.map((value) => value.replace(/\/+$/, ""))));
+}
+
 function maybeDomain(email: string, fallback: string) {
   const parts = email.split("@");
   if (parts.length === 2) return parts[1].toLowerCase();
@@ -1108,12 +1148,58 @@ export async function enrichLeadsWithEmailFinderBatch(params: {
   };
 }
 
-function customerIoApiKey(secrets: OutreachAccountSecrets) {
+function customerIoTrackApiKey(secrets: OutreachAccountSecrets) {
   return (
-    secrets.customerIoApiKey.trim() ||
     secrets.customerIoTrackApiKey.trim() ||
-    secrets.customerIoAppApiKey.trim()
+    secrets.customerIoApiKey.trim()
   );
+}
+
+function customerIoAppApiKey(secrets: OutreachAccountSecrets) {
+  return secrets.customerIoAppApiKey.trim();
+}
+
+function customerIoApiKey(secrets: OutreachAccountSecrets) {
+  return customerIoTrackApiKey(secrets) || customerIoAppApiKey(secrets);
+}
+
+function escapeHtml(value: string) {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/\"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function htmlFromPlainText(value: string) {
+  return escapeHtml(value).replace(/\r?\n/g, "<br />");
+}
+
+function customerIoResponseMessageId(payload: unknown, fallback = "") {
+  const asObject = (value: unknown) =>
+    value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
+
+  const queue: unknown[] = [payload];
+  const visited = new Set<unknown>();
+  while (queue.length) {
+    const current = queue.shift();
+    if (!current || visited.has(current)) continue;
+    visited.add(current);
+    const row = asObject(current);
+    if (!row) continue;
+    for (const key of ["delivery_id", "deliveryId", "message_id", "messageId", "queued_message_id", "id"] as const) {
+      const candidate = String(row[key] ?? "").trim();
+      if (candidate) return candidate;
+    }
+    for (const nested of Object.values(row)) {
+      if (nested && typeof nested === "object") {
+        queue.push(nested);
+      }
+    }
+  }
+
+  return fallback.trim();
 }
 
 async function testCustomerIoTrackCredentials(input: {
@@ -2332,8 +2418,10 @@ export async function testOutreachProviders(
   const shouldTestSourcing = scope === "full";
 
   const fromEmail = account.config.customerIo.fromEmail.trim();
+  const trackingApiKey = customerIoTrackApiKey(secrets);
+  const appApiKey = customerIoAppApiKey(secrets);
   const rawCustomerIoPass = requiresDelivery
-    ? Boolean(account.config.customerIo.siteId && customerIoApiKey(secrets) && fromEmail)
+    ? Boolean(account.config.customerIo.siteId && trackingApiKey && appApiKey && fromEmail)
     : true;
 
   const rawSourcingPass = true;
@@ -2347,14 +2435,15 @@ export async function testOutreachProviders(
     if (!rawCustomerIoPass) {
       const missing: string[] = [];
       if (!account.config.customerIo.siteId.trim()) missing.push("Site ID");
-      if (!customerIoApiKey(secrets)) missing.push("API key");
+      if (!trackingApiKey) missing.push("Tracking API key");
+      if (!appApiKey) missing.push("App API key");
       if (!fromEmail) missing.push("From Email");
       customerIoDetail = missing.length ? `Missing: ${missing.join(", ")}` : "Customer.io config missing";
       customerIoPass = false;
     } else {
       const auth = await testCustomerIoTrackCredentials({
         siteId: account.config.customerIo.siteId,
-        apiKey: customerIoApiKey(secrets),
+        apiKey: trackingApiKey,
       });
       customerIoPass = auth.ok;
       if (!auth.ok) {
@@ -2511,28 +2600,202 @@ export async function sendCustomerIoEvent(params: {
   }
 }
 
+async function sendCustomerIoTransactionalEmail(params: {
+  account: OutreachAccount;
+  secrets: OutreachAccountSecrets;
+  recipient: string;
+  fromEmail: string;
+  replyToEmail: string;
+  subject: string;
+  body: string;
+  metadata?: Record<string, unknown>;
+}): Promise<{ ok: boolean; providerMessageId: string; error: string }> {
+  const appApiKey = customerIoAppApiKey(params.secrets);
+  if (!appApiKey) {
+    return {
+      ok: false,
+      providerMessageId: "",
+      error: "Customer.io App API key missing",
+    };
+  }
+
+  const normalizedRecipient = params.recipient.trim().toLowerCase();
+  const normalizedFromEmail = params.fromEmail.trim();
+  const normalizedReplyToEmail = params.replyToEmail.trim();
+  const normalizedSubject = params.subject.trim();
+  const normalizedBody = params.body.trim();
+  if (!normalizedRecipient || !normalizedFromEmail || !normalizedReplyToEmail || !normalizedSubject || !normalizedBody) {
+    return {
+      ok: false,
+      providerMessageId: "",
+      error: "Customer.io transactional email payload is incomplete",
+    };
+  }
+
+  const basePayload = {
+    to: normalizedRecipient,
+    from: normalizedFromEmail,
+    reply_to: normalizedReplyToEmail,
+    subject: normalizedSubject,
+    body_plain: normalizedBody,
+    body: htmlFromPlainText(normalizedBody),
+    identifiers: {
+      email: normalizedRecipient,
+    },
+    message_data: params.metadata ?? {},
+  };
+
+  const configuredTemplateId = String(process.env.CUSTOMER_IO_TRANSACTIONAL_MESSAGE_ID ?? "").trim();
+  const payloads = configuredTemplateId
+    ? [
+        {
+          ...basePayload,
+          transactional_message_id: configuredTemplateId,
+        },
+      ]
+    : [
+        basePayload,
+        {
+          ...basePayload,
+          transactional_message_id: 1,
+        },
+      ];
+
+  const errors: string[] = [];
+  for (const baseUrl of customerIoAppBaseUrls()) {
+    for (const payload of payloads) {
+      try {
+        const response = await fetch(`${baseUrl}/send/email`, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${appApiKey}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(payload),
+          cache: "no-store",
+        });
+
+        const raw = await response.text();
+        const payloadJson: unknown = raw
+          ? (() => {
+              try {
+                return JSON.parse(raw);
+              } catch {
+                return {};
+              }
+            })()
+          : {};
+        if (response.ok) {
+          const providerMessageId =
+            customerIoResponseMessageId(payloadJson, response.headers.get("x-request-id") ?? "") ||
+            response.headers.get("x-request-id") ||
+            response.headers.get("x-customerio-delivery-id") ||
+            "";
+          return {
+            ok: true,
+            providerMessageId,
+            error: "",
+          };
+        }
+
+        const detail = raw.trim().slice(0, 300);
+        errors.push(`Customer.io send/email ${baseUrl} HTTP ${response.status}${detail ? `: ${detail}` : ""}`);
+
+        const looksLikeTemplateRequirement =
+          !("transactional_message_id" in payload) &&
+          (response.status === 400 || response.status === 422) &&
+          /transactional_message_id|required/i.test(detail);
+        if (looksLikeTemplateRequirement) {
+          continue;
+        }
+      } catch (error) {
+        errors.push(error instanceof Error ? error.message : `Customer.io send/email failed for ${baseUrl}`);
+      }
+    }
+  }
+
+  return {
+    ok: false,
+    providerMessageId: "",
+    error: errors.join(" · ") || "Customer.io transactional send failed",
+  };
+}
+
 export async function sendReplyDraftAsEvent(params: {
   draft: ReplyDraft;
   account: OutreachAccount;
   secrets: OutreachAccountSecrets;
   recipient: string;
-}): Promise<{ ok: boolean; error: string }> {
-  const result = await sendCustomerIoEvent({
+  replyToEmail?: string;
+}): Promise<{ ok: boolean; providerMessageId: string; error: string }> {
+  const fromEmail =
+    params.account.config.customerIo.fromEmail.trim() ||
+    params.account.config.mailbox.email.trim();
+  const replyToEmail = (params.replyToEmail ?? params.account.config.mailbox.email).trim() || fromEmail;
+  const result = await sendCustomerIoTransactionalEmail({
     account: params.account,
     secrets: params.secrets,
-    customerId: params.recipient,
-    eventName: "factory_reply_sent",
-    data: {
+    recipient: params.recipient,
+    fromEmail,
+    replyToEmail,
+    subject: params.draft.subject,
+    body: params.draft.body,
+    metadata: {
       draftId: params.draft.id,
-      subject: params.draft.subject,
-      body: params.draft.body,
+      threadId: params.draft.threadId,
+      runId: params.draft.runId,
+      replyDraft: true,
     },
   });
 
   return {
     ok: result.ok,
+    providerMessageId: result.providerMessageId,
     error: result.error,
   };
+}
+
+export async function sendMonitoringProbeMessage(params: {
+  account: OutreachAccount;
+  secrets: OutreachAccountSecrets;
+  replyToEmail: string;
+  recipient: string;
+  runId: string;
+  experimentId: string;
+  subject: string;
+  body: string;
+  probeToken: string;
+  monitorAccountId: string;
+  monitorEmail: string;
+}): Promise<{ ok: boolean; providerMessageId: string; error: string }> {
+  const fromEmail = params.account.config.customerIo.fromEmail.trim();
+  const replyToEmail = params.replyToEmail.trim();
+  if (!fromEmail) {
+    return { ok: false, providerMessageId: "", error: "Customer.io From Email missing" };
+  }
+  if (!replyToEmail) {
+    return { ok: false, providerMessageId: "", error: "Reply-To email missing" };
+  }
+  return sendCustomerIoTransactionalEmail({
+    account: params.account,
+    secrets: params.secrets,
+    recipient: params.recipient,
+    fromEmail,
+    replyToEmail,
+    subject: params.subject,
+    body: params.body,
+    metadata: {
+      runId: params.runId,
+      experimentId: params.experimentId,
+      messageId: `monitor_${params.probeToken}`,
+      step: 0,
+      monitoring: true,
+      monitor_probe: true,
+      probeToken: params.probeToken,
+      monitorAccountId: params.monitorAccountId,
+      monitorEmail: params.monitorEmail,
+    },
+  });
 }
 
 export async function sendOutreachMessage(params: {
@@ -2552,22 +2815,19 @@ export async function sendOutreachMessage(params: {
   if (!replyToEmail) {
     return { ok: false, providerMessageId: "", error: "Reply-To email missing" };
   }
-  return sendCustomerIoEvent({
+  return sendCustomerIoTransactionalEmail({
     account: params.account,
     secrets: params.secrets,
-    customerId: params.recipient,
-    eventName: "factory_outreach_touch",
-    data: {
-      // Reserved properties (Customer.io track) override campaign From/To/Reply-To.
-      recipient: params.recipient,
-      from_address: fromEmail,
-      reply_to: replyToEmail,
+    recipient: params.recipient,
+    fromEmail,
+    replyToEmail,
+    subject: params.message.subject,
+    body: params.message.body,
+    metadata: {
       runId: params.runId,
       experimentId: params.experimentId,
       messageId: params.message.id,
       step: params.message.step,
-      subject: params.message.subject,
-      body: params.message.body,
     },
   });
 }

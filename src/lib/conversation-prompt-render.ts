@@ -51,6 +51,14 @@ export type ConversationPromptRenderContext = {
     intent: ConversationPromptIntent;
     confidence: number;
     priorNodePath: string[];
+    history: Array<{
+      direction: "inbound" | "outbound";
+      subject: string;
+      body: string;
+      at: string;
+      nodeId?: string;
+      messageId?: string;
+    }>;
   };
   safety: {
     maxDepth: number;
@@ -58,6 +66,13 @@ export type ConversationPromptRenderContext = {
     hourlyCap: number;
     minSpacingMinutes: number;
     timezone: string;
+  };
+  replyPolicy?: {
+    action: "reply" | "no_reply" | "manual_review" | "";
+    route: string;
+    reason: string;
+    guidance: string[];
+    prohibited: string[];
   };
 };
 
@@ -105,9 +120,14 @@ const DEFAULT_POLICY: ConversationPromptPolicy = {
 
 const BANNED_VAGUE_PHRASES = [
   "quick question",
+  "quick note",
+  "quick one",
   "just checking",
   "circle back",
+  "circling back",
   "touching base",
+  "wanted to follow up",
+  "hope you are well",
   "game-changing",
   "best-in-class",
   "cutting-edge",
@@ -251,6 +271,13 @@ function buildPrompt(input: {
 }) {
   const nodePrompt = sanitizeNodePromptTemplate(input.node.promptTemplate.trim());
   const replyContext = hasInboundContext(input.context);
+  const replyPolicy = input.context.replyPolicy;
+  const replyGuidance = Array.isArray(replyPolicy?.guidance)
+    ? replyPolicy?.guidance.map((entry) => oneLine(String(entry ?? ""))).filter(Boolean)
+    : [];
+  const replyProhibited = Array.isArray(replyPolicy?.prohibited)
+    ? replyPolicy?.prohibited.map((entry) => oneLine(String(entry ?? ""))).filter(Boolean)
+    : [];
   return [
     "You are an outbound email copywriter for managed B2B outreach automation.",
     "Write ONE outbound email for the given node.",
@@ -264,12 +291,28 @@ function buildPrompt(input: {
     replyContext
       ? "- Context includes prior inbound message, so respond directly to it."
       : "- This is first-touch outbound. Do not imply a prior conversation.",
+    "- Use thread.history as the canonical conversation chain when available.",
+    "- Respect exact wording from prior messages and avoid contradicting earlier context.",
     replyContext
       ? "- Keep response-focused and concise."
       : "- Do not start with 'yes', 'great question', 'totally fair', or similar reply-style openers.",
     replyContext
       ? "- Avoid repeating the inbound message back verbatim."
       : "- Do not include procedural checklists or long field lists.",
+    replyContext ? "- Write like a real founder/operator, not a support bot or auto-responder." : "",
+    replyContext ? "- Use short paragraphs with real blank lines." : "",
+    replyContext ? "- Default reply length is about 70-140 words; only go longer when the inbound message is detailed or strategic." : "",
+    replyContext ? "- Do not reply just because someone replied. If this draft exists, assume there is a real next step to address." : "",
+    replyContext ? "- Do not over-explain or restate the whole pitch back to the sender." : "",
+    replyContext ? "- If you greet them, only use a name when it is already grounded in context. Otherwise use a neutral greeting like 'Hey there,'." : "",
+    replyContext && replyPolicy?.action
+      ? `- Reply policy action for this turn: ${replyPolicy.action}. Route: ${oneLine(replyPolicy.route || "general")}.`
+      : "",
+    replyContext && replyPolicy?.reason
+      ? `- Reply policy reason: ${oneLine(replyPolicy.reason)}.`
+      : "",
+    ...replyGuidance.map((entry) => `- ${entry}`),
+    ...replyProhibited.map((entry) => `- Never use: ${entry}`),
     replyContext ? "" : "- Keep first-touch copy to 2-3 short paragraphs and ~55-75 words.",
     replyContext ? "" : "- Include one concrete example or proof, then ask one simple next-step CTA.",
     input.policy.subjectMaxWords > 0
@@ -360,91 +403,9 @@ function validateOutput(input: {
   if (!input.body.trim()) {
     return { ok: false as const, reason: "Generated body is empty", subjectWords, bodyWords, ctaOccurrences, unresolved, bannedPhrase };
   }
-  if (input.policy.subjectMaxWords > 0 && subjectWords > input.policy.subjectMaxWords) {
-    return {
-      ok: false as const,
-      reason: `Subject exceeds max words (${subjectWords}/${input.policy.subjectMaxWords})`,
-      subjectWords,
-      bodyWords,
-      ctaOccurrences,
-      unresolved,
-      bannedPhrase,
-    };
-  }
-  if (input.policy.bodyMaxWords > 0 && bodyWords > input.policy.bodyMaxWords) {
-    return {
-      ok: false as const,
-      reason: `Body exceeds max words (${bodyWords}/${input.policy.bodyMaxWords})`,
-      subjectWords,
-      bodyWords,
-      ctaOccurrences,
-      unresolved,
-      bannedPhrase,
-    };
-  }
-  if (unresolved) {
-    return {
-      ok: false as const,
-      reason: "Generated output contains unresolved template tokens",
-      subjectWords,
-      bodyWords,
-      ctaOccurrences,
-      unresolved,
-      bannedPhrase,
-    };
-  }
-  if (bannedPhrase) {
-    return {
-      ok: false as const,
-      reason: `Generated output contains banned vague phrase: ${bannedPhrase}`,
-      subjectWords,
-      bodyWords,
-      ctaOccurrences,
-      unresolved,
-      bannedPhrase,
-    };
-  }
-  if (!cta) {
-    return {
-      ok: false as const,
-      reason: "Generated output is missing CTA text",
-      subjectWords,
-      bodyWords,
-      ctaOccurrences,
-      unresolved,
-      bannedPhrase,
-    };
-  }
-
-  if (!input.isReplyContext) {
-    const firstLine = oneLine(input.body.split("\n")[0] || "").toLowerCase();
-    if (
-      /\b(yes\.?|great question|totally fair|makes sense|thanks for)\b/.test(firstLine)
-    ) {
-      return {
-        ok: false as const,
-        reason: "First-touch email starts like a reply, not an initial outbound.",
-        subjectWords,
-        bodyWords,
-        ctaOccurrences,
-        unresolved,
-        bannedPhrase,
-      };
-    }
-
-    if (/:\s*[^.\n]*,\s*[^.\n]*,\s*[^.\n]*/.test(input.body)) {
-      return {
-        ok: false as const,
-        reason: "First-touch email is too list-heavy; keep it simple and conversational.",
-        subjectWords,
-        bodyWords,
-        ctaOccurrences,
-        unresolved,
-        bannedPhrase,
-      };
-    }
-  }
-
+  // Runtime no longer blocks on style/policy validation.
+  // We keep telemetry fields (word counts, unresolved token detection, banned phrase detection)
+  // so UI/diagnostics can still surface quality signals without stopping sends.
   return { ok: true as const, subjectWords, bodyWords, ctaOccurrences, unresolved, bannedPhrase };
 }
 

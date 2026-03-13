@@ -1,0 +1,267 @@
+- generic:
+  - alert
+  - generic:
+    - banner:
+      - navigation:
+        - generic:
+          - generic:
+            - generic:
+              - link:
+                - /url: /discover/apps/ios/latest
+                - img
+              - generic:
+                - generic:
+                  - generic:
+                    - link:
+                      - /url: /discover/apps/ios/latest
+                      - text: Apps
+                  - link:
+                    - /url: /discover/sites/latest
+                    - text: Sites
+            - generic:
+              - generic:
+                - button:
+                  - img
+                  - generic: Search on iOS...
+                - generic:
+                  - generic:
+                    - button:
+                      - img
+            - generic:
+              - generic:
+                - generic:
+                  - generic:
+                    - generic:
+                      - generic:
+                        - link:
+                          - /url: /saved/mobile/screens
+                  - generic:
+                    - generic:
+                      - link:
+                        - /url: /community/mobile/featured
+                  - generic:
+                    - link:
+                      - /url: /awards
+                      - generic:
+                        - generic: Awards
+                  - generic:
+                    - button
+                - button:
+                  - generic:
+                    - generic:
+                      - generic: D
+  - region "Notifications alt+T"
+  - dialog "Onboarding on Tiimo" [active] [ref=e2]:
+    - generic [ref=e3]:
+      - heading "Onboarding on Tiimo" [level=2] [ref=e4]
+      - paragraph
+    - article [ref=e5]:
+      - generic [ref=e8]:
+        - generic [ref=e9]:
+          - generic [ref=e11]:
+            - generic [ref=e12]:
+              - generic [ref=e13]: Onboarding
+              - generic [ref=e14]: in
+            - link "Tiimo logo Tiimo" [ref=e15] [cursor=pointer]:
+              - /url: /apps/tiimo-ios-92e196c8-3689-45c1-8869-449f9b7207c4/dc39e0c5-e9cb-4411-a8c4-75cc3a5e8169/flows
+              - img "Tiimo logo" [ref=e17]
+              - generic [ref=e18]: Tiimo
+          - radiogroup [ref=e20]:
+            - radio "Screens" [checked] [ref=e21] [cursor=pointer]
+            - radio "Video" [ref=e22] [cursor=pointer]
+          - generic [ref=e24]:
+            - button "Avatar of Seth Miller Avatar of Kat Dsv Avatar of Alba Avatar of Kevin +12" [ref=e25] [cursor=pointer]:
+              - img "Avatar of Seth Miller" [ref=e27]
+              - img "Avatar of Kat Dsv" [ref=e29]
+              - img "Avatar of Alba" [ref=e31]
+              - generic "Avatar of Kevin" [ref=e33]: K
+              - generic [ref=e35]: "+12"
+            - generic [ref=e37]:
+              - button "message icon" [ref=e39] [cursor=pointer]:
+                - img "message icon" [ref=e41]
+              - button "link icon" [ref=e44] [cursor=pointer]:
+                - img "link icon" [ref=e46]
+            - button "close icon" [ref=e52] [cursor=pointer]:
+              - img "close icon" [ref=e54]
+        - generic [ref=e57]:
+          - list [ref=e61]:
+            - listitem [ref=e62]:
+              - img "Onboarding on Tiimo (ios) screen 1" [ref=e63]
+              - button "0:02" [ref=e65] [cursor=pointer]
+              - button "more icon" [ref=e68] [cursor=pointer]:
+                - img "more icon" [ref=e69]
+              - generic [ref=e74]:
+                - button "Save" [ref=e75] [cursor=pointer]:
+                  - generic [ref=e77]: Save
+                - button "Copy" [ref=e79] [cursor=pointer]:
+                  - generic [ref=e81]: Copy
+            - listitem [ref=e82]:
+              - img "Onboarding on Tiimo (ios) screen 2" [ref=e83]
+              - button "0:06" [ref=e86] [cursor=pointer]
+              - button "more icon" [ref=e89] [cursor=pointer]:
+                - img "more icon" [ref=e90]
+              - generic [ref=e95]:
+                - button "Save" [ref=e96] [cursor=pointer]:
+                  - generic [ref=e98]: Save
+                - button "Copy" [ref=e100] [cursor=pointer]:
+                  - generic [ref=e102]: Copy
+            - listitem [ref=e103]:
+              - img "Onboarding on Tiimo (ios) screen 3" [ref=e104]
+              - button "0:20" [ref=e107] [cursor=pointer]
+              - button "more icon" [ref=e110] [cursor=pointer]:
+                - img "more icon" [ref=e111]
+              - generic [ref=e116]:
+                - button "Save" [ref=e117] [cursor=pointer]:
+                  - generic [ref=e119]: Save
+                - button "Copy" [ref=e121] [cursor=pointer]:
+                  - generic [ref=e123]: Copy
+            - listitem [ref=e124]:
+              - img "Onboarding on Tiimo (ios) screen 4" [ref=e125]
+              - button "0:28" [ref=e128] [cursor=pointer]
+              - button "more icon" [ref=e131] [cursor=pointer]:
+                - img "more icon" [ref=e132]
+              - generic [ref=e137]:
+                - button "Save" [ref=e138] [cursor=pointer]:
+                  - generic [ref=e140]: Save
+                - button "Copy" [ref=e142] [cursor=pointer]:
+                  - generic [ref=e144]: Copy
+            - listitem [ref=e145]:
+              - img "Onboarding on Tiimo (ios) screen 5" [ref=e146]
+              - button "0:32" [ref=e148] [cursor=pointer]
+              - button "more icon" [ref=e151] [cursor=pointer]:
+                - img "more icon" [ref=e152]
+              - generic [ref=e157]:
+                - button "Save" [ref=e158] [cursor=pointer]:
+                  - generic [ref=e160]: Save
+                - button "Copy" [ref=e162] [cursor=pointer]:
+                  - generic [ref=e164]: Copy
+            - listitem [ref=e165]:
+              - img "Onboarding on Tiimo (ios) screen 6" [ref=e166]
+              - button "0:34" [ref=e169] [cursor=pointer]
+              - button "more icon" [ref=e172] [cursor=pointer]:
+                - img "more icon" [ref=e173]
+              - generic [ref=e178]:
+                - button "Save" [ref=e179] [cursor=pointer]:
+                  - generic [ref=e181]: Save
+                - button "Copy" [ref=e183] [cursor=pointer]:
+                  - generic [ref=e185]: Copy
+            - listitem [ref=e186]:
+              - img "Onboarding on Tiimo (ios) screen 7" [ref=e187]
+              - button "0:38" [ref=e190] [cursor=pointer]
+              - button "more icon" [ref=e193] [cursor=pointer]:
+                - img "more icon" [ref=e194]
+              - generic [ref=e199]:
+                - button "Save" [ref=e200] [cursor=pointer]:
+                  - generic [ref=e202]: Save
+                - button "Copy" [ref=e204] [cursor=pointer]:
+                  - generic [ref=e206]: Copy
+            - listitem [ref=e207]:
+              - img "Onboarding on Tiimo (ios) screen 8" [ref=e208]
+              - button "0:42" [ref=e211] [cursor=pointer]
+              - button "more icon" [ref=e214] [cursor=pointer]:
+                - img "more icon" [ref=e215]
+              - generic [ref=e220]:
+                - button "Save" [ref=e221] [cursor=pointer]:
+                  - generic [ref=e223]: Save
+                - button "Copy" [ref=e225] [cursor=pointer]:
+                  - generic [ref=e227]: Copy
+            - listitem [ref=e228]:
+              - img "Onboarding on Tiimo (ios) screen 9" [ref=e229]
+              - button "0:46" [ref=e232] [cursor=pointer]
+              - button "more icon" [ref=e235] [cursor=pointer]:
+                - img "more icon" [ref=e236]
+              - generic [ref=e241]:
+                - button "Save" [ref=e242] [cursor=pointer]:
+                  - generic [ref=e244]: Save
+                - button "Copy" [ref=e246] [cursor=pointer]:
+                  - generic [ref=e248]: Copy
+            - listitem [ref=e249]:
+              - img "Onboarding on Tiimo (ios) screen 10" [ref=e250]
+              - button "0:49" [ref=e253] [cursor=pointer]
+              - button "more icon" [ref=e256] [cursor=pointer]:
+                - img "more icon" [ref=e257]
+              - generic [ref=e262]:
+                - button "Save" [ref=e263] [cursor=pointer]:
+                  - generic [ref=e265]: Save
+                - button "Copy" [ref=e267] [cursor=pointer]:
+                  - generic [ref=e269]: Copy
+            - listitem [ref=e270]:
+              - img "Onboarding on Tiimo (ios) screen 11" [ref=e271]
+              - button "0:53" [ref=e274] [cursor=pointer]
+              - button "more icon" [ref=e277] [cursor=pointer]:
+                - img "more icon" [ref=e278]
+              - generic [ref=e283]:
+                - button "Save" [ref=e284] [cursor=pointer]:
+                  - generic [ref=e286]: Save
+                - button "Copy" [ref=e288] [cursor=pointer]:
+                  - generic [ref=e290]: Copy
+            - listitem [ref=e291]:
+              - img "Onboarding on Tiimo (ios) screen 12" [ref=e292]
+              - button "0:59" [ref=e294] [cursor=pointer]
+              - button "more icon" [ref=e297] [cursor=pointer]:
+                - img "more icon" [ref=e298]
+              - generic [ref=e303]:
+                - button "Save" [ref=e304] [cursor=pointer]:
+                  - generic [ref=e306]: Save
+                - button "Copy" [ref=e308] [cursor=pointer]:
+                  - generic [ref=e310]: Copy
+            - listitem [ref=e311]:
+              - img "Onboarding on Tiimo (ios) screen 13" [ref=e312]
+              - button "1:02" [ref=e315] [cursor=pointer]
+              - button "more icon" [ref=e318] [cursor=pointer]:
+                - img "more icon" [ref=e319]
+              - generic [ref=e324]:
+                - button "Save" [ref=e325] [cursor=pointer]:
+                  - generic [ref=e327]: Save
+                - button "Copy" [ref=e329] [cursor=pointer]:
+                  - generic [ref=e331]: Copy
+            - listitem [ref=e332]:
+              - img "Onboarding on Tiimo (ios) screen 14" [ref=e333]
+              - button "1:05" [ref=e336] [cursor=pointer]
+              - button "more icon" [ref=e339] [cursor=pointer]:
+                - img "more icon" [ref=e340]
+              - generic [ref=e345]:
+                - button "Save" [ref=e346] [cursor=pointer]:
+                  - generic [ref=e348]: Save
+                - button "Copy" [ref=e350] [cursor=pointer]:
+                  - generic [ref=e352]: Copy
+            - listitem [ref=e353]:
+              - img "Onboarding on Tiimo (ios) screen 15" [ref=e354]
+              - button "1:09" [ref=e357] [cursor=pointer]
+              - button "more icon" [ref=e360] [cursor=pointer]:
+                - img "more icon" [ref=e361]
+              - generic [ref=e366]:
+                - button "Save" [ref=e367] [cursor=pointer]:
+                  - generic [ref=e369]: Save
+                - button "Copy" [ref=e371] [cursor=pointer]:
+                  - generic [ref=e373]: Copy
+            - listitem [ref=e374]:
+              - img "Onboarding on Tiimo (ios) screen 16" [ref=e375]
+              - button "1:11" [ref=e377] [cursor=pointer]
+              - button "more icon" [ref=e380] [cursor=pointer]:
+                - img "more icon" [ref=e381]
+              - generic [ref=e386]:
+                - button "Save" [ref=e387] [cursor=pointer]:
+                  - generic [ref=e389]: Save
+                - button "Copy" [ref=e391] [cursor=pointer]:
+                  - generic [ref=e393]: Copy
+          - generic:
+            - generic:
+              - generic:
+                - button "arrow left icon" [disabled]:
+                  - img "arrow left icon"
+          - button "arrow right icon" [ref=e397] [cursor=pointer]:
+            - img "arrow right icon" [ref=e398]
+          - generic:
+            - generic [ref=e400]:
+              - button "Save" [ref=e401] [cursor=pointer]:
+                - generic [ref=e403]: Save
+              - button "Copy figma icon" [ref=e405] [cursor=pointer]:
+                - generic [ref=e406]:
+                  - generic [ref=e407]: Copy
+                  - img "figma icon" [ref=e408]
+              - button "more icon" [ref=e415] [cursor=pointer]:
+                - img "more icon" [ref=e417]
+            - generic [ref=e421]:
+              - generic [ref=e422]: iOS (393x852)
+              - button "More info" [ref=e423] [cursor=pointer]

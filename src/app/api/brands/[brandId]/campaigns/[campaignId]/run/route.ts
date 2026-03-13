@@ -10,6 +10,7 @@ import {
   listRunJobs,
   listRunLeads,
 } from "@/lib/outreach-data";
+import { getLeadEmailSuppressionReason } from "@/lib/outreach-providers";
 
 export async function GET(
   _request: Request,
@@ -38,6 +39,7 @@ export async function GET(
   const leads = leadsByRunEntries
     .flatMap(([, rows]) => rows)
     .filter((lead) => lead.campaignId === campaignId)
+    .filter((lead) => !getLeadEmailSuppressionReason(String(lead.email ?? "")))
     .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
   const messages = messagesByRunEntries
     .flatMap(([, rows]) => rows)

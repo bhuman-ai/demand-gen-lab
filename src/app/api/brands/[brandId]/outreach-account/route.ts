@@ -13,6 +13,17 @@ function asRecord(value: unknown): Record<string, unknown> {
   return {};
 }
 
+function normalizeAccountIds(value: unknown, fallbackAccountId = "") {
+  const ids = new Set(
+    (Array.isArray(value) ? value : [])
+      .map((entry) => String(entry ?? "").trim())
+      .filter((entry) => entry.length > 0)
+  );
+  const primary = fallbackAccountId.trim();
+  if (primary) ids.add(primary);
+  return Array.from(ids);
+}
+
 export async function GET(
   _: Request,
   context: { params: Promise<{ brandId: string }> }
@@ -44,15 +55,17 @@ export async function PUT(
   try {
     const { brandId } = await context.params;
     const body = asRecord(await request.json());
-    const accountId = String(body.accountId ?? "").trim();
+    const requestedAccountId = String(body.accountId ?? "").trim();
+    const accountIds = normalizeAccountIds(body.accountIds, requestedAccountId);
+    const accountId = requestedAccountId || accountIds[0] || "";
     const mailboxAccountIdRaw = body.mailboxAccountId;
     const mailboxAccountId =
       typeof mailboxAccountIdRaw === "string" ? mailboxAccountIdRaw.trim() : undefined;
 
-    if (accountId) {
-      const account = await getOutreachAccount(accountId);
+    for (const selectedAccountId of accountIds) {
+      const account = await getOutreachAccount(selectedAccountId);
       if (!account) {
-        return NextResponse.json({ error: "account not found" }, { status: 404 });
+        return NextResponse.json({ error: `account not found: ${selectedAccountId}` }, { status: 404 });
       }
     }
 
@@ -65,7 +78,9 @@ export async function PUT(
 
     const assignment = await setBrandOutreachAssignment(
       brandId,
-      typeof mailboxAccountId === "string" ? { accountId, mailboxAccountId } : { accountId }
+      typeof mailboxAccountId === "string"
+        ? { accountId, accountIds, mailboxAccountId }
+        : { accountId, accountIds }
     );
     const account = assignment ? await getOutreachAccount(assignment.accountId) : null;
     const mailboxAccount = assignment

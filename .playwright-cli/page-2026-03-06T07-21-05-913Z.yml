@@ -1,0 +1,28 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e3]:
+    - generic [ref=e5]:
+      - img [ref=e7] [cursor=pointer]
+      - button "Sign Up / Login" [ref=e12] [cursor=pointer]
+    - generic [ref=e13]:
+      - generic [ref=e14]:
+        - generic [ref=e16]:
+          - img [ref=e18] [cursor=pointer]
+          - textbox "Search 1.6m Personas" [ref=e20]
+          - img [ref=e22] [cursor=pointer]
+        - generic [ref=e26]:
+          - button "philosophers" [ref=e27] [cursor=pointer]
+          - button "scientists" [ref=e28] [cursor=pointer]
+          - button "celebrities" [ref=e29] [cursor=pointer]
+          - button "CEOs" [ref=e30] [cursor=pointer]
+      - generic [ref=e31]:
+        - generic [ref=e32]:
+          - paragraph [ref=e34]: Trending Personas
+          - status [ref=e37]:
+            - img [ref=e38]
+            - generic [ref=e41]: Loading...
+        - generic [ref=e42]:
+          - paragraph [ref=e44]: Discover Personas
+          - status [ref=e47]:
+            - img [ref=e48]
+            - generic [ref=e51]: Loading...
+  - alert [ref=e52]

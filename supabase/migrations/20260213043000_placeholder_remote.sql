@@ -1,0 +1,3 @@
+-- Placeholder for remote migration 20260213043000.
+-- This migration exists in the linked Supabase project but is not present in this repo.
+-- Intentionally left blank to keep migration history aligned.;

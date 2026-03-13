@@ -1,0 +1,664 @@
+{
+  "benchmark": {
+    "loader": {
+      "case_count": 2,
+      "ignored": [],
+      "reason": null
+    },
+    "result": {
+      "case_count": 2,
+      "cases": [
+        {
+          "attempts": [
+            {
+              "attempt": 1,
+              "ehlo_code": 250,
+              "email": "support@monday.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439b54020c9si10545960f8f.545 - gsmtp",
+              "mx_host": "aspmx.l.google.com",
+              "smtp_code": 250,
+              "smtp_message": "2.1.5 OK ffacd0b85a97d-439b54020c9si10545960f8f.545 - gsmtp",
+              "status": "accepted",
+              "timings_ms": {
+                "connect": 326.08,
+                "ehlo": 49.89,
+                "mail_from": 47.67,
+                "rcpt_to": 234.54,
+                "total": 658.29
+              }
+            },
+            {
+              "attempt": 2,
+              "ehlo_code": 250,
+              "email": "support@monday.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-4399c7b2701si24213087f8f.278 - gsmtp",
+              "mx_host": "aspmx.l.google.com",
+              "smtp_code": 250,
+              "smtp_message": "2.1.5 OK ffacd0b85a97d-4399c7b2701si24213087f8f.278 - gsmtp",
+              "status": "accepted",
+              "timings_ms": {
+                "connect": 99.63,
+                "ehlo": 48.57,
+                "mail_from": 47.17,
+                "rcpt_to": 247.58,
+                "total": 443.0
+              }
+            },
+            {
+              "attempt": 3,
+              "ehlo_code": 250,
+              "email": "support@monday.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439af77e3c4si12681351f8f.393 - gsmtp",
+              "mx_host": "aspmx.l.google.com",
+              "smtp_code": 250,
+              "smtp_message": "2.1.5 OK ffacd0b85a97d-439af77e3c4si12681351f8f.393 - gsmtp",
+              "status": "accepted",
+              "timings_ms": {
+                "connect": 104.87,
+                "ehlo": 52.53,
+                "mail_from": 49.36,
+                "rcpt_to": 257.72,
+                "total": 464.52
+              }
+            },
+            {
+              "attempt": 4,
+              "ehlo_code": 250,
+              "email": "support@monday.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439af77e3c4si12681400f8f.393 - gsmtp",
+              "mx_host": "aspmx.l.google.com",
+              "smtp_code": 250,
+              "smtp_message": "2.1.5 OK ffacd0b85a97d-439af77e3c4si12681400f8f.393 - gsmtp",
+              "status": "accepted",
+              "timings_ms": {
+                "connect": 99.29,
+                "ehlo": 48.57,
+                "mail_from": 47.22,
+                "rcpt_to": 289.54,
+                "total": 484.64
+              }
+            },
+            {
+              "attempt": 5,
+              "ehlo_code": 250,
+              "email": "support@monday.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK 5b1f17b1804b1-483bd6f45c8si356485345e9.8 - gsmtp",
+              "mx_host": "aspmx.l.google.com",
+              "smtp_code": 250,
+              "smtp_message": "2.1.5 OK 5b1f17b1804b1-483bd6f45c8si356485345e9.8 - gsmtp",
+              "status": "accepted",
+              "timings_ms": {
+                "connect": 96.45,
+                "ehlo": 47.93,
+                "mail_from": 54.39,
+                "rcpt_to": 260.6,
+                "total": 459.39
+              }
+            },
+            {
+              "attempt": 6,
+              "ehlo_code": 250,
+              "email": "support@monday.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439af04a83esi13359277f8f.383 - gsmtp",
+              "mx_host": "aspmx.l.google.com",
+              "smtp_code": 250,
+              "smtp_message": "2.1.5 OK ffacd0b85a97d-439af04a83esi13359277f8f.383 - gsmtp",
+              "status": "accepted",
+              "timings_ms": {
+                "connect": 101.16,
+                "ehlo": 51.06,
+                "mail_from": 48.94,
+                "rcpt_to": 255.5,
+                "total": 456.69
+              }
+            },
+            {
+              "attempt": 7,
+              "ehlo_code": 250,
+              "email": "support@monday.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-4399c72cdaasi25902755f8f.36 - gsmtp",
+              "mx_host": "aspmx.l.google.com",
+              "smtp_code": 250,
+              "smtp_message": "2.1.5 OK ffacd0b85a97d-4399c72cdaasi25902755f8f.36 - gsmtp",
+              "status": "accepted",
+              "timings_ms": {
+                "connect": 98.92,
+                "ehlo": 50.26,
+                "mail_from": 46.6,
+                "rcpt_to": 251.81,
+                "total": 447.62
+              }
+            },
+            {
+              "attempt": 8,
+              "ehlo_code": 250,
+              "email": "support@monday.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439b7e005a7si7341123f8f.445 - gsmtp",
+              "mx_host": "aspmx.l.google.com",
+              "smtp_code": 250,
+              "smtp_message": "2.1.5 OK ffacd0b85a97d-439b7e005a7si7341123f8f.445 - gsmtp",
+              "status": "accepted",
+              "timings_ms": {
+                "connect": 98.69,
+                "ehlo": 48.79,
+                "mail_from": 48.7,
+                "rcpt_to": 244.04,
+                "total": 440.26
+              }
+            },
+            {
+              "attempt": 9,
+              "ehlo_code": 250,
+              "email": "support@monday.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439b8b1d4d3si6535055f8f.397 - gsmtp",
+              "mx_host": "aspmx.l.google.com",
+              "smtp_code": 250,
+              "smtp_message": "2.1.5 OK ffacd0b85a97d-439b8b1d4d3si6535055f8f.397 - gsmtp",
+              "status": "accepted",
+              "timings_ms": {
+                "connect": 102.96,
+                "ehlo": 49.6,
+                "mail_from": 47.61,
+                "rcpt_to": 336.82,
+                "total": 537.02
+              }
+            },
+            {
+              "attempt": 10,
+              "ehlo_code": 250,
+              "email": "support@monday.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439aec4e16csi13589464f8f.61 - gsmtp",
+              "mx_host": "aspmx.l.google.com",
+              "smtp_code": 250,
+              "smtp_message": "2.1.5 OK ffacd0b85a97d-439aec4e16csi13589464f8f.61 - gsmtp",
+              "status": "accepted",
+              "timings_ms": {
+                "connect": 106.29,
+                "ehlo": 54.29,
+                "mail_from": 47.34,
+                "rcpt_to": 250.04,
+                "total": 457.99
+              }
+            },
+            {
+              "attempt": 11,
+              "ehlo_code": 250,
+              "email": "support@monday.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439aa9aeee7si14927525f8f.468 - gsmtp",
+              "mx_host": "aspmx.l.google.com",
+              "smtp_code": 250,
+              "smtp_message": "2.1.5 OK ffacd0b85a97d-439aa9aeee7si14927525f8f.468 - gsmtp",
+              "status": "accepted",
+              "timings_ms": {
+                "connect": 99.05,
+                "ehlo": 48.46,
+                "mail_from": 47.02,
+                "rcpt_to": 255.75,
+                "total": 450.32
+              }
+            },
+            {
+              "attempt": 12,
+              "ehlo_code": 250,
+              "email": "support@monday.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439bd594a46si3740106f8f.294 - gsmtp",
+              "mx_host": "aspmx.l.google.com",
+              "smtp_code": 250,
+              "smtp_message": "2.1.5 OK ffacd0b85a97d-439bd594a46si3740106f8f.294 - gsmtp",
+              "status": "accepted",
+              "timings_ms": {
+                "connect": 100.05,
+                "ehlo": 51.17,
+                "mail_from": 48.44,
+                "rcpt_to": 255.63,
+                "total": 455.32
+              }
+            }
+          ],
+          "domain": "monday.com",
+          "email": "support@monday.com",
+          "label": "valid_catch_all",
+          "mx_records": [
+            {
+              "host": "aspmx.l.google.com",
+              "priority": 1
+            },
+            {
+              "host": "alt1.aspmx.l.google.com",
+              "priority": 5
+            },
+            {
+              "host": "alt2.aspmx.l.google.com",
+              "priority": 5
+            },
+            {
+              "host": "alt3.aspmx.l.google.com",
+              "priority": 10
+            },
+            {
+              "host": "alt4.aspmx.l.google.com",
+              "priority": 10
+            }
+          ],
+          "summary": {
+            "connect_timing_ms": {
+              "count": 12,
+              "max_ms": 326.08,
+              "mean_ms": 119.45,
+              "median_ms": 99.84,
+              "min_ms": 96.45
+            },
+            "rcpt_timing_ms": {
+              "count": 12,
+              "max_ms": 336.82,
+              "mean_ms": 261.63,
+              "median_ms": 255.56,
+              "min_ms": 234.54
+            },
+            "smtp_code_counts": {
+              "250": 12
+            },
+            "stage": "completed",
+            "status_counts": {
+              "accepted": 12
+            },
+            "total_timing_ms": {
+              "count": 12,
+              "max_ms": 658.29,
+              "mean_ms": 479.59,
+              "median_ms": 457.34,
+              "min_ms": 440.26
+            }
+          }
+        },
+        {
+          "attempts": [
+            {
+              "attempt": 1,
+              "ehlo_code": 250,
+              "email": "zzq9k2p7r4n8x1@monday.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439b6c8a4a4si8345165f8f.183 - gsmtp",
+              "mx_host": "aspmx.l.google.com",
+              "smtp_code": 250,
+              "smtp_message": "2.1.5 OK ffacd0b85a97d-439b6c8a4a4si8345165f8f.183 - gsmtp",
+              "status": "accepted",
+              "timings_ms": {
+                "connect": 104.21,
+                "ehlo": 50.02,
+                "mail_from": 48.77,
+                "rcpt_to": 80.92,
+                "total": 283.94
+              }
+            },
+            {
+              "attempt": 2,
+              "ehlo_code": 250,
+              "email": "zzq9k2p7r4n8x1@monday.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439b9ad71a8si5946943f8f.253 - gsmtp",
+              "mx_host": "aspmx.l.google.com",
+              "smtp_code": 250,
+              "smtp_message": "2.1.5 OK ffacd0b85a97d-439b9ad71a8si5946943f8f.253 - gsmtp",
+              "status": "accepted",
+              "timings_ms": {
+                "connect": 323.09,
+                "ehlo": 204.66,
+                "mail_from": 194.15,
+                "rcpt_to": 139.97,
+                "total": 861.9
+              }
+            },
+            {
+              "attempt": 3,
+              "ehlo_code": 250,
+              "email": "zzq9k2p7r4n8x1@monday.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439b457fbacsi11070155f8f.63 - gsmtp",
+              "mx_host": "aspmx.l.google.com",
+              "smtp_code": 250,
+              "smtp_message": "2.1.5 OK ffacd0b85a97d-439b457fbacsi11070155f8f.63 - gsmtp",
+              "status": "accepted",
+              "timings_ms": {
+                "connect": 97.82,
+                "ehlo": 49.11,
+                "mail_from": 46.55,
+                "rcpt_to": 74.5,
+                "total": 267.99
+              }
+            },
+            {
+              "attempt": 4,
+              "ehlo_code": 250,
+              "email": "zzq9k2p7r4n8x1@monday.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439b50a2170si10719254f8f.70 - gsmtp",
+              "mx_host": "aspmx.l.google.com",
+              "smtp_code": 250,
+              "smtp_message": "2.1.5 OK ffacd0b85a97d-439b50a2170si10719254f8f.70 - gsmtp",
+              "status": "accepted",
+              "timings_ms": {
+                "connect": 94.67,
+                "ehlo": 48.21,
+                "mail_from": 46.48,
+                "rcpt_to": 73.07,
+                "total": 262.45
+              }
+            },
+            {
+              "attempt": 5,
+              "ehlo_code": 250,
+              "email": "zzq9k2p7r4n8x1@monday.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-4399c746ab8si23876840f8f.138 - gsmtp",
+              "mx_host": "aspmx.l.google.com",
+              "smtp_code": 250,
+              "smtp_message": "2.1.5 OK ffacd0b85a97d-4399c746ab8si23876840f8f.138 - gsmtp",
+              "status": "accepted",
+              "timings_ms": {
+                "connect": 99.9,
+                "ehlo": 51.73,
+                "mail_from": 47.35,
+                "rcpt_to": 82.98,
+                "total": 281.99
+              }
+            },
+            {
+              "attempt": 6,
+              "ehlo_code": 250,
+              "email": "zzq9k2p7r4n8x1@monday.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439bee16e91si1682503f8f.209 - gsmtp",
+              "mx_host": "aspmx.l.google.com",
+              "smtp_code": 250,
+              "smtp_message": "2.1.5 OK ffacd0b85a97d-439bee16e91si1682503f8f.209 - gsmtp",
+              "status": "accepted",
+              "timings_ms": {
+                "connect": 97.28,
+                "ehlo": 55.27,
+                "mail_from": 67.48,
+                "rcpt_to": 163.1,
+                "total": 383.14
+              }
+            },
+            {
+              "attempt": 7,
+              "ehlo_code": 250,
+              "email": "zzq9k2p7r4n8x1@monday.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK 5b1f17b1804b1-483c3b3443bsi277367005e9.1 - gsmtp",
+              "mx_host": "aspmx.l.google.com",
+              "smtp_code": 250,
+              "smtp_message": "2.1.5 OK 5b1f17b1804b1-483c3b3443bsi277367005e9.1 - gsmtp",
+              "status": "accepted",
+              "timings_ms": {
+                "connect": 211.94,
+                "ehlo": 48.98,
+                "mail_from": 47.93,
+                "rcpt_to": 73.54,
+                "total": 382.41
+              }
+            },
+            {
+              "attempt": 8,
+              "ehlo_code": 250,
+              "email": "zzq9k2p7r4n8x1@monday.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439bd1b5dc4si3722103f8f.426 - gsmtp",
+              "mx_host": "aspmx.l.google.com",
+              "smtp_code": 250,
+              "smtp_message": "2.1.5 OK ffacd0b85a97d-439bd1b5dc4si3722103f8f.426 - gsmtp",
+              "status": "accepted",
+              "timings_ms": {
+                "connect": 103.87,
+                "ehlo": 48.05,
+                "mail_from": 45.95,
+                "rcpt_to": 76.95,
+                "total": 274.85
+              }
+            },
+            {
+              "attempt": 9,
+              "ehlo_code": 250,
+              "email": "zzq9k2p7r4n8x1@monday.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439b70d38absi7838346f8f.29 - gsmtp",
+              "mx_host": "aspmx.l.google.com",
+              "smtp_code": 250,
+              "smtp_message": "2.1.5 OK ffacd0b85a97d-439b70d38absi7838346f8f.29 - gsmtp",
+              "status": "accepted",
+              "timings_ms": {
+                "connect": 97.3,
+                "ehlo": 48.94,
+                "mail_from": 46.12,
+                "rcpt_to": 79.35,
+                "total": 271.75
+              }
+            },
+            {
+              "attempt": 10,
+              "ehlo_code": 250,
+              "email": "zzq9k2p7r4n8x1@monday.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439b49e34c6si10236077f8f.108 - gsmtp",
+              "mx_host": "aspmx.l.google.com",
+              "smtp_code": 250,
+              "smtp_message": "2.1.5 OK ffacd0b85a97d-439b49e34c6si10236077f8f.108 - gsmtp",
+              "status": "accepted",
+              "timings_ms": {
+                "connect": 100.49,
+                "ehlo": 48.89,
+                "mail_from": 46.48,
+                "rcpt_to": 82.39,
+                "total": 278.27
+              }
+            },
+            {
+              "attempt": 11,
+              "ehlo_code": 250,
+              "email": "zzq9k2p7r4n8x1@monday.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-4399c7bed8bsi23913767f8f.331 - gsmtp",
+              "mx_host": "aspmx.l.google.com",
+              "smtp_code": 250,
+              "smtp_message": "2.1.5 OK ffacd0b85a97d-4399c7bed8bsi23913767f8f.331 - gsmtp",
+              "status": "accepted",
+              "timings_ms": {
+                "connect": 391.5,
+                "ehlo": 233.97,
+                "mail_from": 201.47,
+                "rcpt_to": 210.53,
+                "total": 1037.49
+              }
+            },
+            {
+              "attempt": 12,
+              "ehlo_code": 250,
+              "email": "zzq9k2p7r4n8x1@monday.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439b8b1d5dcsi6440706f8f.395 - gsmtp",
+              "mx_host": "aspmx.l.google.com",
+              "smtp_code": 250,
+              "smtp_message": "2.1.5 OK ffacd0b85a97d-439b8b1d5dcsi6440706f8f.395 - gsmtp",
+              "status": "accepted",
+              "timings_ms": {
+                "connect": 202.64,
+                "ehlo": 222.39,
+                "mail_from": 143.94,
+                "rcpt_to": 75.33,
+                "total": 644.34
+              }
+            }
+          ],
+          "domain": "monday.com",
+          "email": "zzq9k2p7r4n8x1@monday.com",
+          "label": "invalid_catch_all",
+          "mx_records": [
+            {
+              "host": "aspmx.l.google.com",
+              "priority": 1
+            },
+            {
+              "host": "alt1.aspmx.l.google.com",
+              "priority": 5
+            },
+            {
+              "host": "alt2.aspmx.l.google.com",
+              "priority": 5
+            },
+            {
+              "host": "alt4.aspmx.l.google.com",
+              "priority": 10
+            },
+            {
+              "host": "alt3.aspmx.l.google.com",
+              "priority": 10
+            }
+          ],
+          "summary": {
+            "connect_timing_ms": {
+              "count": 12,
+              "max_ms": 391.5,
+              "mean_ms": 160.39,
+              "median_ms": 102.18,
+              "min_ms": 94.67
+            },
+            "rcpt_timing_ms": {
+              "count": 12,
+              "max_ms": 210.53,
+              "mean_ms": 101.05,
+              "median_ms": 80.13,
+              "min_ms": 73.07
+            },
+            "smtp_code_counts": {
+              "250": 12
+            },
+            "stage": "completed",
+            "status_counts": {
+              "accepted": 12
+            },
+            "total_timing_ms": {
+              "count": 12,
+              "max_ms": 1037.49,
+              "mean_ms": 435.88,
+              "median_ms": 282.97,
+              "min_ms": 262.45
+            }
+          }
+        }
+      ],
+      "label_summary": {
+        "invalid_catch_all": {
+          "attempt_count": 12,
+          "rcpt_timing_ms": {
+            "count": 12,
+            "max_ms": 210.53,
+            "mean_ms": 101.05,
+            "median_ms": 80.13,
+            "min_ms": 73.07
+          },
+          "status_counts": {
+            "accepted": 12
+          },
+          "total_timing_ms": {
+            "count": 12,
+            "max_ms": 1037.49,
+            "mean_ms": 435.88,
+            "median_ms": 282.97,
+            "min_ms": 262.45
+          }
+        },
+        "valid_catch_all": {
+          "attempt_count": 12,
+          "rcpt_timing_ms": {
+            "count": 12,
+            "max_ms": 336.82,
+            "mean_ms": 261.63,
+            "median_ms": 255.56,
+            "min_ms": 234.54
+          },
+          "status_counts": {
+            "accepted": 12
+          },
+          "total_timing_ms": {
+            "count": 12,
+            "max_ms": 658.29,
+            "mean_ms": 479.59,
+            "median_ms": 457.34,
+            "min_ms": 440.26
+          }
+        }
+      },
+      "runs_per_email": 12,
+      "stage": "completed"
+    },
+    "stage": "completed"
+  },
+  "generated_at_utc": "2026-03-02T21:13:56.977892+00:00",
+  "input": {
+    "domain": "",
+    "name": ""
+  },
+  "settings": {
+    "api_consensus_enabled": false,
+    "benchmark_file": "/Users/don/EmailFinder/benchmark_cases.monday.csv",
+    "benchmark_max_cases": 50,
+    "benchmark_pause_ms": 300,
+    "benchmark_runs": 12,
+    "benchmark_starttls": false,
+    "consensus_delay_ms": 250,
+    "consensus_max_candidates": 6,
+    "consensus_providers": [
+      "hunter",
+      "abstract"
+    ],
+    "doh_enabled": true,
+    "doh_via_curl": false,
+    "from_address": "probe@localhost",
+    "known_emails": [],
+    "max_candidates": 12,
+    "osint_delay_ms": 300,
+    "osint_enabled": false,
+    "osint_max_candidates": 8,
+    "osint_max_results": 6,
+    "pause_ms": 700,
+    "probe_smtp": false,
+    "timeout_seconds": 8.0
+  }
+}

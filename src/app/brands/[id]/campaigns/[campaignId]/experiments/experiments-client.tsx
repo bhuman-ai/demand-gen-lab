@@ -106,7 +106,7 @@ function friendlyEventName(eventType: string) {
   if (eventType === "lead_sourcing_email_discovery_polled") return "Email discovery status";
   if (eventType === "lead_sourcing_email_discovery_completed") return "Email discovery results";
   if (eventType === "lead_sourcing_completed") return "Lead sourcing completed";
-  if (eventType === "lead_sourced_apify") return "Leads stored";
+  if (eventType === "lead_sourced" || eventType === "lead_sourced_apify") return "Leads stored";
   if (eventType === "schedule_failed") return "Scheduling failed";
   if (eventType === "lead_sourcing_failed") return "Lead sourcing failed";
   if (eventType === "message_scheduled") return "Messages scheduled";
@@ -169,7 +169,7 @@ function summarizeEvent(event: OutreachRunEvent) {
     const sourcedCount = asNumber(event.payload.sourcedCount);
     return `Provider returned ${sourcedCount ?? 0} leads`;
   }
-  if (event.eventType === "lead_sourced_apify") {
+  if (event.eventType === "lead_sourced" || event.eventType === "lead_sourced_apify") {
     const count = asNumber(event.payload.count);
     const blockedCount = asNumber(event.payload.blockedCount);
     return `Stored ${count ?? 0} leads${blockedCount ? ` (${blockedCount} suppressed)` : ""}`;

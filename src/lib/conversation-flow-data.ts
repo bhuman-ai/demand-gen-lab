@@ -8,6 +8,7 @@ import type {
   ConversationFlowGraph,
   ConversationFlowNode,
   ConversationPromptPolicy,
+  ConversationReplyTimingPolicy,
   ConversationMap,
   ConversationSession,
 } from "@/lib/factory-types";
@@ -53,10 +54,17 @@ type ConversationSeedContext = {
   campaignGoal?: string;
 };
 
+type ConversationPlaybook = "selffunded_aws" | "bhuman_private_drop" | "generic";
+
 const DEFAULT_PROMPT_POLICY: ConversationPromptPolicy = {
   subjectMaxWords: 0,
   bodyMaxWords: 0,
   exactlyOneCta: false,
+};
+
+const DEFAULT_REPLY_TIMING: ConversationReplyTimingPolicy = {
+  minimumDelayMinutes: 40,
+  randomAdditionalDelayMinutes: 20,
 };
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -112,9 +120,32 @@ function buildNodePromptTemplate(input: {
     .join("\n");
 }
 
+function normalizeReplyTiming(value: unknown): ConversationReplyTimingPolicy {
+  const row = asRecord(value);
+  return {
+    minimumDelayMinutes: Math.max(
+      0,
+      Math.min(10080, Math.round(Number(row.minimumDelayMinutes ?? row.minimum_delay_minutes ?? DEFAULT_REPLY_TIMING.minimumDelayMinutes) || DEFAULT_REPLY_TIMING.minimumDelayMinutes))
+    ),
+    randomAdditionalDelayMinutes: Math.max(
+      0,
+      Math.min(
+        1440,
+        Math.round(
+          Number(
+            row.randomAdditionalDelayMinutes ??
+              row.random_additional_delay_minutes ??
+              DEFAULT_REPLY_TIMING.randomAdditionalDelayMinutes
+          ) || DEFAULT_REPLY_TIMING.randomAdditionalDelayMinutes
+        )
+      )
+    ),
+  };
+}
+
 function defaultNode(position: { x: number; y: number }): ConversationFlowNode {
-  const subject = "Quick question";
-  const body = "Hi {{firstName}},\n\nSaw {{company}} and wanted to ask one quick thing about {{campaignGoal}}.";
+  const subject = "Question for {{company}}";
+  const body = "Hi {{firstName}},\n\nSaw {{company}} and wanted to ask about {{campaignGoal}}.";
   return {
     id: createId("node"),
     kind: "message",
@@ -236,7 +267,348 @@ function normalizeMessageNodePromptTemplate(node: ConversationFlowNode): Convers
   };
 }
 
+function detectConversationPlaybook(context: ConversationSeedContext): ConversationPlaybook {
+  const haystack = [context.offer ?? "", context.cta ?? "", context.audience ?? "", context.campaignGoal ?? ""]
+    .join("\n")
+    .toLowerCase();
+
+  if (haystack.includes("aws") && (haystack.includes("self-funded") || haystack.includes("bootstrapped"))) {
+    return "selffunded_aws";
+  }
+  if (haystack.includes("bhuman")) {
+    return "bhuman_private_drop";
+  }
+  return "generic";
+}
+
+function configureMessageNode(
+  node: ConversationFlowNode,
+  input: {
+    title: string;
+    subject: string;
+    body: string;
+    autoSend?: boolean;
+    delayMinutes?: number;
+  }
+) {
+  node.title = input.title;
+  node.subject = input.subject;
+  node.body = input.body;
+  node.autoSend = input.autoSend ?? node.autoSend;
+  node.delayMinutes = input.delayMinutes ?? node.delayMinutes;
+  node.promptTemplate = buildNodePromptTemplate({
+    title: node.title,
+    hint: node.body,
+  });
+  return node;
+}
+
+function buildSelffundedAwsGraph(): ConversationFlowGraph {
+  const start = configureMessageNode(defaultNode({ x: 60, y: 220 }), {
+    title: "Ask if they qualify",
+    subject: "AWS credits for self-funded founders",
+    body:
+      "Hi {{firstName}},\n\nWe finalized a partnership with AWS to distribute cloud credits to self-funded founders.\n\nI didn't see anything on Crunchbase, but wanted to confirm: are you entirely self-funded at this point? Angels or friends/family are fine, just no institutional VC.\n\nIf you qualify, I'm happy to send the application link.",
+    autoSend: true,
+  });
+
+  const application = configureMessageNode(defaultNode({ x: 460, y: 60 }), {
+    title: "Send AWS application link",
+    subject: "AWS application link",
+    body:
+      "Hi {{firstName}},\n\nThanks for confirming you're fully self-funded.\n\nHere's the application link for the AWS credits program:\nhttps://www.selffunded.dev/aws-credits/apply\n\nOnce you submit, AWS handles final vetting and approval on their side. If anything is unclear as you go through it, feel free to send it over.",
+    autoSend: true,
+    delayMinutes: 40,
+  });
+
+  const question = configureMessageNode(defaultNode({ x: 460, y: 250 }), {
+    title: "Answer AWS question",
+    subject: "Answer on AWS credits",
+    body:
+      "Hi {{firstName}},\n\nAnswer the question directly and keep it grounded in the actual AWS credits program details.\n\nIf the question is really about eligibility or the next step, it is fine to include the application link.\n\nDo not promise timing, approvals, or deadlines.",
+    autoSend: false,
+  });
+
+  const relevant = configureMessageNode(defaultNode({ x: 460, y: 440 }), {
+    title: "Keep relationship warm",
+    subject: "Noted",
+    body:
+      "Hi {{firstName}},\n\nAcknowledge that AWS may not be the fit right now.\n\nIf they already joined the platform, do not pitch joining again. If they mention AI, LLM, devtool, or infra deals, say those are categories we are prioritizing.\n\nKeep the relationship warm without pushing AWS again.",
+    autoSend: false,
+  });
+
+  const fiveDay = configureMessageNode(defaultNode({ x: 900, y: 60 }), {
+    title: "5-day application check-in",
+    subject: "Still interested in AWS credits?",
+    body:
+      "Hi {{firstName}},\n\nLeaving this here in case the AWS credits application got buried.\n\nIf you're still fully self-funded and want me to resend the link, I can do that.",
+    autoSend: true,
+  });
+
+  const end = defaultTerminalNode({ x: 1160, y: 250 });
+
+  return {
+    version: 1,
+    maxDepth: 6,
+    startNodeId: start.id,
+    nodes: [start, application, question, relevant, fiveDay, end],
+    edges: [
+      {
+        id: createId("edge"),
+        fromNodeId: start.id,
+        toNodeId: application.id,
+        trigger: "intent",
+        intent: "interest",
+        waitMinutes: 0,
+        confidenceThreshold: 0.65,
+        priority: 1,
+      },
+      {
+        id: createId("edge"),
+        fromNodeId: start.id,
+        toNodeId: question.id,
+        trigger: "intent",
+        intent: "question",
+        waitMinutes: 0,
+        confidenceThreshold: 0.6,
+        priority: 2,
+      },
+      {
+        id: createId("edge"),
+        fromNodeId: start.id,
+        toNodeId: relevant.id,
+        trigger: "intent",
+        intent: "objection",
+        waitMinutes: 0,
+        confidenceThreshold: 0.6,
+        priority: 3,
+      },
+      {
+        id: createId("edge"),
+        fromNodeId: start.id,
+        toNodeId: relevant.id,
+        trigger: "intent",
+        intent: "other",
+        waitMinutes: 0,
+        confidenceThreshold: 0.55,
+        priority: 4,
+      },
+      {
+        id: createId("edge"),
+        fromNodeId: start.id,
+        toNodeId: end.id,
+        trigger: "intent",
+        intent: "unsubscribe",
+        waitMinutes: 0,
+        confidenceThreshold: 0.8,
+        priority: 5,
+      },
+      {
+        id: createId("edge"),
+        fromNodeId: application.id,
+        toNodeId: fiveDay.id,
+        trigger: "timer",
+        intent: "",
+        waitMinutes: 7200,
+        confidenceThreshold: 0,
+        priority: 1,
+      },
+      {
+        id: createId("edge"),
+        fromNodeId: application.id,
+        toNodeId: question.id,
+        trigger: "intent",
+        intent: "question",
+        waitMinutes: 0,
+        confidenceThreshold: 0.6,
+        priority: 2,
+      },
+      {
+        id: createId("edge"),
+        fromNodeId: application.id,
+        toNodeId: relevant.id,
+        trigger: "intent",
+        intent: "objection",
+        waitMinutes: 0,
+        confidenceThreshold: 0.6,
+        priority: 3,
+      },
+      {
+        id: createId("edge"),
+        fromNodeId: application.id,
+        toNodeId: end.id,
+        trigger: "intent",
+        intent: "unsubscribe",
+        waitMinutes: 0,
+        confidenceThreshold: 0.8,
+        priority: 4,
+      },
+      {
+        id: createId("edge"),
+        fromNodeId: fiveDay.id,
+        toNodeId: question.id,
+        trigger: "intent",
+        intent: "question",
+        waitMinutes: 0,
+        confidenceThreshold: 0.6,
+        priority: 1,
+      },
+      {
+        id: createId("edge"),
+        fromNodeId: fiveDay.id,
+        toNodeId: application.id,
+        trigger: "intent",
+        intent: "interest",
+        waitMinutes: 0,
+        confidenceThreshold: 0.65,
+        priority: 2,
+      },
+      {
+        id: createId("edge"),
+        fromNodeId: fiveDay.id,
+        toNodeId: end.id,
+        trigger: "fallback",
+        intent: "",
+        waitMinutes: 0,
+        confidenceThreshold: 0,
+        priority: 3,
+      },
+      {
+        id: createId("edge"),
+        fromNodeId: question.id,
+        toNodeId: end.id,
+        trigger: "fallback",
+        intent: "",
+        waitMinutes: 0,
+        confidenceThreshold: 0,
+        priority: 1,
+      },
+      {
+        id: createId("edge"),
+        fromNodeId: relevant.id,
+        toNodeId: end.id,
+        trigger: "fallback",
+        intent: "",
+        waitMinutes: 0,
+        confidenceThreshold: 0,
+        priority: 1,
+      },
+    ],
+    previewLeads: [],
+    previewLeadId: "",
+    replyTiming: { ...DEFAULT_REPLY_TIMING },
+  };
+}
+
+function buildBhumanPrivateDropGraph(): ConversationFlowGraph {
+  const start = configureMessageNode(defaultNode({ x: 60, y: 220 }), {
+    title: "Private BHuman drop",
+    subject: "Private BHuman availability",
+    body:
+      "Hi {{firstName}},\n\nWe have a private BHuman drop with 25 one-month licenses only.\n\nIt includes Speakeasy for full AI videos from a prompt and Personalized Video from one base video with CSV or API personalization.\n\nIf this is relevant for your team, just reply and I'll see if there is still availability.",
+    autoSend: true,
+  });
+
+  const interest = configureMessageNode(defaultNode({ x: 460, y: 120 }), {
+    title: "Check availability manually",
+    subject: "BHuman availability",
+    body:
+      "Hi {{firstName}},\n\nHandle this manually because the BHuman drop is allocated by hand and there are only 25 spots.\n\nIf they take a deal, remind them feedback afterward is required to stay eligible for future drops.",
+    autoSend: false,
+  });
+
+  const question = configureMessageNode(defaultNode({ x: 460, y: 320 }), {
+    title: "Answer BHuman question",
+    subject: "Answer on BHuman",
+    body:
+      "Hi {{firstName}},\n\nAnswer the question clearly and naturally.\n\nKeep the private-drop framing, avoid scripted CTA language, and mention the feedback requirement when it matters.",
+    autoSend: false,
+  });
+
+  const end = defaultTerminalNode({ x: 860, y: 220 });
+
+  return {
+    version: 1,
+    maxDepth: 5,
+    startNodeId: start.id,
+    nodes: [start, interest, question, end],
+    edges: [
+      {
+        id: createId("edge"),
+        fromNodeId: start.id,
+        toNodeId: interest.id,
+        trigger: "intent",
+        intent: "interest",
+        waitMinutes: 0,
+        confidenceThreshold: 0.65,
+        priority: 1,
+      },
+      {
+        id: createId("edge"),
+        fromNodeId: start.id,
+        toNodeId: question.id,
+        trigger: "intent",
+        intent: "question",
+        waitMinutes: 0,
+        confidenceThreshold: 0.6,
+        priority: 2,
+      },
+      {
+        id: createId("edge"),
+        fromNodeId: start.id,
+        toNodeId: end.id,
+        trigger: "intent",
+        intent: "unsubscribe",
+        waitMinutes: 0,
+        confidenceThreshold: 0.8,
+        priority: 3,
+      },
+      {
+        id: createId("edge"),
+        fromNodeId: start.id,
+        toNodeId: end.id,
+        trigger: "fallback",
+        intent: "",
+        waitMinutes: 0,
+        confidenceThreshold: 0,
+        priority: 4,
+      },
+      {
+        id: createId("edge"),
+        fromNodeId: interest.id,
+        toNodeId: end.id,
+        trigger: "fallback",
+        intent: "",
+        waitMinutes: 0,
+        confidenceThreshold: 0,
+        priority: 1,
+      },
+      {
+        id: createId("edge"),
+        fromNodeId: question.id,
+        toNodeId: end.id,
+        trigger: "fallback",
+        intent: "",
+        waitMinutes: 0,
+        confidenceThreshold: 0,
+        priority: 1,
+      },
+    ],
+    previewLeads: [],
+    previewLeadId: "",
+    replyTiming: { ...DEFAULT_REPLY_TIMING },
+  };
+}
+
 export function defaultConversationGraph(context: ConversationSeedContext = {}): ConversationFlowGraph {
+  const playbook = detectConversationPlaybook(context);
+  if (playbook === "selffunded_aws") {
+    return buildSelffundedAwsGraph();
+  }
+  if (playbook === "bhuman_private_drop") {
+    return buildBhumanPrivateDropGraph();
+  }
+
   const offerFromContext = oneLine(context.offer ?? "");
   const inferredCta = oneLine(context.cta ?? "") || extractInlineCta(offerFromContext);
   const cleanOffer = truncate(offerFromContext.replace(/\bCTA\s*:\s*[^\n]+/gi, "").trim(), 220);
@@ -250,9 +622,9 @@ export function defaultConversationGraph(context: ConversationSeedContext = {}):
   start.title = "Start question";
   start.subject = cleanOffer
     ? `Idea: ${truncate(cleanOffer, 58)}`
-    : "Quick question on {{campaignGoal}}";
+    : "Question on {{campaignGoal}}";
   start.body = cleanOffer
-    ? `Hi {{firstName}},\n\nQuick idea for {{company}}: ${cleanOffer}\n\n${
+    ? `Hi {{firstName}},\n\nIdea for {{company}}: ${cleanOffer}\n\n${
         inferredCta || "If this is relevant, open to a short walkthrough?"
       }`
     : "Hi {{firstName}},\n\nNoticed {{company}} and wanted to ask: are you actively working on {{campaignGoal}} right now?\n\nIf yes, I can share a short example from similar teams.";
@@ -281,7 +653,7 @@ export function defaultConversationGraph(context: ConversationSeedContext = {}):
   question.title = "Question answer";
   question.subject = "Short answer";
   question.body =
-    "Great question, {{firstName}}.\n\nShort answer: {{shortAnswer}}\n\nIf useful, I can send one concrete example using your use case for {{company}}.";
+    "Thanks for asking, {{firstName}}.\n\nShort answer: {{shortAnswer}}\n\nIf useful, I can send one concrete example using your use case for {{company}}.";
   question.autoSend = false;
   question.promptTemplate = buildNodePromptTemplate({
     title: question.title,
@@ -290,7 +662,7 @@ export function defaultConversationGraph(context: ConversationSeedContext = {}):
 
   const objection = defaultNode({ x: 420, y: 360 });
   objection.title = "Objection handling";
-  objection.subject = "Totally fair";
+  objection.subject = "Makes sense";
   objection.body =
     `Makes sense. If timing is the blocker, I can send a concise one-pager on ${campaignGoal} and you can review async.\n\nWould that be more useful?`;
   objection.autoSend = false;
@@ -301,9 +673,9 @@ export function defaultConversationGraph(context: ConversationSeedContext = {}):
 
   const noReply = defaultNode({ x: 780, y: 220 });
   noReply.title = "No-reply nudge";
-  noReply.subject = "Close the loop?";
+  noReply.subject = "Should I leave this here?";
   noReply.body =
-    `Just checking once more, {{firstName}}.\n\nShould I close this out, or is there someone else at {{company}} who owns ${campaignGoal}?`;
+    `I can leave this here for now, {{firstName}}.\n\nIf someone else at {{company}} owns ${campaignGoal}, feel free to point me in the right direction.`;
   noReply.autoSend = true;
   noReply.delayMinutes = 1440;
   noReply.promptTemplate = buildNodePromptTemplate({
@@ -412,6 +784,7 @@ export function defaultConversationGraph(context: ConversationSeedContext = {}):
     ],
     previewLeads: [],
     previewLeadId: "",
+    replyTiming: { ...DEFAULT_REPLY_TIMING },
   };
 }
 
@@ -511,6 +884,7 @@ export function normalizeConversationGraph(
     : nodes[0]?.id || fallback.startNodeId;
   const maxDepth = Math.max(1, Math.min(5, Number(row.maxDepth ?? fallback.maxDepth) || fallback.maxDepth));
   const { previewLeads, previewLeadId } = normalizePreviewLeads(row);
+  const replyTiming = normalizeReplyTiming(row.replyTiming ?? row.reply_timing);
 
   if (!nodes.length) {
     if (strict) {
@@ -527,6 +901,7 @@ export function normalizeConversationGraph(
     edges,
     previewLeads,
     previewLeadId,
+    replyTiming,
   };
 }
 

@@ -50,58 +50,6 @@ function normalizeExperiments(value: unknown): ExperimentDraft[] {
     .filter((row) => row.name.length > 0);
 }
 
-function fallbackExperiments(
-  hypotheses: { id: string; title: string; rationale: string }[]
-): ExperimentDraft[] {
-  return hypotheses.flatMap((hypothesis) => {
-    const base = sanitizeAiText(hypothesis.title || "Hypothesis");
-    return [
-      {
-        hypothesisId: hypothesis.id,
-        name: `${base} / Hook-first`,
-        status: "draft" as const,
-        notes: `Lead with a sharp hook tied to: ${sanitizeAiText(hypothesis.rationale || "core problem")}.`,
-        runPolicy: {
-          cadence: "3_step_7_day",
-          dailyCap: 30,
-          hourlyCap: 6,
-          timezone: "America/Los_Angeles",
-          minSpacingMinutes: 8,
-        },
-        executionStatus: "idle",
-      },
-      {
-        hypothesisId: hypothesis.id,
-        name: `${base} / Proof-first`,
-        status: "draft" as const,
-        notes: "Open with measurable proof and concise CTA for pilot or call.",
-        runPolicy: {
-          cadence: "3_step_7_day",
-          dailyCap: 30,
-          hourlyCap: 6,
-          timezone: "America/Los_Angeles",
-          minSpacingMinutes: 8,
-        },
-        executionStatus: "idle",
-      },
-      {
-        hypothesisId: hypothesis.id,
-        name: `${base} / Pain-first`,
-        status: "draft" as const,
-        notes: "Start with an urgent pain signal and end with a one-question CTA.",
-        runPolicy: {
-          cadence: "3_step_7_day",
-          dailyCap: 30,
-          hourlyCap: 6,
-          timezone: "America/Los_Angeles",
-          minSpacingMinutes: 8,
-        },
-        executionStatus: "idle",
-      },
-    ];
-  });
-}
-
 export async function POST(
   request: Request,
   context: { params: Promise<{ brandId: string; campaignId: string }> }
@@ -124,7 +72,13 @@ export async function POST(
 
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) {
-    return NextResponse.json({ experiments: fallbackExperiments(hypotheses), mode: "fallback" });
+    return NextResponse.json(
+      {
+        error: "OPENAI_API_KEY is not configured",
+        hint: "Real-only mode is enabled: fallback experiment generation is disabled.",
+      },
+      { status: 503 }
+    );
   }
 
   const prompt = [
@@ -162,7 +116,14 @@ export async function POST(
 
   const raw = await response.text();
   if (!response.ok) {
-    return NextResponse.json({ experiments: fallbackExperiments(hypotheses), mode: "fallback" });
+    return NextResponse.json(
+      {
+        error: "experiment generation failed",
+        hint: "Real-only mode is enabled: fallback experiment generation is disabled.",
+        providerStatus: response.status,
+      },
+      { status: 502 }
+    );
   }
 
   let payload: unknown = {};
@@ -189,8 +150,14 @@ export async function POST(
   }
   const parsedRecord = asRecord(parsed);
   const experiments = normalizeExperiments(parsedRecord.experiments);
-  return NextResponse.json({
-    experiments: experiments.length ? experiments : fallbackExperiments(hypotheses),
-    mode: experiments.length ? "openai" : "fallback",
-  });
+  if (!experiments.length) {
+    return NextResponse.json(
+      {
+        error: "experiment generation returned no usable experiments",
+        hint: "Real-only mode is enabled: fallback experiment generation is disabled.",
+      },
+      { status: 422 }
+    );
+  }
+  return NextResponse.json({ experiments, mode: "openai" });
 }

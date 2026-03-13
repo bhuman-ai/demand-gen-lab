@@ -1,0 +1,325 @@
+{
+  "items": [
+    {
+      "attempt": 1,
+      "created_at": "2026-03-03T13:15:17.333129+00:00",
+      "domain": "bhuman.ai",
+      "email": "don@bhuman.ai",
+      "last_verdict": "likely-valid",
+      "next_retry_at": "2026-03-03T13:16:18.333093+00:00",
+      "planned_delays_seconds": [
+        61,
+        305
+      ],
+      "reason": "transient-verification-result",
+      "resolved_at": "2026-03-03T13:31:32.718860+00:00",
+      "resolved_reason": "outcome:delivered",
+      "retries_done": 0,
+      "state": "resolved"
+    },
+    {
+      "attempt": 2,
+      "created_at": "2026-03-03T13:15:17.333150+00:00",
+      "domain": "bhuman.ai",
+      "email": "don.bosco@bhuman.ai",
+      "last_verdict": "invalid",
+      "next_retry_at": "2026-03-03T13:16:22.333093+00:00",
+      "planned_delays_seconds": [
+        65,
+        302
+      ],
+      "reason": "transient-verification-result",
+      "resolved_at": "2026-03-03T13:31:32.718860+00:00",
+      "resolved_reason": "outcome:hard_bounce",
+      "retries_done": 0,
+      "state": "failed"
+    },
+    {
+      "attempt": 3,
+      "created_at": "2026-03-03T13:15:17.333163+00:00",
+      "domain": "bhuman.ai",
+      "email": "don_bosco@bhuman.ai",
+      "next_retry_at": "2026-03-03T13:16:18.333093+00:00",
+      "planned_delays_seconds": [
+        61,
+        304
+      ],
+      "reason": "transient-verification-result",
+      "retries_done": 0,
+      "state": "pending"
+    },
+    {
+      "attempt": 1,
+      "created_at": "2026-03-03T13:34:17.330567+00:00",
+      "domain": "example.com",
+      "email": "test@example.com",
+      "from_address": "probe@localhost",
+      "id": "rq_1772544857330_3941",
+      "last_attempt_at": "2026-03-03T13:35:24.721625+00:00",
+      "last_confidence": "low",
+      "last_p_valid": 0.6774,
+      "last_reason": "verification disabled",
+      "last_verdict": "unknown",
+      "next_retry_at": null,
+      "planned_delays_seconds": [
+        1
+      ],
+      "probe_timeout_seconds": 8.0,
+      "reason": "transient-verification-result",
+      "resolved_at": "2026-03-03T13:35:24.721631+00:00",
+      "resolved_reason": "retry_budget_exhausted",
+      "retries_done": 1,
+      "smtp_mx_quorum": 2,
+      "smtp_sequence_check": true,
+      "state": "failed",
+      "verification_mode": "none"
+    },
+    {
+      "attempt": 1,
+      "created_at": "2026-03-03T13:35:23.498760+00:00",
+      "domain": "example.com",
+      "email": "test@example.com",
+      "from_address": "probe@localhost",
+      "id": "rq_1772544923498_8736",
+      "last_attempt_at": "2026-03-03T13:35:24.721633+00:00",
+      "last_confidence": "low",
+      "last_p_valid": 0.6774,
+      "last_reason": "verification disabled",
+      "last_verdict": "unknown",
+      "next_retry_at": null,
+      "planned_delays_seconds": [
+        1
+      ],
+      "probe_timeout_seconds": 8.0,
+      "reason": "transient-verification-result",
+      "resolved_at": "2026-03-03T13:35:24.721635+00:00",
+      "resolved_reason": "retry_budget_exhausted",
+      "retries_done": 1,
+      "smtp_mx_quorum": 2,
+      "smtp_sequence_check": true,
+      "state": "failed",
+      "verification_mode": "none"
+    },
+    {
+      "attempt": 1,
+      "created_at": "2026-03-04T13:07:37.009039+00:00",
+      "domain": "barrierreef.org",
+      "email": "katrina@barrierreef.org",
+      "from_address": "probe@localhost",
+      "id": "rq_1772629657009_5860",
+      "next_retry_at": "2026-03-04T13:12:37.009016+00:00",
+      "planned_delays_seconds": [
+        300,
+        1822
+      ],
+      "probe_timeout_seconds": 8.0,
+      "reason": "transient-verification-result",
+      "retries_done": 0,
+      "smtp_mx_quorum": 2,
+      "smtp_sequence_check": true,
+      "state": "pending",
+      "verification_mode": "none"
+    },
+    {
+      "attempt": 2,
+      "created_at": "2026-03-04T13:07:37.009051+00:00",
+      "domain": "barrierreef.org",
+      "email": "katrina.garvin@barrierreef.org",
+      "from_address": "probe@localhost",
+      "id": "rq_1772629657009_7290",
+      "next_retry_at": "2026-03-04T13:12:59.009016+00:00",
+      "planned_delays_seconds": [
+        322,
+        1818
+      ],
+      "probe_timeout_seconds": 8.0,
+      "reason": "transient-verification-result",
+      "retries_done": 0,
+      "smtp_mx_quorum": 2,
+      "smtp_sequence_check": true,
+      "state": "pending",
+      "verification_mode": "none"
+    },
+    {
+      "attempt": 3,
+      "created_at": "2026-03-04T13:07:37.009057+00:00",
+      "domain": "barrierreef.org",
+      "email": "katrina_garvin@barrierreef.org",
+      "from_address": "probe@localhost",
+      "id": "rq_1772629657009_8523",
+      "next_retry_at": "2026-03-04T13:13:03.009016+00:00",
+      "planned_delays_seconds": [
+        326,
+        1841
+      ],
+      "probe_timeout_seconds": 8.0,
+      "reason": "transient-verification-result",
+      "retries_done": 0,
+      "smtp_mx_quorum": 2,
+      "smtp_sequence_check": true,
+      "state": "pending",
+      "verification_mode": "none"
+    },
+    {
+      "attempt": 4,
+      "created_at": "2026-03-04T13:07:37.009062+00:00",
+      "domain": "barrierreef.org",
+      "email": "katrina-garvin@barrierreef.org",
+      "from_address": "probe@localhost",
+      "id": "rq_1772629657009_1613",
+      "next_retry_at": "2026-03-04T13:12:48.009016+00:00",
+      "planned_delays_seconds": [
+        311,
+        1836
+      ],
+      "probe_timeout_seconds": 8.0,
+      "reason": "transient-verification-result",
+      "retries_done": 0,
+      "smtp_mx_quorum": 2,
+      "smtp_sequence_check": true,
+      "state": "pending",
+      "verification_mode": "none"
+    },
+    {
+      "attempt": 5,
+      "created_at": "2026-03-04T13:07:37.009067+00:00",
+      "domain": "barrierreef.org",
+      "email": "katrinagarvin@barrierreef.org",
+      "from_address": "probe@localhost",
+      "id": "rq_1772629657009_5686",
+      "next_retry_at": "2026-03-04T13:13:13.009016+00:00",
+      "planned_delays_seconds": [
+        336,
+        1828
+      ],
+      "probe_timeout_seconds": 8.0,
+      "reason": "transient-verification-result",
+      "retries_done": 0,
+      "smtp_mx_quorum": 2,
+      "smtp_sequence_check": true,
+      "state": "pending",
+      "verification_mode": "none"
+    },
+    {
+      "attempt": 6,
+      "created_at": "2026-03-04T13:07:37.009071+00:00",
+      "domain": "barrierreef.org",
+      "email": "kgarvin@barrierreef.org",
+      "from_address": "probe@localhost",
+      "id": "rq_1772629657009_7680",
+      "next_retry_at": "2026-03-04T13:12:59.009016+00:00",
+      "planned_delays_seconds": [
+        322,
+        1819
+      ],
+      "probe_timeout_seconds": 8.0,
+      "reason": "transient-verification-result",
+      "retries_done": 0,
+      "smtp_mx_quorum": 2,
+      "smtp_sequence_check": true,
+      "state": "pending",
+      "verification_mode": "none"
+    },
+    {
+      "attempt": 1,
+      "created_at": "2026-03-04T13:07:37.010378+00:00",
+      "domain": "bhuman.ai",
+      "email": "don@bhuman.ai",
+      "from_address": "probe@localhost",
+      "id": "rq_1772629657010_3970",
+      "next_retry_at": "2026-03-04T13:12:43.010371+00:00",
+      "planned_delays_seconds": [
+        306,
+        1837
+      ],
+      "probe_timeout_seconds": 8.0,
+      "reason": "transient-verification-result",
+      "retries_done": 0,
+      "smtp_mx_quorum": 2,
+      "smtp_sequence_check": true,
+      "state": "pending",
+      "verification_mode": "none"
+    },
+    {
+      "attempt": 2,
+      "created_at": "2026-03-04T13:07:37.010385+00:00",
+      "domain": "bhuman.ai",
+      "email": "don.bosco@bhuman.ai",
+      "from_address": "probe@localhost",
+      "id": "rq_1772629657010_6844",
+      "next_retry_at": "2026-03-04T13:13:04.010371+00:00",
+      "planned_delays_seconds": [
+        327,
+        1824
+      ],
+      "probe_timeout_seconds": 8.0,
+      "reason": "transient-verification-result",
+      "retries_done": 0,
+      "smtp_mx_quorum": 2,
+      "smtp_sequence_check": true,
+      "state": "pending",
+      "verification_mode": "none"
+    },
+    {
+      "attempt": 4,
+      "created_at": "2026-03-04T13:07:37.010396+00:00",
+      "domain": "bhuman.ai",
+      "email": "don-bosco@bhuman.ai",
+      "from_address": "probe@localhost",
+      "id": "rq_1772629657010_2686",
+      "next_retry_at": "2026-03-04T13:12:47.010371+00:00",
+      "planned_delays_seconds": [
+        310,
+        1826
+      ],
+      "probe_timeout_seconds": 8.0,
+      "reason": "transient-verification-result",
+      "retries_done": 0,
+      "smtp_mx_quorum": 2,
+      "smtp_sequence_check": true,
+      "state": "pending",
+      "verification_mode": "none"
+    },
+    {
+      "attempt": 5,
+      "created_at": "2026-03-04T13:07:37.010402+00:00",
+      "domain": "bhuman.ai",
+      "email": "donbosco@bhuman.ai",
+      "from_address": "probe@localhost",
+      "id": "rq_1772629657010_8460",
+      "next_retry_at": "2026-03-04T13:13:12.010371+00:00",
+      "planned_delays_seconds": [
+        335,
+        1837
+      ],
+      "probe_timeout_seconds": 8.0,
+      "reason": "transient-verification-result",
+      "retries_done": 0,
+      "smtp_mx_quorum": 2,
+      "smtp_sequence_check": true,
+      "state": "pending",
+      "verification_mode": "none"
+    },
+    {
+      "attempt": 6,
+      "created_at": "2026-03-04T13:07:37.010409+00:00",
+      "domain": "bhuman.ai",
+      "email": "dbosco@bhuman.ai",
+      "from_address": "probe@localhost",
+      "id": "rq_1772629657010_8117",
+      "next_retry_at": "2026-03-04T13:13:11.010371+00:00",
+      "planned_delays_seconds": [
+        334,
+        1809
+      ],
+      "probe_timeout_seconds": 8.0,
+      "reason": "transient-verification-result",
+      "retries_done": 0,
+      "smtp_mx_quorum": 2,
+      "smtp_sequence_check": true,
+      "state": "pending",
+      "verification_mode": "none"
+    }
+  ],
+  "version": 1
+}

@@ -5,7 +5,7 @@ function Card({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) {
   return (
     <div
       className={cn(
-        "rounded-3xl border border-[color:var(--border)] bg-[color:var(--surface)] shadow-[0_18px_44px_-28px_color-mix(in_srgb,var(--shadow)_88%,transparent)]",
+        "rounded-[12px] border border-[color:var(--border)] bg-[color:var(--surface)] shadow-[0_10px_30px_-26px_color-mix(in_oklab,var(--shadow)_82%,transparent)]",
         className
       )}
       {...props}
@@ -14,11 +14,11 @@ function Card({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) {
 }
 
 function CardHeader({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) {
-  return <div className={cn("space-y-1 p-5 md:p-6", className)} {...props} />;
+  return <div className={cn("space-y-1.5 p-5 md:p-6", className)} {...props} />;
 }
 
 function CardTitle({ className, ...props }: React.HTMLAttributes<HTMLHeadingElement>) {
-  return <h3 className={cn("text-lg font-semibold tracking-tight", className)} {...props} />;
+  return <h3 className={cn("text-lg font-semibold tracking-[-0.03em]", className)} {...props} />;
 }
 
 function CardDescription({ className, ...props }: React.HTMLAttributes<HTMLParagraphElement>) {

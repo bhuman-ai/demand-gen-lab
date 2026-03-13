@@ -1,0 +1,308 @@
+{
+  "benchmark": {
+    "loader": {
+      "case_count": 2,
+      "ignored": [],
+      "reason": null
+    },
+    "result": {
+      "case_count": 2,
+      "cases": [
+        {
+          "attempts": [
+            {
+              "attempt": 1,
+              "email": "don@bhuman.ai",
+              "error": "timed out",
+              "mail_code": null,
+              "mail_message": "",
+              "mx_host": "smtp.google.com",
+              "smtp_code": null,
+              "smtp_message": "",
+              "status": "unknown",
+              "timings_ms": {
+                "total": 20014.08
+              }
+            },
+            {
+              "attempt": 2,
+              "email": "don@bhuman.ai",
+              "error": "timed out",
+              "mail_code": null,
+              "mail_message": "",
+              "mx_host": "smtp.google.com",
+              "smtp_code": null,
+              "smtp_message": "",
+              "status": "unknown",
+              "timings_ms": {
+                "total": 20011.12
+              }
+            },
+            {
+              "attempt": 3,
+              "email": "don@bhuman.ai",
+              "error": "timed out",
+              "mail_code": null,
+              "mail_message": "",
+              "mx_host": "smtp.google.com",
+              "smtp_code": null,
+              "smtp_message": "",
+              "status": "unknown",
+              "timings_ms": {
+                "total": 20012.0
+              }
+            },
+            {
+              "attempt": 4,
+              "email": "don@bhuman.ai",
+              "error": "timed out",
+              "mail_code": null,
+              "mail_message": "",
+              "mx_host": "smtp.google.com",
+              "smtp_code": null,
+              "smtp_message": "",
+              "status": "unknown",
+              "timings_ms": {
+                "total": 20013.83
+              }
+            },
+            {
+              "attempt": 5,
+              "email": "don@bhuman.ai",
+              "error": "timed out",
+              "mail_code": null,
+              "mail_message": "",
+              "mx_host": "smtp.google.com",
+              "smtp_code": null,
+              "smtp_message": "",
+              "status": "unknown",
+              "timings_ms": {
+                "total": 20011.89
+              }
+            },
+            {
+              "attempt": 6,
+              "email": "don@bhuman.ai",
+              "error": "timed out",
+              "mail_code": null,
+              "mail_message": "",
+              "mx_host": "smtp.google.com",
+              "smtp_code": null,
+              "smtp_message": "",
+              "status": "unknown",
+              "timings_ms": {
+                "total": 20012.46
+              }
+            }
+          ],
+          "domain": "bhuman.ai",
+          "email": "don@bhuman.ai",
+          "label": "known_real",
+          "mx_records": [
+            {
+              "host": "smtp.google.com",
+              "priority": 1
+            }
+          ],
+          "summary": {
+            "connect_timing_ms": null,
+            "rcpt_timing_ms": null,
+            "smtp_code_counts": {
+              "None": 6
+            },
+            "stage": "completed",
+            "status_counts": {
+              "unknown": 6
+            },
+            "total_timing_ms": {
+              "count": 6,
+              "max_ms": 20014.08,
+              "mean_ms": 20012.56,
+              "median_ms": 20012.23,
+              "min_ms": 20011.12
+            }
+          }
+        },
+        {
+          "attempts": [
+            {
+              "attempt": 1,
+              "email": "x9qk2m7v1p@bhuman.ai",
+              "error": "timed out",
+              "mail_code": null,
+              "mail_message": "",
+              "mx_host": "smtp.google.com",
+              "smtp_code": null,
+              "smtp_message": "",
+              "status": "unknown",
+              "timings_ms": {
+                "total": 20010.03
+              }
+            },
+            {
+              "attempt": 2,
+              "email": "x9qk2m7v1p@bhuman.ai",
+              "error": "timed out",
+              "mail_code": null,
+              "mail_message": "",
+              "mx_host": "smtp.google.com",
+              "smtp_code": null,
+              "smtp_message": "",
+              "status": "unknown",
+              "timings_ms": {
+                "total": 20010.9
+              }
+            },
+            {
+              "attempt": 3,
+              "email": "x9qk2m7v1p@bhuman.ai",
+              "error": "timed out",
+              "mail_code": null,
+              "mail_message": "",
+              "mx_host": "smtp.google.com",
+              "smtp_code": null,
+              "smtp_message": "",
+              "status": "unknown",
+              "timings_ms": {
+                "total": 20009.7
+              }
+            },
+            {
+              "attempt": 4,
+              "email": "x9qk2m7v1p@bhuman.ai",
+              "error": "timed out",
+              "mail_code": null,
+              "mail_message": "",
+              "mx_host": "smtp.google.com",
+              "smtp_code": null,
+              "smtp_message": "",
+              "status": "unknown",
+              "timings_ms": {
+                "total": 20011.1
+              }
+            },
+            {
+              "attempt": 5,
+              "email": "x9qk2m7v1p@bhuman.ai",
+              "error": "timed out",
+              "mail_code": null,
+              "mail_message": "",
+              "mx_host": "smtp.google.com",
+              "smtp_code": null,
+              "smtp_message": "",
+              "status": "unknown",
+              "timings_ms": {
+                "total": 20009.98
+              }
+            },
+            {
+              "attempt": 6,
+              "email": "x9qk2m7v1p@bhuman.ai",
+              "error": "timed out",
+              "mail_code": null,
+              "mail_message": "",
+              "mx_host": "smtp.google.com",
+              "smtp_code": null,
+              "smtp_message": "",
+              "status": "unknown",
+              "timings_ms": {
+                "total": 20011.15
+              }
+            }
+          ],
+          "domain": "bhuman.ai",
+          "email": "x9qk2m7v1p@bhuman.ai",
+          "label": "generic_random",
+          "mx_records": [
+            {
+              "host": "smtp.google.com",
+              "priority": 1
+            }
+          ],
+          "summary": {
+            "connect_timing_ms": null,
+            "rcpt_timing_ms": null,
+            "smtp_code_counts": {
+              "None": 6
+            },
+            "stage": "completed",
+            "status_counts": {
+              "unknown": 6
+            },
+            "total_timing_ms": {
+              "count": 6,
+              "max_ms": 20011.15,
+              "mean_ms": 20010.48,
+              "median_ms": 20010.47,
+              "min_ms": 20009.7
+            }
+          }
+        }
+      ],
+      "label_summary": {
+        "generic_random": {
+          "attempt_count": 6,
+          "rcpt_timing_ms": null,
+          "status_counts": {
+            "unknown": 6
+          },
+          "total_timing_ms": {
+            "count": 6,
+            "max_ms": 20011.15,
+            "mean_ms": 20010.48,
+            "median_ms": 20010.47,
+            "min_ms": 20009.7
+          }
+        },
+        "known_real": {
+          "attempt_count": 6,
+          "rcpt_timing_ms": null,
+          "status_counts": {
+            "unknown": 6
+          },
+          "total_timing_ms": {
+            "count": 6,
+            "max_ms": 20014.08,
+            "mean_ms": 20012.56,
+            "median_ms": 20012.23,
+            "min_ms": 20011.12
+          }
+        }
+      },
+      "runs_per_email": 6,
+      "stage": "completed"
+    },
+    "stage": "completed"
+  },
+  "generated_at_utc": "2026-03-03T12:35:23.596840+00:00",
+  "input": {
+    "domain": "",
+    "name": ""
+  },
+  "settings": {
+    "api_consensus_enabled": false,
+    "benchmark_file": "benchmark_cases.bhuman_pair.csv",
+    "benchmark_max_cases": 50,
+    "benchmark_pause_ms": 150,
+    "benchmark_runs": 6,
+    "benchmark_starttls": true,
+    "consensus_delay_ms": 250,
+    "consensus_max_candidates": 6,
+    "consensus_providers": [
+      "hunter",
+      "abstract"
+    ],
+    "doh_enabled": true,
+    "doh_via_curl": false,
+    "from_address": "don@bhuman.ai",
+    "known_emails": [],
+    "max_candidates": 12,
+    "osint_delay_ms": 300,
+    "osint_enabled": false,
+    "osint_max_candidates": 8,
+    "osint_max_results": 6,
+    "pause_ms": 700,
+    "probe_smtp": false,
+    "timeout_seconds": 4.0
+  }
+}

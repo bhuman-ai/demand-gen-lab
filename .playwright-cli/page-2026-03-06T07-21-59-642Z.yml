@@ -1,0 +1,20 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e4]:
+    - paragraph [ref=e6]:
+      - text: Hi! I'm the AI bot inspired by Paul,
+      - text: and I'm here to chat!
+    - generic [ref=e7]:
+      - generic [ref=e10]:
+        - generic [ref=e14]:
+          - generic [ref=e15]:
+            - img "user avatar" [ref=e16]
+            - img [ref=e17]
+          - paragraph [ref=e19]: Paul's clone
+        - generic [ref=e21]:
+          - button [ref=e22] [cursor=pointer]:
+            - img [ref=e25]
+          - button [ref=e27] [cursor=pointer]:
+            - img [ref=e30]
+      - paragraph [ref=e33]: Allow mic when prompted
+    - paragraph [ref=e34]: "Please Note: This AI-powered digital companion is an innovative creation inspired by public data and media related to . It does not represent themself, nor is it connected or endorsed by them or their affiliates. This digital experience is designed for educational and informational purposes only, reflecting a synthesis of available third-party data and not the personal views or direct inputs of . Engage with understanding and discretion."
+  - alert [ref=e5]

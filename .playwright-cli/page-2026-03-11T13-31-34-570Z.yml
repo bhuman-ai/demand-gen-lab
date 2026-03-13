@@ -1,0 +1,297 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e3]:
+    - complementary [ref=e4]:
+      - link "Factory Factory Platform" [ref=e5] [cursor=pointer]:
+        - /url: /
+        - generic [ref=e6]: Factory
+        - generic [ref=e7]: Factory Platform
+      - combobox [ref=e10]:
+        - option "BHuman | AI personalized videos at scale"
+        - option "selffunded.dev" [selected]
+      - navigation [ref=e12]:
+        - link "Experiments" [ref=e13] [cursor=pointer]:
+          - /url: /brands/brand_7936be472e1247c7/experiments
+          - img [ref=e14]
+          - text: Experiments
+        - link "Campaigns" [ref=e18] [cursor=pointer]:
+          - /url: /brands/brand_7936be472e1247c7/campaigns
+          - img [ref=e19]
+          - text: Campaigns
+        - link "Network" [ref=e21] [cursor=pointer]:
+          - /url: /brands/brand_7936be472e1247c7/network
+          - img [ref=e22]
+          - text: Network
+        - link "Leads" [ref=e27] [cursor=pointer]:
+          - /url: /brands/brand_7936be472e1247c7/leads
+          - img [ref=e28]
+          - text: Leads
+        - link "Inbox" [ref=e31] [cursor=pointer]:
+          - /url: /brands/brand_7936be472e1247c7/inbox
+          - img [ref=e32]
+          - text: Inbox
+      - generic [ref=e35]:
+        - generic [ref=e36]: Tools
+        - navigation [ref=e37]:
+          - link "Settings" [ref=e38] [cursor=pointer]:
+            - /url: /settings/outreach
+            - img [ref=e39]
+            - text: Settings
+          - link "Logic" [ref=e42] [cursor=pointer]:
+            - /url: /logic
+            - img [ref=e43]
+            - text: Logic
+          - link "Doctor" [ref=e45] [cursor=pointer]:
+            - /url: /doctor
+            - img [ref=e46]
+            - text: Doctor
+    - main [ref=e48]:
+      - generic [ref=e50]:
+        - generic [ref=e51]:
+          - generic [ref=e52]: Factory > Brand > Campaigns > Campaign
+          - heading "Campaign" [level=1] [ref=e53]
+        - generic [ref=e54]:
+          - button "Global Search K" [ref=e55]:
+            - img [ref=e56]
+            - text: Global Search
+            - generic [ref=e59]:
+              - img [ref=e60]
+              - text: K
+          - button "User" [ref=e62]:
+            - img [ref=e63]
+            - text: User
+      - generic [ref=e68]:
+        - generic [ref=e132]:
+          - generic [ref=e133]:
+            - generic [ref=e134]:
+              - generic [ref=e135]: Conversation Flow Canvas
+              - generic [ref=e136]: selffunded.dev · AWS credits qualification outreach Runtime · AWS credits qualification outreach
+            - generic [ref=e137]:
+              - generic [ref=e138]: published
+              - generic [ref=e139]: Revision 2
+            - generic [ref=e140]:
+              - button "Generate" [ref=e141]:
+                - img [ref=e142]
+                - text: Generate
+              - button "Save" [ref=e147]:
+                - img [ref=e148]
+                - text: Save
+              - button "Publish" [ref=e152]:
+                - img [ref=e153]
+                - text: Publish
+              - link "Back" [ref=e156] [cursor=pointer]:
+                - /url: /brands/brand_7936be472e1247c7/campaigns/camp_42a8494136f349e9/build
+          - generic [ref=e420]: Draft saved.
+        - generic [ref=e157]:
+          - generic [ref=e158]:
+            - heading "Reply Timing" [level=3] [ref=e159]
+            - paragraph [ref=e160]: Auto replies wait at least 40 minutes to 1 hour, then hold for your working window if needed.
+          - generic [ref=e161]:
+            - generic [ref=e162]:
+              - generic [ref=e163]: Minimum reply wait (minutes)
+              - spinbutton [ref=e164]: "40"
+            - generic [ref=e165]:
+              - generic [ref=e166]: Random extra wait (minutes)
+              - spinbutton [ref=e167]: "20"
+            - generic [ref=e168]:
+              - generic [ref=e169]: Working timezone
+              - textbox "America/Los_Angeles" [ref=e170]
+            - generic [ref=e171]:
+              - generic [ref=e172]: Workday start
+              - spinbutton [ref=e173]: "9"
+            - generic [ref=e174]:
+              - generic [ref=e175]: Workday end
+              - spinbutton [ref=e176]: "17"
+            - generic [ref=e177]:
+              - generic [ref=e178]:
+                - checkbox "Only send replies during working hours" [checked] [ref=e179]
+                - text: Only send replies during working hours
+              - generic [ref=e180]: "Window: America/Los_Angeles · 9:00-17:00 · Mon-Fri"
+        - generic [ref=e181]:
+          - generic [ref=e182]:
+            - generic [ref=e183]:
+              - generic [ref=e184]:
+                - heading "Flow Canvas" [level=3] [ref=e185]
+                - paragraph [ref=e186]: Drag cards, connect handles, pan on background, zoom with ctrl/cmd + wheel.
+              - generic [ref=e187]:
+                - button "Message" [ref=e188]:
+                  - img [ref=e189]
+                  - text: Message
+                - button "End Node" [ref=e190]:
+                  - img [ref=e191]
+                  - text: End Node
+                - button "Auto Layout" [ref=e195]:
+                  - img [ref=e196]
+                  - text: Auto Layout
+                - button "Fit" [ref=e201]
+                - button [ref=e202]:
+                  - img [ref=e203]
+                - button [ref=e206]:
+                  - img [ref=e207]
+            - generic [ref=e211]:
+              - img:
+                - generic:
+                  - generic:
+                    - generic: Interested
+                  - generic:
+                    - generic: Asked for more info
+                  - generic:
+                    - generic: Not now
+                  - generic:
+                    - generic: Negative response
+                  - generic:
+                    - generic: Wait 1 day
+                  - generic:
+                    - generic: Wait 2 days
+                  - generic:
+                    - generic: No reply
+                  - generic:
+                    - generic: No reply
+                  - generic:
+                    - generic: No reply
+              - generic:
+                - generic [ref=e216]:
+                  - button "Connect here" [ref=e217]
+                  - button "Start connection" [ref=e218]
+                  - generic [ref=e219]:
+                    - generic [ref=e220]:
+                      - generic [ref=e221]: Start question
+                      - generic [ref=e222]:
+                        - generic [ref=e223]: Start
+                        - generic [ref=e224]: Auto
+                    - generic [ref=e225]: "Follow-ups: 1 day"
+                  - generic [ref=e227]:
+                    - strong [ref=e228]: "Prompt:"
+                    - text: "Write outbound email copy for node \"Start question\". Primary goal: qualify whether the founder is self-funded and, if qualified, move them toward the AWS credits application link.…"
+                - generic [ref=e229]:
+                  - button "Connect here" [ref=e230]
+                  - button "Start connection" [ref=e231]
+                  - generic [ref=e232]:
+                    - generic [ref=e233]:
+                      - generic [ref=e234]: Interest follow-up
+                      - generic [ref=e236]: Auto
+                    - generic [ref=e237]: "Node delay: 40 minutes"
+                  - generic [ref=e239]:
+                    - strong [ref=e240]: "Prompt:"
+                    - text: "Write outbound email copy for node \"Interest follow-up\". Primary goal: qualify whether the founder is self-funded and, if qualified, move them toward the AWS credits application l…"
+                - generic [ref=e241]:
+                  - button "Connect here" [ref=e242]
+                  - button "Start connection" [ref=e243]
+                  - generic [ref=e245]:
+                    - generic [ref=e246]: Question answer
+                    - generic [ref=e248]: Manual
+                  - generic [ref=e250]:
+                    - strong [ref=e251]: "Prompt:"
+                    - text: "Write outbound email copy for node \"Question answer\". Primary goal: qualify whether the founder is self-funded and, if qualified, move them toward the AWS credits application link…"
+                - generic [ref=e252]:
+                  - button "Connect here" [ref=e253]
+                  - button "Start connection" [ref=e254]
+                  - generic [ref=e256]:
+                    - generic [ref=e257]: Objection handling
+                    - generic [ref=e259]: Manual
+                  - generic [ref=e261]:
+                    - strong [ref=e262]: "Prompt:"
+                    - text: "Write outbound email copy for node \"Objection handling\". Primary goal: qualify whether the founder is self-funded and, if qualified, move them toward the AWS credits application l…"
+                - generic [ref=e263]:
+                  - button "Connect here" [ref=e264]
+                  - button "Start connection" [ref=e265]
+                  - generic [ref=e266]:
+                    - generic [ref=e267]:
+                      - generic [ref=e268]: No-reply nudge
+                      - generic [ref=e270]: Auto
+                    - generic [ref=e271]: "Node delay: 1 day"
+                    - generic [ref=e272]: "Follow-ups: 2 days"
+                  - generic [ref=e274]:
+                    - strong [ref=e275]: "Prompt:"
+                    - text: "Write outbound email copy for node \"No-reply nudge\". Primary goal: qualify whether the founder is self-funded and, if qualified, move them toward the AWS credits application link.…"
+                - generic [ref=e276]:
+                  - button "Connect here" [ref=e277]
+                  - button "Start connection" [ref=e278]
+                  - generic [ref=e281]: End
+                  - generic [ref=e283]:
+                    - strong [ref=e284]: "Flow:"
+                    - text: Sequence stops here.
+              - generic:
+                - generic:
+                  - img
+                  - text: "Pan: drag background"
+                - text: "|Zoom: ctrl/cmd + wheel|"
+                - generic:
+                  - img
+                  - text: "Connect: drag from right dot to left dot"
+          - generic [ref=e285]:
+            - generic [ref=e286]:
+              - heading "Node Inspector" [level=3] [ref=e287]
+              - paragraph [ref=e288]: Edit the selected node. Advanced routing is hidden by default.
+            - generic [ref=e289]:
+              - generic [ref=e290]:
+                - generic [ref=e291]:
+                  - generic [ref=e292]: "Node: Start question"
+                  - generic [ref=e293]:
+                    - button "Duplicate" [ref=e294]
+                    - button "Add follow-up" [ref=e295]
+                    - button [ref=e296]:
+                      - img [ref=e297]
+                - generic [ref=e300]:
+                  - generic [ref=e301]: Title
+                  - textbox "Send AWS application link" [ref=e302]: Start question
+                - generic [ref=e303]:
+                  - generic [ref=e304]: Subject
+                  - textbox "Question about your pipeline" [ref=e305]: AWS credits for self-funded founders?
+                - generic [ref=e306]:
+                  - generic [ref=e307]:
+                    - generic [ref=e308]: Send mode
+                    - combobox [ref=e309]:
+                      - option "Auto send" [selected]
+                      - option "Manual review"
+                  - generic [ref=e310]:
+                    - generic [ref=e311]: Node delay (minutes)
+                    - spinbutton [ref=e312]: "0"
+                    - generic [ref=e313]: "Extra wait after entering this node: immediately. Auto replies also respect the map-level reply timing above."
+                - generic [ref=e314]:
+                  - generic [ref=e315]: Body
+                  - 'textbox "Hi {{firstName}}, ..." [ref=e316]': "Hey {{firstName}}, We just finalized a partnership with AWS to distribute a batch of cloud credits to help bootstrapped founders offset server costs. I didn't see anything on Crunchbase for {{company}}, but want to be sure: are you entirely self-funded at this point? Angels or friends/family are fine, just no institutional VC. If so, happy to invite you to the program. The credits can apply to new or existing AWS accounts if you're already on AWS. Some context on us: we're a private collective for self-funded operators, and we pool our leverage to negotiate exclusive deals with big cloud and software companies. If you qualify, I can send over the application link. Best, Marco Marco Rosetti SelfFunded.dev"
+                - generic [ref=e317]:
+                  - generic [ref=e318]:
+                    - generic [ref=e319]:
+                      - generic [ref=e320]: Follow-ups
+                      - generic [ref=e321]: Add timed no-reply branches directly from this node.
+                    - generic [ref=e322]:
+                      - button "Add 1 day" [ref=e323]
+                      - button "Add 3 days" [ref=e324]
+                      - button "Add 5 days" [ref=e325]
+                  - generic [ref=e327]:
+                    - generic [ref=e328]:
+                      - generic [ref=e329]: No-reply nudge
+                      - generic [ref=e330]: Sends after 1 day
+                    - generic [ref=e331]:
+                      - button "Edit path" [ref=e332]
+                      - button "Open node" [ref=e333]
+                - generic [ref=e334]:
+                  - generic [ref=e335]:
+                    - generic [ref=e336]: Preview uses one sourced sample lead for context.
+                    - button "Refresh lead context" [ref=e337]:
+                      - img [ref=e338]
+                      - text: Refresh lead context
+                  - group [ref=e343]:
+                    - 'generic "Sample lead: Elaine Perales" [ref=e344] [cursor=pointer]'
+                  - button "Regenerate draft" [ref=e345]:
+                    - img [ref=e346]
+                    - text: Regenerate draft
+                - group [ref=e349]:
+                  - generic "Advanced" [ref=e350] [cursor=pointer]
+                - button "Start Node" [ref=e351]
+              - generic [ref=e352]:
+                - generic [ref=e353]:
+                  - generic [ref=e354]:
+                    - generic [ref=e355]: Flow Probe
+                    - generic [ref=e356]: Roleplay a blank recipient against the current draft map and inspect which branch fires.
+                  - generic [ref=e357]: Ready
+                - generic [ref=e358]:
+                  - text: "Entry node: Start question"
+                  - text: "Lead: Elaine Perales"
+                - button "Run probe" [ref=e359]:
+                  - img [ref=e373]
+                  - text: Run probe
+  - button "Open Next.js Dev Tools" [ref=e368] [cursor=pointer]:
+    - img [ref=e369]
+  - alert [ref=e131]

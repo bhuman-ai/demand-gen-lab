@@ -68,48 +68,6 @@ function normalizeHypotheses(value: unknown): GeneratedHypothesis[] {
   return rows.slice(0, 8);
 }
 
-function fallbackHypotheses(goal: string, brandName: string): GeneratedHypothesis[] {
-  const keyword = sanitizeAiText(goal.trim() || `growth for ${brandName}`);
-  return [
-    {
-      title: `ICP pain test for ${keyword}`,
-      channel: "Email",
-      rationale: "Target one role at a narrow company type and lead with a specific pain tied to the objective constraints.",
-      actorQuery: "Head of Growth at B2B SaaS (11-200 employees)",
-      sourceConfig: {
-        actorId: "",
-        actorInput: {},
-        maxLeads: 100,
-      },
-      seedInputs: [brandName, "role", "pain signal"],
-    },
-    {
-      title: `Offer artifact test for ${keyword}`,
-      channel: "Email",
-      rationale: "Offer a concrete artifact (audit/teardown) with a low-friction CTA to increase positive replies.",
-      actorQuery: "Founder at B2B SaaS (1-50 employees)",
-      sourceConfig: {
-        actorId: "",
-        actorInput: {},
-        maxLeads: 80,
-      },
-      seedInputs: [brandName, "offer", "artifact"],
-    },
-    {
-      title: `Trigger-based timing for ${keyword}`,
-      channel: "Email",
-      rationale: "Focus on prospects with an obvious trigger to improve relevance and reduce negative replies.",
-      actorQuery: "RevOps leader at fast-growing SaaS",
-      sourceConfig: {
-        actorId: "",
-        actorInput: {},
-        maxLeads: 120,
-      },
-      seedInputs: [brandName, "trigger", "timing"],
-    },
-  ];
-}
-
 export async function POST(
   request: Request,
   context: { params: Promise<{ brandId: string; campaignId: string }> }
@@ -127,7 +85,13 @@ export async function POST(
 
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) {
-    return NextResponse.json({ hypotheses: fallbackHypotheses(goal, brandName), mode: "fallback" });
+    return NextResponse.json(
+      {
+        error: "OPENAI_API_KEY is not configured",
+        hint: "Real-only mode is enabled: fallback hypothesis generation is disabled.",
+      },
+      { status: 503 }
+    );
   }
 
   const prompt = [
@@ -161,11 +125,11 @@ export async function POST(
   if (!response.ok) {
     return NextResponse.json(
       {
-        hypotheses: fallbackHypotheses(goal, brandName),
-        mode: "fallback",
         error: "generation failed",
+        hint: "Real-only mode is enabled: fallback hypothesis generation is disabled.",
+        providerStatus: response.status,
       },
-      { status: 200 }
+      { status: 502 }
     );
   }
 
@@ -193,8 +157,14 @@ export async function POST(
   }
   const parsedRecord = asRecord(parsed);
   const hypotheses = normalizeHypotheses(parsedRecord.hypotheses);
-  return NextResponse.json({
-    hypotheses: hypotheses.length ? hypotheses : fallbackHypotheses(goal, brandName),
-    mode: hypotheses.length ? "openai" : "fallback",
-  });
+  if (!hypotheses.length) {
+    return NextResponse.json(
+      {
+        error: "generation returned no usable hypotheses",
+        hint: "Real-only mode is enabled: fallback hypothesis generation is disabled.",
+      },
+      { status: 422 }
+    );
+  }
+  return NextResponse.json({ hypotheses, mode: "openai" });
 }

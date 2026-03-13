@@ -36,6 +36,8 @@ export type OutreachAccountSecrets = {
   mailboxAccessToken: string;
   mailboxRefreshToken: string;
   mailboxPassword: string;
+  mailboxRecoveryEmail: string;
+  mailboxRecoveryCodes: string;
 };
 
 export type OutreachJobType =
@@ -44,7 +46,8 @@ export type OutreachJobType =
   | "dispatch_messages"
   | "sync_replies"
   | "analyze_run"
-  | "conversation_tick";
+  | "conversation_tick"
+  | "monitor_deliverability";
 
 export type OutreachJobStatus = "queued" | "running" | "completed" | "failed";
 
@@ -170,6 +173,31 @@ function asArray(value: unknown): unknown[] {
   return Array.isArray(value) ? value : [];
 }
 
+function normalizeAssignmentAccountIds(value: unknown, fallbackAccountId = ""): string[] {
+  const ids = new Set(
+    asArray(value)
+      .map((entry) => String(entry ?? "").trim())
+      .filter((entry) => entry.length > 0)
+  );
+  const primary = fallbackAccountId.trim();
+  if (primary) ids.add(primary);
+  return Array.from(ids);
+}
+
+function mapAssignmentRow(input: unknown): BrandOutreachAssignment {
+  const row = asRecord(input);
+  const accountId = String(row.accountId ?? row.account_id ?? "").trim();
+  const accountIds = normalizeAssignmentAccountIds(row.accountIds ?? row.account_ids, accountId);
+  return {
+    brandId: String(row.brandId ?? row.brand_id ?? ""),
+    accountId: accountId || accountIds[0] || "",
+    accountIds: accountIds.length ? accountIds : accountId ? [accountId] : [],
+    mailboxAccountId: String(row.mailboxAccountId ?? row.mailbox_account_id ?? "").trim(),
+    createdAt: String(row.createdAt ?? row.created_at ?? nowIso()),
+    updatedAt: String(row.updatedAt ?? row.updated_at ?? nowIso()),
+  };
+}
+
 function defaultOutreachStore(): OutreachStore {
   return {
     accounts: [],
@@ -242,6 +270,8 @@ function defaultSecrets(): OutreachAccountSecrets {
     mailboxAccessToken: "",
     mailboxRefreshToken: "",
     mailboxPassword: "",
+    mailboxRecoveryEmail: "",
+    mailboxRecoveryCodes: "",
   };
 }
 
@@ -258,6 +288,20 @@ function sanitizeSecrets(value: unknown): OutreachAccountSecrets {
     mailboxAccessToken: String(row.mailboxAccessToken ?? "").trim(),
     mailboxRefreshToken: String(row.mailboxRefreshToken ?? "").trim(),
     mailboxPassword: String(row.mailboxPassword ?? "").trim(),
+    mailboxRecoveryEmail: String(row.mailboxRecoveryEmail ?? "").trim(),
+    mailboxRecoveryCodes:
+      typeof row.mailboxRecoveryCodes === "string"
+        ? row.mailboxRecoveryCodes
+            .split(/\r?\n|,/)
+            .map((entry) => entry.trim())
+            .filter(Boolean)
+            .join("\n")
+        : Array.isArray(row.mailboxRecoveryCodes)
+          ? row.mailboxRecoveryCodes
+              .map((entry) => String(entry ?? "").trim())
+              .filter(Boolean)
+              .join("\n")
+          : "",
   };
 }
 
@@ -535,9 +579,13 @@ function mapAnomalyRow(input: unknown): RunAnomaly {
   return {
     id: String(row.id ?? ""),
     runId: String(row.run_id ?? row.runId ?? ""),
-    type: ["hard_bounce_rate", "spam_complaint_rate", "provider_error_rate", "negative_reply_rate_spike"].includes(
-      String(row.type)
-    )
+    type: [
+      "hard_bounce_rate",
+      "spam_complaint_rate",
+      "provider_error_rate",
+      "negative_reply_rate_spike",
+      "deliverability_inbox_placement",
+    ].includes(String(row.type))
       ? (String(row.type) as RunAnomaly["type"])
       : "provider_error_rate",
     severity: String(row.severity) === "critical" ? "critical" : "warning",
@@ -557,7 +605,7 @@ function mapJobRow(input: unknown): OutreachJob {
   return {
     id: String(row.id ?? ""),
     runId: String(row.run_id ?? row.runId ?? ""),
-    jobType: ["source_leads", "schedule_messages", "dispatch_messages", "sync_replies", "analyze_run", "conversation_tick"].includes(
+    jobType: ["source_leads", "schedule_messages", "dispatch_messages", "sync_replies", "analyze_run", "conversation_tick", "monitor_deliverability"].includes(
       String(row.job_type ?? row.jobType)
     )
       ? (String(row.job_type ?? row.jobType) as OutreachJobType)
@@ -737,18 +785,7 @@ async function readLocalStore(): Promise<OutreachStore> {
       customerIoProfileAdmissions: asArray(row.customerIoProfileAdmissions).map((item) =>
         mapCustomerIoProfileAdmissionRow(item)
       ),
-      assignments: asArray(row.assignments).map((entry) => {
-        const item = asRecord(entry);
-        const accountId = String(item.accountId ?? item.account_id ?? "");
-        const mailboxAccountId = String(item.mailboxAccountId ?? item.mailbox_account_id ?? "");
-        return {
-          brandId: String(item.brandId ?? item.brand_id ?? ""),
-          accountId,
-          mailboxAccountId,
-          createdAt: String(item.createdAt ?? item.created_at ?? nowIso()),
-          updatedAt: String(item.updatedAt ?? item.updated_at ?? nowIso()),
-        };
-      }),
+      assignments: asArray(row.assignments).map((entry) => mapAssignmentRow(entry)),
       runs: asArray(row.runs).map((item) => mapRunRow(item)),
       runLeads: asArray(row.runLeads).map((item) => mapRunLeadRow(item)),
       messages: asArray(row.messages).map((item) => mapMessageRow(item)),
@@ -917,6 +954,10 @@ function hintForSupabaseWriteError(error: unknown) {
 
   if (isMissingColumnError(error, "mailbox_account_id")) {
     return "Your Supabase schema is missing `demanddev_brand_outreach_assignments.mailbox_account_id`. Apply supabase/migrations/20260211152000_outreach_split_accounts.sql, then redeploy.";
+  }
+
+  if (isMissingColumnError(error, "account_ids")) {
+    return "Your Supabase schema is missing `demanddev_brand_outreach_assignments.account_ids`. Apply supabase/migrations/20260311180000_outreach_multi_sender_assignments.sql, then redeploy.";
   }
 
   if (msg.includes("demanddev_claim_customerio_profile_admission")) {
@@ -1455,6 +1496,8 @@ export async function updateOutreachAccount(
     mailboxAccessToken: patchSecrets.mailboxAccessToken || existingSecrets.mailboxAccessToken,
     mailboxRefreshToken: patchSecrets.mailboxRefreshToken || existingSecrets.mailboxRefreshToken,
     mailboxPassword: patchSecrets.mailboxPassword || existingSecrets.mailboxPassword,
+    mailboxRecoveryEmail: patchSecrets.mailboxRecoveryEmail || existingSecrets.mailboxRecoveryEmail,
+    mailboxRecoveryCodes: patchSecrets.mailboxRecoveryCodes || existingSecrets.mailboxRecoveryCodes,
   };
 
   const nextConfig = patch.config
@@ -1538,25 +1581,67 @@ export async function updateOutreachAccount(
 export async function deleteOutreachAccount(accountId: string): Promise<boolean> {
   const supabase = getSupabaseAdmin();
   if (supabase) {
-    const mailboxClear = await supabase
-      .from(TABLE_ASSIGNMENT)
-      .update({ mailbox_account_id: null })
-      .eq("mailbox_account_id", accountId);
-    if (mailboxClear.error && isVercel && !isMissingColumnError(mailboxClear.error, "mailbox_account_id")) {
-      throw new OutreachDataError("Failed to clear mailbox assignment in Supabase.", {
+    const { data: assignmentRows, error: assignmentError } = await supabase.from(TABLE_ASSIGNMENT).select("*");
+    if (assignmentError && isVercel) {
+      throw new OutreachDataError("Failed to load outreach assignments from Supabase.", {
         status: 500,
-        hint: hintForSupabaseWriteError(mailboxClear.error),
+        hint: hintForSupabaseWriteError(assignmentError),
         debug: {
-          operation: "deleteOutreachAccount:clearMailbox",
+          operation: "deleteOutreachAccount:loadAssignments",
           runtime: runtimeLabel(),
           supabaseConfigured: supabaseConfigured(),
           accountId,
-          supabaseError: supabaseErrorDebug(mailboxClear.error),
+          supabaseError: supabaseErrorDebug(assignmentError),
         },
       });
     }
 
-    await supabase.from(TABLE_ASSIGNMENT).delete().eq("account_id", accountId);
+    for (const row of (assignmentRows ?? []).map((entry) => mapAssignmentRow(entry))) {
+      const nextAccountIds = row.accountIds.filter((id) => id !== accountId);
+      const nextMailboxAccountId = row.mailboxAccountId === accountId ? "" : row.mailboxAccountId;
+      if (nextAccountIds.length === row.accountIds.length && nextMailboxAccountId === row.mailboxAccountId) {
+        continue;
+      }
+
+      if (!nextAccountIds.length) {
+        const deleteAssignment = await supabase.from(TABLE_ASSIGNMENT).delete().eq("brand_id", row.brandId);
+        if (deleteAssignment.error && isVercel) {
+          throw new OutreachDataError("Failed to clear brand assignment in Supabase.", {
+            status: 500,
+            hint: hintForSupabaseWriteError(deleteAssignment.error),
+            debug: {
+              operation: "deleteOutreachAccount:deleteAssignment",
+              runtime: runtimeLabel(),
+              supabaseConfigured: supabaseConfigured(),
+              accountId,
+              brandId: row.brandId,
+              supabaseError: supabaseErrorDebug(deleteAssignment.error),
+            },
+          });
+        }
+        continue;
+      }
+
+      const updateAssignment = await setBrandOutreachAssignment(row.brandId, {
+        accountId: row.accountId === accountId ? nextAccountIds[0] ?? "" : row.accountId,
+        accountIds: nextAccountIds,
+        mailboxAccountId: nextMailboxAccountId,
+      });
+      if (!updateAssignment && isVercel) {
+        throw new OutreachDataError("Failed to update brand assignment in Supabase.", {
+          status: 500,
+          hint: "The sender pool could not be updated after removing the account.",
+          debug: {
+            operation: "deleteOutreachAccount:updateAssignment",
+            runtime: runtimeLabel(),
+            supabaseConfigured: supabaseConfigured(),
+            accountId,
+            brandId: row.brandId,
+          },
+        });
+      }
+    }
+
     const { error } = await supabase.from(TABLE_ACCOUNT).delete().eq("id", accountId);
     if (!error) {
       return true;
@@ -1584,16 +1669,18 @@ export async function deleteOutreachAccount(accountId: string): Promise<boolean>
   store.accounts = store.accounts.filter((row) => row.id !== accountId);
   store.customerIoProfileAdmissions = store.customerIoProfileAdmissions.filter((row) => row.accountId !== accountId);
   store.assignments = store.assignments
-    .filter((row) => row.accountId !== accountId)
-    .map((row) =>
-      row.mailboxAccountId === accountId
-        ? {
-            ...row,
-            mailboxAccountId: "",
-            updatedAt: nowIso(),
-          }
-        : row
-    );
+    .map((row) => {
+      const nextAccountIds = row.accountIds.filter((id) => id !== accountId);
+      if (!nextAccountIds.length) return null;
+      return {
+        ...row,
+        accountId: row.accountId === accountId ? nextAccountIds[0] ?? "" : row.accountId,
+        accountIds: nextAccountIds,
+        mailboxAccountId: row.mailboxAccountId === accountId ? "" : row.mailboxAccountId,
+        updatedAt: nowIso(),
+      };
+    })
+    .filter((row): row is BrandOutreachAssignment => Boolean(row));
   await writeLocalStore(store);
   return store.accounts.length !== before;
 }
@@ -1627,15 +1714,7 @@ export async function getBrandOutreachAssignment(
       .eq("brand_id", brandId)
       .maybeSingle();
     if (!error && data) {
-      const row = asRecord(data);
-      const accountId = String(row.account_id ?? "");
-      return {
-        brandId: String(row.brand_id ?? ""),
-        accountId,
-        mailboxAccountId: String(row.mailbox_account_id ?? ""),
-        createdAt: String(row.created_at ?? nowIso()),
-        updatedAt: String(row.updated_at ?? nowIso()),
-      };
+      return mapAssignmentRow(data);
     }
   }
 
@@ -1647,10 +1726,12 @@ export async function getBrandOutreachAssignment(
 
 export async function setBrandOutreachAssignment(
   brandId: string,
-  input: { accountId?: string; mailboxAccountId?: string } | string
+  input: { accountId?: string; accountIds?: string[]; mailboxAccountId?: string } | string
 ): Promise<BrandOutreachAssignment | null> {
   const patch = typeof input === "string" ? { accountId: input } : input;
-  const accountId = String(patch.accountId ?? "").trim();
+  const requestedAccountId = String(patch.accountId ?? "").trim();
+  const requestedAccountIds = normalizeAssignmentAccountIds(patch.accountIds, requestedAccountId);
+  const accountId = requestedAccountId || requestedAccountIds[0] || "";
 
   if (!accountId.trim()) {
     const supabaseDelete = getSupabaseAdmin();
@@ -1682,11 +1763,16 @@ export async function setBrandOutreachAssignment(
     typeof patch.mailboxAccountId === "string"
       ? patch.mailboxAccountId.trim()
       : existing?.mailboxAccountId ?? "";
+  const accountIds = normalizeAssignmentAccountIds(
+    patch.accountIds ?? existing?.accountIds ?? [],
+    accountId
+  );
 
   const now = nowIso();
   const assignment: BrandOutreachAssignment = {
     brandId,
     accountId,
+    accountIds,
     mailboxAccountId,
     createdAt: now,
     updatedAt: now,
@@ -1716,11 +1802,41 @@ export async function setBrandOutreachAssignment(
       mailbox_account_id: mailboxAccountId || null,
     };
 
+    const upsertWithAccounts = {
+      ...upsertWithMailbox,
+      account_ids: accountIds,
+    };
+
     let { data, error } = await supabase
       .from(TABLE_ASSIGNMENT)
-      .upsert(upsertWithMailbox, { onConflict: "brand_id" })
+      .upsert(upsertWithAccounts, { onConflict: "brand_id" })
       .select("*")
       .single();
+
+    if (error && isMissingColumnError(error, "account_ids")) {
+      if (accountIds.length > 1) {
+        throw new OutreachDataError("Multi-sender brand assignment requires a database migration.", {
+          status: 500,
+          hint: hintForSupabaseWriteError(error),
+          debug: {
+            operation: "setBrandOutreachAssignment",
+            runtime: runtimeLabel(),
+            supabaseConfigured: supabaseConfigured(),
+            brandId,
+            accountId,
+            accountIds,
+            mailboxAccountId,
+            supabaseError: supabaseErrorDebug(error),
+          },
+        });
+      }
+
+      ({ data, error } = await supabase
+        .from(TABLE_ASSIGNMENT)
+        .upsert(upsertWithMailbox, { onConflict: "brand_id" })
+        .select("*")
+        .single());
+    }
 
     if (error && isMissingColumnError(error, "mailbox_account_id")) {
       if (mailboxAccountId) {
@@ -1733,6 +1849,7 @@ export async function setBrandOutreachAssignment(
             supabaseConfigured: supabaseConfigured(),
             brandId,
             accountId,
+            accountIds,
             mailboxAccountId,
             supabaseError: supabaseErrorDebug(error),
           },
@@ -1747,14 +1864,10 @@ export async function setBrandOutreachAssignment(
     }
 
     if (!error && data) {
-      const row = asRecord(data);
-      return {
-        brandId: String(row.brand_id ?? brandId),
-        accountId: String(row.account_id ?? accountId),
-        mailboxAccountId: String(row.mailbox_account_id ?? ""),
-        createdAt: String(row.created_at ?? now),
-        updatedAt: String(row.updated_at ?? now),
-      };
+      return mapAssignmentRow({
+        ...asRecord(data),
+        account_ids: accountIds,
+      });
     }
 
     if (error && isVercel) {
@@ -1767,6 +1880,7 @@ export async function setBrandOutreachAssignment(
           supabaseConfigured: supabaseConfigured(),
           brandId,
           accountId,
+          accountIds,
           mailboxAccountId,
           supabaseError: supabaseErrorDebug(error),
         },
@@ -1782,6 +1896,7 @@ export async function setBrandOutreachAssignment(
     store.assignments[existingIndex] = {
       ...store.assignments[existingIndex],
       accountId,
+      accountIds,
       mailboxAccountId,
       updatedAt: now,
     };

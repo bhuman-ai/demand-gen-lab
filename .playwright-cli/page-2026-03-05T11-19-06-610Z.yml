@@ -1,0 +1,282 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e3]:
+    - complementary [ref=e4]:
+      - link "Factory Brand Command" [ref=e5] [cursor=pointer]:
+        - /url: /
+        - generic [ref=e6]: Factory
+        - generic [ref=e7]: Brand Command
+      - navigation [ref=e8]:
+        - link "Experiments" [ref=e9] [cursor=pointer]:
+          - /url: /brands/brand_mlg68b9l/experiments
+          - img [ref=e10]
+          - text: Experiments
+        - link "Campaigns" [ref=e14] [cursor=pointer]:
+          - /url: /brands/brand_mlg68b9l/campaigns
+          - img [ref=e15]
+          - text: Campaigns
+        - link "Network" [ref=e17] [cursor=pointer]:
+          - /url: /brands/brand_mlg68b9l/network
+          - img [ref=e18]
+          - text: Network
+        - link "Leads" [ref=e23] [cursor=pointer]:
+          - /url: /brands/brand_mlg68b9l/leads
+          - img [ref=e24]
+          - text: Leads
+        - link "Inbox" [ref=e27] [cursor=pointer]:
+          - /url: /brands/brand_mlg68b9l/inbox
+          - img [ref=e28]
+          - text: Inbox
+      - generic [ref=e31]:
+        - generic [ref=e32]: Tools
+        - navigation [ref=e33]:
+          - link "Settings" [ref=e34] [cursor=pointer]:
+            - /url: /settings/outreach
+            - img [ref=e35]
+            - text: Settings
+          - link "Logic" [ref=e38] [cursor=pointer]:
+            - /url: /logic
+            - img [ref=e39]
+            - text: Logic
+          - link "Doctor" [ref=e41] [cursor=pointer]:
+            - /url: /doctor
+            - img [ref=e42]
+            - text: Doctor
+    - main [ref=e44]:
+      - generic [ref=e46]:
+        - generic [ref=e47]:
+          - combobox [ref=e50]:
+            - option "BHuman | AI personalized videos at scale" [selected]
+          - generic [ref=e52]: Factory > Brand > Experiments > Experiment
+          - heading "Experiment" [level=1] [ref=e53]
+        - generic [ref=e54]:
+          - link "Settings" [ref=e55] [cursor=pointer]:
+            - /url: /settings/outreach
+            - img [ref=e56]
+            - text: Settings
+          - generic [ref=e59]:
+            - button "Light theme" [ref=e60]:
+              - img [ref=e61]
+            - button "Dark theme" [ref=e67]:
+              - img [ref=e68]
+            - button "System theme" [ref=e70]:
+              - img [ref=e71]
+      - generic [ref=e83]:
+        - generic [ref=e85]:
+          - generic [ref=e86]:
+            - heading "BHuman | AI personalized videos at scale · Abandoned demo signup → 30-sec personal video follow-up" [level=3] [ref=e87]
+            - paragraph [ref=e88]: "Stage-based flow: Setup -> Prospects -> Messaging -> Launch."
+          - generic [ref=e89]:
+            - generic [ref=e90]: "Status: completed"
+            - generic [ref=e91]: "Sent: 0"
+            - generic [ref=e92]: "Replies: 0"
+            - generic [ref=e93]: "Positive: 0"
+        - generic [ref=e94]:
+          - generic [ref=e95]:
+            - heading "Workflow" [level=3] [ref=e96]
+            - paragraph [ref=e97]: Only current stage content is shown below.
+          - generic [ref=e98]:
+            - generic [ref=e99]:
+              - generic [ref=e100]: 3/4 stages complete
+              - generic [ref=e101]: 75% complete
+            - generic [ref=e102]:
+              - button "0. Setup done" [ref=e103]:
+                - generic [ref=e104]:
+                  - generic [ref=e105]: 0. Setup
+                  - generic [ref=e106]: done
+              - button "1. Prospects waiting" [ref=e737]:
+                - generic [ref=e108]:
+                  - generic [ref=e109]: 1. Prospects
+                  - generic [ref=e110]: waiting
+              - button "2. Messaging done" [ref=e111]:
+                - generic [ref=e112]:
+                  - generic [ref=e113]: 2. Messaging
+                  - generic [ref=e114]: done
+              - button "3. Launch done" [ref=e115]:
+                - generic [ref=e116]:
+                  - generic [ref=e117]: 3. Launch
+                  - generic [ref=e118]: done
+        - generic [ref=e753]:
+          - generic [ref=e754]:
+            - heading "Stage 3 · Launch" [level=3] [ref=e755]
+            - paragraph [ref=e756]: Start outbound sending and monitor run outcomes.
+          - generic [ref=e757]:
+            - generic [ref=e758]:
+              - button "Launch Test" [disabled]:
+                - img
+                - text: Launch Test
+              - button "Promote to Campaign" [ref=e759]
+            - generic [ref=e760]: "Launch is blocked until Prospect stage has 20 quality leads with real work emails. Current: 13."
+            - generic [ref=e761]:
+              - generic [ref=e762]:
+                - generic [ref=e763]: Run 724b71
+                - generic [ref=e764]: completed
+              - generic [ref=e765]:
+                - generic [ref=e766]: Sourcing completed, but no emails were sent in this run.
+                - generic [ref=e767]: "Accepted leads: 13. Click Launch Test to start sending."
+              - generic [ref=e768]: Leads 13 · Sent 0 · Replies 0 · Positive 0
+            - generic [ref=e769]:
+              - generic [ref=e770]: Outbound messages
+              - generic [ref=e771]:
+                - generic [ref=e772]:
+                  - generic [ref=e773]:
+                    - generic [ref=e774]: Quick yes/no for Dotworld
+                    - generic [ref=e775]: scheduled
+                  - generic [ref=e776]: "Hi Noémie — quick yes/no: should I make 10 short personalized follow-up videos for Dotworld’s abandoned demo signups? We create 30-sec videos that mention the viewer’s company + r..."
+                  - generic [ref=e777]: 3/5/2026, 1:18:47 AM
+                - generic [ref=e778]:
+                  - generic [ref=e779]:
+                    - generic [ref=e780]: OK to send 10 videos?
+                    - generic [ref=e781]: scheduled
+                  - generic [ref=e782]: "Hi Mike — quick yes/no: are you open to testing a short video follow-up for people who start a demo request but don’t book within 24 hours? We can generate 10 AI-personalized vide..."
+                  - generic [ref=e783]: 3/5/2026, 1:10:44 AM
+                - generic [ref=e784]:
+                  - generic [ref=e785]:
+                    - generic [ref=e786]: Quick yes/no on video follow-ups
+                    - generic [ref=e787]: scheduled
+                  - generic [ref=e788]: Hi Santiago — quick permission-based question. When someone starts a demo request but doesn’t book within 24 hours, do you follow up with a 30-second personalized video? BHuman c...
+                  - generic [ref=e789]: 3/5/2026, 1:02:40 AM
+                - generic [ref=e790]:
+                  - generic [ref=e791]:
+                    - generic [ref=e792]: Can I send 10 videos?
+                    - generic [ref=e793]: scheduled
+                  - generic [ref=e794]: Hi Alexandre — quick permission question. When someone starts a demo request but doesn’t book within 24 hours, we can follow up with a 30‑sec AI-personalized video that says their...
+                  - generic [ref=e795]: 3/5/2026, 12:54:36 AM
+                - generic [ref=e796]:
+                  - generic [ref=e797]:
+                    - generic [ref=e798]: Quick yes/no for Kameleoon
+                    - generic [ref=e799]: scheduled
+                  - generic [ref=e800]: "Hi Hélène — quick yes/no: should I build 10 short follow-up videos for Kameleoon’s demo requests that didn’t book within 24 hours? Using BHuman, each video is ~30 seconds, mention..."
+                  - generic [ref=e801]: 3/5/2026, 12:46:32 AM
+                - generic [ref=e802]:
+                  - generic [ref=e803]:
+                    - generic [ref=e804]: Ok to send 10 videos?
+                    - generic [ref=e805]: scheduled
+                  - generic [ref=e806]: "Hi Dominika — I noticed some people start a demo request but don’t book a time within 24 hours. I work on follow-up for that exact drop-off: 10 short (30-sec) AI-personalized vide..."
+                  - generic [ref=e807]: 3/5/2026, 12:38:29 AM
+                - generic [ref=e808]:
+                  - generic [ref=e809]:
+                    - generic [ref=e810]: Quick yes/no on a test?
+                    - generic [ref=e811]: scheduled
+                  - generic [ref=e812]: "Hi Roman — quick yes/no: would it be useful to send a 30‑sec personal video to lead sourcing demo starters who didn’t book within 24 hours? We generate 10 videos that mention the ..."
+                  - generic [ref=e813]: 3/5/2026, 12:30:25 AM
+                - generic [ref=e814]:
+                  - generic [ref=e815]:
+                    - generic [ref=e816]: Quick yes/no for Trint
+                    - generic [ref=e817]: scheduled
+                  - generic [ref=e818]: "Hi Xenia — quick yes/no: worth testing a tighter follow-up for Trint’s abandoned demo requests? We build 10 short (30 sec) AI-personalized videos for people who start a demo reque..."
+                  - generic [ref=e819]: 3/5/2026, 12:22:22 AM
+                - generic [ref=e820]:
+                  - generic [ref=e821]:
+                    - generic [ref=e822]: Quick yes/no on demo no-shows
+                    - generic [ref=e823]: scheduled
+                  - generic [ref=e824]: Hi Liliya — can I send you a small sample for Payhawk’s abandoned demo requests? We make 30-second AI-personalized follow-up videos that mention the prospect’s company + role, sug...
+                  - generic [ref=e825]: 3/5/2026, 12:14:19 AM
+                - generic [ref=e826]:
+                  - generic [ref=e827]:
+                    - generic [ref=e828]: Permission to send 10 videos?
+                    - generic [ref=e829]: scheduled
+                  - generic [ref=e830]: "Hi Pulak — quick yes/no: are you open to a small test to re-engage Sage demo requests that didn’t book within 24 hours? We’ll produce 10 short (30s) AI-personalized videos that me..."
+                  - generic [ref=e831]: 3/5/2026, 12:06:15 AM
+                - generic [ref=e832]:
+                  - generic [ref=e833]:
+                    - generic [ref=e834]: Quick yes/no for Semrush?
+                    - generic [ref=e835]: scheduled
+                  - generic [ref=e836]: "Hi Swapnil — quick yes/no: should I build a small batch of 30-sec AI-personalized follow-up videos for Semrush’s abandoned demo signups? These are sent ~24 hours after someone sta..."
+                  - generic [ref=e837]: 3/4/2026, 11:58:11 PM
+                - generic [ref=e838]:
+                  - generic [ref=e839]:
+                    - generic [ref=e840]: Quick yes/no on a test?
+                    - generic [ref=e841]: scheduled
+                  - generic [ref=e842]: "Hi Kelvin — quick yes/no: would it be worth testing a 30-second personal video follow-up for people who start a demo request but don’t book within 24 hours? At BHuman, we can gene..."
+                  - generic [ref=e843]: 3/4/2026, 11:50:07 PM
+                - generic [ref=e844]:
+                  - generic [ref=e845]:
+                    - generic [ref=e846]: Permission to send 10 videos?
+                    - generic [ref=e847]: scheduled
+                  - generic [ref=e848]: "Hi Troy — quick yes/no: should I send you 10 AI-personalized 30-second follow-up videos for Integrate’s abandoned demo requests? Each video mentions the viewer’s first name + comp..."
+                  - generic [ref=e849]: 3/4/2026, 11:42:03 PM
+                - generic [ref=e850]:
+                  - generic [ref=e851]:
+                    - generic [ref=e852]: Permission to send 10 videos?
+                    - generic [ref=e853]: scheduled
+                  - generic [ref=e854]: "Hi Aakash — quick yes/no: should I mock up 10 short follow-up videos for Right Pace Techmedia’s abandoned demo signups? BHuman generates 30-second videos that mention the prospect..."
+                  - generic [ref=e855]: 3/4/2026, 11:34:00 PM
+                - generic [ref=e856]:
+                  - generic [ref=e857]:
+                    - generic [ref=e858]: Permission to send 10 videos?
+                    - generic [ref=e859]: scheduled
+                  - generic [ref=e860]: "Hi Vijay — quick yes/no: would you be open to me making 10 short follow-up videos for people who start your demo request but don’t book within 24 hours? I’m with BHuman. Each vide..."
+                  - generic [ref=e861]: 3/4/2026, 11:25:56 PM
+                - generic [ref=e862]:
+                  - generic [ref=e863]:
+                    - generic [ref=e864]: Quick yes/no on demo drop-offs
+                    - generic [ref=e865]: scheduled
+                  - generic [ref=e866]: "Hi Jonah — quick yes/no: should I build a batch of 30‑sec AI-personalized follow-up videos for XDBS Worldwide’s demo signups who didn’t book within 24 hours? Each video can say th..."
+                  - generic [ref=e867]: 3/4/2026, 11:17:53 PM
+                - generic [ref=e868]:
+                  - generic [ref=e869]:
+                    - generic [ref=e870]: Permission to send 10 videos?
+                    - generic [ref=e871]: scheduled
+                  - generic [ref=e872]: "Hi Jawwad — quick yes/no: would it be worth testing a more personal follow-up for Facile Services’ abandoned demo signups? We generate 10 short (30-sec) AI-personalized videos tha..."
+                  - generic [ref=e873]: 3/4/2026, 11:09:49 PM
+                - generic [ref=e874]:
+                  - generic [ref=e875]:
+                    - generic [ref=e876]: Permission to send 10 videos?
+                    - generic [ref=e877]: scheduled
+                  - generic [ref=e878]: Hi Octave — I noticed some teams lose demo requests when someone starts the form but doesn’t book within 24 hours. BHuman can generate 10 short (30s) 1:1-looking follow-up videos ...
+                  - generic [ref=e879]: 3/4/2026, 11:01:46 PM
+                - generic [ref=e880]:
+                  - generic [ref=e881]:
+                    - generic [ref=e882]: Quick yes/no for Oradian
+                    - generic [ref=e883]: scheduled
+                  - generic [ref=e884]: "Hi Vanda — quick yes/no: should we send a 30-second personal video to Oradian’s demo signups who didn’t book within 24 hours? We generate AI videos that mention their company, rol..."
+                  - generic [ref=e885]: 3/4/2026, 10:53:42 PM
+                - generic [ref=e886]:
+                  - generic [ref=e887]:
+                    - generic [ref=e888]: Quick yes/no for Actuals?
+                    - generic [ref=e889]: scheduled
+                  - generic [ref=e890]: "Hi Jan — quick yes/no: should I build a small batch of AI-personalized follow-up videos for Actuals’ abandoned demo signups? We create 10 videos (~30 seconds each) that reference ..."
+                  - generic [ref=e891]: 3/4/2026, 10:45:38 PM
+            - generic [ref=e892]:
+              - generic [ref=e893]: Inbound replies
+              - generic [ref=e894]: No replies yet.
+            - generic [ref=e895]:
+              - generic [ref=e896]: Run timeline
+              - generic [ref=e897]:
+                - generic [ref=e898]:
+                  - generic [ref=e899]: job_completed
+                  - generic [ref=e900]: 3/5/2026, 2:17:00 PM
+                - generic [ref=e901]:
+                  - generic [ref=e902]: lead_sourced
+                  - generic [ref=e903]: 3/5/2026, 2:17:00 PM
+                - generic [ref=e904]:
+                  - generic [ref=e905]: lead_sourcing_completed
+                  - generic [ref=e906]: 3/5/2026, 2:16:52 PM
+                - generic [ref=e907]:
+                  - generic [ref=e908]: lead_sourcing_chain_selected
+                  - generic [ref=e909]: 3/5/2026, 2:16:52 PM
+                - generic [ref=e910]:
+                  - generic [ref=e911]: lead_sourcing_actor_pool_built
+                  - generic [ref=e912]: 3/5/2026, 2:16:52 PM
+                - generic [ref=e913]:
+                  - generic [ref=e914]: lead_sourcing_requested
+                  - generic [ref=e915]: 3/5/2026, 2:15:23 PM
+                - generic [ref=e916]:
+                  - generic [ref=e917]: run_started
+                  - generic [ref=e918]: 3/5/2026, 2:15:23 PM
+                - generic [ref=e919]:
+                  - generic [ref=e920]: job_started
+                  - generic [ref=e921]: 3/5/2026, 2:15:22 PM
+                - generic [ref=e922]:
+                  - generic [ref=e923]: hypothesis_approved_auto_run_queued
+                  - generic [ref=e924]: 3/5/2026, 2:15:22 PM
+        - generic [ref=e150]:
+          - generic [ref=e151]: Stage 3 · Launch
+          - generic [ref=e152]:
+            - button "Back" [ref=e261]:
+              - img [ref=e262]
+              - text: Back
+            - button "Next" [disabled]:
+              - text: Next
+              - img
+  - alert [ref=e84]

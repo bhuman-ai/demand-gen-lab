@@ -1,0 +1,130 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e3]:
+    - complementary [ref=e4]:
+      - link "Factory Brand Command" [ref=e5] [cursor=pointer]:
+        - /url: /
+        - generic [ref=e6]: Factory
+        - generic [ref=e7]: Brand Command
+      - navigation [ref=e8]:
+        - link "Experiments" [ref=e9] [cursor=pointer]:
+          - /url: /brands/brand_mlg68b9l/experiments
+          - img [ref=e10]
+          - text: Experiments
+        - link "Campaigns" [ref=e14] [cursor=pointer]:
+          - /url: /brands/brand_mlg68b9l/campaigns
+          - img [ref=e15]
+          - text: Campaigns
+        - link "Network" [ref=e17] [cursor=pointer]:
+          - /url: /brands/brand_mlg68b9l/network
+          - img [ref=e18]
+          - text: Network
+        - link "Leads" [ref=e23] [cursor=pointer]:
+          - /url: /brands/brand_mlg68b9l/leads
+          - img [ref=e24]
+          - text: Leads
+        - link "Inbox" [ref=e27] [cursor=pointer]:
+          - /url: /brands/brand_mlg68b9l/inbox
+          - img [ref=e28]
+          - text: Inbox
+      - generic [ref=e31]:
+        - generic [ref=e32]: Tools
+        - navigation [ref=e33]:
+          - link "Settings" [ref=e34] [cursor=pointer]:
+            - /url: /settings/outreach
+            - img [ref=e35]
+            - text: Settings
+          - link "Logic" [ref=e38] [cursor=pointer]:
+            - /url: /logic
+            - img [ref=e39]
+            - text: Logic
+          - link "Doctor" [ref=e41] [cursor=pointer]:
+            - /url: /doctor
+            - img [ref=e42]
+            - text: Doctor
+    - main [ref=e44]:
+      - generic [ref=e46]:
+        - generic [ref=e47]:
+          - combobox [ref=e50]:
+            - option "BHuman | AI personalized videos at scale" [selected]
+          - generic [ref=e52]: Factory > Brand > Experiments > Experiment
+          - heading "Experiment" [level=1] [ref=e53]
+        - generic [ref=e54]:
+          - link "Settings" [ref=e55] [cursor=pointer]:
+            - /url: /settings/outreach
+            - img [ref=e56]
+            - text: Settings
+          - generic [ref=e59]:
+            - button "Light theme" [ref=e60]:
+              - img [ref=e61]
+            - button "Dark theme" [ref=e67]:
+              - img [ref=e68]
+            - button "System theme" [ref=e70]:
+              - img [ref=e71]
+      - generic [ref=e83]:
+        - generic [ref=e85]:
+          - generic [ref=e86]:
+            - heading "BHuman | AI personalized videos at scale · Abandoned demo signup → 30-sec personal video follow-up" [level=3] [ref=e87]
+            - paragraph [ref=e88]: "Stage-based flow: Setup -> Prospects -> Messaging -> Launch."
+          - generic [ref=e89]:
+            - generic [ref=e90]: "Status: ready"
+            - generic [ref=e91]: "Sent: 0"
+            - generic [ref=e92]: "Replies: 0"
+            - generic [ref=e93]: "Positive: 0"
+        - generic [ref=e94]:
+          - generic [ref=e95]:
+            - heading "Workflow" [level=3] [ref=e96]
+            - paragraph [ref=e97]: Only current stage content is shown below.
+          - generic [ref=e101]:
+            - button "0. Setup done" [ref=e102]:
+              - generic [ref=e103]:
+                - generic [ref=e104]: 0. Setup
+                - generic [ref=e105]: done
+            - button "1. Prospects waiting" [ref=e106]:
+              - generic [ref=e107]:
+                - generic [ref=e108]: 1. Prospects
+                - generic [ref=e109]: waiting
+            - button "2. Messaging done" [ref=e110]:
+              - generic [ref=e111]:
+                - generic [ref=e112]: 2. Messaging
+                - generic [ref=e113]: done
+            - button "3. Launch done" [ref=e114]:
+              - generic [ref=e115]:
+                - generic [ref=e116]: 3. Launch
+                - generic [ref=e117]: done
+        - generic [ref=e118]:
+          - generic [ref=e119]:
+            - heading "Stage 0 · Setup" [level=3] [ref=e120]
+            - paragraph [ref=e121]: Define experiment basics before sourcing prospects.
+          - generic [ref=e122]:
+            - generic [ref=e123]:
+              - generic [ref=e124]: Experiment Name
+              - textbox "Experiment Name" [ref=e125]: Abandoned demo signup → 30-sec personal video follow-up
+            - generic [ref=e126]:
+              - generic [ref=e127]: Offer / Angle
+              - textbox "Offer / Angle" [ref=e128]: "A 30-second AI-personalized video that references their company, role, and a likely use case, plus a simple booking link CTA: Reply with your booking link and 3 target fields (first name, company, use case) to get 10 videos made"
+            - generic [ref=e129]:
+              - generic [ref=e130]: Target Audience
+              - textbox "Target Audience" [ref=e131]: "Demand Gen Manager at B2B SaaS companies (50–500 employees) Trigger: Prospect started a product demo request but did not book a time within 24 hours"
+            - generic [ref=e132]:
+              - generic [ref=e133]:
+                - generic [ref=e134]: Lead sample size
+                - spinbutton [ref=e135]: "200"
+              - generic [ref=e136]:
+                - generic [ref=e137]: Duration days
+                - spinbutton [ref=e138]: "7"
+              - generic [ref=e139]:
+                - generic [ref=e140]: Timezone
+                - textbox [ref=e141]: America/Los_Angeles
+            - button "Save Setup" [ref=e143]:
+              - img [ref=e144]
+              - text: Save Setup
+        - generic [ref=e149]:
+          - generic [ref=e150]: Stage 0 · Setup
+          - generic [ref=e151]:
+            - button "Back" [disabled]:
+              - img
+              - text: Back
+            - button "Next" [ref=e152]:
+              - text: Next
+              - img [ref=e153]
+  - alert [ref=e84]

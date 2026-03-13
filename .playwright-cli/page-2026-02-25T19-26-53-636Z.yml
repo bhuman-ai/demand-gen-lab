@@ -1,0 +1,275 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e3]:
+    - complementary [ref=e4]:
+      - link "Factory Brand Command" [ref=e5] [cursor=pointer]:
+        - /url: /
+        - generic [ref=e6]: Factory
+        - generic [ref=e7]: Brand Command
+      - navigation [ref=e8]:
+        - link "Experiments" [ref=e9] [cursor=pointer]:
+          - /url: /brands/brand_mlg68b9l/experiments
+          - img [ref=e10]
+          - text: Experiments
+        - link "Campaigns" [ref=e14] [cursor=pointer]:
+          - /url: /brands/brand_mlg68b9l/campaigns
+          - img [ref=e15]
+          - text: Campaigns
+        - link "Network" [ref=e17] [cursor=pointer]:
+          - /url: /brands/brand_mlg68b9l/network
+          - img [ref=e18]
+          - text: Network
+        - link "Leads" [ref=e23] [cursor=pointer]:
+          - /url: /brands/brand_mlg68b9l/leads
+          - img [ref=e24]
+          - text: Leads
+        - link "Inbox" [ref=e27] [cursor=pointer]:
+          - /url: /brands/brand_mlg68b9l/inbox
+          - img [ref=e28]
+          - text: Inbox
+      - generic [ref=e31]:
+        - generic [ref=e32]: Tools
+        - navigation [ref=e33]:
+          - link "Settings" [ref=e34] [cursor=pointer]:
+            - /url: /settings/outreach
+            - img [ref=e35]
+            - text: Settings
+          - link "Logic" [ref=e38] [cursor=pointer]:
+            - /url: /logic
+            - img [ref=e39]
+            - text: Logic
+          - link "Doctor" [ref=e41] [cursor=pointer]:
+            - /url: /doctor
+            - img [ref=e42]
+            - text: Doctor
+    - main [ref=e44]:
+      - generic [ref=e46]:
+        - generic [ref=e47]:
+          - combobox [ref=e50]:
+            - option "BHuman | AI personalized videos at scale" [selected]
+          - generic [ref=e52]: Factory > Brand > Experiments > Experiment > Flow
+          - heading "Message Flow" [level=1] [ref=e53]
+        - generic [ref=e54]:
+          - link "Settings" [ref=e55] [cursor=pointer]:
+            - /url: /settings/outreach
+            - img [ref=e56]
+            - text: Settings
+          - generic [ref=e59]:
+            - button "Light theme" [ref=e60]:
+              - img [ref=e61]
+            - button "Dark theme" [ref=e67]:
+              - img [ref=e68]
+            - button "System theme" [ref=e70]:
+              - img [ref=e71]
+      - generic [ref=e83]:
+        - generic [ref=e147]:
+          - generic [ref=e148]:
+            - generic [ref=e149]:
+              - heading "Conversation Map Canvas" [level=3] [ref=e150]
+              - paragraph [ref=e151]: BHuman | AI personalized videos at scale - Abandoned demo signup → 30-sec personal video follow-up Runtime - Abandoned demo signup → 30-sec personal video follow-up
+            - generic [ref=e152]:
+              - generic [ref=e153]: published
+              - generic [ref=e154]: Revision 1
+          - generic [ref=e155]:
+            - button "Generate AI Map" [ref=e156]:
+              - img [ref=e157]
+              - text: Generate AI Map
+            - button "Save Draft" [ref=e162]:
+              - img [ref=e163]
+              - text: Save Draft
+            - button "Publish" [ref=e167]:
+              - img [ref=e168]
+              - text: Publish
+            - link "Back" [ref=e171] [cursor=pointer]:
+              - /url: /brands/brand_mlg68b9l/experiments/expt_bf7ab31d5ac44d91
+        - generic [ref=e172]:
+          - generic [ref=e173]:
+            - heading "Sourced Preview Leads" [level=3] [ref=e174]
+            - paragraph [ref=e175]: Preview generation uses real leads ingested by this experiment. No demo data is used.
+          - generic [ref=e176]:
+            - generic [ref=e177]:
+              - button "Refresh Sourced Leads" [ref=e178]:
+                - img [ref=e179]
+                - text: Refresh Sourced Leads
+              - generic [ref=e184]: 2 leads
+              - generic [ref=e185]: "Runs checked: 2"
+              - generic [ref=e186]: "Using: Sarah"
+            - generic [ref=e187]:
+              - generic [ref=e188]:
+                - generic [ref=e189]:
+                  - button "Sarah" [ref=e190]
+                  - generic [ref=e191]: sourced
+                - generic [ref=e192]: sarah@techcorp.io
+                - generic [ref=e193]: Unknown title at revenuehero.io
+              - generic [ref=e194]:
+                - generic [ref=e195]:
+                  - button "alex@gmail.com" [ref=e196]
+                  - generic [ref=e197]: sourced
+                - generic [ref=e198]: alex@gmail.com
+                - generic [ref=e199]: Unknown title at revenuehero.io
+        - generic [ref=e200]:
+          - generic [ref=e201]:
+            - generic [ref=e202]:
+              - generic [ref=e203]:
+                - heading "Canvas" [level=3] [ref=e204]
+                - paragraph [ref=e205]: Drag nodes, connect handles, pan with mouse drag, zoom with wheel + ctrl/cmd.
+              - generic [ref=e206]:
+                - button "Message" [ref=e207]:
+                  - img [ref=e208]
+                  - text: Message
+                - button "End Node" [ref=e209]:
+                  - img [ref=e210]
+                  - text: End Node
+                - button "Auto Layout" [ref=e214]:
+                  - img [ref=e215]
+                  - text: Auto Layout
+                - button "Fit" [ref=e220]
+                - button [ref=e221]:
+                  - img [ref=e222]
+                - button [ref=e225]:
+                  - img [ref=e226]
+            - generic [ref=e230]:
+              - img:
+                - generic:
+                  - generic:
+                    - generic: interest
+                  - generic:
+                    - generic: objection
+                  - generic:
+                    - generic: unsubscribe
+                  - generic:
+                    - generic: unsubscribe
+                  - generic:
+                    - generic: unsubscribe
+              - generic:
+                - generic [ref=e236]:
+                  - button "Connect here" [ref=e237]
+                  - button "Start connection" [ref=e238]
+                  - generic [ref=e240]:
+                    - generic [ref=e241]: Email 1 - Permission-based angle
+                    - generic [ref=e242]:
+                      - generic [ref=e243]: Start
+                      - generic [ref=e244]: prompt
+                      - generic [ref=e245]: message
+                  - generic [ref=e246]:
+                    - generic [ref=e247]:
+                      - strong [ref=e248]: "Prompt:"
+                      - text: "Write this node message for \"Email 1 - Permission-based angle\". Keep it concrete, specific, and easy to understand. Use context variables only when available: {{firstName}}, {{com…"
+                    - generic [ref=e249]:
+                      - generic [ref=e250]: Auto-send
+                      - generic [ref=e251]: Delay 0m
+                - generic [ref=e252]:
+                  - button "Connect here" [ref=e253]
+                  - button "Start connection" [ref=e254]
+                  - generic [ref=e256]:
+                    - generic [ref=e257]: Email 2 - Interest (confirm details)
+                    - generic [ref=e258]:
+                      - generic [ref=e259]: prompt
+                      - generic [ref=e260]: message
+                  - generic [ref=e261]:
+                    - generic [ref=e262]:
+                      - strong [ref=e263]: "Prompt:"
+                      - text: "Write this node message for \"Email 2 - Interest (confirm details)\". Keep it concrete, specific, and easy to understand. Use context variables only when available: {{firstName}}, {…"
+                    - generic [ref=e264]:
+                      - generic [ref=e265]: Manual send
+                      - generic [ref=e266]: Delay 0m
+                - generic [ref=e267]:
+                  - button "Connect here" [ref=e268]
+                  - button "Start connection" [ref=e269]
+                  - generic [ref=e271]:
+                    - generic [ref=e272]: Email 2 - Objection (already have follow-up)
+                    - generic [ref=e273]:
+                      - generic [ref=e274]: prompt
+                      - generic [ref=e275]: message
+                  - generic [ref=e276]:
+                    - generic [ref=e277]:
+                      - strong [ref=e278]: "Prompt:"
+                      - text: "Write this node message for \"Email 2 - Objection (already have follow-up)\". Keep it concrete, specific, and easy to understand. Use context variables only when available: {{firstN…"
+                    - generic [ref=e279]:
+                      - generic [ref=e280]: Manual send
+                      - generic [ref=e281]: Delay 0m
+                - generic [ref=e282]:
+                  - button "Connect here" [ref=e283]
+                  - button "Start connection" [ref=e284]
+                  - generic [ref=e286]:
+                    - generic [ref=e287]: End - Unsubscribe/Stop
+                    - generic [ref=e289]: terminal
+                  - generic [ref=e290]:
+                    - generic [ref=e291]:
+                      - strong [ref=e292]: "Prompt:"
+                      - text: Terminal node
+                    - generic [ref=e293]:
+                      - generic [ref=e294]: Manual send
+                      - generic [ref=e295]: Delay 0m
+              - generic:
+                - generic:
+                  - img
+                  - text: "Pan: drag background"
+                - text: "|Zoom: ctrl/cmd + wheel|"
+                - generic:
+                  - img
+                  - text: "Connect: drag from right dot to left dot"
+          - generic [ref=e296]:
+            - generic [ref=e297]:
+              - heading "Inspector" [level=3] [ref=e298]
+              - paragraph [ref=e299]: Edit selected node/edge details and map settings.
+            - generic [ref=e300]:
+              - generic [ref=e301]:
+                - generic [ref=e302]: Max Depth (turns)
+                - spinbutton "Max Depth (turns)" [ref=e303]: "4"
+              - generic [ref=e304]:
+                - generic [ref=e305]:
+                  - generic [ref=e306]: Preview Lead
+                  - generic [ref=e307]: sourced
+                - generic [ref=e308]:
+                  - generic [ref=e309]: Name
+                  - generic [ref=e310]: Sarah
+                - generic [ref=e311]:
+                  - generic [ref=e312]: Email
+                  - generic [ref=e313]: sarah@techcorp.io
+                - generic [ref=e314]:
+                  - generic [ref=e315]: Company
+                  - generic [ref=e316]: revenuehero.io
+                - generic [ref=e317]:
+                  - generic [ref=e318]: Title
+                  - generic [ref=e319]: (missing)
+                - generic [ref=e320]:
+                  - generic [ref=e321]: Domain
+                  - generic [ref=e322]: techcorp.io
+              - generic [ref=e323]:
+                - generic [ref=e324]:
+                  - generic [ref=e325]: Node
+                  - button [ref=e326]:
+                    - img [ref=e327]
+                - generic [ref=e330]:
+                  - generic [ref=e331]: Title
+                  - textbox [ref=e332]: Email 1 - Permission-based angle
+                - generic [ref=e333]:
+                  - generic [ref=e334]: Kind
+                  - combobox [ref=e335]:
+                    - option "message" [selected]
+                    - option "terminal"
+                - generic [ref=e336]:
+                  - generic [ref=e337]: Prompt Template
+                  - textbox [ref=e338]: "Write this node message for \"Email 1 - Permission-based angle\". Keep it concrete, specific, and easy to understand. Use context variables only when available: {{firstName}}, {{company}}, {{leadTitle}}, {{brandName}}, {{campaignGoal}}, {{variantName}}, {{replyPreview}}, {{shortAnswer}}. Do not leave unresolved placeholders. Include exactly one clear CTA sentence. Legacy subject example: Should I build these? Legacy body example: Hi {{firstName}} — quick yes/no: should I build a batch of follow-up videos for {{company}}’s abandoned demo signups? Offer is simple: 10 AI-personalized videos (30 sec) that reference their company, role, and a likely use case, and include your booking link. If yes, reply with your booking link and 3 target fields (first name, company, use case) to get 10 videos made."
+                - generic [ref=e339]:
+                  - generic [ref=e340]: Prompt Policy
+                  - generic [ref=e341]:
+                    - generic [ref=e342]: Subject Max Words
+                    - spinbutton [ref=e343]: "8"
+                  - generic [ref=e344]:
+                    - generic [ref=e345]: Body Max Words
+                    - spinbutton [ref=e346]: "120"
+                  - generic [ref=e347]:
+                    - checkbox "Require exactly one CTA" [checked] [ref=e348]
+                    - text: Require exactly one CTA
+                  - button "Generate Preview" [ref=e349]:
+                    - img [ref=e350]
+                    - text: Generate Preview
+                - generic [ref=e353]:
+                  - generic [ref=e354]: Delay (minutes)
+                  - spinbutton [ref=e355]: "0"
+                - generic [ref=e356]:
+                  - checkbox "Auto-send" [checked] [ref=e357]
+                  - text: Auto-send
+                - button "Set As Start Node" [ref=e358]
+  - alert [ref=e146]

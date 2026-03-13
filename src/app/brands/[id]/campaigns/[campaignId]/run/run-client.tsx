@@ -18,6 +18,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { EmptyState, PageIntro, SectionPanel, StatLedger, TableHeaderCell, TableShell } from "@/components/ui/page-layout";
 import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import {
@@ -28,6 +29,7 @@ import {
   fetchRunView,
   launchExperimentRun,
   pauseRun,
+  probeRunDeliverability,
   resumeRun,
   updateCampaignApi,
 } from "@/lib/client-api";
@@ -109,6 +111,7 @@ function friendlyJobType(jobType: OutreachRunJob["jobType"]) {
   if (jobType === "dispatch_messages") return "Message dispatch";
   if (jobType === "sync_replies") return "Reply sync";
   if (jobType === "conversation_tick") return "Conversation branching";
+  if (jobType === "monitor_deliverability") return "Inbox placement check";
   return "Run analysis";
 }
 
@@ -129,6 +132,11 @@ function friendlyEventName(eventType: string) {
   if (eventType === "reply_ingested") return "Reply ingested";
   if (eventType === "reply_draft_created") return "Reply draft created";
   if (eventType === "reply_draft_sent") return "Reply sent";
+  if (eventType === "deliverability_probe_requested") return "Inbox placement requested";
+  if (eventType === "deliverability_probe_sent") return "Inbox placement sent";
+  if (eventType === "deliverability_probe_waiting") return "Inbox placement pending";
+  if (eventType === "deliverability_probe_result") return "Inbox placement result";
+  if (eventType === "deliverability_probe_failed") return "Inbox placement failed";
   if (eventType === "conversation_prompt_generated") return "Prompt generated";
   if (eventType === "conversation_prompt_rejected") return "Prompt rejected";
   if (eventType === "conversation_prompt_failed") return "Prompt failed";
@@ -137,6 +145,15 @@ function friendlyEventName(eventType: string) {
   if (eventType === "job_completed") return "Worker job completed";
   if (eventType === "job_failed") return "Worker job failed";
   return eventType.replaceAll("_", " ");
+}
+
+function friendlyAnomalyType(type: string) {
+  if (type === "hard_bounce_rate") return "hard bounce rate";
+  if (type === "spam_complaint_rate") return "spam complaint rate";
+  if (type === "provider_error_rate") return "provider error rate";
+  if (type === "negative_reply_rate_spike") return "negative reply rate";
+  if (type === "deliverability_inbox_placement") return "inbox placement";
+  return type.replaceAll("_", " ");
 }
 
 function summarizeEvent(event: OutreachRunEvent) {
@@ -174,6 +191,56 @@ function summarizeEvent(event: OutreachRunEvent) {
   if (event.eventType === "message_scheduled") {
     const count = asNumber(event.payload.count);
     return `Scheduled ${count ?? 0} messages`;
+  }
+  if (event.eventType === "deliverability_probe_sent") {
+    const monitorEmails = Array.isArray(event.payload.monitorEmails)
+      ? event.payload.monitorEmails.map((value) => asText(value)).filter(Boolean)
+      : [];
+    const monitorCount = asNumber(event.payload.monitorCount);
+    if (monitorEmails.length > 1) {
+      return `Probe sent to ${monitorEmails.length} seed inboxes`;
+    }
+    if (monitorEmails.length === 1) {
+      return `Probe sent to ${monitorEmails[0]}`;
+    }
+    return (monitorCount ?? 0) > 1 ? `Probe sent to ${monitorCount} seed inboxes` : "Probe sent";
+  }
+  if (event.eventType === "deliverability_probe_waiting") {
+    const attempt = asNumber(event.payload.pollAttempt);
+    const pendingMonitorCount = asNumber(event.payload.pendingMonitorCount);
+    const pendingMonitorEmails = Array.isArray(event.payload.pendingMonitorEmails)
+      ? event.payload.pendingMonitorEmails.map((value) => asText(value)).filter(Boolean)
+      : [];
+    const groupLabel =
+      (pendingMonitorCount ?? 0) > 1
+        ? ` for ${pendingMonitorCount} seed inboxes`
+        : pendingMonitorEmails.length === 1
+          ? ` for ${pendingMonitorEmails[0]}`
+          : "";
+    return `Waiting for mailbox placement${groupLabel}${attempt ? ` (attempt ${attempt})` : ""}`;
+  }
+  if (event.eventType === "deliverability_probe_result") {
+    const placement = asText(event.payload.placement);
+    const matchedMailbox = asText(event.payload.matchedMailbox);
+    const monitorEmail = asText(event.payload.monitorEmail);
+    const summaryText = asText(event.payload.summaryText);
+    const totalMonitors = asNumber(event.payload.totalMonitors);
+    const groupLabel =
+      (totalMonitors ?? 0) > 1
+        ? summaryText || `${totalMonitors} seed inboxes checked`
+        : monitorEmail || matchedMailbox || "monitor mailbox";
+    if (placement === "inbox") return `Inbox via ${groupLabel}`;
+    if (placement === "spam") return `Spam via ${groupLabel}`;
+    if (placement === "all_mail_only") {
+      return (totalMonitors ?? 0) > 1
+        ? `Missed Inbox; ${groupLabel}`
+        : `Missed Inbox; found in ${matchedMailbox || "All Mail"}`;
+    }
+    if (placement === "not_found") {
+      return (totalMonitors ?? 0) > 1
+        ? `Probe not found across seed group${summaryText ? ` (${summaryText})` : ""}`
+        : "Probe not found in monitor mailbox";
+    }
   }
   if (event.eventType === "conversation_tick_processed") {
     const scheduled = asNumber(event.payload.scheduledCount);
@@ -263,6 +330,76 @@ function summarizeReplyOutcome(run: OutreachRun) {
   return {
     headline: "No",
     detail: "No replies recorded for this run",
+    tone: "muted" as OutcomeTone,
+  };
+}
+
+function summarizePlacementOutcome(run: OutreachRun, events: OutreachRunEvent[]) {
+  const latestResult = events.find((event) => event.eventType === "deliverability_probe_result") ?? null;
+  if (latestResult) {
+    const placement = asText(latestResult.payload.placement);
+    const matchedMailbox = asText(latestResult.payload.matchedMailbox);
+    const monitorEmail = asText(latestResult.payload.monitorEmail);
+    const summaryText = asText(latestResult.payload.summaryText);
+    const totalMonitors = asNumber(latestResult.payload.totalMonitors);
+    const groupDetail =
+      (totalMonitors ?? 0) > 1
+        ? summaryText
+          ? `Seed group: ${summaryText}`
+          : `${totalMonitors} seed inboxes checked`
+        : "";
+    if (placement === "inbox") {
+      return {
+        headline: "Inbox",
+        detail: groupDetail || (monitorEmail ? `Delivered to ${monitorEmail}` : "Probe reached Inbox"),
+        tone: "normal" as OutcomeTone,
+      };
+    }
+    if (placement === "spam") {
+      return {
+        headline: "Spam",
+        detail: groupDetail || (monitorEmail ? `Landed in spam for ${monitorEmail}` : "Probe landed in spam"),
+        tone: "danger" as OutcomeTone,
+      };
+    }
+    if (placement === "all_mail_only") {
+      return {
+        headline: "All Mail only",
+        detail: groupDetail || `Missed Inbox${matchedMailbox ? `; found in ${matchedMailbox}` : ""}`,
+        tone: "danger" as OutcomeTone,
+      };
+    }
+    if (placement === "not_found") {
+      return {
+        headline: "Unknown",
+        detail: groupDetail || "Probe was not found in the monitoring mailbox",
+        tone: "muted" as OutcomeTone,
+      };
+    }
+  }
+
+  const pendingProbe = events.find(
+    (event) => event.eventType === "deliverability_probe_sent" || event.eventType === "deliverability_probe_waiting"
+  );
+  if (pendingProbe) {
+    return {
+      headline: "Checking",
+      detail: summarizeEvent(pendingProbe) || "Placement probe is running",
+      tone: "muted" as OutcomeTone,
+    };
+  }
+
+  if (run.metrics.sentMessages > 0) {
+    return {
+      headline: "Unknown",
+      detail: "No placement check has completed yet",
+      tone: "muted" as OutcomeTone,
+    };
+  }
+
+  return {
+    headline: "Not yet",
+    detail: "Placement checks start after real sends begin",
     tone: "muted" as OutcomeTone,
   };
 }
@@ -501,39 +638,41 @@ export default function RunClient({
   };
 
   const header = (
-    <Card>
-      <CardHeader>
-        <CardTitle>
-          {brand?.name} · {campaign.name}
-        </CardTitle>
-        <CardDescription>
-          Run workspace: launch, monitor, and iterate from one place.
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="grid gap-3 md:grid-cols-4">
-        <div>
-          <div className="text-xs text-[color:var(--muted-foreground)]">Runs</div>
-          <div className="text-lg font-semibold">{runs.length}</div>
-        </div>
-        <div>
-          <div className="text-xs text-[color:var(--muted-foreground)]">Active Runs</div>
-          <div className="text-lg font-semibold">{activeRuns.length}</div>
-        </div>
-        <div>
-          <div className="text-xs text-[color:var(--muted-foreground)]">Leads</div>
-          <div className="text-lg font-semibold">{totalLeads}</div>
-        </div>
-        <div>
-          <div className="text-xs text-[color:var(--muted-foreground)]">Replies</div>
-          <div className="text-lg font-semibold">{totalReplies}</div>
-        </div>
-      </CardContent>
-    </Card>
+    <PageIntro
+      eyebrow={`${brand?.name || "Brand"} / run workspace`}
+      title={campaign.name}
+      description="Launch variants, inspect actual delivery and reply outcomes, and keep the operator view focused on what changed."
+      aside={
+        <StatLedger
+          items={[
+            {
+              label: "Runs",
+              value: runs.length.toString().padStart(2, "0"),
+              detail: activeRuns.length
+                ? `${activeRuns.length} run${activeRuns.length === 1 ? "" : "s"} currently active.`
+                : "No run is active right now.",
+            },
+            {
+              label: "Leads",
+              value: totalLeads.toLocaleString(),
+              detail: `${totalSent.toLocaleString()} messages have been sent across all runs.`,
+            },
+            {
+              label: "Replies",
+              value: totalReplies.toLocaleString(),
+              detail: totalPositiveReplies
+                ? `${totalPositiveReplies.toLocaleString()} positive replies captured so far.`
+                : "No positive replies yet.",
+            },
+          ]}
+        />
+      }
+    />
   );
 
   const tabs = (
-    <Card>
-      <CardContent className="flex flex-wrap gap-2 py-4">
+    <div className="border-b border-[color:var(--border)]">
+      <div className="flex flex-wrap gap-5">
         {TABS.map((item) => {
           const href = `/brands/${brandId}/campaigns/${campaignId}/run/${item.id}`;
           const active = item.id === tab;
@@ -542,29 +681,27 @@ export default function RunClient({
               key={item.id}
               href={href}
               className={cn(
-                "rounded-full border px-3 py-1.5 text-xs transition",
+                "border-b-2 pb-3 text-sm transition-colors",
                 active
-                  ? "border-[color:var(--accent-border)] bg-[color:var(--accent-soft)] text-[color:var(--accent)]"
-                  : "border-[color:var(--border)] text-[color:var(--muted-foreground)] hover:bg-[color:var(--surface-muted)]"
+                  ? "border-[color:var(--foreground)] text-[color:var(--foreground)]"
+                  : "border-transparent text-[color:var(--muted-foreground)] hover:text-[color:var(--foreground)]"
               )}
             >
               {item.label}
             </Link>
           );
         })}
-      </CardContent>
-    </Card>
+      </div>
+    </div>
   );
 
   const controls = (
-    <Card>
-      <CardHeader>
-        <CardTitle className="text-base">Run Controls</CardTitle>
-        <CardDescription>
-          Choose a variant and launch autopilot. Reply routing and account setup come from Outreach Settings.
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="grid gap-3 lg:grid-cols-[1fr_auto] lg:items-end">
+    <SectionPanel
+      title="Run controls"
+      description="Choose the live variant here. Launching, restarts, and refresh stay in one operator strip."
+      contentClassName="space-y-4"
+    >
+      <div className="grid gap-3 lg:grid-cols-[1fr_auto] lg:items-end">
         <div className="grid gap-2">
           <Label htmlFor="run-variant-select">Variant</Label>
           <Select
@@ -600,9 +737,9 @@ export default function RunClient({
             <Link href={`/brands/${brandId}/campaigns/${campaignId}/build`}>Open Build</Link>
           </Button>
         </div>
-      </CardContent>
+      </div>
       {latestRun ? (
-        <CardContent className="border-t border-[color:var(--border)] pt-3 text-sm">
+        <div className="border-t border-[color:var(--border)] pt-4 text-sm">
           <div className="font-medium">Latest attempt: Run {latestRun.id.slice(-6)}</div>
           <div className="mt-1 text-[color:var(--muted-foreground)]">
             Status {latestRun.status} · leads {latestRun.metrics.sourcedLeads} · sent {latestRun.metrics.sentMessages} · replies {latestRun.metrics.replies}
@@ -614,9 +751,9 @@ export default function RunClient({
           {latestRun.lastError ? (
             <div className="mt-1 text-[color:var(--danger)]">Reason: {latestRun.lastError}</div>
           ) : null}
-        </CardContent>
+        </div>
       ) : null}
-    </Card>
+    </SectionPanel>
   );
 
   const visibility = (
@@ -640,6 +777,7 @@ export default function RunClient({
           const lastDispatchFailure = runEvents.find((event) => event.eventType === "dispatch_failed") ?? null;
           const sendOutcome = summarizeSendOutcome(run);
           const replyOutcome = summarizeReplyOutcome(run);
+          const placementOutcome = summarizePlacementOutcome(run, runEvents);
           const expanded = Boolean(expandedRuns[run.id]);
 
           return (
@@ -651,9 +789,9 @@ export default function RunClient({
               <div className="mt-1 text-[color:var(--muted-foreground)]">
                 Leads {run.metrics.sourcedLeads} · Sent {run.metrics.sentMessages} · Replies {run.metrics.replies}
               </div>
-              <div className="mt-2 grid gap-2 md:grid-cols-2">
+              <div className="mt-2 grid gap-2 lg:grid-cols-3">
                 <div className="rounded-lg border border-[color:var(--border)] bg-[color:var(--surface)] p-2">
-                  <div className="text-[11px] font-medium uppercase tracking-wide text-[color:var(--muted-foreground)]">
+                  <div className="text-[12px] text-[color:var(--muted-foreground)]">
                     Did emails send?
                   </div>
                   <div className={cn("mt-1 text-sm font-semibold", outcomeToneClass(sendOutcome.tone))}>
@@ -665,7 +803,7 @@ export default function RunClient({
                   </div>
                 </div>
                 <div className="rounded-lg border border-[color:var(--border)] bg-[color:var(--surface)] p-2">
-                  <div className="text-[11px] font-medium uppercase tracking-wide text-[color:var(--muted-foreground)]">
+                  <div className="text-[12px] text-[color:var(--muted-foreground)]">
                     Did we get replies?
                   </div>
                   <div className={cn("mt-1 text-sm font-semibold", outcomeToneClass(replyOutcome.tone))}>
@@ -676,11 +814,30 @@ export default function RunClient({
                     Last reply event: {lastReplyEvent ? formatDateTime(lastReplyEvent.createdAt) : "none yet"}
                   </div>
                 </div>
+                <div className="rounded-lg border border-[color:var(--border)] bg-[color:var(--surface)] p-2">
+                  <div className="text-[12px] text-[color:var(--muted-foreground)]">
+                    Inbox placement
+                  </div>
+                  <div className={cn("mt-1 text-sm font-semibold", outcomeToneClass(placementOutcome.tone))}>
+                    {placementOutcome.headline}
+                  </div>
+                  <div className="text-xs text-[color:var(--muted-foreground)]">{placementOutcome.detail}</div>
+                  <div className="mt-1 text-xs text-[color:var(--muted-foreground)]">
+                    Last placement check:{" "}
+                    {runEvents.find((event) => event.eventType === "deliverability_probe_result")
+                      ? formatDateTime(
+                          runEvents.find((event) => event.eventType === "deliverability_probe_result")?.createdAt || ""
+                        )
+                      : "none yet"}
+                  </div>
+                </div>
               </div>
               {run.lastError ? <div className="mt-1 text-[color:var(--danger)]">Reason: {run.lastError}</div> : null}
               {run.pauseReason ? <div className="mt-1 text-[color:var(--danger)]">Pause: {run.pauseReason}</div> : null}
               {runAnomalies.length ? (
-                <div className="mt-1 text-[color:var(--danger)]">Active anomalies: {runAnomalies.map((item) => item.type).join(", ")}</div>
+                <div className="mt-1 text-[color:var(--danger)]">
+                  Active anomalies: {runAnomalies.map((item) => friendlyAnomalyType(item.type)).join(", ")}
+                </div>
               ) : null}
               {lastDispatchFailure ? (
                 <div className="mt-1 text-[color:var(--danger)]">
@@ -738,6 +895,22 @@ export default function RunClient({
                 <Button
                   type="button"
                   size="sm"
+                  variant="outline"
+                  disabled={!["queued", "scheduled", "sending", "monitoring", "paused", "completed"].includes(run.status)}
+                  onClick={() => {
+                    void probeRunDeliverability(brandId, campaignId, run.id)
+                      .then(() => refresh(false))
+                      .catch((err: unknown) => {
+                        setError(err instanceof Error ? err.message : "Failed to start inbox placement check");
+                      });
+                  }}
+                >
+                  Check inbox placement
+                </Button>
+
+                <Button
+                  type="button"
+                  size="sm"
                   variant="ghost"
                   onClick={() => setExpandedRuns((prev) => ({ ...prev, [run.id]: !prev[run.id] }))}
                 >
@@ -748,7 +921,7 @@ export default function RunClient({
 
               {expanded ? (
                 <div className="mt-3 grid gap-2 rounded-lg border border-[color:var(--border)] bg-[color:var(--surface)] p-2">
-                  <div className="text-[11px] font-medium uppercase tracking-wide text-[color:var(--muted-foreground)]">
+                  <div className="text-[12px] text-[color:var(--muted-foreground)]">
                     Worker Activity (advanced)
                   </div>
                   {runJobs.length ? (
@@ -780,7 +953,7 @@ export default function RunClient({
                     </div>
                   )}
 
-                  <div className="text-[11px] font-medium uppercase tracking-wide text-[color:var(--muted-foreground)]">
+                  <div className="text-[12px] text-[color:var(--muted-foreground)]">
                     Timeline
                   </div>
                   {runEvents.length ? (
@@ -861,16 +1034,17 @@ export default function RunClient({
             Every outbound message attempt: who it went to, what was sent, and current delivery status.
           </CardDescription>
         </CardHeader>
-        <CardContent className="overflow-x-auto">
+        <CardContent>
+          <TableShell>
           <table className="min-w-full text-sm">
             <thead>
-              <tr className="text-left text-xs uppercase tracking-wide text-[color:var(--muted-foreground)]">
-                <th className="pb-2">To</th>
-                <th className="pb-2">Subject</th>
-                <th className="pb-2">Message</th>
-                <th className="pb-2">Status</th>
-                <th className="pb-2">Sent / Scheduled</th>
-                <th className="pb-2">Run</th>
+              <tr>
+                <TableHeaderCell>To</TableHeaderCell>
+                <TableHeaderCell>Subject</TableHeaderCell>
+                <TableHeaderCell>Message</TableHeaderCell>
+                <TableHeaderCell>Status</TableHeaderCell>
+                <TableHeaderCell>Sent / Scheduled</TableHeaderCell>
+                <TableHeaderCell>Run</TableHeaderCell>
               </tr>
             </thead>
             <tbody>
@@ -917,10 +1091,13 @@ export default function RunClient({
               })}
             </tbody>
           </table>
+          </TableShell>
           {!outboundMessages.length ? (
-            <div className="py-6 text-sm text-[color:var(--muted-foreground)]">
-              No outbound messages yet.
-            </div>
+            <EmptyState
+              className="mt-4"
+              title="No outbound messages yet."
+              description="Launch a run or wait for the current schedule to dispatch before this log fills in."
+            />
           ) : null}
         </CardContent>
       </Card>
@@ -930,15 +1107,16 @@ export default function RunClient({
           <CardTitle className="text-base">Reply Message Log</CardTitle>
           <CardDescription>What prospects actually said in inbound replies.</CardDescription>
         </CardHeader>
-        <CardContent className="overflow-x-auto">
+        <CardContent>
+          <TableShell>
           <table className="min-w-full text-sm">
             <thead>
-              <tr className="text-left text-xs uppercase tracking-wide text-[color:var(--muted-foreground)]">
-                <th className="pb-2">From</th>
-                <th className="pb-2">Subject</th>
-                <th className="pb-2">Reply</th>
-                <th className="pb-2">Received</th>
-                <th className="pb-2">Run</th>
+              <tr>
+                <TableHeaderCell>From</TableHeaderCell>
+                <TableHeaderCell>Subject</TableHeaderCell>
+                <TableHeaderCell>Reply</TableHeaderCell>
+                <TableHeaderCell>Received</TableHeaderCell>
+                <TableHeaderCell>Run</TableHeaderCell>
               </tr>
             </thead>
             <tbody>
@@ -962,10 +1140,13 @@ export default function RunClient({
               ))}
             </tbody>
           </table>
+          </TableShell>
           {!inboundReplyMessages.length ? (
-            <div className="py-6 text-sm text-[color:var(--muted-foreground)]">
-              No inbound replies yet.
-            </div>
+            <EmptyState
+              className="mt-4"
+              title="No inbound replies yet."
+              description="Replies will appear here once a sent message gets an answer back."
+            />
           ) : null}
         </CardContent>
       </Card>
@@ -1049,16 +1230,17 @@ export default function RunClient({
         <CardTitle className="text-base">Leads</CardTitle>
         <CardDescription>Leads sourced from active and historical runs.</CardDescription>
       </CardHeader>
-      <CardContent className="overflow-x-auto">
+      <CardContent>
+        <TableShell>
         <table className="min-w-full text-sm">
           <thead>
-            <tr className="text-left text-xs uppercase tracking-wide text-[color:var(--muted-foreground)]">
-              <th className="pb-2">Lead</th>
-              <th className="pb-2">Company</th>
-              <th className="pb-2">Email</th>
-              <th className="pb-2">Status</th>
-              <th className="pb-2">Run</th>
-              <th className="pb-2">Source</th>
+            <tr>
+              <TableHeaderCell>Lead</TableHeaderCell>
+              <TableHeaderCell>Company</TableHeaderCell>
+              <TableHeaderCell>Email</TableHeaderCell>
+              <TableHeaderCell>Status</TableHeaderCell>
+              <TableHeaderCell>Run</TableHeaderCell>
+              <TableHeaderCell>Source</TableHeaderCell>
             </tr>
           </thead>
           <tbody>
@@ -1086,10 +1268,13 @@ export default function RunClient({
             ))}
           </tbody>
         </table>
+        </TableShell>
         {!runView.leads.length ? (
-          <div className="py-6 text-sm text-[color:var(--muted-foreground)]">
-            No leads yet. Launch a run from Overview or Variants.
-          </div>
+          <EmptyState
+            className="mt-4"
+            title="No leads yet."
+            description="Launch a run from Overview or Variants and sourced leads will appear here."
+          />
         ) : null}
       </CardContent>
     </Card>
@@ -1151,15 +1336,16 @@ export default function RunClient({
           <CardTitle className="text-base">Threads</CardTitle>
           <CardDescription>Campaign threads linked to this campaign’s runs.</CardDescription>
         </CardHeader>
-        <CardContent className="overflow-x-auto">
+        <CardContent>
+          <TableShell>
           <table className="min-w-full text-sm">
             <thead>
-              <tr className="text-left text-xs uppercase tracking-wide text-[color:var(--muted-foreground)]">
-                <th className="pb-2">Subject</th>
-                <th className="pb-2">Sentiment</th>
-                <th className="pb-2">Intent</th>
-                <th className="pb-2">Status</th>
-                <th className="pb-2">Last Message</th>
+              <tr>
+                <TableHeaderCell>Subject</TableHeaderCell>
+                <TableHeaderCell>Sentiment</TableHeaderCell>
+                <TableHeaderCell>Intent</TableHeaderCell>
+                <TableHeaderCell>Status</TableHeaderCell>
+                <TableHeaderCell>Last message</TableHeaderCell>
               </tr>
             </thead>
             <tbody>
@@ -1186,11 +1372,14 @@ export default function RunClient({
               ))}
             </tbody>
           </table>
+          </TableShell>
 
           {!runView.threads.length ? (
-            <div className="py-6 text-sm text-[color:var(--muted-foreground)]">
-              No replies yet.
-            </div>
+            <EmptyState
+              className="mt-4"
+              title="No replies yet."
+              description="Threads will appear here after prospects respond to a live run."
+            />
           ) : null}
         </CardContent>
       </Card>

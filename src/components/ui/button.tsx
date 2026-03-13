@@ -4,16 +4,16 @@ import { cva, type VariantProps } from "class-variance-authority";
 import { cn } from "@/lib/utils";
 
 const buttonVariants = cva(
-  "inline-flex items-center justify-center gap-2 rounded-full text-sm font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--ring)] disabled:pointer-events-none disabled:opacity-50",
+  "inline-flex items-center justify-center gap-2 rounded-[10px] text-sm font-medium transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--ring)] focus-visible:ring-offset-2 focus-visible:ring-offset-[color:var(--background)] disabled:pointer-events-none disabled:opacity-50",
   {
     variants: {
       variant: {
         default:
-          "border border-[color:var(--foreground)] bg-[color:var(--foreground)] text-[color:var(--background)] shadow-[0_10px_30px_-18px_color-mix(in_srgb,var(--shadow)_95%,transparent)] hover:brightness-110",
-        secondary: "bg-[color:var(--surface-muted)] text-[color:var(--foreground)] hover:bg-[color:var(--surface-hover)]",
+          "border border-[color:var(--accent)] bg-[color:var(--accent)] text-[color:var(--accent-foreground)] hover:opacity-92",
+        secondary: "border border-[color:var(--border)] bg-[color:var(--surface-muted)] text-[color:var(--foreground)] hover:bg-[color:var(--surface-hover)]",
         outline: "border border-[color:var(--border)] bg-[color:var(--surface)] text-[color:var(--foreground)] hover:bg-[color:var(--surface-muted)]",
         ghost: "text-[color:var(--muted-foreground)] hover:bg-[color:var(--surface-muted)] hover:text-[color:var(--foreground)]",
-        danger: "bg-[color:var(--danger)] text-white hover:brightness-105",
+        danger: "border border-[color:var(--danger)] bg-[color:var(--danger)] text-[color:var(--accent-foreground)] hover:opacity-92",
       },
       size: {
         sm: "h-8 px-3 text-xs",

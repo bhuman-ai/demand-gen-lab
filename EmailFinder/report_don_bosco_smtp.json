@@ -1,0 +1,37 @@
+{
+  "candidates": [
+    "don@bhuman.ai",
+    "don.bosco@bhuman.ai",
+    "don_bosco@bhuman.ai",
+    "don-bosco@bhuman.ai",
+    "donbosco@bhuman.ai",
+    "dbosco@bhuman.ai",
+    "donb@bhuman.ai",
+    "d.bosco@bhuman.ai"
+  ],
+  "generated_at_utc": "2026-03-02T19:23:21.824311+00:00",
+  "input": {
+    "domain": "bhuman.ai",
+    "name": "Don Bosco"
+  },
+  "passive": {
+    "candidate_count": 8,
+    "domain_note": "DNS resolution failed: [Errno 8] nodename nor servname provided, or not known",
+    "domain_resolves": false,
+    "mx_records": [],
+    "syntax_valid_count": 8
+  },
+  "settings": {
+    "doh_enabled": true,
+    "doh_via_curl": true,
+    "from_address": "probe@localhost",
+    "max_candidates": 8,
+    "pause_ms": 700,
+    "probe_smtp": true,
+    "timeout_seconds": 8.0
+  },
+  "smtp": {
+    "reason": "no mx records",
+    "stage": "skipped"
+  }
+}

@@ -1,0 +1,194 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e3]:
+    - complementary [ref=e4]:
+      - link "Factory Factory Platform" [ref=e5] [cursor=pointer]:
+        - /url: /
+        - generic [ref=e6]: Factory
+        - generic [ref=e7]: Factory Platform
+      - combobox [ref=e10]:
+        - option "BHuman | AI personalized videos at scale"
+        - option "selffunded.dev" [selected]
+      - navigation [ref=e12]:
+        - link "Experiments" [ref=e13] [cursor=pointer]:
+          - /url: /brands/brand_7936be472e1247c7/experiments
+          - img [ref=e14]
+          - text: Experiments
+        - link "Campaigns" [ref=e18] [cursor=pointer]:
+          - /url: /brands/brand_7936be472e1247c7/campaigns
+          - img [ref=e19]
+          - text: Campaigns
+        - link "Network" [ref=e21] [cursor=pointer]:
+          - /url: /brands/brand_7936be472e1247c7/network
+          - img [ref=e22]
+          - text: Network
+        - link "Leads" [ref=e27] [cursor=pointer]:
+          - /url: /brands/brand_7936be472e1247c7/leads
+          - img [ref=e28]
+          - text: Leads
+        - link "Inbox" [ref=e31] [cursor=pointer]:
+          - /url: /brands/brand_7936be472e1247c7/inbox
+          - img [ref=e32]
+          - text: Inbox
+      - generic [ref=e35]:
+        - generic [ref=e36]: Tools
+        - navigation [ref=e37]:
+          - link "Settings" [ref=e38] [cursor=pointer]:
+            - /url: /settings/outreach
+            - img [ref=e39]
+            - text: Settings
+          - link "Logic" [ref=e42] [cursor=pointer]:
+            - /url: /logic
+            - img [ref=e43]
+            - text: Logic
+          - link "Doctor" [ref=e45] [cursor=pointer]:
+            - /url: /doctor
+            - img [ref=e46]
+            - text: Doctor
+    - main [ref=e48]:
+      - generic [ref=e50]:
+        - generic [ref=e51]:
+          - generic [ref=e52]: Factory > Brand
+          - heading "Factory" [level=1] [ref=e863]
+        - generic [ref=e54]:
+          - button "Global Search K" [ref=e55]:
+            - img [ref=e56]
+            - text: Global Search
+            - generic [ref=e59]:
+              - img [ref=e60]
+              - text: K
+          - button "User" [ref=e62]:
+            - img [ref=e63]
+            - text: User
+      - generic [ref=e864]:
+        - generic [ref=e865]:
+          - generic [ref=e866]:
+            - generic [ref=e867]:
+              - heading "selffunded.dev" [level=3] [ref=e868]
+              - paragraph [ref=e869]: Outbound experimentation workspace · https://selffunded.dev
+            - button "New Experiment" [ref=e870]:
+              - img [ref=e871]
+              - text: New Experiment
+          - generic [ref=e872]:
+            - generic [ref=e873]:
+              - generic [ref=e874]: Tone
+              - generic [ref=e875]: Direct, credible, operator-to-operator
+            - generic [ref=e876]:
+              - generic [ref=e877]: Target markets
+              - generic [ref=e878]: "2"
+            - generic [ref=e879]:
+              - generic [ref=e880]: Experiments
+              - generic [ref=e881]: "1"
+            - generic [ref=e882]:
+              - generic [ref=e883]: Campaigns
+              - generic [ref=e884]: "0"
+            - generic [ref=e885]:
+              - generic [ref=e886]: Notes
+              - generic [ref=e887]: "Private collective for self-funded operators. Current outreach offer: AWS credits for founders with no institutional VC; angels and friends/family are acceptable. Use Marco Rosetti as the sender voice."
+        - generic [ref=e888]:
+          - generic [ref=e889]:
+            - heading "Brand Profile" [level=3] [ref=e890]
+            - paragraph [ref=e891]: Manage target markets, ICPs, and product context after onboarding.
+          - generic [ref=e892]:
+            - generic [ref=e893]:
+              - generic [ref=e894]: Product summary
+              - textbox "Product summary" [ref=e895]:
+                - /placeholder: What the product does and why it matters.
+                - text: Private operator collective with negotiated cloud and software deals for self-funded founders
+            - generic [ref=e896]:
+              - generic [ref=e897]:
+                - generic [ref=e898]: Target markets (one per line)
+                - textbox "Target markets (one per line)" [ref=e899]:
+                  - /placeholder: Mid-market B2B SaaS Agencies
+                  - text: Bootstrapped SaaS founders Self-funded operators
+              - generic [ref=e900]:
+                - generic [ref=e901]: Ideal customer profiles (one per line)
+                - textbox "Ideal customer profiles (one per line)" [ref=e902]:
+                  - /placeholder: VP Sales at 50-500 employee SaaS Founder-led teams
+                  - text: Founders with no institutional VC Teams already on AWS or likely to use AWS
+              - generic [ref=e903]:
+                - generic [ref=e904]: Key features (one per line)
+                - textbox "Key features (one per line)" [ref=e905]:
+                  - /placeholder: AI-personalized video Automated outreach orchestration
+              - generic [ref=e906]:
+                - generic [ref=e907]: Key benefits (one per line)
+                - textbox "Key benefits (one per line)" [ref=e908]:
+                  - /placeholder: Higher reply rates Lower manual workload
+                  - text: AWS credits to offset cloud spend Access to negotiated software and cloud offers
+            - button "Save Brand Profile" [ref=e910]
+        - generic [ref=e911]:
+          - generic [ref=e912]:
+            - generic [ref=e913]:
+              - heading "Next Best Action" [level=3] [ref=e914]
+              - paragraph [ref=e915]: Continue the most important experiment now.
+            - generic [ref=e917]:
+              - generic [ref=e918]: AWS credits qualification outreach
+              - generic [ref=e919]:
+                - text: "Status:"
+                - strong [ref=e920]: completed
+              - link "Continue Experiment" [ref=e921] [cursor=pointer]:
+                - /url: /brands/brand_7936be472e1247c7/experiments/expt_254ab559674b4e93
+                - text: Continue Experiment
+                - img [ref=e922]
+          - generic [ref=e924]:
+            - generic [ref=e925]:
+              - heading "Active Experiments" [level=3] [ref=e926]
+              - paragraph [ref=e927]: Running, sourcing, ready, or paused experiments.
+            - generic [ref=e928]:
+              - generic [ref=e929]: No active experiments yet.
+              - link "Open Experiments" [ref=e930] [cursor=pointer]:
+                - /url: /brands/brand_7936be472e1247c7/experiments
+                - img [ref=e931]
+                - text: Open Experiments
+        - generic [ref=e933]:
+          - generic [ref=e934]:
+            - generic [ref=e935]:
+              - heading "Campaigns Snapshot" [level=3] [ref=e936]
+              - paragraph [ref=e937]: Scale programs promoted from experiment winners.
+            - generic [ref=e938]:
+              - generic [ref=e939]: "0"
+              - link "Open Campaigns" [ref=e940] [cursor=pointer]:
+                - /url: /brands/brand_7936be472e1247c7/campaigns
+                - img [ref=e941]
+                - text: Open Campaigns
+          - generic [ref=e943]:
+            - generic [ref=e944]:
+              - heading "Lead Pool" [level=3] [ref=e945]
+              - paragraph [ref=e946]: Verified and operational leads in this brand workspace.
+            - generic [ref=e947]:
+              - generic [ref=e948]: "0"
+              - link "Open Leads" [ref=e949] [cursor=pointer]:
+                - /url: /brands/brand_7936be472e1247c7/leads
+                - img [ref=e950]
+                - text: Open Leads
+          - generic [ref=e953]:
+            - generic [ref=e954]:
+              - heading "Reply Signals" [level=3] [ref=e955]
+              - paragraph [ref=e956]: Recent conversations and action-ready replies.
+            - generic [ref=e957]:
+              - generic [ref=e958]: "0"
+              - link "Open Inbox" [ref=e959] [cursor=pointer]:
+                - /url: /brands/brand_7936be472e1247c7/inbox
+                - img [ref=e960]
+                - text: Open Inbox
+        - generic [ref=e963]:
+          - generic [ref=e964]:
+            - heading "Outreach delivery account" [level=3] [ref=e965]
+            - paragraph [ref=e966]: Choose the delivery account for this brand. Reply mailbox assignment is managed in Outreach Settings.
+          - generic [ref=e967]:
+            - combobox [ref=e968]:
+              - option "Unassigned"
+              - option "selffunded.dev fluentscroll.com" [selected]
+              - option "mrosetti email selffunded"
+              - option "selffunded.dev lequarterly.com"
+              - option "selffunded.dev startingstroke.com"
+              - option "BHuman enrichanything.com"
+              - option "BHuman atlaswatch.org"
+              - option "BHuman itsallvibes.com"
+              - option "BHuman itsallvibes.com"
+              - option "zeynep email bhuman"
+              - option "Selffunded.dev"
+            - link "Manage Accounts" [ref=e969] [cursor=pointer]:
+              - /url: /settings/outreach
+  - button "Open Next.js Dev Tools" [ref=e126] [cursor=pointer]:
+    - img [ref=e127]
+  - alert [ref=e130]

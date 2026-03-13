@@ -49,37 +49,6 @@ function normalizeSuggestions(value: unknown): HypothesisSuggestion[] {
   return rows.slice(0, 8);
 }
 
-function fallbackSuggestions(brandName: string, goal: string): HypothesisSuggestion[] {
-  const safeBrand = brandName.trim() || "your brand";
-  const safeGoal = goal.trim() || `grow ${safeBrand}`;
-  return [
-    {
-      title: "ICP pain: stop doing X manually",
-      channel: "Email",
-      rationale: `If we target one role at a narrow company type and lead with a specific pain tied to "${safeGoal}", we should see higher-quality replies.`,
-      leadTarget: "Head of Growth at B2B SaaS (11-200 employees)",
-      maxLeads: 100,
-      seedInputs: ["role", "current workflow", "pain signal"],
-    },
-    {
-      title: "Offer test: the 10-minute teardown",
-      channel: "Email",
-      rationale: "If we offer a concrete artifact (teardown/audit) with a low-friction CTA, we should increase positive replies without lowering lead quality.",
-      leadTarget: "Founder at B2B SaaS (1-50 employees)",
-      maxLeads: 80,
-      seedInputs: ["company", "product category", "one specific problem"],
-    },
-    {
-      title: "Trigger-based: new hire or funding",
-      channel: "Email",
-      rationale: "If we filter to prospects with an obvious trigger, outreach will feel timely and reduce negative replies.",
-      leadTarget: "RevOps / Sales leaders at companies with recent funding or hiring",
-      maxLeads: 120,
-      seedInputs: ["trigger", "role", "team goal"],
-    },
-  ];
-}
-
 export async function POST(
   _request: Request,
   context: { params: Promise<{ brandId: string; campaignId: string }> }
@@ -101,10 +70,13 @@ export async function POST(
 
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) {
-    return NextResponse.json({
-      suggestions: fallbackSuggestions(brandName, goal),
-      mode: "fallback",
-    });
+    return NextResponse.json(
+      {
+        error: "OPENAI_API_KEY is not configured",
+        hint: "Real-only mode is enabled: fallback hypothesis suggestions are disabled.",
+      },
+      { status: 503 }
+    );
   }
 
   const brandContext = {
@@ -159,10 +131,14 @@ export async function POST(
 
   const raw = await response.text();
   if (!response.ok) {
-    return NextResponse.json({
-      suggestions: fallbackSuggestions(brandName, goal),
-      mode: "fallback",
-    });
+    return NextResponse.json(
+      {
+        error: "suggestion generation failed",
+        hint: "Real-only mode is enabled: fallback hypothesis suggestions are disabled.",
+        providerStatus: response.status,
+      },
+      { status: 502 }
+    );
   }
 
   let payload: unknown = {};
@@ -190,8 +166,14 @@ export async function POST(
   const parsedRecord = asRecord(parsed);
   const suggestions = normalizeSuggestions(parsedRecord.suggestions);
 
-  return NextResponse.json({
-    suggestions: suggestions.length ? suggestions : fallbackSuggestions(brandName, goal),
-    mode: suggestions.length ? "openai" : "fallback",
-  });
+  if (!suggestions.length) {
+    return NextResponse.json(
+      {
+        error: "suggestion generation returned no usable hypotheses",
+        hint: "Real-only mode is enabled: fallback hypothesis suggestions are disabled.",
+      },
+      { status: 422 }
+    );
+  }
+  return NextResponse.json({ suggestions, mode: "openai" });
 }

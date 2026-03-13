@@ -58,40 +58,6 @@ function normalizeSuggestions(value: unknown): ExperimentSuggestion[] {
   return rows.slice(0, 24);
 }
 
-function fallbackSuggestions(
-  hypotheses: Array<{ id: string; title: string; rationale: string }>
-): ExperimentSuggestion[] {
-  return hypotheses.flatMap((hypothesis) => {
-    const base = sanitizeAiText(hypothesis.title || "Hypothesis").slice(0, 70);
-    const rationale = sanitizeAiText(hypothesis.rationale || "core problem");
-    const runPolicy = {
-      cadence: "3_step_7_day" as const,
-      dailyCap: 30,
-      hourlyCap: 6,
-      timezone: "America/Los_Angeles",
-      minSpacingMinutes: 8,
-    };
-    return [
-      {
-        hypothesisId: hypothesis.id,
-        name: `${base} / Hook-first`,
-        status: "draft",
-        notes: `Lead with a sharp hook tied to: ${rationale}.`,
-        runPolicy,
-        executionStatus: "idle",
-      },
-      {
-        hypothesisId: hypothesis.id,
-        name: `${base} / Proof-first`,
-        status: "draft",
-        notes: "Open with measurable proof, then ask a simple one-question CTA.",
-        runPolicy,
-        executionStatus: "idle",
-      },
-    ];
-  });
-}
-
 export async function POST(
   _request: Request,
   context: { params: Promise<{ brandId: string; campaignId: string }> }
@@ -117,7 +83,13 @@ export async function POST(
 
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) {
-    return NextResponse.json({ suggestions: fallbackSuggestions(hypotheses), mode: "fallback" });
+    return NextResponse.json(
+      {
+        error: "OPENAI_API_KEY is not configured",
+        hint: "Real-only mode is enabled: fallback experiment suggestions are disabled.",
+      },
+      { status: 503 }
+    );
   }
 
   const brandContext = {
@@ -160,7 +132,14 @@ export async function POST(
 
   const raw = await response.text();
   if (!response.ok) {
-    return NextResponse.json({ suggestions: fallbackSuggestions(hypotheses), mode: "fallback" });
+    return NextResponse.json(
+      {
+        error: "experiment suggestion generation failed",
+        hint: "Real-only mode is enabled: fallback experiment suggestions are disabled.",
+        providerStatus: response.status,
+      },
+      { status: 502 }
+    );
   }
 
   let payload: unknown = {};
@@ -204,8 +183,14 @@ export async function POST(
       : []
   );
 
-  return NextResponse.json({
-    suggestions: normalized.length ? normalized : fallbackSuggestions(hypotheses),
-    mode: normalized.length ? "openai" : "fallback",
-  });
+  if (!normalized.length) {
+    return NextResponse.json(
+      {
+        error: "experiment suggestion generation returned no usable suggestions",
+        hint: "Real-only mode is enabled: fallback experiment suggestions are disabled.",
+      },
+      { status: 422 }
+    );
+  }
+  return NextResponse.json({ suggestions: normalized, mode: "openai" });
 }

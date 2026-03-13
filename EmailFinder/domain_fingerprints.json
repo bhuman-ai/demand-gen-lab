@@ -1,0 +1,281 @@
+{
+  "domains": {
+    "absorblms.com": {
+      "catch_all_signals": 0,
+      "confidence_counts": {
+        "high": 1
+      },
+      "created_at": "2026-03-04T13:12:00.364284+00:00",
+      "domain": "absorblms.com",
+      "mx_host_counts": {
+        "absorblms-com.mail.protection.outlook.com": 1
+      },
+      "outcome_counts": {},
+      "outcome_events": 0,
+      "provider_status_counts": {},
+      "request_count": 1,
+      "sequence_sensitive_signals": 0,
+      "smtp_status_counts": {
+        "accepted": 1
+      },
+      "temp_fail_signals": 0,
+      "total_attempts": 1,
+      "updated_at": "2026-03-04T13:12:00.364294+00:00",
+      "verdict_counts": {
+        "likely-valid": 1
+      }
+    },
+    "barrierreef.org": {
+      "catch_all_signals": 0,
+      "confidence_counts": {
+        "low": 6
+      },
+      "created_at": "2026-03-04T13:07:37.008486+00:00",
+      "domain": "barrierreef.org",
+      "mx_host_counts": {},
+      "outcome_counts": {},
+      "outcome_events": 0,
+      "provider_status_counts": {},
+      "request_count": 1,
+      "sequence_sensitive_signals": 0,
+      "smtp_status_counts": {},
+      "temp_fail_signals": 6,
+      "total_attempts": 6,
+      "updated_at": "2026-03-04T13:07:37.008496+00:00",
+      "verdict_counts": {
+        "unknown": 6
+      }
+    },
+    "bhuman.ai": {
+      "catch_all_signals": 0,
+      "confidence_counts": {
+        "high": 1,
+        "low": 46
+      },
+      "created_at": "2026-03-03T13:15:17.330267+00:00",
+      "domain": "bhuman.ai",
+      "mx_host_counts": {
+        "smtp.google.com": 1
+      },
+      "outcome_counts": {
+        "delivered": 1,
+        "hard_bounce": 1
+      },
+      "outcome_events": 2,
+      "provider_status_counts": {},
+      "request_count": 8,
+      "smtp_status_counts": {
+        "accepted": 1
+      },
+      "temp_fail_signals": 46,
+      "total_attempts": 47,
+      "updated_at": "2026-03-04T13:07:37.010130+00:00",
+      "verdict_counts": {
+        "likely-valid": 1,
+        "unknown": 46
+      }
+    },
+    "botpress.com": {
+      "catch_all_signals": 6,
+      "confidence_counts": {
+        "low": 6
+      },
+      "created_at": "2026-03-04T13:12:30.202462+00:00",
+      "domain": "botpress.com",
+      "mx_host_counts": {
+        "aspmx.l.google.com": 1
+      },
+      "outcome_counts": {},
+      "outcome_events": 0,
+      "provider_status_counts": {},
+      "request_count": 1,
+      "sequence_sensitive_signals": 0,
+      "smtp_status_counts": {
+        "accept-all-likely": 6
+      },
+      "temp_fail_signals": 0,
+      "total_attempts": 6,
+      "updated_at": "2026-03-04T13:12:30.202506+00:00",
+      "verdict_counts": {
+        "risky-valid": 6
+      }
+    },
+    "clio.com": {
+      "catch_all_signals": 0,
+      "confidence_counts": {
+        "high": 4
+      },
+      "created_at": "2026-03-04T13:11:15.211342+00:00",
+      "domain": "clio.com",
+      "mx_host_counts": {
+        "aspmx.l.google.com": 2
+      },
+      "outcome_counts": {},
+      "outcome_events": 0,
+      "provider_status_counts": {},
+      "request_count": 2,
+      "sequence_sensitive_signals": 0,
+      "smtp_status_counts": {
+        "accepted": 2,
+        "rejected": 2
+      },
+      "temp_fail_signals": 0,
+      "total_attempts": 4,
+      "updated_at": "2026-03-04T13:12:18.360389+00:00",
+      "verdict_counts": {
+        "invalid": 2,
+        "likely-valid": 2
+      }
+    },
+    "example.com": {
+      "catch_all_signals": 0,
+      "confidence_counts": {
+        "low": 3
+      },
+      "created_at": "2026-03-03T13:34:18.538378+00:00",
+      "domain": "example.com",
+      "mx_host_counts": {},
+      "outcome_counts": {
+        "delivered": 2,
+        "soft_bounce": 1
+      },
+      "outcome_events": 3,
+      "provider_status_counts": {},
+      "request_count": 3,
+      "sequence_sensitive_signals": 0,
+      "smtp_status_counts": {},
+      "temp_fail_signals": 3,
+      "total_attempts": 3,
+      "updated_at": "2026-03-03T13:35:24.729911+00:00",
+      "verdict_counts": {
+        "unknown": 3
+      }
+    },
+    "flowcase.com": {
+      "catch_all_signals": 0,
+      "confidence_counts": {
+        "high": 1
+      },
+      "created_at": "2026-03-04T13:11:51.447433+00:00",
+      "domain": "flowcase.com",
+      "mx_host_counts": {
+        "aspmx.l.google.com": 1
+      },
+      "outcome_counts": {},
+      "outcome_events": 0,
+      "provider_status_counts": {},
+      "request_count": 1,
+      "sequence_sensitive_signals": 0,
+      "smtp_status_counts": {
+        "accepted": 1
+      },
+      "temp_fail_signals": 0,
+      "total_attempts": 1,
+      "updated_at": "2026-03-04T13:11:51.447446+00:00",
+      "verdict_counts": {
+        "likely-valid": 1
+      }
+    },
+    "freshworks.com": {
+      "catch_all_signals": 0,
+      "confidence_counts": {
+        "low": 2
+      },
+      "created_at": "2026-03-03T13:22:50.483328+00:00",
+      "domain": "freshworks.com",
+      "mx_host_counts": {
+        "aspmx.l.google.com": 2
+      },
+      "provider_status_counts": {},
+      "request_count": 2,
+      "sequence_sensitive_signals": 0,
+      "smtp_status_counts": {
+        "indeterminate": 2
+      },
+      "temp_fail_signals": 2,
+      "total_attempts": 2,
+      "updated_at": "2026-03-03T13:23:29.801582+00:00",
+      "verdict_counts": {
+        "unknown": 2
+      }
+    },
+    "hivemq.com": {
+      "catch_all_signals": 0,
+      "confidence_counts": {
+        "high": 4
+      },
+      "created_at": "2026-03-04T13:11:23.057017+00:00",
+      "domain": "hivemq.com",
+      "mx_host_counts": {
+        "aspmx.l.google.com": 2
+      },
+      "outcome_counts": {},
+      "outcome_events": 0,
+      "provider_status_counts": {},
+      "request_count": 2,
+      "sequence_sensitive_signals": 0,
+      "smtp_status_counts": {
+        "accepted": 2,
+        "rejected": 2
+      },
+      "temp_fail_signals": 0,
+      "total_attempts": 4,
+      "updated_at": "2026-03-04T13:12:24.075128+00:00",
+      "verdict_counts": {
+        "invalid": 2,
+        "likely-valid": 2
+      }
+    },
+    "roserocket.com": {
+      "catch_all_signals": 6,
+      "confidence_counts": {
+        "low": 6
+      },
+      "created_at": "2026-03-04T13:12:53.144941+00:00",
+      "domain": "roserocket.com",
+      "mx_host_counts": {
+        "aspmx.l.google.com": 1
+      },
+      "outcome_counts": {},
+      "outcome_events": 0,
+      "provider_status_counts": {},
+      "request_count": 1,
+      "sequence_sensitive_signals": 0,
+      "smtp_status_counts": {
+        "accept-all-likely": 6
+      },
+      "temp_fail_signals": 0,
+      "total_attempts": 6,
+      "updated_at": "2026-03-04T13:12:53.144954+00:00",
+      "verdict_counts": {
+        "risky-valid": 6
+      }
+    },
+    "routeware.com": {
+      "catch_all_signals": 6,
+      "confidence_counts": {
+        "low": 6
+      },
+      "created_at": "2026-03-04T13:12:10.625189+00:00",
+      "domain": "routeware.com",
+      "mx_host_counts": {
+        "routeware-com.mail.protection.outlook.com": 1
+      },
+      "outcome_counts": {},
+      "outcome_events": 0,
+      "provider_status_counts": {},
+      "request_count": 1,
+      "sequence_sensitive_signals": 0,
+      "smtp_status_counts": {
+        "accept-all-likely": 6
+      },
+      "temp_fail_signals": 0,
+      "total_attempts": 6,
+      "updated_at": "2026-03-04T13:12:10.625206+00:00",
+      "verdict_counts": {
+        "risky-valid": 6
+      }
+    }
+  },
+  "version": 1
+}

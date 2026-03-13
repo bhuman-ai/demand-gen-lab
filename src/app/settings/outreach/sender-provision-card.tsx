@@ -21,6 +21,7 @@ type AssignmentMap = Record<
   string,
   {
     accountId: string;
+    accountIds: string[];
     mailboxAccountId: string;
   }
 >;
@@ -124,6 +125,8 @@ function PoolCard({
   const toneClass = pool.canProvision
     ? "border-[color:var(--border)] bg-[color:var(--surface-muted)]"
     : "border-[color:var(--danger-border)] bg-[color:var(--danger-soft)]";
+  const poolLabel = `Customer.io site ${pool.siteId}`;
+  const poolMetaLabel = pool.senderCount > 1 ? `${pool.senderCount} sender accounts` : "1 sender account";
 
   return (
     <button
@@ -136,10 +139,9 @@ function PoolCard({
     >
       <div className="flex items-start justify-between gap-3">
         <div>
-          <div className="text-sm font-semibold">{pool.sourceAccountName}</div>
+          <div className="text-sm font-semibold">{poolLabel}</div>
           <div className="text-[11px] text-[color:var(--muted-foreground)]">
-            Site {pool.siteId}
-            {pool.senderCount > 1 ? ` · ${pool.senderCount} sender accounts` : ""}
+            {poolMetaLabel}
           </div>
         </div>
         <div className="text-xs font-semibold">
@@ -164,6 +166,7 @@ function PoolCard({
 
 export default function SenderProvisionCard({
   brands,
+  allBrands,
   mailboxAccounts,
   customerIoAccounts,
   assignments,
@@ -171,6 +174,7 @@ export default function SenderProvisionCard({
   onProvisioned,
 }: {
   brands: BrandRecord[];
+  allBrands?: BrandRecord[];
   mailboxAccounts: OutreachAccount[];
   customerIoAccounts: OutreachAccount[];
   assignments: AssignmentMap;
@@ -275,7 +279,7 @@ export default function SenderProvisionCard({
 
   const domainOwnerByName = useMemo(() => {
     const map = new Map<string, { brandId: string; brandName: string }>();
-    for (const brand of brands) {
+    for (const brand of allBrands ?? brands) {
       for (const domain of brand.domains) {
         const key = normalizeDomain(domain.domain);
         if (!key || map.has(key)) continue;
@@ -286,7 +290,7 @@ export default function SenderProvisionCard({
       }
     }
     return map;
-  }, [brands]);
+  }, [allBrands, brands]);
 
   const filteredDomains = useMemo(() => {
     const needle = inventoryQuery.trim().toLowerCase();
@@ -434,36 +438,44 @@ export default function SenderProvisionCard({
       <CardHeader>
         <CardTitle className="text-base">Brand Domain Setup</CardTitle>
         <CardDescription>
-          Pick a brand, choose a Namecheap domain, forward it to the protected brand site, and attach it to the
-          Customer.io account with room this month.
+          Pick a domain, point it at the brand website, and connect it to the right sender account.
         </CardDescription>
       </CardHeader>
       <CardContent className="grid gap-5">
         <div className="grid gap-3 md:grid-cols-4">
-          <div className="grid gap-2">
-            <Label htmlFor="setup-brand">Brand</Label>
-            <Select
-              id="setup-brand"
-              value={setup.brandId}
-              onChange={(event) => {
-                const brandId = event.target.value;
-                const brand = brands.find((item) => item.id === brandId) ?? null;
-                setSetup((prev) => ({
-                  ...prev,
-                  brandId,
-                  selectedMailboxAccountId: assignments[brandId]?.mailboxAccountId ?? "",
-                  forwardingTargetUrl: brand?.website ?? "",
-                }));
-              }}
-            >
-              <option value="">Select brand</option>
-              {brands.map((brand) => (
-                <option key={brand.id} value={brand.id}>
-                  {brand.name}
-                </option>
-              ))}
-            </Select>
-          </div>
+          {brands.length > 1 ? (
+            <div className="grid gap-2">
+              <Label htmlFor="setup-brand">Brand</Label>
+              <Select
+                id="setup-brand"
+                value={setup.brandId}
+                onChange={(event) => {
+                  const brandId = event.target.value;
+                  const brand = brands.find((item) => item.id === brandId) ?? null;
+                  setSetup((prev) => ({
+                    ...prev,
+                    brandId,
+                    selectedMailboxAccountId: assignments[brandId]?.mailboxAccountId ?? "",
+                    forwardingTargetUrl: brand?.website ?? "",
+                  }));
+                }}
+              >
+                <option value="">Select brand</option>
+                {brands.map((brand) => (
+                  <option key={brand.id} value={brand.id}>
+                    {brand.name}
+                  </option>
+                ))}
+              </Select>
+            </div>
+          ) : (
+            <div className="grid gap-2">
+              <Label>Brand</Label>
+              <div className="flex min-h-10 items-center rounded-xl border border-[color:var(--border)] bg-[color:var(--surface)] px-3 text-sm font-medium">
+                {selectedBrand?.name || "No brand selected"}
+              </div>
+            </div>
+          )}
           <div className="grid gap-2">
             <Label htmlFor="setup-local-part">Sender Local-Part</Label>
             <Input
@@ -502,7 +514,7 @@ export default function SenderProvisionCard({
 
         <div className="grid gap-3 rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3 md:grid-cols-[1fr_auto] md:items-end">
           <div className="grid gap-2">
-            <Label htmlFor="setup-forwarding-target">Protected Brand Destination</Label>
+            <Label htmlFor="setup-forwarding-target">Website To Forward To</Label>
             <Input
               id="setup-forwarding-target"
               value={setup.forwardingTargetUrl}
@@ -510,8 +522,7 @@ export default function SenderProvisionCard({
               placeholder="https://brand.com"
             />
             <div className="text-[11px] text-[color:var(--muted-foreground)]">
-              Every sender domain can 301 here so the protected brand domain stays the main destination and never has to
-              send email itself.
+              Visitors on the sender domain will be sent here.
             </div>
           </div>
           <Label className="flex items-center gap-2 text-sm font-normal">
@@ -527,9 +538,9 @@ export default function SenderProvisionCard({
         <div className="grid gap-3 rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
-              <div className="text-sm font-semibold">Customer.io Capacity</div>
+              <div className="text-sm font-semibold">Customer.io Account</div>
               <div className="text-[11px] text-[color:var(--muted-foreground)]">
-                Auto-pick will choose the account with baseline sync complete and the most remaining profiles.
+                Auto-pick uses the account with the most room this month.
               </div>
             </div>
             <Select
@@ -623,9 +634,9 @@ export default function SenderProvisionCard({
         <div className="grid gap-3">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
-              <div className="text-sm font-semibold">Namecheap Inventory</div>
+              <div className="text-sm font-semibold">Your Domains</div>
               <div className="text-[11px] text-[color:var(--muted-foreground)]">
-                One click will connect the domain, apply forwarding, and create the sender inside Customer.io.
+                Click once to connect the domain and set the forwarding.
               </div>
             </div>
             <Input
@@ -709,7 +720,7 @@ export default function SenderProvisionCard({
           <div>
             <div className="text-sm font-semibold">Buy New Domain + Set Up</div>
             <div className="text-[11px] text-[color:var(--muted-foreground)]">
-              If the domain is available in Namecheap, this will buy it and run the same setup flow automatically.
+              If the domain is available, this buys it and runs the same setup automatically.
             </div>
           </div>
           <div className="grid gap-3 md:grid-cols-3">

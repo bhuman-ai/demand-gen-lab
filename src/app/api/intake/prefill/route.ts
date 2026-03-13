@@ -46,14 +46,6 @@ function normalizeStringArray(value: unknown): string[] {
   return rows.slice(0, 8);
 }
 
-function fallbackList(description: string, defaults: string[]) {
-  const cleanDescription = description.trim();
-  if (!cleanDescription) return defaults;
-  const firstSentence = cleanDescription.split(/[.!?]/)[0]?.trim();
-  if (!firstSentence) return defaults;
-  return [firstSentence, ...defaults].slice(0, 4);
-}
-
 export async function POST(request: Request) {
   const body = await request.json();
   const url = String(body?.url ?? "").trim();
@@ -93,19 +85,12 @@ export async function POST(request: Request) {
     const brandName = title || hostname;
     const pageExcerpt = stripHtml(text).slice(0, 8000);
 
-    const fallback = {
+    const basePrefill = {
       brandName,
-      tone: "Clear, practical, and direct",
+      tone: "",
       product: description || "",
-      targetMarkets: fallbackList(description, [
-        "Mid-market B2B teams",
-        "Sales and growth leaders",
-        "Teams with outbound pipeline goals",
-      ]),
-      idealCustomerProfiles: [
-        "Head of Growth at B2B SaaS (20-200 employees)",
-        "Sales leader responsible for pipeline creation",
-      ],
+      targetMarkets: [] as string[],
+      idealCustomerProfiles: [] as string[],
       keyFeatures: [],
       keyBenefits: [],
       proof: description || "",
@@ -114,14 +99,9 @@ export async function POST(request: Request) {
     const apiKey = process.env.OPENAI_API_KEY;
     if (!apiKey) {
       return NextResponse.json({
-        prefill: fallback,
-        signals: {
-          title,
-          description,
-          hostname,
-          mode: "fallback",
-        },
-      });
+        error: "OPENAI_API_KEY is not configured",
+        hint: "Real-only mode is enabled: fallback prefill is disabled.",
+      }, { status: 503 });
     }
 
     const prompt = [
@@ -157,14 +137,10 @@ export async function POST(request: Request) {
 
     if (!aiResponse.ok) {
       return NextResponse.json({
-        prefill: fallback,
-        signals: {
-          title,
-          description,
-          hostname,
-          mode: "fallback",
-        },
-      });
+        error: "prefill generation failed",
+        hint: "Real-only mode is enabled: fallback prefill is disabled.",
+        providerStatus: aiResponse.status,
+      }, { status: 502 });
     }
 
     const raw = await aiResponse.text();
@@ -193,18 +169,18 @@ export async function POST(request: Request) {
 
     return NextResponse.json({
       prefill: {
-        brandName: String(ai.brandName ?? fallback.brandName).trim() || fallback.brandName,
-        tone: String(ai.tone ?? fallback.tone).trim() || fallback.tone,
-        product: String(ai.product ?? fallback.product).trim(),
+        brandName: String(ai.brandName ?? basePrefill.brandName).trim() || basePrefill.brandName,
+        tone: String(ai.tone ?? basePrefill.tone).trim(),
+        product: String(ai.product ?? basePrefill.product).trim(),
         targetMarkets: normalizeStringArray(ai.targetMarkets).length
           ? normalizeStringArray(ai.targetMarkets)
-          : fallback.targetMarkets,
+          : basePrefill.targetMarkets,
         idealCustomerProfiles: normalizeStringArray(ai.idealCustomerProfiles).length
           ? normalizeStringArray(ai.idealCustomerProfiles)
-          : fallback.idealCustomerProfiles,
+          : basePrefill.idealCustomerProfiles,
         keyFeatures: normalizeStringArray(ai.keyFeatures),
         keyBenefits: normalizeStringArray(ai.keyBenefits),
-        proof: String(ai.proof ?? fallback.proof).trim(),
+        proof: String(ai.proof ?? basePrefill.proof).trim(),
       },
       signals: {
         title,

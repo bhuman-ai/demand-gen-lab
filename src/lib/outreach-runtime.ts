@@ -65,8 +65,11 @@ import {
   listCampaignRuns,
   listDueOutreachJobs,
   listExperimentRuns,
+  listOutreachAccounts,
   listReplyThreadsByBrand,
   listReplyMessagesByRun,
+  listRunEvents,
+  listRunJobs,
   reclaimStaleRunningOutreachJobs,
   listRunLeads,
   listRunMessages,
@@ -96,6 +99,7 @@ import {
   runApifyActorSyncGetDatasetItems,
   leadsFromApifyRows,
   resolveEmailFinderApiBaseUrl,
+  sendMonitoringProbeMessage,
   sendOutreachMessage,
   sendReplyDraftAsEvent,
   searchApifyStoreActors,
@@ -105,10 +109,84 @@ import {
 } from "@/lib/outreach-providers";
 import { admitCustomerIoProfileForSend } from "@/lib/outreach-customerio-budget";
 import { resolveLlmModel } from "@/lib/llm-router";
+import { inspectMailboxPlacement, type MailboxPlacementVerdict } from "@/lib/mailbox-imap";
+import {
+  getOutreachProvisioningSettings,
+  getOutreachProvisioningSettingsSecrets,
+  updateOutreachProvisioningSettings,
+} from "@/lib/outreach-provider-settings";
+import {
+  buildSenderDeliverabilityScorecards,
+  fetchGooglePostmasterHealth,
+  SENDER_DELIVERABILITY_MIN_MONITORS,
+} from "@/lib/outreach-deliverability";
 
 const DEFAULT_TIMEZONE = "America/Los_Angeles";
+const DEFAULT_REPLY_AUTOSEND_MIN_DELAY_MINUTES = 40;
+const DEFAULT_REPLY_AUTOSEND_RANDOM_ADDITIONAL_DELAY_MINUTES = 20;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const CONVERSATION_TICK_MINUTES = 15;
+const DELIVERABILITY_PROBE_POLL_DELAY_MINUTES = 3;
+const DELIVERABILITY_PROBE_REPEAT_HOURS = 24 * 7;
+const DELIVERABILITY_INTELLIGENCE_REFRESH_HOURS = 6;
+const SELFFUNDED_AWS_APPLICATION_URL = "https://www.selffunded.dev/aws-credits/apply";
+
+type ReplyPolicyAction = "reply" | "no_reply" | "manual_review";
+type ReplyPlaybook = "selffunded_aws" | "bhuman_private_drop" | "generic";
+
+type ReplyPolicyInput = {
+  brandName: string;
+  brandWebsite: string;
+  campaignName: string;
+  experimentName: string;
+  experimentOffer: string;
+  experimentAudience: string;
+  experimentNotes: string;
+  from: string;
+  to: string;
+  subject: string;
+  body: string;
+  leadName: string;
+  leadEmail: string;
+  leadCompany: string;
+};
+
+type ReplyPolicyResult = {
+  action: ReplyPolicyAction;
+  intent: ReplyThread["intent"];
+  sentiment: ReplyThread["sentiment"];
+  confidence: number;
+  route: string;
+  reason: string;
+  playbook: ReplyPlaybook;
+  closeThread: boolean;
+  autoSendAllowed: boolean;
+  guidance: string[];
+  prohibited: string[];
+};
+
+type DeliverabilityProbeStage = "send" | "poll";
+
+type DeliverabilityMonitorTarget = {
+  account: ResolvedAccount;
+  secrets: ResolvedSecrets;
+  brandId: string;
+};
+
+type DeliverabilityProbeTarget = {
+  accountId: string;
+  email: string;
+};
+
+type DeliverabilityProbeMonitorResult = {
+  accountId: string;
+  email: string;
+  placement: MailboxPlacementVerdict;
+  matchedMailbox: string;
+  matchedUid: number;
+  ok: boolean;
+  error: string;
+};
 
 function nowIso() {
   return new Date().toISOString();
@@ -147,6 +225,20 @@ type BusinessWindowPolicy = {
   endHour: number;
   days: number[];
 };
+
+type SenderWarmupPolicy = {
+  dailyCap: number;
+  hourlyCap: number;
+  warmupDay: number;
+};
+
+type SenderDispatchSlot = {
+  account: ResolvedAccount;
+  secrets: ResolvedSecrets;
+  policy: SenderWarmupPolicy;
+};
+
+type SenderUsageMap = Record<string, { dailySent: number; hourlySent: number }>;
 
 const DEFAULT_BUSINESS_WINDOW: BusinessWindowPolicy = {
   enabled: true,
@@ -194,6 +286,15 @@ function businessWindowFromExperimentEnvelope(testEnvelope: unknown): BusinessWi
     endHour: clampBusinessEndHour(row.businessHoursEndHour, DEFAULT_BUSINESS_WINDOW.endHour),
     days: normalizeBusinessDays(row.businessDays),
   };
+}
+
+function businessWindowHours(policy: BusinessWindowPolicy) {
+  if (!policy.enabled) return 24;
+  if (policy.startHour === policy.endHour) return 24;
+  if (policy.startHour < policy.endHour) {
+    return Math.max(1, policy.endHour - policy.startHour);
+  }
+  return Math.max(1, 24 - policy.startHour + policy.endHour);
 }
 
 function localHourInTimeZone(input: Date, timeZone: string) {
@@ -251,6 +352,81 @@ function nextBusinessWindowCheckIso(input: Date, timeZone: string, policy: Busin
     probe = new Date(probe.getTime() + 60 * 60 * 1000);
   }
   return addHours(nowIso(), 1);
+}
+
+function senderWarmupDayNumber(createdAt: string, now: Date, timeZone: string) {
+  const created = toDate(createdAt);
+  const createdKey = timeZoneDateKey(created, timeZone || DEFAULT_TIMEZONE);
+  const nowKey = timeZoneDateKey(now, timeZone || DEFAULT_TIMEZONE);
+  const createdDay = Date.parse(`${createdKey}T00:00:00Z`);
+  const nowDay = Date.parse(`${nowKey}T00:00:00Z`);
+  if (!Number.isFinite(createdDay) || !Number.isFinite(nowDay)) return 1;
+  return Math.max(1, Math.floor((nowDay - createdDay) / DAY_MS) + 1);
+}
+
+function senderWarmupPolicy(input: {
+  account: ResolvedAccount;
+  now: Date;
+  timeZone: string;
+  businessWindow: BusinessWindowPolicy;
+}): SenderWarmupPolicy {
+  const warmupDay = senderWarmupDayNumber(input.account.createdAt, input.now, input.timeZone);
+  const dailyCap = Math.max(15, Math.min(120, warmupDay * 15));
+  const hourlyCap = Math.max(1, Math.ceil(dailyCap / businessWindowHours(input.businessWindow)));
+  return {
+    dailyCap,
+    hourlyCap,
+    warmupDay,
+  };
+}
+
+function alignToBusinessWindow(dateIso: string, timeZone: string, policy: BusinessWindowPolicy) {
+  if (!policy.enabled) return dateIso;
+  const scheduled = toDate(dateIso);
+  if (isInsideBusinessWindow(scheduled, timeZone, policy)) {
+    return scheduled.toISOString();
+  }
+  let probe = new Date(scheduled.getTime());
+  for (let steps = 0; steps < 24 * 14 * 4; steps += 1) {
+    probe = new Date(probe.getTime() + 15 * 60 * 1000);
+    if (isInsideBusinessWindow(probe, timeZone, policy)) {
+      return probe.toISOString();
+    }
+  }
+  return addHours(scheduled.toISOString(), 1);
+}
+
+function normalizeReplyTimingPolicy(graph?: ConversationFlowGraph | null) {
+  return {
+    minimumDelayMinutes: Math.max(
+      0,
+      Math.min(
+        10080,
+        Math.round(
+          Number(graph?.replyTiming?.minimumDelayMinutes ?? DEFAULT_REPLY_AUTOSEND_MIN_DELAY_MINUTES) ||
+            DEFAULT_REPLY_AUTOSEND_MIN_DELAY_MINUTES
+        )
+      )
+    ),
+    randomAdditionalDelayMinutes: Math.max(
+      0,
+      Math.min(
+        1440,
+        Math.round(
+          Number(
+            graph?.replyTiming?.randomAdditionalDelayMinutes ??
+              DEFAULT_REPLY_AUTOSEND_RANDOM_ADDITIONAL_DELAY_MINUTES
+          ) || DEFAULT_REPLY_AUTOSEND_RANDOM_ADDITIONAL_DELAY_MINUTES
+        )
+      )
+    ),
+  };
+}
+
+function randomDelayMinutes(maxAdditionalDelayMinutes: number) {
+  const max = Math.max(0, Math.round(Number(maxAdditionalDelayMinutes) || 0));
+  if (max <= 0) return 0;
+  return Math.floor(Math.random() * (max + 1));
 }
 
 function isRunOpen(status: string) {
@@ -1097,16 +1273,10 @@ const REGION_ALIASES = new Map<string, string>([
   ["nz", "nz"],
 ]);
 
-const DEFAULT_EXA_EVENT_SIGNALS = [
-  "webinars",
-  "virtual events",
-  "on-demand webinars",
-  "event marketing",
-];
-
 const DEFAULT_EXA_COMPANY_KEYWORDS = ["B2B software", "SaaS", "cloud platform"];
 const DEFAULT_EXA_ROLE_TITLES = ["Demand Generation Manager", "Growth Marketing Manager"];
 const MAX_COMPANY_NAMES_PER_PEOPLE_QUERY = 4;
+const EXA_QUERY_BROADENING_ENABLED = false;
 const TITLE_HINT_TOKENS = new Set([
   "manager",
   "director",
@@ -1241,7 +1411,7 @@ function sanitizeSearchSpec(input: {
     companyKeywords = derived.length ? derived : DEFAULT_EXA_COMPANY_KEYWORDS;
   }
 
-  let eventSignals = input.spec.eventSignals.length ? input.spec.eventSignals : DEFAULT_EXA_EVENT_SIGNALS;
+  let eventSignals = [...input.spec.eventSignals];
   if (includesWebinars && !eventSignals.some((item) => item.toLowerCase().includes("webinar"))) {
     eventSignals = uniqueTrimmed([...eventSignals, "webinars"], 6);
   }
@@ -1380,6 +1550,22 @@ function fallbackRoleTitles(targetAudience: string, qualityPolicy?: LeadQualityP
   return uniqueTitles.length ? uniqueTitles : DEFAULT_EXA_ROLE_TITLES;
 }
 
+function deriveExplicitEventSignals(input: { targetAudience: string; triggerContext: string }) {
+  const combined = normalizeText(`${input.targetAudience} ${input.triggerContext}`).toLowerCase();
+  if (!combined) return [] as string[];
+  return uniqueTrimmed(
+    [
+      /\bwebinars?\b/.test(combined) ? "webinars" : "",
+      /\bvirtual events?\b/.test(combined) ? "virtual events" : "",
+      /\bon-demand webinars?\b/.test(combined) ? "on-demand webinars" : "",
+      /\bevent marketing\b/.test(combined) ? "event marketing" : "",
+      combined.includes("recording") ? "recordings" : "",
+      combined.includes("deck") ? "decks" : "",
+    ].filter(Boolean),
+    6
+  );
+}
+
 function buildFallbackExaSearchSpec(input: {
   targetAudience: string;
   triggerContext: string;
@@ -1398,21 +1584,17 @@ function buildFallbackExaSearchSpec(input: {
         ],
         6
       );
-  const eventSignals = uniqueTrimmed(
-    [
-      ...DEFAULT_EXA_EVENT_SIGNALS,
-      ...(combined.toLowerCase().includes("recording") ? ["recordings"] : []),
-      ...(combined.toLowerCase().includes("deck") ? ["decks"] : []),
-    ],
-    6
-  );
+  const eventSignals = deriveExplicitEventSignals({
+    targetAudience: input.targetAudience,
+    triggerContext: input.triggerContext,
+  });
   const excludeIndustries = uniqueTrimmed(input.qualityPolicy?.excludedCompanyKeywords ?? [], 8);
   const spec = {
-    rationale: "deterministic_search_spec_fallback",
+    rationale: "deterministic_search_spec",
     regions,
     roleTitles: roleTitles.length ? roleTitles : DEFAULT_EXA_ROLE_TITLES,
     companyKeywords: companyKeywords.length ? companyKeywords : DEFAULT_EXA_COMPANY_KEYWORDS,
-    eventSignals: eventSignals.length ? eventSignals : DEFAULT_EXA_EVENT_SIGNALS,
+    eventSignals,
     companySizeHint: extractCompanySizeHint(combined),
     includeIndustries: companyKeywords.length ? companyKeywords : DEFAULT_EXA_COMPANY_KEYWORDS,
     excludeIndustries,
@@ -3368,7 +3550,7 @@ async function sourceLeadsFromExa(input: {
       fallbackReasons.push(`icp_alignment_low:${Number(directProbeAlignment.score.toFixed(3))}`);
     }
 
-    if (fallbackReasons.length) {
+    if (fallbackReasons.length && EXA_QUERY_BROADENING_ENABLED) {
       queryPlan.mode = "people_then_company";
       queryPlan.fallbackReason = fallbackReasons.join("; ");
 
@@ -3471,7 +3653,7 @@ async function sourceLeadsFromExa(input: {
       backfillLeadDomains({ rawLeads, companyDomainByEntityId, companyDomainByName });
     } else {
       queryPlan.mode = "people_first";
-      queryPlan.fallbackReason = "";
+      queryPlan.fallbackReason = fallbackReasons.join("; ");
       queryPlan.qualifiedCompanyNames = uniqueTrimmed(
         rawLeads.map((lead) => normalizeText(lead.company)).filter(Boolean),
         12
@@ -8781,6 +8963,11 @@ function supportsMailbox(account: ResolvedAccount) {
   return account.accountType !== "delivery";
 }
 
+function isDedicatedDeliverabilityMonitor(account: ResolvedAccount) {
+  const label = account.name.trim().toLowerCase();
+  return label.startsWith("deliverability ");
+}
+
 function preflightReason(input: {
   deliveryAccount: ResolvedAccount;
   deliverySecrets: ResolvedSecrets;
@@ -8851,41 +9038,449 @@ function preflightDiagnostic(input: {
   return { hint: "", debug };
 }
 
-function classifySentiment(body: string): ReplyThread["sentiment"] {
+function extractMailboxDisplayName(value: string) {
+  const raw = String(value ?? "").trim();
+  if (!raw) return "";
+  const angle = raw.match(/^"?([^"<]+?)"?\s*<[^>]+>$/);
+  const candidate = angle ? angle[1] : raw.includes("@") ? "" : raw;
+  return candidate.replace(/^"+|"+$/g, "").replace(/\s+/g, " ").trim();
+}
+
+function looksHumanDisplayName(value: string) {
+  const normalized = String(value ?? "").trim();
+  if (!normalized) return false;
+  if (normalized.includes("@")) return false;
+  if (!/[a-z]/i.test(normalized)) return false;
+  if (/\b(mailer-daemon|postmaster|auto(?:matic)? reply|out of office|vacation|no[- ]?reply)\b/i.test(normalized)) {
+    return false;
+  }
+  if (/[0-9]{3,}/.test(normalized)) return false;
+  return true;
+}
+
+function inferFallbackNameFromEmail(email: string) {
+  const local = extractFirstEmailAddress(email).split("@")[0] ?? "";
+  if (!local) return "";
+  const compact = local.replace(/[._+-]/g, "");
+  if (!compact || /\d{3,}/.test(compact)) return "";
+  if (/^(info|hello|hi|team|support|contact|sales|admin|billing|ops|operations|noreply|noreply)$/.test(compact)) {
+    return "";
+  }
+  return local
+    .split(/[._+-]+/)
+    .map((token) => token.trim())
+    .filter((token) => token && !/\d{3,}/.test(token))
+    .slice(0, 2)
+    .map((token) => token.charAt(0).toUpperCase() + token.slice(1).toLowerCase())
+    .join(" ");
+}
+
+function resolveReplyLeadName(input: { leadName: string; inboundFrom: string; leadEmail: string }) {
+  const stored = normalizeText(String(input.leadName ?? ""));
+  if (looksHumanDisplayName(stored)) return stored;
+  const display = extractMailboxDisplayName(input.inboundFrom);
+  if (looksHumanDisplayName(display)) return display;
+  return inferFallbackNameFromEmail(input.leadEmail);
+}
+
+function classifySentimentFallback(body: string): ReplyThread["sentiment"] {
   const normalized = body.toLowerCase();
-  if (/(not interested|stop|unsubscribe|remove me|no thanks)/.test(normalized)) {
+  if (/(not interested|stop|unsubscribe|remove me|no thanks|pass|leave me alone)/.test(normalized)) {
     return "negative";
   }
-  if (/(interested|sounds good|let's talk|book|yes)/.test(normalized)) {
+  if (
+    /(interested|sounds good|let's talk|yes|we qualify|we are self-funded|self-funded here|bootstrapped here|all done)/.test(
+      normalized
+    )
+  ) {
     return "positive";
   }
   return "neutral";
 }
 
-function classifyIntent(body: string): ReplyThread["intent"] {
+function classifyIntentFallback(body: string): ReplyThread["intent"] {
   const normalized = body.toLowerCase();
-  if (/(unsubscribe|remove me|stop emailing)/.test(normalized)) {
+  if (/(unsubscribe|remove me|stop emailing|do not contact)/.test(normalized)) {
     return "unsubscribe";
   }
-  if (/(price|how much|details|question|what does)/.test(normalized)) {
+  if (
+    /(\?|price|how much|details|what does|what is|how do(es)?|can you|could you|would you|where do i|why )/.test(
+      normalized
+    )
+  ) {
     return "question";
   }
-  if (/(interested|book|call|chat|learn more)/.test(normalized)) {
+  if (/(interested|qualify|we are self-funded|bootstrapped|send (me )?the link|apply|would love|sounds good)/.test(normalized)) {
     return "interest";
   }
-  if (/(already|not now|budget|timing|no need)/.test(normalized)) {
+  if (/(already|not now|budget|timing|no need|not a fit|not relevant|not for us|not self-funded)/.test(normalized)) {
     return "objection";
   }
   return "other";
 }
 
-function classifyIntentConfidence(body: string): { intent: ReplyThread["intent"]; confidence: number } {
-  const intent = classifyIntent(body);
-  if (intent === "unsubscribe") return { intent, confidence: 0.95 };
-  if (intent === "interest") return { intent, confidence: 0.85 };
-  if (intent === "question") return { intent, confidence: 0.82 };
+function classifyIntentConfidenceFallback(body: string): { intent: ReplyThread["intent"]; confidence: number } {
+  const intent = classifyIntentFallback(body);
+  if (intent === "unsubscribe") return { intent, confidence: 0.96 };
+  if (intent === "interest") return { intent, confidence: 0.86 };
+  if (intent === "question") return { intent, confidence: 0.83 };
   if (intent === "objection") return { intent, confidence: 0.8 };
-  return { intent, confidence: 0.55 };
+  return { intent, confidence: 0.56 };
+}
+
+function detectAutomatedReply(input: { from: string; subject: string; body: string }) {
+  const from = String(input.from ?? "").toLowerCase();
+  const subject = String(input.subject ?? "").toLowerCase();
+  const body = String(input.body ?? "").toLowerCase();
+  const combined = `${subject}\n${body}`;
+
+  if (
+    /\b(mailer-daemon|postmaster|mail delivery subsystem)\b/.test(from) ||
+    /\b(delivery status notification|undeliverable|delivery has failed|returned mail|failure notice)\b/.test(
+      combined
+    )
+  ) {
+    return { skip: true, kind: "delivery_status", reason: "Automated delivery-status reply" };
+  }
+
+  if (
+    /\b(out of office|automatic reply|autoreply|auto reply|vacation|away from the office|ooo)\b/.test(
+      combined
+    )
+  ) {
+    return { skip: true, kind: "out_of_office", reason: "Out-of-office auto reply" };
+  }
+
+  if (
+    /\b(verify you are human|challenge[- ]response|approve sender|whitelist this sender|click the link below to complete delivery)\b/.test(
+      combined
+    )
+  ) {
+    return { skip: true, kind: "anti_spam_challenge", reason: "Automated anti-spam challenge" };
+  }
+
+  return { skip: false, kind: "", reason: "" };
+}
+
+function isAcknowledgementOnlyReply(body: string) {
+  const normalized = normalizeText(body.toLowerCase());
+  if (!normalized) return false;
+  if (normalized.includes("?")) return false;
+  if (
+    /\b(not interested|unsubscribe|remove me|stop|question|how|why|what|when|where|qualify|self-funded|bootstrapped|aws)\b/.test(
+      normalized
+    )
+  ) {
+    return false;
+  }
+  if (normalized.split(/\s+/).length > 12) return false;
+  return /^(thanks!?|thank you!?|sounds good!?|all done!?|appreciate it!?|this is terrific!?|got it!?|perfect!?|done!?|looks good!?|amazing!?)(\s|$)/.test(
+    normalized
+  );
+}
+
+function isStrategicManualReviewReply(body: string) {
+  const normalized = body.toLowerCase();
+  return /\b(partnership|partner with|distribution|referral|refer|intro|introduce|affiliate|channel|audience|portfolio|co-marketing|investor network|community)\b/.test(
+    normalized
+  );
+}
+
+function detectReplyPlaybook(input: {
+  brandName: string;
+  brandWebsite: string;
+  experimentOffer: string;
+  experimentAudience: string;
+  experimentNotes: string;
+}) {
+  const haystack = [
+    input.brandName,
+    input.brandWebsite,
+    input.experimentOffer,
+    input.experimentAudience,
+    input.experimentNotes,
+  ]
+    .join("\n")
+    .toLowerCase();
+
+  if (haystack.includes("aws") && (haystack.includes("self-funded") || haystack.includes("bootstrapped"))) {
+    return "selffunded_aws" as const;
+  }
+  if (haystack.includes("bhuman")) {
+    return "bhuman_private_drop" as const;
+  }
+  return "generic" as const;
+}
+
+function replyPolicyProhibitedPhrases(playbook: ReplyPlaybook) {
+  const base = [
+    "quick note",
+    "quick one",
+    "just circling back",
+    "wanted to follow up",
+    "hope you are well",
+  ];
+  if (playbook === "bhuman_private_drop") {
+    base.push('Reply with "I want a BHuman spot"');
+  }
+  return base;
+}
+
+function buildReplyPolicyGuidance(
+  input: ReplyPolicyInput,
+  result: Pick<ReplyPolicyResult, "action" | "route" | "playbook">
+) {
+  const guidance = [
+    "Preserve real blank lines between short paragraphs.",
+    "Keep the reply warm, selective, and human.",
+  ];
+
+  if (result.playbook === "selffunded_aws") {
+    guidance.push("You are replying as Marco from SelfFunded.dev.");
+    guidance.push(
+      `If the sender is clearly interested and self-funded, include this exact application URL: ${SELFFUNDED_AWS_APPLICATION_URL}`
+    );
+    guidance.push("If you include the application link, say AWS handles final vetting and approval on their side.");
+    guidance.push("Do not invent approval odds, timing guarantees, deadlines, or promises from AWS.");
+    guidance.push("If AWS is not a fit, do not keep selling AWS.");
+    guidance.push("If they already joined the platform, do not ask them to join again.");
+    guidance.push("If they mention AI, LLM, devtool, or infra deals, acknowledge those categories are a priority.");
+    guidance.push("Sign the reply exactly as:\nBest,\nMarco\n\nMarco Rosetti\nSelfFunded.dev");
+
+    if (result.route === "aws_application_link") {
+      guidance.push("This reply should provide the application link and keep the next step simple.");
+    }
+    if (result.route === "aws_not_fit_but_relevant") {
+      guidance.push("Acknowledge AWS may not be the fit right now and keep the relationship warm without re-pitching.");
+    }
+    if (result.route === "aws_question") {
+      guidance.push("Answer the question directly and stay grounded in facts already in context.");
+    }
+  } else if (result.playbook === "bhuman_private_drop") {
+    guidance.push("This is a private BHuman drop handled manually over email.");
+    guidance.push("There are only 25 one-month licenses and the allocation is manual.");
+    guidance.push("If they want one, let them reply naturally and avoid scripted language.");
+    guidance.push("Mention that accepted deals require feedback afterward to stay eligible for future drops.");
+  } else {
+    guidance.push("Use a plainspoken founder-to-founder tone.");
+  }
+
+  if (result.action === "manual_review") {
+    guidance.push("This draft should feel thoughtful and tailored enough for a human to review before sending.");
+  }
+
+  return guidance;
+}
+
+function buildFallbackReplyPolicy(input: ReplyPolicyInput): ReplyPolicyResult {
+  const playbook = detectReplyPlaybook(input);
+  const normalizedBody = input.body.toLowerCase();
+  const sentiment = classifySentimentFallback(input.body);
+  const { intent, confidence } = classifyIntentConfidenceFallback(input.body);
+
+  let action: ReplyPolicyAction = "manual_review";
+  let route = "general_review";
+  let reason = "Fallback review path";
+
+  if (intent === "unsubscribe") {
+    action = "no_reply";
+    route = "unsubscribe_request";
+    reason = "Respect unsubscribe without replying";
+  } else if (isAcknowledgementOnlyReply(input.body)) {
+    action = "no_reply";
+    route = "ack_only";
+    reason = "Acknowledgement-only reply should stay silent";
+  } else if (isStrategicManualReviewReply(input.body)) {
+    action = "manual_review";
+    route = playbook === "selffunded_aws" ? "aws_strategic_review" : "strategic_review";
+    reason = "Strategic or partnership-style message needs human judgment";
+  } else if (playbook === "selffunded_aws") {
+    const mentionsSelfFunded = /\b(self-funded|bootstrapped|friends\/family|friends and family|angel)\b/.test(
+      normalizedBody
+    );
+    const asksForLink = /\b(link|apply|application|send it over|send over|interested|sounds good|yes)\b/.test(
+      normalizedBody
+    );
+    const mentionsOtherDealInterest = /\b(ai|llm|devtool|dev tool|infra|infrastructure|coding agent|tooling)\b/.test(
+      normalizedBody
+    );
+    const saysAwsNotFit = /\b(not a fit|not relevant|not for us|aws isn't a fit|aws is not a fit)\b/.test(
+      normalizedBody
+    );
+    const saysJoined = /\b(joined|already joined|signed up|on the platform)\b/.test(normalizedBody);
+
+    if (mentionsSelfFunded && asksForLink) {
+      action = "reply";
+      route = "aws_application_link";
+      reason = "Qualified and interested in the AWS credits next step";
+    } else if (intent === "question") {
+      action = "reply";
+      route = "aws_question";
+      reason = "Asked a real question that deserves a direct answer";
+    } else if ((saysAwsNotFit || intent === "objection") && (mentionsOtherDealInterest || saysJoined)) {
+      action = "reply";
+      route = "aws_not_fit_but_relevant";
+      reason = "AWS is not the fit, but the relationship is still relevant";
+    } else if (saysAwsNotFit || /\b(not interested|pass|no thanks)\b/.test(normalizedBody)) {
+      action = "no_reply";
+      route = "aws_not_interested";
+      reason = "No meaningful next step on AWS";
+    }
+  } else if (playbook === "bhuman_private_drop") {
+    if (intent === "interest") {
+      action = "reply";
+      route = "bhuman_interest";
+      reason = "Interested in the private BHuman allocation";
+    } else if (intent === "question") {
+      action = "manual_review";
+      route = "bhuman_question_review";
+      reason = "BHuman details are limited and should be handled carefully";
+    }
+  } else if (intent === "interest" || intent === "question") {
+    action = "reply";
+    route = intent === "interest" ? "general_interest" : "general_question";
+    reason = "There is a meaningful next step to provide";
+  }
+
+  return {
+    action,
+    intent,
+    sentiment,
+    confidence,
+    route,
+    reason,
+    playbook,
+    closeThread: action === "no_reply" || intent === "unsubscribe",
+    autoSendAllowed: action === "reply",
+    guidance: buildReplyPolicyGuidance(input, { action, route, playbook }),
+    prohibited: replyPolicyProhibitedPhrases(playbook),
+  };
+}
+
+async function evaluateReplyPolicy(input: ReplyPolicyInput): Promise<ReplyPolicyResult> {
+  const fallback = buildFallbackReplyPolicy(input);
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) {
+    return fallback;
+  }
+
+  const playbookRules =
+    fallback.playbook === "selffunded_aws"
+      ? [
+          "Offer context: AWS credits for self-funded founders; angels or friends/family are fine, institutional VC is not.",
+          `If qualified and interested, include this exact application URL: ${SELFFUNDED_AWS_APPLICATION_URL}`,
+          "Mention AWS handles final vetting/approval on their side.",
+          "Do not promise timing, approvals, or deadlines.",
+          "Do not keep selling AWS if they say AWS is not a fit.",
+          "If they already joined the platform, do not pitch joining again.",
+          "Thoughtful questions about partnerships, distribution, referrals, intros, or audience fit should usually be manual_review.",
+        ]
+      : fallback.playbook === "bhuman_private_drop"
+        ? [
+            "Offer context: private BHuman drop with only 25 one-month licenses.",
+            "Allocation is manual and not visible in the dashboard.",
+            "If relevant, let them reply naturally; never use scripted CTA wording.",
+            "Accepted deals require feedback afterward to remain eligible for future drops.",
+          ]
+        : ["Reply only when there is a real next step or a meaningful human response to give."];
+
+  const prompt = [
+    "You triage inbound founder-style outreach replies.",
+    "Decide whether the system should reply, stay silent, or require manual review.",
+    "Selective silence is important: do not reply to simple acknowledgements.",
+    "Return strict JSON only with this shape:",
+    '{"action":"reply|no_reply|manual_review","intent":"question|interest|objection|unsubscribe|other","sentiment":"positive|neutral|negative","confidence":0-1,"route":"short_snake_case_label","reason":"one short sentence"}',
+    "",
+    "Core rules:",
+    "- Use reply when there is a real next step, a real question, or meaningful context worth acknowledging.",
+    "- Use no_reply for thanks-only acknowledgements, completion confirmations, or messages where replying would feel robotic.",
+    "- Use manual_review for nuanced, strategic, partnership, distribution, referral, intro, or high-value messages.",
+    "- Unsubscribe/remove-me requests should be no_reply with intent=unsubscribe.",
+    ...playbookRules.map((rule) => `- ${rule}`),
+    "",
+    `Context JSON:\n${JSON.stringify({
+      brandName: input.brandName,
+      brandWebsite: input.brandWebsite,
+      campaignName: input.campaignName,
+      experimentName: input.experimentName,
+      experimentOffer: input.experimentOffer,
+      experimentAudience: input.experimentAudience,
+      experimentNotes: input.experimentNotes,
+      from: input.from,
+      to: input.to,
+      subject: input.subject,
+      body: input.body,
+      leadName: input.leadName,
+      leadEmail: input.leadEmail,
+      leadCompany: input.leadCompany,
+    })}`,
+  ].join("\n");
+
+  try {
+    const model = resolveLlmModel("reply_policy_evaluation", { input });
+    const response = await fetch("https://api.openai.com/v1/responses", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model,
+        input: prompt,
+        text: { format: { type: "json_object" } },
+        max_output_tokens: 800,
+      }),
+    });
+    const raw = await response.text();
+    if (!response.ok) {
+      return fallback;
+    }
+    let payload: unknown = {};
+    try {
+      payload = JSON.parse(raw);
+    } catch {
+      payload = {};
+    }
+    const parsed = asRecord(parseLooseJsonObject(extractOutputText(payload)));
+    const actionRaw = String(parsed.action ?? "").trim();
+    const intentRaw = String(parsed.intent ?? "").trim();
+    const sentimentRaw = String(parsed.sentiment ?? "").trim();
+    const confidence = Math.max(0, Math.min(1, Number(parsed.confidence ?? fallback.confidence) || fallback.confidence));
+    const action =
+      actionRaw === "reply" || actionRaw === "no_reply" || actionRaw === "manual_review"
+        ? (actionRaw as ReplyPolicyAction)
+        : fallback.action;
+    const intent =
+      intentRaw === "question" ||
+      intentRaw === "interest" ||
+      intentRaw === "objection" ||
+      intentRaw === "unsubscribe" ||
+      intentRaw === "other"
+        ? (intentRaw as ReplyThread["intent"])
+        : fallback.intent;
+    const sentiment =
+      sentimentRaw === "positive" || sentimentRaw === "neutral" || sentimentRaw === "negative"
+        ? (sentimentRaw as ReplyThread["sentiment"])
+        : fallback.sentiment;
+    const route = trimText(parsed.route, 80) || fallback.route;
+    const reason = trimText(parsed.reason, 220) || fallback.reason;
+
+    return {
+      action,
+      intent,
+      sentiment,
+      confidence,
+      route,
+      reason,
+      playbook: fallback.playbook,
+      closeThread: action === "no_reply" || intent === "unsubscribe",
+      autoSendAllowed: action === "reply",
+      guidance: buildReplyPolicyGuidance(input, { action, route, playbook: fallback.playbook }),
+      prohibited: replyPolicyProhibitedPhrases(fallback.playbook),
+    };
+  } catch {
+    return fallback;
+  }
 }
 
 function addMinutes(dateIso: string, minutes: number) {
@@ -8935,6 +9530,24 @@ function pickDueTimerEdge(input: {
       .sort((a, b) => a.priority - b.priority)
       .find((edge) => elapsedMs >= edge.waitMinutes * 60 * 1000) ?? null
   );
+}
+
+function replyTriggeredAutoSendWaitMinutes(
+  graph: ConversationFlowGraph,
+  node: ConversationFlowNode,
+  edgeWaitMinutes: number
+) {
+  const nodeDelayMinutes = Math.max(0, Number(node.delayMinutes ?? 0) || 0);
+  const currentEdgeWait = Math.max(0, Number(edgeWaitMinutes ?? 0) || 0);
+  const currentTotal = nodeDelayMinutes + currentEdgeWait;
+  if (!node.autoSend) {
+    return currentEdgeWait;
+  }
+  const replyTiming = normalizeReplyTimingPolicy(graph);
+  const randomizedTotal =
+    Math.max(currentTotal, replyTiming.minimumDelayMinutes) +
+    randomDelayMinutes(replyTiming.randomAdditionalDelayMinutes);
+  return Math.max(currentEdgeWait, randomizedTotal - nodeDelayMinutes);
 }
 
 function renderConversationTemplate(
@@ -9175,6 +9788,7 @@ function buildConversationPromptContext(input: {
   priorNodePath?: string[];
   threadHistory?: ConversationThreadHistoryItem[];
   maxDepth?: number;
+  replyPolicy?: ConversationPromptRenderContext["replyPolicy"];
 }): ConversationPromptRenderContext {
   return {
     brand: {
@@ -9240,6 +9854,7 @@ function buildConversationPromptContext(input: {
       minSpacingMinutes: Math.max(1, Number(input.run.minSpacingMinutes || 8)),
       timezone: input.run.timezone || DEFAULT_TIMEZONE,
     },
+    replyPolicy: input.replyPolicy,
   };
 }
 
@@ -9277,6 +9892,7 @@ async function generateConversationNodeContent(input: {
   priorNodePath?: string[];
   threadHistory?: ConversationThreadHistoryItem[];
   maxDepth?: number;
+  replyPolicy?: ConversationPromptRenderContext["replyPolicy"];
 }): Promise<
   | { ok: true; subject: string; body: string; trace: Record<string, unknown> }
   | { ok: false; reason: string; trace: Record<string, unknown> }
@@ -9319,6 +9935,7 @@ async function generateConversationNodeContent(input: {
       priorNodePath: input.priorNodePath,
       threadHistory: input.threadHistory,
       maxDepth: input.maxDepth,
+      replyPolicy: input.replyPolicy,
     });
 
     const generated = await generateConversationPromptMessage({
@@ -9455,8 +10072,10 @@ async function scheduleConversationNodeMessage(input: {
   threadHistory?: ConversationThreadHistoryItem[];
   maxDepth?: number;
   waitMinutes?: number;
+  businessWindow?: BusinessWindowPolicy;
   latestInboundSubject?: string;
   latestInboundBody?: string;
+  replyPolicy?: ConversationPromptRenderContext["replyPolicy"];
   existingMessages: Awaited<ReturnType<typeof listRunMessages>>;
 }): Promise<{ ok: boolean; reason: string; messageId: string }> {
   if (input.node.kind !== "message") {
@@ -9505,6 +10124,7 @@ async function scheduleConversationNodeMessage(input: {
     priorNodePath: input.priorNodePath,
     threadHistory: input.threadHistory,
     maxDepth: input.maxDepth,
+    replyPolicy: input.replyPolicy,
   });
   if (!composed.ok) {
     const failedRows = await createRunMessages([
@@ -9563,6 +10183,11 @@ async function scheduleConversationNodeMessage(input: {
   }
 
   const totalDelay = Math.max(0, input.node.delayMinutes + (input.waitMinutes ?? 0));
+  const scheduledAt = alignToBusinessWindow(
+    addMinutes(nowIso(), totalDelay),
+    input.run.timezone || DEFAULT_TIMEZONE,
+    input.businessWindow ?? DEFAULT_BUSINESS_WINDOW
+  );
   const created = await createRunMessages([
     {
       runId: input.run.id,
@@ -9573,7 +10198,7 @@ async function scheduleConversationNodeMessage(input: {
       subject: composed.subject,
       body: composed.body,
       status: "scheduled",
-      scheduledAt: addMinutes(nowIso(), totalDelay),
+      scheduledAt,
       sourceType: "conversation",
       sessionId: input.sessionId,
       nodeId: input.node.id,
@@ -9619,16 +10244,29 @@ async function ensureBrandAccount(brandId: string): Promise<{
   mailboxSecrets?: ResolvedSecrets;
 }> {
   const assignment = await getBrandOutreachAssignment(brandId);
-  if (!assignment || !assignment.accountId.trim()) {
+  const candidateAccountIds = Array.from(
+    new Set([assignment?.accountId ?? "", ...(assignment?.accountIds ?? [])].map((value) => value.trim()).filter(Boolean))
+  );
+  if (!assignment || !candidateAccountIds.length) {
     return { ok: false, reason: "No outreach delivery account assigned to brand", accountId: "" };
   }
 
-  const deliveryAccount = await getOutreachAccount(assignment.accountId);
-  if (!deliveryAccount || deliveryAccount.status !== "active") {
+  let resolvedAccountId = "";
+  let deliveryAccount: ResolvedAccount | null = null;
+  for (const candidateAccountId of candidateAccountIds) {
+    const candidate = await getOutreachAccount(candidateAccountId);
+    if (candidate && candidate.status === "active") {
+      resolvedAccountId = candidateAccountId;
+      deliveryAccount = candidate;
+      break;
+    }
+  }
+
+  if (!deliveryAccount || !resolvedAccountId) {
     return {
       ok: false,
       reason: "Assigned outreach delivery account is missing or inactive",
-      accountId: assignment.accountId,
+      accountId: candidateAccountIds[0] ?? "",
     };
   }
 
@@ -9637,11 +10275,11 @@ async function ensureBrandAccount(brandId: string): Promise<{
     return {
       ok: false,
       reason: "Assigned delivery account credentials are missing",
-      accountId: assignment.accountId,
+      accountId: resolvedAccountId,
     };
   }
 
-  const mailboxAccountId = assignment.mailboxAccountId || assignment.accountId;
+  const mailboxAccountId = assignment.mailboxAccountId || resolvedAccountId;
   const mailboxAccount =
     mailboxAccountId === deliveryAccount.id
       ? deliveryAccount
@@ -9650,7 +10288,7 @@ async function ensureBrandAccount(brandId: string): Promise<{
     return {
       ok: false,
       reason: "Assigned mailbox account is missing or inactive",
-      accountId: assignment.accountId,
+      accountId: resolvedAccountId,
     };
   }
 
@@ -9662,14 +10300,14 @@ async function ensureBrandAccount(brandId: string): Promise<{
     return {
       ok: false,
       reason: "Assigned mailbox account credentials are missing",
-      accountId: assignment.accountId,
+      accountId: resolvedAccountId,
     };
   }
 
   return {
     ok: true,
     reason: "",
-    accountId: assignment.accountId,
+    accountId: resolvedAccountId,
     mailboxAccountId,
     deliveryAccount,
     deliverySecrets,
@@ -10086,6 +10724,814 @@ async function countOwnerSentUsage(input: {
   };
 }
 
+async function countCampaignSenderUsage(input: {
+  brandId: string;
+  campaignId: string;
+  timezone: string;
+  currentRunId?: string;
+  currentRunMessages?: Awaited<ReturnType<typeof listRunMessages>>;
+}) {
+  const campaignRuns = await listCampaignRuns(input.brandId, input.campaignId);
+  const recentRuns = campaignRuns.filter((run) => {
+    if (isRunOpen(run.status)) return true;
+    return Date.now() - toDate(run.createdAt).getTime() <= 7 * DAY_MS;
+  });
+  const messagesByRun = await Promise.all(
+    recentRuns.map(async (run) => ({
+      run,
+      messages:
+        run.id === input.currentRunId && input.currentRunMessages
+          ? input.currentRunMessages
+          : await listRunMessages(run.id),
+    }))
+  );
+  const usage: SenderUsageMap = {};
+  const oneHourAgo = Date.now() - 60 * 60 * 1000;
+  const todayKey = timeZoneDateKey(new Date(), input.timezone || DEFAULT_TIMEZONE);
+
+  for (const entry of messagesByRun) {
+    for (const message of entry.messages) {
+      if (message.status !== "sent" || !message.sentAt) continue;
+      const senderAccountId =
+        String(message.generationMeta?.senderAccountId ?? "").trim() || entry.run.accountId.trim();
+      if (!senderAccountId) continue;
+      const bucket = usage[senderAccountId] ?? { dailySent: 0, hourlySent: 0 };
+      if (timeZoneDateKey(toDate(message.sentAt), input.timezone || DEFAULT_TIMEZONE) === todayKey) {
+        bucket.dailySent += 1;
+      }
+      if (toDate(message.sentAt).getTime() >= oneHourAgo) {
+        bucket.hourlySent += 1;
+      }
+      usage[senderAccountId] = bucket;
+    }
+  }
+
+  return usage;
+}
+
+async function resolveSenderPoolForBrand(input: {
+  brandId: string;
+  preferredAccountId: string;
+  timeZone: string;
+  businessWindow: BusinessWindowPolicy;
+}) {
+  const assignment = await getBrandOutreachAssignment(input.brandId);
+  const candidateAccountIds = Array.from(
+    new Set(
+      [input.preferredAccountId, assignment?.accountId ?? "", ...(assignment?.accountIds ?? [])]
+        .map((value) => value.trim())
+        .filter(Boolean)
+    )
+  );
+  const now = new Date();
+  const pool: SenderDispatchSlot[] = [];
+
+  for (const accountId of candidateAccountIds) {
+    const account = await getOutreachAccount(accountId);
+    if (!account || account.status !== "active") continue;
+    const fromEmail = account.config.customerIo.fromEmail.trim();
+    if (!fromEmail) continue;
+    const secrets = await getOutreachAccountSecrets(account.id);
+    if (!secrets) continue;
+    pool.push({
+      account,
+      secrets,
+      policy: senderWarmupPolicy({
+        account,
+        now,
+        timeZone: input.timeZone,
+        businessWindow: input.businessWindow,
+      }),
+    });
+  }
+
+  return {
+    assignment,
+    pool,
+  };
+}
+
+function pickSenderForMessage(input: {
+  pool: SenderDispatchSlot[];
+  usage: SenderUsageMap;
+  preferredAccountId: string;
+}) {
+  const ranked = input.pool
+    .map((slot) => {
+      const usage = input.usage[slot.account.id] ?? { dailySent: 0, hourlySent: 0 };
+      const dailyRemaining = Math.max(0, slot.policy.dailyCap - usage.dailySent);
+      const hourlyRemaining = Math.max(0, slot.policy.hourlyCap - usage.hourlySent);
+      const availability = Math.min(dailyRemaining, hourlyRemaining);
+      const dailyRatio = slot.policy.dailyCap > 0 ? usage.dailySent / slot.policy.dailyCap : 1;
+      const hourlyRatio = slot.policy.hourlyCap > 0 ? usage.hourlySent / slot.policy.hourlyCap : 1;
+      return {
+        slot,
+        usage,
+        dailyRemaining,
+        hourlyRemaining,
+        availability,
+        dailyRatio,
+        hourlyRatio,
+      };
+    })
+    .filter((row) => row.availability > 0)
+    .sort((left, right) => {
+      if (left.dailyRatio !== right.dailyRatio) return left.dailyRatio - right.dailyRatio;
+      if (left.hourlyRatio !== right.hourlyRatio) return left.hourlyRatio - right.hourlyRatio;
+      if (left.usage.dailySent !== right.usage.dailySent) return left.usage.dailySent - right.usage.dailySent;
+      if (left.slot.account.id === input.preferredAccountId) return -1;
+      if (right.slot.account.id === input.preferredAccountId) return 1;
+      return left.slot.account.name.localeCompare(right.slot.account.name);
+    });
+
+  return ranked[0] ?? null;
+}
+
+function deliverabilityPlacementScore(placement: MailboxPlacementVerdict) {
+  if (placement === "inbox") return 1;
+  if (placement === "all_mail_only") return 0.5;
+  return 0;
+}
+
+async function listCampaignDeliverabilityEvents(input: { brandId: string; campaignId: string }) {
+  const campaignRuns = await listCampaignRuns(input.brandId, input.campaignId);
+  const recentRuns = campaignRuns.filter((run) => {
+    if (isRunOpen(run.status)) return true;
+    return Date.now() - toDate(run.createdAt).getTime() <= 14 * DAY_MS;
+  });
+  const eventRows = await Promise.all(recentRuns.map((run) => listRunEvents(run.id)));
+  return eventRows.flat();
+}
+
+async function scoreSenderPoolDeliverability(input: {
+  brandId: string;
+  campaignId: string;
+  pool: SenderDispatchSlot[];
+}) {
+  const events = await listCampaignDeliverabilityEvents({
+    brandId: input.brandId,
+    campaignId: input.campaignId,
+  });
+  return buildSenderDeliverabilityScorecards({
+    events,
+    senderAccounts: input.pool.map((slot) => slot.account),
+  });
+}
+
+async function maybeRefreshDeliverabilityIntelligence(run: {
+  id: string;
+  brandId: string;
+  campaignId: string;
+  experimentId: string;
+}) {
+  const [settings, secrets] = await Promise.all([
+    getOutreachProvisioningSettings(),
+    getOutreachProvisioningSettingsSecrets(),
+  ]);
+
+  if (settings.deliverability.provider !== "google_postmaster") return null;
+  if (!settings.deliverability.monitoredDomains.length) return null;
+  if (
+    !secrets.deliverabilityGoogleClientId.trim() ||
+    !secrets.deliverabilityGoogleClientSecret.trim() ||
+    !secrets.deliverabilityGoogleRefreshToken.trim()
+  ) {
+    return null;
+  }
+
+  const lastChecked = settings.deliverability.lastCheckedAt.trim();
+  if (lastChecked) {
+    const elapsed = Date.now() - toDate(lastChecked).getTime();
+    if (elapsed < DELIVERABILITY_INTELLIGENCE_REFRESH_HOURS * 60 * 60 * 1000) {
+      return null;
+    }
+  }
+
+  try {
+    const snapshot = await fetchGooglePostmasterHealth({
+      clientId: secrets.deliverabilityGoogleClientId,
+      clientSecret: secrets.deliverabilityGoogleClientSecret,
+      refreshToken: secrets.deliverabilityGoogleRefreshToken,
+      domains: settings.deliverability.monitoredDomains,
+    });
+
+    await updateOutreachProvisioningSettings({
+      deliverability: {
+        lastCheckedAt: snapshot.checkedAt,
+        lastHealthStatus: snapshot.overallStatus,
+        lastHealthScore: snapshot.overallScore,
+        lastHealthSummary: snapshot.summary,
+        lastDomainSnapshots: snapshot.domains,
+      },
+    });
+
+    await createOutreachEvent({
+      runId: run.id,
+      eventType: "deliverability_intelligence_updated",
+      payload: {
+        provider: snapshot.provider,
+        checkedAt: snapshot.checkedAt,
+        overallStatus: snapshot.overallStatus,
+        overallScore: snapshot.overallScore,
+        summary: snapshot.summary,
+        domains: snapshot.domains,
+      },
+    });
+
+    return snapshot;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Deliverability intelligence refresh failed";
+    await updateOutreachProvisioningSettings({
+      deliverability: {
+        lastCheckedAt: nowIso(),
+        lastHealthStatus: "unknown",
+        lastHealthSummary: message,
+      },
+    });
+    await createOutreachEvent({
+      runId: run.id,
+      eventType: "deliverability_intelligence_failed",
+      payload: {
+        provider: settings.deliverability.provider,
+        error: message,
+      },
+    });
+    return null;
+  }
+}
+
+async function resolveDeliverabilityMonitorTargets(input: {
+  runBrandId: string;
+  excludeAccountIds: string[];
+  excludeEmails: string[];
+}): Promise<DeliverabilityMonitorTarget[]> {
+  const [accounts, brands] = await Promise.all([listOutreachAccounts(), listBrands()]);
+  const assignments = await Promise.all(
+    brands.map(async (brand) => ({
+      brandId: brand.id,
+      assignment: await getBrandOutreachAssignment(brand.id),
+    }))
+  );
+  const mailboxBrandByAccountId = new Map(
+    assignments
+      .filter((row) => row.assignment?.mailboxAccountId)
+      .map((row) => [String(row.assignment?.mailboxAccountId ?? "").trim(), row.brandId] as const)
+  );
+  const excludedAccountIds = new Set(input.excludeAccountIds.map((value) => value.trim()).filter(Boolean));
+  const excludedEmails = new Set(input.excludeEmails.map((value) => value.trim().toLowerCase()).filter(Boolean));
+
+  const candidates: DeliverabilityMonitorTarget[] = [];
+  for (const account of accounts) {
+    if (account.status !== "active" || !supportsMailbox(account)) continue;
+    const mailboxEmail = account.config.mailbox.email.trim().toLowerCase();
+    if (!mailboxEmail || account.config.mailbox.status !== "connected") continue;
+    if (excludedAccountIds.has(account.id) || excludedEmails.has(mailboxEmail)) continue;
+    const secrets = await getOutreachAccountSecrets(account.id);
+    if (!secrets || !secrets.mailboxPassword.trim()) continue;
+    candidates.push({
+      account,
+      secrets,
+      brandId: mailboxBrandByAccountId.get(account.id) ?? "",
+    });
+  }
+
+  const dedicated = candidates.filter((candidate) => isDedicatedDeliverabilityMonitor(candidate.account));
+  const pool = dedicated.length ? dedicated : candidates;
+
+  return pool.sort((left, right) => {
+    const leftDedicated = isDedicatedDeliverabilityMonitor(left.account) ? 0 : 1;
+    const rightDedicated = isDedicatedDeliverabilityMonitor(right.account) ? 0 : 1;
+    if (leftDedicated !== rightDedicated) return leftDedicated - rightDedicated;
+
+    const leftCrossBrand = left.brandId && left.brandId !== input.runBrandId ? 0 : 1;
+    const rightCrossBrand = right.brandId && right.brandId !== input.runBrandId ? 0 : 1;
+    if (leftCrossBrand !== rightCrossBrand) return leftCrossBrand - rightCrossBrand;
+
+    return left.account.name.localeCompare(right.account.name);
+  });
+}
+
+function readDeliverabilityProbeTargets(value: unknown): DeliverabilityProbeTarget[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((entry) => asRecord(entry))
+    .map((entry) => ({
+      accountId: String(entry.accountId ?? "").trim(),
+      email: String(entry.email ?? "").trim().toLowerCase(),
+    }))
+    .filter((entry) => entry.accountId && entry.email);
+}
+
+function readDeliverabilityProbeResults(value: unknown): DeliverabilityProbeMonitorResult[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((entry) => asRecord(entry))
+    .map((entry) => ({
+      accountId: String(entry.accountId ?? "").trim(),
+      email: String(entry.email ?? "").trim().toLowerCase(),
+      placement:
+        ["inbox", "spam", "all_mail_only", "not_found", "error"].includes(String(entry.placement ?? ""))
+          ? (String(entry.placement ?? "") as MailboxPlacementVerdict)
+          : "error",
+      matchedMailbox: String(entry.matchedMailbox ?? "").trim(),
+      matchedUid: Math.max(0, Number(entry.matchedUid ?? 0) || 0),
+      ok: entry.ok !== false,
+      error: String(entry.error ?? "").trim(),
+    }))
+    .filter((entry) => entry.accountId && entry.email);
+}
+
+function summarizeDeliverabilityProbeResults(results: DeliverabilityProbeMonitorResult[]) {
+  const counts = {
+    inbox: 0,
+    spam: 0,
+    all_mail_only: 0,
+    not_found: 0,
+    error: 0,
+  };
+  for (const result of results) {
+    counts[result.placement] += 1;
+  }
+
+  const total = results.length;
+  const placement: MailboxPlacementVerdict =
+    counts.spam > 0
+      ? "spam"
+      : counts.all_mail_only > 0
+        ? "all_mail_only"
+        : counts.not_found > 0
+          ? "not_found"
+          : counts.error > 0
+            ? "error"
+            : counts.inbox > 0
+              ? "inbox"
+              : "not_found";
+
+  const summaryParts: string[] = [];
+  if (counts.inbox) summaryParts.push(`${counts.inbox} inbox`);
+  if (counts.spam) summaryParts.push(`${counts.spam} spam`);
+  if (counts.all_mail_only) summaryParts.push(`${counts.all_mail_only} all mail`);
+  if (counts.not_found) summaryParts.push(`${counts.not_found} missing`);
+  if (counts.error) summaryParts.push(`${counts.error} error`);
+
+  return {
+    placement,
+    total,
+    counts,
+    summaryText: summaryParts.join(" · ") || "No monitor results",
+  };
+}
+
+async function queueDeliverabilityProbe(input: {
+  runId: string;
+  executeAfter?: string;
+  payload?: Record<string, unknown>;
+  force?: boolean;
+}) {
+  const jobs = await listRunJobs(input.runId, 50);
+  if (!input.force) {
+    const activeProbe = jobs.find(
+      (job) =>
+        job.jobType === "monitor_deliverability" &&
+        ["queued", "running"].includes(job.status)
+    );
+    if (activeProbe) {
+      return activeProbe;
+    }
+  }
+  return enqueueOutreachJob({
+    runId: input.runId,
+    jobType: "monitor_deliverability",
+    executeAfter: input.executeAfter ?? nowIso(),
+    payload: input.payload ?? {},
+  });
+}
+
+async function maybeQueueAutomaticDeliverabilityProbe(run: {
+  id: string;
+  brandId: string;
+  campaignId: string;
+  experimentId: string;
+}) {
+  const events = await listRunEvents(run.id);
+  const latestResult = events.find((event) => event.eventType === "deliverability_probe_result") ?? null;
+  const latestSent = events.find((event) => event.eventType === "deliverability_probe_sent") ?? null;
+  const referenceEvent = latestResult ?? latestSent;
+  if (referenceEvent) {
+    const elapsed = Date.now() - toDate(referenceEvent.createdAt).getTime();
+    if (elapsed < DELIVERABILITY_PROBE_REPEAT_HOURS * 60 * 60 * 1000) {
+      return null;
+    }
+  }
+  return queueDeliverabilityProbe({ runId: run.id });
+}
+
+async function processMonitorDeliverabilityJob(job: OutreachJob) {
+  const run = await getOutreachRun(job.runId);
+  if (!run) return;
+  if (["canceled", "failed", "preflight_failed"].includes(run.status)) return;
+
+  const payload =
+    job.payload && typeof job.payload === "object" && !Array.isArray(job.payload)
+      ? (job.payload as Record<string, unknown>)
+      : {};
+  const stageRaw = String(payload.stage ?? "send").trim().toLowerCase();
+  const stage: DeliverabilityProbeStage = stageRaw === "poll" ? "poll" : "send";
+  const runtimeExperiment = await getExperimentRecordByRuntimeRef(run.brandId, run.campaignId, run.experimentId);
+  const businessWindow = businessWindowFromExperimentEnvelope(runtimeExperiment?.testEnvelope);
+  const senderPoolState = await resolveSenderPoolForBrand({
+    brandId: run.brandId,
+    preferredAccountId: run.accountId,
+    timeZone: run.timezone || DEFAULT_TIMEZONE,
+    businessWindow,
+  });
+  if (!senderPoolState.pool.length) {
+    await createOutreachEvent({
+      runId: run.id,
+      eventType: "deliverability_probe_failed",
+      payload: { reason: "No active sender accounts assigned to this brand" },
+    });
+    return;
+  }
+
+  const senderUsage = await countCampaignSenderUsage({
+    brandId: run.brandId,
+    campaignId: run.campaignId,
+    timezone: run.timezone || DEFAULT_TIMEZONE,
+  });
+  const senderChoice =
+    pickSenderForMessage({
+      pool: senderPoolState.pool,
+      usage: senderUsage,
+      preferredAccountId: run.accountId,
+    }) ??
+    senderPoolState.pool.find((slot) => slot.account.id === run.accountId) ??
+    senderPoolState.pool[0];
+  if (!senderChoice) {
+    await createOutreachEvent({
+      runId: run.id,
+      eventType: "deliverability_probe_failed",
+      payload: { reason: "No sender slot available for deliverability monitoring" },
+    });
+    return;
+  }
+
+  const assignment = await getBrandOutreachAssignment(run.brandId);
+  const replyMailbox =
+    assignment?.mailboxAccountId ? await getOutreachAccount(assignment.mailboxAccountId) : null;
+  const replyToEmail =
+    replyMailbox?.config.mailbox.email.trim() || senderChoice.slot.account.config.customerIo.fromEmail.trim();
+  const requestedMonitorTargets = readDeliverabilityProbeTargets(
+    payload.monitorTargets ?? payload.monitorAccountIds
+  );
+  const resolvedRequestedTargets: DeliverabilityMonitorTarget[] = [];
+  for (const requestedTarget of requestedMonitorTargets) {
+    const account = await getOutreachAccount(requestedTarget.accountId);
+    const secrets = account ? await getOutreachAccountSecrets(account.id) : null;
+    if (
+      account &&
+      secrets &&
+      account.status === "active" &&
+      supportsMailbox(account) &&
+      account.config.mailbox.status === "connected" &&
+      secrets.mailboxPassword.trim() &&
+      account.config.mailbox.email.trim().toLowerCase() === requestedTarget.email
+    ) {
+      resolvedRequestedTargets.push({
+        account,
+        secrets,
+        brandId: "",
+      });
+    }
+  }
+  const monitorTargets =
+    resolvedRequestedTargets.length
+      ? resolvedRequestedTargets
+      : await resolveDeliverabilityMonitorTargets({
+          runBrandId: run.brandId,
+          excludeAccountIds: [run.accountId, assignment?.mailboxAccountId ?? ""],
+          excludeEmails: [replyToEmail, senderChoice.slot.account.config.customerIo.fromEmail.trim()],
+        });
+
+  if (!monitorTargets.length) {
+    await createOutreachEvent({
+      runId: run.id,
+      eventType: "deliverability_probe_failed",
+      payload: { reason: "No dedicated deliverability monitor group is connected" },
+    });
+    return;
+  }
+  const brand = await getBrandById(run.brandId);
+  const probeToken = String(payload.probeToken ?? `probe_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`).trim();
+  const subject =
+    String(payload.subject ?? "").trim() ||
+    `Factory placement check ${brand?.name || run.brandId} ${probeToken.slice(-6)}`;
+  const body =
+    String(payload.body ?? "").trim() ||
+    [
+      "This is an automated inbox-placement probe from Factory.",
+      "",
+      `Probe token: ${probeToken}`,
+      `Run ID: ${run.id}`,
+      `Brand: ${brand?.name || run.brandId}`,
+      "",
+      "No action needed.",
+    ].join("\n");
+
+  if (stage === "send") {
+    const sentTargets: Array<DeliverabilityProbeTarget & { providerMessageId: string }> = [];
+    const initialResults: DeliverabilityProbeMonitorResult[] = [];
+
+    for (const monitorTarget of monitorTargets) {
+      const monitorEmail = monitorTarget.account.config.mailbox.email.trim();
+      const send = await sendMonitoringProbeMessage({
+        account: senderChoice.slot.account,
+        secrets: senderChoice.slot.secrets,
+        replyToEmail,
+        recipient: monitorEmail,
+        runId: run.id,
+        experimentId: run.experimentId,
+        subject,
+        body,
+        probeToken,
+        monitorAccountId: monitorTarget.account.id,
+        monitorEmail,
+      });
+      if (send.ok) {
+        sentTargets.push({
+          accountId: monitorTarget.account.id,
+          email: monitorEmail.toLowerCase(),
+          providerMessageId: send.providerMessageId,
+        });
+        continue;
+      }
+      initialResults.push({
+        accountId: monitorTarget.account.id,
+        email: monitorEmail.toLowerCase(),
+        placement: "error",
+        matchedMailbox: "",
+        matchedUid: 0,
+        ok: false,
+        error: send.error || "Monitoring probe send failed",
+      });
+    }
+
+    if (!sentTargets.length) {
+      await createOutreachEvent({
+        runId: run.id,
+        eventType: "deliverability_probe_failed",
+        payload: {
+          reason: "Monitoring probe send failed for every seed mailbox",
+          probeToken,
+          monitorCount: monitorTargets.length,
+          initialResults,
+        },
+      });
+      return;
+    }
+
+    await createOutreachEvent({
+      runId: run.id,
+      eventType: "deliverability_probe_sent",
+      payload: {
+        probeToken,
+        senderAccountId: senderChoice.slot.account.id,
+        senderAccountName: senderChoice.slot.account.name,
+        providerMessageIds: sentTargets.map((target) => target.providerMessageId),
+        subject,
+        fromEmail: senderChoice.slot.account.config.customerIo.fromEmail.trim(),
+        replyToEmail,
+        monitorCount: sentTargets.length,
+        monitorEmails: sentTargets.map((target) => target.email),
+        failedMonitorCount: initialResults.length,
+      },
+    });
+    await queueDeliverabilityProbe({
+      runId: run.id,
+      executeAfter: addMinutes(nowIso(), DELIVERABILITY_PROBE_POLL_DELAY_MINUTES),
+      force: true,
+      payload: {
+        stage: "poll",
+        probeToken,
+        subject,
+        senderAccountId: senderChoice.slot.account.id,
+        senderAccountName: senderChoice.slot.account.name,
+        fromEmail: senderChoice.slot.account.config.customerIo.fromEmail.trim(),
+        monitorTargets: sentTargets.map(({ accountId, email }) => ({ accountId, email })),
+        previousResults: initialResults,
+        pollAttempt: 1,
+      },
+    });
+    return;
+  }
+
+  const pollAttempt = Math.max(1, Number(payload.pollAttempt ?? 1) || 1);
+  const fromEmail = String(payload.fromEmail ?? senderChoice.slot.account.config.customerIo.fromEmail).trim();
+  const previousResults = readDeliverabilityProbeResults(payload.previousResults);
+  const monitorTargetsForPoll = readDeliverabilityProbeTargets(payload.monitorTargets);
+  const pendingTargets: DeliverabilityProbeTarget[] = [];
+  const pollResults: DeliverabilityProbeMonitorResult[] = [];
+
+  for (const target of monitorTargetsForPoll) {
+    const account = await getOutreachAccount(target.accountId);
+    const secrets = account ? await getOutreachAccountSecrets(account.id) : null;
+    if (
+      !account ||
+      !secrets ||
+      account.status !== "active" ||
+      !supportsMailbox(account) ||
+      !secrets.mailboxPassword.trim()
+    ) {
+      pollResults.push({
+        accountId: target.accountId,
+        email: target.email,
+        placement: "error",
+        matchedMailbox: "",
+        matchedUid: 0,
+        ok: false,
+        error: "Monitoring mailbox is missing, inactive, or no longer has credentials",
+      });
+      continue;
+    }
+
+    const placement = await inspectMailboxPlacement({
+      mailbox: {
+        host: account.config.mailbox.host.trim(),
+        port: Number(account.config.mailbox.port ?? 993) || 993,
+        secure: account.config.mailbox.secure !== false,
+        email: account.config.mailbox.email.trim(),
+        password: secrets.mailboxPassword.trim(),
+      },
+      fromEmail,
+      subject,
+      since: new Date(Date.now() - DAY_MS),
+    });
+
+    if (placement.ok && placement.placement === "not_found" && pollAttempt < 3) {
+      pendingTargets.push({
+        accountId: target.accountId,
+        email: target.email,
+      });
+      continue;
+    }
+
+    pollResults.push({
+      accountId: target.accountId,
+      email: target.email,
+      placement: placement.placement,
+      matchedMailbox: placement.matchedMailbox,
+      matchedUid: placement.matchedUid,
+      ok: placement.ok,
+      error: placement.error,
+    });
+  }
+
+  if (pendingTargets.length && pollAttempt < 3) {
+    await createOutreachEvent({
+      runId: run.id,
+      eventType: "deliverability_probe_waiting",
+      payload: {
+        probeToken,
+        subject,
+        senderAccountId: String(payload.senderAccountId ?? "").trim(),
+        senderAccountName: String(payload.senderAccountName ?? "").trim(),
+        fromEmail,
+        pendingMonitorCount: pendingTargets.length,
+        pendingMonitorEmails: pendingTargets.map((target) => target.email),
+        pollAttempt,
+      },
+    });
+    await queueDeliverabilityProbe({
+      runId: run.id,
+      executeAfter: addMinutes(nowIso(), DELIVERABILITY_PROBE_POLL_DELAY_MINUTES),
+      force: true,
+      payload: {
+        stage: "poll",
+        probeToken,
+        subject,
+        senderAccountId: String(payload.senderAccountId ?? "").trim(),
+        senderAccountName: String(payload.senderAccountName ?? "").trim(),
+        fromEmail,
+        monitorTargets: pendingTargets,
+        previousResults: [...previousResults, ...pollResults],
+        pollAttempt: pollAttempt + 1,
+      },
+    });
+    return;
+  }
+
+  const finalResults = [...previousResults, ...pollResults];
+  const aggregate = summarizeDeliverabilityProbeResults(finalResults);
+
+  await createOutreachEvent({
+    runId: run.id,
+    eventType: "deliverability_probe_result",
+    payload: {
+      probeToken,
+      subject,
+      senderAccountId: String(payload.senderAccountId ?? "").trim(),
+      senderAccountName: String(payload.senderAccountName ?? "").trim(),
+      fromEmail,
+      placement: aggregate.placement,
+      totalMonitors: aggregate.total,
+      counts: aggregate.counts,
+      summaryText: aggregate.summaryText,
+      monitorResults: finalResults,
+    },
+  });
+
+  const senderScorecard = buildSenderDeliverabilityScorecards({
+    events: [
+      {
+        id: "",
+        runId: run.id,
+        eventType: "deliverability_probe_result",
+        payload: {
+          senderAccountId: String(payload.senderAccountId ?? "").trim(),
+          senderAccountName: String(payload.senderAccountName ?? "").trim(),
+          fromEmail,
+          placement: aggregate.placement,
+          totalMonitors: aggregate.total,
+          counts: aggregate.counts,
+          summaryText: aggregate.summaryText,
+        },
+        createdAt: nowIso(),
+      },
+    ],
+    senderAccounts: [senderChoice.slot.account],
+  })[0];
+
+  if (
+    senderScorecard?.autoPaused &&
+    senderScorecard.totalMonitors >= SENDER_DELIVERABILITY_MIN_MONITORS
+  ) {
+    await createOutreachEvent({
+      runId: run.id,
+      eventType: "sender_deliverability_paused_auto",
+      payload: {
+        senderAccountId: senderScorecard.senderAccountId,
+        senderAccountName: senderScorecard.senderAccountName,
+        fromEmail: senderScorecard.fromEmail,
+        spamRate: senderScorecard.spamRate,
+        inboxRate: senderScorecard.inboxRate,
+        totalMonitors: senderScorecard.totalMonitors,
+        summaryText: senderScorecard.summaryText,
+        autoPauseUntil: senderScorecard.autoPauseUntil,
+        reason: senderScorecard.autoPauseReason,
+      },
+    });
+  }
+
+  if (
+    aggregate.placement === "spam" ||
+    aggregate.placement === "all_mail_only" ||
+    aggregate.placement === "not_found"
+  ) {
+    await createRunAnomaly({
+      runId: run.id,
+      type: "deliverability_inbox_placement",
+      severity: aggregate.placement === "spam" ? "critical" : "warning",
+      threshold: 1,
+      observed: deliverabilityPlacementScore(aggregate.placement),
+      details:
+        aggregate.placement === "spam"
+          ? `Seed group hit spam. ${aggregate.summaryText}.`
+          : aggregate.placement === "all_mail_only"
+            ? `Seed group missed Inbox and only reached archive-like mailboxes. ${aggregate.summaryText}.`
+            : `Seed group was not found after polling. ${aggregate.summaryText}.`,
+    });
+  }
+
+  if (aggregate.counts.spam > 0 && aggregate.counts.inbox === 0) {
+    const reason = `Auto-paused: seed monitor group saw no inbox placement (${aggregate.summaryText})`;
+    await updateOutreachRun(run.id, {
+      status: "paused",
+      pauseReason: reason,
+      lastError: reason,
+    });
+    await markExperimentExecutionStatus(run.brandId, run.campaignId, run.experimentId, "paused");
+    await createOutreachEvent({
+      runId: run.id,
+      eventType: "run_paused_auto",
+      payload: {
+        reason: "deliverability_probe_spam",
+        placement: aggregate.placement,
+        counts: aggregate.counts,
+        summaryText: aggregate.summaryText,
+      },
+    });
+    return;
+  }
+
+  if (["queued", "sourcing", "scheduled", "sending", "monitoring", "paused"].includes(run.status)) {
+    await queueDeliverabilityProbe({
+      runId: run.id,
+      executeAfter: addHours(nowIso(), DELIVERABILITY_PROBE_REPEAT_HOURS),
+      payload: { stage: "send" },
+    });
+  }
+}
+
 async function ensureActiveCampaignHoppers() {
   const brands = await listBrands();
   let campaignsEvaluated = 0;
@@ -10257,7 +11703,7 @@ async function processSourceLeadsJob(job: OutreachJob) {
   }
   const activeExperiment = experiment;
 
-  let account = await getOutreachAccount(run.accountId);
+  const account = await getOutreachAccount(run.accountId);
   const secrets = await getOutreachAccountSecrets(run.accountId);
   if (!account || !secrets) {
     await failRunWithDiagnostics({
@@ -10989,6 +12435,7 @@ async function processScheduleMessagesJob(job: OutreachJob) {
     return;
   }
   const runtimeExperiment = await getExperimentRecordByRuntimeRef(run.brandId, run.campaignId, run.experimentId);
+  const businessWindow = businessWindowFromExperimentEnvelope(runtimeExperiment?.testEnvelope);
   const parsedOffer = parseOfferAndCta(runtimeExperiment?.offer ?? "");
   const experimentOffer = parsedOffer.offer || runtimeExperiment?.offer || "";
   const experimentCta = parsedOffer.cta;
@@ -11109,6 +12556,7 @@ async function processScheduleMessagesJob(job: OutreachJob) {
         experimentNotes: experiment.notes ?? "",
         maxDepth: graph.maxDepth,
         waitMinutes: index * run.minSpacingMinutes,
+        businessWindow,
         existingMessages: existingConversationMessages,
       });
       if (scheduled.ok) {
@@ -11200,17 +12648,61 @@ async function processDispatchMessagesJob(job: OutreachJob) {
     return;
   }
 
-  let account = await getOutreachAccount(run.accountId);
-  const secrets = await getOutreachAccountSecrets(run.accountId);
-  if (!account || !secrets) {
+  const runtimeExperiment = await getExperimentRecordByRuntimeRef(run.brandId, run.campaignId, run.experimentId);
+  const businessWindow = businessWindowFromExperimentEnvelope(runtimeExperiment?.testEnvelope);
+  const senderPoolState = await resolveSenderPoolForBrand({
+    brandId: run.brandId,
+    preferredAccountId: run.accountId,
+    timeZone: run.timezone || DEFAULT_TIMEZONE,
+    businessWindow,
+  });
+  if (!senderPoolState.pool.length) {
     await failRunWithDiagnostics({
       run,
-      reason: "Account credentials missing",
+      reason: "No active sender accounts with delivery credentials are assigned to this brand",
       eventType: "dispatch_failed",
     });
     return;
   }
-
+  const senderScorecards = await scoreSenderPoolDeliverability({
+    brandId: run.brandId,
+    campaignId: run.campaignId,
+    pool: senderPoolState.pool,
+  });
+  const autoPausedBySenderId = new Map(
+    senderScorecards
+      .filter((scorecard) => scorecard.autoPaused && scorecard.senderAccountId)
+      .map((scorecard) => [scorecard.senderAccountId, scorecard] as const)
+  );
+  const dispatchPool = senderPoolState.pool.filter((slot) => !autoPausedBySenderId.has(slot.account.id));
+  if (!dispatchPool.length) {
+    const pausedSenders = Array.from(autoPausedBySenderId.values()).map((scorecard) => ({
+      senderAccountId: scorecard.senderAccountId,
+      senderAccountName: scorecard.senderAccountName,
+      fromEmail: scorecard.fromEmail,
+      autoPauseUntil: scorecard.autoPauseUntil,
+      reason: scorecard.autoPauseReason,
+      summaryText: scorecard.summaryText,
+    }));
+    const pauseReason = "Auto-paused: every sender in the brand pool is currently flagged for spam risk.";
+    await updateOutreachRun(run.id, {
+      status: "paused",
+      pauseReason,
+      lastError: pauseReason,
+    });
+    await markExperimentExecutionStatus(run.brandId, run.campaignId, run.experimentId, "paused");
+    await createOutreachEvent({
+      runId: run.id,
+      eventType: "run_paused_auto",
+      payload: {
+        reason: "deliverability_sender_pool_guard",
+        summary: pauseReason,
+        pausedSenders,
+      },
+    });
+    return;
+  }
+  const primarySender = dispatchPool.find((slot) => slot.account.id === run.accountId) ?? dispatchPool[0];
   const assignment = await getBrandOutreachAssignment(run.brandId);
   const mailboxAccountId = String(assignment?.mailboxAccountId ?? "").trim();
   if (!mailboxAccountId) {
@@ -11222,7 +12714,9 @@ async function processDispatchMessagesJob(job: OutreachJob) {
     return;
   }
   const mailboxAccount =
-    mailboxAccountId === account.id ? account : await getOutreachAccount(mailboxAccountId);
+    mailboxAccountId === primarySender.account.id
+      ? primarySender.account
+      : await getOutreachAccount(mailboxAccountId);
   if (!mailboxAccount || mailboxAccount.status !== "active") {
     await failRunWithDiagnostics({
       run,
@@ -11240,22 +12734,12 @@ async function processDispatchMessagesJob(job: OutreachJob) {
     });
     return;
   }
-  if (!account.config.customerIo.fromEmail.trim()) {
-    await failRunWithDiagnostics({
-      run,
-      reason: "Customer.io From Email is empty",
-      eventType: "dispatch_failed",
-    });
-    return;
-  }
 
   await updateOutreachRun(run.id, { status: "sending" });
   await markExperimentExecutionStatus(run.brandId, run.campaignId, run.experimentId, "sending");
 
   const messages = await listRunMessages(run.id);
   const leads = await listRunLeads(run.id);
-  const runtimeExperiment = await getExperimentRecordByRuntimeRef(run.brandId, run.campaignId, run.experimentId);
-  const businessWindow = businessWindowFromExperimentEnvelope(runtimeExperiment?.testEnvelope);
   if (!isInsideBusinessWindow(new Date(), run.timezone || DEFAULT_TIMEZONE, businessWindow)) {
     const resumeAt = nextBusinessWindowCheckIso(new Date(), run.timezone || DEFAULT_TIMEZONE, businessWindow);
     await createOutreachEvent({
@@ -11306,6 +12790,13 @@ async function processDispatchMessagesJob(job: OutreachJob) {
           currentRunMessages: messages,
         })
       : null;
+  const senderUsage = await countCampaignSenderUsage({
+    brandId: run.brandId,
+    campaignId: run.campaignId,
+    timezone: run.timezone || DEFAULT_TIMEZONE,
+    currentRunId: run.id,
+    currentRunMessages: messages,
+  });
   const hourlySent =
     ownerUsage?.hourlySent ??
     messages.filter(
@@ -11324,8 +12815,16 @@ async function processDispatchMessagesJob(job: OutreachJob) {
         timeZoneDateKey(toDate(message.sentAt), run.timezone || DEFAULT_TIMEZONE) === runDayKey
     ).length;
 
-  const hourlySlots = Math.max(0, run.hourlyCap - hourlySent);
-  const dailySlots = Math.max(0, run.dailyCap - dailySent);
+  const senderHourlySlots = dispatchPool.reduce((total, slot) => {
+    const usage = senderUsage[slot.account.id] ?? { dailySent: 0, hourlySent: 0 };
+    return total + Math.max(0, slot.policy.hourlyCap - usage.hourlySent);
+  }, 0);
+  const senderDailySlots = dispatchPool.reduce((total, slot) => {
+    const usage = senderUsage[slot.account.id] ?? { dailySent: 0, hourlySent: 0 };
+    return total + Math.max(0, slot.policy.dailyCap - usage.dailySent);
+  }, 0);
+  const hourlySlots = Math.max(0, Math.min(run.hourlyCap - hourlySent, senderHourlySlots));
+  const dailySlots = Math.max(0, Math.min(run.dailyCap - dailySent, senderDailySlots));
   const available = Math.max(0, Math.min(hourlySlots, dailySlots));
 
   if (available <= 0) {
@@ -11379,6 +12878,22 @@ async function processDispatchMessagesJob(job: OutreachJob) {
       continue;
     }
 
+    const senderChoice = pickSenderForMessage({
+      pool: dispatchPool,
+      usage: senderUsage,
+      preferredAccountId: primarySender.account.id,
+    });
+    if (!senderChoice) {
+      await enqueueOutreachJob({
+        runId: run.id,
+        jobType: "dispatch_messages",
+        executeAfter: addHours(nowIso(), 1),
+      });
+      return;
+    }
+    let account = senderChoice.slot.account;
+    const secrets = senderChoice.slot.secrets;
+
     const budgetAdmission = await admitCustomerIoProfileForSend({
       account,
       secrets,
@@ -11400,6 +12915,7 @@ async function processDispatchMessagesJob(job: OutreachJob) {
         eventType: "run_paused_customerio_profile_budget",
         payload: {
           reason: budgetAdmission.reason,
+          accountId: account.id,
           messageId: message.id,
           email: lead.email,
           billingPeriodStart: budgetAdmission.billingPeriodStart,
@@ -11411,6 +12927,7 @@ async function processDispatchMessagesJob(job: OutreachJob) {
       });
       return;
     }
+    account = budgetAdmission.account;
 
     const send = await sendOutreachMessage({
       message,
@@ -11423,32 +12940,57 @@ async function processDispatchMessagesJob(job: OutreachJob) {
     });
 
     if (send.ok) {
+      const nextGenerationMeta = {
+        ...message.generationMeta,
+        senderAccountId: account.id,
+        senderAccountName: account.name,
+        senderFromEmail: account.config.customerIo.fromEmail.trim(),
+        replyToEmail,
+      };
       await updateRunMessage(message.id, {
         status: "sent",
         providerMessageId: send.providerMessageId,
         sentAt: nowIso(),
         lastError: "",
+        generationMeta: nextGenerationMeta,
       });
       await updateRunLead(lead.id, { status: "sent" });
+      const usage = senderUsage[account.id] ?? { dailySent: 0, hourlySent: 0 };
+      usage.dailySent += 1;
+      usage.hourlySent += 1;
+      senderUsage[account.id] = usage;
       await createOutreachEvent({
         runId: run.id,
         eventType: "message_sent",
         payload: {
+          accountId: account.id,
+          fromEmail: account.config.customerIo.fromEmail.trim(),
           messageId: message.id,
           sourceType: message.sourceType,
           nodeId: message.nodeId,
           sessionId: message.sessionId,
         },
       });
+      await maybeQueueAutomaticDeliverabilityProbe(run);
     } else {
+      const nextGenerationMeta = {
+        ...message.generationMeta,
+        senderAccountId: account.id,
+        senderAccountName: account.name,
+        senderFromEmail: account.config.customerIo.fromEmail.trim(),
+        replyToEmail,
+      };
       await updateRunMessage(message.id, {
         status: "failed",
         lastError: send.error,
+        generationMeta: nextGenerationMeta,
       });
       await createOutreachEvent({
         runId: run.id,
         eventType: "dispatch_failed",
         payload: {
+          accountId: account.id,
+          fromEmail: account.config.customerIo.fromEmail.trim(),
           messageId: message.id,
           sourceType: message.sourceType,
           nodeId: message.nodeId,
@@ -11536,6 +13078,7 @@ async function processConversationTickJob(job: OutreachJob) {
     ? campaign?.hypotheses.find((item) => item.id === variant.hypothesisId) ?? null
     : null;
   const runtimeExperiment = await getExperimentRecordByRuntimeRef(run.brandId, run.campaignId, run.experimentId);
+  const businessWindow = businessWindowFromExperimentEnvelope(runtimeExperiment?.testEnvelope);
   const parsedOffer = parseOfferAndCta(runtimeExperiment?.offer ?? "");
   const experimentOffer = parsedOffer.offer || runtimeExperiment?.offer || "";
   const experimentCta = parsedOffer.cta;
@@ -11683,6 +13226,7 @@ async function processConversationTickJob(job: OutreachJob) {
       threadHistory,
       maxDepth: graph.maxDepth,
       waitMinutes: 0,
+      businessWindow,
       existingMessages: messages,
     });
     if (scheduled.ok) {
@@ -11751,6 +13295,8 @@ async function processAnalyzeRunJob(job: OutreachJob) {
   const run = await getOutreachRun(job.runId);
   if (!run) return;
   if (["canceled", "completed", "failed", "preflight_failed"].includes(run.status)) return;
+
+  await maybeRefreshDeliverabilityIntelligence(run);
 
   const messages = await listRunMessages(run.id);
   const { threads } = await listReplyThreadsByBrand(run.brandId);
@@ -11884,6 +13430,10 @@ async function processOutreachJob(job: OutreachJob) {
     await processConversationTickJob(job);
     return;
   }
+  if (job.jobType === "monitor_deliverability") {
+    await processMonitorDeliverabilityJob(job);
+    return;
+  }
   await processAnalyzeRunJob(job);
 }
 
@@ -12000,8 +13550,9 @@ export async function updateRunControl(input: {
   brandId: string;
   campaignId: string;
   runId: string;
-  action: "pause" | "resume" | "cancel";
+  action: "pause" | "resume" | "cancel" | "probe_deliverability" | "resume_sender_deliverability";
   reason?: string;
+  senderAccountId?: string;
 }): Promise<{ ok: boolean; reason: string }> {
   const run = await getOutreachRun(input.runId);
   if (!run || run.brandId !== input.brandId || run.campaignId !== input.campaignId) {
@@ -12043,6 +13594,45 @@ export async function updateRunControl(input: {
     return { ok: true, reason: "Run resumed" };
   }
 
+  if (input.action === "probe_deliverability") {
+    await queueDeliverabilityProbe({
+      runId: run.id,
+      executeAfter: nowIso(),
+      force: true,
+      payload: { stage: "send", manual: true },
+    });
+    await createOutreachEvent({
+      runId: run.id,
+      eventType: "deliverability_probe_requested",
+      payload: {
+        reason: input.reason?.trim() || "Requested by user",
+      },
+    });
+    return { ok: true, reason: "Deliverability probe queued" };
+  }
+
+  if (input.action === "resume_sender_deliverability") {
+    const senderAccountId = String(input.senderAccountId ?? "").trim();
+    if (!senderAccountId) {
+      return { ok: false, reason: "Sender account id is required" };
+    }
+    const account = await getOutreachAccount(senderAccountId);
+    if (!account) {
+      return { ok: false, reason: "Sender account not found" };
+    }
+    await createOutreachEvent({
+      runId: run.id,
+      eventType: "sender_deliverability_resumed_manual",
+      payload: {
+        senderAccountId: account.id,
+        senderAccountName: account.name,
+        fromEmail: account.config.customerIo.fromEmail.trim(),
+        reason: input.reason?.trim() || "Manually resumed by user",
+      },
+    });
+    return { ok: true, reason: "Sender returned to rotation" };
+  }
+
   await updateOutreachRun(run.id, {
     status: "canceled",
     completedAt: nowIso(),
@@ -12072,21 +13662,86 @@ export async function ingestInboundReply(input: {
     return { ok: false, threadId: "", draftId: "", reason: "Run/brand/campaign mismatch" };
   }
 
+  const normalizedFrom = extractFirstEmailAddress(input.from) || input.from.trim().toLowerCase();
+  const normalizedTo = extractFirstEmailAddress(input.to) || input.to.trim().toLowerCase();
+  const normalizedSubject = input.subject.trim();
+  const normalizedBody = input.body.trim();
+
   const leads = await listRunLeads(run.id);
-  const lead = leads.find((item) => item.email.toLowerCase() === input.from.toLowerCase()) ?? null;
+  const lead =
+    leads.find((item) => extractFirstEmailAddress(item.email) === normalizedFrom) ??
+    leads.find((item) => item.email.toLowerCase() === normalizedFrom) ??
+    null;
   if (!lead) {
     return { ok: false, threadId: "", draftId: "", reason: "No lead matched for reply" };
   }
 
-  const sentiment = classifySentiment(input.body);
-  const { intent, confidence } = classifyIntentConfidence(input.body);
+  const automated = detectAutomatedReply({
+    from: input.from,
+    subject: normalizedSubject,
+    body: normalizedBody,
+  });
+  if (automated.skip) {
+    await createOutreachEvent({
+      runId: run.id,
+      eventType: "reply_auto_skipped",
+      payload: {
+        kind: automated.kind,
+        reason: automated.reason,
+        from: normalizedFrom,
+        subject: normalizedSubject,
+      },
+    });
+    return {
+      ok: true,
+      threadId: "",
+      draftId: "",
+      reason: automated.reason,
+    };
+  }
+
+  const [brand, campaign] = await Promise.all([
+    getBrandById(run.brandId),
+    getCampaignById(run.brandId, run.campaignId),
+  ]);
+  const variant = campaign?.experiments.find((item) => item.id === run.experimentId) ?? null;
+  const hypothesis = variant
+    ? campaign?.hypotheses.find((item) => item.id === variant.hypothesisId) ?? null
+    : null;
+  const runtimeExperiment = await getExperimentRecordByRuntimeRef(run.brandId, run.campaignId, run.experimentId);
+  const businessWindow = businessWindowFromExperimentEnvelope(runtimeExperiment?.testEnvelope);
+  const parsedOffer = parseOfferAndCta(runtimeExperiment?.offer ?? "");
+  const experimentOffer = parsedOffer.offer || runtimeExperiment?.offer || "";
+  const experimentCta = parsedOffer.cta;
+  const experimentAudience = runtimeExperiment?.audience || hypothesis?.actorQuery || "";
+  const resolvedLeadName = resolveReplyLeadName({
+    leadName: lead.name,
+    inboundFrom: input.from,
+    leadEmail: lead.email,
+  });
+  const replyPolicy = await evaluateReplyPolicy({
+    brandName: brand?.name ?? "",
+    brandWebsite: brand?.website ?? "",
+    campaignName: campaign?.name ?? "",
+    experimentName: variant?.name ?? "",
+    experimentOffer,
+    experimentAudience,
+    experimentNotes: variant?.notes ?? "",
+    from: input.from,
+    to: input.to,
+    subject: normalizedSubject,
+    body: normalizedBody,
+    leadName: resolvedLeadName,
+    leadEmail: lead.email,
+    leadCompany: lead.company ?? "",
+  });
 
   const { threads } = await listReplyThreadsByBrand(brandId);
   let thread = threads.find(
     (item) =>
       item.runId === run.id &&
       item.leadId === lead.id &&
-      item.subject.trim().toLowerCase() === input.subject.trim().toLowerCase()
+      item.subject.trim().toLowerCase() === normalizedSubject.toLowerCase()
   );
 
   if (!thread) {
@@ -12095,16 +13750,16 @@ export async function ingestInboundReply(input: {
       campaignId: run.campaignId,
       runId: run.id,
       leadId: lead.id,
-      subject: input.subject,
-      sentiment,
-      intent,
-      status: "new",
+      subject: normalizedSubject,
+      sentiment: replyPolicy.sentiment,
+      intent: replyPolicy.intent,
+      status: replyPolicy.closeThread ? "closed" : "new",
     });
   } else {
     const updated = await updateReplyThread(thread.id, {
-      sentiment,
-      intent,
-      status: "open",
+      sentiment: replyPolicy.sentiment,
+      intent: replyPolicy.intent,
+      status: replyPolicy.closeThread ? "closed" : "open",
       lastMessageAt: nowIso(),
     });
     if (updated) {
@@ -12116,10 +13771,10 @@ export async function ingestInboundReply(input: {
     threadId: thread.id,
     runId: run.id,
     direction: "inbound",
-    from: input.from,
-    to: input.to,
-    subject: input.subject,
-    body: input.body,
+    from: normalizedFrom || input.from.trim(),
+    to: normalizedTo || input.to.trim(),
+    subject: normalizedSubject,
+    body: normalizedBody,
     providerMessageId: input.providerMessageId ?? "",
   });
 
@@ -12129,20 +13784,6 @@ export async function ingestInboundReply(input: {
     reason: "",
     messageId: "",
   };
-  const [brand, campaign] = await Promise.all([
-    getBrandById(run.brandId),
-    getCampaignById(run.brandId, run.campaignId),
-  ]);
-  const variant = campaign?.experiments.find((item) => item.id === run.experimentId) ?? null;
-  const hypothesis = variant
-    ? campaign?.hypotheses.find((item) => item.id === variant.hypothesisId) ?? null
-    : null;
-  const runtimeExperiment = await getExperimentRecordByRuntimeRef(run.brandId, run.campaignId, run.experimentId);
-  const parsedOffer = parseOfferAndCta(runtimeExperiment?.offer ?? "");
-  const experimentOffer = parsedOffer.offer || runtimeExperiment?.offer || "";
-  const experimentCta = parsedOffer.cta;
-  const experimentAudience = runtimeExperiment?.audience || hypothesis?.actorQuery || "";
-
   const flowMap = await getPublishedConversationMapForExperiment(run.brandId, run.campaignId, run.experimentId);
   const session = flowMap ? await getConversationSessionByLead({ runId: run.id, leadId: lead.id }) : null;
 
@@ -12150,267 +13791,328 @@ export async function ingestInboundReply(input: {
     const graph = flowMap.publishedGraph;
     const currentNode = conversationNodeById(graph, session.currentNodeId);
     if (currentNode) {
-      const intentEdge = pickIntentEdge({
-        graph,
-        currentNodeId: currentNode.id,
-        intent,
-        confidence,
-      });
-      const fallbackEdge = pickFallbackEdge(graph, currentNode.id);
-      const selectedEdge = intentEdge ?? fallbackEdge;
-
       await createConversationEvent({
         sessionId: session.id,
         runId: run.id,
         eventType: "reply_classified",
         payload: {
-          intent,
-          confidence,
+          intent: replyPolicy.intent,
+          confidence: replyPolicy.confidence,
+          action: replyPolicy.action,
+          route: replyPolicy.route,
+          reason: replyPolicy.reason,
           fromNodeId: currentNode.id,
-          selectedEdgeId: selectedEdge?.id ?? "",
         },
       });
 
-      if (selectedEdge) {
-        const nextNode = conversationNodeById(graph, selectedEdge.toNodeId);
-        if (nextNode) {
-          const nextTurn = session.turnCount + 1;
-          const maxDepthReached = nextTurn >= graph.maxDepth;
-          const shouldComplete =
-            intent === "unsubscribe" || nextNode.kind === "terminal" || maxDepthReached;
+      if (replyPolicy.action === "no_reply") {
+        await updateConversationSession(session.id, {
+          state: "completed",
+          currentNodeId: currentNode.id,
+          turnCount: session.turnCount + 1,
+          lastIntent: replyPolicy.intent,
+          lastConfidence: replyPolicy.confidence,
+          lastNodeEnteredAt: nowIso(),
+          endedReason: replyPolicy.intent === "unsubscribe" ? "unsubscribe" : "no_reply_policy",
+        });
+        await createConversationEvent({
+          sessionId: session.id,
+          runId: run.id,
+          eventType: "session_completed",
+          payload: {
+            reason: replyPolicy.intent === "unsubscribe" ? "unsubscribe" : "no_reply_policy",
+            nodeId: currentNode.id,
+            route: replyPolicy.route,
+          },
+        });
+      } else {
+        const intentEdge = pickIntentEdge({
+          graph,
+          currentNodeId: currentNode.id,
+          intent: replyPolicy.intent,
+          confidence: replyPolicy.confidence,
+        });
+        const fallbackEdge = pickFallbackEdge(graph, currentNode.id);
+        const selectedEdge = intentEdge ?? fallbackEdge;
 
-          if (shouldComplete) {
-            await updateConversationSession(session.id, {
-              state: "completed",
-              currentNodeId: nextNode.id,
-              turnCount: nextTurn,
-              lastIntent: intent,
-              lastConfidence: confidence,
-              lastNodeEnteredAt: nowIso(),
-              endedReason:
-                intent === "unsubscribe"
-                  ? "unsubscribe"
-                  : maxDepthReached
-                    ? "max_depth_reached"
-                    : "terminal_node",
-            });
-            await createConversationEvent({
-              sessionId: session.id,
-              runId: run.id,
-              eventType: "session_completed",
-              payload: {
-                reason:
-                  intent === "unsubscribe"
+        if (selectedEdge) {
+          await createConversationEvent({
+            sessionId: session.id,
+            runId: run.id,
+            eventType: "reply_route_selected",
+            payload: {
+              selectedEdgeId: selectedEdge.id,
+              intent: replyPolicy.intent,
+              route: replyPolicy.route,
+            },
+          });
+        }
+
+        if (selectedEdge) {
+          const nextNode = conversationNodeById(graph, selectedEdge.toNodeId);
+          if (nextNode) {
+            const nextTurn = session.turnCount + 1;
+            const maxDepthReached = nextTurn >= graph.maxDepth;
+            const manualReviewRequired = replyPolicy.action === "manual_review";
+            const shouldComplete =
+              replyPolicy.intent === "unsubscribe" || nextNode.kind === "terminal" || maxDepthReached;
+
+            if (shouldComplete) {
+              await updateConversationSession(session.id, {
+                state: "completed",
+                currentNodeId: nextNode.id,
+                turnCount: nextTurn,
+                lastIntent: replyPolicy.intent,
+                lastConfidence: replyPolicy.confidence,
+                lastNodeEnteredAt: nowIso(),
+                endedReason:
+                  replyPolicy.intent === "unsubscribe"
                     ? "unsubscribe"
                     : maxDepthReached
                       ? "max_depth_reached"
                       : "terminal_node",
-                nodeId: nextNode.id,
-              },
-            });
-          } else {
-            const nextState = nextNode.autoSend ? "active" : "waiting_manual";
-            await updateConversationSession(session.id, {
-              state: nextState,
-              currentNodeId: nextNode.id,
-              turnCount: nextTurn,
-              lastIntent: intent,
-              lastConfidence: confidence,
-              lastNodeEnteredAt: nowIso(),
-              endedReason: "",
-            });
-            await createConversationEvent({
-              sessionId: session.id,
-              runId: run.id,
-              eventType: "session_transition",
-              payload: {
-                trigger: selectedEdge.trigger,
-                fromNodeId: currentNode.id,
-                toNodeId: nextNode.id,
-                edgeId: selectedEdge.id,
-              },
-            });
-
-            const runMessages = await listRunMessages(run.id);
-            const replyMessages = await listReplyMessagesByRun(run.id);
-            const threadHistory = await buildConversationThreadHistory({
-              runId: run.id,
-              leadId: lead.id,
-              leadEmail: lead.email,
-              sessionId: session.id,
-              threadId: thread.id,
-              runMessages,
-              replyMessages,
-            });
-
-            if (nextNode.autoSend) {
-              autoBranchScheduled = await scheduleConversationNodeMessage({
-                run,
-                lead,
-                sessionId: session.id,
-                node: nextNode,
-                step: nextTurn,
-                parentMessageId: inboundMessage.id,
-                brandName: brand?.name ?? "",
-                brandWebsite: brand?.website ?? "",
-                brandTone: brand?.tone ?? "",
-                brandNotes: brand?.notes ?? "",
-                campaignName: campaign?.name ?? "",
-                campaignGoal: campaign?.objective.goal ?? "",
-                campaignConstraints: campaign?.objective.constraints ?? "",
-                variantId: variant?.id ?? "",
-                variantName: variant?.name ?? "",
-                experimentOffer,
-                experimentCta,
-                experimentAudience,
-                experimentNotes: variant?.notes ?? "",
-                intent,
-                intentConfidence: confidence,
-                priorNodePath: [session.currentNodeId, nextNode.id],
-                threadHistory,
-                maxDepth: graph.maxDepth,
-                waitMinutes: selectedEdge.waitMinutes,
-                latestInboundSubject: input.subject,
-                latestInboundBody: input.body,
-                existingMessages: runMessages,
               });
-              if (autoBranchScheduled.ok) {
-                await enqueueOutreachJob({
-                  runId: run.id,
-                  jobType: "dispatch_messages",
-                  executeAfter: nowIso(),
-                });
-                await createConversationEvent({
-                  sessionId: session.id,
-                  runId: run.id,
-                  eventType: "node_message_scheduled",
-                  payload: {
-                    nodeId: nextNode.id,
-                    trigger: selectedEdge.trigger,
-                  },
-                });
-                await createOutreachEvent({
-                  runId: run.id,
-                  eventType: "message_scheduled",
-                  payload: {
-                    count: 1,
-                    mode: "conversation_branch",
-                  },
-                });
-              } else {
-                await createConversationEvent({
-                  sessionId: session.id,
-                  runId: run.id,
-                  eventType: "node_schedule_failed",
-                  payload: {
-                    nodeId: nextNode.id,
-                    trigger: selectedEdge.trigger,
-                    reason: autoBranchScheduled.reason,
-                  },
-                });
-              }
+              await createConversationEvent({
+                sessionId: session.id,
+                runId: run.id,
+                eventType: "session_completed",
+                payload: {
+                  reason:
+                    replyPolicy.intent === "unsubscribe"
+                      ? "unsubscribe"
+                      : maxDepthReached
+                        ? "max_depth_reached"
+                        : "terminal_node",
+                  nodeId: nextNode.id,
+                },
+              });
             } else {
-              const composed = await generateConversationNodeContent({
-                node: nextNode,
-                run,
-                lead,
-                sessionId: session.id,
-                parentMessageId: inboundMessage.id,
-                brandName: brand?.name ?? "",
-                brandWebsite: brand?.website ?? "",
-                brandTone: brand?.tone ?? "",
-                brandNotes: brand?.notes ?? "",
-                campaignName: campaign?.name ?? "",
-                campaignGoal: campaign?.objective.goal ?? "",
-                campaignConstraints: campaign?.objective.constraints ?? "",
-                variantId: variant?.id ?? "",
-                variantName: variant?.name ?? "",
-                experimentOffer,
-                experimentCta,
-                experimentAudience,
-                experimentNotes: variant?.notes ?? "",
-                latestInboundSubject: input.subject,
-                latestInboundBody: input.body,
-                intent,
-                intentConfidence: confidence,
-                priorNodePath: [session.currentNodeId, nextNode.id],
-                threadHistory,
-                maxDepth: graph.maxDepth,
+              const nextState =
+                nextNode.autoSend && replyPolicy.autoSendAllowed ? "active" : "waiting_manual";
+              await updateConversationSession(session.id, {
+                state: nextState,
+                currentNodeId: nextNode.id,
+                turnCount: nextTurn,
+                lastIntent: replyPolicy.intent,
+                lastConfidence: replyPolicy.confidence,
+                lastNodeEnteredAt: nowIso(),
+                endedReason: "",
               });
-              if (!composed.ok) {
-                await createConversationEvent({
+              await createConversationEvent({
+                sessionId: session.id,
+                runId: run.id,
+                eventType: "session_transition",
+                payload: {
+                  trigger: selectedEdge.trigger,
+                  fromNodeId: currentNode.id,
+                  toNodeId: nextNode.id,
+                  edgeId: selectedEdge.id,
+                },
+              });
+
+              const runMessages = await listRunMessages(run.id);
+              const replyMessages = await listReplyMessagesByRun(run.id);
+              const threadHistory = await buildConversationThreadHistory({
+                runId: run.id,
+                leadId: lead.id,
+                leadEmail: lead.email,
+                sessionId: session.id,
+                threadId: thread.id,
+                runMessages,
+                replyMessages,
+              });
+
+              if (nextNode.autoSend && replyPolicy.autoSendAllowed) {
+                const replyTriggeredWaitMinutes = replyTriggeredAutoSendWaitMinutes(
+                  graph,
+                  nextNode,
+                  selectedEdge.waitMinutes
+                );
+                autoBranchScheduled = await scheduleConversationNodeMessage({
+                  run,
+                  lead: { ...lead, name: resolvedLeadName || lead.name },
                   sessionId: session.id,
-                  runId: run.id,
-                  eventType: "manual_node_invalid",
-                  payload: {
-                    nodeId: nextNode.id,
-                    reason: composed.reason,
-                    trace: composed.trace,
+                  node: nextNode,
+                  step: nextTurn,
+                  parentMessageId: inboundMessage.id,
+                  brandName: brand?.name ?? "",
+                  brandWebsite: brand?.website ?? "",
+                  brandTone: brand?.tone ?? "",
+                  brandNotes: brand?.notes ?? "",
+                  campaignName: campaign?.name ?? "",
+                  campaignGoal: campaign?.objective.goal ?? "",
+                  campaignConstraints: campaign?.objective.constraints ?? "",
+                  variantId: variant?.id ?? "",
+                  variantName: variant?.name ?? "",
+                  experimentOffer,
+                  experimentCta,
+                  experimentAudience,
+                  experimentNotes: variant?.notes ?? "",
+                  intent: replyPolicy.intent,
+                  intentConfidence: replyPolicy.confidence,
+                  priorNodePath: [session.currentNodeId, nextNode.id],
+                  threadHistory,
+                  maxDepth: graph.maxDepth,
+                  waitMinutes: replyTriggeredWaitMinutes,
+                  businessWindow,
+                  latestInboundSubject: normalizedSubject,
+                  latestInboundBody: normalizedBody,
+                  replyPolicy: {
+                    action: replyPolicy.action,
+                    route: replyPolicy.route,
+                    reason: replyPolicy.reason,
+                    guidance: replyPolicy.guidance,
+                    prohibited: replyPolicy.prohibited,
                   },
+                  existingMessages: runMessages,
                 });
-                await createConversationEvent({
-                  sessionId: session.id,
-                  runId: run.id,
-                  eventType: "conversation_prompt_rejected",
-                  payload: {
-                    nodeId: nextNode.id,
-                    reason: composed.reason,
-                    trace: composed.trace,
-                  },
-                });
-                await createOutreachEvent({
-                  runId: run.id,
-                  eventType: "conversation_prompt_rejected",
-                  payload: {
-                    nodeId: nextNode.id,
-                    reason: composed.reason,
-                  },
-                });
-                await createOutreachEvent({
-                  runId: run.id,
-                  eventType: "conversation_prompt_failed",
-                  payload: {
-                    nodeId: nextNode.id,
-                    reason: composed.reason,
-                  },
-                });
+                if (autoBranchScheduled.ok) {
+                  await enqueueOutreachJob({
+                    runId: run.id,
+                    jobType: "dispatch_messages",
+                    executeAfter: nowIso(),
+                  });
+                  await createConversationEvent({
+                    sessionId: session.id,
+                    runId: run.id,
+                    eventType: "node_message_scheduled",
+                    payload: {
+                      nodeId: nextNode.id,
+                      trigger: selectedEdge.trigger,
+                    },
+                  });
+                  await createOutreachEvent({
+                    runId: run.id,
+                    eventType: "message_scheduled",
+                    payload: {
+                      count: 1,
+                      mode: "conversation_branch",
+                    },
+                  });
+                } else {
+                  await createConversationEvent({
+                    sessionId: session.id,
+                    runId: run.id,
+                    eventType: "node_schedule_failed",
+                    payload: {
+                      nodeId: nextNode.id,
+                      trigger: selectedEdge.trigger,
+                      reason: autoBranchScheduled.reason,
+                    },
+                  });
+                }
               } else {
-                const draft = await createReplyDraft({
-                  threadId: thread.id,
-                  brandId: run.brandId,
-                  runId: run.id,
-                  subject: composed.subject,
-                  body: composed.body,
-                  reason: `Manual branch: ${nextNode.title}`,
-                });
-                draftId = draft.id;
-                await createConversationEvent({
+                const composed = await generateConversationNodeContent({
+                  node: nextNode,
+                  run,
+                  lead: { ...lead, name: resolvedLeadName || lead.name },
                   sessionId: session.id,
-                  runId: run.id,
-                  eventType: "conversation_prompt_generated",
-                  payload: {
-                    nodeId: nextNode.id,
-                    draftId,
-                    trace: composed.trace,
+                  parentMessageId: inboundMessage.id,
+                  brandName: brand?.name ?? "",
+                  brandWebsite: brand?.website ?? "",
+                  brandTone: brand?.tone ?? "",
+                  brandNotes: brand?.notes ?? "",
+                  campaignName: campaign?.name ?? "",
+                  campaignGoal: campaign?.objective.goal ?? "",
+                  campaignConstraints: campaign?.objective.constraints ?? "",
+                  variantId: variant?.id ?? "",
+                  variantName: variant?.name ?? "",
+                  experimentOffer,
+                  experimentCta,
+                  experimentAudience,
+                  experimentNotes: variant?.notes ?? "",
+                  latestInboundSubject: normalizedSubject,
+                  latestInboundBody: normalizedBody,
+                  intent: replyPolicy.intent,
+                  intentConfidence: replyPolicy.confidence,
+                  priorNodePath: [session.currentNodeId, nextNode.id],
+                  threadHistory,
+                  maxDepth: graph.maxDepth,
+                  replyPolicy: {
+                    action: replyPolicy.action,
+                    route: replyPolicy.route,
+                    reason: replyPolicy.reason,
+                    guidance: replyPolicy.guidance,
+                    prohibited: replyPolicy.prohibited,
                   },
                 });
-                await createOutreachEvent({
-                  runId: run.id,
-                  eventType: "conversation_prompt_generated",
-                  payload: {
-                    nodeId: nextNode.id,
-                    draftId,
-                  },
-                });
-                await createConversationEvent({
-                  sessionId: session.id,
-                  runId: run.id,
-                  eventType: "manual_node_required",
-                  payload: {
-                    nodeId: nextNode.id,
-                    reason: "auto_send_disabled",
-                  },
-                });
+                if (!composed.ok) {
+                  await createConversationEvent({
+                    sessionId: session.id,
+                    runId: run.id,
+                    eventType: "manual_node_invalid",
+                    payload: {
+                      nodeId: nextNode.id,
+                      reason: composed.reason,
+                      trace: composed.trace,
+                    },
+                  });
+                  await createConversationEvent({
+                    sessionId: session.id,
+                    runId: run.id,
+                    eventType: "conversation_prompt_rejected",
+                    payload: {
+                      nodeId: nextNode.id,
+                      reason: composed.reason,
+                      trace: composed.trace,
+                    },
+                  });
+                  await createOutreachEvent({
+                    runId: run.id,
+                    eventType: "conversation_prompt_rejected",
+                    payload: {
+                      nodeId: nextNode.id,
+                      reason: composed.reason,
+                    },
+                  });
+                  await createOutreachEvent({
+                    runId: run.id,
+                    eventType: "conversation_prompt_failed",
+                    payload: {
+                      nodeId: nextNode.id,
+                      reason: composed.reason,
+                    },
+                  });
+                } else {
+                  const draft = await createReplyDraft({
+                    threadId: thread.id,
+                    brandId: run.brandId,
+                    runId: run.id,
+                    subject: composed.subject,
+                    body: composed.body,
+                    reason: manualReviewRequired
+                      ? `Manual review: ${replyPolicy.route || nextNode.title}`
+                      : `Manual branch: ${nextNode.title}`,
+                  });
+                  draftId = draft.id;
+                  await createConversationEvent({
+                    sessionId: session.id,
+                    runId: run.id,
+                    eventType: "conversation_prompt_generated",
+                    payload: {
+                      nodeId: nextNode.id,
+                      draftId,
+                      trace: composed.trace,
+                    },
+                  });
+                  await createOutreachEvent({
+                    runId: run.id,
+                    eventType: "conversation_prompt_generated",
+                    payload: {
+                      nodeId: nextNode.id,
+                      draftId,
+                    },
+                  });
+                  await createConversationEvent({
+                    sessionId: session.id,
+                    runId: run.id,
+                    eventType: "manual_node_required",
+                    payload: {
+                      nodeId: nextNode.id,
+                      reason: manualReviewRequired ? "reply_policy_manual_review" : "auto_send_disabled",
+                    },
+                  });
+                }
               }
             }
           }
@@ -12424,13 +14126,20 @@ export async function ingestInboundReply(input: {
       runId: run.id,
       eventType: "reply_draft_skipped",
       payload: {
-        reason: "No valid conversation branch produced a reply draft",
-        intent,
+        reason:
+          replyPolicy.action === "no_reply"
+            ? `reply_policy:${replyPolicy.route || "no_reply"}`
+            : "No valid conversation branch produced a reply draft",
+        intent: replyPolicy.intent,
+        action: replyPolicy.action,
+        route: replyPolicy.route,
       },
     });
   }
 
-  await updateRunLead(lead.id, { status: intent === "unsubscribe" ? "unsubscribed" : "replied" });
+  await updateRunLead(lead.id, {
+    status: replyPolicy.intent === "unsubscribe" ? "unsubscribed" : "replied",
+  });
 
   const messages = await listRunMessages(run.id);
   const { threads: refreshedThreads } = await listReplyThreadsByBrand(run.brandId);
@@ -12453,8 +14162,10 @@ export async function ingestInboundReply(input: {
     eventType: "reply_ingested",
     payload: {
       threadId: thread.id,
-      intent,
-      confidence,
+      intent: replyPolicy.intent,
+      confidence: replyPolicy.confidence,
+      action: replyPolicy.action,
+      route: replyPolicy.route,
     },
   });
   if (draftId) {
@@ -12496,6 +14207,20 @@ export async function approveReplyDraftAndSend(input: {
     return { ok: false, reason: "Reply mailbox account missing or invalid" };
   }
 
+  const deliveryAccount = await getOutreachAccount(run.accountId);
+  const deliverySecrets = deliveryAccount ? await getOutreachAccountSecrets(deliveryAccount.id) : null;
+  const sendAccount =
+    deliveryAccount && deliveryAccount.status === "active" && deliveryAccount.config.customerIo.siteId.trim()
+      ? deliveryAccount
+      : mailbox.account;
+  const sendSecrets =
+    sendAccount.id === mailbox.account.id
+      ? mailbox.secrets
+      : deliverySecrets;
+  if (!sendSecrets) {
+    return { ok: false, reason: "Delivery account credentials are missing" };
+  }
+
   const leads = await listRunLeads(run.id);
   const lead = leads.find((item) => item.id === thread.leadId);
   if (!lead) {
@@ -12504,9 +14229,10 @@ export async function approveReplyDraftAndSend(input: {
 
   const send = await sendReplyDraftAsEvent({
     draft,
-    account: mailbox.account,
-    secrets: mailbox.secrets,
+    account: sendAccount,
+    secrets: sendSecrets,
     recipient: lead.email,
+    replyToEmail: mailbox.account.config.mailbox.email,
   });
 
   if (!send.ok) {
@@ -12527,11 +14253,11 @@ export async function approveReplyDraftAndSend(input: {
     threadId: thread.id,
     runId: run.id,
     direction: "outbound",
-    from: mailbox.account.config.mailbox.email,
+    from: sendAccount.config.customerIo.fromEmail.trim() || mailbox.account.config.mailbox.email,
     to: lead.email,
     subject: draft.subject,
     body: draft.body,
-    providerMessageId: `reply_${Date.now().toString(36)}`,
+    providerMessageId: send.providerMessageId || `reply_${Date.now().toString(36)}`,
   });
 
   await createOutreachEvent({

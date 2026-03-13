@@ -4,7 +4,6 @@ import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ArrowRight, FolderKanban, FlaskConical, Inbox, Mail, Plus } from "lucide-react";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -23,10 +22,15 @@ import type { BrandRecord, ExperimentRecord, OutreachAccount, ScaleCampaignRecor
 import { Select } from "@/components/ui/select";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { EmptyState, PageIntro, SectionPanel, StatLedger } from "@/components/ui/page-layout";
 
 function nextWorkspace(experiment: ExperimentRecord | null) {
   if (!experiment) return "experiments";
   return `experiments/${experiment.id}`;
+}
+
+function formatCount(value: number) {
+  return value.toString().padStart(2, "0");
 }
 
 export default function BrandHomeClient({ brandId }: { brandId: string }) {
@@ -116,13 +120,12 @@ export default function BrandHomeClient({ brandId }: { brandId: string }) {
   );
 
   return (
-    <div className="space-y-5">
-      <Card>
-        <CardHeader className="flex flex-row items-start justify-between gap-4">
-          <div>
-            <CardTitle>{brand?.name || "Brand"}</CardTitle>
-            <CardDescription>Outbound experimentation workspace · {brand?.website || "No website"}</CardDescription>
-          </div>
+    <div className="space-y-8">
+      <PageIntro
+        eyebrow={brand?.website || "Brand workspace"}
+        title={brand?.name || "Brand"}
+        description={`Operate experiments, campaigns, inbox, and sender context for ${brand?.name || "this brand"} without splitting the proof from the work.`}
+        actions={
           <Button
             type="button"
             onClick={async () => {
@@ -141,41 +144,42 @@ export default function BrandHomeClient({ brandId }: { brandId: string }) {
             disabled={!brand || creating}
           >
             <Plus className="h-4 w-4" />
-            {creating ? "Creating..." : "New Experiment"}
+            {creating ? "Creating..." : "New experiment"}
           </Button>
-        </CardHeader>
-        <CardContent className="grid gap-3 md:grid-cols-4">
-          <div>
-            <div className="text-xs text-[color:var(--muted-foreground)]">Tone</div>
-            <div className="mt-1 text-sm">{brand?.tone || "Not set"}</div>
-          </div>
-          <div>
-            <div className="text-xs text-[color:var(--muted-foreground)]">Target markets</div>
-            <div className="mt-1 text-sm">{brand?.targetMarkets?.length ?? 0}</div>
-          </div>
-          <div>
-            <div className="text-xs text-[color:var(--muted-foreground)]">Experiments</div>
-            <div className="mt-1 text-sm">{experiments.length}</div>
-          </div>
-          <div>
-            <div className="text-xs text-[color:var(--muted-foreground)]">Campaigns</div>
-            <div className="mt-1 text-sm">{campaigns.length}</div>
-          </div>
-          <div>
-            <div className="text-xs text-[color:var(--muted-foreground)]">Notes</div>
-            <div className="mt-1 text-sm">{brand?.notes || "No notes"}</div>
-          </div>
-        </CardContent>
-      </Card>
+        }
+        aside={
+          <StatLedger
+            items={[
+              {
+                label: "Tone",
+                value: brand?.tone ? "Set" : "Open",
+                detail: brand?.tone || "Voice still needs a clear articulation.",
+              },
+              {
+                label: "Markets",
+                value: formatCount(brand?.targetMarkets?.length ?? 0),
+                detail: `${brand?.targetMarkets?.slice(0, 2).join(", ") || "No markets chosen yet"}`,
+              },
+              {
+                label: "Experiments",
+                value: formatCount(experiments.length),
+                detail: experiments.length ? "Tests are attached to the same brand context." : "No experiments started yet.",
+              },
+              {
+                label: "Campaigns",
+                value: formatCount(campaigns.length),
+                detail: campaigns.length ? "Promoted work is live in this desk." : "Nothing has been promoted yet.",
+              },
+            ]}
+          />
+        }
+      />
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Brand Profile</CardTitle>
-          <CardDescription>
-            Manage target markets, ICPs, and product context after onboarding.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="grid gap-4">
+      <SectionPanel
+        title="Brand profile"
+        description="Manage target markets, ICPs, and product context after onboarding."
+      >
+        <div className="grid gap-4">
           <div className="grid gap-2">
             <Label htmlFor="product">Product summary</Label>
             <Textarea
@@ -255,19 +259,18 @@ export default function BrandHomeClient({ brandId }: { brandId: string }) {
               {profileSaving ? "Saving profile..." : "Save Brand Profile"}
             </Button>
           </div>
-        </CardContent>
-      </Card>
+        </div>
+      </SectionPanel>
 
       {error ? <div className="text-sm text-[color:var(--danger)]">{error}</div> : null}
       {loading ? <div className="text-sm text-[color:var(--muted-foreground)]">Loading brand...</div> : null}
 
-      <div className="grid gap-4 lg:grid-cols-[1.2fr_0.8fr]">
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Next Best Action</CardTitle>
-            <CardDescription>Continue the most important experiment now.</CardDescription>
-          </CardHeader>
-          <CardContent>
+      <div className="grid gap-5 lg:grid-cols-[1.2fr_0.8fr]">
+        <SectionPanel
+          title="Next move"
+          description="Continue the highest-value experiment now."
+          contentClassName="py-6"
+        >
             {activeExperiment ? (
               <div className="space-y-3">
                 <Badge variant="accent">{activeExperiment.name}</Badge>
@@ -289,21 +292,19 @@ export default function BrandHomeClient({ brandId }: { brandId: string }) {
                 </Button>
               </div>
             )}
-          </CardContent>
-        </Card>
+        </SectionPanel>
 
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Active Experiments</CardTitle>
-            <CardDescription>Running, sourcing, ready, or paused experiments.</CardDescription>
-          </CardHeader>
-          <CardContent className="grid gap-2">
+        <SectionPanel
+          title="Active experiments"
+          description="Running, sourcing, ready, or paused work."
+          contentClassName="grid gap-2"
+        >
             {activeExperiments.length ? (
               activeExperiments.map((item) => (
                 <Link
                   key={item.id}
                   href={`/brands/${brandId}/experiments/${item.id}`}
-                  className="rounded-lg border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-2 text-sm hover:bg-[color:var(--surface-hover)]"
+                  className="rounded-[10px] border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-2.5 text-sm transition-colors hover:bg-[color:var(--surface-hover)]"
                 >
                   <div className="font-medium">{item.name}</div>
                   <div className="text-xs text-[color:var(--muted-foreground)]">{item.status}</div>
@@ -317,63 +318,53 @@ export default function BrandHomeClient({ brandId }: { brandId: string }) {
                 <FlaskConical className="h-4 w-4" /> Open Experiments
               </Link>
             </Button>
-          </CardContent>
-        </Card>
+        </SectionPanel>
       </div>
 
       <div className="grid gap-4 md:grid-cols-3">
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Campaigns Snapshot</CardTitle>
-            <CardDescription>Scale programs promoted from experiment winners.</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-2">
-            <div className="text-2xl font-semibold">{campaigns.length}</div>
-            <Button asChild variant="outline">
-              <Link href={`/brands/${brandId}/campaigns`}>
-                <FolderKanban className="h-4 w-4" /> Open Campaigns
-              </Link>
-            </Button>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Lead Pool</CardTitle>
-            <CardDescription>Verified and operational leads in this brand workspace.</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-2">
-            <div className="text-2xl font-semibold">{brand?.leads?.length ?? 0}</div>
-            <Button asChild variant="outline">
-              <Link href={`/brands/${brandId}/leads`}>
-                <Mail className="h-4 w-4" /> Open Leads
-              </Link>
-            </Button>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Reply Signals</CardTitle>
-            <CardDescription>Recent conversations and action-ready replies.</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-2">
-            <div className="text-2xl font-semibold">{brand?.inbox?.length ?? 0}</div>
-            <Button asChild variant="outline">
-              <Link href={`/brands/${brandId}/inbox`}>
-                <Inbox className="h-4 w-4" /> Open Inbox
-              </Link>
-            </Button>
-          </CardContent>
-        </Card>
+        <SectionPanel
+          title="Campaigns"
+          description="Scaled programs promoted from experiment winners."
+          contentClassName="space-y-3"
+        >
+          <div className="font-[family:var(--font-brand)] text-[2.4rem] leading-none tracking-[-0.07em]">{campaigns.length}</div>
+          <Button asChild variant="outline">
+            <Link href={`/brands/${brandId}/campaigns`}>
+              <FolderKanban className="h-4 w-4" /> Open campaigns
+            </Link>
+          </Button>
+        </SectionPanel>
+        <SectionPanel
+          title="Lead pool"
+          description="Verified and operational leads in this workspace."
+          contentClassName="space-y-3"
+        >
+          <div className="font-[family:var(--font-brand)] text-[2.4rem] leading-none tracking-[-0.07em]">{brand?.leads?.length ?? 0}</div>
+          <Button asChild variant="outline">
+            <Link href={`/brands/${brandId}/leads`}>
+              <Mail className="h-4 w-4" /> Open leads
+            </Link>
+          </Button>
+        </SectionPanel>
+        <SectionPanel
+          title="Reply signals"
+          description="Recent conversations and action-ready replies."
+          contentClassName="space-y-3"
+        >
+          <div className="font-[family:var(--font-brand)] text-[2.4rem] leading-none tracking-[-0.07em]">{brand?.inbox?.length ?? 0}</div>
+          <Button asChild variant="outline">
+            <Link href={`/brands/${brandId}/inbox`}>
+              <Inbox className="h-4 w-4" /> Open inbox
+            </Link>
+          </Button>
+        </SectionPanel>
       </div>
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Outreach delivery account</CardTitle>
-          <CardDescription>
-            Choose the delivery account for this brand. Reply mailbox assignment is managed in Outreach Settings.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="grid gap-3 md:grid-cols-[1fr_auto] md:items-center">
+      <SectionPanel
+        title="Outreach delivery account"
+        description="Choose the sender account for this brand. Reply mailbox assignment is handled in Outreach Settings."
+      >
+        <div className="grid gap-3 md:grid-cols-[1fr_auto] md:items-center">
           <Select
             value={assignedAccountId}
             onChange={async (event) => {
@@ -396,28 +387,36 @@ export default function BrandHomeClient({ brandId }: { brandId: string }) {
           <Button asChild variant="outline">
             <Link href="/settings/outreach">Manage Accounts</Link>
           </Button>
-        </CardContent>
-      </Card>
+        </div>
+      </SectionPanel>
 
       {campaigns.length ? (
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Promoted campaigns</CardTitle>
-            <CardDescription>Scale-only campaigns promoted from successful experiments.</CardDescription>
-          </CardHeader>
-          <CardContent className="grid gap-2">
-            {campaigns.slice(0, 5).map((campaign) => (
-              <Link
-                key={campaign.id}
-                href={`/brands/${brandId}/campaigns/${campaign.id}`}
-                className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-2 text-sm hover:bg-[color:var(--surface-hover)]"
-              >
-                {campaign.name} · {campaign.status}
-              </Link>
-            ))}
-          </CardContent>
-        </Card>
-      ) : null}
+        <SectionPanel
+          title="Promoted campaigns"
+          description="Scale-only campaigns promoted from successful experiments."
+          contentClassName="grid gap-2"
+        >
+          {campaigns.slice(0, 5).map((campaign) => (
+            <Link
+              key={campaign.id}
+              href={`/brands/${brandId}/campaigns/${campaign.id}`}
+              className="rounded-[10px] border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-2.5 text-sm transition-colors hover:bg-[color:var(--surface-hover)]"
+            >
+              {campaign.name} · {campaign.status}
+            </Link>
+          ))}
+        </SectionPanel>
+      ) : (
+        <EmptyState
+          title="No promoted campaigns yet."
+          description="Promote a winning experiment and it will appear here with the sender, proof, and current state still attached."
+          actions={
+            <Button asChild variant="outline">
+              <Link href={`/brands/${brandId}/experiments`}>Open experiments</Link>
+            </Button>
+          }
+        />
+      )}
     </div>
   );
 }

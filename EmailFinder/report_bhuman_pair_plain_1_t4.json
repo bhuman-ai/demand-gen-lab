@@ -1,0 +1,168 @@
+{
+  "benchmark": {
+    "loader": {
+      "case_count": 2,
+      "ignored": [],
+      "reason": null
+    },
+    "result": {
+      "case_count": 2,
+      "cases": [
+        {
+          "attempts": [
+            {
+              "attempt": 1,
+              "email": "don@bhuman.ai",
+              "error": "timed out",
+              "mail_code": null,
+              "mail_message": "",
+              "mx_host": "smtp.google.com",
+              "smtp_code": null,
+              "smtp_message": "",
+              "status": "unknown",
+              "timings_ms": {
+                "total": 20013.47
+              }
+            }
+          ],
+          "domain": "bhuman.ai",
+          "email": "don@bhuman.ai",
+          "label": "known_real",
+          "mx_records": [
+            {
+              "host": "smtp.google.com",
+              "priority": 1
+            }
+          ],
+          "summary": {
+            "connect_timing_ms": null,
+            "rcpt_timing_ms": null,
+            "smtp_code_counts": {
+              "None": 1
+            },
+            "stage": "completed",
+            "status_counts": {
+              "unknown": 1
+            },
+            "total_timing_ms": {
+              "count": 1,
+              "max_ms": 20013.47,
+              "mean_ms": 20013.47,
+              "median_ms": 20013.47,
+              "min_ms": 20013.47
+            }
+          }
+        },
+        {
+          "attempts": [
+            {
+              "attempt": 1,
+              "email": "x9qk2m7v1p@bhuman.ai",
+              "error": "timed out",
+              "mail_code": null,
+              "mail_message": "",
+              "mx_host": "smtp.google.com",
+              "smtp_code": null,
+              "smtp_message": "",
+              "status": "unknown",
+              "timings_ms": {
+                "total": 20010.55
+              }
+            }
+          ],
+          "domain": "bhuman.ai",
+          "email": "x9qk2m7v1p@bhuman.ai",
+          "label": "generic_random",
+          "mx_records": [
+            {
+              "host": "smtp.google.com",
+              "priority": 1
+            }
+          ],
+          "summary": {
+            "connect_timing_ms": null,
+            "rcpt_timing_ms": null,
+            "smtp_code_counts": {
+              "None": 1
+            },
+            "stage": "completed",
+            "status_counts": {
+              "unknown": 1
+            },
+            "total_timing_ms": {
+              "count": 1,
+              "max_ms": 20010.55,
+              "mean_ms": 20010.55,
+              "median_ms": 20010.55,
+              "min_ms": 20010.55
+            }
+          }
+        }
+      ],
+      "label_summary": {
+        "generic_random": {
+          "attempt_count": 1,
+          "rcpt_timing_ms": null,
+          "status_counts": {
+            "unknown": 1
+          },
+          "total_timing_ms": {
+            "count": 1,
+            "max_ms": 20010.55,
+            "mean_ms": 20010.55,
+            "median_ms": 20010.55,
+            "min_ms": 20010.55
+          }
+        },
+        "known_real": {
+          "attempt_count": 1,
+          "rcpt_timing_ms": null,
+          "status_counts": {
+            "unknown": 1
+          },
+          "total_timing_ms": {
+            "count": 1,
+            "max_ms": 20013.47,
+            "mean_ms": 20013.47,
+            "median_ms": 20013.47,
+            "min_ms": 20013.47
+          }
+        }
+      },
+      "runs_per_email": 1,
+      "stage": "completed"
+    },
+    "stage": "completed"
+  },
+  "generated_at_utc": "2026-03-03T12:38:12.449651+00:00",
+  "input": {
+    "domain": "",
+    "name": ""
+  },
+  "settings": {
+    "api_consensus_enabled": false,
+    "benchmark_file": "benchmark_cases.bhuman_pair.csv",
+    "benchmark_max_cases": 50,
+    "benchmark_pause_ms": 0,
+    "benchmark_runs": 1,
+    "benchmark_starttls": false,
+    "consensus_delay_ms": 250,
+    "consensus_max_candidates": 6,
+    "consensus_providers": [
+      "hunter",
+      "abstract"
+    ],
+    "doh_enabled": true,
+    "doh_via_curl": false,
+    "from_address": "don@bhuman.ai",
+    "known_emails": [],
+    "max_candidates": 12,
+    "osint_delay_ms": 300,
+    "osint_enabled": false,
+    "osint_max_candidates": 8,
+    "osint_max_results": 6,
+    "pause_ms": 700,
+    "probe_smtp": false,
+    "timeout_seconds": 4.0
+  }
+}

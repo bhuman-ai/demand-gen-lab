@@ -10,6 +10,7 @@ import {
   testNamecheapProvisioningConnection,
   type ProvisioningProviderTestResult,
 } from "@/lib/outreach-provisioning";
+import { testGooglePostmasterDeliverabilityConnection } from "@/lib/outreach-deliverability";
 
 function asRecord(value: unknown): Record<string, unknown> {
   if (value && typeof value === "object" && !Array.isArray(value)) {
@@ -20,12 +21,12 @@ function asRecord(value: unknown): Record<string, unknown> {
 
 function providerSelection(value: unknown) {
   const normalized = String(value ?? "").trim().toLowerCase();
-  if (normalized === "customerio" || normalized === "namecheap") return normalized;
+  if (normalized === "customerio" || normalized === "namecheap" || normalized === "deliverability") return normalized;
   return "all";
 }
 
 function failureResult(
-  provider: "customerio" | "namecheap",
+  provider: "customerio" | "namecheap" | "deliverability",
   message: string,
   details: Record<string, unknown> = {}
 ): ProvisioningProviderTestResult {
@@ -46,7 +47,7 @@ export async function POST(request: Request) {
       getOutreachProvisioningSettingsSecrets(),
     ]);
 
-    const tests: Partial<Record<"customerIo" | "namecheap", ProvisioningProviderTestResult>> = {};
+    const tests: Partial<Record<"customerIo" | "namecheap" | "deliverability", ProvisioningProviderTestResult>> = {};
     const now = new Date().toISOString();
 
     if (provider === "customerio" || provider === "all") {
@@ -94,6 +95,32 @@ export async function POST(request: Request) {
       }
     }
 
+    if (provider === "deliverability" || provider === "all") {
+      try {
+        tests.deliverability =
+          settings.deliverability.provider === "google_postmaster" &&
+          settings.deliverability.monitoredDomains.length > 0 &&
+          secrets.deliverabilityGoogleClientId.trim() &&
+          secrets.deliverabilityGoogleClientSecret.trim() &&
+          secrets.deliverabilityGoogleRefreshToken.trim()
+            ? await testGooglePostmasterDeliverabilityConnection({
+                clientId: secrets.deliverabilityGoogleClientId,
+                clientSecret: secrets.deliverabilityGoogleClientSecret,
+                refreshToken: secrets.deliverabilityGoogleRefreshToken,
+                domains: settings.deliverability.monitoredDomains,
+              })
+            : failureResult(
+                "deliverability",
+                "Saved deliverability defaults are incomplete. Add monitored domains plus Google Postmaster OAuth credentials first."
+              );
+      } catch (error) {
+        tests.deliverability = failureResult(
+          "deliverability",
+          error instanceof Error ? error.message : "Deliverability connection test failed"
+        );
+      }
+    }
+
     const updatedSettings = await updateOutreachProvisioningSettings({
       customerIo: tests.customerIo
         ? {
@@ -111,6 +138,32 @@ export async function POST(request: Request) {
             lastValidatedAt: now,
             lastValidatedStatus: tests.namecheap.ok ? "pass" : "fail",
             lastValidationMessage: tests.namecheap.message,
+          }
+        : undefined,
+      deliverability: tests.deliverability
+        ? {
+            lastValidatedAt: now,
+            lastValidatedStatus: tests.deliverability.ok ? "pass" : "fail",
+            lastValidationMessage: tests.deliverability.message,
+            lastCheckedAt:
+              typeof tests.deliverability.details.checkedAt === "string"
+                ? (tests.deliverability.details.checkedAt as string)
+                : settings.deliverability.lastCheckedAt,
+            lastHealthStatus:
+              typeof tests.deliverability.details.overallStatus === "string"
+                ? (tests.deliverability.details.overallStatus as "unknown" | "healthy" | "warning" | "critical")
+                : settings.deliverability.lastHealthStatus,
+            lastHealthScore:
+              typeof tests.deliverability.details.overallScore === "number"
+                ? (tests.deliverability.details.overallScore as number)
+                : settings.deliverability.lastHealthScore,
+            lastHealthSummary:
+              typeof tests.deliverability.details.summary === "string"
+                ? (tests.deliverability.details.summary as string)
+                : settings.deliverability.lastHealthSummary,
+            lastDomainSnapshots: Array.isArray(tests.deliverability.details.domainSnapshots)
+              ? tests.deliverability.details.domainSnapshots
+              : settings.deliverability.lastDomainSnapshots,
           }
         : undefined,
     });

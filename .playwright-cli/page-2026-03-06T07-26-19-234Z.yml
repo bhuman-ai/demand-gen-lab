@@ -1,0 +1,758 @@
+- generic:
+  - alert
+  - generic:
+    - banner:
+      - navigation:
+        - generic:
+          - generic:
+            - generic:
+              - link:
+                - /url: /discover/apps/ios/latest
+                - img
+              - generic:
+                - generic:
+                  - generic:
+                    - link:
+                      - /url: /discover/apps/ios/latest
+                      - text: Apps
+                  - link:
+                    - /url: /discover/sites/latest
+                    - text: Sites
+            - generic:
+              - generic:
+                - button:
+                  - img
+                  - generic: Search on iOS...
+                - generic:
+                  - generic:
+                    - button:
+                      - img
+            - generic:
+              - generic:
+                - generic:
+                  - generic:
+                    - generic:
+                      - generic:
+                        - link:
+                          - /url: /saved/mobile/screens
+                  - generic:
+                    - generic:
+                      - link:
+                        - /url: /community/mobile/featured
+                  - generic:
+                    - link:
+                      - /url: /awards
+                      - generic:
+                        - generic: Awards
+                  - generic:
+                    - button
+                - button:
+                  - generic:
+                    - generic:
+                      - generic: D
+    - main:
+      - article:
+        - generic:
+          - generic:
+            - generic:
+              - radiogroup:
+                - radio [checked]:
+                  - generic: iOS
+                - radio:
+                  - generic: Web
+              - generic:
+                - generic:
+                  - generic:
+                    - generic:
+                      - button:
+                        - text: Categories
+                        - generic:
+                          - img
+                    - generic:
+                      - generic:
+                        - button:
+                          - text: Onboarding
+                          - generic:
+                            - img
+                        - button:
+                          - img
+                - generic:
+                  - generic:
+                    - generic: Showing
+                    - generic: 895 flows
+              - generic:
+                - button:
+                  - text: Trending
+                  - img
+          - generic:
+            - generic:
+              - generic:
+                - generic:
+                  - link:
+                    - /url: /flows/817f5bfd-1701-4756-bcbc-dcdfc3597723
+                  - generic:
+                    - generic:
+                      - generic:
+                        - link:
+                          - /url: /flows/817f5bfd-1701-4756-bcbc-dcdfc3597723
+                        - generic:
+                          - generic:
+                            - link:
+                              - /url: /flows/817f5bfd-1701-4756-bcbc-dcdfc3597723
+                              - generic:
+                                - generic:
+                                  - generic: 01:13
+                          - generic:
+                            - link [active]:
+                              - /url: /flows/817f5bfd-1701-4756-bcbc-dcdfc3597723
+                              - generic:
+                                - img
+                          - generic:
+                            - link:
+                              - /url: /flows/817f5bfd-1701-4756-bcbc-dcdfc3597723
+                              - generic:
+                                - img
+                          - generic:
+                            - link:
+                              - /url: /flows/817f5bfd-1701-4756-bcbc-dcdfc3597723
+                              - generic:
+                                - img
+                          - generic:
+                            - link:
+                              - /url: /flows/817f5bfd-1701-4756-bcbc-dcdfc3597723
+                              - generic:
+                                - img
+                          - generic:
+                            - link:
+                              - /url: /flows/817f5bfd-1701-4756-bcbc-dcdfc3597723
+                              - generic:
+                                - img
+                          - generic:
+                            - link:
+                              - /url: /flows/817f5bfd-1701-4756-bcbc-dcdfc3597723
+                              - generic:
+                                - img
+                          - generic:
+                            - link:
+                              - /url: /flows/817f5bfd-1701-4756-bcbc-dcdfc3597723
+                              - generic:
+                                - img
+                          - generic:
+                            - link:
+                              - /url: /flows/817f5bfd-1701-4756-bcbc-dcdfc3597723
+                              - generic:
+                                - img
+                          - generic:
+                            - link:
+                              - /url: /flows/817f5bfd-1701-4756-bcbc-dcdfc3597723
+                              - generic:
+                                - img
+                          - generic:
+                            - link:
+                              - /url: /flows/817f5bfd-1701-4756-bcbc-dcdfc3597723
+                              - generic:
+                                - img
+                          - generic:
+                            - link:
+                              - /url: /flows/817f5bfd-1701-4756-bcbc-dcdfc3597723
+                              - generic:
+                                - img
+                          - generic:
+                            - link:
+                              - /url: /flows/817f5bfd-1701-4756-bcbc-dcdfc3597723
+                              - generic:
+                                - img
+                          - generic:
+                            - link:
+                              - /url: /flows/817f5bfd-1701-4756-bcbc-dcdfc3597723
+                              - generic:
+                                - img
+                          - generic:
+                            - link:
+                              - /url: /flows/817f5bfd-1701-4756-bcbc-dcdfc3597723
+                              - generic:
+                                - img
+                          - generic:
+                            - link:
+                              - /url: /flows/817f5bfd-1701-4756-bcbc-dcdfc3597723
+                              - generic:
+                                - img
+                          - generic:
+                            - link:
+                              - /url: /flows/817f5bfd-1701-4756-bcbc-dcdfc3597723
+                              - generic:
+                                - img
+                        - generic:
+                          - generic:
+                            - generic:
+                              - button [disabled]:
+                                - img
+                        - button [ref=e553] [cursor=pointer]:
+                          - img [ref=e554]
+                  - generic:
+                    - generic:
+                      - generic:
+                        - generic:
+                          - generic: Onboarding
+                          - generic: in
+                        - generic:
+                          - link:
+                            - /url: /apps/tiimo-ios-92e196c8-3689-45c1-8869-449f9b7207c4/dc39e0c5-e9cb-4411-a8c4-75cc3a5e8169/flows
+                            - generic: Tiimo
+                      - generic: 16 screens
+                    - generic:
+                      - button:
+                        - generic:
+                          - generic: Save
+                      - generic:
+                        - button:
+                          - generic:
+                            - generic: Copy
+                            - img
+                      - generic:
+                        - button:
+                          - generic:
+                            - img
+                - generic:
+                  - link:
+                    - /url: /flows/13c20a32-43c8-41a6-bb5f-63f8371b1683
+                  - generic:
+                    - generic:
+                      - generic:
+                        - link:
+                          - /url: /flows/13c20a32-43c8-41a6-bb5f-63f8371b1683
+                        - generic:
+                          - generic:
+                            - link:
+                              - /url: /flows/13c20a32-43c8-41a6-bb5f-63f8371b1683
+                              - generic:
+                                - img
+                          - generic:
+                            - link:
+                              - /url: /flows/13c20a32-43c8-41a6-bb5f-63f8371b1683
+                              - generic:
+                                - img
+                          - generic:
+                            - link:
+                              - /url: /flows/13c20a32-43c8-41a6-bb5f-63f8371b1683
+                              - generic:
+                                - img
+                          - generic:
+                            - link:
+                              - /url: /flows/13c20a32-43c8-41a6-bb5f-63f8371b1683
+                              - generic:
+                                - img
+                          - generic:
+                            - link:
+                              - /url: /flows/13c20a32-43c8-41a6-bb5f-63f8371b1683
+                              - generic:
+                                - img
+                          - generic:
+                            - link:
+                              - /url: /flows/13c20a32-43c8-41a6-bb5f-63f8371b1683
+                              - generic:
+                                - img
+                          - generic:
+                            - link:
+                              - /url: /flows/13c20a32-43c8-41a6-bb5f-63f8371b1683
+                              - generic:
+                                - img
+                          - generic:
+                            - link:
+                              - /url: /flows/13c20a32-43c8-41a6-bb5f-63f8371b1683
+                              - generic:
+                                - img
+                          - generic:
+                            - link:
+                              - /url: /flows/13c20a32-43c8-41a6-bb5f-63f8371b1683
+                              - generic:
+                                - img
+                          - generic:
+                            - link:
+                              - /url: /flows/13c20a32-43c8-41a6-bb5f-63f8371b1683
+                              - generic:
+                                - img
+                          - generic:
+                            - link:
+                              - /url: /flows/13c20a32-43c8-41a6-bb5f-63f8371b1683
+                              - generic:
+                                - img
+                          - generic:
+                            - link:
+                              - /url: /flows/13c20a32-43c8-41a6-bb5f-63f8371b1683
+                              - generic:
+                                - img
+                          - generic:
+                            - link:
+                              - /url: /flows/13c20a32-43c8-41a6-bb5f-63f8371b1683
+                              - generic:
+                                - img
+                          - generic:
+                            - link:
+                              - /url: /flows/13c20a32-43c8-41a6-bb5f-63f8371b1683
+                              - generic:
+                                - img
+                          - generic:
+                            - link:
+                              - /url: /flows/13c20a32-43c8-41a6-bb5f-63f8371b1683
+                              - generic:
+                                - img
+                          - generic:
+                            - link:
+                              - /url: /flows/13c20a32-43c8-41a6-bb5f-63f8371b1683
+                              - generic:
+                                - img
+                          - generic:
+                            - link:
+                              - /url: /flows/13c20a32-43c8-41a6-bb5f-63f8371b1683
+                              - generic:
+                                - img
+                          - generic:
+                            - link:
+                              - /url: /flows/13c20a32-43c8-41a6-bb5f-63f8371b1683
+                              - generic:
+                                - img
+                          - generic:
+                            - link:
+                              - /url: /flows/13c20a32-43c8-41a6-bb5f-63f8371b1683
+                              - generic:
+                                - img
+                          - generic:
+                            - link:
+                              - /url: /flows/13c20a32-43c8-41a6-bb5f-63f8371b1683
+                              - generic:
+                                - img
+                          - generic:
+                            - link:
+                              - /url: /flows/13c20a32-43c8-41a6-bb5f-63f8371b1683
+                              - generic:
+                                - img
+                          - generic:
+                            - link:
+                              - /url: /flows/13c20a32-43c8-41a6-bb5f-63f8371b1683
+                              - generic:
+                                - img
+                          - generic:
+                            - link:
+                              - /url: /flows/13c20a32-43c8-41a6-bb5f-63f8371b1683
+                              - generic:
+                                - img
+                          - generic:
+                            - link:
+                              - /url: /flows/13c20a32-43c8-41a6-bb5f-63f8371b1683
+                              - generic:
+                                - img
+                          - generic:
+                            - link:
+                              - /url: /flows/13c20a32-43c8-41a6-bb5f-63f8371b1683
+                              - generic:
+                                - img
+                          - generic:
+                            - link:
+                              - /url: /flows/13c20a32-43c8-41a6-bb5f-63f8371b1683
+                              - generic:
+                                - img
+                          - generic:
+                            - link:
+                              - /url: /flows/13c20a32-43c8-41a6-bb5f-63f8371b1683
+                              - generic:
+                                - img
+                          - generic:
+                            - link:
+                              - /url: /flows/13c20a32-43c8-41a6-bb5f-63f8371b1683
+                              - generic:
+                                - img
+                          - generic:
+                            - link:
+                              - /url: /flows/13c20a32-43c8-41a6-bb5f-63f8371b1683
+                              - generic:
+                                - img
+                          - generic:
+                            - link:
+                              - /url: /flows/13c20a32-43c8-41a6-bb5f-63f8371b1683
+                              - generic:
+                                - img
+                          - generic:
+                            - link:
+                              - /url: /flows/13c20a32-43c8-41a6-bb5f-63f8371b1683
+                              - generic:
+                                - img
+                          - generic:
+                            - link:
+                              - /url: /flows/13c20a32-43c8-41a6-bb5f-63f8371b1683
+                              - generic:
+                                - img
+                          - generic:
+                            - link:
+                              - /url: /flows/13c20a32-43c8-41a6-bb5f-63f8371b1683
+                              - generic:
+                                - img
+                          - generic:
+                            - link:
+                              - /url: /flows/13c20a32-43c8-41a6-bb5f-63f8371b1683
+                              - generic:
+                                - img
+                          - generic:
+                            - link:
+                              - /url: /flows/13c20a32-43c8-41a6-bb5f-63f8371b1683
+                              - generic:
+                                - img
+                          - generic:
+                            - link:
+                              - /url: /flows/13c20a32-43c8-41a6-bb5f-63f8371b1683
+                              - generic:
+                                - img
+                          - generic:
+                            - link:
+                              - /url: /flows/13c20a32-43c8-41a6-bb5f-63f8371b1683
+                              - generic:
+                                - img
+                        - generic:
+                          - generic:
+                            - generic:
+                              - button [disabled]:
+                                - img
+                        - button [ref=e555] [cursor=pointer]:
+                          - img [ref=e556]
+                  - generic:
+                    - generic:
+                      - generic:
+                        - generic:
+                          - generic: Onboarding
+                          - generic: in
+                        - generic:
+                          - link:
+                            - /url: /apps/revolut-business-ios-93ad9ceb-a163-41da-ba7a-9f07c737fc2a/0c4c334c-e3a5-4395-89be-c7666aaafdf5/flows
+                            - generic: Revolut Business
+                      - generic: 37 screens
+                    - generic:
+                      - button:
+                        - generic:
+                          - generic: Save
+                      - generic:
+                        - button:
+                          - generic:
+                            - generic: Copy
+                            - img
+                      - generic:
+                        - button:
+                          - generic:
+                            - img
+                - generic:
+                  - link:
+                    - /url: /flows/9e3b1a7c-9409-44db-b448-3d9b69959bea
+                  - generic:
+                    - generic:
+                      - generic:
+                        - link:
+                          - /url: /flows/9e3b1a7c-9409-44db-b448-3d9b69959bea
+                        - generic:
+                          - generic:
+                            - link:
+                              - /url: /flows/9e3b1a7c-9409-44db-b448-3d9b69959bea
+                              - generic:
+                                - img
+                          - generic:
+                            - link:
+                              - /url: /flows/9e3b1a7c-9409-44db-b448-3d9b69959bea
+                              - generic:
+                                - img
+                          - generic:
+                            - link:
+                              - /url: /flows/9e3b1a7c-9409-44db-b448-3d9b69959bea
+                              - generic:
+                                - img
+                          - generic:
+                            - link:
+                              - /url: /flows/9e3b1a7c-9409-44db-b448-3d9b69959bea
+                              - generic:
+                                - img
+                          - generic:
+                            - link:
+                              - /url: /flows/9e3b1a7c-9409-44db-b448-3d9b69959bea
+                              - generic:
+                                - img
+                          - generic:
+                            - link:
+                              - /url: /flows/9e3b1a7c-9409-44db-b448-3d9b69959bea
+                              - generic:
+                                - img
+                          - generic:
+                            - link:
+                              - /url: /flows/9e3b1a7c-9409-44db-b448-3d9b69959bea
+                              - generic:
+                                - img
+                          - generic:
+                            - link:
+                              - /url: /flows/9e3b1a7c-9409-44db-b448-3d9b69959bea
+                              - generic:
+                                - img
+                          - generic:
+                            - link:
+                              - /url: /flows/9e3b1a7c-9409-44db-b448-3d9b69959bea
+                              - generic:
+                                - img
+                          - generic:
+                            - link:
+                              - /url: /flows/9e3b1a7c-9409-44db-b448-3d9b69959bea
+                              - generic:
+                                - img
+                          - generic:
+                            - link:
+                              - /url: /flows/9e3b1a7c-9409-44db-b448-3d9b69959bea
+                              - generic:
+                                - img
+                        - generic:
+                          - generic:
+                            - generic:
+                              - button [disabled]:
+                                - img
+                        - button [ref=e557] [cursor=pointer]:
+                          - img [ref=e558]
+                  - generic:
+                    - generic:
+                      - generic:
+                        - generic:
+                          - generic: Onboarding
+                          - generic: in
+                        - generic:
+                          - link:
+                            - /url: /apps/keeta-ios-b1e857ee-1ca8-4497-ae9f-876c329c6f59/9641be92-ebc0-4c39-b15e-5df72e7ef8fe/flows
+                            - generic: Keeta
+                      - generic: 11 screens
+                    - generic:
+                      - button:
+                        - generic:
+                          - generic: Save
+                      - generic:
+                        - button:
+                          - generic:
+                            - generic: Copy
+                            - img
+                      - generic:
+                        - button:
+                          - generic:
+                            - img
+            - generic:
+              - img
+            - generic:
+              - generic:
+                - button [ref=e559] [cursor=pointer]:
+                  - img [ref=e560]
+                - button [ref=e122] [cursor=pointer]:
+                  - img [ref=e123]
+  - region "Notifications alt+T"
+  - dialog "Onboarding on Tiimo" [ref=e562]:
+    - generic [ref=e563]:
+      - heading "Onboarding on Tiimo" [level=2] [ref=e564]
+      - paragraph
+    - article [ref=e565]:
+      - generic [ref=e568]:
+        - generic [ref=e569]:
+          - generic [ref=e571]:
+            - generic [ref=e572]:
+              - generic [ref=e573]: Onboarding
+              - generic [ref=e574]: in
+            - link "Tiimo logo Tiimo" [ref=e575] [cursor=pointer]:
+              - /url: /apps/tiimo-ios-92e196c8-3689-45c1-8869-449f9b7207c4/dc39e0c5-e9cb-4411-a8c4-75cc3a5e8169/flows
+              - img "Tiimo logo" [ref=e577]
+              - generic [ref=e578]: Tiimo
+          - radiogroup [ref=e580]:
+            - radio "Screens" [checked] [ref=e581] [cursor=pointer]
+            - radio "Video" [ref=e582] [cursor=pointer]
+          - generic [ref=e584]:
+            - button "Avatar of Seth Miller Avatar of Kat Dsv Avatar of Alba Avatar of Kevin +12" [ref=e585] [cursor=pointer]:
+              - img "Avatar of Seth Miller" [ref=e587]
+              - img "Avatar of Kat Dsv" [ref=e589]
+              - img "Avatar of Alba" [ref=e591]
+              - generic "Avatar of Kevin" [ref=e593]: K
+              - generic [ref=e595]: "+12"
+            - generic [ref=e597]:
+              - button "message icon" [ref=e599] [cursor=pointer]:
+                - img "message icon" [ref=e601]
+              - button "link icon" [ref=e604] [cursor=pointer]:
+                - img "link icon" [ref=e606]
+            - button "close icon" [ref=e612] [cursor=pointer]:
+              - img "close icon" [ref=e614]
+        - generic [ref=e617]:
+          - list [ref=e621]:
+            - listitem [ref=e622]:
+              - img "Onboarding on Tiimo (ios) screen 1" [ref=e623]
+              - button "0:02" [ref=e625] [cursor=pointer]
+              - button "more icon" [ref=e628] [cursor=pointer]:
+                - img "more icon" [ref=e629]
+              - generic [ref=e634]:
+                - button "Save" [ref=e635] [cursor=pointer]:
+                  - generic [ref=e637]: Save
+                - button "Copy" [ref=e639] [cursor=pointer]:
+                  - generic [ref=e641]: Copy
+            - listitem [ref=e642]:
+              - img "Onboarding on Tiimo (ios) screen 2" [ref=e643]
+              - button "0:06" [ref=e646] [cursor=pointer]
+              - button "more icon" [ref=e649] [cursor=pointer]:
+                - img "more icon" [ref=e650]
+              - generic [ref=e655]:
+                - button "Save" [ref=e656] [cursor=pointer]:
+                  - generic [ref=e658]: Save
+                - button "Copy" [ref=e660] [cursor=pointer]:
+                  - generic [ref=e662]: Copy
+            - listitem [ref=e663]:
+              - img "Onboarding on Tiimo (ios) screen 3" [ref=e664]
+              - button "0:20" [ref=e667] [cursor=pointer]
+              - button "more icon" [ref=e670] [cursor=pointer]:
+                - img "more icon" [ref=e671]
+              - generic [ref=e676]:
+                - button "Save" [ref=e677] [cursor=pointer]:
+                  - generic [ref=e679]: Save
+                - button "Copy" [ref=e681] [cursor=pointer]:
+                  - generic [ref=e683]: Copy
+            - listitem [ref=e684]:
+              - img "Onboarding on Tiimo (ios) screen 4" [ref=e685]
+              - button "0:28" [ref=e688] [cursor=pointer]
+              - button "more icon" [ref=e691] [cursor=pointer]:
+                - img "more icon" [ref=e692]
+              - generic [ref=e697]:
+                - button "Save" [ref=e698] [cursor=pointer]:
+                  - generic [ref=e700]: Save
+                - button "Copy" [ref=e702] [cursor=pointer]:
+                  - generic [ref=e704]: Copy
+            - listitem [ref=e705]:
+              - img "Onboarding on Tiimo (ios) screen 5" [ref=e706]
+              - button "0:32" [ref=e708] [cursor=pointer]
+              - button "more icon" [ref=e711] [cursor=pointer]:
+                - img "more icon" [ref=e712]
+              - generic [ref=e717]:
+                - button "Save" [ref=e718] [cursor=pointer]:
+                  - generic [ref=e720]: Save
+                - button "Copy" [ref=e722] [cursor=pointer]:
+                  - generic [ref=e724]: Copy
+            - listitem [ref=e725]:
+              - img "Onboarding on Tiimo (ios) screen 6" [ref=e726]
+              - button "0:34" [ref=e729] [cursor=pointer]
+              - button "more icon" [ref=e732] [cursor=pointer]:
+                - img "more icon" [ref=e733]
+              - generic [ref=e738]:
+                - button "Save" [ref=e739] [cursor=pointer]:
+                  - generic [ref=e741]: Save
+                - button "Copy" [ref=e743] [cursor=pointer]:
+                  - generic [ref=e745]: Copy
+            - listitem [ref=e746]:
+              - img "Onboarding on Tiimo (ios) screen 7" [ref=e747]
+              - button "0:38" [ref=e750] [cursor=pointer]
+              - button "more icon" [ref=e753] [cursor=pointer]:
+                - img "more icon" [ref=e754]
+              - generic [ref=e759]:
+                - button "Save" [ref=e760] [cursor=pointer]:
+                  - generic [ref=e762]: Save
+                - button "Copy" [ref=e764] [cursor=pointer]:
+                  - generic [ref=e766]: Copy
+            - listitem [ref=e767]:
+              - img "Onboarding on Tiimo (ios) screen 8" [ref=e768]
+              - button "0:42" [ref=e771] [cursor=pointer]
+              - button "more icon" [ref=e774] [cursor=pointer]:
+                - img "more icon" [ref=e775]
+              - generic [ref=e780]:
+                - button "Save" [ref=e781] [cursor=pointer]:
+                  - generic [ref=e783]: Save
+                - button "Copy" [ref=e785] [cursor=pointer]:
+                  - generic [ref=e787]: Copy
+            - listitem [ref=e788]:
+              - img "Onboarding on Tiimo (ios) screen 9" [ref=e789]
+              - button "0:46" [ref=e792] [cursor=pointer]
+              - button "more icon" [ref=e795] [cursor=pointer]:
+                - img "more icon" [ref=e796]
+              - generic [ref=e801]:
+                - button "Save" [ref=e802] [cursor=pointer]:
+                  - generic [ref=e804]: Save
+                - button "Copy" [ref=e806] [cursor=pointer]:
+                  - generic [ref=e808]: Copy
+            - listitem [ref=e809]:
+              - img "Onboarding on Tiimo (ios) screen 10" [ref=e810]
+              - button "0:49" [ref=e813] [cursor=pointer]
+              - button "more icon" [ref=e816] [cursor=pointer]:
+                - img "more icon" [ref=e817]
+              - generic [ref=e822]:
+                - button "Save" [ref=e823] [cursor=pointer]:
+                  - generic [ref=e825]: Save
+                - button "Copy" [ref=e827] [cursor=pointer]:
+                  - generic [ref=e829]: Copy
+            - listitem [ref=e830]:
+              - img "Onboarding on Tiimo (ios) screen 11" [ref=e831]
+              - button "0:53" [ref=e834] [cursor=pointer]
+              - button "more icon" [ref=e837] [cursor=pointer]:
+                - img "more icon" [ref=e838]
+              - generic [ref=e843]:
+                - button "Save" [ref=e844] [cursor=pointer]:
+                  - generic [ref=e846]: Save
+                - button "Copy" [ref=e848] [cursor=pointer]:
+                  - generic [ref=e850]: Copy
+            - listitem [ref=e851]:
+              - img "Onboarding on Tiimo (ios) screen 12" [ref=e852]
+              - button "0:59" [ref=e854] [cursor=pointer]
+              - button "more icon" [ref=e857] [cursor=pointer]:
+                - img "more icon" [ref=e858]
+              - generic [ref=e863]:
+                - button "Save" [ref=e864] [cursor=pointer]:
+                  - generic [ref=e866]: Save
+                - button "Copy" [ref=e868] [cursor=pointer]:
+                  - generic [ref=e870]: Copy
+            - listitem [ref=e871]:
+              - img "Onboarding on Tiimo (ios) screen 13" [ref=e872]
+              - button "1:02" [ref=e875] [cursor=pointer]
+              - button "more icon" [ref=e878] [cursor=pointer]:
+                - img "more icon" [ref=e879]
+              - generic [ref=e884]:
+                - button "Save" [ref=e885] [cursor=pointer]:
+                  - generic [ref=e887]: Save
+                - button "Copy" [ref=e889] [cursor=pointer]:
+                  - generic [ref=e891]: Copy
+            - listitem [ref=e892]:
+              - img "Onboarding on Tiimo (ios) screen 14" [ref=e893]
+              - button "1:05" [ref=e896] [cursor=pointer]
+              - button "more icon" [ref=e899] [cursor=pointer]:
+                - img "more icon" [ref=e900]
+              - generic [ref=e905]:
+                - button "Save" [ref=e906] [cursor=pointer]:
+                  - generic [ref=e908]: Save
+                - button "Copy" [ref=e910] [cursor=pointer]:
+                  - generic [ref=e912]: Copy
+            - listitem [ref=e913]:
+              - img "Onboarding on Tiimo (ios) screen 15" [ref=e914]
+              - button "1:09" [ref=e917] [cursor=pointer]
+              - button "more icon" [ref=e920] [cursor=pointer]:
+                - img "more icon" [ref=e921]
+              - generic [ref=e926]:
+                - button "Save" [ref=e927] [cursor=pointer]:
+                  - generic [ref=e929]: Save
+                - button "Copy" [ref=e931] [cursor=pointer]:
+                  - generic [ref=e933]: Copy
+            - listitem [ref=e934]:
+              - img "Onboarding on Tiimo (ios) screen 16" [ref=e935]
+              - button "1:11" [ref=e937] [cursor=pointer]
+              - button "more icon" [ref=e940] [cursor=pointer]:
+                - img "more icon" [ref=e941]
+              - generic [ref=e946]:
+                - button "Save" [ref=e947] [cursor=pointer]:
+                  - generic [ref=e949]: Save
+                - button "Copy" [ref=e951] [cursor=pointer]:
+                  - generic [ref=e953]: Copy
+          - generic:
+            - generic:
+              - generic:
+                - button "arrow left icon" [disabled]:
+                  - img "arrow left icon"
+          - button "arrow right icon" [ref=e957] [cursor=pointer]:
+            - img "arrow right icon" [ref=e958]
+          - generic:
+            - generic [ref=e960]:
+              - button "Save" [ref=e961] [cursor=pointer]:
+                - generic [ref=e963]: Save
+              - button "Copy figma icon" [ref=e965] [cursor=pointer]:
+                - generic [ref=e966]:
+                  - generic [ref=e967]: Copy
+                  - img "figma icon" [ref=e968]
+              - button "more icon" [ref=e975] [cursor=pointer]:
+                - img "more icon" [ref=e977]
+            - generic [ref=e981]:
+              - generic [ref=e982]: iOS (393x852)
+              - button "More info" [ref=e983] [cursor=pointer]

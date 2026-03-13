@@ -37,9 +37,9 @@ export function CampaignStepper() {
             key={step.id}
             href={href}
             className={cn(
-              "rounded-full border px-3 py-1.5 text-xs transition",
+              "rounded-[8px] border px-3 py-1.5 text-xs transition-colors",
               active
-                ? "border-[color:var(--accent-border)] bg-[color:var(--accent-soft)] text-[color:var(--accent)]"
+                ? "border-[color:var(--border-strong)] bg-[color:var(--surface-muted)] text-[color:var(--foreground)]"
                 : "border-[color:var(--border)] text-[color:var(--muted-foreground)] hover:bg-[color:var(--surface-muted)]"
             )}
           >

@@ -4,7 +4,10 @@ import {
   getExperimentRecordById,
   updateExperimentRecord,
 } from "@/lib/experiment-data";
-import { clampExperimentSampleSize } from "@/lib/experiment-policy";
+import {
+  EXPERIMENT_MAX_SAMPLE_SIZE,
+  EXPERIMENT_MIN_VERIFIED_EMAIL_LEADS,
+} from "@/lib/experiment-policy";
 import { launchExperimentRun, runOutreachTick } from "@/lib/outreach-runtime";
 
 export async function POST(
@@ -29,7 +32,11 @@ export async function POST(
     body = {};
   }
 
-  const sampleSize = clampExperimentSampleSize(body.sampleSize ?? 0);
+  const rawSampleSize = Math.round(Number(body.sampleSize ?? EXPERIMENT_MIN_VERIFIED_EMAIL_LEADS));
+  const sampleSize = Number.isFinite(rawSampleSize)
+    ? Math.max(1, Math.min(EXPERIMENT_MAX_SAMPLE_SIZE, rawSampleSize))
+    : EXPERIMENT_MIN_VERIFIED_EMAIL_LEADS;
+  const autoSend = body.autoSend === true;
 
   const result = await launchExperimentRun({
     brandId,
@@ -38,7 +45,7 @@ export async function POST(
     trigger: "manual",
     ownerType: "experiment",
     ownerId: experiment.id,
-    sampleOnly: true,
+    sampleOnly: !autoSend,
     maxLeadsOverride: sampleSize,
   });
 
@@ -50,8 +57,9 @@ export async function POST(
       return NextResponse.json(
         {
           runId: result.runId,
-          status: "sourcing",
+          status: autoSend ? "queued" : "sourcing",
           sampleSize,
+          autoSend,
           hint: "A sourcing run is already in progress for this experiment.",
         },
         { status: 200 }
@@ -81,6 +89,7 @@ export async function POST(
       runId: result.runId,
       status: "queued",
       sampleSize,
+      autoSend,
     },
     { status: 201 }
   );

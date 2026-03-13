@@ -1,0 +1,228 @@
+{
+  "benchmark": {
+    "loader": {
+      "case_count": 2,
+      "ignored": [],
+      "reason": null
+    },
+    "result": {
+      "case_count": 2,
+      "cases": [
+        {
+          "attempts": [
+            {
+              "attempt": 1,
+              "email": "aaron.baby@freshworks.com",
+              "error": "timed out",
+              "mail_code": null,
+              "mail_message": "",
+              "mx_host": "aspmx.l.google.com",
+              "smtp_code": null,
+              "smtp_message": "",
+              "status": "unknown",
+              "timings_ms": {
+                "total": 4023.05
+              }
+            },
+            {
+              "attempt": 2,
+              "email": "aaron.baby@freshworks.com",
+              "error": "timed out",
+              "mail_code": null,
+              "mail_message": "",
+              "mx_host": "aspmx.l.google.com",
+              "smtp_code": null,
+              "smtp_message": "",
+              "status": "unknown",
+              "timings_ms": {
+                "total": 4004.11
+              }
+            }
+          ],
+          "domain": "freshworks.com",
+          "email": "aaron.baby@freshworks.com",
+          "label": "known_real",
+          "mx_records": [
+            {
+              "host": "aspmx.l.google.com",
+              "priority": 1
+            },
+            {
+              "host": "alt2.aspmx.l.google.com",
+              "priority": 5
+            },
+            {
+              "host": "alt1.aspmx.l.google.com",
+              "priority": 5
+            },
+            {
+              "host": "aspmx2.googlemail.com",
+              "priority": 10
+            },
+            {
+              "host": "aspmx3.googlemail.com",
+              "priority": 10
+            }
+          ],
+          "summary": {
+            "connect_timing_ms": null,
+            "rcpt_timing_ms": null,
+            "smtp_code_counts": {
+              "None": 2
+            },
+            "stage": "completed",
+            "status_counts": {
+              "unknown": 2
+            },
+            "total_timing_ms": {
+              "count": 2,
+              "max_ms": 4023.05,
+              "mean_ms": 4013.58,
+              "median_ms": 4013.58,
+              "min_ms": 4004.11
+            }
+          }
+        },
+        {
+          "attempts": [
+            {
+              "attempt": 1,
+              "email": "gsoknf@freshworks.com",
+              "error": "timed out",
+              "mail_code": null,
+              "mail_message": "",
+              "mx_host": "aspmx.l.google.com",
+              "smtp_code": null,
+              "smtp_message": "",
+              "status": "unknown",
+              "timings_ms": {
+                "total": 4002.71
+              }
+            },
+            {
+              "attempt": 2,
+              "email": "gsoknf@freshworks.com",
+              "error": "timed out",
+              "mail_code": null,
+              "mail_message": "",
+              "mx_host": "aspmx.l.google.com",
+              "smtp_code": null,
+              "smtp_message": "",
+              "status": "unknown",
+              "timings_ms": {
+                "total": 4002.87
+              }
+            }
+          ],
+          "domain": "freshworks.com",
+          "email": "gsoknf@freshworks.com",
+          "label": "generic_random",
+          "mx_records": [
+            {
+              "host": "aspmx.l.google.com",
+              "priority": 1
+            },
+            {
+              "host": "alt2.aspmx.l.google.com",
+              "priority": 5
+            },
+            {
+              "host": "alt1.aspmx.l.google.com",
+              "priority": 5
+            },
+            {
+              "host": "aspmx2.googlemail.com",
+              "priority": 10
+            },
+            {
+              "host": "aspmx3.googlemail.com",
+              "priority": 10
+            }
+          ],
+          "summary": {
+            "connect_timing_ms": null,
+            "rcpt_timing_ms": null,
+            "smtp_code_counts": {
+              "None": 2
+            },
+            "stage": "completed",
+            "status_counts": {
+              "unknown": 2
+            },
+            "total_timing_ms": {
+              "count": 2,
+              "max_ms": 4002.87,
+              "mean_ms": 4002.79,
+              "median_ms": 4002.79,
+              "min_ms": 4002.71
+            }
+          }
+        }
+      ],
+      "label_summary": {
+        "generic_random": {
+          "attempt_count": 2,
+          "rcpt_timing_ms": null,
+          "status_counts": {
+            "unknown": 2
+          },
+          "total_timing_ms": {
+            "count": 2,
+            "max_ms": 4002.87,
+            "mean_ms": 4002.79,
+            "median_ms": 4002.79,
+            "min_ms": 4002.71
+          }
+        },
+        "known_real": {
+          "attempt_count": 2,
+          "rcpt_timing_ms": null,
+          "status_counts": {
+            "unknown": 2
+          },
+          "total_timing_ms": {
+            "count": 2,
+            "max_ms": 4023.05,
+            "mean_ms": 4013.58,
+            "median_ms": 4013.58,
+            "min_ms": 4004.11
+          }
+        }
+      },
+      "runs_per_email": 2,
+      "stage": "completed"
+    },
+    "stage": "completed"
+  },
+  "generated_at_utc": "2026-03-03T12:39:05.356454+00:00",
+  "input": {
+    "domain": "",
+    "name": ""
+  },
+  "settings": {
+    "api_consensus_enabled": false,
+    "benchmark_file": "benchmark_cases.freshworks_pair_quick.csv",
+    "benchmark_max_cases": 50,
+    "benchmark_pause_ms": 100,
+    "benchmark_runs": 2,
+    "benchmark_starttls": true,
+    "consensus_delay_ms": 250,
+    "consensus_max_candidates": 6,
+    "consensus_providers": [
+      "hunter",
+      "abstract"
+    ],
+    "doh_enabled": true,
+    "doh_via_curl": false,
+    "from_address": "don@bhuman.ai",
+    "known_emails": [],
+    "max_candidates": 12,
+    "osint_delay_ms": 300,
+    "osint_enabled": false,
+    "osint_max_candidates": 8,
+    "osint_max_results": 6,
+    "pause_ms": 700,
+    "probe_smtp": false,
+    "timeout_seconds": 4.0
+  }
+}

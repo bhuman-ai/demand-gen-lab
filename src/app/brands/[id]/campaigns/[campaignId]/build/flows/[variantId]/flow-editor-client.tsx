@@ -28,10 +28,12 @@ import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import {
   fetchBrand,
+  fetchBuildView,
   fetchCampaign,
   fetchConversationMapApi,
   fetchConversationPreviewLeadsApi,
   publishConversationMapApi,
+  probeConversationMapApi,
   previewConversationNodeApi,
   saveConversationMapDraftApi,
   suggestConversationMapApi,
@@ -41,8 +43,10 @@ import type {
   ConversationFlowEdge,
   ConversationFlowGraph,
   ConversationFlowNode,
+  ConversationMapEditorState,
   ConversationMap,
   ConversationPreviewLead,
+  ConversationProbeResult,
 } from "@/lib/factory-types";
 
 const NODE_WIDTH = 340;
@@ -74,6 +78,18 @@ const ROLEPLAY_PHASES = [
   "Scoring clarity, reply likelihood, and risk",
   "Rejecting weak variants and selecting winner",
 ];
+const DEFAULT_REPLY_TIMING = {
+  minimumDelayMinutes: 40,
+  randomAdditionalDelayMinutes: 20,
+};
+const DEFAULT_WORKING_HOURS: ConversationMapEditorState["workingHours"] = {
+  timezone: "America/Los_Angeles",
+  businessHoursEnabled: true,
+  businessHoursStartHour: 9,
+  businessHoursEndHour: 17,
+  businessDays: [1, 2, 3, 4, 5],
+};
+const WEEKDAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
 type Viewport = {
   x: number;
@@ -121,9 +137,30 @@ function defaultMessagePromptTemplate(title: string) {
   ].join("\n");
 }
 
+function defaultFollowUpPromptTemplate(title: string) {
+  const safeTitle = title.trim() || "Follow-up";
+  return [
+    `Write outbound email copy for node "${safeTitle}".`,
+    "Context: this is a no-reply follow-up branch after the previous email got no response.",
+    "Do not imply the recipient replied.",
+    "Keep it lower-pressure and shorter than the previous email.",
+    "Use plain language. Avoid filler, buzzwords, and robotic follow-up phrasing.",
+    "Use variables only when available: {{firstName}}, {{company}}, {{leadTitle}}, {{brandName}}, {{campaignGoal}}, {{variantName}}, {{replyPreview}}, {{shortAnswer}}.",
+    "Never output unresolved placeholders.",
+    "End with one low-friction CTA sentence.",
+  ].join("\n");
+}
+
+function followUpTitle(sourceTitle: string) {
+  const trimmed = sourceTitle.trim();
+  if (!trimmed) return "Follow-up";
+  if (/follow-up/i.test(trimmed)) return trimmed;
+  return `${trimmed} follow-up`;
+}
+
 function defaultNode(kind: "message" | "terminal" = "message", x = 80, y = 160): ConversationFlowNode {
-  const subject = kind === "terminal" ? "" : "Quick follow-up";
-  const body = kind === "terminal" ? "" : "Hi {{firstName}},\n\nQuick follow-up on {{brandName}}.";
+  const subject = kind === "terminal" ? "" : "Follow-up";
+  const body = kind === "terminal" ? "" : "Hi {{firstName}},\n\nFollowing up on {{brandName}}.";
   return {
     id: makeNodeId(),
     kind,
@@ -146,6 +183,60 @@ function defaultNode(kind: "message" | "terminal" = "message", x = 80, y = 160):
     x,
     y,
   };
+}
+
+function createFollowUpNode(source: ConversationFlowNode, x: number, y: number): ConversationFlowNode {
+  const title = followUpTitle(source.title);
+  return {
+    id: makeNodeId(),
+    kind: "message",
+    title,
+    copyMode: "prompt_v1",
+    promptTemplate: defaultFollowUpPromptTemplate(title),
+    promptVersion: 1,
+    promptPolicy: {
+      subjectMaxWords: 0,
+      bodyMaxWords: 0,
+      exactlyOneCta: false,
+    },
+    subject: "Following up",
+    body: "Hi {{firstName}},\n\nFollowing up on my note about {{brandName}}.",
+    autoSend: true,
+    delayMinutes: 0,
+    x,
+    y,
+  };
+}
+
+function formatWaitMinutes(value: number) {
+  const minutes = Math.max(0, Math.round(Number(value) || 0));
+  if (minutes === 0) return "immediately";
+  if (minutes % 1440 === 0) {
+    const days = minutes / 1440;
+    return `${days} day${days === 1 ? "" : "s"}`;
+  }
+  if (minutes % 60 === 0) {
+    const hours = minutes / 60;
+    return `${hours} hour${hours === 1 ? "" : "s"}`;
+  }
+  return `${minutes} minute${minutes === 1 ? "" : "s"}`;
+}
+
+function formatDelayRange(minimumDelayMinutes: number, randomAdditionalDelayMinutes: number) {
+  const min = Math.max(0, Math.round(Number(minimumDelayMinutes) || 0));
+  const extra = Math.max(0, Math.round(Number(randomAdditionalDelayMinutes) || 0));
+  if (extra <= 0) return formatWaitMinutes(min);
+  const max = min + extra;
+  return `${formatWaitMinutes(min)} to ${formatWaitMinutes(max)}`;
+}
+
+function formatBusinessDays(days: number[]) {
+  const normalized = Array.from(new Set(days.map((value) => Math.round(Number(value)))))
+    .filter((value) => Number.isFinite(value) && value >= 0 && value <= 6)
+    .sort((a, b) => a - b);
+  if (!normalized.length || normalized.length === 7) return "Every day";
+  if (normalized.join(",") === "1,2,3,4,5") return "Mon-Fri";
+  return normalized.map((day) => WEEKDAY_LABELS[day] || `Day ${day}`).join(", ");
 }
 
 function nodesNeedSpacing(nodes: ConversationFlowNode[]) {
@@ -208,6 +299,30 @@ function withLayout(graph: ConversationFlowGraph): ConversationFlowGraph {
   };
 }
 
+function withReplyTimingDefaults(graph: ConversationFlowGraph): ConversationFlowGraph {
+  return {
+    ...graph,
+    replyTiming: {
+      minimumDelayMinutes: Math.max(
+        0,
+        Math.min(10080, Math.round(Number(graph.replyTiming?.minimumDelayMinutes ?? DEFAULT_REPLY_TIMING.minimumDelayMinutes) || DEFAULT_REPLY_TIMING.minimumDelayMinutes))
+      ),
+      randomAdditionalDelayMinutes: Math.max(
+        0,
+        Math.min(
+          1440,
+          Math.round(
+            Number(
+              graph.replyTiming?.randomAdditionalDelayMinutes ??
+                DEFAULT_REPLY_TIMING.randomAdditionalDelayMinutes
+            ) || DEFAULT_REPLY_TIMING.randomAdditionalDelayMinutes
+          )
+        )
+      ),
+    },
+  };
+}
+
 function autoLayout(graph: ConversationFlowGraph): ConversationFlowGraph {
   return {
     ...graph,
@@ -263,8 +378,38 @@ function edgeLabel(edge: ConversationFlowEdge) {
         return "No reply";
     }
   }
-  if (edge.trigger === "timer") return `No reply (${edge.waitMinutes} min)`;
+  if (edge.trigger === "timer") return `Wait ${formatWaitMinutes(edge.waitMinutes)}`;
   return "No reply";
+}
+
+function probeOutcomeBadgeVariant(outcome: ConversationProbeResult["scenarios"][number]["outcome"]) {
+  if (outcome === "auto_reply" || outcome === "completed" || outcome === "timer_follow_up") {
+    return "success" as const;
+  }
+  if (outcome === "manual_review") {
+    return "accent" as const;
+  }
+  if (outcome === "no_reply") {
+    return "muted" as const;
+  }
+  return "danger" as const;
+}
+
+function probeOutcomeLabel(outcome: ConversationProbeResult["scenarios"][number]["outcome"]) {
+  switch (outcome) {
+    case "auto_reply":
+      return "Auto reply";
+    case "manual_review":
+      return "Manual review";
+    case "no_reply":
+      return "No reply";
+    case "timer_follow_up":
+      return "Timer follow-up";
+    case "completed":
+      return "Completed";
+    default:
+      return "Stalled";
+  }
 }
 
 function promptSnippet(value: string, max = 180) {
@@ -296,7 +441,7 @@ function RoleplayScreeningLoader({
   return (
     <div
       className={[
-        "rounded-2xl border border-[color:var(--border)] bg-[color:var(--surface)]/95 shadow-xl",
+        "rounded-[10px] border border-[color:var(--border)] bg-[color:var(--surface)]",
         compact ? "w-full max-w-2xl p-4" : "p-5",
       ].join(" ")}
     >
@@ -316,9 +461,9 @@ function RoleplayScreeningLoader({
         </div>
       </div>
 
-      <div className="mb-4 h-2 w-full overflow-hidden rounded-full bg-[color:var(--surface-muted)]">
+      <div className="mb-4 h-1.5 w-full overflow-hidden rounded-[999px] bg-[color:var(--border)]">
         <div
-          className="h-full rounded-full bg-[color:var(--accent)] transition-all duration-500 ease-out"
+          className="h-full rounded-[999px] bg-[color:var(--accent)] transition-all duration-500 ease-out"
           style={{ width: `${Math.max(8, progress)}%` }}
         />
       </div>
@@ -403,12 +548,14 @@ export default function FlowEditorClient({
   variantId,
   backHref,
   hideOverviewCard = false,
+  hideBackButton = false,
 }: {
   brandId: string;
   campaignId: string;
   variantId: string;
   backHref?: string;
   hideOverviewCard?: boolean;
+  hideBackButton?: boolean;
 }) {
   const canvasRef = useRef<HTMLDivElement | null>(null);
   const zoomFrameRef = useRef<number | null>(null);
@@ -441,6 +588,9 @@ export default function FlowEditorClient({
     body: string;
     trace: Record<string, unknown>;
   } | null>(null);
+  const [probing, setProbing] = useState(false);
+  const [probeResult, setProbeResult] = useState<ConversationProbeResult | null>(null);
+  const [probeError, setProbeError] = useState("");
   const [previewError, setPreviewError] = useState("");
   const [error, setError] = useState("");
   const [statusMessage, setStatusMessage] = useState("");
@@ -451,12 +601,16 @@ export default function FlowEditorClient({
   const [selectedPreviewLeadId, setSelectedPreviewLeadId] = useState("");
   const [previewLeadsLoading, setPreviewLeadsLoading] = useState(false);
   const [previewLeadsError, setPreviewLeadsError] = useState("");
+  const [workingHours, setWorkingHours] = useState<ConversationMapEditorState["workingHours"]>(
+    DEFAULT_WORKING_HOURS
+  );
 
   const load = async () => {
     setError("");
-    const [brand, campaign, mapRow] = await Promise.all([
+    const [brand, campaign, build, editorState] = await Promise.all([
       fetchBrand(brandId),
       fetchCampaign(brandId, campaignId),
+      fetchBuildView(brandId, campaignId),
       fetchConversationMapApi(brandId, campaignId, variantId),
     ]);
 
@@ -483,12 +637,12 @@ export default function FlowEditorClient({
       setPreviewLeadsError(err instanceof Error ? err.message : "Failed to load sourced leads");
     }
 
-    const variant = campaign.experiments.find((item) => item.id === variantId);
+    const variant = build.variants.find((item) => item.id === variantId);
     if (!variant) {
       throw new Error("Variant not found. Save Build first, then open Conversation Map.");
     }
 
-    const nextGraph = withoutPreviewLeadState(withLayout(mapRow?.draftGraph ?? {
+    const nextGraph = withoutPreviewLeadState(withLayout(withReplyTimingDefaults(editorState.map?.draftGraph ?? {
       version: 1,
       maxDepth: 5,
       startNodeId: "",
@@ -496,7 +650,8 @@ export default function FlowEditorClient({
       edges: [],
       previewLeads: [],
       previewLeadId: "",
-    }));
+      replyTiming: { ...DEFAULT_REPLY_TIMING },
+    })));
 
     setBrandName(brand.name || "Brand");
     setCampaignName(campaign.name || "Campaign");
@@ -507,7 +662,8 @@ export default function FlowEditorClient({
         ? prev
         : previewLeadData.leads[0]?.id ?? ""
     );
-    setMap(mapRow);
+    setMap(editorState.map);
+    setWorkingHours(editorState.workingHours);
     setGraph(nextGraph);
     setHasFittedInitialView(false);
     setSelectedNodeId(nextGraph.startNodeId || nextGraph.nodes[0]?.id || "");
@@ -574,12 +730,48 @@ export default function FlowEditorClient({
     setPreviewError("");
   }, [selectedNode, previewResult]);
 
+  useEffect(() => {
+    setProbeResult(null);
+    setProbeError("");
+  }, [graph, selectedPreviewLeadId, selectedNodeId]);
+
   const nodeLookup = useMemo(() => {
     const next = new Map<string, ConversationFlowNode>();
     if (!graph) return next;
     for (const node of graph.nodes) next.set(node.id, node);
     return next;
   }, [graph]);
+  const selectedNodeTimerEdges = useMemo(() => {
+    if (!graph || !selectedNode) return [] as ConversationFlowEdge[];
+    return graph.edges
+      .filter((edge) => edge.fromNodeId === selectedNode.id && edge.trigger === "timer")
+      .sort((a, b) => a.waitMinutes - b.waitMinutes || a.priority - b.priority);
+  }, [graph, selectedNode]);
+  const probeTargetNode =
+    selectedNode?.kind === "message"
+      ? selectedNode
+      : graph
+        ? (nodeById(graph, graph.startNodeId) ?? null)
+        : null;
+  const probeLead =
+    selectedPreviewLead ?? {
+      id: "probe_demo_lead",
+      name: "Jordan Lee",
+      email: "jordan@exampleco.com",
+      company: "ExampleCo",
+      title: "Founder",
+      domain: "exampleco.com",
+      source: "manual" as const,
+    };
+  const replyTiming = graph?.replyTiming ?? DEFAULT_REPLY_TIMING;
+  const replyTimingSummary = formatDelayRange(
+    replyTiming.minimumDelayMinutes,
+    replyTiming.randomAdditionalDelayMinutes
+  );
+  const workingWindowSummary =
+    workingHours.businessHoursEnabled
+      ? `${workingHours.timezone} · ${workingHours.businessHoursStartHour}:00-${workingHours.businessHoursEndHour}:00 · ${formatBusinessDays(workingHours.businessDays)}`
+      : `${workingHours.timezone} · replies can send any time`;
 
   const saveDraft = async () => {
     if (!graph) return;
@@ -593,9 +785,11 @@ export default function FlowEditorClient({
         experimentId: variantId,
         name: `${variantName} Conversation Flow`,
         draftGraph: graph,
+        workingHours,
       });
-      setMap(next);
-      setGraph(withoutPreviewLeadState(withLayout(next.draftGraph)));
+      setMap(next.map);
+      setWorkingHours(next.workingHours);
+      setGraph(withoutPreviewLeadState(withLayout(withReplyTimingDefaults(next.map.draftGraph))));
       setStatusMessage("Draft saved.");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to save draft");
@@ -616,12 +810,14 @@ export default function FlowEditorClient({
           experimentId: variantId,
           name: `${variantName} Conversation Flow`,
           draftGraph: graph,
+          workingHours,
         });
       }
       const next = await publishConversationMapApi(brandId, campaignId, variantId);
-      setMap(next);
-      setGraph(withoutPreviewLeadState(withLayout(next.draftGraph)));
-      setStatusMessage(`Published revision ${next.publishedRevision}.`);
+      setMap(next.map);
+      setWorkingHours(next.workingHours);
+      setGraph(withoutPreviewLeadState(withLayout(withReplyTimingDefaults(next.map.draftGraph))));
+      setStatusMessage(`Published revision ${next.map.publishedRevision}.`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to publish map");
     } finally {
@@ -635,7 +831,7 @@ export default function FlowEditorClient({
     setStatusMessage("");
     try {
       const suggested = await suggestConversationMapApi(brandId, campaignId, variantId);
-      const next = withoutPreviewLeadState(withLayout(suggested));
+      const next = withoutPreviewLeadState(withLayout(withReplyTimingDefaults(suggested)));
       setGraph(next);
       setHasFittedInitialView(false);
       setSelectedNodeId(next.startNodeId || next.nodes[0]?.id || "");
@@ -668,7 +864,7 @@ export default function FlowEditorClient({
       { subject: string; body: string; confidence: number }
     > = {
       question: {
-        subject: "Re: quick question",
+        subject: "Re: question",
         body: "Can you share one concrete example relevant to our team?",
         confidence: 0.78,
       },
@@ -747,6 +943,63 @@ export default function FlowEditorClient({
       setPreviewError(err instanceof Error ? err.message : "Failed to generate preview");
     } finally {
       setPreviewingNodeId("");
+    }
+  };
+
+  const generateProbe = async () => {
+    if (!graph) {
+      setProbeError("Conversation map is still loading. Try probe again in a moment.");
+      return;
+    }
+    const lead = probeLead;
+    const entryNode =
+      selectedNode?.kind === "message"
+        ? selectedNode
+        : nodeById(graph, graph.startNodeId);
+    if (!entryNode || entryNode.kind !== "message") {
+      setProbeError("Choose a message node or set a valid start node before probing.");
+      return;
+    }
+
+    setProbing(true);
+    setProbeError("");
+    try {
+      const probe = await probeConversationMapApi({
+        brandId,
+        campaignId,
+        experimentId: variantId,
+        nodeId: entryNode.id,
+        sampleLead: {
+          id: lead.id,
+          name: lead.name,
+          email: lead.email,
+          company: lead.company,
+          title: lead.title,
+          domain: lead.domain,
+        },
+      });
+      setProbeResult(probe);
+      trackEvent("conversation_prompt_previewed", {
+        brandId,
+        campaignId,
+        experimentId: variantId,
+        nodeId: entryNode.id,
+        mode: "probe",
+        ok: true,
+      });
+      setStatusMessage("Probe run completed.");
+    } catch (err) {
+      trackEvent("conversation_prompt_previewed", {
+        brandId,
+        campaignId,
+        experimentId: variantId,
+        nodeId: entryNode.id,
+        mode: "probe",
+        ok: false,
+      });
+      setProbeError(err instanceof Error ? err.message : "Failed to run probe");
+    } finally {
+      setProbing(false);
     }
   };
 
@@ -945,6 +1198,42 @@ export default function FlowEditorClient({
     if (selectedEdgeId === edgeId) setSelectedEdgeId("");
   };
 
+  const createFollowUpBranch = (fromNodeId: string, waitMinutes = 7200) => {
+    let nextNodeId = "";
+    setGraph((prev) => {
+      if (!prev) return prev;
+      const source = prev.nodes.find((node) => node.id === fromNodeId);
+      if (!source || source.kind !== "message") return prev;
+      const nextNode = createFollowUpNode(
+        source,
+        source.x + GRID_X * 0.9,
+        source.y + GRID_Y * 0.55 + prev.nodes.filter((node) => node.id !== source.id).length * 8
+      );
+      const nextEdge: ConversationFlowEdge = {
+        id: makeEdgeId(),
+        fromNodeId: source.id,
+        toNodeId: nextNode.id,
+        trigger: "timer",
+        intent: "",
+        waitMinutes,
+        confidenceThreshold: 0.7,
+        priority: prev.edges.length + 1,
+      };
+      nextNodeId = nextNode.id;
+      return {
+        ...prev,
+        nodes: [...prev.nodes, nextNode],
+        edges: [...prev.edges, nextEdge],
+      };
+    });
+    if (nextNodeId) {
+      setSelectedNodeId(nextNodeId);
+      setSelectedEdgeId("");
+      setHasFittedInitialView(false);
+      setStatusMessage(`Added follow-up after ${formatWaitMinutes(waitMinutes)}.`);
+    }
+  };
+
   const setNodePatch = (nodeId: string, patch: Partial<ConversationFlowNode>) => {
     setGraph((prev) => {
       if (!prev) return prev;
@@ -1076,18 +1365,20 @@ export default function FlowEditorClient({
           <CardTitle className="text-base">Conversation map unavailable</CardTitle>
           <CardDescription className="text-[color:var(--danger)]">{error || "Could not initialize map."}</CardDescription>
         </CardHeader>
-        <CardContent>
-          <Button asChild type="button" variant="outline">
-            <Link href={backHref || `/brands/${brandId}/campaigns/${campaignId}/build`}>Back</Link>
-          </Button>
-        </CardContent>
+        {!hideBackButton ? (
+          <CardContent>
+            <Button asChild type="button" variant="outline">
+              <Link href={backHref || `/brands/${brandId}/campaigns/${campaignId}/build`}>Back</Link>
+            </Button>
+          </CardContent>
+        ) : null}
       </Card>
     );
   }
 
   return (
     <div className="grid gap-4">
-      <Card className={hideOverviewCard ? "sticky top-20 z-20 border-[color:var(--border)]/90 bg-[color:var(--surface)]/95 backdrop-blur" : ""}>
+      <Card className={hideOverviewCard ? "sticky top-20 z-20 border-[color:var(--border)] bg-[color:var(--surface)]" : ""}>
         <CardContent className="flex flex-wrap items-center justify-between gap-3 py-4">
           <div className="min-w-[220px]">
             <div className="text-sm font-semibold">Conversation Flow Canvas</div>
@@ -1112,13 +1403,145 @@ export default function FlowEditorClient({
               <Upload className="h-4 w-4" />
               {publishing ? "Publishing..." : "Publish"}
             </Button>
-            <Button asChild size="sm" type="button" variant="ghost">
-              <Link href={backHref || `/brands/${brandId}/campaigns/${campaignId}/build`}>Back</Link>
-            </Button>
+            {!hideBackButton ? (
+              <Button asChild size="sm" type="button" variant="ghost">
+                <Link href={backHref || `/brands/${brandId}/campaigns/${campaignId}/build`}>Back</Link>
+              </Button>
+            ) : null}
           </div>
         </CardContent>
         {statusMessage ? <CardContent className="pt-0 text-sm text-[color:var(--accent)]">{statusMessage}</CardContent> : null}
         {error ? <CardContent className="pt-0 text-sm text-[color:var(--danger)]">{error}</CardContent> : null}
+      </Card>
+
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-base">Reply Timing</CardTitle>
+          <CardDescription>
+            Auto replies wait at least {replyTimingSummary}, then hold for your working window if needed.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
+          <div className="grid gap-2">
+            <Label>Minimum reply wait (minutes)</Label>
+            <Input
+              type="number"
+              min={0}
+              max={10080}
+              value={replyTiming.minimumDelayMinutes}
+              onChange={(event) =>
+                setGraph((prev) =>
+                  prev
+                    ? {
+                        ...prev,
+                        replyTiming: {
+                          ...replyTiming,
+                          minimumDelayMinutes: clamp(Number(event.target.value || replyTiming.minimumDelayMinutes), 0, 10080),
+                        },
+                      }
+                    : prev
+                )
+              }
+            />
+          </div>
+          <div className="grid gap-2">
+            <Label>Random extra wait (minutes)</Label>
+            <Input
+              type="number"
+              min={0}
+              max={1440}
+              value={replyTiming.randomAdditionalDelayMinutes}
+              onChange={(event) =>
+                setGraph((prev) =>
+                  prev
+                    ? {
+                        ...prev,
+                        replyTiming: {
+                          ...replyTiming,
+                          randomAdditionalDelayMinutes: clamp(
+                            Number(event.target.value || replyTiming.randomAdditionalDelayMinutes),
+                            0,
+                            1440
+                          ),
+                        },
+                      }
+                    : prev
+                )
+              }
+            />
+          </div>
+          <div className="grid gap-2">
+            <Label>Working timezone</Label>
+            <Input
+              value={workingHours.timezone}
+              onChange={(event) =>
+                setWorkingHours((prev) => ({
+                  ...prev,
+                  timezone: event.target.value,
+                }))
+              }
+              placeholder="America/Los_Angeles"
+            />
+          </div>
+          <div className="grid gap-2">
+            <Label>Workday start</Label>
+            <Input
+              type="number"
+              min={0}
+              max={23}
+              value={workingHours.businessHoursStartHour}
+              onChange={(event) =>
+                setWorkingHours((prev) => ({
+                  ...prev,
+                  businessHoursStartHour: clamp(
+                    Math.round(Number(event.target.value || prev.businessHoursStartHour)),
+                    0,
+                    23
+                  ),
+                }))
+              }
+              disabled={workingHours.businessHoursEnabled === false}
+            />
+          </div>
+          <div className="grid gap-2">
+            <Label>Workday end</Label>
+            <Input
+              type="number"
+              min={1}
+              max={24}
+              value={workingHours.businessHoursEndHour}
+              onChange={(event) =>
+                setWorkingHours((prev) => ({
+                  ...prev,
+                  businessHoursEndHour: clamp(
+                    Math.round(Number(event.target.value || prev.businessHoursEndHour)),
+                    1,
+                    24
+                  ),
+                }))
+              }
+              disabled={workingHours.businessHoursEnabled === false}
+            />
+          </div>
+          <div className="md:col-span-2 xl:col-span-5 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-2 text-sm">
+            <label className="inline-flex items-center gap-2">
+              <input
+                type="checkbox"
+                checked={workingHours.businessHoursEnabled !== false}
+                onChange={(event) =>
+                  setWorkingHours((prev) => ({
+                    ...prev,
+                    businessHoursEnabled: event.target.checked,
+                  }))
+                }
+              />
+              Only send replies during working hours
+            </label>
+            <div className="text-[color:var(--muted-foreground)]">
+              Window: {workingWindowSummary}
+            </div>
+          </div>
+        </CardContent>
       </Card>
 
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_340px]">
@@ -1156,8 +1579,13 @@ export default function FlowEditorClient({
           <CardContent className="p-0">
             <div
               ref={canvasRef}
-              className="relative w-full cursor-grab overflow-hidden bg-[radial-gradient(circle_at_center,_rgba(59,130,246,0.08),transparent_55%)]"
-              style={{ minHeight: `${CANVAS_MIN_HEIGHT}px` }}
+              className="relative w-full cursor-grab overflow-hidden bg-[color:var(--surface-muted)]"
+              style={{
+                minHeight: `${CANVAS_MIN_HEIGHT}px`,
+                backgroundImage:
+                  "linear-gradient(to right, color-mix(in srgb, var(--border) 72%, transparent) 1px, transparent 1px), linear-gradient(to bottom, color-mix(in srgb, var(--border) 72%, transparent) 1px, transparent 1px)",
+                backgroundSize: "48px 48px",
+              }}
               onPointerDown={onCanvasPointerDown}
               onPointerMove={onCanvasPointerMove}
               onPointerUp={onCanvasPointerUp}
@@ -1182,7 +1610,7 @@ export default function FlowEditorClient({
                         <path
                           d={bezierPath(fromX, fromY, toX, toY)}
                           fill="none"
-                          stroke={selected ? "rgba(96,165,250,0.5)" : "rgba(147,197,253,0.3)"}
+                          stroke={selected ? "rgba(161,78,44,0.25)" : "rgba(23,20,17,0.08)"}
                           strokeWidth={selected ? 8 : 6}
                           strokeLinecap="round"
                           className="pointer-events-none"
@@ -1191,7 +1619,7 @@ export default function FlowEditorClient({
                           data-edge-path="true"
                           d={bezierPath(fromX, fromY, toX, toY)}
                           fill="none"
-                          stroke={selected ? "#60a5fa" : "#93c5fd"}
+                          stroke={selected ? "var(--accent)" : "var(--border-strong)"}
                           strokeWidth={selected ? 3.2 : 2.5}
                           strokeLinecap="round"
                           className="pointer-events-auto cursor-pointer"
@@ -1205,7 +1633,7 @@ export default function FlowEditorClient({
                           x={(fromX + toX) / 2}
                           y={(fromY + toY) / 2 - 8}
                           textAnchor="middle"
-                          fill="#c7ddff"
+                          fill="var(--muted-foreground)"
                           fontSize="12"
                           className="pointer-events-none"
                         >
@@ -1244,12 +1672,16 @@ export default function FlowEditorClient({
                 {graph.nodes.map((node, nodeIndex) => {
                   const isSelected = selectedNodeId === node.id;
                   const isStart = graph.startNodeId === node.id;
-                  const cardTitle = node.kind === "terminal" ? "End" : `Message ${nodeIndex + 1}`;
+                  const nodeTimerEdges = graph.edges
+                    .filter((edge) => edge.fromNodeId === node.id && edge.trigger === "timer")
+                    .sort((a, b) => a.waitMinutes - b.waitMinutes || a.priority - b.priority);
+                  const cardTitle =
+                    node.title.trim() || (node.kind === "terminal" ? "End" : `Message ${nodeIndex + 1}`);
                   return (
                     <div
                       key={node.id}
                       data-node-card="true"
-                      className="absolute rounded-2xl border bg-[color:var(--surface)] shadow-lg"
+                      className="absolute rounded-[10px] border bg-[color:var(--surface)] shadow-sm"
                       style={{
                         width: `${NODE_WIDTH}px`,
                         minHeight: `${NODE_HEIGHT}px`,
@@ -1266,7 +1698,7 @@ export default function FlowEditorClient({
                     >
                       <button
                         type="button"
-                        className="absolute -left-2.5 top-1/2 h-5 w-5 -translate-y-1/2 rounded-full border-2 border-[color:var(--border-strong)] bg-[color:var(--surface)]"
+                        className="absolute -left-2 top-1/2 h-4 w-4 -translate-y-1/2 rounded-[5px] border border-[color:var(--border-strong)] bg-[color:var(--surface)]"
                         title="Connect here"
                         onPointerUp={(event) => completeConnect(event, node.id)}
                         onPointerDown={(event) => event.stopPropagation()}
@@ -1274,7 +1706,7 @@ export default function FlowEditorClient({
 
                       <button
                         type="button"
-                        className="absolute -right-2.5 top-1/2 h-5 w-5 -translate-y-1/2 rounded-full border-2 border-[color:var(--accent)] bg-[color:var(--accent)]"
+                        className="absolute -right-2 top-1/2 h-4 w-4 -translate-y-1/2 rounded-[5px] border border-[color:var(--accent)] bg-[color:var(--accent)]"
                         title="Start connection"
                         onPointerDown={(event) => startConnect(event, node.id)}
                       />
@@ -1284,8 +1716,24 @@ export default function FlowEditorClient({
                           <div className="truncate text-base font-semibold">{cardTitle}</div>
                           <div className="flex items-center gap-1">
                             {isStart ? <Badge variant="accent">Start</Badge> : null}
+                            {node.kind === "message" ? (
+                              <Badge variant={node.autoSend ? "success" : "muted"}>
+                                {node.autoSend ? "Auto" : "Manual"}
+                              </Badge>
+                            ) : null}
                           </div>
                         </div>
+                        {node.kind === "message" && node.delayMinutes > 0 ? (
+                          <div className="mt-1 text-xs text-[color:var(--muted-foreground)]">
+                            Node delay: {formatWaitMinutes(node.delayMinutes)}
+                          </div>
+                        ) : null}
+                        {node.kind === "message" && nodeTimerEdges.length ? (
+                          <div className="mt-1 text-xs text-[color:var(--muted-foreground)]">
+                            Follow-ups: {nodeTimerEdges.slice(0, 2).map((edge) => formatWaitMinutes(edge.waitMinutes)).join(", ")}
+                            {nodeTimerEdges.length > 2 ? ` +${nodeTimerEdges.length - 2} more` : ""}
+                          </div>
+                        ) : null}
                       </div>
 
                       <div className="space-y-3 px-4 py-3 text-sm leading-6 text-[color:var(--muted-foreground)]">
@@ -1300,12 +1748,12 @@ export default function FlowEditorClient({
               </div>
 
               {generating ? (
-                <div className="absolute inset-0 z-20 flex items-center justify-center bg-[color:var(--surface)]/82 px-4 py-6 backdrop-blur-sm">
+                <div className="absolute inset-0 z-20 flex items-center justify-center bg-[color:var(--surface)]/88 px-4 py-6">
                   <RoleplayScreeningLoader tick={roleplayTick} variantName={variantName} compact />
                 </div>
               ) : null}
 
-              <div className="pointer-events-none absolute bottom-4 left-4 rounded-xl border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-2 text-[13px] text-[color:var(--muted-foreground)] shadow-sm">
+              <div className="pointer-events-none absolute bottom-4 left-4 rounded-[10px] border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-2 text-[13px] text-[color:var(--muted-foreground)]">
                 <span className="inline-flex items-center gap-1"><Hand className="h-3 w-3" /> Pan: drag background</span>
                 <span className="mx-2">|</span>
                 <span>Zoom: ctrl/cmd + wheel</span>
@@ -1334,6 +1782,16 @@ export default function FlowEditorClient({
                         Duplicate
                       </Button>
                     ) : null}
+                    {selectedNode.kind === "message" ? (
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => createFollowUpBranch(selectedNode.id)}
+                      >
+                        Add follow-up
+                      </Button>
+                    ) : null}
                     <Button type="button" size="sm" variant="ghost" onClick={() => deleteNode(selectedNode.id)}>
                       <Trash2 className="h-4 w-4" />
                     </Button>
@@ -1343,12 +1801,51 @@ export default function FlowEditorClient({
                 {selectedNode.kind === "message" ? (
                   <>
                     <div className="grid gap-2">
+                      <Label>Title</Label>
+                      <Input
+                        value={selectedNode.title}
+                        onChange={(event) => setNodePatch(selectedNode.id, { title: event.target.value })}
+                        placeholder="Send AWS application link"
+                      />
+                    </div>
+                    <div className="grid gap-2">
                       <Label>Subject</Label>
                       <Input
                         value={selectedNode.subject}
                         onChange={(event) => setNodePatch(selectedNode.id, { subject: event.target.value })}
-                        placeholder="Quick question about your pipeline"
+                        placeholder="Question about your pipeline"
                       />
+                    </div>
+                    <div className="grid gap-2 md:grid-cols-2">
+                      <div className="grid gap-2">
+                        <Label>Send mode</Label>
+                        <Select
+                          value={selectedNode.autoSend ? "auto" : "manual"}
+                          onChange={(event) =>
+                            setNodePatch(selectedNode.id, { autoSend: event.target.value === "auto" })
+                          }
+                        >
+                          <option value="auto">Auto send</option>
+                          <option value="manual">Manual review</option>
+                        </Select>
+                      </div>
+                      <div className="grid gap-2">
+                        <Label>Node delay (minutes)</Label>
+                        <Input
+                          type="number"
+                          min={0}
+                          max={10080}
+                          value={selectedNode.delayMinutes}
+                          onChange={(event) =>
+                            setNodePatch(selectedNode.id, {
+                              delayMinutes: clamp(Number(event.target.value || selectedNode.delayMinutes), 0, 10080),
+                            })
+                          }
+                        />
+                        <div className="text-xs text-[color:var(--muted-foreground)]">
+                          Extra wait after entering this node: {formatWaitMinutes(selectedNode.delayMinutes)}. Auto replies also respect the map-level reply timing above.
+                        </div>
+                      </div>
                     </div>
                     <div className="grid gap-2">
                       <Label>Body</Label>
@@ -1358,6 +1855,83 @@ export default function FlowEditorClient({
                         onChange={(event) => setNodePatch(selectedNode.id, { body: event.target.value })}
                         placeholder="Hi {{firstName}}, ..."
                       />
+                    </div>
+
+                    <div className="grid gap-3 rounded-lg border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div>
+                          <div className="text-sm font-medium text-[color:var(--foreground)]">Follow-ups</div>
+                          <div className="text-xs text-[color:var(--muted-foreground)]">
+                            Add timed no-reply branches directly from this node.
+                          </div>
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                          {[1440, 4320, 7200].map((minutes) => (
+                            <Button
+                              key={minutes}
+                              type="button"
+                              size="sm"
+                              variant="outline"
+                              onClick={() => createFollowUpBranch(selectedNode.id, minutes)}
+                            >
+                              Add {formatWaitMinutes(minutes)}
+                            </Button>
+                          ))}
+                        </div>
+                      </div>
+
+                      {selectedNodeTimerEdges.length ? (
+                        <div className="grid gap-2">
+                          {selectedNodeTimerEdges.map((edge) => {
+                            const target = nodeLookup.get(edge.toNodeId);
+                            return (
+                              <div
+                                key={edge.id}
+                                className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-2 text-xs"
+                              >
+                                <div>
+                                  <div className="font-medium text-[color:var(--foreground)]">
+                                    {target?.title || "Follow-up node"}
+                                  </div>
+                                  <div className="text-[color:var(--muted-foreground)]">
+                                    Sends after {formatWaitMinutes(edge.waitMinutes)}
+                                  </div>
+                                </div>
+                                <div className="flex flex-wrap gap-2">
+                                  <Button
+                                    type="button"
+                                    size="sm"
+                                    variant="ghost"
+                                    onClick={() => {
+                                      setSelectedEdgeId(edge.id);
+                                      setSelectedNodeId("");
+                                    }}
+                                  >
+                                    Edit path
+                                  </Button>
+                                  {target ? (
+                                    <Button
+                                      type="button"
+                                      size="sm"
+                                      variant="ghost"
+                                      onClick={() => {
+                                        setSelectedNodeId(target.id);
+                                        setSelectedEdgeId("");
+                                      }}
+                                    >
+                                      Open node
+                                    </Button>
+                                  ) : null}
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      ) : (
+                        <div className="text-xs text-[color:var(--muted-foreground)]">
+                          No timed follow-ups yet. Add one if you want this branch to retry after silence.
+                        </div>
+                      )}
                     </div>
 
                     <div className="grid gap-2 rounded-lg border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3">
@@ -1535,7 +2109,7 @@ export default function FlowEditorClient({
 
                     {selectedEdge.trigger === "timer" ? (
                       <div className="grid gap-2">
-                        <Label>Wait (minutes)</Label>
+                        <Label>Wait before this branch fires (minutes)</Label>
                         <Input
                           type="number"
                           min={0}
@@ -1547,6 +2121,22 @@ export default function FlowEditorClient({
                             })
                           }
                         />
+                        <div className="text-xs text-[color:var(--muted-foreground)]">
+                          Current delay: {formatWaitMinutes(selectedEdge.waitMinutes)}. Example: `7200` = 5 days.
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                          {[60, 1440, 4320, 7200].map((minutes) => (
+                            <Button
+                              key={minutes}
+                              type="button"
+                              size="sm"
+                              variant="outline"
+                              onClick={() => setEdgePatch(selectedEdge.id, { waitMinutes: minutes })}
+                            >
+                              {formatWaitMinutes(minutes)}
+                            </Button>
+                          ))}
+                        </div>
                       </div>
                     ) : null}
                   </div>
@@ -1559,6 +2149,128 @@ export default function FlowEditorClient({
                 Select a node to edit subject, body, and preview. Select a connector for advanced routing.
               </div>
             ) : null}
+
+            <div className="space-y-3 rounded-xl border border-[color:var(--border)] p-3">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <div className="text-sm font-semibold">Flow Probe</div>
+                  <div className="mt-1 text-xs text-[color:var(--muted-foreground)]">
+                    Roleplay a blank recipient against the current draft map and inspect which branch fires.
+                  </div>
+                </div>
+                <Badge variant="muted">{probeTargetNode ? "Ready" : "Needs start node"}</Badge>
+              </div>
+
+              <div className="rounded-md border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-2 text-xs text-[color:var(--muted-foreground)]">
+                Entry node: <span className="font-medium text-[color:var(--foreground)]">{probeTargetNode?.title || "Not set"}</span>
+                <br />
+                Lead: <span className="font-medium text-[color:var(--foreground)]">
+                  {probeLead.name || probeLead.email}
+                </span>
+                {!selectedPreviewLead ? (
+                  <>
+                    <br />
+                    Using a synthetic founder profile until sourced preview leads are available.
+                  </>
+                ) : null}
+              </div>
+
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={() => void generateProbe()}
+                disabled={probing || !probeTargetNode}
+              >
+                {probing ? (
+                  <>
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    Running probe...
+                  </>
+                ) : (
+                  <>
+                    <Sparkles className="h-3.5 w-3.5" />
+                    Run probe
+                  </>
+                )}
+              </Button>
+
+              {probeError ? <div className="text-xs text-[color:var(--danger)]">{probeError}</div> : null}
+
+              {probeResult ? (
+                <div className="space-y-2">
+                  <div className="text-xs text-[color:var(--muted-foreground)]">
+                    Probe generated for {probeResult.lead.email || probeResult.lead.domain} from {probeResult.startNodeTitle}.
+                  </div>
+                  {probeResult.scenarios.map((scenario) => (
+                    <details
+                      key={scenario.id}
+                      className="rounded-lg border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-2"
+                    >
+                      <summary className="cursor-pointer list-none">
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <div className="text-sm font-medium text-[color:var(--foreground)]">{scenario.title}</div>
+                            <div className="mt-1 text-xs text-[color:var(--muted-foreground)]">
+                              {scenario.summary}
+                            </div>
+                          </div>
+                          <Badge variant={probeOutcomeBadgeVariant(scenario.outcome)}>
+                            {probeOutcomeLabel(scenario.outcome)}
+                          </Badge>
+                        </div>
+                      </summary>
+
+                      <div className="mt-3 space-y-2 text-xs">
+                        <div className="text-[color:var(--muted-foreground)]">{scenario.description}</div>
+                        <div className="rounded-md border border-[color:var(--border)] bg-[color:var(--surface)] px-2 py-1.5 text-[color:var(--muted-foreground)]">
+                          Path: {scenario.path.length ? scenario.path.join(" -> ") : "No path"}
+                        </div>
+                        {scenario.steps.map((step) => (
+                          <div
+                            key={step.id}
+                            className="rounded-md border border-[color:var(--border)] bg-[color:var(--surface)] p-2"
+                          >
+                            <div className="flex items-center justify-between gap-2">
+                              <div className="font-medium text-[color:var(--foreground)]">
+                                {step.label}
+                                {step.nodeTitle ? ` · ${step.nodeTitle}` : ""}
+                              </div>
+                              {step.kind === "route" && step.action ? (
+                                <Badge variant={step.action === "manual_review" ? "accent" : step.action === "reply" ? "success" : "muted"}>
+                                  {step.action}
+                                </Badge>
+                              ) : null}
+                            </div>
+                            {step.edgeLabel ? (
+                              <div className="mt-1 text-[color:var(--muted-foreground)]">{step.edgeLabel}</div>
+                            ) : null}
+                            {step.waitMinutes > 0 ? (
+                              <div className="mt-1 text-[color:var(--muted-foreground)]">
+                                Wait: {formatWaitMinutes(step.waitMinutes)}
+                              </div>
+                            ) : null}
+                            {step.subject ? (
+                              <div className="mt-2">
+                                <span className="font-medium text-[color:var(--foreground)]">Subject:</span> {step.subject}
+                              </div>
+                            ) : null}
+                            {step.body ? (
+                              <div className="mt-1 whitespace-pre-wrap text-[color:var(--muted-foreground)]">{step.body}</div>
+                            ) : null}
+                            {step.intent || step.route || step.reason ? (
+                              <div className="mt-2 text-[color:var(--muted-foreground)]">
+                                {[step.intent ? `intent: ${step.intent}` : "", step.route ? `route: ${step.route}` : "", step.reason].filter(Boolean).join(" · ")}
+                              </div>
+                            ) : null}
+                          </div>
+                        ))}
+                      </div>
+                    </details>
+                  ))}
+                </div>
+              ) : null}
+            </div>
           </CardContent>
         </Card>
       </div>

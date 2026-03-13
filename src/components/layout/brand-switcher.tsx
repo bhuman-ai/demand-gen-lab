@@ -14,7 +14,7 @@ const ACTIVE_BRAND_KEY = "factory.activeBrandId";
 
 export function getActiveBrandIdFromPath(pathname: string): string {
   const parts = pathname.split("/").filter(Boolean);
-  if (parts[0] === "brands" && parts[1]) {
+  if (parts[0] === "brands" && parts[1] && parts[1] !== "new") {
     return parts[1];
   }
   return "";
@@ -102,35 +102,38 @@ export default function BrandSwitcher() {
   );
 
   return (
-    <div className="flex w-full items-center gap-2">
-      <Select
-        className="border-[color:var(--accent-border)] bg-[color:var(--surface)] shadow-[0_16px_36px_-28px_color-mix(in_srgb,var(--accent)_70%,transparent)]"
-        value={selectedBrandId}
-        onChange={(event) => {
-          const brandId = event.target.value;
-          setActiveBrandId(brandId);
-          localStorage.setItem(ACTIVE_BRAND_KEY, brandId);
-          trackEvent("brand_switched", { brandId });
-          router.push(`/brands/${brandId}`);
-        }}
-      >
-        {loadingBrands && !brands.length ? <option value="">Loading brands...</option> : null}
-        {!loadingBrands && !brands.length ? <option value="">No brands</option> : null}
-        {brands.map((brand) => (
-          <option key={brand.id} value={brand.id}>
-            {brand.name}
-          </option>
-        ))}
-      </Select>
-      {!activeBrand ? (
-        <button
-          type="button"
-          className="rounded-xl border border-[color:var(--border)] px-3 py-2 text-xs text-[color:var(--muted-foreground)]"
-          onClick={() => router.push("/brands/new")}
+    <div className="grid gap-2">
+      <div className="text-[12px] text-[color:var(--muted-foreground)]">Active brand</div>
+      <div className="flex w-full items-center gap-2">
+        <Select
+          className="bg-[color:var(--surface)]"
+          value={selectedBrandId}
+          onChange={(event) => {
+            const brandId = event.target.value;
+            setActiveBrandId(brandId);
+            localStorage.setItem(ACTIVE_BRAND_KEY, brandId);
+            trackEvent("brand_switched", { brandId });
+            router.push(`/brands/${brandId}`);
+          }}
         >
-          New Brand
-        </button>
-      ) : null}
+          {loadingBrands && !brands.length ? <option value="">Loading brands...</option> : null}
+          {!loadingBrands && !brands.length ? <option value="">No brands</option> : null}
+          {brands.map((brand) => (
+            <option key={brand.id} value={brand.id}>
+              {brand.name}
+            </option>
+          ))}
+        </Select>
+        {!activeBrand ? (
+          <button
+            type="button"
+            className="h-11 shrink-0 rounded-[10px] border border-[color:var(--border)] px-3 text-sm text-[color:var(--muted-foreground)] transition-colors hover:bg-[color:var(--surface)] hover:text-[color:var(--foreground)]"
+            onClick={() => router.push("/brands/new")}
+          >
+            New brand
+          </button>
+        ) : null}
+      </div>
     </div>
   );
 }

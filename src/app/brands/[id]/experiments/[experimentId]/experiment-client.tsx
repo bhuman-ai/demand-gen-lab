@@ -10,6 +10,7 @@ import {
   Lock,
   Pause,
   Play,
+  Plus,
   RefreshCw,
   Rocket,
   Save,
@@ -56,11 +57,23 @@ const STAGE_COUNT = 4;
 const AUTO_SOURCE_POLL_INTERVAL_MS = 2000;
 const AUTO_SOURCE_RETRY_DELAY_MS = 1500;
 const CSV_MAX_CHARS = 2_000_000;
+const ADDITIONAL_LEADS_MIN = 1;
+const ADDITIONAL_LEADS_MAX = 400;
+const BUSINESS_DAY_OPTIONS = [
+  { value: 1, label: "Mon" },
+  { value: 2, label: "Tue" },
+  { value: 3, label: "Wed" },
+  { value: 4, label: "Thu" },
+  { value: 5, label: "Fri" },
+  { value: 6, label: "Sat" },
+  { value: 0, label: "Sun" },
+];
 
 type StageIndex = 0 | 1 | 2 | 3;
 type WorkflowStageStatus = "done" | "current" | "waiting" | "locked" | "active";
 type ProspectInputMode = "need_data" | "have_data";
 type ExperimentView = "setup" | "prospects" | "messaging" | "launch" | "run";
+type AutoSourceMode = "gate" | "expand";
 type RejectionSummaryRow = { reason: string; count: number };
 type EmailFailureSample = {
   id: string;
@@ -72,6 +85,17 @@ type EmailFailureSample = {
   topAttemptVerdict: string;
   topAttemptConfidence: string;
   topAttemptReason: string;
+};
+type RunNextAction = {
+  tone: "warning" | "success";
+  title: string;
+  detail: string;
+  primaryLabel: string;
+  primaryHref: string;
+  primaryStage?: StageIndex;
+  secondaryLabel?: string;
+  secondaryHref?: string;
+  secondaryStage?: StageIndex;
 };
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -151,6 +175,23 @@ function reasonFix(reason: string) {
     policy_rejected: "Review top rejection reasons and refine audience query.",
   };
   return fixes[key] ?? "Refine query and ICP filters, then rerun sourcing.";
+}
+
+function parseAdditionalLeadsInput(value: string) {
+  const parsed = Math.round(Number(value));
+  if (!Number.isFinite(parsed)) return null;
+  if (parsed < ADDITIONAL_LEADS_MIN) return null;
+  return Math.max(ADDITIONAL_LEADS_MIN, Math.min(ADDITIONAL_LEADS_MAX, parsed));
+}
+
+function formatBusinessDays(days: number[] | undefined) {
+  const normalized = Array.from(new Set((days ?? [1, 2, 3, 4, 5]).filter((day) => day >= 0 && day <= 6))).sort(
+    (a, b) => a - b
+  );
+  if (!normalized.length) return "Mon-Fri";
+  if (normalized.length === 7) return "Every day";
+  const labels = normalized.map((day) => BUSINESS_DAY_OPTIONS.find((item) => item.value === day)?.label ?? String(day));
+  return labels.join(", ");
 }
 
 function parseReasonRows(raw: unknown): RejectionSummaryRow[] {
@@ -236,6 +277,15 @@ function formatDate(value: string) {
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) return value;
   return parsed.toLocaleString();
+}
+
+function formatUsd(value: number, opts?: { minFractionDigits?: number; maxFractionDigits?: number }) {
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+    minimumFractionDigits: opts?.minFractionDigits ?? 2,
+    maximumFractionDigits: opts?.maxFractionDigits ?? 2,
+  }).format(value);
 }
 
 function wait(ms: number) {
@@ -362,6 +412,7 @@ export default function ExperimentClient({
   const samplingAbortRef = useRef<AbortController | null>(null);
   const samplingStopRequestedRef = useRef(false);
   const samplingActiveRunIdRef = useRef("");
+  const stageAutoInitializedRef = useRef(false);
   const routeStage: StageIndex | null =
     view === "setup" ? 0 : view === "prospects" ? 1 : view === "messaging" ? 2 : view === "launch" ? 3 : null;
 
@@ -476,6 +527,44 @@ export default function ExperimentClient({
     () => (latestRun ? runView?.eventsByRun?.[latestRun.id] ?? [] : []),
     [latestRun, runView]
   );
+  const runTotals = useMemo(
+    () =>
+      (runView?.runs ?? []).reduce(
+        (acc, run) => ({
+          sourcedLeads: acc.sourcedLeads + Number(run.metrics.sourcedLeads ?? 0),
+          scheduledMessages: acc.scheduledMessages + Number(run.metrics.scheduledMessages ?? 0),
+          sentMessages: acc.sentMessages + Number(run.metrics.sentMessages ?? 0),
+          replies: acc.replies + Number(run.metrics.replies ?? 0),
+          positiveReplies: acc.positiveReplies + Number(run.metrics.positiveReplies ?? 0),
+        }),
+        {
+          sourcedLeads: 0,
+          scheduledMessages: 0,
+          sentMessages: 0,
+          replies: 0,
+          positiveReplies: 0,
+        }
+      ),
+    [runView]
+  );
+  const latestRunIsSourcingOnly = useMemo(
+    () =>
+      latestEvents.some((event) => {
+        const payload = asRecord(event.payload);
+        return payload.sampleOnly === true;
+      }),
+    [latestEvents]
+  );
+  const latestSendingRun = useMemo(
+    () =>
+      (runView?.runs ?? []).find(
+        (run) =>
+          Number(run.metrics.sentMessages ?? 0) > 0 ||
+          Number(run.metrics.scheduledMessages ?? 0) > 0 ||
+          ["scheduled", "sending", "monitoring", "paused"].includes(run.status)
+      ) ?? null,
+    [runView]
+  );
 
   const setupReady = useMemo(
     () =>
@@ -497,6 +586,39 @@ export default function ExperimentClient({
     () => Math.max(sourcedLeadWithEmailCount, sampleLeads.filter((lead) => Boolean(lead.email?.trim())).length),
     [sampleLeads, sourcedLeadWithEmailCount]
   );
+  const sourcingEconomics = useMemo(() => {
+    const runs = runView?.runs ?? [];
+    const eventsByRun = runView?.eventsByRun ?? {};
+    let estimatedSourcingSpendUsd = 0;
+    let exaQueryCount = 0;
+
+    for (const run of runs) {
+      const spend = Number(run.sourcingTraceSummary?.budgetUsedUsd ?? 0);
+      if (Number.isFinite(spend) && spend > 0) {
+        estimatedSourcingSpendUsd += spend;
+      }
+
+      const events = eventsByRun[run.id] ?? [];
+      for (const event of events) {
+        const payload = asRecord(event.payload);
+        const costBreakdown = asRecord(payload.costBreakdown);
+        const queryCount = Number(costBreakdown.exaQueryCount ?? 0);
+        if (Number.isFinite(queryCount) && queryCount > 0) {
+          exaQueryCount += queryCount;
+          break;
+        }
+      }
+    }
+
+    return {
+      estimatedSourcingSpendUsd,
+      exaQueryCount,
+      costPerSourcedLeadUsd:
+        runTotals.sourcedLeads > 0 ? estimatedSourcingSpendUsd / Math.max(1, runTotals.sourcedLeads) : null,
+      costPerVerifiedLeadUsd:
+        realEmailLeadCount > 0 ? estimatedSourcingSpendUsd / Math.max(1, realEmailLeadCount) : null,
+    };
+  }, [realEmailLeadCount, runTotals.sourcedLeads, runView]);
 
   const prospectsReady = realEmailLeadCount >= PROSPECT_VALIDATION_MIN_READY;
   const invalidLeadCount = sourcedLeadWithoutEmailCount;
@@ -525,53 +647,6 @@ export default function ExperimentClient({
     (launchComplete ? 1 : 0);
   const progressPercent = Math.round((progressDoneCount / STAGE_COUNT) * 100);
 
-  const latestRunNarrative = useMemo(() => {
-    if (!latestRun) {
-      return {
-        headline: "No launch yet.",
-        detail: "Complete Prospects + Messaging, then click Launch Test.",
-      };
-    }
-    const sourced = Number(latestRun.metrics.sourcedLeads ?? 0);
-    const sent = Number(latestRun.metrics.sentMessages ?? 0);
-    const replies = Number(latestRun.metrics.replies ?? 0);
-
-    if (["failed", "preflight_failed", "canceled"].includes(latestRun.status)) {
-      return {
-        headline: "Run did not complete successfully.",
-        detail: latestRun.lastError || "Check timeline events for root cause.",
-      };
-    }
-    if (latestRun.status === "completed" && sourced > 0 && sent === 0) {
-      return {
-        headline: "Sourcing completed, but no emails were sent in this run.",
-        detail: `Accepted leads: ${sourced}. Click Launch Experiment to start sending.`,
-      };
-    }
-    if (latestRun.status === "completed" && sent > 0 && replies === 0) {
-      return {
-        headline: "Emails were sent; no replies yet.",
-        detail: `Sent ${sent} messages to ${sourced} sourced leads.`,
-      };
-    }
-    if (latestRun.status === "completed" && sent > 0 && replies > 0) {
-      return {
-        headline: "Run completed with outbound and replies.",
-        detail: `Sent ${sent}, replies ${replies}.`,
-      };
-    }
-    if (["queued", "sourcing", "scheduled", "sending", "monitoring"].includes(latestRun.status)) {
-      return {
-        headline: "Run is in progress.",
-        detail: `Current step: ${latestRun.sourcingTraceSummary?.phase || "processing"}.`,
-      };
-    }
-    return {
-      headline: "Run status updated.",
-      detail: `Status: ${latestRun.status}.`,
-    };
-  }, [latestRun]);
-
   const traceQueryDiagnostics = useMemo(() => {
     const rows = sourcingTrace?.probeResults ?? [];
     return rows
@@ -598,6 +673,14 @@ export default function ExperimentClient({
       .filter((row) => row.query)
       .slice(0, 10);
   }, [sourcingTrace]);
+
+  const traceProbeSummary = useMemo(() => {
+    const raw = sourcingTrace?.latestDecision?.probeSummary;
+    return raw && typeof raw === "object" && !Array.isArray(raw) ? (raw as Record<string, unknown>) : null;
+  }, [sourcingTrace]);
+
+  const traceMode = String(traceProbeSummary?.mode ?? "").trim();
+  const traceFallbackReason = String(traceProbeSummary?.fallbackReason ?? "").trim();
 
   const leadRejectionDiagnostics = useMemo(() => {
     const events = sourcingTrace?.runEvents ?? [];
@@ -662,6 +745,7 @@ export default function ExperimentClient({
     [sampleLeads]
   );
   const previewMissingLeadCount = Math.max(0, sampleLeads.length - previewValidLeadCount);
+  const previewDisplayedLeadCount = sampleLeads.length;
   const hasLeadDiagnostics =
     leadRejectionDiagnostics.rejectionRows.length > 0 ||
     leadRejectionDiagnostics.suppressionRows.length > 0 ||
@@ -773,6 +857,13 @@ export default function ExperimentClient({
   const goNext = () =>
     setCurrentStage((prev) => asStageIndex(Math.min(highestUnlockedStage, prev + 1)));
   const goPrev = () => setCurrentStage((prev) => asStageIndex(prev - 1));
+  const openStage = (stage: StageIndex) => {
+    if (routeStage !== null) {
+      router.push(stagePath(brandId, experimentId, stage));
+      return;
+    }
+    setCurrentStage(stage);
+  };
 
   const launchFromEmail = String(deliveryAccount?.config.customerIo.fromEmail ?? "").trim();
   const launchReplyToEmail = String(
@@ -785,6 +876,67 @@ export default function ExperimentClient({
   ].filter(Boolean);
   const launchIdentityReady = launchIdentityIssues.length === 0;
   const launchBlocked = !launchUnlocked || !launchIdentityReady;
+  const canAutoSendOnAddLeads = launchUnlocked && launchIdentityReady;
+  const businessHoursEnabled = experiment?.testEnvelope.businessHoursEnabled !== false;
+  const businessHoursStartHour = Math.max(
+    0,
+    Math.min(23, Number(experiment?.testEnvelope.businessHoursStartHour ?? 9) || 9)
+  );
+  const businessHoursEndHour = Math.max(
+    1,
+    Math.min(24, Number(experiment?.testEnvelope.businessHoursEndHour ?? 17) || 17)
+  );
+  const businessDaysLabel = formatBusinessDays(experiment?.testEnvelope.businessDays);
+  const latestRunNarrative = (() => {
+    if (!latestRun) {
+      return {
+        headline: "No launch yet.",
+        detail: "Complete Prospects + Messaging, then click Launch Test.",
+      };
+    }
+    const sourced = Number(latestRun.metrics.sourcedLeads ?? 0);
+    const sent = Number(latestRun.metrics.sentMessages ?? 0);
+    const replies = Number(latestRun.metrics.replies ?? 0);
+
+    if (["failed", "preflight_failed", "canceled"].includes(latestRun.status)) {
+      return {
+        headline: "Run did not complete successfully.",
+        detail: latestRun.lastError || "Check timeline events for root cause.",
+      };
+    }
+    if (latestRun.status === "completed" && sourced > 0 && sent === 0) {
+      return {
+        headline: "Sourcing completed, but no emails were sent in this run.",
+        detail: !messagingReady
+          ? `Accepted leads: ${sourced}. Publish the messaging flow before this experiment can send.`
+          : !launchIdentityReady
+            ? `Accepted leads: ${sourced}. Finish launch setup: ${launchIdentityIssues.join(", ")}.`
+            : `Accepted leads: ${sourced}. Launch Experiment to start sending.`,
+      };
+    }
+    if (latestRun.status === "completed" && sent > 0 && replies === 0) {
+      return {
+        headline: "Emails were sent; no replies yet.",
+        detail: `Sent ${sent} messages to ${sourced} sourced leads.`,
+      };
+    }
+    if (latestRun.status === "completed" && sent > 0 && replies > 0) {
+      return {
+        headline: "Run completed with outbound and replies.",
+        detail: `Sent ${sent}, replies ${replies}.`,
+      };
+    }
+    if (["queued", "sourcing", "scheduled", "sending", "monitoring"].includes(latestRun.status)) {
+      return {
+        headline: "Run is in progress.",
+        detail: `Current step: ${latestRun.sourcingTraceSummary?.phase || "processing"}.`,
+      };
+    }
+    return {
+      headline: "Run status updated.",
+      detail: `Status: ${latestRun.status}.`,
+    };
+  })();
 
   const saveSetup = async () => {
     if (!experiment) return null;
@@ -807,6 +959,22 @@ export default function ExperimentClient({
     } finally {
       setSaving(false);
     }
+  };
+
+  const requestAdditionalLeadsCount = () => {
+    if (typeof window === "undefined") return null;
+    const defaultValue = String(experiment?.testEnvelope.sampleSize ?? PROSPECT_VALIDATION_TARGET);
+    const response = window.prompt(
+      `How many additional leads should we source? (${ADDITIONAL_LEADS_MIN}-${ADDITIONAL_LEADS_MAX})`,
+      defaultValue
+    );
+    if (response === null) return null;
+    const count = parseAdditionalLeadsInput(response.trim());
+    if (!count) {
+      setError(`Enter a valid lead count between ${ADDITIONAL_LEADS_MIN} and ${ADDITIONAL_LEADS_MAX}.`);
+      return null;
+    }
+    return count;
   };
 
   const stopAutoSource = async () => {
@@ -836,8 +1004,14 @@ export default function ExperimentClient({
     }
   };
 
-  const autoSourceProspects = async () => {
-    if (!experiment || sampling || prospectsReady || prospectInputMode !== "need_data") return;
+  const autoSourceProspects = async (
+    mode: AutoSourceMode = "gate",
+    expandLeadCount?: number,
+    options?: { autoSend?: boolean }
+  ) => {
+    if (!experiment || sampling) return;
+    if (mode === "gate" && prospectInputMode !== "need_data") return;
+    if (mode === "gate" && prospectsReady) return;
     const abortController = new AbortController();
     samplingAbortRef.current = abortController;
     samplingStopRequestedRef.current = false;
@@ -845,15 +1019,43 @@ export default function ExperimentClient({
     setAutoSourcePaused(false);
     setSampling(true);
     setError("");
-    setSamplingStatus("Starting continuous auto-sourcing...");
+    setSamplingStatus(mode === "expand" ? "Starting incremental sourcing for additional leads..." : "Starting continuous auto-sourcing...");
     setSamplingSummary("");
     setSamplingAttempt(0);
     setSamplingRunsLaunched(0);
     setSamplingActiveRunId("");
     setSamplingHeartbeatAt(new Date().toISOString());
 
-    const targetLeads = PROSPECT_VALIDATION_TARGET;
-    const sampleSize = clampExperimentSampleSize(experiment.testEnvelope.sampleSize, targetLeads);
+    const baselineLeadCount = realEmailLeadCount;
+    const requestedExpandCount =
+      mode === "expand"
+        ? Math.max(
+            ADDITIONAL_LEADS_MIN,
+            Math.min(
+              ADDITIONAL_LEADS_MAX,
+              Math.round(
+                Number(expandLeadCount ?? experiment.testEnvelope.sampleSize ?? PROSPECT_VALIDATION_TARGET) ||
+                  PROSPECT_VALIDATION_TARGET
+              )
+            )
+          )
+        : PROSPECT_VALIDATION_TARGET;
+    const sampleSize =
+      mode === "expand"
+        ? requestedExpandCount
+        : clampExperimentSampleSize(experiment.testEnvelope.sampleSize, PROSPECT_VALIDATION_TARGET);
+    const targetLeads =
+      mode === "expand"
+        ? Math.max(baselineLeadCount + 1, baselineLeadCount + requestedExpandCount)
+        : PROSPECT_VALIDATION_TARGET;
+    const autoSend = mode === "expand" ? options?.autoSend !== false : false;
+    if (mode === "expand") {
+      setSamplingStatus(
+        autoSend
+          ? "Starting add-leads run (new leads will auto-send during business hours)..."
+          : "Starting add-leads run (sourcing only)..."
+      );
+    }
 
     let attempts = 0;
     let bestLeadCount = realEmailLeadCount;
@@ -878,7 +1080,7 @@ export default function ExperimentClient({
             brandId,
             experiment.id,
             sampleSize,
-            { timeoutMs: 25_000, signal: abortController.signal }
+            { timeoutMs: 25_000, signal: abortController.signal, autoSend }
           );
         } catch (err) {
           const launchError = err instanceof Error ? err.message : "Failed to launch sourcing run";
@@ -941,19 +1143,31 @@ export default function ExperimentClient({
 
         if (bestLeadCount >= targetLeads) {
           setSamplingSummary(
-            `Prospect validation passed automatically: ${bestLeadCount}/${targetLeads} quality leads with real emails.`
+            mode === "expand"
+              ? autoSend
+                ? `Added and queued sending: ${bestLeadCount} verified leads total (+${requestedExpandCount} requested).`
+                : `Added more data: ${bestLeadCount} verified leads total (+${requestedExpandCount} requested).`
+              : `Prospect validation passed automatically: ${bestLeadCount}/${targetLeads} quality leads with real emails.`
           );
           return;
         }
 
         setSamplingSummary(
-          `Attempt ${attempts} completed: ${bestLeadCount}/${targetLeads} verified leads. Continuing...`
+          mode === "expand"
+            ? autoSend
+              ? `Attempt ${attempts} completed: ${bestLeadCount} verified leads total. Continuing to add +${requestedExpandCount} and queue sends...`
+              : `Attempt ${attempts} completed: ${bestLeadCount} verified leads total. Continuing until +${requestedExpandCount}...`
+            : `Attempt ${attempts} completed: ${bestLeadCount}/${targetLeads} verified leads. Continuing...`
         );
         await wait(AUTO_SOURCE_RETRY_DELAY_MS);
       }
 
       setSamplingSummary(
-        `Prospect validation passed automatically: ${bestLeadCount}/${targetLeads} quality leads with real emails.`
+        mode === "expand"
+          ? autoSend
+            ? `Added and queued sending: ${bestLeadCount} verified leads total (+${requestedExpandCount} requested).`
+            : `Added more data: ${bestLeadCount} verified leads total (+${requestedExpandCount} requested).`
+          : `Prospect validation passed automatically: ${bestLeadCount}/${targetLeads} quality leads with real emails.`
       );
     } catch (err) {
       const message = err instanceof Error ? err.message : "Failed to auto-source prospects";
@@ -1003,20 +1217,98 @@ export default function ExperimentClient({
     autoSourcePaused,
   ]);
 
+  useEffect(() => {
+    if (loading || !experiment || routeStage !== null || stageAutoInitializedRef.current) return;
+    const initialStage = launchUnlocked ? 3 : messagingUnlocked ? 2 : prospectsUnlocked ? 1 : 0;
+    setCurrentStage(initialStage);
+    stageAutoInitializedRef.current = true;
+  }, [experiment, launchUnlocked, loading, messagingUnlocked, prospectsUnlocked, routeStage]);
+
   if (loading || !experiment || !runView) {
     return <div className="text-sm text-[color:var(--muted-foreground)]">Loading experiment...</div>;
   }
 
-  const showLiveRunOverview = Boolean(
-    latestRun &&
-      (view === "run" ||
-        ["queued", "sourcing", "scheduled", "sending", "monitoring", "paused"].includes(latestRun.status))
-  );
-  const latestRunMessages = latestRun ? runView.messages.filter((message) => message.runId === latestRun.id) : [];
-  const nextScheduledAt = latestRunMessages
+  const showLiveRunOverview = Boolean(view === "run" && latestRun);
+  const nextScheduledAtAnyRun = (runView?.messages ?? [])
     .filter((message) => message.status === "scheduled" && message.scheduledAt)
     .map((message) => message.scheduledAt)
     .sort((a, b) => (a < b ? -1 : 1))[0];
+  const runNextAction: RunNextAction | null = (() => {
+    if (!experiment) return null;
+    const messagingHref = `/brands/${brandId}/experiments/${experiment.id}/messaging`;
+    const launchHref = `/brands/${brandId}/experiments/${experiment.id}/launch`;
+    const inboxHref = `/brands/${brandId}/inbox`;
+
+    if (!messagingReady) {
+      return {
+        tone: "warning",
+        title: "Publish messaging before sending",
+        detail: `This experiment has ${realEmailLeadCount} accepted leads, but Flow rev is still #0. Publish the messaging canvas first. After that, Launch can schedule sends during business hours.`,
+        primaryLabel: "Open Messaging",
+        primaryHref: messagingHref,
+        primaryStage: 2,
+        secondaryLabel: "Open Launch",
+        secondaryHref: launchHref,
+        secondaryStage: 3,
+      };
+    }
+
+    if (!launchIdentityReady) {
+      return {
+        tone: "warning",
+        title: "Finish launch setup",
+        detail: `Messaging is published, but sending is blocked until launch setup is complete: ${launchIdentityIssues.join(", ")}.`,
+        primaryLabel: "Open Launch",
+        primaryHref: launchHref,
+        primaryStage: 3,
+        secondaryLabel: "Open Messaging",
+        secondaryHref: messagingHref,
+        secondaryStage: 2,
+      };
+    }
+
+    if (latestRunIsSourcingOnly && !latestSendingRun) {
+      return {
+        tone: "warning",
+        title: "Start the first sending run",
+        detail: `You already have ${realEmailLeadCount} accepted leads. Launch the experiment to schedule and send them during the configured business hours.`,
+        primaryLabel: "Open Launch",
+        primaryHref: launchHref,
+        primaryStage: 3,
+        secondaryLabel: "Open Messaging",
+        secondaryHref: messagingHref,
+        secondaryStage: 2,
+      };
+    }
+
+    if (nextScheduledAtAnyRun) {
+      return {
+        tone: "success",
+        title: "Sends are scheduled",
+        detail: `The next outbound send is scheduled for ${formatDate(nextScheduledAtAnyRun)}.`,
+        primaryLabel: "Open Inbox",
+        primaryHref: inboxHref,
+        secondaryLabel: "Open Launch",
+        secondaryHref: launchHref,
+        secondaryStage: 3,
+      };
+    }
+
+    if (runTotals.sentMessages > 0) {
+      return {
+        tone: "success",
+        title: "Run has already started sending",
+        detail: `This experiment has sent ${runTotals.sentMessages} emails across all runs. Open Inbox to monitor replies, or Launch to review pacing and controls.`,
+        primaryLabel: "Open Inbox",
+        primaryHref: inboxHref,
+        secondaryLabel: "Open Launch",
+        secondaryHref: launchHref,
+        secondaryStage: 3,
+      };
+    }
+
+    return null;
+  })();
   const liveFunnelSteps = latestRun
     ? [
         { label: "Leads sourced", count: Number(latestRun.metrics.sourcedLeads ?? 0) },
@@ -1068,23 +1360,61 @@ export default function ExperimentClient({
               <div className="text-sm font-semibold">{latestRun.id.slice(-8)}</div>
             </div>
             <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-2">
-              <div className="text-xs text-[color:var(--muted-foreground)]">Sent</div>
-              <div className="text-sm font-semibold">{latestRun.metrics.sentMessages}</div>
+              <div className="text-xs text-[color:var(--muted-foreground)]">Sent (all runs)</div>
+              <div className="text-sm font-semibold">{runTotals.sentMessages}</div>
+              <div className="text-[11px] text-[color:var(--muted-foreground)]">
+                Latest run: {latestRun.metrics.sentMessages}
+              </div>
             </div>
             <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-2">
-              <div className="text-xs text-[color:var(--muted-foreground)]">Replies</div>
-              <div className="text-sm font-semibold">{latestRun.metrics.replies}</div>
+              <div className="text-xs text-[color:var(--muted-foreground)]">Replies (all runs)</div>
+              <div className="text-sm font-semibold">{runTotals.replies}</div>
+              <div className="text-[11px] text-[color:var(--muted-foreground)]">
+                Latest run: {latestRun.metrics.replies}
+              </div>
             </div>
             <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-2">
-              <div className="text-xs text-[color:var(--muted-foreground)]">Positive</div>
-              <div className="text-sm font-semibold">{latestRun.metrics.positiveReplies}</div>
+              <div className="text-xs text-[color:var(--muted-foreground)]">Positive (all runs)</div>
+              <div className="text-sm font-semibold">{runTotals.positiveReplies}</div>
+              <div className="text-[11px] text-[color:var(--muted-foreground)]">
+                Latest run: {latestRun.metrics.positiveReplies}
+              </div>
             </div>
             <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-2">
               <div className="text-xs text-[color:var(--muted-foreground)]">Next send</div>
-              <div className="text-sm font-semibold">{nextScheduledAt ? formatDate(nextScheduledAt) : "Pending tick"}</div>
+              <div className="text-sm font-semibold">
+                {nextScheduledAtAnyRun ? formatDate(nextScheduledAtAnyRun) : "No send scheduled"}
+              </div>
             </div>
           </CardContent>
         </Card>
+
+        {runNextAction ? (
+          <div
+            className={`rounded-xl border px-4 py-3 ${
+              runNextAction.tone === "success"
+                ? "border-[color:var(--success)]/40 bg-[color:var(--success-soft)] text-[color:var(--success)]"
+                : "border-[color:var(--warning)]/40 bg-[color:var(--warning-soft)] text-[color:var(--warning)]"
+            }`}
+          >
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div className="space-y-1">
+                <div className="text-sm font-semibold">{runNextAction.title}</div>
+                <div className="text-sm">{runNextAction.detail}</div>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <Button asChild type="button" size="sm">
+                  <Link href={runNextAction.primaryHref}>{runNextAction.primaryLabel}</Link>
+                </Button>
+                {runNextAction.secondaryHref && runNextAction.secondaryLabel ? (
+                  <Button asChild type="button" variant="outline" size="sm">
+                    <Link href={runNextAction.secondaryHref}>{runNextAction.secondaryLabel}</Link>
+                  </Button>
+                ) : null}
+              </div>
+            </div>
+          </div>
+        ) : null}
 
         <div className="grid gap-4 lg:grid-cols-5">
           <Card className="lg:col-span-3">
@@ -1092,7 +1422,7 @@ export default function ExperimentClient({
               <CardTitle className="text-base">Funnel</CardTitle>
               <CardDescription>How leads are flowing through this run right now.</CardDescription>
             </CardHeader>
-            <CardContent className="space-y-3">
+            <CardContent className="space-y-4">
               {liveFunnelSteps.map((step, index) => {
                 const previous = index === 0 ? liveFunnelBase : Math.max(1, Number(liveFunnelSteps[index - 1]?.count ?? 0));
                 const stagePct = Math.round((Math.max(0, step.count) / previous) * 100);
@@ -1109,15 +1439,54 @@ export default function ExperimentClient({
                         {step.count} {index === 0 ? "" : `(${stagePct}% of previous)`}
                       </span>
                     </div>
-                    <div className="h-2 rounded-full bg-[color:var(--surface-muted)]">
+                    <div className="h-1.5 rounded-[999px] bg-[color:var(--border)]">
                       <div
-                        className="h-2 rounded-full bg-gradient-to-r from-[color:var(--accent)] to-[color:var(--success)]"
+                        className="h-1.5 rounded-[999px] bg-[color:var(--accent)]"
                         style={{ width: `${widthPct}%` }}
                       />
                     </div>
                   </div>
                 );
               })}
+              <div className="grid gap-2 pt-1 sm:grid-cols-2 xl:grid-cols-4">
+                <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-2">
+                  <div className="text-xs text-[color:var(--muted-foreground)]">Est. sourcing spend</div>
+                  <div className="text-sm font-semibold text-[color:var(--foreground)]">
+                    {formatUsd(sourcingEconomics.estimatedSourcingSpendUsd)}
+                  </div>
+                </div>
+                <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-2">
+                  <div className="text-xs text-[color:var(--muted-foreground)]">Exa queries used</div>
+                  <div className="text-sm font-semibold text-[color:var(--foreground)]">
+                    {sourcingEconomics.exaQueryCount.toLocaleString()}
+                  </div>
+                </div>
+                <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-2">
+                  <div className="text-xs text-[color:var(--muted-foreground)]">Cost / sourced lead</div>
+                  <div className="text-sm font-semibold text-[color:var(--foreground)]">
+                    {sourcingEconomics.costPerSourcedLeadUsd === null
+                      ? "n/a"
+                      : formatUsd(sourcingEconomics.costPerSourcedLeadUsd, {
+                          minFractionDigits: 4,
+                          maxFractionDigits: 4,
+                        })}
+                  </div>
+                </div>
+                <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-2">
+                  <div className="text-xs text-[color:var(--muted-foreground)]">Cost / current verified</div>
+                  <div className="text-sm font-semibold text-[color:var(--foreground)]">
+                    {sourcingEconomics.costPerVerifiedLeadUsd === null
+                      ? "n/a"
+                      : formatUsd(sourcingEconomics.costPerVerifiedLeadUsd, {
+                          minFractionDigits: 4,
+                          maxFractionDigits: 4,
+                        })}
+                  </div>
+                </div>
+              </div>
+              <div className="text-[11px] text-[color:var(--muted-foreground)]">
+                Based on recorded run-history sourcing spend, not Exa&apos;s billing ledger.
+              </div>
             </CardContent>
           </Card>
 
@@ -1153,7 +1522,7 @@ export default function ExperimentClient({
             <CardDescription>Current run activity and direct operator actions.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-3">
-            <div className="grid gap-2 sm:grid-cols-2 text-xs">
+            <div className="grid gap-2 sm:grid-cols-3 text-xs">
               <div className="rounded-lg border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-2">
                 <div className="text-[color:var(--muted-foreground)]">From email</div>
                 <div className="font-medium text-[color:var(--foreground)]">{launchFromEmail || "Not configured"}</div>
@@ -1162,13 +1531,43 @@ export default function ExperimentClient({
                 <div className="text-[color:var(--muted-foreground)]">Reply-to</div>
                 <div className="font-medium text-[color:var(--foreground)]">{launchReplyToEmail || "Not configured"}</div>
               </div>
+              <div className="rounded-lg border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-2">
+                <div className="text-[color:var(--muted-foreground)]">Business hours</div>
+                <div className="font-medium text-[color:var(--foreground)]">
+                  {businessHoursEnabled ? `${businessHoursStartHour}:00-${businessHoursEndHour}:00` : "Disabled"}
+                </div>
+                {businessHoursEnabled ? (
+                  <div className="text-[11px] text-[color:var(--muted-foreground)]">{businessDaysLabel}</div>
+                ) : null}
+              </div>
             </div>
             <div className="flex flex-wrap gap-2">
               <Button asChild type="button">
                 <Link href={`/brands/${brandId}/inbox`}>Open Inbox</Link>
               </Button>
+              <Button asChild type="button" variant="outline">
+                <Link href={`/brands/${brandId}/experiments/${experiment.id}/launch`}>Open Launch</Link>
+              </Button>
               <Button type="button" variant="outline" onClick={() => void refresh(false)}>
                 <RefreshCw className="h-4 w-4" /> Refresh
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                disabled={sampling}
+                onClick={() => {
+                  setProspectInputMode("need_data");
+                  const count = requestAdditionalLeadsCount();
+                  if (!count) return;
+                  void autoSourceProspects("expand", count, { autoSend: true });
+                }}
+              >
+                {sampling ? (
+                  <RefreshCw className="h-4 w-4 animate-spin" />
+                ) : (
+                  <Plus className="h-4 w-4" />
+                )}
+                {sampling ? "Adding leads..." : "Add Leads"}
               </Button>
               {canPause(latestRun.status) ? (
                 <Button
@@ -1243,6 +1642,7 @@ export default function ExperimentClient({
   }
 
   const messagingFocus = currentStage === 2;
+  const unifiedRunMode = !view && Boolean(latestRun);
 
   return (
     <div className="space-y-4 sm:space-y-5">
@@ -1251,7 +1651,9 @@ export default function ExperimentClient({
           <CardHeader>
             <CardTitle>{brand?.name || "Brand"} · {experiment.name}</CardTitle>
             <CardDescription>
-              Stage-based flow: Setup {"->"} Prospects {"->"} Messaging {"->"} Launch.
+              {unifiedRunMode
+                ? "Manage sourcing, messaging, launch, and live run status from this page."
+                : "Stage-based flow: Setup -> Prospects -> Messaging -> Launch."}
             </CardDescription>
           </CardHeader>
           <CardContent className="flex flex-wrap items-center gap-2 text-xs">
@@ -1259,77 +1661,155 @@ export default function ExperimentClient({
             <Badge variant="muted">Sent: {experiment.metricsSummary.sent}</Badge>
             <Badge variant="muted">Replies: {experiment.metricsSummary.replies}</Badge>
             <Badge variant="muted">Positive: {experiment.metricsSummary.positiveReplies}</Badge>
+            {latestRun ? <Badge variant={runStatusVariant(latestRun.status)}>Run: {latestRun.status}</Badge> : null}
           </CardContent>
         </Card>
       ) : null}
 
       {error ? <div className="text-sm text-[color:var(--danger)]">{error}</div> : null}
 
-      <Card>
-        <CardHeader className="border-b border-[color:var(--border)]">
-          <div className="flex flex-wrap items-start justify-between gap-3">
-            <div>
-              <CardTitle className="text-base">Workflow</CardTitle>
-              <CardDescription>
-                {messagingFocus ? "Messaging focus mode." : "Progressive stage flow with one clear next action."}
-              </CardDescription>
-            </div>
-            <div className="flex flex-wrap items-center gap-2 text-xs">
-              <Badge variant="muted">
-                {progressDoneCount}/{STAGE_COUNT} stages complete
-              </Badge>
-              <Badge variant="muted">{progressPercent}% complete</Badge>
-            </div>
-          </div>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="relative">
-            <div className="pointer-events-none absolute left-10 right-10 top-7 hidden h-px bg-[color:var(--border)] md:block" />
-            <div className="grid gap-2 md:grid-cols-4">
-            {workflowStages.map((stage) => (
-              <button
-                key={stage.index}
-                type="button"
-                disabled={stage.disabled}
-                onClick={() => {
-                  if (stage.disabled) return;
-                  if (routeStage !== null) {
-                    router.push(stagePath(brandId, experiment.id, stage.index));
-                    return;
-                  }
-                  setCurrentStage(stage.index);
-                }}
-                className={`relative rounded-2xl border p-3 text-left transition ${
-                  currentStage === stage.index
-                    ? "border-[color:var(--accent)] bg-[color:var(--accent-soft)] shadow-[0_12px_28px_-22px_color-mix(in_srgb,var(--shadow)_95%,transparent)]"
-                    : stage.status === "done"
-                      ? "border-[color:var(--success-border)] bg-[color:var(--success-soft)]/60"
-                      : "border-[color:var(--border)] bg-[color:var(--surface-muted)]"
-                } ${stage.disabled ? "cursor-not-allowed opacity-60" : ""}`}
-              >
-                <div className="flex items-center justify-between gap-2">
-                  <div className="inline-flex h-6 min-w-6 items-center justify-center rounded-full border border-[color:var(--border)] bg-[color:var(--surface)] px-2 text-[11px] font-semibold">
-                    {stage.index + 1}
-                  </div>
-                  {stage.status === "done" ? (
-                    <CheckCircle2 className="h-4 w-4 text-[color:var(--success)]" />
-                  ) : stage.status === "locked" ? (
-                    <Lock className="h-3.5 w-3.5 text-[color:var(--muted-foreground)]" />
-                  ) : (
-                    <Badge variant={stageBadgeVariant(stage.status)}>{stageBadgeLabel(stage.status)}</Badge>
-                  )}
+      {!view && latestRun ? (
+        <>
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Run Status</CardTitle>
+              <CardDescription>{latestRunNarrative.detail}</CardDescription>
+            </CardHeader>
+            <CardContent className="grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
+              <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-2">
+                <div className="text-xs text-[color:var(--muted-foreground)]">Latest run</div>
+                <div className="text-sm font-semibold">{latestRun.id.slice(-8)}</div>
+              </div>
+              <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-2">
+                <div className="text-xs text-[color:var(--muted-foreground)]">Accepted leads</div>
+                <div className="text-sm font-semibold">{realEmailLeadCount}</div>
+              </div>
+              <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-2">
+                <div className="text-xs text-[color:var(--muted-foreground)]">Sent</div>
+                <div className="text-sm font-semibold">{runTotals.sentMessages}</div>
+              </div>
+              <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-2">
+                <div className="text-xs text-[color:var(--muted-foreground)]">Replies</div>
+                <div className="text-sm font-semibold">{runTotals.replies}</div>
+              </div>
+              <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-2">
+                <div className="text-xs text-[color:var(--muted-foreground)]">Next send</div>
+                <div className="text-sm font-semibold">
+                  {nextScheduledAtAnyRun ? formatDate(nextScheduledAtAnyRun) : "No send scheduled"}
                 </div>
-                <div className="mt-2 text-sm font-semibold">{stage.label}</div>
-                <div className="mt-1 text-xs text-[color:var(--muted-foreground)]">{stageSummary(stage.index)}</div>
-              </button>
-            ))}
+              </div>
+            </CardContent>
+          </Card>
+
+          {runNextAction ? (
+            <div
+              className={`rounded-xl border px-4 py-3 ${
+                runNextAction.tone === "success"
+                  ? "border-[color:var(--success)]/40 bg-[color:var(--success-soft)] text-[color:var(--success)]"
+                  : "border-[color:var(--warning)]/40 bg-[color:var(--warning-soft)] text-[color:var(--warning)]"
+              }`}
+            >
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div className="space-y-1">
+                  <div className="text-sm font-semibold">{runNextAction.title}</div>
+                  <div className="text-sm">{runNextAction.detail}</div>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {runNextAction.primaryStage !== undefined ? (
+                    <Button type="button" size="sm" onClick={() => setCurrentStage(runNextAction.primaryStage!)}>
+                      {runNextAction.primaryLabel}
+                    </Button>
+                  ) : (
+                    <Button asChild type="button" size="sm">
+                      <Link href={runNextAction.primaryHref}>{runNextAction.primaryLabel}</Link>
+                    </Button>
+                  )}
+                  {runNextAction.secondaryLabel ? (
+                    runNextAction.secondaryStage !== undefined ? (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setCurrentStage(runNextAction.secondaryStage!)}
+                      >
+                        {runNextAction.secondaryLabel}
+                      </Button>
+                    ) : runNextAction.secondaryHref ? (
+                      <Button asChild type="button" variant="outline" size="sm">
+                        <Link href={runNextAction.secondaryHref}>{runNextAction.secondaryLabel}</Link>
+                      </Button>
+                    ) : null
+                  ) : null}
+                </div>
+              </div>
             </div>
-          </div>
-          <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-2 text-xs text-[color:var(--muted-foreground)]">
-            {nextGateHint}
-          </div>
-        </CardContent>
-      </Card>
+          ) : null}
+        </>
+      ) : null}
+
+      {!unifiedRunMode ? (
+        <Card>
+          <CardHeader className="border-b border-[color:var(--border)]">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <CardTitle className="text-base">Workflow</CardTitle>
+                <CardDescription>
+                  {messagingFocus ? "Messaging focus mode." : "Progressive stage flow with one clear next action."}
+                </CardDescription>
+              </div>
+              <div className="flex flex-wrap items-center gap-2 text-xs">
+                <Badge variant="muted">
+                  {progressDoneCount}/{STAGE_COUNT} stages complete
+                </Badge>
+                <Badge variant="muted">{progressPercent}% complete</Badge>
+              </div>
+            </div>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="relative">
+              <div className="pointer-events-none absolute left-10 right-10 top-7 hidden h-px bg-[color:var(--border)] md:block" />
+              <div className="grid gap-2 md:grid-cols-4">
+              {workflowStages.map((stage) => (
+                <button
+                  key={stage.index}
+                  type="button"
+                  disabled={stage.disabled}
+                  onClick={() => {
+                    if (stage.disabled) return;
+                    openStage(stage.index);
+                  }}
+                  className={`relative rounded-[10px] border p-3 text-left transition ${
+                    currentStage === stage.index
+                      ? "border-[color:var(--accent)] bg-[color:var(--accent-soft)]"
+                      : stage.status === "done"
+                        ? "border-[color:var(--success-border)] bg-[color:var(--success-soft)]/60"
+                        : "border-[color:var(--border)] bg-[color:var(--surface-muted)]"
+                  } ${stage.disabled ? "cursor-not-allowed opacity-60" : ""}`}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="inline-flex h-6 min-w-6 items-center justify-center rounded-[8px] border border-[color:var(--border)] bg-[color:var(--surface)] px-2 text-[11px] font-semibold">
+                      {stage.index + 1}
+                    </div>
+                    {stage.status === "done" ? (
+                      <CheckCircle2 className="h-4 w-4 text-[color:var(--success)]" />
+                    ) : stage.status === "locked" ? (
+                      <Lock className="h-3.5 w-3.5 text-[color:var(--muted-foreground)]" />
+                    ) : (
+                      <Badge variant={stageBadgeVariant(stage.status)}>{stageBadgeLabel(stage.status)}</Badge>
+                    )}
+                  </div>
+                  <div className="mt-2 text-sm font-semibold">{stage.label}</div>
+                  <div className="mt-1 text-xs text-[color:var(--muted-foreground)]">{stageSummary(stage.index)}</div>
+                </button>
+              ))}
+              </div>
+            </div>
+            <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-2 text-xs text-[color:var(--muted-foreground)]">
+              {nextGateHint}
+            </div>
+          </CardContent>
+        </Card>
+      ) : null}
 
       {currentStage === 0 ? (
         <Card>
@@ -1427,6 +1907,127 @@ export default function ExperimentClient({
                 />
               </div>
             </div>
+            <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3">
+              <div className="text-sm font-medium">Sending Window</div>
+              <div className="mt-1 text-xs text-[color:var(--muted-foreground)]">
+                Add Leads will auto-send only inside this window.
+              </div>
+              <div className="mt-3 grid gap-3 md:grid-cols-3">
+                <label className="inline-flex items-center gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    checked={experiment.testEnvelope.businessHoursEnabled !== false}
+                    onChange={(event) =>
+                      setExperiment((prev) =>
+                        prev
+                          ? {
+                              ...prev,
+                              testEnvelope: {
+                                ...prev.testEnvelope,
+                                businessHoursEnabled: event.target.checked,
+                              },
+                            }
+                          : prev
+                      )
+                    }
+                  />
+                  Restrict sending to business hours
+                </label>
+                <div className="grid gap-2">
+                  <Label>Start hour (0-23)</Label>
+                  <Input
+                    type="number"
+                    min={0}
+                    max={23}
+                    value={Math.max(0, Math.min(23, Number(experiment.testEnvelope.businessHoursStartHour ?? 9) || 9))}
+                    onChange={(event) =>
+                      setExperiment((prev) =>
+                        prev
+                          ? {
+                              ...prev,
+                              testEnvelope: {
+                                ...prev.testEnvelope,
+                                businessHoursStartHour: Math.max(
+                                  0,
+                                  Math.min(23, Math.round(Number(event.target.value || 9) || 9))
+                                ),
+                              },
+                            }
+                          : prev
+                      )
+                    }
+                    disabled={experiment.testEnvelope.businessHoursEnabled === false}
+                  />
+                </div>
+                <div className="grid gap-2">
+                  <Label>End hour (1-24)</Label>
+                  <Input
+                    type="number"
+                    min={1}
+                    max={24}
+                    value={Math.max(1, Math.min(24, Number(experiment.testEnvelope.businessHoursEndHour ?? 17) || 17))}
+                    onChange={(event) =>
+                      setExperiment((prev) =>
+                        prev
+                          ? {
+                              ...prev,
+                              testEnvelope: {
+                                ...prev.testEnvelope,
+                                businessHoursEndHour: Math.max(
+                                  1,
+                                  Math.min(24, Math.round(Number(event.target.value || 17) || 17))
+                                ),
+                              },
+                            }
+                          : prev
+                      )
+                    }
+                    disabled={experiment.testEnvelope.businessHoursEnabled === false}
+                  />
+                </div>
+              </div>
+              <div className="mt-3">
+                <Label>Business days</Label>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {BUSINESS_DAY_OPTIONS.map((option) => {
+                    const selected = (experiment.testEnvelope.businessDays ?? [1, 2, 3, 4, 5]).includes(option.value);
+                    return (
+                      <button
+                        key={`day-${option.value}`}
+                        type="button"
+                        disabled={experiment.testEnvelope.businessHoursEnabled === false}
+                        onClick={() =>
+                          setExperiment((prev) => {
+                            if (!prev) return prev;
+                            const current = new Set(prev.testEnvelope.businessDays ?? [1, 2, 3, 4, 5]);
+                            if (current.has(option.value)) {
+                              current.delete(option.value);
+                            } else {
+                              current.add(option.value);
+                            }
+                            const nextDays = Array.from(current).sort((a, b) => a - b);
+                            return {
+                              ...prev,
+                              testEnvelope: {
+                                ...prev.testEnvelope,
+                                businessDays: nextDays.length ? nextDays : [1, 2, 3, 4, 5],
+                              },
+                            };
+                          })
+                        }
+                        className={`rounded-md border px-2 py-1 text-xs ${
+                          selected
+                            ? "border-[color:var(--accent)] bg-[color:var(--accent-soft)] text-[color:var(--accent)]"
+                            : "border-[color:var(--border)] bg-[color:var(--surface)] text-[color:var(--muted-foreground)]"
+                        }`}
+                      >
+                        {option.label}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
             <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-between">
               <Button
                 type="button"
@@ -1445,7 +2046,11 @@ export default function ExperimentClient({
                 onClick={async () => {
                   const saved = await saveSetup();
                   if (!saved) return;
-                  router.push(stagePath(brandId, saved.id, 1));
+                  if (routeStage !== null) {
+                    router.push(stagePath(brandId, saved.id, 1));
+                    return;
+                  }
+                  setCurrentStage(1);
                 }}
               >
                 Continue to Prospects
@@ -1478,18 +2083,18 @@ export default function ExperimentClient({
               </div>
 
               <div className="mt-3">
-                <div className="h-2 overflow-hidden rounded-full bg-[color:var(--surface)]">
+                <div className="h-1.5 overflow-hidden rounded-[999px] bg-[color:var(--border)]">
                   <div
-                    className={`h-full rounded-full ${prospectsReady ? "bg-[color:var(--success)]" : "bg-[color:var(--accent)]"}`}
+                    className={`h-full rounded-[999px] ${prospectsReady ? "bg-[color:var(--success)]" : "bg-[color:var(--accent)]"}`}
                     style={{ width: `${gateProgressPct}%` }}
                   />
                 </div>
                 <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
-                  <Badge variant={prospectsReady ? "success" : "muted"}>Valid: {realEmailLeadCount}</Badge>
+                  <Badge variant={prospectsReady ? "success" : "muted"}>Verified: {realEmailLeadCount}</Badge>
                   <Badge variant={remainingProspectLeads === 0 ? "success" : "muted"}>
                     Remaining: {remainingProspectLeads}
                   </Badge>
-                  <Badge variant="muted">Candidates: {sourcedLeadCount}</Badge>
+                  <Badge variant="muted">Total leads: {sourcedLeadCount}</Badge>
                 </div>
               </div>
 
@@ -1503,26 +2108,10 @@ export default function ExperimentClient({
                 </div>
               ) : null}
 
-              <details className="mt-3 rounded-lg border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-2 text-xs text-[color:var(--muted-foreground)]">
-                <summary className="cursor-pointer list-none font-medium text-[color:var(--foreground)]">
-                  Run context
-                </summary>
-                <div className="mt-2 flex flex-wrap items-center gap-2">
-                  <Badge variant="muted">Preview runs scanned: {sampleLeadRunsChecked}</Badge>
-                  {sampleLeadSourceExperimentId ? (
-                    <Badge variant="muted">Source owner: {sampleLeadSourceExperimentId}</Badge>
-                  ) : null}
-                  {samplingAttempt > 0 ? (
-                    <Badge variant="muted">
-                      Session attempts: {samplingAttempt}
-                    </Badge>
-                  ) : null}
-                  {samplingRunsLaunched > 0 ? (
-                    <Badge variant="muted">Runs launched: {samplingRunsLaunched}</Badge>
-                  ) : null}
-                  {autoSourcePaused ? <Badge variant="accent">Auto-source paused</Badge> : null}
-                </div>
-              </details>
+              <div className="mt-3 text-xs text-[color:var(--muted-foreground)]">
+                Preview snapshot from {sampleLeadRunsChecked} recent run{sampleLeadRunsChecked === 1 ? "" : "s"}
+                {sampleLeadSourceExperimentId ? ` · owner ${sampleLeadSourceExperimentId}` : ""}.
+              </div>
             </div>
 
             <div className="space-y-2">
@@ -1568,20 +2157,45 @@ export default function ExperimentClient({
                     <div className="text-sm font-medium">Auto-source prospects</div>
                     <div className="text-xs text-[color:var(--muted-foreground)]">
                       Keeps running automatically until {PROSPECT_VALIDATION_TARGET} verified work emails are found.
+                      {prospectsReady
+                        ? canAutoSendOnAddLeads
+                          ? " Target is passed. Use Add Leads to source and auto-send new contacts during business hours."
+                          : " Target is passed. Use Add Leads to keep expanding this experiment's data."
+                        : ""}
                     </div>
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
                     <Button
                       type="button"
                       variant="outline"
-                      disabled={sampling || prospectsReady}
+                      disabled={sampling}
                       onClick={() => {
                         setAutoSourcePaused(false);
-                        void autoSourceProspects();
+                        if (!prospectsReady) {
+                          void autoSourceProspects("gate");
+                          return;
+                        }
+                        const count = requestAdditionalLeadsCount();
+                        if (!count) return;
+                        void autoSourceProspects("expand", count, {
+                          autoSend: canAutoSendOnAddLeads,
+                        });
                       }}
                     >
-                      <RefreshCw className={`h-4 w-4 ${sampling ? "animate-spin" : ""}`} />
-                      {sampling ? "Auto-sourcing..." : autoSourcePaused ? "Resume Auto-source" : "Start now"}
+                      {sampling ? (
+                        <RefreshCw className="h-4 w-4 animate-spin" />
+                      ) : prospectsReady ? (
+                        <Plus className="h-4 w-4" />
+                      ) : (
+                        <RefreshCw className="h-4 w-4" />
+                      )}
+                      {sampling
+                        ? "Auto-sourcing..."
+                        : prospectsReady
+                          ? "Add Leads"
+                          : autoSourcePaused
+                            ? "Resume Auto-source"
+                            : "Start now"}
                     </Button>
                     <Button
                       type="button"
@@ -1606,48 +2220,29 @@ export default function ExperimentClient({
                 </div>
 
                 <div className="rounded-lg border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-2">
-                  <div className="flex items-center justify-between gap-2 text-xs">
-                    <span className="font-medium text-[color:var(--foreground)]">Auto-source progress</span>
-                    <span className="text-[color:var(--muted-foreground)]">
-                      {realEmailLeadCount}/{PROSPECT_VALIDATION_TARGET}
-                    </span>
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <span className="text-sm font-medium text-[color:var(--foreground)]">Auto-source status</span>
+                    <Badge variant={prospectsReady ? "success" : sampling ? "accent" : "muted"}>
+                      {prospectsReady ? "target reached" : sampling ? "running" : autoSourcePaused ? "paused" : "idle"}
+                    </Badge>
                   </div>
-                  <div className="mt-2 h-2 overflow-hidden rounded-full bg-[color:var(--surface-muted)]">
-                    <div
-                      className={`h-full rounded-full ${prospectsReady ? "bg-[color:var(--success)]" : "bg-[color:var(--accent)]"} ${sampling ? "animate-pulse" : ""}`}
-                      style={{ width: `${gateProgressPct}%` }}
-                    />
+                  <div className="mt-2 text-sm text-[color:var(--foreground)]">
+                    {samplingStatus ||
+                      samplingSummary ||
+                      (prospectsReady
+                        ? "Target reached. Use Add Leads when you want to expand the pool."
+                        : autoSourcePaused
+                          ? "Auto-source is paused. Resume when you want more verified leads."
+                          : "Auto-source keeps retrying until the verified-lead target is reached.")}
                   </div>
                   <div className="mt-2 text-xs text-[color:var(--muted-foreground)]">
-                    {prospectsReady
-                      ? "Target reached."
-                      : autoSourcePaused
-                        ? "Auto-source is paused. Click Resume to continue."
-                        : sampling
-                          ? "Auto-source is actively running and retrying until target is reached."
-                          : "Auto-source will run automatically in this stage."}
+                    {samplingAttempt > 0 ? `Attempts: ${samplingAttempt}. ` : ""}
+                    {samplingRunsLaunched > 0 ? `Runs launched: ${samplingRunsLaunched}. ` : ""}
+                    {samplingActiveRunId ? `Active run: ${samplingActiveRunId.slice(-6)}. ` : ""}
+                    {samplingHeartbeatAt ? `Last update: ${formatDate(samplingHeartbeatAt)}. ` : ""}
+                    {!prospectsReady ? "If it stalls for 30s, stop and resume." : ""}
                   </div>
                 </div>
-
-                <div className="rounded-lg border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-2 text-xs text-[color:var(--muted-foreground)]">
-                  If status does not change for 30s, use <strong>Stop</strong>, then <strong>Resume</strong>.
-                  {samplingActiveRunId ? ` Active run: ${samplingActiveRunId.slice(-6)}.` : ""}
-                  {samplingHeartbeatAt ? ` Last update: ${formatDate(samplingHeartbeatAt)}.` : ""}
-                </div>
-
-                {samplingStatus ? (
-                  <div className="rounded-lg border border-[color:var(--accent)]/40 bg-[color:var(--accent-soft)] px-3 py-2 text-sm text-[color:var(--accent)]">
-                    {samplingStatus}
-                  </div>
-                ) : null}
-
-                {samplingSummary ? (
-                  <div
-                    className={`rounded-lg px-3 py-2 text-sm ${prospectsReady ? "border border-[color:var(--success)]/40 bg-[color:var(--success-soft)] text-[color:var(--success)]" : "border border-[color:var(--warning)]/40 bg-[color:var(--warning-soft)] text-[color:var(--warning)]"}`}
-                  >
-                    {samplingSummary}
-                  </div>
-                ) : null}
               </div>
             ) : (
               <div className="space-y-3 rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3">
@@ -1775,18 +2370,22 @@ export default function ExperimentClient({
 
             <details className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3">
               <summary className="flex cursor-pointer list-none flex-wrap items-center justify-between gap-2">
-                <span className="text-sm font-medium text-[color:var(--foreground)]">Current Leads</span>
+                <span className="text-sm font-medium text-[color:var(--foreground)]">Current Leads Preview</span>
                 <span className="flex flex-wrap items-center gap-2 text-xs">
-                  <Badge variant="success">Verified: {previewValidLeadCount}</Badge>
-                  <Badge variant="muted">Missing email: {previewMissingLeadCount}</Badge>
+                  <Badge variant="success">Total verified: {realEmailLeadCount}</Badge>
+                  <Badge variant="muted">Preview rows: {sampleLeads.length}</Badge>
                   <span className="text-[color:var(--muted-foreground)]">
-                    Rows: {sampleLeads.length}/{Math.max(sampleLeads.length, sourcedLeadCount)}
+                    Preview rows loaded: {sampleLeads.length}/{Math.max(sampleLeads.length, sourcedLeadCount)}
                   </span>
                 </span>
               </summary>
+              <div className="mt-3 text-xs text-[color:var(--muted-foreground)]">
+                Totals above reflect the whole experiment. The cards below are only a preview sample from those leads.
+                Showing {previewDisplayedLeadCount} rows, including {previewValidLeadCount} valid and {previewMissingLeadCount} missing-email preview rows.
+              </div>
               {sampleLeads.length ? (
                 <div className="mt-3 grid gap-2 md:grid-cols-2">
-                  {sampleLeads.slice(0, 8).map((lead) => (
+                  {sampleLeads.map((lead) => (
                     <div key={`${lead.id}:${lead.email}`} className="rounded-lg border border-[color:var(--border)] p-3 text-xs">
                       <div className="flex items-center justify-between gap-2">
                         <div className="font-medium text-sm">{lead.name || "(missing name)"}</div>
@@ -2035,6 +2634,12 @@ export default function ExperimentClient({
                       {sourcingTrace?.latestDecision ? (
                         <div className="mt-2 space-y-2 text-xs text-[color:var(--muted-foreground)]">
                           <div>Provider: Exa only</div>
+                          {traceMode ? (
+                            <div>
+                              Mode: <span className="font-medium text-[color:var(--foreground)]">{traceMode}</span>
+                              {traceFallbackReason ? ` · fallback: ${traceFallbackReason}` : ""}
+                            </div>
+                          ) : null}
                           <div className="rounded-lg border border-[color:var(--border)] p-2">
                             <div className="font-medium text-[color:var(--foreground)]">Selected chain</div>
                             <div className="mt-1 space-y-1">
@@ -2042,6 +2647,7 @@ export default function ExperimentClient({
                                 <div key={`${step.id}:${step.actorId}:${index}`}>
                                   {index + 1}. {step.stage} {"->"}{" "}
                                   <span className="font-medium text-[color:var(--foreground)]">{step.actorId}</span>
+                                  {step.purpose ? ` · ${step.purpose}` : ""}
                                 </div>
                               ))}
                             </div>
@@ -2131,15 +2737,11 @@ export default function ExperimentClient({
               </div>
             )}
             <div className="flex flex-col gap-2 sm:flex-row sm:justify-end">
-              <Button asChild type="button" variant="outline">
-                <Link href={`/brands/${brandId}/experiments/${experiment.id}/prospects`}>
-                  Back to Prospects
-                </Link>
+              <Button type="button" variant="outline" onClick={() => openStage(1)}>
+                Back to Prospects
               </Button>
-              <Button asChild type="button" disabled={!messagingReady}>
-                <Link href={`/brands/${brandId}/experiments/${experiment.id}/launch`}>
-                  Continue to Launch
-                </Link>
+              <Button type="button" disabled={!messagingReady} onClick={() => openStage(3)}>
+                Continue to Launch
               </Button>
             </div>
           </CardContent>
@@ -2219,10 +2821,8 @@ export default function ExperimentClient({
             </div>
 
             <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
-              <Button asChild type="button" variant="outline">
-                <Link href={`/brands/${brandId}/experiments/${experiment.id}/messaging`}>
-                  Back to Messaging
-                </Link>
+              <Button type="button" variant="outline" onClick={() => openStage(2)}>
+                Back to Messaging
               </Button>
               <Button
                 type="button"
@@ -2294,43 +2894,76 @@ export default function ExperimentClient({
               </div>
             ) : null}
 
-            <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <div className="text-sm font-medium">{latestRun ? `Run ${latestRun.id.slice(-6)}` : "No run yet"}</div>
-                {latestRun ? <Badge variant={runStatusVariant(latestRun.status)}>{latestRun.status}</Badge> : null}
+            {!unifiedRunMode ? (
+              <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="text-sm font-medium">{latestRun ? `Run ${latestRun.id.slice(-6)}` : "No run yet"}</div>
+                  {latestRun ? <Badge variant={runStatusVariant(latestRun.status)}>{latestRun.status}</Badge> : null}
+                </div>
+                <div className="mt-2 rounded-lg border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-2 text-xs">
+                  <div className="font-medium text-[color:var(--foreground)]">{latestRunNarrative.headline}</div>
+                  <div className="mt-1 text-[color:var(--muted-foreground)]">{latestRunNarrative.detail}</div>
+                </div>
+                {latestRun ? (
+                  <>
+                    <div className="mt-2 text-sm text-[color:var(--muted-foreground)]">
+                      Leads {latestRun.metrics.sourcedLeads} · Sent {latestRun.metrics.sentMessages} · Replies {latestRun.metrics.replies} · Positive {latestRun.metrics.positiveReplies}
+                    </div>
+                    {latestRun.lastError ? (
+                      <div className="mt-2 text-sm text-[color:var(--danger)]">Reason: {latestRun.lastError}</div>
+                    ) : null}
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      {canPause(latestRun.status) ? (
+                        <Button type="button" variant="outline" onClick={async () => { await controlExperimentRunApi(brandId, experiment.id, latestRun.id, "pause"); await refresh(false); }}>
+                          <Pause className="h-4 w-4" /> Pause
+                        </Button>
+                      ) : null}
+                      {canResume(latestRun.status) ? (
+                        <Button type="button" variant="outline" onClick={async () => { await controlExperimentRunApi(brandId, experiment.id, latestRun.id, "resume"); await refresh(false); }}>
+                          <Play className="h-4 w-4" /> Resume
+                        </Button>
+                      ) : null}
+                      {canCancel(latestRun.status) ? (
+                        <Button type="button" variant="outline" onClick={async () => { await controlExperimentRunApi(brandId, experiment.id, latestRun.id, "cancel"); await refresh(false); }}>
+                          Cancel
+                        </Button>
+                      ) : null}
+                    </div>
+                  </>
+                ) : null}
               </div>
-              <div className="mt-2 rounded-lg border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-2 text-xs">
-                <div className="font-medium text-[color:var(--foreground)]">{latestRunNarrative.headline}</div>
-                <div className="mt-1 text-[color:var(--muted-foreground)]">{latestRunNarrative.detail}</div>
-              </div>
-              {latestRun ? (
-                <>
-                  <div className="mt-2 text-sm text-[color:var(--muted-foreground)]">
-                    Leads {latestRun.metrics.sourcedLeads} · Sent {latestRun.metrics.sentMessages} · Replies {latestRun.metrics.replies} · Positive {latestRun.metrics.positiveReplies}
+            ) : latestRun ? (
+              <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="text-sm font-medium">Run controls</div>
+                  <Badge variant={runStatusVariant(latestRun.status)}>{latestRun.status}</Badge>
+                </div>
+                {latestRun.lastError ? (
+                  <div className="mt-2 text-sm text-[color:var(--danger)]">Reason: {latestRun.lastError}</div>
+                ) : (
+                  <div className="mt-2 text-xs text-[color:var(--muted-foreground)]">
+                    Manage the live run here without repeating the full status summary above.
                   </div>
-                  {latestRun.lastError ? (
-                    <div className="mt-2 text-sm text-[color:var(--danger)]">Reason: {latestRun.lastError}</div>
+                )}
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {canPause(latestRun.status) ? (
+                    <Button type="button" variant="outline" onClick={async () => { await controlExperimentRunApi(brandId, experiment.id, latestRun.id, "pause"); await refresh(false); }}>
+                      <Pause className="h-4 w-4" /> Pause
+                    </Button>
                   ) : null}
-                  <div className="mt-3 flex flex-wrap gap-2">
-                    {canPause(latestRun.status) ? (
-                      <Button type="button" variant="outline" onClick={async () => { await controlExperimentRunApi(brandId, experiment.id, latestRun.id, "pause"); await refresh(false); }}>
-                        <Pause className="h-4 w-4" /> Pause
-                      </Button>
-                    ) : null}
-                    {canResume(latestRun.status) ? (
-                      <Button type="button" variant="outline" onClick={async () => { await controlExperimentRunApi(brandId, experiment.id, latestRun.id, "resume"); await refresh(false); }}>
-                        <Play className="h-4 w-4" /> Resume
-                      </Button>
-                    ) : null}
-                    {canCancel(latestRun.status) ? (
-                      <Button type="button" variant="outline" onClick={async () => { await controlExperimentRunApi(brandId, experiment.id, latestRun.id, "cancel"); await refresh(false); }}>
-                        Cancel
-                      </Button>
-                    ) : null}
-                  </div>
-                </>
-              ) : null}
-            </div>
+                  {canResume(latestRun.status) ? (
+                    <Button type="button" variant="outline" onClick={async () => { await controlExperimentRunApi(brandId, experiment.id, latestRun.id, "resume"); await refresh(false); }}>
+                      <Play className="h-4 w-4" /> Resume
+                    </Button>
+                  ) : null}
+                  {canCancel(latestRun.status) ? (
+                    <Button type="button" variant="outline" onClick={async () => { await controlExperimentRunApi(brandId, experiment.id, latestRun.id, "cancel"); await refresh(false); }}>
+                      Cancel
+                    </Button>
+                  ) : null}
+                </div>
+              </div>
+            ) : null}
 
             <div>
               <div className="text-sm font-medium">Outbound messages</div>
@@ -2399,8 +3032,8 @@ export default function ExperimentClient({
         </Card>
       ) : null}
 
-      {!view ? (
-        <Card className="sticky bottom-4 z-10 border-[color:var(--border)]/90 bg-[color:var(--surface)]/95 backdrop-blur">
+      {!view && !unifiedRunMode ? (
+        <Card className="sticky bottom-4 z-10 border-[color:var(--border)] bg-[color:var(--surface)] shadow-[0_12px_30px_-28px_var(--shadow)]">
           <CardContent className="flex flex-wrap items-center justify-between gap-3 py-4">
             <div>
               <div className="text-xs font-medium text-[color:var(--foreground)]">{stageTitle(currentStage)}</div>

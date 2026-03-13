@@ -4,7 +4,7 @@ import {
   ConversationFlowGenerationError,
   generateScreenedConversationFlowGraph,
 } from "@/lib/conversation-flow-generation";
-import { getExperimentRecordByRuntimeRef } from "@/lib/experiment-data";
+import { getExperimentRecordByRuntimeRef, updateExperimentRecord } from "@/lib/experiment-data";
 import type { ConversationFlowGraph, ConversationMap } from "@/lib/factory-types";
 import {
   ConversationFlowDataError,
@@ -29,6 +29,38 @@ function parseOfferAndCta(rawOffer: string) {
   return { offer, cta };
 }
 
+function normalizeBusinessHour(value: unknown, fallback: number, min: number, max: number) {
+  const parsed = Math.round(Number(value));
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.max(min, Math.min(max, parsed));
+}
+
+function normalizeBusinessDays(value: unknown, fallback: number[]) {
+  if (!Array.isArray(value)) return fallback;
+  const days = value
+    .map((entry) => Math.round(Number(entry)))
+    .filter((entry) => Number.isFinite(entry) && entry >= 0 && entry <= 6);
+  const unique = Array.from(new Set(days)).sort((a, b) => a - b);
+  return unique.length ? unique : fallback;
+}
+
+function workingHoursPayload(input: {
+  experimentTimezone?: string;
+  experimentBusinessHoursEnabled?: boolean;
+  experimentBusinessHoursStartHour?: number;
+  experimentBusinessHoursEndHour?: number;
+  experimentBusinessDays?: number[];
+  variantTimezone?: string;
+}) {
+  return {
+    timezone: String(input.experimentTimezone ?? input.variantTimezone ?? "America/Los_Angeles").trim() || "America/Los_Angeles",
+    businessHoursEnabled: input.experimentBusinessHoursEnabled !== false,
+    businessHoursStartHour: normalizeBusinessHour(input.experimentBusinessHoursStartHour, 9, 0, 23),
+    businessHoursEndHour: normalizeBusinessHour(input.experimentBusinessHoursEndHour, 17, 1, 24),
+    businessDays: normalizeBusinessDays(input.experimentBusinessDays, [1, 2, 3, 4, 5]),
+  };
+}
+
 function graphContainsLegacyGenericCopy(graph: ConversationFlowGraph): boolean {
   return graph.nodes.some((node) => {
     if (node.kind !== "message") return false;
@@ -49,9 +81,10 @@ function shouldAutoReseedLegacyDraft(
   parsedOffer: { offer: string; cta: string }
 ): boolean {
   if (!parsedOffer.offer.trim()) return false;
-  if (map.status === "published" || map.publishedRevision > 0) return false;
-  if (!map.createdAt || !map.updatedAt) return false;
-  if (map.createdAt !== map.updatedAt) return false;
+  const draftMatchesPublished =
+    JSON.stringify(map.draftGraph) === JSON.stringify(map.publishedGraph);
+  const untouchedDraft = Boolean(map.createdAt && map.updatedAt && map.createdAt === map.updatedAt);
+  if (!untouchedDraft && !draftMatchesPublished) return false;
   return graphContainsLegacyGenericCopy(map.draftGraph);
 }
 
@@ -74,6 +107,14 @@ export async function GET(
   const sourceExperiment = await getExperimentRecordByRuntimeRef(brandId, campaignId, experimentId);
   const parsed = parseOfferAndCta(sourceExperiment?.offer ?? "");
   const hypothesis = campaign.hypotheses.find((item) => item.id === experiment.hypothesisId) ?? null;
+  const workingHours = workingHoursPayload({
+    experimentTimezone: sourceExperiment?.testEnvelope.timezone,
+    experimentBusinessHoursEnabled: sourceExperiment?.testEnvelope.businessHoursEnabled,
+    experimentBusinessHoursStartHour: sourceExperiment?.testEnvelope.businessHoursStartHour,
+    experimentBusinessHoursEndHour: sourceExperiment?.testEnvelope.businessHoursEndHour,
+    experimentBusinessDays: sourceExperiment?.testEnvelope.businessDays,
+    variantTimezone: experiment.runPolicy?.timezone,
+  });
 
   try {
     const map = await getConversationMapByExperiment(brandId, campaignId, experimentId);
@@ -113,9 +154,9 @@ export async function GET(
           name: map.name,
           draftGraph: generated.graph,
         });
-        return NextResponse.json({ map: reseeded, reseeded: true });
+        return NextResponse.json({ map: reseeded, workingHours, reseeded: true });
       }
-      return NextResponse.json({ map });
+      return NextResponse.json({ map, workingHours });
     }
 
     const generated = await generateScreenedConversationFlowGraph({
@@ -152,7 +193,7 @@ export async function GET(
       name: `${experiment.name || "Variant"} Conversation Flow`,
       draftGraph: generated.graph,
     });
-    return NextResponse.json({ map: created, generated: true, mode: generated.mode });
+    return NextResponse.json({ map: created, workingHours, generated: true, mode: generated.mode });
   } catch (error) {
     if (error instanceof ConversationFlowGenerationError) {
       return NextResponse.json({ error: error.message, details: error.details }, { status: error.status });
@@ -183,6 +224,53 @@ export async function PATCH(
   const body = asRecord(await request.json());
   const draftGraph = normalizeConversationGraph(body.draftGraph);
   const name = String(body.name ?? `${experiment.name || "Variant"} Conversation Flow`).trim();
+  const sourceExperiment = await getExperimentRecordByRuntimeRef(brandId, campaignId, experimentId);
+  const inputWorkingHours = asRecord(body.workingHours);
+
+  let workingHours = workingHoursPayload({
+    experimentTimezone: sourceExperiment?.testEnvelope.timezone,
+    experimentBusinessHoursEnabled: sourceExperiment?.testEnvelope.businessHoursEnabled,
+    experimentBusinessHoursStartHour: sourceExperiment?.testEnvelope.businessHoursStartHour,
+    experimentBusinessHoursEndHour: sourceExperiment?.testEnvelope.businessHoursEndHour,
+    experimentBusinessDays: sourceExperiment?.testEnvelope.businessDays,
+    variantTimezone: experiment.runPolicy?.timezone,
+  });
+
+  if (sourceExperiment && Object.keys(inputWorkingHours).length) {
+    const updated = await updateExperimentRecord(brandId, sourceExperiment.id, {
+      testEnvelope: {
+        ...sourceExperiment.testEnvelope,
+        timezone: String(inputWorkingHours.timezone ?? workingHours.timezone).trim() || workingHours.timezone,
+        businessHoursEnabled:
+          inputWorkingHours.businessHoursEnabled === undefined
+            ? workingHours.businessHoursEnabled
+            : inputWorkingHours.businessHoursEnabled !== false,
+        businessHoursStartHour: normalizeBusinessHour(
+          inputWorkingHours.businessHoursStartHour,
+          workingHours.businessHoursStartHour,
+          0,
+          23
+        ),
+        businessHoursEndHour: normalizeBusinessHour(
+          inputWorkingHours.businessHoursEndHour,
+          workingHours.businessHoursEndHour,
+          1,
+          24
+        ),
+        businessDays: normalizeBusinessDays(inputWorkingHours.businessDays, workingHours.businessDays),
+      },
+    });
+    if (updated) {
+      workingHours = workingHoursPayload({
+        experimentTimezone: updated.testEnvelope.timezone,
+        experimentBusinessHoursEnabled: updated.testEnvelope.businessHoursEnabled,
+        experimentBusinessHoursStartHour: updated.testEnvelope.businessHoursStartHour,
+        experimentBusinessHoursEndHour: updated.testEnvelope.businessHoursEndHour,
+        experimentBusinessDays: updated.testEnvelope.businessDays,
+        variantTimezone: experiment.runPolicy?.timezone,
+      });
+    }
+  }
 
   try {
     const map = await upsertConversationMapDraft({
@@ -192,7 +280,7 @@ export async function PATCH(
       name,
       draftGraph,
     });
-    return NextResponse.json({ map });
+    return NextResponse.json({ map, workingHours });
   } catch (error) {
     if (error instanceof ConversationFlowDataError) {
       return NextResponse.json({ error: error.message, hint: error.hint, debug: error.debug }, { status: error.status });

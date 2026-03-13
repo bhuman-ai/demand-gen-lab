@@ -1,0 +1,263 @@
+- generic [ref=e1]:
+  - generic [ref=e3]:
+    - complementary [ref=e4]:
+      - link "Factory Factory Platform" [ref=e5] [cursor=pointer]:
+        - /url: /
+        - generic [ref=e6]: Factory
+        - generic [ref=e7]: Factory Platform
+      - combobox [ref=e10]:
+        - option "BHuman | AI personalized videos at scale" [selected]
+      - navigation [ref=e12]:
+        - link "Experiments" [ref=e13] [cursor=pointer]:
+          - /url: /brands
+          - img [ref=e14]
+          - text: Experiments
+        - link "Campaigns" [ref=e18] [cursor=pointer]:
+          - /url: /brands
+          - img [ref=e19]
+          - text: Campaigns
+        - link "Network" [ref=e21] [cursor=pointer]:
+          - /url: /brands
+          - img [ref=e22]
+          - text: Network
+        - link "Leads" [ref=e27] [cursor=pointer]:
+          - /url: /brands
+          - img [ref=e28]
+          - text: Leads
+        - link "Inbox" [ref=e31] [cursor=pointer]:
+          - /url: /brands
+          - img [ref=e32]
+          - text: Inbox
+      - generic [ref=e35]:
+        - generic [ref=e36]: Tools
+        - navigation [ref=e37]:
+          - link "Settings" [ref=e38] [cursor=pointer]:
+            - /url: /settings/outreach
+            - img [ref=e39]
+            - text: Settings
+          - link "Logic" [ref=e42] [cursor=pointer]:
+            - /url: /logic
+            - img [ref=e43]
+            - text: Logic
+          - link "Doctor" [ref=e45] [cursor=pointer]:
+            - /url: /doctor
+            - img [ref=e46]
+            - text: Doctor
+    - main [ref=e48]:
+      - generic [ref=e50]:
+        - generic [ref=e51]:
+          - generic [ref=e52]: Factory > settings
+          - heading "Outreach Settings" [level=1] [ref=e53]
+        - generic [ref=e54]:
+          - button "Global Search K" [ref=e55]:
+            - img [ref=e56]
+            - text: Global Search
+            - generic [ref=e59]:
+              - img [ref=e60]
+              - text: K
+          - button "User" [ref=e62]:
+            - img [ref=e63]
+            - text: User
+      - generic [ref=e68]:
+        - generic [ref=e69]:
+          - generic [ref=e71]:
+            - generic [ref=e72]:
+              - generic [ref=e73]:
+                - img [ref=e74]
+                - text: State-based setup
+              - heading "Outreach Setup" [level=3] [ref=e77]
+              - paragraph [ref=e78]: Focus on outcomes instead of raw configuration. Tabs stay clean, and technical fields only appear when you choose to connect or edit something.
+            - generic [ref=e79]:
+              - img [ref=e80]
+              - text: 3/3 tabs configured
+          - generic [ref=e83]:
+            - generic [ref=e84]:
+              - generic [ref=e85]: Ready brands
+              - generic [ref=e86]: 1/1
+            - generic [ref=e87]:
+              - generic [ref=e88]: Sender identities
+              - generic [ref=e89]: "1"
+            - generic [ref=e90]:
+              - generic [ref=e91]: Reply inboxes
+              - generic [ref=e92]: "1"
+            - generic [ref=e93]:
+              - generic [ref=e94]: Active accounts
+              - generic [ref=e95]: "2"
+        - generic [ref=e97]:
+          - button "Identity Brand routing, sender domains, and flow readiness. Configured 1/1 brands ready to launch" [ref=e252]:
+            - generic [ref=e99]:
+              - generic [ref=e100]:
+                - generic [ref=e101]:
+                  - img [ref=e102]
+                  - generic [ref=e111]: Identity
+                - generic [ref=e112]: Brand routing, sender domains, and flow readiness.
+              - generic [ref=e113]: Configured
+            - generic [ref=e114]: 1/1 brands ready to launch
+          - button "Integrations Connection center for provider links and sender identities. Configured 1 sender available" [ref=e253]:
+            - generic [ref=e116]:
+              - generic [ref=e117]:
+                - generic [ref=e118]:
+                  - img [ref=e119]
+                  - generic [ref=e122]: Integrations
+                - generic [ref=e123]: Connection center for provider links and sender identities.
+              - generic [ref=e124]: Configured
+            - generic [ref=e125]: 1 sender available
+          - button "Email Accounts Reply inbox inventory and inbox health. Configured 1 reply inbox available" [ref=e254]:
+            - generic [ref=e127]:
+              - generic [ref=e128]:
+                - generic [ref=e129]:
+                  - img [ref=e130]
+                  - generic [ref=e133]: Email Accounts
+                - generic [ref=e134]: Reply inbox inventory and inbox health.
+              - generic [ref=e135]: Configured
+            - generic [ref=e136]: 1 reply inbox available
+        - generic [ref=e137]:
+          - generic [ref=e541]:
+            - generic [ref=e543]:
+              - generic [ref=e544]:
+                - generic [ref=e545]:
+                  - img [ref=e546]
+                  - text: Connection Center
+                - heading "Integrations" [level=3] [ref=e549]
+                - paragraph [ref=e550]: Show the connection state first. Only open a modal when you need to connect or update the underlying credentials.
+              - generic [ref=e551]:
+                - generic [ref=e552]: Customer.io ready
+                - generic [ref=e553]: Namecheap ready
+            - generic [ref=e554]:
+              - generic [ref=e555]:
+                - generic [ref=e557]:
+                  - generic [ref=e558]:
+                    - img [ref=e560]
+                    - generic [ref=e563]:
+                      - generic [ref=e564]:
+                        - generic [ref=e566]: Healthy
+                        - generic [ref=e567]: Connected
+                      - heading "Customer.io connected" [level=3] [ref=e568]
+                      - paragraph [ref=e569]: Used for sender identity creation and monthly profile capacity checks.
+                  - button "Edit Customer.io connection" [active] [ref=e570]:
+                    - img [ref=e571]
+                - generic [ref=e574]:
+                  - generic [ref=e575]:
+                    - generic [ref=e576]: Connection
+                    - generic [ref=e577]: Connected to Site 7c3b15c5ffdd9762cb6f
+                    - generic [ref=e578]:
+                      - generic [ref=e579]: Site 7c3b15c5ffdd9762cb6f
+                      - generic [ref=e580]: Tracking key saved
+                      - generic [ref=e581]: App key saved
+                      - generic [ref=e582]: Region EU
+                  - generic [ref=e583]:
+                    - generic [ref=e584]: "Last checked: 6 hours ago"
+                    - button "Check connection" [ref=e586]:
+                      - img [ref=e587]
+                      - text: Check connection
+              - generic [ref=e590]:
+                - generic [ref=e592]:
+                  - generic [ref=e593]:
+                    - img [ref=e595]
+                    - generic [ref=e598]:
+                      - generic [ref=e599]:
+                        - generic [ref=e601]: Healthy
+                        - generic [ref=e602]: Connected
+                      - heading "Namecheap connected" [level=3] [ref=e603]
+                      - paragraph [ref=e604]: Used for domain inventory, DNS updates, and forwarding setup.
+                  - button "Edit Namecheap connection" [ref=e605]:
+                    - img [ref=e606]
+                - generic [ref=e609]:
+                  - generic [ref=e610]:
+                    - generic [ref=e611]: Connection
+                    - generic [ref=e612]: Connected to adamfarkas
+                    - generic [ref=e613]:
+                      - generic [ref=e614]: API user adamfarkas
+                      - generic [ref=e615]: Username adamfarkas
+                      - generic [ref=e616]: API key saved
+                      - generic [ref=e617]: IP 104.28.154.252
+                  - generic [ref=e618]:
+                    - generic [ref=e619]: "Last checked: 6 hours ago"
+                    - button "Check connection" [ref=e621]:
+                      - img [ref=e622]
+                      - text: Check connection
+          - generic [ref=e626]:
+            - generic [ref=e627]:
+              - heading "Where Should We Send From?" [level=3] [ref=e628]
+              - generic [ref=e629]: Connected
+            - paragraph [ref=e630]: Sender identities stay in an inventory view. Use the add button when you need another sender instead of leaving a permanent credential form on the page.
+          - generic [ref=e631]:
+            - generic [ref=e632]:
+              - generic [ref=e633]:
+                - generic [ref=e634]:
+                  - heading "Sender Inventory" [level=3] [ref=e635]
+                  - generic [ref=e636]: 1 connected
+                - paragraph [ref=e637]: Saved sender identities available to brand flows.
+              - button "Add sender" [ref=e638]:
+                - img [ref=e639]
+                - text: Add sender
+            - generic [ref=e641]:
+              - generic [ref=e642]:
+                - generic [ref=e643]:
+                  - generic [ref=e644]: Selffunded.dev
+                  - generic [ref=e645]: active
+                - generic [ref=e646]: zeynep@bhumanai.com
+                - generic [ref=e647]: Customer.io sender identity
+              - generic [ref=e648]:
+                - generic [ref=e649]: Connection
+                - generic [ref=e650]: Customer.io Site 9336ae1a489137ebb1e5
+                - generic [ref=e652]: Waiting for baseline sync since 2026-03-01T00:00:00.000Z
+              - generic [ref=e654]:
+                - generic [ref=e655]: Health
+                - generic [ref=e657]: pass
+                - generic [ref=e658]: Last checked 2/15/2026
+              - generic [ref=e659]:
+                - button "Check sender" [ref=e660]
+                - combobox [ref=e661]:
+                  - option "active" [selected]
+                  - option "inactive"
+                - button "Delete" [ref=e662]
+  - button "Open Next.js Dev Tools" [ref=e247] [cursor=pointer]:
+    - img [ref=e248]
+  - alert [ref=e251]
+  - generic [ref=e663]:
+    - button "Close modal" [ref=e664]
+    - dialog "Customer.io connection settings" [ref=e665]:
+      - generic [ref=e667]:
+        - generic [ref=e668]:
+          - heading "Customer.io connection settings" [level=2] [ref=e669]
+          - paragraph [ref=e670]: Only the saved connection fields live here. Blank secret fields keep the current keys in place.
+        - button [ref=e671]:
+          - img [ref=e672]
+      - generic [ref=e676]:
+        - generic [ref=e677]:
+          - generic [ref=e678]:
+            - generic [ref=e679]: Site ID
+            - generic [ref=e680]:
+              - generic "Field help" [ref=e681]: "?"
+              - tooltip "Customer.io -> Settings -> API Credentials. Copy the Site ID from the same row as your tracking key."
+          - textbox "Site ID" [ref=e682]:
+            - /placeholder: 7c3b15c5ffdd9762cb6f
+            - text: 7c3b15c5ffdd9762cb6f
+        - generic [ref=e683]:
+          - generic [ref=e684]:
+            - generic [ref=e685]: Tracking API Key
+            - generic [ref=e686]:
+              - generic "Field help" [ref=e687]: "?"
+              - tooltip "Use the Tracking API key for region lookup and sender setup. Leave blank to keep the saved key."
+          - textbox "Tracking API Key" [ref=e688]:
+            - /placeholder: Saved. Leave blank to keep current key.
+        - generic [ref=e689]:
+          - generic [ref=e690]:
+            - generic [ref=e691]: App API Key
+            - generic [ref=e692]:
+              - generic "Field help" [ref=e693]: "?"
+              - tooltip "Optional but recommended. Used to fetch workspace people counts before you cross the monthly cap."
+          - textbox "App API Key" [ref=e694]:
+            - /placeholder: Saved. Leave blank to keep current key.
+        - button "Show secret values" [ref=e696]
+        - generic [ref=e697]: "Last check: 2026-03-10T12:45:55.817Z · Customer.io tracking and App API credentials are working."
+      - generic [ref=e699]:
+        - link "Where do I find my Site ID and API keys?" [ref=e700] [cursor=pointer]:
+          - /url: https://docs.customer.io/journeys/api-credentials/
+          - text: Where do I find my Site ID and API keys?
+          - img [ref=e701]
+        - generic [ref=e705]:
+          - button "Cancel" [ref=e706]
+          - button "Save + check" [ref=e707]
+          - button "Save connection" [ref=e708]

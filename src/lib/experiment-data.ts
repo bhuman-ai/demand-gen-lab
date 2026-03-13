@@ -15,7 +15,12 @@ import {
   clampExperimentSampleSize,
   EXPERIMENT_MIN_VERIFIED_EMAIL_LEADS,
 } from "@/lib/experiment-policy";
-import { listExperimentRuns, listOwnerRuns } from "@/lib/outreach-data";
+import {
+  getBrandOutreachAssignment,
+  listExperimentRuns,
+  listOwnerRuns,
+  setBrandOutreachAssignment,
+} from "@/lib/outreach-data";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import type {
   CampaignScalePolicy,
@@ -52,6 +57,27 @@ function asNumber(value: unknown, fallback: number) {
   return Number.isFinite(number) ? number : fallback;
 }
 
+function clampBusinessHour(value: unknown, fallback: number) {
+  const parsed = Math.round(Number(value));
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.max(0, Math.min(23, parsed));
+}
+
+function clampBusinessEndHour(value: unknown, fallback: number) {
+  const parsed = Math.round(Number(value));
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.max(1, Math.min(24, parsed));
+}
+
+function normalizeBusinessDays(value: unknown) {
+  if (!Array.isArray(value)) return [1, 2, 3, 4, 5];
+  const days = value
+    .map((entry) => Math.round(Number(entry)))
+    .filter((entry) => Number.isFinite(entry) && entry >= 0 && entry <= 6);
+  const deduped = Array.from(new Set(days)).sort((a, b) => a - b);
+  return deduped.length ? deduped : [1, 2, 3, 4, 5];
+}
+
 function defaultMetricsSummary(): ExperimentMetricsSummary {
   return {
     sent: 0,
@@ -69,6 +95,10 @@ function defaultTestEnvelope(): ExperimentTestEnvelope {
     hourlyCap: 6,
     timezone: "America/Los_Angeles",
     minSpacingMinutes: 8,
+    businessHoursEnabled: true,
+    businessHoursStartHour: 9,
+    businessHoursEndHour: 17,
+    businessDays: [1, 2, 3, 4, 5],
   };
 }
 
@@ -89,6 +119,15 @@ function defaultScalePolicy(): CampaignScalePolicy {
     mailboxAccountId: "",
     safetyMode: "strict",
   };
+}
+
+function mapLegacyScaleCampaignStatus(sourceExperiment: ExperimentRecord): ScaleCampaignRecord["status"] {
+  if (sourceExperiment.status === "running") return "active";
+  if (sourceExperiment.status === "paused") return "paused";
+  if (sourceExperiment.status === "completed" || sourceExperiment.status === "promoted") {
+    return "completed";
+  }
+  return "draft";
 }
 
 function mapExperimentRow(input: unknown): ExperimentRecord {
@@ -121,6 +160,10 @@ function mapExperimentRow(input: unknown): ExperimentRecord {
       hourlyCap: Math.max(1, asNumber(testEnvelope.hourlyCap, 6)),
       timezone: String(testEnvelope.timezone ?? "America/Los_Angeles") || "America/Los_Angeles",
       minSpacingMinutes: Math.max(1, asNumber(testEnvelope.minSpacingMinutes, 8)),
+      businessHoursEnabled: testEnvelope.businessHoursEnabled !== false,
+      businessHoursStartHour: clampBusinessHour(testEnvelope.businessHoursStartHour, 9),
+      businessHoursEndHour: clampBusinessEndHour(testEnvelope.businessHoursEndHour, 17),
+      businessDays: normalizeBusinessDays(testEnvelope.businessDays),
     },
     successMetric: {
       metric: "reply_rate",
@@ -484,6 +527,80 @@ async function hydrateScaleCampaignRecord(record: ScaleCampaignRecord): Promise<
   };
 }
 
+async function getLegacySourceExperimentByRuntimeCampaignId(
+  brandId: string,
+  runtimeCampaignId: string
+): Promise<ExperimentRecord | null> {
+  const records = await listExperimentRecordsWithOptions(brandId, {});
+  return (
+    records.find(
+      (record) =>
+        !record.promotedCampaignId.trim() && record.runtime.campaignId.trim() === runtimeCampaignId.trim()
+    ) ?? null
+  );
+}
+
+async function normalizeLegacyRuntimeCampaign(input: {
+  brandId: string;
+  sourceExperiment: ExperimentRecord;
+}): Promise<ScaleCampaignRecord | null> {
+  const runtimeCampaignId = input.sourceExperiment.runtime.campaignId.trim();
+  if (!runtimeCampaignId) return null;
+
+  const runtimeCampaign = await getCampaignById(input.brandId, runtimeCampaignId);
+  if (!runtimeCampaign) return null;
+
+  let assignment = null as Awaited<ReturnType<typeof getBrandOutreachAssignment>>;
+  try {
+    assignment = await getBrandOutreachAssignment(input.brandId);
+  } catch {
+    assignment = null;
+  }
+
+  return {
+    id: runtimeCampaign.id,
+    brandId: input.brandId,
+    name:
+      input.sourceExperiment.name.trim() ||
+      runtimeCampaign.name.replace(/\s+Runtime$/, "").trim() ||
+      runtimeCampaign.name,
+    status: mapLegacyScaleCampaignStatus(input.sourceExperiment),
+    sourceExperimentId: input.sourceExperiment.id,
+    snapshot: {
+      offer: input.sourceExperiment.offer,
+      audience: input.sourceExperiment.audience,
+      mapId: input.sourceExperiment.messageFlow.mapId,
+      publishedRevision: input.sourceExperiment.messageFlow.publishedRevision,
+    },
+    scalePolicy: {
+      ...defaultScalePolicy(),
+      dailyCap: input.sourceExperiment.testEnvelope.dailyCap,
+      hourlyCap: input.sourceExperiment.testEnvelope.hourlyCap,
+      timezone: input.sourceExperiment.testEnvelope.timezone,
+      minSpacingMinutes: input.sourceExperiment.testEnvelope.minSpacingMinutes,
+      accountId: assignment?.accountId ?? "",
+      mailboxAccountId: assignment?.mailboxAccountId ?? "",
+    },
+    lastRunId: input.sourceExperiment.lastRunId,
+    metricsSummary: input.sourceExperiment.metricsSummary ?? defaultMetricsSummary(),
+    createdAt: runtimeCampaign.createdAt || input.sourceExperiment.createdAt,
+    updatedAt:
+      input.sourceExperiment.updatedAt > runtimeCampaign.updatedAt
+        ? input.sourceExperiment.updatedAt
+        : runtimeCampaign.updatedAt,
+  };
+}
+
+async function listLegacyRuntimeCampaignRecords(brandId: string): Promise<ScaleCampaignRecord[]> {
+  const experiments = await listExperimentRecordsWithOptions(brandId, {});
+  const rows = await Promise.all(
+    experiments
+      .filter((record) => record.runtime.campaignId.trim() && !record.promotedCampaignId.trim())
+      .map((record) => normalizeLegacyRuntimeCampaign({ brandId, sourceExperiment: record }))
+  );
+  return rows.filter((row): row is ScaleCampaignRecord => Boolean(row));
+}
+
 async function listExperimentRowsFromStore(brandId: string): Promise<ExperimentRecord[]> {
   const supabase = getSupabaseAdmin();
   if (supabase) {
@@ -763,6 +880,19 @@ export async function updateExperimentRecord(
             1,
             Number(patch.testEnvelope.minSpacingMinutes ?? existing.testEnvelope.minSpacingMinutes)
           ),
+          businessHoursEnabled:
+            patch.testEnvelope.businessHoursEnabled ?? existing.testEnvelope.businessHoursEnabled ?? true,
+          businessHoursStartHour: clampBusinessHour(
+            patch.testEnvelope.businessHoursStartHour ?? existing.testEnvelope.businessHoursStartHour ?? 9,
+            existing.testEnvelope.businessHoursStartHour ?? 9
+          ),
+          businessHoursEndHour: clampBusinessEndHour(
+            patch.testEnvelope.businessHoursEndHour ?? existing.testEnvelope.businessHoursEndHour ?? 17,
+            existing.testEnvelope.businessHoursEndHour ?? 17
+          ),
+          businessDays: normalizeBusinessDays(
+            patch.testEnvelope.businessDays ?? existing.testEnvelope.businessDays ?? [1, 2, 3, 4, 5]
+          ),
         }
       : existing.testEnvelope,
     successMetric: patch.successMetric
@@ -806,8 +936,23 @@ export async function deleteExperimentRecord(brandId: string, experimentId: stri
 }
 
 export async function listScaleCampaignRecords(brandId: string): Promise<ScaleCampaignRecord[]> {
-  const rows = await listScaleCampaignRowsFromStore(brandId);
-  return Promise.all(rows.map((row) => hydrateScaleCampaignRecord(row)));
+  const [scaleRows, legacyRows] = await Promise.all([
+    (async () => {
+      const rows = await listScaleCampaignRowsFromStore(brandId);
+      return Promise.all(rows.map((row) => hydrateScaleCampaignRecord(row)));
+    })(),
+    listLegacyRuntimeCampaignRecords(brandId),
+  ]);
+
+  const seenIds = new Set(scaleRows.map((row) => row.id));
+  const merged = [...scaleRows];
+  for (const row of legacyRows) {
+    if (seenIds.has(row.id)) continue;
+    if (merged.some((item) => item.sourceExperimentId === row.sourceExperimentId)) continue;
+    merged.push(row);
+  }
+
+  return merged.sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1));
 }
 
 export async function getScaleCampaignRecordById(
@@ -816,8 +961,13 @@ export async function getScaleCampaignRecordById(
 ): Promise<ScaleCampaignRecord | null> {
   const rows = await listScaleCampaignRowsFromStore(brandId);
   const hit = rows.find((row) => row.id === campaignId) ?? null;
-  if (!hit) return null;
-  return hydrateScaleCampaignRecord(hit);
+  if (hit) {
+    return hydrateScaleCampaignRecord(hit);
+  }
+
+  const sourceExperiment = await getLegacySourceExperimentByRuntimeCampaignId(brandId, campaignId);
+  if (!sourceExperiment) return null;
+  return normalizeLegacyRuntimeCampaign({ brandId, sourceExperiment });
 }
 
 export async function updateScaleCampaignRecord(
@@ -825,8 +975,58 @@ export async function updateScaleCampaignRecord(
   campaignId: string,
   patch: Partial<Pick<ScaleCampaignRecord, "name" | "status" | "scalePolicy">>
 ): Promise<ScaleCampaignRecord | null> {
-  const existing = await getScaleCampaignRecordById(brandId, campaignId);
-  if (!existing) return null;
+  const rows = await listScaleCampaignRowsFromStore(brandId);
+  const persistedRow = rows.find((row) => row.id === campaignId) ?? null;
+  if (!persistedRow) {
+    const sourceExperiment = await getLegacySourceExperimentByRuntimeCampaignId(brandId, campaignId);
+    if (!sourceExperiment) return null;
+
+    const testEnvelopePatch = patch.scalePolicy
+      ? {
+          ...sourceExperiment.testEnvelope,
+          dailyCap: Math.max(1, Number(patch.scalePolicy.dailyCap ?? sourceExperiment.testEnvelope.dailyCap)),
+          hourlyCap: Math.max(1, Number(patch.scalePolicy.hourlyCap ?? sourceExperiment.testEnvelope.hourlyCap)),
+          timezone: String(patch.scalePolicy.timezone ?? sourceExperiment.testEnvelope.timezone),
+          minSpacingMinutes: Math.max(
+            1,
+            Number(patch.scalePolicy.minSpacingMinutes ?? sourceExperiment.testEnvelope.minSpacingMinutes)
+          ),
+        }
+      : undefined;
+
+    const nextStatus =
+      patch.status === "paused"
+        ? "paused"
+        : patch.status === "completed"
+          ? "completed"
+          : patch.status === "active"
+            ? "ready"
+            : patch.status === "draft"
+              ? "draft"
+              : undefined;
+
+    const updatedExperiment = await updateExperimentRecord(brandId, sourceExperiment.id, {
+      ...(typeof patch.name === "string" ? { name: patch.name } : {}),
+      ...(testEnvelopePatch ? { testEnvelope: testEnvelopePatch } : {}),
+      ...(nextStatus ? { status: nextStatus } : {}),
+    });
+
+    if (patch.scalePolicy) {
+      const nextAccountId = String(patch.scalePolicy.accountId ?? "").trim();
+      const nextMailboxAccountId = String(patch.scalePolicy.mailboxAccountId ?? "").trim();
+      if (nextAccountId || nextMailboxAccountId) {
+        await setBrandOutreachAssignment(brandId, {
+          accountId: nextAccountId,
+          mailboxAccountId: nextMailboxAccountId,
+        });
+      }
+    }
+
+    if (!updatedExperiment) return null;
+    return normalizeLegacyRuntimeCampaign({ brandId, sourceExperiment: updatedExperiment });
+  }
+
+  const existing = await hydrateScaleCampaignRecord(persistedRow);
 
   const next: ScaleCampaignRecord = {
     ...existing,

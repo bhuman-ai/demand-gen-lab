@@ -1,0 +1,765 @@
+{
+  "items": [
+    {
+      "attempt": 1,
+      "created_at": "2026-03-03T21:56:20.588010+00:00",
+      "domain": "bhuman.ai",
+      "email": "don@bhuman.ai",
+      "from_address": "probe@localhost",
+      "id": "rq_1772574980588_5077",
+      "next_retry_at": "2026-03-03T22:01:47.587963+00:00",
+      "planned_delays_seconds": [
+        327,
+        1820
+      ],
+      "probe_timeout_seconds": 8.0,
+      "reason": "transient-verification-result",
+      "retries_done": 0,
+      "smtp_mx_quorum": 2,
+      "smtp_sequence_check": true,
+      "state": "pending",
+      "verification_mode": "none"
+    },
+    {
+      "attempt": 2,
+      "created_at": "2026-03-03T21:56:20.588023+00:00",
+      "domain": "bhuman.ai",
+      "email": "don.bosco@bhuman.ai",
+      "from_address": "probe@localhost",
+      "id": "rq_1772574980588_4946",
+      "next_retry_at": "2026-03-03T22:01:33.587963+00:00",
+      "planned_delays_seconds": [
+        313,
+        1801
+      ],
+      "probe_timeout_seconds": 8.0,
+      "reason": "transient-verification-result",
+      "retries_done": 0,
+      "smtp_mx_quorum": 2,
+      "smtp_sequence_check": true,
+      "state": "pending",
+      "verification_mode": "none"
+    },
+    {
+      "attempt": 3,
+      "created_at": "2026-03-03T21:56:20.588030+00:00",
+      "domain": "bhuman.ai",
+      "email": "don_bosco@bhuman.ai",
+      "from_address": "probe@localhost",
+      "id": "rq_1772574980588_9615",
+      "next_retry_at": "2026-03-03T22:01:31.587963+00:00",
+      "planned_delays_seconds": [
+        311,
+        1815
+      ],
+      "probe_timeout_seconds": 8.0,
+      "reason": "transient-verification-result",
+      "retries_done": 0,
+      "smtp_mx_quorum": 2,
+      "smtp_sequence_check": true,
+      "state": "pending",
+      "verification_mode": "none"
+    },
+    {
+      "attempt": 4,
+      "created_at": "2026-03-03T21:56:20.588034+00:00",
+      "domain": "bhuman.ai",
+      "email": "don-bosco@bhuman.ai",
+      "from_address": "probe@localhost",
+      "id": "rq_1772574980588_2744",
+      "next_retry_at": "2026-03-03T22:01:32.587963+00:00",
+      "planned_delays_seconds": [
+        312,
+        1815
+      ],
+      "probe_timeout_seconds": 8.0,
+      "reason": "transient-verification-result",
+      "retries_done": 0,
+      "smtp_mx_quorum": 2,
+      "smtp_sequence_check": true,
+      "state": "pending",
+      "verification_mode": "none"
+    },
+    {
+      "attempt": 5,
+      "created_at": "2026-03-03T21:56:20.588039+00:00",
+      "domain": "bhuman.ai",
+      "email": "donbosco@bhuman.ai",
+      "from_address": "probe@localhost",
+      "id": "rq_1772574980588_6781",
+      "next_retry_at": "2026-03-03T22:01:48.587963+00:00",
+      "planned_delays_seconds": [
+        328,
+        1845
+      ],
+      "probe_timeout_seconds": 8.0,
+      "reason": "transient-verification-result",
+      "retries_done": 0,
+      "smtp_mx_quorum": 2,
+      "smtp_sequence_check": true,
+      "state": "pending",
+      "verification_mode": "none"
+    },
+    {
+      "attempt": 6,
+      "created_at": "2026-03-03T21:56:20.588049+00:00",
+      "domain": "bhuman.ai",
+      "email": "dbosco@bhuman.ai",
+      "from_address": "probe@localhost",
+      "id": "rq_1772574980588_5351",
+      "next_retry_at": "2026-03-03T22:01:31.587963+00:00",
+      "planned_delays_seconds": [
+        311,
+        1837
+      ],
+      "probe_timeout_seconds": 8.0,
+      "reason": "transient-verification-result",
+      "retries_done": 0,
+      "smtp_mx_quorum": 2,
+      "smtp_sequence_check": true,
+      "state": "pending",
+      "verification_mode": "none"
+    },
+    {
+      "attempt": 7,
+      "created_at": "2026-03-03T21:56:20.588054+00:00",
+      "domain": "bhuman.ai",
+      "email": "donb@bhuman.ai",
+      "from_address": "probe@localhost",
+      "id": "rq_1772574980588_7094",
+      "next_retry_at": "2026-03-03T22:01:24.587963+00:00",
+      "planned_delays_seconds": [
+        304,
+        1828
+      ],
+      "probe_timeout_seconds": 8.0,
+      "reason": "transient-verification-result",
+      "retries_done": 0,
+      "smtp_mx_quorum": 2,
+      "smtp_sequence_check": true,
+      "state": "pending",
+      "verification_mode": "none"
+    },
+    {
+      "attempt": 8,
+      "created_at": "2026-03-03T21:56:20.588058+00:00",
+      "domain": "bhuman.ai",
+      "email": "d.bosco@bhuman.ai",
+      "from_address": "probe@localhost",
+      "id": "rq_1772574980588_8226",
+      "next_retry_at": "2026-03-03T22:01:26.587963+00:00",
+      "planned_delays_seconds": [
+        306,
+        1825
+      ],
+      "probe_timeout_seconds": 8.0,
+      "reason": "transient-verification-result",
+      "retries_done": 0,
+      "smtp_mx_quorum": 2,
+      "smtp_sequence_check": true,
+      "state": "pending",
+      "verification_mode": "none"
+    },
+    {
+      "attempt": 9,
+      "created_at": "2026-03-03T21:56:20.588062+00:00",
+      "domain": "bhuman.ai",
+      "email": "don.b@bhuman.ai",
+      "from_address": "probe@localhost",
+      "id": "rq_1772574980588_9442",
+      "next_retry_at": "2026-03-03T22:02:04.587963+00:00",
+      "planned_delays_seconds": [
+        344,
+        1816
+      ],
+      "probe_timeout_seconds": 8.0,
+      "reason": "transient-verification-result",
+      "retries_done": 0,
+      "smtp_mx_quorum": 2,
+      "smtp_sequence_check": true,
+      "state": "pending",
+      "verification_mode": "none"
+    },
+    {
+      "attempt": 10,
+      "created_at": "2026-03-03T21:56:20.588067+00:00",
+      "domain": "bhuman.ai",
+      "email": "bosco.don@bhuman.ai",
+      "from_address": "probe@localhost",
+      "id": "rq_1772574980588_6815",
+      "next_retry_at": "2026-03-03T22:02:05.587963+00:00",
+      "planned_delays_seconds": [
+        345,
+        1819
+      ],
+      "probe_timeout_seconds": 8.0,
+      "reason": "transient-verification-result",
+      "retries_done": 0,
+      "smtp_mx_quorum": 2,
+      "smtp_sequence_check": true,
+      "state": "pending",
+      "verification_mode": "none"
+    },
+    {
+      "attempt": 1,
+      "created_at": "2026-03-03T21:56:20.589017+00:00",
+      "domain": "envestnet.com",
+      "email": "henry@envestnet.com",
+      "from_address": "probe@localhost",
+      "id": "rq_1772574980589_1379",
+      "next_retry_at": "2026-03-03T22:02:01.589011+00:00",
+      "planned_delays_seconds": [
+        341,
+        1841
+      ],
+      "probe_timeout_seconds": 8.0,
+      "reason": "transient-verification-result",
+      "retries_done": 0,
+      "smtp_mx_quorum": 2,
+      "smtp_sequence_check": true,
+      "state": "pending",
+      "verification_mode": "none"
+    },
+    {
+      "attempt": 2,
+      "created_at": "2026-03-03T21:56:20.589023+00:00",
+      "domain": "envestnet.com",
+      "email": "henry.buttz@envestnet.com",
+      "from_address": "probe@localhost",
+      "id": "rq_1772574980589_8229",
+      "next_retry_at": "2026-03-03T22:01:57.589011+00:00",
+      "planned_delays_seconds": [
+        337,
+        1837
+      ],
+      "probe_timeout_seconds": 8.0,
+      "reason": "transient-verification-result",
+      "retries_done": 0,
+      "smtp_mx_quorum": 2,
+      "smtp_sequence_check": true,
+      "state": "pending",
+      "verification_mode": "none"
+    },
+    {
+      "attempt": 3,
+      "created_at": "2026-03-03T21:56:20.589028+00:00",
+      "domain": "envestnet.com",
+      "email": "henry_buttz@envestnet.com",
+      "from_address": "probe@localhost",
+      "id": "rq_1772574980589_6589",
+      "next_retry_at": "2026-03-03T22:01:41.589011+00:00",
+      "planned_delays_seconds": [
+        321,
+        1829
+      ],
+      "probe_timeout_seconds": 8.0,
+      "reason": "transient-verification-result",
+      "retries_done": 0,
+      "smtp_mx_quorum": 2,
+      "smtp_sequence_check": true,
+      "state": "pending",
+      "verification_mode": "none"
+    },
+    {
+      "attempt": 4,
+      "created_at": "2026-03-03T21:56:20.589039+00:00",
+      "domain": "envestnet.com",
+      "email": "henry-buttz@envestnet.com",
+      "from_address": "probe@localhost",
+      "id": "rq_1772574980589_9853",
+      "next_retry_at": "2026-03-03T22:01:58.589011+00:00",
+      "planned_delays_seconds": [
+        338,
+        1809
+      ],
+      "probe_timeout_seconds": 8.0,
+      "reason": "transient-verification-result",
+      "retries_done": 0,
+      "smtp_mx_quorum": 2,
+      "smtp_sequence_check": true,
+      "state": "pending",
+      "verification_mode": "none"
+    },
+    {
+      "attempt": 5,
+      "created_at": "2026-03-03T21:56:20.589045+00:00",
+      "domain": "envestnet.com",
+      "email": "henrybuttz@envestnet.com",
+      "from_address": "probe@localhost",
+      "id": "rq_1772574980589_1162",
+      "next_retry_at": "2026-03-03T22:02:02.589011+00:00",
+      "planned_delays_seconds": [
+        342,
+        1819
+      ],
+      "probe_timeout_seconds": 8.0,
+      "reason": "transient-verification-result",
+      "retries_done": 0,
+      "smtp_mx_quorum": 2,
+      "smtp_sequence_check": true,
+      "state": "pending",
+      "verification_mode": "none"
+    },
+    {
+      "attempt": 6,
+      "created_at": "2026-03-03T21:56:20.589050+00:00",
+      "domain": "envestnet.com",
+      "email": "hbuttz@envestnet.com",
+      "from_address": "probe@localhost",
+      "id": "rq_1772574980589_4574",
+      "next_retry_at": "2026-03-03T22:02:00.589011+00:00",
+      "planned_delays_seconds": [
+        340,
+        1803
+      ],
+      "probe_timeout_seconds": 8.0,
+      "reason": "transient-verification-result",
+      "retries_done": 0,
+      "smtp_mx_quorum": 2,
+      "smtp_sequence_check": true,
+      "state": "pending",
+      "verification_mode": "none"
+    },
+    {
+      "attempt": 7,
+      "created_at": "2026-03-03T21:56:20.589056+00:00",
+      "domain": "envestnet.com",
+      "email": "henryb@envestnet.com",
+      "from_address": "probe@localhost",
+      "id": "rq_1772574980589_3665",
+      "next_retry_at": "2026-03-03T22:02:04.589011+00:00",
+      "planned_delays_seconds": [
+        344,
+        1835
+      ],
+      "probe_timeout_seconds": 8.0,
+      "reason": "transient-verification-result",
+      "retries_done": 0,
+      "smtp_mx_quorum": 2,
+      "smtp_sequence_check": true,
+      "state": "pending",
+      "verification_mode": "none"
+    },
+    {
+      "attempt": 8,
+      "created_at": "2026-03-03T21:56:20.589061+00:00",
+      "domain": "envestnet.com",
+      "email": "h.buttz@envestnet.com",
+      "from_address": "probe@localhost",
+      "id": "rq_1772574980589_6624",
+      "next_retry_at": "2026-03-03T22:02:05.589011+00:00",
+      "planned_delays_seconds": [
+        345,
+        1834
+      ],
+      "probe_timeout_seconds": 8.0,
+      "reason": "transient-verification-result",
+      "retries_done": 0,
+      "smtp_mx_quorum": 2,
+      "smtp_sequence_check": true,
+      "state": "pending",
+      "verification_mode": "none"
+    },
+    {
+      "attempt": 9,
+      "created_at": "2026-03-03T21:56:20.589066+00:00",
+      "domain": "envestnet.com",
+      "email": "henry.b@envestnet.com",
+      "from_address": "probe@localhost",
+      "id": "rq_1772574980589_6191",
+      "next_retry_at": "2026-03-03T22:01:37.589011+00:00",
+      "planned_delays_seconds": [
+        317,
+        1827
+      ],
+      "probe_timeout_seconds": 8.0,
+      "reason": "transient-verification-result",
+      "retries_done": 0,
+      "smtp_mx_quorum": 2,
+      "smtp_sequence_check": true,
+      "state": "pending",
+      "verification_mode": "none"
+    },
+    {
+      "attempt": 10,
+      "created_at": "2026-03-03T21:56:20.589071+00:00",
+      "domain": "envestnet.com",
+      "email": "buttz.henry@envestnet.com",
+      "from_address": "probe@localhost",
+      "id": "rq_1772574980589_5414",
+      "next_retry_at": "2026-03-03T22:01:31.589011+00:00",
+      "planned_delays_seconds": [
+        311,
+        1842
+      ],
+      "probe_timeout_seconds": 8.0,
+      "reason": "transient-verification-result",
+      "retries_done": 0,
+      "smtp_mx_quorum": 2,
+      "smtp_sequence_check": true,
+      "state": "pending",
+      "verification_mode": "none"
+    },
+    {
+      "attempt": 1,
+      "created_at": "2026-03-04T00:14:53.100888+00:00",
+      "domain": "demandifymedia.com",
+      "email": "snehal@demandifymedia.com",
+      "from_address": "probe@localhost",
+      "id": "rq_1772583293100_5088",
+      "next_retry_at": "2026-03-04T00:20:18.100374+00:00",
+      "planned_delays_seconds": [
+        325,
+        1832
+      ],
+      "probe_timeout_seconds": 6.0,
+      "reason": "transient-verification-result",
+      "retries_done": 0,
+      "smtp_mx_quorum": 2,
+      "smtp_sequence_check": true,
+      "state": "pending",
+      "verification_mode": "smtp"
+    },
+    {
+      "attempt": 2,
+      "created_at": "2026-03-04T00:14:53.100922+00:00",
+      "domain": "demandifymedia.com",
+      "email": "snehal.mourya@demandifymedia.com",
+      "from_address": "probe@localhost",
+      "id": "rq_1772583293100_4498",
+      "next_retry_at": "2026-03-04T00:20:01.100374+00:00",
+      "planned_delays_seconds": [
+        308,
+        1815
+      ],
+      "probe_timeout_seconds": 6.0,
+      "reason": "transient-verification-result",
+      "retries_done": 0,
+      "smtp_mx_quorum": 2,
+      "smtp_sequence_check": true,
+      "state": "pending",
+      "verification_mode": "smtp"
+    },
+    {
+      "attempt": 3,
+      "created_at": "2026-03-04T00:14:53.100935+00:00",
+      "domain": "demandifymedia.com",
+      "email": "snehal_mourya@demandifymedia.com",
+      "from_address": "probe@localhost",
+      "id": "rq_1772583293100_3474",
+      "next_retry_at": "2026-03-04T00:20:04.100374+00:00",
+      "planned_delays_seconds": [
+        311,
+        1801
+      ],
+      "probe_timeout_seconds": 6.0,
+      "reason": "transient-verification-result",
+      "retries_done": 0,
+      "smtp_mx_quorum": 2,
+      "smtp_sequence_check": true,
+      "state": "pending",
+      "verification_mode": "smtp"
+    },
+    {
+      "attempt": 4,
+      "created_at": "2026-03-04T00:14:53.100947+00:00",
+      "domain": "demandifymedia.com",
+      "email": "snehal-mourya@demandifymedia.com",
+      "from_address": "probe@localhost",
+      "id": "rq_1772583293100_8914",
+      "next_retry_at": "2026-03-04T00:19:55.100374+00:00",
+      "planned_delays_seconds": [
+        302,
+        1801
+      ],
+      "probe_timeout_seconds": 6.0,
+      "reason": "transient-verification-result",
+      "retries_done": 0,
+      "smtp_mx_quorum": 2,
+      "smtp_sequence_check": true,
+      "state": "pending",
+      "verification_mode": "smtp"
+    },
+    {
+      "attempt": 5,
+      "created_at": "2026-03-04T00:14:53.100957+00:00",
+      "domain": "demandifymedia.com",
+      "email": "snehalmourya@demandifymedia.com",
+      "from_address": "probe@localhost",
+      "id": "rq_1772583293100_8820",
+      "next_retry_at": "2026-03-04T00:19:56.100374+00:00",
+      "planned_delays_seconds": [
+        303,
+        1836
+      ],
+      "probe_timeout_seconds": 6.0,
+      "reason": "transient-verification-result",
+      "retries_done": 0,
+      "smtp_mx_quorum": 2,
+      "smtp_sequence_check": true,
+      "state": "pending",
+      "verification_mode": "smtp"
+    },
+    {
+      "attempt": 6,
+      "created_at": "2026-03-04T00:14:53.100983+00:00",
+      "domain": "demandifymedia.com",
+      "email": "smourya@demandifymedia.com",
+      "from_address": "probe@localhost",
+      "id": "rq_1772583293100_5981",
+      "next_retry_at": "2026-03-04T00:19:55.100374+00:00",
+      "planned_delays_seconds": [
+        302,
+        1839
+      ],
+      "probe_timeout_seconds": 6.0,
+      "reason": "transient-verification-result",
+      "retries_done": 0,
+      "smtp_mx_quorum": 2,
+      "smtp_sequence_check": true,
+      "state": "pending",
+      "verification_mode": "smtp"
+    },
+    {
+      "attempt": 1,
+      "created_at": "2026-03-04T00:18:24.547959+00:00",
+      "domain": "syren.com",
+      "email": "vinit@syren.com",
+      "from_address": "probe@localhost",
+      "id": "rq_1772583504547_8742",
+      "next_retry_at": "2026-03-04T00:24:04.547907+00:00",
+      "planned_delays_seconds": [
+        340,
+        1822
+      ],
+      "probe_timeout_seconds": 6.0,
+      "reason": "transient-verification-result",
+      "retries_done": 0,
+      "smtp_mx_quorum": 2,
+      "smtp_sequence_check": true,
+      "state": "pending",
+      "verification_mode": "smtp"
+    },
+    {
+      "attempt": 2,
+      "created_at": "2026-03-04T00:18:24.547983+00:00",
+      "domain": "syren.com",
+      "email": "vinit.g@syren.com",
+      "from_address": "probe@localhost",
+      "id": "rq_1772583504547_1527",
+      "next_retry_at": "2026-03-04T00:23:57.547907+00:00",
+      "planned_delays_seconds": [
+        333,
+        1811
+      ],
+      "probe_timeout_seconds": 6.0,
+      "reason": "transient-verification-result",
+      "retries_done": 0,
+      "smtp_mx_quorum": 2,
+      "smtp_sequence_check": true,
+      "state": "pending",
+      "verification_mode": "smtp"
+    },
+    {
+      "attempt": 3,
+      "created_at": "2026-03-04T00:18:24.547988+00:00",
+      "domain": "syren.com",
+      "email": "vinit_g@syren.com",
+      "from_address": "probe@localhost",
+      "id": "rq_1772583504547_9064",
+      "next_retry_at": "2026-03-04T00:23:44.547907+00:00",
+      "planned_delays_seconds": [
+        320,
+        1839
+      ],
+      "probe_timeout_seconds": 6.0,
+      "reason": "transient-verification-result",
+      "retries_done": 0,
+      "smtp_mx_quorum": 2,
+      "smtp_sequence_check": true,
+      "state": "pending",
+      "verification_mode": "smtp"
+    },
+    {
+      "attempt": 4,
+      "created_at": "2026-03-04T00:18:24.547998+00:00",
+      "domain": "syren.com",
+      "email": "vinit-g@syren.com",
+      "from_address": "probe@localhost",
+      "id": "rq_1772583504547_5620",
+      "next_retry_at": "2026-03-04T00:23:33.547907+00:00",
+      "planned_delays_seconds": [
+        309,
+        1830
+      ],
+      "probe_timeout_seconds": 6.0,
+      "reason": "transient-verification-result",
+      "retries_done": 0,
+      "smtp_mx_quorum": 2,
+      "smtp_sequence_check": true,
+      "state": "pending",
+      "verification_mode": "smtp"
+    },
+    {
+      "attempt": 5,
+      "created_at": "2026-03-04T00:18:24.548002+00:00",
+      "domain": "syren.com",
+      "email": "vinitg@syren.com",
+      "from_address": "probe@localhost",
+      "id": "rq_1772583504548_6398",
+      "next_retry_at": "2026-03-04T00:23:51.547907+00:00",
+      "planned_delays_seconds": [
+        327,
+        1834
+      ],
+      "probe_timeout_seconds": 6.0,
+      "reason": "transient-verification-result",
+      "retries_done": 0,
+      "smtp_mx_quorum": 2,
+      "smtp_sequence_check": true,
+      "state": "pending",
+      "verification_mode": "smtp"
+    },
+    {
+      "attempt": 6,
+      "created_at": "2026-03-04T00:18:24.548007+00:00",
+      "domain": "syren.com",
+      "email": "vg@syren.com",
+      "from_address": "probe@localhost",
+      "id": "rq_1772583504548_8922",
+      "next_retry_at": "2026-03-04T00:23:33.547907+00:00",
+      "planned_delays_seconds": [
+        309,
+        1802
+      ],
+      "probe_timeout_seconds": 6.0,
+      "reason": "transient-verification-result",
+      "retries_done": 0,
+      "smtp_mx_quorum": 2,
+      "smtp_sequence_check": true,
+      "state": "pending",
+      "verification_mode": "smtp"
+    },
+    {
+      "attempt": 1,
+      "created_at": "2026-03-04T00:28:41.520419+00:00",
+      "domain": "validity.com",
+      "email": "faye@validity.com",
+      "from_address": "probe@localhost",
+      "id": "rq_1772584121520_9374",
+      "next_retry_at": "2026-03-04T00:33:57.520293+00:00",
+      "planned_delays_seconds": [
+        316,
+        1811
+      ],
+      "probe_timeout_seconds": 6.0,
+      "reason": "transient-verification-result",
+      "retries_done": 0,
+      "smtp_mx_quorum": 2,
+      "smtp_sequence_check": true,
+      "state": "pending",
+      "verification_mode": "smtp"
+    },
+    {
+      "attempt": 2,
+      "created_at": "2026-03-04T00:28:41.520488+00:00",
+      "domain": "validity.com",
+      "email": "faye.rasmussen@validity.com",
+      "from_address": "probe@localhost",
+      "id": "rq_1772584121520_6874",
+      "next_retry_at": "2026-03-04T00:33:43.520293+00:00",
+      "planned_delays_seconds": [
+        302,
+        1817
+      ],
+      "probe_timeout_seconds": 6.0,
+      "reason": "transient-verification-result",
+      "retries_done": 0,
+      "smtp_mx_quorum": 2,
+      "smtp_sequence_check": true,
+      "state": "pending",
+      "verification_mode": "smtp"
+    },
+    {
+      "attempt": 3,
+      "created_at": "2026-03-04T00:28:41.520520+00:00",
+      "domain": "validity.com",
+      "email": "faye_rasmussen@validity.com",
+      "from_address": "probe@localhost",
+      "id": "rq_1772584121520_2738",
+      "next_retry_at": "2026-03-04T00:34:12.520293+00:00",
+      "planned_delays_seconds": [
+        331,
+        1808
+      ],
+      "probe_timeout_seconds": 6.0,
+      "reason": "transient-verification-result",
+      "retries_done": 0,
+      "smtp_mx_quorum": 2,
+      "smtp_sequence_check": true,
+      "state": "pending",
+      "verification_mode": "smtp"
+    },
+    {
+      "attempt": 4,
+      "created_at": "2026-03-04T00:28:41.520542+00:00",
+      "domain": "validity.com",
+      "email": "faye-rasmussen@validity.com",
+      "from_address": "probe@localhost",
+      "id": "rq_1772584121520_6825",
+      "next_retry_at": "2026-03-04T00:33:54.520293+00:00",
+      "planned_delays_seconds": [
+        313,
+        1813
+      ],
+      "probe_timeout_seconds": 6.0,
+      "reason": "transient-verification-result",
+      "retries_done": 0,
+      "smtp_mx_quorum": 2,
+      "smtp_sequence_check": true,
+      "state": "pending",
+      "verification_mode": "smtp"
+    },
+    {
+      "attempt": 5,
+      "created_at": "2026-03-04T00:28:41.520552+00:00",
+      "domain": "validity.com",
+      "email": "fayerasmussen@validity.com",
+      "from_address": "probe@localhost",
+      "id": "rq_1772584121520_8792",
+      "next_retry_at": "2026-03-04T00:33:51.520293+00:00",
+      "planned_delays_seconds": [
+        310,
+        1806
+      ],
+      "probe_timeout_seconds": 6.0,
+      "reason": "transient-verification-result",
+      "retries_done": 0,
+      "smtp_mx_quorum": 2,
+      "smtp_sequence_check": true,
+      "state": "pending",
+      "verification_mode": "smtp"
+    },
+    {
+      "attempt": 6,
+      "created_at": "2026-03-04T00:28:41.520563+00:00",
+      "domain": "validity.com",
+      "email": "frasmussen@validity.com",
+      "from_address": "probe@localhost",
+      "id": "rq_1772584121520_6215",
+      "next_retry_at": "2026-03-04T00:34:13.520293+00:00",
+      "planned_delays_seconds": [
+        332,
+        1837
+      ],
+      "probe_timeout_seconds": 6.0,
+      "reason": "transient-verification-result",
+      "retries_done": 0,
+      "smtp_mx_quorum": 2,
+      "smtp_sequence_check": true,
+      "state": "pending",
+      "verification_mode": "smtp"
+    }
+  ],
+  "version": 1
+}

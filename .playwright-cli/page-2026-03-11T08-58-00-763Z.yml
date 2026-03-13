@@ -1,0 +1,294 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e3]:
+    - complementary [ref=e4]:
+      - link "Factory Factory Platform" [ref=e5] [cursor=pointer]:
+        - /url: /
+        - generic [ref=e6]: Factory
+        - generic [ref=e7]: Factory Platform
+      - combobox [ref=e10]:
+        - option "BHuman | AI personalized videos at scale"
+        - option "selffunded.dev" [selected]
+      - navigation [ref=e12]:
+        - link "Experiments" [ref=e13] [cursor=pointer]:
+          - /url: /brands/brand_7936be472e1247c7/experiments
+          - img [ref=e14]
+          - text: Experiments
+        - link "Campaigns" [ref=e18] [cursor=pointer]:
+          - /url: /brands/brand_7936be472e1247c7/campaigns
+          - img [ref=e19]
+          - text: Campaigns
+        - link "Network" [ref=e21] [cursor=pointer]:
+          - /url: /brands/brand_7936be472e1247c7/network
+          - img [ref=e22]
+          - text: Network
+        - link "Leads" [ref=e27] [cursor=pointer]:
+          - /url: /brands/brand_7936be472e1247c7/leads
+          - img [ref=e28]
+          - text: Leads
+        - link "Inbox" [ref=e31] [cursor=pointer]:
+          - /url: /brands/brand_7936be472e1247c7/inbox
+          - img [ref=e32]
+          - text: Inbox
+      - generic [ref=e35]:
+        - generic [ref=e36]: Tools
+        - navigation [ref=e37]:
+          - link "Settings" [ref=e38] [cursor=pointer]:
+            - /url: /settings/outreach
+            - img [ref=e39]
+            - text: Settings
+          - link "Logic" [ref=e42] [cursor=pointer]:
+            - /url: /logic
+            - img [ref=e43]
+            - text: Logic
+          - link "Doctor" [ref=e45] [cursor=pointer]:
+            - /url: /doctor
+            - img [ref=e46]
+            - text: Doctor
+    - main [ref=e48]:
+      - generic [ref=e50]:
+        - generic [ref=e51]:
+          - generic [ref=e52]: Factory > Brand > Campaigns > Campaign
+          - heading "Campaign" [level=1] [ref=e53]
+        - generic [ref=e54]:
+          - button "Global Search K" [ref=e55]:
+            - img [ref=e56]
+            - text: Global Search
+            - generic [ref=e59]:
+              - img [ref=e60]
+              - text: K
+          - button "User" [ref=e62]:
+            - img [ref=e63]
+            - text: User
+      - generic [ref=e68]:
+        - generic [ref=e141]:
+          - generic [ref=e142]:
+            - generic [ref=e143]:
+              - generic [ref=e144]: Conversation Flow Canvas
+              - generic [ref=e145]: selffunded.dev · AWS credits qualification outreach Runtime · AWS credits qualification outreach
+            - generic [ref=e146]:
+              - generic [ref=e147]: published
+              - generic [ref=e148]: Revision 1
+            - generic [ref=e149]:
+              - button "Generate" [ref=e150]:
+                - img [ref=e151]
+                - text: Generate
+              - button "Save" [ref=e156]:
+                - img [ref=e157]
+                - text: Save
+              - button "Publish" [ref=e161]:
+                - img [ref=e162]
+                - text: Publish
+              - link "Back" [ref=e165] [cursor=pointer]:
+                - /url: /brands/brand_7936be472e1247c7/campaigns/camp_42a8494136f349e9/build
+          - generic [ref=e322]: Probe run completed.
+        - generic [ref=e166]:
+          - generic [ref=e167]:
+            - generic [ref=e168]:
+              - generic [ref=e169]:
+                - heading "Flow Canvas" [level=3] [ref=e170]
+                - paragraph [ref=e171]: Drag cards, connect handles, pan on background, zoom with ctrl/cmd + wheel.
+              - generic [ref=e172]:
+                - button "Message" [ref=e173]:
+                  - img [ref=e174]
+                  - text: Message
+                - button "End Node" [ref=e175]:
+                  - img [ref=e176]
+                  - text: End Node
+                - button "Auto Layout" [ref=e180]:
+                  - img [ref=e181]
+                  - text: Auto Layout
+                - button "Fit" [ref=e186]
+                - button [ref=e187]:
+                  - img [ref=e188]
+                - button [ref=e191]:
+                  - img [ref=e192]
+            - generic [ref=e196]:
+              - img:
+                - generic:
+                  - generic:
+                    - generic: Interested
+                  - generic:
+                    - generic: Asked for more info
+                  - generic:
+                    - generic: Not now
+                  - generic:
+                    - generic: Negative response
+                  - generic:
+                    - generic: Wait 1 day
+                  - generic:
+                    - generic: Wait 2 days
+                  - generic:
+                    - generic: No reply
+                  - generic:
+                    - generic: No reply
+                  - generic:
+                    - generic: No reply
+              - generic:
+                - generic [ref=e201]:
+                  - button "Connect here" [ref=e202]
+                  - button "Start connection" [ref=e203]
+                  - generic [ref=e205]:
+                    - generic [ref=e206]: Start question
+                    - generic [ref=e207]:
+                      - generic [ref=e208]: Start
+                      - generic [ref=e209]: Auto
+                  - generic [ref=e211]:
+                    - strong [ref=e212]: "Prompt:"
+                    - text: "Write outbound email copy for node \"Start question\". Primary goal: qualify whether the founder is self-funded and, if qualified, move them toward the AWS credits application link.…"
+                - generic [ref=e213]:
+                  - button "Connect here" [ref=e214]
+                  - button "Start connection" [ref=e215]
+                  - generic [ref=e217]:
+                    - generic [ref=e218]: Interest follow-up
+                    - generic [ref=e220]: Auto
+                  - generic [ref=e222]:
+                    - strong [ref=e223]: "Prompt:"
+                    - text: "Write outbound email copy for node \"Interest follow-up\". Primary goal: qualify whether the founder is self-funded and, if qualified, move them toward the AWS credits application l…"
+                - generic [ref=e224]:
+                  - button "Connect here" [ref=e225]
+                  - button "Start connection" [ref=e226]
+                  - generic [ref=e228]:
+                    - generic [ref=e229]: Question answer
+                    - generic [ref=e231]: Manual
+                  - generic [ref=e233]:
+                    - strong [ref=e234]: "Prompt:"
+                    - text: "Write outbound email copy for node \"Question answer\". Primary goal: qualify whether the founder is self-funded and, if qualified, move them toward the AWS credits application link…"
+                - generic [ref=e235]:
+                  - button "Connect here" [ref=e236]
+                  - button "Start connection" [ref=e237]
+                  - generic [ref=e239]:
+                    - generic [ref=e240]: Objection handling
+                    - generic [ref=e242]: Manual
+                  - generic [ref=e244]:
+                    - strong [ref=e245]: "Prompt:"
+                    - text: "Write outbound email copy for node \"Objection handling\". Primary goal: qualify whether the founder is self-funded and, if qualified, move them toward the AWS credits application l…"
+                - generic [ref=e246]:
+                  - button "Connect here" [ref=e247]
+                  - button "Start connection" [ref=e248]
+                  - generic [ref=e249]:
+                    - generic [ref=e250]:
+                      - generic [ref=e251]: No-reply nudge
+                      - generic [ref=e253]: Auto
+                    - generic [ref=e254]: "Node delay: 1 day"
+                  - generic [ref=e256]:
+                    - strong [ref=e257]: "Prompt:"
+                    - text: "Write outbound email copy for node \"No-reply nudge\". Primary goal: qualify whether the founder is self-funded and, if qualified, move them toward the AWS credits application link.…"
+                - generic [ref=e258]:
+                  - button "Connect here" [ref=e259]
+                  - button "Start connection" [ref=e260]
+                  - generic [ref=e263]: End
+                  - generic [ref=e265]:
+                    - strong [ref=e266]: "Flow:"
+                    - text: Sequence stops here.
+              - generic:
+                - generic:
+                  - img
+                  - text: "Pan: drag background"
+                - text: "|Zoom: ctrl/cmd + wheel|"
+                - generic:
+                  - img
+                  - text: "Connect: drag from right dot to left dot"
+          - generic [ref=e267]:
+            - generic [ref=e268]:
+              - heading "Node Inspector" [level=3] [ref=e269]
+              - paragraph [ref=e270]: Edit the selected node. Advanced routing is hidden by default.
+            - generic [ref=e271]:
+              - generic [ref=e272]:
+                - generic [ref=e273]:
+                  - generic [ref=e274]: "Node: Start question"
+                  - generic [ref=e275]:
+                    - button "Duplicate" [ref=e276]
+                    - button [ref=e277]:
+                      - img [ref=e278]
+                - generic [ref=e281]:
+                  - generic [ref=e282]: Title
+                  - textbox "Send AWS application link" [ref=e283]: Start question
+                - generic [ref=e284]:
+                  - generic [ref=e285]: Subject
+                  - textbox "Question about your pipeline" [ref=e286]: AWS credits for self-funded founders?
+                - generic [ref=e287]:
+                  - generic [ref=e288]:
+                    - generic [ref=e289]: Send mode
+                    - combobox [ref=e290]:
+                      - option "Auto send" [selected]
+                      - option "Manual review"
+                  - generic [ref=e291]:
+                    - generic [ref=e292]: Node delay (minutes)
+                    - spinbutton [ref=e293]: "0"
+                    - generic [ref=e294]: "Extra wait after entering this node: immediately."
+                - generic [ref=e295]:
+                  - generic [ref=e296]: Body
+                  - 'textbox "Hi {{firstName}}, ..." [ref=e297]': "Hey {{firstName}}, We just finalized a partnership with AWS to distribute a batch of cloud credits to help bootstrapped founders offset server costs. I didn't see anything on Crunchbase for {{company}}, but want to be sure: are you entirely self-funded at this point? Angels or friends/family are fine, just no institutional VC. If so, happy to invite you to the program. The credits can apply to new or existing AWS accounts if you're already on AWS. Some context on us: we're a private collective for self-funded operators, and we pool our leverage to negotiate exclusive deals with big cloud and software companies. If you qualify, I can send over the application link. Best, Marco Marco Rosetti SelfFunded.dev"
+                - generic [ref=e298]:
+                  - generic [ref=e299]:
+                    - generic [ref=e300]: Preview uses one sourced sample lead for context.
+                    - button "Refresh lead context" [ref=e301]:
+                      - img [ref=e302]
+                      - text: Refresh lead context
+                  - generic [ref=e307]: No sourced leads yet. Run sourcing first, then refresh lead context.
+                  - button "Regenerate draft" [disabled]:
+                    - img
+                    - text: Regenerate draft
+                - group [ref=e308]:
+                  - generic "Advanced" [ref=e309] [cursor=pointer]
+                - button "Start Node" [ref=e310]
+              - generic [ref=e311]:
+                - generic [ref=e312]:
+                  - generic [ref=e313]:
+                    - generic [ref=e314]: Flow Probe
+                    - generic [ref=e315]: Roleplay a blank recipient against the current draft map and inspect which branch fires.
+                  - generic [ref=e316]: Ready
+                - generic [ref=e317]:
+                  - text: "Entry node: Start question"
+                  - text: "Lead: Jordan Lee"
+                  - text: Using a synthetic founder profile until sourced preview leads are available.
+                - button "Run probe" [ref=e318]:
+                  - img [ref=e323]
+                  - text: Run probe
+                - generic [ref=e326]:
+                  - generic [ref=e327]: Probe generated for jordan@exampleco.com from Start question.
+                  - group [ref=e328]:
+                    - generic "Qualified and Interested Reply flows into Interest follow-up automatically. Auto reply" [ref=e329] [cursor=pointer]:
+                      - generic [ref=e330]:
+                        - generic [ref=e331]:
+                          - generic [ref=e332]: Qualified and Interested
+                          - generic [ref=e333]: Reply flows into Interest follow-up automatically.
+                        - generic [ref=e334]: Auto reply
+                  - group [ref=e335]:
+                    - generic "Skeptical Question Reply routes to Question answer, but it should be reviewed by a human before sending. Manual review" [ref=e336] [cursor=pointer]:
+                      - generic [ref=e337]:
+                        - generic [ref=e338]:
+                          - generic [ref=e339]: Skeptical Question
+                          - generic [ref=e340]: Reply routes to Question answer, but it should be reviewed by a human before sending.
+                        - generic [ref=e341]: Manual review
+                  - group [ref=e342]:
+                    - generic "Not AWS, Still Relevant Reply routes to Interest follow-up, but it should be reviewed by a human before sending. Manual review" [ref=e343] [cursor=pointer]:
+                      - generic [ref=e344]:
+                        - generic [ref=e345]:
+                          - generic [ref=e346]: Not AWS, Still Relevant
+                          - generic [ref=e347]: Reply routes to Interest follow-up, but it should be reviewed by a human before sending.
+                        - generic [ref=e348]: Manual review
+                  - group [ref=e349]:
+                    - generic "Thanks Only This is a simple thanks/acknowledgement with no question or next step. No reply" [ref=e350] [cursor=pointer]:
+                      - generic [ref=e351]:
+                        - generic [ref=e352]:
+                          - generic [ref=e353]: Thanks Only
+                          - generic [ref=e354]: This is a simple thanks/acknowledgement with no question or next step.
+                        - generic [ref=e355]: No reply
+                  - group [ref=e356]:
+                    - generic "No Reply No timer branch is configured from this node. Stalled" [ref=e357] [cursor=pointer]:
+                      - generic [ref=e358]:
+                        - generic [ref=e359]:
+                          - generic [ref=e360]: No Reply
+                          - generic [ref=e361]: No timer branch is configured from this node.
+                        - generic [ref=e362]: Stalled
+                  - group [ref=e363]:
+                    - generic "Strategic Relationship Reply routes to Interest follow-up, but it should be reviewed by a human before sending. Manual review" [ref=e364] [cursor=pointer]:
+                      - generic [ref=e365]:
+                        - generic [ref=e366]:
+                          - generic [ref=e367]: Strategic Relationship
+                          - generic [ref=e368]: Reply routes to Interest follow-up, but it should be reviewed by a human before sending.
+                        - generic [ref=e369]: Manual review
+  - button "Open Next.js Dev Tools" [ref=e136] [cursor=pointer]:
+    - img [ref=e137]
+  - alert [ref=e140]

@@ -1,0 +1,380 @@
+{
+  "mx_host": "smtp.google.com",
+  "attempts_per_email": 2,
+  "summary": [
+    {
+      "email": "don@bhuman.ai",
+      "accepted": 0,
+      "rejected": 0,
+      "errors": 2,
+      "codes": [
+        null,
+        null
+      ],
+      "statuses": [
+        "error",
+        "error"
+      ],
+      "rcpt_median_ms": null
+    },
+    {
+      "email": "don.bosco@bhuman.ai",
+      "accepted": 0,
+      "rejected": 0,
+      "errors": 2,
+      "codes": [
+        null,
+        null
+      ],
+      "statuses": [
+        "error",
+        "error"
+      ],
+      "rcpt_median_ms": null
+    },
+    {
+      "email": "dbosco@bhuman.ai",
+      "accepted": 0,
+      "rejected": 0,
+      "errors": 2,
+      "codes": [
+        null,
+        null
+      ],
+      "statuses": [
+        "error",
+        "error"
+      ],
+      "rcpt_median_ms": null
+    },
+    {
+      "email": "donbosco@bhuman.ai",
+      "accepted": 0,
+      "rejected": 0,
+      "errors": 2,
+      "codes": [
+        null,
+        null
+      ],
+      "statuses": [
+        "error",
+        "error"
+      ],
+      "rcpt_median_ms": null
+    },
+    {
+      "email": "don_bosco@bhuman.ai",
+      "accepted": 0,
+      "rejected": 0,
+      "errors": 2,
+      "codes": [
+        null,
+        null
+      ],
+      "statuses": [
+        "error",
+        "error"
+      ],
+      "rcpt_median_ms": null
+    },
+    {
+      "email": "d.bosco@bhuman.ai",
+      "accepted": 0,
+      "rejected": 0,
+      "errors": 2,
+      "codes": [
+        null,
+        null
+      ],
+      "statuses": [
+        "error",
+        "error"
+      ],
+      "rcpt_median_ms": null
+    },
+    {
+      "email": "bosco@bhuman.ai",
+      "accepted": 0,
+      "rejected": 0,
+      "errors": 2,
+      "codes": [
+        null,
+        null
+      ],
+      "statuses": [
+        "error",
+        "error"
+      ],
+      "rcpt_median_ms": null
+    },
+    {
+      "email": "bosco.don@bhuman.ai",
+      "accepted": 0,
+      "rejected": 0,
+      "errors": 2,
+      "codes": [
+        null,
+        null
+      ],
+      "statuses": [
+        "error",
+        "error"
+      ],
+      "rcpt_median_ms": null
+    },
+    {
+      "email": "don.b@bhuman.ai",
+      "accepted": 0,
+      "rejected": 0,
+      "errors": 2,
+      "codes": [
+        null,
+        null
+      ],
+      "statuses": [
+        "error",
+        "error"
+      ],
+      "rcpt_median_ms": null
+    },
+    {
+      "email": "d.b@bhuman.ai",
+      "accepted": 0,
+      "rejected": 0,
+      "errors": 2,
+      "codes": [
+        null,
+        null
+      ],
+      "statuses": [
+        "error",
+        "error"
+      ],
+      "rcpt_median_ms": null
+    },
+    {
+      "email": "x7v3q9p2k6m1@bhuman.ai",
+      "accepted": 0,
+      "rejected": 0,
+      "errors": 2,
+      "codes": [
+        null,
+        null
+      ],
+      "statuses": [
+        "error",
+        "error"
+      ],
+      "rcpt_median_ms": null
+    },
+    {
+      "email": "m4n8p1q6t3z9@bhuman.ai",
+      "accepted": 0,
+      "rejected": 0,
+      "errors": 2,
+      "codes": [
+        null,
+        null
+      ],
+      "statuses": [
+        "error",
+        "error"
+      ],
+      "rcpt_median_ms": null
+    }
+  ],
+  "raw": {
+    "don@bhuman.ai": [
+      {
+        "attempt": 1,
+        "email": "don@bhuman.ai",
+        "error": "timed out",
+        "status": "error",
+        "total_ms": 25012.79
+      },
+      {
+        "attempt": 2,
+        "email": "don@bhuman.ai",
+        "error": "timed out",
+        "status": "error",
+        "total_ms": 25010.8
+      }
+    ],
+    "don.bosco@bhuman.ai": [
+      {
+        "attempt": 1,
+        "email": "don.bosco@bhuman.ai",
+        "error": "timed out",
+        "status": "error",
+        "total_ms": 25013.7
+      },
+      {
+        "attempt": 2,
+        "email": "don.bosco@bhuman.ai",
+        "error": "timed out",
+        "status": "error",
+        "total_ms": 25012.66
+      }
+    ],
+    "dbosco@bhuman.ai": [
+      {
+        "attempt": 1,
+        "email": "dbosco@bhuman.ai",
+        "error": "timed out",
+        "status": "error",
+        "total_ms": 25009.22
+      },
+      {
+        "attempt": 2,
+        "email": "dbosco@bhuman.ai",
+        "error": "timed out",
+        "status": "error",
+        "total_ms": 25012.34
+      }
+    ],
+    "donbosco@bhuman.ai": [
+      {
+        "attempt": 1,
+        "email": "donbosco@bhuman.ai",
+        "error": "timed out",
+        "status": "error",
+        "total_ms": 25012.78
+      },
+      {
+        "attempt": 2,
+        "email": "donbosco@bhuman.ai",
+        "error": "timed out",
+        "status": "error",
+        "total_ms": 25011.06
+      }
+    ],
+    "don_bosco@bhuman.ai": [
+      {
+        "attempt": 1,
+        "email": "don_bosco@bhuman.ai",
+        "error": "timed out",
+        "status": "error",
+        "total_ms": 25011.32
+      },
+      {
+        "attempt": 2,
+        "email": "don_bosco@bhuman.ai",
+        "error": "timed out",
+        "status": "error",
+        "total_ms": 25012.06
+      }
+    ],
+    "d.bosco@bhuman.ai": [
+      {
+        "attempt": 1,
+        "email": "d.bosco@bhuman.ai",
+        "error": "timed out",
+        "status": "error",
+        "total_ms": 25014.32
+      },
+      {
+        "attempt": 2,
+        "email": "d.bosco@bhuman.ai",
+        "error": "timed out",
+        "status": "error",
+        "total_ms": 25014.17
+      }
+    ],
+    "bosco@bhuman.ai": [
+      {
+        "attempt": 1,
+        "email": "bosco@bhuman.ai",
+        "error": "timed out",
+        "status": "error",
+        "total_ms": 25014.09
+      },
+      {
+        "attempt": 2,
+        "email": "bosco@bhuman.ai",
+        "error": "timed out",
+        "status": "error",
+        "total_ms": 25012.64
+      }
+    ],
+    "bosco.don@bhuman.ai": [
+      {
+        "attempt": 1,
+        "email": "bosco.don@bhuman.ai",
+        "error": "timed out",
+        "status": "error",
+        "total_ms": 25010.31
+      },
+      {
+        "attempt": 2,
+        "email": "bosco.don@bhuman.ai",
+        "error": "timed out",
+        "status": "error",
+        "total_ms": 25012.29
+      }
+    ],
+    "don.b@bhuman.ai": [
+      {
+        "attempt": 1,
+        "email": "don.b@bhuman.ai",
+        "error": "timed out",
+        "status": "error",
+        "total_ms": 25013.01
+      },
+      {
+        "attempt": 2,
+        "email": "don.b@bhuman.ai",
+        "error": "timed out",
+        "status": "error",
+        "total_ms": 25011.39
+      }
+    ],
+    "d.b@bhuman.ai": [
+      {
+        "attempt": 1,
+        "email": "d.b@bhuman.ai",
+        "error": "timed out",
+        "status": "error",
+        "total_ms": 25010.02
+      },
+      {
+        "attempt": 2,
+        "email": "d.b@bhuman.ai",
+        "error": "timed out",
+        "status": "error",
+        "total_ms": 25011.31
+      }
+    ],
+    "x7v3q9p2k6m1@bhuman.ai": [
+      {
+        "attempt": 1,
+        "email": "x7v3q9p2k6m1@bhuman.ai",
+        "error": "timed out",
+        "status": "error",
+        "total_ms": 25010.9
+      },
+      {
+        "attempt": 2,
+        "email": "x7v3q9p2k6m1@bhuman.ai",
+        "error": "timed out",
+        "status": "error",
+        "total_ms": 25012.07
+      }
+    ],
+    "m4n8p1q6t3z9@bhuman.ai": [
+      {
+        "attempt": 1,
+        "email": "m4n8p1q6t3z9@bhuman.ai",
+        "error": "timed out",
+        "status": "error",
+        "total_ms": 25011.52
+      },
+      {
+        "attempt": 2,
+        "email": "m4n8p1q6t3z9@bhuman.ai",
+        "error": "timed out",
+        "status": "error",
+        "total_ms": 25014.4
+      }
+    ]
+  }
+}

@@ -1,5 +1,5 @@
 import { sanitizeAiText } from "@/lib/ai-sanitize";
-import { normalizeConversationGraph } from "@/lib/conversation-flow-data";
+import { defaultConversationGraph, normalizeConversationGraph } from "@/lib/conversation-flow-data";
 import { generateConversationPromptMessage } from "@/lib/conversation-prompt-render";
 import type { ConversationFlowGraph, ConversationFlowNode } from "@/lib/factory-types";
 import { resolveLlmModel, type LlmTask } from "@/lib/llm-router";
@@ -175,6 +175,29 @@ function sampleInboundByIntent(intent: "question" | "interest" | "objection" | "
   };
 }
 
+function detectGenerationPlaybook(context: GenerationContext) {
+  const haystack = [
+    context.brand.name,
+    context.brand.website,
+    context.brand.notes,
+    context.campaign.objectiveGoal,
+    context.campaign.variantNotes,
+    context.experiment.offer,
+    context.experiment.cta,
+    context.experiment.audience,
+  ]
+    .join("\n")
+    .toLowerCase();
+
+  if (haystack.includes("aws") && (haystack.includes("self-funded") || haystack.includes("bootstrapped"))) {
+    return "selffunded_aws" as const;
+  }
+  if (haystack.includes("bhuman")) {
+    return "bhuman_private_drop" as const;
+  }
+  return "generic" as const;
+}
+
 function renderFailureReason(
   node: ConversationFlowNode,
   reason: string,
@@ -235,6 +258,7 @@ async function renderCandidateSamples(input: {
         intent: "",
         confidence: 0.5,
         priorNodePath: [startNode.id],
+        history: [],
       },
       safety: {
         maxDepth: input.candidate.graph.maxDepth,
@@ -294,6 +318,23 @@ async function renderCandidateSamples(input: {
           intent: followup.intent,
           confidence: inbound.confidence,
           priorNodePath: [startNode.id, followup.node.id],
+          history: [
+            {
+              direction: "outbound",
+              subject: firstTouch.subject,
+              body: firstTouch.body,
+              at: new Date().toISOString(),
+              nodeId: startNode.id,
+              messageId: "roleplay_msg_1",
+            },
+            {
+              direction: "inbound",
+              subject: inbound.subject,
+              body: inbound.body,
+              at: new Date().toISOString(),
+              messageId: "roleplay_reply_1",
+            },
+          ],
         },
         safety: {
           maxDepth: input.candidate.graph.maxDepth,
@@ -593,6 +634,25 @@ async function roleplayEvaluateCandidates(input: {
 }
 
 export async function generateScreenedConversationFlowGraph(input: { context: GenerationContext }) {
+  const playbook = detectGenerationPlaybook(input.context);
+  if (playbook !== "generic") {
+    return {
+      graph: defaultConversationGraph({
+        offer: input.context.experiment.offer,
+        cta: input.context.experiment.cta,
+        audience: input.context.experiment.audience || input.context.campaign.targetAudience,
+        campaignGoal: input.context.campaign.objectiveGoal,
+      }),
+      mode: "playbook_seeded" as const,
+      selectedIndex: 0,
+      score: 100,
+      summary:
+        playbook === "selffunded_aws"
+          ? "Seeded a curated AWS credits reply map with explicit qualification, application-link, and 5-day branch follow-up nodes."
+          : "Seeded a curated BHuman private-drop map with manual-allocation rules and feedback requirements.",
+    };
+  }
+
   const candidates = await generateCandidateGraphs({
     context: input.context,
     candidateCount: 6,

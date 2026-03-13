@@ -1,0 +1,356 @@
+- generic [ref=e1]:
+  - generic [ref=e3]:
+    - complementary [ref=e4]:
+      - link "Factory Factory Platform" [ref=e5] [cursor=pointer]:
+        - /url: /
+        - generic [ref=e6]: Factory
+        - generic [ref=e7]: Factory Platform
+      - combobox [ref=e10]:
+        - option "BHuman | AI personalized videos at scale"
+        - option "selffunded.dev" [selected]
+      - navigation [ref=e12]:
+        - link "Experiments" [ref=e13] [cursor=pointer]:
+          - /url: /brands/brand_7936be472e1247c7/experiments
+          - img [ref=e14]
+          - text: Experiments
+        - link "Campaigns" [ref=e18] [cursor=pointer]:
+          - /url: /brands/brand_7936be472e1247c7/campaigns
+          - img [ref=e19]
+          - text: Campaigns
+        - link "Network" [ref=e21] [cursor=pointer]:
+          - /url: /brands/brand_7936be472e1247c7/network
+          - img [ref=e22]
+          - text: Network
+        - link "Leads" [ref=e27] [cursor=pointer]:
+          - /url: /brands/brand_7936be472e1247c7/leads
+          - img [ref=e28]
+          - text: Leads
+        - link "Inbox" [ref=e31] [cursor=pointer]:
+          - /url: /brands/brand_7936be472e1247c7/inbox
+          - img [ref=e32]
+          - text: Inbox
+      - generic [ref=e35]:
+        - generic [ref=e36]: Tools
+        - navigation [ref=e37]:
+          - link "Settings" [ref=e38] [cursor=pointer]:
+            - /url: /settings/outreach
+            - img [ref=e39]
+            - text: Settings
+          - link "Logic" [ref=e42] [cursor=pointer]:
+            - /url: /logic
+            - img [ref=e43]
+            - text: Logic
+          - link "Doctor" [ref=e45] [cursor=pointer]:
+            - /url: /doctor
+            - img [ref=e46]
+            - text: Doctor
+    - main [ref=e48]:
+      - generic [ref=e50]:
+        - generic [ref=e51]:
+          - generic [ref=e52]: Factory > Brand > Campaigns > Campaign
+          - heading "Campaign" [level=1] [ref=e53]
+        - generic [ref=e54]:
+          - button "Global Search K" [ref=e55]:
+            - img [ref=e56]
+            - text: Global Search
+            - generic [ref=e59]:
+              - img [ref=e60]
+              - text: K
+          - button "User" [ref=e62]:
+            - img [ref=e63]
+            - text: User
+      - generic [ref=e68]:
+        - generic [ref=e70]:
+          - generic [ref=e71]:
+            - heading "selffunded.dev · AWS credits qualification outreach" [level=3] [ref=e72]
+            - paragraph [ref=e73]: Scale-only campaign promoted from experiment 4b4e93.
+          - generic [ref=e74]:
+            - generic [ref=e75]: "Status: active"
+            - generic [ref=e76]: "Sent: 3"
+            - generic [ref=e77]: "Replies: 0"
+            - generic [ref=e78]: "Positive: 0"
+        - generic [ref=e79]:
+          - generic [ref=e80]:
+            - heading "Source snapshot (locked)" [level=3] [ref=e81]
+            - paragraph [ref=e82]: Strategy, offer, audience, and flow revision are immutable after promotion.
+          - generic [ref=e83]:
+            - generic [ref=e84]:
+              - generic [ref=e85]:
+                - strong [ref=e86]: "Offer:"
+                - text: "We distribute AWS cloud credits to self-funded founders to offset server costs. Angels or friends/family are okay, but no institutional VC. Credits can apply to new or existing AWS accounts. CTA: Are you entirely self-funded right now?"
+              - generic [ref=e87]:
+                - strong [ref=e88]: "Audience:"
+                - text: Founders, co-founders, CEOs, and owner-operators of small bootstrapped tech companies and SMB software startups, especially B2B SaaS, devtools, AI tools, technical software, and Product Hunt-style launches. Prioritize companies roughly 1-50 employees with real products and active software/infrastructure usage. Exclude AWS employees, cloud vendors, agencies, consultancies, recruiters, investors, and enterprise services firms.
+              - generic [ref=e89]:
+                - strong [ref=e90]: "Flow revision:"
+                - text: "#2"
+            - generic [ref=e91]:
+              - button "Open conversational flow" [active] [ref=e92]:
+                - img [ref=e93]
+                - text: Open conversational flow
+              - link "View source experiment" [ref=e97] [cursor=pointer]:
+                - /url: /brands/brand_7936be472e1247c7/experiments/expt_254ab559674b4e93
+        - generic [ref=e98]:
+          - generic [ref=e99]:
+            - heading "Scale controls (editable)" [level=3] [ref=e100]
+            - paragraph [ref=e101]: Set your campaign hopper throughput. The system auto-starts new runs while below daily target.
+          - generic [ref=e102]:
+            - generic [ref=e103]:
+              - generic [ref=e104]: Daily target (emails/day)
+              - spinbutton [ref=e105]: "360"
+            - generic [ref=e106]:
+              - generic [ref=e107]: Hourly cap
+              - spinbutton [ref=e108]: "45"
+            - generic [ref=e109]:
+              - generic [ref=e110]: Timezone
+              - textbox [ref=e111]: America/Los_Angeles
+            - generic [ref=e112]:
+              - generic [ref=e113]: Min spacing (minutes)
+              - spinbutton [ref=e114]: "8"
+            - generic [ref=e115]:
+              - generic [ref=e116]: Delivery account id
+              - textbox [ref=e117]: acct_d8fb38ce029d4c37
+            - generic [ref=e118]:
+              - generic [ref=e119]: Reply mailbox account id
+              - textbox [ref=e120]: acct_2b0814506b1c45d1
+        - generic [ref=e121]:
+          - generic [ref=e122]:
+            - heading "Execution" [level=3] [ref=e123]
+            - paragraph [ref=e124]: Start hopper mode to keep this campaign running every day at the target volume.
+          - generic [ref=e125]:
+            - button "Save Scale Controls" [ref=e126]:
+              - img [ref=e127]
+              - text: Save Scale Controls
+            - button "Pause Hopper" [ref=e131]:
+              - img [ref=e132]
+              - text: Pause Hopper
+            - button "Pause" [ref=e135]:
+              - img [ref=e136]
+              - text: Pause
+        - generic [ref=e139]:
+          - generic [ref=e140]:
+            - heading "Run visibility" [level=3] [ref=e141]
+            - paragraph [ref=e142]: Latest attempt, worker events, sent emails, and replies.
+          - generic [ref=e143]:
+            - generic [ref=e144]:
+              - generic [ref=e145]:
+                - generic [ref=e146]: Run 7a48cf
+                - generic [ref=e147]: sending
+              - generic [ref=e148]: Leads 24 · Sent 3 · Replies 0
+            - generic [ref=e149]:
+              - generic [ref=e150]: Sent messages
+              - generic [ref=e151]:
+                - generic [ref=e152]:
+                  - generic [ref=e153]:
+                    - generic [ref=e154]: "Quick check re: AWS credits for Accountero"
+                    - generic [ref=e155]: scheduled
+                  - generic [ref=e156]: Nav — we’re selffunded.dev, a private collective for bootstrapped operators. We just finalized a partnership with AWS to distribute a limited batch of cloud credits to help cover s...
+                  - generic [ref=e157]: 3/11/2026, 11:29:08 PM
+                - generic [ref=e158]:
+                  - generic [ref=e159]:
+                    - generic [ref=e160]: Quick check — AWS credits for bootstrapped founders
+                    - generic [ref=e161]: scheduled
+                  - generic [ref=e162]: Hi Alexander — I’m Marco from selffunded.dev. We just secured a batch of AWS cloud credits to help self-funded founders offset server costs. Before I send the application link, ca...
+                  - generic [ref=e163]: 3/11/2026, 11:21:02 PM
+                - generic [ref=e164]:
+                  - generic [ref=e165]:
+                    - generic [ref=e166]: "Quick check: is Avares Ai self-funded?"
+                    - generic [ref=e167]: scheduled
+                  - generic [ref=e168]: Hi Josiah — Marco from selffunded.dev. We’re distributing a limited batch of AWS cloud credits to help bootstrapped founders offset server costs (works for new or existing AWS acc...
+                  - generic [ref=e169]: 3/11/2026, 11:12:57 PM
+                - generic [ref=e170]:
+                  - generic [ref=e171]:
+                    - generic [ref=e172]: "Quick check: is Apideck bootstrapped?"
+                    - generic [ref=e173]: scheduled
+                  - generic [ref=e174]: Hi Gertjan — I’m Marco from selffunded.dev. We’re distributing a limited batch of AWS cloud credits to help self-funded founders offset server costs (angels or friends/family are ...
+                  - generic [ref=e175]: 3/11/2026, 11:04:52 PM
+                - generic [ref=e176]:
+                  - generic [ref=e177]:
+                    - generic [ref=e178]: "Quick question re: AWS credits for Federated Computer"
+                    - generic [ref=e179]: scheduled
+                  - generic [ref=e180]: Hi David — we’re selffunded.dev, a private collective for bootstrapped operators. We just secured a batch of AWS cloud credits to help founders offset server costs (works for new o...
+                  - generic [ref=e181]: 3/11/2026, 10:56:48 PM
+                - generic [ref=e182]:
+                  - generic [ref=e183]:
+                    - generic [ref=e184]: "Quick question: is Beefree self-funded?"
+                    - generic [ref=e185]: scheduled
+                  - generic [ref=e186]: Hi Massimo — we (selffunded.dev) just secured a partnership with AWS to distribute a limited batch of cloud credits to bootstrapped founders to offset server costs. Before I send ...
+                  - generic [ref=e187]: 3/11/2026, 10:48:44 PM
+                - generic [ref=e188]:
+                  - generic [ref=e189]:
+                    - generic [ref=e190]: "Quick check: is BairesDev bootstrapped (no institutional VC)?"
+                    - generic [ref=e191]: scheduled
+                  - generic [ref=e192]: Hi Nacho — Marco from selffunded.dev. We partnered with AWS to distribute a limited batch of cloud credits for founders who are self-funded (angels/friends & family are fine; no i...
+                  - generic [ref=e193]: 3/11/2026, 10:40:40 PM
+                - generic [ref=e194]:
+                  - generic [ref=e195]:
+                    - generic [ref=e196]: Quick check on funding for Event Booking Engines
+                    - generic [ref=e197]: scheduled
+                  - generic [ref=e198]: Hi Andrei— I’m Marco from selffunded.dev. We’re distributing a batch of AWS cloud credits to help bootstrapped founders offset server costs (OK if you’ve taken angels or friends/f...
+                  - generic [ref=e199]: 3/11/2026, 10:32:36 PM
+                - generic [ref=e200]:
+                  - generic [ref=e201]:
+                    - generic [ref=e202]: "Quick check re: AWS credits for Appointy.com"
+                    - generic [ref=e203]: scheduled
+                  - generic [ref=e204]: Hi Nemesh — I’m Marco from selffunded.dev. We’re distributing a limited batch of AWS cloud credits to help bootstrapped founders offset server costs (works for new or existing AWS...
+                  - generic [ref=e205]: 3/11/2026, 10:24:32 PM
+                - generic [ref=e206]:
+                  - generic [ref=e207]:
+                    - generic [ref=e208]: "Quick question re: AWS credits for FairFigure"
+                    - generic [ref=e209]: scheduled
+                  - generic [ref=e210]: Hey Aaron — we’re selffunded.dev, a private collective for bootstrapped operators. We just secured a batch of AWS cloud credits to help founders offset server costs. Before I send...
+                  - generic [ref=e211]: 3/11/2026, 10:16:27 PM
+                - generic [ref=e212]:
+                  - generic [ref=e213]:
+                    - generic [ref=e214]: "Quick check: is Freelo bootstrapped?"
+                    - generic [ref=e215]: scheduled
+                  - generic [ref=e216]: Hi Jan — I’m Marco from selffunded.dev. We just secured a batch of AWS cloud credits to help bootstrapped founders offset server costs. Before I send the application link, can I c...
+                  - generic [ref=e217]: 3/11/2026, 10:08:21 PM
+                - generic [ref=e218]:
+                  - generic [ref=e219]:
+                    - generic [ref=e220]: "Quick question re: AWS credits for Customerscore.io"
+                    - generic [ref=e221]: scheduled
+                  - generic [ref=e222]: Hi Tomas — I’m Marco at selffunded.dev. We partnered with AWS to distribute a limited batch of cloud credits to help bootstrapped teams offset server costs (works for new or exist...
+                  - generic [ref=e223]: 3/11/2026, 10:00:17 PM
+                - generic [ref=e224]:
+                  - generic [ref=e225]:
+                    - generic [ref=e226]: "Quick check re: AWS credits for B2B Wave"
+                    - generic [ref=e227]: scheduled
+                  - generic [ref=e228]: Hi Alex — I’m Marco from selffunded.dev. We’re distributing a limited batch of AWS cloud credits to help bootstrapped founders offset server costs. I couldn’t find clear funding i...
+                  - generic [ref=e229]: 3/11/2026, 9:52:12 PM
+                - generic [ref=e230]:
+                  - generic [ref=e231]:
+                    - generic [ref=e232]: "Quick question re: AWS credits for B2B Wave"
+                    - generic [ref=e233]: scheduled
+                  - generic [ref=e234]: Hi Kyriakos — I’m Marco from selffunded.dev. We partnered with AWS to distribute a batch of cloud credits to help bootstrapped founders offset server costs (works for new or exist...
+                  - generic [ref=e235]: 3/11/2026, 9:44:08 PM
+                - generic [ref=e236]:
+                  - generic [ref=e237]:
+                    - generic [ref=e238]: "Quick question re: AWS credits for Keywords Everywhere"
+                    - generic [ref=e239]: scheduled
+                  - generic [ref=e240]: Hi Akash — Marco from selffunded.dev. We’re distributing a limited batch of AWS cloud credits through a partnership aimed at bootstrapped operators to help offset server costs (wo...
+                  - generic [ref=e241]: 3/11/2026, 9:36:03 PM
+                - generic [ref=e242]:
+                  - generic [ref=e243]:
+                    - generic [ref=e244]: "Quick question re: AWS credits for Jobtable"
+                    - generic [ref=e245]: scheduled
+                  - generic [ref=e246]: Hi Kosta — I’m Marco from selffunded.dev. We’re distributing a batch of AWS cloud credits to help bootstrapped founders offset server costs (works for new or existing AWS accounts...
+                  - generic [ref=e247]: 3/11/2026, 9:27:59 PM
+                - generic [ref=e248]:
+                  - generic [ref=e249]:
+                    - generic [ref=e250]: Quick question — AWS credits for bootstrapped founders
+                    - generic [ref=e251]: scheduled
+                  - generic [ref=e252]: Hi Rehina — I’m Marco from selffunded.dev. We’re partnering with AWS to pass along a batch of cloud credits to bootstrapped operators to offset server bills. To qualify, founders ...
+                  - generic [ref=e253]: 3/11/2026, 9:19:53 PM
+                - generic [ref=e254]:
+                  - generic [ref=e255]:
+                    - generic [ref=e256]: "Quick check re: AWS credits for Address Guard"
+                    - generic [ref=e257]: scheduled
+                  - generic [ref=e258]: Hi Ryan — I’m Marco at selffunded.dev. We have a partnership with AWS to distribute a limited batch of cloud credits to help bootstrapped teams offset server costs (works for new ...
+                  - generic [ref=e259]: 3/11/2026, 9:11:49 PM
+                - generic [ref=e260]:
+                  - generic [ref=e261]:
+                    - generic [ref=e262]: "Quick question re: AWS credits for bootstrapped founders"
+                    - generic [ref=e263]: scheduled
+                  - generic [ref=e264]: Hi Neta — I’m Marco at selffunded.dev. We just partnered with AWS to distribute a batch of cloud credits to help bootstrapped founders offset server costs (works for new or existi...
+                  - generic [ref=e265]: 3/11/2026, 9:03:44 PM
+                - generic [ref=e266]:
+                  - generic [ref=e267]:
+                    - generic [ref=e268]: Quick question on funding at MicroSaaS.org
+                    - generic [ref=e269]: scheduled
+                  - generic [ref=e270]: Hi Nicolas — I’m Marco from selffunded.dev. We partnered with AWS to distribute a limited batch of cloud credits to help bootstrapped founders offset server costs. Before I send t...
+                  - generic [ref=e271]: 3/11/2026, 8:55:39 PM
+            - generic [ref=e272]:
+              - generic [ref=e273]: Reply threads
+              - generic [ref=e274]: No replies yet.
+            - generic [ref=e275]:
+              - generic [ref=e276]: Timeline events
+              - generic [ref=e277]:
+                - generic [ref=e278]:
+                  - generic [ref=e279]: job_completed
+                  - generic [ref=e280]: 3/11/2026, 8:41:14 PM
+                - generic [ref=e281]:
+                  - generic [ref=e282]: conversation_tick_processed
+                  - generic [ref=e283]: 3/11/2026, 8:41:14 PM
+                - generic [ref=e284]:
+                  - generic [ref=e285]: job_started
+                  - generic [ref=e286]: 3/11/2026, 8:41:13 PM
+                - generic [ref=e287]:
+                  - generic [ref=e288]: job_completed
+                  - generic [ref=e289]: 3/11/2026, 8:41:13 PM
+                - generic [ref=e290]:
+                  - generic [ref=e291]: job_started
+                  - generic [ref=e292]: 3/11/2026, 8:41:11 PM
+                - generic [ref=e293]:
+                  - generic [ref=e294]: job_completed
+                  - generic [ref=e295]: 3/11/2026, 8:41:11 PM
+                - generic [ref=e296]:
+                  - generic [ref=e297]: message_sent
+                  - generic [ref=e298]: 3/11/2026, 8:41:10 PM
+                - generic [ref=e299]:
+                  - generic [ref=e300]: message_sent
+                  - generic [ref=e301]: 3/11/2026, 8:41:05 PM
+                - generic [ref=e302]:
+                  - generic [ref=e303]: job_started
+                  - generic [ref=e304]: 3/11/2026, 8:40:57 PM
+                - generic [ref=e305]:
+                  - generic [ref=e306]: job_completed
+                  - generic [ref=e307]: 3/11/2026, 8:25:24 PM
+                - generic [ref=e308]:
+                  - generic [ref=e309]: job_completed
+                  - generic [ref=e310]: 3/11/2026, 8:25:24 PM
+                - generic [ref=e311]:
+                  - generic [ref=e312]: message_sent
+                  - generic [ref=e313]: 3/11/2026, 8:25:24 PM
+                - generic [ref=e314]:
+                  - generic [ref=e315]: message_sent
+                  - generic [ref=e316]: 3/11/2026, 8:25:23 PM
+                - generic [ref=e317]:
+                  - generic [ref=e318]: job_started
+                  - generic [ref=e319]: 3/11/2026, 8:25:16 PM
+                - generic [ref=e320]:
+                  - generic [ref=e321]: job_started
+                  - generic [ref=e322]: 3/11/2026, 8:25:11 PM
+                - generic [ref=e323]:
+                  - generic [ref=e324]: job_completed
+                  - generic [ref=e325]: 3/11/2026, 8:25:11 PM
+                - generic [ref=e326]:
+                  - generic [ref=e327]: message_scheduled
+                  - generic [ref=e328]: 3/11/2026, 8:25:09 PM
+                - generic [ref=e329]:
+                  - generic [ref=e330]: conversation_prompt_generated
+                  - generic [ref=e331]: 3/11/2026, 8:25:08 PM
+                - generic [ref=e332]:
+                  - generic [ref=e333]: conversation_prompt_generated
+                  - generic [ref=e334]: 3/11/2026, 8:25:04 PM
+                - generic [ref=e335]:
+                  - generic [ref=e336]: conversation_prompt_generated
+                  - generic [ref=e337]: 3/11/2026, 8:24:58 PM
+                - generic [ref=e338]:
+                  - generic [ref=e339]: conversation_prompt_generated
+                  - generic [ref=e340]: 3/11/2026, 8:24:53 PM
+                - generic [ref=e341]:
+                  - generic [ref=e342]: conversation_prompt_generated
+                  - generic [ref=e343]: 3/11/2026, 8:24:49 PM
+                - generic [ref=e344]:
+                  - generic [ref=e345]: conversation_prompt_generated
+                  - generic [ref=e346]: 3/11/2026, 8:24:45 PM
+                - generic [ref=e347]:
+                  - generic [ref=e348]: conversation_prompt_generated
+                  - generic [ref=e349]: 3/11/2026, 8:24:41 PM
+                - generic [ref=e350]:
+                  - generic [ref=e351]: conversation_prompt_generated
+                  - generic [ref=e352]: 3/11/2026, 8:24:37 PM
+  - alert [ref=e69]
+  - generic [ref=e353]:
+    - button "Close modal" [ref=e354]
+    - dialog "Conversational flow" [ref=e355]:
+      - generic [ref=e357]:
+        - generic [ref=e358]:
+          - heading "Conversational flow" [level=2] [ref=e359]
+          - paragraph [ref=e360]: Review and edit the real conversation map for this campaign without leaving the campaign view.
+        - button [ref=e361]:
+          - img [ref=e362]
+      - generic [ref=e368]:
+        - heading "Conversation map unavailable" [level=3] [ref=e369]
+        - paragraph [ref=e370]: Cannot read properties of undefined (reading 'find')

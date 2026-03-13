@@ -5,8 +5,10 @@ import type {
   CampaignRecord,
   CampaignScalePolicy,
   ConversationMap,
+  ConversationMapEditorState,
   ConversationFlowGraph,
   ConversationPreviewLead,
+  ConversationProbeResult,
   EvolutionSnapshot,
   Experiment,
   ExperimentListItem,
@@ -456,13 +458,16 @@ export async function controlScaleCampaignRunApi(
   brandId: string,
   campaignId: string,
   runId: string,
-  action: "pause" | "resume" | "cancel",
-  reason?: string
+  action: "pause" | "resume" | "cancel" | "probe_deliverability" | "resume_sender_deliverability",
+  reason?: string,
+  options?: {
+    senderAccountId?: string;
+  }
 ) {
   const response = await fetch(`/api/brands/${brandId}/campaigns/${campaignId}/runs/${runId}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ action, reason }),
+    body: JSON.stringify({ action, reason, senderAccountId: options?.senderAccountId }),
   });
   return await readJson(response);
 }
@@ -543,7 +548,25 @@ export async function fetchConversationMapApi(
     { cache: "no-store" }
   );
   const data = await readJson(response);
-  return (data.map ?? null) as ConversationMap | null;
+  const workingHours = asObject(data.workingHours);
+  return {
+    map: (data.map ?? null) as ConversationMap | null,
+    workingHours: {
+      timezone: String(workingHours.timezone ?? "America/Los_Angeles"),
+      businessHoursEnabled: workingHours.businessHoursEnabled !== false,
+      businessHoursStartHour: Math.max(
+        0,
+        Math.min(23, Number(workingHours.businessHoursStartHour ?? 9) || 9)
+      ),
+      businessHoursEndHour: Math.max(
+        1,
+        Math.min(24, Number(workingHours.businessHoursEndHour ?? 17) || 17)
+      ),
+      businessDays: Array.isArray(workingHours.businessDays)
+        ? (workingHours.businessDays as number[])
+        : [1, 2, 3, 4, 5],
+    },
+  } satisfies ConversationMapEditorState;
 }
 
 export async function fetchConversationPreviewLeadsApi(
@@ -607,17 +630,49 @@ export async function saveConversationMapDraftApi(input: {
   experimentId: string;
   name?: string;
   draftGraph: ConversationFlowGraph;
+  workingHours?: ConversationMapEditorState["workingHours"];
 }) {
   const response = await fetch(
     `/api/brands/${input.brandId}/campaigns/${input.campaignId}/experiments/${input.experimentId}/conversation-map`,
     {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: input.name ?? "", draftGraph: input.draftGraph }),
+      body: JSON.stringify({
+        name: input.name ?? "",
+        draftGraph: input.draftGraph,
+        workingHours: input.workingHours ?? undefined,
+      }),
     }
   );
   const data = await readJson(response);
-  return data.map as ConversationMap;
+  const workingHours = asObject(data.workingHours);
+  return {
+    map: data.map as ConversationMap,
+    workingHours: {
+      timezone: String(workingHours.timezone ?? input.workingHours?.timezone ?? "America/Los_Angeles"),
+      businessHoursEnabled:
+        workingHours.businessHoursEnabled === undefined
+          ? (input.workingHours?.businessHoursEnabled ?? true)
+          : workingHours.businessHoursEnabled !== false,
+      businessHoursStartHour: Math.max(
+        0,
+        Math.min(
+          23,
+          Number(workingHours.businessHoursStartHour ?? input.workingHours?.businessHoursStartHour ?? 9) || 9
+        )
+      ),
+      businessHoursEndHour: Math.max(
+        1,
+        Math.min(
+          24,
+          Number(workingHours.businessHoursEndHour ?? input.workingHours?.businessHoursEndHour ?? 17) || 17
+        )
+      ),
+      businessDays: Array.isArray(workingHours.businessDays)
+        ? (workingHours.businessDays as number[])
+        : (input.workingHours?.businessDays ?? [1, 2, 3, 4, 5]),
+    },
+  } satisfies ConversationMapEditorState;
 }
 
 export async function publishConversationMapApi(
@@ -632,7 +687,25 @@ export async function publishConversationMapApi(
     }
   );
   const data = await readJson(response);
-  return data.map as ConversationMap;
+  const workingHours = asObject(data.workingHours);
+  return {
+    map: data.map as ConversationMap,
+    workingHours: {
+      timezone: String(workingHours.timezone ?? "America/Los_Angeles"),
+      businessHoursEnabled: workingHours.businessHoursEnabled !== false,
+      businessHoursStartHour: Math.max(
+        0,
+        Math.min(23, Number(workingHours.businessHoursStartHour ?? 9) || 9)
+      ),
+      businessHoursEndHour: Math.max(
+        1,
+        Math.min(24, Number(workingHours.businessHoursEndHour ?? 17) || 17)
+      ),
+      businessDays: Array.isArray(workingHours.businessDays)
+        ? (workingHours.businessDays as number[])
+        : [1, 2, 3, 4, 5],
+    },
+  } satisfies ConversationMapEditorState;
 }
 
 export async function suggestConversationMapApi(
@@ -691,6 +764,35 @@ export async function previewConversationNodeApi(input: {
         ? (data.trace as Record<string, unknown>)
         : {},
   };
+}
+
+export async function probeConversationMapApi(input: {
+  brandId: string;
+  campaignId: string;
+  experimentId: string;
+  nodeId?: string;
+  sampleLead?: {
+    id?: string;
+    name?: string;
+    email?: string;
+    company?: string;
+    title?: string;
+    domain?: string;
+  };
+}) {
+  const response = await fetch(
+    `/api/brands/${input.brandId}/campaigns/${input.campaignId}/experiments/${input.experimentId}/conversation-map/probe`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        nodeId: input.nodeId ?? "",
+        sampleLead: input.sampleLead ?? {},
+      }),
+    }
+  );
+  const data = await readJson(response);
+  return data.probe as ConversationProbeResult;
 }
 
 export async function createCampaignApi(brandId: string, input: { name: string }) {
@@ -844,6 +946,13 @@ export async function updateOutreachProvisioningSettingsApi(input: {
     clientIp?: string;
     apiKey?: string;
   };
+  deliverability?: {
+    provider?: "none" | "google_postmaster";
+    monitoredDomains?: string[];
+    googleClientId?: string;
+    googleClientSecret?: string;
+    googleRefreshToken?: string;
+  };
 }) {
   const response = await fetch("/api/outreach/provisioning-settings", {
     method: "PUT",
@@ -854,7 +963,9 @@ export async function updateOutreachProvisioningSettingsApi(input: {
   return data.settings as OutreachProvisioningSettings;
 }
 
-export async function testOutreachProvisioningSettings(provider: "customerio" | "namecheap" | "all" = "all") {
+export async function testOutreachProvisioningSettings(
+  provider: "customerio" | "namecheap" | "deliverability" | "all" = "all"
+) {
   const response = await fetch("/api/outreach/provisioning-settings/test", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -865,9 +976,9 @@ export async function testOutreachProvisioningSettings(provider: "customerio" | 
     settings: data.settings as OutreachProvisioningSettings,
     tests: (data.tests ?? {}) as Partial<
       Record<
-        "customerIo" | "namecheap",
+        "customerIo" | "namecheap" | "deliverability",
         {
-          provider: "customerio" | "namecheap";
+          provider: "customerio" | "namecheap" | "deliverability";
           ok: boolean;
           message: string;
           details: Record<string, unknown>;
@@ -1028,13 +1139,14 @@ export async function testOutreachAccount(
 
 export async function assignBrandOutreachAccount(
   brandId: string,
-  input: string | { accountId?: string; mailboxAccountId?: string }
+  input: string | { accountId?: string; accountIds?: string[]; mailboxAccountId?: string }
 ) {
   const payload =
     typeof input === "string"
       ? { accountId: input }
       : {
           accountId: input.accountId ?? "",
+          ...(Array.isArray(input.accountIds) ? { accountIds: input.accountIds } : {}),
           ...(typeof input.mailboxAccountId === "string"
             ? { mailboxAccountId: input.mailboxAccountId }
             : {}),
@@ -1119,6 +1231,20 @@ export async function pauseRun(
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ action: "pause", reason }),
+  });
+  return await readJson(response);
+}
+
+export async function probeRunDeliverability(
+  brandId: string,
+  campaignId: string,
+  runId: string,
+  reason = "Manual deliverability check"
+) {
+  const response = await fetch(`/api/brands/${brandId}/campaigns/${campaignId}/runs/${runId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action: "probe_deliverability", reason }),
   });
   return await readJson(response);
 }

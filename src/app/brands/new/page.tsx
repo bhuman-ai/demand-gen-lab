@@ -5,12 +5,12 @@ import { useRouter } from "next/navigation";
 import { Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { createBrandApi, generateExperimentSuggestions } from "@/lib/client-api";
 import { trackEvent } from "@/lib/telemetry-client";
+import { PageIntro, SectionPanel, StatLedger } from "@/components/ui/page-layout";
 
 type NicheOption = {
   id: string;
@@ -133,6 +133,8 @@ export default function NewBrandPage() {
     ...targetMarkets,
   ]);
   const previewIcps = dedupeLines([...selectedPersonas, ...idealCustomerProfiles]);
+  const progressCount =
+    Number(stepProgress.website) + Number(stepProgress.niche) + Number(stepProgress.subniches) + Number(stepProgress.personas);
 
   const runPrefill = async () => {
     if (!website.trim()) return;
@@ -227,27 +229,36 @@ export default function NewBrandPage() {
   };
 
   return (
-    <div className="mx-auto grid max-w-4xl gap-5 pb-28">
-      <div className="rounded-2xl border border-[color:var(--border)] bg-[color:var(--surface)] px-4 py-3">
-        <div className="flex flex-wrap items-center gap-2">
+    <div className="mx-auto grid max-w-6xl gap-8 pb-28">
+      <PageIntro
+        eyebrow="New brand"
+        title="Set the brand up once. Let the experiment feed inherit the context."
+        description="Website, niche, personas, proof, and product language should all be captured here before you ask the system to suggest outbound work."
+        aside={
+          <StatLedger
+            items={[
+              { label: "Progress", value: `${progressCount}/4`, detail: "Website, niche, subniche, and persona context." },
+              { label: "Markets", value: String(previewTargetMarkets.length).padStart(2, "0"), detail: "Target markets currently in the draft." },
+              { label: "Personas", value: String(previewIcps.length).padStart(2, "0"), detail: "ICPs and buyer personas selected so far." },
+            ]}
+          />
+        }
+      />
+
+      <SectionPanel title="Setup progress" description="Complete the intake in order, then generate the first experiment feed.">
+        <div className="grid gap-2 md:grid-cols-4">
           <Badge variant={stepProgress.website ? "success" : "muted"}>1 Website</Badge>
           <Badge variant={stepProgress.niche ? "success" : "muted"}>2 Primary niche</Badge>
           <Badge variant={stepProgress.subniches ? "success" : "muted"}>3 Subniches</Badge>
           <Badge variant={stepProgress.personas ? "success" : "muted"}>4 Personas</Badge>
         </div>
-        <div className="mt-2 text-xs text-[color:var(--muted-foreground)]">
-          Mobbin-inspired setup: compact steps, chip selection, then one sticky action rail.
-        </div>
-      </div>
+      </SectionPanel>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Brand Setup Quiz</CardTitle>
-          <CardDescription>
-            One input to start: website. Then select niche + subniches and we generate your experiment feed.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
+      <SectionPanel
+        title="Brand intake"
+        description="Start with the website. Everything else can be inferred, refined, and carried forward."
+      >
+        <div className="space-y-4">
           <div className="grid gap-2">
             <Label htmlFor="website">Website</Label>
             <Input
@@ -264,17 +275,14 @@ export default function NewBrandPage() {
             </Button>
             {prefillRan ? <Badge variant="success">Context loaded</Badge> : null}
           </div>
-        </CardContent>
-      </Card>
+        </div>
+      </SectionPanel>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Go-To-Market Quiz</CardTitle>
-          <CardDescription>
-            Pick a primary niche first. Then choose subniches and personas with multi-select.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="grid gap-4">
+      <SectionPanel
+        title="Go-to-market framing"
+        description="Pick a primary niche first, then narrow the subniches and buyer roles."
+      >
+        <div className="grid gap-4">
           <div className="grid gap-2">
             <Label>1) Primary niche</Label>
             <div className="flex flex-wrap gap-2">
@@ -282,10 +290,10 @@ export default function NewBrandPage() {
                 <button
                   key={option.id}
                   type="button"
-                  className={`rounded-full border px-4 py-2 text-sm transition ${
+                  className={`rounded-[8px] border px-4 py-2 text-sm transition-colors ${
                     selectedPrimaryNicheId === option.id
-                      ? "border-[color:var(--foreground)] bg-[color:var(--surface)] text-[color:var(--foreground)]"
-                      : "border-[color:var(--border)] bg-[color:var(--surface-muted)] text-[color:var(--muted-foreground)]"
+                      ? "border-[color:var(--border-strong)] bg-[color:var(--surface)] text-[color:var(--foreground)]"
+                      : "border-[color:var(--border)] bg-[color:var(--surface-muted)] text-[color:var(--muted-foreground)] hover:text-[color:var(--foreground)]"
                   }`}
                   onClick={() => {
                     setSelectedPrimaryNicheId(option.id);
@@ -308,10 +316,10 @@ export default function NewBrandPage() {
                     <button
                       key={subniche}
                       type="button"
-                      className={`rounded-full border px-3 py-1 text-xs font-medium transition ${
+                      className={`rounded-[8px] border px-3 py-1.5 text-xs font-medium transition-colors ${
                         selected
-                          ? "border-[color:var(--foreground)] bg-[color:var(--surface)] text-[color:var(--foreground)]"
-                          : "border-[color:var(--border)] bg-[color:var(--surface-muted)] text-[color:var(--muted-foreground)]"
+                          ? "border-[color:var(--border-strong)] bg-[color:var(--surface)] text-[color:var(--foreground)]"
+                          : "border-[color:var(--border)] bg-[color:var(--surface-muted)] text-[color:var(--muted-foreground)] hover:text-[color:var(--foreground)]"
                       }`}
                       onClick={() => toggleSubniche(subniche)}
                     >
@@ -336,10 +344,10 @@ export default function NewBrandPage() {
                   <button
                     key={persona}
                     type="button"
-                    className={`rounded-full border px-3 py-1 text-xs font-medium transition ${
+                    className={`rounded-[8px] border px-3 py-1.5 text-xs font-medium transition-colors ${
                       selected
-                        ? "border-[color:var(--foreground)] bg-[color:var(--surface)] text-[color:var(--foreground)]"
-                        : "border-[color:var(--border)] bg-[color:var(--surface-muted)] text-[color:var(--muted-foreground)]"
+                        ? "border-[color:var(--border-strong)] bg-[color:var(--surface)] text-[color:var(--foreground)]"
+                        : "border-[color:var(--border)] bg-[color:var(--surface-muted)] text-[color:var(--muted-foreground)] hover:text-[color:var(--foreground)]"
                     }`}
                     onClick={() => togglePersona(persona)}
                   >
@@ -359,19 +367,16 @@ export default function NewBrandPage() {
               placeholder="Anything specific we should prioritize in outreach?"
             />
           </div>
-        </CardContent>
-      </Card>
+        </div>
+      </SectionPanel>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Live Feed Inputs Preview</CardTitle>
-          <CardDescription>
-            This is exactly what will be used to generate your experiment suggestion feed.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="grid gap-3 md:grid-cols-2">
+      <SectionPanel
+        title="Live feed preview"
+        description="This is the draft context that will be used to generate the experiment suggestion feed."
+      >
+        <div className="grid gap-3 md:grid-cols-2">
           <div className="space-y-2">
-            <div className="text-xs uppercase tracking-wide text-[color:var(--muted-foreground)]">Target markets</div>
+            <div className="text-sm text-[color:var(--muted-foreground)]">Target markets</div>
             <div className="flex flex-wrap gap-2">
               {previewTargetMarkets.length ? (
                 previewTargetMarkets.map((item) => (
@@ -385,7 +390,7 @@ export default function NewBrandPage() {
             </div>
           </div>
           <div className="space-y-2">
-            <div className="text-xs uppercase tracking-wide text-[color:var(--muted-foreground)]">ICPs / personas</div>
+            <div className="text-sm text-[color:var(--muted-foreground)]">ICPs / personas</div>
             <div className="flex flex-wrap gap-2">
               {previewIcps.length ? (
                 previewIcps.map((item) => (
@@ -398,17 +403,14 @@ export default function NewBrandPage() {
               )}
             </div>
           </div>
-        </CardContent>
-      </Card>
+        </div>
+      </SectionPanel>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Generated Context (Optional Review)</CardTitle>
-          <CardDescription>
-            Website analysis fills this automatically. Edit only if needed.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="grid gap-4">
+      <SectionPanel
+        title="Generated context"
+        description="Website analysis fills this automatically. Edit only if needed."
+      >
+        <div className="grid gap-4">
           <div className="grid gap-2 md:grid-cols-2">
             <div className="grid gap-2">
               <Label htmlFor="name">Brand Name</Label>
@@ -457,13 +459,13 @@ export default function NewBrandPage() {
           </div>
 
           {error ? <div className="text-sm text-[color:var(--danger)]">{error}</div> : null}
-        </CardContent>
-      </Card>
+        </div>
+      </SectionPanel>
 
-      <div className="sticky bottom-4 z-20 rounded-2xl border border-[color:var(--border)] bg-[color:var(--surface)] px-4 py-3 shadow-[0_12px_32px_-20px_rgba(0,0,0,0.45)] backdrop-blur">
+      <div className="sticky bottom-4 z-20 rounded-[12px] border border-[color:var(--border)] bg-[color:var(--surface)] px-4 py-3 shadow-[0_12px_28px_-24px_color-mix(in_oklab,var(--shadow)_95%,transparent)]">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div className="text-xs text-[color:var(--muted-foreground)]">
-            Showing setup completeness: {Number(stepProgress.website) + Number(stepProgress.niche) + Number(stepProgress.subniches) + Number(stepProgress.personas)}/4
+            Showing setup completeness: {progressCount}/4
           </div>
           <div className="flex gap-2">
             <Button type="button" variant="outline" onClick={() => router.push("/brands")}>

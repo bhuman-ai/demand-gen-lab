@@ -7,6 +7,7 @@ import {
   listRunLeads,
   listRunMessages,
 } from "@/lib/outreach-data";
+import { getLeadEmailSuppressionReason } from "@/lib/outreach-providers";
 import type {
   OutreachMessage,
   OutreachRun,
@@ -60,6 +61,7 @@ export async function buildRunVisibilityBundle(input: {
   const leads = leadsByRunEntries
     .flatMap(([, rows]) => rows)
     .filter((lead) => (input.campaignIdFilter ? lead.campaignId === input.campaignIdFilter : true))
+    .filter((lead) => !getLeadEmailSuppressionReason(String(lead.email ?? "")))
     .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
 
   const messages = messagesByRunEntries

@@ -1,0 +1,47 @@
+[
+  {
+    "email": "don@bhuman.ai",
+    "expected_accept": true,
+    "source": "report_bhuman_ext_25.json (25/25 code=250)"
+  },
+  {
+    "email": "x7v3q9p2k6m1@bhuman.ai",
+    "expected_accept": false,
+    "source": "report_bhuman_ext_25.json (25/25 code=550)"
+  },
+  {
+    "email": "m4n8p1q6t3z9@bhuman.ai",
+    "expected_accept": false,
+    "source": "report_bhuman_ext_25.json (25/25 code=550)"
+  },
+  {
+    "email": "wmekideche@hubspot.com",
+    "expected_accept": true,
+    "source": "hubspot pair aggregate (80/80 code=250)"
+  },
+  {
+    "email": "v9x2q7m1k4t8@hubspot.com",
+    "expected_accept": false,
+    "source": "hubspot pair aggregate (80/80 code=550)"
+  },
+  {
+    "email": "Henry.Buttz@envestnet.com",
+    "expected_accept": true,
+    "source": "envestnet pair aggregate (24/24 code=250)"
+  },
+  {
+    "email": "q7v2m9x4k1p8@envestnet.com",
+    "expected_accept": false,
+    "source": "envestnet pair aggregate (24/24 code=550)"
+  },
+  {
+    "email": "aaron.baby@freshworks.com",
+    "expected_accept": true,
+    "source": "freshworks starttls 100/100 code=250"
+  },
+  {
+    "email": "gsoknf@freshworks.com",
+    "expected_accept": true,
+    "source": "freshworks starttls 100/100 code=250"
+  }
+]

@@ -1,0 +1,2 @@
+[  835707ms] [ERROR] Failed to load resource: the server responded with a status of 405 () @ https://demand-gen-lab.vercel.app/api/brands/brand_mlg68b9l/experiments/expt_bf7ab31d5ac44d91/runs/run_33dd54f7f37d41ed:0
+[  918615ms] [ERROR] Failed to load resource: the server responded with a status of 405 () @ https://demand-gen-lab.vercel.app/api/brands/brand_mlg68b9l/experiments/expt_bf7ab31d5ac44d91/runs/run_5301a0e2f801439c:0

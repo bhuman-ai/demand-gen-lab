@@ -1,0 +1,873 @@
+{
+  "dataset_size": 9,
+  "generated_at_utc": "2026-03-03T10:03:47Z",
+  "base_report": "/Users/don/EmailFinder/validator_benchmark/benchmark_report_hard_timeout.json",
+  "metrics_ranked_by_strict_accuracy": [
+    {
+      "tool": "validatedmails_api",
+      "total": 9,
+      "covered": 9,
+      "unknown": 0,
+      "coverage": 1.0,
+      "accuracy_on_covered": 1.0,
+      "strict_accuracy": 1.0,
+      "tp": 5,
+      "fp": 0,
+      "tn": 4,
+      "fn": 0,
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1": 1.0
+    },
+    {
+      "tool": "python_email_validator",
+      "total": 9,
+      "covered": 9,
+      "unknown": 0,
+      "coverage": 1.0,
+      "accuracy_on_covered": 0.5556,
+      "strict_accuracy": 0.5556,
+      "tp": 5,
+      "fp": 4,
+      "tn": 0,
+      "fn": 0,
+      "precision": 0.5556,
+      "recall": 1.0,
+      "f1": 0.7143
+    },
+    {
+      "tool": "deep_email_validator",
+      "total": 9,
+      "covered": 9,
+      "unknown": 0,
+      "coverage": 1.0,
+      "accuracy_on_covered": 0.4444,
+      "strict_accuracy": 0.4444,
+      "tp": 0,
+      "fp": 0,
+      "tn": 4,
+      "fn": 5,
+      "precision": null,
+      "recall": 0.0,
+      "f1": null
+    },
+    {
+      "tool": "email_validator_js",
+      "total": 9,
+      "covered": 0,
+      "unknown": 9,
+      "coverage": 0.0,
+      "accuracy_on_covered": null,
+      "strict_accuracy": 0.0,
+      "tp": 0,
+      "fp": 0,
+      "tn": 0,
+      "fn": 0,
+      "precision": null,
+      "recall": null,
+      "f1": null
+    }
+  ],
+  "rows": [
+    {
+      "email": "don@bhuman.ai",
+      "expected_accept": true,
+      "source": "report_bhuman_ext_25.json (25/25 code=250)",
+      "tool_predictions": {
+        "python_email_validator": true,
+        "deep_email_validator": false,
+        "email_validator_js": null,
+        "validatedmails_api": true
+      },
+      "tool_details": {
+        "python_email_validator": {
+          "predicted_accept": true,
+          "error": null,
+          "elapsed_ms": 1116.34,
+          "raw": {
+            "normalized": "don@bhuman.ai",
+            "domain": "bhuman.ai"
+          }
+        },
+        "deep_email_validator": {
+          "predicted_accept": false,
+          "raw": {
+            "valid": false,
+            "validators": {
+              "regex": {
+                "valid": true
+              },
+              "typo": {
+                "valid": true
+              },
+              "disposable": {
+                "valid": true
+              },
+              "mx": {
+                "valid": true
+              },
+              "smtp": {
+                "valid": false,
+                "reason": "Timeout"
+              }
+            },
+            "reason": "smtp"
+          },
+          "elapsed_ms": 10144.62
+        },
+        "email_validator_js": {
+          "predicted_accept": null,
+          "error": "subprocess timeout > 20s",
+          "elapsed_ms": 20012.59,
+          "raw": null
+        },
+        "validatedmails_api": {
+          "predicted_accept": true,
+          "elapsed_ms": 2410.02,
+          "http_status": 200,
+          "error": null,
+          "raw": {
+            "is_valid": true,
+            "score": 100,
+            "email": "don@bhuman.ai",
+            "normalized": "don@bhuman.ai",
+            "domain": "bhuman.ai",
+            "state": "Deliverable",
+            "reason": "ACCEPTED EMAIL",
+            "free": false,
+            "role": false,
+            "disposable": false,
+            "accept_all": false,
+            "tag": false,
+            "smtp_ok": true,
+            "syntax_ok": true,
+            "mx_ok": true,
+            "a_ok": true,
+            "response_ms": 2041,
+            "mx_hosts": [
+              "smtp.google.com"
+            ],
+            "status": "valid",
+            "reasons": [
+              "syntax_ok",
+              "mx_ok",
+              "a_ok"
+            ],
+            "trace_id": "ccfa54d6-4f60-4958-b09f-563985ab77c8"
+          }
+        }
+      }
+    },
+    {
+      "email": "x7v3q9p2k6m1@bhuman.ai",
+      "expected_accept": false,
+      "source": "report_bhuman_ext_25.json (25/25 code=550)",
+      "tool_predictions": {
+        "python_email_validator": true,
+        "deep_email_validator": false,
+        "email_validator_js": null,
+        "validatedmails_api": false
+      },
+      "tool_details": {
+        "python_email_validator": {
+          "predicted_accept": true,
+          "error": null,
+          "elapsed_ms": 252.28,
+          "raw": {
+            "normalized": "x7v3q9p2k6m1@bhuman.ai",
+            "domain": "bhuman.ai"
+          }
+        },
+        "deep_email_validator": {
+          "predicted_accept": false,
+          "raw": {
+            "valid": false,
+            "validators": {
+              "regex": {
+                "valid": true
+              },
+              "typo": {
+                "valid": true
+              },
+              "disposable": {
+                "valid": true
+              },
+              "mx": {
+                "valid": true
+              },
+              "smtp": {
+                "valid": false,
+                "reason": "Timeout"
+              }
+            },
+            "reason": "smtp"
+          },
+          "elapsed_ms": 10151.1
+        },
+        "email_validator_js": {
+          "predicted_accept": null,
+          "error": "subprocess timeout > 20s",
+          "elapsed_ms": 20012.76,
+          "raw": null
+        },
+        "validatedmails_api": {
+          "predicted_accept": false,
+          "elapsed_ms": 950.71,
+          "http_status": 200,
+          "error": null,
+          "raw": {
+            "is_valid": false,
+            "score": 60,
+            "email": "x7v3q9p2k6m1@bhuman.ai",
+            "normalized": "x7v3q9p2k6m1@bhuman.ai",
+            "domain": "bhuman.ai",
+            "state": "Not Deliverable",
+            "reason": "INVALID MAIL",
+            "free": false,
+            "role": false,
+            "disposable": false,
+            "tag": false,
+            "smtp_ok": false,
+            "syntax_ok": true,
+            "mx_ok": true,
+            "a_ok": true,
+            "response_ms": 631,
+            "mx_hosts": [
+              "smtp.google.com"
+            ],
+            "status": "invalid",
+            "reasons": [
+              "syntax_ok",
+              "mx_ok",
+              "a_ok"
+            ],
+            "trace_id": "b91de914-9e2e-4e79-b75e-1a9ff1e6c8be"
+          }
+        }
+      }
+    },
+    {
+      "email": "m4n8p1q6t3z9@bhuman.ai",
+      "expected_accept": false,
+      "source": "report_bhuman_ext_25.json (25/25 code=550)",
+      "tool_predictions": {
+        "python_email_validator": true,
+        "deep_email_validator": false,
+        "email_validator_js": null,
+        "validatedmails_api": false
+      },
+      "tool_details": {
+        "python_email_validator": {
+          "predicted_accept": true,
+          "error": null,
+          "elapsed_ms": 12.02,
+          "raw": {
+            "normalized": "m4n8p1q6t3z9@bhuman.ai",
+            "domain": "bhuman.ai"
+          }
+        },
+        "deep_email_validator": {
+          "predicted_accept": false,
+          "raw": {
+            "valid": false,
+            "validators": {
+              "regex": {
+                "valid": true
+              },
+              "typo": {
+                "valid": true
+              },
+              "disposable": {
+                "valid": true
+              },
+              "mx": {
+                "valid": true
+              },
+              "smtp": {
+                "valid": false,
+                "reason": "Timeout"
+              }
+            },
+            "reason": "smtp"
+          },
+          "elapsed_ms": 10137.9
+        },
+        "email_validator_js": {
+          "predicted_accept": null,
+          "error": "subprocess timeout > 20s",
+          "elapsed_ms": 20012.94,
+          "raw": null
+        },
+        "validatedmails_api": {
+          "predicted_accept": false,
+          "elapsed_ms": 1148.24,
+          "http_status": 200,
+          "error": null,
+          "raw": {
+            "is_valid": false,
+            "score": 60,
+            "email": "m4n8p1q6t3z9@bhuman.ai",
+            "normalized": "m4n8p1q6t3z9@bhuman.ai",
+            "domain": "bhuman.ai",
+            "state": "Not Deliverable",
+            "reason": "INVALID MAIL",
+            "free": false,
+            "role": false,
+            "disposable": false,
+            "tag": false,
+            "smtp_ok": false,
+            "syntax_ok": true,
+            "mx_ok": true,
+            "a_ok": true,
+            "response_ms": 866,
+            "mx_hosts": [
+              "smtp.google.com"
+            ],
+            "status": "invalid",
+            "reasons": [
+              "syntax_ok",
+              "mx_ok",
+              "a_ok"
+            ],
+            "trace_id": "0a8d3701-c006-411c-81e4-785163ab128a"
+          }
+        }
+      }
+    },
+    {
+      "email": "wmekideche@hubspot.com",
+      "expected_accept": true,
+      "source": "hubspot pair aggregate (80/80 code=250)",
+      "tool_predictions": {
+        "python_email_validator": true,
+        "deep_email_validator": false,
+        "email_validator_js": null,
+        "validatedmails_api": true
+      },
+      "tool_details": {
+        "python_email_validator": {
+          "predicted_accept": true,
+          "error": null,
+          "elapsed_ms": 968.03,
+          "raw": {
+            "normalized": "wmekideche@hubspot.com",
+            "domain": "hubspot.com"
+          }
+        },
+        "deep_email_validator": {
+          "predicted_accept": false,
+          "raw": {
+            "valid": false,
+            "validators": {
+              "regex": {
+                "valid": true
+              },
+              "typo": {
+                "valid": true
+              },
+              "disposable": {
+                "valid": true
+              },
+              "mx": {
+                "valid": true
+              },
+              "smtp": {
+                "valid": false,
+                "reason": "Timeout"
+              }
+            },
+            "reason": "smtp"
+          },
+          "elapsed_ms": 10137.25
+        },
+        "email_validator_js": {
+          "predicted_accept": null,
+          "error": "subprocess timeout > 20s",
+          "elapsed_ms": 20012.09,
+          "raw": null
+        },
+        "validatedmails_api": {
+          "predicted_accept": true,
+          "elapsed_ms": 1657.72,
+          "http_status": 200,
+          "error": null,
+          "raw": {
+            "is_valid": true,
+            "score": 100,
+            "email": "wmekideche@hubspot.com",
+            "normalized": "wmekideche@hubspot.com",
+            "domain": "hubspot.com",
+            "state": "Deliverable",
+            "reason": "ACCEPTED EMAIL",
+            "free": false,
+            "role": false,
+            "disposable": false,
+            "accept_all": false,
+            "tag": false,
+            "smtp_ok": true,
+            "syntax_ok": true,
+            "mx_ok": true,
+            "a_ok": true,
+            "response_ms": 1152,
+            "mx_hosts": [
+              "smtp.google.com"
+            ],
+            "status": "valid",
+            "reasons": [
+              "syntax_ok",
+              "mx_ok",
+              "a_ok"
+            ],
+            "trace_id": "b105c38b-eabb-40d9-a297-e7284bc2a71a"
+          }
+        }
+      }
+    },
+    {
+      "email": "v9x2q7m1k4t8@hubspot.com",
+      "expected_accept": false,
+      "source": "hubspot pair aggregate (80/80 code=550)",
+      "tool_predictions": {
+        "python_email_validator": true,
+        "deep_email_validator": false,
+        "email_validator_js": null,
+        "validatedmails_api": false
+      },
+      "tool_details": {
+        "python_email_validator": {
+          "predicted_accept": true,
+          "error": null,
+          "elapsed_ms": 15.02,
+          "raw": {
+            "normalized": "v9x2q7m1k4t8@hubspot.com",
+            "domain": "hubspot.com"
+          }
+        },
+        "deep_email_validator": {
+          "predicted_accept": false,
+          "raw": {
+            "valid": false,
+            "validators": {
+              "regex": {
+                "valid": true
+              },
+              "typo": {
+                "valid": true
+              },
+              "disposable": {
+                "valid": true
+              },
+              "mx": {
+                "valid": true
+              },
+              "smtp": {
+                "valid": false,
+                "reason": "Timeout"
+              }
+            },
+            "reason": "smtp"
+          },
+          "elapsed_ms": 10134.31
+        },
+        "email_validator_js": {
+          "predicted_accept": null,
+          "error": "subprocess timeout > 20s",
+          "elapsed_ms": 20012.85,
+          "raw": null
+        },
+        "validatedmails_api": {
+          "predicted_accept": false,
+          "elapsed_ms": 1712.26,
+          "http_status": 200,
+          "error": null,
+          "raw": {
+            "is_valid": false,
+            "score": 60,
+            "email": "v9x2q7m1k4t8@hubspot.com",
+            "normalized": "v9x2q7m1k4t8@hubspot.com",
+            "domain": "hubspot.com",
+            "state": "Not Deliverable",
+            "reason": "INVALID MAIL",
+            "free": false,
+            "role": false,
+            "disposable": false,
+            "tag": false,
+            "smtp_ok": false,
+            "syntax_ok": true,
+            "mx_ok": true,
+            "a_ok": true,
+            "response_ms": 1395,
+            "mx_hosts": [
+              "smtp.google.com"
+            ],
+            "status": "invalid",
+            "reasons": [
+              "syntax_ok",
+              "mx_ok",
+              "a_ok"
+            ],
+            "trace_id": "96e48bde-7135-4896-83c8-10bbabb2ea04"
+          }
+        }
+      }
+    },
+    {
+      "email": "Henry.Buttz@envestnet.com",
+      "expected_accept": true,
+      "source": "envestnet pair aggregate (24/24 code=250)",
+      "tool_predictions": {
+        "python_email_validator": true,
+        "deep_email_validator": false,
+        "email_validator_js": null,
+        "validatedmails_api": true
+      },
+      "tool_details": {
+        "python_email_validator": {
+          "predicted_accept": true,
+          "error": null,
+          "elapsed_ms": 114.45,
+          "raw": {
+            "normalized": "Henry.Buttz@envestnet.com",
+            "domain": "envestnet.com"
+          }
+        },
+        "deep_email_validator": {
+          "predicted_accept": false,
+          "raw": {
+            "valid": false,
+            "validators": {
+              "regex": {
+                "valid": true
+              },
+              "typo": {
+                "valid": true
+              },
+              "disposable": {
+                "valid": true
+              },
+              "mx": {
+                "valid": true
+              },
+              "smtp": {
+                "valid": false,
+                "reason": "Timeout"
+              }
+            },
+            "reason": "smtp"
+          },
+          "elapsed_ms": 10338.2
+        },
+        "email_validator_js": {
+          "predicted_accept": null,
+          "error": "subprocess timeout > 20s",
+          "elapsed_ms": 20008.41,
+          "raw": null
+        },
+        "validatedmails_api": {
+          "predicted_accept": true,
+          "elapsed_ms": 2752.33,
+          "http_status": 200,
+          "error": null,
+          "raw": {
+            "is_valid": true,
+            "score": 100,
+            "email": "Henry.Buttz@envestnet.com",
+            "normalized": "Henry.Buttz@envestnet.com",
+            "domain": "envestnet.com",
+            "state": "Deliverable",
+            "reason": "ACCEPTED EMAIL",
+            "free": false,
+            "role": false,
+            "disposable": false,
+            "tag": false,
+            "smtp_ok": true,
+            "syntax_ok": true,
+            "mx_ok": true,
+            "a_ok": true,
+            "response_ms": 2439,
+            "mx_hosts": [
+              "envestnet-com.mail.protection.outlook.com"
+            ],
+            "status": "valid",
+            "reasons": [
+              "syntax_ok",
+              "mx_ok",
+              "a_ok"
+            ],
+            "trace_id": "97df0939-ff1f-4d81-a1a2-516abb080e64"
+          }
+        }
+      }
+    },
+    {
+      "email": "q7v2m9x4k1p8@envestnet.com",
+      "expected_accept": false,
+      "source": "envestnet pair aggregate (24/24 code=550)",
+      "tool_predictions": {
+        "python_email_validator": true,
+        "deep_email_validator": false,
+        "email_validator_js": null,
+        "validatedmails_api": false
+      },
+      "tool_details": {
+        "python_email_validator": {
+          "predicted_accept": true,
+          "error": null,
+          "elapsed_ms": 9.47,
+          "raw": {
+            "normalized": "q7v2m9x4k1p8@envestnet.com",
+            "domain": "envestnet.com"
+          }
+        },
+        "deep_email_validator": {
+          "predicted_accept": false,
+          "raw": {
+            "valid": false,
+            "validators": {
+              "regex": {
+                "valid": true
+              },
+              "typo": {
+                "valid": true
+              },
+              "disposable": {
+                "valid": true
+              },
+              "mx": {
+                "valid": true
+              },
+              "smtp": {
+                "valid": false,
+                "reason": "Timeout"
+              }
+            },
+            "reason": "smtp"
+          },
+          "elapsed_ms": 16104.17
+        },
+        "email_validator_js": {
+          "predicted_accept": null,
+          "error": "subprocess timeout > 20s",
+          "elapsed_ms": 20008.61,
+          "raw": null
+        },
+        "validatedmails_api": {
+          "predicted_accept": false,
+          "elapsed_ms": 2895.21,
+          "http_status": 200,
+          "error": null,
+          "raw": {
+            "is_valid": false,
+            "score": 60,
+            "email": "q7v2m9x4k1p8@envestnet.com",
+            "normalized": "q7v2m9x4k1p8@envestnet.com",
+            "domain": "envestnet.com",
+            "state": "Not Deliverable",
+            "reason": "INVALID MAIL",
+            "free": false,
+            "role": false,
+            "disposable": false,
+            "tag": false,
+            "smtp_ok": false,
+            "syntax_ok": true,
+            "mx_ok": true,
+            "a_ok": true,
+            "response_ms": 2363,
+            "mx_hosts": [
+              "envestnet-com.mail.protection.outlook.com"
+            ],
+            "status": "invalid",
+            "reasons": [
+              "syntax_ok",
+              "mx_ok",
+              "a_ok"
+            ],
+            "trace_id": "2acea7a5-b9fa-4f4d-8685-3d4b1a29e01b"
+          }
+        }
+      }
+    },
+    {
+      "email": "aaron.baby@freshworks.com",
+      "expected_accept": true,
+      "source": "freshworks starttls 100/100 code=250",
+      "tool_predictions": {
+        "python_email_validator": true,
+        "deep_email_validator": false,
+        "email_validator_js": null,
+        "validatedmails_api": true
+      },
+      "tool_details": {
+        "python_email_validator": {
+          "predicted_accept": true,
+          "error": null,
+          "elapsed_ms": 212.65,
+          "raw": {
+            "normalized": "aaron.baby@freshworks.com",
+            "domain": "freshworks.com"
+          }
+        },
+        "deep_email_validator": {
+          "predicted_accept": false,
+          "raw": {
+            "valid": false,
+            "validators": {
+              "regex": {
+                "valid": true
+              },
+              "typo": {
+                "valid": true
+              },
+              "disposable": {
+                "valid": true
+              },
+              "mx": {
+                "valid": true
+              },
+              "smtp": {
+                "valid": false,
+                "reason": "Timeout"
+              }
+            },
+            "reason": "smtp"
+          },
+          "elapsed_ms": 10304.5
+        },
+        "email_validator_js": {
+          "predicted_accept": null,
+          "error": "subprocess timeout > 20s",
+          "elapsed_ms": 20009.03,
+          "raw": null
+        },
+        "validatedmails_api": {
+          "predicted_accept": true,
+          "elapsed_ms": 1746.15,
+          "http_status": 200,
+          "error": null,
+          "raw": {
+            "is_valid": true,
+            "score": 70,
+            "email": "aaron.baby@freshworks.com",
+            "normalized": "aaron.baby@freshworks.com",
+            "domain": "freshworks.com",
+            "state": "Deliverable",
+            "reason": "ACCEPTED EMAIL",
+            "free": false,
+            "role": false,
+            "disposable": false,
+            "accept_all": true,
+            "tag": false,
+            "smtp_ok": true,
+            "syntax_ok": true,
+            "mx_ok": true,
+            "a_ok": true,
+            "response_ms": 1458,
+            "mx_hosts": [
+              "aspmx.l.google.com",
+              "alt2.aspmx.l.google.com",
+              "alt1.aspmx.l.google.com"
+            ],
+            "status": "valid",
+            "reasons": [
+              "syntax_ok",
+              "mx_ok",
+              "a_ok"
+            ],
+            "trace_id": "a5c97484-d034-4c38-8b6b-8af19fb63216"
+          }
+        }
+      }
+    },
+    {
+      "email": "gsoknf@freshworks.com",
+      "expected_accept": true,
+      "source": "freshworks starttls 100/100 code=250",
+      "tool_predictions": {
+        "python_email_validator": true,
+        "deep_email_validator": false,
+        "email_validator_js": null,
+        "validatedmails_api": true
+      },
+      "tool_details": {
+        "python_email_validator": {
+          "predicted_accept": true,
+          "error": null,
+          "elapsed_ms": 10.92,
+          "raw": {
+            "normalized": "gsoknf@freshworks.com",
+            "domain": "freshworks.com"
+          }
+        },
+        "deep_email_validator": {
+          "predicted_accept": false,
+          "raw": {
+            "valid": false,
+            "validators": {
+              "regex": {
+                "valid": true
+              },
+              "typo": {
+                "valid": true
+              },
+              "disposable": {
+                "valid": true
+              },
+              "mx": {
+                "valid": true
+              },
+              "smtp": {
+                "valid": false,
+                "reason": "Timeout"
+              }
+            },
+            "reason": "smtp"
+          },
+          "elapsed_ms": 10133.4
+        },
+        "email_validator_js": {
+          "predicted_accept": null,
+          "error": "subprocess timeout > 20s",
+          "elapsed_ms": 20009.02,
+          "raw": null
+        },
+        "validatedmails_api": {
+          "predicted_accept": true,
+          "elapsed_ms": 1476.41,
+          "http_status": 200,
+          "error": null,
+          "raw": {
+            "is_valid": true,
+            "score": 70,
+            "email": "gsoknf@freshworks.com",
+            "normalized": "gsoknf@freshworks.com",
+            "domain": "freshworks.com",
+            "state": "Deliverable",
+            "reason": "ACCEPTED EMAIL",
+            "free": false,
+            "role": false,
+            "disposable": false,
+            "accept_all": true,
+            "tag": false,
+            "smtp_ok": true,
+            "syntax_ok": true,
+            "mx_ok": true,
+            "a_ok": true,
+            "response_ms": 989,
+            "mx_hosts": [
+              "aspmx.l.google.com",
+              "alt2.aspmx.l.google.com",
+              "alt1.aspmx.l.google.com"
+            ],
+            "status": "valid",
+            "reasons": [
+              "syntax_ok",
+              "mx_ok",
+              "a_ok"
+            ],
+            "trace_id": "8c20464f-22e5-4cb1-9f46-ebeaaf0d7e32"
+          }
+        }
+      }
+    }
+  ]
+}

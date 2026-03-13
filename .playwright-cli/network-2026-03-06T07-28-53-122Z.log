@@ -1,0 +1,4 @@
+[GET] http://localhost:3001/Dust.png => [404] Not Found
+[GET] https://bhuman-persona-widget.s3.us-east-2.amazonaws.com/bhuman-persona-widget.js?v=6 => [FAILED] net::ERR_BLOCKED_BY_ORB
+[GET] https://user.bhuman.ai/api/user => [200] 
+[GET] https://bhuman-persona-widget.s3.us-east-2.amazonaws.com/bhuman-persona-widget.js?v=6 => [FAILED] net::ERR_BLOCKED_BY_ORB

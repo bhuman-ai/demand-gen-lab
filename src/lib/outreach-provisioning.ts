@@ -114,7 +114,7 @@ export type NamecheapDomainInventoryItem = {
 };
 
 export type ProvisioningProviderTestResult = {
-  provider: "customerio" | "namecheap";
+  provider: "customerio" | "namecheap" | "deliverability";
   ok: boolean;
   message: string;
   details: Record<string, unknown>;
@@ -1237,6 +1237,8 @@ export async function provisionCustomerIoSender(
       mailboxAccessToken: "",
       mailboxRefreshToken: "",
       mailboxPassword: "",
+      mailboxRecoveryEmail: "",
+      mailboxRecoveryCodes: "",
     },
     "customerio"
   );

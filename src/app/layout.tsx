@@ -1,29 +1,34 @@
 import type { Metadata } from "next";
-import { IBM_Plex_Mono, Space_Grotesk } from "next/font/google";
+import { Bricolage_Grotesque, IBM_Plex_Mono, Instrument_Sans } from "next/font/google";
 import "./globals.css";
 import AppShell from "@/components/layout/app-shell";
 import { ThemeProvider } from "@/components/layout/theme-provider";
 
-const display = Space_Grotesk({
-  variable: "--font-display",
+const display = Bricolage_Grotesque({
+  variable: "--font-brand",
+  subsets: ["latin"],
+});
+
+const body = Instrument_Sans({
+  variable: "--font-body",
   subsets: ["latin"],
 });
 
 const mono = IBM_Plex_Mono({
-  variable: "--font-mono",
+  variable: "--font-code",
   subsets: ["latin"],
   weight: ["400", "500", "600"],
 });
 
 export const metadata: Metadata = {
-  title: "The Factory",
-  description: "Brand-first campaign operating system",
+  title: "lastb2b.com",
+  description: "The last B2B outreach product you'll ever buy.",
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
     <html lang="en" suppressHydrationWarning>
-      <body className={`${display.variable} ${mono.variable} antialiased`}>
+      <body className={`${display.variable} ${body.variable} ${mono.variable} antialiased`}>
         <ThemeProvider>
           <AppShell>{children}</AppShell>
         </ThemeProvider>

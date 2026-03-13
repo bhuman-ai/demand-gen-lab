@@ -1,0 +1,363 @@
+- generic [active] [ref=e1]:
+  - alert [ref=e2]
+  - generic [ref=e3]:
+    - banner [ref=e4]:
+      - navigation "Main" [ref=e5]:
+        - generic [ref=e7]:
+          - generic [ref=e8]:
+            - link "Mobbin" [ref=e9] [cursor=pointer]:
+              - /url: /discover/apps/ios/latest
+              - img "Mobbin"
+            - generic [ref=e11]:
+              - link "Apps" [ref=e13] [cursor=pointer]:
+                - /url: /discover/apps/ios/latest
+              - link "Sites" [ref=e14] [cursor=pointer]:
+                - /url: /discover/sites/latest
+          - generic [ref=e16]:
+            - button "search icon Search on iOS..." [ref=e17] [cursor=pointer]:
+              - img "search icon" [ref=e18]
+              - generic [ref=e20]: Search on iOS...
+            - button "visual search icon" [ref=e23] [cursor=pointer]:
+              - img "visual search icon" [ref=e24]
+          - generic [ref=e31]:
+            - generic [ref=e32]:
+              - link [ref=e36] [cursor=pointer]:
+                - /url: /saved/mobile/screens
+              - link [ref=e41] [cursor=pointer]:
+                - /url: /community/mobile/featured
+              - link "Awards" [ref=e45] [cursor=pointer]:
+                - /url: /awards
+                - generic [ref=e49]: Awards
+              - button [ref=e51] [cursor=pointer]
+            - button "Avatar of dfggfdg" [ref=e55] [cursor=pointer]:
+              - generic "Avatar of dfggfdg" [ref=e58]: D
+    - main [ref=e59]:
+      - article [ref=e60]:
+        - generic [ref=e61]:
+          - generic [ref=e63]:
+            - radiogroup [ref=e64]:
+              - radio "iOS" [checked] [ref=e65] [cursor=pointer]:
+                - generic [ref=e66]: iOS
+              - radio "Web" [ref=e67] [cursor=pointer]:
+                - generic [ref=e68]: Web
+            - generic [ref=e71]:
+              - generic [ref=e73]:
+                - button "Filter" [ref=e75] [cursor=pointer]:
+                  - text: Categories
+                  - img "chevron down icon" [ref=e77]
+                - generic [ref=e80]:
+                  - button "Filter (1 selected)" [ref=e81] [cursor=pointer]:
+                    - text: Onboarding
+                    - img "clear icon" [ref=e83]
+                  - button "Clear filter" [ref=e85] [cursor=pointer]:
+                    - img "clear icon" [ref=e86]
+              - generic [ref=e89]:
+                - generic [ref=e90]: Showing
+                - generic [ref=e91]: 895 flows
+            - button "Trending chevron down icon" [ref=e94] [cursor=pointer]:
+              - text: Trending
+              - img "chevron down icon" [ref=e95]
+          - generic [ref=e97]:
+            - generic [ref=e155]:
+              - generic [ref=e156]:
+                - link [ref=e157] [cursor=pointer]:
+                  - /url: /flows/817f5bfd-1701-4756-bcbc-dcdfc3597723
+                - generic [ref=e160]:
+                  - link [ref=e161]:
+                    - /url: /flows/817f5bfd-1701-4756-bcbc-dcdfc3597723
+                  - generic [ref=e162]:
+                    - link "01:13" [ref=e164]:
+                      - /url: /flows/817f5bfd-1701-4756-bcbc-dcdfc3597723
+                      - generic [ref=e168]: 01:13
+                    - link "Tiimo Onboarding screen" [ref=e170]:
+                      - /url: /flows/817f5bfd-1701-4756-bcbc-dcdfc3597723
+                      - img "Tiimo Onboarding screen" [ref=e172]
+                    - link "Tiimo Onboarding screen" [ref=e174]:
+                      - /url: /flows/817f5bfd-1701-4756-bcbc-dcdfc3597723
+                      - img "Tiimo Onboarding screen" [ref=e176]
+                    - link "Tiimo Onboarding screen" [ref=e178]:
+                      - /url: /flows/817f5bfd-1701-4756-bcbc-dcdfc3597723
+                      - img "Tiimo Onboarding screen" [ref=e180]
+                    - link "Tiimo Onboarding screen" [ref=e182]:
+                      - /url: /flows/817f5bfd-1701-4756-bcbc-dcdfc3597723
+                      - img "Tiimo Onboarding screen" [ref=e184]
+                    - link "Tiimo Onboarding screen" [ref=e186]:
+                      - /url: /flows/817f5bfd-1701-4756-bcbc-dcdfc3597723
+                      - img "Tiimo Onboarding screen" [ref=e188]
+                    - link "Tiimo Onboarding screen" [ref=e190]:
+                      - /url: /flows/817f5bfd-1701-4756-bcbc-dcdfc3597723
+                      - img "Tiimo Onboarding screen" [ref=e192]
+                    - link "Tiimo Onboarding screen" [ref=e194]:
+                      - /url: /flows/817f5bfd-1701-4756-bcbc-dcdfc3597723
+                      - img "Tiimo Onboarding screen" [ref=e196]
+                    - link "Tiimo Onboarding screen" [ref=e198]:
+                      - /url: /flows/817f5bfd-1701-4756-bcbc-dcdfc3597723
+                      - img "Tiimo Onboarding screen" [ref=e200]
+                    - link "Tiimo Onboarding screen" [ref=e202]:
+                      - /url: /flows/817f5bfd-1701-4756-bcbc-dcdfc3597723
+                      - img "Tiimo Onboarding screen" [ref=e204]
+                    - link "Tiimo Onboarding screen" [ref=e206]:
+                      - /url: /flows/817f5bfd-1701-4756-bcbc-dcdfc3597723
+                      - img "Tiimo Onboarding screen" [ref=e208]
+                    - link "Tiimo Onboarding screen" [ref=e210]:
+                      - /url: /flows/817f5bfd-1701-4756-bcbc-dcdfc3597723
+                      - img "Tiimo Onboarding screen" [ref=e212]
+                    - link "Tiimo Onboarding screen" [ref=e214]:
+                      - /url: /flows/817f5bfd-1701-4756-bcbc-dcdfc3597723
+                      - img "Tiimo Onboarding screen" [ref=e216]
+                    - link "Tiimo Onboarding screen" [ref=e218]:
+                      - /url: /flows/817f5bfd-1701-4756-bcbc-dcdfc3597723
+                      - img "Tiimo Onboarding screen" [ref=e220]
+                    - link "Tiimo Onboarding screen" [ref=e222]:
+                      - /url: /flows/817f5bfd-1701-4756-bcbc-dcdfc3597723
+                      - img "Tiimo Onboarding screen" [ref=e224]
+                    - link "Tiimo Onboarding screen" [ref=e226]:
+                      - /url: /flows/817f5bfd-1701-4756-bcbc-dcdfc3597723
+                      - img "Tiimo Onboarding screen" [ref=e228]
+                    - link "Tiimo Onboarding screen" [ref=e230]:
+                      - /url: /flows/817f5bfd-1701-4756-bcbc-dcdfc3597723
+                      - img "Tiimo Onboarding screen" [ref=e232]
+                  - generic:
+                    - generic:
+                      - generic:
+                        - button "arrow left icon" [disabled]:
+                          - img "arrow left icon"
+                  - button "arrow right icon" [ref=e233] [cursor=pointer]:
+                    - img "arrow right icon" [ref=e234]
+                - generic [ref=e237]:
+                  - generic [ref=e238]:
+                    - generic [ref=e239]:
+                      - generic [ref=e240]:
+                        - generic [ref=e241]: Onboarding
+                        - generic [ref=e242]: in
+                      - link "Tiimo" [ref=e244] [cursor=pointer]:
+                        - /url: /apps/tiimo-ios-92e196c8-3689-45c1-8869-449f9b7207c4/dc39e0c5-e9cb-4411-a8c4-75cc3a5e8169/flows
+                        - generic [ref=e246]: Tiimo
+                    - generic [ref=e247]: 16 screens
+                  - generic [ref=e248]:
+                    - button "Save" [ref=e249] [cursor=pointer]:
+                      - generic [ref=e251]: Save
+                    - button "Copy figma icon" [ref=e253] [cursor=pointer]:
+                      - generic [ref=e254]:
+                        - generic [ref=e255]: Copy
+                        - img "figma icon" [ref=e256]
+                    - button "more icon" [ref=e263] [cursor=pointer]:
+                      - img "more icon" [ref=e265]
+              - generic [ref=e269]:
+                - link [ref=e270] [cursor=pointer]:
+                  - /url: /flows/13c20a32-43c8-41a6-bb5f-63f8371b1683
+                - generic [ref=e273]:
+                  - link [ref=e274]:
+                    - /url: /flows/13c20a32-43c8-41a6-bb5f-63f8371b1683
+                  - generic [ref=e275]:
+                    - link "Revolut Business Onboarding screen" [ref=e277]:
+                      - /url: /flows/13c20a32-43c8-41a6-bb5f-63f8371b1683
+                      - img "Revolut Business Onboarding screen" [ref=e279]
+                    - link "Revolut Business Onboarding screen" [ref=e281]:
+                      - /url: /flows/13c20a32-43c8-41a6-bb5f-63f8371b1683
+                      - img "Revolut Business Onboarding screen" [ref=e283]
+                    - link "Revolut Business Onboarding screen" [ref=e285]:
+                      - /url: /flows/13c20a32-43c8-41a6-bb5f-63f8371b1683
+                      - img "Revolut Business Onboarding screen" [ref=e287]
+                    - link "Revolut Business Onboarding screen" [ref=e289]:
+                      - /url: /flows/13c20a32-43c8-41a6-bb5f-63f8371b1683
+                      - img "Revolut Business Onboarding screen" [ref=e291]
+                    - link "Revolut Business Onboarding screen" [ref=e293]:
+                      - /url: /flows/13c20a32-43c8-41a6-bb5f-63f8371b1683
+                      - img "Revolut Business Onboarding screen" [ref=e295]
+                    - link "Revolut Business Onboarding screen" [ref=e297]:
+                      - /url: /flows/13c20a32-43c8-41a6-bb5f-63f8371b1683
+                      - img "Revolut Business Onboarding screen" [ref=e299]
+                    - link "Revolut Business Onboarding screen" [ref=e301]:
+                      - /url: /flows/13c20a32-43c8-41a6-bb5f-63f8371b1683
+                      - img "Revolut Business Onboarding screen" [ref=e303]
+                    - link "Revolut Business Onboarding screen" [ref=e305]:
+                      - /url: /flows/13c20a32-43c8-41a6-bb5f-63f8371b1683
+                      - img "Revolut Business Onboarding screen" [ref=e307]
+                    - link "Revolut Business Onboarding screen" [ref=e309]:
+                      - /url: /flows/13c20a32-43c8-41a6-bb5f-63f8371b1683
+                      - img "Revolut Business Onboarding screen" [ref=e311]
+                    - link "Revolut Business Onboarding screen" [ref=e313]:
+                      - /url: /flows/13c20a32-43c8-41a6-bb5f-63f8371b1683
+                      - img "Revolut Business Onboarding screen" [ref=e315]
+                    - link "Revolut Business Onboarding screen" [ref=e317]:
+                      - /url: /flows/13c20a32-43c8-41a6-bb5f-63f8371b1683
+                      - img "Revolut Business Onboarding screen" [ref=e319]
+                    - link "Revolut Business Onboarding screen" [ref=e321]:
+                      - /url: /flows/13c20a32-43c8-41a6-bb5f-63f8371b1683
+                      - img "Revolut Business Onboarding screen" [ref=e323]
+                    - link "Revolut Business Onboarding screen" [ref=e325]:
+                      - /url: /flows/13c20a32-43c8-41a6-bb5f-63f8371b1683
+                      - img "Revolut Business Onboarding screen" [ref=e327]
+                    - link "Revolut Business Onboarding screen" [ref=e329]:
+                      - /url: /flows/13c20a32-43c8-41a6-bb5f-63f8371b1683
+                      - img "Revolut Business Onboarding screen" [ref=e331]
+                    - link "Revolut Business Onboarding screen" [ref=e333]:
+                      - /url: /flows/13c20a32-43c8-41a6-bb5f-63f8371b1683
+                      - img "Revolut Business Onboarding screen" [ref=e335]
+                    - link "Revolut Business Onboarding screen" [ref=e337]:
+                      - /url: /flows/13c20a32-43c8-41a6-bb5f-63f8371b1683
+                      - img "Revolut Business Onboarding screen" [ref=e339]
+                    - link "Revolut Business Onboarding screen" [ref=e341]:
+                      - /url: /flows/13c20a32-43c8-41a6-bb5f-63f8371b1683
+                      - img "Revolut Business Onboarding screen" [ref=e343]
+                    - link "Revolut Business Onboarding screen" [ref=e345]:
+                      - /url: /flows/13c20a32-43c8-41a6-bb5f-63f8371b1683
+                      - img "Revolut Business Onboarding screen" [ref=e347]
+                    - link "Revolut Business Onboarding screen" [ref=e349]:
+                      - /url: /flows/13c20a32-43c8-41a6-bb5f-63f8371b1683
+                      - img "Revolut Business Onboarding screen" [ref=e351]
+                    - link "Revolut Business Onboarding screen" [ref=e353]:
+                      - /url: /flows/13c20a32-43c8-41a6-bb5f-63f8371b1683
+                      - img "Revolut Business Onboarding screen" [ref=e355]
+                    - link "Revolut Business Onboarding screen" [ref=e357]:
+                      - /url: /flows/13c20a32-43c8-41a6-bb5f-63f8371b1683
+                      - img "Revolut Business Onboarding screen" [ref=e359]
+                    - link "Revolut Business Onboarding screen" [ref=e361]:
+                      - /url: /flows/13c20a32-43c8-41a6-bb5f-63f8371b1683
+                      - img "Revolut Business Onboarding screen" [ref=e363]
+                    - link "Revolut Business Onboarding screen" [ref=e365]:
+                      - /url: /flows/13c20a32-43c8-41a6-bb5f-63f8371b1683
+                      - img "Revolut Business Onboarding screen" [ref=e367]
+                    - link "Revolut Business Onboarding screen" [ref=e369]:
+                      - /url: /flows/13c20a32-43c8-41a6-bb5f-63f8371b1683
+                      - img "Revolut Business Onboarding screen" [ref=e371]
+                    - link "Revolut Business Onboarding screen" [ref=e373]:
+                      - /url: /flows/13c20a32-43c8-41a6-bb5f-63f8371b1683
+                      - img "Revolut Business Onboarding screen" [ref=e375]
+                    - link "Revolut Business Onboarding screen" [ref=e377]:
+                      - /url: /flows/13c20a32-43c8-41a6-bb5f-63f8371b1683
+                      - img "Revolut Business Onboarding screen" [ref=e379]
+                    - link "Revolut Business Onboarding screen" [ref=e381]:
+                      - /url: /flows/13c20a32-43c8-41a6-bb5f-63f8371b1683
+                      - img "Revolut Business Onboarding screen" [ref=e383]
+                    - link "Revolut Business Onboarding screen" [ref=e385]:
+                      - /url: /flows/13c20a32-43c8-41a6-bb5f-63f8371b1683
+                      - img "Revolut Business Onboarding screen" [ref=e387]
+                    - link "Revolut Business Onboarding screen" [ref=e389]:
+                      - /url: /flows/13c20a32-43c8-41a6-bb5f-63f8371b1683
+                      - img "Revolut Business Onboarding screen" [ref=e391]
+                    - link "Revolut Business Onboarding screen" [ref=e393]:
+                      - /url: /flows/13c20a32-43c8-41a6-bb5f-63f8371b1683
+                      - img "Revolut Business Onboarding screen" [ref=e395]
+                    - link "Revolut Business Onboarding screen" [ref=e397]:
+                      - /url: /flows/13c20a32-43c8-41a6-bb5f-63f8371b1683
+                      - img "Revolut Business Onboarding screen" [ref=e399]
+                    - link "Revolut Business Onboarding screen" [ref=e401]:
+                      - /url: /flows/13c20a32-43c8-41a6-bb5f-63f8371b1683
+                      - img "Revolut Business Onboarding screen" [ref=e403]
+                    - link "Revolut Business Onboarding screen" [ref=e405]:
+                      - /url: /flows/13c20a32-43c8-41a6-bb5f-63f8371b1683
+                      - img "Revolut Business Onboarding screen" [ref=e407]
+                    - link "Revolut Business Onboarding screen" [ref=e409]:
+                      - /url: /flows/13c20a32-43c8-41a6-bb5f-63f8371b1683
+                      - img "Revolut Business Onboarding screen" [ref=e411]
+                    - link "Revolut Business Onboarding screen" [ref=e413]:
+                      - /url: /flows/13c20a32-43c8-41a6-bb5f-63f8371b1683
+                      - img "Revolut Business Onboarding screen" [ref=e415]
+                    - link "Revolut Business Onboarding screen" [ref=e417]:
+                      - /url: /flows/13c20a32-43c8-41a6-bb5f-63f8371b1683
+                      - img "Revolut Business Onboarding screen" [ref=e419]
+                    - link "Revolut Business Onboarding screen" [ref=e421]:
+                      - /url: /flows/13c20a32-43c8-41a6-bb5f-63f8371b1683
+                      - img "Revolut Business Onboarding screen" [ref=e423]
+                  - generic:
+                    - generic:
+                      - generic:
+                        - button "arrow left icon" [disabled]:
+                          - img "arrow left icon"
+                  - button "arrow right icon" [ref=e424] [cursor=pointer]:
+                    - img "arrow right icon" [ref=e425]
+                - generic [ref=e426]:
+                  - generic [ref=e427]:
+                    - generic [ref=e428]:
+                      - generic [ref=e429]:
+                        - generic [ref=e430]: Onboarding
+                        - generic [ref=e431]: in
+                      - link "Revolut Business" [ref=e433] [cursor=pointer]:
+                        - /url: /apps/revolut-business-ios-93ad9ceb-a163-41da-ba7a-9f07c737fc2a/0c4c334c-e3a5-4395-89be-c7666aaafdf5/flows
+                        - generic [ref=e435]: Revolut Business
+                    - generic [ref=e436]: 37 screens
+                  - generic [ref=e437]:
+                    - button "Save" [ref=e438] [cursor=pointer]:
+                      - generic [ref=e440]: Save
+                    - button "Copy figma icon" [ref=e442] [cursor=pointer]:
+                      - generic [ref=e443]:
+                        - generic [ref=e444]: Copy
+                        - img "figma icon" [ref=e445]
+                    - button "more icon" [ref=e452] [cursor=pointer]:
+                      - img "more icon" [ref=e454]
+              - generic [ref=e458]:
+                - link [ref=e459] [cursor=pointer]:
+                  - /url: /flows/9e3b1a7c-9409-44db-b448-3d9b69959bea
+                - generic [ref=e462]:
+                  - link [ref=e463]:
+                    - /url: /flows/9e3b1a7c-9409-44db-b448-3d9b69959bea
+                  - generic [ref=e464]:
+                    - link "Keeta Onboarding screen" [ref=e466]:
+                      - /url: /flows/9e3b1a7c-9409-44db-b448-3d9b69959bea
+                      - img "Keeta Onboarding screen" [ref=e468]
+                    - link "Keeta Onboarding screen" [ref=e470]:
+                      - /url: /flows/9e3b1a7c-9409-44db-b448-3d9b69959bea
+                      - img "Keeta Onboarding screen" [ref=e472]
+                    - link "Keeta Onboarding screen" [ref=e474]:
+                      - /url: /flows/9e3b1a7c-9409-44db-b448-3d9b69959bea
+                      - img "Keeta Onboarding screen" [ref=e476]
+                    - link "Keeta Onboarding screen" [ref=e478]:
+                      - /url: /flows/9e3b1a7c-9409-44db-b448-3d9b69959bea
+                      - img "Keeta Onboarding screen" [ref=e480]
+                    - link "Keeta Onboarding screen" [ref=e482]:
+                      - /url: /flows/9e3b1a7c-9409-44db-b448-3d9b69959bea
+                      - img "Keeta Onboarding screen" [ref=e484]
+                    - link "Keeta Onboarding screen" [ref=e486]:
+                      - /url: /flows/9e3b1a7c-9409-44db-b448-3d9b69959bea
+                      - img "Keeta Onboarding screen" [ref=e488]
+                    - link "Keeta Onboarding screen" [ref=e490]:
+                      - /url: /flows/9e3b1a7c-9409-44db-b448-3d9b69959bea
+                      - img "Keeta Onboarding screen" [ref=e492]
+                    - link "Keeta Onboarding screen" [ref=e494]:
+                      - /url: /flows/9e3b1a7c-9409-44db-b448-3d9b69959bea
+                      - img "Keeta Onboarding screen" [ref=e496]
+                    - link "Keeta Onboarding screen" [ref=e498]:
+                      - /url: /flows/9e3b1a7c-9409-44db-b448-3d9b69959bea
+                      - img "Keeta Onboarding screen" [ref=e500]
+                    - link "Keeta Onboarding screen" [ref=e502]:
+                      - /url: /flows/9e3b1a7c-9409-44db-b448-3d9b69959bea
+                      - img "Keeta Onboarding screen" [ref=e504]
+                    - link "Keeta Onboarding screen" [ref=e506]:
+                      - /url: /flows/9e3b1a7c-9409-44db-b448-3d9b69959bea
+                      - img "Keeta Onboarding screen" [ref=e508]
+                  - generic:
+                    - generic:
+                      - generic:
+                        - button "arrow left icon" [disabled]:
+                          - img "arrow left icon"
+                  - button "arrow right icon" [ref=e509] [cursor=pointer]:
+                    - img "arrow right icon" [ref=e510]
+                - generic [ref=e511]:
+                  - generic [ref=e512]:
+                    - generic [ref=e513]:
+                      - generic [ref=e514]:
+                        - generic [ref=e515]: Onboarding
+                        - generic [ref=e516]: in
+                      - link "Keeta" [ref=e518] [cursor=pointer]:
+                        - /url: /apps/keeta-ios-b1e857ee-1ca8-4497-ae9f-876c329c6f59/9641be92-ebc0-4c39-b15e-5df72e7ef8fe/flows
+                        - generic [ref=e520]: Keeta
+                    - generic [ref=e521]: 11 screens
+                  - generic [ref=e522]:
+                    - button "Save" [ref=e523] [cursor=pointer]:
+                      - generic [ref=e525]: Save
+                    - button "Copy figma icon" [ref=e527] [cursor=pointer]:
+                      - generic [ref=e528]:
+                        - generic [ref=e529]: Copy
+                        - img "figma icon" [ref=e530]
+                    - button "more icon" [ref=e537] [cursor=pointer]:
+                      - img "more icon" [ref=e539]
+            - img "Dots loading indicator" [ref=e544]
+            - generic [ref=e550]:
+              - generic:
+                - button "thumbs up icon" [ref=e551] [cursor=pointer]:
+                  - img "thumbs up icon" [ref=e552]
+                - button [ref=e122] [cursor=pointer]:
+                  - img [ref=e123]
+  - region "Notifications alt+T"

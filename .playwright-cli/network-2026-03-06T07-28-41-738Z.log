@@ -1,0 +1,2 @@
+[GET] https://persona.bhuman.ai/api/instances/search?search_term= => [200] OK
+[GET] https://user.bhuman.ai/api/user => [200] 

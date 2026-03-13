@@ -2,9 +2,9 @@
 
 import Link from "next/link";
 import { useState } from "react";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { PageIntro, SectionPanel } from "@/components/ui/page-layout";
 
 export default function DoctorPage() {
   const [brandId] = useState(() =>
@@ -12,13 +12,15 @@ export default function DoctorPage() {
   );
 
   return (
-    <div className="space-y-5">
-      <Card>
-        <CardHeader>
-          <CardTitle>Doctor</CardTitle>
-          <CardDescription>Tools: diagnostics and recommended fixes across campaign funnels.</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-3">
+    <div className="space-y-8">
+      <PageIntro
+        eyebrow="System / doctor"
+        title="Inspect delivery quality and failure points before they compound."
+        description="Diagnostics belong inside the same product as campaigns and inbox, not in a separate tab that loses the operating context."
+      />
+
+      <SectionPanel title="Diagnostic desk" description="Recommended fixes and the current active brand context.">
+        <div className="space-y-3">
           <Badge variant="muted">Active brand context: {brandId || "none selected"}</Badge>
           <p className="text-sm text-[color:var(--muted-foreground)]">
             Monitor delivery quality, response shifts, and conversion bottlenecks.
@@ -32,8 +34,8 @@ export default function DoctorPage() {
               <Link href="/brands">Select Brand</Link>
             </Button>
           )}
-        </CardContent>
-      </Card>
+        </div>
+      </SectionPanel>
     </div>
   );
 }

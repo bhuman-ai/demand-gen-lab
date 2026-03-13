@@ -30,6 +30,7 @@ export async function PUT(request: Request) {
     const body = asRecord(await request.json());
     const customerIo = asRecord(body.customerIo);
     const namecheap = asRecord(body.namecheap);
+    const deliverability = asRecord(body.deliverability);
     const settings = await updateOutreachProvisioningSettings({
       customerIo: {
         siteId: customerIo.siteId !== undefined ? String(customerIo.siteId ?? "") : undefined,
@@ -42,6 +43,23 @@ export async function PUT(request: Request) {
         userName: namecheap.userName !== undefined ? String(namecheap.userName ?? "") : undefined,
         clientIp: namecheap.clientIp !== undefined ? String(namecheap.clientIp ?? "") : undefined,
         apiKey: namecheap.apiKey !== undefined ? String(namecheap.apiKey ?? "") : undefined,
+      },
+      deliverability: {
+        provider:
+          deliverability.provider !== undefined ? String(deliverability.provider ?? "") as "none" | "google_postmaster" : undefined,
+        monitoredDomains: Array.isArray(deliverability.monitoredDomains)
+          ? deliverability.monitoredDomains.map((entry) => String(entry ?? ""))
+          : undefined,
+        googleClientId:
+          deliverability.googleClientId !== undefined ? String(deliverability.googleClientId ?? "") : undefined,
+        googleClientSecret:
+          deliverability.googleClientSecret !== undefined
+            ? String(deliverability.googleClientSecret ?? "")
+            : undefined,
+        googleRefreshToken:
+          deliverability.googleRefreshToken !== undefined
+            ? String(deliverability.googleRefreshToken ?? "")
+            : undefined,
       },
     });
     return NextResponse.json({ settings });

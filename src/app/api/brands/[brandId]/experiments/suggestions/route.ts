@@ -173,11 +173,11 @@ async function openAiRoleplayEvaluate(input: {
   }
 
   const prompt = [
-    "You are a realistic buyer-simulation panel for B2B cold outreach.",
+    "You are a realistic buyer-behavior analysis panel for B2B cold outreach.",
     "Evaluate each suggestion as if real recipients are busy, skeptical, annoyed, cautious, and curious.",
     "Each evaluation must reflect likely inbox behavior, not idealized behavior.",
     "",
-    "Simulation setup per suggestion:",
+    "Evaluation setup per suggestion:",
     "- Run 12 micro roleplays across personas: busy operator, annoyed exec, skeptical manager, curious evaluator, price-sensitive buyer, delegated inbox gatekeeper.",
     "- Judge outcomes: open likelihood, reply likelihood, positive reply likelihood, unsubscribe risk.",
     "- Be strict on generic, hypey, vague, or spammy language.",

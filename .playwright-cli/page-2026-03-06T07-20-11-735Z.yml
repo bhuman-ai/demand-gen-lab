@@ -1,0 +1,565 @@
+- generic [active]:
+  - alert
+  - generic:
+    - banner:
+      - navigation:
+        - generic:
+          - generic:
+            - generic:
+              - link:
+                - /url: /discover/apps/ios/latest
+                - img
+              - generic:
+                - generic:
+                  - generic:
+                    - link:
+                      - /url: /discover/apps/ios/latest
+                      - text: Apps
+                  - link:
+                    - /url: /discover/sites/latest
+                    - text: Sites
+            - generic:
+              - generic:
+                - button:
+                  - img
+                  - generic: Search on iOS...
+                - generic:
+                  - generic:
+                    - button:
+                      - img
+            - generic:
+              - generic:
+                - generic:
+                  - generic:
+                    - generic:
+                      - generic:
+                        - link:
+                          - /url: /saved/mobile/screens
+                  - generic:
+                    - generic:
+                      - link:
+                        - /url: /community/mobile/featured
+                  - generic:
+                    - link:
+                      - /url: /awards
+                      - generic:
+                        - generic: Awards
+                  - generic:
+                    - button
+                - button:
+                  - generic:
+                    - generic:
+                      - generic: D
+    - main:
+      - article:
+        - generic:
+          - generic:
+            - generic:
+              - radiogroup:
+                - radio [checked]:
+                  - generic: iOS
+                - radio:
+                  - generic: Web
+              - generic:
+                - generic:
+                  - generic:
+                    - generic:
+                      - button:
+                        - text: Categories
+                        - generic:
+                          - img
+                    - generic:
+                      - generic:
+                        - button:
+                          - text: Onboarding
+                          - generic:
+                            - img
+                        - button:
+                          - img
+                - generic:
+                  - generic:
+                    - generic: Showing
+                    - generic: 895 flows
+              - generic:
+                - button:
+                  - text: Trending
+                  - img
+          - generic:
+            - generic:
+              - generic:
+                - generic:
+                  - link:
+                    - /url: /flows/817f5bfd-1701-4756-bcbc-dcdfc3597723
+                  - generic:
+                    - generic:
+                      - generic:
+                        - link:
+                          - /url: /flows/817f5bfd-1701-4756-bcbc-dcdfc3597723
+                        - generic:
+                          - generic:
+                            - link:
+                              - /url: /flows/817f5bfd-1701-4756-bcbc-dcdfc3597723
+                              - generic:
+                                - generic:
+                                  - generic: 01:13
+                          - generic:
+                            - link:
+                              - /url: /flows/817f5bfd-1701-4756-bcbc-dcdfc3597723
+                              - generic:
+                                - img
+                          - generic:
+                            - link:
+                              - /url: /flows/817f5bfd-1701-4756-bcbc-dcdfc3597723
+                              - generic:
+                                - img
+                          - generic:
+                            - link:
+                              - /url: /flows/817f5bfd-1701-4756-bcbc-dcdfc3597723
+                              - generic:
+                                - img
+                          - generic:
+                            - link:
+                              - /url: /flows/817f5bfd-1701-4756-bcbc-dcdfc3597723
+                              - generic:
+                                - img
+                          - generic:
+                            - link:
+                              - /url: /flows/817f5bfd-1701-4756-bcbc-dcdfc3597723
+                              - generic:
+                                - img
+                          - generic:
+                            - link:
+                              - /url: /flows/817f5bfd-1701-4756-bcbc-dcdfc3597723
+                              - generic:
+                                - img
+                          - generic:
+                            - link:
+                              - /url: /flows/817f5bfd-1701-4756-bcbc-dcdfc3597723
+                              - generic:
+                                - img
+                          - generic:
+                            - link:
+                              - /url: /flows/817f5bfd-1701-4756-bcbc-dcdfc3597723
+                              - generic:
+                                - img
+                          - generic:
+                            - link:
+                              - /url: /flows/817f5bfd-1701-4756-bcbc-dcdfc3597723
+                              - generic:
+                                - img
+                          - generic:
+                            - link:
+                              - /url: /flows/817f5bfd-1701-4756-bcbc-dcdfc3597723
+                              - generic:
+                                - img
+                          - generic:
+                            - link:
+                              - /url: /flows/817f5bfd-1701-4756-bcbc-dcdfc3597723
+                              - generic:
+                                - img
+                          - generic:
+                            - link:
+                              - /url: /flows/817f5bfd-1701-4756-bcbc-dcdfc3597723
+                              - generic:
+                                - img
+                          - generic:
+                            - link:
+                              - /url: /flows/817f5bfd-1701-4756-bcbc-dcdfc3597723
+                              - generic:
+                                - img
+                          - generic:
+                            - link:
+                              - /url: /flows/817f5bfd-1701-4756-bcbc-dcdfc3597723
+                              - generic:
+                                - img
+                          - generic:
+                            - link:
+                              - /url: /flows/817f5bfd-1701-4756-bcbc-dcdfc3597723
+                              - generic:
+                                - img
+                          - generic:
+                            - link:
+                              - /url: /flows/817f5bfd-1701-4756-bcbc-dcdfc3597723
+                              - generic:
+                                - img
+                        - generic:
+                          - generic:
+                            - generic:
+                              - button [disabled]:
+                                - img
+                        - button [ref=e103] [cursor=pointer]:
+                          - img [ref=e104]
+                  - generic:
+                    - generic:
+                      - generic:
+                        - generic:
+                          - generic: Onboarding
+                          - generic: in
+                        - generic:
+                          - link:
+                            - /url: /apps/tiimo-ios-92e196c8-3689-45c1-8869-449f9b7207c4/dc39e0c5-e9cb-4411-a8c4-75cc3a5e8169/flows
+                            - generic: Tiimo
+                      - generic: 16 screens
+                    - generic:
+                      - button:
+                        - generic:
+                          - generic: Save
+                      - generic:
+                        - button:
+                          - generic:
+                            - generic: Copy
+                            - img
+                      - generic:
+                        - button:
+                          - generic:
+                            - img
+                - generic:
+                  - link:
+                    - /url: /flows/13c20a32-43c8-41a6-bb5f-63f8371b1683
+                  - generic:
+                    - generic:
+                      - generic:
+                        - link:
+                          - /url: /flows/13c20a32-43c8-41a6-bb5f-63f8371b1683
+                        - generic:
+                          - generic:
+                            - link:
+                              - /url: /flows/13c20a32-43c8-41a6-bb5f-63f8371b1683
+                              - generic:
+                                - img
+                          - generic:
+                            - link:
+                              - /url: /flows/13c20a32-43c8-41a6-bb5f-63f8371b1683
+                              - generic:
+                                - img
+                          - generic:
+                            - link:
+                              - /url: /flows/13c20a32-43c8-41a6-bb5f-63f8371b1683
+                              - generic:
+                                - img
+                          - generic:
+                            - link:
+                              - /url: /flows/13c20a32-43c8-41a6-bb5f-63f8371b1683
+                              - generic:
+                                - img
+                          - generic:
+                            - link:
+                              - /url: /flows/13c20a32-43c8-41a6-bb5f-63f8371b1683
+                              - generic:
+                                - img
+                          - generic:
+                            - link:
+                              - /url: /flows/13c20a32-43c8-41a6-bb5f-63f8371b1683
+                              - generic:
+                                - img
+                          - generic:
+                            - link:
+                              - /url: /flows/13c20a32-43c8-41a6-bb5f-63f8371b1683
+                              - generic:
+                                - img
+                          - generic:
+                            - link:
+                              - /url: /flows/13c20a32-43c8-41a6-bb5f-63f8371b1683
+                              - generic:
+                                - img
+                          - generic:
+                            - link:
+                              - /url: /flows/13c20a32-43c8-41a6-bb5f-63f8371b1683
+                              - generic:
+                                - img
+                          - generic:
+                            - link:
+                              - /url: /flows/13c20a32-43c8-41a6-bb5f-63f8371b1683
+                              - generic:
+                                - img
+                          - generic:
+                            - link:
+                              - /url: /flows/13c20a32-43c8-41a6-bb5f-63f8371b1683
+                              - generic:
+                                - img
+                          - generic:
+                            - link:
+                              - /url: /flows/13c20a32-43c8-41a6-bb5f-63f8371b1683
+                              - generic:
+                                - img
+                          - generic:
+                            - link:
+                              - /url: /flows/13c20a32-43c8-41a6-bb5f-63f8371b1683
+                              - generic:
+                                - img
+                          - generic:
+                            - link:
+                              - /url: /flows/13c20a32-43c8-41a6-bb5f-63f8371b1683
+                              - generic:
+                                - img
+                          - generic:
+                            - link:
+                              - /url: /flows/13c20a32-43c8-41a6-bb5f-63f8371b1683
+                              - generic:
+                                - img
+                          - generic:
+                            - link:
+                              - /url: /flows/13c20a32-43c8-41a6-bb5f-63f8371b1683
+                              - generic:
+                                - img
+                          - generic:
+                            - link:
+                              - /url: /flows/13c20a32-43c8-41a6-bb5f-63f8371b1683
+                              - generic:
+                                - img
+                          - generic:
+                            - link:
+                              - /url: /flows/13c20a32-43c8-41a6-bb5f-63f8371b1683
+                              - generic:
+                                - img
+                          - generic:
+                            - link:
+                              - /url: /flows/13c20a32-43c8-41a6-bb5f-63f8371b1683
+                              - generic:
+                                - img
+                          - generic:
+                            - link:
+                              - /url: /flows/13c20a32-43c8-41a6-bb5f-63f8371b1683
+                              - generic:
+                                - img
+                          - generic:
+                            - link:
+                              - /url: /flows/13c20a32-43c8-41a6-bb5f-63f8371b1683
+                              - generic:
+                                - img
+                          - generic:
+                            - link:
+                              - /url: /flows/13c20a32-43c8-41a6-bb5f-63f8371b1683
+                              - generic:
+                                - img
+                          - generic:
+                            - link:
+                              - /url: /flows/13c20a32-43c8-41a6-bb5f-63f8371b1683
+                              - generic:
+                                - img
+                          - generic:
+                            - link:
+                              - /url: /flows/13c20a32-43c8-41a6-bb5f-63f8371b1683
+                              - generic:
+                                - img
+                          - generic:
+                            - link:
+                              - /url: /flows/13c20a32-43c8-41a6-bb5f-63f8371b1683
+                              - generic:
+                                - img
+                          - generic:
+                            - link:
+                              - /url: /flows/13c20a32-43c8-41a6-bb5f-63f8371b1683
+                              - generic:
+                                - img
+                          - generic:
+                            - link:
+                              - /url: /flows/13c20a32-43c8-41a6-bb5f-63f8371b1683
+                              - generic:
+                                - img
+                          - generic:
+                            - link:
+                              - /url: /flows/13c20a32-43c8-41a6-bb5f-63f8371b1683
+                              - generic:
+                                - img
+                          - generic:
+                            - link:
+                              - /url: /flows/13c20a32-43c8-41a6-bb5f-63f8371b1683
+                              - generic:
+                                - img
+                          - generic:
+                            - link:
+                              - /url: /flows/13c20a32-43c8-41a6-bb5f-63f8371b1683
+                              - generic:
+                                - img
+                          - generic:
+                            - link:
+                              - /url: /flows/13c20a32-43c8-41a6-bb5f-63f8371b1683
+                              - generic:
+                                - img
+                          - generic:
+                            - link:
+                              - /url: /flows/13c20a32-43c8-41a6-bb5f-63f8371b1683
+                              - generic:
+                                - img
+                          - generic:
+                            - link:
+                              - /url: /flows/13c20a32-43c8-41a6-bb5f-63f8371b1683
+                              - generic:
+                                - img
+                          - generic:
+                            - link:
+                              - /url: /flows/13c20a32-43c8-41a6-bb5f-63f8371b1683
+                              - generic:
+                                - img
+                          - generic:
+                            - link:
+                              - /url: /flows/13c20a32-43c8-41a6-bb5f-63f8371b1683
+                              - generic:
+                                - img
+                          - generic:
+                            - link:
+                              - /url: /flows/13c20a32-43c8-41a6-bb5f-63f8371b1683
+                              - generic:
+                                - img
+                          - generic:
+                            - link:
+                              - /url: /flows/13c20a32-43c8-41a6-bb5f-63f8371b1683
+                              - generic:
+                                - img
+                        - generic:
+                          - generic:
+                            - generic:
+                              - button [disabled]:
+                                - img
+                        - button [ref=e109] [cursor=pointer]:
+                          - img [ref=e110]
+                  - generic:
+                    - generic:
+                      - generic:
+                        - generic:
+                          - generic: Onboarding
+                          - generic: in
+                        - generic:
+                          - link:
+                            - /url: /apps/revolut-business-ios-93ad9ceb-a163-41da-ba7a-9f07c737fc2a/0c4c334c-e3a5-4395-89be-c7666aaafdf5/flows
+                            - generic: Revolut Business
+                      - generic: 37 screens
+                    - generic:
+                      - button:
+                        - generic:
+                          - generic: Save
+                      - generic:
+                        - button:
+                          - generic:
+                            - generic: Copy
+                            - img
+                      - generic:
+                        - button:
+                          - generic:
+                            - img
+                - generic:
+                  - link:
+                    - /url: /flows/9e3b1a7c-9409-44db-b448-3d9b69959bea
+                  - generic:
+                    - generic:
+                      - generic:
+                        - link:
+                          - /url: /flows/9e3b1a7c-9409-44db-b448-3d9b69959bea
+                        - generic:
+                          - generic:
+                            - link:
+                              - /url: /flows/9e3b1a7c-9409-44db-b448-3d9b69959bea
+                              - generic:
+                                - img
+                          - generic:
+                            - link:
+                              - /url: /flows/9e3b1a7c-9409-44db-b448-3d9b69959bea
+                              - generic:
+                                - img
+                          - generic:
+                            - link:
+                              - /url: /flows/9e3b1a7c-9409-44db-b448-3d9b69959bea
+                              - generic:
+                                - img
+                          - generic:
+                            - link:
+                              - /url: /flows/9e3b1a7c-9409-44db-b448-3d9b69959bea
+                              - generic:
+                                - img
+                          - generic:
+                            - link:
+                              - /url: /flows/9e3b1a7c-9409-44db-b448-3d9b69959bea
+                              - generic:
+                                - img
+                          - generic:
+                            - link:
+                              - /url: /flows/9e3b1a7c-9409-44db-b448-3d9b69959bea
+                              - generic:
+                                - img
+                          - generic:
+                            - link:
+                              - /url: /flows/9e3b1a7c-9409-44db-b448-3d9b69959bea
+                              - generic:
+                                - img
+                          - generic:
+                            - link:
+                              - /url: /flows/9e3b1a7c-9409-44db-b448-3d9b69959bea
+                              - generic:
+                                - img
+                          - generic:
+                            - link:
+                              - /url: /flows/9e3b1a7c-9409-44db-b448-3d9b69959bea
+                              - generic:
+                                - img
+                          - generic:
+                            - link:
+                              - /url: /flows/9e3b1a7c-9409-44db-b448-3d9b69959bea
+                              - generic:
+                                - img
+                          - generic:
+                            - link:
+                              - /url: /flows/9e3b1a7c-9409-44db-b448-3d9b69959bea
+                              - generic:
+                                - img
+                        - generic:
+                          - generic:
+                            - generic:
+                              - button [disabled]:
+                                - img
+                        - button [ref=e115] [cursor=pointer]:
+                          - img [ref=e116]
+                  - generic:
+                    - generic:
+                      - generic:
+                        - generic:
+                          - generic: Onboarding
+                          - generic: in
+                        - generic:
+                          - link:
+                            - /url: /apps/keeta-ios-b1e857ee-1ca8-4497-ae9f-876c329c6f59/9641be92-ebc0-4c39-b15e-5df72e7ef8fe/flows
+                            - generic: Keeta
+                      - generic: 11 screens
+                    - generic:
+                      - button:
+                        - generic:
+                          - generic: Save
+                      - generic:
+                        - button:
+                          - generic:
+                            - generic: Copy
+                            - img
+                      - generic:
+                        - button:
+                          - generic:
+                            - img
+            - generic:
+              - img
+            - generic:
+              - generic:
+                - button [ref=e118] [cursor=pointer]:
+                  - img [ref=e119]
+                - button [ref=e122] [cursor=pointer]:
+                  - img [ref=e123]
+  - region "Notifications alt+T"
+  - dialog "Limit reached" [ref=e127]:
+    - generic [ref=e128]:
+      - heading "Limit reached" [level=2] [ref=e129]
+      - paragraph
+    - article [ref=e130]:
+      - generic [ref=e132]:
+        - button "close icon" [ref=e136] [cursor=pointer]:
+          - img "close icon" [ref=e138]
+        - generic [ref=e140]:
+          - generic [ref=e141]:
+            - img [ref=e142]
+            - generic [ref=e145]:
+              - heading "New device detected." [level=1] [ref=e146]
+              - paragraph [ref=e147]: You have been logged out of some other devices. If you’d like to share Mobbin with others, create a team for easier collaboration.
+            - button "Skip" [ref=e149] [cursor=pointer]:
+              - generic [ref=e151]: Skip
+          - paragraph [ref=e152]:
+            - text: Read more about
+            - link "device limits" [ref=e153] [cursor=pointer]:
+              - /url: https://help.mobbin.com/en/articles/8122177
+            - text: .

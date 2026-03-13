@@ -1,0 +1,3 @@
+[GET] https://persona.bhuman.ai/persona/voice/test => [200] OK
+[GET] https://user.bhuman.ai/api/user => [200] 
+[GET] https://persona.bhuman.ai/api/persona/generate/thought/ba210024-edbd-4ab7-8473-5a6bd9486fbf => [200] OK

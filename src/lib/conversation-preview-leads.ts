@@ -358,19 +358,17 @@ export async function listConversationPreviewLeads(input: PreviewLeadQueryInput)
   const recentRuns = [...runs]
     .sort((a, b) => safeDateValue(b.createdAt) - safeDateValue(a.createdAt))
     .slice(0, maxRuns);
-  const latestRun = recentRuns[0];
-  const sourceRuns =
-    latestRun &&
-    !["failed", "preflight_failed", "canceled"].includes(String(latestRun.status ?? "").toLowerCase()) &&
-    Number(latestRun.metrics?.sourcedLeads ?? 0) > 0
-      ? [latestRun]
-      : [];
+  const sourceRuns = recentRuns.filter(
+    (run) =>
+      !["failed", "preflight_failed", "canceled"].includes(String(run.status ?? "").toLowerCase()) &&
+      Number(run.metrics?.sourcedLeads ?? 0) > 0
+  );
   if (!sourceRuns.length) {
     return {
       leads: [] as SourcedConversationPreviewLead[],
       sourceExperimentId: sourceExperiment.id,
       runtimeRefFound: true,
-      runsChecked: latestRun ? 1 : 0,
+      runsChecked: recentRuns.length,
       qualifiedLeadCount: 0,
       qualifiedLeadWithEmailCount: 0,
       qualifiedLeadWithoutEmailCount: 0,

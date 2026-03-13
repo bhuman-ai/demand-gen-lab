@@ -15,7 +15,9 @@ export type LlmTask =
   | "lead_chain_planning"
   | "lead_actor_query_planning"
   | "lead_quality_policy"
-  | "lead_chain_selection";
+  | "lead_chain_selection"
+  | "company_domain_matcher"
+  | "reply_policy_evaluation";
 
 type ModelTier = "fast" | "default" | "high";
 
@@ -39,6 +41,8 @@ const TASK_BASE_TIER: Record<LlmTask, ModelTier> = {
   lead_actor_query_planning: "high",
   lead_quality_policy: "high",
   lead_chain_selection: "high",
+  company_domain_matcher: "fast",
+  reply_policy_evaluation: "high",
 };
 
 function normalizeModelName(value: unknown) {

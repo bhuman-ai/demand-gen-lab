@@ -1,0 +1,111 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e3]:
+    - complementary [ref=e4]:
+      - link "Factory Factory Platform" [ref=e5] [cursor=pointer]:
+        - /url: /
+        - generic [ref=e6]: Factory
+        - generic [ref=e7]: Factory Platform
+      - generic [ref=e9]:
+        - combobox [ref=e10]:
+          - option "Loading brands..." [selected]
+        - button "New Brand" [ref=e11]
+      - navigation [ref=e12]:
+        - link "Experiments" [ref=e13] [cursor=pointer]:
+          - /url: /brands
+          - img [ref=e14]
+          - text: Experiments
+        - link "Campaigns" [ref=e18] [cursor=pointer]:
+          - /url: /brands
+          - img [ref=e19]
+          - text: Campaigns
+        - link "Network" [ref=e21] [cursor=pointer]:
+          - /url: /brands
+          - img [ref=e22]
+          - text: Network
+        - link "Leads" [ref=e27] [cursor=pointer]:
+          - /url: /brands
+          - img [ref=e28]
+          - text: Leads
+        - link "Inbox" [ref=e31] [cursor=pointer]:
+          - /url: /brands
+          - img [ref=e32]
+          - text: Inbox
+      - generic [ref=e35]:
+        - generic [ref=e36]: Tools
+        - navigation [ref=e37]:
+          - link "Settings" [ref=e38] [cursor=pointer]:
+            - /url: /settings/outreach
+            - img [ref=e39]
+            - text: Settings
+          - link "Logic" [ref=e42] [cursor=pointer]:
+            - /url: /logic
+            - img [ref=e43]
+            - text: Logic
+          - link "Doctor" [ref=e45] [cursor=pointer]:
+            - /url: /doctor
+            - img [ref=e46]
+            - text: Doctor
+    - main [ref=e48]:
+      - generic [ref=e50]:
+        - generic [ref=e51]:
+          - generic [ref=e52]: Factory > settings
+          - heading "Outreach Settings" [level=1] [ref=e53]
+        - generic [ref=e54]:
+          - button "Global Search K" [ref=e55]:
+            - img [ref=e56]
+            - text: Global Search
+            - generic [ref=e59]:
+              - img [ref=e60]
+              - text: K
+          - button "User" [ref=e62]:
+            - img [ref=e63]
+            - text: User
+      - generic [ref=e68]:
+        - generic [ref=e69]:
+          - generic [ref=e70]: Outreach settings
+          - generic [ref=e71]: Pick a brand from the sidebar to start.
+          - generic [ref=e72]:
+            - generic [ref=e73]: No brand selected
+            - generic [ref=e74]: Choose brand
+            - generic [ref=e75]: 0 senders selected
+            - generic [ref=e76]: "Reply inbox: None"
+        - generic [ref=e77]: Loading outreach settings...
+        - generic [ref=e79]:
+          - button "Brand Not started Pick a brand from the selector first" [ref=e80]:
+            - generic [ref=e81]:
+              - generic [ref=e82]: Brand
+              - generic [ref=e83]: Not started
+            - generic [ref=e84]: Pick a brand from the selector first
+          - button "Connections Not started Connection center still needs setup" [ref=e85]:
+            - generic [ref=e86]:
+              - generic [ref=e87]: Connections
+              - generic [ref=e88]: Not started
+            - generic [ref=e89]: Connection center still needs setup
+          - button "Reply inboxes Not started No reply inboxes connected yet" [ref=e90]:
+            - generic [ref=e91]:
+              - generic [ref=e92]: Reply inboxes
+              - generic [ref=e93]: Not started
+            - generic [ref=e94]: No reply inboxes connected yet
+        - generic [ref=e95]:
+          - generic [ref=e96]:
+            - generic [ref=e98]:
+              - generic [ref=e99]:
+                - heading "Brand setup" [level=3] [ref=e100]
+                - paragraph [ref=e101]: Pick a brand from the sidebar, then assign senders and replies.
+              - generic [ref=e102]: Not started
+            - generic [ref=e105]:
+              - img [ref=e106]
+              - generic [ref=e108]:
+                - generic [ref=e109]: Finish these first
+                - generic [ref=e110]: Pick the brand you want from the sidebar selector first.
+                - generic [ref=e111]: Connect the delivery stack in Integrations first.
+                - generic [ref=e112]: Add at least one sender in Integrations.
+                - generic [ref=e113]: Add at least one reply inbox in Email Accounts.
+          - generic [ref=e114]:
+            - generic [ref=e116]:
+              - generic [ref=e117]:
+                - heading "Sending setup" [level=3] [ref=e118]
+                - paragraph [ref=e119]: Choose which senders belong to this brand. One sender is the default, but all selected senders stay available for rotation.
+              - generic [ref=e120]: No brand selected
+            - generic [ref=e122]: Pick a brand from the sidebar selector to configure senders and replies.
+  - alert [ref=e123]

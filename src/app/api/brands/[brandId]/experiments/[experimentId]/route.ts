@@ -64,6 +64,12 @@ export async function PATCH(
 
   if (body.testEnvelope && typeof body.testEnvelope === "object") {
     const row = asRecord(body.testEnvelope);
+    const parsedBusinessDays = Array.isArray(row.businessDays)
+      ? row.businessDays
+          .map((entry) => Math.round(Number(entry)))
+          .filter((entry) => Number.isFinite(entry) && entry >= 0 && entry <= 6)
+      : [1, 2, 3, 4, 5];
+    const businessDays = Array.from(new Set(parsedBusinessDays)).sort((a, b) => a - b);
     patch.testEnvelope = {
       sampleSize: clampExperimentSampleSize(row.sampleSize),
       durationDays: Math.max(1, Number(row.durationDays ?? 7)),
@@ -71,6 +77,10 @@ export async function PATCH(
       hourlyCap: Math.max(1, Number(row.hourlyCap ?? 6)),
       timezone: String(row.timezone ?? "America/Los_Angeles"),
       minSpacingMinutes: Math.max(1, Number(row.minSpacingMinutes ?? 8)),
+      businessHoursEnabled: row.businessHoursEnabled !== false,
+      businessHoursStartHour: Math.max(0, Math.min(23, Math.round(Number(row.businessHoursStartHour ?? 9) || 9))),
+      businessHoursEndHour: Math.max(1, Math.min(24, Math.round(Number(row.businessHoursEndHour ?? 17) || 17))),
+      businessDays: businessDays.length ? businessDays : [1, 2, 3, 4, 5],
     };
   }
 

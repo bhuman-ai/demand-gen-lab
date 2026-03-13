@@ -43,12 +43,12 @@ export async function PATCH(
 
   const body = asRecord(await request.json());
   const actionRaw = String(body.action ?? "").toLowerCase();
-  const action = ["pause", "resume", "cancel"].includes(actionRaw)
-    ? (actionRaw as "pause" | "resume" | "cancel")
+  const action = ["pause", "resume", "cancel", "probe_deliverability", "resume_sender_deliverability"].includes(actionRaw)
+    ? (actionRaw as "pause" | "resume" | "cancel" | "probe_deliverability" | "resume_sender_deliverability")
     : null;
 
   if (!action) {
-    return NextResponse.json({ error: "action must be pause, resume, or cancel" }, { status: 400 });
+    return NextResponse.json({ error: "action must be pause, resume, cancel, probe_deliverability, or resume_sender_deliverability" }, { status: 400 });
   }
 
   const result = await updateRunControl({
@@ -57,6 +57,7 @@ export async function PATCH(
     runId,
     action,
     reason: typeof body.reason === "string" ? body.reason : undefined,
+    senderAccountId: typeof body.senderAccountId === "string" ? body.senderAccountId : undefined,
   });
 
   if (!result.ok) {

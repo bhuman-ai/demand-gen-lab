@@ -61,16 +61,6 @@ function normalizeScoring(value: unknown): ObjectiveData["scoring"] {
   };
 }
 
-function defaultRunPolicy() {
-  return {
-    cadence: "3_step_7_day" as const,
-    dailyCap: 30,
-    hourlyCap: 6,
-    timezone: "America/Los_Angeles",
-    minSpacingMinutes: 8,
-  };
-}
-
 function normalizeSuggestion(value: unknown): BuildSuggestion | null {
   const row = asRecord(value);
   const title = sanitizeAiText(String(row.title ?? "").trim());
@@ -155,75 +145,6 @@ function normalizeSuggestions(value: unknown): BuildSuggestion[] {
   return rows.slice(0, 6);
 }
 
-function fallbackSuggestions(brandName: string): BuildSuggestion[] {
-  const safeBrand = brandName.trim() || "your brand";
-  const policy = defaultRunPolicy();
-  return [
-    {
-      title: "Book demos from one tight ICP",
-      rationale: "Start narrow to get clear signal before scaling.",
-      objective: {
-        goal: `Book 10 qualified demos in 14 days for ${safeBrand}.`,
-        constraints: "Email only. One ICP. Keep copy under 90 words. Use conservative sending caps.",
-        scoring: { conversionWeight: 0.7, qualityWeight: 0.2, replyWeight: 0.1 },
-      },
-      angle: {
-        title: "Pain-first angle",
-        rationale: "Lead with one urgent pain and one concrete outcome.",
-        channel: "Email",
-        actorQuery: "Head of Growth at B2B SaaS (11-200 employees)",
-        maxLeads: 100,
-        seedInputs: ["role", "pain", "desired outcome"],
-      },
-      variants: [
-        {
-          name: "Hook-first variant",
-          notes: "Open with pain + cost of inaction in sentence one.",
-          status: "draft",
-          runPolicy: policy,
-        },
-        {
-          name: "Proof-first variant",
-          notes: "Open with measurable proof, then ask one clear CTA.",
-          status: "draft",
-          runPolicy: policy,
-        },
-      ],
-    },
-    {
-      title: "Validate offer quickly",
-      rationale: "Optimize for fast reply signal to refine messaging.",
-      objective: {
-        goal: `Get 20 quality replies in 10 days for ${safeBrand}.`,
-        constraints: "Single offer per email, short copy, no aggressive volume spikes.",
-        scoring: { conversionWeight: 0.5, qualityWeight: 0.25, replyWeight: 0.25 },
-      },
-      angle: {
-        title: "Offer-led angle",
-        rationale: "Position a concrete offer with low-friction CTA.",
-        channel: "Email",
-        actorQuery: "Founder at B2B SaaS (1-50 employees)",
-        maxLeads: 90,
-        seedInputs: ["offer", "proof", "CTA"],
-      },
-      variants: [
-        {
-          name: "Teardown offer variant",
-          notes: "Offer a 10-minute teardown with one-question CTA.",
-          status: "draft",
-          runPolicy: policy,
-        },
-        {
-          name: "Quick-win variant",
-          notes: "Lead with one fast, visible win and ask for fit check.",
-          status: "draft",
-          runPolicy: policy,
-        },
-      ],
-    },
-  ];
-}
-
 export async function POST(
   _request: Request,
   context: { params: Promise<{ brandId: string; campaignId: string }> }
@@ -236,11 +157,16 @@ export async function POST(
   }
 
   const brandName = sanitizeAiText(String(brand?.name ?? "Brand"));
-  const fallback = fallbackSuggestions(brandName);
 
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) {
-    return NextResponse.json({ suggestions: fallback, mode: "fallback" });
+    return NextResponse.json(
+      {
+        error: "OPENAI_API_KEY is not configured",
+        hint: "Real-only mode is enabled: fallback build suggestions are disabled.",
+      },
+      { status: 503 }
+    );
   }
 
   const prompt = [
@@ -284,7 +210,14 @@ export async function POST(
 
   const raw = await response.text();
   if (!response.ok) {
-    return NextResponse.json({ suggestions: fallback, mode: "fallback" });
+    return NextResponse.json(
+      {
+        error: "build suggestion generation failed",
+        hint: "Real-only mode is enabled: fallback build suggestions are disabled.",
+        providerStatus: response.status,
+      },
+      { status: 502 }
+    );
   }
 
   let payload: unknown = {};
@@ -312,8 +245,14 @@ export async function POST(
 
   const normalized = normalizeSuggestions(asRecord(parsed).suggestions);
 
-  return NextResponse.json({
-    suggestions: normalized.length ? normalized : fallback,
-    mode: normalized.length ? "openai" : "fallback",
-  });
+  if (!normalized.length) {
+    return NextResponse.json(
+      {
+        error: "build suggestion generation returned no usable suggestions",
+        hint: "Real-only mode is enabled: fallback build suggestions are disabled.",
+      },
+      { status: 422 }
+    );
+  }
+  return NextResponse.json({ suggestions: normalized, mode: "openai" });
 }

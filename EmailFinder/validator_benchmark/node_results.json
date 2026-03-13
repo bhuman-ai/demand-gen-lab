@@ -1,0 +1,328 @@
+{
+  "results": [
+    {
+      "email": "don@bhuman.ai",
+      "deep_email_validator": {
+        "predicted_accept": false,
+        "error": null,
+        "elapsed_ms": 10032,
+        "raw": {
+          "valid": false,
+          "validators": {
+            "regex": {
+              "valid": true
+            },
+            "typo": {
+              "valid": true
+            },
+            "disposable": {
+              "valid": true
+            },
+            "mx": {
+              "valid": true
+            },
+            "smtp": {
+              "valid": false,
+              "reason": "Timeout"
+            }
+          },
+          "reason": "smtp"
+        }
+      },
+      "email_validator_js": {
+        "predicted_accept": null,
+        "error": "timeout after 15000ms",
+        "elapsed_ms": 15004,
+        "raw": null
+      }
+    },
+    {
+      "email": "x7v3q9p2k6m1@bhuman.ai",
+      "deep_email_validator": {
+        "predicted_accept": false,
+        "error": null,
+        "elapsed_ms": 10032,
+        "raw": {
+          "valid": false,
+          "validators": {
+            "regex": {
+              "valid": true
+            },
+            "typo": {
+              "valid": true
+            },
+            "disposable": {
+              "valid": true
+            },
+            "mx": {
+              "valid": true
+            },
+            "smtp": {
+              "valid": false,
+              "reason": "Timeout"
+            }
+          },
+          "reason": "smtp"
+        }
+      },
+      "email_validator_js": {
+        "predicted_accept": null,
+        "error": "timeout after 15000ms",
+        "elapsed_ms": 15003,
+        "raw": null
+      }
+    },
+    {
+      "email": "m4n8p1q6t3z9@bhuman.ai",
+      "deep_email_validator": {
+        "predicted_accept": false,
+        "error": null,
+        "elapsed_ms": 11013,
+        "raw": {
+          "valid": false,
+          "validators": {
+            "regex": {
+              "valid": true
+            },
+            "typo": {
+              "valid": true
+            },
+            "disposable": {
+              "valid": true
+            },
+            "mx": {
+              "valid": true
+            },
+            "smtp": {
+              "valid": false,
+              "reason": "Timeout"
+            }
+          },
+          "reason": "smtp"
+        }
+      },
+      "email_validator_js": {
+        "predicted_accept": null,
+        "error": "timeout after 15000ms",
+        "elapsed_ms": 15001,
+        "raw": null
+      }
+    },
+    {
+      "email": "wmekideche@hubspot.com",
+      "deep_email_validator": {
+        "predicted_accept": false,
+        "error": null,
+        "elapsed_ms": 10016,
+        "raw": {
+          "valid": false,
+          "validators": {
+            "regex": {
+              "valid": true
+            },
+            "typo": {
+              "valid": true
+            },
+            "disposable": {
+              "valid": true
+            },
+            "mx": {
+              "valid": true
+            },
+            "smtp": {
+              "valid": false,
+              "reason": "Timeout"
+            }
+          },
+          "reason": "smtp"
+        }
+      },
+      "email_validator_js": {
+        "predicted_accept": null,
+        "error": "timeout after 15000ms",
+        "elapsed_ms": 15001,
+        "raw": null
+      }
+    },
+    {
+      "email": "v9x2q7m1k4t8@hubspot.com",
+      "deep_email_validator": {
+        "predicted_accept": false,
+        "error": null,
+        "elapsed_ms": 10015,
+        "raw": {
+          "valid": false,
+          "validators": {
+            "regex": {
+              "valid": true
+            },
+            "typo": {
+              "valid": true
+            },
+            "disposable": {
+              "valid": true
+            },
+            "mx": {
+              "valid": true
+            },
+            "smtp": {
+              "valid": false,
+              "reason": "Timeout"
+            }
+          },
+          "reason": "smtp"
+        }
+      },
+      "email_validator_js": {
+        "predicted_accept": null,
+        "error": "timeout after 15000ms",
+        "elapsed_ms": 15002,
+        "raw": null
+      }
+    },
+    {
+      "email": "Henry.Buttz@envestnet.com",
+      "deep_email_validator": {
+        "predicted_accept": false,
+        "error": null,
+        "elapsed_ms": 10200,
+        "raw": {
+          "valid": false,
+          "validators": {
+            "regex": {
+              "valid": true
+            },
+            "typo": {
+              "valid": true
+            },
+            "disposable": {
+              "valid": true
+            },
+            "mx": {
+              "valid": true
+            },
+            "smtp": {
+              "valid": false,
+              "reason": "Timeout"
+            }
+          },
+          "reason": "smtp"
+        }
+      },
+      "email_validator_js": {
+        "predicted_accept": null,
+        "error": "timeout after 15000ms",
+        "elapsed_ms": 15002,
+        "raw": null
+      }
+    },
+    {
+      "email": "q7v2m9x4k1p8@envestnet.com",
+      "deep_email_validator": {
+        "predicted_accept": false,
+        "error": null,
+        "elapsed_ms": 5005,
+        "raw": {
+          "valid": false,
+          "validators": {
+            "regex": {
+              "valid": true
+            },
+            "typo": {
+              "valid": true
+            },
+            "disposable": {
+              "valid": true
+            },
+            "mx": {
+              "valid": false,
+              "reason": "MX record not found"
+            },
+            "smtp": {
+              "valid": false
+            }
+          },
+          "reason": "mx"
+        }
+      },
+      "email_validator_js": {
+        "predicted_accept": null,
+        "error": "timeout after 15000ms",
+        "elapsed_ms": 15001,
+        "raw": null
+      }
+    },
+    {
+      "email": "aaron.baby@freshworks.com",
+      "deep_email_validator": {
+        "predicted_accept": false,
+        "error": null,
+        "elapsed_ms": 10214,
+        "raw": {
+          "valid": false,
+          "validators": {
+            "regex": {
+              "valid": true
+            },
+            "typo": {
+              "valid": true
+            },
+            "disposable": {
+              "valid": true
+            },
+            "mx": {
+              "valid": true
+            },
+            "smtp": {
+              "valid": false,
+              "reason": "Timeout"
+            }
+          },
+          "reason": "smtp"
+        }
+      },
+      "email_validator_js": {
+        "predicted_accept": null,
+        "error": "timeout after 15000ms",
+        "elapsed_ms": 15002,
+        "raw": null
+      }
+    },
+    {
+      "email": "gsoknf@freshworks.com",
+      "deep_email_validator": {
+        "predicted_accept": false,
+        "error": null,
+        "elapsed_ms": 10017,
+        "raw": {
+          "valid": false,
+          "validators": {
+            "regex": {
+              "valid": true
+            },
+            "typo": {
+              "valid": true
+            },
+            "disposable": {
+              "valid": true
+            },
+            "mx": {
+              "valid": true
+            },
+            "smtp": {
+              "valid": false,
+              "reason": "Timeout"
+            }
+          },
+          "reason": "smtp"
+        }
+      },
+      "email_validator_js": {
+        "predicted_accept": null,
+        "error": "timeout after 15000ms",
+        "elapsed_ms": 15002,
+        "raw": null
+      }
+    }
+  ]
+}

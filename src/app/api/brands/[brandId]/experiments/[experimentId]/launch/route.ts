@@ -29,7 +29,7 @@ export async function POST(
     campaignId: experiment.runtime.campaignId,
     experimentId: experiment.runtime.experimentId,
     limit: 50,
-    maxRuns: 1,
+    maxRuns: 30,
   });
 
   if (preview.qualifiedLeadWithEmailCount < MIN_REAL_PROSPECTS_FOR_LAUNCH) {

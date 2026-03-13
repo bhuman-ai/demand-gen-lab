@@ -1,0 +1,8 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e4]:
+    - generic [ref=e6]: "@test"
+    - generic [ref=e8]:
+      - generic [ref=e9]: Ready to create your own persona?
+      - button "Join Persona" [ref=e10] [cursor=pointer]
+      - generic [ref=e11]: Made by Persona.me
+  - alert [ref=e12]

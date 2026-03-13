@@ -1,0 +1,246 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e3]:
+    - complementary [ref=e4]:
+      - link "Factory Factory Platform" [ref=e5] [cursor=pointer]:
+        - /url: /
+        - generic [ref=e6]: Factory
+        - generic [ref=e7]: Factory Platform
+      - combobox [ref=e10]:
+        - option "BHuman | AI personalized videos at scale" [selected]
+      - navigation [ref=e12]:
+        - link "Experiments" [ref=e13] [cursor=pointer]:
+          - /url: /brands
+          - img [ref=e14]
+          - text: Experiments
+        - link "Campaigns" [ref=e18] [cursor=pointer]:
+          - /url: /brands
+          - img [ref=e19]
+          - text: Campaigns
+        - link "Network" [ref=e21] [cursor=pointer]:
+          - /url: /brands
+          - img [ref=e22]
+          - text: Network
+        - link "Leads" [ref=e27] [cursor=pointer]:
+          - /url: /brands
+          - img [ref=e28]
+          - text: Leads
+        - link "Inbox" [ref=e31] [cursor=pointer]:
+          - /url: /brands
+          - img [ref=e32]
+          - text: Inbox
+      - generic [ref=e35]:
+        - generic [ref=e36]: Tools
+        - navigation [ref=e37]:
+          - link "Settings" [ref=e38] [cursor=pointer]:
+            - /url: /settings/outreach
+            - img [ref=e39]
+            - text: Settings
+          - link "Logic" [ref=e42] [cursor=pointer]:
+            - /url: /logic
+            - img [ref=e43]
+            - text: Logic
+          - link "Doctor" [ref=e45] [cursor=pointer]:
+            - /url: /doctor
+            - img [ref=e46]
+            - text: Doctor
+    - main [ref=e48]:
+      - generic [ref=e50]:
+        - generic [ref=e51]:
+          - generic [ref=e52]: Factory > settings
+          - heading "Outreach Settings" [level=1] [ref=e53]
+        - generic [ref=e54]:
+          - button "Global Search K" [ref=e55]:
+            - img [ref=e56]
+            - text: Global Search
+            - generic [ref=e59]:
+              - img [ref=e60]
+              - text: K
+          - button "User" [ref=e62]:
+            - img [ref=e63]
+            - text: User
+      - generic [ref=e68]:
+        - generic [ref=e69]:
+          - generic [ref=e71]:
+            - generic [ref=e72]:
+              - generic [ref=e73]:
+                - img [ref=e74]
+                - text: State-based setup
+              - heading "Outreach Setup" [level=3] [ref=e77]
+              - paragraph [ref=e78]: Focus on outcomes instead of raw configuration. Tabs stay clean, and technical fields only appear when you choose to connect or edit something.
+            - generic [ref=e79]:
+              - img [ref=e80]
+              - text: 3/3 tabs configured
+          - generic [ref=e83]:
+            - generic [ref=e84]:
+              - generic [ref=e85]: Ready brands
+              - generic [ref=e86]: 1/1
+            - generic [ref=e87]:
+              - generic [ref=e88]: Sender identities
+              - generic [ref=e89]: "1"
+            - generic [ref=e90]:
+              - generic [ref=e91]: Reply inboxes
+              - generic [ref=e92]: "1"
+            - generic [ref=e93]:
+              - generic [ref=e94]: Active accounts
+              - generic [ref=e95]: "2"
+        - generic [ref=e97]:
+          - button "Identity Brand routing, sender domains, and flow readiness. Configured 1/1 brands ready to launch" [ref=e252]:
+            - generic [ref=e99]:
+              - generic [ref=e100]:
+                - generic [ref=e101]:
+                  - img [ref=e102]
+                  - generic [ref=e111]: Identity
+                - generic [ref=e112]: Brand routing, sender domains, and flow readiness.
+              - generic [ref=e113]: Configured
+            - generic [ref=e114]: 1/1 brands ready to launch
+          - button "Integrations Connection center for provider links and sender identities. Configured 1 sender available" [ref=e253]:
+            - generic [ref=e116]:
+              - generic [ref=e117]:
+                - generic [ref=e118]:
+                  - img [ref=e119]
+                  - generic [ref=e122]: Integrations
+                - generic [ref=e123]: Connection center for provider links and sender identities.
+              - generic [ref=e124]: Configured
+            - generic [ref=e125]: 1 sender available
+          - button "Email Accounts Reply inbox inventory and inbox health. Configured 1 reply inbox available" [ref=e254]:
+            - generic [ref=e127]:
+              - generic [ref=e128]:
+                - generic [ref=e129]:
+                  - img [ref=e130]
+                  - generic [ref=e133]: Email Accounts
+                - generic [ref=e134]: Reply inbox inventory and inbox health.
+              - generic [ref=e135]: Configured
+            - generic [ref=e136]: 1 reply inbox available
+        - generic [ref=e137]:
+          - generic [ref=e139]:
+            - generic [ref=e140]:
+              - heading "Connect the Brand Flow" [level=3] [ref=e141]
+              - generic [ref=e142]: Ready to run
+            - paragraph [ref=e143]: Pick the brand, provision the sender domain, and point it at the sender and reply inbox you want carrying the conversation.
+          - generic [ref=e154]:
+            - generic [ref=e155]:
+              - heading "Brand Domain Setup" [level=3] [ref=e156]
+              - paragraph [ref=e157]: Pick a brand, choose a Namecheap domain, forward it to the protected brand site, and attach it to the Customer.io account with room this month.
+            - generic [ref=e158]:
+              - generic [ref=e159]:
+                - generic [ref=e160]:
+                  - generic [ref=e161]: Brand
+                  - combobox "Brand" [ref=e162]:
+                    - option "Select brand"
+                    - option "BHuman | AI personalized videos at scale" [selected]
+                - generic [ref=e163]:
+                  - generic [ref=e164]: Sender Local-Part
+                  - textbox "Sender Local-Part" [ref=e165]:
+                    - /placeholder: hello
+                    - text: hello
+                - generic [ref=e166]:
+                  - generic [ref=e167]: Reply Mailbox
+                  - combobox "Reply Mailbox" [ref=e168]:
+                    - option "Leave unchanged / none" [selected]
+                    - option "zeynep email bhuman · zeynep@bhuman.ai"
+                  - generic [ref=e169]: The brand already has a reply mailbox assignment. Leave this alone to keep it.
+                - generic [ref=e170]:
+                  - generic [ref=e171]: Sender Account Name
+                  - textbox "Sender Account Name" [ref=e172]:
+                    - /placeholder: BHuman | AI personalized videos at scale sender
+              - generic [ref=e173]:
+                - generic [ref=e174]:
+                  - generic [ref=e175]: Protected Brand Destination
+                  - textbox "Protected Brand Destination" [ref=e176]:
+                    - /placeholder: https://brand.com
+                    - text: https://bhuman.ai
+                  - generic [ref=e177]: Every sender domain can 301 here so the protected brand domain stays the main destination and never has to send email itself.
+                - generic [ref=e178]:
+                  - checkbox "Auto-assign sender to brand" [checked] [ref=e179]
+                  - text: Auto-assign sender to brand
+              - generic [ref=e180]:
+                - generic [ref=e181]:
+                  - generic [ref=e182]:
+                    - generic [ref=e183]: Customer.io Capacity
+                    - generic [ref=e184]: Auto-pick will choose the account with baseline sync complete and the most remaining profiles.
+                  - combobox [ref=e185]:
+                    - option "Auto-pick best account" [selected]
+                    - option "Choose a specific account"
+                    - option "Use saved defaults"
+                - 'button "Selffunded.dev Site 9336ae1a489137ebb1e5 0/30,000 30,000 left this month Baseline: waiting Last test: pass Existing senders: zeynep@bhumanai.com Waiting for baseline sync" [disabled] [ref=e255]':
+                  - generic [ref=e256]:
+                    - generic [ref=e257]:
+                      - generic [ref=e258]: Selffunded.dev
+                      - generic [ref=e259]: Site 9336ae1a489137ebb1e5
+                    - generic [ref=e260]: 0/30,000
+                  - generic [ref=e262]:
+                    - generic [ref=e263]: 30,000 left this month
+                    - generic [ref=e264]: "Baseline: waiting"
+                    - generic [ref=e265]: "Last test: pass"
+                  - generic [ref=e266]: "Existing senders: zeynep@bhumanai.com"
+                  - generic [ref=e267]: Waiting for baseline sync
+              - generic [ref=e187]:
+                - generic [ref=e188]:
+                  - generic [ref=e189]:
+                    - generic [ref=e190]: Namecheap Inventory
+                    - generic [ref=e191]: One click will connect the domain, apply forwarding, and create the sender inside Customer.io.
+                  - textbox "Filter domains" [ref=e192]
+                - generic [ref=e268]: "#1011150 Invalid request IP: 109.130.23.186"
+                - generic [ref=e269]: Save platform Namecheap credentials above first. Once that is done, this section will list every owned domain with a setup button.
+              - generic [ref=e194]:
+                - generic [ref=e195]:
+                  - generic [ref=e196]: Buy New Domain + Set Up
+                  - generic [ref=e197]: If the domain is available in Namecheap, this will buy it and run the same setup flow automatically.
+                - generic [ref=e198]:
+                  - generic [ref=e199]:
+                    - generic [ref=e200]: Domain
+                    - textbox "Domain" [ref=e201]:
+                      - /placeholder: example.com
+                  - generic [ref=e202]:
+                    - generic [ref=e203]: First Name
+                    - textbox "First Name" [ref=e204]
+                  - generic [ref=e205]:
+                    - generic [ref=e206]: Last Name
+                    - textbox "Last Name" [ref=e207]
+                  - generic [ref=e208]:
+                    - generic [ref=e209]: Organization
+                    - textbox "Organization" [ref=e210]
+                  - generic [ref=e211]:
+                    - generic [ref=e212]: Email
+                    - textbox "Email" [ref=e213]
+                  - generic [ref=e214]:
+                    - generic [ref=e215]: Phone
+                    - textbox "Phone" [ref=e216]:
+                      - /placeholder: "+1.5555555555"
+                  - generic [ref=e217]:
+                    - generic [ref=e218]: Address
+                    - textbox "Address" [ref=e219]
+                  - generic [ref=e220]:
+                    - generic [ref=e221]: City
+                    - textbox "City" [ref=e222]
+                  - generic [ref=e223]:
+                    - generic [ref=e224]: State / Province
+                    - textbox "State / Province" [ref=e225]
+                  - generic [ref=e226]:
+                    - generic [ref=e227]: Postal Code
+                    - textbox "Postal Code" [ref=e228]
+                  - generic [ref=e229]:
+                    - generic [ref=e230]: Country
+                    - textbox "Country" [ref=e231]:
+                      - /placeholder: US
+                      - text: US
+                - button "Buy + Set Up" [ref=e233]
+          - generic [ref=e234]:
+            - generic [ref=e235]:
+              - generic [ref=e236]:
+                - heading "Brands Still Needing Attention" [level=3] [ref=e237]
+                - generic [ref=e238]: All clear
+              - paragraph [ref=e239]: Incomplete brands stay visible here. Healthy brands collapse into a configured state so the page stays focused on what is left.
+            - generic [ref=e270]: Every brand currently has a tested sender and reply inbox assigned.
+          - generic [ref=e272]:
+            - generic [ref=e273]:
+              - generic [ref=e274]:
+                - heading "Configured Brands" [level=3] [ref=e275]
+                - generic [ref=e276]: 1 ready to run
+              - paragraph [ref=e277]: Collapse the healthy brands so the setup work stays focused on anything still broken.
+            - button "Review" [ref=e278]:
+              - img [ref=e279]
+              - text: Review
+  - button "Open Next.js Dev Tools" [ref=e247] [cursor=pointer]:
+    - img [ref=e248]
+  - alert [ref=e251]

@@ -1,0 +1,492 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e2]:
+    - complementary [ref=e3]:
+      - generic [ref=e4]:
+        - link "New Animations are now available on Mobbin arrow right icon" [ref=e6] [cursor=pointer]:
+          - /url: /changelog/2025-11-12-introducing-animations
+          - generic [ref=e8]: New
+          - paragraph [ref=e9]:
+            - text: Animations are now available on Mobbin
+            - img "arrow right icon" [ref=e10]
+        - button "close icon" [ref=e12] [cursor=pointer]:
+          - img "close icon" [ref=e13]
+    - navigation [ref=e15]:
+      - link [ref=e17] [cursor=pointer]:
+        - /url: /
+        - img [ref=e18]
+      - link "Pricing" [ref=e21] [cursor=pointer]:
+        - /url: /pricing
+      - link "Awards" [ref=e23] [cursor=pointer]:
+        - /url: /awards
+      - link "Log in" [ref=e25] [cursor=pointer]:
+        - /url: /login
+    - main [ref=e26]:
+      - generic [ref=e27]:
+        - list [ref=e29]:
+          - listitem [ref=e30]:
+            - img "Airbnb logo" [ref=e32]
+          - listitem [ref=e33]
+          - listitem [ref=e35]
+          - listitem [ref=e37]:
+            - img "Loom logo" [ref=e39]
+        - generic [ref=e40]:
+          - heading "Discover real-world design inspiration." [level=1] [ref=e41]
+          - paragraph [ref=e42]:
+            - text: Featuring over 1,000 iOS & Web apps, and 200 sites
+            - generic [ref=e43]:
+              - text: —
+              - text: New content weekly
+            - text: .
+          - generic [ref=e45]:
+            - link "Join for free" [ref=e47] [cursor=pointer]:
+              - /url: /signup
+              - generic [ref=e49]: Join for free
+            - link "See our plans arrow right icon" [ref=e51] [cursor=pointer]:
+              - /url: /pricing
+              - generic [ref=e52]:
+                - generic [ref=e53]: See our plans
+                - img "arrow right icon" [ref=e55]
+        - generic [ref=e57]:
+          - paragraph [ref=e58]: Trusted by design teams at
+          - generic [ref=e60]:
+            - img [ref=e61]
+            - img [ref=e66]
+            - img [ref=e77]
+            - img [ref=e85]
+            - img [ref=e87]
+            - img [ref=e95]
+            - img [ref=e97]
+      - generic [ref=e111]:
+        - img "Preview image of the product interface" [ref=e113]
+        - img "Preview image of the product interface" [ref=e115]
+      - generic [ref=e117]:
+        - generic:
+          - generic:
+            - generic:
+              - generic:
+                - img "ChatGPT logo"
+            - generic:
+              - generic:
+                - img "Headspace logo"
+            - generic:
+              - generic:
+                - img "Nike logo"
+            - generic:
+              - generic:
+                - img "Dropbox logo"
+            - generic:
+              - generic:
+                - img "Creme logo"
+            - generic:
+              - generic:
+                - img "Cosmos logo"
+            - generic:
+              - generic:
+                - img "Mailchimp logo"
+            - generic:
+              - generic:
+                - img "Airbnb logo"
+            - generic:
+              - generic:
+                - img "Retro logo"
+            - generic:
+              - generic:
+                - img "Twitch logo"
+            - generic:
+              - generic:
+                - img "Wise logo"
+            - generic:
+              - generic:
+                - img "Apple TV logo"
+        - heading "A growing library of 1,150 apps 599,800 screens 320,000 flows" [level=2] [ref=e119]:
+          - generic [ref=e120]: A growing library of
+          - generic [ref=e121]:
+            - generic [ref=e123]: 1,150 apps
+            - generic [ref=e125]: 599,800 screens
+            - generic [ref=e127]: 320,000 flows
+      - generic [ref=e128]:
+        - heading "Find design patterns in seconds." [level=2] [ref=e129]
+        - radiogroup [ref=e131]:
+          - radio "Screens" [checked] [ref=e132] [cursor=pointer]
+          - radio "UI Elements" [ref=e133] [cursor=pointer]
+          - radio "Flows" [ref=e134] [cursor=pointer]
+          - radio "Text in Screenshot" [ref=e135] [cursor=pointer]
+        - generic [ref=e139]:
+          - figure "Profile" [ref=e140]:
+            - generic [ref=e141]: Profile
+            - img "Profile" [ref=e143]
+          - figure "Wallet" [ref=e144]:
+            - generic [ref=e145]: Wallet
+            - img "Wallet" [ref=e147]
+          - figure "Welcome" [ref=e148]:
+            - generic [ref=e149]: Welcome
+            - img "Welcome" [ref=e151]
+          - figure "Account Setup" [ref=e152]:
+            - generic [ref=e153]: Account Setup
+            - img "Account Setup" [ref=e155]
+          - figure "Home" [ref=e156]:
+            - generic [ref=e157]: Home
+            - img "Home" [ref=e159]
+          - figure "Subscription & Paywall" [ref=e160]:
+            - generic [ref=e161]: Subscription & Paywall
+            - img "Subscription & Paywall" [ref=e163]
+          - figure "Login" [ref=e164]:
+            - generic [ref=e165]: Login
+            - img "Login" [ref=e167]
+          - figure "Settings" [ref=e168]:
+            - generic [ref=e169]: Settings
+            - img "Settings" [ref=e171]
+          - figure "Checkout" [ref=e172]:
+            - generic [ref=e173]: Checkout
+            - img "Checkout" [ref=e175]
+          - figure "Collections" [ref=e176]:
+            - generic [ref=e177]: Collections
+            - img "Collections" [ref=e179]
+          - figure "Profile" [ref=e180]:
+            - generic [ref=e181]: Profile
+            - img "Profile" [ref=e183]
+          - figure "Wallet" [ref=e184]:
+            - generic [ref=e185]: Wallet
+            - img "Wallet" [ref=e187]
+          - figure "Welcome" [ref=e188]:
+            - generic [ref=e189]: Welcome
+            - img "Welcome" [ref=e191]
+          - figure "Account Setup" [ref=e192]:
+            - generic [ref=e193]: Account Setup
+            - img "Account Setup" [ref=e195]
+          - figure "Home" [ref=e196]:
+            - generic [ref=e197]: Home
+            - img "Home" [ref=e199]
+          - figure "Subscription & Paywall" [ref=e200]:
+            - generic [ref=e201]: Subscription & Paywall
+            - img "Subscription & Paywall" [ref=e203]
+          - figure "Login" [ref=e204]:
+            - generic [ref=e205]: Login
+            - img "Login" [ref=e207]
+          - figure "Settings" [ref=e208]:
+            - generic [ref=e209]: Settings
+            - img "Settings" [ref=e211]
+          - figure "Checkout" [ref=e212]:
+            - generic [ref=e213]: Checkout
+            - img "Checkout" [ref=e215]
+          - figure "Collections" [ref=e216]:
+            - generic [ref=e217]: Collections
+            - img "Collections" [ref=e219]
+      - generic [ref=e220]:
+        - heading "Explore entire user journeys with flows." [level=2] [ref=e221]
+        - generic [ref=e222]:
+          - figure "Videos Experience flows the way they were meant to be experienced, complete with transitions, micro-interactions, and animations." [ref=e223]:
+            - generic [ref=e227]:
+              - paragraph [ref=e228]: Videos
+              - paragraph [ref=e229]: Experience flows the way they were meant to be experienced, complete with transitions, micro-interactions, and animations.
+          - figure "Prototype mode Walk through flows, step by step, by using the interactive hotspots at your own preferred pace." [ref=e230]:
+            - generic [ref=e234]:
+              - paragraph [ref=e235]: Prototype mode
+              - paragraph [ref=e236]: Walk through flows, step by step, by using the interactive hotspots at your own preferred pace.
+      - generic [ref=e237]:
+        - heading "From inspiration to creation." [level=2] [ref=e238]
+        - generic [ref=e239]:
+          - figure "Copy to Figma Download designs you like or copy it straight into Figma with our new Figma plugin." [ref=e240]:
+            - generic [ref=e243]:
+              - paragraph [ref=e244]: Copy to Figma
+              - paragraph [ref=e245]:
+                - generic [ref=e246]:
+                  - text: Download designs you like or copy it straight into Figma with our new
+                  - link "Figma plugin" [ref=e247] [cursor=pointer]:
+                    - /url: https://www.figma.com/community/plugin/1332649462188834894/mobbin
+                  - text: .
+          - figure "Save to collections Collect your favorite designs and upload your own screenshots into one place." [ref=e248]:
+            - generic [ref=e251]:
+              - paragraph [ref=e252]: Save to collections
+              - paragraph [ref=e253]:
+                - generic [ref=e254]: Collect your favorite designs and upload your own screenshots into one place.
+          - figure "Leave comments Take notes upon saving so you’ll never forget the context in the future." [ref=e255]:
+            - generic [ref=e258]:
+              - paragraph [ref=e259]: Leave comments
+              - paragraph [ref=e260]:
+                - generic [ref=e261]: Take notes upon saving so you’ll never forget the context in the future.
+      - generic [ref=e262]:
+        - heading "What our users are saying." [level=2] [ref=e263]
+        - generic [ref=e265]:
+          - figure "Avatar of Sebastian Speier Shop logo Sebastian Speier Shop" [ref=e266]:
+            - generic [ref=e267]:
+              - generic [ref=e268]:
+                - img "Avatar of Sebastian Speier" [ref=e269]
+                - img "Shop logo" [ref=e271]
+              - generic [ref=e272]:
+                - paragraph [ref=e273]: Sebastian Speier
+                - paragraph [ref=e274]: Shop
+            - blockquote [ref=e275]: Mobbin is a great resource and it always comes in handy to see what the best practices or standards are for mobile patterns in our current landscape.
+          - figure "Avatar of Taha Hossain Daybreak logo Taha Hossain Daybreak" [ref=e276]:
+            - generic [ref=e277]:
+              - generic [ref=e278]:
+                - img "Avatar of Taha Hossain" [ref=e279]
+                - img "Daybreak logo" [ref=e281]
+              - generic [ref=e282]:
+                - paragraph [ref=e283]: Taha Hossain
+                - paragraph [ref=e284]: Daybreak
+            - blockquote [ref=e285]: We can’t imagine a product design process without Mobbin. The quality, clarity and precision it provides make it just as valuable as it is intuitive.
+          - figure "Avatar of Josiah Gulden Compound Labs logo Josiah Gulden Compound Labs" [ref=e286]:
+            - generic [ref=e287]:
+              - generic [ref=e288]:
+                - img "Avatar of Josiah Gulden" [ref=e289]
+                - img "Compound Labs logo" [ref=e291]
+              - generic [ref=e292]:
+                - paragraph [ref=e293]: Josiah Gulden
+                - paragraph [ref=e294]: Compound Labs
+            - blockquote [ref=e295]: Mobbin is one of the best ways to stay on top of the latest patterns, modalities, and visual trends in mobile product design... it’s an essential resource for my team.
+          - figure "Avatar of Meng To DesignCode logo Meng To DesignCode" [ref=e296]:
+            - generic [ref=e297]:
+              - generic [ref=e298]:
+                - img "Avatar of Meng To" [ref=e299]
+                - img "DesignCode logo" [ref=e301]
+              - generic [ref=e302]:
+                - paragraph [ref=e303]: Meng To
+                - paragraph [ref=e304]: DesignCode
+            - blockquote [ref=e305]: Mobbin is a game-changer for designers looking to step up their understanding of UX and UI design patterns. It’s so massive, meticulously organized, has deep user flows and even a figma plugin! It’s indispensable in the modern designer’s toolbox.
+          - figure "Avatar of Haerin Song Visa logo Haerin Song Visa" [ref=e306]:
+            - generic [ref=e307]:
+              - generic [ref=e308]:
+                - img "Avatar of Haerin Song" [ref=e309]
+                - img "Visa logo" [ref=e311]
+              - generic [ref=e312]:
+                - paragraph [ref=e313]: Haerin Song
+                - paragraph [ref=e314]: Visa
+            - blockquote [ref=e315]: By using the Mobbin app, I save both my research time and space in my photo galleries filled with random screenshots. I love how easy it is to search for different patterns and copy and paste flows into Figma. It is a wonderful design tool you cannot live without!
+          - figure "Avatar of Oykun Yilmaz Oykun Yilmaz" [ref=e316]:
+            - generic [ref=e317]:
+              - img "Avatar of Oykun Yilmaz" [ref=e319]
+              - paragraph [ref=e321]: Oykun Yilmaz
+            - blockquote [ref=e322]: Designing feasible solutions based on real-world products is crucial for our design careers. Mobbin provides the best resources for this approach. I use it daily!
+          - figure "Avatar of Marco Cornacchia Figma logo Marco Cornacchia Figma" [ref=e323]:
+            - generic [ref=e324]:
+              - generic [ref=e325]:
+                - img "Avatar of Marco Cornacchia" [ref=e326]
+                - img "Figma logo" [ref=e328]
+              - generic [ref=e329]:
+                - paragraph [ref=e330]: Marco Cornacchia
+                - paragraph [ref=e331]: Figma
+            - blockquote [ref=e332]: Mobbin is one of my favorite resources for product design and ui inspo. I love having access to a ton of “real world examples” to see how different apps and companies handle specific UI patterns and flows.
+          - figure "Avatar of John Bai Plaid logo John Bai Plaid" [ref=e333]:
+            - generic [ref=e334]:
+              - generic [ref=e335]:
+                - img "Avatar of John Bai" [ref=e336]
+                - img "Plaid logo" [ref=e338]
+              - generic [ref=e339]:
+                - paragraph [ref=e340]: John Bai
+                - paragraph [ref=e341]: Plaid
+            - blockquote [ref=e342]: All my homies love Mobbin. I mean that. I finally deleted that folder of 1,866 unorganized screenshots and haven’t looked back since. Shoutout to Jiho and the team for doing God’s work.
+          - figure "Avatar of Rachel How Rachel How" [ref=e343]:
+            - generic [ref=e344]:
+              - img "Avatar of Rachel How" [ref=e346]
+              - paragraph [ref=e348]: Rachel How
+            - blockquote [ref=e349]: Mobbin is my go-to reference for app & web design. Apart from saving countless hours, it gives me insights on the design patterns, copywriting, and user flows of world-class products. A must-have for creative inspiration and efficiency!
+          - figure "Avatar of Daryl Ginn Endless logo Daryl Ginn Endless" [ref=e350]:
+            - generic [ref=e351]:
+              - generic [ref=e352]:
+                - img "Avatar of Daryl Ginn" [ref=e353]
+                - img "Endless logo" [ref=e355]
+              - generic [ref=e356]:
+                - paragraph [ref=e357]: Daryl Ginn
+                - paragraph [ref=e358]: Endless
+            - blockquote [ref=e359]: Mobbin has quickly become our favourite inspiration resource for designing mobile apps at endless.design, their advanced filtering is unmatched in the inspiration space.
+          - figure "Avatar of Axel Lindmarker Light logo Axel Lindmarker Light" [ref=e360]:
+            - generic [ref=e361]:
+              - generic [ref=e362]:
+                - img "Avatar of Axel Lindmarker" [ref=e363]
+                - img "Light logo" [ref=e365]
+              - generic [ref=e366]:
+                - paragraph [ref=e367]: Axel Lindmarker
+                - paragraph [ref=e368]: Light
+            - blockquote [ref=e369]: Mobbin is one of my main tools for finding flows to gain UX and UI insights from. Going there saves me a lot of time from having to do it myself.
+          - figure "Avatar of Bobby Giangeruso Heart Hands, Inc logo Bobby Giangeruso Heart Hands, Inc" [ref=e370]:
+            - generic [ref=e371]:
+              - generic [ref=e372]:
+                - img "Avatar of Bobby Giangeruso" [ref=e373]
+                - img "Heart Hands, Inc logo" [ref=e375]
+              - generic [ref=e376]:
+                - paragraph [ref=e377]: Bobby Giangeruso
+                - paragraph [ref=e378]: Heart Hands, Inc
+            - blockquote [ref=e379]: Mobbin is one of those tabs I never close. It’s the largest up-to-date library of app screens.
+      - generic [ref=e380]:
+        - heading "Never run out of inspiration again." [level=2] [ref=e381]
+        - paragraph [ref=e382]: Use Mobbin for free as long as you like or get full access with any of our paid plans.
+        - generic [ref=e384]:
+          - link "Join for free" [ref=e385] [cursor=pointer]:
+            - /url: /signup
+            - generic [ref=e387]: Join for free
+          - link "See our plans arrow right icon" [ref=e388] [cursor=pointer]:
+            - /url: /pricing
+            - generic [ref=e389]:
+              - generic [ref=e390]: See our plans
+              - img "arrow right icon" [ref=e392]
+        - generic [ref=e395]:
+          - generic [ref=e396]:
+            - generic [ref=e398]:
+              - generic [ref=e399]:
+                - img "Coinbase logo" [ref=e401]
+                - paragraph [ref=e402]: Coinbase
+              - generic [ref=e403]:
+                - img "Wise logo" [ref=e405]
+                - paragraph [ref=e406]: Wise
+              - generic [ref=e407]:
+                - img "Headspace logo" [ref=e409]
+                - paragraph [ref=e410]: Headspace
+              - generic [ref=e411]:
+                - img "Airbnb logo" [ref=e413]
+                - paragraph [ref=e414]: Airbnb
+              - generic [ref=e415]:
+                - img "Uber logo" [ref=e417]
+                - paragraph [ref=e418]: Uber
+              - generic [ref=e419]:
+                - img "Nike logo" [ref=e421]
+                - paragraph [ref=e422]: Nike
+              - generic [ref=e423]:
+                - img "Pinterest logo" [ref=e425]
+                - paragraph [ref=e426]: Pinterest
+            - generic [ref=e428]:
+              - generic [ref=e429]:
+                - img "Coinbase logo" [ref=e431]
+                - paragraph [ref=e432]: Coinbase
+              - generic [ref=e433]:
+                - img "Wise logo" [ref=e435]
+                - paragraph [ref=e436]: Wise
+              - generic [ref=e437]:
+                - img "Headspace logo" [ref=e439]
+                - paragraph [ref=e440]: Headspace
+              - generic [ref=e441]:
+                - img "Airbnb logo" [ref=e443]
+                - paragraph [ref=e444]: Airbnb
+              - generic [ref=e445]:
+                - img "Uber logo" [ref=e447]
+                - paragraph [ref=e448]: Uber
+              - generic [ref=e449]:
+                - img "Nike logo" [ref=e451]
+                - paragraph [ref=e452]: Nike
+              - generic [ref=e453]:
+                - img "Pinterest logo" [ref=e455]
+                - paragraph [ref=e456]: Pinterest
+          - generic [ref=e457]:
+            - generic [ref=e459]:
+              - generic [ref=e460]:
+                - img "ChatGPT logo" [ref=e462]
+                - paragraph [ref=e463]: ChatGPT
+              - generic [ref=e464]:
+                - img "Shopify logo" [ref=e466]
+                - paragraph [ref=e467]: Shopify
+              - generic [ref=e468]:
+                - img "Loom logo" [ref=e470]
+                - paragraph [ref=e471]: Loom
+              - generic [ref=e472]:
+                - img "Creme logo" [ref=e474]
+                - paragraph [ref=e475]: Creme
+              - generic [ref=e476]:
+                - img "Mailchimp logo" [ref=e478]
+                - paragraph [ref=e479]: Mailchimp
+              - generic [ref=e480]:
+                - img "Twitch logo" [ref=e482]
+                - paragraph [ref=e483]: Twitch
+            - generic [ref=e485]:
+              - generic [ref=e486]:
+                - img "ChatGPT logo" [ref=e488]
+                - paragraph [ref=e489]: ChatGPT
+              - generic [ref=e490]:
+                - img "Shopify logo" [ref=e492]
+                - paragraph [ref=e493]: Shopify
+              - generic [ref=e494]:
+                - img "Loom logo" [ref=e496]
+                - paragraph [ref=e497]: Loom
+              - generic [ref=e498]:
+                - img "Creme logo" [ref=e500]
+                - paragraph [ref=e501]: Creme
+              - generic [ref=e502]:
+                - img "Mailchimp logo" [ref=e504]
+                - paragraph [ref=e505]: Mailchimp
+              - generic [ref=e506]:
+                - img "Twitch logo" [ref=e508]
+                - paragraph [ref=e509]: Twitch
+          - generic [ref=e510]:
+            - generic [ref=e512]:
+              - generic [ref=e513]:
+                - img "Spotify logo" [ref=e515]
+                - paragraph [ref=e516]: Spotify
+              - generic [ref=e517]:
+                - img "Apple TV logo" [ref=e519]
+                - paragraph [ref=e520]: Apple TV
+              - generic [ref=e521]:
+                - img "Shop logo" [ref=e523]
+                - paragraph [ref=e524]: Shop
+              - generic [ref=e525]:
+                - img "Cosmos logo" [ref=e527]
+                - paragraph [ref=e528]: Cosmos
+              - generic [ref=e529]:
+                - img "Retro logo" [ref=e531]
+                - paragraph [ref=e532]: Retro
+              - generic [ref=e533]:
+                - img "Notion logo" [ref=e535]
+                - paragraph [ref=e536]: Notion
+              - generic [ref=e537]:
+                - img "Dropbox logo" [ref=e539]
+                - paragraph [ref=e540]: Dropbox
+            - generic [ref=e542]:
+              - generic [ref=e543]:
+                - img "Spotify logo" [ref=e545]
+                - paragraph [ref=e546]: Spotify
+              - generic [ref=e547]:
+                - img "Apple TV logo" [ref=e549]
+                - paragraph [ref=e550]: Apple TV
+              - generic [ref=e551]:
+                - img "Shop logo" [ref=e553]
+                - paragraph [ref=e554]: Shop
+              - generic [ref=e555]:
+                - img "Cosmos logo" [ref=e557]
+                - paragraph [ref=e558]: Cosmos
+              - generic [ref=e559]:
+                - img "Retro logo" [ref=e561]
+                - paragraph [ref=e562]: Retro
+              - generic [ref=e563]:
+                - img "Notion logo" [ref=e565]
+                - paragraph [ref=e566]: Notion
+              - generic [ref=e567]:
+                - img "Dropbox logo" [ref=e569]
+                - paragraph [ref=e570]: Dropbox
+    - contentinfo [ref=e571]:
+      - generic [ref=e572]:
+        - generic [ref=e573]:
+          - img "Mobbin" [ref=e574]
+          - paragraph [ref=e576]: Design better digital experiences with Mobbin.
+        - generic [ref=e577]:
+          - generic [ref=e578]:
+            - link "Explore" [ref=e579] [cursor=pointer]:
+              - /url: /explore
+            - link "Glossary" [ref=e580] [cursor=pointer]:
+              - /url: /glossary
+            - link "Pricing" [ref=e581] [cursor=pointer]:
+              - /url: /pricing
+            - link "Changelog" [ref=e582] [cursor=pointer]:
+              - /url: /changelog
+            - link "Blog" [ref=e583] [cursor=pointer]:
+              - /url: /blog
+            - link "Colors" [ref=e584] [cursor=pointer]:
+              - /url: /colors
+          - generic [ref=e585]:
+            - link "Contact" [ref=e586] [cursor=pointer]:
+              - /url: mailto:support@mobbin.com
+            - link "Help center" [ref=e587] [cursor=pointer]:
+              - /url: https://help.mobbin.com
+            - link "Careers" [ref=e588] [cursor=pointer]:
+              - /url: https://careers.mobbin.com
+            - link "Merch" [ref=e589] [cursor=pointer]:
+              - /url: https://merch.mobbin.com
+            - link "X (Twitter)" [ref=e590] [cursor=pointer]:
+              - /url: https://x.com/mobbin
+            - link "LinkedIn" [ref=e591] [cursor=pointer]:
+              - /url: https://linkedin.com/company/mobbin
+        - paragraph [ref=e592]: © Mobbin 2018–2026. All rights reserved
+        - generic [ref=e593]:
+          - link "Privacy policy" [ref=e594] [cursor=pointer]:
+            - /url: /privacy
+          - link "Terms" [ref=e595] [cursor=pointer]:
+            - /url: /terms
+  - region "Notifications alt+T"
+  - alert [ref=e596]

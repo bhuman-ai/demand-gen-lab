@@ -2,9 +2,9 @@
 
 import Link from "next/link";
 import { useState } from "react";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { PageIntro, SectionPanel } from "@/components/ui/page-layout";
 
 export default function LogicPage() {
   const [brandId] = useState(() =>
@@ -12,13 +12,15 @@ export default function LogicPage() {
   );
 
   return (
-    <div className="space-y-5">
-      <Card>
-        <CardHeader>
-          <CardTitle>Logic</CardTitle>
-          <CardDescription>Tools: automation logic and execution guardrails.</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-3">
+    <div className="space-y-8">
+      <PageIntro
+        eyebrow="System / logic"
+        title="Keep automation rules close to the work they govern."
+        description="Sequencing rules, guardrails, and campaign conditions should feel like part of the operating desk, not a detached utility panel."
+      />
+
+      <SectionPanel title="Logic desk" description="Automation rules and the current active brand context.">
+        <div className="space-y-3">
           <Badge variant="muted">Active brand context: {brandId || "none selected"}</Badge>
           <p className="text-sm text-[color:var(--muted-foreground)]">
             Use this tool surface for sequencing rules, guardrails, and cross-campaign conditions.
@@ -32,8 +34,8 @@ export default function LogicPage() {
               <Link href="/brands">Select Brand</Link>
             </Button>
           )}
-        </CardContent>
-      </Card>
+        </div>
+      </SectionPanel>
     </div>
   );
 }

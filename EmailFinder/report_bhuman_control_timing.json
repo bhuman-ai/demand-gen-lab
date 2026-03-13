@@ -1,0 +1,480 @@
+{
+  "benchmark": {
+    "loader": {
+      "case_count": 2,
+      "ignored": [],
+      "reason": null
+    },
+    "result": {
+      "case_count": 2,
+      "cases": [
+        {
+          "attempts": [
+            {
+              "attempt": 1,
+              "ehlo_code": 250,
+              "email": "don@bhuman.ai",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439b9ea47f5si5497779f8f.536 - gsmtp",
+              "mx_host": "smtp.google.com",
+              "smtp_code": 250,
+              "smtp_message": "2.1.5 OK ffacd0b85a97d-439b9ea47f5si5497779f8f.536 - gsmtp",
+              "status": "accepted",
+              "timings_ms": {
+                "connect": 135.56,
+                "ehlo": 49.9,
+                "mail_from": 46.12,
+                "rcpt_to": 126.88,
+                "total": 358.49
+              }
+            },
+            {
+              "attempt": 2,
+              "ehlo_code": 250,
+              "email": "don@bhuman.ai",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439bb6ab411si5122381f8f.422 - gsmtp",
+              "mx_host": "smtp.google.com",
+              "smtp_code": 250,
+              "smtp_message": "2.1.5 OK ffacd0b85a97d-439bb6ab411si5122381f8f.422 - gsmtp",
+              "status": "accepted",
+              "timings_ms": {
+                "connect": 103.16,
+                "ehlo": 50.32,
+                "mail_from": 48.22,
+                "rcpt_to": 107.57,
+                "total": 309.29
+              }
+            },
+            {
+              "attempt": 3,
+              "ehlo_code": 250,
+              "email": "don@bhuman.ai",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439b5a16810si9668335f8f.204 - gsmtp",
+              "mx_host": "smtp.google.com",
+              "smtp_code": 250,
+              "smtp_message": "2.1.5 OK ffacd0b85a97d-439b5a16810si9668335f8f.204 - gsmtp",
+              "status": "accepted",
+              "timings_ms": {
+                "connect": 95.89,
+                "ehlo": 48.82,
+                "mail_from": 46.49,
+                "rcpt_to": 101.16,
+                "total": 292.37
+              }
+            },
+            {
+              "attempt": 4,
+              "ehlo_code": 250,
+              "email": "don@bhuman.ai",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439b78d84ffsi7829071f8f.370 - gsmtp",
+              "mx_host": "smtp.google.com",
+              "smtp_code": 250,
+              "smtp_message": "2.1.5 OK ffacd0b85a97d-439b78d84ffsi7829071f8f.370 - gsmtp",
+              "status": "accepted",
+              "timings_ms": {
+                "connect": 95.89,
+                "ehlo": 48.76,
+                "mail_from": 46.5,
+                "rcpt_to": 102.21,
+                "total": 293.37
+              }
+            },
+            {
+              "attempt": 5,
+              "ehlo_code": 250,
+              "email": "don@bhuman.ai",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439af482bd1si13244828f8f.405 - gsmtp",
+              "mx_host": "smtp.google.com",
+              "smtp_code": 250,
+              "smtp_message": "2.1.5 OK ffacd0b85a97d-439af482bd1si13244828f8f.405 - gsmtp",
+              "status": "accepted",
+              "timings_ms": {
+                "connect": 101.54,
+                "ehlo": 49.21,
+                "mail_from": 47.04,
+                "rcpt_to": 109.38,
+                "total": 307.19
+              }
+            },
+            {
+              "attempt": 6,
+              "ehlo_code": 250,
+              "email": "don@bhuman.ai",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439b11fb76asi12274844f8f.86 - gsmtp",
+              "mx_host": "smtp.google.com",
+              "smtp_code": 250,
+              "smtp_message": "2.1.5 OK ffacd0b85a97d-439b11fb76asi12274844f8f.86 - gsmtp",
+              "status": "accepted",
+              "timings_ms": {
+                "connect": 99.11,
+                "ehlo": 52.54,
+                "mail_from": 48.01,
+                "rcpt_to": 102.85,
+                "total": 302.52
+              }
+            },
+            {
+              "attempt": 7,
+              "ehlo_code": 250,
+              "email": "don@bhuman.ai",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439ae052eafsi14241549f8f.158 - gsmtp",
+              "mx_host": "smtp.google.com",
+              "smtp_code": 250,
+              "smtp_message": "2.1.5 OK ffacd0b85a97d-439ae052eafsi14241549f8f.158 - gsmtp",
+              "status": "accepted",
+              "timings_ms": {
+                "connect": 101.26,
+                "ehlo": 49.67,
+                "mail_from": 47.41,
+                "rcpt_to": 105.53,
+                "total": 303.88
+              }
+            },
+            {
+              "attempt": 8,
+              "ehlo_code": 250,
+              "email": "don@bhuman.ai",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439be82cd9esi2173378f8f.529 - gsmtp",
+              "mx_host": "smtp.google.com",
+              "smtp_code": 250,
+              "smtp_message": "2.1.5 OK ffacd0b85a97d-439be82cd9esi2173378f8f.529 - gsmtp",
+              "status": "accepted",
+              "timings_ms": {
+                "connect": 101.3,
+                "ehlo": 51.46,
+                "mail_from": 46.78,
+                "rcpt_to": 111.65,
+                "total": 311.21
+              }
+            }
+          ],
+          "domain": "bhuman.ai",
+          "email": "don@bhuman.ai",
+          "label": "known_real",
+          "mx_records": [
+            {
+              "host": "smtp.google.com",
+              "priority": 1
+            }
+          ],
+          "summary": {
+            "connect_timing_ms": {
+              "count": 8,
+              "max_ms": 135.56,
+              "mean_ms": 104.21,
+              "median_ms": 101.28,
+              "min_ms": 95.89
+            },
+            "rcpt_timing_ms": {
+              "count": 8,
+              "max_ms": 126.88,
+              "mean_ms": 108.4,
+              "median_ms": 106.55,
+              "min_ms": 101.16
+            },
+            "smtp_code_counts": {
+              "250": 8
+            },
+            "stage": "completed",
+            "status_counts": {
+              "accepted": 8
+            },
+            "total_timing_ms": {
+              "count": 8,
+              "max_ms": 358.49,
+              "mean_ms": 309.79,
+              "median_ms": 305.53,
+              "min_ms": 292.37
+            }
+          }
+        },
+        {
+          "attempts": [
+            {
+              "attempt": 1,
+              "ehlo_code": 250,
+              "email": "x7v3q9p2k6m1@bhuman.ai",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439b625685fsi8787283f8f.456 - gsmtp",
+              "mx_host": "smtp.google.com",
+              "smtp_code": 550,
+              "smtp_message": "5.1.1 The email account that you tried to reach does not exist. Please try\n5.1.1 double-checking the recipient's email address for typos or\n5.1.1 unnecessary spaces. For more information, go to\n5.1.1  https://support.google.com/mail/?p=NoSuchUser ffacd0b85a97d-439b625685fsi8787283f8f.456 - gsmtp",
+              "status": "rejected",
+              "timings_ms": {
+                "connect": 220.12,
+                "ehlo": 206.17,
+                "mail_from": 248.04,
+                "rcpt_to": 160.18,
+                "total": 834.54
+              }
+            },
+            {
+              "attempt": 2,
+              "ehlo_code": 250,
+              "email": "x7v3q9p2k6m1@bhuman.ai",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439b1b4342esi11443156f8f.91 - gsmtp",
+              "mx_host": "smtp.google.com",
+              "smtp_code": 550,
+              "smtp_message": "5.1.1 The email account that you tried to reach does not exist. Please try\n5.1.1 double-checking the recipient's email address for typos or\n5.1.1 unnecessary spaces. For more information, go to\n5.1.1  https://support.google.com/mail/?p=NoSuchUser ffacd0b85a97d-439b1b4342esi11443156f8f.91 - gsmtp",
+              "status": "rejected",
+              "timings_ms": {
+                "connect": 94.48,
+                "ehlo": 48.24,
+                "mail_from": 46.06,
+                "rcpt_to": 57.25,
+                "total": 246.04
+              }
+            },
+            {
+              "attempt": 3,
+              "ehlo_code": 250,
+              "email": "x7v3q9p2k6m1@bhuman.ai",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439af9440ecsi11984482f8f.524 - gsmtp",
+              "mx_host": "smtp.google.com",
+              "smtp_code": 550,
+              "smtp_message": "5.1.1 The email account that you tried to reach does not exist. Please try\n5.1.1 double-checking the recipient's email address for typos or\n5.1.1 unnecessary spaces. For more information, go to\n5.1.1  https://support.google.com/mail/?p=NoSuchUser ffacd0b85a97d-439af9440ecsi11984482f8f.524 - gsmtp",
+              "status": "rejected",
+              "timings_ms": {
+                "connect": 96.08,
+                "ehlo": 48.1,
+                "mail_from": 47.23,
+                "rcpt_to": 58.35,
+                "total": 249.77
+              }
+            },
+            {
+              "attempt": 4,
+              "ehlo_code": 250,
+              "email": "x7v3q9p2k6m1@bhuman.ai",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439b4ecb454si10146629f8f.142 - gsmtp",
+              "mx_host": "smtp.google.com",
+              "smtp_code": 550,
+              "smtp_message": "5.1.1 The email account that you tried to reach does not exist. Please try\n5.1.1 double-checking the recipient's email address for typos or\n5.1.1 unnecessary spaces. For more information, go to\n5.1.1  https://support.google.com/mail/?p=NoSuchUser ffacd0b85a97d-439b4ecb454si10146629f8f.142 - gsmtp",
+              "status": "rejected",
+              "timings_ms": {
+                "connect": 96.52,
+                "ehlo": 50.33,
+                "mail_from": 46.36,
+                "rcpt_to": 58.96,
+                "total": 252.18
+              }
+            },
+            {
+              "attempt": 5,
+              "ehlo_code": 250,
+              "email": "x7v3q9p2k6m1@bhuman.ai",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439bce688d2si3944887f8f.477 - gsmtp",
+              "mx_host": "smtp.google.com",
+              "smtp_code": 550,
+              "smtp_message": "5.1.1 The email account that you tried to reach does not exist. Please try\n5.1.1 double-checking the recipient's email address for typos or\n5.1.1 unnecessary spaces. For more information, go to\n5.1.1  https://support.google.com/mail/?p=NoSuchUser ffacd0b85a97d-439bce688d2si3944887f8f.477 - gsmtp",
+              "status": "rejected",
+              "timings_ms": {
+                "connect": 100.22,
+                "ehlo": 48.75,
+                "mail_from": 46.49,
+                "rcpt_to": 57.71,
+                "total": 253.17
+              }
+            },
+            {
+              "attempt": 6,
+              "ehlo_code": 250,
+              "email": "x7v3q9p2k6m1@bhuman.ai",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439c0093a81si510984f8f.398 - gsmtp",
+              "mx_host": "smtp.google.com",
+              "smtp_code": 550,
+              "smtp_message": "5.1.1 The email account that you tried to reach does not exist. Please try\n5.1.1 double-checking the recipient's email address for typos or\n5.1.1 unnecessary spaces. For more information, go to\n5.1.1  https://support.google.com/mail/?p=NoSuchUser ffacd0b85a97d-439c0093a81si510984f8f.398 - gsmtp",
+              "status": "rejected",
+              "timings_ms": {
+                "connect": 101.06,
+                "ehlo": 52.2,
+                "mail_from": 46.63,
+                "rcpt_to": 60.45,
+                "total": 260.35
+              }
+            },
+            {
+              "attempt": 7,
+              "ehlo_code": 250,
+              "email": "x7v3q9p2k6m1@bhuman.ai",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439ae2ac741si13252837f8f.492 - gsmtp",
+              "mx_host": "smtp.google.com",
+              "smtp_code": 550,
+              "smtp_message": "5.1.1 The email account that you tried to reach does not exist. Please try\n5.1.1 double-checking the recipient's email address for typos or\n5.1.1 unnecessary spaces. For more information, go to\n5.1.1  https://support.google.com/mail/?p=NoSuchUser ffacd0b85a97d-439ae2ac741si13252837f8f.492 - gsmtp",
+              "status": "rejected",
+              "timings_ms": {
+                "connect": 103.94,
+                "ehlo": 115.34,
+                "mail_from": 47.57,
+                "rcpt_to": 63.7,
+                "total": 330.55
+              }
+            },
+            {
+              "attempt": 8,
+              "ehlo_code": 250,
+              "email": "x7v3q9p2k6m1@bhuman.ai",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439b9acb561si5927210f8f.221 - gsmtp",
+              "mx_host": "smtp.google.com",
+              "smtp_code": 550,
+              "smtp_message": "5.1.1 The email account that you tried to reach does not exist. Please try\n5.1.1 double-checking the recipient's email address for typos or\n5.1.1 unnecessary spaces. For more information, go to\n5.1.1  https://support.google.com/mail/?p=NoSuchUser ffacd0b85a97d-439b9acb561si5927210f8f.221 - gsmtp",
+              "status": "rejected",
+              "timings_ms": {
+                "connect": 378.77,
+                "ehlo": 163.91,
+                "mail_from": 177.02,
+                "rcpt_to": 172.82,
+                "total": 892.55
+              }
+            }
+          ],
+          "domain": "bhuman.ai",
+          "email": "x7v3q9p2k6m1@bhuman.ai",
+          "label": "random_invalid",
+          "mx_records": [
+            {
+              "host": "smtp.google.com",
+              "priority": 1
+            }
+          ],
+          "summary": {
+            "connect_timing_ms": {
+              "count": 8,
+              "max_ms": 378.77,
+              "mean_ms": 148.9,
+              "median_ms": 100.64,
+              "min_ms": 94.48
+            },
+            "rcpt_timing_ms": {
+              "count": 8,
+              "max_ms": 172.82,
+              "mean_ms": 86.18,
+              "median_ms": 59.7,
+              "min_ms": 57.25
+            },
+            "smtp_code_counts": {
+              "550": 8
+            },
+            "stage": "completed",
+            "status_counts": {
+              "rejected": 8
+            },
+            "total_timing_ms": {
+              "count": 8,
+              "max_ms": 892.55,
+              "mean_ms": 414.89,
+              "median_ms": 256.76,
+              "min_ms": 246.04
+            }
+          }
+        }
+      ],
+      "label_summary": {
+        "known_real": {
+          "attempt_count": 8,
+          "rcpt_timing_ms": {
+            "count": 8,
+            "max_ms": 126.88,
+            "mean_ms": 108.4,
+            "median_ms": 106.55,
+            "min_ms": 101.16
+          },
+          "status_counts": {
+            "accepted": 8
+          },
+          "total_timing_ms": {
+            "count": 8,
+            "max_ms": 358.49,
+            "mean_ms": 309.79,
+            "median_ms": 305.53,
+            "min_ms": 292.37
+          }
+        },
+        "random_invalid": {
+          "attempt_count": 8,
+          "rcpt_timing_ms": {
+            "count": 8,
+            "max_ms": 172.82,
+            "mean_ms": 86.18,
+            "median_ms": 59.7,
+            "min_ms": 57.25
+          },
+          "status_counts": {
+            "rejected": 8
+          },
+          "total_timing_ms": {
+            "count": 8,
+            "max_ms": 892.55,
+            "mean_ms": 414.89,
+            "median_ms": 256.76,
+            "min_ms": 246.04
+          }
+        }
+      },
+      "runs_per_email": 8,
+      "stage": "completed"
+    },
+    "stage": "completed"
+  },
+  "generated_at_utc": "2026-03-02T21:15:20.046168+00:00",
+  "input": {
+    "domain": "",
+    "name": ""
+  },
+  "settings": {
+    "api_consensus_enabled": false,
+    "benchmark_file": "/Users/don/EmailFinder/benchmark_cases.bhuman_control.csv",
+    "benchmark_max_cases": 50,
+    "benchmark_pause_ms": 300,
+    "benchmark_runs": 8,
+    "benchmark_starttls": false,
+    "consensus_delay_ms": 250,
+    "consensus_max_candidates": 6,
+    "consensus_providers": [
+      "hunter",
+      "abstract"
+    ],
+    "doh_enabled": true,
+    "doh_via_curl": false,
+    "from_address": "probe@localhost",
+    "known_emails": [],
+    "max_candidates": 12,
+    "osint_delay_ms": 300,
+    "osint_enabled": false,
+    "osint_max_candidates": 8,
+    "osint_max_results": 6,
+    "pause_ms": 700,
+    "probe_smtp": false,
+    "timeout_seconds": 8.0
+  }
+}

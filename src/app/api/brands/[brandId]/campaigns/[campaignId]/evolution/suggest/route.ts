@@ -38,30 +38,6 @@ function normalizeSuggestions(value: unknown): EvolutionSuggestion[] {
   return rows.slice(0, 6);
 }
 
-function fallbackSuggestions(brandName: string, campaignName: string): EvolutionSuggestion[] {
-  const safeBrand = brandName.trim() || "Brand";
-  const safeCampaign = campaignName.trim() || "Campaign";
-  return [
-    {
-      title: "Week 1 learnings",
-      summary: `Summarize what happened so far for ${safeBrand} / ${safeCampaign}: which ICPs replied, which angle landed, and what to change next.`,
-      status: "observing",
-    },
-    {
-      title: "Promote a winner (if signal is strong)",
-      summary:
-        "If one experiment shows consistently higher positive replies with low bounces/complaints, promote it to Winner and scale slowly (keep caps conservative).",
-      status: "observing",
-    },
-    {
-      title: "Kill low-signal variants",
-      summary:
-        "If an experiment has low replies and high negatives, mark it Killed and replace with a tighter ICP slice or a clearer offer artifact.",
-      status: "observing",
-    },
-  ];
-}
-
 export async function POST(
   _request: Request,
   context: { params: Promise<{ brandId: string; campaignId: string }> }
@@ -82,10 +58,13 @@ export async function POST(
 
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) {
-    return NextResponse.json({
-      suggestions: fallbackSuggestions(brandName, campaign.name),
-      mode: "fallback",
-    });
+    return NextResponse.json(
+      {
+        error: "OPENAI_API_KEY is not configured",
+        hint: "Real-only mode is enabled: fallback evolution suggestions are disabled.",
+      },
+      { status: 503 }
+    );
   }
 
   const idToHypothesis = new Map(campaign.hypotheses.map((h) => [h.id, sanitizeAiText(h.title)]));
@@ -140,10 +119,14 @@ export async function POST(
 
   const raw = await response.text();
   if (!response.ok) {
-    return NextResponse.json({
-      suggestions: fallbackSuggestions(brandName, campaign.name),
-      mode: "fallback",
-    });
+    return NextResponse.json(
+      {
+        error: "evolution suggestion generation failed",
+        hint: "Real-only mode is enabled: fallback evolution suggestions are disabled.",
+        providerStatus: response.status,
+      },
+      { status: 502 }
+    );
   }
 
   let payload: unknown = {};
@@ -170,8 +153,14 @@ export async function POST(
   const parsedRecord = asRecord(parsed);
   const suggestions = normalizeSuggestions(parsedRecord.suggestions);
 
-  return NextResponse.json({
-    suggestions: suggestions.length ? suggestions : fallbackSuggestions(brandName, campaign.name),
-    mode: suggestions.length ? "openai" : "fallback",
-  });
+  if (!suggestions.length) {
+    return NextResponse.json(
+      {
+        error: "evolution suggestion generation returned no usable suggestions",
+        hint: "Real-only mode is enabled: fallback evolution suggestions are disabled.",
+      },
+      { status: 422 }
+    );
+  }
+  return NextResponse.json({ suggestions, mode: "openai" });
 }

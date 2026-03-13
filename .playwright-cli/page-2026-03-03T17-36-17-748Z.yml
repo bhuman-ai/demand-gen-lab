@@ -1,0 +1,129 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e3]:
+    - complementary [ref=e4]:
+      - link "Factory Brand Command" [ref=e5] [cursor=pointer]:
+        - /url: /
+        - generic [ref=e6]: Factory
+        - generic [ref=e7]: Brand Command
+      - navigation [ref=e8]:
+        - link "Experiments" [ref=e9] [cursor=pointer]:
+          - /url: /brands/brand_mlg68b9l/experiments
+          - img [ref=e10]
+          - text: Experiments
+        - link "Campaigns" [ref=e14] [cursor=pointer]:
+          - /url: /brands/brand_mlg68b9l/campaigns
+          - img [ref=e15]
+          - text: Campaigns
+        - link "Network" [ref=e17] [cursor=pointer]:
+          - /url: /brands/brand_mlg68b9l/network
+          - img [ref=e18]
+          - text: Network
+        - link "Leads" [ref=e23] [cursor=pointer]:
+          - /url: /brands/brand_mlg68b9l/leads
+          - img [ref=e24]
+          - text: Leads
+        - link "Inbox" [ref=e27] [cursor=pointer]:
+          - /url: /brands/brand_mlg68b9l/inbox
+          - img [ref=e28]
+          - text: Inbox
+      - generic [ref=e31]:
+        - generic [ref=e32]: Tools
+        - navigation [ref=e33]:
+          - link "Settings" [ref=e34] [cursor=pointer]:
+            - /url: /settings/outreach
+            - img [ref=e35]
+            - text: Settings
+          - link "Logic" [ref=e38] [cursor=pointer]:
+            - /url: /logic
+            - img [ref=e39]
+            - text: Logic
+          - link "Doctor" [ref=e41] [cursor=pointer]:
+            - /url: /doctor
+            - img [ref=e42]
+            - text: Doctor
+    - main [ref=e44]:
+      - generic [ref=e46]:
+        - generic [ref=e47]:
+          - combobox [ref=e50]:
+            - option "BHuman | AI personalized videos at scale" [selected]
+          - generic [ref=e52]: Factory > Brand > Experiments > Experiment
+          - heading "Experiment" [level=1] [ref=e53]
+        - generic [ref=e54]:
+          - link "Settings" [ref=e55] [cursor=pointer]:
+            - /url: /settings/outreach
+            - img [ref=e56]
+            - text: Settings
+          - generic [ref=e59]:
+            - button "Light theme" [ref=e60]:
+              - img [ref=e61]
+            - button "Dark theme" [ref=e67]:
+              - img [ref=e68]
+            - button "System theme" [ref=e70]:
+              - img [ref=e71]
+      - generic [ref=e83]:
+        - generic [ref=e85]:
+          - generic [ref=e86]:
+            - heading "BHuman | AI personalized videos at scale · Abandoned demo signup → 30-sec personal video follow-up" [level=3] [ref=e87]
+            - paragraph [ref=e88]: "Stage-based flow: Setup -> Prospects -> Messaging -> Launch."
+          - generic [ref=e89]:
+            - generic [ref=e90]: "Status: ready"
+            - generic [ref=e91]: "Sent: 0"
+            - generic [ref=e92]: "Replies: 0"
+            - generic [ref=e93]: "Positive: 0"
+        - generic [ref=e94]:
+          - generic [ref=e95]:
+            - heading "Workflow" [level=3] [ref=e96]
+            - paragraph [ref=e97]: Only current stage content is shown below.
+          - generic [ref=e101]:
+            - button "0. Setup done" [ref=e102]:
+              - generic [ref=e103]:
+                - generic [ref=e104]: 0. Setup
+                - generic [ref=e105]: done
+            - button "1. Prospects current" [ref=e155]:
+              - generic [ref=e107]:
+                - generic [ref=e108]: 1. Prospects
+                - generic [ref=e109]: current
+            - button "2. Messaging done" [ref=e110]:
+              - generic [ref=e111]:
+                - generic [ref=e112]: 2. Messaging
+                - generic [ref=e113]: done
+            - button "3. Launch done" [ref=e114]:
+              - generic [ref=e115]:
+                - generic [ref=e116]: 3. Launch
+                - generic [ref=e117]: done
+        - generic [ref=e156]:
+          - generic [ref=e157]:
+            - heading "Stage 1 · Prospects" [level=3] [ref=e158]
+            - paragraph [ref=e159]: "Choose your input path first: bring your own leads, or have the platform source them."
+          - generic [ref=e160]:
+            - generic [ref=e161]:
+              - button "I need data Platform auto-sources qualified prospects." [ref=e162]:
+                - generic [ref=e163]: I need data
+                - generic [ref=e164]: Platform auto-sources qualified prospects.
+              - button "I have data Import CSV leads now (email required)." [ref=e165]:
+                - generic [ref=e166]: I have data
+                - generic [ref=e167]: Import CSV leads now (email required).
+            - generic [ref=e168]:
+              - button "Source Prospects" [ref=e170]:
+                - img [ref=e171]
+                - text: Source Prospects
+              - generic [ref=e176]: One click runs multiple sourcing attempts automatically until 20 quality leads are accepted, or a stop condition is reached.
+            - generic [ref=e177]:
+              - generic [ref=e178]: 0/20 leads
+              - generic [ref=e179]: "Runs checked: 1"
+              - generic [ref=e180]: "Owner: expt_bf7ab31d5ac44d91"
+            - generic [ref=e181]: Prospect validation not passed yet. Need at least 20 quality leads.
+            - generic [ref=e182]: No sample leads yet.
+            - generic [ref=e183]:
+              - generic [ref=e184]: Sourcing Trace
+              - generic [ref=e185]: No sourcing decision yet.
+        - generic [ref=e149]:
+          - generic [ref=e150]: Stage 1 · Prospects
+          - generic [ref=e151]:
+            - button "Back" [ref=e186]:
+              - img [ref=e187]
+              - text: Back
+            - button "Next" [disabled]:
+              - text: Next
+              - img
+  - alert [ref=e84]

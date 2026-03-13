@@ -1,0 +1,50 @@
+{
+  "events": [
+    {
+      "domain": "bhuman.ai",
+      "email": "don@bhuman.ai",
+      "event_id": "out_1772544692719_3910",
+      "metadata": {},
+      "observed_at": null,
+      "recorded_at": "2026-03-03T13:31:32.718860+00:00",
+      "result": "delivered"
+    },
+    {
+      "domain": "bhuman.ai",
+      "email": "don.bosco@bhuman.ai",
+      "event_id": "out_1772544692719_2822",
+      "metadata": {},
+      "observed_at": null,
+      "recorded_at": "2026-03-03T13:31:32.718860+00:00",
+      "result": "hard_bounce"
+    },
+    {
+      "domain": "example.com",
+      "email": "test@example.com",
+      "event_id": "out_1772544858539_4475",
+      "metadata": {},
+      "observed_at": null,
+      "recorded_at": "2026-03-03T13:34:18.539270+00:00",
+      "result": "delivered"
+    },
+    {
+      "domain": "example.com",
+      "email": "ops@example.com",
+      "event_id": "out_1772544868481_1120",
+      "metadata": {},
+      "observed_at": null,
+      "recorded_at": "2026-03-03T13:34:28.481687+00:00",
+      "result": "soft_bounce"
+    },
+    {
+      "domain": "example.com",
+      "email": "test@example.com",
+      "event_id": "out_1772544924729_1744",
+      "metadata": {},
+      "observed_at": null,
+      "recorded_at": "2026-03-03T13:35:24.729911+00:00",
+      "result": "delivered"
+    }
+  ],
+  "version": 1
+}

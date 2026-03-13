@@ -2,13 +2,24 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { approveReplyDraftAndSend, fetchInboxThreads } from "@/lib/client-api";
 import { trackEvent } from "@/lib/telemetry-client";
 import type { BrandRecord, ReplyDraft, ReplyThread } from "@/lib/factory-types";
+import {
+  EmptyState,
+  PageIntro,
+  SectionPanel,
+  StatLedger,
+  TableHeaderCell,
+  TableShell,
+} from "@/components/ui/page-layout";
+
+function formatCount(value: number) {
+  return value.toString().padStart(2, "0");
+}
 
 export default function InboxClient({ brand }: { brand: BrandRecord }) {
   const [threads, setThreads] = useState<ReplyThread[]>([]);
@@ -64,31 +75,22 @@ export default function InboxClient({ brand }: { brand: BrandRecord }) {
   const draftQueueCount = drafts.filter((item) => item.status === "draft").length;
 
   return (
-    <div className="space-y-5">
-      <Card>
-        <CardHeader>
-          <CardTitle>Inbox</CardTitle>
-          <CardDescription>Reply management and human-approved sending for {brand.name}.</CardDescription>
-        </CardHeader>
-        <CardContent className="grid gap-3 md:grid-cols-4">
-          <div>
-            <div className="text-xs text-[color:var(--muted-foreground)]">Threads</div>
-            <div className="text-lg font-semibold">{threads.length}</div>
-          </div>
-          <div>
-            <div className="text-xs text-[color:var(--muted-foreground)]">Open</div>
-            <div className="text-lg font-semibold">{openCount}</div>
-          </div>
-          <div>
-            <div className="text-xs text-[color:var(--muted-foreground)]">Positive</div>
-            <div className="text-lg font-semibold">{positiveCount}</div>
-          </div>
-          <div>
-            <div className="text-xs text-[color:var(--muted-foreground)]">Draft Queue</div>
-            <div className="text-lg font-semibold">{draftQueueCount}</div>
-          </div>
-        </CardContent>
-      </Card>
+    <div className="space-y-8">
+      <PageIntro
+        eyebrow={`${brand.name} / inbox`}
+        title="Keep the reply trail close to the campaigns that created it."
+        description="Threads, drafted responses, and final human approval all belong in the same product as the experiment and campaign work behind them."
+        aside={
+          <StatLedger
+            items={[
+              { label: "Threads", value: formatCount(threads.length), detail: "All reply threads in this brand workspace." },
+              { label: "Open", value: formatCount(openCount), detail: "Conversations still requiring attention." },
+              { label: "Positive", value: formatCount(positiveCount), detail: "Threads carrying clear buying signal." },
+              { label: "Draft queue", value: formatCount(draftQueueCount), detail: "Replies waiting for manual approval." },
+            ]}
+          />
+        }
+      />
 
       {loading ? (
         <div className="text-sm text-[color:var(--muted-foreground)]">Loading inbox...</div>
@@ -96,34 +98,27 @@ export default function InboxClient({ brand }: { brand: BrandRecord }) {
       {error ? <div className="text-sm text-[color:var(--danger)]">{error}</div> : null}
 
       {!loading && !error && threads.length === 0 && draftQueueCount === 0 ? (
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Nothing Here Yet</CardTitle>
-            <CardDescription>
-              Replies appear after you connect a reply mailbox and launch an outreach run.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="flex flex-wrap gap-2">
+        <EmptyState
+          title="Nothing here yet."
+          description="Replies appear after you connect a reply mailbox and launch an outreach run."
+          actions={
+            <>
             <Button asChild size="sm" variant="outline">
               <Link href="/settings/outreach">Connect Reply Mailbox</Link>
             </Button>
             <Button asChild size="sm" variant="outline">
               <Link href={`/brands/${brand.id}/campaigns`}>Launch a Campaign Run</Link>
             </Button>
-          </CardContent>
-        </Card>
+            </>
+          }
+        />
       ) : null}
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Reply Draft Queue</CardTitle>
-          <CardDescription>Drafts require manual send confirmation.</CardDescription>
-        </CardHeader>
-        <CardContent className="grid gap-3">
+      <SectionPanel title="Reply draft queue" description="Drafts require manual send confirmation." contentClassName="grid gap-3">
           {drafts
             .filter((item) => item.status === "draft")
             .map((draft) => (
-              <div key={draft.id} className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3">
+              <div key={draft.id} className="rounded-[10px] border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div className="text-sm font-semibold">{draft.subject}</div>
                   <Badge variant="muted">draft</Badge>
@@ -160,33 +155,34 @@ export default function InboxClient({ brand }: { brand: BrandRecord }) {
               No pending drafts. When replies arrive, we will draft suggested responses here.
             </div>
           ) : null}
-        </CardContent>
-      </Card>
+      </SectionPanel>
 
-      <Card>
-        <CardHeader className="flex flex-row items-center justify-between gap-3">
-          <CardTitle className="text-base">Recent Signals</CardTitle>
+      <SectionPanel
+        title="Recent signals"
+        description="Filter inbox threads by subject, status, or sentiment."
+        actions={
           <Input
             placeholder="Filter inbox threads"
             value={query}
             onChange={(event) => setQuery(event.target.value)}
-            className="max-w-xs"
+            className="w-[18rem]"
           />
-        </CardHeader>
-        <CardContent className="overflow-x-auto">
+        }
+      >
+        <TableShell>
           <table className="min-w-full text-sm">
             <thead>
-              <tr className="text-left text-xs uppercase tracking-wide text-[color:var(--muted-foreground)]">
-                <th className="pb-2">Subject</th>
-                <th className="pb-2">Sentiment</th>
-                <th className="pb-2">Intent</th>
-                <th className="pb-2">Status</th>
-                <th className="pb-2">Last Message</th>
+              <tr>
+                <TableHeaderCell>Subject</TableHeaderCell>
+                <TableHeaderCell>Sentiment</TableHeaderCell>
+                <TableHeaderCell>Intent</TableHeaderCell>
+                <TableHeaderCell>Status</TableHeaderCell>
+                <TableHeaderCell>Last message</TableHeaderCell>
               </tr>
             </thead>
             <tbody>
               {filteredThreads.map((thread) => (
-                <tr key={thread.id} className="border-t border-[color:var(--border)]">
+                <tr key={thread.id} className="border-t border-[color:var(--border)] hover:bg-[color:var(--surface-muted)]">
                   <td className="py-2">{thread.subject}</td>
                   <td className="py-2">
                     <Badge
@@ -212,19 +208,19 @@ export default function InboxClient({ brand }: { brand: BrandRecord }) {
           {!filteredThreads.length ? (
             <div className="py-6 text-sm text-[color:var(--muted-foreground)]">No threads found.</div>
           ) : null}
-        </CardContent>
-      </Card>
+        </TableShell>
+      </SectionPanel>
 
-      <Card>
-        <CardContent className="flex flex-wrap gap-2 py-4">
+      <SectionPanel>
+        <div className="flex flex-wrap gap-2">
           <Button asChild variant="outline">
             <Link href={`/brands/${brand.id}`}>Back to Brand Home</Link>
           </Button>
           <Button asChild>
             <Link href={`/brands/${brand.id}/campaigns`}>Go to Campaigns</Link>
           </Button>
-        </CardContent>
-      </Card>
+        </div>
+      </SectionPanel>
     </div>
   );
 }

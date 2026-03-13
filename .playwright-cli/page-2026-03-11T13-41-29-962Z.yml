@@ -1,0 +1,221 @@
+- generic [ref=e1]:
+  - generic [ref=e3]:
+    - complementary [ref=e4]:
+      - link "Factory Factory Platform" [ref=e5] [cursor=pointer]:
+        - /url: /
+        - generic [ref=e6]: Factory
+        - generic [ref=e7]: Factory Platform
+      - combobox [ref=e10]:
+        - option "BHuman | AI personalized videos at scale" [selected]
+        - option "selffunded.dev"
+      - navigation [ref=e12]:
+        - link "Experiments" [ref=e13] [cursor=pointer]:
+          - /url: /brands
+          - img [ref=e14]
+          - text: Experiments
+        - link "Campaigns" [ref=e18] [cursor=pointer]:
+          - /url: /brands
+          - img [ref=e19]
+          - text: Campaigns
+        - link "Network" [ref=e21] [cursor=pointer]:
+          - /url: /brands
+          - img [ref=e22]
+          - text: Network
+        - link "Leads" [ref=e27] [cursor=pointer]:
+          - /url: /brands
+          - img [ref=e28]
+          - text: Leads
+        - link "Inbox" [ref=e31] [cursor=pointer]:
+          - /url: /brands
+          - img [ref=e32]
+          - text: Inbox
+      - generic [ref=e35]:
+        - generic [ref=e36]: Tools
+        - navigation [ref=e37]:
+          - link "Settings" [ref=e38] [cursor=pointer]:
+            - /url: /settings/outreach
+            - img [ref=e39]
+            - text: Settings
+          - link "Logic" [ref=e42] [cursor=pointer]:
+            - /url: /logic
+            - img [ref=e43]
+            - text: Logic
+          - link "Doctor" [ref=e45] [cursor=pointer]:
+            - /url: /doctor
+            - img [ref=e46]
+            - text: Doctor
+    - main [ref=e48]:
+      - generic [ref=e50]:
+        - generic [ref=e51]:
+          - generic [ref=e52]: Factory > settings
+          - heading "Outreach Settings" [level=1] [ref=e53]
+        - generic [ref=e54]:
+          - button "Global Search K" [ref=e55]:
+            - img [ref=e56]
+            - text: Global Search
+            - generic [ref=e59]:
+              - img [ref=e60]
+              - text: K
+          - button "User" [ref=e62]:
+            - img [ref=e63]
+            - text: User
+      - generic [ref=e68]:
+        - generic [ref=e69]:
+          - generic [ref=e70]: Editing BHuman | AI personalized videos at scale. Choose the senders, reply inbox, and connections for this brand.
+          - generic [ref=e71]:
+            - generic [ref=e72]: BHuman | AI personalized videos at scale
+            - generic [ref=e73]: Setup incomplete
+            - generic [ref=e74]: 0 senders selected
+            - generic [ref=e75]: "Reply inbox: None"
+        - generic [ref=e78]:
+          - button "Brand Needs attention 0 senders selected for BHuman | AI personalized videos at scale" [ref=e131]:
+            - generic [ref=e80]:
+              - generic [ref=e81]: Brand
+              - generic [ref=e82]: Needs attention
+            - generic [ref=e83]: 0 senders selected for BHuman | AI personalized videos at scale
+          - button "Connections Configured 4 senders for BHuman | AI personalized videos at scale" [active] [ref=e132]:
+            - generic [ref=e85]:
+              - generic [ref=e86]: Connections
+              - generic [ref=e87]: Configured
+            - generic [ref=e88]: 4 senders for BHuman | AI personalized videos at scale
+          - button "Reply inboxes Needs attention 2 reply inboxes available" [ref=e133]:
+            - generic [ref=e90]:
+              - generic [ref=e91]: Reply inboxes
+              - generic [ref=e92]: Needs attention
+            - generic [ref=e93]: 2 reply inboxes available
+        - generic [ref=e94]:
+          - generic [ref=e863]:
+            - generic [ref=e864]:
+              - heading "Connections" [level=3] [ref=e865]
+              - paragraph [ref=e866]: Save the platform connections here. Secret values stay hidden until you edit them.
+            - generic [ref=e867]:
+              - generic [ref=e868]:
+                - generic [ref=e871]:
+                  - generic [ref=e872]:
+                    - img [ref=e873]
+                    - heading "Customer.io" [level=3] [ref=e876]
+                    - generic [ref=e877]: Connected
+                  - paragraph [ref=e878]: Used for sender identity creation and monthly profile capacity checks.
+                - generic [ref=e879]:
+                  - generic [ref=e880]: Connected to Site 7c3b15c5ffdd9762cb6f
+                  - generic [ref=e881]:
+                    - generic [ref=e882]: Site 7c3b15c5ffdd9762cb6f
+                    - generic [ref=e883]: Tracking key saved
+                    - generic [ref=e884]: App key saved
+                    - generic [ref=e885]: Region EU
+                  - generic [ref=e886]:
+                    - generic [ref=e887]: Last checked yesterday
+                    - generic [ref=e888]:
+                      - button "Check" [ref=e889]
+                      - button "Edit" [ref=e890]:
+                        - img [ref=e891]
+                        - text: Edit
+              - generic [ref=e894]:
+                - generic [ref=e897]:
+                  - generic [ref=e898]:
+                    - img [ref=e899]
+                    - heading "Namecheap" [level=3] [ref=e902]
+                    - generic [ref=e903]: Connected
+                  - paragraph [ref=e904]: Used for domain inventory, DNS updates, and forwarding setup.
+                - generic [ref=e905]:
+                  - generic [ref=e906]: Connected to adamfarkas
+                  - generic [ref=e907]:
+                    - generic [ref=e908]: API user adamfarkas
+                    - generic [ref=e909]: Username adamfarkas
+                    - generic [ref=e910]: API key saved
+                    - generic [ref=e911]: IP 109.130.23.186
+                  - generic [ref=e912]:
+                    - generic [ref=e913]: Last checked yesterday
+                    - generic [ref=e914]:
+                      - button "Check" [ref=e915]
+                      - button "Edit" [ref=e916]:
+                        - img [ref=e917]
+                        - text: Edit
+          - generic [ref=e920]:
+            - generic [ref=e921]:
+              - generic [ref=e922]:
+                - heading "Senders for BHuman | AI personalized videos at scale" [level=3] [ref=e923]
+                - paragraph [ref=e924]: Only sender identities that belong to the selected brand appear here.
+              - button "Add sender" [ref=e925]:
+                - img [ref=e926]
+                - text: Add sender
+            - generic [ref=e928]:
+              - generic [ref=e929]:
+                - generic [ref=e930]:
+                  - generic [ref=e931]:
+                    - generic [ref=e932]: BHuman enrichanything.com
+                    - generic [ref=e933]: active
+                  - generic [ref=e934]: zeynep@enrichanything.com
+                  - generic [ref=e935]: Customer.io sender
+                - generic [ref=e936]:
+                  - generic [ref=e937]: Customer.io Site 7c3b15c5ffdd9762cb6f
+                  - generic [ref=e939]: Waiting for baseline sync since 2026-03-01T00:00:00.000Z
+                  - generic [ref=e941]:
+                    - generic [ref=e942]: Not checked
+                    - generic [ref=e943]: Last checked Never
+                - generic [ref=e944]:
+                  - button "Check sender" [ref=e945]
+                  - combobox [ref=e946]:
+                    - option "active" [selected]
+                    - option "inactive"
+                  - button "Delete" [ref=e947]
+              - generic [ref=e948]:
+                - generic [ref=e949]:
+                  - generic [ref=e950]:
+                    - generic [ref=e951]: BHuman atlaswatch.org
+                    - generic [ref=e952]: active
+                  - generic [ref=e953]: zeynep@atlaswatch.org
+                  - generic [ref=e954]: Customer.io sender
+                - generic [ref=e955]:
+                  - generic [ref=e956]: Customer.io Site 7c3b15c5ffdd9762cb6f
+                  - generic [ref=e958]: Waiting for baseline sync since 2026-03-01T00:00:00.000Z
+                  - generic [ref=e960]:
+                    - generic [ref=e961]: Not checked
+                    - generic [ref=e962]: Last checked Never
+                - generic [ref=e963]:
+                  - button "Check sender" [ref=e964]
+                  - combobox [ref=e965]:
+                    - option "active" [selected]
+                    - option "inactive"
+                  - button "Delete" [ref=e966]
+              - generic [ref=e967]:
+                - generic [ref=e968]:
+                  - generic [ref=e969]:
+                    - generic [ref=e970]: BHuman itsallvibes.com
+                    - generic [ref=e971]: active
+                  - generic [ref=e972]: zeynep@itsallvibes.com
+                  - generic [ref=e973]: Customer.io sender
+                - generic [ref=e974]:
+                  - generic [ref=e975]: Customer.io Site 7c3b15c5ffdd9762cb6f
+                  - generic [ref=e977]: Waiting for baseline sync since 2026-03-01T00:00:00.000Z
+                  - generic [ref=e979]:
+                    - generic [ref=e980]: Not checked
+                    - generic [ref=e981]: Last checked Never
+                - generic [ref=e982]:
+                  - button "Check sender" [ref=e983]
+                  - combobox [ref=e984]:
+                    - option "active" [selected]
+                    - option "inactive"
+                  - button "Delete" [ref=e985]
+              - generic [ref=e986]:
+                - generic [ref=e987]:
+                  - generic [ref=e988]:
+                    - generic [ref=e989]: BHuman itsallvibes.com
+                    - generic [ref=e990]: active
+                  - generic [ref=e991]: zeynep@itsallvibes.com
+                  - generic [ref=e992]: Customer.io sender
+                - generic [ref=e993]:
+                  - generic [ref=e994]: Customer.io Site 9336ae1a489137ebb1e5
+                  - generic [ref=e996]: Waiting for baseline sync since 2026-03-01T00:00:00.000Z
+                  - generic [ref=e998]:
+                    - generic [ref=e999]: Not checked
+                    - generic [ref=e1000]: Last checked Never
+                - generic [ref=e1001]:
+                  - button "Check sender" [ref=e1002]
+                  - combobox [ref=e1003]:
+                    - option "active" [selected]
+                    - option "inactive"
+                  - button "Delete" [ref=e1004]
+  - button "Open Next.js Dev Tools" [ref=e126] [cursor=pointer]:
+    - img [ref=e127]
+  - alert [ref=e130]

@@ -1,22 +1,11 @@
 "use client";
 
-import { useEffect, useMemo, useState, type ComponentType, type Dispatch, type SetStateAction } from "react";
-import {
-  AlertCircle,
-  CheckCircle2,
-  ChevronDown,
-  ChevronRight,
-  Fingerprint,
-  Inbox,
-  Link2,
-  Send,
-  Sparkles,
-} from "lucide-react";
+import { useEffect, useMemo, useState, type Dispatch, type SetStateAction } from "react";
+import { AlertCircle, ExternalLink, Plus } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
 import {
   assignBrandOutreachAccount,
@@ -33,11 +22,13 @@ import { trackEvent } from "@/lib/telemetry-client";
 import type { BrandRecord, OutreachAccount, OutreachProvisioningSettings } from "@/lib/factory-types";
 import ProvisioningProviderSettingsCard from "./provisioning-provider-settings-card";
 import SenderProvisionCard from "./sender-provision-card";
+import { FieldLabel, SettingsModal, formatRelativeTimeLabel } from "./settings-primitives";
 
 type FieldErrors<T> = Partial<Record<keyof T, string>>;
 
 type AssignmentChoice = {
   accountId: string;
+  accountIds: string[];
   mailboxAccountId: string;
 };
 
@@ -65,8 +56,11 @@ type MailboxFormState = {
   mailboxPassword: string;
 };
 
-type SetupStepId = "identity" | "connections" | "delivery";
+type SetupTabId = "identity" | "integrations" | "email";
 type SetupStepStatus = "complete" | "attention" | "todo";
+
+const ACTIVE_BRAND_KEY = "factory.activeBrandId";
+const CUSTOMER_IO_HELP_URL = "https://docs.customer.io/journeys/api-credentials/";
 
 const INITIAL_DELIVERY_FORM: DeliveryFormState = {
   name: "",
@@ -109,33 +103,34 @@ const MAILBOX_PROVIDER_DEFAULTS: Record<
   },
 };
 
-function InfoHint({ text }: { text: string }) {
-  return (
-    <span className="relative inline-flex items-center group">
-      <span
-        tabIndex={0}
-        aria-label="Field help"
-        className="inline-flex h-4 w-4 cursor-help items-center justify-center rounded-full border border-[color:var(--border)] text-[10px] font-semibold text-[color:var(--muted-foreground)] outline-none focus:ring-2 focus:ring-[color:var(--accent)]/40"
-      >
-        i
-      </span>
-      <span
-        role="tooltip"
-        className="pointer-events-none absolute left-1/2 top-[130%] z-20 w-72 -translate-x-1/2 rounded-md border border-[color:var(--border)] bg-[color:var(--surface)] px-2 py-1 text-[11px] leading-relaxed text-[color:var(--foreground)] opacity-0 shadow-lg transition-opacity group-hover:opacity-100 group-focus-within:opacity-100"
-      >
-        {text}
-      </span>
-    </span>
+function normalizeAssignmentAccountIds(value: string[] | undefined, primaryAccountId = "") {
+  const ids = new Set(
+    (Array.isArray(value) ? value : []).map((entry) => String(entry ?? "").trim()).filter((entry) => entry.length > 0)
   );
+  const primary = primaryAccountId.trim();
+  if (primary) ids.add(primary);
+  return Array.from(ids);
 }
 
-function FieldLabel({ htmlFor, label, help }: { htmlFor: string; label: string; help: string }) {
-  return (
-    <div className="flex items-center gap-1.5">
-      <Label htmlFor={htmlFor}>{label}</Label>
-      <InfoHint text={help} />
-    </div>
-  );
+function normalizeAssignmentChoice(value?: Partial<AssignmentChoice> | null): AssignmentChoice {
+  const requestedAccountId = String(value?.accountId ?? "").trim();
+  const accountIds = normalizeAssignmentAccountIds(value?.accountIds, requestedAccountId);
+  return {
+    accountId: requestedAccountId || accountIds[0] || "",
+    accountIds,
+    mailboxAccountId: String(value?.mailboxAccountId ?? "").trim(),
+  };
+}
+
+function normalizeDomainHost(value: string) {
+  const trimmed = value.trim().toLowerCase();
+  if (!trimmed) return "";
+  const emailDomain = trimmed.includes("@") ? trimmed.split("@")[1] ?? "" : trimmed;
+  return emailDomain
+    .replace(/^https?:\/\//, "")
+    .replace(/^www\./, "")
+    .replace(/\/.*$/, "")
+    .trim();
 }
 
 function FieldError({ message }: { message?: string }) {
@@ -153,266 +148,256 @@ function setupStatusBadge(status: SetupStepStatus, label?: string) {
   return <Badge variant="muted">{label ?? "Not started"}</Badge>;
 }
 
-function stepTone(status: SetupStepStatus, active: boolean) {
-  if (active) return "border-[color:var(--accent)] bg-[color:var(--surface)]";
-  if (status === "complete") return "border-[color:var(--success-border)] bg-[color:var(--success-soft)]";
-  if (status === "attention") return "border-[color:var(--danger-border)] bg-[color:var(--danger-soft)]";
-  return "border-[color:var(--border)] bg-[color:var(--surface-muted)]";
-}
-
-function StepCard({
-  stepNumber,
+function SetupTabButton({
   title,
-  description,
   summary,
   status,
   active,
-  icon: Icon,
   onClick,
 }: {
-  stepNumber: string;
   title: string;
-  description: string;
   summary: string;
   status: SetupStepStatus;
   active: boolean;
-  icon: ComponentType<{ className?: string }>;
   onClick: () => void;
 }) {
   return (
     <button
       type="button"
       onClick={onClick}
-      className={`grid w-full gap-3 rounded-3xl border p-4 text-left transition hover:border-[color:var(--accent)] ${stepTone(
-        status,
+      className={`min-w-[220px] border-b-2 px-1 py-3 text-left transition ${
         active
-      )}`}
+          ? "border-[color:var(--foreground)] text-[color:var(--foreground)]"
+          : "border-transparent text-[color:var(--muted-foreground)] hover:text-[color:var(--foreground)]"
+      }`}
     >
-      <div className="flex items-start justify-between gap-3">
-        <div className="space-y-1">
-          <div className="text-[11px] uppercase tracking-[0.18em] text-[color:var(--muted-foreground)]">
-            Step {stepNumber}
-          </div>
-          <div className="flex items-center gap-2">
-            <Icon className="h-4 w-4" />
-            <span className="text-sm font-semibold">{title}</span>
-          </div>
-        </div>
+      <div className="flex items-center justify-between gap-3">
+        <span className="text-sm font-medium">{title}</span>
         {setupStatusBadge(status)}
       </div>
-      <div className="text-sm text-[color:var(--muted-foreground)]">{description}</div>
-      <div className="text-xs text-[color:var(--muted-foreground)]">{summary}</div>
+      <div className="mt-1 text-xs text-[color:var(--muted-foreground)]">{summary}</div>
     </button>
   );
 }
 
-function SummaryMetric({
-  label,
-  value,
-  tone = "default",
-}: {
-  label: string;
-  value: string;
-  tone?: "default" | "success" | "accent";
-}) {
-  const toneClass =
-    tone === "success"
-      ? "border-[color:var(--success-border)] bg-[color:var(--success-soft)]"
-      : tone === "accent"
-        ? "border-[color:var(--accent-border)] bg-[color:var(--accent-soft)]"
-        : "border-[color:var(--border)] bg-[color:var(--surface)]";
+function mailboxProviderLabel(provider: MailboxFormState["mailboxProvider"]) {
+  if (provider === "gmail") return "Gmail";
+  if (provider === "outlook") return "Outlook";
+  return "Custom IMAP";
+}
+
+function isDeliverabilityMonitorAccount(account: OutreachAccount) {
+  return account.name.trim().toLowerCase().startsWith("deliverability ");
+}
+
+function CustomerIoBudgetMeter({ account }: { account: OutreachAccount }) {
+  const budget = account.customerIoBilling;
+  if (!budget) return null;
+
+  const ratio =
+    budget.monthlyProfileLimit > 0
+      ? Math.max(0, Math.min(1, budget.projectedProfiles / budget.monthlyProfileLimit))
+      : 0;
 
   return (
-    <div className={`rounded-2xl border px-4 py-3 ${toneClass}`}>
-      <div className="text-xs uppercase tracking-[0.14em] text-[color:var(--muted-foreground)]">{label}</div>
-      <div className="mt-1 text-lg font-semibold">{value}</div>
+    <div className="mt-2 grid gap-1">
+      <div className="text-xs text-[color:var(--muted-foreground)]">
+        {budget.baselineReady
+          ? `${budget.projectedProfiles.toLocaleString()}/${budget.monthlyProfileLimit.toLocaleString()} profiles this month`
+          : `Waiting for baseline sync since ${budget.billingPeriodStart}`}
+      </div>
+      <div className="h-2 overflow-hidden rounded-full bg-[color:var(--surface)]">
+        <div className="h-full rounded-full bg-[color:var(--accent)]" style={{ width: `${Math.round(ratio * 100)}%` }} />
+      </div>
     </div>
   );
 }
 
-type AccountListCardProps = {
+type AccountInventoryCardProps = {
   title: string;
   description: string;
   emptyMessage: string;
-  testScope: "full" | "customerio" | "mailbox";
+  addLabel: string;
+  testScope: "customerio" | "mailbox";
   accounts: OutreachAccount[];
   setAccounts: Dispatch<SetStateAction<OutreachAccount[]>>;
   setError: Dispatch<SetStateAction<string>>;
   onDeleteAccount: (accountId: string) => Promise<void>;
+  onAdd: () => void;
 };
 
-function AccountListCard({
+function AccountInventoryCard({
   title,
   description,
   emptyMessage,
+  addLabel,
   testScope,
   accounts,
   setAccounts,
   setError,
   onDeleteAccount,
-}: AccountListCardProps) {
-  const testLabel =
-    testScope === "customerio" ? "Test Customer.io" : testScope === "mailbox" ? "Test Email" : "Test";
-
+  onAdd,
+}: AccountInventoryCardProps) {
   const [testStateByAccountId, setTestStateByAccountId] = useState<
     Record<string, { ok: boolean; message: string; testedAt: string }>
   >({});
   const [testingByAccountId, setTestingByAccountId] = useState<Record<string, boolean>>({});
   const [deletingByAccountId, setDeletingByAccountId] = useState<Record<string, boolean>>({});
 
+  const testLabel = testScope === "customerio" ? "Check sender" : "Check inbox";
+
   return (
     <Card>
-      <CardHeader className="flex flex-row items-start justify-between gap-3 space-y-0">
+      <CardHeader className="flex flex-row items-start justify-between gap-3 space-y-0 pb-3">
         <div className="space-y-1">
-          <div className="flex flex-wrap items-center gap-2">
-            <CardTitle className="text-base">{title}</CardTitle>
-            <Badge variant={accounts.length ? "success" : "muted"}>
-              {accounts.length ? `${accounts.length} connected` : "None connected"}
-            </Badge>
-          </div>
+          <CardTitle className="text-base">{title}</CardTitle>
           <CardDescription>{description}</CardDescription>
         </div>
+        <Button type="button" variant="outline" onClick={onAdd}>
+          <Plus className="h-4 w-4" />
+          {addLabel}
+        </Button>
       </CardHeader>
-      <CardContent className="grid gap-3">
-        {accounts.map((account) => {
-          const budget = account.customerIoBilling;
-          const budgetLine =
-            account.accountType === "mailbox" || !budget
-              ? ""
-              : budget.baselineReady
-                ? `Profile budget: ${budget.projectedProfiles}/${budget.monthlyProfileLimit} this period · ${budget.remainingProfiles} left`
-                : `Profile budget: waiting for baseline sync for period starting ${budget.billingPeriodStart}`;
-          const budgetRatio =
-            budget && budget.monthlyProfileLimit > 0
-              ? Math.max(0, Math.min(1, budget.projectedProfiles / budget.monthlyProfileLimit))
-              : 0;
-          return (
-            <div
-              key={account.id}
-              className="rounded-3xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-4"
-            >
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <div>
-                  <div className="flex flex-wrap items-center gap-2">
-                    <div className="text-sm font-semibold">{account.name}</div>
-                    <Badge variant={account.status === "active" ? "success" : "muted"}>{account.status}</Badge>
-                  </div>
-                  <div className="mt-1 text-xs text-[color:var(--muted-foreground)]">
-                    Type: {account.accountType} · Provider: {account.provider}
-                    {account.accountType !== "mailbox" ? (
-                      <>
-                        {" "}
-                        · From: {account.config.customerIo.fromEmail || "not set"} · Reply-To: set per brand via reply
-                        inbox
-                      </>
-                    ) : null}
-                    {account.accountType !== "delivery" ? (
-                      <> · Inbox: {account.config.mailbox.email || "not set"}</>
-                    ) : null}
-                  </div>
-                </div>
-                <div className="flex flex-wrap items-center gap-2">
-                  <Button
-                    type="button"
-                    variant="outline"
-                    disabled={Boolean(testingByAccountId[account.id] || deletingByAccountId[account.id])}
-                    onClick={async () => {
-                      setError("");
-                      try {
-                        setTestingByAccountId((prev) => ({ ...prev, [account.id]: true }));
-                        const result = await testOutreachAccount(account.id, testScope);
-                        trackEvent("outreach_account_tested", {
-                          accountId: account.id,
-                          ok: result.ok,
-                          scope: result.scope,
-                        });
-                        setTestStateByAccountId((prev) => ({
-                          ...prev,
-                          [account.id]: { ok: result.ok, message: result.message, testedAt: result.testedAt },
-                        }));
-                        const refreshed = await fetchOutreachAccounts();
-                        setAccounts(refreshed);
-                      } catch (err) {
-                        setError(err instanceof Error ? err.message : "Account test failed");
-                      } finally {
-                        setTestingByAccountId((prev) => ({ ...prev, [account.id]: false }));
-                      }
-                    }}
-                  >
-                    {testingByAccountId[account.id] ? "Testing..." : testLabel}
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="danger"
-                    disabled={Boolean(deletingByAccountId[account.id] || testingByAccountId[account.id])}
-                    onClick={async () => {
-                      const confirmed = window.confirm(`Delete account "${account.name}"?`);
-                      if (!confirmed) return;
-                      setError("");
-                      try {
-                        setDeletingByAccountId((prev) => ({ ...prev, [account.id]: true }));
-                        await onDeleteAccount(account.id);
-                        setTestStateByAccountId((prev) => {
-                          const next = { ...prev };
-                          delete next[account.id];
-                          return next;
-                        });
-                      } catch (err) {
-                        setError(err instanceof Error ? err.message : "Failed to delete account");
-                      } finally {
-                        setDeletingByAccountId((prev) => ({ ...prev, [account.id]: false }));
-                      }
-                    }}
-                  >
-                    {deletingByAccountId[account.id] ? "Deleting..." : "Delete"}
-                  </Button>
-                  <Select
-                    value={account.status}
-                    disabled={Boolean(deletingByAccountId[account.id])}
-                    onChange={async (event) => {
-                      const status = event.target.value === "inactive" ? "inactive" : "active";
-                      const updated = await updateOutreachAccountApi(account.id, { status });
-                      setAccounts((prev) => prev.map((row) => (row.id === account.id ? updated : row)));
-                    }}
-                  >
-                    <option value="active">active</option>
-                    <option value="inactive">inactive</option>
-                  </Select>
-                </div>
-              </div>
-              <div className="mt-2 text-xs text-[color:var(--muted-foreground)]">
-                Last test: {account.lastTestAt ? `${account.lastTestStatus} · ${account.lastTestAt}` : "never"}
-              </div>
-              {budgetLine ? (
-                <div className="mt-2 grid gap-1">
-                  <div className="text-xs text-[color:var(--muted-foreground)]">{budgetLine}</div>
-                  <div className="h-2 overflow-hidden rounded-full bg-[color:var(--surface)]">
-                    <div
-                      className="h-full rounded-full bg-[color:var(--accent)]"
-                      style={{ width: `${Math.round(budgetRatio * 100)}%` }}
-                    />
-                  </div>
-                </div>
-              ) : null}
-              {testStateByAccountId[account.id] ? (
+      <CardContent className="pt-0">
+        {accounts.length ? (
+          <div className="overflow-hidden rounded-xl border border-[color:var(--border)]">
+            {accounts.map((account) => {
+              const isSender = account.accountType !== "mailbox";
+              const primaryAddress = isSender ? account.config.customerIo.fromEmail : account.config.mailbox.email;
+              const connectionLabel = isSender
+                ? `Customer.io Site ${account.config.customerIo.siteId || "missing"}`
+                : `${mailboxProviderLabel(account.config.mailbox.provider)} inbox`;
+              const healthBadge =
+                account.lastTestStatus === "pass" ? "success" : account.lastTestStatus === "fail" ? "danger" : "muted";
+
+              return (
                 <div
-                  className={`mt-3 rounded-2xl border px-3 py-2 text-xs ${
-                    testStateByAccountId[account.id].ok
-                      ? "border-[color:var(--success-border)] bg-[color:var(--success-soft)] text-[color:var(--success)]"
-                      : "border-[color:var(--danger-border)] bg-[color:var(--danger-soft)] text-[color:var(--danger)]"
-                  }`}
+                  key={account.id}
+                  className="grid gap-4 border-t border-[color:var(--border)] px-4 py-4 first:border-t-0 md:grid-cols-[minmax(0,1.5fr)_minmax(0,1.1fr)_auto] md:items-center"
                 >
-                  {testStateByAccountId[account.id].message}
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <div className="truncate text-sm font-semibold">{account.name}</div>
+                      <Badge variant={account.status === "active" ? "success" : "muted"}>{account.status}</Badge>
+                    </div>
+                    <div className="mt-1 text-sm">{primaryAddress || "Address not set"}</div>
+                    <div className="mt-1 text-xs text-[color:var(--muted-foreground)]">
+                      {isSender
+                        ? "Customer.io sender"
+                        : `${mailboxProviderLabel(account.config.mailbox.provider)} reply inbox`}
+                    </div>
+                  </div>
+
+                  <div className="min-w-0">
+                    <div className="text-sm">{connectionLabel}</div>
+                    {!isSender ? (
+                      <div className="mt-1 text-xs text-[color:var(--muted-foreground)]">
+                        {account.config.mailbox.host}:{account.config.mailbox.port}
+                      </div>
+                    ) : null}
+                    {isSender ? <CustomerIoBudgetMeter account={account} /> : null}
+                    <div className="mt-2 flex flex-wrap items-center gap-2">
+                      <Badge variant={healthBadge}>
+                        {account.lastTestStatus === "unknown" ? "Not checked" : account.lastTestStatus}
+                      </Badge>
+                      <div className="text-xs text-[color:var(--muted-foreground)]">
+                        Last checked {formatRelativeTimeLabel(account.lastTestAt, "Never")}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-2 md:justify-end">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      disabled={Boolean(testingByAccountId[account.id] || deletingByAccountId[account.id])}
+                      onClick={async () => {
+                        setError("");
+                        try {
+                          setTestingByAccountId((prev) => ({ ...prev, [account.id]: true }));
+                          const result = await testOutreachAccount(account.id, testScope);
+                          trackEvent("outreach_account_tested", {
+                            accountId: account.id,
+                            ok: result.ok,
+                            scope: result.scope,
+                          });
+                          setTestStateByAccountId((prev) => ({
+                            ...prev,
+                            [account.id]: { ok: result.ok, message: result.message, testedAt: result.testedAt },
+                          }));
+                          const refreshed = await fetchOutreachAccounts();
+                          setAccounts(refreshed);
+                        } catch (err) {
+                          setError(err instanceof Error ? err.message : "Account test failed");
+                        } finally {
+                          setTestingByAccountId((prev) => ({ ...prev, [account.id]: false }));
+                        }
+                      }}
+                    >
+                      {testingByAccountId[account.id] ? "Checking..." : testLabel}
+                    </Button>
+                    <Select
+                      value={account.status}
+                      className="w-[120px]"
+                      disabled={Boolean(deletingByAccountId[account.id])}
+                      onChange={async (event) => {
+                        const status = event.target.value === "inactive" ? "inactive" : "active";
+                        const updated = await updateOutreachAccountApi(account.id, { status });
+                        setAccounts((prev) => prev.map((row) => (row.id === account.id ? updated : row)));
+                      }}
+                    >
+                      <option value="active">active</option>
+                      <option value="inactive">inactive</option>
+                    </Select>
+                    <Button
+                      type="button"
+                      variant="danger"
+                      size="sm"
+                      disabled={Boolean(deletingByAccountId[account.id] || testingByAccountId[account.id])}
+                      onClick={async () => {
+                        const confirmed = window.confirm(`Delete account "${account.name}"?`);
+                        if (!confirmed) return;
+                        setError("");
+                        try {
+                          setDeletingByAccountId((prev) => ({ ...prev, [account.id]: true }));
+                          await onDeleteAccount(account.id);
+                          setTestStateByAccountId((prev) => {
+                            const next = { ...prev };
+                            delete next[account.id];
+                            return next;
+                          });
+                        } catch (err) {
+                          setError(err instanceof Error ? err.message : "Failed to delete account");
+                        } finally {
+                          setDeletingByAccountId((prev) => ({ ...prev, [account.id]: false }));
+                        }
+                      }}
+                    >
+                      {deletingByAccountId[account.id] ? "Deleting..." : "Delete"}
+                    </Button>
+                  </div>
+
+                  {testStateByAccountId[account.id] ? (
+                    <div
+                      className={`rounded-lg border px-3 py-2 text-xs md:col-span-3 ${
+                        testStateByAccountId[account.id].ok
+                          ? "border-[color:var(--success-border)] bg-[color:var(--success-soft)] text-[color:var(--success)]"
+                          : "border-[color:var(--danger-border)] bg-[color:var(--danger-soft)] text-[color:var(--danger)]"
+                      }`}
+                    >
+                      {testStateByAccountId[account.id].message}
+                    </div>
+                  ) : null}
                 </div>
-              ) : null}
-            </div>
-          );
-        })}
-        {!accounts.length ? (
-          <div className="rounded-3xl border border-dashed border-[color:var(--border)] bg-[color:var(--surface-muted)] p-4 text-sm text-[color:var(--muted-foreground)]">
+              );
+            })}
+          </div>
+        ) : (
+          <div className="rounded-xl border border-dashed border-[color:var(--border)] px-4 py-5 text-sm text-[color:var(--muted-foreground)]">
             {emptyMessage}
           </div>
-        ) : null}
+        )}
       </CardContent>
     </Card>
   );
@@ -423,16 +408,17 @@ export default function OutreachSettingsClient() {
   const [brands, setBrands] = useState<BrandRecord[]>([]);
   const [provisioningSettings, setProvisioningSettings] = useState<OutreachProvisioningSettings | null>(null);
   const [assignments, setAssignments] = useState<AssignmentMap>({});
+  const [activeBrandId, setActiveBrandId] = useState("");
 
   const [deliveryForm, setDeliveryForm] = useState<DeliveryFormState>(INITIAL_DELIVERY_FORM);
   const [mailboxForm, setMailboxForm] = useState<MailboxFormState>(INITIAL_MAILBOX_FORM);
   const [mailboxAuthMethod, setMailboxAuthMethod] = useState<MailboxAuthMethod>("app_password");
   const [showMailboxAdvanced, setShowMailboxAdvanced] = useState(false);
   const [showDeliveryAdvanced, setShowDeliveryAdvanced] = useState(false);
-  const [showDeliveryForm, setShowDeliveryForm] = useState(false);
-  const [showMailboxForm, setShowMailboxForm] = useState(false);
-  const [showConfiguredBrands, setShowConfiguredBrands] = useState(false);
-  const [activeStep, setActiveStep] = useState<SetupStepId>("identity");
+  const [activeTab, setActiveTab] = useState<SetupTabId>("identity");
+  const [deliveryModalOpen, setDeliveryModalOpen] = useState(false);
+  const [mailboxModalOpen, setMailboxModalOpen] = useState(false);
+  const [autoSelectedTab, setAutoSelectedTab] = useState(false);
 
   const [deliveryErrors, setDeliveryErrors] = useState<FieldErrors<DeliveryFormState>>({});
   const [mailboxErrors, setMailboxErrors] = useState<FieldErrors<MailboxFormState>>({});
@@ -443,17 +429,37 @@ export default function OutreachSettingsClient() {
   const [error, setError] = useState("");
 
   useEffect(() => {
+    if (typeof window === "undefined") return undefined;
+
+    const syncActiveBrand = () => {
+      setActiveBrandId(localStorage.getItem(ACTIVE_BRAND_KEY) ?? "");
+    };
+
+    syncActiveBrand();
+    window.addEventListener("storage", syncActiveBrand);
+    window.addEventListener("focus", syncActiveBrand);
+    return () => {
+      window.removeEventListener("storage", syncActiveBrand);
+      window.removeEventListener("focus", syncActiveBrand);
+    };
+  }, []);
+
+  useEffect(() => {
     let mounted = true;
+
     void (async () => {
       setLoading(true);
       setError("");
+
       try {
         const [accountsRows, brandRows, providerSettings] = await Promise.all([
           fetchOutreachAccounts(),
           fetchBrands(),
           fetchOutreachProvisioningSettings(),
         ]);
+
         if (!mounted) return;
+
         setAccounts(accountsRows);
         setBrands(brandRows);
         setProvisioningSettings(providerSettings);
@@ -463,18 +469,16 @@ export default function OutreachSettingsClient() {
             const row = await fetchBrandOutreachAssignment(brand.id);
             return {
               brandId: brand.id,
-              accountId: row.assignment?.accountId ?? "",
-              mailboxAccountId: row.assignment?.mailboxAccountId ?? "",
+              assignment: normalizeAssignmentChoice(row.assignment),
             };
           })
         );
+
         if (!mounted) return;
+
         const map: AssignmentMap = {};
         for (const row of assignmentPairs) {
-          map[row.brandId] = {
-            accountId: row.accountId,
-            mailboxAccountId: row.mailboxAccountId,
-          };
+          map[row.brandId] = row.assignment;
         }
         setAssignments(map);
       } catch (err) {
@@ -484,15 +488,25 @@ export default function OutreachSettingsClient() {
         if (mounted) setLoading(false);
       }
     })();
+
     return () => {
       mounted = false;
     };
   }, []);
 
-  const activeCount = useMemo(
-    () => accounts.filter((account) => account.status === "active").length,
-    [accounts]
-  );
+  useEffect(() => {
+    if (!brands.length || typeof window === "undefined") return;
+    const storedBrandId = localStorage.getItem(ACTIVE_BRAND_KEY) ?? "";
+    const nextBrandId = brands.some((brand) => brand.id === storedBrandId)
+      ? storedBrandId
+      : brands[0]?.id ?? "";
+    if (nextBrandId && nextBrandId !== storedBrandId) {
+      localStorage.setItem(ACTIVE_BRAND_KEY, nextBrandId);
+    }
+    if (nextBrandId !== activeBrandId) {
+      setActiveBrandId(nextBrandId);
+    }
+  }, [activeBrandId, brands]);
 
   const deliveryAccounts = useMemo(
     () => accounts.filter((account) => account.accountType !== "mailbox"),
@@ -500,21 +514,87 @@ export default function OutreachSettingsClient() {
   );
 
   const mailboxAccounts = useMemo(
-    () => accounts.filter((account) => account.accountType !== "delivery"),
+    () =>
+      accounts.filter(
+        (account) => account.accountType !== "delivery" && !isDeliverabilityMonitorAccount(account)
+      ),
     [accounts]
   );
 
-  useEffect(() => {
-    if (!deliveryAccounts.length) {
-      setShowDeliveryForm(true);
+  const selectedBrand = useMemo(
+    () => brands.find((brand) => brand.id === activeBrandId) ?? brands[0] ?? null,
+    [activeBrandId, brands]
+  );
+
+  const scopedBrands = useMemo(() => (selectedBrand ? [selectedBrand] : []), [selectedBrand]);
+  const selectedBrandSenderAccounts = useMemo(() => {
+    if (!selectedBrand) return [] as OutreachAccount[];
+    const assignment = normalizeAssignmentChoice(assignments[selectedBrand.id]);
+    const senderDomainSet = new Set<string>();
+    for (const domainRow of selectedBrand.domains) {
+      const normalizedDomain = normalizeDomainHost(domainRow.domain);
+      if (normalizedDomain) senderDomainSet.add(normalizedDomain);
+      const fromDomain = normalizeDomainHost(domainRow.fromEmail ?? "");
+      if (fromDomain) senderDomainSet.add(fromDomain);
     }
-  }, [deliveryAccounts.length]);
+    const websiteDomain = normalizeDomainHost(selectedBrand.website);
+    if (websiteDomain) senderDomainSet.add(websiteDomain);
+
+    const knownAccountIds = new Set<string>(
+      [
+        assignment.accountId,
+        ...assignment.accountIds,
+        ...selectedBrand.domains.map((domainRow) => String(domainRow.customerIoAccountId ?? "").trim()),
+      ].filter(Boolean)
+    );
+
+    return deliveryAccounts
+      .filter((account) => {
+        if (knownAccountIds.has(account.id)) return true;
+        const fromDomain = normalizeDomainHost(account.config.customerIo.fromEmail ?? "");
+        return Boolean(fromDomain && senderDomainSet.has(fromDomain));
+      })
+      .filter(
+        (account, index, rows) => rows.findIndex((candidate) => candidate.id === account.id) === index
+      );
+  }, [assignments, deliveryAccounts, selectedBrand]);
+
+  const providerDefaultsReady = Boolean(
+    provisioningSettings?.customerIo.siteId.trim() &&
+      provisioningSettings.customerIo.hasTrackingApiKey &&
+      provisioningSettings?.namecheap.apiUser.trim() &&
+      provisioningSettings.namecheap.hasApiKey &&
+      provisioningSettings?.namecheap.clientIp.trim()
+  );
 
   useEffect(() => {
-    if (!mailboxAccounts.length) {
-      setShowMailboxForm(true);
+    if (loading || autoSelectedTab) return;
+
+    if (!providerDefaultsReady || !deliveryAccounts.length) {
+      setActiveTab("integrations");
+    } else if (!mailboxAccounts.length) {
+      setActiveTab("email");
+    } else {
+      setActiveTab("identity");
     }
-  }, [mailboxAccounts.length]);
+
+    setAutoSelectedTab(true);
+  }, [autoSelectedTab, deliveryAccounts.length, loading, mailboxAccounts.length, providerDefaultsReady]);
+
+  function closeDeliveryModal() {
+    setDeliveryModalOpen(false);
+    setDeliveryForm(INITIAL_DELIVERY_FORM);
+    setDeliveryErrors({});
+    setShowDeliveryAdvanced(false);
+  }
+
+  function closeMailboxModal() {
+    setMailboxModalOpen(false);
+    setMailboxForm(INITIAL_MAILBOX_FORM);
+    setMailboxErrors({});
+    setMailboxAuthMethod("app_password");
+    setShowMailboxAdvanced(false);
+  }
 
   const createDeliveryAccount = async () => {
     const nextErrors: FieldErrors<DeliveryFormState> = {};
@@ -525,17 +605,19 @@ export default function OutreachSettingsClient() {
 
     const siteId = deliveryForm.siteId.trim();
     if (siteId && (siteId.includes("@") || siteId.includes(".") || siteId.includes(" "))) {
-      nextErrors.siteId = "This looks like a workspace/name. Paste the Site ID value (looks like 9336ae1a489137ebb1e5).";
+      nextErrors.siteId = "Paste the Site ID value, not a workspace name or email address.";
     }
+
     setDeliveryErrors(nextErrors);
     if (Object.keys(nextErrors).length) {
-      setError("Fix the highlighted fields in the sending account section.");
-      setShowDeliveryForm(true);
+      setError("Fix the highlighted fields in the sender connection modal.");
+      setDeliveryModalOpen(true);
       return;
     }
 
     setSavingDelivery(true);
     setError("");
+
     try {
       const created = await createOutreachAccountApi({
         name: deliveryForm.name.trim(),
@@ -568,18 +650,14 @@ export default function OutreachSettingsClient() {
       });
 
       setAccounts((prev) => [created, ...prev]);
-      setDeliveryForm(INITIAL_DELIVERY_FORM);
-      setDeliveryErrors({});
-      setShowDeliveryForm(false);
-      setShowDeliveryAdvanced(false);
       trackEvent("outreach_account_connected", { accountId: created.id });
+      closeDeliveryModal();
 
-      if (brands.length === 1) {
-        const onlyBrand = brands[0];
-        const current = assignments[onlyBrand.id]?.accountId ?? "";
-        if (!current) {
-          await onAssign(onlyBrand.id, { accountId: created.id });
-          setActiveStep("identity");
+      if (activeBrandId) {
+        const current = normalizeAssignmentChoice(assignments[activeBrandId]);
+        if (!current.accountId) {
+          await onAssign(activeBrandId, { accountId: created.id, accountIds: [created.id] });
+          setActiveTab("identity");
         }
       }
     } catch (err) {
@@ -605,15 +683,15 @@ export default function OutreachSettingsClient() {
 
     if (mailboxAuthMethod === "app_password") {
       if (!mailboxForm.mailboxPassword.trim()) nextErrors.mailboxPassword = "App password required.";
-    } else {
-      if (!mailboxForm.mailboxAccessToken.trim()) nextErrors.mailboxAccessToken = "Access token required.";
+    } else if (!mailboxForm.mailboxAccessToken.trim()) {
+      nextErrors.mailboxAccessToken = "Access token required.";
     }
 
     setMailboxErrors(nextErrors);
     if (Object.keys(nextErrors).length) {
-      setError("Fix the highlighted fields in the reply inbox section.");
+      setError("Fix the highlighted fields in the reply inbox modal.");
       if (nextErrors.mailboxHost || nextErrors.mailboxPort) setShowMailboxAdvanced(true);
-      setShowMailboxForm(true);
+      setMailboxModalOpen(true);
       return;
     }
 
@@ -652,17 +730,14 @@ export default function OutreachSettingsClient() {
       });
 
       setAccounts((prev) => [created, ...prev]);
-      setMailboxForm(INITIAL_MAILBOX_FORM);
-      setMailboxErrors({});
-      setShowMailboxForm(false);
       trackEvent("outreach_account_connected", { accountId: created.id });
+      closeMailboxModal();
 
-      if (brands.length === 1) {
-        const onlyBrand = brands[0];
-        const current = assignments[onlyBrand.id]?.mailboxAccountId ?? "";
-        if (!current) {
-          await onAssign(onlyBrand.id, { mailboxAccountId: created.id });
-          setActiveStep("identity");
+      if (activeBrandId) {
+        const current = normalizeAssignmentChoice(assignments[activeBrandId]);
+        if (!current.mailboxAccountId) {
+          await onAssign(activeBrandId, { mailboxAccountId: created.id });
+          setActiveTab("identity");
         }
       }
     } catch (err) {
@@ -673,13 +748,18 @@ export default function OutreachSettingsClient() {
   };
 
   const onAssign = async (brandId: string, patch: Partial<AssignmentChoice>) => {
-    const current = assignments[brandId] ?? { accountId: "", mailboxAccountId: "" };
-    const next = { ...current, ...patch };
+    const current = normalizeAssignmentChoice(assignments[brandId]);
+    const next = normalizeAssignmentChoice({ ...current, ...patch });
     setAssignments((prev) => ({ ...prev, [brandId]: next }));
 
     try {
-      await assignBrandOutreachAccount(brandId, next);
+      const saved = await assignBrandOutreachAccount(brandId, next);
+      setAssignments((prev) => ({
+        ...prev,
+        [brandId]: normalizeAssignmentChoice(saved.assignment),
+      }));
     } catch (err) {
+      setAssignments((prev) => ({ ...prev, [brandId]: current }));
       setError(err instanceof Error ? err.message : "Failed to assign account");
     }
   };
@@ -691,13 +771,12 @@ export default function OutreachSettingsClient() {
     setAssignments((prev) => {
       const next: AssignmentMap = {};
       for (const [brandId, row] of Object.entries(prev)) {
-        if (row.accountId === deletedId) {
-          next[brandId] = { accountId: "", mailboxAccountId: "" };
-        } else if (row.mailboxAccountId === deletedId) {
-          next[brandId] = { ...row, mailboxAccountId: "" };
-        } else {
-          next[brandId] = row;
-        }
+        const filteredAccountIds = row.accountIds.filter((accountId) => accountId !== deletedId);
+        next[brandId] = normalizeAssignmentChoice({
+          accountId: row.accountId === deletedId ? filteredAccountIds[0] ?? "" : row.accountId,
+          accountIds: filteredAccountIds,
+          mailboxAccountId: row.mailboxAccountId === deletedId ? "" : row.mailboxAccountId,
+        });
       }
       return next;
     });
@@ -707,17 +786,14 @@ export default function OutreachSettingsClient() {
         const row = await fetchBrandOutreachAssignment(brand.id);
         return {
           brandId: brand.id,
-          accountId: row.assignment?.accountId ?? "",
-          mailboxAccountId: row.assignment?.mailboxAccountId ?? "",
+          assignment: normalizeAssignmentChoice(row.assignment),
         };
       })
     );
+
     const map: AssignmentMap = {};
     for (const row of assignmentPairs) {
-      map[row.brandId] = {
-        accountId: row.accountId,
-        mailboxAccountId: row.mailboxAccountId,
-      };
+      map[row.brandId] = row.assignment;
     }
     setAssignments(map);
   };
@@ -737,24 +813,27 @@ export default function OutreachSettingsClient() {
 
   const brandReadiness = useMemo(() => {
     return brands.map((brand) => {
-      const assignment = assignments[brand.id] ?? { accountId: "", mailboxAccountId: "" };
-      const delivery = assignment.accountId
-        ? deliveryAccounts.find((account) => account.id === assignment.accountId) ?? null
-        : null;
+      const assignment = normalizeAssignmentChoice(assignments[brand.id]);
+      const selectedSenders = assignment.accountIds
+        .map((accountId) => deliveryAccounts.find((account) => account.id === accountId) ?? null)
+        .filter((account): account is OutreachAccount => Boolean(account));
+      const delivery =
+        selectedSenders.find((account) => account.id === assignment.accountId) ?? selectedSenders[0] ?? null;
       const mailbox = assignment.mailboxAccountId
         ? mailboxAccounts.find((account) => account.id === assignment.mailboxAccountId) ?? null
         : null;
 
-      const deliveryAssigned = Boolean(delivery && delivery.status === "active");
+      const deliveryAssigned = Boolean(selectedSenders.length);
       const mailboxAssigned = Boolean(mailbox && mailbox.status === "active");
       const deliveryTested = Boolean(delivery && delivery.lastTestAt);
       const mailboxTested = Boolean(mailbox && mailbox.lastTestAt);
-      const deliveryPass = Boolean(delivery && delivery.lastTestStatus === "pass");
+      const deliveryPass = Boolean(delivery && delivery.status === "active" && delivery.lastTestStatus === "pass");
       const mailboxPass = Boolean(mailbox && mailbox.lastTestStatus === "pass");
 
       return {
         brand,
         assignment,
+        selectedSenders,
         delivery,
         mailbox,
         deliveryAssigned,
@@ -766,756 +845,718 @@ export default function OutreachSettingsClient() {
         ready: deliveryAssigned && mailboxAssigned && deliveryPass && mailboxPass,
       };
     });
-  }, [brands, assignments, deliveryAccounts, mailboxAccounts]);
+  }, [assignments, brands, deliveryAccounts, mailboxAccounts]);
 
+  const scopedBrandReadiness = useMemo(
+    () => (selectedBrand ? brandReadiness.filter((row) => row.brand.id === selectedBrand.id) : []),
+    [brandReadiness, selectedBrand]
+  );
+  const selectedBrandReadiness = scopedBrandReadiness[0] ?? null;
   const brandsNeedingAttention = useMemo(
-    () => brandReadiness.filter((row) => !row.ready),
-    [brandReadiness]
+    () => scopedBrandReadiness.filter((row) => !row.ready),
+    [scopedBrandReadiness]
   );
-  const configuredBrands = useMemo(
-    () => brandReadiness.filter((row) => row.ready),
-    [brandReadiness]
-  );
-
-  const providerDefaultsReady = Boolean(
-    provisioningSettings?.customerIo.siteId.trim() &&
-      provisioningSettings.customerIo.hasTrackingApiKey &&
-      provisioningSettings?.namecheap.apiUser.trim() &&
-      provisioningSettings.namecheap.hasApiKey &&
-      provisioningSettings?.namecheap.clientIp.trim()
-  );
+  const selectedSenderCount = selectedBrandReadiness?.assignment.accountIds.length ?? 0;
 
   const identityStatus: SetupStepStatus =
-    brands.length > 0 && configuredBrands.length === brands.length
-      ? "complete"
-      : configuredBrands.length > 0 || brandsNeedingAttention.length > 0
-        ? "attention"
-        : "todo";
+    !selectedBrand ? "todo" : selectedBrandReadiness?.ready ? "complete" : "attention";
 
-  const connectionsStatus: SetupStepStatus =
-    providerDefaultsReady && deliveryAccounts.length > 0
+  const integrationsStatus: SetupStepStatus =
+    providerDefaultsReady && (!selectedBrand || selectedBrandSenderAccounts.length > 0)
       ? "complete"
       : providerDefaultsReady ||
           provisioningSettings?.customerIo.lastValidatedStatus === "fail" ||
           provisioningSettings?.namecheap.lastValidatedStatus === "fail" ||
-          deliveryAccounts.length > 0
+          deliveryAccounts.length > 0 ||
+          selectedBrandSenderAccounts.length > 0
         ? "attention"
         : "todo";
 
-  const deliveryStatus: SetupStepStatus =
-    mailboxAccounts.length > 0
+  const emailStatus: SetupStepStatus =
+    !selectedBrand
+      ? "todo"
+      : mailboxAccounts.length > 0
       ? brandsNeedingAttention.some((row) => !row.mailboxAssigned)
         ? "attention"
         : "complete"
       : "todo";
 
-  const completedSteps = [identityStatus, connectionsStatus, deliveryStatus].filter(
-    (status) => status === "complete"
-  ).length;
-
   const identityPrerequisites = [
-    !providerDefaultsReady ? "Connect Customer.io and Namecheap defaults in Connections first." : "",
-    !deliveryAccounts.length ? "Add at least one sending account in Connections." : "",
-    !mailboxAccounts.length ? "Connect a reply inbox in Delivery." : "",
+    !selectedBrand ? "Pick the brand you want from the sidebar selector first." : "",
+    !providerDefaultsReady ? "Connect the delivery stack in Integrations first." : "",
+    selectedBrand && !selectedBrandSenderAccounts.length
+      ? `Add or provision at least one sender for ${selectedBrand.name}.`
+      : "",
+    !mailboxAccounts.length ? "Add at least one reply inbox in Email Accounts." : "",
   ].filter(Boolean);
 
-  const connectionSummary = providerDefaultsReady
-    ? `${deliveryAccounts.length} sending account${deliveryAccounts.length === 1 ? "" : "s"} connected`
-    : "Customer.io and Namecheap defaults still need setup";
-  const deliverySummary = mailboxAccounts.length
-    ? `${mailboxAccounts.length} reply inbox${mailboxAccounts.length === 1 ? "" : "es"} connected`
-    : "No reply inbox connected yet";
+  const integrationsSummary = providerDefaultsReady
+    ? selectedBrand
+      ? `${selectedBrandSenderAccounts.length} sender${selectedBrandSenderAccounts.length === 1 ? "" : "s"} for ${selectedBrand.name}`
+      : `${deliveryAccounts.length} sender${deliveryAccounts.length === 1 ? "" : "s"} available`
+    : "Connection center still needs setup";
+  const emailSummary = mailboxAccounts.length
+    ? `${mailboxAccounts.length} reply inbox${mailboxAccounts.length === 1 ? "" : "es"} available`
+    : "No reply inboxes connected yet";
   const identitySummary =
-    configuredBrands.length > 0
-      ? `${configuredBrands.length}/${brands.length || 0} brands ready to run`
-      : "No brands fully configured yet";
+    !selectedBrand
+      ? "Pick a brand from the selector first"
+      : selectedBrandReadiness?.ready
+        ? `${selectedBrand.name} is ready to launch`
+        : `${selectedSenderCount} sender${selectedSenderCount === 1 ? "" : "s"} selected for ${selectedBrand.name}`;
 
   return (
-    <div className="space-y-6">
-      <Card className="overflow-hidden">
-        <CardHeader className="border-b border-[color:var(--border)] bg-[radial-gradient(circle_at_top_left,color-mix(in_srgb,var(--accent)_15%,transparent),transparent_50%),linear-gradient(135deg,color-mix(in_srgb,var(--surface-muted)_92%,white),var(--surface))]">
-          <div className="flex flex-wrap items-start justify-between gap-4">
-            <div className="space-y-2">
-              <div className="inline-flex items-center gap-2 rounded-full border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-1 text-xs text-[color:var(--muted-foreground)]">
-                <Sparkles className="h-3.5 w-3.5" />
-                Progressive setup
-              </div>
-              <CardTitle>Outreach Setup Flow</CardTitle>
-              <CardDescription>
-                Move through Identity, Connections, and Delivery one step at a time. Technical fields stay tucked away
-                until you explicitly open them.
-              </CardDescription>
+    <>
+      <div className="space-y-6">
+        <div className="space-y-2">
+          <div className="text-sm text-[color:var(--muted-foreground)]">
+            {selectedBrand
+              ? `Editing ${selectedBrand.name}. Choose the senders, reply inbox, and connections for this brand.`
+              : "Pick a brand from the sidebar to start."}
+          </div>
+          <div className="flex flex-wrap items-center gap-3 text-sm">
+            <div className="font-medium">{selectedBrand?.name || "No brand selected"}</div>
+            {setupStatusBadge(
+              selectedBrandReadiness?.ready ? "complete" : selectedBrand ? "attention" : "todo",
+              selectedBrandReadiness?.ready ? "Ready to send" : selectedBrand ? "Setup incomplete" : "Choose brand"
+            )}
+            <div className="text-[color:var(--muted-foreground)]">
+              {selectedSenderCount} sender{selectedSenderCount === 1 ? "" : "s"} selected
             </div>
-            <div className="flex items-center gap-2 rounded-full border border-[color:var(--border)] bg-[color:var(--surface)] px-4 py-2 text-sm">
-              <CheckCircle2 className="h-4 w-4 text-[color:var(--success)]" />
-              {completedSteps}/3 steps configured
+            <div className="text-[color:var(--muted-foreground)]">
+              Reply inbox: {selectedBrandReadiness?.mailbox?.name || "None"}
             </div>
           </div>
-        </CardHeader>
-        <CardContent className="grid gap-3 pt-5 md:grid-cols-4">
-          <SummaryMetric label="Ready brands" value={`${configuredBrands.length}/${brands.length}`} tone="success" />
-          <SummaryMetric label="Sending accounts" value={String(deliveryAccounts.length)} tone="accent" />
-          <SummaryMetric label="Reply inboxes" value={String(mailboxAccounts.length)} tone="accent" />
-          <SummaryMetric label="Active accounts" value={String(activeCount)} />
-        </CardContent>
-      </Card>
+        </div>
 
-      {error ? <div className="text-sm text-[color:var(--danger)]">{error}</div> : null}
-      {loading ? <div className="text-sm text-[color:var(--muted-foreground)]">Loading outreach settings...</div> : null}
+        {error ? <div className="text-sm text-[color:var(--danger)]">{error}</div> : null}
+        {loading ? <div className="text-sm text-[color:var(--muted-foreground)]">Loading outreach settings...</div> : null}
 
-      <div className="grid gap-6 xl:grid-cols-[280px_minmax(0,1fr)]">
-        <div className="space-y-4 xl:sticky xl:top-4 xl:self-start">
-          <StepCard
-            stepNumber="1"
-            title="Identity"
-            description="Choose the brand flow, sender domains, and who each brand should route through."
-            summary={identitySummary}
-            status={identityStatus}
-            active={activeStep === "identity"}
-            icon={Fingerprint}
-            onClick={() => setActiveStep("identity")}
-          />
-          <StepCard
-            stepNumber="2"
-            title="Connections"
-            description="Connect the delivery stack and keep provider credentials hidden until you need them."
-            summary={connectionSummary}
-            status={connectionsStatus}
-            active={activeStep === "connections"}
-            icon={Link2}
-            onClick={() => setActiveStep("connections")}
-          />
-          <StepCard
-            stepNumber="3"
-            title="Delivery"
-            description="Connect the inboxes where replies should land and keep advanced mail settings collapsed."
-            summary={deliverySummary}
-            status={deliveryStatus}
-            active={activeStep === "delivery"}
-            icon={Inbox}
-            onClick={() => setActiveStep("delivery")}
-          />
+        <div className="overflow-x-auto border-b border-[color:var(--border)]">
+          <div className="flex min-w-max gap-6">
+            <SetupTabButton
+              title="Brand"
+              summary={identitySummary}
+              status={identityStatus}
+              active={activeTab === "identity"}
+              onClick={() => setActiveTab("identity")}
+            />
+            <SetupTabButton
+              title="Connections"
+              summary={integrationsSummary}
+              status={integrationsStatus}
+              active={activeTab === "integrations"}
+              onClick={() => setActiveTab("integrations")}
+            />
+            <SetupTabButton
+              title="Reply inboxes"
+              summary={emailSummary}
+              status={emailStatus}
+              active={activeTab === "email"}
+              onClick={() => setActiveTab("email")}
+            />
+          </div>
         </div>
 
         <div className="space-y-5">
-          {activeStep === "identity" ? (
+          {activeTab === "identity" ? (
             <>
               <Card>
-                <CardHeader>
-                  <div className="flex flex-wrap items-center gap-2">
-                    <CardTitle className="text-base">Choose the Brand Flow</CardTitle>
-                    {setupStatusBadge(identityStatus, identityStatus === "complete" ? "Flow connected" : undefined)}
+                <CardHeader className="pb-3">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <CardTitle className="text-base">{selectedBrand?.name || "Brand setup"}</CardTitle>
+                      <CardDescription>
+                        {selectedBrand?.website || "Pick a brand from the sidebar, then assign senders and replies."}
+                      </CardDescription>
+                    </div>
+                    {setupStatusBadge(identityStatus, identityStatus === "complete" ? "Ready to run" : undefined)}
                   </div>
-                  <CardDescription>
-                    This step is about the user-facing flow: what domain a brand uses, where it forwards, and which
-                    sending and reply accounts it should rely on.
-                  </CardDescription>
                 </CardHeader>
-                {identityPrerequisites.length ? (
-                  <CardContent className="pt-0">
-                    <div className="rounded-3xl border border-[color:var(--danger-border)] bg-[color:var(--danger-soft)] p-4">
+                <CardContent className="pt-0">
+                  {identityPrerequisites.length ? (
+                    <div className="rounded-xl border border-[color:var(--danger-border)] bg-[color:var(--danger-soft)] px-4 py-3">
                       <div className="flex items-start gap-3">
                         <AlertCircle className="mt-0.5 h-4 w-4 text-[color:var(--danger)]" />
                         <div className="grid gap-1 text-sm text-[color:var(--danger)]">
-                          <div className="font-semibold">A few prerequisites are still missing</div>
+                          <div className="font-medium">Finish these first</div>
                           {identityPrerequisites.map((item) => (
                             <div key={item}>{item}</div>
                           ))}
                         </div>
                       </div>
                     </div>
-                  </CardContent>
-                ) : null}
-              </Card>
-
-              <SenderProvisionCard
-                brands={brands}
-                mailboxAccounts={mailboxAccounts}
-                customerIoAccounts={deliveryAccounts}
-                assignments={assignments}
-                provisioningSettings={provisioningSettings}
-                onProvisioned={(result) => {
-                  setAccounts((prev) => {
-                    const next = prev.filter((row) => row.id !== result.account.id);
-                    return [result.account, ...next];
-                  });
-                  setBrands((prev) => prev.map((row) => (row.id === result.brand.id ? result.brand : row)));
-                  if (result.assignment) {
-                    setAssignments((prev) => ({
-                      ...prev,
-                      [result.brand.id]: {
-                        accountId: result.assignment?.accountId ?? "",
-                        mailboxAccountId: result.assignment?.mailboxAccountId ?? "",
-                      },
-                    }));
-                  }
-                }}
-              />
-
-              <Card>
-                <CardHeader>
-                  <div className="flex flex-wrap items-center gap-2">
-                    <CardTitle className="text-base">What Still Needs Attention?</CardTitle>
-                    {setupStatusBadge(
-                      brandsNeedingAttention.length ? "attention" : "complete",
-                      brandsNeedingAttention.length ? `${brandsNeedingAttention.length} brand${brandsNeedingAttention.length === 1 ? "" : "s"} blocked` : "All clear"
-                    )}
-                  </div>
-                  <CardDescription>
-                    Incomplete brands stay expanded here. Fully configured brands move into a collapsed success state so
-                    the page keeps focus on what is left.
-                  </CardDescription>
-                </CardHeader>
-                <CardContent className="grid gap-3">
-                  {brandsNeedingAttention.length ? (
-                    brandsNeedingAttention.map((row) => {
-                      const assignedMailboxEmail = row.mailbox?.config.mailbox.email?.trim() ?? "";
-                      return (
-                        <div
-                          key={row.brand.id}
-                          className="grid gap-3 rounded-3xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-4 md:grid-cols-[1fr_240px_240px] md:items-center"
-                        >
-                          <div className="min-w-0">
-                            <div className="text-sm font-semibold">{row.brand.name}</div>
-                            <div className="text-xs text-[color:var(--muted-foreground)]">{row.brand.website}</div>
-                            <div className="mt-2 flex flex-wrap gap-2">
-                              <Badge variant={row.deliveryPass ? "success" : row.deliveryAssigned ? "danger" : "muted"}>
-                                {row.deliveryAssigned
-                                  ? row.deliveryPass
-                                    ? "Sending ready"
-                                    : row.deliveryTested
-                                      ? "Sending needs attention"
-                                      : "Sending not tested"
-                                  : "Sending unassigned"}
-                              </Badge>
-                              <Badge variant={row.mailboxPass ? "success" : row.mailboxAssigned ? "danger" : "muted"}>
-                                {row.mailboxAssigned
-                                  ? row.mailboxPass
-                                    ? "Replies ready"
-                                    : row.mailboxTested
-                                      ? "Replies need attention"
-                                      : "Replies not tested"
-                                  : "Replies unassigned"}
-                              </Badge>
-                            </div>
-                          </div>
-
-                          <div className="grid gap-1">
-                            <div className="text-[11px] uppercase tracking-[0.08em] text-[color:var(--muted-foreground)]">
-                              Sending account
-                            </div>
-                            <Select
-                              value={row.assignment.accountId}
-                              onChange={(event) => void onAssign(row.brand.id, { accountId: event.target.value })}
-                            >
-                              <option value="">Choose sending account</option>
-                              {deliveryAccounts.map((account) => (
-                                <option key={account.id} value={account.id}>
-                                  {account.name}
-                                </option>
-                              ))}
-                            </Select>
-                            {row.delivery ? (
-                              <div className="text-xs text-[color:var(--muted-foreground)]">
-                                From:{" "}
-                                <span className="font-medium text-[color:var(--foreground)]">
-                                  {row.delivery.config.customerIo.fromEmail || "not set"}
-                                </span>
-                              </div>
-                            ) : (
-                              <Button type="button" variant="ghost" size="sm" className="justify-start px-0" onClick={() => setActiveStep("connections")}>
-                                Open Connections
-                              </Button>
-                            )}
-                          </div>
-
-                          <div className="grid gap-1">
-                            <div className="text-[11px] uppercase tracking-[0.08em] text-[color:var(--muted-foreground)]">
-                              Reply inbox
-                            </div>
-                            <Select
-                              value={row.assignment.mailboxAccountId}
-                              onChange={(event) => void onAssign(row.brand.id, { mailboxAccountId: event.target.value })}
-                            >
-                              <option value="">Choose reply inbox</option>
-                              {mailboxAccounts.map((account) => (
-                                <option key={account.id} value={account.id}>
-                                  {account.name}
-                                </option>
-                              ))}
-                            </Select>
-                            {row.assignment.mailboxAccountId ? (
-                              <div className="text-xs text-[color:var(--muted-foreground)]">
-                                Reply-To:{" "}
-                                <span className="font-medium text-[color:var(--foreground)]">
-                                  {assignedMailboxEmail || "not set"}
-                                </span>
-                              </div>
-                            ) : (
-                              <Button type="button" variant="ghost" size="sm" className="justify-start px-0" onClick={() => setActiveStep("delivery")}>
-                                Open Delivery
-                              </Button>
-                            )}
-                          </div>
-                        </div>
-                      );
-                    })
                   ) : (
-                    <div className="rounded-3xl border border-[color:var(--success-border)] bg-[color:var(--success-soft)] p-4 text-sm text-[color:var(--success)]">
-                      Every brand currently has a tested sender and a reply inbox assigned.
+                    <div className="grid gap-2 text-sm text-[color:var(--muted-foreground)] md:grid-cols-3">
+                      <div>Selected senders: {selectedSenderCount}</div>
+                      <div>Default sender: {selectedBrandReadiness?.delivery?.name || "None"}</div>
+                      <div>Reply inbox: {selectedBrandReadiness?.mailbox?.name || "None"}</div>
                     </div>
                   )}
                 </CardContent>
               </Card>
 
-              {configuredBrands.length ? (
-                <Card>
-                  <CardHeader className="flex flex-row items-center justify-between gap-3 space-y-0">
-                    <div className="space-y-1">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <CardTitle className="text-base">Configured Brands</CardTitle>
-                        <Badge variant="success">
-                          {configuredBrands.length} ready to run
-                        </Badge>
-                      </div>
-                      <CardDescription>
-                        Collapse the brands that are already healthy so the page keeps attention on the remaining setup work.
-                      </CardDescription>
-                    </div>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => setShowConfiguredBrands((prev) => !prev)}
-                    >
-                      {showConfiguredBrands ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
-                      {showConfiguredBrands ? "Hide" : "Review"}
-                    </Button>
-                  </CardHeader>
-                  {showConfiguredBrands ? (
-                    <CardContent className="grid gap-3">
-                      {configuredBrands.map((row) => (
-                        <div
-                          key={row.brand.id}
-                          className="flex flex-wrap items-center justify-between gap-3 rounded-3xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-4"
-                        >
-                          <div>
-                            <div className="text-sm font-semibold">{row.brand.name}</div>
-                            <div className="text-xs text-[color:var(--muted-foreground)]">
-                              {row.delivery?.config.customerIo.fromEmail || "no sender"} · {row.mailbox?.config.mailbox.email || "no inbox"}
-                            </div>
-                          </div>
-                          <div className="flex flex-wrap gap-2">
-                            <Badge variant="success">Sending ready</Badge>
-                            <Badge variant="success">Replies ready</Badge>
-                          </div>
-                        </div>
-                      ))}
-                    </CardContent>
-                  ) : null}
-                </Card>
-              ) : null}
-            </>
-          ) : null}
-
-          {activeStep === "connections" ? (
-            <>
-              {provisioningSettings ? (
-                <ProvisioningProviderSettingsCard
-                  settings={provisioningSettings}
-                  onSaved={(next) => {
-                    setProvisioningSettings(next);
+              {selectedBrand ? (
+                <SenderProvisionCard
+                  brands={scopedBrands}
+                  allBrands={brands}
+                  mailboxAccounts={mailboxAccounts}
+                  customerIoAccounts={deliveryAccounts}
+                  assignments={assignments}
+                  provisioningSettings={provisioningSettings}
+                  onProvisioned={(result) => {
+                    setAccounts((prev) => {
+                      const next = prev.filter((row) => row.id !== result.account.id);
+                      return [result.account, ...next];
+                    });
+                    setBrands((prev) => prev.map((row) => (row.id === result.brand.id ? result.brand : row)));
+                    if (result.assignment) {
+                      setAssignments((prev) => ({
+                        ...prev,
+                        [result.brand.id]: normalizeAssignmentChoice(result.assignment),
+                      }));
+                    }
                   }}
                 />
               ) : null}
 
               <Card>
-                <CardHeader className="flex flex-row items-start justify-between gap-3 space-y-0">
-                  <div className="space-y-1">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <CardTitle className="text-base">Where Should We Send From?</CardTitle>
-                      {setupStatusBadge(deliveryAccounts.length ? "complete" : "todo", deliveryAccounts.length ? "Connected" : "Not connected")}
+                <CardHeader className="pb-3">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <CardTitle className="text-base">Sending setup</CardTitle>
+                      <CardDescription>
+                        Choose which senders belong to this brand. One sender is the default, but all selected senders
+                        stay available for rotation.
+                      </CardDescription>
                     </div>
-                    <CardDescription>
-                      Connect a sending account only when you need one. Existing accounts stay visible as compact status cards instead of a giant exposed form.
-                    </CardDescription>
+                    {setupStatusBadge(
+                      selectedBrandReadiness?.ready ? "complete" : selectedBrand ? "attention" : "todo",
+                      selectedBrandReadiness?.ready ? "Ready to run" : selectedBrand ? "Needs attention" : "No brand selected"
+                    )}
                   </div>
-                  <Button type="button" variant={showDeliveryForm ? "ghost" : "outline"} onClick={() => setShowDeliveryForm((prev) => !prev)}>
-                    <Send className="h-4 w-4" />
-                    {showDeliveryForm ? "Hide form" : "Connect sending account"}
-                  </Button>
                 </CardHeader>
-                <CardContent className="grid gap-4">
-                  {!showDeliveryForm ? (
-                    <div className="rounded-3xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-4 text-sm text-[color:var(--muted-foreground)]">
-                      {deliveryAccounts.length
-                        ? "Your sending accounts are connected. Open the form only if you need to add another sender."
-                        : "No sending account connected yet. Open the form to add the first Customer.io sender."}
-                    </div>
+                <CardContent className="pt-0">
+                  {selectedBrandReadiness ? (
+                    (() => {
+                      const row = selectedBrandReadiness;
+                      const assignedMailboxEmail = row.mailbox?.config.mailbox.email?.trim() ?? "";
+
+                      return (
+                        <div className="grid gap-5 lg:grid-cols-[minmax(0,1.2fr)_320px]">
+                          <div className="grid gap-2">
+                            <div className="flex items-center justify-between gap-3">
+                              <div className="text-sm font-medium">Senders for this brand</div>
+                              <div className="text-xs text-[color:var(--muted-foreground)]">
+                                {row.assignment.accountIds.length} selected
+                              </div>
+                            </div>
+                            {selectedBrandSenderAccounts.length ? (
+                              <div className="overflow-hidden rounded-xl border border-[color:var(--border)]">
+                                {selectedBrandSenderAccounts.map((account) => {
+                                  const checked = row.assignment.accountIds.includes(account.id);
+                                  const healthLabel =
+                                    account.lastTestStatus === "pass"
+                                      ? "Ready"
+                                      : account.lastTestStatus === "fail"
+                                        ? "Needs attention"
+                                        : "Not checked";
+                                  return (
+                                    <label
+                                      key={account.id}
+                                      className="flex items-start justify-between gap-3 border-t border-[color:var(--border)] px-4 py-3 first:border-t-0"
+                                    >
+                                      <div className="flex items-start gap-3">
+                                        <input
+                                          type="checkbox"
+                                          className="mt-1 h-4 w-4"
+                                          checked={checked}
+                                          onChange={(event) => {
+                                            const nextAccountIds = event.target.checked
+                                              ? [...row.assignment.accountIds, account.id]
+                                              : row.assignment.accountIds.filter((accountId) => accountId !== account.id);
+                                            const nextPrimary = nextAccountIds.includes(row.assignment.accountId)
+                                              ? row.assignment.accountId
+                                              : nextAccountIds[0] ?? "";
+                                            void onAssign(row.brand.id, {
+                                              accountId: nextPrimary,
+                                              accountIds: nextAccountIds,
+                                            });
+                                          }}
+                                        />
+                                        <div className="min-w-0">
+                                          <div className="font-medium">{account.name}</div>
+                                          <div className="text-xs text-[color:var(--muted-foreground)]">
+                                            {account.config.customerIo.fromEmail || "From address not set"}
+                                          </div>
+                                        </div>
+                                      </div>
+                                      <div className="text-xs text-[color:var(--muted-foreground)]">{healthLabel}</div>
+                                    </label>
+                                  );
+                                })}
+                              </div>
+                            ) : (
+                              <div className="rounded-xl border border-[color:var(--border)] px-4 py-4 text-sm text-[color:var(--muted-foreground)]">
+                                No senders belong to {row.brand.name} yet. Add or provision a sender for this brand in
+                                Connections.
+                              </div>
+                            )}
+                          </div>
+
+                          <div className="grid gap-4">
+                            <div className="grid gap-2">
+                              <div className="text-sm font-medium">Default sender</div>
+                              <Select
+                                value={row.assignment.accountId}
+                                onChange={(event) =>
+                                  void onAssign(row.brand.id, {
+                                    accountId: event.target.value,
+                                    accountIds: row.assignment.accountIds,
+                                  })
+                                }
+                                disabled={!row.selectedSenders.length}
+                              >
+                                <option value="">Choose default sender</option>
+                                {row.selectedSenders.map((account) => (
+                                  <option key={account.id} value={account.id}>
+                                    {account.name}
+                                  </option>
+                                ))}
+                              </Select>
+                              <div className="text-xs text-[color:var(--muted-foreground)]">
+                                From: {row.delivery?.config.customerIo.fromEmail || "Not set"}
+                              </div>
+                            </div>
+
+                            <div className="grid gap-2">
+                              <div className="text-sm font-medium">Reply inbox</div>
+                              <Select
+                                value={row.assignment.mailboxAccountId}
+                                disabled={!row.assignment.accountIds.length}
+                                onChange={(event) => void onAssign(row.brand.id, { mailboxAccountId: event.target.value })}
+                              >
+                                <option value="">Choose reply inbox</option>
+                                {mailboxAccounts.map((account) => (
+                                  <option key={account.id} value={account.id}>
+                                    {account.name}
+                                  </option>
+                                ))}
+                              </Select>
+                              <div className="text-xs text-[color:var(--muted-foreground)]">
+                                Reply-To: {assignedMailboxEmail || "Not set"}
+                              </div>
+                            </div>
+
+                            <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-4 py-3 text-sm text-[color:var(--muted-foreground)]">
+                              <div>Website: {row.brand.website || "Not set"}</div>
+                              <div className="mt-1">
+                                Sender check:{" "}
+                                {row.deliveryAssigned
+                                  ? row.deliveryPass
+                                    ? "Ready"
+                                    : row.deliveryTested
+                                      ? "Needs attention"
+                                      : "Not checked"
+                                  : "No sender selected"}
+                              </div>
+                              <div className="mt-1">
+                                Reply check:{" "}
+                                {row.mailboxAssigned
+                                  ? row.mailboxPass
+                                    ? "Ready"
+                                    : row.mailboxTested
+                                      ? "Needs attention"
+                                      : "Not checked"
+                                  : "No reply inbox selected"}
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })()
                   ) : (
-                    <div className="grid gap-4 rounded-3xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-4">
-                      <div className="flex flex-wrap items-center justify-between gap-3">
-                        <div>
-                          <div className="text-sm font-semibold">Connect a Customer.io sender</div>
-                          <div className="text-xs text-[color:var(--muted-foreground)]">
-                            Required fields first. App API access stays tucked under advanced settings.
-                          </div>
-                        </div>
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => setShowDeliveryAdvanced((prev) => !prev)}
-                        >
-                          <ChevronDown className={`h-4 w-4 transition ${showDeliveryAdvanced ? "rotate-180" : ""}`} />
-                          {showDeliveryAdvanced ? "Hide advanced" : "Show advanced"}
-                        </Button>
-                      </div>
-
-                      <div className="grid gap-3 md:grid-cols-2">
-                        <div className="grid gap-2">
-                          <FieldLabel
-                            htmlFor="delivery-account-name"
-                            label="Account Name"
-                            help="Internal label for the sender, for example Main Delivery."
-                          />
-                          <Input
-                            id="delivery-account-name"
-                            value={deliveryForm.name}
-                            onChange={(event) => setDeliveryForm((prev) => ({ ...prev, name: event.target.value }))}
-                            placeholder="Main Delivery"
-                            aria-invalid={Boolean(deliveryErrors.name)}
-                            className={invalidFieldClass(Boolean(deliveryErrors.name))}
-                          />
-                          <FieldError message={deliveryErrors.name} />
-                        </div>
-                        <div className="grid gap-2">
-                          <FieldLabel
-                            htmlFor="delivery-from-email"
-                            label="From Email"
-                            help="The sender address recipients see. It must live on a verified Customer.io sending domain."
-                          />
-                          <Input
-                            id="delivery-from-email"
-                            value={deliveryForm.fromEmail}
-                            onChange={(event) => setDeliveryForm((prev) => ({ ...prev, fromEmail: event.target.value }))}
-                            placeholder="zeynep@brand.com"
-                            aria-invalid={Boolean(deliveryErrors.fromEmail)}
-                            className={invalidFieldClass(Boolean(deliveryErrors.fromEmail))}
-                          />
-                          <FieldError message={deliveryErrors.fromEmail} />
-                        </div>
-                        <div className="grid gap-2">
-                          <FieldLabel
-                            htmlFor="delivery-site-id"
-                            label="Customer.io Site ID"
-                            help="Customer.io -> Settings -> API Credentials. Copy the Site ID from the same row as your Tracking API key."
-                          />
-                          <Input
-                            id="delivery-site-id"
-                            value={deliveryForm.siteId}
-                            onChange={(event) => setDeliveryForm((prev) => ({ ...prev, siteId: event.target.value }))}
-                            placeholder="9336ae1a489137ebb1e5"
-                            aria-invalid={Boolean(deliveryErrors.siteId)}
-                            className={invalidFieldClass(Boolean(deliveryErrors.siteId))}
-                          />
-                          <FieldError message={deliveryErrors.siteId} />
-                        </div>
-                        <div className="grid gap-2">
-                          <FieldLabel
-                            htmlFor="delivery-api-key"
-                            label="Tracking API Key"
-                            help="Customer.io -> Settings -> API Credentials. Use the Tracking API key, not the App API key."
-                          />
-                          <Input
-                            id="delivery-api-key"
-                            type="password"
-                            value={deliveryForm.customerIoApiKey}
-                            onChange={(event) =>
-                              setDeliveryForm((prev) => ({ ...prev, customerIoApiKey: event.target.value }))
-                            }
-                            placeholder="3a50ad6998b2fd842b5f"
-                            aria-invalid={Boolean(deliveryErrors.customerIoApiKey)}
-                            className={invalidFieldClass(Boolean(deliveryErrors.customerIoApiKey))}
-                          />
-                          <FieldError message={deliveryErrors.customerIoApiKey} />
-                        </div>
-                        {showDeliveryAdvanced ? (
-                          <div className="grid gap-2 md:col-span-2">
-                            <FieldLabel
-                              htmlFor="delivery-app-api-key"
-                              label="Customer.io App API Key"
-                              help="Optional but recommended. Lets the platform check workspace people counts before you hit the monthly profile cap."
-                            />
-                            <Input
-                              id="delivery-app-api-key"
-                              type="password"
-                              value={deliveryForm.customerIoAppApiKey}
-                              onChange={(event) =>
-                                setDeliveryForm((prev) => ({ ...prev, customerIoAppApiKey: event.target.value }))
-                              }
-                              placeholder="Optional App API key"
-                            />
-                          </div>
-                        ) : null}
-                      </div>
-
-                      <div className="flex justify-end">
-                        <Button type="button" disabled={savingDelivery} onClick={createDeliveryAccount}>
-                          {savingDelivery ? "Saving..." : "Connect sender"}
-                        </Button>
-                      </div>
+                    <div className="rounded-xl border border-[color:var(--border)] px-4 py-4 text-sm text-[color:var(--muted-foreground)]">
+                      Pick a brand from the sidebar selector to configure senders and replies.
                     </div>
                   )}
                 </CardContent>
               </Card>
+            </>
+          ) : null}
 
-              <AccountListCard
-                title="Connected Sending Accounts"
-                description="Compact status cards so users can scan health without reopening setup fields."
-                emptyMessage="No sending accounts connected yet."
+          {activeTab === "integrations" ? (
+            <>
+              {provisioningSettings ? (
+                <ProvisioningProviderSettingsCard
+                  settings={provisioningSettings}
+                  onSaved={(next) => setProvisioningSettings(next)}
+                />
+              ) : null}
+
+              <AccountInventoryCard
+                title={selectedBrand ? `Senders for ${selectedBrand.name}` : "Senders"}
+                description={
+                  selectedBrand
+                    ? "Only sender identities that belong to the selected brand appear here."
+                    : "Saved sender identities you can attach to brands."
+                }
+                emptyMessage={
+                  selectedBrand
+                    ? `No senders belong to ${selectedBrand.name} yet. Add one to start sending for this brand.`
+                    : "No senders connected yet. Add one to start sending."
+                }
+                addLabel="Add sender"
                 testScope="customerio"
-                accounts={deliveryAccounts}
+                accounts={selectedBrand ? selectedBrandSenderAccounts : deliveryAccounts}
                 setAccounts={setAccounts}
                 setError={setError}
                 onDeleteAccount={onDeleteAccount}
+                onAdd={() => {
+                  setError("");
+                  setDeliveryModalOpen(true);
+                }}
               />
             </>
           ) : null}
 
-          {activeStep === "delivery" ? (
-            <>
-              <Card>
-                <CardHeader className="flex flex-row items-start justify-between gap-3 space-y-0">
-                  <div className="space-y-1">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <CardTitle className="text-base">Where Should We Send Replies?</CardTitle>
-                      {setupStatusBadge(mailboxAccounts.length ? "complete" : "todo", mailboxAccounts.length ? "Connected" : "Not connected")}
-                    </div>
-                    <CardDescription>
-                      Reply inboxes stay hidden behind a single action. Advanced IMAP fields only open if the user asks for them.
-                    </CardDescription>
-                  </div>
-                  <Button type="button" variant={showMailboxForm ? "ghost" : "outline"} onClick={() => setShowMailboxForm((prev) => !prev)}>
-                    <Inbox className="h-4 w-4" />
-                    {showMailboxForm ? "Hide form" : "Connect reply inbox"}
-                  </Button>
-                </CardHeader>
-                <CardContent className="grid gap-4">
-                  {!showMailboxForm ? (
-                    <div className="rounded-3xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-4 text-sm text-[color:var(--muted-foreground)]">
-                      {mailboxAccounts.length
-                        ? "Your reply inboxes are connected. Open the form only when you need another mailbox."
-                        : "No reply inbox connected yet. Open the form to connect the inbox where human replies should land."}
-                    </div>
-                  ) : (
-                    <div className="grid gap-4 rounded-3xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-4">
-                      <div>
-                        <div className="text-sm font-semibold">Connect a reply inbox</div>
-                        <div className="text-xs text-[color:var(--muted-foreground)]">
-                          Start with the inbox and password. Only open advanced IMAP settings if the provider needs custom server details.
-                        </div>
-                      </div>
-
-                      <div className="grid gap-3 md:grid-cols-2">
-                        <div className="grid gap-2">
-                          <FieldLabel
-                            htmlFor="mailbox-account-name"
-                            label="Account Name"
-                            help="Internal label for this reply inbox, for example Sales Inbox."
-                          />
-                          <Input
-                            id="mailbox-account-name"
-                            value={mailboxForm.name}
-                            onChange={(event) => setMailboxForm((prev) => ({ ...prev, name: event.target.value }))}
-                            placeholder="Sales Inbox"
-                            aria-invalid={Boolean(mailboxErrors.name)}
-                            className={invalidFieldClass(Boolean(mailboxErrors.name))}
-                          />
-                          <FieldError message={mailboxErrors.name} />
-                        </div>
-                        <div className="grid gap-2">
-                          <FieldLabel
-                            htmlFor="mailbox-email"
-                            label="Reply Inbox Email"
-                            help="This is where replies land. The platform uses it as Reply-To when the mailbox is assigned to a brand."
-                          />
-                          <Input
-                            id="mailbox-email"
-                            value={mailboxForm.mailboxEmail}
-                            onChange={(event) => setMailboxForm((prev) => ({ ...prev, mailboxEmail: event.target.value }))}
-                            aria-invalid={Boolean(mailboxErrors.mailboxEmail)}
-                            className={invalidFieldClass(Boolean(mailboxErrors.mailboxEmail))}
-                          />
-                          <FieldError message={mailboxErrors.mailboxEmail} />
-                        </div>
-                        <div className="grid gap-2">
-                          <FieldLabel
-                            htmlFor="mailbox-provider"
-                            label="Mailbox Provider"
-                            help="Choose Gmail or Outlook for defaults. Choose IMAP only if you need custom server settings."
-                          />
-                          <Select
-                            id="mailbox-provider"
-                            value={mailboxForm.mailboxProvider}
-                            onChange={(event) =>
-                              setMailboxProviderWithDefaults(event.target.value as MailboxFormState["mailboxProvider"])
-                            }
-                          >
-                            <option value="gmail">gmail</option>
-                            <option value="outlook">outlook</option>
-                            <option value="imap">imap</option>
-                          </Select>
-                          {mailboxForm.mailboxProvider !== "imap" ? (
-                            <div className="text-[11px] text-[color:var(--muted-foreground)]">
-                              Using {mailboxForm.mailboxHost}:{mailboxForm.mailboxPort} by default.
-                            </div>
-                          ) : null}
-                        </div>
-                        <div className="grid gap-2">
-                          <FieldLabel
-                            htmlFor="mailbox-auth-method"
-                            label="Connection Method"
-                            help="App password is the simplest path for Gmail and Outlook. OAuth is for advanced setups that already have tokens."
-                          />
-                          <Select
-                            id="mailbox-auth-method"
-                            value={mailboxAuthMethod}
-                            onChange={(event) => setMailboxAuthMethod(event.target.value as MailboxAuthMethod)}
-                          >
-                            <option value="app_password">App password (recommended)</option>
-                            <option value="oauth_tokens">OAuth tokens (advanced)</option>
-                          </Select>
-                        </div>
-                        <div className="grid gap-2">
-                          <FieldLabel
-                            htmlFor="mailbox-password"
-                            label="App Password"
-                            help="Use a mailbox app password here, not the normal login password. For Gmail, enable 2-Step Verification before generating it."
-                          />
-                          <Input
-                            id="mailbox-password"
-                            type="password"
-                            value={mailboxForm.mailboxPassword}
-                            onChange={(event) => setMailboxForm((prev) => ({ ...prev, mailboxPassword: event.target.value }))}
-                            disabled={mailboxAuthMethod !== "app_password"}
-                            aria-invalid={Boolean(mailboxErrors.mailboxPassword)}
-                            className={invalidFieldClass(Boolean(mailboxErrors.mailboxPassword))}
-                          />
-                          <FieldError message={mailboxErrors.mailboxPassword} />
-                        </div>
-
-                        {mailboxAuthMethod === "oauth_tokens" ? (
-                          <>
-                            <div className="grid gap-2">
-                              <FieldLabel
-                                htmlFor="mailbox-access-token"
-                                label="OAuth Access Token"
-                                help="Only needed if you already manage mailbox OAuth tokens outside this app."
-                              />
-                              <Input
-                                id="mailbox-access-token"
-                                type="password"
-                                value={mailboxForm.mailboxAccessToken}
-                                onChange={(event) =>
-                                  setMailboxForm((prev) => ({ ...prev, mailboxAccessToken: event.target.value }))
-                                }
-                                aria-invalid={Boolean(mailboxErrors.mailboxAccessToken)}
-                                className={invalidFieldClass(Boolean(mailboxErrors.mailboxAccessToken))}
-                              />
-                              <FieldError message={mailboxErrors.mailboxAccessToken} />
-                            </div>
-                            <div className="grid gap-2">
-                              <FieldLabel
-                                htmlFor="mailbox-refresh-token"
-                                label="OAuth Refresh Token"
-                                help="Optional refresh token used to renew access automatically."
-                              />
-                              <Input
-                                id="mailbox-refresh-token"
-                                type="password"
-                                value={mailboxForm.mailboxRefreshToken}
-                                onChange={(event) =>
-                                  setMailboxForm((prev) => ({ ...prev, mailboxRefreshToken: event.target.value }))
-                                }
-                              />
-                            </div>
-                          </>
-                        ) : null}
-                      </div>
-
-                      <div className="flex flex-wrap items-center justify-between gap-3">
-                        <button
-                          type="button"
-                          className="text-xs font-medium text-[color:var(--muted-foreground)] underline decoration-dotted underline-offset-4"
-                          onClick={() => setShowMailboxAdvanced((prev) => !prev)}
-                        >
-                          {showMailboxAdvanced ? "Hide advanced IMAP settings" : "Show advanced IMAP settings"}
-                        </button>
-                        <div className="text-xs text-[color:var(--muted-foreground)]">
-                          Sending address still comes from the assigned sending account.
-                        </div>
-                      </div>
-
-                      {showMailboxAdvanced || mailboxForm.mailboxProvider === "imap" ? (
-                        <div className="grid gap-3 md:grid-cols-2">
-                          <div className="grid gap-2">
-                            <FieldLabel
-                              htmlFor="mailbox-host"
-                              label="IMAP Host"
-                              help="Gmail uses imap.gmail.com. Outlook uses outlook.office365.com."
-                            />
-                            <Input
-                              id="mailbox-host"
-                              value={mailboxForm.mailboxHost}
-                              onChange={(event) => setMailboxForm((prev) => ({ ...prev, mailboxHost: event.target.value }))}
-                              aria-invalid={Boolean(mailboxErrors.mailboxHost)}
-                              className={invalidFieldClass(Boolean(mailboxErrors.mailboxHost))}
-                            />
-                            <FieldError message={mailboxErrors.mailboxHost} />
-                          </div>
-                          <div className="grid gap-2">
-                            <FieldLabel
-                              htmlFor="mailbox-port"
-                              label="IMAP Port"
-                              help="Usually 993 for secure IMAP."
-                            />
-                            <Input
-                              id="mailbox-port"
-                              value={mailboxForm.mailboxPort}
-                              onChange={(event) => setMailboxForm((prev) => ({ ...prev, mailboxPort: event.target.value }))}
-                              aria-invalid={Boolean(mailboxErrors.mailboxPort)}
-                              className={invalidFieldClass(Boolean(mailboxErrors.mailboxPort))}
-                            />
-                            <FieldError message={mailboxErrors.mailboxPort} />
-                          </div>
-                        </div>
-                      ) : null}
-
-                      <div className="flex justify-end">
-                        <Button type="button" disabled={savingMailbox} onClick={createMailboxAccount}>
-                          {savingMailbox ? "Saving..." : "Connect reply inbox"}
-                        </Button>
-                      </div>
-                    </div>
-                  )}
-                </CardContent>
-              </Card>
-
-              <AccountListCard
-                title="Connected Reply Inboxes"
-                description="Reply accounts stay compact until the user wants to test, pause, or replace them."
-                emptyMessage="No reply inboxes connected yet."
-                testScope="mailbox"
-                accounts={mailboxAccounts}
-                setAccounts={setAccounts}
-                setError={setError}
-                onDeleteAccount={onDeleteAccount}
-              />
-            </>
+          {activeTab === "email" ? (
+            <AccountInventoryCard
+              title="Reply inboxes"
+              description="Mailboxes that receive human replies."
+              emptyMessage="No reply inboxes connected yet. Add the inbox where replies should land."
+              addLabel="Add inbox"
+              testScope="mailbox"
+              accounts={mailboxAccounts}
+              setAccounts={setAccounts}
+              setError={setError}
+              onDeleteAccount={onDeleteAccount}
+              onAdd={() => {
+                setError("");
+                setMailboxModalOpen(true);
+              }}
+            />
           ) : null}
         </div>
       </div>
-    </div>
+
+      <SettingsModal
+        open={deliveryModalOpen}
+        onOpenChange={(open) => {
+          if (!open) closeDeliveryModal();
+        }}
+        title="Add sender"
+        description="Connect one Customer.io sender identity. The technical keys stay inside this modal instead of living on the page."
+        footer={
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <a
+              href={CUSTOMER_IO_HELP_URL}
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex items-center gap-1 text-sm text-[color:var(--muted-foreground)] underline underline-offset-4"
+            >
+              Where do I find my Customer.io credentials?
+              <ExternalLink className="h-3.5 w-3.5" />
+            </a>
+            <div className="flex flex-wrap gap-2">
+              <Button type="button" variant="ghost" onClick={closeDeliveryModal}>
+                Cancel
+              </Button>
+              <Button type="button" disabled={savingDelivery} onClick={createDeliveryAccount}>
+                {savingDelivery ? "Saving..." : "Save sender"}
+              </Button>
+            </div>
+          </div>
+        }
+      >
+        <div className="grid gap-4 md:grid-cols-2">
+          <div className="grid gap-2">
+            <FieldLabel
+              htmlFor="delivery-account-name"
+              label="Account name"
+              help="Internal label for the sender, for example Main Delivery."
+            />
+            <Input
+              id="delivery-account-name"
+              value={deliveryForm.name}
+              onChange={(event) => setDeliveryForm((prev) => ({ ...prev, name: event.target.value }))}
+              placeholder="Main Delivery"
+              aria-invalid={Boolean(deliveryErrors.name)}
+              className={invalidFieldClass(Boolean(deliveryErrors.name))}
+            />
+            <FieldError message={deliveryErrors.name} />
+          </div>
+          <div className="grid gap-2">
+            <FieldLabel
+              htmlFor="delivery-from-email"
+              label="From email"
+              help="The sender address recipients see. It must live on a verified Customer.io sending domain."
+            />
+            <Input
+              id="delivery-from-email"
+              value={deliveryForm.fromEmail}
+              onChange={(event) => setDeliveryForm((prev) => ({ ...prev, fromEmail: event.target.value }))}
+              placeholder="hello@branddomain.com"
+              aria-invalid={Boolean(deliveryErrors.fromEmail)}
+              className={invalidFieldClass(Boolean(deliveryErrors.fromEmail))}
+            />
+            <FieldError message={deliveryErrors.fromEmail} />
+          </div>
+          <div className="grid gap-2">
+            <FieldLabel
+              htmlFor="delivery-site-id"
+              label="Customer.io Site ID"
+              help="Customer.io -> Settings -> API Credentials. Copy the Site ID from the same row as your tracking key."
+            />
+            <Input
+              id="delivery-site-id"
+              value={deliveryForm.siteId}
+              onChange={(event) => setDeliveryForm((prev) => ({ ...prev, siteId: event.target.value }))}
+              placeholder="9336ae1a489137ebb1e5"
+              aria-invalid={Boolean(deliveryErrors.siteId)}
+              className={invalidFieldClass(Boolean(deliveryErrors.siteId))}
+            />
+            <FieldError message={deliveryErrors.siteId} />
+          </div>
+          <div className="grid gap-2">
+            <FieldLabel
+              htmlFor="delivery-api-key"
+              label="Tracking API Key"
+              help="Use the Tracking API key, not the App API key. Leave the App API key for the advanced field."
+            />
+            <Input
+              id="delivery-api-key"
+              type="password"
+              value={deliveryForm.customerIoApiKey}
+              onChange={(event) => setDeliveryForm((prev) => ({ ...prev, customerIoApiKey: event.target.value }))}
+              placeholder="Tracking API key"
+              aria-invalid={Boolean(deliveryErrors.customerIoApiKey)}
+              className={invalidFieldClass(Boolean(deliveryErrors.customerIoApiKey))}
+            />
+            <FieldError message={deliveryErrors.customerIoApiKey} />
+          </div>
+
+          <div className="md:col-span-2 flex justify-end">
+            <Button type="button" variant="ghost" size="sm" onClick={() => setShowDeliveryAdvanced((prev) => !prev)}>
+              {showDeliveryAdvanced ? "Hide advanced" : "Show advanced"}
+            </Button>
+          </div>
+
+          {showDeliveryAdvanced ? (
+            <div className="grid gap-2 md:col-span-2">
+              <FieldLabel
+                htmlFor="delivery-app-api-key"
+                label="Customer.io App API Key"
+                help="Optional but recommended. Lets the platform check workspace people counts before you hit your monthly cap."
+              />
+              <Input
+                id="delivery-app-api-key"
+                type="password"
+                value={deliveryForm.customerIoAppApiKey}
+                onChange={(event) => setDeliveryForm((prev) => ({ ...prev, customerIoAppApiKey: event.target.value }))}
+                placeholder="Optional App API key"
+              />
+            </div>
+          ) : null}
+        </div>
+      </SettingsModal>
+
+      <SettingsModal
+        open={mailboxModalOpen}
+        onOpenChange={(open) => {
+          if (!open) closeMailboxModal();
+        }}
+        title="Add reply inbox"
+        description="Connect the inbox where human replies should land. Advanced server details stay hidden unless you need them."
+        footer={
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="text-sm text-[color:var(--muted-foreground)]">
+              Gmail and Outlook usually work with an app password. Open advanced settings only for custom IMAP.
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <Button type="button" variant="ghost" onClick={closeMailboxModal}>
+                Cancel
+              </Button>
+              <Button type="button" disabled={savingMailbox} onClick={createMailboxAccount}>
+                {savingMailbox ? "Saving..." : "Save inbox"}
+              </Button>
+            </div>
+          </div>
+        }
+      >
+        <div className="grid gap-4 md:grid-cols-2">
+          <div className="grid gap-2">
+            <FieldLabel
+              htmlFor="mailbox-name"
+              label="Account name"
+              help="Internal label for the inbox, for example Founder Replies."
+            />
+            <Input
+              id="mailbox-name"
+              value={mailboxForm.name}
+              onChange={(event) => setMailboxForm((prev) => ({ ...prev, name: event.target.value }))}
+              placeholder="Founder Replies"
+              aria-invalid={Boolean(mailboxErrors.name)}
+              className={invalidFieldClass(Boolean(mailboxErrors.name))}
+            />
+            <FieldError message={mailboxErrors.name} />
+          </div>
+          <div className="grid gap-2">
+            <FieldLabel
+              htmlFor="mailbox-provider"
+              label="Provider"
+              help="Choose Gmail or Outlook to preload the standard IMAP settings. Use Custom IMAP for anything else."
+            />
+            <Select
+              id="mailbox-provider"
+              value={mailboxForm.mailboxProvider}
+              onChange={(event) => setMailboxProviderWithDefaults(event.target.value as MailboxFormState["mailboxProvider"])}
+            >
+              <option value="gmail">Gmail</option>
+              <option value="outlook">Outlook</option>
+              <option value="imap">Custom IMAP</option>
+            </Select>
+          </div>
+          <div className="grid gap-2">
+            <FieldLabel
+              htmlFor="mailbox-email"
+              label="Reply email"
+              help="This is the inbox address that will receive responses from prospects."
+            />
+            <Input
+              id="mailbox-email"
+              value={mailboxForm.mailboxEmail}
+              onChange={(event) => setMailboxForm((prev) => ({ ...prev, mailboxEmail: event.target.value }))}
+              placeholder="replies@brand.com"
+              aria-invalid={Boolean(mailboxErrors.mailboxEmail)}
+              className={invalidFieldClass(Boolean(mailboxErrors.mailboxEmail))}
+            />
+            <FieldError message={mailboxErrors.mailboxEmail} />
+          </div>
+          <div className="grid gap-2">
+            <FieldLabel
+              htmlFor="mailbox-auth-method"
+              label="Authentication"
+              help="App passwords are the simplest option. Use OAuth tokens only if your inbox team already has them."
+            />
+            <Select
+              id="mailbox-auth-method"
+              value={mailboxAuthMethod}
+              onChange={(event) =>
+                setMailboxAuthMethod(event.target.value === "oauth_tokens" ? "oauth_tokens" : "app_password")
+              }
+            >
+              <option value="app_password">App password</option>
+              <option value="oauth_tokens">OAuth tokens</option>
+            </Select>
+          </div>
+
+          {mailboxAuthMethod === "app_password" ? (
+            <div className="grid gap-2 md:col-span-2">
+              <FieldLabel
+                htmlFor="mailbox-password"
+                label="App password"
+                help="Use an app-specific password instead of the mailbox login password whenever the provider supports it."
+              />
+              <Input
+                id="mailbox-password"
+                type="password"
+                value={mailboxForm.mailboxPassword}
+                onChange={(event) => setMailboxForm((prev) => ({ ...prev, mailboxPassword: event.target.value }))}
+                placeholder="App password"
+                aria-invalid={Boolean(mailboxErrors.mailboxPassword)}
+                className={invalidFieldClass(Boolean(mailboxErrors.mailboxPassword))}
+              />
+              <FieldError message={mailboxErrors.mailboxPassword} />
+            </div>
+          ) : (
+            <>
+              <div className="grid gap-2 md:col-span-2">
+                <FieldLabel
+                  htmlFor="mailbox-access-token"
+                  label="Access token"
+                  help="Paste the current OAuth access token if your provider issued one for IMAP access."
+                />
+                <Input
+                  id="mailbox-access-token"
+                  type="password"
+                  value={mailboxForm.mailboxAccessToken}
+                  onChange={(event) => setMailboxForm((prev) => ({ ...prev, mailboxAccessToken: event.target.value }))}
+                  placeholder="Access token"
+                  aria-invalid={Boolean(mailboxErrors.mailboxAccessToken)}
+                  className={invalidFieldClass(Boolean(mailboxErrors.mailboxAccessToken))}
+                />
+                <FieldError message={mailboxErrors.mailboxAccessToken} />
+              </div>
+              <div className="grid gap-2 md:col-span-2">
+                <FieldLabel
+                  htmlFor="mailbox-refresh-token"
+                  label="Refresh token"
+                  help="Optional but useful if the access token rotates regularly."
+                />
+                <Input
+                  id="mailbox-refresh-token"
+                  type="password"
+                  value={mailboxForm.mailboxRefreshToken}
+                  onChange={(event) => setMailboxForm((prev) => ({ ...prev, mailboxRefreshToken: event.target.value }))}
+                  placeholder="Optional refresh token"
+                />
+              </div>
+            </>
+          )}
+
+          <div className="md:col-span-2 flex justify-end">
+            <Button type="button" variant="ghost" size="sm" onClick={() => setShowMailboxAdvanced((prev) => !prev)}>
+              {showMailboxAdvanced ? "Hide advanced" : "Show advanced"}
+            </Button>
+          </div>
+
+          {showMailboxAdvanced ? (
+            <>
+              <div className="grid gap-2">
+                <FieldLabel
+                  htmlFor="mailbox-host"
+                  label="IMAP host"
+                  help="Only change this if the provider uses a non-standard IMAP server."
+                />
+                <Input
+                  id="mailbox-host"
+                  value={mailboxForm.mailboxHost}
+                  onChange={(event) => setMailboxForm((prev) => ({ ...prev, mailboxHost: event.target.value }))}
+                  placeholder="imap.gmail.com"
+                  aria-invalid={Boolean(mailboxErrors.mailboxHost)}
+                  className={invalidFieldClass(Boolean(mailboxErrors.mailboxHost))}
+                />
+                <FieldError message={mailboxErrors.mailboxHost} />
+              </div>
+              <div className="grid gap-2">
+                <FieldLabel
+                  htmlFor="mailbox-port"
+                  label="Port"
+                  help="993 is standard for secure IMAP."
+                />
+                <Input
+                  id="mailbox-port"
+                  value={mailboxForm.mailboxPort}
+                  onChange={(event) => setMailboxForm((prev) => ({ ...prev, mailboxPort: event.target.value }))}
+                  placeholder="993"
+                  aria-invalid={Boolean(mailboxErrors.mailboxPort)}
+                  className={invalidFieldClass(Boolean(mailboxErrors.mailboxPort))}
+                />
+                <FieldError message={mailboxErrors.mailboxPort} />
+              </div>
+              <label className="md:col-span-2 inline-flex items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  checked={mailboxForm.mailboxSecure}
+                  onChange={(event) => setMailboxForm((prev) => ({ ...prev, mailboxSecure: event.target.checked }))}
+                />
+                Use TLS/SSL
+              </label>
+            </>
+          ) : null}
+        </div>
+      </SettingsModal>
+    </>
   );
 }

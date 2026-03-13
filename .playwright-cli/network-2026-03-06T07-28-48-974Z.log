@@ -1,0 +1,2 @@
+[GET] https://persona.bhuman.ai/persona/voice/test => [200] OK
+[GET] https://user.bhuman.ai/api/user => [200] 

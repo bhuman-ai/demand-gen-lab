@@ -1,0 +1,1696 @@
+{
+  "benchmark": {
+    "loader": {
+      "case_count": 2,
+      "ignored": [],
+      "reason": null
+    },
+    "result": {
+      "case_count": 2,
+      "cases": [
+        {
+          "attempts": [
+            {
+              "attempt": 1,
+              "ehlo_code": 250,
+              "email": "v9x2q7m1k4t8@hubspot.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439b3d9c15asi10755810f8f.174 - gsmtp",
+              "mx_host": "smtp.google.com",
+              "smtp_code": 550,
+              "smtp_message": "5.1.1 The email account that you tried to reach does not exist. Please try\n5.1.1 double-checking the recipient's email address for typos or\n5.1.1 unnecessary spaces. For more information, go to\n5.1.1  https://support.google.com/mail/?p=NoSuchUser ffacd0b85a97d-439b3d9c15asi10755810f8f.174 - gsmtp",
+              "status": "rejected",
+              "timings_ms": {
+                "connect": 108.62,
+                "ehlo": 52.35,
+                "mail_from": 50.31,
+                "rcpt_to": 72.17,
+                "total": 283.59
+              }
+            },
+            {
+              "attempt": 2,
+              "ehlo_code": 250,
+              "email": "v9x2q7m1k4t8@hubspot.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439ac9f3e10si14260890f8f.114 - gsmtp",
+              "mx_host": "smtp.google.com",
+              "smtp_code": 550,
+              "smtp_message": "5.1.1 The email account that you tried to reach does not exist. Please try\n5.1.1 double-checking the recipient's email address for typos or\n5.1.1 unnecessary spaces. For more information, go to\n5.1.1  https://support.google.com/mail/?p=NoSuchUser ffacd0b85a97d-439ac9f3e10si14260890f8f.114 - gsmtp",
+              "status": "rejected",
+              "timings_ms": {
+                "connect": 99.19,
+                "ehlo": 49.02,
+                "mail_from": 46.23,
+                "rcpt_to": 70.21,
+                "total": 264.72
+              }
+            },
+            {
+              "attempt": 3,
+              "ehlo_code": 250,
+              "email": "v9x2q7m1k4t8@hubspot.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439af0d032bsi13255267f8f.374 - gsmtp",
+              "mx_host": "smtp.google.com",
+              "smtp_code": 550,
+              "smtp_message": "5.1.1 The email account that you tried to reach does not exist. Please try\n5.1.1 double-checking the recipient's email address for typos or\n5.1.1 unnecessary spaces. For more information, go to\n5.1.1  https://support.google.com/mail/?p=NoSuchUser ffacd0b85a97d-439af0d032bsi13255267f8f.374 - gsmtp",
+              "status": "rejected",
+              "timings_ms": {
+                "connect": 97.79,
+                "ehlo": 54.19,
+                "mail_from": 50.37,
+                "rcpt_to": 78.54,
+                "total": 280.93
+              }
+            },
+            {
+              "attempt": 4,
+              "ehlo_code": 250,
+              "email": "v9x2q7m1k4t8@hubspot.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-4399c7ce6dasi25724613f8f.382 - gsmtp",
+              "mx_host": "smtp.google.com",
+              "smtp_code": 550,
+              "smtp_message": "5.1.1 The email account that you tried to reach does not exist. Please try\n5.1.1 double-checking the recipient's email address for typos or\n5.1.1 unnecessary spaces. For more information, go to\n5.1.1  https://support.google.com/mail/?p=NoSuchUser ffacd0b85a97d-4399c7ce6dasi25724613f8f.382 - gsmtp",
+              "status": "rejected",
+              "timings_ms": {
+                "connect": 94.73,
+                "ehlo": 48.26,
+                "mail_from": 46.25,
+                "rcpt_to": 70.94,
+                "total": 260.23
+              }
+            },
+            {
+              "attempt": 5,
+              "ehlo_code": 250,
+              "email": "v9x2q7m1k4t8@hubspot.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439b54020c9si10686986f8f.545 - gsmtp",
+              "mx_host": "smtp.google.com",
+              "smtp_code": 550,
+              "smtp_message": "5.1.1 The email account that you tried to reach does not exist. Please try\n5.1.1 double-checking the recipient's email address for typos or\n5.1.1 unnecessary spaces. For more information, go to\n5.1.1  https://support.google.com/mail/?p=NoSuchUser ffacd0b85a97d-439b54020c9si10686986f8f.545 - gsmtp",
+              "status": "rejected",
+              "timings_ms": {
+                "connect": 102.56,
+                "ehlo": 55.82,
+                "mail_from": 55.43,
+                "rcpt_to": 79.72,
+                "total": 293.57
+              }
+            },
+            {
+              "attempt": 6,
+              "ehlo_code": 250,
+              "email": "v9x2q7m1k4t8@hubspot.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439ba5a2f3esi5845942f8f.508 - gsmtp",
+              "mx_host": "smtp.google.com",
+              "smtp_code": 550,
+              "smtp_message": "5.1.1 The email account that you tried to reach does not exist. Please try\n5.1.1 double-checking the recipient's email address for typos or\n5.1.1 unnecessary spaces. For more information, go to\n5.1.1  https://support.google.com/mail/?p=NoSuchUser ffacd0b85a97d-439ba5a2f3esi5845942f8f.508 - gsmtp",
+              "status": "rejected",
+              "timings_ms": {
+                "connect": 94.73,
+                "ehlo": 54.61,
+                "mail_from": 47.16,
+                "rcpt_to": 71.44,
+                "total": 267.97
+              }
+            },
+            {
+              "attempt": 7,
+              "ehlo_code": 250,
+              "email": "v9x2q7m1k4t8@hubspot.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439b78e66eesi7803505f8f.373 - gsmtp",
+              "mx_host": "smtp.google.com",
+              "smtp_code": 550,
+              "smtp_message": "5.1.1 The email account that you tried to reach does not exist. Please try\n5.1.1 double-checking the recipient's email address for typos or\n5.1.1 unnecessary spaces. For more information, go to\n5.1.1  https://support.google.com/mail/?p=NoSuchUser ffacd0b85a97d-439b78e66eesi7803505f8f.373 - gsmtp",
+              "status": "rejected",
+              "timings_ms": {
+                "connect": 97.26,
+                "ehlo": 50.64,
+                "mail_from": 47.7,
+                "rcpt_to": 81.23,
+                "total": 276.88
+              }
+            },
+            {
+              "attempt": 8,
+              "ehlo_code": 250,
+              "email": "v9x2q7m1k4t8@hubspot.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439ae2dc6dfsi14483065f8f.523 - gsmtp",
+              "mx_host": "smtp.google.com",
+              "smtp_code": 550,
+              "smtp_message": "5.1.1 The email account that you tried to reach does not exist. Please try\n5.1.1 double-checking the recipient's email address for typos or\n5.1.1 unnecessary spaces. For more information, go to\n5.1.1  https://support.google.com/mail/?p=NoSuchUser ffacd0b85a97d-439ae2dc6dfsi14483065f8f.523 - gsmtp",
+              "status": "rejected",
+              "timings_ms": {
+                "connect": 96.33,
+                "ehlo": 47.65,
+                "mail_from": 45.76,
+                "rcpt_to": 67.54,
+                "total": 257.32
+              }
+            },
+            {
+              "attempt": 9,
+              "ehlo_code": 250,
+              "email": "v9x2q7m1k4t8@hubspot.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439b785eea8si8126497f8f.105 - gsmtp",
+              "mx_host": "smtp.google.com",
+              "smtp_code": 550,
+              "smtp_message": "5.1.1 The email account that you tried to reach does not exist. Please try\n5.1.1 double-checking the recipient's email address for typos or\n5.1.1 unnecessary spaces. For more information, go to\n5.1.1  https://support.google.com/mail/?p=NoSuchUser ffacd0b85a97d-439b785eea8si8126497f8f.105 - gsmtp",
+              "status": "rejected",
+              "timings_ms": {
+                "connect": 92.08,
+                "ehlo": 50.16,
+                "mail_from": 47.72,
+                "rcpt_to": 74.68,
+                "total": 264.66
+              }
+            },
+            {
+              "attempt": 10,
+              "ehlo_code": 250,
+              "email": "v9x2q7m1k4t8@hubspot.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439b992f961si6188691f8f.23 - gsmtp",
+              "mx_host": "smtp.google.com",
+              "smtp_code": 550,
+              "smtp_message": "5.1.1 The email account that you tried to reach does not exist. Please try\n5.1.1 double-checking the recipient's email address for typos or\n5.1.1 unnecessary spaces. For more information, go to\n5.1.1  https://support.google.com/mail/?p=NoSuchUser ffacd0b85a97d-439b992f961si6188691f8f.23 - gsmtp",
+              "status": "rejected",
+              "timings_ms": {
+                "connect": 98.96,
+                "ehlo": 48.26,
+                "mail_from": 47.5,
+                "rcpt_to": 70.81,
+                "total": 265.57
+              }
+            },
+            {
+              "attempt": 11,
+              "ehlo_code": 250,
+              "email": "v9x2q7m1k4t8@hubspot.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439b9ad71a8si6080393f8f.253 - gsmtp",
+              "mx_host": "smtp.google.com",
+              "smtp_code": 550,
+              "smtp_message": "5.1.1 The email account that you tried to reach does not exist. Please try\n5.1.1 double-checking the recipient's email address for typos or\n5.1.1 unnecessary spaces. For more information, go to\n5.1.1  https://support.google.com/mail/?p=NoSuchUser ffacd0b85a97d-439b9ad71a8si6080393f8f.253 - gsmtp",
+              "status": "rejected",
+              "timings_ms": {
+                "connect": 91.47,
+                "ehlo": 46.94,
+                "mail_from": 47.37,
+                "rcpt_to": 73.95,
+                "total": 259.75
+              }
+            },
+            {
+              "attempt": 12,
+              "ehlo_code": 250,
+              "email": "v9x2q7m1k4t8@hubspot.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439af85705fsi12440234f8f.35 - gsmtp",
+              "mx_host": "smtp.google.com",
+              "smtp_code": 550,
+              "smtp_message": "5.1.1 The email account that you tried to reach does not exist. Please try\n5.1.1 double-checking the recipient's email address for typos or\n5.1.1 unnecessary spaces. For more information, go to\n5.1.1  https://support.google.com/mail/?p=NoSuchUser ffacd0b85a97d-439af85705fsi12440234f8f.35 - gsmtp",
+              "status": "rejected",
+              "timings_ms": {
+                "connect": 100.78,
+                "ehlo": 49.36,
+                "mail_from": 47.32,
+                "rcpt_to": 70.33,
+                "total": 267.83
+              }
+            },
+            {
+              "attempt": 13,
+              "ehlo_code": 250,
+              "email": "v9x2q7m1k4t8@hubspot.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439b8454c2fsi6866957f8f.499 - gsmtp",
+              "mx_host": "smtp.google.com",
+              "smtp_code": 550,
+              "smtp_message": "5.1.1 The email account that you tried to reach does not exist. Please try\n5.1.1 double-checking the recipient's email address for typos or\n5.1.1 unnecessary spaces. For more information, go to\n5.1.1  https://support.google.com/mail/?p=NoSuchUser ffacd0b85a97d-439b8454c2fsi6866957f8f.499 - gsmtp",
+              "status": "rejected",
+              "timings_ms": {
+                "connect": 100.18,
+                "ehlo": 55.11,
+                "mail_from": 55.41,
+                "rcpt_to": 77.42,
+                "total": 288.15
+              }
+            },
+            {
+              "attempt": 14,
+              "ehlo_code": 250,
+              "email": "v9x2q7m1k4t8@hubspot.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439b73fde3asi7902699f8f.218 - gsmtp",
+              "mx_host": "smtp.google.com",
+              "smtp_code": 550,
+              "smtp_message": "5.1.1 The email account that you tried to reach does not exist. Please try\n5.1.1 double-checking the recipient's email address for typos or\n5.1.1 unnecessary spaces. For more information, go to\n5.1.1  https://support.google.com/mail/?p=NoSuchUser ffacd0b85a97d-439b73fde3asi7902699f8f.218 - gsmtp",
+              "status": "rejected",
+              "timings_ms": {
+                "connect": 102.32,
+                "ehlo": 48.44,
+                "mail_from": 46.13,
+                "rcpt_to": 76.01,
+                "total": 272.94
+              }
+            },
+            {
+              "attempt": 15,
+              "ehlo_code": 250,
+              "email": "v9x2q7m1k4t8@hubspot.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439a9fc7b72si15607710f8f.521 - gsmtp",
+              "mx_host": "smtp.google.com",
+              "smtp_code": 550,
+              "smtp_message": "5.1.1 The email account that you tried to reach does not exist. Please try\n5.1.1 double-checking the recipient's email address for typos or\n5.1.1 unnecessary spaces. For more information, go to\n5.1.1  https://support.google.com/mail/?p=NoSuchUser ffacd0b85a97d-439a9fc7b72si15607710f8f.521 - gsmtp",
+              "status": "rejected",
+              "timings_ms": {
+                "connect": 111.87,
+                "ehlo": 60.7,
+                "mail_from": 52.25,
+                "rcpt_to": 87.2,
+                "total": 312.07
+              }
+            },
+            {
+              "attempt": 16,
+              "ehlo_code": 250,
+              "email": "v9x2q7m1k4t8@hubspot.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439ad801722si14351040f8f.290 - gsmtp",
+              "mx_host": "smtp.google.com",
+              "smtp_code": 550,
+              "smtp_message": "5.1.1 The email account that you tried to reach does not exist. Please try\n5.1.1 double-checking the recipient's email address for typos or\n5.1.1 unnecessary spaces. For more information, go to\n5.1.1  https://support.google.com/mail/?p=NoSuchUser ffacd0b85a97d-439ad801722si14351040f8f.290 - gsmtp",
+              "status": "rejected",
+              "timings_ms": {
+                "connect": 98.06,
+                "ehlo": 48.72,
+                "mail_from": 47.24,
+                "rcpt_to": 71.84,
+                "total": 265.9
+              }
+            },
+            {
+              "attempt": 17,
+              "ehlo_code": 250,
+              "email": "v9x2q7m1k4t8@hubspot.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439b6c8a4a4si8477986f8f.183 - gsmtp",
+              "mx_host": "smtp.google.com",
+              "smtp_code": 550,
+              "smtp_message": "5.1.1 The email account that you tried to reach does not exist. Please try\n5.1.1 double-checking the recipient's email address for typos or\n5.1.1 unnecessary spaces. For more information, go to\n5.1.1  https://support.google.com/mail/?p=NoSuchUser ffacd0b85a97d-439b6c8a4a4si8477986f8f.183 - gsmtp",
+              "status": "rejected",
+              "timings_ms": {
+                "connect": 99.64,
+                "ehlo": 53.78,
+                "mail_from": 50.56,
+                "rcpt_to": 76.1,
+                "total": 280.12
+              }
+            },
+            {
+              "attempt": 18,
+              "ehlo_code": 250,
+              "email": "v9x2q7m1k4t8@hubspot.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439b9ad7e83si5961629f8f.226 - gsmtp",
+              "mx_host": "smtp.google.com",
+              "smtp_code": 550,
+              "smtp_message": "5.1.1 The email account that you tried to reach does not exist. Please try\n5.1.1 double-checking the recipient's email address for typos or\n5.1.1 unnecessary spaces. For more information, go to\n5.1.1  https://support.google.com/mail/?p=NoSuchUser ffacd0b85a97d-439b9ad7e83si5961629f8f.226 - gsmtp",
+              "status": "rejected",
+              "timings_ms": {
+                "connect": 99.14,
+                "ehlo": 48.89,
+                "mail_from": 46.33,
+                "rcpt_to": 69.96,
+                "total": 264.36
+              }
+            },
+            {
+              "attempt": 19,
+              "ehlo_code": 250,
+              "email": "v9x2q7m1k4t8@hubspot.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439b2045bd3si11633218f8f.306 - gsmtp",
+              "mx_host": "smtp.google.com",
+              "smtp_code": 550,
+              "smtp_message": "5.1.1 The email account that you tried to reach does not exist. Please try\n5.1.1 double-checking the recipient's email address for typos or\n5.1.1 unnecessary spaces. For more information, go to\n5.1.1  https://support.google.com/mail/?p=NoSuchUser ffacd0b85a97d-439b2045bd3si11633218f8f.306 - gsmtp",
+              "status": "rejected",
+              "timings_ms": {
+                "connect": 97.57,
+                "ehlo": 52.62,
+                "mail_from": 49.75,
+                "rcpt_to": 69.73,
+                "total": 269.7
+              }
+            },
+            {
+              "attempt": 20,
+              "ehlo_code": 250,
+              "email": "v9x2q7m1k4t8@hubspot.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439b3cc3213si10591245f8f.101 - gsmtp",
+              "mx_host": "smtp.google.com",
+              "smtp_code": 550,
+              "smtp_message": "5.1.1 The email account that you tried to reach does not exist. Please try\n5.1.1 double-checking the recipient's email address for typos or\n5.1.1 unnecessary spaces. For more information, go to\n5.1.1  https://support.google.com/mail/?p=NoSuchUser ffacd0b85a97d-439b3cc3213si10591245f8f.101 - gsmtp",
+              "status": "rejected",
+              "timings_ms": {
+                "connect": 107.15,
+                "ehlo": 52.13,
+                "mail_from": 48.71,
+                "rcpt_to": 72.42,
+                "total": 280.46
+              }
+            },
+            {
+              "attempt": 21,
+              "ehlo_code": 250,
+              "email": "v9x2q7m1k4t8@hubspot.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439b49c8934si9881576f8f.385 - gsmtp",
+              "mx_host": "smtp.google.com",
+              "smtp_code": 550,
+              "smtp_message": "5.1.1 The email account that you tried to reach does not exist. Please try\n5.1.1 double-checking the recipient's email address for typos or\n5.1.1 unnecessary spaces. For more information, go to\n5.1.1  https://support.google.com/mail/?p=NoSuchUser ffacd0b85a97d-439b49c8934si9881576f8f.385 - gsmtp",
+              "status": "rejected",
+              "timings_ms": {
+                "connect": 99.03,
+                "ehlo": 56.79,
+                "mail_from": 53.03,
+                "rcpt_to": 75.0,
+                "total": 283.9
+              }
+            },
+            {
+              "attempt": 22,
+              "ehlo_code": 250,
+              "email": "v9x2q7m1k4t8@hubspot.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439bd19a999si3977875f8f.384 - gsmtp",
+              "mx_host": "smtp.google.com",
+              "smtp_code": 550,
+              "smtp_message": "5.1.1 The email account that you tried to reach does not exist. Please try\n5.1.1 double-checking the recipient's email address for typos or\n5.1.1 unnecessary spaces. For more information, go to\n5.1.1  https://support.google.com/mail/?p=NoSuchUser ffacd0b85a97d-439bd19a999si3977875f8f.384 - gsmtp",
+              "status": "rejected",
+              "timings_ms": {
+                "connect": 101.48,
+                "ehlo": 50.31,
+                "mail_from": 48.98,
+                "rcpt_to": 72.36,
+                "total": 273.15
+              }
+            },
+            {
+              "attempt": 23,
+              "ehlo_code": 250,
+              "email": "v9x2q7m1k4t8@hubspot.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439b3bcf6b8si11279501f8f.19 - gsmtp",
+              "mx_host": "smtp.google.com",
+              "smtp_code": 550,
+              "smtp_message": "5.1.1 The email account that you tried to reach does not exist. Please try\n5.1.1 double-checking the recipient's email address for typos or\n5.1.1 unnecessary spaces. For more information, go to\n5.1.1  https://support.google.com/mail/?p=NoSuchUser ffacd0b85a97d-439b3bcf6b8si11279501f8f.19 - gsmtp",
+              "status": "rejected",
+              "timings_ms": {
+                "connect": 94.66,
+                "ehlo": 52.17,
+                "mail_from": 50.72,
+                "rcpt_to": 78.66,
+                "total": 276.25
+              }
+            },
+            {
+              "attempt": 24,
+              "ehlo_code": 250,
+              "email": "v9x2q7m1k4t8@hubspot.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK 5b1f17b1804b1-4851334a2c9si19375e9.2 - gsmtp",
+              "mx_host": "smtp.google.com",
+              "smtp_code": 550,
+              "smtp_message": "5.1.1 The email account that you tried to reach does not exist. Please try\n5.1.1 double-checking the recipient's email address for typos or\n5.1.1 unnecessary spaces. For more information, go to\n5.1.1  https://support.google.com/mail/?p=NoSuchUser 5b1f17b1804b1-4851334a2c9si19375e9.2 - gsmtp",
+              "status": "rejected",
+              "timings_ms": {
+                "connect": 105.56,
+                "ehlo": 58.34,
+                "mail_from": 50.18,
+                "rcpt_to": 106.75,
+                "total": 320.87
+              }
+            },
+            {
+              "attempt": 25,
+              "ehlo_code": 250,
+              "email": "v9x2q7m1k4t8@hubspot.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439b20466d4si11764977f8f.300 - gsmtp",
+              "mx_host": "smtp.google.com",
+              "smtp_code": 550,
+              "smtp_message": "5.1.1 The email account that you tried to reach does not exist. Please try\n5.1.1 double-checking the recipient's email address for typos or\n5.1.1 unnecessary spaces. For more information, go to\n5.1.1  https://support.google.com/mail/?p=NoSuchUser ffacd0b85a97d-439b20466d4si11764977f8f.300 - gsmtp",
+              "status": "rejected",
+              "timings_ms": {
+                "connect": 98.45,
+                "ehlo": 53.88,
+                "mail_from": 50.57,
+                "rcpt_to": 77.48,
+                "total": 280.44
+              }
+            },
+            {
+              "attempt": 26,
+              "ehlo_code": 250,
+              "email": "v9x2q7m1k4t8@hubspot.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439b8f1c191si6377965f8f.462 - gsmtp",
+              "mx_host": "smtp.google.com",
+              "smtp_code": 550,
+              "smtp_message": "5.1.1 The email account that you tried to reach does not exist. Please try\n5.1.1 double-checking the recipient's email address for typos or\n5.1.1 unnecessary spaces. For more information, go to\n5.1.1  https://support.google.com/mail/?p=NoSuchUser ffacd0b85a97d-439b8f1c191si6377965f8f.462 - gsmtp",
+              "status": "rejected",
+              "timings_ms": {
+                "connect": 102.06,
+                "ehlo": 50.61,
+                "mail_from": 48.69,
+                "rcpt_to": 73.57,
+                "total": 274.98
+              }
+            },
+            {
+              "attempt": 27,
+              "ehlo_code": 250,
+              "email": "v9x2q7m1k4t8@hubspot.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-4399c7a38bbsi24533710f8f.246 - gsmtp",
+              "mx_host": "smtp.google.com",
+              "smtp_code": 550,
+              "smtp_message": "5.1.1 The email account that you tried to reach does not exist. Please try\n5.1.1 double-checking the recipient's email address for typos or\n5.1.1 unnecessary spaces. For more information, go to\n5.1.1  https://support.google.com/mail/?p=NoSuchUser ffacd0b85a97d-4399c7a38bbsi24533710f8f.246 - gsmtp",
+              "status": "rejected",
+              "timings_ms": {
+                "connect": 111.94,
+                "ehlo": 55.62,
+                "mail_from": 58.32,
+                "rcpt_to": 75.77,
+                "total": 301.69
+              }
+            },
+            {
+              "attempt": 28,
+              "ehlo_code": 250,
+              "email": "v9x2q7m1k4t8@hubspot.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439b92a94fbsi6311701f8f.222 - gsmtp",
+              "mx_host": "smtp.google.com",
+              "smtp_code": 550,
+              "smtp_message": "5.1.1 The email account that you tried to reach does not exist. Please try\n5.1.1 double-checking the recipient's email address for typos or\n5.1.1 unnecessary spaces. For more information, go to\n5.1.1  https://support.google.com/mail/?p=NoSuchUser ffacd0b85a97d-439b92a94fbsi6311701f8f.222 - gsmtp",
+              "status": "rejected",
+              "timings_ms": {
+                "connect": 99.89,
+                "ehlo": 48.92,
+                "mail_from": 46.37,
+                "rcpt_to": 72.02,
+                "total": 267.24
+              }
+            },
+            {
+              "attempt": 29,
+              "ehlo_code": 250,
+              "email": "v9x2q7m1k4t8@hubspot.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439b2046719si11443814f8f.16 - gsmtp",
+              "mx_host": "smtp.google.com",
+              "smtp_code": 550,
+              "smtp_message": "5.1.1 The email account that you tried to reach does not exist. Please try\n5.1.1 double-checking the recipient's email address for typos or\n5.1.1 unnecessary spaces. For more information, go to\n5.1.1  https://support.google.com/mail/?p=NoSuchUser ffacd0b85a97d-439b2046719si11443814f8f.16 - gsmtp",
+              "status": "rejected",
+              "timings_ms": {
+                "connect": 95.09,
+                "ehlo": 49.22,
+                "mail_from": 46.61,
+                "rcpt_to": 71.6,
+                "total": 262.56
+              }
+            },
+            {
+              "attempt": 30,
+              "ehlo_code": 250,
+              "email": "v9x2q7m1k4t8@hubspot.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439b112733fsi11799979f8f.436 - gsmtp",
+              "mx_host": "smtp.google.com",
+              "smtp_code": 550,
+              "smtp_message": "5.1.1 The email account that you tried to reach does not exist. Please try\n5.1.1 double-checking the recipient's email address for typos or\n5.1.1 unnecessary spaces. For more information, go to\n5.1.1  https://support.google.com/mail/?p=NoSuchUser ffacd0b85a97d-439b112733fsi11799979f8f.436 - gsmtp",
+              "status": "rejected",
+              "timings_ms": {
+                "connect": 95.89,
+                "ehlo": 48.49,
+                "mail_from": 45.42,
+                "rcpt_to": 73.79,
+                "total": 263.63
+              }
+            },
+            {
+              "attempt": 31,
+              "ehlo_code": 250,
+              "email": "v9x2q7m1k4t8@hubspot.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439b8f1ddeasi6660137f8f.480 - gsmtp",
+              "mx_host": "smtp.google.com",
+              "smtp_code": 550,
+              "smtp_message": "5.1.1 The email account that you tried to reach does not exist. Please try\n5.1.1 double-checking the recipient's email address for typos or\n5.1.1 unnecessary spaces. For more information, go to\n5.1.1  https://support.google.com/mail/?p=NoSuchUser ffacd0b85a97d-439b8f1ddeasi6660137f8f.480 - gsmtp",
+              "status": "rejected",
+              "timings_ms": {
+                "connect": 93.46,
+                "ehlo": 49.1,
+                "mail_from": 48.04,
+                "rcpt_to": 73.54,
+                "total": 264.19
+              }
+            },
+            {
+              "attempt": 32,
+              "ehlo_code": 250,
+              "email": "v9x2q7m1k4t8@hubspot.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439b4adff99si9918146f8f.196 - gsmtp",
+              "mx_host": "smtp.google.com",
+              "smtp_code": 550,
+              "smtp_message": "5.1.1 The email account that you tried to reach does not exist. Please try\n5.1.1 double-checking the recipient's email address for typos or\n5.1.1 unnecessary spaces. For more information, go to\n5.1.1  https://support.google.com/mail/?p=NoSuchUser ffacd0b85a97d-439b4adff99si9918146f8f.196 - gsmtp",
+              "status": "rejected",
+              "timings_ms": {
+                "connect": 98.12,
+                "ehlo": 48.6,
+                "mail_from": 46.38,
+                "rcpt_to": 66.0,
+                "total": 259.14
+              }
+            },
+            {
+              "attempt": 33,
+              "ehlo_code": 250,
+              "email": "v9x2q7m1k4t8@hubspot.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439ad3e69c0si14956767f8f.551 - gsmtp",
+              "mx_host": "smtp.google.com",
+              "smtp_code": 550,
+              "smtp_message": "5.1.1 The email account that you tried to reach does not exist. Please try\n5.1.1 double-checking the recipient's email address for typos or\n5.1.1 unnecessary spaces. For more information, go to\n5.1.1  https://support.google.com/mail/?p=NoSuchUser ffacd0b85a97d-439ad3e69c0si14956767f8f.551 - gsmtp",
+              "status": "rejected",
+              "timings_ms": {
+                "connect": 105.67,
+                "ehlo": 49.61,
+                "mail_from": 48.28,
+                "rcpt_to": 72.89,
+                "total": 276.49
+              }
+            },
+            {
+              "attempt": 34,
+              "ehlo_code": 250,
+              "email": "v9x2q7m1k4t8@hubspot.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-4399c7b601esi24351062f8f.289 - gsmtp",
+              "mx_host": "smtp.google.com",
+              "smtp_code": 550,
+              "smtp_message": "5.1.1 The email account that you tried to reach does not exist. Please try\n5.1.1 double-checking the recipient's email address for typos or\n5.1.1 unnecessary spaces. For more information, go to\n5.1.1  https://support.google.com/mail/?p=NoSuchUser ffacd0b85a97d-4399c7b601esi24351062f8f.289 - gsmtp",
+              "status": "rejected",
+              "timings_ms": {
+                "connect": 102.87,
+                "ehlo": 59.93,
+                "mail_from": 111.43,
+                "rcpt_to": 269.49,
+                "total": 543.77
+              }
+            },
+            {
+              "attempt": 35,
+              "ehlo_code": 250,
+              "email": "v9x2q7m1k4t8@hubspot.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439b3cc3924si10954546f8f.17 - gsmtp",
+              "mx_host": "smtp.google.com",
+              "smtp_code": 550,
+              "smtp_message": "5.1.1 The email account that you tried to reach does not exist. Please try\n5.1.1 double-checking the recipient's email address for typos or\n5.1.1 unnecessary spaces. For more information, go to\n5.1.1  https://support.google.com/mail/?p=NoSuchUser ffacd0b85a97d-439b3cc3924si10954546f8f.17 - gsmtp",
+              "status": "rejected",
+              "timings_ms": {
+                "connect": 1397.4,
+                "ehlo": 632.94,
+                "mail_from": 459.88,
+                "rcpt_to": 493.5,
+                "total": 2983.77
+              }
+            },
+            {
+              "attempt": 36,
+              "ehlo_code": 250,
+              "email": "v9x2q7m1k4t8@hubspot.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439b70dc7e5si9062328f8f.5 - gsmtp",
+              "mx_host": "smtp.google.com",
+              "smtp_code": 550,
+              "smtp_message": "5.1.1 The email account that you tried to reach does not exist. Please try\n5.1.1 double-checking the recipient's email address for typos or\n5.1.1 unnecessary spaces. For more information, go to\n5.1.1  https://support.google.com/mail/?p=NoSuchUser ffacd0b85a97d-439b70dc7e5si9062328f8f.5 - gsmtp",
+              "status": "rejected",
+              "timings_ms": {
+                "connect": 110.24,
+                "ehlo": 52.62,
+                "mail_from": 49.87,
+                "rcpt_to": 72.02,
+                "total": 284.79
+              }
+            },
+            {
+              "attempt": 37,
+              "ehlo_code": 250,
+              "email": "v9x2q7m1k4t8@hubspot.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439ac9f59d4si14298057f8f.423 - gsmtp",
+              "mx_host": "smtp.google.com",
+              "smtp_code": 550,
+              "smtp_message": "5.1.1 The email account that you tried to reach does not exist. Please try\n5.1.1 double-checking the recipient's email address for typos or\n5.1.1 unnecessary spaces. For more information, go to\n5.1.1  https://support.google.com/mail/?p=NoSuchUser ffacd0b85a97d-439ac9f59d4si14298057f8f.423 - gsmtp",
+              "status": "rejected",
+              "timings_ms": {
+                "connect": 95.57,
+                "ehlo": 48.45,
+                "mail_from": 46.6,
+                "rcpt_to": 71.73,
+                "total": 262.4
+              }
+            },
+            {
+              "attempt": 38,
+              "ehlo_code": 250,
+              "email": "v9x2q7m1k4t8@hubspot.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439aec2757dsi13007697f8f.11 - gsmtp",
+              "mx_host": "smtp.google.com",
+              "smtp_code": 550,
+              "smtp_message": "5.1.1 The email account that you tried to reach does not exist. Please try\n5.1.1 double-checking the recipient's email address for typos or\n5.1.1 unnecessary spaces. For more information, go to\n5.1.1  https://support.google.com/mail/?p=NoSuchUser ffacd0b85a97d-439aec2757dsi13007697f8f.11 - gsmtp",
+              "status": "rejected",
+              "timings_ms": {
+                "connect": 95.41,
+                "ehlo": 57.07,
+                "mail_from": 52.42,
+                "rcpt_to": 76.9,
+                "total": 281.84
+              }
+            },
+            {
+              "attempt": 39,
+              "ehlo_code": 250,
+              "email": "v9x2q7m1k4t8@hubspot.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439abe3237fsi15009768f8f.448 - gsmtp",
+              "mx_host": "smtp.google.com",
+              "smtp_code": 550,
+              "smtp_message": "5.1.1 The email account that you tried to reach does not exist. Please try\n5.1.1 double-checking the recipient's email address for typos or\n5.1.1 unnecessary spaces. For more information, go to\n5.1.1  https://support.google.com/mail/?p=NoSuchUser ffacd0b85a97d-439abe3237fsi15009768f8f.448 - gsmtp",
+              "status": "rejected",
+              "timings_ms": {
+                "connect": 102.85,
+                "ehlo": 50.11,
+                "mail_from": 48.6,
+                "rcpt_to": 71.2,
+                "total": 272.86
+              }
+            },
+            {
+              "attempt": 40,
+              "ehlo_code": 250,
+              "email": "v9x2q7m1k4t8@hubspot.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439b03e1402si12106385f8f.7 - gsmtp",
+              "mx_host": "smtp.google.com",
+              "smtp_code": 550,
+              "smtp_message": "5.1.1 The email account that you tried to reach does not exist. Please try\n5.1.1 double-checking the recipient's email address for typos or\n5.1.1 unnecessary spaces. For more information, go to\n5.1.1  https://support.google.com/mail/?p=NoSuchUser ffacd0b85a97d-439b03e1402si12106385f8f.7 - gsmtp",
+              "status": "rejected",
+              "timings_ms": {
+                "connect": 96.48,
+                "ehlo": 54.23,
+                "mail_from": 49.86,
+                "rcpt_to": 77.14,
+                "total": 277.75
+              }
+            }
+          ],
+          "domain": "hubspot.com",
+          "email": "v9x2q7m1k4t8@hubspot.com",
+          "label": "generic_random",
+          "mx_records": [
+            {
+              "host": "smtp.google.com",
+              "priority": 1
+            }
+          ],
+          "summary": {
+            "connect_timing_ms": {
+              "count": 40,
+              "max_ms": 1397.4,
+              "mean_ms": 132.31,
+              "median_ms": 99.09,
+              "min_ms": 91.47
+            },
+            "rcpt_timing_ms": {
+              "count": 40,
+              "max_ms": 493.5,
+              "mean_ms": 90.09,
+              "median_ms": 73.56,
+              "min_ms": 66.0
+            },
+            "smtp_code_counts": {
+              "550": 40
+            },
+            "stage": "completed",
+            "status_counts": {
+              "rejected": 40
+            },
+            "total_timing_ms": {
+              "count": 40,
+              "max_ms": 2983.77,
+              "mean_ms": 349.71,
+              "median_ms": 274.06,
+              "min_ms": 257.32
+            }
+          }
+        },
+        {
+          "attempts": [
+            {
+              "attempt": 1,
+              "ehlo_code": 250,
+              "email": "wmekideche@hubspot.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439addcf5d0si13716764f8f.512 - gsmtp",
+              "mx_host": "smtp.google.com",
+              "smtp_code": 250,
+              "smtp_message": "2.1.5 OK ffacd0b85a97d-439addcf5d0si13716764f8f.512 - gsmtp",
+              "status": "accepted",
+              "timings_ms": {
+                "connect": 98.91,
+                "ehlo": 49.21,
+                "mail_from": 47.0,
+                "rcpt_to": 272.69,
+                "total": 467.99
+              }
+            },
+            {
+              "attempt": 2,
+              "ehlo_code": 250,
+              "email": "wmekideche@hubspot.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439b457fbacsi11207916f8f.63 - gsmtp",
+              "mx_host": "smtp.google.com",
+              "smtp_code": 250,
+              "smtp_message": "2.1.5 OK ffacd0b85a97d-439b457fbacsi11207916f8f.63 - gsmtp",
+              "status": "accepted",
+              "timings_ms": {
+                "connect": 93.67,
+                "ehlo": 52.56,
+                "mail_from": 46.93,
+                "rcpt_to": 223.64,
+                "total": 416.84
+              }
+            },
+            {
+              "attempt": 3,
+              "ehlo_code": 250,
+              "email": "wmekideche@hubspot.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439b1cea81esi11505678f8f.194 - gsmtp",
+              "mx_host": "smtp.google.com",
+              "smtp_code": 250,
+              "smtp_message": "2.1.5 OK ffacd0b85a97d-439b1cea81esi11505678f8f.194 - gsmtp",
+              "status": "accepted",
+              "timings_ms": {
+                "connect": 276.5,
+                "ehlo": 49.52,
+                "mail_from": 46.21,
+                "rcpt_to": 247.43,
+                "total": 619.71
+              }
+            },
+            {
+              "attempt": 4,
+              "ehlo_code": 250,
+              "email": "wmekideche@hubspot.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439b6638e4asi8760367f8f.72 - gsmtp",
+              "mx_host": "smtp.google.com",
+              "smtp_code": 250,
+              "smtp_message": "2.1.5 OK ffacd0b85a97d-439b6638e4asi8760367f8f.72 - gsmtp",
+              "status": "accepted",
+              "timings_ms": {
+                "connect": 99.85,
+                "ehlo": 53.09,
+                "mail_from": 52.37,
+                "rcpt_to": 240.13,
+                "total": 445.48
+              }
+            },
+            {
+              "attempt": 5,
+              "ehlo_code": 250,
+              "email": "wmekideche@hubspot.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-4399c72cdaasi26043096f8f.36 - gsmtp",
+              "mx_host": "smtp.google.com",
+              "smtp_code": 250,
+              "smtp_message": "2.1.5 OK ffacd0b85a97d-4399c72cdaasi26043096f8f.36 - gsmtp",
+              "status": "accepted",
+              "timings_ms": {
+                "connect": 100.49,
+                "ehlo": 53.41,
+                "mail_from": 48.32,
+                "rcpt_to": 228.07,
+                "total": 430.34
+              }
+            },
+            {
+              "attempt": 6,
+              "ehlo_code": 250,
+              "email": "wmekideche@hubspot.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439b54020c9si10688640f8f.545 - gsmtp",
+              "mx_host": "smtp.google.com",
+              "smtp_code": 250,
+              "smtp_message": "2.1.5 OK ffacd0b85a97d-439b54020c9si10688640f8f.545 - gsmtp",
+              "status": "accepted",
+              "timings_ms": {
+                "connect": 97.72,
+                "ehlo": 51.31,
+                "mail_from": 50.89,
+                "rcpt_to": 219.97,
+                "total": 419.98
+              }
+            },
+            {
+              "attempt": 7,
+              "ehlo_code": 250,
+              "email": "wmekideche@hubspot.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK 5b1f17b1804b1-483bd76c60dsi426408815e9.18 - gsmtp",
+              "mx_host": "smtp.google.com",
+              "smtp_code": 250,
+              "smtp_message": "2.1.5 OK 5b1f17b1804b1-483bd76c60dsi426408815e9.18 - gsmtp",
+              "status": "accepted",
+              "timings_ms": {
+                "connect": 114.24,
+                "ehlo": 49.11,
+                "mail_from": 46.25,
+                "rcpt_to": 217.08,
+                "total": 426.71
+              }
+            },
+            {
+              "attempt": 8,
+              "ehlo_code": 250,
+              "email": "wmekideche@hubspot.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439bc014e9bsi4654636f8f.550 - gsmtp",
+              "mx_host": "smtp.google.com",
+              "smtp_code": 250,
+              "smtp_message": "2.1.5 OK ffacd0b85a97d-439bc014e9bsi4654636f8f.550 - gsmtp",
+              "status": "accepted",
+              "timings_ms": {
+                "connect": 93.54,
+                "ehlo": 52.18,
+                "mail_from": 49.11,
+                "rcpt_to": 218.74,
+                "total": 413.6
+              }
+            },
+            {
+              "attempt": 9,
+              "ehlo_code": 250,
+              "email": "wmekideche@hubspot.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439b60c7391si9685109f8f.15 - gsmtp",
+              "mx_host": "smtp.google.com",
+              "smtp_code": 250,
+              "smtp_message": "2.1.5 OK ffacd0b85a97d-439b60c7391si9685109f8f.15 - gsmtp",
+              "status": "accepted",
+              "timings_ms": {
+                "connect": 100.15,
+                "ehlo": 49.51,
+                "mail_from": 46.2,
+                "rcpt_to": 216.1,
+                "total": 412.0
+              }
+            },
+            {
+              "attempt": 10,
+              "ehlo_code": 250,
+              "email": "wmekideche@hubspot.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439b78e6706si7683284f8f.359 - gsmtp",
+              "mx_host": "smtp.google.com",
+              "smtp_code": 250,
+              "smtp_message": "2.1.5 OK ffacd0b85a97d-439b78e6706si7683284f8f.359 - gsmtp",
+              "status": "accepted",
+              "timings_ms": {
+                "connect": 104.42,
+                "ehlo": 52.44,
+                "mail_from": 53.7,
+                "rcpt_to": 204.16,
+                "total": 414.77
+              }
+            },
+            {
+              "attempt": 11,
+              "ehlo_code": 250,
+              "email": "wmekideche@hubspot.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439b736b5b0si9255515f8f.481 - gsmtp",
+              "mx_host": "smtp.google.com",
+              "smtp_code": 250,
+              "smtp_message": "2.1.5 OK ffacd0b85a97d-439b736b5b0si9255515f8f.481 - gsmtp",
+              "status": "accepted",
+              "timings_ms": {
+                "connect": 95.01,
+                "ehlo": 48.57,
+                "mail_from": 46.63,
+                "rcpt_to": 273.28,
+                "total": 463.54
+              }
+            },
+            {
+              "attempt": 12,
+              "ehlo_code": 250,
+              "email": "wmekideche@hubspot.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439b1d642b7si12168187f8f.364 - gsmtp",
+              "mx_host": "smtp.google.com",
+              "smtp_code": 250,
+              "smtp_message": "2.1.5 OK ffacd0b85a97d-439b1d642b7si12168187f8f.364 - gsmtp",
+              "status": "accepted",
+              "timings_ms": {
+                "connect": 96.18,
+                "ehlo": 54.32,
+                "mail_from": 51.15,
+                "rcpt_to": 237.67,
+                "total": 439.34
+              }
+            },
+            {
+              "attempt": 13,
+              "ehlo_code": 250,
+              "email": "wmekideche@hubspot.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK 5b1f17b1804b1-483bd6f3936si435568815e9.7 - gsmtp",
+              "mx_host": "smtp.google.com",
+              "smtp_code": 250,
+              "smtp_message": "2.1.5 OK 5b1f17b1804b1-483bd6f3936si435568815e9.7 - gsmtp",
+              "status": "accepted",
+              "timings_ms": {
+                "connect": 101.81,
+                "ehlo": 51.19,
+                "mail_from": 49.38,
+                "rcpt_to": 332.64,
+                "total": 535.09
+              }
+            },
+            {
+              "attempt": 14,
+              "ehlo_code": 250,
+              "email": "wmekideche@hubspot.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439aa2cdcfcsi15675671f8f.337 - gsmtp",
+              "mx_host": "smtp.google.com",
+              "smtp_code": 250,
+              "smtp_message": "2.1.5 OK ffacd0b85a97d-439aa2cdcfcsi15675671f8f.337 - gsmtp",
+              "status": "accepted",
+              "timings_ms": {
+                "connect": 91.29,
+                "ehlo": 50.22,
+                "mail_from": 48.66,
+                "rcpt_to": 218.9,
+                "total": 409.12
+              }
+            },
+            {
+              "attempt": 15,
+              "ehlo_code": 250,
+              "email": "wmekideche@hubspot.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439b54baa34si9351427f8f.136 - gsmtp",
+              "mx_host": "smtp.google.com",
+              "smtp_code": 250,
+              "smtp_message": "2.1.5 OK ffacd0b85a97d-439b54baa34si9351427f8f.136 - gsmtp",
+              "status": "accepted",
+              "timings_ms": {
+                "connect": 98.63,
+                "ehlo": 48.67,
+                "mail_from": 46.84,
+                "rcpt_to": 257.59,
+                "total": 451.78
+              }
+            },
+            {
+              "attempt": 16,
+              "ehlo_code": 250,
+              "email": "wmekideche@hubspot.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439aa9e9ca1si15474606f8f.233 - gsmtp",
+              "mx_host": "smtp.google.com",
+              "smtp_code": 250,
+              "smtp_message": "2.1.5 OK ffacd0b85a97d-439aa9e9ca1si15474606f8f.233 - gsmtp",
+              "status": "accepted",
+              "timings_ms": {
+                "connect": 98.32,
+                "ehlo": 52.51,
+                "mail_from": 49.94,
+                "rcpt_to": 254.74,
+                "total": 455.56
+              }
+            },
+            {
+              "attempt": 17,
+              "ehlo_code": 250,
+              "email": "wmekideche@hubspot.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439b6c7c658si8134207f8f.329 - gsmtp",
+              "mx_host": "smtp.google.com",
+              "smtp_code": 250,
+              "smtp_message": "2.1.5 OK ffacd0b85a97d-439b6c7c658si8134207f8f.329 - gsmtp",
+              "status": "accepted",
+              "timings_ms": {
+                "connect": 94.73,
+                "ehlo": 48.98,
+                "mail_from": 48.92,
+                "rcpt_to": 237.04,
+                "total": 429.93
+              }
+            },
+            {
+              "attempt": 18,
+              "ehlo_code": 250,
+              "email": "wmekideche@hubspot.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439b70dc7e5si9063343f8f.5 - gsmtp",
+              "mx_host": "smtp.google.com",
+              "smtp_code": 250,
+              "smtp_message": "2.1.5 OK ffacd0b85a97d-439b70dc7e5si9063343f8f.5 - gsmtp",
+              "status": "accepted",
+              "timings_ms": {
+                "connect": 97.82,
+                "ehlo": 50.47,
+                "mail_from": 49.88,
+                "rcpt_to": 212.49,
+                "total": 410.71
+              }
+            },
+            {
+              "attempt": 19,
+              "ehlo_code": 250,
+              "email": "wmekideche@hubspot.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439ad3e71casi13768158f8f.308 - gsmtp",
+              "mx_host": "smtp.google.com",
+              "smtp_code": 250,
+              "smtp_message": "2.1.5 OK ffacd0b85a97d-439ad3e71casi13768158f8f.308 - gsmtp",
+              "status": "accepted",
+              "timings_ms": {
+                "connect": 95.3,
+                "ehlo": 48.77,
+                "mail_from": 47.28,
+                "rcpt_to": 369.89,
+                "total": 561.26
+              }
+            },
+            {
+              "attempt": 20,
+              "ehlo_code": 250,
+              "email": "wmekideche@hubspot.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439b3fec473si10353518f8f.213 - gsmtp",
+              "mx_host": "smtp.google.com",
+              "smtp_code": 250,
+              "smtp_message": "2.1.5 OK ffacd0b85a97d-439b3fec473si10353518f8f.213 - gsmtp",
+              "status": "accepted",
+              "timings_ms": {
+                "connect": 92.26,
+                "ehlo": 51.02,
+                "mail_from": 47.05,
+                "rcpt_to": 291.45,
+                "total": 481.81
+              }
+            },
+            {
+              "attempt": 21,
+              "ehlo_code": 250,
+              "email": "wmekideche@hubspot.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439b863c703si7058231f8f.327 - gsmtp",
+              "mx_host": "smtp.google.com",
+              "smtp_code": 250,
+              "smtp_message": "2.1.5 OK ffacd0b85a97d-439b863c703si7058231f8f.327 - gsmtp",
+              "status": "accepted",
+              "timings_ms": {
+                "connect": 95.25,
+                "ehlo": 47.45,
+                "mail_from": 45.87,
+                "rcpt_to": 203.69,
+                "total": 392.28
+              }
+            },
+            {
+              "attempt": 22,
+              "ehlo_code": 250,
+              "email": "wmekideche@hubspot.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439b78e6711si7811459f8f.354 - gsmtp",
+              "mx_host": "smtp.google.com",
+              "smtp_code": 250,
+              "smtp_message": "2.1.5 OK ffacd0b85a97d-439b78e6711si7811459f8f.354 - gsmtp",
+              "status": "accepted",
+              "timings_ms": {
+                "connect": 89.87,
+                "ehlo": 51.91,
+                "mail_from": 49.01,
+                "rcpt_to": 297.67,
+                "total": 488.5
+              }
+            },
+            {
+              "attempt": 23,
+              "ehlo_code": 250,
+              "email": "wmekideche@hubspot.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439b4ecb454si10270811f8f.142 - gsmtp",
+              "mx_host": "smtp.google.com",
+              "smtp_code": 250,
+              "smtp_message": "2.1.5 OK ffacd0b85a97d-439b4ecb454si10270811f8f.142 - gsmtp",
+              "status": "accepted",
+              "timings_ms": {
+                "connect": 96.05,
+                "ehlo": 47.61,
+                "mail_from": 46.76,
+                "rcpt_to": 328.98,
+                "total": 519.44
+              }
+            },
+            {
+              "attempt": 24,
+              "ehlo_code": 250,
+              "email": "wmekideche@hubspot.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK 5b1f17b1804b1-485126520a8si607935e9.3 - gsmtp",
+              "mx_host": "smtp.google.com",
+              "smtp_code": 250,
+              "smtp_message": "2.1.5 OK 5b1f17b1804b1-485126520a8si607935e9.3 - gsmtp",
+              "status": "accepted",
+              "timings_ms": {
+                "connect": 94.53,
+                "ehlo": 55.43,
+                "mail_from": 51.47,
+                "rcpt_to": 353.51,
+                "total": 555.01
+              }
+            },
+            {
+              "attempt": 25,
+              "ehlo_code": 250,
+              "email": "wmekideche@hubspot.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439b1c107e8si11092374f8f.531 - gsmtp",
+              "mx_host": "smtp.google.com",
+              "smtp_code": 250,
+              "smtp_message": "2.1.5 OK ffacd0b85a97d-439b1c107e8si11092374f8f.531 - gsmtp",
+              "status": "accepted",
+              "timings_ms": {
+                "connect": 101.3,
+                "ehlo": 48.24,
+                "mail_from": 46.54,
+                "rcpt_to": 221.98,
+                "total": 418.12
+              }
+            },
+            {
+              "attempt": 26,
+              "ehlo_code": 250,
+              "email": "wmekideche@hubspot.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439b7870dbfsi7925219f8f.255 - gsmtp",
+              "mx_host": "smtp.google.com",
+              "smtp_code": 250,
+              "smtp_message": "2.1.5 OK ffacd0b85a97d-439b7870dbfsi7925219f8f.255 - gsmtp",
+              "status": "accepted",
+              "timings_ms": {
+                "connect": 100.3,
+                "ehlo": 50.2,
+                "mail_from": 49.28,
+                "rcpt_to": 218.24,
+                "total": 418.06
+              }
+            },
+            {
+              "attempt": 27,
+              "ehlo_code": 250,
+              "email": "wmekideche@hubspot.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439b6638e3esi8632307f8f.94 - gsmtp",
+              "mx_host": "smtp.google.com",
+              "smtp_code": 250,
+              "smtp_message": "2.1.5 OK ffacd0b85a97d-439b6638e3esi8632307f8f.94 - gsmtp",
+              "status": "accepted",
+              "timings_ms": {
+                "connect": 99.59,
+                "ehlo": 50.02,
+                "mail_from": 47.64,
+                "rcpt_to": 234.66,
+                "total": 431.97
+              }
+            },
+            {
+              "attempt": 28,
+              "ehlo_code": 250,
+              "email": "wmekideche@hubspot.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439bd13d439si3913643f8f.84 - gsmtp",
+              "mx_host": "smtp.google.com",
+              "smtp_code": 250,
+              "smtp_message": "2.1.5 OK ffacd0b85a97d-439bd13d439si3913643f8f.84 - gsmtp",
+              "status": "accepted",
+              "timings_ms": {
+                "connect": 97.31,
+                "ehlo": 52.28,
+                "mail_from": 52.47,
+                "rcpt_to": 209.88,
+                "total": 411.99
+              }
+            },
+            {
+              "attempt": 29,
+              "ehlo_code": 250,
+              "email": "wmekideche@hubspot.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439b70dc7e5si9063956f8f.5 - gsmtp",
+              "mx_host": "smtp.google.com",
+              "smtp_code": 250,
+              "smtp_message": "2.1.5 OK ffacd0b85a97d-439b70dc7e5si9063956f8f.5 - gsmtp",
+              "status": "accepted",
+              "timings_ms": {
+                "connect": 100.34,
+                "ehlo": 57.38,
+                "mail_from": 51.67,
+                "rcpt_to": 262.87,
+                "total": 472.29
+              }
+            },
+            {
+              "attempt": 30,
+              "ehlo_code": 250,
+              "email": "wmekideche@hubspot.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-4399c7a425asi25089566f8f.165 - gsmtp",
+              "mx_host": "smtp.google.com",
+              "smtp_code": 250,
+              "smtp_message": "2.1.5 OK ffacd0b85a97d-4399c7a425asi25089566f8f.165 - gsmtp",
+              "status": "accepted",
+              "timings_ms": {
+                "connect": 151.45,
+                "ehlo": 49.56,
+                "mail_from": 49.21,
+                "rcpt_to": 291.91,
+                "total": 542.15
+              }
+            },
+            {
+              "attempt": 31,
+              "ehlo_code": 250,
+              "email": "wmekideche@hubspot.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439b958dbc2si6575350f8f.272 - gsmtp",
+              "mx_host": "smtp.google.com",
+              "smtp_code": 250,
+              "smtp_message": "2.1.5 OK ffacd0b85a97d-439b958dbc2si6575350f8f.272 - gsmtp",
+              "status": "accepted",
+              "timings_ms": {
+                "connect": 98.85,
+                "ehlo": 48.99,
+                "mail_from": 47.25,
+                "rcpt_to": 216.66,
+                "total": 411.78
+              }
+            },
+            {
+              "attempt": 32,
+              "ehlo_code": 250,
+              "email": "wmekideche@hubspot.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439af482bb3si11997173f8f.172 - gsmtp",
+              "mx_host": "smtp.google.com",
+              "smtp_code": 250,
+              "smtp_message": "2.1.5 OK ffacd0b85a97d-439af482bb3si11997173f8f.172 - gsmtp",
+              "status": "accepted",
+              "timings_ms": {
+                "connect": 118.07,
+                "ehlo": 68.44,
+                "mail_from": 49.17,
+                "rcpt_to": 222.31,
+                "total": 458.02
+              }
+            },
+            {
+              "attempt": 33,
+              "ehlo_code": 250,
+              "email": "wmekideche@hubspot.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-4399c7b04e1si23910797f8f.260 - gsmtp",
+              "mx_host": "smtp.google.com",
+              "smtp_code": 250,
+              "smtp_message": "2.1.5 OK ffacd0b85a97d-4399c7b04e1si23910797f8f.260 - gsmtp",
+              "status": "accepted",
+              "timings_ms": {
+                "connect": 97.29,
+                "ehlo": 48.83,
+                "mail_from": 48.1,
+                "rcpt_to": 240.04,
+                "total": 434.28
+              }
+            },
+            {
+              "attempt": 34,
+              "ehlo_code": 250,
+              "email": "wmekideche@hubspot.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439b70d38absi7968156f8f.29 - gsmtp",
+              "mx_host": "smtp.google.com",
+              "smtp_code": 250,
+              "smtp_message": "2.1.5 OK ffacd0b85a97d-439b70d38absi7968156f8f.29 - gsmtp",
+              "status": "accepted",
+              "timings_ms": {
+                "connect": 96.32,
+                "ehlo": 53.22,
+                "mail_from": 52.1,
+                "rcpt_to": 229.65,
+                "total": 431.32
+              }
+            },
+            {
+              "attempt": 35,
+              "ehlo_code": 250,
+              "email": "wmekideche@hubspot.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439aeed133dsi13233465f8f.85 - gsmtp",
+              "mx_host": "smtp.google.com",
+              "smtp_code": 250,
+              "smtp_message": "2.1.5 OK ffacd0b85a97d-439aeed133dsi13233465f8f.85 - gsmtp",
+              "status": "accepted",
+              "timings_ms": {
+                "connect": 98.55,
+                "ehlo": 51.11,
+                "mail_from": 48.25,
+                "rcpt_to": 248.65,
+                "total": 446.59
+              }
+            },
+            {
+              "attempt": 36,
+              "ehlo_code": 250,
+              "email": "wmekideche@hubspot.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-4399c7e1387si24590888f8f.522 - gsmtp",
+              "mx_host": "smtp.google.com",
+              "smtp_code": 250,
+              "smtp_message": "2.1.5 OK ffacd0b85a97d-4399c7e1387si24590888f8f.522 - gsmtp",
+              "status": "accepted",
+              "timings_ms": {
+                "connect": 96.4,
+                "ehlo": 49.56,
+                "mail_from": 50.74,
+                "rcpt_to": 297.65,
+                "total": 494.4
+              }
+            },
+            {
+              "attempt": 37,
+              "ehlo_code": 250,
+              "email": "wmekideche@hubspot.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439b668b66bsi8979392f8f.379 - gsmtp",
+              "mx_host": "smtp.google.com",
+              "smtp_code": 250,
+              "smtp_message": "2.1.5 OK ffacd0b85a97d-439b668b66bsi8979392f8f.379 - gsmtp",
+              "status": "accepted",
+              "timings_ms": {
+                "connect": 98.65,
+                "ehlo": 50.01,
+                "mail_from": 48.41,
+                "rcpt_to": 229.97,
+                "total": 427.08
+              }
+            },
+            {
+              "attempt": 38,
+              "ehlo_code": 250,
+              "email": "wmekideche@hubspot.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439aec4e16csi13730592f8f.61 - gsmtp",
+              "mx_host": "smtp.google.com",
+              "smtp_code": 250,
+              "smtp_message": "2.1.5 OK ffacd0b85a97d-439aec4e16csi13730592f8f.61 - gsmtp",
+              "status": "accepted",
+              "timings_ms": {
+                "connect": 97.09,
+                "ehlo": 53.2,
+                "mail_from": 61.69,
+                "rcpt_to": 233.88,
+                "total": 445.88
+              }
+            },
+            {
+              "attempt": 39,
+              "ehlo_code": 250,
+              "email": "wmekideche@hubspot.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439b4ae0000si10184282f8f.245 - gsmtp",
+              "mx_host": "smtp.google.com",
+              "smtp_code": 250,
+              "smtp_message": "2.1.5 OK ffacd0b85a97d-439b4ae0000si10184282f8f.245 - gsmtp",
+              "status": "accepted",
+              "timings_ms": {
+                "connect": 104.51,
+                "ehlo": 50.68,
+                "mail_from": 49.97,
+                "rcpt_to": 296.2,
+                "total": 501.39
+              }
+            },
+            {
+              "attempt": 40,
+              "ehlo_code": 250,
+              "email": "wmekideche@hubspot.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439af926c43si12127301f8f.37 - gsmtp",
+              "mx_host": "smtp.google.com",
+              "smtp_code": 250,
+              "smtp_message": "2.1.5 OK ffacd0b85a97d-439af926c43si12127301f8f.37 - gsmtp",
+              "status": "accepted",
+              "timings_ms": {
+                "connect": 102.86,
+                "ehlo": 57.88,
+                "mail_from": 52.5,
+                "rcpt_to": 249.83,
+                "total": 463.12
+              }
+            }
+          ],
+          "domain": "hubspot.com",
+          "email": "wmekideche@hubspot.com",
+          "label": "known_real",
+          "mx_records": [
+            {
+              "host": "smtp.google.com",
+              "priority": 1
+            }
+          ],
+          "summary": {
+            "connect_timing_ms": {
+              "count": 40,
+              "max_ms": 276.5,
+              "mean_ms": 104.39,
+              "median_ms": 98.44,
+              "min_ms": 89.87
+            },
+            "rcpt_timing_ms": {
+              "count": 40,
+              "max_ms": 369.89,
+              "mean_ms": 251.55,
+              "median_ms": 237.35,
+              "min_ms": 203.69
+            },
+            "smtp_code_counts": {
+              "250": 40
+            },
+            "stage": "completed",
+            "status_counts": {
+              "accepted": 40
+            },
+            "total_timing_ms": {
+              "count": 40,
+              "max_ms": 619.71,
+              "mean_ms": 456.73,
+              "median_ms": 442.41,
+              "min_ms": 392.28
+            }
+          }
+        }
+      ],
+      "label_summary": {
+        "generic_random": {
+          "attempt_count": 40,
+          "rcpt_timing_ms": {
+            "count": 40,
+            "max_ms": 493.5,
+            "mean_ms": 90.09,
+            "median_ms": 73.56,
+            "min_ms": 66.0
+          },
+          "status_counts": {
+            "rejected": 40
+          },
+          "total_timing_ms": {
+            "count": 40,
+            "max_ms": 2983.77,
+            "mean_ms": 349.71,
+            "median_ms": 274.06,
+            "min_ms": 257.32
+          }
+        },
+        "known_real": {
+          "attempt_count": 40,
+          "rcpt_timing_ms": {
+            "count": 40,
+            "max_ms": 369.89,
+            "mean_ms": 251.55,
+            "median_ms": 237.35,
+            "min_ms": 203.69
+          },
+          "status_counts": {
+            "accepted": 40
+          },
+          "total_timing_ms": {
+            "count": 40,
+            "max_ms": 619.71,
+            "mean_ms": 456.73,
+            "median_ms": 442.41,
+            "min_ms": 392.28
+          }
+        }
+      },
+      "runs_per_email": 40,
+      "stage": "completed"
+    },
+    "stage": "completed"
+  },
+  "generated_at_utc": "2026-03-02T21:49:22.878738+00:00",
+  "input": {
+    "domain": "",
+    "name": ""
+  },
+  "settings": {
+    "api_consensus_enabled": false,
+    "benchmark_file": "/Users/don/EmailFinder/benchmark_cases.hubspot_pair_reversed.csv",
+    "benchmark_max_cases": 50,
+    "benchmark_pause_ms": 250,
+    "benchmark_runs": 40,
+    "benchmark_starttls": false,
+    "consensus_delay_ms": 250,
+    "consensus_max_candidates": 6,
+    "consensus_providers": [
+      "hunter",
+      "abstract"
+    ],
+    "doh_enabled": true,
+    "doh_via_curl": false,
+    "from_address": "probe@localhost",
+    "known_emails": [],
+    "max_candidates": 12,
+    "osint_delay_ms": 300,
+    "osint_enabled": false,
+    "osint_max_candidates": 8,
+    "osint_max_results": 6,
+    "pause_ms": 700,
+    "probe_smtp": false,
+    "timeout_seconds": 8.0
+  }
+}

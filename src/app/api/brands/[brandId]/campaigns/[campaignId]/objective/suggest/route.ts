@@ -60,36 +60,6 @@ function normalizeSuggestions(value: unknown): ObjectiveSuggestion[] {
   return rows.slice(0, 6);
 }
 
-function fallbackSuggestions(brandName: string): ObjectiveSuggestion[] {
-  const safeBrand = brandName.trim() || "your brand";
-  return [
-    {
-      title: "Book Qualified Demos",
-      goal: `Book 10 qualified demos in 14 days with ${safeBrand}'s ideal buyers.`,
-      constraints:
-        "Email only. Keep copy under 90 words. Target a single ICP (role + company type). Start conservative: 30 sends/day per mailbox, 6/hour, 8+ minutes between touches. Unsubscribe always on.",
-      scoring: { conversionWeight: 0.7, qualityWeight: 0.2, replyWeight: 0.1 },
-      rationale: "Optimized for pipeline outcomes with guardrails to protect deliverability.",
-    },
-    {
-      title: "Validate Offer Fast",
-      goal: `Validate ${safeBrand}'s offer by earning 20 replies and 3 intro calls in 10 days.`,
-      constraints:
-        "Email only. One offer per message. Include a simple CTA (one question). Target 1-2 verticals max. Start conservative with caps; pause on complaints or bounces.",
-      scoring: { conversionWeight: 0.55, qualityWeight: 0.25, replyWeight: 0.2 },
-      rationale: "Front-loads learning speed while still tracking conversion quality.",
-    },
-    {
-      title: "Max Positive Replies",
-      goal: `Generate 25 positive replies from a single ICP in 7 days (fast feedback for ${safeBrand}).`,
-      constraints:
-        "Email only. Short messages (50-80 words). Personalize first line. Avoid links on touch 1. Conservative caps. Stop sequence after any reply.",
-      scoring: { conversionWeight: 0.4, qualityWeight: 0.2, replyWeight: 0.4 },
-      rationale: "Optimized for signal density and iteration speed.",
-    },
-  ];
-}
-
 export async function POST(
   _request: Request,
   context: { params: Promise<{ brandId: string; campaignId: string }> }
@@ -109,7 +79,13 @@ export async function POST(
 
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) {
-    return NextResponse.json({ suggestions: fallbackSuggestions(brandName), mode: "fallback" });
+    return NextResponse.json(
+      {
+        error: "OPENAI_API_KEY is not configured",
+        hint: "Real-only mode is enabled: fallback objective suggestions are disabled.",
+      },
+      { status: 503 }
+    );
   }
 
   const brandContext = {
@@ -162,7 +138,14 @@ export async function POST(
 
   const raw = await response.text();
   if (!response.ok) {
-    return NextResponse.json({ suggestions: fallbackSuggestions(brandName), mode: "fallback" });
+    return NextResponse.json(
+      {
+        error: "objective suggestion generation failed",
+        hint: "Real-only mode is enabled: fallback objective suggestions are disabled.",
+        providerStatus: response.status,
+      },
+      { status: 502 }
+    );
   }
 
   let payload: unknown = {};
@@ -190,8 +173,14 @@ export async function POST(
   const parsedRecord = asRecord(parsed);
   const suggestions = normalizeSuggestions(parsedRecord.suggestions);
 
-  return NextResponse.json({
-    suggestions: suggestions.length ? suggestions : fallbackSuggestions(brandName),
-    mode: suggestions.length ? "openai" : "fallback",
-  });
+  if (!suggestions.length) {
+    return NextResponse.json(
+      {
+        error: "objective suggestion generation returned no usable suggestions",
+        hint: "Real-only mode is enabled: fallback objective suggestions are disabled.",
+      },
+      { status: 422 }
+    );
+  }
+  return NextResponse.json({ suggestions, mode: "openai" });
 }

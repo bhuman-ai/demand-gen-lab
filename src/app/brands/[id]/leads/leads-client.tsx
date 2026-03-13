@@ -2,7 +2,6 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
@@ -11,8 +10,20 @@ import { Badge } from "@/components/ui/badge";
 import { updateBrandApi } from "@/lib/client-api";
 import { trackEvent } from "@/lib/telemetry-client";
 import type { BrandRecord, LeadRow } from "@/lib/factory-types";
+import {
+  EmptyState,
+  PageIntro,
+  SectionPanel,
+  StatLedger,
+  TableHeaderCell,
+  TableShell,
+} from "@/components/ui/page-layout";
 
 const makeId = () => `lead_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+
+function formatCount(value: number) {
+  return value.toString().padStart(2, "0");
+}
 
 export default function LeadsClient({ brand }: { brand: BrandRecord }) {
   const [leads, setLeads] = useState<LeadRow[]>(brand.leads || []);
@@ -53,52 +64,53 @@ export default function LeadsClient({ brand }: { brand: BrandRecord }) {
   }, [brand.id]);
 
   return (
-    <div className="space-y-5">
-      <Card>
-        <CardHeader>
-          <CardTitle>Leads</CardTitle>
-          <CardDescription>Operational lead database for {brand.name}.</CardDescription>
-        </CardHeader>
-        <CardContent className="grid gap-3 md:grid-cols-3">
-          <div>
-            <div className="text-xs text-[color:var(--muted-foreground)]">Total Leads</div>
-            <div className="text-lg font-semibold">{leads.length}</div>
-          </div>
-          <div>
-            <div className="text-xs text-[color:var(--muted-foreground)]">Qualified</div>
-            <div className="text-lg font-semibold">{qualified}</div>
-          </div>
-          <div>
-            <div className="text-xs text-[color:var(--muted-foreground)]">Open</div>
-            <div className="text-lg font-semibold">{leads.filter((lead) => lead.status !== "closed").length}</div>
-          </div>
-        </CardContent>
-      </Card>
+    <div className="space-y-8">
+      <PageIntro
+        eyebrow={`${brand.name} / leads`}
+        title="Keep every prospect in the same operating record."
+        description="Lead status, channel, and recent touchpoints should live beside the experiment and campaign work that depends on them."
+        aside={
+          <StatLedger
+            items={[
+              {
+                label: "Total leads",
+                value: formatCount(leads.length),
+                detail: leads.length ? "The active lead pool for this brand." : "No leads recorded yet.",
+              },
+              {
+                label: "Qualified",
+                value: formatCount(qualified),
+                detail: qualified ? "Leads already marked as viable." : "No lead has been qualified yet.",
+              },
+              {
+                label: "Open",
+                value: formatCount(leads.filter((lead) => lead.status !== "closed").length),
+                detail: "Leads still in motion.",
+              },
+            ]}
+          />
+        }
+      />
 
       {!leads.length ? (
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Start Here</CardTitle>
-            <CardDescription>
-              This table is your lead pool. Add leads manually, or run outreach to start conversations.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="flex flex-wrap gap-2">
+        <EmptyState
+          title="No leads yet."
+          description="This table is your lead pool. Add leads manually or start campaign work that will create and update the record."
+          actions={
+            <>
             <Button asChild size="sm" variant="outline">
               <Link href={`/brands/${brand.id}/campaigns`}>Open Campaigns</Link>
             </Button>
             <Button asChild size="sm" variant="outline">
               <Link href="/settings/outreach">Outreach Settings</Link>
             </Button>
-          </CardContent>
-        </Card>
+            </>
+          }
+        />
       ) : null}
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Add Lead</CardTitle>
-        </CardHeader>
-        <CardContent className="grid gap-3 md:grid-cols-5">
+      <SectionPanel title="Add lead" description="Record a new lead without leaving the brand workspace.">
+        <div className="grid gap-3 md:grid-cols-5">
           <div className="md:col-span-2">
             <Label>Name</Label>
             <Input value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} />
@@ -134,27 +146,27 @@ export default function LeadsClient({ brand }: { brand: BrandRecord }) {
               Add Lead
             </Button>
           </div>
-        </CardContent>
-      </Card>
+        </div>
+      </SectionPanel>
 
-      <Card>
-        <CardHeader className="flex flex-row items-center justify-between gap-3">
-          <CardTitle className="text-base">Lead Table</CardTitle>
-          <Input placeholder="Filter leads" value={query} onChange={(event) => setQuery(event.target.value)} className="max-w-xs" />
-        </CardHeader>
-        <CardContent className="overflow-x-auto">
+      <SectionPanel
+        title="Lead register"
+        description="Filter the pool, review status at a glance, and keep the operating record current."
+        actions={<Input placeholder="Filter leads" value={query} onChange={(event) => setQuery(event.target.value)} className="w-[18rem]" />}
+      >
+        <TableShell>
           <table className="min-w-full text-sm">
             <thead>
-              <tr className="text-left text-xs uppercase tracking-wide text-[color:var(--muted-foreground)]">
-                <th className="pb-2">Name</th>
-                <th className="pb-2">Channel</th>
-                <th className="pb-2">Status</th>
-                <th className="pb-2">Last Touch</th>
+              <tr>
+                <TableHeaderCell>Name</TableHeaderCell>
+                <TableHeaderCell>Channel</TableHeaderCell>
+                <TableHeaderCell>Status</TableHeaderCell>
+                <TableHeaderCell>Last touch</TableHeaderCell>
               </tr>
             </thead>
             <tbody>
               {filtered.map((lead) => (
-                <tr key={lead.id} className="border-t border-[color:var(--border)]">
+                <tr key={lead.id} className="border-t border-[color:var(--border)] hover:bg-[color:var(--surface-muted)]">
                   <td className="py-2">{lead.name}</td>
                   <td className="py-2">{lead.channel}</td>
                   <td className="py-2">
@@ -170,21 +182,21 @@ export default function LeadsClient({ brand }: { brand: BrandRecord }) {
             </tbody>
           </table>
           {!filtered.length ? <div className="py-6 text-sm text-[color:var(--muted-foreground)]">No leads found.</div> : null}
-        </CardContent>
-      </Card>
+        </TableShell>
+      </SectionPanel>
 
       {error ? <div className="text-sm text-[color:var(--danger)]">{error}</div> : null}
 
-      <Card>
-        <CardContent className="flex flex-wrap gap-2 py-4">
+      <SectionPanel>
+        <div className="flex flex-wrap gap-2">
           <Button asChild variant="outline">
             <Link href={`/brands/${brand.id}`}>Back to Brand Home</Link>
           </Button>
           <Button asChild>
             <Link href={`/brands/${brand.id}/campaigns`}>Go to Campaigns</Link>
           </Button>
-        </CardContent>
-      </Card>
+        </div>
+      </SectionPanel>
     </div>
   );
 }

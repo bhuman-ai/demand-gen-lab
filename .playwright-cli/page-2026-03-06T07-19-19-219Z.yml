@@ -1,0 +1,345 @@
+- generic [active]:
+  - alert: Discover iOS apps | Mobbin
+  - generic:
+    - banner:
+      - navigation:
+        - generic:
+          - generic:
+            - generic:
+              - link:
+                - /url: /discover/apps/ios/latest
+                - img
+              - generic:
+                - generic:
+                  - generic:
+                    - link:
+                      - /url: /discover/apps/ios/latest
+                      - text: Apps
+                  - link:
+                    - /url: /discover/sites/latest
+                    - text: Sites
+            - generic:
+              - generic:
+                - button:
+                  - img
+                  - generic: Search on iOS...
+                - generic:
+                  - generic:
+                    - button:
+                      - img
+            - generic:
+              - generic:
+                - generic:
+                  - generic:
+                    - generic:
+                      - generic:
+                        - link:
+                          - /url: /saved/mobile/screens
+                  - generic:
+                    - generic:
+                      - link:
+                        - /url: /community/mobile/featured
+                  - generic:
+                    - link:
+                      - /url: /awards
+                      - generic:
+                        - generic: Awards
+                  - generic:
+                    - button
+                - button:
+                  - generic:
+                    - generic:
+                      - generic: D
+    - main:
+      - generic:
+        - generic:
+          - generic:
+            - button:
+              - heading [level=3]: Categories
+              - img
+            - list:
+              - listitem:
+                - link:
+                  - /url: /search/apps/ios?content_type=apps&filter=appCategories.Lifestyle
+                  - text: Lifestyle
+              - listitem:
+                - link:
+                  - /url: /search/apps/ios?content_type=apps&filter=appCategories.AI
+                  - text: AI
+              - listitem:
+                - link:
+                  - /url: /search/apps/ios?content_type=apps&filter=appCategories.Shopping
+                  - text: Shopping
+              - listitem:
+                - link:
+                  - /url: /search/apps/ios?content_type=apps&filter=appCategories.Finance
+                  - text: Finance
+              - listitem:
+                - link:
+                  - /url: /search/apps/ios?content_type=apps&filter=appCategories.Health+%26+Fitness
+                  - text: Health & Fitness
+          - generic:
+            - button:
+              - heading [level=3]: Screens
+              - img
+            - list:
+              - listitem:
+                - link:
+                  - /url: /search/apps/ios?content_type=screens&filter=screenPatterns.Signup
+                  - text: Signup
+              - listitem:
+                - link:
+                  - /url: /search/apps/ios?content_type=screens&filter=screenPatterns.Welcome+%26+Get+Started
+                  - text: Welcome & Get Started
+              - listitem:
+                - link:
+                  - /url: /search/apps/ios?content_type=screens&filter=screenPatterns.Payment+Method
+                  - text: Payment Method
+              - listitem:
+                - link:
+                  - /url: /search/apps/ios?content_type=screens&filter=screenPatterns.Notifications
+                  - text: Notifications
+              - listitem:
+                - link:
+                  - /url: /search/apps/ios?content_type=screens&filter=screenPatterns.Home
+                  - text: Home
+          - generic:
+            - button:
+              - heading [level=3]: UI Elements
+              - img
+            - list:
+              - listitem:
+                - link:
+                  - /url: /search/apps/ios?content_type=ui-elements&filter=screenElements.Text+Field
+                  - text: Text Field
+              - listitem:
+                - link:
+                  - /url: /search/apps/ios?content_type=ui-elements&filter=screenElements.Bottom+Sheet
+                  - text: Bottom Sheet
+              - listitem:
+                - link:
+                  - /url: /search/apps/ios?content_type=ui-elements&filter=screenElements.Button
+                  - text: Button
+              - listitem:
+                - link:
+                  - /url: /search/apps/ios?content_type=ui-elements&filter=screenElements.Tab+Bar
+                  - text: Tab Bar
+              - listitem:
+                - link:
+                  - /url: /search/apps/ios?content_type=ui-elements&filter=screenElements.Dropdown+Menu
+                  - text: Dropdown Menu
+          - generic:
+            - button:
+              - heading [level=3]: Flows
+              - img
+            - list:
+              - listitem:
+                - link:
+                  - /url: /search/apps/ios?content_type=flows&filter=flowActions.Subscribing+%26+Upgrading
+                  - text: Subscribing & Upgrading
+              - listitem:
+                - link:
+                  - /url: /search/apps/ios?content_type=flows&filter=flowActions.Onboarding
+                  - text: Onboarding
+              - listitem:
+                - link:
+                  - /url: /search/apps/ios?content_type=flows&filter=flowActions.Browsing+Tutorial
+                  - text: Browsing Tutorial
+              - listitem:
+                - link:
+                  - /url: /search/apps/ios?content_type=flows&filter=flowActions.Editing+Profile
+                  - text: Editing Profile
+              - listitem:
+                - link:
+                  - /url: /search/apps/ios?content_type=flows&filter=flowActions.Creating+Account
+                  - text: Creating Account
+        - generic:
+          - generic:
+            - generic:
+              - generic:
+                - radiogroup:
+                  - radio [checked]:
+                    - generic: iOS
+                  - radio:
+                    - generic: Web
+              - generic:
+                - generic:
+                  - link:
+                    - /url: /discover/apps/ios/latest
+                    - text: Latest
+                  - link:
+                    - /url: /discover/apps/ios/popular
+                    - text: Most popular
+                  - link:
+                    - /url: /discover/apps/ios/top
+                    - text: Top rated
+                  - link:
+                    - /url: /discover/apps/ios/animations
+                    - text: Animations
+            - generic:
+              - button:
+                - generic:
+                  - img
+                  - generic: Filter
+          - generic:
+            - generic:
+              - generic:
+                - listitem:
+                  - link:
+                    - /url: /apps/todoist-ios-eef2af1b-27db-42b9-a83e-ab4e645a4fdb/c8ffef88-5e15-4e50-bdaf-89447837fa24/screens
+                  - link:
+                    - /url: /apps/todoist-ios-eef2af1b-27db-42b9-a83e-ab4e645a4fdb/c8ffef88-5e15-4e50-bdaf-89447837fa24/screens
+                    - generic:
+                      - generic:
+                        - button:
+                          - img
+                          - img
+                    - generic:
+                      - generic:
+                        - generic: Updated
+                  - generic:
+                    - generic:
+                      - img
+                    - generic:
+                      - heading [level=3]: Todoist
+                      - paragraph: To-do list & calendar
+                - listitem:
+                  - link:
+                    - /url: /apps/the-fork-ios-788fd08c-c7d8-4c9f-a12a-affab14380f6/1be01cc2-2b8c-48a3-a260-4b99aa9c31f4/screens
+                  - link:
+                    - /url: /apps/the-fork-ios-788fd08c-c7d8-4c9f-a12a-affab14380f6/1be01cc2-2b8c-48a3-a260-4b99aa9c31f4/screens
+                    - list:
+                      - listitem:
+                        - img
+                      - listitem:
+                        - img
+                      - listitem:
+                        - img
+                      - listitem:
+                        - img
+                    - button [ref=e885] [cursor=pointer]:
+                      - img [ref=e886]
+                    - generic:
+                      - generic:
+                        - generic: New
+                  - generic:
+                    - generic:
+                      - img
+                    - generic:
+                      - heading [level=3]: TheFork
+                      - paragraph: Savor new dining adventures
+                - listitem:
+                  - link:
+                    - /url: /apps/manus-ios-5a1953a4-1dcd-4a22-a486-612735a15ef7/5aff77ed-6c06-428d-baf7-0e2c303374ca/screens
+                  - link:
+                    - /url: /apps/manus-ios-5a1953a4-1dcd-4a22-a486-612735a15ef7/5aff77ed-6c06-428d-baf7-0e2c303374ca/screens
+                    - list:
+                      - listitem:
+                        - img
+                      - listitem:
+                        - img
+                      - listitem:
+                        - img
+                      - listitem:
+                        - img
+                    - button [ref=e887] [cursor=pointer]:
+                      - img [ref=e888]
+                    - generic:
+                      - generic:
+                        - generic: New
+                  - generic:
+                    - generic:
+                      - img
+                    - generic:
+                      - heading [level=3]: Manus
+                      - paragraph: Hands on AI
+                - listitem:
+                  - link:
+                    - /url: /apps/one-year-ios-275c45aa-0fd9-420e-9b74-e37c10e4ca8c/ea4a7487-bd32-47ed-9564-1fc961550283/screens
+                  - link:
+                    - /url: /apps/one-year-ios-275c45aa-0fd9-420e-9b74-e37c10e4ca8c/ea4a7487-bd32-47ed-9564-1fc961550283/screens
+                    - generic:
+                      - generic:
+                        - button:
+                          - img
+                          - img
+                    - generic:
+                      - generic:
+                        - generic: New
+                  - generic:
+                    - generic:
+                      - img
+                    - generic:
+                      - heading [level=3]: one year
+                      - paragraph: Daily journal
+                - listitem:
+                  - link:
+                    - /url: /apps/goodreads-ios-f93fc46c-d683-4c9f-9dfc-cacf466aebed/69256b17-761d-4a86-8edd-dc6a5f1380ac/screens
+                  - link:
+                    - /url: /apps/goodreads-ios-f93fc46c-d683-4c9f-9dfc-cacf466aebed/69256b17-761d-4a86-8edd-dc6a5f1380ac/screens
+                    - list:
+                      - listitem:
+                        - img
+                      - listitem:
+                        - img
+                      - listitem:
+                        - img
+                      - listitem:
+                        - img
+                    - button [ref=e889] [cursor=pointer]:
+                      - img [ref=e890]
+                    - generic:
+                      - generic:
+                        - generic: New
+                  - generic:
+                    - generic:
+                      - img
+                    - generic:
+                      - heading [level=3]: Goodreads
+                      - paragraph: Reviews, listings & reading goals
+                - listitem:
+                  - link:
+                    - /url: /apps/tesla-robotaxi-ios-c410143b-90a0-4b87-90d1-86f484a2f8c5/22ee5eea-955a-44e2-b5f2-f42c0f0172d9/screens
+                  - link:
+                    - /url: /apps/tesla-robotaxi-ios-c410143b-90a0-4b87-90d1-86f484a2f8c5/22ee5eea-955a-44e2-b5f2-f42c0f0172d9/screens
+                    - list:
+                      - listitem:
+                        - img
+                      - listitem:
+                        - img
+                      - listitem:
+                        - img
+                      - listitem:
+                        - img
+                    - button [ref=e891] [cursor=pointer]:
+                      - img [ref=e892]
+                  - generic:
+                    - generic:
+                      - img
+                    - generic:
+                      - heading [level=3]: Tesla Robotaxi
+                      - paragraph: Autonomous ride service
+            - generic:
+              - img
+  - region "Notifications alt+T"
+  - dialog "Limit reached" [ref=e894]:
+    - generic [ref=e895]:
+      - heading "Limit reached" [level=2] [ref=e896]
+      - paragraph
+    - article [ref=e897]:
+      - generic [ref=e899]:
+        - button "close icon" [ref=e903] [cursor=pointer]:
+          - img "close icon" [ref=e905]
+        - generic [ref=e907]:
+          - generic [ref=e908]:
+            - img [ref=e909]
+            - generic [ref=e912]:
+              - heading "New device detected." [level=1] [ref=e913]
+              - paragraph [ref=e914]: You have been logged out of some other devices. If you’d like to share Mobbin with others, create a team for easier collaboration.
+            - button "Skip" [ref=e916] [cursor=pointer]:
+              - generic [ref=e918]: Skip
+          - paragraph [ref=e919]:
+            - text: Read more about
+            - link "device limits" [ref=e920] [cursor=pointer]:
+              - /url: https://help.mobbin.com/en/articles/8122177
+            - text: .

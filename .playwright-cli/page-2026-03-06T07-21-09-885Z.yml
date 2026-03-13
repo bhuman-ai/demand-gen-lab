@@ -1,0 +1,13 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e2]:
+    - generic [ref=e4]:
+      - img [ref=e6] [cursor=pointer]
+      - generic [ref=e10]:
+        - button "Sign Up / Login" [ref=e11] [cursor=pointer]
+        - button "English" [ref=e14] [cursor=pointer]:
+          - generic [ref=e16]:
+            - text: English
+            - img [ref=e19]
+            - img [ref=e23]
+    - img [ref=e28]
+  - alert [ref=e30]

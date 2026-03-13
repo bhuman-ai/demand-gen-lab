@@ -1,0 +1,143 @@
+- generic [ref=e1]:
+  - main [ref=e601]:
+    - generic [ref=e602]:
+      - generic [ref=e604]:
+        - img "Mobbin" [ref=e605]
+        - heading "Welcome back" [level=2] [ref=e608]
+        - generic [ref=e609]:
+          - generic [ref=e610]:
+            - button "Continue with Google" [ref=e611] [cursor=pointer]:
+              - generic [ref=e612]:
+                - img [ref=e613]
+                - generic [ref=e619]: Continue with Google
+            - button "See other options" [ref=e620] [cursor=pointer]:
+              - generic [ref=e622]: See other options
+          - generic [ref=e623]:
+            - separator [ref=e624]
+            - heading "or" [level=3] [ref=e625]
+            - separator [ref=e626]
+          - generic [ref=e627]:
+            - textbox "Email" [ref=e631]:
+              - /placeholder: Enter email address
+              - text: cmuxvbhz1724@outlook.com
+            - textbox "Password" [active] [ref=e641]:
+              - /placeholder: Enter password
+            - button "Continue" [ref=e632] [cursor=pointer]:
+              - generic [ref=e634]: Continue
+            - paragraph [ref=e635]:
+              - text: By continuing, you agree to Mobbin’s
+              - link "Terms of Service" [ref=e636] [cursor=pointer]:
+                - /url: /terms
+              - text: and
+              - link "Privacy Policy" [ref=e637] [cursor=pointer]:
+                - /url: /privacy
+              - text: .
+            - button "Forgot your password?" [ref=e643] [cursor=pointer]
+      - generic:
+        - generic:
+          - generic:
+            - generic:
+              - img "screen"
+            - generic:
+              - img "screen"
+            - generic:
+              - img "screen"
+            - generic:
+              - img "screen"
+            - generic:
+              - img "screen"
+            - generic:
+              - img "screen"
+          - generic:
+            - generic:
+              - img "screen"
+            - generic:
+              - img "screen"
+            - generic:
+              - img "screen"
+            - generic:
+              - img "screen"
+            - generic:
+              - img "screen"
+            - generic:
+              - img "screen"
+          - generic:
+            - generic:
+              - img "screen"
+            - generic:
+              - img "screen"
+            - generic:
+              - img "screen"
+            - generic:
+              - img "screen"
+            - generic:
+              - img "screen"
+            - generic:
+              - img "screen"
+          - generic:
+            - generic:
+              - img "screen"
+            - generic:
+              - img "screen"
+            - generic:
+              - img "screen"
+            - generic:
+              - img "screen"
+            - generic:
+              - img "screen"
+            - generic:
+              - img "screen"
+          - generic:
+            - generic:
+              - img "screen"
+            - generic:
+              - img "screen"
+            - generic:
+              - img "screen"
+            - generic:
+              - img "screen"
+            - generic:
+              - img "screen"
+            - generic:
+              - img "screen"
+          - generic:
+            - generic:
+              - img "screen"
+            - generic:
+              - img "screen"
+            - generic:
+              - img "screen"
+            - generic:
+              - img "screen"
+            - generic:
+              - img "screen"
+            - generic:
+              - img "screen"
+          - generic:
+            - generic:
+              - img "screen"
+            - generic:
+              - img "screen"
+            - generic:
+              - img "screen"
+            - generic:
+              - img "screen"
+            - generic:
+              - img "screen"
+            - generic:
+              - img "screen"
+          - generic:
+            - generic:
+              - img "screen"
+            - generic:
+              - img "screen"
+            - generic:
+              - img "screen"
+            - generic:
+              - img "screen"
+            - generic:
+              - img "screen"
+            - generic:
+              - img "screen"
+  - region "Notifications alt+T"
+  - alert [ref=e593]: Login | Mobbin

@@ -1,0 +1,484 @@
+{
+  "benchmark": {
+    "loader": {
+      "case_count": 2,
+      "ignored": [],
+      "reason": null
+    },
+    "result": {
+      "case_count": 2,
+      "cases": [
+        {
+          "attempts": [
+            {
+              "attempt": 1,
+              "email": "n8q4v2x7m1k9@salesforce.com",
+              "error": "timed out",
+              "mail_code": null,
+              "mail_message": "",
+              "mx_host": "mxb-00177002.gslb.pphosted.com",
+              "smtp_code": null,
+              "smtp_message": "",
+              "status": "unknown",
+              "timings_ms": {
+                "total": 4006.39
+              }
+            },
+            {
+              "attempt": 2,
+              "email": "n8q4v2x7m1k9@salesforce.com",
+              "error": "timed out",
+              "mail_code": null,
+              "mail_message": "",
+              "mx_host": "mxb-00177002.gslb.pphosted.com",
+              "smtp_code": null,
+              "smtp_message": "",
+              "status": "unknown",
+              "timings_ms": {
+                "total": 4003.93
+              }
+            },
+            {
+              "attempt": 3,
+              "email": "n8q4v2x7m1k9@salesforce.com",
+              "error": "timed out",
+              "mail_code": null,
+              "mail_message": "",
+              "mx_host": "mxb-00177002.gslb.pphosted.com",
+              "smtp_code": null,
+              "smtp_message": "",
+              "status": "unknown",
+              "timings_ms": {
+                "total": 4002.45
+              }
+            },
+            {
+              "attempt": 4,
+              "email": "n8q4v2x7m1k9@salesforce.com",
+              "error": "timed out",
+              "mail_code": null,
+              "mail_message": "",
+              "mx_host": "mxb-00177002.gslb.pphosted.com",
+              "smtp_code": null,
+              "smtp_message": "",
+              "status": "unknown",
+              "timings_ms": {
+                "total": 4004.18
+              }
+            },
+            {
+              "attempt": 5,
+              "email": "n8q4v2x7m1k9@salesforce.com",
+              "error": "timed out",
+              "mail_code": null,
+              "mail_message": "",
+              "mx_host": "mxb-00177002.gslb.pphosted.com",
+              "smtp_code": null,
+              "smtp_message": "",
+              "status": "unknown",
+              "timings_ms": {
+                "total": 4002.77
+              }
+            },
+            {
+              "attempt": 6,
+              "email": "n8q4v2x7m1k9@salesforce.com",
+              "error": "timed out",
+              "mail_code": null,
+              "mail_message": "",
+              "mx_host": "mxb-00177002.gslb.pphosted.com",
+              "smtp_code": null,
+              "smtp_message": "",
+              "status": "unknown",
+              "timings_ms": {
+                "total": 4205.43
+              }
+            },
+            {
+              "attempt": 7,
+              "email": "n8q4v2x7m1k9@salesforce.com",
+              "error": "timed out",
+              "mail_code": null,
+              "mail_message": "",
+              "mx_host": "mxb-00177002.gslb.pphosted.com",
+              "smtp_code": null,
+              "smtp_message": "",
+              "status": "unknown",
+              "timings_ms": {
+                "total": 4004.13
+              }
+            },
+            {
+              "attempt": 8,
+              "email": "n8q4v2x7m1k9@salesforce.com",
+              "error": "timed out",
+              "mail_code": null,
+              "mail_message": "",
+              "mx_host": "mxb-00177002.gslb.pphosted.com",
+              "smtp_code": null,
+              "smtp_message": "",
+              "status": "unknown",
+              "timings_ms": {
+                "total": 4003.34
+              }
+            },
+            {
+              "attempt": 9,
+              "email": "n8q4v2x7m1k9@salesforce.com",
+              "error": "timed out",
+              "mail_code": null,
+              "mail_message": "",
+              "mx_host": "mxb-00177002.gslb.pphosted.com",
+              "smtp_code": null,
+              "smtp_message": "",
+              "status": "unknown",
+              "timings_ms": {
+                "total": 4002.7
+              }
+            },
+            {
+              "attempt": 10,
+              "email": "n8q4v2x7m1k9@salesforce.com",
+              "error": "timed out",
+              "mail_code": null,
+              "mail_message": "",
+              "mx_host": "mxb-00177002.gslb.pphosted.com",
+              "smtp_code": null,
+              "smtp_message": "",
+              "status": "unknown",
+              "timings_ms": {
+                "total": 4002.13
+              }
+            },
+            {
+              "attempt": 11,
+              "email": "n8q4v2x7m1k9@salesforce.com",
+              "error": "timed out",
+              "mail_code": null,
+              "mail_message": "",
+              "mx_host": "mxb-00177002.gslb.pphosted.com",
+              "smtp_code": null,
+              "smtp_message": "",
+              "status": "unknown",
+              "timings_ms": {
+                "total": 4002.96
+              }
+            },
+            {
+              "attempt": 12,
+              "email": "n8q4v2x7m1k9@salesforce.com",
+              "error": "timed out",
+              "mail_code": null,
+              "mail_message": "",
+              "mx_host": "mxb-00177002.gslb.pphosted.com",
+              "smtp_code": null,
+              "smtp_message": "",
+              "status": "unknown",
+              "timings_ms": {
+                "total": 4002.99
+              }
+            }
+          ],
+          "domain": "salesforce.com",
+          "email": "n8q4v2x7m1k9@salesforce.com",
+          "label": "generic_random",
+          "mx_records": [
+            {
+              "host": "mxb-00177002.gslb.pphosted.com",
+              "priority": 10
+            },
+            {
+              "host": "mxa-00177002.gslb.pphosted.com",
+              "priority": 10
+            }
+          ],
+          "summary": {
+            "connect_timing_ms": null,
+            "rcpt_timing_ms": null,
+            "smtp_code_counts": {
+              "None": 12
+            },
+            "stage": "completed",
+            "status_counts": {
+              "unknown": 12
+            },
+            "total_timing_ms": {
+              "count": 12,
+              "max_ms": 4205.43,
+              "mean_ms": 4020.28,
+              "median_ms": 4003.16,
+              "min_ms": 4002.13
+            }
+          }
+        },
+        {
+          "attempts": [
+            {
+              "attempt": 1,
+              "email": "dmartis@salesforce.com",
+              "error": "timed out",
+              "mail_code": null,
+              "mail_message": "",
+              "mx_host": "mxa-00177002.gslb.pphosted.com",
+              "smtp_code": null,
+              "smtp_message": "",
+              "status": "unknown",
+              "timings_ms": {
+                "total": 4194.4
+              }
+            },
+            {
+              "attempt": 2,
+              "email": "dmartis@salesforce.com",
+              "error": "timed out",
+              "mail_code": null,
+              "mail_message": "",
+              "mx_host": "mxa-00177002.gslb.pphosted.com",
+              "smtp_code": null,
+              "smtp_message": "",
+              "status": "unknown",
+              "timings_ms": {
+                "total": 4002.73
+              }
+            },
+            {
+              "attempt": 3,
+              "email": "dmartis@salesforce.com",
+              "error": "timed out",
+              "mail_code": null,
+              "mail_message": "",
+              "mx_host": "mxa-00177002.gslb.pphosted.com",
+              "smtp_code": null,
+              "smtp_message": "",
+              "status": "unknown",
+              "timings_ms": {
+                "total": 4003.01
+              }
+            },
+            {
+              "attempt": 4,
+              "email": "dmartis@salesforce.com",
+              "error": "timed out",
+              "mail_code": null,
+              "mail_message": "",
+              "mx_host": "mxa-00177002.gslb.pphosted.com",
+              "smtp_code": null,
+              "smtp_message": "",
+              "status": "unknown",
+              "timings_ms": {
+                "total": 4003.65
+              }
+            },
+            {
+              "attempt": 5,
+              "email": "dmartis@salesforce.com",
+              "error": "timed out",
+              "mail_code": null,
+              "mail_message": "",
+              "mx_host": "mxa-00177002.gslb.pphosted.com",
+              "smtp_code": null,
+              "smtp_message": "",
+              "status": "unknown",
+              "timings_ms": {
+                "total": 4003.97
+              }
+            },
+            {
+              "attempt": 6,
+              "email": "dmartis@salesforce.com",
+              "error": "timed out",
+              "mail_code": null,
+              "mail_message": "",
+              "mx_host": "mxa-00177002.gslb.pphosted.com",
+              "smtp_code": null,
+              "smtp_message": "",
+              "status": "unknown",
+              "timings_ms": {
+                "total": 4002.87
+              }
+            },
+            {
+              "attempt": 7,
+              "email": "dmartis@salesforce.com",
+              "error": "timed out",
+              "mail_code": null,
+              "mail_message": "",
+              "mx_host": "mxa-00177002.gslb.pphosted.com",
+              "smtp_code": null,
+              "smtp_message": "",
+              "status": "unknown",
+              "timings_ms": {
+                "total": 4003.87
+              }
+            },
+            {
+              "attempt": 8,
+              "email": "dmartis@salesforce.com",
+              "error": "timed out",
+              "mail_code": null,
+              "mail_message": "",
+              "mx_host": "mxa-00177002.gslb.pphosted.com",
+              "smtp_code": null,
+              "smtp_message": "",
+              "status": "unknown",
+              "timings_ms": {
+                "total": 4003.74
+              }
+            },
+            {
+              "attempt": 9,
+              "email": "dmartis@salesforce.com",
+              "error": "timed out",
+              "mail_code": null,
+              "mail_message": "",
+              "mx_host": "mxa-00177002.gslb.pphosted.com",
+              "smtp_code": null,
+              "smtp_message": "",
+              "status": "unknown",
+              "timings_ms": {
+                "total": 4003.34
+              }
+            },
+            {
+              "attempt": 10,
+              "email": "dmartis@salesforce.com",
+              "error": "timed out",
+              "mail_code": null,
+              "mail_message": "",
+              "mx_host": "mxa-00177002.gslb.pphosted.com",
+              "smtp_code": null,
+              "smtp_message": "",
+              "status": "unknown",
+              "timings_ms": {
+                "total": 4003.44
+              }
+            },
+            {
+              "attempt": 11,
+              "email": "dmartis@salesforce.com",
+              "error": "timed out",
+              "mail_code": null,
+              "mail_message": "",
+              "mx_host": "mxa-00177002.gslb.pphosted.com",
+              "smtp_code": null,
+              "smtp_message": "",
+              "status": "unknown",
+              "timings_ms": {
+                "total": 4191.79
+              }
+            },
+            {
+              "attempt": 12,
+              "email": "dmartis@salesforce.com",
+              "error": "timed out",
+              "mail_code": null,
+              "mail_message": "",
+              "mx_host": "mxa-00177002.gslb.pphosted.com",
+              "smtp_code": null,
+              "smtp_message": "",
+              "status": "unknown",
+              "timings_ms": {
+                "total": 4003.34
+              }
+            }
+          ],
+          "domain": "salesforce.com",
+          "email": "dmartis@salesforce.com",
+          "label": "known_real",
+          "mx_records": [
+            {
+              "host": "mxa-00177002.gslb.pphosted.com",
+              "priority": 10
+            },
+            {
+              "host": "mxb-00177002.gslb.pphosted.com",
+              "priority": 10
+            }
+          ],
+          "summary": {
+            "connect_timing_ms": null,
+            "rcpt_timing_ms": null,
+            "smtp_code_counts": {
+              "None": 12
+            },
+            "stage": "completed",
+            "status_counts": {
+              "unknown": 12
+            },
+            "total_timing_ms": {
+              "count": 12,
+              "max_ms": 4194.4,
+              "mean_ms": 4035.01,
+              "median_ms": 4003.55,
+              "min_ms": 4002.73
+            }
+          }
+        }
+      ],
+      "label_summary": {
+        "generic_random": {
+          "attempt_count": 12,
+          "rcpt_timing_ms": null,
+          "status_counts": {
+            "unknown": 12
+          },
+          "total_timing_ms": {
+            "count": 12,
+            "max_ms": 4205.43,
+            "mean_ms": 4020.28,
+            "median_ms": 4003.16,
+            "min_ms": 4002.13
+          }
+        },
+        "known_real": {
+          "attempt_count": 12,
+          "rcpt_timing_ms": null,
+          "status_counts": {
+            "unknown": 12
+          },
+          "total_timing_ms": {
+            "count": 12,
+            "max_ms": 4194.4,
+            "mean_ms": 4035.01,
+            "median_ms": 4003.55,
+            "min_ms": 4002.73
+          }
+        }
+      },
+      "runs_per_email": 12,
+      "stage": "completed"
+    },
+    "stage": "completed"
+  },
+  "generated_at_utc": "2026-03-02T22:09:10.778542+00:00",
+  "input": {
+    "domain": "",
+    "name": ""
+  },
+  "settings": {
+    "api_consensus_enabled": false,
+    "benchmark_file": "/Users/don/EmailFinder/benchmark_cases.salesforce_pair_reversed.csv",
+    "benchmark_max_cases": 50,
+    "benchmark_pause_ms": 150,
+    "benchmark_runs": 12,
+    "benchmark_starttls": false,
+    "consensus_delay_ms": 250,
+    "consensus_max_candidates": 6,
+    "consensus_providers": [
+      "hunter",
+      "abstract"
+    ],
+    "doh_enabled": true,
+    "doh_via_curl": false,
+    "from_address": "probe@localhost",
+    "known_emails": [],
+    "max_candidates": 12,
+    "osint_delay_ms": 300,
+    "osint_enabled": false,
+    "osint_max_candidates": 8,
+    "osint_max_results": 6,
+    "pause_ms": 700,
+    "probe_smtp": false,
+    "timeout_seconds": 4.0
+  }
+}

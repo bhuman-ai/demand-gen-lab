@@ -1,0 +1,514 @@
+- generic [ref=e1]:
+  - generic [ref=e3]:
+    - complementary [ref=e4]:
+      - link "Factory Brand Command" [ref=e5] [cursor=pointer]:
+        - /url: /
+        - generic [ref=e6]: Factory
+        - generic [ref=e7]: Brand Command
+      - navigation [ref=e8]:
+        - link "Experiments" [ref=e9] [cursor=pointer]:
+          - /url: /brands/brand_mlg68b9l/experiments
+          - img [ref=e10]
+          - text: Experiments
+        - link "Campaigns" [ref=e14] [cursor=pointer]:
+          - /url: /brands/brand_mlg68b9l/campaigns
+          - img [ref=e15]
+          - text: Campaigns
+        - link "Network" [ref=e17] [cursor=pointer]:
+          - /url: /brands/brand_mlg68b9l/network
+          - img [ref=e18]
+          - text: Network
+        - link "Leads" [ref=e23] [cursor=pointer]:
+          - /url: /brands/brand_mlg68b9l/leads
+          - img [ref=e24]
+          - text: Leads
+        - link "Inbox" [ref=e27] [cursor=pointer]:
+          - /url: /brands/brand_mlg68b9l/inbox
+          - img [ref=e28]
+          - text: Inbox
+      - generic [ref=e31]:
+        - generic [ref=e32]: Tools
+        - navigation [ref=e33]:
+          - link "Settings" [ref=e34] [cursor=pointer]:
+            - /url: /settings/outreach
+            - img [ref=e35]
+            - text: Settings
+          - link "Logic" [ref=e38] [cursor=pointer]:
+            - /url: /logic
+            - img [ref=e39]
+            - text: Logic
+          - link "Doctor" [ref=e41] [cursor=pointer]:
+            - /url: /doctor
+            - img [ref=e42]
+            - text: Doctor
+    - main [ref=e44]:
+      - generic [ref=e46]:
+        - generic [ref=e47]:
+          - combobox [ref=e50]:
+            - option "BHuman | AI personalized videos at scale" [selected]
+          - generic [ref=e52]: Factory > Brand > Experiments > Experiment
+          - heading "Experiment" [level=1] [ref=e53]
+        - generic [ref=e54]:
+          - link "Settings" [ref=e55] [cursor=pointer]:
+            - /url: /settings/outreach
+            - img [ref=e56]
+            - text: Settings
+          - generic [ref=e59]:
+            - button "Light theme" [ref=e60]:
+              - img [ref=e61]
+            - button "Dark theme" [ref=e67]:
+              - img [ref=e68]
+            - button "System theme" [ref=e70]:
+              - img [ref=e71]
+      - generic [ref=e83]:
+        - generic [ref=e85]:
+          - generic [ref=e86]:
+            - heading "BHuman | AI personalized videos at scale · Abandoned demo signup → 30-sec personal video follow-up" [level=3] [ref=e87]
+            - paragraph [ref=e88]: "Stage-based flow: Setup -> Prospects -> Messaging -> Launch."
+          - generic [ref=e89]:
+            - generic [ref=e90]: "Status: completed"
+            - generic [ref=e91]: "Sent: 0"
+            - generic [ref=e92]: "Replies: 0"
+            - generic [ref=e93]: "Positive: 0"
+        - generic [ref=e94]:
+          - generic [ref=e95]:
+            - heading "Workflow" [level=3] [ref=e96]
+            - paragraph [ref=e97]: Only current stage content is shown below.
+          - generic [ref=e98]:
+            - generic [ref=e99]:
+              - generic [ref=e100]: 4/4 stages complete
+              - generic [ref=e101]: 100% complete
+            - generic [ref=e102]: All stages are complete.
+            - generic [ref=e103]:
+              - button "0. Setup done" [ref=e104]:
+                - generic [ref=e105]:
+                  - generic [ref=e106]: 0. Setup
+                  - generic [ref=e107]: done
+              - button "1. Prospects done" [ref=e108]:
+                - generic [ref=e109]:
+                  - generic [ref=e110]: 1. Prospects
+                  - generic [ref=e111]: done
+              - button "2. Messaging done" [active] [ref=e112]:
+                - generic [ref=e113]:
+                  - generic [ref=e114]: 2. Messaging
+                  - generic [ref=e115]: done
+              - button "3. Launch done" [ref=e116]:
+                - generic [ref=e117]:
+                  - generic [ref=e118]: 3. Launch
+                  - generic [ref=e119]: done
+        - generic [ref=e166]:
+          - generic [ref=e167]:
+            - heading "Stage 2 · Messaging" [level=3] [ref=e168]
+            - paragraph [ref=e169]: Edit and publish the conversation flow before launching.
+          - generic [ref=e170]:
+            - generic [ref=e172]:
+              - text: Published revision
+              - strong [ref=e173]: "#1"
+            - generic [ref=e174]: Messaging stage passed.
+            - generic [ref=e176]:
+              - generic [ref=e253]:
+                - generic [ref=e254]:
+                  - generic [ref=e255]:
+                    - heading "Conversation Map Canvas" [level=3] [ref=e256]
+                    - paragraph [ref=e257]: BHuman | AI personalized videos at scale - Abandoned demo signup → 30-sec personal video follow-up Runtime - Abandoned demo signup → 30-sec personal video follow-up
+                  - generic [ref=e258]:
+                    - generic [ref=e259]: published
+                    - generic [ref=e260]: Revision 1
+                - generic [ref=e261]:
+                  - button "Generate AI Map" [ref=e262]:
+                    - img [ref=e263]
+                    - text: Generate AI Map
+                  - button "Save Draft" [ref=e268]:
+                    - img [ref=e269]
+                    - text: Save Draft
+                  - button "Publish" [ref=e273]:
+                    - img [ref=e274]
+                    - text: Publish
+              - generic [ref=e277]:
+                - generic [ref=e278]:
+                  - heading "Sourced Preview Leads" [level=3] [ref=e279]
+                  - paragraph [ref=e280]: Preview generation uses real leads ingested by this experiment. No demo data is used.
+                - generic [ref=e281]:
+                  - generic [ref=e282]:
+                    - button "Refresh Sourced Leads" [ref=e283]:
+                      - img [ref=e284]
+                      - text: Refresh Sourced Leads
+                    - button "Refresh Sourcing Trace" [ref=e289]:
+                      - img [ref=e290]
+                      - text: Refresh Sourcing Trace
+                    - generic [ref=e295]: 20 leads
+                    - generic [ref=e296]: "Runs checked: 1"
+                    - generic [ref=e297]: "Using: Alex Bramos"
+                  - generic [ref=e298]:
+                    - generic [ref=e299]: Sourcing Trace
+                    - generic [ref=e300]: "Owner experiment: expt_bf7ab31d5ac44d91"
+                    - generic [ref=e301]:
+                      - generic [ref=e302]: "Strategy: exa_people_dynamic_queries"
+                      - generic [ref=e303]:
+                        - text: "Budget used:"
+                        - generic [ref=e304]: $0.03
+                      - generic [ref=e305]:
+                        - generic [ref=e306]: Selected actor chain
+                        - generic [ref=e307]:
+                          - generic [ref=e308]: 1. prospect_discovery -> exa.company.search (B2B SaaS company "employees" 50..500 "United States" ("Series A" OR "Series B" OR "Series C"))
+                          - generic [ref=e309]: 2. prospect_discovery -> exa.people.search ("Demand Generation Manager" (SaaS OR "B2B SaaS") ("50-200" OR "200-500") ("United States" OR Canada) -job -hiring)
+                          - generic [ref=e310]: 3. email_discovery -> emailfinder.batch (emailfinder batch enrichment)
+                      - generic [ref=e311]: "Latest run: run_44119f945d744e41 · completed"
+                      - generic [ref=e312]:
+                        - generic [ref=e313]: Probe results
+                        - generic [ref=e314]:
+                          - generic [ref=e315]: email_discovery · emailfinder.batch · pass
+                          - generic [ref=e316]: prospect_discovery · exa.company.search · pass
+                          - generic [ref=e317]: prospect_discovery · exa.company.search · pass
+                          - generic [ref=e318]: prospect_discovery · exa.company.search · pass
+                          - generic [ref=e319]: prospect_discovery · exa.company.search · pass
+                          - generic [ref=e320]: prospect_discovery · exa.company.search · pass
+                          - generic [ref=e321]: prospect_discovery · exa.company.search · pass
+                          - generic [ref=e322]: prospect_discovery · exa.company.search · pass
+                          - generic [ref=e323]: prospect_discovery · exa.company.search · pass
+                          - generic [ref=e324]: prospect_discovery · exa.company.search · pass
+                  - generic [ref=e325]:
+                    - generic [ref=e326]:
+                      - generic [ref=e327]:
+                        - button "Alex Bramos" [ref=e328]
+                        - generic [ref=e329]: sourced
+                      - generic [ref=e330]: alex.bramos@clio.com
+                      - generic [ref=e331]: Senior Demand Generation Manager at Clio - Cloud-Based Legal Technology
+                      - generic [ref=e332]: Run run_44119f945d744e41 · 3/5/2026, 2:17:11 PM
+                      - generic "https://linkedin.com/in/alexbramos" [ref=e333]: "Source URL: https://linkedin.com/in/alexbramos"
+                    - generic [ref=e334]:
+                      - generic [ref=e335]:
+                        - button "Alex Mickle" [ref=e336]
+                        - generic [ref=e337]: sourced
+                      - generic [ref=e338]: alex.mickle@getaccept.com
+                      - generic [ref=e339]: Director, Existing Sales at GetAccept
+                      - generic [ref=e340]: Run run_44119f945d744e41 · 3/5/2026, 2:17:11 PM
+                      - generic "https://linkedin.com/in/alex-mickle-52996819" [ref=e341]: "Source URL: https://linkedin.com/in/alex-mickle-52996819"
+                    - generic [ref=e342]:
+                      - generic [ref=e343]:
+                        - button "Anne-Marie Lessard" [ref=e344]
+                        - generic [ref=e345]: sourced
+                      - generic [ref=e346]: anne-marie@247.ai
+                      - generic [ref=e347]: Demand Generation Manager at [24]7.ai
+                      - generic [ref=e348]: Run run_44119f945d744e41 · 3/5/2026, 2:17:11 PM
+                      - generic "https://linkedin.com/in/anne-marie-lessard" [ref=e349]: "Source URL: https://linkedin.com/in/anne-marie-lessard"
+                    - generic [ref=e350]:
+                      - generic [ref=e351]:
+                        - button "Ashley Duffy" [ref=e352]
+                        - generic [ref=e353]: sourced
+                      - generic [ref=e354]: ashley.duffy@clio.com
+                      - generic [ref=e355]: Senior Demand Generation Manager, Mid-Market at Clio - Cloud-Based Legal Technology
+                      - generic [ref=e356]: Run run_44119f945d744e41 · 3/5/2026, 2:17:11 PM
+                      - generic "https://linkedin.com/in/ashleymduffy" [ref=e357]: "Source URL: https://linkedin.com/in/ashleymduffy"
+                    - generic [ref=e358]:
+                      - generic [ref=e359]:
+                        - button "Calle Svan" [ref=e360]
+                        - generic [ref=e361]: sourced
+                      - generic [ref=e362]: calle.svan@getaccept.com
+                      - generic [ref=e363]: Demand Generation Manager at GetAccept
+                      - generic [ref=e364]: Run run_44119f945d744e41 · 3/5/2026, 2:17:11 PM
+                      - generic "https://linkedin.com/in/callesvan" [ref=e365]: "Source URL: https://linkedin.com/in/callesvan"
+                    - generic [ref=e366]:
+                      - generic [ref=e367]:
+                        - button "Christofer Rasmusson" [ref=e368]
+                        - generic [ref=e369]: sourced
+                      - generic [ref=e370]: christofer.rasmusson@getaccept.com
+                      - generic [ref=e371]: Product Support Professional at GetAccept
+                      - generic [ref=e372]: Run run_44119f945d744e41 · 3/5/2026, 2:17:11 PM
+                      - generic "https://linkedin.com/in/christofer-rasmusson-a04069191" [ref=e373]: "Source URL: https://linkedin.com/in/christofer-rasmusson-a04069191"
+                    - generic [ref=e374]:
+                      - generic [ref=e375]:
+                        - button "Christoffer Kvarnmark" [ref=e376]
+                        - generic [ref=e377]: sourced
+                      - generic [ref=e378]: christoffer.kvarnmark@getaccept.com
+                      - generic [ref=e379]: Revenue Operations Manager at GetAccept
+                      - generic [ref=e380]: Run run_44119f945d744e41 · 3/5/2026, 2:17:11 PM
+                      - generic "https://linkedin.com/in/christoffer-kvarnmark-93b6b0121" [ref=e381]: "Source URL: https://linkedin.com/in/christoffer-kvarnmark-93b6b0121"
+                    - generic [ref=e382]:
+                      - generic [ref=e383]:
+                        - button "Daniel Ostojic" [ref=e384]
+                        - generic [ref=e385]: sourced
+                      - generic [ref=e386]: daniel.ostojic@getaccept.com
+                      - generic [ref=e387]: GTM Specialist at GetAccept
+                      - generic [ref=e388]: Run run_44119f945d744e41 · 3/5/2026, 2:17:11 PM
+                      - generic "https://linkedin.com/in/daniel-ostojic-3414a5151" [ref=e389]: "Source URL: https://linkedin.com/in/daniel-ostojic-3414a5151"
+                    - generic [ref=e390]:
+                      - generic [ref=e391]:
+                        - button "Emil Karlsson" [ref=e392]
+                        - generic [ref=e393]: sourced
+                      - generic [ref=e394]: emil.karlsson@getaccept.com
+                      - generic [ref=e395]: Account Manager at GetAccept
+                      - generic [ref=e396]: Run run_44119f945d744e41 · 3/5/2026, 2:17:11 PM
+                      - generic "https://linkedin.com/in/emil-karlsson-3171a7171" [ref=e397]: "Source URL: https://linkedin.com/in/emil-karlsson-3171a7171"
+                    - generic [ref=e398]:
+                      - generic [ref=e399]:
+                        - button "Erik Persson" [ref=e400]
+                        - generic [ref=e401]: sourced
+                      - generic [ref=e402]: erik.persson@getaccept.com
+                      - generic [ref=e403]: Head Of Sales Account Management at GetAccept
+                      - generic [ref=e404]: Run run_44119f945d744e41 · 3/5/2026, 2:17:11 PM
+                      - generic "https://linkedin.com/in/erik-persson-05827a44" [ref=e405]: "Source URL: https://linkedin.com/in/erik-persson-05827a44"
+                    - generic [ref=e406]:
+                      - generic [ref=e407]:
+                        - button "Fredric Larsén" [ref=e408]
+                        - generic [ref=e409]: sourced
+                      - generic [ref=e410]: fredric.larsen@getaccept.com
+                      - generic [ref=e411]: Senior Account Executive Pre-Sales at GetAccept
+                      - generic [ref=e412]: Run run_44119f945d744e41 · 3/5/2026, 2:17:11 PM
+                      - generic "https://linkedin.com/in/fredric-lars%C3%A9n-b7950a78" [ref=e413]: "Source URL: https://linkedin.com/in/fredric-lars%C3%A9n-b7950a78"
+                    - generic [ref=e414]:
+                      - generic [ref=e415]:
+                        - button "Frida Ek" [ref=e416]
+                        - generic [ref=e417]: sourced
+                      - generic [ref=e418]: frida.ek@getaccept.com
+                      - generic [ref=e419]: Software Engineer at GetAccept
+                      - generic [ref=e420]: Run run_44119f945d744e41 · 3/5/2026, 2:17:11 PM
+                      - generic "https://linkedin.com/in/frida-ek-b44a84191" [ref=e421]: "Source URL: https://linkedin.com/in/frida-ek-b44a84191"
+                    - generic [ref=e422]:
+                      - generic [ref=e423]:
+                        - button "Ida Oscarsson" [ref=e424]
+                        - generic [ref=e425]: sourced
+                      - generic [ref=e426]: ida.oscarsson@getaccept.com
+                      - generic [ref=e427]: Head Of Customer Success at GetAccept
+                      - generic [ref=e428]: Run run_44119f945d744e41 · 3/5/2026, 2:17:11 PM
+                      - generic "https://linkedin.com/in/ida-oscarsson-b42830141" [ref=e429]: "Source URL: https://linkedin.com/in/ida-oscarsson-b42830141"
+                    - generic [ref=e430]:
+                      - generic [ref=e431]:
+                        - button "Isac Ljung" [ref=e432]
+                        - generic [ref=e433]: sourced
+                      - generic [ref=e434]: isac.ljung@getaccept.com
+                      - generic [ref=e435]: Senior Frontend Developer at GetAccept
+                      - generic [ref=e436]: Run run_44119f945d744e41 · 3/5/2026, 2:17:11 PM
+                      - generic "https://linkedin.com/in/isac-ljung-843733127" [ref=e437]: "Source URL: https://linkedin.com/in/isac-ljung-843733127"
+                    - generic [ref=e438]:
+                      - generic [ref=e439]:
+                        - button "Jeanette Stepanchuk" [ref=e440]
+                        - generic [ref=e441]: sourced
+                      - generic [ref=e442]: jeanette@upwind.io
+                      - generic [ref=e443]: Head Of Demand Generation at Upwind Security
+                      - generic [ref=e444]: Run run_44119f945d744e41 · 3/5/2026, 2:17:11 PM
+                      - generic "https://linkedin.com/in/jeanettebelashov" [ref=e445]: "Source URL: https://linkedin.com/in/jeanettebelashov"
+                    - generic [ref=e446]:
+                      - generic [ref=e447]:
+                        - button "Jeff West" [ref=e448]
+                        - generic [ref=e449]: sourced
+                      - generic [ref=e450]: jwest@tvscientific.com
+                      - generic [ref=e451]: Demand Generation Manager at tvScientific
+                      - generic [ref=e452]: Run run_44119f945d744e41 · 3/5/2026, 2:17:11 PM
+                      - generic "https://linkedin.com/in/jeffwwest" [ref=e453]: "Source URL: https://linkedin.com/in/jeffwwest"
+                    - generic [ref=e454]:
+                      - generic [ref=e455]:
+                        - button "John De Guzman" [ref=e456]
+                        - generic [ref=e457]: sourced
+                      - generic [ref=e458]: john@zeroriskgrowth.com
+                      - generic [ref=e459]: Head Of Account Management at Zero Risk Growth
+                      - generic [ref=e460]: Run run_44119f945d744e41 · 3/5/2026, 2:17:11 PM
+                      - generic "https://linkedin.com/in/johndguzman" [ref=e461]: "Source URL: https://linkedin.com/in/johndguzman"
+                    - generic [ref=e462]:
+                      - generic [ref=e463]:
+                        - button "Jonathan Fournier" [ref=e464]
+                        - generic [ref=e465]: sourced
+                      - generic [ref=e466]: jonathan.fournier@getaccept.com
+                      - generic [ref=e467]: Enterprise Account Manager at GetAccept
+                      - generic [ref=e468]: Run run_44119f945d744e41 · 3/5/2026, 2:17:11 PM
+                      - generic "https://linkedin.com/in/jonathan-fournier-pmp-a88104110" [ref=e469]: "Source URL: https://linkedin.com/in/jonathan-fournier-pmp-a88104110"
+                    - generic [ref=e470]:
+                      - generic [ref=e471]:
+                        - button "Kristen Spence" [ref=e472]
+                        - generic [ref=e473]: sourced
+                      - generic [ref=e474]: kristen@rebus.io
+                      - generic [ref=e475]: Demand Generation Manager at Rebus
+                      - generic [ref=e476]: Run run_44119f945d744e41 · 3/5/2026, 2:17:11 PM
+                      - generic "https://linkedin.com/in/kristen-spence-823b40128" [ref=e477]: "Source URL: https://linkedin.com/in/kristen-spence-823b40128"
+                    - generic [ref=e478]:
+                      - generic [ref=e479]:
+                        - button "Kyle Hansen" [ref=e480]
+                        - generic [ref=e481]: sourced
+                      - generic [ref=e482]: kyle.hansen@clickup.com
+                      - generic [ref=e483]: Demand Generation Manager at ClickUp
+                      - generic [ref=e484]: Run run_44119f945d744e41 · 3/5/2026, 2:17:11 PM
+                      - generic "https://linkedin.com/in/kyleclarkhansen" [ref=e485]: "Source URL: https://linkedin.com/in/kyleclarkhansen"
+              - generic [ref=e486]:
+                - generic [ref=e487]:
+                  - generic [ref=e488]:
+                    - generic [ref=e489]:
+                      - heading "Canvas" [level=3] [ref=e490]
+                      - paragraph [ref=e491]: Drag nodes, connect handles, pan with mouse drag, zoom with wheel + ctrl/cmd.
+                    - generic [ref=e492]:
+                      - button "Message" [ref=e493]:
+                        - img [ref=e494]
+                        - text: Message
+                      - button "End Node" [ref=e495]:
+                        - img [ref=e496]
+                        - text: End Node
+                      - button "Auto Layout" [ref=e500]:
+                        - img [ref=e501]
+                        - text: Auto Layout
+                      - button "Fit" [ref=e506]
+                      - button [ref=e507]:
+                        - img [ref=e508]
+                      - button [ref=e511]:
+                        - img [ref=e512]
+                  - generic [ref=e516]:
+                    - img:
+                      - generic:
+                        - generic:
+                          - generic: interest
+                        - generic:
+                          - generic: objection
+                        - generic:
+                          - generic: unsubscribe
+                        - generic:
+                          - generic: unsubscribe
+                        - generic:
+                          - generic: unsubscribe
+                    - generic:
+                      - generic [ref=e522]:
+                        - button "Connect here" [ref=e523]
+                        - button "Start connection" [ref=e524]
+                        - generic [ref=e526]:
+                          - generic [ref=e527]: Email 1 - Permission-based angle
+                          - generic [ref=e528]:
+                            - generic [ref=e529]: Start
+                            - generic [ref=e530]: prompt
+                            - generic [ref=e531]: message
+                        - generic [ref=e532]:
+                          - generic [ref=e533]:
+                            - strong [ref=e534]: "Prompt:"
+                            - text: "Write this node message for \"Email 1 - Permission-based angle\". Keep it concrete, specific, and easy to understand. Use context variables only when available: {{firstName}}, {{com…"
+                          - generic [ref=e535]:
+                            - generic [ref=e536]: Auto-send
+                            - generic [ref=e537]: Delay 0m
+                      - generic [ref=e538]:
+                        - button "Connect here" [ref=e539]
+                        - button "Start connection" [ref=e540]
+                        - generic [ref=e542]:
+                          - generic [ref=e543]: Email 2 - Interest (confirm details)
+                          - generic [ref=e544]:
+                            - generic [ref=e545]: prompt
+                            - generic [ref=e546]: message
+                        - generic [ref=e547]:
+                          - generic [ref=e548]:
+                            - strong [ref=e549]: "Prompt:"
+                            - text: "Write this node message for \"Email 2 - Interest (confirm details)\". Keep it concrete, specific, and easy to understand. Use context variables only when available: {{firstName}}, {…"
+                          - generic [ref=e550]:
+                            - generic [ref=e551]: Manual send
+                            - generic [ref=e552]: Delay 0m
+                      - generic [ref=e553]:
+                        - button "Connect here" [ref=e554]
+                        - button "Start connection" [ref=e555]
+                        - generic [ref=e557]:
+                          - generic [ref=e558]: Email 2 - Objection (already have follow-up)
+                          - generic [ref=e559]:
+                            - generic [ref=e560]: prompt
+                            - generic [ref=e561]: message
+                        - generic [ref=e562]:
+                          - generic [ref=e563]:
+                            - strong [ref=e564]: "Prompt:"
+                            - text: "Write this node message for \"Email 2 - Objection (already have follow-up)\". Keep it concrete, specific, and easy to understand. Use context variables only when available: {{firstN…"
+                          - generic [ref=e565]:
+                            - generic [ref=e566]: Manual send
+                            - generic [ref=e567]: Delay 0m
+                      - generic [ref=e568]:
+                        - button "Connect here" [ref=e569]
+                        - button "Start connection" [ref=e570]
+                        - generic [ref=e572]:
+                          - generic [ref=e573]: End - Unsubscribe/Stop
+                          - generic [ref=e575]: terminal
+                        - generic [ref=e576]:
+                          - generic [ref=e577]:
+                            - strong [ref=e578]: "Prompt:"
+                            - text: Terminal node
+                          - generic [ref=e579]:
+                            - generic [ref=e580]: Manual send
+                            - generic [ref=e581]: Delay 0m
+                    - generic:
+                      - generic:
+                        - img
+                        - text: "Pan: drag background"
+                      - text: "|Zoom: ctrl/cmd + wheel|"
+                      - generic:
+                        - img
+                        - text: "Connect: drag from right dot to left dot"
+                - generic [ref=e582]:
+                  - generic [ref=e583]:
+                    - heading "Inspector" [level=3] [ref=e584]
+                    - paragraph [ref=e585]: Edit selected node/edge details and map settings.
+                  - generic [ref=e586]:
+                    - generic [ref=e587]:
+                      - generic [ref=e588]: Max Depth (turns)
+                      - spinbutton "Max Depth (turns)" [ref=e589]: "4"
+                    - generic [ref=e590]:
+                      - generic [ref=e591]:
+                        - generic [ref=e592]: Preview Lead
+                        - generic [ref=e593]: sourced
+                      - generic [ref=e594]:
+                        - generic [ref=e595]: Name
+                        - generic [ref=e596]: Alex Bramos
+                      - generic [ref=e597]:
+                        - generic [ref=e598]: Email
+                        - generic [ref=e599]: alex.bramos@clio.com
+                      - generic [ref=e600]:
+                        - generic [ref=e601]: Company
+                        - generic [ref=e602]: Clio - Cloud-Based Legal Technology
+                      - generic [ref=e603]:
+                        - generic [ref=e604]: Title
+                        - generic [ref=e605]: Senior Demand Generation Manager
+                      - generic [ref=e606]:
+                        - generic [ref=e607]: Domain
+                        - generic [ref=e608]: clio.com
+                      - generic [ref=e609]:
+                        - generic [ref=e610]: Source Run
+                        - generic [ref=e611]: run_44119f945d744e41 · 3/5/2026, 2:17:11 PM
+                      - generic [ref=e612]:
+                        - generic [ref=e613]: Source URL
+                        - generic [ref=e614]: https://linkedin.com/in/alexbramos
+                    - generic [ref=e615]:
+                      - generic [ref=e616]:
+                        - generic [ref=e617]: Node
+                        - button [ref=e618]:
+                          - img [ref=e619]
+                      - generic [ref=e622]:
+                        - generic [ref=e623]: Title
+                        - textbox [ref=e624]: Email 1 - Permission-based angle
+                      - generic [ref=e625]:
+                        - generic [ref=e626]: Kind
+                        - combobox [ref=e627]:
+                          - option "message" [selected]
+                          - option "terminal"
+                      - generic [ref=e628]:
+                        - generic [ref=e629]: Prompt Template
+                        - textbox [ref=e630]: "Write this node message for \"Email 1 - Permission-based angle\". Keep it concrete, specific, and easy to understand. Use context variables only when available: {{firstName}}, {{company}}, {{leadTitle}}, {{brandName}}, {{campaignGoal}}, {{variantName}}, {{replyPreview}}, {{shortAnswer}}. Do not leave unresolved placeholders. Include exactly one clear CTA sentence. Legacy subject example: Should I build these? Legacy body example: Hi {{firstName}} — quick yes/no: should I build a batch of follow-up videos for {{company}}’s abandoned demo signups? Offer is simple: 10 AI-personalized videos (30 sec) that reference their company, role, and a likely use case, and include your booking link. If yes, reply with your booking link and 3 target fields (first name, company, use case) to get 10 videos made."
+                      - generic [ref=e631]:
+                        - generic [ref=e632]: Prompt Policy
+                        - generic [ref=e633]:
+                          - generic [ref=e634]: Subject Max Words
+                          - spinbutton [ref=e635]: "8"
+                        - generic [ref=e636]:
+                          - generic [ref=e637]: Body Max Words
+                          - spinbutton [ref=e638]: "120"
+                        - generic [ref=e639]:
+                          - checkbox "Require exactly one CTA" [checked] [ref=e640]
+                          - text: Require exactly one CTA
+                        - button "Generate Preview" [ref=e641]:
+                          - img [ref=e642]
+                          - text: Generate Preview
+                      - generic [ref=e645]:
+                        - generic [ref=e646]: Delay (minutes)
+                        - spinbutton [ref=e647]: "0"
+                      - generic [ref=e648]:
+                        - checkbox "Auto-send" [checked] [ref=e649]
+                        - text: Auto-send
+                      - button "Set As Start Node" [ref=e650]
+        - generic [ref=e151]:
+          - generic [ref=e152]: Stage 2 · Messaging
+          - generic [ref=e153]:
+            - button "Back" [ref=e250]:
+              - img [ref=e251]
+              - text: Back
+            - button "Next" [ref=e154]:
+              - text: Next
+              - img [ref=e155]
+  - button "Open Next.js Dev Tools" [ref=e162] [cursor=pointer]:
+    - img [ref=e163]
+  - alert [ref=e84]

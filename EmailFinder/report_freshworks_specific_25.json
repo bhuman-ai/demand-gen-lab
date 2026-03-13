@@ -1,0 +1,1158 @@
+{
+  "benchmark": {
+    "loader": {
+      "case_count": 2,
+      "ignored": [],
+      "reason": null
+    },
+    "result": {
+      "case_count": 2,
+      "cases": [
+        {
+          "attempts": [
+            {
+              "attempt": 1,
+              "ehlo_code": 250,
+              "email": "gsoknf@freshworks.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439b8f1ebf5si6734306f8f.474 - gsmtp",
+              "mx_host": "aspmx.l.google.com",
+              "smtp_code": 250,
+              "smtp_message": "2.1.5 OK ffacd0b85a97d-439b8f1ebf5si6734306f8f.474 - gsmtp",
+              "status": "accepted",
+              "timings_ms": {
+                "connect": 130.74,
+                "ehlo": 49.32,
+                "mail_from": 45.48,
+                "rcpt_to": 122.4,
+                "total": 347.99
+              }
+            },
+            {
+              "attempt": 2,
+              "ehlo_code": 250,
+              "email": "gsoknf@freshworks.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK 5b1f17b1804b1-483c3b7e5a8si272158755e9.12 - gsmtp",
+              "mx_host": "aspmx.l.google.com",
+              "smtp_code": 250,
+              "smtp_message": "2.1.5 OK 5b1f17b1804b1-483c3b7e5a8si272158755e9.12 - gsmtp",
+              "status": "accepted",
+              "timings_ms": {
+                "connect": 93.98,
+                "ehlo": 48.6,
+                "mail_from": 47.11,
+                "rcpt_to": 120.42,
+                "total": 310.14
+              }
+            },
+            {
+              "attempt": 3,
+              "ehlo_code": 250,
+              "email": "gsoknf@freshworks.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK 5b1f17b1804b1-4851264513asi475435e9.5 - gsmtp",
+              "mx_host": "aspmx.l.google.com",
+              "smtp_code": 250,
+              "smtp_message": "2.1.5 OK 5b1f17b1804b1-4851264513asi475435e9.5 - gsmtp",
+              "status": "accepted",
+              "timings_ms": {
+                "connect": 101.41,
+                "ehlo": 59.04,
+                "mail_from": 49.63,
+                "rcpt_to": 711.84,
+                "total": 921.98
+              }
+            },
+            {
+              "attempt": 4,
+              "ehlo_code": 250,
+              "email": "gsoknf@freshworks.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439be46277fsi2604515f8f.513 - gsmtp",
+              "mx_host": "aspmx.l.google.com",
+              "smtp_code": 250,
+              "smtp_message": "2.1.5 OK ffacd0b85a97d-439be46277fsi2604515f8f.513 - gsmtp",
+              "status": "accepted",
+              "timings_ms": {
+                "connect": 93.53,
+                "ehlo": 49.45,
+                "mail_from": 46.51,
+                "rcpt_to": 125.84,
+                "total": 315.36
+              }
+            },
+            {
+              "attempt": 5,
+              "ehlo_code": 250,
+              "email": "gsoknf@freshworks.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439ac72692asi14754493f8f.97 - gsmtp",
+              "mx_host": "aspmx.l.google.com",
+              "smtp_code": 250,
+              "smtp_message": "2.1.5 OK ffacd0b85a97d-439ac72692asi14754493f8f.97 - gsmtp",
+              "status": "accepted",
+              "timings_ms": {
+                "connect": 98.16,
+                "ehlo": 47.85,
+                "mail_from": 46.3,
+                "rcpt_to": 111.07,
+                "total": 303.39
+              }
+            },
+            {
+              "attempt": 6,
+              "ehlo_code": 250,
+              "email": "gsoknf@freshworks.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-4399c7e2438si24502662f8f.530 - gsmtp",
+              "mx_host": "aspmx.l.google.com",
+              "smtp_code": 250,
+              "smtp_message": "2.1.5 OK ffacd0b85a97d-4399c7e2438si24502662f8f.530 - gsmtp",
+              "status": "accepted",
+              "timings_ms": {
+                "connect": 100.45,
+                "ehlo": 52.31,
+                "mail_from": 47.23,
+                "rcpt_to": 117.1,
+                "total": 317.11
+              }
+            },
+            {
+              "attempt": 7,
+              "ehlo_code": 250,
+              "email": "gsoknf@freshworks.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-4399c746ac5si24740177f8f.139 - gsmtp",
+              "mx_host": "aspmx.l.google.com",
+              "smtp_code": 250,
+              "smtp_message": "2.1.5 OK ffacd0b85a97d-4399c746ac5si24740177f8f.139 - gsmtp",
+              "status": "accepted",
+              "timings_ms": {
+                "connect": 380.01,
+                "ehlo": 48.63,
+                "mail_from": 47.77,
+                "rcpt_to": 110.03,
+                "total": 586.47
+              }
+            },
+            {
+              "attempt": 8,
+              "ehlo_code": 250,
+              "email": "gsoknf@freshworks.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK 5b1f17b1804b1-483bd761df0si358327605e9.12 - gsmtp",
+              "mx_host": "aspmx.l.google.com",
+              "smtp_code": 250,
+              "smtp_message": "2.1.5 OK 5b1f17b1804b1-483bd761df0si358327605e9.12 - gsmtp",
+              "status": "accepted",
+              "timings_ms": {
+                "connect": 129.26,
+                "ehlo": 121.51,
+                "mail_from": 193.67,
+                "rcpt_to": 396.82,
+                "total": 841.29
+              }
+            },
+            {
+              "attempt": 9,
+              "ehlo_code": 250,
+              "email": "gsoknf@freshworks.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439ba78a8edsi5733449f8f.519 - gsmtp",
+              "mx_host": "aspmx.l.google.com",
+              "smtp_code": 250,
+              "smtp_message": "2.1.5 OK ffacd0b85a97d-439ba78a8edsi5733449f8f.519 - gsmtp",
+              "status": "accepted",
+              "timings_ms": {
+                "connect": 96.56,
+                "ehlo": 48.38,
+                "mail_from": 46.46,
+                "rcpt_to": 116.32,
+                "total": 307.75
+              }
+            },
+            {
+              "attempt": 10,
+              "ehlo_code": 250,
+              "email": "gsoknf@freshworks.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439b4adff51si9915195f8f.235 - gsmtp",
+              "mx_host": "aspmx.l.google.com",
+              "smtp_code": 250,
+              "smtp_message": "2.1.5 OK ffacd0b85a97d-439b4adff51si9915195f8f.235 - gsmtp",
+              "status": "accepted",
+              "timings_ms": {
+                "connect": 98.82,
+                "ehlo": 48.83,
+                "mail_from": 47.15,
+                "rcpt_to": 127.54,
+                "total": 322.38
+              }
+            },
+            {
+              "attempt": 11,
+              "ehlo_code": 250,
+              "email": "gsoknf@freshworks.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439b70dd279si9601838f8f.46 - gsmtp",
+              "mx_host": "aspmx.l.google.com",
+              "smtp_code": 250,
+              "smtp_message": "2.1.5 OK ffacd0b85a97d-439b70dd279si9601838f8f.46 - gsmtp",
+              "status": "accepted",
+              "timings_ms": {
+                "connect": 98.74,
+                "ehlo": 47.62,
+                "mail_from": 46.16,
+                "rcpt_to": 108.72,
+                "total": 301.26
+              }
+            },
+            {
+              "attempt": 12,
+              "ehlo_code": 250,
+              "email": "gsoknf@freshworks.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439b296f5eesi11488958f8f.527 - gsmtp",
+              "mx_host": "aspmx.l.google.com",
+              "smtp_code": 250,
+              "smtp_message": "2.1.5 OK ffacd0b85a97d-439b296f5eesi11488958f8f.527 - gsmtp",
+              "status": "accepted",
+              "timings_ms": {
+                "connect": 103.15,
+                "ehlo": 50.09,
+                "mail_from": 48.8,
+                "rcpt_to": 112.42,
+                "total": 314.51
+              }
+            },
+            {
+              "attempt": 13,
+              "ehlo_code": 250,
+              "email": "gsoknf@freshworks.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439b1b4342esi11496224f8f.91 - gsmtp",
+              "mx_host": "aspmx.l.google.com",
+              "smtp_code": 250,
+              "smtp_message": "2.1.5 OK ffacd0b85a97d-439b1b4342esi11496224f8f.91 - gsmtp",
+              "status": "accepted",
+              "timings_ms": {
+                "connect": 101.72,
+                "ehlo": 50.72,
+                "mail_from": 48.31,
+                "rcpt_to": 128.64,
+                "total": 329.44
+              }
+            },
+            {
+              "attempt": 14,
+              "ehlo_code": 250,
+              "email": "gsoknf@freshworks.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439b4887f71si10739595f8f.276 - gsmtp",
+              "mx_host": "aspmx.l.google.com",
+              "smtp_code": 250,
+              "smtp_message": "2.1.5 OK ffacd0b85a97d-439b4887f71si10739595f8f.276 - gsmtp",
+              "status": "accepted",
+              "timings_ms": {
+                "connect": 97.88,
+                "ehlo": 49.45,
+                "mail_from": 46.84,
+                "rcpt_to": 119.27,
+                "total": 313.49
+              }
+            },
+            {
+              "attempt": 15,
+              "ehlo_code": 250,
+              "email": "gsoknf@freshworks.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-4399c7cc5f3si24757625f8f.376 - gsmtp",
+              "mx_host": "aspmx.l.google.com",
+              "smtp_code": 250,
+              "smtp_message": "2.1.5 OK ffacd0b85a97d-4399c7cc5f3si24757625f8f.376 - gsmtp",
+              "status": "accepted",
+              "timings_ms": {
+                "connect": 96.75,
+                "ehlo": 49.61,
+                "mail_from": 46.93,
+                "rcpt_to": 111.23,
+                "total": 304.54
+              }
+            },
+            {
+              "attempt": 16,
+              "ehlo_code": 250,
+              "email": "gsoknf@freshworks.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439ad80609bsi13663293f8f.284 - gsmtp",
+              "mx_host": "aspmx.l.google.com",
+              "smtp_code": 250,
+              "smtp_message": "2.1.5 OK ffacd0b85a97d-439ad80609bsi13663293f8f.284 - gsmtp",
+              "status": "accepted",
+              "timings_ms": {
+                "connect": 98.47,
+                "ehlo": 59.31,
+                "mail_from": 46.35,
+                "rcpt_to": 138.21,
+                "total": 342.38
+              }
+            },
+            {
+              "attempt": 17,
+              "ehlo_code": 250,
+              "email": "gsoknf@freshworks.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439b3168542si11167708f8f.106 - gsmtp",
+              "mx_host": "aspmx.l.google.com",
+              "smtp_code": 250,
+              "smtp_message": "2.1.5 OK ffacd0b85a97d-439b3168542si11167708f8f.106 - gsmtp",
+              "status": "accepted",
+              "timings_ms": {
+                "connect": 100.22,
+                "ehlo": 49.74,
+                "mail_from": 47.02,
+                "rcpt_to": 123.76,
+                "total": 320.79
+              }
+            },
+            {
+              "attempt": 18,
+              "ehlo_code": 250,
+              "email": "gsoknf@freshworks.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439b87f3363si7140859f8f.98 - gsmtp",
+              "mx_host": "aspmx.l.google.com",
+              "smtp_code": 250,
+              "smtp_message": "2.1.5 OK ffacd0b85a97d-439b87f3363si7140859f8f.98 - gsmtp",
+              "status": "accepted",
+              "timings_ms": {
+                "connect": 99.84,
+                "ehlo": 49.91,
+                "mail_from": 46.42,
+                "rcpt_to": 114.94,
+                "total": 311.16
+              }
+            },
+            {
+              "attempt": 19,
+              "ehlo_code": 250,
+              "email": "gsoknf@freshworks.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439bf32a20fsi1144778f8f.264 - gsmtp",
+              "mx_host": "aspmx.l.google.com",
+              "smtp_code": 250,
+              "smtp_message": "2.1.5 OK ffacd0b85a97d-439bf32a20fsi1144778f8f.264 - gsmtp",
+              "status": "accepted",
+              "timings_ms": {
+                "connect": 100.15,
+                "ehlo": 50.06,
+                "mail_from": 46.9,
+                "rcpt_to": 124.32,
+                "total": 321.47
+              }
+            },
+            {
+              "attempt": 20,
+              "ehlo_code": 250,
+              "email": "gsoknf@freshworks.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439b3fec47esi10629353f8f.234 - gsmtp",
+              "mx_host": "aspmx.l.google.com",
+              "smtp_code": 250,
+              "smtp_message": "2.1.5 OK ffacd0b85a97d-439b3fec47esi10629353f8f.234 - gsmtp",
+              "status": "accepted",
+              "timings_ms": {
+                "connect": 95.54,
+                "ehlo": 47.82,
+                "mail_from": 47.17,
+                "rcpt_to": 112.79,
+                "total": 303.35
+              }
+            },
+            {
+              "attempt": 21,
+              "ehlo_code": 250,
+              "email": "gsoknf@freshworks.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439b8f1ebf5si6735103f8f.474 - gsmtp",
+              "mx_host": "aspmx.l.google.com",
+              "smtp_code": 250,
+              "smtp_message": "2.1.5 OK ffacd0b85a97d-439b8f1ebf5si6735103f8f.474 - gsmtp",
+              "status": "accepted",
+              "timings_ms": {
+                "connect": 94.15,
+                "ehlo": 46.61,
+                "mail_from": 46.63,
+                "rcpt_to": 121.98,
+                "total": 309.38
+              }
+            },
+            {
+              "attempt": 22,
+              "ehlo_code": 250,
+              "email": "gsoknf@freshworks.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439ae2dce16si13597795f8f.501 - gsmtp",
+              "mx_host": "aspmx.l.google.com",
+              "smtp_code": 250,
+              "smtp_message": "2.1.5 OK ffacd0b85a97d-439ae2dce16si13597795f8f.501 - gsmtp",
+              "status": "accepted",
+              "timings_ms": {
+                "connect": 100.93,
+                "ehlo": 50.18,
+                "mail_from": 48.11,
+                "rcpt_to": 118.84,
+                "total": 318.1
+              }
+            },
+            {
+              "attempt": 23,
+              "ehlo_code": 250,
+              "email": "gsoknf@freshworks.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439b78e6d31si7419506f8f.353 - gsmtp",
+              "mx_host": "aspmx.l.google.com",
+              "smtp_code": 250,
+              "smtp_message": "2.1.5 OK ffacd0b85a97d-439b78e6d31si7419506f8f.353 - gsmtp",
+              "status": "accepted",
+              "timings_ms": {
+                "connect": 106.61,
+                "ehlo": 51.99,
+                "mail_from": 48.49,
+                "rcpt_to": 137.6,
+                "total": 344.97
+              }
+            },
+            {
+              "attempt": 24,
+              "ehlo_code": 250,
+              "email": "gsoknf@freshworks.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439bf32a20fsi1144954f8f.264 - gsmtp",
+              "mx_host": "aspmx.l.google.com",
+              "smtp_code": 250,
+              "smtp_message": "2.1.5 OK ffacd0b85a97d-439bf32a20fsi1144954f8f.264 - gsmtp",
+              "status": "accepted",
+              "timings_ms": {
+                "connect": 103.64,
+                "ehlo": 50.02,
+                "mail_from": 50.29,
+                "rcpt_to": 119.71,
+                "total": 323.69
+              }
+            },
+            {
+              "attempt": 25,
+              "ehlo_code": 250,
+              "email": "gsoknf@freshworks.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439b4adff51si9915705f8f.235 - gsmtp",
+              "mx_host": "aspmx.l.google.com",
+              "smtp_code": 250,
+              "smtp_message": "2.1.5 OK ffacd0b85a97d-439b4adff51si9915705f8f.235 - gsmtp",
+              "status": "accepted",
+              "timings_ms": {
+                "connect": 96.66,
+                "ehlo": 45.59,
+                "mail_from": 46.39,
+                "rcpt_to": 106.66,
+                "total": 295.36
+              }
+            }
+          ],
+          "domain": "freshworks.com",
+          "email": "gsoknf@freshworks.com",
+          "label": "generic_random",
+          "mx_records": [
+            {
+              "host": "aspmx.l.google.com",
+              "priority": 1
+            },
+            {
+              "host": "alt1.aspmx.l.google.com",
+              "priority": 5
+            },
+            {
+              "host": "alt2.aspmx.l.google.com",
+              "priority": 5
+            },
+            {
+              "host": "aspmx2.googlemail.com",
+              "priority": 10
+            },
+            {
+              "host": "aspmx3.googlemail.com",
+              "priority": 10
+            }
+          ],
+          "summary": {
+            "connect_timing_ms": {
+              "count": 25,
+              "max_ms": 380.01,
+              "mean_ms": 112.69,
+              "median_ms": 99.84,
+              "min_ms": 93.53
+            },
+            "rcpt_timing_ms": {
+              "count": 25,
+              "max_ms": 711.84,
+              "mean_ms": 154.34,
+              "median_ms": 119.71,
+              "min_ms": 106.66
+            },
+            "smtp_code_counts": {
+              "250": 25
+            },
+            "stage": "completed",
+            "status_counts": {
+              "accepted": 25
+            },
+            "total_timing_ms": {
+              "count": 25,
+              "max_ms": 921.98,
+              "mean_ms": 373.11,
+              "median_ms": 317.11,
+              "min_ms": 295.36
+            }
+          }
+        },
+        {
+          "attempts": [
+            {
+              "attempt": 1,
+              "ehlo_code": 250,
+              "email": "aaron.baby@freshworks.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439b93b3935si6115467f8f.287 - gsmtp",
+              "mx_host": "aspmx.l.google.com",
+              "smtp_code": 250,
+              "smtp_message": "2.1.5 OK ffacd0b85a97d-439b93b3935si6115467f8f.287 - gsmtp",
+              "status": "accepted",
+              "timings_ms": {
+                "connect": 94.66,
+                "ehlo": 47.37,
+                "mail_from": 45.97,
+                "rcpt_to": 130.05,
+                "total": 318.19
+              }
+            },
+            {
+              "attempt": 2,
+              "ehlo_code": 250,
+              "email": "aaron.baby@freshworks.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439b04993eesi12252318f8f.236 - gsmtp",
+              "mx_host": "aspmx.l.google.com",
+              "smtp_code": 250,
+              "smtp_message": "2.1.5 OK ffacd0b85a97d-439b04993eesi12252318f8f.236 - gsmtp",
+              "status": "accepted",
+              "timings_ms": {
+                "connect": 98.06,
+                "ehlo": 49.55,
+                "mail_from": 45.95,
+                "rcpt_to": 111.98,
+                "total": 305.57
+              }
+            },
+            {
+              "attempt": 3,
+              "ehlo_code": 250,
+              "email": "aaron.baby@freshworks.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439b70dd0a6si8010421f8f.95 - gsmtp",
+              "mx_host": "aspmx.l.google.com",
+              "smtp_code": 250,
+              "smtp_message": "2.1.5 OK ffacd0b85a97d-439b70dd0a6si8010421f8f.95 - gsmtp",
+              "status": "accepted",
+              "timings_ms": {
+                "connect": 97.88,
+                "ehlo": 49.25,
+                "mail_from": 45.9,
+                "rcpt_to": 115.21,
+                "total": 308.25
+              }
+            },
+            {
+              "attempt": 4,
+              "ehlo_code": 250,
+              "email": "aaron.baby@freshworks.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439b3fb8c9asi10945616f8f.291 - gsmtp",
+              "mx_host": "aspmx.l.google.com",
+              "smtp_code": 250,
+              "smtp_message": "2.1.5 OK ffacd0b85a97d-439b3fb8c9asi10945616f8f.291 - gsmtp",
+              "status": "accepted",
+              "timings_ms": {
+                "connect": 95.99,
+                "ehlo": 49.18,
+                "mail_from": 46.14,
+                "rcpt_to": 113.18,
+                "total": 304.55
+              }
+            },
+            {
+              "attempt": 5,
+              "ehlo_code": 250,
+              "email": "aaron.baby@freshworks.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439b73fbae7si8252080f8f.151 - gsmtp",
+              "mx_host": "aspmx.l.google.com",
+              "smtp_code": 250,
+              "smtp_message": "2.1.5 OK ffacd0b85a97d-439b73fbae7si8252080f8f.151 - gsmtp",
+              "status": "accepted",
+              "timings_ms": {
+                "connect": 101.18,
+                "ehlo": 50.2,
+                "mail_from": 48.1,
+                "rcpt_to": 113.5,
+                "total": 313.04
+              }
+            },
+            {
+              "attempt": 6,
+              "ehlo_code": 250,
+              "email": "aaron.baby@freshworks.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439b93b24basi6519194f8f.176 - gsmtp",
+              "mx_host": "aspmx.l.google.com",
+              "smtp_code": 250,
+              "smtp_message": "2.1.5 OK ffacd0b85a97d-439b93b24basi6519194f8f.176 - gsmtp",
+              "status": "accepted",
+              "timings_ms": {
+                "connect": 95.98,
+                "ehlo": 48.6,
+                "mail_from": 46.13,
+                "rcpt_to": 112.93,
+                "total": 303.67
+              }
+            },
+            {
+              "attempt": 7,
+              "ehlo_code": 250,
+              "email": "aaron.baby@freshworks.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439abfcd46csi14724121f8f.535 - gsmtp",
+              "mx_host": "aspmx.l.google.com",
+              "smtp_code": 250,
+              "smtp_message": "2.1.5 OK ffacd0b85a97d-439abfcd46csi14724121f8f.535 - gsmtp",
+              "status": "accepted",
+              "timings_ms": {
+                "connect": 97.0,
+                "ehlo": 49.4,
+                "mail_from": 46.55,
+                "rcpt_to": 120.8,
+                "total": 313.77
+              }
+            },
+            {
+              "attempt": 8,
+              "ehlo_code": 250,
+              "email": "aaron.baby@freshworks.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439b60c737bsi9666606f8f.387 - gsmtp",
+              "mx_host": "aspmx.l.google.com",
+              "smtp_code": 250,
+              "smtp_message": "2.1.5 OK ffacd0b85a97d-439b60c737bsi9666606f8f.387 - gsmtp",
+              "status": "accepted",
+              "timings_ms": {
+                "connect": 363.15,
+                "ehlo": 207.75,
+                "mail_from": 187.41,
+                "rcpt_to": 168.31,
+                "total": 926.65
+              }
+            },
+            {
+              "attempt": 9,
+              "ehlo_code": 250,
+              "email": "aaron.baby@freshworks.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439bce68896si3991096f8f.4 - gsmtp",
+              "mx_host": "aspmx.l.google.com",
+              "smtp_code": 250,
+              "smtp_message": "2.1.5 OK ffacd0b85a97d-439bce68896si3991096f8f.4 - gsmtp",
+              "status": "accepted",
+              "timings_ms": {
+                "connect": 97.69,
+                "ehlo": 48.86,
+                "mail_from": 47.05,
+                "rcpt_to": 119.89,
+                "total": 313.53
+              }
+            },
+            {
+              "attempt": 10,
+              "ehlo_code": 250,
+              "email": "aaron.baby@freshworks.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439b1332341si11529697f8f.118 - gsmtp",
+              "mx_host": "aspmx.l.google.com",
+              "smtp_code": 250,
+              "smtp_message": "2.1.5 OK ffacd0b85a97d-439b1332341si11529697f8f.118 - gsmtp",
+              "status": "accepted",
+              "timings_ms": {
+                "connect": 97.87,
+                "ehlo": 48.13,
+                "mail_from": 46.06,
+                "rcpt_to": 124.49,
+                "total": 316.56
+              }
+            },
+            {
+              "attempt": 11,
+              "ehlo_code": 250,
+              "email": "aaron.baby@freshworks.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439ac9f44b6si14958037f8f.124 - gsmtp",
+              "mx_host": "aspmx.l.google.com",
+              "smtp_code": 250,
+              "smtp_message": "2.1.5 OK ffacd0b85a97d-439ac9f44b6si14958037f8f.124 - gsmtp",
+              "status": "accepted",
+              "timings_ms": {
+                "connect": 314.28,
+                "ehlo": 47.91,
+                "mail_from": 45.98,
+                "rcpt_to": 114.14,
+                "total": 522.35
+              }
+            },
+            {
+              "attempt": 12,
+              "ehlo_code": 250,
+              "email": "aaron.baby@freshworks.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439bce54631si4185637f8f.111 - gsmtp",
+              "mx_host": "aspmx.l.google.com",
+              "smtp_code": 250,
+              "smtp_message": "2.1.5 OK ffacd0b85a97d-439bce54631si4185637f8f.111 - gsmtp",
+              "status": "accepted",
+              "timings_ms": {
+                "connect": 101.67,
+                "ehlo": 49.98,
+                "mail_from": 48.09,
+                "rcpt_to": 111.22,
+                "total": 310.99
+              }
+            },
+            {
+              "attempt": 13,
+              "ehlo_code": 250,
+              "email": "aaron.baby@freshworks.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439b4d06cadsi10488614f8f.381 - gsmtp",
+              "mx_host": "aspmx.l.google.com",
+              "smtp_code": 250,
+              "smtp_message": "2.1.5 OK ffacd0b85a97d-439b4d06cadsi10488614f8f.381 - gsmtp",
+              "status": "accepted",
+              "timings_ms": {
+                "connect": 100.35,
+                "ehlo": 50.3,
+                "mail_from": 49.13,
+                "rcpt_to": 121.71,
+                "total": 321.52
+              }
+            },
+            {
+              "attempt": 14,
+              "ehlo_code": 250,
+              "email": "aaron.baby@freshworks.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439b7e005d6si7277174f8f.446 - gsmtp",
+              "mx_host": "aspmx.l.google.com",
+              "smtp_code": 250,
+              "smtp_message": "2.1.5 OK ffacd0b85a97d-439b7e005d6si7277174f8f.446 - gsmtp",
+              "status": "accepted",
+              "timings_ms": {
+                "connect": 96.32,
+                "ehlo": 50.22,
+                "mail_from": 47.65,
+                "rcpt_to": 117.29,
+                "total": 311.51
+              }
+            },
+            {
+              "attempt": 15,
+              "ehlo_code": 250,
+              "email": "aaron.baby@freshworks.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439b8f1c19csi6635709f8f.471 - gsmtp",
+              "mx_host": "aspmx.l.google.com",
+              "smtp_code": 250,
+              "smtp_message": "2.1.5 OK ffacd0b85a97d-439b8f1c19csi6635709f8f.471 - gsmtp",
+              "status": "accepted",
+              "timings_ms": {
+                "connect": 93.56,
+                "ehlo": 48.31,
+                "mail_from": 50.6,
+                "rcpt_to": 129.61,
+                "total": 322.1
+              }
+            },
+            {
+              "attempt": 16,
+              "ehlo_code": 250,
+              "email": "aaron.baby@freshworks.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439adcc0e7dsi14046123f8f.159 - gsmtp",
+              "mx_host": "aspmx.l.google.com",
+              "smtp_code": 250,
+              "smtp_message": "2.1.5 OK ffacd0b85a97d-439adcc0e7dsi14046123f8f.159 - gsmtp",
+              "status": "accepted",
+              "timings_ms": {
+                "connect": 96.62,
+                "ehlo": 48.86,
+                "mail_from": 46.35,
+                "rcpt_to": 132.1,
+                "total": 323.95
+              }
+            },
+            {
+              "attempt": 17,
+              "ehlo_code": 250,
+              "email": "aaron.baby@freshworks.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439b1d48d97si11151067f8f.319 - gsmtp",
+              "mx_host": "aspmx.l.google.com",
+              "smtp_code": 250,
+              "smtp_message": "2.1.5 OK ffacd0b85a97d-439b1d48d97si11151067f8f.319 - gsmtp",
+              "status": "accepted",
+              "timings_ms": {
+                "connect": 99.09,
+                "ehlo": 49.41,
+                "mail_from": 46.78,
+                "rcpt_to": 122.22,
+                "total": 317.54
+              }
+            },
+            {
+              "attempt": 18,
+              "ehlo_code": 250,
+              "email": "aaron.baby@freshworks.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439b6013f3csi9384173f8f.198 - gsmtp",
+              "mx_host": "aspmx.l.google.com",
+              "smtp_code": 250,
+              "smtp_message": "2.1.5 OK ffacd0b85a97d-439b6013f3csi9384173f8f.198 - gsmtp",
+              "status": "accepted",
+              "timings_ms": {
+                "connect": 101.86,
+                "ehlo": 52.8,
+                "mail_from": 48.33,
+                "rcpt_to": 122.78,
+                "total": 325.8
+              }
+            },
+            {
+              "attempt": 19,
+              "ehlo_code": 250,
+              "email": "aaron.baby@freshworks.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439b54baa34si9280456f8f.136 - gsmtp",
+              "mx_host": "aspmx.l.google.com",
+              "smtp_code": 250,
+              "smtp_message": "2.1.5 OK ffacd0b85a97d-439b54baa34si9280456f8f.136 - gsmtp",
+              "status": "accepted",
+              "timings_ms": {
+                "connect": 97.3,
+                "ehlo": 49.94,
+                "mail_from": 45.97,
+                "rcpt_to": 126.62,
+                "total": 319.85
+              }
+            },
+            {
+              "attempt": 20,
+              "ehlo_code": 250,
+              "email": "aaron.baby@freshworks.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-4399c7d9a34si24093855f8f.478 - gsmtp",
+              "mx_host": "aspmx.l.google.com",
+              "smtp_code": 250,
+              "smtp_message": "2.1.5 OK ffacd0b85a97d-4399c7d9a34si24093855f8f.478 - gsmtp",
+              "status": "accepted",
+              "timings_ms": {
+                "connect": 97.4,
+                "ehlo": 48.19,
+                "mail_from": 46.88,
+                "rcpt_to": 115.32,
+                "total": 307.81
+              }
+            },
+            {
+              "attempt": 21,
+              "ehlo_code": 250,
+              "email": "aaron.baby@freshworks.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439ad3e69c0si14880306f8f.551 - gsmtp",
+              "mx_host": "aspmx.l.google.com",
+              "smtp_code": 250,
+              "smtp_message": "2.1.5 OK ffacd0b85a97d-439ad3e69c0si14880306f8f.551 - gsmtp",
+              "status": "accepted",
+              "timings_ms": {
+                "connect": 105.56,
+                "ehlo": 50.44,
+                "mail_from": 48.58,
+                "rcpt_to": 121.71,
+                "total": 326.31
+              }
+            },
+            {
+              "attempt": 22,
+              "ehlo_code": 250,
+              "email": "aaron.baby@freshworks.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439b70d38desi8208815f8f.208 - gsmtp",
+              "mx_host": "aspmx.l.google.com",
+              "smtp_code": 250,
+              "smtp_message": "2.1.5 OK ffacd0b85a97d-439b70d38desi8208815f8f.208 - gsmtp",
+              "status": "accepted",
+              "timings_ms": {
+                "connect": 98.82,
+                "ehlo": 48.55,
+                "mail_from": 46.46,
+                "rcpt_to": 127.15,
+                "total": 321.0
+              }
+            },
+            {
+              "attempt": 23,
+              "ehlo_code": 250,
+              "email": "aaron.baby@freshworks.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439b78e6cedsi7900791f8f.366 - gsmtp",
+              "mx_host": "aspmx.l.google.com",
+              "smtp_code": 250,
+              "smtp_message": "2.1.5 OK ffacd0b85a97d-439b78e6cedsi7900791f8f.366 - gsmtp",
+              "status": "accepted",
+              "timings_ms": {
+                "connect": 98.43,
+                "ehlo": 48.46,
+                "mail_from": 46.91,
+                "rcpt_to": 119.67,
+                "total": 313.49
+              }
+            },
+            {
+              "attempt": 24,
+              "ehlo_code": 250,
+              "email": "aaron.baby@freshworks.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439b296f7e0si11194080f8f.526 - gsmtp",
+              "mx_host": "aspmx.l.google.com",
+              "smtp_code": 250,
+              "smtp_message": "2.1.5 OK ffacd0b85a97d-439b296f7e0si11194080f8f.526 - gsmtp",
+              "status": "accepted",
+              "timings_ms": {
+                "connect": 95.99,
+                "ehlo": 48.12,
+                "mail_from": 46.04,
+                "rcpt_to": 111.85,
+                "total": 302.02
+              }
+            },
+            {
+              "attempt": 25,
+              "ehlo_code": 250,
+              "email": "aaron.baby@freshworks.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 OK ffacd0b85a97d-439b78d85e6si7533492f8f.362 - gsmtp",
+              "mx_host": "aspmx.l.google.com",
+              "smtp_code": 250,
+              "smtp_message": "2.1.5 OK ffacd0b85a97d-439b78d85e6si7533492f8f.362 - gsmtp",
+              "status": "accepted",
+              "timings_ms": {
+                "connect": 96.09,
+                "ehlo": 48.81,
+                "mail_from": 46.78,
+                "rcpt_to": 126.42,
+                "total": 318.12
+              }
+            }
+          ],
+          "domain": "freshworks.com",
+          "email": "aaron.baby@freshworks.com",
+          "label": "known_real",
+          "mx_records": [
+            {
+              "host": "aspmx.l.google.com",
+              "priority": 1
+            },
+            {
+              "host": "alt2.aspmx.l.google.com",
+              "priority": 5
+            },
+            {
+              "host": "alt1.aspmx.l.google.com",
+              "priority": 5
+            },
+            {
+              "host": "aspmx2.googlemail.com",
+              "priority": 10
+            },
+            {
+              "host": "aspmx3.googlemail.com",
+              "priority": 10
+            }
+          ],
+          "summary": {
+            "connect_timing_ms": {
+              "count": 25,
+              "max_ms": 363.15,
+              "mean_ms": 117.31,
+              "median_ms": 97.87,
+              "min_ms": 93.56
+            },
+            "rcpt_timing_ms": {
+              "count": 25,
+              "max_ms": 168.31,
+              "mean_ms": 122.01,
+              "median_ms": 120.8,
+              "min_ms": 111.22
+            },
+            "smtp_code_counts": {
+              "250": 25
+            },
+            "stage": "completed",
+            "status_counts": {
+              "accepted": 25
+            },
+            "total_timing_ms": {
+              "count": 25,
+              "max_ms": 926.65,
+              "mean_ms": 347.53,
+              "median_ms": 316.56,
+              "min_ms": 302.02
+            }
+          }
+        }
+      ],
+      "label_summary": {
+        "generic_random": {
+          "attempt_count": 25,
+          "rcpt_timing_ms": {
+            "count": 25,
+            "max_ms": 711.84,
+            "mean_ms": 154.34,
+            "median_ms": 119.71,
+            "min_ms": 106.66
+          },
+          "status_counts": {
+            "accepted": 25
+          },
+          "total_timing_ms": {
+            "count": 25,
+            "max_ms": 921.98,
+            "mean_ms": 373.11,
+            "median_ms": 317.11,
+            "min_ms": 295.36
+          }
+        },
+        "known_real": {
+          "attempt_count": 25,
+          "rcpt_timing_ms": {
+            "count": 25,
+            "max_ms": 168.31,
+            "mean_ms": 122.01,
+            "median_ms": 120.8,
+            "min_ms": 111.22
+          },
+          "status_counts": {
+            "accepted": 25
+          },
+          "total_timing_ms": {
+            "count": 25,
+            "max_ms": 926.65,
+            "mean_ms": 347.53,
+            "median_ms": 316.56,
+            "min_ms": 302.02
+          }
+        }
+      },
+      "runs_per_email": 25,
+      "stage": "completed"
+    },
+    "stage": "completed"
+  },
+  "generated_at_utc": "2026-03-02T21:29:05.972090+00:00",
+  "input": {
+    "domain": "",
+    "name": ""
+  },
+  "settings": {
+    "api_consensus_enabled": false,
+    "benchmark_file": "/Users/don/EmailFinder/benchmark_cases.freshworks_specific.csv",
+    "benchmark_max_cases": 50,
+    "benchmark_pause_ms": 250,
+    "benchmark_runs": 25,
+    "benchmark_starttls": false,
+    "consensus_delay_ms": 250,
+    "consensus_max_candidates": 6,
+    "consensus_providers": [
+      "hunter",
+      "abstract"
+    ],
+    "doh_enabled": true,
+    "doh_via_curl": false,
+    "from_address": "probe@localhost",
+    "known_emails": [],
+    "max_candidates": 12,
+    "osint_delay_ms": 300,
+    "osint_enabled": false,
+    "osint_max_candidates": 8,
+    "osint_max_results": 6,
+    "pause_ms": 700,
+    "probe_smtp": false,
+    "timeout_seconds": 8.0
+  }
+}

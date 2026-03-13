@@ -1,0 +1,632 @@
+{
+  "benchmark": {
+    "loader": {
+      "case_count": 2,
+      "ignored": [],
+      "reason": null
+    },
+    "result": {
+      "case_count": 2,
+      "cases": [
+        {
+          "attempts": [
+            {
+              "attempt": 1,
+              "ehlo_code": 250,
+              "email": "henry.buttz@envestnet.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 Sender OK",
+              "mx_host": "envestnet-com.mail.protection.outlook.com",
+              "smtp_code": 250,
+              "smtp_message": "2.1.5 Recipient OK",
+              "status": "accepted",
+              "timings_ms": {
+                "connect": 418.85,
+                "ehlo": 149.94,
+                "mail_from": 149.72,
+                "rcpt_to": 218.19,
+                "total": 936.83
+              }
+            },
+            {
+              "attempt": 2,
+              "ehlo_code": 250,
+              "email": "henry.buttz@envestnet.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 Sender OK",
+              "mx_host": "envestnet-com.mail.protection.outlook.com",
+              "smtp_code": 250,
+              "smtp_message": "2.1.5 Recipient OK",
+              "status": "accepted",
+              "timings_ms": {
+                "connect": 298.01,
+                "ehlo": 146.42,
+                "mail_from": 146.92,
+                "rcpt_to": 316.74,
+                "total": 908.12
+              }
+            },
+            {
+              "attempt": 3,
+              "ehlo_code": 250,
+              "email": "henry.buttz@envestnet.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 Sender OK",
+              "mx_host": "envestnet-com.mail.protection.outlook.com",
+              "smtp_code": 250,
+              "smtp_message": "2.1.5 Recipient OK",
+              "status": "accepted",
+              "timings_ms": {
+                "connect": 375.04,
+                "ehlo": 183.67,
+                "mail_from": 183.72,
+                "rcpt_to": 317.35,
+                "total": 1059.8
+              }
+            },
+            {
+              "attempt": 4,
+              "ehlo_code": 250,
+              "email": "henry.buttz@envestnet.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 Sender OK",
+              "mx_host": "envestnet-com.mail.protection.outlook.com",
+              "smtp_code": 250,
+              "smtp_message": "2.1.5 Recipient OK",
+              "status": "accepted",
+              "timings_ms": {
+                "connect": 394.6,
+                "ehlo": 192.25,
+                "mail_from": 192.47,
+                "rcpt_to": 319.47,
+                "total": 1098.82
+              }
+            },
+            {
+              "attempt": 5,
+              "ehlo_code": 250,
+              "email": "henry.buttz@envestnet.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 Sender OK",
+              "mx_host": "envestnet-com.mail.protection.outlook.com",
+              "smtp_code": 250,
+              "smtp_message": "2.1.5 Recipient OK",
+              "status": "accepted",
+              "timings_ms": {
+                "connect": 16306.05,
+                "ehlo": 142.02,
+                "mail_from": 219.45,
+                "rcpt_to": 293.94,
+                "total": 16961.51
+              }
+            },
+            {
+              "attempt": 6,
+              "ehlo_code": 250,
+              "email": "henry.buttz@envestnet.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 Sender OK",
+              "mx_host": "envestnet-com.mail.protection.outlook.com",
+              "smtp_code": 250,
+              "smtp_message": "2.1.5 Recipient OK",
+              "status": "accepted",
+              "timings_ms": {
+                "connect": 385.81,
+                "ehlo": 143.74,
+                "mail_from": 144.24,
+                "rcpt_to": 308.18,
+                "total": 982.01
+              }
+            },
+            {
+              "attempt": 7,
+              "ehlo_code": 250,
+              "email": "henry.buttz@envestnet.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 Sender OK",
+              "mx_host": "envestnet-com.mail.protection.outlook.com",
+              "smtp_code": 250,
+              "smtp_message": "2.1.5 Recipient OK",
+              "status": "accepted",
+              "timings_ms": {
+                "connect": 389.68,
+                "ehlo": 188.75,
+                "mail_from": 190.01,
+                "rcpt_to": 313.99,
+                "total": 1082.45
+              }
+            },
+            {
+              "attempt": 8,
+              "ehlo_code": 250,
+              "email": "henry.buttz@envestnet.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 Sender OK",
+              "mx_host": "envestnet-com.mail.protection.outlook.com",
+              "smtp_code": 250,
+              "smtp_message": "2.1.5 Recipient OK",
+              "status": "accepted",
+              "timings_ms": {
+                "connect": 258.18,
+                "ehlo": 126.72,
+                "mail_from": 169.91,
+                "rcpt_to": 128.59,
+                "total": 683.41
+              }
+            },
+            {
+              "attempt": 9,
+              "ehlo_code": 250,
+              "email": "henry.buttz@envestnet.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 Sender OK",
+              "mx_host": "envestnet-com.mail.protection.outlook.com",
+              "smtp_code": 250,
+              "smtp_message": "2.1.5 Recipient OK",
+              "status": "accepted",
+              "timings_ms": {
+                "connect": 265.07,
+                "ehlo": 127.63,
+                "mail_from": 190.02,
+                "rcpt_to": 199.12,
+                "total": 781.87
+              }
+            },
+            {
+              "attempt": 10,
+              "ehlo_code": 250,
+              "email": "henry.buttz@envestnet.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 Sender OK",
+              "mx_host": "envestnet-com.mail.protection.outlook.com",
+              "smtp_code": 250,
+              "smtp_message": "2.1.5 Recipient OK",
+              "status": "accepted",
+              "timings_ms": {
+                "connect": 305.22,
+                "ehlo": 150.56,
+                "mail_from": 187.79,
+                "rcpt_to": 232.91,
+                "total": 876.51
+              }
+            },
+            {
+              "attempt": 11,
+              "ehlo_code": 250,
+              "email": "henry.buttz@envestnet.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 Sender OK",
+              "mx_host": "envestnet-com.mail.protection.outlook.com",
+              "smtp_code": 250,
+              "smtp_message": "2.1.5 Recipient OK",
+              "status": "accepted",
+              "timings_ms": {
+                "connect": 16268.64,
+                "ehlo": 123.84,
+                "mail_from": 227.9,
+                "rcpt_to": 173.95,
+                "total": 16794.58
+              }
+            },
+            {
+              "attempt": 12,
+              "ehlo_code": 250,
+              "email": "henry.buttz@envestnet.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 Sender OK",
+              "mx_host": "envestnet-com.mail.protection.outlook.com",
+              "smtp_code": 250,
+              "smtp_message": "2.1.5 Recipient OK",
+              "status": "accepted",
+              "timings_ms": {
+                "connect": 469.7,
+                "ehlo": 190.42,
+                "mail_from": 269.97,
+                "rcpt_to": 351.2,
+                "total": 1281.31
+              }
+            }
+          ],
+          "domain": "envestnet.com",
+          "email": "henry.buttz@envestnet.com",
+          "label": "known_real",
+          "mx_records": [
+            {
+              "host": "envestnet-com.mail.protection.outlook.com",
+              "priority": 0
+            }
+          ],
+          "summary": {
+            "connect_timing_ms": {
+              "count": 12,
+              "max_ms": 16306.05,
+              "mean_ms": 3011.24,
+              "median_ms": 387.75,
+              "min_ms": 258.18
+            },
+            "rcpt_timing_ms": {
+              "count": 12,
+              "max_ms": 351.2,
+              "mean_ms": 264.47,
+              "median_ms": 301.06,
+              "min_ms": 128.59
+            },
+            "smtp_code_counts": {
+              "250": 12
+            },
+            "stage": "completed",
+            "status_counts": {
+              "accepted": 12
+            },
+            "total_timing_ms": {
+              "count": 12,
+              "max_ms": 16961.51,
+              "mean_ms": 3620.6,
+              "median_ms": 1020.9,
+              "min_ms": 683.41
+            }
+          }
+        },
+        {
+          "attempts": [
+            {
+              "attempt": 1,
+              "ehlo_code": 250,
+              "email": "q7v2m9x4k1p8@envestnet.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 Sender OK",
+              "mx_host": "envestnet-com.mail.protection.outlook.com",
+              "smtp_code": 550,
+              "smtp_message": "5.4.1 Recipient address rejected: Access denied. For more information see https://aka.ms/EXOSmtpErrors [BL02EPF0002992B.namprd02.prod.outlook.com 2026-03-02T22:36:57.341Z 08DE758B2539E8EA]",
+              "status": "rejected",
+              "timings_ms": {
+                "connect": 258.18,
+                "ehlo": 125.06,
+                "mail_from": 125.66,
+                "rcpt_to": 201.4,
+                "total": 710.43
+              }
+            },
+            {
+              "attempt": 2,
+              "ehlo_code": 250,
+              "email": "q7v2m9x4k1p8@envestnet.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 Sender OK",
+              "mx_host": "envestnet-com.mail.protection.outlook.com",
+              "smtp_code": 550,
+              "smtp_message": "5.4.1 Recipient address rejected: Access denied. For more information see https://aka.ms/EXOSmtpErrors [DS3PEPF000099DF.namprd04.prod.outlook.com 2026-03-02T22:36:58.526Z 08DE75AA9F464B1D]",
+              "status": "rejected",
+              "timings_ms": {
+                "connect": 315.03,
+                "ehlo": 154.25,
+                "mail_from": 185.03,
+                "rcpt_to": 270.62,
+                "total": 924.98
+              }
+            },
+            {
+              "attempt": 3,
+              "ehlo_code": 250,
+              "email": "q7v2m9x4k1p8@envestnet.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 Sender OK",
+              "mx_host": "envestnet-com.mail.protection.outlook.com",
+              "smtp_code": 550,
+              "smtp_message": "5.4.1 Recipient address rejected: Access denied. For more information see https://aka.ms/EXOSmtpErrors [SJ5PEPF000001CC.namprd05.prod.outlook.com 2026-03-02T22:37:00.007Z 08DE758FFE5150D6]",
+              "status": "rejected",
+              "timings_ms": {
+                "connect": 401.89,
+                "ehlo": 196.59,
+                "mail_from": 196.76,
+                "rcpt_to": 381.09,
+                "total": 1176.38
+              }
+            },
+            {
+              "attempt": 4,
+              "ehlo_code": 250,
+              "email": "q7v2m9x4k1p8@envestnet.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 Sender OK",
+              "mx_host": "envestnet-com.mail.protection.outlook.com",
+              "smtp_code": 550,
+              "smtp_message": "5.4.1 Recipient address rejected: Access denied. For more information see https://aka.ms/EXOSmtpErrors [BL02EPF00029928.namprd02.prod.outlook.com 2026-03-02T22:37:17.201Z 08DE756D07C0ECC3]",
+              "status": "rejected",
+              "timings_ms": {
+                "connect": 16278.13,
+                "ehlo": 127.74,
+                "mail_from": 192.77,
+                "rcpt_to": 193.13,
+                "total": 16791.81
+              }
+            },
+            {
+              "attempt": 5,
+              "ehlo_code": 250,
+              "email": "q7v2m9x4k1p8@envestnet.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 Sender OK",
+              "mx_host": "envestnet-com.mail.protection.outlook.com",
+              "smtp_code": 550,
+              "smtp_message": "5.4.1 Recipient address rejected: Access denied. For more information see https://aka.ms/EXOSmtpErrors [SN1PEPF0002BA52.namprd03.prod.outlook.com 2026-03-02T22:37:18.606Z 08DE757E770B2D9B]",
+              "status": "rejected",
+              "timings_ms": {
+                "connect": 514.84,
+                "ehlo": 157.39,
+                "mail_from": 157.59,
+                "rcpt_to": 295.3,
+                "total": 1125.17
+              }
+            },
+            {
+              "attempt": 6,
+              "ehlo_code": 250,
+              "email": "q7v2m9x4k1p8@envestnet.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 Sender OK",
+              "mx_host": "envestnet-com.mail.protection.outlook.com",
+              "smtp_code": 550,
+              "smtp_message": "5.4.1 Recipient address rejected: Access denied. For more information see https://aka.ms/EXOSmtpErrors [BN2PEPF000055DF.namprd21.prod.outlook.com 2026-03-02T22:37:19.622Z 08DE762DEF2BE016]",
+              "status": "rejected",
+              "timings_ms": {
+                "connect": 258.17,
+                "ehlo": 126.05,
+                "mail_from": 126.3,
+                "rcpt_to": 181.44,
+                "total": 691.99
+              }
+            },
+            {
+              "attempt": 7,
+              "ehlo_code": 250,
+              "email": "q7v2m9x4k1p8@envestnet.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 Sender OK",
+              "mx_host": "envestnet-com.mail.protection.outlook.com",
+              "smtp_code": 550,
+              "smtp_message": "5.4.1 Recipient address rejected: Access denied. For more information see https://aka.ms/EXOSmtpErrors [DS2PEPF000061C5.namprd02.prod.outlook.com 2026-03-02T22:37:20.780Z 08DE75ACD7310492]",
+              "status": "rejected",
+              "timings_ms": {
+                "connect": 310.94,
+                "ehlo": 153.71,
+                "mail_from": 154.07,
+                "rcpt_to": 270.1,
+                "total": 888.88
+              }
+            },
+            {
+              "attempt": 8,
+              "ehlo_code": 250,
+              "email": "q7v2m9x4k1p8@envestnet.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 Sender OK",
+              "mx_host": "envestnet-com.mail.protection.outlook.com",
+              "smtp_code": 550,
+              "smtp_message": "5.4.1 Recipient address rejected: Access denied. For more information see https://aka.ms/EXOSmtpErrors [SA2PEPF000015C9.namprd03.prod.outlook.com 2026-03-02T22:37:22.068Z 08DE758D8754175A]",
+              "status": "rejected",
+              "timings_ms": {
+                "connect": 311.07,
+                "ehlo": 151.92,
+                "mail_from": 152.16,
+                "rcpt_to": 365.62,
+                "total": 980.81
+              }
+            },
+            {
+              "attempt": 9,
+              "ehlo_code": 250,
+              "email": "q7v2m9x4k1p8@envestnet.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 Sender OK",
+              "mx_host": "envestnet-com.mail.protection.outlook.com",
+              "smtp_code": 550,
+              "smtp_message": "5.4.1 Recipient address rejected: Access denied. For more information see https://aka.ms/EXOSmtpErrors [BN2PEPF000055DC.namprd21.prod.outlook.com 2026-03-02T22:37:39.078Z 08DE765EA4CEB4FC]",
+              "status": "rejected",
+              "timings_ms": {
+                "connect": 16266.72,
+                "ehlo": 124.27,
+                "mail_from": 124.79,
+                "rcpt_to": 176.05,
+                "total": 16691.88
+              }
+            },
+            {
+              "attempt": 10,
+              "ehlo_code": 250,
+              "email": "q7v2m9x4k1p8@envestnet.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 Sender OK",
+              "mx_host": "envestnet-com.mail.protection.outlook.com",
+              "smtp_code": 550,
+              "smtp_message": "5.4.1 Recipient address rejected: Access denied. For more information see https://aka.ms/EXOSmtpErrors [BN1PEPF00005FFE.namprd05.prod.outlook.com 2026-03-02T22:37:40.233Z 08DE75AC88AE6FBB]",
+              "status": "rejected",
+              "timings_ms": {
+                "connect": 438.51,
+                "ehlo": 124.88,
+                "mail_from": 125.22,
+                "rcpt_to": 184.81,
+                "total": 873.46
+              }
+            },
+            {
+              "attempt": 11,
+              "ehlo_code": 250,
+              "email": "q7v2m9x4k1p8@envestnet.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 Sender OK",
+              "mx_host": "envestnet-com.mail.protection.outlook.com",
+              "smtp_code": 550,
+              "smtp_message": "5.4.1 Recipient address rejected: Access denied. For more information see https://aka.ms/EXOSmtpErrors [SJ1PEPF00002312.namprd03.prod.outlook.com 2026-03-02T22:37:41.519Z 08DE75778A6CF0DA]",
+              "status": "rejected",
+              "timings_ms": {
+                "connect": 393.36,
+                "ehlo": 194.13,
+                "mail_from": 193.93,
+                "rcpt_to": 270.1,
+                "total": 1051.57
+              }
+            },
+            {
+              "attempt": 12,
+              "ehlo_code": 250,
+              "email": "q7v2m9x4k1p8@envestnet.com",
+              "error": null,
+              "mail_code": 250,
+              "mail_message": "2.1.0 Sender OK",
+              "mx_host": "envestnet-com.mail.protection.outlook.com",
+              "smtp_code": 550,
+              "smtp_message": "5.4.1 Recipient address rejected: Access denied. For more information see https://aka.ms/EXOSmtpErrors [SA2PEPF00003F68.namprd04.prod.outlook.com 2026-03-02T22:37:42.885Z 08DE75BF6790A7A1]",
+              "status": "rejected",
+              "timings_ms": {
+                "connect": 315.93,
+                "ehlo": 154.49,
+                "mail_from": 205.48,
+                "rcpt_to": 318.09,
+                "total": 994.04
+              }
+            }
+          ],
+          "domain": "envestnet.com",
+          "email": "q7v2m9x4k1p8@envestnet.com",
+          "label": "generic_random",
+          "mx_records": [
+            {
+              "host": "envestnet-com.mail.protection.outlook.com",
+              "priority": 0
+            }
+          ],
+          "summary": {
+            "connect_timing_ms": {
+              "count": 12,
+              "max_ms": 16278.13,
+              "mean_ms": 3005.23,
+              "median_ms": 354.64,
+              "min_ms": 258.17
+            },
+            "rcpt_timing_ms": {
+              "count": 12,
+              "max_ms": 381.09,
+              "mean_ms": 258.98,
+              "median_ms": 270.1,
+              "min_ms": 176.05
+            },
+            "smtp_code_counts": {
+              "550": 12
+            },
+            "stage": "completed",
+            "status_counts": {
+              "rejected": 12
+            },
+            "total_timing_ms": {
+              "count": 12,
+              "max_ms": 16791.81,
+              "mean_ms": 3575.12,
+              "median_ms": 987.42,
+              "min_ms": 691.99
+            }
+          }
+        }
+      ],
+      "label_summary": {
+        "generic_random": {
+          "attempt_count": 12,
+          "rcpt_timing_ms": {
+            "count": 12,
+            "max_ms": 381.09,
+            "mean_ms": 258.98,
+            "median_ms": 270.1,
+            "min_ms": 176.05
+          },
+          "status_counts": {
+            "rejected": 12
+          },
+          "total_timing_ms": {
+            "count": 12,
+            "max_ms": 16791.81,
+            "mean_ms": 3575.12,
+            "median_ms": 987.42,
+            "min_ms": 691.99
+          }
+        },
+        "known_real": {
+          "attempt_count": 12,
+          "rcpt_timing_ms": {
+            "count": 12,
+            "max_ms": 351.2,
+            "mean_ms": 264.47,
+            "median_ms": 301.06,
+            "min_ms": 128.59
+          },
+          "status_counts": {
+            "accepted": 12
+          },
+          "total_timing_ms": {
+            "count": 12,
+            "max_ms": 16961.51,
+            "mean_ms": 3620.6,
+            "median_ms": 1020.9,
+            "min_ms": 683.41
+          }
+        }
+      },
+      "runs_per_email": 12,
+      "stage": "completed"
+    },
+    "stage": "completed"
+  },
+  "generated_at_utc": "2026-03-02T22:36:09.150302+00:00",
+  "input": {
+    "domain": "",
+    "name": ""
+  },
+  "settings": {
+    "api_consensus_enabled": false,
+    "benchmark_file": "/Users/don/EmailFinder/benchmark_cases.envestnet_pair.csv",
+    "benchmark_max_cases": 50,
+    "benchmark_pause_ms": 150,
+    "benchmark_runs": 12,
+    "benchmark_starttls": false,
+    "consensus_delay_ms": 250,
+    "consensus_max_candidates": 6,
+    "consensus_providers": [
+      "hunter",
+      "abstract"
+    ],
+    "doh_enabled": true,
+    "doh_via_curl": false,
+    "from_address": "probe@localhost",
+    "known_emails": [],
+    "max_candidates": 12,
+    "osint_delay_ms": 300,
+    "osint_enabled": false,
+    "osint_max_candidates": 8,
+    "osint_max_results": 6,
+    "pause_ms": 700,
+    "probe_smtp": false,
+    "timeout_seconds": 4.0
+  }
+}

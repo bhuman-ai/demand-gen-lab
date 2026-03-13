@@ -1,5 +1,11 @@
 import { mkdir, readFile, writeFile } from "fs/promises";
-import type { OutreachProvisioningSettings, ProvisioningValidationStatus } from "@/lib/factory-types";
+import type {
+  DeliverabilityDomainHealth,
+  DeliverabilityHealthStatus,
+  DeliverabilityProvider,
+  OutreachProvisioningSettings,
+  ProvisioningValidationStatus,
+} from "@/lib/factory-types";
 import { OutreachDataError } from "@/lib/outreach-data";
 import { decryptJson, encryptJson } from "@/lib/outreach-encryption";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
@@ -22,6 +28,18 @@ type StoredOutreachProvisioningSettings = {
       lastValidatedStatus: ProvisioningValidationStatus;
       lastValidationMessage: string;
     };
+    deliverability: {
+      provider: DeliverabilityProvider;
+      monitoredDomains: string[];
+      lastValidatedAt: string;
+      lastValidatedStatus: ProvisioningValidationStatus;
+      lastValidationMessage: string;
+      lastCheckedAt: string;
+      lastHealthStatus: DeliverabilityHealthStatus;
+      lastHealthScore: number;
+      lastHealthSummary: string;
+      lastDomainSnapshots: DeliverabilityDomainHealth[];
+    };
   };
   credentialsEncrypted: string;
   createdAt: string;
@@ -32,6 +50,9 @@ type OutreachProvisioningSettingsSecrets = {
   customerIoTrackingApiKey: string;
   customerIoAppApiKey: string;
   namecheapApiKey: string;
+  deliverabilityGoogleClientId: string;
+  deliverabilityGoogleClientSecret: string;
+  deliverabilityGoogleRefreshToken: string;
 };
 
 type OutreachProvisioningSettingsPatch = {
@@ -52,6 +73,21 @@ type OutreachProvisioningSettingsPatch = {
     lastValidatedAt?: string;
     lastValidatedStatus?: ProvisioningValidationStatus;
     lastValidationMessage?: string;
+  };
+  deliverability?: {
+    provider?: DeliverabilityProvider;
+    monitoredDomains?: string[];
+    googleClientId?: string;
+    googleClientSecret?: string;
+    googleRefreshToken?: string;
+    lastValidatedAt?: string;
+    lastValidatedStatus?: ProvisioningValidationStatus;
+    lastValidationMessage?: string;
+    lastCheckedAt?: string;
+    lastHealthStatus?: DeliverabilityHealthStatus;
+    lastHealthScore?: number;
+    lastHealthSummary?: string;
+    lastDomainSnapshots?: DeliverabilityDomainHealth[];
   };
 };
 
@@ -76,6 +112,21 @@ function defaultSecrets(): OutreachProvisioningSettingsSecrets {
     customerIoTrackingApiKey: "",
     customerIoAppApiKey: "",
     namecheapApiKey: "",
+    deliverabilityGoogleClientId: "",
+    deliverabilityGoogleClientSecret: "",
+    deliverabilityGoogleRefreshToken: "",
+  };
+}
+
+function sanitizeSecrets(value: unknown): OutreachProvisioningSettingsSecrets {
+  const row = asRecord(value);
+  return {
+    customerIoTrackingApiKey: String(row.customerIoTrackingApiKey ?? "").trim(),
+    customerIoAppApiKey: String(row.customerIoAppApiKey ?? "").trim(),
+    namecheapApiKey: String(row.namecheapApiKey ?? "").trim(),
+    deliverabilityGoogleClientId: String(row.deliverabilityGoogleClientId ?? "").trim(),
+    deliverabilityGoogleClientSecret: String(row.deliverabilityGoogleClientSecret ?? "").trim(),
+    deliverabilityGoogleRefreshToken: String(row.deliverabilityGoogleRefreshToken ?? "").trim(),
   };
 }
 
@@ -96,6 +147,18 @@ function defaultStoredConfig(): StoredOutreachProvisioningSettings["config"] {
       lastValidatedStatus: "unknown",
       lastValidationMessage: "",
     },
+    deliverability: {
+      provider: "none",
+      monitoredDomains: [],
+      lastValidatedAt: "",
+      lastValidatedStatus: "unknown",
+      lastValidationMessage: "",
+      lastCheckedAt: "",
+      lastHealthStatus: "unknown",
+      lastHealthScore: 0,
+      lastHealthSummary: "",
+      lastDomainSnapshots: [],
+    },
   };
 }
 
@@ -105,10 +168,47 @@ function sanitizeValidationStatus(value: unknown): ProvisioningValidationStatus 
     : "unknown";
 }
 
+function sanitizeDeliverabilityProvider(value: unknown): DeliverabilityProvider {
+  return String(value ?? "").trim() === "google_postmaster" ? "google_postmaster" : "none";
+}
+
+function sanitizeDeliverabilityHealthStatus(value: unknown): DeliverabilityHealthStatus {
+  return ["unknown", "healthy", "warning", "critical"].includes(String(value ?? ""))
+    ? (String(value) as DeliverabilityHealthStatus)
+    : "unknown";
+}
+
+function sanitizeMonitoredDomains(value: unknown) {
+  if (!Array.isArray(value)) return [];
+  return Array.from(
+    new Set(
+      value
+        .map((entry) => String(entry ?? "").trim().toLowerCase())
+        .filter(Boolean)
+    )
+  );
+}
+
+function sanitizeDomainSnapshots(value: unknown): DeliverabilityDomainHealth[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((entry) => asRecord(entry))
+    .map((entry) => ({
+      domain: String(entry.domain ?? "").trim().toLowerCase(),
+      trafficDate: String(entry.trafficDate ?? entry.traffic_date ?? "").trim(),
+      domainReputation: String(entry.domainReputation ?? entry.domain_reputation ?? "").trim(),
+      spamRate: Number(entry.spamRate ?? entry.spam_rate ?? 0) || 0,
+      status: sanitizeDeliverabilityHealthStatus(entry.status),
+      summary: String(entry.summary ?? "").trim(),
+    }))
+    .filter((entry) => entry.domain.length > 0);
+}
+
 function sanitizeConfig(value: unknown): StoredOutreachProvisioningSettings["config"] {
   const row = asRecord(value);
   const customerIo = asRecord(row.customerIo);
   const namecheap = asRecord(row.namecheap);
+  const deliverability = asRecord(row.deliverability);
   const customerIoRegion = String(customerIo.workspaceRegion ?? "").trim().toLowerCase();
   return {
     customerIo: {
@@ -137,6 +237,34 @@ function sanitizeConfig(value: unknown): StoredOutreachProvisioningSettings["con
         namecheap.lastValidationMessage ?? namecheap.last_validation_message ?? ""
       ).trim(),
     },
+    deliverability: {
+      provider: sanitizeDeliverabilityProvider(deliverability.provider),
+      monitoredDomains: sanitizeMonitoredDomains(
+        deliverability.monitoredDomains ?? deliverability.monitored_domains
+      ),
+      lastValidatedAt: String(
+        deliverability.lastValidatedAt ?? deliverability.last_validated_at ?? ""
+      ).trim(),
+      lastValidatedStatus: sanitizeValidationStatus(
+        deliverability.lastValidatedStatus ?? deliverability.last_validated_status
+      ),
+      lastValidationMessage: String(
+        deliverability.lastValidationMessage ?? deliverability.last_validation_message ?? ""
+      ).trim(),
+      lastCheckedAt: String(deliverability.lastCheckedAt ?? deliverability.last_checked_at ?? "").trim(),
+      lastHealthStatus: sanitizeDeliverabilityHealthStatus(
+        deliverability.lastHealthStatus ?? deliverability.last_health_status
+      ),
+      lastHealthScore: Number(
+        deliverability.lastHealthScore ?? deliverability.last_health_score ?? 0
+      ) || 0,
+      lastHealthSummary: String(
+        deliverability.lastHealthSummary ?? deliverability.last_health_summary ?? ""
+      ).trim(),
+      lastDomainSnapshots: sanitizeDomainSnapshots(
+        deliverability.lastDomainSnapshots ?? deliverability.last_domain_snapshots
+      ),
+    },
   };
 }
 
@@ -152,7 +280,9 @@ function defaultStoredSettings(): StoredOutreachProvisioningSettings {
 }
 
 function mapStoredSettings(row: StoredOutreachProvisioningSettings): OutreachProvisioningSettings {
-  const secrets = decryptJson<OutreachProvisioningSettingsSecrets>(row.credentialsEncrypted, defaultSecrets());
+  const secrets = sanitizeSecrets(
+    decryptJson<OutreachProvisioningSettingsSecrets>(row.credentialsEncrypted, defaultSecrets())
+  );
   return {
     id: row.id,
     customerIo: {
@@ -172,6 +302,21 @@ function mapStoredSettings(row: StoredOutreachProvisioningSettings): OutreachPro
       lastValidatedAt: row.config.namecheap.lastValidatedAt,
       lastValidatedStatus: row.config.namecheap.lastValidatedStatus,
       lastValidationMessage: row.config.namecheap.lastValidationMessage,
+    },
+    deliverability: {
+      provider: row.config.deliverability.provider,
+      monitoredDomains: row.config.deliverability.monitoredDomains,
+      hasGoogleClientId: Boolean(secrets.deliverabilityGoogleClientId.trim()),
+      hasGoogleClientSecret: Boolean(secrets.deliverabilityGoogleClientSecret.trim()),
+      hasGoogleRefreshToken: Boolean(secrets.deliverabilityGoogleRefreshToken.trim()),
+      lastValidatedAt: row.config.deliverability.lastValidatedAt,
+      lastValidatedStatus: row.config.deliverability.lastValidatedStatus,
+      lastValidationMessage: row.config.deliverability.lastValidationMessage,
+      lastCheckedAt: row.config.deliverability.lastCheckedAt,
+      lastHealthStatus: row.config.deliverability.lastHealthStatus,
+      lastHealthScore: row.config.deliverability.lastHealthScore,
+      lastHealthSummary: row.config.deliverability.lastHealthSummary,
+      lastDomainSnapshots: row.config.deliverability.lastDomainSnapshots,
     },
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
@@ -284,19 +429,21 @@ export async function getOutreachProvisioningSettings(): Promise<OutreachProvisi
 export async function getOutreachProvisioningSettingsSecrets(): Promise<OutreachProvisioningSettingsSecrets> {
   const stored = await getStoredProvisioningSettings();
   if (!stored) return defaultSecrets();
-  return decryptJson<OutreachProvisioningSettingsSecrets>(stored.credentialsEncrypted, defaultSecrets());
+  return sanitizeSecrets(
+    decryptJson<OutreachProvisioningSettingsSecrets>(stored.credentialsEncrypted, defaultSecrets())
+  );
 }
 
 export async function updateOutreachProvisioningSettings(
   patch: OutreachProvisioningSettingsPatch
 ): Promise<OutreachProvisioningSettings> {
   const existing = (await getStoredProvisioningSettings()) ?? defaultStoredSettings();
-  const existingSecrets = decryptJson<OutreachProvisioningSettingsSecrets>(
-    existing.credentialsEncrypted,
-    defaultSecrets()
+  const existingSecrets = sanitizeSecrets(
+    decryptJson<OutreachProvisioningSettingsSecrets>(existing.credentialsEncrypted, defaultSecrets())
   );
   const nextCustomerIo = patch.customerIo ?? {};
   const nextNamecheap = patch.namecheap ?? {};
+  const nextDeliverability = patch.deliverability ?? {};
   const now = nowIso();
 
   const nextConfig: StoredOutreachProvisioningSettings["config"] = {
@@ -336,6 +483,44 @@ export async function updateOutreachProvisioningSettings(
           ? String(nextNamecheap.lastValidationMessage).trim()
           : existing.config.namecheap.lastValidationMessage,
     },
+    deliverability: {
+      provider:
+        nextDeliverability.provider !== undefined
+          ? sanitizeDeliverabilityProvider(nextDeliverability.provider)
+          : existing.config.deliverability.provider,
+      monitoredDomains:
+        nextDeliverability.monitoredDomains !== undefined
+          ? sanitizeMonitoredDomains(nextDeliverability.monitoredDomains)
+          : existing.config.deliverability.monitoredDomains,
+      lastValidatedAt:
+        nextDeliverability.lastValidatedAt !== undefined
+          ? String(nextDeliverability.lastValidatedAt).trim()
+          : existing.config.deliverability.lastValidatedAt,
+      lastValidatedStatus:
+        nextDeliverability.lastValidatedStatus ?? existing.config.deliverability.lastValidatedStatus,
+      lastValidationMessage:
+        nextDeliverability.lastValidationMessage !== undefined
+          ? String(nextDeliverability.lastValidationMessage).trim()
+          : existing.config.deliverability.lastValidationMessage,
+      lastCheckedAt:
+        nextDeliverability.lastCheckedAt !== undefined
+          ? String(nextDeliverability.lastCheckedAt).trim()
+          : existing.config.deliverability.lastCheckedAt,
+      lastHealthStatus:
+        nextDeliverability.lastHealthStatus ?? existing.config.deliverability.lastHealthStatus,
+      lastHealthScore:
+        nextDeliverability.lastHealthScore !== undefined
+          ? Number(nextDeliverability.lastHealthScore) || 0
+          : existing.config.deliverability.lastHealthScore,
+      lastHealthSummary:
+        nextDeliverability.lastHealthSummary !== undefined
+          ? String(nextDeliverability.lastHealthSummary).trim()
+          : existing.config.deliverability.lastHealthSummary,
+      lastDomainSnapshots:
+        nextDeliverability.lastDomainSnapshots !== undefined
+          ? sanitizeDomainSnapshots(nextDeliverability.lastDomainSnapshots)
+          : existing.config.deliverability.lastDomainSnapshots,
+    },
   };
 
   const nextSecrets: OutreachProvisioningSettingsSecrets = {
@@ -343,6 +528,12 @@ export async function updateOutreachProvisioningSettings(
       String(nextCustomerIo.trackingApiKey ?? "").trim() || existingSecrets.customerIoTrackingApiKey,
     customerIoAppApiKey: String(nextCustomerIo.appApiKey ?? "").trim() || existingSecrets.customerIoAppApiKey,
     namecheapApiKey: String(nextNamecheap.apiKey ?? "").trim() || existingSecrets.namecheapApiKey,
+    deliverabilityGoogleClientId:
+      String(nextDeliverability.googleClientId ?? "").trim() || existingSecrets.deliverabilityGoogleClientId,
+    deliverabilityGoogleClientSecret:
+      String(nextDeliverability.googleClientSecret ?? "").trim() || existingSecrets.deliverabilityGoogleClientSecret,
+    deliverabilityGoogleRefreshToken:
+      String(nextDeliverability.googleRefreshToken ?? "").trim() || existingSecrets.deliverabilityGoogleRefreshToken,
   };
 
   const nextStored: StoredOutreachProvisioningSettings = {

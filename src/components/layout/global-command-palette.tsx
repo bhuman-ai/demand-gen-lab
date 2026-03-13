@@ -198,7 +198,7 @@ export default function GlobalCommandPalette({ activeBrandId }: { activeBrandId:
       <Button
         type="button"
         variant="outline"
-        className="inline-flex items-center gap-1.5"
+        className="inline-flex h-10 items-center gap-2 px-3.5 text-[color:var(--foreground)]"
         onClick={() => {
           setQuery("");
           setSelectedIndex(0);
@@ -206,16 +206,19 @@ export default function GlobalCommandPalette({ activeBrandId }: { activeBrandId:
         }}
       >
         <Search className="h-3.5 w-3.5" />
-        Global Search
-        <span className="hidden rounded border border-[color:var(--border)] px-1.5 py-0.5 text-[10px] text-[color:var(--muted-foreground)] sm:inline-flex">
+        Search
+        <span className="hidden rounded-[6px] border border-[color:var(--border)] px-1.5 py-0.5 text-[10px] text-[color:var(--muted-foreground)] sm:inline-flex">
           <Command className="mr-0.5 h-2.5 w-2.5" />K
         </span>
       </Button>
 
       {open ? (
-        <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/45 p-4 pt-16" onClick={() => setOpen(false)}>
+        <div
+          className="fixed inset-0 z-50 flex items-start justify-center bg-[color:color-mix(in_oklab,var(--foreground)_24%,transparent)]/70 p-4 pt-16"
+          onClick={() => setOpen(false)}
+        >
           <div
-            className="w-full max-w-2xl rounded-2xl border border-[color:var(--border)] bg-[color:var(--surface)] shadow-2xl"
+            className="w-full max-w-2xl rounded-[12px] border border-[color:var(--border)] bg-[color:var(--surface)] shadow-[0_18px_50px_-34px_color-mix(in_oklab,var(--shadow)_95%,transparent)]"
             onClick={(event) => event.stopPropagation()}
           >
             <div className="border-b border-[color:var(--border)] p-3">
@@ -242,9 +245,7 @@ export default function GlobalCommandPalette({ activeBrandId }: { activeBrandId:
                 if (!rows.length) return null;
                 return (
                   <div key={group} className="mb-2">
-                    <div className="px-2 py-1 text-[11px] uppercase tracking-[0.18em] text-[color:var(--muted-foreground)]">
-                      {group}
-                    </div>
+                    <div className="px-2 py-1 text-[12px] font-medium text-[color:var(--muted-foreground)]">{group}</div>
                     <div className="space-y-1">
                       {rows.map((row) => {
                         const globalIndex = filtered.findIndex((item) => item.id === row.id);
@@ -259,7 +260,14 @@ export default function GlobalCommandPalette({ activeBrandId }: { activeBrandId:
                               setQuery("");
                               router.push(row.href);
                             }}
-                            className={`w-full rounded-lg px-2 py-2 text-left ${isSelected ? "bg-[color:var(--accent-soft)]" : "hover:bg-[color:var(--surface-muted)]"}`}
+                            className={`
+                              w-full rounded-[10px] border px-3 py-2.5 text-left transition-colors
+                              ${
+                                isSelected
+                                  ? "border-[color:var(--border-strong)] bg-[color:var(--surface-muted)]"
+                                  : "border-transparent hover:bg-[color:var(--surface-muted)]"
+                              }
+                            `}
                           >
                             <div className="text-sm font-medium text-[color:var(--foreground)]">{row.title}</div>
                             <div className="text-xs text-[color:var(--muted-foreground)]">{row.subtitle}</div>

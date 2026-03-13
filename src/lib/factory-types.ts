@@ -312,6 +312,18 @@ export type OutreachProvider = "customerio";
 
 export type ProvisioningValidationStatus = "unknown" | "pass" | "fail";
 
+export type DeliverabilityProvider = "none" | "google_postmaster";
+export type DeliverabilityHealthStatus = "unknown" | "healthy" | "warning" | "critical";
+
+export type DeliverabilityDomainHealth = {
+  domain: string;
+  trafficDate: string;
+  domainReputation: string;
+  spamRate: number;
+  status: DeliverabilityHealthStatus;
+  summary: string;
+};
+
 export type OutreachProvisioningSettings = {
   id: string;
   customerIo: {
@@ -331,6 +343,21 @@ export type OutreachProvisioningSettings = {
     lastValidatedAt: string;
     lastValidatedStatus: ProvisioningValidationStatus;
     lastValidationMessage: string;
+  };
+  deliverability: {
+    provider: DeliverabilityProvider;
+    monitoredDomains: string[];
+    hasGoogleClientId: boolean;
+    hasGoogleClientSecret: boolean;
+    hasGoogleRefreshToken: boolean;
+    lastValidatedAt: string;
+    lastValidatedStatus: ProvisioningValidationStatus;
+    lastValidationMessage: string;
+    lastCheckedAt: string;
+    lastHealthStatus: DeliverabilityHealthStatus;
+    lastHealthScore: number;
+    lastHealthSummary: string;
+    lastDomainSnapshots: DeliverabilityDomainHealth[];
   };
   createdAt: string;
   updatedAt: string;
@@ -404,6 +431,7 @@ export type OutreachAccount = {
 export type BrandOutreachAssignment = {
   brandId: string;
   accountId: string;
+  accountIds: string[];
   mailboxAccountId: string;
   createdAt: string;
   updatedAt: string;
@@ -644,7 +672,8 @@ export type RunAnomalyType =
   | "hard_bounce_rate"
   | "spam_complaint_rate"
   | "provider_error_rate"
-  | "negative_reply_rate_spike";
+  | "negative_reply_rate_spike"
+  | "deliverability_inbox_placement";
 
 export type RunAnomaly = {
   id: string;
@@ -673,7 +702,8 @@ export type OutreachRunJobType =
   | "dispatch_messages"
   | "sync_replies"
   | "analyze_run"
-  | "conversation_tick";
+  | "conversation_tick"
+  | "monitor_deliverability";
 
 export type OutreachRunJobStatus = "queued" | "running" | "completed" | "failed";
 
@@ -712,6 +742,19 @@ export type ConversationPromptPolicy = {
   subjectMaxWords: number;
   bodyMaxWords: number;
   exactlyOneCta: boolean;
+};
+
+export type ConversationReplyTimingPolicy = {
+  minimumDelayMinutes: number;
+  randomAdditionalDelayMinutes: number;
+};
+
+export type ConversationWorkingHoursPolicy = {
+  timezone: string;
+  businessHoursEnabled: boolean;
+  businessHoursStartHour: number;
+  businessHoursEndHour: number;
+  businessDays: number[];
 };
 
 export type ConversationFlowNode = {
@@ -762,6 +805,7 @@ export type ConversationFlowGraph = {
   edges: ConversationFlowEdge[];
   previewLeads: ConversationPreviewLead[];
   previewLeadId: string;
+  replyTiming: ConversationReplyTimingPolicy;
 };
 
 export type ConversationMap = {
@@ -777,6 +821,53 @@ export type ConversationMap = {
   publishedAt: string;
   createdAt: string;
   updatedAt: string;
+};
+
+export type ConversationMapEditorState = {
+  map: ConversationMap | null;
+  workingHours: ConversationWorkingHoursPolicy;
+};
+
+export type ConversationProbeStep = {
+  id: string;
+  kind: "outbound" | "inbound" | "route" | "timer" | "status";
+  label: string;
+  nodeId: string;
+  nodeTitle: string;
+  edgeId: string;
+  edgeLabel: string;
+  subject: string;
+  body: string;
+  waitMinutes: number;
+  intent: "question" | "interest" | "objection" | "unsubscribe" | "other" | "";
+  confidence: number;
+  action: "reply" | "no_reply" | "manual_review" | "";
+  route: string;
+  reason: string;
+};
+
+export type ConversationProbeScenarioResult = {
+  id: string;
+  title: string;
+  description: string;
+  outcome:
+    | "auto_reply"
+    | "manual_review"
+    | "no_reply"
+    | "timer_follow_up"
+    | "completed"
+    | "stalled";
+  summary: string;
+  path: string[];
+  steps: ConversationProbeStep[];
+};
+
+export type ConversationProbeResult = {
+  startNodeId: string;
+  startNodeTitle: string;
+  lead: ConversationPreviewLead;
+  generatedAt: string;
+  scenarios: ConversationProbeScenarioResult[];
 };
 
 export type ConversationSession = {

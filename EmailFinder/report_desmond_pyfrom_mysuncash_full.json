@@ -1,0 +1,234 @@
+{
+  "candidates": [
+    "desmond@mysuncash.com",
+    "desmond.pyfrom@mysuncash.com",
+    "desmond_pyfrom@mysuncash.com",
+    "desmond-pyfrom@mysuncash.com",
+    "desmondpyfrom@mysuncash.com",
+    "dpyfrom@mysuncash.com"
+  ],
+  "generated_at_utc": "2026-03-02T19:59:38.447174+00:00",
+  "input": {
+    "domain": "mysuncash.com",
+    "name": "Desmond Pyfrom"
+  },
+  "osint": {
+    "candidate_scores": [
+      {
+        "email": "desmond@mysuncash.com",
+        "exact_mentions": 0,
+        "mention_urls": [],
+        "osint_confidence": 0.0,
+        "query": "\"desmond@mysuncash.com\"",
+        "result_count": 6
+      },
+      {
+        "email": "desmond.pyfrom@mysuncash.com",
+        "exact_mentions": 0,
+        "mention_urls": [],
+        "osint_confidence": 0.0,
+        "query": "\"desmond.pyfrom@mysuncash.com\"",
+        "result_count": 6
+      },
+      {
+        "email": "desmond_pyfrom@mysuncash.com",
+        "exact_mentions": 0,
+        "mention_urls": [],
+        "osint_confidence": 0.0,
+        "query": "\"desmond_pyfrom@mysuncash.com\"",
+        "result_count": 6
+      },
+      {
+        "email": "desmond-pyfrom@mysuncash.com",
+        "exact_mentions": 0,
+        "mention_urls": [],
+        "osint_confidence": 0.0,
+        "query": "\"desmond-pyfrom@mysuncash.com\"",
+        "result_count": 6
+      },
+      {
+        "email": "desmondpyfrom@mysuncash.com",
+        "exact_mentions": 0,
+        "mention_urls": [],
+        "osint_confidence": 0.0,
+        "query": "\"desmondpyfrom@mysuncash.com\"",
+        "result_count": 6
+      },
+      {
+        "email": "dpyfrom@mysuncash.com",
+        "exact_mentions": 0,
+        "mention_urls": [],
+        "osint_confidence": 0.0,
+        "query": "\"dpyfrom@mysuncash.com\"",
+        "result_count": 6
+      }
+    ],
+    "discovered_domain_emails": [],
+    "discovery_queries": [
+      {
+        "query": "\"Desmond Pyfrom\" \"@mysuncash.com\"",
+        "result_count": 6,
+        "results": [
+          {
+            "description": "Auf YouTube findest du gro\u00dfartige Videos und erstklassige Musik. Au\u00dferdem kannst du eigene Inhalte hochladen und mit Freunden oder mit der ganzen Welt ...",
+            "link": "https://www.youtube.com/?gl=DE&hl=de",
+            "pub_date": "",
+            "title": "YouTube"
+          },
+          {
+            "description": "Enjoy the videos and music you love, upload original content, and share it all with friends, family, and the world on YouTube.",
+            "link": "https://www.youtube.com/",
+            "pub_date": "Paz, 01 Mar 2026 08:11:00 GMT",
+            "title": "YouTube"
+          },
+          {
+            "description": "YouTube (Aussprache [\u02c8ju\u02d0tu\u02d0b oder \u02c8ju\u02d0tju\u02d0b]) ist ein 2005 gegr\u00fcndetes Videoportal des US-amerikanischen Unternehmens YouTube, LLC mit Sitz im kalifornischen San Bruno, welches seit 2006 eine Tochtergesellschaft von Google LLC ist.",
+            "link": "https://de.wikipedia.org/wiki/YouTube",
+            "pub_date": "Cmt, 28 \u015eub 2026 02:29:00 GMT",
+            "title": "YouTube \u2013 Wikipedia"
+          },
+          {
+            "description": "Get the official YouTube app on Android phones and tablets. See what the world is watching -- from the hottest music videos to what\u2019s popular in gaming, fashion, beauty, news, learning and more....",
+            "link": "https://play.google.com/store/apps/details?id=com.google.android.youtube&hl=en-US",
+            "pub_date": "Paz, 01 Mar 2026 08:04:00 GMT",
+            "title": "YouTube - Apps on Google Play"
+          },
+          {
+            "description": "Lade \u201eYouTube\u201c von Google im App Store herunter. Sieh dir Bildschirmfotos, Bewertungen und Rezensionen, Benutzertipps und weitere Apps wie \u201eYouTube\u201c an.",
+            "link": "https://apps.apple.com/de/app/youtube/id544007664",
+            "pub_date": "Cmt, 28 \u015eub 2026 22:38:00 GMT",
+            "title": "\u200eYouTube\u2011App \u2013 App Store"
+          },
+          {
+            "description": "Mit YouTube Kids k\u00f6nnen Kinder YouTube-Videos in einer sicheren Umgebung entdecken und Eltern und Aufsichtspersonen k\u00f6nnen sie auf ihrer Entdeckungsreise begleiten.",
+            "link": "https://www.youtubekids.com/?hl=de",
+            "pub_date": "Paz, 01 Mar 2026 08:04:00 GMT",
+            "title": "YouTube Kids"
+          }
+        ]
+      },
+      {
+        "query": "\"@mysuncash.com\"",
+        "result_count": 6,
+        "results": [
+          {
+            "description": "We would like to show you a description here but the site won\u2019t allow us.",
+            "link": "https://mail.google.com/mail?hl=en",
+            "pub_date": "Pzt, 02 Mar 2026 08:10:00 GMT",
+            "title": "Gmail"
+          },
+          {
+            "description": "Gmail goes beyond ordinary email. You can video chat with a friend, ping a colleague, or give someone a ring \u2013 all without leaving your inbox. The ease and simplicity of Gmail is available on the go. Download the app from Google Play or the Apple App Store to get started.",
+            "link": "https://www.gmail.com/mail/help/intl/en-US/about.html?__shortid__=1wZ9",
+            "pub_date": "Pzt, 02 Mar 2026 08:03:00 GMT",
+            "title": "About Gmail - Email. Chat. Video. Phone. - Google"
+          },
+          {
+            "description": "Not your computer? Use a private browsing window to sign in. Learn more about using Guest mode",
+            "link": "https://www.google.com/accounts/Login",
+            "pub_date": "Paz, 01 Mar 2026 03:17:00 GMT",
+            "title": "Sign in - Google Accounts"
+          },
+          {
+            "description": "Gmail is email that\u2019s intuitive, efficient, and useful. 15 GB of storage, less spam, and mobile access.",
+            "link": "https://mail.google.com/",
+            "pub_date": "Paz, 01 Mar 2026 03:32:00 GMT",
+            "title": "Gmail"
+          },
+          {
+            "description": "To open Gmail, you can sign in from a computer or add your account to the Gmail app on your phone or tablet. Once you're signed in, open your inbox to check your mail.",
+            "link": "https://support.google.com/mail/answer/8494?hl=en&co=GENIE.Platform%3DDesktop",
+            "pub_date": "Pzt, 02 Mar 2026 08:10:00 GMT",
+            "title": "Sign in to Gmail - Computer - Gmail Help - Google Help"
+          },
+          {
+            "description": "Gmail, now powered by Gemini AI. Unlock new ways to write, reply, and organize your emails. Experience a more intelligent and secure inbox.",
+            "link": "https://workspace.google.com/gmail/",
+            "pub_date": "Paz, 01 Mar 2026 14:52:00 GMT",
+            "title": "Gmail: Secure, AI-Powered Email for Everyone | Google Workspace"
+          }
+        ]
+      }
+    ],
+    "engine": "bing-rss",
+    "stage": "completed"
+  },
+  "passive": {
+    "candidate_count": 6,
+    "domain_note": "A/AAAA lookup succeeded",
+    "domain_resolves": true,
+    "mx_records": [
+      {
+        "host": "mail.mysuncash.com",
+        "priority": 1
+      }
+    ],
+    "syntax_valid_count": 6
+  },
+  "settings": {
+    "doh_enabled": true,
+    "doh_via_curl": true,
+    "from_address": "probe@localhost",
+    "max_candidates": 6,
+    "osint_delay_ms": 300,
+    "osint_enabled": true,
+    "osint_max_candidates": 8,
+    "osint_max_results": 6,
+    "pause_ms": 0,
+    "probe_smtp": true,
+    "timeout_seconds": 3.0
+  },
+  "smtp": {
+    "catch_all_likely": false,
+    "catch_all_probe": {
+      "code": null,
+      "detail": "timed out"
+    },
+    "mx_host": "mail.mysuncash.com",
+    "results": [
+      {
+        "detail": "timed out",
+        "email": "desmond@mysuncash.com",
+        "mx_host": "mail.mysuncash.com",
+        "smtp_code": null,
+        "status": "unknown"
+      },
+      {
+        "detail": "timed out",
+        "email": "desmond.pyfrom@mysuncash.com",
+        "mx_host": "mail.mysuncash.com",
+        "smtp_code": null,
+        "status": "unknown"
+      },
+      {
+        "detail": "timed out",
+        "email": "desmond_pyfrom@mysuncash.com",
+        "mx_host": "mail.mysuncash.com",
+        "smtp_code": null,
+        "status": "unknown"
+      },
+      {
+        "detail": "timed out",
+        "email": "desmond-pyfrom@mysuncash.com",
+        "mx_host": "mail.mysuncash.com",
+        "smtp_code": null,
+        "status": "unknown"
+      },
+      {
+        "detail": "timed out",
+        "email": "desmondpyfrom@mysuncash.com",
+        "mx_host": "mail.mysuncash.com",
+        "smtp_code": null,
+        "status": "unknown"
+      },
+      {
+        "detail": "timed out",
+        "email": "dpyfrom@mysuncash.com",
+        "mx_host": "mail.mysuncash.com",
+        "smtp_code": null,
+        "status": "unknown"
+      }
+    ],
+    "stage": "completed"
+  }
+}

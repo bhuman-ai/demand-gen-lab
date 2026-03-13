@@ -1,0 +1,285 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e3]:
+    - complementary [ref=e4]:
+      - link "Factory Factory Platform" [ref=e5] [cursor=pointer]:
+        - /url: /
+        - generic [ref=e6]: Factory
+        - generic [ref=e7]: Factory Platform
+      - combobox [ref=e10]:
+        - option "BHuman | AI personalized videos at scale" [selected]
+        - option "selffunded.dev"
+      - navigation [ref=e12]:
+        - link "Experiments" [ref=e13] [cursor=pointer]:
+          - /url: /brands
+          - img [ref=e14]
+          - text: Experiments
+        - link "Campaigns" [ref=e18] [cursor=pointer]:
+          - /url: /brands
+          - img [ref=e19]
+          - text: Campaigns
+        - link "Network" [ref=e21] [cursor=pointer]:
+          - /url: /brands
+          - img [ref=e22]
+          - text: Network
+        - link "Leads" [ref=e27] [cursor=pointer]:
+          - /url: /brands
+          - img [ref=e28]
+          - text: Leads
+        - link "Inbox" [ref=e31] [cursor=pointer]:
+          - /url: /brands
+          - img [ref=e32]
+          - text: Inbox
+      - generic [ref=e35]:
+        - generic [ref=e36]: Tools
+        - navigation [ref=e37]:
+          - link "Settings" [ref=e38] [cursor=pointer]:
+            - /url: /settings/outreach
+            - img [ref=e39]
+            - text: Settings
+          - link "Logic" [ref=e42] [cursor=pointer]:
+            - /url: /logic
+            - img [ref=e43]
+            - text: Logic
+          - link "Doctor" [ref=e45] [cursor=pointer]:
+            - /url: /doctor
+            - img [ref=e46]
+            - text: Doctor
+    - main [ref=e48]:
+      - generic [ref=e50]:
+        - generic [ref=e51]:
+          - generic [ref=e52]: Factory > settings
+          - heading "Outreach Settings" [level=1] [ref=e53]
+        - generic [ref=e54]:
+          - button "Global Search K" [ref=e55]:
+            - img [ref=e56]
+            - text: Global Search
+            - generic [ref=e59]:
+              - img [ref=e60]
+              - text: K
+          - button "User" [ref=e62]:
+            - img [ref=e63]
+            - text: User
+      - generic [ref=e68]:
+        - generic [ref=e69]:
+          - generic [ref=e70]: Editing BHuman | AI personalized videos at scale. Choose the senders, reply inbox, and connections for this brand.
+          - generic [ref=e71]:
+            - generic [ref=e72]: BHuman | AI personalized videos at scale
+            - generic [ref=e73]: Setup incomplete
+            - generic [ref=e74]: 0 senders selected
+            - generic [ref=e75]: "Reply inbox: None"
+        - generic [ref=e78]:
+          - button "Brand Needs attention 0 senders selected for BHuman | AI personalized videos at scale" [ref=e122]:
+            - generic [ref=e80]:
+              - generic [ref=e81]: Brand
+              - generic [ref=e82]: Needs attention
+            - generic [ref=e83]: 0 senders selected for BHuman | AI personalized videos at scale
+          - button "Connections Configured 4 senders for BHuman | AI personalized videos at scale" [ref=e123]:
+            - generic [ref=e85]:
+              - generic [ref=e86]: Connections
+              - generic [ref=e87]: Configured
+            - generic [ref=e88]: 4 senders for BHuman | AI personalized videos at scale
+          - button "Reply inboxes Needs attention 2 reply inboxes available" [ref=e124]:
+            - generic [ref=e90]:
+              - generic [ref=e91]: Reply inboxes
+              - generic [ref=e92]: Needs attention
+            - generic [ref=e93]: 2 reply inboxes available
+        - generic [ref=e94]:
+          - generic [ref=e95]:
+            - generic [ref=e97]:
+              - generic [ref=e98]:
+                - heading "BHuman | AI personalized videos at scale" [level=3] [ref=e125]
+                - paragraph [ref=e100]: https://bhuman.ai
+              - generic [ref=e101]: Needs attention
+            - generic [ref=e103]:
+              - generic [ref=e104]: "Selected senders: 0"
+              - generic [ref=e126]: "Default sender: None"
+              - generic [ref=e127]: "Reply inbox: None"
+          - generic [ref=e128]:
+            - generic [ref=e129]:
+              - heading "Brand Domain Setup" [level=3] [ref=e130]
+              - paragraph [ref=e131]: Pick a domain, point it at the brand website, and connect it to the right sender account.
+            - generic [ref=e132]:
+              - generic [ref=e133]:
+                - generic [ref=e134]:
+                  - generic [ref=e135]: Brand
+                  - generic [ref=e136]: BHuman | AI personalized videos at scale
+                - generic [ref=e137]:
+                  - generic [ref=e138]: Sender Local-Part
+                  - textbox "Sender Local-Part" [ref=e139]:
+                    - /placeholder: hello
+                    - text: hello
+                - generic [ref=e140]:
+                  - generic [ref=e141]: Reply Mailbox
+                  - combobox "Reply Mailbox" [ref=e142]:
+                    - option "Leave unchanged / none" [selected]
+                    - option "mrosetti email selffunded · mrosetti@selffunded.dev"
+                    - option "zeynep email bhuman · zeynep@bhuman.ai"
+                  - generic [ref=e143]: No reply mailbox selected yet. Setup will work, but launch preflight will still fail until you assign one.
+                - generic [ref=e144]:
+                  - generic [ref=e145]: Sender Account Name
+                  - textbox "Sender Account Name" [ref=e146]:
+                    - /placeholder: BHuman | AI personalized videos at scale sender
+              - generic [ref=e147]:
+                - generic [ref=e148]:
+                  - generic [ref=e149]: Website To Forward To
+                  - textbox "Website To Forward To" [ref=e150]:
+                    - /placeholder: https://brand.com
+                    - text: https://bhuman.ai
+                  - generic [ref=e151]: Visitors on the sender domain will be sent here.
+                - generic [ref=e152]:
+                  - checkbox "Auto-assign sender to brand" [checked] [ref=e153]
+                  - text: Auto-assign sender to brand
+              - generic [ref=e154]:
+                - generic [ref=e155]:
+                  - generic [ref=e156]:
+                    - generic [ref=e157]: Customer.io Account
+                    - generic [ref=e158]: Auto-pick uses the account with the most room this month.
+                  - combobox [ref=e159]:
+                    - option "Auto-pick best account" [selected]
+                    - option "Choose a specific account"
+                    - option "Use saved defaults"
+                - generic [ref=e160]:
+                  - 'button "Customer.io site 7c3b15c5ffdd9762cb6f 3 sender accounts 25/30,000 29,975 left this month Baseline: ready Last test: pass Existing senders: mrosetti@fluentscroll.com · mrosetti@startingstroke.com · mrosetti@lequarterly.com" [disabled] [ref=e161]':
+                    - generic [ref=e162]:
+                      - generic [ref=e163]:
+                        - generic [ref=e164]: Customer.io site 7c3b15c5ffdd9762cb6f
+                        - generic [ref=e165]: 3 sender accounts
+                      - generic [ref=e166]: 25/30,000
+                    - generic [ref=e168]:
+                      - generic [ref=e169]: 29,975 left this month
+                      - generic [ref=e170]: "Baseline: ready"
+                      - generic [ref=e171]: "Last test: pass"
+                    - generic [ref=e172]: "Existing senders: mrosetti@fluentscroll.com · mrosetti@startingstroke.com · mrosetti@lequarterly.com"
+                  - 'button "Customer.io site 7c3b15c5ffdd9762cb6f 3 sender accounts 0/30,000 30,000 left this month Baseline: waiting Existing senders: zeynep@enrichanything.com · zeynep@atlaswatch.org · zeynep@itsallvibes.com Waiting for baseline sync" [disabled] [ref=e173]':
+                    - generic [ref=e174]:
+                      - generic [ref=e175]:
+                        - generic [ref=e176]: Customer.io site 7c3b15c5ffdd9762cb6f
+                        - generic [ref=e177]: 3 sender accounts
+                      - generic [ref=e178]: 0/30,000
+                    - generic [ref=e180]:
+                      - generic [ref=e181]: 30,000 left this month
+                      - generic [ref=e182]: "Baseline: waiting"
+                    - generic [ref=e183]: "Existing senders: zeynep@enrichanything.com · zeynep@atlaswatch.org · zeynep@itsallvibes.com"
+                    - generic [ref=e184]: Waiting for baseline sync
+                  - 'button "Customer.io site 9336ae1a489137ebb1e5 2 sender accounts 0/30,000 30,000 left this month Baseline: waiting Last test: pass Existing senders: zeynep@bhumanai.com · zeynep@itsallvibes.com Waiting for baseline sync" [disabled] [ref=e185]':
+                    - generic [ref=e186]:
+                      - generic [ref=e187]:
+                        - generic [ref=e188]: Customer.io site 9336ae1a489137ebb1e5
+                        - generic [ref=e189]: 2 sender accounts
+                      - generic [ref=e190]: 0/30,000
+                    - generic [ref=e192]:
+                      - generic [ref=e193]: 30,000 left this month
+                      - generic [ref=e194]: "Baseline: waiting"
+                      - generic [ref=e195]: "Last test: pass"
+                    - generic [ref=e196]: "Existing senders: zeynep@bhumanai.com · zeynep@itsallvibes.com"
+                    - generic [ref=e197]: Waiting for baseline sync
+                - generic [ref=e198]: "Auto-pick target: selffunded.dev fluentscroll.com with 29,975 profiles left this month."
+              - generic [ref=e199]:
+                - generic [ref=e200]:
+                  - generic [ref=e201]:
+                    - generic [ref=e202]: Your Domains
+                    - generic [ref=e203]: Click once to connect the domain and set the forwarding.
+                  - textbox "Filter domains" [ref=e204]
+                - generic [ref=e205]: "#1011150 Invalid request IP: 100.53.195.61"
+                - generic [ref=e206]: Save platform Namecheap credentials above first. Once that is done, this section will list every owned domain with a setup button.
+              - generic [ref=e207]:
+                - generic [ref=e208]:
+                  - generic [ref=e209]: Buy New Domain + Set Up
+                  - generic [ref=e210]: If the domain is available, this buys it and runs the same setup automatically.
+                - generic [ref=e211]:
+                  - generic [ref=e212]:
+                    - generic [ref=e213]: Domain
+                    - textbox "Domain" [ref=e214]:
+                      - /placeholder: example.com
+                  - generic [ref=e215]:
+                    - generic [ref=e216]: First Name
+                    - textbox "First Name" [ref=e217]
+                  - generic [ref=e218]:
+                    - generic [ref=e219]: Last Name
+                    - textbox "Last Name" [ref=e220]
+                  - generic [ref=e221]:
+                    - generic [ref=e222]: Organization
+                    - textbox "Organization" [ref=e223]
+                  - generic [ref=e224]:
+                    - generic [ref=e225]: Email
+                    - textbox "Email" [ref=e226]
+                  - generic [ref=e227]:
+                    - generic [ref=e228]: Phone
+                    - textbox "Phone" [ref=e229]:
+                      - /placeholder: "+1.5555555555"
+                  - generic [ref=e230]:
+                    - generic [ref=e231]: Address
+                    - textbox "Address" [ref=e232]
+                  - generic [ref=e233]:
+                    - generic [ref=e234]: City
+                    - textbox "City" [ref=e235]
+                  - generic [ref=e236]:
+                    - generic [ref=e237]: State / Province
+                    - textbox "State / Province" [ref=e238]
+                  - generic [ref=e239]:
+                    - generic [ref=e240]: Postal Code
+                    - textbox "Postal Code" [ref=e241]
+                  - generic [ref=e242]:
+                    - generic [ref=e243]: Country
+                    - textbox "Country" [ref=e244]:
+                      - /placeholder: US
+                      - text: US
+                - button "Buy + Set Up" [ref=e246]
+          - generic [ref=e112]:
+            - generic [ref=e114]:
+              - generic [ref=e115]:
+                - heading "Sending setup" [level=3] [ref=e116]
+                - paragraph [ref=e117]: Choose which senders belong to this brand. One sender is the default, but all selected senders stay available for rotation.
+              - generic [ref=e118]: Needs attention
+            - generic [ref=e120]:
+              - generic [ref=e247]:
+                - generic [ref=e248]:
+                  - generic [ref=e249]: Senders for this brand
+                  - generic [ref=e250]: 0 selected
+                - generic [ref=e251]:
+                  - generic [ref=e252]:
+                    - generic [ref=e253]:
+                      - checkbox "BHuman enrichanything.com zeynep@enrichanything.com Not checked" [ref=e254]
+                      - generic [ref=e255]:
+                        - generic [ref=e256]: BHuman enrichanything.com
+                        - generic [ref=e257]: zeynep@enrichanything.com
+                    - generic [ref=e258]: Not checked
+                  - generic [ref=e259]:
+                    - generic [ref=e260]:
+                      - checkbox "BHuman atlaswatch.org zeynep@atlaswatch.org Not checked" [ref=e261]
+                      - generic [ref=e262]:
+                        - generic [ref=e263]: BHuman atlaswatch.org
+                        - generic [ref=e264]: zeynep@atlaswatch.org
+                    - generic [ref=e265]: Not checked
+                  - generic [ref=e266]:
+                    - generic [ref=e267]:
+                      - checkbox "BHuman itsallvibes.com zeynep@itsallvibes.com Not checked" [ref=e268]
+                      - generic [ref=e269]:
+                        - generic [ref=e270]: BHuman itsallvibes.com
+                        - generic [ref=e271]: zeynep@itsallvibes.com
+                    - generic [ref=e272]: Not checked
+                  - generic [ref=e273]:
+                    - generic [ref=e274]:
+                      - checkbox "BHuman itsallvibes.com zeynep@itsallvibes.com Not checked" [ref=e275]
+                      - generic [ref=e276]:
+                        - generic [ref=e277]: BHuman itsallvibes.com
+                        - generic [ref=e278]: zeynep@itsallvibes.com
+                    - generic [ref=e279]: Not checked
+              - generic [ref=e280]:
+                - generic [ref=e281]:
+                  - generic [ref=e282]: Default sender
+                  - combobox [disabled] [ref=e283]:
+                    - option "Choose default sender" [selected]
+                  - generic [ref=e284]: "From: Not set"
+                - generic [ref=e285]:
+                  - generic [ref=e286]: Reply inbox
+                  - combobox [disabled] [ref=e287]:
+                    - option "Choose reply inbox" [selected]
+                    - option "mrosetti email selffunded"
+                    - option "zeynep email bhuman"
+                  - generic [ref=e288]: "Reply-To: Not set"
+                - generic [ref=e289]:
+                  - generic [ref=e290]: "Website: https://bhuman.ai"
+                  - generic [ref=e291]: "Sender check: No sender selected"
+                  - generic [ref=e292]: "Reply check: No reply inbox selected"
+  - alert [ref=e121]

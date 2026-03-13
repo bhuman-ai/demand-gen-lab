@@ -1,0 +1,252 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e3]:
+    - complementary [ref=e4]:
+      - generic [ref=e5]:
+        - link "lastb2b.com The last B2B outreach product you'll ever buy." [ref=e6] [cursor=pointer]:
+          - /url: /
+          - generic [ref=e7]: lastb2b.com
+          - paragraph [ref=e8]: The last B2B outreach product you'll ever buy.
+        - generic [ref=e10]:
+          - generic [ref=e11]: Active brand
+          - combobox [ref=e13]:
+            - option "BHuman | AI personalized videos at scale" [selected]
+            - option "selffunded.dev"
+        - generic [ref=e14]:
+          - generic [ref=e15]: Work
+          - navigation [ref=e16]:
+            - link "Experiments" [ref=e17] [cursor=pointer]:
+              - /url: /brands/brand_mlg68b9l/experiments
+              - img [ref=e18]
+              - text: Experiments
+            - link "Campaigns" [ref=e22] [cursor=pointer]:
+              - /url: /brands/brand_mlg68b9l/campaigns
+              - img [ref=e23]
+              - text: Campaigns
+            - link "Network" [ref=e25] [cursor=pointer]:
+              - /url: /brands/brand_mlg68b9l/network
+              - img [ref=e26]
+              - text: Network
+            - link "Leads" [ref=e31] [cursor=pointer]:
+              - /url: /brands/brand_mlg68b9l/leads
+              - img [ref=e32]
+              - text: Leads
+            - link "Inbox" [ref=e35] [cursor=pointer]:
+              - /url: /brands/brand_mlg68b9l/inbox
+              - img [ref=e36]
+              - text: Inbox
+        - generic [ref=e39]:
+          - generic [ref=e40]: System
+          - navigation [ref=e41]:
+            - link "Settings" [ref=e42] [cursor=pointer]:
+              - /url: /settings/outreach
+              - img [ref=e43]
+              - text: Settings
+            - link "Logic" [ref=e46] [cursor=pointer]:
+              - /url: /logic
+              - img [ref=e47]
+              - text: Logic
+            - link "Doctor" [ref=e49] [cursor=pointer]:
+              - /url: /doctor
+              - img [ref=e50]
+              - text: Doctor
+        - generic [ref=e52]: Proof before scale. Keep the sender, message, and reply trail in one place.
+    - main [ref=e53]:
+      - generic [ref=e55]:
+        - generic [ref=e56]:
+          - generic [ref=e57]: lastb2b.com > Brand > Campaigns
+          - heading "Campaigns" [level=1] [ref=e58]
+        - generic [ref=e59]:
+          - button "Search K" [ref=e60]:
+            - img [ref=e61]
+            - text: Search
+            - generic [ref=e64]:
+              - img [ref=e65]
+              - text: K
+          - button "Operator" [ref=e67]:
+            - img [ref=e68]
+            - text: Operator
+      - generic [ref=e73]:
+        - generic [ref=e74]:
+          - generic [ref=e75]:
+            - generic [ref=e76]: BHuman | AI personalized videos at scale / campaigns
+            - generic [ref=e77]:
+              - heading "Scale only what proved itself." [level=2] [ref=e78]
+              - paragraph [ref=e79]: Promoted campaigns carry the winning experiment, sender health, and conversation logic forward so scale never gets detached from proof.
+            - generic [ref=e80]:
+              - link "Promote winner" [ref=e81] [cursor=pointer]:
+                - /url: /brands/brand_mlg68b9l/experiments
+                - text: Promote winner
+                - img [ref=e82]
+              - link "Open experiments" [ref=e84] [cursor=pointer]:
+                - /url: /brands/brand_mlg68b9l/experiments
+          - generic [ref=e86]:
+            - generic [ref=e87]:
+              - generic [ref=e88]:
+                - generic [ref=e89]: Campaigns
+                - generic [ref=e90]: "03"
+              - generic [ref=e91]: Promoted programs remain tied to the originating proof.
+            - generic [ref=e92]:
+              - generic [ref=e93]:
+                - generic [ref=e94]: Active
+                - generic [ref=e95]: "00"
+              - generic [ref=e96]: No campaign is active right now.
+            - generic [ref=e97]:
+              - generic [ref=e98]:
+                - generic [ref=e99]: Completed
+                - generic [ref=e100]: "01"
+              - generic [ref=e101]: Completed scale runs preserved for reference.
+        - generic [ref=e112]:
+          - generic [ref=e113]:
+            - generic [ref=e114]:
+              - generic [ref=e115]:
+                - heading "Event no-show follow-up video that names the session" [level=3] [ref=e116]
+                - paragraph [ref=e117]: "An experiment for no-shows: AI-personalized 8–10s video that says first name + event title + one promised takeaway, linking to the recording and a single next-step CTA: Reply with your next webinar date and typical registrant/no-show counts."
+              - generic [ref=e119]: completed
+            - generic [ref=e120]:
+              - generic [ref=e121]:
+                - generic [ref=e122]: Source f344f9
+                - generic [ref=e123]: 0 sent
+                - generic [ref=e124]: 0 replies
+                - generic [ref=e125]: 0 positive
+              - generic [ref=e127]:
+                - button "Open Data" [ref=e128] [cursor=pointer]:
+                  - generic [ref=e129]:
+                    - generic [ref=e130]:
+                      - generic [ref=e131]: Data
+                      - generic [ref=e132]: Watch
+                    - generic [ref=e134]: Audience set
+                    - generic [ref=e135]: Targeting is defined, but no lead pool is loaded yet.
+                - button "Open Deliverability" [ref=e136] [cursor=pointer]:
+                  - generic [ref=e137]:
+                    - generic [ref=e138]:
+                      - generic [ref=e139]: Deliverability
+                      - generic [ref=e140]: Idle
+                    - generic [ref=e142]: Not checked
+                    - generic [ref=e143]: No active deliverability monitor for this campaign yet.
+                - button "Open Offer quality" [ref=e144] [cursor=pointer]:
+                  - generic [ref=e145]:
+                    - generic [ref=e146]:
+                      - generic [ref=e147]: Offer quality
+                      - generic [ref=e148]: Risk
+                    - generic [ref=e150]: Not ready
+                    - generic [ref=e151]: The offer or the published flow still needs work.
+                - button "Open Replies / conversions" [ref=e152] [cursor=pointer]:
+                  - generic [ref=e153]:
+                    - generic [ref=e154]:
+                      - generic [ref=e155]: Replies / conversions
+                      - generic [ref=e156]: Idle
+                    - generic [ref=e158]: No reply signal
+                    - generic [ref=e159]: Nothing has gone out yet, so there are no reply or conversion signals.
+              - generic [ref=e160]:
+                - link "Open campaign" [ref=e161] [cursor=pointer]:
+                  - /url: /brands/brand_mlg68b9l/campaigns/camp_38411da091e643e6
+                  - img [ref=e162]
+                  - text: Open campaign
+                - button "Open flow" [ref=e167]:
+                  - img [ref=e168]
+                  - text: Open flow
+                - link "Source experiment" [ref=e172] [cursor=pointer]:
+                  - /url: /brands/brand_mlg68b9l/experiments/expt_cce1564e53f344f9
+          - generic [ref=e173]:
+            - generic [ref=e174]:
+              - generic [ref=e175]:
+                - heading "Abandoned demo signup → 30-sec personal video follow-up" [level=3] [ref=e176]
+                - paragraph [ref=e177]: "A 30-second AI-personalized video that references their company, role, and a likely use case, plus a simple booking link CTA: Reply with your booking link and 3 target fields (first name, company, use case) to get 10 videos made"
+              - generic [ref=e179]: paused
+            - generic [ref=e180]:
+              - generic [ref=e181]:
+                - generic [ref=e182]: Source c44d91
+                - generic [ref=e183]: 11 sent
+                - generic [ref=e184]: 0 replies
+                - generic [ref=e185]: 0 positive
+              - generic [ref=e187]:
+                - button "Open Data" [ref=e188] [cursor=pointer]:
+                  - generic [ref=e189]:
+                    - generic [ref=e190]:
+                      - generic [ref=e191]: Data
+                      - generic [ref=e192]: Good
+                    - generic [ref=e194]: Lead pool used
+                    - generic [ref=e195]: 11 emails have already gone out from this campaign's sourced list.
+                - button "Open Deliverability" [ref=e196] [cursor=pointer]:
+                  - generic [ref=e197]:
+                    - generic [ref=e198]:
+                      - generic [ref=e199]: Deliverability
+                      - generic [ref=e200]: Idle
+                    - generic [ref=e202]: Not checked
+                    - generic [ref=e203]: No active deliverability monitor for this campaign yet.
+                - button "Open Offer quality" [ref=e204] [cursor=pointer]:
+                  - generic [ref=e205]:
+                    - generic [ref=e206]:
+                      - generic [ref=e207]: Offer quality
+                      - generic [ref=e208]: Watch
+                    - generic [ref=e210]: Ready to test
+                    - generic [ref=e211]: Offer copy and the live conversation flow are in place.
+                - button "Open Replies / conversions" [ref=e212] [cursor=pointer]:
+                  - generic [ref=e213]:
+                    - generic [ref=e214]:
+                      - generic [ref=e215]: Replies / conversions
+                      - generic [ref=e216]: Watch
+                    - generic [ref=e218]: Waiting on signal
+                    - generic [ref=e219]: 11 emails sent. Give the thread time to produce replies.
+              - generic [ref=e220]:
+                - link "Open campaign" [ref=e221] [cursor=pointer]:
+                  - /url: /brands/brand_mlg68b9l/campaigns/camp_624bc2078cf8455f
+                  - img [ref=e222]
+                  - text: Open campaign
+                - button "Open flow" [ref=e227]:
+                  - img [ref=e228]
+                  - text: Open flow
+                - link "Source experiment" [ref=e232] [cursor=pointer]:
+                  - /url: /brands/brand_mlg68b9l/experiments/expt_bf7ab31d5ac44d91
+          - generic [ref=e233]:
+            - generic [ref=e234]:
+              - generic [ref=e235]:
+                - 'heading "Product-led activation: personalized onboarding video for new trials in first hour" [level=3] [ref=e236]'
+                - paragraph [ref=e237]: "A test where each new trial receives a personalized 15s welcome/onboarding video (name + use-case line) within the first hour; compare activation rate vs control group CTA: Can I send a 30-second walkthrough of how the first-hour personalized video test would work for your trial flow?"
+              - generic [ref=e239]: draft
+            - generic [ref=e240]:
+              - generic [ref=e241]:
+                - generic [ref=e242]: Source ba416f
+                - generic [ref=e243]: 0 sent
+                - generic [ref=e244]: 0 replies
+                - generic [ref=e245]: 0 positive
+              - generic [ref=e247]:
+                - button "Open Data" [ref=e248] [cursor=pointer]:
+                  - generic [ref=e249]:
+                    - generic [ref=e250]:
+                      - generic [ref=e251]: Data
+                      - generic [ref=e252]: Watch
+                    - generic [ref=e254]: Audience set
+                    - generic [ref=e255]: Targeting is defined, but no lead pool is loaded yet.
+                - button "Open Deliverability" [ref=e256] [cursor=pointer]:
+                  - generic [ref=e257]:
+                    - generic [ref=e258]:
+                      - generic [ref=e259]: Deliverability
+                      - generic [ref=e260]: Idle
+                    - generic [ref=e262]: Not checked
+                    - generic [ref=e263]: No active deliverability monitor for this campaign yet.
+                - button "Open Offer quality" [ref=e264] [cursor=pointer]:
+                  - generic [ref=e265]:
+                    - generic [ref=e266]:
+                      - generic [ref=e267]: Offer quality
+                      - generic [ref=e268]: Risk
+                    - generic [ref=e270]: Not ready
+                    - generic [ref=e271]: The offer or the published flow still needs work.
+                - button "Open Replies / conversions" [ref=e272] [cursor=pointer]:
+                  - generic [ref=e273]:
+                    - generic [ref=e274]:
+                      - generic [ref=e275]: Replies / conversions
+                      - generic [ref=e276]: Idle
+                    - generic [ref=e278]: No reply signal
+                    - generic [ref=e279]: Nothing has gone out yet, so there are no reply or conversion signals.
+              - generic [ref=e280]:
+                - link "Open campaign" [ref=e281] [cursor=pointer]:
+                  - /url: /brands/brand_mlg68b9l/campaigns/camp_72d006c56838454d
+                  - img [ref=e282]
+                  - text: Open campaign
+                - button "Open flow" [ref=e287]:
+                  - img [ref=e288]
+                  - text: Open flow
+                - link "Source experiment" [ref=e292] [cursor=pointer]:
+                  - /url: /brands/brand_mlg68b9l/experiments/expt_71076fc52aba416f
+  - alert [ref=e111]

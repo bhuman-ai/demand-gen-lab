@@ -2,7 +2,6 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
@@ -11,8 +10,20 @@ import { Badge } from "@/components/ui/badge";
 import { updateBrandApi } from "@/lib/client-api";
 import { trackEvent } from "@/lib/telemetry-client";
 import type { BrandRecord, DomainRow } from "@/lib/factory-types";
+import {
+  EmptyState,
+  PageIntro,
+  SectionPanel,
+  StatLedger,
+  TableHeaderCell,
+  TableShell,
+} from "@/components/ui/page-layout";
 
 const makeId = () => `domain_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+
+function formatCount(value: number) {
+  return value.toString().padStart(2, "0");
+}
 
 export default function NetworkClient({ brand }: { brand: BrandRecord }) {
   const [domains, setDomains] = useState<DomainRow[]>(brand.domains || []);
@@ -60,52 +71,53 @@ export default function NetworkClient({ brand }: { brand: BrandRecord }) {
   }, [brand.id]);
 
   return (
-    <div className="space-y-5">
-      <Card>
-        <CardHeader>
-          <CardTitle>Network</CardTitle>
-          <CardDescription>Data sources, domains, and reputation controls for {brand.name}.</CardDescription>
-        </CardHeader>
-        <CardContent className="grid gap-3 md:grid-cols-3">
-          <div>
-            <div className="text-xs text-[color:var(--muted-foreground)]">Domains</div>
-            <div className="text-lg font-semibold">{domains.length}</div>
-          </div>
-          <div>
-            <div className="text-xs text-[color:var(--muted-foreground)]">Warming</div>
-            <div className="text-lg font-semibold">{domains.filter((item) => item.status === "warming").length}</div>
-          </div>
-          <div>
-            <div className="text-xs text-[color:var(--muted-foreground)]">Risky</div>
-            <div className="text-lg font-semibold">{riskyCount}</div>
-          </div>
-        </CardContent>
-      </Card>
+    <div className="space-y-8">
+      <PageIntro
+        eyebrow={`${brand.name} / network`}
+        title="Track the sender infrastructure that outbound depends on."
+        description="Domains, warmup state, forwarding, and reputation need to live in the same product as the campaigns using them."
+        aside={
+          <StatLedger
+            items={[
+              {
+                label: "Domains",
+                value: formatCount(domains.length),
+                detail: domains.length ? "All network records attached to this brand." : "No sending domain tracked yet.",
+              },
+              {
+                label: "Warming",
+                value: formatCount(domains.filter((item) => item.status === "warming").length),
+                detail: "Domains still moving into production readiness.",
+              },
+              {
+                label: "Risky",
+                value: formatCount(riskyCount),
+                detail: riskyCount ? "These domains need attention before scale." : "No flagged domain at the moment.",
+              },
+            ]}
+          />
+        }
+      />
 
       {!domains.length ? (
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Start Here</CardTitle>
-            <CardDescription>
-              Add the sending domains you care about and monitor warmup and reputation.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="flex flex-wrap gap-2">
+        <EmptyState
+          title="No domains tracked yet."
+          description="Add the sending domains you care about and monitor warmup, forwarding, and reputation from the same desk."
+          actions={
+            <>
             <Button asChild size="sm" variant="outline">
               <Link href="/settings/outreach">Outreach Settings</Link>
             </Button>
             <Button asChild size="sm" variant="outline">
               <Link href={`/brands/${brand.id}/campaigns`}>Open Campaigns</Link>
             </Button>
-          </CardContent>
-        </Card>
+            </>
+          }
+        />
       ) : null}
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Add Domain</CardTitle>
-        </CardHeader>
-        <CardContent className="grid gap-3 md:grid-cols-5">
+      <SectionPanel title="Add domain" description="Record a sender domain and its current health without leaving the brand.">
+        <div className="grid gap-3 md:grid-cols-5">
           <div className="md:col-span-2">
             <Label>Domain</Label>
             <Input value={draft.domain} onChange={(event) => setDraft({ ...draft, domain: event.target.value })} />
@@ -148,35 +160,37 @@ export default function NetworkClient({ brand }: { brand: BrandRecord }) {
               Add Domain
             </Button>
           </div>
-        </CardContent>
-      </Card>
+        </div>
+      </SectionPanel>
 
-      <Card>
-        <CardHeader className="flex flex-row items-center justify-between gap-3">
-          <CardTitle className="text-base">Domain Table</CardTitle>
+      <SectionPanel
+        title="Domain register"
+        description="Monitor forwarding, connection state, and reputation across the sender inventory."
+        actions={
           <Input
             placeholder="Filter domains"
             value={query}
             onChange={(event) => setQuery(event.target.value)}
-            className="max-w-xs"
+            className="w-[18rem]"
           />
-        </CardHeader>
-        <CardContent className="overflow-x-auto">
+        }
+      >
+        <TableShell>
           <table className="min-w-full text-sm">
             <thead>
-              <tr className="text-left text-xs uppercase tracking-wide text-[color:var(--muted-foreground)]">
-                <th className="pb-2">Domain</th>
-                <th className="pb-2">Role</th>
-                <th className="pb-2">Forwarding</th>
-                <th className="pb-2">Customer.io</th>
-                <th className="pb-2">Status</th>
-                <th className="pb-2">Warmup</th>
-                <th className="pb-2">Reputation</th>
+              <tr>
+                <TableHeaderCell>Domain</TableHeaderCell>
+                <TableHeaderCell>Role</TableHeaderCell>
+                <TableHeaderCell>Forwarding</TableHeaderCell>
+                <TableHeaderCell>Customer.io</TableHeaderCell>
+                <TableHeaderCell>Status</TableHeaderCell>
+                <TableHeaderCell>Warmup</TableHeaderCell>
+                <TableHeaderCell>Reputation</TableHeaderCell>
               </tr>
             </thead>
             <tbody>
               {filtered.map((item) => (
-                <tr key={item.id} className="border-t border-[color:var(--border)]">
+                <tr key={item.id} className="border-t border-[color:var(--border)] hover:bg-[color:var(--surface-muted)]">
                   <td className="py-2">{item.domain}</td>
                   <td className="py-2">{roleLabel(item)}</td>
                   <td className="py-2">{item.forwardingTargetUrl || "n/a"}</td>
@@ -193,21 +207,21 @@ export default function NetworkClient({ brand }: { brand: BrandRecord }) {
             </tbody>
           </table>
           {!filtered.length ? <div className="py-6 text-sm text-[color:var(--muted-foreground)]">No domains found.</div> : null}
-        </CardContent>
-      </Card>
+        </TableShell>
+      </SectionPanel>
 
       {error ? <div className="text-sm text-[color:var(--danger)]">{error}</div> : null}
 
-      <Card>
-        <CardContent className="flex flex-wrap gap-2 py-4">
+      <SectionPanel>
+        <div className="flex flex-wrap gap-2">
           <Button asChild variant="outline">
             <Link href={`/brands/${brand.id}`}>Back to Brand Home</Link>
           </Button>
           <Button asChild>
             <Link href={`/brands/${brand.id}/campaigns`}>Go to Campaigns</Link>
           </Button>
-        </CardContent>
-      </Card>
+        </div>
+      </SectionPanel>
     </div>
   );
 }

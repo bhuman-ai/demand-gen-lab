@@ -1,0 +1,382 @@
+- generic [ref=e1]:
+  - generic [ref=e3]:
+    - complementary [ref=e4]:
+      - link "Factory Brand Command" [ref=e5] [cursor=pointer]:
+        - /url: /
+        - generic [ref=e6]: Factory
+        - generic [ref=e7]: Brand Command
+      - navigation [ref=e8]:
+        - link "Experiments" [ref=e9] [cursor=pointer]:
+          - /url: /brands/brand_mlg68b9l/experiments
+          - img [ref=e10]
+          - text: Experiments
+        - link "Campaigns" [ref=e14] [cursor=pointer]:
+          - /url: /brands/brand_mlg68b9l/campaigns
+          - img [ref=e15]
+          - text: Campaigns
+        - link "Network" [ref=e17] [cursor=pointer]:
+          - /url: /brands/brand_mlg68b9l/network
+          - img [ref=e18]
+          - text: Network
+        - link "Leads" [ref=e23] [cursor=pointer]:
+          - /url: /brands/brand_mlg68b9l/leads
+          - img [ref=e24]
+          - text: Leads
+        - link "Inbox" [ref=e27] [cursor=pointer]:
+          - /url: /brands/brand_mlg68b9l/inbox
+          - img [ref=e28]
+          - text: Inbox
+      - generic [ref=e31]:
+        - generic [ref=e32]: Tools
+        - navigation [ref=e33]:
+          - link "Settings" [ref=e34] [cursor=pointer]:
+            - /url: /settings/outreach
+            - img [ref=e35]
+            - text: Settings
+          - link "Logic" [ref=e38] [cursor=pointer]:
+            - /url: /logic
+            - img [ref=e39]
+            - text: Logic
+          - link "Doctor" [ref=e41] [cursor=pointer]:
+            - /url: /doctor
+            - img [ref=e42]
+            - text: Doctor
+    - main [ref=e44]:
+      - generic [ref=e46]:
+        - generic [ref=e47]:
+          - combobox [ref=e50]:
+            - option "BHuman | AI personalized videos at scale" [selected]
+          - generic [ref=e52]: Factory > Brand > Experiments > Experiment
+          - heading "Experiment" [level=1] [ref=e53]
+        - generic [ref=e54]:
+          - link "Settings" [ref=e55] [cursor=pointer]:
+            - /url: /settings/outreach
+            - img [ref=e56]
+            - text: Settings
+          - generic [ref=e59]:
+            - button "Light theme" [ref=e60]:
+              - img [ref=e61]
+            - button "Dark theme" [ref=e67]:
+              - img [ref=e68]
+            - button "System theme" [ref=e70]:
+              - img [ref=e71]
+      - generic [ref=e83]:
+        - generic [ref=e85]:
+          - generic [ref=e86]:
+            - heading "BHuman | AI personalized videos at scale · Abandoned demo signup → 30-sec personal video follow-up" [level=3] [ref=e87]
+            - paragraph [ref=e88]: "Stage-based flow: Setup -> Prospects -> Messaging -> Launch."
+          - generic [ref=e89]:
+            - generic [ref=e90]: "Status: completed"
+            - generic [ref=e91]: "Sent: 0"
+            - generic [ref=e92]: "Replies: 0"
+            - generic [ref=e93]: "Positive: 0"
+        - generic [ref=e94]:
+          - generic [ref=e95]:
+            - heading "Workflow" [level=3] [ref=e96]
+            - paragraph [ref=e97]: Only current stage content is shown below.
+          - generic [ref=e98]:
+            - generic [ref=e99]:
+              - generic [ref=e100]: 3/4 stages complete
+              - generic [ref=e101]: 75% complete
+            - generic [ref=e102]:
+              - button "0. Setup done" [ref=e103]:
+                - generic [ref=e104]:
+                  - generic [ref=e105]: 0. Setup
+                  - generic [ref=e106]: done
+              - button "1. Prospects current" [ref=e156]:
+                - generic [ref=e108]:
+                  - generic [ref=e109]: 1. Prospects
+                  - generic [ref=e110]: current
+              - button "2. Messaging done" [ref=e111]:
+                - generic [ref=e112]:
+                  - generic [ref=e113]: 2. Messaging
+                  - generic [ref=e114]: done
+              - button "3. Launch done" [ref=e115]:
+                - generic [ref=e116]:
+                  - generic [ref=e117]: 3. Launch
+                  - generic [ref=e118]: done
+        - generic [ref=e157]:
+          - generic [ref=e158]:
+            - heading "Stage 1 · Prospects" [level=3] [ref=e159]
+            - paragraph [ref=e160]: Reach 20 qualified leads with real work emails to pass this gate.
+          - generic [ref=e161]:
+            - generic [ref=e162]:
+              - generic [ref=e163]:
+                - generic [ref=e164]:
+                  - generic [ref=e165]: Prospect Gate
+                  - generic [ref=e166]: Only leads with real work emails count.
+                - generic [ref=e167]: In progress
+              - generic [ref=e169]:
+                - generic [ref=e172]: 65%
+                - generic [ref=e173]:
+                  - generic [ref=e174]: 13/20 verified leads
+                  - generic [ref=e175]: 7 remaining to unlock Messaging
+              - generic [ref=e176]:
+                - generic [ref=e177]:
+                  - generic [ref=e178]: Valid leads
+                  - generic [ref=e179]: "13"
+                - generic [ref=e180]:
+                  - generic [ref=e181]: Remaining
+                  - generic [ref=e182]: "7"
+                - generic [ref=e183]:
+                  - generic [ref=e184]: Total candidates
+                  - generic [ref=e185]: "13"
+              - generic [ref=e186]:
+                - generic [ref=e187]: "Runs checked: 1"
+                - generic [ref=e188]: "Source owner: expt_bf7ab31d5ac44d91"
+              - generic [ref=e189]: Gate blocked. 7 more verified work emails needed.
+            - generic [ref=e190]:
+              - generic [ref=e191]: Lead Input
+              - generic [ref=e193]:
+                - button "Source Automatically Platform finds and verifies prospects." [active] [ref=e194]:
+                  - generic [ref=e195]: Source Automatically
+                  - generic [ref=e196]: Platform finds and verifies prospects.
+                - button "Import CSV Upload your own leads with identity data." [ref=e197]:
+                  - generic [ref=e198]: Import CSV
+                  - generic [ref=e199]: Upload your own leads with identity data.
+              - generic [ref=e200]: Pick one path first. You can switch at any time.
+            - generic [ref=e201]:
+              - generic [ref=e202]:
+                - generic [ref=e561]:
+                  - generic [ref=e562]: Auto-source prospects
+                  - generic [ref=e563]: Runs repeated attempts until quality target is met or a stop condition is reached.
+                - button "Auto-sourcing..." [disabled]:
+                  - img
+                  - text: Auto-sourcing...
+              - generic [ref=e397]: "Attempt 3/6: launching sourcing run..."
+            - generic [ref=e212]:
+              - generic [ref=e213]:
+                - generic [ref=e214]: Current Leads
+                - generic [ref=e215]:
+                  - generic [ref=e216]: "Valid in preview: 13"
+                  - generic [ref=e217]: "Missing email: 0"
+                  - generic [ref=e218]: Showing up to 20 rows
+              - generic [ref=e219]:
+                - generic [ref=e564]:
+                  - generic [ref=e565]:
+                    - generic [ref=e566]: Akshath Dorai
+                    - generic [ref=e567]: Valid
+                  - generic [ref=e568]: akshath.dorai@zoominfo.com
+                  - generic [ref=e569]: Principal Product Marketing Manager at ZoomInfo
+                - generic [ref=e570]:
+                  - generic [ref=e571]:
+                    - generic [ref=e572]: Aleksei K.
+                    - generic [ref=e573]: Valid
+                  - generic [ref=e574]: aleksei@spotware.com
+                  - generic [ref=e575]: GM CTrader Store at Spotware Systems
+                - generic [ref=e576]:
+                  - generic [ref=e577]:
+                    - generic [ref=e578]: Carlyn Angus
+                    - generic [ref=e579]: Valid
+                  - generic [ref=e580]: carlyn.angus@planful.com
+                  - generic [ref=e581]: Director Of Demand Generation at Planful
+                - generic [ref=e582]:
+                  - generic [ref=e583]:
+                    - generic [ref=e584]: Chaofan Wu
+                    - generic [ref=e585]: Valid
+                  - generic [ref=e586]: chaofan@edda.co
+                  - generic [ref=e587]: Revenue Operations Manager at Edda
+                - generic [ref=e588]:
+                  - generic [ref=e589]:
+                    - generic [ref=e590]: Colin Haley
+                    - generic [ref=e591]: Valid
+                  - generic [ref=e592]: colin.haley@zoominfo.com
+                  - generic [ref=e593]: Sr. Product Manager, Digital Commerce PLG Lifecycle at ZoomInfo
+                - generic [ref=e594]:
+                  - generic [ref=e595]:
+                    - generic [ref=e596]: Faye Rasmussen
+                    - generic [ref=e597]: Valid
+                  - generic [ref=e598]: faye.rasmussen@validity.com
+                  - generic [ref=e599]: Demand Generation Manager at Validity Inc.
+                - generic [ref=e600]:
+                  - generic [ref=e601]:
+                    - generic [ref=e602]: Jacklyn Dubois
+                    - generic [ref=e603]: Valid
+                  - generic [ref=e604]: jacklyn@grafana.com
+                  - generic [ref=e605]: Interim Head Of Self-Serve (PLG) at Grafana Labs
+                - generic [ref=e606]:
+                  - generic [ref=e607]:
+                    - generic [ref=e608]: Kota Miyamoto
+                    - generic [ref=e609]: Valid
+                  - generic [ref=e610]: kota@productledalliance.com
+                  - generic [ref=e611]: PRO Member at Product Marketing Alliance
+                - generic [ref=e612]:
+                  - generic [ref=e613]:
+                    - generic [ref=e614]: Laura Lefèvre
+                    - generic [ref=e615]: Valid
+                  - generic [ref=e616]: laura@momentslab.com
+                  - generic [ref=e617]: VP Marketing at Moments Lab
+                - generic [ref=e618]:
+                  - generic [ref=e619]:
+                    - generic [ref=e620]: Michal Glinka
+                    - generic [ref=e621]: Valid
+                  - generic [ref=e622]: michal@atlassian.com
+                  - generic [ref=e623]: Senior GTM Marketing Manager - Data And Strategy at Atlassian
+                - generic [ref=e624]:
+                  - generic [ref=e625]:
+                    - generic [ref=e626]: Prashant Jha
+                    - generic [ref=e627]: Valid
+                  - generic [ref=e628]: prashant.jha@loopwork.co
+                  - generic [ref=e629]: Demand Generation Manager- US at Loop Subscriptions
+                - generic [ref=e630]:
+                  - generic [ref=e631]:
+                    - generic [ref=e632]: Shelly Eisen-Livneh
+                    - generic [ref=e633]: Valid
+                  - generic [ref=e634]: shelly@cloudbees.com
+                  - generic [ref=e635]: Sr. Manager Of Product Marketing (Head Of PLG PLS, Commercial) at CloudBees
+                - generic [ref=e636]:
+                  - generic [ref=e637]:
+                    - generic [ref=e638]: Wes Bush
+                    - generic [ref=e639]: Valid
+                  - generic [ref=e640]: wes@productled.com
+                  - generic [ref=e641]: CEO Founder at ProductLed
+            - group [ref=e256]:
+              - generic "Advanced Diagnostics completed Rejections, verifier failures, run trace" [ref=e257] [cursor=pointer]:
+                - generic [ref=e258]:
+                  - text: Advanced Diagnostics
+                  - generic [ref=e259]: completed
+                - generic [ref=e260]: Rejections, verifier failures, run trace
+              - generic [ref=e264]:
+                - generic [ref=e265]:
+                  - generic [ref=e266]: Why leads were rejected
+                  - generic [ref=e267]:
+                    - generic [ref=e268]:
+                      - generic [ref=e269]: Quality-policy rejections
+                      - generic [ref=e270]:
+                        - generic [ref=e642]:
+                          - generic [ref=e643]:
+                            - generic [ref=e644]: Invalid email format
+                            - generic [ref=e645]: "90"
+                          - generic [ref=e646]: Tighten source quality and require verified work emails.
+                        - generic [ref=e647]:
+                          - generic [ref=e648]:
+                            - generic [ref=e649]: Below confidence threshold
+                            - generic [ref=e650]: "7"
+                          - generic [ref=e651]: Narrow role + company constraints for higher-confidence hits.
+                        - generic [ref=e652]:
+                          - generic [ref=e653]:
+                            - generic [ref=e654]: Missing email or usable company domain
+                            - generic [ref=e655]: "1"
+                          - generic [ref=e656]: Adjust sourcing query toward profiles with company domains, then rerun email enrichment.
+                    - generic [ref=e281]:
+                      - generic [ref=e282]: Suppression filters
+                      - generic [ref=e657]:
+                        - generic [ref=e658]:
+                          - generic [ref=e659]: Invalid email format
+                          - generic [ref=e660]: "1"
+                        - generic [ref=e661]: Tighten source quality and require verified work emails.
+                  - generic [ref=e289]:
+                    - generic [ref=e290]: Email enrichment
+                    - generic [ref=e291]: Attempted 21 · matched 13 · failed 8 · provider emailfinder.batch
+                    - generic [ref=e292]:
+                      - generic [ref=e293]: Failed reasons
+                      - generic [ref=e662]:
+                        - generic [ref=e663]: Every generated pattern was invalid
+                        - generic [ref=e664]: "6"
+                      - generic [ref=e478]:
+                        - generic [ref=e479]: Company domain has no working mail route (MX missing)
+                        - generic [ref=e480]: "2"
+                    - generic [ref=e303]:
+                      - generic [ref=e304]: Sample failures
+                      - generic [ref=e665]:
+                        - generic [ref=e666]: Dee A. · talentcompany.io
+                        - generic [ref=e667]: Every generated pattern was invalid · status=invalid
+                        - generic [ref=e668]: "Top attempt: dee@talentcompany.io (invalid/high) · status=invalid"
+                      - generic [ref=e669]:
+                        - generic [ref=e670]: Krzysztof Wróblewski · text.com
+                        - generic [ref=e671]: Every generated pattern was invalid · status=invalid
+                        - generic [ref=e672]: "Top attempt: krzysztof@text.com (invalid/high) · status=invalid"
+                      - generic [ref=e673]:
+                        - generic [ref=e674]: Divyanshu Kumar Mishra · zimyo.com
+                        - generic [ref=e675]: Every generated pattern was invalid · status=invalid
+                        - generic [ref=e676]: "Top attempt: divyanshu@zimyo.com (invalid/high) · status=invalid"
+                      - generic [ref=e677]:
+                        - generic [ref=e678]: Christian Glason · firebolt.io
+                        - generic [ref=e679]: Every generated pattern was invalid · status=invalid
+                        - generic [ref=e680]: "Top attempt: christian@firebolt.io (invalid/high) · status=invalid"
+                      - generic [ref=e681]:
+                        - generic [ref=e682]: Pankaj U. · leadsive.com
+                        - generic [ref=e683]: Company domain has no working mail route (MX missing) · ENODATA
+                        - generic [ref=e684]: "Top attempt: pankaj@leadsive.com (invalid/high) · ENODATA"
+                      - generic [ref=e685]:
+                        - generic [ref=e686]: Deelaka Alawathugoda · decode.agency
+                        - generic [ref=e687]: Every generated pattern was invalid · status=invalid
+                        - generic [ref=e688]: "Top attempt: deelaka@decode.agency (invalid/high) · status=invalid"
+                      - generic [ref=e689]:
+                        - generic [ref=e690]: Pratham Karambe · revvknewtech.com
+                        - generic [ref=e691]: Company domain has no working mail route (MX missing) · ENODATA
+                        - generic [ref=e692]: "Top attempt: pratham@revvknewtech.com (invalid/high) · ENODATA"
+                      - generic [ref=e693]:
+                        - generic [ref=e694]: Joanne Hurley · joanne-hurley.com
+                        - generic [ref=e695]: Every generated pattern was invalid · status=invalid
+                        - generic [ref=e696]: "Top attempt: joanne@joanne-hurley.com (invalid/high) · status=invalid"
+                - generic [ref=e337]:
+                  - generic [ref=e338]:
+                    - generic [ref=e339]: Run Status
+                    - generic [ref=e340]:
+                      - generic [ref=e341]: Run 724b71 · completed · completed
+                      - generic [ref=e342]: "Latest event: job_completed"
+                  - generic [ref=e343]:
+                    - generic [ref=e344]: Sourcing Trace
+                    - generic [ref=e345]:
+                      - generic [ref=e346]: "Provider: Exa (no Apify fallback)"
+                      - generic [ref=e347]:
+                        - generic [ref=e348]: Selected chain
+                        - generic [ref=e349]:
+                          - generic [ref=e350]: 1. prospect_discovery -> exa.company.search
+                          - generic [ref=e351]: 2. prospect_discovery -> exa.people.search
+                          - generic [ref=e352]: 3. email_discovery -> emailfinder.batch
+                      - generic [ref=e353]: "Budget used: $0.03"
+                      - generic [ref=e354]:
+                        - generic [ref=e355]: Queries used
+                        - generic [ref=e356]:
+                          - generic [ref=e697]:
+                            - generic [ref=e698]: email_discovery
+                            - generic [ref=e699]: EmailFinder batch matched 13/21
+                            - generic [ref=e700]: (13 hits)
+                          - generic [ref=e701]:
+                            - generic [ref=e702]: prospect_discovery
+                            - generic [ref=e703]: Moments Lab official website
+                            - generic [ref=e704]: (1 hits)
+                          - generic [ref=e705]:
+                            - generic [ref=e706]: prospect_discovery
+                            - generic [ref=e707]: Spotware Systems official website
+                            - generic [ref=e708]: (1 hits)
+                          - generic [ref=e709]:
+                            - generic [ref=e710]: prospect_discovery
+                            - generic [ref=e711]: ZoomInfo official website
+                            - generic [ref=e712]: (1 hits)
+                          - generic [ref=e713]:
+                            - generic [ref=e714]: prospect_discovery
+                            - generic [ref=e715]: Joanne Hurley Growth official website
+                            - generic [ref=e716]: (1 hits)
+                          - generic [ref=e717]:
+                            - generic [ref=e718]: prospect_discovery
+                            - generic [ref=e719]: Greg Stoutenburg official website
+                            - generic [ref=e720]: (1 hits)
+                          - generic [ref=e721]:
+                            - generic [ref=e722]: prospect_discovery
+                            - generic [ref=e723]: Grafana Labs official website
+                            - generic [ref=e724]: (1 hits)
+                          - generic [ref=e725]:
+                            - generic [ref=e726]: prospect_discovery
+                            - generic [ref=e727]: Revvknew Media official website
+                            - generic [ref=e728]: (1 hits)
+                          - generic [ref=e729]:
+                            - generic [ref=e730]: prospect_discovery
+                            - generic [ref=e731]: Edda official website
+                            - generic [ref=e732]: (1 hits)
+                          - generic [ref=e733]:
+                            - generic [ref=e734]: prospect_discovery
+                            - generic [ref=e735]: Policybazaar for Business official website
+                            - generic [ref=e736]: (1 hits)
+        - generic [ref=e150]:
+          - generic [ref=e151]: Stage 1 · Prospects
+          - generic [ref=e152]:
+            - button "Back" [ref=e261]:
+              - img [ref=e262]
+              - text: Back
+            - button "Next" [disabled]:
+              - text: Next
+              - img
+  - alert [ref=e84]

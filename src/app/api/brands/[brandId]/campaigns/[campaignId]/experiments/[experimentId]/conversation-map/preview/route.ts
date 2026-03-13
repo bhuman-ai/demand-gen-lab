@@ -89,16 +89,16 @@ export async function POST(
   const sampleLead = asRecord(body.sampleLead);
   const sampleReply = asRecord(body.sampleReply);
   const sourcedLead = sourcedPreviewLeads.leads[0] ?? null;
-  const sampleLeadEmail = String(sampleLead.email ?? sourcedLead?.email ?? "").trim();
   const sampleLeadName = String(sampleLead.name ?? sourcedLead?.name ?? "").trim();
   const sampleLeadCompany = String(sampleLead.company ?? sourcedLead?.company ?? "").trim();
   const sampleLeadTitle = String(sampleLead.title ?? sourcedLead?.title ?? "").trim();
   const sampleLeadDomain = String(sampleLead.domain ?? sourcedLead?.domain ?? "").trim();
+  const sampleLeadEmail = String(sampleLead.email ?? sourcedLead?.email ?? "").trim();
   if (!sampleLeadEmail) {
     return NextResponse.json(
       {
-        error: "No sourced leads available for preview",
-        hint: "Launch lead sourcing for this experiment, then retry preview once real leads are ingested.",
+        error: "No sourced leads with real work email available for preview",
+        hint: "Run sourcing until at least one lead has a real work email, then retry preview.",
       },
       { status: 422 }
     );
@@ -155,6 +155,16 @@ export async function POST(
         intent,
         confidence: Math.max(0, Math.min(1, Number(sampleReply.confidence ?? 0.75) || 0.75)),
         priorNodePath: [graph.startNodeId, nodeId].filter(Boolean),
+        history: sampleReply.body
+          ? [
+              {
+                direction: "inbound" as const,
+                subject: String(sampleReply.subject ?? "").trim(),
+                body: String(sampleReply.body ?? "").trim(),
+                at: new Date().toISOString(),
+              },
+            ]
+          : [],
       },
       safety: {
         maxDepth: graph.maxDepth,

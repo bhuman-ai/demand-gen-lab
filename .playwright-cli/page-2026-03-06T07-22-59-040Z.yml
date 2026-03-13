@@ -1,0 +1,143 @@
+- generic [ref=e1]:
+  - main [ref=e2]:
+    - generic [ref=e3]:
+      - generic [ref=e5]:
+        - img "Mobbin" [ref=e6]
+        - heading "Welcome back" [level=2] [ref=e9]
+        - generic [ref=e10]:
+          - generic [ref=e11]:
+            - button "Continue with Google" [ref=e12] [cursor=pointer]:
+              - generic [ref=e13]:
+                - img [ref=e14]
+                - generic [ref=e20]: Continue with Google
+            - button "See other options" [ref=e21] [cursor=pointer]:
+              - generic [ref=e23]: See other options
+          - generic [ref=e24]:
+            - separator [ref=e25]
+            - heading "or" [level=3] [ref=e26]
+            - separator [ref=e27]
+          - generic [ref=e28]:
+            - textbox "Email" [ref=e32]:
+              - /placeholder: Enter email address
+              - text: cmuxvbhz1724@outlook.com
+            - textbox "Password" [active] [ref=e43]:
+              - /placeholder: Enter password
+            - button "Continue" [ref=e33] [cursor=pointer]:
+              - generic [ref=e35]: Continue
+            - paragraph [ref=e36]:
+              - text: By continuing, you agree to Mobbin’s
+              - link "Terms of Service" [ref=e37] [cursor=pointer]:
+                - /url: /terms
+              - text: and
+              - link "Privacy Policy" [ref=e38] [cursor=pointer]:
+                - /url: /privacy
+              - text: .
+            - button "Forgot your password?" [ref=e45] [cursor=pointer]
+      - generic:
+        - generic:
+          - generic:
+            - generic:
+              - img "screen"
+            - generic:
+              - img "screen"
+            - generic:
+              - img "screen"
+            - generic:
+              - img "screen"
+            - generic:
+              - img "screen"
+            - generic:
+              - img "screen"
+          - generic:
+            - generic:
+              - img "screen"
+            - generic:
+              - img "screen"
+            - generic:
+              - img "screen"
+            - generic:
+              - img "screen"
+            - generic:
+              - img "screen"
+            - generic:
+              - img "screen"
+          - generic:
+            - generic:
+              - img "screen"
+            - generic:
+              - img "screen"
+            - generic:
+              - img "screen"
+            - generic:
+              - img "screen"
+            - generic:
+              - img "screen"
+            - generic:
+              - img "screen"
+          - generic:
+            - generic:
+              - img "screen"
+            - generic:
+              - img "screen"
+            - generic:
+              - img "screen"
+            - generic:
+              - img "screen"
+            - generic:
+              - img "screen"
+            - generic:
+              - img "screen"
+          - generic:
+            - generic:
+              - img "screen"
+            - generic:
+              - img "screen"
+            - generic:
+              - img "screen"
+            - generic:
+              - img "screen"
+            - generic:
+              - img "screen"
+            - generic:
+              - img "screen"
+          - generic:
+            - generic:
+              - img "screen"
+            - generic:
+              - img "screen"
+            - generic:
+              - img "screen"
+            - generic:
+              - img "screen"
+            - generic:
+              - img "screen"
+            - generic:
+              - img "screen"
+          - generic:
+            - generic:
+              - img "screen"
+            - generic:
+              - img "screen"
+            - generic:
+              - img "screen"
+            - generic:
+              - img "screen"
+            - generic:
+              - img "screen"
+            - generic:
+              - img "screen"
+          - generic:
+            - generic:
+              - img "screen"
+            - generic:
+              - img "screen"
+            - generic:
+              - img "screen"
+            - generic:
+              - img "screen"
+            - generic:
+              - img "screen"
+            - generic:
+              - img "screen"
+  - region "Notifications alt+T"
+  - alert [ref=e39]

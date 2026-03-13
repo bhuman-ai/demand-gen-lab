@@ -1,0 +1,203 @@
+{
+  "candidates": [
+    "don@bhuman.ai",
+    "don.bosco@bhuman.ai",
+    "don_bosco@bhuman.ai",
+    "don-bosco@bhuman.ai",
+    "donbosco@bhuman.ai",
+    "dbosco@bhuman.ai",
+    "donb@bhuman.ai",
+    "d.bosco@bhuman.ai"
+  ],
+  "generated_at_utc": "2026-03-02T19:45:10.440404+00:00",
+  "input": {
+    "domain": "bhuman.ai",
+    "name": "Don Bosco"
+  },
+  "osint": {
+    "candidate_scores": [
+      {
+        "email": "don@bhuman.ai",
+        "exact_mentions": 0,
+        "mention_urls": [],
+        "osint_confidence": 0.0,
+        "query": "\"don@bhuman.ai\"",
+        "result_count": 6
+      },
+      {
+        "email": "don.bosco@bhuman.ai",
+        "exact_mentions": 0,
+        "mention_urls": [],
+        "osint_confidence": 0.0,
+        "query": "\"don.bosco@bhuman.ai\"",
+        "result_count": 6
+      },
+      {
+        "email": "don_bosco@bhuman.ai",
+        "exact_mentions": 0,
+        "mention_urls": [],
+        "osint_confidence": 0.0,
+        "query": "\"don_bosco@bhuman.ai\"",
+        "result_count": 6
+      },
+      {
+        "email": "don-bosco@bhuman.ai",
+        "exact_mentions": 0,
+        "mention_urls": [],
+        "osint_confidence": 0.0,
+        "query": "\"don-bosco@bhuman.ai\"",
+        "result_count": 6
+      },
+      {
+        "email": "donbosco@bhuman.ai",
+        "exact_mentions": 0,
+        "mention_urls": [],
+        "osint_confidence": 0.0,
+        "query": "\"donbosco@bhuman.ai\"",
+        "result_count": 6
+      },
+      {
+        "email": "dbosco@bhuman.ai",
+        "exact_mentions": 0,
+        "mention_urls": [],
+        "osint_confidence": 0.0,
+        "query": "\"dbosco@bhuman.ai\"",
+        "result_count": 6
+      },
+      {
+        "email": "donb@bhuman.ai",
+        "exact_mentions": 0,
+        "mention_urls": [],
+        "osint_confidence": 0.0,
+        "query": "\"donb@bhuman.ai\"",
+        "result_count": 6
+      },
+      {
+        "email": "d.bosco@bhuman.ai",
+        "exact_mentions": 0,
+        "mention_urls": [],
+        "osint_confidence": 0.0,
+        "query": "\"d.bosco@bhuman.ai\"",
+        "result_count": 6
+      }
+    ],
+    "discovered_domain_emails": [],
+    "discovery_queries": [
+      {
+        "query": "\"Don Bosco\" \"@bhuman.ai\"",
+        "result_count": 6,
+        "results": [
+          {
+            "description": "\u5bf9\u4e8eDon \u7684\u7ffb\u8bd1\uff0c\u8bd1\u6797\u7248\u7684\u201c\u8001\u5934\u5b50\u201d\u542c\u7740\u602a\u602a\u7684\uff0c\u8bfb\u5ba2\u7248\u7684\u201c\u5510\u201d\u867d\u7136\u4f5c\u4e3a\u97f3\u8bd1\u8868\u9762\u4e0a\u6ca1\u4ec0\u4e48\u95ee\u9898\uff0c\u4f46\u662f\u5374\u7ec8\u5f52\u611f\u89c9\u5dee\u4e9b\u610f\u601d\uff0c\u7279\u522b\u662f\u539f\u6587\u4e2d\u4e0d\u5c11\u5730\u65b9\u662f\u628aDon \u5f53\u505a\u4e00\u4e2a\u4e13\u6709\u540d\u8bcd\u5355\u72ec\u8bf4\u7684\uff0c\u8fd9\u79cd\u97f3\u8bd1\u5c31\u66f4\u4e0d\u80fd\u53cd\u6620\u51fa\u8be5\u8bcd\u7684\u610f\u4e49\u4e86\u3002",
+            "link": "https://www.zhihu.com/question/27455335",
+            "pub_date": "Paz, 01 Mar 2026 19:17:00 GMT",
+            "title": "\u6700\u8fd1\u8bfb\u4e86\u6559\u7236\uff0c\u4e0d\u660e\u767d\"\u5510\"\u8fd9\u4e2a\u79f0\u53f7\u5728\u7f8e\u56fd\u662f\u4ec0\u4e48\u610f\u601d? - \u77e5\u4e4e"
+          },
+          {
+            "description": "don \u82f1 [d\u0252n] n. \u5148\u751f\uff0c\u9601\u4e0b\uff1b\u6307\u5bfc\u6559\u5e08\uff0c\u5927\u5b66\u6559\u5e08 vt. \u7a7f\u4e0a n. (Don)\u4eba\u540d\uff1b (\u7f05)\u987f\uff1b (\u82f1)\u5510 (\u7537\u5b50\u6559\u540dDonald \u7684\u6635\u79f0) \u77ed\u8bed Don McLean \u5510\u00b7\u9ea6\u514b\u6797 ; \u5510\u9ea6\u514b\u6797 ; \u5510\u00b7\u9ea6\u514b\u83b1\u6069 ; \u9ea6\u514b\u6797 Don Carlos \u5510\u00b7\u5361\u6d1b\u65af ; \u5510\u00b7\u5361\u6d1b ; \u5361\u6d1b\u65af ; \u5510\u5361\u6d1b\u65af Don Brash \u5510\u7eb3\u5fb7 \u00b7\u5e03\u62c9\u4ec0 ; \u5e03\u62c9\u4ec0 ; \u5e03\u83b1\u58eb \u6269\u5c55\u8d44\u6599 \u540c\u8fd1\u4e49\u8bcd 1\u3001sir \u82f1 [s\u025c\u02d0 ...",
+            "link": "https://zhidao.baidu.com/question/579505861.html",
+            "pub_date": "Paz, 01 Mar 2026 02:06:00 GMT",
+            "title": "Don\u662f\u4ec0\u4e48\u610f\u601d\uff1f - \u767e\u5ea6\u77e5\u9053"
+          },
+          {
+            "description": "Seg\u00fan el diccionario, las palabras don y do\u00f1a tienen la siguiente etimolog\u00eda: don, do\u00f1a Del lat. dom\u012dnus 'se\u00f1or'; la forma f., del lat. dom\u012dna. Sin embargo, aunque su origen queda claro lo q...",
+            "link": "https://spanish.stackexchange.com/questions/24095/c%c3%b3mo-se-originaron-las-formas-don-y-do%c3%b1a",
+            "pub_date": "Cum, 27 \u015eub 2026 02:01:00 GMT",
+            "title": "\u00bfC\u00f3mo se originaron las formas \"don\" y \"do\u00f1a\"?"
+          },
+          {
+            "description": "not\u548cdon't\u7684\u533a\u522b\u5728\u82f1\u8bed\u4e2d\uff0c\"not\"\u548c\"don't\"\u4f5c\u4e3a\u5426\u5b9a\u5f62\u5f0f\u7684\u4f7f\u7528\u6709\u7740\u660e\u786e\u7684\u533a\u5206\u3002not\u662f\u7531\u526f\u8bcd\"not\"\u76f4\u63a5\u52a0\u5728\u52a8\u8bcd\u524d\u6784\u6210\u7684\u5426\u5b9a\u5f62\u5f0f\uff0c\u7528\u4e8e\u8868\u8ff0\u67d0\u884c\u4e3a\u6216\u72b6\u6001\u7684\u5426\u5b9a\u3002\u800c\"don&#3",
+            "link": "https://zhidao.baidu.com/question/1122755185014302859.html",
+            "pub_date": "Pzt, 08 Ara 2025 06:00:00 GMT",
+            "title": "not\u548cdon't\u7684\u533a\u522b - \u767e\u5ea6\u77e5\u9053"
+          },
+          {
+            "description": "Don\u786e\u5b9e\u662f\u201c\u9601\u4e0b\u3001\u5927\u4eba\u201d\u7684\u5c0a\u79f0\uff0c\u7ffb\u8bd1\u4e3a\u201c\u5510\u201d\u6216\u201c\u5802\u201d\u662f\u5386\u53f2\u9519\u8bef\u7684\u6cbf\u7528\uff0c\u5982 \u5802\u5409\u8bc3\u5fb7\u3002",
+            "link": "https://www.zhihu.com/question/28733724",
+            "pub_date": "Cum, 06 \u015eub 2026 17:28:00 GMT",
+            "title": "\u7535\u5f71\u300a\u6559\u7236\u300b\u91cc\u7684Don\u5e94\u8be5\u662f\u4ec0\u4e48\u610f\u601d\uff1f - \u77e5\u4e4e"
+          },
+          {
+            "description": "don\u548c do\u00f1a\u6211\u4eec\u5728\u6587\u5b66\u4f5c\u54c1\u5f53\u4e2d\u7ecf\u5e38\u7ffb\u8bd1\u6210\u201c\u5802\u201d\u548c\u201c\u5802\u5a1c\u201d\uff0c\u4f8b\u5982\u897f\u73ed\u7259\u8bed\u4e16\u754c\u540d\u8457\u201c\u5802\u5409\u8bc3\u5fb7\u201d\u5c31\u662f\u4ece\u201cDon Quijote\u201d\u97f3\u8bd1\u8fc7\u6765\u7684\u3002 \u800c\u65e5\u5e38\u60c5\u51b5\u4e0b\u4e00\u822c\u6211\u4eec\u4e0d\u518d\u4f7f\u7528\u201c\u5802\u201d\u548c\u201c\u5802\u5a1c\u201d\u7684\u7ffb\u8bd1\u65b9\u5f0f\uff0c\u53ef\u4ee5\u5c06\u5b83\u4eec\u5206\u522b\u7ffb\u8bd1\u6210\u4e3a\u201c\u5148\u751f\u201d\u548c\u201c\u5973\u751f\u201d\u3002 \u4f8b\u5982\uff1a",
+            "link": "https://www.zhihu.com/question/54919941",
+            "pub_date": "Paz, 01 Mar 2026 14:02:00 GMT",
+            "title": "\u5982\u4f55\u8fa8\u6790\u897f\u73ed\u7259\u8bed\u4e2ddon\u548cdo\u00f1a;se\u00f1or\u548cse\u00f1ora\uff1f - \u77e5\u4e4e"
+          }
+        ]
+      },
+      {
+        "query": "\"@bhuman.ai\"",
+        "result_count": 6,
+        "results": [
+          {
+            "description": "\u8de8\u5e73\u53f0\u7f16\u8bd1\uff0c\u5982\u679c\u4f60\u5199\u7684Go\u4ee3\u7801\u4e0d\u5305\u542bcgo\uff0c\u90a3\u4e48\u5c31\u53ef\u4ee5\u505a\u5230window\u7cfb\u7edf\u7f16\u8bd1linux\u7684\u5e94\u7528\uff0c\u5982\u4f55\u505a\u5230\u7684\u5462\uff1f Go\u5f15\u7528\u4e86plan9\u7684\u4ee3\u7801\uff0c\u8fd9\u5c31\u662f\u4e0d\u4f9d\u8d56\u7cfb\u7edf\u7684\u4fe1\u606f\u3002 \u5185\u5d4cC\u652f\u6301\uff0c\u524d\u9762\u8bf4\u4e86\u4f5c\u8005\u662fC\u7684\u4f5c\u8005\uff0c\u6240\u4ee5Go\u91cc\u9762\u4e5f\u53ef\u4ee5\u76f4\u63a5\u5305\u542bc\u4ee3\u7801\uff0c\u5229\u7528\u73b0\u6709\u7684\u4e30\u5bcc\u7684C\u5e93\u3002 2\u3001Go\u9002\u5408\u7528\u6765 ...",
+            "link": "https://www.zhihu.com/question/21409296",
+            "pub_date": "Cmt, 28 \u015eub 2026 13:34:00 GMT",
+            "title": "\u4e3a\u4ec0\u4e48\u8981\u4f7f\u7528 Go \u8bed\u8a00\uff1fGo \u8bed\u8a00\u7684\u4f18\u52bf\u5728\u54ea\u91cc\uff1f - \u77e5\u4e4e"
+          },
+          {
+            "description": "W3Cshcool - Go \u7cfb\u5217 W3Cschool \u4e5f\u662f\u4e00\u4e2a\u4e13\u4e1a\u7684\u7f16\u7a0b\u5165\u95e8\u5b66\u4e60\u53ca\u6280\u672f\u6587\u6863\u67e5\u8be2\u5e94\u7528\uff0c\u63d0\u4f9b\u5305\u62ec HTML\uff0c CSS\uff0c Javascript\uff0c jQuery\uff0c C\uff0c PHP\uff0c Java\uff0c Python\uff0c Sql\uff0cMySQL\uff0cGolang \u7b49\u7f16\u7a0b\u8bed\u8a00\u548c\u5f00\u6e90\u6280\u672f\u7684\u5728\u7ebf\u6559\u7a0b\u53ca\u4f7f\u7528\u624b\u518c\uff0c\u662f\u7c7b\u4f3c\u56fd\u5916w3schools\u7684\u5b66\u4e60\u793e\u533a\u53ca\u83dc\u9e1f\u7f16\u7a0b\u5e73\u53f0\u3002 \u7f51\u7ad9\u94fe\u63a5\uff1a w3cschool.cn/go/ m.w3cschool.cn/appDownl (\u4e8c\u7ef4 ...",
+            "link": "https://www.zhihu.com/question/23486344",
+            "pub_date": "Cmt, 28 \u015eub 2026 15:00:00 GMT",
+            "title": "\u600e\u4e48\u5b66\u4e60 Golang\uff1f - \u77e5\u4e4e"
+          },
+          {
+            "description": "You can find web pages, images, and more from the Google Go app. Google Go works quickly on a variety of devices and internet connections. Google Go is the default search app on Android Go devices.",
+            "link": "https://support.google.com/websearch/answer/7579627?hl=en-EN",
+            "pub_date": "Per, 26 \u015eub 2026 23:31:00 GMT",
+            "title": "Find, translate & manage content in the Google Go app"
+          },
+          {
+            "description": "10\u5206\u949f\u4e0a\u624b Go \u8bed\u8a00\uff1a\u4ece\u5b89\u88c5\u5230\u7f16\u7a0b\u5b9e\u6218\uff01 \u5728\u5982\u4eca\u7684\u7f16\u7a0b\u4e16\u754c\u4e2d\uff0cGo \u8bed\u8a00\u56e0\u5176\u9ad8\u6548\u3001\u7b80\u6d01\u548c\u6613\u5b66\u7684\u7279\u70b9\uff0c\u6210\u4e3a\u4e86\u8d8a\u6765\u8d8a\u591a\u5f00\u53d1\u8005\u7684\u9996\u9009\u8bed\u8a00\u3002 \u65e0\u8bba\u662f\u6784\u5efa\u9ad8\u6027\u80fd\u7684\u540e\u7aef\u7cfb\u7edf\uff0c\u8fd8\u662f\u5904\u7406\u5e76\u53d1\u4efb\u52a1\uff0cGo \u90fd\u80fd\u8f7b\u677e\u5e94\u5bf9\u3002",
+            "link": "https://www.zhihu.com/question/631263368",
+            "pub_date": "\u00c7ar, 25 \u015eub 2026 21:09:00 GMT",
+            "title": "\u65b0\u624b\u5b66\u4e60 Go \u8bed\u8a00\u8be5\u5982\u4f55\u5165\u95e8\uff1f - \u77e5\u4e4e"
+          },
+          {
+            "description": "\u4f7f\u7528Go\u8bed\u8a00\uff0c\u5f00\u53d1\u8005 \u4e0d\u7528\u518d\u8d39\u4e8b\u6dfb\u52a0\u4f9d\u8d56\u7684\u5305\uff0c\u65e2\u51cf\u5c11\u4e86\u8f93\u5165\u5de5\u4f5c\u91cf\uff0c\u53c8\u53ef\u4ee5\u8ba9\u4ee3\u7801\u66f4\u7b80\u6d01\u3002 3.\u652f\u6301\u51fd\u6570\u591a\u8fd4\u56de\u503c \u76ee\u524d\u7684\u4e3b\u6d41\u8bed\u8a00\u4e2d\u9664Python\u5916\u57fa\u672c\u90fd\u4e0d\u652f\u6301\u51fd\u6570\u7684\u591a\u8fd4\u56de\u503c\u529f\u80fd\uff0c\u4f46\u5f88\u591a\u60c5\u51b5\u4e0b\u5f00\u53d1\u8005\u975e\u5e38\u9700\u8981\u8fd9\u4e2a\u529f\u80fd\u3002\u6bd4\u5982\uff0c\u6211\u4eec\u8981\u5b9a\u4e49\u4e00\u4e2a\u51fd\u6570\uff0c\u7528\u4e8e\u8fd4\u56de\u4e2a\u4eba\u7684\u540d\u5b57\u4fe1\u606f\uff0c\u800c\u540d\u5b57\u4fe1\u606f\u5305\u542b\u591a\u4e2a ...",
+            "link": "https://www.zhihu.com/topic/19625982/intro",
+            "pub_date": "Cmt, 07 \u015eub 2026 21:09:00 GMT",
+            "title": "Go \u8bed\u8a00 - \u77e5\u4e4e"
+          },
+          {
+            "description": "\u54ea\u4e2a\u591a\u4e0d\u77e5\u9053\uff0c\u4f46\u662fgo\u5199\u540e\u7aef\u53ef\u6bd4Python\u723d\u592a\u591a\u4e86\u3002 \u9996\u5148go\u6027\u80fd\u6bd4Python\u597d\u592a\u591a\uff0c\u5728\u5404\u79cd99\u5143\u670d\u52a1\u5668\u4e0a\u7528go\u80fd\u505a\u7684\u4e8b\u5c31\u591a\u4e86\u3002 \u5f00\u53d1\u4f53\u9a8c\u4e0a\u5f88\u591a\u4eba\u4ee5\u4e3aPython\u8bed\u6cd5\u7b80\u5355\u6240\u4ee5\u7528Python\u5199\u540e\u7aef\u66f4\u7701\u5fc3\u3002",
+            "link": "https://www.zhihu.com/question/1921162848953959545",
+            "pub_date": "\u00c7ar, 25 \u015eub 2026 13:31:00 GMT",
+            "title": "\u7528python\u5199\u540e\u7aef\u7684\u591a\u8fd8\u662f\u7528go\u5199\u540e\u7aef\u7684\uff1f - \u77e5\u4e4e"
+          }
+        ]
+      }
+    ],
+    "engine": "bing-rss",
+    "stage": "completed"
+  },
+  "passive": {
+    "candidate_count": 8,
+    "domain_note": "A/AAAA lookup succeeded",
+    "domain_resolves": true,
+    "mx_records": [
+      {
+        "host": "smtp.google.com",
+        "priority": 1
+      }
+    ],
+    "syntax_valid_count": 8
+  },
+  "settings": {
+    "doh_enabled": true,
+    "doh_via_curl": true,
+    "from_address": "probe@localhost",
+    "max_candidates": 8,
+    "osint_delay_ms": 300,
+    "osint_enabled": true,
+    "osint_max_candidates": 8,
+    "osint_max_results": 6,
+    "pause_ms": 700,
+    "probe_smtp": false,
+    "timeout_seconds": 4.0
+  },
+  "smtp": {
+    "reason": "probe disabled",
+    "stage": "skipped"
+  }
+}

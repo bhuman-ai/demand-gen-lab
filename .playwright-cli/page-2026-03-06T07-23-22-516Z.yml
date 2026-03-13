@@ -1,0 +1,272 @@
+- generic [active] [ref=e1]:
+  - alert [ref=e39]: Discover iOS apps | Mobbin
+  - generic [ref=e46]:
+    - banner [ref=e47]:
+      - navigation "Main" [ref=e48]:
+        - generic [ref=e50]:
+          - generic [ref=e51]:
+            - link "Mobbin" [ref=e52] [cursor=pointer]:
+              - /url: /discover/apps/ios/latest
+              - img "Mobbin"
+            - generic [ref=e54]:
+              - link "Apps" [ref=e56] [cursor=pointer]:
+                - /url: /discover/apps/ios/latest
+              - link "Sites" [ref=e57] [cursor=pointer]:
+                - /url: /discover/sites/latest
+          - generic [ref=e59]:
+            - button "search icon Search on iOS..." [ref=e60] [cursor=pointer]:
+              - img "search icon" [ref=e61]
+              - generic [ref=e63]: Search on iOS...
+            - button "visual search icon" [ref=e66] [cursor=pointer]:
+              - img "visual search icon" [ref=e67]
+          - generic [ref=e74]:
+            - generic [ref=e75]:
+              - link [ref=e79] [cursor=pointer]:
+                - /url: /saved/mobile/screens
+              - link [ref=e84] [cursor=pointer]:
+                - /url: /community/mobile/featured
+              - link "Awards" [ref=e88] [cursor=pointer]:
+                - /url: /awards
+                - generic [ref=e92]: Awards
+              - button [ref=e94] [cursor=pointer]
+            - button "Avatar of dfggfdg" [ref=e98] [cursor=pointer]:
+              - generic "Avatar of dfggfdg" [ref=e101]: D
+    - main [ref=e102]:
+      - generic [ref=e103]:
+        - generic [ref=e104]:
+          - generic [ref=e105]:
+            - button "Categories arrow right icon" [ref=e106] [cursor=pointer]:
+              - heading "Categories" [level=3] [ref=e107]
+              - img "arrow right icon" [ref=e108]
+            - list [ref=e110]:
+              - listitem [ref=e111]:
+                - link "AI" [ref=e112] [cursor=pointer]:
+                  - /url: /search/apps/ios?content_type=apps&filter=appCategories.AI
+              - listitem [ref=e113]:
+                - link "Lifestyle" [ref=e114] [cursor=pointer]:
+                  - /url: /search/apps/ios?content_type=apps&filter=appCategories.Lifestyle
+              - listitem [ref=e115]:
+                - link "Travel & Transportation" [ref=e116] [cursor=pointer]:
+                  - /url: /search/apps/ios?content_type=apps&filter=appCategories.Travel+%26+Transportation
+              - listitem [ref=e117]:
+                - link "Education" [ref=e118] [cursor=pointer]:
+                  - /url: /search/apps/ios?content_type=apps&filter=appCategories.Education
+              - listitem [ref=e119]:
+                - link "Food & Drink" [ref=e120] [cursor=pointer]:
+                  - /url: /search/apps/ios?content_type=apps&filter=appCategories.Food+%26+Drink
+          - generic [ref=e121]:
+            - button "Screens arrow right icon" [ref=e122] [cursor=pointer]:
+              - heading "Screens" [level=3] [ref=e123]
+              - img "arrow right icon" [ref=e124]
+            - list [ref=e126]:
+              - listitem [ref=e127]:
+                - link "Home" [ref=e128] [cursor=pointer]:
+                  - /url: /search/apps/ios?content_type=screens&filter=screenPatterns.Home
+              - listitem [ref=e129]:
+                - link "Notifications" [ref=e130] [cursor=pointer]:
+                  - /url: /search/apps/ios?content_type=screens&filter=screenPatterns.Notifications
+              - listitem [ref=e131]:
+                - link "Filter & Sort" [ref=e132] [cursor=pointer]:
+                  - /url: /search/apps/ios?content_type=screens&filter=screenPatterns.Filter+%26+Sort
+              - listitem [ref=e133]:
+                - link "Payment Method" [ref=e134] [cursor=pointer]:
+                  - /url: /search/apps/ios?content_type=screens&filter=screenPatterns.Payment+Method
+              - listitem [ref=e135]:
+                - link "Welcome & Get Started" [ref=e136] [cursor=pointer]:
+                  - /url: /search/apps/ios?content_type=screens&filter=screenPatterns.Welcome+%26+Get+Started
+          - generic [ref=e137]:
+            - button "UI Elements arrow right icon" [ref=e138] [cursor=pointer]:
+              - heading "UI Elements" [level=3] [ref=e139]
+              - img "arrow right icon" [ref=e140]
+            - list [ref=e142]:
+              - listitem [ref=e143]:
+                - link "Card" [ref=e144] [cursor=pointer]:
+                  - /url: /search/apps/ios?content_type=ui-elements&filter=screenElements.Card
+              - listitem [ref=e145]:
+                - link "Banner" [ref=e146] [cursor=pointer]:
+                  - /url: /search/apps/ios?content_type=ui-elements&filter=screenElements.Banner
+              - listitem [ref=e147]:
+                - link "Bottom Sheet" [ref=e148] [cursor=pointer]:
+                  - /url: /search/apps/ios?content_type=ui-elements&filter=screenElements.Bottom+Sheet
+              - listitem [ref=e149]:
+                - link "Dropdown Menu" [ref=e150] [cursor=pointer]:
+                  - /url: /search/apps/ios?content_type=ui-elements&filter=screenElements.Dropdown+Menu
+              - listitem [ref=e151]:
+                - link "Button" [ref=e152] [cursor=pointer]:
+                  - /url: /search/apps/ios?content_type=ui-elements&filter=screenElements.Button
+          - generic [ref=e153]:
+            - button "Flows arrow right icon" [ref=e154] [cursor=pointer]:
+              - heading "Flows" [level=3] [ref=e155]
+              - img "arrow right icon" [ref=e156]
+            - list [ref=e158]:
+              - listitem [ref=e159]:
+                - link "Subscribing & Upgrading" [ref=e160] [cursor=pointer]:
+                  - /url: /search/apps/ios?content_type=flows&filter=flowActions.Subscribing+%26+Upgrading
+              - listitem [ref=e161]:
+                - link "Browsing Tutorial" [ref=e162] [cursor=pointer]:
+                  - /url: /search/apps/ios?content_type=flows&filter=flowActions.Browsing+Tutorial
+              - listitem [ref=e163]:
+                - link "Filtering & Sorting" [ref=e164] [cursor=pointer]:
+                  - /url: /search/apps/ios?content_type=flows&filter=flowActions.Filtering+%26+Sorting
+              - listitem [ref=e165]:
+                - link "Chatting & Sending Messages" [ref=e166] [cursor=pointer]:
+                  - /url: /search/apps/ios?content_type=flows&filter=flowActions.Chatting+%26+Sending+Messages
+              - listitem [ref=e167]:
+                - link "Onboarding" [ref=e168] [cursor=pointer]:
+                  - /url: /search/apps/ios?content_type=flows&filter=flowActions.Onboarding
+        - generic [ref=e169]:
+          - generic [ref=e170]:
+            - generic [ref=e171]:
+              - radiogroup [ref=e173]:
+                - radio "iOS" [checked] [ref=e174] [cursor=pointer]:
+                  - generic [ref=e175]: iOS
+                - radio "Web" [ref=e176] [cursor=pointer]:
+                  - generic [ref=e177]: Web
+              - generic [ref=e181]:
+                - link "Latest" [ref=e182] [cursor=pointer]:
+                  - /url: /discover/apps/ios/latest
+                - link "Most popular" [ref=e183] [cursor=pointer]:
+                  - /url: /discover/apps/ios/popular
+                - link "Top rated" [ref=e184] [cursor=pointer]:
+                  - /url: /discover/apps/ios/top
+                - link "Animations" [ref=e185] [cursor=pointer]:
+                  - /url: /discover/apps/ios/animations
+            - button "Filter" [ref=e187] [cursor=pointer]:
+              - generic [ref=e188]:
+                - img [ref=e189]
+                - generic [ref=e192]: Filter
+          - generic [ref=e193]:
+            - generic [ref=e195]:
+              - listitem [ref=e196]:
+                - link [ref=e197] [cursor=pointer]:
+                  - /url: /apps/todoist-ios-eef2af1b-27db-42b9-a83e-ab4e645a4fdb/c8ffef88-5e15-4e50-bdaf-89447837fa24/screens
+                - link "Play video Updated" [ref=e198] [cursor=pointer]:
+                  - /url: /apps/todoist-ios-eef2af1b-27db-42b9-a83e-ab4e645a4fdb/c8ffef88-5e15-4e50-bdaf-89447837fa24/screens
+                  - button "Play video" [ref=e203]:
+                    - img "play icon" [ref=e204]
+                    - img [ref=e206]
+                  - generic:
+                    - generic:
+                      - generic: Updated
+                - generic:
+                  - generic:
+                    - img "Todoist logo"
+                  - generic:
+                    - heading "Todoist" [level=3]
+                    - paragraph: To-do list & calendar
+              - listitem [ref=e208]:
+                - link [ref=e209] [cursor=pointer]:
+                  - /url: /apps/the-fork-ios-788fd08c-c7d8-4c9f-a12a-affab14380f6/1be01cc2-2b8c-48a3-a260-4b99aa9c31f4/screens
+                - link "TheFork screen TheFork screen TheFork screen TheFork screen arrow right icon New" [ref=e210] [cursor=pointer]:
+                  - /url: /apps/the-fork-ios-788fd08c-c7d8-4c9f-a12a-affab14380f6/1be01cc2-2b8c-48a3-a260-4b99aa9c31f4/screens
+                  - list [ref=e211]:
+                    - listitem [ref=e212]:
+                      - img "TheFork screen" [ref=e213]
+                    - listitem [ref=e214]:
+                      - img "TheFork screen" [ref=e215]
+                    - listitem [ref=e216]:
+                      - img "TheFork screen" [ref=e217]
+                    - listitem [ref=e218]:
+                      - img "TheFork screen" [ref=e219]
+                  - button "arrow right icon" [ref=e220]:
+                    - img "arrow right icon" [ref=e221]
+                  - generic:
+                    - generic:
+                      - generic: New
+                - generic:
+                  - generic:
+                    - img "TheFork logo"
+                  - generic:
+                    - heading "TheFork" [level=3]
+                    - paragraph: Savor new dining adventures
+              - listitem [ref=e223]:
+                - link [ref=e224] [cursor=pointer]:
+                  - /url: /apps/manus-ios-5a1953a4-1dcd-4a22-a486-612735a15ef7/5aff77ed-6c06-428d-baf7-0e2c303374ca/screens
+                - link "Manus screen Manus screen Manus screen Manus screen arrow right icon New" [ref=e225] [cursor=pointer]:
+                  - /url: /apps/manus-ios-5a1953a4-1dcd-4a22-a486-612735a15ef7/5aff77ed-6c06-428d-baf7-0e2c303374ca/screens
+                  - list [ref=e226]:
+                    - listitem [ref=e227]:
+                      - img "Manus screen" [ref=e228]
+                    - listitem [ref=e229]:
+                      - img "Manus screen" [ref=e230]
+                    - listitem [ref=e231]:
+                      - img "Manus screen" [ref=e232]
+                    - listitem [ref=e233]:
+                      - img "Manus screen" [ref=e234]
+                  - button "arrow right icon" [ref=e235]:
+                    - img "arrow right icon" [ref=e236]
+                  - generic:
+                    - generic:
+                      - generic: New
+                - generic:
+                  - generic:
+                    - img "Manus logo"
+                  - generic:
+                    - heading "Manus" [level=3]
+                    - paragraph: Hands on AI
+              - listitem [ref=e238]:
+                - link [ref=e239] [cursor=pointer]:
+                  - /url: /apps/one-year-ios-275c45aa-0fd9-420e-9b74-e37c10e4ca8c/ea4a7487-bd32-47ed-9564-1fc961550283/screens
+                - link "Play video New" [ref=e240] [cursor=pointer]:
+                  - /url: /apps/one-year-ios-275c45aa-0fd9-420e-9b74-e37c10e4ca8c/ea4a7487-bd32-47ed-9564-1fc961550283/screens
+                  - button "Play video" [ref=e245]:
+                    - img "play icon" [ref=e246]
+                    - img [ref=e248]
+                  - generic:
+                    - generic:
+                      - generic: New
+                - generic:
+                  - generic:
+                    - img "one year logo"
+                  - generic:
+                    - heading "one year" [level=3]
+                    - paragraph: Daily journal
+              - listitem [ref=e250]:
+                - link [ref=e251] [cursor=pointer]:
+                  - /url: /apps/goodreads-ios-f93fc46c-d683-4c9f-9dfc-cacf466aebed/69256b17-761d-4a86-8edd-dc6a5f1380ac/screens
+                - link "Goodreads screen Goodreads screen Goodreads screen Goodreads screen arrow right icon New" [ref=e252] [cursor=pointer]:
+                  - /url: /apps/goodreads-ios-f93fc46c-d683-4c9f-9dfc-cacf466aebed/69256b17-761d-4a86-8edd-dc6a5f1380ac/screens
+                  - list [ref=e253]:
+                    - listitem [ref=e254]:
+                      - img "Goodreads screen" [ref=e255]
+                    - listitem [ref=e256]:
+                      - img "Goodreads screen" [ref=e257]
+                    - listitem [ref=e258]:
+                      - img "Goodreads screen" [ref=e259]
+                    - listitem [ref=e260]:
+                      - img "Goodreads screen" [ref=e261]
+                  - button "arrow right icon" [ref=e262]:
+                    - img "arrow right icon" [ref=e263]
+                  - generic:
+                    - generic:
+                      - generic: New
+                - generic:
+                  - generic:
+                    - img "Goodreads logo"
+                  - generic:
+                    - heading "Goodreads" [level=3]
+                    - paragraph: Reviews, listings & reading goals
+              - listitem [ref=e265]:
+                - link [ref=e266] [cursor=pointer]:
+                  - /url: /apps/tesla-robotaxi-ios-c410143b-90a0-4b87-90d1-86f484a2f8c5/22ee5eea-955a-44e2-b5f2-f42c0f0172d9/screens
+                - link "Tesla Robotaxi screen Tesla Robotaxi screen Tesla Robotaxi screen Tesla Robotaxi screen arrow right icon" [ref=e267] [cursor=pointer]:
+                  - /url: /apps/tesla-robotaxi-ios-c410143b-90a0-4b87-90d1-86f484a2f8c5/22ee5eea-955a-44e2-b5f2-f42c0f0172d9/screens
+                  - list [ref=e268]:
+                    - listitem [ref=e269]:
+                      - img "Tesla Robotaxi screen" [ref=e270]
+                    - listitem [ref=e271]:
+                      - img "Tesla Robotaxi screen" [ref=e272]
+                    - listitem [ref=e273]:
+                      - img "Tesla Robotaxi screen" [ref=e274]
+                    - listitem [ref=e275]:
+                      - img "Tesla Robotaxi screen" [ref=e276]
+                  - button "arrow right icon" [ref=e277]:
+                    - img "arrow right icon" [ref=e278]
+                - generic:
+                  - generic:
+                    - img "Tesla Robotaxi logo"
+                  - generic:
+                    - heading "Tesla Robotaxi" [level=3]
+                    - paragraph: Autonomous ride service
+            - img "Dots loading indicator" [ref=e281]
+  - region "Notifications alt+T"

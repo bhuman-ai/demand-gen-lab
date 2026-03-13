@@ -1,16 +1,24 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
-import { ArrowRight, Rocket, Trash2 } from "lucide-react";
+import { ArrowRight, GitBranch, Loader2, Rocket } from "lucide-react";
 import {
   fetchBrand,
+  fetchExperiment,
+  fetchOutreachProvisioningSettings,
   fetchScaleCampaigns,
 } from "@/lib/client-api";
 import type { BrandRecord, ScaleCampaignRecord } from "@/lib/factory-types";
+import FlowEditorClient from "@/app/brands/[id]/campaigns/[campaignId]/build/flows/[variantId]/flow-editor-client";
+import { SettingsModal } from "@/app/settings/outreach/settings-primitives";
+import CampaignOperationsChain, {
+  buildCampaignOperationsChain,
+} from "@/components/campaign-operations-chain";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { SectionPanel, EmptyState, PageIntro, StatLedger } from "@/components/ui/page-layout";
 
 function statusVariant(status: ScaleCampaignRecord["status"]) {
   if (status === "active") return "accent" as const;
@@ -19,18 +27,38 @@ function statusVariant(status: ScaleCampaignRecord["status"]) {
   return "muted" as const;
 }
 
+function formatCount(value: number) {
+  return value.toString().padStart(2, "0");
+}
+
 export default function CampaignsClient({ brandId }: { brandId: string }) {
+  const router = useRouter();
   const [brand, setBrand] = useState<BrandRecord | null>(null);
   const [campaigns, setCampaigns] = useState<ScaleCampaignRecord[]>([]);
+  const [deliverability, setDeliverability] = useState<{
+    provider: "none" | "google_postmaster";
+    lastHealthStatus: "unknown" | "healthy" | "warning" | "critical";
+  } | null>(null);
+  const [flowModalOpen, setFlowModalOpen] = useState(false);
+  const [flowLoading, setFlowLoading] = useState(false);
+  const [flowCampaignId, setFlowCampaignId] = useState("");
+  const [flowVariantId, setFlowVariantId] = useState("");
+  const [flowCampaignName, setFlowCampaignName] = useState("");
+  const [flowError, setFlowError] = useState("");
   const [error, setError] = useState("");
 
   const refresh = async () => {
-    const [brandRow, campaignRows] = await Promise.all([
+    const [brandRow, campaignRows, provisioningRow] = await Promise.all([
       fetchBrand(brandId),
       fetchScaleCampaigns(brandId),
+      fetchOutreachProvisioningSettings(),
     ]);
     setBrand(brandRow);
     setCampaigns(campaignRows);
+    setDeliverability({
+      provider: provisioningRow.deliverability.provider,
+      lastHealthStatus: provisioningRow.deliverability.lastHealthStatus,
+    });
     localStorage.setItem("factory.activeBrandId", brandId);
   };
 
@@ -51,99 +79,167 @@ export default function CampaignsClient({ brandId }: { brandId: string }) {
     [campaigns]
   );
 
-  return (
-    <div className="space-y-5">
-      <Card>
-        <CardHeader>
-          <CardTitle>{brand?.name || "Brand"} Campaigns</CardTitle>
-          <CardDescription>
-            Scaled execution from promoted winning experiments.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="flex flex-wrap gap-2">
-          <Button asChild>
-            <Link href={`/brands/${brandId}/experiments`}>
-              Promote Winner
-              <ArrowRight className="h-4 w-4" />
-            </Link>
-          </Button>
-          <Button asChild variant="outline">
-            <Link href={`/brands/${brandId}/experiments`}>
-              Open Experiments
-            </Link>
-          </Button>
-        </CardContent>
-      </Card>
+  const openFlow = async (campaign: ScaleCampaignRecord) => {
+    setFlowModalOpen(true);
+    setFlowLoading(true);
+    setFlowCampaignName(campaign.name);
+    setFlowCampaignId("");
+    setFlowVariantId("");
+    setFlowError("");
+    try {
+      const sourceExperiment = await fetchExperiment(brandId, campaign.sourceExperimentId);
+      setFlowCampaignId(sourceExperiment.runtime.campaignId ?? "");
+      setFlowVariantId(sourceExperiment.runtime.experimentId ?? "");
+    } catch (err) {
+      setFlowError(err instanceof Error ? err.message : "Failed to load conversational flow");
+    } finally {
+      setFlowLoading(false);
+    }
+  };
 
-      <div className="grid gap-4 md:grid-cols-3">
-        <Card>
-          <CardHeader>
-            <CardDescription>Total Campaigns</CardDescription>
-            <CardTitle>{campaigns.length}</CardTitle>
-          </CardHeader>
-        </Card>
-        <Card>
-          <CardHeader>
-            <CardDescription>Active</CardDescription>
-            <CardTitle>{activeCount}</CardTitle>
-          </CardHeader>
-        </Card>
-        <Card>
-          <CardHeader>
-            <CardDescription>Completed</CardDescription>
-            <CardTitle>{campaigns.filter((row) => row.status === "completed").length}</CardTitle>
-          </CardHeader>
-        </Card>
-      </div>
+  return (
+    <div className="space-y-8">
+      <PageIntro
+        eyebrow={`${brand?.name || "Brand"} / campaigns`}
+        title="Scale only what proved itself."
+        description="Promoted campaigns carry the winning experiment, sender health, and conversation logic forward so scale never gets detached from proof."
+        actions={
+          <>
+            <Button asChild>
+              <Link href={`/brands/${brandId}/experiments`}>
+                Promote winner
+                <ArrowRight className="h-4 w-4" />
+              </Link>
+            </Button>
+            <Button asChild variant="outline">
+              <Link href={`/brands/${brandId}/experiments`}>Open experiments</Link>
+            </Button>
+          </>
+        }
+        aside={
+          <StatLedger
+            items={[
+              {
+                label: "Campaigns",
+                value: formatCount(campaigns.length),
+                detail: campaigns.length ? "Promoted programs remain tied to the originating proof." : "Nothing has been promoted yet.",
+              },
+              {
+                label: "Active",
+                value: formatCount(activeCount),
+                detail: activeCount ? "Runs currently in market." : "No campaign is active right now.",
+              },
+              {
+                label: "Completed",
+                value: formatCount(campaigns.filter((row) => row.status === "completed").length),
+                detail: "Completed scale runs preserved for reference.",
+              },
+            ]}
+          />
+        }
+      />
 
       {error ? <div className="text-sm text-[color:var(--danger)]">{error}</div> : null}
 
       {campaigns.length ? (
         <div className="grid gap-4 md:grid-cols-2">
           {campaigns.map((campaign) => (
-            <Card key={campaign.id}>
-              <CardHeader className="space-y-2">
-                <div className="flex items-center justify-between gap-2">
-                  <CardTitle className="text-base">{campaign.name}</CardTitle>
-                  <Badge variant={statusVariant(campaign.status)}>{campaign.status}</Badge>
-                </div>
-                <CardDescription>
-                  Source experiment: {campaign.sourceExperimentId.slice(-6)}
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-3">
-                <div className="text-xs text-[color:var(--muted-foreground)]">
-                  Snapshot: {campaign.snapshot.offer || "No offer"}
-                </div>
-                <div className="text-xs text-[color:var(--muted-foreground)]">
-                  Sent {campaign.metricsSummary.sent} · Replies {campaign.metricsSummary.replies} · Positive {campaign.metricsSummary.positiveReplies}
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  <Button size="sm" asChild>
-                    <Link href={`/brands/${brandId}/campaigns/${campaign.id}`}>
-                      <Rocket className="h-4 w-4" /> Open Campaign
-                    </Link>
-                  </Button>
-                  <Button size="sm" variant="outline" asChild>
-                    <Link href={`/brands/${brandId}/experiments/${campaign.sourceExperimentId}`}>
-                      View Source Experiment
-                    </Link>
-                  </Button>
-                  <Button size="sm" variant="ghost" disabled>
-                    <Trash2 className="h-4 w-4" />
-                  </Button>
-                </div>
-              </CardContent>
-            </Card>
+            <SectionPanel
+              key={campaign.id}
+              title={campaign.name}
+              description={campaign.snapshot.offer || "No offer snapshot yet."}
+              actions={<Badge variant={statusVariant(campaign.status)}>{campaign.status}</Badge>}
+              contentClassName="space-y-5"
+            >
+              <div className="flex flex-wrap gap-2">
+                <Badge variant="muted">Source {campaign.sourceExperimentId.slice(-6)}</Badge>
+                <Badge variant="muted">{campaign.metricsSummary.sent} sent</Badge>
+                <Badge variant="muted">{campaign.metricsSummary.replies} replies</Badge>
+                <Badge variant="muted">{campaign.metricsSummary.positiveReplies} positive</Badge>
+              </div>
+              <CampaignOperationsChain
+                compact
+                steps={buildCampaignOperationsChain({
+                  campaign,
+                  deliverability,
+                })}
+                onStepClick={(stepId) => {
+                  if (stepId === "offer_quality") {
+                    void openFlow(campaign);
+                    return;
+                  }
+                  if (stepId === "deliverability") {
+                    router.push(`/brands/${brandId}/campaigns/${campaign.id}#campaign-deliverability`);
+                    return;
+                  }
+                  if (stepId === "replies") {
+                    router.push(`/brands/${brandId}/campaigns/${campaign.id}#campaign-replies`);
+                    return;
+                  }
+                  router.push(`/brands/${brandId}/campaigns/${campaign.id}#campaign-data`);
+                }}
+              />
+              <div className="flex flex-wrap gap-2 pt-1">
+                <Button size="sm" asChild>
+                  <Link href={`/brands/${brandId}/campaigns/${campaign.id}`}>
+                    <Rocket className="h-4 w-4" /> Open campaign
+                  </Link>
+                </Button>
+                <Button size="sm" type="button" variant="outline" onClick={() => void openFlow(campaign)}>
+                  <GitBranch className="h-4 w-4" />
+                  Open flow
+                </Button>
+                <Button size="sm" variant="outline" asChild>
+                  <Link href={`/brands/${brandId}/experiments/${campaign.sourceExperimentId}`}>Source experiment</Link>
+                </Button>
+              </div>
+            </SectionPanel>
           ))}
         </div>
       ) : (
-        <Card>
-          <CardContent className="py-8 text-sm text-[color:var(--muted-foreground)]">
-            No campaigns yet. Promote a winning experiment to create one.
-          </CardContent>
-        </Card>
+        <EmptyState
+          title="No campaigns yet."
+          description="Promote a winning experiment and it will appear here with its sender, flow, and reply performance intact."
+          actions={
+            <Link href={`/brands/${brandId}/experiments`}>
+              <Button>
+                Promote winner
+                <ArrowRight className="h-4 w-4" />
+              </Button>
+            </Link>
+          }
+        />
       )}
+
+      <SettingsModal
+        open={flowModalOpen}
+        title={flowCampaignName ? `${flowCampaignName} flow` : "Conversational flow"}
+        description="Review and edit the full conversation map for this campaign without leaving Campaigns."
+        panelClassName="max-h-[94vh] max-w-[min(96vw,1680px)]"
+        bodyClassName="p-0"
+        onOpenChange={setFlowModalOpen}
+      >
+        {flowLoading ? (
+          <div className="flex min-h-[40vh] items-center justify-center gap-2 text-sm text-[color:var(--muted-foreground)]">
+            <Loader2 className="h-4 w-4 animate-spin" />
+            Loading conversational flow...
+          </div>
+        ) : flowCampaignId && flowVariantId ? (
+          <div className="min-h-[78vh]">
+            <FlowEditorClient
+              brandId={brandId}
+              campaignId={flowCampaignId}
+              variantId={flowVariantId}
+              hideOverviewCard
+              hideBackButton
+            />
+          </div>
+        ) : (
+          <div className="p-6 text-sm text-[color:var(--muted-foreground)]">
+            {flowError || "This campaign does not have a conversation flow attached yet. Open the source experiment first, then try again."}
+          </div>
+        )}
+      </SettingsModal>
     </div>
   );
 }

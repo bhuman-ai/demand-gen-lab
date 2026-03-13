@@ -1,0 +1,112 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e3]:
+    - complementary [ref=e4]:
+      - generic [ref=e5]:
+        - link "lastb2b.com The last B2B outreach product you'll ever buy." [ref=e6] [cursor=pointer]:
+          - /url: /
+          - generic [ref=e7]: lastb2b.com
+          - paragraph [ref=e8]: The last B2B outreach product you'll ever buy.
+        - generic [ref=e10]:
+          - generic [ref=e11]: Active brand
+          - generic [ref=e12]:
+            - combobox [ref=e13]:
+              - option "Loading brands..." [selected]
+            - button "New brand" [ref=e14]
+        - generic [ref=e15]:
+          - generic [ref=e16]: Work
+          - navigation [ref=e17]:
+            - link "Experiments" [ref=e18] [cursor=pointer]:
+              - /url: /brands
+              - img [ref=e19]
+              - text: Experiments
+            - link "Campaigns" [ref=e23] [cursor=pointer]:
+              - /url: /brands
+              - img [ref=e24]
+              - text: Campaigns
+            - link "Network" [ref=e26] [cursor=pointer]:
+              - /url: /brands
+              - img [ref=e27]
+              - text: Network
+            - link "Leads" [ref=e32] [cursor=pointer]:
+              - /url: /brands
+              - img [ref=e33]
+              - text: Leads
+            - link "Inbox" [ref=e36] [cursor=pointer]:
+              - /url: /brands
+              - img [ref=e37]
+              - text: Inbox
+        - generic [ref=e40]:
+          - generic [ref=e41]: System
+          - navigation [ref=e42]:
+            - link "Settings" [ref=e43] [cursor=pointer]:
+              - /url: /settings/outreach
+              - img [ref=e44]
+              - text: Settings
+            - link "Logic" [ref=e47] [cursor=pointer]:
+              - /url: /logic
+              - img [ref=e48]
+              - text: Logic
+            - link "Doctor" [ref=e50] [cursor=pointer]:
+              - /url: /doctor
+              - img [ref=e51]
+              - text: Doctor
+        - generic [ref=e53]: Proof before scale. Keep the sender, message, and reply trail in one place.
+    - main [ref=e54]:
+      - generic [ref=e56]:
+        - generic [ref=e57]:
+          - generic [ref=e58]: lastb2b.com > Brand
+          - heading "Brands" [level=1] [ref=e59]
+        - generic [ref=e60]:
+          - button "Search K" [ref=e61]:
+            - img [ref=e62]
+            - text: Search
+            - generic [ref=e65]:
+              - img [ref=e66]
+              - text: K
+          - button "Operator" [ref=e68]:
+            - img [ref=e69]
+            - text: Operator
+      - generic [ref=e74]:
+        - generic [ref=e75]:
+          - generic [ref=e76]:
+            - generic [ref=e77]: Brand directory
+            - generic [ref=e78]:
+              - heading "Every brand, sequence, and operating note in one cabinet." [level=2] [ref=e79]
+              - paragraph [ref=e80]: Choose a brand to open campaigns, network, leads, inbox, and experiments without losing the thread between them.
+            - generic [ref=e81]:
+              - link "New brand" [ref=e82] [cursor=pointer]:
+                - /url: /brands/new
+                - img [ref=e83]
+                - text: New brand
+              - generic [ref=e84]:
+                - img
+                - textbox "Search brands" [ref=e85]
+          - generic [ref=e87]:
+            - generic [ref=e88]:
+              - generic [ref=e89]:
+                - generic [ref=e90]: Brands
+                - generic [ref=e91]: "00"
+              - generic [ref=e92]: No brands yet
+            - generic [ref=e93]:
+              - generic [ref=e94]:
+                - generic [ref=e95]: With tone
+                - generic [ref=e96]: "00"
+              - generic [ref=e97]: Tone is still undefined across the directory.
+            - generic [ref=e98]:
+              - generic [ref=e99]:
+                - generic [ref=e100]: With notes
+                - generic [ref=e101]: "00"
+              - generic [ref=e102]: Proof and operating notes still need to be written.
+        - generic [ref=e105]:
+          - heading "Brands" [level=3] [ref=e106]
+          - paragraph [ref=e107]: Open the working brand, jump directly to campaigns, or remove a workspace that should not live here anymore.
+        - generic [ref=e109]:
+          - generic [ref=e110]:
+            - generic [ref=e111]: No brands found.
+            - paragraph [ref=e112]: Create a brand to start the outbound workflow, or adjust the search if this directory should already contain one.
+          - link "Create brand" [ref=e114] [cursor=pointer]:
+            - /url: /brands/new
+            - button "Create brand" [ref=e115]:
+              - img [ref=e116]
+              - text: Create brand
+  - alert [ref=e117]

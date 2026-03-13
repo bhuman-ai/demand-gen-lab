@@ -161,15 +161,12 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
       <div className="grid min-h-screen grid-cols-1 md:grid-cols-[260px_1fr]">
         <aside className="border-b border-[color:var(--border)] bg-[color:var(--sidebar)] px-4 py-5 md:border-b-0 md:border-r md:px-5">
           <div className="flex h-full flex-col">
-            <Link href="/" className="group block border-b border-[color:var(--border)] pb-5">
+            <Link href="/" className="group block border-b border-[color:var(--border)] pb-4">
               <BrandWordmark
                 animated
                 lastClassName="text-[2rem]"
                 b2bClassName="mb-[0.26em] text-[0.72rem] tracking-[0.1em] transition-colors group-hover:text-[color:var(--foreground)]"
               />
-              <p className="mt-3 max-w-[16rem] text-[13px] leading-5 text-[color:var(--muted-foreground)]">
-                Outbound operations in one system. Keep the proof, sender, and inbox on the same desk.
-              </p>
             </Link>
 
             <div className="mt-5">
@@ -226,9 +223,6 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
               </nav>
             </div>
 
-            <div className="mt-auto hidden border-t border-[color:var(--border)] pt-5 text-[13px] leading-5 text-[color:var(--muted-foreground)] md:block">
-              Test before scale. Every sender, message, reply, and promotion decision stays tied together.
-            </div>
           </div>
         </aside>
 

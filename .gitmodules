@@ -1,0 +1,3 @@
+[submodule "EnrichAnything"]
+	path = EnrichAnything
+	url = https://github.com/bhuman-ai/enrichanything.git

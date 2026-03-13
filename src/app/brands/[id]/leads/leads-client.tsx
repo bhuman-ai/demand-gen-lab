@@ -66,9 +66,7 @@ export default function LeadsClient({ brand }: { brand: BrandRecord }) {
   return (
     <div className="space-y-8">
       <PageIntro
-        eyebrow={`${brand.name} / leads`}
         title="Leads"
-        description="Lead status, source, and last touch."
         aside={
           <StatLedger
             items={[

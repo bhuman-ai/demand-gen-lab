@@ -2764,9 +2764,16 @@ export async function sendMonitoringProbeMessage(params: {
   experimentId: string;
   subject: string;
   body: string;
+  probeVariant?: "baseline" | "production";
   probeToken: string;
   monitorAccountId: string;
   monitorEmail: string;
+  sourceMessageId?: string;
+  sourceMessageStatus?: string;
+  sourceType?: string;
+  sourceNodeId?: string;
+  sourceLeadId?: string;
+  contentHash?: string;
 }): Promise<{ ok: boolean; providerMessageId: string; error: string }> {
   const fromEmail = params.account.config.customerIo.fromEmail.trim();
   const replyToEmail = params.replyToEmail.trim();
@@ -2791,9 +2798,16 @@ export async function sendMonitoringProbeMessage(params: {
       step: 0,
       monitoring: true,
       monitor_probe: true,
+      probeVariant: params.probeVariant ?? "production",
       probeToken: params.probeToken,
       monitorAccountId: params.monitorAccountId,
       monitorEmail: params.monitorEmail,
+      sourceMessageId: params.sourceMessageId ?? "",
+      sourceMessageStatus: params.sourceMessageStatus ?? "",
+      sourceType: params.sourceType ?? "",
+      sourceNodeId: params.sourceNodeId ?? "",
+      sourceLeadId: params.sourceLeadId ?? "",
+      contentHash: params.contentHash ?? "",
     },
   });
 }

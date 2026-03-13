@@ -47,6 +47,7 @@ import FlowEditorClient from "@/app/brands/[id]/campaigns/[campaignId]/build/flo
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import LeadFinderEmbed from "@/components/experiments/lead-finder-embed";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
@@ -344,10 +345,12 @@ export default function ExperimentClient({
   brandId,
   experimentId,
   view,
+  enrichAnythingAppUrl = "",
 }: {
   brandId: string;
   experimentId: string;
   view?: ExperimentView;
+  enrichAnythingAppUrl?: string;
 }) {
   type RefreshSnapshot = {
     brand: BrandRecord | null;
@@ -408,6 +411,7 @@ export default function ExperimentClient({
   const [importingCsv, setImportingCsv] = useState(false);
   const [csvImportSummary, setCsvImportSummary] = useState("");
   const [csvImportErrors, setCsvImportErrors] = useState<string[]>([]);
+  const [showCsvImport, setShowCsvImport] = useState(false);
   const router = useRouter();
   const samplingAbortRef = useRef<AbortController | null>(null);
   const samplingStopRequestedRef = useRef(false);
@@ -1766,8 +1770,7 @@ export default function ExperimentClient({
             </div>
           </CardHeader>
           <CardContent className="space-y-4">
-            <div className="relative">
-              <div className="pointer-events-none absolute left-10 right-10 top-7 hidden h-px bg-[color:var(--border)] md:block" />
+            <div>
               <div className="grid gap-2 md:grid-cols-4">
               {workflowStages.map((stage) => (
                 <button
@@ -2141,9 +2144,9 @@ export default function ExperimentClient({
                         : "bg-transparent"
                     }`}
                   >
-                    <div className="text-sm font-medium">Import CSV</div>
+                    <div className="text-sm font-medium">Find Leads</div>
                     <div className="mt-1 text-xs text-[color:var(--muted-foreground)]">
-                      Upload your own leads with identity data.
+                      Search here or upload your own list.
                     </div>
                   </button>
                 </div>
@@ -2246,89 +2249,118 @@ export default function ExperimentClient({
               </div>
             ) : (
               <div className="space-y-3 rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3">
-                <div className="text-sm font-medium">CSV Import</div>
+                <div className="text-sm font-medium">Find Leads</div>
                 <div className="text-xs text-[color:var(--muted-foreground)]">
-                  Required identity: either <code>email</code>, or <code>name + domain</code>. Optional: <code>company</code>, <code>title</code>, <code>source_url</code>.
+                  Type who you want, hit Search, then click <code>Add leads</code>. If you already have a list, you can still upload a CSV below.
                 </div>
-                <div className="flex flex-wrap items-center gap-2">
-                  <Input
-                    type="file"
-                    accept=".csv,text/csv"
-                    onChange={(event) => {
-                      const file = event.target.files?.[0] ?? null;
-                      if (!file) {
-                        setCsvFileName("");
-                        setCsvText("");
-                        return;
-                      }
-                      setCsvFileName(file.name);
-                      setCsvImportErrors([]);
-                      setCsvImportSummary("");
-                      void file
-                        .text()
-                        .then((text) => {
-                          setCsvText(text.slice(0, CSV_MAX_CHARS));
-                        })
-                        .catch(() => {
-                          setCsvText("");
-                          setError("Failed to read CSV file");
-                        });
-                    }}
-                    className="max-w-sm"
-                  />
-                  {csvFileName ? (
-                    <Badge variant="muted">{csvFileName}</Badge>
+                <LeadFinderEmbed
+                  brandId={brandId}
+                  experimentId={experiment.id}
+                  enrichAnythingAppUrl={enrichAnythingAppUrl}
+                  onImported={async () => {
+                    await refresh(false);
+                  }}
+                />
+                <div className="rounded-lg border border-[color:var(--border)] bg-[color:var(--surface)]">
+                  <div className="flex flex-wrap items-center justify-between gap-3 px-3 py-3">
+                    <div>
+                      <div className="text-sm font-medium">Already have a list?</div>
+                      <div className="mt-1 text-xs text-[color:var(--muted-foreground)]">
+                        Upload a CSV with <code>email</code>, or <code>name + domain</code>.
+                      </div>
+                    </div>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      onClick={() => setShowCsvImport((current) => !current)}
+                    >
+                      {showCsvImport ? "Hide CSV upload" : "Upload CSV instead"}
+                    </Button>
+                  </div>
+                  {showCsvImport ? (
+                    <div className="space-y-3 border-t border-[color:var(--border)] px-3 py-3">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Input
+                          type="file"
+                          accept=".csv,text/csv"
+                          onChange={(event) => {
+                            const file = event.target.files?.[0] ?? null;
+                            if (!file) {
+                              setCsvFileName("");
+                              setCsvText("");
+                              return;
+                            }
+                            setCsvFileName(file.name);
+                            setCsvImportErrors([]);
+                            setCsvImportSummary("");
+                            void file
+                              .text()
+                              .then((text) => {
+                                setCsvText(text.slice(0, CSV_MAX_CHARS));
+                              })
+                              .catch(() => {
+                                setCsvText("");
+                                setError("Failed to read CSV file");
+                              });
+                          }}
+                          className="max-w-sm"
+                        />
+                        {csvFileName ? (
+                          <Badge variant="muted">{csvFileName}</Badge>
+                        ) : null}
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        <Button
+                          type="button"
+                          variant="outline"
+                          disabled={importingCsv || !csvText.trim()}
+                          onClick={async () => {
+                            if (!csvText.trim()) return;
+                            setImportingCsv(true);
+                            setError("");
+                            setCsvImportErrors([]);
+                            setCsvImportSummary("");
+                            try {
+                              const result = await importExperimentProspectsCsvApi(
+                                brandId,
+                                experiment.id,
+                                csvText
+                              );
+                              setCsvImportErrors(result.parseErrors.slice(0, 10));
+                              setCsvImportSummary(
+                                `Imported ${result.importedCount} leads${result.parseErrorCount ? ` (${result.parseErrorCount} rows skipped)` : ""}.`
+                              );
+                              await refresh(false);
+                              trackEvent("prospects_imported_csv", {
+                                brandId,
+                                experimentId: experiment.id,
+                                runId: result.runId,
+                                importedCount: result.importedCount,
+                              });
+                            } catch (err) {
+                              setError(err instanceof Error ? err.message : "Failed to import CSV leads");
+                            } finally {
+                              setImportingCsv(false);
+                            }
+                          }}
+                        >
+                          <Upload className="h-4 w-4" />
+                          {importingCsv ? "Importing..." : "Import CSV Leads"}
+                        </Button>
+                      </div>
+                      {csvImportSummary ? (
+                        <div className="rounded-lg border border-[color:var(--success)]/40 bg-[color:var(--success-soft)] px-3 py-2 text-sm text-[color:var(--success)]">
+                          {csvImportSummary}
+                        </div>
+                      ) : null}
+                      {csvImportErrors.length ? (
+                        <div className="rounded-lg border border-[color:var(--warning)]/40 bg-[color:var(--warning-soft)] px-3 py-2 text-xs text-[color:var(--warning)]">
+                          {csvImportErrors.slice(0, 5).join(" · ")}
+                        </div>
+                      ) : null}
+                    </div>
                   ) : null}
                 </div>
-                <div className="flex flex-wrap gap-2">
-                  <Button
-                    type="button"
-                    variant="outline"
-                    disabled={importingCsv || !csvText.trim()}
-                    onClick={async () => {
-                      if (!csvText.trim()) return;
-                      setImportingCsv(true);
-                      setError("");
-                      setCsvImportErrors([]);
-                      setCsvImportSummary("");
-                      try {
-                        const result = await importExperimentProspectsCsvApi(
-                          brandId,
-                          experiment.id,
-                          csvText
-                        );
-                        setCsvImportErrors(result.parseErrors.slice(0, 10));
-                        setCsvImportSummary(
-                          `Imported ${result.importedCount} leads${result.parseErrorCount ? ` (${result.parseErrorCount} rows skipped)` : ""}.`
-                        );
-                        await refresh(false);
-                        trackEvent("prospects_imported_csv", {
-                          brandId,
-                          experimentId: experiment.id,
-                          runId: result.runId,
-                          importedCount: result.importedCount,
-                        });
-                      } catch (err) {
-                        setError(err instanceof Error ? err.message : "Failed to import CSV leads");
-                      } finally {
-                        setImportingCsv(false);
-                      }
-                    }}
-                  >
-                    <Upload className="h-4 w-4" />
-                    {importingCsv ? "Importing..." : "Import CSV Leads"}
-                  </Button>
-                </div>
-                {csvImportSummary ? (
-                  <div className="rounded-lg border border-[color:var(--success)]/40 bg-[color:var(--success-soft)] px-3 py-2 text-sm text-[color:var(--success)]">
-                    {csvImportSummary}
-                  </div>
-                ) : null}
-                {csvImportErrors.length ? (
-                  <div className="rounded-lg border border-[color:var(--warning)]/40 bg-[color:var(--warning-soft)] px-3 py-2 text-xs text-[color:var(--warning)]">
-                    {csvImportErrors.slice(0, 5).join(" · ")}
-                  </div>
-                ) : null}
               </div>
             )}
 

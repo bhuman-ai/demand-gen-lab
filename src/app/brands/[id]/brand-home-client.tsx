@@ -122,9 +122,7 @@ export default function BrandHomeClient({ brandId }: { brandId: string }) {
   return (
     <div className="space-y-8">
       <PageIntro
-        eyebrow={brand?.website || "Brand workspace"}
         title={brand?.name || "Brand"}
-        description="Brand record, sending context, and active work."
         actions={
           <Button
             type="button"

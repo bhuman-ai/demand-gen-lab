@@ -7,6 +7,11 @@ import {
   type InboxRow,
   type LeadRow,
 } from "@/lib/factory-data";
+import {
+  getOutreachProvisioningSettings,
+  updateOutreachProvisioningSettings,
+} from "@/lib/outreach-provider-settings";
+import { enrichBrandWithSenderHealth } from "@/lib/sender-health";
 
 function asRecord(value: unknown): Record<string, unknown> {
   if (value && typeof value === "object" && !Array.isArray(value)) {
@@ -15,11 +20,21 @@ function asRecord(value: unknown): Record<string, unknown> {
   return {};
 }
 
+function normalizeMonitoredDomain(value: string) {
+  return value.trim().toLowerCase().replace(/^https?:\/\//, "").replace(/^www\./, "").replace(/\/.*$/, "");
+}
+
 function normalizeDomains(value: unknown): DomainRow[] {
   if (!Array.isArray(value)) return [];
   return value
     .map((entry) => {
       const row = asRecord(entry);
+      const automationStatus = String(row.automationStatus ?? row.automation_status ?? "").toLowerCase();
+      const domainHealth = String(row.domainHealth ?? row.domain_health ?? "").toLowerCase();
+      const emailHealth = String(row.emailHealth ?? row.email_health ?? "").toLowerCase();
+      const ipHealth = String(row.ipHealth ?? row.ip_health ?? "").toLowerCase();
+      const messagingHealth = String(row.messagingHealth ?? row.messaging_health ?? "").toLowerCase();
+      const seedPolicy = String(row.seedPolicy ?? row.seed_policy ?? "").toLowerCase();
       return {
         id: String(row.id ?? `domain_${Math.random().toString(36).slice(2, 8)}`),
         domain: String(row.domain ?? "").trim(),
@@ -28,6 +43,29 @@ function normalizeDomains(value: unknown): DomainRow[] {
           : "active",
         warmupStage: String(row.warmupStage ?? ""),
         reputation: String(row.reputation ?? ""),
+        automationStatus: ["queued", "testing", "warming", "ready", "attention"].includes(automationStatus)
+          ? (automationStatus as DomainRow["automationStatus"])
+          : undefined,
+        automationSummary: String(row.automationSummary ?? row.automation_summary ?? "").trim(),
+        domainHealth: ["unknown", "queued", "healthy", "watch", "risky"].includes(domainHealth)
+          ? (domainHealth as DomainRow["domainHealth"])
+          : undefined,
+        domainHealthSummary: String(row.domainHealthSummary ?? row.domain_health_summary ?? "").trim(),
+        emailHealth: ["unknown", "queued", "healthy", "watch", "risky"].includes(emailHealth)
+          ? (emailHealth as DomainRow["emailHealth"])
+          : undefined,
+        emailHealthSummary: String(row.emailHealthSummary ?? row.email_health_summary ?? "").trim(),
+        ipHealth: ["unknown", "queued", "healthy", "watch", "risky"].includes(ipHealth)
+          ? (ipHealth as DomainRow["ipHealth"])
+          : undefined,
+        ipHealthSummary: String(row.ipHealthSummary ?? row.ip_health_summary ?? "").trim(),
+        messagingHealth: ["unknown", "queued", "healthy", "watch", "risky"].includes(messagingHealth)
+          ? (messagingHealth as DomainRow["messagingHealth"])
+          : undefined,
+        messagingHealthSummary: String(row.messagingHealthSummary ?? row.messaging_health_summary ?? "").trim(),
+        seedPolicy: ["fresh_pool", "rotating_pool", "tainted_mailbox"].includes(seedPolicy)
+          ? (seedPolicy as DomainRow["seedPolicy"])
+          : undefined,
         role: ["brand", "sender"].includes(String(row.role ?? "").toLowerCase())
           ? (String(row.role).toLowerCase() as DomainRow["role"])
           : undefined,
@@ -49,6 +87,8 @@ function normalizeDomains(value: unknown): DomainRow[] {
         customerIoAccountName: String(row.customerIoAccountName ?? row.customer_io_account_name ?? "").trim(),
         notes: String(row.notes ?? "").trim(),
         lastProvisionedAt: String(row.lastProvisionedAt ?? "").trim(),
+        lastHealthCheckAt: String(row.lastHealthCheckAt ?? row.last_health_check_at ?? "").trim(),
+        nextHealthCheckAt: String(row.nextHealthCheckAt ?? row.next_health_check_at ?? "").trim(),
       };
     })
     .filter((row) => row.domain.length > 0);
@@ -106,7 +146,7 @@ export async function GET(_: Request, context: { params: Promise<{ brandId: stri
   if (!brand) {
     return NextResponse.json({ error: "brand not found" }, { status: 404 });
   }
-  return NextResponse.json({ brand });
+  return NextResponse.json({ brand: await enrichBrandWithSenderHealth(brand) });
 }
 
 export async function PATCH(request: Request, context: { params: Promise<{ brandId: string }> }) {
@@ -135,7 +175,37 @@ export async function PATCH(request: Request, context: { params: Promise<{ brand
   if (!brand) {
     return NextResponse.json({ error: "brand not found" }, { status: 404 });
   }
-  return NextResponse.json({ brand });
+
+  if (Array.isArray(patch.domains)) {
+    const senderDomains = brand.domains
+      .filter((row) => row.role !== "brand")
+      .map((row) => normalizeMonitoredDomain(row.domain))
+      .filter(Boolean);
+    if (senderDomains.length) {
+      const settings = await getOutreachProvisioningSettings();
+      if (settings.deliverability.provider === "google_postmaster") {
+        const monitoredDomains = new Set(
+          settings.deliverability.monitoredDomains.map((entry) => normalizeMonitoredDomain(entry)).filter(Boolean)
+        );
+        let changed = false;
+        for (const domain of senderDomains) {
+          if (!monitoredDomains.has(domain)) {
+            monitoredDomains.add(domain);
+            changed = true;
+          }
+        }
+        if (changed) {
+          await updateOutreachProvisioningSettings({
+            deliverability: {
+              monitoredDomains: [...monitoredDomains],
+            },
+          });
+        }
+      }
+    }
+  }
+
+  return NextResponse.json({ brand: await enrichBrandWithSenderHealth(brand) });
 }
 
 export async function DELETE(_: Request, context: { params: Promise<{ brandId: string }> }) {

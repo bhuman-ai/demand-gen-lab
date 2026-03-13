@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import { Lightbulb, RefreshCcw } from "lucide-react";
 import {
@@ -47,6 +48,7 @@ function isRenderableSuggestion(suggestion: ExperimentSuggestionRecord) {
 }
 
 export default function SuggestionsClient({ brandId }: { brandId: string }) {
+  const router = useRouter();
   const [brand, setBrand] = useState<BrandRecord | null>(null);
   const [suggestions, setSuggestions] = useState<ExperimentSuggestionRecord[]>([]);
   const [loading, setLoading] = useState(true);
@@ -180,7 +182,7 @@ export default function SuggestionsClient({ brandId }: { brandId: string }) {
                             experimentId: experiment.id,
                             source: "suggestion",
                           });
-                          await refresh();
+                          router.push(`/brands/${brandId}/experiments/${experiment.id}`);
                         } catch (err) {
                           setError(err instanceof Error ? err.message : "Failed to create experiment");
                         } finally {

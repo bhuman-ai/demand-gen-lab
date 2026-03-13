@@ -1,18 +1,18 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import { CopyPlus, Plus, Search } from "lucide-react";
 import {
   createExperimentApi,
-  fetchBrand,
   fetchExperiment,
   fetchExperimentListView,
 } from "@/lib/client-api";
 import { filterExperimentListItems } from "@/lib/experiment-list-view";
 import { trackEvent } from "@/lib/telemetry-client";
 import { cn } from "@/lib/utils";
-import type { BrandRecord, ExperimentListItem } from "@/lib/factory-types";
+import type { ExperimentListItem } from "@/lib/factory-types";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -76,7 +76,7 @@ function countForStatus(items: ExperimentListItem[], status: (typeof STATUS_OPTI
 }
 
 export default function ExperimentsClient({ brandId }: { brandId: string }) {
-  const [brand, setBrand] = useState<BrandRecord | null>(null);
+  const router = useRouter();
   const [items, setItems] = useState<ExperimentListItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
@@ -86,8 +86,7 @@ export default function ExperimentsClient({ brandId }: { brandId: string }) {
   const [query, setQuery] = useState("");
 
   const refresh = async () => {
-    const [brandRow, listRows] = await Promise.all([fetchBrand(brandId), fetchExperimentListView(brandId)]);
-    setBrand(brandRow);
+    const listRows = await fetchExperimentListView(brandId);
     setItems(listRows);
     localStorage.setItem("factory.activeBrandId", brandId);
   };
@@ -154,7 +153,6 @@ export default function ExperimentsClient({ brandId }: { brandId: string }) {
       {loading ? <div className="text-sm text-[color:var(--muted-foreground)]">Loading experiments...</div> : null}
 
       <PageIntro
-        eyebrow={`${brand?.name || "Brand"} / experiments`}
         title="Experiments"
         description="Test new offers and audiences before promoting them to campaigns."
         actions={
@@ -170,7 +168,7 @@ export default function ExperimentsClient({ brandId }: { brandId: string }) {
                     name: `Experiment ${items.length + 1}`,
                   });
                   trackEvent("experiment_created", { brandId, experimentId: created.id });
-                  await refresh();
+                  router.push(`/brands/${brandId}/experiments/${created.id}`);
                 } catch (err) {
                   setError(err instanceof Error ? err.message : "Failed to create experiment");
                 } finally {
@@ -273,7 +271,18 @@ export default function ExperimentsClient({ brandId }: { brandId: string }) {
                   {filtered.map((item) => (
                     <tr
                       key={item.id}
-                      className="group border-t border-[color:var(--border)] transition-colors hover:bg-[color:var(--surface-muted)]"
+                      className="group cursor-pointer border-t border-[color:var(--border)] transition-colors hover:bg-[color:var(--surface-muted)] focus-within:bg-[color:var(--surface-muted)]"
+                      tabIndex={0}
+                      onClick={() => {
+                        router.push(item.openHref);
+                      }}
+                      onKeyDown={(event) => {
+                        if (event.key !== "Enter" && event.key !== " ") {
+                          return;
+                        }
+                        event.preventDefault();
+                        router.push(item.openHref);
+                      }}
                     >
                       <td className="py-2 pr-4 align-top font-medium">
                         <div className="flex items-start gap-3">
@@ -307,16 +316,21 @@ export default function ExperimentsClient({ brandId }: { brandId: string }) {
                       <td className="py-2 pl-4 align-top">
                         <div className="flex justify-end gap-1 opacity-100 transition md:opacity-0 md:group-hover:opacity-100">
                           <Button size="sm" variant="outline" asChild>
-                            <Link href={item.openHref}>Open</Link>
-                          </Button>
-                          <Button size="sm" variant="outline" asChild>
-                            <Link href={item.editHref}>Edit</Link>
+                            <Link
+                              href={item.editHref}
+                              onClick={(event) => {
+                                event.stopPropagation();
+                              }}
+                            >
+                              Edit
+                            </Link>
                           </Button>
                           <Button
                             size="sm"
                             variant="outline"
                             disabled={duplicatingId === item.id}
-                            onClick={async () => {
+                            onClick={async (event) => {
+                              event.stopPropagation();
                               setDuplicatingId(item.id);
                               setError("");
                               try {
@@ -332,7 +346,7 @@ export default function ExperimentsClient({ brandId }: { brandId: string }) {
                                   source: "duplicate",
                                   fromExperimentId: item.id,
                                 });
-                                await refresh();
+                                router.push(`/brands/${brandId}/experiments/${duplicate.id}`);
                               } catch (err) {
                                 setError(err instanceof Error ? err.message : "Failed to duplicate experiment");
                               } finally {

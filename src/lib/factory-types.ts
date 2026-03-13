@@ -260,6 +260,17 @@ export type DomainRow = {
   status: "active" | "warming" | "risky";
   warmupStage: string;
   reputation: string;
+  automationStatus?: "queued" | "testing" | "warming" | "ready" | "attention";
+  automationSummary?: string;
+  domainHealth?: "unknown" | "queued" | "healthy" | "watch" | "risky";
+  domainHealthSummary?: string;
+  emailHealth?: "unknown" | "queued" | "healthy" | "watch" | "risky";
+  emailHealthSummary?: string;
+  ipHealth?: "unknown" | "queued" | "healthy" | "watch" | "risky";
+  ipHealthSummary?: string;
+  messagingHealth?: "unknown" | "queued" | "healthy" | "watch" | "risky";
+  messagingHealthSummary?: string;
+  seedPolicy?: "fresh_pool" | "rotating_pool" | "tainted_mailbox";
   role?: "brand" | "sender";
   registrar?: "namecheap" | "manual";
   provider?: "customerio" | "manual";
@@ -271,6 +282,8 @@ export type DomainRow = {
   customerIoAccountName?: string;
   notes?: string;
   lastProvisionedAt?: string;
+  lastHealthCheckAt?: string;
+  nextHealthCheckAt?: string;
 };
 
 export type LeadRow = {
@@ -532,6 +545,85 @@ export type SourcingActorMemory = {
   leadsAccepted: number;
   leadsRejected: number;
   avgQuality: number;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type DeliverabilityProbeVariant = "baseline" | "production";
+export type DeliverabilityProbeStage = "send" | "poll";
+export type DeliverabilityProbeRunStatus = "queued" | "sent" | "waiting" | "completed" | "failed";
+export type DeliverabilitySeedReservationStatus = "reserved" | "consumed" | "released";
+
+export type DeliverabilityProbeTarget = {
+  reservationId?: string;
+  accountId: string;
+  email: string;
+  providerMessageId?: string;
+};
+
+export type DeliverabilityProbeMonitorResult = {
+  accountId: string;
+  email: string;
+  placement: string;
+  matchedMailbox: string;
+  matchedUid: number;
+  ok: boolean;
+  error: string;
+};
+
+export type DeliverabilityProbeRun = {
+  id: string;
+  runId: string;
+  brandId: string;
+  campaignId: string;
+  experimentId: string;
+  probeToken: string;
+  probeVariant: DeliverabilityProbeVariant;
+  status: DeliverabilityProbeRunStatus;
+  stage: DeliverabilityProbeStage;
+  sourceMessageId: string;
+  sourceMessageStatus: string;
+  sourceType: string;
+  sourceNodeId: string;
+  sourceLeadId: string;
+  senderAccountId: string;
+  senderAccountName: string;
+  fromEmail: string;
+  replyToEmail: string;
+  subject: string;
+  contentHash: string;
+  reservationIds: string[];
+  monitorTargets: DeliverabilityProbeTarget[];
+  results: DeliverabilityProbeMonitorResult[];
+  pollAttempt: number;
+  placement: string;
+  totalMonitors: number;
+  counts: Record<string, unknown>;
+  summaryText: string;
+  lastError: string;
+  completedAt: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type DeliverabilitySeedReservation = {
+  id: string;
+  probeRunId: string;
+  runId: string;
+  brandId: string;
+  senderAccountId: string;
+  fromEmail: string;
+  monitorAccountId: string;
+  monitorEmail: string;
+  probeVariant: DeliverabilityProbeVariant;
+  contentHash: string;
+  probeToken: string;
+  status: DeliverabilitySeedReservationStatus;
+  providerMessageId: string;
+  releasedReason: string;
+  reservedAt: string;
+  consumedAt: string;
+  releasedAt: string;
   createdAt: string;
   updatedAt: string;
 };

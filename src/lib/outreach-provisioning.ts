@@ -23,6 +23,7 @@ import {
 import {
   getOutreachProvisioningSettings,
   getOutreachProvisioningSettingsSecrets,
+  updateOutreachProvisioningSettings,
 } from "@/lib/outreach-provider-settings";
 import { sanitizeCustomerIoBillingConfig } from "@/lib/outreach-customerio-billing";
 import { testOutreachProviders } from "@/lib/outreach-providers";
@@ -965,12 +966,34 @@ function updateBrandDomainRow(input: {
   const existingIndex = input.brand.domains.findIndex(
     (row) => normalizeDomain(row.domain) === normalizeDomain(input.domain)
   );
+  const automationStatus: DomainRow["automationStatus"] =
+    input.dnsStatus === "verified" ? "warming" : input.dnsStatus === "error" ? "attention" : "testing";
+  const automationSummary =
+    input.dnsStatus === "verified"
+      ? "DNS verified. Warmup started and seed checks now rotate by sender mailbox."
+      : input.dnsStatus === "error"
+        ? "DNS verification failed. Warmup is blocked until the sender records are fixed."
+        : "DNS checks are in flight. Warmup and isolated seed probes start after verification.";
   const row: DomainRow = {
     id: existingIndex >= 0 ? input.brand.domains[existingIndex].id : createId("domain"),
     domain: input.domain,
-    status: "warming",
-    warmupStage: input.dnsStatus === "verified" ? "Day 1 · ready" : "Day 1 · provisioning",
-    reputation: "new",
+    status: input.dnsStatus === "error" ? "risky" : "warming",
+    warmupStage:
+      input.dnsStatus === "verified"
+        ? "Day 1 · warmup active"
+        : input.dnsStatus === "error"
+          ? "Warmup blocked"
+          : "Queued for DNS + warmup",
+    reputation:
+      input.dnsStatus === "verified" ? "building" : input.dnsStatus === "error" ? "attention" : "queued",
+    automationStatus,
+    automationSummary,
+    domainHealth:
+      input.dnsStatus === "verified" ? "watch" : input.dnsStatus === "error" ? "risky" : "queued",
+    emailHealth: input.fromEmail ? "queued" : "unknown",
+    ipHealth: input.dnsStatus === "verified" ? "queued" : "unknown",
+    messagingHealth: "queued",
+    seedPolicy: "fresh_pool",
     role: "sender",
     registrar: "namecheap",
     provider: "customerio",
@@ -982,6 +1005,7 @@ function updateBrandDomainRow(input: {
     customerIoAccountName: input.customerIoAccountName,
     notes: input.notes,
     lastProvisionedAt: now,
+    nextHealthCheckAt: now,
   };
 
   const nextDomains = [...input.brand.domains];
@@ -1015,6 +1039,12 @@ function upsertProtectedBrandDomainRow(input: {
     status: "active",
     warmupStage: "Protected destination",
     reputation: "protected",
+    automationStatus: "ready",
+    automationSummary: "Protected destination only. Warmup and spam-test probes stay on satellite sender mailboxes.",
+    domainHealth: "healthy",
+    emailHealth: "unknown",
+    ipHealth: "unknown",
+    messagingHealth: "unknown",
     role: "brand",
     registrar: existingIndex >= 0 ? input.domains[existingIndex].registrar : "manual",
     provider: existingIndex >= 0 ? input.domains[existingIndex].provider : "manual",
@@ -1357,6 +1387,21 @@ export async function provisionCustomerIoSender(
   const updatedBrand = await updateBrand(brand.id, {
     domains: nextDomains,
   });
+
+  const deliverabilitySettings = await getOutreachProvisioningSettings();
+  if (deliverabilitySettings.deliverability.provider === "google_postmaster") {
+    const monitoredDomains = new Set(
+      deliverabilitySettings.deliverability.monitoredDomains.map((entry) => normalizeDomain(entry)).filter(Boolean)
+    );
+    if (!monitoredDomains.has(domain)) {
+      monitoredDomains.add(domain);
+      await updateOutreachProvisioningSettings({
+        deliverability: {
+          monitoredDomains: [...monitoredDomains],
+        },
+      });
+    }
+  }
 
   const nextSteps: string[] = [];
   if (!desiredDnsRecords.length) {

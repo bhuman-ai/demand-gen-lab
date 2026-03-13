@@ -12,6 +12,13 @@ import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import type {
   ActorCapabilityProfile,
   BrandOutreachAssignment,
+  DeliverabilityProbeRun,
+  DeliverabilityProbeStage,
+  DeliverabilityProbeTarget,
+  DeliverabilityProbeMonitorResult,
+  DeliverabilityProbeVariant,
+  DeliverabilitySeedReservation,
+  DeliverabilitySeedReservationStatus,
   LeadQualityPolicy,
   OutreachAccount,
   OutreachAccountConfig,
@@ -111,6 +118,8 @@ type OutreachStore = {
   anomalies: RunAnomaly[];
   events: OutreachEvent[];
   jobs: OutreachJob[];
+  deliverabilityProbeRuns: DeliverabilityProbeRun[];
+  deliverabilitySeedReservations: DeliverabilitySeedReservation[];
   sourcingActorProfiles: ActorCapabilityProfile[];
   sourcingChainDecisions: SourcingChainDecision[];
   sourcingProbeResults: SourcingProbeResult[];
@@ -151,6 +160,8 @@ const TABLE_REPLY_DRAFT = "demanddev_reply_drafts";
 const TABLE_EVENT = "demanddev_outreach_events";
 const TABLE_JOB = "demanddev_outreach_job_queue";
 const TABLE_ANOMALY = "demanddev_run_anomalies";
+const TABLE_DELIVERABILITY_PROBE_RUN = "demanddev_deliverability_probe_runs";
+const TABLE_DELIVERABILITY_SEED_RESERVATION = "demanddev_deliverability_seed_reservations";
 const TABLE_SOURCING_ACTOR_PROFILE = "demanddev_sourcing_actor_profiles";
 const TABLE_SOURCING_CHAIN_DECISION = "demanddev_sourcing_chain_decisions";
 const TABLE_SOURCING_PROBE_RESULT = "demanddev_sourcing_probe_results";
@@ -212,6 +223,8 @@ function defaultOutreachStore(): OutreachStore {
     anomalies: [],
     events: [],
     jobs: [],
+    deliverabilityProbeRuns: [],
+    deliverabilitySeedReservations: [],
     sourcingActorProfiles: [],
     sourcingChainDecisions: [],
     sourcingProbeResults: [],
@@ -649,6 +662,108 @@ function mapCustomerIoProfileAdmissionRow(input: unknown): CustomerIoProfileAdmi
   };
 }
 
+function mapDeliverabilityProbeTarget(input: unknown): DeliverabilityProbeTarget {
+  const row = asRecord(input);
+  return {
+    reservationId: String(row.reservation_id ?? row.reservationId ?? "").trim() || undefined,
+    accountId: String(row.account_id ?? row.accountId ?? "").trim(),
+    email: String(row.email ?? "").trim().toLowerCase(),
+    providerMessageId: String(row.provider_message_id ?? row.providerMessageId ?? "").trim() || undefined,
+  };
+}
+
+function mapDeliverabilityProbeMonitorResult(input: unknown): DeliverabilityProbeMonitorResult {
+  const row = asRecord(input);
+  return {
+    accountId: String(row.account_id ?? row.accountId ?? "").trim(),
+    email: String(row.email ?? "").trim().toLowerCase(),
+    placement: String(row.placement ?? "unknown").trim(),
+    matchedMailbox: String(row.matched_mailbox ?? row.matchedMailbox ?? "").trim(),
+    matchedUid: Math.max(0, Number(row.matched_uid ?? row.matchedUid ?? 0) || 0),
+    ok: Boolean(row.ok),
+    error: String(row.error ?? "").trim(),
+  };
+}
+
+function mapDeliverabilityProbeRunRow(input: unknown): DeliverabilityProbeRun {
+  const row = asRecord(input);
+  const monitorTargetsRaw = Array.isArray(row.monitor_targets)
+    ? row.monitor_targets
+    : Array.isArray(row.monitorTargets)
+      ? row.monitorTargets
+      : [];
+  const resultsRaw = Array.isArray(row.results) ? row.results : [];
+  const reservationIdsRaw = Array.isArray(row.reservation_ids)
+    ? row.reservation_ids
+    : Array.isArray(row.reservationIds)
+      ? row.reservationIds
+      : [];
+  const counts = asRecord(row.counts);
+  return {
+    id: String(row.id ?? "").trim(),
+    runId: String(row.run_id ?? row.runId ?? "").trim(),
+    brandId: String(row.brand_id ?? row.brandId ?? "").trim(),
+    campaignId: String(row.campaign_id ?? row.campaignId ?? "").trim(),
+    experimentId: String(row.experiment_id ?? row.experimentId ?? "").trim(),
+    probeToken: String(row.probe_token ?? row.probeToken ?? "").trim(),
+    probeVariant: String(row.probe_variant ?? row.probeVariant) === "baseline" ? "baseline" : "production",
+    status: ["queued", "sent", "waiting", "completed", "failed"].includes(String(row.status))
+      ? (String(row.status) as DeliverabilityProbeRun["status"])
+      : "queued",
+    stage: String(row.stage) === "poll" ? "poll" : "send",
+    sourceMessageId: String(row.source_message_id ?? row.sourceMessageId ?? "").trim(),
+    sourceMessageStatus: String(row.source_message_status ?? row.sourceMessageStatus ?? "").trim(),
+    sourceType: String(row.source_type ?? row.sourceType ?? "").trim(),
+    sourceNodeId: String(row.source_node_id ?? row.sourceNodeId ?? "").trim(),
+    sourceLeadId: String(row.source_lead_id ?? row.sourceLeadId ?? "").trim(),
+    senderAccountId: String(row.sender_account_id ?? row.senderAccountId ?? "").trim(),
+    senderAccountName: String(row.sender_account_name ?? row.senderAccountName ?? "").trim(),
+    fromEmail: String(row.from_email ?? row.fromEmail ?? "").trim().toLowerCase(),
+    replyToEmail: String(row.reply_to_email ?? row.replyToEmail ?? "").trim().toLowerCase(),
+    subject: String(row.subject ?? "").trim(),
+    contentHash: String(row.content_hash ?? row.contentHash ?? "").trim(),
+    reservationIds: reservationIdsRaw.map((item) => String(item ?? "").trim()).filter(Boolean),
+    monitorTargets: monitorTargetsRaw.map((item) => mapDeliverabilityProbeTarget(item)).filter((item) => item.accountId && item.email),
+    results: resultsRaw.map((item) => mapDeliverabilityProbeMonitorResult(item)).filter((item) => item.accountId && item.email),
+    pollAttempt: Math.max(0, Number(row.poll_attempt ?? row.pollAttempt ?? 0) || 0),
+    placement: String(row.placement ?? "unknown").trim(),
+    totalMonitors: Math.max(0, Number(row.total_monitors ?? row.totalMonitors ?? 0) || 0),
+    counts,
+    summaryText: String(row.summary_text ?? row.summaryText ?? "").trim(),
+    lastError: String(row.last_error ?? row.lastError ?? "").trim(),
+    completedAt: String(row.completed_at ?? row.completedAt ?? "").trim(),
+    createdAt: String(row.created_at ?? row.createdAt ?? nowIso()),
+    updatedAt: String(row.updated_at ?? row.updatedAt ?? nowIso()),
+  };
+}
+
+function mapDeliverabilitySeedReservationRow(input: unknown): DeliverabilitySeedReservation {
+  const row = asRecord(input);
+  return {
+    id: String(row.id ?? "").trim(),
+    probeRunId: String(row.probe_run_id ?? row.probeRunId ?? "").trim(),
+    runId: String(row.run_id ?? row.runId ?? "").trim(),
+    brandId: String(row.brand_id ?? row.brandId ?? "").trim(),
+    senderAccountId: String(row.sender_account_id ?? row.senderAccountId ?? "").trim(),
+    fromEmail: String(row.from_email ?? row.fromEmail ?? "").trim().toLowerCase(),
+    monitorAccountId: String(row.monitor_account_id ?? row.monitorAccountId ?? "").trim(),
+    monitorEmail: String(row.monitor_email ?? row.monitorEmail ?? "").trim().toLowerCase(),
+    probeVariant: String(row.probe_variant ?? row.probeVariant) === "baseline" ? "baseline" : "production",
+    contentHash: String(row.content_hash ?? row.contentHash ?? "").trim(),
+    probeToken: String(row.probe_token ?? row.probeToken ?? "").trim(),
+    status: ["reserved", "consumed", "released"].includes(String(row.status))
+      ? (String(row.status) as DeliverabilitySeedReservationStatus)
+      : "reserved",
+    providerMessageId: String(row.provider_message_id ?? row.providerMessageId ?? "").trim(),
+    releasedReason: String(row.released_reason ?? row.releasedReason ?? "").trim(),
+    reservedAt: String(row.reserved_at ?? row.reservedAt ?? nowIso()).trim(),
+    consumedAt: String(row.consumed_at ?? row.consumedAt ?? "").trim(),
+    releasedAt: String(row.released_at ?? row.releasedAt ?? "").trim(),
+    createdAt: String(row.created_at ?? row.createdAt ?? nowIso()),
+    updatedAt: String(row.updated_at ?? row.updatedAt ?? nowIso()),
+  };
+}
+
 function mapSourcingActorProfileRow(input: unknown): ActorCapabilityProfile {
   const row = asRecord(input);
   const stageHintsRaw = row.stage_hints ?? row.stageHints;
@@ -795,6 +910,10 @@ async function readLocalStore(): Promise<OutreachStore> {
       anomalies: asArray(row.anomalies).map((item) => mapAnomalyRow(item)),
       events: asArray(row.events).map((item) => mapEventRow(item)),
       jobs: asArray(row.jobs).map((item) => mapJobRow(item)),
+      deliverabilityProbeRuns: asArray(row.deliverabilityProbeRuns).map((item) => mapDeliverabilityProbeRunRow(item)),
+      deliverabilitySeedReservations: asArray(row.deliverabilitySeedReservations).map((item) =>
+        mapDeliverabilitySeedReservationRow(item)
+      ),
       sourcingActorProfiles: asArray(row.sourcingActorProfiles).map((item) => mapSourcingActorProfileRow(item)),
       sourcingChainDecisions: asArray(row.sourcingChainDecisions).map((item) => mapSourcingChainDecisionRow(item)),
       sourcingProbeResults: asArray(row.sourcingProbeResults).map((item) => mapSourcingProbeResultRow(item)),
@@ -3101,6 +3220,472 @@ export async function updateOutreachJob(
   };
   await writeLocalStore(store);
   return store.jobs[idx];
+}
+
+export async function createDeliverabilityProbeRun(input: {
+  runId: string;
+  brandId: string;
+  campaignId: string;
+  experimentId: string;
+  probeToken: string;
+  probeVariant: DeliverabilityProbeVariant;
+  status?: DeliverabilityProbeRun["status"];
+  stage?: DeliverabilityProbeStage;
+  sourceMessageId?: string;
+  sourceMessageStatus?: string;
+  sourceType?: string;
+  sourceNodeId?: string;
+  sourceLeadId?: string;
+  senderAccountId?: string;
+  senderAccountName?: string;
+  fromEmail?: string;
+  replyToEmail?: string;
+  subject?: string;
+  contentHash?: string;
+  reservationIds?: string[];
+  monitorTargets?: DeliverabilityProbeTarget[];
+  results?: DeliverabilityProbeMonitorResult[];
+  pollAttempt?: number;
+  placement?: string;
+  totalMonitors?: number;
+  counts?: Record<string, unknown>;
+  summaryText?: string;
+  lastError?: string;
+  completedAt?: string;
+}): Promise<DeliverabilityProbeRun> {
+  const now = nowIso();
+  const probeRun: DeliverabilityProbeRun = {
+    id: createId("probe"),
+    runId: input.runId,
+    brandId: input.brandId,
+    campaignId: input.campaignId,
+    experimentId: input.experimentId,
+    probeToken: input.probeToken.trim(),
+    probeVariant: input.probeVariant,
+    status: input.status ?? "queued",
+    stage: input.stage ?? "send",
+    sourceMessageId: String(input.sourceMessageId ?? "").trim(),
+    sourceMessageStatus: String(input.sourceMessageStatus ?? "").trim(),
+    sourceType: String(input.sourceType ?? "").trim(),
+    sourceNodeId: String(input.sourceNodeId ?? "").trim(),
+    sourceLeadId: String(input.sourceLeadId ?? "").trim(),
+    senderAccountId: String(input.senderAccountId ?? "").trim(),
+    senderAccountName: String(input.senderAccountName ?? "").trim(),
+    fromEmail: String(input.fromEmail ?? "").trim().toLowerCase(),
+    replyToEmail: String(input.replyToEmail ?? "").trim().toLowerCase(),
+    subject: String(input.subject ?? "").trim(),
+    contentHash: String(input.contentHash ?? "").trim(),
+    reservationIds: (input.reservationIds ?? []).map((item) => String(item ?? "").trim()).filter(Boolean),
+    monitorTargets: (input.monitorTargets ?? []).map((item) => mapDeliverabilityProbeTarget(item)),
+    results: (input.results ?? []).map((item) => mapDeliverabilityProbeMonitorResult(item)),
+    pollAttempt: Math.max(0, Number(input.pollAttempt ?? 0) || 0),
+    placement: String(input.placement ?? "unknown").trim(),
+    totalMonitors: Math.max(0, Number(input.totalMonitors ?? 0) || 0),
+    counts: input.counts ?? {},
+    summaryText: String(input.summaryText ?? "").trim(),
+    lastError: String(input.lastError ?? "").trim(),
+    completedAt: String(input.completedAt ?? "").trim(),
+    createdAt: now,
+    updatedAt: now,
+  };
+
+  const supabase = getSupabaseAdmin();
+  if (supabase) {
+    const { data, error } = await supabase
+      .from(TABLE_DELIVERABILITY_PROBE_RUN)
+      .insert({
+        id: probeRun.id,
+        run_id: probeRun.runId,
+        brand_id: probeRun.brandId,
+        campaign_id: probeRun.campaignId,
+        experiment_id: probeRun.experimentId,
+        probe_token: probeRun.probeToken,
+        probe_variant: probeRun.probeVariant,
+        status: probeRun.status,
+        stage: probeRun.stage,
+        source_message_id: probeRun.sourceMessageId,
+        source_message_status: probeRun.sourceMessageStatus,
+        source_type: probeRun.sourceType,
+        source_node_id: probeRun.sourceNodeId,
+        source_lead_id: probeRun.sourceLeadId,
+        sender_account_id: probeRun.senderAccountId,
+        sender_account_name: probeRun.senderAccountName,
+        from_email: probeRun.fromEmail,
+        reply_to_email: probeRun.replyToEmail,
+        subject: probeRun.subject,
+        content_hash: probeRun.contentHash,
+        reservation_ids: probeRun.reservationIds,
+        monitor_targets: probeRun.monitorTargets,
+        results: probeRun.results,
+        poll_attempt: probeRun.pollAttempt,
+        placement: probeRun.placement,
+        total_monitors: probeRun.totalMonitors,
+        counts: probeRun.counts,
+        summary_text: probeRun.summaryText,
+        last_error: probeRun.lastError,
+        completed_at: probeRun.completedAt || null,
+      })
+      .select("*")
+      .single();
+    if (!error && data) {
+      return mapDeliverabilityProbeRunRow(data);
+    }
+  }
+
+  const store = await readLocalStore();
+  store.deliverabilityProbeRuns.unshift(probeRun);
+  await writeLocalStore(store);
+  return probeRun;
+}
+
+export async function getDeliverabilityProbeRun(probeRunId: string): Promise<DeliverabilityProbeRun | null> {
+  const supabase = getSupabaseAdmin();
+  if (supabase) {
+    const { data, error } = await supabase
+      .from(TABLE_DELIVERABILITY_PROBE_RUN)
+      .select("*")
+      .eq("id", probeRunId)
+      .maybeSingle();
+    if (!error && data) {
+      return mapDeliverabilityProbeRunRow(data);
+    }
+  }
+
+  const store = await readLocalStore();
+  return store.deliverabilityProbeRuns.find((row) => row.id === probeRunId) ?? null;
+}
+
+export async function findDeliverabilityProbeRun(input: {
+  runId: string;
+  probeToken: string;
+  probeVariant?: DeliverabilityProbeVariant;
+}): Promise<DeliverabilityProbeRun | null> {
+  const runId = input.runId.trim();
+  const probeToken = input.probeToken.trim();
+  const probeVariant = input.probeVariant;
+  if (!runId || !probeToken) return null;
+
+  const supabase = getSupabaseAdmin();
+  if (supabase) {
+    let query = supabase
+      .from(TABLE_DELIVERABILITY_PROBE_RUN)
+      .select("*")
+      .eq("run_id", runId)
+      .eq("probe_token", probeToken)
+      .order("created_at", { ascending: false })
+      .limit(1);
+    if (probeVariant) query = query.eq("probe_variant", probeVariant);
+    const { data, error } = await query;
+    if (!error) {
+      const row = (data ?? [])[0];
+      return row ? mapDeliverabilityProbeRunRow(row) : null;
+    }
+  }
+
+  const store = await readLocalStore();
+  return (
+    store.deliverabilityProbeRuns
+      .filter(
+        (row) =>
+          row.runId === runId &&
+          row.probeToken === probeToken &&
+          (!probeVariant || row.probeVariant === probeVariant)
+      )
+      .sort((left, right) => (left.createdAt < right.createdAt ? 1 : -1))[0] ?? null
+  );
+}
+
+export async function listDeliverabilityProbeRuns(input?: {
+  brandId?: string;
+  runId?: string;
+  campaignId?: string;
+  experimentId?: string;
+  senderAccountId?: string;
+  fromEmail?: string;
+  probeVariant?: DeliverabilityProbeVariant;
+  statuses?: DeliverabilityProbeRun["status"][];
+  limit?: number;
+}): Promise<DeliverabilityProbeRun[]> {
+  const brandId = String(input?.brandId ?? "").trim();
+  const runId = String(input?.runId ?? "").trim();
+  const campaignId = String(input?.campaignId ?? "").trim();
+  const experimentId = String(input?.experimentId ?? "").trim();
+  const senderAccountId = String(input?.senderAccountId ?? "").trim();
+  const fromEmail = String(input?.fromEmail ?? "").trim().toLowerCase();
+  const probeVariant = input?.probeVariant;
+  const statuses = (input?.statuses ?? []).filter(Boolean);
+  const limit = Math.max(0, Number(input?.limit ?? 0) || 0);
+
+  const supabase = getSupabaseAdmin();
+  if (supabase) {
+    let query = supabase
+      .from(TABLE_DELIVERABILITY_PROBE_RUN)
+      .select("*")
+      .order("created_at", { ascending: false });
+    if (brandId) query = query.eq("brand_id", brandId);
+    if (runId) query = query.eq("run_id", runId);
+    if (campaignId) query = query.eq("campaign_id", campaignId);
+    if (experimentId) query = query.eq("experiment_id", experimentId);
+    if (senderAccountId) query = query.eq("sender_account_id", senderAccountId);
+    if (fromEmail) query = query.eq("from_email", fromEmail);
+    if (probeVariant) query = query.eq("probe_variant", probeVariant);
+    if (statuses.length) query = query.in("status", statuses);
+    if (limit > 0) query = query.limit(limit);
+    const { data, error } = await query;
+    if (!error) {
+      return (data ?? []).map((row: unknown) => mapDeliverabilityProbeRunRow(row));
+    }
+  }
+
+  let rows = (await readLocalStore()).deliverabilityProbeRuns.filter((row) => {
+    if (brandId && row.brandId !== brandId) return false;
+    if (runId && row.runId !== runId) return false;
+    if (campaignId && row.campaignId !== campaignId) return false;
+    if (experimentId && row.experimentId !== experimentId) return false;
+    if (senderAccountId && row.senderAccountId !== senderAccountId) return false;
+    if (fromEmail && row.fromEmail !== fromEmail) return false;
+    if (probeVariant && row.probeVariant !== probeVariant) return false;
+    if (statuses.length && !statuses.includes(row.status)) return false;
+    return true;
+  });
+  rows = rows.sort((left, right) => (left.createdAt < right.createdAt ? 1 : -1));
+  return limit > 0 ? rows.slice(0, limit) : rows;
+}
+
+export async function updateDeliverabilityProbeRun(
+  probeRunId: string,
+  patch: Partial<
+    Pick<
+      DeliverabilityProbeRun,
+      | "status"
+      | "stage"
+      | "senderAccountId"
+      | "senderAccountName"
+      | "fromEmail"
+      | "replyToEmail"
+      | "subject"
+      | "contentHash"
+      | "reservationIds"
+      | "monitorTargets"
+      | "results"
+      | "pollAttempt"
+      | "placement"
+      | "totalMonitors"
+      | "counts"
+      | "summaryText"
+      | "lastError"
+      | "completedAt"
+    >
+  >
+): Promise<DeliverabilityProbeRun | null> {
+  const now = nowIso();
+  const supabase = getSupabaseAdmin();
+  if (supabase) {
+    const update: Record<string, unknown> = { updated_at: now };
+    if (patch.status !== undefined) update.status = patch.status;
+    if (patch.stage !== undefined) update.stage = patch.stage;
+    if (patch.senderAccountId !== undefined) update.sender_account_id = patch.senderAccountId;
+    if (patch.senderAccountName !== undefined) update.sender_account_name = patch.senderAccountName;
+    if (patch.fromEmail !== undefined) update.from_email = patch.fromEmail;
+    if (patch.replyToEmail !== undefined) update.reply_to_email = patch.replyToEmail;
+    if (patch.subject !== undefined) update.subject = patch.subject;
+    if (patch.contentHash !== undefined) update.content_hash = patch.contentHash;
+    if (patch.reservationIds !== undefined) update.reservation_ids = patch.reservationIds;
+    if (patch.monitorTargets !== undefined) update.monitor_targets = patch.monitorTargets;
+    if (patch.results !== undefined) update.results = patch.results;
+    if (patch.pollAttempt !== undefined) update.poll_attempt = patch.pollAttempt;
+    if (patch.placement !== undefined) update.placement = patch.placement;
+    if (patch.totalMonitors !== undefined) update.total_monitors = patch.totalMonitors;
+    if (patch.counts !== undefined) update.counts = patch.counts;
+    if (patch.summaryText !== undefined) update.summary_text = patch.summaryText;
+    if (patch.lastError !== undefined) update.last_error = patch.lastError;
+    if (patch.completedAt !== undefined) update.completed_at = patch.completedAt || null;
+
+    const { data, error } = await supabase
+      .from(TABLE_DELIVERABILITY_PROBE_RUN)
+      .update(update)
+      .eq("id", probeRunId)
+      .select("*")
+      .maybeSingle();
+    if (!error && data) {
+      return mapDeliverabilityProbeRunRow(data);
+    }
+  }
+
+  const store = await readLocalStore();
+  const index = store.deliverabilityProbeRuns.findIndex((row) => row.id === probeRunId);
+  if (index < 0) return null;
+  store.deliverabilityProbeRuns[index] = {
+    ...store.deliverabilityProbeRuns[index],
+    ...patch,
+    updatedAt: now,
+  };
+  await writeLocalStore(store);
+  return store.deliverabilityProbeRuns[index];
+}
+
+export async function listDeliverabilitySeedReservations(input?: {
+  brandId?: string;
+  runId?: string;
+  probeRunId?: string;
+  senderAccountId?: string;
+  fromEmail?: string;
+  statuses?: DeliverabilitySeedReservationStatus[];
+}): Promise<DeliverabilitySeedReservation[]> {
+  const brandId = String(input?.brandId ?? "").trim();
+  const runId = String(input?.runId ?? "").trim();
+  const probeRunId = String(input?.probeRunId ?? "").trim();
+  const senderAccountId = String(input?.senderAccountId ?? "").trim();
+  const fromEmail = String(input?.fromEmail ?? "").trim().toLowerCase();
+  const statuses = (input?.statuses ?? []).filter(Boolean);
+
+  const supabase = getSupabaseAdmin();
+  if (supabase) {
+    let query = supabase
+      .from(TABLE_DELIVERABILITY_SEED_RESERVATION)
+      .select("*")
+      .order("created_at", { ascending: false });
+    if (brandId) query = query.eq("brand_id", brandId);
+    if (runId) query = query.eq("run_id", runId);
+    if (probeRunId) query = query.eq("probe_run_id", probeRunId);
+    if (senderAccountId) query = query.eq("sender_account_id", senderAccountId);
+    if (fromEmail) query = query.eq("from_email", fromEmail);
+    if (statuses.length) query = query.in("status", statuses);
+    const { data, error } = await query;
+    if (!error) {
+      return (data ?? []).map((row: unknown) => mapDeliverabilitySeedReservationRow(row));
+    }
+  }
+
+  const store = await readLocalStore();
+  return store.deliverabilitySeedReservations
+    .filter((row) => {
+      if (brandId && row.brandId !== brandId) return false;
+      if (runId && row.runId !== runId) return false;
+      if (probeRunId && row.probeRunId !== probeRunId) return false;
+      if (senderAccountId && row.senderAccountId !== senderAccountId) return false;
+      if (fromEmail && row.fromEmail !== fromEmail) return false;
+      if (statuses.length && !statuses.includes(row.status)) return false;
+      return true;
+    })
+    .sort((left, right) => (left.createdAt < right.createdAt ? 1 : -1));
+}
+
+export async function createDeliverabilitySeedReservations(input: {
+  probeRunId: string;
+  runId: string;
+  brandId: string;
+  senderAccountId: string;
+  fromEmail: string;
+  probeVariant: DeliverabilityProbeVariant;
+  contentHash: string;
+  probeToken: string;
+  targets: DeliverabilityProbeTarget[];
+}): Promise<DeliverabilitySeedReservation[]> {
+  const now = nowIso();
+  const rows: DeliverabilitySeedReservation[] = input.targets.map((target) => ({
+    id: createId("seedres"),
+    probeRunId: input.probeRunId,
+    runId: input.runId,
+    brandId: input.brandId,
+    senderAccountId: input.senderAccountId,
+    fromEmail: input.fromEmail.trim().toLowerCase(),
+    monitorAccountId: target.accountId.trim(),
+    monitorEmail: target.email.trim().toLowerCase(),
+    probeVariant: input.probeVariant,
+    contentHash: input.contentHash.trim(),
+    probeToken: input.probeToken.trim(),
+    status: "reserved",
+    providerMessageId: "",
+    releasedReason: "",
+    reservedAt: now,
+    consumedAt: "",
+    releasedAt: "",
+    createdAt: now,
+    updatedAt: now,
+  }));
+  if (!rows.length) return [];
+
+  const supabase = getSupabaseAdmin();
+  if (supabase) {
+    const payload = rows.map((row) => ({
+      id: row.id,
+      probe_run_id: row.probeRunId,
+      run_id: row.runId,
+      brand_id: row.brandId,
+      sender_account_id: row.senderAccountId,
+      from_email: row.fromEmail,
+      monitor_account_id: row.monitorAccountId,
+      monitor_email: row.monitorEmail,
+      probe_variant: row.probeVariant,
+      content_hash: row.contentHash,
+      probe_token: row.probeToken,
+      status: row.status,
+      provider_message_id: row.providerMessageId,
+      released_reason: row.releasedReason,
+      reserved_at: row.reservedAt,
+      consumed_at: null,
+      released_at: null,
+    }));
+    const { data, error } = await supabase
+      .from(TABLE_DELIVERABILITY_SEED_RESERVATION)
+      .insert(payload)
+      .select("*");
+    if (!error) {
+      return (data ?? []).map((row: unknown) => mapDeliverabilitySeedReservationRow(row));
+    }
+  }
+
+  const store = await readLocalStore();
+  store.deliverabilitySeedReservations.unshift(...rows);
+  await writeLocalStore(store);
+  return rows;
+}
+
+export async function updateDeliverabilitySeedReservations(
+  reservationIds: string[],
+  patch: Partial<Pick<DeliverabilitySeedReservation, "status" | "providerMessageId" | "releasedReason" | "consumedAt" | "releasedAt">>
+): Promise<DeliverabilitySeedReservation[]> {
+  const ids = reservationIds.map((item) => String(item ?? "").trim()).filter(Boolean);
+  if (!ids.length) return [];
+  const now = nowIso();
+
+  const supabase = getSupabaseAdmin();
+  if (supabase) {
+    const update: Record<string, unknown> = { updated_at: now };
+    if (patch.status !== undefined) update.status = patch.status;
+    if (patch.providerMessageId !== undefined) update.provider_message_id = patch.providerMessageId;
+    if (patch.releasedReason !== undefined) update.released_reason = patch.releasedReason;
+    if (patch.consumedAt !== undefined) update.consumed_at = patch.consumedAt || null;
+    if (patch.releasedAt !== undefined) update.released_at = patch.releasedAt || null;
+
+    const { data, error } = await supabase
+      .from(TABLE_DELIVERABILITY_SEED_RESERVATION)
+      .update(update)
+      .in("id", ids)
+      .select("*");
+    if (!error) {
+      return (data ?? []).map((row: unknown) => mapDeliverabilitySeedReservationRow(row));
+    }
+  }
+
+  const store = await readLocalStore();
+  const updated: DeliverabilitySeedReservation[] = [];
+  for (let index = 0; index < store.deliverabilitySeedReservations.length; index += 1) {
+    const row = store.deliverabilitySeedReservations[index];
+    if (!ids.includes(row.id)) continue;
+    const next: DeliverabilitySeedReservation = {
+      ...row,
+      ...patch,
+      updatedAt: now,
+    };
+    store.deliverabilitySeedReservations[index] = next;
+    updated.push(next);
+  }
+  if (updated.length) {
+    await writeLocalStore(store);
+  }
+  return updated;
 }
 
 export async function createRunAnomaly(input: {

@@ -33,6 +33,7 @@ import {
   resumeRun,
   updateCampaignApi,
 } from "@/lib/client-api";
+import { buildSenderRoutingSignalFromDomainRow, rankSenderRoutingSignals, type SenderRoutingSignals } from "@/lib/sender-routing";
 import { trackEvent } from "@/lib/telemetry-client";
 import type {
   BrandRecord,
@@ -575,6 +576,26 @@ export default function RunClient({
   const inboundReplyMessages = runView.replyMessages
     .filter((message) => message.direction === "inbound")
     .sort((a, b) => (a.receivedAt < b.receivedAt ? 1 : -1));
+  const rankedSenderRoutingSignals = rankSenderRoutingSignals(
+    (brand?.domains ?? [])
+      .map((row) => buildSenderRoutingSignalFromDomainRow(row))
+      .filter((row): row is SenderRoutingSignals => Boolean(row))
+  );
+  const preferredSenderRoute =
+    rankedSenderRoutingSignals.find((signal) => signal.automationStatus !== "attention") ?? null;
+  const latestRunMessages = latestRun
+    ? runView.messages.filter((message) => message.runId === latestRun.id)
+    : [];
+  const lastSentMessage =
+    [...latestRunMessages]
+      .filter((message) => message.status === "sent" && (message.sentAt || message.createdAt))
+      .sort((left, right) => {
+        const leftAt = left.sentAt || left.createdAt;
+        const rightAt = right.sentAt || right.createdAt;
+        return leftAt < rightAt ? 1 : -1;
+      })[0] ?? null;
+  const lastSentSenderFromEmail = asText(lastSentMessage?.generationMeta?.senderFromEmail);
+  const lastSentSenderName = asText(lastSentMessage?.generationMeta?.senderAccountName);
 
   const launchForVariant = async (experimentId: string) => {
     setLaunching(true);
@@ -751,6 +772,51 @@ export default function RunClient({
           {latestRun.lastError ? (
             <div className="mt-1 text-[color:var(--danger)]">Reason: {latestRun.lastError}</div>
           ) : null}
+          <div className="mt-3 grid gap-3 lg:grid-cols-2">
+            <div className="border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-3">
+              <div className="text-[11px] uppercase tracking-[0.16em] text-[color:var(--muted-foreground)]">
+                Preferred sender
+              </div>
+              <div className="mt-2 flex flex-wrap items-center gap-2">
+                <Badge variant={preferredSenderRoute ? "success" : "muted"}>
+                  {preferredSenderRoute ? "Health-first route" : "No route ready"}
+                </Badge>
+              </div>
+              <div className="mt-2 font-medium text-[color:var(--foreground)]">
+                {preferredSenderRoute?.fromEmail || "No sender mailbox is ready"}
+              </div>
+              <div className="mt-1 text-xs leading-5 text-[color:var(--muted-foreground)]">
+                {preferredSenderRoute
+                  ? preferredSenderRoute.automationSummary
+                  : "Use the Senders page to finish verification, warmup, and probe checks."}
+              </div>
+            </div>
+            <div className="border border-[color:var(--border)] px-3 py-3">
+              <div className="text-[11px] uppercase tracking-[0.16em] text-[color:var(--muted-foreground)]">
+                Latest sender used
+              </div>
+              <div className="mt-2 flex flex-wrap items-center gap-2">
+                <Badge variant={lastSentSenderFromEmail ? "accent" : "muted"}>
+                  {lastSentSenderFromEmail ? "Observed on send" : "No send yet"}
+                </Badge>
+              </div>
+              <div className="mt-2 font-medium text-[color:var(--foreground)]">
+                {lastSentSenderFromEmail || "No sent message in this run yet"}
+              </div>
+              <div className="mt-1 text-xs leading-5 text-[color:var(--muted-foreground)]">
+                {lastSentSenderFromEmail
+                  ? `${lastSentSenderName || "Sender account"} handled the latest completed send.`
+                  : "Once sends start, this panel shows which sender mailbox actually carried the latest message."}
+              </div>
+              {preferredSenderRoute &&
+              lastSentSenderFromEmail &&
+              preferredSenderRoute.fromEmail.toLowerCase() !== lastSentSenderFromEmail.toLowerCase() ? (
+                <div className="mt-2 text-xs leading-5 text-[color:var(--muted-foreground)]">
+                  New sends currently prefer {preferredSenderRoute.fromEmail} if health and capacity remain in family.
+                </div>
+              ) : null}
+            </div>
+          </div>
         </div>
       ) : null}
     </SectionPanel>

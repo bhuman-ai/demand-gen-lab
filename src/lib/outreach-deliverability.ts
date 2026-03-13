@@ -1,4 +1,5 @@
 import type {
+  DeliverabilityProbeRun,
   DeliverabilityDomainHealth,
   DeliverabilityHealthStatus,
   OutreachAccount,
@@ -112,20 +113,21 @@ function normalizeCounts(
 }
 
 function resolveSenderKey(input: {
-  event: OutreachRunEvent;
+  event?: OutreachRunEvent;
+  probeRun?: DeliverabilityProbeRun;
   accountsById: Map<string, OutreachAccount>;
   accountIdByFromEmail: Map<string, string>;
 }) {
-  const payload = asRecord(input.event.payload);
-  const payloadAccountId = asText(payload.senderAccountId);
-  const payloadFromEmail = asText(payload.fromEmail).toLowerCase();
+  const payload = input.event ? asRecord(input.event.payload) : {};
+  const payloadAccountId = input.probeRun?.senderAccountId.trim() || asText(payload.senderAccountId);
+  const payloadFromEmail = (input.probeRun?.fromEmail || asText(payload.fromEmail)).toLowerCase();
   const accountId =
     payloadAccountId ||
     (payloadFromEmail ? input.accountIdByFromEmail.get(payloadFromEmail) ?? "" : "");
   const account = accountId ? input.accountsById.get(accountId) ?? null : null;
   const fromEmail =
     payloadFromEmail || account?.config.customerIo.fromEmail.trim().toLowerCase() || "";
-  const senderAccountName = asText(payload.senderAccountName) || account?.name || fromEmail;
+  const senderAccountName = input.probeRun?.senderAccountName.trim() || asText(payload.senderAccountName) || account?.name || fromEmail;
   const senderKey = accountId || fromEmail;
   return {
     senderKey,
@@ -136,11 +138,14 @@ function resolveSenderKey(input: {
 }
 
 export function buildSenderDeliverabilityScorecards(input: {
-  events: OutreachRunEvent[];
+  events?: OutreachRunEvent[];
+  probeRuns?: DeliverabilityProbeRun[];
   senderAccounts: OutreachAccount[];
   now?: Date;
 }) {
   const now = input.now ?? new Date();
+  const events = input.events ?? [];
+  const probeRuns = input.probeRuns ?? [];
   const accountsById = new Map(input.senderAccounts.map((account) => [account.id, account] as const));
   const accountIdByFromEmail = new Map(
     input.senderAccounts
@@ -150,7 +155,7 @@ export function buildSenderDeliverabilityScorecards(input: {
   const latestBySenderKey = new Map<string, SenderDeliverabilityScorecard>();
   const latestManualResumeBySenderKey = new Map<string, string>();
 
-  const manualResumeEvents = [...input.events]
+  const manualResumeEvents = [...events]
     .filter((event) => event.eventType === "sender_deliverability_resumed_manual")
     .sort((left, right) => (left.createdAt < right.createdAt ? 1 : -1));
 
@@ -164,30 +169,48 @@ export function buildSenderDeliverabilityScorecards(input: {
     latestManualResumeBySenderKey.set(senderKey, event.createdAt);
   }
 
-  const probeResults = [...input.events]
-    .filter((event) => event.eventType === "deliverability_probe_result")
-    .sort((left, right) => (left.createdAt < right.createdAt ? 1 : -1));
+  const probeRows =
+    probeRuns.length > 0
+      ? [...probeRuns]
+          .filter((probeRun) => probeRun.status === "completed")
+          .sort((left, right) => {
+            const leftAt = left.completedAt || left.updatedAt || left.createdAt;
+            const rightAt = right.completedAt || right.updatedAt || right.createdAt;
+            return leftAt < rightAt ? 1 : -1;
+          })
+      : [...events]
+          .filter((event) => event.eventType === "deliverability_probe_result")
+          .sort((left, right) => (left.createdAt < right.createdAt ? 1 : -1));
 
-  for (const event of probeResults) {
-    const payload = asRecord(event.payload);
+  for (const probeRow of probeRows) {
+    const payload = "payload" in probeRow ? asRecord(probeRow.payload) : {};
+    const checkedAt =
+      "createdAt" in probeRow && "eventType" in probeRow
+        ? probeRow.createdAt
+        : probeRow.completedAt || probeRow.updatedAt || probeRow.createdAt;
     const { senderKey, senderAccountId, senderAccountName, fromEmail } = resolveSenderKey({
-      event,
+      event: "payload" in probeRow ? probeRow : undefined,
+      probeRun: "payload" in probeRow ? undefined : probeRow,
       accountsById,
       accountIdByFromEmail,
     });
     if (!senderKey) continue;
     if (latestBySenderKey.has(senderKey)) continue;
 
-    const placement = asText(payload.placement) || "unknown";
-    const { counts, total } = normalizeCounts(placement, payload.counts, payload.totalMonitors);
-    const summaryText = asText(payload.summaryText) || "No monitor summary";
+    const placement =
+      "payload" in probeRow ? asText(payload.placement) || "unknown" : probeRow.placement || "unknown";
+    const countsValue = "payload" in probeRow ? payload.counts : probeRow.counts;
+    const totalMonitorsValue = "payload" in probeRow ? payload.totalMonitors : probeRow.totalMonitors;
+    const { counts, total } = normalizeCounts(placement, countsValue, totalMonitorsValue);
+    const summaryText =
+      "payload" in probeRow ? asText(payload.summaryText) || "No monitor summary" : probeRow.summaryText || "No monitor summary";
     const spamRate = total > 0 ? counts.spam / total : 0;
     const inboxRate = total > 0 ? counts.inbox / total : 0;
-    const autoPauseUntil = addHoursIso(event.createdAt, SENDER_DELIVERABILITY_COOLDOWN_HOURS);
+    const autoPauseUntil = addHoursIso(checkedAt, SENDER_DELIVERABILITY_COOLDOWN_HOURS);
     const manualOverrideAt = latestManualResumeBySenderKey.get(senderKey) ?? "";
     const manualOverrideActive =
       Boolean(manualOverrideAt) &&
-      new Date(manualOverrideAt).getTime() >= new Date(event.createdAt).getTime();
+      new Date(manualOverrideAt).getTime() >= new Date(checkedAt).getTime();
     const autoPaused =
       !manualOverrideActive &&
       total >= SENDER_DELIVERABILITY_MIN_MONITORS &&
@@ -199,7 +222,7 @@ export function buildSenderDeliverabilityScorecards(input: {
       senderAccountId,
       senderAccountName,
       fromEmail,
-      checkedAt: event.createdAt,
+      checkedAt,
       placement,
       totalMonitors: total,
       inboxCount: counts.inbox,

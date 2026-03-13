@@ -77,9 +77,7 @@ export default function InboxClient({ brand }: { brand: BrandRecord }) {
   return (
     <div className="space-y-8">
       <PageIntro
-        eyebrow={`${brand.name} / inbox`}
         title="Inbox"
-        description="Threads, drafts, and reply state."
         aside={
           <StatLedger
             items={[

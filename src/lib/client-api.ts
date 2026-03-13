@@ -387,6 +387,40 @@ export async function importExperimentProspectsCsvApi(
   };
 }
 
+export async function importExperimentProspectSelectionApi(
+  brandId: string,
+  experimentId: string,
+  payload: {
+    tableTitle?: string;
+    prompt?: string;
+    entityType?: string;
+    entityColumn?: string;
+    rows: Array<Record<string, string>>;
+  }
+) {
+  const response = await fetch(
+    `/api/brands/${brandId}/experiments/${experimentId}/import-prospects/selection`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    }
+  );
+  const data = await readJson(response);
+  return {
+    runId: String(data.runId ?? ""),
+    status: String(data.status ?? ""),
+    attemptedCount: Number(data.attemptedCount ?? 0),
+    importedCount: Number(data.importedCount ?? 0),
+    skippedCount: Number(data.skippedCount ?? 0),
+    matchedCount: Number(data.matchedCount ?? 0),
+    parseErrorCount: Number(data.parseErrorCount ?? 0),
+    parseErrors: Array.isArray(data.parseErrors)
+      ? data.parseErrors.map((value) => String(value ?? ""))
+      : ([] as string[]),
+  };
+}
+
 export async function controlExperimentRunApi(
   brandId: string,
   experimentId: string,

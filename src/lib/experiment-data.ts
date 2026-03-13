@@ -591,16 +591,6 @@ async function normalizeLegacyRuntimeCampaign(input: {
   };
 }
 
-async function listLegacyRuntimeCampaignRecords(brandId: string): Promise<ScaleCampaignRecord[]> {
-  const experiments = await listExperimentRecordsWithOptions(brandId, {});
-  const rows = await Promise.all(
-    experiments
-      .filter((record) => record.runtime.campaignId.trim() && !record.promotedCampaignId.trim())
-      .map((record) => normalizeLegacyRuntimeCampaign({ brandId, sourceExperiment: record }))
-  );
-  return rows.filter((row): row is ScaleCampaignRecord => Boolean(row));
-}
-
 async function listExperimentRowsFromStore(brandId: string): Promise<ExperimentRecord[]> {
   const supabase = getSupabaseAdmin();
   if (supabase) {
@@ -936,23 +926,9 @@ export async function deleteExperimentRecord(brandId: string, experimentId: stri
 }
 
 export async function listScaleCampaignRecords(brandId: string): Promise<ScaleCampaignRecord[]> {
-  const [scaleRows, legacyRows] = await Promise.all([
-    (async () => {
-      const rows = await listScaleCampaignRowsFromStore(brandId);
-      return Promise.all(rows.map((row) => hydrateScaleCampaignRecord(row)));
-    })(),
-    listLegacyRuntimeCampaignRecords(brandId),
-  ]);
-
-  const seenIds = new Set(scaleRows.map((row) => row.id));
-  const merged = [...scaleRows];
-  for (const row of legacyRows) {
-    if (seenIds.has(row.id)) continue;
-    if (merged.some((item) => item.sourceExperimentId === row.sourceExperimentId)) continue;
-    merged.push(row);
-  }
-
-  return merged.sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1));
+  const rows = await listScaleCampaignRowsFromStore(brandId);
+  const hydrated = await Promise.all(rows.map((row) => hydrateScaleCampaignRecord(row)));
+  return hydrated.sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1));
 }
 
 export async function getScaleCampaignRecordById(

@@ -37,6 +37,13 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { PageIntro, SectionPanel, StatLedger } from "@/components/ui/page-layout";
+import {
+  buildSenderRoutingSignalFromDomainRow,
+  rankSenderRoutingSignals,
+  senderRouteSelectionVariant,
+  summarizeSelectedSenderRoute,
+  type SenderRoutingSignals,
+} from "@/lib/sender-routing";
 
 function runStatusVariant(status: OutreachRun["status"]) {
   if (status === "completed") return "success" as const;
@@ -313,6 +320,45 @@ export default function CampaignClient({
     () => senderScorecards.filter((scorecard) => !scorecard.autoPaused),
     [senderScorecards]
   );
+  const campaignRoutingSignals = useMemo(
+    () =>
+      rankSenderRoutingSignals(
+        (brand?.domains ?? [])
+          .filter((row) => {
+            const accountId = String(row.customerIoAccountId ?? "").trim();
+            return accountId ? assignedSenderIds.includes(accountId) : false;
+          })
+          .map((row) => buildSenderRoutingSignalFromDomainRow(row))
+          .filter((row): row is SenderRoutingSignals => Boolean(row))
+      ),
+    [assignedSenderIds, brand?.domains]
+  );
+  const preferredCampaignRoute = useMemo(
+    () => campaignRoutingSignals.find((signal) => signal.automationStatus !== "attention") ?? null,
+    [campaignRoutingSignals]
+  );
+  const standbyCampaignRoutes = useMemo(
+    () =>
+      campaignRoutingSignals.filter(
+        (signal) =>
+          signal.automationStatus !== "attention" &&
+          (!preferredCampaignRoute || signal.senderAccountId !== preferredCampaignRoute.senderAccountId)
+      ),
+    [campaignRoutingSignals, preferredCampaignRoute]
+  );
+  const blockedCampaignRoutes = useMemo(
+    () => campaignRoutingSignals.filter((signal) => signal.automationStatus === "attention"),
+    [campaignRoutingSignals]
+  );
+  const routeSummary = useMemo(
+    () =>
+      summarizeSelectedSenderRoute({
+        signals: campaignRoutingSignals,
+        preferredSignal: preferredCampaignRoute,
+        selectedAccountId: campaign?.scalePolicy.accountId,
+      }),
+    [campaign?.scalePolicy.accountId, campaignRoutingSignals, preferredCampaignRoute]
+  );
   const latestMonitorProviderBreakdown = useMemo(() => {
     if (!latestDeliverabilityResult) return [] as Array<{
       provider: string;
@@ -394,9 +440,11 @@ export default function CampaignClient({
               {
                 label: "Senders",
                 value: senderAccounts.length.toString().padStart(2, "0"),
-                detail: activeSenderScorecards.length
-                  ? `${activeSenderScorecards.length} sender${activeSenderScorecards.length === 1 ? "" : "s"} available now.`
-                  : "No sender is currently available.",
+                detail:
+                  routeSummary.signal?.fromEmail ||
+                  (activeSenderScorecards.length
+                    ? `${activeSenderScorecards.length} sender${activeSenderScorecards.length === 1 ? "" : "s"} available now.`
+                    : "No sender is currently available."),
               },
             ]}
           />
@@ -404,6 +452,47 @@ export default function CampaignClient({
       />
 
       {error ? <div className="text-sm text-[color:var(--danger)]">{error}</div> : null}
+
+      <SectionPanel title="Dispatch route" contentClassName="space-y-4">
+        <div className="grid gap-3 lg:grid-cols-[minmax(0,1.45fr)_minmax(0,0.8fr)_minmax(0,0.8fr)]">
+          <div className="border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-4 py-4">
+            <div className="flex flex-wrap items-center gap-2">
+              <Badge variant={senderRouteSelectionVariant(routeSummary.state)}>{routeSummary.label}</Badge>
+              {routeSummary.signal ? (
+                <span className="text-xs text-[color:var(--muted-foreground)]">{routeSummary.signal.domain}</span>
+              ) : null}
+            </div>
+            <div className="mt-2 font-medium text-[color:var(--foreground)]">{routeSummary.title}</div>
+            <div className="mt-1 text-sm leading-6 text-[color:var(--foreground)]">{routeSummary.detail}</div>
+          </div>
+          <div className="border border-[color:var(--border)] px-4 py-4">
+            <div className="text-[12px] text-[color:var(--muted-foreground)]">Standby senders</div>
+            <div className="mt-1 font-medium text-[color:var(--foreground)]">{standbyCampaignRoutes.length}</div>
+            <div className="mt-2 space-y-1 text-xs leading-5 text-[color:var(--muted-foreground)]">
+              {standbyCampaignRoutes.slice(0, 3).length ? (
+                standbyCampaignRoutes.slice(0, 3).map((signal) => (
+                  <div key={signal.senderAccountId}>{signal.fromEmail}</div>
+                ))
+              ) : (
+                <div>No standby sender available.</div>
+              )}
+            </div>
+          </div>
+          <div className="border border-[color:var(--border)] px-4 py-4">
+            <div className="text-[12px] text-[color:var(--muted-foreground)]">Blocked senders</div>
+            <div className="mt-1 font-medium text-[color:var(--foreground)]">{blockedCampaignRoutes.length}</div>
+            <div className="mt-2 space-y-1 text-xs leading-5 text-[color:var(--muted-foreground)]">
+              {blockedCampaignRoutes.slice(0, 3).length ? (
+                blockedCampaignRoutes.slice(0, 3).map((signal) => (
+                  <div key={signal.senderAccountId}>{signal.fromEmail}</div>
+                ))
+              ) : (
+                <div>No sender blocked right now.</div>
+              )}
+            </div>
+          </div>
+        </div>
+      </SectionPanel>
 
       <SectionPanel
         title="Campaign chain"
@@ -785,7 +874,7 @@ export default function CampaignClient({
         <CardHeader>
           <CardTitle className="text-base">Sender health</CardTitle>
           <CardDescription>
-            Seed-group results per sender. Senders with at least 50% spam across a meaningful sample are cooled off for 24 hours and removed from rotation automatically.
+            Route order comes first. These sender rows explain why each mailbox is active, standby, or blocked.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
@@ -807,7 +896,22 @@ export default function CampaignClient({
                       <div className="text-sm font-medium">{scorecard.senderAccountName || scorecard.fromEmail}</div>
                       <div className="text-xs text-[color:var(--muted-foreground)]">{scorecard.fromEmail || "No from email"}</div>
                     </div>
-                    {senderHealthBadge(scorecard)}
+                    <div className="flex flex-wrap items-center justify-end gap-2">
+                      {campaign.scalePolicy.accountId &&
+                      scorecard.senderAccountId === campaign.scalePolicy.accountId ? (
+                        <Badge variant={senderRouteSelectionVariant(routeSummary.state)}>
+                          {routeSummary.label}
+                        </Badge>
+                      ) : preferredCampaignRoute &&
+                        scorecard.senderAccountId === preferredCampaignRoute.senderAccountId ? (
+                        <Badge variant="success">Preferred route</Badge>
+                      ) : blockedCampaignRoutes.some((signal) => signal.senderAccountId === scorecard.senderAccountId) ? (
+                        <Badge variant="danger">Blocked</Badge>
+                      ) : standbyCampaignRoutes.some((signal) => signal.senderAccountId === scorecard.senderAccountId) ? (
+                        <Badge variant="accent">Standby</Badge>
+                      ) : null}
+                      {senderHealthBadge(scorecard)}
+                    </div>
                   </div>
                   <div className="mt-3 grid grid-cols-3 gap-2 text-xs">
                     <div className="rounded-lg border border-[color:var(--border)] bg-[color:var(--surface)] p-2">

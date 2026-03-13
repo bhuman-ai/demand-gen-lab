@@ -2,7 +2,7 @@ import * as React from "react";
 import { cn } from "@/lib/utils";
 
 export function PageIntro({
-  eyebrow,
+  eyebrow: _eyebrow,
   title,
   description,
   actions,
@@ -17,13 +17,12 @@ export function PageIntro({
   className?: string;
 }) {
   return (
-    <section className={cn("space-y-4", className)}>
-      {eyebrow ? <div className="text-[12px] text-[color:var(--muted-foreground)]">{eyebrow}</div> : null}
-      <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+    <section className={cn("space-y-3", className)}>
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
         <div className="min-w-0 max-w-4xl space-y-1.5">
-          <h2 className="text-[1.6rem] font-semibold tracking-[-0.05em] text-[color:var(--foreground)] sm:text-[1.8rem]">
+          <h1 className="text-[1.6rem] font-semibold tracking-[-0.05em] text-[color:var(--foreground)] sm:text-[1.8rem]">
             {title}
-          </h2>
+          </h1>
           {description ? (
             <p className="max-w-[48rem] text-sm leading-6 text-[color:var(--muted-foreground)] sm:text-[0.95rem]">
               {description}

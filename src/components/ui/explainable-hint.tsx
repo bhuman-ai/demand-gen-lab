@@ -20,22 +20,26 @@ export function ExplainableHint({
   className,
   panelClassName,
 }: ExplainableHintProps) {
-  const [open, setOpen] = React.useState(false);
+  const [hovered, setHovered] = React.useState(false);
+  const [pinned, setPinned] = React.useState(false);
   const panelId = React.useId();
   const rootRef = React.useRef<HTMLSpanElement>(null);
+  const open = hovered || pinned;
 
   React.useEffect(() => {
     if (!open) return;
 
     const handlePointerDown = (event: PointerEvent) => {
       if (!rootRef.current?.contains(event.target as Node)) {
-        setOpen(false);
+        setHovered(false);
+        setPinned(false);
       }
     };
 
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
-        setOpen(false);
+        setHovered(false);
+        setPinned(false);
       }
     };
 
@@ -49,13 +53,24 @@ export function ExplainableHint({
   }, [open]);
 
   return (
-    <span ref={rootRef} className={cn("relative inline-flex shrink-0", className)}>
+    <span
+      ref={rootRef}
+      className={cn("relative inline-flex shrink-0", className)}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      onFocusCapture={() => setHovered(true)}
+      onBlurCapture={(event) => {
+        if (!rootRef.current?.contains(event.relatedTarget as Node | null)) {
+          setHovered(false);
+        }
+      }}
+    >
       <button
         type="button"
         aria-label={label}
         aria-expanded={open}
         aria-controls={panelId}
-        onClick={() => setOpen((current) => !current)}
+        onClick={() => setPinned((current) => !current)}
         className={cn(
           "inline-flex h-5 w-5 items-center justify-center rounded-full border text-[11px] font-semibold transition-colors",
           "border-[color:var(--border)] bg-[color:var(--surface)] text-[color:var(--muted-foreground)]",

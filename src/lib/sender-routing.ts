@@ -32,6 +32,24 @@ export type SenderRouteSelectionSummary = {
   signal: SenderRoutingSignals | null;
 };
 
+export type SenderRoutingScoreLevel = "strong" | "usable" | "watch" | "weak";
+
+export type SenderRoutingScoreSummary = {
+  normalizedScore: number;
+  rawScore: number;
+  level: SenderRoutingScoreLevel;
+  label: string;
+  detail: string;
+  breakdown: Array<{
+    label: string;
+    value: string;
+    detail: string;
+  }>;
+};
+
+const ROUTING_SCORE_MIN = -176;
+const ROUTING_SCORE_MAX = 152.5;
+
 export function senderHealthValue(status: NonNullable<DomainRow["domainHealth"]>) {
   if (status === "healthy") return 4;
   if (status === "watch") return 2;
@@ -63,6 +81,87 @@ export function scoreSenderRoutingSignal(signal: SenderRoutingSignals) {
   return {
     healthScore,
     routingScore,
+  };
+}
+
+function normalizeRoutingScore(routingScore: number) {
+  const clamped = Math.max(ROUTING_SCORE_MIN, Math.min(ROUTING_SCORE_MAX, routingScore));
+  const normalized = ((clamped - ROUTING_SCORE_MIN) / (ROUTING_SCORE_MAX - ROUTING_SCORE_MIN)) * 100;
+  return Math.round(normalized);
+}
+
+export function senderRoutingScoreVariant(level: SenderRoutingScoreLevel) {
+  if (level === "strong") return "success" as const;
+  if (level === "usable") return "accent" as const;
+  if (level === "watch") return "muted" as const;
+  return "danger" as const;
+}
+
+export function summarizeSenderRoutingScore(signal: SenderRoutingSignals): SenderRoutingScoreSummary {
+  const automationContribution = senderAutomationValue(signal.automationStatus) * 10;
+  const domainContribution = senderHealthValue(signal.domainStatus);
+  const emailContribution = senderHealthValue(signal.emailStatus);
+  const transportContribution = senderHealthValue(signal.transportStatus);
+  const messageContribution = senderHealthValue(signal.messageStatus);
+  const healthScore = domainContribution + emailContribution + transportContribution + messageContribution;
+  const healthContribution = healthScore * 4;
+  const placementContribution = signal.inboxRate * 8 - signal.spamRate * 12;
+  const freshnessContribution = signal.checkedAt ? 0.5 : 0;
+  const rawScore = automationContribution + healthContribution + placementContribution + freshnessContribution;
+  const normalizedScore = normalizeRoutingScore(rawScore);
+
+  let level: SenderRoutingScoreLevel = "weak";
+  let label = "Weak";
+  let detail = "This sender is unlikely to win routing until its automation state or health signals improve.";
+
+  if (signal.automationStatus === "attention") {
+    level = "weak";
+    label = "Blocked";
+    detail = "This sender is outside rotation because one or more automation or health checks are currently unsafe.";
+  } else if (normalizedScore >= 75) {
+    level = "strong";
+    label = "Strong";
+    detail = "This sender is a strong candidate for first-in-rotation dispatch.";
+  } else if (normalizedScore >= 55) {
+    level = "usable";
+    label = "Usable";
+    detail = "This sender is healthy enough to use, but it may sit behind a stronger route.";
+  } else if (normalizedScore >= 35) {
+    level = "watch";
+    label = "Watch";
+    detail = "This sender is borderline and should stay behind healthier routes until more signal arrives.";
+  }
+
+  return {
+    normalizedScore,
+    rawScore,
+    level,
+    label,
+    detail,
+    breakdown: [
+      {
+        label: "Automation",
+        value: signal.automationStatus,
+        detail: `Automation contributes ${automationContribution.toFixed(1)} raw points based on whether the sender is queued, testing, warming, ready, or blocked.`,
+      },
+      {
+        label: "Health signals",
+        value: `${signal.domainStatus} domain · ${signal.emailStatus} email · ${signal.transportStatus} transport · ${signal.messageStatus} message`,
+        detail: `The four health signals contribute ${healthContribution.toFixed(1)} raw points combined.`,
+      },
+      {
+        label: "Placement history",
+        value: `${Math.round(signal.inboxRate * 100)}% inbox · ${Math.round(signal.spamRate * 100)}% spam`,
+        detail: `Recent inbox and spam placement contributes ${placementContribution.toFixed(1)} raw points.`,
+      },
+      {
+        label: "Freshness",
+        value: signal.checkedAt ? "Recent check on file" : "No recent check",
+        detail: signal.checkedAt
+          ? `A recent health check adds ${freshnessContribution.toFixed(1)} raw points.`
+          : "No freshness bonus is applied until the sender has a recorded health check.",
+      },
+    ],
   };
 }
 

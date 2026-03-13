@@ -21,8 +21,15 @@ const mono = IBM_Plex_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "lastb2b.com",
-  description: "The last B2B outreach product you'll ever buy.",
+  title: {
+    default: "last b2b",
+    template: "%s • last b2b",
+  },
+  description: "One operating desk for outbound brands, experiments, senders, campaigns, and inboxes.",
+  applicationName: "last b2b",
+  icons: {
+    icon: "/icon.svg",
+  },
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {

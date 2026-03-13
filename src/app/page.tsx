@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { ArrowRight, Rocket, Target } from "lucide-react";
+import BrandWordmark from "@/components/layout/brand-wordmark";
 import { Button } from "@/components/ui/button";
 import { fetchBrands, fetchExperiments, fetchScaleCampaigns } from "@/lib/client-api";
 import type { BrandRecord } from "@/lib/factory-types";
@@ -98,19 +99,36 @@ export default function HomePage() {
       <section className="grid gap-10 xl:grid-cols-[minmax(0,1.4fr)_22rem] xl:gap-12">
         <div className="space-y-8">
           <div className="max-w-4xl">
-            <p className="text-sm leading-6 text-[color:var(--muted-foreground)]">
-              lastb2b.com keeps outbound on one desk.
+            <div className="motion-enter" style={{ ["--motion-order" as string]: 0 }}>
+              <BrandWordmark
+                animated
+                lastClassName="text-[clamp(4.4rem,12vw,8.6rem)]"
+                b2bClassName="mb-[0.95em] text-[clamp(0.74rem,1vw,0.96rem)] tracking-[0.16em]"
+              />
+            </div>
+            <p
+              className="motion-enter mt-5 max-w-[18rem] border-t border-[color:var(--border)] pt-4 text-sm leading-6 text-[color:var(--muted-foreground)]"
+              style={{ ["--motion-order" as string]: 1 }}
+            >
+              Outbound, reduced to one operating desk.
             </p>
-            <h2 className="mt-4 font-[family:var(--font-brand)] text-[clamp(3rem,7vw,6.2rem)] leading-[0.9] tracking-[-0.08em] text-[color:var(--foreground)]">
-              The last B2B outreach product you&apos;ll ever buy.
-            </h2>
-            <p className="mt-6 max-w-[42rem] text-[clamp(1.04rem,1.7vw,1.18rem)] leading-8 text-[color:var(--muted-foreground)]">
-              Build the lead list, test the sequence, promote the winner, keep the sender and inbox attached, and stop
-              financing a dozen separate tools just to run outbound carefully.
+            <h1
+              className="motion-enter mt-6 font-[family:var(--font-brand)] text-[clamp(2.8rem,6.8vw,5.6rem)] leading-[0.92] tracking-[-0.08em] text-[color:var(--foreground)]"
+              style={{ ["--motion-order" as string]: 2 }}
+            >
+              Keep the lead list, sender, experiment, campaign, and inbox on one desk.
+            </h1>
+            <p
+              className="motion-enter mt-5 max-w-[44rem] text-[clamp(1.02rem,1.65vw,1.16rem)] leading-8 text-[color:var(--muted-foreground)]"
+              style={{ ["--motion-order" as string]: 3 }}
+            >
+              last b2b is built for operators who want the proof beside the action: test the message, launch from the
+              same brand context, promote the winner without losing the sender trail, and keep replies attached to the
+              decision that earned them.
             </p>
           </div>
 
-          <div className="flex flex-wrap gap-3">
+          <div className="motion-enter flex flex-wrap gap-3" style={{ ["--motion-order" as string]: 4 }}>
             <Button asChild size="lg">
               <Link href="/brands/new">
                 <Rocket className="h-4 w-4" />
@@ -126,7 +144,10 @@ export default function HomePage() {
           </div>
         </div>
 
-        <div className="rounded-[12px] border border-[color:var(--border)] bg-[color:var(--surface)]">
+        <div
+          className="motion-enter rounded-[12px] border border-[color:var(--border)] bg-[color:var(--surface)]"
+          style={{ ["--motion-order" as string]: 3 }}
+        >
           <div className="border-b border-[color:var(--border)] px-5 py-4 text-[12px] text-[color:var(--muted-foreground)]">
             Current desk
           </div>
@@ -181,8 +202,12 @@ export default function HomePage() {
           </div>
 
           <div className="rounded-[12px] border border-[color:var(--border)] bg-[color:var(--surface)] px-5 py-5">
-            <div className="text-sm leading-7 text-[color:var(--muted-foreground)]">
-              Designed for operators who want each reply, sender, and sequence decision preserved in the same place.
+            <BrandWordmark
+              lastClassName="text-[1.6rem]"
+              b2bClassName="mb-[0.22em] text-[0.68rem] tracking-[0.12em]"
+            />
+            <div className="mt-4 text-sm leading-7 text-[color:var(--muted-foreground)]">
+              Built for operators who want each reply, sender, and sequence decision preserved in the same place.
             </div>
             <div className="mt-5 flex items-center gap-2 text-sm text-[color:var(--foreground)]">
               <span>Start with a brand</span>

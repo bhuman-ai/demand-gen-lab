@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -43,7 +44,6 @@ import {
   EXPERIMENT_MIN_VERIFIED_EMAIL_LEADS,
 } from "@/lib/experiment-policy";
 import { trackEvent } from "@/lib/telemetry-client";
-import FlowEditorClient from "@/app/brands/[id]/campaigns/[campaignId]/build/flows/[variantId]/flow-editor-client";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -51,6 +51,18 @@ import LeadFinderEmbed from "@/components/experiments/lead-finder-embed";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+
+const FlowEditorClient = dynamic(
+  () => import("@/app/brands/[id]/campaigns/[campaignId]/build/flows/[variantId]/flow-editor-client"),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="rounded-lg border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-6 text-sm text-[color:var(--muted-foreground)]">
+        Loading flow editor...
+      </div>
+    ),
+  }
+);
 
 const PROSPECT_VALIDATION_TARGET = EXPERIMENT_MIN_VERIFIED_EMAIL_LEADS;
 const PROSPECT_VALIDATION_MIN_READY = PROSPECT_VALIDATION_TARGET;

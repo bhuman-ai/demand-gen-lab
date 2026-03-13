@@ -205,6 +205,38 @@ export type ExperimentSuggestionReviewCandidate = {
   accepted: boolean;
 };
 
+export type ExperimentSuggestionDraftIdea = {
+  name: string;
+  audience: string;
+  trigger: string;
+  offer: string;
+  cta: string;
+  emailPreview: string;
+  successTarget: string;
+  rationale: string;
+};
+
+export type ExperimentSuggestionBrainstormTurnStatus =
+  | "drafting"
+  | "reviewing"
+  | "completed"
+  | "failed";
+
+export type ExperimentSuggestionBrainstormTurn = {
+  turn: number;
+  agentId: string;
+  agentName: string;
+  agentStyle: string;
+  brief: string;
+  status: ExperimentSuggestionBrainstormTurnStatus;
+  score: number;
+  acceptedCount: number;
+  draftIdeas: ExperimentSuggestionDraftIdea[];
+  ideas: ExperimentSuggestionReviewCandidate[];
+  failed?: boolean;
+  error?: string;
+};
+
 export type ExperimentSuggestionGenerationResult = {
   suggestions: ExperimentSuggestionRecord[];
   mode?: string;
@@ -212,7 +244,34 @@ export type ExperimentSuggestionGenerationResult = {
   kept?: number;
   created?: number;
   reviewCandidates?: ExperimentSuggestionReviewCandidate[];
+  brainstormTurns?: ExperimentSuggestionBrainstormTurn[];
 };
+
+export type ExperimentSuggestionStreamEvent =
+  | {
+      type: "start";
+      refresh: boolean;
+      requestedAgents: number;
+      minimumReady: number;
+    }
+  | {
+      type:
+        | "turn_started"
+        | "turn_drafted"
+        | "turn_completed"
+        | "turn_failed";
+      turn: ExperimentSuggestionBrainstormTurn;
+    }
+  | {
+      type: "done";
+      result: ExperimentSuggestionGenerationResult;
+    }
+  | {
+      type: "error";
+      message: string;
+      hint?: string;
+      debug?: Record<string, unknown>;
+    };
 
 export type ScaleCampaignStatus =
   | "draft"

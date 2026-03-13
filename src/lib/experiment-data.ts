@@ -245,6 +245,22 @@ async function writeJsonArray<T>(filePath: string, rows: T[]) {
   await writeFile(filePath, JSON.stringify(rows, null, 2));
 }
 
+function mergeExperimentStores(
+  primary: ExperimentRecord[],
+  secondary: ExperimentRecord[]
+): ExperimentRecord[] {
+  const merged = new Map<string, ExperimentRecord>();
+
+  for (const row of [...primary, ...secondary]) {
+    const existing = merged.get(row.id);
+    if (!existing || existing.updatedAt < row.updatedAt) {
+      merged.set(row.id, row);
+    }
+  }
+
+  return [...merged.values()].sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1));
+}
+
 function runSummaryFromMetrics(input: {
   sentMessages: number;
   replies: number;
@@ -592,6 +608,10 @@ async function normalizeLegacyRuntimeCampaign(input: {
 }
 
 async function listExperimentRowsFromStore(brandId: string): Promise<ExperimentRecord[]> {
+  const local = (await readJsonArray<ExperimentRecord>(EXPERIMENTS_PATH))
+    .map((row) => mapExperimentRow(row))
+    .filter((row) => row.brandId === brandId);
+
   const supabase = getSupabaseAdmin();
   if (supabase) {
     const { data, error } = await supabase
@@ -601,15 +621,14 @@ async function listExperimentRowsFromStore(brandId: string): Promise<ExperimentR
       .order("updated_at", { ascending: false });
 
     if (!error) {
-      return (data ?? []).map((row: unknown) => mapExperimentRow(row));
+      return mergeExperimentStores(
+        (data ?? []).map((row: unknown) => mapExperimentRow(row)),
+        local
+      );
     }
   }
 
-  const local = await readJsonArray<ExperimentRecord>(EXPERIMENTS_PATH);
-  return local
-    .map((row) => mapExperimentRow(row))
-    .filter((row) => row.brandId === brandId)
-    .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1));
+  return local.sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1));
 }
 
 async function listScaleCampaignRowsFromStore(brandId: string): Promise<ScaleCampaignRecord[]> {

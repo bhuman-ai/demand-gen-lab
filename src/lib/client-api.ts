@@ -15,6 +15,7 @@ import type {
   ExperimentRecord,
   ExperimentSuggestionGenerationResult,
   ExperimentSuggestionRecord,
+  ExperimentSuggestionStreamEvent,
   Hypothesis,
   ObjectiveData,
   OutreachAccount,
@@ -133,6 +134,36 @@ export async function updateBrandApi(
   return data.brand as BrandRecord;
 }
 
+export async function fetchBrandIntakePrefill(url: string) {
+  const response = await fetch("/api/intake/prefill", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ url }),
+  });
+  const data = await readJson(response);
+  return {
+    prefill: asObject(data.prefill),
+    signals: asObject(data.signals),
+  } as {
+    prefill: {
+      brandName?: string;
+      tone?: string;
+      product?: string;
+      targetMarkets?: string[];
+      idealCustomerProfiles?: string[];
+      keyFeatures?: string[];
+      keyBenefits?: string[];
+      proof?: string;
+    };
+    signals: {
+      title?: string;
+      description?: string;
+      hostname?: string;
+      mode?: string;
+    };
+  };
+}
+
 export async function deleteBrandApi(brandId: string) {
   const response = await fetch(`/api/brands/${brandId}`, {
     method: "DELETE",
@@ -191,7 +222,97 @@ export async function generateExperimentSuggestionsDetailed(brandId: string, ref
     kept: typeof data?.kept === "number" ? data.kept : undefined,
     created: typeof data?.created === "number" ? data.created : undefined,
     reviewCandidates: Array.isArray(data?.reviewCandidates) ? data.reviewCandidates : [],
+    brainstormTurns: Array.isArray(data?.brainstormTurns) ? data.brainstormTurns : [],
   } as ExperimentSuggestionGenerationResult;
+}
+
+function parseEventStreamChunk(chunk: string) {
+  const lines = chunk
+    .split("\n")
+    .map((line) => line.trimEnd())
+    .filter(Boolean);
+
+  const dataLines: string[] = [];
+
+  for (const line of lines) {
+    if (line.startsWith("event:")) continue;
+    if (line.startsWith("data:")) {
+      dataLines.push(line.slice(5).trim());
+    }
+  }
+
+  if (!dataLines.length) return null;
+
+  let payload: unknown = {};
+  try {
+    payload = JSON.parse(dataLines.join("\n"));
+  } catch {
+    payload = {};
+  }
+
+  return payload;
+}
+
+export async function streamExperimentSuggestions(
+  brandId: string,
+  input: {
+    refresh?: boolean;
+    signal?: AbortSignal;
+    onEvent: (event: ExperimentSuggestionStreamEvent) => void;
+  }
+) {
+  const response = await fetch(`/api/brands/${brandId}/experiments/suggestions/stream`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
+    body: JSON.stringify({ refresh: Boolean(input.refresh) }),
+    signal: input.signal,
+  });
+
+  if (!response.ok) {
+    let message = "Failed to stream suggestions";
+    try {
+      const payload = (await response.json()) as Record<string, unknown>;
+      if (typeof payload.error === "string" && payload.error.trim()) {
+        message = payload.error;
+      }
+    } catch {
+      const text = await response.text().catch(() => "");
+      if (text.trim()) {
+        message = text.slice(0, 240);
+      }
+    }
+    throw new Error(message);
+  }
+
+  if (!response.body) {
+    throw new Error("Suggestion stream is unavailable");
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+    const parts = buffer.split("\n\n");
+    buffer = parts.pop() ?? "";
+
+    for (const part of parts) {
+      const parsed = parseEventStreamChunk(part);
+      if (!parsed) continue;
+      input.onEvent(parsed as ExperimentSuggestionStreamEvent);
+    }
+  }
+
+  if (buffer.trim()) {
+    const parsed = parseEventStreamChunk(buffer);
+    if (parsed) {
+      input.onEvent(parsed as ExperimentSuggestionStreamEvent);
+    }
+  }
 }
 
 export async function applyExperimentSuggestion(brandId: string, suggestionId: string) {

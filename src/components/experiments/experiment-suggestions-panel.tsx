@@ -1,26 +1,89 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Lightbulb, RefreshCcw, Sparkles, UserRound, WandSparkles } from "lucide-react";
+import {
+  Bot,
+  Lightbulb,
+  RefreshCcw,
+  Sparkles,
+  Trophy,
+  UserRound,
+  WandSparkles,
+} from "lucide-react";
 import {
   applyExperimentSuggestion,
   dismissExperimentSuggestion,
   fetchExperimentSuggestions,
-  generateExperimentSuggestions,
-  generateExperimentSuggestionsDetailed,
+  streamExperimentSuggestions,
 } from "@/lib/client-api";
 import { trackEvent } from "@/lib/telemetry-client";
 import { cn } from "@/lib/utils";
 import type {
+  ExperimentSuggestionBrainstormTurn,
   ExperimentSuggestionGenerationResult,
   ExperimentSuggestionRecord,
   ExperimentSuggestionReviewCandidate,
+  ExperimentSuggestionStreamEvent,
 } from "@/lib/factory-types";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 
 const MIN_READY_SUGGESTIONS = 3;
+const STREAM_PLACEHOLDER_MS = 900;
+const TURN_EASE = "motion-safe:ease-[cubic-bezier(0.22,1,0.36,1)]";
+const PLACEHOLDER_AGENTS = [
+  {
+    name: "Agent 1 · Pain Sniper",
+    style: "pain-led",
+    brief: "Hunts the operational pain the prospect already feels this week.",
+  },
+  {
+    name: "Agent 2 · Trigger Hunter",
+    style: "timing-led",
+    brief: "Looks for a deadline or event that makes the idea timely right now.",
+  },
+  {
+    name: "Agent 3 · Proof Builder",
+    style: "proof-led",
+    brief: "Pushes evidence-first angles instead of vague improvement claims.",
+  },
+  {
+    name: "Agent 4 · Teardown Critic",
+    style: "teardown-led",
+    brief: "Calls out a broken workflow the prospect will recognize instantly.",
+  },
+  {
+    name: "Agent 5 · Workflow Surgeon",
+    style: "workflow-led",
+    brief: "Targets one exact handoff or approval jam.",
+  },
+  {
+    name: "Agent 6 · Economic Buyer",
+    style: "economic-led",
+    brief: "Frames the offer around waste, margin, or efficiency.",
+  },
+  {
+    name: "Agent 7 · Contrarian",
+    style: "contrarian",
+    brief: "Brings a sharper angle the safe agents avoid.",
+  },
+  {
+    name: "Agent 8 · Narrow ICP",
+    style: "specialist-led",
+    brief: "Zooms into a tiny segment the others skipped.",
+  },
+  {
+    name: "Agent 9 · Peer Pressure",
+    style: "social-proof-led",
+    brief: "Uses market pressure without fake social proof.",
+  },
+  {
+    name: "Agent 10 · Wildcard",
+    style: "wildcard",
+    brief: "Throws the weird but defensible option onto the board.",
+  },
+];
 
 function pickLine(value: string, label: string) {
   const regex = new RegExp(`^${label}:\\s*(.+)$`, "im");
@@ -85,25 +148,6 @@ function suggestionErrorMessage(error: unknown, fallback: string) {
   return message || fallback;
 }
 
-function selectPlaybackCandidates(candidates: ExperimentSuggestionReviewCandidate[]) {
-  const shortlisted = candidates.filter((candidate) => candidate.accepted).slice(0, 2);
-  const pushback =
-    candidates.find((candidate) => !candidate.accepted) ??
-    candidates.find((candidate) => candidate.decision !== "promote") ??
-    null;
-
-  const ordered = [...shortlisted];
-  if (pushback) {
-    ordered.push(pushback);
-  }
-  for (const candidate of candidates) {
-    if (ordered.some((row) => row.index === candidate.index)) continue;
-    ordered.push(candidate);
-    if (ordered.length >= 4) break;
-  }
-  return ordered.slice(0, 4);
-}
-
 function statusBadgeVariant(candidate: ExperimentSuggestionReviewCandidate) {
   if (candidate.accepted) return "success";
   if (candidate.decision === "revise") return "accent";
@@ -111,57 +155,100 @@ function statusBadgeVariant(candidate: ExperimentSuggestionReviewCandidate) {
 }
 
 function statusLabel(candidate: ExperimentSuggestionReviewCandidate) {
-  if (candidate.accepted) return "Shortlisted";
+  if (candidate.accepted) return "Accepted";
   if (candidate.decision === "revise") return "Needs rewrite";
   return "Rejected";
+}
+
+function turnStatusLabel(turn: ExperimentSuggestionBrainstormTurn) {
+  if (turn.status === "drafting") return "Drafting";
+  if (turn.status === "reviewing") return "Roleplaying";
+  if (turn.status === "failed") return "Stalled";
+  return `${turn.acceptedCount} accepted`;
+}
+
+function turnStatusVariant(turn: ExperimentSuggestionBrainstormTurn) {
+  if (turn.status === "failed") return "danger";
+  if (turn.status === "completed" && turn.acceptedCount > 0) return "success";
+  if (turn.status === "reviewing") return "accent";
+  return "muted";
 }
 
 function prospectPushback(candidate: ExperimentSuggestionReviewCandidate) {
   return (
     candidate.risks[0] ||
     candidate.summary ||
-    "Not interested. This does not feel specific enough to stop the scroll."
+    "Not interested. This still feels too broad to earn attention."
   );
 }
 
-function strategistResponse(candidate: ExperimentSuggestionReviewCandidate) {
+function judgeResponse(candidate: ExperimentSuggestionReviewCandidate) {
   if (candidate.accepted) {
-    return candidate.strengths[0] || "Keep this one. The angle is specific enough to earn a reply.";
+    return candidate.strengths[0] || "Keep it. This one is specific enough to survive first-touch scrutiny.";
   }
   if (candidate.decision === "revise") {
-    return candidate.strengths[0] || "The core idea works, but the ask still needs to tighten.";
+    return candidate.strengths[0] || "There is a real angle here, but the ask or trigger still needs tightening.";
   }
-  return "Drop it. The prospect pushback is too strong for first-touch outbound.";
+  return "Drop it. The prospect pushback is stronger than the hook.";
 }
 
-function reviewNarrative(candidate: ExperimentSuggestionReviewCandidate) {
-  return [
-    {
-      role: "strategist" as const,
-      label: "Strategist",
-      message: candidate.name,
-    },
-    {
-      role: "prospect" as const,
-      label: "Prospect roleplay",
-      message: prospectPushback(candidate),
-    },
-    {
-      role: "strategist" as const,
-      label: statusLabel(candidate),
-      message: strategistResponse(candidate),
-    },
-  ];
+function ideaRankScore(candidate: ExperimentSuggestionReviewCandidate) {
+  const decisionBoost = candidate.decision === "promote" ? 8 : candidate.decision === "revise" ? 2 : -12;
+  return (
+    candidate.score +
+    candidate.openLikelihood * 0.15 +
+    candidate.replyLikelihood * 0.45 +
+    candidate.positiveReplyLikelihood * 0.35 -
+    candidate.unsubscribeRisk * 0.5 +
+    decisionBoost
+  );
+}
+
+function rankTurns(turns: ExperimentSuggestionBrainstormTurn[]) {
+  return [...turns].sort((left, right) => {
+    if (right.acceptedCount !== left.acceptedCount) {
+      return right.acceptedCount - left.acceptedCount;
+    }
+    if (right.score !== left.score) {
+      return right.score - left.score;
+    }
+    return left.turn - right.turn;
+  });
+}
+
+function bestCompletedIdea(turn: ExperimentSuggestionBrainstormTurn) {
+  return [...turn.ideas].sort((left, right) => ideaRankScore(right) - ideaRankScore(left))[0] ?? null;
+}
+
+function bestDraftIdea(turn: ExperimentSuggestionBrainstormTurn) {
+  return turn.draftIdeas[0] ?? null;
+}
+
+function upsertTurn(
+  turns: ExperimentSuggestionBrainstormTurn[],
+  nextTurn: ExperimentSuggestionBrainstormTurn
+) {
+  const copy = [...turns];
+  const existingIndex = copy.findIndex((turn) => turn.turn === nextTurn.turn);
+  if (existingIndex >= 0) {
+    copy[existingIndex] = nextTurn;
+  } else {
+    copy.push(nextTurn);
+  }
+  copy.sort((left, right) => left.turn - right.turn);
+  return copy;
 }
 
 export default function ExperimentSuggestionsPanel({ brandId }: { brandId: string }) {
   const router = useRouter();
+  const streamControllerRef = useRef<AbortController | null>(null);
   const [suggestions, setSuggestions] = useState<ExperimentSuggestionRecord[]>([]);
   const [bootstrapping, setBootstrapping] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [playbackActive, setPlaybackActive] = useState(false);
-  const [playbackIndex, setPlaybackIndex] = useState(0);
-  const [playbackCandidates, setPlaybackCandidates] = useState<ExperimentSuggestionReviewCandidate[]>([]);
+  const [streaming, setStreaming] = useState(false);
+  const [streamTurns, setStreamTurns] = useState<ExperimentSuggestionBrainstormTurn[]>([]);
+  const [activeTurnIndex, setActiveTurnIndex] = useState(0);
+  const [placeholderAgentIndex, setPlaceholderAgentIndex] = useState(0);
   const [prefersReducedMotion, setPrefersReducedMotion] = useState(false);
   const [busyId, setBusyId] = useState("");
   const [error, setError] = useState("");
@@ -179,10 +266,23 @@ export default function ExperimentSuggestionsPanel({ brandId }: { brandId: strin
   );
   const readySuggestionCount = renderableSuggestions.length;
   const hasRenderableSuggestions = readySuggestionCount > 0;
-  const isPreparing = bootstrapping || (refreshing && !hasRenderableSuggestions) || playbackActive;
-  const activePlaybackCandidate =
-    playbackCandidates[Math.min(playbackIndex, Math.max(0, playbackCandidates.length - 1))] ?? null;
-  const playbackNarrative = activePlaybackCandidate ? reviewNarrative(activePlaybackCandidate) : [];
+  const isPreparing = bootstrapping || streaming;
+  const activeTurn =
+    streamTurns[Math.min(activeTurnIndex, Math.max(0, streamTurns.length - 1))] ?? null;
+  const leaderboardTurns = useMemo(
+    () => rankTurns(streamTurns.filter((turn) => turn.status === "completed")),
+    [streamTurns]
+  );
+  const leaderboardRankMap = useMemo(
+    () => new Map(leaderboardTurns.map((turn, index) => [turn.agentId, index + 1])),
+    [leaderboardTurns]
+  );
+  const activeRank = activeTurn ? leaderboardRankMap.get(activeTurn.agentId) ?? null : null;
+  const activeBestCompletedIdea =
+    activeTurn?.status === "completed" ? bestCompletedIdea(activeTurn) : null;
+  const activeBestDraftIdea =
+    activeTurn && activeTurn.status !== "completed" ? bestDraftIdea(activeTurn) : null;
+  const activeBestIdea = activeBestCompletedIdea ?? activeBestDraftIdea;
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -194,61 +294,98 @@ export default function ExperimentSuggestionsPanel({ brandId }: { brandId: strin
   }, []);
 
   useEffect(() => {
-    if (!playbackActive || !playbackCandidates.length) return;
-
-    setPlaybackIndex(0);
-
-    if (prefersReducedMotion) {
-      const timeout = window.setTimeout(() => {
-        setPlaybackActive(false);
-      }, 900);
-      return () => window.clearTimeout(timeout);
-    }
-
-    let nextIndex = 0;
+    if (!isPreparing || streamTurns.length || prefersReducedMotion) return;
     const interval = window.setInterval(() => {
-      nextIndex += 1;
-      if (nextIndex < playbackCandidates.length) {
-        setPlaybackIndex(nextIndex);
-        return;
-      }
-      window.clearInterval(interval);
-      window.setTimeout(() => {
-        setPlaybackActive(false);
-      }, 720);
-    }, 1400);
-
+      setPlaceholderAgentIndex((current) => (current + 1) % PLACEHOLDER_AGENTS.length);
+    }, STREAM_PLACEHOLDER_MS);
     return () => window.clearInterval(interval);
-  }, [playbackActive, playbackCandidates, prefersReducedMotion]);
+  }, [isPreparing, streamTurns.length, prefersReducedMotion]);
 
-  const startPlayback = (result: ExperimentSuggestionGenerationResult) => {
-    const candidates = selectPlaybackCandidates(result.reviewCandidates ?? []);
-    if (!candidates.length) {
-      setPlaybackCandidates([]);
-      setPlaybackIndex(0);
-      setPlaybackActive(false);
+  useEffect(() => {
+    return () => {
+      streamControllerRef.current?.abort();
+    };
+  }, []);
+
+  const applyGeneratedResult = (result: ExperimentSuggestionGenerationResult) => {
+    setSuggestions(result.suggestions);
+    if (result.brainstormTurns?.length) {
+      setStreamTurns(result.brainstormTurns);
+      setActiveTurnIndex(Math.max(result.brainstormTurns.length - 1, 0));
+    }
+  };
+
+  const handleStreamEvent = (event: ExperimentSuggestionStreamEvent) => {
+    if (event.type === "start") {
+      setStreaming(true);
       return;
     }
 
-    setPlaybackCandidates(candidates);
-    setPlaybackIndex(0);
-    setPlaybackActive(true);
+    if (
+      event.type === "turn_started" ||
+      event.type === "turn_drafted" ||
+      event.type === "turn_completed" ||
+      event.type === "turn_failed"
+    ) {
+      setStreamTurns((current) => {
+        const next = upsertTurn(current, event.turn);
+        const nextIndex = next.findIndex((turn) => turn.turn === event.turn.turn);
+        if (nextIndex >= 0) {
+          setActiveTurnIndex(nextIndex);
+        }
+        return next;
+      });
+      return;
+    }
+
+    if (event.type === "done") {
+      applyGeneratedResult(event.result);
+      setStreaming(false);
+      setRefreshing(false);
+      return;
+    }
+
+    if (event.type !== "error") {
+      return;
+    }
+
+    setError(
+      [event.message, event.hint].filter(Boolean).join(" ") ||
+        "Failed to generate suggestions"
+    );
+    setStreaming(false);
+    setRefreshing(false);
   };
 
-  const regenerateSuggestions = async (refresh = true) => {
+  const runLiveGeneration = async (refreshMode = true) => {
+    streamControllerRef.current?.abort();
+    const controller = new AbortController();
+    streamControllerRef.current = controller;
     setRefreshing(true);
+    setStreaming(true);
+    setStreamTurns([]);
+    setActiveTurnIndex(0);
     setError("");
+
     try {
-      const result = await generateExperimentSuggestionsDetailed(brandId, refresh);
-      setSuggestions(result.suggestions);
-      startPlayback(result);
-      return result.suggestions;
+      await streamExperimentSuggestions(brandId, {
+        refresh: refreshMode,
+        signal: controller.signal,
+        onEvent: handleStreamEvent,
+      });
     } catch (err) {
+      if (controller.signal.aborted) return [];
       setError(suggestionErrorMessage(err, "Failed to generate suggestions"));
+      setStreaming(false);
+      setRefreshing(false);
       return [];
     } finally {
-      setRefreshing(false);
+      if (streamControllerRef.current === controller) {
+        streamControllerRef.current = null;
+      }
     }
+
+    return [];
   };
 
   useEffect(() => {
@@ -260,14 +397,7 @@ export default function ExperimentSuggestionsPanel({ brandId }: { brandId: strin
       .then(async (rows) => {
         if (!mounted) return;
         if (rows.filter((row) => isRenderableSuggestion(row)).length >= MIN_READY_SUGGESTIONS) return;
-        try {
-          const generated = await generateExperimentSuggestions(brandId);
-          if (!mounted) return;
-          setSuggestions(generated);
-        } catch (err) {
-          if (!mounted) return;
-          setError(suggestionErrorMessage(err, "Failed to generate suggestions"));
-        }
+        await runLiveGeneration(false);
       })
       .catch((err: unknown) => {
         if (!mounted) return;
@@ -279,6 +409,7 @@ export default function ExperimentSuggestionsPanel({ brandId }: { brandId: strin
 
     return () => {
       mounted = false;
+      streamControllerRef.current?.abort();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [brandId]);
@@ -295,20 +426,27 @@ export default function ExperimentSuggestionsPanel({ brandId }: { brandId: strin
               Start from a real idea, not a blank experiment.
             </h3>
             <p className="max-w-3xl text-sm leading-6 text-[color:var(--muted-foreground)]">
-              Review the strongest audience and offer combinations for this brand, then open the one you want to run.
+              Ten agents now brainstorm in sequence, then the prospect roleplay judge pushes back in
+              real time while the leaderboard updates live.
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <Badge variant={hasRenderableSuggestions ? "accent" : "muted"}>
               {readySuggestionCount} ready
             </Badge>
+            {streaming ? (
+              <Badge variant="accent" className="gap-1">
+                <Sparkles className="h-3.5 w-3.5 motion-safe:animate-pulse" />
+                Live
+              </Badge>
+            ) : null}
             {!isPreparing ? (
               <Button
                 type="button"
                 variant="outline"
                 disabled={refreshing}
                 onClick={async () => {
-                  await regenerateSuggestions(true);
+                  await runLiveGeneration(true);
                 }}
               >
                 <RefreshCcw className={`h-4 w-4 ${refreshing ? "animate-spin" : ""}`} />
@@ -322,42 +460,338 @@ export default function ExperimentSuggestionsPanel({ brandId }: { brandId: strin
       {error ? <div className="text-sm text-[color:var(--danger)]">{error}</div> : null}
 
       {isPreparing ? (
-        playbackCandidates.length && activePlaybackCandidate ? (
-          <section className="grid gap-4 rounded-[22px] border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-4 md:p-5 xl:grid-cols-[minmax(280px,0.88fr)_minmax(0,1.12fr)]">
+        streamTurns.length && activeTurn ? (
+          <section className="grid gap-4 rounded-[22px] border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-4 md:p-5 xl:grid-cols-[minmax(320px,0.9fr)_minmax(0,1.1fr)]">
             <div className="rounded-[18px] border border-[color:var(--border)] bg-[color:var(--surface)] p-4">
-              <div className="flex items-center justify-between gap-3">
+              <div className="flex flex-wrap items-center justify-between gap-3">
                 <div>
                   <p className="text-[11px] font-medium uppercase tracking-[0.2em] text-[color:var(--muted-foreground)]">
-                    Idea queue
+                    Agent tournament
                   </p>
                   <h3 className="mt-1 text-sm font-semibold text-[color:var(--foreground)]">
-                    Reviewing real drafts
+                    Live brainstorm with no repeats
                   </h3>
                 </div>
-                <Badge variant="muted">{playbackIndex + 1} / {playbackCandidates.length}</Badge>
+                <Badge variant="muted">
+                  {Math.min(activeTurnIndex + 1, streamTurns.length)} / {Math.max(streamTurns.length, 1)}
+                </Badge>
+              </div>
+
+              <div className="mt-4 flex flex-wrap gap-2">
+                {leaderboardTurns.slice(0, 3).map((turn, index) => (
+                  <Badge
+                    key={turn.agentId}
+                    variant={index === 0 ? "accent" : "muted"}
+                    className="gap-1"
+                  >
+                    <Trophy className="h-3.5 w-3.5" />
+                    #{index + 1} {turn.agentName.split("·")[1]?.trim() ?? turn.agentName}
+                  </Badge>
+                ))}
               </div>
 
               <div className="mt-4 space-y-2">
-                {playbackCandidates.map((candidate, index) => {
-                  const active = index === playbackIndex;
+                {streamTurns.map((turn, index) => {
+                  const active = index === activeTurnIndex;
+                  const turnRank = leaderboardRankMap.get(turn.agentId);
                   return (
                     <div
-                      key={`${candidate.index}:${candidate.name}`}
+                      key={`${turn.agentId}:${turn.turn}`}
                       className={cn(
-                        "rounded-[16px] border px-3 py-3 transition-all duration-300 motion-reduce:transition-none",
+                        "rounded-[16px] border px-3 py-3 transition-[transform,opacity,background-color,border-color,box-shadow] duration-300",
+                        TURN_EASE,
                         active
-                          ? "border-[color:var(--accent-border)] bg-[color:var(--accent-soft)] shadow-[0_12px_28px_-20px_color-mix(in_srgb,var(--accent)_35%,transparent)]"
-                          : "border-[color:var(--border)] bg-[color:var(--surface-muted)] opacity-70"
+                          ? "border-[color:var(--accent-border)] bg-[color:var(--accent-soft)] shadow-[0_12px_28px_-20px_color-mix(in_srgb,var(--accent)_35%,transparent)] motion-safe:-translate-y-0.5"
+                          : "border-[color:var(--border)] bg-[color:var(--surface-muted)]"
                       )}
                     >
                       <div className="flex items-start justify-between gap-3">
                         <div className="min-w-0">
-                          <p className="text-sm font-semibold leading-5 text-[color:var(--foreground)]">{candidate.name}</p>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <p className="text-xs font-medium uppercase tracking-[0.16em] text-[color:var(--muted-foreground)]">
+                              Turn {turn.turn}
+                            </p>
+                            {turnRank ? <Badge variant={turnRank === 1 ? "accent" : "muted"}>#{turnRank}</Badge> : null}
+                          </div>
+                          <p className="mt-1 text-sm font-semibold leading-5 text-[color:var(--foreground)]">
+                            {turn.agentName}
+                          </p>
                           <p className="mt-1 line-clamp-2 text-xs leading-5 text-[color:var(--muted-foreground)]">
-                            {candidate.audience}
+                            {turn.brief}
                           </p>
                         </div>
-                        <Badge variant={statusBadgeVariant(candidate)}>{statusLabel(candidate)}</Badge>
+                        <div className="flex flex-col items-end gap-2">
+                          <Badge variant={turnStatusVariant(turn)}>{turnStatusLabel(turn)}</Badge>
+                          <span className="text-xs text-[color:var(--muted-foreground)]">
+                            {turn.score} pts
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        {turn.status === "drafting" ? (
+                          <Badge variant="muted">Searching for untouched territory</Badge>
+                        ) : turn.status === "reviewing" ? (
+                          <>
+                            <Badge variant="accent">Ideas drafted</Badge>
+                            <Badge variant="muted">Roleplay in progress</Badge>
+                          </>
+                        ) : turn.status === "failed" ? (
+                          <Badge variant="danger">{turn.error || "Turn failed"}</Badge>
+                        ) : (
+                          turn.ideas.map((idea, ideaIndex) => (
+                            <Badge key={`${turn.agentId}:${idea.index}`} variant={statusBadgeVariant(idea)}>
+                              Idea {ideaIndex + 1} · {statusLabel(idea)}
+                            </Badge>
+                          ))
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div className="rounded-[18px] border border-[color:var(--border)] bg-[color:var(--surface)] p-4">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Badge variant="accent">{activeTurn.agentStyle}</Badge>
+                    {activeRank ? <Badge variant="muted">Rank #{activeRank}</Badge> : null}
+                    <Badge variant={turnStatusVariant(activeTurn)}>{turnStatusLabel(activeTurn)}</Badge>
+                  </div>
+                  <h3 className="mt-2 text-lg font-semibold tracking-[-0.02em] text-[color:var(--foreground)]">
+                    {activeTurn.agentName}
+                  </h3>
+                  <p className="mt-1 max-w-2xl text-sm leading-6 text-[color:var(--muted-foreground)]">
+                    {activeTurn.brief}
+                  </p>
+                </div>
+                <div className="rounded-[16px] border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-2 text-right">
+                  <p className="text-[11px] font-medium uppercase tracking-[0.16em] text-[color:var(--muted-foreground)]">
+                    Score
+                  </p>
+                  <p className="mt-1 text-lg font-semibold text-[color:var(--foreground)]">
+                    {activeTurn.score}
+                  </p>
+                </div>
+              </div>
+
+              {activeTurn.status === "drafting" ? (
+                <div className="mt-5 space-y-3">
+                  <div className="flex justify-end">
+                    <div className="max-w-[90%] rounded-[18px] border border-[color:var(--accent-border)] bg-[color:var(--accent-soft)] px-4 py-3 shadow-[0_12px_32px_-24px_color-mix(in_srgb,var(--shadow)_45%,transparent)]">
+                      <div className="mb-2 flex items-center gap-2 text-[11px] font-medium uppercase tracking-[0.16em] text-[color:var(--foreground)]">
+                        <WandSparkles className="h-3.5 w-3.5 motion-safe:animate-pulse" />
+                        {activeTurn.agentName}
+                      </div>
+                      <p className="text-sm leading-6 text-[color:var(--foreground)]">
+                        Mapping untouched territory and drafting two new angles the earlier agents did not claim.
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="flex justify-start">
+                    <div className="max-w-[90%] rounded-[18px] border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-4 py-3">
+                      <div className="mb-2 flex items-center gap-2 text-[11px] font-medium uppercase tracking-[0.16em] text-[color:var(--muted-foreground)]">
+                        <Bot className="h-3.5 w-3.5" />
+                        Rule
+                      </div>
+                      <p className="text-sm leading-6 text-[color:var(--foreground)]">
+                        No paraphrases. No recycled audience-trigger-offer combos.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              ) : activeTurn.status === "reviewing" ? (
+                <div className="mt-5 space-y-4">
+                  {activeTurn.draftIdeas.map((idea, ideaIndex) => (
+                    <div
+                      key={`${activeTurn.agentId}:draft:${idea.name}`}
+                      className="rounded-[18px] border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-4"
+                    >
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Badge variant="muted">Idea {ideaIndex + 1}</Badge>
+                        <Badge variant="accent">Under review</Badge>
+                      </div>
+
+                      <div className="mt-3 space-y-3">
+                        <div className="flex justify-end">
+                          <div className="max-w-[90%] rounded-[18px] border border-[color:var(--accent-border)] bg-[color:var(--accent-soft)] px-4 py-3 shadow-[0_12px_32px_-24px_color-mix(in_srgb,var(--shadow)_45%,transparent)]">
+                            <div className="mb-2 flex items-center gap-2 text-[11px] font-medium uppercase tracking-[0.16em] text-[color:var(--foreground)]">
+                              <WandSparkles className="h-3.5 w-3.5" />
+                              {activeTurn.agentName}
+                            </div>
+                            <p className="text-sm font-semibold leading-6 text-[color:var(--foreground)]">
+                              {idea.name}
+                            </p>
+                            <p className="mt-2 text-sm leading-6 text-[color:var(--foreground)]">
+                              {idea.audience}
+                            </p>
+                            <p className="mt-2 text-sm leading-6 text-[color:var(--foreground)]">
+                              {idea.offer}
+                            </p>
+                          </div>
+                        </div>
+
+                        <div className="flex justify-start">
+                          <div className="max-w-[90%] rounded-[18px] border border-[color:var(--danger-border)] bg-[color:var(--danger-soft)] px-4 py-3 shadow-[0_12px_32px_-24px_color-mix(in_srgb,var(--shadow)_45%,transparent)]">
+                            <div className="mb-2 flex items-center gap-2 text-[11px] font-medium uppercase tracking-[0.16em] text-[color:var(--danger)]">
+                              <UserRound className="h-3.5 w-3.5" />
+                              Prospect roleplay
+                            </div>
+                            <p className="text-sm leading-6 text-[color:var(--danger)]">
+                              Pressure-testing whether the hook feels timely, specific, and worth replying to.
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : activeTurn.status === "failed" ? (
+                <div className="mt-5 rounded-[18px] border border-[color:var(--danger-border)] bg-[color:var(--danger-soft)] px-4 py-4">
+                  <div className="flex items-center gap-2 text-[11px] font-medium uppercase tracking-[0.16em] text-[color:var(--danger)]">
+                    <Bot className="h-3.5 w-3.5" />
+                    Turn blocked
+                  </div>
+                  <p className="mt-2 text-sm leading-6 text-[color:var(--danger)]">
+                    {activeTurn.error || "This agent failed to produce a distinct idea."}
+                  </p>
+                </div>
+              ) : (
+                <div className="mt-5 space-y-4">
+                  {activeTurn.ideas.map((idea, ideaIndex) => (
+                    <div
+                      key={`${activeTurn.agentId}:${idea.index}`}
+                      className="rounded-[18px] border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-4"
+                    >
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Badge variant="muted">Idea {ideaIndex + 1}</Badge>
+                        <Badge variant={statusBadgeVariant(idea)}>{statusLabel(idea)}</Badge>
+                        <Badge variant="muted">Reply {idea.replyLikelihood}%</Badge>
+                        <Badge variant="muted">Positive {idea.positiveReplyLikelihood}%</Badge>
+                        <Badge variant="muted">Risk {idea.unsubscribeRisk}%</Badge>
+                      </div>
+
+                      <div className="mt-3 space-y-3">
+                        <div className="flex justify-end">
+                          <div className="max-w-[90%] rounded-[18px] border border-[color:var(--accent-border)] bg-[color:var(--accent-soft)] px-4 py-3 shadow-[0_12px_32px_-24px_color-mix(in_srgb,var(--shadow)_45%,transparent)]">
+                            <div className="mb-2 flex items-center gap-2 text-[11px] font-medium uppercase tracking-[0.16em] text-[color:var(--foreground)]">
+                              <WandSparkles className="h-3.5 w-3.5" />
+                              {activeTurn.agentName}
+                            </div>
+                            <p className="text-sm font-semibold leading-6 text-[color:var(--foreground)]">
+                              {idea.name}
+                            </p>
+                            <p className="mt-2 text-sm leading-6 text-[color:var(--foreground)]">
+                              {idea.audience}
+                            </p>
+                            <p className="mt-2 text-sm leading-6 text-[color:var(--foreground)]">
+                              {idea.offer}
+                            </p>
+                          </div>
+                        </div>
+
+                        <div className="flex justify-start">
+                          <div className="max-w-[90%] rounded-[18px] border border-[color:var(--danger-border)] bg-[color:var(--danger-soft)] px-4 py-3 shadow-[0_12px_32px_-24px_color-mix(in_srgb,var(--shadow)_45%,transparent)]">
+                            <div className="mb-2 flex items-center gap-2 text-[11px] font-medium uppercase tracking-[0.16em] text-[color:var(--danger)]">
+                              <UserRound className="h-3.5 w-3.5" />
+                              Prospect roleplay
+                            </div>
+                            <p className="text-sm leading-6 text-[color:var(--danger)]">
+                              {prospectPushback(idea)}
+                            </p>
+                          </div>
+                        </div>
+
+                        <div className="flex justify-end">
+                          <div className="max-w-[90%] rounded-[18px] border border-[color:var(--border)] bg-[color:var(--surface)] px-4 py-3 shadow-[0_12px_32px_-24px_color-mix(in_srgb,var(--shadow)_45%,transparent)]">
+                            <div className="mb-2 flex items-center gap-2 text-[11px] font-medium uppercase tracking-[0.16em] text-[color:var(--muted-foreground)]">
+                              <Bot className="h-3.5 w-3.5" />
+                              {statusLabel(idea)}
+                            </div>
+                            <p className="text-sm leading-6 text-[color:var(--foreground)]">
+                              {judgeResponse(idea)}
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {activeBestIdea ? (
+                <div className="mt-4 rounded-[16px] border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-4 py-3">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-[color:var(--muted-foreground)]">
+                        Live hook
+                      </p>
+                      <p className="mt-2 text-sm font-semibold text-[color:var(--foreground)]">
+                        {activeBestIdea.name}
+                      </p>
+                    </div>
+                    {activeBestCompletedIdea ? (
+                      <Badge variant={statusBadgeVariant(activeBestCompletedIdea)}>
+                        {statusLabel(activeBestCompletedIdea)}
+                      </Badge>
+                    ) : (
+                      <Badge variant="accent">Draft</Badge>
+                    )}
+                  </div>
+                  <p className="mt-3 text-sm leading-6 text-[color:var(--foreground)]">
+                    {activeBestIdea.emailPreview}
+                  </p>
+                </div>
+              ) : null}
+            </div>
+          </section>
+        ) : (
+          <section className="grid gap-4 rounded-[22px] border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-4 md:p-5 xl:grid-cols-[minmax(320px,0.9fr)_minmax(0,1.1fr)]">
+            <div className="rounded-[18px] border border-[color:var(--border)] bg-[color:var(--surface)] p-4">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <p className="text-[11px] font-medium uppercase tracking-[0.2em] text-[color:var(--muted-foreground)]">
+                    Adversarial brainstorm
+                  </p>
+                  <h3 className="mt-1 text-sm font-semibold text-[color:var(--foreground)]">
+                    Ten agents are entering the arena
+                  </h3>
+                </div>
+                <Badge variant="accent">Live stream armed</Badge>
+              </div>
+
+              <div className="mt-4 space-y-2">
+                {PLACEHOLDER_AGENTS.map((agent, index) => {
+                  const active = index === placeholderAgentIndex;
+                  const complete = index < placeholderAgentIndex;
+                  return (
+                    <div
+                      key={agent.name}
+                      className={cn(
+                        "rounded-[16px] border px-3 py-3 transition-[transform,opacity,background-color,border-color] duration-300",
+                        TURN_EASE,
+                        active
+                          ? "border-[color:var(--accent-border)] bg-[color:var(--accent-soft)] motion-safe:-translate-y-0.5"
+                          : complete
+                            ? "border-[color:var(--border)] bg-[color:var(--surface-muted)]"
+                            : "border-[color:var(--border)] bg-[color:var(--surface-muted)] opacity-55"
+                      )}
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <p className="text-sm font-semibold text-[color:var(--foreground)]">
+                            {agent.name}
+                          </p>
+                          <p className="mt-1 text-xs leading-5 text-[color:var(--muted-foreground)]">
+                            {agent.brief}
+                          </p>
+                        </div>
+                        <Badge variant={active ? "accent" : "muted"}>
+                          {active ? "Working" : complete ? "Queued" : "Waiting"}
+                        </Badge>
                       </div>
                     </div>
                   );
@@ -367,92 +801,45 @@ export default function ExperimentSuggestionsPanel({ brandId }: { brandId: strin
 
             <div className="rounded-[18px] border border-[color:var(--border)] bg-[color:var(--surface)] p-4">
               <div className="flex flex-wrap items-center gap-2">
-                <Badge variant={statusBadgeVariant(activePlaybackCandidate)}>{statusLabel(activePlaybackCandidate)}</Badge>
-                <Badge variant="muted">Reply {activePlaybackCandidate.replyLikelihood}%</Badge>
-                <Badge variant="muted">Positive {activePlaybackCandidate.positiveReplyLikelihood}%</Badge>
-                <Badge variant="muted">Risk {activePlaybackCandidate.unsubscribeRisk}%</Badge>
+                <Badge variant="muted">{PLACEHOLDER_AGENTS[placeholderAgentIndex]?.style}</Badge>
+                <Badge variant="muted">2 ideas per turn</Badge>
+                <Badge variant="muted">Prospect roleplay judge</Badge>
               </div>
 
               <div className="mt-4 space-y-3">
-                {playbackNarrative.map((entry, index) => (
-                  <div
-                    key={`${activePlaybackCandidate.index}:${entry.label}:${index}`}
-                    className={cn(
-                      "flex transition-all duration-300 motion-reduce:transition-none",
-                      entry.role === "prospect" ? "justify-start" : "justify-end",
-                      index === playbackNarrative.length - 1 ? "motion-safe:animate-pulse" : ""
-                    )}
-                  >
-                    <div
-                      className={cn(
-                        "max-w-[88%] rounded-[18px] px-4 py-3 shadow-[0_12px_32px_-24px_color-mix(in_srgb,var(--shadow)_45%,transparent)]",
-                        entry.role === "prospect"
-                          ? "border border-[color:var(--danger-border)] bg-[color:var(--danger-soft)] text-[color:var(--danger)]"
-                          : "border border-[color:var(--accent-border)] bg-[color:var(--accent-soft)] text-[color:var(--foreground)]"
-                      )}
-                    >
-                      <div className="mb-2 flex items-center gap-2 text-[11px] font-medium uppercase tracking-[0.16em]">
-                        {entry.role === "prospect" ? <UserRound className="h-3.5 w-3.5" /> : <WandSparkles className="h-3.5 w-3.5" />}
-                        {entry.label}
-                      </div>
-                      <p className="text-sm leading-6">{entry.message}</p>
+                <div className="flex justify-end">
+                  <div className="max-w-[90%] rounded-[18px] border border-[color:var(--accent-border)] bg-[color:var(--accent-soft)] px-4 py-3">
+                    <div className="mb-2 flex items-center gap-2 text-[11px] font-medium uppercase tracking-[0.16em] text-[color:var(--foreground)]">
+                      <WandSparkles className="h-3.5 w-3.5 motion-safe:animate-pulse" />
+                      {PLACEHOLDER_AGENTS[placeholderAgentIndex]?.name ?? "Agent"}
                     </div>
+                    <p className="text-sm leading-6 text-[color:var(--foreground)]">
+                      Drafting two fresh experiment ideas while avoiding every audience, trigger, and offer already claimed.
+                    </p>
                   </div>
-                ))}
-              </div>
-
-              <div className="mt-4 rounded-[16px] border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-4 py-3">
-                <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-[color:var(--muted-foreground)]">
-                  First-line preview
-                </p>
-                <p className="mt-2 text-sm leading-6 text-[color:var(--foreground)]">
-                  {activePlaybackCandidate.emailPreview}
-                </p>
-              </div>
-            </div>
-          </section>
-        ) : (
-          <section className="rounded-[20px] border border-dashed border-[color:var(--border)] bg-[color:var(--surface-muted)] px-5 py-14">
-            <div className="mx-auto grid max-w-4xl gap-4 xl:grid-cols-[minmax(240px,0.75fr)_minmax(0,1.25fr)]">
-              <div className="rounded-[18px] border border-[color:var(--border)] bg-[color:var(--surface)] p-4">
-                <p className="text-[11px] font-medium uppercase tracking-[0.22em] text-[color:var(--muted-foreground)]">
-                  Pipeline
-                </p>
-                <div className="mt-4 space-y-3">
-                  {[
-                    "Drafting audience + offer pairs",
-                    "Pressure-testing the first-line hook",
-                    "Simulating prospect replies and objections",
-                  ].map((label, index) => (
-                    <div key={label} className="flex items-center gap-3">
-                      <div className="flex h-8 w-8 items-center justify-center rounded-full border border-[color:var(--border)] bg-[color:var(--surface-muted)]">
-                        {index === 2 ? (
-                          <Sparkles className="h-4 w-4 text-[color:var(--muted-foreground)]" />
-                        ) : (
-                          <RefreshCcw className="h-4 w-4 animate-spin text-[color:var(--muted-foreground)]" />
-                        )}
-                      </div>
-                      <div className="text-sm text-[color:var(--foreground)]">{label}</div>
-                    </div>
-                  ))}
                 </div>
-              </div>
 
-              <div className="rounded-[18px] border border-[color:var(--border)] bg-[color:var(--surface)] p-4">
-                <div className="flex items-center gap-2 text-[11px] font-medium uppercase tracking-[0.18em] text-[color:var(--muted-foreground)]">
-                  <WandSparkles className="h-3.5 w-3.5" />
-                  Live review
-                </div>
-                <div className="mt-4 space-y-3">
-                  <div className="flex justify-end">
-                    <div className="max-w-[84%] rounded-[18px] border border-[color:var(--accent-border)] bg-[color:var(--accent-soft)] px-4 py-3 text-sm leading-6 text-[color:var(--foreground)]">
-                      Building the strongest experiment angles from this brand profile.
+                <div className="flex justify-start">
+                  <div className="max-w-[90%] rounded-[18px] border border-[color:var(--danger-border)] bg-[color:var(--danger-soft)] px-4 py-3">
+                    <div className="mb-2 flex items-center gap-2 text-[11px] font-medium uppercase tracking-[0.16em] text-[color:var(--danger)]">
+                      <UserRound className="h-3.5 w-3.5" />
+                      Prospect roleplay
                     </div>
+                    <p className="text-sm leading-6 text-[color:var(--danger)]">
+                      If the hook sounds generic or the ask feels fuzzy, I ignore it immediately.
+                    </p>
                   </div>
-                  <div className="flex justify-start">
-                    <div className="max-w-[84%] rounded-[18px] border border-[color:var(--danger-border)] bg-[color:var(--danger-soft)] px-4 py-3 text-sm leading-6 text-[color:var(--danger)]">
-                      Stress-testing whether the prospect would ignore it, push back, or actually reply.
+                </div>
+
+                <div className="flex justify-end">
+                  <div className="max-w-[90%] rounded-[18px] border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-4 py-3">
+                    <div className="mb-2 flex items-center gap-2 text-[11px] font-medium uppercase tracking-[0.16em] text-[color:var(--muted-foreground)]">
+                      <Bot className="h-3.5 w-3.5" />
+                      Filter rule
                     </div>
+                    <p className="text-sm leading-6 text-[color:var(--foreground)]">
+                      Only ideas that survive the prospect pushback make the board.
+                    </p>
                   </div>
                 </div>
               </div>
@@ -565,7 +952,7 @@ export default function ExperimentSuggestionsPanel({ brandId }: { brandId: strin
               variant="outline"
               disabled={refreshing}
               onClick={async () => {
-                await regenerateSuggestions(true);
+                await runLiveGeneration(true);
               }}
             >
               <RefreshCcw className={`h-4 w-4 ${refreshing ? "animate-spin" : ""}`} />

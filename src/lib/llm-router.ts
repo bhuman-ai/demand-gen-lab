@@ -1,5 +1,6 @@
 export type LlmTask =
   | "intake_prefill"
+  | "experiment_setup_generate"
   | "objective_suggest"
   | "build_suggest"
   | "hypotheses_generate"
@@ -25,6 +26,7 @@ const DEFAULT_MODEL = "gpt-5.2";
 
 const TASK_BASE_TIER: Record<LlmTask, ModelTier> = {
   intake_prefill: "default",
+  experiment_setup_generate: "default",
   objective_suggest: "default",
   build_suggest: "default",
   hypotheses_generate: "default",

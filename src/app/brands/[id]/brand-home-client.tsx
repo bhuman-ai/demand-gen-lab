@@ -8,7 +8,6 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
   assignBrandOutreachAccount,
-  createExperimentApi,
   fetchBrand,
   fetchBrands,
   fetchBrandOutreachAssignment,
@@ -19,6 +18,7 @@ import {
 } from "@/lib/client-api";
 import { trackEvent } from "@/lib/telemetry-client";
 import type { BrandRecord, ExperimentRecord, OutreachAccount, ScaleCampaignRecord } from "@/lib/factory-types";
+import CreateExperimentModal from "@/components/experiments/create-experiment-modal";
 import { Select } from "@/components/ui/select";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
@@ -42,6 +42,7 @@ export default function BrandHomeClient({ brandId }: { brandId: string }) {
   const [assignedAccountId, setAssignedAccountId] = useState("");
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
+  const [createOpen, setCreateOpen] = useState(false);
   const [profileSaving, setProfileSaving] = useState(false);
   const [error, setError] = useState("");
   const [product, setProduct] = useState("");
@@ -126,19 +127,7 @@ export default function BrandHomeClient({ brandId }: { brandId: string }) {
         actions={
           <Button
             type="button"
-            onClick={async () => {
-              if (!brand) return;
-              setCreating(true);
-              try {
-                const created = await createExperimentApi(brand.id, {
-                  name: `Experiment ${experiments.length + 1}`,
-                });
-                trackEvent("experiment_created", { brandId: brand.id, experimentId: created.id });
-                router.push(`/brands/${brand.id}/experiments/${created.id}`);
-              } finally {
-                setCreating(false);
-              }
-            }}
+            onClick={() => setCreateOpen(true)}
             disabled={!brand || creating}
           >
             <Plus className="h-4 w-4" />
@@ -415,6 +404,23 @@ export default function BrandHomeClient({ brandId }: { brandId: string }) {
           }
         />
       )}
+
+      {brand ? (
+        <CreateExperimentModal
+          brandId={brand.id}
+          open={createOpen}
+          defaultName={`Experiment ${experiments.length + 1}`}
+          onOpenChange={(open) => {
+            setCreateOpen(open);
+            if (!open) setCreating(false);
+          }}
+          onCreated={(experiment, source) => {
+            setCreating(false);
+            trackEvent("experiment_created", { brandId: brand.id, experimentId: experiment.id, source });
+            router.push(`/brands/${brand.id}/experiments/${experiment.id}/setup`);
+          }}
+        />
+      ) : null}
     </div>
   );
 }

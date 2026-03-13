@@ -15,6 +15,7 @@ import { cn } from "@/lib/utils";
 import type { ExperimentListItem } from "@/lib/factory-types";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import CreateExperimentModal from "@/components/experiments/create-experiment-modal";
 import { Input } from "@/components/ui/input";
 import ExperimentSuggestionsPanel from "@/components/experiments/experiment-suggestions-panel";
 import {
@@ -88,6 +89,7 @@ export default function ExperimentsClient({
   const [items, setItems] = useState<ExperimentListItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
+  const [createOpen, setCreateOpen] = useState(false);
   const [duplicatingId, setDuplicatingId] = useState("");
   const [error, setError] = useState("");
   const [statusFilter, setStatusFilter] = useState<(typeof STATUS_OPTIONS)[number]>("all");
@@ -174,20 +176,9 @@ export default function ExperimentsClient({
             <Button
               type="button"
               disabled={creating}
-              onClick={async () => {
-                setCreating(true);
+              onClick={() => {
                 setError("");
-                try {
-                  const created = await createExperimentApi(brandId, {
-                    name: `Experiment ${items.length + 1}`,
-                  });
-                  trackEvent("experiment_created", { brandId, experimentId: created.id });
-                  router.push(`/brands/${brandId}/experiments/${created.id}`);
-                } catch (err) {
-                  setError(err instanceof Error ? err.message : "Failed to create experiment");
-                } finally {
-                  setCreating(false);
-                }
+                setCreateOpen(true);
               }}
             >
               <Plus className="h-4 w-4" />
@@ -354,13 +345,13 @@ export default function ExperimentsClient({
                                   offer: source.offer,
                                   audience: source.audience,
                                 });
-                                trackEvent("experiment_created", {
-                                  brandId,
-                                  experimentId: duplicate.id,
-                                  source: "duplicate",
-                                  fromExperimentId: item.id,
-                                });
-                                router.push(`/brands/${brandId}/experiments/${duplicate.id}`);
+                              trackEvent("experiment_created", {
+                                brandId,
+                                experimentId: duplicate.id,
+                                source: "duplicate",
+                                fromExperimentId: item.id,
+                              });
+                                router.push(`/brands/${brandId}/experiments/${duplicate.id}/setup`);
                               } catch (err) {
                                 setError(err instanceof Error ? err.message : "Failed to duplicate experiment");
                               } finally {
@@ -397,6 +388,21 @@ export default function ExperimentsClient({
       >
         <ExperimentSuggestionsPanel brandId={brandId} />
       </SettingsModal>
+
+      <CreateExperimentModal
+        brandId={brandId}
+        open={createOpen}
+        defaultName={`Experiment ${items.length + 1}`}
+        onOpenChange={(open) => {
+          setCreateOpen(open);
+          if (!open) setCreating(false);
+        }}
+        onCreated={(experiment, source) => {
+          setCreating(false);
+          trackEvent("experiment_created", { brandId, experimentId: experiment.id, source });
+          router.push(`/brands/${brandId}/experiments/${experiment.id}/setup`);
+        }}
+      />
     </div>
   );
 }

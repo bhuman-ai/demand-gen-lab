@@ -366,6 +366,31 @@ export async function createExperimentApi(
   return data.experiment as ExperimentRecord;
 }
 
+export async function draftExperimentFromPromptApi(
+  brandId: string,
+  input: {
+    prompt: string;
+    current?: {
+      name?: string;
+      audience?: string;
+      offer?: string;
+    };
+  }
+) {
+  const response = await fetch(`/api/brands/${brandId}/experiments/draft`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  const data = await readJson(response);
+  const draft = asObject(data.draft);
+  return {
+    name: String(draft.name ?? "").trim(),
+    audience: String(draft.audience ?? "").trim(),
+    offer: String(draft.offer ?? "").trim(),
+  };
+}
+
 export async function updateExperimentApi(
   brandId: string,
   experimentId: string,

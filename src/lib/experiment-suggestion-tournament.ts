@@ -323,19 +323,19 @@ function concreteSuggestionExample() {
     {
       suggestions: [
         {
-          name: "Renewal Rescue Scorecard for PLG SaaS Teams",
+          name: "Catch bad software renewals early",
           audience:
-            "Head of RevOps at a 25-200 employee product-led SaaS company managing multiple annual software renewals",
+            "Finance lead at a 20-200 person self-funded software company with several tool renewals coming up",
           trigger:
-            "Their team is entering renewal season and finance is asking for tighter justification before approving another year of tool spend.",
+            "A few renewals are close and finance needs a simple way to see what to keep, cut, or renegotiate first.",
           offer:
-            "A one-page renewal scorecard that highlights overlap, usage gaps, and the 3 renewals most likely to be renegotiated this quarter.",
-          cta: "Want me to send the one-page scorecard template?",
+            "A one-page renewal review that shows overlap, low-usage tools, and the 3 contracts worth reopening first.",
+          cta: "Want me to send the one-page renewal review?",
           emailPreview:
-            "If renewal approvals are getting tighter, I can send the 1-page scorecard we use to spot overlap fast.",
-          successTarget: "18% reply rate and 6 scorecard requests per 100 targeted sends",
+            "If a few renewals are coming up, I can send a one-page review showing what to renegotiate first.",
+          successTarget: "18% reply rate and 6 review requests per 100 targeted sends",
           rationale:
-            "The timing is specific, the deliverable is tangible, and the ask is low-friction enough for a cold outbound first touch.",
+            "This could work because the timing is real, the deliverable is simple, and the ask is easy to say yes to.",
         },
       ],
     },
@@ -639,6 +639,7 @@ async function openAiRoleplayEvaluate(input: {
     "You are a realistic buyer-behavior analysis panel for B2B cold outreach.",
     "Evaluate each suggestion as if real recipients are busy, skeptical, annoyed, cautious, and curious.",
     "Each evaluation must reflect likely inbox behavior, not idealized behavior.",
+    "Write your review in plain English, not strategy jargon.",
     "",
     "Evaluation setup per suggestion:",
     "- Run 12 micro roleplays across personas: busy operator, annoyed exec, skeptical manager, curious evaluator, price-sensitive buyer, delegated inbox gatekeeper.",
@@ -651,8 +652,10 @@ async function openAiRoleplayEvaluate(input: {
     "Rules:",
     "- index must match the input suggestion index.",
     "- 0-100 integers for score/openLikelihood/replyLikelihood/positiveReplyLikelihood/unsubscribeRisk.",
-    "- strengths and risks each max 3 bullets, concrete and short.",
+    "- summary must be one short plain-English sentence a non-marketer can understand on first read.",
+    "- strengths and risks each max 3 bullets, concrete, short, and plain-English.",
     "- Do not use provider/tool implementation terms.",
+    "- Avoid internal marketing words like ICP, funnel, product-led, leverage, proof-led, teardown, artifact, or enablement unless the buyer would actually say them.",
     "",
     `BrandContext: ${JSON.stringify({
       brandName: input.brandName,
@@ -693,6 +696,7 @@ async function openAiSuggestionsForAgent(input: {
     "You are one agent inside an adversarial brainstorming tournament for B2B outbound experiments.",
     "You only score points when the downstream roleplay filter accepts your ideas.",
     "Earlier agents have already claimed territory. You must not repeat, paraphrase, or lightly remix any prior audience/trigger/offer lane.",
+    "Write like a clear human, not a growth strategist writing an internal memo.",
     "",
     `AgentName: ${input.agent.name}`,
     `AgentStyle: ${input.agent.style}`,
@@ -703,14 +707,18 @@ async function openAiSuggestionsForAgent(input: {
     "",
     "Rules:",
     `- Generate ${IDEAS_REQUESTED_PER_AGENT} suggestions.`,
-    "- name must read like a concrete campaign idea, not a generic angle label.",
-    "- audience must include role plus company type or size.",
-    "- trigger must explain why this outreach feels timely or specific.",
+    "- Use plain English a smart non-marketer can understand on first read.",
+    "- name must sound like a user-facing idea title, not an internal framework name.",
+    "- Prefer simple names like \"Catch bad software renewals early\" over names with colons, parentheses, acronyms, or jargon.",
+    "- audience must include role plus company type or size, but say it in everyday words.",
+    "- trigger must explain why this outreach feels timely or specific in one plain sentence.",
     "- offer must be tangible and credibly low-friction.",
     "- cta must be one single ask.",
     "- emailPreview must be a short first-line preview under about 25 words.",
     "- successTarget must be measurable.",
+    "- rationale must be one plain-English sentence starting with \"This could work because...\"",
     "- Avoid vague claims, buzzwords, and generic personalization.",
+    "- Avoid internal marketing jargon such as funnel, product-led, proof-led, teardown, artifact, enablement, leverage, operator, margin squeeze, or conversion wobble.",
     "- The ideas must be materially different from each other.",
     "- The ideas must be materially different from all occupied territory below.",
     sparseBrandContext
@@ -770,6 +778,7 @@ async function repairOpenAiSuggestionsForAgent(input: {
     "You are repairing a failed brainstorm response for a B2B outbound experiment tournament.",
     "The first output either broke JSON, missed required fields, or stayed too generic to pass validation.",
     "Repair it into strict JSON. If the failed draft is unusable, generate fresh suggestions from scratch.",
+    "Write in plain English, not strategy jargon.",
     "",
     `AgentName: ${input.agent.name}`,
     `AgentStyle: ${input.agent.style}`,
@@ -780,12 +789,17 @@ async function repairOpenAiSuggestionsForAgent(input: {
     "",
     "Validation reminders:",
     `- Return exactly ${IDEAS_REQUESTED_PER_AGENT} concrete suggestions.`,
-    "- audience must include role plus company type or size.",
-    "- offer must describe a tangible artifact, diagnostic, teardown, audit, checklist, scorecard, plan, review, benchmark, or blueprint.",
+    "- Use plain English a smart non-marketer can understand on first read.",
+    "- name must be a simple user-facing idea title, not an internal framework label.",
+    "- Avoid colons, parentheses, and jargon-heavy naming unless absolutely necessary.",
+    "- audience must include role plus company type or size in everyday language.",
+    "- offer must describe a tangible deliverable such as a checklist, review, guide, script, plan, outline, tracker, report, or audit.",
     "- cta must contain one clear action.",
     "- emailPreview must stay between 8 and 30 words.",
     "- successTarget must include a number and a measurable metric such as reply rate, meetings, or conversions.",
+    "- rationale must be one plain-English sentence starting with \"This could work because...\"",
     "- No vague placeholders. No angle labels. No generic 'optimize growth' language.",
+    "- Avoid internal marketing jargon such as funnel, product-led, proof-led, teardown, artifact, enablement, leverage, operator, margin squeeze, or conversion wobble.",
     "- Do not repeat or paraphrase occupied territory.",
     sparseBrandContext
       ? "- Brand context is sparse. Infer the most plausible concrete angle from the brand name, website, notes, and whatever context exists. Do not ask for more info."
@@ -1113,7 +1127,7 @@ export async function generateExperimentSuggestionResult(input: {
 
   const screened = selected.slice(0, MAX_READY_SUGGESTIONS).map((candidate) => ({
     ...candidate,
-    rationale: sanitizeAiText([candidate.rationale, candidate.summary].filter(Boolean).join(" ")),
+    rationale: sanitizeAiText(candidate.rationale || candidate.summary || ""),
   }));
 
   if (!screened.length) {

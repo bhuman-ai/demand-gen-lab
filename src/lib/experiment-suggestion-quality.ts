@@ -20,12 +20,12 @@ const PLACEHOLDER_PATTERNS = [
 ];
 
 const CTA_VERB_PATTERN =
-  /\b(reply|book|schedule|share|send|confirm|approve|join|start|review|forward|introduce|connect)\b/i;
+  /\b(reply|book|schedule|share|send|confirm|approve|join|start|review|forward|introduce|connect|see|get|check|tell|show|use|compare)\b/i;
 
 const OFFER_NOUN_PATTERN =
-  /\b(teardown|diagnostic|audit|benchmark|blueprint|plan|video|walkthrough|assessment|case study|report|review)\b/i;
+  /\b(teardown|diagnostic|audit|benchmark|blueprint|plan|video|walkthrough|assessment|case study|report|review|checklist|template|tracker|script|outline|guide|pack|scorecard|worksheet|playbook|one-page|one pager|one-pager)\b/i;
 
-const METRIC_PATTERN = /\b(reply|positive|meeting|booked|sent|rate|conversion)\b/i;
+const METRIC_PATTERN = /\b(reply|positive|meeting|meetings|booked|sent|rate|conversion|request|requests|call|calls|application|applications|intro|intros)\b/i;
 const NUMBER_PATTERN = /\d/;
 
 function wordCount(value: string) {
@@ -42,7 +42,7 @@ function isPlaceholder(value: string) {
 export function validateConcreteSuggestion(input: SuggestionQualityInput) {
   const errors: string[] = [];
 
-  if (!input.name.trim() || wordCount(input.name) < 4 || isPlaceholder(input.name)) {
+  if (!input.name.trim() || wordCount(input.name) < 3 || isPlaceholder(input.name)) {
     errors.push("name is missing or too generic");
   }
   if (!input.audience.trim() || wordCount(input.audience) < 5 || isPlaceholder(input.audience)) {

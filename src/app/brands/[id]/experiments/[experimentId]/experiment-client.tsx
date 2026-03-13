@@ -14,6 +14,7 @@ import {
   Plus,
   RefreshCw,
   Rocket,
+  Search,
   Save,
   Upload,
 } from "lucide-react";
@@ -1677,6 +1678,456 @@ export default function ExperimentClient({
 
   const messagingFocus = currentStage === 2;
   const unifiedRunMode = !view && Boolean(latestRun);
+  const pipelineOverviewMode = !view;
+  const experimentStatusLabel = latestRun ? latestRun.status : experiment.status;
+  const activityStatusLabel = latestRun
+    ? latestRun.status
+    : sampling
+      ? "finding leads"
+      : prospectsReady
+        ? "ready"
+        : "waiting";
+  const pipelineSteps = [
+    {
+      id: "experiment-leads",
+      label: "Leads",
+      summary: `${realEmailLeadCount} / ${PROSPECT_VALIDATION_TARGET}`,
+      detail: prospectsReady ? "Ready" : `${remainingProspectLeads} left`,
+      tone: prospectsReady ? "success" : "accent",
+    },
+    {
+      id: "experiment-messaging",
+      label: "Messaging",
+      summary: messagingReady ? "Ready" : "Not created",
+      detail: messagingReady ? `Revision #${experiment.messageFlow.publishedRevision}` : "Needs a flow",
+      tone: messagingReady ? "success" : prospectsReady ? "accent" : "muted",
+    },
+    {
+      id: "experiment-launch",
+      label: "Launch",
+      summary: launchActive ? "Running" : launchUnlocked ? "Ready" : "Not scheduled",
+      detail: launchIdentityReady ? (nextScheduledAtAnyRun ? formatDate(nextScheduledAtAnyRun) : "No send booked") : "Setup needed",
+      tone: launchActive ? "success" : launchUnlocked ? "accent" : "muted",
+    },
+    {
+      id: "experiment-results",
+      label: "Results",
+      summary: runTotals.sentMessages > 0 ? `${runTotals.sentMessages} sent` : "No signal",
+      detail:
+        runTotals.replies > 0
+          ? `${runTotals.replies} replies`
+          : runTotals.sentMessages > 0
+            ? "Waiting for replies"
+            : "Nothing sent yet",
+      tone: runTotals.replies > 0 ? "success" : runTotals.sentMessages > 0 ? "accent" : "muted",
+    },
+  ] as const;
+  const scrollToPipelineSection = (sectionId: string) => {
+    if (typeof document === "undefined") return;
+    document.getElementById(sectionId)?.scrollIntoView({ behavior: "smooth", block: "start" });
+  };
+
+  if (pipelineOverviewMode) {
+    return (
+      <div className="space-y-5">
+        {error ? <div className="text-sm text-[color:var(--danger)]">{error}</div> : null}
+
+        <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_320px]">
+          <Card>
+            <CardHeader>
+              <CardTitle>{experiment.name}</CardTitle>
+            </CardHeader>
+            <CardContent className="flex flex-wrap items-center gap-2 text-xs">
+              <Badge variant="muted">Status: {experimentStatusLabel}</Badge>
+              <Badge variant="muted">Sent: {runTotals.sentMessages}</Badge>
+              <Badge variant="muted">Replies: {runTotals.replies}</Badge>
+              <Badge variant="muted">Positive: {runTotals.positiveReplies}</Badge>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Experiment activity</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3 text-sm">
+              <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-2">
+                <div className="text-xs text-[color:var(--muted-foreground)]">Latest run</div>
+                <div className="font-medium text-[color:var(--foreground)]">
+                  {latestRun ? latestRun.id.slice(-8) : "No run yet"}
+                </div>
+              </div>
+              <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-2">
+                <div className="text-xs text-[color:var(--muted-foreground)]">Sourcing</div>
+                <div className="font-medium text-[color:var(--foreground)]">{activityStatusLabel}</div>
+              </div>
+              <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-2">
+                <div className="text-xs text-[color:var(--muted-foreground)]">Next send</div>
+                <div className="font-medium text-[color:var(--foreground)]">
+                  {nextScheduledAtAnyRun ? formatDate(nextScheduledAtAnyRun) : "Not scheduled"}
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Pipeline</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="grid gap-2 md:grid-cols-4">
+              {pipelineSteps.map((step) => (
+                <button
+                  key={step.id}
+                  type="button"
+                  onClick={() => scrollToPipelineSection(step.id)}
+                  className="rounded-[14px] border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-4 py-4 text-left transition hover:border-[color:var(--accent)] hover:bg-[color:var(--surface)]"
+                >
+                  <div className="text-xs font-medium uppercase tracking-[0.14em] text-[color:var(--muted-foreground)]">
+                    {step.label}
+                  </div>
+                  <div className="mt-2 text-lg font-semibold text-[color:var(--foreground)]">{step.summary}</div>
+                  <div className="mt-1 text-sm text-[color:var(--muted-foreground)]">{step.detail}</div>
+                </button>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card id="experiment-leads">
+          <CardHeader>
+            <CardTitle className="text-base">Leads</CardTitle>
+            <CardDescription>{prospectPrimaryMessage}</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-4">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <div className="text-2xl font-semibold text-[color:var(--foreground)]">
+                    {realEmailLeadCount} / {PROSPECT_VALIDATION_TARGET}
+                  </div>
+                  <div className="mt-1 text-sm text-[color:var(--muted-foreground)]">verified work emails</div>
+                </div>
+                <Badge variant={prospectsReady ? "success" : "muted"}>{remainingProspectLeads} remaining</Badge>
+              </div>
+              <div className="mt-4 h-2 overflow-hidden rounded-full bg-[color:var(--border)]">
+                <div
+                  className={`h-full rounded-full ${prospectsReady ? "bg-[color:var(--success)]" : "bg-[color:var(--accent)]"}`}
+                  style={{ width: `${gateProgressPct}%` }}
+                />
+              </div>
+            </div>
+
+            <div className="flex flex-wrap gap-2">
+              <Button
+                type="button"
+                onClick={() => {
+                  setProspectInputMode("need_data");
+                  setAutoSourcePaused(false);
+                  if (!prospectsReady) {
+                    void autoSourceProspects("gate");
+                    return;
+                  }
+                  const count = requestAdditionalLeadsCount();
+                  if (!count) return;
+                  void autoSourceProspects("expand", count, {
+                    autoSend: canAutoSendOnAddLeads,
+                  });
+                }}
+                disabled={sampling}
+              >
+                {sampling ? <RefreshCw className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+                {autoSourceButtonLabel}
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => {
+                  setProspectInputMode("have_data");
+                  setShowCsvImport(true);
+                }}
+              >
+                <Upload className="h-4 w-4" />
+                Upload leads
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => {
+                  setProspectInputMode("have_data");
+                  setShowCsvImport(false);
+                }}
+              >
+                <Search className="h-4 w-4" />
+                Search leads
+              </Button>
+            </div>
+
+            {prospectInputMode === "need_data" ? (
+              <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <div className="text-sm font-medium">Auto-source leads</div>
+                    <div className="mt-1 text-xs text-[color:var(--muted-foreground)]">{autoSourceStatusMessage}</div>
+                  </div>
+                  {sampling ? (
+                    <Button type="button" variant="outline" onClick={() => void stopAutoSource()}>
+                      Pause
+                    </Button>
+                  ) : null}
+                </div>
+              </div>
+            ) : (
+              <div className="space-y-3 rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3">
+                <div className="text-sm font-medium">
+                  {showCsvImport ? "Upload your lead list" : "Search for leads"}
+                </div>
+                {!showCsvImport ? (
+                  <LeadFinderEmbed
+                    brandId={brandId}
+                    experimentId={experiment.id}
+                    enrichAnythingAppUrl={enrichAnythingAppUrl}
+                    onImported={async () => {
+                      await refresh(false);
+                    }}
+                  />
+                ) : null}
+                <div className="rounded-lg border border-[color:var(--border)] bg-[color:var(--surface)]">
+                  <div className="flex flex-wrap items-center justify-between gap-3 px-3 py-3">
+                    <div>
+                      <div className="text-sm font-medium">CSV upload</div>
+                      <div className="mt-1 text-xs text-[color:var(--muted-foreground)]">
+                        Upload a CSV with <code>email</code>, or with <code>name + domain</code>.
+                      </div>
+                    </div>
+                    <Button type="button" variant="ghost" onClick={() => setShowCsvImport((current) => !current)}>
+                      {showCsvImport ? "Hide upload" : "Show upload"}
+                    </Button>
+                  </div>
+                  {showCsvImport ? (
+                    <div className="space-y-3 border-t border-[color:var(--border)] px-3 py-3">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Input
+                          type="file"
+                          accept=".csv,text/csv"
+                          onChange={(event) => {
+                            const file = event.target.files?.[0] ?? null;
+                            if (!file) {
+                              setCsvFileName("");
+                              setCsvText("");
+                              return;
+                            }
+                            setCsvFileName(file.name);
+                            setCsvImportErrors([]);
+                            setCsvImportSummary("");
+                            void file
+                              .text()
+                              .then((text) => {
+                                setCsvText(text.slice(0, CSV_MAX_CHARS));
+                              })
+                              .catch(() => {
+                                setCsvText("");
+                                setError("Failed to read CSV file");
+                              });
+                          }}
+                          className="max-w-sm"
+                        />
+                        {csvFileName ? <Badge variant="muted">{csvFileName}</Badge> : null}
+                      </div>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        disabled={importingCsv || !csvText.trim()}
+                        onClick={async () => {
+                          if (!csvText.trim()) return;
+                          setImportingCsv(true);
+                          setError("");
+                          setCsvImportErrors([]);
+                          setCsvImportSummary("");
+                          try {
+                            const result = await importExperimentProspectsCsvApi(
+                              brandId,
+                              experiment.id,
+                              csvText
+                            );
+                            setCsvImportErrors(result.parseErrors.slice(0, 10));
+                            setCsvImportSummary(
+                              `Imported ${result.importedCount} leads${result.parseErrorCount ? ` (${result.parseErrorCount} rows skipped)` : ""}.`
+                            );
+                            await refresh(false);
+                            trackEvent("prospects_imported_csv", {
+                              brandId,
+                              experimentId: experiment.id,
+                              runId: result.runId,
+                              importedCount: result.importedCount,
+                            });
+                          } catch (err) {
+                            setError(err instanceof Error ? err.message : "Failed to import CSV leads");
+                          } finally {
+                            setImportingCsv(false);
+                          }
+                        }}
+                      >
+                        <Upload className="h-4 w-4" />
+                        {importingCsv ? "Importing..." : "Import CSV"}
+                      </Button>
+                      {csvImportSummary ? (
+                        <div className="rounded-lg border border-[color:var(--success)]/40 bg-[color:var(--success-soft)] px-3 py-2 text-sm text-[color:var(--success)]">
+                          {csvImportSummary}
+                        </div>
+                      ) : null}
+                      {csvImportErrors.length ? (
+                        <div className="rounded-lg border border-[color:var(--warning)]/40 bg-[color:var(--warning-soft)] px-3 py-2 text-xs text-[color:var(--warning)]">
+                          {csvImportErrors.slice(0, 5).join(" · ")}
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : null}
+                </div>
+              </div>
+            )}
+
+            <details className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3">
+              <summary className="cursor-pointer list-none text-sm font-medium text-[color:var(--foreground)]">
+                View sourcing activity
+              </summary>
+              <div className="mt-3 space-y-3">
+                {hasPreviewEmailLookupSignal ? (
+                  <div
+                    className={`rounded-lg px-3 py-2 text-sm ${
+                      previewEmailEnrichment.error
+                        ? "border border-[color:var(--warning)]/40 bg-[color:var(--warning-soft)] text-[color:var(--warning)]"
+                        : "border border-[color:var(--accent)]/40 bg-[color:var(--accent-soft)] text-[color:var(--accent)]"
+                    }`}
+                  >
+                    {previewEmailEnrichment.error ? (
+                      <span>{previewEmailEnrichment.error}</span>
+                    ) : (
+                      <span>
+                        Checked {previewEmailEnrichment.attempted} people, matched {previewEmailEnrichment.matched},
+                        still missing {Math.max(0, previewEmailEnrichment.attempted - previewEmailEnrichment.matched)}.
+                      </span>
+                    )}
+                  </div>
+                ) : invalidLeadCount > 0 ? (
+                  <div className="rounded-lg border border-[color:var(--warning)]/40 bg-[color:var(--warning-soft)] px-3 py-2 text-sm text-[color:var(--warning)]">
+                    {invalidLeadCount} people are still missing a real work email.
+                  </div>
+                ) : null}
+
+                {autoSourceMeta ? (
+                  <div className="text-xs text-[color:var(--muted-foreground)]">{autoSourceMeta}</div>
+                ) : null}
+
+                <div className="space-y-2">
+                  <div className="text-sm font-medium">Leads found so far</div>
+                  {sampleLeads.length ? (
+                    <div className="grid gap-2 md:grid-cols-2">
+                      {sampleLeads.map((lead) => (
+                        <div key={`${lead.id}:${lead.email}`} className="rounded-lg border border-[color:var(--border)] p-3 text-xs">
+                          <div className="flex items-center justify-between gap-2">
+                            <div className="font-medium text-sm">{lead.name || "(missing name)"}</div>
+                            <Badge variant={lead.email ? "success" : "danger"}>
+                              {lead.email ? "Ready" : "Waiting for email"}
+                            </Badge>
+                          </div>
+                          <div className="text-[color:var(--muted-foreground)]">
+                            {lead.email || "No real email found yet."}
+                          </div>
+                          <div className="text-[color:var(--muted-foreground)]">
+                            {lead.title || "Unknown title"} at {lead.company || lead.domain}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="rounded-lg border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-2 text-sm text-[color:var(--muted-foreground)]">
+                      No sample leads yet.
+                    </div>
+                  )}
+                </div>
+              </div>
+            </details>
+          </CardContent>
+        </Card>
+
+        <Card id="experiment-messaging">
+          <CardHeader>
+            <CardTitle className="text-base">Messaging</CardTitle>
+            <CardDescription>
+              {messagingReady
+                ? `Ready. Flow revision #${experiment.messageFlow.publishedRevision} is published.`
+                : "No messaging flow created yet."}
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <div className="text-sm text-[color:var(--muted-foreground)]">
+              {prospectsReady
+                ? "Create the emails people will get."
+                : `Finish leads first. You still need ${remainingProspectLeads} more real work emails.`}
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <Button asChild type="button" disabled={!prospectsReady}>
+                <Link href={`/brands/${brandId}/experiments/${experiment.id}/messaging`}>
+                  {messagingReady ? "Edit messaging flow" : "Open messaging canvas"}
+                </Link>
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card id="experiment-launch">
+          <CardHeader>
+            <CardTitle className="text-base">Launch</CardTitle>
+            <CardDescription>
+              {!messagingReady
+                ? "Messaging required before launch."
+                : launchIdentityReady
+                  ? latestRun
+                    ? latestRunNarrative.detail
+                    : "Ready when you are."
+                  : "Sending setup required before launch."}
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            {!launchIdentityReady ? (
+              <div className="text-sm text-[color:var(--warning)]">
+                Fix before launch: {launchIdentityIssues.join(" · ")}.
+              </div>
+            ) : null}
+            <div className="flex flex-wrap gap-2">
+              <Button asChild type="button" disabled={!messagingReady}>
+                <Link href={`/brands/${brandId}/experiments/${experiment.id}/launch`}>
+                  {latestRun ? "Open launch controls" : "Launch experiment"}
+                </Link>
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card id="experiment-results">
+          <CardHeader>
+            <CardTitle className="text-base">Results</CardTitle>
+            <CardDescription>
+              {runTotals.sentMessages > 0 ? `${runTotals.sentMessages} emails sent so far.` : "No emails sent yet."}
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <div className="flex flex-wrap gap-2 text-xs">
+              <Badge variant="muted">Sent: {runTotals.sentMessages}</Badge>
+              <Badge variant="muted">Replies: {runTotals.replies}</Badge>
+              <Badge variant="muted">Positive: {runTotals.positiveReplies}</Badge>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <Button asChild type="button" variant="outline">
+                <Link href={`/brands/${brandId}/inbox`}>Open inbox</Link>
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-4 sm:space-y-5">

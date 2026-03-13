@@ -89,7 +89,7 @@ function ConnectionCard({
   configured,
   validationStatus,
   summary,
-  details,
+  highlights,
   lastChecked,
   onOpen,
   onValidate,
@@ -101,7 +101,7 @@ function ConnectionCard({
   configured: boolean;
   validationStatus: OutreachProvisioningSettings["customerIo"]["lastValidatedStatus"];
   summary: string;
-  details: string[];
+  highlights: string[];
   lastChecked: string;
   onOpen: () => void;
   onValidate: () => void;
@@ -124,11 +124,13 @@ function ConnectionCard({
         </div>
       </CardHeader>
       <CardContent className="grid gap-4 pt-0">
-        <div className="text-sm">{summary}</div>
-        {details.length ? (
-          <div className="grid gap-1 text-xs text-[color:var(--muted-foreground)]">
-            {details.map((detail) => (
-              <div key={detail}>{detail}</div>
+        <div className="text-sm leading-6">{summary}</div>
+        {highlights.length ? (
+          <div className="flex flex-wrap gap-2">
+            {highlights.map((detail) => (
+              <Badge key={detail} variant="muted">
+                {detail}
+              </Badge>
             ))}
           </div>
         ) : null}
@@ -137,19 +139,19 @@ function ConnectionCard({
           <div className="flex flex-wrap gap-2">
             {configured ? (
               <Button type="button" variant="outline" size="sm" onClick={onValidate} disabled={validating}>
-                {validating ? "Checking..." : "Check"}
+                {validating ? "Testing..." : "Test connection"}
               </Button>
             ) : null}
             <Button type="button" variant={configured ? "outline" : "default"} size="sm" onClick={onOpen}>
               {configured ? (
                 <>
                   <Settings2 className="h-4 w-4" />
-                  Edit
+                  Edit setup
                 </>
               ) : (
                 <>
                   <Link2 className="h-4 w-4" />
-                  Connect
+                  Set up
                 </>
               )}
             </Button>
@@ -333,28 +335,27 @@ export default function ProvisioningProviderSettingsCard({
     <>
       <Card>
         <CardHeader className="pb-3">
-          <CardTitle className="text-base">Connections</CardTitle>
-          <CardDescription>Save the platform connections here. Secret values stay hidden until you edit them.</CardDescription>
+          <CardTitle className="text-base">Core connections</CardTitle>
+          <CardDescription>Connect the tools that power sending, domains, and sender health.</CardDescription>
         </CardHeader>
         <CardContent className="grid gap-4 pt-0 md:grid-cols-3">
           <ConnectionCard
             title="Customer.io"
-            description="Used for sender identity creation and monthly profile capacity checks."
+            description="Needed to create sender accounts and send mail."
             icon={Send}
             configured={customerIoConfigured}
             validationStatus={settings.customerIo.lastValidatedStatus}
             summary={
               customerIoConfigured
-                ? `Connected to Site ${settings.customerIo.siteId}`
-                : "No Customer.io site is linked yet."
+                ? `Ready. This workspace can create senders with Site ${settings.customerIo.siteId}.`
+                : "Add your Site ID and tracking key to connect sending."
             }
-            details={[
-              settings.customerIo.siteId ? `Site ${settings.customerIo.siteId}` : "Site ID missing",
-              settings.customerIo.hasTrackingApiKey ? "Tracking key saved" : "Tracking key missing",
+            highlights={[
+              settings.customerIo.hasTrackingApiKey ? "Tracking key saved" : "Tracking key needed",
               settings.customerIo.hasAppApiKey ? "App key saved" : "App key optional",
               `Region ${settings.customerIo.workspaceRegion.toUpperCase()}`,
             ]}
-            lastChecked={formatRelativeTimeLabel(settings.customerIo.lastValidatedAt, "Never validated")}
+            lastChecked={formatRelativeTimeLabel(settings.customerIo.lastValidatedAt, "Not tested yet")}
             onOpen={() => {
               setError("");
               setNotice("");
@@ -367,22 +368,21 @@ export default function ProvisioningProviderSettingsCard({
 
           <ConnectionCard
             title="Namecheap"
-            description="Used for domain inventory, DNS updates, and forwarding setup."
+            description="Needed only if you want one-click domain setup."
             icon={Globe}
             configured={namecheapConfigured}
             validationStatus={settings.namecheap.lastValidatedStatus}
             summary={
               namecheapConfigured
-                ? `Connected to ${settings.namecheap.apiUser || settings.namecheap.userName}`
-                : "No Namecheap API credentials are linked yet."
+                ? "Ready. The app can buy domains and update DNS for you."
+                : "Add your Namecheap API details if you want the app to handle domains for you."
             }
-            details={[
-              settings.namecheap.apiUser ? `API user ${settings.namecheap.apiUser}` : "API user missing",
-              settings.namecheap.userName ? `Username ${settings.namecheap.userName}` : "Username defaults to API user",
-              settings.namecheap.hasApiKey ? "API key saved" : "API key missing",
-              settings.namecheap.clientIp ? `IP ${settings.namecheap.clientIp}` : "Whitelisted IP missing",
+            highlights={[
+              settings.namecheap.apiUser ? `API user ${settings.namecheap.apiUser}` : "API user needed",
+              settings.namecheap.hasApiKey ? "API key saved" : "API key needed",
+              settings.namecheap.clientIp ? "Allowed IP saved" : "Allowed IP needed",
             ]}
-            lastChecked={formatRelativeTimeLabel(settings.namecheap.lastValidatedAt, "Never validated")}
+            lastChecked={formatRelativeTimeLabel(settings.namecheap.lastValidatedAt, "Not tested yet")}
             onOpen={() => {
               setError("");
               setNotice("");
@@ -394,29 +394,27 @@ export default function ProvisioningProviderSettingsCard({
           />
 
           <ConnectionCard
-            title="Deliverability"
-            description="Used for ongoing Gmail reputation checks so sender health is monitored without guessing."
+            title="Google Postmaster"
+            description="Optional Gmail reputation monitor."
             icon={ShieldCheck}
             configured={deliverabilityConfigured}
             validationStatus={settings.deliverability.lastValidatedStatus}
             summary={
               deliverabilityConfigured
-                ? `Watching ${settings.deliverability.monitoredDomains.join(", ")}`
-                : "No deliverability intelligence provider is linked yet."
+                ? `Ready. Watching ${settings.deliverability.monitoredDomains.join(", ")} for Gmail reputation changes.`
+                : "Connect this only if you want Gmail reputation data in the app."
             }
-            details={[
+            highlights={[
               settings.deliverability.provider === "google_postmaster"
-                ? "Google Postmaster selected"
-                : "No provider selected",
+                ? "Google Postmaster"
+                : "No monitor selected",
               settings.deliverability.monitoredDomains.length
                 ? `${settings.deliverability.monitoredDomains.length} monitored domain${settings.deliverability.monitoredDomains.length === 1 ? "" : "s"}`
-                : "No monitored domains",
-              settings.deliverability.hasGoogleClientId ? "Client ID saved" : "Client ID missing",
-              settings.deliverability.hasGoogleClientSecret ? "Client secret saved" : "Client secret missing",
-              settings.deliverability.hasGoogleRefreshToken ? "Refresh token saved" : "Refresh token missing",
-              settings.deliverability.lastHealthSummary || "No health snapshot yet",
+                : "No watched domains yet",
+              settings.deliverability.hasGoogleClientId ? "Client ID saved" : "Client ID needed",
+              settings.deliverability.hasGoogleRefreshToken ? "Refresh token saved" : "Refresh token needed",
             ]}
-            lastChecked={formatRelativeTimeLabel(settings.deliverability.lastCheckedAt, "Never checked")}
+            lastChecked={formatRelativeTimeLabel(settings.deliverability.lastCheckedAt, "Not tested yet")}
             onOpen={() => {
               setError("");
               setNotice("");
@@ -455,8 +453,8 @@ export default function ProvisioningProviderSettingsCard({
             setActiveModal(null);
           }
         }}
-        title={customerIoConfigured ? "Customer.io connection settings" : "Connect Customer.io"}
-        description="Only the saved connection fields live here. Blank secret fields keep the current keys in place."
+        title={customerIoConfigured ? "Customer.io setup" : "Connect Customer.io"}
+        description="Paste the Customer.io details we need for sending. Leave secret fields blank if you want to keep the saved value."
         footer={
           <div className="flex flex-wrap items-center justify-between gap-3">
             <a
@@ -478,20 +476,26 @@ export default function ProvisioningProviderSettingsCard({
                 disabled={savingProvider === "customerio" || testingProvider === "customerio"}
                 onClick={() => void saveProvider("customerio", true)}
               >
-                {savingProvider === "customerio" || testingProvider === "customerio" ? "Saving..." : "Save + check"}
+                {savingProvider === "customerio" || testingProvider === "customerio" ? "Saving..." : "Save and test"}
               </Button>
               <Button
                 type="button"
                 disabled={savingProvider === "customerio" || testingProvider === "customerio"}
                 onClick={() => void saveProvider("customerio")}
               >
-                {savingProvider === "customerio" ? "Saving..." : "Save connection"}
+                {savingProvider === "customerio" ? "Saving..." : "Save"}
               </Button>
             </div>
           </div>
         }
       >
         <div className="grid gap-4 md:grid-cols-2">
+          <div className="md:col-span-2 rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-4 py-3 text-sm text-[color:var(--foreground)]">
+            <div className="font-medium">You only need two things</div>
+            <div className="mt-1 text-[color:var(--muted-foreground)]">
+              Paste your Site ID and Tracking key. The App key is optional.
+            </div>
+          </div>
           <div className="grid gap-2">
             <FieldLabel
               htmlFor="provider-cio-site-id"
@@ -508,8 +512,8 @@ export default function ProvisioningProviderSettingsCard({
           <div className="grid gap-2">
             <FieldLabel
               htmlFor="provider-cio-track-key"
-              label="Tracking API Key"
-              help="Use the Tracking API key for region lookup and sender setup. Leave blank to keep the saved key."
+              label="Tracking key"
+              help="Paste the Tracking API key from Customer.io. Leave this blank if you want to keep the saved key."
             />
             <Input
               id="provider-cio-track-key"
@@ -522,8 +526,8 @@ export default function ProvisioningProviderSettingsCard({
           <div className="grid gap-2 md:col-span-2">
             <FieldLabel
               htmlFor="provider-cio-app-key"
-              label="App API Key"
-              help="Optional but recommended. Used to fetch workspace people counts before you cross the monthly cap."
+              label="App key (optional)"
+              help="Optional. This lets the app read Customer.io people counts before you hit your monthly limit."
             />
             <Input
               id="provider-cio-app-key"
@@ -558,8 +562,8 @@ export default function ProvisioningProviderSettingsCard({
             setActiveModal(null);
           }
         }}
-        title={namecheapConfigured ? "Namecheap connection settings" : "Connect Namecheap"}
-        description="Keep the API details tucked away until you need to update domain automation."
+        title={namecheapConfigured ? "Namecheap setup" : "Connect Namecheap"}
+        description="Paste the Namecheap details we need for one-click domain setup. Leave the API key blank if you want to keep the saved value."
         footer={
           <div className="flex flex-wrap items-center justify-between gap-3">
             <a
@@ -581,20 +585,26 @@ export default function ProvisioningProviderSettingsCard({
                 disabled={savingProvider === "namecheap" || testingProvider === "namecheap"}
                 onClick={() => void saveProvider("namecheap", true)}
               >
-                {savingProvider === "namecheap" || testingProvider === "namecheap" ? "Saving..." : "Save + check"}
+                {savingProvider === "namecheap" || testingProvider === "namecheap" ? "Saving..." : "Save and test"}
               </Button>
               <Button
                 type="button"
                 disabled={savingProvider === "namecheap" || testingProvider === "namecheap"}
                 onClick={() => void saveProvider("namecheap")}
               >
-                {savingProvider === "namecheap" ? "Saving..." : "Save connection"}
+                {savingProvider === "namecheap" ? "Saving..." : "Save"}
               </Button>
             </div>
           </div>
         }
       >
         <div className="grid gap-4 md:grid-cols-2">
+          <div className="md:col-span-2 rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-4 py-3 text-sm text-[color:var(--foreground)]">
+            <div className="font-medium">You need three things</div>
+            <div className="mt-1 text-[color:var(--muted-foreground)]">
+              Paste your API user, API key, and the IP address you already allowed in Namecheap.
+            </div>
+          </div>
           <div className="grid gap-2">
             <FieldLabel
               htmlFor="provider-nc-api-user"
@@ -611,8 +621,8 @@ export default function ProvisioningProviderSettingsCard({
           <div className="grid gap-2">
             <FieldLabel
               htmlFor="provider-nc-user-name"
-              label="User Name"
-              help="Usually the same as API User. Only change it if Namecheap tells you to use a different username."
+              label="Username"
+              help="Usually the same as API user. Only change this if Namecheap told you to use a different username."
             />
             <Input
               id="provider-nc-user-name"
@@ -638,8 +648,8 @@ export default function ProvisioningProviderSettingsCard({
           <div className="grid gap-2">
             <FieldLabel
               htmlFor="provider-nc-client-ip"
-              label="Whitelisted Client IP"
-              help="Namecheap only accepts API requests from IPs you whitelist first in the API Access screen."
+              label="Allowed IP address"
+              help="Namecheap only accepts API requests from IPs you allowed first in the API Access screen."
             />
             <Input
               id="provider-nc-client-ip"
@@ -673,8 +683,8 @@ export default function ProvisioningProviderSettingsCard({
             setActiveModal(null);
           }
         }}
-        title={deliverabilityConfigured ? "Deliverability intelligence settings" : "Connect deliverability intelligence"}
-        description="This powers the ongoing spam and reputation checks. We currently use Google Postmaster data for monitored domains."
+        title={deliverabilityConfigured ? "Google Postmaster setup" : "Connect Google Postmaster"}
+        description="Optional. Connect this only if you want Gmail reputation data for your sender domains."
         footer={
           <div className="flex flex-wrap items-center justify-between gap-3">
             <a
@@ -698,25 +708,32 @@ export default function ProvisioningProviderSettingsCard({
               >
                 {savingProvider === "deliverability" || testingProvider === "deliverability"
                   ? "Saving..."
-                  : "Save + check"}
+                  : "Save and test"}
               </Button>
               <Button
                 type="button"
                 disabled={savingProvider === "deliverability" || testingProvider === "deliverability"}
                 onClick={() => void saveProvider("deliverability")}
               >
-                {savingProvider === "deliverability" ? "Saving..." : "Save connection"}
+                {savingProvider === "deliverability" ? "Saving..." : "Save"}
               </Button>
             </div>
           </div>
         }
       >
         <div className="grid gap-4 md:grid-cols-2">
+          <div className="md:col-span-2 rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-4 py-3 text-sm text-[color:var(--foreground)]">
+            <div className="font-medium">You need two parts</div>
+            <div className="mt-1 text-[color:var(--muted-foreground)]">
+              Add the domains you want to watch, then paste the Google client ID, client secret, and refresh token for
+              the Postmaster account.
+            </div>
+          </div>
           <div className="grid gap-2">
             <FieldLabel
               htmlFor="provider-deliverability-provider"
-              label="Provider"
-              help="Google Postmaster is the current first-class integration for Gmail reputation and spam-rate monitoring."
+              label="Monitor source"
+              help="Google Postmaster is the current built-in source for Gmail reputation and spam-rate monitoring."
             />
             <select
               id="provider-deliverability-provider"
@@ -736,8 +753,8 @@ export default function ProvisioningProviderSettingsCard({
           <div className="grid gap-2">
             <FieldLabel
               htmlFor="provider-deliverability-domains"
-              label="Monitored domains"
-              help="Comma-separated domains that already appear in Google Postmaster Tools, for example fluentscroll.com, lequarterly.com."
+              label="Domains to watch"
+              help="Enter the sender domains that already appear in Google Postmaster Tools, separated by commas."
             />
             <Input
               id="provider-deliverability-domains"
@@ -749,8 +766,8 @@ export default function ProvisioningProviderSettingsCard({
           <div className="grid gap-2">
             <FieldLabel
               htmlFor="provider-deliverability-client-id"
-              label="Google OAuth Client ID"
-              help="Use the OAuth client tied to the Google account that can see the domain in Postmaster Tools. Leave blank to keep the saved value."
+              label="Google client ID"
+              help="Use the Google client ID tied to the account that can see these domains in Postmaster Tools. Leave blank to keep the saved value."
             />
             <Input
               id="provider-deliverability-client-id"
@@ -765,8 +782,8 @@ export default function ProvisioningProviderSettingsCard({
           <div className="grid gap-2">
             <FieldLabel
               htmlFor="provider-deliverability-client-secret"
-              label="Google OAuth Client Secret"
-              help="Pair this with the client ID above. Leave blank here to keep the saved secret."
+              label="Google client secret"
+              help="Pair this with the client ID above. Leave blank if you want to keep the saved secret."
             />
             <Input
               id="provider-deliverability-client-secret"
@@ -781,8 +798,8 @@ export default function ProvisioningProviderSettingsCard({
           <div className="grid gap-2 md:col-span-2">
             <FieldLabel
               htmlFor="provider-deliverability-refresh-token"
-              label="Google Refresh Token"
-              help="This is used server-side to refresh Postmaster access automatically. Leave blank to keep the saved token."
+              label="Google refresh token"
+              help="This lets the app refresh Postmaster access automatically. Leave blank if you want to keep the saved token."
             />
             <Input
               id="provider-deliverability-refresh-token"

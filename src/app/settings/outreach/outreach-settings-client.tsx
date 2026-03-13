@@ -1,12 +1,14 @@
 "use client";
 
-import { useEffect, useMemo, useState, type Dispatch, type SetStateAction } from "react";
-import { AlertCircle, ExternalLink, Plus } from "lucide-react";
+import { useEffect, useEffectEvent, useMemo, useRef, useState, type Dispatch, type SetStateAction } from "react";
+import { AlertCircle, ExternalLink, LoaderCircle, Plus, Sparkles } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
+import { Textarea } from "@/components/ui/textarea";
 import {
   assignBrandOutreachAccount,
   createOutreachAccountApi,
@@ -17,6 +19,7 @@ import {
   fetchOutreachProvisioningSettings,
   testOutreachAccount,
   updateOutreachAccountApi,
+  updateBrandApi,
 } from "@/lib/client-api";
 import { trackEvent } from "@/lib/telemetry-client";
 import type { BrandRecord, OutreachAccount, OutreachProvisioningSettings } from "@/lib/factory-types";
@@ -56,7 +59,7 @@ type MailboxFormState = {
   mailboxPassword: string;
 };
 
-type SetupTabId = "identity" | "integrations" | "email";
+type SetupTabId = "profile" | "identity" | "integrations" | "email";
 type SetupStepStatus = "complete" | "attention" | "todo";
 
 const ACTIVE_BRAND_KEY = "factory.activeBrandId";
@@ -131,6 +134,43 @@ function normalizeDomainHost(value: string) {
     .replace(/^www\./, "")
     .replace(/\/.*$/, "")
     .trim();
+}
+
+function normalizeLineList(value: string) {
+  return value
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+}
+
+function normalizeWebsiteForPrefill(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed) return "";
+
+  const candidate = /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
+
+  try {
+    const parsed = new URL(candidate);
+    if (!parsed.hostname || !parsed.hostname.includes(".")) return "";
+    parsed.hash = "";
+    return parsed.toString();
+  } catch {
+    return "";
+  }
+}
+
+function mergePrefillValue(current: string, next: string, overwrite = false) {
+  const normalizedNext = next.trim();
+  if (!normalizedNext) return current;
+  if (overwrite || !current.trim()) return normalizedNext;
+  return current;
+}
+
+function mergePrefillLines(current: string, next: string[], overwrite = false) {
+  const normalizedNext = next.map((line) => line.trim()).filter(Boolean).join("\n");
+  if (!normalizedNext) return current;
+  if (overwrite || !normalizeLineList(current).length) return normalizedNext;
+  return current;
 }
 
 function FieldError({ message }: { message?: string }) {
@@ -415,10 +455,28 @@ export default function OutreachSettingsClient() {
   const [mailboxAuthMethod, setMailboxAuthMethod] = useState<MailboxAuthMethod>("app_password");
   const [showMailboxAdvanced, setShowMailboxAdvanced] = useState(false);
   const [showDeliveryAdvanced, setShowDeliveryAdvanced] = useState(false);
-  const [activeTab, setActiveTab] = useState<SetupTabId>("identity");
+  const [activeTab, setActiveTab] = useState<SetupTabId>("profile");
   const [deliveryModalOpen, setDeliveryModalOpen] = useState(false);
   const [mailboxModalOpen, setMailboxModalOpen] = useState(false);
   const [autoSelectedTab, setAutoSelectedTab] = useState(false);
+  const [profileSaving, setProfileSaving] = useState(false);
+  const [profilePrefillLoading, setProfilePrefillLoading] = useState(false);
+  const [profilePrefillFeedback, setProfilePrefillFeedback] = useState<{
+    tone: "idle" | "success" | "error";
+    message: string;
+  }>({
+    tone: "idle",
+    message: "",
+  });
+
+  const [brandWebsite, setBrandWebsite] = useState("");
+  const [brandTone, setBrandTone] = useState("");
+  const [brandProduct, setBrandProduct] = useState("");
+  const [brandNotes, setBrandNotes] = useState("");
+  const [brandMarketsText, setBrandMarketsText] = useState("");
+  const [brandIcpText, setBrandIcpText] = useState("");
+  const [brandFeaturesText, setBrandFeaturesText] = useState("");
+  const [brandBenefitsText, setBrandBenefitsText] = useState("");
 
   const [deliveryErrors, setDeliveryErrors] = useState<FieldErrors<DeliveryFormState>>({});
   const [mailboxErrors, setMailboxErrors] = useState<FieldErrors<MailboxFormState>>({});
@@ -427,6 +485,7 @@ export default function OutreachSettingsClient() {
   const [savingMailbox, setSavingMailbox] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const profileAutoPrefillKeyRef = useRef("");
 
   useEffect(() => {
     if (typeof window === "undefined") return undefined;
@@ -508,6 +567,10 @@ export default function OutreachSettingsClient() {
     }
   }, [activeBrandId, brands]);
 
+  useEffect(() => {
+    setAutoSelectedTab(false);
+  }, [activeBrandId]);
+
   const deliveryAccounts = useMemo(
     () => accounts.filter((account) => account.accountType !== "mailbox"),
     [accounts]
@@ -525,6 +588,34 @@ export default function OutreachSettingsClient() {
     () => brands.find((brand) => brand.id === activeBrandId) ?? brands[0] ?? null,
     [activeBrandId, brands]
   );
+
+  useEffect(() => {
+    if (!selectedBrand) {
+      setBrandWebsite("");
+      setBrandTone("");
+      setBrandProduct("");
+      setBrandNotes("");
+      setBrandMarketsText("");
+      setBrandIcpText("");
+      setBrandFeaturesText("");
+      setBrandBenefitsText("");
+      return;
+    }
+
+    setBrandWebsite(selectedBrand.website || "");
+    setBrandTone(selectedBrand.tone || "");
+    setBrandProduct(selectedBrand.product || "");
+    setBrandNotes(selectedBrand.notes || "");
+    setBrandMarketsText((selectedBrand.targetMarkets ?? []).join("\n"));
+      setBrandIcpText((selectedBrand.idealCustomerProfiles ?? []).join("\n"));
+      setBrandFeaturesText((selectedBrand.keyFeatures ?? []).join("\n"));
+      setBrandBenefitsText((selectedBrand.keyBenefits ?? []).join("\n"));
+    }, [selectedBrand]);
+
+  useEffect(() => {
+    profileAutoPrefillKeyRef.current = "";
+    setProfilePrefillFeedback({ tone: "idle", message: "" });
+  }, [selectedBrand?.id]);
 
   const scopedBrands = useMemo(() => (selectedBrand ? [selectedBrand] : []), [selectedBrand]);
   const selectedBrandSenderAccounts = useMemo(() => {
@@ -566,11 +657,32 @@ export default function OutreachSettingsClient() {
       provisioningSettings.namecheap.hasApiKey &&
       provisioningSettings?.namecheap.clientIp.trim()
   );
+  const draftTargetMarkets = useMemo(() => normalizeLineList(brandMarketsText), [brandMarketsText]);
+  const draftIcpList = useMemo(() => normalizeLineList(brandIcpText), [brandIcpText]);
+  const draftFeatureList = useMemo(() => normalizeLineList(brandFeaturesText), [brandFeaturesText]);
+  const draftBenefitList = useMemo(() => normalizeLineList(brandBenefitsText), [brandBenefitsText]);
+  const normalizedBrandWebsite = useMemo(() => normalizeWebsiteForPrefill(brandWebsite), [brandWebsite]);
+  const normalizedSavedWebsite = useMemo(
+    () => normalizeWebsiteForPrefill(selectedBrand?.website ?? ""),
+    [selectedBrand?.website]
+  );
+  const draftBrandContextStarted = Boolean(
+    brandProduct.trim() ||
+      brandTone.trim() ||
+      brandNotes.trim() ||
+      draftTargetMarkets.length ||
+      draftIcpList.length ||
+      draftFeatureList.length ||
+      draftBenefitList.length
+  );
+  const brandProfileReady = Boolean(selectedBrand && brandProduct.trim() && draftIcpList.length && draftBenefitList.length);
 
   useEffect(() => {
     if (loading || autoSelectedTab) return;
 
-    if (!providerDefaultsReady || !deliveryAccounts.length) {
+    if (selectedBrand && !brandProfileReady) {
+      setActiveTab("profile");
+    } else if (!providerDefaultsReady || !deliveryAccounts.length) {
       setActiveTab("integrations");
     } else if (!mailboxAccounts.length) {
       setActiveTab("email");
@@ -579,7 +691,7 @@ export default function OutreachSettingsClient() {
     }
 
     setAutoSelectedTab(true);
-  }, [autoSelectedTab, deliveryAccounts.length, loading, mailboxAccounts.length, providerDefaultsReady]);
+  }, [autoSelectedTab, brandProfileReady, deliveryAccounts.length, loading, mailboxAccounts.length, providerDefaultsReady, selectedBrand]);
 
   function closeDeliveryModal() {
     setDeliveryModalOpen(false);
@@ -595,6 +707,140 @@ export default function OutreachSettingsClient() {
     setMailboxAuthMethod("app_password");
     setShowMailboxAdvanced(false);
   }
+
+  const runWebsitePrefill = async (options?: { overwrite?: boolean; source?: "auto" | "manual" }) => {
+    if (!selectedBrand || !normalizedBrandWebsite) return;
+
+    const overwrite = Boolean(options?.overwrite);
+    const source = options?.source ?? "manual";
+    const prefillKey = `${selectedBrand.id}:${normalizedBrandWebsite}`;
+
+    setProfilePrefillLoading(true);
+    if (source === "manual") {
+      setProfilePrefillFeedback({ tone: "idle", message: "" });
+    }
+
+    try {
+      const response = await fetch("/api/intake/prefill", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url: normalizedBrandWebsite }),
+      });
+      const data = (await response.json().catch(() => ({}))) as {
+        error?: string;
+        prefill?: {
+          tone?: string;
+          product?: string;
+          targetMarkets?: string[];
+          idealCustomerProfiles?: string[];
+          keyFeatures?: string[];
+          keyBenefits?: string[];
+          proof?: string;
+        };
+      };
+
+      if (!response.ok) {
+        throw new Error(data?.error || "Website analysis failed.");
+      }
+
+      const prefill = data.prefill ?? {};
+
+      setBrandWebsite(normalizedBrandWebsite);
+      setBrandTone((current) => mergePrefillValue(current, String(prefill.tone ?? ""), overwrite));
+      setBrandProduct((current) => mergePrefillValue(current, String(prefill.product ?? ""), overwrite));
+      setBrandNotes((current) => mergePrefillValue(current, String(prefill.proof ?? ""), overwrite));
+      setBrandMarketsText((current) =>
+        mergePrefillLines(current, Array.isArray(prefill.targetMarkets) ? prefill.targetMarkets : [], overwrite)
+      );
+      setBrandIcpText((current) =>
+        mergePrefillLines(
+          current,
+          Array.isArray(prefill.idealCustomerProfiles) ? prefill.idealCustomerProfiles : [],
+          overwrite
+        )
+      );
+      setBrandFeaturesText((current) =>
+        mergePrefillLines(current, Array.isArray(prefill.keyFeatures) ? prefill.keyFeatures : [], overwrite)
+      );
+      setBrandBenefitsText((current) =>
+        mergePrefillLines(current, Array.isArray(prefill.keyBenefits) ? prefill.keyBenefits : [], overwrite)
+      );
+
+      profileAutoPrefillKeyRef.current = prefillKey;
+      setProfilePrefillFeedback({
+        tone: "success",
+        message:
+          source === "auto"
+            ? "Website analyzed. The rest of the brief was drafted for you."
+            : "Website analyzed again. The brief was refreshed from the site.",
+      });
+    } catch (err) {
+      profileAutoPrefillKeyRef.current = prefillKey;
+      setProfilePrefillFeedback({
+        tone: "error",
+        message: err instanceof Error ? err.message : "Website analysis failed.",
+      });
+    } finally {
+      setProfilePrefillLoading(false);
+    }
+  };
+
+  const runAutoWebsitePrefill = useEffectEvent((overwrite: boolean) => {
+    void runWebsitePrefill({
+      overwrite,
+      source: "auto",
+    });
+  });
+
+  useEffect(() => {
+    if (!selectedBrand || !normalizedBrandWebsite || profilePrefillLoading) return;
+
+    const prefillKey = `${selectedBrand.id}:${normalizedBrandWebsite}`;
+    if (profileAutoPrefillKeyRef.current === prefillKey) return;
+
+    const websiteChanged = normalizedBrandWebsite !== normalizedSavedWebsite;
+    if (!websiteChanged && draftBrandContextStarted) return;
+
+    const timeout = window.setTimeout(() => {
+      runAutoWebsitePrefill(websiteChanged);
+    }, 900);
+
+    return () => {
+      window.clearTimeout(timeout);
+    };
+  }, [
+    draftBrandContextStarted,
+    normalizedBrandWebsite,
+    normalizedSavedWebsite,
+    profilePrefillLoading,
+    selectedBrand,
+  ]);
+
+  const saveBrandProfile = async () => {
+    if (!selectedBrand) return;
+
+    setProfileSaving(true);
+    setError("");
+
+    try {
+      const updated = await updateBrandApi(selectedBrand.id, {
+        website: normalizedBrandWebsite || brandWebsite.trim(),
+        tone: brandTone.trim(),
+        product: brandProduct.trim(),
+        notes: brandNotes.trim(),
+        targetMarkets: draftTargetMarkets,
+        idealCustomerProfiles: draftIcpList,
+        keyFeatures: draftFeatureList,
+        keyBenefits: draftBenefitList,
+      });
+
+      setBrands((prev) => prev.map((row) => (row.id === updated.id ? updated : row)));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to save brand brief");
+    } finally {
+      setProfileSaving(false);
+    }
+  };
 
   const createDeliveryAccount = async () => {
     const nextErrors: FieldErrors<DeliveryFormState> = {};
@@ -858,6 +1104,21 @@ export default function OutreachSettingsClient() {
   );
   const selectedSenderCount = selectedBrandReadiness?.assignment.accountIds.length ?? 0;
 
+  const profileStatus: SetupStepStatus =
+    !selectedBrand
+      ? "todo"
+      : brandProfileReady
+        ? "complete"
+        : brandProduct.trim() ||
+            draftIcpList.length ||
+            draftBenefitList.length ||
+            brandTone.trim() ||
+            brandNotes.trim() ||
+            draftTargetMarkets.length ||
+            draftFeatureList.length
+          ? "attention"
+          : "todo";
+
   const identityStatus: SetupStepStatus =
     !selectedBrand ? "todo" : selectedBrandReadiness?.ready ? "complete" : "attention";
 
@@ -883,6 +1144,7 @@ export default function OutreachSettingsClient() {
 
   const identityPrerequisites = [
     !selectedBrand ? "Pick the brand you want from the sidebar selector first." : "",
+    selectedBrand && !brandProfileReady ? "Write the brand brief first so experiment ideas have context." : "",
     !providerDefaultsReady ? "Connect the delivery stack in Integrations first." : "",
     selectedBrand && !selectedBrandSenderAccounts.length
       ? `Add or provision at least one sender for ${selectedBrand.name}.`
@@ -890,20 +1152,25 @@ export default function OutreachSettingsClient() {
     !mailboxAccounts.length ? "Add at least one reply inbox in Email Accounts." : "",
   ].filter(Boolean);
 
+  const profileSummary = !selectedBrand
+    ? "Pick a brand first"
+    : brandProfileReady
+      ? `${draftIcpList.length} ICP${draftIcpList.length === 1 ? "" : "s"} and product context ready`
+      : "Describe what you sell, who it is for, and why it matters";
   const integrationsSummary = providerDefaultsReady
     ? selectedBrand
-      ? `${selectedBrandSenderAccounts.length} sender${selectedBrandSenderAccounts.length === 1 ? "" : "s"} for ${selectedBrand.name}`
+      ? `${selectedBrandSenderAccounts.length} sender${selectedBrandSenderAccounts.length === 1 ? "" : "s"} ready for ${selectedBrand.name}`
       : `${deliveryAccounts.length} sender${deliveryAccounts.length === 1 ? "" : "s"} available`
-    : "Connection center still needs setup";
+    : "Connect Customer.io and Namecheap first";
   const emailSummary = mailboxAccounts.length
-    ? `${mailboxAccounts.length} reply inbox${mailboxAccounts.length === 1 ? "" : "es"} available`
-    : "No reply inboxes connected yet";
+    ? `${mailboxAccounts.length} reply inbox${mailboxAccounts.length === 1 ? "" : "es"} ready`
+    : "Add the inbox that should receive replies";
   const identitySummary =
     !selectedBrand
       ? "Pick a brand from the selector first"
       : selectedBrandReadiness?.ready
-        ? `${selectedBrand.name} is ready to launch`
-        : `${selectedSenderCount} sender${selectedSenderCount === 1 ? "" : "s"} selected for ${selectedBrand.name}`;
+        ? `${selectedBrand.name} is ready to send`
+        : `Choose senders and a reply inbox for ${selectedBrand.name}`;
 
   return (
     <>
@@ -911,7 +1178,7 @@ export default function OutreachSettingsClient() {
         <div className="space-y-2">
           <div className="text-sm text-[color:var(--muted-foreground)]">
             {selectedBrand
-              ? `Editing ${selectedBrand.name}. Choose the senders, reply inbox, and connections for this brand.`
+              ? `Set up ${selectedBrand.name}. Start with the brand brief, then connect the tools, add a reply inbox, and choose senders.`
               : "Pick a brand from the sidebar to start."}
           </div>
           <div className="flex flex-wrap items-center gap-3 text-sm">
@@ -929,20 +1196,35 @@ export default function OutreachSettingsClient() {
           </div>
         </div>
 
+        <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-4 py-3 text-sm">
+          <div className="font-medium text-[color:var(--foreground)]">Setup order</div>
+          <div className="mt-1 text-[color:var(--muted-foreground)]">
+            1. Write the brand brief. 2. Connect the core tools. 3. Add the inbox that receives replies. 4. Choose
+            which senders belong to this brand.
+          </div>
+        </div>
+
         {error ? <div className="text-sm text-[color:var(--danger)]">{error}</div> : null}
         {loading ? <div className="text-sm text-[color:var(--muted-foreground)]">Loading outreach settings...</div> : null}
 
         <div className="overflow-x-auto border-b border-[color:var(--border)]">
           <div className="flex min-w-max gap-6">
             <SetupTabButton
-              title="Brand"
+              title="Brand brief"
+              summary={profileSummary}
+              status={profileStatus}
+              active={activeTab === "profile"}
+              onClick={() => setActiveTab("profile")}
+            />
+            <SetupTabButton
+              title="Sender setup"
               summary={identitySummary}
               status={identityStatus}
               active={activeTab === "identity"}
               onClick={() => setActiveTab("identity")}
             />
             <SetupTabButton
-              title="Connections"
+              title="Core tools"
               summary={integrationsSummary}
               status={integrationsStatus}
               active={activeTab === "integrations"}
@@ -959,15 +1241,170 @@ export default function OutreachSettingsClient() {
         </div>
 
         <div className="space-y-5">
+          {activeTab === "profile" ? (
+            <Card>
+              <CardHeader className="pb-3">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <CardTitle className="text-base">Brand brief</CardTitle>
+                    <CardDescription>
+                      Write down what this company does, who it sells to, and why buyers care. Experiment ideas and
+                      prompts use this context.
+                    </CardDescription>
+                  </div>
+                  {setupStatusBadge(profileStatus, profileStatus === "complete" ? "Ready" : undefined)}
+                </div>
+              </CardHeader>
+              <CardContent className="pt-0">
+                {selectedBrand ? (
+                  <div className="grid gap-5 lg:grid-cols-[minmax(0,1.2fr)_minmax(0,0.8fr)]">
+                    <div className="grid gap-4">
+                      <div className="grid gap-2">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <Label htmlFor="brand-website">Website</Label>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            disabled={profilePrefillLoading || !normalizedBrandWebsite}
+                            onClick={() => void runWebsitePrefill({ overwrite: true, source: "manual" })}
+                          >
+                            {profilePrefillLoading ? (
+                              <LoaderCircle className="h-4 w-4 animate-spin" />
+                            ) : (
+                              <Sparkles className="h-4 w-4" />
+                            )}
+                            {profilePrefillLoading ? "Analyzing website..." : "Refresh from website"}
+                          </Button>
+                        </div>
+                        <Input
+                          id="brand-website"
+                          value={brandWebsite}
+                          onChange={(event) => {
+                            setBrandWebsite(event.target.value);
+                            setProfilePrefillFeedback({ tone: "idle", message: "" });
+                          }}
+                          placeholder="https://lastb2b.com"
+                        />
+                        <div className="text-xs text-[color:var(--muted-foreground)]">
+                          Put the website here first. The rest of the brief can be drafted from it automatically.
+                        </div>
+                        {profilePrefillFeedback.tone !== "idle" ? (
+                          <div
+                            className={`rounded-lg border px-3 py-2 text-xs ${
+                              profilePrefillFeedback.tone === "success"
+                                ? "border-[color:var(--success-border)] bg-[color:var(--success-soft)] text-[color:var(--success)]"
+                                : "border-[color:var(--danger-border)] bg-[color:var(--danger-soft)] text-[color:var(--danger)]"
+                            }`}
+                          >
+                            {profilePrefillFeedback.message}
+                          </div>
+                        ) : null}
+                      </div>
+                      <div className="grid gap-2">
+                        <Label htmlFor="brand-product">What do you sell?</Label>
+                        <Textarea
+                          id="brand-product"
+                          value={brandProduct}
+                          onChange={(event) => setBrandProduct(event.target.value)}
+                          placeholder="Describe the product in plain English. What does it do, and why would someone buy it?"
+                        />
+                      </div>
+                      <div className="grid gap-2">
+                        <Label htmlFor="brand-benefits">Why do buyers care? (one per line)</Label>
+                        <Textarea
+                          id="brand-benefits"
+                          value={brandBenefitsText}
+                          onChange={(event) => setBrandBenefitsText(event.target.value)}
+                          placeholder={"More qualified replies\nLess manual outbound work\nFaster pipeline feedback"}
+                        />
+                      </div>
+                      <div className="grid gap-2">
+                        <Label htmlFor="brand-tone">How should the product sound?</Label>
+                        <Input
+                          id="brand-tone"
+                          value={brandTone}
+                          onChange={(event) => setBrandTone(event.target.value)}
+                          placeholder="Plainspoken, sharp, operator-first"
+                        />
+                      </div>
+                      <div className="grid gap-2">
+                        <Label htmlFor="brand-notes">Proof, context, or notes</Label>
+                        <Textarea
+                          id="brand-notes"
+                          value={brandNotes}
+                          onChange={(event) => setBrandNotes(event.target.value)}
+                          placeholder="Customer proof, strongest claims, objections to avoid, and anything the system should remember."
+                        />
+                      </div>
+                    </div>
+
+                    <div className="grid gap-4">
+                      <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-4 py-3 text-sm">
+                        <div className="font-medium text-[color:var(--foreground)]">This feeds the rest of the system</div>
+                        <div className="mt-1 text-[color:var(--muted-foreground)]">
+                          The brand brief shapes experiment ideas, targeting, and message prompts. If this is vague,
+                          everything downstream gets weaker.
+                        </div>
+                      </div>
+                      <div className="grid gap-2">
+                        <Label htmlFor="brand-markets">Who should see this? (markets, one per line)</Label>
+                        <Textarea
+                          id="brand-markets"
+                          value={brandMarketsText}
+                          onChange={(event) => setBrandMarketsText(event.target.value)}
+                          placeholder={"B2B SaaS\nAgencies\nFounder-led companies"}
+                        />
+                      </div>
+                      <div className="grid gap-2">
+                        <Label htmlFor="brand-icps">ICPs (one per line)</Label>
+                        <Textarea
+                          id="brand-icps"
+                          value={brandIcpText}
+                          onChange={(event) => setBrandIcpText(event.target.value)}
+                          placeholder={"Growth lead at a 20-200 person SaaS company\nFounder doing outbound by hand"}
+                        />
+                      </div>
+                      <div className="grid gap-2">
+                        <Label htmlFor="brand-features">What makes the product real? (features, one per line)</Label>
+                        <Textarea
+                          id="brand-features"
+                          value={brandFeaturesText}
+                          onChange={(event) => setBrandFeaturesText(event.target.value)}
+                          placeholder={"Automated sender routing\nSpam-test probes with live content\nBuilt-in experiment generation"}
+                        />
+                      </div>
+                    </div>
+
+                    <div className="lg:col-span-2 flex flex-wrap items-center justify-between gap-3 border-t border-[color:var(--border)] pt-4">
+                      <div className="text-sm text-[color:var(--muted-foreground)]">
+                        Save this before asking the app to suggest experiments or write messaging.
+                      </div>
+                      <Button type="button" disabled={profileSaving} onClick={() => void saveBrandProfile()}>
+                        {profileSaving ? "Saving..." : "Save brand brief"}
+                      </Button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="rounded-xl border border-[color:var(--border)] px-4 py-4 text-sm text-[color:var(--muted-foreground)]">
+                    Pick a brand from the sidebar selector first.
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          ) : null}
+
           {activeTab === "identity" ? (
             <>
               <Card>
                 <CardHeader className="pb-3">
                   <div className="flex flex-wrap items-center justify-between gap-3">
                     <div>
-                      <CardTitle className="text-base">{selectedBrand?.name || "Brand setup"}</CardTitle>
+                      <CardTitle className="text-base">Sender setup</CardTitle>
                       <CardDescription>
-                        {selectedBrand?.website || "Pick a brand from the sidebar, then assign senders and replies."}
+                        {selectedBrand
+                          ? `Choose which senders and reply inbox belong to ${selectedBrand.name}.`
+                          : "Pick a brand from the sidebar, then assign senders and a reply inbox."}
                       </CardDescription>
                     </div>
                     {setupStatusBadge(identityStatus, identityStatus === "complete" ? "Ready to run" : undefined)}

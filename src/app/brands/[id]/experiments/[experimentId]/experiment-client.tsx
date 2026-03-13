@@ -308,24 +308,24 @@ function wait(ms: number) {
 }
 
 function stageTitle(index: StageIndex) {
-  if (index === 0) return "Setup";
-  if (index === 1) return "Prospects";
-  if (index === 2) return "Messaging";
-  return "Launch";
+  if (index === 0) return "Set it up";
+  if (index === 1) return "Get leads";
+  if (index === 2) return "Write emails";
+  return "Start sending";
 }
 
 function stageName(index: StageIndex) {
-  if (index === 0) return "Setup";
-  if (index === 1) return "Prospects";
-  if (index === 2) return "Messaging";
-  return "Launch";
+  if (index === 0) return "Set it up";
+  if (index === 1) return "Get leads";
+  if (index === 2) return "Write emails";
+  return "Start sending";
 }
 
 function stageSummary(index: StageIndex) {
-  if (index === 0) return "Define offer, audience, and test envelope.";
-  if (index === 1) return "Collect verified work emails.";
-  if (index === 2) return "Edit and publish flow canvas.";
-  return "Start outbound and monitor outcomes.";
+  if (index === 0) return "Name the test and say who it is for.";
+  if (index === 1) return "Find real people with real work emails.";
+  if (index === 2) return "Write the emails people will get.";
+  return "Turn it on and watch what happens.";
 }
 
 function stagePath(brandId: string, experimentId: string, stage: StageIndex) {
@@ -347,10 +347,10 @@ function stageBadgeVariant(status: WorkflowStageStatus) {
 
 function stageBadgeLabel(status: WorkflowStageStatus) {
   if (status === "done") return "done";
-  if (status === "current") return "current";
-  if (status === "active") return "live";
+  if (status === "current") return "now";
+  if (status === "active") return "running";
   if (status === "locked") return "locked";
-  return "waiting";
+  return "next";
 }
 
 export default function ExperimentClient({
@@ -386,8 +386,8 @@ export default function ExperimentClient({
   const [sampleLeads, setSampleLeads] = useState<
     Awaited<ReturnType<typeof fetchConversationPreviewLeadsApi>>["leads"]
   >([]);
-  const [sampleLeadRunsChecked, setSampleLeadRunsChecked] = useState(0);
-  const [sampleLeadSourceExperimentId, setSampleLeadSourceExperimentId] = useState("");
+  const [, setSampleLeadRunsChecked] = useState(0);
+  const [, setSampleLeadSourceExperimentId] = useState("");
   const [sourcedLeadWithEmailCount, setSourcedLeadWithEmailCount] = useState(0);
   const [sourcedLeadWithoutEmailCount, setSourcedLeadWithoutEmailCount] = useState(0);
   const [sampleLeadError, setSampleLeadError] = useState("");
@@ -414,7 +414,7 @@ export default function ExperimentClient({
   const [samplingSummary, setSamplingSummary] = useState("");
   const [samplingAttempt, setSamplingAttempt] = useState(0);
   const [samplingRunsLaunched, setSamplingRunsLaunched] = useState(0);
-  const [samplingActiveRunId, setSamplingActiveRunId] = useState("");
+  const [, setSamplingActiveRunId] = useState("");
   const [samplingHeartbeatAt, setSamplingHeartbeatAt] = useState("");
   const [autoSourcePaused, setAutoSourcePaused] = useState(false);
   const [prospectInputMode, setProspectInputMode] = useState<ProspectInputMode>("need_data");
@@ -593,11 +593,6 @@ export default function ExperimentClient({
     [experiment]
   );
 
-  const sourcedLeadCount = useMemo(
-    () => sourcedLeadWithEmailCount + sourcedLeadWithoutEmailCount,
-    [sourcedLeadWithEmailCount, sourcedLeadWithoutEmailCount]
-  );
-
   const realEmailLeadCount = useMemo(
     () => Math.max(sourcedLeadWithEmailCount, sampleLeads.filter((lead) => Boolean(lead.email?.trim())).length),
     [sampleLeads, sourcedLeadWithEmailCount]
@@ -655,13 +650,42 @@ export default function ExperimentClient({
     0,
     Math.min(100, Math.round((realEmailLeadCount / Math.max(1, PROSPECT_VALIDATION_TARGET)) * 100))
   );
-
-  const progressDoneCount =
-    (setupComplete ? 1 : 0) +
-    (prospectsComplete ? 1 : 0) +
-    (messagingComplete ? 1 : 0) +
-    (launchComplete ? 1 : 0);
-  const progressPercent = Math.round((progressDoneCount / STAGE_COUNT) * 100);
+  const prospectGoalLabel = `${PROSPECT_VALIDATION_TARGET} real work emails`;
+  const prospectPrimaryMessage = prospectsReady
+    ? "You have enough leads. You can write emails now."
+    : `You need ${remainingProspectLeads} more real work emails before you can write emails.`;
+  const prospectSecondaryMessage = prospectsReady
+    ? "You can keep finding more leads if you want a bigger list."
+    : "Best default: let the platform keep finding leads for you.";
+  const autoSourceButtonLabel = sampling
+    ? "Finding leads..."
+    : prospectsReady
+      ? "Find more leads"
+      : autoSourcePaused
+        ? "Resume finding leads"
+        : "Start finding leads";
+  const autoSourceStatusLabel = prospectsReady
+    ? "done"
+    : sampling
+      ? "working"
+      : autoSourcePaused
+        ? "paused"
+        : "waiting";
+  const autoSourceStatusMessage =
+    samplingStatus ||
+    samplingSummary ||
+    (prospectsReady
+      ? "We found enough real work emails. You can move on or keep finding more."
+      : autoSourcePaused
+        ? "Finding is paused. Press resume when you want to continue."
+        : "We will keep looking until you have enough real work emails.");
+  const autoSourceMeta = [
+    samplingAttempt > 0 ? `Attempt ${samplingAttempt}` : "",
+    samplingRunsLaunched > 0 ? `${samplingRunsLaunched} run${samplingRunsLaunched === 1 ? "" : "s"} started` : "",
+    samplingHeartbeatAt ? `Last update ${formatDate(samplingHeartbeatAt)}` : "",
+  ]
+    .filter(Boolean)
+    .join(" · ");
 
   const traceQueryDiagnostics = useMemo(() => {
     const rows = sourcingTrace?.probeResults ?? [];
@@ -756,12 +780,6 @@ export default function ExperimentClient({
     return { rejectionRows, suppressionRows, emailEnrichment };
   }, [sourcingTrace]);
 
-  const previewValidLeadCount = useMemo(
-    () => sampleLeads.filter((lead) => Boolean(lead.email?.trim())).length,
-    [sampleLeads]
-  );
-  const previewMissingLeadCount = Math.max(0, sampleLeads.length - previewValidLeadCount);
-  const previewDisplayedLeadCount = sampleLeads.length;
   const hasLeadDiagnostics =
     leadRejectionDiagnostics.rejectionRows.length > 0 ||
     leadRejectionDiagnostics.suppressionRows.length > 0 ||
@@ -850,11 +868,11 @@ export default function ExperimentClient({
   );
 
   const nextGateHint = useMemo(() => {
-    if (!setupComplete) return "Complete Setup to unlock Prospect sourcing.";
-    if (!prospectsComplete) return `Need ${remainingProspectLeads} more verified work emails to unlock Messaging.`;
-    if (!messagingComplete) return "Publish a flow revision to unlock Launch.";
-    if (!launchComplete) return "Launch is unlocked. Start a run when ready.";
-    return "All stages are complete.";
+    if (!setupComplete) return "Finish step 1 first.";
+    if (!prospectsComplete) return `Find ${remainingProspectLeads} more real work emails to unlock Write emails.`;
+    if (!messagingComplete) return "Publish your email flow to unlock Start sending.";
+    if (!launchComplete) return "Everything is ready. Start sending when you want.";
+    return "Everything is done.";
   }, [launchComplete, messagingComplete, prospectsComplete, remainingProspectLeads, setupComplete]);
 
   useEffect(() => {
@@ -1768,16 +1786,15 @@ export default function ExperimentClient({
           <CardHeader className="border-b border-[color:var(--border)]">
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
-                <CardTitle className="text-base">Workflow</CardTitle>
+                <CardTitle className="text-base">What happens next</CardTitle>
                 <CardDescription>
-                  {messagingFocus ? "Messaging focus mode." : "Progressive stage flow with one clear next action."}
+                  {messagingFocus ? "You are in the write emails step." : "Do these four steps in order."}
                 </CardDescription>
               </div>
               <div className="flex flex-wrap items-center gap-2 text-xs">
                 <Badge variant="muted">
-                  {progressDoneCount}/{STAGE_COUNT} stages complete
+                  Step {Math.min(currentStage + 1, STAGE_COUNT)} of {STAGE_COUNT}
                 </Badge>
-                <Badge variant="muted">{progressPercent}% complete</Badge>
               </div>
             </div>
           </CardHeader>
@@ -2080,20 +2097,20 @@ export default function ExperimentClient({
           <CardHeader>
             <CardTitle className="text-base">{stageTitle(1)}</CardTitle>
             <CardDescription>
-              Reach {PROSPECT_VALIDATION_TARGET} verified work emails. Sourcing runs automatically.
+              Get {prospectGoalLabel}. Then you can move on to {stageTitle(2).toLowerCase()}.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3">
               <div className="flex flex-wrap items-start justify-between gap-2">
                 <div>
-                  <div className="text-sm font-medium">Verified Lead Progress</div>
+                  <div className="text-sm font-medium">Progress</div>
                   <div className="text-xs text-[color:var(--muted-foreground)]">
-                    {realEmailLeadCount}/{PROSPECT_VALIDATION_TARGET} verified work emails
+                    {realEmailLeadCount} of {PROSPECT_VALIDATION_TARGET} real work emails ready
                   </div>
                 </div>
                 <Badge variant={prospectsReady ? "success" : "accent"}>
-                  {prospectsReady ? "Ready" : "In progress"}
+                  {prospectsReady ? "Ready" : "Working on it"}
                 </Badge>
               </div>
 
@@ -2104,33 +2121,22 @@ export default function ExperimentClient({
                     style={{ width: `${gateProgressPct}%` }}
                   />
                 </div>
-                <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
-                  <Badge variant={prospectsReady ? "success" : "muted"}>Verified: {realEmailLeadCount}</Badge>
-                  <Badge variant={remainingProspectLeads === 0 ? "success" : "muted"}>
-                    Remaining: {remainingProspectLeads}
-                  </Badge>
-                  <Badge variant="muted">Total leads: {sourcedLeadCount}</Badge>
-                </div>
               </div>
 
-              {!prospectsReady ? (
-                <div className="mt-3 rounded-lg border border-[color:var(--danger-border)] bg-[color:var(--danger-soft)] px-3 py-2 text-sm text-[color:var(--danger)]">
-                  Needs attention: {remainingProspectLeads} more verified work emails needed.
-                </div>
-              ) : !samplingSummary ? (
-                <div className="mt-3 rounded-lg border border-[color:var(--success)]/40 bg-[color:var(--success-soft)] px-3 py-2 text-sm text-[color:var(--success)]">
-                  Ready for messaging.
-                </div>
-              ) : null}
-
-              <div className="mt-3 text-xs text-[color:var(--muted-foreground)]">
-                Preview snapshot from {sampleLeadRunsChecked} recent run{sampleLeadRunsChecked === 1 ? "" : "s"}
-                {sampleLeadSourceExperimentId ? ` · owner ${sampleLeadSourceExperimentId}` : ""}.
+              <div
+                className={`mt-3 rounded-lg px-3 py-2 text-sm ${
+                  prospectsReady
+                    ? "border border-[color:var(--success)]/40 bg-[color:var(--success-soft)] text-[color:var(--success)]"
+                    : "border border-[color:var(--warning)]/40 bg-[color:var(--warning-soft)] text-[color:var(--warning)]"
+                }`}
+              >
+                <div className="font-medium">{prospectPrimaryMessage}</div>
+                <div className="mt-1 text-xs opacity-80">{prospectSecondaryMessage}</div>
               </div>
             </div>
 
             <div className="space-y-2">
-              <div className="text-sm font-medium">Lead Input</div>
+              <div className="text-sm font-medium">How do you want to get leads?</div>
               <div className="rounded-lg border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-1">
                 <div className="grid gap-1 md:grid-cols-2">
                   <button
@@ -2142,9 +2148,9 @@ export default function ExperimentClient({
                         : "bg-transparent"
                     }`}
                   >
-                    <div className="text-sm font-medium">Source Automatically</div>
+                    <div className="text-sm font-medium">Find them for me</div>
                     <div className="mt-1 text-xs text-[color:var(--muted-foreground)]">
-                      Platform finds and verifies prospects.
+                      Best default. We keep looking until you have enough.
                     </div>
                   </button>
                   <button
@@ -2156,9 +2162,9 @@ export default function ExperimentClient({
                         : "bg-transparent"
                     }`}
                   >
-                    <div className="text-sm font-medium">Find Leads</div>
+                    <div className="text-sm font-medium">I want to choose them</div>
                     <div className="mt-1 text-xs text-[color:var(--muted-foreground)]">
-                      Search here or upload your own list.
+                      Search here yourself or upload a CSV.
                     </div>
                   </button>
                 </div>
@@ -2169,14 +2175,9 @@ export default function ExperimentClient({
               <div className="space-y-3 rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div>
-                    <div className="text-sm font-medium">Auto-source prospects</div>
+                    <div className="text-sm font-medium">Find leads for me</div>
                     <div className="text-xs text-[color:var(--muted-foreground)]">
-                      Keeps running automatically until {PROSPECT_VALIDATION_TARGET} verified work emails are found.
-                      {prospectsReady
-                        ? canAutoSendOnAddLeads
-                          ? " Target is passed. Use Add Leads to source and auto-send new contacts during business hours."
-                          : " Target is passed. Use Add Leads to keep expanding this experiment's data."
-                        : ""}
+                      We keep looking until you have {prospectGoalLabel}.
                     </div>
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
@@ -2204,13 +2205,7 @@ export default function ExperimentClient({
                       ) : (
                         <RefreshCw className="h-4 w-4" />
                       )}
-                      {sampling
-                        ? "Auto-sourcing..."
-                        : prospectsReady
-                          ? "Add Leads"
-                          : autoSourcePaused
-                            ? "Resume Auto-source"
-                            : "Start now"}
+                      {autoSourceButtonLabel}
                     </Button>
                     <Button
                       type="button"
@@ -2220,50 +2215,31 @@ export default function ExperimentClient({
                         void stopAutoSource();
                       }}
                     >
-                      Stop
-                    </Button>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      onClick={() => {
-                        void refresh(false);
-                      }}
-                    >
-                      Refresh snapshot
+                      Pause
                     </Button>
                   </div>
                 </div>
 
                 <div className="rounded-lg border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-2">
                   <div className="flex flex-wrap items-center justify-between gap-2">
-                    <span className="text-sm font-medium text-[color:var(--foreground)]">Auto-source status</span>
+                    <span className="text-sm font-medium text-[color:var(--foreground)]">What it is doing</span>
                     <Badge variant={prospectsReady ? "success" : sampling ? "accent" : "muted"}>
-                      {prospectsReady ? "target reached" : sampling ? "running" : autoSourcePaused ? "paused" : "idle"}
+                      {autoSourceStatusLabel}
                     </Badge>
                   </div>
                   <div className="mt-2 text-sm text-[color:var(--foreground)]">
-                    {samplingStatus ||
-                      samplingSummary ||
-                      (prospectsReady
-                        ? "Target reached. Use Add Leads when you want to expand the pool."
-                        : autoSourcePaused
-                          ? "Auto-source is paused. Resume when you want more verified leads."
-                          : "Auto-source keeps retrying until the verified-lead target is reached.")}
+                    {autoSourceStatusMessage}
                   </div>
-                  <div className="mt-2 text-xs text-[color:var(--muted-foreground)]">
-                    {samplingAttempt > 0 ? `Attempts: ${samplingAttempt}. ` : ""}
-                    {samplingRunsLaunched > 0 ? `Runs launched: ${samplingRunsLaunched}. ` : ""}
-                    {samplingActiveRunId ? `Active run: ${samplingActiveRunId.slice(-6)}. ` : ""}
-                    {samplingHeartbeatAt ? `Last update: ${formatDate(samplingHeartbeatAt)}. ` : ""}
-                    {!prospectsReady ? "If it stalls for 30s, stop and resume." : ""}
-                  </div>
+                  {autoSourceMeta ? (
+                    <div className="mt-2 text-xs text-[color:var(--muted-foreground)]">{autoSourceMeta}</div>
+                  ) : null}
                 </div>
               </div>
             ) : (
               <div className="space-y-3 rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3">
-                <div className="text-sm font-medium">Find Leads</div>
+                <div className="text-sm font-medium">Choose leads yourself</div>
                 <div className="text-xs text-[color:var(--muted-foreground)]">
-                  Type who you want, hit Search, then click <code>Add leads</code>. If you already have a list, you can still upload a CSV below.
+                  Type who you want, press Search, then press <code>Add leads</code>. If you already have a list, you can upload a CSV below.
                 </div>
                 <LeadFinderEmbed
                   brandId={brandId}
@@ -2278,7 +2254,7 @@ export default function ExperimentClient({
                     <div>
                       <div className="text-sm font-medium">Already have a list?</div>
                       <div className="mt-1 text-xs text-[color:var(--muted-foreground)]">
-                        Upload a CSV with <code>email</code>, or <code>name + domain</code>.
+                        Upload a CSV with <code>email</code>, or with <code>name + domain</code>.
                       </div>
                     </div>
                     <Button
@@ -2387,26 +2363,25 @@ export default function ExperimentClient({
                 {previewEmailEnrichment.error ? (
                   previewEmailEnrichment.attempted > 0 ? (
                     <span>
-                      Live email lookup ran while loading this page but did not resolve enough real emails:
-                      {" "}{previewEmailEnrichment.error}. Leads without emails remain invalid.
+                      We tried to find missing work emails while this page loaded, but it did not finish cleanly:
+                      {" "}{previewEmailEnrichment.error}. Those people still do not count yet.
                     </span>
                   ) : (
                     <span>
-                      Live email lookup could not start while loading this page: {previewEmailEnrichment.error}.
-                      Leads without emails remain invalid until lookup succeeds.
+                      We could not start missing-email lookup while this page loaded: {previewEmailEnrichment.error}.
+                      Those people still do not count yet.
                     </span>
                   )
                 ) : (
                   <span>
-                    Live email lookup ran while loading this page: tried {previewEmailEnrichment.attempted} pending leads,
-                    matched {previewEmailEnrichment.matched}, still missing{" "}
+                    We checked {previewEmailEnrichment.attempted} people for missing work emails, matched {previewEmailEnrichment.matched}, and still need{" "}
                     {Math.max(0, previewEmailEnrichment.attempted - previewEmailEnrichment.matched)}.
                   </span>
                 )}
               </div>
             ) : invalidLeadCount > 0 ? (
               <div className="rounded-lg border border-[color:var(--warning)]/40 bg-[color:var(--warning-soft)] px-3 py-2 text-sm text-[color:var(--warning)]">
-                {invalidLeadCount} leads are currently missing a valid work email and do not count yet.
+                {invalidLeadCount} people are still missing a real work email, so they do not count yet.
               </div>
             ) : null}
 
@@ -2414,18 +2389,14 @@ export default function ExperimentClient({
 
             <details className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3">
               <summary className="flex cursor-pointer list-none flex-wrap items-center justify-between gap-2">
-                <span className="text-sm font-medium text-[color:var(--foreground)]">Current Leads Preview</span>
+                <span className="text-sm font-medium text-[color:var(--foreground)]">Leads found so far</span>
                 <span className="flex flex-wrap items-center gap-2 text-xs">
-                  <Badge variant="success">Total verified: {realEmailLeadCount}</Badge>
-                  <Badge variant="muted">Preview rows: {sampleLeads.length}</Badge>
-                  <span className="text-[color:var(--muted-foreground)]">
-                    Preview rows loaded: {sampleLeads.length}/{Math.max(sampleLeads.length, sourcedLeadCount)}
-                  </span>
+                  <Badge variant="success">Ready: {realEmailLeadCount}</Badge>
+                  <Badge variant="muted">Showing: {sampleLeads.length}</Badge>
                 </span>
               </summary>
               <div className="mt-3 text-xs text-[color:var(--muted-foreground)]">
-                Totals above reflect the whole experiment. The cards below are only a preview sample from those leads.
-                Showing {previewDisplayedLeadCount} rows, including {previewValidLeadCount} valid and {previewMissingLeadCount} missing-email preview rows.
+                This is just a small sample of the people found so far.
               </div>
               {sampleLeads.length ? (
                 <div className="mt-3 grid gap-2 md:grid-cols-2">
@@ -2449,7 +2420,7 @@ export default function ExperimentClient({
               ) : (
                 <div className="mt-3 rounded-lg border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-2 text-sm text-[color:var(--muted-foreground)]">
                   {hasLeadDiagnostics
-                    ? "No accepted leads in the latest run. Open Advanced Diagnostics for rejection and verification details."
+                    ? "No usable leads in the latest run. Open Technical details if you want the reason."
                     : "No sample leads yet."}
                 </div>
               )}
@@ -2458,13 +2429,13 @@ export default function ExperimentClient({
             <details className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3">
               <summary className="flex cursor-pointer list-none items-center justify-between gap-2 text-sm font-medium text-[color:var(--foreground)]">
                 <span className="inline-flex items-center gap-2">
-                  Advanced Diagnostics
+                  Technical details
                   {latestRun ? (
                     <Badge variant={runStatusVariant(latestRun.status)}>{latestRun.status}</Badge>
                   ) : null}
                 </span>
                 <span className="text-xs font-normal text-[color:var(--muted-foreground)]">
-                  Quick summary first, technical detail below
+                  Open this only if something looks wrong
                 </span>
               </summary>
 
@@ -2511,7 +2482,7 @@ export default function ExperimentClient({
 
                 <details className="rounded-lg border border-[color:var(--border)] bg-[color:var(--surface)] p-3">
                   <summary className="cursor-pointer list-none text-sm font-medium text-[color:var(--foreground)]">
-                    Rejection Breakdown
+                    Why leads were skipped
                   </summary>
                   {!leadRejectionDiagnostics.rejectionRows.length &&
                   !leadRejectionDiagnostics.suppressionRows.length ? (
@@ -2577,7 +2548,7 @@ export default function ExperimentClient({
 
                 <details className="rounded-lg border border-[color:var(--border)] bg-[color:var(--surface)] p-3">
                   <summary className="cursor-pointer list-none text-sm font-medium text-[color:var(--foreground)]">
-                    Email Verifier Details
+                    Missing email checker
                   </summary>
                   {leadRejectionDiagnostics.emailEnrichment ? (
                     <div className="mt-2 text-xs">
@@ -2646,7 +2617,7 @@ export default function ExperimentClient({
 
                 <details className="rounded-lg border border-[color:var(--border)] bg-[color:var(--surface)] p-3">
                   <summary className="cursor-pointer list-none text-sm font-medium text-[color:var(--foreground)]">
-                    Run And Sourcing Trace
+                    Run log
                   </summary>
                   <div className="mt-2 grid gap-3 lg:grid-cols-2">
                     <div className="rounded-lg border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3">
@@ -2725,7 +2696,7 @@ export default function ExperimentClient({
             <div className="flex flex-col gap-2 sm:flex-row sm:justify-end">
               <Button asChild type="button" disabled={!prospectsReady}>
                 <Link href={`/brands/${brandId}/experiments/${experiment.id}/messaging`}>
-                  Continue to Messaging
+                  Write emails
                 </Link>
               </Button>
             </div>

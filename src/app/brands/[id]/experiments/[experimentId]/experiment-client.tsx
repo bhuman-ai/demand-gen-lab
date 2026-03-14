@@ -26,7 +26,6 @@ import {
   fetchConversationPreviewLeadsApi,
   fetchExperiment,
   fetchExperimentRunView,
-  fetchExperimentSourcingTraceApi,
   importExperimentProspectsCsvApi,
   launchExperimentTestApi,
   promoteExperimentApi,
@@ -89,18 +88,6 @@ type WorkflowStageStatus = "done" | "current" | "waiting" | "locked" | "active";
 type ProspectInputMode = "need_data" | "have_data";
 type ExperimentView = "setup" | "prospects" | "messaging" | "launch" | "run";
 type AutoSourceMode = "gate" | "expand";
-type RejectionSummaryRow = { reason: string; count: number };
-type EmailFailureSample = {
-  id: string;
-  name: string;
-  domain: string;
-  reason: string;
-  error: string;
-  topAttemptEmail: string;
-  topAttemptVerdict: string;
-  topAttemptConfidence: string;
-  topAttemptReason: string;
-};
 type RunNextAction = {
   tone: "warning" | "success";
   title: string;
@@ -120,78 +107,6 @@ function asRecord(value: unknown): Record<string, unknown> {
   return {};
 }
 
-function normalizeReason(raw: string) {
-  return raw.trim().toLowerCase().replace(/\s+/g, "_");
-}
-
-function reasonLabel(reason: string) {
-  const key = normalizeReason(reason);
-  const labels: Record<string, string> = {
-    missing_email_or_domain: "Missing email or usable company domain",
-    invalid_email: "Invalid email format",
-    free_domain_blocked: "Personal/free email domain blocked",
-    free_domain_low_evidence: "Free email with low person evidence",
-    role_inbox_blocked: "Role inbox blocked (support@, info@, etc.)",
-    role_inbox_low_evidence: "Role inbox with weak person evidence",
-    non_person_name: "Name does not look like a person",
-    source_domain_mismatch: "Lead domain does not match source profile",
-    missing_name: "Missing person name",
-    missing_company: "Missing company",
-    missing_title: "Missing job title",
-    missing_title_for_icp: "Missing title required for ICP",
-    excluded_company_keyword: "Company excluded by ICP keyword rules",
-    insufficient_person_evidence: "Not enough evidence this is a real person",
-    below_confidence_threshold: "Below confidence threshold",
-    no_mail_route: "Company domain has no working mail route (MX missing)",
-    all_candidates_invalid: "Every generated pattern was invalid",
-    only_risky_candidates: "Only risky (accept-all / low-confidence) candidates",
-    no_high_confidence_candidate: "No high-confidence candidate found",
-    no_attempts: "No email attempts were generated",
-    item_error: "Provider returned an item-level error",
-    invalid_item_id: "Internal item mapping error",
-    verification_unavailable: "Email verification unavailable",
-    duplicate_14_day: "Already contacted in last 14 days",
-    role_account: "Role account filtered",
-    placeholder_domain: "Placeholder/non-real domain filtered",
-    policy_rejected: "Rejected by adaptive quality policy",
-  };
-  return labels[key] ?? key.replaceAll("_", " ");
-}
-
-function reasonFix(reason: string) {
-  const key = normalizeReason(reason);
-  const fixes: Record<string, string> = {
-    missing_email_or_domain: "Adjust sourcing query toward profiles with company domains, then rerun email enrichment.",
-    invalid_email: "Tighten source quality and require verified work emails.",
-    free_domain_blocked: "Keep ICP strict to work domains only.",
-    free_domain_low_evidence: "Require title + company evidence before accepting free-domain contacts.",
-    role_inbox_blocked: "Target named people (manager/director/VP), not role inboxes.",
-    role_inbox_low_evidence: "Add stricter title constraints for named decision makers.",
-    non_person_name: "Prioritize sources returning full person names.",
-    source_domain_mismatch: "Prefer leads whose source profile domain matches company domain.",
-    missing_name: "Use people-category queries and require person-name signals.",
-    missing_company: "Require company signals in source + enrichment output.",
-    missing_title: "Add title constraints (e.g. demand generation manager, growth lead).",
-    missing_title_for_icp: "Update query to include role keywords from your ICP.",
-    excluded_company_keyword: "Refine company filters to remove excluded sectors.",
-    insufficient_person_evidence: "Require profile URL or explicit title before accepting.",
-    below_confidence_threshold: "Narrow role + company constraints for higher-confidence hits.",
-    no_mail_route: "Verify the company domain; if MX is missing, no mailbox can validate there.",
-    all_candidates_invalid: "No valid pattern passed verification for this contact/domain pair.",
-    only_risky_candidates: "Provider found only risky addresses; strict policy rejects these.",
-    no_high_confidence_candidate: "No candidate reached strict verification standards.",
-    no_attempts: "Name/domain inputs were insufficient to produce candidate addresses.",
-    item_error: "Check provider error details and retry this contact.",
-    invalid_item_id: "Internal mapping issue; rerun after deploy/check logs.",
-    verification_unavailable: "Email verification service failed during this run; retry sourcing.",
-    duplicate_14_day: "Already contacted recently; expand target pool or wait cooldown.",
-    role_account: "Use person-level contacts instead of generic inboxes.",
-    placeholder_domain: "Drop placeholder/test domains at source.",
-    policy_rejected: "Review top rejection reasons and refine audience query.",
-  };
-  return fixes[key] ?? "Refine query and ICP filters, then rerun sourcing.";
-}
-
 function parseAdditionalLeadsInput(value: string) {
   const parsed = Math.round(Number(value));
   if (!Number.isFinite(parsed)) return null;
@@ -207,60 +122,6 @@ function formatBusinessDays(days: number[] | undefined) {
   if (normalized.length === 7) return "Every day";
   const labels = normalized.map((day) => BUSINESS_DAY_OPTIONS.find((item) => item.value === day)?.label ?? String(day));
   return labels.join(", ");
-}
-
-function parseReasonRows(raw: unknown): RejectionSummaryRow[] {
-  if (!Array.isArray(raw)) return [];
-  return raw
-    .map((row) => {
-      const item = asRecord(row);
-      const reason = String(item.reason ?? "").trim();
-      const countRaw = Number(item.count ?? 0);
-      const count = Number.isFinite(countRaw) ? countRaw : 0;
-      return { reason, count };
-    })
-    .filter((row) => row.reason);
-}
-
-function parseSuppressionRows(raw: unknown): RejectionSummaryRow[] {
-  const counts = asRecord(raw);
-  return Object.entries(counts)
-    .map(([reason, countRaw]) => {
-      const count = Number(countRaw ?? 0);
-      return { reason, count: Number.isFinite(count) ? count : 0 };
-    })
-    .filter((row) => row.count > 0);
-}
-
-function parseEmailFailureSamples(raw: unknown): EmailFailureSample[] {
-  if (!Array.isArray(raw)) return [];
-  return raw
-    .map((row) => {
-      const item = asRecord(row);
-      return {
-        id: String(item.id ?? "").trim(),
-        name: String(item.name ?? "").trim(),
-        domain: String(item.domain ?? "").trim(),
-        reason: String(item.reason ?? "").trim(),
-        error: String(item.error ?? "").trim(),
-        topAttemptEmail: String(item.topAttemptEmail ?? "").trim(),
-        topAttemptVerdict: String(item.topAttemptVerdict ?? "").trim(),
-        topAttemptConfidence: String(item.topAttemptConfidence ?? "").trim(),
-        topAttemptReason: String(item.topAttemptReason ?? "").trim(),
-      } satisfies EmailFailureSample;
-    })
-    .filter((row) => row.reason || row.error || row.name || row.domain);
-}
-
-function mergeReasonRows(rows: RejectionSummaryRow[]) {
-  const byReason = new Map<string, number>();
-  for (const row of rows) {
-    const key = normalizeReason(row.reason);
-    byReason.set(key, (byReason.get(key) ?? 0) + Math.max(0, Number(row.count || 0)));
-  }
-  return Array.from(byReason.entries())
-    .map(([reason, count]) => ({ reason, count }))
-    .sort((a, b) => b.count - a.count);
 }
 
 function runStatusVariant(status: OutreachRun["status"]) {
@@ -382,7 +243,6 @@ export default function ExperimentClient({
   const [outreachAssignment, setOutreachAssignment] = useState<BrandOutreachAssignment | null>(null);
   const [deliveryAccount, setDeliveryAccount] = useState<OutreachAccount | null>(null);
   const [replyMailboxAccount, setReplyMailboxAccount] = useState<OutreachAccount | null>(null);
-  const [sourcingTrace, setSourcingTrace] = useState<Awaited<ReturnType<typeof fetchExperimentSourcingTraceApi>> | null>(null);
   const [sampleLeads, setSampleLeads] = useState<
     Awaited<ReturnType<typeof fetchConversationPreviewLeadsApi>>["leads"]
   >([]);
@@ -438,11 +298,10 @@ export default function ExperimentClient({
   const refresh = async (showSpinner = true): Promise<RefreshSnapshot> => {
     if (showSpinner) setLoading(true);
     try {
-      const [brandRow, experimentRow, runRow, traceRow, outreachAssignmentRow] = await Promise.all([
+      const [brandRow, experimentRow, runRow, outreachAssignmentRow] = await Promise.all([
         fetchBrand(brandId),
         fetchExperiment(brandId, experimentId),
         fetchExperimentRunView(brandId, experimentId),
-        fetchExperimentSourcingTraceApi(brandId, experimentId),
         fetchBrandOutreachAssignment(brandId).catch(() => ({
           assignment: null,
           account: null,
@@ -489,7 +348,6 @@ export default function ExperimentClient({
       setOutreachAssignment(outreachAssignmentRow.assignment);
       setDeliveryAccount(outreachAssignmentRow.account);
       setReplyMailboxAccount(outreachAssignmentRow.mailboxAccount);
-      setSourcingTrace(traceRow);
       setSampleLeads(previewLeadsData.leads);
       setSampleLeadRunsChecked(previewLeadsData.runsChecked);
       setSampleLeadSourceExperimentId(previewLeadsData.sourceExperimentId);
@@ -657,9 +515,6 @@ export default function ExperimentClient({
   const prospectPrimaryMessage = prospectsReady
     ? "You have enough leads. You can write emails now."
     : `You need ${remainingProspectLeads} more real work emails before you can write emails.`;
-  const prospectSecondaryMessage = prospectsReady
-    ? "You can keep finding more leads if you want a bigger list."
-    : "Best default: use the live table below and add the good rows as they appear.";
   const autoSourceButtonLabel = sampling
     ? "Finding leads..."
     : prospectsReady
@@ -692,7 +547,7 @@ export default function ExperimentClient({
   const backgroundSourcingDetails = (
     <details className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3">
       <summary className="cursor-pointer list-none text-sm font-medium text-[color:var(--foreground)]">
-        Background sourcing
+        Let AI keep looking
       </summary>
       <div className="mt-3 space-y-3">
         <div className="flex flex-wrap items-center justify-between gap-2">
@@ -756,7 +611,7 @@ export default function ExperimentClient({
       }}
     >
       <summary className="cursor-pointer list-none text-sm font-medium text-[color:var(--foreground)]">
-        Upload CSV
+        Upload your own list
       </summary>
       <div className="mt-3 rounded-lg border border-[color:var(--border)] bg-[color:var(--surface)]">
         <div className="flex flex-wrap items-center justify-between gap-3 px-3 py-3">
@@ -804,116 +659,71 @@ export default function ExperimentClient({
       </div>
     </details>
   );
+  const prospectActivityDetails = (
+    <details className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3">
+      <summary className="cursor-pointer list-none text-sm font-medium text-[color:var(--foreground)]">
+        View activity
+      </summary>
+      <div className="mt-3 space-y-3">
+        {hasPreviewEmailLookupSignal ? (
+          <div
+            className={`rounded-lg px-3 py-2 text-sm ${
+              previewEmailEnrichment.error
+                ? "border border-[color:var(--warning)]/40 bg-[color:var(--warning-soft)] text-[color:var(--warning)]"
+                : "border border-[color:var(--accent)]/40 bg-[color:var(--accent-soft)] text-[color:var(--accent)]"
+            }`}
+          >
+            {previewEmailEnrichment.error ? (
+              <span>{previewEmailEnrichment.error}</span>
+            ) : (
+              <span>
+                Checked {previewEmailEnrichment.attempted} people, matched {previewEmailEnrichment.matched},
+                still missing {Math.max(0, previewEmailEnrichment.attempted - previewEmailEnrichment.matched)}.
+              </span>
+            )}
+          </div>
+        ) : invalidLeadCount > 0 ? (
+          <div className="rounded-lg border border-[color:var(--warning)]/40 bg-[color:var(--warning-soft)] px-3 py-2 text-sm text-[color:var(--warning)]">
+            {invalidLeadCount} people are still missing a real work email.
+          </div>
+        ) : null}
 
-  const traceQueryDiagnostics = useMemo(() => {
-    const rows = sourcingTrace?.probeResults ?? [];
-    return rows
-      .map((row) => {
-        const details =
-          row.details && typeof row.details === "object" && !Array.isArray(row.details)
-            ? (row.details as Record<string, unknown>)
-            : {};
-        const qualityMetrics =
-          row.qualityMetrics && typeof row.qualityMetrics === "object" && !Array.isArray(row.qualityMetrics)
-            ? (row.qualityMetrics as Record<string, unknown>)
-            : {};
-        const query = String(details.query ?? qualityMetrics.query ?? "").trim();
-        const hitsRaw = Number(details.hits ?? qualityMetrics.hitCount ?? 0);
-        const hits = Number.isFinite(hitsRaw) ? hitsRaw : 0;
-        return {
-          id: row.id,
-          stage: row.stage,
-          query,
-          hits,
-          outcome: row.outcome,
-        };
-      })
-      .filter((row) => row.query)
-      .slice(0, 10);
-  }, [sourcingTrace]);
+        {sampleLeadError ? <div className="text-sm text-[color:var(--danger)]">{sampleLeadError}</div> : null}
 
-  const traceProbeSummary = useMemo(() => {
-    const raw = sourcingTrace?.latestDecision?.probeSummary;
-    return raw && typeof raw === "object" && !Array.isArray(raw) ? (raw as Record<string, unknown>) : null;
-  }, [sourcingTrace]);
+        {autoSourceMeta ? (
+          <div className="text-xs text-[color:var(--muted-foreground)]">{autoSourceMeta}</div>
+        ) : null}
 
-  const traceMode = String(traceProbeSummary?.mode ?? "").trim();
-  const traceFallbackReason = String(traceProbeSummary?.fallbackReason ?? "").trim();
-
-  const leadRejectionDiagnostics = useMemo(() => {
-    const events = sourcingTrace?.runEvents ?? [];
-    let rejectionRows: RejectionSummaryRow[] = [];
-    let suppressionRows: RejectionSummaryRow[] = [];
-    let emailEnrichment: {
-      attempted: number;
-      matched: number;
-      failed: number;
-      provider: string;
-      error: string;
-      failureSummary: RejectionSummaryRow[];
-      failedSamples: EmailFailureSample[];
-    } | null = null;
-
-    for (const event of events) {
-      const payload = asRecord(event.payload);
-      if (!rejectionRows.length) {
-        const topRejections = parseReasonRows(payload.topRejections);
-        const topPolicyRejections = parseReasonRows(payload.topPolicyRejections);
-        const merged = mergeReasonRows([...topRejections, ...topPolicyRejections]).slice(0, 8);
-        if (merged.length) rejectionRows = merged;
-      }
-      if (!suppressionRows.length) {
-        const parsedSuppression = parseSuppressionRows(payload.suppressionCounts);
-        if (parsedSuppression.length) {
-          suppressionRows = mergeReasonRows(parsedSuppression).slice(0, 8);
-        }
-      }
-      if (!emailEnrichment) {
-        const enrichment = asRecord(payload.emailEnrichment);
-        const attemptedRaw = Number(enrichment.attempted ?? 0);
-        const matchedRaw = Number(enrichment.matched ?? 0);
-        const failedRaw = Number(enrichment.failed ?? 0);
-        const attempted = Number.isFinite(attemptedRaw) ? attemptedRaw : 0;
-        const matched = Number.isFinite(matchedRaw) ? matchedRaw : 0;
-        const failed = Number.isFinite(failedRaw) ? failedRaw : 0;
-        const provider = String(enrichment.provider ?? "").trim();
-        const error = String(enrichment.error ?? "").trim();
-        const failureSummary = mergeReasonRows(parseReasonRows(enrichment.failureSummary)).slice(0, 8);
-        const failedSamples = parseEmailFailureSamples(enrichment.failedSamples).slice(0, 8);
-        if (attempted > 0 || matched > 0 || failed > 0 || error) {
-          emailEnrichment = {
-            attempted,
-            matched,
-            failed,
-            provider,
-            error,
-            failureSummary,
-            failedSamples,
-          };
-        }
-      }
-      if (rejectionRows.length && suppressionRows.length && emailEnrichment) break;
-    }
-
-    return { rejectionRows, suppressionRows, emailEnrichment };
-  }, [sourcingTrace]);
-
-  const hasLeadDiagnostics =
-    leadRejectionDiagnostics.rejectionRows.length > 0 ||
-    leadRejectionDiagnostics.suppressionRows.length > 0 ||
-    Boolean(leadRejectionDiagnostics.emailEnrichment);
-  const topRejectionRow = leadRejectionDiagnostics.rejectionRows[0] ?? null;
-  const topSuppressionRow = leadRejectionDiagnostics.suppressionRows[0] ?? null;
-
-  const diagnosticsNextStep = useMemo(() => {
-    if (topRejectionRow) return reasonFix(topRejectionRow.reason);
-    if (topSuppressionRow) return reasonFix(topSuppressionRow.reason);
-    if (leadRejectionDiagnostics.emailEnrichment?.error) {
-      return "Verification provider returned an error. Retry sourcing to get a fresh verification pass.";
-    }
-    if (latestRun?.lastError) return latestRun.lastError;
-    return "Run Source Prospects, then review top rejection reasons and query quality.";
-  }, [leadRejectionDiagnostics.emailEnrichment?.error, latestRun?.lastError, topRejectionRow, topSuppressionRow]);
+        <div className="space-y-2">
+          <div className="text-sm font-medium">Found so far</div>
+          {sampleLeads.length ? (
+            <div className="grid gap-2 md:grid-cols-2">
+              {sampleLeads.map((lead) => (
+                <div key={`${lead.id}:${lead.email}`} className="rounded-lg border border-[color:var(--border)] p-3 text-xs">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="font-medium text-sm">{lead.name || "(missing name)"}</div>
+                    <Badge variant={lead.email ? "success" : "danger"}>
+                      {lead.email ? "Ready" : "Waiting for email"}
+                    </Badge>
+                  </div>
+                  <div className="text-[color:var(--muted-foreground)]">
+                    {lead.email || "No real email found yet."}
+                  </div>
+                  <div className="text-[color:var(--muted-foreground)]">
+                    {lead.title || "Unknown title"} at {lead.company || lead.domain}
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="rounded-lg border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-2 text-sm text-[color:var(--muted-foreground)]">
+              No sample leads yet.
+            </div>
+          )}
+        </div>
+      </div>
+    </details>
+  );
 
   const workflowStages = useMemo(
     () =>
@@ -2037,68 +1847,7 @@ export default function ExperimentClient({
             />
             {backgroundSourcingDetails}
             {csvUploadDetails}
-
-            <details className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3">
-              <summary className="cursor-pointer list-none text-sm font-medium text-[color:var(--foreground)]">
-                View sourcing activity
-              </summary>
-              <div className="mt-3 space-y-3">
-                {hasPreviewEmailLookupSignal ? (
-                  <div
-                    className={`rounded-lg px-3 py-2 text-sm ${
-                      previewEmailEnrichment.error
-                        ? "border border-[color:var(--warning)]/40 bg-[color:var(--warning-soft)] text-[color:var(--warning)]"
-                        : "border border-[color:var(--accent)]/40 bg-[color:var(--accent-soft)] text-[color:var(--accent)]"
-                    }`}
-                  >
-                    {previewEmailEnrichment.error ? (
-                      <span>{previewEmailEnrichment.error}</span>
-                    ) : (
-                      <span>
-                        Checked {previewEmailEnrichment.attempted} people, matched {previewEmailEnrichment.matched},
-                        still missing {Math.max(0, previewEmailEnrichment.attempted - previewEmailEnrichment.matched)}.
-                      </span>
-                    )}
-                  </div>
-                ) : invalidLeadCount > 0 ? (
-                  <div className="rounded-lg border border-[color:var(--warning)]/40 bg-[color:var(--warning-soft)] px-3 py-2 text-sm text-[color:var(--warning)]">
-                    {invalidLeadCount} people are still missing a real work email.
-                  </div>
-                ) : null}
-
-                {autoSourceMeta ? (
-                  <div className="text-xs text-[color:var(--muted-foreground)]">{autoSourceMeta}</div>
-                ) : null}
-
-                <div className="space-y-2">
-                  <div className="text-sm font-medium">Leads found so far</div>
-                  {sampleLeads.length ? (
-                    <div className="grid gap-2 md:grid-cols-2">
-                      {sampleLeads.map((lead) => (
-                        <div key={`${lead.id}:${lead.email}`} className="rounded-lg border border-[color:var(--border)] p-3 text-xs">
-                          <div className="flex items-center justify-between gap-2">
-                            <div className="font-medium text-sm">{lead.name || "(missing name)"}</div>
-                            <Badge variant={lead.email ? "success" : "danger"}>
-                              {lead.email ? "Ready" : "Waiting for email"}
-                            </Badge>
-                          </div>
-                          <div className="text-[color:var(--muted-foreground)]">
-                            {lead.email || "No real email found yet."}
-                          </div>
-                          <div className="text-[color:var(--muted-foreground)]">
-                            {lead.title || "Unknown title"} at {lead.company || lead.domain}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  ) : (
-                    <div className="rounded-lg border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-2 text-sm text-[color:var(--muted-foreground)]">
-                      No sample leads yet.
-                    </div>
-                  )}
-                </div>
-              </div>
-            </details>
+            {prospectActivityDetails}
           </CardContent>
         </Card>
 
@@ -2637,42 +2386,30 @@ export default function ExperimentClient({
         <Card>
           <CardHeader>
             <CardTitle className="text-base">{stageTitle(1)}</CardTitle>
-            <CardDescription>
-              Get {prospectGoalLabel}. Then you can move on to {stageTitle(2).toLowerCase()}.
-            </CardDescription>
+            <CardDescription>Tell AI who to find, then add the rows you want.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
-            <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3">
-              <div className="flex flex-wrap items-start justify-between gap-2">
+            <div className="rounded-[22px] border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-4 py-4">
+              <div className="flex flex-wrap items-center gap-3">
                 <div>
-                  <div className="text-sm font-medium">Progress</div>
-                  <div className="text-xs text-[color:var(--muted-foreground)]">
-                    {realEmailLeadCount} of {PROSPECT_VALIDATION_TARGET} real work emails ready
+                  <div className="text-lg font-semibold text-[color:var(--foreground)]">
+                    {realEmailLeadCount} / {PROSPECT_VALIDATION_TARGET} verified
+                  </div>
+                  <div className="mt-1 text-sm text-[color:var(--muted-foreground)]">
+                    {remainingProspectLeads > 0
+                      ? `${remainingProspectLeads} more before you can write emails`
+                      : "You have enough leads to move on"}
                   </div>
                 </div>
-                <Badge variant={prospectsReady ? "success" : "accent"}>
-                  {prospectsReady ? "Ready" : "Working on it"}
+                <Badge variant={prospectsReady ? "success" : "muted"}>
+                  {prospectsReady ? "Ready for emails" : "Still finding people"}
                 </Badge>
               </div>
-
-              <div className="mt-3">
-                <div className="h-1.5 overflow-hidden rounded-[999px] bg-[color:var(--border)]">
-                  <div
-                    className={`h-full rounded-[999px] ${prospectsReady ? "bg-[color:var(--success)]" : "bg-[color:var(--accent)]"}`}
-                    style={{ width: `${gateProgressPct}%` }}
-                  />
-                </div>
-              </div>
-
-              <div
-                className={`mt-3 rounded-lg px-3 py-2 text-sm ${
-                  prospectsReady
-                    ? "border border-[color:var(--success)]/40 bg-[color:var(--success-soft)] text-[color:var(--success)]"
-                    : "border border-[color:var(--warning)]/40 bg-[color:var(--warning-soft)] text-[color:var(--warning)]"
-                }`}
-              >
-                <div className="font-medium">{prospectPrimaryMessage}</div>
-                <div className="mt-1 text-xs opacity-80">{prospectSecondaryMessage}</div>
+              <div className="mt-4 h-2 overflow-hidden rounded-full bg-[color:var(--border)]">
+                <div
+                  className={`h-full rounded-full ${prospectsReady ? "bg-[color:var(--success)]" : "bg-[color:var(--accent)]"}`}
+                  style={{ width: `${gateProgressPct}%` }}
+                />
               </div>
             </div>
 
@@ -2685,348 +2422,7 @@ export default function ExperimentClient({
             />
             {backgroundSourcingDetails}
             {csvUploadDetails}
-
-            {hasPreviewEmailLookupSignal ? (
-              <div
-                className={`rounded-lg px-3 py-2 text-sm ${
-                  previewEmailEnrichment.error
-                    ? "border border-[color:var(--warning)]/40 bg-[color:var(--warning-soft)] text-[color:var(--warning)]"
-                    : "border border-[color:var(--accent)]/40 bg-[color:var(--accent-soft)] text-[color:var(--accent)]"
-                }`}
-              >
-                {previewEmailEnrichment.error ? (
-                  previewEmailEnrichment.attempted > 0 ? (
-                    <span>
-                      We tried to find missing work emails while this page loaded, but it did not finish cleanly:
-                      {" "}{previewEmailEnrichment.error}. Those people still do not count yet.
-                    </span>
-                  ) : (
-                    <span>
-                      We could not start missing-email lookup while this page loaded: {previewEmailEnrichment.error}.
-                      Those people still do not count yet.
-                    </span>
-                  )
-                ) : (
-                  <span>
-                    We checked {previewEmailEnrichment.attempted} people for missing work emails, matched {previewEmailEnrichment.matched}, and still need{" "}
-                    {Math.max(0, previewEmailEnrichment.attempted - previewEmailEnrichment.matched)}.
-                  </span>
-                )}
-              </div>
-            ) : invalidLeadCount > 0 ? (
-              <div className="rounded-lg border border-[color:var(--warning)]/40 bg-[color:var(--warning-soft)] px-3 py-2 text-sm text-[color:var(--warning)]">
-                {invalidLeadCount} people are still missing a real work email, so they do not count yet.
-              </div>
-            ) : null}
-
-            {sampleLeadError ? <div className="text-sm text-[color:var(--danger)]">{sampleLeadError}</div> : null}
-
-            <details className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3">
-              <summary className="flex cursor-pointer list-none flex-wrap items-center justify-between gap-2">
-                <span className="text-sm font-medium text-[color:var(--foreground)]">Leads found so far</span>
-                <span className="flex flex-wrap items-center gap-2 text-xs">
-                  <Badge variant="success">Ready: {realEmailLeadCount}</Badge>
-                  <Badge variant="muted">Showing: {sampleLeads.length}</Badge>
-                </span>
-              </summary>
-              <div className="mt-3 text-xs text-[color:var(--muted-foreground)]">
-                This is just a small sample of the people found so far.
-              </div>
-              {sampleLeads.length ? (
-                <div className="mt-3 grid gap-2 md:grid-cols-2">
-                  {sampleLeads.map((lead) => (
-                    <div key={`${lead.id}:${lead.email}`} className="rounded-lg border border-[color:var(--border)] p-3 text-xs">
-                      <div className="flex items-center justify-between gap-2">
-                        <div className="font-medium text-sm">{lead.name || "(missing name)"}</div>
-                        <Badge variant={lead.email ? "success" : "danger"}>
-                          {lead.email ? "Valid" : "Invalid"}
-                        </Badge>
-                      </div>
-                      <div className="text-[color:var(--muted-foreground)]">
-                        {lead.email || "No real email found yet. This lead does not count."}
-                      </div>
-                      <div className="text-[color:var(--muted-foreground)]">
-                        {lead.title || "Unknown title"} at {lead.company || lead.domain}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <div className="mt-3 rounded-lg border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-2 text-sm text-[color:var(--muted-foreground)]">
-                  {hasLeadDiagnostics
-                    ? "No usable leads in the latest run. Open Technical details if you want the reason."
-                    : "No sample leads yet."}
-                </div>
-              )}
-            </details>
-
-            <details className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3">
-              <summary className="flex cursor-pointer list-none items-center justify-between gap-2 text-sm font-medium text-[color:var(--foreground)]">
-                <span className="inline-flex items-center gap-2">
-                  Technical details
-                  {latestRun ? (
-                    <Badge variant={runStatusVariant(latestRun.status)}>{latestRun.status}</Badge>
-                  ) : null}
-                </span>
-                <span className="text-xs font-normal text-[color:var(--muted-foreground)]">
-                  Open this only if something looks wrong
-                </span>
-              </summary>
-
-              <div className="mt-3 space-y-3">
-                <div className="rounded-lg border border-[color:var(--border)] bg-[color:var(--surface)] p-3">
-                  <div className="text-sm font-medium">What to do next</div>
-                  <div className="mt-2 grid gap-2 text-xs md:grid-cols-3">
-                    <div className="rounded border border-[color:var(--border)] p-2">
-                      <div className="text-[color:var(--muted-foreground)]">Top rejection</div>
-                      <div className="mt-1 font-medium">
-                        {topRejectionRow ? reasonLabel(topRejectionRow.reason) : "No rejection data yet"}
-                      </div>
-                      {topRejectionRow ? (
-                        <div className="text-[color:var(--muted-foreground)]">{topRejectionRow.count} leads</div>
-                      ) : null}
-                    </div>
-                    <div className="rounded border border-[color:var(--border)] p-2">
-                      <div className="text-[color:var(--muted-foreground)]">Verifier outcome</div>
-                      <div className="mt-1 font-medium">
-                        {leadRejectionDiagnostics.emailEnrichment
-                          ? `${leadRejectionDiagnostics.emailEnrichment.matched}/${leadRejectionDiagnostics.emailEnrichment.attempted} matched`
-                          : "No verifier batch yet"}
-                      </div>
-                      {leadRejectionDiagnostics.emailEnrichment?.error ? (
-                        <div className="text-[color:var(--danger)]">
-                          {leadRejectionDiagnostics.emailEnrichment.error}
-                        </div>
-                      ) : null}
-                    </div>
-                    <div className="rounded border border-[color:var(--border)] p-2">
-                      <div className="text-[color:var(--muted-foreground)]">Run health</div>
-                      <div className="mt-1 font-medium">
-                        {latestRun ? `Run ${latestRun.id.slice(-6)} · ${latestRun.status}` : "No run yet"}
-                      </div>
-                      {latestRun?.sourcingTraceSummary?.phase ? (
-                        <div className="text-[color:var(--muted-foreground)]">
-                          {latestRun.sourcingTraceSummary.phase}
-                        </div>
-                      ) : null}
-                    </div>
-                  </div>
-                  <div className="mt-2 text-xs text-[color:var(--muted-foreground)]">{diagnosticsNextStep}</div>
-                </div>
-
-                <details className="rounded-lg border border-[color:var(--border)] bg-[color:var(--surface)] p-3">
-                  <summary className="cursor-pointer list-none text-sm font-medium text-[color:var(--foreground)]">
-                    Why leads were skipped
-                  </summary>
-                  {!leadRejectionDiagnostics.rejectionRows.length &&
-                  !leadRejectionDiagnostics.suppressionRows.length ? (
-                    <div className="mt-2 text-xs text-[color:var(--muted-foreground)]">
-                      No rejection diagnostics yet. Run sourcing to collect policy and suppression signals.
-                    </div>
-                  ) : (
-                    <div className="mt-2 grid gap-3 lg:grid-cols-2">
-                      <div className="space-y-2">
-                        <div className="text-xs font-medium text-[color:var(--foreground)]">Quality-policy rejections</div>
-                        {leadRejectionDiagnostics.rejectionRows.length ? (
-                          <div className="space-y-2">
-                            {leadRejectionDiagnostics.rejectionRows.map((row) => (
-                              <div
-                                key={`quality:${row.reason}:${row.count}`}
-                                className="rounded-lg border border-[color:var(--border)] p-2"
-                              >
-                                <div className="flex items-center justify-between gap-2">
-                                  <div className="text-xs font-medium">{reasonLabel(row.reason)}</div>
-                                  <Badge variant="muted">{row.count}</Badge>
-                                </div>
-                                <div className="mt-1 text-xs text-[color:var(--muted-foreground)]">
-                                  {reasonFix(row.reason)}
-                                </div>
-                              </div>
-                            ))}
-                          </div>
-                        ) : (
-                          <div className="text-xs text-[color:var(--muted-foreground)]">
-                            No policy-level rejections captured.
-                          </div>
-                        )}
-                      </div>
-
-                      <div className="space-y-2">
-                        <div className="text-xs font-medium text-[color:var(--foreground)]">Suppression filters</div>
-                        {leadRejectionDiagnostics.suppressionRows.length ? (
-                          <div className="space-y-2">
-                            {leadRejectionDiagnostics.suppressionRows.map((row) => (
-                              <div
-                                key={`suppression:${row.reason}:${row.count}`}
-                                className="rounded-lg border border-[color:var(--border)] p-2"
-                              >
-                                <div className="flex items-center justify-between gap-2">
-                                  <div className="text-xs font-medium">{reasonLabel(row.reason)}</div>
-                                  <Badge variant="muted">{row.count}</Badge>
-                                </div>
-                                <div className="mt-1 text-xs text-[color:var(--muted-foreground)]">
-                                  {reasonFix(row.reason)}
-                                </div>
-                              </div>
-                            ))}
-                          </div>
-                        ) : (
-                          <div className="text-xs text-[color:var(--muted-foreground)]">
-                            No suppression counts recorded yet.
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  )}
-                </details>
-
-                <details className="rounded-lg border border-[color:var(--border)] bg-[color:var(--surface)] p-3">
-                  <summary className="cursor-pointer list-none text-sm font-medium text-[color:var(--foreground)]">
-                    Missing email checker
-                  </summary>
-                  {leadRejectionDiagnostics.emailEnrichment ? (
-                    <div className="mt-2 text-xs">
-                      <div className="text-[color:var(--muted-foreground)]">
-                        Attempted {leadRejectionDiagnostics.emailEnrichment.attempted} · matched{" "}
-                        {leadRejectionDiagnostics.emailEnrichment.matched} · failed{" "}
-                        {leadRejectionDiagnostics.emailEnrichment.failed}
-                        {leadRejectionDiagnostics.emailEnrichment.provider
-                          ? ` · provider ${leadRejectionDiagnostics.emailEnrichment.provider}`
-                          : ""}
-                      </div>
-                      {leadRejectionDiagnostics.emailEnrichment.error ? (
-                        <div className="mt-1 text-[color:var(--danger)]">
-                          {leadRejectionDiagnostics.emailEnrichment.error}
-                        </div>
-                      ) : null}
-                      {leadRejectionDiagnostics.emailEnrichment.failureSummary.length ? (
-                        <div className="mt-2 space-y-1">
-                          <div className="font-medium text-[color:var(--foreground)]">Failed reasons</div>
-                          {leadRejectionDiagnostics.emailEnrichment.failureSummary.map((row) => (
-                            <div
-                              key={`email-failure-reason:${row.reason}:${row.count}`}
-                              className="flex items-center justify-between gap-2 text-[color:var(--muted-foreground)]"
-                            >
-                              <span>{reasonLabel(row.reason)}</span>
-                              <Badge variant="muted">{row.count}</Badge>
-                            </div>
-                          ))}
-                        </div>
-                      ) : null}
-                      {leadRejectionDiagnostics.emailEnrichment.failedSamples.length ? (
-                        <div className="mt-2 space-y-1">
-                          <div className="font-medium text-[color:var(--foreground)]">Sample failures</div>
-                          {leadRejectionDiagnostics.emailEnrichment.failedSamples.map((row) => (
-                            <div
-                              key={`email-failure-sample:${row.id}:${row.topAttemptEmail}:${row.domain}`}
-                              className="rounded border border-[color:var(--border)] p-2 text-[color:var(--muted-foreground)]"
-                            >
-                              <div className="text-[color:var(--foreground)]">
-                                {row.name || "Unknown"}{row.domain ? ` · ${row.domain}` : ""}
-                              </div>
-                              <div>
-                                {reasonLabel(row.reason)}
-                                {row.error ? ` · ${row.error}` : ""}
-                              </div>
-                              {row.topAttemptEmail ? (
-                                <div>
-                                  Top attempt: {row.topAttemptEmail}
-                                  {row.topAttemptVerdict ? ` (${row.topAttemptVerdict}` : ""}
-                                  {row.topAttemptConfidence ? `/${row.topAttemptConfidence}` : ""}
-                                  {row.topAttemptVerdict ? ")" : ""}
-                                  {row.topAttemptReason ? ` · ${row.topAttemptReason}` : ""}
-                                </div>
-                              ) : null}
-                            </div>
-                          ))}
-                        </div>
-                      ) : null}
-                    </div>
-                  ) : (
-                    <div className="mt-2 text-xs text-[color:var(--muted-foreground)]">
-                      No email enrichment diagnostics yet.
-                    </div>
-                  )}
-                </details>
-
-                <details className="rounded-lg border border-[color:var(--border)] bg-[color:var(--surface)] p-3">
-                  <summary className="cursor-pointer list-none text-sm font-medium text-[color:var(--foreground)]">
-                    Run log
-                  </summary>
-                  <div className="mt-2 grid gap-3 lg:grid-cols-2">
-                    <div className="rounded-lg border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3">
-                      <div className="text-sm font-medium">Run Status</div>
-                      {latestRun ? (
-                        <div className="mt-2 space-y-1 text-xs text-[color:var(--muted-foreground)]">
-                          <div>
-                            Run {latestRun.id.slice(-6)} · {latestRun.status}
-                            {latestRun.sourcingTraceSummary?.phase
-                              ? ` · ${latestRun.sourcingTraceSummary.phase}`
-                              : ""}
-                          </div>
-                          {latestRun.lastError ? (
-                            <div className="text-[color:var(--danger)]">{latestRun.lastError}</div>
-                          ) : null}
-                          {latestEvents.length ? (
-                            <div>Latest event: {latestEvents[0]?.eventType}</div>
-                          ) : null}
-                        </div>
-                      ) : (
-                        <div className="mt-2 text-xs text-[color:var(--muted-foreground)]">
-                          No sourcing run yet.
-                        </div>
-                      )}
-                    </div>
-
-                    <div className="rounded-lg border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3">
-                      <div className="text-sm font-medium">Sourcing Trace</div>
-                      {sourcingTrace?.latestDecision ? (
-                        <div className="mt-2 space-y-2 text-xs text-[color:var(--muted-foreground)]">
-                          <div>Provider: Exa only</div>
-                          {traceMode ? (
-                            <div>
-                              Mode: <span className="font-medium text-[color:var(--foreground)]">{traceMode}</span>
-                              {traceFallbackReason ? ` · fallback: ${traceFallbackReason}` : ""}
-                            </div>
-                          ) : null}
-                          <div className="rounded-lg border border-[color:var(--border)] p-2">
-                            <div className="font-medium text-[color:var(--foreground)]">Selected chain</div>
-                            <div className="mt-1 space-y-1">
-                              {sourcingTrace.latestDecision.selectedChain.map((step, index) => (
-                                <div key={`${step.id}:${step.actorId}:${index}`}>
-                                  {index + 1}. {step.stage} {"->"}{" "}
-                                  <span className="font-medium text-[color:var(--foreground)]">{step.actorId}</span>
-                                  {step.purpose ? ` · ${step.purpose}` : ""}
-                                </div>
-                              ))}
-                            </div>
-                          </div>
-                          <div>Budget used: ${Number(sourcingTrace.latestDecision.budgetUsedUsd || 0).toFixed(2)}</div>
-                          {traceQueryDiagnostics.length ? (
-                            <div className="rounded-lg border border-[color:var(--border)] p-2">
-                              <div className="font-medium text-[color:var(--foreground)]">Queries used</div>
-                              <div className="mt-1 space-y-1">
-                                {traceQueryDiagnostics.map((row) => (
-                                  <div key={row.id} className="flex flex-wrap items-center gap-2">
-                                    <Badge variant={row.outcome === "pass" ? "success" : "danger"}>
-                                      {row.stage}
-                                    </Badge>
-                                    <span>{row.query}</span>
-                                    <span className="text-[color:var(--muted-foreground)]">({row.hits} hits)</span>
-                                  </div>
-                                ))}
-                              </div>
-                            </div>
-                          ) : null}
-                        </div>
-                      ) : (
-                        <div className="mt-2 text-xs text-[color:var(--muted-foreground)]">No sourcing decision yet.</div>
-                      )}
-                    </div>
-                  </div>
-                </details>
-              </div>
-            </details>
+            {prospectActivityDetails}
             <div className="flex flex-col gap-2 sm:flex-row sm:justify-end">
               <Button asChild type="button" disabled={!prospectsReady}>
                 <Link href={`/brands/${brandId}/experiments/${experiment.id}/messaging`}>

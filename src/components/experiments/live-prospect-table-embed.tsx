@@ -474,6 +474,7 @@ export default function LiveProspectTableEmbed({
   const hasPrompt = Boolean(normalizedPromptDraft || normalizedTablePrompt);
   const lastCheckedLabel = formatTimestamp(tableState.lastSuccessAt);
   const nextRunLabel = formatTimestamp(tableState.nextRunAt);
+  const rowLabel = `${tableState.rowCount} row${tableState.rowCount === 1 ? "" : "s"}`;
   const statusCopy = tableState.isDiscovering
     ? "Finding rows..."
     : tableState.isEnriching
@@ -485,6 +486,23 @@ export default function LiveProspectTableEmbed({
             ? `Live is on. Next check ${nextRunLabel}.`
             : "Live is on."
           : "Live is off.";
+  const assistantNote =
+    importState.status === "importing"
+      ? "Adding the rows in this table to this workflow."
+      : importState.status === "success"
+        ? "Those rows are in. You can keep searching if you want more."
+        : importState.status === "error"
+          ? importState.message
+          : tableState.isDiscovering
+            ? "Looking for people who match that description."
+            : tableState.isEnriching
+              ? "Filling the extra columns for the rows already here."
+              : normalizedPromptDraft && normalizedPromptDraft !== normalizedTablePrompt
+                ? "Press Find to use your new request."
+                : normalizedTablePrompt
+                  ? `Looking for: ${normalizedTablePrompt}`
+                  : "Try “founders at self-funded SaaS companies in Europe”.";
+  const addRowsLabel = importState.status === "importing" ? "Adding rows..." : "Add current rows";
 
   if (loadingConfig) {
     return (
@@ -506,187 +524,197 @@ export default function LiveProspectTableEmbed({
   }
 
   return (
-    <div className="overflow-hidden rounded-2xl border border-[color:var(--border)] bg-[color:var(--surface)]">
-      <div className="border-b border-[color:var(--border)] bg-[color:var(--surface-muted)] px-4 py-4">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div className="space-y-1">
-            <div className="text-sm font-semibold text-[color:var(--foreground)]">
-              {tableState.title || "Prospect table"}
+    <div className="rounded-[28px] border border-[color:var(--border)] bg-[color:var(--surface)]">
+      <div className="border-b border-[color:var(--border)] px-4 py-4 md:px-5">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="min-w-0">
+            <div className="text-[11px] font-medium uppercase tracking-[0.18em] text-[color:var(--muted-foreground)]">
+              Prospects
             </div>
-            <div className="text-xs text-[color:var(--muted-foreground)]">
-              Pick who belongs here, decide which columns to fill, and add the good rows when they look right.
+            <div className="mt-1 text-sm text-[color:var(--muted-foreground)]">
+              Tell AI who to find. Then add the rows you want.
             </div>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <Badge variant="muted">{tableState.rowCount} rows</Badge>
-            <Badge variant="muted">{tableState.columnCount} enrichments</Badge>
+            <Badge variant="muted">{rowLabel}</Badge>
             <Badge variant={tableState.liveEnabled ? "success" : "muted"}>
-              {tableState.liveEnabled ? "Live on" : "Live off"}
+              {tableState.liveEnabled ? "Live" : "Manual"}
             </Badge>
-            {importState.status === "success" ? <Badge variant="success">Added</Badge> : null}
           </div>
         </div>
 
-        <div className="mt-4 grid gap-3 xl:grid-cols-[minmax(0,1fr)_auto] xl:items-end">
-          <div className="space-y-2">
-            <label className="text-xs font-medium uppercase tracking-[0.14em] text-[color:var(--muted-foreground)]">
-              Who should this table find?
-            </label>
-            <Input
-              value={promptDraft}
-              onChange={(event) => {
-                setPromptDraft(event.target.value);
-              }}
-              onKeyDown={(event) => {
-                if (event.key !== "Enter") return;
-                event.preventDefault();
-                if (!iframeReady || tableBusy || !hasPrompt) return;
-                if (normalizedPromptDraft && normalizedPromptDraft !== normalizedTablePrompt) {
-                  sendHostCommand("set-prompt", { prompt: normalizedPromptDraft });
-                }
-                sendHostCommand("set-active-tab", { tab: "search" });
-                sendHostCommand("run-search");
-              }}
-              placeholder="Find self-funded SaaS founders who might qualify for AWS credits"
-              className="h-11"
-            />
-            <div className="text-xs text-[color:var(--muted-foreground)]">
-              Describe the people you want in plain English.
+        <div className="mt-4 rounded-[24px] border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3 md:p-4">
+          <div className="flex gap-3">
+            <div className="mt-1 hidden h-10 w-10 shrink-0 items-center justify-center rounded-[16px] border border-[color:var(--border)] bg-[color:var(--surface)] text-xs font-semibold text-[color:var(--foreground)] md:flex">
+              AI
             </div>
-            <div className="inline-flex flex-wrap gap-2">
-              {[
-                { label: "Criteria", tab: "search" as const },
-                { label: "Columns", tab: "columns" as const },
-                { label: "Details", tab: "row" as const },
-              ].map((item) => (
-                <Button
-                  key={item.tab}
-                  type="button"
-                  variant={tableState.activeTab === item.tab ? "default" : "outline"}
-                  onClick={() => {
-                    sendHostCommand("set-active-tab", { tab: item.tab });
+            <div className="min-w-0 flex-1 space-y-3">
+              <div className="flex flex-col gap-2 xl:flex-row">
+                <Input
+                  value={promptDraft}
+                  onChange={(event) => {
+                    setPromptDraft(event.target.value);
                   }}
-                  disabled={!iframeReady}
+                  onKeyDown={(event) => {
+                    if (event.key !== "Enter") return;
+                    event.preventDefault();
+                    if (!iframeReady || tableBusy || !hasPrompt) return;
+                    if (normalizedPromptDraft && normalizedPromptDraft !== normalizedTablePrompt) {
+                      sendHostCommand("set-prompt", { prompt: normalizedPromptDraft });
+                    }
+                    sendHostCommand("set-active-tab", { tab: "search" });
+                    sendHostCommand("run-search");
+                  }}
+                  placeholder="Find self-funded SaaS founders who might want AWS credits"
+                  className="h-12 flex-1 rounded-[16px] bg-[color:var(--surface)]"
+                />
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    type="button"
+                    size="lg"
+                    onClick={() => {
+                      if (normalizedPromptDraft && normalizedPromptDraft !== normalizedTablePrompt) {
+                        sendHostCommand("set-prompt", { prompt: normalizedPromptDraft });
+                      }
+                      sendHostCommand("set-active-tab", { tab: "search" });
+                      sendHostCommand("run-search");
+                    }}
+                    disabled={!iframeReady || tableBusy || !hasPrompt}
+                  >
+                    {tableState.isDiscovering ? (
+                      <RefreshCw className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <Search className="h-4 w-4" />
+                    )}
+                    {tableState.isDiscovering ? "Finding..." : "Find people"}
+                  </Button>
+                  <Button
+                    type="button"
+                    size="lg"
+                    variant="outline"
+                    onClick={() => {
+                      sendHostCommand("toggle-live", { enabled: !tableState.liveEnabled });
+                    }}
+                    disabled={!iframeReady || tableBusy}
+                  >
+                    {tableState.liveEnabled ? "Live on" : "Live off"}
+                  </Button>
+                </div>
+              </div>
+
+              <div className="rounded-[18px] border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-3">
+                <div className="text-[11px] font-medium uppercase tracking-[0.16em] text-[color:var(--muted-foreground)]">
+                  AI note
+                </div>
+                <div className="mt-2 text-sm text-[color:var(--foreground)]">{assistantNote}</div>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2">
+                {[
+                  { label: "Criteria", tab: "search" as const },
+                  { label: "Columns", tab: "columns" as const },
+                  { label: "Details", tab: "row" as const },
+                ].map((item) => (
+                  <Button
+                    key={item.tab}
+                    type="button"
+                    size="sm"
+                    variant={tableState.activeTab === item.tab ? "secondary" : "ghost"}
+                    onClick={() => {
+                      sendHostCommand("set-active-tab", { tab: item.tab });
+                    }}
+                    disabled={!iframeReady}
+                  >
+                    {item.label}
+                  </Button>
+                ))}
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => {
+                    sendHostCommand("set-active-tab", { tab: "columns" });
+                    sendHostCommand("run-enrichment");
+                  }}
+                  disabled={!iframeReady || tableBusy || !tableState.hasRows || !tableState.hasColumns}
                 >
-                  {item.label}
+                  {tableState.isEnriching ? (
+                    <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Sparkles className="h-3.5 w-3.5" />
+                  )}
+                  {tableState.isEnriching ? "Filling..." : "Fill columns"}
                 </Button>
-              ))}
+                <div className="text-xs text-[color:var(--muted-foreground)]">
+                  {statusCopy}
+                  {lastCheckedLabel ? ` · checked ${lastCheckedLabel}` : ""}
+                  {tableState.lastRowsAppended > 0 ? ` · ${tableState.lastRowsAppended} new last run` : ""}
+                </div>
+              </div>
             </div>
           </div>
+        </div>
 
-          <div className="flex flex-wrap gap-2 xl:justify-end">
+        {importState.parseErrors.length ? (
+          <div className="mt-3 rounded-[18px] border border-[color:var(--warning)]/40 bg-[color:var(--warning-soft)] px-3 py-2 text-xs text-[color:var(--warning)]">
+            {importState.parseErrors.slice(0, 5).join(" · ")}
+          </div>
+        ) : null}
+      </div>
+
+      <div className="relative border-t border-[color:var(--border)]">
+        {!iframeLoaded ? (
+          <div className="absolute inset-0 z-10 flex items-center justify-center bg-[color:var(--surface)]/92">
+            <div className="flex items-center gap-2 text-sm text-[color:var(--muted-foreground)]">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              Loading table...
+            </div>
+          </div>
+        ) : null}
+        <iframe
+          ref={iframeRef}
+          title="Live prospect table"
+          src={iframeSrc}
+          className="h-[760px] w-full bg-transparent"
+          onLoad={() => {
+            setIframeLoaded(true);
+            sendHostInit();
+            sendHostCommand("refresh-state");
+          }}
+        />
+      </div>
+
+      <div className="sticky bottom-4 z-20 border-t border-[color:var(--border)] bg-[color:var(--surface)]/96 px-4 py-4 backdrop-blur-sm md:px-5">
+        <div className="flex flex-col gap-3 rounded-[22px] border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-4 py-4 md:flex-row md:items-center md:justify-between">
+          <div className="min-w-0">
+            <div className="text-sm font-semibold text-[color:var(--foreground)]">
+              {tableState.hasRows ? `${rowLabel} ready to add` : "Find people first"}
+            </div>
+            <div className="mt-1 text-xs text-[color:var(--muted-foreground)]">
+              {importState.status === "success"
+                ? summaryLine || "Those rows are already in this workflow."
+                : "This adds every row currently in the table to this workflow."}
+            </div>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            {importState.status === "success" ? (
+              <div className="inline-flex items-center gap-2 text-xs text-[color:var(--success)]">
+                <CheckCircle2 className="h-3.5 w-3.5" />
+                Added
+              </div>
+            ) : null}
             <Button
               type="button"
-              variant="outline"
-              onClick={() => {
-                if (normalizedPromptDraft && normalizedPromptDraft !== normalizedTablePrompt) {
-                  sendHostCommand("set-prompt", { prompt: normalizedPromptDraft });
-                }
-                sendHostCommand("set-active-tab", { tab: "search" });
-                sendHostCommand("run-search");
-              }}
-              disabled={!iframeReady || tableBusy || !hasPrompt}
-            >
-              {tableState.isDiscovering ? (
-                <RefreshCw className="h-4 w-4 animate-spin" />
-              ) : (
-                <Search className="h-4 w-4" />
-              )}
-              {tableState.isDiscovering ? "Finding..." : "Find rows"}
-            </Button>
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => {
-                sendHostCommand("set-active-tab", { tab: "columns" });
-                sendHostCommand("run-enrichment");
-              }}
-              disabled={!iframeReady || tableBusy || !tableState.hasRows || !tableState.hasColumns}
-            >
-              {tableState.isEnriching ? (
-                <RefreshCw className="h-4 w-4 animate-spin" />
-              ) : (
-                <Sparkles className="h-4 w-4" />
-              )}
-              {tableState.isEnriching ? "Filling..." : "Fill columns"}
-            </Button>
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => {
-                sendHostCommand("toggle-live", { enabled: !tableState.liveEnabled });
-              }}
-              disabled={!iframeReady || tableBusy}
-            >
-              {tableState.liveEnabled ? "Turn live off" : "Turn live on"}
-            </Button>
-            <Button
-              type="button"
+              size="lg"
               onClick={() => {
                 sendHostCommand("add-leads");
               }}
               disabled={!iframeReady || tableBusy || importState.status === "importing" || !tableState.hasRows}
             >
-              {importState.status === "importing" ? "Adding..." : "Add leads"}
+              {addRowsLabel}
             </Button>
           </div>
         </div>
-
-        <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-[color:var(--muted-foreground)]">
-          <span>{statusCopy}</span>
-          {lastCheckedLabel ? <span>Checked {lastCheckedLabel}</span> : null}
-          {tableState.lastRowsAppended > 0 ? (
-            <span>{tableState.lastRowsAppended} new last run</span>
-          ) : null}
-        </div>
-      </div>
-
-      <div className="space-y-3 px-4 py-4">
-        {importState.status !== "idle" ? (
-          <div className="rounded-lg border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-2 text-xs text-[color:var(--muted-foreground)]">
-            {importState.message}
-            {summaryLine ? <span className="ml-2 text-[color:var(--foreground)]">{summaryLine}</span> : null}
-          </div>
-        ) : normalizedTablePrompt ? (
-          <div className="rounded-lg border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-2 text-xs text-[color:var(--muted-foreground)]">
-            <span className="text-[color:var(--foreground)]">Current criteria:</span> {normalizedTablePrompt}
-          </div>
-        ) : null}
-
-        {importState.parseErrors.length ? (
-          <div className="rounded-lg border border-[color:var(--warning)]/40 bg-[color:var(--warning-soft)] px-3 py-2 text-xs text-[color:var(--warning)]">
-            {importState.parseErrors.slice(0, 5).join(" · ")}
-          </div>
-        ) : null}
-
-        <div className="relative overflow-hidden rounded-2xl border border-[color:var(--border)] bg-[color:var(--surface)]">
-          {!iframeLoaded ? (
-            <div className="absolute inset-0 z-10 flex items-center justify-center bg-[color:var(--surface)]/92">
-              <div className="flex items-center gap-2 text-sm text-[color:var(--muted-foreground)]">
-                <Loader2 className="h-4 w-4 animate-spin" />
-                Loading table...
-              </div>
-            </div>
-          ) : null}
-          <iframe
-            ref={iframeRef}
-            title="Live prospect table"
-            src={iframeSrc}
-            className="h-[760px] w-full bg-transparent"
-            onLoad={() => {
-              setIframeLoaded(true);
-              sendHostInit();
-              sendHostCommand("refresh-state");
-            }}
-          />
-        </div>
-
-        {importState.status === "success" ? (
-          <div className="inline-flex items-center gap-2 text-xs text-[color:var(--success)]">
-            <CheckCircle2 className="h-3.5 w-3.5" />
-            Those leads are now available inside this workflow.
-          </div>
-        ) : null}
       </div>
     </div>
   );

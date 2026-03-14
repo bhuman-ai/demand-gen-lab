@@ -14,7 +14,6 @@ import {
   Plus,
   RefreshCw,
   Rocket,
-  Search,
   Save,
   Sparkles,
   Upload,
@@ -690,6 +689,121 @@ export default function ExperimentClient({
   ]
     .filter(Boolean)
     .join(" · ");
+  const backgroundSourcingDetails = (
+    <details className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3">
+      <summary className="cursor-pointer list-none text-sm font-medium text-[color:var(--foreground)]">
+        Background sourcing
+      </summary>
+      <div className="mt-3 space-y-3">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <div className="text-sm font-medium">Keep finding people automatically</div>
+            <div className="text-xs text-[color:var(--muted-foreground)]">
+              We keep looking until you have {prospectGoalLabel}.
+            </div>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              disabled={sampling}
+              onClick={() => {
+                startBackgroundSourcing();
+              }}
+            >
+              {sampling ? (
+                <RefreshCw className="h-4 w-4 animate-spin" />
+              ) : prospectsReady ? (
+                <Plus className="h-4 w-4" />
+              ) : (
+                <RefreshCw className="h-4 w-4" />
+              )}
+              {autoSourceButtonLabel}
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={!sampling}
+              onClick={() => {
+                void stopAutoSource();
+              }}
+            >
+              Pause
+            </Button>
+          </div>
+        </div>
+        <div className="rounded-lg border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-2">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <span className="text-sm font-medium text-[color:var(--foreground)]">What it is doing</span>
+            <Badge variant={prospectsReady ? "success" : sampling ? "accent" : "muted"}>
+              {autoSourceStatusLabel}
+            </Badge>
+          </div>
+          <div className="mt-2 text-sm text-[color:var(--foreground)]">{autoSourceStatusMessage}</div>
+          {autoSourceMeta ? (
+            <div className="mt-2 text-xs text-[color:var(--muted-foreground)]">{autoSourceMeta}</div>
+          ) : null}
+        </div>
+      </div>
+    </details>
+  );
+  const csvUploadDetails = (
+    <details
+      className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3"
+      open={showCsvImport}
+      onToggle={(event) => {
+        setShowCsvImport(event.currentTarget.open);
+      }}
+    >
+      <summary className="cursor-pointer list-none text-sm font-medium text-[color:var(--foreground)]">
+        Upload CSV
+      </summary>
+      <div className="mt-3 rounded-lg border border-[color:var(--border)] bg-[color:var(--surface)]">
+        <div className="flex flex-wrap items-center justify-between gap-3 px-3 py-3">
+          <div>
+            <div className="text-sm font-medium">Already have a list?</div>
+            <div className="mt-1 text-xs text-[color:var(--muted-foreground)]">
+              Upload a CSV with <code>email</code>, or with <code>name + domain</code>.
+            </div>
+          </div>
+          {csvFileName ? <Badge variant="muted">{csvFileName}</Badge> : null}
+        </div>
+        <div className="space-y-3 border-t border-[color:var(--border)] px-3 py-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <Input
+              type="file"
+              accept=".csv,text/csv"
+              onChange={(event) => {
+                handleCsvFileSelected(event.target.files?.[0] ?? null);
+              }}
+              className="max-w-sm"
+            />
+          </div>
+          <Button
+            type="button"
+            variant="outline"
+            disabled={importingCsv || !csvText.trim()}
+            onClick={async () => {
+              await importCsvLeads();
+            }}
+          >
+            <Upload className="h-4 w-4" />
+            {importingCsv ? "Importing..." : "Import CSV"}
+          </Button>
+          {csvImportSummary ? (
+            <div className="rounded-lg border border-[color:var(--success)]/40 bg-[color:var(--success-soft)] px-3 py-2 text-sm text-[color:var(--success)]">
+              {csvImportSummary}
+            </div>
+          ) : null}
+          {csvImportErrors.length ? (
+            <div className="rounded-lg border border-[color:var(--warning)]/40 bg-[color:var(--warning-soft)] px-3 py-2 text-xs text-[color:var(--warning)]">
+              {csvImportErrors.slice(0, 5).join(" · ")}
+            </div>
+          ) : null}
+        </div>
+      </div>
+    </details>
+  );
 
   const traceQueryDiagnostics = useMemo(() => {
     const rows = sourcingTrace?.probeResults ?? [];
@@ -1029,6 +1143,67 @@ export default function ExperimentClient({
     } finally {
       setDraftingSetupFromAi(false);
     }
+  };
+
+  const handleCsvFileSelected = (file: File | null) => {
+    if (!file) {
+      setCsvFileName("");
+      setCsvText("");
+      return;
+    }
+
+    setCsvFileName(file.name);
+    setCsvImportErrors([]);
+    setCsvImportSummary("");
+    void file
+      .text()
+      .then((text) => {
+        setCsvText(text.slice(0, CSV_MAX_CHARS));
+      })
+      .catch(() => {
+        setCsvText("");
+        setError("Failed to read CSV file");
+      });
+  };
+
+  const importCsvLeads = async () => {
+    if (!experiment || !csvText.trim()) return;
+    setImportingCsv(true);
+    setError("");
+    setCsvImportErrors([]);
+    setCsvImportSummary("");
+    try {
+      const result = await importExperimentProspectsCsvApi(brandId, experiment.id, csvText);
+      setCsvImportErrors(result.parseErrors.slice(0, 10));
+      setCsvImportSummary(
+        `Imported ${result.importedCount} leads${result.parseErrorCount ? ` (${result.parseErrorCount} rows skipped)` : ""}.`
+      );
+      await refresh(false);
+      trackEvent("prospects_imported_csv", {
+        brandId,
+        experimentId: experiment.id,
+        runId: result.runId,
+        importedCount: result.importedCount,
+      });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to import CSV leads");
+    } finally {
+      setImportingCsv(false);
+    }
+  };
+
+  const startBackgroundSourcing = () => {
+    setProspectInputMode("need_data");
+    setAutoSourcePaused(false);
+    if (!prospectsReady) {
+      void autoSourceProspects("gate");
+      return;
+    }
+    const count = requestAdditionalLeadsCount();
+    if (!count) return;
+    void autoSourceProspects("expand", count, {
+      autoSend: canAutoSendOnAddLeads,
+    });
   };
 
   const requestAdditionalLeadsCount = () => {
@@ -1853,51 +2028,6 @@ export default function ExperimentClient({
               </div>
             </div>
 
-            <div className="flex flex-wrap gap-2">
-              <Button
-                type="button"
-                onClick={() => {
-                  setProspectInputMode("need_data");
-                  setAutoSourcePaused(false);
-                  if (!prospectsReady) {
-                    void autoSourceProspects("gate");
-                    return;
-                  }
-                  const count = requestAdditionalLeadsCount();
-                  if (!count) return;
-                  void autoSourceProspects("expand", count, {
-                    autoSend: canAutoSendOnAddLeads,
-                  });
-                }}
-                disabled={sampling}
-              >
-                {sampling ? <RefreshCw className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
-                {autoSourceButtonLabel}
-              </Button>
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => {
-                  setProspectInputMode("have_data");
-                  setShowCsvImport(true);
-                }}
-              >
-                <Upload className="h-4 w-4" />
-                Upload leads
-              </Button>
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => {
-                  setProspectInputMode("have_data");
-                  setShowCsvImport(false);
-                }}
-              >
-                <Search className="h-4 w-4" />
-                Search leads
-              </Button>
-            </div>
-
             <LiveProspectTableEmbed
               initPath={`/api/brands/${brandId}/experiments/${experiment.id}/prospect-table`}
               importPath={`/api/brands/${brandId}/experiments/${experiment.id}/import-prospects/selection`}
@@ -1905,125 +2035,8 @@ export default function ExperimentClient({
                 await refresh(false);
               }}
             />
-
-            {prospectInputMode === "need_data" ? (
-              <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3">
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <div>
-                    <div className="text-sm font-medium">Auto-source leads</div>
-                    <div className="mt-1 text-xs text-[color:var(--muted-foreground)]">{autoSourceStatusMessage}</div>
-                  </div>
-                  {sampling ? (
-                    <Button type="button" variant="outline" onClick={() => void stopAutoSource()}>
-                      Pause
-                    </Button>
-                  ) : null}
-                </div>
-              </div>
-            ) : (
-              <div className="space-y-3 rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3">
-                <div className="text-sm font-medium">
-                  {showCsvImport ? "Upload your lead list" : "Use the live prospect table"}
-                </div>
-                {!showCsvImport ? (
-                  <div className="text-xs text-[color:var(--muted-foreground)]">
-                    The live table above keeps growing during the experiment. Use CSV only if you already have a list.
-                  </div>
-                ) : null}
-                <div className="rounded-lg border border-[color:var(--border)] bg-[color:var(--surface)]">
-                  <div className="flex flex-wrap items-center justify-between gap-3 px-3 py-3">
-                    <div>
-                      <div className="text-sm font-medium">CSV upload</div>
-                      <div className="mt-1 text-xs text-[color:var(--muted-foreground)]">
-                        Upload a CSV with <code>email</code>, or with <code>name + domain</code>.
-                      </div>
-                    </div>
-                    <Button type="button" variant="ghost" onClick={() => setShowCsvImport((current) => !current)}>
-                      {showCsvImport ? "Hide upload" : "Show upload"}
-                    </Button>
-                  </div>
-                  {showCsvImport ? (
-                    <div className="space-y-3 border-t border-[color:var(--border)] px-3 py-3">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <Input
-                          type="file"
-                          accept=".csv,text/csv"
-                          onChange={(event) => {
-                            const file = event.target.files?.[0] ?? null;
-                            if (!file) {
-                              setCsvFileName("");
-                              setCsvText("");
-                              return;
-                            }
-                            setCsvFileName(file.name);
-                            setCsvImportErrors([]);
-                            setCsvImportSummary("");
-                            void file
-                              .text()
-                              .then((text) => {
-                                setCsvText(text.slice(0, CSV_MAX_CHARS));
-                              })
-                              .catch(() => {
-                                setCsvText("");
-                                setError("Failed to read CSV file");
-                              });
-                          }}
-                          className="max-w-sm"
-                        />
-                        {csvFileName ? <Badge variant="muted">{csvFileName}</Badge> : null}
-                      </div>
-                      <Button
-                        type="button"
-                        variant="outline"
-                        disabled={importingCsv || !csvText.trim()}
-                        onClick={async () => {
-                          if (!csvText.trim()) return;
-                          setImportingCsv(true);
-                          setError("");
-                          setCsvImportErrors([]);
-                          setCsvImportSummary("");
-                          try {
-                            const result = await importExperimentProspectsCsvApi(
-                              brandId,
-                              experiment.id,
-                              csvText
-                            );
-                            setCsvImportErrors(result.parseErrors.slice(0, 10));
-                            setCsvImportSummary(
-                              `Imported ${result.importedCount} leads${result.parseErrorCount ? ` (${result.parseErrorCount} rows skipped)` : ""}.`
-                            );
-                            await refresh(false);
-                            trackEvent("prospects_imported_csv", {
-                              brandId,
-                              experimentId: experiment.id,
-                              runId: result.runId,
-                              importedCount: result.importedCount,
-                            });
-                          } catch (err) {
-                            setError(err instanceof Error ? err.message : "Failed to import CSV leads");
-                          } finally {
-                            setImportingCsv(false);
-                          }
-                        }}
-                      >
-                        <Upload className="h-4 w-4" />
-                        {importingCsv ? "Importing..." : "Import CSV"}
-                      </Button>
-                      {csvImportSummary ? (
-                        <div className="rounded-lg border border-[color:var(--success)]/40 bg-[color:var(--success-soft)] px-3 py-2 text-sm text-[color:var(--success)]">
-                          {csvImportSummary}
-                        </div>
-                      ) : null}
-                      {csvImportErrors.length ? (
-                        <div className="rounded-lg border border-[color:var(--warning)]/40 bg-[color:var(--warning-soft)] px-3 py-2 text-xs text-[color:var(--warning)]">
-                          {csvImportErrors.slice(0, 5).join(" · ")}
-                        </div>
-                      ) : null}
-                    </div>
-                  ) : null}
-                </div>
-              </div>
-            )}
+            {backgroundSourcingDetails}
+            {csvUploadDetails}
 
             <details className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3">
               <summary className="cursor-pointer list-none text-sm font-medium text-[color:var(--foreground)]">
@@ -2663,42 +2676,6 @@ export default function ExperimentClient({
               </div>
             </div>
 
-            <div className="space-y-2">
-              <div className="text-sm font-medium">How do you want to get leads?</div>
-              <div className="rounded-lg border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-1">
-                <div className="grid gap-1 md:grid-cols-2">
-                  <button
-                    type="button"
-                    onClick={() => setProspectInputMode("need_data")}
-                    className={`rounded-md px-3 py-2 text-left ${
-                      prospectInputMode === "need_data"
-                        ? "bg-[color:var(--surface)] shadow-sm"
-                        : "bg-transparent"
-                    }`}
-                  >
-                    <div className="text-sm font-medium">Keep finding people for me</div>
-                    <div className="mt-1 text-xs text-[color:var(--muted-foreground)]">
-                      Background mode. We keep looking until you have enough.
-                    </div>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setProspectInputMode("have_data")}
-                    className={`rounded-md px-3 py-2 text-left ${
-                      prospectInputMode === "have_data"
-                        ? "bg-[color:var(--surface)] shadow-sm"
-                        : "bg-transparent"
-                    }`}
-                  >
-                    <div className="text-sm font-medium">Use the live table</div>
-                    <div className="mt-1 text-xs text-[color:var(--muted-foreground)]">
-                      See the table here, review rows, and add the good ones.
-                    </div>
-                  </button>
-                </div>
-              </div>
-            </div>
-
             <LiveProspectTableEmbed
               initPath={`/api/brands/${brandId}/experiments/${experiment.id}/prospect-table`}
               importPath={`/api/brands/${brandId}/experiments/${experiment.id}/import-prospects/selection`}
@@ -2706,179 +2683,8 @@ export default function ExperimentClient({
                 await refresh(false);
               }}
             />
-
-            {prospectInputMode === "need_data" ? (
-              <div className="space-y-3 rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div>
-                    <div className="text-sm font-medium">Find leads for me</div>
-                    <div className="text-xs text-[color:var(--muted-foreground)]">
-                      We keep looking until you have {prospectGoalLabel}.
-                    </div>
-                  </div>
-                  <div className="flex flex-wrap items-center gap-2">
-                    <Button
-                      type="button"
-                      variant="outline"
-                      disabled={sampling}
-                      onClick={() => {
-                        setAutoSourcePaused(false);
-                        if (!prospectsReady) {
-                          void autoSourceProspects("gate");
-                          return;
-                        }
-                        const count = requestAdditionalLeadsCount();
-                        if (!count) return;
-                        void autoSourceProspects("expand", count, {
-                          autoSend: canAutoSendOnAddLeads,
-                        });
-                      }}
-                    >
-                      {sampling ? (
-                        <RefreshCw className="h-4 w-4 animate-spin" />
-                      ) : prospectsReady ? (
-                        <Plus className="h-4 w-4" />
-                      ) : (
-                        <RefreshCw className="h-4 w-4" />
-                      )}
-                      {autoSourceButtonLabel}
-                    </Button>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      disabled={!sampling}
-                      onClick={() => {
-                        void stopAutoSource();
-                      }}
-                    >
-                      Pause
-                    </Button>
-                  </div>
-                </div>
-
-                <div className="rounded-lg border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-2">
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <span className="text-sm font-medium text-[color:var(--foreground)]">What it is doing</span>
-                    <Badge variant={prospectsReady ? "success" : sampling ? "accent" : "muted"}>
-                      {autoSourceStatusLabel}
-                    </Badge>
-                  </div>
-                  <div className="mt-2 text-sm text-[color:var(--foreground)]">
-                    {autoSourceStatusMessage}
-                  </div>
-                  {autoSourceMeta ? (
-                    <div className="mt-2 text-xs text-[color:var(--muted-foreground)]">{autoSourceMeta}</div>
-                  ) : null}
-                </div>
-              </div>
-            ) : (
-              <div className="space-y-3 rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3">
-                <div className="text-sm font-medium">Choose leads yourself</div>
-                <div className="text-xs text-[color:var(--muted-foreground)]">
-                  The live table above stays open for this experiment and keeps collecting new prospects over time. If you already have a list, you can upload a CSV below.
-                </div>
-                <div className="rounded-lg border border-[color:var(--border)] bg-[color:var(--surface)]">
-                  <div className="flex flex-wrap items-center justify-between gap-3 px-3 py-3">
-                    <div>
-                      <div className="text-sm font-medium">Already have a list?</div>
-                      <div className="mt-1 text-xs text-[color:var(--muted-foreground)]">
-                        Upload a CSV with <code>email</code>, or with <code>name + domain</code>.
-                      </div>
-                    </div>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      onClick={() => setShowCsvImport((current) => !current)}
-                    >
-                      {showCsvImport ? "Hide CSV upload" : "Upload CSV instead"}
-                    </Button>
-                  </div>
-                  {showCsvImport ? (
-                    <div className="space-y-3 border-t border-[color:var(--border)] px-3 py-3">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <Input
-                          type="file"
-                          accept=".csv,text/csv"
-                          onChange={(event) => {
-                            const file = event.target.files?.[0] ?? null;
-                            if (!file) {
-                              setCsvFileName("");
-                              setCsvText("");
-                              return;
-                            }
-                            setCsvFileName(file.name);
-                            setCsvImportErrors([]);
-                            setCsvImportSummary("");
-                            void file
-                              .text()
-                              .then((text) => {
-                                setCsvText(text.slice(0, CSV_MAX_CHARS));
-                              })
-                              .catch(() => {
-                                setCsvText("");
-                                setError("Failed to read CSV file");
-                              });
-                          }}
-                          className="max-w-sm"
-                        />
-                        {csvFileName ? (
-                          <Badge variant="muted">{csvFileName}</Badge>
-                        ) : null}
-                      </div>
-                      <div className="flex flex-wrap gap-2">
-                        <Button
-                          type="button"
-                          variant="outline"
-                          disabled={importingCsv || !csvText.trim()}
-                          onClick={async () => {
-                            if (!csvText.trim()) return;
-                            setImportingCsv(true);
-                            setError("");
-                            setCsvImportErrors([]);
-                            setCsvImportSummary("");
-                            try {
-                              const result = await importExperimentProspectsCsvApi(
-                                brandId,
-                                experiment.id,
-                                csvText
-                              );
-                              setCsvImportErrors(result.parseErrors.slice(0, 10));
-                              setCsvImportSummary(
-                                `Imported ${result.importedCount} leads${result.parseErrorCount ? ` (${result.parseErrorCount} rows skipped)` : ""}.`
-                              );
-                              await refresh(false);
-                              trackEvent("prospects_imported_csv", {
-                                brandId,
-                                experimentId: experiment.id,
-                                runId: result.runId,
-                                importedCount: result.importedCount,
-                              });
-                            } catch (err) {
-                              setError(err instanceof Error ? err.message : "Failed to import CSV leads");
-                            } finally {
-                              setImportingCsv(false);
-                            }
-                          }}
-                        >
-                          <Upload className="h-4 w-4" />
-                          {importingCsv ? "Importing..." : "Import CSV Leads"}
-                        </Button>
-                      </div>
-                      {csvImportSummary ? (
-                        <div className="rounded-lg border border-[color:var(--success)]/40 bg-[color:var(--success-soft)] px-3 py-2 text-sm text-[color:var(--success)]">
-                          {csvImportSummary}
-                        </div>
-                      ) : null}
-                      {csvImportErrors.length ? (
-                        <div className="rounded-lg border border-[color:var(--warning)]/40 bg-[color:var(--warning-soft)] px-3 py-2 text-xs text-[color:var(--warning)]">
-                          {csvImportErrors.slice(0, 5).join(" · ")}
-                        </div>
-                      ) : null}
-                    </div>
-                  ) : null}
-                </div>
-              </div>
-            )}
+            {backgroundSourcingDetails}
+            {csvUploadDetails}
 
             {hasPreviewEmailLookupSignal ? (
               <div

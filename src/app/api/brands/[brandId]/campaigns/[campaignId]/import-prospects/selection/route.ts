@@ -4,6 +4,8 @@ import {
   createOutreachEvent,
   createOutreachRun,
   getBrandOutreachAssignment,
+  listOwnerRuns,
+  listRunLeads,
   updateOutreachRun,
   upsertRunLeads,
 } from "@/lib/outreach-data";
@@ -314,6 +316,35 @@ export async function POST(
     );
   }
 
+  const existingRuns = await listOwnerRuns(brandId, "campaign", campaign.id);
+  const existingLeadLists = await Promise.all(existingRuns.map((run) => listRunLeads(run.id)));
+  const existingEmails = new Set(
+    existingLeadLists
+      .flat()
+      .map((lead) => String(lead.email ?? "").trim().toLowerCase())
+      .filter(Boolean)
+  );
+
+  const newLeads = finalLeads.filter((lead) => !existingEmails.has(lead.email.toLowerCase()));
+  const dedupedCount = Math.max(0, finalLeads.length - newLeads.length);
+
+  if (!newLeads.length) {
+    return NextResponse.json(
+      {
+        runId: "",
+        status: "completed",
+        attemptedCount: parsed.candidates.length,
+        importedCount: 0,
+        skippedCount: Math.max(0, parsed.candidates.length),
+        matchedCount: enrichment.matched,
+        dedupedCount,
+        parseErrorCount: parseErrors.length,
+        parseErrors: parseErrors.slice(0, 20),
+      },
+      { status: 200 }
+    );
+  }
+
   const assignment = await getBrandOutreachAssignment(brandId);
   const run = await createOutreachRun({
     brandId,
@@ -330,7 +361,7 @@ export async function POST(
     minSpacingMinutes: campaign.scalePolicy.minSpacingMinutes,
   });
 
-  const imported = await upsertRunLeads(run.id, brandId, campaign.id, finalLeads);
+  const imported = await upsertRunLeads(run.id, brandId, campaign.id, newLeads);
 
   await updateOutreachRun(run.id, {
     status: "completed",
@@ -363,6 +394,7 @@ export async function POST(
       attemptedCount: parsed.candidates.length,
       skippedCount: Math.max(0, parsed.candidates.length - imported.length),
       matchedCount: enrichment.matched,
+      dedupedCount,
       parseErrorCount: parseErrors.length,
       source: "enrichanything_live_table_campaign",
       tableTitle: normalizeCell(body.tableTitle),
@@ -379,6 +411,7 @@ export async function POST(
       importedCount: imported.length,
       skippedCount: Math.max(0, parsed.candidates.length - imported.length),
       matchedCount: enrichment.matched,
+      dedupedCount,
       parseErrorCount: parseErrors.length,
       parseErrors: parseErrors.slice(0, 20),
     },

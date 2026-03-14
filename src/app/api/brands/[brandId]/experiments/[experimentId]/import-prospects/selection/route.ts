@@ -8,6 +8,8 @@ import {
   createOutreachEvent,
   createOutreachRun,
   getBrandOutreachAssignment,
+  listOwnerRuns,
+  listRunLeads,
   updateOutreachRun,
   upsertRunLeads,
 } from "@/lib/outreach-data";
@@ -330,6 +332,35 @@ export async function POST(
     );
   }
 
+  const existingRuns = await listOwnerRuns(brandId, "experiment", experiment.id);
+  const existingLeadLists = await Promise.all(existingRuns.map((run) => listRunLeads(run.id)));
+  const existingEmails = new Set(
+    existingLeadLists
+      .flat()
+      .map((lead) => String(lead.email ?? "").trim().toLowerCase())
+      .filter(Boolean)
+  );
+
+  const newLeads = finalLeads.filter((lead) => !existingEmails.has(lead.email.toLowerCase()));
+  const dedupedCount = Math.max(0, finalLeads.length - newLeads.length);
+
+  if (!newLeads.length) {
+    return NextResponse.json(
+      {
+        runId: "",
+        status: "completed",
+        attemptedCount: parsed.candidates.length,
+        importedCount: 0,
+        skippedCount: Math.max(0, parsed.candidates.length),
+        matchedCount: enrichment.matched,
+        dedupedCount,
+        parseErrorCount: parseErrors.length,
+        parseErrors: parseErrors.slice(0, 20),
+      },
+      { status: 200 }
+    );
+  }
+
   const assignment = await getBrandOutreachAssignment(brandId);
   const run = await createOutreachRun({
     brandId,
@@ -346,7 +377,7 @@ export async function POST(
     run.id,
     brandId,
     experiment.runtime.campaignId,
-    finalLeads
+    newLeads
   );
 
   await updateOutreachRun(run.id, {
@@ -375,14 +406,15 @@ export async function POST(
   await createOutreachEvent({
     runId: run.id,
     eventType: "lead_imported_selection",
-    payload: {
-      importedCount: imported.length,
-      attemptedCount: parsed.candidates.length,
-      skippedCount: Math.max(0, parsed.candidates.length - imported.length),
-      matchedCount: enrichment.matched,
-      parseErrorCount: parseErrors.length,
-      source: "enrichanything_embed",
-      tableTitle: normalizeCell(body.tableTitle),
+      payload: {
+        importedCount: imported.length,
+        attemptedCount: parsed.candidates.length,
+        skippedCount: Math.max(0, parsed.candidates.length - imported.length),
+        matchedCount: enrichment.matched,
+        dedupedCount,
+        parseErrorCount: parseErrors.length,
+        source: "enrichanything_embed",
+        tableTitle: normalizeCell(body.tableTitle),
       prompt: normalizeCell(body.prompt),
       entityType: normalizeCell(body.entityType),
     },
@@ -400,6 +432,7 @@ export async function POST(
       importedCount: imported.length,
       skippedCount: Math.max(0, parsed.candidates.length - imported.length),
       matchedCount: enrichment.matched,
+      dedupedCount,
       parseErrorCount: parseErrors.length,
       parseErrors: parseErrors.slice(0, 20),
     },

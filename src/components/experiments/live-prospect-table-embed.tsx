@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
-import { CheckCircle2, Loader2, RefreshCw, Search, Sparkles } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { CheckCircle2, ChevronDown, ChevronUp, Loader2, RefreshCw, Search, Sparkles } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -12,16 +12,21 @@ const EMBED_IMPORT_MESSAGE_TYPE = "enrichanything:import-table";
 const EMBED_HOST_INIT_MESSAGE_TYPE = "lastb2b:embed-init";
 const EMBED_HOST_COMMAND_MESSAGE_TYPE = "lastb2b:embed-command";
 
+type ImportMode = "auto" | "manual";
+type ActivityTone = "neutral" | "success" | "warning" | "danger";
+
 type ImportState =
   | {
       status: "idle";
       message: string;
       parseErrors: string[];
+      mode: null;
     }
   | {
       status: "importing";
       message: string;
       parseErrors: string[];
+      mode: ImportMode;
     }
   | {
       status: "success";
@@ -31,12 +36,15 @@ type ImportState =
       skippedCount: number;
       matchedCount: number;
       attemptedCount: number;
+      dedupedCount: number;
       runId: string;
+      mode: ImportMode;
     }
   | {
       status: "error";
       message: string;
       parseErrors: string[];
+      mode: ImportMode | null;
     };
 
 type TableTab = "search" | "columns" | "row";
@@ -68,8 +76,16 @@ type LiveProspectTableEmbedProps = {
     skippedCount: number;
     matchedCount: number;
     attemptedCount: number;
+    dedupedCount: number;
     parseErrors: string[];
   }) => void | Promise<void>;
+};
+
+type ActivityItem = {
+  id: string;
+  message: string;
+  tone: ActivityTone;
+  meta: string;
 };
 
 function asObject(value: unknown): Record<string, unknown> {
@@ -183,13 +199,24 @@ export default function LiveProspectTableEmbed({
 }: LiveProspectTableEmbedProps) {
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
   const importBusyRef = useRef(false);
+  const pendingImportModeRef = useRef<ImportMode>("manual");
+  const lastAutoImportSignatureRef = useRef("");
+  const previousStateRef = useRef({
+    prompt: "",
+    isDiscovering: false,
+    isEnriching: false,
+    liveEnabled: false,
+  });
   const [iframeSrc, setIframeSrc] = useState("");
   const [iframeOrigin, setIframeOrigin] = useState("");
   const [iframeLoaded, setIframeLoaded] = useState(false);
   const [iframeReady, setIframeReady] = useState(false);
   const [iframeError, setIframeError] = useState("");
   const [loadingConfig, setLoadingConfig] = useState(true);
+  const [autoAddEnabled, setAutoAddEnabled] = useState(true);
+  const [reviewOpen, setReviewOpen] = useState(false);
   const [promptDraft, setPromptDraft] = useState("");
+  const [activityItems, setActivityItems] = useState<ActivityItem[]>([]);
   const [tableState, setTableState] = useState<EmbeddedTableState>({
     title: "",
     prompt: "",
@@ -209,32 +236,59 @@ export default function LiveProspectTableEmbed({
   });
   const [importState, setImportState] = useState<ImportState>({
     status: "idle",
-    message: "Rows added here can be sent straight into this workflow.",
+    message: "AI will keep adding good leads automatically.",
     parseErrors: [],
+    mode: null,
   });
 
-  const postToEmbed = (message: Record<string, unknown>) => {
+  const pushActivity = (message: string, tone: ActivityTone = "neutral") => {
+    const trimmed = message.trim();
+    if (!trimmed) return;
+
+    const meta = new Date().toLocaleTimeString([], {
+      hour: "numeric",
+      minute: "2-digit",
+    });
+
+    setActivityItems((current) => {
+      if (current[0]?.message === trimmed) {
+        return current;
+      }
+
+      return [
+        {
+          id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+          message: trimmed,
+          tone,
+          meta,
+        },
+        ...current,
+      ].slice(0, 4);
+    });
+  };
+
+  const postToEmbed = useCallback((message: Record<string, unknown>) => {
     if (!iframeRef.current?.contentWindow || !iframeOrigin) {
       return;
     }
 
     iframeRef.current.contentWindow.postMessage(message, iframeOrigin);
-  };
+  }, [iframeOrigin]);
 
-  const sendHostInit = () => {
+  const sendHostInit = useCallback(() => {
     postToEmbed({
       type: EMBED_HOST_INIT_MESSAGE_TYPE,
       theme: readHostThemeTokens(),
     });
-  };
+  }, [postToEmbed]);
 
-  const sendHostCommand = (command: string, payload: Record<string, unknown> = {}) => {
+  const sendHostCommand = useCallback((command: string, payload: Record<string, unknown> = {}) => {
     postToEmbed({
       type: EMBED_HOST_COMMAND_MESSAGE_TYPE,
       command,
       payload,
     });
-  };
+  }, [postToEmbed]);
 
   useEffect(() => {
     let canceled = false;
@@ -362,6 +416,7 @@ export default function LiveProspectTableEmbed({
           status: "error",
           message: "No leads were sent from the table.",
           parseErrors: [],
+          mode: null,
         });
         postResult({
           type: "lastb2b:import-result",
@@ -373,11 +428,22 @@ export default function LiveProspectTableEmbed({
       }
 
       importBusyRef.current = true;
+      const importMode = pendingImportModeRef.current;
       setImportState({
         status: "importing",
-        message: `Adding ${rows.length} lead${rows.length === 1 ? "" : "s"}...`,
+        message:
+          importMode === "auto"
+            ? `Checking ${rows.length} row${rows.length === 1 ? "" : "s"} and adding the good leads automatically...`
+            : `Checking ${rows.length} row${rows.length === 1 ? "" : "s"} now...`,
         parseErrors: [],
+        mode: importMode,
       });
+      pushActivity(
+        importMode === "auto"
+          ? "Checking the latest rows and adding the good leads automatically."
+          : "Checking the current rows now.",
+        "neutral"
+      );
 
       try {
         const response = await fetch(importPath, {
@@ -396,14 +462,18 @@ export default function LiveProspectTableEmbed({
         const skippedCount = Number(result.skippedCount ?? 0);
         const matchedCount = Number(result.matchedCount ?? 0);
         const attemptedCount = Number(result.attemptedCount ?? 0);
+        const dedupedCount = Number(result.dedupedCount ?? 0);
         const runId = String(result.runId ?? "").trim();
         const parseErrors = Array.isArray(result.parseErrors)
           ? result.parseErrors.map((value) => String(value ?? ""))
           : [];
-        const message =
-          importedCount > 0
-            ? `Added ${importedCount} lead${importedCount === 1 ? "" : "s"}.`
-            : "No leads were added from the table.";
+        const message = importedCount > 0
+          ? importMode === "auto"
+            ? `AI added ${importedCount} lead${importedCount === 1 ? "" : "s"}.`
+            : `Added ${importedCount} lead${importedCount === 1 ? "" : "s"}.`
+          : dedupedCount > 0
+            ? "The good leads in those rows were already added."
+            : "No new verified work emails were ready to add.";
 
         setImportState({
           status: "success",
@@ -413,8 +483,18 @@ export default function LiveProspectTableEmbed({
           skippedCount,
           matchedCount,
           attemptedCount,
+          dedupedCount,
           runId,
+          mode: importMode,
         });
+        pushActivity(
+          importedCount > 0
+            ? message
+            : dedupedCount > 0
+              ? `Checked ${attemptedCount} row${attemptedCount === 1 ? "" : "s"}. The good leads were already here.`
+              : `Checked ${attemptedCount} row${attemptedCount === 1 ? "" : "s"}. No new verified work emails yet.`,
+          importedCount > 0 ? "success" : dedupedCount > 0 ? "neutral" : "warning"
+        );
 
         postResult({
           type: "lastb2b:import-result",
@@ -424,6 +504,7 @@ export default function LiveProspectTableEmbed({
           skippedCount,
           matchedCount,
           attemptedCount,
+          dedupedCount,
           runId,
           message,
         });
@@ -435,6 +516,7 @@ export default function LiveProspectTableEmbed({
             skippedCount,
             matchedCount,
             attemptedCount,
+            dedupedCount,
             parseErrors,
           })
         ).catch(() => undefined);
@@ -445,7 +527,9 @@ export default function LiveProspectTableEmbed({
           status: "error",
           message,
           parseErrors: [],
+          mode: importMode,
         });
+        pushActivity(message, "danger");
         postResult({
           type: "lastb2b:import-result",
           requestId,
@@ -463,9 +547,28 @@ export default function LiveProspectTableEmbed({
     };
   }, [iframeOrigin, importPath, onImported]);
 
+  const requestImport = useCallback((mode: ImportMode) => {
+    if (!iframeReady || importBusyRef.current || !tableState.hasRows) {
+      return;
+    }
+
+    pendingImportModeRef.current = mode;
+    sendHostCommand("add-leads");
+  }, [iframeReady, sendHostCommand, tableState.hasRows]);
+
   const summaryLine = useMemo(() => {
     if (importState.status !== "success") return null;
-    return `${importState.attemptedCount} checked · ${importState.matchedCount} matched · ${importState.skippedCount} skipped`;
+    const parts = [
+      `${importState.attemptedCount} checked`,
+      `${importState.matchedCount} matched`,
+    ];
+    if (importState.dedupedCount > 0) {
+      parts.push(`${importState.dedupedCount} already here`);
+    }
+    if (importState.skippedCount > 0) {
+      parts.push(`${importState.skippedCount} skipped`);
+    }
+    return parts.join(" · ");
   }, [importState]);
 
   const tableBusy = tableState.isDiscovering || tableState.isEnriching || tableState.isLiveRunning;
@@ -475,6 +578,12 @@ export default function LiveProspectTableEmbed({
   const lastCheckedLabel = formatTimestamp(tableState.lastSuccessAt);
   const nextRunLabel = formatTimestamp(tableState.nextRunAt);
   const rowLabel = `${tableState.rowCount} row${tableState.rowCount === 1 ? "" : "s"}`;
+  const autoImportSignature = [
+    normalizedTablePrompt,
+    tableState.rowCount,
+    tableState.lastSuccessAt,
+    tableState.lastRowsAppended,
+  ].join("|");
   const statusCopy = tableState.isDiscovering
     ? "Finding rows..."
     : tableState.isEnriching
@@ -488,9 +597,15 @@ export default function LiveProspectTableEmbed({
           : "Live is off.";
   const assistantNote =
     importState.status === "importing"
-      ? "Adding the rows in this table to this workflow."
+      ? importState.mode === "auto"
+        ? "Checking the latest rows and keeping the good leads automatically."
+        : "Checking the current rows now."
       : importState.status === "success"
-        ? "Those rows are in. You can keep searching if you want more."
+        ? importState.importedCount > 0
+          ? "AI added the latest good leads. Open review if you want to inspect the table."
+          : importState.dedupedCount > 0
+            ? "The latest good leads were already in this experiment."
+            : "AI checked the latest rows but did not find new verified work emails yet."
         : importState.status === "error"
           ? importState.message
           : tableState.isDiscovering
@@ -498,11 +613,81 @@ export default function LiveProspectTableEmbed({
             : tableState.isEnriching
               ? "Filling the extra columns for the rows already here."
               : normalizedPromptDraft && normalizedPromptDraft !== normalizedTablePrompt
-                ? "Press Find to use your new request."
+                ? "Press Update search to use your new request."
                 : normalizedTablePrompt
                   ? `Looking for: ${normalizedTablePrompt}`
                   : "Try “founders at self-funded SaaS companies in Europe”.";
-  const addRowsLabel = importState.status === "importing" ? "Adding rows..." : "Add current rows";
+  const manualAddLabel = importState.status === "importing" ? "Checking rows..." : "Add current table now";
+
+  useEffect(() => {
+    if (!iframeReady) return;
+
+    const previous = previousStateRef.current;
+
+    if (tableState.prompt && tableState.prompt !== previous.prompt) {
+      pushActivity(`Now looking for ${tableState.prompt}.`, "neutral");
+    }
+
+    if (tableState.isDiscovering && !previous.isDiscovering) {
+      pushActivity("Looking for more people who match your request.", "neutral");
+    }
+
+    if (tableState.isEnriching && !previous.isEnriching) {
+      pushActivity("Checking work emails and filling in missing details.", "neutral");
+    }
+
+    if (tableState.liveEnabled !== previous.liveEnabled) {
+      pushActivity(
+        tableState.liveEnabled
+          ? "AI will keep checking this search automatically."
+          : "Auto-checking is paused.",
+        tableState.liveEnabled ? "success" : "warning"
+      );
+    }
+
+    previousStateRef.current = {
+      prompt: tableState.prompt,
+      isDiscovering: tableState.isDiscovering,
+      isEnriching: tableState.isEnriching,
+      liveEnabled: tableState.liveEnabled,
+    };
+  }, [
+    iframeReady,
+    tableState.isDiscovering,
+    tableState.isEnriching,
+    tableState.liveEnabled,
+    tableState.prompt,
+  ]);
+
+  useEffect(() => {
+    if (!autoAddEnabled || !iframeReady || importState.status === "importing" || tableBusy || !tableState.hasRows) {
+      return;
+    }
+
+    const hasFreshRows =
+      tableState.lastRowsAppended > 0 || Boolean(tableState.lastSuccessAt) || tableState.rowCount > 0;
+    if (!hasFreshRows) {
+      return;
+    }
+
+    if (lastAutoImportSignatureRef.current === autoImportSignature) {
+      return;
+    }
+
+    lastAutoImportSignatureRef.current = autoImportSignature;
+    requestImport("auto");
+  }, [
+    autoAddEnabled,
+    autoImportSignature,
+    iframeReady,
+    importState.status,
+    requestImport,
+    tableBusy,
+    tableState.hasRows,
+    tableState.lastRowsAppended,
+    tableState.lastSuccessAt,
+    tableState.rowCount,
+  ]);
 
   if (loadingConfig) {
     return (
@@ -532,124 +717,153 @@ export default function LiveProspectTableEmbed({
               Prospects
             </div>
             <div className="mt-1 text-sm text-[color:var(--muted-foreground)]">
-              Tell AI who to find. Then add the rows you want.
+              Tell AI who to find. It keeps the good leads automatically.
             </div>
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <Badge variant="muted">{rowLabel}</Badge>
             <Badge variant={tableState.liveEnabled ? "success" : "muted"}>
-              {tableState.liveEnabled ? "Live" : "Manual"}
+              {tableState.liveEnabled ? "Live" : "Paused"}
+            </Badge>
+            <Badge variant={autoAddEnabled ? "success" : "muted"}>
+              {autoAddEnabled ? "Auto-add on" : "Auto-add off"}
             </Badge>
           </div>
         </div>
 
         <div className="mt-4 rounded-[24px] border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3 md:p-4">
-          <div className="flex gap-3">
-            <div className="mt-1 hidden h-10 w-10 shrink-0 items-center justify-center rounded-[16px] border border-[color:var(--border)] bg-[color:var(--surface)] text-xs font-semibold text-[color:var(--foreground)] md:flex">
-              AI
-            </div>
-            <div className="min-w-0 flex-1 space-y-3">
-              <div className="flex flex-col gap-2 xl:flex-row">
-                <Input
-                  value={promptDraft}
-                  onChange={(event) => {
-                    setPromptDraft(event.target.value);
-                  }}
-                  onKeyDown={(event) => {
-                    if (event.key !== "Enter") return;
-                    event.preventDefault();
-                    if (!iframeReady || tableBusy || !hasPrompt) return;
+          <div className="min-w-0 space-y-3">
+            <div className="flex flex-col gap-2 xl:flex-row">
+              <Input
+                value={promptDraft}
+                onChange={(event) => {
+                  setPromptDraft(event.target.value);
+                }}
+                onKeyDown={(event) => {
+                  if (event.key !== "Enter") return;
+                  event.preventDefault();
+                  if (!iframeReady || tableBusy || !hasPrompt) return;
+                  if (normalizedPromptDraft && normalizedPromptDraft !== normalizedTablePrompt) {
+                    sendHostCommand("set-prompt", { prompt: normalizedPromptDraft });
+                  }
+                  sendHostCommand("set-active-tab", { tab: "search" });
+                  sendHostCommand("run-search");
+                }}
+                placeholder="Who do you want to find?"
+                className="h-12 flex-1 rounded-[16px] bg-[color:var(--surface)]"
+              />
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  type="button"
+                  size="lg"
+                  onClick={() => {
                     if (normalizedPromptDraft && normalizedPromptDraft !== normalizedTablePrompt) {
                       sendHostCommand("set-prompt", { prompt: normalizedPromptDraft });
                     }
                     sendHostCommand("set-active-tab", { tab: "search" });
                     sendHostCommand("run-search");
                   }}
-                  placeholder="Find self-funded SaaS founders who might want AWS credits"
-                  className="h-12 flex-1 rounded-[16px] bg-[color:var(--surface)]"
-                />
-                <div className="flex flex-wrap gap-2">
-                  <Button
-                    type="button"
-                    size="lg"
-                    onClick={() => {
-                      if (normalizedPromptDraft && normalizedPromptDraft !== normalizedTablePrompt) {
-                        sendHostCommand("set-prompt", { prompt: normalizedPromptDraft });
-                      }
-                      sendHostCommand("set-active-tab", { tab: "search" });
-                      sendHostCommand("run-search");
-                    }}
-                    disabled={!iframeReady || tableBusy || !hasPrompt}
-                  >
-                    {tableState.isDiscovering ? (
-                      <RefreshCw className="h-4 w-4 animate-spin" />
-                    ) : (
-                      <Search className="h-4 w-4" />
-                    )}
-                    {tableState.isDiscovering ? "Finding..." : "Find people"}
-                  </Button>
-                  <Button
-                    type="button"
-                    size="lg"
-                    variant="outline"
-                    onClick={() => {
-                      sendHostCommand("toggle-live", { enabled: !tableState.liveEnabled });
-                    }}
-                    disabled={!iframeReady || tableBusy}
-                  >
-                    {tableState.liveEnabled ? "Live on" : "Live off"}
-                  </Button>
-                </div>
-              </div>
-
-              <div className="rounded-[18px] border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-3">
-                <div className="text-[11px] font-medium uppercase tracking-[0.16em] text-[color:var(--muted-foreground)]">
-                  AI note
-                </div>
-                <div className="mt-2 text-sm text-[color:var(--foreground)]">{assistantNote}</div>
-              </div>
-
-              <div className="flex flex-wrap items-center gap-2">
-                {[
-                  { label: "Criteria", tab: "search" as const },
-                  { label: "Columns", tab: "columns" as const },
-                  { label: "Details", tab: "row" as const },
-                ].map((item) => (
-                  <Button
-                    key={item.tab}
-                    type="button"
-                    size="sm"
-                    variant={tableState.activeTab === item.tab ? "secondary" : "ghost"}
-                    onClick={() => {
-                      sendHostCommand("set-active-tab", { tab: item.tab });
-                    }}
-                    disabled={!iframeReady}
-                  >
-                    {item.label}
-                  </Button>
-                ))}
+                  disabled={!iframeReady || tableBusy || !hasPrompt}
+                >
+                  {tableState.isDiscovering ? (
+                    <RefreshCw className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Search className="h-4 w-4" />
+                  )}
+                  {tableState.isDiscovering ? "Finding..." : "Update search"}
+                </Button>
                 <Button
                   type="button"
-                  size="sm"
-                  variant="ghost"
+                  size="lg"
+                  variant="outline"
                   onClick={() => {
-                    sendHostCommand("set-active-tab", { tab: "columns" });
-                    sendHostCommand("run-enrichment");
+                    sendHostCommand("toggle-live", { enabled: !tableState.liveEnabled });
                   }}
-                  disabled={!iframeReady || tableBusy || !tableState.hasRows || !tableState.hasColumns}
+                  disabled={!iframeReady || tableBusy}
                 >
-                  {tableState.isEnriching ? (
-                    <RefreshCw className="h-3.5 w-3.5 animate-spin" />
-                  ) : (
-                    <Sparkles className="h-3.5 w-3.5" />
-                  )}
-                  {tableState.isEnriching ? "Filling..." : "Fill columns"}
+                  {tableState.liveEnabled ? "Pause" : "Resume"}
                 </Button>
+                <Button
+                  type="button"
+                  size="lg"
+                  variant={autoAddEnabled ? "secondary" : "outline"}
+                  onClick={() => {
+                    setAutoAddEnabled((current) => !current);
+                  }}
+                >
+                  {autoAddEnabled ? "Auto-add on" : "Auto-add off"}
+                </Button>
+              </div>
+            </div>
+
+            <div className="rounded-[18px] border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-3">
+              <div className="text-[11px] font-medium uppercase tracking-[0.16em] text-[color:var(--muted-foreground)]">
+                AI note
+              </div>
+              <div className="mt-2 text-sm text-[color:var(--foreground)]">{assistantNote}</div>
+            </div>
+
+            <div className="grid gap-2 sm:grid-cols-3">
+              <div className="rounded-[16px] border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-3">
+                <div className="text-[11px] font-medium uppercase tracking-[0.16em] text-[color:var(--muted-foreground)]">
+                  Auto-add
+                </div>
+                <div className="mt-2 text-sm font-semibold text-[color:var(--foreground)]">
+                  {autoAddEnabled ? "Adding good leads for you" : "Waiting for your review"}
+                </div>
+              </div>
+              <div className="rounded-[16px] border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-3">
+                <div className="text-[11px] font-medium uppercase tracking-[0.16em] text-[color:var(--muted-foreground)]">
+                  In review
+                </div>
+                <div className="mt-2 text-sm font-semibold text-[color:var(--foreground)]">{rowLabel}</div>
+              </div>
+              <div className="rounded-[16px] border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-3">
+                <div className="text-[11px] font-medium uppercase tracking-[0.16em] text-[color:var(--muted-foreground)]">
+                  Last check
+                </div>
+                <div className="mt-2 text-sm font-semibold text-[color:var(--foreground)]">
+                  {lastCheckedLabel || "Waiting for the first run"}
+                </div>
+              </div>
+            </div>
+
+            <div className="rounded-[18px] border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="text-[11px] font-medium uppercase tracking-[0.16em] text-[color:var(--muted-foreground)]">
+                  Live activity
+                </div>
                 <div className="text-xs text-[color:var(--muted-foreground)]">
                   {statusCopy}
-                  {lastCheckedLabel ? ` · checked ${lastCheckedLabel}` : ""}
                   {tableState.lastRowsAppended > 0 ? ` · ${tableState.lastRowsAppended} new last run` : ""}
                 </div>
+              </div>
+              <div className="mt-3 space-y-2">
+                {activityItems.length ? (
+                  activityItems.map((item) => (
+                    <div
+                      key={item.id}
+                      className={`flex items-start justify-between gap-3 rounded-[14px] border px-3 py-2 text-sm ${
+                        item.tone === "success"
+                          ? "border-[color:var(--success)]/30 bg-[color:var(--success-soft)] text-[color:var(--success)]"
+                          : item.tone === "warning"
+                            ? "border-[color:var(--warning)]/30 bg-[color:var(--warning-soft)] text-[color:var(--warning)]"
+                            : item.tone === "danger"
+                              ? "border-[color:var(--danger)]/30 bg-[color:var(--danger-soft)] text-[color:var(--danger)]"
+                              : "border-[color:var(--border)] bg-[color:var(--surface-muted)] text-[color:var(--foreground)]"
+                      }`}
+                    >
+                      <span className="min-w-0 flex-1">{item.message}</span>
+                      <span className="shrink-0 text-[11px] uppercase tracking-[0.14em] opacity-70">
+                        {item.meta}
+                      </span>
+                    </div>
+                  ))
+                ) : (
+                  <div className="rounded-[14px] border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-2 text-sm text-[color:var(--muted-foreground)]">
+                    AI is ready. Tell it who to find and it will keep adding the good leads here.
+                  </div>
+                )}
               </div>
             </div>
           </div>
@@ -662,57 +876,119 @@ export default function LiveProspectTableEmbed({
         ) : null}
       </div>
 
-      <div className="relative border-t border-[color:var(--border)]">
-        {!iframeLoaded ? (
-          <div className="absolute inset-0 z-10 flex items-center justify-center bg-[color:var(--surface)]/92">
-            <div className="flex items-center gap-2 text-sm text-[color:var(--muted-foreground)]">
-              <Loader2 className="h-4 w-4 animate-spin" />
-              Loading table...
-            </div>
-          </div>
-        ) : null}
-        <iframe
-          ref={iframeRef}
-          title="Live prospect table"
-          src={iframeSrc}
-          className="h-[760px] w-full bg-transparent"
-          onLoad={() => {
-            setIframeLoaded(true);
-            sendHostInit();
-            sendHostCommand("refresh-state");
-          }}
-        />
-      </div>
-
-      <div className="sticky bottom-4 z-20 border-t border-[color:var(--border)] bg-[color:var(--surface)]/96 px-4 py-4 backdrop-blur-sm md:px-5">
-        <div className="flex flex-col gap-3 rounded-[22px] border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-4 py-4 md:flex-row md:items-center md:justify-between">
-          <div className="min-w-0">
-            <div className="text-sm font-semibold text-[color:var(--foreground)]">
-              {tableState.hasRows ? `${rowLabel} ready to add` : "Find people first"}
-            </div>
-            <div className="mt-1 text-xs text-[color:var(--muted-foreground)]">
-              {importState.status === "success"
-                ? summaryLine || "Those rows are already in this workflow."
-                : "This adds every row currently in the table to this workflow."}
-            </div>
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
-            {importState.status === "success" ? (
-              <div className="inline-flex items-center gap-2 text-xs text-[color:var(--success)]">
-                <CheckCircle2 className="h-3.5 w-3.5" />
-                Added
+      <div className="border-t border-[color:var(--border)] px-4 py-4 md:px-5">
+        <div className="rounded-[24px] border border-[color:var(--border)] bg-[color:var(--surface-muted)]">
+          <button
+            type="button"
+            onClick={() => {
+              setReviewOpen((current) => !current);
+            }}
+            className="flex w-full items-center justify-between gap-3 px-4 py-4 text-left"
+          >
+            <div>
+              <div className="text-sm font-semibold text-[color:var(--foreground)]">Review leads</div>
+              <div className="mt-1 text-sm text-[color:var(--muted-foreground)]">
+                Open the table if you want to inspect rows, change columns, or add the current rows yourself.
               </div>
-            ) : null}
-            <Button
-              type="button"
-              size="lg"
-              onClick={() => {
-                sendHostCommand("add-leads");
-              }}
-              disabled={!iframeReady || tableBusy || importState.status === "importing" || !tableState.hasRows}
-            >
-              {addRowsLabel}
-            </Button>
+            </div>
+            <div className="flex items-center gap-2">
+              {summaryLine ? <Badge variant="muted">{summaryLine}</Badge> : null}
+              <Badge variant="muted">{reviewOpen ? "Open" : "Closed"}</Badge>
+              {reviewOpen ? (
+                <ChevronUp className="h-4 w-4 text-[color:var(--muted-foreground)]" />
+              ) : (
+                <ChevronDown className="h-4 w-4 text-[color:var(--muted-foreground)]" />
+              )}
+            </div>
+          </button>
+
+          <div
+            className={`overflow-hidden transition-[max-height,opacity] duration-300 ease-out ${
+              reviewOpen ? "max-h-[980px] opacity-100" : "max-h-0 opacity-0"
+            }`}
+          >
+            <div className="border-t border-[color:var(--border)] px-4 py-4">
+              <div className="flex flex-wrap items-center justify-between gap-2 pb-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  {[
+                    { label: "Criteria", tab: "search" as const },
+                    { label: "Columns", tab: "columns" as const },
+                    { label: "Details", tab: "row" as const },
+                  ].map((item) => (
+                    <Button
+                      key={item.tab}
+                      type="button"
+                      size="sm"
+                      variant={tableState.activeTab === item.tab ? "secondary" : "ghost"}
+                      onClick={() => {
+                        sendHostCommand("set-active-tab", { tab: item.tab });
+                      }}
+                      disabled={!iframeReady}
+                    >
+                      {item.label}
+                    </Button>
+                  ))}
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => {
+                      sendHostCommand("set-active-tab", { tab: "columns" });
+                      sendHostCommand("run-enrichment");
+                    }}
+                    disabled={!iframeReady || tableBusy || !tableState.hasRows || !tableState.hasColumns}
+                  >
+                    {tableState.isEnriching ? (
+                      <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <Sparkles className="h-3.5 w-3.5" />
+                    )}
+                    {tableState.isEnriching ? "Filling..." : "Fill columns"}
+                  </Button>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    onClick={() => {
+                      requestImport("manual");
+                    }}
+                    disabled={!iframeReady || tableBusy || importState.status === "importing" || !tableState.hasRows}
+                  >
+                    {manualAddLabel}
+                  </Button>
+                  {importState.status === "success" && importState.importedCount > 0 ? (
+                    <div className="inline-flex items-center gap-2 text-xs text-[color:var(--success)]">
+                      <CheckCircle2 className="h-3.5 w-3.5" />
+                      Added
+                    </div>
+                  ) : null}
+                </div>
+              </div>
+
+              <div className="relative border border-[color:var(--border)] bg-[color:var(--surface)]">
+                {!iframeLoaded ? (
+                  <div className="absolute inset-0 z-10 flex items-center justify-center bg-[color:var(--surface)]/92">
+                    <div className="flex items-center gap-2 text-sm text-[color:var(--muted-foreground)]">
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                      Loading table...
+                    </div>
+                  </div>
+                ) : null}
+                <iframe
+                  ref={iframeRef}
+                  title="Live prospect table"
+                  src={iframeSrc}
+                  className="h-[760px] w-full bg-transparent"
+                  onLoad={() => {
+                    setIframeLoaded(true);
+                    sendHostInit();
+                    sendHostCommand("refresh-state");
+                  }}
+                />
+              </div>
+            </div>
           </div>
         </div>
       </div>

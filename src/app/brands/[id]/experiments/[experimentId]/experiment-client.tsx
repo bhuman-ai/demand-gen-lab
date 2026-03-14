@@ -514,7 +514,7 @@ export default function ExperimentClient({
   const prospectGoalLabel = `${PROSPECT_VALIDATION_TARGET} real work emails`;
   const prospectPrimaryMessage = prospectsReady
     ? "You have enough leads. You can write emails now."
-    : `You need ${remainingProspectLeads} more real work emails before you can write emails.`;
+    : `AI is still collecting leads. You need ${remainingProspectLeads} more real work emails before you can write emails.`;
   const autoSourceButtonLabel = sampling
     ? "Finding leads..."
     : prospectsReady
@@ -2386,7 +2386,7 @@ export default function ExperimentClient({
         <Card>
           <CardHeader>
             <CardTitle className="text-base">{stageTitle(1)}</CardTitle>
-            <CardDescription>Tell AI who to find, then add the rows you want.</CardDescription>
+            <CardDescription>Tell AI who to find. It keeps the good leads automatically.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="rounded-[22px] border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-4 py-4">

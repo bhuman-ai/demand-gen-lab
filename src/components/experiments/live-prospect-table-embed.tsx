@@ -708,16 +708,77 @@ export default function LiveProspectTableEmbed({
 
   return (
     <div className="overflow-hidden rounded-[24px] border border-[#e7e0d3] bg-[#fbfaf7] shadow-[0_20px_48px_-40px_rgba(36,30,18,0.34)]">
-      <div className="border-b border-[#ebe4d7] bg-white px-4 py-5 md:px-6">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="min-w-0">
-            <div className="text-[11px] font-medium uppercase tracking-[0.18em] text-[#8a8275]">
-              Database
-            </div>
-            <div className="mt-1 text-lg font-semibold text-[#232019]">Prospects</div>
-            <div className="mt-1 text-sm text-[#6f685d]">
-              Tell AI who to find. The table stays live while AI keeps the good leads automatically.
-            </div>
+      <div className="border-b border-[#ebe4d7] bg-white px-4 py-4 md:px-6">
+        <div className="text-[11px] font-medium uppercase tracking-[0.18em] text-[#8a8275]">Find leads</div>
+        <div className="mt-3 flex flex-col gap-2 xl:flex-row">
+          <Input
+            value={promptDraft}
+            onChange={(event) => {
+              setPromptDraft(event.target.value);
+            }}
+            onKeyDown={(event) => {
+              if (event.key !== "Enter") return;
+              event.preventDefault();
+              if (!iframeReady || tableBusy || !hasPrompt) return;
+              if (normalizedPromptDraft && normalizedPromptDraft !== normalizedTablePrompt) {
+                sendHostCommand("set-prompt", { prompt: normalizedPromptDraft });
+              }
+              sendHostCommand("set-active-tab", { tab: "search" });
+              sendHostCommand("run-search");
+            }}
+            placeholder="Find self-funded SaaS founders who might want AWS credits"
+            className="h-12 flex-1 rounded-[14px] border-[#e5dfd4] bg-[#fbfaf7] text-[#232019] placeholder:text-[#8a8275] shadow-none focus-visible:ring-[#d6cec0]"
+          />
+          <div className="flex flex-wrap gap-2">
+            <Button
+              type="button"
+              size="lg"
+              className="border-[#2a241b] bg-[#2a241b] text-white hover:bg-[#1f1b14]"
+              onClick={() => {
+                if (normalizedPromptDraft && normalizedPromptDraft !== normalizedTablePrompt) {
+                  sendHostCommand("set-prompt", { prompt: normalizedPromptDraft });
+                }
+                sendHostCommand("set-active-tab", { tab: "search" });
+                sendHostCommand("run-search");
+              }}
+              disabled={!iframeReady || tableBusy || !hasPrompt}
+            >
+              {tableState.isDiscovering ? (
+                <RefreshCw className="h-4 w-4 animate-spin" />
+              ) : (
+                <Search className="h-4 w-4" />
+              )}
+              {tableState.isDiscovering ? "Running..." : "Update search"}
+            </Button>
+            <Button
+              type="button"
+              size="lg"
+              variant="outline"
+              className="border-[#e5dfd4] bg-white text-[#232019] hover:bg-[#f7f4ee]"
+              onClick={() => {
+                sendHostCommand("toggle-live", { enabled: !tableState.liveEnabled });
+              }}
+              disabled={!iframeReady || tableBusy}
+            >
+              {tableState.liveEnabled ? "Pause" : "Resume"}
+            </Button>
+            <Button
+              type="button"
+              size="lg"
+              variant="outline"
+              className="border-[#e5dfd4] bg-white text-[#232019] hover:bg-[#f7f4ee]"
+              onClick={() => {
+                setAutoAddEnabled((current) => !current);
+              }}
+            >
+              {autoAddEnabled ? "Auto-add on" : "Auto-add off"}
+            </Button>
+          </div>
+        </div>
+
+        <div className="mt-3 flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+          <div className="min-w-0 truncate text-sm text-[#6f685d]" title={assistantNote}>
+            {assistantNote}
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <Badge variant="muted">{rowLabel}</Badge>
@@ -729,155 +790,10 @@ export default function LiveProspectTableEmbed({
             </Badge>
           </div>
         </div>
-
-        <div className="mt-5 space-y-3">
-          <div className="flex flex-col gap-2 xl:flex-row">
-            <Input
-              value={promptDraft}
-              onChange={(event) => {
-                setPromptDraft(event.target.value);
-              }}
-              onKeyDown={(event) => {
-                if (event.key !== "Enter") return;
-                event.preventDefault();
-                if (!iframeReady || tableBusy || !hasPrompt) return;
-                if (normalizedPromptDraft && normalizedPromptDraft !== normalizedTablePrompt) {
-                  sendHostCommand("set-prompt", { prompt: normalizedPromptDraft });
-                }
-                sendHostCommand("set-active-tab", { tab: "search" });
-                sendHostCommand("run-search");
-              }}
-              placeholder="Find self-funded SaaS founders who might want AWS credits"
-              className="h-12 flex-1 rounded-[14px] border-[#e5dfd4] bg-[#fbfaf7] text-[#232019] placeholder:text-[#8a8275] shadow-none focus-visible:ring-[#d6cec0]"
-            />
-            <div className="flex flex-wrap gap-2">
-              <Button
-                type="button"
-                size="lg"
-                className="border-[#2a241b] bg-[#2a241b] text-white hover:bg-[#1f1b14]"
-                onClick={() => {
-                  if (normalizedPromptDraft && normalizedPromptDraft !== normalizedTablePrompt) {
-                    sendHostCommand("set-prompt", { prompt: normalizedPromptDraft });
-                  }
-                  sendHostCommand("set-active-tab", { tab: "search" });
-                  sendHostCommand("run-search");
-                }}
-                disabled={!iframeReady || tableBusy || !hasPrompt}
-              >
-                {tableState.isDiscovering ? (
-                  <RefreshCw className="h-4 w-4 animate-spin" />
-                ) : (
-                  <Search className="h-4 w-4" />
-                )}
-                {tableState.isDiscovering ? "Finding..." : "Update search"}
-              </Button>
-              <Button
-                type="button"
-                size="lg"
-                variant="outline"
-                className="border-[#e5dfd4] bg-white text-[#232019] hover:bg-[#f7f4ee]"
-                onClick={() => {
-                  sendHostCommand("toggle-live", { enabled: !tableState.liveEnabled });
-                }}
-                disabled={!iframeReady || tableBusy}
-              >
-                {tableState.liveEnabled ? "Pause" : "Resume"}
-              </Button>
-              <Button
-                type="button"
-                size="lg"
-                variant="outline"
-                className="border-[#e5dfd4] bg-white text-[#232019] hover:bg-[#f7f4ee]"
-                onClick={() => {
-                  setAutoAddEnabled((current) => !current);
-                }}
-              >
-                {autoAddEnabled ? "Auto-add on" : "Auto-add off"}
-              </Button>
-            </div>
-          </div>
-
-          <div className="flex flex-wrap items-center gap-2">
-            {[
-              { label: "Criteria", tab: "search" as const },
-              { label: "Columns", tab: "columns" as const },
-              { label: "Details", tab: "row" as const },
-            ].map((item) => (
-              <Button
-                key={item.tab}
-                type="button"
-                size="sm"
-                variant={tableState.activeTab === item.tab ? "secondary" : "ghost"}
-                className={
-                  tableState.activeTab === item.tab
-                    ? "border-[#ded7cb] bg-[#f3efe7] text-[#232019] hover:bg-[#ece7de]"
-                    : "text-[#6f685d] hover:bg-[#f3efe7] hover:text-[#232019]"
-                }
-                onClick={() => {
-                  sendHostCommand("set-active-tab", { tab: item.tab });
-                }}
-                disabled={!iframeReady}
-              >
-                {item.label}
-              </Button>
-            ))}
-            <Button
-              type="button"
-              size="sm"
-              variant="ghost"
-              className="text-[#6f685d] hover:bg-[#f3efe7] hover:text-[#232019]"
-              onClick={() => {
-                sendHostCommand("set-active-tab", { tab: "columns" });
-                sendHostCommand("run-enrichment");
-              }}
-              disabled={!iframeReady || tableBusy || !tableState.hasRows || !tableState.hasColumns}
-            >
-              {tableState.isEnriching ? (
-                <RefreshCw className="h-3.5 w-3.5 animate-spin" />
-              ) : (
-                <Sparkles className="h-3.5 w-3.5" />
-              )}
-              {tableState.isEnriching ? "Filling..." : "Fill columns"}
-            </Button>
-            <div className="ml-auto text-sm text-[#6f685d]">{assistantNote}</div>
-          </div>
-        </div>
-
-        {importState.parseErrors.length ? (
-          <div className="mt-4 rounded-[14px] border border-[color:var(--warning)]/35 bg-[color:var(--warning-soft)] px-3 py-2 text-xs text-[color:var(--warning)]">
-            {importState.parseErrors.slice(0, 5).join(" · ")}
-          </div>
-        ) : null}
       </div>
 
-      <div className="border-t border-[#ebe4d7] bg-[#f8f5ef] px-4 py-3 md:px-6">
-        <div className="space-y-2">
-          {activityItems.length ? (
-            activityItems.slice(0, 3).map((item) => (
-              <div
-                key={item.id}
-                className={`flex items-start justify-between gap-3 rounded-[12px] px-3 py-2 text-sm ${
-                  item.tone === "success"
-                    ? "bg-[#e4f1e8] text-[#2f7250]"
-                    : item.tone === "warning"
-                      ? "bg-[#fbefdd] text-[#94612d]"
-                      : item.tone === "danger"
-                        ? "bg-[#f8e4df] text-[#9b4b3f]"
-                        : "bg-white text-[#3a342a]"
-                }`}
-              >
-                <span className="min-w-0 flex-1">{item.message}</span>
-                <span className="shrink-0 text-[11px] uppercase tracking-[0.14em] opacity-60">
-                  {item.meta}
-                </span>
-              </div>
-            ))
-          ) : (
-            <div className="rounded-[12px] bg-white px-3 py-2 text-sm text-[#6f685d]">
-              AI is ready. Tell it who to find and the table will keep itself fresh.
-            </div>
-          )}
-        </div>
+      <div className="border-b border-[#ebe4d7] bg-[#faf8f4] px-4 py-2.5 text-sm text-[#6f685d] md:px-6">
+        {summaryLine || statusCopy}
       </div>
 
       <div className="relative bg-white">
@@ -902,29 +818,93 @@ export default function LiveProspectTableEmbed({
         />
       </div>
 
-      <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[#ebe4d7] bg-[#faf8f4] px-4 py-3 md:px-6">
-        <div className="text-sm text-[#6f685d]">{summaryLine || statusCopy}</div>
-        <div className="flex flex-wrap items-center gap-2">
-          {importState.status === "success" && importState.importedCount > 0 ? (
-            <div className="inline-flex items-center gap-2 text-xs text-[#2f7250]">
-              <CheckCircle2 className="h-3.5 w-3.5" />
-              Added
+      <details className="border-t border-[#ebe4d7] bg-[#faf8f4]">
+        <summary className="flex cursor-pointer list-none flex-wrap items-center justify-between gap-2 px-4 py-3 text-sm font-medium text-[#232019] md:px-6">
+          <span>Advanced</span>
+          <span className="text-xs font-normal text-[#8a8275]">Fill columns or add the current table manually.</span>
+        </summary>
+        <div className="border-t border-[#ebe4d7] bg-white px-4 py-3 md:px-6">
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              className="border-[#e5dfd4] bg-white text-[#232019] hover:bg-[#f7f4ee]"
+              onClick={() => {
+                sendHostCommand("set-active-tab", { tab: "columns" });
+                sendHostCommand("run-enrichment");
+              }}
+              disabled={!iframeReady || tableBusy || !tableState.hasRows || !tableState.hasColumns}
+            >
+              {tableState.isEnriching ? (
+                <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Sparkles className="h-3.5 w-3.5" />
+              )}
+              {tableState.isEnriching ? "Filling..." : "Fill columns"}
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              className="border-[#e5dfd4] bg-white text-[#232019] hover:bg-[#f7f4ee]"
+              onClick={() => {
+                requestImport("manual");
+              }}
+              disabled={!iframeReady || tableBusy || importState.status === "importing" || !tableState.hasRows}
+            >
+              {manualAddLabel}
+            </Button>
+            {importState.status === "success" && importState.importedCount > 0 ? (
+              <div className="inline-flex items-center gap-2 text-xs text-[#2f7250]">
+                <CheckCircle2 className="h-3.5 w-3.5" />
+                Added
+              </div>
+            ) : null}
+          </div>
+          {importState.parseErrors.length ? (
+            <div className="mt-3 rounded-[12px] border border-[color:var(--warning)]/35 bg-[color:var(--warning-soft)] px-3 py-2 text-xs text-[color:var(--warning)]">
+              {importState.parseErrors.slice(0, 5).join(" · ")}
             </div>
           ) : null}
-          <Button
-            type="button"
-            size="sm"
-            variant="outline"
-            className="border-[#e5dfd4] bg-white text-[#232019] hover:bg-[#f7f4ee]"
-            onClick={() => {
-              requestImport("manual");
-            }}
-            disabled={!iframeReady || tableBusy || importState.status === "importing" || !tableState.hasRows}
-          >
-            {manualAddLabel}
-          </Button>
         </div>
-      </div>
+      </details>
+
+      <details className="border-t border-[#ebe4d7] bg-[#faf8f4]">
+        <summary className="flex cursor-pointer list-none flex-wrap items-center justify-between gap-2 px-4 py-3 text-sm font-medium text-[#232019] md:px-6">
+          <span>View activity</span>
+          <span className="text-xs font-normal text-[#8a8275]">Only open this if you want the AI log.</span>
+        </summary>
+        <div className="border-t border-[#ebe4d7] bg-white px-4 py-3 md:px-6">
+          <div className="space-y-2">
+            {activityItems.length ? (
+              activityItems.slice(0, 5).map((item) => (
+                <div
+                  key={item.id}
+                  className={`flex items-start justify-between gap-3 rounded-[12px] px-3 py-2 text-sm ${
+                    item.tone === "success"
+                      ? "bg-[#e4f1e8] text-[#2f7250]"
+                      : item.tone === "warning"
+                        ? "bg-[#fbefdd] text-[#94612d]"
+                        : item.tone === "danger"
+                          ? "bg-[#f8e4df] text-[#9b4b3f]"
+                          : "bg-[#faf8f4] text-[#3a342a]"
+                  }`}
+                >
+                  <span className="min-w-0 flex-1">{item.message}</span>
+                  <span className="shrink-0 text-[11px] uppercase tracking-[0.14em] opacity-60">
+                    {item.meta}
+                  </span>
+                </div>
+              ))
+            ) : (
+              <div className="rounded-[12px] bg-[#faf8f4] px-3 py-2 text-sm text-[#6f685d]">
+                AI is ready. Tell it who to find and it will start filling the table.
+              </div>
+            )}
+          </div>
+        </div>
+      </details>
     </div>
   );
 }

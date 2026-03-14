@@ -283,7 +283,6 @@ export default function ExperimentClient({
   const [importingCsv, setImportingCsv] = useState(false);
   const [csvImportSummary, setCsvImportSummary] = useState("");
   const [csvImportErrors, setCsvImportErrors] = useState<string[]>([]);
-  const [showCsvImport, setShowCsvImport] = useState(false);
   const [aiSetupPrompt, setAiSetupPrompt] = useState("");
   const [draftingSetupFromAi, setDraftingSetupFromAi] = useState(false);
   const [aiSetupNotice, setAiSetupNotice] = useState("");
@@ -544,20 +543,30 @@ export default function ExperimentClient({
   ]
     .filter(Boolean)
     .join(" · ");
-  const backgroundSourcingDetails = (
-    <details className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3">
-      <summary className="cursor-pointer list-none text-sm font-medium text-[color:var(--foreground)]">
-        Let AI keep looking
+  const advancedProspectDetails = (
+    <details className="rounded-[14px] border border-[color:var(--border)] bg-[color:var(--surface)]">
+      <summary className="flex cursor-pointer list-none flex-wrap items-center justify-between gap-2 px-3 py-3 text-sm font-medium text-[color:var(--foreground)]">
+        <span>Advanced options</span>
+        <span className="text-xs font-normal text-[color:var(--muted-foreground)]">
+          Upload a list or let AI keep searching in the background.
+        </span>
       </summary>
-      <div className="mt-3 space-y-3">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <div>
-            <div className="text-sm font-medium">Keep finding people automatically</div>
+      <div className="grid gap-4 border-t border-[color:var(--border)] px-3 py-3">
+        <div className="flex flex-wrap items-start justify-between gap-3 rounded-[12px] bg-[color:var(--surface-muted)] px-3 py-3">
+          <div className="space-y-1">
+            <div className="text-sm font-medium text-[color:var(--foreground)]">Keep searching automatically</div>
             <div className="text-xs text-[color:var(--muted-foreground)]">
-              We keep looking until you have {prospectGoalLabel}.
+              AI can keep looking until you have {prospectGoalLabel}.
+            </div>
+            <div className="text-xs text-[color:var(--muted-foreground)]">
+              {autoSourceStatusMessage}
+              {autoSourceMeta ? ` ${autoSourceMeta}.` : ""}
             </div>
           </div>
           <div className="flex flex-wrap items-center gap-2">
+            <Badge variant={prospectsReady ? "success" : sampling ? "accent" : "muted"}>
+              {autoSourceStatusLabel}
+            </Badge>
             <Button
               type="button"
               variant="outline"
@@ -587,44 +596,18 @@ export default function ExperimentClient({
             </Button>
           </div>
         </div>
-        <div className="rounded-lg border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-2">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <span className="text-sm font-medium text-[color:var(--foreground)]">What it is doing</span>
-            <Badge variant={prospectsReady ? "success" : sampling ? "accent" : "muted"}>
-              {autoSourceStatusLabel}
-            </Badge>
-          </div>
-          <div className="mt-2 text-sm text-[color:var(--foreground)]">{autoSourceStatusMessage}</div>
-          {autoSourceMeta ? (
-            <div className="mt-2 text-xs text-[color:var(--muted-foreground)]">{autoSourceMeta}</div>
-          ) : null}
-        </div>
-      </div>
-    </details>
-  );
-  const csvUploadDetails = (
-    <details
-      className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3"
-      open={showCsvImport}
-      onToggle={(event) => {
-        setShowCsvImport(event.currentTarget.open);
-      }}
-    >
-      <summary className="cursor-pointer list-none text-sm font-medium text-[color:var(--foreground)]">
-        Upload your own list
-      </summary>
-      <div className="mt-3 rounded-lg border border-[color:var(--border)] bg-[color:var(--surface)]">
-        <div className="flex flex-wrap items-center justify-between gap-3 px-3 py-3">
-          <div>
-            <div className="text-sm font-medium">Already have a list?</div>
-            <div className="mt-1 text-xs text-[color:var(--muted-foreground)]">
-              Upload a CSV with <code>email</code>, or with <code>name + domain</code>.
+
+        <div className="rounded-[12px] bg-[color:var(--surface-muted)] px-3 py-3">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <div className="text-sm font-medium text-[color:var(--foreground)]">Upload your own list</div>
+              <div className="mt-1 text-xs text-[color:var(--muted-foreground)]">
+                Upload a CSV with <code>email</code>, or with <code>name + domain</code>.
+              </div>
             </div>
+            {csvFileName ? <Badge variant="muted">{csvFileName}</Badge> : null}
           </div>
-          {csvFileName ? <Badge variant="muted">{csvFileName}</Badge> : null}
-        </div>
-        <div className="space-y-3 border-t border-[color:var(--border)] px-3 py-3">
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="mt-3 flex flex-wrap items-center gap-2">
             <Input
               type="file"
               accept=".csv,text/csv"
@@ -633,25 +616,25 @@ export default function ExperimentClient({
               }}
               className="max-w-sm"
             />
+            <Button
+              type="button"
+              variant="outline"
+              disabled={importingCsv || !csvText.trim()}
+              onClick={async () => {
+                await importCsvLeads();
+              }}
+            >
+              <Upload className="h-4 w-4" />
+              {importingCsv ? "Importing..." : "Import CSV"}
+            </Button>
           </div>
-          <Button
-            type="button"
-            variant="outline"
-            disabled={importingCsv || !csvText.trim()}
-            onClick={async () => {
-              await importCsvLeads();
-            }}
-          >
-            <Upload className="h-4 w-4" />
-            {importingCsv ? "Importing..." : "Import CSV"}
-          </Button>
           {csvImportSummary ? (
-            <div className="rounded-lg border border-[color:var(--success)]/40 bg-[color:var(--success-soft)] px-3 py-2 text-sm text-[color:var(--success)]">
+            <div className="mt-3 rounded-lg border border-[color:var(--success)]/40 bg-[color:var(--success-soft)] px-3 py-2 text-sm text-[color:var(--success)]">
               {csvImportSummary}
             </div>
           ) : null}
           {csvImportErrors.length ? (
-            <div className="rounded-lg border border-[color:var(--warning)]/40 bg-[color:var(--warning-soft)] px-3 py-2 text-xs text-[color:var(--warning)]">
+            <div className="mt-3 rounded-lg border border-[color:var(--warning)]/40 bg-[color:var(--warning-soft)] px-3 py-2 text-xs text-[color:var(--warning)]">
               {csvImportErrors.slice(0, 5).join(" · ")}
             </div>
           ) : null}
@@ -660,14 +643,17 @@ export default function ExperimentClient({
     </details>
   );
   const prospectActivityDetails = (
-    <details className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3">
-      <summary className="cursor-pointer list-none text-sm font-medium text-[color:var(--foreground)]">
-        View activity
+    <details className="rounded-[14px] border border-[color:var(--border)] bg-[color:var(--surface)]">
+      <summary className="flex cursor-pointer list-none flex-wrap items-center justify-between gap-2 px-3 py-3 text-sm font-medium text-[color:var(--foreground)]">
+        <span>View activity</span>
+        <span className="text-xs font-normal text-[color:var(--muted-foreground)]">
+          Only open this if something looks wrong.
+        </span>
       </summary>
-      <div className="mt-3 space-y-3">
+      <div className="grid gap-3 border-t border-[color:var(--border)] px-3 py-3">
         {hasPreviewEmailLookupSignal ? (
           <div
-            className={`rounded-lg px-3 py-2 text-sm ${
+            className={`rounded-[12px] px-3 py-2 text-sm ${
               previewEmailEnrichment.error
                 ? "border border-[color:var(--warning)]/40 bg-[color:var(--warning-soft)] text-[color:var(--warning)]"
                 : "border border-[color:var(--accent)]/40 bg-[color:var(--accent-soft)] text-[color:var(--accent)]"
@@ -683,44 +669,34 @@ export default function ExperimentClient({
             )}
           </div>
         ) : invalidLeadCount > 0 ? (
-          <div className="rounded-lg border border-[color:var(--warning)]/40 bg-[color:var(--warning-soft)] px-3 py-2 text-sm text-[color:var(--warning)]">
+          <div className="rounded-[12px] border border-[color:var(--warning)]/40 bg-[color:var(--warning-soft)] px-3 py-2 text-sm text-[color:var(--warning)]">
             {invalidLeadCount} people are still missing a real work email.
           </div>
         ) : null}
 
+        <div className="rounded-[12px] bg-[color:var(--surface-muted)] px-3 py-3">
+          <div className="text-sm font-medium text-[color:var(--foreground)]">Background status</div>
+          <div className="mt-1 text-sm text-[color:var(--foreground)]">{autoSourceStatusMessage}</div>
+          {autoSourceMeta ? (
+            <div className="mt-2 text-xs text-[color:var(--muted-foreground)]">{autoSourceMeta}</div>
+          ) : null}
+        </div>
+
         {sampleLeadError ? <div className="text-sm text-[color:var(--danger)]">{sampleLeadError}</div> : null}
 
-        {autoSourceMeta ? (
-          <div className="text-xs text-[color:var(--muted-foreground)]">{autoSourceMeta}</div>
-        ) : null}
-
-        <div className="space-y-2">
-          <div className="text-sm font-medium">Found so far</div>
-          {sampleLeads.length ? (
-            <div className="grid gap-2 md:grid-cols-2">
-              {sampleLeads.map((lead) => (
-                <div key={`${lead.id}:${lead.email}`} className="rounded-lg border border-[color:var(--border)] p-3 text-xs">
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="font-medium text-sm">{lead.name || "(missing name)"}</div>
-                    <Badge variant={lead.email ? "success" : "danger"}>
-                      {lead.email ? "Ready" : "Waiting for email"}
-                    </Badge>
-                  </div>
-                  <div className="text-[color:var(--muted-foreground)]">
-                    {lead.email || "No real email found yet."}
-                  </div>
-                  <div className="text-[color:var(--muted-foreground)]">
-                    {lead.title || "Unknown title"} at {lead.company || lead.domain}
-                  </div>
-                </div>
+        {sampleLeads.length ? (
+          <div className="rounded-[12px] bg-[color:var(--surface-muted)] px-3 py-3">
+            <div className="text-sm font-medium text-[color:var(--foreground)]">Recent checked leads</div>
+            <div className="mt-2 flex flex-wrap gap-2">
+              {sampleLeads.slice(0, 6).map((lead) => (
+                <Badge key={`${lead.id}:${lead.email}`} variant={lead.email ? "success" : "muted"}>
+                  {lead.name || "Unknown"}
+                  {lead.email ? "" : " · missing email"}
+                </Badge>
               ))}
             </div>
-          ) : (
-            <div className="rounded-lg border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-2 text-sm text-[color:var(--muted-foreground)]">
-              No sample leads yet.
-            </div>
-          )}
-        </div>
+          </div>
+        ) : null}
       </div>
     </details>
   );
@@ -1697,6 +1673,7 @@ export default function ExperimentClient({
   }
 
   const messagingFocus = currentStage === 2;
+  const stageRouteMode = routeStage !== null;
   const unifiedRunMode = !view && Boolean(latestRun);
   const pipelineOverviewMode = !view;
   const experimentStatusLabel = latestRun ? latestRun.status : experiment.status;
@@ -1845,8 +1822,7 @@ export default function ExperimentClient({
                 await refresh(false);
               }}
             />
-            {backgroundSourcingDetails}
-            {csvUploadDetails}
+            {advancedProspectDetails}
             {prospectActivityDetails}
           </CardContent>
         </Card>
@@ -1932,23 +1908,45 @@ export default function ExperimentClient({
   return (
     <div className="space-y-4 sm:space-y-5">
       {!messagingFocus ? (
-        <Card>
-          <CardHeader>
-            <CardTitle>{brand?.name || "Brand"} · {experiment.name}</CardTitle>
-            <CardDescription>
-              {unifiedRunMode
-                ? "Manage sourcing, messaging, launch, and live run status from this page."
-                : "Stage-based flow: Setup -> Prospects -> Messaging -> Launch."}
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="flex flex-wrap items-center gap-2 text-xs">
-            <Badge variant="muted">Status: {experiment.status}</Badge>
-            <Badge variant="muted">Sent: {experiment.metricsSummary.sent}</Badge>
-            <Badge variant="muted">Replies: {experiment.metricsSummary.replies}</Badge>
-            <Badge variant="muted">Positive: {experiment.metricsSummary.positiveReplies}</Badge>
-            {latestRun ? <Badge variant={runStatusVariant(latestRun.status)}>Run: {latestRun.status}</Badge> : null}
-          </CardContent>
-        </Card>
+        stageRouteMode ? (
+          <section className="space-y-2 border-b border-[color:var(--border)] pb-4">
+            <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+              <div className="min-w-0">
+                <h1 className="text-[1.55rem] font-semibold tracking-[-0.05em] text-[color:var(--foreground)]">
+                  {experiment.name}
+                </h1>
+                <div className="mt-1 text-sm text-[color:var(--muted-foreground)]">
+                  Setup → Prospects → Messaging → Launch
+                </div>
+              </div>
+              <div className="flex flex-wrap items-center gap-2 text-xs">
+                <Badge variant="muted">Status: {experiment.status}</Badge>
+                <Badge variant="muted">Sent: {experiment.metricsSummary.sent}</Badge>
+                <Badge variant="muted">Replies: {experiment.metricsSummary.replies}</Badge>
+                <Badge variant="muted">Positive: {experiment.metricsSummary.positiveReplies}</Badge>
+                {latestRun ? <Badge variant={runStatusVariant(latestRun.status)}>Run: {latestRun.status}</Badge> : null}
+              </div>
+            </div>
+          </section>
+        ) : (
+          <Card>
+            <CardHeader>
+              <CardTitle>{brand?.name || "Brand"} · {experiment.name}</CardTitle>
+              <CardDescription>
+                {unifiedRunMode
+                  ? "Manage sourcing, messaging, launch, and live run status from this page."
+                  : "Stage-based flow: Setup -> Prospects -> Messaging -> Launch."}
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="flex flex-wrap items-center gap-2 text-xs">
+              <Badge variant="muted">Status: {experiment.status}</Badge>
+              <Badge variant="muted">Sent: {experiment.metricsSummary.sent}</Badge>
+              <Badge variant="muted">Replies: {experiment.metricsSummary.replies}</Badge>
+              <Badge variant="muted">Positive: {experiment.metricsSummary.positiveReplies}</Badge>
+              {latestRun ? <Badge variant={runStatusVariant(latestRun.status)}>Run: {latestRun.status}</Badge> : null}
+            </CardContent>
+          </Card>
+        )
       ) : null}
 
       {error ? <div className="text-sm text-[color:var(--danger)]">{error}</div> : null}
@@ -2033,65 +2031,105 @@ export default function ExperimentClient({
       ) : null}
 
       {!unifiedRunMode ? (
-        <Card>
-          <CardHeader className="border-b border-[color:var(--border)]">
-            <div className="flex flex-wrap items-start justify-between gap-3">
-              <div>
-                <CardTitle className="text-base">What happens next</CardTitle>
-                <CardDescription>
-                  {messagingFocus ? "You are in the write emails step." : "Do these four steps in order."}
-                </CardDescription>
-              </div>
-              <div className="flex flex-wrap items-center gap-2 text-xs">
-                <Badge variant="muted">
-                  Step {Math.min(currentStage + 1, STAGE_COUNT)} of {STAGE_COUNT}
-                </Badge>
-              </div>
-            </div>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div>
-              <div className="grid gap-2 md:grid-cols-4">
-              {workflowStages.map((stage) => (
-                <button
-                  key={stage.index}
-                  type="button"
-                  disabled={stage.disabled}
-                  onClick={() => {
-                    if (stage.disabled) return;
-                    openStage(stage.index);
-                  }}
-                  className={`relative rounded-[10px] border p-3 text-left transition ${
-                    currentStage === stage.index
-                      ? "border-[color:var(--accent)] bg-[color:var(--accent-soft)]"
-                      : stage.status === "done"
-                        ? "border-[color:var(--success-border)] bg-[color:var(--success-soft)]/60"
-                        : "border-[color:var(--border)] bg-[color:var(--surface-muted)]"
-                  } ${stage.disabled ? "cursor-not-allowed opacity-60" : ""}`}
-                >
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="inline-flex h-6 min-w-6 items-center justify-center rounded-[8px] border border-[color:var(--border)] bg-[color:var(--surface)] px-2 text-[11px] font-semibold">
+        stageRouteMode ? (
+          <section className="space-y-2">
+            <div className="flex flex-wrap items-center gap-2 rounded-[14px] border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-3">
+              {workflowStages.map((stage, index) => (
+                <div key={stage.index} className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    disabled={stage.disabled}
+                    onClick={() => {
+                      if (stage.disabled) return;
+                      openStage(stage.index);
+                    }}
+                    className={`flex items-center gap-2 rounded-full px-2.5 py-1.5 text-sm transition ${
+                      currentStage === stage.index
+                        ? "bg-[color:var(--accent-soft)] text-[color:var(--foreground)]"
+                        : stage.status === "done"
+                          ? "text-[color:var(--success)]"
+                          : "text-[color:var(--muted-foreground)]"
+                    } ${stage.disabled ? "cursor-not-allowed opacity-50" : "hover:bg-[color:var(--surface-muted)]"}`}
+                  >
+                    <span className="inline-flex h-5 w-5 items-center justify-center rounded-full border border-[color:var(--border)] text-[11px] font-semibold">
                       {stage.index + 1}
-                    </div>
+                    </span>
+                    <span className="font-medium">{stage.label}</span>
                     {stage.status === "done" ? (
-                      <CheckCircle2 className="h-4 w-4 text-[color:var(--success)]" />
+                      <CheckCircle2 className="h-3.5 w-3.5" />
                     ) : stage.status === "locked" ? (
-                      <Lock className="h-3.5 w-3.5 text-[color:var(--muted-foreground)]" />
-                    ) : (
-                      <Badge variant={stageBadgeVariant(stage.status)}>{stageBadgeLabel(stage.status)}</Badge>
-                    )}
-                  </div>
-                  <div className="mt-2 text-sm font-semibold">{stage.label}</div>
-                  <div className="mt-1 text-xs text-[color:var(--muted-foreground)]">{stageSummary(stage.index)}</div>
-                </button>
+                      <Lock className="h-3 w-3 text-[color:var(--muted-foreground)]" />
+                    ) : null}
+                  </button>
+                  {index < workflowStages.length - 1 ? (
+                    <div className="h-px w-6 bg-[color:var(--border)]" />
+                  ) : null}
+                </div>
               ))}
+            </div>
+            <div className="text-xs text-[color:var(--muted-foreground)]">{nextGateHint}</div>
+          </section>
+        ) : (
+          <Card>
+            <CardHeader className="border-b border-[color:var(--border)]">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <CardTitle className="text-base">What happens next</CardTitle>
+                  <CardDescription>
+                    {messagingFocus ? "You are in the write emails step." : "Do these four steps in order."}
+                  </CardDescription>
+                </div>
+                <div className="flex flex-wrap items-center gap-2 text-xs">
+                  <Badge variant="muted">
+                    Step {Math.min(currentStage + 1, STAGE_COUNT)} of {STAGE_COUNT}
+                  </Badge>
+                </div>
               </div>
-            </div>
-            <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-2 text-xs text-[color:var(--muted-foreground)]">
-              {nextGateHint}
-            </div>
-          </CardContent>
-        </Card>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div>
+                <div className="grid gap-2 md:grid-cols-4">
+                {workflowStages.map((stage) => (
+                  <button
+                    key={stage.index}
+                    type="button"
+                    disabled={stage.disabled}
+                    onClick={() => {
+                      if (stage.disabled) return;
+                      openStage(stage.index);
+                    }}
+                    className={`relative rounded-[10px] border p-3 text-left transition ${
+                      currentStage === stage.index
+                        ? "border-[color:var(--accent)] bg-[color:var(--accent-soft)]"
+                        : stage.status === "done"
+                          ? "border-[color:var(--success-border)] bg-[color:var(--success-soft)]/60"
+                          : "border-[color:var(--border)] bg-[color:var(--surface-muted)]"
+                    } ${stage.disabled ? "cursor-not-allowed opacity-60" : ""}`}
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="inline-flex h-6 min-w-6 items-center justify-center rounded-[8px] border border-[color:var(--border)] bg-[color:var(--surface)] px-2 text-[11px] font-semibold">
+                        {stage.index + 1}
+                      </div>
+                      {stage.status === "done" ? (
+                        <CheckCircle2 className="h-4 w-4 text-[color:var(--success)]" />
+                      ) : stage.status === "locked" ? (
+                        <Lock className="h-3.5 w-3.5 text-[color:var(--muted-foreground)]" />
+                      ) : (
+                        <Badge variant={stageBadgeVariant(stage.status)}>{stageBadgeLabel(stage.status)}</Badge>
+                      )}
+                    </div>
+                    <div className="mt-2 text-sm font-semibold">{stage.label}</div>
+                    <div className="mt-1 text-xs text-[color:var(--muted-foreground)]">{stageSummary(stage.index)}</div>
+                  </button>
+                ))}
+                </div>
+              </div>
+              <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-2 text-xs text-[color:var(--muted-foreground)]">
+                {nextGateHint}
+              </div>
+            </CardContent>
+          </Card>
+        )
       ) : null}
 
       {currentStage === 0 ? (
@@ -2383,55 +2421,57 @@ export default function ExperimentClient({
       ) : null}
 
       {currentStage === 1 ? (
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">{stageTitle(1)}</CardTitle>
-            <CardDescription>Tell AI who to find. It keeps the good leads automatically.</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="rounded-[22px] border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-4 py-4">
-              <div className="flex flex-wrap items-center gap-3">
-                <div>
-                  <div className="text-lg font-semibold text-[color:var(--foreground)]">
-                    {realEmailLeadCount} / {PROSPECT_VALIDATION_TARGET} verified
-                  </div>
-                  <div className="mt-1 text-sm text-[color:var(--muted-foreground)]">
-                    {remainingProspectLeads > 0
-                      ? `${remainingProspectLeads} more before you can write emails`
-                      : "You have enough leads to move on"}
-                  </div>
-                </div>
+        <section className="space-y-4">
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+            <div className="space-y-1">
+              <div className="text-lg font-semibold text-[color:var(--foreground)]">{stageTitle(1)}</div>
+              <div className="text-sm text-[color:var(--muted-foreground)]">
+                Define the search, watch the table fill, and move on when you have enough leads.
+              </div>
+            </div>
+            <Button type="button" disabled={!prospectsReady} onClick={() => openStage(2)}>
+              Write emails
+            </Button>
+          </div>
+
+          <div className="rounded-[16px] border border-[color:var(--border)] bg-[color:var(--surface)] px-4 py-3">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="flex flex-wrap items-center gap-3 text-sm">
+                <span className="font-medium text-[color:var(--foreground)]">
+                  Leads found: {realEmailLeadCount} / {PROSPECT_VALIDATION_TARGET}
+                </span>
                 <Badge variant={prospectsReady ? "success" : "muted"}>
                   {prospectsReady ? "Ready for emails" : "Still finding people"}
                 </Badge>
+                <span className="text-[color:var(--muted-foreground)]">
+                  {remainingProspectLeads > 0 ? `${remainingProspectLeads} more needed` : "Enough leads found"}
+                </span>
               </div>
-              <div className="mt-4 h-2 overflow-hidden rounded-full bg-[color:var(--border)]">
-                <div
-                  className={`h-full rounded-full ${prospectsReady ? "bg-[color:var(--success)]" : "bg-[color:var(--accent)]"}`}
-                  style={{ width: `${gateProgressPct}%` }}
-                />
-              </div>
+              <span className="text-xs text-[color:var(--muted-foreground)]">
+                {stageRouteMode ? "Prospects step" : "Live sourcing table"}
+              </span>
             </div>
+            <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-[color:var(--border)]">
+              <div
+                className={`h-full rounded-full ${prospectsReady ? "bg-[color:var(--success)]" : "bg-[color:var(--accent)]"}`}
+                style={{ width: `${gateProgressPct}%` }}
+              />
+            </div>
+          </div>
 
-            <LiveProspectTableEmbed
-              initPath={`/api/brands/${brandId}/experiments/${experiment.id}/prospect-table`}
-              importPath={`/api/brands/${brandId}/experiments/${experiment.id}/import-prospects/selection`}
-              onImported={async () => {
-                await refresh(false);
-              }}
-            />
-            {backgroundSourcingDetails}
-            {csvUploadDetails}
+          <LiveProspectTableEmbed
+            initPath={`/api/brands/${brandId}/experiments/${experiment.id}/prospect-table`}
+            importPath={`/api/brands/${brandId}/experiments/${experiment.id}/import-prospects/selection`}
+            onImported={async () => {
+              await refresh(false);
+            }}
+          />
+
+          <div className="grid gap-2">
+            {advancedProspectDetails}
             {prospectActivityDetails}
-            <div className="flex flex-col gap-2 sm:flex-row sm:justify-end">
-              <Button asChild type="button" disabled={!prospectsReady}>
-                <Link href={`/brands/${brandId}/experiments/${experiment.id}/messaging`}>
-                  Write emails
-                </Link>
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
+          </div>
+        </section>
       ) : null}
 
       {currentStage === 2 ? (

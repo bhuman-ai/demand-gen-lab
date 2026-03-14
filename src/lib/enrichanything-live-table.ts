@@ -6,6 +6,7 @@ type ProspectTableConfig = {
   tableId: string;
   tableTitle: string;
   discoveryPrompt: string;
+  enabled: boolean;
   entityType: "person";
   entityColumn: "person_name";
   cadence: "daily";
@@ -23,19 +24,15 @@ function buildDiscoveryPrompt(audience: string, offer: string, fallbackName: str
   const normalizedOffer = normalizeText(offer);
   const normalizedName = normalizeText(fallbackName) || "this experiment";
 
-  if (normalizedAudience && normalizedOffer) {
-    return `Find real people who match this audience: ${normalizedAudience} They should be strong fits for this offer: ${normalizedOffer}`;
-  }
-
   if (normalizedAudience) {
-    return `Find real people who match this audience: ${normalizedAudience}`;
+    return normalizedAudience;
   }
 
   if (normalizedOffer) {
-    return `Find real people who are likely to want this offer: ${normalizedOffer}`;
+    return normalizedOffer;
   }
 
-  return `Find real prospects for ${normalizedName}`;
+  return normalizedName;
 }
 
 function createSnapshot(config: ProspectTableConfig) {
@@ -55,13 +52,47 @@ function createSnapshot(config: ProspectTableConfig) {
     liveTable: {
       tableId: config.tableId,
       workspaceId: config.workspaceId,
-      enabled: true,
+      enabled: config.enabled,
       cadence: config.cadence,
       dailyRowTarget: config.dailyRowTarget,
       maxRowsPerRun: config.maxRowsPerRun,
       overlapHours: config.overlapHours,
     },
     selectedRowIndex: 0,
+    savedAt: new Date().toISOString(),
+  };
+}
+
+function asObject(value: unknown) {
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    return value as Record<string, unknown>;
+  }
+  return {};
+}
+
+function mergeSnapshot(config: ProspectTableConfig, existingSnapshot: unknown = null) {
+  const snapshot = asObject(existingSnapshot);
+  const liveTable = asObject(snapshot.liveTable);
+
+  return {
+    ...createSnapshot(config),
+    ...snapshot,
+    workspaceId: config.workspaceId,
+    currentListId: config.tableId,
+    discoveryPrompt: config.discoveryPrompt,
+    entityColumn: config.entityColumn,
+    entityType: config.entityType,
+    tableTitle: config.tableTitle,
+    liveTable: {
+      ...liveTable,
+      tableId: config.tableId,
+      workspaceId: config.workspaceId,
+      enabled: config.enabled,
+      cadence: config.cadence,
+      dailyRowTarget: config.dailyRowTarget,
+      maxRowsPerRun: config.maxRowsPerRun,
+      overlapHours: config.overlapHours,
+    },
     savedAt: new Date().toISOString(),
   };
 }
@@ -74,12 +105,16 @@ async function readJsonSafe(response: Response) {
   }
 }
 
-export function buildExperimentProspectTableConfig(experiment: ExperimentRecord): ProspectTableConfig {
+export function buildExperimentProspectTableConfig(
+  experiment: ExperimentRecord,
+  options: { enabled?: boolean } = {}
+): ProspectTableConfig {
   return {
     workspaceId: `lastb2b_brand_${experiment.brandId}`,
     tableId: `lastb2b_experiment_${experiment.id}`,
     tableTitle: `${normalizeText(experiment.name) || "Experiment"} prospects`,
     discoveryPrompt: buildDiscoveryPrompt(experiment.audience, experiment.offer, experiment.name),
+    enabled: Boolean(options.enabled),
     entityType: "person",
     entityColumn: "person_name",
     cadence: "daily",
@@ -99,6 +134,7 @@ export function buildCampaignProspectTableConfig(campaign: ScaleCampaignRecord):
       campaign.snapshot.offer,
       campaign.name
     ),
+    enabled: true,
     entityType: "person",
     entityColumn: "person_name",
     cadence: "daily",
@@ -125,21 +161,35 @@ export async function ensureEnrichAnythingProspectTable(config: ProspectTableCon
       : null;
 
   if (existingTable) {
-    if (existingTable.enabled !== true) {
-      const enableResponse = await fetch(`${appUrl}/api/live`, {
+    const snapshot = asObject(existingTable.snapshot);
+    const liveTable = asObject(snapshot.liveTable);
+    const needsPatch =
+      existingTable.enabled !== config.enabled ||
+      String(snapshot.discoveryPrompt ?? "").trim() !== config.discoveryPrompt ||
+      String(snapshot.tableTitle ?? "").trim() !== config.tableTitle ||
+      String(snapshot.entityColumn ?? "").trim() !== config.entityColumn ||
+      String(snapshot.entityType ?? "").trim() !== config.entityType ||
+      liveTable.enabled !== config.enabled ||
+      String(liveTable.cadence ?? "").trim() !== config.cadence ||
+      Number(liveTable.dailyRowTarget ?? 0) !== config.dailyRowTarget ||
+      Number(liveTable.maxRowsPerRun ?? 0) !== config.maxRowsPerRun ||
+      Number(liveTable.overlapHours ?? 0) !== config.overlapHours;
+
+    if (needsPatch) {
+      const patchResponse = await fetch(`${appUrl}/api/live`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           tableId: config.tableId,
-          enabled: true,
-          snapshot: existingTable.snapshot ?? createSnapshot(config),
+          enabled: config.enabled,
+          snapshot: mergeSnapshot(config, existingTable.snapshot),
           title: config.tableTitle,
         }),
         cache: "no-store",
       });
-      if (!enableResponse.ok) {
-        const enablePayload = await readJsonSafe(enableResponse);
-        throw new Error(String(enablePayload.error ?? "Failed to enable EnrichAnything live table."));
+      if (!patchResponse.ok) {
+        const patchPayload = await readJsonSafe(patchResponse);
+        throw new Error(String(patchPayload.error ?? "Failed to update EnrichAnything prospect table."));
       }
     }
 
@@ -156,7 +206,7 @@ export async function ensureEnrichAnythingProspectTable(config: ProspectTableCon
       workspaceId: config.workspaceId,
       tableId: config.tableId,
       snapshot: createSnapshot(config),
-      enabled: true,
+      enabled: config.enabled,
       cadence: config.cadence,
       dailyRowTarget: config.dailyRowTarget,
       maxRowsPerRun: config.maxRowsPerRun,

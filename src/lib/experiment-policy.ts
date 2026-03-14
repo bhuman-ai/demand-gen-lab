@@ -1,4 +1,4 @@
-export const EXPERIMENT_MIN_VERIFIED_EMAIL_LEADS = 200;
+export const EXPERIMENT_MIN_VERIFIED_EMAIL_LEADS = 20;
 export const EXPERIMENT_MAX_SAMPLE_SIZE = 400;
 
 export function clampExperimentSampleSize(

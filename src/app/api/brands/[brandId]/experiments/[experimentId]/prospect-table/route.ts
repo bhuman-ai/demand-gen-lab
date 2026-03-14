@@ -17,7 +17,9 @@ export async function GET(
     }
 
     const config = await ensureEnrichAnythingProspectTable(
-      buildExperimentProspectTableConfig(experiment)
+      buildExperimentProspectTableConfig(experiment, {
+        enabled: experiment.status === "running",
+      })
     );
     return NextResponse.json(config);
   } catch (error) {

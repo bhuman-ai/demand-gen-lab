@@ -1,6 +1,10 @@
 import { NextResponse } from "next/server";
 import { ensureRuntimeForExperiment, getExperimentRecordById, updateExperimentRecord } from "@/lib/experiment-data";
 import { listConversationPreviewLeads } from "@/lib/conversation-preview-leads";
+import {
+  buildExperimentProspectTableConfig,
+  ensureEnrichAnythingProspectTable,
+} from "@/lib/enrichanything-live-table";
 import { EXPERIMENT_MIN_VERIFIED_EMAIL_LEADS } from "@/lib/experiment-policy";
 import { launchExperimentRun } from "@/lib/outreach-runtime";
 
@@ -78,6 +82,14 @@ export async function POST(
   await updateExperimentRecord(brandId, experiment.id, {
     status: "running",
   });
+
+  try {
+    await ensureEnrichAnythingProspectTable(
+      buildExperimentProspectTableConfig(experiment, { enabled: true })
+    );
+  } catch {
+    // Best effort only. Launching should not fail just because the live prospect table could not switch on.
+  }
 
   return NextResponse.json({ runId: result.runId, status: "queued" }, { status: 201 });
 }

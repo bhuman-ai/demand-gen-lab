@@ -16,7 +16,6 @@ import {
   Rocket,
   Save,
   Sparkles,
-  Upload,
 } from "lucide-react";
 import {
   controlExperimentRunApi,
@@ -26,7 +25,6 @@ import {
   fetchConversationPreviewLeadsApi,
   fetchExperiment,
   fetchExperimentRunView,
-  importExperimentProspectsCsvApi,
   launchExperimentTestApi,
   promoteExperimentApi,
   sourceExperimentSampleLeadsApi,
@@ -70,7 +68,6 @@ const PROSPECT_VALIDATION_MIN_READY = PROSPECT_VALIDATION_TARGET;
 const STAGE_COUNT = 4;
 const AUTO_SOURCE_POLL_INTERVAL_MS = 2000;
 const AUTO_SOURCE_RETRY_DELAY_MS = 1500;
-const CSV_MAX_CHARS = 2_000_000;
 const ADDITIONAL_LEADS_MIN = 1;
 const ADDITIONAL_LEADS_MAX = 400;
 const BUSINESS_DAY_OPTIONS = [
@@ -231,7 +228,6 @@ export default function ExperimentClient({
     runView: RunViewModel;
     sourcedLeadCount: number;
     sourcedLeadWithEmailCount: number;
-    sourcedLeadWithoutEmailCount: number;
     previewLeadCount: number;
     runsChecked: number;
     sourceExperimentId: string;
@@ -249,17 +245,6 @@ export default function ExperimentClient({
   const [, setSampleLeadRunsChecked] = useState(0);
   const [, setSampleLeadSourceExperimentId] = useState("");
   const [sourcedLeadWithEmailCount, setSourcedLeadWithEmailCount] = useState(0);
-  const [sourcedLeadWithoutEmailCount, setSourcedLeadWithoutEmailCount] = useState(0);
-  const [sampleLeadError, setSampleLeadError] = useState("");
-  const [previewEmailEnrichment, setPreviewEmailEnrichment] = useState<
-    Awaited<ReturnType<typeof fetchConversationPreviewLeadsApi>>["previewEmailEnrichment"]
-  >({
-    attempted: 0,
-    matched: 0,
-    failed: 0,
-    provider: "emailfinder.batch",
-    error: "",
-  });
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -270,19 +255,13 @@ export default function ExperimentClient({
   const [currentStage, setCurrentStage] = useState<StageIndex>(
     view === "prospects" ? 1 : view === "messaging" ? 2 : view === "launch" ? 3 : 0
   );
-  const [samplingStatus, setSamplingStatus] = useState("");
-  const [samplingSummary, setSamplingSummary] = useState("");
-  const [samplingAttempt, setSamplingAttempt] = useState(0);
-  const [samplingRunsLaunched, setSamplingRunsLaunched] = useState(0);
+  const [, setSamplingStatus] = useState("");
+  const [, setSamplingSummary] = useState("");
+  const [, setSamplingAttempt] = useState(0);
+  const [, setSamplingRunsLaunched] = useState(0);
   const [, setSamplingActiveRunId] = useState("");
-  const [samplingHeartbeatAt, setSamplingHeartbeatAt] = useState("");
-  const [autoSourcePaused, setAutoSourcePaused] = useState(false);
+  const [, setSamplingHeartbeatAt] = useState("");
   const [prospectInputMode, setProspectInputMode] = useState<ProspectInputMode>("have_data");
-  const [csvFileName, setCsvFileName] = useState("");
-  const [csvText, setCsvText] = useState("");
-  const [importingCsv, setImportingCsv] = useState(false);
-  const [csvImportSummary, setCsvImportSummary] = useState("");
-  const [csvImportErrors, setCsvImportErrors] = useState<string[]>([]);
   const [aiSetupPrompt, setAiSetupPrompt] = useState("");
   const [draftingSetupFromAi, setDraftingSetupFromAi] = useState(false);
   const [aiSetupNotice, setAiSetupNotice] = useState("");
@@ -333,12 +312,9 @@ export default function ExperimentClient({
             experimentRow.runtime.experimentId,
             { limit: 20, maxRuns: 8 }
           );
-          setSampleLeadError("");
-        } catch (err) {
-          setSampleLeadError(err instanceof Error ? err.message : "Failed to load sample leads");
+        } catch {
+          // Keep preview leads empty if the preview endpoint fails.
         }
-      } else {
-        setSampleLeadError("Runtime mapping is missing. Source prospects first to initialize preview leads.");
       }
 
       setBrand(brandRow);
@@ -351,8 +327,6 @@ export default function ExperimentClient({
       setSampleLeadRunsChecked(previewLeadsData.runsChecked);
       setSampleLeadSourceExperimentId(previewLeadsData.sourceExperimentId);
       setSourcedLeadWithEmailCount(previewLeadsData.qualifiedLeadWithEmailCount);
-      setSourcedLeadWithoutEmailCount(previewLeadsData.qualifiedLeadWithoutEmailCount);
-      setPreviewEmailEnrichment(previewLeadsData.previewEmailEnrichment);
       localStorage.setItem("factory.activeBrandId", brandId);
 
       const sourcedLeadCount = previewLeadsData.qualifiedLeadCount;
@@ -363,7 +337,6 @@ export default function ExperimentClient({
         runView: runRow,
         sourcedLeadCount,
         sourcedLeadWithEmailCount: previewLeadsData.qualifiedLeadWithEmailCount,
-        sourcedLeadWithoutEmailCount: previewLeadsData.qualifiedLeadWithoutEmailCount,
         previewLeadCount: previewLeadsData.leads.length,
         runsChecked: previewLeadsData.runsChecked,
         sourceExperimentId: previewLeadsData.sourceExperimentId,
@@ -492,9 +465,6 @@ export default function ExperimentClient({
   }, [realEmailLeadCount, runTotals.sourcedLeads, runView]);
 
   const prospectsReady = realEmailLeadCount >= PROSPECT_VALIDATION_MIN_READY;
-  const invalidLeadCount = sourcedLeadWithoutEmailCount;
-  const hasPreviewEmailLookupSignal =
-    previewEmailEnrichment.attempted > 0 || Boolean(previewEmailEnrichment.error.trim());
   const messagingReady = Number(experiment?.messageFlow.publishedRevision ?? 0) > 0;
   const setupComplete = setupReady;
   const prospectsUnlocked = setupComplete;
@@ -510,196 +480,9 @@ export default function ExperimentClient({
     0,
     Math.min(100, Math.round((realEmailLeadCount / Math.max(1, PROSPECT_VALIDATION_TARGET)) * 100))
   );
-  const prospectGoalLabel = `${PROSPECT_VALIDATION_TARGET} real work emails`;
   const prospectPrimaryMessage = prospectsReady
     ? "You have enough leads. You can write emails now."
     : `AI is still collecting leads. You need ${remainingProspectLeads} more real work emails before you can write emails.`;
-  const autoSourceButtonLabel = sampling
-    ? "Finding leads..."
-    : prospectsReady
-      ? "Find more leads"
-      : autoSourcePaused
-        ? "Resume finding leads"
-        : "Start finding leads";
-  const autoSourceStatusLabel = prospectsReady
-    ? "done"
-    : sampling
-      ? "working"
-      : autoSourcePaused
-        ? "paused"
-        : "waiting";
-  const autoSourceStatusMessage =
-    samplingStatus ||
-    samplingSummary ||
-    (prospectsReady
-      ? "We found enough real work emails. You can move on or keep finding more."
-      : autoSourcePaused
-        ? "Finding is paused. Press resume when you want to continue."
-        : "We will keep looking until you have enough real work emails.");
-  const autoSourceMeta = [
-    samplingAttempt > 0 ? `Attempt ${samplingAttempt}` : "",
-    samplingRunsLaunched > 0 ? `${samplingRunsLaunched} run${samplingRunsLaunched === 1 ? "" : "s"} started` : "",
-    samplingHeartbeatAt ? `Last update ${formatDate(samplingHeartbeatAt)}` : "",
-  ]
-    .filter(Boolean)
-    .join(" · ");
-  const advancedProspectDetails = (
-    <details className="rounded-[14px] border border-[color:var(--border)] bg-[color:var(--surface)]">
-      <summary className="flex cursor-pointer list-none flex-wrap items-center justify-between gap-2 px-3 py-3 text-sm font-medium text-[color:var(--foreground)]">
-        <span>Advanced options</span>
-        <span className="text-xs font-normal text-[color:var(--muted-foreground)]">
-          Upload a list or let AI keep searching in the background.
-        </span>
-      </summary>
-      <div className="grid gap-4 border-t border-[color:var(--border)] px-3 py-3">
-        <div className="flex flex-wrap items-start justify-between gap-3 rounded-[12px] bg-[color:var(--surface-muted)] px-3 py-3">
-          <div className="space-y-1">
-            <div className="text-sm font-medium text-[color:var(--foreground)]">Keep searching automatically</div>
-            <div className="text-xs text-[color:var(--muted-foreground)]">
-              AI can keep looking until you have {prospectGoalLabel}.
-            </div>
-            <div className="text-xs text-[color:var(--muted-foreground)]">
-              {autoSourceStatusMessage}
-              {autoSourceMeta ? ` ${autoSourceMeta}.` : ""}
-            </div>
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <Badge variant={prospectsReady ? "success" : sampling ? "accent" : "muted"}>
-              {autoSourceStatusLabel}
-            </Badge>
-            <Button
-              type="button"
-              variant="outline"
-              disabled={sampling}
-              onClick={() => {
-                startBackgroundSourcing();
-              }}
-            >
-              {sampling ? (
-                <RefreshCw className="h-4 w-4 animate-spin" />
-              ) : prospectsReady ? (
-                <Plus className="h-4 w-4" />
-              ) : (
-                <RefreshCw className="h-4 w-4" />
-              )}
-              {autoSourceButtonLabel}
-            </Button>
-            <Button
-              type="button"
-              variant="outline"
-              disabled={!sampling}
-              onClick={() => {
-                void stopAutoSource();
-              }}
-            >
-              Pause
-            </Button>
-          </div>
-        </div>
-
-        <div className="rounded-[12px] bg-[color:var(--surface-muted)] px-3 py-3">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <div className="text-sm font-medium text-[color:var(--foreground)]">Upload your own list</div>
-              <div className="mt-1 text-xs text-[color:var(--muted-foreground)]">
-                Upload a CSV with <code>email</code>, or with <code>name + domain</code>.
-              </div>
-            </div>
-            {csvFileName ? <Badge variant="muted">{csvFileName}</Badge> : null}
-          </div>
-          <div className="mt-3 flex flex-wrap items-center gap-2">
-            <Input
-              type="file"
-              accept=".csv,text/csv"
-              onChange={(event) => {
-                handleCsvFileSelected(event.target.files?.[0] ?? null);
-              }}
-              className="max-w-sm"
-            />
-            <Button
-              type="button"
-              variant="outline"
-              disabled={importingCsv || !csvText.trim()}
-              onClick={async () => {
-                await importCsvLeads();
-              }}
-            >
-              <Upload className="h-4 w-4" />
-              {importingCsv ? "Importing..." : "Import CSV"}
-            </Button>
-          </div>
-          {csvImportSummary ? (
-            <div className="mt-3 rounded-lg border border-[color:var(--success)]/40 bg-[color:var(--success-soft)] px-3 py-2 text-sm text-[color:var(--success)]">
-              {csvImportSummary}
-            </div>
-          ) : null}
-          {csvImportErrors.length ? (
-            <div className="mt-3 rounded-lg border border-[color:var(--warning)]/40 bg-[color:var(--warning-soft)] px-3 py-2 text-xs text-[color:var(--warning)]">
-              {csvImportErrors.slice(0, 5).join(" · ")}
-            </div>
-          ) : null}
-        </div>
-      </div>
-    </details>
-  );
-  const prospectActivityDetails = (
-    <details className="rounded-[14px] border border-[color:var(--border)] bg-[color:var(--surface)]">
-      <summary className="flex cursor-pointer list-none flex-wrap items-center justify-between gap-2 px-3 py-3 text-sm font-medium text-[color:var(--foreground)]">
-        <span>View activity</span>
-        <span className="text-xs font-normal text-[color:var(--muted-foreground)]">
-          Only open this if something looks wrong.
-        </span>
-      </summary>
-      <div className="grid gap-3 border-t border-[color:var(--border)] px-3 py-3">
-        {hasPreviewEmailLookupSignal ? (
-          <div
-            className={`rounded-[12px] px-3 py-2 text-sm ${
-              previewEmailEnrichment.error
-                ? "border border-[color:var(--warning)]/40 bg-[color:var(--warning-soft)] text-[color:var(--warning)]"
-                : "border border-[color:var(--accent)]/40 bg-[color:var(--accent-soft)] text-[color:var(--accent)]"
-            }`}
-          >
-            {previewEmailEnrichment.error ? (
-              <span>{previewEmailEnrichment.error}</span>
-            ) : (
-              <span>
-                Checked {previewEmailEnrichment.attempted} people, matched {previewEmailEnrichment.matched},
-                still missing {Math.max(0, previewEmailEnrichment.attempted - previewEmailEnrichment.matched)}.
-              </span>
-            )}
-          </div>
-        ) : invalidLeadCount > 0 ? (
-          <div className="rounded-[12px] border border-[color:var(--warning)]/40 bg-[color:var(--warning-soft)] px-3 py-2 text-sm text-[color:var(--warning)]">
-            {invalidLeadCount} people are still missing a real work email.
-          </div>
-        ) : null}
-
-        <div className="rounded-[12px] bg-[color:var(--surface-muted)] px-3 py-3">
-          <div className="text-sm font-medium text-[color:var(--foreground)]">Background status</div>
-          <div className="mt-1 text-sm text-[color:var(--foreground)]">{autoSourceStatusMessage}</div>
-          {autoSourceMeta ? (
-            <div className="mt-2 text-xs text-[color:var(--muted-foreground)]">{autoSourceMeta}</div>
-          ) : null}
-        </div>
-
-        {sampleLeadError ? <div className="text-sm text-[color:var(--danger)]">{sampleLeadError}</div> : null}
-
-        {sampleLeads.length ? (
-          <div className="rounded-[12px] bg-[color:var(--surface-muted)] px-3 py-3">
-            <div className="text-sm font-medium text-[color:var(--foreground)]">Recent checked leads</div>
-            <div className="mt-2 flex flex-wrap gap-2">
-              {sampleLeads.slice(0, 6).map((lead) => (
-                <Badge key={`${lead.id}:${lead.email}`} variant={lead.email ? "success" : "muted"}>
-                  {lead.name || "Unknown"}
-                  {lead.email ? "" : " · missing email"}
-                </Badge>
-              ))}
-            </div>
-          </div>
-        ) : null}
-      </div>
-    </details>
-  );
 
   const workflowStages = useMemo(
     () =>
@@ -814,7 +597,6 @@ export default function ExperimentClient({
   ].filter(Boolean);
   const launchIdentityReady = launchIdentityIssues.length === 0;
   const launchBlocked = !launchUnlocked || !launchIdentityReady;
-  const canAutoSendOnAddLeads = launchUnlocked && launchIdentityReady;
   const businessHoursEnabled = experiment?.testEnvelope.businessHoursEnabled !== false;
   const businessHoursStartHour = Math.max(
     0,
@@ -930,68 +712,6 @@ export default function ExperimentClient({
       setDraftingSetupFromAi(false);
     }
   };
-
-  const handleCsvFileSelected = (file: File | null) => {
-    if (!file) {
-      setCsvFileName("");
-      setCsvText("");
-      return;
-    }
-
-    setCsvFileName(file.name);
-    setCsvImportErrors([]);
-    setCsvImportSummary("");
-    void file
-      .text()
-      .then((text) => {
-        setCsvText(text.slice(0, CSV_MAX_CHARS));
-      })
-      .catch(() => {
-        setCsvText("");
-        setError("Failed to read CSV file");
-      });
-  };
-
-  const importCsvLeads = async () => {
-    if (!experiment || !csvText.trim()) return;
-    setImportingCsv(true);
-    setError("");
-    setCsvImportErrors([]);
-    setCsvImportSummary("");
-    try {
-      const result = await importExperimentProspectsCsvApi(brandId, experiment.id, csvText);
-      setCsvImportErrors(result.parseErrors.slice(0, 10));
-      setCsvImportSummary(
-        `Imported ${result.importedCount} leads${result.parseErrorCount ? ` (${result.parseErrorCount} rows skipped)` : ""}.`
-      );
-      await refresh(false);
-      trackEvent("prospects_imported_csv", {
-        brandId,
-        experimentId: experiment.id,
-        runId: result.runId,
-        importedCount: result.importedCount,
-      });
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to import CSV leads");
-    } finally {
-      setImportingCsv(false);
-    }
-  };
-
-  const startBackgroundSourcing = () => {
-    setProspectInputMode("need_data");
-    setAutoSourcePaused(false);
-    if (!prospectsReady) {
-      void autoSourceProspects("gate");
-      return;
-    }
-    const count = requestAdditionalLeadsCount();
-    if (!count) return;
-    void autoSourceProspects("expand", count, {
-      autoSend: canAutoSendOnAddLeads,
-    });
-  };
-
   const requestAdditionalLeadsCount = () => {
     if (typeof window === "undefined") return null;
     const defaultValue = String(experiment?.testEnvelope.sampleSize ?? PROSPECT_VALIDATION_TARGET);
@@ -1008,33 +728,6 @@ export default function ExperimentClient({
     return count;
   };
 
-  const stopAutoSource = async () => {
-    if (!experiment) return;
-    setAutoSourcePaused(true);
-    if (!sampling) {
-      setSamplingSummary("Auto-source paused.");
-      return;
-    }
-    samplingStopRequestedRef.current = true;
-    samplingAbortRef.current?.abort();
-    setSamplingStatus("Stopping auto-source...");
-    setSamplingSummary("Auto-source paused. Finishing current sync and refreshing latest run status.");
-
-    const activeRunId = samplingActiveRunIdRef.current;
-    if (!activeRunId) return;
-    try {
-      await controlExperimentRunApi(
-        brandId,
-        experiment.id,
-        activeRunId,
-        "cancel",
-        "Stopped from Prospect Gate auto-source control"
-      );
-    } catch {
-      // Ignore cancel errors; final refresh still reflects actual run state.
-    }
-  };
-
   const autoSourceProspects = async (
     mode: AutoSourceMode = "gate",
     expandLeadCount?: number,
@@ -1047,7 +740,6 @@ export default function ExperimentClient({
     samplingAbortRef.current = abortController;
     samplingStopRequestedRef.current = false;
     samplingActiveRunIdRef.current = "";
-    setAutoSourcePaused(false);
     setSampling(true);
     setError("");
     setSamplingStatus(mode === "expand" ? "Starting incremental sourcing for additional leads..." : "Starting continuous auto-sourcing...");
@@ -1228,25 +920,6 @@ export default function ExperimentClient({
       }
     }
   };
-
-  useEffect(() => {
-    if (loading || !experiment) return;
-    if (currentStage !== 1) return;
-    if (prospectInputMode !== "need_data") return;
-    if (!prospectsUnlocked || prospectsReady) return;
-    if (sampling || autoSourcePaused) return;
-    void autoSourceProspects();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [
-    loading,
-    experiment?.id,
-    currentStage,
-    prospectInputMode,
-    prospectsUnlocked,
-    prospectsReady,
-    sampling,
-    autoSourcePaused,
-  ]);
 
   useEffect(() => {
     if (loading || !experiment || routeStage !== null || stageAutoInitializedRef.current) return;
@@ -1823,8 +1496,6 @@ export default function ExperimentClient({
                 await refresh(false);
               }}
             />
-            {advancedProspectDetails}
-            {prospectActivityDetails}
           </CardContent>
         </Card>
 
@@ -2468,11 +2139,6 @@ export default function ExperimentClient({
               await refresh(false);
             }}
           />
-
-          <div className="grid gap-2">
-            {advancedProspectDetails}
-            {prospectActivityDetails}
-          </div>
         </section>
       ) : null}
 

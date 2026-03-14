@@ -1,8 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { CheckCircle2, Loader2, RefreshCw, Search, Sparkles } from "lucide-react";
-import { Badge } from "@/components/ui/badge";
+import { Loader2, RefreshCw, Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
@@ -12,7 +11,7 @@ const EMBED_IMPORT_MESSAGE_TYPE = "enrichanything:import-table";
 const EMBED_HOST_INIT_MESSAGE_TYPE = "lastb2b:embed-init";
 const EMBED_HOST_COMMAND_MESSAGE_TYPE = "lastb2b:embed-command";
 const REVIEW_CHECKPOINT_ROWS = 20;
-const DEFAULT_GOAL_COUNT = 200;
+const DEFAULT_GOAL_COUNT = REVIEW_CHECKPOINT_ROWS;
 
 type ImportMode = "auto" | "manual";
 type ActivityTone = "neutral" | "success" | "warning" | "danger";
@@ -207,10 +206,10 @@ export default function LiveProspectTableEmbed({
   const [iframeReady, setIframeReady] = useState(false);
   const [iframeError, setIframeError] = useState("");
   const [loadingConfig, setLoadingConfig] = useState(true);
-  const [autoAddEnabled, setAutoAddEnabled] = useState(true);
+  const [allowLiveTable, setAllowLiveTable] = useState(false);
   const [reviewApproved, setReviewApproved] = useState(false);
   const [promptDraft, setPromptDraft] = useState("");
-  const [activityItems, setActivityItems] = useState<ActivityItem[]>([]);
+  const [, setActivityItems] = useState<ActivityItem[]>([]);
   const [tableState, setTableState] = useState<EmbeddedTableState>({
     title: "",
     prompt: "",
@@ -230,7 +229,7 @@ export default function LiveProspectTableEmbed({
   });
   const [importState, setImportState] = useState<ImportState>({
     status: "idle",
-    message: "AI will keep adding good leads automatically.",
+    message: `AI is gathering the first ${REVIEW_CHECKPOINT_ROWS} leads for review.`,
     parseErrors: [],
     mode: null,
   });
@@ -307,6 +306,7 @@ export default function LiveProspectTableEmbed({
         embedUrl.searchParams.set("parentLabel", "lastb2b");
         setIframeSrc(embedUrl.toString());
         setIframeOrigin(embedUrl.origin);
+        setAllowLiveTable(Boolean(payload.enabled));
         setTableState((current) => ({
           ...current,
           title: String(payload.tableTitle ?? current.title ?? "").trim(),
@@ -571,57 +571,44 @@ export default function LiveProspectTableEmbed({
   const promptForSearch = normalizedTablePrompt || normalizedPromptDraft;
   const hasPrompt = Boolean(promptForSearch);
   const promptDirty = Boolean(normalizedPromptDraft && normalizedPromptDraft !== normalizedTablePrompt);
-  const rowLabel = `${tableState.rowCount} row${tableState.rowCount === 1 ? "" : "s"}`;
   const reviewStorageKey = useMemo(
     () => (promptForSearch ? `lastb2b:prospects-review:${initPath}:${promptForSearch}` : ""),
     [initPath, promptForSearch]
   );
   const reviewPending = tableState.rowCount >= REVIEW_CHECKPOINT_ROWS && !reviewApproved;
-  const shouldContinueSearching = reviewApproved && tableState.rowCount < goalCount;
   const autoImportSignature = [
     normalizedTablePrompt,
     tableState.rowCount,
     tableState.lastSuccessAt,
     tableState.lastRowsAppended,
   ].join("|");
-  const statusCopy = tableState.isDiscovering
-    ? "Searching for prospects..."
-    : tableState.isEnriching
-      ? "Filling columns..."
-      : tableState.isLiveRunning
-        ? "Updating live table..."
-        : reviewPending
-          ? `${Math.max(REVIEW_CHECKPOINT_ROWS, tableState.rowCount)} leads found • review targeting`
-          : shouldContinueSearching
-            ? `Continuing search • ${tableState.rowCount} / ${goalCount} leads`
-            : tableState.rowCount > 0
-              ? `${tableState.rowCount} leads found`
-              : "Searching for prospects… The first leads will appear shortly.";
+  const statusCopy = reviewPending
+    ? `${tableState.rowCount} / ${goalCount} leads found • review targeting`
+    : tableBusy
+      ? `Searching for prospects • ${tableState.rowCount} / ${goalCount}`
+      : tableState.rowCount > 0
+        ? `${tableState.rowCount} / ${goalCount} leads found`
+        : "Searching for prospects...";
   const assistantNote =
     importState.status === "importing"
-      ? importState.mode === "auto"
-        ? "Checking the latest rows and keeping the good leads automatically."
-        : "Checking the current rows now."
+      ? "Checking the latest rows and keeping the good leads automatically."
       : importState.status === "success"
         ? importState.importedCount > 0
-          ? "AI added the latest good leads. Open review if you want to inspect the table."
+          ? "AI added the good leads from this review batch."
           : importState.dedupedCount > 0
-            ? "The latest good leads were already in this experiment."
-            : "AI checked the latest rows but did not find new verified work emails yet."
+            ? "The good leads from this batch were already added."
+            : "AI checked these rows but did not find new verified work emails yet."
         : importState.status === "error"
           ? importState.message
-          : tableState.isDiscovering
-            ? "AI is working on the first set of matching leads."
-            : tableState.isEnriching
-              ? "Filling the extra columns for the rows already here."
-              : reviewPending
-                ? "First leads found. Confirm the targeting before AI keeps going."
-                : promptDirty
-                  ? "Apply your targeting changes to refresh the search."
-                  : normalizedTablePrompt
-                    ? `Looking for: ${normalizedTablePrompt}`
-                    : "Searching for prospects…";
-  const manualAddLabel = importState.status === "importing" ? "Checking rows..." : "Add current table now";
+          : reviewPending
+            ? "Review the first leads. If the targeting looks right, keep them."
+            : promptDirty
+              ? "Update the audience, then apply your changes."
+              : tableState.isDiscovering
+                ? `Looking for people who match: ${promptForSearch || "your audience"}`
+                : reviewApproved
+                  ? "Targeting approved. You can move on once enough verified emails are ready."
+                  : "AI is looking for the first review batch.";
 
   useEffect(() => {
     if (!iframeReady) return;
@@ -665,15 +652,19 @@ export default function LiveProspectTableEmbed({
 
   useEffect(() => {
     if (typeof window === "undefined") return;
+    if (allowLiveTable) {
+      setReviewApproved(true);
+      return;
+    }
     if (!reviewStorageKey) {
       setReviewApproved(false);
       return;
     }
     setReviewApproved(window.localStorage.getItem(reviewStorageKey) === "approved");
-  }, [reviewStorageKey]);
+  }, [allowLiveTable, reviewStorageKey]);
 
   useEffect(() => {
-    if (!iframeReady || reviewApproved || !hasPrompt || tableState.hasRows || tableBusy) {
+    if (!iframeReady || reviewApproved || !hasPrompt || tableBusy || tableState.rowCount >= goalCount) {
       return;
     }
 
@@ -686,9 +677,10 @@ export default function LiveProspectTableEmbed({
     if (normalizedPromptDraft && normalizedPromptDraft !== normalizedTablePrompt) {
       sendHostCommand("set-prompt", { prompt: promptForSearch });
     }
-    sendHostCommand("run-search");
+    sendHostCommand("run-search", { limit: goalCount });
     pushActivity("AI started searching for the first leads.", "neutral");
   }, [
+    goalCount,
     hasPrompt,
     iframeReady,
     normalizedPromptDraft,
@@ -697,19 +689,19 @@ export default function LiveProspectTableEmbed({
     reviewApproved,
     sendHostCommand,
     tableBusy,
-    tableState.hasRows,
+    tableState.rowCount,
   ]);
 
   useEffect(() => {
-    if (!iframeReady || reviewApproved || !tableState.liveEnabled || tableBusy) {
+    if (allowLiveTable || !iframeReady || !tableState.liveEnabled || tableBusy) {
       return;
     }
 
     sendHostCommand("toggle-live", { enabled: false });
-  }, [iframeReady, reviewApproved, sendHostCommand, tableBusy, tableState.liveEnabled]);
+  }, [allowLiveTable, iframeReady, sendHostCommand, tableBusy, tableState.liveEnabled]);
 
   useEffect(() => {
-    if (!autoAddEnabled || !iframeReady || importState.status === "importing" || tableBusy || !tableState.hasRows) {
+    if (!reviewApproved || !iframeReady || importState.status === "importing" || tableBusy || !tableState.hasRows) {
       return;
     }
 
@@ -726,11 +718,11 @@ export default function LiveProspectTableEmbed({
     lastAutoImportSignatureRef.current = autoImportSignature;
     requestImport("auto");
   }, [
-    autoAddEnabled,
     autoImportSignature,
     iframeReady,
     importState.status,
     requestImport,
+    reviewApproved,
     tableBusy,
     tableState.hasRows,
     tableState.lastRowsAppended,
@@ -776,7 +768,7 @@ export default function LiveProspectTableEmbed({
                 sendHostCommand("set-prompt", { prompt: normalizedPromptDraft });
               }
               sendHostCommand("set-active-tab", { tab: "search" });
-              sendHostCommand("run-search");
+              sendHostCommand("run-search", { limit: goalCount });
             }}
             placeholder="Find self-funded SaaS founders who might want AWS credits"
             className="h-12 flex-1 rounded-[14px] border-[#e5dfd4] bg-[#fbfaf7] text-[#232019] placeholder:text-[#8a8275] shadow-none focus-visible:ring-[#d6cec0]"
@@ -794,7 +786,7 @@ export default function LiveProspectTableEmbed({
                   setReviewApproved(false);
                   sendHostCommand("set-prompt", { prompt: normalizedPromptDraft });
                   sendHostCommand("set-active-tab", { tab: "search" });
-                  sendHostCommand("run-search");
+                  sendHostCommand("run-search", { limit: goalCount });
                 }}
                 disabled={!iframeReady || tableBusy || !normalizedPromptDraft}
               >
@@ -808,7 +800,7 @@ export default function LiveProspectTableEmbed({
                 ) : (
                   <Search className="h-4 w-4" />
                 )}
-                {reviewPending ? "Waiting for review" : tableBusy || shouldContinueSearching ? "Searching…" : "Targeting ready"}
+                {reviewPending ? "Waiting for review" : tableBusy ? "Searching…" : reviewApproved ? "Targeting approved" : "Targeting ready"}
               </div>
             )}
             <Button
@@ -820,43 +812,15 @@ export default function LiveProspectTableEmbed({
                 promptInputRef.current?.focus();
                 sendHostCommand("set-active-tab", { tab: "search" });
               }}
-              disabled={!iframeReady}
-            >
+                disabled={!iframeReady}
+              >
               Edit targeting
-            </Button>
-            <Button
-              type="button"
-              size="lg"
-              variant="outline"
-              className="border-[#e5dfd4] bg-white text-[#232019] hover:bg-[#f7f4ee]"
-              onClick={() => {
-                if (tableState.liveEnabled || tableBusy) {
-                  sendHostCommand("toggle-live", { enabled: false });
-                } else if (reviewApproved) {
-                  sendHostCommand("toggle-live", { enabled: true });
-                  sendHostCommand("run-search");
-                }
-              }}
-              disabled={!iframeReady || (!tableBusy && !tableState.liveEnabled && !reviewApproved)}
-            >
-              {tableState.liveEnabled || tableBusy ? "Pause" : "Resume"}
             </Button>
           </div>
         </div>
 
-        <div className="mt-3 flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
-          <div className="min-w-0 truncate text-sm text-[#6f685d]" title={assistantNote}>
-            {assistantNote}
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <Badge variant="muted">{rowLabel}</Badge>
-            <Badge variant={tableState.liveEnabled ? "success" : "muted"}>
-              {tableState.liveEnabled ? "Live" : "Paused"}
-            </Badge>
-            <Badge variant={autoAddEnabled ? "success" : "muted"}>
-              {autoAddEnabled ? "Auto-add on" : "Auto-add off"}
-            </Badge>
-          </div>
+        <div className="mt-3 min-w-0 truncate text-sm text-[#6f685d]" title={assistantNote}>
+          {assistantNote}
         </div>
       </div>
 
@@ -870,7 +834,7 @@ export default function LiveProspectTableEmbed({
             <div>
               <div className="text-sm font-semibold text-[#232019]">First leads found. Do these look right?</div>
               <div className="mt-1 text-sm text-[#6f685d]">
-                AI found the first {Math.max(REVIEW_CHECKPOINT_ROWS, tableState.rowCount)} prospects. Make sure the targeting looks correct before it continues.
+                AI found the first {Math.max(REVIEW_CHECKPOINT_ROWS, tableState.rowCount)} prospects. Make sure the targeting looks correct before you move on.
               </div>
             </div>
             <div className="flex flex-wrap gap-2">
@@ -882,12 +846,10 @@ export default function LiveProspectTableEmbed({
                     window.localStorage.setItem(reviewStorageKey, "approved");
                   }
                   setReviewApproved(true);
-                  sendHostCommand("toggle-live", { enabled: true });
-                  sendHostCommand("run-search");
-                  pushActivity("Targeting looks good. AI is continuing the search.", "success");
+                  pushActivity("Targeting looks good. AI will keep the good leads from this batch.", "success");
                 }}
               >
-                Looks good — keep searching
+                Looks good
               </Button>
               <Button
                 type="button"
@@ -930,105 +892,11 @@ export default function LiveProspectTableEmbed({
           }}
         />
       </div>
-
-      <details className="border-t border-[#ebe4d7] bg-[#faf8f4]">
-        <summary className="flex cursor-pointer list-none flex-wrap items-center justify-between gap-2 px-4 py-3 text-sm font-medium text-[#232019] md:px-6">
-          <span>Advanced</span>
-          <span className="text-xs font-normal text-[#8a8275]">Fill columns or add the current table manually.</span>
-        </summary>
-        <div className="border-t border-[#ebe4d7] bg-white px-4 py-3 md:px-6">
-          <div className="flex flex-wrap items-center gap-2">
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              className="border-[#e5dfd4] bg-white text-[#232019] hover:bg-[#f7f4ee]"
-              onClick={() => {
-                setAutoAddEnabled((current) => !current);
-              }}
-            >
-              {autoAddEnabled ? "Auto-add on" : "Auto-add off"}
-            </Button>
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              className="border-[#e5dfd4] bg-white text-[#232019] hover:bg-[#f7f4ee]"
-              onClick={() => {
-                sendHostCommand("set-active-tab", { tab: "columns" });
-                sendHostCommand("run-enrichment");
-              }}
-              disabled={!iframeReady || tableBusy || !tableState.hasRows || !tableState.hasColumns}
-            >
-              {tableState.isEnriching ? (
-                <RefreshCw className="h-3.5 w-3.5 animate-spin" />
-              ) : (
-                <Sparkles className="h-3.5 w-3.5" />
-              )}
-              {tableState.isEnriching ? "Filling..." : "Fill columns"}
-            </Button>
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              className="border-[#e5dfd4] bg-white text-[#232019] hover:bg-[#f7f4ee]"
-              onClick={() => {
-                requestImport("manual");
-              }}
-              disabled={!iframeReady || tableBusy || importState.status === "importing" || !tableState.hasRows}
-            >
-              {manualAddLabel}
-            </Button>
-            {importState.status === "success" && importState.importedCount > 0 ? (
-              <div className="inline-flex items-center gap-2 text-xs text-[#2f7250]">
-                <CheckCircle2 className="h-3.5 w-3.5" />
-                Added
-              </div>
-            ) : null}
-          </div>
-          {importState.parseErrors.length ? (
-            <div className="mt-3 rounded-[12px] border border-[color:var(--warning)]/35 bg-[color:var(--warning-soft)] px-3 py-2 text-xs text-[color:var(--warning)]">
-              {importState.parseErrors.slice(0, 5).join(" · ")}
-            </div>
-          ) : null}
+      {importState.parseErrors.length ? (
+        <div className="border-t border-[#ebe4d7] bg-[#faf8f4] px-4 py-3 text-xs text-[#94612d] md:px-6">
+          {importState.parseErrors.slice(0, 5).join(" · ")}
         </div>
-      </details>
-
-      <details className="border-t border-[#ebe4d7] bg-[#faf8f4]">
-        <summary className="flex cursor-pointer list-none flex-wrap items-center justify-between gap-2 px-4 py-3 text-sm font-medium text-[#232019] md:px-6">
-          <span>View activity</span>
-          <span className="text-xs font-normal text-[#8a8275]">Only open this if you want the AI log.</span>
-        </summary>
-        <div className="border-t border-[#ebe4d7] bg-white px-4 py-3 md:px-6">
-          <div className="space-y-2">
-            {activityItems.length ? (
-              activityItems.slice(0, 5).map((item) => (
-                <div
-                  key={item.id}
-                  className={`flex items-start justify-between gap-3 rounded-[12px] px-3 py-2 text-sm ${
-                    item.tone === "success"
-                      ? "bg-[#e4f1e8] text-[#2f7250]"
-                      : item.tone === "warning"
-                        ? "bg-[#fbefdd] text-[#94612d]"
-                        : item.tone === "danger"
-                          ? "bg-[#f8e4df] text-[#9b4b3f]"
-                          : "bg-[#faf8f4] text-[#3a342a]"
-                  }`}
-                >
-                  <span className="min-w-0 flex-1">{item.message}</span>
-                  <span className="shrink-0 text-[11px] uppercase tracking-[0.14em] opacity-60">
-                    {item.meta}
-                  </span>
-                </div>
-              ))
-            ) : (
-              <div className="rounded-[12px] bg-[#faf8f4] px-3 py-2 text-sm text-[#6f685d]">
-                AI is ready. Tell it who to find and it will start filling the table.
-              </div>
-            )}
-          </div>
-        </div>
-      </details>
+      ) : null}
     </div>
   );
 }

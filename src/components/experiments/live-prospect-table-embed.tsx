@@ -72,6 +72,11 @@ type LiveProspectTableEmbedProps = {
   initPath: string;
   importPath: string;
   goalCount?: number;
+  onTableStateChange?: (state: {
+    rowCount: number;
+    isSearching: boolean;
+    prompt: string;
+  }) => void | Promise<void>;
   onImported?: (result: {
     runId: string;
     importedCount: number;
@@ -186,6 +191,7 @@ export default function LiveProspectTableEmbed({
   initPath,
   importPath,
   goalCount = DEFAULT_GOAL_COUNT,
+  onTableStateChange,
   onImported,
 }: LiveProspectTableEmbedProps) {
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
@@ -609,6 +615,22 @@ export default function LiveProspectTableEmbed({
                 : reviewApproved
                   ? "Targeting approved. You can move on once enough verified emails are ready."
                   : "AI is looking for the first review batch.";
+
+  useEffect(() => {
+    Promise.resolve(
+      onTableStateChange?.({
+        rowCount: tableState.rowCount,
+        isSearching: tableBusy,
+        prompt: normalizedTablePrompt || normalizedPromptDraft,
+      })
+    ).catch(() => undefined);
+  }, [
+    normalizedPromptDraft,
+    normalizedTablePrompt,
+    onTableStateChange,
+    tableBusy,
+    tableState.rowCount,
+  ]);
 
   useEffect(() => {
     if (!iframeReady) return;

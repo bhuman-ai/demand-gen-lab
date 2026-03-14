@@ -252,6 +252,7 @@ export default function ExperimentClient({
   const [sampling, setSampling] = useState(false);
   const [promoting, setPromoting] = useState(false);
   const [error, setError] = useState("");
+  const [prospectTableRowCount, setProspectTableRowCount] = useState(0);
   const [currentStage, setCurrentStage] = useState<StageIndex>(
     view === "prospects" ? 1 : view === "messaging" ? 2 : view === "launch" ? 3 : 0
   );
@@ -476,12 +477,10 @@ export default function ExperimentClient({
   const launchActive = launchUnlocked && Boolean(latestRun && !isRunTerminal(latestRun.status));
   const highestUnlockedStage = launchUnlocked ? 3 : messagingUnlocked ? 2 : prospectsUnlocked ? 1 : 0;
   const remainingProspectLeads = Math.max(0, PROSPECT_VALIDATION_TARGET - realEmailLeadCount);
-  const gateProgressPct = Math.max(
-    0,
-    Math.min(100, Math.round((realEmailLeadCount / Math.max(1, PROSPECT_VALIDATION_TARGET)) * 100))
-  );
   const prospectPrimaryMessage = prospectsReady
     ? "You have enough leads. You can write emails now."
+    : prospectTableRowCount > 0
+      ? `${prospectTableRowCount} lead${prospectTableRowCount === 1 ? "" : "s"} are in the table. AI is still checking work emails before you can write emails.`
     : `AI is still collecting leads. You need ${remainingProspectLeads} more real work emails before you can write emails.`;
 
   const workflowStages = useMemo(
@@ -1470,28 +1469,13 @@ export default function ExperimentClient({
             <CardDescription>{prospectPrimaryMessage}</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
-            <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-4">
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <div>
-                  <div className="text-2xl font-semibold text-[color:var(--foreground)]">
-                    {realEmailLeadCount} / {PROSPECT_VALIDATION_TARGET}
-                  </div>
-                  <div className="mt-1 text-sm text-[color:var(--muted-foreground)]">verified work emails</div>
-                </div>
-                <Badge variant={prospectsReady ? "success" : "muted"}>{remainingProspectLeads} remaining</Badge>
-              </div>
-              <div className="mt-4 h-2 overflow-hidden rounded-full bg-[color:var(--border)]">
-                <div
-                  className={`h-full rounded-full ${prospectsReady ? "bg-[color:var(--success)]" : "bg-[color:var(--accent)]"}`}
-                  style={{ width: `${gateProgressPct}%` }}
-                />
-              </div>
-            </div>
-
             <LiveProspectTableEmbed
               initPath={`/api/brands/${brandId}/experiments/${experiment.id}/prospect-table`}
               importPath={`/api/brands/${brandId}/experiments/${experiment.id}/import-prospects/selection`}
               goalCount={PROSPECT_VALIDATION_TARGET}
+              onTableStateChange={({ rowCount }) => {
+                setProspectTableRowCount(rowCount);
+              }}
               onImported={async () => {
                 await refresh(false);
               }}
@@ -2106,35 +2090,13 @@ export default function ExperimentClient({
             </Button>
           </div>
 
-          <div className="rounded-[16px] border border-[color:var(--border)] bg-[color:var(--surface)] px-4 py-3">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div className="flex flex-wrap items-center gap-3 text-sm">
-                <span className="font-medium text-[color:var(--foreground)]">
-                  Leads found: {realEmailLeadCount} / {PROSPECT_VALIDATION_TARGET}
-                </span>
-                <Badge variant={prospectsReady ? "success" : "muted"}>
-                  {prospectsReady ? "Ready for emails" : "Still finding people"}
-                </Badge>
-                <span className="text-[color:var(--muted-foreground)]">
-                  {remainingProspectLeads > 0 ? `${remainingProspectLeads} more needed` : "Enough leads found"}
-                </span>
-              </div>
-              <span className="text-xs text-[color:var(--muted-foreground)]">
-                {stageRouteMode ? "Prospects step" : "Live sourcing table"}
-              </span>
-            </div>
-            <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-[color:var(--border)]">
-              <div
-                className={`h-full rounded-full ${prospectsReady ? "bg-[color:var(--success)]" : "bg-[color:var(--accent)]"}`}
-                style={{ width: `${gateProgressPct}%` }}
-              />
-            </div>
-          </div>
-
           <LiveProspectTableEmbed
             initPath={`/api/brands/${brandId}/experiments/${experiment.id}/prospect-table`}
             importPath={`/api/brands/${brandId}/experiments/${experiment.id}/import-prospects/selection`}
             goalCount={PROSPECT_VALIDATION_TARGET}
+            onTableStateChange={({ rowCount }) => {
+              setProspectTableRowCount(rowCount);
+            }}
             onImported={async () => {
               await refresh(false);
             }}

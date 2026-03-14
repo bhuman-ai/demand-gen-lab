@@ -418,7 +418,7 @@ export default function ExperimentClient({
   const [, setSamplingActiveRunId] = useState("");
   const [samplingHeartbeatAt, setSamplingHeartbeatAt] = useState("");
   const [autoSourcePaused, setAutoSourcePaused] = useState(false);
-  const [prospectInputMode, setProspectInputMode] = useState<ProspectInputMode>("need_data");
+  const [prospectInputMode, setProspectInputMode] = useState<ProspectInputMode>("have_data");
   const [csvFileName, setCsvFileName] = useState("");
   const [csvText, setCsvText] = useState("");
   const [importingCsv, setImportingCsv] = useState(false);
@@ -660,7 +660,7 @@ export default function ExperimentClient({
     : `You need ${remainingProspectLeads} more real work emails before you can write emails.`;
   const prospectSecondaryMessage = prospectsReady
     ? "You can keep finding more leads if you want a bigger list."
-    : "Best default: let the platform keep finding leads for you.";
+    : "Best default: use the live table below and add the good rows as they appear.";
   const autoSourceButtonLabel = sampling
     ? "Finding leads..."
     : prospectsReady
@@ -2676,9 +2676,9 @@ export default function ExperimentClient({
                         : "bg-transparent"
                     }`}
                   >
-                    <div className="text-sm font-medium">Find them for me</div>
+                    <div className="text-sm font-medium">Keep finding people for me</div>
                     <div className="mt-1 text-xs text-[color:var(--muted-foreground)]">
-                      Best default. We keep looking until you have enough.
+                      Background mode. We keep looking until you have enough.
                     </div>
                   </button>
                   <button
@@ -2690,9 +2690,9 @@ export default function ExperimentClient({
                         : "bg-transparent"
                     }`}
                   >
-                    <div className="text-sm font-medium">I want to choose them</div>
+                    <div className="text-sm font-medium">Use the live table</div>
                     <div className="mt-1 text-xs text-[color:var(--muted-foreground)]">
-                      Search here yourself or upload a CSV.
+                      See the table here, review rows, and add the good ones.
                     </div>
                   </button>
                 </div>

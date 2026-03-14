@@ -1818,6 +1818,7 @@ export default function ExperimentClient({
             <LiveProspectTableEmbed
               initPath={`/api/brands/${brandId}/experiments/${experiment.id}/prospect-table`}
               importPath={`/api/brands/${brandId}/experiments/${experiment.id}/import-prospects/selection`}
+              goalCount={PROSPECT_VALIDATION_TARGET}
               onImported={async () => {
                 await refresh(false);
               }}
@@ -2462,6 +2463,7 @@ export default function ExperimentClient({
           <LiveProspectTableEmbed
             initPath={`/api/brands/${brandId}/experiments/${experiment.id}/prospect-table`}
             importPath={`/api/brands/${brandId}/experiments/${experiment.id}/import-prospects/selection`}
+            goalCount={PROSPECT_VALIDATION_TARGET}
             onImported={async () => {
               await refresh(false);
             }}

@@ -11,6 +11,8 @@ const EMBED_STATE_MESSAGE_TYPE = "enrichanything:embed-state";
 const EMBED_IMPORT_MESSAGE_TYPE = "enrichanything:import-table";
 const EMBED_HOST_INIT_MESSAGE_TYPE = "lastb2b:embed-init";
 const EMBED_HOST_COMMAND_MESSAGE_TYPE = "lastb2b:embed-command";
+const REVIEW_CHECKPOINT_ROWS = 20;
+const DEFAULT_GOAL_COUNT = 200;
 
 type ImportMode = "auto" | "manual";
 type ActivityTone = "neutral" | "success" | "warning" | "danger";
@@ -70,6 +72,7 @@ type EmbeddedTableState = {
 type LiveProspectTableEmbedProps = {
   initPath: string;
   importPath: string;
+  goalCount?: number;
   onImported?: (result: {
     runId: string;
     importedCount: number;
@@ -171,18 +174,6 @@ function normalizeTableState(value: unknown): EmbeddedTableState {
   };
 }
 
-function formatTimestamp(value: string) {
-  if (!value) return "";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "";
-  return date.toLocaleString(undefined, {
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  });
-}
-
 async function readJson(response: Response) {
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
@@ -195,12 +186,15 @@ async function readJson(response: Response) {
 export default function LiveProspectTableEmbed({
   initPath,
   importPath,
+  goalCount = DEFAULT_GOAL_COUNT,
   onImported,
 }: LiveProspectTableEmbedProps) {
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
+  const promptInputRef = useRef<HTMLInputElement | null>(null);
   const importBusyRef = useRef(false);
   const pendingImportModeRef = useRef<ImportMode>("manual");
   const lastAutoImportSignatureRef = useRef("");
+  const autoSearchPromptRef = useRef("");
   const previousStateRef = useRef({
     prompt: "",
     isDiscovering: false,
@@ -214,6 +208,7 @@ export default function LiveProspectTableEmbed({
   const [iframeError, setIframeError] = useState("");
   const [loadingConfig, setLoadingConfig] = useState(true);
   const [autoAddEnabled, setAutoAddEnabled] = useState(true);
+  const [reviewApproved, setReviewApproved] = useState(false);
   const [promptDraft, setPromptDraft] = useState("");
   const [activityItems, setActivityItems] = useState<ActivityItem[]>([]);
   const [tableState, setTableState] = useState<EmbeddedTableState>({
@@ -573,9 +568,16 @@ export default function LiveProspectTableEmbed({
   const tableBusy = tableState.isDiscovering || tableState.isEnriching || tableState.isLiveRunning;
   const normalizedPromptDraft = promptDraft.trim();
   const normalizedTablePrompt = tableState.prompt.trim();
-  const hasPrompt = Boolean(normalizedPromptDraft || normalizedTablePrompt);
-  const nextRunLabel = formatTimestamp(tableState.nextRunAt);
+  const promptForSearch = normalizedTablePrompt || normalizedPromptDraft;
+  const hasPrompt = Boolean(promptForSearch);
+  const promptDirty = Boolean(normalizedPromptDraft && normalizedPromptDraft !== normalizedTablePrompt);
   const rowLabel = `${tableState.rowCount} row${tableState.rowCount === 1 ? "" : "s"}`;
+  const reviewStorageKey = useMemo(
+    () => (promptForSearch ? `lastb2b:prospects-review:${initPath}:${promptForSearch}` : ""),
+    [initPath, promptForSearch]
+  );
+  const reviewPending = tableState.rowCount >= REVIEW_CHECKPOINT_ROWS && !reviewApproved;
+  const shouldContinueSearching = reviewApproved && tableState.rowCount < goalCount;
   const autoImportSignature = [
     normalizedTablePrompt,
     tableState.rowCount,
@@ -583,16 +585,18 @@ export default function LiveProspectTableEmbed({
     tableState.lastRowsAppended,
   ].join("|");
   const statusCopy = tableState.isDiscovering
-    ? "Finding rows..."
+    ? "Searching for prospects..."
     : tableState.isEnriching
       ? "Filling columns..."
       : tableState.isLiveRunning
         ? "Updating live table..."
-        : tableState.liveEnabled
-          ? nextRunLabel
-            ? `Live is on. Next check ${nextRunLabel}.`
-            : "Live is on."
-          : "Live is off.";
+        : reviewPending
+          ? `${Math.max(REVIEW_CHECKPOINT_ROWS, tableState.rowCount)} leads found • review targeting`
+          : shouldContinueSearching
+            ? `Continuing search • ${tableState.rowCount} / ${goalCount} leads`
+            : tableState.rowCount > 0
+              ? `${tableState.rowCount} leads found`
+              : "Searching for prospects… The first leads will appear shortly.";
   const assistantNote =
     importState.status === "importing"
       ? importState.mode === "auto"
@@ -607,14 +611,16 @@ export default function LiveProspectTableEmbed({
         : importState.status === "error"
           ? importState.message
           : tableState.isDiscovering
-            ? "Looking for people who match that description."
+            ? "AI is working on the first set of matching leads."
             : tableState.isEnriching
               ? "Filling the extra columns for the rows already here."
-              : normalizedPromptDraft && normalizedPromptDraft !== normalizedTablePrompt
-                ? "Press Update search to use your new request."
-                : normalizedTablePrompt
-                  ? `Looking for: ${normalizedTablePrompt}`
-                  : "Try “founders at self-funded SaaS companies in Europe”.";
+              : reviewPending
+                ? "First leads found. Confirm the targeting before AI keeps going."
+                : promptDirty
+                  ? "Apply your targeting changes to refresh the search."
+                  : normalizedTablePrompt
+                    ? `Looking for: ${normalizedTablePrompt}`
+                    : "Searching for prospects…";
   const manualAddLabel = importState.status === "importing" ? "Checking rows..." : "Add current table now";
 
   useEffect(() => {
@@ -656,6 +662,51 @@ export default function LiveProspectTableEmbed({
     tableState.liveEnabled,
     tableState.prompt,
   ]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (!reviewStorageKey) {
+      setReviewApproved(false);
+      return;
+    }
+    setReviewApproved(window.localStorage.getItem(reviewStorageKey) === "approved");
+  }, [reviewStorageKey]);
+
+  useEffect(() => {
+    if (!iframeReady || reviewApproved || !hasPrompt || tableState.hasRows || tableBusy) {
+      return;
+    }
+
+    if (autoSearchPromptRef.current === promptForSearch) {
+      return;
+    }
+
+    autoSearchPromptRef.current = promptForSearch;
+    sendHostCommand("set-active-tab", { tab: "search" });
+    if (normalizedPromptDraft && normalizedPromptDraft !== normalizedTablePrompt) {
+      sendHostCommand("set-prompt", { prompt: promptForSearch });
+    }
+    sendHostCommand("run-search");
+    pushActivity("AI started searching for the first leads.", "neutral");
+  }, [
+    hasPrompt,
+    iframeReady,
+    normalizedPromptDraft,
+    normalizedTablePrompt,
+    promptForSearch,
+    reviewApproved,
+    sendHostCommand,
+    tableBusy,
+    tableState.hasRows,
+  ]);
+
+  useEffect(() => {
+    if (!iframeReady || reviewApproved || !tableState.liveEnabled || tableBusy) {
+      return;
+    }
+
+    sendHostCommand("toggle-live", { enabled: false });
+  }, [iframeReady, reviewApproved, sendHostCommand, tableBusy, tableState.liveEnabled]);
 
   useEffect(() => {
     if (!autoAddEnabled || !iframeReady || importState.status === "importing" || tableBusy || !tableState.hasRows) {
@@ -712,6 +763,7 @@ export default function LiveProspectTableEmbed({
         <div className="text-[11px] font-medium uppercase tracking-[0.18em] text-[#8a8275]">Find leads</div>
         <div className="mt-3 flex flex-col gap-2 xl:flex-row">
           <Input
+            ref={promptInputRef}
             value={promptDraft}
             onChange={(event) => {
               setPromptDraft(event.target.value);
@@ -730,25 +782,47 @@ export default function LiveProspectTableEmbed({
             className="h-12 flex-1 rounded-[14px] border-[#e5dfd4] bg-[#fbfaf7] text-[#232019] placeholder:text-[#8a8275] shadow-none focus-visible:ring-[#d6cec0]"
           />
           <div className="flex flex-wrap gap-2">
-            <Button
-              type="button"
-              size="lg"
-              className="border-[#2a241b] bg-[#2a241b] text-white hover:bg-[#1f1b14]"
-              onClick={() => {
-                if (normalizedPromptDraft && normalizedPromptDraft !== normalizedTablePrompt) {
+            {promptDirty ? (
+              <Button
+                type="button"
+                size="lg"
+                className="border-[#2a241b] bg-[#2a241b] text-white hover:bg-[#1f1b14]"
+                onClick={() => {
+                  if (typeof window !== "undefined" && reviewStorageKey) {
+                    window.localStorage.removeItem(reviewStorageKey);
+                  }
+                  setReviewApproved(false);
                   sendHostCommand("set-prompt", { prompt: normalizedPromptDraft });
-                }
-                sendHostCommand("set-active-tab", { tab: "search" });
-                sendHostCommand("run-search");
-              }}
-              disabled={!iframeReady || tableBusy || !hasPrompt}
-            >
-              {tableState.isDiscovering ? (
-                <RefreshCw className="h-4 w-4 animate-spin" />
-              ) : (
+                  sendHostCommand("set-active-tab", { tab: "search" });
+                  sendHostCommand("run-search");
+                }}
+                disabled={!iframeReady || tableBusy || !normalizedPromptDraft}
+              >
                 <Search className="h-4 w-4" />
-              )}
-              {tableState.isDiscovering ? "Running..." : "Update search"}
+                Apply changes
+              </Button>
+            ) : (
+              <div className="inline-flex h-12 items-center gap-2 rounded-[14px] border border-[#e5dfd4] bg-[#f7f3ea] px-4 text-sm text-[#6f685d]">
+                {(tableState.isDiscovering || tableState.isLiveRunning) ? (
+                  <RefreshCw className="h-4 w-4 animate-spin" />
+                ) : (
+                  <Search className="h-4 w-4" />
+                )}
+                {reviewPending ? "Waiting for review" : tableBusy || shouldContinueSearching ? "Searching…" : "Targeting ready"}
+              </div>
+            )}
+            <Button
+              type="button"
+              size="lg"
+              variant="outline"
+              className="border-[#e5dfd4] bg-white text-[#232019] hover:bg-[#f7f4ee]"
+              onClick={() => {
+                promptInputRef.current?.focus();
+                sendHostCommand("set-active-tab", { tab: "search" });
+              }}
+              disabled={!iframeReady}
+            >
+              Edit targeting
             </Button>
             <Button
               type="button"
@@ -756,22 +830,16 @@ export default function LiveProspectTableEmbed({
               variant="outline"
               className="border-[#e5dfd4] bg-white text-[#232019] hover:bg-[#f7f4ee]"
               onClick={() => {
-                sendHostCommand("toggle-live", { enabled: !tableState.liveEnabled });
+                if (tableState.liveEnabled || tableBusy) {
+                  sendHostCommand("toggle-live", { enabled: false });
+                } else if (reviewApproved) {
+                  sendHostCommand("toggle-live", { enabled: true });
+                  sendHostCommand("run-search");
+                }
               }}
-              disabled={!iframeReady || tableBusy}
+              disabled={!iframeReady || (!tableBusy && !tableState.liveEnabled && !reviewApproved)}
             >
-              {tableState.liveEnabled ? "Pause" : "Resume"}
-            </Button>
-            <Button
-              type="button"
-              size="lg"
-              variant="outline"
-              className="border-[#e5dfd4] bg-white text-[#232019] hover:bg-[#f7f4ee]"
-              onClick={() => {
-                setAutoAddEnabled((current) => !current);
-              }}
-            >
-              {autoAddEnabled ? "Auto-add on" : "Auto-add off"}
+              {tableState.liveEnabled || tableBusy ? "Pause" : "Resume"}
             </Button>
           </div>
         </div>
@@ -795,6 +863,51 @@ export default function LiveProspectTableEmbed({
       <div className="border-b border-[#ebe4d7] bg-[#faf8f4] px-4 py-2.5 text-sm text-[#6f685d] md:px-6">
         {summaryLine || statusCopy}
       </div>
+
+      {reviewPending ? (
+        <div className="border-b border-[#ebe4d7] bg-[#f6f0e4] px-4 py-3 md:px-6">
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+            <div>
+              <div className="text-sm font-semibold text-[#232019]">First leads found. Do these look right?</div>
+              <div className="mt-1 text-sm text-[#6f685d]">
+                AI found the first {Math.max(REVIEW_CHECKPOINT_ROWS, tableState.rowCount)} prospects. Make sure the targeting looks correct before it continues.
+              </div>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <Button
+                type="button"
+                className="border-[#2a241b] bg-[#2a241b] text-white hover:bg-[#1f1b14]"
+                onClick={() => {
+                  if (typeof window !== "undefined" && reviewStorageKey) {
+                    window.localStorage.setItem(reviewStorageKey, "approved");
+                  }
+                  setReviewApproved(true);
+                  sendHostCommand("toggle-live", { enabled: true });
+                  sendHostCommand("run-search");
+                  pushActivity("Targeting looks good. AI is continuing the search.", "success");
+                }}
+              >
+                Looks good — keep searching
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                className="border-[#e5dfd4] bg-white text-[#232019] hover:bg-[#f7f4ee]"
+                onClick={() => {
+                  if (typeof window !== "undefined" && reviewStorageKey) {
+                    window.localStorage.removeItem(reviewStorageKey);
+                  }
+                  setReviewApproved(false);
+                  promptInputRef.current?.focus();
+                  sendHostCommand("set-active-tab", { tab: "search" });
+                }}
+              >
+                Adjust targeting
+              </Button>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       <div className="relative bg-white">
         {!iframeLoaded ? (
@@ -825,6 +938,17 @@ export default function LiveProspectTableEmbed({
         </summary>
         <div className="border-t border-[#ebe4d7] bg-white px-4 py-3 md:px-6">
           <div className="flex flex-wrap items-center gap-2">
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              className="border-[#e5dfd4] bg-white text-[#232019] hover:bg-[#f7f4ee]"
+              onClick={() => {
+                setAutoAddEnabled((current) => !current);
+              }}
+            >
+              {autoAddEnabled ? "Auto-add on" : "Auto-add off"}
+            </Button>
             <Button
               type="button"
               size="sm"

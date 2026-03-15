@@ -200,6 +200,8 @@ export default function LiveProspectTableEmbed({
   const pendingImportModeRef = useRef<ImportMode>("manual");
   const lastAutoImportSignatureRef = useRef("");
   const autoSearchPromptRef = useRef("");
+  const lastAutoSearchResumeSignatureRef = useRef("");
+  const initialEmbedStateHandledRef = useRef(false);
   const previousStateRef = useRef({
     prompt: "",
     isDiscovering: false,
@@ -295,6 +297,10 @@ export default function LiveProspectTableEmbed({
     setIframeError("");
     setIframeLoaded(false);
     setIframeReady(false);
+    initialEmbedStateHandledRef.current = false;
+    autoSearchPromptRef.current = "";
+    lastAutoSearchResumeSignatureRef.current = "";
+    lastAutoImportSignatureRef.current = "";
 
     void fetch(initPath, { cache: "no-store" })
       .then((response) => readJson(response))
@@ -588,6 +594,12 @@ export default function LiveProspectTableEmbed({
     tableState.lastSuccessAt,
     tableState.lastRowsAppended,
   ].join("|");
+  const autoSearchResumeSignature = [
+    promptForSearch,
+    tableState.rowCount,
+    tableState.lastSuccessAt,
+    tableState.lastRowsAppended,
+  ].join("|");
   const statusCopy = reviewPending
     ? `${tableState.rowCount} / ${goalCount} leads found • review targeting`
     : tableBusy
@@ -615,6 +627,25 @@ export default function LiveProspectTableEmbed({
                 : reviewApproved
                   ? "Targeting approved. You can move on once enough verified emails are ready."
                   : "AI is looking for the first review batch.";
+
+  useEffect(() => {
+    if (!iframeReady || initialEmbedStateHandledRef.current) {
+      return;
+    }
+
+    initialEmbedStateHandledRef.current = true;
+
+    if (tableState.rowCount > 0 || tableBusy) {
+      autoSearchPromptRef.current = promptForSearch;
+      lastAutoSearchResumeSignatureRef.current = autoSearchResumeSignature;
+    }
+  }, [
+    autoSearchResumeSignature,
+    iframeReady,
+    promptForSearch,
+    tableBusy,
+    tableState.rowCount,
+  ]);
 
   useEffect(() => {
     Promise.resolve(
@@ -686,7 +717,15 @@ export default function LiveProspectTableEmbed({
   }, [allowLiveTable, reviewStorageKey]);
 
   useEffect(() => {
-    if (!iframeReady || reviewApproved || !hasPrompt || tableBusy || tableState.rowCount >= goalCount) {
+    if (
+      !iframeReady ||
+      !initialEmbedStateHandledRef.current ||
+      reviewApproved ||
+      !hasPrompt ||
+      tableBusy ||
+      tableState.rowCount > 0 ||
+      tableState.rowCount >= goalCount
+    ) {
       return;
     }
 
@@ -711,6 +750,51 @@ export default function LiveProspectTableEmbed({
     reviewApproved,
     sendHostCommand,
     tableBusy,
+    tableState.rowCount,
+  ]);
+
+  useEffect(() => {
+    if (
+      allowLiveTable ||
+      !iframeReady ||
+      !initialEmbedStateHandledRef.current ||
+      reviewApproved ||
+      !hasPrompt ||
+      tableBusy ||
+      tableState.rowCount <= 0 ||
+      tableState.rowCount >= goalCount ||
+      tableState.lastRowsAppended <= 0
+    ) {
+      return;
+    }
+
+    if (lastAutoSearchResumeSignatureRef.current === autoSearchResumeSignature) {
+      return;
+    }
+
+    lastAutoSearchResumeSignatureRef.current = autoSearchResumeSignature;
+    sendHostCommand("set-active-tab", { tab: "search" });
+    if (normalizedPromptDraft && normalizedPromptDraft !== normalizedTablePrompt) {
+      sendHostCommand("set-prompt", { prompt: promptForSearch });
+    }
+    sendHostCommand("run-search", { limit: goalCount });
+    pushActivity(
+      `AI found ${tableState.rowCount} lead${tableState.rowCount === 1 ? "" : "s"} so far and is looking for more.`,
+      "neutral"
+    );
+  }, [
+    allowLiveTable,
+    autoSearchResumeSignature,
+    goalCount,
+    hasPrompt,
+    iframeReady,
+    normalizedPromptDraft,
+    normalizedTablePrompt,
+    promptForSearch,
+    reviewApproved,
+    sendHostCommand,
+    tableBusy,
+    tableState.lastRowsAppended,
     tableState.rowCount,
   ]);
 

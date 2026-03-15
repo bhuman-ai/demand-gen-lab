@@ -137,19 +137,32 @@ function readHostThemeTokens() {
 
   const rootStyles = window.getComputedStyle(document.documentElement);
   const bodyStyles = window.getComputedStyle(document.body);
+  const explicitMode = document.documentElement.dataset.theme;
+  const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+  const mode = explicitMode === "dark" || (!explicitMode && prefersDark) ? "dark" : "light";
 
   return {
+    mode,
     "--app-bg": "transparent",
+    "--background": readThemeToken(rootStyles, "--background", mode === "dark" ? "#171c22" : "#f7f7f4"),
     "--panel": readThemeToken(rootStyles, "--surface", "#11161c"),
     "--panel-alt": readThemeToken(rootStyles, "--surface-muted", "#171d24"),
+    "--surface-hover": readThemeToken(rootStyles, "--surface-hover", mode === "dark" ? "#262d35" : "#f2f4f1"),
     "--line": readThemeToken(rootStyles, "--border", "rgba(255, 255, 255, 0.08)"),
     "--line-strong": readThemeToken(rootStyles, "--border", "rgba(255, 255, 255, 0.12)"),
     "--text": readThemeToken(rootStyles, "--foreground", "#f4f7fb"),
     "--muted": readThemeToken(rootStyles, "--muted-foreground", "#94a0b3"),
     "--blue": readThemeToken(rootStyles, "--accent", "#d6dfef"),
     "--blue-strong": readThemeToken(rootStyles, "--accent", "#edf3ff"),
+    "--accent-foreground": readThemeToken(rootStyles, "--accent-foreground", mode === "dark" ? "#161b22" : "#fafaf9"),
+    "--accent-soft": readThemeToken(rootStyles, "--accent-soft", mode === "dark" ? "#2a3139" : "#eef1ec"),
+    "--accent-border": readThemeToken(rootStyles, "--accent-border", mode === "dark" ? "#4d5660" : "#d7ddd4"),
     "--green": readThemeToken(rootStyles, "--success", "#7ed0a6"),
     "--green-bg": readThemeToken(rootStyles, "--success-soft", "rgba(88, 153, 116, 0.18)"),
+    "--warning": readThemeToken(rootStyles, "--warning", mode === "dark" ? "#d7b35f" : "#ae7b1f"),
+    "--warning-soft": readThemeToken(rootStyles, "--warning-soft", mode === "dark" ? "#3a3122" : "#f5ebd3"),
+    "--danger": readThemeToken(rootStyles, "--danger", mode === "dark" ? "#ef8f88" : "#ba4b43"),
+    "--danger-soft": readThemeToken(rootStyles, "--danger-soft", mode === "dark" ? "#392424" : "#f6e2df"),
     "--sans": bodyStyles.fontFamily || '"IBM Plex Sans", "Avenir Next", sans-serif',
     "--shadow": "none",
   };
@@ -553,6 +566,38 @@ export default function LiveProspectTableEmbed({
     };
   }, [iframeOrigin, importPath, onImported]);
 
+  useEffect(() => {
+    if (!iframeReady) {
+      return;
+    }
+
+    const resendTheme = () => {
+      sendHostInit();
+    };
+
+    resendTheme();
+
+    const root = document.documentElement;
+    const observer = new MutationObserver(() => {
+      resendTheme();
+    });
+    observer.observe(root, {
+      attributes: true,
+      attributeFilter: ["data-theme", "class", "style"],
+    });
+
+    const media = window.matchMedia("(prefers-color-scheme: dark)");
+    const handleMediaChange = () => {
+      resendTheme();
+    };
+    media.addEventListener?.("change", handleMediaChange);
+
+    return () => {
+      observer.disconnect();
+      media.removeEventListener?.("change", handleMediaChange);
+    };
+  }, [iframeReady, sendHostInit]);
+
   const requestImport = useCallback((mode: ImportMode) => {
     if (!iframeReady || importBusyRef.current || !tableState.hasRows) {
       return;
@@ -853,9 +898,9 @@ export default function LiveProspectTableEmbed({
   }
 
   return (
-    <div className="overflow-hidden rounded-[24px] border border-[#e7e0d3] bg-[#fbfaf7] shadow-[0_20px_48px_-40px_rgba(36,30,18,0.34)]">
-      <div className="border-b border-[#ebe4d7] bg-white px-4 py-4 md:px-6">
-        <div className="text-[11px] font-medium uppercase tracking-[0.18em] text-[#8a8275]">Find leads</div>
+    <div className="overflow-hidden rounded-[24px] border border-[color:var(--border)] bg-[color:var(--surface)] shadow-none">
+      <div className="border-b border-[color:var(--border)] bg-[color:var(--surface)] px-4 py-4 md:px-6">
+        <div className="text-[11px] font-medium uppercase tracking-[0.18em] text-[color:var(--muted-foreground)]">Find leads</div>
         <div className="mt-3 flex flex-col gap-2 xl:flex-row">
           <Input
             ref={promptInputRef}
@@ -874,14 +919,14 @@ export default function LiveProspectTableEmbed({
               sendHostCommand("run-search", { limit: goalCount });
             }}
             placeholder="Find self-funded SaaS founders who might want AWS credits"
-            className="h-12 flex-1 rounded-[14px] border-[#e5dfd4] bg-[#fbfaf7] text-[#232019] placeholder:text-[#8a8275] shadow-none focus-visible:ring-[#d6cec0]"
+            className="h-12 flex-1 rounded-[14px] border-[color:var(--border)] bg-[color:var(--surface-muted)] text-[color:var(--foreground)] placeholder:text-[color:var(--muted-foreground)] shadow-none focus-visible:ring-[color:var(--accent-border)]"
           />
           <div className="flex flex-wrap gap-2">
             {promptDirty ? (
               <Button
                 type="button"
                 size="lg"
-                className="border-[#2a241b] bg-[#2a241b] text-white hover:bg-[#1f1b14]"
+                className="border-[color:var(--accent-border)] bg-[color:var(--accent)] text-[color:var(--accent-foreground)] hover:opacity-95"
                 onClick={() => {
                   if (typeof window !== "undefined" && reviewStorageKey) {
                     window.localStorage.removeItem(reviewStorageKey);
@@ -897,7 +942,7 @@ export default function LiveProspectTableEmbed({
                 Apply changes
               </Button>
             ) : (
-              <div className="inline-flex h-12 items-center gap-2 rounded-[14px] border border-[#e5dfd4] bg-[#f7f3ea] px-4 text-sm text-[#6f685d]">
+              <div className="inline-flex h-12 items-center gap-2 rounded-[14px] border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-4 text-sm text-[color:var(--muted-foreground)]">
                 {(tableState.isDiscovering || tableState.isLiveRunning) ? (
                   <RefreshCw className="h-4 w-4 animate-spin" />
                 ) : (
@@ -910,7 +955,7 @@ export default function LiveProspectTableEmbed({
               type="button"
               size="lg"
               variant="outline"
-              className="border-[#e5dfd4] bg-white text-[#232019] hover:bg-[#f7f4ee]"
+              className="border-[color:var(--border)] bg-[color:var(--surface)] text-[color:var(--foreground)] hover:bg-[color:var(--surface-muted)]"
               onClick={() => {
                 promptInputRef.current?.focus();
                 sendHostCommand("set-active-tab", { tab: "search" });
@@ -922,28 +967,28 @@ export default function LiveProspectTableEmbed({
           </div>
         </div>
 
-        <div className="mt-3 min-w-0 truncate text-sm text-[#6f685d]" title={assistantNote}>
+        <div className="mt-3 min-w-0 truncate text-sm text-[color:var(--muted-foreground)]" title={assistantNote}>
           {assistantNote}
         </div>
       </div>
 
-      <div className="border-b border-[#ebe4d7] bg-[#faf8f4] px-4 py-2.5 text-sm text-[#6f685d] md:px-6">
+      <div className="border-b border-[color:var(--border)] bg-[color:var(--surface-muted)] px-4 py-2.5 text-sm text-[color:var(--muted-foreground)] md:px-6">
         {summaryLine || statusCopy}
       </div>
 
       {reviewPending ? (
-        <div className="border-b border-[#ebe4d7] bg-[#f6f0e4] px-4 py-3 md:px-6">
+        <div className="border-b border-[color:var(--accent-border)] bg-[color:var(--accent-soft)] px-4 py-3 md:px-6">
           <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
             <div>
-              <div className="text-sm font-semibold text-[#232019]">First leads found. Do these look right?</div>
-              <div className="mt-1 text-sm text-[#6f685d]">
+              <div className="text-sm font-semibold text-[color:var(--foreground)]">First leads found. Do these look right?</div>
+              <div className="mt-1 text-sm text-[color:var(--muted-foreground)]">
                 AI found the first {Math.max(REVIEW_CHECKPOINT_ROWS, tableState.rowCount)} prospects. Make sure the targeting looks correct before you move on.
               </div>
             </div>
             <div className="flex flex-wrap gap-2">
               <Button
                 type="button"
-                className="border-[#2a241b] bg-[#2a241b] text-white hover:bg-[#1f1b14]"
+                className="border-[color:var(--accent-border)] bg-[color:var(--accent)] text-[color:var(--accent-foreground)] hover:opacity-95"
                 onClick={() => {
                   if (typeof window !== "undefined" && reviewStorageKey) {
                     window.localStorage.setItem(reviewStorageKey, "approved");
@@ -957,7 +1002,7 @@ export default function LiveProspectTableEmbed({
               <Button
                 type="button"
                 variant="outline"
-                className="border-[#e5dfd4] bg-white text-[#232019] hover:bg-[#f7f4ee]"
+                className="border-[color:var(--border)] bg-[color:var(--surface)] text-[color:var(--foreground)] hover:bg-[color:var(--surface-muted)]"
                 onClick={() => {
                   if (typeof window !== "undefined" && reviewStorageKey) {
                     window.localStorage.removeItem(reviewStorageKey);
@@ -974,10 +1019,10 @@ export default function LiveProspectTableEmbed({
         </div>
       ) : null}
 
-      <div className="relative bg-white">
+      <div className="relative bg-[color:var(--surface)]">
         {!iframeLoaded ? (
-          <div className="absolute inset-0 z-10 flex items-center justify-center bg-white/92">
-            <div className="flex items-center gap-2 text-sm text-[#6f685d]">
+          <div className="absolute inset-0 z-10 flex items-center justify-center bg-[color:var(--surface)]">
+            <div className="flex items-center gap-2 text-sm text-[color:var(--muted-foreground)]">
               <Loader2 className="h-4 w-4 animate-spin" />
               Loading table...
             </div>
@@ -996,7 +1041,7 @@ export default function LiveProspectTableEmbed({
         />
       </div>
       {importState.parseErrors.length ? (
-        <div className="border-t border-[#ebe4d7] bg-[#faf8f4] px-4 py-3 text-xs text-[#94612d] md:px-6">
+        <div className="border-t border-[color:var(--warning-border)] bg-[color:var(--warning-soft)] px-4 py-3 text-xs text-[color:var(--warning)] md:px-6">
           {importState.parseErrors.slice(0, 5).join(" · ")}
         </div>
       ) : null}

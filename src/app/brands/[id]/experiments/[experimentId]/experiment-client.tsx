@@ -426,6 +426,39 @@ export default function ExperimentClient({
       ),
     [experiment]
   );
+  const setupChecklist = useMemo(
+    () => [
+      {
+        key: "name",
+        label: "Name",
+        done: Boolean(experiment?.name.trim()),
+      },
+      {
+        key: "audience",
+        label: "Audience",
+        done: Boolean(experiment?.audience.trim()),
+      },
+      {
+        key: "offer",
+        label: "Offer",
+        done: Boolean(experiment?.offer.trim()),
+      },
+      {
+        key: "timezone",
+        label: "Timezone",
+        done: Boolean(experiment?.testEnvelope.timezone.trim()),
+      },
+    ],
+    [experiment]
+  );
+  const setupCompletionCount = useMemo(
+    () => setupChecklist.filter((item) => item.done).length,
+    [setupChecklist]
+  );
+  const setupCompletionPct = Math.max(
+    8,
+    Math.round((setupCompletionCount / Math.max(1, setupChecklist.length)) * 100)
+  );
 
   const realEmailLeadCount = useMemo(
     () => Math.max(sourcedLeadWithEmailCount, sampleLeads.filter((lead) => Boolean(lead.email?.trim())).length),
@@ -1349,6 +1382,8 @@ export default function ExperimentClient({
   const stageRouteMode = routeStage !== null;
   const unifiedRunMode = !view && Boolean(latestRun);
   const pipelineOverviewMode = !view;
+  const showSetupProgressBar = !setupComplete && currentStage === 0;
+  const compactProspectsCanvas = currentStage === 1 && !showSetupProgressBar;
   const experimentStatusLabel = latestRun ? latestRun.status : experiment.status;
   const activityStatusLabel = latestRun
     ? latestRun.status
@@ -1396,6 +1431,37 @@ export default function ExperimentClient({
     if (typeof document === "undefined") return;
     document.getElementById(sectionId)?.scrollIntoView({ behavior: "smooth", block: "start" });
   };
+  const leadsWorkspace = (
+    <section className="space-y-3">
+      <LiveProspectTableEmbed
+        initPath={`/api/brands/${brandId}/experiments/${experiment.id}/prospect-table`}
+        importPath={`/api/brands/${brandId}/experiments/${experiment.id}/import-prospects/selection`}
+        goalCount={PROSPECT_VALIDATION_TARGET}
+        onTableStateChange={({ rowCount }) => {
+          setProspectTableRowCount(rowCount);
+        }}
+        onImported={async () => {
+          await refresh(false);
+        }}
+      />
+      {prospectsReady ? (
+        <div className="flex justify-end">
+          <Button type="button" onClick={() => openStage(2)}>
+            Write emails
+          </Button>
+        </div>
+      ) : null}
+    </section>
+  );
+
+  if (pipelineOverviewMode && compactProspectsCanvas) {
+    return (
+      <div className="space-y-4">
+        {error ? <div className="text-sm text-[color:var(--danger)]">{error}</div> : null}
+        {leadsWorkspace}
+      </div>
+    );
+  }
 
   if (pipelineOverviewMode) {
     return (
@@ -1439,6 +1505,58 @@ export default function ExperimentClient({
             </CardContent>
           </Card>
         </div>
+
+        {showSetupProgressBar ? (
+          <section className="overflow-hidden rounded-[18px] border border-[color:var(--border)] bg-[color:var(--surface)]">
+            <div className="border-b border-[color:var(--border)] px-4 py-4 sm:px-5">
+              <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                <div className="space-y-1">
+                  <div className="text-xs font-medium uppercase tracking-[0.16em] text-[color:var(--muted-foreground)]">
+                    Setup progress
+                  </div>
+                  <div className="text-sm font-medium text-[color:var(--foreground)]">
+                    {setupCompletionCount} of {setupChecklist.length} basics filled in
+                  </div>
+                </div>
+                <Badge variant="muted">Step 1 of {STAGE_COUNT}</Badge>
+              </div>
+              <div className="mt-4 h-2 overflow-hidden rounded-full bg-[color:var(--surface-muted)]">
+                <div
+                  className="h-full rounded-full bg-[color:var(--accent)] transition-[width] duration-300"
+                  style={{ width: `${setupCompletionPct}%` }}
+                />
+              </div>
+            </div>
+            <div className="grid gap-2 px-4 py-4 sm:grid-cols-4 sm:px-5">
+              {workflowStages.map((stage) => (
+                <div
+                  key={`setup-progress-${stage.index}`}
+                  className={`rounded-[14px] border px-3 py-3 ${
+                    stage.index === 0
+                      ? "border-[color:var(--accent)] bg-[color:var(--accent-soft)]"
+                      : stage.status === "locked"
+                        ? "border-[color:var(--border)] bg-[color:var(--surface-muted)] text-[color:var(--muted-foreground)]"
+                        : "border-[color:var(--border)] bg-[color:var(--surface)]"
+                  }`}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="inline-flex h-6 min-w-6 items-center justify-center rounded-full border border-[color:var(--border)] text-[11px] font-semibold">
+                      {stage.index + 1}
+                    </div>
+                    {stage.status === "done" ? (
+                      <CheckCircle2 className="h-4 w-4 text-[color:var(--success)]" />
+                    ) : stage.status === "locked" ? (
+                      <Lock className="h-3.5 w-3.5 text-[color:var(--muted-foreground)]" />
+                    ) : (
+                      <Badge variant={stageBadgeVariant(stage.status)}>{stageBadgeLabel(stage.status)}</Badge>
+                    )}
+                  </div>
+                  <div className="mt-2 text-sm font-semibold text-[color:var(--foreground)]">{stage.label}</div>
+                </div>
+              ))}
+            </div>
+          </section>
+        ) : null}
 
         <Card>
           <CardHeader>
@@ -1564,7 +1682,7 @@ export default function ExperimentClient({
 
   return (
     <div className="space-y-4 sm:space-y-5">
-      {!messagingFocus ? (
+      {!messagingFocus && !compactProspectsCanvas ? (
         stageRouteMode ? (
           <section className="space-y-2 border-b border-[color:var(--border)] pb-4">
             <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
@@ -1608,7 +1726,59 @@ export default function ExperimentClient({
 
       {error ? <div className="text-sm text-[color:var(--danger)]">{error}</div> : null}
 
-      {!view && latestRun ? (
+      {showSetupProgressBar ? (
+        <section className="overflow-hidden rounded-[18px] border border-[color:var(--border)] bg-[color:var(--surface)]">
+          <div className="border-b border-[color:var(--border)] px-4 py-4 sm:px-5">
+            <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+              <div className="space-y-1">
+                <div className="text-xs font-medium uppercase tracking-[0.16em] text-[color:var(--muted-foreground)]">
+                  Setup progress
+                </div>
+                <div className="text-sm font-medium text-[color:var(--foreground)]">
+                  {setupCompletionCount} of {setupChecklist.length} basics filled in
+                </div>
+              </div>
+              <Badge variant="muted">Step 1 of {STAGE_COUNT}</Badge>
+            </div>
+            <div className="mt-4 h-2 overflow-hidden rounded-full bg-[color:var(--surface-muted)]">
+              <div
+                className="h-full rounded-full bg-[color:var(--accent)] transition-[width] duration-300"
+                style={{ width: `${setupCompletionPct}%` }}
+              />
+            </div>
+          </div>
+          <div className="grid gap-2 px-4 py-4 sm:grid-cols-4 sm:px-5">
+            {workflowStages.map((stage) => (
+              <div
+                key={`setup-stage-${stage.index}`}
+                className={`rounded-[14px] border px-3 py-3 ${
+                  stage.index === 0
+                    ? "border-[color:var(--accent)] bg-[color:var(--accent-soft)]"
+                    : stage.status === "locked"
+                      ? "border-[color:var(--border)] bg-[color:var(--surface-muted)] text-[color:var(--muted-foreground)]"
+                      : "border-[color:var(--border)] bg-[color:var(--surface)]"
+                }`}
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <div className="inline-flex h-6 min-w-6 items-center justify-center rounded-full border border-[color:var(--border)] text-[11px] font-semibold">
+                    {stage.index + 1}
+                  </div>
+                  {stage.status === "done" ? (
+                    <CheckCircle2 className="h-4 w-4 text-[color:var(--success)]" />
+                  ) : stage.status === "locked" ? (
+                    <Lock className="h-3.5 w-3.5 text-[color:var(--muted-foreground)]" />
+                  ) : (
+                    <Badge variant={stageBadgeVariant(stage.status)}>{stageBadgeLabel(stage.status)}</Badge>
+                  )}
+                </div>
+                <div className="mt-2 text-sm font-semibold text-[color:var(--foreground)]">{stage.label}</div>
+              </div>
+            ))}
+          </div>
+        </section>
+      ) : null}
+
+      {!view && latestRun && !compactProspectsCanvas ? (
         <>
           <Card>
             <CardHeader>
@@ -1687,7 +1857,7 @@ export default function ExperimentClient({
         </>
       ) : null}
 
-      {!unifiedRunMode ? (
+      {!unifiedRunMode && !showSetupProgressBar && !compactProspectsCanvas ? (
         stageRouteMode ? (
           <section className="space-y-2">
             <div className="flex flex-wrap items-center gap-2 rounded-[14px] border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-3">
@@ -2078,31 +2248,7 @@ export default function ExperimentClient({
       ) : null}
 
       {currentStage === 1 ? (
-        <section className="space-y-4">
-          <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
-            <div className="space-y-1">
-              <div className="text-lg font-semibold text-[color:var(--foreground)]">{stageTitle(1)}</div>
-              <div className="text-sm text-[color:var(--muted-foreground)]">
-                Define the search, watch the table fill, and move on when you have enough leads.
-              </div>
-            </div>
-            <Button type="button" disabled={!prospectsReady} onClick={() => openStage(2)}>
-              Write emails
-            </Button>
-          </div>
-
-          <LiveProspectTableEmbed
-            initPath={`/api/brands/${brandId}/experiments/${experiment.id}/prospect-table`}
-            importPath={`/api/brands/${brandId}/experiments/${experiment.id}/import-prospects/selection`}
-            goalCount={PROSPECT_VALIDATION_TARGET}
-            onTableStateChange={({ rowCount }) => {
-              setProspectTableRowCount(rowCount);
-            }}
-            onImported={async () => {
-              await refresh(false);
-            }}
-          />
-        </section>
+        leadsWorkspace
       ) : null}
 
       {currentStage === 2 ? (

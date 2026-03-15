@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Loader2, RefreshCw, Search } from "lucide-react";
+import { Loader2, Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
@@ -241,7 +241,6 @@ export default function LiveProspectTableEmbed({
   const lastAutoSearchResumeSignatureRef = useRef("");
   const lastStallRetrySignatureRef = useRef("");
   const initialEmbedStateHandledRef = useRef(false);
-  const busyStartedAtRef = useRef<number | null>(null);
   const previousStateRef = useRef({
     prompt: "",
     isDiscovering: false,
@@ -343,8 +342,6 @@ export default function LiveProspectTableEmbed({
     lastAutoSearchResumeSignatureRef.current = "";
     lastAutoImportSignatureRef.current = "";
     lastStallRetrySignatureRef.current = "";
-    busyStartedAtRef.current = null;
-
     void fetch(initPath, { cache: "no-store" })
       .then((response) => readJson(response))
       .then((payload) => {
@@ -647,21 +644,6 @@ export default function LiveProspectTableEmbed({
     sendHostCommand("add-leads");
   }, [iframeReady, sendHostCommand, tableState.hasRows]);
 
-  const summaryLine = useMemo(() => {
-    if (importState.status !== "success") return null;
-    const parts = [
-      `${importState.attemptedCount} checked`,
-      `${importState.matchedCount} matched`,
-    ];
-    if (importState.dedupedCount > 0) {
-      parts.push(`${importState.dedupedCount} already here`);
-    }
-    if (importState.skippedCount > 0) {
-      parts.push(`${importState.skippedCount} skipped`);
-    }
-    return parts.join(" · ");
-  }, [importState]);
-
   const tableBusy = tableState.isDiscovering || tableState.isEnriching || tableState.isLiveRunning;
   const normalizedPromptDraft = promptDraft.trim();
   const normalizedTablePrompt = tableState.prompt.trim();
@@ -677,6 +659,7 @@ export default function LiveProspectTableEmbed({
   const secondsSinceLastSuccess =
     lastSuccessMs > 0 ? Math.max(0, Math.floor((statusNow - lastSuccessMs) / 1000)) : null;
   const searchUnderGoal = hasPrompt && !reviewApproved && tableState.rowCount < goalCount;
+  const searchLocked = hasPrompt && !reviewApproved && tableState.rowCount < goalCount;
   const autoImportSignature = [
     normalizedTablePrompt,
     tableState.rowCount,
@@ -689,63 +672,39 @@ export default function LiveProspectTableEmbed({
     tableState.lastSuccessAt,
     tableState.lastRowsAppended,
   ].join("|");
-  const statusCopy = reviewPending
-    ? `${tableState.rowCount} / ${goalCount} leads found • review targeting`
-    : tableBusy
-      ? `Searching for prospects • ${tableState.rowCount} / ${goalCount}`
-      : tableState.rowCount > 0
-        ? `${tableState.rowCount} / ${goalCount} leads found`
-        : "Searching for prospects...";
-  const assistantNote =
-    importState.status === "importing"
-      ? "Checking the latest rows and keeping the good leads automatically."
-      : importState.status === "success"
-        ? importState.importedCount > 0
-          ? "AI added the good leads from this review batch."
-          : importState.dedupedCount > 0
-            ? "The good leads from this batch were already added."
-            : "AI checked these rows but did not find new verified work emails yet."
-        : importState.status === "error"
-          ? importState.message
-          : reviewPending
-            ? "Review the first leads. If the targeting looks right, keep them."
-            : promptDirty
-              ? "Update the audience, then apply your changes."
-              : tableState.isDiscovering
-                ? `Looking for people who match: ${promptForSearch || "your audience"}`
-                : reviewApproved
-                  ? "Targeting approved. You can move on once enough verified emails are ready."
-                  : "AI is looking for the first review batch.";
   const searchStatusLabel = reviewPending
-    ? "Review the first leads"
+    ? "Review"
     : tableBusy
-      ? "Searching right now"
+      ? "Searching"
       : searchUnderGoal
         ? secondsSinceLastSuccess !== null && secondsSinceLastSuccess >= 30
-          ? "Search paused"
-          : "Waiting for the next batch"
+          ? "Retrying"
+          : "Waiting"
         : reviewApproved
-          ? "Targeting approved"
+          ? "Approved"
           : tableState.rowCount >= goalCount
-            ? "Review batch ready"
-            : "Preparing search";
-  const searchStatusDetail = reviewPending
-    ? `AI found ${tableState.rowCount} leads. Check them before it keeps going.`
-    : tableBusy
-      ? tableState.rowCount > 0
-        ? `Still checking more sources. ${tableState.rowCount} found so far.`
-        : "Checking websites, profiles, and public data now."
-      : searchUnderGoal
-        ? secondsSinceLastSuccess !== null && secondsSinceLastSuccess >= 30
-          ? `No new leads for ${formatElapsedLabel(secondsSinceLastSuccess)}. Trying again automatically.`
-          : secondsSinceLastSuccess !== null
-            ? `Last update ${formatElapsedLabel(secondsSinceLastSuccess)}. Still working toward ${goalCount}.`
-            : `Looking for the first leads now.`
-        : reviewApproved
-          ? "The first review batch looks good. Keep going when you're ready."
-          : tableState.rowCount >= goalCount
-            ? "You have enough leads to review and move on."
-            : "Starting the first search.";
+            ? "Ready"
+            : "Waiting";
+  const progressPercent = goalCount > 0 ? Math.min(100, (tableState.rowCount / goalCount) * 100) : 0;
+  const progressFillPercent = searchLocked
+    ? Math.max(progressPercent, tableState.rowCount > 0 ? 12 : 6)
+    : progressPercent;
+  const progressLabel = reviewPending
+    ? `${tableState.rowCount} / ${goalCount} ready to review`
+    : `${tableState.rowCount} / ${goalCount}`;
+  const progressMetaLabel = reviewPending
+    ? "Review leads"
+    : searchLocked
+      ? tableBusy
+        ? "Searching"
+        : secondsSinceLastSuccess !== null && secondsSinceLastSuccess >= 30
+          ? "Trying again"
+          : "Working"
+      : reviewApproved
+        ? "Approved"
+        : tableState.rowCount >= goalCount
+          ? "Ready"
+          : "Waiting";
 
   useEffect(() => {
     if (!iframeReady || initialEmbedStateHandledRef.current) {
@@ -784,17 +743,6 @@ export default function LiveProspectTableEmbed({
     tableBusy,
     tableState.rowCount,
   ]);
-
-  useEffect(() => {
-    if (tableBusy) {
-      if (busyStartedAtRef.current === null) {
-        busyStartedAtRef.current = Date.now();
-      }
-      return;
-    }
-
-    busyStartedAtRef.current = null;
-  }, [tableBusy]);
 
   useEffect(() => {
     if (!iframeReady) return;
@@ -1047,8 +995,7 @@ export default function LiveProspectTableEmbed({
   return (
     <div className="overflow-hidden rounded-[24px] border border-[color:var(--border)] bg-[color:var(--surface)] shadow-none">
       <div className="border-b border-[color:var(--border)] bg-[color:var(--surface)] px-4 py-4 md:px-6">
-        <div className="text-[11px] font-medium uppercase tracking-[0.18em] text-[color:var(--muted-foreground)]">Find leads</div>
-        <div className="mt-3 flex flex-col gap-2 xl:flex-row">
+        <div className="flex flex-col gap-3 xl:flex-row xl:items-center">
           <Input
             ref={promptInputRef}
             value={promptDraft}
@@ -1058,7 +1005,7 @@ export default function LiveProspectTableEmbed({
             onKeyDown={(event) => {
               if (event.key !== "Enter") return;
               event.preventDefault();
-              if (!iframeReady || tableBusy || !hasPrompt) return;
+              if (!iframeReady || searchLocked || !hasPrompt) return;
               if (normalizedPromptDraft && normalizedPromptDraft !== normalizedTablePrompt) {
                 sendHostCommand("set-prompt", { prompt: normalizedPromptDraft });
               }
@@ -1066,10 +1013,42 @@ export default function LiveProspectTableEmbed({
               sendHostCommand("run-search", { limit: goalCount });
             }}
             placeholder="Find self-funded SaaS founders who might want AWS credits"
-            className="h-12 flex-1 rounded-[14px] border-[color:var(--border)] bg-[color:var(--surface-muted)] text-[color:var(--foreground)] placeholder:text-[color:var(--muted-foreground)] shadow-none focus-visible:ring-[color:var(--accent-border)]"
+            readOnly={searchLocked}
+            aria-readonly={searchLocked}
+            className="h-12 flex-1 rounded-[14px] border-[color:var(--border)] bg-[color:var(--surface-muted)] text-[color:var(--foreground)] placeholder:text-[color:var(--muted-foreground)] shadow-none focus-visible:ring-[color:var(--accent-border)] read-only:cursor-not-allowed read-only:opacity-85"
           />
           <div className="flex flex-wrap gap-2">
-            {promptDirty ? (
+            {reviewPending ? (
+              <>
+                <Button
+                  type="button"
+                  className="border-[color:var(--accent-border)] bg-[color:var(--accent)] text-[color:var(--accent-foreground)] hover:opacity-95"
+                  onClick={() => {
+                    if (typeof window !== "undefined" && reviewStorageKey) {
+                      window.localStorage.setItem(reviewStorageKey, "approved");
+                    }
+                    setReviewApproved(true);
+                    pushActivity("Targeting looks good. AI will keep the good leads from this batch.", "success");
+                  }}
+                >
+                  Looks good
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="border-[color:var(--border)] bg-[color:var(--surface)] text-[color:var(--foreground)] hover:bg-[color:var(--surface-muted)]"
+                  onClick={() => {
+                    if (typeof window !== "undefined" && reviewStorageKey) {
+                      window.localStorage.removeItem(reviewStorageKey);
+                    }
+                    setReviewApproved(false);
+                    promptInputRef.current?.focus();
+                  }}
+                >
+                  Edit targeting
+                </Button>
+              </>
+            ) : promptDirty && !searchLocked ? (
               <Button
                 type="button"
                 size="lg"
@@ -1088,106 +1067,39 @@ export default function LiveProspectTableEmbed({
                 <Search className="h-4 w-4" />
                 Apply changes
               </Button>
-            ) : (
-              <div className="inline-flex h-12 items-center gap-2 rounded-[14px] border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-4 text-sm text-[color:var(--muted-foreground)]">
-                {(tableState.isDiscovering || tableState.isLiveRunning) ? (
-                  <RefreshCw className="h-4 w-4 animate-spin" />
-                ) : (
-                  <Search className="h-4 w-4" />
-                )}
-                {reviewPending ? "Waiting for review" : tableBusy ? "Searching…" : reviewApproved ? "Targeting approved" : "Targeting ready"}
-              </div>
-            )}
-            <Button
-              type="button"
-              size="lg"
-              variant="outline"
-              className="border-[color:var(--border)] bg-[color:var(--surface)] text-[color:var(--foreground)] hover:bg-[color:var(--surface-muted)]"
-              onClick={() => {
-                promptInputRef.current?.focus();
-                sendHostCommand("set-active-tab", { tab: "search" });
-              }}
-                disabled={!iframeReady}
-              >
-              Edit targeting
-            </Button>
-          </div>
-        </div>
-
-        <div className="mt-3 min-w-0 truncate text-sm text-[color:var(--muted-foreground)]" title={assistantNote}>
-          {assistantNote}
-        </div>
-      </div>
-
-      <div className="border-b border-[color:var(--border)] bg-[color:var(--surface-muted)] px-4 py-2.5 text-sm text-[color:var(--muted-foreground)] md:px-6">
-        {summaryLine || statusCopy}
-      </div>
-
-      <div className="border-b border-[color:var(--border)] bg-[color:var(--surface)] px-4 py-3 md:px-6">
-        <div className="flex flex-col gap-1.5 md:flex-row md:items-center md:justify-between">
-          <div className="flex items-center gap-2 text-sm font-medium text-[color:var(--foreground)]">
-            {tableBusy ? (
-              <Loader2 className="h-4 w-4 animate-spin text-[color:var(--accent)]" />
-            ) : searchUnderGoal && secondsSinceLastSuccess !== null && secondsSinceLastSuccess >= 30 ? (
-              <RefreshCw className="h-4 w-4 text-[color:var(--warning)]" />
-            ) : (
-              <Search className="h-4 w-4 text-[color:var(--muted-foreground)]" />
-            )}
-            <span>{searchStatusLabel}</span>
-          </div>
-          <div className="text-xs text-[color:var(--muted-foreground)]">
-            {tableBusy && busyStartedAtRef.current
-              ? `Search has been running for ${formatElapsedLabel(Math.max(1, Math.floor((statusNow - busyStartedAtRef.current) / 1000))).replace(" ago", "")}`
-              : tableState.lastSuccessAt
-                ? `Last lead update ${formatElapsedLabel(secondsSinceLastSuccess ?? 0)}`
-                : "No leads yet"}
-          </div>
-        </div>
-        <div className="mt-1.5 text-sm text-[color:var(--muted-foreground)]">{searchStatusDetail}</div>
-      </div>
-
-      {reviewPending ? (
-        <div className="border-b border-[color:var(--accent-border)] bg-[color:var(--accent-soft)] px-4 py-3 md:px-6">
-          <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-            <div>
-              <div className="text-sm font-semibold text-[color:var(--foreground)]">First leads found. Do these look right?</div>
-              <div className="mt-1 text-sm text-[color:var(--muted-foreground)]">
-                AI found the first {Math.max(REVIEW_CHECKPOINT_ROWS, tableState.rowCount)} prospects. Make sure the targeting looks correct before you move on.
-              </div>
-            </div>
-            <div className="flex flex-wrap gap-2">
+            ) : !searchLocked ? (
               <Button
                 type="button"
-                className="border-[color:var(--accent-border)] bg-[color:var(--accent)] text-[color:var(--accent-foreground)] hover:opacity-95"
-                onClick={() => {
-                  if (typeof window !== "undefined" && reviewStorageKey) {
-                    window.localStorage.setItem(reviewStorageKey, "approved");
-                  }
-                  setReviewApproved(true);
-                  pushActivity("Targeting looks good. AI will keep the good leads from this batch.", "success");
-                }}
-              >
-                Looks good
-              </Button>
-              <Button
-                type="button"
+                size="lg"
                 variant="outline"
                 className="border-[color:var(--border)] bg-[color:var(--surface)] text-[color:var(--foreground)] hover:bg-[color:var(--surface-muted)]"
                 onClick={() => {
-                  if (typeof window !== "undefined" && reviewStorageKey) {
-                    window.localStorage.removeItem(reviewStorageKey);
-                  }
-                  setReviewApproved(false);
                   promptInputRef.current?.focus();
                   sendHostCommand("set-active-tab", { tab: "search" });
                 }}
+                disabled={!iframeReady}
               >
-                Adjust targeting
+                Edit targeting
               </Button>
-            </div>
+            ) : null}
           </div>
         </div>
-      ) : null}
+        <div className="mt-4 space-y-2">
+          <div className="flex items-center justify-between gap-3 text-xs font-medium uppercase tracking-[0.12em] text-[color:var(--muted-foreground)]">
+            <span>{progressLabel}</span>
+            <span className="flex items-center gap-2">
+              {searchLocked ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+              {progressMetaLabel}
+            </span>
+          </div>
+          <div className="h-2 overflow-hidden rounded-full bg-[color:var(--surface-muted)]">
+            <div
+              className={`h-full rounded-full bg-[color:var(--accent)] transition-[width] duration-500 ${searchLocked ? "animate-pulse" : ""}`}
+              style={{ width: `${progressFillPercent}%` }}
+            />
+          </div>
+        </div>
+      </div>
 
       <div className="relative bg-[color:var(--surface)]">
         {!iframeLoaded ? (
@@ -1210,11 +1122,6 @@ export default function LiveProspectTableEmbed({
           }}
         />
       </div>
-      {importState.parseErrors.length ? (
-        <div className="border-t border-[color:var(--warning-border)] bg-[color:var(--warning-soft)] px-4 py-3 text-xs text-[color:var(--warning)] md:px-6">
-          {importState.parseErrors.slice(0, 5).join(" · ")}
-        </div>
-      ) : null}
     </div>
   );
 }

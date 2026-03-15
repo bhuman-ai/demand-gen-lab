@@ -635,9 +635,8 @@ export default function LiveProspectTableEmbed({
 
     initialEmbedStateHandledRef.current = true;
 
-    if (tableState.rowCount > 0 || tableBusy) {
+    if (tableBusy) {
       autoSearchPromptRef.current = promptForSearch;
-      lastAutoSearchResumeSignatureRef.current = autoSearchResumeSignature;
     }
   }, [
     autoSearchResumeSignature,
@@ -762,8 +761,7 @@ export default function LiveProspectTableEmbed({
       !hasPrompt ||
       tableBusy ||
       tableState.rowCount <= 0 ||
-      tableState.rowCount >= goalCount ||
-      tableState.lastRowsAppended <= 0
+      tableState.rowCount >= goalCount
     ) {
       return;
     }
@@ -794,7 +792,6 @@ export default function LiveProspectTableEmbed({
     reviewApproved,
     sendHostCommand,
     tableBusy,
-    tableState.lastRowsAppended,
     tableState.rowCount,
   ]);
 

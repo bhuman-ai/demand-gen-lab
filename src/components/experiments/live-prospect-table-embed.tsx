@@ -76,6 +76,8 @@ type LiveProspectTableEmbedProps = {
     rowCount: number;
     isSearching: boolean;
     prompt: string;
+    lastSuccessAt: string;
+    statusLabel: string;
   }) => void | Promise<void>;
   onImported?: (result: {
     runId: string;
@@ -94,6 +96,29 @@ type ActivityItem = {
   tone: ActivityTone;
   meta: string;
 };
+
+function formatElapsedLabel(totalSeconds: number) {
+  if (!Number.isFinite(totalSeconds) || totalSeconds <= 0) {
+    return "just now";
+  }
+
+  if (totalSeconds < 60) {
+    return `${totalSeconds}s ago`;
+  }
+
+  const minutes = Math.floor(totalSeconds / 60);
+  if (minutes < 60) {
+    return `${minutes}m ago`;
+  }
+
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) {
+    return `${hours}h ago`;
+  }
+
+  const days = Math.floor(hours / 24);
+  return `${days}d ago`;
+}
 
 function asObject(value: unknown): Record<string, unknown> {
   if (value && typeof value === "object" && !Array.isArray(value)) {
@@ -214,7 +239,9 @@ export default function LiveProspectTableEmbed({
   const lastAutoImportSignatureRef = useRef("");
   const autoSearchPromptRef = useRef("");
   const lastAutoSearchResumeSignatureRef = useRef("");
+  const lastStallRetrySignatureRef = useRef("");
   const initialEmbedStateHandledRef = useRef(false);
+  const busyStartedAtRef = useRef<number | null>(null);
   const previousStateRef = useRef({
     prompt: "",
     isDiscovering: false,
@@ -230,6 +257,7 @@ export default function LiveProspectTableEmbed({
   const [allowLiveTable, setAllowLiveTable] = useState(false);
   const [reviewApproved, setReviewApproved] = useState(false);
   const [promptDraft, setPromptDraft] = useState("");
+  const [statusNow, setStatusNow] = useState(() => Date.now());
   const [, setActivityItems] = useState<ActivityItem[]>([]);
   const [tableState, setTableState] = useState<EmbeddedTableState>({
     title: "",
@@ -314,6 +342,8 @@ export default function LiveProspectTableEmbed({
     autoSearchPromptRef.current = "";
     lastAutoSearchResumeSignatureRef.current = "";
     lastAutoImportSignatureRef.current = "";
+    lastStallRetrySignatureRef.current = "";
+    busyStartedAtRef.current = null;
 
     void fetch(initPath, { cache: "no-store" })
       .then((response) => readJson(response))
@@ -354,6 +384,16 @@ export default function LiveProspectTableEmbed({
   useEffect(() => {
     setPromptDraft(tableState.prompt);
   }, [tableState.prompt]);
+
+  useEffect(() => {
+    const intervalId = window.setInterval(() => {
+      setStatusNow(Date.now());
+    }, 1000);
+
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, []);
 
   useEffect(() => {
     if (!iframeOrigin) return;
@@ -633,6 +673,10 @@ export default function LiveProspectTableEmbed({
     [initPath, promptForSearch]
   );
   const reviewPending = tableState.rowCount >= REVIEW_CHECKPOINT_ROWS && !reviewApproved;
+  const lastSuccessMs = tableState.lastSuccessAt ? Date.parse(tableState.lastSuccessAt) : 0;
+  const secondsSinceLastSuccess =
+    lastSuccessMs > 0 ? Math.max(0, Math.floor((statusNow - lastSuccessMs) / 1000)) : null;
+  const searchUnderGoal = hasPrompt && !reviewApproved && tableState.rowCount < goalCount;
   const autoImportSignature = [
     normalizedTablePrompt,
     tableState.rowCount,
@@ -672,6 +716,36 @@ export default function LiveProspectTableEmbed({
                 : reviewApproved
                   ? "Targeting approved. You can move on once enough verified emails are ready."
                   : "AI is looking for the first review batch.";
+  const searchStatusLabel = reviewPending
+    ? "Review the first leads"
+    : tableBusy
+      ? "Searching right now"
+      : searchUnderGoal
+        ? secondsSinceLastSuccess !== null && secondsSinceLastSuccess >= 30
+          ? "Search paused"
+          : "Waiting for the next batch"
+        : reviewApproved
+          ? "Targeting approved"
+          : tableState.rowCount >= goalCount
+            ? "Review batch ready"
+            : "Preparing search";
+  const searchStatusDetail = reviewPending
+    ? `AI found ${tableState.rowCount} leads. Check them before it keeps going.`
+    : tableBusy
+      ? tableState.rowCount > 0
+        ? `Still checking more sources. ${tableState.rowCount} found so far.`
+        : "Checking websites, profiles, and public data now."
+      : searchUnderGoal
+        ? secondsSinceLastSuccess !== null && secondsSinceLastSuccess >= 30
+          ? `No new leads for ${formatElapsedLabel(secondsSinceLastSuccess)}. Trying again automatically.`
+          : secondsSinceLastSuccess !== null
+            ? `Last update ${formatElapsedLabel(secondsSinceLastSuccess)}. Still working toward ${goalCount}.`
+            : `Looking for the first leads now.`
+        : reviewApproved
+          ? "The first review batch looks good. Keep going when you're ready."
+          : tableState.rowCount >= goalCount
+            ? "You have enough leads to review and move on."
+            : "Starting the first search.";
 
   useEffect(() => {
     if (!iframeReady || initialEmbedStateHandledRef.current) {
@@ -697,15 +771,30 @@ export default function LiveProspectTableEmbed({
         rowCount: tableState.rowCount,
         isSearching: tableBusy,
         prompt: normalizedTablePrompt || normalizedPromptDraft,
+        lastSuccessAt: tableState.lastSuccessAt,
+        statusLabel: searchStatusLabel,
       })
     ).catch(() => undefined);
   }, [
+    searchStatusLabel,
+    tableState.lastSuccessAt,
     normalizedPromptDraft,
     normalizedTablePrompt,
     onTableStateChange,
     tableBusy,
     tableState.rowCount,
   ]);
+
+  useEffect(() => {
+    if (tableBusy) {
+      if (busyStartedAtRef.current === null) {
+        busyStartedAtRef.current = Date.now();
+      }
+      return;
+    }
+
+    busyStartedAtRef.current = null;
+  }, [tableBusy]);
 
   useEffect(() => {
     if (!iframeReady) return;
@@ -837,6 +926,64 @@ export default function LiveProspectTableEmbed({
     reviewApproved,
     sendHostCommand,
     tableBusy,
+      tableState.rowCount,
+  ]);
+
+  useEffect(() => {
+    if (
+      allowLiveTable ||
+      !iframeReady ||
+      !initialEmbedStateHandledRef.current ||
+      reviewApproved ||
+      !hasPrompt ||
+      promptDirty ||
+      tableBusy ||
+      tableState.rowCount >= goalCount
+    ) {
+      return;
+    }
+
+    const noProgressThresholdSeconds = tableState.rowCount > 0 ? 30 : 18;
+    if (secondsSinceLastSuccess === null || secondsSinceLastSuccess < noProgressThresholdSeconds) {
+      return;
+    }
+
+    const retrySignature = [
+      promptForSearch,
+      tableState.rowCount,
+      tableState.lastSuccessAt || "none",
+    ].join("|");
+
+    if (lastStallRetrySignatureRef.current === retrySignature) {
+      return;
+    }
+
+    lastStallRetrySignatureRef.current = retrySignature;
+    sendHostCommand("set-active-tab", { tab: "search" });
+    if (normalizedPromptDraft && normalizedPromptDraft !== normalizedTablePrompt) {
+      sendHostCommand("set-prompt", { prompt: promptForSearch });
+    }
+    sendHostCommand("run-search", { limit: goalCount });
+    pushActivity(
+      tableState.rowCount > 0
+        ? `No new leads for ${formatElapsedLabel(secondsSinceLastSuccess)}. Trying another search pass.`
+        : "Still waiting for the first leads. Trying another search pass.",
+      "warning"
+    );
+  }, [
+    allowLiveTable,
+    goalCount,
+    hasPrompt,
+    iframeReady,
+    normalizedPromptDraft,
+    normalizedTablePrompt,
+    promptDirty,
+    promptForSearch,
+    reviewApproved,
+    secondsSinceLastSuccess,
+    sendHostCommand,
+    tableBusy,
+    tableState.lastSuccessAt,
     tableState.rowCount,
   ]);
 
@@ -974,6 +1121,29 @@ export default function LiveProspectTableEmbed({
 
       <div className="border-b border-[color:var(--border)] bg-[color:var(--surface-muted)] px-4 py-2.5 text-sm text-[color:var(--muted-foreground)] md:px-6">
         {summaryLine || statusCopy}
+      </div>
+
+      <div className="border-b border-[color:var(--border)] bg-[color:var(--surface)] px-4 py-3 md:px-6">
+        <div className="flex flex-col gap-1.5 md:flex-row md:items-center md:justify-between">
+          <div className="flex items-center gap-2 text-sm font-medium text-[color:var(--foreground)]">
+            {tableBusy ? (
+              <Loader2 className="h-4 w-4 animate-spin text-[color:var(--accent)]" />
+            ) : searchUnderGoal && secondsSinceLastSuccess !== null && secondsSinceLastSuccess >= 30 ? (
+              <RefreshCw className="h-4 w-4 text-[color:var(--warning)]" />
+            ) : (
+              <Search className="h-4 w-4 text-[color:var(--muted-foreground)]" />
+            )}
+            <span>{searchStatusLabel}</span>
+          </div>
+          <div className="text-xs text-[color:var(--muted-foreground)]">
+            {tableBusy && busyStartedAtRef.current
+              ? `Search has been running for ${formatElapsedLabel(Math.max(1, Math.floor((statusNow - busyStartedAtRef.current) / 1000))).replace(" ago", "")}`
+              : tableState.lastSuccessAt
+                ? `Last lead update ${formatElapsedLabel(secondsSinceLastSuccess ?? 0)}`
+                : "No leads yet"}
+          </div>
+        </div>
+        <div className="mt-1.5 text-sm text-[color:var(--muted-foreground)]">{searchStatusDetail}</div>
       </div>
 
       {reviewPending ? (

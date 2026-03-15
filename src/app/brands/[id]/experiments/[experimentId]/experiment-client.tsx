@@ -183,7 +183,7 @@ function stageName(index: StageIndex) {
 
 function stageSummary(index: StageIndex) {
   if (index === 0) return "Name the test and say who it is for.";
-  if (index === 1) return "Find real people with real work emails.";
+  if (index === 1) return "Find the first 20 leads for this experiment.";
   if (index === 2) return "Write the emails people will get.";
   return "Turn it on and watch what happens.";
 }
@@ -465,7 +465,8 @@ export default function ExperimentClient({
     };
   }, [realEmailLeadCount, runTotals.sourcedLeads, runView]);
 
-  const prospectsReady = realEmailLeadCount >= PROSPECT_VALIDATION_MIN_READY;
+  const prospectLeadCount = Math.max(realEmailLeadCount, prospectTableRowCount);
+  const prospectsReady = prospectLeadCount >= PROSPECT_VALIDATION_MIN_READY;
   const messagingReady = Number(experiment?.messageFlow.publishedRevision ?? 0) > 0;
   const setupComplete = setupReady;
   const prospectsUnlocked = setupComplete;
@@ -476,12 +477,12 @@ export default function ExperimentClient({
   const launchComplete = launchUnlocked && latestRun?.status === "completed";
   const launchActive = launchUnlocked && Boolean(latestRun && !isRunTerminal(latestRun.status));
   const highestUnlockedStage = launchUnlocked ? 3 : messagingUnlocked ? 2 : prospectsUnlocked ? 1 : 0;
-  const remainingProspectLeads = Math.max(0, PROSPECT_VALIDATION_TARGET - realEmailLeadCount);
+  const remainingProspectLeads = Math.max(0, PROSPECT_VALIDATION_TARGET - prospectLeadCount);
   const prospectPrimaryMessage = prospectsReady
     ? "You have enough leads. You can write emails now."
-    : prospectTableRowCount > 0
-      ? `${prospectTableRowCount} lead${prospectTableRowCount === 1 ? "" : "s"} are in the table. AI is still checking work emails before you can write emails.`
-    : `AI is still collecting leads. You need ${remainingProspectLeads} more real work emails before you can write emails.`;
+    : prospectLeadCount > 0
+      ? `${prospectLeadCount} lead${prospectLeadCount === 1 ? "" : "s"} found. AI is still building the first review batch before you can write emails.`
+    : `AI is still collecting leads. You need ${remainingProspectLeads} more before you can write emails.`;
 
   const workflowStages = useMemo(
     () =>
@@ -555,7 +556,7 @@ export default function ExperimentClient({
 
   const nextGateHint = useMemo(() => {
     if (!setupComplete) return "Finish step 1 first.";
-    if (!prospectsComplete) return `Find ${remainingProspectLeads} more real work emails to unlock Write emails.`;
+    if (!prospectsComplete) return `Find ${remainingProspectLeads} more leads to unlock Write emails.`;
     if (!messagingComplete) return "Publish your email flow to unlock Start sending.";
     if (!launchComplete) return "Everything is ready. Start sending when you want.";
     return "Everything is done.";
@@ -1360,7 +1361,7 @@ export default function ExperimentClient({
     {
       id: "experiment-leads",
       label: "Leads",
-      summary: `${realEmailLeadCount} / ${PROSPECT_VALIDATION_TARGET}`,
+      summary: `${prospectLeadCount} / ${PROSPECT_VALIDATION_TARGET}`,
       detail: prospectsReady ? "Ready" : `${remainingProspectLeads} left`,
       tone: prospectsReady ? "success" : "accent",
     },
@@ -1496,7 +1497,7 @@ export default function ExperimentClient({
             <div className="text-sm text-[color:var(--muted-foreground)]">
               {prospectsReady
                 ? "Create the emails people will get."
-                : `Finish leads first. You still need ${remainingProspectLeads} more real work emails.`}
+                : `Finish leads first. You still need ${remainingProspectLeads} more.`}
             </div>
             <div className="flex flex-wrap gap-2">
               <Button asChild type="button" disabled={!prospectsReady}>
@@ -2304,8 +2305,8 @@ export default function ExperimentClient({
 
             {!prospectsReady ? (
               <div className="rounded-lg border border-[color:var(--warning)]/40 bg-[color:var(--warning-soft)] px-3 py-2 text-sm text-[color:var(--warning)]">
-                Launch is blocked until Prospect stage has {PROSPECT_VALIDATION_TARGET} quality leads with real work emails.
-                Current: {realEmailLeadCount} ({remainingProspectLeads} remaining).
+                Launch is blocked until Prospect stage has {PROSPECT_VALIDATION_TARGET} leads ready for review.
+                Current: {prospectLeadCount} ({remainingProspectLeads} remaining).
               </div>
             ) : null}
 

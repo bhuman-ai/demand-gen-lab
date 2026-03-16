@@ -1167,8 +1167,6 @@ export default function LiveProspectTableEmbed({
           className="h-[860px] w-full bg-transparent"
           onLoad={() => {
             setIframeLoaded(true);
-            sendHostInit();
-            sendHostCommand("refresh-state");
           }}
         />
       </div>

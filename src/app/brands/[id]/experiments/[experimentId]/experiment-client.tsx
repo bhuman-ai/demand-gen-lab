@@ -611,9 +611,12 @@ export default function ExperimentClient({
   const goNext = () =>
     setCurrentStage((prev) => asStageIndex(Math.min(highestUnlockedStage, prev + 1)));
   const goPrev = () => setCurrentStage((prev) => asStageIndex(prev - 1));
+  const navigateToStage = (stage: StageIndex) => {
+    router.push(stagePath(brandId, experimentId, stage));
+  };
   const openStage = (stage: StageIndex) => {
     if (routeStage !== null) {
-      router.push(stagePath(brandId, experimentId, stage));
+      navigateToStage(stage);
       return;
     }
     setCurrentStage(stage);
@@ -1438,7 +1441,7 @@ export default function ExperimentClient({
         importPath={`/api/brands/${brandId}/experiments/${experiment.id}/import-prospects/selection`}
         goalCount={PROSPECT_VALIDATION_TARGET}
         onReviewApproved={() => {
-          openStage(2);
+          navigateToStage(2);
         }}
         onTableStateChange={({ rowCount }) => {
           setProspectTableRowCount(rowCount);
@@ -1589,7 +1592,7 @@ export default function ExperimentClient({
               importPath={`/api/brands/${brandId}/experiments/${experiment.id}/import-prospects/selection`}
               goalCount={PROSPECT_VALIDATION_TARGET}
               onReviewApproved={() => {
-                openStage(2);
+                navigateToStage(2);
               }}
               onTableStateChange={({ rowCount }) => {
                 setProspectTableRowCount(rowCount);

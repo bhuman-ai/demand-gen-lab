@@ -1485,6 +1485,43 @@ export default function ExperimentClient({
       </div>
     </section>
   ) : null;
+  const stageFlowStrip = (
+    <section className="space-y-2">
+      <div className="flex flex-wrap items-center gap-2 rounded-[14px] border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-3">
+        {workflowStages.map((stage, index) => (
+          <div key={`flow-strip-${stage.index}`} className="flex items-center gap-2">
+            <button
+              type="button"
+              disabled={stage.disabled}
+              onClick={() => {
+                if (stage.disabled) return;
+                openStage(stage.index);
+              }}
+              className={`flex items-center gap-2 rounded-full px-2.5 py-1.5 text-sm transition ${
+                currentStage === stage.index
+                  ? "bg-[color:var(--accent-soft)] text-[color:var(--foreground)]"
+                  : stage.status === "done"
+                    ? "text-[color:var(--success)]"
+                    : "text-[color:var(--muted-foreground)]"
+              } ${stage.disabled ? "cursor-not-allowed opacity-50" : "hover:bg-[color:var(--surface-muted)]"}`}
+            >
+              <span className="inline-flex h-5 w-5 items-center justify-center rounded-full border border-[color:var(--border)] text-[11px] font-semibold">
+                {stage.index + 1}
+              </span>
+              <span className="font-medium">{stage.label}</span>
+              {stage.status === "done" ? (
+                <CheckCircle2 className="h-3.5 w-3.5" />
+              ) : stage.status === "locked" ? (
+                <Lock className="h-3 w-3 text-[color:var(--muted-foreground)]" />
+              ) : null}
+            </button>
+            {index < workflowStages.length - 1 ? <div className="h-px w-6 bg-[color:var(--border)]" /> : null}
+          </div>
+        ))}
+      </div>
+      <div className="text-xs text-[color:var(--muted-foreground)]">{nextGateHint}</div>
+    </section>
+  );
   const prospectTableSettings = {
     oneContactPerCompany: experiment.testEnvelope.oneContactPerCompany !== false,
   };
@@ -1522,6 +1559,7 @@ export default function ExperimentClient({
     return (
       <div className="space-y-4">
         {error ? <div className="text-sm text-[color:var(--danger)]">{error}</div> : null}
+        {stageFlowStrip}
         {leadsWorkspace}
       </div>
     );
@@ -1828,45 +1866,7 @@ export default function ExperimentClient({
 
       {!unifiedRunMode && !compactProspectsCanvas ? (
         stageRouteMode ? (
-          !showSetupProgressBar ? (
-          <section className="space-y-2">
-            <div className="flex flex-wrap items-center gap-2 rounded-[14px] border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-3">
-              {workflowStages.map((stage, index) => (
-                <div key={stage.index} className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    disabled={stage.disabled}
-                    onClick={() => {
-                      if (stage.disabled) return;
-                      openStage(stage.index);
-                    }}
-                    className={`flex items-center gap-2 rounded-full px-2.5 py-1.5 text-sm transition ${
-                      currentStage === stage.index
-                        ? "bg-[color:var(--accent-soft)] text-[color:var(--foreground)]"
-                        : stage.status === "done"
-                          ? "text-[color:var(--success)]"
-                          : "text-[color:var(--muted-foreground)]"
-                    } ${stage.disabled ? "cursor-not-allowed opacity-50" : "hover:bg-[color:var(--surface-muted)]"}`}
-                  >
-                    <span className="inline-flex h-5 w-5 items-center justify-center rounded-full border border-[color:var(--border)] text-[11px] font-semibold">
-                      {stage.index + 1}
-                    </span>
-                    <span className="font-medium">{stage.label}</span>
-                    {stage.status === "done" ? (
-                      <CheckCircle2 className="h-3.5 w-3.5" />
-                    ) : stage.status === "locked" ? (
-                      <Lock className="h-3 w-3 text-[color:var(--muted-foreground)]" />
-                    ) : null}
-                  </button>
-                  {index < workflowStages.length - 1 ? (
-                    <div className="h-px w-6 bg-[color:var(--border)]" />
-                  ) : null}
-                </div>
-              ))}
-            </div>
-            <div className="text-xs text-[color:var(--muted-foreground)]">{nextGateHint}</div>
-          </section>
-          ) : null
+          !showSetupProgressBar ? stageFlowStrip : null
         ) : (
           <Card>
             <CardHeader className="border-b border-[color:var(--border)]">

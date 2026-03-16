@@ -1437,6 +1437,9 @@ export default function ExperimentClient({
         initPath={`/api/brands/${brandId}/experiments/${experiment.id}/prospect-table`}
         importPath={`/api/brands/${brandId}/experiments/${experiment.id}/import-prospects/selection`}
         goalCount={PROSPECT_VALIDATION_TARGET}
+        onReviewApproved={() => {
+          openStage(2);
+        }}
         onTableStateChange={({ rowCount }) => {
           setProspectTableRowCount(rowCount);
         }}
@@ -1444,13 +1447,6 @@ export default function ExperimentClient({
           await refresh(false);
         }}
       />
-      {prospectsReady ? (
-        <div className="flex justify-end">
-          <Button type="button" onClick={() => openStage(2)}>
-            Write emails
-          </Button>
-        </div>
-      ) : null}
     </section>
   );
 
@@ -1592,6 +1588,9 @@ export default function ExperimentClient({
               initPath={`/api/brands/${brandId}/experiments/${experiment.id}/prospect-table`}
               importPath={`/api/brands/${brandId}/experiments/${experiment.id}/import-prospects/selection`}
               goalCount={PROSPECT_VALIDATION_TARGET}
+              onReviewApproved={() => {
+                openStage(2);
+              }}
               onTableStateChange={({ rowCount }) => {
                 setProspectTableRowCount(rowCount);
               }}

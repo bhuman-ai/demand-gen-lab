@@ -72,6 +72,7 @@ type LiveProspectTableEmbedProps = {
   initPath: string;
   importPath: string;
   goalCount?: number;
+  onReviewApproved?: () => void | Promise<void>;
   onTableStateChange?: (state: {
     rowCount: number;
     isSearching: boolean;
@@ -229,6 +230,7 @@ export default function LiveProspectTableEmbed({
   initPath,
   importPath,
   goalCount = DEFAULT_GOAL_COUNT,
+  onReviewApproved,
   onTableStateChange,
   onImported,
 }: LiveProspectTableEmbedProps) {
@@ -1029,6 +1031,7 @@ export default function LiveProspectTableEmbed({
                     }
                     setReviewApproved(true);
                     pushActivity("Targeting looks good. AI will keep the good leads from this batch.", "success");
+                    Promise.resolve(onReviewApproved?.()).catch(() => undefined);
                   }}
                 >
                   Looks good

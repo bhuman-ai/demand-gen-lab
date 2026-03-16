@@ -253,6 +253,7 @@ export default function ExperimentClient({
   const [promoting, setPromoting] = useState(false);
   const [error, setError] = useState("");
   const [prospectTableRowCount, setProspectTableRowCount] = useState(0);
+  const [prospectTablePrompt, setProspectTablePrompt] = useState("");
   const [currentStage, setCurrentStage] = useState<StageIndex>(
     view === "prospects" ? 1 : view === "messaging" ? 2 : view === "launch" ? 3 : 0
   );
@@ -594,6 +595,13 @@ export default function ExperimentClient({
     if (!launchComplete) return "Everything is ready. Start sending when you want.";
     return "Everything is done.";
   }, [launchComplete, messagingComplete, prospectsComplete, remainingProspectLeads, setupComplete]);
+  const prospectReviewStorageKey = useMemo(() => {
+    const prompt = String(prospectTablePrompt || experiment?.audience || "").trim();
+    if (!prompt) return "";
+    const experimentKey = String(experiment?.id || "").trim();
+    if (!experimentKey) return "";
+    return `lastb2b:prospects-review:/api/brands/${brandId}/experiments/${experimentKey}/prospect-table:${prompt}`;
+  }, [brandId, experiment?.audience, experiment?.id, prospectTablePrompt]);
 
   useEffect(() => {
     if (routeStage !== null) return;
@@ -746,6 +754,33 @@ export default function ExperimentClient({
       setError(err instanceof Error ? err.message : "Failed to write setup from prompt");
     } finally {
       setDraftingSetupFromAi(false);
+    }
+  };
+  const launchExperimentNow = async () => {
+    if (!experiment) {
+      return;
+    }
+    setLaunching(true);
+    setError("");
+    try {
+      await updateExperimentApi(brandId, experiment.id, {
+        name: experiment.name,
+        offer: experiment.offer,
+        audience: experiment.audience,
+        testEnvelope: experiment.testEnvelope,
+        successMetric: experiment.successMetric,
+      });
+      const result = await launchExperimentTestApi(brandId, experiment.id);
+      trackEvent("experiment_launched", {
+        brandId,
+        experimentId: experiment.id,
+        runId: result.runId,
+      });
+      await refresh(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to launch test");
+    } finally {
+      setLaunching(false);
     }
   };
   const requestAdditionalLeadsCount = () => {
@@ -1487,37 +1522,89 @@ export default function ExperimentClient({
   ) : null;
   const stageFlowStrip = (
     <section className="space-y-2">
-      <div className="flex flex-wrap items-center gap-2 rounded-[14px] border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-3">
-        {workflowStages.map((stage, index) => (
-          <div key={`flow-strip-${stage.index}`} className="flex items-center gap-2">
-            <button
+      <div className="flex flex-col gap-3 rounded-[14px] border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-3 lg:flex-row lg:items-center lg:justify-between">
+        <div className="flex flex-wrap items-center gap-2">
+          {workflowStages.map((stage, index) => (
+            <div key={`flow-strip-${stage.index}`} className="flex items-center gap-2">
+              <button
+                type="button"
+                disabled={stage.disabled}
+                onClick={() => {
+                  if (stage.disabled) return;
+                  openStage(stage.index);
+                }}
+                className={`flex items-center gap-2 rounded-full px-2.5 py-1.5 text-sm transition ${
+                  currentStage === stage.index
+                    ? "bg-[color:var(--accent-soft)] text-[color:var(--foreground)]"
+                    : stage.status === "done"
+                      ? "text-[color:var(--success)]"
+                      : "text-[color:var(--muted-foreground)]"
+                } ${stage.disabled ? "cursor-not-allowed opacity-50" : "hover:bg-[color:var(--surface-muted)]"}`}
+              >
+                <span className="inline-flex h-5 w-5 items-center justify-center rounded-full border border-[color:var(--border)] text-[11px] font-semibold">
+                  {stage.index + 1}
+                </span>
+                <span className="font-medium">{stage.label}</span>
+                {stage.status === "done" ? (
+                  <CheckCircle2 className="h-3.5 w-3.5" />
+                ) : stage.status === "locked" ? (
+                  <Lock className="h-3 w-3 text-[color:var(--muted-foreground)]" />
+                ) : null}
+              </button>
+              {index < workflowStages.length - 1 ? <div className="h-px w-6 bg-[color:var(--border)]" /> : null}
+            </div>
+          ))}
+        </div>
+        <div className="flex items-center justify-end">
+          {currentStage === 0 ? (
+            <Button
               type="button"
-              disabled={stage.disabled}
-              onClick={() => {
-                if (stage.disabled) return;
-                openStage(stage.index);
-              }}
-              className={`flex items-center gap-2 rounded-full px-2.5 py-1.5 text-sm transition ${
-                currentStage === stage.index
-                  ? "bg-[color:var(--accent-soft)] text-[color:var(--foreground)]"
-                  : stage.status === "done"
-                    ? "text-[color:var(--success)]"
-                    : "text-[color:var(--muted-foreground)]"
-              } ${stage.disabled ? "cursor-not-allowed opacity-50" : "hover:bg-[color:var(--surface-muted)]"}`}
+              onClick={() => navigateToStage(1)}
+              disabled={!setupComplete || saving}
+              className="min-w-[170px] justify-between rounded-full"
             >
-              <span className="inline-flex h-5 w-5 items-center justify-center rounded-full border border-[color:var(--border)] text-[11px] font-semibold">
-                {stage.index + 1}
-              </span>
-              <span className="font-medium">{stage.label}</span>
-              {stage.status === "done" ? (
-                <CheckCircle2 className="h-3.5 w-3.5" />
-              ) : stage.status === "locked" ? (
-                <Lock className="h-3 w-3 text-[color:var(--muted-foreground)]" />
-              ) : null}
-            </button>
-            {index < workflowStages.length - 1 ? <div className="h-px w-6 bg-[color:var(--border)]" /> : null}
-          </div>
-        ))}
+              <span>Next: Get leads</span>
+              <ArrowRight className="h-4 w-4" />
+            </Button>
+          ) : currentStage === 1 ? (
+            <Button
+              type="button"
+              onClick={() => {
+                if (typeof window !== "undefined" && prospectReviewStorageKey) {
+                  window.localStorage.setItem(prospectReviewStorageKey, "approved");
+                }
+                navigateToStage(2);
+              }}
+              disabled={!prospectsComplete}
+              className="min-w-[190px] justify-between rounded-full"
+            >
+              <span>Next: Write emails</span>
+              <ArrowRight className="h-4 w-4" />
+            </Button>
+          ) : currentStage === 2 ? (
+            <Button
+              type="button"
+              onClick={() => navigateToStage(3)}
+              disabled={!messagingComplete}
+              className="min-w-[190px] justify-between rounded-full"
+            >
+              <span>Next: Start sending</span>
+              <ArrowRight className="h-4 w-4" />
+            </Button>
+          ) : (
+            <Button
+              type="button"
+              onClick={() => {
+                void launchExperimentNow();
+              }}
+              disabled={launching || launchBlocked}
+              className="min-w-[190px] justify-between rounded-full"
+            >
+              <span>{launching ? "Launching..." : "Start sending"}</span>
+              <Rocket className="h-4 w-4" />
+            </Button>
+          )}
+        </div>
       </div>
       <div className="text-xs text-[color:var(--muted-foreground)]">{nextGateHint}</div>
     </section>
@@ -1542,11 +1629,17 @@ export default function ExperimentClient({
         goalCount={PROSPECT_VALIDATION_TARGET}
         settings={prospectTableSettings}
         onReviewApproved={() => {
+          if (typeof window !== "undefined" && prospectReviewStorageKey) {
+            window.localStorage.setItem(prospectReviewStorageKey, "approved");
+          }
           navigateToStage(2);
         }}
         onSettingsChange={saveProspectTableSettings}
-        onTableStateChange={({ rowCount }) => {
+        onTableStateChange={({ rowCount, prompt }) => {
           setProspectTableRowCount(rowCount);
+          if (prompt) {
+            setProspectTablePrompt(prompt);
+          }
         }}
         onImported={async () => {
           await refresh(false);
@@ -1862,11 +1955,12 @@ export default function ExperimentClient({
         </>
       ) : null}
 
-      {setupProgressPanel}
-
       {!unifiedRunMode && !compactProspectsCanvas ? (
         stageRouteMode ? (
-          !showSetupProgressBar ? stageFlowStrip : null
+          <div className="space-y-4">
+            {stageFlowStrip}
+            {showSetupProgressBar ? setupProgressPanel : null}
+          </div>
         ) : (
           <Card>
             <CardHeader className="border-b border-[color:var(--border)]">
@@ -2361,28 +2455,7 @@ export default function ExperimentClient({
                 type="button"
                 disabled={launching || launchBlocked}
                 onClick={async () => {
-                  setLaunching(true);
-                  setError("");
-                  try {
-                    await updateExperimentApi(brandId, experiment.id, {
-                      name: experiment.name,
-                      offer: experiment.offer,
-                      audience: experiment.audience,
-                      testEnvelope: experiment.testEnvelope,
-                      successMetric: experiment.successMetric,
-                    });
-                    const result = await launchExperimentTestApi(brandId, experiment.id);
-                    trackEvent("experiment_launched", {
-                      brandId,
-                      experimentId: experiment.id,
-                      runId: result.runId,
-                    });
-                    await refresh(false);
-                  } catch (err) {
-                    setError(err instanceof Error ? err.message : "Failed to launch test");
-                  } finally {
-                    setLaunching(false);
-                  }
+                  await launchExperimentNow();
                 }}
               >
                 <Rocket className="h-4 w-4" />

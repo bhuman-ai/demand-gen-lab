@@ -1,7 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Loader2, Search } from "lucide-react";
+import { Loader2, Search, Settings2 } from "lucide-react";
+import { SettingsModal } from "@/app/settings/outreach/settings-primitives";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
@@ -72,7 +73,13 @@ type LiveProspectTableEmbedProps = {
   initPath: string;
   importPath: string;
   goalCount?: number;
+  settings?: {
+    oneContactPerCompany: boolean;
+  };
   onReviewApproved?: () => void | Promise<void>;
+  onSettingsChange?: (settings: {
+    oneContactPerCompany: boolean;
+  }) => void | Promise<void>;
   onTableStateChange?: (state: {
     rowCount: number;
     isSearching: boolean;
@@ -230,7 +237,9 @@ export default function LiveProspectTableEmbed({
   initPath,
   importPath,
   goalCount = DEFAULT_GOAL_COUNT,
+  settings,
   onReviewApproved,
+  onSettingsChange,
   onTableStateChange,
   onImported,
 }: LiveProspectTableEmbedProps) {
@@ -258,6 +267,11 @@ export default function LiveProspectTableEmbed({
   const [allowLiveTable, setAllowLiveTable] = useState(false);
   const [reviewApproved, setReviewApproved] = useState(false);
   const [promptDraft, setPromptDraft] = useState("");
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsSaving, setSettingsSaving] = useState(false);
+  const [oneContactPerCompanyDraft, setOneContactPerCompanyDraft] = useState(
+    settings?.oneContactPerCompany ?? true
+  );
   const [statusNow, setStatusNow] = useState(() => Date.now());
   const [, setActivityItems] = useState<ActivityItem[]>([]);
   const [tableState, setTableState] = useState<EmbeddedTableState>({
@@ -383,6 +397,10 @@ export default function LiveProspectTableEmbed({
   useEffect(() => {
     setPromptDraft(tableState.prompt);
   }, [tableState.prompt]);
+
+  useEffect(() => {
+    setOneContactPerCompanyDraft(settings?.oneContactPerCompany ?? true);
+  }, [settings?.oneContactPerCompany]);
 
   useEffect(() => {
     const intervalId = window.setInterval(() => {
@@ -705,8 +723,9 @@ export default function LiveProspectTableEmbed({
       : reviewApproved
         ? "Approved"
         : tableState.rowCount >= goalCount
-          ? "Ready"
-          : "Waiting";
+        ? "Ready"
+        : "Waiting";
+  const settingsDirty = oneContactPerCompanyDraft !== (settings?.oneContactPerCompany ?? true);
 
   useEffect(() => {
     if (!iframeReady || initialEmbedStateHandledRef.current) {
@@ -994,7 +1013,25 @@ export default function LiveProspectTableEmbed({
     );
   }
 
+  async function saveSettings() {
+    if (!settingsDirty || !onSettingsChange) {
+      setSettingsOpen(false);
+      return;
+    }
+
+    setSettingsSaving(true);
+    try {
+      await onSettingsChange({
+        oneContactPerCompany: oneContactPerCompanyDraft,
+      });
+      setSettingsOpen(false);
+    } finally {
+      setSettingsSaving(false);
+    }
+  }
+
   return (
+    <>
     <div className="overflow-hidden rounded-[24px] border border-[color:var(--border)] bg-[color:var(--surface)] shadow-none">
       <div className="border-b border-[color:var(--border)] bg-[color:var(--surface)] px-4 py-4 md:px-6">
         <div className="flex flex-col gap-3 xl:flex-row xl:items-center">
@@ -1020,6 +1057,16 @@ export default function LiveProspectTableEmbed({
             className="h-12 flex-1 rounded-[14px] border-[color:var(--border)] bg-[color:var(--surface-muted)] text-[color:var(--foreground)] placeholder:text-[color:var(--muted-foreground)] shadow-none focus-visible:ring-[color:var(--accent-border)] read-only:cursor-not-allowed read-only:opacity-85"
           />
           <div className="flex flex-wrap gap-2">
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              className="h-12 rounded-[14px] px-3"
+              onClick={() => setSettingsOpen(true)}
+            >
+              <Settings2 className="h-4 w-4" />
+              Settings
+            </Button>
             {reviewPending ? (
               <>
                 <Button
@@ -1126,5 +1173,46 @@ export default function LiveProspectTableEmbed({
         />
       </div>
     </div>
+
+      <SettingsModal
+        open={settingsOpen}
+        onOpenChange={setSettingsOpen}
+        title="Lead settings"
+        description="Adjust how this experiment turns matching rows into actual leads."
+        panelClassName="max-w-lg"
+        footer={
+          <div className="flex items-center justify-end gap-2">
+            <Button type="button" variant="ghost" onClick={() => setSettingsOpen(false)} disabled={settingsSaving}>
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              onClick={() => {
+                void saveSettings();
+              }}
+              disabled={settingsSaving || !settingsDirty}
+            >
+              {settingsSaving ? "Saving..." : "Save changes"}
+            </Button>
+          </div>
+        }
+      >
+        <label className="flex cursor-pointer items-start gap-3 rounded-[14px] border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-4">
+          <input
+            type="checkbox"
+            className="mt-0.5 h-4 w-4 rounded border border-[color:var(--border)] bg-[color:var(--surface)]"
+            checked={oneContactPerCompanyDraft}
+            onChange={(event) => setOneContactPerCompanyDraft(event.target.checked)}
+          />
+          <div className="space-y-1">
+            <div className="text-sm font-medium text-[color:var(--foreground)]">Only keep one contact per company</div>
+            <div className="text-sm text-[color:var(--muted-foreground)]">
+              When this is on, the experiment skips extra people from companies already represented in the lead pool.
+              Turn it off if you want to contact multiple people at the same company.
+            </div>
+          </div>
+        </label>
+      </SettingsModal>
+    </>
   );
 }

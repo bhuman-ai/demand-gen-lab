@@ -84,6 +84,7 @@ export type ExperimentTestEnvelope = {
   hourlyCap: number;
   timezone: string;
   minSpacingMinutes: number;
+  oneContactPerCompany?: boolean;
   businessHoursEnabled?: boolean;
   businessHoursStartHour?: number;
   businessHoursEndHour?: number;

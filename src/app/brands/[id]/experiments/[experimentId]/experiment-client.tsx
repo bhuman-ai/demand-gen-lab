@@ -1434,15 +1434,80 @@ export default function ExperimentClient({
     if (typeof document === "undefined") return;
     document.getElementById(sectionId)?.scrollIntoView({ behavior: "smooth", block: "start" });
   };
+  const setupProgressPanel = showSetupProgressBar ? (
+    <section className="overflow-hidden rounded-[18px] border border-[color:var(--border)] bg-[color:var(--surface)]">
+      <div className="border-b border-[color:var(--border)] px-4 py-4 sm:px-5">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+          <div className="space-y-1">
+            <div className="text-xs font-medium uppercase tracking-[0.16em] text-[color:var(--muted-foreground)]">
+              Setup progress
+            </div>
+            <div className="text-sm font-medium text-[color:var(--foreground)]">
+              {setupCompletionCount} of {setupChecklist.length} basics filled in
+            </div>
+          </div>
+          <Badge variant="muted">Step 1 of {STAGE_COUNT}</Badge>
+        </div>
+        <div className="mt-4 h-2 overflow-hidden rounded-full bg-[color:var(--surface-muted)]">
+          <div
+            className="h-full rounded-full bg-[color:var(--accent)] transition-[width] duration-300"
+            style={{ width: `${setupCompletionPct}%` }}
+          />
+        </div>
+      </div>
+      <div className="grid gap-2 px-4 py-4 sm:grid-cols-4 sm:px-5">
+        {workflowStages.map((stage) => (
+          <div
+            key={`setup-progress-${stage.index}`}
+            className={`rounded-[14px] border px-3 py-3 ${
+              stage.index === 0
+                ? "border-[color:var(--accent)] bg-[color:var(--accent-soft)]"
+                : stage.status === "locked"
+                  ? "border-[color:var(--border)] bg-[color:var(--surface-muted)] text-[color:var(--muted-foreground)]"
+                  : "border-[color:var(--border)] bg-[color:var(--surface)]"
+            }`}
+          >
+            <div className="flex items-center justify-between gap-2">
+              <div className="inline-flex h-6 min-w-6 items-center justify-center rounded-full border border-[color:var(--border)] text-[11px] font-semibold">
+                {stage.index + 1}
+              </div>
+              {stage.status === "done" ? (
+                <CheckCircle2 className="h-4 w-4 text-[color:var(--success)]" />
+              ) : stage.status === "locked" ? (
+                <Lock className="h-3.5 w-3.5 text-[color:var(--muted-foreground)]" />
+              ) : (
+                <Badge variant={stageBadgeVariant(stage.status)}>{stageBadgeLabel(stage.status)}</Badge>
+              )}
+            </div>
+            <div className="mt-2 text-sm font-semibold text-[color:var(--foreground)]">{stage.label}</div>
+          </div>
+        ))}
+      </div>
+    </section>
+  ) : null;
+  const prospectTableSettings = {
+    oneContactPerCompany: experiment.testEnvelope.oneContactPerCompany !== false,
+  };
+  const saveProspectTableSettings = async (next: { oneContactPerCompany: boolean }) => {
+    const updated = await updateExperimentApi(brandId, experiment.id, {
+      testEnvelope: {
+        ...experiment.testEnvelope,
+        oneContactPerCompany: next.oneContactPerCompany,
+      },
+    });
+    setExperiment(updated);
+  };
   const leadsWorkspace = (
     <section className="space-y-3">
       <LiveProspectTableEmbed
         initPath={`/api/brands/${brandId}/experiments/${experiment.id}/prospect-table`}
         importPath={`/api/brands/${brandId}/experiments/${experiment.id}/import-prospects/selection`}
         goalCount={PROSPECT_VALIDATION_TARGET}
+        settings={prospectTableSettings}
         onReviewApproved={() => {
           navigateToStage(2);
         }}
+        onSettingsChange={saveProspectTableSettings}
         onTableStateChange={({ rowCount }) => {
           setProspectTableRowCount(rowCount);
         }}
@@ -1505,57 +1570,7 @@ export default function ExperimentClient({
           </Card>
         </div>
 
-        {showSetupProgressBar ? (
-          <section className="overflow-hidden rounded-[18px] border border-[color:var(--border)] bg-[color:var(--surface)]">
-            <div className="border-b border-[color:var(--border)] px-4 py-4 sm:px-5">
-              <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-                <div className="space-y-1">
-                  <div className="text-xs font-medium uppercase tracking-[0.16em] text-[color:var(--muted-foreground)]">
-                    Setup progress
-                  </div>
-                  <div className="text-sm font-medium text-[color:var(--foreground)]">
-                    {setupCompletionCount} of {setupChecklist.length} basics filled in
-                  </div>
-                </div>
-                <Badge variant="muted">Step 1 of {STAGE_COUNT}</Badge>
-              </div>
-              <div className="mt-4 h-2 overflow-hidden rounded-full bg-[color:var(--surface-muted)]">
-                <div
-                  className="h-full rounded-full bg-[color:var(--accent)] transition-[width] duration-300"
-                  style={{ width: `${setupCompletionPct}%` }}
-                />
-              </div>
-            </div>
-            <div className="grid gap-2 px-4 py-4 sm:grid-cols-4 sm:px-5">
-              {workflowStages.map((stage) => (
-                <div
-                  key={`setup-progress-${stage.index}`}
-                  className={`rounded-[14px] border px-3 py-3 ${
-                    stage.index === 0
-                      ? "border-[color:var(--accent)] bg-[color:var(--accent-soft)]"
-                      : stage.status === "locked"
-                        ? "border-[color:var(--border)] bg-[color:var(--surface-muted)] text-[color:var(--muted-foreground)]"
-                        : "border-[color:var(--border)] bg-[color:var(--surface)]"
-                  }`}
-                >
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="inline-flex h-6 min-w-6 items-center justify-center rounded-full border border-[color:var(--border)] text-[11px] font-semibold">
-                      {stage.index + 1}
-                    </div>
-                    {stage.status === "done" ? (
-                      <CheckCircle2 className="h-4 w-4 text-[color:var(--success)]" />
-                    ) : stage.status === "locked" ? (
-                      <Lock className="h-3.5 w-3.5 text-[color:var(--muted-foreground)]" />
-                    ) : (
-                      <Badge variant={stageBadgeVariant(stage.status)}>{stageBadgeLabel(stage.status)}</Badge>
-                    )}
-                  </div>
-                  <div className="mt-2 text-sm font-semibold text-[color:var(--foreground)]">{stage.label}</div>
-                </div>
-              ))}
-            </div>
-          </section>
-        ) : null}
+        {setupProgressPanel}
 
         <Card>
           <CardHeader>
@@ -1591,9 +1606,11 @@ export default function ExperimentClient({
               initPath={`/api/brands/${brandId}/experiments/${experiment.id}/prospect-table`}
               importPath={`/api/brands/${brandId}/experiments/${experiment.id}/import-prospects/selection`}
               goalCount={PROSPECT_VALIDATION_TARGET}
+              settings={prospectTableSettings}
               onReviewApproved={() => {
                 navigateToStage(2);
               }}
+              onSettingsChange={saveProspectTableSettings}
               onTableStateChange={({ rowCount }) => {
                 setProspectTableRowCount(rowCount);
               }}
@@ -1807,8 +1824,11 @@ export default function ExperimentClient({
         </>
       ) : null}
 
+      {setupProgressPanel}
+
       {!unifiedRunMode && !compactProspectsCanvas ? (
         stageRouteMode ? (
+          !showSetupProgressBar ? (
           <section className="space-y-2">
             <div className="flex flex-wrap items-center gap-2 rounded-[14px] border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-3">
               {workflowStages.map((stage, index) => (
@@ -1846,6 +1866,7 @@ export default function ExperimentClient({
             </div>
             <div className="text-xs text-[color:var(--muted-foreground)]">{nextGateHint}</div>
           </section>
+          ) : null
         ) : (
           <Card>
             <CardHeader className="border-b border-[color:var(--border)]">
@@ -1907,58 +1928,6 @@ export default function ExperimentClient({
             </CardContent>
           </Card>
         )
-      ) : null}
-
-      {showSetupProgressBar ? (
-        <section className="overflow-hidden rounded-[18px] border border-[color:var(--border)] bg-[color:var(--surface)]">
-          <div className="border-b border-[color:var(--border)] px-4 py-4 sm:px-5">
-            <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-              <div className="space-y-1">
-                <div className="text-xs font-medium uppercase tracking-[0.16em] text-[color:var(--muted-foreground)]">
-                  Setup progress
-                </div>
-                <div className="text-sm font-medium text-[color:var(--foreground)]">
-                  {setupCompletionCount} of {setupChecklist.length} basics filled in
-                </div>
-              </div>
-              <Badge variant="muted">Step 1 of {STAGE_COUNT}</Badge>
-            </div>
-            <div className="mt-4 h-2 overflow-hidden rounded-full bg-[color:var(--surface-muted)]">
-              <div
-                className="h-full rounded-full bg-[color:var(--accent)] transition-[width] duration-300"
-                style={{ width: `${setupCompletionPct}%` }}
-              />
-            </div>
-          </div>
-          <div className="grid gap-2 px-4 py-4 sm:grid-cols-4 sm:px-5">
-            {workflowStages.map((stage) => (
-              <div
-                key={`setup-stage-${stage.index}`}
-                className={`rounded-[14px] border px-3 py-3 ${
-                  stage.index === 0
-                    ? "border-[color:var(--accent)] bg-[color:var(--accent-soft)]"
-                    : stage.status === "locked"
-                      ? "border-[color:var(--border)] bg-[color:var(--surface-muted)] text-[color:var(--muted-foreground)]"
-                      : "border-[color:var(--border)] bg-[color:var(--surface)]"
-                }`}
-              >
-                <div className="flex items-center justify-between gap-2">
-                  <div className="inline-flex h-6 min-w-6 items-center justify-center rounded-full border border-[color:var(--border)] text-[11px] font-semibold">
-                    {stage.index + 1}
-                  </div>
-                  {stage.status === "done" ? (
-                    <CheckCircle2 className="h-4 w-4 text-[color:var(--success)]" />
-                  ) : stage.status === "locked" ? (
-                    <Lock className="h-3.5 w-3.5 text-[color:var(--muted-foreground)]" />
-                  ) : (
-                    <Badge variant={stageBadgeVariant(stage.status)}>{stageBadgeLabel(stage.status)}</Badge>
-                  )}
-                </div>
-                <div className="mt-2 text-sm font-semibold text-[color:var(--foreground)]">{stage.label}</div>
-              </div>
-            ))}
-          </div>
-        </section>
       ) : null}
 
       {currentStage === 0 ? (

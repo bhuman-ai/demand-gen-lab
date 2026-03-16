@@ -79,6 +79,31 @@ function domainFromEmailOrUrl(email: string, source: string) {
   return normalizeDomainCandidate(source);
 }
 
+function normalizeCompanyName(value: string) {
+  return normalizeCell(value).toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+}
+
+function companyKeyFromLead(input: {
+  domain?: string;
+  company?: string;
+  email?: string;
+  sourceUrl?: string;
+}) {
+  const domain = normalizeDomainCandidate(
+    input.domain || domainFromEmailOrUrl(input.email ?? "", input.sourceUrl ?? "")
+  );
+  if (domain && !isNonCompanyProfileDomain(domain)) {
+    return `domain:${domain}`;
+  }
+
+  const company = normalizeCompanyName(String(input.company ?? ""));
+  if (company) {
+    return `company:${company}`;
+  }
+
+  return "";
+}
+
 function extractFirstUrlish(value: unknown) {
   const raw = String(value ?? "").trim();
   if (!raw) return "";
@@ -340,9 +365,37 @@ export async function POST(
       .map((lead) => String(lead.email ?? "").trim().toLowerCase())
       .filter(Boolean)
   );
+  const oneContactPerCompany = experiment.testEnvelope.oneContactPerCompany !== false;
+  const existingCompanyKeys = new Set(
+    oneContactPerCompany
+      ? existingLeadLists
+          .flat()
+          .map((lead) => companyKeyFromLead(lead))
+          .filter(Boolean)
+      : []
+  );
+  const newLeads: typeof finalLeads = [];
+  let dedupedCount = 0;
 
-  const newLeads = finalLeads.filter((lead) => !existingEmails.has(lead.email.toLowerCase()));
-  const dedupedCount = Math.max(0, finalLeads.length - newLeads.length);
+  for (const lead of finalLeads) {
+    const normalizedEmail = lead.email.toLowerCase();
+    if (existingEmails.has(normalizedEmail)) {
+      dedupedCount += 1;
+      continue;
+    }
+
+    const companyKey = oneContactPerCompany ? companyKeyFromLead(lead) : "";
+    if (companyKey && existingCompanyKeys.has(companyKey)) {
+      dedupedCount += 1;
+      continue;
+    }
+
+    newLeads.push(lead);
+    existingEmails.add(normalizedEmail);
+    if (companyKey) {
+      existingCompanyKeys.add(companyKey);
+    }
+  }
 
   if (!newLeads.length) {
     return NextResponse.json(

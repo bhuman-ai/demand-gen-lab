@@ -95,6 +95,7 @@ function defaultTestEnvelope(): ExperimentTestEnvelope {
     hourlyCap: 6,
     timezone: "America/Los_Angeles",
     minSpacingMinutes: 8,
+    oneContactPerCompany: true,
     businessHoursEnabled: true,
     businessHoursStartHour: 9,
     businessHoursEndHour: 17,
@@ -160,6 +161,7 @@ function mapExperimentRow(input: unknown): ExperimentRecord {
       hourlyCap: Math.max(1, asNumber(testEnvelope.hourlyCap, 6)),
       timezone: String(testEnvelope.timezone ?? "America/Los_Angeles") || "America/Los_Angeles",
       minSpacingMinutes: Math.max(1, asNumber(testEnvelope.minSpacingMinutes, 8)),
+      oneContactPerCompany: testEnvelope.oneContactPerCompany !== false,
       businessHoursEnabled: testEnvelope.businessHoursEnabled !== false,
       businessHoursStartHour: clampBusinessHour(testEnvelope.businessHoursStartHour, 9),
       businessHoursEndHour: clampBusinessEndHour(testEnvelope.businessHoursEndHour, 17),
@@ -889,6 +891,8 @@ export async function updateExperimentRecord(
             1,
             Number(patch.testEnvelope.minSpacingMinutes ?? existing.testEnvelope.minSpacingMinutes)
           ),
+          oneContactPerCompany:
+            patch.testEnvelope.oneContactPerCompany ?? existing.testEnvelope.oneContactPerCompany ?? true,
           businessHoursEnabled:
             patch.testEnvelope.businessHoursEnabled ?? existing.testEnvelope.businessHoursEnabled ?? true,
           businessHoursStartHour: clampBusinessHour(

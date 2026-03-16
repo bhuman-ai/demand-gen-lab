@@ -19,6 +19,7 @@ import {
   ZoomIn,
   ZoomOut,
 } from "lucide-react";
+import { SettingsModal } from "@/app/settings/outreach/settings-primitives";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -575,6 +576,8 @@ export default function FlowEditorClient({
 
   const [selectedNodeId, setSelectedNodeId] = useState("");
   const [selectedEdgeId, setSelectedEdgeId] = useState("");
+  const [nodeEditorOpen, setNodeEditorOpen] = useState(false);
+  const [edgeEditorOpen, setEdgeEditorOpen] = useState(false);
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -729,6 +732,14 @@ export default function FlowEditorClient({
     setPreviewResult(null);
     setPreviewError("");
   }, [selectedNode, previewResult]);
+
+  useEffect(() => {
+    if (!selectedNode) setNodeEditorOpen(false);
+  }, [selectedNode]);
+
+  useEffect(() => {
+    if (!selectedEdge) setEdgeEditorOpen(false);
+  }, [selectedEdge]);
 
   useEffect(() => {
     setProbeResult(null);
@@ -1129,6 +1140,8 @@ export default function FlowEditorClient({
     setGraph({ ...graph, edges: [...graph.edges, nextEdge] });
     setSelectedEdgeId(nextEdge.id);
     setSelectedNodeId("");
+    setEdgeEditorOpen(true);
+    setNodeEditorOpen(false);
     setConnectState(null);
   };
 
@@ -1229,6 +1242,8 @@ export default function FlowEditorClient({
     if (nextNodeId) {
       setSelectedNodeId(nextNodeId);
       setSelectedEdgeId("");
+      setNodeEditorOpen(true);
+      setEdgeEditorOpen(false);
       setHasFittedInitialView(false);
       setStatusMessage(`Added follow-up after ${formatWaitMinutes(waitMinutes)}.`);
     }
@@ -1252,6 +1267,20 @@ export default function FlowEditorClient({
         edges: prev.edges.map((edge) => (edge.id === edgeId ? { ...edge, ...patch } : edge)),
       };
     });
+  };
+
+  const openNodeEditor = (nodeId: string) => {
+    setSelectedNodeId(nodeId);
+    setSelectedEdgeId("");
+    setNodeEditorOpen(true);
+    setEdgeEditorOpen(false);
+  };
+
+  const openEdgeEditor = (edgeId: string) => {
+    setSelectedEdgeId(edgeId);
+    setSelectedNodeId("");
+    setEdgeEditorOpen(true);
+    setNodeEditorOpen(false);
   };
 
   const fitView = () => {
@@ -1544,7 +1573,7 @@ export default function FlowEditorClient({
         </CardContent>
       </Card>
 
-      <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_340px]">
+      <div className="grid gap-4">
         <Card className="overflow-hidden">
           <CardHeader className="flex flex-row items-center justify-between gap-3 border-b border-[color:var(--border)] pb-3">
             <div>
@@ -1625,8 +1654,7 @@ export default function FlowEditorClient({
                           className="pointer-events-auto cursor-pointer"
                           onClick={(event) => {
                             event.stopPropagation();
-                            setSelectedEdgeId(edge.id);
-                            setSelectedNodeId("");
+                            openEdgeEditor(edge.id);
                           }}
                         />
                         <text
@@ -1715,6 +1743,19 @@ export default function FlowEditorClient({
                         <div className="flex items-center justify-between gap-2">
                           <div className="truncate text-base font-semibold">{cardTitle}</div>
                           <div className="flex items-center gap-1">
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="ghost"
+                              className="h-7 px-2 text-xs"
+                              onPointerDown={(event) => event.stopPropagation()}
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                openNodeEditor(node.id);
+                              }}
+                            >
+                              Edit
+                            </Button>
                             {isStart ? <Badge variant="accent">Start</Badge> : null}
                             {node.kind === "message" ? (
                               <Badge variant={node.autoSend ? "success" : "muted"}>
@@ -1766,389 +1807,13 @@ export default function FlowEditorClient({
 
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">Node Inspector</CardTitle>
-            <CardDescription>Edit the selected node. Advanced routing is hidden by default.</CardDescription>
+            <CardTitle className="text-base">Flow Probe</CardTitle>
+            <CardDescription>Use the canvas edit buttons for nodes. Probe lets you test the draft flow against a sample lead.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
-            {selectedNode ? (
-              <div className="space-y-3 rounded-xl border border-[color:var(--border)] p-3">
-                <div className="flex items-center justify-between">
-                  <div className="text-sm font-semibold">
-                    Node: {selectedNode.title || (selectedNode.kind === "terminal" ? "End" : "Message")}
-                  </div>
-                  <div className="flex items-center gap-1">
-                    {selectedNode.kind === "message" ? (
-                      <Button type="button" size="sm" variant="ghost" onClick={() => duplicateNode(selectedNode.id)}>
-                        Duplicate
-                      </Button>
-                    ) : null}
-                    {selectedNode.kind === "message" ? (
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="ghost"
-                        onClick={() => createFollowUpBranch(selectedNode.id)}
-                      >
-                        Add follow-up
-                      </Button>
-                    ) : null}
-                    <Button type="button" size="sm" variant="ghost" onClick={() => deleteNode(selectedNode.id)}>
-                      <Trash2 className="h-4 w-4" />
-                    </Button>
-                  </div>
-                </div>
-
-                {selectedNode.kind === "message" ? (
-                  <>
-                    <div className="grid gap-2">
-                      <Label>Title</Label>
-                      <Input
-                        value={selectedNode.title}
-                        onChange={(event) => setNodePatch(selectedNode.id, { title: event.target.value })}
-                        placeholder="Send AWS application link"
-                      />
-                    </div>
-                    <div className="grid gap-2">
-                      <Label>Subject</Label>
-                      <Input
-                        value={selectedNode.subject}
-                        onChange={(event) => setNodePatch(selectedNode.id, { subject: event.target.value })}
-                        placeholder="Question about your pipeline"
-                      />
-                    </div>
-                    <div className="grid gap-2 md:grid-cols-2">
-                      <div className="grid gap-2">
-                        <Label>Send mode</Label>
-                        <Select
-                          value={selectedNode.autoSend ? "auto" : "manual"}
-                          onChange={(event) =>
-                            setNodePatch(selectedNode.id, { autoSend: event.target.value === "auto" })
-                          }
-                        >
-                          <option value="auto">Auto send</option>
-                          <option value="manual">Manual review</option>
-                        </Select>
-                      </div>
-                      <div className="grid gap-2">
-                        <Label>Node delay (minutes)</Label>
-                        <Input
-                          type="number"
-                          min={0}
-                          max={10080}
-                          value={selectedNode.delayMinutes}
-                          onChange={(event) =>
-                            setNodePatch(selectedNode.id, {
-                              delayMinutes: clamp(Number(event.target.value || selectedNode.delayMinutes), 0, 10080),
-                            })
-                          }
-                        />
-                        <div className="text-xs text-[color:var(--muted-foreground)]">
-                          Extra wait after entering this node: {formatWaitMinutes(selectedNode.delayMinutes)}. Auto replies also respect the map-level reply timing above.
-                        </div>
-                      </div>
-                    </div>
-                    <div className="grid gap-2">
-                      <Label>Body</Label>
-                      <Textarea
-                        value={selectedNode.body}
-                        rows={9}
-                        onChange={(event) => setNodePatch(selectedNode.id, { body: event.target.value })}
-                        placeholder="Hi {{firstName}}, ..."
-                      />
-                    </div>
-
-                    <div className="grid gap-3 rounded-lg border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3">
-                      <div className="flex flex-wrap items-center justify-between gap-2">
-                        <div>
-                          <div className="text-sm font-medium text-[color:var(--foreground)]">Follow-ups</div>
-                          <div className="text-xs text-[color:var(--muted-foreground)]">
-                            Add timed no-reply branches directly from this node.
-                          </div>
-                        </div>
-                        <div className="flex flex-wrap gap-2">
-                          {[1440, 4320, 7200].map((minutes) => (
-                            <Button
-                              key={minutes}
-                              type="button"
-                              size="sm"
-                              variant="outline"
-                              onClick={() => createFollowUpBranch(selectedNode.id, minutes)}
-                            >
-                              Add {formatWaitMinutes(minutes)}
-                            </Button>
-                          ))}
-                        </div>
-                      </div>
-
-                      {selectedNodeTimerEdges.length ? (
-                        <div className="grid gap-2">
-                          {selectedNodeTimerEdges.map((edge) => {
-                            const target = nodeLookup.get(edge.toNodeId);
-                            return (
-                              <div
-                                key={edge.id}
-                                className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-2 text-xs"
-                              >
-                                <div>
-                                  <div className="font-medium text-[color:var(--foreground)]">
-                                    {target?.title || "Follow-up node"}
-                                  </div>
-                                  <div className="text-[color:var(--muted-foreground)]">
-                                    Sends after {formatWaitMinutes(edge.waitMinutes)}
-                                  </div>
-                                </div>
-                                <div className="flex flex-wrap gap-2">
-                                  <Button
-                                    type="button"
-                                    size="sm"
-                                    variant="ghost"
-                                    onClick={() => {
-                                      setSelectedEdgeId(edge.id);
-                                      setSelectedNodeId("");
-                                    }}
-                                  >
-                                    Edit path
-                                  </Button>
-                                  {target ? (
-                                    <Button
-                                      type="button"
-                                      size="sm"
-                                      variant="ghost"
-                                      onClick={() => {
-                                        setSelectedNodeId(target.id);
-                                        setSelectedEdgeId("");
-                                      }}
-                                    >
-                                      Open node
-                                    </Button>
-                                  ) : null}
-                                </div>
-                              </div>
-                            );
-                          })}
-                        </div>
-                      ) : (
-                        <div className="text-xs text-[color:var(--muted-foreground)]">
-                          No timed follow-ups yet. Add one if you want this branch to retry after silence.
-                        </div>
-                      )}
-                    </div>
-
-                    <div className="grid gap-2 rounded-lg border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3">
-                      <div className="flex flex-wrap items-center justify-between gap-2">
-                        <div className="text-xs text-[color:var(--muted-foreground)]">
-                          Preview uses one sourced sample lead for context.
-                        </div>
-                        <Button
-                          type="button"
-                          size="sm"
-                          variant="outline"
-                          onClick={() => void refreshPreviewLeads()}
-                          disabled={previewLeadsLoading}
-                        >
-                          <RefreshCw className={`h-3.5 w-3.5 ${previewLeadsLoading ? "animate-spin" : ""}`} />
-                          {previewLeadsLoading ? "Refreshing..." : "Refresh lead context"}
-                        </Button>
-                      </div>
-
-                      {selectedPreviewLead ? (
-                        <details className="rounded-md border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-2 text-xs">
-                          <summary className="cursor-pointer font-medium text-[color:var(--foreground)]">
-                            Sample lead: {selectedPreviewLead.name || selectedPreviewLead.email || selectedPreviewLead.domain}
-                          </summary>
-                          <div className="mt-2 text-[color:var(--muted-foreground)]">
-                            {selectedPreviewLead.title || "Unknown title"} at {selectedPreviewLead.company || selectedPreviewLead.domain}
-                          </div>
-                          <div className="text-[color:var(--muted-foreground)]">{selectedPreviewLead.email || "(missing email)"}</div>
-                        </details>
-                      ) : null}
-                      {previewLeadsError ? (
-                        <div className="text-xs text-[color:var(--danger)]">{previewLeadsError}</div>
-                      ) : null}
-                      {!previewLeads.length ? (
-                        <div className="text-xs text-[color:var(--muted-foreground)]">
-                          No sourced leads yet. Run sourcing first, then refresh lead context.
-                        </div>
-                      ) : null}
-
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="default"
-                        onClick={() => void generatePreview()}
-                        disabled={previewingNodeId === selectedNode.id || !selectedPreviewLead}
-                      >
-                        {previewingNodeId === selectedNode.id ? (
-                          <>
-                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                            Regenerating...
-                          </>
-                        ) : (
-                          <>
-                            <Sparkles className="h-3.5 w-3.5" />
-                            Regenerate draft
-                          </>
-                        )}
-                      </Button>
-                      {previewError && previewingNodeId !== selectedNode.id ? (
-                        <div className="text-xs text-[color:var(--danger)]">{previewError}</div>
-                      ) : null}
-                      {previewResult && previewResult.nodeId === selectedNode.id ? (
-                        <div className="grid gap-2 rounded-md border border-[color:var(--border)] bg-[color:var(--surface)] p-2 text-xs">
-                          <div>
-                            <span className="font-medium">Subject:</span> {previewResult.subject || "(empty)"}
-                          </div>
-                          <div className="whitespace-pre-wrap">
-                            <span className="font-medium">Body:</span> {previewResult.body || "(empty)"}
-                          </div>
-                          <details>
-                            <summary className="cursor-pointer text-[color:var(--muted-foreground)]">Trace</summary>
-                            <pre className="mt-1 overflow-x-auto whitespace-pre-wrap rounded border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-2">
-                              {JSON.stringify(previewResult.trace, null, 2)}
-                            </pre>
-                          </details>
-                        </div>
-                      ) : null}
-                    </div>
-
-                    <details className="rounded-lg border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-2">
-                      <summary className="cursor-pointer text-sm font-medium">Advanced</summary>
-                      <div className="mt-2 grid gap-2">
-                        <Label>Prompt Template</Label>
-                        <Textarea
-                          value={selectedNode.promptTemplate}
-                          rows={8}
-                          onChange={(event) => setNodePatch(selectedNode.id, { promptTemplate: event.target.value })}
-                        />
-                      </div>
-                    </details>
-                  </>
-                ) : (
-                  <div className="rounded-lg border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-2 text-sm text-[color:var(--muted-foreground)]">
-                    This is an end node. It does not send a message.
-                  </div>
-                )}
-
-                <Button
-                  type="button"
-                  size="sm"
-                  variant={graph.startNodeId === selectedNode.id ? "default" : "outline"}
-                  onClick={() => setGraph((prev) => (prev ? { ...prev, startNodeId: selectedNode.id } : prev))}
-                >
-                  {graph.startNodeId === selectedNode.id ? "Start Node" : "Set As Start Node"}
-                </Button>
-              </div>
-            ) : null}
-
-            {selectedEdge ? (
-              <div className="space-y-3 rounded-xl border border-[color:var(--border)] p-3">
-                <div className="rounded-md border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-2 text-xs text-[color:var(--muted-foreground)]">
-                  Path: {(nodeLookup.get(selectedEdge.fromNodeId)?.title || "From node")} {"->"}{" "}
-                  {(nodeLookup.get(selectedEdge.toNodeId)?.title || "To node")}
-                </div>
-
-                <details>
-                  <summary className="cursor-pointer text-sm font-medium">Advanced routing</summary>
-                  <div className="mt-3 space-y-3">
-                    <div className="flex justify-end">
-                      <Button type="button" size="sm" variant="ghost" onClick={() => deleteEdge(selectedEdge.id)}>
-                        <Trash2 className="h-4 w-4" />
-                      </Button>
-                    </div>
-
-                    <div className="grid gap-2">
-                      <Label>When should this path run?</Label>
-                      <Select
-                        value={selectedEdge.trigger}
-                        onChange={(event) => {
-                          const trigger =
-                            event.target.value === "intent"
-                              ? "intent"
-                              : event.target.value === "timer"
-                                ? "timer"
-                                : "fallback";
-                          setEdgePatch(selectedEdge.id, {
-                            trigger,
-                            intent: trigger === "intent" ? selectedEdge.intent || "interest" : "",
-                          });
-                        }}
-                      >
-                        <option value="intent">When a reply arrives</option>
-                        <option value="timer">No reply after waiting</option>
-                        <option value="fallback">No reply fallback</option>
-                      </Select>
-                    </div>
-
-                    {selectedEdge.trigger === "intent" ? (
-                      <div className="grid gap-2">
-                        <Label>Reply category</Label>
-                        <Select
-                          value={selectedEdge.intent}
-                          onChange={(event) => {
-                            const value = event.target.value;
-                            const intent =
-                              value === "question" ||
-                              value === "interest" ||
-                              value === "objection" ||
-                              value === "unsubscribe" ||
-                              value === "other"
-                                ? value
-                                : "";
-                            setEdgePatch(selectedEdge.id, { intent });
-                          }}
-                        >
-                          <option value="">No reply</option>
-                          <option value="question">Asked for more info</option>
-                          <option value="interest">Interested</option>
-                          <option value="objection">Not now</option>
-                          <option value="other">Wrong person</option>
-                          <option value="unsubscribe">Negative response</option>
-                        </Select>
-                      </div>
-                    ) : null}
-
-                    {selectedEdge.trigger === "timer" ? (
-                      <div className="grid gap-2">
-                        <Label>Wait before this branch fires (minutes)</Label>
-                        <Input
-                          type="number"
-                          min={0}
-                          max={10080}
-                          value={selectedEdge.waitMinutes}
-                          onChange={(event) =>
-                            setEdgePatch(selectedEdge.id, {
-                              waitMinutes: clamp(Number(event.target.value || selectedEdge.waitMinutes), 0, 10080),
-                            })
-                          }
-                        />
-                        <div className="text-xs text-[color:var(--muted-foreground)]">
-                          Current delay: {formatWaitMinutes(selectedEdge.waitMinutes)}. Example: `7200` = 5 days.
-                        </div>
-                        <div className="flex flex-wrap gap-2">
-                          {[60, 1440, 4320, 7200].map((minutes) => (
-                            <Button
-                              key={minutes}
-                              type="button"
-                              size="sm"
-                              variant="outline"
-                              onClick={() => setEdgePatch(selectedEdge.id, { waitMinutes: minutes })}
-                            >
-                              {formatWaitMinutes(minutes)}
-                            </Button>
-                          ))}
-                        </div>
-                      </div>
-                    ) : null}
-                  </div>
-                </details>
-              </div>
-            ) : null}
-
-            {!selectedNode && !selectedEdge ? (
-              <div className="rounded-xl border border-dashed border-[color:var(--border)] p-4 text-sm leading-6 text-[color:var(--muted-foreground)]">
-                Select a node to edit subject, body, and preview. Select a connector for advanced routing.
-              </div>
-            ) : null}
+            <div className="rounded-xl border border-dashed border-[color:var(--border)] p-4 text-sm leading-6 text-[color:var(--muted-foreground)]">
+              Edit nodes directly on the canvas. Click a node&apos;s Edit button or click a path to adjust routing.
+            </div>
 
             <div className="space-y-3 rounded-xl border border-[color:var(--border)] p-3">
               <div className="flex items-start justify-between gap-3">
@@ -2274,6 +1939,392 @@ export default function FlowEditorClient({
           </CardContent>
         </Card>
       </div>
+
+      <SettingsModal
+        open={nodeEditorOpen && Boolean(selectedNode)}
+        onOpenChange={setNodeEditorOpen}
+        title={selectedNode?.kind === "terminal" ? "Edit end node" : `Edit ${selectedNode?.title || "message node"}`}
+        description={
+          selectedNode?.kind === "message"
+            ? "Update the node copy, timing, follow-ups, and preview without leaving the canvas."
+            : "This node ends the sequence."
+        }
+        panelClassName="max-w-4xl"
+        bodyClassName="space-y-4"
+      >
+        {selectedNode ? (
+          <div className="space-y-4">
+            <div className="flex items-center justify-between gap-3">
+              <div className="text-sm font-semibold">
+                Node: {selectedNode.title || (selectedNode.kind === "terminal" ? "End" : "Message")}
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                {selectedNode.kind === "message" ? (
+                  <Button type="button" size="sm" variant="ghost" onClick={() => duplicateNode(selectedNode.id)}>
+                    Duplicate
+                  </Button>
+                ) : null}
+                {selectedNode.kind === "message" ? (
+                  <Button type="button" size="sm" variant="ghost" onClick={() => createFollowUpBranch(selectedNode.id)}>
+                    Add follow-up
+                  </Button>
+                ) : null}
+                <Button
+                  type="button"
+                  size="sm"
+                  variant={graph.startNodeId === selectedNode.id ? "default" : "outline"}
+                  onClick={() => setGraph((prev) => (prev ? { ...prev, startNodeId: selectedNode.id } : prev))}
+                >
+                  {graph.startNodeId === selectedNode.id ? "Start Node" : "Set As Start Node"}
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => {
+                    deleteNode(selectedNode.id);
+                    setNodeEditorOpen(false);
+                  }}
+                >
+                  <Trash2 className="h-4 w-4" />
+                </Button>
+              </div>
+            </div>
+
+            {selectedNode.kind === "message" ? (
+              <>
+                <div className="grid gap-4 md:grid-cols-2">
+                  <div className="grid gap-2">
+                    <Label>Title</Label>
+                    <Input
+                      value={selectedNode.title}
+                      onChange={(event) => setNodePatch(selectedNode.id, { title: event.target.value })}
+                      placeholder="Send AWS application link"
+                    />
+                  </div>
+                  <div className="grid gap-2">
+                    <Label>Subject</Label>
+                    <Input
+                      value={selectedNode.subject}
+                      onChange={(event) => setNodePatch(selectedNode.id, { subject: event.target.value })}
+                      placeholder="Question about your pipeline"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid gap-4 md:grid-cols-2">
+                  <div className="grid gap-2">
+                    <Label>Send mode</Label>
+                    <Select
+                      value={selectedNode.autoSend ? "auto" : "manual"}
+                      onChange={(event) => setNodePatch(selectedNode.id, { autoSend: event.target.value === "auto" })}
+                    >
+                      <option value="auto">Auto send</option>
+                      <option value="manual">Manual review</option>
+                    </Select>
+                  </div>
+                  <div className="grid gap-2">
+                    <Label>Node delay (minutes)</Label>
+                    <Input
+                      type="number"
+                      min={0}
+                      max={10080}
+                      value={selectedNode.delayMinutes}
+                      onChange={(event) =>
+                        setNodePatch(selectedNode.id, {
+                          delayMinutes: clamp(Number(event.target.value || selectedNode.delayMinutes), 0, 10080),
+                        })
+                      }
+                    />
+                    <div className="text-xs text-[color:var(--muted-foreground)]">
+                      Extra wait after entering this node: {formatWaitMinutes(selectedNode.delayMinutes)}. Auto replies also respect the map-level reply timing above.
+                    </div>
+                  </div>
+                </div>
+
+                <div className="grid gap-2">
+                  <Label>Body</Label>
+                  <Textarea
+                    value={selectedNode.body}
+                    rows={10}
+                    onChange={(event) => setNodePatch(selectedNode.id, { body: event.target.value })}
+                    placeholder="Hi {{firstName}}, ..."
+                  />
+                </div>
+
+                <div className="grid gap-3 rounded-lg border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div>
+                      <div className="text-sm font-medium text-[color:var(--foreground)]">Follow-ups</div>
+                      <div className="text-xs text-[color:var(--muted-foreground)]">
+                        Add timed no-reply branches directly from this node.
+                      </div>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      {[1440, 4320, 7200].map((minutes) => (
+                        <Button
+                          key={minutes}
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          onClick={() => createFollowUpBranch(selectedNode.id, minutes)}
+                        >
+                          Add {formatWaitMinutes(minutes)}
+                        </Button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {selectedNodeTimerEdges.length ? (
+                    <div className="grid gap-2">
+                      {selectedNodeTimerEdges.map((edge) => {
+                        const target = nodeLookup.get(edge.toNodeId);
+                        return (
+                          <div
+                            key={edge.id}
+                            className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-2 text-xs"
+                          >
+                            <div>
+                              <div className="font-medium text-[color:var(--foreground)]">
+                                {target?.title || "Follow-up node"}
+                              </div>
+                              <div className="text-[color:var(--muted-foreground)]">
+                                Sends after {formatWaitMinutes(edge.waitMinutes)}
+                              </div>
+                            </div>
+                            <div className="flex flex-wrap gap-2">
+                              <Button type="button" size="sm" variant="ghost" onClick={() => openEdgeEditor(edge.id)}>
+                                Edit path
+                              </Button>
+                              {target ? (
+                                <Button type="button" size="sm" variant="ghost" onClick={() => openNodeEditor(target.id)}>
+                                  Open node
+                                </Button>
+                              ) : null}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <div className="text-xs text-[color:var(--muted-foreground)]">
+                      No timed follow-ups yet. Add one if you want this branch to retry after silence.
+                    </div>
+                  )}
+                </div>
+
+                <div className="grid gap-2 rounded-lg border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="text-xs text-[color:var(--muted-foreground)]">
+                      Preview uses one sourced sample lead for context.
+                    </div>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      onClick={() => void refreshPreviewLeads()}
+                      disabled={previewLeadsLoading}
+                    >
+                      <RefreshCw className={`h-3.5 w-3.5 ${previewLeadsLoading ? "animate-spin" : ""}`} />
+                      {previewLeadsLoading ? "Refreshing..." : "Refresh lead context"}
+                    </Button>
+                  </div>
+
+                  {selectedPreviewLead ? (
+                    <details className="rounded-md border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-2 text-xs">
+                      <summary className="cursor-pointer font-medium text-[color:var(--foreground)]">
+                        Sample lead: {selectedPreviewLead.name || selectedPreviewLead.email || selectedPreviewLead.domain}
+                      </summary>
+                      <div className="mt-2 text-[color:var(--muted-foreground)]">
+                        {selectedPreviewLead.title || "Unknown title"} at {selectedPreviewLead.company || selectedPreviewLead.domain}
+                      </div>
+                      <div className="text-[color:var(--muted-foreground)]">{selectedPreviewLead.email || "(missing email)"}</div>
+                    </details>
+                  ) : null}
+                  {previewLeadsError ? <div className="text-xs text-[color:var(--danger)]">{previewLeadsError}</div> : null}
+                  {!previewLeads.length ? (
+                    <div className="text-xs text-[color:var(--muted-foreground)]">
+                      No sourced leads yet. Run sourcing first, then refresh lead context.
+                    </div>
+                  ) : null}
+
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="default"
+                    onClick={() => void generatePreview()}
+                    disabled={previewingNodeId === selectedNode.id || !selectedPreviewLead}
+                  >
+                    {previewingNodeId === selectedNode.id ? (
+                      <>
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        Regenerating...
+                      </>
+                    ) : (
+                      <>
+                        <Sparkles className="h-3.5 w-3.5" />
+                        Regenerate draft
+                      </>
+                    )}
+                  </Button>
+                  {previewError && previewingNodeId !== selectedNode.id ? (
+                    <div className="text-xs text-[color:var(--danger)]">{previewError}</div>
+                  ) : null}
+                  {previewResult && previewResult.nodeId === selectedNode.id ? (
+                    <div className="grid gap-2 rounded-md border border-[color:var(--border)] bg-[color:var(--surface)] p-2 text-xs">
+                      <div>
+                        <span className="font-medium">Subject:</span> {previewResult.subject || "(empty)"}
+                      </div>
+                      <div className="whitespace-pre-wrap">
+                        <span className="font-medium">Body:</span> {previewResult.body || "(empty)"}
+                      </div>
+                      <details>
+                        <summary className="cursor-pointer text-[color:var(--muted-foreground)]">Trace</summary>
+                        <pre className="mt-1 overflow-x-auto whitespace-pre-wrap rounded border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-2">
+                          {JSON.stringify(previewResult.trace, null, 2)}
+                        </pre>
+                      </details>
+                    </div>
+                  ) : null}
+                </div>
+
+                <details className="rounded-lg border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-2">
+                  <summary className="cursor-pointer text-sm font-medium">Advanced</summary>
+                  <div className="mt-2 grid gap-2">
+                    <Label>Prompt Template</Label>
+                    <Textarea
+                      value={selectedNode.promptTemplate}
+                      rows={8}
+                      onChange={(event) => setNodePatch(selectedNode.id, { promptTemplate: event.target.value })}
+                    />
+                  </div>
+                </details>
+              </>
+            ) : (
+              <div className="rounded-lg border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-2 text-sm text-[color:var(--muted-foreground)]">
+                This is an end node. It does not send a message.
+              </div>
+            )}
+          </div>
+        ) : null}
+      </SettingsModal>
+
+      <SettingsModal
+        open={edgeEditorOpen && Boolean(selectedEdge)}
+        onOpenChange={setEdgeEditorOpen}
+        title="Edit path"
+        description={
+          selectedEdge
+            ? `Route from ${nodeLookup.get(selectedEdge.fromNodeId)?.title || "From node"} to ${
+                nodeLookup.get(selectedEdge.toNodeId)?.title || "To node"
+              }.`
+            : undefined
+        }
+        panelClassName="max-w-2xl"
+        bodyClassName="space-y-4"
+      >
+        {selectedEdge ? (
+          <div className="space-y-4">
+            <div className="flex justify-end">
+              <Button
+                type="button"
+                size="sm"
+                variant="ghost"
+                onClick={() => {
+                  deleteEdge(selectedEdge.id);
+                  setEdgeEditorOpen(false);
+                }}
+              >
+                <Trash2 className="h-4 w-4" />
+              </Button>
+            </div>
+
+            <div className="grid gap-2">
+              <Label>When should this path run?</Label>
+              <Select
+                value={selectedEdge.trigger}
+                onChange={(event) => {
+                  const trigger =
+                    event.target.value === "intent"
+                      ? "intent"
+                      : event.target.value === "timer"
+                        ? "timer"
+                        : "fallback";
+                  setEdgePatch(selectedEdge.id, {
+                    trigger,
+                    intent: trigger === "intent" ? selectedEdge.intent || "interest" : "",
+                  });
+                }}
+              >
+                <option value="intent">When a reply arrives</option>
+                <option value="timer">No reply after waiting</option>
+                <option value="fallback">No reply fallback</option>
+              </Select>
+            </div>
+
+            {selectedEdge.trigger === "intent" ? (
+              <div className="grid gap-2">
+                <Label>Reply category</Label>
+                <Select
+                  value={selectedEdge.intent}
+                  onChange={(event) => {
+                    const value = event.target.value;
+                    const intent =
+                      value === "question" ||
+                      value === "interest" ||
+                      value === "objection" ||
+                      value === "unsubscribe" ||
+                      value === "other"
+                        ? value
+                        : "";
+                    setEdgePatch(selectedEdge.id, { intent });
+                  }}
+                >
+                  <option value="">No reply</option>
+                  <option value="question">Asked for more info</option>
+                  <option value="interest">Interested</option>
+                  <option value="objection">Not now</option>
+                  <option value="other">Wrong person</option>
+                  <option value="unsubscribe">Negative response</option>
+                </Select>
+              </div>
+            ) : null}
+
+            {selectedEdge.trigger === "timer" ? (
+              <div className="grid gap-2">
+                <Label>Wait before this branch fires (minutes)</Label>
+                <Input
+                  type="number"
+                  min={0}
+                  max={10080}
+                  value={selectedEdge.waitMinutes}
+                  onChange={(event) =>
+                    setEdgePatch(selectedEdge.id, {
+                      waitMinutes: clamp(Number(event.target.value || selectedEdge.waitMinutes), 0, 10080),
+                    })
+                  }
+                />
+                <div className="text-xs text-[color:var(--muted-foreground)]">
+                  Current delay: {formatWaitMinutes(selectedEdge.waitMinutes)}. Example: `7200` = 5 days.
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {[60, 1440, 4320, 7200].map((minutes) => (
+                    <Button
+                      key={minutes}
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      onClick={() => setEdgePatch(selectedEdge.id, { waitMinutes: minutes })}
+                    >
+                      {formatWaitMinutes(minutes)}
+                    </Button>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+      </SettingsModal>
     </div>
   );
 }

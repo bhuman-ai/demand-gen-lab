@@ -544,7 +544,6 @@ export default function CampaignsClient({ brandId }: { brandId: string }) {
               brandId={brandId}
               campaignId={flowCampaignId}
               variantId={flowVariantId}
-              hideOverviewCard
               hideBackButton
             />
           </div>

@@ -2317,62 +2317,19 @@ export default function ExperimentClient({
       ) : null}
 
       {currentStage === 2 ? (
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">{stageTitle(2)}</CardTitle>
-            <CardDescription>Focus mode: edit the conversation canvas, publish, then continue.</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-2 text-sm">
-              <div>
-                {experiment.messageFlow.publishedRevision > 0 ? (
-                  <span>
-                    Published revision <strong>#{experiment.messageFlow.publishedRevision}</strong>
-                  </span>
-                ) : (
-                  <span className="text-[color:var(--danger)]">No published flow yet.</span>
-                )}
-              </div>
-              {experiment.runtime.campaignId && experiment.runtime.experimentId ? (
-                <Button asChild size="sm" variant="outline">
-                  <Link
-                    href={`/brands/${brandId}/campaigns/${experiment.runtime.campaignId}/build/flows/${experiment.runtime.experimentId}`}
-                  >
-                    Open in Builder
-                  </Link>
-                </Button>
-              ) : null}
-            </div>
-            {!messagingReady ? (
-              <div className="rounded-lg border border-[color:var(--danger-border)] bg-[color:var(--danger-soft)] px-3 py-2 text-sm text-[color:var(--danger)]">
-                Publish at least one revision before launch.
-              </div>
-            ) : null}
-            {experiment.runtime.campaignId && experiment.runtime.experimentId ? (
-              <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3">
-                <FlowEditorClient
-                  brandId={brandId}
-                  campaignId={experiment.runtime.campaignId}
-                  variantId={experiment.runtime.experimentId}
-                  backHref={`/brands/${brandId}/experiments/${experiment.id}`}
-                  hideOverviewCard
-                />
-              </div>
-            ) : (
-              <div className="rounded-lg border border-[color:var(--warning)]/40 bg-[color:var(--warning-soft)] px-3 py-2 text-sm text-[color:var(--warning)]">
-                Flow editor is unavailable until runtime mapping exists. Run Stage 1 sourcing once, then reopen Messaging.
-              </div>
-            )}
-            <div className="flex flex-col gap-2 sm:flex-row sm:justify-end">
-              <Button type="button" variant="outline" onClick={() => openStage(1)}>
-                Back to Prospects
-              </Button>
-              <Button type="button" disabled={!messagingReady} onClick={() => openStage(3)}>
-                Continue to Launch
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
+        experiment.runtime.campaignId && experiment.runtime.experimentId ? (
+          <FlowEditorClient
+            brandId={brandId}
+            campaignId={experiment.runtime.campaignId}
+            variantId={experiment.runtime.experimentId}
+            backHref={`/brands/${brandId}/experiments/${experiment.id}`}
+            hideBackButton
+          />
+        ) : (
+          <div className="rounded-lg border border-[color:var(--warning)]/40 bg-[color:var(--warning-soft)] px-3 py-2 text-sm text-[color:var(--warning)]">
+            Flow editor is unavailable until runtime mapping exists. Run Stage 1 sourcing once, then reopen Messaging.
+          </div>
+        )
       ) : null}
 
       {currentStage === 3 ? (

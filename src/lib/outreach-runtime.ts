@@ -10,6 +10,7 @@ import {
   type Hypothesis,
 } from "@/lib/factory-data";
 import type {
+  ConversationFlowEdge,
   ActorCapabilityProfile,
   ConversationFlowGraph,
   ConversationFlowNode,
@@ -9566,6 +9567,12 @@ function pickFallbackEdge(graph: ConversationFlowGraph, currentNodeId: string) {
   );
 }
 
+function timerEdgeWaitMinutes(graph: ConversationFlowGraph, edge: ConversationFlowEdge) {
+  const explicitWait = Math.max(0, Number(edge.waitMinutes ?? 0) || 0);
+  if (explicitWait > 0) return explicitWait;
+  return normalizeReplyTimingPolicy(graph).minimumDelayMinutes;
+}
+
 function pickDueTimerEdge(input: {
   graph: ConversationFlowGraph;
   currentNodeId: string;
@@ -9576,7 +9583,7 @@ function pickDueTimerEdge(input: {
     input.graph.edges
       .filter((edge) => edge.fromNodeId === input.currentNodeId && edge.trigger === "timer")
       .sort((a, b) => a.priority - b.priority)
-      .find((edge) => elapsedMs >= edge.waitMinutes * 60 * 1000) ?? null
+      .find((edge) => elapsedMs >= timerEdgeWaitMinutes(input.graph, edge) * 60 * 1000) ?? null
   );
 }
 
@@ -14319,7 +14326,10 @@ async function processConversationTickJob(job: OutreachJob) {
       experimentNotes: variant?.notes ?? "",
       threadHistory,
       maxDepth: graph.maxDepth,
-      waitMinutes: 0,
+      waitMinutes:
+        Math.max(0, Number(timerEdge.waitMinutes ?? 0) || 0) > 0
+          ? 0
+          : randomDelayMinutes(normalizeReplyTimingPolicy(graph).randomAdditionalDelayMinutes),
       businessWindow,
       existingMessages: messages,
     });

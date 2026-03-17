@@ -2,7 +2,9 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import {
+  ChevronRight,
   CheckCircle2,
   Hand,
   LayoutGrid,
@@ -420,6 +422,149 @@ function promptSnippet(value: string, max = 180) {
   return `${oneLine.slice(0, Math.max(0, max - 1)).trimEnd()}…`;
 }
 
+const REPLY_ROUTE_OPTIONS = [
+  { value: "question", label: "Questions" },
+  { value: "interest", label: "Interested replies" },
+  { value: "objection", label: "Objections" },
+  { value: "other", label: "Other replies" },
+  { value: "unsubscribe", label: "Unsubscribes" },
+] as const;
+
+type StepSequenceEntry = {
+  node: ConversationFlowNode;
+  index: number;
+  primaryEdge: ConversationFlowEdge | null;
+  nextNode: ConversationFlowNode | null;
+};
+
+function sortFlowEdges(a: ConversationFlowEdge, b: ConversationFlowEdge) {
+  return a.priority - b.priority || a.waitMinutes - b.waitMinutes || a.id.localeCompare(b.id);
+}
+
+function timerEdgesForNode(graph: ConversationFlowGraph, nodeId: string) {
+  return graph.edges
+    .filter((edge) => edge.fromNodeId === nodeId && edge.trigger === "timer")
+    .sort(sortFlowEdges);
+}
+
+function fallbackEdgeForNode(graph: ConversationFlowGraph, nodeId: string) {
+  return (
+    graph.edges
+      .filter((edge) => edge.fromNodeId === nodeId && edge.trigger === "fallback")
+      .sort(sortFlowEdges)[0] ?? null
+  );
+}
+
+function intentEdgesForNode(graph: ConversationFlowGraph, nodeId: string) {
+  return graph.edges
+    .filter((edge) => edge.fromNodeId === nodeId && edge.trigger === "intent" && edge.intent)
+    .sort(sortFlowEdges);
+}
+
+function primaryAdvanceEdge(graph: ConversationFlowGraph, nodeId: string) {
+  return timerEdgesForNode(graph, nodeId)[0] ?? fallbackEdgeForNode(graph, nodeId);
+}
+
+function buildStepSequence(graph: ConversationFlowGraph): StepSequenceEntry[] {
+  const next: StepSequenceEntry[] = [];
+  const visited = new Set<string>();
+  let currentNodeId = graph.startNodeId || graph.nodes.find((node) => node.kind === "message")?.id || "";
+
+  while (currentNodeId && !visited.has(currentNodeId)) {
+    visited.add(currentNodeId);
+    const node = nodeById(graph, currentNodeId);
+    if (!node || node.kind !== "message") break;
+    const primaryEdge = primaryAdvanceEdge(graph, node.id);
+    const nextNode = primaryEdge ? nodeById(graph, primaryEdge.toNodeId) : null;
+    next.push({
+      node,
+      index: next.length,
+      primaryEdge,
+      nextNode,
+    });
+    if (!nextNode || nextNode.kind !== "message") break;
+    currentNodeId = nextNode.id;
+  }
+
+  return next;
+}
+
+function ensureTerminalNode(graph: ConversationFlowGraph) {
+  const existing = graph.nodes.find((node) => node.kind === "terminal");
+  if (existing) {
+    return { graph, terminalId: existing.id };
+  }
+
+  const terminal = {
+    ...defaultNode("terminal", 0, 0),
+    title: "End",
+  };
+  return {
+    graph: {
+      ...graph,
+      nodes: [...graph.nodes, terminal],
+    },
+    terminalId: terminal.id,
+  };
+}
+
+function withImplicitRouteDefaults(graph: ConversationFlowGraph) {
+  const ensured = ensureTerminalNode(graph);
+  const sequence = buildStepSequence(ensured.graph);
+  const nextEdges = [...ensured.graph.edges];
+
+  for (const entry of sequence) {
+    const nextStepId =
+      entry.nextNode?.kind === "message" ? entry.nextNode.id : ensured.terminalId;
+
+    const hasFallback = nextEdges.some(
+      (edge) => edge.fromNodeId === entry.node.id && edge.trigger === "fallback"
+    );
+    if (!hasFallback) {
+      nextEdges.push({
+        id: makeEdgeId(),
+        fromNodeId: entry.node.id,
+        toNodeId: nextStepId,
+        trigger: "fallback",
+        intent: "",
+        waitMinutes: 0,
+        confidenceThreshold: 0.7,
+        priority: nextEdges.length + 1,
+      });
+    }
+
+    for (const route of REPLY_ROUTE_OPTIONS) {
+      const hasIntent = nextEdges.some(
+        (edge) =>
+          edge.fromNodeId === entry.node.id &&
+          edge.trigger === "intent" &&
+          edge.intent === route.value
+      );
+      if (hasIntent) continue;
+
+      nextEdges.push({
+        id: makeEdgeId(),
+        fromNodeId: entry.node.id,
+        toNodeId: route.value === "unsubscribe" ? ensured.terminalId : nextStepId,
+        trigger: "intent",
+        intent: route.value,
+        waitMinutes: 0,
+        confidenceThreshold: 0.7,
+        priority: nextEdges.length + 1,
+      });
+    }
+  }
+
+  return {
+    ...ensured.graph,
+    edges: nextEdges,
+  };
+}
+
+function stepBlockTitle(node: ConversationFlowNode) {
+  return node.title.trim() || "Untitled step";
+}
+
 function RoleplayScreeningLoader({
   tick,
   variantName,
@@ -576,6 +721,7 @@ export default function FlowEditorClient({
 
   const [selectedNodeId, setSelectedNodeId] = useState("");
   const [selectedEdgeId, setSelectedEdgeId] = useState("");
+  const [drawerStepId, setDrawerStepId] = useState("");
   const [nodeEditorOpen, setNodeEditorOpen] = useState(false);
   const [edgeEditorOpen, setEdgeEditorOpen] = useState(false);
 
@@ -669,7 +815,8 @@ export default function FlowEditorClient({
     setWorkingHours(editorState.workingHours);
     setGraph(nextGraph);
     setHasFittedInitialView(false);
-    setSelectedNodeId(nextGraph.startNodeId || nextGraph.nodes[0]?.id || "");
+    setSelectedNodeId("");
+    setDrawerStepId("");
     setSelectedEdgeId("");
   };
 
@@ -758,6 +905,29 @@ export default function FlowEditorClient({
       .filter((edge) => edge.fromNodeId === selectedNode.id && edge.trigger === "timer")
       .sort((a, b) => a.waitMinutes - b.waitMinutes || a.priority - b.priority);
   }, [graph, selectedNode]);
+  const stepSequence = useMemo(() => (graph ? buildStepSequence(graph) : []), [graph]);
+  const selectedStepEntry = useMemo(
+    () => stepSequence.find((entry) => entry.node.id === drawerStepId) ?? null,
+    [stepSequence, drawerStepId]
+  );
+  const selectedStepNode = selectedStepEntry?.node ?? null;
+  const selectedStepIntentEdges = useMemo(
+    () => (graph && selectedStepNode ? intentEdgesForNode(graph, selectedStepNode.id) : []),
+    [graph, selectedStepNode]
+  );
+  const selectedStepFallbackEdge = useMemo(
+    () => (graph && selectedStepNode ? fallbackEdgeForNode(graph, selectedStepNode.id) : null),
+    [graph, selectedStepNode]
+  );
+  const drawerRouteOptions = useMemo(() => {
+    const options = stepSequence
+      .filter((entry) => entry.node.id !== selectedStepNode?.id)
+      .map((entry) => ({
+        value: entry.node.id,
+        label: `Step ${entry.index + 1} · ${stepBlockTitle(entry.node)}`,
+      }));
+    return [{ value: "", label: "Handle automatically" }, ...options, { value: "__end__", label: "End flow" }];
+  }, [stepSequence, selectedStepNode]);
   const probeTargetNode =
     selectedNode?.kind === "message"
       ? selectedNode
@@ -779,10 +949,252 @@ export default function FlowEditorClient({
     replyTiming.minimumDelayMinutes,
     replyTiming.randomAdditionalDelayMinutes
   );
+  const maximumAutomationDelay = replyTiming.minimumDelayMinutes + replyTiming.randomAdditionalDelayMinutes;
   const workingWindowSummary =
     workingHours.businessHoursEnabled
       ? `${workingHours.timezone} · ${workingHours.businessHoursStartHour}:00-${workingHours.businessHoursEndHour}:00 · ${formatBusinessDays(workingHours.businessDays)}`
       : `${workingHours.timezone} · replies can send any time`;
+  const drawerOpen = Boolean(selectedStepNode);
+
+  const setAutomationDelayRange = (minimumMinutes: number, maximumMinutes: number) => {
+    setGraph((prev) => {
+      if (!prev) return prev;
+      const min = clamp(Math.round(Number(minimumMinutes) || 0), 0, 10080);
+      const max = clamp(Math.round(Number(maximumMinutes) || 0), min, 10080);
+      return {
+        ...prev,
+        replyTiming: {
+          minimumDelayMinutes: min,
+          randomAdditionalDelayMinutes: Math.max(0, max - min),
+        },
+      };
+    });
+  };
+
+  const toggleBusinessDay = (day: number) => {
+    setWorkingHours((prev) => {
+      const current = new Set(prev.businessDays);
+      if (current.has(day)) {
+        current.delete(day);
+      } else {
+        current.add(day);
+      }
+      const nextDays = Array.from(current).sort((a, b) => a - b);
+      return {
+        ...prev,
+        businessDays: nextDays.length ? nextDays : [1, 2, 3, 4, 5],
+      };
+    });
+  };
+
+  const addStepBlock = (afterNodeId?: string) => {
+    let createdNodeId = "";
+    setGraph((prev) => {
+      if (!prev) return prev;
+
+      let working = prev;
+      if (!working.nodes.some((node) => node.kind === "message")) {
+        const firstNode = {
+          ...defaultNode("message", 120, 160),
+          title: "Step block",
+          subject: "",
+          body: "",
+          promptTemplate: defaultMessagePromptTemplate("Step block"),
+        };
+        const ensured = ensureTerminalNode({
+          ...working,
+          startNodeId: firstNode.id,
+          nodes: [...working.nodes, firstNode],
+        });
+        const initialEdge: ConversationFlowEdge = {
+          id: makeEdgeId(),
+          fromNodeId: firstNode.id,
+          toNodeId: ensured.terminalId,
+          trigger: "timer",
+          intent: "",
+          waitMinutes: 0,
+          confidenceThreshold: 0.7,
+          priority: 1,
+        };
+        createdNodeId = firstNode.id;
+        return {
+          ...ensured.graph,
+          edges: [...working.edges, initialEdge],
+        };
+      }
+
+      const visibleSequence = buildStepSequence(working);
+      const anchorId =
+        afterNodeId && visibleSequence.some((entry) => entry.node.id === afterNodeId)
+          ? afterNodeId
+          : visibleSequence[visibleSequence.length - 1]?.node.id || working.startNodeId;
+      const anchorNode = nodeById(working, anchorId);
+      if (!anchorNode || anchorNode.kind !== "message") return working;
+
+      const ensured = ensureTerminalNode(working);
+      working = ensured.graph;
+      const primaryEdge = primaryAdvanceEdge(working, anchorNode.id);
+      const fallbackTargetId = primaryEdge?.toNodeId || ensured.terminalId;
+      const nextX = anchorNode.x + GRID_X * 0.72;
+      const nextY = anchorNode.y;
+      const newNode: ConversationFlowNode = {
+        ...defaultNode("message", nextX, nextY),
+        title: "Step block",
+        subject: "",
+        body: "",
+        promptTemplate: defaultMessagePromptTemplate("Step block"),
+      };
+      createdNodeId = newNode.id;
+
+      const remainingEdges = primaryEdge
+        ? working.edges.filter((edge) => edge.id !== primaryEdge.id)
+        : [...working.edges];
+      const nextEdges: ConversationFlowEdge[] = [
+        ...remainingEdges,
+        {
+          id: makeEdgeId(),
+          fromNodeId: anchorNode.id,
+          toNodeId: newNode.id,
+          trigger: "timer",
+          intent: "",
+          waitMinutes: 0,
+          confidenceThreshold: 0.7,
+          priority: remainingEdges.length + 1,
+        },
+        {
+          id: makeEdgeId(),
+          fromNodeId: newNode.id,
+          toNodeId: fallbackTargetId,
+          trigger: "timer",
+          intent: "",
+          waitMinutes: 0,
+          confidenceThreshold: 0.7,
+          priority: remainingEdges.length + 2,
+        },
+      ];
+
+      return {
+        ...working,
+        nodes: [...working.nodes, newNode],
+        edges: nextEdges,
+      };
+    });
+    if (createdNodeId) {
+      setSelectedNodeId(createdNodeId);
+      setDrawerStepId(createdNodeId);
+      setSelectedEdgeId("");
+    }
+  };
+
+  const deleteStepBlock = (nodeId: string) => {
+    let nextSelectionId = "";
+    setGraph((prev) => {
+      if (!prev) return prev;
+      const visibleSequence = buildStepSequence(prev);
+      if (visibleSequence.length <= 1) return prev;
+      const currentIndex = visibleSequence.findIndex((entry) => entry.node.id === nodeId);
+      if (currentIndex === -1) return prev;
+
+      const previous = visibleSequence[currentIndex - 1] ?? null;
+      const nextVisible = visibleSequence[currentIndex + 1] ?? null;
+      const ensured = ensureTerminalNode(prev);
+      const terminalId = ensured.terminalId;
+      const reconnectTargetId = nextVisible?.node.id || terminalId;
+
+      let nextEdges = ensured.graph.edges.filter(
+        (edge) => edge.fromNodeId !== nodeId && edge.toNodeId !== nodeId
+      );
+
+      if (previous) {
+        const previousPrimaryEdge = primaryAdvanceEdge(
+          { ...ensured.graph, edges: nextEdges },
+          previous.node.id
+        );
+        if (previousPrimaryEdge) {
+          nextEdges = nextEdges.filter((edge) => edge.id !== previousPrimaryEdge.id);
+        }
+        nextEdges.push({
+          id: makeEdgeId(),
+          fromNodeId: previous.node.id,
+          toNodeId: reconnectTargetId,
+          trigger: "timer",
+          intent: "",
+          waitMinutes: 0,
+          confidenceThreshold: 0.7,
+          priority: nextEdges.length + 1,
+        });
+      }
+
+      nextSelectionId = nextVisible?.node.id || previous?.node.id || "";
+
+      return {
+        ...ensured.graph,
+        startNodeId:
+          ensured.graph.startNodeId === nodeId
+            ? nextVisible?.node.id || previous?.node.id || ""
+            : ensured.graph.startNodeId,
+        nodes: ensured.graph.nodes.filter((node) => node.id !== nodeId),
+        edges: nextEdges,
+      };
+    });
+    setSelectedNodeId(nextSelectionId);
+    setDrawerStepId(nextSelectionId);
+    setSelectedEdgeId("");
+  };
+
+  const setReplyRouteTarget = (
+    fromNodeId: string,
+    route: ConversationFlowEdge["intent"] | "fallback",
+    targetValue: string
+  ) => {
+    setGraph((prev) => {
+      if (!prev) return prev;
+      let working = prev;
+      if (targetValue === "__end__") {
+        const ensured = ensureTerminalNode(prev);
+        working = ensured.graph;
+      }
+
+      const toNodeId =
+        targetValue === "__end__"
+          ? working.nodes.find((node) => node.kind === "terminal")?.id || ""
+          : targetValue;
+      const nextEdges = [...working.edges];
+      const existingIndex = nextEdges.findIndex((edge) =>
+        route === "fallback"
+          ? edge.fromNodeId === fromNodeId && edge.trigger === "fallback"
+          : edge.fromNodeId === fromNodeId && edge.trigger === "intent" && edge.intent === route
+      );
+
+      if (!toNodeId) {
+        if (existingIndex >= 0) nextEdges.splice(existingIndex, 1);
+        return { ...working, edges: nextEdges };
+      }
+
+      if (existingIndex >= 0) {
+        nextEdges[existingIndex] = {
+          ...nextEdges[existingIndex],
+          toNodeId,
+        };
+        return { ...working, edges: nextEdges };
+      }
+
+      nextEdges.push({
+        id: makeEdgeId(),
+        fromNodeId,
+        toNodeId,
+        trigger: route === "fallback" ? "fallback" : "intent",
+        intent: route === "fallback" ? "" : route,
+        waitMinutes: 0,
+        confidenceThreshold: 0.7,
+        priority: nextEdges.length + 1,
+      });
+      return {
+        ...working,
+        edges: nextEdges,
+      };
+    });
+  };
 
   const saveDraft = async () => {
     if (!graph) return;
@@ -790,12 +1202,13 @@ export default function FlowEditorClient({
     setError("");
     setStatusMessage("");
     try {
+      const nextDraft = withImplicitRouteDefaults(graph);
       const next = await saveConversationMapDraftApi({
         brandId,
         campaignId,
         experimentId: variantId,
         name: `${variantName} Conversation Flow`,
-        draftGraph: graph,
+        draftGraph: nextDraft,
         workingHours,
       });
       setMap(next.map);
@@ -815,12 +1228,13 @@ export default function FlowEditorClient({
     setStatusMessage("");
     try {
       if (graph) {
+        const nextDraft = withImplicitRouteDefaults(graph);
         await saveConversationMapDraftApi({
           brandId,
           campaignId,
           experimentId: variantId,
           name: `${variantName} Conversation Flow`,
-          draftGraph: graph,
+          draftGraph: nextDraft,
           workingHours,
         });
       }
@@ -845,7 +1259,8 @@ export default function FlowEditorClient({
       const next = withoutPreviewLeadState(withLayout(withReplyTimingDefaults(suggested)));
       setGraph(next);
       setHasFittedInitialView(false);
-      setSelectedNodeId(next.startNodeId || next.nodes[0]?.id || "");
+      setSelectedNodeId("");
+      setDrawerStepId("");
       setSelectedEdgeId("");
       setStatusMessage("AI map generated. Save draft to keep it.");
     } catch (err) {
@@ -1145,6 +1560,7 @@ export default function FlowEditorClient({
   };
 
   const addMessageNode = () => {
+    setDrawerStepId("");
     setGraph((prev) => {
       if (!prev) return prev;
       const next = defaultNode("message", 120 + prev.nodes.length * 40, 120 + prev.nodes.length * 30);
@@ -1157,6 +1573,7 @@ export default function FlowEditorClient({
   };
 
   const addTerminalNode = () => {
+    setDrawerStepId("");
     setGraph((prev) => {
       if (!prev) return prev;
       const next = defaultNode("terminal", 120 + prev.nodes.length * 40, 120 + prev.nodes.length * 30);
@@ -1269,6 +1686,7 @@ export default function FlowEditorClient({
   };
 
   const openNodeEditor = (nodeId: string) => {
+    setDrawerStepId("");
     setSelectedNodeId(nodeId);
     setSelectedEdgeId("");
     setNodeEditorOpen(true);
@@ -1276,6 +1694,7 @@ export default function FlowEditorClient({
   };
 
   const openEdgeEditor = (edgeId: string) => {
+    setDrawerStepId("");
     setSelectedEdgeId(edgeId);
     setSelectedNodeId("");
     setEdgeEditorOpen(true);
@@ -1409,7 +1828,7 @@ export default function FlowEditorClient({
       <Card className={hideOverviewCard ? "sticky top-20 z-20 border-[color:var(--border)] bg-[color:var(--surface)]" : ""}>
         <CardContent className="flex flex-wrap items-center justify-between gap-3 py-4">
           <div className="min-w-[220px]">
-            <div className="text-sm font-semibold">Conversation Flow Canvas</div>
+            <div className="text-sm font-semibold">Step Block Flow</div>
             <div className="text-xs text-[color:var(--muted-foreground)]">
               {brandName} · {campaignName} · {variantName}
             </div>
@@ -1417,142 +1836,100 @@ export default function FlowEditorClient({
           <div className="flex flex-wrap items-center gap-2 text-xs">
             <Badge variant={map?.status === "published" ? "success" : "muted"}>{map?.status || "draft"}</Badge>
             <Badge variant="muted">Revision {map?.publishedRevision ?? 0}</Badge>
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <Button type="button" size="sm" variant="outline" onClick={generate} disabled={generating}>
-              <RefreshCw className="h-4 w-4" />
-              {generating ? "Screening..." : "Generate"}
-            </Button>
-            <Button type="button" size="sm" variant="outline" onClick={saveDraft} disabled={saving}>
-              <Save className="h-4 w-4" />
-              {saving ? "Saving..." : "Save"}
-            </Button>
-            <Button type="button" size="sm" onClick={publish} disabled={publishing}>
-              <Upload className="h-4 w-4" />
-              {publishing ? "Publishing..." : "Publish"}
-            </Button>
-            {!hideBackButton ? (
-              <Button asChild size="sm" type="button" variant="ghost">
-                <Link href={backHref || `/brands/${brandId}/campaigns/${campaignId}/build`}>Back</Link>
-              </Button>
-            ) : null}
+            <Badge variant="muted">{replyTimingSummary}</Badge>
           </div>
         </CardContent>
         {statusMessage ? <CardContent className="pt-0 text-sm text-[color:var(--accent)]">{statusMessage}</CardContent> : null}
         {error ? <CardContent className="pt-0 text-sm text-[color:var(--danger)]">{error}</CardContent> : null}
       </Card>
 
-      <Card>
-        <CardHeader className="pb-3">
-          <CardTitle className="text-base">Reply Timing</CardTitle>
-          <CardDescription>
-            Auto replies wait at least {replyTimingSummary}, then hold for your working window if needed.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
-          <div className="grid gap-2">
-            <Label>Minimum reply wait (minutes)</Label>
-            <Input
-              type="number"
-              min={0}
-              max={10080}
-              value={replyTiming.minimumDelayMinutes}
-              onChange={(event) =>
-                setGraph((prev) =>
-                  prev
-                    ? {
-                        ...prev,
-                        replyTiming: {
-                          ...replyTiming,
-                          minimumDelayMinutes: clamp(Number(event.target.value || replyTiming.minimumDelayMinutes), 0, 10080),
-                        },
-                      }
-                    : prev
-                )
-              }
-            />
+      <Card className="border-[color:var(--border)] bg-[color:var(--surface)]">
+        <CardContent className="space-y-4 py-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <div className="text-sm font-semibold">Automation cadence</div>
+              <div className="text-xs text-[color:var(--muted-foreground)]">
+                One timing rule powers follow-ups and automatic reply handling across the whole flow.
+              </div>
+            </div>
+            <Badge variant="accent">{replyTimingSummary}</Badge>
           </div>
-          <div className="grid gap-2">
-            <Label>Random extra wait (minutes)</Label>
-            <Input
-              type="number"
-              min={0}
-              max={1440}
-              value={replyTiming.randomAdditionalDelayMinutes}
-              onChange={(event) =>
-                setGraph((prev) =>
-                  prev
-                    ? {
-                        ...prev,
-                        replyTiming: {
-                          ...replyTiming,
-                          randomAdditionalDelayMinutes: clamp(
-                            Number(event.target.value || replyTiming.randomAdditionalDelayMinutes),
-                            0,
-                            1440
-                          ),
-                        },
-                      }
-                    : prev
-                )
-              }
-            />
+
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+            <div className="grid gap-2">
+              <Label>Delay from</Label>
+              <Input
+                type="number"
+                min={0}
+                max={10080}
+                value={replyTiming.minimumDelayMinutes}
+                onChange={(event) =>
+                  setAutomationDelayRange(
+                    clamp(Number(event.target.value || replyTiming.minimumDelayMinutes), 0, 10080),
+                    maximumAutomationDelay
+                  )
+                }
+              />
+            </div>
+            <div className="grid gap-2">
+              <Label>Delay to</Label>
+              <Input
+                type="number"
+                min={replyTiming.minimumDelayMinutes}
+                max={10080}
+                value={maximumAutomationDelay}
+                onChange={(event) =>
+                  setAutomationDelayRange(
+                    replyTiming.minimumDelayMinutes,
+                    clamp(Number(event.target.value || maximumAutomationDelay), replyTiming.minimumDelayMinutes, 10080)
+                  )
+                }
+              />
+            </div>
+            <div className="grid gap-2">
+              <Label>Workday starts</Label>
+              <Input
+                type="number"
+                min={0}
+                max={23}
+                value={workingHours.businessHoursStartHour}
+                onChange={(event) =>
+                  setWorkingHours((prev) => ({
+                    ...prev,
+                    businessHoursStartHour: clamp(
+                      Math.round(Number(event.target.value || prev.businessHoursStartHour)),
+                      0,
+                      23
+                    ),
+                  }))
+                }
+                disabled={workingHours.businessHoursEnabled === false}
+              />
+            </div>
+            <div className="grid gap-2">
+              <Label>Workday ends</Label>
+              <Input
+                type="number"
+                min={1}
+                max={24}
+                value={workingHours.businessHoursEndHour}
+                onChange={(event) =>
+                  setWorkingHours((prev) => ({
+                    ...prev,
+                    businessHoursEndHour: clamp(
+                      Math.round(Number(event.target.value || prev.businessHoursEndHour)),
+                      1,
+                      24
+                    ),
+                  }))
+                }
+                disabled={workingHours.businessHoursEnabled === false}
+              />
+            </div>
           </div>
-          <div className="grid gap-2">
-            <Label>Working timezone</Label>
-            <Input
-              value={workingHours.timezone}
-              onChange={(event) =>
-                setWorkingHours((prev) => ({
-                  ...prev,
-                  timezone: event.target.value,
-                }))
-              }
-              placeholder="America/Los_Angeles"
-            />
-          </div>
-          <div className="grid gap-2">
-            <Label>Workday start</Label>
-            <Input
-              type="number"
-              min={0}
-              max={23}
-              value={workingHours.businessHoursStartHour}
-              onChange={(event) =>
-                setWorkingHours((prev) => ({
-                  ...prev,
-                  businessHoursStartHour: clamp(
-                    Math.round(Number(event.target.value || prev.businessHoursStartHour)),
-                    0,
-                    23
-                  ),
-                }))
-              }
-              disabled={workingHours.businessHoursEnabled === false}
-            />
-          </div>
-          <div className="grid gap-2">
-            <Label>Workday end</Label>
-            <Input
-              type="number"
-              min={1}
-              max={24}
-              value={workingHours.businessHoursEndHour}
-              onChange={(event) =>
-                setWorkingHours((prev) => ({
-                  ...prev,
-                  businessHoursEndHour: clamp(
-                    Math.round(Number(event.target.value || prev.businessHoursEndHour)),
-                    1,
-                    24
-                  ),
-                }))
-              }
-              disabled={workingHours.businessHoursEnabled === false}
-            />
-          </div>
-          <div className="md:col-span-2 xl:col-span-5 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-2 text-sm">
-            <label className="inline-flex items-center gap-2">
+
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-2">
+            <label className="inline-flex items-center gap-2 text-sm">
               <input
                 type="checkbox"
                 checked={workingHours.businessHoursEnabled !== false}
@@ -1563,17 +1940,139 @@ export default function FlowEditorClient({
                   }))
                 }
               />
-              Only send replies during working hours
+              Keep automation inside working hours
             </label>
-            <div className="text-[color:var(--muted-foreground)]">
-              Window: {workingWindowSummary}
-            </div>
+            <div className="text-xs text-[color:var(--muted-foreground)]">{workingWindowSummary}</div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            {WEEKDAY_LABELS.map((label, day) => {
+              const selected = workingHours.businessDays.includes(day);
+              return (
+                <button
+                  key={label}
+                  type="button"
+                  className={[
+                    "rounded-full border px-3 py-1 text-xs transition-colors",
+                    selected
+                      ? "border-[color:var(--accent)] bg-[color:var(--accent-soft)] text-[color:var(--foreground)]"
+                      : "border-[color:var(--border)] bg-[color:var(--surface)] text-[color:var(--muted-foreground)]",
+                  ].join(" ")}
+                  onClick={() => toggleBusinessDay(day)}
+                >
+                  {label}
+                </button>
+              );
+            })}
           </div>
         </CardContent>
       </Card>
 
-      <div className="grid gap-4">
-        <Card className="overflow-hidden">
+      <Card className="overflow-hidden border-[color:var(--border)] bg-[color:var(--surface)]">
+        <CardContent className="space-y-4 py-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <div className="text-sm font-semibold">Step Blocks</div>
+              <div className="text-xs text-[color:var(--muted-foreground)]">
+                Keep the happy path simple. Click any step to edit it in the side drawer.
+              </div>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <Button type="button" size="sm" variant="outline" onClick={() => addStepBlock(selectedStepNode?.id)}>
+                <Plus className="h-4 w-4" />
+                Add Step
+              </Button>
+              <Button type="button" size="sm" variant="outline" onClick={generate} disabled={generating}>
+                <RefreshCw className="h-4 w-4" />
+                {generating ? "Generating..." : "Generate"}
+              </Button>
+              <Button type="button" size="sm" variant="outline" onClick={saveDraft} disabled={saving}>
+                <Save className="h-4 w-4" />
+                {saving ? "Saving..." : "Save"}
+              </Button>
+              <Button type="button" size="sm" onClick={publish} disabled={publishing}>
+                <Upload className="h-4 w-4" />
+                {publishing ? "Publishing..." : "Publish"}
+              </Button>
+              {!hideBackButton ? (
+                <Button asChild size="sm" type="button" variant="ghost">
+                  <Link href={backHref || `/brands/${brandId}/campaigns/${campaignId}/build`}>Back</Link>
+                </Button>
+              ) : null}
+            </div>
+          </div>
+
+          {stepSequence.length ? (
+            <div className="overflow-x-auto pb-2">
+              <div className="flex min-w-max items-center gap-3 px-1 py-2">
+                {stepSequence.map((entry, index) => {
+                  const isSelected = selectedStepNode?.id === entry.node.id;
+                  const isFirst = graph.startNodeId === entry.node.id;
+                  return (
+                    <div key={entry.node.id} className="flex items-center gap-3">
+                      <button
+                        type="button"
+                        className={[
+                          "w-[220px] rounded-[18px] border px-4 py-4 text-left transition-all",
+                          isSelected
+                            ? "border-[color:var(--accent)] bg-[color:var(--accent-soft)] shadow-[0_0_0_1px_color-mix(in_srgb,var(--accent)_35%,transparent)]"
+                            : "border-[color:var(--border)] bg-[color:var(--surface-muted)] hover:border-[color:var(--accent-border)] hover:bg-[color:var(--surface)]",
+                        ].join(" ")}
+                        onClick={() => {
+                          setDrawerStepId(entry.node.id);
+                          setSelectedNodeId(entry.node.id);
+                          setSelectedEdgeId("");
+                        }}
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <Badge variant="muted">Step {index + 1}</Badge>
+                          <div className="flex items-center gap-1">
+                            {isFirst ? <Badge variant="accent">First step</Badge> : null}
+                            <Badge variant={entry.node.autoSend ? "success" : "muted"}>
+                              {entry.node.autoSend ? "Auto" : "Manual"}
+                            </Badge>
+                          </div>
+                        </div>
+                        <div className="mt-4 text-base font-semibold text-[color:var(--foreground)]">
+                          {stepBlockTitle(entry.node)}
+                        </div>
+                        <div className="mt-2 line-clamp-1 text-sm text-[color:var(--muted-foreground)]">
+                          {entry.node.subject.trim() || "No subject yet"}
+                        </div>
+                      </button>
+
+                      {index < stepSequence.length - 1 ? (
+                        <div className="flex items-center gap-2">
+                          <div className="h-[4px] w-20 rounded-full bg-[color:var(--accent)]" />
+                          <ChevronRight className="h-4 w-4 text-[color:var(--accent)]" />
+                        </div>
+                      ) : null}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          ) : (
+            <div className="rounded-[18px] border border-dashed border-[color:var(--border)] bg-[color:var(--surface-muted)] px-4 py-6 text-sm">
+              <div className="font-medium text-[color:var(--foreground)]">No step blocks yet</div>
+              <div className="mt-1 text-[color:var(--muted-foreground)]">
+                Start with one simple step. AI can generate the flow from there.
+              </div>
+              <Button type="button" size="sm" className="mt-4" onClick={() => addStepBlock()}>
+                <Plus className="h-4 w-4" />
+                Add first step
+              </Button>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <details className="rounded-[18px] border border-[color:var(--border)] bg-[color:var(--surface)]">
+        <summary className="cursor-pointer px-4 py-3 text-sm font-medium text-[color:var(--foreground)]">
+          Advanced flow map
+        </summary>
+        <div className="grid gap-4 px-4 pb-4">
+          <Card className="overflow-hidden">
           <CardHeader className="flex flex-row items-center justify-between gap-3 border-b border-[color:var(--border)] pb-3">
             <div>
               <CardTitle className="text-base">Flow Canvas</CardTitle>
@@ -1937,7 +2436,210 @@ export default function FlowEditorClient({
             </div>
           </CardContent>
         </Card>
-      </div>
+        </div>
+      </details>
+
+      {drawerOpen && selectedStepNode
+        ? createPortal(
+            <div className="fixed inset-0 z-50 flex justify-end">
+              <button
+                type="button"
+                className="flex-1 bg-black/35"
+                onClick={() => setDrawerStepId("")}
+                aria-label="Close step drawer"
+              />
+              <aside className="relative flex h-full w-full max-w-[520px] flex-col border-l border-[color:var(--border)] bg-[color:var(--surface)] shadow-2xl">
+                <div className="flex items-start justify-between gap-3 border-b border-[color:var(--border)] px-5 py-4">
+                  <div>
+                    <div className="text-xs uppercase tracking-[0.22em] text-[color:var(--muted-foreground)]">
+                      Step Block
+                    </div>
+                    <div className="mt-1 text-lg font-semibold text-[color:var(--foreground)]">
+                      {stepBlockTitle(selectedStepNode)}
+                    </div>
+                  </div>
+                  <Button type="button" variant="ghost" size="sm" onClick={() => setDrawerStepId("")}>
+                    Close
+                  </Button>
+                </div>
+
+                <div className="flex-1 space-y-5 overflow-y-auto px-5 py-5">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Badge variant="muted">
+                      Step {(selectedStepEntry?.index ?? 0) + 1}
+                    </Badge>
+                    {graph.startNodeId === selectedStepNode.id ? <Badge variant="accent">First step</Badge> : null}
+                    <Badge variant={selectedStepNode.autoSend ? "success" : "muted"}>
+                      {selectedStepNode.autoSend ? "Auto send" : "Manual review"}
+                    </Badge>
+                  </div>
+
+                  <div className="grid gap-4">
+                    <div className="grid gap-2">
+                      <Label>Step title</Label>
+                      <Input
+                        value={selectedStepNode.title}
+                        onChange={(event) => setNodePatch(selectedStepNode.id, { title: event.target.value })}
+                        placeholder="Qualify the lead"
+                      />
+                    </div>
+                    <div className="grid gap-2">
+                      <Label>Subject</Label>
+                      <Input
+                        value={selectedStepNode.subject}
+                        onChange={(event) => setNodePatch(selectedStepNode.id, { subject: event.target.value })}
+                        placeholder="Short subject line"
+                      />
+                    </div>
+                    <div className="grid gap-2">
+                      <Label>Body</Label>
+                      <Textarea
+                        value={selectedStepNode.body}
+                        rows={12}
+                        onChange={(event) => setNodePatch(selectedStepNode.id, { body: event.target.value })}
+                        placeholder="Write the message this step should send..."
+                      />
+                    </div>
+                    <div className="grid gap-2">
+                      <Label>Send mode</Label>
+                      <Select
+                        value={selectedStepNode.autoSend ? "auto" : "manual"}
+                        onChange={(event) =>
+                          setNodePatch(selectedStepNode.id, { autoSend: event.target.value === "auto" })
+                        }
+                      >
+                        <option value="auto">Send automatically</option>
+                        <option value="manual">Send only after manual review</option>
+                      </Select>
+                    </div>
+                  </div>
+
+                  <div className="rounded-[18px] border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-4 py-4">
+                    <div className="flex items-center gap-2 text-sm font-medium text-[color:var(--foreground)]">
+                      <Sparkles className="h-4 w-4 text-[color:var(--accent)]" />
+                      AI reply handling
+                    </div>
+                    <p className="mt-2 text-sm leading-6 text-[color:var(--muted-foreground)]">
+                      Questions, objections, and unsubscribes are handled automatically from this step.
+                      Use Advanced only if you want to force a specific route.
+                    </p>
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => addStepBlock(selectedStepNode.id)}
+                    >
+                      <Plus className="h-4 w-4" />
+                      Add step after
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={() =>
+                        setGraph((prev) => (prev ? { ...prev, startNodeId: selectedStepNode.id } : prev))
+                      }
+                    >
+                      {graph.startNodeId === selectedStepNode.id ? "First step" : "Use as first step"}
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => deleteStepBlock(selectedStepNode.id)}
+                      disabled={stepSequence.length <= 1}
+                    >
+                      <Trash2 className="h-4 w-4" />
+                      Delete
+                    </Button>
+                  </div>
+
+                  <details className="rounded-[18px] border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-4 py-3">
+                    <summary className="cursor-pointer text-sm font-medium text-[color:var(--foreground)]">
+                      Advanced
+                    </summary>
+                    <div className="mt-4 space-y-4">
+                      <div className="grid gap-2">
+                        <Label>AI prompt template</Label>
+                        <Textarea
+                          value={selectedStepNode.promptTemplate}
+                          rows={8}
+                          onChange={(event) =>
+                            setNodePatch(selectedStepNode.id, { promptTemplate: event.target.value })
+                          }
+                        />
+                      </div>
+
+                      <div className="grid gap-2">
+                        <div className="text-xs uppercase tracking-[0.2em] text-[color:var(--muted-foreground)]">
+                          Manual routing
+                        </div>
+                        <div className="grid gap-3">
+                          {REPLY_ROUTE_OPTIONS.map((route) => {
+                            const edge =
+                              selectedStepIntentEdges.find((item) => item.intent === route.value) ?? null;
+                            const routeValue = edge
+                              ? nodeLookup.get(edge.toNodeId)?.kind === "terminal"
+                                ? "__end__"
+                                : edge.toNodeId
+                              : "";
+                            return (
+                              <div key={route.value} className="grid gap-1">
+                                <Label>{route.label}</Label>
+                                <Select
+                                  value={routeValue}
+                                  onChange={(event) =>
+                                    setReplyRouteTarget(
+                                      selectedStepNode.id,
+                                      route.value,
+                                      event.target.value
+                                    )
+                                  }
+                                >
+                                  {drawerRouteOptions.map((option) => (
+                                    <option key={`${route.value}-${option.value || "auto"}`} value={option.value}>
+                                      {option.label}
+                                    </option>
+                                  ))}
+                                </Select>
+                              </div>
+                            );
+                          })}
+
+                          <div className="grid gap-1">
+                            <Label>Fallback route</Label>
+                            <Select
+                              value={
+                                selectedStepFallbackEdge
+                                  ? nodeLookup.get(selectedStepFallbackEdge.toNodeId)?.kind === "terminal"
+                                    ? "__end__"
+                                    : selectedStepFallbackEdge.toNodeId
+                                  : ""
+                              }
+                              onChange={(event) =>
+                                setReplyRouteTarget(selectedStepNode.id, "fallback", event.target.value)
+                              }
+                            >
+                              {drawerRouteOptions.map((option) => (
+                                <option key={`fallback-${option.value || "auto"}`} value={option.value}>
+                                  {option.label}
+                                </option>
+                              ))}
+                            </Select>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </details>
+                </div>
+              </aside>
+            </div>,
+            document.body
+          )
+        : null}
 
       <SettingsModal
         open={nodeEditorOpen && Boolean(selectedNode)}

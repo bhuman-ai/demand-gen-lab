@@ -696,8 +696,14 @@ function pickDueTimerEdge(input: {
     input.graph.edges
       .filter((edge) => edge.fromNodeId === input.currentNodeId && edge.trigger === "timer")
       .sort((a, b) => a.priority - b.priority)
-      .find((edge) => elapsedMs >= edge.waitMinutes * 60 * 1000) ?? null
+      .find((edge) => elapsedMs >= timerEdgeWaitMinutes(input.graph, edge) * 60 * 1000) ?? null
   );
+}
+
+function timerEdgeWaitMinutes(graph: ConversationFlowGraph, edge: ConversationFlowEdge) {
+  const explicitWait = Math.max(0, Number(edge.waitMinutes ?? 0) || 0);
+  if (explicitWait > 0) return explicitWait;
+  return normalizeReplyTiming(graph).minimumDelayMinutes;
 }
 
 function edgeLabel(edge: ConversationFlowEdge) {
@@ -1302,8 +1308,8 @@ async function runScenario(input: {
           nodeTitle: currentNode.title,
           edgeId: timerEdge.id,
           edgeLabel: edgeLabel(timerEdge),
-          waitMinutes: timerEdge.waitMinutes,
-          reason: `No reply for ${timerEdge.waitMinutes} minutes.`,
+          waitMinutes: timerEdgeWaitMinutes(context.graph, timerEdge),
+          reason: `No reply for ${timerEdgeWaitMinutes(context.graph, timerEdge)} minutes.`,
         })
       );
 
@@ -1367,7 +1373,7 @@ async function runScenario(input: {
       currentNode = nextNode;
       turnCount += 1;
       outcome = "timer_follow_up";
-      summary = `Silence routes to ${nextNode.title || "the next node"} after ${timerEdge.waitMinutes} minutes.`;
+      summary = `Silence routes to ${nextNode.title || "the next node"} after ${timerEdgeWaitMinutes(context.graph, timerEdge)} minutes.`;
       if (!nextNode.autoSend) {
         steps.push(
           makeStep({

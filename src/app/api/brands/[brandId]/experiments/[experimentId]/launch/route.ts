@@ -1,14 +1,14 @@
 import { NextResponse } from "next/server";
 import { ensureRuntimeForExperiment, getExperimentRecordById, updateExperimentRecord } from "@/lib/experiment-data";
-import { listConversationPreviewLeads } from "@/lib/conversation-preview-leads";
 import {
   buildExperimentProspectTableConfig,
   ensureEnrichAnythingProspectTable,
+  getEnrichAnythingProspectTableState,
 } from "@/lib/enrichanything-live-table";
 import { EXPERIMENT_MIN_VERIFIED_EMAIL_LEADS } from "@/lib/experiment-policy";
 import { launchExperimentRun } from "@/lib/outreach-runtime";
 
-const MIN_REAL_PROSPECTS_FOR_LAUNCH = EXPERIMENT_MIN_VERIFIED_EMAIL_LEADS;
+const MIN_PROSPECTS_FOR_LAUNCH = EXPERIMENT_MIN_VERIFIED_EMAIL_LEADS;
 
 export async function POST(
   _: Request,
@@ -28,26 +28,19 @@ export async function POST(
     );
   }
 
-  const preview = await listConversationPreviewLeads({
-    brandId,
-    campaignId: experiment.runtime.campaignId,
-    experimentId: experiment.runtime.experimentId,
-    limit: 50,
-    maxRuns: 30,
-  });
+  const prospectTable = await getEnrichAnythingProspectTableState(
+    buildExperimentProspectTableConfig(experiment)
+  );
 
-  if (preview.qualifiedLeadWithEmailCount < MIN_REAL_PROSPECTS_FOR_LAUNCH) {
+  if (prospectTable.rowCount < MIN_PROSPECTS_FOR_LAUNCH) {
     return NextResponse.json(
       {
-        error: `Prospect validation failed: need at least ${MIN_REAL_PROSPECTS_FOR_LAUNCH} qualified leads with real work emails before launch.`,
-        hint: "Go to Stage 1 (Prospects), run auto-sourcing/import, and wait for the gate to pass.",
+        error: `Prospect validation failed: need at least ${MIN_PROSPECTS_FOR_LAUNCH} saved leads before launch.`,
+        hint: "Go to Stage 1 (Prospects), keep sourcing until the first 20 leads are ready, then relaunch.",
         debug: {
-          qualifiedLeadCount: preview.qualifiedLeadCount,
-          qualifiedLeadWithEmailCount: preview.qualifiedLeadWithEmailCount,
-          qualifiedLeadWithoutEmailCount: preview.qualifiedLeadWithoutEmailCount,
-          runsChecked: preview.runsChecked,
-          sourceExperimentId: preview.sourceExperimentId,
-          runtimeRefFound: preview.runtimeRefFound,
+          prospectTableId: prospectTable.tableId,
+          prospectWorkspaceId: prospectTable.workspaceId,
+          savedLeadCount: prospectTable.rowCount,
         },
       },
       { status: 400 }

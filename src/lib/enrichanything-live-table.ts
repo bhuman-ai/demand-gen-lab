@@ -121,6 +121,20 @@ async function readJsonSafe(response: Response) {
   }
 }
 
+async function readExistingTable(
+  appUrl: string,
+  tableId: string
+): Promise<Record<string, unknown> | null> {
+  const existingResponse = await fetch(
+    `${appUrl}/api/live?tableId=${encodeURIComponent(tableId)}`,
+    { cache: "no-store" }
+  );
+  const existingPayload = await readJsonSafe(existingResponse);
+  return existingResponse.ok && existingPayload.table && typeof existingPayload.table === "object"
+    ? (existingPayload.table as Record<string, unknown>)
+    : null;
+}
+
 export function buildExperimentProspectTableConfig(
   experiment: ExperimentRecord,
   options: { enabled?: boolean } = {}
@@ -166,15 +180,7 @@ export async function ensureEnrichAnythingProspectTable(config: ProspectTableCon
     throw new Error("ENRICHANYTHING_APP_URL is not configured.");
   }
 
-  const existingResponse = await fetch(
-    `${appUrl}/api/live?tableId=${encodeURIComponent(config.tableId)}`,
-    { cache: "no-store" }
-  );
-  const existingPayload = await readJsonSafe(existingResponse);
-  const existingTable =
-    existingResponse.ok && existingPayload.table && typeof existingPayload.table === "object"
-      ? (existingPayload.table as Record<string, unknown>)
-      : null;
+  const existingTable = await readExistingTable(appUrl, config.tableId);
 
   if (existingTable) {
     const snapshot = asObject(existingTable.snapshot);
@@ -240,5 +246,22 @@ export async function ensureEnrichAnythingProspectTable(config: ProspectTableCon
     appUrl,
     ...config,
     rowCount: 0,
+  };
+}
+
+export async function getEnrichAnythingProspectTableState(
+  config: ProspectTableConfig
+): Promise<ProspectTableState> {
+  const appUrl = resolveEnrichAnythingAppUrl();
+  if (!appUrl) {
+    throw new Error("ENRICHANYTHING_APP_URL is not configured.");
+  }
+
+  const existingTable = await readExistingTable(appUrl, config.tableId);
+
+  return {
+    appUrl,
+    ...config,
+    rowCount: existingTable ? countSnapshotRows(existingTable.snapshot) : 0,
   };
 }

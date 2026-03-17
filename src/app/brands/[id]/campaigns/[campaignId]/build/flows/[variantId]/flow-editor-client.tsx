@@ -1104,7 +1104,6 @@ export default function FlowEditorClient({
 
   const startConnect = (event: React.PointerEvent<HTMLButtonElement>, fromNodeId: string) => {
     event.stopPropagation();
-    event.currentTarget.setPointerCapture(event.pointerId);
     setConnectState({ fromNodeId, pointerId: event.pointerId });
     setSelectedNodeId(fromNodeId);
     setSelectedEdgeId("");
@@ -1756,7 +1755,7 @@ export default function FlowEditorClient({
                             >
                               Edit
                             </Button>
-                            {isStart ? <Badge variant="accent">Start</Badge> : null}
+                            {isStart ? <Badge variant="accent">First</Badge> : null}
                             {node.kind === "message" ? (
                               <Badge variant={node.autoSend ? "success" : "muted"}>
                                 {node.autoSend ? "Auto" : "Manual"}
@@ -1951,6 +1950,16 @@ export default function FlowEditorClient({
         }
         panelClassName="max-w-4xl"
         bodyClassName="space-y-4"
+        footer={
+          <div className="flex items-center justify-end gap-2">
+            <Button type="button" variant="ghost" onClick={() => setNodeEditorOpen(false)}>
+              Cancel
+            </Button>
+            <Button type="button" onClick={() => setNodeEditorOpen(false)}>
+              Save node
+            </Button>
+          </div>
+        }
       >
         {selectedNode ? (
           <div className="space-y-4">
@@ -1969,14 +1978,16 @@ export default function FlowEditorClient({
                     Add follow-up
                   </Button>
                 ) : null}
-                <Button
-                  type="button"
-                  size="sm"
-                  variant={graph.startNodeId === selectedNode.id ? "default" : "outline"}
-                  onClick={() => setGraph((prev) => (prev ? { ...prev, startNodeId: selectedNode.id } : prev))}
-                >
-                  {graph.startNodeId === selectedNode.id ? "Start Node" : "Set As Start Node"}
-                </Button>
+                {selectedNode.kind === "message" ? (
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant={graph.startNodeId === selectedNode.id ? "secondary" : "outline"}
+                    onClick={() => setGraph((prev) => (prev ? { ...prev, startNodeId: selectedNode.id } : prev))}
+                  >
+                    {graph.startNodeId === selectedNode.id ? "First email node" : "Use as first email"}
+                  </Button>
+                ) : null}
                 <Button
                   type="button"
                   size="sm"

@@ -15,6 +15,11 @@ type ProspectTableConfig = {
   overlapHours: number;
 };
 
+type ProspectTableState = ProspectTableConfig & {
+  appUrl: string;
+  rowCount: number;
+};
+
 function normalizeText(value: unknown) {
   return String(value ?? "").replace(/\s+/g, " ").trim();
 }
@@ -68,6 +73,17 @@ function asObject(value: unknown) {
     return value as Record<string, unknown>;
   }
   return {};
+}
+
+function countSnapshotRows(snapshot: unknown) {
+  const value = asObject(snapshot);
+  const rows = Array.isArray(value.rows) ? value.rows : [];
+  return rows.filter((row) => {
+    if (!row || typeof row !== "object" || Array.isArray(row)) {
+      return false;
+    }
+    return Object.values(row as Record<string, unknown>).some((cell) => String(cell ?? "").trim());
+  }).length;
 }
 
 function mergeSnapshot(config: ProspectTableConfig, existingSnapshot: unknown = null) {
@@ -144,7 +160,7 @@ export function buildCampaignProspectTableConfig(campaign: ScaleCampaignRecord):
   };
 }
 
-export async function ensureEnrichAnythingProspectTable(config: ProspectTableConfig) {
+export async function ensureEnrichAnythingProspectTable(config: ProspectTableConfig): Promise<ProspectTableState> {
   const appUrl = resolveEnrichAnythingAppUrl();
   if (!appUrl) {
     throw new Error("ENRICHANYTHING_APP_URL is not configured.");
@@ -196,6 +212,7 @@ export async function ensureEnrichAnythingProspectTable(config: ProspectTableCon
     return {
       appUrl,
       ...config,
+      rowCount: countSnapshotRows(existingTable.snapshot),
     };
   }
 
@@ -222,5 +239,6 @@ export async function ensureEnrichAnythingProspectTable(config: ProspectTableCon
   return {
     appUrl,
     ...config,
+    rowCount: 0,
   };
 }

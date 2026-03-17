@@ -278,7 +278,7 @@ export default function ExperimentClient({
   const refresh = async (showSpinner = true): Promise<RefreshSnapshot> => {
     if (showSpinner) setLoading(true);
     try {
-      const [brandRow, experimentRow, runRow, outreachAssignmentRow] = await Promise.all([
+      const [brandRow, experimentRow, runRow, outreachAssignmentRow, prospectTableResponse] = await Promise.all([
         fetchBrand(brandId),
         fetchExperiment(brandId, experimentId),
         fetchExperimentRunView(brandId, experimentId),
@@ -287,6 +287,9 @@ export default function ExperimentClient({
           account: null,
           mailboxAccount: null,
         })),
+        fetch(`/api/brands/${brandId}/experiments/${experimentId}/prospect-table`, {
+          cache: "no-store",
+        }).catch(() => null),
       ]);
 
       let previewLeadsData: Awaited<ReturnType<typeof fetchConversationPreviewLeadsApi>> = {
@@ -329,6 +332,20 @@ export default function ExperimentClient({
       setSampleLeadRunsChecked(previewLeadsData.runsChecked);
       setSampleLeadSourceExperimentId(previewLeadsData.sourceExperimentId);
       setSourcedLeadWithEmailCount(previewLeadsData.qualifiedLeadWithEmailCount);
+      if (prospectTableResponse?.ok) {
+        try {
+          const prospectTablePayload = (await prospectTableResponse.json()) as {
+            rowCount?: number;
+            discoveryPrompt?: string;
+          };
+          setProspectTableRowCount(Math.max(0, Number(prospectTablePayload.rowCount ?? 0) || 0));
+          if (String(prospectTablePayload.discoveryPrompt || "").trim()) {
+            setProspectTablePrompt(String(prospectTablePayload.discoveryPrompt || "").trim());
+          }
+        } catch {
+          // Keep the existing local prospect snapshot if the persisted table payload is malformed.
+        }
+      }
       localStorage.setItem("factory.activeBrandId", brandId);
 
       const sourcedLeadCount = previewLeadsData.qualifiedLeadCount;

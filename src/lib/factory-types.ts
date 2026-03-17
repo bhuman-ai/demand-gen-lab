@@ -1011,6 +1011,77 @@ export type ConversationMapEditorState = {
   workingHours: ConversationWorkingHoursPolicy;
 };
 
+export type ConversationMapSuggestionResult = {
+  graph: ConversationFlowGraph;
+  mode: string;
+  selectedIndex: number;
+  score: number;
+  summary: string;
+};
+
+export type ConversationMapSuggestionCandidateState =
+  | "queued"
+  | "drafted"
+  | "reviewing"
+  | "accepted"
+  | "rejected"
+  | "winner";
+
+export type ConversationMapSuggestionCandidate = {
+  index: number;
+  title: string;
+  rationale: string;
+  state: ConversationMapSuggestionCandidateState;
+  score?: number;
+  decision?: "promote" | "revise" | "reject";
+  summary?: string;
+  strengths?: string[];
+  risks?: string[];
+};
+
+export type ConversationMapSuggestionStreamEvent =
+  | {
+      type: "start";
+      ultimateGoal: string;
+      candidateCount: number;
+      personaCount: number;
+      progress: number;
+      phase: "drafting_candidates";
+      phaseLabel: string;
+    }
+  | {
+      type: "phase";
+      phase: "drafting_candidates" | "roleplay_screening" | "selecting_winner";
+      phaseLabel: string;
+      progress: number;
+    }
+  | {
+      type: "candidates_generated";
+      progress: number;
+      candidates: ConversationMapSuggestionCandidate[];
+    }
+  | {
+      type: "candidate_scored";
+      progress: number;
+      candidate: ConversationMapSuggestionCandidate;
+    }
+  | {
+      type: "winner_selected";
+      progress: number;
+      selectedIndex: number;
+      summary: string;
+      score: number;
+    }
+  | {
+      type: "done";
+      result: ConversationMapSuggestionResult;
+    }
+  | {
+      type: "error";
+      message: string;
+      details?: string;
+    };
+
 export type ConversationProbeStep = {
   id: string;
   kind: "outbound" | "inbound" | "route" | "timer" | "status";

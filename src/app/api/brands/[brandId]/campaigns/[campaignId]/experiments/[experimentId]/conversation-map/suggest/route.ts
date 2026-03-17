@@ -6,6 +6,13 @@ import {
   generateScreenedConversationFlowGraph,
 } from "@/lib/conversation-flow-generation";
 
+function asRecord(value: unknown): Record<string, unknown> {
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    return value as Record<string, unknown>;
+  }
+  return {};
+}
+
 function parseOfferAndCta(rawOffer: string) {
   const text = String(rawOffer ?? "").trim();
   if (!text) return { offer: "", cta: "" };
@@ -16,9 +23,16 @@ function parseOfferAndCta(rawOffer: string) {
 }
 
 export async function POST(
-  _request: Request,
+  request: Request,
   context: { params: Promise<{ brandId: string; campaignId: string; experimentId: string }> }
 ) {
+  let requestBody: Record<string, unknown> = {};
+  try {
+    requestBody = asRecord(await request.json());
+  } catch {
+    requestBody = {};
+  }
+  const ultimateGoal = String(requestBody.ultimateGoal ?? "").trim();
   const { brandId, campaignId, experimentId } = await context.params;
   const [brand, campaign] = await Promise.all([
     getBrandById(brandId),
@@ -60,9 +74,11 @@ export async function POST(
           offer: parsedContext.offer || sourceExperiment?.offer || "",
           cta: parsedContext.cta || "",
           audience: sourceExperiment?.audience || "",
+          ultimateGoal,
           testEnvelope: sourceExperiment?.testEnvelope ?? null,
         },
       },
+      forceRoleplay: Boolean(ultimateGoal),
     });
     return NextResponse.json({
       graph: generated.graph,

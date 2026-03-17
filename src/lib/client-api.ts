@@ -7,6 +7,8 @@ import type {
   ConversationMap,
   ConversationMapEditorState,
   ConversationFlowGraph,
+  ConversationMapSuggestionResult,
+  ConversationMapSuggestionStreamEvent,
   ConversationPreviewLead,
   ConversationProbeResult,
   EvolutionSnapshot,
@@ -904,16 +906,121 @@ export async function publishConversationMapApi(
 export async function suggestConversationMapApi(
   brandId: string,
   campaignId: string,
-  experimentId: string
+  experimentId: string,
+  input?: {
+    ultimateGoal?: string;
+  }
 ) {
   const response = await fetch(
     `/api/brands/${brandId}/campaigns/${campaignId}/experiments/${experimentId}/conversation-map/suggest`,
     {
       method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input ?? {}),
     }
   );
   const data = await readJson(response);
-  return data.graph as ConversationFlowGraph;
+  return {
+    graph: data.graph as ConversationFlowGraph,
+    mode: typeof data.mode === "string" ? data.mode : "",
+    selectedIndex:
+      Number.isFinite(Number(data.selectedIndex)) ? Math.round(Number(data.selectedIndex)) : 0,
+    score: Number.isFinite(Number(data.score)) ? Math.round(Number(data.score)) : 0,
+    summary: typeof data.summary === "string" ? data.summary : "",
+  } as ConversationMapSuggestionResult;
+}
+
+export async function streamConversationMapSuggestionApi(
+  brandId: string,
+  campaignId: string,
+  experimentId: string,
+  input: {
+    ultimateGoal?: string;
+    signal?: AbortSignal;
+    onEvent: (event: ConversationMapSuggestionStreamEvent) => void;
+  }
+) {
+  const response = await fetch(
+    `/api/brands/${brandId}/campaigns/${campaignId}/experiments/${experimentId}/conversation-map/suggest/stream`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
+      body: JSON.stringify({ ultimateGoal: input.ultimateGoal ?? "" }),
+      signal: input.signal,
+    }
+  );
+
+  if (!response.ok) {
+    let message = "Failed to stream conversation-map suggestion";
+    try {
+      const payload = (await response.json()) as Record<string, unknown>;
+      if (typeof payload.error === "string" && payload.error.trim()) {
+        message = payload.error;
+      }
+    } catch {
+      const text = await response.text().catch(() => "");
+      if (text.trim()) {
+        message = text.slice(0, 240);
+      }
+    }
+    throw new Error(message);
+  }
+
+  if (!response.body) {
+    throw new Error("Conversation-map suggestion stream is unavailable");
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let doneResult: ConversationMapSuggestionResult | null = null;
+  let streamError = "";
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+    const parts = buffer.split("\n\n");
+    buffer = parts.pop() ?? "";
+
+    for (const part of parts) {
+      const parsed = parseEventStreamChunk(part);
+      if (!parsed) continue;
+      const event = parsed as ConversationMapSuggestionStreamEvent;
+      input.onEvent(event);
+      if (event.type === "done") {
+        doneResult = event.result;
+      }
+      if (event.type === "error") {
+        streamError = event.message || "Conversation-map generation failed";
+      }
+    }
+  }
+
+  if (buffer.trim()) {
+    const parsed = parseEventStreamChunk(buffer);
+    if (parsed) {
+      const event = parsed as ConversationMapSuggestionStreamEvent;
+      input.onEvent(event);
+      if (event.type === "done") {
+        doneResult = event.result;
+      }
+      if (event.type === "error") {
+        streamError = event.message || "Conversation-map generation failed";
+      }
+    }
+  }
+
+  if (streamError) {
+    throw new Error(streamError);
+  }
+
+  if (!doneResult) {
+    throw new Error("Conversation-map generation finished without a result");
+  }
+
+  return doneResult;
 }
 
 export async function previewConversationNodeApi(input: {

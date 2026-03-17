@@ -1,7 +1,13 @@
 import { sanitizeAiText } from "@/lib/ai-sanitize";
 import { defaultConversationGraph, normalizeConversationGraph } from "@/lib/conversation-flow-data";
 import { generateConversationPromptMessage } from "@/lib/conversation-prompt-render";
-import type { ConversationFlowGraph, ConversationFlowNode } from "@/lib/factory-types";
+import type {
+  ConversationFlowGraph,
+  ConversationFlowNode,
+  ConversationMapSuggestionCandidate,
+  ConversationMapSuggestionResult,
+  ConversationMapSuggestionStreamEvent,
+} from "@/lib/factory-types";
 import { resolveLlmModel, type LlmTask } from "@/lib/llm-router";
 
 type GenerationContext = {
@@ -26,6 +32,7 @@ type GenerationContext = {
     offer: string;
     cta: string;
     audience: string;
+    ultimateGoal: string;
     testEnvelope: unknown;
   };
 };
@@ -58,6 +65,10 @@ type CandidateEvaluation = {
   strengths: string[];
   risks: string[];
 };
+
+type ConversationFlowGenerationEventHandler = (
+  event: ConversationMapSuggestionStreamEvent
+) => void | Promise<void>;
 
 export class ConversationFlowGenerationError extends Error {
   status: number;
@@ -534,18 +545,61 @@ function passesGate(evaluation: CandidateEvaluation) {
   return true;
 }
 
-async function generateCandidateGraphs(input: { context: GenerationContext; candidateCount: number }) {
+function candidateDisplayTitle(candidate: CandidateGraph) {
+  const startNode = findStartMessageNode(candidate.graph);
+  const title = oneLine(startNode?.title || candidate.rationale || `Candidate ${candidate.index + 1}`);
+  return sanitizeAiText(title).slice(0, 72) || `Candidate ${candidate.index + 1}`;
+}
+
+function toSuggestionCandidate(
+  candidate: CandidateGraph,
+  overrides: Partial<ConversationMapSuggestionCandidate> = {}
+): ConversationMapSuggestionCandidate {
+  return {
+    index: candidate.index,
+    title: candidateDisplayTitle(candidate),
+    rationale: sanitizeAiText(oneLine(candidate.rationale)).slice(0, 180),
+    state: "queued",
+    ...overrides,
+  };
+}
+
+async function emitGenerationEvent(
+  onEvent: ConversationFlowGenerationEventHandler | undefined,
+  event: ConversationMapSuggestionStreamEvent
+) {
+  if (!onEvent) return;
+  await onEvent(event);
+}
+
+async function generateCandidateGraphs(input: {
+  context: GenerationContext;
+  candidateCount: number;
+  compact?: boolean;
+}) {
+  const ultimateGoal =
+    oneLine(input.context.experiment.ultimateGoal) ||
+    oneLine(input.context.campaign.objectiveGoal) ||
+    oneLine(input.context.experiment.cta) ||
+    "earn a positive reply and advance the conversation";
   const prompt = [
     "You write high-performing B2B outbound email conversation maps.",
     `Generate ${input.candidateCount} distinct candidate maps for the same experiment.`,
     "Each candidate must use a different opening angle and framing while staying true to the exact offer and CTA.",
+    `All candidates must optimize toward this ultimate goal: ${ultimateGoal}.`,
     "",
     "Hard requirements:",
     "- Plain, concrete language. No buzzwords, no generic hype.",
     "- Subject lines <= 7 words. Message bodies <= 90 words.",
+    input.compact
+      ? "- Keep each candidate compact: 1 to 3 message nodes max, plus terminal nodes only if needed."
+      : "- Keep each candidate compact and avoid unnecessary branches.",
+    "- Message node titles must be short, plain step labels (for example: 'Check if they qualify', 'Follow up once').",
+    "- Avoid title styles like angle names, em dashes, campaign labels, or internal strategy jargon.",
     "- Every non-terminal message includes exactly one clear CTA.",
     "- Use only these variables when needed: {{firstName}}, {{company}}, {{brandName}}, {{campaignGoal}}, {{shortAnswer}}.",
     "- Every non-terminal message MUST directly reflect experiment offer + CTA context.",
+    "- promptTemplate must be short and operational: one sentence, <= 18 words, no long context dumps.",
     "- No provider/tool implementation terms.",
     "",
     "Return JSON only:",
@@ -555,7 +609,7 @@ async function generateCandidateGraphs(input: { context: GenerationContext; cand
 
   const parsed = await openAiJsonCall({
     prompt,
-    maxOutputTokens: 7000,
+    maxOutputTokens: input.compact ? 9000 : 7000,
     task: "conversation_flow_generation",
   });
   const candidates = normalizeCandidateGraphs(parsed.candidates);
@@ -572,6 +626,11 @@ async function roleplayEvaluateCandidates(input: {
   context: GenerationContext;
   candidates: CandidateGraph[];
 }) {
+  const ultimateGoal =
+    oneLine(input.context.experiment.ultimateGoal) ||
+    oneLine(input.context.campaign.objectiveGoal) ||
+    oneLine(input.context.experiment.cta) ||
+    "earn a positive reply and advance the conversation";
   const candidatesWithSamples = await Promise.all(
     input.candidates.map(async (candidate) => ({
       candidate,
@@ -584,9 +643,11 @@ async function roleplayEvaluateCandidates(input: {
 
   const prompt = [
     "You are a strict recipient-behavior analysis panel for B2B cold outreach email flows.",
-    "Evaluate each candidate as real recipients: busy, skeptical, annoyed, cautious, curious.",
+    "Evaluate each candidate using 10 distinct recipient agents from the target audience.",
+    "The agents should behave like realistic inbox recipients: busy, skeptical, annoyed, cautious, curious, technical, price-sensitive, distracted, polite, and outright uninterested.",
     "Assume inbox pressure and limited attention.",
     "Prioritize the rendered sample emails when scoring; use graph structure as secondary context.",
+    `Judge whether the flow is likely to move the conversation toward this ultimate goal: ${ultimateGoal}.`,
     "",
     "Per candidate, run hidden roleplay checks and score:",
     "- openLikelihood",
@@ -633,8 +694,12 @@ async function roleplayEvaluateCandidates(input: {
   return evaluations;
 }
 
-export async function generateScreenedConversationFlowGraph(input: { context: GenerationContext }) {
-  const playbook = detectGenerationPlaybook(input.context);
+export async function generateScreenedConversationFlowGraph(input: {
+  context: GenerationContext;
+  forceRoleplay?: boolean;
+  onEvent?: ConversationFlowGenerationEventHandler;
+}): Promise<ConversationMapSuggestionResult> {
+  const playbook = input.forceRoleplay ? "generic" : detectGenerationPlaybook(input.context);
   if (playbook !== "generic") {
     return {
       graph: defaultConversationGraph({
@@ -653,15 +718,71 @@ export async function generateScreenedConversationFlowGraph(input: { context: Ge
     };
   }
 
+  const candidateCount = input.forceRoleplay ? 3 : 6;
+  const ultimateGoal =
+    oneLine(input.context.experiment.ultimateGoal) ||
+    oneLine(input.context.campaign.objectiveGoal) ||
+    oneLine(input.context.experiment.cta) ||
+    "earn a positive reply and advance the conversation";
+  await emitGenerationEvent(input.onEvent, {
+    type: "start",
+    ultimateGoal,
+    candidateCount,
+    personaCount: 10,
+    progress: 8,
+    phase: "drafting_candidates",
+    phaseLabel: "Generating candidate step flows",
+  });
+
   const candidates = await generateCandidateGraphs({
     context: input.context,
-    candidateCount: 6,
+    candidateCount,
+    compact: input.forceRoleplay,
   });
+  await emitGenerationEvent(input.onEvent, {
+    type: "candidates_generated",
+    progress: 38,
+    candidates: candidates.map((candidate) =>
+      toSuggestionCandidate(candidate, {
+        state: "drafted",
+      })
+    ),
+  });
+  await emitGenerationEvent(input.onEvent, {
+    type: "phase",
+    phase: "roleplay_screening",
+    phaseLabel: "Testing flows against simulated recipients",
+    progress: 46,
+  });
+
   const evaluations = await roleplayEvaluateCandidates({
     context: input.context,
     candidates,
   });
   const evaluationByIndex = new Map(evaluations.map((row) => [row.index, row]));
+  const progressStep = evaluations.length ? 38 / evaluations.length : 0;
+  for (const [index, evaluation] of evaluations.entries()) {
+    const candidate = candidates.find((row) => row.index === evaluation.index);
+    if (!candidate) continue;
+    await emitGenerationEvent(input.onEvent, {
+      type: "candidate_scored",
+      progress: Math.min(88, Math.round(50 + progressStep * (index + 1))),
+      candidate: toSuggestionCandidate(candidate, {
+        state: passesGate(evaluation) ? "accepted" : "rejected",
+        score: evaluation.score,
+        decision: evaluation.decision,
+        summary: evaluation.summary,
+        strengths: evaluation.strengths,
+        risks: evaluation.risks,
+      }),
+    });
+  }
+  await emitGenerationEvent(input.onEvent, {
+    type: "phase",
+    phase: "selecting_winner",
+    phaseLabel: "Selecting the strongest flow",
+    progress: 92,
+  });
 
   const ranked = candidates
     .map((candidate) => ({ candidate, evaluation: evaluationByIndex.get(candidate.index) ?? null }))
@@ -685,6 +806,14 @@ export async function generateScreenedConversationFlowGraph(input: { context: Ge
       details: JSON.stringify({ top }),
     });
   }
+
+  await emitGenerationEvent(input.onEvent, {
+    type: "winner_selected",
+    progress: 96,
+    selectedIndex: selected.candidate.index,
+    summary: selected.evaluation.summary,
+    score: selected.evaluation.score,
+  });
 
   return {
     graph: selected.candidate.graph,

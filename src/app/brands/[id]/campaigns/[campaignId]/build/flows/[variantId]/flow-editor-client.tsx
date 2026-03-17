@@ -2,10 +2,8 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { createPortal } from "react-dom";
 import {
   ChevronRight,
-  CheckCircle2,
   Hand,
   LayoutGrid,
   Loader2,
@@ -18,7 +16,6 @@ import {
   Target,
   Trash2,
   Upload,
-  XCircle,
   ZoomIn,
   ZoomOut,
 } from "lucide-react";
@@ -38,7 +35,7 @@ import {
   probeConversationMapApi,
   previewConversationNodeApi,
   saveConversationMapDraftApi,
-  suggestConversationMapApi,
+  streamConversationMapSuggestionApi,
 } from "@/lib/client-api";
 import { trackEvent } from "@/lib/telemetry-client";
 import type {
@@ -46,6 +43,8 @@ import type {
   ConversationFlowGraph,
   ConversationFlowNode,
   ConversationMapEditorState,
+  ConversationMapSuggestionCandidate,
+  ConversationMapSuggestionStreamEvent,
   ConversationMap,
   ConversationPreviewLead,
   ConversationProbeResult,
@@ -65,21 +64,6 @@ const WHEEL_ZOOM_SENSITIVITY = 0.0009;
 const MAX_WHEEL_ZOOM_STEP = 0.025;
 const BUTTON_ZOOM_STEP = 0.04;
 const ZOOM_EASING = 0.22;
-const ROLEPLAY_PASSING_SCORE = 75;
-const ROLEPLAY_CANDIDATES = [
-  { id: "cand_1", title: "Personalized Hook", score: 84 },
-  { id: "cand_2", title: "Pain-Led Opener", score: 62 },
-  { id: "cand_3", title: "Offer-First Ask", score: 79 },
-  { id: "cand_4", title: "Trigger + Proof", score: 68 },
-  { id: "cand_5", title: "Use-Case Teardown", score: 87 },
-  { id: "cand_6", title: "Objection-First", score: 71 },
-];
-const ROLEPLAY_PHASES = [
-  "Generating candidate flow ideas",
-  "Roleplaying busy and skeptical personas",
-  "Scoring clarity, reply likelihood, and risk",
-  "Rejecting weak variants and selecting winner",
-];
 const DEFAULT_REPLY_TIMING = {
   minimumDelayMinutes: 40,
   randomAdditionalDelayMinutes: 20,
@@ -117,6 +101,15 @@ type PanState = {
 type ConnectState = {
   fromNodeId: string;
   pointerId: number;
+};
+
+type GenerateProgressState = {
+  progress: number;
+  phaseLabel: string;
+  ultimateGoal: string;
+  personaCount: number;
+  candidateCount: number;
+  candidates: ConversationMapSuggestionCandidate[];
 };
 
 const makeNodeId = () => `node_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
@@ -556,43 +549,35 @@ function stepBlockTitle(node: ConversationFlowNode) {
   return node.title.trim() || "Untitled step";
 }
 
-function RoleplayScreeningLoader({
-  tick,
-  variantName,
+function RoleplayScreeningPanel({
+  state,
   compact = false,
 }: {
-  tick: number;
-  variantName: string;
+  state: GenerateProgressState | null;
   compact?: boolean;
 }) {
-  const cycleTick = tick % 64;
-  const phaseIndex = Math.min(ROLEPLAY_PHASES.length - 1, Math.floor(cycleTick / 4));
-  const phaseLabel = ROLEPLAY_PHASES[phaseIndex] || ROLEPLAY_PHASES[0];
-  const scoredCount = Math.min(ROLEPLAY_CANDIDATES.length, Math.floor(cycleTick / 2));
-  const scoringIndex = cycleTick % 2 === 1 && scoredCount < ROLEPLAY_CANDIDATES.length ? scoredCount : -1;
-  const winnerIndex = ROLEPLAY_CANDIDATES.reduce((best, row, index, array) =>
-    row.score > array[best].score ? index : best
-  , 0);
-  const progress = Math.min(100, Math.round((cycleTick / 24) * 100));
-
+  const progress = state?.progress ?? 8;
+  const phaseLabel = state?.phaseLabel ?? "Preparing generation";
+  const candidates = (state?.candidates ?? []).slice(0, 3);
   return (
     <div
       className={[
         "rounded-[10px] border border-[color:var(--border)] bg-[color:var(--surface)]",
-        compact ? "w-full max-w-2xl p-4" : "p-5",
+        compact ? "w-full max-w-xl p-4" : "p-5",
       ].join(" ")}
     >
-      <div className="mb-3 flex items-center justify-between gap-3">
+      <div className="mb-3 flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <div className="flex items-center gap-2 text-sm font-semibold text-[color:var(--foreground)]">
+          <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.18em] text-[color:var(--muted-foreground)]">
             <Sparkles className="h-4 w-4 text-[color:var(--accent)]" />
-            Roleplay Screening In Progress
+            Generating flow
           </div>
-          <div className="truncate text-sm text-[color:var(--muted-foreground)]">
-            {variantName || "Variant"} - {phaseLabel}
+          <div className="mt-1 text-lg font-semibold text-[color:var(--foreground)]">{phaseLabel}</div>
+          <div className="mt-1 text-sm text-[color:var(--muted-foreground)]">
+            Testing which Step Block sequence gets the best reply.
           </div>
         </div>
-        <div className="flex items-center gap-1 text-sm text-[color:var(--accent)]">
+        <div className="flex items-center gap-1 text-sm font-medium text-[color:var(--accent)]">
           <Loader2 className="h-4 w-4 animate-spin" />
           {progress}%
         </div>
@@ -605,76 +590,78 @@ function RoleplayScreeningLoader({
         />
       </div>
 
-      <div className="grid gap-2 md:grid-cols-2">
-        {ROLEPLAY_CANDIDATES.map((candidate, index) => {
-          const isScoring = index === scoringIndex;
-          const isScored = index < scoredCount && !isScoring;
-          const isAccepted = isScored && candidate.score >= ROLEPLAY_PASSING_SCORE;
-          const stateLabel = isScoring
-            ? "scoring"
-            : isScored
-              ? isAccepted
-                ? "accepted"
-                : "rejected"
-              : "queued";
-
-          return (
-            <div
-              key={candidate.id}
-              className={[
-                "rounded-xl border px-3 py-2 transition-all duration-300",
-                isScoring
-                  ? "border-[color:var(--accent-border)] bg-[color:var(--accent-soft)] animate-pulse"
-                  : isAccepted
-                    ? "border-[color:var(--success-border)] bg-[color:var(--success-soft)]"
-                    : isScored
-                      ? "border-[color:var(--danger-border)] bg-[color:var(--danger-soft)]"
-                      : "border-[color:var(--border)] bg-[color:var(--surface)]",
-              ].join(" ")}
-            >
-              <div className="flex items-center justify-between gap-2">
-                <div className="truncate text-sm font-medium text-[color:var(--foreground)]">
-                  {candidate.title}
-                </div>
-                <div className="flex items-center gap-1">
-                  {isScoring ? (
-                    <Badge variant="accent">scoring</Badge>
-                  ) : isAccepted ? (
-                    <Badge variant="success">accepted</Badge>
-                  ) : isScored ? (
-                    <Badge variant="danger">rejected</Badge>
-                  ) : (
-                    <Badge variant="muted">queued</Badge>
-                  )}
-                </div>
-              </div>
-              <div className="mt-1 flex items-center justify-between text-xs text-[color:var(--muted-foreground)]">
-                <span className="truncate">
-                  {stateLabel === "accepted" && index === winnerIndex ? "selected winner" : `state: ${stateLabel}`}
-                </span>
-                <span>
-                  {isScored || isScoring ? `score ${candidate.score}` : "--"}
-                </span>
-              </div>
-              {isScored ? (
-                <div className="mt-1 flex items-center gap-1 text-xs">
-                  {isAccepted ? (
-                    <>
-                      <CheckCircle2 className="h-3.5 w-3.5 text-[color:var(--success)]" />
-                      <span className="text-[color:var(--success)]">Passes quality gate</span>
-                    </>
-                  ) : (
-                    <>
-                      <XCircle className="h-3.5 w-3.5 text-[color:var(--danger)]" />
-                      <span className="text-[color:var(--danger)]">Rejected for weak intent/risk profile</span>
-                    </>
-                  )}
-                </div>
-              ) : null}
-            </div>
-          );
-        })}
+      <div className="mb-4 rounded-[12px] border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-3 text-sm text-[color:var(--muted-foreground)]">
+        {state?.ultimateGoal ? (
+          <div className="font-medium leading-6 text-[color:var(--foreground)]">{state.ultimateGoal}</div>
+        ) : null}
+        <div className={state?.ultimateGoal ? "mt-1" : ""}>
+          Checking likely replies from this audience and keeping the strongest option.
+        </div>
       </div>
+
+      {candidates.length ? (
+        <div className="grid gap-2">
+          {candidates.map((candidate) => {
+            const isAccepted = candidate.state === "accepted" || candidate.state === "winner";
+            const isRejected = candidate.state === "rejected";
+            const isReviewing = candidate.state === "reviewing";
+            return (
+              <div
+                key={candidate.index}
+                className={[
+                  "rounded-xl border px-3 py-2 transition-all duration-300",
+                  isReviewing
+                    ? "border-[color:var(--accent-border)] bg-[color:var(--accent-soft)] animate-pulse"
+                    : isAccepted
+                      ? "border-[color:var(--success-border)] bg-[color:var(--success-soft)]"
+                      : isRejected
+                        ? "border-[color:var(--danger-border)] bg-[color:var(--danger-soft)]"
+                        : "border-[color:var(--border)] bg-[color:var(--surface)]",
+                ].join(" ")}
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <div className="truncate text-sm font-medium text-[color:var(--foreground)]">
+                    {candidate.title}
+                  </div>
+                  <Badge
+                    variant={
+                      candidate.state === "winner"
+                        ? "success"
+                        : isAccepted
+                          ? "success"
+                          : isRejected
+                            ? "danger"
+                            : isReviewing
+                              ? "accent"
+                              : "muted"
+                    }
+                  >
+                    {candidate.state === "winner" ? "winner" : candidate.state}
+                  </Badge>
+                </div>
+                <div className="mt-1 flex items-center justify-between gap-3 text-xs text-[color:var(--muted-foreground)]">
+                  <span className="truncate">
+                    {candidate.summary || candidate.rationale || "Still being checked"}
+                  </span>
+                  {typeof candidate.score === "number" ? <span>{candidate.score}</span> : null}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      ) : (
+        <div className="grid gap-2">
+          {Array.from({ length: state?.candidateCount ?? 3 }).map((_, index) => (
+            <div
+              key={index}
+              className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-3"
+            >
+              <div className="h-4 w-24 rounded bg-[color:var(--surface-muted)]" />
+              <div className="mt-3 h-3 w-full rounded bg-[color:var(--surface-muted)]" />
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -712,12 +699,14 @@ export default function FlowEditorClient({
   const [nodeEditorOpen, setNodeEditorOpen] = useState(false);
   const [edgeEditorOpen, setEdgeEditorOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [generateModalOpen, setGenerateModalOpen] = useState(false);
+  const [ultimateGoalDraft, setUltimateGoalDraft] = useState("");
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [publishing, setPublishing] = useState(false);
   const [generating, setGenerating] = useState(false);
-  const [roleplayTick, setRoleplayTick] = useState(0);
+  const [generateProgress, setGenerateProgress] = useState<GenerateProgressState | null>(null);
   const [previewingNodeId, setPreviewingNodeId] = useState("");
   const [previewResult, setPreviewResult] = useState<{
     nodeId: string;
@@ -842,15 +831,6 @@ export default function FlowEditorClient({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [brandId, campaignId, variantId]);
 
-  useEffect(() => {
-    if (!loading && !generating) return;
-    setRoleplayTick(0);
-    const interval = window.setInterval(() => {
-      setRoleplayTick((prev) => Math.min(prev + 1, 64));
-    }, 650);
-    return () => window.clearInterval(interval);
-  }, [loading, generating]);
-
   const selectedNode = useMemo(() => nodeById(graph, selectedNodeId), [graph, selectedNodeId]);
   const selectedEdge = useMemo(() => edgeById(graph, selectedEdgeId), [graph, selectedEdgeId]);
   const selectedPreviewLead = useMemo(() => {
@@ -934,8 +914,83 @@ export default function FlowEditorClient({
     workingHours.businessHoursEnabled
       ? `${workingHours.timezone} · ${workingHours.businessHoursStartHour}:00-${workingHours.businessHoursEndHour}:00 · ${formatBusinessDays(workingHours.businessDays)}`
       : `${workingHours.timezone} · replies can send any time`;
-  const drawerOpen = Boolean(selectedStepNode);
   const showAdvancedFlowMap = false;
+  const trimmedUltimateGoalDraft = ultimateGoalDraft.trim();
+
+  const handleGenerateStreamEvent = (event: ConversationMapSuggestionStreamEvent) => {
+    setGenerateProgress((prev) => {
+      const base: GenerateProgressState =
+        prev ?? {
+          progress: 8,
+          phaseLabel: "Preparing generation",
+          ultimateGoal: trimmedUltimateGoalDraft,
+          personaCount: 10,
+          candidateCount: 3,
+          candidates: [],
+        };
+
+      if (event.type === "start") {
+        return {
+          progress: event.progress,
+          phaseLabel: event.phaseLabel,
+          ultimateGoal: event.ultimateGoal,
+          personaCount: event.personaCount,
+          candidateCount: event.candidateCount,
+          candidates: [],
+        };
+      }
+
+      if (event.type === "phase") {
+        return {
+          ...base,
+          progress: event.progress,
+          phaseLabel: event.phaseLabel,
+        };
+      }
+
+      if (event.type === "candidates_generated") {
+        return {
+          ...base,
+          progress: event.progress,
+          candidates: event.candidates.map((candidate) => ({ ...candidate, state: "reviewing" })),
+        };
+      }
+
+      if (event.type === "candidate_scored") {
+        const nextCandidates = base.candidates.length
+          ? base.candidates.map((candidate) =>
+              candidate.index === event.candidate.index ? event.candidate : candidate
+            )
+          : [event.candidate];
+        return {
+          ...base,
+          progress: event.progress,
+          candidates: nextCandidates,
+        };
+      }
+
+      if (event.type === "winner_selected") {
+        return {
+          ...base,
+          progress: event.progress,
+          phaseLabel: "Winner selected",
+          candidates: base.candidates.map((candidate) =>
+            candidate.index === event.selectedIndex ? { ...candidate, state: "winner" } : candidate
+          ),
+        };
+      }
+
+      if (event.type === "done") {
+        return {
+          ...base,
+          progress: 100,
+          phaseLabel: "Generation complete",
+        };
+      }
+
+      return base;
+    });
+  };
 
   const setAutomationDelayRange = (minimumMinutes: number, maximumMinutes: number) => {
     setGraph((prev) => {
@@ -1232,18 +1287,38 @@ export default function FlowEditorClient({
   };
 
   const generate = async () => {
+    if (!trimmedUltimateGoalDraft) {
+      setError("Add the ultimate goal before generating a flow.");
+      return;
+    }
     setGenerating(true);
     setError("");
     setStatusMessage("");
+    setGenerateProgress({
+      progress: 8,
+      phaseLabel: "Preparing generation",
+      ultimateGoal: trimmedUltimateGoalDraft,
+      personaCount: 10,
+      candidateCount: 3,
+      candidates: [],
+    });
     try {
-      const suggested = await suggestConversationMapApi(brandId, campaignId, variantId);
-      const next = withoutPreviewLeadState(withLayout(withReplyTimingDefaults(suggested)));
+      const suggested = await streamConversationMapSuggestionApi(brandId, campaignId, variantId, {
+        ultimateGoal: trimmedUltimateGoalDraft,
+        onEvent: handleGenerateStreamEvent,
+      });
+      const next = withoutPreviewLeadState(withLayout(withReplyTimingDefaults(suggested.graph)));
       setGraph(next);
       setHasFittedInitialView(false);
       setSelectedNodeId("");
       setDrawerStepId("");
       setSelectedEdgeId("");
-      setStatusMessage("AI map generated. Save draft to keep it.");
+      setGenerateModalOpen(false);
+      setStatusMessage(
+        suggested.summary
+          ? `Generated a flow for "${trimmedUltimateGoalDraft}". ${suggested.summary}`
+          : `Generated a flow for "${trimmedUltimateGoalDraft}". Save draft to keep it.`
+      );
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to generate map");
     } finally {
@@ -1781,7 +1856,12 @@ export default function FlowEditorClient({
   if (loading) {
     return (
       <div className="mx-auto w-full max-w-5xl px-2 py-6">
-        <RoleplayScreeningLoader tick={roleplayTick} variantName={variantName} />
+        <div className="rounded-[10px] border border-[color:var(--border)] bg-[color:var(--surface)] p-4">
+          <div className="flex items-center gap-2 text-sm font-semibold text-[color:var(--foreground)]">
+            <Loader2 className="h-4 w-4 animate-spin text-[color:var(--accent)]" />
+            Loading conversation flow
+          </div>
+        </div>
       </div>
     );
   }
@@ -1827,9 +1907,15 @@ export default function FlowEditorClient({
             <Plus className="h-4 w-4" />
             Add Step
           </Button>
-          <Button type="button" size="sm" variant="outline" onClick={generate} disabled={generating}>
-            <RefreshCw className="h-4 w-4" />
-            {generating ? "Generating..." : "Generate"}
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            onClick={() => setGenerateModalOpen(true)}
+            disabled={generating}
+          >
+            <Sparkles className="h-4 w-4" />
+            Generate For Me
           </Button>
           <Button type="button" size="sm" variant="outline" onClick={saveDraft} disabled={saving}>
             <Save className="h-4 w-4" />
@@ -2123,7 +2209,7 @@ export default function FlowEditorClient({
 
               {generating ? (
                 <div className="absolute inset-0 z-20 flex items-center justify-center bg-[color:var(--surface)]/88 px-4 py-6">
-                  <RoleplayScreeningLoader tick={roleplayTick} variantName={variantName} compact />
+                  <RoleplayScreeningPanel state={generateProgress} compact />
                 </div>
               ) : null}
 
@@ -2276,6 +2362,53 @@ export default function FlowEditorClient({
       ) : null}
 
       <SettingsModal
+        open={generateModalOpen}
+        onOpenChange={(open) => {
+          if (!generating) setGenerateModalOpen(open);
+        }}
+        title="Generate For Me"
+        description="Tell AI the final outcome you want."
+        panelClassName="max-w-2xl"
+        bodyClassName="space-y-4"
+        footer={
+          <div className="flex items-center justify-end gap-2">
+            {!generating ? (
+              <>
+                <Button type="button" variant="ghost" onClick={() => setGenerateModalOpen(false)}>
+                  Cancel
+                </Button>
+                <Button type="button" onClick={() => void generate()} disabled={!trimmedUltimateGoalDraft}>
+                  <Sparkles className="h-4 w-4" />
+                  Generate flow
+                </Button>
+              </>
+            ) : (
+              <div className="text-sm text-[color:var(--muted-foreground)]">Generating...</div>
+            )}
+          </div>
+        }
+      >
+        {!generating ? (
+          <>
+            <div className="grid gap-2">
+              <Label>Ultimate goal</Label>
+              <Textarea
+                value={ultimateGoalDraft}
+                rows={4}
+                onChange={(event) => setUltimateGoalDraft(event.target.value)}
+                placeholder="Example: get qualified founders to reply yes so I can send them the AWS application link."
+              />
+              <p className="text-sm text-[color:var(--muted-foreground)]">
+                AI will draft a few flow options, test them, and keep the strongest winner.
+              </p>
+            </div>
+          </>
+        ) : (
+          <RoleplayScreeningPanel state={generateProgress} compact />
+        )}
+      </SettingsModal>
+
+      <SettingsModal
         open={settingsOpen}
         onOpenChange={setSettingsOpen}
         title="Automation settings"
@@ -2402,207 +2535,206 @@ export default function FlowEditorClient({
         </div>
       </SettingsModal>
 
-      {drawerOpen && selectedStepNode
-        ? createPortal(
-            <div className="fixed inset-0 z-50 flex justify-end">
-              <button
-                type="button"
-                className="flex-1 bg-black/35"
-                onClick={() => setDrawerStepId("")}
-                aria-label="Close step drawer"
-              />
-              <aside className="relative flex h-full w-full max-w-[520px] flex-col border-l border-[color:var(--border)] bg-[color:var(--surface)] shadow-2xl">
-                <div className="flex items-start justify-between gap-3 border-b border-[color:var(--border)] px-5 py-4">
-                  <div>
-                    <div className="text-xs uppercase tracking-[0.22em] text-[color:var(--muted-foreground)]">
-                      Step Block
-                    </div>
-                    <div className="mt-1 text-lg font-semibold text-[color:var(--foreground)]">
-                      {stepBlockTitle(selectedStepNode)}
-                    </div>
-                  </div>
-                  <Button type="button" variant="ghost" size="sm" onClick={() => setDrawerStepId("")}>
-                    Close
+      <SettingsModal
+        open={Boolean(selectedStepNode)}
+        onOpenChange={(open) => {
+          if (!open) setDrawerStepId("");
+        }}
+        title={selectedStepNode ? `Edit ${stepBlockTitle(selectedStepNode)}` : "Edit step"}
+        description="Update the step copy and behavior without leaving the canvas."
+        panelClassName="max-w-4xl"
+        bodyClassName="space-y-5"
+        footer={
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex flex-wrap items-center gap-2">
+              {selectedStepNode ? (
+                <>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => addStepBlock(selectedStepNode.id)}
+                  >
+                    <Plus className="h-4 w-4" />
+                    Add step after
                   </Button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={() =>
+                      setGraph((prev) => (prev ? { ...prev, startNodeId: selectedStepNode.id } : prev))
+                    }
+                  >
+                    {graph.startNodeId === selectedStepNode.id ? "First step" : "Use as first step"}
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => deleteStepBlock(selectedStepNode.id)}
+                    disabled={stepSequence.length <= 1}
+                  >
+                    <Trash2 className="h-4 w-4" />
+                    Delete
+                  </Button>
+                </>
+              ) : null}
+            </div>
+            <div className="flex items-center gap-2">
+              <Button type="button" variant="ghost" onClick={() => setDrawerStepId("")}>
+                Close
+              </Button>
+              <Button type="button" onClick={() => setDrawerStepId("")}>
+                Save step
+              </Button>
+            </div>
+          </div>
+        }
+      >
+        {selectedStepNode ? (
+          <>
+            <div className="flex flex-wrap items-center gap-2">
+              <Badge variant="muted">
+                Step {(selectedStepEntry?.index ?? 0) + 1}
+              </Badge>
+              {graph.startNodeId === selectedStepNode.id ? <Badge variant="accent">First step</Badge> : null}
+              <Badge variant={selectedStepNode.autoSend ? "success" : "muted"}>
+                {selectedStepNode.autoSend ? "Auto send" : "Manual review"}
+              </Badge>
+            </div>
+
+            <div className="grid gap-4">
+              <div className="grid gap-2">
+                <Label>Step title</Label>
+                <Input
+                  value={selectedStepNode.title}
+                  onChange={(event) => setNodePatch(selectedStepNode.id, { title: event.target.value })}
+                  placeholder="Qualify the lead"
+                />
+              </div>
+              <div className="grid gap-2">
+                <Label>Subject</Label>
+                <Input
+                  value={selectedStepNode.subject}
+                  onChange={(event) => setNodePatch(selectedStepNode.id, { subject: event.target.value })}
+                  placeholder="Short subject line"
+                />
+              </div>
+              <div className="grid gap-2">
+                <Label>Body</Label>
+                <Textarea
+                  value={selectedStepNode.body}
+                  rows={12}
+                  onChange={(event) => setNodePatch(selectedStepNode.id, { body: event.target.value })}
+                  placeholder="Write the message this step should send..."
+                />
+              </div>
+              <div className="grid gap-2">
+                <Label>Send mode</Label>
+                <Select
+                  value={selectedStepNode.autoSend ? "auto" : "manual"}
+                  onChange={(event) =>
+                    setNodePatch(selectedStepNode.id, { autoSend: event.target.value === "auto" })
+                  }
+                >
+                  <option value="auto">Send automatically</option>
+                  <option value="manual">Send only after manual review</option>
+                </Select>
+              </div>
+            </div>
+
+            <div className="rounded-[18px] border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-4 py-4">
+              <div className="flex items-center gap-2 text-sm font-medium text-[color:var(--foreground)]">
+                <Sparkles className="h-4 w-4 text-[color:var(--accent)]" />
+                AI reply handling
+              </div>
+              <p className="mt-2 text-sm leading-6 text-[color:var(--muted-foreground)]">
+                Questions, objections, and unsubscribes are handled automatically from this step.
+                Use Advanced only if you want to force a specific route.
+              </p>
+            </div>
+
+            <details className="rounded-[18px] border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-4 py-3">
+              <summary className="cursor-pointer text-sm font-medium text-[color:var(--foreground)]">
+                Advanced
+              </summary>
+              <div className="mt-4 space-y-4">
+                <div className="grid gap-2">
+                  <Label>AI prompt template</Label>
+                  <Textarea
+                    value={selectedStepNode.promptTemplate}
+                    rows={8}
+                    onChange={(event) =>
+                      setNodePatch(selectedStepNode.id, { promptTemplate: event.target.value })
+                    }
+                  />
                 </div>
 
-                <div className="flex-1 space-y-5 overflow-y-auto px-5 py-5">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <Badge variant="muted">
-                      Step {(selectedStepEntry?.index ?? 0) + 1}
-                    </Badge>
-                    {graph.startNodeId === selectedStepNode.id ? <Badge variant="accent">First step</Badge> : null}
-                    <Badge variant={selectedStepNode.autoSend ? "success" : "muted"}>
-                      {selectedStepNode.autoSend ? "Auto send" : "Manual review"}
-                    </Badge>
+                <div className="grid gap-2">
+                  <div className="text-xs uppercase tracking-[0.2em] text-[color:var(--muted-foreground)]">
+                    Manual routing
                   </div>
+                  <div className="grid gap-3">
+                    {REPLY_ROUTE_OPTIONS.map((route) => {
+                      const edge =
+                        selectedStepIntentEdges.find((item) => item.intent === route.value) ?? null;
+                      const routeValue = edge
+                        ? nodeLookup.get(edge.toNodeId)?.kind === "terminal"
+                          ? "__end__"
+                          : edge.toNodeId
+                        : "";
+                      return (
+                        <div key={route.value} className="grid gap-1">
+                          <Label>{route.label}</Label>
+                          <Select
+                            value={routeValue}
+                            onChange={(event) =>
+                              setReplyRouteTarget(
+                                selectedStepNode.id,
+                                route.value,
+                                event.target.value
+                              )
+                            }
+                          >
+                            {drawerRouteOptions.map((option) => (
+                              <option key={`${route.value}-${option.value || "auto"}`} value={option.value}>
+                                {option.label}
+                              </option>
+                            ))}
+                          </Select>
+                        </div>
+                      );
+                    })}
 
-                  <div className="grid gap-4">
-                    <div className="grid gap-2">
-                      <Label>Step title</Label>
-                      <Input
-                        value={selectedStepNode.title}
-                        onChange={(event) => setNodePatch(selectedStepNode.id, { title: event.target.value })}
-                        placeholder="Qualify the lead"
-                      />
-                    </div>
-                    <div className="grid gap-2">
-                      <Label>Subject</Label>
-                      <Input
-                        value={selectedStepNode.subject}
-                        onChange={(event) => setNodePatch(selectedStepNode.id, { subject: event.target.value })}
-                        placeholder="Short subject line"
-                      />
-                    </div>
-                    <div className="grid gap-2">
-                      <Label>Body</Label>
-                      <Textarea
-                        value={selectedStepNode.body}
-                        rows={12}
-                        onChange={(event) => setNodePatch(selectedStepNode.id, { body: event.target.value })}
-                        placeholder="Write the message this step should send..."
-                      />
-                    </div>
-                    <div className="grid gap-2">
-                      <Label>Send mode</Label>
+                    <div className="grid gap-1">
+                      <Label>Fallback route</Label>
                       <Select
-                        value={selectedStepNode.autoSend ? "auto" : "manual"}
+                        value={
+                          selectedStepFallbackEdge
+                            ? nodeLookup.get(selectedStepFallbackEdge.toNodeId)?.kind === "terminal"
+                              ? "__end__"
+                              : selectedStepFallbackEdge.toNodeId
+                            : ""
+                        }
                         onChange={(event) =>
-                          setNodePatch(selectedStepNode.id, { autoSend: event.target.value === "auto" })
+                          setReplyRouteTarget(selectedStepNode.id, "fallback", event.target.value)
                         }
                       >
-                        <option value="auto">Send automatically</option>
-                        <option value="manual">Send only after manual review</option>
+                        {drawerRouteOptions.map((option) => (
+                          <option key={`fallback-${option.value || "auto"}`} value={option.value}>
+                            {option.label}
+                          </option>
+                        ))}
                       </Select>
                     </div>
                   </div>
-
-                  <div className="rounded-[18px] border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-4 py-4">
-                    <div className="flex items-center gap-2 text-sm font-medium text-[color:var(--foreground)]">
-                      <Sparkles className="h-4 w-4 text-[color:var(--accent)]" />
-                      AI reply handling
-                    </div>
-                    <p className="mt-2 text-sm leading-6 text-[color:var(--muted-foreground)]">
-                      Questions, objections, and unsubscribes are handled automatically from this step.
-                      Use Advanced only if you want to force a specific route.
-                    </p>
-                  </div>
-
-                  <div className="flex flex-wrap items-center gap-2">
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      onClick={() => addStepBlock(selectedStepNode.id)}
-                    >
-                      <Plus className="h-4 w-4" />
-                      Add step after
-                    </Button>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      onClick={() =>
-                        setGraph((prev) => (prev ? { ...prev, startNodeId: selectedStepNode.id } : prev))
-                      }
-                    >
-                      {graph.startNodeId === selectedStepNode.id ? "First step" : "Use as first step"}
-                    </Button>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => deleteStepBlock(selectedStepNode.id)}
-                      disabled={stepSequence.length <= 1}
-                    >
-                      <Trash2 className="h-4 w-4" />
-                      Delete
-                    </Button>
-                  </div>
-
-                  <details className="rounded-[18px] border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-4 py-3">
-                    <summary className="cursor-pointer text-sm font-medium text-[color:var(--foreground)]">
-                      Advanced
-                    </summary>
-                    <div className="mt-4 space-y-4">
-                      <div className="grid gap-2">
-                        <Label>AI prompt template</Label>
-                        <Textarea
-                          value={selectedStepNode.promptTemplate}
-                          rows={8}
-                          onChange={(event) =>
-                            setNodePatch(selectedStepNode.id, { promptTemplate: event.target.value })
-                          }
-                        />
-                      </div>
-
-                      <div className="grid gap-2">
-                        <div className="text-xs uppercase tracking-[0.2em] text-[color:var(--muted-foreground)]">
-                          Manual routing
-                        </div>
-                        <div className="grid gap-3">
-                          {REPLY_ROUTE_OPTIONS.map((route) => {
-                            const edge =
-                              selectedStepIntentEdges.find((item) => item.intent === route.value) ?? null;
-                            const routeValue = edge
-                              ? nodeLookup.get(edge.toNodeId)?.kind === "terminal"
-                                ? "__end__"
-                                : edge.toNodeId
-                              : "";
-                            return (
-                              <div key={route.value} className="grid gap-1">
-                                <Label>{route.label}</Label>
-                                <Select
-                                  value={routeValue}
-                                  onChange={(event) =>
-                                    setReplyRouteTarget(
-                                      selectedStepNode.id,
-                                      route.value,
-                                      event.target.value
-                                    )
-                                  }
-                                >
-                                  {drawerRouteOptions.map((option) => (
-                                    <option key={`${route.value}-${option.value || "auto"}`} value={option.value}>
-                                      {option.label}
-                                    </option>
-                                  ))}
-                                </Select>
-                              </div>
-                            );
-                          })}
-
-                          <div className="grid gap-1">
-                            <Label>Fallback route</Label>
-                            <Select
-                              value={
-                                selectedStepFallbackEdge
-                                  ? nodeLookup.get(selectedStepFallbackEdge.toNodeId)?.kind === "terminal"
-                                    ? "__end__"
-                                    : selectedStepFallbackEdge.toNodeId
-                                  : ""
-                              }
-                              onChange={(event) =>
-                                setReplyRouteTarget(selectedStepNode.id, "fallback", event.target.value)
-                              }
-                            >
-                              {drawerRouteOptions.map((option) => (
-                                <option key={`fallback-${option.value || "auto"}`} value={option.value}>
-                                  {option.label}
-                                </option>
-                              ))}
-                            </Select>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  </details>
                 </div>
-              </aside>
-            </div>,
-            document.body
-          )
-        : null}
+              </div>
+            </details>
+          </>
+        ) : null}
+      </SettingsModal>
 
       <SettingsModal
         open={nodeEditorOpen && Boolean(selectedNode)}

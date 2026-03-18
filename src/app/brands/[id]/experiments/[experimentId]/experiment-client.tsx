@@ -793,6 +793,10 @@ export default function ExperimentClient({
         experimentId: experiment.id,
         runId: result.runId,
       });
+      if (typeof window !== "undefined") {
+        window.location.assign(`/brands/${brandId}/experiments?launched=${experiment.id}`);
+        return;
+      }
       router.push(`/brands/${brandId}/experiments?launched=${experiment.id}`);
       return;
     } catch (err) {

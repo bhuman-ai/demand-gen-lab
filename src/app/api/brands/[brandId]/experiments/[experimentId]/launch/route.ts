@@ -3,9 +3,12 @@ import { ensureRuntimeForExperiment, getExperimentRecordById, updateExperimentRe
 import {
   buildExperimentProspectTableConfig,
   ensureEnrichAnythingProspectTable,
+  getEnrichAnythingProspectTableRows,
   getEnrichAnythingProspectTableState,
 } from "@/lib/enrichanything-live-table";
+import { importExperimentProspectRows } from "@/lib/experiment-prospect-import";
 import { EXPERIMENT_MIN_VERIFIED_EMAIL_LEADS } from "@/lib/experiment-policy";
+import { listOwnerRuns, listRunLeads } from "@/lib/outreach-data";
 import { launchExperimentRun } from "@/lib/outreach-runtime";
 
 const MIN_PROSPECTS_FOR_LAUNCH = EXPERIMENT_MIN_VERIFIED_EMAIL_LEADS;
@@ -45,6 +48,44 @@ export async function POST(
       },
       { status: 400 }
     );
+  }
+
+  const existingRuns = await listOwnerRuns(brandId, "experiment", experiment.id);
+  const existingLeadLists = await Promise.all(existingRuns.map((run) => listRunLeads(run.id)));
+  const existingLeadCount = existingLeadLists.flat().length;
+
+  if (existingLeadCount <= 0) {
+    const tableRows = await getEnrichAnythingProspectTableRows(
+      buildExperimentProspectTableConfig(experiment)
+    );
+    const importResult = await importExperimentProspectRows({
+      brandId,
+      experimentId,
+      rows: tableRows,
+      requestOrigin: new URL(_.url).origin,
+      tableTitle: prospectTable.tableTitle,
+      prompt: prospectTable.discoveryPrompt,
+      entityType: prospectTable.entityType,
+    });
+
+    if (importResult.importedCount <= 0) {
+      return NextResponse.json(
+        {
+          error:
+            "Launch could not find any sendable leads yet. The approved prospects table has people, but none have been imported as verified contact leads.",
+          hint:
+            "Go back to Prospects and let AI keep checking emails, or refine the targeting so more rows resolve to a real work email.",
+          debug: {
+            approvedTableRows: prospectTable.rowCount,
+            importedLeadCount: importResult.importedCount,
+            attemptedCount: importResult.attemptedCount,
+            matchedCount: importResult.matchedCount,
+            parseErrorCount: importResult.parseErrorCount,
+          },
+        },
+        { status: 400 }
+      );
+    }
   }
 
   const result = await launchExperimentRun({

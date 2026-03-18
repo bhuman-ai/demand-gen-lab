@@ -12717,7 +12717,38 @@ async function processSourceLeadsJob(job: OutreachJob) {
     return;
   }
 
-  const existingLeads = await listRunLeads(run.id);
+  let existingLeads = await listRunLeads(run.id);
+  if (!existingLeads.length) {
+    const ownerRuns = await listOwnerRuns(run.brandId, run.ownerType, run.ownerId);
+    const donorRuns = ownerRuns.filter((candidate) => candidate.id !== run.id);
+    if (donorRuns.length) {
+      const donorLeadLists = await Promise.all(donorRuns.map((candidate) => listRunLeads(candidate.id)));
+      const donorLeads = donorLeadLists.flat();
+      if (donorLeads.length) {
+        existingLeads = await upsertRunLeads(
+          run.id,
+          run.brandId,
+          run.campaignId,
+          donorLeads.map((lead) => ({
+            email: lead.email,
+            name: lead.name,
+            company: lead.company,
+            title: lead.title,
+            domain: lead.domain,
+            sourceUrl: lead.sourceUrl,
+          }))
+        );
+        await createOutreachEvent({
+          runId: run.id,
+          eventType: "lead_sourcing_seeded_from_owner",
+          payload: {
+            donorRunIds: donorRuns.map((candidate) => candidate.id),
+            count: existingLeads.length,
+          },
+        });
+      }
+    }
+  }
   const payload =
     job.payload && typeof job.payload === "object" && !Array.isArray(job.payload)
       ? (job.payload as Record<string, unknown>)

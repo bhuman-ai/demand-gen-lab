@@ -135,6 +135,11 @@ async function readExistingTable(
     : null;
 }
 
+function extractSnapshotRows(snapshot: unknown) {
+  const value = asObject(snapshot);
+  return Array.isArray(value.rows) ? value.rows : [];
+}
+
 export function buildExperimentProspectTableConfig(
   experiment: ExperimentRecord,
   options: { enabled?: boolean } = {}
@@ -264,4 +269,20 @@ export async function getEnrichAnythingProspectTableState(
     ...config,
     rowCount: existingTable ? countSnapshotRows(existingTable.snapshot) : 0,
   };
+}
+
+export async function getEnrichAnythingProspectTableRows(
+  config: ProspectTableConfig
+): Promise<unknown[]> {
+  const appUrl = resolveEnrichAnythingAppUrl();
+  if (!appUrl) {
+    throw new Error("ENRICHANYTHING_APP_URL is not configured.");
+  }
+
+  const existingTable = await readExistingTable(appUrl, config.tableId);
+  if (!existingTable) {
+    return [];
+  }
+
+  return extractSnapshotRows(asObject(existingTable).snapshot);
 }

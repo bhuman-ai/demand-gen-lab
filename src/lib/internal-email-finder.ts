@@ -952,31 +952,77 @@ async function verifyWithValidatedMails(email: string, apiKey: string, timeoutSe
     }
 
     const data = asRecord(payload);
-    const status = String(data.status ?? "").trim().toLowerCase();
-    const acceptAll = data.accept_all === true;
-    const isValid = typeof data.is_valid === "boolean" ? data.is_valid : null;
+    const providerStatus = String(
+      data.status ?? data.result ?? data.verdict ?? data.state ?? ""
+    )
+      .trim()
+      .toLowerCase();
+    const toBoolish = (value: unknown) => {
+      if (typeof value === "boolean") return value;
+      const normalized = String(value ?? "").trim().toLowerCase();
+      if (!normalized) return null;
+      if (["true", "1", "yes"].includes(normalized)) return true;
+      if (["false", "0", "no"].includes(normalized)) return false;
+      return null;
+    };
+    const acceptAll =
+      toBoolish(data.accept_all) === true ||
+      toBoolish(data.acceptall) === true ||
+      toBoolish(data.catch_all) === true ||
+      toBoolish(data.catchall) === true;
+    const isValid = toBoolish(data.is_valid);
+    const isDeliverable =
+      toBoolish(data.deliverable) === true ||
+      toBoolish(data.is_deliverable) === true ||
+      toBoolish(data.smtp_ok) === true ||
+      toBoolish(data.smtp_check) === true ||
+      toBoolish(data.smtp_valid) === true ||
+      toBoolish(data.reachable) === true;
+    const status = providerStatus;
 
     let verdict = "unknown";
     let reason = "unrecognized response status";
-    if (status === "valid") {
+    if (
+      [
+        "valid",
+        "deliverable",
+        "accepted",
+        "ok",
+        "safe",
+        "safe-to-send",
+        "safe_to_send",
+        "reachable",
+      ].includes(status)
+    ) {
       verdict = acceptAll ? "risky-valid" : "likely-valid";
-      reason = acceptAll ? "valid + accept_all=true" : "valid + accept_all=false";
-    } else if (status === "invalid") {
+      reason = acceptAll ? `${status} + catch-all=true` : `${status} + catch-all=false`;
+    } else if (
+      ["catch-all", "catch_all", "accept-all", "accept_all", "catchall", "risky-valid", "risky_valid", "risky"].includes(
+        status
+      )
+    ) {
+      verdict = "risky-valid";
+      reason = `${status} + catch-all routing`;
+    } else if (["invalid", "undeliverable", "rejected", "bounce", "bounced", "failed", "bad"].includes(status)) {
       verdict = "invalid";
-      reason = "status=invalid";
+      reason = `status=${status}`;
     } else if (status === "unknown") {
       verdict = "unknown";
       reason = "status=unknown";
+    } else if (isDeliverable) {
+      verdict = acceptAll ? "risky-valid" : "likely-valid";
+      reason = acceptAll ? "deliverable=true + catch-all=true" : "deliverable=true";
     } else if (isValid === true) {
       verdict = acceptAll ? "risky-valid" : "likely-valid";
-      reason = acceptAll ? "is_valid=true + accept_all=true" : "is_valid=true";
+      reason = acceptAll ? "is_valid=true + catch-all=true" : "is_valid=true";
     } else if (isValid === false) {
       verdict = "invalid";
       reason = "is_valid=false";
     }
 
     let confidence = "low";
-    const score = typeof data.score === "number" ? data.score : null;
+    const rawScore = typeof data.score === "number" ? data.score : Number(data.score);
+    const score = Number.isFinite(rawScore) ? rawScore : null;
     if (status === "invalid" || verdict === "invalid") {
       confidence = "high";
     } else if (verdict === "likely-valid") {
@@ -992,9 +1038,11 @@ async function verifyWithValidatedMails(email: string, apiKey: string, timeoutSe
         verdict,
         reason,
         provider: "validatedmails",
-        provider_status: data.status,
+        provider_status: providerStatus,
         provider_reason: data.reason,
         accept_all: data.accept_all,
+        catch_all: data.catch_all ?? data.catchall,
+        deliverable: data.deliverable ?? data.is_deliverable,
         smtp_ok: data.smtp_ok,
         score: data.score,
         trace_id: data.trace_id,

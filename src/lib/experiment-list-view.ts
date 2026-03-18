@@ -58,6 +58,29 @@ function deriveActiveAction(status: ExperimentListItem["status"]) {
   return "Open" as const;
 }
 
+function summarizeBlockedReason(latestRun: OutreachRun | null, experiment: ExperimentRecord) {
+  if (experiment.status === "archived") {
+    return "This experiment is archived.";
+  }
+
+  const raw = String(latestRun?.lastError ?? "").trim();
+  if (!raw) {
+    return "Latest run is blocked. Open the experiment to inspect what stopped it.";
+  }
+
+  const firstSection = raw.split(/\b(?:Hint|Debug):/i)[0] ?? raw;
+  const normalized = firstSection.replace(/\s+/g, " ").trim();
+  if (!normalized) {
+    return "Latest run is blocked. Open the experiment to inspect what stopped it.";
+  }
+
+  if (normalized.length <= 140) {
+    return normalized;
+  }
+
+  return `${normalized.slice(0, 137).trimEnd()}...`;
+}
+
 function normalizeCount(value: unknown) {
   const next = Number(value);
   if (!Number.isFinite(next)) return 0;
@@ -100,12 +123,14 @@ export function mapExperimentToListItem(input: {
       : activeActionLabel === "Open Prospects"
         ? `/brands/${brandId}/experiments/${experiment.id}/prospects`
         : openHref;
+  const blockedReason = status === "Blocked" ? summarizeBlockedReason(latestRun, experiment) : undefined;
 
   return {
     id: experiment.id,
     brandId,
     name: experiment.name,
     status,
+    blockedReason,
     audience: experiment.audience,
     offer: experiment.offer,
     owner: "Unassigned",

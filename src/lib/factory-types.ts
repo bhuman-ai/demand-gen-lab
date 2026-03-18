@@ -142,6 +142,7 @@ export type ExperimentListItem = {
   brandId: string;
   name: string;
   status: ExperimentListItemStatus;
+  blockedReason?: string;
   audience: string;
   offer: string;
   owner: string;

@@ -78,6 +78,68 @@ function countForStatus(items: ExperimentListItem[], status: (typeof STATUS_OPTI
   return items.filter((item) => item.status === status).length;
 }
 
+function isActiveLaunchStatus(status: ExperimentListItem["status"]) {
+  return status === "Running" || status === "Sourcing";
+}
+
+function launchNoticeForItem(item: ExperimentListItem | null, loading: boolean) {
+  if (loading) {
+    return {
+      tone:
+        "border-[color:var(--border)] bg-[color:var(--surface-muted)] text-[color:var(--foreground)]",
+      title: "Checking launched experiment",
+      detail: "Refreshing the latest run status.",
+    };
+  }
+
+  if (!item) {
+    return null;
+  }
+
+  if (item.status === "Running") {
+    return {
+      tone:
+        "border-[color:var(--success-border)] bg-[color:var(--success-soft)] text-[color:var(--success)]",
+      title: "Experiment launched and is now running.",
+      detail: "The list below reflects its latest live state.",
+    };
+  }
+
+  if (item.status === "Sourcing") {
+    return {
+      tone:
+        "border-[color:var(--accent-border)] bg-[color:var(--accent-soft)] text-[color:var(--accent)]",
+      title: "Experiment launched and is sourcing prospects.",
+      detail: "The list below reflects its latest live state.",
+    };
+  }
+
+  if (item.status === "Blocked") {
+    return {
+      tone:
+        "border-[color:var(--danger-border)] bg-[color:var(--danger-soft)] text-[color:var(--danger)]",
+      title: "Launch was submitted, but the latest status is blocked.",
+      detail: "Open the experiment to inspect the run and fix what stopped it.",
+    };
+  }
+
+  if (item.status === "Paused") {
+    return {
+      tone:
+        "border-[color:var(--warning-border)] bg-[color:var(--warning-soft)] text-[color:var(--warning)]",
+      title: "Experiment launched, but it is currently paused.",
+      detail: "Open the experiment to review the run before resuming it.",
+    };
+  }
+
+  return {
+    tone:
+      "border-[color:var(--border-strong)] bg-[color:var(--surface-muted)] text-[color:var(--foreground)]",
+    title: `Experiment launched. Latest status: ${item.status}.`,
+    detail: "The list below reflects the current state after refresh.",
+  };
+}
+
 export default function ExperimentsClient({
   brandId,
   openSuggestionsOnLoad = false,
@@ -97,6 +159,7 @@ export default function ExperimentsClient({
   const [statusFilter, setStatusFilter] = useState<(typeof STATUS_OPTIONS)[number]>("all");
   const [query, setQuery] = useState("");
   const [suggestionsOpen, setSuggestionsOpen] = useState(openSuggestionsOnLoad);
+  const [launchNoticeId, setLaunchNoticeId] = useState(launchedExperimentId);
 
   const refresh = async () => {
     const listRows = await fetchExperimentListView(brandId);
@@ -124,9 +187,14 @@ export default function ExperimentsClient({
   }, [brandId]);
 
   useEffect(() => {
-    if (!openSuggestionsOnLoad) return;
+    if (!openSuggestionsOnLoad && !(launchedExperimentId && !loading)) return;
     router.replace(`/brands/${brandId}/experiments`, { scroll: false });
-  }, [brandId, openSuggestionsOnLoad, router]);
+  }, [brandId, launchedExperimentId, loading, openSuggestionsOnLoad, router]);
+
+  useEffect(() => {
+    if (!launchedExperimentId) return;
+    setLaunchNoticeId(launchedExperimentId);
+  }, [launchedExperimentId]);
 
   const filtered = useMemo(
     () =>
@@ -165,13 +233,24 @@ export default function ExperimentsClient({
     [items]
   );
 
+  const launchedItem = useMemo(
+    () => (launchNoticeId ? items.find((item) => item.id === launchNoticeId) ?? null : null),
+    [items, launchNoticeId]
+  );
+
+  const launchNotice = useMemo(
+    () => (launchNoticeId ? launchNoticeForItem(launchedItem, loading) : null),
+    [launchedItem, launchNoticeId, loading]
+  );
+
   return (
     <div className="space-y-8">
       {error ? <div className="text-sm text-[color:var(--danger)]">{error}</div> : null}
       {loading ? <div className="text-sm text-[color:var(--muted-foreground)]">Loading experiments...</div> : null}
-      {launchedExperimentId ? (
-        <div className="rounded-[12px] border border-[color:var(--success-border)] bg-[color:var(--success-soft)] px-4 py-3 text-sm text-[color:var(--success)]">
-          Experiment launched. Its latest status is shown below.
+      {launchNotice ? (
+        <div className={cn("rounded-[12px] border px-4 py-3 text-sm", launchNotice.tone)}>
+          <div className="font-medium">{launchNotice.title}</div>
+          <div className="mt-1 opacity-90">{launchNotice.detail}</div>
         </div>
       ) : null}
 
@@ -212,27 +291,27 @@ export default function ExperimentsClient({
         <div className="space-y-4">
           <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
             <div className="flex flex-wrap gap-2">
-            {STATUS_OPTIONS.map((status) => {
-              const active = statusFilter === status;
-              return (
-                <button
-                  key={status}
-                  type="button"
-                  aria-pressed={active}
-                  onClick={() => setStatusFilter(status)}
-                  className={cn(
-                    "rounded-[8px] border px-3 py-1.5 text-sm transition-colors",
-                    active
-                      ? status === "all"
-                        ? "border-[color:var(--border-strong)] bg-[color:var(--surface-muted)] text-[color:var(--foreground)]"
-                        : statusTone(status)
-                      : "border-[color:var(--border)] bg-[color:var(--surface)] text-[color:var(--muted-foreground)] hover:bg-[color:var(--surface-muted)] hover:text-[color:var(--foreground)]"
-                  )}
-                >
-                  {`${statusLabel(status)} (${countForStatus(items, status)})`}
-                </button>
-              );
-            })}
+              {STATUS_OPTIONS.map((status) => {
+                const active = statusFilter === status;
+                return (
+                  <button
+                    key={status}
+                    type="button"
+                    aria-pressed={active}
+                    onClick={() => setStatusFilter(status)}
+                    className={cn(
+                      "rounded-[8px] border px-3 py-1.5 text-sm transition-colors",
+                      active
+                        ? status === "all"
+                          ? "border-[color:var(--border-strong)] bg-[color:var(--surface-muted)] text-[color:var(--foreground)]"
+                          : statusTone(status)
+                        : "border-[color:var(--border)] bg-[color:var(--surface)] text-[color:var(--muted-foreground)] hover:bg-[color:var(--surface-muted)] hover:text-[color:var(--foreground)]"
+                    )}
+                  >
+                    {`${statusLabel(status)} (${countForStatus(items, status)})`}
+                  </button>
+                );
+              })}
             </div>
 
             <div className="relative max-w-md">
@@ -281,102 +360,108 @@ export default function ExperimentsClient({
                 </thead>
                 <tbody>
                   {filtered.map((item) => {
-                    const launched = launchedExperimentId === item.id;
+                    const launched = launchNoticeId === item.id;
+                    const launchedAndActive = launched && isActiveLaunchStatus(item.status);
                     return (
-                    <tr
-                      key={item.id}
-                      className={cn(
-                        "group cursor-pointer border-t border-[color:var(--border)] transition-colors focus-within:bg-[color:var(--surface-muted)] hover:bg-[color:var(--surface-muted)]",
-                        launched && "bg-[color:var(--success-soft)]"
-                      )}
-                      tabIndex={0}
-                      onClick={() => {
-                        router.push(item.openHref);
-                      }}
-                      onKeyDown={(event) => {
-                        if (event.key !== "Enter" && event.key !== " ") {
-                          return;
-                        }
-                        event.preventDefault();
-                        router.push(item.openHref);
-                      }}
-                    >
-                      <td className="py-2 pr-4 align-top font-medium">
-                        <div className="flex items-start gap-3">
-                          <span
-                            className={cn(
-                              "mt-1 h-10 w-1 rounded-[2px]",
-                              launched || item.status === "Running"
-                                ? "bg-[color:var(--success)]"
-                                : item.status === "Paused"
-                                  ? "bg-[color:var(--warning)]"
-                                  : item.status === "Blocked"
-                                    ? "bg-[color:var(--danger)]"
-                                    : item.status === "Sourcing" || item.status === "Ready" || item.status === "Promoted"
-                                      ? "bg-[color:var(--accent)]"
-                                      : "bg-[color:var(--border)]"
-                            )}
-                          />
-                          <span>{item.name}</span>
-                        </div>
-                      </td>
-                      <td className="py-2 pr-4 align-top">
-                        <Badge className={statusTone(item.status)}>{item.status}</Badge>
-                      </td>
-                      <td className="py-2 pr-4 align-top text-[color:var(--muted-foreground)]">{item.audience || "—"}</td>
-                      <td className="py-2 px-2 align-top text-right">{leadsCell(item) || "—"}</td>
-                      <td className="py-2 px-2 align-top text-right">{item.replies || "—"}</td>
-                      <td className="py-2 px-2 align-top text-right">{item.positiveReplies || "—"}</td>
-                      <td className="py-2 px-2 align-top whitespace-nowrap text-[color:var(--muted-foreground)]">
-                        {item.lastActivityLabel}
-                      </td>
-                      <td className="py-2 pl-4 align-top">
-                        <div className="flex justify-end gap-1 opacity-100 transition md:opacity-0 md:group-hover:opacity-100">
-                          <Button size="sm" variant="outline" asChild>
-                            <Link
-                              href={item.editHref}
-                              onClick={(event) => {
+                      <tr
+                        key={item.id}
+                        className={cn(
+                          "group cursor-pointer border-t border-[color:var(--border)] transition-colors focus-within:bg-[color:var(--surface-muted)] hover:bg-[color:var(--surface-muted)]",
+                          launchedAndActive && "bg-[color:var(--success-soft)]"
+                        )}
+                        tabIndex={0}
+                        onClick={() => {
+                          router.push(item.openHref);
+                        }}
+                        onKeyDown={(event) => {
+                          if (event.key !== "Enter" && event.key !== " ") {
+                            return;
+                          }
+                          event.preventDefault();
+                          router.push(item.openHref);
+                        }}
+                      >
+                        <td className="py-2 pr-4 align-top font-medium">
+                          <div className="flex items-start gap-3">
+                            <span
+                              className={cn(
+                                "mt-1 h-10 w-1 rounded-[2px]",
+                                item.status === "Running"
+                                  ? "bg-[color:var(--success)]"
+                                  : item.status === "Paused"
+                                    ? "bg-[color:var(--warning)]"
+                                    : item.status === "Blocked"
+                                      ? "bg-[color:var(--danger)]"
+                                      : item.status === "Sourcing" || item.status === "Ready" || item.status === "Promoted"
+                                        ? "bg-[color:var(--accent)]"
+                                        : "bg-[color:var(--border)]"
+                              )}
+                            />
+                            <span>{item.name}</span>
+                          </div>
+                        </td>
+                        <td className="py-2 pr-4 align-top">
+                        <Badge
+                          className={statusTone(item.status)}
+                          title={item.status === "Blocked" ? item.blockedReason : undefined}
+                        >
+                          {item.status}
+                        </Badge>
+                        </td>
+                        <td className="py-2 pr-4 align-top text-[color:var(--muted-foreground)]">{item.audience || "—"}</td>
+                        <td className="py-2 px-2 align-top text-right">{leadsCell(item) || "—"}</td>
+                        <td className="py-2 px-2 align-top text-right">{item.replies || "—"}</td>
+                        <td className="py-2 px-2 align-top text-right">{item.positiveReplies || "—"}</td>
+                        <td className="py-2 px-2 align-top whitespace-nowrap text-[color:var(--muted-foreground)]">
+                          {item.lastActivityLabel}
+                        </td>
+                        <td className="py-2 pl-4 align-top">
+                          <div className="flex justify-end gap-1 opacity-100 transition md:opacity-0 md:group-hover:opacity-100">
+                            <Button size="sm" variant="outline" asChild>
+                              <Link
+                                href={item.editHref}
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                }}
+                              >
+                                Edit
+                              </Link>
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              disabled={duplicatingId === item.id}
+                              onClick={async (event) => {
                                 event.stopPropagation();
+                                setDuplicatingId(item.id);
+                                setError("");
+                                try {
+                                  const source = await fetchExperiment(brandId, item.id);
+                                  const duplicate = await createExperimentApi(brandId, {
+                                    name: `${source.name} Copy`,
+                                    offer: source.offer,
+                                    audience: source.audience,
+                                  });
+                                  trackEvent("experiment_created", {
+                                    brandId,
+                                    experimentId: duplicate.id,
+                                    source: "duplicate",
+                                    fromExperimentId: item.id,
+                                  });
+                                  router.push(`/brands/${brandId}/experiments/${duplicate.id}/setup`);
+                                } catch (err) {
+                                  setError(err instanceof Error ? err.message : "Failed to duplicate experiment");
+                                } finally {
+                                  setDuplicatingId("");
+                                }
                               }}
                             >
-                              Edit
-                            </Link>
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            disabled={duplicatingId === item.id}
-                            onClick={async (event) => {
-                              event.stopPropagation();
-                              setDuplicatingId(item.id);
-                              setError("");
-                              try {
-                                const source = await fetchExperiment(brandId, item.id);
-                                const duplicate = await createExperimentApi(brandId, {
-                                  name: `${source.name} Copy`,
-                                  offer: source.offer,
-                                  audience: source.audience,
-                                });
-                              trackEvent("experiment_created", {
-                                brandId,
-                                experimentId: duplicate.id,
-                                source: "duplicate",
-                                fromExperimentId: item.id,
-                              });
-                                router.push(`/brands/${brandId}/experiments/${duplicate.id}/setup`);
-                              } catch (err) {
-                                setError(err instanceof Error ? err.message : "Failed to duplicate experiment");
-                              } finally {
-                                setDuplicatingId("");
-                              }
-                            }}
-                          >
-                            <CopyPlus className="h-3.5 w-3.5" />
-                            {duplicatingId === item.id ? "Duplicating..." : "Duplicate"}
-                          </Button>
-                        </div>
-                      </td>
-                    </tr>
+                              <CopyPlus className="h-3.5 w-3.5" />
+                              {duplicatingId === item.id ? "Duplicating..." : "Duplicate"}
+                            </Button>
+                          </div>
+                        </td>
+                      </tr>
                     );
                   })}
                 </tbody>

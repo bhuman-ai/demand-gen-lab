@@ -13,6 +13,51 @@ import { launchExperimentRun } from "@/lib/outreach-runtime";
 
 const MIN_PROSPECTS_FOR_LAUNCH = EXPERIMENT_MIN_VERIFIED_EMAIL_LEADS;
 
+function buildImportFailureResponse(input: {
+  approvedTableRows: number;
+  importResult: {
+    importedCount: number;
+    attemptedCount: number;
+    matchedCount: number;
+    parseErrorCount: number;
+    enrichmentError: string;
+    failureSummary: Array<{ reason: string; count: number }>;
+  };
+}) {
+  const failureReasons = new Set(input.importResult.failureSummary.map((entry) => entry.reason));
+  const normalizedEnrichmentError = input.importResult.enrichmentError.trim().toLowerCase();
+  const validatorUnauthorized =
+    failureReasons.has("validatedmails_unauthorized") ||
+    normalizedEnrichmentError.includes("401") ||
+    normalizedEnrichmentError.includes("unauthorized");
+  const validatorMissing =
+    failureReasons.has("missing_validatedmails_api_key") ||
+    normalizedEnrichmentError.includes("validatedmails api key is required");
+
+  if (validatorUnauthorized) {
+    return {
+      error: "Launch is blocked because email verification is misconfigured.",
+      hint:
+        "ValidatedMails rejected the production API key while checking prospect emails. Fix that verifier credential, then try launch again.",
+    };
+  }
+
+  if (validatorMissing) {
+    return {
+      error: "Launch is blocked because email verification is not configured.",
+      hint:
+        "Add a production ValidatedMails API key so saved prospects can be converted into sendable contacts, then try launch again.",
+    };
+  }
+
+  return {
+    error:
+      "Launch could not find any sendable leads yet. The approved prospects table has people, but none have been imported as sendable contact leads.",
+    hint:
+      "Go back to Prospects and let AI keep checking emails, or refine the targeting so more rows resolve to a real work email.",
+  };
+}
+
 export async function POST(
   _: Request,
   context: { params: Promise<{ brandId: string; experimentId: string }> }
@@ -69,18 +114,22 @@ export async function POST(
     });
 
     if (importResult.importedCount <= 0) {
+      const failure = buildImportFailureResponse({
+        approvedTableRows: prospectTable.rowCount,
+        importResult,
+      });
       return NextResponse.json(
         {
-          error:
-            "Launch could not find any sendable leads yet. The approved prospects table has people, but none have been imported as verified contact leads.",
-          hint:
-            "Go back to Prospects and let AI keep checking emails, or refine the targeting so more rows resolve to a real work email.",
+          error: failure.error,
+          hint: failure.hint,
           debug: {
             approvedTableRows: prospectTable.rowCount,
             importedLeadCount: importResult.importedCount,
             attemptedCount: importResult.attemptedCount,
             matchedCount: importResult.matchedCount,
             parseErrorCount: importResult.parseErrorCount,
+            enrichmentError: importResult.enrichmentError,
+            failureSummary: importResult.failureSummary,
           },
         },
         { status: 400 }

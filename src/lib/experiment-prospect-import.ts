@@ -42,6 +42,8 @@ export type ImportExperimentProspectRowsResult = {
   dedupedCount: number;
   parseErrorCount: number;
   parseErrors: string[];
+  enrichmentError: string;
+  failureSummary: Array<{ reason: string; count: number }>;
 };
 
 const NON_COMPANY_PROFILE_ROOTS = [
@@ -367,6 +369,8 @@ export async function importExperimentProspectRows(input: {
       dedupedCount: 0,
       parseErrorCount: parseErrors.length,
       parseErrors: parseErrors.slice(0, 20),
+      enrichmentError: enrichment.error,
+      failureSummary: enrichment.failureSummary,
     };
   }
 
@@ -421,6 +425,8 @@ export async function importExperimentProspectRows(input: {
       dedupedCount,
       parseErrorCount: parseErrors.length,
       parseErrors: parseErrors.slice(0, 20),
+      enrichmentError: enrichment.error,
+      failureSummary: enrichment.failureSummary,
     };
   }
 
@@ -497,5 +503,7 @@ export async function importExperimentProspectRows(input: {
     dedupedCount,
     parseErrorCount: parseErrors.length,
     parseErrors: parseErrors.slice(0, 20),
+    enrichmentError: enrichment.error,
+    failureSummary: enrichment.failureSummary,
   };
 }

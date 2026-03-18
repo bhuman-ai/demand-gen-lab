@@ -791,8 +791,18 @@ function summarizeNoHitFromBatchResult(result: unknown) {
   ).length;
   const riskyQueueCount = Array.isArray(queues.risky_queue) ? queues.risky_queue.length : 0;
 
+  const topAttempt = attempts[0] ?? {};
+  const topDetails = coerceRecord(topAttempt.details);
+  const rawError = String(root.error ?? topDetails.reason ?? topDetails.error ?? "").trim();
+  const normalizedError = rawError.toLowerCase();
+  const topHttpStatus = Number(topDetails.http_status ?? root.http_status ?? 0);
+
   let reason = "no_high_confidence_candidate";
-  if (mxStatus === "no-mail-route") {
+  if (topHttpStatus === 401 || normalizedError.includes("unauthorized")) {
+    reason = "validatedmails_unauthorized";
+  } else if (normalizedError.includes("validatedmails api key is required")) {
+    reason = "missing_validatedmails_api_key";
+  } else if (mxStatus === "no-mail-route") {
     reason = "no_mail_route";
   } else if (attempts.length > 0 && invalidAttempts === attempts.length) {
     reason = "all_candidates_invalid";
@@ -802,11 +812,12 @@ function summarizeNoHitFromBatchResult(result: unknown) {
     reason = "no_attempts";
   }
 
-  const topAttempt = attempts[0] ?? {};
-  const topDetails = coerceRecord(topAttempt.details);
   return {
     reason,
-    error: String(root.error ?? topDetails.reason ?? "").trim(),
+    error:
+      reason === "validatedmails_unauthorized"
+        ? "ValidatedMails rejected the API key (HTTP 401)."
+        : rawError,
     topAttemptEmail: extractFirstEmailAddress(topAttempt.email),
     topAttemptVerdict: String(topAttempt.verdict ?? "").trim().toLowerCase(),
     topAttemptConfidence: String(topAttempt.confidence ?? "").trim().toLowerCase(),
@@ -1022,7 +1033,13 @@ export async function enrichLeadsWithEmailFinderBatch(params: {
         failed += 1;
         const itemError = String(item.error ?? "").trim();
         if (!firstError && itemError) firstError = itemError;
-        pushFailure({ reason: "item_error", error: itemError });
+        pushFailure({
+          reason:
+            itemError.includes("401") || /unauthorized/i.test(itemError)
+              ? "validatedmails_unauthorized"
+              : "item_error",
+          error: itemError,
+        });
         continue;
       }
 

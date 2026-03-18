@@ -28,27 +28,28 @@ function formatRelativeTime(input: string, now = Date.now()) {
 }
 
 function deriveListStatus(experiment: ExperimentRecord, latestRun: OutreachRun | null): ExperimentListItem["status"] {
-  if (latestRun) {
-    if (latestRun.status === "sourcing") return "Sourcing";
-    if (["queued", "scheduled", "sending", "monitoring"].includes(latestRun.status)) {
-      return "Running";
-    }
-    if (latestRun.status === "paused") return "Paused";
-    if (latestRun.status === "completed") {
-      return experiment.promotedCampaignId ? "Promoted" : "Completed";
-    }
-    if (["failed", "preflight_failed", "canceled"].includes(latestRun.status)) {
+  if (experiment.status === "archived") return "Blocked";
+  if (experiment.status === "promoted") return "Promoted";
+  if (experiment.status === "completed") return "Completed";
+
+  if (experiment.status === "running") {
+    if (latestRun?.status === "sourcing") return "Sourcing";
+    if (latestRun?.status === "paused") return "Paused";
+    if (latestRun && ["failed", "preflight_failed", "canceled"].includes(latestRun.status)) {
       return "Blocked";
     }
+    return "Running";
   }
 
-  if (experiment.status === "draft") return "Draft";
+  if (experiment.status === "paused") {
+    return "Paused";
+  }
+
+  if (latestRun?.status === "sourcing") {
+    return "Sourcing";
+  }
+
   if (experiment.status === "ready") return "Ready";
-  if (experiment.status === "running") return "Running";
-  if (experiment.status === "paused") return "Paused";
-  if (experiment.status === "completed") return "Completed";
-  if (experiment.status === "promoted") return "Promoted";
-  if (experiment.status === "archived") return "Blocked";
   return "Draft";
 }
 

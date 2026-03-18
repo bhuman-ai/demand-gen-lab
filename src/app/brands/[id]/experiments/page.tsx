@@ -5,7 +5,7 @@ export default async function ExperimentsPage({
   searchParams,
 }: {
   params: Promise<{ id: string }>;
-  searchParams: Promise<{ from?: string; suggestions?: string }>;
+  searchParams: Promise<{ from?: string; suggestions?: string; launched?: string }>;
 }) {
   const { id } = await params;
   const query = await searchParams;
@@ -13,6 +13,7 @@ export default async function ExperimentsPage({
     <ExperimentsClient
       brandId={id}
       openSuggestionsOnLoad={query?.from === "quiz" || query?.suggestions === "1"}
+      launchedExperimentId={query?.launched ?? ""}
     />
   );
 }

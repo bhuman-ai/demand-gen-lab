@@ -793,7 +793,8 @@ export default function ExperimentClient({
         experimentId: experiment.id,
         runId: result.runId,
       });
-      await refresh(false);
+      router.push(`/brands/${brandId}/experiments?launched=${experiment.id}`);
+      return;
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to launch test");
     } finally {

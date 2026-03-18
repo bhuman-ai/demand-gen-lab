@@ -81,9 +81,11 @@ function countForStatus(items: ExperimentListItem[], status: (typeof STATUS_OPTI
 export default function ExperimentsClient({
   brandId,
   openSuggestionsOnLoad = false,
+  launchedExperimentId = "",
 }: {
   brandId: string;
   openSuggestionsOnLoad?: boolean;
+  launchedExperimentId?: string;
 }) {
   const router = useRouter();
   const [items, setItems] = useState<ExperimentListItem[]>([]);
@@ -167,6 +169,11 @@ export default function ExperimentsClient({
     <div className="space-y-8">
       {error ? <div className="text-sm text-[color:var(--danger)]">{error}</div> : null}
       {loading ? <div className="text-sm text-[color:var(--muted-foreground)]">Loading experiments...</div> : null}
+      {launchedExperimentId ? (
+        <div className="rounded-[12px] border border-[color:var(--success-border)] bg-[color:var(--success-soft)] px-4 py-3 text-sm text-[color:var(--success)]">
+          Experiment launched. Its latest status is shown below.
+        </div>
+      ) : null}
 
       <PageIntro
         title="Experiments"
@@ -273,10 +280,15 @@ export default function ExperimentsClient({
                   </tr>
                 </thead>
                 <tbody>
-                  {filtered.map((item) => (
+                  {filtered.map((item) => {
+                    const launched = launchedExperimentId === item.id;
+                    return (
                     <tr
                       key={item.id}
-                      className="group cursor-pointer border-t border-[color:var(--border)] transition-colors hover:bg-[color:var(--surface-muted)] focus-within:bg-[color:var(--surface-muted)]"
+                      className={cn(
+                        "group cursor-pointer border-t border-[color:var(--border)] transition-colors focus-within:bg-[color:var(--surface-muted)] hover:bg-[color:var(--surface-muted)]",
+                        launched && "bg-[color:var(--success-soft)]"
+                      )}
                       tabIndex={0}
                       onClick={() => {
                         router.push(item.openHref);
@@ -294,7 +306,7 @@ export default function ExperimentsClient({
                           <span
                             className={cn(
                               "mt-1 h-10 w-1 rounded-[2px]",
-                              item.status === "Running"
+                              launched || item.status === "Running"
                                 ? "bg-[color:var(--success)]"
                                 : item.status === "Paused"
                                   ? "bg-[color:var(--warning)]"
@@ -365,7 +377,8 @@ export default function ExperimentsClient({
                         </div>
                       </td>
                     </tr>
-                  ))}
+                    );
+                  })}
                 </tbody>
               </table>
             </TableShell>

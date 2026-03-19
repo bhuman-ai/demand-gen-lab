@@ -460,6 +460,12 @@ export async function resolveApprovedExperimentProspectsApi(
       ? data.parseErrors.map((value) => String(value ?? ""))
       : ([] as string[]),
     enrichmentError: String(data.enrichmentError ?? ""),
+    liveTopUpAttempted: Boolean(data.liveTopUpAttempted),
+    liveTopUpRunId: String(data.liveTopUpRunId ?? ""),
+    liveTopUpRowsAppended: Math.max(0, Number(data.liveTopUpRowsAppended ?? 0) || 0),
+    liveTopUpStatus: String(data.liveTopUpStatus ?? ""),
+    liveTopUpError: String(data.liveTopUpError ?? ""),
+    queryExhausted: Boolean(data.queryExhausted),
     failureSummary: Array.isArray(data.failureSummary)
       ? data.failureSummary.flatMap((entry) => {
           if (!entry || typeof entry !== "object" || Array.isArray(entry)) {

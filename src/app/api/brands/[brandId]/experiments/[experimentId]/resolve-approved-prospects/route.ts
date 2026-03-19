@@ -4,6 +4,7 @@ import {
   buildExperimentProspectTableConfig,
   getEnrichAnythingProspectTableRows,
   getEnrichAnythingProspectTableState,
+  runEnrichAnythingProspectTable,
 } from "@/lib/enrichanything-live-table";
 import {
   countExperimentSendableLeadContacts,
@@ -13,6 +14,7 @@ import {
 import { EXPERIMENT_MIN_VERIFIED_EMAIL_LEADS } from "@/lib/experiment-policy";
 
 const TARGET_SENDABLE_CONTACTS = EXPERIMENT_MIN_VERIFIED_EMAIL_LEADS;
+const LIVE_TOP_UP_MIN_INTERVAL_MS = 20_000;
 
 function emptyImportResult(): ImportExperimentProspectRowsResult {
   return {
@@ -42,10 +44,10 @@ export async function POST(
 
   try {
     const config = buildExperimentProspectTableConfig(experiment);
-    const tableState = await getEnrichAnythingProspectTableState(config);
-    const rows = tableState.rowCount > 0 ? await getEnrichAnythingProspectTableRows(config) : [];
+    let tableState = await getEnrichAnythingProspectTableState(config);
+    let rows = tableState.rowCount > 0 ? await getEnrichAnythingProspectTableRows(config) : [];
 
-    const importResult =
+    let importResult =
       rows.length > 0
         ? await importExperimentProspectRows({
             brandId,
@@ -58,7 +60,54 @@ export async function POST(
           })
         : emptyImportResult();
 
-    const sendableSummary = await countExperimentSendableLeadContacts(brandId, experimentId);
+    let sendableSummary = await countExperimentSendableLeadContacts(brandId, experimentId);
+    let liveTopUpAttempted = false;
+    let liveTopUpRunId = "";
+    let liveTopUpRowsAppended = 0;
+    let liveTopUpStatus = "";
+    let liveTopUpError = "";
+    let queryExhausted = false;
+
+    if (sendableSummary.sendableLeadCount < TARGET_SENDABLE_CONTACTS) {
+      const lastRunAtMs = tableState.lastRunAt ? Date.parse(tableState.lastRunAt) : Number.NaN;
+      const canAttemptTopUp =
+        !Number.isFinite(lastRunAtMs) || Date.now() - lastRunAtMs >= LIVE_TOP_UP_MIN_INTERVAL_MS;
+
+      if (canAttemptTopUp) {
+        liveTopUpAttempted = true;
+        try {
+          const liveRun = await runEnrichAnythingProspectTable(config);
+          liveTopUpRunId = liveRun.runId;
+          liveTopUpRowsAppended = liveRun.lastRowsAppended;
+          liveTopUpStatus = liveRun.lastStatus;
+          tableState = liveRun;
+
+          if (liveTopUpRowsAppended > 0 || liveRun.rowCount > rows.length) {
+            rows = liveRun.rowCount > 0 ? await getEnrichAnythingProspectTableRows(config) : [];
+            importResult =
+              rows.length > 0
+                ? await importExperimentProspectRows({
+                    brandId,
+                    experimentId,
+                    rows,
+                    requestOrigin: new URL(request.url).origin,
+                    tableTitle: liveRun.tableTitle,
+                    prompt: liveRun.discoveryPrompt,
+                    entityType: liveRun.entityType,
+                  })
+                : emptyImportResult();
+
+            sendableSummary = await countExperimentSendableLeadContacts(brandId, experimentId);
+          } else {
+            queryExhausted = sendableSummary.sendableLeadCount < TARGET_SENDABLE_CONTACTS;
+          }
+        } catch (error) {
+          liveTopUpStatus = "failed";
+          liveTopUpError =
+            error instanceof Error ? error.message : "Live prospect top-up failed.";
+        }
+      }
+    }
 
     return NextResponse.json({
       targetCount: TARGET_SENDABLE_CONTACTS,
@@ -70,6 +119,12 @@ export async function POST(
         TARGET_SENDABLE_CONTACTS - sendableSummary.sendableLeadCount
       ),
       runsChecked: sendableSummary.runsChecked,
+      liveTopUpAttempted,
+      liveTopUpRunId,
+      liveTopUpRowsAppended,
+      liveTopUpStatus,
+      liveTopUpError,
+      queryExhausted,
       ...importResult,
     });
   } catch (error) {

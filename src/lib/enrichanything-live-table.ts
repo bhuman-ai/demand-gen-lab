@@ -18,6 +18,14 @@ type ProspectTableConfig = {
 type ProspectTableState = ProspectTableConfig & {
   appUrl: string;
   rowCount: number;
+  lastRunAt: string;
+  lastStatus: string;
+  lastRowsFound: number;
+  lastRowsAppended: number;
+};
+
+type ProspectTableRunResult = ProspectTableState & {
+  runId: string;
 };
 
 function normalizeText(value: unknown) {
@@ -140,6 +148,22 @@ function extractSnapshotRows(snapshot: unknown) {
   return Array.isArray(value.rows) ? value.rows : [];
 }
 
+function buildProspectTableState(
+  appUrl: string,
+  config: ProspectTableConfig,
+  existingTable: Record<string, unknown> | null
+): ProspectTableState {
+  return {
+    appUrl,
+    ...config,
+    rowCount: existingTable ? countSnapshotRows(existingTable.snapshot) : 0,
+    lastRunAt: String(existingTable?.lastRunAt ?? "").trim(),
+    lastStatus: String(existingTable?.lastStatus ?? "").trim(),
+    lastRowsFound: Math.max(0, Number(existingTable?.lastRowsFound ?? 0) || 0),
+    lastRowsAppended: Math.max(0, Number(existingTable?.lastRowsAppended ?? 0) || 0),
+  };
+}
+
 export function buildExperimentProspectTableConfig(
   experiment: ExperimentRecord,
   options: { enabled?: boolean } = {}
@@ -221,9 +245,7 @@ export async function ensureEnrichAnythingProspectTable(config: ProspectTableCon
     }
 
     return {
-      appUrl,
-      ...config,
-      rowCount: countSnapshotRows(existingTable.snapshot),
+      ...buildProspectTableState(appUrl, config, existingTable),
     };
   }
 
@@ -248,9 +270,7 @@ export async function ensureEnrichAnythingProspectTable(config: ProspectTableCon
   }
 
   return {
-    appUrl,
-    ...config,
-    rowCount: 0,
+    ...buildProspectTableState(appUrl, config, null),
   };
 }
 
@@ -264,11 +284,7 @@ export async function getEnrichAnythingProspectTableState(
 
   const existingTable = await readExistingTable(appUrl, config.tableId);
 
-  return {
-    appUrl,
-    ...config,
-    rowCount: existingTable ? countSnapshotRows(existingTable.snapshot) : 0,
-  };
+  return buildProspectTableState(appUrl, config, existingTable);
 }
 
 export async function getEnrichAnythingProspectTableRows(
@@ -285,4 +301,38 @@ export async function getEnrichAnythingProspectTableRows(
   }
 
   return extractSnapshotRows(asObject(existingTable).snapshot);
+}
+
+export async function runEnrichAnythingProspectTable(
+  config: ProspectTableConfig
+): Promise<ProspectTableRunResult> {
+  const appUrl = resolveEnrichAnythingAppUrl();
+  if (!appUrl) {
+    throw new Error("ENRICHANYTHING_APP_URL is not configured.");
+  }
+
+  const response = await fetch(`${appUrl}/api/live/run`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ tableId: config.tableId }),
+    cache: "no-store",
+  });
+
+  const payload = await readJsonSafe(response);
+  if (!response.ok) {
+    throw new Error(String(payload.error ?? "Failed to run EnrichAnything prospect table."));
+  }
+
+  const table =
+    payload.table && typeof payload.table === "object" && !Array.isArray(payload.table)
+      ? (payload.table as Record<string, unknown>)
+      : null;
+  const run = payload.run && typeof payload.run === "object" && !Array.isArray(payload.run)
+    ? (payload.run as Record<string, unknown>)
+    : null;
+
+  return {
+    ...buildProspectTableState(appUrl, config, table),
+    runId: String(run?.id ?? "").trim(),
+  };
 }

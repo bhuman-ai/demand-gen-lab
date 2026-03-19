@@ -221,6 +221,8 @@ type SendableLeadResolutionState = {
   lastUpdatedAt: string;
   readyCount: number;
   retryable: boolean;
+  queryExhausted: boolean;
+  dedupedCount: number;
 };
 
 function emptySendableLeadResolutionState(): SendableLeadResolutionState {
@@ -230,6 +232,8 @@ function emptySendableLeadResolutionState(): SendableLeadResolutionState {
     lastUpdatedAt: "",
     readyCount: 0,
     retryable: false,
+    queryExhausted: false,
+    dedupedCount: 0,
   };
 }
 
@@ -250,6 +254,8 @@ function summarizeSendableLeadResolution(
       lastUpdatedAt: now,
       readyCount: result.sendableLeadCount,
       retryable: false,
+      queryExhausted: false,
+      dedupedCount: result.dedupedCount,
     };
   }
 
@@ -263,6 +269,8 @@ function summarizeSendableLeadResolution(
       lastUpdatedAt: now,
       readyCount: result.sendableLeadCount,
       retryable: false,
+      queryExhausted: false,
+      dedupedCount: result.dedupedCount,
     };
   }
 
@@ -276,6 +284,8 @@ function summarizeSendableLeadResolution(
       lastUpdatedAt: now,
       readyCount: result.sendableLeadCount,
       retryable: false,
+      queryExhausted: false,
+      dedupedCount: result.dedupedCount,
     };
   }
 
@@ -286,6 +296,8 @@ function summarizeSendableLeadResolution(
       lastUpdatedAt: now,
       readyCount: result.sendableLeadCount,
       retryable: true,
+      queryExhausted: false,
+      dedupedCount: result.dedupedCount,
     };
   }
 
@@ -296,6 +308,8 @@ function summarizeSendableLeadResolution(
       lastUpdatedAt: now,
       readyCount: result.sendableLeadCount,
       retryable: false,
+      queryExhausted: false,
+      dedupedCount: result.dedupedCount,
     };
   }
 
@@ -306,6 +320,8 @@ function summarizeSendableLeadResolution(
       lastUpdatedAt: now,
       readyCount: result.sendableLeadCount,
       retryable: true,
+      queryExhausted: false,
+      dedupedCount: result.dedupedCount,
     };
   }
 
@@ -316,6 +332,8 @@ function summarizeSendableLeadResolution(
       lastUpdatedAt: now,
       readyCount: result.sendableLeadCount,
       retryable: false,
+      queryExhausted: true,
+      dedupedCount: result.dedupedCount,
     };
   }
 
@@ -326,6 +344,8 @@ function summarizeSendableLeadResolution(
       lastUpdatedAt: now,
       readyCount: result.sendableLeadCount,
       retryable: true,
+      queryExhausted: false,
+      dedupedCount: result.dedupedCount,
     };
   }
 
@@ -336,6 +356,8 @@ function summarizeSendableLeadResolution(
       lastUpdatedAt: now,
       readyCount: result.sendableLeadCount,
       retryable: false,
+      queryExhausted: false,
+      dedupedCount: result.dedupedCount,
     };
   }
 
@@ -350,6 +372,8 @@ function summarizeSendableLeadResolution(
       lastUpdatedAt: now,
       readyCount: result.sendableLeadCount,
       retryable: false,
+      queryExhausted: false,
+      dedupedCount: result.dedupedCount,
     };
   }
 
@@ -359,6 +383,8 @@ function summarizeSendableLeadResolution(
     lastUpdatedAt: now,
     readyCount: result.sendableLeadCount,
     retryable: true,
+    queryExhausted: false,
+    dedupedCount: result.dedupedCount,
   };
 }
 
@@ -790,6 +816,16 @@ export default function ExperimentClient({
     if (!prospectReviewApproved) return "Review the first 20 leads, then click Looks good to unlock Write emails.";
     if (!messagingReady) return "Publish your email flow to keep going.";
     if (!sendableLeadsReady) {
+      if (
+        sendableLeadResolution.queryExhausted &&
+        experiment?.testEnvelope.oneContactPerCompany !== false &&
+        sendableLeadResolution.dedupedCount > 0
+      ) {
+        return `This targeting topped out at ${sendableLeadCount}/${PROSPECT_VALIDATION_TARGET} sendable contacts with one contact per company turned on. Allow more than one contact per company or edit targeting to continue.`;
+      }
+      if (sendableLeadResolution.queryExhausted) {
+        return `This targeting topped out at ${sendableLeadCount}/${PROSPECT_VALIDATION_TARGET} sendable contacts. Edit targeting to continue.`;
+      }
       return launchQueued
         ? `Preparing launch in the background: ${sendableLeadCount}/${PROSPECT_VALIDATION_TARGET} sendable contacts ready.`
         : "Open Start sending. We’ll keep checking work emails in the background and launch once 20 contacts are ready.";
@@ -798,13 +834,15 @@ export default function ExperimentClient({
     return "Everything is done.";
   }, [
     launchComplete,
+    experiment?.testEnvelope.oneContactPerCompany,
     launchQueued,
     messagingReady,
     prospectReviewApproved,
     remainingProspectLeads,
     savedProspectsReady,
     sendableLeadCount,
-    sendableLeadResolution.message,
+    sendableLeadResolution.dedupedCount,
+    sendableLeadResolution.queryExhausted,
     sendableLeadsReady,
     setupComplete,
   ]);
@@ -868,6 +906,7 @@ export default function ExperimentClient({
     let shouldRetry = true;
     sendableLeadResolutionInFlightRef.current = true;
     setSendableLeadResolution((current) => ({
+      ...current,
       status: "resolving",
       message:
         current.message ||
@@ -899,6 +938,8 @@ export default function ExperimentClient({
           lastUpdatedAt: new Date().toISOString(),
           readyCount: sendableLeadCount,
           retryable: false,
+          queryExhausted: false,
+          dedupedCount: 0,
         });
       })
       .finally(() => {
@@ -934,6 +975,8 @@ export default function ExperimentClient({
       lastUpdatedAt: new Date().toISOString(),
       readyCount: sendableLeadCount,
       retryable: false,
+      queryExhausted: false,
+      dedupedCount: 0,
     });
   }, [sendableLeadCount, sendableLeadsReady]);
 
@@ -973,6 +1016,7 @@ export default function ExperimentClient({
     }
     setProspectReviewApproved(true);
     setSendableLeadResolution((current) => ({
+      ...current,
       status: current.status === "idle" ? "resolving" : current.status,
       message:
         current.message ||
@@ -989,6 +1033,30 @@ export default function ExperimentClient({
       return;
     }
     setCurrentStage(stage);
+  };
+  const oneContactPerCompanyEnabled = experiment?.testEnvelope.oneContactPerCompany !== false;
+  const canRelaxCompanyDedupe =
+    sendableLeadResolution.queryExhausted &&
+    oneContactPerCompanyEnabled &&
+    sendableLeadResolution.dedupedCount > 0;
+  const relaxCompanyDedupe = async () => {
+    if (!experiment) return;
+    const updated = await updateExperimentApi(brandId, experiment.id, {
+      testEnvelope: {
+        ...experiment.testEnvelope,
+        oneContactPerCompany: false,
+      },
+    });
+    setExperiment(updated);
+    setSendableLeadResolution((current) => ({
+      ...current,
+      status: "resolving",
+      message: "Allowing more than one contact per company and checking emails again.",
+      retryable: true,
+      queryExhausted: false,
+      lastUpdatedAt: new Date().toISOString(),
+    }));
+    setSendableLeadResolutionTick((tick) => tick + 1);
   };
 
   const launchFromEmail = String(deliveryAccount?.config.customerIo.fromEmail ?? "").trim();
@@ -1011,7 +1079,11 @@ export default function ExperimentClient({
         : sendableLeadResolution.status === "blocked"
           ? "Need email verifier"
         : sendableLeadResolution.status === "attention"
-            ? "Need better emails"
+            ? canRelaxCompanyDedupe
+              ? "Allow more per company"
+              : sendableLeadResolution.queryExhausted
+                ? "Need more matching contacts"
+                : "Need better emails"
             : "Launch when ready"
       : !launchIdentityReady
         ? "Finish sending setup"
@@ -1133,6 +1205,26 @@ export default function ExperimentClient({
         </div>
       ) : null}
       <div className="mt-2 text-xs text-[color:var(--muted-foreground)]">{sendableLeadProgressLabel}</div>
+      {canRelaxCompanyDedupe ? (
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <Button type="button" size="sm" variant="outline" onClick={() => void relaxCompanyDedupe()}>
+            Allow more than one contact per company
+          </Button>
+          <div className="text-xs text-[color:var(--muted-foreground)]">
+            Some additional matches were skipped because only one contact per company is allowed right now.
+          </div>
+        </div>
+      ) : null}
+      {sendableLeadResolution.queryExhausted && !canRelaxCompanyDedupe ? (
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <Button type="button" size="sm" variant="outline" onClick={() => openStage(1)}>
+            Edit targeting
+          </Button>
+          <div className="text-xs text-[color:var(--muted-foreground)]">
+            This search has topped out for the current audience and offer.
+          </div>
+        </div>
+      ) : null}
     </div>
   ) : null;
 
@@ -2060,6 +2152,10 @@ export default function ExperimentClient({
               type="button"
               onClick={() => {
                 if (launchPreparing) {
+                  if (canRelaxCompanyDedupe) {
+                    void relaxCompanyDedupe();
+                    return;
+                  }
                   updateLaunchQueued(true);
                   return;
                 }
@@ -2078,7 +2174,7 @@ export default function ExperimentClient({
     </section>
   );
   const prospectTableSettings = {
-    oneContactPerCompany: experiment.testEnvelope.oneContactPerCompany !== false,
+    oneContactPerCompany: oneContactPerCompanyEnabled,
   };
   const saveProspectTableSettings = async (next: { oneContactPerCompany: boolean }) => {
     const updated = await updateExperimentApi(brandId, experiment.id, {
@@ -2890,8 +2986,13 @@ export default function ExperimentClient({
                 disabled={launching || launchBlocked}
                 onClick={async () => {
                   if (launchPreparing) {
+                    if (canRelaxCompanyDedupe) {
+                      await relaxCompanyDedupe();
+                      return;
+                    }
                     updateLaunchQueued(true);
                     setSendableLeadResolution((current) => ({
+                      ...current,
                       status: current.status === "ready" ? current.status : "resolving",
                       message:
                         current.message ||

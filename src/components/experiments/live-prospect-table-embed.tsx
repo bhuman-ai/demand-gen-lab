@@ -705,6 +705,8 @@ export default function LiveProspectTableEmbed({
           : tableState.rowCount >= goalCount
             ? "Ready"
             : "Waiting";
+  const waitingForFirstResults =
+    hasPrompt && searchLocked && tableState.rowCount === 0;
   const progressPercent = goalCount > 0 ? Math.min(100, (tableState.rowCount / goalCount) * 100) : 0;
   const progressFillPercent = searchLocked
     ? Math.max(progressPercent, tableState.rowCount > 0 ? 12 : 6)
@@ -715,8 +717,10 @@ export default function LiveProspectTableEmbed({
   const progressMetaLabel = reviewPending
     ? "Review leads"
     : searchLocked
-      ? tableBusy
-        ? "Searching"
+      ? tableState.rowCount === 0
+        ? "Finding first leads"
+        : tableBusy
+          ? "Searching"
         : secondsSinceLastSuccess !== null && secondsSinceLastSuccess >= 30
           ? "Trying again"
           : "Working"
@@ -1157,6 +1161,18 @@ export default function LiveProspectTableEmbed({
             <div className="flex items-center gap-2 text-sm text-[color:var(--muted-foreground)]">
               <Loader2 className="h-4 w-4 animate-spin" />
               Loading table...
+            </div>
+          </div>
+        ) : null}
+        {iframeLoaded && waitingForFirstResults ? (
+          <div className="absolute inset-0 z-10 flex items-center justify-center bg-[color:var(--surface)]/94">
+            <div className="w-full max-w-md px-6">
+              <div className="mb-3 text-center text-xs font-medium uppercase tracking-[0.14em] text-[color:var(--muted-foreground)]">
+                Finding first leads
+              </div>
+              <div className="h-2 overflow-hidden rounded-full bg-[color:var(--surface-muted)]">
+                <div className="h-full w-1/3 rounded-full bg-[color:var(--accent)] animate-pulse" />
+              </div>
             </div>
           </div>
         ) : null}

@@ -46,6 +46,11 @@ export type ImportExperimentProspectRowsResult = {
   failureSummary: Array<{ reason: string; count: number }>;
 };
 
+export type ExperimentSendableLeadSummary = {
+  sendableLeadCount: number;
+  runsChecked: number;
+};
+
 const NON_COMPANY_PROFILE_ROOTS = [
   "linkedin.com",
   "linkedin.co",
@@ -505,5 +510,37 @@ export async function importExperimentProspectRows(input: {
     parseErrors: parseErrors.slice(0, 20),
     enrichmentError: enrichment.error,
     failureSummary: enrichment.failureSummary,
+  };
+}
+
+export async function countExperimentSendableLeadContacts(
+  brandId: string,
+  experimentId: string
+): Promise<ExperimentSendableLeadSummary> {
+  const experiment = await getExperimentRecordById(brandId, experimentId);
+  if (!experiment) {
+    throw new Error("experiment not found");
+  }
+
+  const runs = await listOwnerRuns(brandId, "experiment", experiment.id);
+  if (!runs.length) {
+    return {
+      sendableLeadCount: 0,
+      runsChecked: 0,
+    };
+  }
+
+  const leadLists = await Promise.all(runs.map((run) => listRunLeads(run.id)));
+  const emails = new Set<string>();
+
+  for (const lead of leadLists.flat()) {
+    const email = extractFirstEmailAddress(lead.email).toLowerCase();
+    if (!email) continue;
+    emails.add(email);
+  }
+
+  return {
+    sendableLeadCount: emails.size,
+    runsChecked: runs.length,
   };
 }

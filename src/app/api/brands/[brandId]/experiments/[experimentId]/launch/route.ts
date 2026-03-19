@@ -3,60 +3,13 @@ import { ensureRuntimeForExperiment, getExperimentRecordById, updateExperimentRe
 import {
   buildExperimentProspectTableConfig,
   ensureEnrichAnythingProspectTable,
-  getEnrichAnythingProspectTableRows,
   getEnrichAnythingProspectTableState,
 } from "@/lib/enrichanything-live-table";
-import { importExperimentProspectRows } from "@/lib/experiment-prospect-import";
+import { countExperimentSendableLeadContacts } from "@/lib/experiment-prospect-import";
 import { EXPERIMENT_MIN_VERIFIED_EMAIL_LEADS } from "@/lib/experiment-policy";
-import { listOwnerRuns, listRunLeads } from "@/lib/outreach-data";
 import { launchExperimentRun } from "@/lib/outreach-runtime";
 
 const MIN_PROSPECTS_FOR_LAUNCH = EXPERIMENT_MIN_VERIFIED_EMAIL_LEADS;
-
-function buildImportFailureResponse(input: {
-  approvedTableRows: number;
-  importResult: {
-    importedCount: number;
-    attemptedCount: number;
-    matchedCount: number;
-    parseErrorCount: number;
-    enrichmentError: string;
-    failureSummary: Array<{ reason: string; count: number }>;
-  };
-}) {
-  const failureReasons = new Set(input.importResult.failureSummary.map((entry) => entry.reason));
-  const normalizedEnrichmentError = input.importResult.enrichmentError.trim().toLowerCase();
-  const validatorUnauthorized =
-    failureReasons.has("validatedmails_unauthorized") ||
-    normalizedEnrichmentError.includes("401") ||
-    normalizedEnrichmentError.includes("unauthorized");
-  const validatorMissing =
-    failureReasons.has("missing_validatedmails_api_key") ||
-    normalizedEnrichmentError.includes("validatedmails api key is required");
-
-  if (validatorUnauthorized) {
-    return {
-      error: "Launch is blocked because email verification is misconfigured.",
-      hint:
-        "ValidatedMails rejected the production API key while checking prospect emails. Fix that verifier credential, then try launch again.",
-    };
-  }
-
-  if (validatorMissing) {
-    return {
-      error: "Launch is blocked because email verification is not configured.",
-      hint:
-        "Add a production ValidatedMails API key so saved prospects can be converted into sendable contacts, then try launch again.",
-    };
-  }
-
-  return {
-    error:
-      "Launch could not find any sendable leads yet. The approved prospects table has people, but none have been imported as sendable contact leads.",
-    hint:
-      "Go back to Prospects and let AI keep checking emails, or refine the targeting so more rows resolve to a real work email.",
-  };
-}
 
 export async function POST(
   _: Request,
@@ -95,46 +48,24 @@ export async function POST(
     );
   }
 
-  const existingRuns = await listOwnerRuns(brandId, "experiment", experiment.id);
-  const existingLeadLists = await Promise.all(existingRuns.map((run) => listRunLeads(run.id)));
-  const existingLeadCount = existingLeadLists.flat().length;
-
-  if (existingLeadCount <= 0) {
-    const tableRows = await getEnrichAnythingProspectTableRows(
-      buildExperimentProspectTableConfig(experiment)
-    );
-    const importResult = await importExperimentProspectRows({
-      brandId,
-      experimentId,
-      rows: tableRows,
-      requestOrigin: new URL(_.url).origin,
-      tableTitle: prospectTable.tableTitle,
-      prompt: prospectTable.discoveryPrompt,
-      entityType: prospectTable.entityType,
-    });
-
-    if (importResult.importedCount <= 0) {
-      const failure = buildImportFailureResponse({
-        approvedTableRows: prospectTable.rowCount,
-        importResult,
-      });
-      return NextResponse.json(
-        {
-          error: failure.error,
-          hint: failure.hint,
-          debug: {
-            approvedTableRows: prospectTable.rowCount,
-            importedLeadCount: importResult.importedCount,
-            attemptedCount: importResult.attemptedCount,
-            matchedCount: importResult.matchedCount,
-            parseErrorCount: importResult.parseErrorCount,
-            enrichmentError: importResult.enrichmentError,
-            failureSummary: importResult.failureSummary,
-          },
+  const sendableSummary = await countExperimentSendableLeadContacts(brandId, experiment.id);
+  if (sendableSummary.sendableLeadCount < MIN_PROSPECTS_FOR_LAUNCH) {
+    return NextResponse.json(
+      {
+        error: `Launch is still preparing contacts with work emails.`,
+        hint: `Keep the Messaging step open while AI checks company domains and resolves work emails in the background. Launch unlocks once ${MIN_PROSPECTS_FOR_LAUNCH} sendable contacts are ready.`,
+        debug: {
+          approvedTableRows: prospectTable.rowCount,
+          sendableLeadCount: sendableSummary.sendableLeadCount,
+          sendableLeadRemaining: Math.max(
+            0,
+            MIN_PROSPECTS_FOR_LAUNCH - sendableSummary.sendableLeadCount
+          ),
+          runsChecked: sendableSummary.runsChecked,
         },
-        { status: 400 }
-      );
-    }
+      },
+      { status: 400 }
+    );
   }
 
   const result = await launchExperimentRun({

@@ -24,9 +24,11 @@ import {
   fetchBrandOutreachAssignment,
   fetchConversationPreviewLeadsApi,
   fetchExperiment,
+  fetchExperimentSendableLeadSummaryApi,
   fetchExperimentRunView,
   launchExperimentTestApi,
   promoteExperimentApi,
+  resolveApprovedExperimentProspectsApi,
   sourceExperimentSampleLeadsApi,
   updateExperimentApi,
 } from "@/lib/client-api";
@@ -213,21 +215,120 @@ function stageBadgeLabel(status: WorkflowStageStatus) {
   return "next";
 }
 
-type PreviewEmailEnrichmentState = {
-  attempted: number;
-  matched: number;
-  failed: number;
-  provider: string;
-  error: string;
+type SendableLeadResolutionState = {
+  status: "idle" | "resolving" | "ready" | "attention" | "blocked" | "error";
+  message: string;
+  lastUpdatedAt: string;
+  readyCount: number;
+  retryable: boolean;
 };
 
-function emptyPreviewEmailEnrichment(): PreviewEmailEnrichmentState {
+function emptySendableLeadResolutionState(): SendableLeadResolutionState {
   return {
-    attempted: 0,
-    matched: 0,
-    failed: 0,
-    provider: "emailfinder.batch",
-    error: "",
+    status: "idle",
+    message: "",
+    lastUpdatedAt: "",
+    readyCount: 0,
+    retryable: false,
+  };
+}
+
+type ResolveApprovedProspectsResult = Awaited<
+  ReturnType<typeof resolveApprovedExperimentProspectsApi>
+>;
+
+function summarizeSendableLeadResolution(
+  result: ResolveApprovedProspectsResult
+): SendableLeadResolutionState {
+  const topFailure = String(result.failureSummary[0]?.reason ?? "").trim().toLowerCase();
+  const now = new Date().toISOString();
+
+  if (result.ready) {
+    return {
+      status: "ready",
+      message: `${result.sendableLeadCount} sendable contacts are ready.`,
+      lastUpdatedAt: now,
+      readyCount: result.sendableLeadCount,
+      retryable: false,
+    };
+  }
+
+  if (
+    result.enrichmentError.toLowerCase().includes("validatedmails api key is required") ||
+    topFailure === "missing_validatedmails_api_key"
+  ) {
+    return {
+      status: "blocked",
+      message: "Work email verification is not configured yet. Add the ValidatedMails API key to keep preparing sendable contacts.",
+      lastUpdatedAt: now,
+      readyCount: result.sendableLeadCount,
+      retryable: false,
+    };
+  }
+
+  if (
+    result.enrichmentError.toLowerCase().includes("rejected the api key") ||
+    topFailure === "validatedmails_unauthorized"
+  ) {
+    return {
+      status: "blocked",
+      message: "The work email verification key was rejected. Fix the verifier credential before launching.",
+      lastUpdatedAt: now,
+      readyCount: result.sendableLeadCount,
+      retryable: false,
+    };
+  }
+
+  if (result.importedCount > 0) {
+    return {
+      status: "resolving",
+      message: `Found ${result.importedCount} more work email${result.importedCount === 1 ? "" : "s"}: ${result.sendableLeadCount}/${result.targetCount} ready.`,
+      lastUpdatedAt: now,
+      readyCount: result.sendableLeadCount,
+      retryable: true,
+    };
+  }
+
+  if (result.sendableLeadCount > 0) {
+    return {
+      status: "resolving",
+      message: `Still checking work emails in the background: ${result.sendableLeadCount}/${result.targetCount} ready.`,
+      lastUpdatedAt: now,
+      readyCount: result.sendableLeadCount,
+      retryable: true,
+    };
+  }
+
+  if (topFailure === "no_mail_route") {
+    return {
+      status: "attention",
+      message: "These prospects do not expose a usable company mail route yet. Refine the targeting or keep finding more companies.",
+      lastUpdatedAt: now,
+      readyCount: result.sendableLeadCount,
+      retryable: false,
+    };
+  }
+
+  if (
+    topFailure === "no_high_confidence_candidate" ||
+    topFailure === "only_risky_candidates" ||
+    topFailure === "all_candidates_invalid"
+  ) {
+    return {
+      status: "attention",
+      message: "Most saved prospects still do not resolve to a verified work email. Refine the targeting or keep sourcing more companies.",
+      lastUpdatedAt: now,
+      readyCount: result.sendableLeadCount,
+      retryable: false,
+    };
+  }
+
+  return {
+    status: "resolving",
+    message: "Still checking company domains and work emails in the background.",
+    lastUpdatedAt: now,
+    readyCount: result.sendableLeadCount,
+    retryable: true,
   };
 }
 
@@ -246,6 +347,7 @@ export default function ExperimentClient({
     runView: RunViewModel;
     sourcedLeadCount: number;
     sourcedLeadWithEmailCount: number;
+    sendableLeadCount: number;
     previewLeadCount: number;
     runsChecked: number;
     sourceExperimentId: string;
@@ -262,11 +364,8 @@ export default function ExperimentClient({
   >([]);
   const [, setSampleLeadRunsChecked] = useState(0);
   const [, setSampleLeadSourceExperimentId] = useState("");
-  const [qualifiedLeadCount, setQualifiedLeadCount] = useState(0);
   const [sourcedLeadWithEmailCount, setSourcedLeadWithEmailCount] = useState(0);
-  const [qualifiedLeadWithoutEmailCount, setQualifiedLeadWithoutEmailCount] = useState(0);
-  const [previewEmailEnrichment, setPreviewEmailEnrichment] =
-    useState<PreviewEmailEnrichmentState>(emptyPreviewEmailEnrichment);
+  const [sendableLeadCountSnapshot, setSendableLeadCountSnapshot] = useState(0);
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -289,18 +388,32 @@ export default function ExperimentClient({
   const [aiSetupPrompt, setAiSetupPrompt] = useState("");
   const [draftingSetupFromAi, setDraftingSetupFromAi] = useState(false);
   const [aiSetupNotice, setAiSetupNotice] = useState("");
+  const [prospectReviewApproved, setProspectReviewApproved] = useState(false);
+  const [sendableLeadResolution, setSendableLeadResolution] = useState<SendableLeadResolutionState>(
+    emptySendableLeadResolutionState
+  );
+  const [sendableLeadResolutionTick, setSendableLeadResolutionTick] = useState(0);
+  const [launchQueued, setLaunchQueued] = useState(false);
   const router = useRouter();
   const samplingAbortRef = useRef<AbortController | null>(null);
   const samplingStopRequestedRef = useRef(false);
   const samplingActiveRunIdRef = useRef("");
   const stageAutoInitializedRef = useRef(false);
+  const sendableLeadResolutionInFlightRef = useRef(false);
   const routeStage: StageIndex | null =
     view === "setup" ? 0 : view === "prospects" ? 1 : view === "messaging" ? 2 : view === "launch" ? 3 : null;
 
   const refresh = async (showSpinner = true): Promise<RefreshSnapshot> => {
     if (showSpinner) setLoading(true);
     try {
-      const [brandRow, experimentRow, runRow, outreachAssignmentRow, prospectTableResponse] = await Promise.all([
+      const [
+        brandRow,
+        experimentRow,
+        runRow,
+        outreachAssignmentRow,
+        prospectTableResponse,
+        sendableLeadSummary,
+      ] = await Promise.all([
         fetchBrand(brandId),
         fetchExperiment(brandId, experimentId),
         fetchExperimentRunView(brandId, experimentId),
@@ -312,6 +425,10 @@ export default function ExperimentClient({
         fetch(`/api/brands/${brandId}/experiments/${experimentId}/prospect-table`, {
           cache: "no-store",
         }).catch(() => null),
+        fetchExperimentSendableLeadSummaryApi(brandId, experimentId).catch(() => ({
+          sendableLeadCount: 0,
+          runsChecked: 0,
+        })),
       ]);
 
       let previewLeadsData: Awaited<ReturnType<typeof fetchConversationPreviewLeadsApi>> = {
@@ -322,7 +439,13 @@ export default function ExperimentClient({
         qualifiedLeadCount: 0,
         qualifiedLeadWithEmailCount: 0,
         qualifiedLeadWithoutEmailCount: 0,
-        previewEmailEnrichment: emptyPreviewEmailEnrichment(),
+        previewEmailEnrichment: {
+          attempted: 0,
+          matched: 0,
+          failed: 0,
+          provider: "emailfinder.batch",
+          error: "",
+        },
       };
 
       if (experimentRow.runtime.campaignId && experimentRow.runtime.experimentId) {
@@ -331,7 +454,7 @@ export default function ExperimentClient({
             brandId,
             experimentRow.runtime.campaignId,
             experimentRow.runtime.experimentId,
-            { limit: 20, maxRuns: 8 }
+            { limit: 20, maxRuns: 30 }
           );
         } catch {
           // Keep preview leads empty if the preview endpoint fails.
@@ -347,10 +470,8 @@ export default function ExperimentClient({
       setSampleLeads(previewLeadsData.leads);
       setSampleLeadRunsChecked(previewLeadsData.runsChecked);
       setSampleLeadSourceExperimentId(previewLeadsData.sourceExperimentId);
-      setQualifiedLeadCount(previewLeadsData.qualifiedLeadCount);
       setSourcedLeadWithEmailCount(previewLeadsData.qualifiedLeadWithEmailCount);
-      setQualifiedLeadWithoutEmailCount(previewLeadsData.qualifiedLeadWithoutEmailCount);
-      setPreviewEmailEnrichment(previewLeadsData.previewEmailEnrichment);
+      setSendableLeadCountSnapshot(sendableLeadSummary.sendableLeadCount);
       if (prospectTableResponse?.ok) {
         try {
           const prospectTablePayload = (await prospectTableResponse.json()) as {
@@ -375,6 +496,7 @@ export default function ExperimentClient({
         runView: runRow,
         sourcedLeadCount,
         sourcedLeadWithEmailCount: previewLeadsData.qualifiedLeadWithEmailCount,
+        sendableLeadCount: sendableLeadSummary.sendableLeadCount,
         previewLeadCount: previewLeadsData.leads.length,
         runsChecked: previewLeadsData.runsChecked,
         sourceExperimentId: previewLeadsData.sourceExperimentId,
@@ -497,7 +619,7 @@ export default function ExperimentClient({
     Math.round((setupCompletionCount / Math.max(1, setupChecklist.length)) * 100)
   );
 
-  const realEmailLeadCount = useMemo(
+  const previewEmailLeadCount = useMemo(
     () => Math.max(sourcedLeadWithEmailCount, sampleLeads.filter((lead) => Boolean(lead.email?.trim())).length),
     [sampleLeads, sourcedLeadWithEmailCount]
   );
@@ -531,29 +653,36 @@ export default function ExperimentClient({
       costPerSourcedLeadUsd:
         runTotals.sourcedLeads > 0 ? estimatedSourcingSpendUsd / Math.max(1, runTotals.sourcedLeads) : null,
       costPerVerifiedLeadUsd:
-        realEmailLeadCount > 0 ? estimatedSourcingSpendUsd / Math.max(1, realEmailLeadCount) : null,
+        previewEmailLeadCount > 0 ? estimatedSourcingSpendUsd / Math.max(1, previewEmailLeadCount) : null,
     };
-  }, [realEmailLeadCount, runTotals.sourcedLeads, runView]);
+  }, [previewEmailLeadCount, runTotals.sourcedLeads, runView]);
 
-  const prospectLeadCount = Math.max(realEmailLeadCount, prospectTableRowCount);
-  const prospectsReady = prospectLeadCount >= PROSPECT_VALIDATION_MIN_READY;
+  const savedProspectCount = prospectTableRowCount;
+  const sendableLeadCount = Math.max(sendableLeadCountSnapshot, sendableLeadResolution.readyCount);
+  const savedProspectsReady = savedProspectCount >= PROSPECT_VALIDATION_MIN_READY;
+  const sendableLeadsReady = sendableLeadCount >= PROSPECT_VALIDATION_MIN_READY;
+  const prospectsReady = savedProspectsReady;
   const messagingReady = Number(experiment?.messageFlow.publishedRevision ?? 0) > 0;
   const setupComplete = setupReady;
   const prospectsUnlocked = setupComplete;
-  const prospectsComplete = prospectsUnlocked && prospectsReady;
+  const prospectsComplete = prospectsUnlocked && savedProspectsReady && prospectReviewApproved;
   const messagingUnlocked = prospectsComplete;
   const messagingComplete = messagingUnlocked && messagingReady;
-  const launchStageUnlocked = messagingComplete;
-  const launchUnlocked = launchStageUnlocked;
+  const launchStageUnlocked = messagingReady && sendableLeadsReady;
   const launchComplete = launchStageUnlocked && latestRun?.status === "completed";
   const launchActive = launchStageUnlocked && Boolean(latestRun && !isRunTerminal(latestRun.status));
   const highestUnlockedStage = launchStageUnlocked ? 3 : messagingUnlocked ? 2 : prospectsUnlocked ? 1 : 0;
-  const remainingProspectLeads = Math.max(0, PROSPECT_VALIDATION_TARGET - prospectLeadCount);
-  const prospectPrimaryMessage = prospectsReady
-    ? "You have enough leads. You can write emails now."
-    : prospectLeadCount > 0
-      ? `${prospectLeadCount} lead${prospectLeadCount === 1 ? "" : "s"} found. AI is still building the first review batch before you can write emails.`
-      : `AI is still collecting leads. You need ${remainingProspectLeads} more before you can write emails.`;
+  const remainingProspectLeads = Math.max(0, PROSPECT_VALIDATION_TARGET - savedProspectCount);
+  const prospectPrimaryMessage = !savedProspectsReady
+    ? savedProspectCount > 0
+      ? `${savedProspectCount} lead${savedProspectCount === 1 ? "" : "s"} found. AI is still building the first review batch before you can write emails.`
+      : `AI is still collecting leads. You need ${remainingProspectLeads} more before you can write emails.`
+    : !prospectReviewApproved
+      ? `${savedProspectCount} leads are ready. Review them and click Looks good to move into messaging.`
+      : sendableLeadsReady
+        ? `${sendableLeadCount} sendable contacts are ready.`
+        : sendableLeadResolution.message ||
+          `Checking work emails in the background: ${sendableLeadCount}/${PROSPECT_VALIDATION_TARGET} sendable contacts ready.`;
 
   const workflowStages = useMemo(
     () =>
@@ -627,15 +756,26 @@ export default function ExperimentClient({
 
   const nextGateHint = useMemo(() => {
     if (!setupComplete) return "Finish step 1 first.";
-    if (!prospectsComplete) return `Find ${remainingProspectLeads} more leads to unlock Write emails.`;
-    if (!messagingComplete) return "Publish your email flow to unlock Start sending.";
+    if (!savedProspectsReady) return `Find ${remainingProspectLeads} more leads to unlock Write emails.`;
+    if (!prospectReviewApproved) return "Review the first 20 leads, then click Looks good to unlock Write emails.";
+    if (!messagingReady) return "Publish your email flow to keep going.";
+    if (!sendableLeadsReady) {
+      return (
+        sendableLeadResolution.message ||
+        `We’re checking work emails in the background: ${sendableLeadCount}/${PROSPECT_VALIDATION_TARGET} ready.`
+      );
+    }
     if (!launchComplete) return "Everything is ready. Start sending when you want.";
     return "Everything is done.";
   }, [
     launchComplete,
-    messagingComplete,
-    prospectsComplete,
+    messagingReady,
+    prospectReviewApproved,
     remainingProspectLeads,
+    savedProspectsReady,
+    sendableLeadCount,
+    sendableLeadResolution.message,
+    sendableLeadsReady,
     setupComplete,
   ]);
   const prospectReviewStorageKey = useMemo(() => {
@@ -647,6 +787,103 @@ export default function ExperimentClient({
   }, [brandId, experiment?.audience, experiment?.id, prospectTablePrompt]);
 
   useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (!prospectReviewStorageKey) {
+      setProspectReviewApproved(false);
+      return;
+    }
+    setProspectReviewApproved(window.localStorage.getItem(prospectReviewStorageKey) === "approved");
+  }, [prospectReviewStorageKey]);
+
+  // refresh is intentionally omitted here because the effect is keyed off the persisted-stage inputs above.
+  // Re-running on every refresh function identity change would restart the background resolver loop.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (
+      !experiment ||
+      !prospectReviewApproved ||
+      savedProspectCount <= 0 ||
+      sendableLeadsReady ||
+      sendableLeadResolutionInFlightRef.current
+    ) {
+      return;
+    }
+
+    let cancelled = false;
+    let retryTimeout: number | null = null;
+    let shouldRetry = true;
+    sendableLeadResolutionInFlightRef.current = true;
+    setSendableLeadResolution((current) => ({
+      status: "resolving",
+      message:
+        current.message ||
+        `Checking work emails in the background: ${sendableLeadCount}/${PROSPECT_VALIDATION_TARGET} ready.`,
+      lastUpdatedAt: current.lastUpdatedAt,
+      readyCount: current.readyCount,
+      retryable: true,
+    }));
+
+    void resolveApprovedExperimentProspectsApi(brandId, experiment.id)
+      .then(async (result) => {
+        if (cancelled) return;
+
+        const nextState = summarizeSendableLeadResolution(result);
+        shouldRetry = nextState.retryable;
+        setSendableLeadResolution(nextState);
+
+        await refresh(false);
+      })
+      .catch((err: unknown) => {
+        if (cancelled) return;
+        shouldRetry = false;
+        setSendableLeadResolution({
+          status: "error",
+          message:
+            err instanceof Error
+              ? err.message
+              : "Background email resolution hit a problem.",
+          lastUpdatedAt: new Date().toISOString(),
+          readyCount: sendableLeadCount,
+          retryable: false,
+        });
+      })
+      .finally(() => {
+        sendableLeadResolutionInFlightRef.current = false;
+        if (!cancelled && !sendableLeadsReady && shouldRetry) {
+          retryTimeout = window.setTimeout(() => {
+            setSendableLeadResolutionTick((tick) => tick + 1);
+          }, 4000);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+      if (retryTimeout !== null) {
+        window.clearTimeout(retryTimeout);
+      }
+    };
+  }, [
+    brandId,
+    experiment,
+    prospectReviewApproved,
+    savedProspectCount,
+    sendableLeadCount,
+    sendableLeadsReady,
+    sendableLeadResolutionTick,
+  ]);
+
+  useEffect(() => {
+    if (!sendableLeadsReady) return;
+    setSendableLeadResolution({
+      status: "ready",
+      message: `${sendableLeadCount} sendable contacts are ready.`,
+      lastUpdatedAt: new Date().toISOString(),
+      readyCount: sendableLeadCount,
+      retryable: false,
+    });
+  }, [sendableLeadCount, sendableLeadsReady]);
+
+  useEffect(() => {
     if (routeStage !== null) return;
     const nextStage = asStageIndex(Math.min(currentStage, highestUnlockedStage));
     if (nextStage !== currentStage) setCurrentStage(nextStage);
@@ -655,15 +892,31 @@ export default function ExperimentClient({
   const canGoNext = useMemo(() => {
     if (currentStage === 0) return setupComplete;
     if (currentStage === 1) return prospectsComplete;
-    if (currentStage === 2) return messagingComplete;
+    if (currentStage === 2) return messagingComplete && sendableLeadsReady;
     return false;
-  }, [currentStage, messagingComplete, prospectsComplete, setupComplete]);
+  }, [currentStage, messagingComplete, prospectsComplete, sendableLeadsReady, setupComplete]);
 
   const goNext = () =>
     setCurrentStage((prev) => asStageIndex(Math.min(highestUnlockedStage, prev + 1)));
   const goPrev = () => setCurrentStage((prev) => asStageIndex(prev - 1));
   const navigateToStage = (stage: StageIndex) => {
     router.push(stagePath(brandId, experimentId, stage));
+  };
+  const approveProspectsAndContinue = () => {
+    if (typeof window !== "undefined" && prospectReviewStorageKey) {
+      window.localStorage.setItem(prospectReviewStorageKey, "approved");
+    }
+    setProspectReviewApproved(true);
+    setSendableLeadResolution((current) => ({
+      status: current.status === "idle" ? "resolving" : current.status,
+      message:
+        current.message ||
+        `Checking work emails in the background: ${sendableLeadCount}/${PROSPECT_VALIDATION_TARGET} ready.`,
+      lastUpdatedAt: current.lastUpdatedAt,
+      readyCount: Math.max(current.readyCount, sendableLeadCount),
+      retryable: current.status === "ready" ? false : true,
+    }));
+    navigateToStage(2);
   };
   const openStage = (stage: StageIndex) => {
     if (routeStage !== null) {
@@ -683,12 +936,30 @@ export default function ExperimentClient({
     !launchReplyToEmail ? "reply-to mailbox missing" : "",
   ].filter(Boolean);
   const launchIdentityReady = launchIdentityIssues.length === 0;
-  const launchBlocked = !launchUnlocked || !launchIdentityReady;
+  const launchPreparing = !sendableLeadsReady;
+  const launchBlocked = launching || !launchIdentityReady;
   const launchActionLabel = launching
     ? "Launching..."
-    : !launchIdentityReady
-      ? "Finish sending setup"
-      : "Start sending";
+    : launchPreparing
+      ? launchQueued
+        ? `Preparing ${sendableLeadCount}/${PROSPECT_VALIDATION_TARGET}`
+        : sendableLeadResolution.status === "blocked"
+          ? "Need email verifier"
+        : sendableLeadResolution.status === "attention"
+            ? "Need better emails"
+            : "Launch when ready"
+      : !launchIdentityReady
+        ? "Finish sending setup"
+        : "Start sending";
+  // launchExperimentNow is intentionally omitted here so the queued-launch effect only keys off readiness state.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (!launchQueued || launching || !launchIdentityReady || !sendableLeadsReady) {
+      return;
+    }
+
+    void launchExperimentNow();
+  }, [launchIdentityReady, launchQueued, launching, sendableLeadsReady]);
   const businessHoursEnabled = experiment?.testEnvelope.businessHoursEnabled !== false;
   const businessHoursStartHour = Math.max(
     0,
@@ -749,6 +1020,56 @@ export default function ExperimentClient({
       detail: `Status: ${latestRun.status}.`,
     };
   })();
+  const showSendableLeadProgress = prospectReviewApproved && !sendableLeadsReady;
+  const sendableLeadProgressPercent = Math.max(
+    8,
+    Math.min(100, Math.round((sendableLeadCount / Math.max(1, PROSPECT_VALIDATION_TARGET)) * 100))
+  );
+  const sendableLeadProgressLabel = launchQueued
+    ? `We’ll launch automatically when ${PROSPECT_VALIDATION_TARGET} contacts are ready.`
+    : sendableLeadResolution.message ||
+      `Checking work emails in the background: ${sendableLeadCount}/${PROSPECT_VALIDATION_TARGET} ready.`;
+  const sendableLeadProgressPanel = showSendableLeadProgress ? (
+    <div
+      className={`rounded-[14px] border px-4 py-3 ${
+        sendableLeadResolution.status === "blocked" || sendableLeadResolution.status === "error"
+          ? "border-[color:var(--danger)]/40 bg-[color:var(--danger-soft)]"
+          : sendableLeadResolution.status === "attention"
+            ? "border-[color:var(--warning)]/40 bg-[color:var(--warning-soft)]"
+            : "border-[color:var(--border)] bg-[color:var(--surface-muted)]"
+      }`}
+    >
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="text-sm font-medium text-[color:var(--foreground)]">
+          {sendableLeadResolution.status === "blocked"
+            ? "Email verification is blocked"
+            : sendableLeadResolution.status === "attention"
+              ? "Email verification needs attention"
+              : "Preparing sendable contacts"}
+        </div>
+        <Badge
+          variant={
+            sendableLeadResolution.status === "blocked" || sendableLeadResolution.status === "error"
+              ? "danger"
+              : sendableLeadResolution.status === "attention"
+                ? "accent"
+                : "accent"
+          }
+        >
+          {sendableLeadCount}/{PROSPECT_VALIDATION_TARGET} ready
+        </Badge>
+      </div>
+      {sendableLeadResolution.status === "resolving" || sendableLeadResolution.status === "ready" ? (
+        <div className="mt-2 h-2 overflow-hidden rounded-full bg-[color:var(--surface)]">
+          <div
+            className="h-full rounded-full bg-[color:var(--accent)] transition-[width] duration-300"
+            style={{ width: `${sendableLeadProgressPercent}%` }}
+          />
+        </div>
+      ) : null}
+      <div className="mt-2 text-xs text-[color:var(--muted-foreground)]">{sendableLeadProgressLabel}</div>
+    </div>
+  ) : null;
 
   const saveSetup = async () => {
     if (!experiment) return null;
@@ -831,6 +1152,7 @@ export default function ExperimentClient({
       router.push(`/brands/${brandId}/experiments?launched=${experiment.id}`);
       return;
     } catch (err) {
+      setLaunchQueued(false);
       setError(err instanceof Error ? err.message : "Failed to launch test");
     } finally {
       setLaunching(false);
@@ -873,7 +1195,7 @@ export default function ExperimentClient({
     setSamplingActiveRunId("");
     setSamplingHeartbeatAt(new Date().toISOString());
 
-    const baselineLeadCount = realEmailLeadCount;
+    const baselineLeadCount = savedProspectCount;
     const requestedExpandCount =
       mode === "expand"
         ? Math.max(
@@ -905,7 +1227,7 @@ export default function ExperimentClient({
     }
 
     let attempts = 0;
-    let bestLeadCount = realEmailLeadCount;
+    let bestLeadCount = savedProspectCount;
 
     try {
       while (bestLeadCount < targetLeads) {
@@ -1071,7 +1393,7 @@ export default function ExperimentClient({
       return {
         tone: "warning",
         title: "Publish messaging before sending",
-        detail: `This experiment has ${realEmailLeadCount} accepted leads, but Flow rev is still #0. Publish the messaging canvas first. After that, Launch can schedule sends during business hours.`,
+        detail: `This experiment has ${sendableLeadCount} sendable contact${sendableLeadCount === 1 ? "" : "s"} ready. Publish the messaging canvas first. After that, Launch can schedule sends during business hours.`,
         primaryLabel: "Open Messaging",
         primaryHref: messagingHref,
         primaryStage: 2,
@@ -1099,7 +1421,7 @@ export default function ExperimentClient({
       return {
         tone: "warning",
         title: "Start the first sending run",
-        detail: `You already have ${realEmailLeadCount} accepted leads. Launch the experiment to schedule and send them during the configured business hours.`,
+        detail: `You already have ${sendableLeadCount} sendable contact${sendableLeadCount === 1 ? "" : "s"} ready. Launch the experiment to schedule and send them during the configured business hours.`,
         primaryLabel: "Open Launch",
         primaryHref: launchHref,
         primaryStage: 3,
@@ -1480,36 +1802,48 @@ export default function ExperimentClient({
     ? latestRun.status
     : sampling
       ? "finding leads"
-      : prospectsReady
-        ? "ready"
-        : "waiting";
+      : sendableLeadResolution.status === "blocked"
+        ? "email verifier blocked"
+        : sendableLeadResolution.status === "attention"
+          ? "needs better emails"
+      : showSendableLeadProgress
+        ? "checking emails"
+        : prospectsComplete
+          ? "ready"
+          : "waiting";
   const pipelineSteps = [
     {
       id: "experiment-leads",
       label: "Leads",
-      summary: `${prospectLeadCount} / ${PROSPECT_VALIDATION_TARGET}`,
-      detail: prospectsReady ? "Ready" : `${remainingProspectLeads} left`,
-      tone: prospectsReady ? "success" : "accent",
+      summary: `${savedProspectCount} / ${PROSPECT_VALIDATION_TARGET}`,
+      detail: prospectsComplete ? "Approved" : savedProspectsReady ? "Review ready" : `${remainingProspectLeads} left`,
+      tone: prospectsComplete ? "success" : "accent",
     },
     {
       id: "experiment-messaging",
       label: "Messaging",
-      summary: messagingReady ? "Ready" : "Not created",
-      detail: messagingReady ? `Revision #${experiment.messageFlow.publishedRevision}` : "Needs a flow",
-      tone: messagingReady ? "success" : prospectsReady ? "accent" : "muted",
+      summary: messagingReady ? "Published" : "Not created",
+      detail: !prospectReviewApproved
+        ? "Approve leads first"
+        : !sendableLeadsReady
+          ? `${sendableLeadCount}/${PROSPECT_VALIDATION_TARGET} contacts ready`
+          : messagingReady
+            ? `Revision #${experiment.messageFlow.publishedRevision}`
+            : "Needs a flow",
+      tone: messagingReady ? "success" : messagingUnlocked ? "accent" : "muted",
     },
     {
       id: "experiment-launch",
       label: "Launch",
-      summary: launchActive ? "Running" : launchUnlocked ? "Ready" : "Not scheduled",
+      summary: launchActive ? "Running" : sendableLeadsReady ? "Ready" : "Preparing",
       detail: !launchIdentityReady
         ? "Setup needed"
-        : launchUnlocked
+        : sendableLeadsReady
           ? nextScheduledAtAnyRun
             ? formatDate(nextScheduledAtAnyRun)
             : "No send booked"
-          : "Finish messaging",
-      tone: launchActive ? "success" : launchUnlocked ? "accent" : "muted",
+          : `${sendableLeadCount}/${PROSPECT_VALIDATION_TARGET} contacts ready`,
+      tone: launchActive ? "success" : sendableLeadsReady ? "accent" : "muted",
     },
     {
       id: "experiment-results",
@@ -1628,12 +1962,7 @@ export default function ExperimentClient({
           ) : currentStage === 1 ? (
             <Button
               type="button"
-              onClick={() => {
-                if (typeof window !== "undefined" && prospectReviewStorageKey) {
-                  window.localStorage.setItem(prospectReviewStorageKey, "approved");
-                }
-                navigateToStage(2);
-              }}
+              onClick={approveProspectsAndContinue}
               disabled={!prospectsComplete}
               className="min-w-[190px] justify-between rounded-full"
             >
@@ -1644,19 +1973,29 @@ export default function ExperimentClient({
             <Button
               type="button"
               onClick={() => navigateToStage(3)}
-              disabled={!messagingComplete}
+              disabled={!messagingComplete || !sendableLeadsReady}
               className="min-w-[190px] justify-between rounded-full"
             >
-              <span>{launchUnlocked ? "Next: Start sending" : "Next: Launch setup"}</span>
+              <span>
+                {!messagingComplete
+                  ? "Publish flow first"
+                  : sendableLeadsReady
+                    ? "Next: Start sending"
+                    : `Checking emails ${sendableLeadCount}/${PROSPECT_VALIDATION_TARGET}`}
+              </span>
               <ArrowRight className="h-4 w-4" />
             </Button>
           ) : (
             <Button
               type="button"
               onClick={() => {
+                if (launchPreparing) {
+                  setLaunchQueued(true);
+                  return;
+                }
                 void launchExperimentNow();
               }}
-              disabled={launching || launchBlocked}
+              disabled={launchBlocked}
               className="min-w-[190px] justify-between rounded-full"
             >
               <span>{launchActionLabel}</span>
@@ -1686,13 +2025,8 @@ export default function ExperimentClient({
         initPath={`/api/brands/${brandId}/experiments/${experiment.id}/prospect-table`}
         importPath={`/api/brands/${brandId}/experiments/${experiment.id}/import-prospects/selection`}
         goalCount={PROSPECT_VALIDATION_TARGET}
-        settings={prospectTableSettings}
-        onReviewApproved={() => {
-          if (typeof window !== "undefined" && prospectReviewStorageKey) {
-            window.localStorage.setItem(prospectReviewStorageKey, "approved");
-          }
-          navigateToStage(2);
-        }}
+      settings={prospectTableSettings}
+        onReviewApproved={approveProspectsAndContinue}
         onSettingsChange={saveProspectTableSettings}
         onTableStateChange={({ rowCount, prompt }) => {
           setProspectTableRowCount(rowCount);
@@ -1817,17 +2151,22 @@ export default function ExperimentClient({
             <CardDescription>
               {messagingReady
                 ? `Ready. Flow revision #${experiment.messageFlow.publishedRevision} is published.`
-                : "No messaging flow created yet."}
+                : !prospectReviewApproved
+                  ? "Approve the first 20 leads first."
+                  : "No messaging flow created yet."}
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-3">
+            {sendableLeadProgressPanel}
             <div className="text-sm text-[color:var(--muted-foreground)]">
-              {prospectsReady
-                ? "Create the emails people will get."
-                : `Finish leads first. You still need ${remainingProspectLeads} more.`}
+              {!prospectReviewApproved
+                ? "Review and approve the first 20 leads to unlock messaging."
+                : showSendableLeadProgress
+                  ? `AI is still resolving work emails in the background: ${sendableLeadCount}/${PROSPECT_VALIDATION_TARGET} ready.`
+                  : "Create the step blocks people will get."}
             </div>
             <div className="flex flex-wrap gap-2">
-              <Button asChild type="button" disabled={!prospectsReady}>
+              <Button asChild type="button" disabled={!messagingUnlocked}>
                 <Link href={`/brands/${brandId}/experiments/${experiment.id}/messaging`}>
                   {messagingReady ? "Edit messaging flow" : "Open messaging canvas"}
                 </Link>
@@ -1840,16 +2179,21 @@ export default function ExperimentClient({
           <CardHeader>
             <CardTitle className="text-base">Launch</CardTitle>
             <CardDescription>
-              {!messagingReady
-                ? "Messaging required before launch."
-                : launchIdentityReady
-                  ? latestRun
-                    ? latestRunNarrative.detail
-                    : "Ready when you are."
-                  : "Sending setup required before launch."}
+              {!prospectReviewApproved
+                ? "Approve the first 20 leads first."
+                : !messagingReady
+                  ? "Messaging required before launch."
+                  : showSendableLeadProgress
+                    ? `Still preparing sendable contacts: ${sendableLeadCount}/${PROSPECT_VALIDATION_TARGET} ready.`
+                    : launchIdentityReady
+                      ? latestRun
+                        ? latestRunNarrative.detail
+                        : "Ready when you are."
+                      : "Sending setup required before launch."}
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-3">
+            {sendableLeadProgressPanel}
             {!launchIdentityReady ? (
               <div className="text-sm text-[color:var(--warning)]">
                 Fix before launch: {launchIdentityIssues.join(" · ")}.
@@ -1948,8 +2292,8 @@ export default function ExperimentClient({
                 <div className="text-sm font-semibold">{latestRun.id.slice(-8)}</div>
               </div>
               <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-2">
-                <div className="text-xs text-[color:var(--muted-foreground)]">Accepted leads</div>
-                <div className="text-sm font-semibold">{realEmailLeadCount}</div>
+                <div className="text-xs text-[color:var(--muted-foreground)]">Sendable contacts</div>
+                <div className="text-sm font-semibold">{sendableLeadCount}</div>
               </div>
               <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-2">
                 <div className="text-xs text-[color:var(--muted-foreground)]">Sent</div>
@@ -2376,19 +2720,22 @@ export default function ExperimentClient({
       ) : null}
 
       {currentStage === 2 ? (
-        experiment.runtime.campaignId && experiment.runtime.experimentId ? (
-          <FlowEditorClient
-            brandId={brandId}
-            campaignId={experiment.runtime.campaignId}
-            variantId={experiment.runtime.experimentId}
-            backHref={`/brands/${brandId}/experiments/${experiment.id}`}
-            hideBackButton
-          />
-        ) : (
-          <div className="rounded-lg border border-[color:var(--warning)]/40 bg-[color:var(--warning-soft)] px-3 py-2 text-sm text-[color:var(--warning)]">
-            Flow editor is unavailable until runtime mapping exists. Run Stage 1 sourcing once, then reopen Messaging.
-          </div>
-        )
+        <div className="space-y-4">
+          {sendableLeadProgressPanel}
+          {experiment.runtime.campaignId && experiment.runtime.experimentId ? (
+            <FlowEditorClient
+              brandId={brandId}
+              campaignId={experiment.runtime.campaignId}
+              variantId={experiment.runtime.experimentId}
+              backHref={`/brands/${brandId}/experiments/${experiment.id}`}
+              hideBackButton
+            />
+          ) : (
+            <div className="rounded-lg border border-[color:var(--warning)]/40 bg-[color:var(--warning-soft)] px-3 py-2 text-sm text-[color:var(--warning)]">
+              Flow editor is unavailable until runtime mapping exists. Run Stage 1 sourcing once, then reopen Messaging.
+            </div>
+          )}
+        </div>
       ) : null}
 
       {currentStage === 3 ? (
@@ -2398,6 +2745,7 @@ export default function ExperimentClient({
             <CardDescription>Review setup and start this experiment.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
+            {sendableLeadProgressPanel}
             <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div className="text-sm font-medium">Sending Account</div>
@@ -2509,10 +2857,9 @@ export default function ExperimentClient({
               ) : null}
             </div>
 
-            {!prospectsReady ? (
+            {showSendableLeadProgress ? (
               <div className="rounded-lg border border-[color:var(--warning)]/40 bg-[color:var(--warning-soft)] px-3 py-2 text-sm text-[color:var(--warning)]">
-                Launch is blocked until Prospects has {PROSPECT_VALIDATION_TARGET} saved leads ready for review.
-                Current: {prospectLeadCount} ({remainingProspectLeads} remaining).
+                Launch will unlock automatically once {PROSPECT_VALIDATION_TARGET} sendable contacts are ready.
               </div>
             ) : null}
 

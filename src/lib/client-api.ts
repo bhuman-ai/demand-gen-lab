@@ -430,6 +430,53 @@ export async function launchExperimentTestApi(brandId: string, experimentId: str
   };
 }
 
+export async function resolveApprovedExperimentProspectsApi(
+  brandId: string,
+  experimentId: string
+) {
+  const response = await fetch(
+    `/api/brands/${brandId}/experiments/${experimentId}/resolve-approved-prospects`,
+    {
+      method: "POST",
+    }
+  );
+  const data = await readJson(response);
+  return {
+    targetCount: Math.max(0, Number(data.targetCount ?? 0) || 0),
+    ready: Boolean(data.ready),
+    savedProspectCount: Math.max(0, Number(data.savedProspectCount ?? 0) || 0),
+    sendableLeadCount: Math.max(0, Number(data.sendableLeadCount ?? 0) || 0),
+    sendableLeadRemaining: Math.max(0, Number(data.sendableLeadRemaining ?? 0) || 0),
+    runsChecked: Math.max(0, Number(data.runsChecked ?? 0) || 0),
+    runId: String(data.runId ?? ""),
+    status: String(data.status ?? ""),
+    attemptedCount: Math.max(0, Number(data.attemptedCount ?? 0) || 0),
+    importedCount: Math.max(0, Number(data.importedCount ?? 0) || 0),
+    skippedCount: Math.max(0, Number(data.skippedCount ?? 0) || 0),
+    matchedCount: Math.max(0, Number(data.matchedCount ?? 0) || 0),
+    dedupedCount: Math.max(0, Number(data.dedupedCount ?? 0) || 0),
+    parseErrorCount: Math.max(0, Number(data.parseErrorCount ?? 0) || 0),
+    parseErrors: Array.isArray(data.parseErrors)
+      ? data.parseErrors.map((value) => String(value ?? ""))
+      : ([] as string[]),
+    enrichmentError: String(data.enrichmentError ?? ""),
+    failureSummary: Array.isArray(data.failureSummary)
+      ? data.failureSummary.flatMap((entry) => {
+          if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+            return [];
+          }
+          const row = entry as Record<string, unknown>;
+          return [
+            {
+              reason: String(row.reason ?? ""),
+              count: Math.max(0, Number(row.count ?? 0) || 0),
+            },
+          ];
+        })
+      : ([] as Array<{ reason: string; count: number }>),
+  };
+}
+
 export async function promoteExperimentApi(
   brandId: string,
   experimentId: string,
@@ -816,6 +863,18 @@ export async function fetchConversationPreviewLeadsApi(
             provider: "emailfinder.batch",
             error: "",
           },
+  };
+}
+
+export async function fetchExperimentSendableLeadSummaryApi(brandId: string, experimentId: string) {
+  const response = await fetch(
+    `/api/brands/${brandId}/experiments/${experimentId}/sendable-leads`,
+    { cache: "no-store" }
+  );
+  const data = await readJson(response);
+  return {
+    sendableLeadCount: Math.max(0, Number(data.sendableLeadCount ?? 0) || 0),
+    runsChecked: Math.max(0, Number(data.runsChecked ?? 0) || 0),
   };
 }
 

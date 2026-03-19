@@ -383,6 +383,14 @@ export default function LiveProspectTableEmbed({
           ...current,
           title: String(payload.tableTitle ?? current.title ?? "").trim(),
           prompt: String(payload.discoveryPrompt ?? current.prompt ?? "").trim(),
+          rowCount: Math.max(0, Number(payload.rowCount ?? current.rowCount ?? 0) || 0),
+          hasRows:
+            Math.max(0, Number(payload.rowCount ?? current.rowCount ?? 0) || 0) > 0 ||
+            current.hasRows,
+          statusMessage:
+            Math.max(0, Number(payload.rowCount ?? current.rowCount ?? 0) || 0) > 0
+              ? "Saved leads restored."
+              : current.statusMessage,
         }));
       })
       .catch((error) => {

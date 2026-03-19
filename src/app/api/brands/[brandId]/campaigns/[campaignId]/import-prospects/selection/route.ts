@@ -277,6 +277,8 @@ export async function POST(
     maxCandidates: 12,
     maxCredits: 7,
     concurrency: 3,
+    allowBestGuessFallback: true,
+    minBestGuessPValid: 0.58,
   });
 
   const parseErrors = [...parsed.errors];
@@ -289,7 +291,7 @@ export async function POST(
     const email = extractFirstEmailAddress(lead.email);
     if (!email) {
       const label = candidate?.lead.name || candidate?.lead.company || candidate?.lead.domain || "this row";
-      parseErrors.push(`Row ${candidate?.rowNumber ?? index + 1}: no verified work email for ${label}.`);
+      parseErrors.push(`Row ${candidate?.rowNumber ?? index + 1}: no usable work email for ${label}.`);
       return [];
     }
 
@@ -309,7 +311,7 @@ export async function POST(
     return NextResponse.json(
       {
         error: "No prospects were imported.",
-        hint: "The selected rows did not produce any verified work emails.",
+        hint: "The selected rows did not produce any usable work emails.",
         parseErrors: parseErrors.slice(0, 20),
       },
       { status: 400 }

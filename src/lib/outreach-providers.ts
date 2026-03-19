@@ -684,13 +684,25 @@ export function resolveEmailFinderApiBaseUrl(explicit?: string) {
   return "";
 }
 
-function parseEmailFinderBestGuessEmail(result: unknown) {
+function parseEmailFinderBestGuessEmail(
+  result: unknown,
+  options: {
+    allowBestGuessFallback?: boolean;
+    minFallbackPValid?: number;
+  } = {}
+) {
   const root = coerceRecord(result);
   const routing = coerceRecord(root.routing);
   const queues = coerceRecord(routing.queues);
   const eligible = Array.isArray(queues.eligible_send_now) ? queues.eligible_send_now : [];
   const risky = Array.isArray(queues.risky_queue) ? queues.risky_queue : [];
+  const review = Array.isArray(queues.review_queue) ? queues.review_queue : [];
   const attempts = Array.isArray(root.attempts) ? root.attempts : [];
+  const allowBestGuessFallback = options.allowBestGuessFallback === true;
+  const minFallbackPValid = Math.max(
+    0,
+    Math.min(1, Number(options.minFallbackPValid ?? 0.58) || 0.58)
+  );
 
   const toCandidate = (row: unknown) => {
     const candidate = coerceRecord(row);
@@ -765,6 +777,33 @@ function parseEmailFinderBestGuessEmail(result: unknown) {
     };
   }
 
+  if (allowBestGuessFallback) {
+    const fallbackCandidateRows = [...review, root.best_guess, ...attempts];
+    const fallbackCandidates = fallbackCandidateRows
+      .map(toCandidate)
+      .filter((candidate) => {
+        if (!candidate.email) return false;
+        if (candidate.verdict === "invalid") return false;
+        return candidate.pValid >= minFallbackPValid;
+      })
+      .sort((left, right) => {
+        const pValidDelta = right.pValid - left.pValid;
+        if (pValidDelta !== 0) return pValidDelta;
+        const confidenceDelta = confidenceScore(right.confidence) - confidenceScore(left.confidence);
+        if (confidenceDelta !== 0) return confidenceDelta;
+        return left.attempt - right.attempt;
+      });
+
+    for (const candidate of fallbackCandidates) {
+      const suppressionReason = getLeadEmailSuppressionReason(candidate.email);
+      if (suppressionReason) continue;
+      return {
+        email: candidate.email,
+        realVerifiedEmail: false,
+      };
+    }
+  }
+
   return {
     email: "",
     realVerifiedEmail: false,
@@ -834,6 +873,8 @@ export async function enrichLeadsWithEmailFinderBatch(params: {
   maxCredits?: number;
   timeoutMs?: number;
   concurrency?: number;
+  allowBestGuessFallback?: boolean;
+  minBestGuessPValid?: number;
 }): Promise<EmailFinderBatchEnrichmentResult> {
   const apiBaseUrl = resolveEmailFinderApiBaseUrl(params.apiBaseUrl);
   if (!apiBaseUrl) {
@@ -1043,7 +1084,10 @@ export async function enrichLeadsWithEmailFinderBatch(params: {
         continue;
       }
 
-      const resolved = parseEmailFinderBestGuessEmail(item.result);
+      const resolved = parseEmailFinderBestGuessEmail(item.result, {
+        allowBestGuessFallback: params.allowBestGuessFallback,
+        minFallbackPValid: params.minBestGuessPValid,
+      });
       if (!resolved.email) {
         failed += 1;
         const summary = summarizeNoHitFromBatchResult(item.result);

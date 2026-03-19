@@ -335,6 +335,8 @@ export async function importExperimentProspectRows(input: {
     maxCandidates: 12,
     maxCredits: 7,
     concurrency: 3,
+    allowBestGuessFallback: true,
+    minBestGuessPValid: 0.58,
   });
 
   const parseErrors = [...parsed.errors];
@@ -347,7 +349,7 @@ export async function importExperimentProspectRows(input: {
     const email = extractFirstEmailAddress(lead.email);
     if (!email) {
       const label = candidate?.lead.name || candidate?.lead.company || candidate?.lead.domain || "this row";
-      parseErrors.push(`Row ${candidate?.rowNumber ?? index + 1}: no verified work email for ${label}.`);
+      parseErrors.push(`Row ${candidate?.rowNumber ?? index + 1}: no usable work email for ${label}.`);
       return [];
     }
 

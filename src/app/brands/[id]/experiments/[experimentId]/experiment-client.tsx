@@ -316,7 +316,7 @@ function summarizeSendableLeadResolution(
   ) {
     return {
       status: "attention",
-      message: "Most saved prospects still do not resolve to a verified work email. Refine the targeting or keep sourcing more companies.",
+      message: "Most saved prospects still do not resolve to a usable work email. Refine the targeting or keep sourcing more companies.",
       lastUpdatedAt: now,
       readyCount: result.sendableLeadCount,
       retryable: false,

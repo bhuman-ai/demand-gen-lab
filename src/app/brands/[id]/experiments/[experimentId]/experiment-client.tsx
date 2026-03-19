@@ -2176,6 +2176,9 @@ export default function ExperimentClient({
   const prospectTableSettings = {
     oneContactPerCompany: oneContactPerCompanyEnabled,
   };
+  const prospectInitialPrompt = String(
+    prospectTablePrompt || experiment?.audience || experiment?.offer || experiment?.name || ""
+  ).trim();
   const saveProspectTableSettings = async (next: { oneContactPerCompany: boolean }) => {
     const updated = await updateExperimentApi(brandId, experiment.id, {
       testEnvelope: {
@@ -2191,7 +2194,9 @@ export default function ExperimentClient({
         initPath={`/api/brands/${brandId}/experiments/${experiment.id}/prospect-table`}
         importPath={`/api/brands/${brandId}/experiments/${experiment.id}/import-prospects/selection`}
         goalCount={PROSPECT_VALIDATION_TARGET}
-      settings={prospectTableSettings}
+        initialPrompt={prospectInitialPrompt}
+        targetingLocked
+        settings={prospectTableSettings}
         onReviewApproved={approveProspectsAndContinue}
         onSettingsChange={saveProspectTableSettings}
         onTableStateChange={({ rowCount, prompt }) => {
@@ -2296,6 +2301,8 @@ export default function ExperimentClient({
               initPath={`/api/brands/${brandId}/experiments/${experiment.id}/prospect-table`}
               importPath={`/api/brands/${brandId}/experiments/${experiment.id}/import-prospects/selection`}
               goalCount={PROSPECT_VALIDATION_TARGET}
+              initialPrompt={prospectInitialPrompt}
+              targetingLocked
               settings={prospectTableSettings}
               onReviewApproved={() => {
                 navigateToStage(2);

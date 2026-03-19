@@ -73,6 +73,8 @@ type LiveProspectTableEmbedProps = {
   initPath: string;
   importPath: string;
   goalCount?: number;
+  initialPrompt?: string;
+  targetingLocked?: boolean;
   settings?: {
     oneContactPerCompany: boolean;
   };
@@ -237,6 +239,8 @@ export default function LiveProspectTableEmbed({
   initPath,
   importPath,
   goalCount = DEFAULT_GOAL_COUNT,
+  initialPrompt = "",
+  targetingLocked = false,
   settings,
   onReviewApproved,
   onSettingsChange,
@@ -266,7 +270,7 @@ export default function LiveProspectTableEmbed({
   const [loadingConfig, setLoadingConfig] = useState(true);
   const [allowLiveTable, setAllowLiveTable] = useState(false);
   const [reviewApproved, setReviewApproved] = useState(false);
-  const [promptDraft, setPromptDraft] = useState("");
+  const [promptDraft, setPromptDraft] = useState(() => String(initialPrompt || "").trim());
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsSaving, setSettingsSaving] = useState(false);
   const [oneContactPerCompanyDraft, setOneContactPerCompanyDraft] = useState(
@@ -394,9 +398,11 @@ export default function LiveProspectTableEmbed({
     };
   }, [initPath]);
 
+  const normalizedInitialPrompt = String(initialPrompt || "").trim();
+
   useEffect(() => {
-    setPromptDraft(tableState.prompt);
-  }, [tableState.prompt]);
+    setPromptDraft(tableState.prompt || normalizedInitialPrompt);
+  }, [normalizedInitialPrompt, tableState.prompt]);
 
   useEffect(() => {
     setOneContactPerCompanyDraft(settings?.oneContactPerCompany ?? true);
@@ -667,7 +673,7 @@ export default function LiveProspectTableEmbed({
   const tableBusy = tableState.isDiscovering || tableState.isEnriching || tableState.isLiveRunning;
   const normalizedPromptDraft = promptDraft.trim();
   const normalizedTablePrompt = tableState.prompt.trim();
-  const promptForSearch = normalizedTablePrompt || normalizedPromptDraft;
+  const promptForSearch = normalizedTablePrompt || normalizedPromptDraft || normalizedInitialPrompt;
   const hasPrompt = Boolean(promptForSearch);
   const promptDirty = Boolean(normalizedPromptDraft && normalizedPromptDraft !== normalizedTablePrompt);
   const reviewStorageKey = useMemo(
@@ -843,7 +849,7 @@ export default function LiveProspectTableEmbed({
 
     autoSearchPromptRef.current = promptForSearch;
     sendHostCommand("set-active-tab", { tab: "search" });
-    if (normalizedPromptDraft && normalizedPromptDraft !== normalizedTablePrompt) {
+    if (promptForSearch && promptForSearch !== normalizedTablePrompt) {
       sendHostCommand("set-prompt", { prompt: promptForSearch });
     }
     sendHostCommand("run-search", { limit: goalCount });
@@ -881,7 +887,7 @@ export default function LiveProspectTableEmbed({
 
     lastAutoSearchResumeSignatureRef.current = autoSearchResumeSignature;
     sendHostCommand("set-active-tab", { tab: "search" });
-    if (normalizedPromptDraft && normalizedPromptDraft !== normalizedTablePrompt) {
+    if (promptForSearch && promptForSearch !== normalizedTablePrompt) {
       sendHostCommand("set-prompt", { prompt: promptForSearch });
     }
     sendHostCommand("run-search", { limit: goalCount });
@@ -935,7 +941,7 @@ export default function LiveProspectTableEmbed({
 
     lastStallRetrySignatureRef.current = retrySignature;
     sendHostCommand("set-active-tab", { tab: "search" });
-    if (normalizedPromptDraft && normalizedPromptDraft !== normalizedTablePrompt) {
+    if (promptForSearch && promptForSearch !== normalizedTablePrompt) {
       sendHostCommand("set-prompt", { prompt: promptForSearch });
     }
     sendHostCommand("run-search", { limit: goalCount });
@@ -1058,8 +1064,8 @@ export default function LiveProspectTableEmbed({
               sendHostCommand("run-search", { limit: goalCount });
             }}
             placeholder="Find self-funded SaaS founders who might want AWS credits"
-            readOnly={searchLocked}
-            aria-readonly={searchLocked}
+            readOnly={searchLocked || targetingLocked}
+            aria-readonly={searchLocked || targetingLocked}
             className="h-12 flex-1 rounded-[14px] border-[color:var(--border)] bg-[color:var(--surface-muted)] text-[color:var(--foreground)] placeholder:text-[color:var(--muted-foreground)] shadow-none focus-visible:ring-[color:var(--accent-border)] read-only:cursor-not-allowed read-only:opacity-85"
           />
           <div className="flex flex-wrap gap-2">
@@ -1089,22 +1095,24 @@ export default function LiveProspectTableEmbed({
                 >
                   Looks good
                 </Button>
-                <Button
-                  type="button"
-                  variant="outline"
-                  className="border-[color:var(--border)] bg-[color:var(--surface)] text-[color:var(--foreground)] hover:bg-[color:var(--surface-muted)]"
-                  onClick={() => {
-                    if (typeof window !== "undefined" && reviewStorageKey) {
-                      window.localStorage.removeItem(reviewStorageKey);
-                    }
-                    setReviewApproved(false);
-                    promptInputRef.current?.focus();
-                  }}
-                >
-                  Edit targeting
-                </Button>
+                {!targetingLocked ? (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="border-[color:var(--border)] bg-[color:var(--surface)] text-[color:var(--foreground)] hover:bg-[color:var(--surface-muted)]"
+                    onClick={() => {
+                      if (typeof window !== "undefined" && reviewStorageKey) {
+                        window.localStorage.removeItem(reviewStorageKey);
+                      }
+                      setReviewApproved(false);
+                      promptInputRef.current?.focus();
+                    }}
+                  >
+                    Edit targeting
+                  </Button>
+                ) : null}
               </>
-            ) : promptDirty && !searchLocked ? (
+            ) : promptDirty && !searchLocked && !targetingLocked ? (
               <Button
                 type="button"
                 size="lg"
@@ -1123,7 +1131,7 @@ export default function LiveProspectTableEmbed({
                 <Search className="h-4 w-4" />
                 Apply changes
               </Button>
-            ) : !searchLocked ? (
+            ) : !searchLocked && !targetingLocked ? (
               <Button
                 type="button"
                 size="lg"

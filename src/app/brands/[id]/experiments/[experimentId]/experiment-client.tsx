@@ -309,16 +309,6 @@ function summarizeSendableLeadResolution(
     };
   }
 
-  if (result.sendableLeadCount > 0) {
-    return {
-      status: "resolving",
-      message: `Still checking work emails in the background: ${result.sendableLeadCount}/${result.targetCount} ready.`,
-      lastUpdatedAt: now,
-      readyCount: result.sendableLeadCount,
-      retryable: true,
-    };
-  }
-
   if (result.queryExhausted) {
     return {
       status: "attention",
@@ -326,6 +316,16 @@ function summarizeSendableLeadResolution(
       lastUpdatedAt: now,
       readyCount: result.sendableLeadCount,
       retryable: false,
+    };
+  }
+
+  if (result.sendableLeadCount > 0) {
+    return {
+      status: "resolving",
+      message: `Still checking work emails in the background: ${result.sendableLeadCount}/${result.targetCount} ready.`,
+      lastUpdatedAt: now,
+      readyCount: result.sendableLeadCount,
+      retryable: true,
     };
   }
 

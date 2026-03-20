@@ -284,6 +284,8 @@ function mapExperimentStatusFromRun(input: {
   hasAudience: boolean;
   promotedCampaignId: string;
   runStatus?: string;
+  scheduledMessages?: number;
+  sentMessages?: number;
 }): ExperimentRecord["status"] {
   if (input.currentStatus === "archived") return "archived";
 
@@ -297,7 +299,14 @@ function mapExperimentStatusFromRun(input: {
     return "running";
   }
   if (input.runStatus === "paused") return "paused";
-  if (input.runStatus === "completed") return input.promotedCampaignId ? "promoted" : "completed";
+  if (input.runStatus === "completed") {
+    const scheduledMessages = Math.max(0, Number(input.scheduledMessages ?? 0));
+    const sentMessages = Math.max(0, Number(input.sentMessages ?? 0));
+    if (scheduledMessages === 0 && sentMessages === 0) {
+      return input.promotedCampaignId ? "promoted" : input.hasOffer && input.hasAudience ? "ready" : "draft";
+    }
+    return input.promotedCampaignId ? "promoted" : "completed";
+  }
   if (input.promotedCampaignId) return "promoted";
   return input.hasOffer && input.hasAudience ? "ready" : "draft";
 }
@@ -501,6 +510,8 @@ async function hydrateExperimentRecord(record: ExperimentRecord): Promise<Experi
     hasAudience: Boolean(record.audience.trim()),
     promotedCampaignId: record.promotedCampaignId,
     runStatus: latestRun?.status,
+    scheduledMessages: latestRun?.metrics.scheduledMessages,
+    sentMessages: latestRun?.metrics.sentMessages,
   });
 
   return {

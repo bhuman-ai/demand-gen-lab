@@ -2213,9 +2213,22 @@ export default function ExperimentClient({
         onReviewApproved={approveProspectsAndContinue}
         onSettingsChange={saveProspectTableSettings}
         onTableStateChange={({ rowCount, prompt }) => {
-          setProspectTableRowCount(rowCount);
-          if (prompt) {
-            setProspectTablePrompt(prompt);
+          const normalizedPrompt = String(prompt || "").trim();
+          const currentPrompt = String(prospectTablePrompt || "").trim();
+          const promptChanged = Boolean(normalizedPrompt) && normalizedPrompt !== currentPrompt;
+          const normalizedRowCount = Math.max(0, Number(rowCount || 0));
+
+          setProspectTableRowCount((currentCount) => {
+            if (promptChanged) {
+              return normalizedRowCount;
+            }
+            if (normalizedRowCount === 0 && currentCount > 0) {
+              return currentCount;
+            }
+            return Math.max(currentCount, normalizedRowCount);
+          });
+          if (normalizedPrompt) {
+            setProspectTablePrompt(normalizedPrompt);
           }
         }}
         onImported={async () => {
@@ -2322,7 +2335,13 @@ export default function ExperimentClient({
               }}
               onSettingsChange={saveProspectTableSettings}
               onTableStateChange={({ rowCount }) => {
-                setProspectTableRowCount(rowCount);
+                const normalizedRowCount = Math.max(0, Number(rowCount || 0));
+                setProspectTableRowCount((currentCount) => {
+                  if (normalizedRowCount === 0 && currentCount > 0) {
+                    return currentCount;
+                  }
+                  return Math.max(currentCount, normalizedRowCount);
+                });
               }}
               onImported={async () => {
                 await refresh(false);

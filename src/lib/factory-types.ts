@@ -130,6 +130,7 @@ export type ExperimentRecord = {
 export type ExperimentListItemStatus =
   | "Draft"
   | "Sourcing"
+  | "Preparing"
   | "Ready"
   | "Running"
   | "Paused"
@@ -143,6 +144,7 @@ export type ExperimentListItem = {
   name: string;
   status: ExperimentListItemStatus;
   blockedReason?: string;
+  statusDetail?: string;
   audience: string;
   offer: string;
   owner: string;

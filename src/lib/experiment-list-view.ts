@@ -1,4 +1,5 @@
 import type { ExperimentListItem, ExperimentRecord, OutreachRun } from "@/lib/factory-types";
+import { EXPERIMENT_MIN_VERIFIED_EMAIL_LEADS } from "@/lib/experiment-policy";
 
 function safeDate(input: string) {
   const parsed = Date.parse(input);
@@ -49,7 +50,19 @@ function deriveListStatus(experiment: ExperimentRecord, latestRun: OutreachRun |
     return "Sourcing";
   }
 
-  if (experiment.status === "ready") return "Ready";
+  if (experiment.status === "ready") {
+    const sourcedLeads = normalizeCount(latestRun?.metrics.sourcedLeads);
+    const flowPublished = normalizeCount(experiment.messageFlow.publishedRevision) > 0;
+    const hasStartedSending =
+      normalizeCount(latestRun?.metrics.sentMessages) > 0 ||
+      normalizeCount(experiment.metricsSummary.sent) > 0;
+
+    if (!hasStartedSending && flowPublished && sourcedLeads < EXPERIMENT_MIN_VERIFIED_EMAIL_LEADS) {
+      return "Preparing";
+    }
+
+    return "Ready";
+  }
   return "Draft";
 }
 
@@ -80,6 +93,30 @@ function summarizeBlockedReason(latestRun: OutreachRun | null, experiment: Exper
   }
 
   return `${normalized.slice(0, 137).trimEnd()}...`;
+}
+
+function summarizeStatusDetail(
+  status: ExperimentListItem["status"],
+  experiment: ExperimentRecord,
+  latestRun: OutreachRun | null
+) {
+  if (status === "Preparing") {
+    const sourcedLeads = normalizeCount(latestRun?.metrics.sourcedLeads);
+    const remaining = Math.max(0, EXPERIMENT_MIN_VERIFIED_EMAIL_LEADS - sourcedLeads);
+    if (remaining > 0) {
+      return `Waiting on ${remaining} more contacts before launch.`;
+    }
+    return "Finishing pre-launch checks before sending starts.";
+  }
+
+  if (status === "Ready") {
+    if (normalizeCount(experiment.messageFlow.publishedRevision) > 0) {
+      return "Ready to launch. No active run is sending yet.";
+    }
+    return "Setup is ready, but messaging still needs to be published.";
+  }
+
+  return undefined;
 }
 
 function normalizeCount(value: unknown) {
@@ -125,6 +162,8 @@ export function mapExperimentToListItem(input: {
         ? `/brands/${brandId}/experiments/${experiment.id}/prospects`
         : openHref;
   const blockedReason = status === "Blocked" ? summarizeBlockedReason(latestRun, experiment) : undefined;
+  const statusDetail =
+    status === "Blocked" ? blockedReason : summarizeStatusDetail(status, experiment, latestRun);
 
   return {
     id: experiment.id,
@@ -132,6 +171,7 @@ export function mapExperimentToListItem(input: {
     name: experiment.name,
     status,
     blockedReason,
+    statusDetail,
     audience: experiment.audience,
     offer: experiment.offer,
     owner: "Unassigned",

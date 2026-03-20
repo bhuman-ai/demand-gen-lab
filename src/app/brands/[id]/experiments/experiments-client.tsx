@@ -32,6 +32,7 @@ const STATUS_OPTIONS: Array<"all" | ExperimentListItem["status"]> = [
   "all",
   "Draft",
   "Sourcing",
+  "Preparing",
   "Ready",
   "Running",
   "Paused",
@@ -48,7 +49,7 @@ function statusTone(status: (typeof STATUS_OPTIONS)[number]) {
   if (status === "Running") {
     return "border-[color:var(--success-border)] bg-[color:var(--success-soft)] text-[color:var(--success)]";
   }
-  if (status === "Sourcing" || status === "Ready" || status === "Promoted") {
+  if (status === "Sourcing" || status === "Preparing" || status === "Ready" || status === "Promoted") {
     return "border-[color:var(--accent-border)] bg-[color:var(--accent-soft)] text-[color:var(--accent)]";
   }
   if (status === "Paused") {
@@ -392,9 +393,9 @@ export default function ExperimentsClient({
                                     ? "bg-[color:var(--warning)]"
                                     : item.status === "Blocked"
                                       ? "bg-[color:var(--danger)]"
-                                      : item.status === "Sourcing" || item.status === "Ready" || item.status === "Promoted"
-                                        ? "bg-[color:var(--accent)]"
-                                        : "bg-[color:var(--border)]"
+                                        : item.status === "Sourcing" || item.status === "Preparing" || item.status === "Ready" || item.status === "Promoted"
+                                          ? "bg-[color:var(--accent)]"
+                                          : "bg-[color:var(--border)]"
                               )}
                             />
                             <span>{item.name}</span>
@@ -403,7 +404,7 @@ export default function ExperimentsClient({
                         <td className="py-2 pr-4 align-top">
                         <Badge
                           className={statusTone(item.status)}
-                          title={item.status === "Blocked" ? item.blockedReason : undefined}
+                          title={item.statusDetail}
                         >
                           {item.status}
                         </Badge>

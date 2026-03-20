@@ -237,18 +237,10 @@ function mergeEmbeddedTableState(
   const currentPrompt = current.prompt.trim();
   const incomingPrompt = incoming.prompt.trim();
   const resolvedPrompt = incomingPrompt || currentPrompt || fallbackPrompt.trim();
-  const promptChanged =
-    Boolean(incomingPrompt) && Boolean(currentPrompt) && incomingPrompt !== currentPrompt;
-  const protectsExistingRows =
-    current.rowCount > 0 &&
-    incoming.rowCount === 0 &&
-    (!incomingPrompt || incomingPrompt === currentPrompt);
-
+  const protectsExistingRows = current.rowCount > 0 && incoming.rowCount < current.rowCount;
   const resolvedRowCount = protectsExistingRows
     ? current.rowCount
-    : promptChanged
-      ? incoming.rowCount
-      : Math.max(current.rowCount, incoming.rowCount);
+    : Math.max(current.rowCount, incoming.rowCount);
   const resolvedHasRows =
     resolvedRowCount > 0 || current.hasRows || incoming.hasRows;
 
@@ -310,6 +302,7 @@ export default function LiveProspectTableEmbed({
   const [iframeError, setIframeError] = useState("");
   const [loadingConfig, setLoadingConfig] = useState(true);
   const [allowLiveTable, setAllowLiveTable] = useState(false);
+  const [serverSeedRowCount, setServerSeedRowCount] = useState(0);
   const [reviewApproved, setReviewApproved] = useState(false);
   const [promptDraft, setPromptDraft] = useState(() => String(initialPrompt || "").trim());
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -351,6 +344,7 @@ export default function LiveProspectTableEmbed({
     const serverTitle = String(payload.tableTitle ?? "").trim();
 
     setAllowLiveTable(Boolean(payload.enabled));
+    setServerSeedRowCount((current) => Math.max(current, serverRowCount));
     setTableState((current) => ({
       ...current,
       title: serverTitle || current.title,
@@ -745,21 +739,23 @@ export default function LiveProspectTableEmbed({
     () => (promptForSearch ? `lastb2b:prospects-review:${initPath}:${promptForSearch}` : ""),
     [initPath, promptForSearch]
   );
-  const reviewPending = tableState.rowCount >= REVIEW_CHECKPOINT_ROWS && !reviewApproved;
   const lastSuccessMs = tableState.lastSuccessAt ? Date.parse(tableState.lastSuccessAt) : 0;
   const secondsSinceLastSuccess =
     lastSuccessMs > 0 ? Math.max(0, Math.floor((statusNow - lastSuccessMs) / 1000)) : null;
-  const searchUnderGoal = hasPrompt && !reviewApproved && tableState.rowCount < goalCount;
-  const searchLocked = hasPrompt && !reviewApproved && tableState.rowCount < goalCount;
+  const visibleRowCount = Math.max(tableState.rowCount, serverSeedRowCount);
+  const hasVisibleRows = visibleRowCount > 0 || tableState.hasRows;
+  const reviewPending = visibleRowCount >= REVIEW_CHECKPOINT_ROWS && !reviewApproved;
+  const searchUnderGoal = hasPrompt && !reviewApproved && visibleRowCount < goalCount;
+  const searchLocked = hasPrompt && !reviewApproved && visibleRowCount < goalCount;
   const autoImportSignature = [
     normalizedTablePrompt,
-    tableState.rowCount,
+    visibleRowCount,
     tableState.lastSuccessAt,
     tableState.lastRowsAppended,
   ].join("|");
   const autoSearchResumeSignature = [
     promptForSearch,
-    tableState.rowCount,
+    visibleRowCount,
     tableState.lastSuccessAt,
     tableState.lastRowsAppended,
   ].join("|");
@@ -773,24 +769,24 @@ export default function LiveProspectTableEmbed({
           : "Waiting"
         : reviewApproved
           ? "Approved"
-          : tableState.rowCount >= goalCount
+          : visibleRowCount >= goalCount
             ? "Ready"
             : "Waiting";
   const waitingForFirstResults =
     hasPrompt &&
-    tableState.rowCount === 0 &&
+    visibleRowCount === 0 &&
     (tableBusy || searchUnderGoal || reviewApproved);
-  const progressPercent = goalCount > 0 ? Math.min(100, (tableState.rowCount / goalCount) * 100) : 0;
+  const progressPercent = goalCount > 0 ? Math.min(100, (visibleRowCount / goalCount) * 100) : 0;
   const progressFillPercent = searchLocked
-    ? Math.max(progressPercent, tableState.rowCount > 0 ? 12 : 6)
+    ? Math.max(progressPercent, visibleRowCount > 0 ? 12 : 6)
     : progressPercent;
   const progressLabel = reviewPending
-    ? `${tableState.rowCount} / ${goalCount} ready to review`
-    : `${tableState.rowCount} / ${goalCount}`;
+    ? `${visibleRowCount} / ${goalCount} ready to review`
+    : `${visibleRowCount} / ${goalCount}`;
   const progressMetaLabel = reviewPending
     ? "Review leads"
     : searchLocked
-      ? tableState.rowCount === 0
+      ? visibleRowCount === 0
         ? "Finding first leads"
         : tableBusy
           ? "Searching"
@@ -798,10 +794,10 @@ export default function LiveProspectTableEmbed({
           ? "Trying again"
           : "Working"
       : reviewApproved
-        ? tableState.rowCount === 0
+        ? visibleRowCount === 0
           ? "Loading leads"
           : "Approved"
-        : tableState.rowCount >= goalCount
+        : visibleRowCount >= goalCount
         ? "Ready"
         : "Waiting";
   const settingsDirty = oneContactPerCompanyDraft !== (settings?.oneContactPerCompany ?? true);
@@ -827,7 +823,7 @@ export default function LiveProspectTableEmbed({
   useEffect(() => {
     Promise.resolve(
       onTableStateChange?.({
-        rowCount: tableState.rowCount,
+        rowCount: visibleRowCount,
         isSearching: tableBusy,
         prompt: normalizedTablePrompt || normalizedPromptDraft,
         lastSuccessAt: tableState.lastSuccessAt,
@@ -841,7 +837,7 @@ export default function LiveProspectTableEmbed({
     normalizedTablePrompt,
     onTableStateChange,
     tableBusy,
-    tableState.rowCount,
+    visibleRowCount,
   ]);
 
   useEffect(() => {
@@ -904,8 +900,8 @@ export default function LiveProspectTableEmbed({
       reviewApproved ||
       !hasPrompt ||
       tableBusy ||
-      tableState.rowCount > 0 ||
-      tableState.rowCount >= goalCount
+      visibleRowCount > 0 ||
+      visibleRowCount >= goalCount
     ) {
       return;
     }
@@ -931,7 +927,7 @@ export default function LiveProspectTableEmbed({
     reviewApproved,
     sendHostCommand,
     tableBusy,
-    tableState.rowCount,
+    visibleRowCount,
   ]);
 
   useEffect(() => {
@@ -942,8 +938,8 @@ export default function LiveProspectTableEmbed({
       reviewApproved ||
       !hasPrompt ||
       tableBusy ||
-      tableState.rowCount <= 0 ||
-      tableState.rowCount >= goalCount
+      visibleRowCount <= 0 ||
+      visibleRowCount >= goalCount
     ) {
       return;
     }
@@ -959,7 +955,7 @@ export default function LiveProspectTableEmbed({
     }
     sendHostCommand("run-search", { limit: goalCount });
     pushActivity(
-      `AI found ${tableState.rowCount} lead${tableState.rowCount === 1 ? "" : "s"} so far and is looking for more.`,
+      `AI found ${visibleRowCount} lead${visibleRowCount === 1 ? "" : "s"} so far and is looking for more.`,
       "neutral"
     );
   }, [
@@ -974,7 +970,7 @@ export default function LiveProspectTableEmbed({
     reviewApproved,
     sendHostCommand,
     tableBusy,
-      tableState.rowCount,
+    visibleRowCount,
   ]);
 
   useEffect(() => {
@@ -986,19 +982,19 @@ export default function LiveProspectTableEmbed({
       !hasPrompt ||
       promptDirty ||
       tableBusy ||
-      tableState.rowCount >= goalCount
+      visibleRowCount >= goalCount
     ) {
       return;
     }
 
-    const noProgressThresholdSeconds = tableState.rowCount > 0 ? 30 : 18;
+    const noProgressThresholdSeconds = visibleRowCount > 0 ? 30 : 18;
     if (secondsSinceLastSuccess === null || secondsSinceLastSuccess < noProgressThresholdSeconds) {
       return;
     }
 
     const retrySignature = [
       promptForSearch,
-      tableState.rowCount,
+      visibleRowCount,
       tableState.lastSuccessAt || "none",
     ].join("|");
 
@@ -1013,7 +1009,7 @@ export default function LiveProspectTableEmbed({
     }
     sendHostCommand("run-search", { limit: goalCount });
     pushActivity(
-      tableState.rowCount > 0
+      visibleRowCount > 0
         ? `No new leads for ${formatElapsedLabel(secondsSinceLastSuccess)}. Trying another search pass.`
         : "Still waiting for the first leads. Trying another search pass.",
       "warning"
@@ -1032,7 +1028,7 @@ export default function LiveProspectTableEmbed({
     sendHostCommand,
     tableBusy,
     tableState.lastSuccessAt,
-    tableState.rowCount,
+    visibleRowCount,
   ]);
 
   useEffect(() => {
@@ -1044,7 +1040,7 @@ export default function LiveProspectTableEmbed({
   }, [allowLiveTable, iframeReady, sendHostCommand, tableBusy, tableState.liveEnabled]);
 
   useEffect(() => {
-    if (!reviewApproved || !iframeReady || importState.status === "importing" || tableBusy || !tableState.hasRows) {
+    if (!reviewApproved || !iframeReady || importState.status === "importing" || tableBusy || !hasVisibleRows) {
       return;
     }
 
@@ -1067,14 +1063,14 @@ export default function LiveProspectTableEmbed({
     requestImport,
     reviewApproved,
     tableBusy,
-    tableState.hasRows,
+    hasVisibleRows,
     tableState.lastRowsAppended,
     tableState.lastSuccessAt,
-    tableState.rowCount,
+    visibleRowCount,
   ]);
 
   useEffect(() => {
-    if (loadingConfig || iframeError || tableState.rowCount > 0) {
+    if (loadingConfig || iframeError || visibleRowCount > 0) {
       return;
     }
 
@@ -1094,7 +1090,7 @@ export default function LiveProspectTableEmbed({
     iframeError,
     loadingConfig,
     refreshTableStateFromServer,
-    tableState.rowCount,
+    visibleRowCount,
   ]);
 
   if (loadingConfig) {
@@ -1213,6 +1209,14 @@ export default function LiveProspectTableEmbed({
                     window.localStorage.removeItem(reviewStorageKey);
                   }
                   setReviewApproved(false);
+                  setServerSeedRowCount(0);
+                  setTableState((current) => ({
+                    ...current,
+                    rowCount: 0,
+                    hasRows: false,
+                    lastRowsAppended: 0,
+                    lastSuccessAt: "",
+                  }));
                   sendHostCommand("set-prompt", { prompt: normalizedPromptDraft });
                   sendHostCommand("set-active-tab", { tab: "search" });
                   sendHostCommand("run-search", { limit: goalCount });

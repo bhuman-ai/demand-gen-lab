@@ -9,8 +9,11 @@ import { Input } from "@/components/ui/input";
 const EMBED_READY_MESSAGE_TYPE = "enrichanything:embed-ready";
 const EMBED_STATE_MESSAGE_TYPE = "enrichanything:embed-state";
 const EMBED_IMPORT_MESSAGE_TYPE = "enrichanything:import-table";
-const EMBED_HOST_INIT_MESSAGE_TYPE = "lastb2b:embed-init";
-const EMBED_HOST_COMMAND_MESSAGE_TYPE = "lastb2b:embed-command";
+const EMBED_IMPORT_RESULT_MESSAGE_TYPE = "enrichanything:import-result";
+const EMBED_HOST_INIT_MESSAGE_TYPE = "enrichanything:host-init";
+const EMBED_HOST_COMMAND_MESSAGE_TYPE = "enrichanything:host-command";
+const EMBED_PARTNER_ID = "lastb2b";
+const EMBED_PARTNER_LABEL = "lastb2b";
 const REVIEW_CHECKPOINT_ROWS = 20;
 const DEFAULT_GOAL_COUNT = REVIEW_CHECKPOINT_ROWS;
 
@@ -236,10 +239,16 @@ function mergeEmbeddedTableState(
   const resolvedPrompt = incomingPrompt || currentPrompt || fallbackPrompt.trim();
   const promptChanged =
     Boolean(incomingPrompt) && Boolean(currentPrompt) && incomingPrompt !== currentPrompt;
+  const protectsExistingRows =
+    current.rowCount > 0 &&
+    incoming.rowCount === 0 &&
+    (!incomingPrompt || incomingPrompt === currentPrompt);
 
-  const resolvedRowCount = promptChanged
-    ? incoming.rowCount
-    : Math.max(current.rowCount, incoming.rowCount);
+  const resolvedRowCount = protectsExistingRows
+    ? current.rowCount
+    : promptChanged
+      ? incoming.rowCount
+      : Math.max(current.rowCount, incoming.rowCount);
   const resolvedHasRows =
     resolvedRowCount > 0 || current.hasRows || incoming.hasRows;
 
@@ -407,7 +416,9 @@ export default function LiveProspectTableEmbed({
         embedUrl.searchParams.set("embed", "1");
         embedUrl.searchParams.set("embedShell", "surface");
         embedUrl.searchParams.set("parentOrigin", window.location.origin);
-        embedUrl.searchParams.set("parentLabel", "lastb2b");
+        embedUrl.searchParams.set("partnerId", EMBED_PARTNER_ID);
+        embedUrl.searchParams.set("partnerLabel", EMBED_PARTNER_LABEL);
+        embedUrl.searchParams.set("parentLabel", EMBED_PARTNER_LABEL);
         setIframeSrc(embedUrl.toString());
         setIframeOrigin(embedUrl.origin);
         setAllowLiveTable(Boolean(payload.enabled));
@@ -522,7 +533,7 @@ export default function LiveProspectTableEmbed({
 
       if (!requestId) {
         postResult({
-          type: "lastb2b:import-result",
+          type: EMBED_IMPORT_RESULT_MESSAGE_TYPE,
           ok: false,
           error: "Missing request id.",
         });
@@ -531,7 +542,7 @@ export default function LiveProspectTableEmbed({
 
       if (importBusyRef.current) {
         postResult({
-          type: "lastb2b:import-result",
+          type: EMBED_IMPORT_RESULT_MESSAGE_TYPE,
           requestId,
           ok: false,
           error: "An import is already in progress.",
@@ -547,7 +558,7 @@ export default function LiveProspectTableEmbed({
           mode: null,
         });
         postResult({
-          type: "lastb2b:import-result",
+          type: EMBED_IMPORT_RESULT_MESSAGE_TYPE,
           requestId,
           ok: false,
           error: "No rows were sent from the table.",
@@ -625,7 +636,7 @@ export default function LiveProspectTableEmbed({
         );
 
         postResult({
-          type: "lastb2b:import-result",
+          type: EMBED_IMPORT_RESULT_MESSAGE_TYPE,
           requestId,
           ok: true,
           importedCount,
@@ -659,7 +670,7 @@ export default function LiveProspectTableEmbed({
         });
         pushActivity(message, "danger");
         postResult({
-          type: "lastb2b:import-result",
+          type: EMBED_IMPORT_RESULT_MESSAGE_TYPE,
           requestId,
           ok: false,
           error: message,

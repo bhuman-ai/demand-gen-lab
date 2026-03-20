@@ -121,6 +121,20 @@ function mergeSnapshot(config: ProspectTableConfig, existingSnapshot: unknown = 
   };
 }
 
+function isHostManagedProspectTable(config: ProspectTableConfig) {
+  return config.workspaceId.startsWith("lastb2b_");
+}
+
+function hasQuotaPauseMessage(value: unknown) {
+  const normalized = String(value ?? "").toLowerCase();
+  return (
+    normalized.includes("not enough credits remain") ||
+    normalized.includes("upgrade to resume automatic runs") ||
+    normalized.includes("free trial") ||
+    normalized.includes("credit limit reached")
+  );
+}
+
 async function readJsonSafe(response: Response) {
   try {
     return (await response.json()) as Record<string, unknown>;
@@ -214,6 +228,12 @@ export async function ensureEnrichAnythingProspectTable(config: ProspectTableCon
   if (existingTable) {
     const snapshot = asObject(existingTable.snapshot);
     const liveTable = asObject(snapshot.liveTable);
+    const staleQuotaPause =
+      isHostManagedProspectTable(config) &&
+      (hasQuotaPauseMessage(existingTable.lastError) ||
+        hasQuotaPauseMessage(liveTable.lastError) ||
+        (String(existingTable.lastStatus ?? "").trim().toLowerCase() === "paused" &&
+          hasQuotaPauseMessage(existingTable.lastError || liveTable.lastError)));
     const needsPatch =
       existingTable.enabled !== config.enabled ||
       String(snapshot.discoveryPrompt ?? "").trim() !== config.discoveryPrompt ||
@@ -224,16 +244,28 @@ export async function ensureEnrichAnythingProspectTable(config: ProspectTableCon
       String(liveTable.cadence ?? "").trim() !== config.cadence ||
       Number(liveTable.dailyRowTarget ?? 0) !== config.dailyRowTarget ||
       Number(liveTable.maxRowsPerRun ?? 0) !== config.maxRowsPerRun ||
-      Number(liveTable.overlapHours ?? 0) !== config.overlapHours;
+      Number(liveTable.overlapHours ?? 0) !== config.overlapHours ||
+      staleQuotaPause;
 
     if (needsPatch) {
+      const nextSnapshot = mergeSnapshot(config, existingTable.snapshot);
+      if (staleQuotaPause) {
+        const nextLiveTable = asObject(nextSnapshot.liveTable);
+        nextSnapshot.liveTable = {
+          ...nextLiveTable,
+          enabled: config.enabled,
+          lastStatus: "idle",
+          lastError: "",
+          nextRunAt: config.enabled ? String(nextLiveTable.nextRunAt ?? "").trim() || new Date().toISOString() : null,
+        };
+      }
       const patchResponse = await fetch(`${appUrl}/api/live`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           tableId: config.tableId,
           enabled: config.enabled,
-          snapshot: mergeSnapshot(config, existingTable.snapshot),
+          snapshot: nextSnapshot,
           title: config.tableTitle,
         }),
         cache: "no-store",

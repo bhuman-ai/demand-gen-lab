@@ -7,6 +7,11 @@ import { importExperimentProspectSelectionApi } from "@/lib/client-api";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 
+const EMBED_IMPORT_MESSAGE_TYPE = "enrichanything:import-table";
+const EMBED_IMPORT_RESULT_MESSAGE_TYPE = "enrichanything:import-result";
+const EMBED_PARTNER_ID = "lastb2b";
+const EMBED_PARTNER_LABEL = "lastb2b";
+
 type ImportState =
   | {
       status: "idle";
@@ -73,7 +78,9 @@ function buildStudioUrl(baseUrl: string, parentOrigin: string) {
   url.pathname = `${pathname || ""}/tables/new`;
   url.searchParams.set("embed", "1");
   url.searchParams.set("parentOrigin", parentOrigin);
-  url.searchParams.set("parentLabel", "lastb2b");
+  url.searchParams.set("partnerId", EMBED_PARTNER_ID);
+  url.searchParams.set("partnerLabel", EMBED_PARTNER_LABEL);
+  url.searchParams.set("parentLabel", EMBED_PARTNER_LABEL);
   return url.toString();
 }
 
@@ -152,7 +159,7 @@ export default function LeadFinderEmbed({
       }
 
       const data = asObject(event.data);
-      if (String(data.type ?? "") !== "enrichanything:import-table") {
+      if (String(data.type ?? "") !== EMBED_IMPORT_MESSAGE_TYPE) {
         return;
       }
 
@@ -166,7 +173,7 @@ export default function LeadFinderEmbed({
 
       if (!requestId) {
         postResult({
-          type: "lastb2b:import-result",
+          type: EMBED_IMPORT_RESULT_MESSAGE_TYPE,
           ok: false,
           error: "Missing request id.",
         });
@@ -175,7 +182,7 @@ export default function LeadFinderEmbed({
 
       if (importBusyRef.current) {
         postResult({
-          type: "lastb2b:import-result",
+          type: EMBED_IMPORT_RESULT_MESSAGE_TYPE,
           requestId,
           ok: false,
           error: "An import is already in progress.",
@@ -190,7 +197,7 @@ export default function LeadFinderEmbed({
           parseErrors: [],
         });
         postResult({
-          type: "lastb2b:import-result",
+          type: EMBED_IMPORT_RESULT_MESSAGE_TYPE,
           requestId,
           ok: false,
           error: "No rows were sent from the finder.",
@@ -231,7 +238,7 @@ export default function LeadFinderEmbed({
         });
 
         postResult({
-          type: "lastb2b:import-result",
+          type: EMBED_IMPORT_RESULT_MESSAGE_TYPE,
           requestId,
           ok: true,
           importedCount: result.importedCount,
@@ -261,7 +268,7 @@ export default function LeadFinderEmbed({
           parseErrors: [],
         });
         postResult({
-          type: "lastb2b:import-result",
+          type: EMBED_IMPORT_RESULT_MESSAGE_TYPE,
           requestId,
           ok: false,
           error: message,

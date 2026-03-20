@@ -226,6 +226,38 @@ function normalizeTableState(value: unknown): EmbeddedTableState {
   };
 }
 
+function mergeEmbeddedTableState(
+  current: EmbeddedTableState,
+  incoming: EmbeddedTableState,
+  fallbackPrompt = ""
+): EmbeddedTableState {
+  const currentPrompt = current.prompt.trim();
+  const incomingPrompt = incoming.prompt.trim();
+  const resolvedPrompt = incomingPrompt || currentPrompt || fallbackPrompt.trim();
+  const promptChanged =
+    Boolean(incomingPrompt) && Boolean(currentPrompt) && incomingPrompt !== currentPrompt;
+
+  const resolvedRowCount = promptChanged
+    ? incoming.rowCount
+    : Math.max(current.rowCount, incoming.rowCount);
+  const resolvedHasRows =
+    resolvedRowCount > 0 || current.hasRows || incoming.hasRows;
+
+  return {
+    ...current,
+    ...incoming,
+    title: incoming.title || current.title,
+    prompt: resolvedPrompt,
+    rowCount: resolvedRowCount,
+    hasRows: resolvedHasRows,
+    hasColumns: current.hasColumns || incoming.hasColumns,
+    lastSuccessAt: incoming.lastSuccessAt || current.lastSuccessAt,
+    nextRunAt: incoming.nextRunAt || current.nextRunAt,
+    lastRowsAppended: Math.max(current.lastRowsAppended, incoming.lastRowsAppended),
+    statusMessage: incoming.statusMessage || current.statusMessage,
+  };
+}
+
 async function readJson(response: Response) {
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
@@ -454,19 +486,25 @@ export default function LiveProspectTableEmbed({
 
       if (type === EMBED_READY_MESSAGE_TYPE) {
         setIframeReady(true);
-        setTableState((current) => ({
-          ...current,
-          ...normalizeTableState(data.payload),
-        }));
+        setTableState((current) =>
+          mergeEmbeddedTableState(
+            current,
+            normalizeTableState(data.payload),
+            normalizedInitialPrompt
+          )
+        );
         sendHostInitFromEffect();
         return;
       }
 
       if (type === EMBED_STATE_MESSAGE_TYPE) {
-        setTableState((current) => ({
-          ...current,
-          ...normalizeTableState(data.payload),
-        }));
+        setTableState((current) =>
+          mergeEmbeddedTableState(
+            current,
+            normalizeTableState(data.payload),
+            normalizedInitialPrompt
+          )
+        );
         return;
       }
 
@@ -635,7 +673,7 @@ export default function LiveProspectTableEmbed({
     return () => {
       window.removeEventListener("message", handleMessage);
     };
-  }, [iframeOrigin, importPath, onImported]);
+  }, [iframeOrigin, importPath, normalizedInitialPrompt, onImported]);
 
   useEffect(() => {
     if (!iframeReady) {

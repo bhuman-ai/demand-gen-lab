@@ -223,7 +223,7 @@ export async function ensureEnrichAnythingProspectTable(config: ProspectTableCon
     throw new Error("ENRICHANYTHING_APP_URL is not configured.");
   }
 
-  const existingTable = await readExistingTable(appUrl, config.tableId);
+  let existingTable = await readExistingTable(appUrl, config.tableId);
 
   if (existingTable) {
     const snapshot = asObject(existingTable.snapshot);
@@ -250,13 +250,17 @@ export async function ensureEnrichAnythingProspectTable(config: ProspectTableCon
     if (needsPatch) {
       const nextSnapshot = mergeSnapshot(config, existingTable.snapshot);
       if (staleQuotaPause) {
-        const nextLiveTable = asObject(nextSnapshot.liveTable);
-        nextSnapshot.liveTable = {
+        const nextSnapshotRecord = nextSnapshot as Record<string, unknown>;
+        const nextLiveTable = asObject(nextSnapshotRecord.liveTable);
+        nextSnapshotRecord.liveTable = {
           ...nextLiveTable,
           enabled: config.enabled,
           lastStatus: "idle",
           lastError: "",
-          nextRunAt: config.enabled ? String(nextLiveTable.nextRunAt ?? "").trim() || new Date().toISOString() : null,
+          nextRunAt:
+            config.enabled
+              ? String(nextLiveTable.nextRunAt ?? "").trim() || new Date().toISOString()
+              : null,
         };
       }
       const patchResponse = await fetch(`${appUrl}/api/live`, {
@@ -274,6 +278,7 @@ export async function ensureEnrichAnythingProspectTable(config: ProspectTableCon
         const patchPayload = await readJsonSafe(patchResponse);
         throw new Error(String(patchPayload.error ?? "Failed to update EnrichAnything prospect table."));
       }
+      existingTable = await readExistingTable(appUrl, config.tableId);
     }
 
     return {

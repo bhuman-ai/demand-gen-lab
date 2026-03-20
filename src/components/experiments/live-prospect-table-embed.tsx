@@ -343,6 +343,29 @@ export default function LiveProspectTableEmbed({
     mode: null,
   });
 
+  const refreshTableStateFromServer = useCallback(async () => {
+    const response = await fetch(initPath, { cache: "no-store" });
+    const payload = await readJson(response);
+    const serverRowCount = Math.max(0, Number(payload.rowCount ?? 0) || 0);
+    const serverPrompt = String(payload.discoveryPrompt ?? "").trim();
+    const serverTitle = String(payload.tableTitle ?? "").trim();
+
+    setAllowLiveTable(Boolean(payload.enabled));
+    setTableState((current) => ({
+      ...current,
+      title: serverTitle || current.title,
+      prompt: serverPrompt || current.prompt,
+      rowCount: Math.max(current.rowCount, serverRowCount),
+      hasRows: current.hasRows || serverRowCount > 0,
+      statusMessage:
+        serverRowCount > 0
+          ? "Saved leads restored."
+          : current.statusMessage,
+    }));
+
+    return payload;
+  }, [initPath]);
+
   const pushActivity = (message: string, tone: ActivityTone = "neutral") => {
     const trimmed = message.trim();
     if (!trimmed) return;
@@ -403,8 +426,7 @@ export default function LiveProspectTableEmbed({
     lastAutoSearchResumeSignatureRef.current = "";
     lastAutoImportSignatureRef.current = "";
     lastStallRetrySignatureRef.current = "";
-    void fetch(initPath, { cache: "no-store" })
-      .then((response) => readJson(response))
+    void refreshTableStateFromServer()
       .then((payload) => {
         if (canceled) return;
         const appUrl = String(payload.appUrl ?? "").trim().replace(/\/+$/, "");
@@ -421,20 +443,6 @@ export default function LiveProspectTableEmbed({
         embedUrl.searchParams.set("parentLabel", EMBED_PARTNER_LABEL);
         setIframeSrc(embedUrl.toString());
         setIframeOrigin(embedUrl.origin);
-        setAllowLiveTable(Boolean(payload.enabled));
-        setTableState((current) => ({
-          ...current,
-          title: String(payload.tableTitle ?? current.title ?? "").trim(),
-          prompt: String(payload.discoveryPrompt ?? current.prompt ?? "").trim(),
-          rowCount: Math.max(0, Number(payload.rowCount ?? current.rowCount ?? 0) || 0),
-          hasRows:
-            Math.max(0, Number(payload.rowCount ?? current.rowCount ?? 0) || 0) > 0 ||
-            current.hasRows,
-          statusMessage:
-            Math.max(0, Number(payload.rowCount ?? current.rowCount ?? 0) || 0) > 0
-              ? "Saved leads restored."
-              : current.statusMessage,
-        }));
       })
       .catch((error) => {
         if (canceled) return;
@@ -447,7 +455,7 @@ export default function LiveProspectTableEmbed({
     return () => {
       canceled = true;
     };
-  }, [initPath]);
+  }, [refreshTableStateFromServer]);
 
   const normalizedInitialPrompt = String(initialPrompt || "").trim();
 
@@ -1062,6 +1070,30 @@ export default function LiveProspectTableEmbed({
     tableState.hasRows,
     tableState.lastRowsAppended,
     tableState.lastSuccessAt,
+    tableState.rowCount,
+  ]);
+
+  useEffect(() => {
+    if (loadingConfig || iframeError || tableState.rowCount > 0) {
+      return;
+    }
+
+    let canceled = false;
+    const intervalId = window.setInterval(() => {
+      void refreshTableStateFromServer().catch(() => undefined);
+    }, 5000);
+
+    void refreshTableStateFromServer().catch(() => undefined);
+
+    return () => {
+      canceled = true;
+      window.clearInterval(intervalId);
+      void canceled;
+    };
+  }, [
+    iframeError,
+    loadingConfig,
+    refreshTableStateFromServer,
     tableState.rowCount,
   ]);
 

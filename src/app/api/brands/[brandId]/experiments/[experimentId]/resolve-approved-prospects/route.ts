@@ -2,8 +2,8 @@ import { NextResponse } from "next/server";
 import { getExperimentRecordById } from "@/lib/experiment-data";
 import {
   buildExperimentProspectTableConfig,
+  ensureEnrichAnythingProspectTable,
   getEnrichAnythingProspectTableRows,
-  getEnrichAnythingProspectTableState,
   runEnrichAnythingProspectTable,
 } from "@/lib/enrichanything-live-table";
 import {
@@ -15,6 +15,22 @@ import { EXPERIMENT_MIN_VERIFIED_EMAIL_LEADS } from "@/lib/experiment-policy";
 
 const TARGET_SENDABLE_CONTACTS = EXPERIMENT_MIN_VERIFIED_EMAIL_LEADS;
 const LIVE_TOP_UP_MIN_INTERVAL_MS = 20_000;
+
+function isHostManagedWorkspace(workspaceId: string) {
+  return workspaceId.startsWith("lastb2b_");
+}
+
+function hasQuotaLikeTopUpError(message: string) {
+  const normalized = String(message).toLowerCase();
+  return (
+    normalized.includes("credit") ||
+    normalized.includes("quota") ||
+    normalized.includes("free trial") ||
+    normalized.includes("upgrade to resume automatic runs") ||
+    normalized.includes("this managed workspace") ||
+    normalized.includes("not enough credits remain")
+  );
+}
 
 function emptyImportResult(): ImportExperimentProspectRowsResult {
   return {
@@ -44,7 +60,8 @@ export async function POST(
 
   try {
     const config = buildExperimentProspectTableConfig(experiment);
-    let tableState = await getEnrichAnythingProspectTableState(config);
+    const hostManagedWorkspace = isHostManagedWorkspace(config.workspaceId);
+    let tableState = await ensureEnrichAnythingProspectTable(config);
     let rows = tableState.rowCount > 0 ? await getEnrichAnythingProspectTableRows(config) : [];
 
     let importResult =
@@ -102,9 +119,16 @@ export async function POST(
             queryExhausted = sendableSummary.sendableLeadCount < TARGET_SENDABLE_CONTACTS;
           }
         } catch (error) {
-          liveTopUpStatus = "failed";
-          liveTopUpError =
+          const message =
             error instanceof Error ? error.message : "Live prospect top-up failed.";
+          if (hostManagedWorkspace && hasQuotaLikeTopUpError(message)) {
+            liveTopUpStatus = "idle";
+            liveTopUpError = "";
+            tableState = await ensureEnrichAnythingProspectTable(config);
+          } else {
+            liveTopUpStatus = "failed";
+            liveTopUpError = message;
+          }
         }
       }
     }

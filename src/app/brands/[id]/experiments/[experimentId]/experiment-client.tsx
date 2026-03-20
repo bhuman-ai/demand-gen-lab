@@ -241,11 +241,24 @@ type ResolveApprovedProspectsResult = Awaited<
   ReturnType<typeof resolveApprovedExperimentProspectsApi>
 >;
 
+function hasQuotaLikeTopUpMessage(message: string) {
+  const normalized = String(message).toLowerCase();
+  return (
+    normalized.includes("credit") ||
+    normalized.includes("quota") ||
+    normalized.includes("free trial") ||
+    normalized.includes("upgrade to resume automatic runs") ||
+    normalized.includes("this managed workspace") ||
+    normalized.includes("not enough credits remain")
+  );
+}
+
 function summarizeSendableLeadResolution(
   result: ResolveApprovedProspectsResult
 ): SendableLeadResolutionState {
   const topFailure = String(result.failureSummary[0]?.reason ?? "").trim().toLowerCase();
   const now = new Date().toISOString();
+  const ignoreQuotaLikeTopUpError = hasQuotaLikeTopUpMessage(result.liveTopUpError);
 
   if (result.ready) {
     return {
@@ -301,7 +314,7 @@ function summarizeSendableLeadResolution(
     };
   }
 
-  if (result.liveTopUpError) {
+  if (result.liveTopUpError && !ignoreQuotaLikeTopUpError) {
     return {
       status: "attention",
       message: `We checked the current prospects, but fetching more matches hit a problem: ${result.liveTopUpError}`,

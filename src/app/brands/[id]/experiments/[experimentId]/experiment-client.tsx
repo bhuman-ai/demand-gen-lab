@@ -729,8 +729,8 @@ export default function ExperimentClient({
     };
   }, [previewEmailLeadCount, runTotals.sourcedLeads, runView]);
 
-  const savedProspectCount = prospectTableRowCount;
   const sendableLeadCount = Math.max(sendableLeadCountSnapshot, sendableLeadResolution.readyCount);
+  const savedProspectCount = Math.max(prospectTableRowCount, sendableLeadCount);
   const savedProspectsReady = savedProspectCount >= PROSPECT_VALIDATION_MIN_READY;
   const sendableLeadsReady = sendableLeadCount >= PROSPECT_VALIDATION_MIN_READY;
   const prospectsReady = savedProspectsReady;

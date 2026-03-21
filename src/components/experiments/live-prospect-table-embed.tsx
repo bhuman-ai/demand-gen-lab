@@ -851,7 +851,7 @@ export default function LiveProspectTableEmbed({
   const lastSuccessMs = tableState.lastSuccessAt ? Date.parse(tableState.lastSuccessAt) : 0;
   const secondsSinceLastSuccess =
     lastSuccessMs > 0 ? Math.max(0, Math.floor((statusNow - lastSuccessMs) / 1000)) : null;
-  const visibleRowCount = Math.max(tableState.rowCount, serverSeedRowCount);
+  const visibleRowCount = Math.max(tableState.rowCount, serverSeedRowCount, sendableLeadCount);
   const hasVisibleRows = visibleRowCount > 0 || tableState.hasRows;
   const reviewPending = visibleRowCount >= REVIEW_CHECKPOINT_ROWS && !reviewApproved;
   const needMoreSendable = sendableLeadCount < sendableLeadGoal;
@@ -888,6 +888,7 @@ export default function LiveProspectTableEmbed({
   const waitingForFirstResults =
     hasPrompt &&
     visibleRowCount === 0 &&
+    sendableLeadCount === 0 &&
     (tableBusy || searchUnderGoal || reviewApproved);
   const progressPercent = goalCount > 0 ? Math.min(100, (visibleRowCount / goalCount) * 100) : 0;
   const progressFillPercent = searchLocked

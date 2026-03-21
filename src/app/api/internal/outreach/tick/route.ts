@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { runOutreachTick } from "@/lib/outreach-runtime";
+import { runExperimentSendablePrepTick } from "@/lib/experiment-sendable-prep";
 
 function isAuthorized(request: Request) {
   const token =
@@ -15,8 +16,15 @@ async function handleTick(request: Request) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
 
-  const result = await runOutreachTick(30);
-  return NextResponse.json({ ok: true, result });
+  const requestOrigin = new URL(request.url).origin;
+  const [outreach, sendablePrep] = await Promise.all([
+    runOutreachTick(30),
+    runExperimentSendablePrepTick(8, {
+      requestOrigin,
+    }),
+  ]);
+
+  return NextResponse.json({ ok: true, outreach, sendablePrep });
 }
 
 export async function GET(request: Request) {

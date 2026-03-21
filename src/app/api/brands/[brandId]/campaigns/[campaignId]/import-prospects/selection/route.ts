@@ -266,7 +266,10 @@ export async function POST(
   }
 
   const validatedMailsApiKey = String(
-    process.env.EMAIL_FINDER_VALIDATEDMAILS_API_KEY ?? process.env.VALIDATEDMAILS_API_KEY ?? ""
+    process.env.EMAIL_FINDER_VALIDATEDMAILS_API_KEY ??
+      process.env.ENRICHANYTHING_VALIDATEDMAILS_API_KEY ??
+      process.env.VALIDATEDMAILS_API_KEY ??
+      ""
   ).trim();
 
   const enrichment = await enrichLeadsWithEmailFinderBatch({

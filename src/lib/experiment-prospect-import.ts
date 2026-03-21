@@ -15,6 +15,7 @@ import {
 import {
   enrichLeadsWithEmailFinderBatch,
   extractFirstEmailAddress,
+  resolveEmailFinderApiBaseUrl,
   type ApifyLead,
 } from "@/lib/outreach-providers";
 
@@ -297,7 +298,8 @@ export async function importExperimentProspectRows(input: {
   brandId: string;
   experimentId: string;
   rows: unknown[];
-  requestOrigin: string;
+  requestOrigin?: string;
+  emailFinderApiBaseUrl?: string;
   tableTitle?: string;
   prompt?: string;
   entityType?: string;
@@ -324,12 +326,19 @@ export async function importExperimentProspectRows(input: {
   }
 
   const validatedMailsApiKey = String(
-    process.env.EMAIL_FINDER_VALIDATEDMAILS_API_KEY ?? process.env.VALIDATEDMAILS_API_KEY ?? ""
+    process.env.EMAIL_FINDER_VALIDATEDMAILS_API_KEY ??
+      process.env.ENRICHANYTHING_VALIDATEDMAILS_API_KEY ??
+      process.env.VALIDATEDMAILS_API_KEY ??
+      ""
   ).trim();
+  const apiBaseUrl = resolveEmailFinderApiBaseUrl(
+    input.emailFinderApiBaseUrl ||
+      (input.requestOrigin ? emailFinderApiBaseUrl(input.requestOrigin) : "")
+  );
 
   const enrichment = await enrichLeadsWithEmailFinderBatch({
     leads: parsed.candidates.map((entry) => entry.lead),
-    apiBaseUrl: emailFinderApiBaseUrl(input.requestOrigin),
+    apiBaseUrl,
     verificationMode: "validatedmails",
     validatedMailsApiKey,
     maxCandidates: 12,

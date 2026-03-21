@@ -900,6 +900,53 @@ export default function ExperimentClient({
     setLaunchQueued(window.localStorage.getItem(launchQueueStorageKey) === "queued");
   }, [launchQueueStorageKey]);
 
+  useEffect(() => {
+    if (!experiment || currentStage !== 1 || prospectTableRowCount > 0) {
+      return;
+    }
+
+    let cancelled = false;
+
+    const syncSavedProspectCount = async () => {
+      try {
+        const response = await fetch(
+          `/api/brands/${brandId}/experiments/${experiment.id}/prospect-table`,
+          { cache: "no-store" }
+        );
+        if (!response.ok) {
+          return;
+        }
+        const payload = (await response.json()) as {
+          rowCount?: number;
+          discoveryPrompt?: string;
+        };
+        if (cancelled) return;
+
+        const nextRowCount = Math.max(0, Number(payload.rowCount ?? 0) || 0);
+        const nextPrompt = String(payload.discoveryPrompt ?? "").trim();
+
+        if (nextRowCount > 0) {
+          setProspectTableRowCount((current) => Math.max(current, nextRowCount));
+        }
+        if (nextPrompt) {
+          setProspectTablePrompt((current) => current || nextPrompt);
+        }
+      } catch {
+        // Ignore polling failures; the main screen can keep the current snapshot.
+      }
+    };
+
+    void syncSavedProspectCount();
+    const intervalId = window.setInterval(() => {
+      void syncSavedProspectCount();
+    }, 5000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+    };
+  }, [brandId, currentStage, experiment, prospectTableRowCount]);
+
   // refresh is intentionally omitted here because the effect is keyed off the persisted-stage inputs above.
   // Re-running on every refresh function identity change would restart the background resolver loop.
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -2328,6 +2375,7 @@ export default function ExperimentClient({
               importPath={`/api/brands/${brandId}/experiments/${experiment.id}/import-prospects/selection`}
               goalCount={PROSPECT_VALIDATION_TARGET}
               initialPrompt={prospectInitialPrompt}
+              initialRowCount={savedProspectCount}
               targetingLocked
               settings={prospectTableSettings}
               onReviewApproved={() => {

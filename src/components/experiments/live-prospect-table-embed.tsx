@@ -77,6 +77,7 @@ type LiveProspectTableEmbedProps = {
   importPath: string;
   goalCount?: number;
   initialPrompt?: string;
+  initialRowCount?: number;
   targetingLocked?: boolean;
   settings?: {
     oneContactPerCompany: boolean;
@@ -273,6 +274,7 @@ export default function LiveProspectTableEmbed({
   importPath,
   goalCount = DEFAULT_GOAL_COUNT,
   initialPrompt = "",
+  initialRowCount = 0,
   targetingLocked = false,
   settings,
   onReviewApproved,
@@ -302,7 +304,9 @@ export default function LiveProspectTableEmbed({
   const [iframeError, setIframeError] = useState("");
   const [loadingConfig, setLoadingConfig] = useState(true);
   const [allowLiveTable, setAllowLiveTable] = useState(false);
-  const [serverSeedRowCount, setServerSeedRowCount] = useState(0);
+  const [serverSeedRowCount, setServerSeedRowCount] = useState(() =>
+    Math.max(0, Number(initialRowCount || 0))
+  );
   const [reviewApproved, setReviewApproved] = useState(false);
   const [promptDraft, setPromptDraft] = useState(() => String(initialPrompt || "").trim());
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -452,6 +456,10 @@ export default function LiveProspectTableEmbed({
   }, [refreshTableStateFromServer]);
 
   const normalizedInitialPrompt = String(initialPrompt || "").trim();
+
+  useEffect(() => {
+    setServerSeedRowCount((current) => Math.max(current, Math.max(0, Number(initialRowCount || 0))));
+  }, [initialRowCount]);
 
   useEffect(() => {
     setPromptDraft(tableState.prompt || normalizedInitialPrompt);

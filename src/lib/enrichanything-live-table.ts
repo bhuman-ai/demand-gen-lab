@@ -15,6 +15,17 @@ type ProspectTableConfig = {
   overlapHours: number;
 };
 
+type ProspectTableDiscoveryMeta = {
+  promptSource?: "default" | "lookalike_seed";
+  lookalikeSeed?: {
+    sourceCount: number;
+    analyzedCount: number;
+    summaryTags: string[];
+    mode: "openai" | "heuristic";
+    savedAt: string;
+  } | null;
+} | null;
+
 type ProspectTableState = ProspectTableConfig & {
   appUrl: string;
   rowCount: number;
@@ -22,6 +33,7 @@ type ProspectTableState = ProspectTableConfig & {
   lastStatus: string;
   lastRowsFound: number;
   lastRowsAppended: number;
+  discoveryMeta: ProspectTableDiscoveryMeta;
 };
 
 type ProspectTableRunResult = ProspectTableState & {
@@ -81,6 +93,57 @@ function asObject(value: unknown) {
     return value as Record<string, unknown>;
   }
   return {};
+}
+
+function normalizeDiscoveryMeta(value: unknown): ProspectTableDiscoveryMeta {
+  const meta = asObject(value);
+  if (!Object.keys(meta).length) {
+    return null;
+  }
+
+  const promptSource =
+    String(meta.promptSource ?? "").trim() === "lookalike_seed" ? "lookalike_seed" : "default";
+  const lookalikeSeed = asObject(meta.lookalikeSeed);
+
+  return {
+    promptSource,
+    lookalikeSeed: Object.keys(lookalikeSeed).length
+      ? {
+          sourceCount: Math.max(0, Number(lookalikeSeed.sourceCount ?? 0) || 0),
+          analyzedCount: Math.max(0, Number(lookalikeSeed.analyzedCount ?? 0) || 0),
+          summaryTags: Array.isArray(lookalikeSeed.summaryTags)
+            ? lookalikeSeed.summaryTags
+                .map((entry) => String(entry ?? "").trim())
+                .filter(Boolean)
+                .slice(0, 5)
+            : [],
+          mode: String(lookalikeSeed.mode ?? "").trim() === "openai" ? "openai" : "heuristic",
+          savedAt: String(lookalikeSeed.savedAt ?? "").trim(),
+        }
+      : null,
+  };
+}
+
+function resolveEffectiveConfig(config: ProspectTableConfig, existingTable: Record<string, unknown> | null) {
+  if (!existingTable) {
+    return config;
+  }
+
+  const snapshot = asObject(existingTable.snapshot);
+  const discoveryMeta = normalizeDiscoveryMeta(snapshot.discoveryMeta);
+  const snapshotPrompt = String(snapshot.discoveryPrompt ?? "").trim();
+
+  if (
+    discoveryMeta?.promptSource === "lookalike_seed" &&
+    snapshotPrompt
+  ) {
+    return {
+      ...config,
+      discoveryPrompt: snapshotPrompt,
+    };
+  }
+
+  return config;
 }
 
 function countSnapshotRows(snapshot: unknown) {
@@ -167,14 +230,18 @@ function buildProspectTableState(
   config: ProspectTableConfig,
   existingTable: Record<string, unknown> | null
 ): ProspectTableState {
+  const effectiveConfig = resolveEffectiveConfig(config, existingTable);
+  const snapshot = asObject(existingTable?.snapshot);
+
   return {
     appUrl,
-    ...config,
+    ...effectiveConfig,
     rowCount: existingTable ? countSnapshotRows(existingTable.snapshot) : 0,
     lastRunAt: String(existingTable?.lastRunAt ?? "").trim(),
     lastStatus: String(existingTable?.lastStatus ?? "").trim(),
     lastRowsFound: Math.max(0, Number(existingTable?.lastRowsFound ?? 0) || 0),
     lastRowsAppended: Math.max(0, Number(existingTable?.lastRowsAppended ?? 0) || 0),
+    discoveryMeta: normalizeDiscoveryMeta(snapshot.discoveryMeta),
   };
 }
 
@@ -226,39 +293,40 @@ export async function ensureEnrichAnythingProspectTable(config: ProspectTableCon
   let existingTable = await readExistingTable(appUrl, config.tableId);
 
   if (existingTable) {
+    const effectiveConfig = resolveEffectiveConfig(config, existingTable);
     const snapshot = asObject(existingTable.snapshot);
     const liveTable = asObject(snapshot.liveTable);
     const staleQuotaPause =
-      isHostManagedProspectTable(config) &&
+      isHostManagedProspectTable(effectiveConfig) &&
       (hasQuotaPauseMessage(existingTable.lastError) ||
         hasQuotaPauseMessage(liveTable.lastError) ||
         (String(existingTable.lastStatus ?? "").trim().toLowerCase() === "paused" &&
           hasQuotaPauseMessage(existingTable.lastError || liveTable.lastError)));
     const needsPatch =
-      existingTable.enabled !== config.enabled ||
-      String(snapshot.discoveryPrompt ?? "").trim() !== config.discoveryPrompt ||
-      String(snapshot.tableTitle ?? "").trim() !== config.tableTitle ||
-      String(snapshot.entityColumn ?? "").trim() !== config.entityColumn ||
-      String(snapshot.entityType ?? "").trim() !== config.entityType ||
-      liveTable.enabled !== config.enabled ||
-      String(liveTable.cadence ?? "").trim() !== config.cadence ||
-      Number(liveTable.dailyRowTarget ?? 0) !== config.dailyRowTarget ||
-      Number(liveTable.maxRowsPerRun ?? 0) !== config.maxRowsPerRun ||
-      Number(liveTable.overlapHours ?? 0) !== config.overlapHours ||
+      existingTable.enabled !== effectiveConfig.enabled ||
+      String(snapshot.discoveryPrompt ?? "").trim() !== effectiveConfig.discoveryPrompt ||
+      String(snapshot.tableTitle ?? "").trim() !== effectiveConfig.tableTitle ||
+      String(snapshot.entityColumn ?? "").trim() !== effectiveConfig.entityColumn ||
+      String(snapshot.entityType ?? "").trim() !== effectiveConfig.entityType ||
+      liveTable.enabled !== effectiveConfig.enabled ||
+      String(liveTable.cadence ?? "").trim() !== effectiveConfig.cadence ||
+      Number(liveTable.dailyRowTarget ?? 0) !== effectiveConfig.dailyRowTarget ||
+      Number(liveTable.maxRowsPerRun ?? 0) !== effectiveConfig.maxRowsPerRun ||
+      Number(liveTable.overlapHours ?? 0) !== effectiveConfig.overlapHours ||
       staleQuotaPause;
 
     if (needsPatch) {
-      const nextSnapshot = mergeSnapshot(config, existingTable.snapshot);
+      const nextSnapshot = mergeSnapshot(effectiveConfig, existingTable.snapshot);
       if (staleQuotaPause) {
         const nextSnapshotRecord = nextSnapshot as Record<string, unknown>;
         const nextLiveTable = asObject(nextSnapshotRecord.liveTable);
         nextSnapshotRecord.liveTable = {
           ...nextLiveTable,
-          enabled: config.enabled,
+          enabled: effectiveConfig.enabled,
           lastStatus: "idle",
           lastError: "",
           nextRunAt:
-            config.enabled
+            effectiveConfig.enabled
               ? String(nextLiveTable.nextRunAt ?? "").trim() || new Date().toISOString()
               : null,
         };
@@ -267,10 +335,10 @@ export async function ensureEnrichAnythingProspectTable(config: ProspectTableCon
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          tableId: config.tableId,
-          enabled: config.enabled,
+          tableId: effectiveConfig.tableId,
+          enabled: effectiveConfig.enabled,
           snapshot: nextSnapshot,
-          title: config.tableTitle,
+          title: effectiveConfig.tableTitle,
         }),
         cache: "no-store",
       });
@@ -278,11 +346,11 @@ export async function ensureEnrichAnythingProspectTable(config: ProspectTableCon
         const patchPayload = await readJsonSafe(patchResponse);
         throw new Error(String(patchPayload.error ?? "Failed to update EnrichAnything prospect table."));
       }
-      existingTable = await readExistingTable(appUrl, config.tableId);
+      existingTable = await readExistingTable(appUrl, effectiveConfig.tableId);
     }
 
     return {
-      ...buildProspectTableState(appUrl, config, existingTable),
+      ...buildProspectTableState(appUrl, effectiveConfig, existingTable),
     };
   }
 
@@ -322,6 +390,52 @@ export async function getEnrichAnythingProspectTableState(
   const existingTable = await readExistingTable(appUrl, config.tableId);
 
   return buildProspectTableState(appUrl, config, existingTable);
+}
+
+export async function updateEnrichAnythingProspectTableDiscovery(
+  config: ProspectTableConfig,
+  input: {
+    discoveryPrompt: string;
+    discoveryMeta?: ProspectTableDiscoveryMeta;
+  }
+): Promise<ProspectTableState> {
+  const appUrl = resolveEnrichAnythingAppUrl();
+  if (!appUrl) {
+    throw new Error("ENRICHANYTHING_APP_URL is not configured.");
+  }
+
+  await ensureEnrichAnythingProspectTable(config);
+  const existingTable = await readExistingTable(appUrl, config.tableId);
+  if (!existingTable) {
+    throw new Error("Failed to load EnrichAnything prospect table.");
+  }
+
+  const nextPrompt = normalizeText(input.discoveryPrompt) || config.discoveryPrompt;
+  const nextConfig = {
+    ...config,
+    discoveryPrompt: nextPrompt,
+  };
+  const nextSnapshot = mergeSnapshot(nextConfig, existingTable.snapshot) as Record<string, unknown>;
+  nextSnapshot.discoveryMeta = input.discoveryMeta ?? null;
+
+  const patchResponse = await fetch(`${appUrl}/api/live`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      tableId: config.tableId,
+      enabled: config.enabled,
+      snapshot: nextSnapshot,
+      title: config.tableTitle,
+    }),
+    cache: "no-store",
+  });
+  if (!patchResponse.ok) {
+    const patchPayload = await readJsonSafe(patchResponse);
+    throw new Error(String(patchPayload.error ?? "Failed to update EnrichAnything prospect table."));
+  }
+
+  const refreshed = await readExistingTable(appUrl, config.tableId);
+  return buildProspectTableState(appUrl, nextConfig, refreshed);
 }
 
 export async function getEnrichAnythingProspectTableRows(

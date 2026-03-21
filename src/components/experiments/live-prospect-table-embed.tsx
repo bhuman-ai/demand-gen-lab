@@ -1,10 +1,11 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Loader2, Search, Settings2 } from "lucide-react";
+import { Globe2, Loader2, Search, Settings2 } from "lucide-react";
 import { SettingsModal } from "@/app/settings/outreach/settings-primitives";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 
 const EMBED_READY_MESSAGE_TYPE = "enrichanything:embed-ready";
 const EMBED_STATE_MESSAGE_TYPE = "enrichanything:embed-state";
@@ -75,6 +76,7 @@ type EmbeddedTableState = {
 type LiveProspectTableEmbedProps = {
   initPath: string;
   importPath: string;
+  lookalikeSeedPath?: string;
   goalCount?: number;
   initialPrompt?: string;
   initialRowCount?: number;
@@ -111,6 +113,16 @@ type ActivityItem = {
   meta: string;
 };
 
+type LookalikeSeedSummary = {
+  sourceCount: number;
+  analyzedCount: number;
+  generatedPrompt: string;
+  summaryTags: string[];
+  mode: "openai" | "heuristic";
+};
+
+type LookalikeSeedAction = "analyze" | "clear";
+
 function formatElapsedLabel(totalSeconds: number) {
   if (!Number.isFinite(totalSeconds) || totalSeconds <= 0) {
     return "just now";
@@ -139,6 +151,77 @@ function asObject(value: unknown): Record<string, unknown> {
     return value as Record<string, unknown>;
   }
   return {};
+}
+
+function normalizeWebsiteSeedToken(value: string) {
+  const trimmed = value.trim().replace(/^[<([{"'`]+|[>\])}"'`,;]+$/g, "");
+  if (!trimmed) return "";
+
+  try {
+    const url = new URL(/^[a-z]+:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`);
+    const hostname = url.hostname.toLowerCase().replace(/^www\./, "").replace(/\.+$/, "");
+    if (!/^[a-z0-9.-]+\.[a-z]{2,}$/i.test(hostname)) {
+      return "";
+    }
+    return hostname;
+  } catch {
+    const normalized = trimmed
+      .toLowerCase()
+      .replace(/^https?:\/\//, "")
+      .replace(/^www\./, "")
+      .replace(/[/?#].*$/, "")
+      .replace(/\.+$/, "");
+    if (!/^[a-z0-9.-]+\.[a-z]{2,}$/i.test(normalized)) {
+      return "";
+    }
+    return normalized;
+  }
+}
+
+function normalizeWebsiteSeedList(value: string) {
+  const parts = String(value ?? "")
+    .split(/[\n,\t ;]+/)
+    .map((entry) => normalizeWebsiteSeedToken(entry))
+    .filter(Boolean);
+
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const domain of parts) {
+    if (seen.has(domain)) continue;
+    seen.add(domain);
+    out.push(domain);
+    if (out.length >= 40) break;
+  }
+  return out;
+}
+
+function normalizeLookalikeSeedSummary(value: unknown, fallbackPrompt = ""): LookalikeSeedSummary | null {
+  const meta = asObject(value);
+  const promptSource = String(meta.promptSource ?? "").trim();
+  const lookalikeSeed = asObject(meta.lookalikeSeed);
+  const generatedPrompt = String(meta.generatedPrompt ?? fallbackPrompt ?? "").trim();
+
+  if (promptSource !== "lookalike_seed" || !Object.keys(lookalikeSeed).length || !generatedPrompt) {
+    return null;
+  }
+
+  const sourceCount = Math.max(0, Number(lookalikeSeed.sourceCount ?? 0) || 0);
+  if (sourceCount <= 0) {
+    return null;
+  }
+
+  return {
+    sourceCount,
+    analyzedCount: Math.max(0, Number(lookalikeSeed.analyzedCount ?? 0) || 0),
+    generatedPrompt,
+    summaryTags: Array.isArray(lookalikeSeed.summaryTags)
+      ? lookalikeSeed.summaryTags
+          .map((entry) => String(entry ?? "").trim())
+          .filter(Boolean)
+          .slice(0, 5)
+      : [],
+    mode: String(lookalikeSeed.mode ?? "").trim() === "openai" ? "openai" : "heuristic",
+  };
 }
 
 function coerceRows(value: unknown) {
@@ -272,6 +355,7 @@ async function readJson(response: Response) {
 export default function LiveProspectTableEmbed({
   initPath,
   importPath,
+  lookalikeSeedPath = "",
   goalCount = DEFAULT_GOAL_COUNT,
   initialPrompt = "",
   initialRowCount = 0,
@@ -309,6 +393,11 @@ export default function LiveProspectTableEmbed({
   );
   const [reviewApproved, setReviewApproved] = useState(false);
   const [promptDraft, setPromptDraft] = useState(() => String(initialPrompt || "").trim());
+  const [lookalikeSeedOpen, setLookalikeSeedOpen] = useState(false);
+  const [lookalikeSeedDraft, setLookalikeSeedDraft] = useState("");
+  const [lookalikeSeedAction, setLookalikeSeedAction] = useState<LookalikeSeedAction | null>(null);
+  const [lookalikeSeedError, setLookalikeSeedError] = useState("");
+  const [lookalikeSeedSummary, setLookalikeSeedSummary] = useState<LookalikeSeedSummary | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsSaving, setSettingsSaving] = useState(false);
   const [oneContactPerCompanyDraft, setOneContactPerCompanyDraft] = useState(
@@ -346,9 +435,14 @@ export default function LiveProspectTableEmbed({
     const serverRowCount = Math.max(0, Number(payload.rowCount ?? 0) || 0);
     const serverPrompt = String(payload.discoveryPrompt ?? "").trim();
     const serverTitle = String(payload.tableTitle ?? "").trim();
+    const serverLookalikeSeedSummary = normalizeLookalikeSeedSummary(
+      payload.discoveryMeta,
+      serverPrompt
+    );
 
     setAllowLiveTable(Boolean(payload.enabled));
     setServerSeedRowCount((current) => Math.max(current, serverRowCount));
+    setLookalikeSeedSummary(serverLookalikeSeedSummary);
     setTableState((current) => ({
       ...current,
       title: serverTitle || current.title,
@@ -741,6 +835,7 @@ export default function LiveProspectTableEmbed({
   const normalizedPromptDraft = promptDraft.trim();
   const normalizedTablePrompt = tableState.prompt.trim();
   const promptForSearch = normalizedTablePrompt || normalizedPromptDraft || normalizedInitialPrompt;
+  const defaultTargetingPrompt = normalizedInitialPrompt;
   const hasPrompt = Boolean(promptForSearch);
   const promptDirty = Boolean(normalizedPromptDraft && normalizedPromptDraft !== normalizedTablePrompt);
   const reviewStorageKey = useMemo(
@@ -809,6 +904,154 @@ export default function LiveProspectTableEmbed({
         ? "Ready"
         : "Waiting";
   const settingsDirty = oneContactPerCompanyDraft !== (settings?.oneContactPerCompany ?? true);
+  const lookalikeSeedDomains = useMemo(
+    () => normalizeWebsiteSeedList(lookalikeSeedDraft),
+    [lookalikeSeedDraft]
+  );
+  const lookalikeSeedCount = lookalikeSeedDomains.length;
+  const lookalikeSeedAvailable = Boolean(lookalikeSeedPath);
+  const lookalikeSeedBusy = lookalikeSeedAction !== null;
+  const lookalikeSeedCanAnalyze =
+    lookalikeSeedAvailable &&
+    lookalikeSeedCount >= 3 &&
+    !lookalikeSeedBusy &&
+    !searchLocked;
+
+  const resetTargetingSearchState = useCallback(() => {
+    if (typeof window !== "undefined" && reviewStorageKey) {
+      window.localStorage.removeItem(reviewStorageKey);
+    }
+    setReviewApproved(false);
+    setServerSeedRowCount(0);
+    setTableState((current) => ({
+      ...current,
+      rowCount: 0,
+      hasRows: false,
+      lastRowsAppended: 0,
+      lastSuccessAt: "",
+      statusMessage: "",
+    }));
+  }, [reviewStorageKey]);
+
+  const applyPromptAndRunSearch = useCallback(
+    (nextPrompt: string, activityMessage: string) => {
+      const normalized = nextPrompt.trim();
+      if (!iframeReady || !normalized) {
+        return;
+      }
+
+      autoSearchPromptRef.current = normalized;
+      lastAutoSearchResumeSignatureRef.current = "";
+      lastAutoImportSignatureRef.current = "";
+      lastStallRetrySignatureRef.current = "";
+      resetTargetingSearchState();
+      setPromptDraft(normalized);
+      setTableState((current) => ({
+        ...current,
+        prompt: normalized,
+      }));
+      sendHostCommand("set-prompt", { prompt: normalized });
+      sendHostCommand("set-active-tab", { tab: "search" });
+      sendHostCommand("run-search", { limit: goalCount });
+      pushActivity(activityMessage, "neutral");
+    },
+    [goalCount, iframeReady, resetTargetingSearchState, sendHostCommand]
+  );
+
+  const persistLookalikeSeedSummary = useCallback(
+    async (next: { discoveryPrompt: string; summary: LookalikeSeedSummary | null }) => {
+      const response = await fetch(initPath, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          discoveryPrompt: next.discoveryPrompt,
+          discoveryMeta: next.summary
+            ? {
+                promptSource: "lookalike_seed",
+                generatedPrompt: next.summary.generatedPrompt,
+                lookalikeSeed: {
+                  sourceCount: next.summary.sourceCount,
+                  analyzedCount: next.summary.analyzedCount,
+                  summaryTags: next.summary.summaryTags,
+                  mode: next.summary.mode,
+                  savedAt: new Date().toISOString(),
+                },
+              }
+            : null,
+        }),
+      });
+
+      return readJson(response);
+    },
+    [initPath]
+  );
+
+  const analyzeLookalikeSeed = useCallback(async () => {
+    if (!lookalikeSeedCanAnalyze) {
+      return;
+    }
+
+    setLookalikeSeedAction("analyze");
+    setLookalikeSeedError("");
+
+    try {
+      const response = await fetch(lookalikeSeedPath, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          websitesText: lookalikeSeedDraft,
+          currentPrompt: promptForSearch,
+        }),
+      });
+      const payload = await readJson(response);
+      const generatedPrompt = String(payload.generatedPrompt ?? "").trim();
+      const sourceCount = Math.max(0, Number(payload.sourceCount ?? lookalikeSeedCount) || 0);
+      const analyzedCount = Math.max(0, Number(payload.analyzedCount ?? 0) || 0);
+      const mode = String(payload.mode ?? "heuristic").trim() === "openai" ? "openai" : "heuristic";
+      const summaryTags = Array.isArray(payload.summaryTags)
+        ? payload.summaryTags
+            .map((entry) => String(entry ?? "").trim())
+            .filter(Boolean)
+            .slice(0, 5)
+        : [];
+
+      if (!generatedPrompt) {
+        throw new Error("No usable targeting prompt came back.");
+      }
+
+      const nextSummary = {
+        sourceCount: Math.max(sourceCount, lookalikeSeedCount),
+        analyzedCount,
+        generatedPrompt,
+        summaryTags,
+        mode,
+      } satisfies LookalikeSeedSummary;
+      await persistLookalikeSeedSummary({
+        discoveryPrompt: generatedPrompt,
+        summary: nextSummary,
+      });
+      setLookalikeSeedSummary(nextSummary);
+      setLookalikeSeedOpen(false);
+      applyPromptAndRunSearch(
+        generatedPrompt,
+        "AI started searching from your customer website seed."
+      );
+    } catch (error) {
+      setLookalikeSeedError(
+        error instanceof Error ? error.message : "Failed to analyze customer websites."
+      );
+    } finally {
+      setLookalikeSeedAction(null);
+    }
+  }, [
+    applyPromptAndRunSearch,
+    lookalikeSeedCanAnalyze,
+    lookalikeSeedCount,
+    lookalikeSeedDraft,
+    lookalikeSeedPath,
+    persistLookalikeSeedSummary,
+    promptForSearch,
+  ]);
 
   useEffect(() => {
     if (!iframeReady || initialEmbedStateHandledRef.current) {
@@ -1073,6 +1316,7 @@ export default function LiveProspectTableEmbed({
     tableBusy,
     hasVisibleRows,
     tableState.lastRowsAppended,
+    tableState.rowCount,
     tableState.lastSuccessAt,
     visibleRowCount,
   ]);
@@ -1153,7 +1397,11 @@ export default function LiveProspectTableEmbed({
               event.preventDefault();
               if (!iframeReady || searchLocked || !hasPrompt) return;
               if (normalizedPromptDraft && normalizedPromptDraft !== normalizedTablePrompt) {
-                sendHostCommand("set-prompt", { prompt: normalizedPromptDraft });
+                applyPromptAndRunSearch(
+                  normalizedPromptDraft,
+                  "AI restarted the search with your updated targeting."
+                );
+                return;
               }
               sendHostCommand("set-active-tab", { tab: "search" });
               sendHostCommand("run-search", { limit: goalCount });
@@ -1164,6 +1412,22 @@ export default function LiveProspectTableEmbed({
             className="h-12 flex-1 rounded-[14px] border-[color:var(--border)] bg-[color:var(--surface-muted)] text-[color:var(--foreground)] placeholder:text-[color:var(--muted-foreground)] shadow-none focus-visible:ring-[color:var(--accent-border)] read-only:cursor-not-allowed read-only:opacity-85"
           />
           <div className="flex flex-wrap gap-2">
+            {lookalikeSeedAvailable ? (
+              <Button
+                type="button"
+                size="sm"
+                variant={lookalikeSeedSummary ? "secondary" : "outline"}
+                className="h-12 rounded-[14px] px-3"
+                onClick={() => {
+                  setLookalikeSeedError("");
+                  setLookalikeSeedOpen((current) => !current);
+                }}
+                disabled={lookalikeSeedBusy || searchLocked}
+              >
+                <Globe2 className="h-4 w-4" />
+                {lookalikeSeedSummary ? "Edit customer websites" : "Use customer websites"}
+              </Button>
+            ) : null}
             <Button
               type="button"
               size="sm"
@@ -1212,23 +1476,12 @@ export default function LiveProspectTableEmbed({
                 type="button"
                 size="lg"
                 className="border-[color:var(--accent-border)] bg-[color:var(--accent)] text-[color:var(--accent-foreground)] hover:opacity-95"
-                onClick={() => {
-                  if (typeof window !== "undefined" && reviewStorageKey) {
-                    window.localStorage.removeItem(reviewStorageKey);
-                  }
-                  setReviewApproved(false);
-                  setServerSeedRowCount(0);
-                  setTableState((current) => ({
-                    ...current,
-                    rowCount: 0,
-                    hasRows: false,
-                    lastRowsAppended: 0,
-                    lastSuccessAt: "",
-                  }));
-                  sendHostCommand("set-prompt", { prompt: normalizedPromptDraft });
-                  sendHostCommand("set-active-tab", { tab: "search" });
-                  sendHostCommand("run-search", { limit: goalCount });
-                }}
+                onClick={() =>
+                  applyPromptAndRunSearch(
+                    normalizedPromptDraft,
+                    "AI restarted the search with your updated targeting."
+                  )
+                }
                 disabled={!iframeReady || tableBusy || !normalizedPromptDraft}
               >
                 <Search className="h-4 w-4" />
@@ -1251,6 +1504,164 @@ export default function LiveProspectTableEmbed({
             ) : null}
           </div>
         </div>
+        {lookalikeSeedOpen ? (
+          <div className="mt-4 rounded-[18px] border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-4">
+            <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+              <div className="space-y-1">
+                <div className="text-xs font-medium uppercase tracking-[0.12em] text-[color:var(--muted-foreground)]">
+                  Customer website seed
+                </div>
+                <div className="text-sm text-[color:var(--foreground)]">
+                  Paste customer domains one per line. We&apos;ll infer the common pattern and turn it into a clean search prompt.
+                </div>
+              </div>
+              <div className="text-xs text-[color:var(--muted-foreground)]">
+                {lookalikeSeedCount > 0
+                  ? `${lookalikeSeedCount} website${lookalikeSeedCount === 1 ? "" : "s"} detected`
+                  : "Use 3-40 customer websites"}
+              </div>
+            </div>
+            <div className="mt-3">
+              <Textarea
+                value={lookalikeSeedDraft}
+                onChange={(event) => {
+                  setLookalikeSeedDraft(event.target.value);
+                  if (lookalikeSeedError) {
+                    setLookalikeSeedError("");
+                  }
+                }}
+                placeholder={"stripe.com\nbrex.com\nramp.com"}
+                disabled={lookalikeSeedBusy}
+                className="min-h-[132px] rounded-[14px] border-[color:var(--border)] bg-[color:var(--surface)]"
+              />
+            </div>
+            <div className="mt-3 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+              <div className="text-sm text-[color:var(--muted-foreground)]">
+                {lookalikeSeedError
+                  ? <span className="text-[color:var(--danger)]">{lookalikeSeedError}</span>
+                  : "URLs, bare domains, pasted spreadsheet columns, and comma-separated lists all work."}
+              </div>
+              <div className="flex flex-wrap justify-end gap-2">
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => {
+                    setLookalikeSeedOpen(false);
+                    setLookalikeSeedError("");
+                  }}
+                  disabled={lookalikeSeedBusy}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  onClick={() => {
+                    void analyzeLookalikeSeed();
+                  }}
+                  disabled={!lookalikeSeedCanAnalyze}
+                >
+                  {lookalikeSeedAction === "analyze"
+                    ? <Loader2 className="h-4 w-4 animate-spin" />
+                    : <Globe2 className="h-4 w-4" />}
+                  {lookalikeSeedAction === "analyze" ? "Analyzing..." : "Analyze list"}
+                </Button>
+              </div>
+            </div>
+          </div>
+        ) : null}
+        {lookalikeSeedSummary && !lookalikeSeedOpen ? (
+          <div className="mt-4 rounded-[18px] border border-[color:var(--accent-border)] bg-[color:var(--accent-soft)] px-4 py-3">
+            <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+              <div className="space-y-2">
+                <div className="text-xs font-medium uppercase tracking-[0.12em] text-[color:var(--muted-foreground)]">
+                  Customer website seed
+                </div>
+                <div className="text-sm text-[color:var(--foreground)]">
+                  Seeded from {lookalikeSeedSummary.sourceCount} customer website
+                  {lookalikeSeedSummary.sourceCount === 1 ? "" : "s"}
+                  {lookalikeSeedSummary.analyzedCount > 0
+                    ? `, analyzed ${lookalikeSeedSummary.analyzedCount}.`
+                    : "."}
+                </div>
+                {lookalikeSeedSummary.summaryTags.length ? (
+                  <div className="flex flex-wrap gap-2">
+                    {lookalikeSeedSummary.summaryTags.map((tag) => (
+                      <span
+                        key={tag}
+                        className="rounded-full border border-[color:var(--accent-border)] bg-[color:var(--surface)] px-2.5 py-1 text-xs text-[color:var(--foreground)]"
+                      >
+                        {tag}
+                      </span>
+                    ))}
+                  </div>
+                ) : null}
+                {lookalikeSeedAction === "clear" ? (
+                  <div className="text-xs text-[color:var(--muted-foreground)]">
+                    Removing customer website seed...
+                  </div>
+                ) : null}
+              </div>
+              {!searchLocked ? (
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    disabled={lookalikeSeedBusy}
+                    onClick={() => {
+                      setLookalikeSeedError("");
+                      setLookalikeSeedOpen(true);
+                    }}
+                  >
+                    Edit
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    disabled={lookalikeSeedBusy}
+                    onClick={() => {
+                      void (async () => {
+                        setLookalikeSeedAction("clear");
+                        setLookalikeSeedError("");
+                        try {
+                          const nextPrompt = defaultTargetingPrompt || lookalikeSeedSummary.generatedPrompt;
+                          await persistLookalikeSeedSummary({
+                            discoveryPrompt: nextPrompt,
+                            summary: null,
+                          });
+                          setLookalikeSeedSummary(null);
+                          setLookalikeSeedDraft("");
+                          setLookalikeSeedError("");
+                          if (defaultTargetingPrompt) {
+                            applyPromptAndRunSearch(
+                              defaultTargetingPrompt,
+                              "AI went back to the default targeting prompt."
+                            );
+                          }
+                        } catch (error) {
+                          setLookalikeSeedOpen(true);
+                          setLookalikeSeedError(
+                            error instanceof Error ? error.message : "Failed to clear customer website seed."
+                          );
+                        } finally {
+                          setLookalikeSeedAction(null);
+                        }
+                      })();
+                    }}
+                  >
+                    {lookalikeSeedAction === "clear" ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : null}
+                    {lookalikeSeedAction === "clear" ? "Clearing..." : "Clear"}
+                  </Button>
+                </div>
+              ) : null}
+            </div>
+          </div>
+        ) : null}
         <div className="mt-4 space-y-2">
           <div className="flex items-center justify-between gap-3 text-xs font-medium uppercase tracking-[0.12em] text-[color:var(--muted-foreground)]">
             <span>{progressLabel}</span>

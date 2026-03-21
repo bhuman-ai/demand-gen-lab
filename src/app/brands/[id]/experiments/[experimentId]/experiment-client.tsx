@@ -2253,6 +2253,7 @@ export default function ExperimentClient({
       <LiveProspectTableEmbed
         initPath={`/api/brands/${brandId}/experiments/${experiment.id}/prospect-table`}
         importPath={`/api/brands/${brandId}/experiments/${experiment.id}/import-prospects/selection`}
+        lookalikeSeedPath={`/api/brands/${brandId}/lookalike-seed`}
         goalCount={PROSPECT_VALIDATION_TARGET}
         initialPrompt={prospectInitialPrompt}
         targetingLocked
@@ -2373,6 +2374,7 @@ export default function ExperimentClient({
             <LiveProspectTableEmbed
               initPath={`/api/brands/${brandId}/experiments/${experiment.id}/prospect-table`}
               importPath={`/api/brands/${brandId}/experiments/${experiment.id}/import-prospects/selection`}
+              lookalikeSeedPath={`/api/brands/${brandId}/lookalike-seed`}
               goalCount={PROSPECT_VALIDATION_TARGET}
               initialPrompt={prospectInitialPrompt}
               initialRowCount={savedProspectCount}

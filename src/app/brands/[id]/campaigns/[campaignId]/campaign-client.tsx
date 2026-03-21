@@ -593,6 +593,10 @@ export default function CampaignClient({
         <LiveProspectTableEmbed
           initPath={`/api/brands/${brandId}/campaigns/${campaign.id}/prospect-table`}
           importPath={`/api/brands/${brandId}/campaigns/${campaign.id}/import-prospects/selection`}
+          lookalikeSeedPath={`/api/brands/${brandId}/lookalike-seed`}
+          initialPrompt={
+            String(campaign.snapshot.audience || campaign.snapshot.offer || campaign.name || "").trim()
+          }
           onImported={async () => {
             await refresh(false);
           }}

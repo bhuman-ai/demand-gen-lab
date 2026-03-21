@@ -80,6 +80,9 @@ type LiveProspectTableEmbedProps = {
   goalCount?: number;
   initialPrompt?: string;
   initialRowCount?: number;
+  sendableLeadCount?: number;
+  sendableLeadGoal?: number;
+  maxRowCap?: number;
   targetingLocked?: boolean;
   settings?: {
     oneContactPerCompany: boolean;
@@ -359,6 +362,9 @@ export default function LiveProspectTableEmbed({
   goalCount = DEFAULT_GOAL_COUNT,
   initialPrompt = "",
   initialRowCount = 0,
+  sendableLeadCount = 0,
+  sendableLeadGoal = REVIEW_CHECKPOINT_ROWS,
+  maxRowCap = 80,
   targetingLocked = false,
   settings,
   onReviewApproved,
@@ -848,8 +854,10 @@ export default function LiveProspectTableEmbed({
   const visibleRowCount = Math.max(tableState.rowCount, serverSeedRowCount);
   const hasVisibleRows = visibleRowCount > 0 || tableState.hasRows;
   const reviewPending = visibleRowCount >= REVIEW_CHECKPOINT_ROWS && !reviewApproved;
-  const searchUnderGoal = hasPrompt && visibleRowCount < goalCount;
-  const searchLocked = hasPrompt && visibleRowCount < goalCount;
+  const needMoreSendable = sendableLeadCount < sendableLeadGoal;
+  const canSearchBeyondReview = reviewApproved && needMoreSendable && visibleRowCount < maxRowCap;
+  const searchUnderGoal = hasPrompt && (visibleRowCount < goalCount || canSearchBeyondReview);
+  const searchLocked = hasPrompt && (visibleRowCount < goalCount || canSearchBeyondReview);
   const autoImportSignature = [
     normalizedTablePrompt,
     visibleRowCount,
@@ -861,6 +869,8 @@ export default function LiveProspectTableEmbed({
     visibleRowCount,
     tableState.lastSuccessAt,
     tableState.lastRowsAppended,
+    sendableLeadCount,
+    sendableLeadGoal,
   ].join("|");
   const searchStatusLabel = reviewPending
     ? "Review"
@@ -885,21 +895,27 @@ export default function LiveProspectTableEmbed({
     : progressPercent;
   const progressLabel = reviewPending
     ? `${visibleRowCount} / ${goalCount} ready to review`
-    : `${visibleRowCount} / ${goalCount}`;
+    : canSearchBeyondReview
+      ? `${sendableLeadCount} / ${sendableLeadGoal} contacts ready`
+      : `${visibleRowCount} / ${goalCount}`;
   const progressMetaLabel = reviewPending
     ? "Review leads"
-      : searchLocked
+    : searchLocked
       ? visibleRowCount === 0
         ? "Finding first leads"
         : tableBusy
           ? "Searching"
         : secondsSinceLastSuccess !== null && secondsSinceLastSuccess >= 30
           ? "Trying again"
-          : "Working"
+          : canSearchBeyondReview
+            ? "Finding more contacts"
+            : "Working"
       : reviewApproved
         ? visibleRowCount === 0
           ? "Loading leads"
-          : "Approved"
+          : canSearchBeyondReview
+            ? "Finding more contacts"
+            : "Approved"
         : visibleRowCount >= goalCount
         ? "Ready"
         : "Waiting";
@@ -1151,7 +1167,7 @@ export default function LiveProspectTableEmbed({
       !hasPrompt ||
       tableBusy ||
       visibleRowCount > 0 ||
-      visibleRowCount >= goalCount
+      (visibleRowCount >= goalCount && !canSearchBeyondReview)
     ) {
       return;
     }
@@ -1178,6 +1194,7 @@ export default function LiveProspectTableEmbed({
     sendHostCommand,
     tableBusy,
     visibleRowCount,
+    canSearchBeyondReview,
   ]);
 
   useEffect(() => {
@@ -1188,7 +1205,7 @@ export default function LiveProspectTableEmbed({
       !hasPrompt ||
       tableBusy ||
       visibleRowCount <= 0 ||
-      visibleRowCount >= goalCount
+      (visibleRowCount >= goalCount && !canSearchBeyondReview)
     ) {
       return;
     }
@@ -1220,6 +1237,7 @@ export default function LiveProspectTableEmbed({
     sendHostCommand,
     tableBusy,
     visibleRowCount,
+    canSearchBeyondReview,
   ]);
 
   useEffect(() => {
@@ -1230,7 +1248,7 @@ export default function LiveProspectTableEmbed({
       !hasPrompt ||
       promptDirty ||
       tableBusy ||
-      visibleRowCount >= goalCount
+      (visibleRowCount >= goalCount && !canSearchBeyondReview)
     ) {
       return;
     }
@@ -1277,6 +1295,7 @@ export default function LiveProspectTableEmbed({
     tableBusy,
     tableState.lastSuccessAt,
     visibleRowCount,
+    canSearchBeyondReview,
   ]);
 
   useEffect(() => {

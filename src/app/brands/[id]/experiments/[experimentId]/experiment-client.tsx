@@ -2378,6 +2378,9 @@ export default function ExperimentClient({
               goalCount={PROSPECT_VALIDATION_TARGET}
               initialPrompt={prospectInitialPrompt}
               initialRowCount={savedProspectCount}
+              sendableLeadCount={sendableLeadCount}
+              sendableLeadGoal={PROSPECT_VALIDATION_TARGET}
+              maxRowCap={Math.max(PROSPECT_VALIDATION_TARGET * 3, 80)}
               targetingLocked
               settings={prospectTableSettings}
               onReviewApproved={() => {

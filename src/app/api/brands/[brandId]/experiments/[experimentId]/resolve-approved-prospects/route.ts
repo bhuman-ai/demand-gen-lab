@@ -136,6 +136,7 @@ export async function POST(
     return NextResponse.json({
       targetCount: TARGET_SENDABLE_CONTACTS,
       ready: sendableSummary.sendableLeadCount >= TARGET_SENDABLE_CONTACTS,
+      hostManagedWorkspace,
       savedProspectCount: tableState.rowCount,
       sendableLeadCount: sendableSummary.sendableLeadCount,
       sendableLeadRemaining: Math.max(

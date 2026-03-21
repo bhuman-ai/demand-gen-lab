@@ -259,6 +259,7 @@ function summarizeSendableLeadResolution(
   const topFailure = String(result.failureSummary[0]?.reason ?? "").trim().toLowerCase();
   const now = new Date().toISOString();
   const ignoreQuotaLikeTopUpError = hasQuotaLikeTopUpMessage(result.liveTopUpError);
+  const allowRetryAfterExhausted = Boolean(result.hostManagedWorkspace);
 
   if (result.ready) {
     return {
@@ -340,12 +341,14 @@ function summarizeSendableLeadResolution(
 
   if (result.queryExhausted) {
     return {
-      status: "attention",
-      message: `We checked the current approved prospects and searched for more, but this targeting only produced ${result.sendableLeadCount}/${result.targetCount} sendable contacts. Edit targeting to continue.`,
+      status: allowRetryAfterExhausted ? "resolving" : "attention",
+      message: allowRetryAfterExhausted
+        ? `Still searching for more sendable contacts: ${result.sendableLeadCount}/${result.targetCount} ready.`
+        : `We checked the current approved prospects and searched for more, but this targeting only produced ${result.sendableLeadCount}/${result.targetCount} sendable contacts. Edit targeting to continue.`,
       lastUpdatedAt: now,
       readyCount: result.sendableLeadCount,
-      retryable: false,
-      queryExhausted: true,
+      retryable: allowRetryAfterExhausted,
+      queryExhausted: !allowRetryAfterExhausted,
       dedupedCount: result.dedupedCount,
     };
   }

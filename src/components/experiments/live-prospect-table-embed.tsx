@@ -848,8 +848,8 @@ export default function LiveProspectTableEmbed({
   const visibleRowCount = Math.max(tableState.rowCount, serverSeedRowCount);
   const hasVisibleRows = visibleRowCount > 0 || tableState.hasRows;
   const reviewPending = visibleRowCount >= REVIEW_CHECKPOINT_ROWS && !reviewApproved;
-  const searchUnderGoal = hasPrompt && !reviewApproved && visibleRowCount < goalCount;
-  const searchLocked = hasPrompt && !reviewApproved && visibleRowCount < goalCount;
+  const searchUnderGoal = hasPrompt && visibleRowCount < goalCount;
+  const searchLocked = hasPrompt && visibleRowCount < goalCount;
   const autoImportSignature = [
     normalizedTablePrompt,
     visibleRowCount,
@@ -888,7 +888,7 @@ export default function LiveProspectTableEmbed({
     : `${visibleRowCount} / ${goalCount}`;
   const progressMetaLabel = reviewPending
     ? "Review leads"
-    : searchLocked
+      : searchLocked
       ? visibleRowCount === 0
         ? "Finding first leads"
         : tableBusy
@@ -1148,7 +1148,6 @@ export default function LiveProspectTableEmbed({
     if (
       !iframeReady ||
       !initialEmbedStateHandledRef.current ||
-      reviewApproved ||
       !hasPrompt ||
       tableBusy ||
       visibleRowCount > 0 ||
@@ -1186,7 +1185,6 @@ export default function LiveProspectTableEmbed({
       allowLiveTable ||
       !iframeReady ||
       !initialEmbedStateHandledRef.current ||
-      reviewApproved ||
       !hasPrompt ||
       tableBusy ||
       visibleRowCount <= 0 ||
@@ -1229,7 +1227,6 @@ export default function LiveProspectTableEmbed({
       allowLiveTable ||
       !iframeReady ||
       !initialEmbedStateHandledRef.current ||
-      reviewApproved ||
       !hasPrompt ||
       promptDirty ||
       tableBusy ||

@@ -444,6 +444,7 @@ export async function resolveApprovedExperimentProspectsApi(
   return {
     targetCount: Math.max(0, Number(data.targetCount ?? 0) || 0),
     ready: Boolean(data.ready),
+    hostManagedWorkspace: Boolean(data.hostManagedWorkspace),
     savedProspectCount: Math.max(0, Number(data.savedProspectCount ?? 0) || 0),
     sendableLeadCount: Math.max(0, Number(data.sendableLeadCount ?? 0) || 0),
     sendableLeadRemaining: Math.max(0, Number(data.sendableLeadRemaining ?? 0) || 0),

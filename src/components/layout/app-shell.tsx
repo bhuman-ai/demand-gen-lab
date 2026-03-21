@@ -11,7 +11,7 @@ import {
   Mail,
   Network,
   Settings,
-  Target,
+  TestTubeDiagonal,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { cn } from "@/lib/utils";
@@ -125,12 +125,46 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
     sessionStorage.setItem("factory.previousPath", pathname);
   }, [pathname]);
 
+  useEffect(() => {
+    let cancelled = false;
+
+    const checkBuild = async () => {
+      try {
+        const response = await fetch("/api/build-id", { cache: "no-store" });
+        if (!response.ok) return;
+        const payload = await response.json();
+        if (cancelled) return;
+        const nextId = String(payload?.buildId || "");
+        if (!nextId) return;
+        const stored = sessionStorage.getItem("lastb2b.buildId");
+        if (stored && stored !== nextId) {
+          window.location.reload();
+          return;
+        }
+        sessionStorage.setItem("lastb2b.buildId", nextId);
+      } catch {
+        // Ignore build-id fetch failures.
+      }
+    };
+
+    void checkBuild();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const hasActiveBrand = Boolean(activeBrandId);
   const brandRoot = hasActiveBrand ? `/brands/${activeBrandId}` : "/brands";
 
   const mainItems = useMemo<MainNavItem[]>(
     () => [
-      { id: "experiments", label: "Experiments", href: hasActiveBrand ? `${brandRoot}/experiments` : "/brands", icon: Target },
+      {
+        id: "experiments",
+        label: "Experiments",
+        href: hasActiveBrand ? `${brandRoot}/experiments` : "/brands",
+        icon: TestTubeDiagonal,
+      },
       { id: "campaigns", label: "Campaigns", href: hasActiveBrand ? `${brandRoot}/campaigns` : "/brands", icon: FolderKanban },
       { id: "network", label: "Senders", href: hasActiveBrand ? `${brandRoot}/network` : "/brands", icon: Network },
       { id: "leads", label: "Leads", href: hasActiveBrand ? `${brandRoot}/leads` : "/brands", icon: Mail },

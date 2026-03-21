@@ -77,6 +77,7 @@ export async function PATCH(
       hourlyCap: Math.max(1, Number(row.hourlyCap ?? 6)),
       timezone: String(row.timezone ?? "America/Los_Angeles"),
       minSpacingMinutes: Math.max(1, Number(row.minSpacingMinutes ?? 8)),
+      oneContactPerCompany: row.oneContactPerCompany !== false,
       businessHoursEnabled: row.businessHoursEnabled !== false,
       businessHoursStartHour: Math.max(0, Math.min(23, Math.round(Number(row.businessHoursStartHour ?? 9) || 9))),
       businessHoursEndHour: Math.max(1, Math.min(24, Math.round(Number(row.businessHoursEndHour ?? 17) || 17))),

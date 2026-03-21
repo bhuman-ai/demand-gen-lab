@@ -901,7 +901,7 @@ export default function ExperimentClient({
   }, [launchQueueStorageKey]);
 
   useEffect(() => {
-    if (!experiment || currentStage !== 1 || prospectTableRowCount > 0) {
+    if (!experiment || prospectTableRowCount > 0) {
       return;
     }
 
@@ -945,7 +945,7 @@ export default function ExperimentClient({
       cancelled = true;
       window.clearInterval(intervalId);
     };
-  }, [brandId, currentStage, experiment, prospectTableRowCount]);
+  }, [brandId, experiment, prospectTableRowCount]);
 
   // refresh is intentionally omitted here because the effect is keyed off the persisted-stage inputs above.
   // Re-running on every refresh function identity change would restart the background resolver loop.

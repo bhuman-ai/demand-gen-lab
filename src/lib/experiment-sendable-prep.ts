@@ -17,7 +17,7 @@ import {
   type ImportExperimentProspectRowsResult,
 } from "@/lib/experiment-prospect-import";
 import { EXPERIMENT_MIN_VERIFIED_EMAIL_LEADS } from "@/lib/experiment-policy";
-import { listOwnerRuns } from "@/lib/outreach-data";
+import { listExperimentRuns, listOwnerRuns } from "@/lib/outreach-data";
 import { resolveEmailFinderApiBaseUrl } from "@/lib/outreach-providers";
 import { launchExperimentRun } from "@/lib/outreach-runtime";
 
@@ -81,7 +81,19 @@ async function maybeAutoLaunchPreparedExperiment(experiment: ExperimentRecord) {
   }
 
   const ownerRuns = await listOwnerRuns(experiment.brandId, "experiment", experiment.id);
-  const activeOwnerRun = ownerRuns.find((run) => hasOpenRunStatus(run.status)) ?? null;
+  const experimentRuns =
+    experiment.runtime.campaignId && experiment.runtime.experimentId
+      ? await listExperimentRuns(
+          experiment.brandId,
+          experiment.runtime.campaignId,
+          experiment.runtime.experimentId
+        )
+      : [];
+  const launchRelevantRuns = [...ownerRuns, ...experimentRuns].sort((a, b) =>
+    a.createdAt < b.createdAt ? 1 : -1
+  );
+  const activeOwnerRun =
+    launchRelevantRuns.find((run) => hasOpenRunStatus(run.status)) ?? null;
   if (activeOwnerRun) {
     if (experiment.status !== "running") {
       await updateExperimentRecord(experiment.brandId, experiment.id, { status: "running" });
@@ -93,7 +105,7 @@ async function maybeAutoLaunchPreparedExperiment(experiment: ExperimentRecord) {
     await updateExperimentRecord(experiment.brandId, experiment.id, { status: "ready" });
   }
 
-  if (hasLaunchFailureCooldown(experiment, ownerRuns)) {
+  if (hasLaunchFailureCooldown(experiment, launchRelevantRuns)) {
     return { launched: false, blocked: true };
   }
 

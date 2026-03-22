@@ -2,6 +2,7 @@ import { listBrands } from "@/lib/factory-data";
 import {
   getExperimentRecordById,
   listExperimentRecords,
+  updateExperimentRecord,
 } from "@/lib/experiment-data";
 import type { ExperimentRecord } from "@/lib/factory-types";
 import {
@@ -16,10 +17,14 @@ import {
   type ImportExperimentProspectRowsResult,
 } from "@/lib/experiment-prospect-import";
 import { EXPERIMENT_MIN_VERIFIED_EMAIL_LEADS } from "@/lib/experiment-policy";
+import { listOwnerRuns } from "@/lib/outreach-data";
 import { resolveEmailFinderApiBaseUrl } from "@/lib/outreach-providers";
+import { launchExperimentRun } from "@/lib/outreach-runtime";
 
 const TARGET_SENDABLE_CONTACTS = EXPERIMENT_MIN_VERIFIED_EMAIL_LEADS;
+const TARGET_EXPERIMENT_CONTACTS = 500;
 const LIVE_TOP_UP_MIN_INTERVAL_MS = 20_000;
+const AUTO_LAUNCH_RETRY_COOLDOWN_MS = 15 * 60 * 1000;
 
 export type ExperimentSendablePrepResult = {
   targetCount: number;
@@ -43,9 +48,63 @@ export type ExperimentSendablePrepTickResult = {
   experimentsPrepared: number;
   experimentsReady: number;
   experimentsAdvanced: number;
+  experimentsLaunched: number;
+  experimentsLaunchBlocked: number;
   liveTopUpsAttempted: number;
   errors: Array<{ brandId: string; experimentId: string; error: string }>;
 };
+
+function hasOpenRunStatus(status: string) {
+  return ["queued", "sourcing", "scheduled", "sending", "monitoring", "paused"].includes(
+    String(status ?? "").trim().toLowerCase()
+  );
+}
+
+function hasLaunchFailureCooldown(experiment: ExperimentRecord, runs: Awaited<ReturnType<typeof listOwnerRuns>>) {
+  const latestRun = runs[0] ?? null;
+  if (!latestRun) return false;
+  if (hasOpenRunStatus(latestRun.status)) return true;
+  if (!["failed", "preflight_failed"].includes(latestRun.status)) return false;
+  const sentMessages = Math.max(0, Number(latestRun.metrics.sentMessages ?? 0) || 0);
+  if (sentMessages > 0) return false;
+  const updatedAtMs = Date.parse(String(latestRun.updatedAt ?? ""));
+  if (!Number.isFinite(updatedAtMs)) return false;
+  return Date.now() - updatedAtMs < AUTO_LAUNCH_RETRY_COOLDOWN_MS;
+}
+
+async function maybeAutoLaunchPreparedExperiment(experiment: ExperimentRecord) {
+  if (!experiment.runtime.campaignId || !experiment.runtime.experimentId) {
+    return { launched: false, blocked: true };
+  }
+  if (["running", "paused", "completed", "promoted", "archived"].includes(experiment.status)) {
+    return { launched: false, blocked: true };
+  }
+
+  const ownerRuns = await listOwnerRuns(experiment.brandId, "experiment", experiment.id);
+  if (hasLaunchFailureCooldown(experiment, ownerRuns)) {
+    return { launched: false, blocked: true };
+  }
+
+  const launch = await launchExperimentRun({
+    brandId: experiment.brandId,
+    campaignId: experiment.runtime.campaignId,
+    experimentId: experiment.runtime.experimentId,
+    trigger: "manual",
+    ownerType: "experiment",
+    ownerId: experiment.id,
+    maxLeadsOverride: TARGET_EXPERIMENT_CONTACTS,
+  });
+
+  if (!launch.ok) {
+    if (launch.reason.includes("already has an active run")) {
+      await updateExperimentRecord(experiment.brandId, experiment.id, { status: "running" });
+    }
+    return { launched: false, blocked: true };
+  }
+
+  await updateExperimentRecord(experiment.brandId, experiment.id, { status: "running" });
+  return { launched: true, blocked: false };
+}
 
 function isHostManagedWorkspace(workspaceId: string) {
   return workspaceId.startsWith("lastb2b_");
@@ -213,6 +272,8 @@ export async function runExperimentSendablePrepTick(
     experimentsPrepared: 0,
     experimentsReady: 0,
     experimentsAdvanced: 0,
+    experimentsLaunched: 0,
+    experimentsLaunchBlocked: 0,
     liveTopUpsAttempted: 0,
     errors: [],
   };
@@ -240,6 +301,12 @@ export async function runExperimentSendablePrepTick(
         const before = await countExperimentSendableLeadContacts(brand.id, experiment.id);
         if (before.sendableLeadCount >= TARGET_SENDABLE_CONTACTS) {
           results.experimentsReady += 1;
+          const launch = await maybeAutoLaunchPreparedExperiment(experiment);
+          if (launch.launched) {
+            results.experimentsLaunched += 1;
+          } else if (launch.blocked) {
+            results.experimentsLaunchBlocked += 1;
+          }
           continue;
         }
 
@@ -256,6 +323,13 @@ export async function runExperimentSendablePrepTick(
         }
         if (prep.ready) {
           results.experimentsReady += 1;
+          const latestExperiment = (await getExperimentRecordById(brand.id, experiment.id)) ?? experiment;
+          const launch = await maybeAutoLaunchPreparedExperiment(latestExperiment);
+          if (launch.launched) {
+            results.experimentsLaunched += 1;
+          } else if (launch.blocked) {
+            results.experimentsLaunchBlocked += 1;
+          }
         }
         if (prep.sendableLeadCount > before.sendableLeadCount) {
           results.experimentsAdvanced += 1;

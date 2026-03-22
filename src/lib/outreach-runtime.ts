@@ -150,6 +150,7 @@ const DEFAULT_REPLY_AUTOSEND_MIN_DELAY_MINUTES = 40;
 const DEFAULT_REPLY_AUTOSEND_RANDOM_ADDITIONAL_DELAY_MINUTES = 20;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const CONVERSATION_TICK_MINUTES = 15;
+const DEFAULT_EXPERIMENT_RUN_LEAD_TARGET = 500;
 const DELIVERABILITY_PROBE_POLL_DELAY_MINUTES = 3;
 const DELIVERABILITY_PROBE_REPEAT_HOURS = 24 * 7;
 const DELIVERABILITY_INTELLIGENCE_REFRESH_HOURS = 6;
@@ -12713,7 +12714,7 @@ export async function autoQueueApprovedHypothesisRuns(input: {
 async function processSourceLeadsJob(job: OutreachJob) {
   const run = await getOutreachRun(job.runId);
   if (!run) return;
-  if (!["queued", "sourcing"].includes(run.status)) {
+  if (!["queued", "sourcing", "scheduled", "sending", "monitoring"].includes(run.status)) {
     return;
   }
 
@@ -12755,36 +12756,6 @@ async function processSourceLeadsJob(job: OutreachJob) {
       : {};
   const sampleOnly = payload.sampleOnly === true;
   const resumeState = parseDeferredSourcingState(payload.resumeState);
-
-  if (existingLeads.length) {
-    await updateOutreachRun(run.id, {
-      status:
-        run.status === "queued" || run.status === "sourcing"
-          ? sampleOnly
-            ? "completed"
-            : "scheduled"
-          : run.status,
-      lastError: "",
-      completedAt: sampleOnly ? nowIso() : "",
-      metrics: {
-        ...run.metrics,
-        sourcedLeads: existingLeads.length,
-      },
-    });
-    await createOutreachEvent({
-      runId: run.id,
-      eventType: "lead_sourcing_skipped",
-      payload: { reason: "leads_already_present", count: existingLeads.length, sampleOnly },
-    });
-    if (!sampleOnly) {
-      await enqueueOutreachJob({
-        runId: run.id,
-        jobType: "schedule_messages",
-        executeAfter: nowIso(),
-      });
-    }
-    return;
-  }
 
   const campaign = await getCampaignById(run.brandId, run.campaignId);
   if (!campaign) {
@@ -12829,6 +12800,43 @@ async function processSourceLeadsJob(job: OutreachJob) {
       Number(payload.maxLeadsOverride ?? sourceConfig.maxLeads ?? (sampleOnly ? APIFY_PROBE_MAX_LEADS : 100)) || 100
     )
   );
+  if (existingLeads.length) {
+    await updateOutreachRun(run.id, {
+      status:
+        existingLeads.length >= maxLeads && (run.status === "queued" || run.status === "sourcing")
+          ? sampleOnly
+            ? "completed"
+            : "scheduled"
+          : run.status,
+      lastError: "",
+      completedAt: sampleOnly && existingLeads.length >= maxLeads ? nowIso() : "",
+      metrics: {
+        ...run.metrics,
+        sourcedLeads: Math.max(run.metrics.sourcedLeads, existingLeads.length),
+      },
+    });
+    await createOutreachEvent({
+      runId: run.id,
+      eventType:
+        existingLeads.length >= maxLeads ? "lead_sourcing_skipped" : "lead_sourcing_top_up_requested",
+      payload: {
+        reason: existingLeads.length >= maxLeads ? "leads_already_present" : "top_up_after_seed",
+        count: existingLeads.length,
+        targetLeadCount: maxLeads,
+        sampleOnly,
+      },
+    });
+    if (!sampleOnly) {
+      await enqueueOutreachJob({
+        runId: run.id,
+        jobType: "schedule_messages",
+        executeAfter: nowIso(),
+      });
+    }
+    if (existingLeads.length >= maxLeads) {
+      return;
+    }
+  }
   const runtimeExperiment = await getExperimentRecordByRuntimeRef(run.brandId, run.campaignId, run.experimentId);
   const baseAudienceContext = buildSourcingAudienceContext({
     runtimeAudience: runtimeExperiment?.audience ?? "",
@@ -13505,22 +13513,6 @@ async function processScheduleMessagesJob(job: OutreachJob) {
   if (["paused", "completed", "canceled", "failed", "preflight_failed"].includes(run.status)) return;
 
   const existingMessages = await listRunMessages(run.id);
-  if (existingMessages.length) {
-    await maybeQueueScheduledDeliverabilityProbe(run);
-    await updateOutreachRun(run.id, {
-      lastError: "",
-      metrics: {
-        ...run.metrics,
-        scheduledMessages: Math.max(run.metrics.scheduledMessages, existingMessages.length),
-      },
-    });
-    await createOutreachEvent({
-      runId: run.id,
-      eventType: "message_scheduling_skipped",
-      payload: { reason: "messages_already_exist", count: existingMessages.length },
-    });
-    return;
-  }
 
   const campaign = await getCampaignById(run.brandId, run.campaignId);
   if (!campaign) {
@@ -13577,7 +13569,7 @@ async function processScheduleMessagesJob(job: OutreachJob) {
       return;
     }
 
-    const existingConversationMessages = await listRunMessages(run.id);
+    const existingConversationMessages = existingMessages;
     const campaignGoal = campaign.objective.goal.trim();
     const brandName = brand?.name ?? "";
 
@@ -13690,7 +13682,11 @@ async function processScheduleMessagesJob(job: OutreachJob) {
       }
     }
 
-    if (scheduledMessagesCount === 0) {
+    const totalSchedulableMessages = existingConversationMessages.filter((message) =>
+      ["scheduled", "sent"].includes(message.status)
+    ).length;
+
+    if (scheduledMessagesCount === 0 && totalSchedulableMessages === 0) {
       await failRunWithDiagnostics({
         run,
         reason:
@@ -13703,11 +13699,18 @@ async function processScheduleMessagesJob(job: OutreachJob) {
 
     await createOutreachEvent({
       runId: run.id,
-      eventType: "message_scheduled",
-      payload: {
-        count: scheduledMessagesCount,
-        mode: "conversation_map",
-      },
+      eventType: scheduledMessagesCount > 0 ? "message_scheduled" : "message_scheduling_skipped",
+      payload:
+        scheduledMessagesCount > 0
+          ? {
+              count: scheduledMessagesCount,
+              totalCount: totalSchedulableMessages,
+              mode: "conversation_map",
+            }
+          : {
+              reason: "messages_already_exist",
+              count: totalSchedulableMessages,
+            },
     });
   } else {
     await failRunWithDiagnostics({
@@ -13727,7 +13730,10 @@ async function processScheduleMessagesJob(job: OutreachJob) {
     status: "scheduled",
     metrics: {
       ...run.metrics,
-      scheduledMessages: Math.max(run.metrics.scheduledMessages, scheduledMessagesCount),
+      scheduledMessages: Math.max(
+        run.metrics.scheduledMessages,
+        existingMessages.filter((message) => ["scheduled", "sent"].includes(message.status)).length
+      ),
     },
   });
   await maybeQueueScheduledDeliverabilityProbe(run);
@@ -14483,8 +14489,40 @@ async function processAnalyzeRunJob(job: OutreachJob) {
   }
 
   const messages = await listRunMessages(run.id);
+  const leads = await listRunLeads(run.id);
+  const jobs = await listRunJobs(run.id, 100);
   const { threads } = await listReplyThreadsByBrand(run.brandId);
   const metrics = calculateRunMetricsFromMessages(run.id, messages, threads);
+  const targetLeadCount = run.ownerType === "experiment" ? DEFAULT_EXPERIMENT_RUN_LEAD_TARGET : 0;
+  const hasOpenSourceJob = jobs.some(
+    (queuedJob) =>
+      queuedJob.jobType === "source_leads" && ["queued", "running"].includes(queuedJob.status)
+  );
+  const shouldTopUpLeads =
+    targetLeadCount > 0 &&
+    leads.length < targetLeadCount &&
+    metrics.sentMessages < targetLeadCount &&
+    !hasOpenSourceJob;
+
+  if (shouldTopUpLeads) {
+    await enqueueOutreachJob({
+      runId: run.id,
+      jobType: "source_leads",
+      executeAfter: nowIso(),
+      payload: {
+        maxLeadsOverride: targetLeadCount,
+      },
+    });
+    await createOutreachEvent({
+      runId: run.id,
+      eventType: "lead_sourcing_top_up_requested",
+      payload: {
+        currentLeadCount: leads.length,
+        sentMessages: metrics.sentMessages,
+        targetLeadCount,
+      },
+    });
+  }
 
   const delivered = Math.max(1, metrics.sentMessages + metrics.bouncedMessages);
   const attempted = Math.max(1, metrics.sentMessages + metrics.failedMessages + metrics.bouncedMessages);
@@ -14557,6 +14595,30 @@ async function processAnalyzeRunJob(job: OutreachJob) {
 
   const pendingScheduled = messages.some((message) => message.status === "scheduled");
   if (!pendingScheduled) {
+    if (
+      targetLeadCount > 0 &&
+      metrics.sentMessages < targetLeadCount &&
+      (leads.length < targetLeadCount || hasOpenSourceJob)
+    ) {
+      await updateOutreachRun(run.id, {
+        status: "monitoring",
+        metrics: {
+          ...run.metrics,
+          sentMessages: metrics.sentMessages,
+          bouncedMessages: metrics.bouncedMessages,
+          failedMessages: metrics.failedMessages,
+          replies: metrics.replies,
+          positiveReplies: metrics.positiveReplies,
+          negativeReplies: metrics.negativeReplies,
+        },
+      });
+      await enqueueOutreachJob({
+        runId: run.id,
+        jobType: "analyze_run",
+        executeAfter: addMinutes(nowIso(), 10),
+      });
+      return;
+    }
     await updateOutreachRun(run.id, {
       status: "completed",
       completedAt: nowIso(),

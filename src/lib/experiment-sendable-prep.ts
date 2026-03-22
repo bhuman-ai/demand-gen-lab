@@ -76,11 +76,23 @@ async function maybeAutoLaunchPreparedExperiment(experiment: ExperimentRecord) {
   if (!experiment.runtime.campaignId || !experiment.runtime.experimentId) {
     return { launched: false, blocked: true };
   }
-  if (["running", "paused", "completed", "promoted", "archived"].includes(experiment.status)) {
+  if (["completed", "promoted", "archived"].includes(experiment.status)) {
     return { launched: false, blocked: true };
   }
 
   const ownerRuns = await listOwnerRuns(experiment.brandId, "experiment", experiment.id);
+  const activeOwnerRun = ownerRuns.find((run) => hasOpenRunStatus(run.status)) ?? null;
+  if (activeOwnerRun) {
+    if (experiment.status !== "running") {
+      await updateExperimentRecord(experiment.brandId, experiment.id, { status: "running" });
+    }
+    return { launched: false, blocked: true };
+  }
+
+  if (["running", "paused"].includes(experiment.status)) {
+    await updateExperimentRecord(experiment.brandId, experiment.id, { status: "ready" });
+  }
+
   if (hasLaunchFailureCooldown(experiment, ownerRuns)) {
     return { launched: false, blocked: true };
   }

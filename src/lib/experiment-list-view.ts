@@ -100,6 +100,18 @@ function summarizeStatusDetail(
   experiment: ExperimentRecord,
   latestRun: OutreachRun | null
 ) {
+  if (status === "Running") {
+    const scheduledMessages = normalizeCount(latestRun?.metrics.scheduledMessages);
+    const sentMessages = normalizeCount(latestRun?.metrics.sentMessages);
+    if (scheduledMessages > 0 && sentMessages === 0) {
+      return `${scheduledMessages} messages are queued. Waiting for the next business-hour send window.`;
+    }
+    if (sentMessages > 0) {
+      return `${sentMessages} email${sentMessages === 1 ? "" : "s"} already sent.`;
+    }
+    return "A sending run is active.";
+  }
+
   if (status === "Preparing") {
     const sourcedLeads = normalizeCount(latestRun?.metrics.sourcedLeads);
     const remaining = Math.max(0, EXPERIMENT_MIN_VERIFIED_EMAIL_LEADS - sourcedLeads);

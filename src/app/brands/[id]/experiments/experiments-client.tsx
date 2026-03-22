@@ -402,12 +402,22 @@ export default function ExperimentsClient({
                           </div>
                         </td>
                         <td className="py-2 pr-4 align-top">
-                        <Badge
-                          className={statusTone(item.status)}
-                          title={item.statusDetail}
-                        >
-                          {item.status}
-                        </Badge>
+                          <div className="space-y-1">
+                            <Badge
+                              className={statusTone(item.status)}
+                              title={item.statusDetail}
+                            >
+                              {item.status}
+                            </Badge>
+                            {item.statusDetail ? (
+                              <div
+                                className="max-w-[18rem] text-xs leading-5 text-[color:var(--muted-foreground)]"
+                                title={item.statusDetail}
+                              >
+                                {item.statusDetail}
+                              </div>
+                            ) : null}
+                          </div>
                         </td>
                         <td className="py-2 pr-4 align-top text-[color:var(--muted-foreground)]">{item.audience || "—"}</td>
                         <td className="py-2 px-2 align-top text-right">{leadsCell(item) || "—"}</td>

@@ -154,6 +154,13 @@ function formatDate(value: string) {
   return parsed.toLocaleString();
 }
 
+function formatHourLabel(hour: number) {
+  const safeHour = Math.max(0, Math.min(23, Math.floor(hour)));
+  const suffix = safeHour >= 12 ? "PM" : "AM";
+  const normalized = safeHour % 12 || 12;
+  return `${normalized}:00 ${suffix}`;
+}
+
 function formatUsd(value: number, opts?: { minFractionDigits?: number; maxFractionDigits?: number }) {
   return new Intl.NumberFormat("en-US", {
     style: "currency",
@@ -646,6 +653,15 @@ export default function ExperimentClient({
       ) ?? null,
     [runView]
   );
+  const primaryRun = latestSendingRun ?? latestRun;
+  const nextScheduledAtAnyRun = useMemo(
+    () =>
+      (runView?.messages ?? [])
+        .filter((message) => message.status === "scheduled" && message.scheduledAt)
+        .map((message) => message.scheduledAt)
+        .sort((a, b) => (a < b ? -1 : 1))[0] ?? "",
+    [runView]
+  );
 
   const setupReady = useMemo(
     () =>
@@ -741,8 +757,8 @@ export default function ExperimentClient({
   const messagingUnlocked = prospectsComplete;
   const messagingComplete = messagingUnlocked && messagingReady;
   const launchStageUnlocked = messagingReady;
-  const launchComplete = launchStageUnlocked && latestRun?.status === "completed";
-  const launchActive = launchStageUnlocked && Boolean(latestRun && !isRunTerminal(latestRun.status));
+  const launchComplete = launchStageUnlocked && primaryRun?.status === "completed";
+  const launchActive = launchStageUnlocked && Boolean(primaryRun && !isRunTerminal(primaryRun.status));
   const highestUnlockedStage = launchStageUnlocked ? 3 : messagingUnlocked ? 2 : prospectsUnlocked ? 1 : 0;
   const remainingProspectLeads = Math.max(0, PROSPECT_VALIDATION_TARGET - savedProspectCount);
   const prospectPrimaryMessage = !savedProspectsReady
@@ -1170,24 +1186,45 @@ export default function ExperimentClient({
     Math.min(24, Number(experiment?.testEnvelope.businessHoursEndHour ?? 17) || 17)
   );
   const businessDaysLabel = formatBusinessDays(experiment?.testEnvelope.businessDays);
+  const businessHoursLabel = businessHoursEnabled
+    ? `${businessDaysLabel} ${formatHourLabel(businessHoursStartHour)}-${formatHourLabel(
+        businessHoursEndHour === 24 ? 23 : businessHoursEndHour
+      )} ${experiment?.testEnvelope.timezone || "local time"}`
+    : "all day";
+  const primaryRunScheduledMessages = Number(primaryRun?.metrics.scheduledMessages ?? 0);
+  const primaryRunSentMessages = Number(primaryRun?.metrics.sentMessages ?? 0);
+  const primaryRunReplies = Number(primaryRun?.metrics.replies ?? 0);
+  const runWaitingForSendWindow =
+    Boolean(primaryRun) &&
+    primaryRunScheduledMessages > 0 &&
+    primaryRunSentMessages === 0 &&
+    ["scheduled", "sending", "monitoring", "paused"].includes(primaryRun?.status ?? "");
   const latestRunNarrative = (() => {
-    if (!latestRun) {
+    if (!primaryRun) {
       return {
         headline: "No launch yet.",
         detail: "Complete Prospects + Messaging, then click Launch Test.",
       };
     }
-    const sourced = Number(latestRun.metrics.sourcedLeads ?? 0);
-    const sent = Number(latestRun.metrics.sentMessages ?? 0);
-    const replies = Number(latestRun.metrics.replies ?? 0);
+    const sourced = Number(primaryRun.metrics.sourcedLeads ?? 0);
+    const sent = primaryRunSentMessages;
+    const replies = primaryRunReplies;
 
-    if (["failed", "preflight_failed", "canceled"].includes(latestRun.status)) {
+    if (["failed", "preflight_failed", "canceled"].includes(primaryRun.status)) {
       return {
         headline: "Run did not complete successfully.",
-        detail: latestRun.lastError || "Check timeline events for root cause.",
+        detail: primaryRun.lastError || "Check timeline events for root cause.",
       };
     }
-    if (latestRun.status === "completed" && sourced > 0 && sent === 0) {
+    if (runWaitingForSendWindow) {
+      return {
+        headline: "Messages are queued.",
+        detail: nextScheduledAtAnyRun
+          ? `${primaryRunScheduledMessages} messages are queued. First send window opens ${formatDate(nextScheduledAtAnyRun)}.`
+          : `${primaryRunScheduledMessages} messages are queued. Waiting for the next send window (${businessHoursLabel}).`,
+      };
+    }
+    if (primaryRun.status === "completed" && sourced > 0 && sent === 0) {
       return {
         headline: "Sourcing completed, but no emails were sent in this run.",
         detail: !messagingReady
@@ -1197,27 +1234,30 @@ export default function ExperimentClient({
             : `Accepted leads: ${sourced}. Launch Experiment to start sending.`,
       };
     }
-    if (latestRun.status === "completed" && sent > 0 && replies === 0) {
+    if (primaryRun.status === "completed" && sent > 0 && replies === 0) {
       return {
         headline: "Emails were sent; no replies yet.",
         detail: `Sent ${sent} messages to ${sourced} sourced leads.`,
       };
     }
-    if (latestRun.status === "completed" && sent > 0 && replies > 0) {
+    if (primaryRun.status === "completed" && sent > 0 && replies > 0) {
       return {
         headline: "Run completed with outbound and replies.",
         detail: `Sent ${sent}, replies ${replies}.`,
       };
     }
-    if (["queued", "sourcing", "scheduled", "sending", "monitoring"].includes(latestRun.status)) {
+    if (["queued", "sourcing", "scheduled", "sending", "monitoring"].includes(primaryRun.status)) {
       return {
         headline: "Run is in progress.",
-        detail: `Current step: ${latestRun.sourcingTraceSummary?.phase || "processing"}.`,
+        detail:
+          sent > 0
+            ? `${sent} emails already sent.`
+            : `Current step: ${primaryRun.sourcingTraceSummary?.phase || "processing"}.`,
       };
     }
     return {
       headline: "Run status updated.",
-      detail: `Status: ${latestRun.status}.`,
+      detail: `Status: ${primaryRun.status}.`,
     };
   })();
   const showSendableLeadProgress = prospectReviewApproved && !sendableLeadsReady;
@@ -1599,11 +1639,7 @@ export default function ExperimentClient({
     return <div className="text-sm text-[color:var(--muted-foreground)]">Loading experiment...</div>;
   }
 
-  const showLiveRunOverview = Boolean(view === "run" && latestRun);
-  const nextScheduledAtAnyRun = (runView?.messages ?? [])
-    .filter((message) => message.status === "scheduled" && message.scheduledAt)
-    .map((message) => message.scheduledAt)
-    .sort((a, b) => (a < b ? -1 : 1))[0];
+  const showLiveRunOverview = Boolean(view === "run" && primaryRun);
   const runNextAction: RunNextAction | null = (() => {
     if (!experiment) return null;
     const messagingHref = `/brands/${brandId}/experiments/${experiment.id}/messaging`;
@@ -1710,7 +1746,7 @@ export default function ExperimentClient({
     );
   }
 
-  if (showLiveRunOverview && latestRun) {
+  if (showLiveRunOverview && primaryRun) {
     return (
       <div className="space-y-5">
         {error ? <div className="text-sm text-[color:var(--danger)]">{error}</div> : null}
@@ -1722,33 +1758,35 @@ export default function ExperimentClient({
                 <CardTitle>{brand?.name || "Brand"} · {experiment.name}</CardTitle>
                 <CardDescription>{latestRunNarrative.detail}</CardDescription>
               </div>
-              <Badge variant={runStatusVariant(latestRun.status)}>{latestRun.status}</Badge>
+              <Badge variant={runStatusVariant(primaryRun.status)}>
+                {runWaitingForSendWindow ? "queued" : primaryRun.status}
+              </Badge>
             </div>
           </CardHeader>
           <CardContent className="grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
             <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-2">
               <div className="text-xs text-[color:var(--muted-foreground)]">Run</div>
-              <div className="text-sm font-semibold">{latestRun.id.slice(-8)}</div>
+              <div className="text-sm font-semibold">{primaryRun.id.slice(-8)}</div>
             </div>
             <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-2">
               <div className="text-xs text-[color:var(--muted-foreground)]">Sent (all runs)</div>
               <div className="text-sm font-semibold">{runTotals.sentMessages}</div>
               <div className="text-[11px] text-[color:var(--muted-foreground)]">
-                Latest run: {latestRun.metrics.sentMessages}
+                Latest run: {primaryRun.metrics.sentMessages}
               </div>
             </div>
             <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-2">
               <div className="text-xs text-[color:var(--muted-foreground)]">Replies (all runs)</div>
               <div className="text-sm font-semibold">{runTotals.replies}</div>
               <div className="text-[11px] text-[color:var(--muted-foreground)]">
-                Latest run: {latestRun.metrics.replies}
+                Latest run: {primaryRun.metrics.replies}
               </div>
             </div>
             <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-2">
               <div className="text-xs text-[color:var(--muted-foreground)]">Positive (all runs)</div>
               <div className="text-sm font-semibold">{runTotals.positiveReplies}</div>
               <div className="text-[11px] text-[color:var(--muted-foreground)]">
-                Latest run: {latestRun.metrics.positiveReplies}
+                Latest run: {primaryRun.metrics.positiveReplies}
               </div>
             </div>
             <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-2">
@@ -1880,7 +1918,7 @@ export default function ExperimentClient({
                   <span className="text-[color:var(--muted-foreground)]">Flow rev</span> #{experiment.messageFlow.publishedRevision}
                 </div>
                 <div className="rounded-lg border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-2 py-1">
-                  <span className="text-[color:var(--muted-foreground)]">Cadence</span> {latestRun.cadence}
+                  <span className="text-[color:var(--muted-foreground)]">Cadence</span> {primaryRun.cadence}
                 </div>
               </div>
             </CardContent>
@@ -1940,36 +1978,36 @@ export default function ExperimentClient({
                 )}
                 {sampling ? "Adding leads..." : "Add Leads"}
               </Button>
-              {canPause(latestRun.status) ? (
+              {canPause(primaryRun.status) ? (
                 <Button
                   type="button"
                   variant="outline"
                   onClick={async () => {
-                    await controlExperimentRunApi(brandId, experiment.id, latestRun.id, "pause");
+                    await controlExperimentRunApi(brandId, experiment.id, primaryRun.id, "pause");
                     await refresh(false);
                   }}
                 >
                   <Pause className="h-4 w-4" /> Pause
                 </Button>
               ) : null}
-              {canResume(latestRun.status) ? (
+              {canResume(primaryRun.status) ? (
                 <Button
                   type="button"
                   variant="outline"
                   onClick={async () => {
-                    await controlExperimentRunApi(brandId, experiment.id, latestRun.id, "resume");
+                    await controlExperimentRunApi(brandId, experiment.id, primaryRun.id, "resume");
                     await refresh(false);
                   }}
                 >
                   <Play className="h-4 w-4" /> Resume
                 </Button>
               ) : null}
-              {canCancel(latestRun.status) ? (
+              {canCancel(primaryRun.status) ? (
                 <Button
                   type="button"
                   variant="outline"
                   onClick={async () => {
-                    await controlExperimentRunApi(brandId, experiment.id, latestRun.id, "cancel");
+                    await controlExperimentRunApi(brandId, experiment.id, primaryRun.id, "cancel");
                     await refresh(false);
                   }}
                 >
@@ -2018,9 +2056,15 @@ export default function ExperimentClient({
   const pipelineOverviewMode = !view;
   const showSetupProgressBar = !setupComplete && currentStage === 0;
   const compactProspectsCanvas = currentStage === 1 && !showSetupProgressBar;
-  const experimentStatusLabel = latestRun ? latestRun.status : experiment.status;
-  const activityStatusLabel = latestRun
-    ? latestRun.status
+  const experimentStatusLabel = primaryRun
+    ? runWaitingForSendWindow
+      ? "queued"
+      : primaryRun.status
+    : experiment.status;
+  const activityStatusLabel = primaryRun
+    ? runWaitingForSendWindow
+      ? "waiting for send window"
+      : primaryRun.status
     : sampling
       ? "finding leads"
       : sendableLeadResolution.status === "blocked"
@@ -2058,13 +2102,19 @@ export default function ExperimentClient({
     {
       id: "experiment-launch",
       label: "Launch",
-      summary: launchActive ? "Running" : sendableLeadsReady ? "Ready" : "Preparing",
+      summary: launchActive ? (runWaitingForSendWindow ? "Queued" : "Running") : sendableLeadsReady ? "Ready" : "Preparing",
       detail: !launchIdentityReady
         ? "Setup needed"
         : sendableLeadsReady
-          ? nextScheduledAtAnyRun
-            ? formatDate(nextScheduledAtAnyRun)
-            : "No send booked"
+          ? runWaitingForSendWindow
+            ? nextScheduledAtAnyRun
+              ? `First send: ${formatDate(nextScheduledAtAnyRun)}`
+              : `Waiting for ${businessHoursLabel}`
+            : nextScheduledAtAnyRun
+              ? formatDate(nextScheduledAtAnyRun)
+              : primaryRunSentMessages > 0
+                ? `${primaryRunSentMessages} sent`
+                : "No send booked"
           : launchQueued
             ? `Auto-launch at ${PROSPECT_VALIDATION_TARGET}/${PROSPECT_VALIDATION_TARGET}`
             : `${sendableLeadCount}/${PROSPECT_VALIDATION_TARGET} contacts ready`,
@@ -2325,7 +2375,7 @@ export default function ExperimentClient({
               <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-2">
                 <div className="text-xs text-[color:var(--muted-foreground)]">Latest run</div>
                 <div className="font-medium text-[color:var(--foreground)]">
-                  {latestRun ? latestRun.id.slice(-8) : "No run yet"}
+                  {primaryRun ? primaryRun.id.slice(-8) : "No run yet"}
                 </div>
               </div>
               <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-2">
@@ -2513,7 +2563,11 @@ export default function ExperimentClient({
                 <Badge variant="muted">Sent: {experiment.metricsSummary.sent}</Badge>
                 <Badge variant="muted">Replies: {experiment.metricsSummary.replies}</Badge>
                 <Badge variant="muted">Positive: {experiment.metricsSummary.positiveReplies}</Badge>
-                {latestRun ? <Badge variant={runStatusVariant(latestRun.status)}>Run: {latestRun.status}</Badge> : null}
+                {primaryRun ? (
+                  <Badge variant={runStatusVariant(primaryRun.status)}>
+                    Run: {runWaitingForSendWindow ? "queued" : primaryRun.status}
+                  </Badge>
+                ) : null}
               </div>
             </div>
           </section>
@@ -2532,7 +2586,11 @@ export default function ExperimentClient({
               <Badge variant="muted">Sent: {experiment.metricsSummary.sent}</Badge>
               <Badge variant="muted">Replies: {experiment.metricsSummary.replies}</Badge>
               <Badge variant="muted">Positive: {experiment.metricsSummary.positiveReplies}</Badge>
-              {latestRun ? <Badge variant={runStatusVariant(latestRun.status)}>Run: {latestRun.status}</Badge> : null}
+              {primaryRun ? (
+                <Badge variant={runStatusVariant(primaryRun.status)}>
+                  Run: {runWaitingForSendWindow ? "queued" : primaryRun.status}
+                </Badge>
+              ) : null}
             </CardContent>
           </Card>
         )
@@ -2540,7 +2598,7 @@ export default function ExperimentClient({
 
       {error ? <div className="text-sm text-[color:var(--danger)]">{error}</div> : null}
 
-      {!view && latestRun && !compactProspectsCanvas ? (
+      {!view && primaryRun && !compactProspectsCanvas ? (
         <>
           <Card>
             <CardHeader>
@@ -2550,7 +2608,7 @@ export default function ExperimentClient({
             <CardContent className="grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
               <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-2">
                 <div className="text-xs text-[color:var(--muted-foreground)]">Latest run</div>
-                <div className="text-sm font-semibold">{latestRun.id.slice(-8)}</div>
+                <div className="text-sm font-semibold">{primaryRun.id.slice(-8)}</div>
               </div>
               <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-2">
                 <div className="text-xs text-[color:var(--muted-foreground)]">Sendable contacts</div>
@@ -3146,34 +3204,38 @@ export default function ExperimentClient({
             {!unifiedRunMode ? (
               <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3">
                 <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div className="text-sm font-medium">{latestRun ? `Run ${latestRun.id.slice(-6)}` : "No run yet"}</div>
-                  {latestRun ? <Badge variant={runStatusVariant(latestRun.status)}>{latestRun.status}</Badge> : null}
+                  <div className="text-sm font-medium">{primaryRun ? `Run ${primaryRun.id.slice(-6)}` : "No run yet"}</div>
+                  {primaryRun ? (
+                    <Badge variant={runStatusVariant(primaryRun.status)}>
+                      {runWaitingForSendWindow ? "queued" : primaryRun.status}
+                    </Badge>
+                  ) : null}
                 </div>
                 <div className="mt-2 rounded-lg border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-2 text-xs">
                   <div className="font-medium text-[color:var(--foreground)]">{latestRunNarrative.headline}</div>
                   <div className="mt-1 text-[color:var(--muted-foreground)]">{latestRunNarrative.detail}</div>
                 </div>
-                {latestRun ? (
+                {primaryRun ? (
                   <>
                     <div className="mt-2 text-sm text-[color:var(--muted-foreground)]">
-                      Leads {latestRun.metrics.sourcedLeads} · Sent {latestRun.metrics.sentMessages} · Replies {latestRun.metrics.replies} · Positive {latestRun.metrics.positiveReplies}
+                      Leads {primaryRun.metrics.sourcedLeads} · Sent {primaryRun.metrics.sentMessages} · Replies {primaryRun.metrics.replies} · Positive {primaryRun.metrics.positiveReplies}
                     </div>
-                    {latestRun.lastError ? (
-                      <div className="mt-2 text-sm text-[color:var(--danger)]">Reason: {latestRun.lastError}</div>
+                    {primaryRun.lastError ? (
+                      <div className="mt-2 text-sm text-[color:var(--danger)]">Reason: {primaryRun.lastError}</div>
                     ) : null}
                     <div className="mt-3 flex flex-wrap gap-2">
-                      {canPause(latestRun.status) ? (
-                        <Button type="button" variant="outline" onClick={async () => { await controlExperimentRunApi(brandId, experiment.id, latestRun.id, "pause"); await refresh(false); }}>
+                      {canPause(primaryRun.status) ? (
+                        <Button type="button" variant="outline" onClick={async () => { await controlExperimentRunApi(brandId, experiment.id, primaryRun.id, "pause"); await refresh(false); }}>
                           <Pause className="h-4 w-4" /> Pause
                         </Button>
                       ) : null}
-                      {canResume(latestRun.status) ? (
-                        <Button type="button" variant="outline" onClick={async () => { await controlExperimentRunApi(brandId, experiment.id, latestRun.id, "resume"); await refresh(false); }}>
+                      {canResume(primaryRun.status) ? (
+                        <Button type="button" variant="outline" onClick={async () => { await controlExperimentRunApi(brandId, experiment.id, primaryRun.id, "resume"); await refresh(false); }}>
                           <Play className="h-4 w-4" /> Resume
                         </Button>
                       ) : null}
-                      {canCancel(latestRun.status) ? (
-                        <Button type="button" variant="outline" onClick={async () => { await controlExperimentRunApi(brandId, experiment.id, latestRun.id, "cancel"); await refresh(false); }}>
+                      {canCancel(primaryRun.status) ? (
+                        <Button type="button" variant="outline" onClick={async () => { await controlExperimentRunApi(brandId, experiment.id, primaryRun.id, "cancel"); await refresh(false); }}>
                           Cancel
                         </Button>
                       ) : null}
@@ -3181,32 +3243,34 @@ export default function ExperimentClient({
                   </>
                 ) : null}
               </div>
-            ) : latestRun ? (
+            ) : primaryRun ? (
               <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div className="text-sm font-medium">Run controls</div>
-                  <Badge variant={runStatusVariant(latestRun.status)}>{latestRun.status}</Badge>
+                  <Badge variant={runStatusVariant(primaryRun.status)}>
+                    {runWaitingForSendWindow ? "queued" : primaryRun.status}
+                  </Badge>
                 </div>
-                {latestRun.lastError ? (
-                  <div className="mt-2 text-sm text-[color:var(--danger)]">Reason: {latestRun.lastError}</div>
+                {primaryRun.lastError ? (
+                  <div className="mt-2 text-sm text-[color:var(--danger)]">Reason: {primaryRun.lastError}</div>
                 ) : (
                   <div className="mt-2 text-xs text-[color:var(--muted-foreground)]">
                     Manage the live run here without repeating the full status summary above.
                   </div>
                 )}
                 <div className="mt-3 flex flex-wrap gap-2">
-                  {canPause(latestRun.status) ? (
-                    <Button type="button" variant="outline" onClick={async () => { await controlExperimentRunApi(brandId, experiment.id, latestRun.id, "pause"); await refresh(false); }}>
+                  {canPause(primaryRun.status) ? (
+                    <Button type="button" variant="outline" onClick={async () => { await controlExperimentRunApi(brandId, experiment.id, primaryRun.id, "pause"); await refresh(false); }}>
                       <Pause className="h-4 w-4" /> Pause
                     </Button>
                   ) : null}
-                  {canResume(latestRun.status) ? (
-                    <Button type="button" variant="outline" onClick={async () => { await controlExperimentRunApi(brandId, experiment.id, latestRun.id, "resume"); await refresh(false); }}>
+                  {canResume(primaryRun.status) ? (
+                    <Button type="button" variant="outline" onClick={async () => { await controlExperimentRunApi(brandId, experiment.id, primaryRun.id, "resume"); await refresh(false); }}>
                       <Play className="h-4 w-4" /> Resume
                     </Button>
                   ) : null}
-                  {canCancel(latestRun.status) ? (
-                    <Button type="button" variant="outline" onClick={async () => { await controlExperimentRunApi(brandId, experiment.id, latestRun.id, "cancel"); await refresh(false); }}>
+                  {canCancel(primaryRun.status) ? (
+                    <Button type="button" variant="outline" onClick={async () => { await controlExperimentRunApi(brandId, experiment.id, primaryRun.id, "cancel"); await refresh(false); }}>
                       Cancel
                     </Button>
                   ) : null}

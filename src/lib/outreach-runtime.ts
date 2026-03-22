@@ -60,6 +60,7 @@ import {
   createRunAnomaly,
   createRunMessages,
   enqueueOutreachJob,
+  claimQueuedOutreachJob,
   getBrandOutreachAssignment,
   findDeliverabilityProbeRun,
   getDeliverabilityProbeRun,
@@ -14746,35 +14747,40 @@ export async function runOutreachTick(
 
   const jobs = await listDueOutreachJobs(limit);
 
+  let processed = 0;
   let completed = 0;
   let failed = 0;
 
   for (const job of jobs) {
     const attempts = job.attempts + 1;
-    await updateOutreachJob(job.id, { status: "running", attempts });
+    const claimedJob = await claimQueuedOutreachJob(job.id, attempts);
+    if (!claimedJob) {
+      continue;
+    }
+    processed += 1;
     await createOutreachEvent({
-      runId: job.runId,
+      runId: claimedJob.runId,
       eventType: "job_started",
       payload: {
-        jobId: job.id,
-        jobType: job.jobType,
+        jobId: claimedJob.id,
+        jobType: claimedJob.jobType,
         attempt: attempts,
-        maxAttempts: job.maxAttempts,
+        maxAttempts: claimedJob.maxAttempts,
       },
     });
 
     try {
-      await processOutreachJob(job);
-      await updateOutreachJob(job.id, {
+      await processOutreachJob(claimedJob);
+      await updateOutreachJob(claimedJob.id, {
         status: "completed",
         lastError: "",
       });
       await createOutreachEvent({
-        runId: job.runId,
+        runId: claimedJob.runId,
         eventType: "job_completed",
         payload: {
-          jobId: job.id,
-          jobType: job.jobType,
+          jobId: claimedJob.id,
+          jobType: claimedJob.jobType,
           attempt: attempts,
         },
       });
@@ -14788,31 +14794,31 @@ export async function runOutreachTick(
               .slice(0, 12)
               .join("\n")
           : "";
-      if (attempts >= job.maxAttempts) {
-        await updateOutreachJob(job.id, {
+      if (attempts >= claimedJob.maxAttempts) {
+        await updateOutreachJob(claimedJob.id, {
           status: "failed",
           lastError: message,
         });
       } else {
         const delayMinutes = Math.min(60, attempts * 5);
         const next = new Date(Date.now() + delayMinutes * 60 * 1000).toISOString();
-        await updateOutreachJob(job.id, {
+        await updateOutreachJob(claimedJob.id, {
           status: "queued",
           executeAfter: next,
           lastError: message,
         });
       }
       await createOutreachEvent({
-        runId: job.runId,
+        runId: claimedJob.runId,
         eventType: "job_failed",
         payload: {
-          jobId: job.id,
-          jobType: job.jobType,
+          jobId: claimedJob.id,
+          jobType: claimedJob.jobType,
           attempt: attempts,
-          maxAttempts: job.maxAttempts,
+          maxAttempts: claimedJob.maxAttempts,
           error: message,
           stack,
-          willRetry: attempts < job.maxAttempts,
+          willRetry: attempts < claimedJob.maxAttempts,
         },
       });
       failed += 1;
@@ -14825,7 +14831,7 @@ export async function runOutreachTick(
       : await ensureActiveCampaignHoppers();
 
   return {
-    processed: jobs.length,
+    processed,
     completed,
     failed,
     campaignsEvaluated: hopper.campaignsEvaluated,

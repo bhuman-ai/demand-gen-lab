@@ -168,6 +168,14 @@ const TABLE_SOURCING_PROBE_RESULT = "demanddev_sourcing_probe_results";
 const TABLE_SOURCING_ACTOR_MEMORY = "demanddev_sourcing_actor_memory";
 
 const nowIso = () => new Date().toISOString();
+const SINGLETON_OUTREACH_JOB_TYPES = new Set<OutreachJobType>([
+  "source_leads",
+  "schedule_messages",
+  "dispatch_messages",
+  "sync_replies",
+  "analyze_run",
+  "conversation_tick",
+]);
 
 function runtimeLabel(): "vercel" | "local" {
   return isVercel ? "vercel" : "local";
@@ -3052,15 +3060,19 @@ export async function enqueueOutreachJob(input: {
   maxAttempts?: number;
 }): Promise<OutreachJob> {
   const now = nowIso();
+  const singletonJobType = SINGLETON_OUTREACH_JOB_TYPES.has(input.jobType);
+  const requestedExecuteAfter = input.executeAfter ?? now;
+  const requestedPayload = input.payload ?? {};
+  const requestedMaxAttempts = input.maxAttempts ?? 5;
   const job: OutreachJob = {
     id: createId("job"),
     runId: input.runId,
     jobType: input.jobType,
     status: "queued",
-    executeAfter: input.executeAfter ?? now,
+    executeAfter: requestedExecuteAfter,
     attempts: 0,
-    maxAttempts: input.maxAttempts ?? 5,
-    payload: input.payload ?? {},
+    maxAttempts: requestedMaxAttempts,
+    payload: requestedPayload,
     lastError: "",
     createdAt: now,
     updatedAt: now,
@@ -3068,6 +3080,60 @@ export async function enqueueOutreachJob(input: {
 
   const supabase = getSupabaseAdmin();
   if (supabase) {
+    if (singletonJobType) {
+      const { data: existingQueued, error: existingError } = await supabase
+        .from(TABLE_JOB)
+        .select("*")
+        .eq("run_id", input.runId)
+        .eq("job_type", input.jobType)
+        .eq("status", "queued")
+        .order("execute_after", { ascending: true })
+        .order("created_at", { ascending: true });
+
+      if (!existingError && existingQueued && existingQueued.length) {
+        const mappedQueued = existingQueued.map((row: unknown) => mapJobRow(row));
+        const [keep, ...duplicates] = mappedQueued;
+        const nextExecuteAfter =
+          keep.executeAfter <= requestedExecuteAfter ? keep.executeAfter : requestedExecuteAfter;
+        const nextPayload = { ...keep.payload, ...requestedPayload };
+        const nextMaxAttempts = Math.max(keep.maxAttempts, requestedMaxAttempts);
+        const shouldUpdate =
+          keep.executeAfter !== nextExecuteAfter ||
+          keep.maxAttempts !== nextMaxAttempts ||
+          JSON.stringify(keep.payload) !== JSON.stringify(nextPayload);
+
+        let keptJob = keep;
+        if (shouldUpdate) {
+          const { data: updated, error: updateError } = await supabase
+            .from(TABLE_JOB)
+            .update({
+              execute_after: nextExecuteAfter,
+              payload: nextPayload,
+              max_attempts: nextMaxAttempts,
+              updated_at: now,
+            })
+            .eq("id", keep.id)
+            .select("*")
+            .maybeSingle();
+          if (!updateError && updated) {
+            keptJob = mapJobRow(updated);
+          }
+        }
+
+        if (duplicates.length) {
+          await supabase
+            .from(TABLE_JOB)
+            .delete()
+            .in(
+              "id",
+              duplicates.map((queuedJob) => queuedJob.id)
+            );
+        }
+
+        return keptJob;
+      }
+    }
+
     const { data, error } = await supabase
       .from(TABLE_JOB)
       .insert({
@@ -3089,6 +3155,37 @@ export async function enqueueOutreachJob(input: {
   }
 
   const store = await readLocalStore();
+  if (singletonJobType) {
+    const queuedMatches = store.jobs
+      .filter((row) => row.runId === input.runId && row.jobType === input.jobType && row.status === "queued")
+      .sort((left, right) => {
+        if (left.executeAfter === right.executeAfter) {
+          return left.createdAt < right.createdAt ? -1 : 1;
+        }
+        return left.executeAfter < right.executeAfter ? -1 : 1;
+      });
+    if (queuedMatches.length) {
+      const [keep, ...duplicates] = queuedMatches;
+      const nextExecuteAfter =
+        keep.executeAfter <= requestedExecuteAfter ? keep.executeAfter : requestedExecuteAfter;
+      const nextPayload = { ...keep.payload, ...requestedPayload };
+      const nextMaxAttempts = Math.max(keep.maxAttempts, requestedMaxAttempts);
+      const updatedKeep: OutreachJob = {
+        ...keep,
+        executeAfter: nextExecuteAfter,
+        payload: nextPayload,
+        maxAttempts: nextMaxAttempts,
+        updatedAt: now,
+      };
+      store.jobs = store.jobs.filter((row) => !duplicates.some((duplicate) => duplicate.id === row.id));
+      const keepIndex = store.jobs.findIndex((row) => row.id === keep.id);
+      if (keepIndex >= 0) {
+        store.jobs[keepIndex] = updatedKeep;
+      }
+      await writeLocalStore(store);
+      return updatedKeep;
+    }
+  }
   store.jobs.unshift(job);
   await writeLocalStore(store);
   return job;
@@ -3222,6 +3319,41 @@ export async function updateOutreachJob(
   };
   await writeLocalStore(store);
   return store.jobs[idx];
+}
+
+export async function claimQueuedOutreachJob(jobId: string, attempts: number): Promise<OutreachJob | null> {
+  const now = nowIso();
+  const supabase = getSupabaseAdmin();
+  if (supabase) {
+    const { data, error } = await supabase
+      .from(TABLE_JOB)
+      .update({
+        status: "running",
+        attempts,
+        updated_at: now,
+      })
+      .eq("id", jobId)
+      .eq("status", "queued")
+      .select("*")
+      .maybeSingle();
+    if (!error && data) {
+      return mapJobRow(data);
+    }
+    return null;
+  }
+
+  const store = await readLocalStore();
+  const index = store.jobs.findIndex((row) => row.id === jobId && row.status === "queued");
+  if (index < 0) return null;
+  const next: OutreachJob = {
+    ...store.jobs[index],
+    status: "running",
+    attempts,
+    updatedAt: now,
+  };
+  store.jobs[index] = next;
+  await writeLocalStore(store);
+  return next;
 }
 
 export async function createDeliverabilityProbeRun(input: {

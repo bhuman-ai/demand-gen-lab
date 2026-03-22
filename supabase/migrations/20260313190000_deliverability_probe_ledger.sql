@@ -67,6 +67,16 @@ create index if not exists demanddev_deliverability_seed_reservations_sender_idx
 create index if not exists demanddev_deliverability_seed_reservations_probe_idx
   on demanddev_deliverability_seed_reservations (probe_run_id, created_at asc);
 
+create or replace function public.set_current_timestamp_updated_at()
+returns trigger
+language plpgsql
+as $$
+begin
+  new.updated_at = now();
+  return new;
+end;
+$$;
+
 drop trigger if exists demanddev_deliverability_probe_runs_updated_at on demanddev_deliverability_probe_runs;
 create trigger demanddev_deliverability_probe_runs_updated_at
 before update on demanddev_deliverability_probe_runs

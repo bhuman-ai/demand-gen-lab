@@ -11213,9 +11213,14 @@ async function maybeRefreshDeliverabilityIntelligence(run: {
     getOutreachProvisioningSettings(),
     getOutreachProvisioningSettingsSecrets(),
   ]);
+  const deliverabilitySettings = settings.deliverability;
+  const provider = String(deliverabilitySettings?.provider ?? "none").trim();
+  const monitoredDomains = Array.isArray(deliverabilitySettings?.monitoredDomains)
+    ? deliverabilitySettings.monitoredDomains.map((value) => String(value ?? "").trim()).filter(Boolean)
+    : [];
 
-  if (settings.deliverability.provider !== "google_postmaster") return null;
-  if (!settings.deliverability.monitoredDomains.length) return null;
+  if (provider !== "google_postmaster") return null;
+  if (!monitoredDomains.length) return null;
   if (
     !secrets.deliverabilityGoogleClientId.trim() ||
     !secrets.deliverabilityGoogleClientSecret.trim() ||
@@ -11224,7 +11229,7 @@ async function maybeRefreshDeliverabilityIntelligence(run: {
     return null;
   }
 
-  const lastChecked = settings.deliverability.lastCheckedAt.trim();
+  const lastChecked = String(deliverabilitySettings?.lastCheckedAt ?? "").trim();
   if (lastChecked) {
     const elapsed = Date.now() - toDate(lastChecked).getTime();
     if (elapsed < DELIVERABILITY_INTELLIGENCE_REFRESH_HOURS * 60 * 60 * 1000) {
@@ -11237,7 +11242,7 @@ async function maybeRefreshDeliverabilityIntelligence(run: {
       clientId: secrets.deliverabilityGoogleClientId,
       clientSecret: secrets.deliverabilityGoogleClientSecret,
       refreshToken: secrets.deliverabilityGoogleRefreshToken,
-      domains: settings.deliverability.monitoredDomains,
+      domains: monitoredDomains,
     });
 
     await updateOutreachProvisioningSettings({
@@ -11277,7 +11282,7 @@ async function maybeRefreshDeliverabilityIntelligence(run: {
       runId: run.id,
       eventType: "deliverability_intelligence_failed",
       payload: {
-        provider: settings.deliverability.provider,
+        provider,
         error: message,
       },
     });
@@ -14436,172 +14441,167 @@ async function processConversationTickJob(job: OutreachJob) {
   });
 }
 
+function contextualizeJobError(operation: string, phase: string, error: unknown): Error {
+  const message = error instanceof Error ? error.message : String(error ?? "Job failed");
+  const next = new Error(`${operation}:${phase}: ${message}`);
+  if (error instanceof Error && typeof error.stack === "string" && error.stack.trim()) {
+    const stackLines = error.stack.split("\n");
+    next.stack = [`${next.name}: ${next.message}`, ...stackLines.slice(1)].join("\n");
+  }
+  return next;
+}
+
 async function processAnalyzeRunJob(job: OutreachJob) {
   const run = await getOutreachRun(job.runId);
   if (!run) return;
   if (["canceled", "completed", "failed", "preflight_failed"].includes(run.status)) return;
 
-  await maybeRefreshDeliverabilityIntelligence(run);
+  let phase = "refresh_deliverability";
+  try {
+    await maybeRefreshDeliverabilityIntelligence(run);
 
-  const senderAccount = await getOutreachAccount(run.accountId);
-  const senderHealthState =
-    senderAccount && senderAccount.status === "active"
-      ? await resolveBrandSenderHealth({
-          brandId: run.brandId,
-          accountId: senderAccount.id,
-          fromEmail: senderAccount.config.customerIo.fromEmail.trim().toLowerCase(),
-        })
-      : null;
-  const senderHealthGate = senderHealthState?.gate ?? { row: null, blockers: [], pending: [] };
-  if (senderHealthGate.blockers.length) {
-    const failover = await autoFailoverRunSender({
-      run,
-      reason: "sender_health_gate",
-      summary: "Current sender failed health checks and the system attempted to switch to the healthiest standby sender.",
-    });
-    if (failover.switched) {
-      await enqueueOutreachJob({
+    phase = "load_sender_account";
+    const senderAccount = await getOutreachAccount(run.accountId);
+    const senderFromEmail = String(senderAccount?.config?.customerIo?.fromEmail ?? "").trim().toLowerCase();
+
+    phase = "resolve_sender_health";
+    const senderHealthState =
+      senderAccount && senderAccount.status === "active" && senderFromEmail
+        ? await resolveBrandSenderHealth({
+            brandId: run.brandId,
+            accountId: senderAccount.id,
+            fromEmail: senderFromEmail,
+          })
+        : null;
+    const senderHealthGate = senderHealthState?.gate ?? { row: null, blockers: [], pending: [] };
+    if (senderHealthGate.blockers.length) {
+      phase = "pause_for_sender_health";
+      const failover = await autoFailoverRunSender({
+        run,
+        reason: "sender_health_gate",
+        summary: "Current sender failed health checks and the system attempted to switch to the healthiest standby sender.",
+      });
+      if (failover.switched) {
+        await enqueueOutreachJob({
+          runId: run.id,
+          jobType: "dispatch_messages",
+          executeAfter: nowIso(),
+        });
+        return;
+      }
+      const pauseReason = `Auto-paused due to sender health: ${describeSenderHealthIssues(senderHealthGate.blockers)}.`;
+      await updateOutreachRun(run.id, {
+        status: "paused",
+        pauseReason,
+        lastError: pauseReason,
+      });
+      await markExperimentExecutionStatus(run.brandId, run.campaignId, run.experimentId, "paused");
+      await createOutreachEvent({
         runId: run.id,
-        jobType: "dispatch_messages",
-        executeAfter: nowIso(),
+        eventType: "run_paused_auto",
+        payload: {
+          reason: "sender_health_gate",
+          summary: pauseReason,
+          senderAccountId: senderAccount?.id ?? run.accountId,
+          fromEmail: senderHealthGate.row?.fromEmail ?? senderAccount?.config?.customerIo?.fromEmail ?? "",
+          blockers: formatSenderHealthIssues(senderHealthGate.blockers),
+        },
       });
       return;
     }
-    const pauseReason = `Auto-paused due to sender health: ${describeSenderHealthIssues(senderHealthGate.blockers)}.`;
-    await updateOutreachRun(run.id, {
-      status: "paused",
-      pauseReason,
-      lastError: pauseReason,
-    });
-    await markExperimentExecutionStatus(run.brandId, run.campaignId, run.experimentId, "paused");
-    await createOutreachEvent({
-      runId: run.id,
-      eventType: "run_paused_auto",
-      payload: {
-        reason: "sender_health_gate",
-        summary: pauseReason,
-        senderAccountId: senderAccount?.id ?? run.accountId,
-        fromEmail: senderHealthGate.row?.fromEmail ?? senderAccount?.config.customerIo.fromEmail ?? "",
-        blockers: formatSenderHealthIssues(senderHealthGate.blockers),
-      },
-    });
-    return;
-  }
 
-  const messages = await listRunMessages(run.id);
-  const leads = await listRunLeads(run.id);
-  const jobs = await listRunJobs(run.id, 100);
-  const { threads } = await listReplyThreadsByBrand(run.brandId);
-  const metrics = calculateRunMetricsFromMessages(run.id, messages, threads);
-  const targetLeadCount = run.ownerType === "experiment" ? DEFAULT_EXPERIMENT_RUN_LEAD_TARGET : 0;
-  const hasOpenSourceJob = jobs.some(
-    (queuedJob) =>
-      queuedJob.jobType === "source_leads" && ["queued", "running"].includes(queuedJob.status)
-  );
-  const shouldTopUpLeads =
-    targetLeadCount > 0 &&
-    leads.length < targetLeadCount &&
-    metrics.sentMessages < targetLeadCount &&
-    !hasOpenSourceJob;
-
-  if (shouldTopUpLeads) {
-    await enqueueOutreachJob({
-      runId: run.id,
-      jobType: "source_leads",
-      executeAfter: nowIso(),
-      payload: {
-        maxLeadsOverride: targetLeadCount,
-      },
-    });
-    await createOutreachEvent({
-      runId: run.id,
-      eventType: "lead_sourcing_top_up_requested",
-      payload: {
-        currentLeadCount: leads.length,
-        sentMessages: metrics.sentMessages,
-        targetLeadCount,
-      },
-    });
-  }
-
-  const delivered = Math.max(1, metrics.sentMessages + metrics.bouncedMessages);
-  const attempted = Math.max(1, metrics.sentMessages + metrics.failedMessages + metrics.bouncedMessages);
-  const replyCount = Math.max(1, metrics.replies);
-
-  const bounceRate = metrics.bouncedMessages / delivered;
-  const providerErrorRate = metrics.failedMessages / attempted;
-  const negativeReplyRate = metrics.negativeReplies / replyCount;
-
-  let paused = false;
-
-  if (metrics.bouncedMessages >= 5 && bounceRate > 0.05) {
-    paused = true;
-    await createRunAnomaly({
-      runId: run.id,
-      type: "hard_bounce_rate",
-      severity: "critical",
-      threshold: 0.05,
-      observed: bounceRate,
-      details: "Hard bounce rate exceeded 5%.",
-    });
-  }
-
-  if (!paused && providerErrorRate > 0.2) {
-    paused = true;
-    await createRunAnomaly({
-      runId: run.id,
-      type: "provider_error_rate",
-      severity: "critical",
-      threshold: 0.2,
-      observed: providerErrorRate,
-      details: "Provider error rate exceeded 20%.",
-    });
-  }
-
-  if (!paused && metrics.replies >= 4 && negativeReplyRate > 0.25) {
-    paused = true;
-    await createRunAnomaly({
-      runId: run.id,
-      type: "negative_reply_rate_spike",
-      severity: "warning",
-      threshold: 0.25,
-      observed: negativeReplyRate,
-      details: "Negative reply rate spike above 25%.",
-    });
-  }
-
-  if (paused) {
-    await updateOutreachRun(run.id, {
-      status: "paused",
-      pauseReason: "Auto-paused due to anomaly",
-      metrics: {
-        ...run.metrics,
-        sentMessages: metrics.sentMessages,
-        bouncedMessages: metrics.bouncedMessages,
-        failedMessages: metrics.failedMessages,
-        replies: metrics.replies,
-        positiveReplies: metrics.positiveReplies,
-        negativeReplies: metrics.negativeReplies,
-      },
-    });
-    await markExperimentExecutionStatus(run.brandId, run.campaignId, run.experimentId, "paused");
-    await createOutreachEvent({
-      runId: run.id,
-      eventType: "run_paused_auto",
-      payload: { bounceRate, providerErrorRate, negativeReplyRate },
-    });
-    return;
-  }
-
-  const pendingScheduled = messages.some((message) => message.status === "scheduled");
-  if (!pendingScheduled) {
-    if (
+    phase = "load_run_state";
+    const messages = await listRunMessages(run.id);
+    const leads = await listRunLeads(run.id);
+    const jobs = await listRunJobs(run.id, 100);
+    const { threads } = await listReplyThreadsByBrand(run.brandId);
+    const metrics = calculateRunMetricsFromMessages(run.id, messages, threads);
+    const targetLeadCount = run.ownerType === "experiment" ? DEFAULT_EXPERIMENT_RUN_LEAD_TARGET : 0;
+    const hasOpenSourceJob = jobs.some(
+      (queuedJob) =>
+        queuedJob.jobType === "source_leads" && ["queued", "running"].includes(queuedJob.status)
+    );
+    const shouldTopUpLeads =
       targetLeadCount > 0 &&
+      leads.length < targetLeadCount &&
       metrics.sentMessages < targetLeadCount &&
-      (leads.length < targetLeadCount || hasOpenSourceJob)
-    ) {
+      !hasOpenSourceJob;
+
+    if (shouldTopUpLeads) {
+      phase = "request_lead_top_up";
+      await enqueueOutreachJob({
+        runId: run.id,
+        jobType: "source_leads",
+        executeAfter: nowIso(),
+        payload: {
+          maxLeadsOverride: targetLeadCount,
+        },
+      });
+      await createOutreachEvent({
+        runId: run.id,
+        eventType: "lead_sourcing_top_up_requested",
+        payload: {
+          currentLeadCount: leads.length,
+          sentMessages: metrics.sentMessages,
+          targetLeadCount,
+        },
+      });
+    }
+
+    const delivered = Math.max(1, metrics.sentMessages + metrics.bouncedMessages);
+    const attempted = Math.max(1, metrics.sentMessages + metrics.failedMessages + metrics.bouncedMessages);
+    const replyCount = Math.max(1, metrics.replies);
+
+    const bounceRate = metrics.bouncedMessages / delivered;
+    const providerErrorRate = metrics.failedMessages / attempted;
+    const negativeReplyRate = metrics.negativeReplies / replyCount;
+
+    let paused = false;
+
+    if (metrics.bouncedMessages >= 5 && bounceRate > 0.05) {
+      phase = "record_hard_bounce_anomaly";
+      paused = true;
+      await createRunAnomaly({
+        runId: run.id,
+        type: "hard_bounce_rate",
+        severity: "critical",
+        threshold: 0.05,
+        observed: bounceRate,
+        details: "Hard bounce rate exceeded 5%.",
+      });
+    }
+
+    if (!paused && providerErrorRate > 0.2) {
+      phase = "record_provider_error_anomaly";
+      paused = true;
+      await createRunAnomaly({
+        runId: run.id,
+        type: "provider_error_rate",
+        severity: "critical",
+        threshold: 0.2,
+        observed: providerErrorRate,
+        details: "Provider error rate exceeded 20%.",
+      });
+    }
+
+    if (!paused && metrics.replies >= 4 && negativeReplyRate > 0.25) {
+      phase = "record_negative_reply_anomaly";
+      paused = true;
+      await createRunAnomaly({
+        runId: run.id,
+        type: "negative_reply_rate_spike",
+        severity: "warning",
+        threshold: 0.25,
+        observed: negativeReplyRate,
+        details: "Negative reply rate spike above 25%.",
+      });
+    }
+
+    if (paused) {
+      phase = "pause_for_anomaly";
       await updateOutreachRun(run.id, {
-        status: "monitoring",
+        status: "paused",
+        pauseReason: "Auto-paused due to anomaly",
         metrics: {
           ...run.metrics,
           sentMessages: metrics.sentMessages,
@@ -14612,16 +14612,63 @@ async function processAnalyzeRunJob(job: OutreachJob) {
           negativeReplies: metrics.negativeReplies,
         },
       });
-      await enqueueOutreachJob({
+      await markExperimentExecutionStatus(run.brandId, run.campaignId, run.experimentId, "paused");
+      await createOutreachEvent({
         runId: run.id,
-        jobType: "analyze_run",
-        executeAfter: addMinutes(nowIso(), 10),
+        eventType: "run_paused_auto",
+        payload: { bounceRate, providerErrorRate, negativeReplyRate },
       });
       return;
     }
+
+    const pendingScheduled = messages.some((message) => message.status === "scheduled");
+    if (!pendingScheduled) {
+      if (
+        targetLeadCount > 0 &&
+        metrics.sentMessages < targetLeadCount &&
+        (leads.length < targetLeadCount || hasOpenSourceJob)
+      ) {
+        phase = "wait_for_top_up";
+        await updateOutreachRun(run.id, {
+          status: "monitoring",
+          metrics: {
+            ...run.metrics,
+            sentMessages: metrics.sentMessages,
+            bouncedMessages: metrics.bouncedMessages,
+            failedMessages: metrics.failedMessages,
+            replies: metrics.replies,
+            positiveReplies: metrics.positiveReplies,
+            negativeReplies: metrics.negativeReplies,
+          },
+        });
+        await enqueueOutreachJob({
+          runId: run.id,
+          jobType: "analyze_run",
+          executeAfter: addMinutes(nowIso(), 10),
+        });
+        return;
+      }
+      phase = "complete_run";
+      await updateOutreachRun(run.id, {
+        status: "completed",
+        completedAt: nowIso(),
+        metrics: {
+          ...run.metrics,
+          sentMessages: metrics.sentMessages,
+          bouncedMessages: metrics.bouncedMessages,
+          failedMessages: metrics.failedMessages,
+          replies: metrics.replies,
+          positiveReplies: metrics.positiveReplies,
+          negativeReplies: metrics.negativeReplies,
+        },
+      });
+      await markExperimentExecutionStatus(run.brandId, run.campaignId, run.experimentId, "completed");
+      return;
+    }
+
+    phase = "reschedule_analysis";
     await updateOutreachRun(run.id, {
-      status: "completed",
-      completedAt: nowIso(),
+      status: "monitoring",
       metrics: {
         ...run.metrics,
         sentMessages: metrics.sentMessages,
@@ -14632,27 +14679,14 @@ async function processAnalyzeRunJob(job: OutreachJob) {
         negativeReplies: metrics.negativeReplies,
       },
     });
-    await markExperimentExecutionStatus(run.brandId, run.campaignId, run.experimentId, "completed");
-    return;
+    await enqueueOutreachJob({
+      runId: run.id,
+      jobType: "analyze_run",
+      executeAfter: addHours(nowIso(), 1),
+    });
+  } catch (error) {
+    throw contextualizeJobError("analyze_run", phase, error);
   }
-
-  await updateOutreachRun(run.id, {
-    status: "monitoring",
-    metrics: {
-      ...run.metrics,
-      sentMessages: metrics.sentMessages,
-      bouncedMessages: metrics.bouncedMessages,
-      failedMessages: metrics.failedMessages,
-      replies: metrics.replies,
-      positiveReplies: metrics.positiveReplies,
-      negativeReplies: metrics.negativeReplies,
-    },
-  });
-  await enqueueOutreachJob({
-    runId: run.id,
-    jobType: "analyze_run",
-    executeAfter: addHours(nowIso(), 1),
-  });
 }
 
 async function processOutreachJob(job: OutreachJob) {
@@ -14747,6 +14781,13 @@ export async function runOutreachTick(
       completed += 1;
     } catch (error) {
       const message = error instanceof Error ? error.message : "Job failed";
+      const stack =
+        error instanceof Error && typeof error.stack === "string"
+          ? error.stack
+              .split("\n")
+              .slice(0, 12)
+              .join("\n")
+          : "";
       if (attempts >= job.maxAttempts) {
         await updateOutreachJob(job.id, {
           status: "failed",
@@ -14770,6 +14811,7 @@ export async function runOutreachTick(
           attempt: attempts,
           maxAttempts: job.maxAttempts,
           error: message,
+          stack,
           willRetry: attempts < job.maxAttempts,
         },
       });

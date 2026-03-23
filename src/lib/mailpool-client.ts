@@ -168,10 +168,15 @@ async function mailpoolRequest<T>(options: MailpoolRequestOptions): Promise<T> {
       })()
     : null;
   if (!response.ok) {
-    const detail =
+    const detailSource =
       typeof payload === "string"
         ? payload
-        : String(asRecord(payload).message ?? asRecord(payload).error ?? raw ?? "").trim();
+        : (() => {
+            const record = asRecord(payload);
+            const candidate = record.message ?? record.error ?? raw ?? "";
+            return typeof candidate === "string" ? candidate : JSON.stringify(candidate);
+          })();
+    const detail = String(detailSource ?? "").trim();
     throw new Error(`Mailpool ${options.method ?? "GET"} ${options.path} failed (HTTP ${response.status})${detail ? `: ${detail.slice(0, 300)}` : ""}`);
   }
   return payload as T;

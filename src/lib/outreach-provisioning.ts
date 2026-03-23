@@ -1766,7 +1766,6 @@ export async function provisionMailpoolSender(
       firstName,
       lastName,
       signature: `Best regards,\n${firstName} ${lastName}`.trim(),
-      forwardTo: forwardingTargetUrl || undefined,
       type: "google",
     });
   }

@@ -62,7 +62,7 @@ const TOOL_SPECS: OperatorToolSpec[] = [
     name: "get_brand_snapshot",
     riskLevel: "read",
     approvalMode: "none",
-    description: "Summarize a brand's senders, routing, campaigns, and inbox state.",
+    description: "Summarize a brand's senders, routing, experiments, campaigns, and inbox state.",
     previewTitle: "Get brand snapshot",
     run: async (input) => {
       const brandId = requireString(input, "brandId");
@@ -70,8 +70,9 @@ const TOOL_SPECS: OperatorToolSpec[] = [
       if (!context) {
         throw new Error("Brand not found");
       }
+      const runningExperiments = context.experiments.running + context.experiments.sourcing;
       return {
-        summary: `${context.brand.name} has ${context.senders.total} sender${context.senders.total === 1 ? "" : "s"}, ${context.campaigns.total} campaign${context.campaigns.total === 1 ? "" : "s"}, and ${context.inbox.threads} inbox thread${context.inbox.threads === 1 ? "" : "s"}.`,
+        summary: `${context.brand.name} has ${context.senders.total} sender${context.senders.total === 1 ? "" : "s"}, ${context.experiments.total} experiment${context.experiments.total === 1 ? "" : "s"}${runningExperiments ? `, ${runningExperiments} running` : ""}, and ${context.inbox.threads} inbox thread${context.inbox.threads === 1 ? "" : "s"}.`,
         result: context as unknown as Record<string, unknown>,
       } satisfies OperatorToolResult;
     },

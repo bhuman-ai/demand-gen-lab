@@ -1,10 +1,12 @@
 import { getBrandById, listBrands, listCampaigns } from "@/lib/factory-data";
-import type { BrandOutreachAssignment, BrandRecord, DomainRow, OutreachAccount } from "@/lib/factory-types";
-import { listDeliverabilityProbeRuns, getBrandOutreachAssignment, listOutreachAccounts, listReplyThreadsByBrand } from "@/lib/outreach-data";
+import { listExperimentRecords } from "@/lib/experiment-data";
+import { mapExperimentToListItem } from "@/lib/experiment-list-view";
+import type { BrandOutreachAssignment, BrandRecord, DomainRow, ExperimentListItem, OutreachAccount } from "@/lib/factory-types";
+import { listDeliverabilityProbeRuns, getBrandOutreachAssignment, listExperimentRuns, listOutreachAccounts, listOwnerRuns, listReplyThreadsByBrand } from "@/lib/outreach-data";
 import { getDomainDeliveryAccountId, getOutreachAccountFromEmail, getOutreachAccountReplyToEmail } from "@/lib/outreach-account-helpers";
 import { listSavedMailpoolDomains } from "@/lib/outreach-provisioning";
 import { getOutreachProvisioningSettings } from "@/lib/outreach-provider-settings";
-import { buildSenderRoutingSignalFromDomainRow, rankSenderRoutingSignals, summarizeSenderRoutingScore } from "@/lib/sender-routing";
+import { buildSenderRoutingSignalFromDomainRow, rankSenderRoutingSignals, summarizeSenderRoutingScore, type SenderRoutingScoreLevel } from "@/lib/sender-routing";
 import { enrichBrandWithSenderHealth } from "@/lib/sender-health";
 
 export type OperatorSenderSnapshot = {
@@ -18,7 +20,9 @@ export type OperatorSenderSnapshot = {
   automationStatus: string;
   automationSummary: string;
   routeScore: number;
+  routeLevel: SenderRoutingScoreLevel;
   routeLabel: string;
+  usableForRouting: boolean;
   mailpoolStatus: string;
   dnsStatus: string;
 };
@@ -59,6 +63,19 @@ export type OperatorBrandContext = {
     draft: number;
     active: number;
     paused: number;
+    names: string[];
+  };
+  experiments: {
+    total: number;
+    draft: number;
+    running: number;
+    sourcing: number;
+    preparing: number;
+    ready: number;
+    paused: number;
+    completed: number;
+    promoted: number;
+    blocked: number;
     names: string[];
   };
   inbox: {
@@ -135,7 +152,8 @@ function matchesSenderDomain(row: DomainRow, account: OutreachAccount) {
 function summarizeBrandIssues(input: {
   brand: BrandRecord;
   senderSnapshots: OperatorSenderSnapshot[];
-  campaignActiveCount: number;
+  activeCampaignCount: number;
+  activeExperimentCount: number;
   mailpoolConfigured: boolean;
 }) {
   const issues: string[] = [];
@@ -145,15 +163,25 @@ function summarizeBrandIssues(input: {
   if (!input.senderSnapshots.length) {
     issues.push("This brand does not have a sender attached yet.");
   }
-  if (input.senderSnapshots.length && !input.senderSnapshots.some((row) => row.automationStatus === "ready")) {
-    issues.push("No sender is fully ready for routing yet.");
+  const usableSenderCount = input.senderSnapshots.filter((row) => row.usableForRouting).length;
+  const fullyReadySenderCount = input.senderSnapshots.filter((row) => row.automationStatus === "ready").length;
+  if (input.senderSnapshots.length && fullyReadySenderCount === 0) {
+    issues.push(
+      usableSenderCount > 0
+        ? "You have a usable sender route, but no sender has fully cleared warmup and probe checks yet."
+        : "No sender is routeable yet."
+    );
   }
   const blockedCount = input.senderSnapshots.filter((row) => row.automationStatus === "attention").length;
   if (blockedCount > 0) {
     issues.push(`${blockedCount} sender${blockedCount === 1 ? "" : "s"} are blocked and out of rotation.`);
   }
-  if (input.campaignActiveCount > 0 && !input.senderSnapshots.some((row) => row.automationStatus === "ready")) {
-    issues.push("There is active campaign work, but no sender is in a ready state.");
+  if ((input.activeCampaignCount > 0 || input.activeExperimentCount > 0) && usableSenderCount === 0) {
+    issues.push("There is live outbound work queued, but no sender route is available yet.");
+  } else if (input.activeExperimentCount > 0 && fullyReadySenderCount === 0 && usableSenderCount > 0) {
+    issues.push("A live experiment is running, but the preferred sender is still finishing control checks.");
+  } else if (input.activeCampaignCount > 0 && fullyReadySenderCount === 0 && usableSenderCount > 0) {
+    issues.push("A live campaign is active, but the preferred sender is still finishing control checks.");
   }
   if (!input.brand.domains.some((row) => row.role !== "brand")) {
     issues.push("No sender domains are attached to this brand yet.");
@@ -179,14 +207,18 @@ function summarizeNextActions(input: {
     );
     return nextActions;
   }
+  const usableSenderCount = input.senderSnapshots.filter((row) => row.usableForRouting).length;
+  const fullyReadySenderCount = input.senderSnapshots.filter((row) => row.automationStatus === "ready").length;
   if (input.senderSnapshots.some((row) => isPendingAutomation(row.automationStatus) || row.mailpoolStatus === "pending")) {
     nextActions.push("Refresh the pending Mailpool sender to pull mailbox and deliverability state.");
   }
   if (input.senderSnapshots.some((row) => row.automationStatus === "attention")) {
     nextActions.push("Inspect the blocked sender and fix the failing domain, mailbox, transport, or message signal.");
   }
-  if (!input.senderSnapshots.some((row) => row.automationStatus === "ready")) {
-    nextActions.push("Wait for the control and content probes to settle before routing live traffic.");
+  if (usableSenderCount === 0) {
+    nextActions.push("Wait for at least one sender route to become usable before routing live traffic.");
+  } else if (fullyReadySenderCount === 0) {
+    nextActions.push("Keep the preferred sender in place, but let the control and content probes settle before scaling volume.");
   }
   return uniqueStrings(nextActions);
 }
@@ -226,6 +258,7 @@ function buildSenderSnapshots(input: {
       const row = senderRowsByAccountId.get(accountId) ?? null;
       const signal = routingByAccountId.get(accountId) ?? null;
       const routeScore = signal ? summarizeSenderRoutingScore(signal) : null;
+      const routeLevel = routeScore?.level ?? "weak";
       return {
         accountId,
         accountName: account.name,
@@ -237,7 +270,9 @@ function buildSenderSnapshots(input: {
         automationStatus: signal?.automationStatus ?? row?.automationStatus ?? "queued",
         automationSummary: signal?.automationSummary ?? row?.automationSummary ?? "",
         routeScore: routeScore?.normalizedScore ?? 0,
+        routeLevel,
         routeLabel: routeScore?.label ?? "Queued",
+        usableForRouting: routeLevel === "strong" || routeLevel === "usable",
         mailpoolStatus: account.config.mailpool.status,
         dnsStatus: row?.dnsStatus ?? "pending",
       } satisfies OperatorSenderSnapshot;
@@ -246,16 +281,37 @@ function buildSenderSnapshots(input: {
   return snapshots.sort((left, right) => right.routeScore - left.routeScore);
 }
 
+async function listOperatorExperimentItems(brandId: string): Promise<ExperimentListItem[]> {
+  const experiments = await listExperimentRecords(brandId);
+  const now = Date.now();
+  return Promise.all(
+    experiments.map(async (experiment) => {
+      let runs = await listOwnerRuns(brandId, "experiment", experiment.id);
+      if (!runs.length && experiment.runtime.campaignId && experiment.runtime.experimentId) {
+        runs = await listExperimentRuns(brandId, experiment.runtime.campaignId, experiment.runtime.experimentId);
+      }
+      const latestRun = runs[0] ?? null;
+      return mapExperimentToListItem({
+        brandId,
+        experiment,
+        latestRun,
+        now,
+      });
+    })
+  );
+}
+
 export async function getOperatorBrandContext(brandId: string): Promise<OperatorBrandContext | null> {
   const brand = await getBrandById(brandId);
   if (!brand) return null;
 
-  const [enrichedBrand, assignment, accounts, settings, campaigns, inboxData, mailpoolDomains] = await Promise.all([
+  const [enrichedBrand, assignment, accounts, settings, campaigns, experimentItems, inboxData, mailpoolDomains] = await Promise.all([
     enrichBrandWithSenderHealth(brand),
     getBrandOutreachAssignment(brand.id),
     listOutreachAccounts(),
     getOutreachProvisioningSettings(),
     listCampaigns(brand.id),
+    listOperatorExperimentItems(brand.id),
     listReplyThreadsByBrand(brand.id),
     listSavedMailpoolDomains(),
   ]);
@@ -272,7 +328,8 @@ export async function getOperatorBrandContext(brandId: string): Promise<Operator
   const issues = summarizeBrandIssues({
     brand: enrichedBrand,
     senderSnapshots,
-    campaignActiveCount: campaigns.filter((campaign) => campaign.status === "active").length,
+    activeCampaignCount: campaigns.filter((campaign) => campaign.status === "active").length,
+    activeExperimentCount: experimentItems.filter((item) => item.isActiveNow).length,
     mailpoolConfigured: settings.mailpool.hasApiKey,
   });
   const nextActions = summarizeNextActions({
@@ -324,6 +381,19 @@ export async function getOperatorBrandContext(brandId: string): Promise<Operator
       active: campaigns.filter((campaign) => campaign.status === "active").length,
       paused: campaigns.filter((campaign) => campaign.status === "paused").length,
       names: campaigns.slice(0, 5).map((campaign) => campaign.name),
+    },
+    experiments: {
+      total: experimentItems.length,
+      draft: experimentItems.filter((item) => item.status === "Draft").length,
+      running: experimentItems.filter((item) => item.status === "Running").length,
+      sourcing: experimentItems.filter((item) => item.status === "Sourcing").length,
+      preparing: experimentItems.filter((item) => item.status === "Preparing").length,
+      ready: experimentItems.filter((item) => item.status === "Ready").length,
+      paused: experimentItems.filter((item) => item.status === "Paused").length,
+      completed: experimentItems.filter((item) => item.status === "Completed").length,
+      promoted: experimentItems.filter((item) => item.status === "Promoted").length,
+      blocked: experimentItems.filter((item) => item.status === "Blocked").length,
+      names: experimentItems.slice(0, 5).map((item) => item.name),
     },
     inbox: {
       threads: inboxData.threads.length,

@@ -160,6 +160,10 @@ import {
   type SenderHealthGateIssue,
 } from "@/lib/sender-health";
 import {
+  buildSenderUsageMap,
+  calculateSenderCapacityPolicy,
+} from "@/lib/sender-capacity";
+import {
   scoreSenderRoutingSignal,
   type SenderRoutingSignals,
 } from "@/lib/sender-routing";
@@ -423,30 +427,18 @@ function nextBusinessWindowCheckIso(input: Date, timeZone: string, policy: Busin
   return addHours(nowIso(), 1);
 }
 
-function senderWarmupDayNumber(createdAt: string, now: Date, timeZone: string) {
-  const created = toDate(createdAt);
-  const createdKey = timeZoneDateKey(created, timeZone || DEFAULT_TIMEZONE);
-  const nowKey = timeZoneDateKey(now, timeZone || DEFAULT_TIMEZONE);
-  const createdDay = Date.parse(`${createdKey}T00:00:00Z`);
-  const nowDay = Date.parse(`${nowKey}T00:00:00Z`);
-  if (!Number.isFinite(createdDay) || !Number.isFinite(nowDay)) return 1;
-  return Math.max(1, Math.floor((nowDay - createdDay) / DAY_MS) + 1);
-}
-
 function senderWarmupPolicy(input: {
   account: ResolvedAccount;
   now: Date;
   timeZone: string;
   businessWindow: BusinessWindowPolicy;
 }): SenderWarmupPolicy {
-  const warmupDay = senderWarmupDayNumber(input.account.createdAt, input.now, input.timeZone);
-  const dailyCap = Math.max(15, Math.min(120, warmupDay * 15));
-  const hourlyCap = Math.max(1, Math.ceil(dailyCap / businessWindowHours(input.businessWindow)));
-  return {
-    dailyCap,
-    hourlyCap,
-    warmupDay,
-  };
+  return calculateSenderCapacityPolicy({
+    account: input.account,
+    now: input.now,
+    timeZone: input.timeZone,
+    businessHoursPerDay: businessWindowHours(input.businessWindow),
+  });
 }
 
 function alignToBusinessWindow(dateIso: string, timeZone: string, policy: BusinessWindowPolicy) {
@@ -11053,28 +11045,10 @@ async function countBrandSenderUsage(input: {
           : await listRunMessages(run.id),
     }))
   );
-  const usage: SenderUsageMap = {};
-  const oneHourAgo = Date.now() - 60 * 60 * 1000;
-  const todayKey = timeZoneDateKey(new Date(), input.timezone || DEFAULT_TIMEZONE);
-
-  for (const entry of messagesByRun) {
-    for (const message of entry.messages) {
-      if (message.status !== "sent" || !message.sentAt) continue;
-      const senderAccountId =
-        String(message.generationMeta?.senderAccountId ?? "").trim() || entry.run.accountId.trim();
-      if (!senderAccountId) continue;
-      const bucket = usage[senderAccountId] ?? { dailySent: 0, hourlySent: 0 };
-      if (timeZoneDateKey(toDate(message.sentAt), input.timezone || DEFAULT_TIMEZONE) === todayKey) {
-        bucket.dailySent += 1;
-      }
-      if (toDate(message.sentAt).getTime() >= oneHourAgo) {
-        bucket.hourlySent += 1;
-      }
-      usage[senderAccountId] = bucket;
-    }
-  }
-
-  return usage;
+  return buildSenderUsageMap({
+    entries: messagesByRun,
+    timeZone: input.timezone,
+  });
 }
 
 async function resolveSenderPoolForBrand(input: {
@@ -12081,6 +12055,27 @@ async function buildRunSenderRoutingContext(run: OutreachRun, input?: { preferre
         pool: senderPoolState.pool,
       })
     : [];
+  const scorecardBySenderId = new Map(
+    senderScorecards
+      .filter((scorecard) => scorecard.senderAccountId)
+      .map((scorecard) => [scorecard.senderAccountId, scorecard] as const)
+  );
+  const healthRowBySenderId = new Map(
+    (senderHealthState?.brand?.domains ?? [])
+      .filter((row) => row.role !== "brand" && getDomainDeliveryAccountId(row))
+      .map((row) => [getDomainDeliveryAccountId(row), row] as const)
+  );
+  const poolWithDynamicPolicy = senderPoolState.pool.map((slot) => ({
+    ...slot,
+    policy: calculateSenderCapacityPolicy({
+      account: slot.account,
+      now: new Date(),
+      timeZone: run.timezone || DEFAULT_TIMEZONE,
+      businessHoursPerDay: businessWindowHours(businessWindow),
+      row: healthRowBySenderId.get(slot.account.id),
+      scorecard: scorecardBySenderId.get(slot.account.id),
+    }),
+  }));
   const autoPausedBySenderId = new Map(
     senderScorecards
       .filter((scorecard) => scorecard.autoPaused && scorecard.senderAccountId)
@@ -12090,11 +12085,11 @@ async function buildRunSenderRoutingContext(run: OutreachRun, input?: { preferre
     domains: senderHealthState?.brand?.domains,
     scorecards: senderScorecards,
   });
-  const dispatchPool = senderPoolState.pool.filter(
+  const dispatchPool = poolWithDynamicPolicy.filter(
     (slot) => !autoPausedBySenderId.has(slot.account.id) && !healthBlockedBySenderId.has(slot.account.id)
   );
   const senderUsage =
-    senderPoolState.pool.length > 0
+    poolWithDynamicPolicy.length > 0
       ? await countBrandSenderUsage({
           brandId: run.brandId,
           timezone: run.timezone || DEFAULT_TIMEZONE,
@@ -12114,7 +12109,10 @@ async function buildRunSenderRoutingContext(run: OutreachRun, input?: { preferre
 
   return {
     businessWindow,
-    senderPoolState,
+    senderPoolState: {
+      ...senderPoolState,
+      pool: poolWithDynamicPolicy,
+    },
     senderHealthState,
     healthBlockedBySenderId,
     senderScorecards,

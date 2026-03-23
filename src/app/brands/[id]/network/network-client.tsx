@@ -20,6 +20,7 @@ import type {
   OutreachAccount,
   OutreachProvisioningSettings,
 } from "@/lib/factory-types";
+import type { SenderCapacitySnapshot } from "@/lib/sender-capacity";
 import {
   PageIntro,
   SectionPanel,
@@ -327,6 +328,7 @@ export default function NetworkClient({
   customerIoAccounts,
   assignments,
   provisioningSettings,
+  senderCapacitySnapshots,
 }: {
   brand: BrandRecord;
   allBrands: BrandRecord[];
@@ -334,6 +336,7 @@ export default function NetworkClient({
   customerIoAccounts: OutreachAccount[];
   assignments: AssignmentMap;
   provisioningSettings: OutreachProvisioningSettings | null;
+  senderCapacitySnapshots: SenderCapacitySnapshot[];
 }) {
   const router = useRouter();
   const [query, setQuery] = useState("");
@@ -346,6 +349,19 @@ export default function NetworkClient({
     tone: "success" | "neutral";
   } | null>(null);
   const domains = useMemo(() => brand.domains || [], [brand.domains]);
+  const senderCapacityByAccountId = useMemo(
+    () => new Map(senderCapacitySnapshots.map((snapshot) => [snapshot.senderAccountId, snapshot] as const)),
+    [senderCapacitySnapshots]
+  );
+  const senderCapacityByFromEmail = useMemo(
+    () =>
+      new Map(
+        senderCapacitySnapshots
+          .filter((snapshot) => snapshot.fromEmail)
+          .map((snapshot) => [snapshot.fromEmail.toLowerCase(), snapshot] as const)
+      ),
+    [senderCapacitySnapshots]
+  );
 
   const filtered = useMemo(() => {
     const needle = query.trim().toLowerCase();
@@ -641,6 +657,12 @@ export default function NetworkClient({
                     : derivedAutomationStatus(item) === "attention"
                       ? "blocked"
                       : "pending";
+              const senderCapacity =
+                (getDomainDeliveryAccountId(item)
+                  ? senderCapacityByAccountId.get(getDomainDeliveryAccountId(item))
+                  : null) ??
+                (item.fromEmail ? senderCapacityByFromEmail.get(item.fromEmail.toLowerCase()) : null) ??
+                null;
               const healthSignals = [
                 ["Domain", derivedHealth(item, "domainHealth"), derivedHealthSummary(item, "domainHealthSummary")],
                 ["Email", derivedHealth(item, "emailHealth"), derivedHealthSummary(item, "emailHealthSummary")],
@@ -663,6 +685,39 @@ export default function NetworkClient({
                           ? `Replies route to ${item.replyMailboxEmail}`
                           : "Replies route appears after the sender mailbox is attached."}
                       </div>
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        {senderCapacity ? (
+                          <>
+                            <div className="rounded-[10px] border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-2">
+                              <div className="text-[10px] uppercase tracking-[0.12em] text-[color:var(--muted-foreground)]">
+                                Sent today
+                              </div>
+                              <div className="text-sm font-medium text-[color:var(--foreground)]">
+                                {senderCapacity.dailySent} / {senderCapacity.dailyCap}
+                              </div>
+                            </div>
+                            <div className="rounded-[10px] border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-2">
+                              <div className="text-[10px] uppercase tracking-[0.12em] text-[color:var(--muted-foreground)]">
+                                Hourly
+                              </div>
+                              <div className="text-sm font-medium text-[color:var(--foreground)]">
+                                {senderCapacity.hourlySent} / {senderCapacity.hourlyCap}
+                              </div>
+                            </div>
+                          </>
+                        ) : (
+                          <div className="rounded-[10px] border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-2 text-xs text-[color:var(--muted-foreground)]">
+                            {item.role === "brand"
+                              ? "Protected destination domains do not send mail."
+                              : "Sender volume appears after a mailbox is attached."}
+                          </div>
+                        )}
+                      </div>
+                      {senderCapacity ? (
+                        <div className="mt-2 text-xs leading-5 text-[color:var(--muted-foreground)]">
+                          {senderCapacity.summary}
+                        </div>
+                      ) : null}
                     </div>
 
                     <div className="min-w-0">

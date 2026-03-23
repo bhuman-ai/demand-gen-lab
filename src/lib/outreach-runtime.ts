@@ -15107,13 +15107,6 @@ export async function updateRunControl(input: {
         reason: "No real scheduled or sent message exists for deliverability probing yet",
       };
     }
-    const baselineContentHash = referenceMessage.senderFromEmail
-      ? buildDeliverabilityBaselineProbe({
-          brandName: "",
-          senderDomain: senderDomainFromEmail(referenceMessage.senderFromEmail),
-          probeToken: "control",
-        }).contentHash
-      : "";
     const routingContext = await buildRunSenderRoutingContext(run, {
       preferredAccountId: run.accountId,
     });
@@ -15145,26 +15138,6 @@ export async function updateRunControl(input: {
         fromEmail: probeSenderFromEmail,
       },
     });
-    await queueDeliverabilityProbe({
-      runId: run.id,
-      executeAfter: nowIso(),
-      force: true,
-      payload: {
-        stage: "send",
-        manual: true,
-        probeToken: generateDeliverabilityProbeToken(),
-        probeVariant: "baseline",
-        sourceMessageId: referenceMessage.id,
-        sourceMessageStatus: referenceMessage.status,
-        sourceType: referenceMessage.sourceType,
-        nodeId: referenceMessage.nodeId,
-        leadId: referenceMessage.leadId,
-        contentHash: baselineContentHash,
-        senderAccountId: probeSenderAccountId,
-        senderAccountName: probeSenderAccountName,
-        fromEmail: probeSenderFromEmail,
-      },
-    });
     await createOutreachEvent({
       runId: run.id,
       eventType: "deliverability_probe_requested",
@@ -15179,10 +15152,10 @@ export async function updateRunControl(input: {
         senderAccountId: probeSenderAccountId,
         senderAccountName: probeSenderAccountName,
         fromEmail: probeSenderFromEmail,
-        probeVariants: ["baseline", "production"],
+        probeVariants: ["production"],
       },
     });
-    return { ok: true, reason: "Deliverability probes queued" };
+    return { ok: true, reason: "Deliverability check queued" };
   }
 
   if (input.action === "resume_sender_deliverability") {

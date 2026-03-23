@@ -55,29 +55,30 @@ function asRecord(value: unknown): Record<string, unknown> {
   return {};
 }
 
-function asStringArray(value: unknown) {
-  return Array.isArray(value)
-    ? value
-        .map((entry) => asString(entry))
-        .filter(Boolean)
-    : [];
-}
-
-function uniqueStrings(values: string[]) {
-  return Array.from(new Set(values.map((value) => value.trim()).filter(Boolean)));
-}
-
 function isCasualGreeting(message: string) {
   const normalized = message.trim().toLowerCase();
   if (!normalized) return false;
   return /^(hi|hey|hello|yo|sup|what'?s up|hiya|howdy)[!.?]*$/.test(normalized);
 }
 
+function isExplicitActionRequest(message: string) {
+  const normalized = message.trim().toLowerCase();
+  if (!normalized || isCasualGreeting(normalized)) return false;
+  if (
+    /\b(can you|could you|please|go ahead and|i want you to|take care of|handle|do this)\b/.test(normalized)
+  ) {
+    return true;
+  }
+  return /^(add|create|buy|register|provision|refresh|sync|check|run|pause|resume|summarize|show|inspect|diagnose|draft|send|use)\b/.test(
+    normalized
+  );
+}
+
 function buildGreetingAssistant(brandName?: string): OperatorChatAssistantReply {
   return {
     summary: brandName
-      ? `Hi. I'm Operator for ${brandName}. I can help with senders, campaigns, inbox, and what to do next.`
-      : "Hi. I'm Operator. I can help with senders, campaigns, inbox, and what to do next.",
+      ? `Hi. I'm Operator for ${brandName}. Tell me what you want to do, or ask me anything about the account.`
+      : "Hi. I'm Operator. Tell me what you want to do, or ask me anything about the account.",
     findings: [],
     recommendations: [],
   };
@@ -97,20 +98,20 @@ function buildDefaultAssistantReply(input: {
   inboxThreads?: number;
 }): OperatorChatAssistantReply {
   const brandLabel = input.brandName || "this brand";
+  const primaryIssue = input.issues[0] ?? "";
+  const primaryNextAction = input.nextActions[0] ?? "";
+  let summary = `${brandLabel} is loaded and I'm ready to help.`;
+  if (primaryIssue && primaryNextAction) {
+    summary = `${primaryIssue} The next move is to ${primaryNextAction.charAt(0).toLowerCase()}${primaryNextAction.slice(1)}`;
+  } else if (primaryIssue) {
+    summary = primaryIssue;
+  } else if (primaryNextAction) {
+    summary = `Things look stable right now. The next move is to ${primaryNextAction.charAt(0).toLowerCase()}${primaryNextAction.slice(1)}`;
+  }
   return {
-    summary: `${brandLabel} has ${input.sendersTotal ?? 0} sender${input.sendersTotal === 1 ? "" : "s"}, ${input.campaignsTotal ?? 0} campaign${input.campaignsTotal === 1 ? "" : "s"}, and ${input.inboxThreads ?? 0} inbox thread${input.inboxThreads === 1 ? "" : "s"}.`,
-    findings:
-      input.issues.length > 0
-        ? input.issues
-        : [
-            input.readySenders
-              ? `${input.readySenders} sender${input.readySenders === 1 ? "" : "s"} are ready for routing.`
-              : "No immediate blockers were detected from the stored brand snapshot.",
-          ],
-    recommendations:
-      input.nextActions.length > 0
-        ? input.nextActions
-        : ["Ask Operator to inspect a sender, summarize campaigns, or summarize inbox activity."],
+    summary,
+    findings: [],
+    recommendations: [],
   };
 }
 
@@ -146,12 +147,11 @@ function extractDomain(message: string) {
 }
 
 function summarizeActionPreview(action: OperatorAction): OperatorChatAssistantReply {
-  const previewTitle = asString(action.preview.title) || "Action ready";
   const previewSummary = asString(action.preview.summary) || "Operator prepared an action preview.";
   return {
-    summary: `${previewTitle}. Confirmation is required before it runs.`,
-    findings: [previewSummary],
-    recommendations: ["Review the action preview and confirm if it looks correct."],
+    summary: `I can do that. ${previewSummary} Confirm it when you're ready.`,
+    findings: [],
+    recommendations: [],
   };
 }
 
@@ -218,15 +218,13 @@ function normalizeAssistantReply(
   options: { plainGreeting?: boolean } = {}
 ): OperatorChatAssistantReply {
   const row = asRecord(value);
-  const findings = uniqueStrings(asStringArray(row.findings)).slice(0, 3);
-  const recommendations = uniqueStrings(asStringArray(row.recommendations)).slice(0, 3);
-  const rawSummary = asString(row.summary) || findings[0] || recommendations[0] || fallback.summary;
+  const rawSummary = asString(row.message) || asString(row.summary) || fallback.summary;
   const summary =
     options.plainGreeting && looksLikeStatusSummary(rawSummary) ? fallback.summary : rawSummary;
   return {
     summary,
-    findings: options.plainGreeting ? [] : findings.length ? findings : fallback.findings.slice(0, 3),
-    recommendations: options.plainGreeting ? [] : recommendations.length ? recommendations : fallback.recommendations.slice(0, 3),
+    findings: [],
+    recommendations: [],
   };
 }
 
@@ -308,6 +306,17 @@ function normalizeRequestedAction(input: {
   };
 }
 
+function filterRequestedActionForMessage(
+  requestedAction: OperatorRequestedAction | null,
+  message: string
+) {
+  if (!requestedAction) return null;
+  const tool = getOperatorToolSpec(requestedAction.toolName);
+  if (!tool) return null;
+  if (tool.riskLevel === "read") return requestedAction;
+  return isExplicitActionRequest(message) ? requestedAction : null;
+}
+
 function buildOperatorPrompt(input: {
   message: string;
   mode: OperatorChatRequest["mode"];
@@ -323,16 +332,19 @@ function buildOperatorPrompt(input: {
   }));
 
   return [
-    "You are Operator, the LastB2B account copilot.",
+    "You are Operator, the LastB2B account assistant.",
     "Respond with JSON only.",
-    'The JSON object must contain: summary (string), findings (string[]), recommendations (string[]), requestedAction (null or { toolName: string, input: object }).',
+    'The JSON object must contain: message (string) and requestedAction (null or { toolName: string, input: object }).',
     "Ground every statement in the supplied account context and recent thread messages.",
-    "Be concise, practical, and specific.",
-    "Keep findings and recommendations to at most 3 items each.",
-    "Only propose requestedAction when the user is clearly asking for an action or a concrete next operational step.",
+    "Talk like a sharp human teammate, not a dashboard, support bot, or structured report.",
+    "Reply in plain conversational language.",
+    "Do not use headings, bullets, or sections like 'What I found' or 'What I recommend'.",
+    "Only mention operational status when it is relevant to the user's message.",
+    "Only propose requestedAction when the user explicitly asks you to do something, or explicitly asks you to inspect or summarize something.",
+    "Do not trigger safe_write or guarded_write actions just because they might be helpful.",
     "If mode is recommendation_only, requestedAction must be null.",
     "If the latest user message is only a casual greeting like hi, hey, or hello, reply like a normal human assistant in 1 or 2 short sentences.",
-    "For a casual greeting, do not dump account status, do not include findings or recommendations, and do not propose an action.",
+    "For a casual greeting, do not dump account status and do not propose an action.",
     "Only use requestedAction.toolName values from the provided tool catalog.",
     "Never invent IDs, emails, or domains that are not in the provided context or the latest user message.",
     "For refresh_mailpool_sender and get_sender_snapshot, prefer using accountId from the context.",
@@ -618,9 +630,9 @@ export async function runOperatorChatTurn(input: OperatorChatRequest): Promise<O
           inboxThreads: brandContext.inbox.threads,
         })
       : {
-          summary: "Operator is ready, but no brand context was provided for this thread yet.",
-          findings: ["There is no active brand attached to this Operator request."],
-          recommendations: ["Open a brand and try again, or pass a brandId into the Operator chat request."],
+          summary: "I can help, but there isn't an active brand attached to this chat yet. Open a brand and try again.",
+          findings: [],
+          recommendations: [],
         };
   const messageHistory = await listOperatorMessages(thread.id);
   const llmPlan = input.structuredAction
@@ -633,7 +645,10 @@ export async function runOperatorChatTurn(input: OperatorChatRequest): Promise<O
         context: brandContext,
         fallbackAssistant,
       });
-  const requestedAction = input.structuredAction ?? llmPlan?.requestedAction ?? inferActionFromMessage(input, brandContext);
+  const requestedAction = filterRequestedActionForMessage(
+    input.structuredAction ?? llmPlan?.requestedAction ?? inferActionFromMessage(input, brandContext),
+    input.message
+  );
   const run = await createOperatorRun({
     threadId: thread.id,
     brandId: resolvedBrandId,
@@ -653,9 +668,9 @@ export async function runOperatorChatTurn(input: OperatorChatRequest): Promise<O
       const tool = getOperatorToolSpec(requestedAction.toolName);
       if (!tool) {
         assistant = {
-          summary: "Operator recognized the request, but the corresponding tool is not registered.",
-          findings: [`Missing tool: ${requestedAction.toolName}`],
-          recommendations: ["Try a different request or register the missing tool."],
+          summary: `I understand what you're asking for, but I can't run that yet because the tool \`${requestedAction.toolName}\` is not registered.`,
+          findings: [],
+          recommendations: [],
         };
       } else if (
         tool.name === "provision_mailpool_sender" &&
@@ -663,18 +678,11 @@ export async function runOperatorChatTurn(input: OperatorChatRequest): Promise<O
       ) {
         const hasInventory = (brandContext?.provisioning.mailpoolDomainInventoryCount ?? 0) > 0;
         assistant = {
-          summary: "I can add a sender, but I still need the sender mailbox details.",
-          findings: [
-            hasInventory
-              ? `This workspace already has ${brandContext?.provisioning.mailpoolDomainInventoryCount ?? 0} Mailpool domain${brandContext?.provisioning.mailpoolDomainInventoryCount === 1 ? "" : "s"} available.`
-              : "This workspace does not have any saved Mailpool domains yet.",
-          ],
-          recommendations: [
-            "Tell me the sender email you want, for example `marco@getselffunded.com`.",
-            hasInventory
-              ? "Say whether I should use an existing Mailpool domain or buy a new one."
-              : "If this should be a new domain purchase, say `buy` or `register` and I will prepare that flow.",
-          ],
+          summary: hasInventory
+            ? `I can add the sender. Tell me the exact sender email you want, for example \`marco@getselffunded.com\`, and whether I should use an existing Mailpool domain or buy a new one.`
+            : "I can add the sender. Tell me the exact sender email you want, for example `marco@getselffunded.com`. If this needs a new domain, say `buy` or `register` and I'll prepare that flow.",
+          findings: [],
+          recommendations: [],
         };
       } else if (
         tool.name === "provision_mailpool_sender" &&
@@ -691,12 +699,9 @@ export async function runOperatorChatTurn(input: OperatorChatRequest): Promise<O
           Boolean(asString(registrant.country));
         if (!hasRegistrant) {
           assistant = {
-            summary: "I can buy and provision that sender, but I still need the registrant details for the domain purchase.",
-            findings: ["Mailpool requires registrant contact data before a new domain can be bought."],
-            recommendations: [
-              "Send first name, last name, company, email, street address, city, postal code, and country.",
-              "If you want to avoid that step, tell me to use an existing Mailpool domain instead.",
-            ],
+            summary: "I can buy and provision that sender, but I still need the registrant details first: first name, last name, company, email, street address, city, postal code, and country. If you want to skip that, tell me to use an existing Mailpool domain instead.",
+            findings: [],
+            recommendations: [],
           };
         } else if (tool.approvalMode === "confirm") {
           const action = await createOperatorAction({
@@ -738,9 +743,8 @@ export async function runOperatorChatTurn(input: OperatorChatRequest): Promise<O
           });
           assistant = {
             summary: executed.result.summary,
-            findings: brandContext?.issues.length ? brandContext.issues.slice(0, 3) : [executed.result.summary],
-            recommendations:
-              brandContext?.nextActions.length ? brandContext.nextActions.slice(0, 3) : ["Ask Operator for the next step."],
+            findings: [],
+            recommendations: [],
           };
         }
       } else if (tool.approvalMode === "confirm") {
@@ -783,9 +787,8 @@ export async function runOperatorChatTurn(input: OperatorChatRequest): Promise<O
         });
         assistant = {
           summary: executed.result.summary,
-          findings: brandContext?.issues.length ? brandContext.issues.slice(0, 3) : [executed.result.summary],
-          recommendations:
-              brandContext?.nextActions.length ? brandContext.nextActions.slice(0, 3) : ["Ask Operator for the next step."],
+          findings: [],
+          recommendations: [],
         };
       }
     } else {

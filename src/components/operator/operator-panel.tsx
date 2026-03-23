@@ -66,32 +66,8 @@ function MessageBody({ message, actionsById }: { message: OperatorMessage; actio
   const content = asRecord(message.content);
   if (message.kind === "message" && message.role === "assistant") {
     const assistant = asRecord(content.assistant);
-    const findings = asStringArray(assistant.findings);
-    const recommendations = asStringArray(assistant.recommendations);
     return (
-      <div className="space-y-2">
-        <div className="text-sm leading-6">{asString(content.text) || asString(assistant.summary)}</div>
-        {findings.length ? (
-          <div className="space-y-1">
-            <div className="text-[11px] uppercase tracking-[0.16em] text-[color:var(--muted-foreground)]">What I found</div>
-            <div className="space-y-1 text-sm text-[color:var(--foreground)]">
-              {findings.map((item) => (
-                <div key={item}>• {item}</div>
-              ))}
-            </div>
-          </div>
-        ) : null}
-        {recommendations.length ? (
-          <div className="space-y-1">
-            <div className="text-[11px] uppercase tracking-[0.16em] text-[color:var(--muted-foreground)]">What I recommend</div>
-            <div className="space-y-1 text-sm text-[color:var(--foreground)]">
-              {recommendations.map((item) => (
-                <div key={item}>• {item}</div>
-              ))}
-            </div>
-          </div>
-        ) : null}
-      </div>
+      <div className="whitespace-pre-wrap text-sm leading-6">{asString(content.text) || asString(assistant.summary)}</div>
     );
   }
 
@@ -160,11 +136,11 @@ function MessageBody({ message, actionsById }: { message: OperatorMessage; actio
 }
 
 const DEFAULT_PROMPTS = [
-  "What should I do next?",
+  "What needs attention right now?",
   "Add a sender for this brand",
-  "Why is the current sender blocked?",
+  "Why isn't the current sender ready?",
   "Summarize inbox activity",
-  "Summarize campaign status",
+  "What should I do next?",
 ] as const;
 
 export default function OperatorPanel({
@@ -322,7 +298,7 @@ export default function OperatorPanel({
                 {activeBrandName ? <Badge variant="muted">{activeBrandName}</Badge> : null}
               </div>
               <div className="mt-2 text-sm leading-6 text-[color:var(--foreground)]">
-                Ask what is happening, what to do next, or tell Operator to take the safe parts.
+                Ask anything about this brand, or tell Operator what you want done.
               </div>
             </div>
             <Button type="button" variant="ghost" size="icon" onClick={() => onOpenChange(false)} aria-label="Close Operator">
@@ -472,7 +448,7 @@ export default function OperatorPanel({
               }}
               placeholder={
                 activeBrandId
-                  ? "Ask Operator what is wrong, what to do next, or tell it to take an action."
+                  ? "Ask anything, or tell Operator what you want it to do."
                   : "Select a brand to use Operator."
               }
               className="min-h-[112px]"

@@ -92,6 +92,8 @@ const INITIAL_REGISTER: RegisterState = {
   registrantCountry: "US",
 };
 
+type EmbeddedMailpoolMode = "existing" | "register";
+
 function normalizeDomain(value: string) {
   return value.trim().toLowerCase().replace(/^https?:\/\//, "").replace(/^www\./, "").replace(/\/.*$/, "");
 }
@@ -228,6 +230,7 @@ export default function SenderProvisionCard({
   const [busyKey, setBusyKey] = useState("");
   const [error, setError] = useState("");
   const [result, setResult] = useState<ProvisionResult | null>(null);
+  const [embeddedMailpoolMode, setEmbeddedMailpoolMode] = useState<EmbeddedMailpoolMode>("existing");
 
   useEffect(() => {
     let active = true;
@@ -295,6 +298,15 @@ export default function SenderProvisionCard({
     }));
   }, [lockedProvider]);
 
+  const simpleMailpoolMode = embedded && lockedProvider === "mailpool";
+
+  useEffect(() => {
+    if (!simpleMailpoolMode || mailpoolInventory.loading || !mailpoolInventory.configured) return;
+    if (embeddedMailpoolMode === "existing" && !mailpoolInventory.domains.length) {
+      setEmbeddedMailpoolMode("register");
+    }
+  }, [embeddedMailpoolMode, mailpoolInventory.configured, mailpoolInventory.domains.length, mailpoolInventory.loading, simpleMailpoolMode]);
+
   const selectedBrand = useMemo(
     () => brands.find((brand) => brand.id === setup.brandId) ?? null,
     [brands, setup.brandId]
@@ -351,7 +363,6 @@ export default function SenderProvisionCard({
   }, [inventoryQuery, mailpoolInventory.domains, namecheapInventory.domains, setup.provider]);
 
   const activeInventory = setup.provider === "mailpool" ? mailpoolInventory : namecheapInventory;
-  const simpleMailpoolMode = embedded && lockedProvider === "mailpool";
 
   const manualDefaultsReady =
     Boolean(setup.customerIoSiteId.trim() || provisioningSettings?.customerIo.siteId.trim()) &&
@@ -501,9 +512,41 @@ export default function SenderProvisionCard({
   const content = (
     <div className="grid gap-5">
       {simpleMailpoolMode ? (
-        <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-4 py-3 text-sm text-[color:var(--muted-foreground)]">
-          Add one sender. We will buy or connect the domain, create the Google mailbox, attach it to this brand, and
-          start Mailpool checks automatically.
+        <div className="grid gap-4">
+          <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-4 py-3 text-sm text-[color:var(--muted-foreground)]">
+            Add one sender. We will buy or connect the domain, create the Google mailbox, attach it to this brand, and
+            start Mailpool checks automatically.
+          </div>
+          <div className="grid gap-3 md:grid-cols-2">
+            <button
+              type="button"
+              onClick={() => setEmbeddedMailpoolMode("existing")}
+              className={`grid gap-2 rounded-xl border px-4 py-4 text-left transition ${
+                embeddedMailpoolMode === "existing"
+                  ? "border-[color:var(--accent)] bg-[color:var(--surface)]"
+                  : "border-[color:var(--border)] bg-[color:var(--surface-muted)] hover:border-[color:var(--border-strong)]"
+              }`}
+            >
+              <div className="text-sm font-semibold text-[color:var(--foreground)]">Use an existing Mailpool domain</div>
+              <div className="text-[11px] leading-5 text-[color:var(--muted-foreground)]">
+                Pick a domain already in Mailpool and we will attach a sender mailbox to it.
+              </div>
+            </button>
+            <button
+              type="button"
+              onClick={() => setEmbeddedMailpoolMode("register")}
+              className={`grid gap-2 rounded-xl border px-4 py-4 text-left transition ${
+                embeddedMailpoolMode === "register"
+                  ? "border-[color:var(--accent)] bg-[color:var(--surface)]"
+                  : "border-[color:var(--border)] bg-[color:var(--surface-muted)] hover:border-[color:var(--border-strong)]"
+              }`}
+            >
+              <div className="text-sm font-semibold text-[color:var(--foreground)]">Buy a new sender domain</div>
+              <div className="text-[11px] leading-5 text-[color:var(--muted-foreground)]">
+                We will ask for registrant details, buy the domain in Mailpool, and finish setup for you.
+              </div>
+            </button>
+          </div>
         </div>
       ) : null}
         <div className="grid gap-3 md:grid-cols-5">
@@ -736,6 +779,7 @@ export default function SenderProvisionCard({
           </div>
         )}
 
+        {!simpleMailpoolMode || embeddedMailpoolMode === "existing" ? (
         <div className="grid gap-3">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
@@ -842,7 +886,9 @@ export default function SenderProvisionCard({
             </div>
           ) : null}
         </div>
+        ) : null}
 
+        {!simpleMailpoolMode || embeddedMailpoolMode === "register" ? (
         <div className="grid gap-3 rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3">
           <div>
             <div className="text-sm font-semibold">
@@ -895,6 +941,11 @@ export default function SenderProvisionCard({
                   setRegister((prev) => ({ ...prev, registrantOrganizationName: event.target.value }))
                 }
               />
+            </div>
+            <div className="grid gap-2 md:col-span-3">
+              <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-2 text-[11px] leading-5 text-[color:var(--muted-foreground)]">
+                Registrant details are required by the registrar to buy the domain. We only use them for the purchase.
+              </div>
             </div>
             <div className="grid gap-2">
               <Label htmlFor="register-email">Email</Label>
@@ -978,6 +1029,7 @@ export default function SenderProvisionCard({
             </Button>
           </div>
         </div>
+        ) : null}
 
         {error ? <div className="text-sm text-[color:var(--danger)]">{error}</div> : null}
 

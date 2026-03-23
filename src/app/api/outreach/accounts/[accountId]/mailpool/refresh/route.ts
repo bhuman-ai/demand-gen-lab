@@ -10,6 +10,7 @@ import {
 import { sanitizeCustomerIoBillingConfig } from "@/lib/outreach-customerio-billing";
 import { getDomainDeliveryAccountId, getOutreachAccountFromEmail } from "@/lib/outreach-account-helpers";
 import { getOutreachProvisioningSettingsSecrets } from "@/lib/outreach-provider-settings";
+import { kickoffMailpoolAccountDeliverability } from "@/lib/mailpool-deliverability-bootstrap";
 import {
   getMailpoolMailbox,
   listMailpoolDomains,
@@ -199,18 +200,28 @@ export async function POST(
         : await updateOutreachAccount(account.id, buildMailpoolAccountPatch(mailbox!, account.config));
 
     const latestAccount = refreshedAccount ?? account;
+    const deliverabilityKickoff =
+      mailboxDeleted || !mailbox
+        ? { account: latestAccount, triggered: false, errors: [] as string[] }
+        : await kickoffMailpoolAccountDeliverability({
+            account: latestAccount,
+            apiKey,
+            mailbox,
+          });
     const updatedDomains = await reconcileBrandDomains({
-      accountId: latestAccount.id,
-      accountName: latestAccount.name,
+      accountId: deliverabilityKickoff.account.id,
+      accountName: deliverabilityKickoff.account.name,
       domain: currentDomain,
       fallbackHost: senderDomain,
     });
 
     return NextResponse.json({
-      account: latestAccount,
+      account: deliverabilityKickoff.account,
       domain: currentDomain,
       mailboxDeleted,
       updatedDomains,
+      deliverabilityKickoffTriggered: deliverabilityKickoff.triggered,
+      deliverabilityKickoffErrors: deliverabilityKickoff.errors,
       refreshedAt: new Date().toISOString(),
     });
   } catch (error) {

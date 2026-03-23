@@ -9,6 +9,7 @@ import {
 import { getOutreachAccountFromEmail } from "@/lib/outreach-account-helpers";
 import { sanitizeCustomerIoBillingConfig } from "@/lib/outreach-customerio-billing";
 import { getOutreachProvisioningSettingsSecrets } from "@/lib/outreach-provider-settings";
+import { kickoffMailpoolAccountDeliverability } from "@/lib/mailpool-deliverability-bootstrap";
 import {
   parseMailpoolWebhookEvent,
   verifyMailpoolWebhookSignature,
@@ -99,13 +100,14 @@ async function reconcileMailbox(mailbox: MailpoolMailbox, deleted = false) {
   };
 
   if (existing) {
-    await updateOutreachAccount(existing.id, patch);
-    return;
+    return updateOutreachAccount(existing.id, patch);
   }
 
   if (!deleted) {
-    await createOutreachAccount(patch);
+    return createOutreachAccount(patch);
   }
+
+  return null;
 }
 
 async function reconcileDomain(domain: MailpoolDomain) {
@@ -151,13 +153,28 @@ export async function POST(request: Request) {
   }
 
   const event = parseMailpoolWebhookEvent(rawBody);
+  let deliverabilityKickoffTriggered = false;
+  let deliverabilityKickoffErrors: string[] = [];
 
   if (event.domain && event.type.startsWith("domains.")) {
     await reconcileDomain(event.domain);
   }
   if (event.mailbox && event.type.startsWith("mailboxes.")) {
-    await reconcileMailbox(event.mailbox, event.type === "mailboxes.deleted");
+    const account = await reconcileMailbox(event.mailbox, event.type === "mailboxes.deleted");
+    if (account && event.type !== "mailboxes.deleted" && secrets.mailpoolApiKey.trim()) {
+      const kickoff = await kickoffMailpoolAccountDeliverability({
+        account,
+        apiKey: secrets.mailpoolApiKey.trim(),
+        mailbox: event.mailbox,
+      });
+      deliverabilityKickoffTriggered = kickoff.triggered;
+      deliverabilityKickoffErrors = kickoff.errors;
+    }
   }
 
-  return NextResponse.json({ ok: true });
+  return NextResponse.json({
+    ok: true,
+    deliverabilityKickoffTriggered,
+    deliverabilityKickoffErrors,
+  });
 }

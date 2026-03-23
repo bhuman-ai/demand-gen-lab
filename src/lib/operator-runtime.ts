@@ -14,17 +14,31 @@ import {
   updateOperatorThread,
 } from "@/lib/operator-data";
 import { getOperatorBrandContext } from "@/lib/operator-context";
-import { getOperatorToolSpec } from "@/lib/operator-tools";
+import { getOperatorToolSpec, listOperatorToolSpecs } from "@/lib/operator-tools";
 import type {
   OperatorAction,
   OperatorActionSummary,
   OperatorChatAssistantReply,
   OperatorChatRequest,
   OperatorChatResponse,
+  OperatorMessage,
   OperatorRequestedAction,
   OperatorThreadDetail,
+  OperatorToolName,
   OperatorToolSpec,
 } from "@/lib/operator-types";
+
+const DEFAULT_OPERATOR_MODEL = String(process.env.OPENAI_MODEL_OPERATOR ?? "").trim() || "gpt-5.4";
+const DEFAULT_OPERATOR_REASONING = (() => {
+  const value = String(process.env.OPENAI_OPERATOR_REASONING_EFFORT ?? "").trim().toLowerCase();
+  return ["minimal", "low", "medium", "high", "xhigh"].includes(value) ? value : "low";
+})();
+
+type OperatorPlannerResult = {
+  assistant: OperatorChatAssistantReply;
+  requestedAction: OperatorRequestedAction | null;
+  model: string;
+};
 
 function nowIso() {
   return new Date().toISOString();
@@ -39,6 +53,18 @@ function asRecord(value: unknown): Record<string, unknown> {
     return value as Record<string, unknown>;
   }
   return {};
+}
+
+function asStringArray(value: unknown) {
+  return Array.isArray(value)
+    ? value
+        .map((entry) => asString(entry))
+        .filter(Boolean)
+    : [];
+}
+
+function uniqueStrings(values: string[]) {
+  return Array.from(new Set(values.map((value) => value.trim()).filter(Boolean)));
 }
 
 function buildDefaultAssistantReply(input: {
@@ -107,6 +133,266 @@ function summarizeActionPreview(action: OperatorAction): OperatorChatAssistantRe
     findings: [previewSummary],
     recommendations: ["Review the action preview and confirm if it looks correct."],
   };
+}
+
+function extractResponseText(payload: unknown) {
+  const row = asRecord(payload);
+  const output = Array.isArray(row.output) ? row.output : [];
+  const firstOutput = asRecord(output[0]);
+  const content = Array.isArray(firstOutput.content) ? firstOutput.content : [];
+  return (
+    asString(row.output_text) ||
+    asString(
+      content
+        .map((entry) => asRecord(entry))
+        .find((entry) => typeof entry.text === "string")?.text
+    )
+  );
+}
+
+function summarizePromptMessages(messages: OperatorMessage[]) {
+  return messages.slice(-12).map((message) => ({
+    role: message.role,
+    kind: message.kind,
+    text: asString(message.content.text) || JSON.stringify(message.content).slice(0, 400),
+  }));
+}
+
+function summarizePromptContext(context: Awaited<ReturnType<typeof getOperatorBrandContext>>) {
+  if (!context) return { brand: null };
+  return {
+    brand: context.brand,
+    assignment: context.assignment,
+    provisioning: context.provisioning,
+    senders: {
+      total: context.senders.total,
+      ready: context.senders.ready,
+      pending: context.senders.pending,
+      blocked: context.senders.blocked,
+      snapshots: context.senders.snapshots.map((snapshot) => ({
+        accountId: snapshot.accountId,
+        accountName: snapshot.accountName,
+        provider: snapshot.provider,
+        status: snapshot.status,
+        fromEmail: snapshot.fromEmail,
+        replyToEmail: snapshot.replyToEmail,
+        domain: snapshot.domain,
+        automationStatus: snapshot.automationStatus,
+        automationSummary: snapshot.automationSummary,
+        routeScore: snapshot.routeScore,
+        routeLabel: snapshot.routeLabel,
+        mailpoolStatus: snapshot.mailpoolStatus,
+        dnsStatus: snapshot.dnsStatus,
+      })),
+    },
+    routing: context.routing,
+    campaigns: context.campaigns,
+    inbox: context.inbox,
+    issues: context.issues,
+    nextActions: context.nextActions,
+  };
+}
+
+function normalizeAssistantReply(
+  value: unknown,
+  fallback: OperatorChatAssistantReply
+): OperatorChatAssistantReply {
+  const row = asRecord(value);
+  const findings = uniqueStrings(asStringArray(row.findings)).slice(0, 3);
+  const recommendations = uniqueStrings(asStringArray(row.recommendations)).slice(0, 3);
+  const summary = asString(row.summary) || findings[0] || recommendations[0] || fallback.summary;
+  return {
+    summary,
+    findings: findings.length ? findings : fallback.findings.slice(0, 3),
+    recommendations: recommendations.length ? recommendations : fallback.recommendations.slice(0, 3),
+  };
+}
+
+function resolveSenderAccountId(
+  rawInput: Record<string, unknown>,
+  context: Awaited<ReturnType<typeof getOperatorBrandContext>>
+) {
+  const explicit = asString(rawInput.accountId);
+  if (explicit) return explicit;
+
+  const fromEmail = asString(rawInput.fromEmail).toLowerCase();
+  if (fromEmail) {
+    const matched = context?.senders.snapshots.find((snapshot) => snapshot.fromEmail === fromEmail);
+    if (matched?.accountId) return matched.accountId;
+  }
+
+  const fromLocalPart = asString(rawInput.fromLocalPart).toLowerCase();
+  const domain = asString(rawInput.domain).toLowerCase();
+  if (fromLocalPart && domain) {
+    const matched = context?.senders.snapshots.find((snapshot) => snapshot.fromEmail === `${fromLocalPart}@${domain}`);
+    if (matched?.accountId) return matched.accountId;
+  }
+
+  const pendingMailpool =
+    context?.senders.snapshots.find((snapshot) => snapshot.provider === "mailpool" && snapshot.mailpoolStatus === "pending") ??
+    null;
+  if (pendingMailpool?.accountId) return pendingMailpool.accountId;
+
+  if (context?.senders.snapshots.length === 1) {
+    return context.senders.snapshots[0]?.accountId ?? "";
+  }
+
+  return "";
+}
+
+function normalizeRequestedAction(input: {
+  raw: unknown;
+  brandId: string;
+  mode: OperatorChatRequest["mode"];
+  message: string;
+  context: Awaited<ReturnType<typeof getOperatorBrandContext>>;
+}): OperatorRequestedAction | null {
+  if (input.mode === "recommendation_only") return null;
+  const row = asRecord(input.raw);
+  const toolName = asString(row.toolName) as OperatorToolName;
+  if (!toolName || !listOperatorToolSpecs().some((tool) => tool.name === toolName)) {
+    return null;
+  }
+
+  const toolInput = { ...asRecord(row.input) };
+  if (
+    input.brandId &&
+    ["get_brand_snapshot", "summarize_campaign_status", "summarize_inbox", "provision_mailpool_sender"].includes(toolName) &&
+    !asString(toolInput.brandId)
+  ) {
+    toolInput.brandId = input.brandId;
+  }
+
+  if (toolName === "provision_mailpool_sender") {
+    toolInput.provider = "mailpool";
+    if (!asString(toolInput.domainMode)) {
+      const message = input.message.toLowerCase();
+      toolInput.domainMode =
+        message.includes("buy") || message.includes("register") || message.includes("new domain")
+          ? "register"
+          : "existing";
+    }
+  }
+
+  if (toolName === "refresh_mailpool_sender" || toolName === "get_sender_snapshot") {
+    const accountId = resolveSenderAccountId(toolInput, input.context);
+    if (!accountId) return null;
+    toolInput.accountId = accountId;
+  }
+
+  return {
+    toolName,
+    input: toolInput,
+  };
+}
+
+function buildOperatorPrompt(input: {
+  message: string;
+  mode: OperatorChatRequest["mode"];
+  messages: OperatorMessage[];
+  brandId: string;
+  context: Awaited<ReturnType<typeof getOperatorBrandContext>>;
+}) {
+  const toolCatalog = listOperatorToolSpecs().map((tool) => ({
+    name: tool.name,
+    riskLevel: tool.riskLevel,
+    approvalMode: tool.approvalMode,
+    description: tool.description,
+  }));
+
+  return [
+    "You are Operator, the LastB2B account copilot.",
+    "Respond with JSON only.",
+    'The JSON object must contain: summary (string), findings (string[]), recommendations (string[]), requestedAction (null or { toolName: string, input: object }).',
+    "Ground every statement in the supplied account context and recent thread messages.",
+    "Be concise, practical, and specific.",
+    "Keep findings and recommendations to at most 3 items each.",
+    "Only propose requestedAction when the user is clearly asking for an action or a concrete next operational step.",
+    "If mode is recommendation_only, requestedAction must be null.",
+    "Only use requestedAction.toolName values from the provided tool catalog.",
+    "Never invent IDs, emails, or domains that are not in the provided context or the latest user message.",
+    "For refresh_mailpool_sender and get_sender_snapshot, prefer using accountId from the context.",
+    "For provision_mailpool_sender, include any known fields such as brandId, domain, fromLocalPart, domainMode, and registrant fields.",
+    `Mode: ${input.mode === "recommendation_only" ? "recommendation_only" : "default"}`,
+    `Resolved brandId: ${input.brandId || "(none)"}`,
+    `Tool catalog JSON: ${JSON.stringify(toolCatalog)}`,
+    `Recent thread messages JSON: ${JSON.stringify(summarizePromptMessages(input.messages))}`,
+    `Current brand context JSON: ${JSON.stringify(summarizePromptContext(input.context))}`,
+    `Latest user message: ${input.message}`,
+  ].join("\n\n");
+}
+
+async function planOperatorReplyWithLlm(input: {
+  brandId: string;
+  message: string;
+  mode: OperatorChatRequest["mode"];
+  messages: OperatorMessage[];
+  context: Awaited<ReturnType<typeof getOperatorBrandContext>>;
+  fallbackAssistant: OperatorChatAssistantReply;
+}): Promise<OperatorPlannerResult | null> {
+  const apiKey = String(process.env.OPENAI_API_KEY ?? "").trim();
+  if (!apiKey) return null;
+
+  const model = DEFAULT_OPERATOR_MODEL;
+  const prompt = buildOperatorPrompt(input);
+
+  try {
+    const response = await fetch("https://api.openai.com/v1/responses", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model,
+        input: prompt,
+        reasoning: { effort: DEFAULT_OPERATOR_REASONING },
+        text: { format: { type: "json_object" } },
+        max_output_tokens: 900,
+        store: false,
+      }),
+    });
+
+    const raw = await response.text();
+    if (!response.ok) {
+      console.error("Operator OpenAI request failed", raw.slice(0, 800));
+      return null;
+    }
+
+    let payload: unknown = {};
+    try {
+      payload = JSON.parse(raw);
+    } catch {
+      payload = {};
+    }
+
+    const outputText = extractResponseText(payload);
+    if (!outputText) return null;
+
+    let parsed: unknown = {};
+    try {
+      parsed = JSON.parse(outputText);
+    } catch {
+      console.error("Operator OpenAI JSON parse failed", outputText.slice(0, 800));
+      return null;
+    }
+
+    const row = asRecord(parsed);
+    return {
+      assistant: normalizeAssistantReply(row, input.fallbackAssistant),
+      requestedAction: normalizeRequestedAction({
+        raw: row.requestedAction,
+        brandId: input.brandId,
+        mode: input.mode,
+        message: input.message,
+        context: input.context,
+      }),
+      model,
+    };
+  } catch (error) {
+    console.error("Operator OpenAI planning threw", error);
+    return null;
+  }
 }
 
 function inferActionFromMessage(
@@ -293,11 +579,37 @@ export async function runOperatorChatTurn(input: OperatorChatRequest): Promise<O
   });
 
   const brandContext = resolvedBrandId ? await getOperatorBrandContext(resolvedBrandId) : null;
-  const requestedAction = inferActionFromMessage(input, brandContext);
+  const fallbackAssistant = brandContext
+    ? buildDefaultAssistantReply({
+        brandName: brandContext.brand.name,
+        issues: brandContext.issues,
+        nextActions: brandContext.nextActions,
+        sendersTotal: brandContext.senders.total,
+        readySenders: brandContext.senders.ready,
+        campaignsTotal: brandContext.campaigns.total,
+        inboxThreads: brandContext.inbox.threads,
+      })
+    : {
+        summary: "Operator is ready, but no brand context was provided for this thread yet.",
+        findings: ["There is no active brand attached to this Operator request."],
+        recommendations: ["Open a brand and try again, or pass a brandId into the Operator chat request."],
+      };
+  const messageHistory = await listOperatorMessages(thread.id);
+  const llmPlan = input.structuredAction
+    ? null
+    : await planOperatorReplyWithLlm({
+        brandId: resolvedBrandId,
+        message: input.message,
+        mode: input.mode,
+        messages: messageHistory,
+        context: brandContext,
+        fallbackAssistant,
+      });
+  const requestedAction = input.structuredAction ?? llmPlan?.requestedAction ?? inferActionFromMessage(input, brandContext);
   const run = await createOperatorRun({
     threadId: thread.id,
     brandId: resolvedBrandId,
-    model: "operator-v1",
+    model: llmPlan?.model ?? (input.structuredAction ? "operator-structured-action" : "operator-v1"),
     contextSnapshot: snapshotContext(brandContext),
     plan: requestedAction
       ? [{ step: requestedAction.toolName, status: "in_progress" }]
@@ -445,25 +757,11 @@ export async function runOperatorChatTurn(input: OperatorChatRequest): Promise<O
           summary: executed.result.summary,
           findings: brandContext?.issues.length ? brandContext.issues.slice(0, 3) : [executed.result.summary],
           recommendations:
-            brandContext?.nextActions.length ? brandContext.nextActions.slice(0, 3) : ["Ask Operator for the next step."],
+              brandContext?.nextActions.length ? brandContext.nextActions.slice(0, 3) : ["Ask Operator for the next step."],
         };
       }
-    } else if (brandContext) {
-      assistant = buildDefaultAssistantReply({
-        brandName: brandContext.brand.name,
-        issues: brandContext.issues,
-        nextActions: brandContext.nextActions,
-        sendersTotal: brandContext.senders.total,
-        readySenders: brandContext.senders.ready,
-        campaignsTotal: brandContext.campaigns.total,
-        inboxThreads: brandContext.inbox.threads,
-      });
     } else {
-      assistant = {
-        summary: "Operator is ready, but no brand context was provided for this thread yet.",
-        findings: ["There is no active brand attached to this Operator request."],
-        recommendations: ["Open a brand and try again, or pass a brandId into the Operator chat request."],
-      };
+      assistant = llmPlan?.assistant ?? fallbackAssistant;
     }
 
     const assistantMessage = await createAssistantMessage(thread.id, assistant);

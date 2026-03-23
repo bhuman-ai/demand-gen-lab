@@ -467,11 +467,11 @@ export default function ProvisioningProviderSettingsCard({
             summary={
               settings.deliverability.provider === "mailpool"
                 ? deliverabilityConfigured
-                  ? `Ready. Mailpool deliverability will run placement checks using ${settings.deliverability.mailpoolInboxProviders.join(", ")}.`
+                  ? "Ready. Mailpool spam checks are active, and inbox placement uses the internal monitor pool."
                   : "Mailpool deliverability is selected, but the Mailpool connection still needs attention."
                 : deliverabilityConfigured
                   ? `Ready. Watching ${settings.deliverability.monitoredDomains.join(", ")} for Gmail reputation changes.`
-                  : "Connect this only if you want Gmail reputation data or Mailpool-backed inbox placement in the app."
+                  : "Connect this only if you want Gmail reputation data or Mailpool spam checks in the app."
             }
             highlights={[
               settings.deliverability.provider === "google_postmaster"
@@ -483,12 +483,12 @@ export default function ProvisioningProviderSettingsCard({
                 ? `${settings.deliverability.monitoredDomains.length} monitored domain${settings.deliverability.monitoredDomains.length === 1 ? "" : "s"}`
                 : "No watched domains yet",
               settings.deliverability.provider === "mailpool"
-                ? `${settings.deliverability.mailpoolInboxProviders.length} inbox providers`
+                ? "Internal inbox pool"
                 : settings.deliverability.hasGoogleClientId
                   ? "Client ID saved"
                   : "Client ID needed",
               settings.deliverability.provider === "mailpool"
-                ? "Uses Mailpool workspace connection"
+                ? "Uses Mailpool for spam checks"
                 : settings.deliverability.hasGoogleRefreshToken
                   ? "Refresh token saved"
                   : "Refresh token needed",
@@ -873,7 +873,7 @@ export default function ProvisioningProviderSettingsCard({
           }
         }}
         title={deliverabilityConfigured ? "Deliverability setup" : "Connect deliverability checks"}
-        description="Optional. Use Google Postmaster for Gmail reputation, or Mailpool for spam checks and inbox placement on Mailpool senders."
+        description="Optional. Use Google Postmaster for Gmail reputation, or Mailpool for spam checks on Mailpool senders while inbox placement uses the internal monitor pool."
         footer={
           <div className="flex flex-wrap items-center justify-between gap-3">
             <a
@@ -912,17 +912,20 @@ export default function ProvisioningProviderSettingsCard({
       >
         <div className="grid gap-4 md:grid-cols-2">
           <div className="md:col-span-2 rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-4 py-3 text-sm text-[color:var(--foreground)]">
-            <div className="font-medium">You need two parts</div>
+            <div className="font-medium">
+              {form.deliverabilityProvider === "mailpool" ? "Mailpool mode" : "You need two parts"}
+            </div>
             <div className="mt-1 text-[color:var(--muted-foreground)]">
-              Add the domains you want to watch, then paste the Google client ID, client secret, and refresh token for
-              the Postmaster account.
+              {form.deliverabilityProvider === "mailpool"
+                ? "Mailpool will run spam checks for Mailpool-managed senders. Inbox placement continues to use the internal monitor pool you already have connected."
+                : "Add the domains you want to watch, then paste the Google client ID, client secret, and refresh token for the Postmaster account."}
             </div>
           </div>
           <div className="grid gap-2">
             <FieldLabel
               htmlFor="provider-deliverability-provider"
               label="Monitor source"
-              help="Google Postmaster is used for Gmail reputation. Mailpool uses the saved Mailpool workspace for spam checks and inbox placement."
+              help="Google Postmaster is used for Gmail reputation. Mailpool uses the saved Mailpool workspace for spam checks, while inbox placement stays on the internal monitor pool."
             />
             <select
               id="provider-deliverability-provider"
@@ -1026,7 +1029,7 @@ export default function ProvisioningProviderSettingsCard({
           <div className="md:col-span-2 rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-4 py-3 text-sm text-[color:var(--muted-foreground)]">
             Last check: {settings.deliverability.lastCheckedAt || "never"}
             {settings.deliverability.provider === "mailpool"
-              ? ` · Mailpool inbox providers: ${settings.deliverability.mailpoolInboxProviders.join(", ")}`
+              ? " · Mailpool spam checks active · Inbox placement uses internal monitor pool"
               : settings.deliverability.lastHealthSummary
                 ? ` · ${settings.deliverability.lastHealthSummary}`
                 : ""}

@@ -592,7 +592,7 @@ function buildOperatorPrompt(input: {
     "Only mention operational status when it is relevant to the user's message.",
     "When experiment data is present, prefer talking about experiments instead of campaigns unless the user specifically asks about campaigns.",
     "If the context shows a usable preferred sender but it is still in testing or warming, explain that distinction instead of saying no sender is ready.",
-    "For Mailpool senders, treat spam checks and inbox placement as separate checks. Do not say both are blocked if only inbox placement is failing.",
+    "For Mailpool senders, spam checks come from Mailpool, but inbox placement uses the internal monitor pool. Treat them as separate checks.",
     "Do not merge experiments and campaigns into one count or one status line.",
     "If experiments.running or experiments.sourcing is greater than 0, explicitly acknowledge that there is live experiment work.",
     "Do not say everything is draft unless the context actually shows no running, sourcing, ready, completed, paused, or promoted experiments.",

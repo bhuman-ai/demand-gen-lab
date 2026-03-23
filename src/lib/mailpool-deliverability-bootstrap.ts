@@ -1,12 +1,8 @@
-import type { MailpoolInboxPlacementProvider, OutreachAccount } from "@/lib/factory-types";
-import { DEFAULT_MAILPOOL_INBOX_PROVIDERS } from "@/lib/outreach-account-helpers";
+import type { OutreachAccount } from "@/lib/factory-types";
 import { updateOutreachAccount } from "@/lib/outreach-data";
-import { getOutreachProvisioningSettings } from "@/lib/outreach-provider-settings";
 import {
-  createMailpoolInboxPlacement,
   createMailpoolSpamCheck,
   getMailpoolSpamCheck,
-  runMailpoolInboxPlacement,
   type MailpoolMailbox,
   type MailpoolSpamCheck,
 } from "@/lib/mailpool-client";
@@ -52,7 +48,6 @@ export async function kickoffMailpoolAccountDeliverability(input: {
   apiKey: string;
   mailbox: MailpoolMailbox;
   forceSpamCheck?: boolean;
-  forceInboxPlacement?: boolean;
 }) {
   if (!mailpoolMailboxHasDeliveryCredentials(input.mailbox)) {
     return {
@@ -62,14 +57,7 @@ export async function kickoffMailpoolAccountDeliverability(input: {
     };
   }
 
-  const settings = await getOutreachProvisioningSettings();
-  const providers =
-    settings.deliverability.mailpoolInboxProviders.length
-      ? settings.deliverability.mailpoolInboxProviders
-      : ([...DEFAULT_MAILPOOL_INBOX_PROVIDERS] as MailpoolInboxPlacementProvider[]);
-
   let spamCheckId = input.account.config.mailpool.spamCheckId.trim();
-  let inboxPlacementId = input.account.config.mailpool.inboxPlacementId.trim();
   let lastSpamCheckAt = input.account.config.mailpool.lastSpamCheckAt.trim();
   let lastSpamCheckScore = Number(input.account.config.mailpool.lastSpamCheckScore ?? 0) || 0;
   let lastSpamCheckSummary = input.account.config.mailpool.lastSpamCheckSummary.trim();
@@ -117,52 +105,7 @@ export async function kickoffMailpoolAccountDeliverability(input: {
     lastSpamCheckScore = 0;
     lastSpamCheckSummary = "";
   }
-
-  const shouldCreateInboxPlacement = !inboxPlacementId;
-  const shouldRunInboxPlacement = Boolean(input.forceInboxPlacement) || shouldCreateInboxPlacement;
-
-  if (shouldCreateInboxPlacement) {
-    try {
-      const placement = await createMailpoolInboxPlacement({
-        apiKey: input.apiKey,
-        mailboxId: input.mailbox.id,
-        providers,
-      });
-      inboxPlacementId = String(placement.id ?? "").trim();
-      triggered = true;
-    } catch (error) {
-      errors.push(error instanceof Error ? error.message : "Failed to create Mailpool inbox placement.");
-    }
-  }
-
-  if (inboxPlacementId && shouldRunInboxPlacement) {
-    try {
-      await runMailpoolInboxPlacement(input.apiKey, inboxPlacementId);
-      triggered = true;
-    } catch (error) {
-      if (isMailpoolNotFoundError(error)) {
-        inboxPlacementId = "";
-        try {
-          const placement = await createMailpoolInboxPlacement({
-            apiKey: input.apiKey,
-            mailboxId: input.mailbox.id,
-            providers,
-          });
-          inboxPlacementId = String(placement.id ?? "").trim();
-          triggered = true;
-          if (inboxPlacementId) {
-            await runMailpoolInboxPlacement(input.apiKey, inboxPlacementId);
-          }
-        } catch (innerError) {
-          errors.push(
-            innerError instanceof Error ? innerError.message : "Failed to recreate Mailpool inbox placement."
-          );
-        }
-      } else {
-        errors.push(error instanceof Error ? error.message : "Failed to run Mailpool inbox placement.");
-      }
-    }
-  }
+  const inboxPlacementId = "";
 
   const configChanged =
     spamCheckId !== input.account.config.mailpool.spamCheckId.trim() ||

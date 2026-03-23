@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { trackEvent } from "@/lib/telemetry-client";
+import { fetchBrandDirectory, readCachedBrandDirectory } from "@/lib/brand-directory-client";
 import { Select } from "@/components/ui/select";
 
 type Brand = {
@@ -36,8 +37,8 @@ export default function BrandSwitcher() {
   const router = useRouter();
   const pathname = usePathname();
   const pathBrandId = getActiveBrandIdFromPath(pathname);
-  const [brands, setBrands] = useState<Brand[]>([]);
-  const [loadingBrands, setLoadingBrands] = useState(true);
+  const [brands, setBrands] = useState<Brand[]>(() => readCachedBrandDirectory());
+  const [loadingBrands, setLoadingBrands] = useState(() => readCachedBrandDirectory().length === 0);
   const [activeBrandId, setActiveBrandId] = useState(() =>
     pathBrandId || (typeof window !== "undefined" ? localStorage.getItem(ACTIVE_BRAND_KEY) ?? "" : "")
   );
@@ -45,22 +46,35 @@ export default function BrandSwitcher() {
   useEffect(() => {
     if (pathBrandId) {
       localStorage.setItem(ACTIVE_BRAND_KEY, pathBrandId);
+      setActiveBrandId(pathBrandId);
     }
   }, [pathBrandId]);
 
   useEffect(() => {
     let mounted = true;
-    setLoadingBrands(true);
+
+    const cachedRows = readCachedBrandDirectory();
+    if (cachedRows.length) {
+      setBrands(cachedRows);
+      setLoadingBrands(false);
+    } else {
+      setLoadingBrands(true);
+    }
+
     const load = async () => {
       try {
-        const response = await fetch("/api/brands", { cache: "no-store" });
-        const data = await response.json();
+        const rows = await fetchBrandDirectory({ force: cachedRows.length === 0 });
         if (!mounted) return;
-        const rows = Array.isArray(data?.brands) ? (data.brands as Brand[]) : [];
         setBrands(rows);
-        if (!activeBrandId && !pathBrandId && rows[0]?.id) {
-          setActiveBrandId(rows[0].id);
-          localStorage.setItem(ACTIVE_BRAND_KEY, rows[0].id);
+
+        if (!pathBrandId) {
+          const storedBrandId =
+            typeof window !== "undefined" ? localStorage.getItem(ACTIVE_BRAND_KEY) ?? "" : "";
+          const fallbackBrandId = hasBrandId(rows, storedBrandId) ? storedBrandId : rows[0]?.id ?? "";
+          if (fallbackBrandId) {
+            setActiveBrandId(fallbackBrandId);
+            localStorage.setItem(ACTIVE_BRAND_KEY, fallbackBrandId);
+          }
         }
       } catch {
         if (mounted) setBrands([]);
@@ -72,27 +86,26 @@ export default function BrandSwitcher() {
     return () => {
       mounted = false;
     };
-  }, [activeBrandId, pathBrandId]);
+  }, [pathBrandId]);
 
   useEffect(() => {
     if (!brands.length) return;
 
-    const storedBrandId = typeof window !== "undefined" ? localStorage.getItem(ACTIVE_BRAND_KEY) ?? "" : "";
-    const validStoredBrandId = hasBrandId(brands, storedBrandId) ? storedBrandId : "";
-    const fallbackBrandId = validStoredBrandId || brands[0]?.id || "";
-
-    if (pathBrandId && !hasBrandId(brands, pathBrandId) && fallbackBrandId) {
-      localStorage.setItem(ACTIVE_BRAND_KEY, fallbackBrandId);
-      router.replace(buildPathWithBrandId(pathname, fallbackBrandId));
+    if (pathBrandId) {
+      if (hasBrandId(brands, pathBrandId)) {
+        localStorage.setItem(ACTIVE_BRAND_KEY, pathBrandId);
+        setActiveBrandId(pathBrandId);
+      }
       return;
     }
 
-    if (!pathBrandId) {
-      if (fallbackBrandId) {
-        localStorage.setItem(ACTIVE_BRAND_KEY, fallbackBrandId);
-      }
+    const storedBrandId = typeof window !== "undefined" ? localStorage.getItem(ACTIVE_BRAND_KEY) ?? "" : "";
+    const fallbackBrandId = hasBrandId(brands, storedBrandId) ? storedBrandId : brands[0]?.id ?? "";
+    if (fallbackBrandId) {
+      localStorage.setItem(ACTIVE_BRAND_KEY, fallbackBrandId);
+      setActiveBrandId(fallbackBrandId);
     }
-  }, [brands, pathBrandId, activeBrandId, pathname, router]);
+  }, [brands, pathBrandId]);
 
   const selectedBrandId = pathBrandId || activeBrandId;
 
@@ -110,10 +123,13 @@ export default function BrandSwitcher() {
           value={selectedBrandId}
           onChange={(event) => {
             const brandId = event.target.value;
+            if (!brandId || brandId === selectedBrandId) {
+              return;
+            }
             setActiveBrandId(brandId);
             localStorage.setItem(ACTIVE_BRAND_KEY, brandId);
             trackEvent("brand_switched", { brandId });
-            router.push(`/brands/${brandId}`);
+            router.push(buildPathWithBrandId(pathname, brandId));
           }}
         >
           {loadingBrands && !brands.length ? <option value="">Loading brands...</option> : null}

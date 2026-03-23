@@ -14,6 +14,7 @@ import {
   TestTubeDiagonal,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+import { fetchBrandDirectory, readCachedBrandDirectory } from "@/lib/brand-directory-client";
 import { cn } from "@/lib/utils";
 import { trackEvent } from "@/lib/telemetry-client";
 import BrandSwitcher, { getActiveBrandIdFromPath } from "./brand-switcher";
@@ -21,6 +22,8 @@ import BrandWordmark from "./brand-wordmark";
 import GlobalCommandPalette from "./global-command-palette";
 
 const ACTIVE_BRAND_KEY = "factory.activeBrandId";
+const BUILD_ID_KEY = "lastb2b.buildId";
+const BUILD_RELOAD_GUARD_KEY = "lastb2b.buildReloaded";
 
 type NavItem = {
   label: string;
@@ -80,7 +83,10 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   const storedBrandId =
     typeof window !== "undefined" ? localStorage.getItem(ACTIVE_BRAND_KEY) || "" : "";
   const activeBrandId = pathBrandId || storedBrandId;
-  const [activeBrandName, setActiveBrandName] = useState("");
+  const [resolvedActiveBrand, setResolvedActiveBrand] = useState(() => ({
+    brandId: activeBrandId,
+    name: readCachedBrandDirectory().find((row) => row.id === activeBrandId)?.name || "",
+  }));
 
   useEffect(() => {
     if (pathBrandId) {
@@ -96,16 +102,23 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
       };
     }
 
+    const cachedRows = readCachedBrandDirectory();
     const load = async () => {
       try {
-        const response = await fetch("/api/brands", { cache: "no-store" });
-        const data = await response.json();
+        const rows = await fetchBrandDirectory({ force: cachedRows.length === 0 });
         if (!mounted) return;
-        const rows = Array.isArray(data?.brands) ? (data.brands as Array<{ id: string; name: string }>) : [];
         const activeBrand = rows.find((row) => row.id === activeBrandId);
-        setActiveBrandName(activeBrand?.name || "Brand");
+        setResolvedActiveBrand({
+          brandId: activeBrandId,
+          name: activeBrand?.name || "Brand",
+        });
       } catch {
-        if (mounted) setActiveBrandName("Brand");
+        if (mounted) {
+          setResolvedActiveBrand({
+            brandId: activeBrandId,
+            name: "Brand",
+          });
+        }
       }
     };
 
@@ -114,6 +127,13 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
       mounted = false;
     };
   }, [activeBrandId]);
+
+  const activeBrandName = useMemo(() => {
+    if (resolvedActiveBrand.brandId === activeBrandId && resolvedActiveBrand.name) {
+      return resolvedActiveBrand.name;
+    }
+    return readCachedBrandDirectory().find((row) => row.id === activeBrandId)?.name || "";
+  }, [activeBrandId, resolvedActiveBrand]);
 
   useEffect(() => {
     const previous = sessionStorage.getItem("factory.previousPath");
@@ -136,12 +156,17 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
         if (cancelled) return;
         const nextId = String(payload?.buildId || "");
         if (!nextId) return;
-        const stored = sessionStorage.getItem("lastb2b.buildId");
+        const stored = sessionStorage.getItem(BUILD_ID_KEY);
         if (stored && stored !== nextId) {
-          window.location.reload();
+          sessionStorage.setItem(BUILD_ID_KEY, nextId);
+          if (sessionStorage.getItem(BUILD_RELOAD_GUARD_KEY) !== "1") {
+            sessionStorage.setItem(BUILD_RELOAD_GUARD_KEY, "1");
+            window.location.reload();
+          }
           return;
         }
-        sessionStorage.setItem("lastb2b.buildId", nextId);
+        sessionStorage.removeItem(BUILD_RELOAD_GUARD_KEY);
+        sessionStorage.setItem(BUILD_ID_KEY, nextId);
       } catch {
         // Ignore build-id fetch failures.
       }
@@ -264,7 +289,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
           <header className="sticky top-0 z-20 border-b border-[color:var(--border)] bg-[color:var(--background)]/96 px-4 py-3 backdrop-blur-sm md:px-8">
             <div className="flex flex-wrap items-center justify-between gap-4">
               <div className="min-w-0 text-sm text-[color:var(--muted-foreground)]">
-                {breadcrumb(pathname, activeBrandName)}
+                {breadcrumb(pathname, activeBrandId ? activeBrandName : "")}
               </div>
               <div className="flex items-center gap-2">
                 <GlobalCommandPalette activeBrandId={activeBrandId} />

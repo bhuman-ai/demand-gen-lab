@@ -64,14 +64,47 @@ function statusTone(status: (typeof STATUS_OPTIONS)[number]) {
   return "border-[color:var(--border)] bg-[color:var(--surface)] text-[color:var(--muted-foreground)]";
 }
 
-function leadsCell(item: ExperimentListItem) {
-  if (item.sourcedLeads > 0) return item.sourcedLeads;
-  if (item.scheduledMessages > 0) return item.scheduledMessages;
-  return item.sentMessages;
-}
-
 function formatCount(value: number) {
   return value.toString().padStart(2, "0");
+}
+
+function formatMetric(value: number) {
+  return value > 0 ? value : "—";
+}
+
+function nextActivityForItem(item: ExperimentListItem) {
+  if (item.statusDetail) {
+    return {
+      primary: item.statusDetail,
+      secondary: `Last activity ${item.lastActivityLabel}`,
+    };
+  }
+
+  if (item.status === "Completed") {
+    return {
+      primary: "No pending activity.",
+      secondary: `Completed ${item.lastActivityLabel}`,
+    };
+  }
+
+  if (item.status === "Draft") {
+    return {
+      primary: "Finish setup and publish messaging before launch.",
+      secondary: `Last activity ${item.lastActivityLabel}`,
+    };
+  }
+
+  if (item.status === "Promoted") {
+    return {
+      primary: "Experiment was promoted into a campaign.",
+      secondary: `Last activity ${item.lastActivityLabel}`,
+    };
+  }
+
+  return {
+    primary: "Open the experiment to inspect the latest state.",
+    secondary: `Last activity ${item.lastActivityLabel}`,
+  };
 }
 
 function countForStatus(items: ExperimentListItem[], status: (typeof STATUS_OPTIONS)[number]) {
@@ -328,16 +361,18 @@ export default function ExperimentsClient({
 
           {filtered.length ? (
             <TableShell>
-              <table className="w-full min-w-[1120px] text-sm">
+              <table className="w-full min-w-[1280px] text-sm">
                 <colgroup>
-                  <col className="w-[27%]" />
+                  <col className="w-[23%]" />
                   <col className="w-[10%]" />
-                  <col className="w-[31%]" />
+                  <col className="w-[25%]" />
                   <col className="w-[6%]" />
                   <col className="w-[6%]" />
-                  <col className="w-[7%]" />
-                  <col className="w-[9%]" />
-                  <col className="w-[14%]" />
+                  <col className="w-[6%]" />
+                  <col className="w-[6%]" />
+                  <col className="w-[6%]" />
+                  <col className="w-[12%]" />
+                  <col className="w-[12%]" />
                 </colgroup>
                 <thead>
                   <tr>
@@ -345,7 +380,10 @@ export default function ExperimentsClient({
                     <TableHeaderCell className="pr-4">Status</TableHeaderCell>
                     <TableHeaderCell className="pr-4">Audience</TableHeaderCell>
                     <TableHeaderCell align="right" className="px-2 whitespace-nowrap">
-                      Leads
+                      Prospects
+                    </TableHeaderCell>
+                    <TableHeaderCell align="right" className="px-2 whitespace-nowrap">
+                      Sent
                     </TableHeaderCell>
                     <TableHeaderCell align="right" className="px-2 whitespace-nowrap">
                       Replies
@@ -353,7 +391,7 @@ export default function ExperimentsClient({
                     <TableHeaderCell align="right" className="px-2 whitespace-nowrap">
                       Positive
                     </TableHeaderCell>
-                    <TableHeaderCell className="px-2 whitespace-nowrap">Last active</TableHeaderCell>
+                    <TableHeaderCell className="px-2 whitespace-nowrap">Next Activity</TableHeaderCell>
                     <TableHeaderCell align="right" className="pl-4 whitespace-nowrap">
                       Actions
                     </TableHeaderCell>
@@ -363,6 +401,7 @@ export default function ExperimentsClient({
                   {filtered.map((item) => {
                     const launched = launchNoticeId === item.id;
                     const launchedAndActive = launched && isActiveLaunchStatus(item.status);
+                    const nextActivity = nextActivityForItem(item);
                     return (
                       <tr
                         key={item.id}
@@ -402,29 +441,23 @@ export default function ExperimentsClient({
                           </div>
                         </td>
                         <td className="py-2 pr-4 align-top">
-                          <div className="space-y-1">
-                            <Badge
-                              className={statusTone(item.status)}
-                              title={item.statusDetail}
-                            >
-                              {item.status}
-                            </Badge>
-                            {item.statusDetail ? (
-                              <div
-                                className="max-w-[18rem] text-xs leading-5 text-[color:var(--muted-foreground)]"
-                                title={item.statusDetail}
-                              >
-                                {item.statusDetail}
-                              </div>
-                            ) : null}
-                          </div>
+                          <Badge className={statusTone(item.status)} title={item.statusDetail}>
+                            {item.status}
+                          </Badge>
                         </td>
                         <td className="py-2 pr-4 align-top text-[color:var(--muted-foreground)]">{item.audience || "—"}</td>
-                        <td className="py-2 px-2 align-top text-right">{leadsCell(item) || "—"}</td>
-                        <td className="py-2 px-2 align-top text-right">{item.replies || "—"}</td>
-                        <td className="py-2 px-2 align-top text-right">{item.positiveReplies || "—"}</td>
-                        <td className="py-2 px-2 align-top whitespace-nowrap text-[color:var(--muted-foreground)]">
-                          {item.lastActivityLabel}
+                        <td className="py-2 px-2 align-top text-right">{formatMetric(item.sourcedLeads)}</td>
+                        <td className="py-2 px-2 align-top text-right">{formatMetric(item.sentMessages)}</td>
+                        <td className="py-2 px-2 align-top text-right">{formatMetric(item.replies)}</td>
+                        <td className="py-2 px-2 align-top text-right">{formatMetric(item.positiveReplies)}</td>
+                        <td className="py-2 px-2 align-top">
+                          <div
+                            className="max-w-[16rem] space-y-1"
+                            title={nextActivity.primary}
+                          >
+                            <div className="text-sm text-[color:var(--foreground)]">{nextActivity.primary}</div>
+                            <div className="text-xs text-[color:var(--muted-foreground)]">{nextActivity.secondary}</div>
+                          </div>
                         </td>
                         <td className="py-2 pl-4 align-top">
                           <div className="flex justify-end gap-1 opacity-100 transition md:opacity-0 md:group-hover:opacity-100">

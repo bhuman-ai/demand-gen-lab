@@ -11566,11 +11566,19 @@ async function findRecentDeliverabilityProbeForSender(input: {
     senderAccountId: input.senderAccountId,
     fromEmail: input.fromEmail,
     probeVariant: input.probeVariant,
-    statuses: ["queued", "sent", "waiting", "completed"],
+    statuses: ["queued", "sent", "waiting", "completed", "failed"],
     limit: 25,
   });
   return (
     probeRuns.find((probeRun) => {
+      if (
+        probeRun.status === "failed" &&
+        !probeRun.reservationIds.length &&
+        !probeRun.monitorTargets.length &&
+        !probeRun.results.length
+      ) {
+        return false;
+      }
       if (probeRun.contentHash && input.contentHash && probeRun.contentHash === input.contentHash) {
         return true;
       }

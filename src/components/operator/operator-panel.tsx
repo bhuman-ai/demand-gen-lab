@@ -298,7 +298,7 @@ export default function OperatorPanel({
                 {activeBrandName ? <Badge variant="muted">{activeBrandName}</Badge> : null}
               </div>
               <div className="mt-2 text-sm leading-6 text-[color:var(--foreground)]">
-                Ask anything about this brand, or tell Operator what you want done.
+                Ask anything about this brand, or tell Operator what you want done. If it actually makes a change, it will show a receipt here.
               </div>
             </div>
             <Button type="button" variant="ghost" size="icon" onClick={() => onOpenChange(false)} aria-label="Close Operator">

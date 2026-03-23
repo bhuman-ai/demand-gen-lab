@@ -74,6 +74,21 @@ function isExplicitActionRequest(message: string) {
   );
 }
 
+function isExplicitMutationRequest(message: string) {
+  const normalized = message.trim().toLowerCase();
+  if (!normalized || isCasualGreeting(normalized)) return false;
+  if (
+    /\b(can you|could you|please|go ahead and|i want you to|take care of|handle|do this)\b/.test(normalized)
+  ) {
+    return /\b(add|create|make|buy|register|provision|refresh|sync|run|pause|resume|send|dismiss|delete|remove|launch|promote|update|edit|change|set up|setup|start)\b/.test(
+      normalized
+    );
+  }
+  return /^(add|create|make|buy|register|provision|refresh|sync|run|pause|resume|send|dismiss|delete|remove|launch|promote|update|edit|change|set up|setup|start)\b/.test(
+    normalized
+  );
+}
+
 function buildGreetingAssistant(brandName?: string): OperatorChatAssistantReply {
   return {
     summary: brandName
@@ -144,6 +159,20 @@ function extractDomain(message: string) {
     .toLowerCase()
     .match(/\b([a-z0-9-]+(?:\.[a-z0-9-]+)+)\b/);
   return match?.[1] ?? "";
+}
+
+function looksLikeBrandCreationRequest(message: string) {
+  const normalized = message.trim().toLowerCase();
+  if (!normalized) return false;
+  if (!/\bbrand\b/.test(normalized)) return false;
+  return /\b(make|create|add|set up|setup|start|open)\b/.test(normalized);
+}
+
+function ensureWebsiteUrl(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed) return "";
+  if (/^https?:\/\//i.test(trimmed)) return trimmed;
+  return `https://${trimmed}`;
 }
 
 function extractQuotedText(message: string) {
@@ -299,6 +328,21 @@ function normalizeAssistantReply(
     options.plainGreeting && looksLikeStatusSummary(rawSummary) ? fallback.summary : rawSummary;
   return {
     summary,
+    findings: [],
+    recommendations: [],
+  };
+}
+
+function makeUnexecutedActionAssistant(message: string, assistant: OperatorChatAssistantReply): OperatorChatAssistantReply {
+  const summary = asString(assistant.summary);
+  if (!isExplicitMutationRequest(message)) {
+    return assistant;
+  }
+  if (summary && /\b(created|updated|deleted|launched|paused|resumed|sent|refreshed|dismissed|provisioned)\b/i.test(summary)) {
+    return assistant;
+  }
+  return {
+    summary: "I didn't make any changes yet. When I take an action, I'll either do it and show a receipt or tell you exactly what's missing.",
     findings: [],
     recommendations: [],
   };
@@ -481,6 +525,17 @@ function normalizeRequestedAction(input: {
     }
   }
 
+  if (toolName === "create_brand") {
+    const domain = extractDomain(input.message);
+    const website = asString(toolInput.website) || domain;
+    if (website && !asString(toolInput.website)) {
+      toolInput.website = ensureWebsiteUrl(website);
+    }
+    if (!asString(toolInput.name)) {
+      toolInput.name = asString(toolInput.website).replace(/^https?:\/\//i, "").replace(/\/+$/, "");
+    }
+  }
+
   if (toolName === "refresh_mailpool_sender" || toolName === "get_sender_snapshot") {
     const accountId = resolveSenderAccountId(toolInput, input.context);
     if (!accountId) return null;
@@ -599,6 +654,8 @@ function buildOperatorPrompt(input: {
     "Do not contradict the numeric counts or statuses in the supplied context.",
     "Only propose requestedAction when the user explicitly asks you to do something, or explicitly asks you to inspect or summarize something.",
     "Do not trigger safe_write or guarded_write actions just because they might be helpful.",
+    "If the user asks you to take an action and you are not returning requestedAction, say clearly that you did not make changes yet.",
+    "Do not say 'I can do that', 'I'll set that up', or similar if requestedAction is null.",
     "If mode is recommendation_only, requestedAction must be null.",
     "If the latest user message is only a casual greeting like hi, hey, or hello, reply like a normal human assistant in 1 or 2 short sentences.",
     "For a casual greeting, do not dump account status and do not propose an action.",
@@ -704,6 +761,17 @@ function inferActionFromMessage(
   const campaignId = resolveCampaignId({}, context, input.message);
   const draftId = resolveDraftId({}, context, input.message);
   const leadId = resolveLeadId({}, context, input.message);
+  const requestedDomain = extractDomain(input.message);
+
+  if (looksLikeBrandCreationRequest(message) && requestedDomain) {
+    return {
+      toolName: "create_brand",
+      input: {
+        name: requestedDomain,
+        website: ensureWebsiteUrl(requestedDomain),
+      },
+    };
+  }
 
   if (context?.brand.id && message.includes("inbox")) {
     return {
@@ -1192,7 +1260,7 @@ export async function runOperatorChatTurn(input: OperatorChatRequest): Promise<O
         };
       }
     } else {
-      assistant = llmPlan?.assistant ?? fallbackAssistant;
+      assistant = makeUnexecutedActionAssistant(input.message, llmPlan?.assistant ?? fallbackAssistant);
     }
 
     const assistantMessage = await createAssistantMessage(thread.id, assistant);

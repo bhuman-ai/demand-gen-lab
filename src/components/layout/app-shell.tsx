@@ -17,6 +17,7 @@ import { useEffect, useMemo, useState } from "react";
 import { fetchBrandDirectory, readCachedBrandDirectory } from "@/lib/brand-directory-client";
 import { cn } from "@/lib/utils";
 import { trackEvent } from "@/lib/telemetry-client";
+import OperatorPanel from "@/components/operator/operator-panel";
 import BrandSwitcher, { getActiveBrandIdFromPath } from "./brand-switcher";
 import BrandWordmark from "./brand-wordmark";
 import GlobalCommandPalette from "./global-command-palette";
@@ -87,6 +88,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
     brandId: activeBrandId,
     name: readCachedBrandDirectory().find((row) => row.id === activeBrandId)?.name || "",
   }));
+  const [operatorOpen, setOperatorOpen] = useState(false);
 
   useEffect(() => {
     if (pathBrandId) {
@@ -295,6 +297,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
                 <GlobalCommandPalette activeBrandId={activeBrandId} />
                 <button
                   type="button"
+                  onClick={() => setOperatorOpen(true)}
                   className="inline-flex h-10 items-center gap-2 rounded-[10px] border border-[color:var(--border)] px-3 text-sm text-[color:var(--muted-foreground)] transition-colors hover:bg-[color:var(--surface)] hover:text-[color:var(--foreground)]"
                 >
                   <CircleUserRound className="h-3.5 w-3.5" />
@@ -306,6 +309,12 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
           <div className="p-4 md:px-8 md:py-7">{children}</div>
         </main>
       </div>
+      <OperatorPanel
+        open={operatorOpen}
+        onOpenChange={setOperatorOpen}
+        activeBrandId={activeBrandId}
+        activeBrandName={activeBrandName}
+      />
     </div>
   );
 }

@@ -33,6 +33,13 @@ import type {
   SourcingChainDecision,
   SourcingProbeResult,
 } from "@/lib/factory-types";
+import type {
+  OperatorAction,
+  OperatorChatResponse,
+  OperatorThread,
+  OperatorThreadDetail,
+  OperatorToolName,
+} from "@/lib/operator-types";
 import {
   EXPERIMENT_MAX_SAMPLE_SIZE,
   EXPERIMENT_MIN_VERIFIED_EMAIL_LEADS,
@@ -1733,4 +1740,74 @@ export function defaultObjective(): ObjectiveData {
 
 export function summarizeWinners(rows: EvolutionSnapshot[]) {
   return rows.filter((item) => item.status === "winner").length;
+}
+
+export async function fetchOperatorThreads(input: {
+  userId?: string;
+  brandId?: string;
+  status?: OperatorThread["status"];
+} = {}) {
+  const params = new URLSearchParams();
+  if (input.userId?.trim()) params.set("userId", input.userId.trim());
+  if (input.brandId?.trim()) params.set("brandId", input.brandId.trim());
+  if (input.status?.trim()) params.set("status", input.status.trim());
+  const query = params.toString();
+  const response = await fetch(`/api/operator/threads${query ? `?${query}` : ""}`, { cache: "no-store" });
+  const data = await readJson(response);
+  return (Array.isArray(data.threads) ? data.threads : []) as OperatorThread[];
+}
+
+export async function fetchOperatorThreadDetail(threadId: string) {
+  const response = await fetch(`/api/operator/threads/${threadId}`, { cache: "no-store" });
+  const data = await readJson(response);
+  return data as unknown as OperatorThreadDetail;
+}
+
+export async function sendOperatorChat(input: {
+  threadId?: string;
+  userId?: string;
+  brandId?: string;
+  message: string;
+  mode?: "default" | "recommendation_only";
+  structuredAction?: {
+    toolName: OperatorToolName;
+    input: Record<string, unknown>;
+  } | null;
+}) {
+  const response = await fetch("/api/operator/chat", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  const data = await readJson(response);
+  return data as unknown as OperatorChatResponse;
+}
+
+export async function confirmOperatorActionApi(actionId: string, input: { userId?: string; note?: string } = {}) {
+  const response = await fetch(`/api/operator/actions/${actionId}/confirm`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  const data = await readJson(response);
+  return {
+    action: data.action as OperatorAction,
+    receipt: data.receipt as {
+      title: string;
+      summary: string;
+      details: string[];
+    },
+  };
+}
+
+export async function cancelOperatorActionApi(actionId: string, input: { userId?: string; note?: string } = {}) {
+  const response = await fetch(`/api/operator/actions/${actionId}/cancel`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  const data = await readJson(response);
+  return {
+    action: data.action as OperatorAction,
+  };
 }

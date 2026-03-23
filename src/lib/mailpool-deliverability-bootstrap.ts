@@ -32,7 +32,7 @@ function isMailpoolNotFoundError(error: unknown) {
 
 async function waitForMailpoolSpamCheck(apiKey: string, spamCheckId: string) {
   let current = await getMailpoolSpamCheck(apiKey, spamCheckId);
-  for (let attempt = 0; attempt < 4 && current.state !== "completed"; attempt += 1) {
+  for (let attempt = 0; attempt < 10 && current.state !== "completed"; attempt += 1) {
     await sleep(1500);
     current = await getMailpoolSpamCheck(apiKey, spamCheckId);
   }

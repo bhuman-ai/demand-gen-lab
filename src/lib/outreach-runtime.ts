@@ -12181,113 +12181,115 @@ async function processMonitorDeliverabilityJob(job: OutreachJob) {
   const contentHash =
     String(payload.contentHash ?? "").trim() ||
     (probeVariant === "baseline" ? baselineProbe.contentHash : referenceMessage.contentHash);
-  const requestedMonitorTargets = readDeliverabilityProbeTargets(
-    payload.monitorTargets ?? payload.monitorAccountIds
-  );
-  const resolvedRequestedTargets: DeliverabilityMonitorTarget[] = [];
-  for (const requestedTarget of requestedMonitorTargets) {
-    const account = await getOutreachAccount(requestedTarget.accountId);
-    const secrets = account ? await getOutreachAccountSecrets(account.id) : null;
-    if (
-      account &&
-      secrets &&
-      account.status === "active" &&
-      supportsMailbox(account) &&
-      account.config.mailbox.status === "connected" &&
-      secrets.mailboxPassword.trim() &&
-      account.config.mailbox.email.trim().toLowerCase() === requestedTarget.email
-    ) {
-      resolvedRequestedTargets.push({
-        account,
-        secrets,
-        brandId: "",
-      });
-    }
-  }
-  const candidateMonitorTargets =
-    resolvedRequestedTargets.length
-      ? resolvedRequestedTargets
-      : await resolveDeliverabilityMonitorTargets({
-          runBrandId: run.brandId,
-          excludeAccountIds: [run.accountId, assignment?.mailboxAccountId ?? ""],
-          excludeEmails: [replyToEmail, senderFromEmail],
-        });
-  const blockedMonitorEmails = await listBlockedMonitorEmailsForSender({
-    brandId: run.brandId,
-    senderAccountId: senderChoice.slot.account.id,
-    fromEmail: senderFromEmail,
-  });
-  const monitorTargets = candidateMonitorTargets.filter((target) => {
-    const monitorEmail = target.account.config.mailbox.email.trim().toLowerCase();
-    return !blockedMonitorEmails.has(monitorEmail);
-  });
-
-  if (!monitorTargets.length) {
-    if (!probeRun) {
-      probeRun = await createDeliverabilityProbeRun({
-        runId: run.id,
-        brandId: run.brandId,
-        campaignId: run.campaignId,
-        experimentId: run.experimentId,
-        probeToken,
-        probeVariant,
-        status: "failed",
-        stage,
-        sourceMessageId: referenceMessage.id,
-        sourceMessageStatus: referenceMessage.status,
-        sourceType: referenceMessage.sourceType,
-        sourceNodeId: referenceMessage.nodeId,
-        sourceLeadId: referenceMessage.leadId,
-        senderAccountId: senderChoice.slot.account.id,
-        senderAccountName: senderChoice.slot.account.name,
-        fromEmail: senderFromEmail,
-        replyToEmail,
-        subject,
-        contentHash,
-        lastError: candidateMonitorTargets.length
-          ? "No unused deliverability monitor mailbox remains for this sender"
-          : "No dedicated deliverability monitor group is connected",
-      });
-    } else {
-      probeRun = await updateDeliverabilityProbeRun(probeRun.id, {
-        status: "failed",
-        stage,
-        senderAccountId: senderChoice.slot.account.id,
-        senderAccountName: senderChoice.slot.account.name,
-        fromEmail: senderFromEmail,
-        replyToEmail,
-        subject,
-        contentHash,
-        lastError: candidateMonitorTargets.length
-          ? "No unused deliverability monitor mailbox remains for this sender"
-          : "No dedicated deliverability monitor group is connected",
-      });
-    }
-    await createOutreachEvent({
-      runId: run.id,
-      eventType: "deliverability_probe_failed",
-      payload: {
-        reason: candidateMonitorTargets.length
-          ? "No unused deliverability monitor mailbox remains for this sender"
-          : "No dedicated deliverability monitor group is connected",
-        probeVariant,
-        probeToken,
-        probeRunId: probeRun?.id ?? "",
-        senderAccountId: senderChoice.slot.account.id,
-        fromEmail: senderFromEmail,
-        candidateMonitorCount: candidateMonitorTargets.length,
-        candidateMonitorEmails: candidateMonitorTargets.map((target) =>
-          target.account.config.mailbox.email.trim().toLowerCase()
-        ),
-        blockedMonitorCount: blockedMonitorEmails.size,
-        blockedMonitorEmails: Array.from(blockedMonitorEmails),
-        taintedMonitorCount: blockedMonitorEmails.size,
-      },
-    });
-    return;
-  }
+  let monitorTargets: DeliverabilityMonitorTarget[] = [];
 
   if (stage === "send") {
+    const requestedMonitorTargets = readDeliverabilityProbeTargets(
+      payload.monitorTargets ?? payload.monitorAccountIds
+    );
+    const resolvedRequestedTargets: DeliverabilityMonitorTarget[] = [];
+    for (const requestedTarget of requestedMonitorTargets) {
+      const account = await getOutreachAccount(requestedTarget.accountId);
+      const secrets = account ? await getOutreachAccountSecrets(account.id) : null;
+      if (
+        account &&
+        secrets &&
+        account.status === "active" &&
+        supportsMailbox(account) &&
+        account.config.mailbox.status === "connected" &&
+        secrets.mailboxPassword.trim() &&
+        account.config.mailbox.email.trim().toLowerCase() === requestedTarget.email
+      ) {
+        resolvedRequestedTargets.push({
+          account,
+          secrets,
+          brandId: "",
+        });
+      }
+    }
+    const candidateMonitorTargets =
+      resolvedRequestedTargets.length
+        ? resolvedRequestedTargets
+        : await resolveDeliverabilityMonitorTargets({
+            runBrandId: run.brandId,
+            excludeAccountIds: [run.accountId, assignment?.mailboxAccountId ?? ""],
+            excludeEmails: [replyToEmail, senderFromEmail],
+          });
+    const blockedMonitorEmails = await listBlockedMonitorEmailsForSender({
+      brandId: run.brandId,
+      senderAccountId: senderChoice.slot.account.id,
+      fromEmail: senderFromEmail,
+    });
+    monitorTargets = candidateMonitorTargets.filter((target) => {
+      const monitorEmail = target.account.config.mailbox.email.trim().toLowerCase();
+      return !blockedMonitorEmails.has(monitorEmail);
+    });
+
+    if (!monitorTargets.length) {
+      if (!probeRun) {
+        probeRun = await createDeliverabilityProbeRun({
+          runId: run.id,
+          brandId: run.brandId,
+          campaignId: run.campaignId,
+          experimentId: run.experimentId,
+          probeToken,
+          probeVariant,
+          status: "failed",
+          stage,
+          sourceMessageId: referenceMessage.id,
+          sourceMessageStatus: referenceMessage.status,
+          sourceType: referenceMessage.sourceType,
+          sourceNodeId: referenceMessage.nodeId,
+          sourceLeadId: referenceMessage.leadId,
+          senderAccountId: senderChoice.slot.account.id,
+          senderAccountName: senderChoice.slot.account.name,
+          fromEmail: senderFromEmail,
+          replyToEmail,
+          subject,
+          contentHash,
+          lastError: candidateMonitorTargets.length
+            ? "No unused deliverability monitor mailbox remains for this sender"
+            : "No dedicated deliverability monitor group is connected",
+        });
+      } else {
+        probeRun = await updateDeliverabilityProbeRun(probeRun.id, {
+          status: "failed",
+          stage,
+          senderAccountId: senderChoice.slot.account.id,
+          senderAccountName: senderChoice.slot.account.name,
+          fromEmail: senderFromEmail,
+          replyToEmail,
+          subject,
+          contentHash,
+          lastError: candidateMonitorTargets.length
+            ? "No unused deliverability monitor mailbox remains for this sender"
+            : "No dedicated deliverability monitor group is connected",
+        });
+      }
+      await createOutreachEvent({
+        runId: run.id,
+        eventType: "deliverability_probe_failed",
+        payload: {
+          reason: candidateMonitorTargets.length
+            ? "No unused deliverability monitor mailbox remains for this sender"
+            : "No dedicated deliverability monitor group is connected",
+          probeVariant,
+          probeToken,
+          probeRunId: probeRun?.id ?? "",
+          senderAccountId: senderChoice.slot.account.id,
+          fromEmail: senderFromEmail,
+          candidateMonitorCount: candidateMonitorTargets.length,
+          candidateMonitorEmails: candidateMonitorTargets.map((target) =>
+            target.account.config.mailbox.email.trim().toLowerCase()
+          ),
+          blockedMonitorCount: blockedMonitorEmails.size,
+          blockedMonitorEmails: Array.from(blockedMonitorEmails),
+          taintedMonitorCount: blockedMonitorEmails.size,
+        },
+      });
+      return;
+    }
+
     if (!probeRun) {
       probeRun = await createDeliverabilityProbeRun({
         runId: run.id,

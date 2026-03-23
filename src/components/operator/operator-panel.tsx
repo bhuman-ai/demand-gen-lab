@@ -2,7 +2,6 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  AlertCircle,
   Bot,
   Check,
   ChevronRight,
@@ -18,7 +17,12 @@ import {
   fetchOperatorThreads,
   sendOperatorChat,
 } from "@/lib/client-api";
-import type { OperatorAction, OperatorMessage, OperatorThreadDetail } from "@/lib/operator-types";
+import type {
+  OperatorAction,
+  OperatorExecutionEnvelope,
+  OperatorMessage,
+  OperatorThreadDetail,
+} from "@/lib/operator-types";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -39,20 +43,42 @@ function asStringArray(value: unknown) {
   return Array.isArray(value) ? value.map((entry) => String(entry ?? "").trim()).filter(Boolean) : [];
 }
 
-function actionBadgeVariant(action: OperatorAction) {
-  if (action.status === "completed") return "success" as const;
-  if (action.status === "failed" || action.status === "blocked") return "danger" as const;
-  if (action.status === "awaiting_approval") return "accent" as const;
-  return "muted" as const;
+function executionStateLabel(state: OperatorExecutionEnvelope["state"]) {
+  switch (state) {
+    case "need_info":
+      return "Need info";
+    case "awaiting_confirmation":
+      return "Ready to run";
+    case "running":
+      return "Running";
+    case "completed":
+      return "Done";
+    case "failed":
+      return "Failed";
+    case "canceled":
+      return "Canceled";
+    default:
+      return "Answer only";
+  }
+}
+
+function executionCardTone(state: OperatorExecutionEnvelope["state"]) {
+  switch (state) {
+    case "need_info":
+    case "awaiting_confirmation":
+      return "border-[color:var(--accent-border)] bg-[color:var(--accent-soft)]";
+    case "completed":
+      return "border-[color:var(--success-border)] bg-[color:var(--success-soft)]";
+    case "failed":
+      return "border-[color:var(--danger-border)] bg-[color:var(--danger-soft)]";
+    case "canceled":
+      return "border-[color:var(--border)] bg-[color:var(--surface-muted)]";
+    default:
+      return "border-[color:var(--border)] bg-[color:var(--surface)]";
+  }
 }
 
 function messageCardTone(message: OperatorMessage) {
-  if (message.kind === "receipt") {
-    return "border-[color:var(--success-border)] bg-[color:var(--success-soft)]";
-  }
-  if (message.kind === "approval_request") {
-    return "border-[color:var(--accent-border)] bg-[color:var(--accent-soft)]";
-  }
   if (message.kind === "system_note") {
     return "border-[color:var(--danger-border)] bg-[color:var(--danger-soft)]";
   }
@@ -62,65 +88,146 @@ function messageCardTone(message: OperatorMessage) {
   return "border-[color:var(--border)] bg-[color:var(--surface-muted)]";
 }
 
-function MessageBody({ message, actionsById }: { message: OperatorMessage; actionsById: Map<string, OperatorAction> }) {
+function ExecutionCard({
+  execution,
+  action,
+  onConfirm,
+  onCancel,
+  actionBusyId,
+}: {
+  execution: OperatorExecutionEnvelope;
+  action?: OperatorAction;
+  onConfirm: (actionId: string) => void;
+  onCancel: (actionId: string) => void;
+  actionBusyId: string;
+}) {
+  const intent = execution.intent;
+  const receipt = execution.receipt;
+  const missingFields = asStringArray(execution.missingFields);
+  const statusLabel = executionStateLabel(execution.state);
+  const actionId = asString(execution.actionId);
+  const canConfirm = execution.state === "awaiting_confirmation" && Boolean(actionId) && action?.status === "awaiting_approval";
+
+  return (
+    <div className={cn("mt-3 rounded-[14px] border px-3 py-3", executionCardTone(execution.state))}>
+      <div className="flex items-center justify-between gap-3">
+        <div className="text-xs font-medium uppercase tracking-[0.14em] text-[color:var(--muted-foreground)]">Action</div>
+        <Badge variant={execution.state === "completed" ? "success" : execution.state === "failed" ? "danger" : execution.state === "awaiting_confirmation" || execution.state === "need_info" ? "accent" : "muted"}>
+          {statusLabel}
+        </Badge>
+      </div>
+      <div className="mt-3 grid gap-2 text-sm leading-6 text-[color:var(--foreground)]">
+        {intent ? (
+          <>
+            <div>
+              <span className="text-[color:var(--muted-foreground)]">Intent:</span>{" "}
+              <span className="font-medium capitalize">{intent.verb}</span> {intent.objectType}
+            </div>
+            <div>
+              <span className="text-[color:var(--muted-foreground)]">Target:</span>{" "}
+              <span>{intent.objectLabel || "Not resolved yet"}</span>
+            </div>
+          </>
+        ) : null}
+        {execution.toolName ? (
+          <div>
+            <span className="text-[color:var(--muted-foreground)]">Tool:</span>{" "}
+            <span className="font-mono text-xs">{execution.toolName}</span>
+          </div>
+        ) : null}
+        {receipt ? (
+          <div>
+            <span className="text-[color:var(--muted-foreground)]">Result:</span>{" "}
+            <span>{receipt.summary}</span>
+          </div>
+        ) : asString(execution.preview.summary) ? (
+          <div>
+            <span className="text-[color:var(--muted-foreground)]">Result:</span>{" "}
+            <span>{asString(execution.preview.summary)}</span>
+          </div>
+        ) : null}
+        {missingFields.length ? (
+          <div>
+            <div className="text-[color:var(--muted-foreground)]">Missing:</div>
+            <div className="mt-1 flex flex-wrap gap-2">
+              {missingFields.map((field) => (
+                <Badge key={field} variant="muted">
+                  {field}
+                </Badge>
+              ))}
+            </div>
+          </div>
+        ) : null}
+        {asString(execution.error) ? (
+          <div>
+            <span className="text-[color:var(--muted-foreground)]">Error:</span>{" "}
+            <span>{asString(execution.error)}</span>
+          </div>
+        ) : null}
+      </div>
+      {canConfirm ? (
+        <div className="mt-3 flex items-center gap-2">
+          <Button
+            type="button"
+            size="sm"
+            onClick={() => onConfirm(actionId)}
+            disabled={Boolean(actionBusyId)}
+          >
+            {actionBusyId === actionId ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
+            Confirm
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            onClick={() => onCancel(actionId)}
+            disabled={Boolean(actionBusyId)}
+          >
+            Cancel
+          </Button>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function MessageBody({
+  message,
+  actionsById,
+  onConfirm,
+  onCancel,
+  actionBusyId,
+}: {
+  message: OperatorMessage;
+  actionsById: Map<string, OperatorAction>;
+  onConfirm: (actionId: string) => void;
+  onCancel: (actionId: string) => void;
+  actionBusyId: string;
+}) {
   const content = asRecord(message.content);
   if (message.kind === "message" && message.role === "assistant") {
     const assistant = asRecord(content.assistant);
+    const execution = asRecord(content.execution);
+    const actionId = asString(execution.actionId);
+    const action = actionId ? actionsById.get(actionId) : undefined;
     return (
-      <div className="whitespace-pre-wrap text-sm leading-6">{asString(content.text) || asString(assistant.summary)}</div>
-    );
-  }
-
-  if (message.kind === "message") {
-    return <div className="text-sm leading-6">{asString(content.text)}</div>;
-  }
-
-  if (message.kind === "approval_request") {
-    const preview = asRecord(content.preview);
-    const actionId = asString(content.actionId);
-    const action = actionsById.get(actionId);
-    return (
-      <div className="space-y-2">
-        <div className="flex items-center gap-2">
-          <Badge variant="accent">Approval needed</Badge>
-          {action ? <Badge variant={actionBadgeVariant(action)}>{action.status.replace(/_/g, " ")}</Badge> : null}
-        </div>
-        <div className="text-sm font-medium text-[color:var(--foreground)]">{asString(preview.title) || "Pending action"}</div>
-        <div className="text-sm leading-6 text-[color:var(--foreground)]">{asString(preview.summary)}</div>
-      </div>
-    );
-  }
-
-  if (message.kind === "receipt") {
-    return (
-      <div className="space-y-2">
-        <div className="flex items-center gap-2 text-sm font-medium text-[color:var(--foreground)]">
-          <Check className="h-4 w-4" />
-          {asString(content.title) || "Action receipt"}
-        </div>
-        <div className="text-sm leading-6 text-[color:var(--foreground)]">{asString(content.summary)}</div>
-        {asStringArray(content.details).length ? (
-          <div className="space-y-1 text-sm text-[color:var(--foreground)]">
-            {asStringArray(content.details).map((item) => (
-              <div key={item}>• {item}</div>
-            ))}
-          </div>
+      <div>
+        <div className="whitespace-pre-wrap text-sm leading-6">{asString(content.text) || asString(assistant.summary)}</div>
+        {asString(execution.state) && asString(execution.state) !== "answer_only" ? (
+          <ExecutionCard
+            execution={execution as OperatorExecutionEnvelope}
+            action={action}
+            onConfirm={onConfirm}
+            onCancel={onCancel}
+            actionBusyId={actionBusyId}
+          />
         ) : null}
       </div>
     );
   }
 
-  if (message.kind === "tool_call") {
-    return <div className="text-xs text-[color:var(--muted-foreground)]">Running {asString(content.toolName)}...</div>;
-  }
-
-  if (message.kind === "tool_result") {
-    return (
-      <div className="space-y-1">
-        <div className="text-xs uppercase tracking-[0.14em] text-[color:var(--muted-foreground)]">{asString(content.toolName)}</div>
-        <div className="text-sm leading-6 text-[color:var(--foreground)]">{asString(content.summary)}</div>
-      </div>
-    );
+  if (message.kind === "message") {
+    return <div className="text-sm leading-6">{asString(content.text)}</div>;
   }
 
   if (message.kind === "system_note") {
@@ -162,8 +269,14 @@ export default function OperatorPanel({
   const [input, setInput] = useState("");
   const scrollerRef = useRef<HTMLDivElement | null>(null);
 
-  const pendingActions = useMemo(
-    () => (threadDetail?.actions ?? []).filter((action) => action.status === "awaiting_approval"),
+  const visibleMessages = useMemo(
+    () =>
+      (threadDetail?.messages ?? []).filter(
+        (message) =>
+          (message.role === "user" && message.kind === "message") ||
+          (message.role === "assistant" && message.kind === "message") ||
+          message.kind === "system_note"
+      ),
     [threadDetail]
   );
   const actionsById = useMemo(
@@ -298,7 +411,7 @@ export default function OperatorPanel({
                 {activeBrandName ? <Badge variant="muted">{activeBrandName}</Badge> : null}
               </div>
               <div className="mt-2 text-sm leading-6 text-[color:var(--foreground)]">
-                Ask anything about this brand, or tell Operator what you want done. If it actually makes a change, it will show a receipt here.
+                Ask anything. If Operator makes a change, it will show exactly what it did.
               </div>
             </div>
             <Button type="button" variant="ghost" size="icon" onClick={() => onOpenChange(false)} aria-label="Close Operator">
@@ -327,7 +440,7 @@ export default function OperatorPanel({
             </div>
           ) : null}
 
-          {!loadingThread && activeBrandId && !threadDetail?.messages.length ? (
+          {!loadingThread && activeBrandId && !visibleMessages.length ? (
             <div className="space-y-4">
               <div className="rounded-[16px] border border-[color:var(--border)] bg-[linear-gradient(135deg,color-mix(in_oklab,var(--accent)_14%,var(--surface))_0%,var(--surface-muted)_100%)] px-4 py-4">
                 <div className="flex items-center gap-2 text-sm font-medium text-[color:var(--foreground)]">
@@ -351,7 +464,7 @@ export default function OperatorPanel({
             </div>
           ) : null}
 
-          {threadDetail?.messages.map((message) => {
+          {visibleMessages.map((message) => {
             const isUser = message.role === "user" && message.kind === "message";
             return (
               <div key={message.id} className={cn("flex", isUser ? "justify-end" : "justify-start")}>
@@ -362,58 +475,18 @@ export default function OperatorPanel({
                     isUser ? "max-w-[80%]" : ""
                   )}
                 >
-                  <MessageBody message={message} actionsById={actionsById} />
+                  <MessageBody
+                    message={message}
+                    actionsById={actionsById}
+                    onConfirm={(actionId) => void handleConfirm(actionId)}
+                    onCancel={(actionId) => void handleCancel(actionId)}
+                    actionBusyId={actionBusyId}
+                  />
                 </div>
               </div>
             );
           })}
         </div>
-
-        {pendingActions.length ? (
-          <div className="border-t border-[color:var(--border)] bg-[color:var(--surface-muted)] px-5 py-4">
-            <div className="mb-3 flex items-center gap-2 text-sm font-medium text-[color:var(--foreground)]">
-              <AlertCircle className="h-4 w-4 text-[color:var(--accent)]" />
-              Pending approvals
-            </div>
-            <div className="space-y-3">
-              {pendingActions.map((action) => (
-                <div key={action.id} className="rounded-[14px] border border-[color:var(--border)] bg-[color:var(--surface)] px-4 py-3">
-                  <div className="flex items-center justify-between gap-3">
-                    <div className="min-w-0">
-                      <div className="text-sm font-medium text-[color:var(--foreground)]">
-                        {asString(action.preview.title) || "Pending action"}
-                      </div>
-                      <div className="mt-1 text-sm leading-6 text-[color:var(--muted-foreground)]">
-                        {asString(action.preview.summary) || action.toolName}
-                      </div>
-                    </div>
-                    <Badge variant={actionBadgeVariant(action)}>{action.status.replace(/_/g, " ")}</Badge>
-                  </div>
-                  <div className="mt-3 flex items-center gap-2">
-                    <Button
-                      type="button"
-                      size="sm"
-                      onClick={() => void handleConfirm(action.id)}
-                      disabled={Boolean(actionBusyId)}
-                    >
-                      {actionBusyId === action.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
-                      Confirm
-                    </Button>
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="outline"
-                      onClick={() => void handleCancel(action.id)}
-                      disabled={Boolean(actionBusyId)}
-                    >
-                      Cancel
-                    </Button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        ) : null}
 
         <div className="border-t border-[color:var(--border)] px-5 py-4">
           <div className="mb-3 flex flex-wrap gap-2">

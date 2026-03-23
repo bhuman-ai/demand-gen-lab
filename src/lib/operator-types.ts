@@ -66,6 +66,32 @@ export type OperatorReceipt = {
   details: string[];
 };
 
+export type OperatorExecutionState =
+  | "answer_only"
+  | "need_info"
+  | "awaiting_confirmation"
+  | "running"
+  | "completed"
+  | "failed"
+  | "canceled";
+
+export type OperatorExecutionIntent = {
+  verb: string;
+  objectType: string;
+  objectLabel: string;
+};
+
+export type OperatorExecutionEnvelope = {
+  state: OperatorExecutionState;
+  actionId: string;
+  intent: OperatorExecutionIntent | null;
+  toolName: OperatorToolName | "";
+  preview: Record<string, unknown>;
+  receipt: OperatorReceipt | null;
+  missingFields: string[];
+  error: string;
+};
+
 export type OperatorThread = {
   id: string;
   userId: string;
@@ -186,6 +212,7 @@ export type OperatorChatResponse = {
   thread: OperatorThread;
   run: Pick<OperatorRun, "id" | "status" | "model">;
   assistant: OperatorChatAssistantReply;
+  execution: OperatorExecutionEnvelope | null;
   actions: OperatorActionSummary[];
   messages: OperatorMessage[];
 };

@@ -21,8 +21,11 @@ import type {
   OperatorChatAssistantReply,
   OperatorChatRequest,
   OperatorChatResponse,
+  OperatorExecutionEnvelope,
+  OperatorExecutionIntent,
   OperatorMessage,
   OperatorRequestedAction,
+  OperatorReceipt,
   OperatorThreadDetail,
   OperatorToolName,
   OperatorToolSpec,
@@ -135,6 +138,161 @@ function buildToolPreview(tool: OperatorToolSpec, input: Record<string, unknown>
     title: tool.previewTitle,
     summary: tool.description,
   };
+}
+
+function inferExecutionVerb(toolName: OperatorToolName, input: Record<string, unknown>) {
+  switch (toolName) {
+    case "create_brand":
+    case "create_experiment":
+      return "create";
+    case "update_brand":
+    case "update_brand_lead":
+    case "update_experiment":
+    case "update_campaign":
+      return "update";
+    case "delete_brand":
+    case "delete_experiment":
+    case "delete_campaign":
+      return "delete";
+    case "add_brand_lead":
+      return "add";
+    case "launch_experiment_run":
+    case "launch_campaign_run":
+      return "launch";
+    case "promote_experiment_to_campaign":
+      return "promote";
+    case "send_reply_draft":
+      return "send";
+    case "dismiss_reply_draft":
+      return "dismiss";
+    case "refresh_mailpool_sender":
+      return "refresh";
+    case "provision_mailpool_sender":
+      return asString(input.domainMode) === "register" ? "buy and provision" : "provision";
+    case "control_experiment_run":
+    case "control_campaign_run":
+      return asString(input.action) || "control";
+    case "summarize_campaign_status":
+    case "summarize_experiments":
+    case "summarize_leads":
+    case "summarize_inbox":
+      return "summarize";
+    default:
+      return "inspect";
+  }
+}
+
+function inferExecutionObjectType(toolName: OperatorToolName) {
+  switch (toolName) {
+    case "create_brand":
+    case "update_brand":
+    case "delete_brand":
+    case "get_brand_snapshot":
+      return "brand";
+    case "refresh_mailpool_sender":
+    case "provision_mailpool_sender":
+    case "get_sender_snapshot":
+      return "sender";
+    case "add_brand_lead":
+    case "update_brand_lead":
+    case "summarize_leads":
+      return "lead";
+    case "create_experiment":
+    case "update_experiment":
+    case "delete_experiment":
+    case "launch_experiment_run":
+    case "control_experiment_run":
+    case "promote_experiment_to_campaign":
+    case "get_experiment_snapshot":
+    case "summarize_experiments":
+      return "experiment";
+    case "update_campaign":
+    case "delete_campaign":
+    case "launch_campaign_run":
+    case "control_campaign_run":
+    case "get_campaign_snapshot":
+    case "summarize_campaign_status":
+      return "campaign";
+    case "send_reply_draft":
+    case "dismiss_reply_draft":
+    case "summarize_inbox":
+      return "reply";
+    default:
+      return "item";
+  }
+}
+
+function inferExecutionTargetLabel(toolName: OperatorToolName, input: Record<string, unknown>) {
+  const fromLocalPart = asString(input.fromLocalPart);
+  const domain = asString(input.domain);
+  if (fromLocalPart && domain) return `${fromLocalPart}@${domain}`;
+  const candidates = [
+    input.fromEmail,
+    input.replyToEmail,
+    input.accountName,
+    input.brandName,
+    input.name,
+    input.website,
+    input.experimentName,
+    input.campaignName,
+    input.leadName,
+    input.draftSubject,
+    input.domain,
+    input.accountId,
+    input.brandId,
+  ];
+  const target = candidates.map((value) => asString(value)).find(Boolean);
+  if (target) return target;
+  return inferExecutionObjectType(toolName);
+}
+
+function buildExecutionIntent(
+  toolName: OperatorToolName,
+  input: Record<string, unknown>
+): OperatorExecutionIntent {
+  return {
+    verb: inferExecutionVerb(toolName, input),
+    objectType: inferExecutionObjectType(toolName),
+    objectLabel: inferExecutionTargetLabel(toolName, input),
+  };
+}
+
+function buildExecutionEnvelope(input: {
+  state: OperatorExecutionEnvelope["state"];
+  toolName?: OperatorToolName;
+  toolInput?: Record<string, unknown>;
+  actionId?: string;
+  preview?: Record<string, unknown>;
+  receipt?: OperatorReceipt | null;
+  missingFields?: string[];
+  error?: string;
+}): OperatorExecutionEnvelope {
+  const toolName = input.toolName ?? "";
+  return {
+    state: input.state,
+    actionId: asString(input.actionId),
+    intent: toolName ? buildExecutionIntent(toolName, input.toolInput ?? {}) : null,
+    toolName,
+    preview: input.preview ?? {},
+    receipt: input.receipt ?? null,
+    missingFields: input.missingFields ?? [],
+    error: asString(input.error),
+  };
+}
+
+function buildNeedInfoEnvelope(input: {
+  toolName?: OperatorToolName;
+  toolInput?: Record<string, unknown>;
+  missingFields: string[];
+  preview?: Record<string, unknown>;
+}): OperatorExecutionEnvelope {
+  return buildExecutionEnvelope({
+    state: "need_info",
+    toolName: input.toolName,
+    toolInput: input.toolInput,
+    preview: input.preview,
+    missingFields: input.missingFields,
+  });
 }
 
 function titleFromMessage(message: string) {
@@ -346,6 +504,31 @@ function makeUnexecutedActionAssistant(message: string, assistant: OperatorChatA
     findings: [],
     recommendations: [],
   };
+}
+
+function buildProvisionMissingFields(toolInput: Record<string, unknown>) {
+  const missingFields: string[] = [];
+  if (!asString(toolInput.fromLocalPart) || !asString(toolInput.domain)) {
+    missingFields.push("sender email");
+  }
+  if (asString(toolInput.domainMode) === "register") {
+    const registrant = asRecord(toolInput.registrant);
+    const requiredRegistrantFields: Array<[string, string]> = [
+      ["firstName", "registrant first name"],
+      ["lastName", "registrant last name"],
+      ["emailAddress", "registrant email"],
+      ["address1", "registrant street address"],
+      ["city", "registrant city"],
+      ["postalCode", "registrant postal code"],
+      ["country", "registrant country"],
+    ];
+    for (const [field, label] of requiredRegistrantFields) {
+      if (!asString(registrant[field])) {
+        missingFields.push(label);
+      }
+    }
+  }
+  return missingFields;
 }
 
 function resolveSenderAccountId(
@@ -1006,7 +1189,8 @@ function toActionSummary(action: OperatorAction): OperatorActionSummary {
 
 async function createAssistantMessage(
   threadId: string,
-  assistant: OperatorChatAssistantReply
+  assistant: OperatorChatAssistantReply,
+  execution: OperatorExecutionEnvelope | null = null
 ) {
   return createOperatorMessage({
     threadId,
@@ -1015,6 +1199,7 @@ async function createAssistantMessage(
     content: {
       text: assistant.summary,
       assistant,
+      execution,
     },
   });
 }
@@ -1130,6 +1315,7 @@ export async function runOperatorChatTurn(input: OperatorChatRequest): Promise<O
 
   try {
     let assistant: OperatorChatAssistantReply;
+    let execution: OperatorExecutionEnvelope | null = buildExecutionEnvelope({ state: "answer_only" });
     const actions: OperatorAction[] = [];
 
     if (requestedAction) {
@@ -1140,6 +1326,12 @@ export async function runOperatorChatTurn(input: OperatorChatRequest): Promise<O
           findings: [],
           recommendations: [],
         };
+        execution = buildExecutionEnvelope({
+          state: "failed",
+          toolName: requestedAction.toolName,
+          toolInput: requestedAction.input,
+          error: assistant.summary,
+        });
       } else if (
         tool.name === "provision_mailpool_sender" &&
         (!asString(requestedAction.input.domain) || !asString(requestedAction.input.fromLocalPart))
@@ -1152,6 +1344,12 @@ export async function runOperatorChatTurn(input: OperatorChatRequest): Promise<O
           findings: [],
           recommendations: [],
         };
+        execution = buildNeedInfoEnvelope({
+          toolName: tool.name,
+          toolInput: requestedAction.input,
+          preview: buildToolPreview(tool, requestedAction.input),
+          missingFields: ["sender email"],
+        });
       } else if (
         tool.name === "provision_mailpool_sender" &&
         asString(requestedAction.input.domainMode) === "register"
@@ -1171,6 +1369,12 @@ export async function runOperatorChatTurn(input: OperatorChatRequest): Promise<O
             findings: [],
             recommendations: [],
           };
+          execution = buildNeedInfoEnvelope({
+            toolName: tool.name,
+            toolInput: requestedAction.input,
+            preview: buildToolPreview(tool, requestedAction.input),
+            missingFields: buildProvisionMissingFields(requestedAction.input),
+          });
         } else if (tool.approvalMode === "confirm") {
           const action = await createOperatorAction({
             runId: run.id,
@@ -1181,17 +1385,14 @@ export async function runOperatorChatTurn(input: OperatorChatRequest): Promise<O
             preview: buildToolPreview(tool, requestedAction.input),
           });
           actions.push(action);
-          await createOperatorMessage({
-            threadId: thread.id,
-            role: "assistant",
-            kind: "approval_request",
-            content: {
-              actionId: action.id,
-              preview: action.preview,
-              toolName: action.toolName,
-            },
-          });
           assistant = summarizeActionPreview(action);
+          execution = buildExecutionEnvelope({
+            state: "awaiting_confirmation",
+            actionId: action.id,
+            toolName: tool.name,
+            toolInput: requestedAction.input,
+            preview: action.preview,
+          });
         } else {
           const action = await createOperatorAction({
             runId: run.id,
@@ -1202,6 +1403,87 @@ export async function runOperatorChatTurn(input: OperatorChatRequest): Promise<O
             input: requestedAction.input,
             preview: buildToolPreview(tool, requestedAction.input),
           });
+          try {
+            const executed = await executeToolAction({
+              threadId: thread.id,
+              actionId: action.id,
+              tool,
+              toolInput: requestedAction.input,
+            });
+            actions.push(executed.updatedAction ?? action);
+            assistant = {
+              summary: executed.result.summary,
+              findings: [],
+              recommendations: [],
+            };
+            execution =
+              tool.riskLevel === "read"
+                ? buildExecutionEnvelope({ state: "answer_only" })
+                : buildExecutionEnvelope({
+                    state: "completed",
+                    actionId: executed.updatedAction?.id ?? action.id,
+                    toolName: tool.name,
+                    toolInput: requestedAction.input,
+                    preview: action.preview,
+                    receipt:
+                      executed.result.receipt ??
+                      ({
+                        title: "Action completed",
+                        summary: executed.result.summary,
+                        details: [],
+                      } satisfies OperatorReceipt),
+                  });
+          } catch (error) {
+            const message = error instanceof Error ? error.message : "Operator action failed";
+            const failedAction = await updateOperatorAction(action.id, {
+              status: "failed",
+              errorText: message,
+            });
+            actions.push(failedAction ?? action);
+            assistant = {
+              summary: `It failed. ${message}`,
+              findings: [],
+              recommendations: [],
+            };
+            execution = buildExecutionEnvelope({
+              state: "failed",
+              actionId: failedAction?.id ?? action.id,
+              toolName: tool.name,
+              toolInput: requestedAction.input,
+              preview: action.preview,
+              error: message,
+            });
+          }
+        }
+      } else if (tool.approvalMode === "confirm") {
+        const action = await createOperatorAction({
+          runId: run.id,
+          toolName: tool.name,
+          riskLevel: tool.riskLevel,
+          approvalMode: tool.approvalMode,
+          input: requestedAction.input,
+          preview: buildToolPreview(tool, requestedAction.input),
+        });
+        actions.push(action);
+        assistant = summarizeActionPreview(action);
+        execution = buildExecutionEnvelope({
+          state: "awaiting_confirmation",
+          actionId: action.id,
+          toolName: tool.name,
+          toolInput: requestedAction.input,
+          preview: action.preview,
+        });
+      } else {
+        const action = await createOperatorAction({
+          runId: run.id,
+          toolName: tool.name,
+          riskLevel: tool.riskLevel,
+          approvalMode: tool.approvalMode,
+          status: "running",
+          input: requestedAction.input,
+          preview: buildToolPreview(tool, requestedAction.input),
+        });
+        try {
           const executed = await executeToolAction({
             threadId: thread.id,
             actionId: action.id,
@@ -1214,62 +1496,62 @@ export async function runOperatorChatTurn(input: OperatorChatRequest): Promise<O
             findings: [],
             recommendations: [],
           };
-        }
-      } else if (tool.approvalMode === "confirm") {
-        const action = await createOperatorAction({
-          runId: run.id,
-          toolName: tool.name,
-          riskLevel: tool.riskLevel,
-          approvalMode: tool.approvalMode,
-          input: requestedAction.input,
-          preview: buildToolPreview(tool, requestedAction.input),
-        });
-        actions.push(action);
-        await createOperatorMessage({
-          threadId: thread.id,
-          role: "assistant",
-          kind: "approval_request",
-          content: {
-            actionId: action.id,
+          execution =
+            tool.riskLevel === "read"
+              ? buildExecutionEnvelope({ state: "answer_only" })
+              : buildExecutionEnvelope({
+                  state: "completed",
+                  actionId: executed.updatedAction?.id ?? action.id,
+                  toolName: tool.name,
+                  toolInput: requestedAction.input,
+                  preview: action.preview,
+                  receipt:
+                    executed.result.receipt ??
+                    ({
+                      title: "Action completed",
+                      summary: executed.result.summary,
+                      details: [],
+                    } satisfies OperatorReceipt),
+                });
+        } catch (error) {
+          const message = error instanceof Error ? error.message : "Operator action failed";
+          const failedAction = await updateOperatorAction(action.id, {
+            status: "failed",
+            errorText: message,
+          });
+          actions.push(failedAction ?? action);
+          assistant = {
+            summary: `It failed. ${message}`,
+            findings: [],
+            recommendations: [],
+          };
+          execution = buildExecutionEnvelope({
+            state: "failed",
+            actionId: failedAction?.id ?? action.id,
+            toolName: tool.name,
+            toolInput: requestedAction.input,
             preview: action.preview,
-            toolName: action.toolName,
-          },
-        });
-        assistant = summarizeActionPreview(action);
-      } else {
-        const action = await createOperatorAction({
-          runId: run.id,
-          toolName: tool.name,
-          riskLevel: tool.riskLevel,
-          approvalMode: tool.approvalMode,
-          status: "running",
-          input: requestedAction.input,
-          preview: buildToolPreview(tool, requestedAction.input),
-        });
-        const executed = await executeToolAction({
-          threadId: thread.id,
-          actionId: action.id,
-          tool,
-          toolInput: requestedAction.input,
-        });
-        actions.push(executed.updatedAction ?? action);
-        assistant = {
-          summary: executed.result.summary,
-          findings: [],
-          recommendations: [],
-        };
+            error: message,
+          });
+        }
       }
     } else {
       assistant = makeUnexecutedActionAssistant(input.message, llmPlan?.assistant ?? fallbackAssistant);
+      execution = isExplicitMutationRequest(input.message)
+        ? buildNeedInfoEnvelope({
+            missingFields: [],
+          })
+        : buildExecutionEnvelope({ state: "answer_only" });
     }
 
-    const assistantMessage = await createAssistantMessage(thread.id, assistant);
+    const assistantMessage = await createAssistantMessage(thread.id, assistant, execution);
     const updatedThread =
       (await updateOperatorThread(thread.id, {
         lastSummary: assistant.summary,
       })) ?? thread;
+    const runStatus = execution?.state === "failed" ? "failed" : "completed";
     await updateOperatorRun(run.id, {
-      status: "completed",
+      status: runStatus,
       contextSnapshot: snapshotContext(brandContext),
       completedAt: nowIso(),
     });
@@ -1278,10 +1560,11 @@ export async function runOperatorChatTurn(input: OperatorChatRequest): Promise<O
       thread: updatedThread,
       run: {
         id: run.id,
-        status: "completed",
+        status: runStatus,
         model: run.model,
       },
       assistant,
+      execution,
       actions: actions.map(toActionSummary),
       messages: [assistantMessage],
     };
@@ -1361,6 +1644,22 @@ export async function confirmOperatorAction(input: {
         summary: executed.result.summary,
         details: [],
       } as const);
+    await createAssistantMessage(
+      thread.id,
+      {
+        summary: executed.result.summary,
+        findings: [],
+        recommendations: [],
+      },
+      buildExecutionEnvelope({
+        state: "completed",
+        actionId: action.id,
+        toolName: action.toolName,
+        toolInput: action.input,
+        preview: action.preview,
+        receipt,
+      })
+    );
     await updateOperatorThread(thread.id, {
       lastSummary: receipt.summary,
     });
@@ -1374,19 +1673,33 @@ export async function confirmOperatorAction(input: {
       status: "failed",
       errorText: message,
     });
-    await createOperatorMessage({
-      threadId: thread.id,
-      role: "assistant",
-      kind: "system_note",
-      content: {
+    await createAssistantMessage(
+      thread.id,
+      {
+        summary: `It failed. ${message}`,
+        findings: [],
+        recommendations: [],
+      },
+      buildExecutionEnvelope({
+        state: "failed",
+        actionId: action.id,
+        toolName: action.toolName,
+        toolInput: action.input,
+        preview: action.preview,
+        error: message,
+      })
+    );
+    await updateOperatorThread(thread.id, {
+      lastSummary: message,
+    });
+    return {
+      action: failedAction ?? action,
+      receipt: {
         title: "Action failed",
         summary: message,
+        details: [],
       },
-    });
-    throw Object.assign(new Error(message), {
-      status: 500,
-      action: failedAction ?? action,
-    });
+    };
   }
 }
 
@@ -1427,17 +1740,24 @@ export async function cancelOperatorAction(input: {
     status: "canceled",
     errorText: "",
   });
-  await createOperatorMessage({
-    threadId: thread.id,
-    role: "assistant",
-    kind: "system_note",
-    content: {
-      title: "Action canceled",
-      summary: input.note?.trim() || "The requested action was canceled.",
+  const summary = input.note?.trim() || "Canceled. I did not make that change.";
+  await createAssistantMessage(
+    thread.id,
+    {
+      summary,
+      findings: [],
+      recommendations: [],
     },
-  });
+    buildExecutionEnvelope({
+      state: "canceled",
+      actionId: action.id,
+      toolName: action.toolName,
+      toolInput: action.input,
+      preview: action.preview,
+    })
+  );
   await updateOperatorThread(thread.id, {
-    lastSummary: input.note?.trim() || "Action canceled",
+    lastSummary: summary,
   });
 
   return {

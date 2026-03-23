@@ -138,15 +138,14 @@ function summarizeActionPreview(action: OperatorAction): OperatorChatAssistantRe
 function extractResponseText(payload: unknown) {
   const row = asRecord(payload);
   const output = Array.isArray(row.output) ? row.output : [];
-  const firstOutput = asRecord(output[0]);
-  const content = Array.isArray(firstOutput.content) ? firstOutput.content : [];
+  const outputTextFromItems = output
+    .map((item) => asRecord(item))
+    .flatMap((item) => (Array.isArray(item.content) ? item.content : []))
+    .map((entry) => asRecord(entry))
+    .find((entry) => typeof entry.text === "string");
   return (
     asString(row.output_text) ||
-    asString(
-      content
-        .map((entry) => asRecord(entry))
-        .find((entry) => typeof entry.text === "string")?.text
-    )
+    asString(outputTextFromItems?.text)
   );
 }
 

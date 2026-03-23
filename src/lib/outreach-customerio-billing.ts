@@ -98,6 +98,7 @@ export function mergeOutreachAccountConfig(
 ): OutreachAccountConfig {
   const next = asRecord(patch);
   const nextCustomerIo = asRecord(next.customerIo);
+  const nextMailpool = asRecord(next.mailpool);
   const nextApify = asRecord(next.apify);
   const nextMailbox = asRecord(next.mailbox);
   const nextBilling = asRecord(nextCustomerIo.billing);
@@ -111,6 +112,10 @@ export function mergeOutreachAccountConfig(
         ...existing.customerIo.billing,
         ...nextBilling,
       },
+    },
+    mailpool: {
+      ...existing.mailpool,
+      ...nextMailpool,
     },
     apify: {
       ...existing.apify,

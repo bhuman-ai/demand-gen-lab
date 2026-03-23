@@ -103,11 +103,15 @@ function summarizeStatusDetail(
   if (status === "Running") {
     const scheduledMessages = normalizeCount(latestRun?.metrics.scheduledMessages);
     const sentMessages = normalizeCount(latestRun?.metrics.sentMessages);
-    if (scheduledMessages > 0 && sentMessages === 0) {
-      return `${scheduledMessages} messages are queued. Waiting for the next business-hour send window.`;
-    }
     if (sentMessages > 0) {
+      const queuedMessages = Math.max(0, scheduledMessages - sentMessages);
+      if (queuedMessages > 0) {
+        return `${sentMessages} email${sentMessages === 1 ? "" : "s"} sent so far. ${queuedMessages} more ${queuedMessages === 1 ? "is" : "are"} queued for upcoming send slots.`;
+      }
       return `${sentMessages} email${sentMessages === 1 ? "" : "s"} already sent.`;
+    }
+    if (scheduledMessages > 0) {
+      return `${scheduledMessages} messages are queued for the first eligible send slot.`;
     }
     return "A sending run is active.";
   }

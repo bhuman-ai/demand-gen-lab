@@ -2268,6 +2268,23 @@ export async function listCampaignRuns(
     .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
 }
 
+export async function listBrandRuns(brandId: string): Promise<OutreachRun[]> {
+  const supabase = getSupabaseAdmin();
+  if (supabase) {
+    const { data, error } = await supabase
+      .from(TABLE_RUN)
+      .select("*")
+      .eq("brand_id", brandId)
+      .order("created_at", { ascending: false });
+    if (!error) {
+      return (data ?? []).map((row: unknown) => mapRunRow(row));
+    }
+  }
+
+  const store = await readLocalStore();
+  return store.runs.filter((row) => row.brandId === brandId).sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
+}
+
 export async function listExperimentRuns(
   brandId: string,
   campaignId: string,

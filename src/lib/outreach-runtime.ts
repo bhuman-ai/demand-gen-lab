@@ -72,6 +72,7 @@ import {
   getReplyThread,
   getSourcingActorMemory,
   listCampaignRuns,
+  listBrandRuns,
   listDueOutreachJobs,
   listExperimentRuns,
   listOutreachAccounts,
@@ -10259,6 +10260,36 @@ function calculateRunMetricsFromMessages(
   };
 }
 
+function calculateScheduledRunMessages(
+  runId: string,
+  messages: Awaited<ReturnType<typeof listRunMessages>>
+) {
+  return messages.filter((item) => item.runId === runId && ["scheduled", "sent"].includes(item.status)).length;
+}
+
+function buildLiveRunMetrics(input: {
+  run: Pick<OutreachRun, "id" | "metrics">;
+  messages: Awaited<ReturnType<typeof listRunMessages>>;
+  threads: ReplyThread[];
+  sourcedLeads?: number;
+}) {
+  const liveMetrics = calculateRunMetricsFromMessages(input.run.id, input.messages, input.threads);
+  return {
+    ...input.run.metrics,
+    sourcedLeads: Math.max(input.run.metrics.sourcedLeads, input.sourcedLeads ?? input.run.metrics.sourcedLeads),
+    scheduledMessages: Math.max(
+      input.run.metrics.scheduledMessages,
+      calculateScheduledRunMessages(input.run.id, input.messages)
+    ),
+    sentMessages: liveMetrics.sentMessages,
+    bouncedMessages: liveMetrics.bouncedMessages,
+    failedMessages: liveMetrics.failedMessages,
+    replies: liveMetrics.replies,
+    positiveReplies: liveMetrics.positiveReplies,
+    negativeReplies: liveMetrics.negativeReplies,
+  };
+}
+
 async function scheduleConversationNodeMessage(input: {
   run: {
     id: string;
@@ -11002,15 +11033,14 @@ async function countOwnerSentUsage(input: {
   };
 }
 
-async function countCampaignSenderUsage(input: {
+async function countBrandSenderUsage(input: {
   brandId: string;
-  campaignId: string;
   timezone: string;
   currentRunId?: string;
   currentRunMessages?: Awaited<ReturnType<typeof listRunMessages>>;
 }) {
-  const campaignRuns = await listCampaignRuns(input.brandId, input.campaignId);
-  const recentRuns = campaignRuns.filter((run) => {
+  const brandRuns = await listBrandRuns(input.brandId);
+  const recentRuns = brandRuns.filter((run) => {
     if (isRunOpen(run.status)) return true;
     return Date.now() - toDate(run.createdAt).getTime() <= 7 * DAY_MS;
   });
@@ -11527,6 +11557,12 @@ function mailpoolPlacementToMonitorPlacement(value: string): DeliverabilityProbe
   return "error";
 }
 
+function isMailpoolCreditExhaustedError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error ?? "");
+  const normalized = message.trim().toLowerCase();
+  return normalized.includes("mailpool") && normalized.includes("enough credits");
+}
+
 async function waitForMailpoolDeliverabilitySpamCheck(apiKey: string, spamCheckId: string) {
   let current = await getMailpoolSpamCheck(apiKey, spamCheckId);
   for (let attempt = 0; attempt < 4 && current.state !== "completed"; attempt += 1) {
@@ -11619,11 +11655,7 @@ async function processMailpoolDeliverabilityJob(input: {
   const mailboxId = senderAccount.config.mailpool.mailboxId.trim();
   const fromEmail = getOutreachAccountFromEmail(senderAccount).trim();
   const replyToEmail = getOutreachAccountReplyToEmail(senderAccount).trim() || fromEmail;
-  const settings = await getOutreachProvisioningSettings();
-  const secrets = await getOutreachProvisioningSettingsSecrets();
-  const apiKey = String(secrets.mailpoolApiKey ?? "").trim();
-
-  if (!mailboxId || !apiKey) {
+  const failProbe = async (reason: string) => {
     const failedProbe =
       input.probeRun ??
       (await createDeliverabilityProbeRun({
@@ -11646,13 +11678,22 @@ async function processMailpoolDeliverabilityJob(input: {
         replyToEmail,
         subject: input.referenceMessage.subject,
         contentHash: input.referenceMessage.contentHash,
-        lastError: "Mailpool mailbox is missing or Mailpool credentials are not configured",
+        lastError: reason,
+        completedAt: nowIso(),
       }));
+    if (input.probeRun) {
+      await updateDeliverabilityProbeRun(input.probeRun.id, {
+        status: "failed",
+        stage: "poll",
+        lastError: reason,
+        completedAt: nowIso(),
+      });
+    }
     await createOutreachEvent({
       runId: input.run.id,
       eventType: "deliverability_probe_failed",
       payload: {
-        reason: "Mailpool mailbox is missing or Mailpool credentials are not configured",
+        reason,
         probeRunId: failedProbe.id,
         probeToken: input.probeToken,
         probeVariant: input.probeVariant,
@@ -11660,185 +11701,189 @@ async function processMailpoolDeliverabilityJob(input: {
         fromEmail,
       },
     });
+  };
+  const settings = await getOutreachProvisioningSettings();
+  const secrets = await getOutreachProvisioningSettingsSecrets();
+  const apiKey = String(secrets.mailpoolApiKey ?? "").trim();
+
+  if (!mailboxId || !apiKey) {
+    await failProbe("Mailpool mailbox is missing or Mailpool credentials are not configured");
     return;
   }
 
-  const spamCheck = await createMailpoolSpamCheck({ apiKey, mailboxId });
-  const resolvedSpamCheck = await waitForMailpoolDeliverabilitySpamCheck(apiKey, String(spamCheck.id));
-
-  const providers =
-    settings.deliverability.mailpoolInboxProviders.length
-      ? settings.deliverability.mailpoolInboxProviders
-      : [...DEFAULT_MAILPOOL_INBOX_PROVIDERS];
-  let inboxPlacementId = senderAccount.config.mailpool.inboxPlacementId.trim();
-  if (!inboxPlacementId) {
-    const created = await createMailpoolInboxPlacement({
-      apiKey,
-      mailboxId,
-      providers,
-    });
-    inboxPlacementId = String(created.id).trim();
-  }
-
   try {
-    await runMailpoolInboxPlacement(apiKey, inboxPlacementId);
-  } catch {
-    const created = await createMailpoolInboxPlacement({
-      apiKey,
-      mailboxId,
-      providers,
-    });
-    inboxPlacementId = String(created.id).trim();
-    await runMailpoolInboxPlacement(apiKey, inboxPlacementId);
-  }
+    const spamCheck = await createMailpoolSpamCheck({ apiKey, mailboxId });
+    const resolvedSpamCheck = await waitForMailpoolDeliverabilitySpamCheck(apiKey, String(spamCheck.id));
 
-  const resolvedPlacement = await waitForMailpoolDeliverabilityInboxPlacement(apiKey, inboxPlacementId);
+    const providers =
+      settings.deliverability.mailpoolInboxProviders.length
+        ? settings.deliverability.mailpoolInboxProviders
+        : [...DEFAULT_MAILPOOL_INBOX_PROVIDERS];
+    let inboxPlacementId = senderAccount.config.mailpool.inboxPlacementId.trim();
+    if (!inboxPlacementId) {
+      const created = await createMailpoolInboxPlacement({
+        apiKey,
+        mailboxId,
+        providers,
+      });
+      inboxPlacementId = String(created.id).trim();
+    }
 
-  await updateOutreachAccount(senderAccount.id, {
-    config: {
-      mailpool: {
-        spamCheckId: String(resolvedSpamCheck.id).trim(),
-        inboxPlacementId,
-        status: resolvedPlacement.state === "completed" ? "active" : "pending",
-        lastSpamCheckAt: resolvedSpamCheck.createdAt,
-        lastSpamCheckScore: Number(resolvedSpamCheck.result?.score ?? 0) || 0,
-        lastSpamCheckSummary:
-          resolvedSpamCheck.state === "completed"
-            ? `Spam score ${Number(resolvedSpamCheck.result?.score ?? 0) || 0}/100`
-            : "Spam check pending",
+    await runMailpoolInboxPlacement(apiKey, inboxPlacementId);
+    const resolvedPlacement = await waitForMailpoolDeliverabilityInboxPlacement(apiKey, inboxPlacementId);
+
+    await updateOutreachAccount(senderAccount.id, {
+      config: {
+        mailpool: {
+          spamCheckId: String(resolvedSpamCheck.id).trim(),
+          inboxPlacementId,
+          status: resolvedPlacement.state === "completed" ? "active" : "pending",
+          lastSpamCheckAt: resolvedSpamCheck.createdAt,
+          lastSpamCheckScore: Number(resolvedSpamCheck.result?.score ?? 0) || 0,
+          lastSpamCheckSummary:
+            resolvedSpamCheck.state === "completed"
+              ? `Spam score ${Number(resolvedSpamCheck.result?.score ?? 0) || 0}/100`
+              : "Spam check pending",
+        },
       },
-    },
-  });
+    });
 
-  const finalResults =
-    resolvedPlacement.result?.checks?.length
-      ? resolvedPlacement.result.checks.map((check) => ({
-          accountId: String(check.mailboxId ?? check.provider ?? "mailpool").trim(),
-          email: String(check.email ?? check.provider ?? "mailpool").trim().toLowerCase(),
-          placement: mailpoolPlacementToMonitorPlacement(String(check.placement ?? "")),
-          matchedMailbox: String(check.email ?? "").trim().toLowerCase(),
-          matchedUid: 0,
-          ok: Boolean(check.placement),
-          error: "",
-        }))
-      : [
-          {
-            accountId: "mailpool",
-            email: "mailpool",
-            placement: resolvedPlacement.state === "completed" ? "error" : "not_found",
-            matchedMailbox: "",
+    const finalResults =
+      resolvedPlacement.result?.checks?.length
+        ? resolvedPlacement.result.checks.map((check) => ({
+            accountId: String(check.mailboxId ?? check.provider ?? "mailpool").trim(),
+            email: String(check.email ?? check.provider ?? "mailpool").trim().toLowerCase(),
+            placement: mailpoolPlacementToMonitorPlacement(String(check.placement ?? "")),
+            matchedMailbox: String(check.email ?? "").trim().toLowerCase(),
             matchedUid: 0,
-            ok: false,
-            error:
-              resolvedPlacement.state === "completed"
-                ? "Mailpool inbox placement returned no provider checks"
-                : "Mailpool inbox placement is still pending",
-          } satisfies DeliverabilityProbeMonitorResult,
-        ];
-  const aggregate = summarizeDeliverabilityProbeResults(finalResults);
+            ok: Boolean(check.placement),
+            error: "",
+          }))
+        : [
+            {
+              accountId: "mailpool",
+              email: "mailpool",
+              placement: resolvedPlacement.state === "completed" ? "error" : "not_found",
+              matchedMailbox: "",
+              matchedUid: 0,
+              ok: false,
+              error:
+                resolvedPlacement.state === "completed"
+                  ? "Mailpool inbox placement returned no provider checks"
+                  : "Mailpool inbox placement is still pending",
+            } satisfies DeliverabilityProbeMonitorResult,
+          ];
+    const aggregate = summarizeDeliverabilityProbeResults(finalResults);
 
-  const nextProbe =
-    input.probeRun
-      ? await updateDeliverabilityProbeRun(input.probeRun.id, {
-          status: resolvedPlacement.state === "completed" ? "completed" : "failed",
-          stage: "poll",
-          monitorTargets: finalResults.map((result) => ({
-            accountId: result.accountId,
-            email: result.email,
-          })),
-          results: finalResults,
-          pollAttempt: 1,
-          placement: aggregate.placement,
-          totalMonitors: aggregate.total,
-          counts: aggregate.counts,
-          summaryText: aggregate.summaryText,
-          lastError: resolvedPlacement.state === "completed" ? "" : "Mailpool inbox placement is still pending",
-          completedAt: nowIso(),
-        })
-      : await createDeliverabilityProbeRun({
-          runId: input.run.id,
-          brandId: input.run.brandId,
-          campaignId: input.run.campaignId,
-          experimentId: input.run.experimentId,
-          probeToken: input.probeToken,
-          probeVariant: input.probeVariant,
-          status: resolvedPlacement.state === "completed" ? "completed" : "failed",
-          stage: "poll",
-          sourceMessageId: input.referenceMessage.id,
-          sourceMessageStatus: input.referenceMessage.status,
-          sourceType: input.referenceMessage.sourceType,
-          sourceNodeId: input.referenceMessage.nodeId,
-          sourceLeadId: input.referenceMessage.leadId,
-          senderAccountId: senderAccount.id,
-          senderAccountName: senderAccount.name,
-          fromEmail,
-          replyToEmail,
-          subject: input.referenceMessage.subject,
-          contentHash: input.referenceMessage.contentHash,
-          monitorTargets: finalResults.map((result) => ({
-            accountId: result.accountId,
-            email: result.email,
-          })),
-          results: finalResults,
-          pollAttempt: 1,
-          placement: aggregate.placement,
-          totalMonitors: aggregate.total,
-          counts: aggregate.counts,
-          summaryText: aggregate.summaryText,
-          lastError: resolvedPlacement.state === "completed" ? "" : "Mailpool inbox placement is still pending",
-          completedAt: nowIso(),
-        });
+    const nextProbe =
+      input.probeRun
+        ? await updateDeliverabilityProbeRun(input.probeRun.id, {
+            status: resolvedPlacement.state === "completed" ? "completed" : "failed",
+            stage: "poll",
+            monitorTargets: finalResults.map((result) => ({
+              accountId: result.accountId,
+              email: result.email,
+            })),
+            results: finalResults,
+            pollAttempt: 1,
+            placement: aggregate.placement,
+            totalMonitors: aggregate.total,
+            counts: aggregate.counts,
+            summaryText: aggregate.summaryText,
+            lastError: resolvedPlacement.state === "completed" ? "" : "Mailpool inbox placement is still pending",
+            completedAt: nowIso(),
+          })
+        : await createDeliverabilityProbeRun({
+            runId: input.run.id,
+            brandId: input.run.brandId,
+            campaignId: input.run.campaignId,
+            experimentId: input.run.experimentId,
+            probeToken: input.probeToken,
+            probeVariant: input.probeVariant,
+            status: resolvedPlacement.state === "completed" ? "completed" : "failed",
+            stage: "poll",
+            sourceMessageId: input.referenceMessage.id,
+            sourceMessageStatus: input.referenceMessage.status,
+            sourceType: input.referenceMessage.sourceType,
+            sourceNodeId: input.referenceMessage.nodeId,
+            sourceLeadId: input.referenceMessage.leadId,
+            senderAccountId: senderAccount.id,
+            senderAccountName: senderAccount.name,
+            fromEmail,
+            replyToEmail,
+            subject: input.referenceMessage.subject,
+            contentHash: input.referenceMessage.contentHash,
+            monitorTargets: finalResults.map((result) => ({
+              accountId: result.accountId,
+              email: result.email,
+            })),
+            results: finalResults,
+            pollAttempt: 1,
+            placement: aggregate.placement,
+            totalMonitors: aggregate.total,
+            counts: aggregate.counts,
+            summaryText: aggregate.summaryText,
+            lastError: resolvedPlacement.state === "completed" ? "" : "Mailpool inbox placement is still pending",
+            completedAt: nowIso(),
+          });
 
-  await createOutreachEvent({
-    runId: input.run.id,
-    eventType: "deliverability_probe_result",
-    payload: {
-      probeToken: input.probeToken,
-      probeRunId: nextProbe?.id ?? "",
-      probeVariant: input.probeVariant,
-      subject: input.referenceMessage.subject,
-      sourceMessageId: input.referenceMessage.id,
-      sourceMessageStatus: input.referenceMessage.status,
-      sourceType: input.referenceMessage.sourceType,
-      nodeId: input.referenceMessage.nodeId,
-      leadId: input.referenceMessage.leadId,
-      contentHash: input.referenceMessage.contentHash,
-      senderAccountId: senderAccount.id,
-      senderAccountName: senderAccount.name,
-      fromEmail,
-      placement: aggregate.placement,
-      totalMonitors: aggregate.total,
-      counts: aggregate.counts,
-      summaryText: aggregate.summaryText,
-      spamCheckScore: Number(resolvedSpamCheck.result?.score ?? 0) || 0,
-      monitorResults: finalResults,
-    },
-  });
-
-  const senderScorecard = buildSenderDeliverabilityScorecards({
-    probeRuns: nextProbe ? [nextProbe] : [],
-    senderAccounts: [senderAccount],
-  })[0];
-
-  if (
-    senderScorecard?.autoPaused &&
-    senderScorecard.totalMonitors >= SENDER_DELIVERABILITY_MIN_MONITORS
-  ) {
     await createOutreachEvent({
       runId: input.run.id,
-      eventType: "sender_deliverability_paused_auto",
+      eventType: "deliverability_probe_result",
       payload: {
-        senderAccountId: senderScorecard.senderAccountId,
-        senderAccountName: senderScorecard.senderAccountName,
-        fromEmail: senderScorecard.fromEmail,
-        spamRate: senderScorecard.spamRate,
-        inboxRate: senderScorecard.inboxRate,
-        totalMonitors: senderScorecard.totalMonitors,
-        summaryText: senderScorecard.summaryText,
-        autoPauseUntil: senderScorecard.autoPauseUntil,
-        reason: senderScorecard.autoPauseReason,
+        probeToken: input.probeToken,
+        probeRunId: nextProbe?.id ?? "",
+        probeVariant: input.probeVariant,
+        subject: input.referenceMessage.subject,
+        sourceMessageId: input.referenceMessage.id,
+        sourceMessageStatus: input.referenceMessage.status,
+        sourceType: input.referenceMessage.sourceType,
+        nodeId: input.referenceMessage.nodeId,
+        leadId: input.referenceMessage.leadId,
+        contentHash: input.referenceMessage.contentHash,
+        senderAccountId: senderAccount.id,
+        senderAccountName: senderAccount.name,
+        fromEmail,
+        placement: aggregate.placement,
+        totalMonitors: aggregate.total,
+        counts: aggregate.counts,
+        summaryText: aggregate.summaryText,
+        spamCheckScore: Number(resolvedSpamCheck.result?.score ?? 0) || 0,
+        monitorResults: finalResults,
       },
     });
+
+    const senderScorecard = buildSenderDeliverabilityScorecards({
+      probeRuns: nextProbe ? [nextProbe] : [],
+      senderAccounts: [senderAccount],
+    })[0];
+
+    if (
+      senderScorecard?.autoPaused &&
+      senderScorecard.totalMonitors >= SENDER_DELIVERABILITY_MIN_MONITORS
+    ) {
+      await createOutreachEvent({
+        runId: input.run.id,
+        eventType: "sender_deliverability_paused_auto",
+        payload: {
+          senderAccountId: senderScorecard.senderAccountId,
+          senderAccountName: senderScorecard.senderAccountName,
+          fromEmail: senderScorecard.fromEmail,
+          spamRate: senderScorecard.spamRate,
+          inboxRate: senderScorecard.inboxRate,
+          totalMonitors: senderScorecard.totalMonitors,
+          summaryText: senderScorecard.summaryText,
+          autoPauseUntil: senderScorecard.autoPauseUntil,
+          reason: senderScorecard.autoPauseReason,
+        },
+      });
+    }
+  } catch (error) {
+    if (isMailpoolCreditExhaustedError(error)) {
+      await failProbe(error instanceof Error ? error.message : "Mailpool credits are exhausted");
+      return;
+    }
+    throw error;
   }
 }
 
@@ -12050,9 +12095,8 @@ async function buildRunSenderRoutingContext(run: OutreachRun, input?: { preferre
   );
   const senderUsage =
     senderPoolState.pool.length > 0
-      ? await countCampaignSenderUsage({
+      ? await countBrandSenderUsage({
           brandId: run.brandId,
-          campaignId: run.campaignId,
           timezone: run.timezone || DEFAULT_TIMEZONE,
         })
       : {};
@@ -12215,9 +12259,8 @@ async function processMonitorDeliverabilityJob(job: OutreachJob) {
     return;
   }
 
-  const senderUsage = await countCampaignSenderUsage({
+  const senderUsage = await countBrandSenderUsage({
     brandId: run.brandId,
-    campaignId: run.campaignId,
     timezone: run.timezone || DEFAULT_TIMEZONE,
   });
   const strictSenderAccountId =
@@ -13116,6 +13159,8 @@ async function processSourceLeadsJob(job: OutreachJob) {
     )
   );
   if (existingLeads.length) {
+    const existingRunMessages = await listRunMessages(run.id);
+    const { threads } = await listReplyThreadsByBrand(run.brandId);
     await updateOutreachRun(run.id, {
       status:
         existingLeads.length >= maxLeads && (run.status === "queued" || run.status === "sourcing")
@@ -13125,10 +13170,12 @@ async function processSourceLeadsJob(job: OutreachJob) {
           : run.status,
       lastError: "",
       completedAt: sampleOnly && existingLeads.length >= maxLeads ? nowIso() : "",
-      metrics: {
-        ...run.metrics,
-        sourcedLeads: Math.max(run.metrics.sourcedLeads, existingLeads.length),
-      },
+      metrics: buildLiveRunMetrics({
+        run,
+        messages: existingRunMessages,
+        threads,
+        sourcedLeads: existingLeads.length,
+      }),
     });
     await createOutreachEvent({
       runId: run.id,
@@ -13791,10 +13838,12 @@ async function finishSourcingWithLeads(
     status: options.sampleOnly ? "completed" : "scheduled",
     lastError: "",
     completedAt: options.sampleOnly ? nowIso() : "",
-    metrics: {
-      ...run.metrics,
+    metrics: buildLiveRunMetrics({
+      run,
+      messages: await listRunMessages(run.id),
+      threads: (await listReplyThreadsByBrand(run.brandId)).threads,
       sourcedLeads: upserted.length,
-    },
+    }),
   });
   await createOutreachEvent({
     runId: run.id,
@@ -14041,15 +14090,15 @@ async function processScheduleMessagesJob(job: OutreachJob) {
     return;
   }
 
+  const { threads } = await listReplyThreadsByBrand(run.brandId);
   await updateOutreachRun(run.id, {
     status: "scheduled",
-    metrics: {
-      ...run.metrics,
-      scheduledMessages: Math.max(
-        run.metrics.scheduledMessages,
-        existingMessages.filter((message) => ["scheduled", "sent"].includes(message.status)).length
-      ),
-    },
+    metrics: buildLiveRunMetrics({
+      run,
+      messages: existingMessages,
+      threads,
+      sourcedLeads: leads.length,
+    }),
   });
   await maybeQueueScheduledDeliverabilityProbe(run);
   await markExperimentExecutionStatus(run.brandId, run.campaignId, run.experimentId, "scheduled");
@@ -14267,8 +14316,14 @@ async function processDispatchMessagesJob(job: OutreachJob) {
     const usage = senderUsage[slot.account.id] ?? { dailySent: 0, hourlySent: 0 };
     return total + Math.max(0, slot.policy.dailyCap - usage.dailySent);
   }, 0);
-  const hourlySlots = Math.max(0, Math.min(run.hourlyCap - hourlySent, senderHourlySlots));
-  const dailySlots = Math.max(0, Math.min(run.dailyCap - dailySent, senderDailySlots));
+  const hourlySlots =
+    run.ownerType === "campaign"
+      ? Math.max(0, Math.min(run.hourlyCap - hourlySent, senderHourlySlots))
+      : Math.max(0, senderHourlySlots);
+  const dailySlots =
+    run.ownerType === "campaign"
+      ? Math.max(0, Math.min(run.dailyCap - dailySent, senderDailySlots))
+      : Math.max(0, senderDailySlots);
   const available = Math.max(0, Math.min(hourlySlots, dailySlots));
 
   if (available <= 0) {
@@ -14460,19 +14515,15 @@ async function processDispatchMessagesJob(job: OutreachJob) {
 
   const refreshedMessages = await listRunMessages(run.id);
   const { threads } = await listReplyThreadsByBrand(run.brandId);
-  const metrics = calculateRunMetricsFromMessages(run.id, refreshedMessages, threads);
 
   await updateOutreachRun(run.id, {
     status: "sending",
-    metrics: {
-      ...run.metrics,
-      sentMessages: metrics.sentMessages,
-      bouncedMessages: metrics.bouncedMessages,
-      failedMessages: metrics.failedMessages,
-      replies: metrics.replies,
-      positiveReplies: metrics.positiveReplies,
-      negativeReplies: metrics.negativeReplies,
-    },
+    metrics: buildLiveRunMetrics({
+      run,
+      messages: refreshedMessages,
+      threads,
+      sourcedLeads: leads.length,
+    }),
   });
 
   const nextAt = nextDispatchTime(refreshedMessages);
@@ -14716,11 +14767,14 @@ async function processConversationTickJob(job: OutreachJob) {
 
   if (scheduledCount > 0) {
     await maybeQueueScheduledDeliverabilityProbe(run);
+    const { threads } = await listReplyThreadsByBrand(run.brandId);
     await updateOutreachRun(run.id, {
-      metrics: {
-        ...run.metrics,
-        scheduledMessages: Math.max(run.metrics.scheduledMessages, messages.length),
-      },
+      metrics: buildLiveRunMetrics({
+        run,
+        messages,
+        threads,
+        sourcedLeads: leads.length,
+      }),
     });
     await enqueueOutreachJob({
       runId: run.id,
@@ -14913,15 +14967,12 @@ async function processAnalyzeRunJob(job: OutreachJob) {
       await updateOutreachRun(run.id, {
         status: "paused",
         pauseReason: "Auto-paused due to anomaly",
-        metrics: {
-          ...run.metrics,
-          sentMessages: metrics.sentMessages,
-          bouncedMessages: metrics.bouncedMessages,
-          failedMessages: metrics.failedMessages,
-          replies: metrics.replies,
-          positiveReplies: metrics.positiveReplies,
-          negativeReplies: metrics.negativeReplies,
-        },
+        metrics: buildLiveRunMetrics({
+          run,
+          messages,
+          threads,
+          sourcedLeads: leads.length,
+        }),
       });
       await markExperimentExecutionStatus(run.brandId, run.campaignId, run.experimentId, "paused");
       await createOutreachEvent({
@@ -14942,15 +14993,12 @@ async function processAnalyzeRunJob(job: OutreachJob) {
         phase = "wait_for_top_up";
         await updateOutreachRun(run.id, {
           status: "monitoring",
-          metrics: {
-            ...run.metrics,
-            sentMessages: metrics.sentMessages,
-            bouncedMessages: metrics.bouncedMessages,
-            failedMessages: metrics.failedMessages,
-            replies: metrics.replies,
-            positiveReplies: metrics.positiveReplies,
-            negativeReplies: metrics.negativeReplies,
-          },
+          metrics: buildLiveRunMetrics({
+            run,
+            messages,
+            threads,
+            sourcedLeads: leads.length,
+          }),
         });
         await enqueueOutreachJob({
           runId: run.id,
@@ -14963,15 +15011,12 @@ async function processAnalyzeRunJob(job: OutreachJob) {
       await updateOutreachRun(run.id, {
         status: "completed",
         completedAt: nowIso(),
-        metrics: {
-          ...run.metrics,
-          sentMessages: metrics.sentMessages,
-          bouncedMessages: metrics.bouncedMessages,
-          failedMessages: metrics.failedMessages,
-          replies: metrics.replies,
-          positiveReplies: metrics.positiveReplies,
-          negativeReplies: metrics.negativeReplies,
-        },
+        metrics: buildLiveRunMetrics({
+          run,
+          messages,
+          threads,
+          sourcedLeads: leads.length,
+        }),
       });
       await markExperimentExecutionStatus(run.brandId, run.campaignId, run.experimentId, "completed");
       return;
@@ -14980,15 +15025,12 @@ async function processAnalyzeRunJob(job: OutreachJob) {
     phase = "reschedule_analysis";
     await updateOutreachRun(run.id, {
       status: "monitoring",
-      metrics: {
-        ...run.metrics,
-        sentMessages: metrics.sentMessages,
-        bouncedMessages: metrics.bouncedMessages,
-        failedMessages: metrics.failedMessages,
-        replies: metrics.replies,
-        positiveReplies: metrics.positiveReplies,
-        negativeReplies: metrics.negativeReplies,
-      },
+      metrics: buildLiveRunMetrics({
+        run,
+        messages,
+        threads,
+        sourcedLeads: leads.length,
+      }),
     });
     await enqueueOutreachJob({
       runId: run.id,
@@ -15805,18 +15847,13 @@ export async function ingestInboundReply(input: {
 
   const messages = await listRunMessages(run.id);
   const { threads: refreshedThreads } = await listReplyThreadsByBrand(run.brandId);
-  const metrics = calculateRunMetricsFromMessages(run.id, messages, refreshedThreads);
 
   await updateOutreachRun(run.id, {
-    metrics: {
-      ...run.metrics,
-      replies: metrics.replies,
-      positiveReplies: metrics.positiveReplies,
-      negativeReplies: metrics.negativeReplies,
-      sentMessages: metrics.sentMessages,
-      bouncedMessages: metrics.bouncedMessages,
-      failedMessages: metrics.failedMessages,
-    },
+    metrics: buildLiveRunMetrics({
+      run,
+      messages,
+      threads: refreshedThreads,
+    }),
   });
 
   await createOutreachEvent({

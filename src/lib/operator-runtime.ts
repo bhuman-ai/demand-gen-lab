@@ -177,7 +177,10 @@ function summarizePromptMessages(messages: OperatorMessage[]) {
   }));
 }
 
-function summarizePromptContext(context: Awaited<ReturnType<typeof getOperatorBrandContext>>) {
+function summarizePromptContext(
+  context: Awaited<ReturnType<typeof getOperatorBrandContext>>,
+  options: { includeCampaigns?: boolean } = {}
+) {
   if (!context) return { brand: null };
   return {
     brand: context.brand,
@@ -205,7 +208,8 @@ function summarizePromptContext(context: Awaited<ReturnType<typeof getOperatorBr
       })),
     },
     routing: context.routing,
-    campaigns: context.campaigns,
+    campaigns: options.includeCampaigns ? context.campaigns : undefined,
+    experiments: context.experiments,
     inbox: context.inbox,
     issues: context.issues,
     nextActions: context.nextActions,
@@ -324,6 +328,7 @@ function buildOperatorPrompt(input: {
   brandId: string;
   context: Awaited<ReturnType<typeof getOperatorBrandContext>>;
 }) {
+  const includeCampaigns = /\bcampaigns?\b/i.test(input.message);
   const toolCatalog = listOperatorToolSpecs().map((tool) => ({
     name: tool.name,
     riskLevel: tool.riskLevel,
@@ -359,7 +364,7 @@ function buildOperatorPrompt(input: {
     `Resolved brandId: ${input.brandId || "(none)"}`,
     `Tool catalog JSON: ${JSON.stringify(toolCatalog)}`,
     `Recent thread messages JSON: ${JSON.stringify(summarizePromptMessages(input.messages))}`,
-    `Current brand context JSON: ${JSON.stringify(summarizePromptContext(input.context))}`,
+    `Current brand context JSON: ${JSON.stringify(summarizePromptContext(input.context, { includeCampaigns }))}`,
     `Latest user message: ${input.message}`,
   ].join("\n\n");
 }

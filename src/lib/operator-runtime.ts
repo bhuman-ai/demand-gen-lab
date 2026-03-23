@@ -69,7 +69,7 @@ function isExplicitActionRequest(message: string) {
   ) {
     return true;
   }
-  return /^(add|create|buy|register|provision|refresh|sync|check|run|pause|resume|summarize|show|inspect|diagnose|draft|send|use)\b/.test(
+  return /^(add|create|make|buy|register|provision|refresh|sync|check|run|pause|resume|summarize|show|inspect|diagnose|draft|send|use|update|edit|change|delete|remove|dismiss|launch|promote|set up|setup|start|open)\b/.test(
     normalized
   );
 }

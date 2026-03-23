@@ -234,9 +234,13 @@ function inferExecutionTargetLabel(toolName: OperatorToolName, input: Record<str
     input.name,
     input.website,
     input.experimentName,
+    input.experimentId,
     input.campaignName,
+    input.campaignId,
     input.leadName,
+    input.leadId,
     input.draftSubject,
+    input.draftId,
     input.domain,
     input.accountId,
     input.brandId,
@@ -711,7 +715,7 @@ function normalizeRequestedAction(input: {
   if (toolName === "create_brand") {
     const domain = extractDomain(input.message);
     const website = asString(toolInput.website) || domain;
-    if (website && !asString(toolInput.website)) {
+    if (website) {
       toolInput.website = ensureWebsiteUrl(website);
     }
     if (!asString(toolInput.name)) {

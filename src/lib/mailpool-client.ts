@@ -122,6 +122,20 @@ export type MailpoolWebhookEvent = {
   mailbox?: MailpoolMailbox;
 } & Record<string, unknown>;
 
+export type MailpoolSubscriptionSlotType = "google" | "private" | "outlook";
+
+type MailpoolSubscriptionSlotCounters = {
+  google: number;
+  private: number;
+  outlook: number;
+  shared: number;
+};
+
+export type MailpoolSubscriptionSlots = {
+  mailboxes: MailpoolSubscriptionSlotCounters;
+  slots: MailpoolSubscriptionSlotCounters;
+};
+
 function asRecord(value: unknown): Record<string, unknown> {
   if (value && typeof value === "object" && !Array.isArray(value)) {
     return value as Record<string, unknown>;
@@ -135,6 +149,11 @@ function asArray(value: unknown): unknown[] {
 
 function numberOrString(value: unknown): number | string | undefined {
   return typeof value === "number" || typeof value === "string" ? value : undefined;
+}
+
+function numberValue(value: unknown) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : 0;
 }
 
 function mailpoolApiBaseUrl() {
@@ -281,6 +300,24 @@ function mapInboxPlacement(input: unknown): MailpoolInboxPlacement {
   };
 }
 
+function mapSubscriptionSlotCounters(input: unknown): MailpoolSubscriptionSlots["mailboxes"] {
+  const row = asRecord(input);
+  return {
+    google: numberValue(row.google),
+    private: numberValue(row.private),
+    outlook: numberValue(row.outlook),
+    shared: numberValue(row.shared),
+  };
+}
+
+function mapSubscriptionSlots(input: unknown): MailpoolSubscriptionSlots {
+  const row = asRecord(input);
+  return {
+    mailboxes: mapSubscriptionSlotCounters(row.mailboxes),
+    slots: mapSubscriptionSlotCounters(row.slots),
+  };
+}
+
 export async function testMailpoolConnection(apiKey: string) {
   await listMailpoolDomains(apiKey);
   return {
@@ -295,6 +332,31 @@ export async function listMailpoolDomains(apiKey: string) {
     path: "/domains/?limit=100&offset=0",
   });
   return asArray(asRecord(payload).data).map((entry) => mapDomain(entry)).filter((entry) => entry.domain);
+}
+
+export async function getMailpoolSubscriptionSlots(apiKey: string) {
+  const payload = await mailpoolRequest<unknown>({
+    apiKey,
+    path: "/subscriptions/slots",
+  });
+  return mapSubscriptionSlots(payload);
+}
+
+export async function updateMailpoolSubscriptionSlots(input: {
+  apiKey: string;
+  type: MailpoolSubscriptionSlotType;
+  quantity: number;
+}) {
+  await mailpoolRequest<unknown>({
+    apiKey: input.apiKey,
+    method: "POST",
+    path: "/subscriptions/update-slots",
+    body: {
+      type: input.type,
+      quantity: Math.max(0, Math.round(input.quantity)),
+    },
+  });
+  return getMailpoolSubscriptionSlots(input.apiKey);
 }
 
 export async function registerMailpoolDomain(input: {

@@ -37,17 +37,20 @@ import {
   createMailpoolMailbox,
   createMailpoolSpamCheck,
   getMailpoolInboxPlacement,
+  getMailpoolSubscriptionSlots,
   getMailpoolSpamCheck,
   listMailpoolDomains,
   listMailpoolMailboxes,
   registerMailpoolDomain,
   runMailpoolInboxPlacement,
   testMailpoolConnection,
+  updateMailpoolSubscriptionSlots,
   type MailpoolDomain,
   type MailpoolDomainOwner,
   type MailpoolInboxPlacement,
   type MailpoolMailbox,
   type MailpoolSpamCheck,
+  type MailpoolSubscriptionSlots,
 } from "@/lib/mailpool-client";
 import { sanitizeCustomerIoBillingConfig } from "@/lib/outreach-customerio-billing";
 import { testOutreachProviders } from "@/lib/outreach-providers";
@@ -1341,6 +1344,44 @@ async function waitForMailpoolInboxPlacement(apiKey: string, inboxPlacementId: s
   return current;
 }
 
+function availableMailpoolGoogleSlots(slots: MailpoolSubscriptionSlots) {
+  return Math.max(0, slots.slots.google - slots.mailboxes.google);
+}
+
+function isMailpoolMailboxLimitError(error: unknown) {
+  return error instanceof Error && /mailboxes count limit exceeded/i.test(error.message);
+}
+
+async function ensureMailpoolGoogleSlots(apiKey: string, requiredAvailable = 1) {
+  let current = await getMailpoolSubscriptionSlots(apiKey);
+  if (availableMailpoolGoogleSlots(current) >= requiredAvailable) {
+    return current;
+  }
+
+  const targetQuantity = Math.max(
+    current.slots.google,
+    current.mailboxes.google + requiredAvailable
+  );
+  current = await updateMailpoolSubscriptionSlots({
+    apiKey,
+    type: "google",
+    quantity: targetQuantity,
+  });
+
+  for (let attempt = 0; attempt < 4 && availableMailpoolGoogleSlots(current) < requiredAvailable; attempt += 1) {
+    await sleep(1500);
+    current = await getMailpoolSubscriptionSlots(apiKey);
+  }
+
+  if (availableMailpoolGoogleSlots(current) < requiredAvailable) {
+    throw new Error(
+      `Mailpool Google inbox slots are exhausted after auto-scaling. Current slots: ${current.slots.google}, mailboxes: ${current.mailboxes.google}.`
+    );
+  }
+
+  return current;
+}
+
 type ResolvedCustomerIoProvisioningConnection = {
   siteId: string;
   workspaceId: string;
@@ -1760,14 +1801,31 @@ export async function provisionMailpoolSender(
   let mailbox =
     existingMailboxes.find((entry) => entry.email === fromEmail.toLowerCase()) ?? null;
   if (!mailbox) {
-    mailbox = await createMailpoolMailbox({
-      apiKey,
-      email: fromEmail,
-      firstName,
-      lastName,
-      signature: `Best regards,\n${firstName} ${lastName}`.trim(),
-      type: "google",
-    });
+    await ensureMailpoolGoogleSlots(apiKey, 1);
+    try {
+      mailbox = await createMailpoolMailbox({
+        apiKey,
+        email: fromEmail,
+        firstName,
+        lastName,
+        signature: `Best regards,\n${firstName} ${lastName}`.trim(),
+        type: "google",
+      });
+    } catch (error) {
+      if (!isMailpoolMailboxLimitError(error)) {
+        throw error;
+      }
+      await ensureMailpoolGoogleSlots(apiKey, 1);
+      await sleep(1500);
+      mailbox = await createMailpoolMailbox({
+        apiKey,
+        email: fromEmail,
+        firstName,
+        lastName,
+        signature: `Best regards,\n${firstName} ${lastName}`.trim(),
+        type: "google",
+      });
+    }
   }
 
   const spamCheck = mailbox.id ? await createMailpoolSpamCheck({ apiKey, mailboxId: mailbox.id }) : null;

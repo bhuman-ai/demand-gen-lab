@@ -211,6 +211,8 @@ export async function refreshMailpoolOutreachAccount(accountId: string): Promise
           account: latestAccount,
           apiKey,
           mailbox,
+          forceSpamCheck: true,
+          forceInboxPlacement: true,
         });
   const updatedDomains = await reconcileBrandDomains({
     accountId: deliverabilityKickoff.account.id,

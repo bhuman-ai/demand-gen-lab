@@ -502,19 +502,26 @@ const TOOL_SPECS: OperatorToolSpec[] = [
     run: async (input) => {
       const accountId = requireString(input, "accountId");
       const result = await refreshMailpoolOutreachAccount(accountId);
+      const fromEmail = result.account.config.customerIo.fromEmail || result.account.name;
+      const spamSummary = result.account.config.mailpool.lastSpamCheckSummary.trim();
+      const inboxPlacementId = result.account.config.mailpool.inboxPlacementId.trim();
+      const deliverabilityDetails = [
+        result.domain?.domain ? `Domain: ${result.domain.domain}` : "No Mailpool domain match was found.",
+        spamSummary ? `Spam check: ${spamSummary}` : "Spam check: not available yet.",
+        inboxPlacementId ? `Inbox placement id: ${inboxPlacementId}` : "Inbox placement: not created yet.",
+        result.mailboxDeleted ? "Mailbox is deleted in Mailpool." : "Mailbox still exists in Mailpool.",
+        ...result.deliverabilityKickoffErrors.slice(0, 2),
+      ];
       return {
-        summary: `${result.account.config.customerIo.fromEmail || result.account.name} refreshed. Mailpool status is ${result.account.config.mailpool.status}.`,
+        summary:
+          result.deliverabilityKickoffErrors.length > 0
+            ? `${fromEmail} refreshed. Spam checks were synced, but inbox placement still failed in Mailpool.`
+            : `${fromEmail} refreshed. Mailpool status is ${result.account.config.mailpool.status}.`,
         result: result as unknown as Record<string, unknown>,
         receipt: {
           title: "Mailpool sender refreshed",
           summary: `${result.account.name} was refreshed from Mailpool.`,
-          details: [
-            result.domain?.domain ? `Domain: ${result.domain.domain}` : "No Mailpool domain match was found.",
-            result.deliverabilityKickoffTriggered
-              ? "Deliverability kickoff was triggered."
-              : "No new deliverability kickoff was needed.",
-            result.mailboxDeleted ? "Mailbox is deleted in Mailpool." : "Mailbox still exists in Mailpool.",
-          ],
+          details: deliverabilityDetails,
         },
       } satisfies OperatorToolResult;
     },

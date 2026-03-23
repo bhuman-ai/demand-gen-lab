@@ -1559,9 +1559,19 @@ export async function refreshMailpoolOutreachAccount(accountId: string) {
   const data = await readJson(response);
   return {
     account: data.account as OutreachAccount,
+    domain: (data.domain ?? null) as {
+      id: string;
+      domain: string;
+      status: string;
+      redirectUrl?: string;
+    } | null,
     refreshedAt: String(data.refreshedAt ?? ""),
     mailboxDeleted: Boolean(data.mailboxDeleted),
     updatedDomains: Number(data.updatedDomains ?? 0) || 0,
+    deliverabilityKickoffTriggered: Boolean(data.deliverabilityKickoffTriggered),
+    deliverabilityKickoffErrors: Array.isArray(data.deliverabilityKickoffErrors)
+      ? data.deliverabilityKickoffErrors.map((entry) => String(entry ?? "").trim()).filter(Boolean)
+      : [],
   };
 }
 

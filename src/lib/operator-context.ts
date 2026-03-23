@@ -24,6 +24,8 @@ export type OperatorSenderSnapshot = {
   routeLabel: string;
   usableForRouting: boolean;
   mailpoolStatus: string;
+  spamCheckSummary: string;
+  inboxPlacementId: string;
   dnsStatus: string;
 };
 
@@ -328,6 +330,8 @@ function buildSenderSnapshots(input: {
         routeLabel: routeScore?.label ?? "Queued",
         usableForRouting: routeLevel === "strong" || routeLevel === "usable",
         mailpoolStatus: account.config.mailpool.status,
+        spamCheckSummary: account.config.mailpool.lastSpamCheckSummary,
+        inboxPlacementId: account.config.mailpool.inboxPlacementId,
         dnsStatus: row?.dnsStatus ?? "pending",
       } satisfies OperatorSenderSnapshot;
     })

@@ -1,11 +1,10 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { updateBrandApi } from "@/lib/client-api";
 import {
   buildSenderRoutingSignalFromDomainRow,
   rankSenderRoutingSignals,
@@ -15,16 +14,31 @@ import {
 } from "@/lib/sender-routing";
 import { getDomainDeliveryAccountId, getDomainDeliveryAccountName } from "@/lib/outreach-account-helpers";
 import { trackEvent } from "@/lib/telemetry-client";
-import type { BrandRecord, DomainRow } from "@/lib/factory-types";
+import type {
+  BrandRecord,
+  DomainRow,
+  OutreachAccount,
+  OutreachProvisioningSettings,
+} from "@/lib/factory-types";
 import {
   PageIntro,
   SectionPanel,
   StatLedger,
 } from "@/components/ui/page-layout";
 import { ExplainableHint } from "@/components/ui/explainable-hint";
+import SenderProvisionCard from "@/app/settings/outreach/sender-provision-card";
+import { SettingsModal } from "@/app/settings/outreach/settings-primitives";
 
-const makeId = () => `domain_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 const FILTERS = ["all", "queued", "warming", "attention", "ready"] as const;
+
+type AssignmentMap = Record<
+  string,
+  {
+    accountId: string;
+    accountIds: string[];
+    mailboxAccountId: string;
+  }
+>;
 
 type SenderFilter = (typeof FILTERS)[number];
 type HealthDimension = "domainHealth" | "emailHealth" | "ipHealth" | "messagingHealth";
@@ -36,10 +50,6 @@ type HealthSummaryDimension =
 
 function formatCount(value: number) {
   return value.toString().padStart(2, "0");
-}
-
-function normalizeDomainInput(value: string) {
-  return value.trim().toLowerCase().replace(/^https?:\/\//, "").replace(/^www\./, "").replace(/\/.*$/, "");
 }
 
 function stripUrl(value?: string) {
@@ -310,14 +320,32 @@ function RoutingScoreDetails({
   );
 }
 
-export default function NetworkClient({ brand }: { brand: BrandRecord }) {
-  const [domains, setDomains] = useState<DomainRow[]>(brand.domains || []);
+export default function NetworkClient({
+  brand,
+  allBrands,
+  mailboxAccounts,
+  customerIoAccounts,
+  assignments,
+  provisioningSettings,
+}: {
+  brand: BrandRecord;
+  allBrands: BrandRecord[];
+  mailboxAccounts: OutreachAccount[];
+  customerIoAccounts: OutreachAccount[];
+  assignments: AssignmentMap;
+  provisioningSettings: OutreachProvisioningSettings | null;
+}) {
+  const router = useRouter();
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<SenderFilter>("all");
-  const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
-  const [draftDomain, setDraftDomain] = useState("");
-  const domainInputRef = useRef<HTMLInputElement>(null);
+  const [senderModalOpen, setSenderModalOpen] = useState(false);
+  const [provisionNotice, setProvisionNotice] = useState<{
+    title: string;
+    details: string[];
+    tone: "success" | "neutral";
+  } | null>(null);
+  const domains = useMemo(() => brand.domains || [], [brand.domains]);
 
   const filtered = useMemo(() => {
     const needle = query.trim().toLowerCase();
@@ -336,19 +364,6 @@ export default function NetworkClient({ brand }: { brand: BrandRecord }) {
         .includes(needle);
     });
   }, [domains, query, statusFilter]);
-
-  const persist = async (next: DomainRow[]) => {
-    setSaving(true);
-    setError("");
-    try {
-      const updated = await updateBrandApi(brand.id, { domains: next });
-      setDomains(updated.domains || []);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Save failed");
-    } finally {
-      setSaving(false);
-    }
-  };
 
   const ledgerItems = useMemo(
     () =>
@@ -424,7 +439,7 @@ export default function NetworkClient({ brand }: { brand: BrandRecord }) {
               title="What happens here"
             >
               <p>
-                Add a sender domain and the system handles the rest: DNS checks, warmup, control probes, live-content
+                Add one sender and the system handles the rest: domain setup, mailbox provisioning, warmup, control
                 probes, routing, and automatic pauses.
               </p>
               <p>
@@ -435,14 +450,33 @@ export default function NetworkClient({ brand }: { brand: BrandRecord }) {
           </span>
         }
         actions={
-          <Button type="button" onClick={() => domainInputRef.current?.focus()}>
-            Add sender domain
+          <Button type="button" onClick={() => setSenderModalOpen(true)}>
+            Add sender
           </Button>
         }
         aside={
           <StatLedger items={ledgerItems} />
         }
       />
+
+      {provisionNotice ? (
+        <div
+          className={`rounded-xl border px-4 py-3 text-sm ${
+            provisionNotice.tone === "success"
+              ? "border-[color:var(--success-border)] bg-[color:var(--success-soft)]"
+              : "border-[color:var(--border)] bg-[color:var(--surface-muted)]"
+          }`}
+        >
+          <div className="font-medium text-[color:var(--foreground)]">{provisionNotice.title}</div>
+          {provisionNotice.details.length ? (
+            <div className="mt-1 space-y-1 text-[color:var(--muted-foreground)]">
+              {provisionNotice.details.map((detail) => (
+                <div key={detail}>• {detail}</div>
+              ))}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
 
       <SectionPanel
         title={
@@ -538,82 +572,6 @@ export default function NetworkClient({ brand }: { brand: BrandRecord }) {
                   : "No sender is blocked right now."}
               </div>
             </div>
-          </div>
-        </div>
-      </SectionPanel>
-
-      <SectionPanel
-        title={
-          <span className="inline-flex items-center gap-2">
-            <span>Add sender domain</span>
-            <ExplainableHint
-              label="Explain sender setup"
-              title="What happens after you add a domain"
-            >
-              <p>
-                The system starts DNS verification immediately, then waits for a sender mailbox before it begins warmup
-                and deliverability checks.
-              </p>
-              <p>
-                Control probes test infrastructure without campaign copy. Production probes test the exact subject and
-                body that the campaign will send.
-              </p>
-            </ExplainableHint>
-          </span>
-        }
-      >
-        <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_auto]">
-          <div>
-            <Label htmlFor="sender-domain-input">Domain</Label>
-            <Input
-              id="sender-domain-input"
-              ref={domainInputRef}
-              value={draftDomain}
-              placeholder="mail.lastb2b.com"
-              onChange={(event) => setDraftDomain(event.target.value)}
-            />
-          </div>
-          <div className="flex items-end">
-            <Button
-              type="button"
-              onClick={async () => {
-                const domain = normalizeDomainInput(draftDomain);
-                if (!domain) return;
-                if (domains.some((item) => item.domain.toLowerCase() === domain)) {
-                  setError("Sender domain already exists.");
-                  return;
-                }
-                const now = new Date().toISOString();
-                const next = [
-                  {
-                    id: makeId(),
-                    domain,
-                    status: "warming",
-                    warmupStage: "Queued for DNS + warmup",
-                    reputation: "queued",
-                    automationStatus: "queued",
-                    automationSummary:
-                      "Domain checks queued. Mailbox, IP, and message tests start as soon as a sender mailbox is attached.",
-                    domainHealth: "queued",
-                    emailHealth: "unknown",
-                    ipHealth: "unknown",
-                    messagingHealth: "unknown",
-                    seedPolicy: "fresh_pool",
-                    role: "sender",
-                    registrar: "manual",
-                    provider: "manual",
-                    dnsStatus: "pending",
-                    nextHealthCheckAt: now,
-                  } satisfies DomainRow,
-                  ...domains,
-                ];
-                await persist(next);
-                setDraftDomain("");
-              }}
-              disabled={saving}
-            >
-              {saving ? "Saving..." : "Add sender domain"}
-            </Button>
           </div>
         </div>
       </SectionPanel>
@@ -781,12 +739,41 @@ export default function NetworkClient({ brand }: { brand: BrandRecord }) {
           ) : (
             <div className="px-4 py-6 text-sm text-[color:var(--muted-foreground)]">
               {domains.length
-                ? "No sender domains match the current filter."
-                : "No sender domains yet. Add one to queue DNS verification, warmup, and seed checks."}
+                ? "No senders match the current filter."
+                : "No senders yet. Add one to connect or buy a domain and let setup run automatically."}
             </div>
           )}
         </div>
       </SectionPanel>
+
+      <SettingsModal
+        open={senderModalOpen}
+        onOpenChange={setSenderModalOpen}
+        title="Add sender"
+        description="Use an existing Mailpool domain or buy a new one. We will attach the sender to this brand and start setup automatically."
+        panelClassName="max-w-5xl"
+      >
+        <SenderProvisionCard
+          brands={[brand]}
+          allBrands={allBrands}
+          mailboxAccounts={mailboxAccounts}
+          customerIoAccounts={customerIoAccounts}
+          assignments={assignments}
+          provisioningSettings={provisioningSettings}
+          embedded
+          lockedProvider="mailpool"
+          onProvisioned={(result) => {
+            setProvisionNotice({
+              title: result.readyToSend ? `${result.fromEmail} is ready.` : `${result.fromEmail} is provisioning.`,
+              details: [...result.warnings, ...result.nextSteps],
+              tone: result.readyToSend ? "success" : "neutral",
+            });
+            setSenderModalOpen(false);
+            setError("");
+            router.refresh();
+          }}
+        />
+      </SettingsModal>
     </div>
   );
 }

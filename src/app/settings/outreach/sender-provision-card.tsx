@@ -180,6 +180,8 @@ export default function SenderProvisionCard({
   assignments,
   provisioningSettings,
   onProvisioned,
+  embedded = false,
+  lockedProvider,
 }: {
   brands: BrandRecord[];
   allBrands?: BrandRecord[];
@@ -188,11 +190,15 @@ export default function SenderProvisionCard({
   assignments: AssignmentMap;
   provisioningSettings: OutreachProvisioningSettings | null;
   onProvisioned: (result: ProvisionResult) => void;
+  embedded?: boolean;
+  lockedProvider?: SetupState["provider"];
 }) {
   const [setup, setSetup] = useState<SetupState>(() => ({
     ...INITIAL_SETUP,
+    provider: lockedProvider ?? INITIAL_SETUP.provider,
     brandId: brands[0]?.id ?? "",
-    selectedMailboxAccountId: brands[0] ? assignments[brands[0].id]?.mailboxAccountId ?? "" : "",
+    selectedMailboxAccountId:
+      lockedProvider === "mailpool" ? "" : brands[0] ? assignments[brands[0].id]?.mailboxAccountId ?? "" : "",
     forwardingTargetUrl: brands[0]?.website ?? "",
   }));
   const [register, setRegister] = useState<RegisterState>(INITIAL_REGISTER);
@@ -279,6 +285,16 @@ export default function SenderProvisionCard({
     });
   }, [assignments, brands]);
 
+  useEffect(() => {
+    if (!lockedProvider) return;
+    setSetup((prev) => ({
+      ...prev,
+      provider: lockedProvider,
+      assignToBrand: true,
+      selectedMailboxAccountId: lockedProvider === "mailpool" ? "" : prev.selectedMailboxAccountId,
+    }));
+  }, [lockedProvider]);
+
   const selectedBrand = useMemo(
     () => brands.find((brand) => brand.id === setup.brandId) ?? null,
     [brands, setup.brandId]
@@ -335,6 +351,7 @@ export default function SenderProvisionCard({
   }, [inventoryQuery, mailpoolInventory.domains, namecheapInventory.domains, setup.provider]);
 
   const activeInventory = setup.provider === "mailpool" ? mailpoolInventory : namecheapInventory;
+  const simpleMailpoolMode = embedded && lockedProvider === "mailpool";
 
   const manualDefaultsReady =
     Boolean(setup.customerIoSiteId.trim() || provisioningSettings?.customerIo.siteId.trim()) &&
@@ -481,15 +498,14 @@ export default function SenderProvisionCard({
     }
   }
 
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="text-base">Brand Domain Setup</CardTitle>
-        <CardDescription>
-          Pick a domain, point it at the brand website, and connect it to the right sender account.
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="grid gap-5">
+  const content = (
+    <div className="grid gap-5">
+      {simpleMailpoolMode ? (
+        <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-4 py-3 text-sm text-[color:var(--muted-foreground)]">
+          Add one sender. We will buy or connect the domain, create the Google mailbox, attach it to this brand, and
+          start Mailpool checks automatically.
+        </div>
+      ) : null}
         <div className="grid gap-3 md:grid-cols-5">
           {brands.length > 1 ? (
             <div className="grid gap-2">
@@ -524,22 +540,24 @@ export default function SenderProvisionCard({
               </div>
             </div>
           )}
-          <div className="grid gap-2">
-            <Label htmlFor="setup-provider">Provider</Label>
-            <Select
-              id="setup-provider"
-              value={setup.provider}
-              onChange={(event) =>
-                setSetup((prev) => ({
-                  ...prev,
-                  provider: event.target.value === "mailpool" ? "mailpool" : "customerio",
-                }))
-              }
-            >
-              <option value="customerio">Customer.io + Namecheap</option>
-              <option value="mailpool">Mailpool</option>
-            </Select>
-          </div>
+          {!lockedProvider ? (
+            <div className="grid gap-2">
+              <Label htmlFor="setup-provider">Provider</Label>
+              <Select
+                id="setup-provider"
+                value={setup.provider}
+                onChange={(event) =>
+                  setSetup((prev) => ({
+                    ...prev,
+                    provider: event.target.value === "mailpool" ? "mailpool" : "customerio",
+                  }))
+                }
+              >
+                <option value="customerio">Customer.io + Namecheap</option>
+                <option value="mailpool">Mailpool</option>
+              </Select>
+            </div>
+          ) : null}
           <div className="grid gap-2">
             <Label htmlFor="setup-local-part">Sender Local-Part</Label>
             <Input
@@ -549,23 +567,33 @@ export default function SenderProvisionCard({
               placeholder="hello"
             />
           </div>
-          <div className="grid gap-2">
-            <Label htmlFor="setup-mailbox">Reply Mailbox</Label>
-            <Select
-              id="setup-mailbox"
-              value={setup.selectedMailboxAccountId}
-              disabled={setup.provider === "mailpool"}
-              onChange={(event) => setSetup((prev) => ({ ...prev, selectedMailboxAccountId: event.target.value }))}
-            >
-              <option value="">{setup.provider === "mailpool" ? "Auto-provisioned hybrid mailbox" : "Leave unchanged / none"}</option>
-              {mailboxAccounts.map((account) => (
-                <option key={account.id} value={account.id}>
-                  {account.name} {account.config.mailbox.email ? `· ${account.config.mailbox.email}` : ""}
-                </option>
-              ))}
-            </Select>
-            <div className="text-[11px] text-[color:var(--muted-foreground)]">{mailboxHint}</div>
-          </div>
+          {!simpleMailpoolMode ? (
+            <div className="grid gap-2">
+              <Label htmlFor="setup-mailbox">Reply Mailbox</Label>
+              <Select
+                id="setup-mailbox"
+                value={setup.selectedMailboxAccountId}
+                disabled={setup.provider === "mailpool"}
+                onChange={(event) => setSetup((prev) => ({ ...prev, selectedMailboxAccountId: event.target.value }))}
+              >
+                <option value="">{setup.provider === "mailpool" ? "Auto-provisioned hybrid mailbox" : "Leave unchanged / none"}</option>
+                {mailboxAccounts.map((account) => (
+                  <option key={account.id} value={account.id}>
+                    {account.name} {account.config.mailbox.email ? `· ${account.config.mailbox.email}` : ""}
+                  </option>
+                ))}
+              </Select>
+              <div className="text-[11px] text-[color:var(--muted-foreground)]">{mailboxHint}</div>
+            </div>
+          ) : (
+            <div className="grid gap-2">
+              <Label>Reply Mailbox</Label>
+              <div className="flex min-h-10 items-center rounded-xl border border-[color:var(--border)] bg-[color:var(--surface)] px-3 text-sm text-[color:var(--muted-foreground)]">
+                Auto-provisioned hybrid mailbox
+              </div>
+              <div className="text-[11px] text-[color:var(--muted-foreground)]">{mailboxHint}</div>
+            </div>
+          )}
           <div className="grid gap-2">
             <Label htmlFor="setup-account-name">Sender Account Name</Label>
             <Input
@@ -590,14 +618,20 @@ export default function SenderProvisionCard({
               Visitors on the sender domain will be sent here.
             </div>
           </div>
-          <Label className="flex items-center gap-2 text-sm font-normal">
-            <input
-              type="checkbox"
-              checked={setup.assignToBrand}
-              onChange={(event) => setSetup((prev) => ({ ...prev, assignToBrand: event.target.checked }))}
-            />
-            Auto-assign sender to brand
-          </Label>
+          {simpleMailpoolMode ? (
+            <div className="flex min-h-10 items-center text-sm text-[color:var(--muted-foreground)]">
+              Sender will be assigned to this brand automatically.
+            </div>
+          ) : (
+            <Label className="flex items-center gap-2 text-sm font-normal">
+              <input
+                type="checkbox"
+                checked={setup.assignToBrand}
+                onChange={(event) => setSetup((prev) => ({ ...prev, assignToBrand: event.target.checked }))}
+              />
+              Auto-assign sender to brand
+            </Label>
+          )}
         </div>
 
         {setup.provider === "customerio" ? (
@@ -705,10 +739,14 @@ export default function SenderProvisionCard({
         <div className="grid gap-3">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
-              <div className="text-sm font-semibold">Your Domains</div>
+              <div className="text-sm font-semibold">
+                {simpleMailpoolMode ? "Use a domain you already manage" : "Your Domains"}
+              </div>
               <div className="text-[11px] text-[color:var(--muted-foreground)]">
                 {setup.provider === "mailpool"
-                  ? "These are the domains already managed inside Mailpool."
+                  ? simpleMailpoolMode
+                    ? "Pick a Mailpool domain and we will attach a sender mailbox to it."
+                    : "These are the domains already managed inside Mailpool."
                   : "Click once to connect the domain and set the forwarding."}
               </div>
             </div>
@@ -785,7 +823,15 @@ export default function SenderProvisionCard({
                       disabled={Boolean(busyKey) || Boolean(assignedElsewhere)}
                       onClick={() => void runProvision(item.domain, "existing")}
                     >
-                      {busyKey === key ? "Setting Up..." : alreadyOnThisBrand ? "Re-run Setup" : "Set Up"}
+                      {busyKey === key
+                        ? "Setting Up..."
+                        : simpleMailpoolMode
+                          ? alreadyOnThisBrand
+                            ? "Refresh Sender"
+                            : "Use This Domain"
+                          : alreadyOnThisBrand
+                            ? "Re-run Setup"
+                            : "Set Up"}
                     </Button>
                   </div>
                 );
@@ -800,11 +846,17 @@ export default function SenderProvisionCard({
         <div className="grid gap-3 rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3">
           <div>
             <div className="text-sm font-semibold">
-              {setup.provider === "mailpool" ? "Buy In Mailpool + Set Up" : "Buy New Domain + Set Up"}
+              {setup.provider === "mailpool"
+                ? simpleMailpoolMode
+                  ? "Buy a new sender domain"
+                  : "Buy In Mailpool + Set Up"
+                : "Buy New Domain + Set Up"}
             </div>
             <div className="text-[11px] text-[color:var(--muted-foreground)]">
               {setup.provider === "mailpool"
-                ? "If the domain is available, this buys it in Mailpool, provisions a Google sender mailbox, and runs the first spam and inbox checks."
+                ? simpleMailpoolMode
+                  ? "If the domain is available, we buy it in Mailpool, create the sender mailbox, attach it to this brand, and start the first checks."
+                  : "If the domain is available, this buys it in Mailpool, provisions a Google sender mailbox, and runs the first spam and inbox checks."
                 : "If the domain is available, this buys it and runs the same setup automatically."}
             </div>
           </div>
@@ -919,7 +971,9 @@ export default function SenderProvisionCard({
               {busyKey === `register:${normalizeDomain(register.domain)}`
                 ? "Buying + Setting Up..."
                 : setup.provider === "mailpool"
-                  ? "Buy In Mailpool + Set Up"
+                  ? simpleMailpoolMode
+                    ? "Buy Domain + Add Sender"
+                    : "Buy In Mailpool + Set Up"
                   : "Buy + Set Up"}
             </Button>
           </div>
@@ -965,7 +1019,22 @@ export default function SenderProvisionCard({
             ) : null}
           </div>
         ) : null}
-      </CardContent>
+    </div>
+  );
+
+  if (embedded) {
+    return content;
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base">Brand Domain Setup</CardTitle>
+        <CardDescription>
+          Pick a domain, point it at the brand website, and connect it to the right sender account.
+        </CardDescription>
+      </CardHeader>
+      <CardContent>{content}</CardContent>
     </Card>
   );
 }

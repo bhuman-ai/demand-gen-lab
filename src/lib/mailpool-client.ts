@@ -285,11 +285,11 @@ export async function testMailpoolConnection(apiKey: string) {
 }
 
 export async function listMailpoolDomains(apiKey: string) {
-  const payload = await mailpoolRequest<unknown[]>({
+  const payload = await mailpoolRequest<unknown>({
     apiKey,
-    path: "/domains/",
+    path: "/domains/?limit=100&offset=0",
   });
-  return asArray(payload).map((entry) => mapDomain(entry)).filter((entry) => entry.domain);
+  return asArray(asRecord(payload).data).map((entry) => mapDomain(entry)).filter((entry) => entry.domain);
 }
 
 export async function registerMailpoolDomain(input: {
@@ -299,18 +299,21 @@ export async function registerMailpoolDomain(input: {
   redirectUrl?: string;
   domainOwner: MailpoolDomainOwner;
 }) {
-  const payload = await mailpoolRequest<unknown>({
+  const payload = await mailpoolRequest<unknown[]>({
     apiKey: input.apiKey,
     method: "POST",
     path: "/domains/",
     body: {
-      domain: input.domain.trim().toLowerCase(),
-      redirectUrl: input.redirectUrl?.trim() || undefined,
-      type: input.type ?? "google",
-      domainOwner: input.domainOwner,
+      domains: [input.domain.trim().toLowerCase()],
+      redirect: input.redirectUrl?.trim() || undefined,
+      newDomainOwner: input.domainOwner,
     },
   });
-  return mapDomain(payload);
+  const created = asArray(payload).map((entry) => mapDomain(entry)).find((entry) => entry.domain);
+  if (!created) {
+    throw new Error("Mailpool domain registration did not return a domain record");
+  }
+  return created;
 }
 
 export async function getMailpoolDomainDns(apiKey: string, domainId: string) {
@@ -334,11 +337,11 @@ export async function updateMailpoolDomainDns(input: {
 }
 
 export async function listMailpoolMailboxes(apiKey: string) {
-  const payload = await mailpoolRequest<unknown[]>({
+  const payload = await mailpoolRequest<unknown>({
     apiKey,
-    path: "/mailboxes",
+    path: "/mailboxes?limit=100&offset=0",
   });
-  return asArray(payload).map((entry) => mapMailbox(entry)).filter((entry) => entry.email);
+  return asArray(asRecord(payload).data).map((entry) => mapMailbox(entry)).filter((entry) => entry.email);
 }
 
 export async function createMailpoolMailbox(input: {
@@ -354,16 +357,22 @@ export async function createMailpoolMailbox(input: {
     apiKey: input.apiKey,
     method: "POST",
     path: "/mailboxes",
-    body: {
-      email: input.email.trim().toLowerCase(),
-      firstName: input.firstName.trim(),
-      lastName: input.lastName.trim(),
-      signature: input.signature?.trim() || undefined,
-      forwardTo: input.forwardTo?.trim() || undefined,
-      type: input.type,
-    },
+    body: [
+      {
+        email: input.email.trim().toLowerCase(),
+        firstName: input.firstName.trim(),
+        lastName: input.lastName.trim(),
+        signature: input.signature?.trim() || undefined,
+        forwardTo: input.forwardTo?.trim() || undefined,
+        type: input.type,
+      },
+    ],
   });
-  return mapMailbox(payload);
+  const created = asArray(asRecord(payload).emails).map((entry) => mapMailbox(entry)).find((entry) => entry.email);
+  if (!created) {
+    throw new Error("Mailpool mailbox creation did not return a mailbox record");
+  }
+  return created;
 }
 
 export async function getMailpoolMailbox(apiKey: string, mailboxId: string) {
@@ -400,7 +409,7 @@ export async function createMailpoolSpamCheck(input: { apiKey: string; mailboxId
   const payload = await mailpoolRequest<unknown>({
     apiKey: input.apiKey,
     method: "POST",
-    path: "/spam-checks",
+    path: "/spam-checks/",
     body: { mailboxId: input.mailboxId },
   });
   return mapSpamCheck(payload);
@@ -430,7 +439,7 @@ export async function createMailpoolInboxPlacement(input: {
   const payload = await mailpoolRequest<unknown>({
     apiKey: input.apiKey,
     method: "POST",
-    path: "/inbox-placements",
+    path: "/inbox-placements/",
     body: {
       mailboxId: input.mailboxId,
       providers: input.providers,

@@ -13,6 +13,7 @@ import {
   summarizeSenderRoutingScore,
   type SenderRoutingSignals,
 } from "@/lib/sender-routing";
+import { getDomainDeliveryAccountId, getDomainDeliveryAccountName } from "@/lib/outreach-account-helpers";
 import { trackEvent } from "@/lib/telemetry-client";
 import type { BrandRecord, DomainRow } from "@/lib/factory-types";
 import {
@@ -268,7 +269,7 @@ function routingHeadline(role: "primary" | "standby" | "blocked" | "pending", ro
 
 function senderMetaLine(row: DomainRow) {
   const parts = [roleLabel(row)];
-  if (row.customerIoAccountName) parts.push(row.customerIoAccountName);
+  if (getDomainDeliveryAccountName(row)) parts.push(getDomainDeliveryAccountName(row));
   if (row.forwardingTargetUrl) parts.push(`forwards to ${stripUrl(row.forwardingTargetUrl)}`);
   return parts.join(" · ");
 }
@@ -327,7 +328,7 @@ export default function NetworkClient({ brand }: { brand: BrandRecord }) {
         item.domain,
         item.fromEmail ?? "",
         item.replyMailboxEmail ?? "",
-        item.customerIoAccountName ?? "",
+        getDomainDeliveryAccountName(item),
         automationSummary(item),
       ]
         .join(" ")
@@ -675,8 +676,8 @@ export default function NetworkClient({ brand }: { brand: BrandRecord }) {
           {filtered.length ? (
             filtered.map((item) => {
               const routingRole =
-                item.customerIoAccountId
-                  ? routingRoleBySenderId.get(item.customerIoAccountId) ?? "pending"
+                getDomainDeliveryAccountId(item)
+                  ? routingRoleBySenderId.get(getDomainDeliveryAccountId(item)) ?? "pending"
                   : item.role === "brand"
                     ? "pending"
                     : derivedAutomationStatus(item) === "attention"

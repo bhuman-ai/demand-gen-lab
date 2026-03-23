@@ -1,3 +1,4 @@
+import nodemailer from "nodemailer";
 import type {
   LeadAcceptanceDecision,
   LeadQualityPolicy,
@@ -5,6 +6,11 @@ import type {
   OutreachMessage,
   ReplyDraft,
 } from "@/lib/factory-types";
+import {
+  getOutreachAccountFromEmail,
+  getOutreachAccountReplyToEmail,
+  supportsMailpoolDelivery,
+} from "@/lib/outreach-account-helpers";
 import type { OutreachAccountSecrets } from "@/lib/outreach-data";
 
 export type ProviderTestResult = {
@@ -1224,6 +1230,10 @@ function customerIoApiKey(secrets: OutreachAccountSecrets) {
   return customerIoTrackApiKey(secrets) || customerIoAppApiKey(secrets);
 }
 
+function mailboxSmtpPassword(secrets: OutreachAccountSecrets) {
+  return secrets.mailboxSmtpPassword.trim() || secrets.mailboxPassword.trim();
+}
+
 function escapeHtml(value: string) {
   return value
     .replace(/&/g, "&amp;")
@@ -1342,12 +1352,6 @@ async function testCustomerIoTrackCredentials(input: {
       baseUrl,
     };
   }
-}
-
-function sourcingToken(secrets: OutreachAccountSecrets) {
-  void secrets;
-  // Hard-disabled: platform no longer uses Apify for sourcing.
-  return "";
 }
 
 function normalizeApifyActorId(actorId: string) {
@@ -2478,11 +2482,13 @@ export async function testOutreachProviders(
   const shouldTestMailbox = scope === "full" || scope === "mailbox";
   const shouldTestSourcing = scope === "full";
 
-  const fromEmail = account.config.customerIo.fromEmail.trim();
+  const fromEmail = getOutreachAccountFromEmail(account).trim();
   const trackingApiKey = customerIoTrackApiKey(secrets);
   const appApiKey = customerIoAppApiKey(secrets);
   const rawCustomerIoPass = requiresDelivery
-    ? Boolean(account.config.customerIo.siteId && trackingApiKey && appApiKey && fromEmail)
+    ? account.provider === "customerio"
+      ? Boolean(account.config.customerIo.siteId && trackingApiKey && appApiKey && fromEmail)
+      : supportsMailpoolDelivery(account, secrets)
     : true;
 
   const rawSourcingPass = true;
@@ -2495,13 +2501,21 @@ export async function testOutreachProviders(
   if (requiresDelivery && shouldTestCustomerIo) {
     if (!rawCustomerIoPass) {
       const missing: string[] = [];
-      if (!account.config.customerIo.siteId.trim()) missing.push("Site ID");
-      if (!trackingApiKey) missing.push("Tracking API key");
-      if (!appApiKey) missing.push("App API key");
-      if (!fromEmail) missing.push("From Email");
-      customerIoDetail = missing.length ? `Missing: ${missing.join(", ")}` : "Customer.io config missing";
+      if (account.provider === "customerio") {
+        if (!account.config.customerIo.siteId.trim()) missing.push("Site ID");
+        if (!trackingApiKey) missing.push("Tracking API key");
+        if (!appApiKey) missing.push("App API key");
+        if (!fromEmail) missing.push("From Email");
+        customerIoDetail = missing.length ? `Missing: ${missing.join(", ")}` : "Customer.io config missing";
+      } else {
+        if (!account.config.mailbox.smtpHost.trim()) missing.push("SMTP host");
+        if (!account.config.mailbox.smtpUsername.trim()) missing.push("SMTP username");
+        if (!mailboxSmtpPassword(secrets)) missing.push("SMTP password");
+        if (!fromEmail) missing.push("From Email");
+        customerIoDetail = missing.length ? `Missing: ${missing.join(", ")}` : "Mailpool SMTP config missing";
+      }
       customerIoPass = false;
-    } else {
+    } else if (account.provider === "customerio") {
       const auth = await testCustomerIoTrackCredentials({
         siteId: account.config.customerIo.siteId,
         apiKey: trackingApiKey,
@@ -2515,6 +2529,24 @@ export async function testOutreachProviders(
         if (auth.baseUrl) detailParts.push(`Base: ${auth.baseUrl.replace(/^https?:\/\//, "")}`);
         customerIoDetail = detailParts.join(" · ");
       }
+    } else {
+      try {
+        const transport = nodemailer.createTransport({
+          host: account.config.mailbox.smtpHost.trim(),
+          port: account.config.mailbox.smtpPort,
+          secure: account.config.mailbox.smtpSecure,
+          auth: {
+            user: account.config.mailbox.smtpUsername.trim(),
+            pass: mailboxSmtpPassword(secrets),
+          },
+        });
+        await transport.verify();
+        customerIoPass = true;
+        customerIoDetail = `SMTP verified at ${account.config.mailbox.smtpHost.trim()}`;
+      } catch (error) {
+        customerIoPass = false;
+        customerIoDetail = error instanceof Error ? error.message : "Mailpool SMTP verification failed";
+      }
     }
   }
 
@@ -2525,11 +2557,11 @@ export async function testOutreachProviders(
     scope === "customerio"
       ? customerIoPass
         ? customerIoDetail
-          ? `Customer.io check passed. ${customerIoDetail}`
-          : "Customer.io check passed"
+          ? `${account.provider === "customerio" ? "Customer.io" : "Mailpool"} check passed. ${customerIoDetail}`
+          : `${account.provider === "customerio" ? "Customer.io" : "Mailpool"} check passed`
         : customerIoDetail
-          ? `Customer.io check failed. ${customerIoDetail}`
-          : "Customer.io check failed"
+          ? `${account.provider === "customerio" ? "Customer.io" : "Mailpool"} check failed. ${customerIoDetail}`
+          : `${account.provider === "customerio" ? "Customer.io" : "Mailpool"} check failed`
       : scope === "mailbox"
         ? mailboxPass
           ? "Mailbox check passed"
@@ -2782,6 +2814,86 @@ async function sendCustomerIoTransactionalEmail(params: {
   };
 }
 
+async function sendMailpoolSmtpEmail(params: {
+  account: OutreachAccount;
+  secrets: OutreachAccountSecrets;
+  recipient: string;
+  fromEmail: string;
+  replyToEmail: string;
+  subject: string;
+  body: string;
+}): Promise<{ ok: boolean; providerMessageId: string; error: string }> {
+  const smtpHost = params.account.config.mailbox.smtpHost.trim();
+  const smtpUsername = params.account.config.mailbox.smtpUsername.trim();
+  const smtpPassword = mailboxSmtpPassword(params.secrets);
+  const recipient = params.recipient.trim().toLowerCase();
+  const fromEmail = params.fromEmail.trim();
+  const replyToEmail = params.replyToEmail.trim();
+  const subject = params.subject.trim();
+  const body = params.body.trim();
+  if (!smtpHost || !smtpUsername || !smtpPassword) {
+    return {
+      ok: false,
+      providerMessageId: "",
+      error: "Mailpool SMTP credentials are incomplete",
+    };
+  }
+  if (!recipient || !fromEmail || !replyToEmail || !subject || !body) {
+    return {
+      ok: false,
+      providerMessageId: "",
+      error: "Mailpool SMTP payload is incomplete",
+    };
+  }
+
+  try {
+    const transport = nodemailer.createTransport({
+      host: smtpHost,
+      port: params.account.config.mailbox.smtpPort,
+      secure: params.account.config.mailbox.smtpSecure,
+      auth: {
+        user: smtpUsername,
+        pass: smtpPassword,
+      },
+    });
+    const info = await transport.sendMail({
+      from: fromEmail,
+      to: recipient,
+      replyTo: replyToEmail,
+      subject,
+      text: body,
+      html: htmlFromPlainText(body),
+    });
+    return {
+      ok: true,
+      providerMessageId: String(info.messageId ?? "").trim(),
+      error: "",
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      providerMessageId: "",
+      error: error instanceof Error ? error.message : "Mailpool SMTP send failed",
+    };
+  }
+}
+
+async function sendDeliveryEmail(params: {
+  account: OutreachAccount;
+  secrets: OutreachAccountSecrets;
+  recipient: string;
+  fromEmail: string;
+  replyToEmail: string;
+  subject: string;
+  body: string;
+  metadata?: Record<string, unknown>;
+}) {
+  if (params.account.provider === "mailpool") {
+    return sendMailpoolSmtpEmail(params);
+  }
+  return sendCustomerIoTransactionalEmail(params);
+}
+
 export async function sendReplyDraftAsEvent(params: {
   draft: ReplyDraft;
   account: OutreachAccount;
@@ -2789,11 +2901,10 @@ export async function sendReplyDraftAsEvent(params: {
   recipient: string;
   replyToEmail?: string;
 }): Promise<{ ok: boolean; providerMessageId: string; error: string }> {
-  const fromEmail =
-    params.account.config.customerIo.fromEmail.trim() ||
-    params.account.config.mailbox.email.trim();
-  const replyToEmail = (params.replyToEmail ?? params.account.config.mailbox.email).trim() || fromEmail;
-  const result = await sendCustomerIoTransactionalEmail({
+  const fromEmail = getOutreachAccountFromEmail(params.account).trim();
+  const replyToEmail =
+    (params.replyToEmail ?? getOutreachAccountReplyToEmail(params.account)).trim() || fromEmail;
+  const result = await sendDeliveryEmail({
     account: params.account,
     secrets: params.secrets,
     recipient: params.recipient,
@@ -2836,15 +2947,19 @@ export async function sendMonitoringProbeMessage(params: {
   sourceLeadId?: string;
   contentHash?: string;
 }): Promise<{ ok: boolean; providerMessageId: string; error: string }> {
-  const fromEmail = params.account.config.customerIo.fromEmail.trim();
+  const fromEmail = getOutreachAccountFromEmail(params.account).trim();
   const replyToEmail = params.replyToEmail.trim();
   if (!fromEmail) {
-    return { ok: false, providerMessageId: "", error: "Customer.io From Email missing" };
+    return {
+      ok: false,
+      providerMessageId: "",
+      error: `${params.account.provider === "mailpool" ? "Mailpool" : "Customer.io"} From Email missing`,
+    };
   }
   if (!replyToEmail) {
     return { ok: false, providerMessageId: "", error: "Reply-To email missing" };
   }
-  return sendCustomerIoTransactionalEmail({
+  return sendDeliveryEmail({
     account: params.account,
     secrets: params.secrets,
     recipient: params.recipient,
@@ -2882,15 +2997,19 @@ export async function sendOutreachMessage(params: {
   runId: string;
   experimentId: string;
 }): Promise<{ ok: boolean; providerMessageId: string; error: string }> {
-  const fromEmail = params.account.config.customerIo.fromEmail.trim();
+  const fromEmail = getOutreachAccountFromEmail(params.account).trim();
   const replyToEmail = params.replyToEmail.trim();
   if (!fromEmail) {
-    return { ok: false, providerMessageId: "", error: "Customer.io From Email missing" };
+    return {
+      ok: false,
+      providerMessageId: "",
+      error: `${params.account.provider === "mailpool" ? "Mailpool" : "Customer.io"} From Email missing`,
+    };
   }
   if (!replyToEmail) {
     return { ok: false, providerMessageId: "", error: "Reply-To email missing" };
   }
-  return sendCustomerIoTransactionalEmail({
+  return sendDeliveryEmail({
     account: params.account,
     secrets: params.secrets,
     recipient: params.recipient,

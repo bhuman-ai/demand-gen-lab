@@ -3,8 +3,15 @@ import type {
   BrandOutreachAssignment,
   BrandRecord,
   DomainRow,
+  MailpoolInboxPlacementProvider,
   OutreachAccount,
+  OutreachProvider,
 } from "@/lib/factory-types";
+import {
+  DEFAULT_MAILPOOL_INBOX_PROVIDERS,
+  getOutreachAccountFromEmail,
+  supportsMailpoolDelivery,
+} from "@/lib/outreach-account-helpers";
 import {
   buildCustomerIoCapacityPools,
   findBestCustomerIoCapacityPool,
@@ -25,6 +32,23 @@ import {
   getOutreachProvisioningSettingsSecrets,
   updateOutreachProvisioningSettings,
 } from "@/lib/outreach-provider-settings";
+import {
+  createMailpoolInboxPlacement,
+  createMailpoolMailbox,
+  createMailpoolSpamCheck,
+  getMailpoolInboxPlacement,
+  getMailpoolSpamCheck,
+  listMailpoolDomains,
+  listMailpoolMailboxes,
+  registerMailpoolDomain,
+  runMailpoolInboxPlacement,
+  testMailpoolConnection,
+  type MailpoolDomain,
+  type MailpoolDomainOwner,
+  type MailpoolInboxPlacement,
+  type MailpoolMailbox,
+  type MailpoolSpamCheck,
+} from "@/lib/mailpool-client";
 import { sanitizeCustomerIoBillingConfig } from "@/lib/outreach-customerio-billing";
 import { testOutreachProviders } from "@/lib/outreach-providers";
 
@@ -48,6 +72,7 @@ type CustomerIoSenderIdentityStatus = "existing" | "created" | "manual_required"
 
 export type ProvisionSenderInput = {
   brandId: string;
+  provider?: OutreachProvider;
   accountName: string;
   assignToBrand?: boolean;
   selectedMailboxAccountId?: string;
@@ -60,6 +85,7 @@ export type ProvisionSenderInput = {
   customerIoSiteId: string;
   customerIoTrackingApiKey: string;
   customerIoAppApiKey?: string;
+  mailpoolApiKey?: string;
   namecheapApiUser: string;
   namecheapUserName?: string;
   namecheapApiKey: string;
@@ -80,13 +106,14 @@ export type ProvisionSenderInput = {
 
 export type ProvisionSenderResult = {
   ok: boolean;
+  provider: OutreachProvider;
   readyToSend: boolean;
   domain: string;
   fromEmail: string;
   brand: BrandRecord;
   account: OutreachAccount;
   assignment: BrandOutreachAssignment | null;
-  namecheap: {
+  namecheap?: {
     mode: "existing" | "register";
     domainStatus: "existing" | "registered";
     existingRecordCount: number;
@@ -94,11 +121,21 @@ export type ProvisionSenderResult = {
     forwardingEnabled: boolean;
     forwardingTargetUrl: string;
   };
-  customerIo: {
+  customerIo?: {
     senderIdentityStatus: CustomerIoSenderIdentityStatus;
     dnsRecordCount: number;
     sourceAccountId: string;
     sourceAccountName: string;
+  };
+  mailpool?: {
+    domainId: string;
+    domainStatus: string;
+    mailboxId: string;
+    mailboxStatus: string;
+    spamCheckId: string;
+    spamCheckStatus: string;
+    inboxPlacementId: string;
+    inboxPlacementStatus: string;
   };
   warnings: string[];
   nextSteps: string[];
@@ -115,7 +152,7 @@ export type NamecheapDomainInventoryItem = {
 };
 
 export type ProvisioningProviderTestResult = {
-  provider: "customerio" | "namecheap" | "deliverability";
+  provider: "customerio" | "namecheap" | "mailpool" | "deliverability";
   ok: boolean;
   message: string;
   details: Record<string, unknown>;
@@ -577,6 +614,30 @@ export async function listSavedNamecheapDomains(): Promise<NamecheapDomainInvent
   });
 }
 
+export async function testMailpoolProvisioningConnection(input: {
+  apiKey: string;
+}): Promise<ProvisioningProviderTestResult> {
+  await testMailpoolConnection(input.apiKey);
+  return {
+    provider: "mailpool",
+    ok: true,
+    message: "Mailpool API credentials are working.",
+    details: {},
+  };
+}
+
+export async function listSavedMailpoolDomains(): Promise<MailpoolDomain[]> {
+  const [savedSettings, savedSecrets] = await Promise.all([
+    getOutreachProvisioningSettings(),
+    getOutreachProvisioningSettingsSecrets(),
+  ]);
+  const apiKey = savedSecrets.mailpoolApiKey.trim();
+  if (!apiKey || !savedSettings.mailpool.hasApiKey) {
+    return [];
+  }
+  return listMailpoolDomains(apiKey);
+}
+
 function customerIoTrackHeaders(siteId: string, trackingApiKey: string) {
   return {
     Authorization: `Basic ${Buffer.from(`${siteId.trim()}:${trackingApiKey.trim()}`).toString("base64")}`,
@@ -914,6 +975,7 @@ async function ensureCustomerIoDeliveryAccount(input: {
 
   const payload = {
     name: input.accountName.trim(),
+    provider: "customerio" as const,
     accountType: "delivery" as const,
     status: "active" as const,
     config: {
@@ -924,6 +986,17 @@ async function ensureCustomerIoDeliveryAccount(input: {
         replyToEmail: input.replyToEmail.trim(),
         billing: sanitizeCustomerIoBillingConfig(input.billing),
       },
+      mailpool: {
+        domainId: "",
+        mailboxId: "",
+        mailboxType: "google",
+        spamCheckId: "",
+        inboxPlacementId: "",
+        status: "pending",
+        lastSpamCheckAt: "",
+        lastSpamCheckScore: 0,
+        lastSpamCheckSummary: "",
+      },
       apify: {
         defaultActorId: "",
       },
@@ -933,6 +1006,10 @@ async function ensureCustomerIoDeliveryAccount(input: {
         host: "",
         port: 993,
         secure: true,
+        smtpHost: "",
+        smtpPort: 587,
+        smtpSecure: false,
+        smtpUsername: "",
         status: "disconnected",
       },
     },
@@ -951,6 +1028,88 @@ async function ensureCustomerIoDeliveryAccount(input: {
   return createOutreachAccount(payload);
 }
 
+async function ensureMailpoolHybridAccount(input: {
+  accountName: string;
+  mailbox: MailpoolMailbox;
+  spamCheck?: MailpoolSpamCheck | null;
+  inboxPlacement?: MailpoolInboxPlacement | null;
+  replyToEmail: string;
+}) {
+  const allAccounts = await listOutreachAccounts();
+  const fromEmail = input.mailbox.email.trim().toLowerCase();
+  const existing =
+    allAccounts.find(
+      (account) =>
+        account.provider === "mailpool" &&
+        getOutreachAccountFromEmail(account).trim().toLowerCase() === fromEmail
+    ) ?? null;
+
+  const payload = {
+    name: input.accountName.trim(),
+    provider: "mailpool" as const,
+    accountType: "hybrid" as const,
+    status: input.mailbox.status === "deleted" ? ("inactive" as const) : ("active" as const),
+    config: {
+      customerIo: {
+        siteId: "",
+        workspaceId: "",
+        fromEmail,
+        replyToEmail: input.replyToEmail.trim() || fromEmail,
+        billing: sanitizeCustomerIoBillingConfig({}),
+      },
+      mailpool: {
+        domainId: String(input.mailbox.domain?.id ?? "").trim(),
+        mailboxId: input.mailbox.id,
+        mailboxType: input.mailbox.type,
+        spamCheckId: String(input.spamCheck?.id ?? "").trim(),
+        inboxPlacementId: String(input.inboxPlacement?.id ?? "").trim(),
+        status:
+          input.mailbox.status === "active"
+            ? "active"
+            : input.mailbox.status === "deleted"
+              ? "deleted"
+              : "pending",
+        lastSpamCheckAt:
+          input.spamCheck?.state === "completed" ? input.spamCheck.createdAt : "",
+        lastSpamCheckScore: Number(input.spamCheck?.result?.score ?? 0) || 0,
+        lastSpamCheckSummary:
+          input.spamCheck?.state === "completed"
+            ? `Spam score ${Number(input.spamCheck?.result?.score ?? 0) || 0}/100`
+            : "",
+      },
+      apify: {
+        defaultActorId: "",
+      },
+      mailbox: {
+        provider: "imap",
+        email: fromEmail,
+        status: input.mailbox.imapHost ? "connected" : "disconnected",
+        host: String(input.mailbox.imapHost ?? "").trim(),
+        port: Number(input.mailbox.imapPort ?? 993) || 993,
+        secure: Boolean(input.mailbox.imapTLS ?? true),
+        smtpHost: String(input.mailbox.smtpHost ?? "").trim(),
+        smtpPort: Number(input.mailbox.smtpPort ?? 587) || 587,
+        smtpSecure: Boolean(input.mailbox.smtpTLS ?? false),
+        smtpUsername:
+          String(input.mailbox.smtpUsername ?? "").trim() || fromEmail,
+      },
+    },
+    credentials: {
+      mailboxPassword:
+        String(input.mailbox.imapPassword ?? input.mailbox.password ?? "").trim(),
+      mailboxSmtpPassword:
+        String(input.mailbox.smtpPassword ?? input.mailbox.password ?? "").trim(),
+    } satisfies Partial<OutreachAccountSecrets>,
+  };
+
+  if (existing) {
+    const updated = await updateOutreachAccount(existing.id, payload);
+    return updated ?? existing;
+  }
+
+  return createOutreachAccount(payload);
+}
+
 function updateBrandDomainRow(input: {
   brand: BrandRecord;
   domain: string;
@@ -958,8 +1117,11 @@ function updateBrandDomainRow(input: {
   replyMailboxEmail: string;
   dnsStatus: DomainRow["dnsStatus"];
   forwardingTargetUrl: string;
-  customerIoAccountId: string;
-  customerIoAccountName: string;
+  registrar: NonNullable<DomainRow["registrar"]>;
+  provider: NonNullable<Exclude<DomainRow["provider"], "manual">>;
+  deliveryAccountId: string;
+  deliveryAccountName: string;
+  mailpoolDomainId?: string;
   notes: string;
 }) {
   const now = nowIso();
@@ -995,14 +1157,19 @@ function updateBrandDomainRow(input: {
     messagingHealth: "queued",
     seedPolicy: "fresh_pool",
     role: "sender",
-    registrar: "namecheap",
-    provider: "customerio",
+    registrar: input.registrar,
+    provider: input.provider,
     dnsStatus: input.dnsStatus,
     fromEmail: input.fromEmail,
     replyMailboxEmail: input.replyMailboxEmail,
     forwardingTargetUrl: input.forwardingTargetUrl,
-    customerIoAccountId: input.customerIoAccountId,
-    customerIoAccountName: input.customerIoAccountName,
+    deliveryAccountId: input.deliveryAccountId,
+    deliveryAccountName: input.deliveryAccountName,
+    customerIoAccountId:
+      input.provider === "customerio" ? input.deliveryAccountId : undefined,
+    customerIoAccountName:
+      input.provider === "customerio" ? input.deliveryAccountName : undefined,
+    mailpoolDomainId: input.mailpoolDomainId,
     notes: input.notes,
     lastProvisionedAt: now,
     nextHealthCheckAt: now,
@@ -1097,6 +1264,81 @@ async function resolveNamecheapCredentials(input: ProvisionSenderInput) {
     namecheapApiKey,
     namecheapClientIp,
   };
+}
+
+async function resolveMailpoolApiKey(input: ProvisionSenderInput) {
+  const [savedSettings, savedSecrets] = await Promise.all([
+    getOutreachProvisioningSettings(),
+    getOutreachProvisioningSettingsSecrets(),
+  ]);
+  const apiKey = String(input.mailpoolApiKey ?? "").trim() || savedSecrets.mailpoolApiKey.trim();
+  if (!apiKey || !savedSettings.mailpool.hasApiKey && !String(input.mailpoolApiKey ?? "").trim()) {
+    throw new Error("Mailpool API key is required. Save it in outreach settings first.");
+  }
+  return apiKey;
+}
+
+function buildMailpoolDomainOwner(input: {
+  brand: BrandRecord;
+  registrant?: ProvisionSenderInput["registrant"];
+}): MailpoolDomainOwner {
+  const registrant = input.registrant;
+  if (!registrant) {
+    throw new Error("Registrant contact information is required to buy a new domain");
+  }
+  const company = String(registrant.organizationName ?? "").trim() || input.brand.name.trim() || registrant.lastName.trim();
+  return {
+    company,
+    firstName: registrant.firstName.trim(),
+    lastName: registrant.lastName.trim(),
+    email: registrant.emailAddress.trim(),
+    streetAddress1: registrant.address1.trim(),
+    streetAddress2: "",
+    city: registrant.city.trim(),
+    state: registrant.stateProvince.trim(),
+    postalCode: registrant.postalCode.trim(),
+    country: registrant.country.trim().toUpperCase(),
+  };
+}
+
+function mailpoolStatusToDnsStatus(status: string): DomainRow["dnsStatus"] {
+  const normalized = String(status ?? "").trim().toLowerCase();
+  if (normalized === "active") return "verified";
+  if (normalized === "pending") return "configured";
+  return "error";
+}
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function deriveMailboxNameParts(input: { brand: BrandRecord; accountName: string; emailLocalPart: string }) {
+  const raw = input.accountName.trim() || input.brand.name.trim() || input.emailLocalPart.replace(/[._+-]+/g, " ");
+  const tokens = raw
+    .split(/\s+/)
+    .map((token) => token.trim())
+    .filter(Boolean);
+  const firstName = tokens[0] || "Sales";
+  const lastName = tokens.slice(1).join(" ") || input.brand.name.trim() || "Team";
+  return { firstName, lastName };
+}
+
+async function waitForMailpoolSpamCheck(apiKey: string, spamCheckId: string) {
+  let current = await getMailpoolSpamCheck(apiKey, spamCheckId);
+  for (let attempt = 0; attempt < 4 && current.state !== "completed"; attempt += 1) {
+    await sleep(1500);
+    current = await getMailpoolSpamCheck(apiKey, spamCheckId);
+  }
+  return current;
+}
+
+async function waitForMailpoolInboxPlacement(apiKey: string, inboxPlacementId: string) {
+  let current = await getMailpoolInboxPlacement(apiKey, inboxPlacementId);
+  for (let attempt = 0; attempt < 6 && current.state !== "completed"; attempt += 1) {
+    await sleep(2000);
+    current = await getMailpoolInboxPlacement(apiKey, inboxPlacementId);
+  }
+  return current;
 }
 
 type ResolvedCustomerIoProvisioningConnection = {
@@ -1239,6 +1481,17 @@ export async function provisionCustomerIoSender(
         replyToEmail: replyMailboxEmail,
         billing: customerIoConnection.billing,
       },
+      mailpool: {
+        domainId: "",
+        mailboxId: "",
+        mailboxType: "google",
+        spamCheckId: "",
+        inboxPlacementId: "",
+        status: "pending",
+        lastSpamCheckAt: "",
+        lastSpamCheckScore: 0,
+        lastSpamCheckSummary: "",
+      },
       apify: {
         defaultActorId: "",
       },
@@ -1249,6 +1502,10 @@ export async function provisionCustomerIoSender(
         host: "",
         port: 993,
         secure: true,
+        smtpHost: "",
+        smtpPort: 587,
+        smtpSecure: false,
+        smtpUsername: "",
       },
     },
     hasCredentials: true,
@@ -1267,6 +1524,7 @@ export async function provisionCustomerIoSender(
       mailboxAccessToken: "",
       mailboxRefreshToken: "",
       mailboxPassword: "",
+      mailboxSmtpPassword: "",
       mailboxRecoveryEmail: "",
       mailboxRecoveryCodes: "",
     },
@@ -1368,8 +1626,10 @@ export async function provisionCustomerIoSender(
     replyMailboxEmail,
     dnsStatus,
     forwardingTargetUrl,
-    customerIoAccountId: customerIoConnection.sourceAccountId || account.id,
-    customerIoAccountName: customerIoConnection.sourceAccountName || account.name,
+    registrar: "namecheap",
+    provider: "customerio",
+    deliveryAccountId: customerIoConnection.sourceAccountId || account.id,
+    deliveryAccountName: customerIoConnection.sourceAccountName || account.name,
     notes:
       desiredDnsRecords.length > 0
         ? "Provisioned through outreach settings."
@@ -1417,6 +1677,7 @@ export async function provisionCustomerIoSender(
 
   return {
     ok: true,
+    provider: "customerio",
     readyToSend: Boolean(replyMailboxEmail && desiredDnsRecords.length && senderBootstrap.status !== "error"),
     domain,
     fromEmail,
@@ -1437,7 +1698,217 @@ export async function provisionCustomerIoSender(
       sourceAccountId: customerIoConnection.sourceAccountId || account.id,
       sourceAccountName: customerIoConnection.sourceAccountName || account.name,
     },
+    mailpool: undefined,
     warnings,
     nextSteps,
   };
+}
+
+export async function provisionMailpoolSender(
+  input: ProvisionSenderInput
+): Promise<ProvisionSenderResult> {
+  const brand = await getBrandById(input.brandId);
+  if (!brand) {
+    throw new Error("Brand not found");
+  }
+
+  const domain = normalizeDomain(input.domain);
+  if (!domain || !domain.includes(".")) {
+    throw new Error("A valid domain is required");
+  }
+
+  const fromLocalPart = normalizeEmailLocalPart(input.fromLocalPart);
+  if (!fromLocalPart) {
+    throw new Error("Sender local-part is required");
+  }
+
+  const apiKey = await resolveMailpoolApiKey(input);
+  const forwardingTargetUrl = input.forwardingTargetUrl?.trim()
+    ? normalizeForwardingTargetUrl(input.forwardingTargetUrl)
+    : brand.website.trim()
+      ? normalizeForwardingTargetUrl(brand.website)
+      : "";
+  const fromEmail = `${fromLocalPart}@${domain}`;
+  const { firstName, lastName } = deriveMailboxNameParts({
+    brand,
+    accountName: input.accountName,
+    emailLocalPart: fromLocalPart,
+  });
+
+  const [settings, existingDomains, existingMailboxes] = await Promise.all([
+    getOutreachProvisioningSettings(),
+    listMailpoolDomains(apiKey),
+    listMailpoolMailboxes(apiKey),
+  ]);
+
+  let mailpoolDomain =
+    existingDomains.find((entry) => entry.domain === domain) ?? null;
+  if (input.domainMode === "register") {
+    mailpoolDomain = await registerMailpoolDomain({
+      apiKey,
+      domain,
+      type: "google",
+      redirectUrl: forwardingTargetUrl || undefined,
+      domainOwner: buildMailpoolDomainOwner({ brand, registrant: input.registrant }),
+    });
+  }
+
+  if (!mailpoolDomain) {
+    throw new Error("This domain is not managed in Mailpool yet. Add it there first or switch to register.");
+  }
+
+  let mailbox =
+    existingMailboxes.find((entry) => entry.email === fromEmail.toLowerCase()) ?? null;
+  if (!mailbox) {
+    mailbox = await createMailpoolMailbox({
+      apiKey,
+      email: fromEmail,
+      firstName,
+      lastName,
+      signature: `Best regards,\n${firstName} ${lastName}`.trim(),
+      forwardTo: forwardingTargetUrl || undefined,
+      type: "google",
+    });
+  }
+
+  const spamCheck = mailbox.id ? await createMailpoolSpamCheck({ apiKey, mailboxId: mailbox.id }) : null;
+  const resolvedSpamCheck =
+    spamCheck?.id ? await waitForMailpoolSpamCheck(apiKey, spamCheck.id) : null;
+
+  const inboxProviders =
+    settings.deliverability.mailpoolInboxProviders.length
+      ? settings.deliverability.mailpoolInboxProviders
+      : ([...DEFAULT_MAILPOOL_INBOX_PROVIDERS] as MailpoolInboxPlacementProvider[]);
+  const inboxPlacement = mailbox.id
+    ? await createMailpoolInboxPlacement({
+        apiKey,
+        mailboxId: mailbox.id,
+        providers: inboxProviders,
+      })
+    : null;
+  const runningInboxPlacement =
+    inboxPlacement?.id ? await runMailpoolInboxPlacement(apiKey, inboxPlacement.id) : inboxPlacement;
+  const resolvedInboxPlacement =
+    runningInboxPlacement?.id
+      ? await waitForMailpoolInboxPlacement(apiKey, runningInboxPlacement.id)
+      : null;
+
+  const account = await ensureMailpoolHybridAccount({
+    accountName: input.accountName.trim() || `${brand.name} ${domain}`,
+    mailbox,
+    spamCheck: resolvedSpamCheck,
+    inboxPlacement: resolvedInboxPlacement,
+    replyToEmail: fromEmail,
+  });
+
+  if (!supportsMailpoolDelivery(account, (await getOutreachAccountSecrets(account.id)) ?? undefined)) {
+    throw new Error("Mailpool returned incomplete SMTP credentials for this mailbox.");
+  }
+
+  const assignment =
+    input.assignToBrand === false
+      ? null
+      : await setBrandOutreachAssignment(brand.id, {
+          accountId: account.id,
+          mailboxAccountId: account.id,
+        });
+
+  let nextDomains = updateBrandDomainRow({
+    brand,
+    domain,
+    fromEmail,
+    replyMailboxEmail: fromEmail,
+    dnsStatus: mailpoolStatusToDnsStatus(mailpoolDomain.status),
+    forwardingTargetUrl: forwardingTargetUrl || mailpoolDomain.redirectUrl || "",
+    registrar: "mailpool",
+    provider: "mailpool",
+    deliveryAccountId: account.id,
+    deliveryAccountName: account.name,
+    mailpoolDomainId: mailpoolDomain.id,
+    notes: "Provisioned through Mailpool.",
+  });
+  const protectedDomain = forwardingTargetUrl ? normalizeDomain(forwardingTargetUrl) : "";
+  if (protectedDomain && protectedDomain !== domain) {
+    nextDomains = upsertProtectedBrandDomainRow({
+      domains: nextDomains,
+      protectedDomain,
+      protectedUrl: forwardingTargetUrl,
+    });
+  }
+  const updatedBrand = await updateBrand(brand.id, {
+    domains: nextDomains,
+  });
+
+  if (settings.deliverability.provider !== "none") {
+    const monitoredDomains = new Set(
+      settings.deliverability.monitoredDomains.map((entry) => normalizeDomain(entry)).filter(Boolean)
+    );
+    if (!monitoredDomains.has(domain)) {
+      monitoredDomains.add(domain);
+      await updateOutreachProvisioningSettings({
+        deliverability: {
+          monitoredDomains: [...monitoredDomains],
+        },
+      });
+    }
+  }
+
+  const warnings: string[] = [];
+  if (mailpoolDomain.status !== "active") {
+    warnings.push(`Mailpool domain is still ${mailpoolDomain.status}. DNS may still be propagating.`);
+  }
+  if (resolvedSpamCheck?.state !== "completed") {
+    warnings.push("Mailpool spam check is still pending.");
+  }
+  if (resolvedInboxPlacement?.state !== "completed") {
+    warnings.push("Mailpool inbox placement is still pending.");
+  }
+
+  const nextSteps: string[] = [];
+  if (mailpoolDomain.status !== "active") {
+    nextSteps.push("Wait for Mailpool to finish domain activation and DNS propagation.");
+  }
+  if (resolvedInboxPlacement?.state !== "completed") {
+    nextSteps.push("Refresh inbox placement after Mailpool finishes the first run.");
+  }
+  nextSteps.push("Run a sender test before launching live campaigns.");
+
+  return {
+    ok: true,
+    provider: "mailpool",
+    readyToSend: Boolean(
+      mailpoolDomain.status === "active" &&
+        mailbox.smtpHost &&
+        mailbox.imapHost &&
+        mailbox.smtpPassword &&
+        mailbox.imapPassword
+    ),
+    domain,
+    fromEmail,
+    brand: updatedBrand ?? brand,
+    account,
+    assignment,
+    namecheap: undefined,
+    customerIo: undefined,
+    mailpool: {
+      domainId: mailpoolDomain.id,
+      domainStatus: mailpoolDomain.status,
+      mailboxId: mailbox.id,
+      mailboxStatus: String(mailbox.status ?? "").trim() || "pending",
+      spamCheckId: String(resolvedSpamCheck?.id ?? spamCheck?.id ?? "").trim(),
+      spamCheckStatus: String(resolvedSpamCheck?.state ?? spamCheck?.state ?? "pending"),
+      inboxPlacementId: String(resolvedInboxPlacement?.id ?? inboxPlacement?.id ?? "").trim(),
+      inboxPlacementStatus: String(
+        resolvedInboxPlacement?.state ?? runningInboxPlacement?.state ?? inboxPlacement?.state ?? "pending"
+      ),
+    },
+    warnings,
+    nextSteps,
+  };
+}
+
+export async function provisionSender(input: ProvisionSenderInput): Promise<ProvisionSenderResult> {
+  return (input.provider ?? "customerio") === "mailpool"
+    ? provisionMailpoolSender(input)
+    : provisionCustomerIoSender(input);
 }

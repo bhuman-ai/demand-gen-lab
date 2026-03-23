@@ -6,6 +6,7 @@ import {
   updateOutreachProvisioningSettings,
 } from "@/lib/outreach-provider-settings";
 import {
+  testMailpoolProvisioningConnection,
   testCustomerIoProvisioningConnection,
   testNamecheapProvisioningConnection,
   type ProvisioningProviderTestResult,
@@ -21,12 +22,19 @@ function asRecord(value: unknown): Record<string, unknown> {
 
 function providerSelection(value: unknown) {
   const normalized = String(value ?? "").trim().toLowerCase();
-  if (normalized === "customerio" || normalized === "namecheap" || normalized === "deliverability") return normalized;
+  if (
+    normalized === "customerio" ||
+    normalized === "namecheap" ||
+    normalized === "mailpool" ||
+    normalized === "deliverability"
+  ) {
+    return normalized;
+  }
   return "all";
 }
 
 function failureResult(
-  provider: "customerio" | "namecheap" | "deliverability",
+  provider: "customerio" | "namecheap" | "mailpool" | "deliverability",
   message: string,
   details: Record<string, unknown> = {}
 ): ProvisioningProviderTestResult {
@@ -47,7 +55,9 @@ export async function POST(request: Request) {
       getOutreachProvisioningSettingsSecrets(),
     ]);
 
-    const tests: Partial<Record<"customerIo" | "namecheap" | "deliverability", ProvisioningProviderTestResult>> = {};
+    const tests: Partial<
+      Record<"customerIo" | "namecheap" | "mailpool" | "deliverability", ProvisioningProviderTestResult>
+    > = {};
     const now = new Date().toISOString();
 
     if (provider === "customerio" || provider === "all") {
@@ -95,14 +105,47 @@ export async function POST(request: Request) {
       }
     }
 
+    if (provider === "mailpool" || provider === "all") {
+      try {
+        tests.mailpool = secrets.mailpoolApiKey.trim()
+          ? await testMailpoolProvisioningConnection({
+              apiKey: secrets.mailpoolApiKey,
+            })
+          : failureResult(
+              "mailpool",
+              "Saved Mailpool defaults are incomplete. Add an API key first."
+            );
+      } catch (error) {
+        tests.mailpool = failureResult(
+          "mailpool",
+          error instanceof Error ? error.message : "Mailpool connection test failed"
+        );
+      }
+    }
+
     if (provider === "deliverability" || provider === "all") {
       try {
         tests.deliverability =
-          settings.deliverability.provider === "google_postmaster" &&
-          settings.deliverability.monitoredDomains.length > 0 &&
-          secrets.deliverabilityGoogleClientId.trim() &&
-          secrets.deliverabilityGoogleClientSecret.trim() &&
-          secrets.deliverabilityGoogleRefreshToken.trim()
+          settings.deliverability.provider === "mailpool"
+            ? secrets.mailpoolApiKey.trim()
+              ? {
+                  provider: "deliverability" as const,
+                  ok: true,
+                  message: "Deliverability is configured to use Mailpool.",
+                  details: {
+                    provider: "mailpool",
+                    inboxProviders: settings.deliverability.mailpoolInboxProviders,
+                  },
+                }
+              : failureResult(
+                  "deliverability",
+                  "Mailpool deliverability is selected, but the saved Mailpool API key is missing."
+                )
+            : settings.deliverability.provider === "google_postmaster" &&
+                settings.deliverability.monitoredDomains.length > 0 &&
+                secrets.deliverabilityGoogleClientId.trim() &&
+                secrets.deliverabilityGoogleClientSecret.trim() &&
+                secrets.deliverabilityGoogleRefreshToken.trim()
             ? await testGooglePostmasterDeliverabilityConnection({
                 clientId: secrets.deliverabilityGoogleClientId,
                 clientSecret: secrets.deliverabilityGoogleClientSecret,
@@ -138,6 +181,13 @@ export async function POST(request: Request) {
             lastValidatedAt: now,
             lastValidatedStatus: tests.namecheap.ok ? "pass" : "fail",
             lastValidationMessage: tests.namecheap.message,
+          }
+        : undefined,
+      mailpool: tests.mailpool
+        ? {
+            lastValidatedAt: now,
+            lastValidatedStatus: tests.mailpool.ok ? "pass" : "fail",
+            lastValidationMessage: tests.mailpool.message,
           }
         : undefined,
       deliverability: tests.deliverability

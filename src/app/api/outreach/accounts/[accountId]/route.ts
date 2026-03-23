@@ -27,6 +27,7 @@ export async function PATCH(
     const body = asRecord(await request.json());
     const account = await updateOutreachAccount(accountId, {
       name: typeof body.name === "string" ? body.name : undefined,
+      provider: body.provider === "mailpool" ? "mailpool" : body.provider === "customerio" ? "customerio" : undefined,
       accountType:
         body.accountType === "delivery" || body.accountType === "mailbox" || body.accountType === "hybrid"
           ? body.accountType

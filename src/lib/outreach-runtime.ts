@@ -87,6 +87,7 @@ import {
   listOwnerRuns,
   setBrandOutreachAssignment,
   updateOutreachJob,
+  updateOutreachAccount,
   updateOutreachRun,
   updateDeliverabilityProbeRun,
   updateDeliverabilitySeedReservations,
@@ -120,6 +121,15 @@ import {
   type ApifyStoreActor,
   type ApifyLead,
 } from "@/lib/outreach-providers";
+import {
+  DEFAULT_MAILPOOL_INBOX_PROVIDERS,
+  getDomainDeliveryAccountId,
+  getDomainDeliveryAccountName,
+  getOutreachAccountFromEmail,
+  getOutreachAccountReplyToEmail,
+  supportsCustomerIoDelivery,
+  supportsMailpoolDelivery,
+} from "@/lib/outreach-account-helpers";
 import { admitCustomerIoProfileForSend } from "@/lib/outreach-customerio-budget";
 import { resolveLlmModel } from "@/lib/llm-router";
 import { inspectMailboxPlacement, type MailboxPlacementVerdict } from "@/lib/mailbox-imap";
@@ -128,6 +138,13 @@ import {
   getOutreachProvisioningSettingsSecrets,
   updateOutreachProvisioningSettings,
 } from "@/lib/outreach-provider-settings";
+import {
+  createMailpoolInboxPlacement,
+  createMailpoolSpamCheck,
+  getMailpoolInboxPlacement,
+  getMailpoolSpamCheck,
+  runMailpoolInboxPlacement,
+} from "@/lib/mailpool-client";
 import {
   buildSenderDeliverabilityScorecards,
   fetchGooglePostmasterHealth,
@@ -9037,15 +9054,16 @@ function preflightReason(input: {
     return "Platform lead sourcing is not configured (EXA_API_KEY missing)";
   }
   if (
-    !input.deliveryAccount.config.customerIo.siteId.trim()
+    !supportsCustomerIoDelivery(input.deliveryAccount) &&
+    !supportsMailpoolDelivery(input.deliveryAccount, input.deliverySecrets)
   ) {
-    return "Customer.io site config is required";
+    return "Delivery account is missing provider credentials";
   }
-  if (!effectiveCustomerIoApiKey(input.deliverySecrets)) {
+  if (input.deliveryAccount.provider === "customerio" && !effectiveCustomerIoApiKey(input.deliverySecrets)) {
     return "Customer.io API key missing";
   }
-  if (!input.deliveryAccount.config.customerIo.fromEmail.trim()) {
-    return "Customer.io From Email is required";
+  if (!getOutreachAccountFromEmail(input.deliveryAccount).trim()) {
+    return `${input.deliveryAccount.provider === "mailpool" ? "Mailpool" : "Customer.io"} From Email is required`;
   }
   if (!supportsMailbox(input.mailboxAccount)) {
     return "Assigned mailbox account does not support mailbox reply handling";
@@ -10172,7 +10190,7 @@ function buildSenderRoutingSignals(input: {
 
   for (const row of domains) {
     if (row.role === "brand") continue;
-    const accountId = String(row.customerIoAccountId ?? "").trim();
+    const accountId = getDomainDeliveryAccountId(row);
     if (!accountId) continue;
     const scorecard = scorecardBySenderId.get(accountId);
     bySenderId.set(accountId, {
@@ -10183,7 +10201,7 @@ function buildSenderRoutingSignals(input: {
       automationStatus: row.automationStatus ?? "queued",
       automationSummary: row.automationSummary ?? "",
       senderAccountId: accountId,
-      senderAccountName: row.customerIoAccountName ?? row.fromEmail ?? row.domain,
+      senderAccountName: getDomainDeliveryAccountName(row) || row.fromEmail || row.domain,
       domain: row.domain,
       fromEmail: row.fromEmail ?? "",
       inboxRate: scorecard?.inboxRate ?? 0,
@@ -10766,7 +10784,7 @@ export async function launchExperimentRun(input: {
     };
   }
 
-  const senderFromEmail = brandAccount.deliveryAccount.config.customerIo.fromEmail.trim().toLowerCase();
+  const senderFromEmail = getOutreachAccountFromEmail(brandAccount.deliveryAccount).trim().toLowerCase();
   const requireReady = input.ownerType === "campaign";
   const senderHealthState = await resolveBrandSenderHealth({
     brandId: input.brandId,
@@ -11049,7 +11067,7 @@ async function resolveSenderPoolForBrand(input: {
   for (const accountId of candidateAccountIds) {
     const account = await getOutreachAccount(accountId);
     if (!account || account.status !== "active") continue;
-    const fromEmail = account.config.customerIo.fromEmail.trim();
+    const fromEmail = getOutreachAccountFromEmail(account).trim();
     if (!fromEmail) continue;
     const secrets = await getOutreachAccountSecrets(account.id);
     if (!secrets) continue;
@@ -11089,8 +11107,8 @@ function pickSenderForMessage(input: {
         input.routingSignalsBySenderId?.get(slot.account.id) ?? {
           senderAccountId: slot.account.id,
           senderAccountName: slot.account.name,
-          domain: slot.account.config.customerIo.fromEmail.trim().split("@")[1] ?? "",
-          fromEmail: slot.account.config.customerIo.fromEmail.trim(),
+          domain: getOutreachAccountFromEmail(slot.account).trim().split("@")[1] ?? "",
+          fromEmail: getOutreachAccountFromEmail(slot.account).trim(),
           domainStatus: "unknown",
           emailStatus: "unknown",
           transportStatus: "unknown",
@@ -11500,6 +11518,33 @@ function summarizeDeliverabilityProbeResults(results: DeliverabilityProbeMonitor
   };
 }
 
+function mailpoolPlacementToMonitorPlacement(value: string): DeliverabilityProbeMonitorResult["placement"] {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  if (normalized === "inbox") return "inbox";
+  if (normalized === "promotion") return "all_mail_only";
+  if (normalized === "spam") return "spam";
+  if (normalized === "unreceived") return "not_found";
+  return "error";
+}
+
+async function waitForMailpoolDeliverabilitySpamCheck(apiKey: string, spamCheckId: string) {
+  let current = await getMailpoolSpamCheck(apiKey, spamCheckId);
+  for (let attempt = 0; attempt < 4 && current.state !== "completed"; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    current = await getMailpoolSpamCheck(apiKey, spamCheckId);
+  }
+  return current;
+}
+
+async function waitForMailpoolDeliverabilityInboxPlacement(apiKey: string, inboxPlacementId: string) {
+  let current = await getMailpoolInboxPlacement(apiKey, inboxPlacementId);
+  for (let attempt = 0; attempt < 6 && current.state !== "completed"; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+    current = await getMailpoolInboxPlacement(apiKey, inboxPlacementId);
+  }
+  return current;
+}
+
 async function queueDeliverabilityProbe(input: {
   runId: string;
   executeAfter?: string;
@@ -11551,6 +11596,250 @@ async function queueDeliverabilityProbe(input: {
     executeAfter: input.executeAfter ?? nowIso(),
     payload: input.payload ?? {},
   });
+}
+
+async function processMailpoolDeliverabilityJob(input: {
+  run: OutreachRun;
+  probeRun: Awaited<ReturnType<typeof getDeliverabilityProbeRun>> | null;
+  probeVariant: DeliverabilityProbeVariant;
+  probeToken: string;
+  referenceMessage: {
+    id: string;
+    status: string;
+    sourceType: string;
+    nodeId: string;
+    leadId: string;
+    subject: string;
+    body: string;
+    contentHash: string;
+  };
+  senderChoice: SenderDispatchSlot;
+}) {
+  const senderAccount = input.senderChoice.account;
+  const mailboxId = senderAccount.config.mailpool.mailboxId.trim();
+  const fromEmail = getOutreachAccountFromEmail(senderAccount).trim();
+  const replyToEmail = getOutreachAccountReplyToEmail(senderAccount).trim() || fromEmail;
+  const settings = await getOutreachProvisioningSettings();
+  const secrets = await getOutreachProvisioningSettingsSecrets();
+  const apiKey = String(secrets.mailpoolApiKey ?? "").trim();
+
+  if (!mailboxId || !apiKey) {
+    const failedProbe =
+      input.probeRun ??
+      (await createDeliverabilityProbeRun({
+        runId: input.run.id,
+        brandId: input.run.brandId,
+        campaignId: input.run.campaignId,
+        experimentId: input.run.experimentId,
+        probeToken: input.probeToken,
+        probeVariant: input.probeVariant,
+        status: "failed",
+        stage: "poll",
+        sourceMessageId: input.referenceMessage.id,
+        sourceMessageStatus: input.referenceMessage.status,
+        sourceType: input.referenceMessage.sourceType,
+        sourceNodeId: input.referenceMessage.nodeId,
+        sourceLeadId: input.referenceMessage.leadId,
+        senderAccountId: senderAccount.id,
+        senderAccountName: senderAccount.name,
+        fromEmail,
+        replyToEmail,
+        subject: input.referenceMessage.subject,
+        contentHash: input.referenceMessage.contentHash,
+        lastError: "Mailpool mailbox is missing or Mailpool credentials are not configured",
+      }));
+    await createOutreachEvent({
+      runId: input.run.id,
+      eventType: "deliverability_probe_failed",
+      payload: {
+        reason: "Mailpool mailbox is missing or Mailpool credentials are not configured",
+        probeRunId: failedProbe.id,
+        probeToken: input.probeToken,
+        probeVariant: input.probeVariant,
+        senderAccountId: senderAccount.id,
+        fromEmail,
+      },
+    });
+    return;
+  }
+
+  const spamCheck = await createMailpoolSpamCheck({ apiKey, mailboxId });
+  const resolvedSpamCheck = await waitForMailpoolDeliverabilitySpamCheck(apiKey, String(spamCheck.id));
+
+  const providers =
+    settings.deliverability.mailpoolInboxProviders.length
+      ? settings.deliverability.mailpoolInboxProviders
+      : [...DEFAULT_MAILPOOL_INBOX_PROVIDERS];
+  let inboxPlacementId = senderAccount.config.mailpool.inboxPlacementId.trim();
+  if (!inboxPlacementId) {
+    const created = await createMailpoolInboxPlacement({
+      apiKey,
+      mailboxId,
+      providers,
+    });
+    inboxPlacementId = String(created.id).trim();
+  }
+
+  try {
+    await runMailpoolInboxPlacement(apiKey, inboxPlacementId);
+  } catch {
+    const created = await createMailpoolInboxPlacement({
+      apiKey,
+      mailboxId,
+      providers,
+    });
+    inboxPlacementId = String(created.id).trim();
+    await runMailpoolInboxPlacement(apiKey, inboxPlacementId);
+  }
+
+  const resolvedPlacement = await waitForMailpoolDeliverabilityInboxPlacement(apiKey, inboxPlacementId);
+
+  await updateOutreachAccount(senderAccount.id, {
+    config: {
+      mailpool: {
+        spamCheckId: String(resolvedSpamCheck.id).trim(),
+        inboxPlacementId,
+        status: resolvedPlacement.state === "completed" ? "active" : "pending",
+        lastSpamCheckAt: resolvedSpamCheck.createdAt,
+        lastSpamCheckScore: Number(resolvedSpamCheck.result?.score ?? 0) || 0,
+        lastSpamCheckSummary:
+          resolvedSpamCheck.state === "completed"
+            ? `Spam score ${Number(resolvedSpamCheck.result?.score ?? 0) || 0}/100`
+            : "Spam check pending",
+      },
+    },
+  });
+
+  const finalResults =
+    resolvedPlacement.result?.checks?.length
+      ? resolvedPlacement.result.checks.map((check) => ({
+          accountId: String(check.mailboxId ?? check.provider ?? "mailpool").trim(),
+          email: String(check.email ?? check.provider ?? "mailpool").trim().toLowerCase(),
+          placement: mailpoolPlacementToMonitorPlacement(String(check.placement ?? "")),
+          matchedMailbox: String(check.email ?? "").trim().toLowerCase(),
+          matchedUid: 0,
+          ok: Boolean(check.placement),
+          error: "",
+        }))
+      : [
+          {
+            accountId: "mailpool",
+            email: "mailpool",
+            placement: resolvedPlacement.state === "completed" ? "error" : "not_found",
+            matchedMailbox: "",
+            matchedUid: 0,
+            ok: false,
+            error:
+              resolvedPlacement.state === "completed"
+                ? "Mailpool inbox placement returned no provider checks"
+                : "Mailpool inbox placement is still pending",
+          } satisfies DeliverabilityProbeMonitorResult,
+        ];
+  const aggregate = summarizeDeliverabilityProbeResults(finalResults);
+
+  const nextProbe =
+    input.probeRun
+      ? await updateDeliverabilityProbeRun(input.probeRun.id, {
+          status: resolvedPlacement.state === "completed" ? "completed" : "failed",
+          stage: "poll",
+          monitorTargets: finalResults.map((result) => ({
+            accountId: result.accountId,
+            email: result.email,
+          })),
+          results: finalResults,
+          pollAttempt: 1,
+          placement: aggregate.placement,
+          totalMonitors: aggregate.total,
+          counts: aggregate.counts,
+          summaryText: aggregate.summaryText,
+          lastError: resolvedPlacement.state === "completed" ? "" : "Mailpool inbox placement is still pending",
+          completedAt: nowIso(),
+        })
+      : await createDeliverabilityProbeRun({
+          runId: input.run.id,
+          brandId: input.run.brandId,
+          campaignId: input.run.campaignId,
+          experimentId: input.run.experimentId,
+          probeToken: input.probeToken,
+          probeVariant: input.probeVariant,
+          status: resolvedPlacement.state === "completed" ? "completed" : "failed",
+          stage: "poll",
+          sourceMessageId: input.referenceMessage.id,
+          sourceMessageStatus: input.referenceMessage.status,
+          sourceType: input.referenceMessage.sourceType,
+          sourceNodeId: input.referenceMessage.nodeId,
+          sourceLeadId: input.referenceMessage.leadId,
+          senderAccountId: senderAccount.id,
+          senderAccountName: senderAccount.name,
+          fromEmail,
+          replyToEmail,
+          subject: input.referenceMessage.subject,
+          contentHash: input.referenceMessage.contentHash,
+          monitorTargets: finalResults.map((result) => ({
+            accountId: result.accountId,
+            email: result.email,
+          })),
+          results: finalResults,
+          pollAttempt: 1,
+          placement: aggregate.placement,
+          totalMonitors: aggregate.total,
+          counts: aggregate.counts,
+          summaryText: aggregate.summaryText,
+          lastError: resolvedPlacement.state === "completed" ? "" : "Mailpool inbox placement is still pending",
+          completedAt: nowIso(),
+        });
+
+  await createOutreachEvent({
+    runId: input.run.id,
+    eventType: "deliverability_probe_result",
+    payload: {
+      probeToken: input.probeToken,
+      probeRunId: nextProbe?.id ?? "",
+      probeVariant: input.probeVariant,
+      subject: input.referenceMessage.subject,
+      sourceMessageId: input.referenceMessage.id,
+      sourceMessageStatus: input.referenceMessage.status,
+      sourceType: input.referenceMessage.sourceType,
+      nodeId: input.referenceMessage.nodeId,
+      leadId: input.referenceMessage.leadId,
+      contentHash: input.referenceMessage.contentHash,
+      senderAccountId: senderAccount.id,
+      senderAccountName: senderAccount.name,
+      fromEmail,
+      placement: aggregate.placement,
+      totalMonitors: aggregate.total,
+      counts: aggregate.counts,
+      summaryText: aggregate.summaryText,
+      spamCheckScore: Number(resolvedSpamCheck.result?.score ?? 0) || 0,
+      monitorResults: finalResults,
+    },
+  });
+
+  const senderScorecard = buildSenderDeliverabilityScorecards({
+    probeRuns: nextProbe ? [nextProbe] : [],
+    senderAccounts: [senderAccount],
+  })[0];
+
+  if (
+    senderScorecard?.autoPaused &&
+    senderScorecard.totalMonitors >= SENDER_DELIVERABILITY_MIN_MONITORS
+  ) {
+    await createOutreachEvent({
+      runId: input.run.id,
+      eventType: "sender_deliverability_paused_auto",
+      payload: {
+        senderAccountId: senderScorecard.senderAccountId,
+        senderAccountName: senderScorecard.senderAccountName,
+        fromEmail: senderScorecard.fromEmail,
+        spamRate: senderScorecard.spamRate,
+        inboxRate: senderScorecard.inboxRate,
+        totalMonitors: senderScorecard.totalMonitors,
+        summaryText: senderScorecard.summaryText,
+        autoPauseUntil: senderScorecard.autoPauseUntil,
+        reason: senderScorecard.autoPauseReason,
+      },
+    });
+  }
 }
 
 async function findRecentDeliverabilityProbeForSender(input: {
@@ -11693,7 +11982,7 @@ async function maybeQueueScheduledDeliverabilityProbe(run: OutreachRun) {
     referenceMessage,
     senderAccountId: senderSlot.account.id,
     senderAccountName: senderSlot.account.name,
-    senderFromEmail: senderSlot.account.config.customerIo.fromEmail.trim(),
+    senderFromEmail: getOutreachAccountFromEmail(senderSlot.account).trim(),
     triggerStage: "schedule",
   });
 }
@@ -11721,7 +12010,7 @@ async function buildRunSenderRoutingContext(run: OutreachRun, input?: { preferre
   const healthBlockedBySenderId = new Map<string, SenderHealthGateSnapshot>();
   if (senderHealthState?.brand) {
     for (const slot of senderPoolState.pool) {
-      const fromEmail = slot.account.config.customerIo.fromEmail.trim().toLowerCase();
+      const fromEmail = getOutreachAccountFromEmail(slot.account).trim().toLowerCase();
       const gate = evaluateSenderHealthGate({
         domains: senderHealthState.brand.domains,
         accountId: slot.account.id,
@@ -11839,10 +12128,10 @@ async function autoFailoverRunSender(input: {
       summary: input.summary,
       fromAccountId: currentAccountId,
       fromAccountName: previousAccount?.name ?? "",
-      fromEmail: previousAccount?.config.customerIo.fromEmail.trim() ?? "",
+      fromEmail: previousAccount ? getOutreachAccountFromEmail(previousAccount).trim() : "",
       toAccountId: nextSender.account.id,
       toAccountName: nextSender.account.name,
-      toEmail: nextSender.account.config.customerIo.fromEmail.trim(),
+      toEmail: getOutreachAccountFromEmail(nextSender.account).trim(),
       standbyCount: Math.max(0, routingContext.dispatchPool.length - 1),
       blockedCount: routingContext.autoPausedBySenderId.size + routingContext.healthBlockedBySenderId.size,
     },
@@ -11857,7 +12146,7 @@ async function autoFailoverRunSender(input: {
       referenceMessage,
       senderAccountId: nextSender.account.id,
       senderAccountName: nextSender.account.name,
-      senderFromEmail: nextSender.account.config.customerIo.fromEmail.trim(),
+      senderFromEmail: getOutreachAccountFromEmail(nextSender.account).trim(),
       triggerStage: "failover",
     });
   }
@@ -11968,17 +12257,29 @@ async function processMonitorDeliverabilityJob(job: OutreachJob) {
     return;
   }
 
+  if (senderChoice.slot.account.provider === "mailpool") {
+    await processMailpoolDeliverabilityJob({
+      run,
+      probeRun,
+      probeVariant,
+      probeToken,
+      referenceMessage,
+      senderChoice: senderChoice.slot,
+    });
+    return;
+  }
+
+  const senderFromEmail = getOutreachAccountFromEmail(senderChoice.slot.account).trim();
   const assignment = await getBrandOutreachAssignment(run.brandId);
   const replyMailbox =
     assignment?.mailboxAccountId ? await getOutreachAccount(assignment.mailboxAccountId) : null;
-  const replyToEmail =
-    replyMailbox?.config.mailbox.email.trim() || senderChoice.slot.account.config.customerIo.fromEmail.trim();
+  const replyToEmail = replyMailbox?.config.mailbox.email.trim() || senderFromEmail;
   const brand = await getBrandById(run.brandId);
   const baselineProbe = buildDeliverabilityBaselineProbe({
     brandName: brand?.name || "",
     senderDomain:
       senderDomainFromEmail(referenceMessage.senderFromEmail) ||
-      senderDomainFromEmail(senderChoice.slot.account.config.customerIo.fromEmail.trim()),
+      senderDomainFromEmail(senderFromEmail),
     probeToken,
   });
   const queuedSubject = typeof payload.subject === "string" ? payload.subject : "";
@@ -12019,12 +12320,12 @@ async function processMonitorDeliverabilityJob(job: OutreachJob) {
       : await resolveDeliverabilityMonitorTargets({
           runBrandId: run.brandId,
           excludeAccountIds: [run.accountId, assignment?.mailboxAccountId ?? ""],
-          excludeEmails: [replyToEmail, senderChoice.slot.account.config.customerIo.fromEmail.trim()],
+          excludeEmails: [replyToEmail, senderFromEmail],
         });
   const blockedMonitorEmails = await listBlockedMonitorEmailsForSender({
     brandId: run.brandId,
     senderAccountId: senderChoice.slot.account.id,
-    fromEmail: senderChoice.slot.account.config.customerIo.fromEmail.trim(),
+    fromEmail: senderFromEmail,
   });
   const monitorTargets = candidateMonitorTargets.filter((target) => {
     const monitorEmail = target.account.config.mailbox.email.trim().toLowerCase();
@@ -12049,7 +12350,7 @@ async function processMonitorDeliverabilityJob(job: OutreachJob) {
         sourceLeadId: referenceMessage.leadId,
         senderAccountId: senderChoice.slot.account.id,
         senderAccountName: senderChoice.slot.account.name,
-        fromEmail: senderChoice.slot.account.config.customerIo.fromEmail.trim(),
+        fromEmail: senderFromEmail,
         replyToEmail,
         subject,
         contentHash,
@@ -12063,7 +12364,7 @@ async function processMonitorDeliverabilityJob(job: OutreachJob) {
         stage,
         senderAccountId: senderChoice.slot.account.id,
         senderAccountName: senderChoice.slot.account.name,
-        fromEmail: senderChoice.slot.account.config.customerIo.fromEmail.trim(),
+        fromEmail: senderFromEmail,
         replyToEmail,
         subject,
         contentHash,
@@ -12083,7 +12384,7 @@ async function processMonitorDeliverabilityJob(job: OutreachJob) {
         probeToken,
         probeRunId: probeRun?.id ?? "",
         senderAccountId: senderChoice.slot.account.id,
-        fromEmail: senderChoice.slot.account.config.customerIo.fromEmail.trim(),
+        fromEmail: senderFromEmail,
         taintedMonitorCount: blockedMonitorEmails.size,
       },
     });
@@ -12108,7 +12409,7 @@ async function processMonitorDeliverabilityJob(job: OutreachJob) {
         sourceLeadId: referenceMessage.leadId,
         senderAccountId: senderChoice.slot.account.id,
         senderAccountName: senderChoice.slot.account.name,
-        fromEmail: senderChoice.slot.account.config.customerIo.fromEmail.trim(),
+        fromEmail: senderFromEmail,
         replyToEmail,
         subject,
         contentHash,
@@ -12119,7 +12420,7 @@ async function processMonitorDeliverabilityJob(job: OutreachJob) {
       runId: run.id,
       brandId: run.brandId,
       senderAccountId: senderChoice.slot.account.id,
-      fromEmail: senderChoice.slot.account.config.customerIo.fromEmail.trim(),
+      fromEmail: senderFromEmail,
       probeVariant,
       contentHash,
       probeToken,
@@ -12290,7 +12591,7 @@ async function processMonitorDeliverabilityJob(job: OutreachJob) {
         leadId: referenceMessage.leadId,
         contentHash,
         subject,
-        fromEmail: senderChoice.slot.account.config.customerIo.fromEmail.trim(),
+        fromEmail: senderFromEmail,
         replyToEmail,
         monitorCount: sentTargets.length,
         monitorEmails: sentTargets.map((target) => target.email),
@@ -12315,7 +12616,7 @@ async function processMonitorDeliverabilityJob(job: OutreachJob) {
         contentHash,
         senderAccountId: senderChoice.slot.account.id,
         senderAccountName: senderChoice.slot.account.name,
-        fromEmail: senderChoice.slot.account.config.customerIo.fromEmail.trim(),
+        fromEmail: senderFromEmail,
         monitorTargets: sentTargets.map(({ reservationId, accountId, email, providerMessageId }) => ({
           reservationId,
           accountId,
@@ -12330,7 +12631,7 @@ async function processMonitorDeliverabilityJob(job: OutreachJob) {
   }
 
   const pollAttempt = Math.max(1, Number(payload.pollAttempt ?? 1) || 1);
-  const fromEmail = String(payload.fromEmail ?? senderChoice.slot.account.config.customerIo.fromEmail).trim();
+  const fromEmail = String(payload.fromEmail ?? senderFromEmail).trim();
   const previousResults = readDeliverabilityProbeResults(payload.previousResults);
   const monitorTargetsForPoll = readDeliverabilityProbeTargets(payload.monitorTargets);
   const pendingTargets: DeliverabilityProbeTarget[] = [];
@@ -12560,7 +12861,7 @@ async function processMonitorDeliverabilityJob(job: OutreachJob) {
       payload: {
         senderAccountId: senderChoice.slot.account.id,
         senderAccountName: senderChoice.slot.account.name,
-        fromEmail: senderChoice.slot.account.config.customerIo.fromEmail.trim(),
+        fromEmail: senderFromEmail,
         autoPauseUntil,
         reason: `Seed placement failed (${aggregate.summaryText})`,
         placement: aggregate.placement,
@@ -14037,41 +14338,42 @@ async function processDispatchMessagesJob(job: OutreachJob) {
     }
     let account = senderChoice.slot.account;
     const secrets = senderChoice.slot.secrets;
-
-    const budgetAdmission = await admitCustomerIoProfileForSend({
-      account,
-      secrets,
-      profileIdentifier: lead.email,
-      sourceRunId: run.id,
-      sourceMessageId: message.id,
-    });
-    account = budgetAdmission.account;
-    if (!budgetAdmission.ok) {
-      const pauseReason = `${budgetAdmission.reason} Next reset: ${budgetAdmission.nextBillingPeriodStart}.`;
-      await updateOutreachRun(run.id, {
-        status: "paused",
-        pauseReason,
-        lastError: pauseReason,
+    if (account.provider === "customerio") {
+      const budgetAdmission = await admitCustomerIoProfileForSend({
+        account,
+        secrets,
+        profileIdentifier: lead.email,
+        sourceRunId: run.id,
+        sourceMessageId: message.id,
       });
-      await markExperimentExecutionStatus(run.brandId, run.campaignId, run.experimentId, "paused");
-      await createOutreachEvent({
-        runId: run.id,
-        eventType: "run_paused_customerio_profile_budget",
-        payload: {
-          reason: budgetAdmission.reason,
-          accountId: account.id,
-          messageId: message.id,
-          email: lead.email,
-          billingPeriodStart: budgetAdmission.billingPeriodStart,
-          nextBillingPeriodStart: budgetAdmission.nextBillingPeriodStart,
-          admittedProfiles: budgetAdmission.currentCount,
-          projectedProfiles: budgetAdmission.projectedProfiles,
-          remainingProfiles: budgetAdmission.remainingProfiles,
-        },
-      });
-      return;
+      account = budgetAdmission.account;
+      if (!budgetAdmission.ok) {
+        const pauseReason = `${budgetAdmission.reason} Next reset: ${budgetAdmission.nextBillingPeriodStart}.`;
+        await updateOutreachRun(run.id, {
+          status: "paused",
+          pauseReason,
+          lastError: pauseReason,
+        });
+        await markExperimentExecutionStatus(run.brandId, run.campaignId, run.experimentId, "paused");
+        await createOutreachEvent({
+          runId: run.id,
+          eventType: "run_paused_customerio_profile_budget",
+          payload: {
+            reason: budgetAdmission.reason,
+            accountId: account.id,
+            messageId: message.id,
+            email: lead.email,
+            billingPeriodStart: budgetAdmission.billingPeriodStart,
+            nextBillingPeriodStart: budgetAdmission.nextBillingPeriodStart,
+            admittedProfiles: budgetAdmission.currentCount,
+            projectedProfiles: budgetAdmission.projectedProfiles,
+            remainingProfiles: budgetAdmission.remainingProfiles,
+          },
+        });
+        return;
+      }
+      account = budgetAdmission.account;
     }
-    account = budgetAdmission.account;
 
     const send = await sendOutreachMessage({
       message,
@@ -14089,7 +14391,7 @@ async function processDispatchMessagesJob(job: OutreachJob) {
         ...message.generationMeta,
         senderAccountId: account.id,
         senderAccountName: account.name,
-        senderFromEmail: account.config.customerIo.fromEmail.trim(),
+        senderFromEmail: getOutreachAccountFromEmail(account).trim(),
         replyToEmail,
       };
       await updateRunMessage(message.id, {
@@ -14109,7 +14411,7 @@ async function processDispatchMessagesJob(job: OutreachJob) {
         eventType: "message_sent",
         payload: {
           accountId: account.id,
-          fromEmail: account.config.customerIo.fromEmail.trim(),
+          fromEmail: getOutreachAccountFromEmail(account).trim(),
           messageId: message.id,
           sourceType: message.sourceType,
           nodeId: message.nodeId,
@@ -14125,14 +14427,14 @@ async function processDispatchMessagesJob(job: OutreachJob) {
         },
         senderAccountId: account.id,
         senderAccountName: account.name,
-        senderFromEmail: account.config.customerIo.fromEmail.trim(),
+        senderFromEmail: getOutreachAccountFromEmail(account).trim(),
       });
     } else {
       const nextGenerationMeta = {
         ...message.generationMeta,
         senderAccountId: account.id,
         senderAccountName: account.name,
-        senderFromEmail: account.config.customerIo.fromEmail.trim(),
+        senderFromEmail: getOutreachAccountFromEmail(account).trim(),
         replyToEmail,
       };
       await updateRunMessage(message.id, {
@@ -14145,7 +14447,7 @@ async function processDispatchMessagesJob(job: OutreachJob) {
         eventType: "dispatch_failed",
         payload: {
           accountId: account.id,
-          fromEmail: account.config.customerIo.fromEmail.trim(),
+          fromEmail: getOutreachAccountFromEmail(account).trim(),
           messageId: message.id,
           sourceType: message.sourceType,
           nodeId: message.nodeId,
@@ -14986,7 +15288,7 @@ export async function updateRunControl(input: {
       payload: {
         senderAccountId: account.id,
         senderAccountName: account.name,
-        fromEmail: account.config.customerIo.fromEmail.trim(),
+        fromEmail: getOutreachAccountFromEmail(account).trim(),
         reason: input.reason?.trim() || "Manually resumed by user",
       },
     });
@@ -15570,7 +15872,9 @@ export async function approveReplyDraftAndSend(input: {
   const deliveryAccount = await getOutreachAccount(run.accountId);
   const deliverySecrets = deliveryAccount ? await getOutreachAccountSecrets(deliveryAccount.id) : null;
   const sendAccount =
-    deliveryAccount && deliveryAccount.status === "active" && deliveryAccount.config.customerIo.siteId.trim()
+    deliveryAccount &&
+    deliveryAccount.status === "active" &&
+    (supportsCustomerIoDelivery(deliveryAccount) || supportsMailpoolDelivery(deliveryAccount, deliverySecrets ?? undefined))
       ? deliveryAccount
       : mailbox.account;
   const sendSecrets =
@@ -15613,7 +15917,7 @@ export async function approveReplyDraftAndSend(input: {
     threadId: thread.id,
     runId: run.id,
     direction: "outbound",
-    from: sendAccount.config.customerIo.fromEmail.trim() || mailbox.account.config.mailbox.email,
+    from: getOutreachAccountFromEmail(sendAccount).trim() || mailbox.account.config.mailbox.email,
     to: lead.email,
     subject: draft.subject,
     body: draft.body,

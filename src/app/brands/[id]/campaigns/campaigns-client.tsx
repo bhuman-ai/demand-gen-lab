@@ -116,7 +116,7 @@ export default function CampaignsClient({ brandId }: { brandId: string }) {
   const [campaigns, setCampaigns] = useState<ScaleCampaignRecord[]>([]);
   const [statusFilter, setStatusFilter] = useState<"all" | ScaleCampaignRecord["status"]>("all");
   const [deliverability, setDeliverability] = useState<{
-    provider: "none" | "google_postmaster";
+    provider: "none" | "google_postmaster" | "mailpool";
     lastHealthStatus: "unknown" | "healthy" | "warning" | "critical";
   } | null>(null);
   const [flowModalOpen, setFlowModalOpen] = useState(false);

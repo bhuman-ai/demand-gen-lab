@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { OutreachDataError } from "@/lib/outreach-data";
-import { provisionCustomerIoSender } from "@/lib/outreach-provisioning";
+import { provisionSender } from "@/lib/outreach-provisioning";
 
 function asRecord(value: unknown): Record<string, unknown> {
   if (value && typeof value === "object" && !Array.isArray(value)) {
@@ -18,8 +18,9 @@ export async function POST(
     const body = asRecord(await request.json());
     const registrant = asRecord(body.registrant);
 
-    const result = await provisionCustomerIoSender({
+    const result = await provisionSender({
       brandId,
+      provider: String(body.provider ?? "").trim().toLowerCase() === "mailpool" ? "mailpool" : "customerio",
       accountName: String(body.accountName ?? ""),
       assignToBrand: body.assignToBrand !== false,
       selectedMailboxAccountId: String(body.selectedMailboxAccountId ?? ""),
@@ -32,6 +33,7 @@ export async function POST(
       customerIoSiteId: String(body.customerIoSiteId ?? ""),
       customerIoTrackingApiKey: String(body.customerIoTrackingApiKey ?? ""),
       customerIoAppApiKey: String(body.customerIoAppApiKey ?? ""),
+      mailpoolApiKey: String(body.mailpoolApiKey ?? ""),
       namecheapApiUser: String(body.namecheapApiUser ?? ""),
       namecheapUserName: String(body.namecheapUserName ?? ""),
       namecheapApiKey: String(body.namecheapApiKey ?? ""),

@@ -15,6 +15,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { DEFAULT_MAILPOOL_INBOX_PROVIDERS } from "@/lib/outreach-account-helpers";
 import {
   testOutreachProvisioningSettings,
   updateOutreachProvisioningSettingsApi,
@@ -22,7 +23,7 @@ import {
 import type { OutreachProvisioningSettings } from "@/lib/factory-types";
 import { FieldLabel, SettingsModal, formatRelativeTimeLabel } from "./settings-primitives";
 
-type ProviderKey = "customerio" | "namecheap" | "deliverability";
+type ProviderKey = "customerio" | "namecheap" | "mailpool" | "deliverability";
 
 type ProviderSettingsFormState = {
   customerIoSiteId: string;
@@ -32,7 +33,10 @@ type ProviderSettingsFormState = {
   namecheapUserName: string;
   namecheapApiKey: string;
   namecheapClientIp: string;
-  deliverabilityProvider: "none" | "google_postmaster";
+  mailpoolApiKey: string;
+  mailpoolWebhookSecret: string;
+  mailpoolWebhookUrl: string;
+  deliverabilityProvider: "none" | "google_postmaster" | "mailpool";
   deliverabilityDomains: string;
   deliverabilityGoogleClientId: string;
   deliverabilityGoogleClientSecret: string;
@@ -47,6 +51,9 @@ const INITIAL_FORM: ProviderSettingsFormState = {
   namecheapUserName: "",
   namecheapApiKey: "",
   namecheapClientIp: "",
+  mailpoolApiKey: "",
+  mailpoolWebhookSecret: "",
+  mailpoolWebhookUrl: "",
   deliverabilityProvider: "none",
   deliverabilityDomains: "",
   deliverabilityGoogleClientId: "",
@@ -56,6 +63,7 @@ const INITIAL_FORM: ProviderSettingsFormState = {
 
 const CUSTOMER_IO_HELP_URL = "https://docs.customer.io/journeys/api-credentials/";
 const NAMECHEAP_HELP_URL = "https://www.namecheap.com/support/knowledgebase/article.aspx/9739/63/api-faq/";
+const MAILPOOL_HELP_URL = "https://mailpool.stoplight.io/docs/mailpool/yt6li83uogjyz-mailpool-api";
 const DELIVERABILITY_HELP_URL = "https://developers.google.com/workspace/gmail/postmaster/quickstart";
 
 function connectionMeta(
@@ -175,6 +183,7 @@ export default function ProvisioningProviderSettingsCard({
   const [testingProvider, setTestingProvider] = useState<"" | ProviderKey>("");
   const [showCustomerIoSecrets, setShowCustomerIoSecrets] = useState(false);
   const [showNamecheapSecrets, setShowNamecheapSecrets] = useState(false);
+  const [showMailpoolSecrets, setShowMailpoolSecrets] = useState(false);
   const [showDeliverabilitySecrets, setShowDeliverabilitySecrets] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -183,12 +192,15 @@ export default function ProvisioningProviderSettingsCard({
   const namecheapConfigured = Boolean(
     settings.namecheap.apiUser.trim() && settings.namecheap.clientIp.trim() && settings.namecheap.hasApiKey
   );
+  const mailpoolConfigured = Boolean(settings.mailpool.hasApiKey);
   const deliverabilityConfigured =
-    settings.deliverability.provider === "google_postmaster" &&
-    settings.deliverability.monitoredDomains.length > 0 &&
-    settings.deliverability.hasGoogleClientId &&
-    settings.deliverability.hasGoogleClientSecret &&
-    settings.deliverability.hasGoogleRefreshToken;
+    settings.deliverability.provider === "mailpool"
+      ? mailpoolConfigured
+      : settings.deliverability.provider === "google_postmaster" &&
+        settings.deliverability.monitoredDomains.length > 0 &&
+        settings.deliverability.hasGoogleClientId &&
+        settings.deliverability.hasGoogleClientSecret &&
+        settings.deliverability.hasGoogleRefreshToken;
 
   function resetFormFromSettings() {
     setForm({
@@ -199,6 +211,9 @@ export default function ProvisioningProviderSettingsCard({
       namecheapUserName: settings.namecheap.userName,
       namecheapApiKey: "",
       namecheapClientIp: settings.namecheap.clientIp,
+      mailpoolApiKey: "",
+      mailpoolWebhookSecret: "",
+      mailpoolWebhookUrl: settings.mailpool.webhookUrl,
       deliverabilityProvider: settings.deliverability.provider,
       deliverabilityDomains: settings.deliverability.monitoredDomains.join(", "),
       deliverabilityGoogleClientId: "",
@@ -216,6 +231,9 @@ export default function ProvisioningProviderSettingsCard({
       namecheapUserName: settings.namecheap.userName,
       namecheapApiKey: "",
       namecheapClientIp: settings.namecheap.clientIp,
+      mailpoolApiKey: "",
+      mailpoolWebhookSecret: "",
+      mailpoolWebhookUrl: settings.mailpool.webhookUrl,
       deliverabilityProvider: settings.deliverability.provider,
       deliverabilityDomains: settings.deliverability.monitoredDomains.join(", "),
       deliverabilityGoogleClientId: "",
@@ -226,6 +244,7 @@ export default function ProvisioningProviderSettingsCard({
     settings.customerIo.siteId,
     settings.deliverability.monitoredDomains,
     settings.deliverability.provider,
+    settings.mailpool.webhookUrl,
     settings.namecheap.apiUser,
     settings.namecheap.clientIp,
     settings.namecheap.userName,
@@ -255,6 +274,14 @@ export default function ProvisioningProviderSettingsCard({
                   apiKey: form.namecheapApiKey.trim(),
                 },
               })
+            : provider === "mailpool"
+              ? await updateOutreachProvisioningSettingsApi({
+                  mailpool: {
+                    apiKey: form.mailpoolApiKey.trim(),
+                    webhookSecret: form.mailpoolWebhookSecret.trim(),
+                    webhookUrl: form.mailpoolWebhookUrl.trim(),
+                  },
+                })
             : await updateOutreachProvisioningSettingsApi({
                 deliverability: {
                   provider: form.deliverabilityProvider,
@@ -262,6 +289,9 @@ export default function ProvisioningProviderSettingsCard({
                     .split(",")
                     .map((value) => value.trim())
                     .filter(Boolean),
+                  mailpoolInboxProviders: settings.deliverability.mailpoolInboxProviders.length
+                    ? settings.deliverability.mailpoolInboxProviders
+                    : [...DEFAULT_MAILPOOL_INBOX_PROVIDERS],
                   googleClientId: form.deliverabilityGoogleClientId.trim(),
                   googleClientSecret: form.deliverabilityGoogleClientSecret.trim(),
                   googleRefreshToken: form.deliverabilityGoogleRefreshToken.trim(),
@@ -274,6 +304,8 @@ export default function ProvisioningProviderSettingsCard({
         customerIoTrackingApiKey: "",
         customerIoAppApiKey: "",
         namecheapApiKey: "",
+        mailpoolApiKey: "",
+        mailpoolWebhookSecret: "",
         deliverabilityGoogleClientId: "",
         deliverabilityGoogleClientSecret: "",
         deliverabilityGoogleRefreshToken: "",
@@ -285,6 +317,8 @@ export default function ProvisioningProviderSettingsCard({
             ? "Customer.io connection saved."
             : provider === "namecheap"
               ? "Namecheap connection saved."
+              : provider === "mailpool"
+                ? "Mailpool connection saved."
               : "Deliverability connection saved."
         );
         setActiveModal(null);
@@ -299,6 +333,8 @@ export default function ProvisioningProviderSettingsCard({
           ? result.tests.customerIo?.message || "Customer.io connection checked."
           : provider === "namecheap"
             ? result.tests.namecheap?.message || "Namecheap connection checked."
+            : provider === "mailpool"
+              ? result.tests.mailpool?.message || "Mailpool connection checked."
             : result.tests.deliverability?.message || "Deliverability connection checked.";
       setNotice(message);
       setActiveModal(null);
@@ -322,6 +358,8 @@ export default function ProvisioningProviderSettingsCard({
           ? result.tests.customerIo?.message || "Customer.io connection checked."
           : provider === "namecheap"
             ? result.tests.namecheap?.message || "Namecheap connection checked."
+            : provider === "mailpool"
+              ? result.tests.mailpool?.message || "Mailpool connection checked."
             : result.tests.deliverability?.message || "Deliverability connection checked.";
       setNotice(message);
     } catch (err) {
@@ -338,7 +376,7 @@ export default function ProvisioningProviderSettingsCard({
           <CardTitle className="text-base">Core connections</CardTitle>
           <CardDescription>Connect the tools that power sending, domains, and sender health.</CardDescription>
         </CardHeader>
-        <CardContent className="grid gap-4 pt-0 md:grid-cols-3">
+        <CardContent className="grid gap-4 pt-0 md:grid-cols-4">
           <ConnectionCard
             title="Customer.io"
             description="Needed to create sender accounts and send mail."
@@ -394,25 +432,66 @@ export default function ProvisioningProviderSettingsCard({
           />
 
           <ConnectionCard
-            title="Google Postmaster"
-            description="Optional Gmail reputation monitor."
+            title="Mailpool"
+            description="Used for Google Workspace provisioning, SMTP sending, and Mailpool-backed deliverability."
+            icon={Link2}
+            configured={mailpoolConfigured}
+            validationStatus={settings.mailpool.lastValidatedStatus}
+            summary={
+              mailpoolConfigured
+                ? `Ready. Webhook target: ${settings.mailpool.webhookUrl || "not set"}.`
+                : "Add the Mailpool API key and webhook secret to provision Google senders automatically."
+            }
+            highlights={[
+              settings.mailpool.hasApiKey ? "API key saved" : "API key needed",
+              settings.mailpool.hasWebhookSecret ? "Webhook secret saved" : "Webhook secret needed",
+              settings.mailpool.webhookUrl ? "Webhook URL ready" : "Webhook URL missing",
+            ]}
+            lastChecked={formatRelativeTimeLabel(settings.mailpool.lastValidatedAt, "Not tested yet")}
+            onOpen={() => {
+              setError("");
+              setNotice("");
+              resetFormFromSettings();
+              setActiveModal("mailpool");
+            }}
+            onValidate={() => void validateSavedProvider("mailpool")}
+            validating={testingProvider === "mailpool"}
+          />
+
+          <ConnectionCard
+            title="Deliverability"
+            description="Choose Google Postmaster or Mailpool for sender health checks."
             icon={ShieldCheck}
             configured={deliverabilityConfigured}
             validationStatus={settings.deliverability.lastValidatedStatus}
             summary={
-              deliverabilityConfigured
-                ? `Ready. Watching ${settings.deliverability.monitoredDomains.join(", ")} for Gmail reputation changes.`
-                : "Connect this only if you want Gmail reputation data in the app."
+              settings.deliverability.provider === "mailpool"
+                ? deliverabilityConfigured
+                  ? `Ready. Mailpool deliverability will run placement checks using ${settings.deliverability.mailpoolInboxProviders.join(", ")}.`
+                  : "Mailpool deliverability is selected, but the Mailpool connection still needs attention."
+                : deliverabilityConfigured
+                  ? `Ready. Watching ${settings.deliverability.monitoredDomains.join(", ")} for Gmail reputation changes.`
+                  : "Connect this only if you want Gmail reputation data or Mailpool-backed inbox placement in the app."
             }
             highlights={[
               settings.deliverability.provider === "google_postmaster"
                 ? "Google Postmaster"
-                : "No monitor selected",
+                : settings.deliverability.provider === "mailpool"
+                  ? "Mailpool"
+                  : "No monitor selected",
               settings.deliverability.monitoredDomains.length
                 ? `${settings.deliverability.monitoredDomains.length} monitored domain${settings.deliverability.monitoredDomains.length === 1 ? "" : "s"}`
                 : "No watched domains yet",
-              settings.deliverability.hasGoogleClientId ? "Client ID saved" : "Client ID needed",
-              settings.deliverability.hasGoogleRefreshToken ? "Refresh token saved" : "Refresh token needed",
+              settings.deliverability.provider === "mailpool"
+                ? `${settings.deliverability.mailpoolInboxProviders.length} inbox providers`
+                : settings.deliverability.hasGoogleClientId
+                  ? "Client ID saved"
+                  : "Client ID needed",
+              settings.deliverability.provider === "mailpool"
+                ? "Uses Mailpool workspace connection"
+                : settings.deliverability.hasGoogleRefreshToken
+                  ? "Refresh token saved"
+                  : "Refresh token needed",
             ]}
             lastChecked={formatRelativeTimeLabel(settings.deliverability.lastCheckedAt, "Not tested yet")}
             onOpen={() => {
@@ -426,7 +505,7 @@ export default function ProvisioningProviderSettingsCard({
           />
 
           {error ? (
-            <div className="md:col-span-2">
+            <div className="md:col-span-4">
               <div className="flex items-start gap-3 rounded-xl border border-[color:var(--danger-border)] bg-[color:var(--danger-soft)] px-4 py-3 text-sm text-[color:var(--danger)]">
                 <AlertCircle className="mt-0.5 h-4 w-4" />
                 <div>{error}</div>
@@ -435,7 +514,7 @@ export default function ProvisioningProviderSettingsCard({
           ) : null}
 
           {!error && notice ? (
-            <div className="md:col-span-2">
+            <div className="md:col-span-4">
               <div className="flex items-start gap-3 rounded-xl border border-[color:var(--success-border)] bg-[color:var(--success-soft)] px-4 py-3 text-sm text-[color:var(--success)]">
                 <CheckCircle2 className="mt-0.5 h-4 w-4" />
                 <div>{notice}</div>
@@ -676,6 +755,116 @@ export default function ProvisioningProviderSettingsCard({
       </SettingsModal>
 
       <SettingsModal
+        open={activeModal === "mailpool"}
+        onOpenChange={(open) => {
+          if (!open) {
+            resetFormFromSettings();
+            setActiveModal(null);
+          }
+        }}
+        title={mailpoolConfigured ? "Mailpool setup" : "Connect Mailpool"}
+        description="Save the shared Mailpool workspace credentials. Leave secret fields blank if you want to keep the saved values."
+        footer={
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <a
+              href={MAILPOOL_HELP_URL}
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex items-center gap-1 text-sm text-[color:var(--muted-foreground)] underline underline-offset-4"
+            >
+              Mailpool API docs
+              <ExternalLink className="h-3.5 w-3.5" />
+            </a>
+            <div className="flex flex-wrap gap-2">
+              <Button type="button" variant="ghost" onClick={() => setActiveModal(null)}>
+                Cancel
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                disabled={savingProvider === "mailpool" || testingProvider === "mailpool"}
+                onClick={() => void saveProvider("mailpool", true)}
+              >
+                {savingProvider === "mailpool" || testingProvider === "mailpool" ? "Saving..." : "Save and test"}
+              </Button>
+              <Button
+                type="button"
+                disabled={savingProvider === "mailpool" || testingProvider === "mailpool"}
+                onClick={() => void saveProvider("mailpool")}
+              >
+                {savingProvider === "mailpool" ? "Saving..." : "Save"}
+              </Button>
+            </div>
+          </div>
+        }
+      >
+        <div className="grid gap-4 md:grid-cols-2">
+          <div className="md:col-span-2 rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-4 py-3 text-sm text-[color:var(--foreground)]">
+            <div className="font-medium">Mailpool powers the new sender stack</div>
+            <div className="mt-1 text-[color:var(--muted-foreground)]">
+              The app uses one shared Mailpool workspace for domain purchase, Google mailbox provisioning, SMTP sends,
+              inbox placement, and spam checks.
+            </div>
+          </div>
+          <div className="grid gap-2 md:col-span-2">
+            <FieldLabel
+              htmlFor="provider-mailpool-api-key"
+              label="API key"
+              help="Paste the shared Mailpool API key. Leave blank here to keep the current value."
+            />
+            <Input
+              id="provider-mailpool-api-key"
+              type={showMailpoolSecrets ? "text" : "password"}
+              value={form.mailpoolApiKey}
+              onChange={(event) => setForm((prev) => ({ ...prev, mailpoolApiKey: event.target.value }))}
+              placeholder={settings.mailpool.hasApiKey ? "Saved. Leave blank to keep current key." : ""}
+            />
+          </div>
+          <div className="grid gap-2">
+            <FieldLabel
+              htmlFor="provider-mailpool-webhook-secret"
+              label="Webhook secret"
+              help="Paste the Mailpool webhook signing secret. Leave blank here to keep the current value."
+            />
+            <Input
+              id="provider-mailpool-webhook-secret"
+              type={showMailpoolSecrets ? "text" : "password"}
+              value={form.mailpoolWebhookSecret}
+              onChange={(event) => setForm((prev) => ({ ...prev, mailpoolWebhookSecret: event.target.value }))}
+              placeholder={settings.mailpool.hasWebhookSecret ? "Saved. Leave blank to keep current secret." : ""}
+            />
+          </div>
+          <div className="grid gap-2">
+            <FieldLabel
+              htmlFor="provider-mailpool-webhook-url"
+              label="Webhook URL"
+              help="Use this exact URL inside Mailpool workspace settings so mailbox and domain events reconcile back into the app."
+            />
+            <Input
+              id="provider-mailpool-webhook-url"
+              value={form.mailpoolWebhookUrl}
+              onChange={(event) => setForm((prev) => ({ ...prev, mailpoolWebhookUrl: event.target.value }))}
+              placeholder="https://lastb2b.com/api/webhooks/mailpool/events"
+            />
+          </div>
+          <div className="md:col-span-2 flex justify-end">
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() => setShowMailpoolSecrets((prev) => !prev)}
+            >
+              {showMailpoolSecrets ? "Hide secret values" : "Show secret values"}
+            </Button>
+          </div>
+          <div className="md:col-span-2 rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-4 py-3 text-sm text-[color:var(--muted-foreground)]">
+            Last check: {settings.mailpool.lastValidatedAt || "never"}
+            {settings.mailpool.lastValidationMessage ? ` · ${settings.mailpool.lastValidationMessage}` : ""}
+          </div>
+        </div>
+      </SettingsModal>
+
+      <SettingsModal
         open={activeModal === "deliverability"}
         onOpenChange={(open) => {
           if (!open) {
@@ -683,8 +872,8 @@ export default function ProvisioningProviderSettingsCard({
             setActiveModal(null);
           }
         }}
-        title={deliverabilityConfigured ? "Google Postmaster setup" : "Connect Google Postmaster"}
-        description="Optional. Connect this only if you want Gmail reputation data for your sender domains."
+        title={deliverabilityConfigured ? "Deliverability setup" : "Connect deliverability checks"}
+        description="Optional. Use Google Postmaster for Gmail reputation, or Mailpool for spam checks and inbox placement on Mailpool senders."
         footer={
           <div className="flex flex-wrap items-center justify-between gap-3">
             <a
@@ -733,7 +922,7 @@ export default function ProvisioningProviderSettingsCard({
             <FieldLabel
               htmlFor="provider-deliverability-provider"
               label="Monitor source"
-              help="Google Postmaster is the current built-in source for Gmail reputation and spam-rate monitoring."
+              help="Google Postmaster is used for Gmail reputation. Mailpool uses the saved Mailpool workspace for spam checks and inbox placement."
             />
             <select
               id="provider-deliverability-provider"
@@ -741,13 +930,19 @@ export default function ProvisioningProviderSettingsCard({
               onChange={(event) =>
                 setForm((prev) => ({
                   ...prev,
-                  deliverabilityProvider: event.target.value === "google_postmaster" ? "google_postmaster" : "none",
+                  deliverabilityProvider:
+                    event.target.value === "google_postmaster"
+                      ? "google_postmaster"
+                      : event.target.value === "mailpool"
+                        ? "mailpool"
+                        : "none",
                 }))
               }
               className="h-11 w-full rounded-xl border border-[color:var(--border)] bg-[color:var(--surface)] px-3 text-sm text-[color:var(--foreground)] shadow-sm outline-none transition focus:border-[color:var(--ring)] focus:ring-2 focus:ring-[color:var(--ring)]/20"
             >
               <option value="none">No external provider</option>
               <option value="google_postmaster">Google Postmaster</option>
+              <option value="mailpool">Mailpool</option>
             </select>
           </div>
           <div className="grid gap-2">
@@ -760,7 +955,11 @@ export default function ProvisioningProviderSettingsCard({
               id="provider-deliverability-domains"
               value={form.deliverabilityDomains}
               onChange={(event) => setForm((prev) => ({ ...prev, deliverabilityDomains: event.target.value }))}
-              placeholder="fluentscroll.com, lequarterly.com"
+              placeholder={
+                form.deliverabilityProvider === "mailpool"
+                  ? "satellite1.com, satellite2.com"
+                  : "fluentscroll.com, lequarterly.com"
+              }
             />
           </div>
           <div className="grid gap-2">
@@ -777,6 +976,7 @@ export default function ProvisioningProviderSettingsCard({
                 setForm((prev) => ({ ...prev, deliverabilityGoogleClientId: event.target.value }))
               }
               placeholder={settings.deliverability.hasGoogleClientId ? "Saved. Leave blank to keep current value." : ""}
+              disabled={form.deliverabilityProvider !== "google_postmaster"}
             />
           </div>
           <div className="grid gap-2">
@@ -793,6 +993,7 @@ export default function ProvisioningProviderSettingsCard({
                 setForm((prev) => ({ ...prev, deliverabilityGoogleClientSecret: event.target.value }))
               }
               placeholder={settings.deliverability.hasGoogleClientSecret ? "Saved. Leave blank to keep current value." : ""}
+              disabled={form.deliverabilityProvider !== "google_postmaster"}
             />
           </div>
           <div className="grid gap-2 md:col-span-2">
@@ -809,6 +1010,7 @@ export default function ProvisioningProviderSettingsCard({
                 setForm((prev) => ({ ...prev, deliverabilityGoogleRefreshToken: event.target.value }))
               }
               placeholder={settings.deliverability.hasGoogleRefreshToken ? "Saved. Leave blank to keep current token." : ""}
+              disabled={form.deliverabilityProvider !== "google_postmaster"}
             />
           </div>
           <div className="md:col-span-2 flex justify-end">
@@ -823,7 +1025,11 @@ export default function ProvisioningProviderSettingsCard({
           </div>
           <div className="md:col-span-2 rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-4 py-3 text-sm text-[color:var(--muted-foreground)]">
             Last check: {settings.deliverability.lastCheckedAt || "never"}
-            {settings.deliverability.lastHealthSummary ? ` · ${settings.deliverability.lastHealthSummary}` : ""}
+            {settings.deliverability.provider === "mailpool"
+              ? ` · Mailpool inbox providers: ${settings.deliverability.mailpoolInboxProviders.join(", ")}`
+              : settings.deliverability.lastHealthSummary
+                ? ` · ${settings.deliverability.lastHealthSummary}`
+                : ""}
           </div>
         </div>
       </SettingsModal>

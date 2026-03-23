@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
 import {
+  fetchSavedMailpoolDomains,
   fetchSavedNamecheapDomains,
   provisionSenderDomain,
 } from "@/lib/client-api";
@@ -32,6 +33,7 @@ type CustomerIoStrategy = "auto" | "specific" | "defaults";
 
 type SetupState = {
   brandId: string;
+  provider: "customerio" | "mailpool";
   fromLocalPart: string;
   assignToBrand: boolean;
   selectedMailboxAccountId: string;
@@ -59,9 +61,11 @@ type RegisterState = {
 };
 
 type NamecheapInventoryItem = Awaited<ReturnType<typeof fetchSavedNamecheapDomains>>["domains"][number];
+type MailpoolInventoryItem = Awaited<ReturnType<typeof fetchSavedMailpoolDomains>>["domains"][number];
 
 const INITIAL_SETUP: SetupState = {
   brandId: "",
+  provider: "customerio",
   fromLocalPart: "hello",
   assignToBrand: true,
   selectedMailboxAccountId: "",
@@ -97,6 +101,10 @@ function formatDateLabel(value: string) {
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) return value;
   return parsed.toLocaleDateString();
+}
+
+function providerDomainLabel(provider: SetupState["provider"]) {
+  return provider === "mailpool" ? "Mailpool" : "Namecheap";
 }
 
 function CapacityBar({ ratio }: { ratio: number }) {
@@ -188,10 +196,21 @@ export default function SenderProvisionCard({
     forwardingTargetUrl: brands[0]?.website ?? "",
   }));
   const [register, setRegister] = useState<RegisterState>(INITIAL_REGISTER);
-  const [inventory, setInventory] = useState<{
+  const [namecheapInventory, setNamecheapInventory] = useState<{
     configured: boolean;
     loading: boolean;
     domains: NamecheapInventoryItem[];
+    error: string;
+  }>({
+    configured: false,
+    loading: true,
+    domains: [],
+    error: "",
+  });
+  const [mailpoolInventory, setMailpoolInventory] = useState<{
+    configured: boolean;
+    loading: boolean;
+    domains: MailpoolInventoryItem[];
     error: string;
   }>({
     configured: false,
@@ -208,21 +227,36 @@ export default function SenderProvisionCard({
     let active = true;
     void (async () => {
       try {
-        const next = await fetchSavedNamecheapDomains();
+        const [nextNamecheap, nextMailpool] = await Promise.all([
+          fetchSavedNamecheapDomains(),
+          fetchSavedMailpoolDomains(),
+        ]);
         if (!active) return;
-        setInventory({
-          configured: next.configured,
+        setNamecheapInventory({
+          configured: nextNamecheap.configured,
           loading: false,
-          domains: next.domains,
+          domains: nextNamecheap.domains,
+          error: "",
+        });
+        setMailpoolInventory({
+          configured: nextMailpool.configured,
+          loading: false,
+          domains: nextMailpool.domains,
           error: "",
         });
       } catch (err) {
         if (!active) return;
-        setInventory({
+        setNamecheapInventory({
           configured: false,
           loading: false,
           domains: [],
           error: err instanceof Error ? err.message : "Failed to load Namecheap domains",
+        });
+        setMailpoolInventory({
+          configured: false,
+          loading: false,
+          domains: [],
+          error: err instanceof Error ? err.message : "Failed to load Mailpool domains",
         });
       }
     })();
@@ -294,15 +328,21 @@ export default function SenderProvisionCard({
 
   const filteredDomains = useMemo(() => {
     const needle = inventoryQuery.trim().toLowerCase();
-    if (!needle) return inventory.domains;
-    return inventory.domains.filter((item) => item.domain.includes(needle));
-  }, [inventory.domains, inventoryQuery]);
+    const currentDomains =
+      setup.provider === "mailpool" ? mailpoolInventory.domains : namecheapInventory.domains;
+    if (!needle) return currentDomains;
+    return currentDomains.filter((item) => item.domain.includes(needle));
+  }, [inventoryQuery, mailpoolInventory.domains, namecheapInventory.domains, setup.provider]);
+
+  const activeInventory = setup.provider === "mailpool" ? mailpoolInventory : namecheapInventory;
 
   const manualDefaultsReady =
     Boolean(setup.customerIoSiteId.trim() || provisioningSettings?.customerIo.siteId.trim()) &&
     Boolean(setup.customerIoTrackingApiKey.trim() || provisioningSettings?.customerIo.hasTrackingApiKey);
 
-  const mailboxHint = selectedMailbox
+  const mailboxHint = setup.provider === "mailpool"
+    ? "Mailpool senders use the provisioned mailbox for both sending and reply sync automatically."
+    : selectedMailbox
     ? `Replies will route to ${selectedMailbox.config.mailbox.email || "the selected mailbox"}.`
     : assignments[setup.brandId]?.mailboxAccountId
       ? "The brand already has a reply mailbox assignment. Leave this alone to keep it."
@@ -317,10 +357,15 @@ export default function SenderProvisionCard({
       setError("Sender local-part is required.");
       return false;
     }
-    if (!inventory.configured) {
+    if (setup.provider === "customerio" && !namecheapInventory.configured) {
       setError("Save Namecheap credentials in provisioning settings before using one-click domain setup.");
       return false;
     }
+    if (setup.provider === "mailpool" && !mailpoolInventory.configured) {
+      setError("Save Mailpool credentials in provisioning settings before using Mailpool sender setup.");
+      return false;
+    }
+    if (setup.provider === "mailpool") return true;
     if (setup.customerIoStrategy === "specific") {
       if (!setup.customerIoSourceAccountId) {
         setError("Pick a specific Customer.io account.");
@@ -357,13 +402,15 @@ export default function SenderProvisionCard({
       register.registrantFirstName,
       register.registrantLastName,
       register.registrantEmailAddress,
-      register.registrantPhone,
       register.registrantAddress1,
       register.registrantCity,
       register.registrantStateProvince,
       register.registrantPostalCode,
       register.registrantCountry,
     ];
+    if (setup.provider === "customerio") {
+      requiredFields.push(register.registrantPhone);
+    }
     if (requiredFields.some((value) => !value.trim())) {
       setError("Registrant contact information is required to buy a new domain.");
       return false;
@@ -386,9 +433,10 @@ export default function SenderProvisionCard({
 
     try {
       const provisioned = await provisionSenderDomain(setup.brandId, {
+        provider: setup.provider,
         accountName: setup.accountName.trim() || `${selectedBrand?.name ?? "Brand"} ${normalizedDomain}`,
         assignToBrand: setup.assignToBrand,
-        selectedMailboxAccountId: setup.selectedMailboxAccountId,
+        selectedMailboxAccountId: setup.provider === "mailpool" ? "" : setup.selectedMailboxAccountId,
         domainMode,
         domain: normalizedDomain,
         fromLocalPart: setup.fromLocalPart.trim(),
@@ -442,7 +490,7 @@ export default function SenderProvisionCard({
         </CardDescription>
       </CardHeader>
       <CardContent className="grid gap-5">
-        <div className="grid gap-3 md:grid-cols-4">
+        <div className="grid gap-3 md:grid-cols-5">
           {brands.length > 1 ? (
             <div className="grid gap-2">
               <Label htmlFor="setup-brand">Brand</Label>
@@ -477,6 +525,22 @@ export default function SenderProvisionCard({
             </div>
           )}
           <div className="grid gap-2">
+            <Label htmlFor="setup-provider">Provider</Label>
+            <Select
+              id="setup-provider"
+              value={setup.provider}
+              onChange={(event) =>
+                setSetup((prev) => ({
+                  ...prev,
+                  provider: event.target.value === "mailpool" ? "mailpool" : "customerio",
+                }))
+              }
+            >
+              <option value="customerio">Customer.io + Namecheap</option>
+              <option value="mailpool">Mailpool</option>
+            </Select>
+          </div>
+          <div className="grid gap-2">
             <Label htmlFor="setup-local-part">Sender Local-Part</Label>
             <Input
               id="setup-local-part"
@@ -490,9 +554,10 @@ export default function SenderProvisionCard({
             <Select
               id="setup-mailbox"
               value={setup.selectedMailboxAccountId}
+              disabled={setup.provider === "mailpool"}
               onChange={(event) => setSetup((prev) => ({ ...prev, selectedMailboxAccountId: event.target.value }))}
             >
-              <option value="">Leave unchanged / none</option>
+              <option value="">{setup.provider === "mailpool" ? "Auto-provisioned hybrid mailbox" : "Leave unchanged / none"}</option>
               {mailboxAccounts.map((account) => (
                 <option key={account.id} value={account.id}>
                   {account.name} {account.config.mailbox.email ? `· ${account.config.mailbox.email}` : ""}
@@ -535,108 +600,116 @@ export default function SenderProvisionCard({
           </Label>
         </div>
 
-        <div className="grid gap-3 rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <div className="text-sm font-semibold">Customer.io Account</div>
-              <div className="text-[11px] text-[color:var(--muted-foreground)]">
-                Auto-pick uses the account with the most room this month.
+        {setup.provider === "customerio" ? (
+          <div className="grid gap-3 rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <div className="text-sm font-semibold">Customer.io Account</div>
+                <div className="text-[11px] text-[color:var(--muted-foreground)]">
+                  Auto-pick uses the account with the most room this month.
+                </div>
               </div>
+              <Select
+                value={setup.customerIoStrategy}
+                onChange={(event) =>
+                  setSetup((prev) => ({
+                    ...prev,
+                    customerIoStrategy:
+                      event.target.value === "specific"
+                        ? "specific"
+                        : event.target.value === "defaults"
+                          ? "defaults"
+                          : "auto",
+                  }))
+                }
+                className="w-full max-w-xs"
+              >
+                <option value="auto">Auto-pick best account</option>
+                <option value="specific">Choose a specific account</option>
+                <option value="defaults">Use saved defaults</option>
+              </Select>
             </div>
-            <Select
-              value={setup.customerIoStrategy}
-              onChange={(event) =>
-                setSetup((prev) => ({
-                  ...prev,
-                  customerIoStrategy:
-                    event.target.value === "specific"
-                      ? "specific"
-                      : event.target.value === "defaults"
-                        ? "defaults"
-                        : "auto",
-                }))
-              }
-              className="w-full max-w-xs"
-            >
-              <option value="auto">Auto-pick best account</option>
-              <option value="specific">Choose a specific account</option>
-              <option value="defaults">Use saved defaults</option>
-            </Select>
+
+            {customerIoPools.length ? (
+              <div className="grid gap-3 md:grid-cols-2">
+                {customerIoPools.map((pool) => (
+                  <PoolCard
+                    key={pool.id}
+                    pool={pool}
+                    selected={setup.customerIoSourceAccountId === pool.sourceAccountId}
+                    disabled={setup.customerIoStrategy !== "specific"}
+                    onSelect={() =>
+                      setSetup((prev) => ({
+                        ...prev,
+                        customerIoSourceAccountId: pool.sourceAccountId,
+                      }))
+                    }
+                  />
+                ))}
+              </div>
+            ) : (
+              <div className="text-sm text-[color:var(--muted-foreground)]">
+                No Customer.io sender accounts exist yet. Add one above or use saved defaults below.
+              </div>
+            )}
+
+            {setup.customerIoStrategy === "auto" && recommendedPool ? (
+              <div className="rounded-xl border border-[color:var(--success-border)] bg-[color:var(--success-soft)] px-3 py-2 text-sm text-[color:var(--success)]">
+                Auto-pick target: {recommendedPool.sourceAccountName} with{" "}
+                {recommendedPool.remainingProfiles.toLocaleString()} profiles left this month.
+              </div>
+            ) : null}
+
+            {setup.customerIoStrategy === "defaults" ? (
+              <div className="grid gap-3 md:grid-cols-3">
+                <div className="grid gap-2">
+                  <Label htmlFor="setup-default-site-id">Customer.io Site ID</Label>
+                  <Input
+                    id="setup-default-site-id"
+                    value={setup.customerIoSiteId}
+                    onChange={(event) => setSetup((prev) => ({ ...prev, customerIoSiteId: event.target.value }))}
+                    placeholder={provisioningSettings?.customerIo.siteId || "Saved default"}
+                  />
+                </div>
+                <div className="grid gap-2">
+                  <Label htmlFor="setup-default-track-key">Tracking API Key</Label>
+                  <Input
+                    id="setup-default-track-key"
+                    type="password"
+                    value={setup.customerIoTrackingApiKey}
+                    onChange={(event) =>
+                      setSetup((prev) => ({ ...prev, customerIoTrackingApiKey: event.target.value }))
+                    }
+                    placeholder={provisioningSettings?.customerIo.hasTrackingApiKey ? "Leave blank to use saved key" : ""}
+                  />
+                </div>
+                <div className="grid gap-2">
+                  <Label htmlFor="setup-default-app-key">App API Key</Label>
+                  <Input
+                    id="setup-default-app-key"
+                    type="password"
+                    value={setup.customerIoAppApiKey}
+                    onChange={(event) => setSetup((prev) => ({ ...prev, customerIoAppApiKey: event.target.value }))}
+                    placeholder={provisioningSettings?.customerIo.hasAppApiKey ? "Leave blank to use saved key" : "Optional"}
+                  />
+                </div>
+              </div>
+            ) : null}
           </div>
-
-          {customerIoPools.length ? (
-            <div className="grid gap-3 md:grid-cols-2">
-              {customerIoPools.map((pool) => (
-                <PoolCard
-                  key={pool.id}
-                  pool={pool}
-                  selected={setup.customerIoSourceAccountId === pool.sourceAccountId}
-                  disabled={setup.customerIoStrategy !== "specific"}
-                  onSelect={() =>
-                    setSetup((prev) => ({
-                      ...prev,
-                      customerIoSourceAccountId: pool.sourceAccountId,
-                    }))
-                  }
-                />
-              ))}
-            </div>
-          ) : (
-            <div className="text-sm text-[color:var(--muted-foreground)]">
-              No Customer.io sender accounts exist yet. Add one above or use saved defaults below.
-            </div>
-          )}
-
-          {setup.customerIoStrategy === "auto" && recommendedPool ? (
-            <div className="rounded-xl border border-[color:var(--success-border)] bg-[color:var(--success-soft)] px-3 py-2 text-sm text-[color:var(--success)]">
-              Auto-pick target: {recommendedPool.sourceAccountName} with{" "}
-              {recommendedPool.remainingProfiles.toLocaleString()} profiles left this month.
-            </div>
-          ) : null}
-
-          {setup.customerIoStrategy === "defaults" ? (
-            <div className="grid gap-3 md:grid-cols-3">
-              <div className="grid gap-2">
-                <Label htmlFor="setup-default-site-id">Customer.io Site ID</Label>
-                <Input
-                  id="setup-default-site-id"
-                  value={setup.customerIoSiteId}
-                  onChange={(event) => setSetup((prev) => ({ ...prev, customerIoSiteId: event.target.value }))}
-                  placeholder={provisioningSettings?.customerIo.siteId || "Saved default"}
-                />
-              </div>
-              <div className="grid gap-2">
-                <Label htmlFor="setup-default-track-key">Tracking API Key</Label>
-                <Input
-                  id="setup-default-track-key"
-                  type="password"
-                  value={setup.customerIoTrackingApiKey}
-                  onChange={(event) =>
-                    setSetup((prev) => ({ ...prev, customerIoTrackingApiKey: event.target.value }))
-                  }
-                  placeholder={provisioningSettings?.customerIo.hasTrackingApiKey ? "Leave blank to use saved key" : ""}
-                />
-              </div>
-              <div className="grid gap-2">
-                <Label htmlFor="setup-default-app-key">App API Key</Label>
-                <Input
-                  id="setup-default-app-key"
-                  type="password"
-                  value={setup.customerIoAppApiKey}
-                  onChange={(event) => setSetup((prev) => ({ ...prev, customerIoAppApiKey: event.target.value }))}
-                  placeholder={provisioningSettings?.customerIo.hasAppApiKey ? "Leave blank to use saved key" : "Optional"}
-                />
-              </div>
-            </div>
-          ) : null}
-        </div>
+        ) : (
+          <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3 text-sm text-[color:var(--muted-foreground)]">
+            Mailpool provisioning uses the shared Mailpool workspace and creates one hybrid sender account per mailbox.
+          </div>
+        )}
 
         <div className="grid gap-3">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
               <div className="text-sm font-semibold">Your Domains</div>
               <div className="text-[11px] text-[color:var(--muted-foreground)]">
-                Click once to connect the domain and set the forwarding.
+                {setup.provider === "mailpool"
+                  ? "These are the domains already managed inside Mailpool."
+                  : "Click once to connect the domain and set the forwarding."}
               </div>
             </div>
             <Input
@@ -647,18 +720,21 @@ export default function SenderProvisionCard({
             />
           </div>
 
-          {inventory.loading ? (
-            <div className="text-sm text-[color:var(--muted-foreground)]">Loading Namecheap domains...</div>
+          {activeInventory.loading ? (
+            <div className="text-sm text-[color:var(--muted-foreground)]">
+              Loading {providerDomainLabel(setup.provider)} domains...
+            </div>
           ) : null}
-          {inventory.error ? <div className="text-sm text-[color:var(--danger)]">{inventory.error}</div> : null}
-          {!inventory.loading && !inventory.configured ? (
+          {activeInventory.error ? <div className="text-sm text-[color:var(--danger)]">{activeInventory.error}</div> : null}
+          {!activeInventory.loading && !activeInventory.configured ? (
             <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3 text-sm">
-              Save platform Namecheap credentials above first. Once that is done, this section will list every owned
-              domain with a setup button.
+              {setup.provider === "mailpool"
+                ? "Save Mailpool credentials above first. Once that is done, this section will list domains already managed in Mailpool."
+                : "Save platform Namecheap credentials above first. Once that is done, this section will list every owned domain with a setup button."}
             </div>
           ) : null}
 
-          {inventory.configured ? (
+          {activeInventory.configured ? (
             <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
               {filteredDomains.map((item) => {
                 const owner = domainOwnerByName.get(item.domain) ?? null;
@@ -679,16 +755,21 @@ export default function SenderProvisionCard({
                       <div>
                         <div className="text-sm font-semibold">{item.domain}</div>
                         <div className="text-[11px] text-[color:var(--muted-foreground)]">
-                          Expires {formatDateLabel(item.expiresAt)}
+                          {"expiresAt" in item && item.expiresAt
+                            ? `Expires ${formatDateLabel(item.expiresAt)}`
+                            : "Managed in Mailpool"}
                         </div>
                       </div>
                       <div className="text-[11px] text-[color:var(--muted-foreground)]">
-                        {item.autoRenew ? "Auto-renew" : "Manual renew"}
+                        {"autoRenew" in item ? (item.autoRenew ? "Auto-renew" : "Manual renew") : item.status}
                       </div>
                     </div>
                     <div className="flex flex-wrap gap-2 text-[11px] text-[color:var(--muted-foreground)]">
-                      <span>{item.isOurDns ? "Namecheap DNS" : "External DNS"}</span>
-                      <span>{item.whoisGuardEnabled ? "WhoisGuard on" : "WhoisGuard off"}</span>
+                      {"isOurDns" in item ? <span>{item.isOurDns ? "Namecheap DNS" : "External DNS"}</span> : null}
+                      {"whoisGuardEnabled" in item ? (
+                        <span>{item.whoisGuardEnabled ? "WhoisGuard on" : "WhoisGuard off"}</span>
+                      ) : null}
+                      {"type" in item && item.type ? <span>{item.type}</span> : null}
                     </div>
                     {assignedElsewhere ? (
                       <div className="text-[11px] text-[color:var(--muted-foreground)]">
@@ -718,9 +799,13 @@ export default function SenderProvisionCard({
 
         <div className="grid gap-3 rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3">
           <div>
-            <div className="text-sm font-semibold">Buy New Domain + Set Up</div>
+            <div className="text-sm font-semibold">
+              {setup.provider === "mailpool" ? "Buy In Mailpool + Set Up" : "Buy New Domain + Set Up"}
+            </div>
             <div className="text-[11px] text-[color:var(--muted-foreground)]">
-              If the domain is available, this buys it and runs the same setup automatically.
+              {setup.provider === "mailpool"
+                ? "If the domain is available, this buys it in Mailpool, provisions a Google sender mailbox, and runs the first spam and inbox checks."
+                : "If the domain is available, this buys it and runs the same setup automatically."}
             </div>
           </div>
           <div className="grid gap-3 md:grid-cols-3">
@@ -776,6 +861,7 @@ export default function SenderProvisionCard({
                 value={register.registrantPhone}
                 onChange={(event) => setRegister((prev) => ({ ...prev, registrantPhone: event.target.value }))}
                 placeholder="+1.5555555555"
+                disabled={setup.provider === "mailpool"}
               />
             </div>
             <div className="grid gap-2 md:col-span-2">
@@ -830,7 +916,11 @@ export default function SenderProvisionCard({
               disabled={Boolean(busyKey)}
               onClick={() => void runProvision(register.domain, "register")}
             >
-              {busyKey === `register:${normalizeDomain(register.domain)}` ? "Buying + Setting Up..." : "Buy + Set Up"}
+              {busyKey === `register:${normalizeDomain(register.domain)}`
+                ? "Buying + Setting Up..."
+                : setup.provider === "mailpool"
+                  ? "Buy In Mailpool + Set Up"
+                  : "Buy + Set Up"}
             </Button>
           </div>
         </div>
@@ -849,8 +939,15 @@ export default function SenderProvisionCard({
               {result.readyToSend ? "Sender is ready" : "Sender provisioned with follow-up needed"}
             </div>
             <div className="mt-1 text-[color:var(--muted-foreground)]">
-              {result.fromEmail} · Customer.io: {result.customerIo.sourceAccountName} · Forwarding:{" "}
-              {result.namecheap.forwardingEnabled ? result.namecheap.forwardingTargetUrl : "not set"}
+              {result.fromEmail}
+              {result.provider === "customerio" && result.customerIo
+                ? ` · Customer.io: ${result.customerIo.sourceAccountName}`
+                : result.provider === "mailpool" && result.mailpool
+                  ? ` · Mailpool mailbox: ${result.mailpool.mailboxId}`
+                  : ""}
+              {result.namecheap
+                ? ` · Forwarding: ${result.namecheap.forwardingEnabled ? result.namecheap.forwardingTargetUrl : "not set"}`
+                : ""}
             </div>
             {result.warnings.length ? (
               <div className="mt-2 space-y-1 text-xs text-[color:var(--muted-foreground)]">

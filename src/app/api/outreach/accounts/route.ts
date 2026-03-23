@@ -37,6 +37,7 @@ export async function POST(request: Request) {
 
     const account = await createOutreachAccount({
       name,
+      provider: body.provider === "mailpool" ? "mailpool" : "customerio",
       accountType:
         body.accountType === "delivery" || body.accountType === "mailbox" || body.accountType === "hybrid"
           ? body.accountType

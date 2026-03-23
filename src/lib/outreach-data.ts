@@ -43,6 +43,7 @@ export type OutreachAccountSecrets = {
   mailboxAccessToken: string;
   mailboxRefreshToken: string;
   mailboxPassword: string;
+  mailboxSmtpPassword: string;
   mailboxRecoveryEmail: string;
   mailboxRecoveryCodes: string;
 };
@@ -241,8 +242,11 @@ function defaultOutreachStore(): OutreachStore {
 }
 
 function deriveAccountType(config: OutreachAccountConfig): OutreachAccount["accountType"] {
-  // Workspace is optional; presence of a site id indicates delivery capability.
-  const hasDelivery = Boolean(config.customerIo.siteId.trim());
+  const hasDelivery = Boolean(
+    config.customerIo.siteId.trim() ||
+      config.mailpool.mailboxId.trim() ||
+      (config.mailbox.smtpHost.trim() && config.mailbox.smtpUsername.trim())
+  );
   const hasMailbox = Boolean(config.mailbox.email.trim() && config.mailbox.host.trim());
   if (hasDelivery && hasMailbox) return "hybrid";
   if (hasDelivery) return "delivery";
@@ -253,8 +257,10 @@ function deriveAccountType(config: OutreachAccountConfig): OutreachAccount["acco
 function sanitizeAccountConfig(value: unknown): OutreachAccountConfig {
   const row = asRecord(value);
   const customerIo = asRecord(row.customerIo);
+  const mailpool = asRecord(row.mailpool);
   const apify = asRecord(row.apify);
   const mailbox = asRecord(row.mailbox);
+  const mailpoolStatus = String(mailpool.status ?? "").trim().toLowerCase();
 
   return {
     customerIo: {
@@ -263,6 +269,23 @@ function sanitizeAccountConfig(value: unknown): OutreachAccountConfig {
       fromEmail: String(customerIo.fromEmail ?? customerIo.from_email ?? "").trim(),
       replyToEmail: String(customerIo.replyToEmail ?? customerIo.reply_to_email ?? customerIo.replyTo ?? "").trim(),
       billing: sanitizeCustomerIoBillingConfig(customerIo.billing),
+    },
+    mailpool: {
+      domainId: String(mailpool.domainId ?? mailpool.domain_id ?? "").trim(),
+      mailboxId: String(mailpool.mailboxId ?? mailpool.mailbox_id ?? "").trim(),
+      mailboxType: ["google", "shared", "private", "outlook"].includes(String(mailpool.mailboxType ?? mailpool.mailbox_type))
+        ? (String(mailpool.mailboxType ?? mailpool.mailbox_type) as OutreachAccountConfig["mailpool"]["mailboxType"])
+        : "google",
+      spamCheckId: String(mailpool.spamCheckId ?? mailpool.spam_check_id ?? "").trim(),
+      inboxPlacementId: String(mailpool.inboxPlacementId ?? mailpool.inbox_placement_id ?? "").trim(),
+      status: ["pending", "active", "updating", "error", "deleted"].includes(mailpoolStatus)
+        ? (mailpoolStatus as OutreachAccountConfig["mailpool"]["status"])
+        : "pending",
+      lastSpamCheckAt: String(mailpool.lastSpamCheckAt ?? mailpool.last_spam_check_at ?? "").trim(),
+      lastSpamCheckScore: Number(mailpool.lastSpamCheckScore ?? mailpool.last_spam_check_score ?? 0) || 0,
+      lastSpamCheckSummary: String(
+        mailpool.lastSpamCheckSummary ?? mailpool.last_spam_check_summary ?? ""
+      ).trim(),
     },
     apify: {
       defaultActorId: String(apify.defaultActorId ?? "").trim(),
@@ -278,6 +301,10 @@ function sanitizeAccountConfig(value: unknown): OutreachAccountConfig {
       host: String(mailbox.host ?? "").trim(),
       port: Number(mailbox.port ?? 993),
       secure: Boolean(mailbox.secure ?? true),
+      smtpHost: String(mailbox.smtpHost ?? mailbox.smtp_host ?? "").trim(),
+      smtpPort: Number(mailbox.smtpPort ?? mailbox.smtp_port ?? 587),
+      smtpSecure: Boolean(mailbox.smtpSecure ?? mailbox.smtp_secure ?? false),
+      smtpUsername: String(mailbox.smtpUsername ?? mailbox.smtp_username ?? "").trim(),
     },
   };
 }
@@ -291,6 +318,7 @@ function defaultSecrets(): OutreachAccountSecrets {
     mailboxAccessToken: "",
     mailboxRefreshToken: "",
     mailboxPassword: "",
+    mailboxSmtpPassword: "",
     mailboxRecoveryEmail: "",
     mailboxRecoveryCodes: "",
   };
@@ -309,6 +337,7 @@ function sanitizeSecrets(value: unknown): OutreachAccountSecrets {
     mailboxAccessToken: String(row.mailboxAccessToken ?? "").trim(),
     mailboxRefreshToken: String(row.mailboxRefreshToken ?? "").trim(),
     mailboxPassword: String(row.mailboxPassword ?? "").trim(),
+    mailboxSmtpPassword: String(row.mailboxSmtpPassword ?? row.smtpPassword ?? "").trim(),
     mailboxRecoveryEmail: String(row.mailboxRecoveryEmail ?? "").trim(),
     mailboxRecoveryCodes:
       typeof row.mailboxRecoveryCodes === "string"
@@ -357,7 +386,10 @@ function mapAccountRowFromDb(input: unknown): StoredAccount {
   return {
     id: String(row.id ?? ""),
     name: String(row.name ?? ""),
-    provider: "customerio",
+    provider:
+      String(row.provider ?? "").trim().toLowerCase() === "mailpool"
+        ? "mailpool"
+        : "customerio",
     accountType,
     status: String(row.status ?? "active") === "inactive" ? "inactive" : "active",
     config,
@@ -987,6 +1019,7 @@ export async function getOutreachAccountLookupDebug(accountId: string): Promise<
 function buildStoredAccount(input: {
   id?: string;
   name: string;
+  provider?: OutreachAccount["provider"];
   accountType?: OutreachAccount["accountType"];
   status?: OutreachAccount["status"];
   config?: unknown;
@@ -1000,7 +1033,7 @@ function buildStoredAccount(input: {
   return {
     id: input.id ?? createId("acct"),
     name: input.name.trim(),
-    provider: "customerio",
+    provider: input.provider ?? "customerio",
     accountType: input.accountType ?? "hybrid",
     status: input.status ?? "active",
     config: sanitizeAccountConfig(input.config),
@@ -1101,7 +1134,7 @@ function isMissingRelationError(error: unknown, relationName: string) {
 }
 
 async function hydrateOutreachAccountCustomerIoBilling(account: OutreachAccount): Promise<OutreachAccount> {
-  if (!account.config.customerIo.siteId.trim()) {
+  if (account.provider !== "customerio" || !account.config.customerIo.siteId.trim()) {
     return account;
   }
   const billingPeriodStart = currentCustomerIoBillingPeriodStart(account.config.customerIo.billing.billingCycleAnchorDay);
@@ -1503,6 +1536,7 @@ export async function getOutreachAccountSecrets(accountId: string): Promise<Outr
 
 export async function createOutreachAccount(input: {
   name: string;
+  provider?: OutreachAccount["provider"];
   accountType?: OutreachAccount["accountType"];
   status?: OutreachAccount["status"];
   config?: unknown;
@@ -1512,6 +1546,7 @@ export async function createOutreachAccount(input: {
   const secrets = sanitizeSecrets(input.credentials);
   const stored = buildStoredAccount({
     name: input.name,
+    provider: input.provider,
     accountType: input.accountType,
     status: input.status,
     config: input.config,
@@ -1597,6 +1632,7 @@ export async function updateOutreachAccount(
   accountId: string,
   patch: {
     name?: string;
+    provider?: OutreachAccount["provider"];
     accountType?: OutreachAccount["accountType"];
     status?: OutreachAccount["status"];
     config?: unknown;
@@ -1623,6 +1659,7 @@ export async function updateOutreachAccount(
     mailboxAccessToken: patchSecrets.mailboxAccessToken || existingSecrets.mailboxAccessToken,
     mailboxRefreshToken: patchSecrets.mailboxRefreshToken || existingSecrets.mailboxRefreshToken,
     mailboxPassword: patchSecrets.mailboxPassword || existingSecrets.mailboxPassword,
+    mailboxSmtpPassword: patchSecrets.mailboxSmtpPassword || existingSecrets.mailboxSmtpPassword,
     mailboxRecoveryEmail: patchSecrets.mailboxRecoveryEmail || existingSecrets.mailboxRecoveryEmail,
     mailboxRecoveryCodes: patchSecrets.mailboxRecoveryCodes || existingSecrets.mailboxRecoveryCodes,
   };
@@ -1640,6 +1677,7 @@ export async function updateOutreachAccount(
       updated_at: now,
     };
     if (typeof patch.name === "string") update.name = patch.name.trim();
+    if (patch.provider) update.provider = patch.provider;
     if (patch.accountType) update.account_type = patch.accountType;
     if (patch.status) update.status = patch.status;
     if (patch.lastTestAt !== undefined) update.last_test_at = patch.lastTestAt || null;
@@ -1692,6 +1730,7 @@ export async function updateOutreachAccount(
   const nextStored: StoredAccount = {
     ...current,
     name: typeof patch.name === "string" ? patch.name.trim() : current.name,
+    provider: patch.provider ?? current.provider,
     accountType: patch.accountType ?? current.accountType,
     status: patch.status ?? current.status,
     config: nextConfig,

@@ -17,10 +17,16 @@ import {
   fetchBrands,
   fetchOutreachAccounts,
   fetchOutreachProvisioningSettings,
+  refreshMailpoolOutreachAccount,
   testOutreachAccount,
   updateOutreachAccountApi,
   updateBrandApi,
 } from "@/lib/client-api";
+import {
+  getDomainDeliveryAccountId,
+  getOutreachAccountFromEmail,
+  outreachProviderLabel,
+} from "@/lib/outreach-account-helpers";
 import { trackEvent } from "@/lib/telemetry-client";
 import type { BrandRecord, OutreachAccount, OutreachProvisioningSettings } from "@/lib/factory-types";
 import ProvisioningProviderSettingsCard from "./provisioning-provider-settings-card";
@@ -282,6 +288,7 @@ function AccountInventoryCard({
     Record<string, { ok: boolean; message: string; testedAt: string }>
   >({});
   const [testingByAccountId, setTestingByAccountId] = useState<Record<string, boolean>>({});
+  const [refreshingByAccountId, setRefreshingByAccountId] = useState<Record<string, boolean>>({});
   const [deletingByAccountId, setDeletingByAccountId] = useState<Record<string, boolean>>({});
 
   const testLabel = testScope === "customerio" ? "Check sender" : "Check inbox";
@@ -303,9 +310,11 @@ function AccountInventoryCard({
           <div className="overflow-hidden rounded-xl border border-[color:var(--border)]">
             {accounts.map((account) => {
               const isSender = account.accountType !== "mailbox";
-              const primaryAddress = isSender ? account.config.customerIo.fromEmail : account.config.mailbox.email;
+              const primaryAddress = isSender ? getOutreachAccountFromEmail(account) : account.config.mailbox.email;
               const connectionLabel = isSender
-                ? `Customer.io Site ${account.config.customerIo.siteId || "missing"}`
+                ? account.provider === "mailpool"
+                  ? `${outreachProviderLabel(account)} SMTP ${account.config.mailbox.smtpHost || "missing"}`
+                  : `Customer.io Site ${account.config.customerIo.siteId || "missing"}`
                 : `${mailboxProviderLabel(account.config.mailbox.provider)} inbox`;
               const healthBadge =
                 account.lastTestStatus === "pass" ? "success" : account.lastTestStatus === "fail" ? "danger" : "muted";
@@ -323,7 +332,7 @@ function AccountInventoryCard({
                     <div className="mt-1 text-sm">{primaryAddress || "Address not set"}</div>
                     <div className="mt-1 text-xs text-[color:var(--muted-foreground)]">
                       {isSender
-                        ? "Customer.io sender"
+                        ? `${outreachProviderLabel(account)} sender`
                         : `${mailboxProviderLabel(account.config.mailbox.provider)} reply inbox`}
                     </div>
                   </div>
@@ -351,7 +360,11 @@ function AccountInventoryCard({
                       type="button"
                       variant="outline"
                       size="sm"
-                      disabled={Boolean(testingByAccountId[account.id] || deletingByAccountId[account.id])}
+                      disabled={Boolean(
+                        testingByAccountId[account.id] ||
+                          deletingByAccountId[account.id] ||
+                          refreshingByAccountId[account.id]
+                      )}
                       onClick={async () => {
                         setError("");
                         try {
@@ -377,10 +390,37 @@ function AccountInventoryCard({
                     >
                       {testingByAccountId[account.id] ? "Checking..." : testLabel}
                     </Button>
+                    {isSender && account.provider === "mailpool" ? (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        disabled={Boolean(
+                          testingByAccountId[account.id] ||
+                            deletingByAccountId[account.id] ||
+                            refreshingByAccountId[account.id]
+                        )}
+                        onClick={async () => {
+                          setError("");
+                          try {
+                            setRefreshingByAccountId((prev) => ({ ...prev, [account.id]: true }));
+                            await refreshMailpoolOutreachAccount(account.id);
+                            const refreshed = await fetchOutreachAccounts();
+                            setAccounts(refreshed);
+                          } catch (err) {
+                            setError(err instanceof Error ? err.message : "Mailpool refresh failed");
+                          } finally {
+                            setRefreshingByAccountId((prev) => ({ ...prev, [account.id]: false }));
+                          }
+                        }}
+                      >
+                        {refreshingByAccountId[account.id] ? "Refreshing..." : "Refresh Mailpool"}
+                      </Button>
+                    ) : null}
                     <Select
                       value={account.status}
                       className="w-[120px]"
-                      disabled={Boolean(deletingByAccountId[account.id])}
+                      disabled={Boolean(deletingByAccountId[account.id] || refreshingByAccountId[account.id])}
                       onChange={async (event) => {
                         const status = event.target.value === "inactive" ? "inactive" : "active";
                         const updated = await updateOutreachAccountApi(account.id, { status });
@@ -394,7 +434,11 @@ function AccountInventoryCard({
                       type="button"
                       variant="danger"
                       size="sm"
-                      disabled={Boolean(deletingByAccountId[account.id] || testingByAccountId[account.id])}
+                      disabled={Boolean(
+                        deletingByAccountId[account.id] ||
+                          testingByAccountId[account.id] ||
+                          refreshingByAccountId[account.id]
+                      )}
                       onClick={async () => {
                         const confirmed = window.confirm(`Delete account "${account.name}"?`);
                         if (!confirmed) return;
@@ -635,14 +679,14 @@ export default function OutreachSettingsClient() {
       [
         assignment.accountId,
         ...assignment.accountIds,
-        ...selectedBrand.domains.map((domainRow) => String(domainRow.customerIoAccountId ?? "").trim()),
+        ...selectedBrand.domains.map((domainRow) => getDomainDeliveryAccountId(domainRow)),
       ].filter(Boolean)
     );
 
     return deliveryAccounts
       .filter((account) => {
         if (knownAccountIds.has(account.id)) return true;
-        const fromDomain = normalizeDomainHost(account.config.customerIo.fromEmail ?? "");
+        const fromDomain = normalizeDomainHost(getOutreachAccountFromEmail(account));
         return Boolean(fromDomain && senderDomainSet.has(fromDomain));
       })
       .filter(
@@ -651,11 +695,12 @@ export default function OutreachSettingsClient() {
   }, [assignments, deliveryAccounts, selectedBrand]);
 
   const providerDefaultsReady = Boolean(
-    provisioningSettings?.customerIo.siteId.trim() &&
+    (provisioningSettings?.customerIo.siteId.trim() &&
       provisioningSettings.customerIo.hasTrackingApiKey &&
       provisioningSettings?.namecheap.apiUser.trim() &&
       provisioningSettings.namecheap.hasApiKey &&
-      provisioningSettings?.namecheap.clientIp.trim()
+      provisioningSettings?.namecheap.clientIp.trim()) ||
+      provisioningSettings?.mailpool.hasApiKey
   );
   const draftTargetMarkets = useMemo(() => normalizeLineList(brandMarketsText), [brandMarketsText]);
   const draftIcpList = useMemo(() => normalizeLineList(brandIcpText), [brandIcpText]);
@@ -1524,7 +1569,7 @@ export default function OutreachSettingsClient() {
                                         <div className="min-w-0">
                                           <div className="font-medium">{account.name}</div>
                                           <div className="text-xs text-[color:var(--muted-foreground)]">
-                                            {account.config.customerIo.fromEmail || "From address not set"}
+                                            {getOutreachAccountFromEmail(account) || "From address not set"}
                                           </div>
                                         </div>
                                       </div>
@@ -1562,7 +1607,7 @@ export default function OutreachSettingsClient() {
                                 ))}
                               </Select>
                               <div className="text-xs text-[color:var(--muted-foreground)]">
-                                From: {row.delivery?.config.customerIo.fromEmail || "Not set"}
+                                From: {(row.delivery ? getOutreachAccountFromEmail(row.delivery) : "") || "Not set"}
                               </div>
                             </div>
 

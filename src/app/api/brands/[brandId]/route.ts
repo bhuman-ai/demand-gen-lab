@@ -72,10 +72,14 @@ function normalizeDomains(value: unknown): DomainRow[] {
         registrar:
           String(row.registrar ?? "").toLowerCase() === "namecheap"
             ? ("namecheap" as DomainRow["registrar"])
-            : ("manual" as DomainRow["registrar"]),
+            : String(row.registrar ?? "").toLowerCase() === "mailpool"
+              ? ("mailpool" as DomainRow["registrar"])
+              : ("manual" as DomainRow["registrar"]),
         provider:
           String(row.provider ?? "").toLowerCase() === "customerio"
             ? ("customerio" as DomainRow["provider"])
+            : String(row.provider ?? "").toLowerCase() === "mailpool"
+              ? ("mailpool" as DomainRow["provider"])
             : ("manual" as DomainRow["provider"]),
         dnsStatus: ["pending", "configured", "verified", "error"].includes(String(row.dnsStatus ?? "").toLowerCase())
           ? (String(row.dnsStatus).toLowerCase() as DomainRow["dnsStatus"])
@@ -83,8 +87,11 @@ function normalizeDomains(value: unknown): DomainRow[] {
         fromEmail: String(row.fromEmail ?? "").trim(),
         replyMailboxEmail: String(row.replyMailboxEmail ?? "").trim(),
         forwardingTargetUrl: String(row.forwardingTargetUrl ?? row.forwarding_target_url ?? "").trim(),
+        deliveryAccountId: String(row.deliveryAccountId ?? row.delivery_account_id ?? "").trim(),
+        deliveryAccountName: String(row.deliveryAccountName ?? row.delivery_account_name ?? "").trim(),
         customerIoAccountId: String(row.customerIoAccountId ?? row.customer_io_account_id ?? "").trim(),
         customerIoAccountName: String(row.customerIoAccountName ?? row.customer_io_account_name ?? "").trim(),
+        mailpoolDomainId: String(row.mailpoolDomainId ?? row.mailpool_domain_id ?? "").trim(),
         notes: String(row.notes ?? "").trim(),
         lastProvisionedAt: String(row.lastProvisionedAt ?? "").trim(),
         lastHealthCheckAt: String(row.lastHealthCheckAt ?? row.last_health_check_at ?? "").trim(),

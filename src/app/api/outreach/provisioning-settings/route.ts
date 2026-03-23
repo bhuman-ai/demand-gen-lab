@@ -30,6 +30,7 @@ export async function PUT(request: Request) {
     const body = asRecord(await request.json());
     const customerIo = asRecord(body.customerIo);
     const namecheap = asRecord(body.namecheap);
+    const mailpool = asRecord(body.mailpool);
     const deliverability = asRecord(body.deliverability);
     const settings = await updateOutreachProvisioningSettings({
       customerIo: {
@@ -44,11 +45,31 @@ export async function PUT(request: Request) {
         clientIp: namecheap.clientIp !== undefined ? String(namecheap.clientIp ?? "") : undefined,
         apiKey: namecheap.apiKey !== undefined ? String(namecheap.apiKey ?? "") : undefined,
       },
+      mailpool: {
+        apiKey: mailpool.apiKey !== undefined ? String(mailpool.apiKey ?? "") : undefined,
+        webhookSecret:
+          mailpool.webhookSecret !== undefined ? String(mailpool.webhookSecret ?? "") : undefined,
+        webhookUrl: mailpool.webhookUrl !== undefined ? String(mailpool.webhookUrl ?? "") : undefined,
+      },
       deliverability: {
         provider:
-          deliverability.provider !== undefined ? String(deliverability.provider ?? "") as "none" | "google_postmaster" : undefined,
+          deliverability.provider !== undefined
+            ? (String(deliverability.provider ?? "") as "none" | "google_postmaster" | "mailpool")
+            : undefined,
         monitoredDomains: Array.isArray(deliverability.monitoredDomains)
           ? deliverability.monitoredDomains.map((entry) => String(entry ?? ""))
+          : undefined,
+        mailpoolInboxProviders: Array.isArray(deliverability.mailpoolInboxProviders)
+          ? deliverability.mailpoolInboxProviders.map((entry) => String(entry ?? "")) as Array<
+              | "GoogleWorkspace"
+              | "Gmail"
+              | "Outlook"
+              | "M365Outlook"
+              | "Yahoo"
+              | "Aol"
+              | "SMTP"
+              | "Hotmail"
+            >
           : undefined,
         googleClientId:
           deliverability.googleClientId !== undefined ? String(deliverability.googleClientId ?? "") : undefined,

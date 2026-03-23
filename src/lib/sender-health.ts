@@ -11,6 +11,7 @@ import {
   listDeliverabilitySeedReservations,
   listOutreachAccounts,
 } from "@/lib/outreach-data";
+import { getDomainDeliveryAccountId, getOutreachAccountFromEmail } from "@/lib/outreach-account-helpers";
 import { getOutreachProvisioningSettings } from "@/lib/outreach-provider-settings";
 
 const HEALTH_WINDOW_DAYS = 21;
@@ -143,7 +144,7 @@ function parseProbeObservation(
   const resolvedAccountId =
     senderAccountId || (payloadFromEmail ? accountIdByFromEmail.get(payloadFromEmail) ?? "" : "");
   const account = resolvedAccountId ? accountsById.get(resolvedAccountId) ?? null : null;
-  const fromEmail = payloadFromEmail || account?.config.customerIo.fromEmail.trim().toLowerCase() || "";
+  const fromEmail = payloadFromEmail || getOutreachAccountFromEmail(account).trim().toLowerCase() || "";
   const senderDomain = normalizeDomain(fromEmail.split("@")[1] ?? "");
   if (!fromEmail || !senderDomain) return null;
   const score = scorePlacement({ counts: probeRun.counts, totalMonitors: probeRun.totalMonitors });
@@ -536,7 +537,7 @@ export function buildBrandSenderHealthRows(input: {
   const accountsById = new Map(input.senderAccounts.map((account) => [account.id, account] as const));
   const accountIdByFromEmail = new Map(
     input.senderAccounts
-      .map((account) => [account.config.customerIo.fromEmail.trim().toLowerCase(), account.id] as const)
+      .map((account) => [getOutreachAccountFromEmail(account).trim().toLowerCase(), account.id] as const)
       .filter(([fromEmail]) => Boolean(fromEmail))
   );
   const observations = input.probeRuns
@@ -629,7 +630,7 @@ export function buildBrandSenderHealthRows(input: {
     const rowDomain = normalizeDomain(row.domain);
     const rowEmail = row.fromEmail?.trim().toLowerCase() || "";
     const rowAccountId =
-      row.customerIoAccountId?.trim() ||
+      getDomainDeliveryAccountId(row) ||
       (rowEmail ? accountIdByFromEmail.get(rowEmail) ?? "" : "");
     const rowAccount = rowAccountId ? accountsById.get(rowAccountId) ?? null : null;
     const rowTransportKey = transportKeyForAccount(rowAccount, rowAccountId, rowEmail);
@@ -727,7 +728,7 @@ export function evaluateSenderHealthGate(input: {
     input.domains.find(
       (domainRow) =>
         domainRow.role !== "brand" &&
-        ((accountId && String(domainRow.customerIoAccountId ?? "").trim() === accountId) ||
+        ((accountId && getDomainDeliveryAccountId(domainRow) === accountId) ||
           (fromEmail && String(domainRow.fromEmail ?? "").trim().toLowerCase() === fromEmail))
     ) ?? null;
 

@@ -46,6 +46,7 @@ import {
   summarizeSelectedSenderRoute,
   type SenderRoutingSignals,
 } from "@/lib/sender-routing";
+import { getDomainDeliveryAccountId } from "@/lib/outreach-account-helpers";
 
 function runStatusVariant(status: OutreachRun["status"]) {
   if (status === "completed") return "success" as const;
@@ -327,7 +328,7 @@ export default function CampaignClient({
       rankSenderRoutingSignals(
         (brand?.domains ?? [])
           .filter((row) => {
-            const accountId = String(row.customerIoAccountId ?? "").trim();
+            const accountId = getDomainDeliveryAccountId(row);
             return accountId ? assignedSenderIds.includes(accountId) : false;
           })
           .map((row) => buildSenderRoutingSignalFromDomainRow(row))
@@ -1174,6 +1175,29 @@ export default function CampaignClient({
                 ))}
               </div>
             ) : null}
+          </CardContent>
+        </Card>
+      ) : provisioningSettings?.deliverability.provider === "mailpool" ? (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Deliverability intelligence</CardTitle>
+            <CardDescription>
+              Mailpool spam checks and inbox placement are active for Mailpool-managed senders.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3 text-sm">
+            <div className="rounded-[10px] border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="font-medium">Mailpool placement checks</div>
+                <Badge variant="success">mailpool</Badge>
+              </div>
+              <div className="mt-2 text-sm text-[color:var(--muted-foreground)]">
+                Providers {provisioningSettings.deliverability.mailpoolInboxProviders.join(", ")}
+              </div>
+              <div className="mt-2 text-sm">
+                Sender scorecards above are driven by Mailpool inbox placement results and spam-check summaries.
+              </div>
+            </div>
           </CardContent>
         </Card>
       ) : null}

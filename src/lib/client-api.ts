@@ -1312,9 +1312,17 @@ export async function updateOutreachProvisioningSettingsApi(input: {
     clientIp?: string;
     apiKey?: string;
   };
+  mailpool?: {
+    apiKey?: string;
+    webhookSecret?: string;
+    webhookUrl?: string;
+  };
   deliverability?: {
-    provider?: "none" | "google_postmaster";
+    provider?: "none" | "google_postmaster" | "mailpool";
     monitoredDomains?: string[];
+    mailpoolInboxProviders?: Array<
+      "GoogleWorkspace" | "Gmail" | "Outlook" | "M365Outlook" | "Yahoo" | "Aol" | "SMTP" | "Hotmail"
+    >;
     googleClientId?: string;
     googleClientSecret?: string;
     googleRefreshToken?: string;
@@ -1330,7 +1338,7 @@ export async function updateOutreachProvisioningSettingsApi(input: {
 }
 
 export async function testOutreachProvisioningSettings(
-  provider: "customerio" | "namecheap" | "deliverability" | "all" = "all"
+  provider: "customerio" | "namecheap" | "mailpool" | "deliverability" | "all" = "all"
 ) {
   const response = await fetch("/api/outreach/provisioning-settings/test", {
     method: "POST",
@@ -1342,9 +1350,9 @@ export async function testOutreachProvisioningSettings(
     settings: data.settings as OutreachProvisioningSettings,
     tests: (data.tests ?? {}) as Partial<
       Record<
-        "customerIo" | "namecheap" | "deliverability",
+        "customerIo" | "namecheap" | "mailpool" | "deliverability",
         {
-          provider: "customerio" | "namecheap" | "deliverability";
+          provider: "customerio" | "namecheap" | "mailpool" | "deliverability";
           ok: boolean;
           message: string;
           details: Record<string, unknown>;
@@ -1373,9 +1381,30 @@ export async function fetchSavedNamecheapDomains() {
   };
 }
 
+export async function fetchSavedMailpoolDomains() {
+  const response = await fetch("/api/outreach/provisioning/mailpool-domains", {
+    cache: "no-store",
+  });
+  const data = await readJson(response);
+  return {
+    configured: Boolean(data.configured),
+    domains: (Array.isArray(data.domains) ? data.domains : []) as Array<{
+      id: string;
+      domain: string;
+      status: string;
+      type: string;
+      createdAt: string;
+      redirectUrl?: string;
+      expireAt?: string;
+      nameservers?: string[];
+    }>,
+  };
+}
+
 export async function provisionSenderDomain(
   brandId: string,
   input: {
+    provider?: "customerio" | "mailpool";
     accountName: string;
     assignToBrand?: boolean;
     selectedMailboxAccountId?: string;
@@ -1414,13 +1443,14 @@ export async function provisionSenderDomain(
   const data = await readJson(response);
   return data.result as {
     ok: boolean;
+    provider: "customerio" | "mailpool";
     readyToSend: boolean;
     domain: string;
     fromEmail: string;
     brand: BrandRecord;
     account: OutreachAccount;
     assignment: BrandOutreachAssignment | null;
-    namecheap: {
+    namecheap?: {
       mode: "existing" | "register";
       domainStatus: "existing" | "registered";
       existingRecordCount: number;
@@ -1428,11 +1458,21 @@ export async function provisionSenderDomain(
       forwardingEnabled: boolean;
       forwardingTargetUrl: string;
     };
-    customerIo: {
+    customerIo?: {
       senderIdentityStatus: "existing" | "created" | "manual_required" | "error";
       dnsRecordCount: number;
       sourceAccountId: string;
       sourceAccountName: string;
+    };
+    mailpool?: {
+      domainId: string;
+      domainStatus: string;
+      mailboxId: string;
+      mailboxStatus: string;
+      spamCheckId: string;
+      spamCheckStatus: string;
+      inboxPlacementId: string;
+      inboxPlacementStatus: string;
     };
     warnings: string[];
     nextSteps: string[];
@@ -1441,6 +1481,7 @@ export async function provisionSenderDomain(
 
 export async function createOutreachAccountApi(input: {
   name: string;
+  provider?: "customerio" | "mailpool";
   accountType?: "delivery" | "mailbox" | "hybrid";
   status?: "active" | "inactive";
   config?: unknown;
@@ -1459,6 +1500,7 @@ export async function updateOutreachAccountApi(
   accountId: string,
   patch: {
     name?: string;
+    provider?: "customerio" | "mailpool";
     accountType?: "delivery" | "mailbox" | "hybrid";
     status?: "active" | "inactive";
     config?: unknown;
@@ -1500,6 +1542,19 @@ export async function testOutreachAccount(
     };
     message: string;
     testedAt: string;
+  };
+}
+
+export async function refreshMailpoolOutreachAccount(accountId: string) {
+  const response = await fetch(`/api/outreach/accounts/${accountId}/mailpool/refresh`, {
+    method: "POST",
+  });
+  const data = await readJson(response);
+  return {
+    account: data.account as OutreachAccount,
+    refreshedAt: String(data.refreshedAt ?? ""),
+    mailboxDeleted: Boolean(data.mailboxDeleted),
+    updatedDomains: Number(data.updatedDomains ?? 0) || 0,
   };
 }
 

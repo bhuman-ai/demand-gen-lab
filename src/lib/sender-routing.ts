@@ -1,4 +1,5 @@
 import type { DomainRow } from "@/lib/factory-types";
+import { getDomainDeliveryAccountId, getDomainDeliveryAccountName } from "@/lib/outreach-account-helpers";
 
 export type SenderRoutingSignals = {
   senderAccountId: string;
@@ -173,12 +174,12 @@ export function buildSenderRoutingSignalFromDomainRow(
     checkedAt?: string;
   }
 ): SenderRoutingSignals | null {
-  const senderAccountId = String(row.customerIoAccountId ?? "").trim();
+  const senderAccountId = getDomainDeliveryAccountId(row);
   const fromEmail = String(row.fromEmail ?? "").trim().toLowerCase();
   if (row.role === "brand" || !senderAccountId || !fromEmail) return null;
   return {
     senderAccountId,
-    senderAccountName: row.customerIoAccountName ?? fromEmail,
+    senderAccountName: getDomainDeliveryAccountName(row) || fromEmail,
     domain: row.domain,
     fromEmail,
     automationStatus: row.automationStatus ?? "queued",

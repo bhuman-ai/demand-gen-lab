@@ -44,6 +44,7 @@ import {
   clampExperimentSampleSize,
   EXPERIMENT_MIN_VERIFIED_EMAIL_LEADS,
 } from "@/lib/experiment-policy";
+import { getOutreachAccountFromEmail, getOutreachAccountReplyToEmail } from "@/lib/outreach-account-helpers";
 import { trackEvent } from "@/lib/telemetry-client";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -1138,9 +1139,9 @@ export default function ExperimentClient({
     setSendableLeadResolutionTick((tick) => tick + 1);
   };
 
-  const launchFromEmail = String(deliveryAccount?.config.customerIo.fromEmail ?? "").trim();
+  const launchFromEmail = getOutreachAccountFromEmail(deliveryAccount).trim();
   const launchReplyToEmail = String(
-    replyMailboxAccount?.config.mailbox.email || deliveryAccount?.config.customerIo.replyToEmail || ""
+    replyMailboxAccount?.config.mailbox.email || getOutreachAccountReplyToEmail(deliveryAccount) || ""
   ).trim();
   const launchIdentityIssues = [
     !outreachAssignment?.accountId ? "delivery account not assigned" : "",

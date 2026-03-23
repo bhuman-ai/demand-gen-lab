@@ -366,14 +366,17 @@ export type DomainRow = {
   messagingHealthSummary?: string;
   seedPolicy?: "fresh_pool" | "rotating_pool" | "tainted_mailbox";
   role?: "brand" | "sender";
-  registrar?: "namecheap" | "manual";
-  provider?: "customerio" | "manual";
+  registrar?: "namecheap" | "mailpool" | "manual";
+  provider?: "customerio" | "mailpool" | "manual";
   dnsStatus?: "pending" | "configured" | "verified" | "error";
   fromEmail?: string;
   replyMailboxEmail?: string;
   forwardingTargetUrl?: string;
+  deliveryAccountId?: string;
+  deliveryAccountName?: string;
   customerIoAccountId?: string;
   customerIoAccountName?: string;
+  mailpoolDomainId?: string;
   notes?: string;
   lastProvisionedAt?: string;
   lastHealthCheckAt?: string;
@@ -415,12 +418,23 @@ export type BrandRecord = {
   updatedAt: string;
 };
 
-export type OutreachProvider = "customerio";
+export type OutreachProvider = "customerio" | "mailpool";
 
 export type ProvisioningValidationStatus = "unknown" | "pass" | "fail";
 
-export type DeliverabilityProvider = "none" | "google_postmaster";
+export type DeliverabilityProvider = "none" | "google_postmaster" | "mailpool";
 export type DeliverabilityHealthStatus = "unknown" | "healthy" | "warning" | "critical";
+export type MailpoolMailboxType = "google" | "shared" | "private" | "outlook";
+export type MailpoolResourceStatus = "pending" | "active" | "updating" | "error" | "deleted";
+export type MailpoolInboxPlacementProvider =
+  | "GoogleWorkspace"
+  | "Gmail"
+  | "Outlook"
+  | "M365Outlook"
+  | "Yahoo"
+  | "Aol"
+  | "SMTP"
+  | "Hotmail";
 
 export type DeliverabilityDomainHealth = {
   domain: string;
@@ -448,12 +462,21 @@ export type OutreachProvisioningSettings = {
     clientIp: string;
     hasApiKey: boolean;
     lastValidatedAt: string;
+      lastValidatedStatus: ProvisioningValidationStatus;
+      lastValidationMessage: string;
+    };
+  mailpool: {
+    webhookUrl: string;
+    hasApiKey: boolean;
+    hasWebhookSecret: boolean;
+    lastValidatedAt: string;
     lastValidatedStatus: ProvisioningValidationStatus;
     lastValidationMessage: string;
   };
   deliverability: {
     provider: DeliverabilityProvider;
     monitoredDomains: string[];
+    mailpoolInboxProviders: MailpoolInboxPlacementProvider[];
     hasGoogleClientId: boolean;
     hasGoogleClientSecret: boolean;
     hasGoogleRefreshToken: boolean;
@@ -507,6 +530,17 @@ export type OutreachAccountConfig = {
     replyToEmail: string;
     billing: CustomerIoBillingConfig;
   };
+  mailpool: {
+    domainId: string;
+    mailboxId: string;
+    mailboxType: MailpoolMailboxType;
+    spamCheckId: string;
+    inboxPlacementId: string;
+    status: MailpoolResourceStatus;
+    lastSpamCheckAt: string;
+    lastSpamCheckScore: number;
+    lastSpamCheckSummary: string;
+  };
   apify: {
     defaultActorId: string;
   };
@@ -517,6 +551,10 @@ export type OutreachAccountConfig = {
     host: string;
     port: number;
     secure: boolean;
+    smtpHost: string;
+    smtpPort: number;
+    smtpSecure: boolean;
+    smtpUsername: string;
   };
 };
 

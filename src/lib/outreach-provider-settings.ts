@@ -3,9 +3,12 @@ import type {
   DeliverabilityDomainHealth,
   DeliverabilityHealthStatus,
   DeliverabilityProvider,
+  MailpoolInboxPlacementProvider,
   OutreachProvisioningSettings,
   ProvisioningValidationStatus,
 } from "@/lib/factory-types";
+import { getMailpoolWebhookUrl } from "@/lib/app-url";
+import { DEFAULT_MAILPOOL_INBOX_PROVIDERS } from "@/lib/outreach-account-helpers";
 import { OutreachDataError } from "@/lib/outreach-data";
 import { decryptJson, encryptJson } from "@/lib/outreach-encryption";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
@@ -28,9 +31,16 @@ type StoredOutreachProvisioningSettings = {
       lastValidatedStatus: ProvisioningValidationStatus;
       lastValidationMessage: string;
     };
+    mailpool: {
+      webhookUrl: string;
+      lastValidatedAt: string;
+      lastValidatedStatus: ProvisioningValidationStatus;
+      lastValidationMessage: string;
+    };
     deliverability: {
       provider: DeliverabilityProvider;
       monitoredDomains: string[];
+      mailpoolInboxProviders: MailpoolInboxPlacementProvider[];
       lastValidatedAt: string;
       lastValidatedStatus: ProvisioningValidationStatus;
       lastValidationMessage: string;
@@ -50,6 +60,8 @@ type OutreachProvisioningSettingsSecrets = {
   customerIoTrackingApiKey: string;
   customerIoAppApiKey: string;
   namecheapApiKey: string;
+  mailpoolApiKey: string;
+  mailpoolWebhookSecret: string;
   deliverabilityGoogleClientId: string;
   deliverabilityGoogleClientSecret: string;
   deliverabilityGoogleRefreshToken: string;
@@ -74,9 +86,18 @@ type OutreachProvisioningSettingsPatch = {
     lastValidatedStatus?: ProvisioningValidationStatus;
     lastValidationMessage?: string;
   };
+  mailpool?: {
+    apiKey?: string;
+    webhookSecret?: string;
+    webhookUrl?: string;
+    lastValidatedAt?: string;
+    lastValidatedStatus?: ProvisioningValidationStatus;
+    lastValidationMessage?: string;
+  };
   deliverability?: {
     provider?: DeliverabilityProvider;
     monitoredDomains?: string[];
+    mailpoolInboxProviders?: MailpoolInboxPlacementProvider[];
     googleClientId?: string;
     googleClientSecret?: string;
     googleRefreshToken?: string;
@@ -112,6 +133,8 @@ function defaultSecrets(): OutreachProvisioningSettingsSecrets {
     customerIoTrackingApiKey: "",
     customerIoAppApiKey: "",
     namecheapApiKey: "",
+    mailpoolApiKey: "",
+    mailpoolWebhookSecret: "",
     deliverabilityGoogleClientId: "",
     deliverabilityGoogleClientSecret: "",
     deliverabilityGoogleRefreshToken: "",
@@ -124,6 +147,8 @@ function sanitizeSecrets(value: unknown): OutreachProvisioningSettingsSecrets {
     customerIoTrackingApiKey: String(row.customerIoTrackingApiKey ?? "").trim(),
     customerIoAppApiKey: String(row.customerIoAppApiKey ?? "").trim(),
     namecheapApiKey: String(row.namecheapApiKey ?? "").trim(),
+    mailpoolApiKey: String(row.mailpoolApiKey ?? "").trim(),
+    mailpoolWebhookSecret: String(row.mailpoolWebhookSecret ?? "").trim(),
     deliverabilityGoogleClientId: String(row.deliverabilityGoogleClientId ?? "").trim(),
     deliverabilityGoogleClientSecret: String(row.deliverabilityGoogleClientSecret ?? "").trim(),
     deliverabilityGoogleRefreshToken: String(row.deliverabilityGoogleRefreshToken ?? "").trim(),
@@ -147,9 +172,16 @@ function defaultStoredConfig(): StoredOutreachProvisioningSettings["config"] {
       lastValidatedStatus: "unknown",
       lastValidationMessage: "",
     },
+    mailpool: {
+      webhookUrl: getMailpoolWebhookUrl(),
+      lastValidatedAt: "",
+      lastValidatedStatus: "unknown",
+      lastValidationMessage: "",
+    },
     deliverability: {
       provider: "none",
       monitoredDomains: [],
+      mailpoolInboxProviders: [...DEFAULT_MAILPOOL_INBOX_PROVIDERS],
       lastValidatedAt: "",
       lastValidatedStatus: "unknown",
       lastValidationMessage: "",
@@ -169,7 +201,10 @@ function sanitizeValidationStatus(value: unknown): ProvisioningValidationStatus 
 }
 
 function sanitizeDeliverabilityProvider(value: unknown): DeliverabilityProvider {
-  return String(value ?? "").trim() === "google_postmaster" ? "google_postmaster" : "none";
+  const normalized = String(value ?? "").trim();
+  if (normalized === "google_postmaster") return "google_postmaster";
+  if (normalized === "mailpool") return "mailpool";
+  return "none";
 }
 
 function sanitizeDeliverabilityHealthStatus(value: unknown): DeliverabilityHealthStatus {
@@ -187,6 +222,28 @@ function sanitizeMonitoredDomains(value: unknown) {
         .filter(Boolean)
     )
   );
+}
+
+function sanitizeMailpoolInboxProviders(value: unknown): MailpoolInboxPlacementProvider[] {
+  if (!Array.isArray(value)) return [...DEFAULT_MAILPOOL_INBOX_PROVIDERS];
+  const allowed = new Set<MailpoolInboxPlacementProvider>([
+    "GoogleWorkspace",
+    "Gmail",
+    "Outlook",
+    "M365Outlook",
+    "Yahoo",
+    "Aol",
+    "SMTP",
+    "Hotmail",
+  ]);
+  const providers = Array.from(
+    new Set(
+      value
+        .map((entry) => String(entry ?? "").trim())
+        .filter((entry): entry is MailpoolInboxPlacementProvider => allowed.has(entry as MailpoolInboxPlacementProvider))
+    )
+  );
+  return providers.length ? providers : [...DEFAULT_MAILPOOL_INBOX_PROVIDERS];
 }
 
 function sanitizeDomainSnapshots(value: unknown): DeliverabilityDomainHealth[] {
@@ -208,6 +265,7 @@ function sanitizeConfig(value: unknown): StoredOutreachProvisioningSettings["con
   const row = asRecord(value);
   const customerIo = asRecord(row.customerIo);
   const namecheap = asRecord(row.namecheap);
+  const mailpool = asRecord(row.mailpool);
   const deliverability = asRecord(row.deliverability);
   const customerIoRegion = String(customerIo.workspaceRegion ?? "").trim().toLowerCase();
   return {
@@ -237,10 +295,23 @@ function sanitizeConfig(value: unknown): StoredOutreachProvisioningSettings["con
         namecheap.lastValidationMessage ?? namecheap.last_validation_message ?? ""
       ).trim(),
     },
+    mailpool: {
+      webhookUrl: String(mailpool.webhookUrl ?? mailpool.webhook_url ?? getMailpoolWebhookUrl()).trim() || getMailpoolWebhookUrl(),
+      lastValidatedAt: String(mailpool.lastValidatedAt ?? mailpool.last_validated_at ?? "").trim(),
+      lastValidatedStatus: sanitizeValidationStatus(
+        mailpool.lastValidatedStatus ?? mailpool.last_validated_status
+      ),
+      lastValidationMessage: String(
+        mailpool.lastValidationMessage ?? mailpool.last_validation_message ?? ""
+      ).trim(),
+    },
     deliverability: {
       provider: sanitizeDeliverabilityProvider(deliverability.provider),
       monitoredDomains: sanitizeMonitoredDomains(
         deliverability.monitoredDomains ?? deliverability.monitored_domains
+      ),
+      mailpoolInboxProviders: sanitizeMailpoolInboxProviders(
+        deliverability.mailpoolInboxProviders ?? deliverability.mailpool_inbox_providers
       ),
       lastValidatedAt: String(
         deliverability.lastValidatedAt ?? deliverability.last_validated_at ?? ""
@@ -303,9 +374,18 @@ function mapStoredSettings(row: StoredOutreachProvisioningSettings): OutreachPro
       lastValidatedStatus: row.config.namecheap.lastValidatedStatus,
       lastValidationMessage: row.config.namecheap.lastValidationMessage,
     },
+    mailpool: {
+      webhookUrl: row.config.mailpool.webhookUrl || getMailpoolWebhookUrl(),
+      hasApiKey: Boolean(secrets.mailpoolApiKey.trim()),
+      hasWebhookSecret: Boolean(secrets.mailpoolWebhookSecret.trim()),
+      lastValidatedAt: row.config.mailpool.lastValidatedAt,
+      lastValidatedStatus: row.config.mailpool.lastValidatedStatus,
+      lastValidationMessage: row.config.mailpool.lastValidationMessage,
+    },
     deliverability: {
       provider: row.config.deliverability.provider,
       monitoredDomains: row.config.deliverability.monitoredDomains,
+      mailpoolInboxProviders: row.config.deliverability.mailpoolInboxProviders,
       hasGoogleClientId: Boolean(secrets.deliverabilityGoogleClientId.trim()),
       hasGoogleClientSecret: Boolean(secrets.deliverabilityGoogleClientSecret.trim()),
       hasGoogleRefreshToken: Boolean(secrets.deliverabilityGoogleRefreshToken.trim()),
@@ -443,6 +523,7 @@ export async function updateOutreachProvisioningSettings(
   );
   const nextCustomerIo = patch.customerIo ?? {};
   const nextNamecheap = patch.namecheap ?? {};
+  const nextMailpool = patch.mailpool ?? {};
   const nextDeliverability = patch.deliverability ?? {};
   const now = nowIso();
 
@@ -483,6 +564,21 @@ export async function updateOutreachProvisioningSettings(
           ? String(nextNamecheap.lastValidationMessage).trim()
           : existing.config.namecheap.lastValidationMessage,
     },
+    mailpool: {
+      webhookUrl:
+        nextMailpool.webhookUrl !== undefined
+          ? String(nextMailpool.webhookUrl).trim() || getMailpoolWebhookUrl()
+          : existing.config.mailpool.webhookUrl || getMailpoolWebhookUrl(),
+      lastValidatedAt:
+        nextMailpool.lastValidatedAt !== undefined
+          ? String(nextMailpool.lastValidatedAt).trim()
+          : existing.config.mailpool.lastValidatedAt,
+      lastValidatedStatus: nextMailpool.lastValidatedStatus ?? existing.config.mailpool.lastValidatedStatus,
+      lastValidationMessage:
+        nextMailpool.lastValidationMessage !== undefined
+          ? String(nextMailpool.lastValidationMessage).trim()
+          : existing.config.mailpool.lastValidationMessage,
+    },
     deliverability: {
       provider:
         nextDeliverability.provider !== undefined
@@ -492,6 +588,10 @@ export async function updateOutreachProvisioningSettings(
         nextDeliverability.monitoredDomains !== undefined
           ? sanitizeMonitoredDomains(nextDeliverability.monitoredDomains)
           : existing.config.deliverability.monitoredDomains,
+      mailpoolInboxProviders:
+        nextDeliverability.mailpoolInboxProviders !== undefined
+          ? sanitizeMailpoolInboxProviders(nextDeliverability.mailpoolInboxProviders)
+          : existing.config.deliverability.mailpoolInboxProviders,
       lastValidatedAt:
         nextDeliverability.lastValidatedAt !== undefined
           ? String(nextDeliverability.lastValidatedAt).trim()
@@ -528,6 +628,9 @@ export async function updateOutreachProvisioningSettings(
       String(nextCustomerIo.trackingApiKey ?? "").trim() || existingSecrets.customerIoTrackingApiKey,
     customerIoAppApiKey: String(nextCustomerIo.appApiKey ?? "").trim() || existingSecrets.customerIoAppApiKey,
     namecheapApiKey: String(nextNamecheap.apiKey ?? "").trim() || existingSecrets.namecheapApiKey,
+    mailpoolApiKey: String(nextMailpool.apiKey ?? "").trim() || existingSecrets.mailpoolApiKey,
+    mailpoolWebhookSecret:
+      String(nextMailpool.webhookSecret ?? "").trim() || existingSecrets.mailpoolWebhookSecret,
     deliverabilityGoogleClientId:
       String(nextDeliverability.googleClientId ?? "").trim() || existingSecrets.deliverabilityGoogleClientId,
     deliverabilityGoogleClientSecret:

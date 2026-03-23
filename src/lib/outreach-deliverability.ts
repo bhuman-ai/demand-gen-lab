@@ -5,6 +5,7 @@ import type {
   OutreachAccount,
   OutreachRunEvent,
 } from "@/lib/factory-types";
+import { getOutreachAccountFromEmail } from "@/lib/outreach-account-helpers";
 import type { ProvisioningProviderTestResult } from "@/lib/outreach-provisioning";
 
 const GOOGLE_OAUTH_TOKEN_URL = "https://oauth2.googleapis.com/token";
@@ -125,8 +126,7 @@ function resolveSenderKey(input: {
     payloadAccountId ||
     (payloadFromEmail ? input.accountIdByFromEmail.get(payloadFromEmail) ?? "" : "");
   const account = accountId ? input.accountsById.get(accountId) ?? null : null;
-  const fromEmail =
-    payloadFromEmail || account?.config.customerIo.fromEmail.trim().toLowerCase() || "";
+  const fromEmail = payloadFromEmail || getOutreachAccountFromEmail(account).trim().toLowerCase() || "";
   const senderAccountName = input.probeRun?.senderAccountName.trim() || asText(payload.senderAccountName) || account?.name || fromEmail;
   const senderKey = accountId || fromEmail;
   return {
@@ -149,7 +149,7 @@ export function buildSenderDeliverabilityScorecards(input: {
   const accountsById = new Map(input.senderAccounts.map((account) => [account.id, account] as const));
   const accountIdByFromEmail = new Map(
     input.senderAccounts
-      .map((account) => [account.config.customerIo.fromEmail.trim().toLowerCase(), account.id] as const)
+      .map((account) => [getOutreachAccountFromEmail(account).trim().toLowerCase(), account.id] as const)
       .filter(([fromEmail]) => Boolean(fromEmail))
   );
   const latestBySenderKey = new Map<string, SenderDeliverabilityScorecard>();
@@ -297,7 +297,7 @@ export function buildSenderDeliverabilityScorecards(input: {
     latestBySenderKey.set(senderKey, {
       senderAccountId: account.id,
       senderAccountName: account.name,
-      fromEmail: account.config.customerIo.fromEmail.trim().toLowerCase(),
+      fromEmail: getOutreachAccountFromEmail(account).trim().toLowerCase(),
       checkedAt: "",
       placement: "unknown",
       totalMonitors: 0,

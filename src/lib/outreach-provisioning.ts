@@ -1352,6 +1352,10 @@ function isMailpoolMailboxLimitError(error: unknown) {
   return error instanceof Error && /mailboxes count limit exceeded/i.test(error.message);
 }
 
+function isMailpoolGoogleCredentialsPendingError(error: unknown) {
+  return error instanceof Error && /google workspace credentials not found/i.test(error.message);
+}
+
 async function ensureMailpoolGoogleSlots(apiKey: string, requiredAvailable = 1) {
   let current = await getMailpoolSubscriptionSlots(apiKey);
   if (availableMailpoolGoogleSlots(current) >= requiredAvailable) {
@@ -1828,27 +1832,54 @@ export async function provisionMailpoolSender(
     }
   }
 
-  const spamCheck = mailbox.id ? await createMailpoolSpamCheck({ apiKey, mailboxId: mailbox.id }) : null;
-  const resolvedSpamCheck =
-    spamCheck?.id ? await waitForMailpoolSpamCheck(apiKey, spamCheck.id) : null;
-
+  const mailboxReadyForDelivery = Boolean(
+    mailbox.status === "active" &&
+      String(mailbox.smtpHost ?? "").trim() &&
+      String(mailbox.imapHost ?? "").trim() &&
+      (String(mailbox.smtpPassword ?? mailbox.password ?? "").trim() ||
+        String(mailbox.imapPassword ?? mailbox.password ?? "").trim())
+  );
+  let spamCheck: MailpoolSpamCheck | null = null;
+  let resolvedSpamCheck: MailpoolSpamCheck | null = null;
   const inboxProviders =
     settings.deliverability.mailpoolInboxProviders.length
       ? settings.deliverability.mailpoolInboxProviders
       : ([...DEFAULT_MAILPOOL_INBOX_PROVIDERS] as MailpoolInboxPlacementProvider[]);
-  const inboxPlacement = mailbox.id
-    ? await createMailpoolInboxPlacement({
+  let inboxPlacement: MailpoolInboxPlacement | null = null;
+  let runningInboxPlacement: MailpoolInboxPlacement | null = null;
+  let resolvedInboxPlacement: MailpoolInboxPlacement | null = null;
+
+  const warnings: string[] = [];
+  const nextSteps: string[] = [];
+
+  if (mailboxReadyForDelivery && mailbox.id) {
+    try {
+      spamCheck = await createMailpoolSpamCheck({ apiKey, mailboxId: mailbox.id });
+      resolvedSpamCheck =
+        spamCheck?.id ? await waitForMailpoolSpamCheck(apiKey, spamCheck.id) : null;
+
+      inboxPlacement = await createMailpoolInboxPlacement({
         apiKey,
         mailboxId: mailbox.id,
         providers: inboxProviders,
-      })
-    : null;
-  const runningInboxPlacement =
-    inboxPlacement?.id ? await runMailpoolInboxPlacement(apiKey, inboxPlacement.id) : inboxPlacement;
-  const resolvedInboxPlacement =
-    runningInboxPlacement?.id
-      ? await waitForMailpoolInboxPlacement(apiKey, runningInboxPlacement.id)
-      : null;
+      });
+      runningInboxPlacement =
+        inboxPlacement?.id ? await runMailpoolInboxPlacement(apiKey, inboxPlacement.id) : inboxPlacement;
+      resolvedInboxPlacement =
+        runningInboxPlacement?.id
+          ? await waitForMailpoolInboxPlacement(apiKey, runningInboxPlacement.id)
+          : null;
+    } catch (error) {
+      if (!isMailpoolGoogleCredentialsPendingError(error)) {
+        throw error;
+      }
+      warnings.push("Mailpool mailbox exists, but Google Workspace credentials are still provisioning.");
+      nextSteps.push("Wait for Mailpool to finish Google Workspace mailbox setup, then refresh the sender.");
+    }
+  } else {
+    warnings.push("Mailpool mailbox is still provisioning and is not ready for SMTP, IMAP, or deliverability checks yet.");
+    nextSteps.push("Wait for Mailpool to mark the mailbox active, then refresh the sender to sync credentials.");
+  }
 
   const account = await ensureMailpoolHybridAccount({
     accountName: input.accountName.trim() || `${brand.name} ${domain}`,
@@ -1857,10 +1888,6 @@ export async function provisionMailpoolSender(
     inboxPlacement: resolvedInboxPlacement,
     replyToEmail: fromEmail,
   });
-
-  if (!supportsMailpoolDelivery(account, (await getOutreachAccountSecrets(account.id)) ?? undefined)) {
-    throw new Error("Mailpool returned incomplete SMTP credentials for this mailbox.");
-  }
 
   const assignment =
     input.assignToBrand === false
@@ -1910,7 +1937,6 @@ export async function provisionMailpoolSender(
     }
   }
 
-  const warnings: string[] = [];
   if (mailpoolDomain.status !== "active") {
     warnings.push(`Mailpool domain is still ${mailpoolDomain.status}. DNS may still be propagating.`);
   }
@@ -1921,7 +1947,6 @@ export async function provisionMailpoolSender(
     warnings.push("Mailpool inbox placement is still pending.");
   }
 
-  const nextSteps: string[] = [];
   if (mailpoolDomain.status !== "active") {
     nextSteps.push("Wait for Mailpool to finish domain activation and DNS propagation.");
   }
@@ -1935,10 +1960,7 @@ export async function provisionMailpoolSender(
     provider: "mailpool",
     readyToSend: Boolean(
       mailpoolDomain.status === "active" &&
-        mailbox.smtpHost &&
-        mailbox.imapHost &&
-        mailbox.smtpPassword &&
-        mailbox.imapPassword
+        supportsMailpoolDelivery(account, (await getOutreachAccountSecrets(account.id)) ?? undefined)
     ),
     domain,
     fromEmail,

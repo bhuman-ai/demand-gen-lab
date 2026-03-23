@@ -35,9 +35,30 @@ export type OperatorToolName =
   | "get_brand_snapshot"
   | "get_sender_snapshot"
   | "summarize_campaign_status"
+  | "get_campaign_snapshot"
+  | "summarize_experiments"
+  | "get_experiment_snapshot"
+  | "summarize_leads"
   | "summarize_inbox"
   | "refresh_mailpool_sender"
-  | "provision_mailpool_sender";
+  | "provision_mailpool_sender"
+  | "create_brand"
+  | "update_brand"
+  | "delete_brand"
+  | "add_brand_lead"
+  | "update_brand_lead"
+  | "create_experiment"
+  | "update_experiment"
+  | "delete_experiment"
+  | "launch_experiment_run"
+  | "control_experiment_run"
+  | "promote_experiment_to_campaign"
+  | "update_campaign"
+  | "delete_campaign"
+  | "launch_campaign_run"
+  | "control_campaign_run"
+  | "send_reply_draft"
+  | "dismiss_reply_draft";
 
 export type OperatorReceipt = {
   title: string;

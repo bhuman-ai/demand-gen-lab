@@ -146,6 +146,57 @@ function extractDomain(message: string) {
   return match?.[1] ?? "";
 }
 
+function extractQuotedText(message: string) {
+  const match = message.match(/["“”'`](.+?)["“”'`]/);
+  return match?.[1]?.trim() ?? "";
+}
+
+function normalizeMatchText(value: string) {
+  return value.toLowerCase().replace(/[`"'“”’]/g, "").replace(/\s+/g, " ").trim();
+}
+
+function findNamedItem<T extends { id: string; name?: string; subject?: string; status?: string }>(
+  items: T[],
+  input: {
+    explicitId?: string;
+    explicitName?: string;
+    message: string;
+    statusHints?: string[];
+  }
+) {
+  if (input.explicitId) {
+    return items.find((item) => item.id === input.explicitId) ?? null;
+  }
+
+  const messageText = normalizeMatchText(input.message);
+  const explicitName = normalizeMatchText(input.explicitName ?? "");
+  const candidates = items.filter((item) => {
+    if (!input.statusHints?.length) return true;
+    return input.statusHints.some((status) => normalizeMatchText(item.status ?? "") === normalizeMatchText(status));
+  });
+
+  if (explicitName) {
+    const exact = candidates.find((item) => {
+      const label = normalizeMatchText(String(item.name ?? item.subject ?? ""));
+      return label === explicitName;
+    });
+    if (exact) return exact;
+  }
+
+  const matched =
+    candidates.find((item) => {
+      const label = normalizeMatchText(String(item.name ?? item.subject ?? ""));
+      return label.length > 0 && messageText.includes(label);
+    }) ?? null;
+  if (matched) return matched;
+
+  if (candidates.length === 1) {
+    return candidates[0] ?? null;
+  }
+
+  return null;
+}
+
 function summarizeActionPreview(action: OperatorAction): OperatorChatAssistantReply {
   const previewSummary = asString(action.preview.summary) || "Operator prepared an action preview.";
   return {
@@ -208,9 +259,28 @@ function summarizePromptContext(
       })),
     },
     routing: context.routing,
-    campaigns: options.includeCampaigns ? context.campaigns : undefined,
-    experiments: context.experiments,
-    inbox: context.inbox,
+    campaigns: options.includeCampaigns
+      ? {
+          ...context.campaigns,
+          items: context.campaigns.items.slice(0, 10),
+        }
+      : undefined,
+    experiments: {
+      ...context.experiments,
+      items: context.experiments.items.slice(0, 10),
+    },
+    leads: {
+      ...context.leads,
+      items: context.leads.items.slice(0, 20),
+    },
+    inbox: {
+      threads: context.inbox.threads,
+      newThreads: context.inbox.newThreads,
+      openThreads: context.inbox.openThreads,
+      closedThreads: context.inbox.closedThreads,
+      threadItems: context.inbox.threadItems.slice(0, 10),
+      draftItems: context.inbox.draftItems.slice(0, 10),
+    },
     issues: context.issues,
     nextActions: context.nextActions,
   };
@@ -264,6 +334,121 @@ function resolveSenderAccountId(
   return "";
 }
 
+const TOOLS_WITH_BRAND_CONTEXT = new Set<OperatorToolName>([
+  "get_brand_snapshot",
+  "summarize_campaign_status",
+  "get_campaign_snapshot",
+  "summarize_experiments",
+  "get_experiment_snapshot",
+  "summarize_leads",
+  "summarize_inbox",
+  "provision_mailpool_sender",
+  "update_brand",
+  "delete_brand",
+  "add_brand_lead",
+  "update_brand_lead",
+  "create_experiment",
+  "update_experiment",
+  "delete_experiment",
+  "launch_experiment_run",
+  "control_experiment_run",
+  "promote_experiment_to_campaign",
+  "update_campaign",
+  "delete_campaign",
+  "launch_campaign_run",
+  "control_campaign_run",
+  "send_reply_draft",
+  "dismiss_reply_draft",
+]);
+
+function resolveExperimentId(
+  rawInput: Record<string, unknown>,
+  context: Awaited<ReturnType<typeof getOperatorBrandContext>>,
+  message: string
+) {
+  const matched = findNamedItem(context?.experiments.items ?? [], {
+    explicitId: asString(rawInput.experimentId),
+    explicitName:
+      asString(rawInput.experimentName) ||
+      (asString(rawInput.name) && !asString(rawInput.brandId) ? asString(rawInput.name) : "") ||
+      extractQuotedText(message),
+    message,
+    statusHints:
+      /\brunning\b/.test(message.toLowerCase())
+        ? ["Running", "Sourcing"]
+        : /\bdraft\b/.test(message.toLowerCase())
+          ? ["Draft"]
+          : /\bcompleted\b/.test(message.toLowerCase())
+            ? ["Completed"]
+            : undefined,
+  });
+  return matched?.id ?? "";
+}
+
+function resolveCampaignId(
+  rawInput: Record<string, unknown>,
+  context: Awaited<ReturnType<typeof getOperatorBrandContext>>,
+  message: string
+) {
+  const matched = findNamedItem(context?.campaigns.items ?? [], {
+    explicitId: asString(rawInput.campaignId),
+    explicitName: asString(rawInput.campaignName) || extractQuotedText(message),
+    message,
+    statusHints:
+      /\bactive\b/.test(message.toLowerCase())
+        ? ["active"]
+        : /\bdraft\b/.test(message.toLowerCase())
+          ? ["draft"]
+          : /\bpaused\b/.test(message.toLowerCase())
+            ? ["paused"]
+            : undefined,
+  });
+  return matched?.id ?? "";
+}
+
+function resolveLeadId(
+  rawInput: Record<string, unknown>,
+  context: Awaited<ReturnType<typeof getOperatorBrandContext>>,
+  message: string
+) {
+  const matched = findNamedItem(context?.leads.items ?? [], {
+    explicitId: asString(rawInput.leadId),
+    explicitName: asString(rawInput.leadName) || asString(rawInput.name) || extractQuotedText(message),
+    message,
+    statusHints:
+      /\bqualified\b/.test(message.toLowerCase())
+        ? ["qualified"]
+        : /\bcontacted\b/.test(message.toLowerCase())
+          ? ["contacted"]
+          : /\bclosed\b/.test(message.toLowerCase())
+            ? ["closed"]
+            : /\bnew\b/.test(message.toLowerCase())
+              ? ["new"]
+              : undefined,
+  });
+  return matched?.id ?? "";
+}
+
+function resolveDraftId(
+  rawInput: Record<string, unknown>,
+  context: Awaited<ReturnType<typeof getOperatorBrandContext>>,
+  message: string
+) {
+  const matched = findNamedItem(
+    (context?.inbox.draftItems ?? []).map((draft) => ({
+      ...draft,
+      name: draft.subject,
+    })),
+    {
+      explicitId: asString(rawInput.draftId),
+      explicitName: asString(rawInput.draftSubject) || extractQuotedText(message),
+      message,
+      statusHints: /\bdraft\b/.test(message.toLowerCase()) ? ["draft"] : undefined,
+    }
+  );
+  return matched?.id ?? "";
+}
+
 function normalizeRequestedAction(input: {
   raw: unknown;
   brandId: string;
@@ -279,11 +464,7 @@ function normalizeRequestedAction(input: {
   }
 
   const toolInput = { ...asRecord(row.input) };
-  if (
-    input.brandId &&
-    ["get_brand_snapshot", "summarize_campaign_status", "summarize_inbox", "provision_mailpool_sender"].includes(toolName) &&
-    !asString(toolInput.brandId)
-  ) {
+  if (input.brandId && TOOLS_WITH_BRAND_CONTEXT.has(toolName) && !asString(toolInput.brandId)) {
     toolInput.brandId = input.brandId;
   }
 
@@ -302,6 +483,68 @@ function normalizeRequestedAction(input: {
     const accountId = resolveSenderAccountId(toolInput, input.context);
     if (!accountId) return null;
     toolInput.accountId = accountId;
+  }
+
+  if (
+    [
+      "get_experiment_snapshot",
+      "update_experiment",
+      "delete_experiment",
+      "launch_experiment_run",
+      "control_experiment_run",
+      "promote_experiment_to_campaign",
+    ].includes(toolName)
+  ) {
+    const experimentId = resolveExperimentId(toolInput, input.context, input.message);
+    if (!experimentId) return null;
+    toolInput.experimentId = experimentId;
+    if (!asString(toolInput.experimentName)) {
+      toolInput.experimentName =
+        input.context?.experiments.items.find((item) => item.id === experimentId)?.name ?? "";
+    }
+  }
+
+  if (
+    ["get_campaign_snapshot", "update_campaign", "delete_campaign", "launch_campaign_run", "control_campaign_run"].includes(
+      toolName
+    )
+  ) {
+    const campaignId = resolveCampaignId(toolInput, input.context, input.message);
+    if (!campaignId) return null;
+    toolInput.campaignId = campaignId;
+    if (!asString(toolInput.campaignName)) {
+      toolInput.campaignName =
+        input.context?.campaigns.items.find((item) => item.id === campaignId)?.name ?? "";
+    }
+  }
+
+  if (toolName === "update_brand_lead") {
+    const leadId = resolveLeadId(toolInput, input.context, input.message);
+    if (!leadId) return null;
+    toolInput.leadId = leadId;
+    if (!asString(toolInput.leadName)) {
+      toolInput.leadName =
+        input.context?.leads.items.find((item) => item.id === leadId)?.name ?? "";
+    }
+  }
+
+  if (toolName === "send_reply_draft" || toolName === "dismiss_reply_draft") {
+    const draftId = resolveDraftId(toolInput, input.context, input.message);
+    if (!draftId) return null;
+    toolInput.draftId = draftId;
+    if (!asString(toolInput.draftSubject)) {
+      toolInput.draftSubject =
+        input.context?.inbox.draftItems.find((item) => item.id === draftId)?.subject ?? "";
+    }
+  }
+
+  if (toolName === "control_campaign_run" && asString(toolInput.action).toLowerCase() === "resume_sender_deliverability") {
+    toolInput.senderAccountId =
+      asString(toolInput.senderAccountId) || input.context?.routing.preferredSenderAccountId || "";
+  }
+
+  if (toolName === "delete_brand" && !asString(toolInput.brandName)) {
+    toolInput.brandName = input.context?.brand.name ?? "";
   }
 
   return {
@@ -358,6 +601,9 @@ function buildOperatorPrompt(input: {
     "For a casual greeting, do not dump account status and do not propose an action.",
     "Only use requestedAction.toolName values from the provided tool catalog.",
     "Never invent IDs, emails, or domains that are not in the provided context or the latest user message.",
+    "If the user asks to create, update, launch, pause, resume, cancel, send, dismiss, or delete something and there is a matching tool, use it.",
+    "When matching experiments, campaigns, leads, or reply drafts, prefer the IDs and names in the provided context items.",
+    "If there is exactly one obvious running, draft, active, or pending object that matches the user's words, it is okay to target it.",
     "For refresh_mailpool_sender and get_sender_snapshot, prefer using accountId from the context.",
     "For provision_mailpool_sender, include any known fields such as brandId, domain, fromLocalPart, domainMode, and registrant fields.",
     `Mode: ${input.mode === "recommendation_only" ? "recommendation_only" : "default"}`,
@@ -450,6 +696,11 @@ function inferActionFromMessage(
   if (input.structuredAction) return input.structuredAction;
   const message = input.message.trim().toLowerCase();
   if (!message) return null;
+  const quoted = extractQuotedText(input.message);
+  const experimentId = resolveExperimentId({}, context, input.message);
+  const campaignId = resolveCampaignId({}, context, input.message);
+  const draftId = resolveDraftId({}, context, input.message);
+  const leadId = resolveLeadId({}, context, input.message);
 
   if (context?.brand.id && message.includes("inbox")) {
     return {
@@ -458,9 +709,135 @@ function inferActionFromMessage(
     };
   }
 
-  if (context?.brand.id && message.includes("campaign")) {
+  if (context?.brand.id && /\bleads?\b/.test(message)) {
+    if ((message.includes("add") || message.includes("create")) && quoted) {
+      return {
+        toolName: "add_brand_lead",
+        input: { brandId: context.brand.id, name: quoted },
+      };
+    }
+    if ((message.includes("update") || message.includes("mark")) && leadId) {
+      return {
+        toolName: "update_brand_lead",
+        input: {
+          brandId: context.brand.id,
+          leadId,
+          status: message.includes("qualified")
+            ? "qualified"
+            : message.includes("contacted")
+              ? "contacted"
+              : message.includes("closed")
+                ? "closed"
+                : message.includes("new")
+                  ? "new"
+                  : "",
+        },
+      };
+    }
+    return {
+      toolName: "summarize_leads",
+      input: { brandId: context.brand.id },
+    };
+  }
+
+  if (context?.brand.id && /\bdrafts?\b/.test(message) && message.includes("send") && draftId) {
+    return {
+      toolName: "send_reply_draft",
+      input: { brandId: context.brand.id, draftId },
+    };
+  }
+
+  if (context?.brand.id && /\bdrafts?\b/.test(message) && (message.includes("dismiss") || message.includes("skip")) && draftId) {
+    return {
+      toolName: "dismiss_reply_draft",
+      input: { brandId: context.brand.id, draftId },
+    };
+  }
+
+  if (context?.brand.id && /\bcampaigns?\b/.test(message)) {
+    if ((message.includes("launch") || message.includes("start")) && campaignId) {
+      return {
+        toolName: "launch_campaign_run",
+        input: { brandId: context.brand.id, campaignId },
+      };
+    }
+    if ((message.includes("pause") || message.includes("resume") || message.includes("cancel")) && campaignId) {
+      return {
+        toolName: "control_campaign_run",
+        input: {
+          brandId: context.brand.id,
+          campaignId,
+          action: message.includes("pause") ? "pause" : message.includes("resume") ? "resume" : "cancel",
+        },
+      };
+    }
+    if (message.includes("probe") && campaignId) {
+      return {
+        toolName: "control_campaign_run",
+        input: { brandId: context.brand.id, campaignId, action: "probe_deliverability" },
+      };
+    }
+    if ((message.includes("delete") || message.includes("remove")) && campaignId) {
+      return {
+        toolName: "delete_campaign",
+        input: { brandId: context.brand.id, campaignId },
+      };
+    }
+    if (campaignId) {
+      return {
+        toolName: "get_campaign_snapshot",
+        input: { brandId: context.brand.id, campaignId },
+      };
+    }
     return {
       toolName: "summarize_campaign_status",
+      input: { brandId: context.brand.id },
+    };
+  }
+
+  if (context?.brand.id && /\bexperiments?\b/.test(message)) {
+    if ((message.includes("create") || message.includes("add")) && quoted) {
+      return {
+        toolName: "create_experiment",
+        input: { brandId: context.brand.id, name: quoted },
+      };
+    }
+    if ((message.includes("launch") || message.includes("start")) && experimentId) {
+      return {
+        toolName: "launch_experiment_run",
+        input: { brandId: context.brand.id, experimentId },
+      };
+    }
+    if ((message.includes("pause") || message.includes("resume") || message.includes("cancel")) && experimentId) {
+      return {
+        toolName: "control_experiment_run",
+        input: {
+          brandId: context.brand.id,
+          experimentId,
+          action: message.includes("pause") ? "pause" : message.includes("resume") ? "resume" : "cancel",
+        },
+      };
+    }
+    if ((message.includes("promote") || message.includes("make campaign")) && experimentId) {
+      return {
+        toolName: "promote_experiment_to_campaign",
+        input: { brandId: context.brand.id, experimentId },
+      };
+    }
+    if ((message.includes("delete") || message.includes("remove")) && experimentId) {
+      return {
+        toolName: "delete_experiment",
+        input: { brandId: context.brand.id, experimentId },
+      };
+    }
+    if (experimentId) {
+      return {
+        toolName: "get_experiment_snapshot",
+        input: { brandId: context.brand.id, experimentId },
+      };
+    }
+    return {
+      toolName: "summarize_experiments",
       input: { brandId: context.brand.id },
     };
   }
@@ -497,6 +874,13 @@ function inferActionFromMessage(
     }
   }
 
+  if (context?.brand.id && message.includes("brand")) {
+    return {
+      toolName: "get_brand_snapshot",
+      input: { brandId: context.brand.id },
+    };
+  }
+
   if (
     context?.senders.snapshots.length === 1 &&
     context.senders.snapshots[0]?.provider === "mailpool" &&
@@ -530,6 +914,8 @@ function snapshotContext(context: Awaited<ReturnType<typeof getOperatorBrandCont
       blocked: context.senders.blocked,
     },
     campaigns: context.campaigns,
+    experiments: context.experiments,
+    leads: context.leads,
     inbox: context.inbox,
     issues: context.issues,
     nextActions: context.nextActions,
@@ -745,13 +1131,13 @@ export async function runOperatorChatTurn(input: OperatorChatRequest): Promise<O
             input: requestedAction.input,
             preview: buildToolPreview(tool, requestedAction.input),
           });
-          actions.push(action);
           const executed = await executeToolAction({
             threadId: thread.id,
             actionId: action.id,
             tool,
             toolInput: requestedAction.input,
           });
+          actions.push(executed.updatedAction ?? action);
           assistant = {
             summary: executed.result.summary,
             findings: [],
@@ -789,13 +1175,13 @@ export async function runOperatorChatTurn(input: OperatorChatRequest): Promise<O
           input: requestedAction.input,
           preview: buildToolPreview(tool, requestedAction.input),
         });
-        actions.push(action);
         const executed = await executeToolAction({
           threadId: thread.id,
           actionId: action.id,
           tool,
           toolInput: requestedAction.input,
         });
+        actions.push(executed.updatedAction ?? action);
         assistant = {
           summary: executed.result.summary,
           findings: [],

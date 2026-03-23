@@ -1,5 +1,5 @@
-import { getBrandById, listBrands, listCampaigns } from "@/lib/factory-data";
-import { listExperimentRecords } from "@/lib/experiment-data";
+import { getBrandById, listBrands } from "@/lib/factory-data";
+import { listExperimentRecords, listScaleCampaignRecords } from "@/lib/experiment-data";
 import { mapExperimentToListItem } from "@/lib/experiment-list-view";
 import type { BrandOutreachAssignment, BrandRecord, DomainRow, ExperimentListItem, OutreachAccount } from "@/lib/factory-types";
 import { listDeliverabilityProbeRuns, getBrandOutreachAssignment, listExperimentRuns, listOutreachAccounts, listOwnerRuns, listReplyThreadsByBrand } from "@/lib/outreach-data";
@@ -63,7 +63,17 @@ export type OperatorBrandContext = {
     draft: number;
     active: number;
     paused: number;
+    completed: number;
+    archived: number;
     names: string[];
+    items: Array<{
+      id: string;
+      name: string;
+      status: string;
+      sourceExperimentId: string;
+      lastRunId: string;
+      updatedAt: string;
+    }>;
   };
   experiments: {
     total: number;
@@ -77,12 +87,56 @@ export type OperatorBrandContext = {
     promoted: number;
     blocked: number;
     names: string[];
+    items: Array<{
+      id: string;
+      name: string;
+      status: string;
+      isActiveNow: boolean;
+      lastActivityAt: string;
+      lastActivityLabel: string;
+      promotedCampaignId: string;
+      runtimeCampaignId: string;
+      runtimeExperimentId: string;
+    }>;
+  };
+  leads: {
+    total: number;
+    new: number;
+    contacted: number;
+    qualified: number;
+    closed: number;
+    items: Array<{
+      id: string;
+      name: string;
+      channel: string;
+      status: string;
+      lastTouch: string;
+    }>;
   };
   inbox: {
     threads: number;
     newThreads: number;
     openThreads: number;
     closedThreads: number;
+    threadItems: Array<{
+      id: string;
+      subject: string;
+      status: string;
+      sentiment: string;
+      intent: string;
+      leadId: string;
+      runId: string;
+      lastMessageAt: string;
+    }>;
+    draftItems: Array<{
+      id: string;
+      threadId: string;
+      runId: string;
+      subject: string;
+      status: string;
+      reason: string;
+      createdAt: string;
+    }>;
   };
   issues: string[];
   nextActions: string[];
@@ -305,12 +359,12 @@ export async function getOperatorBrandContext(brandId: string): Promise<Operator
   const brand = await getBrandById(brandId);
   if (!brand) return null;
 
-  const [enrichedBrand, assignment, accounts, settings, campaigns, experimentItems, inboxData, mailpoolDomains] = await Promise.all([
+  const [enrichedBrand, assignment, accounts, settings, scaleCampaigns, experimentItems, inboxData, mailpoolDomains] = await Promise.all([
     enrichBrandWithSenderHealth(brand),
     getBrandOutreachAssignment(brand.id),
     listOutreachAccounts(),
     getOutreachProvisioningSettings(),
-    listCampaigns(brand.id),
+    listScaleCampaignRecords(brand.id),
     listOperatorExperimentItems(brand.id),
     listReplyThreadsByBrand(brand.id),
     listSavedMailpoolDomains(),
@@ -328,7 +382,7 @@ export async function getOperatorBrandContext(brandId: string): Promise<Operator
   const issues = summarizeBrandIssues({
     brand: enrichedBrand,
     senderSnapshots,
-    activeCampaignCount: campaigns.filter((campaign) => campaign.status === "active").length,
+    activeCampaignCount: scaleCampaigns.filter((campaign) => campaign.status === "active").length,
     activeExperimentCount: experimentItems.filter((item) => item.isActiveNow).length,
     mailpoolConfigured: settings.mailpool.hasApiKey,
   });
@@ -376,11 +430,21 @@ export async function getOperatorBrandContext(brandId: string): Promise<Operator
       blockedCount,
     },
     campaigns: {
-      total: campaigns.length,
-      draft: campaigns.filter((campaign) => campaign.status === "draft").length,
-      active: campaigns.filter((campaign) => campaign.status === "active").length,
-      paused: campaigns.filter((campaign) => campaign.status === "paused").length,
-      names: campaigns.slice(0, 5).map((campaign) => campaign.name),
+      total: scaleCampaigns.length,
+      draft: scaleCampaigns.filter((campaign) => campaign.status === "draft").length,
+      active: scaleCampaigns.filter((campaign) => campaign.status === "active").length,
+      paused: scaleCampaigns.filter((campaign) => campaign.status === "paused").length,
+      completed: scaleCampaigns.filter((campaign) => campaign.status === "completed").length,
+      archived: scaleCampaigns.filter((campaign) => campaign.status === "archived").length,
+      names: scaleCampaigns.slice(0, 5).map((campaign) => campaign.name),
+      items: scaleCampaigns.slice(0, 10).map((campaign) => ({
+        id: campaign.id,
+        name: campaign.name,
+        status: campaign.status,
+        sourceExperimentId: campaign.sourceExperimentId,
+        lastRunId: campaign.lastRunId,
+        updatedAt: campaign.updatedAt,
+      })),
     },
     experiments: {
       total: experimentItems.length,
@@ -394,12 +458,56 @@ export async function getOperatorBrandContext(brandId: string): Promise<Operator
       promoted: experimentItems.filter((item) => item.status === "Promoted").length,
       blocked: experimentItems.filter((item) => item.status === "Blocked").length,
       names: experimentItems.slice(0, 5).map((item) => item.name),
+      items: experimentItems.slice(0, 10).map((item) => ({
+        id: item.id,
+        name: item.name,
+        status: item.status,
+        isActiveNow: item.isActiveNow,
+        lastActivityAt: item.lastActivityAt,
+        lastActivityLabel: item.lastActivityLabel,
+        promotedCampaignId: item.promotedCampaignId,
+        runtimeCampaignId: "",
+        runtimeExperimentId: "",
+      })),
+    },
+    leads: {
+      total: enrichedBrand.leads.length,
+      new: enrichedBrand.leads.filter((lead) => lead.status === "new").length,
+      contacted: enrichedBrand.leads.filter((lead) => lead.status === "contacted").length,
+      qualified: enrichedBrand.leads.filter((lead) => lead.status === "qualified").length,
+      closed: enrichedBrand.leads.filter((lead) => lead.status === "closed").length,
+      items: enrichedBrand.leads.slice(0, 20).map((lead) => ({
+        id: lead.id,
+        name: lead.name,
+        channel: lead.channel,
+        status: lead.status,
+        lastTouch: lead.lastTouch,
+      })),
     },
     inbox: {
       threads: inboxData.threads.length,
       newThreads: inboxData.threads.filter((thread) => thread.status === "new").length,
       openThreads: inboxData.threads.filter((thread) => thread.status === "open").length,
       closedThreads: inboxData.threads.filter((thread) => thread.status === "closed").length,
+      threadItems: inboxData.threads.slice(0, 10).map((thread) => ({
+        id: thread.id,
+        subject: thread.subject,
+        status: thread.status,
+        sentiment: thread.sentiment,
+        intent: thread.intent,
+        leadId: thread.leadId,
+        runId: thread.runId,
+        lastMessageAt: thread.lastMessageAt,
+      })),
+      draftItems: inboxData.drafts.slice(0, 10).map((draft) => ({
+        id: draft.id,
+        threadId: draft.threadId,
+        runId: draft.runId,
+        subject: draft.subject,
+        status: draft.status,
+        reason: draft.reason,
+        createdAt: draft.createdAt,
+      })),
     },
     issues,
     nextActions,

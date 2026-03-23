@@ -20,6 +20,7 @@ import type {
   OutreachMessage,
   OutreachAccount,
   OutreachRun,
+  OutreachRunLead,
   ReplyThread,
   SourcingActorMemory,
   SourcingChainDecision,
@@ -11426,12 +11427,63 @@ function buildDeliverabilityBaselineProbe(input: {
   };
 }
 
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function replaceCaseInsensitive(haystack: string, needle: string, replacement: string) {
+  const search = needle.trim();
+  if (!search) return haystack;
+  return haystack.replace(new RegExp(escapeRegExp(search), "gi"), replacement);
+}
+
+function sanitizeDeliverabilityProbeText(value: string, lead: OutreachRunLead | null) {
+  if (!lead) return value;
+
+  let sanitized = value;
+  const fullName = lead.name.trim();
+  const nameParts = fullName.split(/\s+/).filter(Boolean);
+  const firstName = nameParts[0] ?? "";
+  const lastName = nameParts.length > 1 ? nameParts[nameParts.length - 1] ?? "" : "";
+  const company = lead.company.trim();
+  const email = lead.email.trim();
+  const domain = lead.domain.trim().toLowerCase();
+
+  const replacements: Array<{ search: string; replace: string }> = [
+    { search: email, replace: "founder@example.com" },
+    { search: domain, replace: "yourcompany.com" },
+    { search: company, replace: "your company" },
+    { search: fullName, replace: "there" },
+    { search: firstName, replace: "there" },
+    { search: lastName, replace: "there" },
+  ];
+  const seen = new Set<string>();
+  for (const entry of replacements) {
+    const search = entry.search.trim();
+    if (!search) continue;
+    const key = `${search.toLowerCase()}=>${entry.replace}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    sanitized = replaceCaseInsensitive(sanitized, search, entry.replace);
+  }
+
+  sanitized = sanitized
+    .replace(/^(hi|hello|hey|dear)\s+[^,\n]+([,\n])/gim, (_match, greeting: string, suffix: string) => {
+      return `${greeting} there${suffix}`;
+    })
+    .replace(/\bthere there\b/gi, "there")
+    .replace(/\byour company company\b/gi, "your company");
+
+  return sanitized;
+}
+
 function buildDeliverabilityProbeReferenceMessage(
-  message: OutreachMessage
+  message: OutreachMessage,
+  lead: OutreachRunLead | null
 ): DeliverabilityProbeReferenceMessage {
   const generationMeta = asRecord(message.generationMeta);
-  const subject = message.subject;
-  const body = message.body;
+  const subject = sanitizeDeliverabilityProbeText(message.subject, lead);
+  const body = sanitizeDeliverabilityProbeText(message.body, lead);
   return {
     id: message.id,
     leadId: message.leadId,
@@ -11447,6 +11499,19 @@ function buildDeliverabilityProbeReferenceMessage(
   };
 }
 
+async function buildDeliverabilityProbeReferenceMessageForRun(input: {
+  runId: string;
+  message: OutreachMessage;
+}) {
+  let lead: OutreachRunLead | null = null;
+  const leadId = input.message.leadId.trim();
+  if (leadId) {
+    const leads = await listRunLeads(input.runId);
+    lead = leads.find((entry) => entry.id === leadId) ?? null;
+  }
+  return buildDeliverabilityProbeReferenceMessage(input.message, lead);
+}
+
 async function resolveDeliverabilityProbeReferenceMessage(input: {
   runId: string;
   sourceMessageId?: string;
@@ -11460,7 +11525,12 @@ async function resolveDeliverabilityProbeReferenceMessage(input: {
 
   if (sourceMessageId) {
     const exact = messages.find((message) => message.id === sourceMessageId);
-    return exact ? buildDeliverabilityProbeReferenceMessage(exact) : null;
+    return exact
+      ? buildDeliverabilityProbeReferenceMessageForRun({
+          runId: input.runId,
+          message: exact,
+        })
+      : null;
   }
 
   const scheduled = [...messages]
@@ -11475,7 +11545,12 @@ async function resolveDeliverabilityProbeReferenceMessage(input: {
       ? scheduled[0] ?? sent[0] ?? null
       : sent[0] ?? scheduled[0] ?? null;
 
-  return chosen ? buildDeliverabilityProbeReferenceMessage(chosen) : null;
+  return chosen
+    ? buildDeliverabilityProbeReferenceMessageForRun({
+        runId: input.runId,
+        message: chosen,
+      })
+    : null;
 }
 
 function summarizeDeliverabilityProbeResults(results: DeliverabilityProbeMonitorResult[]) {
@@ -11729,7 +11804,10 @@ async function maybeQueueAutomaticDeliverabilityProbe(run: {
   senderAccountName: string;
   senderFromEmail: string;
 }) {
-  const referenceMessage = buildDeliverabilityProbeReferenceMessage(input.message);
+  const referenceMessage = await buildDeliverabilityProbeReferenceMessageForRun({
+    runId: run.id,
+    message: input.message,
+  });
   return maybeQueueAutomaticDeliverabilityProbeSet(run, {
     referenceMessage,
     senderAccountId: input.senderAccountId,

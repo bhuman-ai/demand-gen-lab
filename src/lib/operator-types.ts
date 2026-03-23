@@ -81,6 +81,16 @@ export type OperatorExecutionIntent = {
   objectLabel: string;
 };
 
+export type OperatorExecutionQuestionOption = {
+  label: string;
+  message: string;
+};
+
+export type OperatorExecutionQuestion = {
+  prompt: string;
+  options: OperatorExecutionQuestionOption[];
+};
+
 export type OperatorExecutionEnvelope = {
   state: OperatorExecutionState;
   actionId: string;
@@ -89,6 +99,7 @@ export type OperatorExecutionEnvelope = {
   preview: Record<string, unknown>;
   receipt: OperatorReceipt | null;
   missingFields: string[];
+  questions: OperatorExecutionQuestion[];
   error: string;
 };
 

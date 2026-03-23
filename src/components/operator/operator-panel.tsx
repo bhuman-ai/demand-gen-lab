@@ -93,17 +93,22 @@ function ExecutionCard({
   action,
   onConfirm,
   onCancel,
+  onChooseReply,
   actionBusyId,
+  sending,
 }: {
   execution: OperatorExecutionEnvelope;
   action?: OperatorAction;
   onConfirm: (actionId: string) => void;
   onCancel: (actionId: string) => void;
+  onChooseReply: (message: string) => void;
   actionBusyId: string;
+  sending: boolean;
 }) {
   const intent = execution.intent;
   const receipt = execution.receipt;
   const missingFields = asStringArray(execution.missingFields);
+  const questions = Array.isArray(execution.questions) ? execution.questions : [];
   const statusLabel = executionStateLabel(execution.state);
   const actionId = asString(execution.actionId);
   const canConfirm = execution.state === "awaiting_confirmation" && Boolean(actionId) && action?.status === "awaiting_approval";
@@ -164,6 +169,39 @@ function ExecutionCard({
             <span>{asString(execution.error)}</span>
           </div>
         ) : null}
+        {questions.length ? (
+          <div className="space-y-3">
+            {questions.map((question, index) => {
+              const prompt = asString(question?.prompt);
+              const options = Array.isArray(question?.options) ? question.options : [];
+              if (!prompt || !options.length) return null;
+              return (
+                <div key={`${prompt}-${index}`}>
+                  <div className="text-[color:var(--muted-foreground)]">{prompt}</div>
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    {options.map((option, optionIndex) => {
+                      const label = asString(option?.label);
+                      const message = asString(option?.message);
+                      if (!label || !message) return null;
+                      return (
+                        <Button
+                          key={`${label}-${optionIndex}`}
+                          type="button"
+                          size="sm"
+                          variant="secondary"
+                          onClick={() => onChooseReply(message)}
+                          disabled={sending || Boolean(actionBusyId)}
+                        >
+                          {label}
+                        </Button>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        ) : null}
       </div>
       {canConfirm ? (
         <div className="mt-3 flex items-center gap-2">
@@ -196,13 +234,17 @@ function MessageBody({
   actionsById,
   onConfirm,
   onCancel,
+  onChooseReply,
   actionBusyId,
+  sending,
 }: {
   message: OperatorMessage;
   actionsById: Map<string, OperatorAction>;
   onConfirm: (actionId: string) => void;
   onCancel: (actionId: string) => void;
+  onChooseReply: (message: string) => void;
   actionBusyId: string;
+  sending: boolean;
 }) {
   const content = asRecord(message.content);
   if (message.kind === "message" && message.role === "assistant") {
@@ -219,7 +261,9 @@ function MessageBody({
             action={action}
             onConfirm={onConfirm}
             onCancel={onCancel}
+            onChooseReply={onChooseReply}
             actionBusyId={actionBusyId}
+            sending={sending}
           />
         ) : null}
       </div>
@@ -480,7 +524,9 @@ export default function OperatorPanel({
                     actionsById={actionsById}
                     onConfirm={(actionId) => void handleConfirm(actionId)}
                     onCancel={(actionId) => void handleCancel(actionId)}
+                    onChooseReply={(message) => void handleSend(message)}
                     actionBusyId={actionBusyId}
+                    sending={sending}
                   />
                 </div>
               </div>

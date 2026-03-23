@@ -23,6 +23,7 @@ import type {
   OperatorChatResponse,
   OperatorExecutionEnvelope,
   OperatorExecutionIntent,
+  OperatorExecutionQuestion,
   OperatorMessage,
   OperatorRequestedAction,
   OperatorReceipt,
@@ -269,6 +270,7 @@ function buildExecutionEnvelope(input: {
   preview?: Record<string, unknown>;
   receipt?: OperatorReceipt | null;
   missingFields?: string[];
+  questions?: OperatorExecutionQuestion[];
   error?: string;
 }): OperatorExecutionEnvelope {
   const toolName = input.toolName ?? "";
@@ -280,6 +282,7 @@ function buildExecutionEnvelope(input: {
     preview: input.preview ?? {},
     receipt: input.receipt ?? null,
     missingFields: input.missingFields ?? [],
+    questions: input.questions ?? [],
     error: asString(input.error),
   };
 }
@@ -289,6 +292,7 @@ function buildNeedInfoEnvelope(input: {
   toolInput?: Record<string, unknown>;
   missingFields: string[];
   preview?: Record<string, unknown>;
+  questions?: OperatorExecutionQuestion[];
 }): OperatorExecutionEnvelope {
   return buildExecutionEnvelope({
     state: "need_info",
@@ -296,7 +300,68 @@ function buildNeedInfoEnvelope(input: {
     toolInput: input.toolInput,
     preview: input.preview,
     missingFields: input.missingFields,
+    questions: input.questions,
   });
+}
+
+function buildQuestion(prompt: string, options: Array<{ label: string; message: string }>): OperatorExecutionQuestion {
+  return {
+    prompt,
+    options: options
+      .map((option) => ({
+        label: asString(option.label),
+        message: asString(option.message),
+      }))
+      .filter((option) => option.label && option.message),
+  };
+}
+
+function buildProvisionQuestions(input: {
+  hasMailpoolInventory: boolean;
+  domainMode?: string;
+  missingFields: string[];
+}): OperatorExecutionQuestion[] {
+  const questions: OperatorExecutionQuestion[] = [];
+
+  if (input.missingFields.includes("sender email")) {
+    questions.push(
+      buildQuestion("Which path should I use for this sender?", [
+        ...(input.hasMailpoolInventory
+          ? [
+              {
+                label: "Use existing domain",
+                message: "Use an existing Mailpool domain for the sender.",
+              },
+            ]
+          : []),
+        {
+          label: "Buy new domain",
+          message: "Buy a new sender domain for this sender.",
+        },
+      ])
+    );
+  }
+
+  if (input.domainMode === "register") {
+    questions.push(
+      buildQuestion("Do you want to keep the new-domain flow, or switch to an existing Mailpool domain?", [
+        {
+          label: "Keep new domain",
+          message: "Keep the new sender domain flow. I'll send the registrant details next.",
+        },
+        ...(input.hasMailpoolInventory
+          ? [
+              {
+                label: "Use existing domain",
+                message: "Use an existing Mailpool domain instead.",
+              },
+            ]
+          : []),
+      ])
+    );
+  }
+
+  return questions.filter((question) => question.options.length > 0);
 }
 
 function titleFromMessage(message: string) {
@@ -1353,6 +1418,11 @@ export async function runOperatorChatTurn(input: OperatorChatRequest): Promise<O
           toolInput: requestedAction.input,
           preview: buildToolPreview(tool, requestedAction.input),
           missingFields: ["sender email"],
+          questions: buildProvisionQuestions({
+            hasMailpoolInventory: hasInventory,
+            domainMode: asString(requestedAction.input.domainMode),
+            missingFields: ["sender email"],
+          }),
         });
       } else if (
         tool.name === "provision_mailpool_sender" &&
@@ -1378,6 +1448,11 @@ export async function runOperatorChatTurn(input: OperatorChatRequest): Promise<O
             toolInput: requestedAction.input,
             preview: buildToolPreview(tool, requestedAction.input),
             missingFields: buildProvisionMissingFields(requestedAction.input),
+            questions: buildProvisionQuestions({
+              hasMailpoolInventory: (brandContext?.provisioning.mailpoolDomainInventoryCount ?? 0) > 0,
+              domainMode: asString(requestedAction.input.domainMode),
+              missingFields: buildProvisionMissingFields(requestedAction.input),
+            }),
           });
         } else if (tool.approvalMode === "confirm") {
           const action = await createOperatorAction({
@@ -1544,6 +1619,13 @@ export async function runOperatorChatTurn(input: OperatorChatRequest): Promise<O
       execution = isExplicitMutationRequest(input.message)
         ? buildNeedInfoEnvelope({
             missingFields: [],
+            questions: [
+              buildQuestion("What should I do next?", [
+                { label: "Summarize this brand", message: "Summarize this brand." },
+                { label: "Check senders", message: "What needs attention with the senders?" },
+                { label: "Summarize inbox", message: "Summarize inbox activity." },
+              ]),
+            ],
           })
         : buildExecutionEnvelope({ state: "answer_only" });
     }

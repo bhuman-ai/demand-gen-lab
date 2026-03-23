@@ -67,6 +67,26 @@ function uniqueStrings(values: string[]) {
   return Array.from(new Set(values.map((value) => value.trim()).filter(Boolean)));
 }
 
+function isCasualGreeting(message: string) {
+  const normalized = message.trim().toLowerCase();
+  if (!normalized) return false;
+  return /^(hi|hey|hello|yo|sup|what'?s up|hiya|howdy)[!.?]*$/.test(normalized);
+}
+
+function buildGreetingAssistant(brandName?: string): OperatorChatAssistantReply {
+  return {
+    summary: brandName
+      ? `Hi. I'm Operator for ${brandName}. I can help with senders, campaigns, inbox, and what to do next.`
+      : "Hi. I'm Operator. I can help with senders, campaigns, inbox, and what to do next.",
+    findings: [],
+    recommendations: [],
+  };
+}
+
+function looksLikeStatusSummary(summary: string) {
+  return /\bhas \d+\b|\bconfigured senders\b|\bcampaigns\b|\binbox thread\b|\brouting\b/i.test(summary);
+}
+
 function buildDefaultAssistantReply(input: {
   brandName?: string;
   issues: string[];
@@ -194,16 +214,19 @@ function summarizePromptContext(context: Awaited<ReturnType<typeof getOperatorBr
 
 function normalizeAssistantReply(
   value: unknown,
-  fallback: OperatorChatAssistantReply
+  fallback: OperatorChatAssistantReply,
+  options: { plainGreeting?: boolean } = {}
 ): OperatorChatAssistantReply {
   const row = asRecord(value);
   const findings = uniqueStrings(asStringArray(row.findings)).slice(0, 3);
   const recommendations = uniqueStrings(asStringArray(row.recommendations)).slice(0, 3);
-  const summary = asString(row.summary) || findings[0] || recommendations[0] || fallback.summary;
+  const rawSummary = asString(row.summary) || findings[0] || recommendations[0] || fallback.summary;
+  const summary =
+    options.plainGreeting && looksLikeStatusSummary(rawSummary) ? fallback.summary : rawSummary;
   return {
     summary,
-    findings: findings.length ? findings : fallback.findings.slice(0, 3),
-    recommendations: recommendations.length ? recommendations : fallback.recommendations.slice(0, 3),
+    findings: options.plainGreeting ? [] : findings.length ? findings : fallback.findings.slice(0, 3),
+    recommendations: options.plainGreeting ? [] : recommendations.length ? recommendations : fallback.recommendations.slice(0, 3),
   };
 }
 
@@ -308,6 +331,8 @@ function buildOperatorPrompt(input: {
     "Keep findings and recommendations to at most 3 items each.",
     "Only propose requestedAction when the user is clearly asking for an action or a concrete next operational step.",
     "If mode is recommendation_only, requestedAction must be null.",
+    "If the latest user message is only a casual greeting like hi, hey, or hello, reply like a normal human assistant in 1 or 2 short sentences.",
+    "For a casual greeting, do not dump account status, do not include findings or recommendations, and do not propose an action.",
     "Only use requestedAction.toolName values from the provided tool catalog.",
     "Never invent IDs, emails, or domains that are not in the provided context or the latest user message.",
     "For refresh_mailpool_sender and get_sender_snapshot, prefer using accountId from the context.",
@@ -334,6 +359,7 @@ async function planOperatorReplyWithLlm(input: {
 
   const model = DEFAULT_OPERATOR_MODEL;
   const prompt = buildOperatorPrompt(input);
+  const greetingOnly = isCasualGreeting(input.message);
 
   try {
     const response = await fetch("https://api.openai.com/v1/responses", {
@@ -378,7 +404,7 @@ async function planOperatorReplyWithLlm(input: {
 
     const row = asRecord(parsed);
     return {
-      assistant: normalizeAssistantReply(row, input.fallbackAssistant),
+      assistant: normalizeAssistantReply(row, input.fallbackAssistant, { plainGreeting: greetingOnly }),
       requestedAction: normalizeRequestedAction({
         raw: row.requestedAction,
         brandId: input.brandId,
@@ -578,21 +604,24 @@ export async function runOperatorChatTurn(input: OperatorChatRequest): Promise<O
   });
 
   const brandContext = resolvedBrandId ? await getOperatorBrandContext(resolvedBrandId) : null;
-  const fallbackAssistant = brandContext
-    ? buildDefaultAssistantReply({
-        brandName: brandContext.brand.name,
-        issues: brandContext.issues,
-        nextActions: brandContext.nextActions,
-        sendersTotal: brandContext.senders.total,
-        readySenders: brandContext.senders.ready,
-        campaignsTotal: brandContext.campaigns.total,
-        inboxThreads: brandContext.inbox.threads,
-      })
-    : {
-        summary: "Operator is ready, but no brand context was provided for this thread yet.",
-        findings: ["There is no active brand attached to this Operator request."],
-        recommendations: ["Open a brand and try again, or pass a brandId into the Operator chat request."],
-      };
+  const greetingOnly = isCasualGreeting(input.message);
+  const fallbackAssistant = greetingOnly
+    ? buildGreetingAssistant(brandContext?.brand.name)
+    : brandContext
+      ? buildDefaultAssistantReply({
+          brandName: brandContext.brand.name,
+          issues: brandContext.issues,
+          nextActions: brandContext.nextActions,
+          sendersTotal: brandContext.senders.total,
+          readySenders: brandContext.senders.ready,
+          campaignsTotal: brandContext.campaigns.total,
+          inboxThreads: brandContext.inbox.threads,
+        })
+      : {
+          summary: "Operator is ready, but no brand context was provided for this thread yet.",
+          findings: ["There is no active brand attached to this Operator request."],
+          recommendations: ["Open a brand and try again, or pass a brandId into the Operator chat request."],
+        };
   const messageHistory = await listOperatorMessages(thread.id);
   const llmPlan = input.structuredAction
     ? null

@@ -156,6 +156,10 @@ function numberValue(value: unknown) {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
+function numericIdIfPossible(value: string) {
+  return /^\d+$/.test(value.trim()) ? Number(value.trim()) : value.trim();
+}
+
 function mailpoolApiBaseUrl() {
   return String(process.env.MAILPOOL_API_BASE_URL ?? DEFAULT_MAILPOOL_API_BASE_URL)
     .trim()
@@ -477,7 +481,7 @@ export async function createMailpoolSpamCheck(input: { apiKey: string; mailboxId
     apiKey: input.apiKey,
     method: "POST",
     path: "/spam-checks/",
-    body: { mailboxId: input.mailboxId },
+    body: { mailboxId: numericIdIfPossible(input.mailboxId) },
   });
   return mapSpamCheck(payload);
 }
@@ -508,7 +512,7 @@ export async function createMailpoolInboxPlacement(input: {
     method: "POST",
     path: "/inbox-placements/",
     body: {
-      mailboxId: input.mailboxId,
+      mailboxId: numericIdIfPossible(input.mailboxId),
       providers: input.providers,
     },
   });

@@ -75,6 +75,78 @@ function factLabel(value: string) {
   return formatLabel(value);
 }
 
+function decodeCodePoint(codePoint: number) {
+  if (!Number.isFinite(codePoint) || codePoint < 0 || codePoint > 0x10ffff) {
+    return "";
+  }
+  try {
+    return String.fromCodePoint(codePoint);
+  } catch {
+    return "";
+  }
+}
+
+function decodeHtmlEntities(value: string) {
+  return String(value ?? "")
+    .replace(/&#x([0-9a-f]+);/gi, (_, hex: string) => {
+      const codePoint = Number.parseInt(hex, 16);
+      return decodeCodePoint(codePoint);
+    })
+    .replace(/&#(\d+);/g, (_, digits: string) => {
+      const codePoint = Number.parseInt(digits, 10);
+      return decodeCodePoint(codePoint);
+    })
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;|&apos;/gi, "'")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">");
+}
+
+function normalizeEmailBody(value: string) {
+  return String(value ?? "")
+    .replace(/\r\n?/g, "\n")
+    .replace(/\u00a0/g, " ")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n[ \t]+/g, "\n")
+    .replace(/[ \t]{2,}/g, " ")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function formatMessageBody(value: string) {
+  const raw = String(value ?? "");
+  if (!raw.trim()) return "";
+
+  const decoded = decodeHtmlEntities(
+    raw
+      .replace(/=\r?\n/g, "")
+      .replace(/=3D/gi, "=")
+      .replace(/=20/gi, " ")
+      .replace(/=09/gi, "\t")
+  );
+  const looksLikeHtml = /<[a-z!/][^>]*>/i.test(decoded);
+  if (!looksLikeHtml) {
+    return normalizeEmailBody(decoded);
+  }
+
+  return normalizeEmailBody(
+    decodeHtmlEntities(
+      decoded
+        .replace(/<style[\s\S]*?<\/style>/gi, " ")
+        .replace(/<script[\s\S]*?<\/script>/gi, " ")
+        .replace(/<head[\s\S]*?<\/head>/gi, " ")
+        .replace(/<!--[\s\S]*?-->/g, " ")
+        .replace(/<\s*br\s*\/?>/gi, "\n")
+        .replace(/<\s*li\b[^>]*>/gi, "• ")
+        .replace(/<\s*\/\s*li\s*>/gi, "\n")
+        .replace(/<\s*\/\s*(p|div|section|article|header|footer|main|aside|blockquote|pre|tr|table|h[1-6])\s*>/gi, "\n")
+        .replace(/<[^>]+>/g, " ")
+    )
+  );
+}
+
 export default function InboxClient({ brand }: { brand: BrandRecord }) {
   const [threads, setThreads] = useState<ReplyThread[]>([]);
   const [drafts, setDrafts] = useState<ReplyDraft[]>([]);
@@ -762,7 +834,7 @@ export default function InboxClient({ brand }: { brand: BrandRecord }) {
                           </div>
                         ) : null}
                         <div className="mt-2 whitespace-pre-wrap text-sm leading-6 text-[color:var(--foreground)]">
-                          {item.body}
+                          {formatMessageBody(item.body)}
                         </div>
                       </div>
                     ))}

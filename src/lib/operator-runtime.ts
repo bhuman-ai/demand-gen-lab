@@ -698,55 +698,6 @@ function looksLikeBrandCreationRequest(message: string) {
   return /\b(make|create|add|set up|setup|start|open)\b/.test(normalized);
 }
 
-function cleanBrandNameCandidate(value: string) {
-  return value
-    .trim()
-    .replace(/^["'`]+|["'`]+$/g, "")
-    .replace(/^(?:called|named)\s+/i, "")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function extractBrandCreationDraft(message: string) {
-  const normalized = message.replace(/\s+/g, " ").trim();
-  if (!normalized) {
-    return { name: "", website: "", notes: "", product: "" };
-  }
-
-  const patterns = [
-    /(?:make|create|add|set up|setup|start|open)\s+(?:me\s+|us\s+)?(?:a\s+|an\s+)?(?:new\s+)?brand(?:\s+for)?\s+(.+?)(?=(?:\s+(?:basically|because|since|that'?s|this is|it'?s|it is|i want|we want|so that|to do|to get|to land|to book)\b)|[.!?]|$)/i,
-    /brand\s+for\s+(.+?)(?=(?:\s+(?:basically|because|since|that'?s|this is|it'?s|it is|i want|we want|so that|to do|to get|to land|to book)\b)|[.!?]|$)/i,
-  ];
-
-  let name = "";
-  let notes = "";
-  for (const pattern of patterns) {
-    const match = normalized.match(pattern);
-    const candidate = cleanBrandNameCandidate(match?.[1] ?? "");
-    if (!candidate) continue;
-    name = candidate;
-    const matchStart = typeof match?.index === "number" ? match.index : -1;
-    const matchLength = match?.[0]?.length ?? 0;
-    const remainder =
-      matchStart >= 0 ? normalized.slice(matchStart + matchLength).trim() : "";
-    notes = remainder.replace(/^[,:;\-.\s]+/, "").trim();
-    break;
-  }
-
-  const website = extractDomain(normalized);
-  const productMatch = normalized.match(
-    /\b(?:get|book|land|win|sell|offer)\s+(?:new\s+)?(.+?\s+(?:commissions?|clients?|leads?|customers?|projects?))\b/i
-  );
-  const product = cleanBrandNameCandidate(productMatch?.[1] ?? "");
-
-  return {
-    name,
-    website,
-    notes,
-    product,
-  };
-}
-
 function ensureWebsiteUrl(value: string) {
   const trimmed = value.trim();
   if (!trimmed) return "";
@@ -1986,7 +1937,14 @@ function normalizeRequestedAction(input: {
     return null;
   }
 
-  const toolInput = { ...asRecord(row.input) };
+  const rawToolInput = asRecord(row.input);
+  const nestedToolInput = asRecord(rawToolInput.input);
+  const toolInput = {
+    ...nestedToolInput,
+    ...Object.fromEntries(
+      Object.entries(rawToolInput).filter(([key]) => key !== "input")
+    ),
+  };
   if (input.brandId && TOOLS_WITH_BRAND_CONTEXT.has(toolName) && !asString(toolInput.brandId)) {
     toolInput.brandId = input.brandId;
   }
@@ -2019,22 +1977,13 @@ function normalizeRequestedAction(input: {
   }
 
   if (toolName === "create_brand") {
-    const brandDraft = extractBrandCreationDraft(input.message);
     const domain = extractDomain(input.message);
-    const website = asString(toolInput.website) || brandDraft.website || domain;
+    const website = asString(toolInput.website) || domain;
     if (website) {
       toolInput.website = ensureWebsiteUrl(website);
     }
     if (!asString(toolInput.name)) {
-      toolInput.name =
-        brandDraft.name ||
-        asString(toolInput.website).replace(/^https?:\/\//i, "").replace(/\/+$/, "");
-    }
-    if (!asString(toolInput.notes) && brandDraft.notes) {
-      toolInput.notes = brandDraft.notes;
-    }
-    if (!asString(toolInput.product) && brandDraft.product) {
-      toolInput.product = brandDraft.product;
+      toolInput.name = asString(toolInput.website).replace(/^https?:\/\//i, "").replace(/\/+$/, "");
     }
   }
 
@@ -2187,6 +2136,9 @@ function buildOperatorPrompt(input: {
     "If there is exactly one obvious running, draft, active, or pending object that matches the user's words, it is okay to target it.",
     "For refresh_mailpool_sender and get_sender_snapshot, prefer using accountId from the context.",
     "For provision_mailpool_sender, include any known fields such as brandId, domain, fromLocalPart, domainMode, and registrant fields.",
+    "For create_brand, website is optional.",
+    "If the user names a brand in normal prose, pass that exact brand name in create_brand.input.name.",
+    "If the user explains what the brand does or wants, include that in create_brand.input.notes or create_brand.input.product when useful.",
     "Never claim a change already happened unless the change is present in the tool results so far.",
     "If you need live data, choose a read tool and set done to false.",
     "If you need user input, set done to true, leave toolName empty, and ask only for the missing information.",
@@ -2417,7 +2369,6 @@ function inferActionFromMessage(
   const draftId = resolveDraftId({}, context, input.message);
   const leadId = resolveLeadId({}, context, input.message);
   const requestedDomain = extractDomain(input.message);
-  const brandDraft = extractBrandCreationDraft(input.message);
 
   if (context?.brand.id && mentionsReferencePronoun(message)) {
     if ((message.includes("pause") || message.includes("resume") || message.includes("cancel")) && asString(brandMemory?.recentSelection.experimentId)) {
@@ -2450,14 +2401,12 @@ function inferActionFromMessage(
     }
   }
 
-  if (looksLikeBrandCreationRequest(message) && (brandDraft.name || requestedDomain)) {
+  if (looksLikeBrandCreationRequest(message) && (quoted || requestedDomain)) {
     return {
       toolName: "create_brand",
       input: {
-        name: brandDraft.name || requestedDomain,
-        website: brandDraft.website ? ensureWebsiteUrl(brandDraft.website) : "",
-        notes: brandDraft.notes,
-        product: brandDraft.product,
+        name: quoted || requestedDomain,
+        website: requestedDomain ? ensureWebsiteUrl(requestedDomain) : "",
       },
     };
   }
@@ -3031,6 +2980,18 @@ export async function runOperatorChatTurn(input: OperatorChatRequest): Promise<O
           toolName: requestedAction.toolName,
           toolInput: requestedAction.input,
           error: assistant.summary,
+        });
+      } else if (tool.name === "create_brand" && !asString(requestedAction.input.name)) {
+        assistant = {
+          summary: "I can create the brand, but I still need the brand name.",
+          findings: [],
+          recommendations: [],
+        };
+        execution = buildNeedInfoEnvelope({
+          toolName: tool.name,
+          toolInput: requestedAction.input,
+          preview: buildToolPreview(tool, requestedAction.input),
+          missingFields: ["brand name"],
         });
       } else if (
         tool.name === "provision_mailpool_sender" &&

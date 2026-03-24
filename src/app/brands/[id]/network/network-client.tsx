@@ -13,6 +13,8 @@ import {
   fetchBrands,
   fetchOutreachAccounts,
   fetchOutreachProvisioningSettings,
+  provisionSenderDomain,
+  refreshMailpoolOutreachAccount,
 } from "@/lib/client-api";
 import {
   buildSenderRoutingSignalFromDomainRow,
@@ -43,12 +45,23 @@ type SenderFilter = (typeof FILTERS)[number];
 type RoutingRole = "primary" | "standby" | "blocked" | "pending";
 type SenderCardStatus = "ready" | "warming" | "setup" | "fix" | "protected";
 type SenderHealthTone = "good" | "watch" | "checking" | "problem";
+type SenderActionKind = "repair_setup" | "refresh_mailpool" | "open_setup" | "open_settings";
 type HealthDimension = "domainHealth" | "emailHealth" | "ipHealth" | "messagingHealth";
 type HealthSummaryDimension =
   | "domainHealthSummary"
   | "emailHealthSummary"
   | "ipHealthSummary"
   | "messagingHealthSummary";
+type SenderActionPlan = {
+  kind: SenderActionKind;
+  label: string;
+  description: string;
+};
+type SenderActionState = {
+  pending: boolean;
+  error: string;
+  success: string;
+};
 type AssignmentMap = Record<
   string,
   {
@@ -57,7 +70,6 @@ type AssignmentMap = Record<
     mailboxAccountId: string;
   }
 >;
-
 type NetworkClientProps = {
   brand: BrandRecord;
   allBrands?: BrandRecord[];
@@ -66,6 +78,12 @@ type NetworkClientProps = {
   assignments?: AssignmentMap;
   provisioningSettings?: OutreachProvisioningSettings | null;
   senderCapacitySnapshots?: unknown[];
+};
+
+const EMPTY_SENDER_ACTION_STATE: SenderActionState = {
+  pending: false,
+  error: "",
+  success: "",
 };
 
 function formatCount(value: number) {
@@ -268,12 +286,64 @@ function senderCardStatusVariant(status: SenderCardStatus) {
   return "muted";
 }
 
-function senderRouteLabel(role: RoutingRole, row: DomainRow) {
+function senderRouteLabel(
+  role: RoutingRole,
+  row: DomainRow,
+  status: SenderCardStatus,
+  health: SenderHealthTone
+) {
+  if (status === "protected") return "Replies only";
+  if (status === "fix") {
+    const summary = automationSummary(row).toLowerCase();
+    if (row.dnsStatus === "error") return "Setup broken";
+    if (summary.includes("seed pool exhausted")) return "Needs test inboxes";
+    if (health === "problem") return "Health problem";
+    return "Paused";
+  }
+  if (status === "setup") {
+    if (!row.fromEmail) return "Missing mailbox";
+    if (row.dnsStatus === "pending") return "Waiting on DNS";
+    if (row.dnsStatus === "configured") return "Checking DNS";
+    return "Running checks";
+  }
+  if (status === "warming") return "Warming up";
   if (role === "primary") return "Sending now";
-  if (role === "standby") return "Backup";
-  if (role === "blocked") return "Stopped";
-  if (!row.fromEmail) return "Not ready";
-  return "Waiting";
+  if (role === "standby") return "Backup ready";
+  if (role === "blocked") return "Paused";
+  return "Ready";
+}
+
+function senderRouteDetail(
+  role: RoutingRole,
+  row: DomainRow,
+  status: SenderCardStatus,
+  health: SenderHealthTone
+) {
+  if (status === "protected") return "Reply inbox only";
+  if (status === "fix") {
+    const summary = automationSummary(row).toLowerCase();
+    if (row.dnsStatus === "error") return "Warmup cannot start";
+    if (summary.includes("seed pool exhausted")) return "Add fresh test inboxes";
+    if (health === "problem") return "Out of rotation";
+    return "Needs review";
+  }
+  if (status === "setup") {
+    if (!row.fromEmail) return "Finish sender setup";
+    if (row.dnsStatus !== "verified") return "Cannot send until DNS verifies";
+    return "Waiting for control checks";
+  }
+  if (status === "warming") return "Limited volume only";
+  if (role === "primary") return "First in line";
+  if (role === "standby") return "Healthy backup";
+  if (role === "blocked") return "Out of rotation";
+  return "Ready when needed";
+}
+
+function senderRouteVariant(status: SenderCardStatus, role: RoutingRole) {
+  if (status === "fix") return "danger";
+  if (status === "warming") return "accent";
+  if (status === "ready") return routingRoleBadgeVariant(role);
+  return "muted";
 }
 
 function senderHealthSignals(row: DomainRow) {
@@ -347,6 +417,59 @@ function senderNextStep(row: DomainRow, status: SenderCardStatus, health: Sender
   return "Keep sending";
 }
 
+function senderActionPlan(
+  row: DomainRow,
+  status: SenderCardStatus,
+  health: SenderHealthTone
+): SenderActionPlan | null {
+  const summary = automationSummary(row).toLowerCase();
+
+  if (status === "protected" || status === "ready") return null;
+  if (!row.fromEmail) {
+    return {
+      kind: "open_setup",
+      label: "Finish setup",
+      description: "Open sender setup and attach the missing sender mailbox.",
+    };
+  }
+  if (row.provider === "mailpool" && row.dnsStatus !== "verified") {
+    return {
+      kind: "refresh_mailpool",
+      label: "Refresh status",
+      description: "Pull the latest domain and mailbox state from Mailpool.",
+    };
+  }
+  if (row.dnsStatus === "error") {
+    return {
+      kind: "repair_setup",
+      label: "Repair setup",
+      description: "Re-apply sender DNS, forwarding, and account setup for this domain.",
+    };
+  }
+  if (row.dnsStatus !== "verified") {
+    return {
+      kind: "repair_setup",
+      label: "Re-run setup",
+      description: "Re-apply sender DNS and forwarding while this domain finishes verifying.",
+    };
+  }
+  if (summary.includes("seed pool exhausted")) {
+    return {
+      kind: "open_settings",
+      label: "Open outreach settings",
+      description: "Add fresh test inboxes so sender checks can run again.",
+    };
+  }
+  if (status === "fix" || health === "problem") {
+    return {
+      kind: "open_settings",
+      label: "Open outreach settings",
+      description: "Review deliverability settings and the sender inputs driving health checks.",
+    };
+  }
+  return null;
+}
+
 function senderSummaryLine(
   row: DomainRow,
   status: SenderCardStatus,
@@ -356,20 +479,7 @@ function senderSummaryLine(
   if (status === "protected") {
     return "This is your protected reply domain. It catches replies but does not send outbound mail.";
   }
-  if (status === "fix") {
-    if (row.dnsStatus === "error") {
-      return "This sender is paused because DNS or authentication is broken. Fix setup before it sends again.";
-    }
-    return "This sender is paused because at least one health check found a real problem.";
-  }
-  if (status === "setup") {
-    if (!row.fromEmail) return "This sender has no mailbox yet, so it cannot send anything.";
-    if (row.dnsStatus !== "verified") return "DNS is still being verified, so warmup has not fully started yet.";
-    return "Early checks are still running before this sender is trusted with normal traffic.";
-  }
-  if (status === "warming") {
-    return "Warmup is running. The system is building trust before this sender takes full traffic.";
-  }
+  if (status === "fix" || status === "setup" || status === "warming") return automationSummary(row);
   if (health === "watch") {
     return "This sender can send, but one of the health signals needs watching.";
   }
@@ -456,6 +566,7 @@ export default function NetworkClient({
   const [senderModalBrands, setSenderModalBrands] = useState<BrandRecord[]>(initialAllBrands);
   const [senderModalSettings, setSenderModalSettings] =
     useState<OutreachProvisioningSettings | null>(initialProvisioningSettings);
+  const [senderActionState, setSenderActionState] = useState<Record<string, SenderActionState>>({});
 
   const activeBrand = useMemo(() => ({ ...brand, domains }), [brand, domains]);
   const modalBrands = useMemo(() => [activeBrand], [activeBrand]);
@@ -547,6 +658,8 @@ export default function NetworkClient({
         (summary, row) => {
           const routingRole = routingRoleForRow(row, routingRoleBySenderId);
           const status = senderCardStatus(row, routingRole);
+          const health = senderOverallHealth(row);
+          const action = senderActionPlan(row, status, health);
 
           if (status === "ready") {
             summary.readyCount += 1;
@@ -558,6 +671,15 @@ export default function NetworkClient({
           } else if (status === "setup") {
             summary.setupCount += 1;
           }
+          if (status === "setup" && row.fromEmail && row.dnsStatus !== "verified") {
+            summary.dnsWaitingCount += 1;
+          }
+          if (status === "setup" && !row.fromEmail) {
+            summary.mailboxMissingCount += 1;
+          }
+          if (action && action.kind !== "open_settings") {
+            summary.autoFixCount += 1;
+          }
 
           return summary;
         },
@@ -567,6 +689,9 @@ export default function NetworkClient({
           warmingCount: 0,
           fixCount: 0,
           setupCount: 0,
+          dnsWaitingCount: 0,
+          mailboxMissingCount: 0,
+          autoFixCount: 0,
         }
       ),
     [senderDomains, routingRoleBySenderId]
@@ -607,6 +732,103 @@ export default function NetworkClient({
       setSenderModalError(err instanceof Error ? err.message : "Failed to load sender setup.");
     } finally {
       setSenderModalLoading(false);
+    }
+  }
+
+  async function refreshDomainsFromServer() {
+    const refreshedBrand = await fetchBrand(brand.id);
+    setDomains(refreshedBrand.domains || []);
+    router.refresh();
+    return refreshedBrand;
+  }
+
+  function updateSenderActionState(rowId: string, patch: Partial<SenderActionState>) {
+    setSenderActionState((prev) => ({
+      ...prev,
+      [rowId]: {
+        ...(prev[rowId] ?? EMPTY_SENDER_ACTION_STATE),
+        ...patch,
+      },
+    }));
+  }
+
+  async function handleSenderAction(row: DomainRow, action: SenderActionPlan) {
+    updateSenderActionState(row.id, { pending: true, error: "", success: "" });
+
+    try {
+      if (action.kind === "open_setup") {
+        openSenderModal();
+        updateSenderActionState(row.id, {
+          pending: false,
+          success: "Sender setup opened. Use the same domain to finish attaching the mailbox.",
+        });
+        return;
+      }
+
+      if (action.kind === "open_settings") {
+        router.push("/settings/outreach");
+        updateSenderActionState(row.id, { pending: false, success: "" });
+        return;
+      }
+
+      if (action.kind === "refresh_mailpool") {
+        const accountId = getDomainDeliveryAccountId(row);
+        if (!accountId) {
+          throw new Error("This sender is missing its Mailpool account link, so it cannot be refreshed here.");
+        }
+        await refreshMailpoolOutreachAccount(accountId);
+        await refreshDomainsFromServer();
+        updateSenderActionState(row.id, {
+          pending: false,
+          success: "Pulled the latest Mailpool status for this sender.",
+        });
+        return;
+      }
+
+      const fromLocalPart = row.fromEmail?.split("@")[0]?.trim() || "";
+      if (!fromLocalPart) {
+        throw new Error("This sender does not have a mailbox local-part saved yet. Finish setup manually.");
+      }
+
+      const assignmentResult = await fetchBrandOutreachAssignment(brand.id);
+      const sourceAccountId = String(row.customerIoAccountId ?? row.deliveryAccountId ?? "").trim();
+      const useSavedDefaults =
+        row.provider !== "customerio" ||
+        !sourceAccountId ||
+        getDomainDeliveryAccountName(row).trim().toLowerCase() === "saved defaults";
+
+      const result = await provisionSenderDomain(brand.id, {
+        provider: row.provider === "mailpool" ? "mailpool" : "customerio",
+        accountName: getDomainDeliveryAccountName(row) || `${brand.name} ${row.domain}`,
+        assignToBrand: true,
+        selectedMailboxAccountId: row.provider === "mailpool" ? "" : assignmentResult.assignment?.mailboxAccountId ?? "",
+        domainMode: "existing",
+        domain: row.domain,
+        fromLocalPart,
+        autoPickCustomerIoAccount: row.provider === "customerio" ? false : undefined,
+        customerIoSourceAccountId: row.provider === "customerio" && !useSavedDefaults ? sourceAccountId : "",
+        forwardingTargetUrl: row.forwardingTargetUrl || brand.website || "",
+        customerIoSiteId: "",
+        customerIoTrackingApiKey: "",
+        customerIoAppApiKey: "",
+        namecheapApiUser: "",
+        namecheapUserName: "",
+        namecheapApiKey: "",
+        namecheapClientIp: "",
+      });
+
+      await refreshDomainsFromServer();
+      updateSenderActionState(row.id, {
+        pending: false,
+        success: result.readyToSend
+          ? "Setup repaired. This sender is ready for traffic."
+          : result.warnings[0] || "Setup refreshed. DNS or checks may still need time.",
+      });
+    } catch (err) {
+      updateSenderActionState(row.id, {
+        pending: false,
+        error: err instanceof Error ? err.message : "Failed to update this sender.",
+      });
     }
   }
 
@@ -657,8 +879,8 @@ export default function NetworkClient({
               title="What this summary means"
             >
               <p>
-                The big card shows who would send first right now. The smaller cards tell you how much ready volume you
-                have, how many senders are still warming up, and how many need fixing.
+                The big card shows what can send right now and what is blocking everything else. The smaller cards tell
+                you how much ready volume you have, how many senders are still warming up, and how many need fixing.
               </p>
               <p>
                 Only senders marked <span className="font-medium">Can send</span> count toward ready volume today.
@@ -671,25 +893,41 @@ export default function NetworkClient({
         <div className="grid gap-4 xl:grid-cols-[minmax(0,1.35fr)_repeat(3,minmax(0,0.55fr))]">
           <div className="space-y-3 rounded-[16px] border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-4 py-4 md:px-5">
             <div className="flex flex-wrap items-center gap-2">
-              <Badge variant={preferredReadyRoutingSignal ? "success" : "muted"}>
-                {preferredReadyRoutingSignal ? "Sending now" : "Nobody ready yet"}
+              <Badge variant={preferredReadyRoutingSignal ? "success" : senderSummary.autoFixCount ? "accent" : "muted"}>
+                {preferredReadyRoutingSignal
+                  ? "Sending now"
+                  : senderSummary.autoFixCount
+                    ? "Fixes available"
+                    : "Nobody ready yet"}
               </Badge>
               {preferredReadyRoutingSignal ? <RoutingScoreDetails signal={preferredReadyRoutingSignal} /> : null}
             </div>
             <div>
               <div className="text-lg font-semibold text-[color:var(--foreground)]">
-                {preferredReadyRoutingSignal?.fromEmail || "No sender is ready to send yet"}
+                {preferredReadyRoutingSignal?.fromEmail || "0 senders can send right now"}
               </div>
               <div className="mt-1 text-sm leading-6 text-[color:var(--muted-foreground)]">
                 {preferredReadyRoutingSignal
                   ? `${preferredReadyRoutingSignal.senderAccountName} · ${preferredReadyRoutingSignal.domain}`
-                  : "Finish setup or let warmup complete and the healthiest sender will show up here automatically."}
+                  : [
+                      senderSummary.dnsWaitingCount
+                        ? `${senderSummary.dnsWaitingCount} waiting on DNS`
+                        : "",
+                      senderSummary.mailboxMissingCount
+                        ? `${senderSummary.mailboxMissingCount} missing a mailbox`
+                        : "",
+                      senderSummary.fixCount ? `${senderSummary.fixCount} paused` : "",
+                    ]
+                      .filter(Boolean)
+                      .join(" · ") || "Finish setup and the healthiest sender will show up here automatically."}
               </div>
             </div>
             <div className="text-sm leading-6 text-[color:var(--foreground)]">
               {preferredReadyRoutingSignal
                 ? "This sender is first in line right now. If it slips, the system moves traffic to a healthy backup."
-                : "Use the cards below to see which senders are ready, which ones are warming up, and which ones need a fix."}
+                : senderSummary.autoFixCount
+                  ? "Use the fix buttons on the sender cards below. Setup problems can be repaired here without leaving the page."
+                  : "Use the cards below to see which senders are ready, which ones are warming up, and which ones need a fix."}
             </div>
             <div className="flex flex-wrap items-center gap-2 text-xs text-[color:var(--muted-foreground)]">
               <span>
@@ -770,11 +1008,13 @@ export default function NetworkClient({
               const status = senderCardStatus(item, routingRole);
               const overallHealth = senderOverallHealth(item);
               const today = senderTodaySummary(item, status);
-              const nextStep = senderNextStep(item, status, overallHealth);
+              const action = senderActionPlan(item, status, overallHealth);
+              const nextStep = action?.label ?? senderNextStep(item, status, overallHealth);
               const healthSignals = senderHealthSignals(item);
               const setupLine = senderSetupLine(item);
               const dailyCap = senderDailyCap(item);
               const warmupDay = senderWarmupDay(item.lastProvisionedAt);
+              const actionState = senderActionState[item.id] ?? EMPTY_SENDER_ACTION_STATE;
 
               return (
                 <article
@@ -785,7 +1025,9 @@ export default function NetworkClient({
                     <div className="min-w-0 xl:max-w-[26rem]">
                       <div className="flex flex-wrap items-center gap-2">
                         <Badge variant={senderCardStatusVariant(status)}>{senderCardStatusLabel(status)}</Badge>
-                        <Badge variant={routingRoleBadgeVariant(routingRole)}>{senderRouteLabel(routingRole, item)}</Badge>
+                        <Badge variant={senderRouteVariant(status, routingRole)}>
+                          {senderRouteLabel(routingRole, item, status, overallHealth)}
+                        </Badge>
                         <Badge variant={senderOverallHealthVariant(overallHealth)}>
                           Health {senderOverallHealthLabel(overallHealth)}
                         </Badge>
@@ -824,25 +1066,19 @@ export default function NetworkClient({
                         </div>
                       </div>
                       <div className="rounded-[12px] border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-3">
-                        <div className="text-[10px] uppercase tracking-[0.14em] text-[color:var(--muted-foreground)]">Send order</div>
+                        <div className="text-[10px] uppercase tracking-[0.14em] text-[color:var(--muted-foreground)]">Status</div>
                         <div className="mt-2 text-xl font-semibold text-[color:var(--foreground)]">
-                          {senderRouteLabel(routingRole, item)}
+                          {senderRouteLabel(routingRole, item, status, overallHealth)}
                         </div>
                         <div className="mt-1 text-xs leading-5 text-[color:var(--muted-foreground)]">
-                          {routingRole === "primary"
-                            ? "First in line"
-                            : routingRole === "standby"
-                              ? "Healthy backup"
-                              : routingRole === "blocked"
-                                ? "Out of rotation"
-                                : "Waiting for setup"}
+                          {senderRouteDetail(routingRole, item, status, overallHealth)}
                         </div>
                       </div>
                       <div className="rounded-[12px] border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-3">
                         <div className="text-[10px] uppercase tracking-[0.14em] text-[color:var(--muted-foreground)]">Next step</div>
                         <div className="mt-2 text-xl font-semibold text-[color:var(--foreground)]">{nextStep}</div>
                         <div className="mt-1 text-xs leading-5 text-[color:var(--muted-foreground)]">
-                          {automationTimingLabel(item)}
+                          {action?.description ?? automationTimingLabel(item)}
                         </div>
                       </div>
                     </div>
@@ -851,6 +1087,33 @@ export default function NetworkClient({
                   <p className="mt-4 text-sm leading-6 text-[color:var(--foreground)]">
                     {senderSummaryLine(item, status, routingRole, overallHealth)}
                   </p>
+
+                  {action ? (
+                    <div className="mt-4 flex flex-wrap items-center gap-3">
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant={action.kind === "open_settings" ? "outline" : status === "fix" ? "danger" : "default"}
+                        onClick={() => void handleSenderAction(item, action)}
+                        disabled={actionState.pending}
+                      >
+                        {actionState.pending ? "Working..." : action.label}
+                      </Button>
+                      <div className="text-sm text-[color:var(--muted-foreground)]">{action.description}</div>
+                    </div>
+                  ) : null}
+
+                  {actionState.error ? (
+                    <div className="mt-3 rounded-[12px] border border-[color:var(--danger-border)] bg-[color:var(--danger-soft)] px-3 py-2 text-sm text-[color:var(--danger)]">
+                      {actionState.error}
+                    </div>
+                  ) : null}
+
+                  {actionState.success ? (
+                    <div className="mt-3 rounded-[12px] border border-[color:var(--success-border)] bg-[color:var(--success-soft)] px-3 py-2 text-sm text-[color:var(--success)]">
+                      {actionState.success}
+                    </div>
+                  ) : null}
 
                   <div className="mt-4 flex flex-wrap items-center gap-2">
                     {healthSignals.map(([label, value]) => (
@@ -931,12 +1194,9 @@ export default function NetworkClient({
               onProvisioned={(result) => {
                 void (async () => {
                   try {
-                    const refreshedBrand = await fetchBrand(brand.id);
-                    setDomains(refreshedBrand.domains || []);
+                    await refreshDomainsFromServer();
                   } catch (err) {
                     setError(err instanceof Error ? err.message : "Failed to refresh senders.");
-                  } finally {
-                    router.refresh();
                   }
                 })();
                 if (result.readyToSend) {

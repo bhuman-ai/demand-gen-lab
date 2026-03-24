@@ -13,6 +13,12 @@ import {
   updateOperatorRun,
   updateOperatorThread,
 } from "@/lib/operator-data";
+import {
+  getOperatorBrandMemory,
+  rememberOperatorRecentSelection,
+  rememberProvisionMailpoolSenderInput,
+  type OperatorBrandMemory,
+} from "@/lib/operator-memory";
 import { getOperatorBrandContext } from "@/lib/operator-context";
 import { getOperatorToolSpec, listOperatorToolSpecs } from "@/lib/operator-tools";
 import type {
@@ -353,14 +359,19 @@ function buildFormField(input: Partial<OperatorExecutionFormField> & Pick<Operat
 
 function buildProvisionForms(input: {
   brandContext: Awaited<ReturnType<typeof getOperatorBrandContext>>;
+  brandMemory: OperatorBrandMemory | null;
   toolInput: Record<string, unknown>;
   missingFields: string[];
 }): OperatorExecutionForm[] {
   const forms: OperatorExecutionForm[] = [];
-  const domainMode = asString(input.toolInput.domainMode);
-  const fromLocalPart = asString(input.toolInput.fromLocalPart);
-  const domain = asString(input.toolInput.domain);
-  const senderEmail = fromLocalPart && domain ? `${fromLocalPart}@${domain}` : "";
+  const domainMode =
+    asString(input.toolInput.domainMode) || asString(input.brandMemory?.senderDefaults.domainMode);
+  const fromLocalPart =
+    asString(input.toolInput.fromLocalPart) || asString(input.brandMemory?.senderDefaults.fromLocalPart);
+  const domain = asString(input.toolInput.domain) || asString(input.brandMemory?.senderDefaults.domain);
+  const senderEmail =
+    (fromLocalPart && domain ? `${fromLocalPart}@${domain}` : "") ||
+    asString(input.brandMemory?.senderDefaults.senderEmail);
   const registrant = asRecord(input.toolInput.registrant);
   const inventory = input.brandContext?.provisioning.mailpoolDomains ?? [];
   const inventoryOptions = inventory.map((item) => ({
@@ -459,7 +470,7 @@ function buildProvisionForms(input: {
           type: "text",
           required: true,
           placeholder: "Marco",
-          value: asString(registrant.firstName),
+          value: asString(registrant.firstName) || asString(input.brandMemory?.registrantDefaults.firstName),
           autoComplete: "given-name",
         }),
         buildFormField({
@@ -468,7 +479,7 @@ function buildProvisionForms(input: {
           type: "text",
           required: true,
           placeholder: "Rosetti",
-          value: asString(registrant.lastName),
+          value: asString(registrant.lastName) || asString(input.brandMemory?.registrantDefaults.lastName),
           autoComplete: "family-name",
         }),
         buildFormField({
@@ -477,7 +488,10 @@ function buildProvisionForms(input: {
           type: "text",
           required: false,
           placeholder: input.brandContext?.brand.name || "SelfFunded",
-          value: asString(registrant.organizationName) || asString(input.brandContext?.brand.name),
+          value:
+            asString(registrant.organizationName) ||
+            asString(input.brandMemory?.registrantDefaults.organizationName) ||
+            asString(input.brandContext?.brand.name),
           autoComplete: "organization",
         }),
         buildFormField({
@@ -486,7 +500,7 @@ function buildProvisionForms(input: {
           type: "email",
           required: true,
           placeholder: "mrosetti@selffunded.dev",
-          value: asString(registrant.emailAddress),
+          value: asString(registrant.emailAddress) || asString(input.brandMemory?.registrantDefaults.emailAddress),
           autoComplete: "email",
         }),
         buildFormField({
@@ -495,7 +509,7 @@ function buildProvisionForms(input: {
           type: "tel",
           required: false,
           placeholder: "+39 080 000 0000",
-          value: asString(registrant.phone),
+          value: asString(registrant.phone) || asString(input.brandMemory?.registrantDefaults.phone),
           autoComplete: "tel",
         }),
         buildFormField({
@@ -504,7 +518,7 @@ function buildProvisionForms(input: {
           type: "text",
           required: true,
           placeholder: "Piazza Umberto I, 1",
-          value: asString(registrant.address1),
+          value: asString(registrant.address1) || asString(input.brandMemory?.registrantDefaults.address1),
           autoComplete: "address-line1",
         }),
         buildFormField({
@@ -513,7 +527,7 @@ function buildProvisionForms(input: {
           type: "text",
           required: true,
           placeholder: "Bari",
-          value: asString(registrant.city),
+          value: asString(registrant.city) || asString(input.brandMemory?.registrantDefaults.city),
           autoComplete: "address-level2",
         }),
         buildFormField({
@@ -522,7 +536,9 @@ function buildProvisionForms(input: {
           type: "text",
           required: true,
           placeholder: "BA",
-          value: asString(registrant.stateProvince),
+          value:
+            asString(registrant.stateProvince) ||
+            asString(input.brandMemory?.registrantDefaults.stateProvince),
           autoComplete: "address-level1",
         }),
         buildFormField({
@@ -531,7 +547,9 @@ function buildProvisionForms(input: {
           type: "text",
           required: true,
           placeholder: "70121",
-          value: asString(registrant.postalCode),
+          value:
+            asString(registrant.postalCode) ||
+            asString(input.brandMemory?.registrantDefaults.postalCode),
           autoComplete: "postal-code",
         }),
         buildFormField({
@@ -540,7 +558,10 @@ function buildProvisionForms(input: {
           type: "text",
           required: true,
           placeholder: "IT",
-          value: asString(registrant.country) || "US",
+          value:
+            asString(registrant.country) ||
+            asString(input.brandMemory?.registrantDefaults.country) ||
+            "US",
           autoComplete: "country",
         }),
       ],
@@ -685,6 +706,43 @@ function findNamedItem<T extends { id: string; name?: string; subject?: string; 
   }
 
   return null;
+}
+
+function findNamedCandidates<T extends { id: string; name?: string; subject?: string; status?: string }>(
+  items: T[],
+  input: {
+    explicitId?: string;
+    explicitName?: string;
+    message: string;
+    statusHints?: string[];
+  }
+) {
+  if (input.explicitId) {
+    return items.filter((item) => item.id === input.explicitId);
+  }
+
+  const messageText = normalizeMatchText(input.message);
+  const explicitName = normalizeMatchText(input.explicitName ?? "");
+  const candidates = items.filter((item) => {
+    if (!input.statusHints?.length) return true;
+    return input.statusHints.some((status) => normalizeMatchText(item.status ?? "") === normalizeMatchText(status));
+  });
+
+  if (explicitName) {
+    const exact = candidates.filter((item) => {
+      const label = normalizeMatchText(String(item.name ?? item.subject ?? ""));
+      return label === explicitName;
+    });
+    if (exact.length) return exact;
+  }
+
+  const matched = candidates.filter((item) => {
+    const label = normalizeMatchText(String(item.name ?? item.subject ?? ""));
+    return label.length > 0 && messageText.includes(label);
+  });
+  if (matched.length) return matched;
+
+  return candidates;
 }
 
 function summarizeActionPreview(action: OperatorAction): OperatorChatAssistantReply {
@@ -982,12 +1040,246 @@ function resolveDraftId(
   return matched?.id ?? "";
 }
 
+function mentionsReferencePronoun(message: string) {
+  return /\b(it|that|this one|that one|current one|current)\b/.test(message.toLowerCase());
+}
+
+function experimentStatusHints(message: string) {
+  const lowered = message.toLowerCase();
+  if (/\brunning\b/.test(lowered)) return ["Running", "Sourcing"];
+  if (/\bdraft\b/.test(lowered)) return ["Draft"];
+  if (/\bcompleted\b/.test(lowered)) return ["Completed"];
+  if (/\bpaused\b/.test(lowered)) return ["Paused"];
+  if (/\bready\b/.test(lowered)) return ["Ready", "Preparing"];
+  return undefined;
+}
+
+function campaignStatusHints(message: string) {
+  const lowered = message.toLowerCase();
+  if (/\bactive\b/.test(lowered)) return ["active"];
+  if (/\bdraft\b/.test(lowered)) return ["draft"];
+  if (/\bpaused\b/.test(lowered)) return ["paused"];
+  if (/\bcompleted\b/.test(lowered)) return ["completed"];
+  return undefined;
+}
+
+function inferExperimentIntent(message: string) {
+  const lowered = message.toLowerCase();
+  if (lowered.includes("launch") || lowered.includes("start")) {
+    return {
+      toolName: "launch_experiment_run" as const,
+      verb: "launch",
+      buildMessage: (name: string) => `Launch experiment "${name}".`,
+      input: {},
+    };
+  }
+  if (lowered.includes("pause") || lowered.includes("resume") || lowered.includes("cancel")) {
+    const action = lowered.includes("pause") ? "pause" : lowered.includes("resume") ? "resume" : "cancel";
+    return {
+      toolName: "control_experiment_run" as const,
+      verb: action,
+      buildMessage: (name: string) => `${action.charAt(0).toUpperCase()}${action.slice(1)} experiment "${name}".`,
+      input: { action },
+    };
+  }
+  if (lowered.includes("promote") || lowered.includes("make campaign")) {
+    return {
+      toolName: "promote_experiment_to_campaign" as const,
+      verb: "promote",
+      buildMessage: (name: string) => `Promote experiment "${name}" to a campaign.`,
+      input: {},
+    };
+  }
+  if (lowered.includes("delete") || lowered.includes("remove")) {
+    return {
+      toolName: "delete_experiment" as const,
+      verb: "delete",
+      buildMessage: (name: string) => `Delete experiment "${name}".`,
+      input: {},
+    };
+  }
+  return {
+    toolName: "get_experiment_snapshot" as const,
+    verb: "inspect",
+    buildMessage: (name: string) => `Show experiment "${name}".`,
+    input: {},
+  };
+}
+
+function inferCampaignIntent(message: string) {
+  const lowered = message.toLowerCase();
+  if (lowered.includes("launch") || lowered.includes("start")) {
+    return {
+      toolName: "launch_campaign_run" as const,
+      verb: "launch",
+      buildMessage: (name: string) => `Launch campaign "${name}".`,
+      input: {},
+    };
+  }
+  if (lowered.includes("pause") || lowered.includes("resume") || lowered.includes("cancel")) {
+    const action = lowered.includes("pause") ? "pause" : lowered.includes("resume") ? "resume" : "cancel";
+    return {
+      toolName: "control_campaign_run" as const,
+      verb: action,
+      buildMessage: (name: string) => `${action.charAt(0).toUpperCase()}${action.slice(1)} campaign "${name}".`,
+      input: { action },
+    };
+  }
+  if (lowered.includes("delete") || lowered.includes("remove")) {
+    return {
+      toolName: "delete_campaign" as const,
+      verb: "delete",
+      buildMessage: (name: string) => `Delete campaign "${name}".`,
+      input: {},
+    };
+  }
+  return {
+    toolName: "get_campaign_snapshot" as const,
+    verb: "inspect",
+    buildMessage: (name: string) => `Show campaign "${name}".`,
+    input: {},
+  };
+}
+
+function inferDraftIntent(message: string) {
+  const lowered = message.toLowerCase();
+  if (lowered.includes("dismiss") || lowered.includes("skip")) {
+    return {
+      toolName: "dismiss_reply_draft" as const,
+      verb: "dismiss",
+      buildMessage: (subject: string) => `Dismiss draft "${subject}".`,
+    };
+  }
+  return {
+    toolName: "send_reply_draft" as const,
+    verb: "send",
+    buildMessage: (subject: string) => `Send draft "${subject}".`,
+  };
+}
+
+function buildDisambiguationEnvelope(input: {
+  toolName: OperatorToolName;
+  toolInput: Record<string, unknown>;
+  label: string;
+  questionPrompt: string;
+  options: Array<{ label: string; message: string }>;
+}): {
+  assistant: OperatorChatAssistantReply;
+  execution: OperatorExecutionEnvelope;
+} {
+  return {
+    assistant: {
+      summary: input.label,
+      findings: [],
+      recommendations: [],
+    },
+    execution: buildNeedInfoEnvelope({
+      toolName: input.toolName,
+      toolInput: input.toolInput,
+      missingFields: [input.questionPrompt.toLowerCase()],
+      questions: [buildQuestion(input.questionPrompt, input.options)],
+    }),
+  };
+}
+
+function inferDisambiguationTurn(input: {
+  message: string;
+  brandContext: Awaited<ReturnType<typeof getOperatorBrandContext>>;
+}) {
+  const context = input.brandContext;
+  if (!context) return null;
+  const message = input.message;
+  const lowered = message.toLowerCase();
+  const quoted = extractQuotedText(message);
+
+  if (/\bexperiments?\b/.test(lowered) || (mentionsReferencePronoun(message) && (lowered.includes("pause") || lowered.includes("resume") || lowered.includes("cancel") || lowered.includes("launch") || lowered.includes("start") || lowered.includes("promote") || lowered.includes("delete") || lowered.includes("show") || lowered.includes("open")))) {
+    const candidates = findNamedCandidates(context.experiments.items, {
+      explicitName: quoted,
+      message,
+      statusHints: experimentStatusHints(message),
+    });
+    if (candidates.length > 1) {
+      const intent = inferExperimentIntent(message);
+      const prompt =
+        candidates.length === 2
+          ? `I found two matching experiments. Which one do you want me to ${intent.verb}?`
+          : `I found ${candidates.length} matching experiments. Which one do you want me to ${intent.verb}?`;
+      return buildDisambiguationEnvelope({
+        toolName: intent.toolName,
+        toolInput: { brandId: context.brand.id, ...intent.input },
+        label: prompt,
+        questionPrompt: "Choose an experiment",
+        options: candidates.slice(0, 6).map((item) => ({
+          label: item.name,
+          message: intent.buildMessage(item.name),
+        })),
+      });
+    }
+  }
+
+  if (/\bcampaigns?\b/.test(lowered)) {
+    const candidates = findNamedCandidates(context.campaigns.items, {
+      explicitName: quoted,
+      message,
+      statusHints: campaignStatusHints(message),
+    });
+    if (candidates.length > 1) {
+      const intent = inferCampaignIntent(message);
+      const prompt =
+        candidates.length === 2
+          ? `I found two matching campaigns. Which one do you want me to ${intent.verb}?`
+          : `I found ${candidates.length} matching campaigns. Which one do you want me to ${intent.verb}?`;
+      return buildDisambiguationEnvelope({
+        toolName: intent.toolName,
+        toolInput: { brandId: context.brand.id, ...intent.input },
+        label: prompt,
+        questionPrompt: "Choose a campaign",
+        options: candidates.slice(0, 6).map((item) => ({
+          label: item.name,
+          message: intent.buildMessage(item.name),
+        })),
+      });
+    }
+  }
+
+  if (/\bdrafts?\b/.test(lowered) && (lowered.includes("send") || lowered.includes("dismiss") || lowered.includes("skip"))) {
+    const candidates = findNamedCandidates(
+      context.inbox.draftItems.map((draft) => ({ ...draft, name: draft.subject })),
+      {
+        explicitName: quoted,
+        message,
+        statusHints: ["draft"],
+      }
+    );
+    if (candidates.length > 1) {
+      const intent = inferDraftIntent(message);
+      const prompt =
+        candidates.length === 2
+          ? `I found two matching drafts. Which one do you want me to ${intent.verb}?`
+          : `I found ${candidates.length} matching drafts. Which one do you want me to ${intent.verb}?`;
+      return buildDisambiguationEnvelope({
+        toolName: intent.toolName,
+        toolInput: { brandId: context.brand.id },
+        label: prompt,
+        questionPrompt: "Choose a draft",
+        options: candidates.slice(0, 6).map((item) => ({
+          label: item.subject,
+          message: intent.buildMessage(item.subject),
+        })),
+      });
+    }
+  }
+
+  return null;
+}
+
 function normalizeRequestedAction(input: {
   raw: unknown;
   brandId: string;
   mode: OperatorChatRequest["mode"];
   message: string;
   context: Awaited<ReturnType<typeof getOperatorBrandContext>>;
+  brandMemory: OperatorBrandMemory | null;
 }): OperatorRequestedAction | null {
   if (input.mode === "recommendation_only") return null;
   const row = asRecord(input.raw);
@@ -1043,7 +1335,9 @@ function normalizeRequestedAction(input: {
       "promote_experiment_to_campaign",
     ].includes(toolName)
   ) {
-    const experimentId = resolveExperimentId(toolInput, input.context, input.message);
+    const experimentId =
+      resolveExperimentId(toolInput, input.context, input.message) ||
+      (mentionsReferencePronoun(input.message) ? asString(input.brandMemory?.recentSelection.experimentId) : "");
     if (!experimentId) return null;
     toolInput.experimentId = experimentId;
     if (!asString(toolInput.experimentName)) {
@@ -1057,7 +1351,9 @@ function normalizeRequestedAction(input: {
       toolName
     )
   ) {
-    const campaignId = resolveCampaignId(toolInput, input.context, input.message);
+    const campaignId =
+      resolveCampaignId(toolInput, input.context, input.message) ||
+      (mentionsReferencePronoun(input.message) ? asString(input.brandMemory?.recentSelection.campaignId) : "");
     if (!campaignId) return null;
     toolInput.campaignId = campaignId;
     if (!asString(toolInput.campaignName)) {
@@ -1067,7 +1363,9 @@ function normalizeRequestedAction(input: {
   }
 
   if (toolName === "update_brand_lead") {
-    const leadId = resolveLeadId(toolInput, input.context, input.message);
+    const leadId =
+      resolveLeadId(toolInput, input.context, input.message) ||
+      (mentionsReferencePronoun(input.message) ? asString(input.brandMemory?.recentSelection.leadId) : "");
     if (!leadId) return null;
     toolInput.leadId = leadId;
     if (!asString(toolInput.leadName)) {
@@ -1077,7 +1375,9 @@ function normalizeRequestedAction(input: {
   }
 
   if (toolName === "send_reply_draft" || toolName === "dismiss_reply_draft") {
-    const draftId = resolveDraftId(toolInput, input.context, input.message);
+    const draftId =
+      resolveDraftId(toolInput, input.context, input.message) ||
+      (mentionsReferencePronoun(input.message) ? asString(input.brandMemory?.recentSelection.draftId) : "");
     if (!draftId) return null;
     toolInput.draftId = draftId;
     if (!asString(toolInput.draftSubject)) {
@@ -1118,6 +1418,7 @@ function buildOperatorPrompt(input: {
   messages: OperatorMessage[];
   brandId: string;
   context: Awaited<ReturnType<typeof getOperatorBrandContext>>;
+  brandMemory: OperatorBrandMemory | null;
   trace: OperatorPlannerResult["trace"];
   stepNumber: number;
   maxSteps: number;
@@ -1178,6 +1479,7 @@ function buildOperatorPrompt(input: {
     `Tool catalog JSON: ${JSON.stringify(toolCatalog)}`,
     `Recent thread messages JSON: ${JSON.stringify(summarizePromptMessages(input.messages))}`,
     `Current brand context JSON: ${JSON.stringify(summarizePromptContext(input.context, { includeCampaigns }))}`,
+    `Operator brand memory JSON: ${JSON.stringify(input.brandMemory)}`,
     `Tool results so far JSON: ${JSON.stringify(input.trace)}`,
     `Latest user message: ${input.message}`,
   ].join("\n\n");
@@ -1189,6 +1491,7 @@ async function planOperatorReplyWithLlm(input: {
   mode: OperatorChatRequest["mode"];
   messages: OperatorMessage[];
   context: Awaited<ReturnType<typeof getOperatorBrandContext>>;
+  brandMemory: OperatorBrandMemory | null;
   fallbackAssistant: OperatorChatAssistantReply;
 }): Promise<OperatorPlannerResult | null> {
   const apiKey = String(process.env.OPENAI_API_KEY ?? "").trim();
@@ -1295,6 +1598,7 @@ async function planOperatorReplyWithLlm(input: {
         mode: input.mode,
         message: input.message,
         context: input.context,
+        brandMemory: input.brandMemory,
       });
       const tool = normalizedAction ? getOperatorToolSpec(normalizedAction.toolName) : null;
 
@@ -1382,7 +1686,8 @@ async function planOperatorReplyWithLlm(input: {
 
 function inferActionFromMessage(
   input: OperatorChatRequest,
-  context: Awaited<ReturnType<typeof getOperatorBrandContext>>
+  context: Awaited<ReturnType<typeof getOperatorBrandContext>>,
+  brandMemory: OperatorBrandMemory | null
 ): OperatorRequestedAction | null {
   const message = input.message.trim().toLowerCase();
   if (!message) return null;
@@ -1392,6 +1697,37 @@ function inferActionFromMessage(
   const draftId = resolveDraftId({}, context, input.message);
   const leadId = resolveLeadId({}, context, input.message);
   const requestedDomain = extractDomain(input.message);
+
+  if (context?.brand.id && mentionsReferencePronoun(message)) {
+    if ((message.includes("pause") || message.includes("resume") || message.includes("cancel")) && asString(brandMemory?.recentSelection.experimentId)) {
+      return {
+        toolName: "control_experiment_run",
+        input: {
+          brandId: context.brand.id,
+          experimentId: asString(brandMemory?.recentSelection.experimentId),
+          action: message.includes("pause") ? "pause" : message.includes("resume") ? "resume" : "cancel",
+        },
+      };
+    }
+    if ((message.includes("launch") || message.includes("start")) && asString(brandMemory?.recentSelection.experimentId)) {
+      return {
+        toolName: "launch_experiment_run",
+        input: {
+          brandId: context.brand.id,
+          experimentId: asString(brandMemory?.recentSelection.experimentId),
+        },
+      };
+    }
+    if ((message.includes("send") || message.includes("dismiss") || message.includes("skip")) && asString(brandMemory?.recentSelection.draftId)) {
+      return {
+        toolName: message.includes("dismiss") || message.includes("skip") ? "dismiss_reply_draft" : "send_reply_draft",
+        input: {
+          brandId: context.brand.id,
+          draftId: asString(brandMemory?.recentSelection.draftId),
+        },
+      };
+    }
+  }
 
   if (looksLikeBrandCreationRequest(message) && requestedDomain) {
     return {
@@ -1723,7 +2059,12 @@ export async function runOperatorChatTurn(input: OperatorChatRequest): Promise<O
     content: { text: input.message },
   });
 
-  const brandContext = resolvedBrandId ? await getOperatorBrandContext(resolvedBrandId) : null;
+  const [brandContext, brandMemory] = resolvedBrandId
+    ? await Promise.all([
+        getOperatorBrandContext(resolvedBrandId),
+        getOperatorBrandMemory(resolvedBrandId),
+      ])
+    : [null, null];
   const greetingOnly = isCasualGreeting(input.message);
   const fallbackAssistant = greetingOnly
     ? buildGreetingAssistant(brandContext?.brand.name)
@@ -1750,6 +2091,7 @@ export async function runOperatorChatTurn(input: OperatorChatRequest): Promise<O
         mode: input.mode,
         message: input.message,
         context: brandContext,
+        brandMemory,
       })
     : null;
   const llmPlan = structuredAction
@@ -1760,13 +2102,14 @@ export async function runOperatorChatTurn(input: OperatorChatRequest): Promise<O
         mode: input.mode,
         messages: messageHistory,
         context: brandContext,
+        brandMemory,
         fallbackAssistant,
       });
   const requestedAction = structuredAction
     ? structuredAction
     : llmPlan
       ? filterRequestedActionForMessage(llmPlan.requestedAction, input.message)
-      : filterRequestedActionForMessage(inferActionFromMessage(input, brandContext), input.message);
+      : filterRequestedActionForMessage(inferActionFromMessage(input, brandContext, brandMemory), input.message);
   const run = await createOperatorRun({
     threadId: thread.id,
     brandId: resolvedBrandId,
@@ -1791,6 +2134,19 @@ export async function runOperatorChatTurn(input: OperatorChatRequest): Promise<O
     const actions: OperatorAction[] = [];
 
     if (requestedAction) {
+      if (resolvedBrandId && requestedAction.toolName === "provision_mailpool_sender") {
+        await rememberProvisionMailpoolSenderInput(resolvedBrandId, requestedAction.input);
+      }
+      if (resolvedBrandId) {
+        await rememberOperatorRecentSelection(resolvedBrandId, {
+          experimentId: asString(requestedAction.input.experimentId),
+          campaignId: asString(requestedAction.input.campaignId),
+          leadId: asString(requestedAction.input.leadId),
+          draftId: asString(requestedAction.input.draftId),
+          senderAccountId:
+            asString(requestedAction.input.accountId) || asString(requestedAction.input.senderAccountId),
+        });
+      }
       const tool = getOperatorToolSpec(requestedAction.toolName);
       if (!tool) {
         assistant = {
@@ -1828,6 +2184,7 @@ export async function runOperatorChatTurn(input: OperatorChatRequest): Promise<O
           }),
           forms: buildProvisionForms({
             brandContext,
+            brandMemory,
             toolInput: requestedAction.input,
             missingFields: ["sender email"],
           }),
@@ -1863,6 +2220,7 @@ export async function runOperatorChatTurn(input: OperatorChatRequest): Promise<O
             }),
             forms: buildProvisionForms({
               brandContext,
+              brandMemory,
               toolInput: requestedAction.input,
               missingFields: buildProvisionMissingFields(requestedAction.input),
             }),
@@ -2028,19 +2386,28 @@ export async function runOperatorChatTurn(input: OperatorChatRequest): Promise<O
         }
       }
     } else {
-      assistant = makeUnexecutedActionAssistant(input.message, llmPlan?.assistant ?? fallbackAssistant);
-      execution = isExplicitMutationRequest(input.message)
-        ? buildNeedInfoEnvelope({
-            missingFields: [],
-            questions: [
-              buildQuestion("What should I do next?", [
-                { label: "Summarize this brand", message: "Summarize this brand." },
-                { label: "Check senders", message: "What needs attention with the senders?" },
-                { label: "Summarize inbox", message: "Summarize inbox activity." },
-              ]),
-            ],
-          })
-        : buildExecutionEnvelope({ state: "answer_only" });
+      const disambiguation = inferDisambiguationTurn({
+        message: input.message,
+        brandContext,
+      });
+      if (disambiguation) {
+        assistant = disambiguation.assistant;
+        execution = disambiguation.execution;
+      } else {
+        assistant = makeUnexecutedActionAssistant(input.message, llmPlan?.assistant ?? fallbackAssistant);
+        execution = isExplicitMutationRequest(input.message)
+          ? buildNeedInfoEnvelope({
+              missingFields: [],
+              questions: [
+                buildQuestion("What should I do next?", [
+                  { label: "Summarize this brand", message: "Summarize this brand." },
+                  { label: "Check senders", message: "What needs attention with the senders?" },
+                  { label: "Summarize inbox", message: "Summarize inbox activity." },
+                ]),
+              ],
+            })
+          : buildExecutionEnvelope({ state: "answer_only" });
+      }
     }
 
     const assistantMessage = await createAssistantMessage(thread.id, assistant, execution);

@@ -15,10 +15,55 @@ import {
   calculateSenderCapacityPolicy,
   type SenderCapacitySnapshot,
 } from "@/lib/sender-capacity";
-import { getDomainDeliveryAccountId, getOutreachAccountFromEmail } from "@/lib/outreach-account-helpers";
+import {
+  getDomainDeliveryAccountId,
+  getOutreachAccountFromEmail,
+  getOutreachAccountReplyToEmail,
+} from "@/lib/outreach-account-helpers";
+import type { DomainRow } from "@/lib/factory-types";
 import { notFound } from "next/navigation";
 
 const DEFAULT_SENDER_BUSINESS_HOURS = 8;
+
+function buildSyntheticAssignedSenderRow(input: {
+  accountId: string;
+  accountName: string;
+  fromEmail: string;
+  replyMailboxEmail: string;
+  createdAt: string;
+}): DomainRow {
+  const domain = input.fromEmail.split("@")[1]?.trim().toLowerCase() || input.fromEmail.trim().toLowerCase();
+  return {
+    id: `assigned-sender:${input.accountId}`,
+    domain,
+    status: "active",
+    warmupStage: "assigned",
+    reputation: "good",
+    automationStatus: "ready",
+    automationSummary: "Assigned sender account available for this brand.",
+    domainHealth: "healthy",
+    domainHealthSummary: "Assigned sender is active and already configured for outbound delivery.",
+    emailHealth: "healthy",
+    emailHealthSummary: "Sender mailbox is active.",
+    ipHealth: "healthy",
+    ipHealthSummary: "Delivery account is active.",
+    messagingHealth: "healthy",
+    messagingHealthSummary: "This sender is available for production sends.",
+    seedPolicy: "fresh_pool",
+    role: "sender",
+    registrar: "manual",
+    provider: "customerio",
+    dnsStatus: "verified",
+    fromEmail: input.fromEmail,
+    replyMailboxEmail: input.replyMailboxEmail,
+    deliveryAccountId: input.accountId,
+    deliveryAccountName: input.accountName,
+    customerIoAccountId: input.accountId,
+    customerIoAccountName: input.accountName,
+    notes: "Synthesized from the brand's assigned delivery account.",
+    lastProvisionedAt: input.createdAt,
+  };
+}
 
 export default async function NetworkPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
@@ -59,6 +104,31 @@ export default async function NetworkPage({ params }: { params: Promise<{ id: st
       (fromEmail ? senderEmails.has(fromEmail) : false)
     );
   });
+  const replyMailboxAccount = accounts.find((account) => account.id === assignment?.mailboxAccountId) ?? null;
+  const syntheticAssignedSenderRows = brandSenderAccounts.flatMap((account) => {
+    const fromEmail = getOutreachAccountFromEmail(account).trim().toLowerCase();
+    if (!fromEmail) return [];
+    const existingRow =
+      enrichedBrand.domains.find((row) => getDomainDeliveryAccountId(row) === account.id) ??
+      enrichedBrand.domains.find((row) => String(row.fromEmail ?? "").trim().toLowerCase() === fromEmail) ??
+      null;
+    if (existingRow) return [];
+    return [
+      buildSyntheticAssignedSenderRow({
+        accountId: account.id,
+        accountName: account.name,
+        fromEmail,
+        replyMailboxEmail:
+          getOutreachAccountReplyToEmail(replyMailboxAccount)?.trim().toLowerCase() ||
+          getOutreachAccountReplyToEmail(account)?.trim().toLowerCase(),
+        createdAt: account.createdAt,
+      }),
+    ];
+  });
+  const mergedBrand = {
+    ...enrichedBrand,
+    domains: [...enrichedBrand.domains, ...syntheticAssignedSenderRows],
+  };
   const senderScorecards = buildSenderDeliverabilityScorecards({
     probeRuns,
     senderAccounts: brandSenderAccounts,
@@ -82,8 +152,8 @@ export default async function NetworkPage({ params }: { params: Promise<{ id: st
     .map((account) => {
       const fromEmail = getOutreachAccountFromEmail(account).trim().toLowerCase();
       const row =
-        enrichedBrand.domains.find((item) => getDomainDeliveryAccountId(item) === account.id) ??
-        enrichedBrand.domains.find((item) => String(item.fromEmail ?? "").trim().toLowerCase() === fromEmail) ??
+        mergedBrand.domains.find((item) => getDomainDeliveryAccountId(item) === account.id) ??
+        mergedBrand.domains.find((item) => String(item.fromEmail ?? "").trim().toLowerCase() === fromEmail) ??
         null;
       const policy = calculateSenderCapacityPolicy({
         account,
@@ -105,7 +175,7 @@ export default async function NetworkPage({ params }: { params: Promise<{ id: st
 
   return (
     <NetworkClient
-      brand={enrichedBrand}
+      brand={mergedBrand}
       allBrands={allBrands}
       mailboxAccounts={mailboxAccounts}
       customerIoAccounts={customerIoAccounts}

@@ -66,6 +66,23 @@ function shortText(value: unknown, max = 220) {
   return text.length <= max ? text : `${text.slice(0, Math.max(0, max - 3)).trimEnd()}...`;
 }
 
+function evidenceText(value: unknown, max = 180) {
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+    return sanitizeAiText(shortText(value, max));
+  }
+  const record = asRecord(value);
+  const candidate =
+    record.value ??
+    record.text ??
+    record.body ??
+    record.summary ??
+    record.reason ??
+    record.label ??
+    record.note ??
+    "";
+  return sanitizeAiText(shortText(candidate, max));
+}
+
 const DRAFT_PLACEHOLDER_TOKEN = /{{\s*[^}\n]+\s*}}|\[\s*(?:your|sender|contact|company|brand|first|last|full|agent|rep)[^[\]\n]{0,40}(?:name|company|title|email|phone|signature|role)?[^[\]\n]*\]|<\s*(?:your|sender|contact|company|brand|first|last|full|agent|rep)[^>\n]{0,40}(?:name|company|title|email|phone|signature|role)?[^>\n]*>/i;
 const SIGNOFF_LINE = /^(best|best regards|regards|kind regards|thanks|thank you|cheers|sincerely)[,!-]*$/i;
 
@@ -115,6 +132,14 @@ function sanitizeDraftBody(value: string) {
   }
 
   return sanitizeAiText(cleaned.join("\n").replace(/\n{3,}/g, "\n\n"));
+}
+
+function hasExplicitOptOutLanguage(body: string) {
+  const normalized = body.trim().toLowerCase();
+  if (!normalized) return false;
+  return /(unsubscribe|remove me|stop emailing|stop reaching out|do not contact|don't contact|no further (emails|outreach|messages)|take me off|opt out)/.test(
+    normalized
+  );
 }
 
 function parseOfferAndCta(rawOffer: string) {
@@ -429,6 +454,24 @@ async function compileWithLlm(input: {
     const currentStage = String(parsed.currentStage ?? "").trim();
     const decisionRaw = asRecord(parsed.decision);
     const recommendedMove = String(decisionRaw.recommendedMove ?? "").trim();
+    const allowRespectOptOut =
+      input.thread.intent === "unsubscribe" || input.thread.status === "closed" || hasExplicitOptOutLanguage(input.latestInboundBody);
+    const parsedRecommendedMove: ReplyThreadMove = [
+      "stay_silent",
+      "acknowledge_and_close",
+      "answer_question",
+      "ask_qualifying_question",
+      "offer_proof",
+      "reframe_objection",
+      "advance_next_step",
+      "soft_nurture",
+      "handoff_to_human",
+      "respect_opt_out",
+    ].includes(recommendedMove)
+      ? (recommendedMove as ReplyThreadMove)
+      : input.fallbackDecision.recommendedMove;
+    const safeRecommendedMove =
+      parsedRecommendedMove === "respect_opt_out" && !allowRespectOptOut ? "acknowledge_and_close" : parsedRecommendedMove;
 
     return {
       thread: {
@@ -463,28 +506,18 @@ async function compileWithLlm(input: {
           }))
           .filter((item) => item.key && item.value)
           .slice(0, 8),
-        openQuestions: asArray(parsed.openQuestions).map((item) => sanitizeAiText(shortText(item, 180))).filter(Boolean).slice(0, 6),
-        objections: asArray(parsed.objections).map((item) => sanitizeAiText(shortText(item, 180))).filter(Boolean).slice(0, 6),
-        commitments: asArray(parsed.commitments).map((item) => sanitizeAiText(shortText(item, 180))).filter(Boolean).slice(0, 6),
-        riskFlags: asArray(parsed.riskFlags).map((item) => sanitizeAiText(shortText(item, 120))).filter(Boolean).slice(0, 6),
-        buyingSignals: asArray(parsed.buyingSignals).map((item) => sanitizeAiText(shortText(item, 120))).filter(Boolean).slice(0, 6),
+        openQuestions: asArray(parsed.openQuestions).map((item) => evidenceText(item, 180)).filter(Boolean).slice(0, 6),
+        objections: asArray(parsed.objections).map((item) => evidenceText(item, 180)).filter(Boolean).slice(0, 6),
+        commitments: asArray(parsed.commitments).map((item) => evidenceText(item, 180)).filter(Boolean).slice(0, 6),
+        riskFlags: asArray(parsed.riskFlags).map((item) => evidenceText(item, 120)).filter(Boolean).slice(0, 6),
+        buyingSignals: asArray(parsed.buyingSignals).map((item) => evidenceText(item, 120)).filter(Boolean).slice(0, 6),
       },
       decision: {
-        recommendedMove: [
-          "stay_silent",
-          "acknowledge_and_close",
-          "answer_question",
-          "ask_qualifying_question",
-          "offer_proof",
-          "reframe_objection",
-          "advance_next_step",
-          "soft_nurture",
-          "handoff_to_human",
-          "respect_opt_out",
-        ].includes(recommendedMove)
-          ? (recommendedMove as ReplyThreadMove)
-          : input.fallbackDecision.recommendedMove,
-        objectiveForThisTurn: sanitizeAiText(shortText(decisionRaw.objectiveForThisTurn, 180)) || input.fallbackDecision.objectiveForThisTurn,
+        recommendedMove: safeRecommendedMove,
+        objectiveForThisTurn:
+          safeRecommendedMove !== parsedRecommendedMove
+            ? "Acknowledge their note and close the thread cleanly without pressure."
+            : sanitizeAiText(shortText(decisionRaw.objectiveForThisTurn, 180)) || input.fallbackDecision.objectiveForThisTurn,
         rationale: sanitizeAiText(shortText(decisionRaw.rationale, 220)) || input.fallbackDecision.rationale,
         confidence: clampZeroOne(decisionRaw.confidence, input.fallbackDecision.confidence),
         autopilotOk: decisionRaw.autopilotOk === true,

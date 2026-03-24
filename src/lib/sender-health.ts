@@ -16,6 +16,11 @@ import { getOutreachProvisioningSettings } from "@/lib/outreach-provider-setting
 
 const HEALTH_WINDOW_DAYS = 21;
 const DAY_MS = 24 * 60 * 60 * 1000;
+const MAILPOOL_SPAM_FALLBACK_MAX_AGE_DAYS = 7;
+const MONITOR_POOL_UNAVAILABLE_REASONS = [
+  "No unused deliverability monitor mailbox remains for this sender",
+  "No dedicated deliverability monitor group is connected",
+] as const;
 
 type HealthLabel = NonNullable<DomainRow["domainHealth"]>;
 export type SenderHealthDimension = "domain" | "email" | "transport" | "message";
@@ -37,6 +42,13 @@ type ProbeObservation = {
   totalMonitors: number;
   summaryText: string;
   createdAt: string;
+};
+
+type MailpoolSpamFallback = {
+  status: HealthLabel;
+  score: number;
+  checkedAt: string;
+  summary: string;
 };
 
 type HealthSignal = {
@@ -166,26 +178,9 @@ function parseProbeObservation(
 }
 
 function parseSeedPolicyBySender(input: {
-  probeRuns: DeliverabilityProbeRun[];
   reservations: DeliverabilitySeedReservation[];
 }) {
   const latestBySender = new Map<string, DomainRow["seedPolicy"]>();
-  const latestRuns = [...input.probeRuns].sort((left, right) => {
-    const leftAt = left.updatedAt || left.createdAt;
-    const rightAt = right.updatedAt || right.createdAt;
-    return leftAt < rightAt ? 1 : -1;
-  });
-  for (const probeRun of latestRuns) {
-    const fromEmail = probeRun.fromEmail.trim().toLowerCase();
-    if (!fromEmail || latestBySender.has(fromEmail)) continue;
-    if (
-      probeRun.status === "failed" &&
-      probeRun.lastError.trim() === "No unused deliverability monitor mailbox remains for this sender"
-    ) {
-      latestBySender.set(fromEmail, "tainted_mailbox");
-      continue;
-    }
-  }
   for (const reservation of input.reservations) {
     const fromEmail = reservation.fromEmail.trim().toLowerCase();
     if (!fromEmail || latestBySender.has(fromEmail)) continue;
@@ -194,6 +189,62 @@ function parseSeedPolicyBySender(input: {
     }
   }
   return latestBySender;
+}
+
+function isMonitorPoolUnavailableReason(reason: string) {
+  return MONITOR_POOL_UNAVAILABLE_REASONS.includes(
+    reason as (typeof MONITOR_POOL_UNAVAILABLE_REASONS)[number]
+  );
+}
+
+function readMailpoolSpamFallback(
+  account: OutreachAccount | null,
+  automation: SenderAutomationContext,
+  now: Date
+): MailpoolSpamFallback | null {
+  const latestFailure = latestProbeFailureReason(automation.latestProbe);
+  if (!isMonitorPoolUnavailableReason(latestFailure)) return null;
+  if (!account) return null;
+
+  const checkedAt = account.config.mailpool.lastSpamCheckAt.trim();
+  const score = Math.max(0, Math.min(100, Number(account.config.mailpool.lastSpamCheckScore ?? 0) || 0));
+  if (!checkedAt || score <= 0) return null;
+
+  const checkedDate = toDate(checkedAt);
+  if (checkedDate.getTime() <= 0) return null;
+  if (now.getTime() - checkedDate.getTime() > MAILPOOL_SPAM_FALLBACK_MAX_AGE_DAYS * DAY_MS) return null;
+
+  return {
+    status: healthFromScore(score / 100),
+    score,
+    checkedAt,
+    summary: account.config.mailpool.lastSpamCheckSummary.trim() || `Mailpool spam check scored ${score}/100.`,
+  };
+}
+
+function buildMailpoolSpamFallbackSignal(input: {
+  dimension: SenderHealthDimension;
+  fallback: MailpoolSpamFallback;
+}): HealthSignal {
+  const label =
+    input.dimension === "domain"
+      ? "domain"
+      : input.dimension === "email"
+        ? "mailbox"
+        : input.dimension === "transport"
+          ? "route"
+          : "message";
+  const tail =
+    input.fallback.status === "risky"
+      ? "Treat this sender as risky until a stronger check improves it."
+      : input.fallback.status === "watch"
+        ? "Good enough to keep sending carefully while richer placement checks are unavailable."
+        : "Good enough to keep sending while richer placement checks are unavailable.";
+
+  return {
+    status: input.fallback.status,
+    summary: `Mailpool spam check ${input.fallback.score}/100. Using that as the best available ${label} health signal because inbox placement checks were unavailable. ${tail}`,
+  };
 }
 
 function fallbackSignal(
@@ -242,7 +293,11 @@ function fallbackSignal(
   };
 }
 
-function buildTransportSignal(row: DomainRow, transportBaselines: ProbeObservation[]): HealthSignal {
+function buildTransportSignal(
+  row: DomainRow,
+  transportBaselines: ProbeObservation[],
+  mailpoolSpamFallback: MailpoolSpamFallback | null
+): HealthSignal {
   if (row.role === "brand") {
     return {
       status: "unknown",
@@ -250,6 +305,12 @@ function buildTransportSignal(row: DomainRow, transportBaselines: ProbeObservati
     };
   }
   if (!transportBaselines.length) {
+    if (mailpoolSpamFallback) {
+      return buildMailpoolSpamFallbackSignal({
+        dimension: "transport",
+        fallback: mailpoolSpamFallback,
+      });
+    }
     return fallbackSignal(row, "transport");
   }
   const score = averageScore(transportBaselines) ?? 0;
@@ -272,8 +333,15 @@ function buildDomainSignal(input: {
   domainBaselines: ProbeObservation[];
   transportPeerBaselines: ProbeObservation[];
   postmasterSnapshot: DeliverabilityDomainHealth | null;
+  mailpoolSpamFallback: MailpoolSpamFallback | null;
 }) {
   if (!input.domainBaselines.length && !input.postmasterSnapshot) {
+    if (input.mailpoolSpamFallback) {
+      return buildMailpoolSpamFallbackSignal({
+        dimension: "domain",
+        fallback: input.mailpoolSpamFallback,
+      });
+    }
     return fallbackSignal(input.row, "domain");
   }
 
@@ -322,8 +390,15 @@ function buildEmailSignal(input: {
   baseline: ProbeObservation | null;
   domainPeerBaselines: ProbeObservation[];
   transportPeerBaselines: ProbeObservation[];
+  mailpoolSpamFallback: MailpoolSpamFallback | null;
 }) {
   if (!input.row.fromEmail || !input.baseline) {
+    if (input.mailpoolSpamFallback) {
+      return buildMailpoolSpamFallbackSignal({
+        dimension: "email",
+        fallback: input.mailpoolSpamFallback,
+      });
+    }
     return fallbackSignal(input.row, "email");
   }
 
@@ -361,9 +436,16 @@ function buildMessageSignal(input: {
   row: DomainRow;
   baseline: ProbeObservation | null;
   production: ProbeObservation | null;
+  mailpoolSpamFallback: MailpoolSpamFallback | null;
 }) {
   if (!input.row.fromEmail) {
     return fallbackSignal(input.row, "message");
+  }
+  if (input.mailpoolSpamFallback && (!input.baseline || !input.production)) {
+    return buildMailpoolSpamFallbackSignal({
+      dimension: "message",
+      fallback: input.mailpoolSpamFallback,
+    });
   }
   if (!input.production) {
     return fallbackSignal(input.row, "message");
@@ -425,6 +507,7 @@ function buildAutomationSummary(input: {
   transport: HealthSignal;
   message: HealthSignal;
   automation: SenderAutomationContext;
+  mailpoolSpamFallback: MailpoolSpamFallback | null;
 }) {
   if (input.row.role === "brand") {
     return input.row.automationSummary || "Protected destination only. Sender warmup and probes stay on satellite mailboxes.";
@@ -443,8 +526,13 @@ function buildAutomationSummary(input: {
   }
 
   const latestFailure = latestProbeFailureReason(input.automation.latestProbe);
-  if (latestFailure === "No unused deliverability monitor mailbox remains for this sender") {
-    return "Paused: seed pool exhausted for this sender mailbox. Add fresh seed inboxes before more probes can run.";
+  if (isMonitorPoolUnavailableReason(latestFailure)) {
+    if (input.mailpoolSpamFallback) {
+      return input.mailpoolSpamFallback.status === "risky"
+        ? `Paused: inbox placement checks were unavailable, and the Mailpool spam check scored ${input.mailpoolSpamFallback.score}/100. That is too risky to keep sending.`
+        : `Inbox placement checks were unavailable, so the sender is using Mailpool spam check fallback (${input.mailpoolSpamFallback.score}/100). This does not block sending.`;
+    }
+    return "Paused: this sender is fine, but we ran out of extra inboxes used to check it safely. Add 1 more inbox and checks will run again.";
   }
   if (latestFailure) {
     return `Preparing sender. The latest probe failed: ${latestFailure}. Automation will retry after the sender state changes.`;
@@ -503,13 +591,23 @@ function buildAutomationStatus(input: {
   transport: HealthSignal;
   message: HealthSignal;
   automation: SenderAutomationContext;
+  mailpoolSpamFallback: MailpoolSpamFallback | null;
 }): NonNullable<DomainRow["automationStatus"]> {
   if (input.row.role === "brand") return "ready";
   if (input.row.dnsStatus === "error") return "attention";
   if (!input.row.fromEmail) return "queued";
   if (input.row.dnsStatus !== "verified") return "testing";
-  if (latestProbeFailureReason(input.automation.latestProbe) === "No unused deliverability monitor mailbox remains for this sender") {
-    return "attention";
+  if (isMonitorPoolUnavailableReason(latestProbeFailureReason(input.automation.latestProbe))) {
+    if (!input.mailpoolSpamFallback) {
+      return "attention";
+    }
+    if (input.mailpoolSpamFallback.status === "risky") {
+      return "attention";
+    }
+    if (input.row.status === "warming" || !input.automation.latestBaseline || !input.automation.latestProduction) {
+      return "warming";
+    }
+    return "ready";
   }
   if (input.automation.activeReservationCount > 0) return "testing";
   if ([input.domain, input.email, input.transport, input.message].some((signal) => signal.status === "risky")) {
@@ -561,7 +659,6 @@ export function buildBrandSenderHealthRows(input: {
       return leftAt < rightAt ? 1 : -1;
     });
   const seedPolicyBySender = parseSeedPolicyBySender({
-    probeRuns: recentProbeRuns,
     reservations: recentReservations,
   });
   const latestBySenderVariant = new Map<string, ProbeObservation>();
@@ -655,27 +752,31 @@ export function buildBrandSenderHealthRows(input: {
       activeReservationCount: reservationStats.activeReservationCount,
       consumedReservationCount: reservationStats.consumedReservationCount,
     } satisfies SenderAutomationContext;
+    const mailpoolSpamFallback = readMailpoolSpamFallback(rowAccount, automation, now);
 
     const domainSignal = buildDomainSignal({
       row,
       domainBaselines,
       transportPeerBaselines,
       postmasterSnapshot,
+      mailpoolSpamFallback,
     });
     const emailSignal = buildEmailSignal({
       row,
       baseline: senderBaseline,
       domainPeerBaselines,
       transportPeerBaselines: emailTransportPeers,
+      mailpoolSpamFallback,
     });
-    const transportSignal = buildTransportSignal(row, transportBaselines);
+    const transportSignal = buildTransportSignal(row, transportBaselines, mailpoolSpamFallback);
     const messageSignal = buildMessageSignal({
       row,
       baseline: senderBaseline,
       production: senderProduction,
+      mailpoolSpamFallback,
     });
 
-    const latestCheckAt = [senderBaseline?.createdAt, senderProduction?.createdAt]
+    const latestCheckAt = [senderBaseline?.createdAt, senderProduction?.createdAt, mailpoolSpamFallback?.checkedAt]
       .filter((value): value is string => Boolean(value))
       .sort((left, right) => (left < right ? 1 : -1))[0];
     const latestReservationAt = recentReservations
@@ -692,6 +793,7 @@ export function buildBrandSenderHealthRows(input: {
         transport: transportSignal,
         message: messageSignal,
         automation,
+        mailpoolSpamFallback,
       }),
       automationSummary: buildAutomationSummary({
         row,
@@ -700,6 +802,7 @@ export function buildBrandSenderHealthRows(input: {
         transport: transportSignal,
         message: messageSignal,
         automation,
+        mailpoolSpamFallback,
       }),
       domainHealth: domainSignal.status,
       domainHealthSummary: domainSignal.summary,

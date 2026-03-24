@@ -30,6 +30,7 @@ type AssignmentMap = Record<
 type ProvisionResult = Awaited<ReturnType<typeof provisionSenderDomain>>;
 
 type CustomerIoStrategy = "auto" | "specific" | "defaults";
+type GuidedSenderPath = "existing_domain" | "buy_new_domain";
 
 type SetupState = {
   brandId: string;
@@ -91,8 +92,6 @@ const INITIAL_REGISTER: RegisterState = {
   registrantPostalCode: "",
   registrantCountry: "US",
 };
-
-type EmbeddedMailpoolMode = "existing" | "register";
 
 function normalizeDomain(value: string) {
   return value.trim().toLowerCase().replace(/^https?:\/\//, "").replace(/^www\./, "").replace(/\/.*$/, "");
@@ -183,7 +182,6 @@ export default function SenderProvisionCard({
   provisioningSettings,
   onProvisioned,
   embedded = false,
-  lockedProvider,
 }: {
   brands: BrandRecord[];
   allBrands?: BrandRecord[];
@@ -193,14 +191,11 @@ export default function SenderProvisionCard({
   provisioningSettings: OutreachProvisioningSettings | null;
   onProvisioned: (result: ProvisionResult) => void;
   embedded?: boolean;
-  lockedProvider?: SetupState["provider"];
 }) {
   const [setup, setSetup] = useState<SetupState>(() => ({
     ...INITIAL_SETUP,
-    provider: lockedProvider ?? INITIAL_SETUP.provider,
     brandId: brands[0]?.id ?? "",
-    selectedMailboxAccountId:
-      lockedProvider === "mailpool" ? "" : brands[0] ? assignments[brands[0].id]?.mailboxAccountId ?? "" : "",
+    selectedMailboxAccountId: brands[0] ? assignments[brands[0].id]?.mailboxAccountId ?? "" : "",
     forwardingTargetUrl: brands[0]?.website ?? "",
   }));
   const [register, setRegister] = useState<RegisterState>(INITIAL_REGISTER);
@@ -230,7 +225,8 @@ export default function SenderProvisionCard({
   const [busyKey, setBusyKey] = useState("");
   const [error, setError] = useState("");
   const [result, setResult] = useState<ProvisionResult | null>(null);
-  const [embeddedMailpoolMode, setEmbeddedMailpoolMode] = useState<EmbeddedMailpoolMode>("existing");
+  const [guidedPath, setGuidedPath] = useState<GuidedSenderPath | null>(null);
+  const [advancedMode, setAdvancedMode] = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -288,25 +284,6 @@ export default function SenderProvisionCard({
     });
   }, [assignments, brands]);
 
-  useEffect(() => {
-    if (!lockedProvider) return;
-    setSetup((prev) => ({
-      ...prev,
-      provider: lockedProvider,
-      assignToBrand: true,
-      selectedMailboxAccountId: lockedProvider === "mailpool" ? "" : prev.selectedMailboxAccountId,
-    }));
-  }, [lockedProvider]);
-
-  const simpleMailpoolMode = embedded && lockedProvider === "mailpool";
-
-  useEffect(() => {
-    if (!simpleMailpoolMode || mailpoolInventory.loading || !mailpoolInventory.configured) return;
-    if (embeddedMailpoolMode === "existing" && !mailpoolInventory.domains.length) {
-      setEmbeddedMailpoolMode("register");
-    }
-  }, [embeddedMailpoolMode, mailpoolInventory.configured, mailpoolInventory.domains.length, mailpoolInventory.loading, simpleMailpoolMode]);
-
   const selectedBrand = useMemo(
     () => brands.find((brand) => brand.id === setup.brandId) ?? null,
     [brands, setup.brandId]
@@ -363,6 +340,12 @@ export default function SenderProvisionCard({
   }, [inventoryQuery, mailpoolInventory.domains, namecheapInventory.domains, setup.provider]);
 
   const activeInventory = setup.provider === "mailpool" ? mailpoolInventory : namecheapInventory;
+  const showSimpleFlow = !advancedMode;
+  const showExistingDomainPath = showSimpleFlow && guidedPath === "existing_domain";
+  const showBuyDomainPath = showSimpleFlow && guidedPath === "buy_new_domain";
+  const showSetupFields = advancedMode || Boolean(guidedPath);
+  const showExistingDomainSection = advancedMode || showExistingDomainPath;
+  const showBuyDomainSection = advancedMode || showBuyDomainPath;
 
   const manualDefaultsReady =
     Boolean(setup.customerIoSiteId.trim() || provisioningSettings?.customerIo.siteId.trim()) &&
@@ -446,6 +429,18 @@ export default function SenderProvisionCard({
     return true;
   }
 
+  function chooseGuidedPath(path: GuidedSenderPath) {
+    setAdvancedMode(false);
+    setGuidedPath(path);
+    setInventoryQuery("");
+    setError("");
+    setResult(null);
+    setSetup((prev) => ({
+      ...prev,
+      provider: "mailpool",
+    }));
+  }
+
   async function runProvision(domain: string, domainMode: "existing" | "register") {
     const normalizedDomain = normalizeDomain(domain);
     if (!normalizedDomain || !normalizedDomain.includes(".")) {
@@ -510,45 +505,69 @@ export default function SenderProvisionCard({
   }
 
   const content = (
-    <div className="grid gap-5">
-      {simpleMailpoolMode ? (
-        <div className="grid gap-4">
-          <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-4 py-3 text-sm text-[color:var(--muted-foreground)]">
-            Add one sender. We will buy or connect the domain, create the Google mailbox, attach it to this brand, and
-            start Mailpool checks automatically.
+    <>
+      <div className="grid gap-3 rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-4">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <div className="text-base font-semibold">Do you already have a domain?</div>
+            <div className="text-sm text-[color:var(--muted-foreground)]">
+              Pick the simple Mailpool path first. Advanced provider setup is still available if you need it.
+            </div>
           </div>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={() => {
+              setAdvancedMode((prev) => !prev);
+              if (!advancedMode) {
+                setGuidedPath(null);
+              }
+            }}
+          >
+            {advancedMode ? "Back to simple setup" : "Advanced setup"}
+          </Button>
+        </div>
+
+        {!advancedMode ? (
           <div className="grid gap-3 md:grid-cols-2">
             <button
               type="button"
-              onClick={() => setEmbeddedMailpoolMode("existing")}
-              className={`grid gap-2 rounded-xl border px-4 py-4 text-left transition ${
-                embeddedMailpoolMode === "existing"
+              onClick={() => chooseGuidedPath("existing_domain")}
+              className={`grid gap-2 rounded-xl border p-4 text-left transition hover:border-[color:var(--accent)] ${
+                guidedPath === "existing_domain"
                   ? "border-[color:var(--accent)] bg-[color:var(--surface)]"
-                  : "border-[color:var(--border)] bg-[color:var(--surface-muted)] hover:border-[color:var(--border-strong)]"
+                  : "border-[color:var(--border)] bg-[color:var(--surface)]"
               }`}
             >
-              <div className="text-sm font-semibold text-[color:var(--foreground)]">Use an existing Mailpool domain</div>
-              <div className="text-[11px] leading-5 text-[color:var(--muted-foreground)]">
-                Pick a domain already in Mailpool and we will attach a sender mailbox to it.
+              <div className="text-sm font-semibold">Yes, connect my domain</div>
+              <div className="text-sm text-[color:var(--muted-foreground)]">
+                Use a domain you already own, add or find it in Mailpool, then create a fresh Mailpool inbox for this sender.
               </div>
             </button>
             <button
               type="button"
-              onClick={() => setEmbeddedMailpoolMode("register")}
-              className={`grid gap-2 rounded-xl border px-4 py-4 text-left transition ${
-                embeddedMailpoolMode === "register"
+              onClick={() => chooseGuidedPath("buy_new_domain")}
+              className={`grid gap-2 rounded-xl border p-4 text-left transition hover:border-[color:var(--accent)] ${
+                guidedPath === "buy_new_domain"
                   ? "border-[color:var(--accent)] bg-[color:var(--surface)]"
-                  : "border-[color:var(--border)] bg-[color:var(--surface-muted)] hover:border-[color:var(--border-strong)]"
+                  : "border-[color:var(--border)] bg-[color:var(--surface)]"
               }`}
             >
-              <div className="text-sm font-semibold text-[color:var(--foreground)]">Buy a new sender domain</div>
-              <div className="text-[11px] leading-5 text-[color:var(--muted-foreground)]">
-                We will ask for registrant details, buy the domain in Mailpool, and finish setup for you.
+              <div className="text-sm font-semibold">No, buy a new domain</div>
+              <div className="text-sm text-[color:var(--muted-foreground)]">
+                Buy the domain in Mailpool and let setup create the inbox, forwarding, and first deliverability checks.
               </div>
             </button>
           </div>
-        </div>
-      ) : null}
+        ) : (
+          <div className="text-sm text-[color:var(--muted-foreground)]">
+            Advanced mode keeps the old provider-level setup for Customer.io + Namecheap and Mailpool.
+          </div>
+        )}
+      </div>
+
+      {showSetupFields ? (
         <div className="grid gap-3 md:grid-cols-5">
           {brands.length > 1 ? (
             <div className="grid gap-2">
@@ -583,7 +602,7 @@ export default function SenderProvisionCard({
               </div>
             </div>
           )}
-          {!lockedProvider ? (
+          {advancedMode ? (
             <div className="grid gap-2">
               <Label htmlFor="setup-provider">Provider</Label>
               <Select
@@ -600,7 +619,14 @@ export default function SenderProvisionCard({
                 <option value="mailpool">Mailpool</option>
               </Select>
             </div>
-          ) : null}
+          ) : (
+            <div className="grid gap-2">
+              <Label>Path</Label>
+              <div className="flex min-h-10 items-center rounded-xl border border-[color:var(--border)] bg-[color:var(--surface)] px-3 text-sm font-medium">
+                {guidedPath === "existing_domain" ? "Existing domain in Mailpool" : "Buy new domain in Mailpool"}
+              </div>
+            </div>
+          )}
           <div className="grid gap-2">
             <Label htmlFor="setup-local-part">Sender Local-Part</Label>
             <Input
@@ -610,7 +636,7 @@ export default function SenderProvisionCard({
               placeholder="hello"
             />
           </div>
-          {!simpleMailpoolMode ? (
+          {advancedMode ? (
             <div className="grid gap-2">
               <Label htmlFor="setup-mailbox">Reply Mailbox</Label>
               <Select
@@ -630,11 +656,13 @@ export default function SenderProvisionCard({
             </div>
           ) : (
             <div className="grid gap-2">
-              <Label>Reply Mailbox</Label>
-              <div className="flex min-h-10 items-center rounded-xl border border-[color:var(--border)] bg-[color:var(--surface)] px-3 text-sm text-[color:var(--muted-foreground)]">
-                Auto-provisioned hybrid mailbox
+              <Label>Inbox</Label>
+              <div className="flex min-h-10 items-center rounded-xl border border-[color:var(--border)] bg-[color:var(--surface)] px-3 text-sm">
+                New Mailpool inbox will be created automatically
               </div>
-              <div className="text-[11px] text-[color:var(--muted-foreground)]">{mailboxHint}</div>
+              <div className="text-[11px] text-[color:var(--muted-foreground)]">
+                Replies and sending both use the same Mailpool mailbox in this flow.
+              </div>
             </div>
           )}
           <div className="grid gap-2">
@@ -647,7 +675,9 @@ export default function SenderProvisionCard({
             />
           </div>
         </div>
+      ) : null}
 
+      {showSetupFields ? (
         <div className="grid gap-3 rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3 md:grid-cols-[1fr_auto] md:items-end">
           <div className="grid gap-2">
             <Label htmlFor="setup-forwarding-target">Website To Forward To</Label>
@@ -661,23 +691,18 @@ export default function SenderProvisionCard({
               Visitors on the sender domain will be sent here.
             </div>
           </div>
-          {simpleMailpoolMode ? (
-            <div className="flex min-h-10 items-center text-sm text-[color:var(--muted-foreground)]">
-              Sender will be assigned to this brand automatically.
-            </div>
-          ) : (
-            <Label className="flex items-center gap-2 text-sm font-normal">
-              <input
-                type="checkbox"
-                checked={setup.assignToBrand}
-                onChange={(event) => setSetup((prev) => ({ ...prev, assignToBrand: event.target.checked }))}
-              />
-              Auto-assign sender to brand
-            </Label>
-          )}
+          <Label className="flex items-center gap-2 text-sm font-normal">
+            <input
+              type="checkbox"
+              checked={setup.assignToBrand}
+              onChange={(event) => setSetup((prev) => ({ ...prev, assignToBrand: event.target.checked }))}
+            />
+            Auto-assign sender to brand
+          </Label>
         </div>
+      ) : null}
 
-        {setup.provider === "customerio" ? (
+        {advancedMode && setup.provider === "customerio" ? (
           <div className="grid gap-3 rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
@@ -773,25 +798,27 @@ export default function SenderProvisionCard({
               </div>
             ) : null}
           </div>
-        ) : (
+        ) : advancedMode ? (
           <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3 text-sm text-[color:var(--muted-foreground)]">
             Mailpool provisioning uses the shared Mailpool workspace and creates one hybrid sender account per mailbox.
           </div>
-        )}
+        ) : null}
 
-        {!simpleMailpoolMode || embeddedMailpoolMode === "existing" ? (
+        {showExistingDomainSection ? (
         <div className="grid gap-3">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
               <div className="text-sm font-semibold">
-                {simpleMailpoolMode ? "Use a domain you already manage" : "Your Domains"}
+                {advancedMode
+                  ? "Your Domains"
+                  : "Use a domain you already own"}
               </div>
               <div className="text-[11px] text-[color:var(--muted-foreground)]">
-                {setup.provider === "mailpool"
-                  ? simpleMailpoolMode
-                    ? "Pick a Mailpool domain and we will attach a sender mailbox to it."
-                    : "These are the domains already managed inside Mailpool."
-                  : "Click once to connect the domain and set the forwarding."}
+                {advancedMode
+                  ? setup.provider === "mailpool"
+                    ? "These are the domains already managed inside Mailpool."
+                    : "Click once to connect the domain and set the forwarding."
+                  : "Pick a domain already added in Mailpool. We will create a new inbox for it and attach it to this brand."}
               </div>
             </div>
             <Input
@@ -811,7 +838,9 @@ export default function SenderProvisionCard({
           {!activeInventory.loading && !activeInventory.configured ? (
             <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3 text-sm">
               {setup.provider === "mailpool"
-                ? "Save Mailpool credentials above first. Once that is done, this section will list domains already managed in Mailpool."
+                ? advancedMode
+                  ? "Save Mailpool credentials above first. Once that is done, this section will list domains already managed in Mailpool."
+                  : "Save Mailpool credentials first. Then this list will show domains already added in Mailpool."
                 : "Save platform Namecheap credentials above first. Once that is done, this section will list every owned domain with a setup button."}
             </div>
           ) : null}
@@ -861,6 +890,10 @@ export default function SenderProvisionCard({
                       <div className="text-[11px] text-[color:var(--muted-foreground)]">
                         Already on this brand. Re-run setup to refresh DNS and forwarding.
                       </div>
+                    ) : !advancedMode ? (
+                      <div className="text-[11px] text-[color:var(--muted-foreground)]">
+                        This will create {setup.fromLocalPart.trim() || "hello"}@{item.domain} in Mailpool and connect it to this brand.
+                      </div>
                     ) : null}
                     <Button
                       type="button"
@@ -869,41 +902,43 @@ export default function SenderProvisionCard({
                     >
                       {busyKey === key
                         ? "Setting Up..."
-                        : simpleMailpoolMode
-                          ? alreadyOnThisBrand
-                            ? "Refresh Sender"
-                            : "Use This Domain"
-                          : alreadyOnThisBrand
-                            ? "Re-run Setup"
-                            : "Set Up"}
+                        : alreadyOnThisBrand
+                          ? "Re-run Setup"
+                          : advancedMode
+                            ? "Set Up"
+                            : "Connect + Create Inbox"}
                     </Button>
                   </div>
                 );
               })}
               {!filteredDomains.length ? (
-                <div className="text-sm text-[color:var(--muted-foreground)]">No domains found.</div>
+                <div className="text-sm text-[color:var(--muted-foreground)]">
+                  {advancedMode
+                    ? "No domains found."
+                    : "No Mailpool domains found yet. Add the domain in Mailpool first, then come back here to create the inbox."}
+                </div>
               ) : null}
             </div>
           ) : null}
         </div>
         ) : null}
 
-        {!simpleMailpoolMode || embeddedMailpoolMode === "register" ? (
+        {showBuyDomainSection ? (
         <div className="grid gap-3 rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3">
           <div>
             <div className="text-sm font-semibold">
-              {setup.provider === "mailpool"
-                ? simpleMailpoolMode
-                  ? "Buy a new sender domain"
-                  : "Buy In Mailpool + Set Up"
-                : "Buy New Domain + Set Up"}
+              {advancedMode
+                ? setup.provider === "mailpool"
+                  ? "Buy In Mailpool + Set Up"
+                  : "Buy New Domain + Set Up"
+                : "Buy a new domain in Mailpool"}
             </div>
             <div className="text-[11px] text-[color:var(--muted-foreground)]">
-              {setup.provider === "mailpool"
-                ? simpleMailpoolMode
-                  ? "If the domain is available, we buy it in Mailpool, create the sender mailbox, attach it to this brand, and start the first checks."
-                  : "If the domain is available, this buys it in Mailpool, provisions a Google sender mailbox, and runs the first spam and inbox checks."
-                : "If the domain is available, this buys it and runs the same setup automatically."}
+              {advancedMode
+                ? setup.provider === "mailpool"
+                  ? "If the domain is available, this buys it in Mailpool, provisions a Google sender mailbox, and runs the first spam and inbox checks."
+                  : "If the domain is available, this buys it and runs the same setup automatically."
+                : "If the domain is available, Mailpool will buy it, create the sender inbox, and run the first checks automatically."}
             </div>
           </div>
           <div className="grid gap-3 md:grid-cols-3">
@@ -941,11 +976,6 @@ export default function SenderProvisionCard({
                   setRegister((prev) => ({ ...prev, registrantOrganizationName: event.target.value }))
                 }
               />
-            </div>
-            <div className="grid gap-2 md:col-span-3">
-              <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-2 text-[11px] leading-5 text-[color:var(--muted-foreground)]">
-                Registrant details are required by the registrar to buy the domain. We only use them for the purchase.
-              </div>
             </div>
             <div className="grid gap-2">
               <Label htmlFor="register-email">Email</Label>
@@ -1021,11 +1051,11 @@ export default function SenderProvisionCard({
             >
               {busyKey === `register:${normalizeDomain(register.domain)}`
                 ? "Buying + Setting Up..."
-                : setup.provider === "mailpool"
-                  ? simpleMailpoolMode
-                    ? "Buy Domain + Add Sender"
-                    : "Buy In Mailpool + Set Up"
-                  : "Buy + Set Up"}
+                : advancedMode
+                  ? setup.provider === "mailpool"
+                    ? "Buy In Mailpool + Set Up"
+                    : "Buy + Set Up"
+                  : "Buy Domain + Create Inbox"}
             </Button>
           </div>
         </div>
@@ -1071,11 +1101,11 @@ export default function SenderProvisionCard({
             ) : null}
           </div>
         ) : null}
-    </div>
+    </>
   );
 
   if (embedded) {
-    return content;
+    return <div className="grid gap-5">{content}</div>;
   }
 
   return (
@@ -1086,7 +1116,7 @@ export default function SenderProvisionCard({
           Pick a domain, point it at the brand website, and connect it to the right sender account.
         </CardDescription>
       </CardHeader>
-      <CardContent>{content}</CardContent>
+      <CardContent className="grid gap-5">{content}</CardContent>
     </Card>
   );
 }

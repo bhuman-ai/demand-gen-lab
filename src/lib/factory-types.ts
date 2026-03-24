@@ -1169,6 +1169,21 @@ export type ReplyThreadDetail = {
   run: Pick<OutreachRun, "id" | "status" | "accountId" | "createdAt" | "updatedAt"> | null;
 };
 
+export type BrandInboxSource = {
+  mailboxAccountId: string;
+  accountName: string;
+  email: string;
+  provider: OutreachProvider | "";
+  accountType: OutreachAccountType | "";
+  accountStatus: OutreachAccount["status"] | "unknown";
+  mailboxStatus: MailboxStatus | "unknown";
+  threadCount: number;
+  sourceTypes: Array<ReplyThread["sourceType"]>;
+  lastSyncedAt: string;
+  lastError: string;
+  primary: boolean;
+};
+
 export type ReplyThreadFeedbackType =
   | "good"
   | "wrong_move"

@@ -3861,6 +3861,28 @@ export async function getInboxSyncState(
   );
 }
 
+export async function listInboxSyncStatesByBrand(brandId: string): Promise<InboxSyncState[]> {
+  const normalizedBrandId = brandId.trim();
+  if (!normalizedBrandId) return [];
+
+  const supabase = getSupabaseAdmin();
+  if (supabase) {
+    const { data, error } = await supabase
+      .from(TABLE_INBOX_SYNC_STATE)
+      .select("*")
+      .eq("brand_id", normalizedBrandId)
+      .order("updated_at", { ascending: false });
+    if (!error) {
+      return (data ?? []).map((row: unknown) => mapInboxSyncStateRow(row));
+    }
+  }
+
+  const store = await readLocalStore();
+  return store.inboxSyncStates
+    .filter((row) => row.brandId === normalizedBrandId)
+    .sort((left, right) => (left.updatedAt < right.updatedAt ? 1 : -1));
+}
+
 export async function upsertInboxSyncState(input: {
   brandId: string;
   mailboxAccountId: string;

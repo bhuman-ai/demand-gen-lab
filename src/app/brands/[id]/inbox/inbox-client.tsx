@@ -14,6 +14,7 @@ import {
 } from "@/lib/client-api";
 import { trackEvent } from "@/lib/telemetry-client";
 import type {
+  BrandInboxSource,
   BrandRecord,
   ReplyDraft,
   ReplyThreadFeedbackType,
@@ -73,6 +74,30 @@ function moveBadgeVariant(move: string) {
 
 function factLabel(value: string) {
   return formatLabel(value);
+}
+
+function sourceBadgeVariant(source: BrandInboxSource) {
+  if (source.lastError) return "danger" as const;
+  if (source.lastSyncedAt) return "success" as const;
+  return "muted" as const;
+}
+
+function sourceStatusLabel(source: BrandInboxSource) {
+  if (source.lastError) return "Sync Error";
+  if (source.lastSyncedAt) return "Syncing In";
+  if (source.threadCount > 0) return "Observed";
+  return "Configured";
+}
+
+function formatSourceSubtitle(source: BrandInboxSource) {
+  const parts = [
+    source.provider ? formatLabel(source.provider) : "",
+    source.accountType ? formatLabel(source.accountType) : "",
+    source.mailboxStatus && source.mailboxStatus !== "unknown"
+      ? formatLabel(source.mailboxStatus)
+      : "",
+  ].filter(Boolean);
+  return parts.join(" · ");
 }
 
 function decodeCodePoint(codePoint: number) {
@@ -150,6 +175,7 @@ function formatMessageBody(value: string) {
 export default function InboxClient({ brand }: { brand: BrandRecord }) {
   const [threads, setThreads] = useState<ReplyThread[]>([]);
   const [drafts, setDrafts] = useState<ReplyDraft[]>([]);
+  const [inboxSources, setInboxSources] = useState<BrandInboxSource[]>([]);
   const [selectedThreadId, setSelectedThreadId] = useState("");
   const [selectedDetail, setSelectedDetail] = useState<ReplyThreadDetail | null>(null);
   const [query, setQuery] = useState("");
@@ -157,6 +183,7 @@ export default function InboxClient({ brand }: { brand: BrandRecord }) {
   const [detailLoading, setDetailLoading] = useState(false);
   const [sendingDraftId, setSendingDraftId] = useState("");
   const [syncingMailbox, setSyncingMailbox] = useState(false);
+  const [showInboxSources, setShowInboxSources] = useState(false);
   const [syncStatus, setSyncStatus] = useState("");
   const [feedbackSubmitting, setFeedbackSubmitting] = useState("");
   const [feedbackStatus, setFeedbackStatus] = useState("");
@@ -166,6 +193,7 @@ export default function InboxClient({ brand }: { brand: BrandRecord }) {
     const rows = await fetchInboxThreads(brand.id);
     setThreads(rows.threads);
     setDrafts(rows.drafts);
+    setInboxSources(rows.inboxSources);
     if (selectedThreadId && rows.threads.some((item) => item.id === selectedThreadId)) {
       const detail = await fetchInboxThreadDetail(brand.id, selectedThreadId);
       setSelectedDetail(detail);
@@ -180,6 +208,7 @@ export default function InboxClient({ brand }: { brand: BrandRecord }) {
         if (!mounted) return;
         setThreads(rows.threads);
         setDrafts(rows.drafts);
+        setInboxSources(rows.inboxSources);
         if (rows.threads.length) {
           setSelectedThreadId((current) =>
             current && rows.threads.some((item) => item.id === current)
@@ -269,6 +298,7 @@ export default function InboxClient({ brand }: { brand: BrandRecord }) {
     [threads]
   );
   const openCount = threads.filter((item) => item.status !== "closed").length;
+  const syncedInboxCount = inboxSources.filter((source) => source.lastSyncedAt || source.threadCount > 0).length;
   const humanReviewCount = threads.filter(
     (item) => Boolean(item.stateSummary?.manualReviewReason) || item.stateSummary?.autopilotOk === false
   ).length;
@@ -311,10 +341,23 @@ export default function InboxClient({ brand }: { brand: BrandRecord }) {
   return (
     <div className="space-y-8">
       <PageIntro
-        title="Inbox"
+        title="Global Inbox"
+        description="This brand-level inbox rolls up every mailbox currently feeding the reply-thread system, then lets you review threads, drafts, and state in one place."
         aside={
           <StatLedger
             items={[
+              {
+                label: "Inboxes",
+                value: formatCount(inboxSources.length),
+                detail: "Mailbox accounts currently feeding this global inbox.",
+                active: showInboxSources,
+                onClick: () => setShowInboxSources((current) => !current),
+              },
+              {
+                label: "Syncing In",
+                value: formatCount(syncedInboxCount),
+                detail: "Inboxes with active sync state or observed thread traffic.",
+              },
               { label: "Threads", value: formatCount(threads.length), detail: "All reply threads in this brand workspace." },
               { label: "Open", value: formatCount(openCount), detail: "Conversations still requiring attention." },
               { label: "Human review", value: formatCount(humanReviewCount), detail: "Threads the model marked as risky or manual." },
@@ -345,6 +388,95 @@ export default function InboxClient({ brand }: { brand: BrandRecord }) {
           }
         />
       ) : null}
+
+      <SectionPanel
+        title="Inbox Sources"
+        description="See which mailbox accounts are feeding this global inbox. Expand the list to inspect live sync state and thread volume per inbox."
+        actions={
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            onClick={() => setShowInboxSources((current) => !current)}
+          >
+            {showInboxSources ? "Hide Inboxes" : `Show Inboxes (${inboxSources.length})`}
+          </Button>
+        }
+      >
+        {showInboxSources ? (
+          inboxSources.length ? (
+            <div className="grid gap-3 lg:grid-cols-2">
+              {inboxSources.map((source) => (
+                <div
+                  key={source.mailboxAccountId}
+                  className="rounded-[10px] border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3"
+                >
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <div className="text-sm font-semibold text-[color:var(--foreground)]">
+                          {source.accountName}
+                        </div>
+                        {source.primary ? <Badge variant="accent">Primary Reply Inbox</Badge> : null}
+                        <Badge variant={sourceBadgeVariant(source)}>{sourceStatusLabel(source)}</Badge>
+                      </div>
+                      <div className="mt-1 text-sm text-[color:var(--muted-foreground)]">
+                        {source.email || source.mailboxAccountId}
+                      </div>
+                      {formatSourceSubtitle(source) ? (
+                        <div className="mt-1 text-xs text-[color:var(--muted-foreground)]">
+                          {formatSourceSubtitle(source)}
+                        </div>
+                      ) : null}
+                    </div>
+                    <div className="text-right">
+                      <div className="text-lg font-semibold tracking-[-0.04em] text-[color:var(--foreground)]">
+                        {formatCount(source.threadCount)}
+                      </div>
+                      <div className="text-xs text-[color:var(--muted-foreground)]">threads</div>
+                    </div>
+                  </div>
+                  <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                    <div>
+                      <div className="text-[11px] uppercase tracking-[0.08em] text-[color:var(--muted-foreground)]">
+                        Last Sync
+                      </div>
+                      <div className="mt-1 text-sm text-[color:var(--foreground)]">
+                        {source.lastSyncedAt ? formatDateTime(source.lastSyncedAt) : "Not synced yet"}
+                      </div>
+                    </div>
+                    <div>
+                      <div className="text-[11px] uppercase tracking-[0.08em] text-[color:var(--muted-foreground)]">
+                        Source Types
+                      </div>
+                      <div className="mt-1 text-sm text-[color:var(--foreground)]">
+                        {source.sourceTypes.length
+                          ? source.sourceTypes.map((item) => formatLabel(item)).join(", ")
+                          : "No thread sources recorded yet"}
+                      </div>
+                    </div>
+                  </div>
+                  {source.lastError ? (
+                    <div className="mt-3 rounded-[10px] border border-[color:var(--danger-border)] px-3 py-2 text-sm text-[color:var(--danger)]">
+                      {source.lastError}
+                    </div>
+                  ) : null}
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="text-sm text-[color:var(--muted-foreground)]">
+              No mailbox sources are registered for this brand yet.
+            </div>
+          )
+        ) : (
+          <div className="text-sm text-[color:var(--muted-foreground)]">
+            {inboxSources.length
+              ? `${inboxSources.length} mailbox ${inboxSources.length === 1 ? "account is" : "accounts are"} currently feeding this global inbox.`
+              : "Expand this section to confirm which inboxes are feeding the global inbox."}
+          </div>
+        )}
+      </SectionPanel>
 
       <SectionPanel title="Reply draft queue" description="Drafts require manual send confirmation." contentClassName="grid gap-3">
           {drafts

@@ -29,6 +29,7 @@ import type {
   OutreachRun,
   RunViewModel,
   ReplyDraft,
+  BrandInboxSource,
   ReplyThreadDetail,
   ReplyThread,
   ReplyThreadFeedback,
@@ -1740,6 +1741,7 @@ export async function fetchInboxThreads(brandId: string) {
   return {
     threads: (Array.isArray(data.threads) ? data.threads : []) as ReplyThread[],
     drafts: (Array.isArray(data.drafts) ? data.drafts : []) as ReplyDraft[],
+    inboxSources: (Array.isArray(data.inboxSources) ? data.inboxSources : []) as BrandInboxSource[],
   };
 }
 

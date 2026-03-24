@@ -2,7 +2,7 @@ import { promises as dns } from "dns";
 import { readFile } from "fs/promises";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 
-type EmailFinderVerificationMode = "validatedmails";
+type EmailFinderVerificationMode = "validatedmails" | "heuristic";
 
 type PatternShape = {
   separator: "." | "_" | "-" | "mixed" | "none";
@@ -737,7 +737,10 @@ function normalizeVerificationMode(value: unknown): EmailFinderVerificationMode 
   if (normalized === "validatedmails") {
     return "validatedmails";
   }
-  throw new Error("Only real verification mode 'validatedmails' is supported");
+  if (["heuristic", "pattern", "none", "best_guess", "best-guess"].includes(normalized)) {
+    return "heuristic";
+  }
+  throw new Error("Only verification modes 'validatedmails' and 'heuristic' are supported");
 }
 
 function parseValidationConfig(payload: unknown): ValidationConfig {
@@ -764,7 +767,7 @@ function parseValidationConfig(payload: unknown): ValidationConfig {
   const verificationMode = normalizeVerificationMode(body.verification_mode);
   const validatedMailsApiKey = String(body.validatedmails_api_key ?? "").trim();
 
-  if (!validatedMailsApiKey) {
+  if (verificationMode === "validatedmails" && !validatedMailsApiKey) {
     throw new Error("validatedmails_api_key is required for real verification");
   }
 
@@ -791,6 +794,64 @@ function parseValidationConfig(payload: unknown): ValidationConfig {
     canaryHardBounces: boundedInt(canaryObservations.hard_bounces, 0, 0, 1_000_000),
     canaryMinSamples: boundedInt(canaryPolicy.min_samples, 25, 1, 100_000),
     canaryMaxHardBounceRate: boundedFloat(canaryPolicy.max_hard_bounce_rate, 0.03, 0, 1),
+  };
+}
+
+function buildHeuristicVerificationOutcome(input: {
+  email: string;
+  patternScore?: number;
+  profile: PatternProfile;
+  mx: DomainMailSignal;
+  candidateIndex: number;
+  candidateCount: number;
+}) {
+  const patternScore = typeof input.patternScore === "number" ? input.patternScore : 0.5;
+  const noHistory = input.profile.sampleSize === 0;
+  const isFirstCandidate = input.candidateIndex === 0;
+
+  let verdict = "unknown";
+  let confidence = "low";
+  let reason = "low heuristic confidence";
+
+  if (input.mx.status === "no-mail-route") {
+    verdict = "invalid";
+    confidence = "high";
+    reason = input.mx.error || "domain has no mail route";
+  } else if (!noHistory && patternScore >= 0.84) {
+    verdict = "likely-valid";
+    confidence = "high";
+    reason = "strong domain pattern match";
+  } else if (!noHistory && patternScore >= 0.72) {
+    verdict = "likely-valid";
+    confidence = "medium";
+    reason = "good domain pattern match";
+  } else if (!noHistory && patternScore >= 0.58) {
+    verdict = "risky-valid";
+    confidence = "medium";
+    reason = "possible domain pattern match";
+  } else if (noHistory && isFirstCandidate && patternScore >= 0.62) {
+    verdict = "risky-valid";
+    confidence = "low";
+    reason = "first candidate fallback with mail-ready domain";
+  }
+
+  return {
+    verdict,
+    confidence,
+    details: {
+      verdict,
+      reason,
+      provider: "internal-email-finder",
+      provider_status: verdict,
+      mx_status: input.mx.status,
+      mx_records: input.mx.records,
+      mx_error: input.mx.error,
+      pattern_score: patternScore,
+      pattern_sample_size: input.profile.sampleSize,
+      heuristic_only: true,
+      candidate_index: input.candidateIndex + 1,
+      candidate_count: input.candidateCount,
+    },
   };
 }
 
@@ -1089,7 +1150,7 @@ async function runGuess(
 
   const attempts = [] as Array<Record<string, unknown>>;
   let creditsUsed = 0;
-  const verificationModeUsed = "validatedmails";
+  const verificationModeUsed = config.verificationMode;
 
   for (const [index, email] of orderedCandidates.entries()) {
     let outcome: {
@@ -1112,6 +1173,15 @@ async function runGuess(
           pattern_sample_size: profile.sampleSize,
         },
       };
+    } else if (verificationModeUsed === "heuristic") {
+      outcome = buildHeuristicVerificationOutcome({
+        email,
+        patternScore: patternScores[email],
+        profile,
+        mx: domainInsights.mx,
+        candidateIndex: index,
+        candidateCount: orderedCandidates.length,
+      });
     } else {
       if (creditsUsed >= config.maxCredits) {
         break;

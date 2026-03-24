@@ -106,7 +106,7 @@ function coerceRows(value: unknown) {
 function statusBadge(state: ImportState) {
   if (state.status === "success") return <Badge variant="success">Added</Badge>;
   if (state.status === "error") return <Badge variant="accent">Needs attention</Badge>;
-  if (state.status === "importing") return <Badge variant="accent">Adding leads</Badge>;
+  if (state.status === "importing") return <Badge variant="accent">Adding prospects</Badge>;
   return <Badge variant="muted">Ready</Badge>;
 }
 
@@ -126,7 +126,7 @@ export default function LeadFinderEmbed({
   const [iframeError, setIframeError] = useState("");
   const [importState, setImportState] = useState<ImportState>({
     status: "idle",
-    message: "Type who you want, press Search, then click Add leads.",
+    message: "Type who you want, press Search, then click Add prospects.",
     parseErrors: [],
   });
 
@@ -193,7 +193,7 @@ export default function LeadFinderEmbed({
       if (!rows.length) {
         setImportState({
           status: "error",
-          message: "No leads were sent from the finder.",
+          message: "No prospects were sent from the finder.",
           parseErrors: [],
         });
         postResult({
@@ -208,7 +208,7 @@ export default function LeadFinderEmbed({
       importBusyRef.current = true;
       setImportState({
         status: "importing",
-        message: `Adding ${rows.length} lead${rows.length === 1 ? "" : "s"} to this experiment...`,
+        message: `Adding ${rows.length} prospect${rows.length === 1 ? "" : "s"} to this experiment...`,
         parseErrors: [],
       });
 
@@ -223,8 +223,8 @@ export default function LeadFinderEmbed({
 
         const summary =
           result.importedCount > 0
-            ? `Added ${result.importedCount} lead${result.importedCount === 1 ? "" : "s"} to this experiment.`
-            : "No leads were added from the finder.";
+            ? `Added ${result.importedCount} prospect${result.importedCount === 1 ? "" : "s"} to this experiment.`
+            : "No prospects were added from the finder.";
 
         setImportState({
           status: "success",
@@ -261,7 +261,7 @@ export default function LeadFinderEmbed({
         ).catch(() => undefined);
       } catch (error) {
         const message =
-          error instanceof Error ? error.message : "Failed to import leads from the finder.";
+          error instanceof Error ? error.message : "Failed to import prospects from the finder.";
         setImportState({
           status: "error",
           message,
@@ -300,7 +300,7 @@ export default function LeadFinderEmbed({
           </Button>
           <div className="flex items-center gap-2 text-sm text-[color:var(--muted-foreground)]">
             {statusBadge(importState)}
-            <span>Search here and add leads without leaving the experiment.</span>
+            <span>Search here and add prospects without leaving the experiment.</span>
           </div>
         </div>
       ) : null}
@@ -308,9 +308,9 @@ export default function LeadFinderEmbed({
       <div className="overflow-hidden rounded-xl border border-[color:var(--border)] bg-[color:var(--surface)]">
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[color:var(--border)] px-4 py-3">
           <div>
-            <div className="text-sm font-medium text-[color:var(--foreground)]">Find leads</div>
+            <div className="text-sm font-medium text-[color:var(--foreground)]">Find prospects</div>
             <div className="mt-1 text-xs text-[color:var(--muted-foreground)]">
-              Describe who you want, check the list, then click <span className="font-medium">Add leads</span>.
+              Describe who you want, check the list, then click <span className="font-medium">Add prospects</span>.
             </div>
           </div>
           <div className="flex items-center gap-2">
@@ -338,13 +338,13 @@ export default function LeadFinderEmbed({
               <div className="absolute inset-0 flex items-center justify-center bg-[color:var(--surface)]">
                 <div className="flex items-center gap-2 text-sm text-[color:var(--muted-foreground)]">
                   <Loader2 className="h-4 w-4 animate-spin" />
-                  Loading lead finder...
+                  Loading prospect finder...
                 </div>
               </div>
             ) : null}
             <iframe
               ref={iframeRef}
-              title="Embedded lead finder"
+              title="Embedded prospect finder"
               src={iframeSrc}
               onLoad={() => setIframeLoaded(true)}
               className={`${frameHeight} ${frameMinHeight} w-full border-0 bg-white`}
@@ -352,7 +352,7 @@ export default function LeadFinderEmbed({
           </div>
         ) : (
           <div className={`flex ${frameMinHeight} items-center justify-center text-sm text-[color:var(--muted-foreground)]`}>
-            Preparing lead finder...
+            Preparing prospect finder...
           </div>
         )}
 

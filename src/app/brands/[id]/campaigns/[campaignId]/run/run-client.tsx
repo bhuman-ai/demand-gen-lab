@@ -107,7 +107,7 @@ function previewText(text: string, max = 140) {
 }
 
 function friendlyJobType(jobType: OutreachRunJob["jobType"]) {
-  if (jobType === "source_leads") return "Lead sourcing";
+  if (jobType === "source_leads") return "Prospect sourcing";
   if (jobType === "schedule_messages") return "Message scheduling";
   if (jobType === "dispatch_messages") return "Message dispatch";
   if (jobType === "sync_replies") return "Reply sync";
@@ -118,17 +118,17 @@ function friendlyJobType(jobType: OutreachRunJob["jobType"]) {
 
 function friendlyEventName(eventType: string) {
   if (eventType === "run_started") return "Run started";
-  if (eventType === "lead_sourcing_requested") return "Lead sourcing requested";
-  if (eventType === "lead_sourcing_search_completed") return "Lead search results";
+  if (eventType === "lead_sourcing_requested") return "Prospect sourcing requested";
+  if (eventType === "lead_sourcing_search_completed") return "Prospect search results";
   if (eventType === "lead_sourcing_email_discovery_started") return "Email discovery started";
   if (eventType === "lead_sourcing_email_discovery_polled") return "Email discovery status";
   if (eventType === "lead_sourcing_email_discovery_completed") return "Email discovery results";
-  if (eventType === "lead_sourcing_completed") return "Lead sourcing completed";
-  if (eventType === "lead_sourced" || eventType === "lead_sourced_apify") return "Leads stored";
+  if (eventType === "lead_sourcing_completed") return "Prospect sourcing completed";
+  if (eventType === "lead_sourced" || eventType === "lead_sourced_apify") return "Prospects stored";
   if (eventType === "message_scheduled") return "Messages scheduled";
   if (eventType === "message_sent") return "Message sent";
   if (eventType === "dispatch_failed") return "Dispatch failed";
-  if (eventType === "lead_suppressed_before_send") return "Lead suppressed before send";
+  if (eventType === "lead_suppressed_before_send") return "Prospect suppressed before send";
   if (eventType === "schedule_failed") return "Scheduling failed";
   if (eventType === "reply_ingested") return "Reply ingested";
   if (eventType === "reply_draft_created") return "Reply draft created";
@@ -165,7 +165,7 @@ function summarizeEvent(event: OutreachRunEvent) {
 
   if (event.eventType === "lead_sourcing_requested") {
     const maxLeads = asNumber(event.payload.maxLeads);
-    return `Requested up to ${maxLeads ?? "?"} leads`;
+    return `Requested up to ${maxLeads ?? "?"} prospects`;
   }
   if (event.eventType === "lead_sourcing_search_completed") {
     const ok = Boolean(event.payload.ok);
@@ -189,7 +189,7 @@ function summarizeEvent(event: OutreachRunEvent) {
   if (event.eventType === "lead_sourced" || event.eventType === "lead_sourced_apify") {
     const count = asNumber(event.payload.count);
     const blockedCount = asNumber(event.payload.blockedCount);
-    return `Stored ${count ?? 0} leads${blockedCount ? ` (${blockedCount} suppressed)` : ""}`;
+    return `Stored ${count ?? 0} prospects${blockedCount ? ` (${blockedCount} suppressed)` : ""}`;
   }
   if (event.eventType === "message_scheduled") {
     const count = asNumber(event.payload.count);
@@ -439,13 +439,13 @@ function friendlyRunLaunchError(error: unknown) {
     return "Run did not start: start node prompt is empty.";
   }
   if (message.includes("Lead source is not configured for this hypothesis")) {
-    return "Run did not start: this angle has no lead source yet. Save Build, then retry.";
+    return "Run did not start: this angle has no prospect source yet. Save Build, then retry.";
   }
   if (message.includes("Lead sourcing credentials are missing")) {
-    return "Run did not start: lead sourcing credentials are missing in this deployment.";
+    return "Run did not start: prospect sourcing credentials are missing in this deployment.";
   }
   if (message.includes("Lead sourcing is not enabled for this workspace")) {
-    return "Run did not start: lead sourcing is not enabled for this workspace.";
+    return "Run did not start: prospect sourcing is not enabled for this workspace.";
   }
   if (message.includes("Experiment already has an active run")) {
     return "This variant already has an active run. Pause/cancel it, or restart.";
@@ -460,7 +460,7 @@ function byNewest<T extends { createdAt: string }>(rows: T[]) {
 const TABS: Array<{ id: RunTab; label: string }> = [
   { id: "overview", label: "Overview" },
   { id: "variants", label: "Variants" },
-  { id: "leads", label: "Leads" },
+  { id: "leads", label: "Prospects" },
   { id: "inbox", label: "Inbox" },
   { id: "insights", label: "Insights" },
 ];
@@ -690,7 +690,7 @@ export default function RunClient({
                 : "No run is active right now.",
             },
             {
-              label: "Leads",
+              label: "Prospects",
               value: totalLeads.toLocaleString(),
               detail: `${totalSent.toLocaleString()} messages have been sent across all runs.`,
             },
@@ -779,7 +779,7 @@ export default function RunClient({
         <div className="border-t border-[color:var(--border)] pt-4 text-sm">
           <div className="font-medium">Latest attempt: Run {latestRun.id.slice(-6)}</div>
           <div className="mt-1 text-[color:var(--muted-foreground)]">
-            Status {latestRun.status} · leads {latestRun.metrics.sourcedLeads} · sent {latestRun.metrics.sentMessages} · replies {latestRun.metrics.replies}
+            Status {latestRun.status} · prospects {latestRun.metrics.sourcedLeads} · sent {latestRun.metrics.sentMessages} · replies {latestRun.metrics.replies}
           </div>
           <div className="mt-1 text-[color:var(--muted-foreground)]">
             Did emails send? {latestRun.metrics.sentMessages > 0 ? "Yes" : "No"} · Did we get replies?{" "}
@@ -869,7 +869,7 @@ export default function RunClient({
                 <Badge variant={runStatusVariant(run.status)}>{run.status}</Badge>
               </div>
               <div className="mt-1 text-[color:var(--muted-foreground)]">
-                Leads {run.metrics.sourcedLeads} · Sent {run.metrics.sentMessages} · Replies {run.metrics.replies}
+                Prospects {run.metrics.sourcedLeads} · Sent {run.metrics.sentMessages} · Replies {run.metrics.replies}
               </div>
               <div className="mt-2 grid gap-2 lg:grid-cols-3">
                 <div className="rounded-lg border border-[color:var(--border)] bg-[color:var(--surface)] p-2">
@@ -1135,7 +1135,7 @@ export default function RunClient({
                 return (
                 <tr key={message.id} className="border-t border-[color:var(--border)] align-top">
                     <td className="py-2">
-                      <div className="break-all">{lead?.email || "Unknown lead"}</div>
+                      <div className="break-all">{lead?.email || "Unknown prospect"}</div>
                       {lead?.name ? (
                         <div className="text-xs text-[color:var(--muted-foreground)]">{lead.name}</div>
                       ) : null}
@@ -1309,15 +1309,15 @@ export default function RunClient({
   const leadsPanel = (
     <Card>
       <CardHeader>
-        <CardTitle className="text-base">Leads</CardTitle>
-        <CardDescription>Leads sourced from active and historical runs.</CardDescription>
+        <CardTitle className="text-base">Prospects</CardTitle>
+        <CardDescription>Prospects sourced from active and historical runs.</CardDescription>
       </CardHeader>
       <CardContent>
         <TableShell>
         <table className="min-w-full text-sm">
           <thead>
             <tr>
-              <TableHeaderCell>Lead</TableHeaderCell>
+              <TableHeaderCell>Prospect</TableHeaderCell>
               <TableHeaderCell>Company</TableHeaderCell>
               <TableHeaderCell>Email</TableHeaderCell>
               <TableHeaderCell>Status</TableHeaderCell>
@@ -1354,8 +1354,8 @@ export default function RunClient({
         {!runView.leads.length ? (
           <EmptyState
             className="mt-4"
-            title="No leads yet."
-            description="Launch a run from Overview or Variants and sourced leads will appear here."
+            title="No prospects yet."
+            description="Launch a run from Overview or Variants and sourced prospects will appear here."
           />
         ) : null}
       </CardContent>

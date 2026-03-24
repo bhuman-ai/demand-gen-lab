@@ -1000,7 +1000,7 @@ export default function ExperimentSuggestionsPanel({ brandId }: { brandId: strin
                             experimentId: experiment.id,
                             source: "suggestion",
                           });
-                          router.push(`/brands/${brandId}/experiments/${experiment.id}`);
+                          router.push(`/brands/${brandId}/experiments/${experiment.id}/setup`);
                         } catch (err) {
                           setError(err instanceof Error ? err.message : "Failed to create experiment");
                         } finally {
@@ -1008,7 +1008,7 @@ export default function ExperimentSuggestionsPanel({ brandId }: { brandId: strin
                         }
                       }}
                     >
-                      {busyId === suggestion.id ? "Creating..." : "Use this idea"}
+                      {busyId === suggestion.id ? "Opening setup..." : "Start with this idea"}
                     </Button>
                     <Button
                       type="button"

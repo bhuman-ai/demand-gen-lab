@@ -63,10 +63,10 @@ function runStatusVariant(status: OutreachRun["status"]) {
 function friendlyRunLaunchError(error: unknown) {
   const message = error instanceof Error ? error.message : "Failed to launch run";
   if (message.includes("Lead sourcing is not enabled for this workspace")) {
-    return "Run did not start: platform lead sourcing is not configured in this deployment yet.";
+    return "Run did not start: platform prospect sourcing is not configured in this deployment yet.";
   }
   if (message.includes("Lead sourcing credentials are missing")) {
-    return "Run did not start: platform lead sourcing credentials are missing in this deployment.";
+    return "Run did not start: platform prospect sourcing credentials are missing in this deployment.";
   }
   if (message.includes("Experiment already has an active run")) {
     return "This experiment already has an active run. Cancel it to restart, or wait for it to finish.";
@@ -90,7 +90,7 @@ function formatDateTime(value: string) {
 }
 
 function friendlyJobType(jobType: OutreachRunJob["jobType"]) {
-  if (jobType === "source_leads") return "Lead sourcing";
+  if (jobType === "source_leads") return "Prospect sourcing";
   if (jobType === "schedule_messages") return "Message scheduling";
   if (jobType === "dispatch_messages") return "Message dispatch";
   if (jobType === "sync_replies") return "Reply sync";
@@ -100,15 +100,15 @@ function friendlyJobType(jobType: OutreachRunJob["jobType"]) {
 function friendlyEventName(eventType: string) {
   if (eventType === "hypothesis_approved_auto_run_queued") return "Run queued";
   if (eventType === "run_started") return "Run started";
-  if (eventType === "lead_sourcing_requested") return "Lead sourcing requested";
-  if (eventType === "lead_sourcing_search_completed") return "Lead search results";
+  if (eventType === "lead_sourcing_requested") return "Prospect sourcing requested";
+  if (eventType === "lead_sourcing_search_completed") return "Prospect search results";
   if (eventType === "lead_sourcing_email_discovery_started") return "Email discovery started";
   if (eventType === "lead_sourcing_email_discovery_polled") return "Email discovery status";
   if (eventType === "lead_sourcing_email_discovery_completed") return "Email discovery results";
-  if (eventType === "lead_sourcing_completed") return "Lead sourcing completed";
-  if (eventType === "lead_sourced" || eventType === "lead_sourced_apify") return "Leads stored";
+  if (eventType === "lead_sourcing_completed") return "Prospect sourcing completed";
+  if (eventType === "lead_sourced" || eventType === "lead_sourced_apify") return "Prospects stored";
   if (eventType === "schedule_failed") return "Scheduling failed";
-  if (eventType === "lead_sourcing_failed") return "Lead sourcing failed";
+  if (eventType === "lead_sourcing_failed") return "Prospect sourcing failed";
   if (eventType === "message_scheduled") return "Messages scheduled";
   if (eventType === "dispatch_failed") return "Dispatch failed";
   if (eventType === "message_sent") return "Message sent";
@@ -130,7 +130,7 @@ function summarizeEvent(event: OutreachRunEvent) {
 
   if (event.eventType === "lead_sourcing_requested") {
     const maxLeads = asNumber(event.payload.maxLeads);
-    return `Requested up to ${maxLeads ?? "?"} leads`;
+    return `Requested up to ${maxLeads ?? "?"} prospects`;
   }
   if (event.eventType === "lead_sourcing_search_completed") {
     const ok = Boolean(event.payload.ok);
@@ -167,12 +167,12 @@ function summarizeEvent(event: OutreachRunEvent) {
   }
   if (event.eventType === "lead_sourcing_completed") {
     const sourcedCount = asNumber(event.payload.sourcedCount);
-    return `Provider returned ${sourcedCount ?? 0} leads`;
+    return `Provider returned ${sourcedCount ?? 0} prospects`;
   }
   if (event.eventType === "lead_sourced" || event.eventType === "lead_sourced_apify") {
     const count = asNumber(event.payload.count);
     const blockedCount = asNumber(event.payload.blockedCount);
-    return `Stored ${count ?? 0} leads${blockedCount ? ` (${blockedCount} suppressed)` : ""}`;
+    return `Stored ${count ?? 0} prospects${blockedCount ? ` (${blockedCount} suppressed)` : ""}`;
   }
   if (event.eventType === "message_scheduled") {
     const count = asNumber(event.payload.count);
@@ -668,7 +668,7 @@ export default function ExperimentsClient({ brandId, campaignId }: { brandId: st
                           </Badge>
                         </div>
                         <div className="mt-1 text-[color:var(--muted-foreground)]">
-                          Leads {run.metrics.sourcedLeads} · Sent {run.metrics.sentMessages} · Replies {run.metrics.replies}
+                          Prospects {run.metrics.sourcedLeads} · Sent {run.metrics.sentMessages} · Replies {run.metrics.replies}
                         </div>
                         {run.lastError ? (
                           <div className="mt-1 text-[color:var(--danger)]">Reason: {run.lastError}</div>
@@ -676,7 +676,7 @@ export default function ExperimentsClient({ brandId, campaignId }: { brandId: st
                         {run.status === "preflight_failed" &&
                         run.lastError.includes("Lead sourcing is not enabled for this workspace") ? (
                           <div className="mt-1 rounded-md border border-[color:var(--danger-border)] bg-[color:var(--danger-soft)] px-2 py-1 text-[color:var(--danger)]">
-                            Setup required: platform lead sourcing is not configured in this deployment yet.
+                            Setup required: platform prospect sourcing is not configured in this deployment yet.
                           </div>
                         ) : null}
                         {run.pauseReason ? (

@@ -412,13 +412,13 @@ export default function ProvisioningProviderSettingsCard({
             validationStatus={settings.namecheap.lastValidatedStatus}
             summary={
               namecheapConfigured
-                ? "Ready. The app can buy domains and update DNS for you."
-                : "Add your Namecheap API details if you want the app to handle domains for you."
+                ? "Ready if Namecheap sees this app from the allowlisted server IPv4."
+                : "Add your Namecheap API details and a stable server IPv4 if you want the app to handle domains for you."
             }
             highlights={[
               settings.namecheap.apiUser ? `API user ${settings.namecheap.apiUser}` : "API user needed",
               settings.namecheap.hasApiKey ? "API key saved" : "API key needed",
-              settings.namecheap.clientIp ? "Allowed IP saved" : "Allowed IP needed",
+              settings.namecheap.clientIp ? "Allowed server IPv4 saved" : "Allowed server IPv4 needed",
             ]}
             lastChecked={formatRelativeTimeLabel(settings.namecheap.lastValidatedAt, "Not tested yet")}
             onOpen={() => {
@@ -467,11 +467,11 @@ export default function ProvisioningProviderSettingsCard({
             summary={
               settings.deliverability.provider === "mailpool"
                 ? deliverabilityConfigured
-                  ? "Ready. Mailpool spam checks are active, and inbox placement uses the internal monitor pool."
+                  ? `Ready. Mailpool deliverability will run placement checks using ${settings.deliverability.mailpoolInboxProviders.join(", ")}.`
                   : "Mailpool deliverability is selected, but the Mailpool connection still needs attention."
                 : deliverabilityConfigured
                   ? `Ready. Watching ${settings.deliverability.monitoredDomains.join(", ")} for Gmail reputation changes.`
-                  : "Connect this only if you want Gmail reputation data or Mailpool spam checks in the app."
+                  : "Connect this only if you want Gmail reputation data or Mailpool-backed inbox placement in the app."
             }
             highlights={[
               settings.deliverability.provider === "google_postmaster"
@@ -483,12 +483,12 @@ export default function ProvisioningProviderSettingsCard({
                 ? `${settings.deliverability.monitoredDomains.length} monitored domain${settings.deliverability.monitoredDomains.length === 1 ? "" : "s"}`
                 : "No watched domains yet",
               settings.deliverability.provider === "mailpool"
-                ? "Internal inbox pool"
+                ? `${settings.deliverability.mailpoolInboxProviders.length} inbox providers`
                 : settings.deliverability.hasGoogleClientId
                   ? "Client ID saved"
                   : "Client ID needed",
               settings.deliverability.provider === "mailpool"
-                ? "Uses Mailpool for spam checks"
+                ? "Uses Mailpool workspace connection"
                 : settings.deliverability.hasGoogleRefreshToken
                   ? "Refresh token saved"
                   : "Refresh token needed",
@@ -651,7 +651,7 @@ export default function ProvisioningProviderSettingsCard({
               rel="noreferrer"
               className="inline-flex items-center gap-1 text-sm text-[color:var(--muted-foreground)] underline underline-offset-4"
             >
-              Where do I find API access and my whitelisted IP?
+              Where do I manage API access and allowlisted IPs?
               <ExternalLink className="h-3.5 w-3.5" />
             </a>
             <div className="flex flex-wrap gap-2">
@@ -681,7 +681,11 @@ export default function ProvisioningProviderSettingsCard({
           <div className="md:col-span-2 rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-4 py-3 text-sm text-[color:var(--foreground)]">
             <div className="font-medium">You need three things</div>
             <div className="mt-1 text-[color:var(--muted-foreground)]">
-              Paste your API user, API key, and the IP address you already allowed in Namecheap.
+              Paste your API user, API key, and the stable public IPv4 you already allowed in Namecheap.
+            </div>
+            <div className="mt-2 text-[color:var(--muted-foreground)]">
+              If production runs on Vercel, default outbound IPs can change. Use Vercel Static IPs or send Namecheap
+              calls through a relay with a fixed IPv4.
             </div>
           </div>
           <div className="grid gap-2">
@@ -727,8 +731,8 @@ export default function ProvisioningProviderSettingsCard({
           <div className="grid gap-2">
             <FieldLabel
               htmlFor="provider-nc-client-ip"
-              label="Allowed IP address"
-              help="Namecheap only accepts API requests from IPs you allowed first in the API Access screen."
+              label="Allowed server IPv4"
+              help="Must match the stable public IPv4 of the server making the API request. This is not your domain name."
             />
             <Input
               id="provider-nc-client-ip"
@@ -873,7 +877,7 @@ export default function ProvisioningProviderSettingsCard({
           }
         }}
         title={deliverabilityConfigured ? "Deliverability setup" : "Connect deliverability checks"}
-        description="Optional. Use Google Postmaster for Gmail reputation, or Mailpool for spam checks on Mailpool senders while inbox placement uses the internal monitor pool."
+        description="Optional. Use Google Postmaster for Gmail reputation, or Mailpool for spam checks and inbox placement on Mailpool senders."
         footer={
           <div className="flex flex-wrap items-center justify-between gap-3">
             <a
@@ -912,20 +916,17 @@ export default function ProvisioningProviderSettingsCard({
       >
         <div className="grid gap-4 md:grid-cols-2">
           <div className="md:col-span-2 rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-4 py-3 text-sm text-[color:var(--foreground)]">
-            <div className="font-medium">
-              {form.deliverabilityProvider === "mailpool" ? "Mailpool mode" : "You need two parts"}
-            </div>
+            <div className="font-medium">You need two parts</div>
             <div className="mt-1 text-[color:var(--muted-foreground)]">
-              {form.deliverabilityProvider === "mailpool"
-                ? "Mailpool will run spam checks for Mailpool-managed senders. Inbox placement continues to use the internal monitor pool you already have connected."
-                : "Add the domains you want to watch, then paste the Google client ID, client secret, and refresh token for the Postmaster account."}
+              Add the domains you want to watch, then paste the Google client ID, client secret, and refresh token for
+              the Postmaster account.
             </div>
           </div>
           <div className="grid gap-2">
             <FieldLabel
               htmlFor="provider-deliverability-provider"
               label="Monitor source"
-              help="Google Postmaster is used for Gmail reputation. Mailpool uses the saved Mailpool workspace for spam checks, while inbox placement stays on the internal monitor pool."
+              help="Google Postmaster is used for Gmail reputation. Mailpool uses the saved Mailpool workspace for spam checks and inbox placement."
             />
             <select
               id="provider-deliverability-provider"
@@ -1029,7 +1030,7 @@ export default function ProvisioningProviderSettingsCard({
           <div className="md:col-span-2 rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-4 py-3 text-sm text-[color:var(--muted-foreground)]">
             Last check: {settings.deliverability.lastCheckedAt || "never"}
             {settings.deliverability.provider === "mailpool"
-              ? " · Mailpool spam checks active · Inbox placement uses internal monitor pool"
+              ? ` · Mailpool inbox providers: ${settings.deliverability.mailpoolInboxProviders.join(", ")}`
               : settings.deliverability.lastHealthSummary
                 ? ` · ${settings.deliverability.lastHealthSummary}`
                 : ""}

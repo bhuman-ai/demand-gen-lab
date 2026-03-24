@@ -430,7 +430,7 @@ export default function LiveProspectTableEmbed({
   });
   const [importState, setImportState] = useState<ImportState>({
     status: "idle",
-    message: `AI is gathering the first ${REVIEW_CHECKPOINT_ROWS} leads for review.`,
+    message: `AI is gathering the first ${REVIEW_CHECKPOINT_ROWS} prospects for review.`,
     parseErrors: [],
     mode: null,
   });
@@ -457,7 +457,7 @@ export default function LiveProspectTableEmbed({
       hasRows: current.hasRows || serverRowCount > 0,
       statusMessage:
         serverRowCount > 0
-          ? "Saved leads restored."
+          ? "Saved prospects restored."
           : current.statusMessage,
     }));
 
@@ -663,7 +663,7 @@ export default function LiveProspectTableEmbed({
       if (!rows.length) {
         setImportState({
           status: "error",
-          message: "No leads were sent from the table.",
+          message: "No prospects were sent from the table.",
           parseErrors: [],
           mode: null,
         });
@@ -682,14 +682,14 @@ export default function LiveProspectTableEmbed({
         status: "importing",
         message:
           importMode === "auto"
-            ? `Checking ${rows.length} row${rows.length === 1 ? "" : "s"} and adding the good leads automatically...`
+            ? `Checking ${rows.length} row${rows.length === 1 ? "" : "s"} and adding the good prospects automatically...`
             : `Checking ${rows.length} row${rows.length === 1 ? "" : "s"} now...`,
         parseErrors: [],
         mode: importMode,
       });
       pushActivity(
         importMode === "auto"
-          ? "Checking the latest rows and adding the good leads automatically."
+          ? "Checking the latest rows and adding the good prospects automatically."
           : "Checking the current rows now.",
         "neutral"
       );
@@ -718,10 +718,10 @@ export default function LiveProspectTableEmbed({
           : [];
         const message = importedCount > 0
           ? importMode === "auto"
-            ? `AI added ${importedCount} lead${importedCount === 1 ? "" : "s"}.`
-            : `Added ${importedCount} lead${importedCount === 1 ? "" : "s"}.`
+            ? `AI added ${importedCount} prospect${importedCount === 1 ? "" : "s"}.`
+            : `Added ${importedCount} prospect${importedCount === 1 ? "" : "s"}.`
           : dedupedCount > 0
-            ? "The good leads in those rows were already added."
+            ? "The good prospects in those rows were already added."
             : "No new verified work emails were ready to add.";
 
         setImportState({
@@ -740,7 +740,7 @@ export default function LiveProspectTableEmbed({
           importedCount > 0
             ? message
             : dedupedCount > 0
-              ? `Checked ${attemptedCount} row${attemptedCount === 1 ? "" : "s"}. The good leads were already here.`
+              ? `Checked ${attemptedCount} row${attemptedCount === 1 ? "" : "s"}. The good prospects were already here.`
               : `Checked ${attemptedCount} row${attemptedCount === 1 ? "" : "s"}. No new verified work emails yet.`,
           importedCount > 0 ? "success" : dedupedCount > 0 ? "neutral" : "warning"
         );
@@ -771,7 +771,7 @@ export default function LiveProspectTableEmbed({
         ).catch(() => undefined);
       } catch (error) {
         const message =
-          error instanceof Error ? error.message : "Failed to import leads from the prospect table.";
+          error instanceof Error ? error.message : "Failed to import prospects from the prospect table.";
         setImportState({
           status: "error",
           message,
@@ -900,10 +900,10 @@ export default function LiveProspectTableEmbed({
       ? `${sendableLeadCount} / ${sendableLeadGoal} contacts ready`
       : `${visibleRowCount} / ${goalCount}`;
   const progressMetaLabel = reviewPending
-    ? "Review leads"
+    ? "Review prospects"
     : searchLocked
       ? visibleRowCount === 0
-        ? "Finding first leads"
+        ? "Finding first prospects"
         : tableBusy
           ? "Searching"
         : secondsSinceLastSuccess !== null && secondsSinceLastSuccess >= 30
@@ -913,7 +913,7 @@ export default function LiveProspectTableEmbed({
             : "Working"
       : reviewApproved
         ? visibleRowCount === 0
-          ? "Loading leads"
+          ? "Loading prospects"
           : canSearchBeyondReview
             ? "Finding more contacts"
             : "Approved"
@@ -1183,7 +1183,7 @@ export default function LiveProspectTableEmbed({
       sendHostCommand("set-prompt", { prompt: promptForSearch });
     }
     sendHostCommand("run-search", { limit: goalCount });
-    pushActivity("AI started searching for the first leads.", "neutral");
+    pushActivity("AI started searching for the first prospects.", "neutral");
   }, [
     goalCount,
     hasPrompt,
@@ -1222,7 +1222,7 @@ export default function LiveProspectTableEmbed({
     }
     sendHostCommand("run-search", { limit: goalCount });
     pushActivity(
-      `AI found ${visibleRowCount} lead${visibleRowCount === 1 ? "" : "s"} so far and is looking for more.`,
+      `AI found ${visibleRowCount} prospect${visibleRowCount === 1 ? "" : "s"} so far and is looking for more.`,
       "neutral"
     );
   }, [
@@ -1277,8 +1277,8 @@ export default function LiveProspectTableEmbed({
     sendHostCommand("run-search", { limit: goalCount });
     pushActivity(
       visibleRowCount > 0
-        ? `No new leads for ${formatElapsedLabel(secondsSinceLastSuccess)}. Trying another search pass.`
-        : "Still waiting for the first leads. Trying another search pass.",
+        ? `No new prospects for ${formatElapsedLabel(secondsSinceLastSuccess)}. Trying another search pass.`
+        : "Still waiting for the first prospects. Trying another search pass.",
       "warning"
     );
   }, [
@@ -1465,7 +1465,7 @@ export default function LiveProspectTableEmbed({
                       window.localStorage.setItem(reviewStorageKey, "approved");
                     }
                     setReviewApproved(true);
-                    pushActivity("Targeting looks good. AI will keep the good leads from this batch.", "success");
+                    pushActivity("Targeting looks good. AI will keep the good prospects from this batch.", "success");
                     Promise.resolve(onReviewApproved?.()).catch(() => undefined);
                   }}
                 >
@@ -1710,17 +1710,17 @@ export default function LiveProspectTableEmbed({
             <div className="w-full max-w-md px-6">
               <div className="mb-3 text-center text-xs font-medium uppercase tracking-[0.14em] text-[color:var(--muted-foreground)]">
                 {tableBusy
-                  ? "Finding first leads"
+                  ? "Finding first prospects"
                   : reviewApproved
-                    ? "Loading leads"
-                    : "Waiting for first leads"}
+                    ? "Loading prospects"
+                    : "Waiting for first prospects"}
               </div>
               <div className="h-2 overflow-hidden rounded-full bg-[color:var(--surface-muted)]">
                 <div className="h-full w-1/3 rounded-full bg-[color:var(--accent)] animate-pulse" />
               </div>
               <div className="mt-3 text-center text-xs text-[color:var(--muted-foreground)]">
                 {reviewApproved
-                  ? "Loading the saved leads for this experiment."
+                  ? "Loading the saved prospects for this experiment."
                   : "The first matching rows will appear here automatically."}
               </div>
             </div>
@@ -1741,8 +1741,8 @@ export default function LiveProspectTableEmbed({
       <SettingsModal
         open={settingsOpen}
         onOpenChange={setSettingsOpen}
-        title="Lead settings"
-        description="Adjust how this experiment turns matching rows into actual leads."
+        title="Prospect settings"
+        description="Adjust how this experiment turns matching rows into sendable prospects."
         panelClassName="max-w-lg"
         footer={
           <div className="flex items-center justify-end gap-2">
@@ -1771,7 +1771,7 @@ export default function LiveProspectTableEmbed({
           <div className="space-y-1">
             <div className="text-sm font-medium text-[color:var(--foreground)]">Only keep one contact per company</div>
             <div className="text-sm text-[color:var(--muted-foreground)]">
-              When this is on, the experiment skips extra people from companies already represented in the lead pool.
+              When this is on, the experiment skips extra people from companies already represented in the prospect pool.
               Turn it off if you want to contact multiple people at the same company.
             </div>
           </div>

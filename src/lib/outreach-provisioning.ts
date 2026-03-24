@@ -3,10 +3,12 @@ import type {
   BrandOutreachAssignment,
   BrandRecord,
   DomainRow,
+  MailpoolInboxPlacementProvider,
   OutreachAccount,
   OutreachProvider,
 } from "@/lib/factory-types";
 import {
+  DEFAULT_MAILPOOL_INBOX_PROVIDERS,
   getOutreachAccountFromEmail,
   supportsMailpoolDelivery,
 } from "@/lib/outreach-account-helpers";
@@ -31,17 +33,21 @@ import {
   updateOutreachProvisioningSettings,
 } from "@/lib/outreach-provider-settings";
 import {
+  createMailpoolInboxPlacement,
   createMailpoolMailbox,
   createMailpoolSpamCheck,
+  getMailpoolInboxPlacement,
   getMailpoolSubscriptionSlots,
   getMailpoolSpamCheck,
   listMailpoolDomains,
   listMailpoolMailboxes,
   registerMailpoolDomain,
+  runMailpoolInboxPlacement,
   testMailpoolConnection,
   updateMailpoolSubscriptionSlots,
   type MailpoolDomain,
   type MailpoolDomainOwner,
+  type MailpoolInboxPlacement,
   type MailpoolMailbox,
   type MailpoolSpamCheck,
   type MailpoolSubscriptionSlots,
@@ -207,6 +213,58 @@ function xmlErrors(xml: string) {
   );
 }
 
+function looksLikeNamecheapIpAllowlistError(message: string) {
+  const normalized = message.toLowerCase();
+  return (
+    normalized.includes("whitelist") ||
+    normalized.includes("allowlist") ||
+    normalized.includes("request ip") ||
+    normalized.includes("clientip") ||
+    (normalized.includes("ip") && normalized.includes("allow")) ||
+    (normalized.includes("ip") && normalized.includes("valid"))
+  );
+}
+
+function withNamecheapIpHint(message: string) {
+  if (!looksLikeNamecheapIpAllowlistError(message)) {
+    return message;
+  }
+  return `${message} Use the stable public IPv4 of the server making the request. If this app runs on Vercel, default outbound IPs change; use Vercel Static IPs or route Namecheap through a relay with a fixed IPv4.`;
+}
+
+function resolveNamecheapRelayUrl() {
+  return String(process.env.NAMECHEAP_RELAY_URL ?? "").trim();
+}
+
+function namecheapRelayHeaders() {
+  const token = String(process.env.NAMECHEAP_RELAY_TOKEN ?? "").trim();
+  return {
+    "Content-Type": "application/json",
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+  };
+}
+
+function looksLikeNamecheapXmlApiResponse(body: string) {
+  return /<ApiResponse\b/i.test(body);
+}
+
+function compactErrorMessage(body: string) {
+  const trimmed = body.trim();
+  if (!trimmed) {
+    return "";
+  }
+  try {
+    const parsed = JSON.parse(trimmed) as { error?: unknown; message?: unknown };
+    const candidate = String(parsed.error ?? parsed.message ?? "").trim();
+    if (candidate) {
+      return candidate;
+    }
+  } catch {
+    // Fall through to plain-text cleanup.
+  }
+  return trimmed.replace(/\s+/g, " ").slice(0, 300);
+}
+
 function parseXmlAttributes(blob: string) {
   const out: Record<string, string> = {};
   for (const match of blob.matchAll(/([A-Za-z0-9_:-]+)="([^"]*)"/g)) {
@@ -227,17 +285,34 @@ function parseXmlText(xml: string, tagName: string) {
 
 async function namecheapRequest(command: string, params: Record<string, string>) {
   const query = new URLSearchParams(params);
-  const response = await fetch(`${NAMECHEAP_BASE_URL}?${query.toString()}`, {
-    method: "GET",
-    cache: "no-store",
-  });
+  const relayUrl = resolveNamecheapRelayUrl();
+  const response = relayUrl
+    ? await fetch(relayUrl, {
+        method: "POST",
+        cache: "no-store",
+        headers: namecheapRelayHeaders(),
+        body: JSON.stringify({ command, params }),
+      })
+    : await fetch(`${NAMECHEAP_BASE_URL}?${query.toString()}`, {
+        method: "GET",
+        cache: "no-store",
+      });
   const xml = await response.text();
+  if (!looksLikeNamecheapXmlApiResponse(xml)) {
+    const detail = compactErrorMessage(xml);
+    const source = relayUrl ? "Namecheap relay" : "Namecheap";
+    throw new Error(
+      detail
+        ? `${source} ${command} failed: ${detail}`
+        : `${source} ${command} returned a non-XML response (${response.status || "unknown status"})`
+    );
+  }
   const status = xmlResponseStatus(xml);
   const errors = xmlErrors(xml);
   if (!response.ok || status !== "OK") {
-    throw new Error(
-      errors.join(" · ") || `Namecheap ${command} failed (${response.status || "unknown status"})`
-    );
+    const message =
+      errors.join(" · ") || `Namecheap ${command} failed (${response.status || "unknown status"})`;
+    throw new Error(withNamecheapIpHint(message));
   }
   return xml;
 }
@@ -1029,6 +1104,7 @@ async function ensureMailpoolHybridAccount(input: {
   accountName: string;
   mailbox: MailpoolMailbox;
   spamCheck?: MailpoolSpamCheck | null;
+  inboxPlacement?: MailpoolInboxPlacement | null;
   replyToEmail: string;
 }) {
   const allAccounts = await listOutreachAccounts();
@@ -1058,7 +1134,7 @@ async function ensureMailpoolHybridAccount(input: {
         mailboxId: input.mailbox.id,
         mailboxType: input.mailbox.type,
         spamCheckId: String(input.spamCheck?.id ?? "").trim(),
-        inboxPlacementId: "",
+        inboxPlacementId: String(input.inboxPlacement?.id ?? "").trim(),
         status:
           input.mailbox.status === "active"
             ? "active"
@@ -1324,6 +1400,15 @@ async function waitForMailpoolSpamCheck(apiKey: string, spamCheckId: string) {
   for (let attempt = 0; attempt < 10 && current.state !== "completed"; attempt += 1) {
     await sleep(1500);
     current = await getMailpoolSpamCheck(apiKey, spamCheckId);
+  }
+  return current;
+}
+
+async function waitForMailpoolInboxPlacement(apiKey: string, inboxPlacementId: string) {
+  let current = await getMailpoolInboxPlacement(apiKey, inboxPlacementId);
+  for (let attempt = 0; attempt < 6 && current.state !== "completed"; attempt += 1) {
+    await sleep(2000);
+    current = await getMailpoolInboxPlacement(apiKey, inboxPlacementId);
   }
   return current;
 }
@@ -1825,6 +1910,8 @@ export async function provisionMailpoolSender(
   );
   let spamCheck: MailpoolSpamCheck | null = null;
   let resolvedSpamCheck: MailpoolSpamCheck | null = null;
+  let inboxPlacement: MailpoolInboxPlacement | null = null;
+  let resolvedInboxPlacement: MailpoolInboxPlacement | null = null;
 
   const warnings: string[] = [];
   const nextSteps: string[] = [];
@@ -1834,6 +1921,22 @@ export async function provisionMailpoolSender(
       spamCheck = await createMailpoolSpamCheck({ apiKey, mailboxId: mailbox.id });
       resolvedSpamCheck =
         spamCheck?.id ? await waitForMailpoolSpamCheck(apiKey, spamCheck.id) : null;
+
+      const inboxProviders =
+        settings.deliverability.mailpoolInboxProviders.length
+          ? settings.deliverability.mailpoolInboxProviders
+          : ([...DEFAULT_MAILPOOL_INBOX_PROVIDERS] as MailpoolInboxPlacementProvider[]);
+      inboxPlacement = await createMailpoolInboxPlacement({
+        apiKey,
+        mailboxId: mailbox.id,
+        providers: inboxProviders,
+      });
+      const runningInboxPlacement =
+        inboxPlacement?.id ? await runMailpoolInboxPlacement(apiKey, inboxPlacement.id) : inboxPlacement;
+      resolvedInboxPlacement =
+        runningInboxPlacement?.id
+          ? await waitForMailpoolInboxPlacement(apiKey, runningInboxPlacement.id)
+          : null;
     } catch (error) {
       if (!isMailpoolGoogleCredentialsPendingError(error)) {
         throw error;
@@ -1850,6 +1953,7 @@ export async function provisionMailpoolSender(
     accountName: input.accountName.trim() || `${brand.name} ${domain}`,
     mailbox,
     spamCheck: resolvedSpamCheck,
+    inboxPlacement: resolvedInboxPlacement,
     replyToEmail: fromEmail,
   });
 
@@ -1907,11 +2011,16 @@ export async function provisionMailpoolSender(
   if (resolvedSpamCheck?.state !== "completed") {
     warnings.push("Mailpool spam check is still pending.");
   }
+  if (resolvedInboxPlacement && resolvedInboxPlacement.state !== "completed") {
+    warnings.push("Mailpool inbox placement is still pending.");
+  }
 
   if (mailpoolDomain.status !== "active") {
     nextSteps.push("Wait for Mailpool to finish domain activation and DNS propagation.");
   }
-  nextSteps.push("Inbox placement will use the internal monitor pool after the first sender test.");
+  if (resolvedInboxPlacement && resolvedInboxPlacement.state !== "completed") {
+    nextSteps.push("Refresh inbox placement after Mailpool finishes the first run.");
+  }
   nextSteps.push("Run a sender test before launching live campaigns.");
 
   return {
@@ -1935,8 +2044,8 @@ export async function provisionMailpoolSender(
       mailboxStatus: String(mailbox.status ?? "").trim() || "pending",
       spamCheckId: String(resolvedSpamCheck?.id ?? spamCheck?.id ?? "").trim(),
       spamCheckStatus: String(resolvedSpamCheck?.state ?? spamCheck?.state ?? "pending"),
-      inboxPlacementId: "",
-      inboxPlacementStatus: "internal_pool",
+      inboxPlacementId: String(resolvedInboxPlacement?.id ?? inboxPlacement?.id ?? "").trim(),
+      inboxPlacementStatus: String(resolvedInboxPlacement?.state ?? inboxPlacement?.state ?? "pending"),
     },
     warnings,
     nextSteps,

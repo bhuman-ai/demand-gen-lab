@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useEffectEvent, useMemo, useRef, useState, type Dispatch, type SetStateAction } from "react";
+import { useSearchParams } from "next/navigation";
 import { AlertCircle, ExternalLink, LoaderCircle, Plus, Sparkles } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -488,6 +489,7 @@ function AccountInventoryCard({
 }
 
 export default function OutreachSettingsClient() {
+  const searchParams = useSearchParams();
   const [accounts, setAccounts] = useState<OutreachAccount[]>([]);
   const [brands, setBrands] = useState<BrandRecord[]>([]);
   const [provisioningSettings, setProvisioningSettings] = useState<OutreachProvisioningSettings | null>(null);
@@ -529,6 +531,7 @@ export default function OutreachSettingsClient() {
   const [savingMailbox, setSavingMailbox] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
   const profileAutoPrefillKeyRef = useRef("");
 
   useEffect(() => {
@@ -614,6 +617,32 @@ export default function OutreachSettingsClient() {
   useEffect(() => {
     setAutoSelectedTab(false);
   }, [activeBrandId]);
+
+  useEffect(() => {
+    if (loading) return;
+
+    const requestedTab = searchParams.get("tab");
+    const requestedOpen = searchParams.get("open");
+    const reason = searchParams.get("reason");
+
+    if (requestedTab === "profile" || requestedTab === "identity" || requestedTab === "integrations" || requestedTab === "email") {
+      setActiveTab(requestedTab);
+      setAutoSelectedTab(true);
+    }
+
+    if (reason === "monitor_pool") {
+      setNotice(
+        "Fix this here: add 1 new reply inbox and save it. The sender itself is fine. We just ran out of extra inboxes used for safety checks."
+      );
+    } else {
+      setNotice("");
+    }
+
+    if (requestedTab === "email" && requestedOpen === "mailbox") {
+      setError("");
+      setMailboxModalOpen(true);
+    }
+  }, [loading, searchParams]);
 
   const deliveryAccounts = useMemo(
     () => accounts.filter((account) => account.accountType !== "mailbox"),
@@ -1249,6 +1278,11 @@ export default function OutreachSettingsClient() {
           </div>
         </div>
 
+        {notice ? (
+          <div className="rounded-xl border border-[color:var(--accent)] bg-[color:var(--surface-muted)] px-4 py-3 text-sm text-[color:var(--foreground)]">
+            {notice}
+          </div>
+        ) : null}
         {error ? <div className="text-sm text-[color:var(--danger)]">{error}</div> : null}
         {loading ? <div className="text-sm text-[color:var(--muted-foreground)]">Loading outreach settings...</div> : null}
 

@@ -75,6 +75,7 @@ export async function POST(
     trigger: "manual",
     ownerType: "experiment",
     ownerId: experiment.id,
+    maxLeadsOverride: 500,
   });
 
   if (!result.ok) {

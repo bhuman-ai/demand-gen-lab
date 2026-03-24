@@ -20,6 +20,8 @@ Copy `.env.example` to `.env.local` and fill values:
 - `OUTREACH_CRON_TOKEN` (optional, protects cron tick endpoint)
 - `CRON_SECRET` (optional legacy alias for tick auth token)
 - `CUSTOMER_IO_WEBHOOK_SECRET` (optional)
+- `NAMECHEAP_RELAY_URL` (optional, routes Namecheap API calls through a fixed-IP relay)
+- `NAMECHEAP_RELAY_TOKEN` (optional bearer token for that relay)
 
 ## Scheduler (Cloudflare Worker)
 
@@ -38,6 +40,36 @@ wrangler deploy
 The worker schedule is configured in:
 
 - `/Users/don/factory-platform/cloudflare/outreach-cron/wrangler.toml`
+
+## Namecheap Relay (Fixed IP)
+
+Namecheap API access is tied to an allowlisted IPv4. If this app runs on Vercel without Static IPs, Namecheap calls can fail because the outbound IP is not fixed.
+
+This repo includes a small relay you can run on a VPS or VM with a stable public IPv4:
+
+```bash
+NAMECHEAP_RELAY_TOKEN=replace-me \
+PORT=8788 \
+npm run namecheap:relay
+```
+
+Put it behind HTTPS or a private network before exposing it outside your host.
+
+Recommended setup:
+
+1. Run the relay on a small server with a fixed public IPv4.
+2. Add that server IPv4 to Namecheap's API allowlist.
+3. Set these app env vars in `lastb2b`:
+
+```bash
+NAMECHEAP_RELAY_URL=https://YOUR_RELAY_HOST/namecheap
+NAMECHEAP_RELAY_TOKEN=replace-me
+```
+
+4. Keep the saved Namecheap `clientIp` setting equal to that same server IPv4.
+5. Check the relay with `curl https://YOUR_RELAY_HOST/healthz`.
+
+The relay only accepts authenticated `POST /namecheap` requests and only forwards to Namecheap's production or sandbox API host.
 
 ## API endpoints
 

@@ -95,7 +95,7 @@ export async function POST(request: Request) {
               })
             : failureResult(
                 "namecheap",
-                "Saved Namecheap defaults are incomplete. Add an API user, API key, and whitelisted client IP first."
+                "Saved Namecheap defaults are incomplete. Add an API user, API key, and allowlisted server IPv4 first."
               );
       } catch (error) {
         tests.namecheap = failureResult(

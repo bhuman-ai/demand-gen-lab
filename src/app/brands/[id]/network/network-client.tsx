@@ -45,7 +45,8 @@ type SenderFilter = (typeof FILTERS)[number];
 type RoutingRole = "primary" | "standby" | "blocked" | "pending";
 type SenderCardStatus = "ready" | "warming" | "setup" | "fix" | "protected";
 type SenderHealthTone = "good" | "watch" | "checking" | "problem";
-type SenderActionKind = "repair_setup" | "refresh_mailpool" | "open_setup" | "open_settings";
+type SenderActionKind = "repair_setup" | "refresh_mailpool" | "open_setup" | "open_settings" | "add_inbox";
+type SenderBadgeVariant = "default" | "success" | "accent" | "muted" | "danger";
 type HealthDimension = "domainHealth" | "emailHealth" | "ipHealth" | "messagingHealth";
 type HealthSummaryDimension =
   | "domainHealthSummary"
@@ -253,6 +254,16 @@ function senderSetupLine(row: DomainRow) {
   return parts.join(" · ");
 }
 
+function isMonitorInboxIssue(row: DomainRow) {
+  const summary = automationSummary(row).toLowerCase();
+  return (
+    row.seedPolicy === "tainted_mailbox" ||
+    summary.includes("seed pool exhausted") ||
+    summary.includes("spare check inbox") ||
+    summary.includes("no unused deliverability monitor mailbox remains")
+  );
+}
+
 function routingRoleForRow(row: DomainRow, routingRoleBySenderId: Map<string, RoutingRole>): RoutingRole {
   if (getDomainDeliveryAccountId(row)) {
     return routingRoleBySenderId.get(getDomainDeliveryAccountId(row)) ?? "pending";
@@ -294,9 +305,8 @@ function senderRouteLabel(
 ) {
   if (status === "protected") return "Replies only";
   if (status === "fix") {
-    const summary = automationSummary(row).toLowerCase();
     if (row.dnsStatus === "error") return "Setup broken";
-    if (summary.includes("seed pool exhausted")) return "Needs test inboxes";
+    if (isMonitorInboxIssue(row)) return "Need another inbox";
     if (health === "problem") return "Health problem";
     return "Paused";
   }
@@ -321,9 +331,8 @@ function senderRouteDetail(
 ) {
   if (status === "protected") return "Reply inbox only";
   if (status === "fix") {
-    const summary = automationSummary(row).toLowerCase();
     if (row.dnsStatus === "error") return "Warmup cannot start";
-    if (summary.includes("seed pool exhausted")) return "Add fresh test inboxes";
+    if (isMonitorInboxIssue(row)) return "Checks are paused";
     if (health === "problem") return "Out of rotation";
     return "Needs review";
   }
@@ -384,6 +393,35 @@ function senderOverallHealthVariant(status: SenderHealthTone) {
   return "muted";
 }
 
+function senderHealthDisplay(
+  row: DomainRow,
+  status: SenderCardStatus,
+  health: SenderHealthTone
+): { badgeLabel: string; cardLabel: string; detail: string; variant: SenderBadgeVariant } {
+  if (status === "fix" && isMonitorInboxIssue(row)) {
+    return {
+      badgeLabel: "Sender okay",
+      cardLabel: "Sender okay",
+      detail: "Blocked only because checks need another inbox",
+      variant: "success",
+    };
+  }
+
+  return {
+    badgeLabel: senderOverallHealthLabel(health),
+    cardLabel: senderOverallHealthLabel(health),
+    detail:
+      health === "good"
+        ? "Looks healthy"
+        : health === "watch"
+          ? "Usable, but watch it"
+          : health === "problem"
+            ? "Fix before sending"
+            : "Still gathering signal",
+    variant: senderOverallHealthVariant(health),
+  };
+}
+
 function senderTodaySummary(row: DomainRow, status: SenderCardStatus) {
   const cap = senderDailyCap(row);
   if (status === "protected") {
@@ -422,8 +460,6 @@ function senderActionPlan(
   status: SenderCardStatus,
   health: SenderHealthTone
 ): SenderActionPlan | null {
-  const summary = automationSummary(row).toLowerCase();
-
   if (status === "protected" || status === "ready") return null;
   if (!row.fromEmail) {
     return {
@@ -453,11 +489,11 @@ function senderActionPlan(
       description: "Re-apply sender DNS and forwarding while this domain finishes verifying.",
     };
   }
-  if (summary.includes("seed pool exhausted")) {
+  if (isMonitorInboxIssue(row)) {
     return {
-      kind: "open_settings",
-      label: "Open outreach settings",
-      description: "Add fresh test inboxes so sender checks can run again.",
+      kind: "add_inbox",
+      label: "Add inbox",
+      description: "Add 1 more reply inbox. We will open the right screen with the form already open.",
     };
   }
   if (status === "fix" || health === "problem") {
@@ -478,6 +514,9 @@ function senderSummaryLine(
 ) {
   if (status === "protected") {
     return "This is your protected reply domain. It catches replies but does not send outbound mail.";
+  }
+  if (status === "fix" && isMonitorInboxIssue(row)) {
+    return "This sender is not broken. We just ran out of extra inboxes used to check it safely. Add 1 more inbox and checks will start again.";
   }
   if (status === "fix" || status === "setup" || status === "warming") return automationSummary(row);
   if (health === "watch") {
@@ -771,6 +810,12 @@ export default function NetworkClient({
         return;
       }
 
+      if (action.kind === "add_inbox") {
+        router.push("/settings/outreach?tab=email&open=mailbox&reason=monitor_pool");
+        updateSenderActionState(row.id, { pending: false, success: "" });
+        return;
+      }
+
       if (action.kind === "refresh_mailpool") {
         const accountId = getDomainDeliveryAccountId(row);
         if (!accountId) {
@@ -1007,6 +1052,7 @@ export default function NetworkClient({
               const routingRole = routingRoleForRow(item, routingRoleBySenderId);
               const status = senderCardStatus(item, routingRole);
               const overallHealth = senderOverallHealth(item);
+              const healthDisplay = senderHealthDisplay(item, status, overallHealth);
               const today = senderTodaySummary(item, status);
               const action = senderActionPlan(item, status, overallHealth);
               const nextStep = action?.label ?? senderNextStep(item, status, overallHealth);
@@ -1015,6 +1061,8 @@ export default function NetworkClient({
               const dailyCap = senderDailyCap(item);
               const warmupDay = senderWarmupDay(item.lastProvisionedAt);
               const actionState = senderActionState[item.id] ?? EMPTY_SENDER_ACTION_STATE;
+              const statusHeading = status === "fix" || status === "setup" ? "Issue" : "Status";
+              const nextStepHeading = action ? "Fix" : "Next step";
 
               return (
                 <article
@@ -1028,9 +1076,7 @@ export default function NetworkClient({
                         <Badge variant={senderRouteVariant(status, routingRole)}>
                           {senderRouteLabel(routingRole, item, status, overallHealth)}
                         </Badge>
-                        <Badge variant={senderOverallHealthVariant(overallHealth)}>
-                          Health {senderOverallHealthLabel(overallHealth)}
-                        </Badge>
+                        <Badge variant={healthDisplay.variant}>{healthDisplay.badgeLabel}</Badge>
                       </div>
                       <div className="mt-3 text-lg font-semibold text-[color:var(--foreground)]">{item.domain}</div>
                       <div className="mt-1 text-sm text-[color:var(--foreground)]">{item.fromEmail || "Mailbox pending"}</div>
@@ -1052,21 +1098,11 @@ export default function NetworkClient({
                       </div>
                       <div className="rounded-[12px] border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-3">
                         <div className="text-[10px] uppercase tracking-[0.14em] text-[color:var(--muted-foreground)]">Health</div>
-                        <div className="mt-2 text-xl font-semibold text-[color:var(--foreground)]">
-                          {senderOverallHealthLabel(overallHealth)}
-                        </div>
-                        <div className="mt-1 text-xs leading-5 text-[color:var(--muted-foreground)]">
-                          {overallHealth === "good"
-                            ? "Looks healthy"
-                            : overallHealth === "watch"
-                              ? "Usable, but watch it"
-                              : overallHealth === "problem"
-                                ? "Fix before sending"
-                                : "Still gathering signal"}
-                        </div>
+                        <div className="mt-2 text-xl font-semibold text-[color:var(--foreground)]">{healthDisplay.cardLabel}</div>
+                        <div className="mt-1 text-xs leading-5 text-[color:var(--muted-foreground)]">{healthDisplay.detail}</div>
                       </div>
                       <div className="rounded-[12px] border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-3">
-                        <div className="text-[10px] uppercase tracking-[0.14em] text-[color:var(--muted-foreground)]">Status</div>
+                        <div className="text-[10px] uppercase tracking-[0.14em] text-[color:var(--muted-foreground)]">{statusHeading}</div>
                         <div className="mt-2 text-xl font-semibold text-[color:var(--foreground)]">
                           {senderRouteLabel(routingRole, item, status, overallHealth)}
                         </div>
@@ -1075,7 +1111,7 @@ export default function NetworkClient({
                         </div>
                       </div>
                       <div className="rounded-[12px] border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-3">
-                        <div className="text-[10px] uppercase tracking-[0.14em] text-[color:var(--muted-foreground)]">Next step</div>
+                        <div className="text-[10px] uppercase tracking-[0.14em] text-[color:var(--muted-foreground)]">{nextStepHeading}</div>
                         <div className="mt-2 text-xl font-semibold text-[color:var(--foreground)]">{nextStep}</div>
                         <div className="mt-1 text-xs leading-5 text-[color:var(--muted-foreground)]">
                           {action?.description ?? automationTimingLabel(item)}
@@ -1093,7 +1129,15 @@ export default function NetworkClient({
                       <Button
                         type="button"
                         size="sm"
-                        variant={action.kind === "open_settings" ? "outline" : status === "fix" ? "danger" : "default"}
+                        variant={
+                          action.kind === "open_settings"
+                            ? "outline"
+                            : action.kind === "add_inbox"
+                              ? "default"
+                              : status === "fix"
+                                ? "danger"
+                                : "default"
+                        }
                         onClick={() => void handleSenderAction(item, action)}
                         disabled={actionState.pending}
                       >

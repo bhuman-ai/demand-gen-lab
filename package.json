@@ -7,6 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
+    "namecheap:relay": "node scripts/namecheap-relay.mjs",
     "plan:generate": "node scripts/plan-generator.mjs",
     "test:e2e": "playwright test",
     "test:e2e:headed": "playwright test --headed",

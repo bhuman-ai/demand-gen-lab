@@ -581,7 +581,7 @@ const TOOL_SPECS: OperatorToolSpec[] = [
     run: async (input) => {
       const brand = await createBrand({
         name: requireString(input, "name"),
-        website: requireString(input, "website"),
+        website: asString(input.website),
         tone: asString(input.tone),
         notes: asString(input.notes),
         product: asString(input.product),

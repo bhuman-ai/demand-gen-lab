@@ -2021,13 +2021,16 @@ function normalizeRequestedAction(input: {
 
 function filterRequestedActionForMessage(
   requestedAction: OperatorRequestedAction | null,
-  message: string
+  message: string,
+  options: { allowAffirmative?: boolean } = {}
 ) {
   if (!requestedAction) return null;
   const tool = getOperatorToolSpec(requestedAction.toolName);
   if (!tool) return null;
   if (tool.riskLevel === "read") return requestedAction;
-  return isExplicitActionRequest(message) ? requestedAction : null;
+  if (isExplicitActionRequest(message)) return requestedAction;
+  if (options.allowAffirmative && isAffirmativeMessage(message)) return requestedAction;
+  return null;
 }
 
 function shouldUseHeuristicFallbackAction(
@@ -2037,24 +2040,9 @@ function shouldUseHeuristicFallbackAction(
   if (!requestedAction) return false;
   const tool = getOperatorToolSpec(requestedAction.toolName);
   if (!tool) return false;
-  if (tool.riskLevel === "read") return true;
+  if (tool.approvalMode !== "confirm") return false;
   if (!isExplicitMutationRequest(message)) return false;
-  return [
-    "refresh_mailpool_sender",
-    "get_sender_snapshot",
-    "get_experiment_snapshot",
-    "launch_experiment_run",
-    "control_experiment_run",
-    "promote_experiment_to_campaign",
-    "delete_experiment",
-    "get_campaign_snapshot",
-    "launch_campaign_run",
-    "control_campaign_run",
-    "delete_campaign",
-    "send_reply_draft",
-    "dismiss_reply_draft",
-    "update_brand_lead",
-  ].includes(requestedAction.toolName);
+  return true;
 }
 
 function buildOperatorPrompt(input: {
@@ -2103,7 +2091,9 @@ function buildOperatorPrompt(input: {
     "Do not say everything is draft unless the context actually shows no running, sourcing, ready, completed, paused, or promoted experiments.",
     "Do not contradict the numeric counts or statuses in the supplied context.",
     "Prefer using read tools to inspect live state before giving confident operational advice or choosing a write action.",
-    "Only choose a safe_write or guarded_write tool when the user explicitly asked you to act.",
+    "Treat normal user language as valid intent. If the user is clearly asking you to do something, do not wait for rigid command phrasing.",
+    "For non-destructive actions, choose the tool directly when the user's intent is clear from normal speech.",
+    "For guarded actions, choose the tool when it is the right action and let the UI handle confirmation.",
     "Do not trigger write actions just because they might be helpful.",
     "If the user asks you to take an action and you are not choosing a write tool, say clearly that you did not make changes yet.",
     "Do not say 'I can do that', 'I'll set that up', or similar if toolName is empty.",
@@ -2274,22 +2264,9 @@ async function planOperatorReplyWithLlm(input: {
       }
 
       if (tool.riskLevel !== "read") {
-        const filteredAction = filterRequestedActionForMessage(normalizedAction, input.message);
-        if (!filteredAction) {
-          trace.push({
-            step: stepNumber,
-            toolName: normalizedAction.toolName,
-            riskLevel: tool.riskLevel,
-            input: normalizedAction.input,
-            summary: "",
-            result: {},
-            error: "Operator identified a write action, but the user's message was not explicit enough to run it.",
-          });
-          continue;
-        }
         return {
           assistant,
-          requestedAction: filteredAction,
+          requestedAction: normalizedAction,
           model,
           trace,
         };
@@ -2850,7 +2827,7 @@ export async function runOperatorChatTurn(input: OperatorChatRequest): Promise<O
       ? filterRequestedActionForMessage(inferredFallbackAction, effectiveMessage)
     : llmPlan
       ? (
-          filterRequestedActionForMessage(llmPlan.requestedAction, effectiveMessage) ??
+          llmPlan.requestedAction ??
           (shouldUseHeuristicFallbackAction(inferredFallbackAction, effectiveMessage)
             ? filterRequestedActionForMessage(inferredFallbackAction, effectiveMessage)
             : null)

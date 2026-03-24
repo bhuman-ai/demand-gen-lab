@@ -5,10 +5,13 @@ import {
   Bot,
   Check,
   ChevronRight,
+  Clock3,
   Loader2,
+  MessageSquareText,
   SendHorizontal,
   Sparkles,
   X,
+  ListTodo,
 } from "lucide-react";
 import {
   cancelOperatorActionApi,
@@ -105,9 +108,35 @@ function messageCardTone(message: OperatorMessage) {
     return "border-[color:var(--danger-border)] bg-[color:var(--danger-soft)]";
   }
   if (message.role === "user") {
-    return "border-[color:var(--accent)] bg-[color:var(--accent)] text-[color:var(--accent-foreground)]";
+    return "border-[color:var(--foreground)] bg-[color:var(--foreground)] text-[color:var(--background)]";
   }
-  return "border-[color:var(--border)] bg-[color:var(--surface-muted)]";
+  return "border-transparent bg-transparent";
+}
+
+function executionHeadline(execution: OperatorExecutionEnvelope) {
+  const receipt = asRecord(execution.receipt);
+  const preview = asRecord(execution.preview);
+  if (asString(receipt.title)) return asString(receipt.title);
+  if (asString(preview.title)) return asString(preview.title);
+  if (execution.intent?.verb && execution.intent.objectType) {
+    return `${execution.intent.verb[0]?.toUpperCase() ?? ""}${execution.intent.verb.slice(1)} ${execution.intent.objectType}`;
+  }
+  return "Task";
+}
+
+function executionSummary(execution: OperatorExecutionEnvelope) {
+  const receipt = asRecord(execution.receipt);
+  const preview = asRecord(execution.preview);
+  if (asString(receipt.summary)) return asString(receipt.summary);
+  if (asString(preview.summary)) return asString(preview.summary);
+  return "";
+}
+
+function readMessageExecution(message: OperatorMessage | null) {
+  const execution = asRecord(asRecord(message?.content).execution);
+  const state = asString(execution.state);
+  if (!state || state === "answer_only") return null;
+  return execution as OperatorExecutionEnvelope;
 }
 
 function ExecutionCard({
@@ -137,43 +166,39 @@ function ExecutionCard({
   const statusLabel = executionStateLabel(execution.state);
   const actionId = asString(execution.actionId);
   const canConfirm = execution.state === "awaiting_confirmation" && Boolean(actionId) && action?.status === "awaiting_approval";
+  const headline = executionHeadline(execution);
+  const summary = executionSummary(execution);
 
   return (
-    <div className={cn("mt-3 rounded-[14px] border px-3 py-3", executionCardTone(execution.state))}>
-      <div className="flex items-center justify-between gap-3">
-        <div className="text-xs font-medium uppercase tracking-[0.14em] text-[color:var(--muted-foreground)]">Action</div>
+    <div className={cn("mt-3 rounded-[12px] border px-3 py-3", executionCardTone(execution.state))}>
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="text-sm font-medium text-[color:var(--foreground)]">{headline}</div>
+          {summary ? (
+            <div className="mt-1 text-sm leading-6 text-[color:var(--muted-foreground)]">{summary}</div>
+          ) : null}
+        </div>
         <Badge variant={execution.state === "completed" ? "success" : execution.state === "failed" ? "danger" : execution.state === "awaiting_confirmation" || execution.state === "need_info" ? "accent" : "muted"}>
           {statusLabel}
         </Badge>
       </div>
-      <div className="mt-3 grid gap-2 text-sm leading-6 text-[color:var(--foreground)]">
+      <div className="mt-3 grid gap-3 text-sm leading-6 text-[color:var(--foreground)]">
         {intent ? (
-          <>
+          <div className="grid gap-2 rounded-[10px] border border-[color:var(--border)] bg-[color:var(--surface)]/70 px-3 py-3 sm:grid-cols-2">
             <div>
-              <span className="text-[color:var(--muted-foreground)]">Intent:</span>{" "}
-              <span className="font-medium capitalize">{intent.verb}</span> {intent.objectType}
+              <div className="text-[11px] font-medium uppercase tracking-[0.12em] text-[color:var(--muted-foreground)]">Intent</div>
+              <div className="mt-1 font-medium capitalize">{intent.verb} {intent.objectType}</div>
             </div>
             <div>
-              <span className="text-[color:var(--muted-foreground)]">Target:</span>{" "}
-              <span>{intent.objectLabel || "Not resolved yet"}</span>
+              <div className="text-[11px] font-medium uppercase tracking-[0.12em] text-[color:var(--muted-foreground)]">Target</div>
+              <div className="mt-1">{intent.objectLabel || "Not resolved yet"}</div>
             </div>
-          </>
+          </div>
         ) : null}
         {execution.toolName ? (
           <div>
             <span className="text-[color:var(--muted-foreground)]">Tool:</span>{" "}
             <span className="font-mono text-xs">{execution.toolName}</span>
-          </div>
-        ) : null}
-        {receipt ? (
-          <div>
-            <span className="text-[color:var(--muted-foreground)]">Result:</span>{" "}
-            <span>{receipt.summary}</span>
-          </div>
-        ) : asString(execution.preview.summary) ? (
-          <div>
-            <span className="text-[color:var(--muted-foreground)]">Result:</span>{" "}
-            <span>{asString(execution.preview.summary)}</span>
           </div>
         ) : null}
         {missingFields.length ? (
@@ -239,7 +264,7 @@ function ExecutionCard({
               return (
                 <form
                   key={formId}
-                  className="rounded-[12px] border border-[color:var(--border)] bg-[color:var(--surface)]/80 p-3"
+                  className="rounded-[10px] border border-[color:var(--border)] bg-[color:var(--surface)]/80 p-3"
                   onSubmit={(event) => {
                     event.preventDefault();
                     onSubmitForm(form, toStringRecord(new FormData(event.currentTarget)));
@@ -440,6 +465,16 @@ export default function OperatorPanel({
     () => new Map((threadDetail?.actions ?? []).map((action) => [action.id, action] as const)),
     [threadDetail]
   );
+  const latestExecutionMessage = useMemo(
+    () =>
+      [...visibleMessages]
+        .reverse()
+        .find((message) => message.role === "assistant" && message.kind === "message" && readMessageExecution(message)),
+    [visibleMessages]
+  );
+  const latestExecution = latestExecutionMessage ? readMessageExecution(latestExecutionMessage) : null;
+  const latestTaskSummary = latestExecution ? executionSummary(latestExecution) : "";
+  const threadTitle = asString(threadDetail?.thread.title) || (activeBrandName ? `${activeBrandName} operator thread` : "Operator");
 
   useEffect(() => {
     if (!open) return;
@@ -677,20 +712,25 @@ export default function OperatorPanel({
   if (!open) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex justify-end bg-[color:color-mix(in_oklab,var(--foreground)_22%,transparent)]/70 backdrop-blur-[1px]">
+    <div className="fixed inset-0 z-50 flex justify-end bg-[color:color-mix(in_oklab,var(--foreground)_18%,transparent)]/75">
       <button type="button" className="flex-1" aria-label="Close Operator" onClick={() => onOpenChange(false)} />
-      <aside className="relative flex h-full w-full max-w-[30rem] flex-col border-l border-[color:var(--border)] bg-[color:var(--surface)] shadow-[0_24px_70px_-40px_color-mix(in_oklab,var(--shadow)_92%,transparent)]">
+      <aside className="relative flex h-full w-full max-w-[38rem] flex-col border-l border-[color:var(--border)] bg-[color:var(--background)] shadow-[0_18px_48px_-28px_color-mix(in_oklab,var(--shadow)_88%,transparent)]">
         <div className="border-b border-[color:var(--border)] px-5 py-4">
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
               <div className="flex items-center gap-2">
-                <Badge variant="accent" className="gap-1">
-                  <Sparkles className="h-3.5 w-3.5" />
+                <div className="inline-flex h-9 items-center gap-2 rounded-[10px] border border-[color:var(--border)] bg-[color:var(--surface)] px-3 text-sm font-medium text-[color:var(--foreground)]">
+                  <Sparkles className="h-4 w-4" />
                   Operator
-                </Badge>
-                {activeBrandName ? <Badge variant="muted">{activeBrandName}</Badge> : null}
+                </div>
+                {activeBrandName ? (
+                  <div className="inline-flex h-9 items-center rounded-[10px] border border-[color:var(--border)] bg-[color:var(--surface)] px-3 text-sm text-[color:var(--muted-foreground)]">
+                    {activeBrandName}
+                  </div>
+                ) : null}
               </div>
-              <div className="mt-2 text-sm leading-6 text-[color:var(--foreground)]">
+              <div className="mt-3 text-sm font-medium text-[color:var(--foreground)]">{threadTitle}</div>
+              <div className="mt-1 text-sm leading-6 text-[color:var(--muted-foreground)]">
                 Ask anything. If Operator makes a change, it will show exactly what it did.
               </div>
             </div>
@@ -698,17 +738,38 @@ export default function OperatorPanel({
               <X className="h-4 w-4" />
             </Button>
           </div>
+          <div className="mt-4 rounded-[12px] border border-[color:var(--border)] bg-[color:var(--surface)] px-4 py-3">
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <div className="flex items-center gap-2 text-xs font-medium uppercase tracking-[0.12em] text-[color:var(--muted-foreground)]">
+                  <ListTodo className="h-3.5 w-3.5" />
+                  Current task
+                </div>
+                <div className="mt-2 text-sm font-medium text-[color:var(--foreground)]">
+                  {latestExecution ? executionHeadline(latestExecution) : "No active task"}
+                </div>
+                <div className="mt-1 text-sm leading-6 text-[color:var(--muted-foreground)]">
+                  {latestExecution
+                    ? latestTaskSummary || "Operator is tracking the latest actionable step in this thread."
+                    : "Start with a question or tell Operator what you want done for this brand."}
+                </div>
+              </div>
+              <Badge variant={latestExecution ? (latestExecution.state === "completed" ? "success" : latestExecution.state === "failed" ? "danger" : latestExecution.state === "awaiting_confirmation" || latestExecution.state === "need_info" ? "accent" : "muted") : "muted"}>
+                {latestExecution ? executionStateLabel(latestExecution.state) : "Idle"}
+              </Badge>
+            </div>
+          </div>
         </div>
 
-        <div ref={scrollerRef} className="flex-1 space-y-4 overflow-y-auto px-5 py-5">
+        <div ref={scrollerRef} className="flex-1 space-y-5 overflow-y-auto px-5 py-5">
           {!activeBrandId ? (
-            <div className="rounded-[14px] border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-4 py-4 text-sm text-[color:var(--muted-foreground)]">
+            <div className="rounded-[12px] border border-[color:var(--border)] bg-[color:var(--surface)] px-4 py-4 text-sm text-[color:var(--muted-foreground)]">
               Select a brand first. Operator is scoped to the active brand context.
             </div>
           ) : null}
 
           {loadingThread ? (
-            <div className="inline-flex items-center gap-2 rounded-[12px] border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-4 py-3 text-sm text-[color:var(--muted-foreground)]">
+            <div className="inline-flex items-center gap-2 rounded-[12px] border border-[color:var(--border)] bg-[color:var(--surface)] px-4 py-3 text-sm text-[color:var(--muted-foreground)]">
               <Loader2 className="h-4 w-4 animate-spin" />
               Loading Operator thread...
             </div>
@@ -721,40 +782,53 @@ export default function OperatorPanel({
           ) : null}
 
           {!loadingThread && activeBrandId && !visibleMessages.length ? (
-            <div className="space-y-4">
-              <div className="rounded-[16px] border border-[color:var(--border)] bg-[linear-gradient(135deg,color-mix(in_oklab,var(--accent)_14%,var(--surface))_0%,var(--surface-muted)_100%)] px-4 py-4">
-                <div className="flex items-center gap-2 text-sm font-medium text-[color:var(--foreground)]">
-                  <Bot className="h-4 w-4" />
-                  Start with one of these
-                </div>
-                <div className="mt-3 grid gap-2">
-                  {DEFAULT_PROMPTS.map((prompt) => (
-                    <button
-                      key={prompt}
-                      type="button"
-                      onClick={() => void handleSend(prompt)}
-                      className="flex items-center justify-between rounded-[12px] border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-3 text-left text-sm text-[color:var(--foreground)] transition-colors hover:bg-[color:var(--surface-hover)]"
-                    >
-                      <span>{prompt}</span>
-                      <ChevronRight className="h-4 w-4 text-[color:var(--muted-foreground)]" />
-                    </button>
-                  ))}
-                </div>
+            <div className="space-y-3">
+              <div className="flex items-center gap-2 text-xs font-medium uppercase tracking-[0.12em] text-[color:var(--muted-foreground)]">
+                <Bot className="h-3.5 w-3.5" />
+                Start here
               </div>
+              <div className="grid gap-2">
+                {DEFAULT_PROMPTS.map((prompt) => (
+                  <button
+                    key={prompt}
+                    type="button"
+                    onClick={() => void handleSend(prompt)}
+                    className="flex items-center justify-between rounded-[10px] border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-3 text-left text-sm text-[color:var(--foreground)] transition-colors hover:bg-[color:var(--surface-hover)]"
+                  >
+                    <span>{prompt}</span>
+                    <ChevronRight className="h-4 w-4 text-[color:var(--muted-foreground)]" />
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : null}
+
+          {!!visibleMessages.length ? (
+            <div className="flex items-center gap-2 text-xs font-medium uppercase tracking-[0.12em] text-[color:var(--muted-foreground)]">
+              <MessageSquareText className="h-3.5 w-3.5" />
+              Conversation
             </div>
           ) : null}
 
           {visibleMessages.map((message) => {
             const isUser = message.role === "user" && message.kind === "message";
+            const isAssistant = message.role === "assistant" && message.kind === "message";
             return (
               <div key={message.id} className={cn("flex", isUser ? "justify-end" : "justify-start")}>
                 <div
                   className={cn(
-                    "max-w-[92%] rounded-[16px] border px-4 py-3",
+                    "max-w-[94%] rounded-[12px] border px-4 py-3",
                     messageCardTone(message),
-                    isUser ? "max-w-[80%]" : ""
+                    isUser ? "max-w-[80%]" : "",
+                    isAssistant ? "w-full max-w-none border-transparent bg-transparent px-0 py-0" : ""
                   )}
                 >
+                  {isAssistant ? (
+                    <div className="mb-2 flex items-center gap-2 text-[11px] font-medium uppercase tracking-[0.12em] text-[color:var(--muted-foreground)]">
+                      <Clock3 className="h-3.5 w-3.5" />
+                      Operator
+                    </div>
+                  ) : null}
                   <MessageBody
                     message={message}
                     actionsById={actionsById}
@@ -807,7 +881,7 @@ export default function OperatorPanel({
                   ? "Ask anything, or tell Operator what you want it to do."
                   : "Select a brand to use Operator."
               }
-              className="min-h-[112px]"
+              className="min-h-[104px] rounded-[12px] bg-[color:var(--surface)]"
               disabled={sending || !activeBrandId}
             />
             <div className="flex items-center justify-between gap-3">

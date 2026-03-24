@@ -4,13 +4,13 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
   Activity,
-  CircleUserRound,
   FolderKanban,
   FlaskConical,
   Inbox,
   Mail,
   Network,
   Settings,
+  Sparkles,
   TestTubeDiagonal,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
@@ -298,9 +298,9 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
                 <button
                   type="button"
                   onClick={() => setOperatorOpen(true)}
-                  className="inline-flex h-10 items-center gap-2 rounded-[10px] border border-[color:var(--border)] px-3 text-sm text-[color:var(--muted-foreground)] transition-colors hover:bg-[color:var(--surface)] hover:text-[color:var(--foreground)]"
+                  className="inline-flex h-10 items-center gap-2 rounded-[10px] border border-[color:var(--border)] bg-[color:var(--surface)] px-3 text-sm font-medium text-[color:var(--foreground)] transition-colors hover:bg-[color:var(--surface-hover)]"
                 >
-                  <CircleUserRound className="h-3.5 w-3.5" />
+                  <Sparkles className="h-3.5 w-3.5" />
                   Operator
                 </button>
               </div>

@@ -87,7 +87,7 @@ function isExplicitActionRequest(message: string) {
   const normalized = message.trim().toLowerCase();
   if (!normalized || isCasualGreeting(normalized)) return false;
   if (
-    /\b(can you|could you|please|go ahead and|i want you to|i need you to|i need u to|need you to|need u to|take care of|handle|do this)\b/.test(normalized)
+    /\b(can you|could you|please|go ahead and|i want you to|i need you to|i need u to|need you to|need u to|we want to|we wanna|want to|wanna|we need to|let's|lets|take care of|handle|do this)\b/.test(normalized)
   ) {
     return true;
   }
@@ -100,7 +100,7 @@ function isExplicitMutationRequest(message: string) {
   const normalized = message.trim().toLowerCase();
   if (!normalized || isCasualGreeting(normalized)) return false;
   if (
-    /\b(can you|could you|please|go ahead and|i want you to|i need you to|i need u to|need you to|need u to|take care of|handle|do this)\b/.test(normalized)
+    /\b(can you|could you|please|go ahead and|i want you to|i need you to|i need u to|need you to|need u to|we want to|we wanna|want to|wanna|we need to|let's|lets|take care of|handle|do this)\b/.test(normalized)
   ) {
     return /\b(add|create|make|buy|register|provision|refresh|sync|run|pause|resume|cancel|send|dismiss|delete|remove|launch|promote|update|edit|change|set up|setup|start)\b/.test(
       normalized
@@ -114,7 +114,7 @@ function isExplicitMutationRequest(message: string) {
 function isAffirmativeMessage(message: string) {
   const normalized = message.trim().toLowerCase();
   if (!normalized) return false;
-  return /^(yes|yep|yeah|yup|sure|ok|okay|confirm|do it|yes do it|go ahead|run it|send it|make it so|please do|do that)$/i.test(
+  return /^(yes|yep|yeah|yup|sure|ok|okay|confirm|do it|u do it|you do it|yes do it|yeah do it|yep do it|go ahead|go for it|run it|send it|make it so|please do|do that|just do it)$/i.test(
     normalized
   );
 }
@@ -2071,13 +2071,16 @@ function normalizeRequestedAction(input: {
 
 function filterRequestedActionForMessage(
   requestedAction: OperatorRequestedAction | null,
-  message: string
+  message: string,
+  options: { allowAffirmative?: boolean } = {}
 ) {
   if (!requestedAction) return null;
   const tool = getOperatorToolSpec(requestedAction.toolName);
   if (!tool) return null;
   if (tool.riskLevel === "read") return requestedAction;
-  return isExplicitActionRequest(message) ? requestedAction : null;
+  if (isExplicitActionRequest(message)) return requestedAction;
+  if (options.allowAffirmative && isAffirmativeMessage(message)) return requestedAction;
+  return null;
 }
 
 function buildOperatorPrompt(input: {
@@ -2139,6 +2142,8 @@ function buildOperatorPrompt(input: {
     "For create_brand, website is optional.",
     "If the user names a brand in normal prose, pass that exact brand name in create_brand.input.name.",
     "If the user explains what the brand does or wants, include that in create_brand.input.notes or create_brand.input.product when useful.",
+    "For create_experiment, if the user describes the offer and audience but does not provide a formal experiment name, synthesize a short clear name and still create it.",
+    "For create_experiment, fill audience and offer from the user's described idea whenever those are clear.",
     "Never claim a change already happened unless the change is present in the tool results so far.",
     "If you need live data, choose a read tool and set done to false.",
     "If you need user input, set done to true, leave toolName empty, and ask only for the missing information.",
@@ -2288,7 +2293,9 @@ async function planOperatorReplyWithLlm(input: {
       }
 
       if (tool.riskLevel !== "read") {
-        const filteredAction = filterRequestedActionForMessage(normalizedAction, input.message);
+        const filteredAction = filterRequestedActionForMessage(normalizedAction, input.message, {
+          allowAffirmative: true,
+        });
         if (!filteredAction) {
           trace.push({
             step: stepNumber,
@@ -2871,7 +2878,9 @@ export async function runOperatorChatTurn(input: OperatorChatRequest): Promise<O
       ? filterRequestedActionForMessage(inferredFallbackAction, effectiveMessage)
     : llmPlan
       ? (
-          filterRequestedActionForMessage(llmPlan.requestedAction, effectiveMessage) ??
+          filterRequestedActionForMessage(llmPlan.requestedAction, effectiveMessage, {
+            allowAffirmative: true,
+          }) ??
           (isExplicitMutationRequest(effectiveMessage)
             ? filterRequestedActionForMessage(inferredFallbackAction, effectiveMessage)
             : null)

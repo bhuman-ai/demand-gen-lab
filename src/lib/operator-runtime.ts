@@ -475,7 +475,7 @@ function buildProvisionForms(input: {
         title: "Sender details",
         description:
           domainMode === "register"
-            ? "Enter the exact sender email you want to buy and provision."
+            ? "Enter the exact sender email you want to buy and provision, or say `you decide` and I'll pick a sensible one."
             : "Enter the exact sender email you want to create for this brand.",
         submitLabel: "Continue",
         input: input.toolInput,
@@ -652,6 +652,14 @@ function buildProvisionQuestions(input: {
           label: "Buy new domain",
           message: "Add a sender for this brand by buying a new sender domain.",
         },
+        ...(!input.hasMailpoolInventory
+          ? [
+              {
+                label: "You decide",
+                message: "Add a sender for this brand by buying a new sender domain. You decide on the sender email and domain.",
+              },
+            ]
+          : []),
       ])
     );
   }
@@ -662,6 +670,10 @@ function buildProvisionQuestions(input: {
         {
           label: "Keep new domain",
           message: "Add a sender for this brand by buying a new sender domain. I'll provide the registrant details next.",
+        },
+        {
+          label: "You decide",
+          message: "Add a sender for this brand by buying a new sender domain. You decide on the sender email and domain.",
         },
         ...(input.hasMailpoolInventory
           ? [
@@ -726,6 +738,170 @@ function normalizeProvisionDomainMode(value: unknown) {
     return "existing";
   }
   return normalized;
+}
+
+function hasDelegatedProvisionChoicePermission(message: string) {
+  const normalized = normalizeMatchText(message);
+  if (!normalized) return false;
+  return (
+    /^(u|you)\s+decide$/.test(normalized) ||
+    /\b(your call|up to you|whatever you think|whatever works|choose for me|pick for me|you choose|you pick|pick one for me|choose one for me|feel free to choose|auto choose|decide for me)\b/.test(
+      normalized
+    )
+  );
+}
+
+function asciiWordTokens(value: string) {
+  return value
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/&/g, " and ")
+    .match(/[a-z0-9]+/g) ?? [];
+}
+
+function uniqueStrings(values: string[]) {
+  return Array.from(new Set(values.map((value) => value.trim()).filter(Boolean)));
+}
+
+function normalizeProvisionLocalPartCandidate(value: string) {
+  return value
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ".")
+    .replace(/^\.+|\.+$/g, "")
+    .replace(/\.{2,}/g, ".")
+    .slice(0, 64);
+}
+
+function normalizeProvisionDomainRootCandidate(value: string) {
+  return value
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "")
+    .slice(0, 48);
+}
+
+function extractDomainRoot(value: string) {
+  const domain = extractDomain(value);
+  if (!domain) return "";
+  const parts = domain.split(".").filter(Boolean);
+  if (parts.length >= 3 && ["co", "com", "org", "net"].includes(parts[parts.length - 2] ?? "")) {
+    return parts[parts.length - 3] ?? "";
+  }
+  if (parts.length >= 2) {
+    return parts[parts.length - 2] ?? "";
+  }
+  return parts[0] ?? "";
+}
+
+function pickProvisionLocalPart(input: {
+  brandContext: Awaited<ReturnType<typeof getOperatorBrandContext>>;
+  brandMemory: OperatorBrandMemory | null;
+  toolInput: Record<string, unknown>;
+}) {
+  const registrant = asRecord(input.toolInput.registrant);
+  const candidates = uniqueStrings([
+    normalizeProvisionLocalPartCandidate(asString(input.toolInput.fromLocalPart)),
+    normalizeProvisionLocalPartCandidate(asString(input.brandMemory?.senderDefaults.fromLocalPart)),
+    normalizeProvisionLocalPartCandidate(asString(registrant.firstName)),
+    normalizeProvisionLocalPartCandidate(asString(input.brandMemory?.registrantDefaults.firstName)),
+    normalizeProvisionLocalPartCandidate(asciiWordTokens(input.brandContext?.brand.name ?? "").slice(0, 1).join("")),
+    normalizeProvisionLocalPartCandidate(asciiWordTokens(input.brandContext?.brand.website ?? "").slice(0, 1).join("")),
+    "hello",
+  ]);
+  return candidates.find(Boolean) ?? "hello";
+}
+
+function pickProvisionDomain(input: {
+  brandContext: Awaited<ReturnType<typeof getOperatorBrandContext>>;
+  brandMemory: OperatorBrandMemory | null;
+  toolInput: Record<string, unknown>;
+}) {
+  const inventoryDomains = (input.brandContext?.provisioning.mailpoolDomains ?? []).map((item) => item.domain.toLowerCase());
+  const rememberedDomain = asString(input.brandMemory?.senderDefaults.domain).toLowerCase();
+  const requestedDomain = asString(input.toolInput.domain).toLowerCase();
+  const domainMode = normalizeProvisionDomainMode(input.toolInput.domainMode);
+  if (domainMode === "existing") {
+    if (requestedDomain && inventoryDomains.includes(requestedDomain)) return requestedDomain;
+    if (rememberedDomain && inventoryDomains.includes(rememberedDomain)) return rememberedDomain;
+    return inventoryDomains[0] ?? "";
+  }
+
+  const registrant = asRecord(input.toolInput.registrant);
+  const brandSignal = `${input.brandContext?.brand.name ?? ""} ${input.brandContext?.brand.website ?? ""}`;
+  const artisticBrand = /\b(art|artist|painting|painter|portrait|gallery|museum|studio)\b/i.test(brandSignal);
+  const websiteRoot = normalizeProvisionDomainRootCandidate(extractDomainRoot(input.brandContext?.brand.website ?? ""));
+  const brandRoot = normalizeProvisionDomainRootCandidate(
+    asciiWordTokens(input.brandContext?.brand.name ?? "").slice(0, 3).join("")
+  );
+  const orgRoot = normalizeProvisionDomainRootCandidate(asString(registrant.organizationName) || asString(input.brandMemory?.registrantDefaults.organizationName));
+  const personalRoot = normalizeProvisionDomainRootCandidate(
+    [
+      asString(registrant.firstName) || asString(input.brandMemory?.registrantDefaults.firstName),
+      asString(registrant.lastName) || asString(input.brandMemory?.registrantDefaults.lastName),
+    ]
+      .filter(Boolean)
+      .join("")
+  );
+  const rememberedRoot = normalizeProvisionDomainRootCandidate(extractDomainRoot(rememberedDomain));
+  const requestedRoot = normalizeProvisionDomainRootCandidate(extractDomainRoot(requestedDomain));
+
+  const takenDomains = new Set(
+    uniqueStrings([
+      ...inventoryDomains,
+      asString(input.brandContext?.brand.website).toLowerCase().replace(/^https?:\/\//, "").replace(/^www\./, "").replace(/\/.*$/, ""),
+    ])
+  );
+  const rootCandidates = uniqueStrings([requestedRoot, rememberedRoot, brandRoot, orgRoot, websiteRoot, personalRoot]).filter(
+    Boolean
+  );
+  const suffixes = artisticBrand ? ["", "studio", "works", "mail"] : ["", "hq", "mail", "team", "works"];
+
+  const domainCandidates: string[] = [];
+  for (const root of rootCandidates) {
+    if (!root) continue;
+    if (websiteRoot && root === websiteRoot) {
+      domainCandidates.push(`get${root}.com`);
+    }
+    for (const suffix of suffixes) {
+      if (suffix === "" && websiteRoot && root === websiteRoot) continue;
+      const nextRoot = normalizeProvisionDomainRootCandidate(suffix ? `${root}${suffix}` : root);
+      if (!nextRoot) continue;
+      domainCandidates.push(`${nextRoot}.com`);
+    }
+  }
+
+  return uniqueStrings(domainCandidates).find((candidate) => !takenDomains.has(candidate)) ?? "";
+}
+
+function autoFillProvisionIdentity(input: {
+  brandContext: Awaited<ReturnType<typeof getOperatorBrandContext>>;
+  brandMemory: OperatorBrandMemory | null;
+  toolInput: Record<string, unknown>;
+}) {
+  const nextInput: Record<string, unknown> = {
+    ...input.toolInput,
+    registrant: asRecord(input.toolInput.registrant),
+  };
+  const inventoryCount = input.brandContext?.provisioning.mailpoolDomainInventoryCount ?? 0;
+  const normalizedMode = normalizeProvisionDomainMode(nextInput.domainMode);
+  nextInput.domainMode = normalizedMode || (inventoryCount > 0 ? "existing" : "register");
+
+  if (!asString(nextInput.fromLocalPart)) {
+    nextInput.fromLocalPart = pickProvisionLocalPart(input);
+  }
+  if (!asString(nextInput.domain)) {
+    nextInput.domain = pickProvisionDomain({
+      brandContext: input.brandContext,
+      brandMemory: input.brandMemory,
+      toolInput: nextInput,
+    });
+  }
+
+  return nextInput;
 }
 
 function extractProvisionLocalPart(message: string) {
@@ -1063,6 +1239,46 @@ function getExecutionToolInput(execution: OperatorExecutionEnvelope) {
   return asRecord(firstForm?.input);
 }
 
+function inferDelegatedProvisionContinuation(input: {
+  message: string;
+  messages: OperatorMessage[];
+  brandContext: Awaited<ReturnType<typeof getOperatorBrandContext>>;
+  brandMemory: OperatorBrandMemory | null;
+  brandId: string;
+}): PendingConversationContinuation | null {
+  if (!hasDelegatedProvisionChoicePermission(input.message)) return null;
+  const pending = getLatestPendingAssistantExecution(input.messages);
+  if (!pending || pending.execution.state !== "need_info" || pending.execution.toolName !== "provision_mailpool_sender") {
+    return null;
+  }
+
+  const baseInput = getExecutionToolInput(pending.execution);
+  if (!Object.keys(baseInput).length) return null;
+
+  const nextInput = autoFillProvisionIdentity({
+    brandContext: input.brandContext,
+    brandMemory: input.brandMemory,
+    toolInput: {
+      ...baseInput,
+      brandId: input.brandId || asString(baseInput.brandId),
+      provider: "mailpool",
+      domainMode: normalizeProvisionDomainMode(baseInput.domainMode),
+    },
+  });
+
+  if (!asString(nextInput.fromLocalPart) && !asString(nextInput.domain)) {
+    return null;
+  }
+
+  return {
+    kind: "structured_action",
+    requestedAction: {
+      toolName: "provision_mailpool_sender",
+      input: nextInput,
+    },
+  };
+}
+
 const QUESTION_OPTION_ORDINALS = [
   ["1", "one", "first"],
   ["2", "two", "second"],
@@ -1073,7 +1289,7 @@ const QUESTION_OPTION_ORDINALS = [
 ] as const;
 
 function findQuestionOptionMatch(execution: OperatorExecutionEnvelope, message: string) {
-  const normalized = normalizeMatchText(message);
+  const normalized = normalizeMatchText(message).replace(/^u\b/, "you");
   if (!normalized) return null;
   const questionOptions = (execution.questions ?? []).flatMap((question) =>
     Array.isArray(question.options) ? question.options : []
@@ -1101,8 +1317,8 @@ function findQuestionOptionMatch(execution: OperatorExecutionEnvelope, message: 
 
   for (const question of execution.questions ?? []) {
     for (const option of question.options ?? []) {
-      const label = normalizeMatchText(option.label);
-      const optionMessage = normalizeMatchText(option.message);
+      const label = normalizeMatchText(option.label).replace(/^u\b/, "you");
+      const optionMessage = normalizeMatchText(option.message).replace(/^u\b/, "you");
       if (label && (normalized === label || normalized.includes(label) || label.includes(normalized))) {
         return option;
       }
@@ -1423,6 +1639,17 @@ function mergeProvisionInputFromContinuation(input: {
   }
 
   nextInput.domainMode = normalizeProvisionDomainMode(nextInput.domainMode);
+
+  if (needsSenderEmail && hasDelegatedProvisionChoicePermission(input.message)) {
+    const autoFilled = autoFillProvisionIdentity({
+      brandContext: input.brandContext,
+      brandMemory: input.brandMemory,
+      toolInput: nextInput,
+    });
+    nextInput.fromLocalPart = asString(autoFilled.fromLocalPart);
+    nextInput.domain = asString(autoFilled.domain).toLowerCase();
+    nextInput.domainMode = normalizeProvisionDomainMode(autoFilled.domainMode);
+  }
 
   if (!asString(nextInput.domain) && normalizeProvisionDomainMode(nextInput.domainMode) === "existing") {
     const rememberedDomain = asString(input.brandMemory?.senderDefaults.domain);
@@ -2289,11 +2516,31 @@ function normalizeRequestedAction(input: {
       const explicitEmailParts = extractEmailParts(input.message);
       const explicitDomain = extractDomain(input.message);
       const explicitLocalPart = extractProvisionLocalPart(input.message);
-      toolInput.fromLocalPart = explicitEmailParts?.fromLocalPart ?? explicitLocalPart ?? "";
-      toolInput.domain = explicitEmailParts?.domain ?? explicitDomain ?? "";
-      if (!hasExplicitRegistrantSignal(input.message)) {
+      toolInput.fromLocalPart =
+        explicitEmailParts?.fromLocalPart ??
+        explicitLocalPart ??
+        asString(toolInput.fromLocalPart);
+      toolInput.domain =
+        explicitEmailParts?.domain ??
+        explicitDomain ??
+        asString(toolInput.domain).toLowerCase();
+      if (!hasExplicitRegistrantSignal(input.message) && !Object.keys(asRecord(toolInput.registrant)).length) {
         toolInput.registrant = {};
       }
+    }
+
+    if (
+      hasDelegatedProvisionChoicePermission(input.message) &&
+      (!asString(toolInput.fromLocalPart) || !asString(toolInput.domain))
+    ) {
+      const autoFilled = autoFillProvisionIdentity({
+        brandContext: input.context,
+        brandMemory: input.brandMemory,
+        toolInput,
+      });
+      toolInput.domainMode = normalizeProvisionDomainMode(autoFilled.domainMode);
+      toolInput.fromLocalPart = asString(autoFilled.fromLocalPart);
+      toolInput.domain = asString(autoFilled.domain).toLowerCase();
     }
   }
 
@@ -2454,12 +2701,14 @@ function buildOperatorPrompt(input: {
     "If the latest user message is only a casual greeting like hi, hey, or hello, reply like a normal human assistant in 1 or 2 short sentences.",
     "For a casual greeting, do not dump account status and do not propose an action.",
     "Only use toolName values from the provided tool catalog.",
-    "Never invent IDs, emails, or domains that are not in the provided context or the latest user message.",
+    "Never invent IDs.",
+    "Do not invent emails or domains unless the user explicitly delegated the choice for provision_mailpool_sender; in that one case you may synthesize a sensible sender identity and new domain candidate from brand context and memory.",
     "If the user asks to create, update, launch, pause, resume, cancel, send, dismiss, or delete something and there is a matching tool, you may choose that tool after enough inspection.",
     "When matching experiments, campaigns, leads, or reply drafts, prefer the IDs and names in the provided context items.",
     "If there is exactly one obvious running, draft, active, or pending object that matches the user's words, it is okay to target it.",
     "For refresh_mailpool_sender and get_sender_snapshot, prefer using accountId from the context.",
     "For provision_mailpool_sender, include any known fields such as brandId, domain, fromLocalPart, domainMode, and registrant fields.",
+    "If the user says things like `you decide`, `pick one`, or `choose for me` during sender provisioning, you may choose fromLocalPart and domain yourself instead of asking for an exact sender email.",
     "For create_brand, website is optional.",
     "If the user names a brand in normal prose, pass that exact brand name in create_brand.input.name.",
     "If the user explains what the brand does or wants, include that in create_brand.input.notes or create_brand.input.product when useful.",
@@ -3132,9 +3381,19 @@ export async function runOperatorChatTurn(input: OperatorChatRequest): Promise<O
     listOperatorMessages(thread.id),
     listOperatorActionsByThread(thread.id),
   ]);
+  const delegatedProvisionContinuation = input.structuredAction
+    ? null
+    : inferDelegatedProvisionContinuation({
+        message: input.message,
+        messages: messageHistory,
+        brandContext,
+        brandMemory,
+        brandId: resolvedBrandId,
+      });
   const continuation = input.structuredAction
     ? null
-    : inferContinuationFromPendingExecution({
+    : delegatedProvisionContinuation ??
+      inferContinuationFromPendingExecution({
         message: input.message,
         messages: messageHistory,
         actions: threadActions,
@@ -3372,8 +3631,8 @@ export async function runOperatorChatTurn(input: OperatorChatRequest): Promise<O
         const hasInventory = (brandContext?.provisioning.mailpoolDomainInventoryCount ?? 0) > 0;
         assistant = {
           summary: hasInventory
-            ? `I can add the sender. Tell me the exact sender email you want, for example \`marco@getselffunded.com\`, and whether I should use an existing Mailpool domain or buy a new one.`
-            : "I can add the sender. Tell me the exact sender email you want, for example `marco@getselffunded.com`. If this needs a new domain, say `buy` or `register` and I'll prepare that flow.",
+            ? `I can add the sender. Tell me the exact sender email you want, for example \`marco@getselffunded.com\`, and whether I should use an existing Mailpool domain or buy a new one. If you want me to choose, say \`you decide\`.`
+            : "I can add the sender. Tell me the exact sender email you want, for example `marco@getselffunded.com`. If this needs a new domain, say `buy` or `register`, or say `you decide` and I'll pick a sensible sender identity.",
           findings: [],
           recommendations: [],
         };

@@ -68,7 +68,8 @@ function formatCount(value: number) {
   return value.toString().padStart(2, "0");
 }
 
-function formatMetric(value: number) {
+function formatMetric(value: number, options?: { showZero?: boolean }) {
+  if (options?.showZero && value === 0) return 0;
   return value > 0 ? value : "—";
 }
 
@@ -447,7 +448,7 @@ export default function ExperimentsClient({
                         </td>
                         <td className="py-2 pr-4 align-top text-[color:var(--muted-foreground)]">{item.audience || "—"}</td>
                         <td className="py-2 px-2 align-top text-right">{formatMetric(item.sourcedLeads)}</td>
-                        <td className="py-2 px-2 align-top text-right">{formatMetric(item.sentMessages)}</td>
+                        <td className="py-2 px-2 align-top text-right">{formatMetric(item.sentMessages, { showZero: true })}</td>
                         <td className="py-2 px-2 align-top text-right">{formatMetric(item.replies)}</td>
                         <td className="py-2 px-2 align-top text-right">{formatMetric(item.positiveReplies)}</td>
                         <td className="py-2 px-2 align-top">

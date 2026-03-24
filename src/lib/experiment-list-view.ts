@@ -111,7 +111,7 @@ function summarizeStatusDetail(
       return `${sentMessages} email${sentMessages === 1 ? "" : "s"} already sent.`;
     }
     if (scheduledMessages > 0) {
-      return `${scheduledMessages} messages are queued for the first eligible send slot.`;
+      return `No messages have been sent yet. ${scheduledMessages} ${scheduledMessages === 1 ? "message is" : "messages are"} queued for the first eligible send slot.`;
     }
     return "A sending run is active.";
   }

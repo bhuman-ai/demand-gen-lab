@@ -2,9 +2,9 @@ import { listBrands } from "@/lib/factory-data";
 import {
   getExperimentRecordById,
   listExperimentRecords,
-  updateExperimentRecord,
 } from "@/lib/experiment-data";
 import type { ExperimentRecord } from "@/lib/factory-types";
+import { maybeAutoLaunchPreparedExperiment } from "@/lib/experiment-auto-launch";
 import {
   buildExperimentProspectTableConfig,
   ensureEnrichAnythingProspectTable,
@@ -16,15 +16,10 @@ import {
   importExperimentProspectRows,
   type ImportExperimentProspectRowsResult,
 } from "@/lib/experiment-prospect-import";
-import { EXPERIMENT_MIN_VERIFIED_EMAIL_LEADS } from "@/lib/experiment-policy";
-import { listExperimentRuns, listOwnerRuns } from "@/lib/outreach-data";
+import { getExperimentVerifiedEmailLeadTarget } from "@/lib/experiment-policy";
 import { resolveEmailFinderApiBaseUrl } from "@/lib/outreach-providers";
-import { launchExperimentRun } from "@/lib/outreach-runtime";
 
-const TARGET_SENDABLE_CONTACTS = EXPERIMENT_MIN_VERIFIED_EMAIL_LEADS;
-const TARGET_EXPERIMENT_CONTACTS = 500;
 const LIVE_TOP_UP_MIN_INTERVAL_MS = 20_000;
-const AUTO_LAUNCH_RETRY_COOLDOWN_MS = 15 * 60 * 1000;
 
 export type ExperimentSendablePrepResult = {
   targetCount: number;
@@ -53,82 +48,6 @@ export type ExperimentSendablePrepTickResult = {
   liveTopUpsAttempted: number;
   errors: Array<{ brandId: string; experimentId: string; error: string }>;
 };
-
-function hasOpenRunStatus(status: string) {
-  return ["queued", "sourcing", "scheduled", "sending", "monitoring", "paused"].includes(
-    String(status ?? "").trim().toLowerCase()
-  );
-}
-
-function hasLaunchFailureCooldown(experiment: ExperimentRecord, runs: Awaited<ReturnType<typeof listOwnerRuns>>) {
-  const latestRun = runs[0] ?? null;
-  if (!latestRun) return false;
-  if (hasOpenRunStatus(latestRun.status)) return true;
-  if (!["failed", "preflight_failed"].includes(latestRun.status)) return false;
-  const sentMessages = Math.max(0, Number(latestRun.metrics.sentMessages ?? 0) || 0);
-  if (sentMessages > 0) return false;
-  const updatedAtMs = Date.parse(String(latestRun.updatedAt ?? ""));
-  if (!Number.isFinite(updatedAtMs)) return false;
-  return Date.now() - updatedAtMs < AUTO_LAUNCH_RETRY_COOLDOWN_MS;
-}
-
-async function maybeAutoLaunchPreparedExperiment(experiment: ExperimentRecord) {
-  if (!experiment.runtime.campaignId || !experiment.runtime.experimentId) {
-    return { launched: false, blocked: true };
-  }
-  if (["completed", "promoted", "archived"].includes(experiment.status)) {
-    return { launched: false, blocked: true };
-  }
-
-  const ownerRuns = await listOwnerRuns(experiment.brandId, "experiment", experiment.id);
-  const experimentRuns =
-    experiment.runtime.campaignId && experiment.runtime.experimentId
-      ? await listExperimentRuns(
-          experiment.brandId,
-          experiment.runtime.campaignId,
-          experiment.runtime.experimentId
-        )
-      : [];
-  const launchRelevantRuns = [...ownerRuns, ...experimentRuns].sort((a, b) =>
-    a.createdAt < b.createdAt ? 1 : -1
-  );
-  const activeOwnerRun =
-    launchRelevantRuns.find((run) => hasOpenRunStatus(run.status)) ?? null;
-  if (activeOwnerRun) {
-    if (experiment.status !== "running") {
-      await updateExperimentRecord(experiment.brandId, experiment.id, { status: "running" });
-    }
-    return { launched: false, blocked: true };
-  }
-
-  if (["running", "paused"].includes(experiment.status)) {
-    await updateExperimentRecord(experiment.brandId, experiment.id, { status: "ready" });
-  }
-
-  if (hasLaunchFailureCooldown(experiment, launchRelevantRuns)) {
-    return { launched: false, blocked: true };
-  }
-
-  const launch = await launchExperimentRun({
-    brandId: experiment.brandId,
-    campaignId: experiment.runtime.campaignId,
-    experimentId: experiment.runtime.experimentId,
-    trigger: "manual",
-    ownerType: "experiment",
-    ownerId: experiment.id,
-    maxLeadsOverride: TARGET_EXPERIMENT_CONTACTS,
-  });
-
-  if (!launch.ok) {
-    if (launch.reason.includes("already has an active run")) {
-      await updateExperimentRecord(experiment.brandId, experiment.id, { status: "running" });
-    }
-    return { launched: false, blocked: true };
-  }
-
-  await updateExperimentRecord(experiment.brandId, experiment.id, { status: "running" });
-  return { launched: true, blocked: false };
-}
 
 function isHostManagedWorkspace(workspaceId: string) {
   return workspaceId.startsWith("lastb2b_");
@@ -159,6 +78,11 @@ function emptyImportResult(): ImportExperimentProspectRowsResult {
     parseErrors: [],
     enrichmentError: "",
     failureSummary: [],
+    autoLaunchAttempted: false,
+    autoLaunchTriggered: false,
+    autoLaunchBlocked: false,
+    autoLaunchRunId: "",
+    autoLaunchReason: "",
   };
 }
 
@@ -187,6 +111,7 @@ export async function prepareExperimentSendableContacts(input: {
   }
 
   const config = buildExperimentProspectTableConfig(experiment);
+  const targetSendableContacts = getExperimentVerifiedEmailLeadTarget(experiment);
   const hostManagedWorkspace = isHostManagedWorkspace(config.workspaceId);
   const emailFinderApiBaseUrl = resolveEmailFinderApiBaseUrl(input.emailFinderApiBaseUrl);
 
@@ -215,7 +140,7 @@ export async function prepareExperimentSendableContacts(input: {
   let liveTopUpError = "";
   let queryExhausted = false;
 
-  if (sendableSummary.sendableLeadCount < TARGET_SENDABLE_CONTACTS) {
+  if (sendableSummary.sendableLeadCount < targetSendableContacts) {
     const lastRunAtMs = tableState.lastRunAt ? Date.parse(tableState.lastRunAt) : Number.NaN;
     const canAttemptTopUp =
       !Number.isFinite(lastRunAtMs) || Date.now() - lastRunAtMs >= LIVE_TOP_UP_MIN_INTERVAL_MS;
@@ -247,7 +172,7 @@ export async function prepareExperimentSendableContacts(input: {
 
           sendableSummary = await countExperimentSendableLeadContacts(input.brandId, input.experimentId);
         } else {
-          queryExhausted = sendableSummary.sendableLeadCount < TARGET_SENDABLE_CONTACTS;
+          queryExhausted = sendableSummary.sendableLeadCount < targetSendableContacts;
         }
       } catch (error) {
         const message =
@@ -265,14 +190,14 @@ export async function prepareExperimentSendableContacts(input: {
   }
 
   return {
-    targetCount: TARGET_SENDABLE_CONTACTS,
-    ready: sendableSummary.sendableLeadCount >= TARGET_SENDABLE_CONTACTS,
+    targetCount: targetSendableContacts,
+    ready: sendableSummary.sendableLeadCount >= targetSendableContacts,
     hostManagedWorkspace,
     savedProspectCount: tableState.rowCount,
     sendableLeadCount: sendableSummary.sendableLeadCount,
     sendableLeadRemaining: Math.max(
       0,
-      TARGET_SENDABLE_CONTACTS - sendableSummary.sendableLeadCount
+      targetSendableContacts - sendableSummary.sendableLeadCount
     ),
     runsChecked: sendableSummary.runsChecked,
     liveTopUpAttempted,
@@ -323,7 +248,8 @@ export async function runExperimentSendablePrepTick(
 
       try {
         const before = await countExperimentSendableLeadContacts(brand.id, experiment.id);
-        if (before.sendableLeadCount >= TARGET_SENDABLE_CONTACTS) {
+        const targetSendableContacts = getExperimentVerifiedEmailLeadTarget(experiment);
+        if (before.sendableLeadCount >= targetSendableContacts) {
           results.experimentsReady += 1;
           const launch = await maybeAutoLaunchPreparedExperiment(experiment);
           if (launch.launched) {

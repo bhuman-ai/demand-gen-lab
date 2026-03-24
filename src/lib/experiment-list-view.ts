@@ -1,5 +1,5 @@
 import type { ExperimentListItem, ExperimentRecord, OutreachRun } from "@/lib/factory-types";
-import { EXPERIMENT_MIN_VERIFIED_EMAIL_LEADS } from "@/lib/experiment-policy";
+import { getExperimentVerifiedEmailLeadTarget } from "@/lib/experiment-policy";
 
 function safeDate(input: string) {
   const parsed = Date.parse(input);
@@ -33,16 +33,11 @@ function deriveListStatus(experiment: ExperimentRecord, latestRun: OutreachRun |
   if (experiment.status === "promoted") return "Promoted";
   if (experiment.status === "completed") return "Completed";
 
-  if (experiment.status === "running") {
-    if (latestRun?.status === "sourcing") return "Sourcing";
-    if (latestRun?.status === "paused") return "Paused";
-    if (latestRun && ["failed", "preflight_failed", "canceled"].includes(latestRun.status)) {
-      return "Blocked";
-    }
-    return "Running";
+  if (latestRun && ["failed", "preflight_failed", "canceled"].includes(latestRun.status)) {
+    return "Blocked";
   }
 
-  if (experiment.status === "paused") {
+  if (latestRun?.status === "paused") {
     return "Paused";
   }
 
@@ -50,14 +45,27 @@ function deriveListStatus(experiment: ExperimentRecord, latestRun: OutreachRun |
     return "Sourcing";
   }
 
+  if (latestRun?.status === "queued") {
+    return "Preparing";
+  }
+
+  if (experiment.status === "running") {
+    return "Running";
+  }
+
+  if (experiment.status === "paused") {
+    return "Paused";
+  }
+
   if (experiment.status === "ready") {
     const sourcedLeads = normalizeCount(latestRun?.metrics.sourcedLeads);
+    const leadTarget = getExperimentVerifiedEmailLeadTarget(experiment);
     const flowPublished = normalizeCount(experiment.messageFlow.publishedRevision) > 0;
     const hasStartedSending =
       normalizeCount(latestRun?.metrics.sentMessages) > 0 ||
       normalizeCount(experiment.metricsSummary.sent) > 0;
 
-    if (!hasStartedSending && flowPublished && sourcedLeads < EXPERIMENT_MIN_VERIFIED_EMAIL_LEADS) {
+    if (!hasStartedSending && flowPublished && sourcedLeads < leadTarget) {
       return "Preparing";
     }
 
@@ -118,7 +126,8 @@ function summarizeStatusDetail(
 
   if (status === "Preparing") {
     const sourcedLeads = normalizeCount(latestRun?.metrics.sourcedLeads);
-    const remaining = Math.max(0, EXPERIMENT_MIN_VERIFIED_EMAIL_LEADS - sourcedLeads);
+    const leadTarget = getExperimentVerifiedEmailLeadTarget(experiment);
+    const remaining = Math.max(0, leadTarget - sourcedLeads);
     if (remaining > 0) {
       return `Waiting on ${remaining} more contacts before launch.`;
     }

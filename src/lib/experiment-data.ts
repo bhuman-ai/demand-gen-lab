@@ -295,8 +295,11 @@ function mapExperimentStatusFromRun(input: {
     return "ready";
   }
 
-  if (["queued", "sourcing", "scheduled", "sending", "monitoring"].includes(input.runStatus)) {
+  if (["scheduled", "sending", "monitoring"].includes(input.runStatus)) {
     return "running";
+  }
+  if (["queued", "sourcing"].includes(input.runStatus)) {
+    return input.promotedCampaignId ? "promoted" : input.hasOffer && input.hasAudience ? "ready" : "draft";
   }
   if (input.runStatus === "paused") return "paused";
   if (input.runStatus === "completed") {

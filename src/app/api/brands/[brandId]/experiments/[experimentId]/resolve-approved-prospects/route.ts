@@ -1,4 +1,6 @@
 import { NextResponse } from "next/server";
+import { maybeAutoLaunchPreparedExperiment } from "@/lib/experiment-auto-launch";
+import { getExperimentRecordById } from "@/lib/experiment-data";
 import { prepareExperimentSendableContacts } from "@/lib/experiment-sendable-prep";
 
 export async function POST(
@@ -13,7 +15,33 @@ export async function POST(
       experimentId,
       requestOrigin: new URL(request.url).origin,
     });
-    return NextResponse.json(result);
+
+    let autoLaunchAttempted = false;
+    let autoLaunchTriggered = false;
+    let autoLaunchBlocked = false;
+    let autoLaunchRunId = "";
+    let autoLaunchReason = "";
+
+    if (result.ready) {
+      const experiment = await getExperimentRecordById(brandId, experimentId);
+      if (experiment && experiment.messageFlow.publishedRevision > 0) {
+        autoLaunchAttempted = true;
+        const autoLaunch = await maybeAutoLaunchPreparedExperiment(experiment);
+        autoLaunchTriggered = autoLaunch.launched;
+        autoLaunchBlocked = autoLaunch.blocked;
+        autoLaunchRunId = autoLaunch.runId ?? "";
+        autoLaunchReason = autoLaunch.reason ?? "";
+      }
+    }
+
+    return NextResponse.json({
+      ...result,
+      autoLaunchAttempted,
+      autoLaunchTriggered,
+      autoLaunchBlocked,
+      autoLaunchRunId,
+      autoLaunchReason,
+    });
   } catch (error) {
     const message =
       error instanceof Error ? error.message : "Failed to resolve approved prospects.";

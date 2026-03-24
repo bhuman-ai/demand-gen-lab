@@ -19,7 +19,7 @@ async function handleTick(request: Request) {
 
   const requestOrigin = new URL(request.url).origin;
   const outreachPromise = runOutreachTick(30);
-  const sendablePrepPromise = runExperimentSendablePrepTick(8, {
+  const sendablePrepPromise = runExperimentSendablePrepTick(24, {
     requestOrigin,
   });
   const inboxSync = await runInboxSyncTick(12);

@@ -18,15 +18,16 @@ async function handleTick(request: Request) {
   }
 
   const requestOrigin = new URL(request.url).origin;
-  const outreachPromise = runOutreachTick(30);
-  const sendablePrepPromise = runExperimentSendablePrepTick(24, {
-    requestOrigin,
-  });
-  const inboxSync = await runInboxSyncTick(12);
-  const senderLaunch = await runSenderLaunchTick(12, {
-    mailboxSync: false,
-  });
-  const [outreach, sendablePrep] = await Promise.all([outreachPromise, sendablePrepPromise]);
+  const [outreach, sendablePrep, inboxSync, senderLaunch] = await Promise.all([
+    runOutreachTick(30),
+    runExperimentSendablePrepTick(24, {
+      requestOrigin,
+    }),
+    runInboxSyncTick(12),
+    runSenderLaunchTick(12, {
+      mailboxSync: false,
+    }),
+  ]);
 
   return NextResponse.json({ ok: true, outreach, inboxSync, sendablePrep, senderLaunch });
 }

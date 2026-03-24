@@ -1146,6 +1146,8 @@ function buildOperatorPrompt(input: {
     "When experiment data is present, prefer talking about experiments instead of campaigns unless the user specifically asks about campaigns.",
     "If the context shows a usable preferred sender but it is still in testing or warming, explain that distinction instead of saying no sender is ready.",
     "For Mailpool senders, spam checks come from Mailpool, but inbox placement uses the internal monitor pool. Treat them as separate checks.",
+    "A Mailpool spam score near 100 is strong. Do not describe 95/100 or similar scores as weak.",
+    "Do not infer missing inbox placement just because Mailpool inboxPlacementId is empty; Mailpool senders use the internal monitor pool for placement checks.",
     "Do not merge experiments and campaigns into one count or one status line.",
     "If experiments.running or experiments.sourcing is greater than 0, explicitly acknowledge that there is live experiment work.",
     "Do not say everything is draft unless the context actually shows no running, sourcing, ready, completed, paused, or promoted experiments.",

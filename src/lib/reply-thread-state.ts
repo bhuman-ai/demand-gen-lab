@@ -142,6 +142,14 @@ function hasExplicitOptOutLanguage(body: string) {
   );
 }
 
+function isLowPriorityDefer(body: string) {
+  const normalized = body.trim().toLowerCase();
+  if (!normalized || hasExplicitOptOutLanguage(normalized)) return false;
+  return /(not really a priority|not a priority right now|not looking at this right now|not focused on this right now|just bandwidth|mainly bandwidth|timing\/bandwidth|timing and bandwidth|maybe later|not now|reach out later|circle back later|deprioritized)/.test(
+    normalized
+  );
+}
+
 function parseOfferAndCta(rawOffer: string) {
   const text = String(rawOffer ?? "").trim();
   if (!text) return { offer: "", cta: "" };
@@ -308,9 +316,12 @@ function buildFallbackDecision(input: {
   latestDraft: ReplyDraft | null;
   hint?: SyncDecisionHint;
 }): ReplyThreadStateDecision {
+  const softDefer = isLowPriorityDefer(input.latestInboundBody);
   const recommendedMove =
     input.hint?.recommendedMove && input.hint.recommendedMove.trim()
       ? input.hint.recommendedMove
+      : softDefer
+        ? "acknowledge_and_close"
       : inferMoveFromThread(input.thread, input.latestDraft);
   let objectiveForThisTurn = input.hint?.objectiveForThisTurn?.trim() || "";
   if (!objectiveForThisTurn) {
@@ -319,6 +330,7 @@ function buildFallbackDecision(input: {
     else if (recommendedMove === "reframe_objection") objectiveForThisTurn = "Reduce risk and address the core objection.";
     else if (recommendedMove === "handoff_to_human") objectiveForThisTurn = "Escalate the thread for a thoughtful human review.";
     else if (recommendedMove === "respect_opt_out") objectiveForThisTurn = "Stop outreach and close the thread cleanly.";
+    else if (recommendedMove === "acknowledge_and_close") objectiveForThisTurn = "Acknowledge their timing and close the thread cleanly without pressure.";
     else objectiveForThisTurn = "Keep the thread moving with one low-friction response.";
   }
 
@@ -456,6 +468,7 @@ async function compileWithLlm(input: {
     const recommendedMove = String(decisionRaw.recommendedMove ?? "").trim();
     const allowRespectOptOut =
       input.fallbackDecision.recommendedMove === "respect_opt_out" || hasExplicitOptOutLanguage(input.latestInboundBody);
+    const softDefer = isLowPriorityDefer(input.latestInboundBody);
     const parsedRecommendedMove: ReplyThreadMove = [
       "stay_silent",
       "acknowledge_and_close",
@@ -471,7 +484,12 @@ async function compileWithLlm(input: {
       ? (recommendedMove as ReplyThreadMove)
       : input.fallbackDecision.recommendedMove;
     const safeRecommendedMove =
-      parsedRecommendedMove === "respect_opt_out" && !allowRespectOptOut ? "acknowledge_and_close" : parsedRecommendedMove;
+      parsedRecommendedMove === "respect_opt_out" && !allowRespectOptOut
+        ? "acknowledge_and_close"
+        : softDefer &&
+            ["ask_qualifying_question", "advance_next_step", "reframe_objection"].includes(parsedRecommendedMove)
+          ? "acknowledge_and_close"
+          : parsedRecommendedMove;
 
     return {
       thread: {

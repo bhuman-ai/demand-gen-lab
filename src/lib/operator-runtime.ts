@@ -21,6 +21,7 @@ import {
 } from "@/lib/operator-memory";
 import { getOperatorBrandContext } from "@/lib/operator-context";
 import { getOperatorToolSpec, listOperatorToolSpecs } from "@/lib/operator-tools";
+import { selectAvailableMailpoolDomain } from "@/lib/outreach-provisioning";
 import type {
   OperatorAction,
   OperatorActionSummary,
@@ -437,7 +438,7 @@ function buildProvisionForms(input: {
   const senderEmail = fromLocalPart && domain ? `${fromLocalPart}@${domain}` : "";
   const registrant = asRecord(input.toolInput.registrant);
 
-  if (input.missingFields.includes("sender email")) {
+  if (input.missingFields.includes("sender email") || input.missingFields.includes("available domain")) {
     if (domainMode === "existing" && inventoryOptions.length > 0) {
       forms.push({
         id: "provision-existing-sender",
@@ -474,6 +475,9 @@ function buildProvisionForms(input: {
         toolName: "provision_mailpool_sender",
         title: "Sender details",
         description:
+          input.missingFields.includes("available domain")
+            ? "That domain is not available. Update the sender email, or say `you decide` and I'll try other domains."
+            :
           domainMode === "register"
             ? "Enter the exact sender email you want to buy and provision, or say `you decide` and I'll pick a sensible one."
             : "Enter the exact sender email you want to create for this brand.",
@@ -731,7 +735,20 @@ function ensureWebsiteUrl(value: string) {
 function normalizeProvisionDomainMode(value: unknown) {
   const normalized = asString(value).toLowerCase();
   if (!normalized) return "";
-  if (["register", "new", "buy", "purchase", "new_domain", "new-domain"].includes(normalized)) {
+  if (
+    [
+      "register",
+      "new",
+      "buy",
+      "purchase",
+      "buy_new",
+      "buy-new",
+      "new_domain",
+      "new-domain",
+      "buy_new_domain",
+      "buy-new-domain",
+    ].includes(normalized)
+  ) {
     return "register";
   }
   if (["existing", "current", "existing_domain", "existing-domain"].includes(normalized)) {
@@ -815,7 +832,7 @@ function pickProvisionLocalPart(input: {
   return candidates.find(Boolean) ?? "hello";
 }
 
-function pickProvisionDomain(input: {
+function buildProvisionDomainCandidates(input: {
   brandContext: Awaited<ReturnType<typeof getOperatorBrandContext>>;
   brandMemory: OperatorBrandMemory | null;
   toolInput: Record<string, unknown>;
@@ -825,9 +842,11 @@ function pickProvisionDomain(input: {
   const requestedDomain = asString(input.toolInput.domain).toLowerCase();
   const domainMode = normalizeProvisionDomainMode(input.toolInput.domainMode);
   if (domainMode === "existing") {
-    if (requestedDomain && inventoryDomains.includes(requestedDomain)) return requestedDomain;
-    if (rememberedDomain && inventoryDomains.includes(rememberedDomain)) return rememberedDomain;
-    return inventoryDomains[0] ?? "";
+    return uniqueStrings([
+      requestedDomain && inventoryDomains.includes(requestedDomain) ? requestedDomain : "",
+      rememberedDomain && inventoryDomains.includes(rememberedDomain) ? rememberedDomain : "",
+      ...inventoryDomains,
+    ]);
   }
 
   const registrant = asRecord(input.toolInput.registrant);
@@ -837,7 +856,9 @@ function pickProvisionDomain(input: {
   const brandRoot = normalizeProvisionDomainRootCandidate(
     asciiWordTokens(input.brandContext?.brand.name ?? "").slice(0, 3).join("")
   );
-  const orgRoot = normalizeProvisionDomainRootCandidate(asString(registrant.organizationName) || asString(input.brandMemory?.registrantDefaults.organizationName));
+  const orgRoot = normalizeProvisionDomainRootCandidate(
+    asString(registrant.organizationName) || asString(input.brandMemory?.registrantDefaults.organizationName)
+  );
   const personalRoot = normalizeProvisionDomainRootCandidate(
     [
       asString(registrant.firstName) || asString(input.brandMemory?.registrantDefaults.firstName),
@@ -848,7 +869,6 @@ function pickProvisionDomain(input: {
   );
   const rememberedRoot = normalizeProvisionDomainRootCandidate(extractDomainRoot(rememberedDomain));
   const requestedRoot = normalizeProvisionDomainRootCandidate(extractDomainRoot(requestedDomain));
-
   const takenDomains = new Set(
     uniqueStrings([
       ...inventoryDomains,
@@ -859,7 +879,6 @@ function pickProvisionDomain(input: {
     Boolean
   );
   const suffixes = artisticBrand ? ["", "studio", "works", "mail"] : ["", "hq", "mail", "team", "works"];
-
   const domainCandidates: string[] = [];
   for (const root of rootCandidates) {
     if (!root) continue;
@@ -873,8 +892,7 @@ function pickProvisionDomain(input: {
       domainCandidates.push(`${nextRoot}.com`);
     }
   }
-
-  return uniqueStrings(domainCandidates).find((candidate) => !takenDomains.has(candidate)) ?? "";
+  return uniqueStrings(domainCandidates).filter((candidate) => !takenDomains.has(candidate));
 }
 
 function autoFillProvisionIdentity(input: {
@@ -893,12 +911,17 @@ function autoFillProvisionIdentity(input: {
   if (!asString(nextInput.fromLocalPart)) {
     nextInput.fromLocalPart = pickProvisionLocalPart(input);
   }
+  const domainCandidates = buildProvisionDomainCandidates({
+    brandContext: input.brandContext,
+    brandMemory: input.brandMemory,
+    toolInput: nextInput,
+  });
+  nextInput.domainCandidates = domainCandidates;
   if (!asString(nextInput.domain)) {
-    nextInput.domain = pickProvisionDomain({
-      brandContext: input.brandContext,
-      brandMemory: input.brandMemory,
-      toolInput: nextInput,
-    });
+    nextInput.domain = domainCandidates[0] ?? "";
+  }
+  if (normalizeProvisionDomainMode(nextInput.domainMode) === "register" && domainCandidates.length > 1) {
+    nextInput.allowAlternativeDomains = true;
   }
 
   return nextInput;
@@ -1171,6 +1194,42 @@ function buildProvisionMissingFields(toolInput: Record<string, unknown>) {
     }
   }
   return missingFields;
+}
+
+async function resolveMailpoolProvisionDomain(input: {
+  message: string;
+  toolInput: Record<string, unknown>;
+}) {
+  const nextInput: Record<string, unknown> = {
+    ...input.toolInput,
+    registrant: asRecord(input.toolInput.registrant),
+  };
+  if (normalizeProvisionDomainMode(nextInput.domainMode) !== "register" || !asString(nextInput.domain)) {
+    return {
+      toolInput: nextInput,
+      selection: null as Awaited<ReturnType<typeof selectAvailableMailpoolDomain>> | null,
+    };
+  }
+
+  const selection = await selectAvailableMailpoolDomain({
+    preferredDomain: asString(nextInput.domain),
+    domainCandidates: Array.isArray(nextInput.domainCandidates)
+      ? nextInput.domainCandidates.map((entry) => asString(entry)).filter(Boolean)
+      : [],
+    allowAlternativeDomains:
+      nextInput.allowAlternativeDomains === true || hasDelegatedProvisionChoicePermission(input.message),
+    mailpoolApiKey: asString(nextInput.mailpoolApiKey),
+  });
+
+  nextInput.domainAvailabilityChecked = true;
+  nextInput.domainAvailabilityPrice = selection.price;
+  nextInput.domainAvailabilitySource = selection.source;
+  nextInput.checkedDomains = selection.checkedDomains;
+  if (selection.available && selection.domain) {
+    nextInput.domain = selection.domain;
+  }
+
+  return { toolInput: nextInput, selection };
 }
 
 type PendingConversationContinuation =
@@ -3560,6 +3619,51 @@ export async function runOperatorChatTurn(input: OperatorChatRequest): Promise<O
         });
       }
       const tool = getOperatorToolSpec(requestedAction.toolName);
+      let provisionDomainBlocked = false;
+      if (tool?.name === "provision_mailpool_sender") {
+        const resolvedProvision = await resolveMailpoolProvisionDomain({
+          message: effectiveMessage,
+          toolInput: requestedAction.input,
+        });
+        requestedAction.input = resolvedProvision.toolInput;
+        if (
+          normalizeProvisionDomainMode(requestedAction.input.domainMode) === "register" &&
+          asString(requestedAction.input.fromLocalPart) &&
+          asString(requestedAction.input.domain) &&
+          resolvedProvision.selection &&
+          !resolvedProvision.selection.available
+        ) {
+          const checkedDomains = Array.isArray(requestedAction.input.checkedDomains)
+            ? requestedAction.input.checkedDomains.map((entry) => asString(entry)).filter(Boolean)
+            : [];
+          assistant = {
+            summary:
+              checkedDomains.length > 1
+                ? `I couldn't find an available domain to buy from the names I checked. Give me a different sender email, or say \`you decide\` and I'll try a wider set of alternatives.`
+                : `I checked ${asString(requestedAction.input.domain)}, and it's not available. Give me a different sender email, or say \`you decide\` and I'll pick other domains for you.`,
+            findings: [],
+            recommendations: [],
+          };
+          execution = buildNeedInfoEnvelope({
+            toolName: tool.name,
+            toolInput: requestedAction.input,
+            preview: buildToolPreview(tool, requestedAction.input),
+            missingFields: ["available domain"],
+            questions: buildProvisionQuestions({
+              hasMailpoolInventory: (brandContext?.provisioning.mailpoolDomainInventoryCount ?? 0) > 0,
+              domainMode: normalizeProvisionDomainMode(requestedAction.input.domainMode),
+              missingFields: ["available domain"],
+            }),
+            forms: buildProvisionForms({
+              brandContext,
+              brandMemory,
+              toolInput: requestedAction.input,
+              missingFields: ["available domain"],
+            }),
+          });
+          provisionDomainBlocked = true;
+        }
+      }
       if (!tool) {
         assistant = {
           summary: `I understand what you're asking for, but I can't run that yet because the tool \`${requestedAction.toolName}\` is not registered.`,
@@ -3572,6 +3676,7 @@ export async function runOperatorChatTurn(input: OperatorChatRequest): Promise<O
           toolInput: requestedAction.input,
           error: assistant.summary,
         });
+      } else if (provisionDomainBlocked) {
       } else if (tool.riskLevel === "read" && isExplicitMutationRequest(effectiveMessage)) {
         const plannerNeedInfo = inferPlannerMissingInfoTurn({
           message: effectiveMessage,

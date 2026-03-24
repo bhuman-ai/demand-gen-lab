@@ -38,6 +38,17 @@ export type MailpoolDomain = {
   nameservers?: string[];
 };
 
+export type MailpoolDomainInfo = {
+  available: boolean;
+  price: number;
+};
+
+export type MailpoolDomainSuggestion = {
+  domain: string;
+  available: boolean;
+  price: number;
+};
+
 export type MailpoolDnsRecord = {
   type: string;
   key: string;
@@ -220,6 +231,23 @@ function mapDomain(input: unknown): MailpoolDomain {
   };
 }
 
+function mapDomainInfo(input: unknown): MailpoolDomainInfo {
+  const row = asRecord(input);
+  return {
+    available: Boolean(row.available),
+    price: numberValue(row.price),
+  };
+}
+
+function mapDomainSuggestion(input: unknown): MailpoolDomainSuggestion {
+  const row = asRecord(input);
+  return {
+    domain: String(row.domain ?? "").trim().toLowerCase(),
+    available: Boolean(row.available),
+    price: numberValue(row.price),
+  };
+}
+
 function mapMailbox(input: unknown): MailpoolMailbox {
   const row = asRecord(input);
   return {
@@ -336,6 +364,31 @@ export async function listMailpoolDomains(apiKey: string) {
     path: "/domains/?limit=100&offset=0",
   });
   return asArray(asRecord(payload).data).map((entry) => mapDomain(entry)).filter((entry) => entry.domain);
+}
+
+export async function getMailpoolDomainInfo(apiKey: string, domain: string) {
+  const payload = await mailpoolRequest<unknown>({
+    apiKey,
+    path: `/domains/info?domain=${encodeURIComponent(domain.trim().toLowerCase())}`,
+  });
+  return mapDomainInfo(payload);
+}
+
+export async function listMailpoolDomainSuggestions(input: {
+  apiKey: string;
+  domain: string;
+  limit?: number;
+  offset?: number;
+}) {
+  const limit = Math.max(1, Math.min(10, Math.round(input.limit ?? 5)));
+  const offset = Math.max(0, Math.round(input.offset ?? 0));
+  const payload = await mailpoolRequest<unknown>({
+    apiKey: input.apiKey,
+    path: `/domains/suggestions?domain=${encodeURIComponent(input.domain.trim().toLowerCase())}&limit=${limit}&offset=${offset}`,
+  });
+  return asArray(payload)
+    .map((entry) => mapDomainSuggestion(entry))
+    .filter((entry) => entry.domain);
 }
 
 export async function getMailpoolSubscriptionSlots(apiKey: string) {

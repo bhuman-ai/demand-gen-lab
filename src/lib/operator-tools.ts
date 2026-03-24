@@ -104,10 +104,35 @@ function pickRun<T extends { status: string }>(runs: T[]) {
   return runs.find((run) => RUN_OPEN_STATUSES.has(run.status)) ?? runs[0] ?? null;
 }
 
+function normalizeProvisionDomainMode(value: unknown) {
+  const normalized = asString(value).toLowerCase();
+  if (!normalized) return "existing";
+  if (
+    [
+      "register",
+      "new",
+      "buy",
+      "purchase",
+      "buy_new",
+      "buy-new",
+      "new_domain",
+      "new-domain",
+      "buy_new_domain",
+      "buy-new-domain",
+    ].includes(normalized)
+  ) {
+    return "register";
+  }
+  if (["existing", "current", "existing_domain", "existing-domain"].includes(normalized)) {
+    return "existing";
+  }
+  return "existing";
+}
+
 function buildProvisionPreview(input: Record<string, unknown>) {
   const domain = asString(input.domain) || "new Mailpool domain";
   const fromLocalPart = asString(input.fromLocalPart) || "sender local-part";
-  const domainMode = asString(input.domainMode) === "register" ? "register" : "existing";
+  const domainMode = normalizeProvisionDomainMode(input.domainMode);
   return {
     title: "Add Mailpool sender",
     summary:
@@ -541,8 +566,10 @@ const TOOL_SPECS: OperatorToolSpec[] = [
         accountName: asString(input.accountName),
         assignToBrand: input.assignToBrand !== false,
         selectedMailboxAccountId: asString(input.selectedMailboxAccountId),
-        domainMode: asString(input.domainMode) === "register" ? "register" : "existing",
+        domainMode: normalizeProvisionDomainMode(input.domainMode),
         domain: requireString(input, "domain"),
+        domainCandidates: asStringArray(input.domainCandidates),
+        allowAlternativeDomains: input.allowAlternativeDomains === true,
         fromLocalPart: requireString(input, "fromLocalPart"),
         autoPickCustomerIoAccount: false,
         customerIoSourceAccountId: "",

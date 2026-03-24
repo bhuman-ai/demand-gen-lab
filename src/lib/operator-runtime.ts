@@ -2105,11 +2105,17 @@ export async function runOperatorChatTurn(input: OperatorChatRequest): Promise<O
         brandMemory,
         fallbackAssistant,
       });
+  const inferredFallbackAction = inferActionFromMessage(input, brandContext, brandMemory);
   const requestedAction = structuredAction
     ? structuredAction
     : llmPlan
-      ? filterRequestedActionForMessage(llmPlan.requestedAction, input.message)
-      : filterRequestedActionForMessage(inferActionFromMessage(input, brandContext, brandMemory), input.message);
+      ? (
+          filterRequestedActionForMessage(llmPlan.requestedAction, input.message) ??
+          (isExplicitMutationRequest(input.message)
+            ? filterRequestedActionForMessage(inferredFallbackAction, input.message)
+            : null)
+        )
+      : filterRequestedActionForMessage(inferredFallbackAction, input.message);
   const run = await createOperatorRun({
     threadId: thread.id,
     brandId: resolvedBrandId,

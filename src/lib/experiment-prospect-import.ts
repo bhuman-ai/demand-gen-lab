@@ -46,6 +46,11 @@ export type ImportExperimentProspectRowsResult = {
   parseErrors: string[];
   enrichmentError: string;
   failureSummary: Array<{ reason: string; count: number }>;
+  autoLaunchAttempted: boolean;
+  autoLaunchTriggered: boolean;
+  autoLaunchBlocked: boolean;
+  autoLaunchRunId: string;
+  autoLaunchReason: string;
 };
 
 export type ExperimentSendableLeadSummary = {
@@ -454,6 +459,11 @@ export async function importExperimentProspectRows(input: {
       parseErrors: parseErrors.slice(0, 20),
       enrichmentError: enrichment.error,
       failureSummary: enrichment.failureSummary,
+      autoLaunchAttempted: false,
+      autoLaunchTriggered: false,
+      autoLaunchBlocked: false,
+      autoLaunchRunId: "",
+      autoLaunchReason: "",
     };
   }
 
@@ -510,6 +520,11 @@ export async function importExperimentProspectRows(input: {
       parseErrors: parseErrors.slice(0, 20),
       enrichmentError: enrichment.error,
       failureSummary: enrichment.failureSummary,
+      autoLaunchAttempted: false,
+      autoLaunchTriggered: false,
+      autoLaunchBlocked: false,
+      autoLaunchRunId: "",
+      autoLaunchReason: "",
     };
   }
 
@@ -588,6 +603,11 @@ export async function importExperimentProspectRows(input: {
     parseErrors: parseErrors.slice(0, 20),
     enrichmentError: enrichment.error,
     failureSummary: enrichment.failureSummary,
+    autoLaunchAttempted: false,
+    autoLaunchTriggered: false,
+    autoLaunchBlocked: false,
+    autoLaunchRunId: "",
+    autoLaunchReason: "",
   };
 }
 

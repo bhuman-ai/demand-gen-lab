@@ -21,8 +21,6 @@ import {
 } from "@/lib/operator-memory";
 import { getOperatorBrandContext } from "@/lib/operator-context";
 import { getOperatorToolSpec, listOperatorToolSpecs } from "@/lib/operator-tools";
-import { selectAvailableMailpoolDomain } from "@/lib/outreach-provisioning";
-import { listBrands } from "@/lib/factory-data";
 import type {
   OperatorAction,
   OperatorActionSummary,
@@ -79,17 +77,6 @@ function asRecord(value: unknown): Record<string, unknown> {
   return {};
 }
 
-function normalizeRawToolInput(value: unknown) {
-  const rawToolInput = asRecord(value);
-  const nestedToolInput = asRecord(rawToolInput.input);
-  return {
-    ...nestedToolInput,
-    ...Object.fromEntries(
-      Object.entries(rawToolInput).filter(([key]) => key !== "input")
-    ),
-  };
-}
-
 function isCasualGreeting(message: string) {
   const normalized = message.trim().toLowerCase();
   if (!normalized) return false;
@@ -100,7 +87,7 @@ function isExplicitActionRequest(message: string) {
   const normalized = message.trim().toLowerCase();
   if (!normalized || isCasualGreeting(normalized)) return false;
   if (
-    /\b(can you|could you|please|go ahead and|i want you to|i need you to|i need u to|need you to|need u to|we want to|we wanna|want to|wanna|we need to|let's|lets|take care of|handle|do this)\b/.test(normalized)
+    /\b(can you|could you|please|go ahead and|i want you to|take care of|handle|do this)\b/.test(normalized)
   ) {
     return true;
   }
@@ -113,7 +100,7 @@ function isExplicitMutationRequest(message: string) {
   const normalized = message.trim().toLowerCase();
   if (!normalized || isCasualGreeting(normalized)) return false;
   if (
-    /\b(can you|could you|please|go ahead and|i want you to|i need you to|i need u to|need you to|need u to|we want to|we wanna|want to|wanna|we need to|let's|lets|take care of|handle|do this)\b/.test(normalized)
+    /\b(can you|could you|please|go ahead and|i want you to|take care of|handle|do this)\b/.test(normalized)
   ) {
     return /\b(add|create|make|buy|register|provision|refresh|sync|run|pause|resume|cancel|send|dismiss|delete|remove|launch|promote|update|edit|change|set up|setup|start)\b/.test(
       normalized
@@ -127,7 +114,7 @@ function isExplicitMutationRequest(message: string) {
 function isAffirmativeMessage(message: string) {
   const normalized = message.trim().toLowerCase();
   if (!normalized) return false;
-  return /^(yes|yep|yeah|yup|sure|ok|okay|confirm|do it|u do it|you do it|yes do it|yeah do it|yep do it|go ahead|go for it|run it|send it|make it so|please do|do that|just do it)$/i.test(
+  return /^(yes|yep|yeah|yup|sure|ok|okay|confirm|do it|yes do it|go ahead|run it|send it|make it so|please do|do that)$/i.test(
     normalized
   );
 }
@@ -138,30 +125,6 @@ function isNegativeMessage(message: string) {
   return /^(no|nope|nah|cancel|cancel it|stop|never mind|nevermind|don'?t|do not|don'?t do it|don'?t do that|skip it)$/i.test(
     normalized
   );
-}
-
-function extractPendingTopicShift(message: string) {
-  const trimmed = message.trim();
-  if (!trimmed) {
-    return { abandon: false, nextMessage: "" };
-  }
-
-  const patterns = [
-    /^(?:actually\s+)?(?:forget that|forget it|ignore that|ignore it|scratch that|never mind|nevermind|skip that|drop that)\s*[,.;:-]?\s*(.*)$/i,
-    /^(?:actually\s+)?(?:i want to|i wanna|let'?s)\s+talk about\s+(?:something else|smth else|another thing|a different thing)\s*[,.;:-]?\s*(.*)$/i,
-    /^(?:actually\s+)?(?:different topic|another thing instead)\s*[,.;:-]?\s*(.*)$/i,
-  ];
-
-  for (const pattern of patterns) {
-    const match = trimmed.match(pattern);
-    if (!match) continue;
-    return {
-      abandon: true,
-      nextMessage: asString(match[1]),
-    };
-  }
-
-  return { abandon: false, nextMessage: "" };
 }
 
 function buildGreetingAssistant(brandName?: string): OperatorChatAssistantReply {
@@ -439,7 +402,7 @@ function buildProvisionForms(input: {
   const senderEmail = fromLocalPart && domain ? `${fromLocalPart}@${domain}` : "";
   const registrant = asRecord(input.toolInput.registrant);
 
-  if (input.missingFields.includes("sender email") || input.missingFields.includes("available domain")) {
+  if (input.missingFields.includes("sender email")) {
     if (domainMode === "existing" && inventoryOptions.length > 0) {
       forms.push({
         id: "provision-existing-sender",
@@ -476,11 +439,8 @@ function buildProvisionForms(input: {
         toolName: "provision_mailpool_sender",
         title: "Sender details",
         description:
-          input.missingFields.includes("available domain")
-            ? "That domain is not available. Update the sender email, or say `you decide` and I'll try other domains."
-            :
           domainMode === "register"
-            ? "Enter the exact sender email you want to buy and provision, or say `you decide` and I'll pick a sensible one."
+            ? "Enter the exact sender email you want to buy and provision."
             : "Enter the exact sender email you want to create for this brand.",
         submitLabel: "Continue",
         input: input.toolInput,
@@ -657,14 +617,6 @@ function buildProvisionQuestions(input: {
           label: "Buy new domain",
           message: "Add a sender for this brand by buying a new sender domain.",
         },
-        ...(!input.hasMailpoolInventory
-          ? [
-              {
-                label: "You decide",
-                message: "Add a sender for this brand by buying a new sender domain. You decide on the sender email and domain.",
-              },
-            ]
-          : []),
       ])
     );
   }
@@ -675,10 +627,6 @@ function buildProvisionQuestions(input: {
         {
           label: "Keep new domain",
           message: "Add a sender for this brand by buying a new sender domain. I'll provide the registrant details next.",
-        },
-        {
-          label: "You decide",
-          message: "Add a sender for this brand by buying a new sender domain. You decide on the sender email and domain.",
         },
         ...(input.hasMailpoolInventory
           ? [
@@ -726,13 +674,6 @@ function looksLikeBrandCreationRequest(message: string) {
   return /\b(make|create|add|set up|setup|start|open)\b/.test(normalized);
 }
 
-function looksLikeExperimentCreationRequest(message: string) {
-  const normalized = message.trim().toLowerCase();
-  if (!normalized) return false;
-  if (!/\bexperiments?\b/.test(normalized)) return false;
-  return /\b(make|create|add|set up|setup|start|launch|build|draft|new)\b/.test(normalized);
-}
-
 function ensureWebsiteUrl(value: string) {
   const trimmed = value.trim();
   if (!trimmed) return "";
@@ -740,294 +681,16 @@ function ensureWebsiteUrl(value: string) {
   return `https://${trimmed}`;
 }
 
-function normalizeBrandReference(value: string) {
-  return value.trim().toLowerCase().replace(/^https?:\/\//, "").replace(/^www\./, "").replace(/\/+$/, "").replace(/\/.*$/, "");
-}
-
-function titleCaseWords(value: string) {
-  return value
-    .split(/\s+/)
-    .filter(Boolean)
-    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
-    .join(" ");
-}
-
-function synthesizeExperimentDraft(input: {
-  message: string;
-  brandName: string;
-}) {
-  const normalizedMessage = input.message.replace(/\s+/g, " ").trim();
-  const lowered = normalizedMessage.toLowerCase();
-  let audience = "";
-  const audienceMatch =
-    normalizedMessage.match(
-      /\b(?:reaching out to|reach out to|target(?:ing)?|for)\s+(.+?)(?=(?:\s+(?:explaining|to explain|about|with|where|who|saying|offering)\b|[,.]|$))/i
-    ) ??
-    normalizedMessage.match(/\b([A-Za-z0-9 ,/&-]*founders?[A-Za-z0-9 ,/&-]*)\b/i);
-  if (audienceMatch?.[1]) {
-    audience = audienceMatch[1].replace(/\s+/g, " ").trim();
-  }
-
-  const cleanedOffer = normalizedMessage
-    .replace(/^ok[, ]*/i, "")
-    .replace(/\bwe need to make (?:a )?new experiment(?: on [^,]+)?\b/i, "")
-    .replace(/\bwhich is\b/i, "")
-    .replace(/\bour thinking is\b/i, "")
-    .replace(/\bmy thinking is\b/i, "")
-    .replace(/^\s*[:,.-]?\s*/, "")
-    .trim();
-
-  let name = "";
-  if (audience) {
-    const audienceTokens = audience
-      .replace(/[^a-z0-9\s/&-]+/gi, " ")
-      .split(/\s+/)
-      .filter(Boolean)
-      .slice(0, 4);
-    if (audienceTokens.length) {
-      const suffix =
-        /\b(feedback|review|reviews|g2|trial|free month)\b/i.test(normalizedMessage) ? "Feedback Offer" : "Outreach";
-      name = `${titleCaseWords(audienceTokens.join(" "))} ${suffix}`.trim();
-    }
-  }
-  if (!name && /\b(feedback|reviews?|g2)\b/i.test(lowered)) {
-    name = `${input.brandName} Feedback Offer`;
-  }
-  if (!name && cleanedOffer.length > 40) {
-    name = `${input.brandName} Outreach Experiment`;
-  }
-
-  return {
-    name: name.trim(),
-    audience,
-    offer: cleanedOffer,
-  };
-}
-
-async function findExistingBrandByReference(input: {
-  brandContext: Awaited<ReturnType<typeof getOperatorBrandContext>>;
-  toolInput: Record<string, unknown>;
-  message: string;
-}) {
-  const activeBrand = input.brandContext?.brand;
-  const requestedReferences = [
-    asString(input.toolInput.name),
-    asString(input.toolInput.website),
-    extractDomain(input.message),
-  ]
-    .map((value) => normalizeBrandReference(value))
-    .filter(Boolean);
-  if (!requestedReferences.length) return null;
-  if (activeBrand) {
-    const activeReferences = new Set(
-      [activeBrand.name, activeBrand.website].map((value) => normalizeBrandReference(value)).filter(Boolean)
-    );
-    if (requestedReferences.some((value) => activeReferences.has(value))) {
-      return activeBrand;
-    }
-  }
-  const brands = await listBrands();
-  return (
-    brands.find((brand) => {
-      const references = new Set([brand.name, brand.website].map((value) => normalizeBrandReference(value)).filter(Boolean));
-      return requestedReferences.some((value) => references.has(value));
-    }) ?? null
-  );
-}
-
 function normalizeProvisionDomainMode(value: unknown) {
   const normalized = asString(value).toLowerCase();
   if (!normalized) return "";
-  if (
-    [
-      "register",
-      "new",
-      "buy",
-      "purchase",
-      "buy_new",
-      "buy-new",
-      "new_domain",
-      "new-domain",
-      "buy_new_domain",
-      "buy-new-domain",
-    ].includes(normalized)
-  ) {
+  if (["register", "new", "buy", "purchase", "new_domain", "new-domain"].includes(normalized)) {
     return "register";
   }
   if (["existing", "current", "existing_domain", "existing-domain"].includes(normalized)) {
     return "existing";
   }
   return normalized;
-}
-
-function hasDelegatedProvisionChoicePermission(message: string) {
-  const normalized = normalizeMatchText(message);
-  if (!normalized) return false;
-  return (
-    /^(u|you)\s+decide$/.test(normalized) ||
-    /\b(your call|up to you|whatever you think|whatever works|choose for me|pick for me|you choose|you pick|pick one for me|choose one for me|feel free to choose|auto choose|decide for me)\b/.test(
-      normalized
-    )
-  );
-}
-
-function asciiWordTokens(value: string) {
-  return value
-    .normalize("NFKD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase()
-    .replace(/&/g, " and ")
-    .match(/[a-z0-9]+/g) ?? [];
-}
-
-function uniqueStrings(values: string[]) {
-  return Array.from(new Set(values.map((value) => value.trim()).filter(Boolean)));
-}
-
-function normalizeProvisionLocalPartCandidate(value: string) {
-  return value
-    .normalize("NFKD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, ".")
-    .replace(/^\.+|\.+$/g, "")
-    .replace(/\.{2,}/g, ".")
-    .slice(0, 64);
-}
-
-function normalizeProvisionDomainRootCandidate(value: string) {
-  return value
-    .normalize("NFKD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "")
-    .slice(0, 48);
-}
-
-function extractDomainRoot(value: string) {
-  const domain = extractDomain(value);
-  if (!domain) return "";
-  const parts = domain.split(".").filter(Boolean);
-  if (parts.length >= 3 && ["co", "com", "org", "net"].includes(parts[parts.length - 2] ?? "")) {
-    return parts[parts.length - 3] ?? "";
-  }
-  if (parts.length >= 2) {
-    return parts[parts.length - 2] ?? "";
-  }
-  return parts[0] ?? "";
-}
-
-function pickProvisionLocalPart(input: {
-  brandContext: Awaited<ReturnType<typeof getOperatorBrandContext>>;
-  brandMemory: OperatorBrandMemory | null;
-  toolInput: Record<string, unknown>;
-}) {
-  const registrant = asRecord(input.toolInput.registrant);
-  const candidates = uniqueStrings([
-    normalizeProvisionLocalPartCandidate(asString(input.toolInput.fromLocalPart)),
-    normalizeProvisionLocalPartCandidate(asString(input.brandMemory?.senderDefaults.fromLocalPart)),
-    normalizeProvisionLocalPartCandidate(asString(registrant.firstName)),
-    normalizeProvisionLocalPartCandidate(asString(input.brandMemory?.registrantDefaults.firstName)),
-    normalizeProvisionLocalPartCandidate(asciiWordTokens(input.brandContext?.brand.name ?? "").slice(0, 1).join("")),
-    normalizeProvisionLocalPartCandidate(asciiWordTokens(input.brandContext?.brand.website ?? "").slice(0, 1).join("")),
-    "hello",
-  ]);
-  return candidates.find(Boolean) ?? "hello";
-}
-
-function buildProvisionDomainCandidates(input: {
-  brandContext: Awaited<ReturnType<typeof getOperatorBrandContext>>;
-  brandMemory: OperatorBrandMemory | null;
-  toolInput: Record<string, unknown>;
-}) {
-  const inventoryDomains = (input.brandContext?.provisioning.mailpoolDomains ?? []).map((item) => item.domain.toLowerCase());
-  const rememberedDomain = asString(input.brandMemory?.senderDefaults.domain).toLowerCase();
-  const requestedDomain = asString(input.toolInput.domain).toLowerCase();
-  const domainMode = normalizeProvisionDomainMode(input.toolInput.domainMode);
-  if (domainMode === "existing") {
-    return uniqueStrings([
-      requestedDomain && inventoryDomains.includes(requestedDomain) ? requestedDomain : "",
-      rememberedDomain && inventoryDomains.includes(rememberedDomain) ? rememberedDomain : "",
-      ...inventoryDomains,
-    ]);
-  }
-
-  const registrant = asRecord(input.toolInput.registrant);
-  const brandSignal = `${input.brandContext?.brand.name ?? ""} ${input.brandContext?.brand.website ?? ""}`;
-  const artisticBrand = /\b(art|artist|painting|painter|portrait|gallery|museum|studio)\b/i.test(brandSignal);
-  const websiteRoot = normalizeProvisionDomainRootCandidate(extractDomainRoot(input.brandContext?.brand.website ?? ""));
-  const brandRoot = normalizeProvisionDomainRootCandidate(
-    asciiWordTokens(input.brandContext?.brand.name ?? "").slice(0, 3).join("")
-  );
-  const orgRoot = normalizeProvisionDomainRootCandidate(
-    asString(registrant.organizationName) || asString(input.brandMemory?.registrantDefaults.organizationName)
-  );
-  const personalRoot = normalizeProvisionDomainRootCandidate(
-    [
-      asString(registrant.firstName) || asString(input.brandMemory?.registrantDefaults.firstName),
-      asString(registrant.lastName) || asString(input.brandMemory?.registrantDefaults.lastName),
-    ]
-      .filter(Boolean)
-      .join("")
-  );
-  const rememberedRoot = normalizeProvisionDomainRootCandidate(extractDomainRoot(rememberedDomain));
-  const requestedRoot = normalizeProvisionDomainRootCandidate(extractDomainRoot(requestedDomain));
-  const takenDomains = new Set(
-    uniqueStrings([
-      ...inventoryDomains,
-      asString(input.brandContext?.brand.website).toLowerCase().replace(/^https?:\/\//, "").replace(/^www\./, "").replace(/\/.*$/, ""),
-    ])
-  );
-  const rootCandidates = uniqueStrings([requestedRoot, rememberedRoot, brandRoot, orgRoot, websiteRoot, personalRoot]).filter(
-    Boolean
-  );
-  const suffixes = artisticBrand ? ["", "studio", "works", "mail"] : ["", "hq", "mail", "team", "works"];
-  const domainCandidates: string[] = [];
-  for (const root of rootCandidates) {
-    if (!root) continue;
-    if (websiteRoot && root === websiteRoot) {
-      domainCandidates.push(`get${root}.com`);
-    }
-    for (const suffix of suffixes) {
-      if (suffix === "" && websiteRoot && root === websiteRoot) continue;
-      const nextRoot = normalizeProvisionDomainRootCandidate(suffix ? `${root}${suffix}` : root);
-      if (!nextRoot) continue;
-      domainCandidates.push(`${nextRoot}.com`);
-    }
-  }
-  return uniqueStrings(domainCandidates).filter((candidate) => !takenDomains.has(candidate));
-}
-
-function autoFillProvisionIdentity(input: {
-  brandContext: Awaited<ReturnType<typeof getOperatorBrandContext>>;
-  brandMemory: OperatorBrandMemory | null;
-  toolInput: Record<string, unknown>;
-}) {
-  const nextInput: Record<string, unknown> = {
-    ...input.toolInput,
-    registrant: asRecord(input.toolInput.registrant),
-  };
-  const inventoryCount = input.brandContext?.provisioning.mailpoolDomainInventoryCount ?? 0;
-  const normalizedMode = normalizeProvisionDomainMode(nextInput.domainMode);
-  nextInput.domainMode = normalizedMode || (inventoryCount > 0 ? "existing" : "register");
-
-  if (!asString(nextInput.fromLocalPart)) {
-    nextInput.fromLocalPart = pickProvisionLocalPart(input);
-  }
-  const domainCandidates = buildProvisionDomainCandidates({
-    brandContext: input.brandContext,
-    brandMemory: input.brandMemory,
-    toolInput: nextInput,
-  });
-  nextInput.domainCandidates = domainCandidates;
-  if (!asString(nextInput.domain)) {
-    nextInput.domain = domainCandidates[0] ?? "";
-  }
-  if (normalizeProvisionDomainMode(nextInput.domainMode) === "register" && domainCandidates.length > 1) {
-    nextInput.allowAlternativeDomains = true;
-  }
-
-  return nextInput;
 }
 
 function extractProvisionLocalPart(message: string) {
@@ -1264,15 +927,6 @@ function makeUnexecutedActionAssistant(message: string, assistant: OperatorChatA
   };
 }
 
-function assistantLooksLikeNeedInfo(assistant: OperatorChatAssistantReply) {
-  const summary = asString(assistant.summary).toLowerCase();
-  if (!summary) return false;
-  return (
-    summary.includes("?") ||
-    /\b(i still need|what should|which |tell me|send me|share|let me know)\b/.test(summary)
-  );
-}
-
 function buildProvisionMissingFields(toolInput: Record<string, unknown>) {
   const missingFields: string[] = [];
   if (!asString(toolInput.fromLocalPart) || !asString(toolInput.domain)) {
@@ -1299,51 +953,10 @@ function buildProvisionMissingFields(toolInput: Record<string, unknown>) {
   return missingFields;
 }
 
-async function resolveMailpoolProvisionDomain(input: {
-  message: string;
-  toolInput: Record<string, unknown>;
-}) {
-  const nextInput: Record<string, unknown> = {
-    ...input.toolInput,
-    registrant: asRecord(input.toolInput.registrant),
-  };
-  if (normalizeProvisionDomainMode(nextInput.domainMode) !== "register" || !asString(nextInput.domain)) {
-    return {
-      toolInput: nextInput,
-      selection: null as Awaited<ReturnType<typeof selectAvailableMailpoolDomain>> | null,
-    };
-  }
-
-  const selection = await selectAvailableMailpoolDomain({
-    preferredDomain: asString(nextInput.domain),
-    domainCandidates: Array.isArray(nextInput.domainCandidates)
-      ? nextInput.domainCandidates.map((entry) => asString(entry)).filter(Boolean)
-      : [],
-    allowAlternativeDomains:
-      nextInput.allowAlternativeDomains === true || hasDelegatedProvisionChoicePermission(input.message),
-    mailpoolApiKey: asString(nextInput.mailpoolApiKey),
-  });
-
-  nextInput.domainAvailabilityChecked = true;
-  nextInput.domainAvailabilityPrice = selection.price;
-  nextInput.domainAvailabilitySource = selection.source;
-  nextInput.checkedDomains = selection.checkedDomains;
-  if (selection.available && selection.domain) {
-    nextInput.domain = selection.domain;
-  }
-
-  return { toolInput: nextInput, selection };
-}
-
 type PendingConversationContinuation =
   | {
       kind: "structured_action";
       requestedAction: OperatorRequestedAction;
-    }
-  | {
-      kind: "abandon_pending";
-      actionId: string;
-      message: string;
     }
   | {
       kind: "message_override";
@@ -1382,13 +995,9 @@ function getLatestPendingAssistantExecution(messages: OperatorMessage[]) {
     const message = messages[index];
     if (message.role !== "assistant" || message.kind !== "message") continue;
     const execution = readExecutionEnvelope(asRecord(message.content).execution);
-    if (!execution) {
-      return null;
-    }
-    if (execution.state !== "completed" && execution.state !== "failed" && execution.state !== "canceled") {
+    if (execution && execution.state !== "completed" && execution.state !== "failed" && execution.state !== "canceled") {
       return { message, execution };
     }
-    return null;
   }
   return null;
 }
@@ -1401,46 +1010,6 @@ function getExecutionToolInput(execution: OperatorExecutionEnvelope) {
   return asRecord(firstForm?.input);
 }
 
-function inferDelegatedProvisionContinuation(input: {
-  message: string;
-  messages: OperatorMessage[];
-  brandContext: Awaited<ReturnType<typeof getOperatorBrandContext>>;
-  brandMemory: OperatorBrandMemory | null;
-  brandId: string;
-}): PendingConversationContinuation | null {
-  if (!hasDelegatedProvisionChoicePermission(input.message)) return null;
-  const pending = getLatestPendingAssistantExecution(input.messages);
-  if (!pending || pending.execution.state !== "need_info" || pending.execution.toolName !== "provision_mailpool_sender") {
-    return null;
-  }
-
-  const baseInput = getExecutionToolInput(pending.execution);
-  if (!Object.keys(baseInput).length) return null;
-
-  const nextInput = autoFillProvisionIdentity({
-    brandContext: input.brandContext,
-    brandMemory: input.brandMemory,
-    toolInput: {
-      ...baseInput,
-      brandId: input.brandId || asString(baseInput.brandId),
-      provider: "mailpool",
-      domainMode: normalizeProvisionDomainMode(baseInput.domainMode),
-    },
-  });
-
-  if (!asString(nextInput.fromLocalPart) && !asString(nextInput.domain)) {
-    return null;
-  }
-
-  return {
-    kind: "structured_action",
-    requestedAction: {
-      toolName: "provision_mailpool_sender",
-      input: nextInput,
-    },
-  };
-}
-
 const QUESTION_OPTION_ORDINALS = [
   ["1", "one", "first"],
   ["2", "two", "second"],
@@ -1451,7 +1020,7 @@ const QUESTION_OPTION_ORDINALS = [
 ] as const;
 
 function findQuestionOptionMatch(execution: OperatorExecutionEnvelope, message: string) {
-  const normalized = normalizeMatchText(message).replace(/^u\b/, "you");
+  const normalized = normalizeMatchText(message);
   if (!normalized) return null;
   const questionOptions = (execution.questions ?? []).flatMap((question) =>
     Array.isArray(question.options) ? question.options : []
@@ -1479,8 +1048,8 @@ function findQuestionOptionMatch(execution: OperatorExecutionEnvelope, message: 
 
   for (const question of execution.questions ?? []) {
     for (const option of question.options ?? []) {
-      const label = normalizeMatchText(option.label).replace(/^u\b/, "you");
-      const optionMessage = normalizeMatchText(option.message).replace(/^u\b/, "you");
+      const label = normalizeMatchText(option.label);
+      const optionMessage = normalizeMatchText(option.message);
       if (label && (normalized === label || normalized.includes(label) || label.includes(normalized))) {
         return option;
       }
@@ -1802,17 +1371,6 @@ function mergeProvisionInputFromContinuation(input: {
 
   nextInput.domainMode = normalizeProvisionDomainMode(nextInput.domainMode);
 
-  if (needsSenderEmail && hasDelegatedProvisionChoicePermission(input.message)) {
-    const autoFilled = autoFillProvisionIdentity({
-      brandContext: input.brandContext,
-      brandMemory: input.brandMemory,
-      toolInput: nextInput,
-    });
-    nextInput.fromLocalPart = asString(autoFilled.fromLocalPart);
-    nextInput.domain = asString(autoFilled.domain).toLowerCase();
-    nextInput.domainMode = normalizeProvisionDomainMode(autoFilled.domainMode);
-  }
-
   if (!asString(nextInput.domain) && normalizeProvisionDomainMode(nextInput.domainMode) === "existing") {
     const rememberedDomain = asString(input.brandMemory?.senderDefaults.domain);
     const onlyDomain =
@@ -1853,16 +1411,6 @@ function inferContinuationFromPendingExecution(input: {
       ? input.actions.find((action) => action.id === pending.execution.actionId)
       : null) ??
     input.actions.find((action) => action.status === "awaiting_approval");
-  const topicShift = extractPendingTopicShift(message);
-
-  if (topicShift.abandon) {
-    return {
-      kind: "abandon_pending",
-      actionId:
-        pending.execution.state === "awaiting_confirmation" && latestAction ? latestAction.id : "",
-      message: topicShift.nextMessage,
-    };
-  }
 
   if (pending.execution.state === "awaiting_confirmation" && latestAction) {
     if (isAffirmativeMessage(message)) {
@@ -2239,314 +1787,6 @@ function buildDisambiguationEnvelope(input: {
   };
 }
 
-function buildSimpleNeedInfoTurn(input: {
-  toolName: OperatorToolName;
-  toolInput: Record<string, unknown>;
-  preview?: Record<string, unknown>;
-  summary: string;
-  missingFields: string[];
-  questions?: OperatorExecutionQuestion[];
-}) {
-  return {
-    assistant: {
-      summary: input.summary,
-      findings: [],
-      recommendations: [],
-    },
-    execution: buildNeedInfoEnvelope({
-      toolName: input.toolName,
-      toolInput: input.toolInput,
-      preview: input.preview,
-      missingFields: input.missingFields,
-      questions: input.questions,
-    }),
-  };
-}
-
-function inferPlannerMissingInfoTurn(input: {
-  message: string;
-  planner: OperatorPlannerResult | null;
-  brandContext: Awaited<ReturnType<typeof getOperatorBrandContext>>;
-  brandMemory: OperatorBrandMemory | null;
-}) {
-  const lastAttempt = input.planner?.trace[input.planner.trace.length - 1];
-  if (!lastAttempt?.toolName) return null;
-
-  const toolName = lastAttempt.toolName as OperatorToolName;
-  const tool = getOperatorToolSpec(toolName);
-  if (!tool) return null;
-
-  const toolInput = normalizeRawToolInput(lastAttempt.input);
-  const preview = buildToolPreview(tool, toolInput);
-  const context = input.brandContext;
-
-  if (toolName === "create_brand" && !asString(toolInput.name)) {
-    return buildSimpleNeedInfoTurn({
-      toolName,
-      toolInput,
-      preview,
-      summary: "I can create the brand, but I still need the brand name.",
-      missingFields: ["brand name"],
-    });
-  }
-
-  if (toolName === "create_experiment" && !asString(toolInput.name)) {
-    return buildSimpleNeedInfoTurn({
-      toolName,
-      toolInput,
-      preview,
-      summary: "I can create the experiment, but I still need the experiment name.",
-      missingFields: ["experiment name"],
-    });
-  }
-
-  if (["get_experiment_snapshot", "update_experiment", "delete_experiment", "launch_experiment_run", "control_experiment_run", "promote_experiment_to_campaign"].includes(toolName)) {
-    const experimentId =
-      resolveExperimentId(toolInput, context, input.message) ||
-      (mentionsReferencePronoun(input.message) ? asString(input.brandMemory?.recentSelection.experimentId) : "");
-    if (!experimentId) {
-      const experiments = context?.experiments.items ?? [];
-      if (experiments.length > 0) {
-        const intent = inferExperimentIntent(input.message);
-        return buildDisambiguationEnvelope({
-          toolName: intent.toolName,
-          toolInput: { brandId: context?.brand.id ?? "", ...intent.input },
-          label: `I need to know which experiment you mean before I can ${intent.verb} it.`,
-          questionPrompt: "Choose an experiment",
-          options: experiments.slice(0, 6).map((item) => ({
-            label: item.name,
-            message: intent.buildMessage(item.name),
-          })),
-        });
-      }
-      return buildSimpleNeedInfoTurn({
-        toolName,
-        toolInput,
-        preview,
-        summary: "This brand doesn't have any experiments yet. If you want, tell me what experiment you want me to create.",
-        missingFields: ["experiment details"],
-      });
-    }
-  }
-
-  if (["get_campaign_snapshot", "update_campaign", "delete_campaign", "launch_campaign_run", "control_campaign_run"].includes(toolName)) {
-    const campaignId =
-      resolveCampaignId(toolInput, context, input.message) ||
-      (mentionsReferencePronoun(input.message) ? asString(input.brandMemory?.recentSelection.campaignId) : "");
-    if (!campaignId) {
-      const campaigns = context?.campaigns.items ?? [];
-      if (campaigns.length > 0) {
-        const intent = inferCampaignIntent(input.message);
-        return buildDisambiguationEnvelope({
-          toolName: intent.toolName,
-          toolInput: { brandId: context?.brand.id ?? "", ...intent.input },
-          label: `I need to know which campaign you mean before I can ${intent.verb} it.`,
-          questionPrompt: "Choose a campaign",
-          options: campaigns.slice(0, 6).map((item) => ({
-            label: item.name,
-            message: intent.buildMessage(item.name),
-          })),
-        });
-      }
-      return buildSimpleNeedInfoTurn({
-        toolName,
-        toolInput,
-        preview,
-        summary: "This brand doesn't have any campaigns yet.",
-        missingFields: ["campaign"],
-      });
-    }
-  }
-
-  if (toolName === "update_brand_lead") {
-    const leadId =
-      resolveLeadId(toolInput, context, input.message) ||
-      (mentionsReferencePronoun(input.message) ? asString(input.brandMemory?.recentSelection.leadId) : "");
-    if (!leadId) {
-      const leads = context?.leads.items ?? [];
-      if (leads.length > 0) {
-        return buildDisambiguationEnvelope({
-          toolName,
-          toolInput: { brandId: context?.brand.id ?? "" },
-          label: "I need to know which lead you mean before I can update it.",
-          questionPrompt: "Choose a lead",
-          options: leads.slice(0, 6).map((item) => ({
-            label: item.name,
-            message: `Update lead "${item.name}".`,
-          })),
-        });
-      }
-      return buildSimpleNeedInfoTurn({
-        toolName,
-        toolInput,
-        preview,
-        summary: "This brand doesn't have any leads yet.",
-        missingFields: ["lead"],
-      });
-    }
-  }
-
-  if (toolName === "send_reply_draft" || toolName === "dismiss_reply_draft") {
-    const draftId =
-      resolveDraftId(toolInput, context, input.message) ||
-      (mentionsReferencePronoun(input.message) ? asString(input.brandMemory?.recentSelection.draftId) : "");
-    if (!draftId) {
-      const draftIntent = inferDraftIntent(input.message);
-      const drafts = context?.inbox.draftItems ?? [];
-      if (drafts.length > 0) {
-        return buildDisambiguationEnvelope({
-          toolName: draftIntent.toolName,
-          toolInput: { brandId: context?.brand.id ?? "" },
-          label: `I need to know which draft you mean before I can ${draftIntent.verb} it.`,
-          questionPrompt: "Choose a draft",
-          options: drafts.slice(0, 6).map((item) => ({
-            label: item.subject,
-            message: draftIntent.buildMessage(item.subject),
-          })),
-        });
-      }
-      return buildSimpleNeedInfoTurn({
-        toolName,
-        toolInput,
-        preview,
-        summary: "I don't see any reply drafts for this brand right now.",
-        missingFields: ["reply draft"],
-      });
-    }
-  }
-
-  if ((toolName === "refresh_mailpool_sender" || toolName === "get_sender_snapshot") && !resolveSenderAccountId(toolInput, context)) {
-    const senders = context?.senders.snapshots ?? [];
-    if (senders.length > 0) {
-      return buildDisambiguationEnvelope({
-        toolName,
-        toolInput: { brandId: context?.brand.id ?? "" },
-        label: "I need to know which sender you mean first.",
-        questionPrompt: "Choose a sender",
-        options: senders.slice(0, 6).map((item) => ({
-          label: item.fromEmail,
-          message:
-            toolName === "refresh_mailpool_sender"
-              ? `Refresh sender ${item.fromEmail}.`
-              : `Show sender ${item.fromEmail}.`,
-        })),
-      });
-    }
-    return buildSimpleNeedInfoTurn({
-      toolName,
-      toolInput,
-      preview,
-      summary: "This brand doesn't have any senders yet. If you want, I can add one.",
-      missingFields: ["sender"],
-    });
-  }
-
-  return null;
-}
-
-function inferMissingObjectFollowUp(input: {
-  message: string;
-  brandContext: Awaited<ReturnType<typeof getOperatorBrandContext>>;
-}) {
-  const lowered = input.message.toLowerCase();
-
-  if (looksLikeBrandCreationRequest(input.message) && !extractQuotedText(input.message) && !extractDomain(input.message)) {
-    return buildSimpleNeedInfoTurn({
-      toolName: "create_brand",
-      toolInput: {},
-      preview: buildToolPreview(getOperatorToolSpec("create_brand")!, {}),
-      summary: "I can create the brand, but I still need the brand name. If you want, send the website too and I'll include it.",
-      missingFields: ["brand name"],
-    });
-  }
-
-  const context = input.brandContext;
-  if (!context) return null;
-
-  if (
-    /\bexperiments?\b/.test(lowered) &&
-    /\b(launch|start|pause|resume|cancel|promote|delete|remove|show|open)\b/.test(lowered) &&
-    (context.experiments.total ?? 0) === 0
-  ) {
-    return buildSimpleNeedInfoTurn({
-      toolName: "create_experiment",
-      toolInput: { brandId: context.brand.id },
-      preview: buildToolPreview(getOperatorToolSpec("create_experiment")!, {
-        brandId: context.brand.id,
-      }),
-      summary: "This brand doesn't have any experiments yet. Tell me what experiment you want me to create and I'll set it up.",
-      missingFields: ["experiment details"],
-    });
-  }
-
-  if (
-    /\bcampaigns?\b/.test(lowered) &&
-    /\b(launch|start|pause|resume|cancel|delete|remove|show|open)\b/.test(lowered) &&
-    (context.campaigns.total ?? 0) === 0
-  ) {
-    return buildSimpleNeedInfoTurn({
-      toolName: "create_experiment",
-      toolInput: { brandId: context.brand.id },
-      preview: buildToolPreview(getOperatorToolSpec("create_experiment")!, {
-        brandId: context.brand.id,
-      }),
-      summary: "This brand doesn't have any campaigns yet. If you want to launch something, tell me the experiment you want me to create first.",
-      missingFields: ["experiment details"],
-    });
-  }
-
-  if (
-    /\b(senders?|mailboxes?)\b/.test(lowered) &&
-    /\b(add|create|make|provision|refresh|check|show|open|set up|setup)\b/.test(lowered) &&
-    (context.senders.total ?? 0) === 0
-  ) {
-    return buildSimpleNeedInfoTurn({
-      toolName: "provision_mailpool_sender",
-      toolInput: { brandId: context.brand.id, provider: "mailpool" },
-      preview: buildToolPreview(getOperatorToolSpec("provision_mailpool_sender")!, {
-        brandId: context.brand.id,
-        provider: "mailpool",
-      }),
-      summary: "This brand doesn't have any senders yet. Tell me the sender email you want and I'll set it up.",
-      missingFields: ["sender email"],
-    });
-  }
-
-  if (
-    /\bleads?\b/.test(lowered) &&
-    /\b(update|mark|change|remove|delete|qualify|contact)\b/.test(lowered) &&
-    (context.leads.total ?? 0) === 0
-  ) {
-    return buildSimpleNeedInfoTurn({
-      toolName: "add_brand_lead",
-      toolInput: { brandId: context.brand.id },
-      preview: buildToolPreview(getOperatorToolSpec("add_brand_lead")!, {
-        brandId: context.brand.id,
-      }),
-      summary: "This brand doesn't have any leads yet. If you want, tell me who to add first.",
-      missingFields: ["lead details"],
-    });
-  }
-
-  if (
-    /\bdrafts?\b/.test(lowered) &&
-    /\b(send|dismiss|skip)\b/.test(lowered) &&
-    (context.inbox.draftItems?.length ?? 0) === 0
-  ) {
-    return buildSimpleNeedInfoTurn({
-      toolName: "summarize_inbox",
-      toolInput: { brandId: context.brand.id },
-      preview: buildToolPreview(getOperatorToolSpec("summarize_inbox")!, {
-        brandId: context.brand.id,
-      }),
-      summary: "I don't see any reply drafts for this brand right now.",
-      missingFields: ["reply draft"],
-    });
-  }
-
-  return null;
-}
-
 function inferDisambiguationTurn(input: {
   message: string;
   brandContext: Awaited<ReturnType<typeof getOperatorBrandContext>>;
@@ -2654,7 +1894,7 @@ function normalizeRequestedAction(input: {
     return null;
   }
 
-  const toolInput = normalizeRawToolInput(row.input);
+  const toolInput = { ...asRecord(row.input) };
   if (input.brandId && TOOLS_WITH_BRAND_CONTEXT.has(toolName) && !asString(toolInput.brandId)) {
     toolInput.brandId = input.brandId;
   }
@@ -2678,31 +1918,11 @@ function normalizeRequestedAction(input: {
       const explicitEmailParts = extractEmailParts(input.message);
       const explicitDomain = extractDomain(input.message);
       const explicitLocalPart = extractProvisionLocalPart(input.message);
-      toolInput.fromLocalPart =
-        explicitEmailParts?.fromLocalPart ??
-        explicitLocalPart ??
-        asString(toolInput.fromLocalPart);
-      toolInput.domain =
-        explicitEmailParts?.domain ??
-        explicitDomain ??
-        asString(toolInput.domain).toLowerCase();
-      if (!hasExplicitRegistrantSignal(input.message) && !Object.keys(asRecord(toolInput.registrant)).length) {
+      toolInput.fromLocalPart = explicitEmailParts?.fromLocalPart ?? explicitLocalPart ?? "";
+      toolInput.domain = explicitEmailParts?.domain ?? explicitDomain ?? "";
+      if (!hasExplicitRegistrantSignal(input.message)) {
         toolInput.registrant = {};
       }
-    }
-
-    if (
-      hasDelegatedProvisionChoicePermission(input.message) &&
-      (!asString(toolInput.fromLocalPart) || !asString(toolInput.domain))
-    ) {
-      const autoFilled = autoFillProvisionIdentity({
-        brandContext: input.context,
-        brandMemory: input.brandMemory,
-        toolInput,
-      });
-      toolInput.domainMode = normalizeProvisionDomainMode(autoFilled.domainMode);
-      toolInput.fromLocalPart = asString(autoFilled.fromLocalPart);
-      toolInput.domain = asString(autoFilled.domain).toLowerCase();
     }
   }
 
@@ -2801,16 +2021,13 @@ function normalizeRequestedAction(input: {
 
 function filterRequestedActionForMessage(
   requestedAction: OperatorRequestedAction | null,
-  message: string,
-  options: { allowAffirmative?: boolean } = {}
+  message: string
 ) {
   if (!requestedAction) return null;
   const tool = getOperatorToolSpec(requestedAction.toolName);
   if (!tool) return null;
   if (tool.riskLevel === "read") return requestedAction;
-  if (isExplicitActionRequest(message)) return requestedAction;
-  if (options.allowAffirmative && isAffirmativeMessage(message)) return requestedAction;
-  return null;
+  return isExplicitActionRequest(message) ? requestedAction : null;
 }
 
 function buildOperatorPrompt(input: {
@@ -2863,24 +2080,15 @@ function buildOperatorPrompt(input: {
     "If the latest user message is only a casual greeting like hi, hey, or hello, reply like a normal human assistant in 1 or 2 short sentences.",
     "For a casual greeting, do not dump account status and do not propose an action.",
     "Only use toolName values from the provided tool catalog.",
-    "Never invent IDs.",
-    "Do not invent emails or domains unless the user explicitly delegated the choice for provision_mailpool_sender; in that one case you may synthesize a sensible sender identity and new domain candidate from brand context and memory.",
+    "Never invent IDs, emails, or domains that are not in the provided context or the latest user message.",
     "If the user asks to create, update, launch, pause, resume, cancel, send, dismiss, or delete something and there is a matching tool, you may choose that tool after enough inspection.",
     "When matching experiments, campaigns, leads, or reply drafts, prefer the IDs and names in the provided context items.",
     "If there is exactly one obvious running, draft, active, or pending object that matches the user's words, it is okay to target it.",
     "For refresh_mailpool_sender and get_sender_snapshot, prefer using accountId from the context.",
     "For provision_mailpool_sender, include any known fields such as brandId, domain, fromLocalPart, domainMode, and registrant fields.",
-    "If the user says things like `you decide`, `pick one`, or `choose for me` during sender provisioning, you may choose fromLocalPart and domain yourself instead of asking for an exact sender email.",
-    "For create_brand, website is optional.",
-    "If the user names a brand in normal prose, pass that exact brand name in create_brand.input.name.",
-    "If the user explains what the brand does or wants, include that in create_brand.input.notes or create_brand.input.product when useful.",
-    "For create_experiment, if the user describes the offer and audience but does not provide a formal experiment name, synthesize a short clear name and still create it.",
-    "For create_experiment, fill audience and offer from the user's described idea whenever those are clear.",
     "Never claim a change already happened unless the change is present in the tool results so far.",
     "If you need live data, choose a read tool and set done to false.",
     "If you need user input, set done to true, leave toolName empty, and ask only for the missing information.",
-    "When a write request is missing one or two required details, ask for those specific details instead of saying you can't do it.",
-    "If the user asks you to act on something that does not exist yet, say what is missing and ask the next needed question or offer the create step.",
     "If you have enough information to answer with no more tools, set done to true and leave toolName empty.",
     "If you are choosing a write tool, that is the final action for this turn. Set done to true.",
     `Mode: ${input.mode === "recommendation_only" ? "recommendation_only" : "default"}`,
@@ -3027,9 +2235,7 @@ async function planOperatorReplyWithLlm(input: {
       }
 
       if (tool.riskLevel !== "read") {
-        const filteredAction = filterRequestedActionForMessage(normalizedAction, input.message, {
-          allowAffirmative: true,
-        });
+        const filteredAction = filterRequestedActionForMessage(normalizedAction, input.message);
         if (!filteredAction) {
           trace.push({
             step: stepNumber,
@@ -3111,22 +2317,6 @@ function inferActionFromMessage(
   const leadId = resolveLeadId({}, context, input.message);
   const requestedDomain = extractDomain(input.message);
 
-  if (context?.brand.id && looksLikeExperimentCreationRequest(message)) {
-    const draft = synthesizeExperimentDraft({
-      message: input.message,
-      brandName: context.brand.name,
-    });
-    return {
-      toolName: "create_experiment",
-      input: {
-        brandId: context.brand.id,
-        name: draft.name,
-        audience: draft.audience,
-        offer: draft.offer,
-      },
-    };
-  }
-
   if (context?.brand.id && mentionsReferencePronoun(message)) {
     if ((message.includes("pause") || message.includes("resume") || message.includes("cancel")) && asString(brandMemory?.recentSelection.experimentId)) {
       return {
@@ -3158,12 +2348,12 @@ function inferActionFromMessage(
     }
   }
 
-  if (looksLikeBrandCreationRequest(message) && (quoted || requestedDomain) && !looksLikeExperimentCreationRequest(message)) {
+  if (looksLikeBrandCreationRequest(message) && requestedDomain) {
     return {
       toolName: "create_brand",
       input: {
-        name: quoted || requestedDomain,
-        website: requestedDomain ? ensureWebsiteUrl(requestedDomain) : "",
+        name: requestedDomain,
+        website: ensureWebsiteUrl(requestedDomain),
       },
     };
   }
@@ -3559,19 +2749,9 @@ export async function runOperatorChatTurn(input: OperatorChatRequest): Promise<O
     listOperatorMessages(thread.id),
     listOperatorActionsByThread(thread.id),
   ]);
-  const delegatedProvisionContinuation = input.structuredAction
-    ? null
-    : inferDelegatedProvisionContinuation({
-        message: input.message,
-        messages: messageHistory,
-        brandContext,
-        brandMemory,
-        brandId: resolvedBrandId,
-      });
   const continuation = input.structuredAction
     ? null
-    : delegatedProvisionContinuation ??
-      inferContinuationFromPendingExecution({
+    : inferContinuationFromPendingExecution({
         message: input.message,
         messages: messageHistory,
         actions: threadActions,
@@ -3580,13 +2760,7 @@ export async function runOperatorChatTurn(input: OperatorChatRequest): Promise<O
         brandId: resolvedBrandId,
       });
   const effectiveMessage =
-    continuation?.kind === "message_override"
-      ? continuation.message
-      : continuation?.kind === "abandon_pending"
-        ? continuation.message
-        : input.message;
-  const abandonedPendingWithoutNewTopic =
-    continuation?.kind === "abandon_pending" && !effectiveMessage.trim();
+    continuation?.kind === "message_override" ? continuation.message : input.message;
   const structuredAction = input.structuredAction
     ? normalizeRequestedAction({
         raw: input.structuredAction,
@@ -3612,8 +2786,7 @@ export async function runOperatorChatTurn(input: OperatorChatRequest): Promise<O
     ? null
     : continuation?.kind === "confirm_action" ||
         continuation?.kind === "cancel_action" ||
-        continuation?.kind === "message_override" ||
-        abandonedPendingWithoutNewTopic
+        continuation?.kind === "message_override"
       ? null
     : await planOperatorReplyWithLlm({
         brandId: resolvedBrandId,
@@ -3632,15 +2805,13 @@ export async function runOperatorChatTurn(input: OperatorChatRequest): Promise<O
     brandContext,
     brandMemory
   );
-  let requestedAction = structuredAction
+  const requestedAction = structuredAction
     ? structuredAction
     : continuation?.kind === "message_override"
       ? filterRequestedActionForMessage(inferredFallbackAction, effectiveMessage)
     : llmPlan
       ? (
-          filterRequestedActionForMessage(llmPlan.requestedAction, effectiveMessage, {
-            allowAffirmative: true,
-          }) ??
+          filterRequestedActionForMessage(llmPlan.requestedAction, effectiveMessage) ??
           (isExplicitMutationRequest(effectiveMessage)
             ? filterRequestedActionForMessage(inferredFallbackAction, effectiveMessage)
             : null)
@@ -3671,9 +2842,6 @@ export async function runOperatorChatTurn(input: OperatorChatRequest): Promise<O
       ...(continuation?.kind === "cancel_action"
         ? [{ step: "cancel_action", status: "in_progress", actionId: continuation.actionId }]
         : []),
-      ...(continuation?.kind === "abandon_pending" && continuation.actionId
-        ? [{ step: "abandon_pending", status: "in_progress", actionId: continuation.actionId }]
-        : []),
       ...(requestedAction
         ? [{ step: requestedAction.toolName, status: "in_progress" }]
         : []),
@@ -3682,7 +2850,7 @@ export async function runOperatorChatTurn(input: OperatorChatRequest): Promise<O
   runId = run.id;
 
   try {
-    let assistant: OperatorChatAssistantReply = llmPlan?.assistant ?? fallbackAssistant;
+    let assistant: OperatorChatAssistantReply;
     let execution: OperatorExecutionEnvelope | null = buildExecutionEnvelope({ state: "answer_only" });
     const actions: OperatorAction[] = [];
 
@@ -3720,12 +2888,6 @@ export async function runOperatorChatTurn(input: OperatorChatRequest): Promise<O
         runStatus: "completed",
         model: run.model,
       });
-    } else if (continuation?.kind === "abandon_pending" && continuation.actionId) {
-      await cancelOperatorAction({
-        actionId: continuation.actionId,
-        userId: input.userId,
-        note: "Canceled in chat because the user moved on.",
-      });
     } else if (requestedAction) {
       if (resolvedBrandId) {
         await rememberOperatorRecentSelection(resolvedBrandId, {
@@ -3737,89 +2899,8 @@ export async function runOperatorChatTurn(input: OperatorChatRequest): Promise<O
             asString(requestedAction.input.accountId) || asString(requestedAction.input.senderAccountId),
         });
       }
-      let tool = getOperatorToolSpec(requestedAction.toolName);
-      let brandCreationBlocked = false;
-      if (tool?.name === "create_brand") {
-        const existingBrand = await findExistingBrandByReference({
-          brandContext,
-          toolInput: requestedAction.input,
-          message: effectiveMessage,
-        });
-        if (existingBrand && looksLikeExperimentCreationRequest(effectiveMessage)) {
-          const draft = synthesizeExperimentDraft({
-            message: effectiveMessage,
-            brandName: existingBrand.name,
-          });
-          requestedAction = {
-            toolName: "create_experiment",
-            input: {
-              brandId: existingBrand.id,
-              name: draft.name,
-              audience: draft.audience,
-              offer: draft.offer,
-            },
-          };
-          tool = getOperatorToolSpec(requestedAction.toolName);
-        } else if (existingBrand) {
-          assistant = {
-            summary: `${existingBrand.name} already exists, so I didn't create a duplicate brand.`,
-            findings: [],
-            recommendations: [],
-          };
-          execution = buildExecutionEnvelope({ state: "answer_only" });
-          brandCreationBlocked = true;
-        }
-      }
-      if (!requestedAction) {
-        throw new Error("Operator requested action became empty unexpectedly.");
-      }
-      let provisionDomainBlocked = false;
-      if (tool?.name === "provision_mailpool_sender") {
-        const resolvedProvision = await resolveMailpoolProvisionDomain({
-          message: effectiveMessage,
-          toolInput: requestedAction.input,
-        });
-        requestedAction.input = resolvedProvision.toolInput;
-        if (
-          normalizeProvisionDomainMode(requestedAction.input.domainMode) === "register" &&
-          asString(requestedAction.input.fromLocalPart) &&
-          asString(requestedAction.input.domain) &&
-          resolvedProvision.selection &&
-          !resolvedProvision.selection.available
-        ) {
-          const checkedDomains = Array.isArray(requestedAction.input.checkedDomains)
-            ? requestedAction.input.checkedDomains.map((entry) => asString(entry)).filter(Boolean)
-            : [];
-          assistant = {
-            summary:
-              checkedDomains.length > 1
-                ? `I couldn't find an available domain to buy from the names I checked. Give me a different sender email, or say \`you decide\` and I'll try a wider set of alternatives.`
-                : `I checked ${asString(requestedAction.input.domain)}, and it's not available. Give me a different sender email, or say \`you decide\` and I'll pick other domains for you.`,
-            findings: [],
-            recommendations: [],
-          };
-          execution = buildNeedInfoEnvelope({
-            toolName: tool.name,
-            toolInput: requestedAction.input,
-            preview: buildToolPreview(tool, requestedAction.input),
-            missingFields: ["available domain"],
-            questions: buildProvisionQuestions({
-              hasMailpoolInventory: (brandContext?.provisioning.mailpoolDomainInventoryCount ?? 0) > 0,
-              domainMode: normalizeProvisionDomainMode(requestedAction.input.domainMode),
-              missingFields: ["available domain"],
-            }),
-            forms: buildProvisionForms({
-              brandContext,
-              brandMemory,
-              toolInput: requestedAction.input,
-              missingFields: ["available domain"],
-            }),
-          });
-          provisionDomainBlocked = true;
-        }
-      }
-      if (brandCreationBlocked) {
-      } else if (!tool) {
+      const tool = getOperatorToolSpec(requestedAction.toolName);
+      if (!tool) {
         assistant = {
           summary: `I understand what you're asking for, but I can't run that yet because the tool \`${requestedAction.toolName}\` is not registered.`,
           findings: [],
@@ -3831,59 +2912,6 @@ export async function runOperatorChatTurn(input: OperatorChatRequest): Promise<O
           toolInput: requestedAction.input,
           error: assistant.summary,
         });
-      } else if (provisionDomainBlocked) {
-      } else if (tool.riskLevel === "read" && isExplicitMutationRequest(effectiveMessage)) {
-        const plannerNeedInfo = inferPlannerMissingInfoTurn({
-          message: effectiveMessage,
-          planner: llmPlan,
-          brandContext,
-          brandMemory,
-        });
-        const missingObjectFollowUp = inferMissingObjectFollowUp({
-          message: effectiveMessage,
-          brandContext,
-        });
-        if (plannerNeedInfo) {
-          assistant = plannerNeedInfo.assistant;
-          execution = plannerNeedInfo.execution;
-        } else if (missingObjectFollowUp) {
-          assistant = missingObjectFollowUp.assistant;
-          execution = missingObjectFollowUp.execution;
-        } else if (llmPlan?.assistant && assistantLooksLikeNeedInfo(llmPlan.assistant)) {
-          assistant = llmPlan.assistant;
-          execution = buildNeedInfoEnvelope({
-            missingFields: [],
-          });
-        } else {
-          assistant = makeUnexecutedActionAssistant(effectiveMessage, llmPlan?.assistant ?? fallbackAssistant);
-          execution = buildNeedInfoEnvelope({
-            missingFields: [],
-          });
-        }
-      } else if (tool.name === "create_brand" && !asString(requestedAction.input.name)) {
-        assistant = {
-          summary: "I can create the brand, but I still need the brand name.",
-          findings: [],
-          recommendations: [],
-        };
-        execution = buildNeedInfoEnvelope({
-          toolName: tool.name,
-          toolInput: requestedAction.input,
-          preview: buildToolPreview(tool, requestedAction.input),
-          missingFields: ["brand name"],
-        });
-      } else if (tool.name === "create_experiment" && !asString(requestedAction.input.name)) {
-        assistant = {
-          summary: "I can create the experiment, but I still need the experiment name.",
-          findings: [],
-          recommendations: [],
-        };
-        execution = buildNeedInfoEnvelope({
-          toolName: tool.name,
-          toolInput: requestedAction.input,
-          preview: buildToolPreview(tool, requestedAction.input),
-          missingFields: ["experiment name"],
-        });
       } else if (
         tool.name === "provision_mailpool_sender" &&
         (!asString(requestedAction.input.domain) || !asString(requestedAction.input.fromLocalPart))
@@ -3891,8 +2919,8 @@ export async function runOperatorChatTurn(input: OperatorChatRequest): Promise<O
         const hasInventory = (brandContext?.provisioning.mailpoolDomainInventoryCount ?? 0) > 0;
         assistant = {
           summary: hasInventory
-            ? `I can add the sender. Tell me the exact sender email you want, for example \`marco@getselffunded.com\`, and whether I should use an existing Mailpool domain or buy a new one. If you want me to choose, say \`you decide\`.`
-            : "I can add the sender. Tell me the exact sender email you want, for example `marco@getselffunded.com`. If this needs a new domain, say `buy` or `register`, or say `you decide` and I'll pick a sensible sender identity.",
+            ? `I can add the sender. Tell me the exact sender email you want, for example \`marco@getselffunded.com\`, and whether I should use an existing Mailpool domain or buy a new one.`
+            : "I can add the sender. Tell me the exact sender email you want, for example `marco@getselffunded.com`. If this needs a new domain, say `buy` or `register` and I'll prepare that flow.",
           findings: [],
           recommendations: [],
         };
@@ -4123,40 +3151,12 @@ export async function runOperatorChatTurn(input: OperatorChatRequest): Promise<O
       }
     } else {
       const disambiguation = inferDisambiguationTurn({
-        message: effectiveMessage || input.message,
+        message: input.message,
         brandContext,
       });
-      const plannerNeedInfo = inferPlannerMissingInfoTurn({
-        message: effectiveMessage || input.message,
-        planner: llmPlan,
-        brandContext,
-        brandMemory,
-      });
-      const missingObjectFollowUp = inferMissingObjectFollowUp({
-        message: effectiveMessage || input.message,
-        brandContext,
-      });
-      if (plannerNeedInfo) {
-        assistant = plannerNeedInfo.assistant;
-        execution = plannerNeedInfo.execution;
-      } else if (missingObjectFollowUp) {
-        assistant = missingObjectFollowUp.assistant;
-        execution = missingObjectFollowUp.execution;
-      } else if (disambiguation) {
+      if (disambiguation) {
         assistant = disambiguation.assistant;
         execution = disambiguation.execution;
-      } else if (abandonedPendingWithoutNewTopic) {
-        assistant = {
-          summary: "Okay. I dropped that. What do you want to talk about instead?",
-          findings: [],
-          recommendations: [],
-        };
-        execution = buildExecutionEnvelope({ state: "answer_only" });
-      } else if (isExplicitMutationRequest(effectiveMessage) && llmPlan?.assistant && assistantLooksLikeNeedInfo(llmPlan.assistant)) {
-        assistant = llmPlan.assistant;
-        execution = buildNeedInfoEnvelope({
-          missingFields: [],
-        });
       } else {
         assistant = makeUnexecutedActionAssistant(effectiveMessage, llmPlan?.assistant ?? fallbackAssistant);
         execution = isExplicitMutationRequest(effectiveMessage)

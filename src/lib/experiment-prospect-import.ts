@@ -18,6 +18,7 @@ import {
   resolveEmailFinderApiBaseUrl,
   type ApifyLead,
 } from "@/lib/outreach-providers";
+import { assessReportCommentLeadQuality } from "@/lib/report-comment-lead-quality";
 
 type SelectionLeadCandidate = {
   rowNumber: number;
@@ -52,13 +53,37 @@ export type ExperimentSendableLeadSummary = {
   runsChecked: number;
 };
 
-const NON_COMPANY_PROFILE_ROOTS = [
+export const NON_COMPANY_PROFILE_ROOTS = [
   "linkedin.com",
   "linkedin.co",
   "facebook.com",
   "x.com",
   "twitter.com",
   "instagram.com",
+  "malt.com",
+  "malt.fr",
+  "malt.uk",
+  "upwork.com",
+  "fiverr.com",
+  "contra.com",
+  "freelancer.com",
+  "freelancermap.de",
+  "freelancermap.com",
+  "freelancermap.at",
+  "peopleperhour.com",
+  "xing.com",
+  "xing.de",
+  "clutch.co",
+  "sortlist.com",
+  "sortlist.fr",
+  "agencyspotter.com",
+  "designrush.com",
+  "goodfirms.co",
+  "bark.com",
+  "semrush.com",
+  "hubspot.com",
+  "theorg.com",
+  "twine.net",
 ];
 
 function normalizeCell(value: unknown) {
@@ -70,7 +95,7 @@ function normalizeHeaderKey(value: string) {
   return normalizeCell(value).toLowerCase().replace(/[^a-z0-9]+/g, "");
 }
 
-function isNonCompanyProfileDomain(domain: string) {
+export function isNonCompanyProfileDomain(domain: string) {
   const normalized = domain.trim().toLowerCase().replace(/^www\./, "").replace(/\.+$/, "");
   if (!normalized) return false;
   return NON_COMPANY_PROFILE_ROOTS.some(
@@ -78,7 +103,7 @@ function isNonCompanyProfileDomain(domain: string) {
   );
 }
 
-function normalizeDomainCandidate(value: unknown) {
+export function normalizeDomainCandidate(value: unknown) {
   const raw = String(value ?? "").trim();
   if (!raw) return "";
   if (raw.includes("@")) {
@@ -109,6 +134,30 @@ function domainFromEmailOrUrl(email: string, source: string) {
 
 function normalizeCompanyName(value: string) {
   return normalizeCell(value).toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+}
+
+function titleCaseWords(value: string) {
+  return value
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(" ");
+}
+
+export function deriveCompanyFromDomain(domain: string) {
+  const normalized = normalizeDomainCandidate(domain);
+  if (!normalized || isNonCompanyProfileDomain(normalized)) {
+    return "";
+  }
+
+  const hostParts = normalized.split(".");
+  const root = hostParts.length > 1 ? hostParts[hostParts.length - 2] : hostParts[0];
+  const humanized = root.replace(/[-_]+/g, " ").replace(/\d+/g, " ").replace(/\s+/g, " ").trim();
+  if (!humanized) {
+    return "";
+  }
+
+  return titleCaseWords(humanized);
 }
 
 function companyKeyFromLead(input: {
@@ -362,16 +411,34 @@ export async function importExperimentProspectRows(input: {
       return [];
     }
 
-    return [
-      {
-        email,
-        name: normalizeCell(lead.name),
-        company: normalizeCell(lead.company),
-        title: normalizeCell(lead.title),
-        domain: normalizeDomainCandidate(lead.domain || email),
-        sourceUrl: normalizeCell(lead.sourceUrl),
-      } satisfies ImportedLead,
-    ];
+    const domain = normalizeDomainCandidate(lead.domain || email);
+    if (!domain || isNonCompanyProfileDomain(domain)) {
+      const label = candidate?.lead.name || candidate?.lead.company || domain || "this row";
+      parseErrors.push(
+        `Row ${candidate?.rowNumber ?? index + 1}: skipped ${label} because the source domain is a marketplace, directory, or profile host.`
+      );
+      return [];
+    }
+
+    const importedLead = {
+      email,
+      name: normalizeCell(lead.name),
+      company: normalizeCell(lead.company) || deriveCompanyFromDomain(domain),
+      title: normalizeCell(lead.title),
+      domain,
+      sourceUrl: normalizeCell(lead.sourceUrl),
+    } satisfies ImportedLead;
+
+    const quality = assessReportCommentLeadQuality(experiment, importedLead);
+    if (!quality.keep) {
+      const label = importedLead.name || importedLead.company || importedLead.domain || "this row";
+      parseErrors.push(
+        `Row ${candidate?.rowNumber ?? index + 1}: skipped ${label} because it does not look like a strong expert-fit lead for this report (${quality.reason}).`
+      );
+      return [];
+    }
+
+    return [importedLead];
   });
 
   if (!finalLeads.length) {
@@ -545,8 +612,13 @@ export async function countExperimentSendableLeadContacts(
   const emails = new Set<string>();
 
   for (const lead of leadLists.flat()) {
+    if (lead.status === "suppressed") continue;
     const email = extractFirstEmailAddress(lead.email).toLowerCase();
     if (!email) continue;
+    const domain = normalizeDomainCandidate(lead.domain || email);
+    if (!domain || isNonCompanyProfileDomain(domain)) {
+      continue;
+    }
     emails.add(email);
   }
 

@@ -18,7 +18,11 @@ export type LlmTask =
   | "lead_quality_policy"
   | "lead_chain_selection"
   | "company_domain_matcher"
-  | "reply_policy_evaluation";
+  | "reply_policy_evaluation"
+  | "reply_thread_state_compile"
+  | "reply_thread_draft_generate"
+  | "inbox_eval_roleplay"
+  | "inbox_eval_score";
 
 type ModelTier = "fast" | "default" | "high";
 
@@ -45,6 +49,10 @@ const TASK_BASE_TIER: Record<LlmTask, ModelTier> = {
   lead_chain_selection: "high",
   company_domain_matcher: "fast",
   reply_policy_evaluation: "high",
+  reply_thread_state_compile: "high",
+  reply_thread_draft_generate: "high",
+  inbox_eval_roleplay: "high",
+  inbox_eval_score: "high",
 };
 
 function normalizeModelName(value: unknown) {

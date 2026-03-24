@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
-import { runOutreachTick } from "@/lib/outreach-runtime";
+import { runInboxSyncTick, runOutreachTick } from "@/lib/outreach-runtime";
 import { runExperimentSendablePrepTick } from "@/lib/experiment-sendable-prep";
+import { runSenderLaunchTick } from "@/lib/sender-launch";
 
 function isAuthorized(request: Request) {
   const token =
@@ -17,14 +18,17 @@ async function handleTick(request: Request) {
   }
 
   const requestOrigin = new URL(request.url).origin;
-  const [outreach, sendablePrep] = await Promise.all([
-    runOutreachTick(30),
-    runExperimentSendablePrepTick(8, {
-      requestOrigin,
-    }),
-  ]);
+  const outreachPromise = runOutreachTick(30);
+  const sendablePrepPromise = runExperimentSendablePrepTick(8, {
+    requestOrigin,
+  });
+  const inboxSync = await runInboxSyncTick(12);
+  const senderLaunch = await runSenderLaunchTick(12, {
+    mailboxSync: false,
+  });
+  const [outreach, sendablePrep] = await Promise.all([outreachPromise, sendablePrepPromise]);
 
-  return NextResponse.json({ ok: true, outreach, sendablePrep });
+  return NextResponse.json({ ok: true, outreach, inboxSync, sendablePrep, senderLaunch });
 }
 
 export async function GET(request: Request) {

@@ -20,6 +20,7 @@ import type {
   OutreachMessage,
   OutreachRun,
   ReplyThread,
+  ReplyThreadStateDecision,
   SourcingActorMemory,
   SourcingChainDecision,
   SourcingChainStep,
@@ -47,6 +48,7 @@ import {
   generateConversationPromptMessage,
   type ConversationPromptRenderContext,
 } from "@/lib/conversation-prompt-render";
+import { generateReplyThreadDraft, syncReplyThreadState } from "@/lib/reply-thread-state";
 import {
   createOutreachEvent,
   createOutreachRun,
@@ -63,7 +65,9 @@ import {
   claimQueuedOutreachJob,
   getBrandOutreachAssignment,
   findDeliverabilityProbeRun,
+  findReplyMessageByProviderMessageId,
   getDeliverabilityProbeRun,
+  getInboxSyncState,
   getOutreachAccount,
   getOutreachAccountSecrets,
   getOutreachRun,
@@ -97,11 +101,13 @@ import {
   updateSourcingChainDecision,
   updateRunLead,
   updateRunMessage,
+  upsertInboxSyncState,
   upsertSourcingActorMemory,
   upsertSourcingActorProfiles,
   upsertRunLeads,
   type OutreachJob,
 } from "@/lib/outreach-data";
+import { assessReportCommentLeadQuality } from "@/lib/report-comment-lead-quality";
 import {
   enrichLeadsWithEmailFinderBatch,
   evaluateActorCompatibility,
@@ -133,7 +139,7 @@ import {
 } from "@/lib/outreach-account-helpers";
 import { admitCustomerIoProfileForSend } from "@/lib/outreach-customerio-budget";
 import { resolveLlmModel } from "@/lib/llm-router";
-import { inspectMailboxPlacement, type MailboxPlacementVerdict } from "@/lib/mailbox-imap";
+import { inspectMailboxPlacement, listInboxMessages, type MailboxPlacementVerdict } from "@/lib/mailbox-imap";
 import {
   getOutreachProvisioningSettings,
   getOutreachProvisioningSettingsSecrets,
@@ -208,6 +214,78 @@ type ReplyPolicyResult = {
   guidance: string[];
   prohibited: string[];
 };
+
+function replyPolicyDecisionHint(policy: ReplyPolicyResult): Partial<ReplyThreadStateDecision> {
+  const recommendedMove =
+    policy.intent === "unsubscribe"
+      ? "respect_opt_out"
+      : policy.action === "manual_review"
+        ? "handoff_to_human"
+        : policy.action === "no_reply"
+          ? "stay_silent"
+          : policy.intent === "question"
+            ? "answer_question"
+            : policy.intent === "interest"
+              ? "advance_next_step"
+              : policy.intent === "objection"
+                ? "reframe_objection"
+                : "ask_qualifying_question";
+
+  const objectiveForThisTurn =
+    recommendedMove === "respect_opt_out"
+      ? "Stop outreach and close the thread cleanly."
+      : recommendedMove === "handoff_to_human"
+        ? "Escalate the thread for human judgment before responding."
+        : recommendedMove === "stay_silent"
+          ? "Avoid a robotic reply when there is no meaningful next move."
+          : recommendedMove === "answer_question"
+            ? "Answer the lead directly and keep the conversation moving."
+            : recommendedMove === "advance_next_step"
+              ? "Make the next step easy to accept."
+              : recommendedMove === "reframe_objection"
+                ? "Address the objection without overselling."
+                : "Move the thread forward with one useful, low-friction response.";
+
+  return {
+    recommendedMove,
+    objectiveForThisTurn,
+    rationale: policy.reason,
+    confidence: policy.confidence,
+    autopilotOk: policy.action === "reply" && policy.autoSendAllowed,
+    manualReviewReason: policy.action === "manual_review" ? policy.reason : "",
+  };
+}
+
+function normalizeReplyThreadSubject(value: string) {
+  return value.replace(/^\s*((re|fw|fwd)\s*:\s*)+/gi, "").replace(/\s+/g, " ").trim().toLowerCase();
+}
+
+function findMatchingReplyThread(input: {
+  threads: ReplyThread[];
+  subject: string;
+  sourceType: ReplyThread["sourceType"];
+  runId?: string;
+  leadId?: string;
+  mailboxAccountId?: string;
+  contactEmail?: string;
+}) {
+  const normalizedSubject = normalizeReplyThreadSubject(input.subject);
+  return (
+    input.threads.find((thread) => {
+      if (thread.sourceType !== input.sourceType) return false;
+      if (normalizeReplyThreadSubject(thread.subject) !== normalizedSubject) return false;
+      if (input.sourceType === "outreach") {
+        return thread.runId === (input.runId ?? "") && thread.leadId === (input.leadId ?? "");
+      }
+      return (
+        thread.contactEmail.trim().toLowerCase() === String(input.contactEmail ?? "").trim().toLowerCase() &&
+        (!thread.mailboxAccountId ||
+          !(input.mailboxAccountId ?? "").trim() ||
+          thread.mailboxAccountId === (input.mailboxAccountId ?? ""))
+      );
+    }) ?? null
+  );
+}
 
 type DeliverabilityProbeStage = "send" | "poll";
 type DeliverabilityProbeVariant = "baseline" | "production";
@@ -1167,6 +1245,13 @@ const NON_COMPANY_PROFILE_DOMAIN_ROOTS = new Set([
   "x.com",
   "twitter.com",
   "instagram.com",
+  "malt.com",
+  "malt.fr",
+  "malt.uk",
+  "freelancermap.de",
+  "freelancermap.com",
+  "theorg.com",
+  "twine.net",
 ]);
 
 type ExaPeopleSourcingResult = {
@@ -9032,6 +9117,16 @@ function supportsMailbox(account: ResolvedAccount) {
   return account.accountType !== "delivery";
 }
 
+function supportsAutomaticInboxSync(account: ResolvedAccount) {
+  return (
+    supportsMailbox(account) &&
+    account.status === "active" &&
+    account.config.mailbox.status === "connected" &&
+    Boolean(account.config.mailbox.email.trim()) &&
+    Boolean(account.config.mailbox.host.trim())
+  );
+}
+
 function isDedicatedDeliverabilityMonitor(account: ResolvedAccount) {
   const label = account.name.trim().toLowerCase();
   return label.startsWith("deliverability ");
@@ -10571,6 +10666,28 @@ async function ensureBrandAccount(brandId: string): Promise<{
 async function resolveMailboxAccountForRun(run: { brandId: string; accountId: string }) {
   const assignment = await getBrandOutreachAssignment(run.brandId);
   const mailboxAccountId = assignment?.mailboxAccountId || assignment?.accountId || run.accountId;
+  const account = await getOutreachAccount(mailboxAccountId);
+  if (!account || account.status !== "active" || !supportsMailbox(account)) {
+    return null;
+  }
+  const secrets = await getOutreachAccountSecrets(mailboxAccountId);
+  if (!secrets) {
+    return null;
+  }
+  return { account, secrets };
+}
+
+async function resolveMailboxAccountForBrand(input: {
+  brandId: string;
+  preferredMailboxAccountId?: string;
+}) {
+  const assignment = await getBrandOutreachAssignment(input.brandId);
+  const mailboxAccountId =
+    input.preferredMailboxAccountId?.trim() ||
+    assignment?.mailboxAccountId ||
+    assignment?.accountId ||
+    "";
+  if (!mailboxAccountId) return null;
   const account = await getOutreachAccount(mailboxAccountId);
   if (!account || account.status !== "active" || !supportsMailbox(account)) {
     return null;
@@ -13766,6 +13883,11 @@ async function finishSourcingWithLeads(
     emailEnrichment?: ExaPeopleSourcingResult["emailEnrichment"] | null;
   } = {}
 ) {
+  const runtimeExperiment = await getExperimentRecordByRuntimeRef(
+    run.brandId,
+    run.campaignId,
+    run.experimentId
+  );
   const recentRuns = (await listCampaignRuns(run.brandId, run.campaignId)).filter((item) => {
     if (item.id === run.id) return false;
     const ageMs = Date.now() - new Date(item.createdAt).getTime();
@@ -13787,6 +13909,7 @@ async function finishSourcingWithLeads(
     placeholder_domain: 0,
     role_account: 0,
     policy_rejected: 0,
+    report_comment_rejected: 0,
     verification_unavailable: 0,
   };
 
@@ -13851,6 +13974,29 @@ async function finishSourcingWithLeads(
       if (!decision.accepted) {
         suppressionCounts.policy_rejected += 1;
         policyRejections.push(decision);
+        continue;
+      }
+    }
+    if (runtimeExperiment) {
+      const quality = assessReportCommentLeadQuality(runtimeExperiment, {
+        name: lead.name,
+        company: lead.company,
+        title: lead.title,
+        domain: normalizedDomain,
+        sourceUrl: lead.sourceUrl,
+        email: persistenceEmail,
+      });
+      if (!quality.keep) {
+        suppressionCounts.report_comment_rejected += 1;
+        policyRejections.push({
+          email: persistenceEmail,
+          accepted: false,
+          confidence: 1,
+          reason: quality.reason,
+          details: {
+            qualityProfile: "report_comment_expert_fit",
+          },
+        });
         continue;
       }
     }
@@ -15265,6 +15411,94 @@ export async function runOutreachTick(
   };
 }
 
+export async function runInboxSyncTick(limit = 12): Promise<{
+  brandsChecked: number;
+  eligibleBrands: number;
+  mailboxesSynced: number;
+  importedInboxMessages: number;
+  duplicateMessages: number;
+  skippedMessages: number;
+  failed: number;
+  errors: Array<{ brandId: string; mailboxAccountId: string; error: string }>;
+}> {
+  const [brands, accounts] = await Promise.all([listBrands(), listOutreachAccounts()]);
+  const accountById = new Map(accounts.map((account) => [account.id, account] as const));
+
+  const candidateRows = (
+    await Promise.all(
+      brands.map(async (brand) => {
+        const assignment = await getBrandOutreachAssignment(brand.id);
+        const mailboxAccountId = String(
+          assignment?.mailboxAccountId ?? assignment?.accountId ?? ""
+        ).trim();
+        if (!mailboxAccountId) return null;
+        const account = accountById.get(mailboxAccountId);
+        if (!account || !supportsAutomaticInboxSync(account)) return null;
+        const secrets = await getOutreachAccountSecrets(mailboxAccountId);
+        if (!secrets?.mailboxPassword.trim()) return null;
+        const syncState = await getInboxSyncState(brand.id, mailboxAccountId);
+        const syncedAt = Date.parse(syncState?.lastSyncedAt || syncState?.updatedAt || "");
+        return {
+          brandId: brand.id,
+          mailboxAccountId,
+          lastSyncedAtMs: Number.isFinite(syncedAt) ? syncedAt : 0,
+        };
+      })
+    )
+  )
+    .filter((row): row is { brandId: string; mailboxAccountId: string; lastSyncedAtMs: number } => Boolean(row))
+    .sort((left, right) => {
+      if (left.lastSyncedAtMs !== right.lastSyncedAtMs) {
+        return left.lastSyncedAtMs - right.lastSyncedAtMs;
+      }
+      if (left.brandId !== right.brandId) {
+        return left.brandId.localeCompare(right.brandId);
+      }
+      return left.mailboxAccountId.localeCompare(right.mailboxAccountId);
+    })
+    .slice(0, Math.max(1, Math.min(100, Math.round(Number(limit) || 12))));
+
+  let mailboxesSynced = 0;
+  let importedInboxMessages = 0;
+  let duplicateMessages = 0;
+  let skippedMessages = 0;
+  let failed = 0;
+  const errors: Array<{ brandId: string; mailboxAccountId: string; error: string }> = [];
+
+  for (const candidate of candidateRows) {
+    const result = await syncBrandInboxMailbox({
+      brandId: candidate.brandId,
+      mailboxAccountId: candidate.mailboxAccountId,
+      maxMessages: 25,
+    });
+    if (result.ok) {
+      mailboxesSynced += 1;
+      importedInboxMessages += result.importedCount;
+      duplicateMessages += result.duplicateCount;
+      skippedMessages += result.skippedCount;
+      continue;
+    }
+
+    failed += 1;
+    errors.push({
+      brandId: candidate.brandId,
+      mailboxAccountId: candidate.mailboxAccountId,
+      error: result.reason,
+    });
+  }
+
+  return {
+    brandsChecked: brands.length,
+    eligibleBrands: candidateRows.length,
+    mailboxesSynced,
+    importedInboxMessages,
+    duplicateMessages,
+    skippedMessages,
+    failed,
+    errors,
+  };
+}
+
 export async function updateRunControl(input: {
   brandId: string;
   campaignId: string;
@@ -15514,12 +15748,13 @@ export async function ingestInboundReply(input: {
   });
 
   const { threads } = await listReplyThreadsByBrand(brandId);
-  let thread = threads.find(
-    (item) =>
-      item.runId === run.id &&
-      item.leadId === lead.id &&
-      item.subject.trim().toLowerCase() === normalizedSubject.toLowerCase()
-  );
+  let thread = findMatchingReplyThread({
+    threads,
+    sourceType: "outreach",
+    runId: run.id,
+    leadId: lead.id,
+    subject: normalizedSubject,
+  });
 
   if (!thread) {
     thread = await createReplyThread({
@@ -15527,6 +15762,10 @@ export async function ingestInboundReply(input: {
       campaignId: run.campaignId,
       runId: run.id,
       leadId: lead.id,
+      sourceType: "outreach",
+      contactEmail: lead.email,
+      contactName: resolvedLeadName || lead.name,
+      contactCompany: lead.company ?? "",
       subject: normalizedSubject,
       sentiment: replyPolicy.sentiment,
       intent: replyPolicy.intent,
@@ -15538,6 +15777,9 @@ export async function ingestInboundReply(input: {
       intent: replyPolicy.intent,
       status: replyPolicy.closeThread ? "closed" : "open",
       lastMessageAt: nowIso(),
+      contactEmail: lead.email,
+      contactName: resolvedLeadName || lead.name,
+      contactCompany: lead.company ?? "",
     });
     if (updated) {
       thread = updated;
@@ -15944,12 +16186,351 @@ export async function ingestInboundReply(input: {
     await createOutreachEvent({ runId: run.id, eventType: "reply_draft_created", payload: { draftId } });
   }
 
+  try {
+    await syncReplyThreadState({
+      threadId: thread.id,
+      decisionHint: replyPolicyDecisionHint(replyPolicy),
+    });
+  } catch (error) {
+    console.error("failed_to_sync_reply_thread_state", {
+      threadId: thread.id,
+      error: error instanceof Error ? error.message : String(error ?? "unknown_error"),
+    });
+  }
+
   return {
     ok: true,
     threadId: thread.id,
     draftId,
     reason: "Reply ingested",
   };
+}
+
+export async function ingestBrandInboxMessage(input: {
+  brandId: string;
+  mailboxAccountId?: string;
+  threadId?: string;
+  sourceType?: ReplyThread["sourceType"];
+  from: string;
+  to: string;
+  subject: string;
+  body: string;
+  providerMessageId?: string;
+  contactName?: string;
+  contactCompany?: string;
+}): Promise<{ ok: boolean; threadId: string; draftId: string; reason: string }> {
+  const brand = await getBrandById(input.brandId);
+  if (!brand) {
+    return { ok: false, threadId: "", draftId: "", reason: "Brand not found" };
+  }
+
+  const normalizedFrom = extractFirstEmailAddress(input.from) || input.from.trim().toLowerCase();
+  const normalizedTo = extractFirstEmailAddress(input.to) || input.to.trim().toLowerCase();
+  const normalizedSubject = input.subject.trim();
+  const normalizedBody = input.body.trim();
+  const contactName = input.contactName?.trim() || normalizedFrom;
+  const contactCompany = input.contactCompany?.trim() || "";
+  const threadSourceType = input.sourceType === "eval" ? "eval" : "mailbox";
+
+  const automated = detectAutomatedReply({
+    from: input.from,
+    subject: normalizedSubject,
+    body: normalizedBody,
+  });
+  if (automated.skip) {
+    return {
+      ok: true,
+      threadId: "",
+      draftId: "",
+      reason: automated.reason,
+    };
+  }
+
+  const mailbox = await resolveMailboxAccountForBrand({
+    brandId: brand.id,
+    preferredMailboxAccountId: input.mailboxAccountId,
+  });
+  const replyPolicy = await evaluateReplyPolicy({
+    brandName: brand.name,
+    brandWebsite: brand.website,
+    campaignName: "",
+    experimentName: "",
+    experimentOffer: "",
+    experimentAudience: "",
+    experimentNotes: "",
+    from: input.from,
+    to: input.to,
+    subject: normalizedSubject,
+    body: normalizedBody,
+    leadName: contactName,
+    leadEmail: normalizedFrom,
+    leadCompany: contactCompany,
+  });
+
+  const { threads } = await listReplyThreadsByBrand(brand.id);
+  let thread = input.threadId?.trim() ? await getReplyThread(input.threadId.trim()) : null;
+  if (thread && thread.brandId !== brand.id) {
+    return { ok: false, threadId: "", draftId: "", reason: "Thread/brand mismatch" };
+  }
+  if (!thread) {
+    thread = findMatchingReplyThread({
+      threads,
+      sourceType: threadSourceType,
+      mailboxAccountId: mailbox?.account.id || input.mailboxAccountId || "",
+      contactEmail: normalizedFrom,
+      subject: normalizedSubject,
+    });
+  }
+
+  if (!thread) {
+    thread = await createReplyThread({
+      brandId: brand.id,
+      sourceType: threadSourceType,
+      mailboxAccountId: mailbox?.account.id || input.mailboxAccountId || "",
+      contactEmail: normalizedFrom,
+      contactName,
+      contactCompany,
+      subject: normalizedSubject,
+      sentiment: replyPolicy.sentiment,
+      intent: replyPolicy.intent,
+      status: replyPolicy.closeThread ? "closed" : "new",
+    });
+  } else {
+    const updated = await updateReplyThread(thread.id, {
+      sourceType: threadSourceType,
+      mailboxAccountId: mailbox?.account.id || thread.mailboxAccountId,
+      contactEmail: normalizedFrom || thread.contactEmail,
+      contactName: contactName || thread.contactName,
+      contactCompany: contactCompany || thread.contactCompany,
+      sentiment: replyPolicy.sentiment,
+      intent: replyPolicy.intent,
+      status: replyPolicy.closeThread ? "closed" : "open",
+      lastMessageAt: nowIso(),
+    });
+    if (updated) {
+      thread = updated;
+    }
+  }
+
+  await createReplyMessage({
+    threadId: thread.id,
+    runId: "",
+    direction: "inbound",
+    from: normalizedFrom || input.from.trim(),
+    to: normalizedTo || input.to.trim(),
+    subject: normalizedSubject,
+    body: normalizedBody,
+    providerMessageId: input.providerMessageId ?? "",
+  });
+
+  let syncedState = null;
+  try {
+    syncedState = await syncReplyThreadState({
+      threadId: thread.id,
+    });
+  } catch (error) {
+    console.error("failed_to_sync_reply_thread_state", {
+      threadId: thread.id,
+      error: error instanceof Error ? error.message : String(error ?? "unknown_error"),
+    });
+  }
+
+  let draftId = "";
+  const shouldDraft =
+    syncedState
+      ? !["stay_silent", "respect_opt_out"].includes(syncedState.latestDecision.recommendedMove)
+      : replyPolicy.action !== "no_reply" && replyPolicy.intent !== "unsubscribe";
+  if (shouldDraft) {
+    const draft = await generateReplyThreadDraft({ threadId: thread.id });
+    draftId = draft?.id ?? "";
+  }
+
+  return {
+    ok: true,
+    threadId: thread.id,
+    draftId,
+    reason: draftId ? "Inbox message ingested and drafted" : "Inbox message ingested",
+  };
+}
+
+export async function syncBrandInboxMailbox(input: {
+  brandId: string;
+  mailboxAccountId?: string;
+  maxMessages?: number;
+}): Promise<{
+  ok: boolean;
+  reason: string;
+  mailboxAccountId: string;
+  mailboxName: string;
+  importedCount: number;
+  duplicateCount: number;
+  skippedCount: number;
+  lastInboxUid: number;
+  threadIds: string[];
+}> {
+  const brand = await getBrandById(input.brandId);
+  if (!brand) {
+    return {
+      ok: false,
+      reason: "Brand not found",
+      mailboxAccountId: "",
+      mailboxName: "",
+      importedCount: 0,
+      duplicateCount: 0,
+      skippedCount: 0,
+      lastInboxUid: 0,
+      threadIds: [],
+    };
+  }
+
+  const mailbox = await resolveMailboxAccountForBrand({
+    brandId: brand.id,
+    preferredMailboxAccountId: input.mailboxAccountId,
+  });
+  if (!mailbox) {
+    return {
+      ok: false,
+      reason: "Brand reply mailbox account missing or invalid",
+      mailboxAccountId: "",
+      mailboxName: "",
+      importedCount: 0,
+      duplicateCount: 0,
+      skippedCount: 0,
+      lastInboxUid: 0,
+      threadIds: [],
+    };
+  }
+
+  const mailboxPassword = mailbox.secrets.mailboxPassword.trim();
+  const mailboxHost = mailbox.account.config.mailbox.host.trim();
+  const mailboxEmail = mailbox.account.config.mailbox.email.trim();
+  const mailboxName = "INBOX";
+  const existingSyncState = await getInboxSyncState(brand.id, mailbox.account.id);
+
+  if (!mailboxHost || !mailboxEmail || !mailboxPassword) {
+    const reason = "Mailbox polling requires an IMAP host, mailbox email, and mailbox password";
+    await upsertInboxSyncState({
+      brandId: brand.id,
+      mailboxAccountId: mailbox.account.id,
+      mailboxName,
+      lastInboxUid: existingSyncState?.lastInboxUid ?? 0,
+      lastError: reason,
+    });
+    return {
+      ok: false,
+      reason,
+      mailboxAccountId: mailbox.account.id,
+      mailboxName,
+      importedCount: 0,
+      duplicateCount: 0,
+      skippedCount: 0,
+      lastInboxUid: existingSyncState?.lastInboxUid ?? 0,
+      threadIds: [],
+    };
+  }
+
+  try {
+    const fetchedMessages = await listInboxMessages({
+      mailbox: {
+        host: mailboxHost,
+        port: Number(mailbox.account.config.mailbox.port ?? 993) || 993,
+        secure: mailbox.account.config.mailbox.secure !== false,
+        email: mailboxEmail,
+        password: mailboxPassword,
+      },
+      afterUid: existingSyncState?.lastInboxUid ?? 0,
+      maxMessages: Math.max(1, Math.min(100, Math.round(Number(input.maxMessages ?? 25) || 25))),
+      maxBodyBytes: 16_000,
+    });
+
+    let importedCount = 0;
+    let duplicateCount = 0;
+    let skippedCount = 0;
+    let lastInboxUid = existingSyncState?.lastInboxUid ?? 0;
+    const threadIds = new Set<string>();
+
+    for (const message of fetchedMessages) {
+      lastInboxUid = Math.max(lastInboxUid, message.uid);
+
+      const providerMessageId =
+        message.messageId.trim() || `imap:${mailbox.account.id}:${message.mailboxName}:${message.uid}`;
+      const existing = await findReplyMessageByProviderMessageId(providerMessageId);
+      if (existing) {
+        duplicateCount += 1;
+        continue;
+      }
+
+      const fromEmail = extractFirstEmailAddress(message.from);
+      if (!fromEmail || fromEmail === mailboxEmail.toLowerCase()) {
+        skippedCount += 1;
+        continue;
+      }
+
+      const result = await ingestBrandInboxMessage({
+        brandId: brand.id,
+        mailboxAccountId: mailbox.account.id,
+        from: message.from || fromEmail,
+        to: message.to || mailboxEmail,
+        subject: message.subject.trim() || "(No subject)",
+        body: message.body.trim() || "[empty message body]",
+        providerMessageId,
+        contactName: extractMailboxDisplayName(message.from),
+      });
+
+      if (result.ok) {
+        importedCount += 1;
+        if (result.threadId) {
+          threadIds.add(result.threadId);
+        }
+      } else {
+        skippedCount += 1;
+      }
+    }
+
+    await upsertInboxSyncState({
+      brandId: brand.id,
+      mailboxAccountId: mailbox.account.id,
+      mailboxName: fetchedMessages[0]?.mailboxName || mailboxName,
+      lastInboxUid,
+      lastError: "",
+    });
+
+    return {
+      ok: true,
+      reason: importedCount
+        ? `Imported ${importedCount} inbox ${importedCount === 1 ? "message" : "messages"}`
+        : duplicateCount
+          ? "No new inbox messages found"
+          : "Inbox synced",
+      mailboxAccountId: mailbox.account.id,
+      mailboxName: fetchedMessages[0]?.mailboxName || mailboxName,
+      importedCount,
+      duplicateCount,
+      skippedCount,
+      lastInboxUid,
+      threadIds: Array.from(threadIds),
+    };
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : "Mailbox sync failed";
+    await upsertInboxSyncState({
+      brandId: brand.id,
+      mailboxAccountId: mailbox.account.id,
+      mailboxName,
+      lastInboxUid: existingSyncState?.lastInboxUid ?? 0,
+      lastError: reason,
+    });
+    return {
+      ok: false,
+      reason,
+      mailboxAccountId: mailbox.account.id,
+      mailboxName,
+      importedCount: 0,
+      duplicateCount: 0,
+      skippedCount: 0,
+      lastInboxUid: existingSyncState?.lastInboxUid ?? 0,
+      threadIds: [],
+    };
+  }
 }
 
 export async function approveReplyDraftAndSend(input: {
@@ -15969,9 +16550,62 @@ export async function approveReplyDraftAndSend(input: {
     return { ok: false, reason: "Reply thread not found" };
   }
 
-  const run = await getOutreachRun(draft.runId);
+  const run = draft.runId ? await getOutreachRun(draft.runId) : null;
+
   if (!run) {
-    return { ok: false, reason: "Run not found" };
+    const mailbox = await resolveMailboxAccountForBrand({
+      brandId: input.brandId,
+      preferredMailboxAccountId: thread.mailboxAccountId,
+    });
+    if (!mailbox) {
+      return { ok: false, reason: "Brand reply mailbox account missing or invalid" };
+    }
+    if (!thread.contactEmail) {
+      return { ok: false, reason: "Thread contact email is missing" };
+    }
+
+    const send = await sendReplyDraftAsEvent({
+      draft,
+      account: mailbox.account,
+      secrets: mailbox.secrets,
+      recipient: thread.contactEmail,
+      replyToEmail: mailbox.account.config.mailbox.email,
+    });
+    if (!send.ok) {
+      return { ok: false, reason: send.error };
+    }
+
+    await updateReplyDraft(draft.id, {
+      status: "sent",
+      sentAt: nowIso(),
+    });
+
+    await updateReplyThread(thread.id, {
+      status: "open",
+      lastMessageAt: nowIso(),
+    });
+
+    await createReplyMessage({
+      threadId: thread.id,
+      runId: "",
+      direction: "outbound",
+      from: getOutreachAccountFromEmail(mailbox.account).trim() || mailbox.account.config.mailbox.email,
+      to: thread.contactEmail,
+      subject: draft.subject,
+      body: draft.body,
+      providerMessageId: send.providerMessageId || `reply_${Date.now().toString(36)}`,
+    });
+
+    try {
+      await syncReplyThreadState({ threadId: thread.id });
+    } catch (error) {
+      console.error("failed_to_sync_reply_thread_state", {
+        threadId: thread.id,
+        error: error instanceof Error ? error.message : String(error ?? "unknown_error"),
+      });
+    }
+
+    return { ok: true, reason: "Reply sent" };
   }
 
   const mailbox = await resolveMailboxAccountForRun(run);
@@ -15987,10 +16621,7 @@ export async function approveReplyDraftAndSend(input: {
     (supportsCustomerIoDelivery(deliveryAccount) || supportsMailpoolDelivery(deliveryAccount, deliverySecrets ?? undefined))
       ? deliveryAccount
       : mailbox.account;
-  const sendSecrets =
-    sendAccount.id === mailbox.account.id
-      ? mailbox.secrets
-      : deliverySecrets;
+  const sendSecrets = sendAccount.id === mailbox.account.id ? mailbox.secrets : deliverySecrets;
   if (!sendSecrets) {
     return { ok: false, reason: "Delivery account credentials are missing" };
   }
@@ -16039,6 +16670,15 @@ export async function approveReplyDraftAndSend(input: {
     eventType: "reply_draft_sent",
     payload: { draftId: draft.id },
   });
+
+  try {
+    await syncReplyThreadState({ threadId: thread.id });
+  } catch (error) {
+    console.error("failed_to_sync_reply_thread_state", {
+      threadId: thread.id,
+      error: error instanceof Error ? error.message : String(error ?? "unknown_error"),
+    });
+  }
 
   return { ok: true, reason: "Reply sent" };
 }

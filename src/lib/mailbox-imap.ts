@@ -31,6 +31,17 @@ export type MailboxPlacementResult = {
   error: string;
 };
 
+export type MailboxFetchedMessage = {
+  uid: number;
+  mailboxName: string;
+  messageId: string;
+  from: string;
+  to: string;
+  subject: string;
+  date: string;
+  body: string;
+};
+
 function imapQuoted(value: string) {
   return `"${String(value ?? "").replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
 }
@@ -84,6 +95,50 @@ function parseSearchUids(raw: string) {
     .filter((value) => Number.isFinite(value) && value > 0);
 }
 
+function extractImapLiteral(raw: string, pattern: RegExp) {
+  const match = pattern.exec(raw);
+  if (!match || typeof match.index !== "number") return "";
+  const byteCount = Number(match[1] ?? 0);
+  if (!Number.isFinite(byteCount) || byteCount <= 0) return "";
+  const start = match.index + match[0].length;
+  return raw.slice(start, start + byteCount);
+}
+
+function unfoldHeaderValue(value: string) {
+  return value.replace(/\r?\n[ \t]+/g, " ").trim();
+}
+
+function parseHeaderValue(headersRaw: string, headerName: string) {
+  const escaped = headerName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = headersRaw.match(new RegExp(`^${escaped}:([\\s\\S]*?)(?:\\r?\\n[^ \\t]|$)`, "im"));
+  if (!match) return "";
+  return unfoldHeaderValue(match[1] ?? "");
+}
+
+function parseFetchedMailboxMessage(raw: string, mailboxName: string): MailboxFetchedMessage | null {
+  const uidMatch = raw.match(/\bUID (\d+)\b/i);
+  const uid = Number(uidMatch?.[1] ?? 0);
+  if (!Number.isFinite(uid) || uid <= 0) return null;
+
+  const headersRaw = extractImapLiteral(
+    raw,
+    /BODY\[HEADER\.FIELDS \(FROM TO SUBJECT MESSAGE-ID DATE\)\] \{(\d+)\}\r\n/i
+  );
+  const bodyRaw = extractImapLiteral(raw, /BODY\[TEXT\](?:<\d+>)? \{(\d+)\}\r\n/i);
+
+  const messageId = parseHeaderValue(headersRaw, "Message-ID").replace(/^<|>$/g, "");
+  return {
+    uid,
+    mailboxName,
+    messageId,
+    from: parseHeaderValue(headersRaw, "From"),
+    to: parseHeaderValue(headersRaw, "To"),
+    subject: parseHeaderValue(headersRaw, "Subject"),
+    date: parseHeaderValue(headersRaw, "Date"),
+    body: bodyRaw.trim(),
+  };
+}
+
 function mailboxByAttribute(mailboxes: ImapMailbox[], expected: string[]) {
   const normalized = expected.map((value) => value.toLowerCase());
   return (
@@ -119,6 +174,7 @@ class ImapClient {
   private socket: tls.TLSSocket | net.Socket | null = null;
   private connected = false;
   private tagCounter = 1;
+  private selectedMailbox = "";
 
   constructor(private readonly options: ImapMailboxConfig) {}
 
@@ -240,16 +296,33 @@ class ImapClient {
     return parseListMailboxes(result.raw);
   }
 
-  async searchMailbox(mailboxName: string, criteria: string[]) {
+  async examineMailbox(mailboxName: string) {
+    if (this.selectedMailbox === mailboxName) return;
     const select = await this.command(`EXAMINE ${imapQuoted(mailboxName)}`);
     if (!select.ok) {
       throw new Error(`IMAP EXAMINE failed for ${mailboxName}: ${select.raw.trim()}`);
     }
+    this.selectedMailbox = mailboxName;
+  }
+
+  async searchMailbox(mailboxName: string, criteria: string[]) {
+    await this.examineMailbox(mailboxName);
     const search = await this.command(`UID SEARCH ${criteria.join(" ")}`);
     if (!search.ok) {
       throw new Error(`IMAP SEARCH failed for ${mailboxName}: ${search.raw.trim()}`);
     }
     return parseSearchUids(search.raw);
+  }
+
+  async fetchMailboxMessage(mailboxName: string, uid: number, maxBodyBytes = 16_000) {
+    await this.examineMailbox(mailboxName);
+    const fetch = await this.command(
+      `UID FETCH ${uid} (UID BODY.PEEK[HEADER.FIELDS (FROM TO SUBJECT MESSAGE-ID DATE)] BODY.PEEK[TEXT]<0.${Math.max(512, maxBodyBytes)}>)`
+    );
+    if (!fetch.ok) {
+      throw new Error(`IMAP FETCH failed for ${mailboxName} uid ${uid}: ${fetch.raw.trim()}`);
+    }
+    return parseFetchedMailboxMessage(fetch.raw, mailboxName);
   }
 
   async close() {
@@ -265,6 +338,35 @@ class ImapClient {
     this.socket.destroy();
     this.socket = null;
     this.connected = false;
+  }
+}
+
+export async function listInboxMessages(input: {
+  mailbox: ImapMailboxConfig;
+  afterUid?: number;
+  maxMessages?: number;
+  maxBodyBytes?: number;
+}) {
+  const client = new ImapClient(input.mailbox);
+  try {
+    await client.connect();
+    const mailboxes = await client.listMailboxes();
+    const inbox = resolveInboxMailbox(mailboxes)?.name ?? "INBOX";
+    const startUid = Math.max(0, Math.round(Number(input.afterUid ?? 0) || 0));
+    const uids = await client.searchMailbox(
+      inbox,
+      startUid > 0 ? ["UID", `${startUid + 1}:*`] : ["ALL"]
+    );
+    const selectedUids =
+      input.maxMessages && input.maxMessages > 0 ? uids.slice(-input.maxMessages) : uids;
+    const messages: MailboxFetchedMessage[] = [];
+    for (const uid of selectedUids) {
+      const fetched = await client.fetchMailboxMessage(inbox, uid, input.maxBodyBytes ?? 16_000);
+      if (fetched) messages.push(fetched);
+    }
+    return messages;
+  } finally {
+    await client.close();
   }
 }
 

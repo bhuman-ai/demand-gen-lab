@@ -174,24 +174,24 @@ export default function BrandSwitcher() {
   }
 
   return (
-    <div className="grid gap-2">
+    <div className="grid w-full min-w-0 gap-2">
       <div className="text-[12px] text-[color:var(--muted-foreground)]">Active brand</div>
-      <div ref={containerRef} className="relative">
+      <div ref={containerRef} className="relative w-full min-w-0 max-w-full">
         <button
           type="button"
           aria-haspopup="listbox"
           aria-expanded={menuOpen}
           onClick={() => setMenuOpen((prev) => !prev)}
           className={cn(
-            "flex w-full items-center justify-between gap-3 rounded-[14px] border px-3.5 py-3 text-left transition-all duration-150",
+            "flex w-full max-w-full items-center justify-between gap-3 overflow-hidden rounded-[14px] border px-3.5 py-3 text-left transition-all duration-150",
             "border-[color:var(--border)] bg-[color:var(--surface)] shadow-[0_1px_0_rgba(15,23,42,0.02)]",
             "hover:border-[color:var(--border-strong)] hover:bg-[color:var(--surface-hover)]",
             menuOpen ? "border-[color:var(--border-strong)] bg-[color:var(--surface-hover)]" : ""
           )}
         >
-          <div className="min-w-0">
+          <div className="min-w-0 flex-1 overflow-hidden pr-1">
             <div className="truncate text-[15px] font-medium text-[color:var(--foreground)]">{triggerLabel}</div>
-            <div className="mt-0.5 text-[11px] text-[color:var(--muted-foreground)]">{triggerHint}</div>
+            <div className="mt-0.5 truncate text-[11px] text-[color:var(--muted-foreground)]">{triggerHint}</div>
           </div>
           <div
             className={cn(
@@ -204,7 +204,7 @@ export default function BrandSwitcher() {
         </button>
 
         {menuOpen ? (
-          <div className="absolute left-0 right-0 top-[calc(100%+10px)] z-30 overflow-hidden rounded-[16px] border border-[color:var(--border-strong)] bg-[color:var(--surface)] p-1.5 shadow-[0_16px_40px_rgba(15,23,42,0.14)]">
+          <div className="absolute left-0 top-[calc(100%+10px)] z-30 w-full max-w-full overflow-hidden rounded-[16px] border border-[color:var(--border-strong)] bg-[color:var(--surface)] p-1.5 shadow-[0_16px_40px_rgba(15,23,42,0.14)]">
             <div role="listbox" aria-label="Brands" className="grid gap-1">
               {loadingBrands && !brands.length ? (
                 <div className="rounded-[12px] px-3 py-3 text-sm text-[color:var(--muted-foreground)]">
@@ -228,15 +228,15 @@ export default function BrandSwitcher() {
                     aria-selected={active}
                     onClick={() => handleBrandSwitch(brand.id)}
                     className={cn(
-                      "flex w-full items-center justify-between gap-3 rounded-[12px] px-3 py-3 text-left transition-colors duration-150",
+                      "flex w-full max-w-full items-center justify-between gap-3 overflow-hidden rounded-[12px] px-3 py-3 text-left transition-colors duration-150",
                       active
                         ? "bg-[color:var(--surface-muted)] text-[color:var(--foreground)]"
                         : "text-[color:var(--foreground)] hover:bg-[color:var(--surface-muted)]"
                     )}
                   >
-                    <div className="min-w-0">
+                    <div className="min-w-0 flex-1 overflow-hidden">
                       <div className="truncate text-sm font-medium">{brand.name}</div>
-                      <div className="mt-0.5 text-[11px] text-[color:var(--muted-foreground)]">
+                      <div className="mt-0.5 truncate text-[11px] text-[color:var(--muted-foreground)]">
                         {active ? "Current brand" : "Open this brand"}
                       </div>
                     </div>
@@ -252,14 +252,14 @@ export default function BrandSwitcher() {
               <button
                 type="button"
                 onClick={handleCreateBrand}
-                className="flex w-full items-center gap-3 rounded-[12px] px-3 py-3 text-left text-[color:var(--foreground)] transition-colors duration-150 hover:bg-[color:var(--surface-muted)]"
+                className="flex w-full max-w-full items-center gap-3 overflow-hidden rounded-[12px] px-3 py-3 text-left text-[color:var(--foreground)] transition-colors duration-150 hover:bg-[color:var(--surface-muted)]"
               >
                 <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-[color:var(--border)] bg-[color:var(--background)] text-[color:var(--muted-foreground)]">
                   <Plus className="h-4 w-4" />
                 </div>
-                <div>
-                  <div className="text-sm font-medium">+ New Brand</div>
-                  <div className="mt-0.5 text-[11px] text-[color:var(--muted-foreground)]">
+                <div className="min-w-0 overflow-hidden">
+                  <div className="truncate text-sm font-medium">+ New Brand</div>
+                  <div className="mt-0.5 truncate text-[11px] text-[color:var(--muted-foreground)]">
                     Create another brand workspace
                   </div>
                 </div>

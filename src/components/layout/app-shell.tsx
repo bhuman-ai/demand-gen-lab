@@ -220,8 +220,8 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   return (
     <div className="min-h-screen bg-[color:var(--background)] text-[color:var(--foreground)]">
       <div className="grid min-h-screen grid-cols-1 md:grid-cols-[260px_1fr]">
-        <aside className="border-b border-[color:var(--border)] bg-[color:var(--sidebar)] px-4 py-5 md:border-b-0 md:border-r md:px-5">
-          <div className="flex h-full flex-col">
+        <aside className="min-w-0 border-b border-[color:var(--border)] bg-[color:var(--sidebar)] px-4 py-5 md:border-b-0 md:border-r md:px-5">
+          <div className="flex h-full min-w-0 flex-col">
             <Link href="/" className="group block border-b border-[color:var(--border)] pb-4">
               <BrandWordmark
                 animated
@@ -230,7 +230,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
               />
             </Link>
 
-            <div className="mt-5">
+            <div className="mt-5 min-w-0">
               <BrandSwitcher />
             </div>
 

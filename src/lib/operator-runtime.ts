@@ -35,6 +35,7 @@ import type {
   OperatorMessage,
   OperatorRequestedAction,
   OperatorReceipt,
+  OperatorRunStatus,
   OperatorThreadDetail,
   OperatorToolName,
   OperatorToolSpec,
@@ -106,6 +107,22 @@ function isExplicitMutationRequest(message: string) {
     );
   }
   return /^(add|create|make|buy|register|provision|refresh|sync|run|pause|resume|send|dismiss|delete|remove|launch|promote|update|edit|change|set up|setup|start)\b/.test(
+    normalized
+  );
+}
+
+function isAffirmativeMessage(message: string) {
+  const normalized = message.trim().toLowerCase();
+  if (!normalized) return false;
+  return /^(yes|yep|yeah|yup|sure|ok|okay|confirm|do it|yes do it|go ahead|run it|send it|make it so|please do|do that)$/i.test(
+    normalized
+  );
+}
+
+function isNegativeMessage(message: string) {
+  const normalized = message.trim().toLowerCase();
+  if (!normalized) return false;
+  return /^(no|nope|nah|cancel|cancel it|stop|never mind|nevermind|don'?t|do not|don'?t do it|don'?t do that|skip it)$/i.test(
     normalized
   );
 }
@@ -186,7 +203,7 @@ function inferExecutionVerb(toolName: OperatorToolName, input: Record<string, un
     case "refresh_mailpool_sender":
       return "refresh";
     case "provision_mailpool_sender":
-      return asString(input.domainMode) === "register" ? "buy and provision" : "provision";
+      return normalizeProvisionDomainMode(input.domainMode) === "register" ? "buy and provision" : "provision";
     case "control_experiment_run":
     case "control_campaign_run":
       return asString(input.action) || "control";
@@ -297,6 +314,7 @@ function buildExecutionEnvelope(input: {
     actionId: asString(input.actionId),
     intent: toolName ? buildExecutionIntent(toolName, input.toolInput ?? {}) : null,
     toolName,
+    toolInput: input.toolInput ?? {},
     preview: input.preview ?? {},
     receipt: input.receipt ?? null,
     missingFields: input.missingFields ?? [],
@@ -365,7 +383,8 @@ function buildProvisionForms(input: {
 }): OperatorExecutionForm[] {
   const forms: OperatorExecutionForm[] = [];
   const domainMode =
-    asString(input.toolInput.domainMode) || asString(input.brandMemory?.senderDefaults.domainMode);
+    normalizeProvisionDomainMode(input.toolInput.domainMode) ||
+    normalizeProvisionDomainMode(input.brandMemory?.senderDefaults.domainMode);
   const fromLocalPart =
     asString(input.toolInput.fromLocalPart) || asString(input.brandMemory?.senderDefaults.fromLocalPart);
   const domain = asString(input.toolInput.domain) || asString(input.brandMemory?.senderDefaults.domain);
@@ -577,6 +596,7 @@ function buildProvisionQuestions(input: {
   missingFields: string[];
 }): OperatorExecutionQuestion[] {
   const questions: OperatorExecutionQuestion[] = [];
+  const domainMode = normalizeProvisionDomainMode(input.domainMode);
 
   if (input.missingFields.includes("sender email")) {
     questions.push(
@@ -597,7 +617,7 @@ function buildProvisionQuestions(input: {
     );
   }
 
-  if (input.domainMode === "register") {
+  if (domainMode === "register") {
     questions.push(
       buildQuestion("Do you want to keep the new-domain flow, or switch to an existing Mailpool domain?", [
         {
@@ -655,6 +675,18 @@ function ensureWebsiteUrl(value: string) {
   if (!trimmed) return "";
   if (/^https?:\/\//i.test(trimmed)) return trimmed;
   return `https://${trimmed}`;
+}
+
+function normalizeProvisionDomainMode(value: unknown) {
+  const normalized = asString(value).toLowerCase();
+  if (!normalized) return "";
+  if (["register", "new", "buy", "purchase", "new_domain", "new-domain"].includes(normalized)) {
+    return "register";
+  }
+  if (["existing", "current", "existing_domain", "existing-domain"].includes(normalized)) {
+    return "existing";
+  }
+  return normalized;
 }
 
 function extractQuotedText(message: string) {
@@ -872,7 +904,7 @@ function buildProvisionMissingFields(toolInput: Record<string, unknown>) {
   if (!asString(toolInput.fromLocalPart) || !asString(toolInput.domain)) {
     missingFields.push("sender email");
   }
-  if (asString(toolInput.domainMode) === "register") {
+  if (normalizeProvisionDomainMode(toolInput.domainMode) === "register") {
     const registrant = asRecord(toolInput.registrant);
     const requiredRegistrantFields: Array<[string, string]> = [
       ["firstName", "registrant first name"],
@@ -891,6 +923,241 @@ function buildProvisionMissingFields(toolInput: Record<string, unknown>) {
     }
   }
   return missingFields;
+}
+
+type PendingConversationContinuation =
+  | {
+      kind: "structured_action";
+      requestedAction: OperatorRequestedAction;
+    }
+  | {
+      kind: "confirm_action";
+      actionId: string;
+    }
+  | {
+      kind: "cancel_action";
+      actionId: string;
+    };
+
+function readExecutionEnvelope(value: unknown): OperatorExecutionEnvelope | null {
+  const row = asRecord(value);
+  const state = asString(row.state) as OperatorExecutionEnvelope["state"];
+  if (!state || state === "answer_only") return null;
+  return {
+    state,
+    actionId: asString(row.actionId),
+    intent: row.intent ? (asRecord(row.intent) as OperatorExecutionEnvelope["intent"]) : null,
+    toolName: asString(row.toolName) as OperatorExecutionEnvelope["toolName"],
+    toolInput: asRecord(row.toolInput),
+    preview: asRecord(row.preview),
+    receipt: row.receipt ? (asRecord(row.receipt) as OperatorReceipt) : null,
+    missingFields: Array.isArray(row.missingFields) ? row.missingFields.map((entry) => asString(entry)).filter(Boolean) : [],
+    questions: Array.isArray(row.questions) ? (row.questions as OperatorExecutionQuestion[]) : [],
+    forms: Array.isArray(row.forms) ? (row.forms as OperatorExecutionForm[]) : [],
+    error: asString(row.error),
+  };
+}
+
+function getLatestPendingAssistantExecution(messages: OperatorMessage[]) {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message.role !== "assistant" || message.kind !== "message") continue;
+    const execution = readExecutionEnvelope(asRecord(message.content).execution);
+    if (execution && execution.state !== "completed" && execution.state !== "failed" && execution.state !== "canceled") {
+      return { message, execution };
+    }
+  }
+  return null;
+}
+
+function getExecutionToolInput(execution: OperatorExecutionEnvelope) {
+  if (Object.keys(asRecord(execution.toolInput)).length > 0) {
+    return asRecord(execution.toolInput);
+  }
+  const firstForm = Array.isArray(execution.forms) ? execution.forms[0] : null;
+  return asRecord(firstForm?.input);
+}
+
+function findQuestionOptionMatch(execution: OperatorExecutionEnvelope, message: string) {
+  const normalized = normalizeMatchText(message);
+  if (!normalized) return null;
+  for (const question of execution.questions ?? []) {
+    for (const option of question.options ?? []) {
+      const label = normalizeMatchText(option.label);
+      const optionMessage = normalizeMatchText(option.message);
+      if (label && (normalized === label || normalized.includes(label) || label.includes(normalized))) {
+        return option;
+      }
+      if (optionMessage && normalized === optionMessage) {
+        return option;
+      }
+    }
+  }
+  return null;
+}
+
+function mergeProvisionInputFromContinuation(input: {
+  message: string;
+  baseInput: Record<string, unknown>;
+  brandContext: Awaited<ReturnType<typeof getOperatorBrandContext>>;
+  brandMemory: OperatorBrandMemory | null;
+}): Record<string, unknown> {
+  const lowered = input.message.trim().toLowerCase();
+  const nextInput: Record<string, unknown> = {
+    ...input.baseInput,
+    registrant: asRecord(input.baseInput.registrant),
+  };
+  const inventoryDomains = (input.brandContext?.provisioning.mailpoolDomains ?? []).map((item) => item.domain.toLowerCase());
+  const optionMatch = findQuestionOptionMatch(
+    buildExecutionEnvelope({
+      state: "need_info",
+      toolName: "provision_mailpool_sender",
+      toolInput: input.baseInput,
+      questions: buildProvisionQuestions({
+        hasMailpoolInventory: (input.brandContext?.provisioning.mailpoolDomainInventoryCount ?? 0) > 0,
+        domainMode: normalizeProvisionDomainMode(input.baseInput.domainMode),
+        missingFields: buildProvisionMissingFields(input.baseInput),
+      }),
+    }),
+    input.message
+  );
+  const optionMessage = optionMatch?.message.toLowerCase() ?? "";
+
+  if (
+    lowered.includes("existing domain") ||
+    lowered.includes("use existing") ||
+    optionMessage.includes("existing mailpool domain")
+  ) {
+    nextInput.domainMode = "existing";
+  } else if (
+    lowered.includes("buy new") ||
+    lowered.includes("new domain") ||
+    lowered.includes("register") ||
+    lowered.includes("buy ") ||
+    optionMessage.includes("buying a new sender domain")
+  ) {
+    nextInput.domainMode = "register";
+  }
+
+  const emailParts = extractEmailParts(input.message);
+  if (emailParts) {
+    nextInput.fromLocalPart = emailParts.fromLocalPart;
+    nextInput.domain = emailParts.domain;
+  } else {
+    const directDomain = extractDomain(input.message);
+    if (directDomain) {
+      nextInput.domain = directDomain;
+    }
+    const singleWord = lowered.match(/^([a-z0-9._%+-]+)$/);
+    if (
+      singleWord &&
+      !singleWord[1]?.includes(".") &&
+      !singleWord[1]?.includes("@") &&
+      (asString(nextInput.domain) ||
+        (normalizeProvisionDomainMode(nextInput.domainMode) === "existing" &&
+          (input.brandContext?.provisioning.mailpoolDomains.length ?? 0) === 1))
+    ) {
+      nextInput.fromLocalPart = singleWord[1];
+      if (!asString(nextInput.domain) && (input.brandContext?.provisioning.mailpoolDomains.length ?? 0) === 1) {
+        nextInput.domain = input.brandContext?.provisioning.mailpoolDomains[0]?.domain ?? "";
+      }
+    }
+  }
+
+  nextInput.domainMode = normalizeProvisionDomainMode(nextInput.domainMode);
+
+  if (!asString(nextInput.domain) && normalizeProvisionDomainMode(nextInput.domainMode) === "existing") {
+    const rememberedDomain = asString(input.brandMemory?.senderDefaults.domain);
+    const onlyDomain =
+      (input.brandContext?.provisioning.mailpoolDomains.length ?? 0) === 1
+        ? input.brandContext?.provisioning.mailpoolDomains[0]?.domain ?? ""
+        : "";
+    nextInput.domain = rememberedDomain || onlyDomain;
+  } else if (
+    normalizeProvisionDomainMode(nextInput.domainMode) === "existing" &&
+    asString(nextInput.domain) &&
+    !inventoryDomains.includes(asString(nextInput.domain).toLowerCase())
+  ) {
+    const rememberedDomain = asString(input.brandMemory?.senderDefaults.domain);
+    const onlyDomain =
+      (input.brandContext?.provisioning.mailpoolDomains.length ?? 0) === 1
+        ? input.brandContext?.provisioning.mailpoolDomains[0]?.domain ?? ""
+        : "";
+    nextInput.domain = rememberedDomain || onlyDomain || "";
+  }
+
+  return nextInput;
+}
+
+function inferContinuationFromPendingExecution(input: {
+  message: string;
+  messages: OperatorMessage[];
+  actions: OperatorAction[];
+  brandContext: Awaited<ReturnType<typeof getOperatorBrandContext>>;
+  brandMemory: OperatorBrandMemory | null;
+  brandId: string;
+}): PendingConversationContinuation | null {
+  const pending = getLatestPendingAssistantExecution(input.messages);
+  if (!pending) return null;
+  const message = input.message.trim();
+  const lowered = message.toLowerCase();
+  const latestAction =
+    (pending.execution.actionId
+      ? input.actions.find((action) => action.id === pending.execution.actionId)
+      : null) ??
+    input.actions.find((action) => action.status === "awaiting_approval");
+
+  if (pending.execution.state === "awaiting_confirmation" && latestAction) {
+    if (isAffirmativeMessage(message)) {
+      return { kind: "confirm_action", actionId: latestAction.id };
+    }
+    if (isNegativeMessage(message)) {
+      return { kind: "cancel_action", actionId: latestAction.id };
+    }
+    return null;
+  }
+
+  if (pending.execution.state !== "need_info" || pending.execution.toolName !== "provision_mailpool_sender") {
+    return null;
+  }
+
+  const baseInput = getExecutionToolInput(pending.execution);
+  if (!Object.keys(baseInput).length) return null;
+
+  const optionMatch = findQuestionOptionMatch(pending.execution, lowered);
+  const effectiveMessage = optionMatch?.message ?? message;
+  const nextInput = mergeProvisionInputFromContinuation({
+    message: effectiveMessage,
+    baseInput: {
+      ...baseInput,
+      brandId: input.brandId || asString(baseInput.brandId),
+      provider: "mailpool",
+    },
+    brandContext: input.brandContext,
+    brandMemory: input.brandMemory,
+  });
+
+  const changed =
+    JSON.stringify({
+      ...baseInput,
+      registrant: asRecord(baseInput.registrant),
+    }) !==
+    JSON.stringify({
+      ...nextInput,
+      registrant: asRecord(nextInput.registrant),
+    });
+
+  if (!changed) {
+    return null;
+  }
+
+  return {
+    kind: "structured_action",
+    requestedAction: {
+      toolName: "provision_mailpool_sender",
+      input: nextInput,
+    },
+  };
 }
 
 function resolveSenderAccountId(
@@ -1295,6 +1562,7 @@ function normalizeRequestedAction(input: {
 
   if (toolName === "provision_mailpool_sender") {
     toolInput.provider = "mailpool";
+    toolInput.domainMode = normalizeProvisionDomainMode(toolInput.domainMode);
     if (!asString(toolInput.domainMode)) {
       const message = input.message.toLowerCase();
       toolInput.domainMode =
@@ -1978,6 +2246,49 @@ function toActionSummary(action: OperatorAction): OperatorActionSummary {
   };
 }
 
+function extractAssistantPayload(message: OperatorMessage | null) {
+  const content = asRecord(message?.content);
+  return {
+    assistant: {
+      summary: asString(asRecord(content.assistant).summary) || asString(content.text),
+      findings: Array.isArray(asRecord(content.assistant).findings)
+        ? (asRecord(content.assistant).findings as string[])
+        : [],
+      recommendations: Array.isArray(asRecord(content.assistant).recommendations)
+        ? (asRecord(content.assistant).recommendations as string[])
+        : [],
+    } satisfies OperatorChatAssistantReply,
+    execution: readExecutionEnvelope(content.execution),
+  };
+}
+
+async function buildChatResponseFromThread(input: {
+  threadId: string;
+  runId: string;
+  runStatus: OperatorRunStatus;
+  model: string;
+}) {
+  const detail = await getOperatorThreadDetail(input.threadId);
+  if (!detail) {
+    throw new Error("Operator thread not found after action completed");
+  }
+  const latestAssistantMessage =
+    [...detail.messages].reverse().find((message) => message.role === "assistant" && message.kind === "message") ?? null;
+  const payload = extractAssistantPayload(latestAssistantMessage);
+  return {
+    thread: detail.thread,
+    run: {
+      id: input.runId,
+      status: input.runStatus,
+      model: input.model,
+    },
+    assistant: payload.assistant,
+    execution: payload.execution,
+    actions: detail.actions.map(toActionSummary),
+    messages: latestAssistantMessage ? [latestAssistantMessage] : [],
+  } satisfies OperatorChatResponse;
+}
+
 async function createAssistantMessage(
   threadId: string,
   assistant: OperatorChatAssistantReply,
@@ -2083,7 +2394,20 @@ export async function runOperatorChatTurn(input: OperatorChatRequest): Promise<O
           findings: [],
           recommendations: [],
         };
-  const messageHistory = await listOperatorMessages(thread.id);
+  const [messageHistory, threadActions] = await Promise.all([
+    listOperatorMessages(thread.id),
+    listOperatorActionsByThread(thread.id),
+  ]);
+  const continuation = input.structuredAction
+    ? null
+    : inferContinuationFromPendingExecution({
+        message: input.message,
+        messages: messageHistory,
+        actions: threadActions,
+        brandContext,
+        brandMemory,
+        brandId: resolvedBrandId,
+      });
   const structuredAction = input.structuredAction
     ? normalizeRequestedAction({
         raw: input.structuredAction,
@@ -2093,9 +2417,20 @@ export async function runOperatorChatTurn(input: OperatorChatRequest): Promise<O
         context: brandContext,
         brandMemory,
       })
+    : continuation?.kind === "structured_action"
+      ? normalizeRequestedAction({
+          raw: continuation.requestedAction,
+          brandId: resolvedBrandId,
+          mode: input.mode,
+          message: input.message,
+          context: brandContext,
+          brandMemory,
+        })
     : null;
   const llmPlan = structuredAction
     ? null
+    : continuation?.kind === "confirm_action" || continuation?.kind === "cancel_action"
+      ? null
     : await planOperatorReplyWithLlm({
         brandId: resolvedBrandId,
         message: input.message,
@@ -2119,7 +2454,15 @@ export async function runOperatorChatTurn(input: OperatorChatRequest): Promise<O
   const run = await createOperatorRun({
     threadId: thread.id,
     brandId: resolvedBrandId,
-    model: llmPlan?.model ?? (structuredAction ? "operator-structured-action" : "operator-v1"),
+    model:
+      llmPlan?.model ??
+      (structuredAction
+        ? "operator-structured-action"
+        : continuation?.kind === "confirm_action"
+          ? "operator-inline-confirm"
+          : continuation?.kind === "cancel_action"
+            ? "operator-inline-cancel"
+            : "operator-v1"),
     contextSnapshot: snapshotContext(brandContext),
     plan: [
       ...((llmPlan?.trace ?? []).map((entry) => ({
@@ -2127,6 +2470,12 @@ export async function runOperatorChatTurn(input: OperatorChatRequest): Promise<O
         status: entry.error ? "completed_with_error" : "completed",
         summary: entry.error || entry.summary,
       })) as Array<Record<string, unknown>>),
+      ...(continuation?.kind === "confirm_action"
+        ? [{ step: "confirm_action", status: "in_progress", actionId: continuation.actionId }]
+        : []),
+      ...(continuation?.kind === "cancel_action"
+        ? [{ step: "cancel_action", status: "in_progress", actionId: continuation.actionId }]
+        : []),
       ...(requestedAction
         ? [{ step: requestedAction.toolName, status: "in_progress" }]
         : []),
@@ -2139,7 +2488,41 @@ export async function runOperatorChatTurn(input: OperatorChatRequest): Promise<O
     let execution: OperatorExecutionEnvelope | null = buildExecutionEnvelope({ state: "answer_only" });
     const actions: OperatorAction[] = [];
 
-    if (requestedAction) {
+    if (continuation?.kind === "confirm_action") {
+      await confirmOperatorAction({
+        actionId: continuation.actionId,
+        userId: input.userId,
+        note: "Confirmed in chat.",
+      });
+      await updateOperatorRun(run.id, {
+        status: "completed",
+        contextSnapshot: snapshotContext(brandContext),
+        completedAt: nowIso(),
+      });
+      return buildChatResponseFromThread({
+        threadId: thread.id,
+        runId: run.id,
+        runStatus: "completed",
+        model: run.model,
+      });
+    } else if (continuation?.kind === "cancel_action") {
+      await cancelOperatorAction({
+        actionId: continuation.actionId,
+        userId: input.userId,
+        note: "Canceled in chat.",
+      });
+      await updateOperatorRun(run.id, {
+        status: "completed",
+        contextSnapshot: snapshotContext(brandContext),
+        completedAt: nowIso(),
+      });
+      return buildChatResponseFromThread({
+        threadId: thread.id,
+        runId: run.id,
+        runStatus: "completed",
+        model: run.model,
+      });
+    } else if (requestedAction) {
       if (resolvedBrandId && requestedAction.toolName === "provision_mailpool_sender") {
         await rememberProvisionMailpoolSenderInput(resolvedBrandId, requestedAction.input);
       }
@@ -2185,7 +2568,7 @@ export async function runOperatorChatTurn(input: OperatorChatRequest): Promise<O
           missingFields: ["sender email"],
           questions: buildProvisionQuestions({
             hasMailpoolInventory: hasInventory,
-            domainMode: asString(requestedAction.input.domainMode),
+            domainMode: normalizeProvisionDomainMode(requestedAction.input.domainMode),
             missingFields: ["sender email"],
           }),
           forms: buildProvisionForms({
@@ -2197,7 +2580,7 @@ export async function runOperatorChatTurn(input: OperatorChatRequest): Promise<O
         });
       } else if (
         tool.name === "provision_mailpool_sender" &&
-        asString(requestedAction.input.domainMode) === "register"
+        normalizeProvisionDomainMode(requestedAction.input.domainMode) === "register"
       ) {
         const registrant = asRecord(requestedAction.input.registrant);
         const hasRegistrant =
@@ -2221,7 +2604,7 @@ export async function runOperatorChatTurn(input: OperatorChatRequest): Promise<O
             missingFields: buildProvisionMissingFields(requestedAction.input),
             questions: buildProvisionQuestions({
               hasMailpoolInventory: (brandContext?.provisioning.mailpoolDomainInventoryCount ?? 0) > 0,
-              domainMode: asString(requestedAction.input.domainMode),
+              domainMode: normalizeProvisionDomainMode(requestedAction.input.domainMode),
               missingFields: buildProvisionMissingFields(requestedAction.input),
             }),
             forms: buildProvisionForms({

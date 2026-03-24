@@ -123,6 +123,7 @@ export type OperatorExecutionEnvelope = {
   actionId: string;
   intent: OperatorExecutionIntent | null;
   toolName: OperatorToolName | "";
+  toolInput: Record<string, unknown>;
   preview: Record<string, unknown>;
   receipt: OperatorReceipt | null;
   missingFields: string[];

@@ -135,6 +135,7 @@ import {
   getDomainDeliveryAccountName,
   getOutreachAccountFromEmail,
   getOutreachAccountReplyToEmail,
+  getOutreachSenderBackingIssue,
   supportsCustomerIoDelivery,
   supportsMailpoolDelivery,
 } from "@/lib/outreach-account-helpers";
@@ -9162,6 +9163,13 @@ function preflightReason(input: {
   if (!getOutreachAccountFromEmail(input.deliveryAccount).trim()) {
     return `${input.deliveryAccount.provider === "mailpool" ? "Mailpool" : "Customer.io"} From Email is required`;
   }
+  const senderBackingIssue = getOutreachSenderBackingIssue(
+    input.deliveryAccount,
+    input.mailboxAccount
+  );
+  if (senderBackingIssue) {
+    return senderBackingIssue;
+  }
   if (!supportsMailbox(input.mailboxAccount)) {
     return "Assigned mailbox account does not support mailbox reply handling";
   }
@@ -10648,6 +10656,15 @@ async function ensureBrandAccount(brandId: string): Promise<{
     return {
       ok: false,
       reason: "Assigned mailbox account credentials are missing",
+      accountId: resolvedAccountId,
+    };
+  }
+
+  const senderBackingIssue = getOutreachSenderBackingIssue(deliveryAccount, mailboxAccount);
+  if (senderBackingIssue) {
+    return {
+      ok: false,
+      reason: senderBackingIssue,
       accountId: resolvedAccountId,
     };
   }

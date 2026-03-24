@@ -9,7 +9,9 @@ import type {
 } from "@/lib/factory-types";
 import {
   DEFAULT_MAILPOOL_INBOX_PROVIDERS,
+  getOutreachMailboxEmail,
   getOutreachAccountFromEmail,
+  getOutreachSenderBackingIssue,
   supportsMailpoolDelivery,
 } from "@/lib/outreach-account-helpers";
 import {
@@ -1805,7 +1807,58 @@ export async function provisionCustomerIoSender(
   const mailboxSelection =
     input.selectedMailboxAccountId?.trim() || (await getBrandOutreachAssignment(brand.id))?.mailboxAccountId || "";
   const mailboxAccount = mailboxSelection ? await getOutreachAccount(mailboxSelection) : null;
-  const replyMailboxEmail = mailboxAccount?.config.mailbox.email.trim() || "";
+  const replyMailboxEmail = getOutreachMailboxEmail(mailboxAccount).trim();
+
+  if (!mailboxAccount) {
+    throw new Error(
+      "Assign a real mailbox account before provisioning a Customer.io sender. We do not allow unbacked From addresses."
+    );
+  }
+  const senderBackingIssue = getOutreachSenderBackingIssue(
+    {
+      provider: "customerio",
+      accountType: "delivery",
+      config: {
+        customerIo: {
+          siteId: customerIoConnection.siteId,
+          workspaceId: customerIoConnection.workspaceId,
+          fromEmail,
+          replyToEmail: replyMailboxEmail,
+          billing: customerIoConnection.billing,
+        },
+        mailpool: {
+          domainId: "",
+          mailboxId: "",
+          mailboxType: "google",
+          spamCheckId: "",
+          inboxPlacementId: "",
+          status: "pending",
+          lastSpamCheckAt: "",
+          lastSpamCheckScore: 0,
+          lastSpamCheckSummary: "",
+        },
+        apify: {
+          defaultActorId: "",
+        },
+        mailbox: {
+          provider: "imap",
+          email: "",
+          status: "disconnected",
+          host: "",
+          port: 993,
+          secure: true,
+          smtpHost: "",
+          smtpPort: 587,
+          smtpSecure: false,
+          smtpUsername: "",
+        },
+      },
+    },
+    mailboxAccount
+  );
+  if (senderBackingIssue) {
+    throw new Error(senderBackingIssue);
+  }
 
   const connectivityAccount: OutreachAccount = {
     id: "provision_check",

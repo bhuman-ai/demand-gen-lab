@@ -5,6 +5,7 @@ import {
   getOutreachAccount,
   setBrandOutreachAssignment,
 } from "@/lib/outreach-data";
+import { getOutreachSenderBackingIssue, supportsCustomerIoDelivery } from "@/lib/outreach-account-helpers";
 
 function asRecord(value: unknown): Record<string, unknown> {
   if (value && typeof value === "object" && !Array.isArray(value)) {
@@ -61,18 +62,43 @@ export async function PUT(
     const mailboxAccountIdRaw = body.mailboxAccountId;
     const mailboxAccountId =
       typeof mailboxAccountIdRaw === "string" ? mailboxAccountIdRaw.trim() : undefined;
+    const accountsById = new Map<string, Awaited<ReturnType<typeof getOutreachAccount>>>();
 
     for (const selectedAccountId of accountIds) {
       const account = await getOutreachAccount(selectedAccountId);
       if (!account) {
         return NextResponse.json({ error: `account not found: ${selectedAccountId}` }, { status: 404 });
       }
+      accountsById.set(selectedAccountId, account);
     }
 
+    const explicitMailboxAccount =
+      typeof mailboxAccountId === "string" && mailboxAccountId
+        ? await getOutreachAccount(mailboxAccountId)
+        : null;
     if (typeof mailboxAccountId === "string" && mailboxAccountId) {
-      const mailboxAccount = await getOutreachAccount(mailboxAccountId);
-      if (!mailboxAccount) {
+      if (!explicitMailboxAccount) {
         return NextResponse.json({ error: "mailbox account not found" }, { status: 404 });
+      }
+    }
+
+    for (const selectedAccountId of accountIds) {
+      const deliveryAccount = accountsById.get(selectedAccountId) ?? null;
+      if (!deliveryAccount) continue;
+      if (!supportsCustomerIoDelivery(deliveryAccount)) continue;
+      const effectiveMailboxAccount =
+        explicitMailboxAccount ??
+        (deliveryAccount.accountType !== "delivery" ? deliveryAccount : null);
+      const issue = getOutreachSenderBackingIssue(deliveryAccount, effectiveMailboxAccount);
+      if (issue) {
+        return NextResponse.json(
+          {
+            error: issue,
+            hint:
+              "Customer.io senders must use a real connected mailbox with the exact same email address as the From address.",
+          },
+          { status: 400 }
+        );
       }
     }
 

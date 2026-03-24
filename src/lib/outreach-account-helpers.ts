@@ -27,6 +27,34 @@ export function getOutreachAccountReplyToEmail(account: Pick<OutreachAccount, "c
   );
 }
 
+export function getOutreachMailboxEmail(account: Pick<OutreachAccount, "config"> | null | undefined) {
+  if (!account) return "";
+  return account.config.mailbox.email.trim();
+}
+
+export function getOutreachSenderBackingIssue(
+  deliveryAccount: Pick<OutreachAccount, "provider" | "accountType" | "config"> | null | undefined,
+  mailboxAccount: Pick<OutreachAccount, "provider" | "accountType" | "config"> | null | undefined
+) {
+  const fromEmail = getOutreachAccountFromEmail(deliveryAccount).trim().toLowerCase();
+  const mailboxEmail = getOutreachMailboxEmail(mailboxAccount).trim().toLowerCase();
+
+  if (!fromEmail) return "From email is missing.";
+  if (!mailboxAccount) return "A real mailbox account must be assigned before sending.";
+  if (!mailboxEmail) return "Assigned mailbox inbox email is missing.";
+  if (fromEmail !== mailboxEmail) {
+    return `From email ${fromEmail} is not backed by the assigned mailbox ${mailboxEmail}.`;
+  }
+  return "";
+}
+
+export function isOutreachSenderBackedByMailbox(
+  deliveryAccount: Pick<OutreachAccount, "provider" | "accountType" | "config"> | null | undefined,
+  mailboxAccount: Pick<OutreachAccount, "provider" | "accountType" | "config"> | null | undefined
+) {
+  return !getOutreachSenderBackingIssue(deliveryAccount, mailboxAccount);
+}
+
 export function supportsCustomerIoDelivery(account: Pick<OutreachAccount, "provider" | "accountType" | "config">) {
   return (
     account.provider === "customerio" &&

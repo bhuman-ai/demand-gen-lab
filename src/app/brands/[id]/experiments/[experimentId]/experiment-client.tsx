@@ -44,7 +44,11 @@ import {
   clampExperimentSampleSize,
   EXPERIMENT_MIN_VERIFIED_EMAIL_LEADS,
 } from "@/lib/experiment-policy";
-import { getOutreachAccountFromEmail, getOutreachAccountReplyToEmail } from "@/lib/outreach-account-helpers";
+import {
+  getOutreachAccountFromEmail,
+  getOutreachAccountReplyToEmail,
+  getOutreachSenderBackingIssue,
+} from "@/lib/outreach-account-helpers";
 import { trackEvent } from "@/lib/telemetry-client";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -1147,6 +1151,7 @@ export default function ExperimentClient({
     !outreachAssignment?.accountId ? "delivery account not assigned" : "",
     !launchFromEmail ? "from email missing" : "",
     !launchReplyToEmail ? "reply-to mailbox missing" : "",
+    getOutreachSenderBackingIssue(deliveryAccount, replyMailboxAccount),
   ].filter(Boolean);
   const launchIdentityReady = launchIdentityIssues.length === 0;
   const launchPreparing = !sendableLeadsReady;

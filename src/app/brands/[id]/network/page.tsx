@@ -19,6 +19,7 @@ import {
   getDomainDeliveryAccountId,
   getOutreachAccountFromEmail,
   getOutreachAccountReplyToEmail,
+  isOutreachSenderBackedByMailbox,
 } from "@/lib/outreach-account-helpers";
 import type { DomainRow } from "@/lib/factory-types";
 import { notFound } from "next/navigation";
@@ -82,6 +83,10 @@ export default async function NetworkPage({ params }: { params: Promise<{ id: st
     (account) => account.accountType !== "delivery" && !account.name.trim().toLowerCase().startsWith("deliverability ")
   );
   const customerIoAccounts = accounts.filter((account) => account.accountType !== "mailbox");
+  const assignedMailboxAccountId = assignment?.mailboxAccountId || assignment?.accountId || "";
+  const assignedMailboxAccount = assignedMailboxAccountId
+    ? accounts.find((account) => account.id === assignedMailboxAccountId) ?? null
+    : null;
   const assignedDeliveryAccountIds = new Set(
     [
       assignment?.accountId ?? "",
@@ -98,11 +103,12 @@ export default async function NetworkPage({ params }: { params: Promise<{ id: st
   );
   const brandSenderAccounts = customerIoAccounts.filter((account) => {
     const fromEmail = getOutreachAccountFromEmail(account).trim().toLowerCase();
-    return (
+    const matchesBrand =
       assignedDeliveryAccountIds.has(account.id) ||
       senderAccountIds.has(account.id) ||
-      (fromEmail ? senderEmails.has(fromEmail) : false)
-    );
+      (fromEmail ? senderEmails.has(fromEmail) : false);
+    if (!matchesBrand) return false;
+    return isOutreachSenderBackedByMailbox(account, assignedMailboxAccount);
   });
   const replyMailboxAccount = accounts.find((account) => account.id === assignment?.mailboxAccountId) ?? null;
   const syntheticAssignedSenderRows = brandSenderAccounts.flatMap((account) => {

@@ -1134,8 +1134,9 @@ function buildOperatorPrompt(input: {
     "You are Operator, the LastB2B account assistant.",
     "You are inside a multi-step planning loop.",
     "Respond with JSON only.",
-    'The JSON object must contain: message (string), done (boolean), toolName (string), and toolInput (object).',
+    'The JSON object must contain: message (string), done (boolean), toolName (string), and toolInputJson (string).',
     'Use toolName as an empty string when you are not calling a tool in this step.',
+    'Use toolInputJson as a JSON object string like "{}" or "{\\"brandId\\":\\"...\\"}".',
     "You may call at most one tool per step.",
     "Ground every statement in the supplied account context and recent thread messages.",
     "Talk like a sharp human teammate, not a dashboard, support bot, or structured report.",
@@ -1226,12 +1227,9 @@ async function planOperatorReplyWithLlm(input: {
                   message: { type: "string" },
                   done: { type: "boolean" },
                   toolName: { type: "string" },
-                  toolInput: {
-                    type: "object",
-                    additionalProperties: true,
-                  },
+                  toolInputJson: { type: "string" },
                 },
-                required: ["message", "done", "toolName", "toolInput"],
+                required: ["message", "done", "toolName", "toolInputJson"],
               },
             },
           },
@@ -1268,7 +1266,15 @@ async function planOperatorReplyWithLlm(input: {
       assistant = normalizeAssistantReply(row, input.fallbackAssistant, { plainGreeting: greetingOnly });
 
       const rawToolName = asString(row.toolName);
-      const rawToolInput = asRecord(row.toolInput);
+      let rawToolInput: Record<string, unknown> = {};
+      const rawToolInputJson = asString(row.toolInputJson);
+      if (rawToolInputJson) {
+        try {
+          rawToolInput = asRecord(JSON.parse(rawToolInputJson));
+        } catch {
+          rawToolInput = {};
+        }
+      }
       if (!rawToolName) {
         return {
           assistant,

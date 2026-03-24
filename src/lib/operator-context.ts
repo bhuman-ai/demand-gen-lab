@@ -45,6 +45,11 @@ export type OperatorBrandContext = {
     mailpoolWebhookConfigured: boolean;
     deliverabilityProvider: string;
     mailpoolDomainInventoryCount: number;
+    mailpoolDomains: Array<{
+      id: string;
+      domain: string;
+      status: string;
+    }>;
   };
   senders: {
     total: number;
@@ -414,6 +419,11 @@ export async function getOperatorBrandContext(brandId: string): Promise<Operator
       mailpoolWebhookConfigured: settings.mailpool.hasWebhookSecret,
       deliverabilityProvider: settings.deliverability.provider,
       mailpoolDomainInventoryCount: mailpoolDomains.length,
+      mailpoolDomains: mailpoolDomains.map((domain) => ({
+        id: domain.id,
+        domain: domain.domain,
+        status: domain.status,
+      })),
     },
     senders: {
       total: senderSnapshots.length,

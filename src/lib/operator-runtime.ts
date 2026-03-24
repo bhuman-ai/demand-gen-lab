@@ -22,6 +22,8 @@ import type {
   OperatorChatRequest,
   OperatorChatResponse,
   OperatorExecutionEnvelope,
+  OperatorExecutionForm,
+  OperatorExecutionFormField,
   OperatorExecutionIntent,
   OperatorExecutionQuestion,
   OperatorMessage,
@@ -271,6 +273,7 @@ function buildExecutionEnvelope(input: {
   receipt?: OperatorReceipt | null;
   missingFields?: string[];
   questions?: OperatorExecutionQuestion[];
+  forms?: OperatorExecutionForm[];
   error?: string;
 }): OperatorExecutionEnvelope {
   const toolName = input.toolName ?? "";
@@ -283,6 +286,7 @@ function buildExecutionEnvelope(input: {
     receipt: input.receipt ?? null,
     missingFields: input.missingFields ?? [],
     questions: input.questions ?? [],
+    forms: input.forms ?? [],
     error: asString(input.error),
   };
 }
@@ -293,6 +297,7 @@ function buildNeedInfoEnvelope(input: {
   missingFields: string[];
   preview?: Record<string, unknown>;
   questions?: OperatorExecutionQuestion[];
+  forms?: OperatorExecutionForm[];
 }): OperatorExecutionEnvelope {
   return buildExecutionEnvelope({
     state: "need_info",
@@ -301,6 +306,7 @@ function buildNeedInfoEnvelope(input: {
     preview: input.preview,
     missingFields: input.missingFields,
     questions: input.questions,
+    forms: input.forms,
   });
 }
 
@@ -314,6 +320,225 @@ function buildQuestion(prompt: string, options: Array<{ label: string; message: 
       }))
       .filter((option) => option.label && option.message),
   };
+}
+
+function buildFormField(input: Partial<OperatorExecutionFormField> & Pick<OperatorExecutionFormField, "name" | "label" | "type">): OperatorExecutionFormField {
+  return {
+    name: asString(input.name),
+    label: asString(input.label),
+    type: input.type,
+    required: Boolean(input.required),
+    placeholder: asString(input.placeholder),
+    value: asString(input.value),
+    autoComplete: asString(input.autoComplete),
+    options: Array.isArray(input.options)
+      ? input.options
+          .map((option) => ({
+            label: asString(option?.label),
+            value: asString(option?.value),
+          }))
+          .filter((option) => option.label && option.value)
+      : [],
+  };
+}
+
+function buildProvisionForms(input: {
+  brandContext: Awaited<ReturnType<typeof getOperatorBrandContext>>;
+  toolInput: Record<string, unknown>;
+  missingFields: string[];
+}): OperatorExecutionForm[] {
+  const forms: OperatorExecutionForm[] = [];
+  const domainMode = asString(input.toolInput.domainMode);
+  const fromLocalPart = asString(input.toolInput.fromLocalPart);
+  const domain = asString(input.toolInput.domain);
+  const senderEmail = fromLocalPart && domain ? `${fromLocalPart}@${domain}` : "";
+  const registrant = asRecord(input.toolInput.registrant);
+  const inventory = input.brandContext?.provisioning.mailpoolDomains ?? [];
+  const inventoryOptions = inventory.map((item) => ({
+    label: item.domain,
+    value: item.domain,
+  }));
+
+  if (input.missingFields.includes("sender email")) {
+    if (domainMode === "existing" && inventoryOptions.length > 0) {
+      forms.push({
+        id: "provision-existing-sender",
+        formType: "provision_sender_email",
+        toolName: "provision_mailpool_sender",
+        title: "Sender details",
+        description: "Pick the existing Mailpool domain and local-part for the sender you want to create.",
+        submitLabel: "Continue",
+        input: input.toolInput,
+        fields: [
+          buildFormField({
+            name: "fromLocalPart",
+            label: "Sender local-part",
+            type: "text",
+            required: true,
+            placeholder: "marco",
+            value: fromLocalPart,
+            autoComplete: "username",
+          }),
+          buildFormField({
+            name: "domain",
+            label: "Mailpool domain",
+            type: "select",
+            required: true,
+            value: domain,
+            options: inventoryOptions,
+          }),
+        ],
+      });
+    } else {
+      forms.push({
+        id: "provision-sender-email",
+        formType: "provision_sender_email",
+        toolName: "provision_mailpool_sender",
+        title: "Sender details",
+        description:
+          domainMode === "register"
+            ? "Enter the exact sender email you want to buy and provision."
+            : "Enter the exact sender email you want to create for this brand.",
+        submitLabel: "Continue",
+        input: input.toolInput,
+        fields: [
+          buildFormField({
+            name: "senderEmail",
+            label: "Sender email",
+            type: "email",
+            required: true,
+            placeholder: "marco@getselffunded.com",
+            value: senderEmail,
+            autoComplete: "email",
+          }),
+          ...(!domainMode && inventoryOptions.length > 0
+            ? [
+                buildFormField({
+                  name: "domainMode",
+                  label: "How should I set it up?",
+                  type: "select",
+                  required: true,
+                  value: "",
+                  options: [
+                    { label: "Use an existing Mailpool domain", value: "existing" },
+                    { label: "Buy a new sender domain", value: "register" },
+                  ],
+                }),
+              ]
+            : []),
+        ],
+      });
+    }
+  }
+
+  const needsRegistrant = input.missingFields.some((field) => field.startsWith("registrant "));
+  if (domainMode === "register" && needsRegistrant) {
+    forms.push({
+      id: "provision-registrant",
+      formType: "provision_registrant",
+      toolName: "provision_mailpool_sender",
+      title: "Registrant details",
+      description: senderEmail
+        ? `Mailpool needs domain owner details before it can buy ${domain} and provision ${senderEmail}.`
+        : "Mailpool needs domain owner details before it can buy the domain and finish setup.",
+      submitLabel: "Continue",
+      input: input.toolInput,
+      fields: [
+        buildFormField({
+          name: "firstName",
+          label: "First name",
+          type: "text",
+          required: true,
+          placeholder: "Marco",
+          value: asString(registrant.firstName),
+          autoComplete: "given-name",
+        }),
+        buildFormField({
+          name: "lastName",
+          label: "Last name",
+          type: "text",
+          required: true,
+          placeholder: "Rosetti",
+          value: asString(registrant.lastName),
+          autoComplete: "family-name",
+        }),
+        buildFormField({
+          name: "organizationName",
+          label: "Company",
+          type: "text",
+          required: false,
+          placeholder: input.brandContext?.brand.name || "SelfFunded",
+          value: asString(registrant.organizationName) || asString(input.brandContext?.brand.name),
+          autoComplete: "organization",
+        }),
+        buildFormField({
+          name: "emailAddress",
+          label: "Email",
+          type: "email",
+          required: true,
+          placeholder: "mrosetti@selffunded.dev",
+          value: asString(registrant.emailAddress),
+          autoComplete: "email",
+        }),
+        buildFormField({
+          name: "phone",
+          label: "Phone",
+          type: "tel",
+          required: false,
+          placeholder: "+39 080 000 0000",
+          value: asString(registrant.phone),
+          autoComplete: "tel",
+        }),
+        buildFormField({
+          name: "address1",
+          label: "Street address",
+          type: "text",
+          required: true,
+          placeholder: "Piazza Umberto I, 1",
+          value: asString(registrant.address1),
+          autoComplete: "address-line1",
+        }),
+        buildFormField({
+          name: "city",
+          label: "City",
+          type: "text",
+          required: true,
+          placeholder: "Bari",
+          value: asString(registrant.city),
+          autoComplete: "address-level2",
+        }),
+        buildFormField({
+          name: "stateProvince",
+          label: "State / Province",
+          type: "text",
+          required: true,
+          placeholder: "BA",
+          value: asString(registrant.stateProvince),
+          autoComplete: "address-level1",
+        }),
+        buildFormField({
+          name: "postalCode",
+          label: "Postal code",
+          type: "text",
+          required: true,
+          placeholder: "70121",
+          value: asString(registrant.postalCode),
+          autoComplete: "postal-code",
+        }),
+        buildFormField({
+          name: "country",
+          label: "Country",
+          type: "text",
+          required: true,
+          placeholder: "IT",
+          value: asString(registrant.country) || "US",
+          autoComplete: "country",
+        }),
+      ],
+    });
+  }
+
+  return forms;
 }
 
 function buildProvisionQuestions(input: {
@@ -330,13 +555,13 @@ function buildProvisionQuestions(input: {
           ? [
               {
                 label: "Use existing domain",
-                message: "Use an existing Mailpool domain for the sender.",
+                message: "Add a sender for this brand using an existing Mailpool domain.",
               },
             ]
           : []),
         {
           label: "Buy new domain",
-          message: "Buy a new sender domain for this sender.",
+          message: "Add a sender for this brand by buying a new sender domain.",
         },
       ])
     );
@@ -347,13 +572,13 @@ function buildProvisionQuestions(input: {
       buildQuestion("Do you want to keep the new-domain flow, or switch to an existing Mailpool domain?", [
         {
           label: "Keep new domain",
-          message: "Keep the new sender domain flow. I'll send the registrant details next.",
+          message: "Add a sender for this brand by buying a new sender domain. I'll provide the registrant details next.",
         },
         ...(input.hasMailpoolInventory
           ? [
               {
                 label: "Use existing domain",
-                message: "Use an existing Mailpool domain instead.",
+                message: "Add a sender for this brand using an existing Mailpool domain instead.",
               },
             ]
           : []),
@@ -588,6 +813,7 @@ function buildProvisionMissingFields(toolInput: Record<string, unknown>) {
       ["emailAddress", "registrant email"],
       ["address1", "registrant street address"],
       ["city", "registrant city"],
+      ["stateProvince", "registrant state or province"],
       ["postalCode", "registrant postal code"],
       ["country", "registrant country"],
     ];
@@ -771,9 +997,13 @@ function normalizeRequestedAction(input: {
     if (!asString(toolInput.domainMode)) {
       const message = input.message.toLowerCase();
       toolInput.domainMode =
-        message.includes("buy") || message.includes("register") || message.includes("new domain")
+        message.includes("buy") ||
+        message.includes("register") ||
+        message.includes("new domain")
           ? "register"
-          : "existing";
+          : message.includes("existing")
+            ? "existing"
+            : "existing";
     }
   }
 
@@ -1005,7 +1235,6 @@ function inferActionFromMessage(
   input: OperatorChatRequest,
   context: Awaited<ReturnType<typeof getOperatorBrandContext>>
 ): OperatorRequestedAction | null {
-  if (input.structuredAction) return input.structuredAction;
   const message = input.message.trim().toLowerCase();
   if (!message) return null;
   const quoted = extractQuotedText(input.message);
@@ -1165,7 +1394,13 @@ function inferActionFromMessage(
     };
   }
 
-  if (context?.brand.id && (message.includes("add sender") || message.includes("buy domain") || message.includes("provision sender"))) {
+  const wantsSenderProvision =
+    /\b(add|create|set up|setup|provision)\b.*\bsender\b/.test(message) ||
+    /\bbuy\b.*\bdomain\b/.test(message) ||
+    /\bnew sender domain\b/.test(message) ||
+    /\bexisting mailpool domain\b/.test(message);
+
+  if (context?.brand.id && wantsSenderProvision) {
     const emailParts = extractEmailParts(message);
     const parsedDomain = emailParts?.domain || extractDomain(message);
     return {
@@ -1176,7 +1411,9 @@ function inferActionFromMessage(
         domain: parsedDomain,
         fromLocalPart: emailParts?.fromLocalPart ?? "",
         domainMode:
-          message.includes("buy") || message.includes("register") || message.includes("new domain")
+          message.includes("buy") ||
+          message.includes("register") ||
+          message.includes("new domain")
             ? "register"
             : "existing",
       },
@@ -1357,7 +1594,16 @@ export async function runOperatorChatTurn(input: OperatorChatRequest): Promise<O
           recommendations: [],
         };
   const messageHistory = await listOperatorMessages(thread.id);
-  const llmPlan = input.structuredAction
+  const structuredAction = input.structuredAction
+    ? normalizeRequestedAction({
+        raw: input.structuredAction,
+        brandId: resolvedBrandId,
+        mode: input.mode,
+        message: input.message,
+        context: brandContext,
+      })
+    : null;
+  const llmPlan = structuredAction
     ? null
     : await planOperatorReplyWithLlm({
         brandId: resolvedBrandId,
@@ -1367,14 +1613,16 @@ export async function runOperatorChatTurn(input: OperatorChatRequest): Promise<O
         context: brandContext,
         fallbackAssistant,
       });
-  const requestedAction = filterRequestedActionForMessage(
-    input.structuredAction ?? llmPlan?.requestedAction ?? inferActionFromMessage(input, brandContext),
-    input.message
-  );
+  const requestedAction = structuredAction
+    ? structuredAction
+    : filterRequestedActionForMessage(
+        llmPlan?.requestedAction ?? inferActionFromMessage(input, brandContext),
+        input.message
+      );
   const run = await createOperatorRun({
     threadId: thread.id,
     brandId: resolvedBrandId,
-    model: llmPlan?.model ?? (input.structuredAction ? "operator-structured-action" : "operator-v1"),
+    model: llmPlan?.model ?? (structuredAction ? "operator-structured-action" : "operator-v1"),
     contextSnapshot: snapshotContext(brandContext),
     plan: requestedAction
       ? [{ step: requestedAction.toolName, status: "in_progress" }]
@@ -1423,6 +1671,11 @@ export async function runOperatorChatTurn(input: OperatorChatRequest): Promise<O
             domainMode: asString(requestedAction.input.domainMode),
             missingFields: ["sender email"],
           }),
+          forms: buildProvisionForms({
+            brandContext,
+            toolInput: requestedAction.input,
+            missingFields: ["sender email"],
+          }),
         });
       } else if (
         tool.name === "provision_mailpool_sender" &&
@@ -1451,6 +1704,11 @@ export async function runOperatorChatTurn(input: OperatorChatRequest): Promise<O
             questions: buildProvisionQuestions({
               hasMailpoolInventory: (brandContext?.provisioning.mailpoolDomainInventoryCount ?? 0) > 0,
               domainMode: asString(requestedAction.input.domainMode),
+              missingFields: buildProvisionMissingFields(requestedAction.input),
+            }),
+            forms: buildProvisionForms({
+              brandContext,
+              toolInput: requestedAction.input,
               missingFields: buildProvisionMissingFields(requestedAction.input),
             }),
           });

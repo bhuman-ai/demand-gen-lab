@@ -20,12 +20,16 @@ import {
 import type {
   OperatorAction,
   OperatorExecutionEnvelope,
+  OperatorExecutionForm,
   OperatorMessage,
   OperatorThreadDetail,
 } from "@/lib/operator-types";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -41,6 +45,24 @@ function asString(value: unknown) {
 
 function asStringArray(value: unknown) {
   return Array.isArray(value) ? value.map((entry) => String(entry ?? "").trim()).filter(Boolean) : [];
+}
+
+function toStringRecord(value: FormData) {
+  const next: Record<string, string> = {};
+  for (const [key, entry] of value.entries()) {
+    next[key] = String(entry ?? "").trim();
+  }
+  return next;
+}
+
+function splitSenderEmail(value: string) {
+  const normalized = value.trim().toLowerCase();
+  const match = normalized.match(/^([^@\s]+)@([^@\s]+\.[^@\s]+)$/);
+  if (!match) return null;
+  return {
+    fromLocalPart: match[1] ?? "",
+    domain: match[2] ?? "",
+  };
 }
 
 function executionStateLabel(state: OperatorExecutionEnvelope["state"]) {
@@ -94,6 +116,7 @@ function ExecutionCard({
   onConfirm,
   onCancel,
   onChooseReply,
+  onSubmitForm,
   actionBusyId,
   sending,
 }: {
@@ -102,6 +125,7 @@ function ExecutionCard({
   onConfirm: (actionId: string) => void;
   onCancel: (actionId: string) => void;
   onChooseReply: (message: string) => void;
+  onSubmitForm: (form: OperatorExecutionForm, values: Record<string, string>) => void;
   actionBusyId: string;
   sending: boolean;
 }) {
@@ -109,6 +133,7 @@ function ExecutionCard({
   const receipt = execution.receipt;
   const missingFields = asStringArray(execution.missingFields);
   const questions = Array.isArray(execution.questions) ? execution.questions : [];
+  const forms = Array.isArray(execution.forms) ? execution.forms : [];
   const statusLabel = executionStateLabel(execution.state);
   const actionId = asString(execution.actionId);
   const canConfirm = execution.state === "awaiting_confirmation" && Boolean(actionId) && action?.status === "awaiting_approval";
@@ -202,6 +227,91 @@ function ExecutionCard({
             })}
           </div>
         ) : null}
+        {forms.length ? (
+          <div className="space-y-3">
+            {forms.map((form, formIndex) => {
+              const formId = asString(form?.id) || `operator-form-${formIndex}`;
+              const title = asString(form?.title);
+              const description = asString(form?.description);
+              const submitLabel = asString(form?.submitLabel) || "Continue";
+              const fields = Array.isArray(form?.fields) ? form.fields : [];
+              if (!title || !fields.length) return null;
+              return (
+                <form
+                  key={formId}
+                  className="rounded-[12px] border border-[color:var(--border)] bg-[color:var(--surface)]/80 p-3"
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    onSubmitForm(form, toStringRecord(new FormData(event.currentTarget)));
+                  }}
+                >
+                  <div className="text-sm font-medium text-[color:var(--foreground)]">{title}</div>
+                  {description ? (
+                    <div className="mt-1 text-xs leading-5 text-[color:var(--muted-foreground)]">{description}</div>
+                  ) : null}
+                  <div className="mt-3 grid gap-3">
+                    {fields.map((field, fieldIndex) => {
+                      const fieldName = asString(field?.name);
+                      const fieldLabel = asString(field?.label);
+                      const fieldType = asString(field?.type);
+                      const fieldId = `${formId}-${fieldName || fieldIndex}`;
+                      if (!fieldName || !fieldLabel || !fieldType) return null;
+                      if (fieldType === "select") {
+                        const options = Array.isArray(field?.options) ? field.options : [];
+                        return (
+                          <div key={fieldId} className="space-y-1.5">
+                            <Label htmlFor={fieldId}>{fieldLabel}</Label>
+                            <Select
+                              id={fieldId}
+                              name={fieldName}
+                              defaultValue={asString(field?.value)}
+                              required={Boolean(field?.required)}
+                              disabled={sending || Boolean(actionBusyId)}
+                            >
+                              <option value="">
+                                {asString(field?.placeholder) || `Select ${fieldLabel.toLowerCase()}`}
+                              </option>
+                              {options.map((option, optionIndex) => {
+                                const label = asString(option?.label);
+                                const value = asString(option?.value);
+                                if (!label || !value) return null;
+                                return (
+                                  <option key={`${fieldId}-${optionIndex}`} value={value}>
+                                    {label}
+                                  </option>
+                                );
+                              })}
+                            </Select>
+                          </div>
+                        );
+                      }
+                      return (
+                        <div key={fieldId} className="space-y-1.5">
+                          <Label htmlFor={fieldId}>{fieldLabel}</Label>
+                          <Input
+                            id={fieldId}
+                            name={fieldName}
+                            type={fieldType}
+                            defaultValue={asString(field?.value)}
+                            placeholder={asString(field?.placeholder)}
+                            required={Boolean(field?.required)}
+                            autoComplete={asString(field?.autoComplete) || undefined}
+                            disabled={sending || Boolean(actionBusyId)}
+                          />
+                        </div>
+                      );
+                    })}
+                  </div>
+                  <div className="mt-3">
+                    <Button type="submit" size="sm" disabled={sending || Boolean(actionBusyId)}>
+                      {submitLabel}
+                    </Button>
+                  </div>
+                </form>
+              );
+            })}
+          </div>
+        ) : null}
       </div>
       {canConfirm ? (
         <div className="mt-3 flex items-center gap-2">
@@ -235,6 +345,7 @@ function MessageBody({
   onConfirm,
   onCancel,
   onChooseReply,
+  onSubmitForm,
   actionBusyId,
   sending,
 }: {
@@ -243,6 +354,7 @@ function MessageBody({
   onConfirm: (actionId: string) => void;
   onCancel: (actionId: string) => void;
   onChooseReply: (message: string) => void;
+  onSubmitForm: (form: OperatorExecutionForm, values: Record<string, string>) => void;
   actionBusyId: string;
   sending: boolean;
 }) {
@@ -262,6 +374,7 @@ function MessageBody({
             onConfirm={onConfirm}
             onCancel={onCancel}
             onChooseReply={onChooseReply}
+            onSubmitForm={onSubmitForm}
             actionBusyId={actionBusyId}
             sending={sending}
           />
@@ -385,6 +498,38 @@ export default function OperatorPanel({
     setThreadDetail(detail);
   }
 
+  async function handleStructuredAction(input: {
+    message: string;
+    structuredAction: {
+      toolName: OperatorExecutionForm["toolName"];
+      input: Record<string, unknown>;
+    };
+  }) {
+    const trimmed = input.message.trim();
+    if (!trimmed || sending) return;
+    if (!activeBrandId) {
+      setError("Open a brand first so Operator has account context.");
+      return;
+    }
+
+    setSending(true);
+    setError("");
+    try {
+      const response = await sendOperatorChat({
+        threadId: threadDetail?.thread.id,
+        brandId: activeBrandId,
+        message: trimmed,
+        structuredAction: input.structuredAction,
+      });
+      setInput("");
+      await refreshThread(response.thread.id);
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : "Operator request failed");
+    } finally {
+      setSending(false);
+    }
+  }
+
   async function handleSend(message: string) {
     const trimmed = message.trim();
     if (!trimmed || sending) return;
@@ -408,6 +553,97 @@ export default function OperatorPanel({
     } finally {
       setSending(false);
     }
+  }
+
+  async function handleSubmitForm(form: OperatorExecutionForm, values: Record<string, string>) {
+    if (form.toolName !== "provision_mailpool_sender") {
+      setError("This Operator form is not wired yet.");
+      return;
+    }
+
+    const baseInput: Record<string, unknown> = {
+      ...asRecord(form.input),
+      brandId: activeBrandId,
+      provider: "mailpool",
+    };
+    if (form.formType === "provision_sender_email") {
+      let nextInput = { ...baseInput };
+      const domainMode = asString(values.domainMode) || asString(nextInput.domainMode);
+      if (domainMode) {
+        nextInput.domainMode = domainMode;
+      }
+
+      if (values.senderEmail) {
+        const parts = splitSenderEmail(values.senderEmail);
+        if (!parts) {
+          setError("Enter a valid sender email.");
+          return;
+        }
+        nextInput = {
+          ...nextInput,
+          fromLocalPart: parts.fromLocalPart,
+          domain: parts.domain,
+        };
+      } else {
+        const fromLocalPart = asString(values.fromLocalPart);
+        const domain = asString(values.domain).toLowerCase();
+        if (!fromLocalPart || !domain) {
+          setError("Choose the sender local-part and domain.");
+          return;
+        }
+        nextInput = {
+          ...nextInput,
+          fromLocalPart,
+          domain,
+        };
+      }
+
+      const fromLocalPart = asString(nextInput.fromLocalPart);
+      const domain = asString(nextInput.domain);
+      const message =
+        asString(nextInput.domainMode) === "register"
+          ? `Add a sender for this brand by buying ${domain} and creating ${fromLocalPart}@${domain}.`
+          : `Add a sender for this brand using ${domain}. Create ${fromLocalPart}@${domain}.`;
+      await handleStructuredAction({
+        message,
+        structuredAction: {
+          toolName: "provision_mailpool_sender",
+          input: nextInput,
+        },
+      });
+      return;
+    }
+
+    if (form.formType === "provision_registrant") {
+      const nextInput: Record<string, unknown> = {
+        ...baseInput,
+        registrant: {
+          ...asRecord(baseInput.registrant),
+          firstName: asString(values.firstName),
+          lastName: asString(values.lastName),
+          organizationName: asString(values.organizationName),
+          emailAddress: asString(values.emailAddress),
+          phone: asString(values.phone),
+          address1: asString(values.address1),
+          city: asString(values.city),
+          stateProvince: asString(values.stateProvince),
+          postalCode: asString(values.postalCode),
+          country: asString(values.country).toUpperCase(),
+        },
+      };
+      const fromLocalPart = asString(nextInput.fromLocalPart);
+      const domain = asString(nextInput.domain);
+      await handleStructuredAction({
+        message: `Buy ${domain} and provision ${fromLocalPart}@${domain} for this brand using the registrant details I provided.`,
+        structuredAction: {
+          toolName: "provision_mailpool_sender",
+          input: nextInput,
+        },
+      });
+      return;
+    }
+
+    setError("This Operator form type is not wired yet.");
   }
 
   async function handleConfirm(actionId: string) {
@@ -525,6 +761,7 @@ export default function OperatorPanel({
                     onConfirm={(actionId) => void handleConfirm(actionId)}
                     onCancel={(actionId) => void handleCancel(actionId)}
                     onChooseReply={(message) => void handleSend(message)}
+                    onSubmitForm={(form, values) => void handleSubmitForm(form, values)}
                     actionBusyId={actionBusyId}
                     sending={sending}
                   />

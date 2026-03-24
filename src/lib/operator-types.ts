@@ -91,6 +91,33 @@ export type OperatorExecutionQuestion = {
   options: OperatorExecutionQuestionOption[];
 };
 
+export type OperatorExecutionFormFieldOption = {
+  label: string;
+  value: string;
+};
+
+export type OperatorExecutionFormField = {
+  name: string;
+  label: string;
+  type: "text" | "email" | "tel" | "select";
+  required: boolean;
+  placeholder: string;
+  value: string;
+  autoComplete: string;
+  options: OperatorExecutionFormFieldOption[];
+};
+
+export type OperatorExecutionForm = {
+  id: string;
+  formType: "provision_sender_email" | "provision_registrant";
+  toolName: OperatorToolName;
+  title: string;
+  description: string;
+  submitLabel: string;
+  input: Record<string, unknown>;
+  fields: OperatorExecutionFormField[];
+};
+
 export type OperatorExecutionEnvelope = {
   state: OperatorExecutionState;
   actionId: string;
@@ -100,6 +127,7 @@ export type OperatorExecutionEnvelope = {
   receipt: OperatorReceipt | null;
   missingFields: string[];
   questions: OperatorExecutionQuestion[];
+  forms: OperatorExecutionForm[];
   error: string;
 };
 

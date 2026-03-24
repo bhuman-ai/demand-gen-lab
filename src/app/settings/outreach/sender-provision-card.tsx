@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -437,7 +438,7 @@ export default function SenderProvisionCard({
     setResult(null);
     setSetup((prev) => ({
       ...prev,
-      provider: "mailpool",
+      provider: path === "existing_domain" ? "customerio" : "mailpool",
     }));
   }
 
@@ -509,9 +510,9 @@ export default function SenderProvisionCard({
       <div className="grid gap-3 rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-4">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
-            <div className="text-base font-semibold">Do you already have a domain?</div>
+            <div className="text-base font-semibold">Do you already own the domain?</div>
             <div className="text-sm text-[color:var(--muted-foreground)]">
-              Pick the simple Mailpool path first. Advanced provider setup is still available if you need it.
+              Pick the simple path. If you already own the domain, we only support domains inside Namecheap right now.
             </div>
           </div>
           <Button
@@ -540,9 +541,9 @@ export default function SenderProvisionCard({
                   : "border-[color:var(--border)] bg-[color:var(--surface)]"
               }`}
             >
-              <div className="text-sm font-semibold">Yes, connect my domain</div>
+              <div className="text-sm font-semibold">Yes, I already own a domain</div>
               <div className="text-sm text-[color:var(--muted-foreground)]">
-                Use a domain you already own, add or find it in Mailpool, then create a fresh Mailpool inbox for this sender.
+                Add that domain to Namecheap first. Then come back here and pick which domain you want us to use.
               </div>
             </button>
             <button
@@ -554,9 +555,9 @@ export default function SenderProvisionCard({
                   : "border-[color:var(--border)] bg-[color:var(--surface)]"
               }`}
             >
-              <div className="text-sm font-semibold">No, buy a new domain</div>
+              <div className="text-sm font-semibold">No, buy me a new domain</div>
               <div className="text-sm text-[color:var(--muted-foreground)]">
-                Buy the domain in Mailpool and let setup create the inbox, forwarding, and first deliverability checks.
+                We will buy the domain, create the inbox, and set everything up for you.
               </div>
             </button>
           </div>
@@ -623,12 +624,12 @@ export default function SenderProvisionCard({
             <div className="grid gap-2">
               <Label>Path</Label>
               <div className="flex min-h-10 items-center rounded-xl border border-[color:var(--border)] bg-[color:var(--surface)] px-3 text-sm font-medium">
-                {guidedPath === "existing_domain" ? "Existing domain in Mailpool" : "Buy new domain in Mailpool"}
+                {guidedPath === "existing_domain" ? "Use a domain from Namecheap" : "Buy a new domain"}
               </div>
             </div>
           )}
           <div className="grid gap-2">
-            <Label htmlFor="setup-local-part">Sender Local-Part</Label>
+            <Label htmlFor="setup-local-part">Name before the @</Label>
             <Input
               id="setup-local-part"
               value={setup.fromLocalPart}
@@ -656,17 +657,23 @@ export default function SenderProvisionCard({
             </div>
           ) : (
             <div className="grid gap-2">
-              <Label>Inbox</Label>
+              <Label>{showExistingDomainPath ? "Reply inbox" : "Inbox"}</Label>
               <div className="flex min-h-10 items-center rounded-xl border border-[color:var(--border)] bg-[color:var(--surface)] px-3 text-sm">
-                New Mailpool inbox will be created automatically
+                {showExistingDomainPath
+                  ? selectedMailbox?.config.mailbox.email || "No reply inbox picked yet"
+                  : "New Mailpool inbox will be created automatically"}
               </div>
               <div className="text-[11px] text-[color:var(--muted-foreground)]">
-                Replies and sending both use the same Mailpool mailbox in this flow.
+                {showExistingDomainPath
+                  ? selectedMailbox
+                    ? "Replies will go to the inbox already linked to this brand."
+                    : "You can add a reply inbox later in Outreach Settings."
+                  : "Replies and sending both use the same Mailpool mailbox in this flow."}
               </div>
             </div>
           )}
           <div className="grid gap-2">
-            <Label htmlFor="setup-account-name">Sender Account Name</Label>
+            <Label htmlFor="setup-account-name">Internal name (optional)</Label>
             <Input
               id="setup-account-name"
               value={setup.accountName}
@@ -699,6 +706,27 @@ export default function SenderProvisionCard({
             />
             Auto-assign sender to brand
           </Label>
+        </div>
+      ) : null}
+
+      {showExistingDomainPath ? (
+        <div className="grid gap-3 rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-4">
+          <div className="grid gap-1">
+            <div className="text-sm font-semibold">How this works</div>
+            <div className="text-sm text-[color:var(--muted-foreground)]">
+              We can only use domains that already live in Namecheap.
+            </div>
+          </div>
+          <div className="grid gap-2 text-sm text-[color:var(--muted-foreground)]">
+            <div>1. Put your domain into Namecheap.</div>
+            <div>2. Save your Namecheap connection in Outreach Settings.</div>
+            <div>3. Come back here and pick the domain you want us to use.</div>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Button asChild type="button" variant="outline" size="sm">
+              <Link href="/settings/outreach">Open Outreach Settings</Link>
+            </Button>
+          </div>
         </div>
       ) : null}
 
@@ -811,20 +839,20 @@ export default function SenderProvisionCard({
               <div className="text-sm font-semibold">
                 {advancedMode
                   ? "Your Domains"
-                  : "Use a domain you already own"}
+                  : "Pick a Namecheap domain"}
               </div>
               <div className="text-[11px] text-[color:var(--muted-foreground)]">
                 {advancedMode
                   ? setup.provider === "mailpool"
                     ? "These are the domains already managed inside Mailpool."
                     : "Click once to connect the domain and set the forwarding."
-                  : "Pick a domain already added in Mailpool. We will create a new inbox for it and attach it to this brand."}
+                  : "We pull these straight from Namecheap. Pick the one you want to use for this sender."}
               </div>
             </div>
             <Input
               value={inventoryQuery}
               onChange={(event) => setInventoryQuery(event.target.value)}
-              placeholder="Filter domains"
+              placeholder={showExistingDomainPath ? "Search Namecheap domains" : "Filter domains"}
               className="w-full max-w-xs"
             />
           </div>
@@ -841,7 +869,9 @@ export default function SenderProvisionCard({
                 ? advancedMode
                   ? "Save Mailpool credentials above first. Once that is done, this section will list domains already managed in Mailpool."
                   : "Save Mailpool credentials first. Then this list will show domains already added in Mailpool."
-                : "Save platform Namecheap credentials above first. Once that is done, this section will list every owned domain with a setup button."}
+                : showExistingDomainPath
+                  ? "We cannot see your Namecheap domains yet. Open Outreach Settings, connect Namecheap, then come back here."
+                  : "Save platform Namecheap credentials above first. Once that is done, this section will list every owned domain with a setup button."}
             </div>
           ) : null}
 
@@ -892,7 +922,7 @@ export default function SenderProvisionCard({
                       </div>
                     ) : !advancedMode ? (
                       <div className="text-[11px] text-[color:var(--muted-foreground)]">
-                        This will create {setup.fromLocalPart.trim() || "hello"}@{item.domain} in Mailpool and connect it to this brand.
+                        We will set up {setup.fromLocalPart.trim() || "hello"}@{item.domain} for this brand.
                       </div>
                     ) : null}
                     <Button
@@ -906,7 +936,7 @@ export default function SenderProvisionCard({
                           ? "Re-run Setup"
                           : advancedMode
                             ? "Set Up"
-                            : "Connect + Create Inbox"}
+                            : "Use this domain"}
                     </Button>
                   </div>
                 );
@@ -915,7 +945,7 @@ export default function SenderProvisionCard({
                 <div className="text-sm text-[color:var(--muted-foreground)]">
                   {advancedMode
                     ? "No domains found."
-                    : "No Mailpool domains found yet. Add the domain in Mailpool first, then come back here to create the inbox."}
+                    : "No Namecheap domains found yet. Add the domain to Namecheap first, then come back here and pick it."}
                 </div>
               ) : null}
             </div>

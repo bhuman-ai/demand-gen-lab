@@ -1762,10 +1762,9 @@ export async function runOperatorChatTurn(input: OperatorChatRequest): Promise<O
       });
   const requestedAction = structuredAction
     ? structuredAction
-    : filterRequestedActionForMessage(
-        llmPlan?.requestedAction ?? inferActionFromMessage(input, brandContext),
-        input.message
-      );
+    : llmPlan
+      ? filterRequestedActionForMessage(llmPlan.requestedAction, input.message)
+      : filterRequestedActionForMessage(inferActionFromMessage(input, brandContext), input.message);
   const run = await createOperatorRun({
     threadId: thread.id,
     brandId: resolvedBrandId,

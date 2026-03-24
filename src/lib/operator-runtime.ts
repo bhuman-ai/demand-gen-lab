@@ -2091,6 +2091,22 @@ function inferMissingObjectFollowUp(input: {
   }
 
   if (
+    /\bcampaigns?\b/.test(lowered) &&
+    /\b(launch|start|pause|resume|cancel|delete|remove|show|open)\b/.test(lowered) &&
+    (context.campaigns.total ?? 0) === 0
+  ) {
+    return buildSimpleNeedInfoTurn({
+      toolName: "create_experiment",
+      toolInput: { brandId: context.brand.id },
+      preview: buildToolPreview(getOperatorToolSpec("create_experiment")!, {
+        brandId: context.brand.id,
+      }),
+      summary: "This brand doesn't have any campaigns yet. If you want to launch something, tell me the experiment you want me to create first.",
+      missingFields: ["experiment details"],
+    });
+  }
+
+  if (
     /\b(senders?|mailboxes?)\b/.test(lowered) &&
     /\b(add|create|make|provision|refresh|check|show|open|set up|setup)\b/.test(lowered) &&
     (context.senders.total ?? 0) === 0
@@ -2104,6 +2120,38 @@ function inferMissingObjectFollowUp(input: {
       }),
       summary: "This brand doesn't have any senders yet. Tell me the sender email you want and I'll set it up.",
       missingFields: ["sender email"],
+    });
+  }
+
+  if (
+    /\bleads?\b/.test(lowered) &&
+    /\b(update|mark|change|remove|delete|qualify|contact)\b/.test(lowered) &&
+    (context.leads.total ?? 0) === 0
+  ) {
+    return buildSimpleNeedInfoTurn({
+      toolName: "add_brand_lead",
+      toolInput: { brandId: context.brand.id },
+      preview: buildToolPreview(getOperatorToolSpec("add_brand_lead")!, {
+        brandId: context.brand.id,
+      }),
+      summary: "This brand doesn't have any leads yet. If you want, tell me who to add first.",
+      missingFields: ["lead details"],
+    });
+  }
+
+  if (
+    /\bdrafts?\b/.test(lowered) &&
+    /\b(send|dismiss|skip)\b/.test(lowered) &&
+    (context.inbox.draftItems?.length ?? 0) === 0
+  ) {
+    return buildSimpleNeedInfoTurn({
+      toolName: "summarize_inbox",
+      toolInput: { brandId: context.brand.id },
+      preview: buildToolPreview(getOperatorToolSpec("summarize_inbox")!, {
+        brandId: context.brand.id,
+      }),
+      summary: "I don't see any reply drafts for this brand right now.",
+      missingFields: ["reply draft"],
     });
   }
 
@@ -3265,6 +3313,34 @@ export async function runOperatorChatTurn(input: OperatorChatRequest): Promise<O
           toolInput: requestedAction.input,
           error: assistant.summary,
         });
+      } else if (tool.riskLevel === "read" && isExplicitMutationRequest(effectiveMessage)) {
+        const plannerNeedInfo = inferPlannerMissingInfoTurn({
+          message: effectiveMessage,
+          planner: llmPlan,
+          brandContext,
+          brandMemory,
+        });
+        const missingObjectFollowUp = inferMissingObjectFollowUp({
+          message: effectiveMessage,
+          brandContext,
+        });
+        if (plannerNeedInfo) {
+          assistant = plannerNeedInfo.assistant;
+          execution = plannerNeedInfo.execution;
+        } else if (missingObjectFollowUp) {
+          assistant = missingObjectFollowUp.assistant;
+          execution = missingObjectFollowUp.execution;
+        } else if (llmPlan?.assistant && assistantLooksLikeNeedInfo(llmPlan.assistant)) {
+          assistant = llmPlan.assistant;
+          execution = buildNeedInfoEnvelope({
+            missingFields: [],
+          });
+        } else {
+          assistant = makeUnexecutedActionAssistant(effectiveMessage, llmPlan?.assistant ?? fallbackAssistant);
+          execution = buildNeedInfoEnvelope({
+            missingFields: [],
+          });
+        }
       } else if (tool.name === "create_brand" && !asString(requestedAction.input.name)) {
         assistant = {
           summary: "I can create the brand, but I still need the brand name.",

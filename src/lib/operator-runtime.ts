@@ -77,6 +77,17 @@ function asRecord(value: unknown): Record<string, unknown> {
   return {};
 }
 
+function normalizeRawToolInput(value: unknown) {
+  const rawToolInput = asRecord(value);
+  const nestedToolInput = asRecord(rawToolInput.input);
+  return {
+    ...nestedToolInput,
+    ...Object.fromEntries(
+      Object.entries(rawToolInput).filter(([key]) => key !== "input")
+    ),
+  };
+}
+
 function isCasualGreeting(message: string) {
   const normalized = message.trim().toLowerCase();
   if (!normalized) return false;
@@ -949,6 +960,15 @@ function makeUnexecutedActionAssistant(message: string, assistant: OperatorChatA
     findings: [],
     recommendations: [],
   };
+}
+
+function assistantLooksLikeNeedInfo(assistant: OperatorChatAssistantReply) {
+  const summary = asString(assistant.summary).toLowerCase();
+  if (!summary) return false;
+  return (
+    summary.includes("?") ||
+    /\b(i still need|what should|which |tell me|send me|share|let me know)\b/.test(summary)
+  );
 }
 
 function buildProvisionMissingFields(toolInput: Record<string, unknown>) {
@@ -1830,6 +1850,266 @@ function buildDisambiguationEnvelope(input: {
   };
 }
 
+function buildSimpleNeedInfoTurn(input: {
+  toolName: OperatorToolName;
+  toolInput: Record<string, unknown>;
+  preview?: Record<string, unknown>;
+  summary: string;
+  missingFields: string[];
+  questions?: OperatorExecutionQuestion[];
+}) {
+  return {
+    assistant: {
+      summary: input.summary,
+      findings: [],
+      recommendations: [],
+    },
+    execution: buildNeedInfoEnvelope({
+      toolName: input.toolName,
+      toolInput: input.toolInput,
+      preview: input.preview,
+      missingFields: input.missingFields,
+      questions: input.questions,
+    }),
+  };
+}
+
+function inferPlannerMissingInfoTurn(input: {
+  message: string;
+  planner: OperatorPlannerResult | null;
+  brandContext: Awaited<ReturnType<typeof getOperatorBrandContext>>;
+  brandMemory: OperatorBrandMemory | null;
+}) {
+  const lastAttempt = input.planner?.trace[input.planner.trace.length - 1];
+  if (!lastAttempt?.toolName) return null;
+
+  const toolName = lastAttempt.toolName as OperatorToolName;
+  const tool = getOperatorToolSpec(toolName);
+  if (!tool) return null;
+
+  const toolInput = normalizeRawToolInput(lastAttempt.input);
+  const preview = buildToolPreview(tool, toolInput);
+  const context = input.brandContext;
+
+  if (toolName === "create_brand" && !asString(toolInput.name)) {
+    return buildSimpleNeedInfoTurn({
+      toolName,
+      toolInput,
+      preview,
+      summary: "I can create the brand, but I still need the brand name.",
+      missingFields: ["brand name"],
+    });
+  }
+
+  if (toolName === "create_experiment" && !asString(toolInput.name)) {
+    return buildSimpleNeedInfoTurn({
+      toolName,
+      toolInput,
+      preview,
+      summary: "I can create the experiment, but I still need the experiment name.",
+      missingFields: ["experiment name"],
+    });
+  }
+
+  if (["get_experiment_snapshot", "update_experiment", "delete_experiment", "launch_experiment_run", "control_experiment_run", "promote_experiment_to_campaign"].includes(toolName)) {
+    const experimentId =
+      resolveExperimentId(toolInput, context, input.message) ||
+      (mentionsReferencePronoun(input.message) ? asString(input.brandMemory?.recentSelection.experimentId) : "");
+    if (!experimentId) {
+      const experiments = context?.experiments.items ?? [];
+      if (experiments.length > 0) {
+        const intent = inferExperimentIntent(input.message);
+        return buildDisambiguationEnvelope({
+          toolName: intent.toolName,
+          toolInput: { brandId: context?.brand.id ?? "", ...intent.input },
+          label: `I need to know which experiment you mean before I can ${intent.verb} it.`,
+          questionPrompt: "Choose an experiment",
+          options: experiments.slice(0, 6).map((item) => ({
+            label: item.name,
+            message: intent.buildMessage(item.name),
+          })),
+        });
+      }
+      return buildSimpleNeedInfoTurn({
+        toolName,
+        toolInput,
+        preview,
+        summary: "This brand doesn't have any experiments yet. If you want, tell me what experiment you want me to create.",
+        missingFields: ["experiment details"],
+      });
+    }
+  }
+
+  if (["get_campaign_snapshot", "update_campaign", "delete_campaign", "launch_campaign_run", "control_campaign_run"].includes(toolName)) {
+    const campaignId =
+      resolveCampaignId(toolInput, context, input.message) ||
+      (mentionsReferencePronoun(input.message) ? asString(input.brandMemory?.recentSelection.campaignId) : "");
+    if (!campaignId) {
+      const campaigns = context?.campaigns.items ?? [];
+      if (campaigns.length > 0) {
+        const intent = inferCampaignIntent(input.message);
+        return buildDisambiguationEnvelope({
+          toolName: intent.toolName,
+          toolInput: { brandId: context?.brand.id ?? "", ...intent.input },
+          label: `I need to know which campaign you mean before I can ${intent.verb} it.`,
+          questionPrompt: "Choose a campaign",
+          options: campaigns.slice(0, 6).map((item) => ({
+            label: item.name,
+            message: intent.buildMessage(item.name),
+          })),
+        });
+      }
+      return buildSimpleNeedInfoTurn({
+        toolName,
+        toolInput,
+        preview,
+        summary: "This brand doesn't have any campaigns yet.",
+        missingFields: ["campaign"],
+      });
+    }
+  }
+
+  if (toolName === "update_brand_lead") {
+    const leadId =
+      resolveLeadId(toolInput, context, input.message) ||
+      (mentionsReferencePronoun(input.message) ? asString(input.brandMemory?.recentSelection.leadId) : "");
+    if (!leadId) {
+      const leads = context?.leads.items ?? [];
+      if (leads.length > 0) {
+        return buildDisambiguationEnvelope({
+          toolName,
+          toolInput: { brandId: context?.brand.id ?? "" },
+          label: "I need to know which lead you mean before I can update it.",
+          questionPrompt: "Choose a lead",
+          options: leads.slice(0, 6).map((item) => ({
+            label: item.name,
+            message: `Update lead "${item.name}".`,
+          })),
+        });
+      }
+      return buildSimpleNeedInfoTurn({
+        toolName,
+        toolInput,
+        preview,
+        summary: "This brand doesn't have any leads yet.",
+        missingFields: ["lead"],
+      });
+    }
+  }
+
+  if (toolName === "send_reply_draft" || toolName === "dismiss_reply_draft") {
+    const draftId =
+      resolveDraftId(toolInput, context, input.message) ||
+      (mentionsReferencePronoun(input.message) ? asString(input.brandMemory?.recentSelection.draftId) : "");
+    if (!draftId) {
+      const draftIntent = inferDraftIntent(input.message);
+      const drafts = context?.inbox.draftItems ?? [];
+      if (drafts.length > 0) {
+        return buildDisambiguationEnvelope({
+          toolName: draftIntent.toolName,
+          toolInput: { brandId: context?.brand.id ?? "" },
+          label: `I need to know which draft you mean before I can ${draftIntent.verb} it.`,
+          questionPrompt: "Choose a draft",
+          options: drafts.slice(0, 6).map((item) => ({
+            label: item.subject,
+            message: draftIntent.buildMessage(item.subject),
+          })),
+        });
+      }
+      return buildSimpleNeedInfoTurn({
+        toolName,
+        toolInput,
+        preview,
+        summary: "I don't see any reply drafts for this brand right now.",
+        missingFields: ["reply draft"],
+      });
+    }
+  }
+
+  if ((toolName === "refresh_mailpool_sender" || toolName === "get_sender_snapshot") && !resolveSenderAccountId(toolInput, context)) {
+    const senders = context?.senders.snapshots ?? [];
+    if (senders.length > 0) {
+      return buildDisambiguationEnvelope({
+        toolName,
+        toolInput: { brandId: context?.brand.id ?? "" },
+        label: "I need to know which sender you mean first.",
+        questionPrompt: "Choose a sender",
+        options: senders.slice(0, 6).map((item) => ({
+          label: item.fromEmail,
+          message:
+            toolName === "refresh_mailpool_sender"
+              ? `Refresh sender ${item.fromEmail}.`
+              : `Show sender ${item.fromEmail}.`,
+        })),
+      });
+    }
+    return buildSimpleNeedInfoTurn({
+      toolName,
+      toolInput,
+      preview,
+      summary: "This brand doesn't have any senders yet. If you want, I can add one.",
+      missingFields: ["sender"],
+    });
+  }
+
+  return null;
+}
+
+function inferMissingObjectFollowUp(input: {
+  message: string;
+  brandContext: Awaited<ReturnType<typeof getOperatorBrandContext>>;
+}) {
+  const context = input.brandContext;
+  if (!context) return null;
+
+  const lowered = input.message.toLowerCase();
+
+  if (looksLikeBrandCreationRequest(input.message) && !extractQuotedText(input.message) && !extractDomain(input.message)) {
+    return buildSimpleNeedInfoTurn({
+      toolName: "create_brand",
+      toolInput: {},
+      preview: buildToolPreview(getOperatorToolSpec("create_brand")!, {}),
+      summary: "I can create the brand, but I still need the brand name. If you want, send the website too and I'll include it.",
+      missingFields: ["brand name"],
+    });
+  }
+
+  if (
+    /\bexperiments?\b/.test(lowered) &&
+    /\b(launch|start|pause|resume|cancel|promote|delete|remove|show|open)\b/.test(lowered) &&
+    (context.experiments.total ?? 0) === 0
+  ) {
+    return buildSimpleNeedInfoTurn({
+      toolName: "create_experiment",
+      toolInput: { brandId: context.brand.id },
+      preview: buildToolPreview(getOperatorToolSpec("create_experiment")!, {
+        brandId: context.brand.id,
+      }),
+      summary: "This brand doesn't have any experiments yet. Tell me what experiment you want me to create and I'll set it up.",
+      missingFields: ["experiment details"],
+    });
+  }
+
+  if (
+    /\b(senders?|mailboxes?)\b/.test(lowered) &&
+    /\b(add|create|make|provision|refresh|check|show|open|set up|setup)\b/.test(lowered) &&
+    (context.senders.total ?? 0) === 0
+  ) {
+    return buildSimpleNeedInfoTurn({
+      toolName: "provision_mailpool_sender",
+      toolInput: { brandId: context.brand.id, provider: "mailpool" },
+      preview: buildToolPreview(getOperatorToolSpec("provision_mailpool_sender")!, {
+        brandId: context.brand.id,
+        provider: "mailpool",
+      }),
+      summary: "This brand doesn't have any senders yet. Tell me the sender email you want and I'll set it up.",
+      missingFields: ["sender email"],
+    });
+  }
+
+  return null;
+}
+
 function inferDisambiguationTurn(input: {
   message: string;
   brandContext: Awaited<ReturnType<typeof getOperatorBrandContext>>;
@@ -1937,14 +2217,7 @@ function normalizeRequestedAction(input: {
     return null;
   }
 
-  const rawToolInput = asRecord(row.input);
-  const nestedToolInput = asRecord(rawToolInput.input);
-  const toolInput = {
-    ...nestedToolInput,
-    ...Object.fromEntries(
-      Object.entries(rawToolInput).filter(([key]) => key !== "input")
-    ),
-  };
+  const toolInput = normalizeRawToolInput(row.input);
   if (input.brandId && TOOLS_WITH_BRAND_CONTEXT.has(toolName) && !asString(toolInput.brandId)) {
     toolInput.brandId = input.brandId;
   }
@@ -2147,6 +2420,8 @@ function buildOperatorPrompt(input: {
     "Never claim a change already happened unless the change is present in the tool results so far.",
     "If you need live data, choose a read tool and set done to false.",
     "If you need user input, set done to true, leave toolName empty, and ask only for the missing information.",
+    "When a write request is missing one or two required details, ask for those specific details instead of saying you can't do it.",
+    "If the user asks you to act on something that does not exist yet, say what is missing and ask the next needed question or offer the create step.",
     "If you have enough information to answer with no more tools, set done to true and leave toolName empty.",
     "If you are choosing a write tool, that is the final action for this turn. Set done to true.",
     `Mode: ${input.mode === "recommendation_only" ? "recommendation_only" : "default"}`,
@@ -3002,6 +3277,18 @@ export async function runOperatorChatTurn(input: OperatorChatRequest): Promise<O
           preview: buildToolPreview(tool, requestedAction.input),
           missingFields: ["brand name"],
         });
+      } else if (tool.name === "create_experiment" && !asString(requestedAction.input.name)) {
+        assistant = {
+          summary: "I can create the experiment, but I still need the experiment name.",
+          findings: [],
+          recommendations: [],
+        };
+        execution = buildNeedInfoEnvelope({
+          toolName: tool.name,
+          toolInput: requestedAction.input,
+          preview: buildToolPreview(tool, requestedAction.input),
+          missingFields: ["experiment name"],
+        });
       } else if (
         tool.name === "provision_mailpool_sender" &&
         (!asString(requestedAction.input.domain) || !asString(requestedAction.input.fromLocalPart))
@@ -3244,7 +3531,23 @@ export async function runOperatorChatTurn(input: OperatorChatRequest): Promise<O
         message: effectiveMessage || input.message,
         brandContext,
       });
-      if (disambiguation) {
+      const plannerNeedInfo = inferPlannerMissingInfoTurn({
+        message: effectiveMessage || input.message,
+        planner: llmPlan,
+        brandContext,
+        brandMemory,
+      });
+      const missingObjectFollowUp = inferMissingObjectFollowUp({
+        message: effectiveMessage || input.message,
+        brandContext,
+      });
+      if (plannerNeedInfo) {
+        assistant = plannerNeedInfo.assistant;
+        execution = plannerNeedInfo.execution;
+      } else if (missingObjectFollowUp) {
+        assistant = missingObjectFollowUp.assistant;
+        execution = missingObjectFollowUp.execution;
+      } else if (disambiguation) {
         assistant = disambiguation.assistant;
         execution = disambiguation.execution;
       } else if (abandonedPendingWithoutNewTopic) {
@@ -3254,6 +3557,11 @@ export async function runOperatorChatTurn(input: OperatorChatRequest): Promise<O
           recommendations: [],
         };
         execution = buildExecutionEnvelope({ state: "answer_only" });
+      } else if (isExplicitMutationRequest(effectiveMessage) && llmPlan?.assistant && assistantLooksLikeNeedInfo(llmPlan.assistant)) {
+        assistant = llmPlan.assistant;
+        execution = buildNeedInfoEnvelope({
+          missingFields: [],
+        });
       } else {
         assistant = makeUnexecutedActionAssistant(effectiveMessage, llmPlan?.assistant ?? fallbackAssistant);
         execution = isExplicitMutationRequest(effectiveMessage)

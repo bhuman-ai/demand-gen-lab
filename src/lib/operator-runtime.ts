@@ -21,6 +21,8 @@ import {
 } from "@/lib/operator-memory";
 import { getOperatorBrandContext } from "@/lib/operator-context";
 import { getOperatorToolSpec, listOperatorToolSpecs } from "@/lib/operator-tools";
+import { selectAvailableMailpoolDomain } from "@/lib/outreach-provisioning";
+import { listBrands } from "@/lib/factory-data";
 import type {
   OperatorAction,
   OperatorActionSummary,
@@ -724,11 +726,113 @@ function looksLikeBrandCreationRequest(message: string) {
   return /\b(make|create|add|set up|setup|start|open)\b/.test(normalized);
 }
 
+function looksLikeExperimentCreationRequest(message: string) {
+  const normalized = message.trim().toLowerCase();
+  if (!normalized) return false;
+  if (!/\bexperiments?\b/.test(normalized)) return false;
+  return /\b(make|create|add|set up|setup|start|launch|build|draft|new)\b/.test(normalized);
+}
+
 function ensureWebsiteUrl(value: string) {
   const trimmed = value.trim();
   if (!trimmed) return "";
   if (/^https?:\/\//i.test(trimmed)) return trimmed;
   return `https://${trimmed}`;
+}
+
+function normalizeBrandReference(value: string) {
+  return value.trim().toLowerCase().replace(/^https?:\/\//, "").replace(/^www\./, "").replace(/\/+$/, "").replace(/\/.*$/, "");
+}
+
+function titleCaseWords(value: string) {
+  return value
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(" ");
+}
+
+function synthesizeExperimentDraft(input: {
+  message: string;
+  brandName: string;
+}) {
+  const normalizedMessage = input.message.replace(/\s+/g, " ").trim();
+  const lowered = normalizedMessage.toLowerCase();
+  let audience = "";
+  const audienceMatch =
+    normalizedMessage.match(
+      /\b(?:reaching out to|reach out to|target(?:ing)?|for)\s+(.+?)(?=(?:\s+(?:explaining|to explain|about|with|where|who|saying|offering)\b|[,.]|$))/i
+    ) ??
+    normalizedMessage.match(/\b([A-Za-z0-9 ,/&-]*founders?[A-Za-z0-9 ,/&-]*)\b/i);
+  if (audienceMatch?.[1]) {
+    audience = audienceMatch[1].replace(/\s+/g, " ").trim();
+  }
+
+  const cleanedOffer = normalizedMessage
+    .replace(/^ok[, ]*/i, "")
+    .replace(/\bwe need to make (?:a )?new experiment(?: on [^,]+)?\b/i, "")
+    .replace(/\bwhich is\b/i, "")
+    .replace(/\bour thinking is\b/i, "")
+    .replace(/\bmy thinking is\b/i, "")
+    .replace(/^\s*[:,.-]?\s*/, "")
+    .trim();
+
+  let name = "";
+  if (audience) {
+    const audienceTokens = audience
+      .replace(/[^a-z0-9\s/&-]+/gi, " ")
+      .split(/\s+/)
+      .filter(Boolean)
+      .slice(0, 4);
+    if (audienceTokens.length) {
+      const suffix =
+        /\b(feedback|review|reviews|g2|trial|free month)\b/i.test(normalizedMessage) ? "Feedback Offer" : "Outreach";
+      name = `${titleCaseWords(audienceTokens.join(" "))} ${suffix}`.trim();
+    }
+  }
+  if (!name && /\b(feedback|reviews?|g2)\b/i.test(lowered)) {
+    name = `${input.brandName} Feedback Offer`;
+  }
+  if (!name && cleanedOffer.length > 40) {
+    name = `${input.brandName} Outreach Experiment`;
+  }
+
+  return {
+    name: name.trim(),
+    audience,
+    offer: cleanedOffer,
+  };
+}
+
+async function findExistingBrandByReference(input: {
+  brandContext: Awaited<ReturnType<typeof getOperatorBrandContext>>;
+  toolInput: Record<string, unknown>;
+  message: string;
+}) {
+  const activeBrand = input.brandContext?.brand;
+  const requestedReferences = [
+    asString(input.toolInput.name),
+    asString(input.toolInput.website),
+    extractDomain(input.message),
+  ]
+    .map((value) => normalizeBrandReference(value))
+    .filter(Boolean);
+  if (!requestedReferences.length) return null;
+  if (activeBrand) {
+    const activeReferences = new Set(
+      [activeBrand.name, activeBrand.website].map((value) => normalizeBrandReference(value)).filter(Boolean)
+    );
+    if (requestedReferences.some((value) => activeReferences.has(value))) {
+      return activeBrand;
+    }
+  }
+  const brands = await listBrands();
+  return (
+    brands.find((brand) => {
+      const references = new Set([brand.name, brand.website].map((value) => normalizeBrandReference(value)).filter(Boolean));
+      return requestedReferences.some((value) => references.has(value));
+    }) ?? null
+  );
 }
 
 function normalizeProvisionDomainMode(value: unknown) {
@@ -2982,6 +3086,22 @@ function inferActionFromMessage(
   const leadId = resolveLeadId({}, context, input.message);
   const requestedDomain = extractDomain(input.message);
 
+  if (context?.brand.id && looksLikeExperimentCreationRequest(message)) {
+    const draft = synthesizeExperimentDraft({
+      message: input.message,
+      brandName: context.brand.name,
+    });
+    return {
+      toolName: "create_experiment",
+      input: {
+        brandId: context.brand.id,
+        name: draft.name,
+        audience: draft.audience,
+        offer: draft.offer,
+      },
+    };
+  }
+
   if (context?.brand.id && mentionsReferencePronoun(message)) {
     if ((message.includes("pause") || message.includes("resume") || message.includes("cancel")) && asString(brandMemory?.recentSelection.experimentId)) {
       return {
@@ -3013,7 +3133,7 @@ function inferActionFromMessage(
     }
   }
 
-  if (looksLikeBrandCreationRequest(message) && (quoted || requestedDomain)) {
+  if (looksLikeBrandCreationRequest(message) && (quoted || requestedDomain) && !looksLikeExperimentCreationRequest(message)) {
     return {
       toolName: "create_brand",
       input: {
@@ -3487,7 +3607,7 @@ export async function runOperatorChatTurn(input: OperatorChatRequest): Promise<O
     brandContext,
     brandMemory
   );
-  const requestedAction = structuredAction
+  let requestedAction = structuredAction
     ? structuredAction
     : continuation?.kind === "message_override"
       ? filterRequestedActionForMessage(inferredFallbackAction, effectiveMessage)
@@ -3592,7 +3712,42 @@ export async function runOperatorChatTurn(input: OperatorChatRequest): Promise<O
             asString(requestedAction.input.accountId) || asString(requestedAction.input.senderAccountId),
         });
       }
-      const tool = getOperatorToolSpec(requestedAction.toolName);
+      let tool = getOperatorToolSpec(requestedAction.toolName);
+      let brandCreationBlocked = false;
+      if (tool?.name === "create_brand") {
+        const existingBrand = await findExistingBrandByReference({
+          brandContext,
+          toolInput: requestedAction.input,
+          message: effectiveMessage,
+        });
+        if (existingBrand && looksLikeExperimentCreationRequest(effectiveMessage)) {
+          const draft = synthesizeExperimentDraft({
+            message: effectiveMessage,
+            brandName: existingBrand.name,
+          });
+          requestedAction = {
+            toolName: "create_experiment",
+            input: {
+              brandId: existingBrand.id,
+              name: draft.name,
+              audience: draft.audience,
+              offer: draft.offer,
+            },
+          };
+          tool = getOperatorToolSpec(requestedAction.toolName);
+        } else if (existingBrand) {
+          assistant = {
+            summary: `${existingBrand.name} already exists, so I didn't create a duplicate brand.`,
+            findings: [],
+            recommendations: [],
+          };
+          execution = buildExecutionEnvelope({ state: "answer_only" });
+          brandCreationBlocked = true;
+        }
+      }
+      if (!requestedAction) {
+        throw new Error("Operator requested action became empty unexpectedly.");
+      }
       let provisionDomainBlocked = false;
       if (tool?.name === "provision_mailpool_sender") {
         const resolvedProvision = await resolveMailpoolProvisionDomain({
@@ -3638,7 +3793,8 @@ export async function runOperatorChatTurn(input: OperatorChatRequest): Promise<O
           provisionDomainBlocked = true;
         }
       }
-      if (!tool) {
+      if (brandCreationBlocked) {
+      } else if (!tool) {
         assistant = {
           summary: `I understand what you're asking for, but I can't run that yet because the tool \`${requestedAction.toolName}\` is not registered.`,
           findings: [],

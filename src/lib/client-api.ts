@@ -19,6 +19,8 @@ import type {
   ExperimentSuggestionRecord,
   ExperimentSuggestionStreamEvent,
   Hypothesis,
+  InboxEvalRun,
+  InboxEvalScenario,
   ObjectiveData,
   OutreachAccount,
   OutreachProvisioningSettings,
@@ -27,7 +29,10 @@ import type {
   OutreachRun,
   RunViewModel,
   ReplyDraft,
+  ReplyThreadDetail,
   ReplyThread,
+  ReplyThreadFeedback,
+  ReplyThreadFeedbackType,
   RunAnomaly,
   ScaleCampaignRecord,
   SourcingChainDecision,
@@ -1388,6 +1393,25 @@ export async function fetchSavedNamecheapDomains() {
   };
 }
 
+export async function checkNamecheapDomainAvailability(domains: string[]) {
+  const response = await fetch("/api/outreach/provisioning/namecheap-domain-availability", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ domains }),
+  });
+  const data = await readJson(response);
+  return {
+    configured: Boolean(data.configured),
+    results: (Array.isArray(data.results) ? data.results : []) as Array<{
+      domain: string;
+      available: boolean;
+      premium: boolean;
+      premiumRegistrationPrice: number;
+      description: string;
+    }>,
+  };
+}
+
 export async function fetchSavedMailpoolDomains() {
   const response = await fetch("/api/outreach/provisioning/mailpool-domains", {
     cache: "no-store",
@@ -1719,11 +1743,88 @@ export async function fetchInboxThreads(brandId: string) {
   };
 }
 
+export async function fetchInboxThreadDetail(brandId: string, threadId: string) {
+  const response = await fetch(`/api/brands/${brandId}/inbox/threads/${threadId}`, { cache: "no-store" });
+  const data = await readJson(response);
+  return data.detail as ReplyThreadDetail;
+}
+
 export async function approveReplyDraftAndSend(brandId: string, draftId: string) {
   const response = await fetch(`/api/brands/${brandId}/inbox/drafts/${draftId}/send`, {
     method: "POST",
   });
   return await readJson(response);
+}
+
+export async function syncInboxMailbox(
+  brandId: string,
+  input?: {
+    mailboxAccountId?: string;
+    maxMessages?: number;
+  }
+) {
+  const response = await fetch(`/api/brands/${brandId}/inbox/sync`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      mailboxAccountId: input?.mailboxAccountId ?? "",
+      maxMessages: input?.maxMessages ?? 25,
+    }),
+  });
+  const data = await readJson(response);
+  return data.result as {
+    ok: boolean;
+    reason: string;
+    mailboxAccountId: string;
+    mailboxName: string;
+    importedCount: number;
+    duplicateCount: number;
+    skippedCount: number;
+    lastInboxUid: number;
+    threadIds: string[];
+  };
+}
+
+export async function submitInboxThreadFeedback(
+  brandId: string,
+  threadId: string,
+  type: ReplyThreadFeedbackType,
+  note = ""
+) {
+  const response = await fetch(`/api/brands/${brandId}/inbox/threads/${threadId}/feedback`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ type, note }),
+  });
+  const data = await readJson(response);
+  return data.feedback as ReplyThreadFeedback;
+}
+
+export async function fetchInboxEvalLab(brandId: string) {
+  const response = await fetch(`/api/brands/${brandId}/inbox/evals`, { cache: "no-store" });
+  const data = await readJson(response);
+  return {
+    scenarios: (Array.isArray(data.scenarios) ? data.scenarios : []) as InboxEvalScenario[],
+    runs: (Array.isArray(data.runs) ? data.runs : []) as InboxEvalRun[],
+  };
+}
+
+export async function runInboxEval(brandId: string, scenarioId: string) {
+  const response = await fetch(`/api/brands/${brandId}/inbox/evals`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ scenarioId }),
+  });
+  const data = await readJson(response);
+  return data.run as InboxEvalRun;
+}
+
+export async function fetchInboxEvalRun(brandId: string, runId: string) {
+  const response = await fetch(`/api/brands/${brandId}/inbox/evals/runs/${runId}`, {
+    cache: "no-store",
+  });
+  const data = await readJson(response);
+  return data.run as InboxEvalRun;
 }
 
 export function completeStepState(step: "objective" | "hypotheses" | "experiments" | "evolution", current: CampaignRecord["stepState"]) {

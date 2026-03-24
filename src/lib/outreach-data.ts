@@ -19,6 +19,8 @@ import type {
   DeliverabilityProbeVariant,
   DeliverabilitySeedReservation,
   DeliverabilitySeedReservationStatus,
+  InboxSyncState,
+  InboxEvalRun,
   LeadQualityPolicy,
   OutreachAccount,
   OutreachAccountConfig,
@@ -30,9 +32,18 @@ import type {
   SourcingChainStep,
   SourcingProbeResult,
   ReplyDraft,
+  ReplyThreadFeedback,
+  ReplyThreadCanonicalState,
+  ReplyThreadDraftMeta,
+  ReplyThreadStateDecision,
+  ReplyThreadStateRecord,
+  ReplyThreadStateSummary,
   ReplyMessage,
   ReplyThread,
   RunAnomaly,
+  SenderLaunchAction,
+  SenderLaunch,
+  SenderLaunchEvent,
 } from "@/lib/factory-types";
 
 export type OutreachAccountSecrets = {
@@ -114,8 +125,12 @@ type OutreachStore = {
   runLeads: OutreachRunLead[];
   messages: OutreachMessage[];
   replyThreads: ReplyThread[];
+  replyThreadStates: ReplyThreadStateRecord[];
   replyMessages: ReplyMessage[];
   replyDrafts: ReplyDraft[];
+  replyThreadFeedback: ReplyThreadFeedback[];
+  inboxSyncStates: InboxSyncState[];
+  inboxEvalRuns: InboxEvalRun[];
   anomalies: RunAnomaly[];
   events: OutreachEvent[];
   jobs: OutreachJob[];
@@ -125,6 +140,9 @@ type OutreachStore = {
   sourcingChainDecisions: SourcingChainDecision[];
   sourcingProbeResults: SourcingProbeResult[];
   sourcingActorMemory: SourcingActorMemory[];
+  senderLaunches: SenderLaunch[];
+  senderLaunchActions: SenderLaunchAction[];
+  senderLaunchEvents: SenderLaunchEvent[];
 };
 
 const isVercel = Boolean(process.env.VERCEL);
@@ -156,8 +174,12 @@ const TABLE_RUN = "demanddev_outreach_runs";
 const TABLE_RUN_LEAD = "demanddev_outreach_run_leads";
 const TABLE_MESSAGE = "demanddev_outreach_messages";
 const TABLE_THREAD = "demanddev_reply_threads";
+const TABLE_THREAD_STATE = "demanddev_reply_thread_state";
 const TABLE_REPLY_MESSAGE = "demanddev_reply_messages";
 const TABLE_REPLY_DRAFT = "demanddev_reply_drafts";
+const TABLE_REPLY_THREAD_FEEDBACK = "demanddev_reply_thread_feedback";
+const TABLE_INBOX_SYNC_STATE = "demanddev_inbox_sync_state";
+const TABLE_INBOX_EVAL_RUN = "demanddev_inbox_eval_runs";
 const TABLE_EVENT = "demanddev_outreach_events";
 const TABLE_JOB = "demanddev_outreach_job_queue";
 const TABLE_ANOMALY = "demanddev_run_anomalies";
@@ -167,6 +189,9 @@ const TABLE_SOURCING_ACTOR_PROFILE = "demanddev_sourcing_actor_profiles";
 const TABLE_SOURCING_CHAIN_DECISION = "demanddev_sourcing_chain_decisions";
 const TABLE_SOURCING_PROBE_RESULT = "demanddev_sourcing_probe_results";
 const TABLE_SOURCING_ACTOR_MEMORY = "demanddev_sourcing_actor_memory";
+const TABLE_SENDER_LAUNCH = "demanddev_sender_launches";
+const TABLE_SENDER_LAUNCH_ACTION = "demanddev_sender_launch_actions";
+const TABLE_SENDER_LAUNCH_EVENT = "demanddev_sender_launch_events";
 
 const nowIso = () => new Date().toISOString();
 const SINGLETON_OUTREACH_JOB_TYPES = new Set<OutreachJobType>([
@@ -227,8 +252,12 @@ function defaultOutreachStore(): OutreachStore {
     runLeads: [],
     messages: [],
     replyThreads: [],
+    replyThreadStates: [],
     replyMessages: [],
     replyDrafts: [],
+    replyThreadFeedback: [],
+    inboxSyncStates: [],
+    inboxEvalRuns: [],
     anomalies: [],
     events: [],
     jobs: [],
@@ -238,6 +267,9 @@ function defaultOutreachStore(): OutreachStore {
     sourcingChainDecisions: [],
     sourcingProbeResults: [],
     sourcingActorMemory: [],
+    senderLaunches: [],
+    senderLaunchActions: [],
+    senderLaunchEvents: [],
   };
 }
 
@@ -575,6 +607,16 @@ function mapThreadRow(input: unknown): ReplyThread {
     campaignId: String(row.campaign_id ?? row.campaignId ?? ""),
     runId: String(row.run_id ?? row.runId ?? ""),
     leadId: String(row.lead_id ?? row.leadId ?? ""),
+    sourceType:
+      String(row.source_type ?? row.sourceType ?? "outreach") === "mailbox"
+        ? "mailbox"
+        : String(row.source_type ?? row.sourceType ?? "outreach") === "eval"
+          ? "eval"
+          : "outreach",
+    mailboxAccountId: String(row.mailbox_account_id ?? row.mailboxAccountId ?? ""),
+    contactEmail: String(row.contact_email ?? row.contactEmail ?? ""),
+    contactName: String(row.contact_name ?? row.contactName ?? ""),
+    contactCompany: String(row.contact_company ?? row.contactCompany ?? ""),
     subject: String(row.subject ?? ""),
     sentiment: ["positive", "neutral", "negative"].includes(String(row.sentiment))
       ? (String(row.sentiment) as ReplyThread["sentiment"])
@@ -586,6 +628,7 @@ function mapThreadRow(input: unknown): ReplyThread {
       ? (String(row.intent) as ReplyThread["intent"])
       : "other",
     lastMessageAt: String(row.last_message_at ?? row.lastMessageAt ?? nowIso()),
+    stateSummary: mapThreadStateSummary(row.state_summary ?? row.stateSummary),
     createdAt: String(row.created_at ?? row.createdAt ?? nowIso()),
     updatedAt: String(row.updated_at ?? row.updatedAt ?? nowIso()),
   };
@@ -622,6 +665,325 @@ function mapDraftRow(input: unknown): ReplyDraft {
       : "draft",
     reason: String(row.reason ?? ""),
     sentAt: String(row.sent_at ?? row.sentAt ?? ""),
+    createdAt: String(row.created_at ?? row.createdAt ?? nowIso()),
+    updatedAt: String(row.updated_at ?? row.updatedAt ?? nowIso()),
+  };
+}
+
+function mapReplyThreadFeedbackRow(input: unknown): ReplyThreadFeedback {
+  const row = asRecord(input);
+  const type = String(row.type ?? "").trim();
+  return {
+    id: String(row.id ?? "").trim(),
+    threadId: String(row.thread_id ?? row.threadId ?? "").trim(),
+    brandId: String(row.brand_id ?? row.brandId ?? "").trim(),
+    type: ["good", "wrong_move", "wrong_facts", "too_aggressive", "should_be_human"].includes(type)
+      ? (type as ReplyThreadFeedback["type"])
+      : "good",
+    note: String(row.note ?? "").trim(),
+    createdAt: String(row.created_at ?? row.createdAt ?? nowIso()),
+  };
+}
+
+function mapInboxSyncStateRow(input: unknown): InboxSyncState {
+  const row = asRecord(input);
+  return {
+    brandId: String(row.brand_id ?? row.brandId ?? "").trim(),
+    mailboxAccountId: String(row.mailbox_account_id ?? row.mailboxAccountId ?? "").trim(),
+    mailboxName: String(row.mailbox_name ?? row.mailboxName ?? "").trim(),
+    lastInboxUid: Math.max(0, Math.round(Number(row.last_inbox_uid ?? row.lastInboxUid ?? 0) || 0)),
+    lastSyncedAt: String(row.last_synced_at ?? row.lastSyncedAt ?? "").trim(),
+    lastError: String(row.last_error ?? row.lastError ?? "").trim(),
+    createdAt: String(row.created_at ?? row.createdAt ?? nowIso()),
+    updatedAt: String(row.updated_at ?? row.updatedAt ?? nowIso()),
+  };
+}
+
+function mapInboxEvalRunRow(input: unknown): InboxEvalRun {
+  const row = asRecord(input);
+  const scorecardRaw = row.scorecard ?? row.scorecard_json ?? null;
+  return {
+    id: String(row.id ?? "").trim(),
+    brandId: String(row.brand_id ?? row.brandId ?? "").trim(),
+    scenarioId: String(row.scenario_id ?? row.scenarioId ?? "").trim(),
+    scenarioName: String(row.scenario_name ?? row.scenarioName ?? "").trim(),
+    status: ["running", "completed", "failed"].includes(String(row.status))
+      ? (String(row.status) as InboxEvalRun["status"])
+      : "running",
+    seed: String(row.seed ?? "").trim(),
+    threadId: String(row.thread_id ?? row.threadId ?? "").trim(),
+    scenario: asRecord(row.scenario) as InboxEvalRun["scenario"],
+    transcript: (asArray(row.transcript) as InboxEvalRun["transcript"]).map((item) => asRecord(item) as InboxEvalRun["transcript"][number]),
+    scorecard:
+      scorecardRaw && typeof scorecardRaw === "object" && !Array.isArray(scorecardRaw)
+        ? (scorecardRaw as InboxEvalRun["scorecard"])
+        : null,
+    lastError: String(row.last_error ?? row.lastError ?? "").trim(),
+    startedAt: String(row.started_at ?? row.startedAt ?? "").trim(),
+    completedAt: String(row.completed_at ?? row.completedAt ?? "").trim(),
+    createdAt: String(row.created_at ?? row.createdAt ?? nowIso()).trim(),
+    updatedAt: String(row.updated_at ?? row.updatedAt ?? nowIso()).trim(),
+  };
+}
+
+function clampZeroOne(value: unknown, fallback = 0) {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return fallback;
+  return Math.max(0, Math.min(1, Number(num.toFixed(3))));
+}
+
+function oneLine(value: unknown) {
+  return String(value ?? "").replace(/\s+/g, " ").trim();
+}
+
+function mapThreadStateSummary(input: unknown): ReplyThreadStateSummary | null {
+  const row = asRecord(input);
+  const currentStage = String(row.currentStage ?? row.current_stage ?? "").trim();
+  const recommendedMove = String(row.recommendedMove ?? row.recommended_move ?? "").trim();
+  if (!currentStage || !recommendedMove) return null;
+  return {
+    currentStage: [
+      "discover_relevance",
+      "qualify",
+      "handle_objection",
+      "advance_next_step",
+      "nurture",
+      "closed",
+    ].includes(currentStage)
+      ? (currentStage as ReplyThreadStateSummary["currentStage"])
+      : "discover_relevance",
+    recommendedMove: [
+      "stay_silent",
+      "acknowledge_and_close",
+      "answer_question",
+      "ask_qualifying_question",
+      "offer_proof",
+      "reframe_objection",
+      "advance_next_step",
+      "soft_nurture",
+      "handoff_to_human",
+      "respect_opt_out",
+    ].includes(recommendedMove)
+      ? (recommendedMove as ReplyThreadStateSummary["recommendedMove"])
+      : "soft_nurture",
+    confidence: clampZeroOne(row.confidence, 0),
+    autopilotOk: row.autopilotOk === true || row.autopilot_ok === true,
+    manualReviewReason: String(row.manualReviewReason ?? row.manual_review_reason ?? "").trim(),
+    latestUserAsk: String(row.latestUserAsk ?? row.latest_user_ask ?? "").trim(),
+    progressScore: clampZeroOne(row.progressScore ?? row.progress_score, 0),
+  };
+}
+
+function defaultReplyThreadDecision(): ReplyThreadStateDecision {
+  return {
+    recommendedMove: "soft_nurture",
+    objectiveForThisTurn: "",
+    rationale: "",
+    confidence: 0,
+    autopilotOk: false,
+    manualReviewReason: "",
+  };
+}
+
+function mapThreadStateDecision(input: unknown): ReplyThreadStateDecision {
+  const row = asRecord(input);
+  const recommendedMove = String(row.recommendedMove ?? row.recommended_move ?? "").trim();
+  return {
+    recommendedMove: [
+      "stay_silent",
+      "acknowledge_and_close",
+      "answer_question",
+      "ask_qualifying_question",
+      "offer_proof",
+      "reframe_objection",
+      "advance_next_step",
+      "soft_nurture",
+      "handoff_to_human",
+      "respect_opt_out",
+    ].includes(recommendedMove)
+      ? (recommendedMove as ReplyThreadStateDecision["recommendedMove"])
+      : "soft_nurture",
+    objectiveForThisTurn: String(row.objectiveForThisTurn ?? row.objective_for_this_turn ?? "").trim(),
+    rationale: String(row.rationale ?? "").trim(),
+    confidence: clampZeroOne(row.confidence, 0),
+    autopilotOk: row.autopilotOk === true || row.autopilot_ok === true,
+    manualReviewReason: String(row.manualReviewReason ?? row.manual_review_reason ?? "").trim(),
+  };
+}
+
+function defaultReplyThreadDraftMeta(): ReplyThreadDraftMeta {
+  return {
+    draftId: "",
+    status: "none",
+    subject: "",
+    reason: "",
+    createdAt: "",
+  };
+}
+
+function mapThreadDraftMeta(input: unknown): ReplyThreadDraftMeta {
+  const row = asRecord(input);
+  const status = String(row.status ?? "").trim();
+  return {
+    draftId: String(row.draftId ?? row.draft_id ?? "").trim(),
+    status: ["none", "draft", "sent", "dismissed"].includes(status)
+      ? (status as ReplyThreadDraftMeta["status"])
+      : "none",
+    subject: String(row.subject ?? "").trim(),
+    reason: String(row.reason ?? "").trim(),
+    createdAt: String(row.createdAt ?? row.created_at ?? "").trim(),
+  };
+}
+
+function defaultReplyThreadCanonicalState(): ReplyThreadCanonicalState {
+  return {
+    ids: {
+      threadId: "",
+      brandId: "",
+      campaignId: "",
+      runId: "",
+      leadId: "",
+      sourceType: "outreach",
+      mailboxAccountId: "",
+    },
+    org: {
+      brandSummary: "",
+      productSummary: "",
+      offerSummary: "",
+      tone: "",
+      proofPoints: [],
+      allowedClaims: [],
+      forbiddenClaims: [],
+      desiredOutcome: "",
+    },
+    contact: {
+      email: "",
+      name: "",
+      company: "",
+      title: "",
+      roleFit: "",
+      relationshipValue: "medium",
+    },
+    thread: {
+      rollingSummary: "",
+      latestInboundSummary: "",
+      latestUserAsk: "",
+      currentStage: "discover_relevance",
+      stageGoal: "",
+      progressScore: 0,
+    },
+    evidence: {
+      confirmedFacts: [],
+      inferredFacts: [],
+      openQuestions: [],
+      objections: [],
+      commitments: [],
+      riskFlags: [],
+      buyingSignals: [],
+    },
+    policy: {
+      preferredMoves: [],
+      forbiddenMoves: [],
+      manualReviewTriggers: [],
+      autopilotEnabled: false,
+    },
+    decision: defaultReplyThreadDecision(),
+    draft: {
+      subject: "",
+      body: "",
+      styleNotes: [],
+    },
+    audit: {
+      stateRevision: 1,
+      sourcesUsed: [],
+      model: "",
+      generatedAt: nowIso(),
+    },
+  };
+}
+
+function mapThreadStateRow(input: unknown): ReplyThreadStateRecord {
+  const row = asRecord(input);
+  const canonicalStateRaw = asRecord(row.canonical_state ?? row.canonicalState);
+  const latestDecision = mapThreadStateDecision(row.latest_decision ?? row.latestDecision ?? canonicalStateRaw.decision);
+  const latestDraftMeta = mapThreadDraftMeta(row.latest_draft_meta ?? row.latestDraftMeta);
+  const sourcesUsed = asArray(row.sources_used ?? row.sourcesUsed)
+    .map((entry) => String(entry ?? "").trim())
+    .filter(Boolean);
+  const canonicalState = {
+    ...defaultReplyThreadCanonicalState(),
+    ...canonicalStateRaw,
+    ids: {
+      ...defaultReplyThreadCanonicalState().ids,
+      ...asRecord(canonicalStateRaw.ids),
+    },
+    org: {
+      ...defaultReplyThreadCanonicalState().org,
+      ...asRecord(canonicalStateRaw.org),
+      proofPoints: asArray(asRecord(canonicalStateRaw.org).proofPoints).map((entry) => String(entry ?? "").trim()).filter(Boolean),
+      allowedClaims: asArray(asRecord(canonicalStateRaw.org).allowedClaims).map((entry) => String(entry ?? "").trim()).filter(Boolean),
+      forbiddenClaims: asArray(asRecord(canonicalStateRaw.org).forbiddenClaims).map((entry) => String(entry ?? "").trim()).filter(Boolean),
+    },
+    contact: {
+      ...defaultReplyThreadCanonicalState().contact,
+      ...asRecord(canonicalStateRaw.contact),
+      relationshipValue: ["low", "medium", "high"].includes(String(asRecord(canonicalStateRaw.contact).relationshipValue))
+        ? (String(asRecord(canonicalStateRaw.contact).relationshipValue) as ReplyThreadCanonicalState["contact"]["relationshipValue"])
+        : "medium",
+    },
+    thread: {
+      ...defaultReplyThreadCanonicalState().thread,
+      ...asRecord(canonicalStateRaw.thread),
+      currentStage: mapThreadStateSummary({
+        currentStage: asRecord(canonicalStateRaw.thread).currentStage,
+        recommendedMove: latestDecision.recommendedMove,
+      })?.currentStage ?? "discover_relevance",
+      progressScore: clampZeroOne(asRecord(canonicalStateRaw.thread).progressScore, 0),
+    },
+    evidence: {
+      ...defaultReplyThreadCanonicalState().evidence,
+      ...asRecord(canonicalStateRaw.evidence),
+      confirmedFacts: asArray(asRecord(canonicalStateRaw.evidence).confirmedFacts) as ReplyThreadCanonicalState["evidence"]["confirmedFacts"],
+      inferredFacts: asArray(asRecord(canonicalStateRaw.evidence).inferredFacts) as ReplyThreadCanonicalState["evidence"]["inferredFacts"],
+      openQuestions: asArray(asRecord(canonicalStateRaw.evidence).openQuestions).map((entry) => String(entry ?? "").trim()).filter(Boolean),
+      objections: asArray(asRecord(canonicalStateRaw.evidence).objections).map((entry) => String(entry ?? "").trim()).filter(Boolean),
+      commitments: asArray(asRecord(canonicalStateRaw.evidence).commitments).map((entry) => String(entry ?? "").trim()).filter(Boolean),
+      riskFlags: asArray(asRecord(canonicalStateRaw.evidence).riskFlags).map((entry) => String(entry ?? "").trim()).filter(Boolean),
+      buyingSignals: asArray(asRecord(canonicalStateRaw.evidence).buyingSignals).map((entry) => String(entry ?? "").trim()).filter(Boolean),
+    },
+    policy: {
+      ...defaultReplyThreadCanonicalState().policy,
+      ...asRecord(canonicalStateRaw.policy),
+      preferredMoves: asArray(asRecord(canonicalStateRaw.policy).preferredMoves) as ReplyThreadCanonicalState["policy"]["preferredMoves"],
+      forbiddenMoves: asArray(asRecord(canonicalStateRaw.policy).forbiddenMoves) as ReplyThreadCanonicalState["policy"]["forbiddenMoves"],
+      manualReviewTriggers: asArray(asRecord(canonicalStateRaw.policy).manualReviewTriggers).map((entry) => String(entry ?? "").trim()).filter(Boolean),
+      autopilotEnabled: asRecord(canonicalStateRaw.policy).autopilotEnabled === true,
+    },
+    decision: latestDecision,
+    draft: {
+      ...defaultReplyThreadCanonicalState().draft,
+      ...asRecord(canonicalStateRaw.draft),
+      styleNotes: asArray(asRecord(canonicalStateRaw.draft).styleNotes).map((entry) => String(entry ?? "").trim()).filter(Boolean),
+    },
+    audit: {
+      ...defaultReplyThreadCanonicalState().audit,
+      ...asRecord(canonicalStateRaw.audit),
+      stateRevision: Math.max(1, Math.round(Number(asRecord(canonicalStateRaw.audit).stateRevision ?? row.state_revision ?? 1) || 1)),
+      sourcesUsed: asArray(asRecord(canonicalStateRaw.audit).sourcesUsed).map((entry) => String(entry ?? "").trim()).filter(Boolean),
+      model: oneLine(asRecord(canonicalStateRaw.audit).model),
+      generatedAt: String(asRecord(canonicalStateRaw.audit).generatedAt ?? row.updated_at ?? row.updatedAt ?? nowIso()).trim(),
+    },
+  } satisfies ReplyThreadCanonicalState;
+
+  return {
+    threadId: String(row.thread_id ?? row.threadId ?? "").trim(),
+    brandId: String(row.brand_id ?? row.brandId ?? "").trim(),
+    runId: String(row.run_id ?? row.runId ?? "").trim(),
+    stateRevision: Math.max(1, Math.round(Number(row.state_revision ?? row.stateRevision ?? canonicalState.audit.stateRevision ?? 1) || 1)),
+    canonicalState,
+    latestDecision,
+    latestDraftMeta,
+    sourcesUsed,
     createdAt: String(row.created_at ?? row.createdAt ?? nowIso()),
     updatedAt: String(row.updated_at ?? row.updatedAt ?? nowIso()),
   };
@@ -804,6 +1166,121 @@ function mapDeliverabilitySeedReservationRow(input: unknown): DeliverabilitySeed
   };
 }
 
+function mapSenderLaunchRow(input: unknown): SenderLaunch {
+  const row = asRecord(input);
+  const planType = String(row.plan_type ?? row.planType ?? "").trim();
+  const state = String(row.state ?? "").trim();
+  return {
+    id: String(row.id ?? "").trim(),
+    senderAccountId: String(row.sender_account_id ?? row.senderAccountId ?? "").trim(),
+    brandId: String(row.brand_id ?? row.brandId ?? "").trim(),
+    fromEmail: String(row.from_email ?? row.fromEmail ?? "").trim().toLowerCase(),
+    domain: String(row.domain ?? "").trim().toLowerCase(),
+    planType: ["bridge", "subdomain", "fresh"].includes(planType)
+      ? (planType as SenderLaunch["planType"])
+      : "fresh",
+    state: ["setup", "observing", "warming", "restricted_send", "ready", "paused", "blocked"].includes(state)
+      ? (state as SenderLaunch["state"])
+      : "setup",
+    readinessScore: Math.max(0, Math.min(100, Number(row.readiness_score ?? row.readinessScore ?? 0) || 0)),
+    summary: String(row.summary ?? "").trim(),
+    nextStep: String(row.next_step ?? row.nextStep ?? "").trim(),
+    topicSummary: String(row.topic_summary ?? row.topicSummary ?? "").trim(),
+    topicKeywords: asArray(row.topic_keywords ?? row.topicKeywords)
+      .map((entry) => String(entry ?? "").trim().toLowerCase())
+      .filter(Boolean),
+    sourceExperimentIds: asArray(row.source_experiment_ids ?? row.sourceExperimentIds)
+      .map((entry) => String(entry ?? "").trim())
+      .filter(Boolean),
+    infraScore: Math.max(0, Math.min(30, Number(row.infra_score ?? row.infraScore ?? 0) || 0)),
+    reputationScore: Math.max(0, Math.min(25, Number(row.reputation_score ?? row.reputationScore ?? 0) || 0)),
+    trustScore: Math.max(0, Math.min(20, Number(row.trust_score ?? row.trustScore ?? 0) || 0)),
+    safetyScore: Math.max(0, Math.min(15, Number(row.safety_score ?? row.safetyScore ?? 0) || 0)),
+    topicScore: Math.max(0, Math.min(10, Number(row.topic_score ?? row.topicScore ?? 0) || 0)),
+    dailyCap: Math.max(0, Number(row.daily_cap ?? row.dailyCap ?? 0) || 0),
+    sentCount: Math.max(0, Number(row.sent_count ?? row.sentCount ?? 0) || 0),
+    repliedCount: Math.max(0, Number(row.replied_count ?? row.repliedCount ?? 0) || 0),
+    bouncedCount: Math.max(0, Number(row.bounced_count ?? row.bouncedCount ?? 0) || 0),
+    failedCount: Math.max(0, Number(row.failed_count ?? row.failedCount ?? 0) || 0),
+    inboxRate: clampZeroOne(row.inbox_rate ?? row.inboxRate, 0),
+    spamRate: clampZeroOne(row.spam_rate ?? row.spamRate, 0),
+    trustEventCount: Math.max(0, Number(row.trust_event_count ?? row.trustEventCount ?? 0) || 0),
+    pausedUntil: String(row.paused_until ?? row.pausedUntil ?? "").trim(),
+    pauseReason: String(row.pause_reason ?? row.pauseReason ?? "").trim(),
+    lastEventAt: String(row.last_event_at ?? row.lastEventAt ?? "").trim(),
+    lastEvaluatedAt: String(row.last_evaluated_at ?? row.lastEvaluatedAt ?? "").trim(),
+    createdAt: String(row.created_at ?? row.createdAt ?? nowIso()),
+    updatedAt: String(row.updated_at ?? row.updatedAt ?? nowIso()),
+  };
+}
+
+function mapSenderLaunchActionRow(input: unknown): SenderLaunchAction {
+  const row = asRecord(input);
+  const lane = String(row.lane ?? "").trim();
+  const actionType = String(row.action_type ?? row.actionType ?? "").trim();
+  const status = String(row.status ?? "").trim();
+  return {
+    id: String(row.id ?? "").trim(),
+    senderLaunchId: String(row.sender_launch_id ?? row.senderLaunchId ?? "").trim(),
+    senderAccountId: String(row.sender_account_id ?? row.senderAccountId ?? "").trim(),
+    brandId: String(row.brand_id ?? row.brandId ?? "").trim(),
+    lane: ["opt_in", "double_opt_in", "inquiry"].includes(lane)
+      ? (lane as SenderLaunchAction["lane"])
+      : "opt_in",
+    actionType: ["execute_opt_in", "confirm_double_opt_in", "execute_inquiry"].includes(actionType)
+      ? (actionType as SenderLaunchAction["actionType"])
+      : "execute_opt_in",
+    sourceKey: String(row.source_key ?? row.sourceKey ?? "").trim(),
+    status: ["queued", "running", "waiting", "completed", "failed", "skipped"].includes(status)
+      ? (status as SenderLaunchAction["status"])
+      : "queued",
+    executeAfter: String(row.execute_after ?? row.executeAfter ?? nowIso()).trim(),
+    attempts: Math.max(0, Number(row.attempts ?? 0) || 0),
+    maxAttempts: Math.max(1, Number(row.max_attempts ?? row.maxAttempts ?? 5) || 5),
+    payload: asRecord(row.payload),
+    resultSummary: String(row.result_summary ?? row.resultSummary ?? "").trim(),
+    lastError: String(row.last_error ?? row.lastError ?? "").trim(),
+    completedAt: String(row.completed_at ?? row.completedAt ?? "").trim(),
+    createdAt: String(row.created_at ?? row.createdAt ?? nowIso()),
+    updatedAt: String(row.updated_at ?? row.updatedAt ?? nowIso()),
+  };
+}
+
+function mapSenderLaunchEventRow(input: unknown): SenderLaunchEvent {
+  const row = asRecord(input);
+  const eventType = String(row.event_type ?? row.eventType ?? "").trim();
+  return {
+    id: String(row.id ?? "").trim(),
+    senderLaunchId: String(row.sender_launch_id ?? row.senderLaunchId ?? "").trim(),
+    senderAccountId: String(row.sender_account_id ?? row.senderAccountId ?? "").trim(),
+    brandId: String(row.brand_id ?? row.brandId ?? "").trim(),
+    eventType: [
+      "launch_initialized",
+      "topic_profile_refreshed",
+      "bridge_inbound_recorded",
+      "opt_in_scheduled",
+      "opt_in_completed",
+      "double_opt_in_received",
+      "double_opt_in_confirmed",
+      "inquiry_scheduled",
+      "inquiry_completed",
+      "action_failed",
+      "state_changed",
+      "first_reply_recorded",
+      "healthy_probe_recorded",
+      "launch_paused",
+      "launch_resumed",
+    ].includes(eventType)
+      ? (eventType as SenderLaunchEvent["eventType"])
+      : "launch_initialized",
+    title: String(row.title ?? "").trim(),
+    detail: String(row.detail ?? "").trim(),
+    metadata: asRecord(row.metadata),
+    occurredAt: String(row.occurred_at ?? row.occurredAt ?? nowIso()),
+    createdAt: String(row.created_at ?? row.createdAt ?? nowIso()),
+  };
+}
+
 function mapSourcingActorProfileRow(input: unknown): ActorCapabilityProfile {
   const row = asRecord(input);
   const stageHintsRaw = row.stage_hints ?? row.stageHints;
@@ -945,8 +1422,12 @@ async function readLocalStore(): Promise<OutreachStore> {
       runLeads: asArray(row.runLeads).map((item) => mapRunLeadRow(item)),
       messages: asArray(row.messages).map((item) => mapMessageRow(item)),
       replyThreads: asArray(row.replyThreads).map((item) => mapThreadRow(item)),
+      replyThreadStates: asArray(row.replyThreadStates).map((item) => mapThreadStateRow(item)),
       replyMessages: asArray(row.replyMessages).map((item) => mapReplyMessageRow(item)),
       replyDrafts: asArray(row.replyDrafts).map((item) => mapDraftRow(item)),
+      replyThreadFeedback: asArray(row.replyThreadFeedback).map((item) => mapReplyThreadFeedbackRow(item)),
+      inboxSyncStates: asArray(row.inboxSyncStates).map((item) => mapInboxSyncStateRow(item)),
+      inboxEvalRuns: asArray(row.inboxEvalRuns).map((item) => mapInboxEvalRunRow(item)),
       anomalies: asArray(row.anomalies).map((item) => mapAnomalyRow(item)),
       events: asArray(row.events).map((item) => mapEventRow(item)),
       jobs: asArray(row.jobs).map((item) => mapJobRow(item)),
@@ -958,6 +1439,9 @@ async function readLocalStore(): Promise<OutreachStore> {
       sourcingChainDecisions: asArray(row.sourcingChainDecisions).map((item) => mapSourcingChainDecisionRow(item)),
       sourcingProbeResults: asArray(row.sourcingProbeResults).map((item) => mapSourcingProbeResultRow(item)),
       sourcingActorMemory: asArray(row.sourcingActorMemory).map((item) => mapSourcingActorMemoryRow(item)),
+      senderLaunches: asArray(row.senderLaunches).map((item) => mapSenderLaunchRow(item)),
+      senderLaunchActions: asArray(row.senderLaunchActions).map((item) => mapSenderLaunchActionRow(item)),
+      senderLaunchEvents: asArray(row.senderLaunchEvents).map((item) => mapSenderLaunchEventRow(item)),
     };
   } catch {
     return defaultOutreachStore();
@@ -2527,13 +3011,18 @@ export async function loadHistoricalCompanyDomains(
 
 export async function updateRunLead(
   leadId: string,
-  patch: Partial<Pick<OutreachRunLead, "status">>
+  patch: Partial<Pick<OutreachRunLead, "status" | "name" | "company" | "title" | "domain" | "sourceUrl">>
 ): Promise<OutreachRunLead | null> {
   const now = nowIso();
   const supabase = getSupabaseAdmin();
   if (supabase) {
     const update: Record<string, unknown> = { updated_at: now };
     if (patch.status) update.status = patch.status;
+    if (typeof patch.name === "string") update.name = patch.name;
+    if (typeof patch.company === "string") update.company = patch.company;
+    if (typeof patch.title === "string") update.title = patch.title;
+    if (typeof patch.domain === "string") update.domain = patch.domain;
+    if (typeof patch.sourceUrl === "string") update.source_url = patch.sourceUrl;
     const { data, error } = await supabase
       .from(TABLE_RUN_LEAD)
       .update(update)
@@ -2719,9 +3208,14 @@ export async function updateRunMessage(
 
 export async function createReplyThread(input: {
   brandId: string;
-  campaignId: string;
-  runId: string;
-  leadId: string;
+  campaignId?: string;
+  runId?: string;
+  leadId?: string;
+  sourceType?: ReplyThread["sourceType"];
+  mailboxAccountId?: string;
+  contactEmail?: string;
+  contactName?: string;
+  contactCompany?: string;
   subject: string;
   sentiment: ReplyThread["sentiment"];
   intent: ReplyThread["intent"];
@@ -2731,9 +3225,19 @@ export async function createReplyThread(input: {
   const thread: ReplyThread = {
     id: createId("thread"),
     brandId: input.brandId,
-    campaignId: input.campaignId,
-    runId: input.runId,
-    leadId: input.leadId,
+    campaignId: input.campaignId?.trim() ?? "",
+    runId: input.runId?.trim() ?? "",
+    leadId: input.leadId?.trim() ?? "",
+    sourceType:
+      input.sourceType === "mailbox"
+        ? "mailbox"
+        : input.sourceType === "eval"
+          ? "eval"
+          : "outreach",
+    mailboxAccountId: input.mailboxAccountId?.trim() ?? "",
+    contactEmail: input.contactEmail?.trim() ?? "",
+    contactName: input.contactName?.trim() ?? "",
+    contactCompany: input.contactCompany?.trim() ?? "",
     subject: input.subject,
     sentiment: input.sentiment,
     status: input.status ?? "new",
@@ -2750,9 +3254,14 @@ export async function createReplyThread(input: {
       .insert({
         id: thread.id,
         brand_id: thread.brandId,
-        campaign_id: thread.campaignId,
-        run_id: thread.runId,
-        lead_id: thread.leadId,
+        campaign_id: thread.campaignId || null,
+        run_id: thread.runId || null,
+        lead_id: thread.leadId || null,
+        source_type: thread.sourceType,
+        mailbox_account_id: thread.mailboxAccountId || null,
+        contact_email: thread.contactEmail,
+        contact_name: thread.contactName,
+        contact_company: thread.contactCompany,
         subject: thread.subject,
         sentiment: thread.sentiment,
         status: thread.status,
@@ -2774,7 +3283,20 @@ export async function createReplyThread(input: {
 
 export async function updateReplyThread(
   threadId: string,
-  patch: Partial<Pick<ReplyThread, "status" | "sentiment" | "intent" | "lastMessageAt">>
+  patch: Partial<
+    Pick<
+      ReplyThread,
+      | "status"
+      | "sentiment"
+      | "intent"
+      | "lastMessageAt"
+      | "mailboxAccountId"
+      | "contactEmail"
+      | "contactName"
+      | "contactCompany"
+      | "sourceType"
+    >
+  >
 ): Promise<ReplyThread | null> {
   const now = nowIso();
 
@@ -2785,6 +3307,11 @@ export async function updateReplyThread(
     if (patch.sentiment) update.sentiment = patch.sentiment;
     if (patch.intent) update.intent = patch.intent;
     if (patch.lastMessageAt) update.last_message_at = patch.lastMessageAt;
+    if (patch.mailboxAccountId !== undefined) update.mailbox_account_id = patch.mailboxAccountId || null;
+    if (patch.contactEmail !== undefined) update.contact_email = patch.contactEmail;
+    if (patch.contactName !== undefined) update.contact_name = patch.contactName;
+    if (patch.contactCompany !== undefined) update.contact_company = patch.contactCompany;
+    if (patch.sourceType) update.source_type = patch.sourceType;
 
     const { data, error } = await supabase
       .from(TABLE_THREAD)
@@ -2811,7 +3338,7 @@ export async function updateReplyThread(
 
 export async function createReplyMessage(input: {
   threadId: string;
-  runId: string;
+  runId?: string;
   direction: ReplyMessage["direction"];
   from: string;
   to: string;
@@ -2824,7 +3351,7 @@ export async function createReplyMessage(input: {
   const message: ReplyMessage = {
     id: createId("rmsg"),
     threadId: input.threadId,
-    runId: input.runId,
+    runId: input.runId?.trim() ?? "",
     direction: input.direction,
     from: input.from,
     to: input.to,
@@ -2842,7 +3369,7 @@ export async function createReplyMessage(input: {
       .insert({
         id: message.id,
         thread_id: message.threadId,
-        run_id: message.runId,
+        run_id: message.runId || null,
         direction: message.direction,
         sender: message.from,
         recipient: message.to,
@@ -2864,12 +3391,156 @@ export async function createReplyMessage(input: {
   return message;
 }
 
-export async function listReplyThreadsByBrand(
-  brandId: string
-): Promise<{ threads: ReplyThread[]; drafts: ReplyDraft[] }> {
+function summarizeReplyThreadState(record: ReplyThreadStateRecord): ReplyThreadStateSummary {
+  return {
+    currentStage: record.canonicalState.thread.currentStage,
+    recommendedMove: record.latestDecision.recommendedMove,
+    confidence: record.latestDecision.confidence,
+    autopilotOk: record.latestDecision.autopilotOk,
+    manualReviewReason: record.latestDecision.manualReviewReason,
+    latestUserAsk: record.canonicalState.thread.latestUserAsk,
+    progressScore: record.canonicalState.thread.progressScore,
+  };
+}
+
+function attachReplyThreadStateSummaries(
+  threads: ReplyThread[],
+  states: ReplyThreadStateRecord[]
+): ReplyThread[] {
+  const stateByThreadId = new Map(states.map((item) => [item.threadId, item] as const));
+  return threads.map((thread) => {
+    const state = stateByThreadId.get(thread.id);
+    return state
+      ? {
+          ...thread,
+          stateSummary: summarizeReplyThreadState(state),
+        }
+      : thread;
+  });
+}
+
+export async function listReplyThreadStatesByBrand(brandId: string): Promise<ReplyThreadStateRecord[]> {
   const supabase = getSupabaseAdmin();
   if (supabase) {
-    const [threadsResult, draftsResult] = await Promise.all([
+    const { data, error } = await supabase
+      .from(TABLE_THREAD_STATE)
+      .select("*")
+      .eq("brand_id", brandId)
+      .order("updated_at", { ascending: false });
+    if (!error) {
+      return (data ?? []).map((row: unknown) => mapThreadStateRow(row));
+    }
+  }
+
+  const store = await readLocalStore();
+  return store.replyThreadStates
+    .filter((row) => row.brandId === brandId)
+    .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1));
+}
+
+export async function getReplyThreadState(threadId: string): Promise<ReplyThreadStateRecord | null> {
+  const supabase = getSupabaseAdmin();
+  if (supabase) {
+    const { data, error } = await supabase
+      .from(TABLE_THREAD_STATE)
+      .select("*")
+      .eq("thread_id", threadId)
+      .maybeSingle();
+    if (!error && data) {
+      return mapThreadStateRow(data);
+    }
+  }
+
+  const store = await readLocalStore();
+  return store.replyThreadStates.find((row) => row.threadId === threadId) ?? null;
+}
+
+export async function upsertReplyThreadState(input: {
+  threadId: string;
+  brandId: string;
+  runId?: string;
+  canonicalState: ReplyThreadCanonicalState;
+  latestDecision?: ReplyThreadStateDecision;
+  latestDraftMeta?: ReplyThreadDraftMeta;
+  sourcesUsed?: string[];
+}): Promise<ReplyThreadStateRecord> {
+  const existing = await getReplyThreadState(input.threadId);
+  const now = nowIso();
+  const stateRevision = Math.max(1, (existing?.stateRevision ?? 0) + 1);
+  const latestDecision = input.latestDecision ?? input.canonicalState.decision ?? defaultReplyThreadDecision();
+  const latestDraftMeta = input.latestDraftMeta ?? existing?.latestDraftMeta ?? defaultReplyThreadDraftMeta();
+  const sourcesUsed = (input.sourcesUsed ?? input.canonicalState.audit.sourcesUsed ?? [])
+    .map((entry) => String(entry ?? "").trim())
+    .filter(Boolean);
+  const canonicalState: ReplyThreadCanonicalState = {
+    ...input.canonicalState,
+    decision: latestDecision,
+    audit: {
+      ...input.canonicalState.audit,
+      stateRevision,
+      sourcesUsed,
+      generatedAt: input.canonicalState.audit.generatedAt || now,
+    },
+  };
+
+  const record: ReplyThreadStateRecord = {
+    threadId: input.threadId,
+    brandId: input.brandId,
+    runId: input.runId?.trim() ?? "",
+    stateRevision,
+    canonicalState,
+    latestDecision,
+    latestDraftMeta,
+    sourcesUsed,
+    createdAt: existing?.createdAt ?? now,
+    updatedAt: now,
+  };
+
+  const supabase = getSupabaseAdmin();
+  if (supabase) {
+    const { data, error } = await supabase
+      .from(TABLE_THREAD_STATE)
+      .upsert(
+        {
+          thread_id: record.threadId,
+          brand_id: record.brandId,
+          run_id: record.runId || null,
+          state_revision: record.stateRevision,
+          canonical_state: record.canonicalState,
+          latest_decision: record.latestDecision,
+          latest_draft_meta: record.latestDraftMeta,
+          sources_used: record.sourcesUsed,
+          created_at: record.createdAt,
+          updated_at: record.updatedAt,
+        },
+        { onConflict: "thread_id" }
+      )
+      .select("*")
+      .maybeSingle();
+    if (!error && data) {
+      return mapThreadStateRow(data);
+    }
+  }
+
+  const store = await readLocalStore();
+  const idx = store.replyThreadStates.findIndex((row) => row.threadId === record.threadId);
+  if (idx >= 0) {
+    store.replyThreadStates[idx] = record;
+  } else {
+    store.replyThreadStates.unshift(record);
+  }
+  await writeLocalStore(store);
+  return record;
+}
+
+export async function listReplyThreadsByBrand(
+  brandId: string,
+  options: { includeEval?: boolean } = {}
+): Promise<{ threads: ReplyThread[]; drafts: ReplyDraft[] }> {
+  const includeEval = options.includeEval === true;
+  const supabase = getSupabaseAdmin();
+  if (supabase) {
+    const [threadsResult, draftsResult, statesResult] = await Promise.all([
       supabase
         .from(TABLE_THREAD)
         .select("*")
@@ -2880,27 +3551,48 @@ export async function listReplyThreadsByBrand(
         .select("*")
         .eq("brand_id", brandId)
         .order("created_at", { ascending: false }),
+      supabase
+        .from(TABLE_THREAD_STATE)
+        .select("*")
+        .eq("brand_id", brandId)
+        .order("updated_at", { ascending: false }),
     ]);
-    if (!threadsResult.error && !draftsResult.error) {
+    if (!threadsResult.error && !draftsResult.error && !statesResult.error) {
+      const threads = attachReplyThreadStateSummaries(
+        (threadsResult.data ?? []).map((row: unknown) => mapThreadRow(row)),
+        (statesResult.data ?? []).map((row: unknown) => mapThreadStateRow(row))
+      );
+      const visibleThreads = includeEval ? threads : threads.filter((thread) => thread.sourceType !== "eval");
+      const visibleThreadIds = new Set(visibleThreads.map((thread) => thread.id));
       return {
-        threads: (threadsResult.data ?? []).map((row: unknown) => mapThreadRow(row)),
-        drafts: (draftsResult.data ?? []).map((row: unknown) => mapDraftRow(row)),
+        threads: visibleThreads,
+        drafts: (draftsResult.data ?? [])
+          .map((row: unknown) => mapDraftRow(row))
+          .filter((draft) => visibleThreadIds.has(draft.threadId)),
       };
     }
   }
 
   const store = await readLocalStore();
-  return {
-    threads: store.replyThreads
-      .filter((row) => row.brandId === brandId)
+  const threads = attachReplyThreadStateSummaries(
+    store.replyThreads
+      .filter((row) => row.brandId === brandId && (includeEval || row.sourceType !== "eval"))
       .sort((a, b) => (a.lastMessageAt < b.lastMessageAt ? 1 : -1)),
+    store.replyThreadStates.filter((row) => row.brandId === brandId)
+  );
+  const threadIds = new Set(threads.map((thread) => thread.id));
+  return {
+    threads,
     drafts: store.replyDrafts
-      .filter((row) => row.brandId === brandId)
+      .filter((row) => row.brandId === brandId && threadIds.has(row.threadId))
       .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1)),
   };
 }
 
 export async function listReplyMessagesByRun(runId: string): Promise<ReplyMessage[]> {
+  if (!runId.trim()) {
+    return [];
+  }
   const supabase = getSupabaseAdmin();
   if (supabase) {
     const { data, error } = await supabase
@@ -2917,6 +3609,47 @@ export async function listReplyMessagesByRun(runId: string): Promise<ReplyMessag
   return store.replyMessages
     .filter((row) => row.runId === runId)
     .sort((a, b) => (a.receivedAt < b.receivedAt ? 1 : -1));
+}
+
+export async function listReplyMessagesByThread(threadId: string): Promise<ReplyMessage[]> {
+  const supabase = getSupabaseAdmin();
+  if (supabase) {
+    const { data, error } = await supabase
+      .from(TABLE_REPLY_MESSAGE)
+      .select("*")
+      .eq("thread_id", threadId)
+      .order("received_at", { ascending: false });
+    if (!error) {
+      return (data ?? []).map((row: unknown) => mapReplyMessageRow(row));
+    }
+  }
+
+  const store = await readLocalStore();
+  return store.replyMessages
+    .filter((row) => row.threadId === threadId)
+    .sort((a, b) => (a.receivedAt < b.receivedAt ? 1 : -1));
+}
+
+export async function findReplyMessageByProviderMessageId(
+  providerMessageId: string
+): Promise<ReplyMessage | null> {
+  const normalized = providerMessageId.trim();
+  if (!normalized) return null;
+
+  const supabase = getSupabaseAdmin();
+  if (supabase) {
+    const { data, error } = await supabase
+      .from(TABLE_REPLY_MESSAGE)
+      .select("*")
+      .eq("provider_message_id", normalized)
+      .maybeSingle();
+    if (!error && data) {
+      return mapReplyMessageRow(data);
+    }
+  }
+
+  const store = await readLocalStore();
+  return store.replyMessages.find((row) => row.providerMessageId === normalized) ?? null;
 }
 
 export async function getReplyThread(threadId: string): Promise<ReplyThread | null> {
@@ -2939,7 +3672,7 @@ export async function getReplyThread(threadId: string): Promise<ReplyThread | nu
 export async function createReplyDraft(input: {
   threadId: string;
   brandId: string;
-  runId: string;
+  runId?: string;
   subject: string;
   body: string;
   reason: string;
@@ -2949,7 +3682,7 @@ export async function createReplyDraft(input: {
     id: createId("draft"),
     threadId: input.threadId,
     brandId: input.brandId,
-    runId: input.runId,
+    runId: input.runId?.trim() ?? "",
     subject: input.subject,
     body: input.body,
     status: "draft",
@@ -2967,7 +3700,7 @@ export async function createReplyDraft(input: {
         id: draft.id,
         thread_id: draft.threadId,
         brand_id: draft.brandId,
-        run_id: draft.runId,
+        run_id: draft.runId || null,
         subject: draft.subject,
         body: draft.body,
         status: draft.status,
@@ -3005,7 +3738,7 @@ export async function getReplyDraft(draftId: string): Promise<ReplyDraft | null>
 
 export async function updateReplyDraft(
   draftId: string,
-  patch: Partial<Pick<ReplyDraft, "status" | "sentAt">>
+  patch: Partial<Pick<ReplyDraft, "status" | "sentAt" | "subject" | "body" | "reason">>
 ): Promise<ReplyDraft | null> {
   const now = nowIso();
   const supabase = getSupabaseAdmin();
@@ -3013,6 +3746,9 @@ export async function updateReplyDraft(
     const update: Record<string, unknown> = { updated_at: now };
     if (patch.status) update.status = patch.status;
     if (patch.sentAt !== undefined) update.sent_at = patch.sentAt || null;
+    if (patch.subject !== undefined) update.subject = patch.subject;
+    if (patch.body !== undefined) update.body = patch.body;
+    if (patch.reason !== undefined) update.reason = patch.reason;
 
     const { data, error } = await supabase
       .from(TABLE_REPLY_DRAFT)
@@ -3035,6 +3771,290 @@ export async function updateReplyDraft(
   };
   await writeLocalStore(store);
   return store.replyDrafts[idx];
+}
+
+export async function createReplyThreadFeedback(input: {
+  threadId: string;
+  brandId: string;
+  type: ReplyThreadFeedback["type"];
+  note?: string;
+}): Promise<ReplyThreadFeedback> {
+  const feedback: ReplyThreadFeedback = {
+    id: createId("rtf"),
+    threadId: input.threadId,
+    brandId: input.brandId,
+    type: input.type,
+    note: input.note?.trim() ?? "",
+    createdAt: nowIso(),
+  };
+
+  const supabase = getSupabaseAdmin();
+  if (supabase) {
+    const { data, error } = await supabase
+      .from(TABLE_REPLY_THREAD_FEEDBACK)
+      .insert({
+        id: feedback.id,
+        thread_id: feedback.threadId,
+        brand_id: feedback.brandId,
+        type: feedback.type,
+        note: feedback.note,
+        created_at: feedback.createdAt,
+      })
+      .select("*")
+      .single();
+    if (!error && data) {
+      return mapReplyThreadFeedbackRow(data);
+    }
+  }
+
+  const store = await readLocalStore();
+  store.replyThreadFeedback.unshift(feedback);
+  await writeLocalStore(store);
+  return feedback;
+}
+
+export async function listReplyThreadFeedback(threadId: string): Promise<ReplyThreadFeedback[]> {
+  const supabase = getSupabaseAdmin();
+  if (supabase) {
+    const { data, error } = await supabase
+      .from(TABLE_REPLY_THREAD_FEEDBACK)
+      .select("*")
+      .eq("thread_id", threadId)
+      .order("created_at", { ascending: false });
+    if (!error) {
+      return (data ?? []).map((row: unknown) => mapReplyThreadFeedbackRow(row));
+    }
+  }
+
+  const store = await readLocalStore();
+  return store.replyThreadFeedback
+    .filter((row) => row.threadId === threadId)
+    .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
+}
+
+export async function getInboxSyncState(
+  brandId: string,
+  mailboxAccountId: string
+): Promise<InboxSyncState | null> {
+  const normalizedBrandId = brandId.trim();
+  const normalizedMailboxAccountId = mailboxAccountId.trim();
+  if (!normalizedBrandId || !normalizedMailboxAccountId) return null;
+
+  const supabase = getSupabaseAdmin();
+  if (supabase) {
+    const { data, error } = await supabase
+      .from(TABLE_INBOX_SYNC_STATE)
+      .select("*")
+      .eq("brand_id", normalizedBrandId)
+      .eq("mailbox_account_id", normalizedMailboxAccountId)
+      .maybeSingle();
+    if (!error && data) {
+      return mapInboxSyncStateRow(data);
+    }
+  }
+
+  const store = await readLocalStore();
+  return (
+    store.inboxSyncStates.find(
+      (row) => row.brandId === normalizedBrandId && row.mailboxAccountId === normalizedMailboxAccountId
+    ) ?? null
+  );
+}
+
+export async function upsertInboxSyncState(input: {
+  brandId: string;
+  mailboxAccountId: string;
+  mailboxName?: string;
+  lastInboxUid?: number;
+  lastSyncedAt?: string;
+  lastError?: string;
+}): Promise<InboxSyncState> {
+  const existing = await getInboxSyncState(input.brandId, input.mailboxAccountId);
+  const state: InboxSyncState = {
+    brandId: input.brandId.trim(),
+    mailboxAccountId: input.mailboxAccountId.trim(),
+    mailboxName: input.mailboxName?.trim() || existing?.mailboxName || "",
+    lastInboxUid: Math.max(existing?.lastInboxUid ?? 0, Math.round(Number(input.lastInboxUid ?? existing?.lastInboxUid ?? 0) || 0)),
+    lastSyncedAt: input.lastSyncedAt?.trim() || nowIso(),
+    lastError: input.lastError?.trim() ?? "",
+    createdAt: existing?.createdAt ?? nowIso(),
+    updatedAt: nowIso(),
+  };
+
+  const supabase = getSupabaseAdmin();
+  if (supabase) {
+    const { data, error } = await supabase
+      .from(TABLE_INBOX_SYNC_STATE)
+      .upsert(
+        {
+          brand_id: state.brandId,
+          mailbox_account_id: state.mailboxAccountId,
+          mailbox_name: state.mailboxName,
+          last_inbox_uid: state.lastInboxUid,
+          last_synced_at: state.lastSyncedAt || null,
+          last_error: state.lastError,
+          created_at: state.createdAt,
+          updated_at: state.updatedAt,
+        },
+        { onConflict: "brand_id,mailbox_account_id" }
+      )
+      .select("*")
+      .maybeSingle();
+    if (!error && data) {
+      return mapInboxSyncStateRow(data);
+    }
+  }
+
+  const store = await readLocalStore();
+  const index = store.inboxSyncStates.findIndex(
+    (row) => row.brandId === state.brandId && row.mailboxAccountId === state.mailboxAccountId
+  );
+  if (index >= 0) {
+    store.inboxSyncStates[index] = state;
+  } else {
+    store.inboxSyncStates.unshift(state);
+  }
+  await writeLocalStore(store);
+  return state;
+}
+
+export async function createInboxEvalRun(input: {
+  brandId: string;
+  scenarioId: string;
+  scenarioName: string;
+  seed: string;
+  threadId?: string;
+  scenario: InboxEvalRun["scenario"];
+  transcript?: InboxEvalRun["transcript"];
+}): Promise<InboxEvalRun> {
+  const now = nowIso();
+  const run: InboxEvalRun = {
+    id: createId("ieval"),
+    brandId: input.brandId.trim(),
+    scenarioId: input.scenarioId.trim(),
+    scenarioName: input.scenarioName.trim(),
+    status: "running",
+    seed: input.seed.trim(),
+    threadId: input.threadId?.trim() ?? "",
+    scenario: input.scenario,
+    transcript: input.transcript ?? [],
+    scorecard: null,
+    lastError: "",
+    startedAt: now,
+    completedAt: "",
+    createdAt: now,
+    updatedAt: now,
+  };
+
+  const supabase = getSupabaseAdmin();
+  if (supabase) {
+    const { data, error } = await supabase
+      .from(TABLE_INBOX_EVAL_RUN)
+      .insert({
+        id: run.id,
+        brand_id: run.brandId,
+        scenario_id: run.scenarioId,
+        scenario_name: run.scenarioName,
+        status: run.status,
+        seed: run.seed,
+        thread_id: run.threadId || null,
+        scenario: run.scenario,
+        transcript: run.transcript,
+        scorecard: run.scorecard,
+        last_error: run.lastError,
+        started_at: run.startedAt || null,
+        completed_at: run.completedAt || null,
+        created_at: run.createdAt,
+        updated_at: run.updatedAt,
+      })
+      .select("*")
+      .single();
+    if (!error && data) {
+      return mapInboxEvalRunRow(data);
+    }
+  }
+
+  const store = await readLocalStore();
+  store.inboxEvalRuns.unshift(run);
+  await writeLocalStore(store);
+  return run;
+}
+
+export async function updateInboxEvalRun(
+  runId: string,
+  patch: Partial<
+    Pick<InboxEvalRun, "status" | "threadId" | "transcript" | "scorecard" | "lastError" | "startedAt" | "completedAt">
+  >
+): Promise<InboxEvalRun | null> {
+  const supabase = getSupabaseAdmin();
+  const now = nowIso();
+  if (supabase) {
+    const update: Record<string, unknown> = { updated_at: now };
+    if (patch.status) update.status = patch.status;
+    if (patch.threadId !== undefined) update.thread_id = patch.threadId || null;
+    if (patch.transcript !== undefined) update.transcript = patch.transcript;
+    if (patch.scorecard !== undefined) update.scorecard = patch.scorecard;
+    if (patch.lastError !== undefined) update.last_error = patch.lastError;
+    if (patch.startedAt !== undefined) update.started_at = patch.startedAt || null;
+    if (patch.completedAt !== undefined) update.completed_at = patch.completedAt || null;
+
+    const { data, error } = await supabase
+      .from(TABLE_INBOX_EVAL_RUN)
+      .update(update)
+      .eq("id", runId)
+      .select("*")
+      .maybeSingle();
+    if (!error && data) {
+      return mapInboxEvalRunRow(data);
+    }
+  }
+
+  const store = await readLocalStore();
+  const index = store.inboxEvalRuns.findIndex((row) => row.id === runId);
+  if (index < 0) return null;
+  store.inboxEvalRuns[index] = {
+    ...store.inboxEvalRuns[index],
+    ...patch,
+    updatedAt: now,
+  };
+  await writeLocalStore(store);
+  return store.inboxEvalRuns[index];
+}
+
+export async function getInboxEvalRun(runId: string): Promise<InboxEvalRun | null> {
+  const supabase = getSupabaseAdmin();
+  if (supabase) {
+    const { data, error } = await supabase
+      .from(TABLE_INBOX_EVAL_RUN)
+      .select("*")
+      .eq("id", runId)
+      .maybeSingle();
+    if (!error && data) {
+      return mapInboxEvalRunRow(data);
+    }
+  }
+
+  const store = await readLocalStore();
+  return store.inboxEvalRuns.find((row) => row.id === runId) ?? null;
+}
+
+export async function listInboxEvalRunsByBrand(brandId: string): Promise<InboxEvalRun[]> {
+  const supabase = getSupabaseAdmin();
+  if (supabase) {
+    const { data, error } = await supabase
+      .from(TABLE_INBOX_EVAL_RUN)
+      .select("*")
+      .eq("brand_id", brandId)
+      .order("created_at", { ascending: false });
+    if (!error) {
+      return (data ?? []).map((row: unknown) => mapInboxEvalRunRow(row));
+    }
+  }
+
+  const store = await readLocalStore();
+  return store.inboxEvalRuns
+    .filter((row) => row.brandId === brandId)
+    .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
 }
 
 export async function createOutreachEvent(input: {
@@ -4368,4 +5388,520 @@ export async function listSourcingProbeResults(decisionId: string): Promise<Sour
   return store.sourcingProbeResults
     .filter((row) => row.decisionId === decisionId)
     .sort((a, b) => (a.createdAt < b.createdAt ? -1 : 1));
+}
+
+export async function listSenderLaunches(
+  input: { brandId?: string; senderAccountId?: string } = {},
+  options: { allowMissingTable?: boolean } = {}
+): Promise<SenderLaunch[]> {
+  const brandId = String(input.brandId ?? "").trim();
+  const senderAccountId = String(input.senderAccountId ?? "").trim();
+  const supabase = getSupabaseAdmin();
+  if (supabase) {
+    let query = supabase.from(TABLE_SENDER_LAUNCH).select("*").order("updated_at", { ascending: false });
+    if (brandId) query = query.eq("brand_id", brandId);
+    if (senderAccountId) query = query.eq("sender_account_id", senderAccountId);
+    const { data, error } = await query;
+    if (!error) {
+      return (data ?? []).map((row: unknown) => mapSenderLaunchRow(row));
+    }
+    if (options.allowMissingTable && isMissingRelationError(error, TABLE_SENDER_LAUNCH)) {
+      return [];
+    }
+    if (isVercel) {
+      throw new OutreachDataError("Failed to load sender launches from Supabase.", {
+        status: 500,
+        hint: hintForSupabaseWriteError(error),
+        debug: {
+          operation: "listSenderLaunches",
+          runtime: runtimeLabel(),
+          supabaseConfigured: supabaseConfigured(),
+          brandId,
+          senderAccountId,
+          supabaseError: supabaseErrorDebug(error),
+        },
+      });
+    }
+  }
+
+  const store = await readLocalStore();
+  return store.senderLaunches
+    .filter((row) => (!brandId || row.brandId === brandId) && (!senderAccountId || row.senderAccountId === senderAccountId))
+    .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1));
+}
+
+export async function getSenderLaunch(
+  brandId: string,
+  senderAccountId: string,
+  options: { allowMissingTable?: boolean } = {}
+): Promise<SenderLaunch | null> {
+  const normalizedBrandId = brandId.trim();
+  const normalizedSenderAccountId = senderAccountId.trim();
+  if (!normalizedBrandId || !normalizedSenderAccountId) return null;
+
+  const supabase = getSupabaseAdmin();
+  if (supabase) {
+    const { data, error } = await supabase
+      .from(TABLE_SENDER_LAUNCH)
+      .select("*")
+      .eq("brand_id", normalizedBrandId)
+      .eq("sender_account_id", normalizedSenderAccountId)
+      .maybeSingle();
+    if (!error) {
+      return data ? mapSenderLaunchRow(data) : null;
+    }
+    if (options.allowMissingTable && isMissingRelationError(error, TABLE_SENDER_LAUNCH)) {
+      return null;
+    }
+    if (isVercel) {
+      throw new OutreachDataError("Failed to load sender launch from Supabase.", {
+        status: 500,
+        hint: hintForSupabaseWriteError(error),
+        debug: {
+          operation: "getSenderLaunch",
+          runtime: runtimeLabel(),
+          supabaseConfigured: supabaseConfigured(),
+          brandId: normalizedBrandId,
+          senderAccountId: normalizedSenderAccountId,
+          supabaseError: supabaseErrorDebug(error),
+        },
+      });
+    }
+  }
+
+  const store = await readLocalStore();
+  return (
+    store.senderLaunches.find(
+      (row) => row.brandId === normalizedBrandId && row.senderAccountId === normalizedSenderAccountId
+    ) ?? null
+  );
+}
+
+export async function upsertSenderLaunch(
+  input: Omit<SenderLaunch, "id" | "createdAt" | "updatedAt"> & { id?: string; createdAt?: string; updatedAt?: string },
+  options: { allowMissingTable?: boolean } = {}
+): Promise<SenderLaunch> {
+  const existing = await getSenderLaunch(input.brandId, input.senderAccountId, options);
+  const now = nowIso();
+  const launch: SenderLaunch = {
+    id: existing?.id ?? input.id ?? createId("launch"),
+    senderAccountId: input.senderAccountId.trim(),
+    brandId: input.brandId.trim(),
+    fromEmail: input.fromEmail.trim().toLowerCase(),
+    domain: input.domain.trim().toLowerCase(),
+    planType: input.planType,
+    state: input.state,
+    readinessScore: Math.max(0, Math.min(100, Math.round(Number(input.readinessScore ?? 0) || 0))),
+    summary: input.summary.trim(),
+    nextStep: input.nextStep.trim(),
+    topicSummary: input.topicSummary.trim(),
+    topicKeywords: input.topicKeywords.map((entry) => String(entry ?? "").trim().toLowerCase()).filter(Boolean),
+    sourceExperimentIds: input.sourceExperimentIds.map((entry) => String(entry ?? "").trim()).filter(Boolean),
+    infraScore: Math.max(0, Math.min(30, Math.round(Number(input.infraScore ?? 0) || 0))),
+    reputationScore: Math.max(0, Math.min(25, Math.round(Number(input.reputationScore ?? 0) || 0))),
+    trustScore: Math.max(0, Math.min(20, Math.round(Number(input.trustScore ?? 0) || 0))),
+    safetyScore: Math.max(0, Math.min(15, Math.round(Number(input.safetyScore ?? 0) || 0))),
+    topicScore: Math.max(0, Math.min(10, Math.round(Number(input.topicScore ?? 0) || 0))),
+    dailyCap: Math.max(0, Math.round(Number(input.dailyCap ?? 0) || 0)),
+    sentCount: Math.max(0, Math.round(Number(input.sentCount ?? 0) || 0)),
+    repliedCount: Math.max(0, Math.round(Number(input.repliedCount ?? 0) || 0)),
+    bouncedCount: Math.max(0, Math.round(Number(input.bouncedCount ?? 0) || 0)),
+    failedCount: Math.max(0, Math.round(Number(input.failedCount ?? 0) || 0)),
+    inboxRate: clampZeroOne(input.inboxRate, 0),
+    spamRate: clampZeroOne(input.spamRate, 0),
+    trustEventCount: Math.max(0, Math.round(Number(input.trustEventCount ?? 0) || 0)),
+    pausedUntil: String(input.pausedUntil ?? "").trim(),
+    pauseReason: String(input.pauseReason ?? "").trim(),
+    lastEventAt: String(input.lastEventAt ?? "").trim(),
+    lastEvaluatedAt: String(input.lastEvaluatedAt ?? "").trim() || now,
+    createdAt: existing?.createdAt ?? input.createdAt ?? now,
+    updatedAt: now,
+  };
+
+  const supabase = getSupabaseAdmin();
+  if (supabase) {
+    const payload = {
+      id: launch.id,
+      sender_account_id: launch.senderAccountId,
+      brand_id: launch.brandId,
+      from_email: launch.fromEmail,
+      domain: launch.domain,
+      plan_type: launch.planType,
+      state: launch.state,
+      readiness_score: launch.readinessScore,
+      summary: launch.summary,
+      next_step: launch.nextStep,
+      topic_summary: launch.topicSummary,
+      topic_keywords: launch.topicKeywords,
+      source_experiment_ids: launch.sourceExperimentIds,
+      infra_score: launch.infraScore,
+      reputation_score: launch.reputationScore,
+      trust_score: launch.trustScore,
+      safety_score: launch.safetyScore,
+      topic_score: launch.topicScore,
+      daily_cap: launch.dailyCap,
+      sent_count: launch.sentCount,
+      replied_count: launch.repliedCount,
+      bounced_count: launch.bouncedCount,
+      failed_count: launch.failedCount,
+      inbox_rate: launch.inboxRate,
+      spam_rate: launch.spamRate,
+      trust_event_count: launch.trustEventCount,
+      paused_until: launch.pausedUntil || null,
+      pause_reason: launch.pauseReason,
+      last_event_at: launch.lastEventAt || null,
+      last_evaluated_at: launch.lastEvaluatedAt || null,
+      created_at: launch.createdAt,
+      updated_at: launch.updatedAt,
+    };
+    const query = existing
+      ? supabase.from(TABLE_SENDER_LAUNCH).update(payload).eq("id", existing.id).select("*").single()
+      : supabase.from(TABLE_SENDER_LAUNCH).insert(payload).select("*").single();
+    const { data, error } = await query;
+    if (!error && data) {
+      return mapSenderLaunchRow(data);
+    }
+    if (!(options.allowMissingTable && isMissingRelationError(error, TABLE_SENDER_LAUNCH)) && isVercel) {
+      throw new OutreachDataError("Failed to save sender launch in Supabase.", {
+        status: 500,
+        hint: hintForSupabaseWriteError(error),
+        debug: {
+          operation: "upsertSenderLaunch",
+          runtime: runtimeLabel(),
+          supabaseConfigured: supabaseConfigured(),
+          brandId: launch.brandId,
+          senderAccountId: launch.senderAccountId,
+          supabaseError: supabaseErrorDebug(error),
+        },
+      });
+    }
+  }
+
+  const store = await readLocalStore();
+  const index = store.senderLaunches.findIndex(
+    (row) => row.brandId === launch.brandId && row.senderAccountId === launch.senderAccountId
+  );
+  if (index >= 0) {
+    store.senderLaunches[index] = launch;
+  } else {
+    store.senderLaunches.unshift(launch);
+  }
+  await writeLocalStore(store);
+  return launch;
+}
+
+export async function listSenderLaunchEvents(
+  input: { brandId?: string; senderAccountId?: string; senderLaunchId?: string; limit?: number } = {},
+  options: { allowMissingTable?: boolean } = {}
+): Promise<SenderLaunchEvent[]> {
+  const brandId = String(input.brandId ?? "").trim();
+  const senderAccountId = String(input.senderAccountId ?? "").trim();
+  const senderLaunchId = String(input.senderLaunchId ?? "").trim();
+  const limit = Math.max(1, Math.round(Number(input.limit ?? 50) || 50));
+  const supabase = getSupabaseAdmin();
+  if (supabase) {
+    let query = supabase
+      .from(TABLE_SENDER_LAUNCH_EVENT)
+      .select("*")
+      .order("occurred_at", { ascending: false })
+      .limit(limit);
+    if (brandId) query = query.eq("brand_id", brandId);
+    if (senderAccountId) query = query.eq("sender_account_id", senderAccountId);
+    if (senderLaunchId) query = query.eq("sender_launch_id", senderLaunchId);
+    const { data, error } = await query;
+    if (!error) {
+      return (data ?? []).map((row: unknown) => mapSenderLaunchEventRow(row));
+    }
+    if (options.allowMissingTable && isMissingRelationError(error, TABLE_SENDER_LAUNCH_EVENT)) {
+      return [];
+    }
+    if (isVercel) {
+      throw new OutreachDataError("Failed to load sender launch events from Supabase.", {
+        status: 500,
+        hint: hintForSupabaseWriteError(error),
+        debug: {
+          operation: "listSenderLaunchEvents",
+          runtime: runtimeLabel(),
+          supabaseConfigured: supabaseConfigured(),
+          brandId,
+          senderAccountId,
+          senderLaunchId,
+          supabaseError: supabaseErrorDebug(error),
+        },
+      });
+    }
+  }
+
+  const store = await readLocalStore();
+  return store.senderLaunchEvents
+    .filter(
+      (row) =>
+        (!brandId || row.brandId === brandId) &&
+        (!senderAccountId || row.senderAccountId === senderAccountId) &&
+        (!senderLaunchId || row.senderLaunchId === senderLaunchId)
+    )
+    .sort((a, b) => (a.occurredAt < b.occurredAt ? 1 : -1))
+    .slice(0, limit);
+}
+
+export async function createSenderLaunchEvent(
+  input: Omit<SenderLaunchEvent, "id" | "createdAt"> & { id?: string; createdAt?: string },
+  options: { allowMissingTable?: boolean } = {}
+): Promise<SenderLaunchEvent> {
+  const event: SenderLaunchEvent = {
+    id: input.id ?? createId("launchevt"),
+    senderLaunchId: input.senderLaunchId.trim(),
+    senderAccountId: input.senderAccountId.trim(),
+    brandId: input.brandId.trim(),
+    eventType: input.eventType,
+    title: input.title.trim(),
+    detail: input.detail.trim(),
+    metadata: input.metadata ?? {},
+    occurredAt: String(input.occurredAt ?? "").trim() || nowIso(),
+    createdAt: input.createdAt ?? nowIso(),
+  };
+
+  const supabase = getSupabaseAdmin();
+  if (supabase) {
+    const { data, error } = await supabase
+      .from(TABLE_SENDER_LAUNCH_EVENT)
+      .insert({
+        id: event.id,
+        sender_launch_id: event.senderLaunchId,
+        sender_account_id: event.senderAccountId,
+        brand_id: event.brandId,
+        event_type: event.eventType,
+        title: event.title,
+        detail: event.detail,
+        metadata: event.metadata,
+        occurred_at: event.occurredAt,
+        created_at: event.createdAt,
+      })
+      .select("*")
+      .single();
+    if (!error && data) {
+      return mapSenderLaunchEventRow(data);
+    }
+    if (!(options.allowMissingTable && isMissingRelationError(error, TABLE_SENDER_LAUNCH_EVENT)) && isVercel) {
+      throw new OutreachDataError("Failed to save sender launch event in Supabase.", {
+        status: 500,
+        hint: hintForSupabaseWriteError(error),
+        debug: {
+          operation: "createSenderLaunchEvent",
+          runtime: runtimeLabel(),
+          supabaseConfigured: supabaseConfigured(),
+          senderLaunchId: event.senderLaunchId,
+          senderAccountId: event.senderAccountId,
+          supabaseError: supabaseErrorDebug(error),
+        },
+      });
+    }
+  }
+
+  const store = await readLocalStore();
+  store.senderLaunchEvents.unshift(event);
+  await writeLocalStore(store);
+  return event;
+}
+
+export async function listSenderLaunchActions(
+  input: { brandId?: string; senderAccountId?: string; senderLaunchId?: string; status?: SenderLaunchAction["status"] } = {},
+  options: { allowMissingTable?: boolean } = {}
+): Promise<SenderLaunchAction[]> {
+  const brandId = String(input.brandId ?? "").trim();
+  const senderAccountId = String(input.senderAccountId ?? "").trim();
+  const senderLaunchId = String(input.senderLaunchId ?? "").trim();
+  const status = String(input.status ?? "").trim();
+  const supabase = getSupabaseAdmin();
+  if (supabase) {
+    let query = supabase.from(TABLE_SENDER_LAUNCH_ACTION).select("*").order("updated_at", { ascending: false });
+    if (brandId) query = query.eq("brand_id", brandId);
+    if (senderAccountId) query = query.eq("sender_account_id", senderAccountId);
+    if (senderLaunchId) query = query.eq("sender_launch_id", senderLaunchId);
+    if (status) query = query.eq("status", status);
+    const { data, error } = await query;
+    if (!error) {
+      return (data ?? []).map((row: unknown) => mapSenderLaunchActionRow(row));
+    }
+    if (options.allowMissingTable && isMissingRelationError(error, TABLE_SENDER_LAUNCH_ACTION)) {
+      return [];
+    }
+    if (isVercel) {
+      throw new OutreachDataError("Failed to load sender launch actions from Supabase.", {
+        status: 500,
+        hint: hintForSupabaseWriteError(error),
+        debug: {
+          operation: "listSenderLaunchActions",
+          runtime: runtimeLabel(),
+          supabaseConfigured: supabaseConfigured(),
+          brandId,
+          senderAccountId,
+          senderLaunchId,
+          status,
+          supabaseError: supabaseErrorDebug(error),
+        },
+      });
+    }
+  }
+
+  const store = await readLocalStore();
+  return store.senderLaunchActions
+    .filter(
+      (row) =>
+        (!brandId || row.brandId === brandId) &&
+        (!senderAccountId || row.senderAccountId === senderAccountId) &&
+        (!senderLaunchId || row.senderLaunchId === senderLaunchId) &&
+        (!status || row.status === status)
+    )
+    .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1));
+}
+
+export async function createSenderLaunchAction(
+  input: Omit<SenderLaunchAction, "id" | "createdAt" | "updatedAt" | "completedAt"> & {
+    id?: string;
+    createdAt?: string;
+    updatedAt?: string;
+    completedAt?: string;
+  },
+  options: { allowMissingTable?: boolean } = {}
+): Promise<SenderLaunchAction> {
+  const now = nowIso();
+  const action: SenderLaunchAction = {
+    id: input.id ?? createId("launchact"),
+    senderLaunchId: input.senderLaunchId.trim(),
+    senderAccountId: input.senderAccountId.trim(),
+    brandId: input.brandId.trim(),
+    lane: input.lane,
+    actionType: input.actionType,
+    sourceKey: String(input.sourceKey ?? "").trim(),
+    status: input.status,
+    executeAfter: String(input.executeAfter ?? "").trim() || now,
+    attempts: Math.max(0, Math.round(Number(input.attempts ?? 0) || 0)),
+    maxAttempts: Math.max(1, Math.round(Number(input.maxAttempts ?? 5) || 5)),
+    payload: input.payload ?? {},
+    resultSummary: String(input.resultSummary ?? "").trim(),
+    lastError: String(input.lastError ?? "").trim(),
+    completedAt: String(input.completedAt ?? "").trim(),
+    createdAt: input.createdAt ?? now,
+    updatedAt: input.updatedAt ?? now,
+  };
+
+  const supabase = getSupabaseAdmin();
+  if (supabase) {
+    const { data, error } = await supabase
+      .from(TABLE_SENDER_LAUNCH_ACTION)
+      .insert({
+        id: action.id,
+        sender_launch_id: action.senderLaunchId,
+        sender_account_id: action.senderAccountId,
+        brand_id: action.brandId,
+        lane: action.lane,
+        action_type: action.actionType,
+        source_key: action.sourceKey,
+        status: action.status,
+        execute_after: action.executeAfter,
+        attempts: action.attempts,
+        max_attempts: action.maxAttempts,
+        payload: action.payload,
+        result_summary: action.resultSummary,
+        last_error: action.lastError,
+        completed_at: action.completedAt || null,
+        created_at: action.createdAt,
+        updated_at: action.updatedAt,
+      })
+      .select("*")
+      .single();
+    if (!error && data) {
+      return mapSenderLaunchActionRow(data);
+    }
+    if (!(options.allowMissingTable && isMissingRelationError(error, TABLE_SENDER_LAUNCH_ACTION)) && isVercel) {
+      throw new OutreachDataError("Failed to save sender launch action in Supabase.", {
+        status: 500,
+        hint: hintForSupabaseWriteError(error),
+        debug: {
+          operation: "createSenderLaunchAction",
+          runtime: runtimeLabel(),
+          supabaseConfigured: supabaseConfigured(),
+          senderLaunchId: action.senderLaunchId,
+          senderAccountId: action.senderAccountId,
+          supabaseError: supabaseErrorDebug(error),
+        },
+      });
+    }
+  }
+
+  const store = await readLocalStore();
+  store.senderLaunchActions.unshift(action);
+  await writeLocalStore(store);
+  return action;
+}
+
+export async function updateSenderLaunchAction(
+  actionId: string,
+  patch: Partial<Pick<SenderLaunchAction, "status" | "executeAfter" | "attempts" | "maxAttempts" | "payload" | "resultSummary" | "lastError" | "completedAt">>,
+  options: { allowMissingTable?: boolean } = {}
+): Promise<SenderLaunchAction | null> {
+  const normalizedActionId = actionId.trim();
+  if (!normalizedActionId) return null;
+  const existingActions = await listSenderLaunchActions({}, options);
+  const existing = existingActions.find((row) => row.id === normalizedActionId) ?? null;
+  if (!existing) return null;
+  const now = nowIso();
+  const next: SenderLaunchAction = {
+    ...existing,
+    status: patch.status ?? existing.status,
+    executeAfter: String(patch.executeAfter ?? existing.executeAfter).trim(),
+    attempts: patch.attempts === undefined ? existing.attempts : Math.max(0, Math.round(Number(patch.attempts) || 0)),
+    maxAttempts:
+      patch.maxAttempts === undefined ? existing.maxAttempts : Math.max(1, Math.round(Number(patch.maxAttempts) || 1)),
+    payload: patch.payload ?? existing.payload,
+    resultSummary: patch.resultSummary === undefined ? existing.resultSummary : String(patch.resultSummary).trim(),
+    lastError: patch.lastError === undefined ? existing.lastError : String(patch.lastError).trim(),
+    completedAt: patch.completedAt === undefined ? existing.completedAt : String(patch.completedAt).trim(),
+    updatedAt: now,
+  };
+
+  const supabase = getSupabaseAdmin();
+  if (supabase) {
+    const { data, error } = await supabase
+      .from(TABLE_SENDER_LAUNCH_ACTION)
+      .update({
+        status: next.status,
+        execute_after: next.executeAfter,
+        attempts: next.attempts,
+        max_attempts: next.maxAttempts,
+        payload: next.payload,
+        result_summary: next.resultSummary,
+        last_error: next.lastError,
+        completed_at: next.completedAt || null,
+        updated_at: next.updatedAt,
+      })
+      .eq("id", next.id)
+      .select("*")
+      .single();
+    if (!error && data) {
+      return mapSenderLaunchActionRow(data);
+    }
+    if (!(options.allowMissingTable && isMissingRelationError(error, TABLE_SENDER_LAUNCH_ACTION)) && isVercel) {
+      throw new OutreachDataError("Failed to update sender launch action in Supabase.", {
+        status: 500,
+        hint: hintForSupabaseWriteError(error),
+        debug: {
+          operation: "updateSenderLaunchAction",
+          runtime: runtimeLabel(),
+          supabaseConfigured: supabaseConfigured(),
+          actionId: next.id,
+          supabaseError: supabaseErrorDebug(error),
+        },
+      });
+    }
+  }
+
+  const store = await readLocalStore();
+  const index = store.senderLaunchActions.findIndex((row) => row.id === next.id);
+  if (index >= 0) {
+    store.senderLaunchActions[index] = next;
+    await writeLocalStore(store);
+  }
+  return next;
 }

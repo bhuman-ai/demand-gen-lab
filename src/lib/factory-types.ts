@@ -381,6 +381,15 @@ export type DomainRow = {
   lastProvisionedAt?: string;
   lastHealthCheckAt?: string;
   nextHealthCheckAt?: string;
+  senderLaunchId?: string;
+  senderLaunchPlanType?: SenderLaunchPlanType;
+  senderLaunchState?: SenderLaunchState;
+  senderLaunchScore?: number;
+  senderLaunchSummary?: string;
+  senderLaunchNextStep?: string;
+  senderLaunchTopicSummary?: string;
+  senderLaunchDailyCap?: number;
+  senderLaunchLastEvaluatedAt?: string;
 };
 
 export type LeadRow = {
@@ -443,6 +452,109 @@ export type DeliverabilityDomainHealth = {
   spamRate: number;
   status: DeliverabilityHealthStatus;
   summary: string;
+};
+
+export type SenderLaunchPlanType = "bridge" | "subdomain" | "fresh";
+
+export type SenderLaunchState =
+  | "setup"
+  | "observing"
+  | "warming"
+  | "restricted_send"
+  | "ready"
+  | "paused"
+  | "blocked";
+
+export type SenderLaunch = {
+  id: string;
+  senderAccountId: string;
+  brandId: string;
+  fromEmail: string;
+  domain: string;
+  planType: SenderLaunchPlanType;
+  state: SenderLaunchState;
+  readinessScore: number;
+  summary: string;
+  nextStep: string;
+  topicSummary: string;
+  topicKeywords: string[];
+  sourceExperimentIds: string[];
+  infraScore: number;
+  reputationScore: number;
+  trustScore: number;
+  safetyScore: number;
+  topicScore: number;
+  dailyCap: number;
+  sentCount: number;
+  repliedCount: number;
+  bouncedCount: number;
+  failedCount: number;
+  inboxRate: number;
+  spamRate: number;
+  trustEventCount: number;
+  pausedUntil: string;
+  pauseReason: string;
+  lastEventAt: string;
+  lastEvaluatedAt: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type SenderLaunchActionLane = "opt_in" | "double_opt_in" | "inquiry";
+
+export type SenderLaunchActionType =
+  | "execute_opt_in"
+  | "confirm_double_opt_in"
+  | "execute_inquiry";
+
+export type SenderLaunchActionStatus = "queued" | "running" | "waiting" | "completed" | "failed" | "skipped";
+
+export type SenderLaunchAction = {
+  id: string;
+  senderLaunchId: string;
+  senderAccountId: string;
+  brandId: string;
+  lane: SenderLaunchActionLane;
+  actionType: SenderLaunchActionType;
+  sourceKey: string;
+  status: SenderLaunchActionStatus;
+  executeAfter: string;
+  attempts: number;
+  maxAttempts: number;
+  payload: Record<string, unknown>;
+  resultSummary: string;
+  lastError: string;
+  completedAt: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type SenderLaunchEvent = {
+  id: string;
+  senderLaunchId: string;
+  senderAccountId: string;
+  brandId: string;
+  eventType:
+    | "launch_initialized"
+    | "topic_profile_refreshed"
+    | "bridge_inbound_recorded"
+    | "opt_in_scheduled"
+    | "opt_in_completed"
+    | "double_opt_in_received"
+    | "double_opt_in_confirmed"
+    | "inquiry_scheduled"
+    | "inquiry_completed"
+    | "action_failed"
+    | "state_changed"
+    | "first_reply_recorded"
+    | "healthy_probe_recorded"
+    | "launch_paused"
+    | "launch_resumed";
+  title: string;
+  detail: string;
+  metadata: Record<string, unknown>;
+  occurredAt: string;
+  createdAt: string;
 };
 
 export type OutreachProvisioningSettings = {
@@ -855,11 +967,17 @@ export type ReplyThread = {
   campaignId: string;
   runId: string;
   leadId: string;
+  sourceType: "outreach" | "mailbox" | "eval";
+  mailboxAccountId: string;
+  contactEmail: string;
+  contactName: string;
+  contactCompany: string;
   subject: string;
   sentiment: "positive" | "neutral" | "negative";
   status: "new" | "open" | "closed";
   intent: "question" | "interest" | "objection" | "unsubscribe" | "other";
   lastMessageAt: string;
+  stateSummary?: ReplyThreadStateSummary | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -888,6 +1006,338 @@ export type ReplyDraft = {
   status: "draft" | "sent" | "dismissed";
   reason: string;
   sentAt: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type ReplyThreadStage =
+  | "discover_relevance"
+  | "qualify"
+  | "handle_objection"
+  | "advance_next_step"
+  | "nurture"
+  | "closed";
+
+export type ReplyThreadMove =
+  | "stay_silent"
+  | "acknowledge_and_close"
+  | "answer_question"
+  | "ask_qualifying_question"
+  | "offer_proof"
+  | "reframe_objection"
+  | "advance_next_step"
+  | "soft_nurture"
+  | "handoff_to_human"
+  | "respect_opt_out";
+
+export type ReplyThreadFactSource =
+  | "thread"
+  | "crm"
+  | "enrichment"
+  | "brand_memory"
+  | "inference";
+
+export type ReplyThreadFact = {
+  key: string;
+  value: string;
+  source: ReplyThreadFactSource;
+  confidence: number;
+};
+
+export type ReplyThreadStateDecision = {
+  recommendedMove: ReplyThreadMove;
+  objectiveForThisTurn: string;
+  rationale: string;
+  confidence: number;
+  autopilotOk: boolean;
+  manualReviewReason: string;
+};
+
+export type ReplyThreadDraftMeta = {
+  draftId: string;
+  status: "none" | "draft" | "sent" | "dismissed";
+  subject: string;
+  reason: string;
+  createdAt: string;
+};
+
+export type ReplyThreadCanonicalState = {
+  ids: {
+    threadId: string;
+    brandId: string;
+    campaignId: string;
+    runId: string;
+    leadId: string;
+    sourceType: "outreach" | "mailbox" | "eval";
+    mailboxAccountId: string;
+  };
+  org: {
+    brandSummary: string;
+    productSummary: string;
+    offerSummary: string;
+    tone: string;
+    proofPoints: string[];
+    allowedClaims: string[];
+    forbiddenClaims: string[];
+    desiredOutcome: string;
+  };
+  contact: {
+    email: string;
+    name: string;
+    company: string;
+    title: string;
+    roleFit: string;
+    relationshipValue: "low" | "medium" | "high";
+  };
+  thread: {
+    rollingSummary: string;
+    latestInboundSummary: string;
+    latestUserAsk: string;
+    currentStage: ReplyThreadStage;
+    stageGoal: string;
+    progressScore: number;
+  };
+  evidence: {
+    confirmedFacts: ReplyThreadFact[];
+    inferredFacts: ReplyThreadFact[];
+    openQuestions: string[];
+    objections: string[];
+    commitments: string[];
+    riskFlags: string[];
+    buyingSignals: string[];
+  };
+  policy: {
+    preferredMoves: ReplyThreadMove[];
+    forbiddenMoves: ReplyThreadMove[];
+    manualReviewTriggers: string[];
+    autopilotEnabled: boolean;
+  };
+  decision: ReplyThreadStateDecision;
+  draft: {
+    subject: string;
+    body: string;
+    styleNotes: string[];
+  };
+  audit: {
+    stateRevision: number;
+    sourcesUsed: string[];
+    model: string;
+    generatedAt: string;
+  };
+};
+
+export type ReplyThreadStateSummary = {
+  currentStage: ReplyThreadStage;
+  recommendedMove: ReplyThreadMove;
+  confidence: number;
+  autopilotOk: boolean;
+  manualReviewReason: string;
+  latestUserAsk: string;
+  progressScore: number;
+};
+
+export type ReplyThreadStateRecord = {
+  threadId: string;
+  brandId: string;
+  runId: string;
+  stateRevision: number;
+  canonicalState: ReplyThreadCanonicalState;
+  latestDecision: ReplyThreadStateDecision;
+  latestDraftMeta: ReplyThreadDraftMeta;
+  sourcesUsed: string[];
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type ReplyThreadHistoryItem = {
+  id: string;
+  source: "outreach_message" | "reply_message";
+  direction: "inbound" | "outbound";
+  subject: string;
+  body: string;
+  at: string;
+  status: string;
+};
+
+export type ReplyThreadDetail = {
+  thread: ReplyThread;
+  state: ReplyThreadStateRecord | null;
+  history: ReplyThreadHistoryItem[];
+  drafts: ReplyDraft[];
+  feedback: ReplyThreadFeedback[];
+  lead: OutreachRunLead | null;
+  run: Pick<OutreachRun, "id" | "status" | "accountId" | "createdAt" | "updatedAt"> | null;
+};
+
+export type ReplyThreadFeedbackType =
+  | "good"
+  | "wrong_move"
+  | "wrong_facts"
+  | "too_aggressive"
+  | "should_be_human";
+
+export type ReplyThreadFeedback = {
+  id: string;
+  threadId: string;
+  brandId: string;
+  type: ReplyThreadFeedbackType;
+  note: string;
+  createdAt: string;
+};
+
+export type InboxSyncState = {
+  brandId: string;
+  mailboxAccountId: string;
+  mailboxName: string;
+  lastInboxUid: number;
+  lastSyncedAt: string;
+  lastError: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type InboxEvalScenarioCategory =
+  | "normal"
+  | "curveball"
+  | "adversarial"
+  | "long_running";
+
+export type InboxEvalScenarioDifficulty = "easy" | "medium" | "hard";
+
+export type InboxEvalScenario = {
+  id: string;
+  name: string;
+  description: string;
+  category: InboxEvalScenarioCategory;
+  difficulty: InboxEvalScenarioDifficulty;
+  seed: string;
+  brandContext: {
+    orgSummary: string;
+    productSummary: string;
+    offerSummary: string;
+    desiredPath: string[];
+    forbiddenClaims: string[];
+    humanReviewTriggers: string[];
+  };
+  persona: {
+    name: string;
+    email: string;
+    role: string;
+    company: string;
+    seniority: string;
+    disposition: "friendly" | "skeptical" | "rushed" | "hostile" | "ambiguous";
+    communicationStyle: string;
+    hiddenTruths: string[];
+    goals: string[];
+    redLines: string[];
+  };
+  threadSetup: {
+    initialSubject: string;
+    initialBody: string;
+    priorThreadHistory?: Array<{
+      from: "brand" | "persona";
+      subject?: string;
+      body: string;
+    }>;
+    knownFacts: string[];
+    unknownFacts: string[];
+  };
+  roleplayRules: {
+    mustDo: string[];
+    mustNotDo: string[];
+    allowedCurveballs: string[];
+    escalationTraps: string[];
+    maxTurns: number;
+    stopConditions: string[];
+  };
+  expectedBehavior: {
+    idealMoves: string[];
+    acceptableMoves: string[];
+    badMoves: string[];
+    mustCaptureFacts: string[];
+    mustAvoid: string[];
+    successCondition: string;
+    failureConditions: string[];
+  };
+  scoring: {
+    safetyWeight: number;
+    strategyWeight: number;
+    stateWeight: number;
+    outcomeWeight: number;
+  };
+};
+
+export type InboxEvalScoreDimension = {
+  score: number;
+  notes: string[];
+};
+
+export type InboxEvalScorecard = {
+  overall: number;
+  safety: InboxEvalScoreDimension & {
+    respectedOptOut: boolean;
+    avoidedHallucinatedClaims: boolean;
+    escalatedWhenRequired: boolean;
+    avoidedPolicyViolation: boolean;
+  };
+  strategy: InboxEvalScoreDimension & {
+    understoodUserAsk: number;
+    choseRightMove: number;
+    maintainedDesiredPath: number;
+    handledObjectionQuality: number;
+    pressureCalibration: number;
+  };
+  state: InboxEvalScoreDimension & {
+    factExtractionAccuracy: number;
+    objectionTrackingAccuracy: number;
+    commitmentTrackingAccuracy: number;
+    memoryConsistency: number;
+  };
+  outcome: InboxEvalScoreDimension & {
+    resolvedCorrectly: number;
+    unnecessaryEscalationPenalty: number;
+    unnecessarySilencePenalty: number;
+    recoveredFromCurveball: number;
+  };
+  verdict: "pass" | "borderline" | "fail";
+  failureType:
+    | "none"
+    | "safety_miss"
+    | "bad_move"
+    | "state_miss"
+    | "memory_drift"
+    | "draft_quality"
+    | "escalation_error"
+    | "retrieval_or_context_miss";
+  summary: string;
+};
+
+export type InboxEvalTranscriptItem = {
+  id: string;
+  turn: number;
+  actor: "persona" | "manager" | "system";
+  direction: "inbound" | "outbound" | "meta";
+  subject: string;
+  body: string;
+  at: string;
+  decision?: ReplyThreadStateDecision | null;
+  stateSummary?: ReplyThreadStateSummary | null;
+};
+
+export type InboxEvalRun = {
+  id: string;
+  brandId: string;
+  scenarioId: string;
+  scenarioName: string;
+  status: "running" | "completed" | "failed";
+  seed: string;
+  threadId: string;
+  scenario: InboxEvalScenario;
+  transcript: InboxEvalTranscriptItem[];
+  scorecard: InboxEvalScorecard | null;
+  lastError: string;
+  startedAt: string;
+  completedAt: string;
   createdAt: string;
   updatedAt: string;
 };

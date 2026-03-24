@@ -18,7 +18,7 @@ import {
 import {
   countExperimentSendableLeadContacts,
 } from "@/lib/experiment-prospect-import";
-import { EXPERIMENT_MIN_VERIFIED_EMAIL_LEADS } from "@/lib/experiment-policy";
+import { getExperimentVerifiedEmailLeadTarget } from "@/lib/experiment-policy";
 import {
   createExperimentRecord,
   deleteScaleCampaignRecord,
@@ -104,35 +104,10 @@ function pickRun<T extends { status: string }>(runs: T[]) {
   return runs.find((run) => RUN_OPEN_STATUSES.has(run.status)) ?? runs[0] ?? null;
 }
 
-function normalizeProvisionDomainMode(value: unknown) {
-  const normalized = asString(value).toLowerCase();
-  if (!normalized) return "existing";
-  if (
-    [
-      "register",
-      "new",
-      "buy",
-      "purchase",
-      "buy_new",
-      "buy-new",
-      "new_domain",
-      "new-domain",
-      "buy_new_domain",
-      "buy-new-domain",
-    ].includes(normalized)
-  ) {
-    return "register";
-  }
-  if (["existing", "current", "existing_domain", "existing-domain"].includes(normalized)) {
-    return "existing";
-  }
-  return "existing";
-}
-
 function buildProvisionPreview(input: Record<string, unknown>) {
   const domain = asString(input.domain) || "new Mailpool domain";
   const fromLocalPart = asString(input.fromLocalPart) || "sender local-part";
-  const domainMode = normalizeProvisionDomainMode(input.domainMode);
+  const domainMode = asString(input.domainMode) === "register" ? "register" : "existing";
   return {
     title: "Add Mailpool sender",
     summary:
@@ -566,10 +541,8 @@ const TOOL_SPECS: OperatorToolSpec[] = [
         accountName: asString(input.accountName),
         assignToBrand: input.assignToBrand !== false,
         selectedMailboxAccountId: asString(input.selectedMailboxAccountId),
-        domainMode: normalizeProvisionDomainMode(input.domainMode),
+        domainMode: asString(input.domainMode) === "register" ? "register" : "existing",
         domain: requireString(input, "domain"),
-        domainCandidates: asStringArray(input.domainCandidates),
-        allowAlternativeDomains: input.allowAlternativeDomains === true,
         fromLocalPart: requireString(input, "fromLocalPart"),
         autoPickCustomerIoAccount: false,
         customerIoSourceAccountId: "",
@@ -608,7 +581,7 @@ const TOOL_SPECS: OperatorToolSpec[] = [
     run: async (input) => {
       const brand = await createBrand({
         name: requireString(input, "name"),
-        website: asString(input.website),
+        website: requireString(input, "website"),
         tone: asString(input.tone),
         notes: asString(input.notes),
         product: asString(input.product),
@@ -921,14 +894,15 @@ const TOOL_SPECS: OperatorToolSpec[] = [
       const prospectTable = await getEnrichAnythingProspectTableState(
         buildExperimentProspectTableConfig(experiment)
       );
-      if (prospectTable.rowCount < EXPERIMENT_MIN_VERIFIED_EMAIL_LEADS) {
+      const leadTarget = getExperimentVerifiedEmailLeadTarget(experiment);
+      if (prospectTable.rowCount < leadTarget) {
         throw new Error(
-          `Prospect validation failed: need at least ${EXPERIMENT_MIN_VERIFIED_EMAIL_LEADS} saved leads before launch.`
+          `Prospect validation failed: need at least ${leadTarget} saved leads before launch.`
         );
       }
 
       const sendableSummary = await countExperimentSendableLeadContacts(brandId, experiment.id);
-      if (sendableSummary.sendableLeadCount < EXPERIMENT_MIN_VERIFIED_EMAIL_LEADS) {
+      if (sendableSummary.sendableLeadCount < leadTarget) {
         throw new Error("Launch is still preparing contacts with work emails.");
       }
 

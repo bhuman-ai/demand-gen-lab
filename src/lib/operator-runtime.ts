@@ -21,7 +21,6 @@ import {
 } from "@/lib/operator-memory";
 import { getOperatorBrandContext } from "@/lib/operator-context";
 import { getOperatorToolSpec, listOperatorToolSpecs } from "@/lib/operator-tools";
-import { selectAvailableMailpoolDomain } from "@/lib/outreach-provisioning";
 import type {
   OperatorAction,
   OperatorActionSummary,
@@ -1204,32 +1203,7 @@ async function resolveMailpoolProvisionDomain(input: {
     ...input.toolInput,
     registrant: asRecord(input.toolInput.registrant),
   };
-  if (normalizeProvisionDomainMode(nextInput.domainMode) !== "register" || !asString(nextInput.domain)) {
-    return {
-      toolInput: nextInput,
-      selection: null as Awaited<ReturnType<typeof selectAvailableMailpoolDomain>> | null,
-    };
-  }
-
-  const selection = await selectAvailableMailpoolDomain({
-    preferredDomain: asString(nextInput.domain),
-    domainCandidates: Array.isArray(nextInput.domainCandidates)
-      ? nextInput.domainCandidates.map((entry) => asString(entry)).filter(Boolean)
-      : [],
-    allowAlternativeDomains:
-      nextInput.allowAlternativeDomains === true || hasDelegatedProvisionChoicePermission(input.message),
-    mailpoolApiKey: asString(nextInput.mailpoolApiKey),
-  });
-
-  nextInput.domainAvailabilityChecked = true;
-  nextInput.domainAvailabilityPrice = selection.price;
-  nextInput.domainAvailabilitySource = selection.source;
-  nextInput.checkedDomains = selection.checkedDomains;
-  if (selection.available && selection.domain) {
-    nextInput.domain = selection.domain;
-  }
-
-  return { toolInput: nextInput, selection };
+  return { toolInput: nextInput, selection: null as { available: boolean } | null };
 }
 
 type PendingConversationContinuation =

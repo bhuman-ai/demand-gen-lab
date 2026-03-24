@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
 import {
+  checkNamecheapDomainAvailability,
   fetchSavedMailpoolDomains,
   fetchSavedNamecheapDomains,
   provisionSenderDomain,
@@ -64,6 +65,7 @@ type RegisterState = {
 
 type NamecheapInventoryItem = Awaited<ReturnType<typeof fetchSavedNamecheapDomains>>["domains"][number];
 type MailpoolInventoryItem = Awaited<ReturnType<typeof fetchSavedMailpoolDomains>>["domains"][number];
+type DomainAvailabilityItem = Awaited<ReturnType<typeof checkNamecheapDomainAvailability>>["results"][number];
 
 const INITIAL_SETUP: SetupState = {
   brandId: "",
@@ -103,6 +105,52 @@ function formatDateLabel(value: string) {
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) return value;
   return parsed.toLocaleDateString();
+}
+
+function normalizeDomainLabel(value: string) {
+  return value.trim().toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+function trimDomainLabel(value: string, maxLength: number) {
+  return value.slice(0, maxLength).replace(/^-+|-+$/g, "");
+}
+
+function buildSuggestedDomains(input: {
+  forwardingTargetUrl: string;
+  fromLocalPart: string;
+  takenDomains: Set<string>;
+}) {
+  const mainDomain = normalizeDomain(input.forwardingTargetUrl);
+  const mainLabel = mainDomain.split(".")[0] || "";
+  const base = trimDomainLabel(normalizeDomainLabel(mainLabel), 18);
+  const local = trimDomainLabel(normalizeDomainLabel(input.fromLocalPart), 10);
+  if (!base) return [];
+
+  const rawCandidates = [
+    `${base}mail.com`,
+    `${base}team.com`,
+    `${base}work.com`,
+    `${base}hq.com`,
+    `${base}reply.com`,
+    `${base}studio.com`,
+    `go${base}.com`,
+    `try${base}.com`,
+    `use${base}.com`,
+    local ? `${base}${local}.com` : "",
+    local ? `${local}${base}.com` : "",
+  ];
+
+  const seen = new Set<string>();
+  return rawCandidates
+    .map((candidate) => normalizeDomain(candidate))
+    .filter((candidate) => {
+      if (!candidate || candidate === mainDomain) return false;
+      if (input.takenDomains.has(candidate)) return false;
+      if (seen.has(candidate)) return false;
+      seen.add(candidate);
+      return true;
+    })
+    .slice(0, 8);
 }
 
 function providerDomainLabel(provider: SetupState["provider"]) {
@@ -228,6 +276,17 @@ export default function SenderProvisionCard({
   const [result, setResult] = useState<ProvisionResult | null>(null);
   const [guidedPath, setGuidedPath] = useState<GuidedSenderPath | null>(null);
   const [advancedMode, setAdvancedMode] = useState(false);
+  const [availabilityState, setAvailabilityState] = useState<{
+    configured: boolean;
+    checking: boolean;
+    error: string;
+    results: Record<string, DomainAvailabilityItem>;
+  }>({
+    configured: false,
+    checking: false,
+    error: "",
+    results: {},
+  });
 
   useEffect(() => {
     let active = true;
@@ -332,6 +391,20 @@ export default function SenderProvisionCard({
     return map;
   }, [allBrands, brands]);
 
+  const takenDomains = useMemo(() => {
+    const next = new Set<string>();
+    for (const item of namecheapInventory.domains) {
+      next.add(normalizeDomain(item.domain));
+    }
+    for (const item of mailpoolInventory.domains) {
+      next.add(normalizeDomain(item.domain));
+    }
+    for (const key of domainOwnerByName.keys()) {
+      next.add(key);
+    }
+    return next;
+  }, [domainOwnerByName, mailpoolInventory.domains, namecheapInventory.domains]);
+
   const filteredDomains = useMemo(() => {
     const needle = inventoryQuery.trim().toLowerCase();
     const currentDomains =
@@ -344,9 +417,111 @@ export default function SenderProvisionCard({
   const showSimpleFlow = !advancedMode;
   const showExistingDomainPath = showSimpleFlow && guidedPath === "existing_domain";
   const showBuyDomainPath = showSimpleFlow && guidedPath === "buy_new_domain";
-  const showSetupFields = advancedMode || Boolean(guidedPath);
+  const showGuidedBuyWizard = showBuyDomainPath && !advancedMode;
+  const showSharedSetupFields = advancedMode || showExistingDomainPath;
   const showExistingDomainSection = advancedMode || showExistingDomainPath;
   const showBuyDomainSection = advancedMode || showBuyDomainPath;
+
+  const buyDomainSuggestions = useMemo(
+    () =>
+      buildSuggestedDomains({
+        forwardingTargetUrl: setup.forwardingTargetUrl,
+        fromLocalPart: setup.fromLocalPart,
+        takenDomains,
+      }),
+    [setup.forwardingTargetUrl, setup.fromLocalPart, takenDomains]
+  );
+
+  const availabilityDomains = useMemo(() => {
+    const next = new Set<string>();
+    for (const candidate of buyDomainSuggestions) {
+      next.add(normalizeDomain(candidate));
+    }
+    const typedDomain = normalizeDomain(register.domain);
+    if (typedDomain) {
+      next.add(typedDomain);
+    }
+    return Array.from(next).filter((domain) => domain && domain.includes(".")).slice(0, 50);
+  }, [buyDomainSuggestions, register.domain]);
+
+  useEffect(() => {
+    if (!showGuidedBuyWizard || register.domain.trim() || !buyDomainSuggestions.length) {
+      return;
+    }
+    setRegister((prev) => ({
+      ...prev,
+      domain: buyDomainSuggestions[0],
+    }));
+  }, [buyDomainSuggestions, register.domain, showGuidedBuyWizard]);
+
+  useEffect(() => {
+    if (!showGuidedBuyWizard) {
+      setAvailabilityState({
+        configured: false,
+        checking: false,
+        error: "",
+        results: {},
+      });
+      return;
+    }
+
+    if (!namecheapInventory.configured) {
+      setAvailabilityState({
+        configured: false,
+        checking: false,
+        error: "",
+        results: {},
+      });
+      return;
+    }
+
+    if (!normalizeDomain(setup.forwardingTargetUrl) || !setup.fromLocalPart.trim() || !availabilityDomains.length) {
+      setAvailabilityState((prev) => ({
+        ...prev,
+        checking: false,
+        error: "",
+        results: {},
+      }));
+      return;
+    }
+
+    let active = true;
+    setAvailabilityState((prev) => ({
+      ...prev,
+      checking: true,
+      error: "",
+    }));
+
+    const timer = window.setTimeout(() => {
+      void (async () => {
+        try {
+          const response = await checkNamecheapDomainAvailability(availabilityDomains);
+          if (!active) return;
+          const nextResults = Object.fromEntries(
+            response.results.map((item) => [normalizeDomain(item.domain), item])
+          );
+          setAvailabilityState({
+            configured: response.configured,
+            checking: false,
+            error: "",
+            results: nextResults,
+          });
+        } catch (err) {
+          if (!active) return;
+          setAvailabilityState((prev) => ({
+            ...prev,
+            checking: false,
+            error: err instanceof Error ? err.message : "Failed to check domain availability",
+          }));
+        }
+      })();
+    }, 250);
+
+    return () => {
+      active = false;
+      window.clearTimeout(timer);
+    };
+  }, [availabilityDomains, namecheapInventory.configured, setup.forwardingTargetUrl, setup.fromLocalPart, showGuidedBuyWizard]);
 
   const manualDefaultsReady =
     Boolean(setup.customerIoSiteId.trim() || provisioningSettings?.customerIo.siteId.trim()) &&
@@ -436,6 +611,10 @@ export default function SenderProvisionCard({
     setInventoryQuery("");
     setError("");
     setResult(null);
+    setRegister((prev) => ({
+      ...prev,
+      domain: "",
+    }));
     setSetup((prev) => ({
       ...prev,
       provider: path === "existing_domain" ? "customerio" : "mailpool",
@@ -447,6 +626,25 @@ export default function SenderProvisionCard({
     if (!normalizedDomain || !normalizedDomain.includes(".")) {
       setError("Pick a valid domain.");
       return;
+    }
+    if (domainMode === "register" && !advancedMode) {
+      if (!namecheapInventory.configured) {
+        setError("Connect Namecheap first so we can run a live domain availability check.");
+        return;
+      }
+      if (availabilityState.checking) {
+        setError("Wait for the live availability check to finish.");
+        return;
+      }
+      const selectedAvailability = availabilityState.results[normalizedDomain];
+      if (!selectedAvailability) {
+        setError("We have not checked that domain yet. Give it a second and try again.");
+        return;
+      }
+      if (!selectedAvailability.available) {
+        setError(`${normalizedDomain} is not available. Pick a different domain.`);
+        return;
+      }
     }
     if (!validateCommon()) return;
     if (domainMode === "register" && !validateRegistrant()) return;
@@ -504,6 +702,122 @@ export default function SenderProvisionCard({
       setBusyKey("");
     }
   }
+
+  const selectedBuyDomain = normalizeDomain(register.domain);
+  const selectedBuyAvailability = selectedBuyDomain ? availabilityState.results[selectedBuyDomain] ?? null : null;
+  const canBuySelectedDomain = advancedMode
+    ? Boolean(selectedBuyDomain)
+    : Boolean(
+        selectedBuyDomain &&
+          mailpoolInventory.configured &&
+          namecheapInventory.configured &&
+          !availabilityState.checking &&
+          selectedBuyAvailability?.available
+      );
+  const buyActionLabel =
+    busyKey === `register:${selectedBuyDomain}`
+      ? "Buying + Setting Up..."
+      : advancedMode
+        ? setup.provider === "mailpool"
+          ? "Buy In Mailpool + Set Up"
+          : "Buy + Set Up"
+        : "Buy selected domain";
+
+  const registerFields = (
+    <div className="grid gap-3 md:grid-cols-3">
+      <div className="grid gap-2">
+        <Label htmlFor="register-first-name">First Name</Label>
+        <Input
+          id="register-first-name"
+          value={register.registrantFirstName}
+          onChange={(event) => setRegister((prev) => ({ ...prev, registrantFirstName: event.target.value }))}
+        />
+      </div>
+      <div className="grid gap-2">
+        <Label htmlFor="register-last-name">Last Name</Label>
+        <Input
+          id="register-last-name"
+          value={register.registrantLastName}
+          onChange={(event) => setRegister((prev) => ({ ...prev, registrantLastName: event.target.value }))}
+        />
+      </div>
+      <div className="grid gap-2">
+        <Label htmlFor="register-org">Organization</Label>
+        <Input
+          id="register-org"
+          value={register.registrantOrganizationName}
+          onChange={(event) =>
+            setRegister((prev) => ({ ...prev, registrantOrganizationName: event.target.value }))
+          }
+        />
+      </div>
+      <div className="grid gap-2">
+        <Label htmlFor="register-email">Email</Label>
+        <Input
+          id="register-email"
+          value={register.registrantEmailAddress}
+          onChange={(event) =>
+            setRegister((prev) => ({ ...prev, registrantEmailAddress: event.target.value }))
+          }
+        />
+      </div>
+      <div className="grid gap-2">
+        <Label htmlFor="register-phone">Phone</Label>
+        <Input
+          id="register-phone"
+          value={register.registrantPhone}
+          onChange={(event) => setRegister((prev) => ({ ...prev, registrantPhone: event.target.value }))}
+          placeholder="+1.5555555555"
+          disabled={setup.provider === "mailpool"}
+        />
+      </div>
+      <div className="grid gap-2 md:col-span-2">
+        <Label htmlFor="register-address">Address</Label>
+        <Input
+          id="register-address"
+          value={register.registrantAddress1}
+          onChange={(event) => setRegister((prev) => ({ ...prev, registrantAddress1: event.target.value }))}
+        />
+      </div>
+      <div className="grid gap-2">
+        <Label htmlFor="register-city">City</Label>
+        <Input
+          id="register-city"
+          value={register.registrantCity}
+          onChange={(event) => setRegister((prev) => ({ ...prev, registrantCity: event.target.value }))}
+        />
+      </div>
+      <div className="grid gap-2">
+        <Label htmlFor="register-state">State / Province</Label>
+        <Input
+          id="register-state"
+          value={register.registrantStateProvince}
+          onChange={(event) =>
+            setRegister((prev) => ({ ...prev, registrantStateProvince: event.target.value }))
+          }
+        />
+      </div>
+      <div className="grid gap-2">
+        <Label htmlFor="register-postal">Postal Code</Label>
+        <Input
+          id="register-postal"
+          value={register.registrantPostalCode}
+          onChange={(event) =>
+            setRegister((prev) => ({ ...prev, registrantPostalCode: event.target.value }))
+          }
+        />
+      </div>
+      <div className="grid gap-2">
+        <Label htmlFor="register-country">Country</Label>
+        <Input
+          id="register-country"
+          value={register.registrantCountry}
+          onChange={(event) => setRegister((prev) => ({ ...prev, registrantCountry: event.target.value }))}
+          placeholder="US"
+        />
+      </div>
+    </div>
+  );
 
   const content = (
     <>
@@ -568,7 +882,7 @@ export default function SenderProvisionCard({
         )}
       </div>
 
-      {showSetupFields ? (
+      {showSharedSetupFields ? (
         <div className="grid gap-3 md:grid-cols-5">
           {brands.length > 1 ? (
             <div className="grid gap-2">
@@ -684,7 +998,7 @@ export default function SenderProvisionCard({
         </div>
       ) : null}
 
-      {showSetupFields ? (
+      {showSharedSetupFields ? (
         <div className="grid gap-3 rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3 md:grid-cols-[1fr_auto] md:items-end">
           <div className="grid gap-2">
             <Label htmlFor="setup-forwarding-target">Website To Forward To</Label>
@@ -706,6 +1020,70 @@ export default function SenderProvisionCard({
             />
             Auto-assign sender to brand
           </Label>
+        </div>
+      ) : null}
+
+      {showGuidedBuyWizard ? (
+        <div className="grid gap-4 rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-4">
+          <div className="grid gap-1">
+            <div className="text-sm font-semibold">Start with these 2 answers</div>
+            <div className="text-sm text-[color:var(--muted-foreground)]">
+              We will use this to find a new sender domain you can buy next.
+            </div>
+          </div>
+
+          {brands.length > 1 ? (
+            <div className="grid gap-2 md:max-w-sm">
+              <Label htmlFor="guided-buy-brand">Brand</Label>
+              <Select
+                id="guided-buy-brand"
+                value={setup.brandId}
+                onChange={(event) => {
+                  const brandId = event.target.value;
+                  const brand = brands.find((item) => item.id === brandId) ?? null;
+                  setSetup((prev) => ({
+                    ...prev,
+                    brandId,
+                    forwardingTargetUrl: brand?.website ?? "",
+                  }));
+                }}
+              >
+                <option value="">Select brand</option>
+                {brands.map((brand) => (
+                  <option key={brand.id} value={brand.id}>
+                    {brand.name}
+                  </option>
+                ))}
+              </Select>
+            </div>
+          ) : null}
+
+          <div className="grid gap-3 md:grid-cols-2">
+            <div className="grid gap-2">
+              <Label htmlFor="guided-forwarding-target">1. What&apos;s your main domain?</Label>
+              <Input
+                id="guided-forwarding-target"
+                value={setup.forwardingTargetUrl}
+                onChange={(event) => setSetup((prev) => ({ ...prev, forwardingTargetUrl: event.target.value }))}
+                placeholder="https://brand.com"
+              />
+              <div className="text-[11px] text-[color:var(--muted-foreground)]">
+                The new sender domain will forward here.
+              </div>
+            </div>
+            <div className="grid gap-2">
+              <Label htmlFor="guided-local-part">2. What goes before the @?</Label>
+              <Input
+                id="guided-local-part"
+                value={setup.fromLocalPart}
+                onChange={(event) => setSetup((prev) => ({ ...prev, fromLocalPart: event.target.value }))}
+                placeholder="hello"
+              />
+              <div className="text-[11px] text-[color:var(--muted-foreground)]">
+                Example: {setup.fromLocalPart.trim() || "hello"}@your-new-domain.com
+              </div>
+            </div>
+          </div>
         </div>
       ) : null}
 
@@ -955,137 +1333,183 @@ export default function SenderProvisionCard({
 
         {showBuyDomainSection ? (
         <div className="grid gap-3 rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3">
-          <div>
-            <div className="text-sm font-semibold">
-              {advancedMode
-                ? setup.provider === "mailpool"
-                  ? "Buy In Mailpool + Set Up"
-                  : "Buy New Domain + Set Up"
-                : "Buy a new domain in Mailpool"}
-            </div>
-            <div className="text-[11px] text-[color:var(--muted-foreground)]">
-              {advancedMode
-                ? setup.provider === "mailpool"
-                  ? "If the domain is available, this buys it in Mailpool, provisions a Google sender mailbox, and runs the first spam and inbox checks."
-                  : "If the domain is available, this buys it and runs the same setup automatically."
-                : "If the domain is available, Mailpool will buy it, create the sender inbox, and run the first checks automatically."}
-            </div>
-          </div>
-          <div className="grid gap-3 md:grid-cols-3">
-            <div className="grid gap-2">
-              <Label htmlFor="register-domain">Domain</Label>
-              <Input
-                id="register-domain"
-                value={register.domain}
-                onChange={(event) => setRegister((prev) => ({ ...prev, domain: event.target.value }))}
-                placeholder="example.com"
-              />
-            </div>
-            <div className="grid gap-2">
-              <Label htmlFor="register-first-name">First Name</Label>
-              <Input
-                id="register-first-name"
-                value={register.registrantFirstName}
-                onChange={(event) => setRegister((prev) => ({ ...prev, registrantFirstName: event.target.value }))}
-              />
-            </div>
-            <div className="grid gap-2">
-              <Label htmlFor="register-last-name">Last Name</Label>
-              <Input
-                id="register-last-name"
-                value={register.registrantLastName}
-                onChange={(event) => setRegister((prev) => ({ ...prev, registrantLastName: event.target.value }))}
-              />
-            </div>
-            <div className="grid gap-2">
-              <Label htmlFor="register-org">Organization</Label>
-              <Input
-                id="register-org"
-                value={register.registrantOrganizationName}
-                onChange={(event) =>
-                  setRegister((prev) => ({ ...prev, registrantOrganizationName: event.target.value }))
-                }
-              />
-            </div>
-            <div className="grid gap-2">
-              <Label htmlFor="register-email">Email</Label>
-              <Input
-                id="register-email"
-                value={register.registrantEmailAddress}
-                onChange={(event) =>
-                  setRegister((prev) => ({ ...prev, registrantEmailAddress: event.target.value }))
-                }
-              />
-            </div>
-            <div className="grid gap-2">
-              <Label htmlFor="register-phone">Phone</Label>
-              <Input
-                id="register-phone"
-                value={register.registrantPhone}
-                onChange={(event) => setRegister((prev) => ({ ...prev, registrantPhone: event.target.value }))}
-                placeholder="+1.5555555555"
-                disabled={setup.provider === "mailpool"}
-              />
-            </div>
-            <div className="grid gap-2 md:col-span-2">
-              <Label htmlFor="register-address">Address</Label>
-              <Input
-                id="register-address"
-                value={register.registrantAddress1}
-                onChange={(event) => setRegister((prev) => ({ ...prev, registrantAddress1: event.target.value }))}
-              />
-            </div>
-            <div className="grid gap-2">
-              <Label htmlFor="register-city">City</Label>
-              <Input
-                id="register-city"
-                value={register.registrantCity}
-                onChange={(event) => setRegister((prev) => ({ ...prev, registrantCity: event.target.value }))}
-              />
-            </div>
-            <div className="grid gap-2">
-              <Label htmlFor="register-state">State / Province</Label>
-              <Input
-                id="register-state"
-                value={register.registrantStateProvince}
-                onChange={(event) =>
-                  setRegister((prev) => ({ ...prev, registrantStateProvince: event.target.value }))
-                }
-              />
-            </div>
-            <div className="grid gap-2">
-              <Label htmlFor="register-postal">Postal Code</Label>
-              <Input
-                id="register-postal"
-                value={register.registrantPostalCode}
-                onChange={(event) =>
-                  setRegister((prev) => ({ ...prev, registrantPostalCode: event.target.value }))
-                }
-              />
-            </div>
-            <div className="grid gap-2">
-              <Label htmlFor="register-country">Country</Label>
-              <Input
-                id="register-country"
-                value={register.registrantCountry}
-                onChange={(event) => setRegister((prev) => ({ ...prev, registrantCountry: event.target.value }))}
-                placeholder="US"
-              />
-            </div>
-          </div>
+          {advancedMode ? (
+            <>
+              <div>
+                <div className="text-sm font-semibold">
+                  {setup.provider === "mailpool" ? "Buy In Mailpool + Set Up" : "Buy New Domain + Set Up"}
+                </div>
+                <div className="text-[11px] text-[color:var(--muted-foreground)]">
+                  {setup.provider === "mailpool"
+                    ? "If the domain is available, this buys it in Mailpool, provisions a Google sender mailbox, and runs the first spam and inbox checks."
+                    : "If the domain is available, this buys it and runs the same setup automatically."}
+                </div>
+              </div>
+              <div className="grid gap-3">
+                <div className="grid gap-2 md:max-w-sm">
+                  <Label htmlFor="register-domain">Domain</Label>
+                  <Input
+                    id="register-domain"
+                    value={register.domain}
+                    onChange={(event) => setRegister((prev) => ({ ...prev, domain: event.target.value }))}
+                    placeholder="example.com"
+                  />
+                </div>
+                {registerFields}
+              </div>
+            </>
+          ) : (
+            <>
+              <div>
+                <div className="text-sm font-semibold">Pick your new sender domain</div>
+                <div className="text-[11px] text-[color:var(--muted-foreground)]">
+                  We made a few domain ideas from your main site. Pick one you like, or type your own.
+                </div>
+              </div>
+
+              {!mailpoolInventory.configured ? (
+                <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[color:var(--border)] bg-[color:var(--surface)] p-3 text-sm">
+                  <div className="text-[color:var(--muted-foreground)]">
+                    Save Mailpool credentials first so we can buy the domain and make the inbox.
+                  </div>
+                  <Button asChild type="button" variant="outline" size="sm">
+                    <Link href="/settings/outreach">Open Outreach Settings</Link>
+                  </Button>
+                </div>
+              ) : null}
+
+              {!namecheapInventory.configured ? (
+                <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[color:var(--border)] bg-[color:var(--surface)] p-3 text-sm">
+                  <div className="text-[color:var(--muted-foreground)]">
+                    Connect Namecheap too. We use it here for live domain availability checks before you buy.
+                  </div>
+                  <Button asChild type="button" variant="outline" size="sm">
+                    <Link href="/settings/outreach">Open Outreach Settings</Link>
+                  </Button>
+                </div>
+              ) : null}
+
+              {availabilityState.checking ? (
+                <div className="text-sm text-[color:var(--muted-foreground)]">Checking live availability...</div>
+              ) : null}
+              {availabilityState.error ? (
+                <div className="text-sm text-[color:var(--danger)]">{availabilityState.error}</div>
+              ) : null}
+
+              {normalizeDomain(setup.forwardingTargetUrl) && setup.fromLocalPart.trim() ? (
+                buyDomainSuggestions.length ? (
+                  <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                    {buyDomainSuggestions.map((candidate) => {
+                      const selected = normalizeDomain(register.domain) === candidate;
+                      const availability = availabilityState.results[candidate];
+                      const available = Boolean(availability?.available);
+                      const taken = Boolean(availability && !availability.available);
+                      const premium = Boolean(availability?.premium && availability.available);
+                      return (
+                        <button
+                          key={candidate}
+                          type="button"
+                          disabled={taken}
+                          onClick={() => setRegister((prev) => ({ ...prev, domain: candidate }))}
+                          className={`grid gap-1 rounded-xl border p-3 text-left transition ${
+                            selected
+                              ? "border-[color:var(--accent)] bg-[color:var(--surface)]"
+                              : taken
+                                ? "border-[color:var(--border)] bg-[color:var(--surface)] opacity-60"
+                                : "border-[color:var(--border)] bg-[color:var(--surface)] hover:border-[color:var(--accent)]"
+                          } ${taken ? "cursor-not-allowed" : ""}`}
+                        >
+                          <div className="text-sm font-semibold">{candidate}</div>
+                          <div className="text-[11px] text-[color:var(--muted-foreground)]">
+                            {setup.fromLocalPart.trim() || "hello"}@{candidate}
+                          </div>
+                          <div className="text-[11px] text-[color:var(--muted-foreground)]">
+                            {availabilityState.checking && !availability
+                              ? "Checking..."
+                              : premium
+                                ? `Available premium · $${availability?.premiumRegistrationPrice.toFixed(0) || "0"}`
+                                : available
+                                  ? "Available"
+                                  : taken
+                                    ? "Taken"
+                                    : namecheapInventory.configured
+                                      ? "Not checked yet"
+                                      : "Connect Namecheap to check"}
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <div className="rounded-xl border border-dashed border-[color:var(--border)] bg-[color:var(--surface)] px-4 py-5 text-sm text-[color:var(--muted-foreground)]">
+                    We could not make a clean suggestion from that domain. Type the domain you want below.
+                  </div>
+                )
+              ) : (
+                <div className="rounded-xl border border-dashed border-[color:var(--border)] bg-[color:var(--surface)] px-4 py-5 text-sm text-[color:var(--muted-foreground)]">
+                  Answer the 2 questions above first. Then we will show domain options here.
+                </div>
+              )}
+
+              <div className="grid gap-2 md:max-w-sm">
+                <Label htmlFor="register-domain">Or type your own domain</Label>
+                <Input
+                  id="register-domain"
+                  value={register.domain}
+                  onChange={(event) => setRegister((prev) => ({ ...prev, domain: event.target.value }))}
+                  placeholder="example.com"
+                />
+                <div className="text-[11px] text-[color:var(--muted-foreground)]">
+                  {availabilityState.checking && selectedBuyDomain
+                    ? "Checking live availability..."
+                    : selectedBuyDomain && selectedBuyAvailability?.available && selectedBuyAvailability.premium
+                      ? `Available premium domain · $${selectedBuyAvailability.premiumRegistrationPrice.toFixed(0)}`
+                      : selectedBuyDomain && selectedBuyAvailability?.available
+                        ? "Available now"
+                        : selectedBuyDomain && selectedBuyAvailability && !selectedBuyAvailability.available
+                          ? "Already taken"
+                          : selectedBuyDomain && namecheapInventory.configured
+                            ? "Waiting for live check..."
+                            : "Type a domain if you want something else."}
+                </div>
+              </div>
+
+              {selectedBuyDomain ? (
+                <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface)] p-3 text-sm">
+                  <div className="font-medium text-[color:var(--foreground)]">
+                    We will create {setup.fromLocalPart.trim() || "hello"}@{selectedBuyDomain}
+                  </div>
+                  <div className="mt-1 text-[color:var(--muted-foreground)]">
+                    Visitors on {selectedBuyDomain} will forward to {normalizeDomain(setup.forwardingTargetUrl) || "your main site"}.
+                  </div>
+                </div>
+              ) : null}
+
+              {selectedBuyDomain ? (
+                <>
+                  <div className="grid gap-2">
+                    <div className="text-sm font-semibold">Who should own this domain?</div>
+                    <div className="text-[11px] text-[color:var(--muted-foreground)]">
+                      This is only used for the domain purchase.
+                    </div>
+                  </div>
+                  {registerFields}
+                </>
+              ) : (
+                <div className="rounded-xl border border-dashed border-[color:var(--border)] bg-[color:var(--surface)] px-4 py-5 text-sm text-[color:var(--muted-foreground)]">
+                  Pick or type a domain first. Then we will show the purchase details.
+                </div>
+              )}
+            </>
+          )}
+
           <div className="flex justify-end">
             <Button
               type="button"
-              disabled={Boolean(busyKey)}
+              disabled={Boolean(busyKey) || !canBuySelectedDomain}
               onClick={() => void runProvision(register.domain, "register")}
             >
-              {busyKey === `register:${normalizeDomain(register.domain)}`
-                ? "Buying + Setting Up..."
-                : advancedMode
-                  ? setup.provider === "mailpool"
-                    ? "Buy In Mailpool + Set Up"
-                    : "Buy + Set Up"
-                  : "Buy Domain + Create Inbox"}
+              {buyActionLabel}
             </Button>
           </div>
         </div>

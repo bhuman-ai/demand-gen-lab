@@ -37,6 +37,12 @@ export default async function NetworkPage({ params }: { params: Promise<{ id: st
     (account) => account.accountType !== "delivery" && !account.name.trim().toLowerCase().startsWith("deliverability ")
   );
   const customerIoAccounts = accounts.filter((account) => account.accountType !== "mailbox");
+  const assignedDeliveryAccountIds = new Set(
+    [
+      assignment?.accountId ?? "",
+      ...(assignment?.accountIds ?? []),
+    ].filter(Boolean)
+  );
   const senderAccountIds = new Set(
     enrichedBrand.domains.map((row) => getDomainDeliveryAccountId(row)).filter((value): value is string => Boolean(value))
   );
@@ -47,7 +53,11 @@ export default async function NetworkPage({ params }: { params: Promise<{ id: st
   );
   const brandSenderAccounts = customerIoAccounts.filter((account) => {
     const fromEmail = getOutreachAccountFromEmail(account).trim().toLowerCase();
-    return senderAccountIds.has(account.id) || (fromEmail ? senderEmails.has(fromEmail) : false);
+    return (
+      assignedDeliveryAccountIds.has(account.id) ||
+      senderAccountIds.has(account.id) ||
+      (fromEmail ? senderEmails.has(fromEmail) : false)
+    );
   });
   const senderScorecards = buildSenderDeliverabilityScorecards({
     probeRuns,

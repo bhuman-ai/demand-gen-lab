@@ -78,11 +78,6 @@ function emptyImportResult(): ImportExperimentProspectRowsResult {
     parseErrors: [],
     enrichmentError: "",
     failureSummary: [],
-    autoLaunchAttempted: false,
-    autoLaunchTriggered: false,
-    autoLaunchBlocked: false,
-    autoLaunchRunId: "",
-    autoLaunchReason: "",
   };
 }
 

@@ -43,6 +43,7 @@ import {
   updateExperimentRecord,
   updateScaleCampaignRecord,
 } from "@/lib/experiment-data";
+import { isReportCommentExperiment } from "@/lib/experiment-policy";
 import {
   conversationPromptModeEnabled,
   generateConversationPromptMessage,
@@ -13390,6 +13391,21 @@ async function processSourceLeadsJob(job: OutreachJob) {
     }
   }
   const runtimeExperiment = await getExperimentRecordByRuntimeRef(run.brandId, run.campaignId, run.experimentId);
+  if (
+    existingLeads.length > 0 &&
+    runtimeExperiment &&
+    isReportCommentExperiment(runtimeExperiment)
+  ) {
+    await createOutreachEvent({
+      runId: run.id,
+      eventType: "lead_sourcing_seeded_owner_preserved",
+      payload: {
+        count: existingLeads.length,
+        reason: "report_comment_seeded_owner_leads",
+      },
+    });
+    return;
+  }
   const baseAudienceContext = buildSourcingAudienceContext({
     runtimeAudience: runtimeExperiment?.audience ?? "",
     hypothesisAudience: hypothesis.actorQuery,

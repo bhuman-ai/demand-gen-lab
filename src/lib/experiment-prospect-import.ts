@@ -18,7 +18,6 @@ import {
   resolveEmailFinderApiBaseUrl,
   type ApifyLead,
 } from "@/lib/outreach-providers";
-import { assessReportCommentLeadQuality } from "@/lib/report-comment-lead-quality";
 
 type SelectionLeadCandidate = {
   rowNumber: number;
@@ -433,15 +432,6 @@ export async function importExperimentProspectRows(input: {
       domain,
       sourceUrl: normalizeCell(lead.sourceUrl),
     } satisfies ImportedLead;
-
-    const quality = assessReportCommentLeadQuality(experiment, importedLead);
-    if (!quality.keep) {
-      const label = importedLead.name || importedLead.company || importedLead.domain || "this row";
-      parseErrors.push(
-        `Row ${candidate?.rowNumber ?? index + 1}: skipped ${label} because it does not look like a strong expert-fit lead for this report (${quality.reason}).`
-      );
-      return [];
-    }
 
     return [importedLead];
   });

@@ -2850,9 +2850,7 @@ export async function runOperatorChatTurn(input: OperatorChatRequest): Promise<O
       ? filterRequestedActionForMessage(inferredFallbackAction, effectiveMessage)
     : llmPlan
       ? (
-          filterRequestedActionForMessage(llmPlan.requestedAction, effectiveMessage, {
-            allowAffirmative: true,
-          }) ??
+          filterRequestedActionForMessage(llmPlan.requestedAction, effectiveMessage) ??
           (shouldUseHeuristicFallbackAction(inferredFallbackAction, effectiveMessage)
             ? filterRequestedActionForMessage(inferredFallbackAction, effectiveMessage)
             : null)

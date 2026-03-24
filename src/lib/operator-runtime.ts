@@ -127,6 +127,30 @@ function isNegativeMessage(message: string) {
   );
 }
 
+function extractPendingTopicShift(message: string) {
+  const trimmed = message.trim();
+  if (!trimmed) {
+    return { abandon: false, nextMessage: "" };
+  }
+
+  const patterns = [
+    /^(?:actually\s+)?(?:forget that|forget it|ignore that|ignore it|scratch that|never mind|nevermind|skip that|drop that)\s*[,.;:-]?\s*(.*)$/i,
+    /^(?:actually\s+)?(?:i want to|i wanna|let'?s)\s+talk about\s+(?:something else|smth else|another thing|a different thing)\s*[,.;:-]?\s*(.*)$/i,
+    /^(?:actually\s+)?(?:different topic|another thing instead)\s*[,.;:-]?\s*(.*)$/i,
+  ];
+
+  for (const pattern of patterns) {
+    const match = trimmed.match(pattern);
+    if (!match) continue;
+    return {
+      abandon: true,
+      nextMessage: asString(match[1]),
+    };
+  }
+
+  return { abandon: false, nextMessage: "" };
+}
+
 function buildGreetingAssistant(brandName?: string): OperatorChatAssistantReply {
   return {
     summary: brandName
@@ -959,6 +983,11 @@ type PendingConversationContinuation =
       requestedAction: OperatorRequestedAction;
     }
   | {
+      kind: "abandon_pending";
+      actionId: string;
+      message: string;
+    }
+  | {
       kind: "message_override";
       message: string;
     }
@@ -995,9 +1024,13 @@ function getLatestPendingAssistantExecution(messages: OperatorMessage[]) {
     const message = messages[index];
     if (message.role !== "assistant" || message.kind !== "message") continue;
     const execution = readExecutionEnvelope(asRecord(message.content).execution);
-    if (execution && execution.state !== "completed" && execution.state !== "failed" && execution.state !== "canceled") {
+    if (!execution) {
+      return null;
+    }
+    if (execution.state !== "completed" && execution.state !== "failed" && execution.state !== "canceled") {
       return { message, execution };
     }
+    return null;
   }
   return null;
 }
@@ -1411,6 +1444,16 @@ function inferContinuationFromPendingExecution(input: {
       ? input.actions.find((action) => action.id === pending.execution.actionId)
       : null) ??
     input.actions.find((action) => action.status === "awaiting_approval");
+  const topicShift = extractPendingTopicShift(message);
+
+  if (topicShift.abandon) {
+    return {
+      kind: "abandon_pending",
+      actionId:
+        pending.execution.state === "awaiting_confirmation" && latestAction ? latestAction.id : "",
+      message: topicShift.nextMessage,
+    };
+  }
 
   if (pending.execution.state === "awaiting_confirmation" && latestAction) {
     if (isAffirmativeMessage(message)) {
@@ -2760,7 +2803,13 @@ export async function runOperatorChatTurn(input: OperatorChatRequest): Promise<O
         brandId: resolvedBrandId,
       });
   const effectiveMessage =
-    continuation?.kind === "message_override" ? continuation.message : input.message;
+    continuation?.kind === "message_override"
+      ? continuation.message
+      : continuation?.kind === "abandon_pending"
+        ? continuation.message
+        : input.message;
+  const abandonedPendingWithoutNewTopic =
+    continuation?.kind === "abandon_pending" && !effectiveMessage.trim();
   const structuredAction = input.structuredAction
     ? normalizeRequestedAction({
         raw: input.structuredAction,
@@ -2786,7 +2835,8 @@ export async function runOperatorChatTurn(input: OperatorChatRequest): Promise<O
     ? null
     : continuation?.kind === "confirm_action" ||
         continuation?.kind === "cancel_action" ||
-        continuation?.kind === "message_override"
+        continuation?.kind === "message_override" ||
+        abandonedPendingWithoutNewTopic
       ? null
     : await planOperatorReplyWithLlm({
         brandId: resolvedBrandId,
@@ -2842,6 +2892,9 @@ export async function runOperatorChatTurn(input: OperatorChatRequest): Promise<O
       ...(continuation?.kind === "cancel_action"
         ? [{ step: "cancel_action", status: "in_progress", actionId: continuation.actionId }]
         : []),
+      ...(continuation?.kind === "abandon_pending" && continuation.actionId
+        ? [{ step: "abandon_pending", status: "in_progress", actionId: continuation.actionId }]
+        : []),
       ...(requestedAction
         ? [{ step: requestedAction.toolName, status: "in_progress" }]
         : []),
@@ -2850,7 +2903,7 @@ export async function runOperatorChatTurn(input: OperatorChatRequest): Promise<O
   runId = run.id;
 
   try {
-    let assistant: OperatorChatAssistantReply;
+    let assistant: OperatorChatAssistantReply = llmPlan?.assistant ?? fallbackAssistant;
     let execution: OperatorExecutionEnvelope | null = buildExecutionEnvelope({ state: "answer_only" });
     const actions: OperatorAction[] = [];
 
@@ -2887,6 +2940,12 @@ export async function runOperatorChatTurn(input: OperatorChatRequest): Promise<O
         runId: run.id,
         runStatus: "completed",
         model: run.model,
+      });
+    } else if (continuation?.kind === "abandon_pending" && continuation.actionId) {
+      await cancelOperatorAction({
+        actionId: continuation.actionId,
+        userId: input.userId,
+        note: "Canceled in chat because the user moved on.",
       });
     } else if (requestedAction) {
       if (resolvedBrandId) {
@@ -3151,12 +3210,19 @@ export async function runOperatorChatTurn(input: OperatorChatRequest): Promise<O
       }
     } else {
       const disambiguation = inferDisambiguationTurn({
-        message: input.message,
+        message: effectiveMessage || input.message,
         brandContext,
       });
       if (disambiguation) {
         assistant = disambiguation.assistant;
         execution = disambiguation.execution;
+      } else if (abandonedPendingWithoutNewTopic) {
+        assistant = {
+          summary: "Okay. I dropped that. What do you want to talk about instead?",
+          findings: [],
+          recommendations: [],
+        };
+        execution = buildExecutionEnvelope({ state: "answer_only" });
       } else {
         assistant = makeUnexecutedActionAssistant(effectiveMessage, llmPlan?.assistant ?? fallbackAssistant);
         execution = isExplicitMutationRequest(effectiveMessage)

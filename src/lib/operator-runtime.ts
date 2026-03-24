@@ -44,6 +44,15 @@ type OperatorPlannerResult = {
   assistant: OperatorChatAssistantReply;
   requestedAction: OperatorRequestedAction | null;
   model: string;
+  trace: Array<{
+    step: number;
+    toolName: string;
+    riskLevel: string;
+    input: Record<string, unknown>;
+    summary: string;
+    result: Record<string, unknown>;
+    error: string;
+  }>;
 };
 
 function nowIso() {
@@ -1109,6 +1118,9 @@ function buildOperatorPrompt(input: {
   messages: OperatorMessage[];
   brandId: string;
   context: Awaited<ReturnType<typeof getOperatorBrandContext>>;
+  trace: OperatorPlannerResult["trace"];
+  stepNumber: number;
+  maxSteps: number;
 }) {
   const includeCampaigns = /\bcampaigns?\b/i.test(input.message);
   const toolCatalog = listOperatorToolSpecs().map((tool) => ({
@@ -1120,8 +1132,11 @@ function buildOperatorPrompt(input: {
 
   return [
     "You are Operator, the LastB2B account assistant.",
+    "You are inside a multi-step planning loop.",
     "Respond with JSON only.",
-    'The JSON object must contain: message (string) and requestedAction (null or { toolName: string, input: object }).',
+    'The JSON object must contain: message (string), done (boolean), toolName (string), and toolInput (object).',
+    'Use toolName as an empty string when you are not calling a tool in this step.',
+    "You may call at most one tool per step.",
     "Ground every statement in the supplied account context and recent thread messages.",
     "Talk like a sharp human teammate, not a dashboard, support bot, or structured report.",
     "Reply in plain conversational language.",
@@ -1134,25 +1149,33 @@ function buildOperatorPrompt(input: {
     "If experiments.running or experiments.sourcing is greater than 0, explicitly acknowledge that there is live experiment work.",
     "Do not say everything is draft unless the context actually shows no running, sourcing, ready, completed, paused, or promoted experiments.",
     "Do not contradict the numeric counts or statuses in the supplied context.",
-    "Only propose requestedAction when the user explicitly asks you to do something, or explicitly asks you to inspect or summarize something.",
-    "Do not trigger safe_write or guarded_write actions just because they might be helpful.",
-    "If the user asks you to take an action and you are not returning requestedAction, say clearly that you did not make changes yet.",
-    "Do not say 'I can do that', 'I'll set that up', or similar if requestedAction is null.",
-    "If mode is recommendation_only, requestedAction must be null.",
+    "Prefer using read tools to inspect live state before giving confident operational advice or choosing a write action.",
+    "Only choose a safe_write or guarded_write tool when the user explicitly asked you to act.",
+    "Do not trigger write actions just because they might be helpful.",
+    "If the user asks you to take an action and you are not choosing a write tool, say clearly that you did not make changes yet.",
+    "Do not say 'I can do that', 'I'll set that up', or similar if toolName is empty.",
+    "If mode is recommendation_only, never choose a tool with riskLevel safe_write or guarded_write.",
     "If the latest user message is only a casual greeting like hi, hey, or hello, reply like a normal human assistant in 1 or 2 short sentences.",
     "For a casual greeting, do not dump account status and do not propose an action.",
-    "Only use requestedAction.toolName values from the provided tool catalog.",
+    "Only use toolName values from the provided tool catalog.",
     "Never invent IDs, emails, or domains that are not in the provided context or the latest user message.",
-    "If the user asks to create, update, launch, pause, resume, cancel, send, dismiss, or delete something and there is a matching tool, use it.",
+    "If the user asks to create, update, launch, pause, resume, cancel, send, dismiss, or delete something and there is a matching tool, you may choose that tool after enough inspection.",
     "When matching experiments, campaigns, leads, or reply drafts, prefer the IDs and names in the provided context items.",
     "If there is exactly one obvious running, draft, active, or pending object that matches the user's words, it is okay to target it.",
     "For refresh_mailpool_sender and get_sender_snapshot, prefer using accountId from the context.",
     "For provision_mailpool_sender, include any known fields such as brandId, domain, fromLocalPart, domainMode, and registrant fields.",
+    "Never claim a change already happened unless the change is present in the tool results so far.",
+    "If you need live data, choose a read tool and set done to false.",
+    "If you need user input, set done to true, leave toolName empty, and ask only for the missing information.",
+    "If you have enough information to answer with no more tools, set done to true and leave toolName empty.",
+    "If you are choosing a write tool, that is the final action for this turn. Set done to true.",
     `Mode: ${input.mode === "recommendation_only" ? "recommendation_only" : "default"}`,
     `Resolved brandId: ${input.brandId || "(none)"}`,
+    `Planning step: ${input.stepNumber} of ${input.maxSteps}`,
     `Tool catalog JSON: ${JSON.stringify(toolCatalog)}`,
     `Recent thread messages JSON: ${JSON.stringify(summarizePromptMessages(input.messages))}`,
     `Current brand context JSON: ${JSON.stringify(summarizePromptContext(input.context, { includeCampaigns }))}`,
+    `Tool results so far JSON: ${JSON.stringify(input.trace)}`,
     `Latest user message: ${input.message}`,
   ].join("\n\n");
 }
@@ -1169,61 +1192,179 @@ async function planOperatorReplyWithLlm(input: {
   if (!apiKey) return null;
 
   const model = DEFAULT_OPERATOR_MODEL;
-  const prompt = buildOperatorPrompt(input);
   const greetingOnly = isCasualGreeting(input.message);
+  const trace: OperatorPlannerResult["trace"] = [];
+  const maxSteps = 4;
 
   try {
-    const response = await fetch("https://api.openai.com/v1/responses", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model,
-        input: prompt,
-        reasoning: { effort: DEFAULT_OPERATOR_REASONING },
-        text: { format: { type: "json_object" } },
-        max_output_tokens: 900,
-        store: false,
-      }),
-    });
+    let assistant = input.fallbackAssistant;
 
-    const raw = await response.text();
-    if (!response.ok) {
-      console.error("Operator OpenAI request failed", raw.slice(0, 800));
-      return null;
-    }
+    for (let stepNumber = 1; stepNumber <= maxSteps; stepNumber += 1) {
+      const response = await fetch("https://api.openai.com/v1/responses", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          model,
+          input: buildOperatorPrompt({
+            ...input,
+            trace,
+            stepNumber,
+            maxSteps,
+          }),
+          reasoning: { effort: DEFAULT_OPERATOR_REASONING },
+          text: {
+            format: {
+              type: "json_schema",
+              name: "operator_agent_step",
+              schema: {
+                type: "object",
+                additionalProperties: false,
+                properties: {
+                  message: { type: "string" },
+                  done: { type: "boolean" },
+                  toolName: { type: "string" },
+                  toolInput: {
+                    type: "object",
+                    additionalProperties: true,
+                  },
+                },
+                required: ["message", "done", "toolName", "toolInput"],
+              },
+            },
+          },
+          max_output_tokens: 900,
+          store: false,
+        }),
+      });
 
-    let payload: unknown = {};
-    try {
-      payload = JSON.parse(raw);
-    } catch {
-      payload = {};
-    }
+      const raw = await response.text();
+      if (!response.ok) {
+        console.error("Operator OpenAI request failed", raw.slice(0, 800));
+        return null;
+      }
 
-    const outputText = extractResponseText(payload);
-    if (!outputText) return null;
+      let payload: unknown = {};
+      try {
+        payload = JSON.parse(raw);
+      } catch {
+        payload = {};
+      }
 
-    let parsed: unknown = {};
-    try {
-      parsed = JSON.parse(outputText);
-    } catch {
-      console.error("Operator OpenAI JSON parse failed", outputText.slice(0, 800));
-      return null;
-    }
+      const outputText = extractResponseText(payload);
+      if (!outputText) return null;
 
-    const row = asRecord(parsed);
-    return {
-      assistant: normalizeAssistantReply(row, input.fallbackAssistant, { plainGreeting: greetingOnly }),
-      requestedAction: normalizeRequestedAction({
-        raw: row.requestedAction,
+      let parsed: unknown = {};
+      try {
+        parsed = JSON.parse(outputText);
+      } catch {
+        console.error("Operator OpenAI JSON parse failed", outputText.slice(0, 800));
+        return null;
+      }
+
+      const row = asRecord(parsed);
+      assistant = normalizeAssistantReply(row, input.fallbackAssistant, { plainGreeting: greetingOnly });
+
+      const rawToolName = asString(row.toolName);
+      const rawToolInput = asRecord(row.toolInput);
+      if (!rawToolName) {
+        return {
+          assistant,
+          requestedAction: null,
+          model,
+          trace,
+        };
+      }
+
+      const normalizedAction = normalizeRequestedAction({
+        raw: {
+          toolName: rawToolName,
+          input: rawToolInput,
+        },
         brandId: input.brandId,
         mode: input.mode,
         message: input.message,
         context: input.context,
-      }),
+      });
+      const tool = normalizedAction ? getOperatorToolSpec(normalizedAction.toolName) : null;
+
+      if (!normalizedAction || !tool) {
+        trace.push({
+          step: stepNumber,
+          toolName: rawToolName,
+          riskLevel: tool?.riskLevel ?? "unknown",
+          input: rawToolInput,
+          summary: "",
+          result: {},
+          error: "Operator could not resolve that tool call from the current live context.",
+        });
+        continue;
+      }
+
+      if (tool.riskLevel !== "read") {
+        const filteredAction = filterRequestedActionForMessage(normalizedAction, input.message);
+        if (!filteredAction) {
+          trace.push({
+            step: stepNumber,
+            toolName: normalizedAction.toolName,
+            riskLevel: tool.riskLevel,
+            input: normalizedAction.input,
+            summary: "",
+            result: {},
+            error: "Operator identified a write action, but the user's message was not explicit enough to run it.",
+          });
+          continue;
+        }
+        return {
+          assistant,
+          requestedAction: filteredAction,
+          model,
+          trace,
+        };
+      }
+
+      try {
+        const result = await tool.run(normalizedAction.input);
+        trace.push({
+          step: stepNumber,
+          toolName: normalizedAction.toolName,
+          riskLevel: tool.riskLevel,
+          input: normalizedAction.input,
+          summary: result.summary,
+          result: asRecord(result.result),
+          error: "",
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Operator tool call failed";
+        trace.push({
+          step: stepNumber,
+          toolName: normalizedAction.toolName,
+          riskLevel: tool.riskLevel,
+          input: normalizedAction.input,
+          summary: "",
+          result: {},
+          error: message,
+        });
+      }
+    }
+
+    return {
+      assistant:
+        trace.length > 0
+          ? {
+              summary:
+                trace[trace.length - 1]?.error ||
+                trace[trace.length - 1]?.summary ||
+                input.fallbackAssistant.summary,
+              findings: [],
+              recommendations: [],
+            }
+          : input.fallbackAssistant,
+      requestedAction: null,
       model,
+      trace,
     };
   } catch (error) {
     console.error("Operator OpenAI planning threw", error);
@@ -1624,9 +1765,16 @@ export async function runOperatorChatTurn(input: OperatorChatRequest): Promise<O
     brandId: resolvedBrandId,
     model: llmPlan?.model ?? (structuredAction ? "operator-structured-action" : "operator-v1"),
     contextSnapshot: snapshotContext(brandContext),
-    plan: requestedAction
-      ? [{ step: requestedAction.toolName, status: "in_progress" }]
-      : [],
+    plan: [
+      ...((llmPlan?.trace ?? []).map((entry) => ({
+        step: entry.toolName,
+        status: entry.error ? "completed_with_error" : "completed",
+        summary: entry.error || entry.summary,
+      })) as Array<Record<string, unknown>>),
+      ...(requestedAction
+        ? [{ step: requestedAction.toolName, status: "in_progress" }]
+        : []),
+    ],
   });
   runId = run.id;
 

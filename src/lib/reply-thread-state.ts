@@ -455,7 +455,7 @@ async function compileWithLlm(input: {
     const decisionRaw = asRecord(parsed.decision);
     const recommendedMove = String(decisionRaw.recommendedMove ?? "").trim();
     const allowRespectOptOut =
-      input.thread.intent === "unsubscribe" || input.thread.status === "closed" || hasExplicitOptOutLanguage(input.latestInboundBody);
+      input.fallbackDecision.recommendedMove === "respect_opt_out" || hasExplicitOptOutLanguage(input.latestInboundBody);
     const parsedRecommendedMove: ReplyThreadMove = [
       "stay_silent",
       "acknowledge_and_close",

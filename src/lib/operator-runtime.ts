@@ -2059,9 +2059,6 @@ function inferMissingObjectFollowUp(input: {
   message: string;
   brandContext: Awaited<ReturnType<typeof getOperatorBrandContext>>;
 }) {
-  const context = input.brandContext;
-  if (!context) return null;
-
   const lowered = input.message.toLowerCase();
 
   if (looksLikeBrandCreationRequest(input.message) && !extractQuotedText(input.message) && !extractDomain(input.message)) {
@@ -2073,6 +2070,9 @@ function inferMissingObjectFollowUp(input: {
       missingFields: ["brand name"],
     });
   }
+
+  const context = input.brandContext;
+  if (!context) return null;
 
   if (
     /\bexperiments?\b/.test(lowered) &&

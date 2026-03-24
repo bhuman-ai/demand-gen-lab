@@ -36,10 +36,12 @@ import {
   createMailpoolInboxPlacement,
   createMailpoolMailbox,
   createMailpoolSpamCheck,
+  getMailpoolDomainInfo,
   getMailpoolInboxPlacement,
   getMailpoolSubscriptionSlots,
   getMailpoolSpamCheck,
   listMailpoolDomains,
+  listMailpoolDomainSuggestions,
   listMailpoolMailboxes,
   registerMailpoolDomain,
   runMailpoolInboxPlacement,
@@ -89,6 +91,8 @@ export type ProvisionSenderInput = {
   customerIoTrackingApiKey: string;
   customerIoAppApiKey?: string;
   mailpoolApiKey?: string;
+  domainCandidates?: string[];
+  allowAlternativeDomains?: boolean;
   namecheapApiUser: string;
   namecheapUserName?: string;
   namecheapApiKey: string;
@@ -142,6 +146,15 @@ export type ProvisionSenderResult = {
   };
   warnings: string[];
   nextSteps: string[];
+};
+
+export type MailpoolDomainSelection = {
+  domain: string;
+  available: boolean;
+  price: number;
+  source: "requested" | "candidate" | "suggestion";
+  checkedDomains: string[];
+  suggestions: string[];
 };
 
 export type NamecheapDomainInventoryItem = {
@@ -1427,6 +1440,142 @@ async function resolveMailpoolApiKey(input: ProvisionSenderInput) {
   return apiKey;
 }
 
+function uniqueNormalizedDomains(values: string[]) {
+  return Array.from(
+    new Set(
+      values
+        .map((value) => normalizeDomain(value))
+        .filter((value) => value && value.includes("."))
+    )
+  );
+}
+
+async function getFirstAvailableMailpoolDomain(input: {
+  apiKey: string;
+  domains: string[];
+  checkedDomains: string[];
+}) {
+  for (const domain of uniqueNormalizedDomains(input.domains)) {
+    if (!domain || input.checkedDomains.includes(domain)) continue;
+    input.checkedDomains.push(domain);
+    const info = await getMailpoolDomainInfo(input.apiKey, domain);
+    if (info.available) {
+      return { domain, info };
+    }
+  }
+  return null;
+}
+
+async function getFirstSuggestedAvailableMailpoolDomain(input: {
+  apiKey: string;
+  seeds: string[];
+  checkedDomains: string[];
+}) {
+  for (const seed of uniqueNormalizedDomains(input.seeds)) {
+    const suggestions = await listMailpoolDomainSuggestions({
+      apiKey: input.apiKey,
+      domain: seed,
+      limit: 5,
+    });
+    for (const suggestion of suggestions) {
+      if (!suggestion.domain || input.checkedDomains.includes(suggestion.domain)) continue;
+      input.checkedDomains.push(suggestion.domain);
+      if (suggestion.available) {
+        return { seed, suggestion };
+      }
+    }
+  }
+  return null;
+}
+
+export async function selectAvailableMailpoolDomain(input: {
+  preferredDomain: string;
+  domainCandidates?: string[];
+  allowAlternativeDomains?: boolean;
+  mailpoolApiKey?: string;
+}): Promise<MailpoolDomainSelection> {
+  const apiKey =
+    String(input.mailpoolApiKey ?? "").trim() ||
+    (await getOutreachProvisioningSettingsSecrets()).mailpoolApiKey.trim();
+  if (!apiKey) {
+    throw new Error("Mailpool API key is required. Save it in outreach settings first.");
+  }
+
+  const preferredDomain = normalizeDomain(input.preferredDomain);
+  const candidateDomains = uniqueNormalizedDomains(input.domainCandidates ?? []);
+  const checkedDomains: string[] = [];
+  const requested =
+    preferredDomain
+      ? await getFirstAvailableMailpoolDomain({
+          apiKey,
+          domains: [preferredDomain],
+          checkedDomains,
+        })
+      : null;
+  if (requested) {
+    return {
+      domain: requested.domain,
+      available: true,
+      price: requested.info.price,
+      source: "requested",
+      checkedDomains,
+      suggestions: [],
+    };
+  }
+
+  if (!input.allowAlternativeDomains) {
+    return {
+      domain: preferredDomain,
+      available: false,
+      price: 0,
+      source: "requested",
+      checkedDomains,
+      suggestions: [],
+    };
+  }
+
+  const alternate = await getFirstAvailableMailpoolDomain({
+    apiKey,
+    domains: candidateDomains.filter((domain) => domain !== preferredDomain),
+    checkedDomains,
+  });
+  if (alternate) {
+    return {
+      domain: alternate.domain,
+      available: true,
+      price: alternate.info.price,
+      source: "candidate",
+      checkedDomains,
+      suggestions: [],
+    };
+  }
+
+  const suggestion = await getFirstSuggestedAvailableMailpoolDomain({
+    apiKey,
+    seeds: [preferredDomain, ...candidateDomains],
+    checkedDomains,
+  });
+  if (suggestion) {
+    return {
+      domain: suggestion.suggestion.domain,
+      available: true,
+      price: suggestion.suggestion.price,
+      source: "suggestion",
+      checkedDomains,
+      suggestions: [suggestion.suggestion.domain],
+    };
+  }
+
+  return {
+    domain: preferredDomain || candidateDomains[0] || "",
+    available: false,
+    price: 0,
+    source: "requested",
+    checkedDomains,
+    suggestions: [],
+  };
+}
+
 function buildMailpoolDomainOwner(input: {
   brand: BrandRecord;
   registrant?: ProvisionSenderInput["registrant"];
@@ -1903,8 +2052,8 @@ export async function provisionMailpoolSender(
     throw new Error("Brand not found");
   }
 
-  const domain = normalizeDomain(input.domain);
-  if (!domain || !domain.includes(".")) {
+  const requestedDomain = normalizeDomain(input.domain);
+  if (!requestedDomain || !requestedDomain.includes(".")) {
     throw new Error("A valid domain is required");
   }
 
@@ -1914,6 +2063,23 @@ export async function provisionMailpoolSender(
   }
 
   const apiKey = await resolveMailpoolApiKey(input);
+  const domainSelection =
+    input.domainMode === "register"
+      ? await selectAvailableMailpoolDomain({
+          preferredDomain: requestedDomain,
+          domainCandidates: input.domainCandidates,
+          allowAlternativeDomains: input.allowAlternativeDomains,
+          mailpoolApiKey: apiKey,
+        })
+      : null;
+  const domain = domainSelection?.domain || requestedDomain;
+  if (input.domainMode === "register" && (!domainSelection || !domainSelection.available || !domain)) {
+    throw new Error(
+      domainSelection?.checkedDomains?.length
+        ? `Mailpool could not find an available domain to register. Checked: ${domainSelection.checkedDomains.join(", ")}`
+        : "Mailpool could not find an available domain to register."
+    );
+  }
   const forwardingTargetUrl = input.forwardingTargetUrl?.trim()
     ? normalizeForwardingTargetUrl(input.forwardingTargetUrl)
     : brand.website.trim()
@@ -1992,6 +2158,10 @@ export async function provisionMailpoolSender(
 
   const warnings: string[] = [];
   const nextSteps: string[] = [];
+
+  if (input.domainMode === "register" && domainSelection?.source && domainSelection.source !== "requested" && requestedDomain !== domain) {
+    warnings.push(`Mailpool switched to ${domain} because ${requestedDomain} was not available.`);
+  }
 
   if (mailboxReadyForDelivery && mailbox.id) {
     try {

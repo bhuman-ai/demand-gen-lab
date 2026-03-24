@@ -2030,6 +2030,33 @@ function filterRequestedActionForMessage(
   return isExplicitActionRequest(message) ? requestedAction : null;
 }
 
+function shouldUseHeuristicFallbackAction(
+  requestedAction: OperatorRequestedAction | null,
+  message: string
+) {
+  if (!requestedAction) return false;
+  const tool = getOperatorToolSpec(requestedAction.toolName);
+  if (!tool) return false;
+  if (tool.riskLevel === "read") return true;
+  if (!isExplicitMutationRequest(message)) return false;
+  return [
+    "refresh_mailpool_sender",
+    "get_sender_snapshot",
+    "get_experiment_snapshot",
+    "launch_experiment_run",
+    "control_experiment_run",
+    "promote_experiment_to_campaign",
+    "delete_experiment",
+    "get_campaign_snapshot",
+    "launch_campaign_run",
+    "control_campaign_run",
+    "delete_campaign",
+    "send_reply_draft",
+    "dismiss_reply_draft",
+    "update_brand_lead",
+  ].includes(requestedAction.toolName);
+}
+
 function buildOperatorPrompt(input: {
   message: string;
   mode: OperatorChatRequest["mode"];
@@ -2060,8 +2087,12 @@ function buildOperatorPrompt(input: {
     "Ground every statement in the supplied account context and recent thread messages.",
     "Talk like a sharp human teammate, not a dashboard, support bot, or structured report.",
     "Reply in plain conversational language.",
+    "Think like an open-ended, high-agency assistant. Use the rules here only as safety rails, not as an excuse to act dumb or overly literal.",
     "Do not use headings, bullets, or sections like 'What I found' or 'What I recommend'.",
     "Only mention operational status when it is relevant to the user's message.",
+    "Treat the active brand as the default frame for the conversation.",
+    "If the user mentions a domain or brand name that already matches the active brand, do not switch into create_brand just because the name appears in the message.",
+    "Domains mentioned inside requests about experiments, campaigns, senders, leads, inbox, or settings are usually context, not a create_brand command.",
     "When experiment data is present, prefer talking about experiments instead of campaigns unless the user specifically asks about campaigns.",
     "If the context shows a usable preferred sender but it is still in testing or warming, explain that distinction instead of saying no sender is ready.",
     "For Mailpool senders, spam checks come from Mailpool, but inbox placement uses the internal monitor pool. Treat them as separate checks.",
@@ -2086,6 +2117,14 @@ function buildOperatorPrompt(input: {
     "If there is exactly one obvious running, draft, active, or pending object that matches the user's words, it is okay to target it.",
     "For refresh_mailpool_sender and get_sender_snapshot, prefer using accountId from the context.",
     "For provision_mailpool_sender, include any known fields such as brandId, domain, fromLocalPart, domainMode, and registrant fields.",
+    "If the user says things like `you decide`, `pick one`, or `choose for me` during sender provisioning, you may choose fromLocalPart and domain yourself instead of asking for an exact sender email.",
+    "For create_brand, website is optional.",
+    "If the user names a brand in normal prose, pass that exact brand name in create_brand.input.name.",
+    "If the user explains what the brand does or wants, include that in create_brand.input.notes or create_brand.input.product when useful.",
+    "For create_experiment, if the user describes the offer and audience but does not provide a formal experiment name, synthesize a short clear name and still create it.",
+    "For create_experiment, fill audience and offer from the user's described idea whenever those are clear.",
+    "When the user is clearly asking for a new experiment, be willing to draft the first experiment from their prose instead of waiting for rigid field-by-field instructions.",
+    "Ask follow-up questions only when a missing field truly blocks the action or would create a bad result.",
     "Never claim a change already happened unless the change is present in the tool results so far.",
     "If you need live data, choose a read tool and set done to false.",
     "If you need user input, set done to true, leave toolName empty, and ask only for the missing information.",
@@ -2811,8 +2850,10 @@ export async function runOperatorChatTurn(input: OperatorChatRequest): Promise<O
       ? filterRequestedActionForMessage(inferredFallbackAction, effectiveMessage)
     : llmPlan
       ? (
-          filterRequestedActionForMessage(llmPlan.requestedAction, effectiveMessage) ??
-          (isExplicitMutationRequest(effectiveMessage)
+          filterRequestedActionForMessage(llmPlan.requestedAction, effectiveMessage, {
+            allowAffirmative: true,
+          }) ??
+          (shouldUseHeuristicFallbackAction(inferredFallbackAction, effectiveMessage)
             ? filterRequestedActionForMessage(inferredFallbackAction, effectiveMessage)
             : null)
         )

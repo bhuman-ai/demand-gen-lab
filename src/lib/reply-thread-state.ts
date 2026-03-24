@@ -66,6 +66,57 @@ function shortText(value: unknown, max = 220) {
   return text.length <= max ? text : `${text.slice(0, Math.max(0, max - 3)).trimEnd()}...`;
 }
 
+const DRAFT_PLACEHOLDER_TOKEN = /{{\s*[^}\n]+\s*}}|\[\s*(?:your|sender|contact|company|brand|first|last|full|agent|rep)[^[\]\n]{0,40}(?:name|company|title|email|phone|signature|role)?[^[\]\n]*\]|<\s*(?:your|sender|contact|company|brand|first|last|full|agent|rep)[^>\n]{0,40}(?:name|company|title|email|phone|signature|role)?[^>\n]*>/i;
+const SIGNOFF_LINE = /^(best|best regards|regards|kind regards|thanks|thank you|cheers|sincerely)[,!-]*$/i;
+
+function containsDraftPlaceholderToken(value: string) {
+  return DRAFT_PLACEHOLDER_TOKEN.test(String(value ?? ""));
+}
+
+function stripInlineDraftPlaceholders(value: string) {
+  return String(value ?? "")
+    .replace(/{{\s*[^}\n]+\s*}}/g, "")
+    .replace(/\[\s*(?:your|sender|contact|company|brand|first|last|full|agent|rep)[^[\]\n]{0,40}(?:name|company|title|email|phone|signature|role)?[^[\]\n]*\]/gi, "")
+    .replace(/<\s*(?:your|sender|contact|company|brand|first|last|full|agent|rep)[^>\n]{0,40}(?:name|company|title|email|phone|signature|role)?[^>\n]*>/gi, "");
+}
+
+function sanitizeDraftSubject(value: string) {
+  const next = sanitizeAiText(stripInlineDraftPlaceholders(value).replace(/[ \t]{2,}/g, " "));
+  return next.trim();
+}
+
+function sanitizeDraftBody(value: string) {
+  const lines = String(value ?? "").split(/\r?\n/);
+  const cleaned: string[] = [];
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const rawLine = lines[index] ?? "";
+    const trimmed = rawLine.trim();
+    const nextTrimmed = (lines[index + 1] ?? "").trim();
+
+    if (trimmed && containsDraftPlaceholderToken(trimmed)) {
+      continue;
+    }
+
+    if (trimmed && SIGNOFF_LINE.test(trimmed) && nextTrimmed && containsDraftPlaceholderToken(nextTrimmed)) {
+      continue;
+    }
+
+    const hadPlaceholder = containsDraftPlaceholderToken(rawLine);
+    const stripped = stripInlineDraftPlaceholders(rawLine).replace(/[ \t]{2,}/g, " ").trimEnd();
+    if (!stripped.trim()) {
+      cleaned.push("");
+      continue;
+    }
+    if (hadPlaceholder && SIGNOFF_LINE.test(stripped.trim())) {
+      continue;
+    }
+    cleaned.push(stripped);
+  }
+
+  return sanitizeAiText(cleaned.join("\n").replace(/\n{3,}/g, "\n\n"));
+}
+
 function parseOfferAndCta(rawOffer: string) {
   const text = String(rawOffer ?? "").trim();
   if (!text) return { offer: "", cta: "" };
@@ -739,8 +790,6 @@ function buildFallbackDraft(input: {
     objective || desiredOutcome
       ? `${objective || desiredOutcome}`
       : "I can keep this concise and make the next step straightforward if useful.",
-    "",
-    "Best,",
   ];
 
   return {
@@ -766,6 +815,8 @@ async function generateDraftWithLlm(input: {
     "Do not invent facts or promises.",
     "Keep the reply human, concise, and specific.",
     "Keep the existing thread subject unless a clearer reply subject is genuinely necessary.",
+    "Do not output placeholder tokens, bracketed variables, or fake signatures like [Your Name].",
+    "Only use a signer name if it is explicitly grounded in context. Otherwise end the email without a signature block.",
     "",
     `Context JSON:\n${JSON.stringify({
       thread: {
@@ -808,8 +859,11 @@ async function generateDraftWithLlm(input: {
       payload = {};
     }
     const parsed = asRecord(JSON.parse(extractOutputText(payload)));
-    const subject = sanitizeAiText(shortText(parsed.subject, 180)) || input.thread.subject || "Re: Conversation";
-    const body = sanitizeAiText(String(parsed.body ?? "").trim());
+    const subject = sanitizeDraftSubject(shortText(parsed.subject, 180)) || input.thread.subject || "Re: Conversation";
+    const body = sanitizeDraftBody(String(parsed.body ?? "").trim());
+    if (containsDraftPlaceholderToken(subject) || containsDraftPlaceholderToken(body)) {
+      return null;
+    }
     if (!body) return null;
     return {
       subject,

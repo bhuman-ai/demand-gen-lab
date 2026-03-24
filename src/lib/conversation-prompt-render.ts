@@ -202,7 +202,15 @@ function escapeRegExp(value: string) {
 }
 
 function unresolvedTemplateTokens(text: string) {
-  return /{{\s*[^}]+\s*}}/.test(text);
+  return (
+    /{{\s*[^}]+\s*}}/.test(text) ||
+    /\[\s*(?:your|sender|contact|company|brand|first|last|full|agent|rep)[^[\]\n]{0,40}(?:name|company|title|email|phone|signature|role)?[^[\]\n]*\]/i.test(
+      text
+    ) ||
+    /<\s*(?:your|sender|contact|company|brand|first|last|full|agent|rep)[^>\n]{0,40}(?:name|company|title|email|phone|signature|role)?[^>\n]*>/i.test(
+      text
+    )
+  );
 }
 
 function findBannedPhrase(subject: string, body: string) {

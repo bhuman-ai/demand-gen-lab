@@ -91,7 +91,7 @@ function isExplicitActionRequest(message: string) {
   ) {
     return true;
   }
-  return /^(add|create|make|buy|register|provision|refresh|sync|check|run|pause|resume|summarize|show|inspect|diagnose|draft|send|use|update|edit|change|delete|remove|dismiss|launch|promote|set up|setup|start|open)\b/.test(
+  return /^(add|create|make|buy|register|provision|refresh|sync|check|run|pause|resume|cancel|summarize|show|inspect|diagnose|draft|send|use|update|edit|change|delete|remove|dismiss|launch|promote|set up|setup|start|open)\b/.test(
     normalized
   );
 }
@@ -102,11 +102,11 @@ function isExplicitMutationRequest(message: string) {
   if (
     /\b(can you|could you|please|go ahead and|i want you to|take care of|handle|do this)\b/.test(normalized)
   ) {
-    return /\b(add|create|make|buy|register|provision|refresh|sync|run|pause|resume|send|dismiss|delete|remove|launch|promote|update|edit|change|set up|setup|start)\b/.test(
+    return /\b(add|create|make|buy|register|provision|refresh|sync|run|pause|resume|cancel|send|dismiss|delete|remove|launch|promote|update|edit|change|set up|setup|start)\b/.test(
       normalized
     );
   }
-  return /^(add|create|make|buy|register|provision|refresh|sync|run|pause|resume|send|dismiss|delete|remove|launch|promote|update|edit|change|set up|setup|start)\b/.test(
+  return /^(add|create|make|buy|register|provision|refresh|sync|run|pause|resume|cancel|send|dismiss|delete|remove|launch|promote|update|edit|change|set up|setup|start)\b/.test(
     normalized
   );
 }
@@ -382,21 +382,25 @@ function buildProvisionForms(input: {
   missingFields: string[];
 }): OperatorExecutionForm[] {
   const forms: OperatorExecutionForm[] = [];
-  const domainMode =
-    normalizeProvisionDomainMode(input.toolInput.domainMode) ||
-    normalizeProvisionDomainMode(input.brandMemory?.senderDefaults.domainMode);
-  const fromLocalPart =
-    asString(input.toolInput.fromLocalPart) || asString(input.brandMemory?.senderDefaults.fromLocalPart);
-  const domain = asString(input.toolInput.domain) || asString(input.brandMemory?.senderDefaults.domain);
-  const senderEmail =
-    (fromLocalPart && domain ? `${fromLocalPart}@${domain}` : "") ||
-    asString(input.brandMemory?.senderDefaults.senderEmail);
-  const registrant = asRecord(input.toolInput.registrant);
   const inventory = input.brandContext?.provisioning.mailpoolDomains ?? [];
   const inventoryOptions = inventory.map((item) => ({
     label: item.domain,
     value: item.domain,
   }));
+  const domainMode =
+    normalizeProvisionDomainMode(input.toolInput.domainMode) ||
+    normalizeProvisionDomainMode(input.brandMemory?.senderDefaults.domainMode);
+  const hasExplicitSenderIdentity =
+    Boolean(asString(input.toolInput.fromLocalPart)) || Boolean(asString(input.toolInput.domain));
+  const fromLocalPart =
+    asString(input.toolInput.fromLocalPart) ||
+    (hasExplicitSenderIdentity ? asString(input.brandMemory?.senderDefaults.fromLocalPart) : "");
+  const domain =
+    asString(input.toolInput.domain) ||
+    (domainMode === "existing" && inventoryOptions.length === 1 ? inventoryOptions[0]?.value ?? "" : "") ||
+    (hasExplicitSenderIdentity ? asString(input.brandMemory?.senderDefaults.domain) : "");
+  const senderEmail = fromLocalPart && domain ? `${fromLocalPart}@${domain}` : "";
+  const registrant = asRecord(input.toolInput.registrant);
 
   if (input.missingFields.includes("sender email")) {
     if (domainMode === "existing" && inventoryOptions.length > 0) {
@@ -598,7 +602,7 @@ function buildProvisionQuestions(input: {
   const questions: OperatorExecutionQuestion[] = [];
   const domainMode = normalizeProvisionDomainMode(input.domainMode);
 
-  if (input.missingFields.includes("sender email")) {
+  if (input.missingFields.includes("sender email") && !domainMode) {
     questions.push(
       buildQuestion("Which path should I use for this sender?", [
         ...(input.hasMailpoolInventory
@@ -687,6 +691,30 @@ function normalizeProvisionDomainMode(value: unknown) {
     return "existing";
   }
   return normalized;
+}
+
+function extractProvisionLocalPart(message: string) {
+  const lowered = message.trim().toLowerCase();
+  if (!lowered) return "";
+  const labeledMatch = lowered.match(
+    /\b(?:local[- ]part|local part|username|mailbox name)\s*(?::|=|-|is)?\s*([a-z0-9._%+-]{1,64})\b/
+  );
+  if (labeledMatch?.[1]) {
+    return labeledMatch[1];
+  }
+  return "";
+}
+
+function hasExplicitRegistrantSignal(message: string) {
+  const trimmed = message.trim();
+  if (!trimmed) return false;
+  return (
+    /\b(first name|last name|company|organization|organisation|email|phone|address|street|city|state|province|postal|zip|country)\b/i.test(
+      trimmed
+    ) ||
+    trimmed.includes("\n") ||
+    trimmed.split(",").length >= 4
+  );
 }
 
 function extractQuotedText(message: string) {
@@ -780,7 +808,7 @@ function findNamedCandidates<T extends { id: string; name?: string; subject?: st
 function summarizeActionPreview(action: OperatorAction): OperatorChatAssistantReply {
   const previewSummary = asString(action.preview.summary) || "Operator prepared an action preview.";
   return {
-    summary: `I can do that. ${previewSummary} Confirm it when you're ready.`,
+    summary: `I'm ready to do it. ${previewSummary} Confirm when you want me to run it.`,
     findings: [],
     recommendations: [],
   };
@@ -931,6 +959,10 @@ type PendingConversationContinuation =
       requestedAction: OperatorRequestedAction;
     }
   | {
+      kind: "message_override";
+      message: string;
+    }
+  | {
       kind: "confirm_action";
       actionId: string;
     }
@@ -978,9 +1010,42 @@ function getExecutionToolInput(execution: OperatorExecutionEnvelope) {
   return asRecord(firstForm?.input);
 }
 
+const QUESTION_OPTION_ORDINALS = [
+  ["1", "one", "first"],
+  ["2", "two", "second"],
+  ["3", "three", "third"],
+  ["4", "four", "fourth"],
+  ["5", "five", "fifth"],
+  ["6", "six", "sixth"],
+] as const;
+
 function findQuestionOptionMatch(execution: OperatorExecutionEnvelope, message: string) {
   const normalized = normalizeMatchText(message);
   if (!normalized) return null;
+  const questionOptions = (execution.questions ?? []).flatMap((question) =>
+    Array.isArray(question.options) ? question.options : []
+  );
+
+  if (questionOptions.length === 1 && /^(that|that one|this|this one|the one)$/i.test(normalized)) {
+    return questionOptions[0] ?? null;
+  }
+
+  if (/^(last|the last|final|the final)$/i.test(normalized) && questionOptions.length > 0) {
+    return questionOptions[questionOptions.length - 1] ?? null;
+  }
+
+  for (let index = 0; index < questionOptions.length; index += 1) {
+    const option = questionOptions[index];
+    const ordinalTokens = QUESTION_OPTION_ORDINALS[index] ?? [];
+    const ordinalPattern = new RegExp(
+      `^(?:option\\s+)?(?:${ordinalTokens.join("|")})(?:\\s+one)?$`,
+      "i"
+    );
+    if (ordinalTokens.length > 0 && ordinalPattern.test(normalized)) {
+      return option;
+    }
+  }
+
   for (const question of execution.questions ?? []) {
     for (const option of question.options ?? []) {
       const label = normalizeMatchText(option.label);
@@ -996,6 +1061,245 @@ function findQuestionOptionMatch(execution: OperatorExecutionEnvelope, message: 
   return null;
 }
 
+const COUNTRY_CODE_BY_NAME: Record<string, string> = {
+  australia: "AU",
+  austria: "AT",
+  belgium: "BE",
+  canada: "CA",
+  denmark: "DK",
+  finland: "FI",
+  france: "FR",
+  germany: "DE",
+  ireland: "IE",
+  italy: "IT",
+  lithuania: "LT",
+  netherlands: "NL",
+  norway: "NO",
+  poland: "PL",
+  portugal: "PT",
+  spain: "ES",
+  sweden: "SE",
+  switzerland: "CH",
+  "united kingdom": "GB",
+  uk: "GB",
+  "great britain": "GB",
+  "united states": "US",
+  usa: "US",
+  us: "US",
+};
+
+function normalizeCountryCode(value: string) {
+  const normalized = normalizeMatchText(value);
+  if (!normalized) return "";
+  if (/^[a-z]{2}$/i.test(normalized)) return normalized.toUpperCase();
+  return COUNTRY_CODE_BY_NAME[normalized] ?? value.trim().toUpperCase();
+}
+
+function extractLabeledField(message: string, labels: string[]) {
+  const pattern = labels
+    .map((label) => label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\s+/g, "\\s+"))
+    .join("|");
+  const regex = new RegExp(`(?:^|[\\n;,])\\s*(?:${pattern})\\s*(?::|=|-)?\\s*([^\\n;]+)`, "i");
+  const match = message.match(regex);
+  return match?.[1]?.trim() ?? "";
+}
+
+function parseNameFromLine(line: string) {
+  const cleaned = line
+    .replace(/^(name|contact|registrant)\s*[:=-]?\s*/i, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  const parts = cleaned.split(" ").filter(Boolean);
+  if (parts.length < 2) return null;
+  return {
+    firstName: parts[0] ?? "",
+    lastName: parts.slice(1).join(" "),
+  };
+}
+
+function parseAddressBlock(text: string) {
+  const cleaned = text.replace(/\s+/g, " ").trim();
+  if (!cleaned) return {} as Record<string, string>;
+
+  let working = cleaned;
+  let country = "";
+  const commaParts = working
+    .split(",")
+    .map((part) => part.trim())
+    .filter(Boolean);
+
+  if (commaParts.length > 1) {
+    const candidateCountry = normalizeCountryCode(commaParts[commaParts.length - 1] ?? "");
+    if (candidateCountry && candidateCountry.length <= 3) {
+      country = candidateCountry;
+      commaParts.pop();
+      working = commaParts.join(", ").trim();
+    }
+  }
+
+  let postalCode = "";
+  let city = "";
+  let stateProvince = "";
+  let address1 = working;
+
+  const patterns = [
+    /^(.*?)(?:,\s*)?(\d{4,10})\s+([A-Za-zÀ-ÿ][A-Za-zÀ-ÿ.' -]+?)(?:\s+([A-Za-z]{1,4}))?$/u,
+    /^(.*?)(?:,\s*)?([A-Za-zÀ-ÿ][A-Za-zÀ-ÿ.' -]+?)(?:\s+([A-Za-z]{1,4}))?\s+(\d{4,10})$/u,
+  ];
+
+  for (const pattern of patterns) {
+    const match = working.match(pattern);
+    if (!match) continue;
+    if (pattern === patterns[0]) {
+      address1 = (match[1] ?? "").trim().replace(/,\s*$/, "");
+      postalCode = (match[2] ?? "").trim();
+      city = (match[3] ?? "").trim();
+      stateProvince = (match[4] ?? "").trim();
+    } else {
+      address1 = (match[1] ?? "").trim().replace(/,\s*$/, "");
+      city = (match[2] ?? "").trim();
+      stateProvince = (match[3] ?? "").trim();
+      postalCode = (match[4] ?? "").trim();
+    }
+    break;
+  }
+
+  if (!postalCode && commaParts.length >= 2) {
+    const tail = commaParts[commaParts.length - 1] ?? "";
+    const postalMatch = tail.match(/(\d{4,10})/);
+    if (postalMatch) {
+      postalCode = postalMatch[1] ?? "";
+      const withoutPostal = tail.replace(postalMatch[1] ?? "", "").trim();
+      const tailParts = withoutPostal.split(/\s+/).filter(Boolean);
+      stateProvince = tailParts.length > 1 ? tailParts[tailParts.length - 1] ?? "" : "";
+      city = tailParts.length > 1 ? tailParts.slice(0, -1).join(" ") : withoutPostal;
+      address1 = commaParts.slice(0, -1).join(", ");
+    }
+  }
+
+  return {
+    address1: address1.trim(),
+    city,
+    stateProvince,
+    postalCode,
+    country,
+  };
+}
+
+function parseRegistrantFromMessage(input: {
+  message: string;
+  existingRegistrant: Record<string, unknown>;
+  brandMemory: OperatorBrandMemory | null;
+  brandName?: string;
+}) {
+  const message = input.message.trim();
+  if (!message) return asRecord(input.existingRegistrant);
+
+  const registrant: Record<string, unknown> = {
+    ...input.existingRegistrant,
+  };
+
+  const labeledValues = {
+    firstName: extractLabeledField(message, ["first name", "firstname", "first"]),
+    lastName: extractLabeledField(message, ["last name", "lastname", "last"]),
+    organizationName: extractLabeledField(message, ["company", "organization", "organisation", "org"]),
+    emailAddress: extractLabeledField(message, ["email", "email address"]),
+    phone: extractLabeledField(message, ["phone", "telephone", "mobile"]),
+    address1: extractLabeledField(message, ["street address", "address", "street"]),
+    city: extractLabeledField(message, ["city"]),
+    stateProvince: extractLabeledField(message, ["state / province", "state/province", "state", "province", "region"]),
+    postalCode: extractLabeledField(message, ["postal code", "postcode", "zip code", "zip"]),
+    country: extractLabeledField(message, ["country"]),
+  };
+
+  for (const [key, value] of Object.entries(labeledValues)) {
+    if (!value) continue;
+    registrant[key] = key === "country" ? normalizeCountryCode(value) : value;
+  }
+
+  if (!asString(registrant.emailAddress)) {
+    const emailMatch = message.match(/\b([a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,})\b/i);
+    if (emailMatch?.[1]) {
+      registrant.emailAddress = emailMatch[1].trim();
+    }
+  }
+
+  if (!asString(registrant.phone)) {
+    const phoneMatch = message.match(/(\+?[0-9][0-9\s().-]{6,}[0-9])/);
+    if (phoneMatch?.[1]) {
+      registrant.phone = phoneMatch[1].trim();
+    }
+  }
+
+  const normalizedLines = message
+    .split(/\n+/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const unlabeledLines = normalizedLines.filter(
+    (line) => !/^(first|last|company|organization|organisation|org|email|phone|street|address|city|state|province|postal|zip|country)\b/i.test(line)
+  );
+  const emailIndex = unlabeledLines.findIndex((line) => /\b[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}\b/i.test(line));
+  const beforeEmail = emailIndex >= 0 ? unlabeledLines.slice(0, emailIndex) : unlabeledLines.slice(0, 3);
+  const afterEmail = emailIndex >= 0 ? unlabeledLines.slice(emailIndex + 1) : unlabeledLines.slice(beforeEmail.length);
+
+  if (!asString(registrant.firstName) || !asString(registrant.lastName)) {
+    const nameLine = beforeEmail.find((line) => line.split(/\s+/).length >= 2 && !/@/.test(line));
+    const parsedName = nameLine ? parseNameFromLine(nameLine) : null;
+    if (parsedName) {
+      if (!asString(registrant.firstName)) registrant.firstName = parsedName.firstName;
+      if (!asString(registrant.lastName)) registrant.lastName = parsedName.lastName;
+    } else if (beforeEmail.length >= 2) {
+      if (!asString(registrant.firstName)) registrant.firstName = beforeEmail[0] ?? "";
+      if (!asString(registrant.lastName)) registrant.lastName = beforeEmail[1] ?? "";
+    }
+  }
+
+  if (!asString(registrant.organizationName)) {
+    const nameLine = beforeEmail.find((line) => line.split(/\s+/).length >= 2 && !/@/.test(line));
+    const remainingBeforeEmail = beforeEmail.filter((line) => line !== nameLine);
+    const atMatch = message.match(/\bat\s+([A-Za-z0-9][A-Za-z0-9 .&'-]{1,80})/i);
+    if (atMatch?.[1]) {
+      registrant.organizationName = atMatch[1].trim().replace(/[.,;]$/, "");
+    } else if (remainingBeforeEmail.length > 0) {
+      registrant.organizationName = remainingBeforeEmail[0] ?? "";
+    } else if (beforeEmail.length >= 3) {
+      registrant.organizationName = beforeEmail[2] ?? "";
+    } else if (input.brandName) {
+      registrant.organizationName = input.brandName;
+    }
+  }
+
+  if (
+    !asString(registrant.address1) ||
+    !asString(registrant.city) ||
+    !asString(registrant.postalCode) ||
+    !asString(registrant.country)
+  ) {
+    const addressBlock =
+      afterEmail.join(", ") ||
+      message
+        .replace(String(registrant.emailAddress ?? ""), "")
+        .replace(String(registrant.firstName ?? ""), "")
+        .replace(String(registrant.lastName ?? ""), "")
+        .replace(String(registrant.organizationName ?? ""), "")
+        .trim();
+    const parsedAddress = parseAddressBlock(addressBlock);
+    if (!asString(registrant.address1) && parsedAddress.address1) registrant.address1 = parsedAddress.address1;
+    if (!asString(registrant.city) && parsedAddress.city) registrant.city = parsedAddress.city;
+    if (!asString(registrant.stateProvince) && parsedAddress.stateProvince) registrant.stateProvince = parsedAddress.stateProvince;
+    if (!asString(registrant.postalCode) && parsedAddress.postalCode) registrant.postalCode = parsedAddress.postalCode;
+    if (!asString(registrant.country) && parsedAddress.country) registrant.country = parsedAddress.country;
+  }
+
+  if (!asString(registrant.country) && asString(input.brandMemory?.registrantDefaults.country)) {
+    registrant.country = asString(input.brandMemory?.registrantDefaults.country);
+  } else {
+    registrant.country = normalizeCountryCode(asString(registrant.country));
+  }
+
+  return registrant;
+}
+
 function mergeProvisionInputFromContinuation(input: {
   message: string;
   baseInput: Record<string, unknown>;
@@ -1003,6 +1307,7 @@ function mergeProvisionInputFromContinuation(input: {
   brandMemory: OperatorBrandMemory | null;
 }): Record<string, unknown> {
   const lowered = input.message.trim().toLowerCase();
+  const needsSenderEmail = !asString(input.baseInput.fromLocalPart) || !asString(input.baseInput.domain);
   const nextInput: Record<string, unknown> = {
     ...input.baseInput,
     registrant: asRecord(input.baseInput.registrant),
@@ -1040,10 +1345,10 @@ function mergeProvisionInputFromContinuation(input: {
   }
 
   const emailParts = extractEmailParts(input.message);
-  if (emailParts) {
+  if (needsSenderEmail && emailParts) {
     nextInput.fromLocalPart = emailParts.fromLocalPart;
     nextInput.domain = emailParts.domain;
-  } else {
+  } else if (needsSenderEmail) {
     const directDomain = extractDomain(input.message);
     if (directDomain) {
       nextInput.domain = directDomain;
@@ -1100,7 +1405,7 @@ function inferContinuationFromPendingExecution(input: {
   const pending = getLatestPendingAssistantExecution(input.messages);
   if (!pending) return null;
   const message = input.message.trim();
-  const lowered = message.toLowerCase();
+  const optionMatch = findQuestionOptionMatch(pending.execution, message);
   const latestAction =
     (pending.execution.actionId
       ? input.actions.find((action) => action.id === pending.execution.actionId)
@@ -1117,14 +1422,23 @@ function inferContinuationFromPendingExecution(input: {
     return null;
   }
 
-  if (pending.execution.state !== "need_info" || pending.execution.toolName !== "provision_mailpool_sender") {
+  if (pending.execution.state !== "need_info") {
+    return null;
+  }
+
+  if (pending.execution.toolName !== "provision_mailpool_sender") {
+    if (optionMatch?.message) {
+      return {
+        kind: "message_override",
+        message: optionMatch.message,
+      };
+    }
     return null;
   }
 
   const baseInput = getExecutionToolInput(pending.execution);
   if (!Object.keys(baseInput).length) return null;
 
-  const optionMatch = findQuestionOptionMatch(pending.execution, lowered);
   const effectiveMessage = optionMatch?.message ?? message;
   const nextInput = mergeProvisionInputFromContinuation({
     message: effectiveMessage,
@@ -1132,10 +1446,27 @@ function inferContinuationFromPendingExecution(input: {
       ...baseInput,
       brandId: input.brandId || asString(baseInput.brandId),
       provider: "mailpool",
+      domainMode: normalizeProvisionDomainMode(baseInput.domainMode),
     },
     brandContext: input.brandContext,
     brandMemory: input.brandMemory,
   });
+
+  const needsSenderEmail = !asString(baseInput.fromLocalPart) || !asString(baseInput.domain);
+  const shouldParseRegistrant =
+    normalizeProvisionDomainMode(nextInput.domainMode) === "register" &&
+    (!needsSenderEmail ||
+      hasExplicitRegistrantSignal(message));
+  const nextRegistrant =
+    shouldParseRegistrant
+      ? parseRegistrantFromMessage({
+          message,
+          existingRegistrant: asRecord(nextInput.registrant),
+          brandMemory: input.brandMemory,
+          brandName: input.brandContext?.brand.name,
+        })
+      : asRecord(nextInput.registrant);
+  nextInput.registrant = nextRegistrant;
 
   const changed =
     JSON.stringify({
@@ -1147,7 +1478,14 @@ function inferContinuationFromPendingExecution(input: {
       registrant: asRecord(nextInput.registrant),
     });
 
-  if (!changed) {
+  if (!changed && optionMatch?.message) {
+    return {
+      kind: "message_override",
+      message: optionMatch.message,
+    };
+  }
+
+  if (!changed && !needsSenderEmail) {
     return null;
   }
 
@@ -1547,6 +1885,7 @@ function normalizeRequestedAction(input: {
   message: string;
   context: Awaited<ReturnType<typeof getOperatorBrandContext>>;
   brandMemory: OperatorBrandMemory | null;
+  source: "llm" | "heuristic" | "structured" | "continuation";
 }): OperatorRequestedAction | null {
   if (input.mode === "recommendation_only") return null;
   const row = asRecord(input.raw);
@@ -1573,6 +1912,17 @@ function normalizeRequestedAction(input: {
           : message.includes("existing")
             ? "existing"
             : "existing";
+    }
+
+    if (input.source === "llm" || input.source === "heuristic") {
+      const explicitEmailParts = extractEmailParts(input.message);
+      const explicitDomain = extractDomain(input.message);
+      const explicitLocalPart = extractProvisionLocalPart(input.message);
+      toolInput.fromLocalPart = explicitEmailParts?.fromLocalPart ?? explicitLocalPart ?? "";
+      toolInput.domain = explicitEmailParts?.domain ?? explicitDomain ?? "";
+      if (!hasExplicitRegistrantSignal(input.message)) {
+        toolInput.registrant = {};
+      }
     }
   }
 
@@ -1867,6 +2217,7 @@ async function planOperatorReplyWithLlm(input: {
         message: input.message,
         context: input.context,
         brandMemory: input.brandMemory,
+        source: "llm",
       });
       const tool = normalizedAction ? getOperatorToolSpec(normalizedAction.toolName) : null;
 
@@ -2408,49 +2759,64 @@ export async function runOperatorChatTurn(input: OperatorChatRequest): Promise<O
         brandMemory,
         brandId: resolvedBrandId,
       });
+  const effectiveMessage =
+    continuation?.kind === "message_override" ? continuation.message : input.message;
   const structuredAction = input.structuredAction
     ? normalizeRequestedAction({
         raw: input.structuredAction,
         brandId: resolvedBrandId,
         mode: input.mode,
-        message: input.message,
+        message: effectiveMessage,
         context: brandContext,
         brandMemory,
+        source: "structured",
       })
     : continuation?.kind === "structured_action"
       ? normalizeRequestedAction({
           raw: continuation.requestedAction,
           brandId: resolvedBrandId,
           mode: input.mode,
-          message: input.message,
+          message: effectiveMessage,
           context: brandContext,
           brandMemory,
+          source: "continuation",
         })
     : null;
   const llmPlan = structuredAction
     ? null
-    : continuation?.kind === "confirm_action" || continuation?.kind === "cancel_action"
+    : continuation?.kind === "confirm_action" ||
+        continuation?.kind === "cancel_action" ||
+        continuation?.kind === "message_override"
       ? null
     : await planOperatorReplyWithLlm({
         brandId: resolvedBrandId,
-        message: input.message,
+        message: effectiveMessage,
         mode: input.mode,
         messages: messageHistory,
         context: brandContext,
         brandMemory,
         fallbackAssistant,
       });
-  const inferredFallbackAction = inferActionFromMessage(input, brandContext, brandMemory);
+  const inferredFallbackAction = inferActionFromMessage(
+    {
+      ...input,
+      message: effectiveMessage,
+    },
+    brandContext,
+    brandMemory
+  );
   const requestedAction = structuredAction
     ? structuredAction
+    : continuation?.kind === "message_override"
+      ? filterRequestedActionForMessage(inferredFallbackAction, effectiveMessage)
     : llmPlan
       ? (
-          filterRequestedActionForMessage(llmPlan.requestedAction, input.message) ??
-          (isExplicitMutationRequest(input.message)
-            ? filterRequestedActionForMessage(inferredFallbackAction, input.message)
+          filterRequestedActionForMessage(llmPlan.requestedAction, effectiveMessage) ??
+          (isExplicitMutationRequest(effectiveMessage)
+            ? filterRequestedActionForMessage(inferredFallbackAction, effectiveMessage)
             : null)
         )
-      : filterRequestedActionForMessage(inferredFallbackAction, input.message);
+      : filterRequestedActionForMessage(inferredFallbackAction, effectiveMessage);
   const run = await createOperatorRun({
     threadId: thread.id,
     brandId: resolvedBrandId,
@@ -2523,9 +2889,6 @@ export async function runOperatorChatTurn(input: OperatorChatRequest): Promise<O
         model: run.model,
       });
     } else if (requestedAction) {
-      if (resolvedBrandId && requestedAction.toolName === "provision_mailpool_sender") {
-        await rememberProvisionMailpoolSenderInput(resolvedBrandId, requestedAction.input);
-      }
       if (resolvedBrandId) {
         await rememberOperatorRecentSelection(resolvedBrandId, {
           experimentId: asString(requestedAction.input.experimentId),
@@ -2615,6 +2978,9 @@ export async function runOperatorChatTurn(input: OperatorChatRequest): Promise<O
             }),
           });
         } else if (tool.approvalMode === "confirm") {
+          if (resolvedBrandId) {
+            await rememberProvisionMailpoolSenderInput(resolvedBrandId, requestedAction.input);
+          }
           const action = await createOperatorAction({
             runId: run.id,
             toolName: tool.name,
@@ -2633,6 +2999,9 @@ export async function runOperatorChatTurn(input: OperatorChatRequest): Promise<O
             preview: action.preview,
           });
         } else {
+          if (resolvedBrandId) {
+            await rememberProvisionMailpoolSenderInput(resolvedBrandId, requestedAction.input);
+          }
           const action = await createOperatorAction({
             runId: run.id,
             toolName: tool.name,
@@ -2695,6 +3064,9 @@ export async function runOperatorChatTurn(input: OperatorChatRequest): Promise<O
           }
         }
       } else if (tool.approvalMode === "confirm") {
+        if (resolvedBrandId && tool.name === "provision_mailpool_sender") {
+          await rememberProvisionMailpoolSenderInput(resolvedBrandId, requestedAction.input);
+        }
         const action = await createOperatorAction({
           runId: run.id,
           toolName: tool.name,
@@ -2713,6 +3085,9 @@ export async function runOperatorChatTurn(input: OperatorChatRequest): Promise<O
           preview: action.preview,
         });
       } else {
+        if (resolvedBrandId && tool.name === "provision_mailpool_sender") {
+          await rememberProvisionMailpoolSenderInput(resolvedBrandId, requestedAction.input);
+        }
         const action = await createOperatorAction({
           runId: run.id,
           toolName: tool.name,
@@ -2783,8 +3158,8 @@ export async function runOperatorChatTurn(input: OperatorChatRequest): Promise<O
         assistant = disambiguation.assistant;
         execution = disambiguation.execution;
       } else {
-        assistant = makeUnexecutedActionAssistant(input.message, llmPlan?.assistant ?? fallbackAssistant);
-        execution = isExplicitMutationRequest(input.message)
+        assistant = makeUnexecutedActionAssistant(effectiveMessage, llmPlan?.assistant ?? fallbackAssistant);
+        execution = isExplicitMutationRequest(effectiveMessage)
           ? buildNeedInfoEnvelope({
               missingFields: [],
               questions: [

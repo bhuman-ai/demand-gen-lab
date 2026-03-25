@@ -490,6 +490,40 @@ async function namecheapGetHosts(input: {
   return hosts;
 }
 
+async function namecheapGetDnsList(input: {
+  apiUser: string;
+  userName?: string;
+  apiKey: string;
+  clientIp: string;
+  domain: string;
+}) {
+  const { sld, tld } = splitDomain(input.domain);
+  const xml = await namecheapRequest("namecheap.domains.dns.getList", {
+    ...namecheapBaseParams({
+      apiUser: input.apiUser,
+      userName: input.userName,
+      apiKey: input.apiKey,
+      clientIp: input.clientIp,
+      command: "namecheap.domains.dns.getList",
+    }),
+    SLD: sld,
+    TLD: tld,
+  });
+
+  const nameservers = [...xml.matchAll(/<Nameserver>([\s\S]*?)<\/Nameserver>/gi)]
+    .map((match) => decodeXmlEntities(String(match[1] ?? "")).trim().toLowerCase())
+    .filter(Boolean);
+  const attrsMatch = xml.match(/<DomainDNSGetListResult\b([^>]*)>/i);
+  const attrs = parseXmlAttributes(String(attrsMatch?.[1] ?? ""));
+
+  return {
+    usingOurDns: String(attrs.IsUsingOurDNS ?? attrs.IsOurDNS ?? "").trim().toLowerCase() === "true",
+    customDns: String(attrs.IsCustomDNS ?? "").trim().toLowerCase() === "true",
+    providerType: String(attrs.ProviderType ?? attrs.Type ?? "").trim(),
+    nameservers,
+  };
+}
+
 async function namecheapRegisterDomain(input: {
   apiUser: string;
   userName?: string;
@@ -699,6 +733,35 @@ async function namecheapSetHosts(input: {
   });
 
   await namecheapRequest("namecheap.domains.dns.setHosts", params);
+}
+
+async function namecheapSetCustomNameservers(input: {
+  apiUser: string;
+  userName?: string;
+  apiKey: string;
+  clientIp: string;
+  domain: string;
+  nameservers: string[];
+}) {
+  const nameservers = input.nameservers
+    .map((entry) => String(entry ?? "").trim().toLowerCase())
+    .filter(Boolean);
+  if (!nameservers.length) {
+    throw new Error("At least one nameserver is required");
+  }
+  const { sld, tld } = splitDomain(input.domain);
+  await namecheapRequest("namecheap.domains.dns.setCustom", {
+    ...namecheapBaseParams({
+      apiUser: input.apiUser,
+      userName: input.userName,
+      apiKey: input.apiKey,
+      clientIp: input.clientIp,
+      command: "namecheap.domains.dns.setCustom",
+    }),
+    SLD: sld,
+    TLD: tld,
+    Nameservers: nameservers.join(","),
+  });
 }
 
 export async function testNamecheapProvisioningConnection(input: {
@@ -2356,4 +2419,46 @@ export async function provisionSender(input: ProvisionSenderInput): Promise<Prov
   return (input.provider ?? "customerio") === "mailpool"
     ? provisionMailpoolSender(input)
     : provisionCustomerIoSender(input);
+}
+
+export async function setSavedNamecheapCustomNameservers(input: {
+  domain: string;
+  nameservers: string[];
+}) {
+  const settings = await getOutreachProvisioningSettings();
+  const secrets = await getOutreachProvisioningSettingsSecrets();
+  const apiUser = settings.namecheap.apiUser.trim();
+  const userName = settings.namecheap.userName.trim() || apiUser;
+  const apiKey = secrets.namecheapApiKey.trim();
+  const clientIp = settings.namecheap.clientIp.trim();
+
+  if (!apiUser || !apiKey || !clientIp) {
+    throw new Error("Namecheap provisioning is not configured");
+  }
+
+  const domain = normalizeDomain(input.domain);
+  await namecheapSetCustomNameservers({
+    apiUser,
+    userName,
+    apiKey,
+    clientIp,
+    domain,
+    nameservers: input.nameservers,
+  });
+
+  const dns = await namecheapGetDnsList({
+    apiUser,
+    userName,
+    apiKey,
+    clientIp,
+    domain,
+  });
+
+  return {
+    domain,
+    nameservers: dns.nameservers,
+    usingOurDns: dns.usingOurDns,
+    customDns: dns.customDns,
+    providerType: dns.providerType,
+  };
 }

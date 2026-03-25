@@ -36,6 +36,8 @@ type MainNavItem = NavItem & {
   id: "experiments" | "campaigns" | "network" | "leads" | "inbox";
 };
 
+const CHROMELESS_ROUTES = new Set(["/autoads", "/google-ads-review"]);
+
 function prettySegment(value: string) {
   return value
     .replace(/[-_]/g, " ")
@@ -80,6 +82,7 @@ function breadcrumb(pathname: string, activeBrandName?: string) {
 
 export default function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
+  const chromeless = CHROMELESS_ROUTES.has(pathname);
   const pathBrandId = getActiveBrandIdFromPath(pathname);
   const storedBrandId =
     typeof window !== "undefined" ? localStorage.getItem(ACTIVE_BRAND_KEY) || "" : "";
@@ -91,13 +94,19 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   const [operatorOpen, setOperatorOpen] = useState(false);
 
   useEffect(() => {
+    if (chromeless) return;
     if (pathBrandId) {
       localStorage.setItem(ACTIVE_BRAND_KEY, pathBrandId);
     }
-  }, [pathBrandId]);
+  }, [chromeless, pathBrandId]);
 
   useEffect(() => {
     let mounted = true;
+    if (chromeless) {
+      return () => {
+        mounted = false;
+      };
+    }
     if (!activeBrandId) {
       return () => {
         mounted = false;
@@ -128,7 +137,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
     return () => {
       mounted = false;
     };
-  }, [activeBrandId]);
+  }, [activeBrandId, chromeless]);
 
   const activeBrandName = useMemo(() => {
     if (resolvedActiveBrand.brandId === activeBrandId && resolvedActiveBrand.name) {
@@ -138,6 +147,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   }, [activeBrandId, resolvedActiveBrand]);
 
   useEffect(() => {
+    if (chromeless) return;
     const previous = sessionStorage.getItem("factory.previousPath");
     const beforePrevious = sessionStorage.getItem("factory.beforePreviousPath");
     if (beforePrevious && pathname === beforePrevious && previous && previous !== pathname) {
@@ -145,10 +155,15 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
     }
     sessionStorage.setItem("factory.beforePreviousPath", previous || "");
     sessionStorage.setItem("factory.previousPath", pathname);
-  }, [pathname]);
+  }, [chromeless, pathname]);
 
   useEffect(() => {
     let cancelled = false;
+    if (chromeless) {
+      return () => {
+        cancelled = true;
+      };
+    }
 
     const checkBuild = async () => {
       try {
@@ -179,7 +194,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [chromeless]);
 
   const hasActiveBrand = Boolean(activeBrandId);
   const brandRoot = hasActiveBrand ? `/brands/${activeBrandId}` : "/brands";
@@ -216,6 +231,10 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
     { label: "Logic", href: "/logic", icon: Activity },
     { label: "Doctor", href: "/doctor", icon: FlaskConical },
   ];
+
+  if (chromeless) {
+    return <>{children}</>;
+  }
 
   return (
     <div className="min-h-screen bg-[color:var(--background)] text-[color:var(--foreground)]">

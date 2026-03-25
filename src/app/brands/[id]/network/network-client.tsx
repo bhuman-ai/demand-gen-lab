@@ -42,6 +42,7 @@ import {
   StatLedger,
 } from "@/components/ui/page-layout";
 import { ExplainableHint } from "@/components/ui/explainable-hint";
+import type { SenderCapacitySnapshot } from "@/lib/sender-capacity";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const FILTERS = ["all", "queued", "warming", "attention", "ready"] as const;
@@ -90,7 +91,7 @@ type NetworkClientProps = {
   customerIoAccounts?: OutreachAccount[];
   assignments?: AssignmentMap;
   provisioningSettings?: OutreachProvisioningSettings | null;
-  senderCapacitySnapshots?: unknown[];
+  senderCapacitySnapshots?: SenderCapacitySnapshot[];
 };
 
 const EMPTY_SENDER_ACTION_STATE: SenderActionState = {
@@ -747,6 +748,7 @@ export default function NetworkClient({
   customerIoAccounts: initialCustomerIoAccounts = [],
   assignments: initialAssignments = {},
   provisioningSettings: initialProvisioningSettings = null,
+  senderCapacitySnapshots = [],
 }: NetworkClientProps) {
   const router = useRouter();
   const [domains, setDomains] = useState<DomainRow[]>(brand.domains || []);
@@ -969,6 +971,24 @@ export default function NetworkClient({
     return status === "ready" ? preferredRoutingSignal : null;
   }, [preferredRoutingSignal, routingRoleBySenderId, senderDomains]);
   const readyBackupCount = Math.max(0, senderSummary.readyCount - (preferredReadyRoutingSignal ? 1 : 0));
+  const sendingPower = useMemo(() => {
+    const totalDailyCap = senderCapacitySnapshots.reduce(
+      (sum, snapshot) => sum + Math.max(0, Number(snapshot.dailyCap) || 0),
+      0
+    );
+    const usedToday = senderCapacitySnapshots.reduce(
+      (sum, snapshot) => sum + Math.max(0, Number(snapshot.dailySent) || 0),
+      0
+    );
+    const activeSenders = senderCapacitySnapshots.filter((snapshot) => (Number(snapshot.dailyCap) || 0) > 0).length;
+    return {
+      totalDailyCap,
+      usedToday,
+      remaining: Math.max(totalDailyCap - usedToday, 0),
+      utilization: totalDailyCap > 0 ? Math.min(1, usedToday / totalDailyCap) : 0,
+      activeSenders,
+    };
+  }, [senderCapacitySnapshots]);
 
   useEffect(() => {
     trackEvent("ops_module_opened", { module: "senders", brandId: brand.id });
@@ -1246,14 +1266,42 @@ export default function NetworkClient({
             </div>
           </div>
           <div className="rounded-[16px] border border-[color:var(--border)] px-4 py-4 md:px-5">
-            <div className="text-[11px] uppercase tracking-[0.16em] text-[color:var(--muted-foreground)]">Ready today</div>
-            <div className="mt-3 text-3xl font-semibold text-[color:var(--foreground)]">{senderSummary.readyCapacity}</div>
+            <div className="text-[11px] uppercase tracking-[0.16em] text-[color:var(--muted-foreground)]">
+              Total sending power
+            </div>
+            <div className="mt-3 flex items-end justify-between gap-3">
+              <div className="text-3xl font-semibold text-[color:var(--foreground)]">{sendingPower.totalDailyCap}</div>
+              <div className="text-right text-xs text-[color:var(--muted-foreground)]">
+                {sendingPower.totalDailyCap
+                  ? `${sendingPower.usedToday} used today`
+                  : primaryProvisioningSender
+                    ? "Pending setup"
+                    : "No sender capacity yet"}
+              </div>
+            </div>
+            <div className="mt-3">
+              <div className="h-2.5 overflow-hidden rounded-full bg-[color:var(--surface-muted)]">
+                <div
+                  className="h-full rounded-full bg-[color:var(--foreground)] transition-[width] duration-300"
+                  style={{
+                    width:
+                      sendingPower.totalDailyCap > 0 && sendingPower.usedToday > 0
+                        ? `${Math.max(6, Math.round(sendingPower.utilization * 100))}%`
+                        : "0%",
+                  }}
+                />
+              </div>
+              <div className="mt-2 flex items-center justify-between text-xs text-[color:var(--muted-foreground)]">
+                <span>{sendingPower.usedToday} used</span>
+                <span>{sendingPower.totalDailyCap} total</span>
+              </div>
+            </div>
             <div className="mt-2 text-sm leading-6 text-[color:var(--muted-foreground)]">
-              {senderSummary.readyCount
-                ? `${formatEmailCount(senderSummary.readyCapacity)} across ${senderSummary.readyCount} sender${senderSummary.readyCount === 1 ? "" : "s"}.`
+              {sendingPower.totalDailyCap
+                ? `${formatEmailCount(sendingPower.totalDailyCap)} of brand-wide daily sending power across ${sendingPower.activeSenders} sender${sendingPower.activeSenders === 1 ? "" : "s"}. ${formatEmailCount(sendingPower.remaining)} left today.`
                 : primaryProvisioningSender
                   ? primaryProvisioningSender.provisioning.etaLabel
-                : "No sender is fully ready yet."}
+                  : "No sender is fully ready yet."}
             </div>
           </div>
           <div className="rounded-[16px] border border-[color:var(--border)] px-4 py-4 md:px-5">

@@ -206,6 +206,15 @@ function normalizeEmailLocalPart(value: string) {
     .replace(/^\.+|\.+$/g, "");
 }
 
+function isMailpoolOptionalDeliverabilityCreditError(error: unknown) {
+  const message = error instanceof Error ? error.message.toLowerCase() : String(error ?? "").toLowerCase();
+  return (
+    message.includes("not enough credits") ||
+    message.includes("don't have enough credits") ||
+    message.includes("not enough credit")
+  );
+}
+
 function splitDomain(domain: string) {
   const parts = domain.split(".").filter(Boolean);
   if (parts.length < 2) {
@@ -2311,11 +2320,15 @@ export async function provisionMailpoolSender(
           ? await waitForMailpoolInboxPlacement(apiKey, runningInboxPlacement.id)
           : null;
     } catch (error) {
-      if (!isMailpoolGoogleCredentialsPendingError(error)) {
+      if (isMailpoolGoogleCredentialsPendingError(error)) {
+        warnings.push("Mailpool mailbox exists, but Google Workspace credentials are still provisioning.");
+        nextSteps.push("Wait for Mailpool to finish Google Workspace mailbox setup, then refresh the sender.");
+      } else if (isMailpoolOptionalDeliverabilityCreditError(error)) {
+        warnings.push("Mailpool sender was provisioned, but optional deliverability checks were skipped because Mailpool is out of inbox-placement credits.");
+        nextSteps.push("Top up Mailpool inbox-placement credits, then refresh this sender to attach the optional deliverability checks.");
+      } else {
         throw error;
       }
-      warnings.push("Mailpool mailbox exists, but Google Workspace credentials are still provisioning.");
-      nextSteps.push("Wait for Mailpool to finish Google Workspace mailbox setup, then refresh the sender.");
     }
   } else {
     warnings.push("Mailpool mailbox is still provisioning and is not ready for SMTP, IMAP, or deliverability checks yet.");

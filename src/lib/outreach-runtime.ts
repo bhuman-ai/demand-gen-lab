@@ -108,6 +108,10 @@ import {
   upsertRunLeads,
   type OutreachJob,
 } from "@/lib/outreach-data";
+import {
+  isReusableExperimentLeadStatus,
+  isTerminalExperimentLeadStatus,
+} from "@/lib/experiment-prospect-import";
 import { assessReportCommentLeadQuality } from "@/lib/report-comment-lead-quality";
 import {
   enrichLeadsWithEmailFinderBatch,
@@ -10756,6 +10760,80 @@ async function createDefaultExperimentForHypothesis(
   return experiment;
 }
 
+type LaunchSeedLead = {
+  email: string;
+  name: string;
+  company: string;
+  title: string;
+  domain: string;
+  sourceUrl: string;
+};
+
+async function collectReusableLaunchSeedLeads(input: {
+  brandId: string;
+  campaignId: string;
+  experimentId: string;
+  ownerType?: "experiment" | "campaign";
+  ownerId?: string;
+  excludeRunId?: string;
+  maxLeads?: number;
+}): Promise<LaunchSeedLead[]> {
+  const donorRuns =
+    input.ownerType && input.ownerId
+      ? await listOwnerRuns(input.brandId, input.ownerType, input.ownerId)
+      : await listExperimentRuns(input.brandId, input.campaignId, input.experimentId);
+
+  const sortedRuns = donorRuns
+    .filter((run) => run.id !== input.excludeRunId)
+    .sort((left, right) => (left.createdAt < right.createdAt ? 1 : -1));
+  if (!sortedRuns.length) {
+    return [];
+  }
+
+  const leadLists = await Promise.all(sortedRuns.map((run) => listRunLeads(run.id)));
+  const blockedEmails = new Set<string>();
+  for (const lead of leadLists.flat()) {
+    const email = extractFirstEmailAddress(lead.email).toLowerCase();
+    if (!email) continue;
+    if (isTerminalExperimentLeadStatus(lead.status)) {
+      blockedEmails.add(email);
+    }
+  }
+
+  const maxLeads = Math.max(
+    1,
+    Number(input.maxLeads ?? DEFAULT_EXPERIMENT_RUN_LEAD_TARGET) || DEFAULT_EXPERIMENT_RUN_LEAD_TARGET
+  );
+  const selected = new Map<string, LaunchSeedLead>();
+  for (const leads of leadLists) {
+    for (const lead of leads) {
+      const email = extractFirstEmailAddress(lead.email).toLowerCase();
+      if (!email || blockedEmails.has(email) || selected.has(email)) {
+        continue;
+      }
+      if (!isReusableExperimentLeadStatus(lead.status)) {
+        continue;
+      }
+      if (getLeadEmailSuppressionReason(email)) {
+        continue;
+      }
+      selected.set(email, {
+        email,
+        name: lead.name,
+        company: lead.company,
+        title: lead.title,
+        domain: lead.domain,
+        sourceUrl: lead.sourceUrl,
+      });
+      if (selected.size >= maxLeads) {
+        return [...selected.values()];
+      }
+    }
+  }
+
+  return [...selected.values()];
+}
+
 export async function launchExperimentRun(input: {
   brandId: string;
   campaignId: string;
@@ -11007,6 +11085,54 @@ export async function launchExperimentRun(input: {
     };
   }
 
+  const maxSeedLeads =
+    input.maxLeadsOverride !== undefined
+      ? Math.max(1, Math.min(500, Number(input.maxLeadsOverride) || 0))
+      : DEFAULT_EXPERIMENT_RUN_LEAD_TARGET;
+  const seedLeads = await collectReusableLaunchSeedLeads({
+    brandId: input.brandId,
+    campaignId: input.campaignId,
+    experimentId: experiment.id,
+    ownerType: input.ownerType,
+    ownerId: input.ownerId,
+    maxLeads: maxSeedLeads,
+  });
+  if (!seedLeads.length) {
+    const reason = "No reusable approved prospects are available for this experiment yet";
+    const failed = await createOutreachRun({
+      brandId: input.brandId,
+      campaignId: input.campaignId,
+      experimentId: experiment.id,
+      hypothesisId: hypothesis.id,
+      ownerType: input.ownerType,
+      ownerId: input.ownerId,
+      accountId: brandAccount.deliveryAccount.id,
+      status: "preflight_failed",
+      dailyCap: experiment.runPolicy?.dailyCap ?? 30,
+      hourlyCap: experiment.runPolicy?.hourlyCap ?? 6,
+      timezone: experiment.runPolicy?.timezone || DEFAULT_TIMEZONE,
+      minSpacingMinutes: experiment.runPolicy?.minSpacingMinutes ?? 8,
+      lastError: reason,
+    });
+    await markExperimentExecutionStatus(input.brandId, input.campaignId, experiment.id, "failed");
+    await createOutreachEvent({
+      runId: failed.id,
+      eventType: "hypothesis_approved_auto_run_queued",
+      payload: {
+        trigger: input.trigger,
+        outcome: "preflight_failed",
+        reason,
+        hint: "Resolve approved EnrichAnything prospects first, then relaunch.",
+      },
+    });
+    return {
+      ok: false,
+      runId: failed.id,
+      reason,
+      hint: "Resolve approved EnrichAnything prospects first, then relaunch.",
+    };
+  }
+
   const run = await createOutreachRun({
     brandId: input.brandId,
     campaignId: input.campaignId,
@@ -11022,23 +11148,54 @@ export async function launchExperimentRun(input: {
     minSpacingMinutes: experiment.runPolicy?.minSpacingMinutes ?? 8,
   });
 
-  await enqueueOutreachJob({
+  const seededLeads = await upsertRunLeads(run.id, input.brandId, input.campaignId, seedLeads);
+  await updateOutreachRun(run.id, {
+    status: input.sampleOnly ? "completed" : "queued",
+    completedAt: input.sampleOnly ? nowIso() : "",
+    lastError: "",
+    sourcingTraceSummary: {
+      phase: "completed",
+      selectedActorIds: ["approved_owner_leads"],
+      lastActorInputError: "",
+      failureStep: "",
+      budgetUsedUsd: 0,
+    },
+    metrics: buildLiveRunMetrics({
+      run,
+      messages: [],
+      threads: [],
+      sourcedLeads: seededLeads.length,
+    }),
+  });
+  await createOutreachEvent({
     runId: run.id,
-    jobType: "source_leads",
-    executeAfter: nowIso(),
+    eventType: "lead_sourcing_seeded_from_owner",
     payload: {
-      sampleOnly: input.sampleOnly === true,
-      maxLeadsOverride:
-        input.maxLeadsOverride !== undefined
-          ? Math.max(1, Math.min(500, Number(input.maxLeadsOverride) || 0))
-          : undefined,
+      count: seededLeads.length,
+      source: input.ownerType ? `${input.ownerType}_owner_runs` : "runtime_experiment_runs",
     },
   });
-  await markExperimentExecutionStatus(input.brandId, input.campaignId, experiment.id, "queued");
+  if (!input.sampleOnly) {
+    await enqueueOutreachJob({
+      runId: run.id,
+      jobType: "schedule_messages",
+      executeAfter: nowIso(),
+    });
+  }
+  await markExperimentExecutionStatus(
+    input.brandId,
+    input.campaignId,
+    experiment.id,
+    input.sampleOnly ? "completed" : "queued"
+  );
   await createOutreachEvent({
     runId: run.id,
     eventType: "hypothesis_approved_auto_run_queued",
-    payload: { trigger: input.trigger, sampleOnly: input.sampleOnly === true },
+    payload: {
+      trigger: input.trigger,
+      sampleOnly: input.sampleOnly === true,
+      seededLeadCount: seededLeads.length,
+    },
   });
 
   return { ok: true, runId: run.id, reason: "Run queued" };

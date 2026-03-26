@@ -57,6 +57,22 @@ export type ExperimentSendableLeadSummary = {
   runsChecked: number;
 };
 
+export function isReusableExperimentLeadStatus(status: string) {
+  const normalized = String(status ?? "").trim().toLowerCase();
+  return normalized === "new" || normalized === "scheduled";
+}
+
+export function isTerminalExperimentLeadStatus(status: string) {
+  const normalized = String(status ?? "").trim().toLowerCase();
+  return (
+    normalized === "suppressed" ||
+    normalized === "sent" ||
+    normalized === "replied" ||
+    normalized === "bounced" ||
+    normalized === "unsubscribed"
+  );
+}
+
 export const NON_COMPANY_PROFILE_ROOTS = [
   "linkedin.com",
   "linkedin.co",
@@ -622,7 +638,7 @@ export async function countExperimentSendableLeadContacts(
   const emails = new Set<string>();
 
   for (const lead of leadLists.flat()) {
-    if (lead.status === "suppressed") continue;
+    if (!isReusableExperimentLeadStatus(lead.status)) continue;
     const email = extractFirstEmailAddress(lead.email).toLowerCase();
     if (!email) continue;
     const domain = normalizeDomainCandidate(lead.domain || email);

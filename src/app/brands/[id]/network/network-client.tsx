@@ -156,6 +156,10 @@ function senderDailyCap(row: DomainRow) {
 }
 
 function derivedAutomationStatus(row: DomainRow): NonNullable<DomainRow["automationStatus"]> {
+  if (row.senderLaunchState === "paused" || row.senderLaunchState === "blocked") return "attention";
+  if (row.senderLaunchState === "setup" || row.senderLaunchState === "observing") return "testing";
+  if (row.senderLaunchState === "warming" || row.senderLaunchState === "restricted_send") return "warming";
+  if (row.senderLaunchState === "ready") return "ready";
   if (row.automationStatus) return row.automationStatus;
   if (row.role === "brand") return "ready";
   if (row.status === "risky" || row.dnsStatus === "error") return "attention";

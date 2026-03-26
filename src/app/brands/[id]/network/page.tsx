@@ -6,6 +6,7 @@ import {
   listDeliverabilityProbeRuns,
   listOutreachAccounts,
   listRunMessages,
+  listSenderLaunches,
 } from "@/lib/outreach-data";
 import { getOutreachProvisioningSettings } from "@/lib/outreach-provider-settings";
 import { enrichBrandWithSenderHealth } from "@/lib/sender-health";
@@ -66,11 +67,30 @@ function buildSyntheticAssignedSenderRow(input: {
   };
 }
 
+function applySenderLaunchToRow(row: DomainRow, launch: Awaited<ReturnType<typeof listSenderLaunches>>[number] | null): DomainRow {
+  if (!launch) return row;
+  return {
+    ...row,
+    senderLaunchId: launch.id,
+    senderLaunchPlanType: launch.planType,
+    senderLaunchState: launch.state,
+    senderLaunchScore: launch.readinessScore,
+    senderLaunchSummary: launch.summary,
+    senderLaunchNextStep: launch.nextStep,
+    senderLaunchTopicSummary: launch.topicSummary,
+    senderLaunchDailyCap: launch.dailyCap,
+    senderLaunchLastEvaluatedAt: launch.lastEvaluatedAt,
+    senderLaunchAutopilotMode: launch.autopilotMode,
+    senderLaunchAutopilotAllowedDomains: launch.autopilotAllowedDomains,
+    senderLaunchAutopilotBlockedDomains: launch.autopilotBlockedDomains,
+  };
+}
+
 export default async function NetworkPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const brand = await getBrandById(id);
   if (!brand) notFound();
-  const [enrichedBrand, allBrands, accounts, provisioningSettings, assignment, probeRuns, brandRuns] = await Promise.all([
+  const [enrichedBrand, allBrands, accounts, provisioningSettings, assignment, probeRuns, brandRuns, senderLaunches] = await Promise.all([
     enrichBrandWithSenderHealth(brand),
     listBrands(),
     listOutreachAccounts(),
@@ -78,7 +98,25 @@ export default async function NetworkPage({ params }: { params: Promise<{ id: st
     getBrandOutreachAssignment(brand.id),
     listDeliverabilityProbeRuns({ brandId: brand.id, limit: 300 }),
     listBrandRuns(brand.id),
+    listSenderLaunches({ brandId: brand.id }, { allowMissingTable: true }),
   ]);
+  const senderLaunchByAccountId = new Map(senderLaunches.map((launch) => [launch.senderAccountId, launch] as const));
+  const senderLaunchByEmail = new Map(
+    senderLaunches
+      .map((launch) => [launch.fromEmail.trim().toLowerCase(), launch] as const)
+      .filter(([fromEmail]) => Boolean(fromEmail))
+  );
+  const launchAwareBrand = {
+    ...enrichedBrand,
+    domains: enrichedBrand.domains.map((row) => {
+      const launch =
+        (getDomainDeliveryAccountId(row)
+          ? senderLaunchByAccountId.get(getDomainDeliveryAccountId(row)) ?? null
+          : null) ||
+        (row.fromEmail ? senderLaunchByEmail.get(String(row.fromEmail).trim().toLowerCase()) ?? null : null);
+      return applySenderLaunchToRow(row, launch);
+    }),
+  };
   const mailboxAccounts = accounts.filter(
     (account) => account.accountType !== "delivery" && !account.name.trim().toLowerCase().startsWith("deliverability ")
   );
@@ -94,10 +132,10 @@ export default async function NetworkPage({ params }: { params: Promise<{ id: st
     ].filter(Boolean)
   );
   const senderAccountIds = new Set(
-    enrichedBrand.domains.map((row) => getDomainDeliveryAccountId(row)).filter((value): value is string => Boolean(value))
+    launchAwareBrand.domains.map((row) => getDomainDeliveryAccountId(row)).filter((value): value is string => Boolean(value))
   );
   const senderEmails = new Set(
-    enrichedBrand.domains
+    launchAwareBrand.domains
       .map((row) => String(row.fromEmail ?? "").trim().toLowerCase())
       .filter(Boolean)
   );
@@ -115,8 +153,8 @@ export default async function NetworkPage({ params }: { params: Promise<{ id: st
     const fromEmail = getOutreachAccountFromEmail(account).trim().toLowerCase();
     if (!fromEmail) return [];
     const existingRow =
-      enrichedBrand.domains.find((row) => getDomainDeliveryAccountId(row) === account.id) ??
-      enrichedBrand.domains.find((row) => String(row.fromEmail ?? "").trim().toLowerCase() === fromEmail) ??
+      launchAwareBrand.domains.find((row) => getDomainDeliveryAccountId(row) === account.id) ??
+      launchAwareBrand.domains.find((row) => String(row.fromEmail ?? "").trim().toLowerCase() === fromEmail) ??
       null;
     if (existingRow) return [];
     return [
@@ -132,8 +170,8 @@ export default async function NetworkPage({ params }: { params: Promise<{ id: st
     ];
   });
   const mergedBrand = {
-    ...enrichedBrand,
-    domains: [...enrichedBrand.domains, ...syntheticAssignedSenderRows],
+    ...launchAwareBrand,
+    domains: [...launchAwareBrand.domains, ...syntheticAssignedSenderRows],
   };
   const senderScorecards = buildSenderDeliverabilityScorecards({
     probeRuns,

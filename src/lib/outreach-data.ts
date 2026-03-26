@@ -1,6 +1,10 @@
 import { mkdir, readFile, writeFile } from "fs/promises";
 import { createId } from "@/lib/factory-data";
 import {
+  normalizeLegacyOutreachErrorText,
+  normalizeLegacyOutreachValue,
+} from "@/lib/outreach-error-normalization";
+import {
   buildCustomerIoBillingSummary,
   currentCustomerIoBillingPeriodStart,
   mergeOutreachAccountConfig,
@@ -462,6 +466,18 @@ function defaultRunMetrics(): OutreachRun["metrics"] {
   };
 }
 
+function sanitizeRunTraceSummary(
+  value: OutreachRun["sourcingTraceSummary"] | null | undefined
+): OutreachRun["sourcingTraceSummary"] {
+  return {
+    phase: value?.phase ?? "plan_sourcing",
+    selectedActorIds: Array.isArray(value?.selectedActorIds) ? value.selectedActorIds : [],
+    lastActorInputError: normalizeLegacyOutreachErrorText(value?.lastActorInputError ?? ""),
+    failureStep: String(value?.failureStep ?? ""),
+    budgetUsedUsd: Math.max(0, Number(value?.budgetUsedUsd ?? 0) || 0),
+  };
+}
+
 function mapRunRow(input: unknown): OutreachRun {
   const row = asRecord(input);
   const campaignId = String(row.campaign_id ?? row.campaignId ?? "");
@@ -501,12 +517,12 @@ function mapRunRow(input: unknown): OutreachRun {
     timezone: String(row.timezone ?? "America/Los_Angeles"),
     minSpacingMinutes: Number(row.min_spacing_minutes ?? row.minSpacingMinutes ?? 8),
     pauseReason: String(row.pause_reason ?? row.pauseReason ?? ""),
-    lastError: String(row.last_error ?? row.lastError ?? ""),
+    lastError: normalizeLegacyOutreachErrorText(row.last_error ?? row.lastError ?? ""),
     externalRef: String(row.external_ref ?? row.externalRef ?? ""),
     metrics: row.metrics ? mapRunMetrics(row.metrics) : defaultRunMetrics(),
     sourcingTraceSummary:
       row.sourcing_trace_summary && typeof row.sourcing_trace_summary === "object"
-        ? ({
+        ? sanitizeRunTraceSummary({
             phase: String((row.sourcing_trace_summary as Record<string, unknown>).phase ?? "plan_sourcing") as
               | "plan_sourcing"
               | "probe_chain"
@@ -529,13 +545,7 @@ function mapRunRow(input: unknown): OutreachRun {
               Number((row.sourcing_trace_summary as Record<string, unknown>).budgetUsedUsd ?? 0) || 0
             ),
           })
-        : {
-            phase: "plan_sourcing",
-            selectedActorIds: [],
-            lastActorInputError: "",
-            failureStep: "",
-            budgetUsedUsd: 0,
-          },
+        : sanitizeRunTraceSummary(null),
     startedAt: String(row.started_at ?? row.startedAt ?? ""),
     completedAt: String(row.completed_at ?? row.completedAt ?? ""),
     createdAt: String(row.created_at ?? row.createdAt ?? nowIso()),
@@ -1031,8 +1041,8 @@ function mapJobRow(input: unknown): OutreachJob {
     executeAfter: String(row.execute_after ?? row.executeAfter ?? nowIso()),
     attempts: Number(row.attempts ?? 0),
     maxAttempts: Number(row.max_attempts ?? row.maxAttempts ?? 5),
-    payload: asRecord(row.payload),
-    lastError: String(row.last_error ?? row.lastError ?? ""),
+    payload: asRecord(normalizeLegacyOutreachValue(asRecord(row.payload))),
+    lastError: normalizeLegacyOutreachErrorText(row.last_error ?? row.lastError ?? ""),
     createdAt: String(row.created_at ?? row.createdAt ?? nowIso()),
     updatedAt: String(row.updated_at ?? row.updatedAt ?? nowIso()),
   };
@@ -1044,7 +1054,7 @@ function mapEventRow(input: unknown): OutreachEvent {
     id: String(row.id ?? ""),
     runId: String(row.run_id ?? row.runId ?? ""),
     eventType: String(row.event_type ?? row.eventType ?? ""),
-    payload: asRecord(row.payload),
+    payload: asRecord(normalizeLegacyOutreachValue(asRecord(row.payload))),
     createdAt: String(row.created_at ?? row.createdAt ?? nowIso()),
   };
 }
@@ -1209,6 +1219,16 @@ function mapSenderLaunchRow(input: unknown): SenderLaunch {
     pauseReason: String(row.pause_reason ?? row.pauseReason ?? "").trim(),
     lastEventAt: String(row.last_event_at ?? row.lastEventAt ?? "").trim(),
     lastEvaluatedAt: String(row.last_evaluated_at ?? row.lastEvaluatedAt ?? "").trim(),
+    autopilotMode:
+      String(row.autopilot_mode ?? row.autopilotMode ?? "").trim() === "curated_only"
+        ? "curated_only"
+        : "curated_plus_open_web",
+    autopilotAllowedDomains: asArray(row.autopilot_allowed_domains ?? row.autopilotAllowedDomains)
+      .map((entry) => String(entry ?? "").trim().toLowerCase())
+      .filter(Boolean),
+    autopilotBlockedDomains: asArray(row.autopilot_blocked_domains ?? row.autopilotBlockedDomains)
+      .map((entry) => String(entry ?? "").trim().toLowerCase())
+      .filter(Boolean),
     createdAt: String(row.created_at ?? row.createdAt ?? nowIso()),
     updatedAt: String(row.updated_at ?? row.updatedAt ?? nowIso()),
   };
@@ -1257,6 +1277,7 @@ function mapSenderLaunchEventRow(input: unknown): SenderLaunchEvent {
     eventType: [
       "launch_initialized",
       "topic_profile_refreshed",
+      "autopilot_policy_updated",
       "bridge_inbound_recorded",
       "opt_in_scheduled",
       "opt_in_completed",
@@ -1622,9 +1643,17 @@ async function hydrateOutreachAccountCustomerIoBilling(account: OutreachAccount)
     return account;
   }
   const billingPeriodStart = currentCustomerIoBillingPeriodStart(account.config.customerIo.billing.billingCycleAnchorDay);
-  const admittedProfiles = await countCustomerIoProfileAdmissions(account.id, billingPeriodStart, {
-    allowMissingTable: true,
-  });
+  let admittedProfiles = 0;
+  try {
+    admittedProfiles = await countCustomerIoProfileAdmissions(account.id, billingPeriodStart, {
+      allowMissingTable: true,
+    });
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : "Unknown Customer.io billing hydration failure";
+    console.error(
+      `[outreach] Failed to hydrate Customer.io billing for ${account.id}; continuing without live admission count: ${detail}`
+    );
+  }
   return {
     ...account,
     customerIoBilling: buildCustomerIoBillingSummary({
@@ -2576,6 +2605,7 @@ export async function createOutreachRun(input: {
   lastError?: string;
 }): Promise<OutreachRun> {
   const now = nowIso();
+  const sanitizedLastError = normalizeLegacyOutreachErrorText(input.lastError ?? "");
   const run: OutreachRun = {
     id: createId("run"),
     brandId: input.brandId,
@@ -2596,16 +2626,16 @@ export async function createOutreachRun(input: {
     timezone: input.timezone ?? "America/Los_Angeles",
     minSpacingMinutes: Number(input.minSpacingMinutes ?? 8),
     pauseReason: input.pauseReason ?? "",
-    lastError: input.lastError ?? "",
+    lastError: sanitizedLastError,
     externalRef: input.externalRef ?? "",
     metrics: defaultRunMetrics(),
-    sourcingTraceSummary: {
+    sourcingTraceSummary: sanitizeRunTraceSummary({
       phase: "plan_sourcing",
       selectedActorIds: [],
       lastActorInputError: "",
       failureStep: "",
       budgetUsedUsd: 0,
-    },
+    }),
     startedAt: now,
     completedAt: "",
     createdAt: now,
@@ -2672,6 +2702,12 @@ export async function updateOutreachRun(
   >
 ): Promise<OutreachRun | null> {
   const now = nowIso();
+  const sanitizedLastError =
+    patch.lastError === undefined ? undefined : normalizeLegacyOutreachErrorText(patch.lastError);
+  const sanitizedTraceSummary =
+    patch.sourcingTraceSummary === undefined
+      ? undefined
+      : sanitizeRunTraceSummary(patch.sourcingTraceSummary);
 
   const supabase = getSupabaseAdmin();
   if (supabase) {
@@ -2683,10 +2719,10 @@ export async function updateOutreachRun(
     if (patch.timezone !== undefined) update.timezone = patch.timezone;
     if (patch.minSpacingMinutes !== undefined) update.min_spacing_minutes = patch.minSpacingMinutes;
     if (patch.pauseReason !== undefined) update.pause_reason = patch.pauseReason;
-    if (patch.lastError !== undefined) update.last_error = patch.lastError;
+    if (sanitizedLastError !== undefined) update.last_error = sanitizedLastError;
     if (patch.externalRef !== undefined) update.external_ref = patch.externalRef;
     if (patch.metrics) update.metrics = patch.metrics;
-    if (patch.sourcingTraceSummary !== undefined) update.sourcing_trace_summary = patch.sourcingTraceSummary;
+    if (sanitizedTraceSummary !== undefined) update.sourcing_trace_summary = sanitizedTraceSummary;
     if (patch.completedAt !== undefined) update.completed_at = patch.completedAt || null;
 
     const { data, error } = await supabase
@@ -2706,6 +2742,8 @@ export async function updateOutreachRun(
   store.runs[idx] = {
     ...store.runs[idx],
     ...patch,
+    ...(sanitizedLastError === undefined ? {} : { lastError: sanitizedLastError }),
+    ...(sanitizedTraceSummary === undefined ? {} : { sourcingTraceSummary: sanitizedTraceSummary }),
     updatedAt: now,
   };
   await writeLocalStore(store);
@@ -2806,6 +2844,109 @@ export async function listOwnerRuns(
         row.ownerId === ownerId
     )
     .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
+}
+
+function chunkStrings(values: string[], size = 100) {
+  const chunks: string[][] = [];
+  for (let index = 0; index < values.length; index += size) {
+    chunks.push(values.slice(index, index + size));
+  }
+  return chunks;
+}
+
+export async function deleteOutreachRunsByIds(runIds: string[]): Promise<number> {
+  const uniqueRunIds = Array.from(new Set(runIds.map((value) => String(value ?? "").trim()).filter(Boolean)));
+  if (!uniqueRunIds.length) return 0;
+
+  const supabase = getSupabaseAdmin();
+  if (supabase) {
+    for (const runIdChunk of chunkStrings(uniqueRunIds)) {
+      const { data: threadRows } = await supabase
+        .from(TABLE_THREAD)
+        .select("id")
+        .in("run_id", runIdChunk);
+      const threadIds = Array.from(
+        new Set(
+          (threadRows ?? [])
+            .map((row: unknown) => String(asRecord(row).id ?? "").trim())
+            .filter(Boolean)
+        )
+      );
+
+      if (threadIds.length) {
+        for (const threadIdChunk of chunkStrings(threadIds)) {
+          await supabase.from(TABLE_REPLY_THREAD_FEEDBACK).delete().in("thread_id", threadIdChunk);
+        }
+      }
+
+      await Promise.all([
+        supabase.from(TABLE_THREAD_STATE).delete().in("run_id", runIdChunk),
+        supabase.from(TABLE_REPLY_MESSAGE).delete().in("run_id", runIdChunk),
+        supabase.from(TABLE_REPLY_DRAFT).delete().in("run_id", runIdChunk),
+        supabase.from(TABLE_THREAD).delete().in("run_id", runIdChunk),
+        supabase.from(TABLE_MESSAGE).delete().in("run_id", runIdChunk),
+        supabase.from(TABLE_RUN_LEAD).delete().in("run_id", runIdChunk),
+        supabase.from(TABLE_EVENT).delete().in("run_id", runIdChunk),
+        supabase.from(TABLE_JOB).delete().in("run_id", runIdChunk),
+        supabase.from(TABLE_ANOMALY).delete().in("run_id", runIdChunk),
+        supabase.from(TABLE_CUSTOMER_IO_PROFILE_ADMISSION).delete().in("source_run_id", runIdChunk),
+        supabase.from(TABLE_SOURCING_CHAIN_DECISION).delete().in("run_id", runIdChunk),
+        supabase.from(TABLE_SOURCING_PROBE_RESULT).delete().in("run_id", runIdChunk),
+        supabase.from(TABLE_DELIVERABILITY_SEED_RESERVATION).delete().in("run_id", runIdChunk),
+        supabase.from(TABLE_DELIVERABILITY_PROBE_RUN).delete().in("run_id", runIdChunk),
+      ]);
+
+      await supabase.from(TABLE_RUN).delete().in("id", runIdChunk);
+    }
+  }
+
+  if (!isVercel) {
+    const store = await readLocalStore();
+    const runIdSet = new Set(uniqueRunIds);
+    const threadIdSet = new Set(
+      store.replyThreads
+        .filter((row) => runIdSet.has(row.runId))
+        .map((row) => row.id)
+    );
+
+    store.customerIoProfileAdmissions = store.customerIoProfileAdmissions.filter(
+      (row) => !runIdSet.has(row.sourceRunId)
+    );
+    store.runs = store.runs.filter((row) => !runIdSet.has(row.id));
+    store.runLeads = store.runLeads.filter((row) => !runIdSet.has(row.runId));
+    store.messages = store.messages.filter((row) => !runIdSet.has(row.runId));
+    store.replyThreads = store.replyThreads.filter((row) => !runIdSet.has(row.runId));
+    store.replyThreadStates = store.replyThreadStates.filter(
+      (row) => !runIdSet.has(row.runId) && !threadIdSet.has(row.threadId)
+    );
+    store.replyMessages = store.replyMessages.filter(
+      (row) => !runIdSet.has(row.runId) && !threadIdSet.has(row.threadId)
+    );
+    store.replyDrafts = store.replyDrafts.filter(
+      (row) => !runIdSet.has(row.runId) && !threadIdSet.has(row.threadId)
+    );
+    store.replyThreadFeedback = store.replyThreadFeedback.filter(
+      (row) => !threadIdSet.has(row.threadId)
+    );
+    store.anomalies = store.anomalies.filter((row) => !runIdSet.has(row.runId));
+    store.events = store.events.filter((row) => !runIdSet.has(row.runId));
+    store.jobs = store.jobs.filter((row) => !runIdSet.has(row.runId));
+    store.deliverabilityProbeRuns = store.deliverabilityProbeRuns.filter(
+      (row) => !runIdSet.has(row.runId)
+    );
+    store.deliverabilitySeedReservations = store.deliverabilitySeedReservations.filter(
+      (row) => !runIdSet.has(row.runId)
+    );
+    store.sourcingChainDecisions = store.sourcingChainDecisions.filter(
+      (row) => !runIdSet.has(row.runId)
+    );
+    store.sourcingProbeResults = store.sourcingProbeResults.filter(
+      (row) => !runIdSet.has(row.runId)
+    );
+    await writeLocalStore(store);
+  }
+
+  return uniqueRunIds.length;
 }
 
 export async function upsertRunLeads(
@@ -4084,11 +4225,12 @@ export async function createOutreachEvent(input: {
   eventType: string;
   payload?: Record<string, unknown>;
 }): Promise<OutreachEvent> {
+  const sanitizedPayload = asRecord(normalizeLegacyOutreachValue(input.payload ?? {}));
   const event: OutreachEvent = {
     id: createId("event"),
     runId: input.runId,
     eventType: input.eventType,
-    payload: input.payload ?? {},
+    payload: sanitizedPayload,
     createdAt: nowIso(),
   };
 
@@ -4098,7 +4240,7 @@ export async function createOutreachEvent(input: {
       id: event.id,
       run_id: event.runId,
       event_type: event.eventType,
-      payload: event.payload,
+      payload: sanitizedPayload,
     });
     if (!error) {
       return event;
@@ -4157,10 +4299,24 @@ export async function enqueueOutreachJob(input: {
   payload?: Record<string, unknown>;
   maxAttempts?: number;
 }): Promise<OutreachJob> {
+  if (input.jobType === "source_leads") {
+    throw new OutreachDataError(
+      "Legacy source_leads jobs are disabled. Launches must use approved EnrichAnything prospects with work emails.",
+      {
+        status: 400,
+        hint: "Seed runs from approved EnrichAnything table leads and queue schedule_messages instead.",
+        debug: {
+          runId: input.runId,
+          jobType: input.jobType,
+          migration: "enrichanything_only",
+        },
+      }
+    );
+  }
   const now = nowIso();
   const singletonJobType = SINGLETON_OUTREACH_JOB_TYPES.has(input.jobType);
   const requestedExecuteAfter = input.executeAfter ?? now;
-  const requestedPayload = input.payload ?? {};
+  const requestedPayload = asRecord(normalizeLegacyOutreachValue(input.payload ?? {}));
   const requestedMaxAttempts = input.maxAttempts ?? 5;
   const job: OutreachJob = {
     id: createId("job"),
@@ -4312,6 +4468,34 @@ export async function listDueOutreachJobs(limit = 25): Promise<OutreachJob[]> {
     .slice(0, limit);
 }
 
+export async function listActiveOutreachJobsByType(input: {
+  jobType: OutreachJobType;
+  statuses?: OutreachJobStatus[];
+  limit?: number;
+}): Promise<OutreachJob[]> {
+  const statuses = Array.from(new Set(input.statuses ?? ["queued", "running"]));
+  const limit = Math.max(1, Math.min(200, Number(input.limit ?? 50) || 50));
+  const supabase = getSupabaseAdmin();
+  if (supabase) {
+    const { data, error } = await supabase
+      .from(TABLE_JOB)
+      .select("*")
+      .eq("job_type", input.jobType)
+      .in("status", statuses)
+      .order("updated_at", { ascending: false })
+      .limit(limit);
+    if (!error) {
+      return (data ?? []).map((row: unknown) => mapJobRow(row));
+    }
+  }
+
+  const store = await readLocalStore();
+  return store.jobs
+    .filter((row) => row.jobType === input.jobType && statuses.includes(row.status))
+    .sort((left, right) => (left.updatedAt < right.updatedAt ? 1 : -1))
+    .slice(0, limit);
+}
+
 export async function reclaimStaleRunningOutreachJobs(input?: {
   staleAfterMinutes?: number;
   limit?: number;
@@ -4387,14 +4571,18 @@ export async function updateOutreachJob(
   patch: Partial<Pick<OutreachJob, "status" | "executeAfter" | "attempts" | "lastError" | "payload">>
 ): Promise<OutreachJob | null> {
   const now = nowIso();
+  const sanitizedLastError =
+    patch.lastError === undefined ? undefined : normalizeLegacyOutreachErrorText(patch.lastError);
+  const sanitizedPayload =
+    patch.payload === undefined ? undefined : asRecord(normalizeLegacyOutreachValue(patch.payload));
   const supabase = getSupabaseAdmin();
   if (supabase) {
     const update: Record<string, unknown> = { updated_at: now };
     if (patch.status) update.status = patch.status;
     if (patch.executeAfter !== undefined) update.execute_after = patch.executeAfter;
     if (patch.attempts !== undefined) update.attempts = patch.attempts;
-    if (patch.lastError !== undefined) update.last_error = patch.lastError;
-    if (patch.payload !== undefined) update.payload = patch.payload;
+    if (sanitizedLastError !== undefined) update.last_error = sanitizedLastError;
+    if (sanitizedPayload !== undefined) update.payload = sanitizedPayload;
 
     const { data, error } = await supabase
       .from(TABLE_JOB)
@@ -4413,6 +4601,8 @@ export async function updateOutreachJob(
   store.jobs[idx] = {
     ...store.jobs[idx],
     ...patch,
+    ...(sanitizedLastError === undefined ? {} : { lastError: sanitizedLastError }),
+    ...(sanitizedPayload === undefined ? {} : { payload: sanitizedPayload }),
     updatedAt: now,
   };
   await writeLocalStore(store);
@@ -5536,6 +5726,13 @@ export async function upsertSenderLaunch(
     pauseReason: String(input.pauseReason ?? "").trim(),
     lastEventAt: String(input.lastEventAt ?? "").trim(),
     lastEvaluatedAt: String(input.lastEvaluatedAt ?? "").trim() || now,
+    autopilotMode: input.autopilotMode === "curated_only" ? "curated_only" : "curated_plus_open_web",
+    autopilotAllowedDomains: input.autopilotAllowedDomains
+      .map((entry) => String(entry ?? "").trim().toLowerCase())
+      .filter(Boolean),
+    autopilotBlockedDomains: input.autopilotBlockedDomains
+      .map((entry) => String(entry ?? "").trim().toLowerCase())
+      .filter(Boolean),
     createdAt: existing?.createdAt ?? input.createdAt ?? now,
     updatedAt: now,
   };
@@ -5573,6 +5770,9 @@ export async function upsertSenderLaunch(
       pause_reason: launch.pauseReason,
       last_event_at: launch.lastEventAt || null,
       last_evaluated_at: launch.lastEvaluatedAt || null,
+      autopilot_mode: launch.autopilotMode,
+      autopilot_allowed_domains: launch.autopilotAllowedDomains,
+      autopilot_blocked_domains: launch.autopilotBlockedDomains,
       created_at: launch.createdAt,
       updated_at: launch.updatedAt,
     };

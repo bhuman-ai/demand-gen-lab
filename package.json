@@ -9,6 +9,8 @@
     "lint": "eslint",
     "namecheap:relay": "node scripts/namecheap-relay.mjs",
     "plan:generate": "node scripts/plan-generator.mjs",
+    "experiments:enrichanything:report-comments": "python3 scripts/setup_enrichanything_report_comment_experiments.py",
+    "experiments:enrichanything:source-report-comments": "python3 scripts/source_enrichanything_report_comment_leads.py",
     "test:e2e": "playwright test",
     "test:e2e:headed": "playwright test --headed",
     "test:e2e:ui": "playwright test --ui",

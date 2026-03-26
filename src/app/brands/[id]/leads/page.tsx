@@ -4,7 +4,7 @@ import { notFound } from "next/navigation";
 
 export default async function LeadsPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const brand = await getBrandById(id);
+  const brand = await getBrandById(id, { includeEmbedded: true });
   if (!brand) notFound();
   return <LeadsClient brand={brand} />;
 }

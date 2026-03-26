@@ -17,6 +17,13 @@ export async function POST(
     const { brandId } = await context.params;
     const body = asRecord(await request.json());
     const registrant = asRecord(body.registrant);
+    const normalizedDomainMode = String(body.domainMode ?? "").toLowerCase().trim();
+    const domainMode =
+      normalizedDomainMode === "register"
+        ? "register"
+        : normalizedDomainMode === "transfer"
+          ? "transfer"
+          : "existing";
 
     const result = await provisionSender({
       brandId,
@@ -24,7 +31,7 @@ export async function POST(
       accountName: String(body.accountName ?? ""),
       assignToBrand: body.assignToBrand !== false,
       selectedMailboxAccountId: String(body.selectedMailboxAccountId ?? ""),
-      domainMode: String(body.domainMode ?? "").toLowerCase() === "register" ? "register" : "existing",
+      domainMode,
       domain: String(body.domain ?? ""),
       fromLocalPart: String(body.fromLocalPart ?? ""),
       autoPickCustomerIoAccount: body.autoPickCustomerIoAccount !== false,

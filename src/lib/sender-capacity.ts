@@ -79,6 +79,15 @@ function automationFactor(status?: DomainRow["automationStatus"]) {
   return 0.65;
 }
 
+function launchFactor(state?: DomainRow["senderLaunchState"]) {
+  if (state === "ready") return 1;
+  if (state === "restricted_send") return 0.65;
+  if (state === "warming") return 0.5;
+  if (state === "observing") return 0.25;
+  if (state === "paused" || state === "blocked" || state === "setup") return 0;
+  return 1;
+}
+
 function healthStatusFactor(status?: DomainRow["domainHealth"]) {
   if (status === "healthy") return 1;
   if (status === "watch") return 0.82;
@@ -173,9 +182,10 @@ export function calculateSenderCapacityPolicy(input: {
   const baseHourlyCap = Math.max(1, Math.ceil(baseDailyCap / safeBusinessHours));
 
   const nextAutomationFactor = automationFactor(input.row?.automationStatus);
+  const nextLaunchFactor = launchFactor(input.row?.senderLaunchState);
   const nextHealthFactor = worstHealthFactor(input.row);
   const nextDeliverabilityFactor = deliverabilityFactor(input.scorecard);
-  const confidence = Math.min(nextAutomationFactor, nextHealthFactor, nextDeliverabilityFactor);
+  const confidence = Math.min(nextAutomationFactor, nextLaunchFactor, nextHealthFactor, nextDeliverabilityFactor);
   const minimumCap = confidence <= 0 ? 0 : input.row?.automationStatus === "ready" ? 10 : 5;
   const dailyCap =
     confidence <= 0 ? 0 : Math.min(baseDailyCap, Math.max(minimumCap, Math.round(baseDailyCap * confidence)));

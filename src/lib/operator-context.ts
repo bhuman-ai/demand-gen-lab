@@ -353,7 +353,11 @@ async function listOperatorExperimentItems(brandId: string): Promise<ExperimentL
       if (!runs.length && experiment.runtime.campaignId && experiment.runtime.experimentId) {
         runs = await listExperimentRuns(brandId, experiment.runtime.campaignId, experiment.runtime.experimentId);
       }
-      const latestRun = runs[0] ?? null;
+      const preferredRunId = experiment.lastRunId.trim();
+      const latestRun =
+        (preferredRunId ? runs.find((run) => run.id === preferredRunId) ?? null : null) ??
+        runs[0] ??
+        null;
       return mapExperimentToListItem({
         brandId,
         experiment,
@@ -365,7 +369,7 @@ async function listOperatorExperimentItems(brandId: string): Promise<ExperimentL
 }
 
 export async function getOperatorBrandContext(brandId: string): Promise<OperatorBrandContext | null> {
-  const brand = await getBrandById(brandId);
+  const brand = await getBrandById(brandId, { includeEmbedded: true });
   if (!brand) return null;
 
   const [enrichedBrand, assignment, accounts, settings, scaleCampaigns, experimentItems, inboxData, mailpoolDomains] = await Promise.all([

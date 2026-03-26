@@ -33,15 +33,176 @@ export type {
 };
 
 const isVercel = Boolean(process.env.VERCEL);
+const BUNDLED_BRANDS_PATH = `${process.cwd()}/data/brands.v2.json`;
 const BRANDS_PATH = isVercel
   ? "/tmp/factory_brands.json"
-  : `${process.cwd()}/data/brands.v2.json`;
+  : BUNDLED_BRANDS_PATH;
 const CAMPAIGNS_PATH = isVercel
   ? "/tmp/factory_campaigns.json"
   : `${process.cwd()}/data/campaigns.v2.json`;
+const SUPABASE_QUERY_TIMEOUT_MS = 1_500;
+const EMBEDDED_BRAND_FALLBACKS: BrandRecord[] = [
+  {
+    id: "brand_e8e92eeeba824a93",
+    name: "SwarmTester",
+    website: "https://swarmtester.com/",
+    tone: "",
+    notes: "QA/testing brand workspace.",
+    product: "",
+    targetMarkets: [],
+    idealCustomerProfiles: [],
+    keyFeatures: [],
+    keyBenefits: [],
+    domains: [],
+    leads: [],
+    inbox: [],
+    createdAt: "2026-03-25T12:47:36.255244+00:00",
+    updatedAt: "2026-03-25T12:52:46.433368+00:00",
+  },
+  {
+    id: "brand_7936be472e1247c7",
+    name: "selffunded.dev",
+    website: "https://selffunded.dev/",
+    tone: "Direct, credible, operator-to-operator",
+    notes:
+      "Private collective for self-funded operators. Current outreach offer: AWS credits for founders with no institutional VC; angels and friends/family are acceptable. Use Marco Rosetti as the sender voice.",
+    product: "Private operator collective with negotiated cloud and software deals for self-funded founders",
+    targetMarkets: ["Bootstrapped SaaS founders", "Self-funded operators"],
+    idealCustomerProfiles: ["Founders with no institutional VC"],
+    keyFeatures: [
+      "AWS credits for selffunded brands",
+      "Exclusive free access to business software",
+    ],
+    keyBenefits: [
+      "AWS credits to offset cloud spend",
+      "Access to negotiated software and cloud offers",
+    ],
+    domains: [],
+    leads: [],
+    inbox: [],
+    createdAt: "2026-03-10T21:58:28.94428+00:00",
+    updatedAt: "2026-03-25T12:49:25.04422+00:00",
+  },
+  {
+    id: "brand_mlg68b9l",
+    name: "BHuman | AI personalized videos at scale",
+    website: "https://bhuman.ai/",
+    tone: "Modern, confident, results-driven, B2B growth-focused",
+    notes:
+      "Claims: trusted by over 200,000 innovators; campaign metrics cited (2x opens, 7x click-throughs, 4x conversions) backed by customer campaign data; testimonials from Steve Anderson, Henry Reith, and Alasdair Sutherland praising ease of use and time savings.",
+    product:
+      "AI platform to create realistic personalized videos at scale (prompt-to-video generation and bulk personalization), with delivery and workflow automation via no-code tools and API.",
+    targetMarkets: [
+      "B2B sales/outbound teams",
+      "Marketing and growth teams",
+      "Customer success and support teams",
+      "Founders and product teams",
+    ],
+    idealCustomerProfiles: [
+      "Outbound sales teams that want warm intros and more meetings using personalized video",
+      "Marketing teams creating social posts, ads, and product update videos quickly",
+      "Customer success teams onboarding users and sending re-engagement/re-ordering videos",
+      "Support teams that want FAQ/help content delivered with a human presenter",
+      "Teams that need multilingual video personalization across global markets",
+    ],
+    keyFeatures: [
+      "Speakeasy: generate full AI videos from a prompt (presenter, script, voice included)",
+      "Personalized Video: create thousands of variants from one base video using CSV or API",
+      "AI presenter with cloned voice",
+      "Dynamic overlays for text, images, names, company, and links",
+      "Batch/bulk rendering and templates in AI Studio",
+      "Delivery and tracking via email/CRM with measurable opens/clicks/conversions",
+      "LinkedIn + email workflows and campaign analytics (Leadr)",
+      "Persona: upload face/voice/knowledge; handles video, audio, and text chats; embeddable concierge",
+    ],
+    keyBenefits: [
+      "Higher reply rates and more booked meetings from 1:1-feeling outreach",
+      "Stronger engagement across email, LinkedIn, and SMS",
+      "Shorter sales cycles through warmer first touches",
+      "Clearer CTAs that don’t feel like mass-blast messaging",
+      "Saves time by automating what used to be manual personalized video recording",
+      "Scales personalized video creation to hundreds or thousands of recipients",
+      "Fast production (render in minutes) with no editing required",
+    ],
+    domains: [],
+    leads: [],
+    inbox: [],
+    createdAt: "2026-02-15T04:12:14.053479+00:00",
+    updatedAt: "2026-03-25T12:47:57.643156+00:00",
+  },
+  {
+    id: "brand_729885c92b1242e1",
+    name: "Don Bosco Art",
+    website: "",
+    tone: "",
+    notes: "This is the user's art account. They want to do outreach to get new painting commissions.",
+    product: "Painting commissions",
+    targetMarkets: [],
+    idealCustomerProfiles: [],
+    keyFeatures: [],
+    keyBenefits: [],
+    domains: [],
+    leads: [],
+    inbox: [],
+    createdAt: "2026-03-24T13:28:33.080909+00:00",
+    updatedAt: "2026-03-25T12:47:37.817523+00:00",
+  },
+  {
+    id: "brand_7bfdb4d1686b4afc",
+    name: "EnrichAnything",
+    website: "https://www.enrichanything.com/",
+    tone: "Direct, operator-to-operator, research-led",
+    notes:
+      "Primary job: publish source-backed market notes and underlying prospect lists, then ask relevant agencies and operators for comment, corrections, and reactions. Priority themes right now: Shopify Meta/no-TikTok gaps, Klaviyo-without-SMS gaps, accounting automation gaps, and recently funded Europe GTM hiring gaps.",
+    product:
+      "Source-backed prospect discovery and market-note generation for overlooked B2B and e-commerce slices.",
+    targetMarkets: [
+      "EU TikTok and paid-social agencies",
+      "Email and SMS retention agencies",
+      "RevOps and GTM systems consultants",
+      "AI automation consultants for SMB professional services",
+    ],
+    idealCustomerProfiles: [
+      "Agencies that make money by acting on narrow, source-backed market lists",
+      "Operators who can comment on report findings and use the source list commercially",
+      "Teams willing to react to a public market note and discuss whether the pattern is real",
+    ],
+    keyFeatures: [
+      "Public market notes tied to source-backed prospect lists",
+      "Representative samples with signal, gap, and timing fields",
+      "Narrow market discovery for agencies and consultants",
+    ],
+    keyBenefits: [
+      "Give agencies a list they can actually work from",
+      "Turn market research into outreach-ready targeting",
+      "Use public notes as a reason to start conversations",
+    ],
+    domains: [],
+    leads: [],
+    inbox: [],
+    createdAt: "2026-03-24T09:47:46.349685+00:00",
+    updatedAt: "2026-03-25T12:40:13.045069+00:00",
+  },
+];
 
 const BRAND_TABLE = "demanddev_brands";
 const CAMPAIGN_TABLE = "demanddev_campaigns";
+const BRAND_BASE_SELECT = [
+  "id",
+  "name",
+  "website",
+  "tone",
+  "notes",
+  "product",
+  "target_markets",
+  "ideal_customer_profiles",
+  "key_features",
+  "key_benefits",
+  "domains",
+  "created_at",
+  "updated_at",
+].join(",");
+const BRAND_EMBEDDED_SELECT = `${BRAND_BASE_SELECT},leads,inbox`;
 
 const nowIso = () => new Date().toISOString();
 
@@ -202,38 +363,95 @@ async function writeJsonArray<T>(filePath: string, rows: T[]) {
   await writeFile(filePath, JSON.stringify(rows, null, 2));
 }
 
-export async function listBrands(): Promise<BrandRecord[]> {
-  const supabase = getSupabaseAdmin();
-  if (supabase) {
-    const { data, error } = await supabase
-      .from(BRAND_TABLE)
-      .select("*")
-      .order("updated_at", { ascending: false });
-    if (!error) {
-      return (data ?? []).map(mapBrandRow);
+async function withTimeout<T>(promise: PromiseLike<T>, ms: number): Promise<T | null> {
+  let timeoutId: ReturnType<typeof setTimeout> | null = null;
+  const timeout = new Promise<null>((resolve) => {
+    timeoutId = setTimeout(() => resolve(null), ms);
+  });
+
+  return Promise.race([Promise.resolve(promise), timeout]).finally(() => {
+    if (timeoutId) {
+      clearTimeout(timeoutId);
     }
-  }
-  const rows = await readJsonArray<BrandRecord>(BRANDS_PATH);
-  return rows
-    .map((row) => mapBrandRow(row))
-    .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1));
+  });
 }
 
-export async function getBrandById(brandId: string): Promise<BrandRecord | null> {
+function mergeBrandStores(primary: BrandRecord[], fallback: BrandRecord[]) {
+  const rows = new Map<string, BrandRecord>();
+
+  for (const row of fallback) {
+    rows.set(row.id, row);
+  }
+
+  for (const row of primary) {
+    rows.set(row.id, row);
+  }
+
+  return [...rows.values()].sort((left, right) => (left.updatedAt < right.updatedAt ? 1 : -1));
+}
+
+async function readBrandRowsFromStore(): Promise<BrandRecord[]> {
+  const mutable = (await readJsonArray<BrandRecord>(BRANDS_PATH)).map((row) => mapBrandRow(row));
+  const embedded = EMBEDDED_BRAND_FALLBACKS.map((row) => mapBrandRow(row));
+  if (!isVercel || BUNDLED_BRANDS_PATH === BRANDS_PATH) {
+    return mergeBrandStores(mutable, embedded);
+  }
+
+  const bundled = (await readJsonArray<BrandRecord>(BUNDLED_BRANDS_PATH)).map((row) => mapBrandRow(row));
+  return mergeBrandStores(mergeBrandStores(mutable, bundled), embedded);
+}
+
+export async function listBrands(): Promise<BrandRecord[]> {
+  return listBrandsWithOptions();
+}
+
+export async function listBrandsWithOptions(options?: {
+  includeEmbedded?: boolean;
+}): Promise<BrandRecord[]> {
+  const selectColumns = options?.includeEmbedded ? BRAND_EMBEDDED_SELECT : BRAND_BASE_SELECT;
+  const local = await readBrandRowsFromStore();
   const supabase = getSupabaseAdmin();
   if (supabase) {
-    const { data, error } = await supabase
-      .from(BRAND_TABLE)
-      .select("*")
-      .eq("id", brandId)
-      .maybeSingle();
-    if (!error && data) {
-      return mapBrandRow(data);
+    const response = (await withTimeout(
+      supabase
+        .from(BRAND_TABLE)
+        .select(selectColumns)
+        .order("updated_at", { ascending: false }),
+      SUPABASE_QUERY_TIMEOUT_MS
+    )) as { data: unknown[] | null; error: unknown | null } | null;
+    if (response && !response.error) {
+      return mergeBrandStores(
+        (response.data ?? []).map((row) => mapBrandRow(row)),
+        local
+      );
     }
   }
-  const rows = await readJsonArray<BrandRecord>(BRANDS_PATH);
-  const hit = rows.find((row) => row.id === brandId);
-  return hit ? mapBrandRow(hit) : null;
+  return local;
+}
+
+export async function getBrandById(
+  brandId: string,
+  options?: {
+    includeEmbedded?: boolean;
+  }
+): Promise<BrandRecord | null> {
+  const selectColumns = options?.includeEmbedded ? BRAND_EMBEDDED_SELECT : BRAND_BASE_SELECT;
+  const local = await readBrandRowsFromStore();
+  const supabase = getSupabaseAdmin();
+  if (supabase) {
+    const response = (await withTimeout(
+      supabase
+        .from(BRAND_TABLE)
+        .select(selectColumns)
+        .eq("id", brandId)
+        .maybeSingle(),
+      SUPABASE_QUERY_TIMEOUT_MS
+    )) as { data: unknown | null; error: unknown | null } | null;
+    if (response && !response.error && response.data) {
+      return mapBrandRow(response.data);
+    }
+  }
+  return local.find((row) => row.id === brandId) ?? null;
 }
 
 export async function createBrand(input: {

@@ -6,10 +6,8 @@ import {
   getEnrichAnythingProspectTableState,
 } from "@/lib/enrichanything-live-table";
 import { countExperimentSendableLeadContacts } from "@/lib/experiment-prospect-import";
-import { EXPERIMENT_MIN_VERIFIED_EMAIL_LEADS } from "@/lib/experiment-policy";
+import { getExperimentVerifiedEmailLeadTarget } from "@/lib/experiment-policy";
 import { launchExperimentRun } from "@/lib/outreach-runtime";
-
-const MIN_PROSPECTS_FOR_LAUNCH = EXPERIMENT_MIN_VERIFIED_EMAIL_LEADS;
 
 export async function POST(
   _: Request,
@@ -22,6 +20,7 @@ export async function POST(
   }
 
   const experiment = await ensureRuntimeForExperiment(existing);
+  const minProspectsForLaunch = getExperimentVerifiedEmailLeadTarget(experiment);
   if (!experiment.runtime.campaignId || !experiment.runtime.experimentId) {
     return NextResponse.json(
       { error: "experiment runtime is not configured" },
@@ -33,11 +32,11 @@ export async function POST(
     buildExperimentProspectTableConfig(experiment)
   );
 
-  if (prospectTable.rowCount < MIN_PROSPECTS_FOR_LAUNCH) {
+  if (prospectTable.rowCount < minProspectsForLaunch) {
     return NextResponse.json(
       {
-        error: `Prospect validation failed: need at least ${MIN_PROSPECTS_FOR_LAUNCH} saved leads before launch.`,
-        hint: "Go to Stage 1 (Prospects), keep sourcing until the first 20 leads are ready, then relaunch.",
+        error: `Prospect validation failed: need at least ${minProspectsForLaunch} saved leads before launch.`,
+        hint: `Go to Stage 1 (Prospects), keep sourcing until the first ${minProspectsForLaunch} leads are ready, then relaunch.`,
         debug: {
           prospectTableId: prospectTable.tableId,
           prospectWorkspaceId: prospectTable.workspaceId,
@@ -49,17 +48,17 @@ export async function POST(
   }
 
   const sendableSummary = await countExperimentSendableLeadContacts(brandId, experiment.id);
-  if (sendableSummary.sendableLeadCount < MIN_PROSPECTS_FOR_LAUNCH) {
+  if (sendableSummary.sendableLeadCount < minProspectsForLaunch) {
     return NextResponse.json(
       {
-        error: `Launch is still preparing contacts with work emails.`,
-        hint: `Keep the Messaging step open while AI checks company domains and resolves work emails in the background. Launch unlocks once ${MIN_PROSPECTS_FOR_LAUNCH} sendable contacts are ready.`,
+        error: "Launch is still waiting on approved EnrichAnything contacts with work emails.",
+        hint: `Only approved EnrichAnything table leads are used for sending. Launch unlocks once ${minProspectsForLaunch} approved contacts with work emails are ready.`,
         debug: {
           approvedTableRows: prospectTable.rowCount,
           sendableLeadCount: sendableSummary.sendableLeadCount,
           sendableLeadRemaining: Math.max(
             0,
-            MIN_PROSPECTS_FOR_LAUNCH - sendableSummary.sendableLeadCount
+            minProspectsForLaunch - sendableSummary.sendableLeadCount
           ),
           runsChecked: sendableSummary.runsChecked,
         },

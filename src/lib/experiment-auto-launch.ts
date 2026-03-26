@@ -31,12 +31,30 @@ export function deriveExperimentStoredStatusFromRun(
   return "ready";
 }
 
+function runSentMessages(run: LaunchRelevantRun) {
+  return Math.max(0, Number(run.metrics.sentMessages ?? 0) || 0);
+}
+
+function runScheduledMessages(run: LaunchRelevantRun) {
+  return Math.max(0, Number(run.metrics.scheduledMessages ?? 0) || 0);
+}
+
+function findCompletedExperimentRun(runs: LaunchRelevantRun[]) {
+  return (
+    runs.find((run) => runSentMessages(run) > 0) ??
+    runs.find(
+      (run) => String(run.status ?? "").trim().toLowerCase() === "completed" && runScheduledMessages(run) > 0
+    ) ??
+    null
+  );
+}
+
 function hasLaunchFailureCooldown(runs: LaunchRelevantRun[]) {
   const latestRun = runs[0] ?? null;
   if (!latestRun) return false;
   if (isExperimentOpenRunStatus(latestRun.status)) return true;
   if (!["failed", "preflight_failed"].includes(latestRun.status)) return false;
-  const sentMessages = Math.max(0, Number(latestRun.metrics.sentMessages ?? 0) || 0);
+  const sentMessages = runSentMessages(latestRun);
   if (sentMessages > 0) return false;
   const updatedAtMs = Date.parse(String(latestRun.updatedAt ?? ""));
   if (!Number.isFinite(updatedAtMs)) return false;
@@ -87,6 +105,18 @@ export async function maybeAutoLaunchPreparedExperiment(
       runId: activeRun.id,
       reason: "active_run",
       activeRunStatus: activeRun.status,
+    };
+  }
+
+  const completedRun = findCompletedExperimentRun(launchRelevantRuns);
+  if (completedRun) {
+    await setExperimentStoredStatus(experiment, "completed");
+    return {
+      launched: false,
+      blocked: true,
+      runId: completedRun.id,
+      reason: "already_completed",
+      activeRunStatus: completedRun.status,
     };
   }
 

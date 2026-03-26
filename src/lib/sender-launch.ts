@@ -559,6 +559,9 @@ function applyLaunchToDomainRow(row: DomainRow, launch: SenderLaunch | null): Do
     senderLaunchTopicSummary: launch.topicSummary,
     senderLaunchDailyCap: launch.dailyCap,
     senderLaunchLastEvaluatedAt: launch.lastEvaluatedAt,
+    senderLaunchAutopilotMode: launch.autopilotMode,
+    senderLaunchAutopilotAllowedDomains: launch.autopilotAllowedDomains,
+    senderLaunchAutopilotBlockedDomains: launch.autopilotBlockedDomains,
   };
 }
 
@@ -726,6 +729,9 @@ async function buildSenderLaunchesForBrand(brandId: string) {
             .sort()
             .at(-1) ?? "",
         lastEvaluatedAt: new Date().toISOString(),
+        autopilotMode: existing?.autopilotMode ?? "curated_plus_open_web",
+        autopilotAllowedDomains: existing?.autopilotAllowedDomains ?? [],
+        autopilotBlockedDomains: existing?.autopilotBlockedDomains ?? [],
       },
       { allowMissingTable: true }
     );

@@ -105,6 +105,13 @@ const NON_COMPANY_PROFILE_DOMAIN_ROOTS = new Set([
   "x.com",
   "twitter.com",
   "instagram.com",
+  "malt.com",
+  "malt.fr",
+  "malt.uk",
+  "freelancermap.de",
+  "freelancermap.com",
+  "theorg.com",
+  "twine.net",
 ]);
 const ROLE_LOCALS = new Set([
   "admin",

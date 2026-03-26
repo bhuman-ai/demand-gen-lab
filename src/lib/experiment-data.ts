@@ -16,6 +16,7 @@ import {
   EXPERIMENT_MIN_VERIFIED_EMAIL_LEADS,
 } from "@/lib/experiment-policy";
 import {
+  deleteOutreachRunsByIds,
   getBrandOutreachAssignment,
   listExperimentRuns,
   listOwnerRuns,
@@ -42,6 +43,7 @@ const SCALE_CAMPAIGNS_PATH = isVercel
 
 const EXPERIMENT_TABLE = "demanddev_experiments";
 const SCALE_CAMPAIGN_TABLE = "demanddev_scale_campaigns";
+const SUPABASE_QUERY_TIMEOUT_MS = 3500;
 
 const nowIso = () => new Date().toISOString();
 
@@ -247,6 +249,19 @@ async function writeJsonArray<T>(filePath: string, rows: T[]) {
   await writeFile(filePath, JSON.stringify(rows, null, 2));
 }
 
+async function withTimeout<T>(promise: PromiseLike<T>, ms: number): Promise<T | null> {
+  let timeoutId: ReturnType<typeof setTimeout> | null = null;
+  const timeout = new Promise<null>((resolve) => {
+    timeoutId = setTimeout(() => resolve(null), ms);
+  });
+
+  return Promise.race([Promise.resolve(promise), timeout]).finally(() => {
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+    }
+  }) as Promise<T | null>;
+}
+
 function mergeExperimentStores(
   primary: ExperimentRecord[],
   secondary: ExperimentRecord[]
@@ -276,6 +291,49 @@ function runSummaryFromMetrics(input: {
     positiveReplies: input.positiveReplies,
     failed: input.failedMessages + input.bouncedMessages,
   };
+}
+
+function runSentMessages(input?: {
+  metrics?: { sentMessages?: number | null; scheduledMessages?: number | null } | null;
+}) {
+  return Math.max(0, Number(input?.metrics?.sentMessages ?? 0) || 0);
+}
+
+function runScheduledMessages(input?: {
+  metrics?: { sentMessages?: number | null; scheduledMessages?: number | null } | null;
+}) {
+  return Math.max(0, Number(input?.metrics?.scheduledMessages ?? 0) || 0);
+}
+
+function findAuthoritativeExperimentRun<T extends { status: string; metrics: { sentMessages: number; scheduledMessages: number } }>(
+  runs: T[]
+): T | null {
+  const latestRun = runs[0] ?? null;
+  if (!latestRun) return null;
+
+  const latestStatus = String(latestRun.status ?? "").trim().toLowerCase();
+  const historicalSuccessfulRun =
+    runs.find((run) => runSentMessages(run) > 0) ??
+    runs.find(
+      (run) =>
+        String(run.status ?? "").trim().toLowerCase() === "completed" &&
+        runScheduledMessages(run) > 0
+    ) ??
+    null;
+
+  if (!historicalSuccessfulRun || historicalSuccessfulRun === latestRun) {
+    return latestRun;
+  }
+
+  if (
+    ["failed", "preflight_failed"].includes(latestStatus) &&
+    runSentMessages(latestRun) === 0 &&
+    runScheduledMessages(latestRun) === 0
+  ) {
+    return historicalSuccessfulRun;
+  }
+
+  return latestRun;
 }
 
 function mapExperimentStatusFromRun(input: {
@@ -312,6 +370,19 @@ function mapExperimentStatusFromRun(input: {
   }
   if (input.promotedCampaignId) return "promoted";
   return input.hasOffer && input.hasAudience ? "ready" : "draft";
+}
+
+function experimentSnapshotNeedsPersistence(raw: ExperimentRecord, hydrated: ExperimentRecord) {
+  return (
+    raw.status !== hydrated.status ||
+    raw.lastRunId !== hydrated.lastRunId ||
+    raw.messageFlow.mapId !== hydrated.messageFlow.mapId ||
+    raw.messageFlow.publishedRevision !== hydrated.messageFlow.publishedRevision ||
+    raw.metricsSummary.sent !== hydrated.metricsSummary.sent ||
+    raw.metricsSummary.replies !== hydrated.metricsSummary.replies ||
+    raw.metricsSummary.positiveReplies !== hydrated.metricsSummary.positiveReplies ||
+    raw.metricsSummary.failed !== hydrated.metricsSummary.failed
+  );
 }
 
 async function createRuntimeRef(input: {
@@ -503,8 +574,9 @@ async function hydrateExperimentRecord(record: ExperimentRecord): Promise<Experi
       : ownerRuns;
 
   const latestRun = fallbackRuns[0] ?? null;
-  const metricsSummary = latestRun
-    ? runSummaryFromMetrics(latestRun.metrics)
+  const authoritativeRun = findAuthoritativeExperimentRun(fallbackRuns);
+  const metricsSummary = authoritativeRun
+    ? runSummaryFromMetrics(authoritativeRun.metrics)
     : record.metricsSummary ?? defaultMetricsSummary();
 
   const status = mapExperimentStatusFromRun({
@@ -512,9 +584,9 @@ async function hydrateExperimentRecord(record: ExperimentRecord): Promise<Experi
     hasOffer: Boolean(record.offer.trim()),
     hasAudience: Boolean(record.audience.trim()),
     promotedCampaignId: record.promotedCampaignId,
-    runStatus: latestRun?.status,
-    scheduledMessages: latestRun?.metrics.scheduledMessages,
-    sentMessages: latestRun?.metrics.sentMessages,
+    runStatus: authoritativeRun?.status,
+    scheduledMessages: authoritativeRun?.metrics.scheduledMessages,
+    sentMessages: authoritativeRun?.metrics.sentMessages,
   });
 
   return {
@@ -524,7 +596,7 @@ async function hydrateExperimentRecord(record: ExperimentRecord): Promise<Experi
       mapId: publishedMapId,
       publishedRevision,
     },
-    lastRunId: latestRun?.id ?? record.lastRunId,
+    lastRunId: authoritativeRun?.id ?? latestRun?.id ?? record.lastRunId,
     metricsSummary,
   };
 }
@@ -556,6 +628,46 @@ async function hydrateScaleCampaignRecord(record: ScaleCampaignRecord): Promise<
     status,
     lastRunId: latestRun.id,
     metricsSummary: runSummaryFromMetrics(latestRun.metrics),
+  };
+}
+
+export async function normalizeExperimentRecordState(
+  brandId: string,
+  experimentId: string,
+  options: { includeSuggestions?: boolean } = {}
+): Promise<ExperimentRecord | null> {
+  const includeSuggestions = Boolean(options.includeSuggestions);
+  const rows = await listExperimentRowsFromStore(brandId);
+  const raw = rows.find((row) => row.id === experimentId) ?? null;
+  if (!raw) return null;
+
+  let hydrated: ExperimentRecord = raw;
+  try {
+    hydrated = await hydrateExperimentRecord(raw);
+  } catch {
+    hydrated = raw;
+  }
+
+  if (!includeSuggestions && isExperimentSuggestionRecord(hydrated)) return null;
+  if (!experimentSnapshotNeedsPersistence(raw, hydrated)) {
+    return hydrated;
+  }
+
+  const persisted = await persistExperiment({
+    ...raw,
+    status: hydrated.status,
+    messageFlow: hydrated.messageFlow,
+    lastRunId: hydrated.lastRunId,
+    metricsSummary: hydrated.metricsSummary,
+    updatedAt: nowIso(),
+  });
+
+  return {
+    ...persisted,
+    status: hydrated.status,
+    messageFlow: hydrated.messageFlow,
+    lastRunId: hydrated.lastRunId,
+    metricsSummary: hydrated.metricsSummary,
   };
 }
 
@@ -630,15 +742,17 @@ async function listExperimentRowsFromStore(brandId: string): Promise<ExperimentR
 
   const supabase = getSupabaseAdmin();
   if (supabase) {
-    const { data, error } = await supabase
-      .from(EXPERIMENT_TABLE)
-      .select("*")
-      .eq("brand_id", brandId)
-      .order("updated_at", { ascending: false });
-
-    if (!error) {
+    const response = (await withTimeout(
+      supabase
+        .from(EXPERIMENT_TABLE)
+        .select("*")
+        .eq("brand_id", brandId)
+        .order("updated_at", { ascending: false }),
+      SUPABASE_QUERY_TIMEOUT_MS
+    )) as { data: unknown[] | null; error: unknown | null } | null;
+    if (response && !response.error) {
       return mergeExperimentStores(
-        (data ?? []).map((row: unknown) => mapExperimentRow(row)),
+        (response.data ?? []).map((row: unknown) => mapExperimentRow(row)),
         local
       );
     }
@@ -650,14 +764,16 @@ async function listExperimentRowsFromStore(brandId: string): Promise<ExperimentR
 async function listScaleCampaignRowsFromStore(brandId: string): Promise<ScaleCampaignRecord[]> {
   const supabase = getSupabaseAdmin();
   if (supabase) {
-    const { data, error } = await supabase
-      .from(SCALE_CAMPAIGN_TABLE)
-      .select("*")
-      .eq("brand_id", brandId)
-      .order("updated_at", { ascending: false });
-
-    if (!error) {
-      return (data ?? []).map((row: unknown) => mapScaleCampaignRow(row));
+    const response = (await withTimeout(
+      supabase
+        .from(SCALE_CAMPAIGN_TABLE)
+        .select("*")
+        .eq("brand_id", brandId)
+        .order("updated_at", { ascending: false }),
+      SUPABASE_QUERY_TIMEOUT_MS
+    )) as { data: unknown[] | null; error: unknown | null } | null;
+    if (response && !response.error) {
+      return (response.data ?? []).map((row: unknown) => mapScaleCampaignRow(row));
     }
   }
 
@@ -758,21 +874,36 @@ export function isExperimentSuggestionRecord(record: ExperimentRecord) {
   return !record.runtime.campaignId && !record.runtime.experimentId;
 }
 
+export async function listStoredExperimentRecords(
+  brandId: string,
+  options: { includeSuggestions?: boolean } = {}
+): Promise<ExperimentRecord[]> {
+  const includeSuggestions = Boolean(options.includeSuggestions);
+  const records = await listExperimentRowsFromStore(brandId);
+  if (includeSuggestions) {
+    return records;
+  }
+  return records.filter((record) => !isExperimentSuggestionRecord(record));
+}
+
 export async function listExperimentRecordsWithOptions(
   brandId: string,
   options: { includeSuggestions?: boolean }
 ): Promise<ExperimentRecord[]> {
   const includeSuggestions = Boolean(options.includeSuggestions);
-  const records = await listExperimentRowsFromStore(brandId);
-  const hydrated = await Promise.all(
+  const records = await listStoredExperimentRecords(brandId, { includeSuggestions });
+  const normalized = await Promise.all(
     records.map(async (record) => {
       try {
-        return await hydrateExperimentRecord(record);
+        return await normalizeExperimentRecordState(brandId, record.id, {
+          includeSuggestions,
+        });
       } catch {
         return record;
       }
     })
   );
+  const hydrated = normalized.filter((record): record is ExperimentRecord => Boolean(record));
   if (includeSuggestions) return hydrated;
   return hydrated.filter((record) => !isExperimentSuggestionRecord(record));
 }
@@ -783,15 +914,10 @@ export async function getExperimentRecordById(
   options: { includeSuggestions?: boolean } = {}
 ): Promise<ExperimentRecord | null> {
   const includeSuggestions = Boolean(options.includeSuggestions);
-  const rows = await listExperimentRowsFromStore(brandId);
-  const hit = rows.find((row) => row.id === experimentId) ?? null;
-  if (!hit) return null;
-  let hydrated: ExperimentRecord = hit;
-  try {
-    hydrated = await hydrateExperimentRecord(hit);
-  } catch {
-    hydrated = hit;
-  }
+  const hydrated = await normalizeExperimentRecordState(brandId, experimentId, {
+    includeSuggestions: options.includeSuggestions,
+  });
+  if (!hydrated) return null;
   if (!includeSuggestions && isExperimentSuggestionRecord(hydrated)) return null;
   return hydrated;
 }
@@ -944,6 +1070,18 @@ export async function deleteExperimentRecord(brandId: string, experimentId: stri
   const existing = await getExperimentRecordById(brandId, experimentId);
   if (!existing) return false;
 
+  const ownerRuns = await listOwnerRuns(brandId, "experiment", experimentId);
+  const runtimeRuns =
+    existing.runtime.campaignId && existing.runtime.experimentId
+      ? await listExperimentRuns(brandId, existing.runtime.campaignId, existing.runtime.experimentId)
+      : [];
+  const runIds = Array.from(
+    new Set([...ownerRuns, ...runtimeRuns].map((run) => run.id).filter(Boolean))
+  );
+  if (runIds.length) {
+    await deleteOutreachRunsByIds(runIds);
+  }
+
   const supabase = getSupabaseAdmin();
   if (supabase) {
     await supabase.from(EXPERIMENT_TABLE).delete().eq("brand_id", brandId).eq("id", experimentId);
@@ -966,6 +1104,13 @@ export async function listScaleCampaignRecords(brandId: string): Promise<ScaleCa
   const rows = await listScaleCampaignRowsFromStore(brandId);
   const hydrated = await Promise.all(rows.map((row) => hydrateScaleCampaignRecord(row)));
   return hydrated.sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1));
+}
+
+export async function listStoredScaleCampaignRecords(
+  brandId: string
+): Promise<ScaleCampaignRecord[]> {
+  const rows = await listScaleCampaignRowsFromStore(brandId);
+  return rows.sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1));
 }
 
 export async function getScaleCampaignRecordById(

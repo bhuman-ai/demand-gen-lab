@@ -1,4 +1,4 @@
-const DEFAULT_ENRICHANYTHING_APP_URL = "https://enrichanything.vercel.app";
+const DEFAULT_ENRICHANYTHING_APP_URL = "https://www.enrichanything.com";
 
 export function resolveEnrichAnythingAppUrl() {
   return String(

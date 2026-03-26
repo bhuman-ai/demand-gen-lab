@@ -107,12 +107,16 @@ function pickRun<T extends { status: string }>(runs: T[]) {
 function buildProvisionPreview(input: Record<string, unknown>) {
   const domain = asString(input.domain) || "new Mailpool domain";
   const fromLocalPart = asString(input.fromLocalPart) || "sender local-part";
-  const domainMode = asString(input.domainMode) === "register" ? "register" : "existing";
+  const rawDomainMode = asString(input.domainMode);
+  const domainMode =
+    rawDomainMode === "register" ? "register" : rawDomainMode === "transfer" ? "transfer" : "existing";
   return {
     title: "Add Mailpool sender",
     summary:
       domainMode === "register"
         ? `Buy ${domain}, create ${fromLocalPart}@${domain}, and attach it to the brand.`
+        : domainMode === "transfer"
+          ? `Transfer ${domain} into Mailpool, create ${fromLocalPart}@${domain}, and attach it to the brand.`
         : `Use ${domain}, create ${fromLocalPart}@${domain}, and attach it to the brand.`,
     domainMode,
     domain,
@@ -153,7 +157,7 @@ function summarizeCampaignCounts(campaigns: ScaleCampaignRecord[]) {
 }
 
 async function getBrandOrThrow(brandId: string) {
-  const brand = await getBrandById(brandId);
+  const brand = await getBrandById(brandId, { includeEmbedded: true });
   if (!brand) throw new Error("Brand not found");
   return brand;
 }

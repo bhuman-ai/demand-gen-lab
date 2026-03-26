@@ -39,6 +39,7 @@ export async function GET(
   const leads = leadsByRunEntries
     .flatMap(([, rows]) => rows)
     .filter((lead) => lead.campaignId === campaignId)
+    .filter((lead) => lead.status !== "suppressed")
     .filter((lead) => !getLeadEmailSuppressionReason(String(lead.email ?? "")))
     .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
   const messages = messagesByRunEntries

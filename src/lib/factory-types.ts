@@ -131,6 +131,9 @@ export type ExperimentListItemStatus =
   | "Draft"
   | "Sourcing"
   | "Preparing"
+  | "Waiting"
+  | "Sending"
+  // Legacy labels kept for compatibility with older callers.
   | "Ready"
   | "Running"
   | "Paused"
@@ -390,6 +393,9 @@ export type DomainRow = {
   senderLaunchTopicSummary?: string;
   senderLaunchDailyCap?: number;
   senderLaunchLastEvaluatedAt?: string;
+  senderLaunchAutopilotMode?: SenderLaunchAutopilotMode;
+  senderLaunchAutopilotAllowedDomains?: string[];
+  senderLaunchAutopilotBlockedDomains?: string[];
 };
 
 export type LeadRow = {
@@ -455,6 +461,7 @@ export type DeliverabilityDomainHealth = {
 };
 
 export type SenderLaunchPlanType = "bridge" | "subdomain" | "fresh";
+export type SenderLaunchAutopilotMode = "curated_only" | "curated_plus_open_web";
 
 export type SenderLaunchState =
   | "setup"
@@ -496,6 +503,9 @@ export type SenderLaunch = {
   pauseReason: string;
   lastEventAt: string;
   lastEvaluatedAt: string;
+  autopilotMode: SenderLaunchAutopilotMode;
+  autopilotAllowedDomains: string[];
+  autopilotBlockedDomains: string[];
   createdAt: string;
   updatedAt: string;
 };
@@ -537,6 +547,7 @@ export type SenderLaunchEvent = {
   eventType:
     | "launch_initialized"
     | "topic_profile_refreshed"
+    | "autopilot_policy_updated"
     | "bridge_inbound_recorded"
     | "opt_in_scheduled"
     | "opt_in_completed"

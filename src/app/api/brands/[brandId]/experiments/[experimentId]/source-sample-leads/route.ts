@@ -57,10 +57,10 @@ export async function POST(
       return NextResponse.json(
         {
           runId: result.runId,
-          status: autoSend ? "queued" : "sourcing",
+          status: autoSend ? "queued" : "completed",
           sampleSize,
           autoSend,
-          hint: "A sourcing run is already in progress for this experiment.",
+          hint: "An EnrichAnything-backed run is already in progress for this experiment.",
         },
         { status: 200 }
       );
@@ -81,13 +81,15 @@ export async function POST(
     );
   }
 
-  // Kick one immediate tick so sample sourcing starts without waiting for scheduler.
-  await runOutreachTick(8);
+  if (autoSend) {
+    // Kick one immediate tick so scheduling starts without waiting for the scheduler.
+    await runOutreachTick(8);
+  }
 
   return NextResponse.json(
     {
       runId: result.runId,
-      status: "queued",
+      status: autoSend ? "queued" : "completed",
       sampleSize,
       autoSend,
     },

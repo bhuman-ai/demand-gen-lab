@@ -47,6 +47,12 @@ type AutopilotResult = {
   actionsFailed: number;
 };
 
+type OpenWebSearchHit = {
+  title: string;
+  url: string;
+  snippet: string;
+};
+
 const TOPIC_EQUIVALENTS: Record<string, string[]> = {
   ai: ["llm", "llms", "models", "agents", "automation"],
   llm: ["ai", "llms", "models", "agents"],
@@ -75,6 +81,28 @@ const DOUBLE_OPT_IN_DAILY_LIMIT = 3;
 const DOUBLE_OPT_IN_POLL_MINUTES = 30;
 const DOUBLE_OPT_IN_TIMEOUT_HOURS = 24;
 const AUTOPILOT_INQUIRY_LANE_ENABLED = false;
+const OPEN_WEB_DISCOVERY_MAX_QUERIES = 2;
+const OPEN_WEB_DISCOVERY_MAX_SEARCH_RESULTS = 8;
+const OPEN_WEB_DISCOVERY_MAX_SOURCES = 4;
+const OPEN_WEB_DISCOVERY_FETCH_TIMEOUT_MS = 12_000;
+const OPEN_WEB_DISCOVERY_BLOCKED_HOSTS = new Set([
+  "duckduckgo.com",
+  "www.duckduckgo.com",
+  "google.com",
+  "www.google.com",
+  "bing.com",
+  "www.bing.com",
+  "sidestack.io",
+  "www.sidestack.io",
+  "feedly.com",
+  "www.feedly.com",
+  "linkedin.com",
+  "www.linkedin.com",
+  "x.com",
+  "www.x.com",
+  "twitter.com",
+  "www.twitter.com",
+]);
 
 const LAUNCH_SOURCE_CATALOG: LaunchSource[] = [
   {
@@ -270,6 +298,11 @@ function nowIso() {
   return new Date().toISOString();
 }
 
+function trimText(value: string, max = 240) {
+  const normalized = value.replace(/\s+/g, " ").trim();
+  return normalized.length > max ? `${normalized.slice(0, max - 1).trimEnd()}…` : normalized;
+}
+
 function addMinutes(iso: string, minutes: number) {
   return new Date(Date.parse(iso) + minutes * 60_000).toISOString();
 }
@@ -296,6 +329,125 @@ function emailDomain(value: string) {
   const normalized = normalizeEmail(value);
   const at = normalized.lastIndexOf("@");
   return at >= 0 ? normalized.slice(at + 1) : "";
+}
+
+function normalizeHost(value: string) {
+  return value.trim().toLowerCase().replace(/^www\./, "");
+}
+
+function hostFromUrl(value: string) {
+  try {
+    return normalizeHost(new URL(value).hostname);
+  } catch {
+    return "";
+  }
+}
+
+function decodeDuckDuckGoRedirect(url: string) {
+  try {
+    const absolute = url.startsWith("//") ? `https:${url}` : url;
+    const parsed = new URL(absolute);
+    if (!/duckduckgo\.com$/i.test(parsed.hostname)) return absolute;
+    const encoded = parsed.searchParams.get("uddg") ?? "";
+    return encoded ? decodeURIComponent(encoded) : absolute;
+  } catch {
+    return url;
+  }
+}
+
+function stripHtml(value: string) {
+  return decodeHtmlEntities(value.replace(/<[^>]+>/g, " ")).replace(/\s+/g, " ").trim();
+}
+
+function slugify(value: string) {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 80);
+}
+
+function tokenizeTopicText(value: string) {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9\s-]/g, " ")
+    .split(/\s+/)
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length >= 3 && !/^\d+$/.test(entry));
+}
+
+function launchTokens(launch: SenderLaunch) {
+  const tokens = new Set<string>();
+  for (const keyword of launch.topicKeywords) {
+    for (const variant of expandMatchToken(keyword)) tokens.add(variant);
+  }
+  return tokens;
+}
+
+function topicOverlapCount(launch: SenderLaunch, text: string) {
+  const tokens = launchTokens(launch);
+  let overlap = 0;
+  for (const token of tokenizeTopicText(text)) {
+    if ([...expandMatchToken(token)].some((variant) => tokens.has(variant))) {
+      overlap += 1;
+    }
+  }
+  return overlap;
+}
+
+function searchQueriesForLaunch(launch: SenderLaunch) {
+  const keywords = launch.topicKeywords.slice(0, 3);
+  const primary = keywords.join(" ").trim() || "b2b saas";
+  return [primary, keywords[0] || "saas"]
+    .map((seed, index) =>
+      index === 0
+        ? `${seed} newsletter subscribe`
+        : `${seed} substack newsletter`
+    )
+    .filter(Boolean)
+    .slice(0, OPEN_WEB_DISCOVERY_MAX_QUERIES);
+}
+
+function substackSourceKeyFromUrl(url: string, html: string) {
+  try {
+    const parsed = new URL(url);
+    const host = normalizeHost(parsed.hostname);
+    if (host !== "substack.com") return host || slugify(url);
+    const firstPath = parsed.pathname.split("/").filter(Boolean)[0]?.replace(/^@/, "") ?? "";
+    if (firstPath) return firstPath;
+    const inferredSubdomain =
+      html.match(/https%3A%2F%2F([a-z0-9-]+)\.substack\.com%2Ftwitter%2Fsubscribe-card/i)?.[1] ??
+      html.match(/"subdomain":"([a-z0-9-]+)"/i)?.[1] ??
+      "";
+    return inferredSubdomain || "substack_publication";
+  } catch {
+    return slugify(url);
+  }
+}
+
+function launchSourceKeyForUrl(url: string, html = "") {
+  const host = hostFromUrl(url);
+  if (host === "substack.com") return `open_web_${slugify(substackSourceKeyFromUrl(url, html))}`;
+  return `open_web_${slugify(host || url)}`;
+}
+
+function sourceHost(source: LaunchSource) {
+  const signupHost = hostFromUrl(source.signupPageUrl ?? "");
+  if (signupHost) return signupHost;
+  const doiHost =
+    (source.doi?.senderDomains ?? []).map((entry) => normalizeHost(entry)).find((entry) => !["substack.com", "kit.com"].includes(entry)) ??
+    normalizeHost(source.doi?.senderDomains?.[0] ?? "");
+  return doiHost;
+}
+
+function sourceAllowedByLaunchPolicy(launch: SenderLaunch, source: LaunchSource) {
+  const host = sourceHost(source);
+  const allowed = (launch.autopilotAllowedDomains ?? []).map((entry) => normalizeHost(entry)).filter(Boolean);
+  const blocked = (launch.autopilotBlockedDomains ?? []).map((entry) => normalizeHost(entry)).filter(Boolean);
+  if (host && blocked.includes(host)) return false;
+  if (allowed.length && (!host || !allowed.includes(host))) return false;
+  if (launch.autopilotMode === "curated_only" && source.key.startsWith("open_web_")) return false;
+  return true;
 }
 
 function expandMatchToken(token: string) {
@@ -477,16 +629,305 @@ async function recordLaunchEvent(
 }
 
 async function fetchText(url: string, init?: RequestInit) {
+  const timeout = OPEN_WEB_DISCOVERY_FETCH_TIMEOUT_MS;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeout);
   const response = await fetch(url, {
     redirect: "follow",
     ...init,
+    signal: init?.signal ?? controller.signal,
     headers: {
       "user-agent": "lastb2b-sender-launch/1.0",
       ...(init?.headers ?? {}),
     },
-  });
+  }).finally(() => clearTimeout(timer));
   const text = await response.text();
   return { response, text };
+}
+
+function platformExaApiKey() {
+  return String(process.env.EXA_API_KEY ?? process.env.EXA_API_TOKEN ?? "").trim();
+}
+
+async function exaSearchHits(query: string): Promise<OpenWebSearchHit[]> {
+  const apiKey = platformExaApiKey();
+  if (!apiKey) return [];
+  const response = await fetch("https://api.exa.ai/search", {
+    method: "POST",
+    headers: {
+      "x-api-key": apiKey,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({
+      query,
+      type: "auto",
+      category: "company",
+      numResults: OPEN_WEB_DISCOVERY_MAX_SEARCH_RESULTS,
+      livecrawl: "fallback",
+      contents: {
+        highlights: {
+          maxCharacters: 600,
+        },
+      },
+    }),
+  });
+  const raw = await response.text();
+  if (!response.ok) {
+    return [];
+  }
+  let parsed: unknown = {};
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    parsed = {};
+  }
+  const payload = parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : {};
+  const results = Array.isArray(payload.results) ? payload.results : [];
+  const hits: OpenWebSearchHit[] = [];
+  for (const row of results) {
+    const item = row && typeof row === "object" ? (row as Record<string, unknown>) : {};
+    const url = String(item.url ?? "").trim();
+    if (!url) continue;
+    const title = trimText(String(item.title ?? ""), 180);
+    const snippet = trimText(String(item.summary ?? ""), 280);
+    hits.push({ title, url, snippet });
+  }
+  return hits;
+}
+
+async function duckDuckGoSearchHits(query: string): Promise<OpenWebSearchHit[]> {
+  const html = await fetchText(`https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`);
+  const hits: OpenWebSearchHit[] = [];
+  const resultRegex =
+    /<a[^>]*class="result__a"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>[\s\S]*?<a class="result__snippet"[^>]*>([\s\S]*?)<\/a>/gi;
+  for (const match of html.text.matchAll(resultRegex)) {
+    const rawUrl = decodeDuckDuckGoRedirect(decodeHtmlEntities(match[1] ?? ""));
+    const title = trimText(stripHtml(match[2] ?? ""), 180);
+    const snippet = trimText(stripHtml(match[3] ?? ""), 280);
+    if (!rawUrl) continue;
+    hits.push({ title, url: rawUrl, snippet });
+    if (hits.length >= OPEN_WEB_DISCOVERY_MAX_SEARCH_RESULTS) break;
+  }
+  return hits;
+}
+
+function publicationLabelFromHtml(url: string, title: string, html: string) {
+  const ogTitle =
+    html.match(/<meta[^>]+property="og:title"[^>]+content="([^"]+)"/i)?.[1] ??
+    html.match(/<title>([^<]+)<\/title>/i)?.[1] ??
+    title;
+  const normalized = stripHtml(ogTitle || title)
+    .replace(/\s+\|\s+Substack$/i, "")
+    .replace(/\s+\|\s+Buttondown$/i, "")
+    .replace(/\s+-\s+Substack$/i, "")
+    .trim();
+  if (normalized) return trimText(normalized, 120);
+  return trimText(hostFromUrl(url) || "Newsletter", 120);
+}
+
+function buildDynamicSourceFromPage(input: {
+  launch: SenderLaunch;
+  hit: OpenWebSearchHit;
+  html: string;
+  finalUrl: string;
+}): LaunchSource | null {
+  const host = hostFromUrl(input.finalUrl);
+  if (!host || OPEN_WEB_DISCOVERY_BLOCKED_HOSTS.has(host)) return null;
+
+  const label = publicationLabelFromHtml(input.finalUrl, input.hit.title, input.html);
+  const sourceKey = launchSourceKeyForUrl(input.finalUrl, input.html);
+  const overlap = topicOverlapCount(input.launch, `${input.hit.title} ${input.hit.snippet} ${label} ${host}`);
+  const topicTags = Array.from(
+    new Set([...input.launch.topicKeywords.slice(0, 6), ...tokenizeTopicText(`${input.hit.title} ${input.hit.snippet}`).slice(0, 4)])
+  ).slice(0, 8);
+  const priority = 70 + Math.min(20, overlap * 4);
+
+  const looksLikeSubstack =
+    host === "substack.com" ||
+    input.html.includes("substackcdn.com") ||
+    input.html.includes("subscribe-card") ||
+    input.html.includes("/api/v1/free?nojs=true");
+  if (looksLikeSubstack) {
+    return {
+      key: sourceKey,
+      kind: "newsletter",
+      label,
+      active: true,
+      priority,
+      topicTags: topicTags.length ? topicTags : input.launch.topicKeywords.slice(0, 6),
+      signupMode: "substack_free_form",
+      signupPageUrl: input.finalUrl,
+      signupFormSelector: {
+        actionIncludes: "/api/v1/free?nojs=true",
+      },
+      doi: {
+        required: false,
+        subjectIncludes: ["confirm your subscription", "confirm subscription", "please confirm"],
+        senderDomains: Array.from(new Set(["substack.com", host])),
+        linkHostAllowlist: Array.from(new Set([host, "substack.com"])),
+        successUrlIncludes: Array.from(new Set([host.split(".")[0] ?? "", "substack"])).filter(Boolean),
+        successTextIncludes: ["thanks for subscribing", "check your inbox", "please confirm your subscription"],
+      },
+    };
+  }
+
+  const kitEmbedScriptUrl = input.html.match(/https:\/\/[a-z0-9.-]+\.kit\.com\/[a-z0-9/_-]+\.js/gi)?.[0] ?? "";
+  if (kitEmbedScriptUrl) {
+    return {
+      key: sourceKey,
+      kind: "newsletter",
+      label,
+      active: true,
+      priority,
+      topicTags: topicTags.length ? topicTags : input.launch.topicKeywords.slice(0, 6),
+      signupMode: "kit_embedded_form",
+      signupPageUrl: input.finalUrl,
+      kitEmbedScriptUrl,
+      doi: {
+        required: false,
+        subjectIncludes: ["confirm your subscription", "please confirm"],
+        senderDomains: Array.from(new Set([host, "kit.com"])),
+        linkHostAllowlist: Array.from(new Set([host, "app.kit.com"])),
+        successUrlIncludes: Array.from(new Set([host.split(".")[0] ?? "", "confirm"])).filter(Boolean),
+        successTextIncludes: ["check your email to confirm", "please confirm your subscription", "check your inbox"],
+      },
+    };
+  }
+
+  const gravityFormAction = input.html.match(/action="([^"]*#gf_[^"]+)"/i)?.[1] ?? "";
+  if (gravityFormAction) {
+    return {
+      key: sourceKey,
+      kind: "newsletter",
+      label,
+      active: true,
+      priority: priority - 4,
+      topicTags: topicTags.length ? topicTags : input.launch.topicKeywords.slice(0, 6),
+      signupMode: "gravity_form",
+      signupPageUrl: input.finalUrl,
+      signupFormSelector: {
+        actionIncludes: "#gf_",
+      },
+      doi: {
+        required: false,
+        subjectIncludes: ["confirm your subscription", "please confirm"],
+        senderDomains: [host],
+        linkHostAllowlist: [host],
+        successUrlIncludes: ["signup", "confirm"],
+        successTextIncludes: ["check your inbox", "almost done", "confirm"],
+      },
+    };
+  }
+
+  return null;
+}
+
+export async function discoverOpenWebSourcesForLaunch(launch: SenderLaunch) {
+  const queries = searchQueriesForLaunch(launch);
+  const allHits: OpenWebSearchHit[] = [];
+  for (const query of queries) {
+    const exaHits = await exaSearchHits(query);
+    const hits = exaHits.length ? exaHits : await duckDuckGoSearchHits(query);
+    allHits.push(...hits);
+  }
+  const dedupedHits: OpenWebSearchHit[] = [];
+  const seenUrls = new Set<string>();
+  for (const hit of allHits) {
+    const normalizedUrl = decodeDuckDuckGoRedirect(hit.url).replace(/#.*$/, "");
+    const host = hostFromUrl(normalizedUrl);
+    if (!normalizedUrl || !host || OPEN_WEB_DISCOVERY_BLOCKED_HOSTS.has(host)) continue;
+    if (!/newsletter|substack|subscribe|digest|brief|weekly/i.test(`${hit.title} ${hit.snippet} ${normalizedUrl}`)) continue;
+    if (topicOverlapCount(launch, `${hit.title} ${hit.snippet} ${normalizedUrl}`) <= 0) continue;
+    const sourceDedupKey = launchSourceKeyForUrl(normalizedUrl);
+    if (seenUrls.has(sourceDedupKey)) continue;
+    seenUrls.add(sourceDedupKey);
+    dedupedHits.push({ ...hit, url: normalizedUrl });
+    if (dedupedHits.length >= OPEN_WEB_DISCOVERY_MAX_SEARCH_RESULTS) break;
+  }
+
+  const sources: LaunchSource[] = [];
+  for (const hit of dedupedHits) {
+    try {
+      const page = await fetchText(hit.url);
+      const source = buildDynamicSourceFromPage({
+        launch,
+        hit,
+        html: page.text,
+        finalUrl: page.response.url || hit.url,
+      });
+      if (!source) continue;
+      sources.push(source);
+      if (sources.length >= OPEN_WEB_DISCOVERY_MAX_SOURCES) break;
+    } catch {
+      continue;
+    }
+  }
+  return sources;
+}
+
+function sourceFromPayload(payload: Record<string, unknown>) {
+  const sourceRaw = payload.source;
+  if (!sourceRaw || typeof sourceRaw !== "object" || Array.isArray(sourceRaw)) return null;
+  const source = sourceRaw as Record<string, unknown>;
+  const key = String(source.key ?? "").trim();
+  const label = String(source.label ?? "").trim();
+  const kind = String(source.kind ?? "").trim();
+  const signupMode = String(source.signupMode ?? "").trim();
+  if (!key || !label || kind !== "newsletter") return null;
+  return {
+    key,
+    kind: "newsletter" as const,
+    label,
+    active: Boolean(source.active ?? true),
+    priority: Number(source.priority ?? 70) || 70,
+    topicTags: Array.isArray(source.topicTags)
+      ? source.topicTags.map((entry) => String(entry ?? "").trim()).filter(Boolean)
+      : [],
+    signupMode:
+      signupMode === "gravity_form" || signupMode === "substack_free_form" || signupMode === "kit_embedded_form"
+        ? signupMode
+        : undefined,
+    signupPageUrl: String(source.signupPageUrl ?? "").trim() || undefined,
+    signupFormSelector:
+      source.signupFormSelector && typeof source.signupFormSelector === "object" && !Array.isArray(source.signupFormSelector)
+        ? {
+            actionIncludes: String((source.signupFormSelector as Record<string, unknown>).actionIncludes ?? "").trim() || undefined,
+            actionEquals: String((source.signupFormSelector as Record<string, unknown>).actionEquals ?? "").trim() || undefined,
+          }
+        : undefined,
+    kitEmbedScriptUrl: String(source.kitEmbedScriptUrl ?? "").trim() || undefined,
+    doi:
+      source.doi && typeof source.doi === "object" && !Array.isArray(source.doi)
+        ? {
+            required: Boolean((source.doi as Record<string, unknown>).required),
+            subjectIncludes: Array.isArray((source.doi as Record<string, unknown>).subjectIncludes)
+              ? ((source.doi as Record<string, unknown>).subjectIncludes as unknown[])
+                  .map((entry) => String(entry ?? "").trim())
+                  .filter(Boolean)
+              : [],
+            senderDomains: Array.isArray((source.doi as Record<string, unknown>).senderDomains)
+              ? ((source.doi as Record<string, unknown>).senderDomains as unknown[])
+                  .map((entry) => normalizeHost(String(entry ?? "")))
+                  .filter(Boolean)
+              : [],
+            linkHostAllowlist: Array.isArray((source.doi as Record<string, unknown>).linkHostAllowlist)
+              ? ((source.doi as Record<string, unknown>).linkHostAllowlist as unknown[])
+                  .map((entry) => normalizeHost(String(entry ?? "")))
+                  .filter(Boolean)
+              : [],
+            successUrlIncludes: Array.isArray((source.doi as Record<string, unknown>).successUrlIncludes)
+              ? ((source.doi as Record<string, unknown>).successUrlIncludes as unknown[])
+                  .map((entry) => String(entry ?? "").trim())
+                  .filter(Boolean)
+              : [],
+            successTextIncludes: Array.isArray((source.doi as Record<string, unknown>).successTextIncludes)
+              ? ((source.doi as Record<string, unknown>).successTextIncludes as unknown[])
+                  .map((entry) => String(entry ?? "").trim())
+                  .filter(Boolean)
+              : [],
+          }
+        : undefined,
+  } satisfies LaunchSource;
 }
 
 async function executeSubstackFreeSignup(source: LaunchSource, email: string) {
@@ -532,6 +973,7 @@ async function executeSubstackFreeSignup(source: LaunchSource, email: string) {
       ? `Subscribed ${email} to ${source.label}.`
       : `Failed to subscribe ${email} to ${source.label}.`,
     error: ok ? "" : `unexpected_substack_response:${result.response.status}`,
+    requiresConfirmation: /check your inbox|confirm/i.test(text),
   };
 }
 
@@ -567,6 +1009,7 @@ async function executeGravityFormSignup(source: LaunchSource, email: string) {
       ? `Submitted the ${source.label} signup form for ${email}.`
       : `Failed to submit the ${source.label} signup form.`,
     error: ok ? "" : `unexpected_gravity_form_response:${result.response.status}`,
+    requiresConfirmation: /you’re almost done|check your inbox|confirm/i.test(haystack),
   };
 }
 
@@ -606,6 +1049,7 @@ async function executeKitEmbeddedSignup(source: LaunchSource, email: string) {
       ? `Submitted the ${source.label} Kit signup for ${email}.`
       : `Failed to submit the ${source.label} Kit signup.`,
     error: ok ? "" : `unexpected_kit_response:${result.response.status}`,
+    requiresConfirmation: /check your email to confirm|please confirm/i.test(haystack),
   };
 }
 
@@ -663,8 +1107,23 @@ async function scheduleOptInActionsForLaunch(
   if (activeOptIns.length >= OPT_IN_FIRST_WEEK_LIMIT && ageInDays(launch) < 7) return 0;
 
   let created = 0;
-  const rankedSources = [...LAUNCH_SOURCE_CATALOG]
+  const staticRankedSources = [...LAUNCH_SOURCE_CATALOG]
     .filter((source) => source.active && source.kind === "newsletter")
+    .map((source) => ({ source, score: topicMatchScore(launch, source) }))
+    .filter((entry) => entry.score > 0)
+    .sort((left, right) => {
+      if (left.score !== right.score) return right.score - left.score;
+      return right.source.priority - left.source.priority;
+    });
+  const needsOpenWebDiscovery =
+    launch.autopilotMode === "curated_plus_open_web" && staticRankedSources.length < Math.max(2, optInDailyLimit(launch));
+  const dynamicSources = needsOpenWebDiscovery ? await discoverOpenWebSourcesForLaunch(launch) : [];
+  const rankedSources = [
+    ...staticRankedSources.map((entry) => entry.source),
+    ...dynamicSources,
+  ]
+    .filter((source, index, array) => array.findIndex((entry) => entry.key === source.key) === index)
+    .filter((source) => sourceAllowedByLaunchPolicy(launch, source))
     .map((source) => ({ source, score: topicMatchScore(launch, source) }))
     .filter((entry) => entry.score > 0)
     .sort((left, right) => {
@@ -675,9 +1134,12 @@ async function scheduleOptInActionsForLaunch(
   for (const { source } of rankedSources) {
     if (created >= optInDailyLimit(launch)) break;
     if (actionsForSource(actions, source.key).length > 0) continue;
+    const inboxDedupeSenderDomains = (source.doi?.senderDomains ?? []).filter(
+      (domain) => !["substack.com", "kit.com"].includes(domain)
+    );
     const alreadySeenInInbox = threads.some(
       (thread) =>
-        thread.sourceType === "mailbox" && source.doi?.senderDomains.includes(emailDomain(thread.contactEmail))
+        thread.sourceType === "mailbox" && inboxDedupeSenderDomains.includes(emailDomain(thread.contactEmail))
     );
     if (alreadySeenInInbox) continue;
     const action = await createSenderLaunchAction(
@@ -696,6 +1158,7 @@ async function scheduleOptInActionsForLaunch(
           sourceKey: source.key,
           sourceLabel: source.label,
           sourceKind: source.kind,
+          source,
         },
         resultSummary: "",
         lastError: "",
@@ -719,8 +1182,12 @@ function sourceByKey(sourceKey: string) {
   return LAUNCH_SOURCE_CATALOG.find((entry) => entry.key === sourceKey) ?? null;
 }
 
+function sourceForAction(action: SenderLaunchAction) {
+  return sourceFromPayload(action.payload) ?? sourceByKey(action.sourceKey);
+}
+
 async function executeOptInAction(launch: SenderLaunch, action: SenderLaunchAction) {
-  const source = sourceByKey(action.sourceKey);
+  const source = sourceForAction(action);
   if (!source) {
     await updateSenderLaunchAction(
       action.id,
@@ -776,7 +1243,7 @@ async function executeOptInAction(launch: SenderLaunch, action: SenderLaunchActi
     sourceKey: source.key,
     sourceLabel: source.label,
   });
-  if (source.doi?.required) {
+  if (source.doi && (source.doi.required || result.requiresConfirmation)) {
     const pendingDoi = await createSenderLaunchAction(
       {
         senderLaunchId: launch.id,
@@ -792,6 +1259,7 @@ async function executeOptInAction(launch: SenderLaunch, action: SenderLaunchActi
         payload: {
           sourceKey: source.key,
           sourceLabel: source.label,
+          source,
         },
         resultSummary: `Waiting for the ${source.label} confirmation email.`,
         lastError: "",
@@ -808,7 +1276,7 @@ async function executeDoubleOptInAction(
   action: SenderLaunchAction,
   threads: ReplyThread[]
 ) {
-  const source = sourceByKey(action.sourceKey);
+  const source = sourceForAction(action);
   if (!source?.doi) {
     await updateSenderLaunchAction(
       action.id,
@@ -983,6 +1451,19 @@ async function processDueActionsForLaunch(
     .sort((left, right) => (left.createdAt < right.createdAt ? -1 : 1));
 
   for (const action of dueActions) {
+    const source = sourceForAction(action);
+    if (source && !sourceAllowedByLaunchPolicy(launch, source)) {
+      await updateSenderLaunchAction(
+        action.id,
+        {
+          status: "skipped",
+          resultSummary: `${source.label} is now outside this sender's autopilot policy.`,
+          completedAt: nowIso(),
+        },
+        { allowMissingTable: true }
+      );
+      continue;
+    }
     if (action.lane === "double_opt_in") {
       if (countActionsToday(actions, "double_opt_in", nowIso()) > DOUBLE_OPT_IN_DAILY_LIMIT) continue;
       const result = await executeDoubleOptInAction(launch, action, threads);

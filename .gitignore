@@ -47,3 +47,4 @@ output/playwright/
 
 # Supabase temp
 supabase/.temp/
+.env*.local

@@ -28,6 +28,17 @@ function formatRelativeTime(input: string, now = Date.now()) {
   return `${days} days ago`;
 }
 
+function hasPublishedMessaging(experiment: ExperimentRecord) {
+  return normalizeCount(experiment.messageFlow.publishedRevision) > 0;
+}
+
+function hasStartedSending(experiment: ExperimentRecord, latestRun: OutreachRun | null) {
+  return (
+    normalizeCount(latestRun?.metrics.sentMessages) > 0 ||
+    normalizeCount(experiment.metricsSummary.sent) > 0
+  );
+}
+
 function deriveListStatus(experiment: ExperimentRecord, latestRun: OutreachRun | null): ExperimentListItem["status"] {
   if (experiment.status === "archived") return "Blocked";
   if (experiment.status === "promoted") return "Promoted";
@@ -49,8 +60,12 @@ function deriveListStatus(experiment: ExperimentRecord, latestRun: OutreachRun |
     return "Preparing";
   }
 
+  if (latestRun && ["scheduled", "sending", "monitoring"].includes(latestRun.status)) {
+    return "Sending";
+  }
+
   if (experiment.status === "running") {
-    return "Running";
+    return "Sending";
   }
 
   if (experiment.status === "paused") {
@@ -60,22 +75,24 @@ function deriveListStatus(experiment: ExperimentRecord, latestRun: OutreachRun |
   if (experiment.status === "ready") {
     const sourcedLeads = normalizeCount(latestRun?.metrics.sourcedLeads);
     const leadTarget = getExperimentVerifiedEmailLeadTarget(experiment);
-    const flowPublished = normalizeCount(experiment.messageFlow.publishedRevision) > 0;
-    const hasStartedSending =
-      normalizeCount(latestRun?.metrics.sentMessages) > 0 ||
-      normalizeCount(experiment.metricsSummary.sent) > 0;
+    const flowPublished = hasPublishedMessaging(experiment);
+    const sent = hasStartedSending(experiment, latestRun);
 
-    if (!hasStartedSending && flowPublished && sourcedLeads < leadTarget) {
+    if (!flowPublished) {
+      return "Blocked";
+    }
+
+    if (!sent && sourcedLeads < leadTarget) {
       return "Preparing";
     }
 
-    return "Ready";
+    return "Waiting";
   }
   return "Draft";
 }
 
 function deriveActiveAction(status: ExperimentListItem["status"]) {
-  if (status === "Running") return "Open Run" as const;
+  if (status === "Sending" || status === "Running") return "Open Run" as const;
   if (status === "Sourcing") return "Open Prospects" as const;
   return "Open" as const;
 }
@@ -83,6 +100,10 @@ function deriveActiveAction(status: ExperimentListItem["status"]) {
 function summarizeBlockedReason(latestRun: OutreachRun | null, experiment: ExperimentRecord) {
   if (experiment.status === "archived") {
     return "This experiment is archived.";
+  }
+
+  if (experiment.status === "ready" && !hasPublishedMessaging(experiment)) {
+    return "Messaging is not published yet. Publish the flow before sending can start.";
   }
 
   const raw = String(latestRun?.lastError ?? "").trim();
@@ -108,7 +129,9 @@ function summarizeStatusDetail(
   experiment: ExperimentRecord,
   latestRun: OutreachRun | null
 ) {
-  if (status === "Running") {
+  if (status === "Sending") {
+    const sourcedLeads = normalizeCount(latestRun?.metrics.sourcedLeads);
+    const leadTarget = getExperimentVerifiedEmailLeadTarget(experiment);
     const scheduledMessages = normalizeCount(latestRun?.metrics.scheduledMessages);
     const sentMessages = normalizeCount(latestRun?.metrics.sentMessages);
     if (sentMessages > 0) {
@@ -119,26 +142,53 @@ function summarizeStatusDetail(
       return `${sentMessages} email${sentMessages === 1 ? "" : "s"} already sent.`;
     }
     if (scheduledMessages > 0) {
-      return `No messages have been sent yet. ${scheduledMessages} ${scheduledMessages === 1 ? "message is" : "messages are"} queued for the first eligible send slot.`;
+      return `${scheduledMessages} ${scheduledMessages === 1 ? "message is" : "messages are"} queued for the first eligible send slot.`;
+    }
+    const remaining = Math.max(0, leadTarget - sourcedLeads);
+    if (latestRun?.status === "monitoring" && remaining > 0) {
+      return `Waiting on ${remaining} more contacts before sending can resume.`;
+    }
+    if (latestRun?.status === "monitoring") {
+      return "Waiting for the next dispatch cycle.";
     }
     return "A sending run is active.";
   }
 
   if (status === "Preparing") {
+    if (!hasPublishedMessaging(experiment)) {
+      return "Waiting on messaging to be published before launch.";
+    }
     const sourcedLeads = normalizeCount(latestRun?.metrics.sourcedLeads);
     const leadTarget = getExperimentVerifiedEmailLeadTarget(experiment);
     const remaining = Math.max(0, leadTarget - sourcedLeads);
     if (remaining > 0) {
       return `Waiting on ${remaining} more contacts before launch.`;
     }
+    if (latestRun?.status === "queued") {
+      return "Run is queued and pre-launch checks are still running.";
+    }
     return "Finishing pre-launch checks before sending starts.";
   }
 
-  if (status === "Ready") {
-    if (normalizeCount(experiment.messageFlow.publishedRevision) > 0) {
-      return "Ready to launch. No active run is sending yet.";
+  if (status === "Waiting") {
+    const sentMessages = latestRun
+      ? normalizeCount(latestRun.metrics.sentMessages)
+      : normalizeCount(experiment.metricsSummary.sent);
+    if (!hasPublishedMessaging(experiment)) {
+      return "Waiting on messaging to be published before sending can start.";
     }
-    return "Setup is ready, but messaging still needs to be published.";
+    if (!latestRun) {
+      return "Waiting for launch. No run has been started yet.";
+    }
+    if (latestRun.status === "completed" && sentMessages === 0) {
+      return "Waiting to relaunch. The last run finished without sending any messages.";
+    }
+    if (latestRun.status === "completed" && sentMessages > 0) {
+      return `Waiting to relaunch. The last run already sent ${sentMessages} email${
+        sentMessages === 1 ? "" : "s"
+      }.`;
+    }
+    return "Waiting for launch. No active run is sending right now.";
   }
 
   return undefined;
@@ -206,7 +256,7 @@ export function mapExperimentToListItem(input: {
     sentMessages,
     replies,
     positiveReplies,
-    isActiveNow: status === "Running" || status === "Sourcing",
+    isActiveNow: status === "Sending" || status === "Running" || status === "Sourcing",
     activeActionLabel,
     openHref,
     editHref,

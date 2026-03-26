@@ -176,6 +176,13 @@ const NON_COMPANY_PROFILE_DOMAIN_ROOTS = new Set([
   "x.com",
   "twitter.com",
   "instagram.com",
+  "malt.com",
+  "malt.fr",
+  "malt.uk",
+  "freelancermap.de",
+  "freelancermap.com",
+  "theorg.com",
+  "twine.net",
 ]);
 
 const STRICT_EMAIL_PATTERN = /^([a-z0-9._%+-]+)@([a-z0-9.-]+\.[a-z]{2,})$/i;

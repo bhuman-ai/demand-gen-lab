@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getBrandById } from "@/lib/factory-data";
-import { createExperimentRecord, listExperimentRecords } from "@/lib/experiment-data";
+import { createExperimentRecord, listStoredExperimentRecords } from "@/lib/experiment-data";
 
 function asRecord(value: unknown): Record<string, unknown> {
   if (value && typeof value === "object" && !Array.isArray(value)) {
@@ -11,12 +11,7 @@ function asRecord(value: unknown): Record<string, unknown> {
 
 export async function GET(_: Request, context: { params: Promise<{ brandId: string }> }) {
   const { brandId } = await context.params;
-  const brand = await getBrandById(brandId);
-  if (!brand) {
-    return NextResponse.json({ error: "brand not found" }, { status: 404 });
-  }
-
-  const experiments = await listExperimentRecords(brandId);
+  const experiments = await listStoredExperimentRecords(brandId);
   return NextResponse.json({ experiments });
 }
 

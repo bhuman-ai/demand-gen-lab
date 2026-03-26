@@ -182,8 +182,15 @@ export function buildSenderRoutingSignalFromDomainRow(
     senderAccountName: getDomainDeliveryAccountName(row) || fromEmail,
     domain: row.domain,
     fromEmail,
-    automationStatus: row.automationStatus ?? "queued",
-    automationSummary: row.automationSummary ?? "",
+    automationStatus:
+      row.senderLaunchState === "paused" || row.senderLaunchState === "blocked"
+        ? "attention"
+        : row.senderLaunchState === "setup" || row.senderLaunchState === "observing"
+          ? "testing"
+          : row.senderLaunchState === "warming" || row.senderLaunchState === "restricted_send"
+            ? "warming"
+            : row.automationStatus ?? "queued",
+    automationSummary: row.senderLaunchSummary || row.automationSummary || "",
     domainStatus: row.domainHealth ?? "unknown",
     emailStatus: row.emailHealth ?? "unknown",
     transportStatus: row.ipHealth ?? "unknown",

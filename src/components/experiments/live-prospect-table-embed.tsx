@@ -126,6 +126,13 @@ type LookalikeSeedSummary = {
 
 type LookalikeSeedAction = "analyze" | "clear";
 
+type ExternalTableSource = {
+  input: string;
+  tableId: string;
+  src: string;
+  origin: string;
+};
+
 function formatElapsedLabel(totalSeconds: number) {
   if (!Number.isFinite(totalSeconds) || totalSeconds <= 0) {
     return "just now";
@@ -196,6 +203,69 @@ function normalizeWebsiteSeedList(value: string) {
     if (out.length >= 40) break;
   }
   return out;
+}
+
+function normalizeAppUrl(value: string) {
+  return String(value ?? "").trim().replace(/\/+$/, "");
+}
+
+function extractTableId(value: string) {
+  const trimmed = String(value ?? "").trim();
+  if (!trimmed) return "";
+
+  const directMatch = trimmed.match(/\/tables\/([^/?#]+)/i);
+  if (directMatch?.[1]) {
+    return decodeURIComponent(directMatch[1]).trim();
+  }
+
+  if (/^[a-z0-9-]{8,}$/i.test(trimmed)) {
+    return trimmed;
+  }
+
+  return "";
+}
+
+function buildEmbeddedTableSource(
+  input: string,
+  fallbackAppUrl: string,
+  parentOrigin: string
+): ExternalTableSource {
+  const trimmed = String(input ?? "").trim();
+  if (!trimmed) {
+    throw new Error("Paste an EnrichAnything table URL or table ID.");
+  }
+
+  let tableId = extractTableId(trimmed);
+  let baseUrl = normalizeAppUrl(fallbackAppUrl);
+
+  if (/^https?:\/\//i.test(trimmed)) {
+    const sourceUrl = new URL(trimmed);
+    tableId = extractTableId(sourceUrl.pathname);
+    baseUrl = normalizeAppUrl(sourceUrl.origin);
+  }
+
+  if (!tableId) {
+    throw new Error("That does not look like an EnrichAnything table URL.");
+  }
+
+  if (!baseUrl) {
+    throw new Error("The EnrichAnything app URL is not configured.");
+  }
+
+  const embedUrl = new URL(`${baseUrl}/tables/${encodeURIComponent(tableId)}`);
+  embedUrl.searchParams.set("embed", "1");
+  embedUrl.searchParams.set("embedShell", "surface");
+  embedUrl.searchParams.set("parentOrigin", parentOrigin);
+  embedUrl.searchParams.set("partnerId", EMBED_PARTNER_ID);
+  embedUrl.searchParams.set("partnerLabel", EMBED_PARTNER_LABEL);
+  embedUrl.searchParams.set("parentLabel", EMBED_PARTNER_LABEL);
+
+  return {
+    input: trimmed,
+    tableId,
+    src: embedUrl.toString(),
+    origin: embedUrl.origin,
+  };
 }
 
 function normalizeLookalikeSeedSummary(value: unknown, fallbackPrompt = ""): LookalikeSeedSummary | null {
@@ -380,6 +450,7 @@ export default function LiveProspectTableEmbed({
   const autoSearchPromptRef = useRef("");
   const lastAutoSearchResumeSignatureRef = useRef("");
   const lastStallRetrySignatureRef = useRef("");
+  const bootstrapRunAttemptedRef = useRef(false);
   const initialEmbedStateHandledRef = useRef(false);
   const previousStateRef = useRef({
     prompt: "",
@@ -389,6 +460,9 @@ export default function LiveProspectTableEmbed({
   });
   const [iframeSrc, setIframeSrc] = useState("");
   const [iframeOrigin, setIframeOrigin] = useState("");
+  const [managedIframeSrc, setManagedIframeSrc] = useState("");
+  const [managedIframeOrigin, setManagedIframeOrigin] = useState("");
+  const [managedAppUrl, setManagedAppUrl] = useState("");
   const [iframeLoaded, setIframeLoaded] = useState(false);
   const [iframeReady, setIframeReady] = useState(false);
   const [iframeError, setIframeError] = useState("");
@@ -404,6 +478,9 @@ export default function LiveProspectTableEmbed({
   const [lookalikeSeedAction, setLookalikeSeedAction] = useState<LookalikeSeedAction | null>(null);
   const [lookalikeSeedError, setLookalikeSeedError] = useState("");
   const [lookalikeSeedSummary, setLookalikeSeedSummary] = useState<LookalikeSeedSummary | null>(null);
+  const [externalTableDraft, setExternalTableDraft] = useState("");
+  const [externalTableError, setExternalTableError] = useState("");
+  const [externalTableSource, setExternalTableSource] = useState<ExternalTableSource | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsSaving, setSettingsSaving] = useState(false);
   const [oneContactPerCompanyDraft, setOneContactPerCompanyDraft] = useState(
@@ -434,6 +511,7 @@ export default function LiveProspectTableEmbed({
     parseErrors: [],
     mode: null,
   });
+  const usingExternalTable = Boolean(externalTableSource);
 
   const refreshTableStateFromServer = useCallback(async () => {
     const response = await fetch(initPath, { cache: "no-store" });
@@ -449,6 +527,7 @@ export default function LiveProspectTableEmbed({
     setAllowLiveTable(Boolean(payload.enabled));
     setServerSeedRowCount((current) => Math.max(current, serverRowCount));
     setLookalikeSeedSummary(serverLookalikeSeedSummary);
+    setManagedAppUrl(String(payload.appUrl ?? "").trim().replace(/\/+$/, ""));
     setTableState((current) => ({
       ...current,
       title: serverTitle || current.title,
@@ -520,6 +599,7 @@ export default function LiveProspectTableEmbed({
     setIframeLoaded(false);
     setIframeReady(false);
     initialEmbedStateHandledRef.current = false;
+    bootstrapRunAttemptedRef.current = false;
     autoSearchPromptRef.current = "";
     lastAutoSearchResumeSignatureRef.current = "";
     lastAutoImportSignatureRef.current = "";
@@ -539,8 +619,9 @@ export default function LiveProspectTableEmbed({
         embedUrl.searchParams.set("partnerId", EMBED_PARTNER_ID);
         embedUrl.searchParams.set("partnerLabel", EMBED_PARTNER_LABEL);
         embedUrl.searchParams.set("parentLabel", EMBED_PARTNER_LABEL);
-        setIframeSrc(embedUrl.toString());
-        setIframeOrigin(embedUrl.origin);
+        setManagedAppUrl(appUrl);
+        setManagedIframeSrc(embedUrl.toString());
+        setManagedIframeOrigin(embedUrl.origin);
       })
       .catch((error) => {
         if (canceled) return;
@@ -554,6 +635,19 @@ export default function LiveProspectTableEmbed({
       canceled = true;
     };
   }, [refreshTableStateFromServer]);
+
+  useEffect(() => {
+    const nextSrc = externalTableSource?.src || managedIframeSrc;
+    const nextOrigin = externalTableSource?.origin || managedIframeOrigin;
+    if (nextSrc === iframeSrc && nextOrigin === iframeOrigin) {
+      return;
+    }
+    setIframeSrc(nextSrc);
+    setIframeOrigin(nextOrigin);
+    setIframeLoaded(false);
+    setIframeReady(false);
+    initialEmbedStateHandledRef.current = false;
+  }, [externalTableSource, iframeOrigin, iframeSrc, managedIframeOrigin, managedIframeSrc]);
 
   const normalizedInitialPrompt = String(initialPrompt || "").trim();
 
@@ -890,6 +984,8 @@ export default function LiveProspectTableEmbed({
     visibleRowCount === 0 &&
     sendableLeadCount === 0 &&
     (tableBusy || searchUnderGoal || reviewApproved);
+  const loadingSavedProspects =
+    reviewApproved && (serverSeedRowCount > 0 || sendableLeadCount > 0);
   const progressPercent = goalCount > 0 ? Math.min(100, (visibleRowCount / goalCount) * 100) : 0;
   const progressFillPercent = searchLocked
     ? Math.max(progressPercent, visibleRowCount > 0 ? 12 : 6)
@@ -913,7 +1009,9 @@ export default function LiveProspectTableEmbed({
             : "Working"
       : reviewApproved
         ? visibleRowCount === 0
-          ? "Loading prospects"
+          ? loadingSavedProspects
+            ? "Loading prospects"
+            : "Finding first prospects"
           : canSearchBeyondReview
             ? "Finding more contacts"
             : "Approved"
@@ -1071,6 +1169,78 @@ export default function LiveProspectTableEmbed({
   ]);
 
   useEffect(() => {
+    if (
+      bootstrapRunAttemptedRef.current ||
+      usingExternalTable ||
+      !hasPrompt ||
+      serverSeedRowCount > 0 ||
+      sendableLeadCount > 0 ||
+      tableBusy
+    ) {
+      return;
+    }
+
+    bootstrapRunAttemptedRef.current = true;
+    setTableState((current) => ({
+      ...current,
+      isLiveRunning: true,
+      statusMessage: current.statusMessage || "Starting the first search run.",
+    }));
+
+    void fetch(initPath, {
+      method: "POST",
+      cache: "no-store",
+    })
+      .then(async (response) => {
+        const payload = await readJson(response);
+        if (!response.ok) {
+          throw new Error(String(payload.error ?? "Failed to start the first prospect search."));
+        }
+        const serverRowCount = Math.max(0, Number(payload.rowCount ?? 0) || 0);
+        const serverPrompt = String(payload.discoveryPrompt ?? "").trim();
+        const serverTitle = String(payload.tableTitle ?? "").trim();
+
+        setAllowLiveTable(Boolean(payload.enabled));
+        setServerSeedRowCount((current) => Math.max(current, serverRowCount));
+        setManagedAppUrl(String(payload.appUrl ?? "").trim().replace(/\/+$/, ""));
+        setTableState((current) => ({
+          ...current,
+          title: serverTitle || current.title,
+          prompt: serverPrompt || current.prompt,
+          rowCount: Math.max(current.rowCount, serverRowCount),
+          hasRows: current.hasRows || serverRowCount > 0,
+          isDiscovering: false,
+          isEnriching: false,
+          isLiveRunning: false,
+          lastSuccessAt: String(payload.lastRunAt ?? "").trim() || current.lastSuccessAt,
+          lastRowsAppended: Math.max(0, Number(payload.lastRowsAppended ?? 0) || 0),
+          statusMessage:
+            serverRowCount > 0
+              ? "Found the first prospects."
+              : "Started the first search run.",
+        }));
+      })
+      .catch((error) => {
+        bootstrapRunAttemptedRef.current = false;
+        setTableState((current) => ({
+          ...current,
+          isLiveRunning: false,
+          statusMessage: "",
+        }));
+        setIframeError(
+          error instanceof Error ? error.message : "Failed to start the first prospect search."
+        );
+      });
+  }, [
+    hasPrompt,
+    initPath,
+    sendableLeadCount,
+    serverSeedRowCount,
+    tableBusy,
+    usingExternalTable,
+  ]);
+
+  useEffect(() => {
     if (!iframeReady || initialEmbedStateHandledRef.current) {
       return;
     }
@@ -1163,6 +1333,7 @@ export default function LiveProspectTableEmbed({
 
   useEffect(() => {
     if (
+      usingExternalTable ||
       !iframeReady ||
       !initialEmbedStateHandledRef.current ||
       !hasPrompt ||
@@ -1196,11 +1367,13 @@ export default function LiveProspectTableEmbed({
     tableBusy,
     visibleRowCount,
     canSearchBeyondReview,
+    usingExternalTable,
   ]);
 
   useEffect(() => {
     if (
       allowLiveTable ||
+      usingExternalTable ||
       !iframeReady ||
       !initialEmbedStateHandledRef.current ||
       !hasPrompt ||
@@ -1239,11 +1412,13 @@ export default function LiveProspectTableEmbed({
     tableBusy,
     visibleRowCount,
     canSearchBeyondReview,
+    usingExternalTable,
   ]);
 
   useEffect(() => {
     if (
       allowLiveTable ||
+      usingExternalTable ||
       !iframeReady ||
       !initialEmbedStateHandledRef.current ||
       !hasPrompt ||
@@ -1297,18 +1472,26 @@ export default function LiveProspectTableEmbed({
     tableState.lastSuccessAt,
     visibleRowCount,
     canSearchBeyondReview,
+    usingExternalTable,
   ]);
 
   useEffect(() => {
-    if (allowLiveTable || !iframeReady || !tableState.liveEnabled || tableBusy) {
+    if (allowLiveTable || usingExternalTable || !iframeReady || !tableState.liveEnabled || tableBusy) {
       return;
     }
 
     sendHostCommand("toggle-live", { enabled: false });
-  }, [allowLiveTable, iframeReady, sendHostCommand, tableBusy, tableState.liveEnabled]);
+  }, [allowLiveTable, iframeReady, sendHostCommand, tableBusy, tableState.liveEnabled, usingExternalTable]);
 
   useEffect(() => {
-    if (!reviewApproved || !iframeReady || importState.status === "importing" || tableBusy || !hasVisibleRows) {
+    if (
+      usingExternalTable ||
+      !reviewApproved ||
+      !iframeReady ||
+      importState.status === "importing" ||
+      tableBusy ||
+      !hasVisibleRows
+    ) {
       return;
     }
 
@@ -1336,6 +1519,7 @@ export default function LiveProspectTableEmbed({
     tableState.rowCount,
     tableState.lastSuccessAt,
     visibleRowCount,
+    usingExternalTable,
   ]);
 
   useEffect(() => {
@@ -1410,7 +1594,7 @@ export default function LiveProspectTableEmbed({
               setPromptDraft(event.target.value);
             }}
             onKeyDown={(event) => {
-              if (event.key !== "Enter") return;
+              if (usingExternalTable || event.key !== "Enter") return;
               event.preventDefault();
               if (!iframeReady || searchLocked || !hasPrompt) return;
               if (normalizedPromptDraft && normalizedPromptDraft !== normalizedTablePrompt) {
@@ -1424,12 +1608,12 @@ export default function LiveProspectTableEmbed({
               sendHostCommand("run-search", { limit: goalCount });
             }}
             placeholder="Find self-funded SaaS founders who might want AWS credits"
-            readOnly={searchLocked || targetingLocked}
-            aria-readonly={searchLocked || targetingLocked}
+            readOnly={searchLocked || targetingLocked || usingExternalTable}
+            aria-readonly={searchLocked || targetingLocked || usingExternalTable}
             className="h-12 flex-1 rounded-[14px] border-[color:var(--border)] bg-[color:var(--surface-muted)] text-[color:var(--foreground)] placeholder:text-[color:var(--muted-foreground)] shadow-none focus-visible:ring-[color:var(--accent-border)] read-only:cursor-not-allowed read-only:opacity-85"
           />
           <div className="flex flex-wrap gap-2">
-            {lookalikeSeedAvailable ? (
+            {lookalikeSeedAvailable && !usingExternalTable ? (
               <Button
                 type="button"
                 size="sm"
@@ -1455,6 +1639,22 @@ export default function LiveProspectTableEmbed({
               <Settings2 className="h-4 w-4" />
               Settings
             </Button>
+            {usingExternalTable ? (
+              <Button
+                type="button"
+                size="lg"
+                className="border-[color:var(--accent-border)] bg-[color:var(--accent)] text-[color:var(--accent-foreground)] hover:opacity-95"
+                onClick={() => requestImport("manual")}
+                disabled={!iframeReady || importBusyRef.current || !tableState.hasRows}
+              >
+                {importState.status === "importing" ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <Search className="h-4 w-4" />
+                )}
+                Import current rows
+              </Button>
+            ) : null}
             {reviewPending ? (
               <>
                 <Button
@@ -1488,7 +1688,7 @@ export default function LiveProspectTableEmbed({
                   </Button>
                 ) : null}
               </>
-            ) : promptDirty && !searchLocked && !targetingLocked ? (
+            ) : promptDirty && !searchLocked && !targetingLocked && !usingExternalTable ? (
               <Button
                 type="button"
                 size="lg"
@@ -1504,7 +1704,7 @@ export default function LiveProspectTableEmbed({
                 <Search className="h-4 w-4" />
                 Apply changes
               </Button>
-            ) : !searchLocked && !targetingLocked ? (
+            ) : !searchLocked && !targetingLocked && !usingExternalTable ? (
               <Button
                 type="button"
                 size="lg"
@@ -1705,13 +1905,13 @@ export default function LiveProspectTableEmbed({
             </div>
           </div>
         ) : null}
-        {iframeLoaded && waitingForFirstResults ? (
+        {iframeLoaded && waitingForFirstResults && !usingExternalTable ? (
           <div className="absolute inset-0 z-10 flex items-center justify-center bg-[color:var(--surface)]/94">
             <div className="w-full max-w-md px-6">
               <div className="mb-3 text-center text-xs font-medium uppercase tracking-[0.14em] text-[color:var(--muted-foreground)]">
                 {tableBusy
                   ? "Finding first prospects"
-                  : reviewApproved
+                  : loadingSavedProspects
                     ? "Loading prospects"
                     : "Waiting for first prospects"}
               </div>
@@ -1719,7 +1919,7 @@ export default function LiveProspectTableEmbed({
                 <div className="h-full w-1/3 rounded-full bg-[color:var(--accent)] animate-pulse" />
               </div>
               <div className="mt-3 text-center text-xs text-[color:var(--muted-foreground)]">
-                {reviewApproved
+                {loadingSavedProspects
                   ? "Loading the saved prospects for this experiment."
                   : "The first matching rows will appear here automatically."}
               </div>
@@ -1743,7 +1943,7 @@ export default function LiveProspectTableEmbed({
         onOpenChange={setSettingsOpen}
         title="Prospect settings"
         description="Adjust how this experiment turns matching rows into sendable prospects."
-        panelClassName="max-w-lg"
+        panelClassName="max-w-2xl"
         footer={
           <div className="flex items-center justify-end gap-2">
             <Button type="button" variant="ghost" onClick={() => setSettingsOpen(false)} disabled={settingsSaving}>
@@ -1776,6 +1976,91 @@ export default function LiveProspectTableEmbed({
             </div>
           </div>
         </label>
+        <div className="mt-4 rounded-[14px] border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-4">
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+            <div className="space-y-1">
+              <div className="text-xs font-medium uppercase tracking-[0.12em] text-[color:var(--muted-foreground)]">
+                Existing EnrichAnything table
+              </div>
+              <div className="text-sm text-[color:var(--foreground)]">
+                Paste a table URL to use your already-curated EnrichAnything rows as the source for this experiment.
+              </div>
+            </div>
+            {usingExternalTable ? (
+              <Button
+                type="button"
+                size="sm"
+                variant="ghost"
+                onClick={() => {
+                  setExternalTableSource(null);
+                  setExternalTableDraft("");
+                  setExternalTableError("");
+                  pushActivity("Switched back to the experiment's native prospect table.", "neutral");
+                }}
+              >
+                Use native table
+              </Button>
+            ) : null}
+          </div>
+          <div className="mt-3 flex flex-col gap-2 lg:flex-row">
+            <Input
+              value={externalTableDraft}
+              onChange={(event) => {
+                setExternalTableDraft(event.target.value);
+                if (externalTableError) {
+                  setExternalTableError("");
+                }
+              }}
+              placeholder="Paste an EnrichAnything table URL or table ID"
+              className="h-11 rounded-[14px] border-[color:var(--border)] bg-[color:var(--surface)]"
+            />
+            <Button
+              type="button"
+              variant="outline"
+              className="h-11 rounded-[14px]"
+              onClick={() => {
+                try {
+                  const nextSource = buildEmbeddedTableSource(
+                    externalTableDraft,
+                    managedAppUrl,
+                    window.location.origin
+                  );
+                  setExternalTableSource(nextSource);
+                  setExternalTableError("");
+                  setPromptDraft("");
+                  setTableState((current) => ({
+                    ...current,
+                    rowCount: 0,
+                    hasRows: false,
+                    lastRowsAppended: 0,
+                    lastSuccessAt: "",
+                    statusMessage: "",
+                  }));
+                  pushActivity("Loaded an existing EnrichAnything table for direct import.", "success");
+                } catch (error) {
+                  setExternalTableError(
+                    error instanceof Error ? error.message : "Failed to open that EnrichAnything table."
+                  );
+                }
+              }}
+              disabled={!externalTableDraft.trim()}
+            >
+              Open table
+            </Button>
+          </div>
+          <div className="mt-2 text-xs text-[color:var(--muted-foreground)]">
+            {externalTableError ? (
+              <span className="text-[color:var(--danger)]">{externalTableError}</span>
+            ) : usingExternalTable ? (
+              <>
+                Using table <span className="font-medium text-[color:var(--foreground)]">{externalTableSource?.tableId}</span>.
+                Review the rows, then import them directly into this experiment.
+              </>
+            ) : (
+              "This uses your current EnrichAnything login in the embedded table and skips the autonomous sourcing loop."
+            )}
+          </div>
+        </div>
       </SettingsModal>
     </>
   );

@@ -1,0 +1,47 @@
+[
+  {
+    "rank": 1,
+    "score": 93,
+    "recommendation": "provision_now",
+    "marketTitle": "Series A SaaS in the US hiring SDRs but not using sequencing tools (Series A to B)",
+    "tableId": "candidate_market_series-a-sdr-no-sequencing-us-series-a-b",
+    "workspaceId": "lastb2b_market_candidates_lab",
+    "cadence": "6h",
+    "maxRowsPerRun": 25,
+    "buyerLabel": "Outbound agencies",
+    "geoLabel": "the US",
+    "blueprintId": "series-a-sdr-no-sequencing",
+    "expectedRows": 238,
+    "seoQuery": "series a saas in us hiring sdrs but not using sequencing tools series a to b"
+  },
+  {
+    "rank": 3,
+    "score": 93,
+    "recommendation": "provision_now",
+    "marketTitle": "Series A SaaS in the UK hiring SDRs but not using sequencing tools (Series A to B)",
+    "tableId": "candidate_market_series-a-sdr-no-sequencing-uk-series-a-b",
+    "workspaceId": "lastb2b_market_candidates_lab",
+    "cadence": "6h",
+    "maxRowsPerRun": 25,
+    "buyerLabel": "Outbound agencies",
+    "geoLabel": "the UK",
+    "blueprintId": "series-a-sdr-no-sequencing",
+    "expectedRows": 180,
+    "seoQuery": "series a saas in uk hiring sdrs but not using sequencing tools series a to b"
+  },
+  {
+    "rank": 7,
+    "score": 92,
+    "recommendation": "provision_now",
+    "marketTitle": "Shopify brands in the UK running Meta ads but not TikTok (with 20k to 200k monthly traffic)",
+    "tableId": "candidate_market_shopify-meta-no-tiktok-uk-mid-market-traffic",
+    "workspaceId": "lastb2b_market_candidates_lab",
+    "cadence": "6h",
+    "maxRowsPerRun": 25,
+    "buyerLabel": "TikTok ad agencies",
+    "geoLabel": "the UK",
+    "blueprintId": "shopify-meta-no-tiktok",
+    "expectedRows": 125,
+    "seoQuery": "shopify brands in uk running meta ads but not tiktok 20k to 200k monthly traffic"
+  }
+]

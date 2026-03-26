@@ -440,6 +440,46 @@ export async function registerMailpoolDomain(input: {
   return created;
 }
 
+export async function transferMailpoolDomain(input: {
+  apiKey: string;
+  domain: string;
+  redirectUrl?: string;
+  domainOwner?: MailpoolDomainOwner;
+}) {
+  const normalizedDomain = input.domain.trim().toLowerCase();
+  const payload = await mailpoolRequest<unknown>({
+    apiKey: input.apiKey,
+    method: "POST",
+    path: "/domains/transfer",
+    body: {
+      domains: [normalizedDomain],
+      redirect: input.redirectUrl?.trim() || undefined,
+      newDomainOwner: input.domainOwner,
+    },
+  });
+
+  const payloadRecord = asRecord(payload);
+  const candidateRows = [
+    ...asArray(payload),
+    ...asArray(payloadRecord.data),
+    ...asArray(payloadRecord.domains),
+    ...(payloadRecord.domain ? [payloadRecord.domain] : []),
+  ];
+  const created = candidateRows
+    .map((entry) => mapDomain(entry))
+    .find((entry) => entry.domain === normalizedDomain);
+  if (created) {
+    return created;
+  }
+
+  const domains = await listMailpoolDomains(input.apiKey);
+  const existing = domains.find((entry) => entry.domain === normalizedDomain);
+  if (!existing) {
+    throw new Error("Mailpool domain transfer did not return a domain record");
+  }
+  return existing;
+}
+
 export async function getMailpoolDomainDns(apiKey: string, domainId: string) {
   return mailpoolRequest<Record<string, unknown>>({
     apiKey,

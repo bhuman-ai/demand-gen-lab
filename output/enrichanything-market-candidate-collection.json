@@ -1,0 +1,273 @@
+[
+  {
+    "tableId": "candidate_market_series-a-sdr-no-sequencing-us-core",
+    "title": "Series A SaaS in the US hiring SDRs but not using sequencing tools",
+    "rowCount": 7,
+    "targetRows": 50,
+    "reachedTarget": false,
+    "lastStatus": "success",
+    "lastError": "",
+    "enabled": true,
+    "runs": [
+      {
+        "pass": 1,
+        "status": "success",
+        "rowsFound": 7,
+        "rowsAppended": 7,
+        "rowCount": 7
+      }
+    ]
+  },
+  {
+    "tableId": "candidate_market_series-a-sdr-no-sequencing-germany-series-a-b",
+    "title": "Series A SaaS in Germany hiring SDRs but not using sequencing tools (Series A to B)",
+    "rowCount": 12,
+    "targetRows": 50,
+    "reachedTarget": false,
+    "lastStatus": "success",
+    "lastError": "",
+    "enabled": true,
+    "runs": [
+      {
+        "pass": 1,
+        "status": "success",
+        "rowsFound": 12,
+        "rowsAppended": 12,
+        "rowCount": 12
+      }
+    ]
+  },
+  {
+    "tableId": "candidate_market_series-a-sdr-no-sequencing-uk-core",
+    "title": "Series A SaaS in the UK hiring SDRs but not using sequencing tools",
+    "rowCount": 3,
+    "targetRows": 50,
+    "reachedTarget": false,
+    "lastStatus": "success",
+    "lastError": "",
+    "enabled": true,
+    "runs": [
+      {
+        "pass": 1,
+        "status": "success",
+        "rowsFound": 3,
+        "rowsAppended": 3,
+        "rowCount": 3
+      }
+    ]
+  },
+  {
+    "tableId": "candidate_market_series-a-sdr-no-sequencing-germany-core",
+    "title": "Series A SaaS in Germany hiring SDRs but not using sequencing tools",
+    "rowCount": 7,
+    "targetRows": 50,
+    "reachedTarget": false,
+    "lastStatus": "success",
+    "lastError": "",
+    "enabled": true,
+    "runs": [
+      {
+        "pass": 1,
+        "status": "success",
+        "rowsFound": 7,
+        "rowsAppended": 7,
+        "rowCount": 7
+      }
+    ]
+  },
+  {
+    "tableId": "candidate_market_series-a-sdr-no-sequencing-canada-series-a-b",
+    "title": "Series A SaaS in Canada hiring SDRs but not using sequencing tools (Series A to B)",
+    "rowCount": 7,
+    "targetRows": 50,
+    "reachedTarget": false,
+    "lastStatus": "success",
+    "lastError": "",
+    "enabled": true,
+    "runs": [
+      {
+        "pass": 1,
+        "status": "success",
+        "rowsFound": 7,
+        "rowsAppended": 7,
+        "rowCount": 7
+      }
+    ]
+  },
+  {
+    "tableId": "candidate_market_shopify-meta-no-tiktok-uk-launch-cadence",
+    "title": "Shopify brands in the UK running Meta ads but not TikTok (with visible launch cadence)",
+    "rowCount": 3,
+    "targetRows": 50,
+    "reachedTarget": false,
+    "lastStatus": "success",
+    "lastError": "",
+    "enabled": true,
+    "runs": [
+      {
+        "pass": 1,
+        "status": "success",
+        "rowsFound": 3,
+        "rowsAppended": 3,
+        "rowCount": 3
+      }
+    ]
+  },
+  {
+    "tableId": "candidate_market_shopify-meta-no-tiktok-france-mid-market-traffic",
+    "title": "Shopify brands in France running Meta ads but not TikTok (with 20k to 200k monthly traffic)",
+    "rowCount": 10,
+    "targetRows": 50,
+    "reachedTarget": false,
+    "lastStatus": "success",
+    "lastError": "",
+    "enabled": true,
+    "runs": [
+      {
+        "pass": 1,
+        "status": "success",
+        "rowsFound": 10,
+        "rowsAppended": 10,
+        "rowCount": 10
+      }
+    ]
+  },
+  {
+    "tableId": "candidate_market_shopify-meta-no-tiktok-germany-launch-cadence",
+    "title": "Shopify brands in Germany running Meta ads but not TikTok (with visible launch cadence)",
+    "rowCount": 2,
+    "targetRows": 50,
+    "reachedTarget": false,
+    "lastStatus": "success",
+    "lastError": "",
+    "enabled": true,
+    "runs": [
+      {
+        "pass": 1,
+        "status": "success",
+        "rowsFound": 2,
+        "rowsAppended": 2,
+        "rowCount": 2
+      }
+    ]
+  },
+  {
+    "tableId": "candidate_market_shopify-meta-no-tiktok-spain-mid-market-traffic",
+    "title": "Shopify brands in Spain running Meta ads but not TikTok (with 20k to 200k monthly traffic)",
+    "rowCount": 6,
+    "targetRows": 50,
+    "reachedTarget": false,
+    "lastStatus": "success",
+    "lastError": "",
+    "enabled": true,
+    "runs": [
+      {
+        "pass": 1,
+        "status": "success",
+        "rowsFound": 6,
+        "rowsAppended": 6,
+        "rowCount": 6
+      }
+    ]
+  },
+  {
+    "tableId": "candidate_market_series-a-sdr-no-sequencing-canada-core",
+    "title": "Series A SaaS in Canada hiring SDRs but not using sequencing tools",
+    "rowCount": 0,
+    "targetRows": 50,
+    "reachedTarget": false,
+    "lastStatus": "idle",
+    "lastError": "",
+    "enabled": true,
+    "runs": [
+      {
+        "pass": 1,
+        "status": "timed_out",
+        "rowsFound": 0,
+        "rowsAppended": 0,
+        "rowCount": 0,
+        "reason": "Timed out after 90000ms."
+      }
+    ]
+  },
+  {
+    "tableId": "candidate_market_shopify-meta-no-tiktok-france-launch-cadence",
+    "title": "Shopify brands in France running Meta ads but not TikTok (with visible launch cadence)",
+    "rowCount": 0,
+    "targetRows": 50,
+    "reachedTarget": false,
+    "lastStatus": "idle",
+    "lastError": "",
+    "enabled": true,
+    "runs": [
+      {
+        "pass": 1,
+        "status": "timed_out",
+        "rowsFound": 0,
+        "rowsAppended": 0,
+        "rowCount": 0,
+        "reason": "Timed out after 90000ms."
+      }
+    ]
+  },
+  {
+    "tableId": "candidate_market_shopify-meta-no-tiktok-spain-launch-cadence",
+    "title": "Shopify brands in Spain running Meta ads but not TikTok (with visible launch cadence)",
+    "rowCount": 0,
+    "targetRows": 50,
+    "reachedTarget": false,
+    "lastStatus": "idle",
+    "lastError": "",
+    "enabled": true,
+    "runs": [
+      {
+        "pass": 1,
+        "status": "timed_out",
+        "rowsFound": 0,
+        "rowsAppended": 0,
+        "rowCount": 0,
+        "reason": "Timed out after 90000ms."
+      }
+    ]
+  },
+  {
+    "tableId": "candidate_market_shopify-meta-no-tiktok-netherlands-mid-market-traffic",
+    "title": "Shopify brands in the Netherlands running Meta ads but not TikTok (with 20k to 200k monthly traffic)",
+    "rowCount": 0,
+    "targetRows": 50,
+    "reachedTarget": false,
+    "lastStatus": "idle",
+    "lastError": "",
+    "enabled": true,
+    "runs": [
+      {
+        "pass": 1,
+        "status": "timed_out",
+        "rowsFound": 0,
+        "rowsAppended": 0,
+        "rowCount": 0,
+        "reason": "Timed out after 90000ms."
+      }
+    ]
+  },
+  {
+    "tableId": "candidate_market_shopify-meta-no-tiktok-netherlands-launch-cadence",
+    "title": "Shopify brands in the Netherlands running Meta ads but not TikTok (with visible launch cadence)",
+    "rowCount": 0,
+    "targetRows": 50,
+    "reachedTarget": false,
+    "lastStatus": "idle",
+    "lastError": "",
+    "enabled": true,
+    "runs": [
+      {
+        "pass": 1,
+        "status": "timed_out",
+        "rowsFound": 0,
+        "rowsAppended": 0,
+        "rowCount": 0,
+        "reason": "Timed out after 90000ms."
+      }
+    ]
+  }
+]

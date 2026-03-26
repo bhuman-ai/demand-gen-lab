@@ -3,9 +3,10 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
-import { CopyPlus, Plus, Search } from "lucide-react";
+import { Plus, Search } from "lucide-react";
 import {
   createExperimentApi,
+  deleteExperimentApi,
   fetchExperiment,
   fetchExperimentListView,
 } from "@/lib/client-api";
@@ -33,8 +34,8 @@ const STATUS_OPTIONS: Array<"all" | ExperimentListItem["status"]> = [
   "Draft",
   "Sourcing",
   "Preparing",
-  "Ready",
-  "Running",
+  "Waiting",
+  "Sending",
   "Paused",
   "Completed",
   "Promoted",
@@ -46,10 +47,16 @@ function statusLabel(status: (typeof STATUS_OPTIONS)[number]) {
 }
 
 function statusTone(status: (typeof STATUS_OPTIONS)[number]) {
-  if (status === "Running") {
+  if (status === "Sending" || status === "Running") {
     return "border-[color:var(--success-border)] bg-[color:var(--success-soft)] text-[color:var(--success)]";
   }
-  if (status === "Sourcing" || status === "Preparing" || status === "Ready" || status === "Promoted") {
+  if (
+    status === "Sourcing" ||
+    status === "Preparing" ||
+    status === "Waiting" ||
+    status === "Ready" ||
+    status === "Promoted"
+  ) {
     return "border-[color:var(--accent-border)] bg-[color:var(--accent-soft)] text-[color:var(--accent)]";
   }
   if (status === "Paused") {
@@ -114,7 +121,7 @@ function countForStatus(items: ExperimentListItem[], status: (typeof STATUS_OPTI
 }
 
 function isActiveLaunchStatus(status: ExperimentListItem["status"]) {
-  return status === "Running" || status === "Sourcing";
+  return status === "Sending" || status === "Running" || status === "Sourcing";
 }
 
 function launchNoticeForItem(item: ExperimentListItem | null, loading: boolean) {
@@ -131,11 +138,11 @@ function launchNoticeForItem(item: ExperimentListItem | null, loading: boolean) 
     return null;
   }
 
-  if (item.status === "Running") {
+  if (item.status === "Sending" || item.status === "Running") {
     return {
       tone:
         "border-[color:var(--success-border)] bg-[color:var(--success-soft)] text-[color:var(--success)]",
-      title: "Experiment launched and is now running.",
+      title: "Experiment launched and is now sending.",
       detail: "The list below reflects its latest live state.",
     };
   }
@@ -190,6 +197,9 @@ export default function ExperimentsClient({
   const [creating, setCreating] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
   const [duplicatingId, setDuplicatingId] = useState("");
+  const [deletingId, setDeletingId] = useState("");
+  const [actionMenuId, setActionMenuId] = useState("");
+  const [deleteTarget, setDeleteTarget] = useState<ExperimentListItem | null>(null);
   const [error, setError] = useState("");
   const [statusFilter, setStatusFilter] = useState<(typeof STATUS_OPTIONS)[number]>("all");
   const [query, setQuery] = useState("");
@@ -231,6 +241,72 @@ export default function ExperimentsClient({
     setLaunchNoticeId(launchedExperimentId);
   }, [launchedExperimentId]);
 
+  useEffect(() => {
+    if (!actionMenuId) return;
+
+    const handlePointerDown = (event: MouseEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (target?.closest("[data-experiment-actions-root]")) {
+        return;
+      }
+      setActionMenuId("");
+    };
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setActionMenuId("");
+      }
+    };
+
+    document.addEventListener("mousedown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [actionMenuId]);
+
+  const handleDuplicate = async (item: ExperimentListItem) => {
+    setActionMenuId("");
+    setDuplicatingId(item.id);
+    setError("");
+    try {
+      const source = await fetchExperiment(brandId, item.id);
+      const duplicate = await createExperimentApi(brandId, {
+        name: `${source.name} Copy`,
+        offer: source.offer,
+        audience: source.audience,
+      });
+      trackEvent("experiment_created", {
+        brandId,
+        experimentId: duplicate.id,
+        source: "duplicate",
+        fromExperimentId: item.id,
+      });
+      router.push(`/brands/${brandId}/experiments/${duplicate.id}/setup`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to duplicate experiment");
+    } finally {
+      setDuplicatingId("");
+    }
+  };
+
+  const handleDelete = async () => {
+    if (!deleteTarget) return;
+
+    setDeletingId(deleteTarget.id);
+    setError("");
+    try {
+      await deleteExperimentApi(brandId, deleteTarget.id);
+      setDeleteTarget(null);
+      await refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to delete experiment");
+    } finally {
+      setDeletingId("");
+    }
+  };
+
   const filtered = useMemo(
     () =>
       filterExperimentListItems({
@@ -245,9 +321,9 @@ export default function ExperimentsClient({
     () => [
       { label: "All", status: "all" as const, count: items.length },
       {
-        label: "Running",
-        status: "Running" as const,
-        count: items.filter((item) => item.status === "Running").length,
+        label: "Sending",
+        status: "Sending" as const,
+        count: items.filter((item) => item.status === "Sending" || item.status === "Running").length,
       },
       {
         label: "Draft",
@@ -427,13 +503,17 @@ export default function ExperimentsClient({
                             <span
                               className={cn(
                                 "mt-1 h-10 w-1 rounded-[2px]",
-                                item.status === "Running"
+                                item.status === "Sending" || item.status === "Running"
                                   ? "bg-[color:var(--success)]"
                                   : item.status === "Paused"
                                     ? "bg-[color:var(--warning)]"
                                     : item.status === "Blocked"
                                       ? "bg-[color:var(--danger)]"
-                                        : item.status === "Sourcing" || item.status === "Preparing" || item.status === "Ready" || item.status === "Promoted"
+                                        : item.status === "Sourcing" ||
+                                            item.status === "Preparing" ||
+                                            item.status === "Waiting" ||
+                                            item.status === "Ready" ||
+                                            item.status === "Promoted"
                                           ? "bg-[color:var(--accent)]"
                                           : "bg-[color:var(--border)]"
                               )}
@@ -461,49 +541,67 @@ export default function ExperimentsClient({
                           </div>
                         </td>
                         <td className="py-2 pl-4 align-top">
-                          <div className="flex justify-end gap-1 opacity-100 transition md:opacity-0 md:group-hover:opacity-100">
-                            <Button size="sm" variant="outline" asChild>
-                              <Link
-                                href={item.editHref}
-                                onClick={(event) => {
-                                  event.stopPropagation();
-                                }}
-                              >
-                                Edit
-                              </Link>
-                            </Button>
+                          <div
+                            data-experiment-actions-root
+                            className="relative flex justify-end opacity-100 transition md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                            }}
+                          >
                             <Button
+                              type="button"
                               size="sm"
-                              variant="outline"
-                              disabled={duplicatingId === item.id}
-                              onClick={async (event) => {
-                                event.stopPropagation();
-                                setDuplicatingId(item.id);
-                                setError("");
-                                try {
-                                  const source = await fetchExperiment(brandId, item.id);
-                                  const duplicate = await createExperimentApi(brandId, {
-                                    name: `${source.name} Copy`,
-                                    offer: source.offer,
-                                    audience: source.audience,
-                                  });
-                                  trackEvent("experiment_created", {
-                                    brandId,
-                                    experimentId: duplicate.id,
-                                    source: "duplicate",
-                                    fromExperimentId: item.id,
-                                  });
-                                  router.push(`/brands/${brandId}/experiments/${duplicate.id}/setup`);
-                                } catch (err) {
-                                  setError(err instanceof Error ? err.message : "Failed to duplicate experiment");
-                                } finally {
-                                  setDuplicatingId("");
-                                }
+                              variant="ghost"
+                              aria-haspopup="menu"
+                              aria-expanded={actionMenuId === item.id}
+                              aria-label={`Open actions for ${item.name}`}
+                              onClick={() => {
+                                setActionMenuId((current) => (current === item.id ? "" : item.id));
                               }}
                             >
-                              <CopyPlus className="h-3.5 w-3.5" />
-                              {duplicatingId === item.id ? "Duplicating..." : "Duplicate"}
+                              <span className="text-lg leading-none tracking-[0.18em]">...</span>
                             </Button>
+                            {actionMenuId === item.id ? (
+                              <div
+                                role="menu"
+                                aria-label={`Actions for ${item.name}`}
+                                className="absolute right-0 top-[calc(100%+8px)] z-20 min-w-[10rem] overflow-hidden rounded-[14px] border border-[color:var(--border-strong)] bg-[color:var(--surface)] p-1 shadow-[0_16px_40px_rgba(15,23,42,0.14)]"
+                              >
+                                <Link
+                                  href={item.editHref}
+                                  role="menuitem"
+                                  className="block rounded-[10px] px-3 py-2 text-left text-sm text-[color:var(--foreground)] transition-colors hover:bg-[color:var(--surface-muted)]"
+                                  onClick={() => {
+                                    setActionMenuId("");
+                                  }}
+                                >
+                                  Edit
+                                </Link>
+                                <button
+                                  type="button"
+                                  role="menuitem"
+                                  disabled={duplicatingId === item.id}
+                                  className="block w-full rounded-[10px] px-3 py-2 text-left text-sm text-[color:var(--foreground)] transition-colors hover:bg-[color:var(--surface-muted)] disabled:cursor-not-allowed disabled:opacity-60"
+                                  onClick={() => {
+                                    void handleDuplicate(item);
+                                  }}
+                                >
+                                  {duplicatingId === item.id ? "Duplicating..." : "Duplicate"}
+                                </button>
+                                <button
+                                  type="button"
+                                  role="menuitem"
+                                  disabled={deletingId === item.id}
+                                  className="block w-full rounded-[10px] px-3 py-2 text-left text-sm text-[color:var(--danger)] transition-colors hover:bg-[color:var(--danger-soft)] disabled:cursor-not-allowed disabled:opacity-60"
+                                  onClick={() => {
+                                    setActionMenuId("");
+                                    setDeleteTarget(item);
+                                  }}
+                                >
+                                  Delete
+                                </button>
+                              </div>
+                            ) : null}
                           </div>
                         </td>
                       </tr>
@@ -546,6 +644,47 @@ export default function ExperimentsClient({
           router.push(`/brands/${brandId}/experiments/${experiment.id}/setup`);
         }}
       />
+
+      <SettingsModal
+        open={Boolean(deleteTarget)}
+        title="Delete experiment?"
+        description={
+          deleteTarget
+            ? `Delete "${deleteTarget.name}" and all of its run history?`
+            : "Delete this experiment and all of its run history?"
+        }
+        onOpenChange={(open) => {
+          if (!open && !deletingId) {
+            setDeleteTarget(null);
+          }
+        }}
+        footer={
+          <div className="flex justify-end gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setDeleteTarget(null)}
+              disabled={Boolean(deletingId)}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              variant="danger"
+              onClick={() => {
+                void handleDelete();
+              }}
+              disabled={!deleteTarget || Boolean(deletingId)}
+            >
+              {deletingId ? "Deleting..." : "Delete"}
+            </Button>
+          </div>
+        }
+      >
+        <div className="text-sm text-[color:var(--muted-foreground)]">
+          This removes the experiment, its runs, and the related run history from this brand.
+        </div>
+      </SettingsModal>
     </div>
   );
 }

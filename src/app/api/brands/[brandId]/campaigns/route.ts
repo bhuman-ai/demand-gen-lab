@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
 import { getBrandById } from "@/lib/factory-data";
 import {
-  listScaleCampaignRecords,
+  listStoredExperimentRecords,
+  listStoredScaleCampaignRecords,
   promoteExperimentRecordToCampaign,
 } from "@/lib/experiment-data";
 
@@ -14,12 +15,7 @@ function asRecord(value: unknown): Record<string, unknown> {
 
 export async function GET(_: Request, context: { params: Promise<{ brandId: string }> }) {
   const { brandId } = await context.params;
-  const brand = await getBrandById(brandId);
-  if (!brand) {
-    return NextResponse.json({ error: "brand not found" }, { status: 404 });
-  }
-
-  const campaigns = await listScaleCampaignRecords(brandId);
+  const campaigns = await listStoredScaleCampaignRecords(brandId);
   return NextResponse.json({ campaigns });
 }
 
@@ -40,6 +36,11 @@ export async function POST(request: Request, context: { params: Promise<{ brandI
   }
 
   try {
+    const storedExperiments = await listStoredExperimentRecords(brandId);
+    const sourceExperiment = storedExperiments.find((row) => row.id === sourceExperimentId) ?? null;
+    if (!sourceExperiment) {
+      return NextResponse.json({ error: "sourceExperimentId was not found." }, { status: 404 });
+    }
     const campaign = await promoteExperimentRecordToCampaign({
       brandId,
       experimentId: sourceExperimentId,

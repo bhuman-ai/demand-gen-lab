@@ -46,6 +46,7 @@ import {
   listMailpoolDomainSuggestions,
   listMailpoolMailboxes,
   registerMailpoolDomain,
+  transferMailpoolDomain,
   runMailpoolInboxPlacement,
   testMailpoolConnection,
   updateMailpoolSubscriptionSlots,
@@ -83,7 +84,7 @@ export type ProvisionSenderInput = {
   accountName: string;
   assignToBrand?: boolean;
   selectedMailboxAccountId?: string;
-  domainMode: "existing" | "register";
+  domainMode: "existing" | "register" | "transfer";
   domain: string;
   fromLocalPart: string;
   autoPickCustomerIoAccount?: boolean;
@@ -2141,7 +2142,7 @@ export async function provisionCustomerIoSender(
     account,
     assignment,
     namecheap: {
-      mode: input.domainMode,
+      mode: input.domainMode === "register" ? "register" : "existing",
       domainStatus: input.domainMode === "register" ? "registered" : "existing",
       existingRecordCount: existingHosts.length,
       appliedRecordCount: desiredDnsRecords.length,
@@ -2224,10 +2225,19 @@ export async function provisionMailpoolSender(
       redirectUrl: forwardingTargetUrl || undefined,
       domainOwner: buildMailpoolDomainOwner({ brand, registrant: input.registrant }),
     });
+  } else if (input.domainMode === "transfer" && !mailpoolDomain) {
+    mailpoolDomain = await transferMailpoolDomain({
+      apiKey,
+      domain,
+      redirectUrl: forwardingTargetUrl || undefined,
+      domainOwner: input.registrant
+        ? buildMailpoolDomainOwner({ brand, registrant: input.registrant })
+        : undefined,
+    });
   }
 
   if (!mailpoolDomain) {
-    throw new Error("This domain is not managed in Mailpool yet. Add it there first or switch to register.");
+    throw new Error("This domain is not managed in Mailpool yet. Transfer it into Mailpool first or switch to buy new.");
   }
 
   let mailbox =
@@ -2340,7 +2350,10 @@ export async function provisionMailpoolSender(
     deliveryAccountId: account.id,
     deliveryAccountName: account.name,
     mailpoolDomainId: mailpoolDomain.id,
-    notes: "Provisioned through Mailpool.",
+    notes:
+      input.domainMode === "transfer"
+        ? "Transferred into Mailpool and provisioned through Mailpool."
+        : "Provisioned through Mailpool.",
   });
   const protectedDomain = forwardingTargetUrl ? normalizeDomain(forwardingTargetUrl) : "";
   if (protectedDomain && protectedDomain !== domain) {
@@ -2380,6 +2393,9 @@ export async function provisionMailpoolSender(
 
   if (mailpoolDomain.status !== "active") {
     nextSteps.push("Wait for Mailpool to finish domain activation and DNS propagation.");
+  }
+  if (input.domainMode === "transfer" && mailpoolDomain.status !== "active") {
+    nextSteps.push("Wait for Mailpool to finish transferring the domain before treating this sender as live.");
   }
   if (resolvedInboxPlacement && resolvedInboxPlacement.state !== "completed") {
     nextSteps.push("Refresh inbox placement after Mailpool finishes the first run.");

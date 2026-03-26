@@ -27,6 +27,13 @@ const NON_COMPANY_PROFILE_ROOTS = [
   "x.com",
   "twitter.com",
   "instagram.com",
+  "malt.com",
+  "malt.fr",
+  "malt.uk",
+  "freelancermap.de",
+  "freelancermap.com",
+  "theorg.com",
+  "twine.net",
 ];
 
 function normalizeCell(value: unknown) {

@@ -90,7 +90,7 @@ function formatDateTime(value: string) {
 }
 
 function friendlyJobType(jobType: OutreachRunJob["jobType"]) {
-  if (jobType === "source_leads") return "Prospect sourcing";
+  if (jobType === "source_leads") return "Legacy sourcing (disabled)";
   if (jobType === "schedule_messages") return "Message scheduling";
   if (jobType === "dispatch_messages") return "Message dispatch";
   if (jobType === "sync_replies") return "Reply sync";

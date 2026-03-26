@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { createBrand, listBrands } from "@/lib/factory-data";
+import { createBrand, listBrandsWithOptions } from "@/lib/factory-data";
 
 function normalizeStringArray(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
@@ -8,8 +8,10 @@ function normalizeStringArray(value: unknown): string[] {
     .filter((entry) => entry.length > 0);
 }
 
-export async function GET() {
-  const brands = await listBrands();
+export async function GET(request: Request) {
+  const { searchParams } = new URL(request.url);
+  const includeEmbedded = searchParams.get("includeEmbedded") === "1";
+  const brands = await listBrandsWithOptions({ includeEmbedded });
   return NextResponse.json({ brands });
 }
 

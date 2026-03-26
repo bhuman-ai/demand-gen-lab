@@ -687,6 +687,9 @@ function normalizeProvisionDomainMode(value: unknown) {
   if (["register", "new", "buy", "purchase", "new_domain", "new-domain"].includes(normalized)) {
     return "register";
   }
+  if (["transfer", "bring_your_own", "bring-your-own", "own_domain", "own-domain"].includes(normalized)) {
+    return "transfer";
+  }
   if (["existing", "current", "existing_domain", "existing-domain"].includes(normalized)) {
     return "existing";
   }

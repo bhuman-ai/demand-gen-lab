@@ -36,6 +36,8 @@ import type {
   ReplyThreadFeedbackType,
   RunAnomaly,
   ScaleCampaignRecord,
+  SenderLaunch,
+  SenderLaunchAutopilotMode,
   SourcingChainDecision,
   SourcingProbeResult,
 } from "@/lib/factory-types";
@@ -88,14 +90,16 @@ async function readJson(response: Response) {
   return record;
 }
 
-export async function fetchBrands() {
-  const response = await fetch("/api/brands", { cache: "no-store" });
+export async function fetchBrands(options?: { includeEmbedded?: boolean }) {
+  const query = options?.includeEmbedded ? "?includeEmbedded=1" : "";
+  const response = await fetch(`/api/brands${query}`, { cache: "no-store" });
   const data = await readJson(response);
   return (Array.isArray(data?.brands) ? data.brands : []) as BrandRecord[];
 }
 
-export async function fetchBrand(brandId: string) {
-  const response = await fetch(`/api/brands/${brandId}`, { cache: "no-store" });
+export async function fetchBrand(brandId: string, options?: { includeEmbedded?: boolean }) {
+  const query = options?.includeEmbedded ? "?includeEmbedded=1" : "";
+  const response = await fetch(`/api/brands/${brandId}${query}`, { cache: "no-store" });
   const data = await readJson(response);
   return data.brand as BrandRecord;
 }
@@ -1440,7 +1444,7 @@ export async function provisionSenderDomain(
     accountName: string;
     assignToBrand?: boolean;
     selectedMailboxAccountId?: string;
-    domainMode: "existing" | "register";
+    domainMode: "existing" | "register" | "transfer";
     domain: string;
     fromLocalPart: string;
     autoPickCustomerIoAccount?: boolean;
@@ -1598,6 +1602,23 @@ export async function refreshMailpoolOutreachAccount(accountId: string) {
       ? data.deliverabilityKickoffErrors.map((entry) => String(entry ?? "").trim()).filter(Boolean)
       : [],
   };
+}
+
+export async function updateSenderLaunchPolicy(
+  accountId: string,
+  patch: {
+    autopilotMode: SenderLaunchAutopilotMode;
+    autopilotAllowedDomains?: string[];
+    autopilotBlockedDomains?: string[];
+  }
+) {
+  const response = await fetch(`/api/outreach/accounts/${accountId}/launch/policy`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+  const data = await readJson(response);
+  return data.launch as SenderLaunch;
 }
 
 export async function assignBrandOutreachAccount(

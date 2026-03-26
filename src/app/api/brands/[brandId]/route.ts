@@ -12,6 +12,7 @@ import {
   updateOutreachProvisioningSettings,
 } from "@/lib/outreach-provider-settings";
 import { enrichBrandWithSenderHealth } from "@/lib/sender-health";
+import { loadBrandSenderLaunchView } from "@/lib/sender-launch";
 
 function asRecord(value: unknown): Record<string, unknown> {
   if (value && typeof value === "object" && !Array.isArray(value)) {
@@ -147,13 +148,15 @@ function normalizeStringArray(value: unknown): string[] {
     .filter((entry) => entry.length > 0);
 }
 
-export async function GET(_: Request, context: { params: Promise<{ brandId: string }> }) {
+export async function GET(request: Request, context: { params: Promise<{ brandId: string }> }) {
   const { brandId } = await context.params;
-  const brand = await getBrandById(brandId);
+  const { searchParams } = new URL(request.url);
+  const includeEmbedded = searchParams.get("includeEmbedded") === "1";
+  const brand = await getBrandById(brandId, { includeEmbedded });
   if (!brand) {
     return NextResponse.json({ error: "brand not found" }, { status: 404 });
   }
-  return NextResponse.json({ brand: await enrichBrandWithSenderHealth(brand) });
+  return NextResponse.json({ brand });
 }
 
 export async function PATCH(request: Request, context: { params: Promise<{ brandId: string }> }) {
@@ -212,7 +215,8 @@ export async function PATCH(request: Request, context: { params: Promise<{ brand
     }
   }
 
-  return NextResponse.json({ brand: await enrichBrandWithSenderHealth(brand) });
+  const launchView = await loadBrandSenderLaunchView(brand.id);
+  return NextResponse.json({ brand: launchView?.brand ?? (await enrichBrandWithSenderHealth(brand)) });
 }
 
 export async function DELETE(_: Request, context: { params: Promise<{ brandId: string }> }) {

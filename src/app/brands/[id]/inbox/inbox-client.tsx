@@ -804,18 +804,18 @@ export default function InboxClient({ brand }: { brand: BrandRecord }) {
             </div>
 
             <div className="grid gap-4 xl:grid-cols-2">
-              <div className="space-y-4">
-                <div className="rounded-[12px] border border-[color:var(--border)] bg-[color:var(--surface)] p-4">
+              <div className="min-w-0 space-y-4">
+                <div className="min-w-0 rounded-[12px] border border-[color:var(--border)] bg-[color:var(--surface)] p-4">
                   <div className="text-sm font-semibold text-[color:var(--foreground)]">Confirmed Facts</div>
                   <div className="mt-3">{renderFactList(confirmedFacts, "No confirmed facts captured yet.")}</div>
                 </div>
 
-                <div className="rounded-[12px] border border-[color:var(--border)] bg-[color:var(--surface)] p-4">
+                <div className="min-w-0 rounded-[12px] border border-[color:var(--border)] bg-[color:var(--surface)] p-4">
                   <div className="text-sm font-semibold text-[color:var(--foreground)]">Inferred Facts</div>
                   <div className="mt-3">{renderFactList(inferredFacts, "No inferred facts yet.")}</div>
                 </div>
 
-                <div className="rounded-[12px] border border-[color:var(--border)] bg-[color:var(--surface)] p-4">
+                <div className="min-w-0 rounded-[12px] border border-[color:var(--border)] bg-[color:var(--surface)] p-4">
                   <div className="text-sm font-semibold text-[color:var(--foreground)]">Signals</div>
                   <div className="mt-3 grid gap-3 md:grid-cols-2">
                     <div>
@@ -886,8 +886,8 @@ export default function InboxClient({ brand }: { brand: BrandRecord }) {
                 </div>
               </div>
 
-              <div className="space-y-4">
-                <div className="rounded-[12px] border border-[color:var(--border)] bg-[color:var(--surface)] p-4">
+              <div className="min-w-0 space-y-4">
+                <div className="min-w-0 rounded-[12px] border border-[color:var(--border)] bg-[color:var(--surface)] p-4">
                   <div className="flex flex-wrap items-center justify-between gap-3">
                     <div className="text-sm font-semibold text-[color:var(--foreground)]">Current Draft</div>
                     {selectedState.latestDraftMeta.status !== "none" ? (
@@ -916,14 +916,14 @@ export default function InboxClient({ brand }: { brand: BrandRecord }) {
                           {selectedState.latestDraftMeta.reason || "No draft reason recorded."}
                         </div>
                       </div>
-                      <div className="rounded-[10px] border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3 whitespace-pre-wrap text-sm text-[color:var(--foreground)]">
+                      <div className="min-w-0 overflow-hidden rounded-[10px] border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3 whitespace-pre-wrap break-words [overflow-wrap:anywhere] text-sm text-[color:var(--foreground)]">
                         {selectedState.canonicalState.draft.body || "No draft body stored in state."}
                       </div>
                     </div>
                   )}
                 </div>
 
-                <div className="rounded-[12px] border border-[color:var(--border)] bg-[color:var(--surface)] p-4">
+                <div className="min-w-0 rounded-[12px] border border-[color:var(--border)] bg-[color:var(--surface)] p-4">
                   <div className="text-sm font-semibold text-[color:var(--foreground)]">Reviewer Feedback</div>
                   <div className="mt-3 space-y-2">
                     {selectedDetail.feedback.length ? (
@@ -951,13 +951,13 @@ export default function InboxClient({ brand }: { brand: BrandRecord }) {
                   </div>
                 </div>
 
-                <div className="rounded-[12px] border border-[color:var(--border)] bg-[color:var(--surface)] p-4">
+                <div className="min-w-0 rounded-[12px] border border-[color:var(--border)] bg-[color:var(--surface)] p-4">
                   <div className="text-sm font-semibold text-[color:var(--foreground)]">History</div>
                   <div className="mt-3 space-y-3">
                     {selectedDetail.history.map((item) => (
                       <div
                         key={`${item.source}:${item.id}`}
-                        className="rounded-[10px] border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3"
+                        className="min-w-0 overflow-hidden rounded-[10px] border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3"
                       >
                         <div className="flex flex-wrap items-center justify-between gap-2">
                           <div className="flex flex-wrap items-center gap-2">
@@ -973,11 +973,11 @@ export default function InboxClient({ brand }: { brand: BrandRecord }) {
                           </div>
                         </div>
                         {item.subject ? (
-                          <div className="mt-2 text-sm font-medium text-[color:var(--foreground)]">
+                          <div className="mt-2 min-w-0 break-words [overflow-wrap:anywhere] text-sm font-medium text-[color:var(--foreground)]">
                             {item.subject}
                           </div>
                         ) : null}
-                        <div className="mt-2 whitespace-pre-wrap text-sm leading-6 text-[color:var(--foreground)]">
+                        <div className="mt-2 min-w-0 whitespace-pre-wrap break-words [overflow-wrap:anywhere] text-sm leading-6 text-[color:var(--foreground)]">
                           {formatMessageBody(item.body)}
                         </div>
                       </div>

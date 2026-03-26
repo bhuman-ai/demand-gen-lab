@@ -16256,6 +16256,23 @@ export async function ingestBrandInboxMessage(input: {
   if (!brand) {
     return { ok: false, threadId: "", draftId: "", reason: "Brand not found" };
   }
+  const assignment = await getBrandOutreachAssignment(brand.id);
+  const assignedMailboxAccountId = String(
+    assignment?.mailboxAccountId ?? assignment?.accountId ?? ""
+  ).trim();
+  const requestedMailboxAccountId = input.mailboxAccountId?.trim() || "";
+  if (
+    requestedMailboxAccountId &&
+    assignedMailboxAccountId &&
+    requestedMailboxAccountId !== assignedMailboxAccountId
+  ) {
+    return {
+      ok: false,
+      threadId: "",
+      draftId: "",
+      reason: "Mailbox account is not assigned to this brand",
+    };
+  }
 
   const normalizedFrom = extractFirstEmailAddress(input.from) || input.from.trim().toLowerCase();
   const normalizedTo = extractFirstEmailAddress(input.to) || input.to.trim().toLowerCase();
@@ -16281,7 +16298,7 @@ export async function ingestBrandInboxMessage(input: {
 
   const mailbox = await resolveMailboxAccountForBrand({
     brandId: brand.id,
-    preferredMailboxAccountId: input.mailboxAccountId,
+    preferredMailboxAccountId: assignedMailboxAccountId || requestedMailboxAccountId,
   });
   const replyPolicy = await evaluateReplyPolicy({
     brandName: brand.name,
@@ -16415,10 +16432,32 @@ export async function syncBrandInboxMailbox(input: {
       threadIds: [],
     };
   }
+  const assignment = await getBrandOutreachAssignment(brand.id);
+  const assignedMailboxAccountId = String(
+    assignment?.mailboxAccountId ?? assignment?.accountId ?? ""
+  ).trim();
+  const requestedMailboxAccountId = input.mailboxAccountId?.trim() || "";
+  if (
+    requestedMailboxAccountId &&
+    assignedMailboxAccountId &&
+    requestedMailboxAccountId !== assignedMailboxAccountId
+  ) {
+    return {
+      ok: false,
+      reason: "Mailbox account is not assigned to this brand",
+      mailboxAccountId: requestedMailboxAccountId,
+      mailboxName: "",
+      importedCount: 0,
+      duplicateCount: 0,
+      skippedCount: 0,
+      lastInboxUid: 0,
+      threadIds: [],
+    };
+  }
 
   const mailbox = await resolveMailboxAccountForBrand({
     brandId: brand.id,
-    preferredMailboxAccountId: input.mailboxAccountId,
+    preferredMailboxAccountId: assignedMailboxAccountId || requestedMailboxAccountId,
   });
   if (!mailbox) {
     return {

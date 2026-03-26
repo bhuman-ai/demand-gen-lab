@@ -9,6 +9,12 @@ import {
 } from "@/lib/outreach-data";
 import type { BrandInboxSource, ReplyThread } from "@/lib/factory-types";
 
+function assignedMailboxAccountId(
+  assignment: Awaited<ReturnType<typeof getBrandOutreachAssignment>>
+) {
+  return String(assignment?.mailboxAccountId ?? assignment?.accountId ?? "").trim();
+}
+
 function providerValue(value: unknown): BrandInboxSource["provider"] {
   return value === "mailpool" || value === "customerio" ? value : "";
 }
@@ -41,6 +47,11 @@ function sourceTypesForMailbox(
   )];
 }
 
+function isVisibleInboxThread(thread: ReplyThread, allowedMailboxIds: Set<string>) {
+  const mailboxAccountId = thread.mailboxAccountId.trim();
+  return !mailboxAccountId || allowedMailboxIds.size === 0 || allowedMailboxIds.has(mailboxAccountId);
+}
+
 export async function GET(
   _: Request,
   context: { params: Promise<{ brandId: string }> }
@@ -57,12 +68,24 @@ export async function GET(
     listInboxSyncStatesByBrand(brandId),
     listOutreachAccounts(),
   ]);
+  const currentMailboxAccountId = assignedMailboxAccountId(assignment);
+  const allowedMailboxIds = new Set<string>();
+  if (currentMailboxAccountId) {
+    allowedMailboxIds.add(currentMailboxAccountId);
+  }
+  const visibleThreads = threads.filter((thread) => isVisibleInboxThread(thread, allowedMailboxIds));
+  const visibleDraftThreadIds = new Set(visibleThreads.map((thread) => thread.id));
+  const visibleDrafts = drafts.filter((draft) => visibleDraftThreadIds.has(draft.threadId));
+  const visibleSyncStates = syncStates.filter((state) => {
+    const mailboxAccountId = state.mailboxAccountId.trim();
+    return !mailboxAccountId || allowedMailboxIds.size === 0 || allowedMailboxIds.has(mailboxAccountId);
+  });
 
   const accountById = new Map(accounts.map((account) => [account.id, account] as const));
-  const syncStateByMailboxId = new Map(syncStates.map((state) => [state.mailboxAccountId, state] as const));
+  const syncStateByMailboxId = new Map(visibleSyncStates.map((state) => [state.mailboxAccountId, state] as const));
   const threadCountsByMailboxId = new Map<string, number>();
 
-  for (const thread of threads) {
+  for (const thread of visibleThreads) {
     const mailboxAccountId = thread.mailboxAccountId.trim();
     if (!mailboxAccountId) continue;
     threadCountsByMailboxId.set(
@@ -72,14 +95,14 @@ export async function GET(
   }
 
   const mailboxIds = new Set<string>();
-  for (const thread of threads) {
+  for (const thread of visibleThreads) {
     if (thread.mailboxAccountId.trim()) mailboxIds.add(thread.mailboxAccountId.trim());
   }
-  for (const state of syncStates) {
+  for (const state of visibleSyncStates) {
     if (state.mailboxAccountId.trim()) mailboxIds.add(state.mailboxAccountId.trim());
   }
-  if (assignment?.mailboxAccountId.trim()) {
-    mailboxIds.add(assignment.mailboxAccountId.trim());
+  if (currentMailboxAccountId) {
+    mailboxIds.add(currentMailboxAccountId);
   }
 
   const inboxSources: BrandInboxSource[] = [...mailboxIds]
@@ -104,10 +127,10 @@ export async function GET(
         accountStatus: accountStatusValue(account?.status),
         mailboxStatus: mailboxStatusValue(account?.config.mailbox.status),
         threadCount: threadCountsByMailboxId.get(mailboxAccountId) ?? 0,
-        sourceTypes: sourceTypesForMailbox(threads, mailboxAccountId),
+        sourceTypes: sourceTypesForMailbox(visibleThreads, mailboxAccountId),
         lastSyncedAt: syncState?.lastSyncedAt ?? "",
         lastError: syncState?.lastError ?? "",
-        primary: assignment?.mailboxAccountId.trim() === mailboxAccountId,
+        primary: currentMailboxAccountId === mailboxAccountId,
       };
     })
     .sort((left, right) => {
@@ -117,5 +140,5 @@ export async function GET(
       return (left.email || left.accountName).localeCompare(right.email || right.accountName);
     });
 
-  return NextResponse.json({ threads, drafts, inboxSources });
+  return NextResponse.json({ threads: visibleThreads, drafts: visibleDrafts, inboxSources });
 }

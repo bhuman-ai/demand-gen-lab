@@ -292,6 +292,10 @@ export default function InboxClient({ brand }: { brand: BrandRecord }) {
         .includes(needle)
     );
   }, [threads, query]);
+  const inboxSourceByMailboxId = useMemo(
+    () => new Map(inboxSources.map((source) => [source.mailboxAccountId, source])),
+    [inboxSources]
+  );
 
   const threadMap = useMemo(
     () => new Map(threads.map((thread) => [thread.id, thread])),
@@ -618,6 +622,14 @@ export default function InboxClient({ brand }: { brand: BrandRecord }) {
                       <div className="font-medium text-[color:var(--foreground)]">{thread.subject}</div>
                       <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-[color:var(--muted-foreground)]">
                         <Badge variant="muted">{thread.sourceType}</Badge>
+                        {thread.mailboxAccountId ? (
+                          <Badge variant="outline">
+                            {(inboxSourceByMailboxId.get(thread.mailboxAccountId)?.email ||
+                              inboxSourceByMailboxId.get(thread.mailboxAccountId)?.accountName ||
+                              thread.mailboxAccountId)
+                              .trim()}
+                          </Badge>
+                        ) : null}
                         <span>
                           {thread.contactName || thread.contactEmail || thread.contactCompany || thread.stateSummary?.latestUserAsk || thread.intent}
                         </span>

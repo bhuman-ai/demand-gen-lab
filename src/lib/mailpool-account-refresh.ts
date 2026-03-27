@@ -48,7 +48,7 @@ function buildMailpoolAccountPatch(mailbox: MailpoolMailbox, existingConfig: Out
         siteId: String(existingConfig.customerIo.siteId ?? "").trim(),
         workspaceId: String(existingConfig.customerIo.workspaceId ?? "").trim(),
         fromEmail,
-        replyToEmail: String(existingConfig.customerIo.replyToEmail ?? "").trim() || fromEmail,
+        replyToEmail: fromEmail,
         billing: sanitizeCustomerIoBillingConfig(existingConfig.customerIo.billing),
       },
       mailpool: {

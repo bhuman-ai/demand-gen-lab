@@ -20,9 +20,12 @@ export function getOutreachAccountFromEmail(account: Pick<OutreachAccount, "conf
 
 export function getOutreachAccountReplyToEmail(account: Pick<OutreachAccount, "config"> | null | undefined) {
   if (!account) return "";
+  const mailboxEmail = account.config.mailbox.email.trim();
+  if (mailboxEmail) {
+    return mailboxEmail;
+  }
   return (
     account.config.customerIo.replyToEmail.trim() ||
-    account.config.mailbox.email.trim() ||
     account.config.customerIo.fromEmail.trim()
   );
 }

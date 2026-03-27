@@ -11098,8 +11098,7 @@ export async function launchExperimentRun(input: {
     maxLeads: maxSeedLeads,
   });
   if (!seedLeads.length) {
-    const reason = "No reusable approved prospects are available for this experiment yet";
-    const failed = await createOutreachRun({
+    const run = await createOutreachRun({
       brandId: input.brandId,
       campaignId: input.campaignId,
       experimentId: experiment.id,
@@ -11107,29 +11106,54 @@ export async function launchExperimentRun(input: {
       ownerType: input.ownerType,
       ownerId: input.ownerId,
       accountId: brandAccount.deliveryAccount.id,
-      status: "preflight_failed",
+      status: "queued",
       dailyCap: experiment.runPolicy?.dailyCap ?? 30,
       hourlyCap: experiment.runPolicy?.hourlyCap ?? 6,
       timezone: experiment.runPolicy?.timezone || DEFAULT_TIMEZONE,
       minSpacingMinutes: experiment.runPolicy?.minSpacingMinutes ?? 8,
-      lastError: reason,
     });
-    await markExperimentExecutionStatus(input.brandId, input.campaignId, experiment.id, "failed");
+    await updateOutreachRun(run.id, {
+      status: "sourcing",
+      completedAt: "",
+      lastError: "",
+      sourcingTraceSummary: {
+        phase: "queued",
+        selectedActorIds: [],
+        lastActorInputError: "",
+        failureStep: "",
+        budgetUsedUsd: 0,
+      },
+      metrics: buildLiveRunMetrics({
+        run,
+        messages: [],
+        threads: [],
+        sourcedLeads: 0,
+      }),
+    });
+    await enqueueOutreachJob({
+      runId: run.id,
+      jobType: "source_leads",
+      executeAfter: nowIso(),
+      payload: {
+        maxLeadsOverride: maxSeedLeads,
+      },
+    });
+    await markExperimentExecutionStatus(input.brandId, input.campaignId, experiment.id, "queued");
     await createOutreachEvent({
-      runId: failed.id,
+      runId: run.id,
       eventType: "hypothesis_approved_auto_run_queued",
       payload: {
         trigger: input.trigger,
-        outcome: "preflight_failed",
-        reason,
-        hint: "Resolve approved EnrichAnything prospects first, then relaunch.",
+        outcome: "source_from_zero",
+        seededLeadCount: 0,
+        maxLeadsOverride: maxSeedLeads,
       },
     });
     return {
-      ok: false,
-      runId: failed.id,
-      reason,
-      hint: "Resolve approved EnrichAnything prospects first, then relaunch.",
+      ok: true,
+      runId: run.id,
+      reason: "Run queued for fresh lead sourcing",
+      hint: "No reusable approved prospects existed, so lead sourcing was queued from zero.",
     };
   }
 
@@ -14310,6 +14334,13 @@ async function processScheduleMessagesJob(job: OutreachJob) {
   }
   const runtimeExperiment = await getExperimentRecordByRuntimeRef(run.brandId, run.campaignId, run.experimentId);
   const businessWindow = businessWindowFromExperimentEnvelope(runtimeExperiment?.testEnvelope);
+  const routingPreview = await buildRunSenderRoutingContext(run);
+  const launchParallelism = Math.max(
+    1,
+    routingPreview.dispatchPool.length || routingPreview.senderPoolState.pool.length || 1
+  );
+  const effectiveSpacingMinutes =
+    run.minSpacingMinutes <= 0 ? 0 : Math.max(1, Math.floor(run.minSpacingMinutes / launchParallelism));
   const parsedOffer = parseOfferAndCta(runtimeExperiment?.offer ?? "");
   const experimentOffer = parsedOffer.offer || runtimeExperiment?.offer || "";
   const experimentCta = parsedOffer.cta;
@@ -14429,7 +14460,7 @@ async function processScheduleMessagesJob(job: OutreachJob) {
         experimentAudience,
         experimentNotes: experiment.notes ?? "",
         maxDepth: graph.maxDepth,
-        waitMinutes: index * run.minSpacingMinutes,
+        waitMinutes: index * effectiveSpacingMinutes,
         businessWindow,
         existingMessages: existingConversationMessages,
       });
@@ -15618,24 +15649,36 @@ export async function runInboxSyncTick(limit = 12): Promise<{
     await Promise.all(
       brands.map(async (brand) => {
         const assignment = await getBrandOutreachAssignment(brand.id);
-        const mailboxAccountId = String(
+        const mailboxIds = new Set<string>();
+        const primaryMailboxId = String(
           assignment?.mailboxAccountId ?? assignment?.accountId ?? ""
         ).trim();
-        if (!mailboxAccountId) return null;
-        const account = accountById.get(mailboxAccountId);
-        if (!account || !supportsAutomaticInboxSync(account)) return null;
-        const secrets = await getOutreachAccountSecrets(mailboxAccountId);
-        if (!secrets?.mailboxPassword.trim()) return null;
-        const syncState = await getInboxSyncState(brand.id, mailboxAccountId);
-        const syncedAt = Date.parse(syncState?.lastSyncedAt || syncState?.updatedAt || "");
-        return {
-          brandId: brand.id,
-          mailboxAccountId,
-          lastSyncedAtMs: Number.isFinite(syncedAt) ? syncedAt : 0,
-        };
+        if (primaryMailboxId) mailboxIds.add(primaryMailboxId);
+        for (const accountId of assignment?.accountIds ?? []) {
+          const normalized = String(accountId ?? "").trim();
+          if (normalized) mailboxIds.add(normalized);
+        }
+        if (mailboxIds.size === 0) return [];
+
+        return Promise.all(
+          [...mailboxIds].map(async (mailboxAccountId) => {
+            const account = accountById.get(mailboxAccountId);
+            if (!account || !supportsAutomaticInboxSync(account)) return null;
+            const secrets = await getOutreachAccountSecrets(mailboxAccountId);
+            if (!secrets?.mailboxPassword.trim()) return null;
+            const syncState = await getInboxSyncState(brand.id, mailboxAccountId);
+            const syncedAt = Date.parse(syncState?.lastSyncedAt || syncState?.updatedAt || "");
+            return {
+              brandId: brand.id,
+              mailboxAccountId,
+              lastSyncedAtMs: Number.isFinite(syncedAt) ? syncedAt : 0,
+            };
+          })
+        );
       })
     )
   )
+    .flat()
     .filter((row): row is { brandId: string; mailboxAccountId: string; lastSyncedAtMs: number } => Boolean(row))
     .sort((left, right) => {
       if (left.lastSyncedAtMs !== right.lastSyncedAtMs) {

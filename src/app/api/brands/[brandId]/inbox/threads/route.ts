@@ -15,6 +15,19 @@ function assignedMailboxAccountId(
   return String(assignment?.mailboxAccountId ?? assignment?.accountId ?? "").trim();
 }
 
+function assignedMailboxAccountIds(
+  assignment: Awaited<ReturnType<typeof getBrandOutreachAssignment>>
+) {
+  const ids = new Set<string>();
+  const primary = assignedMailboxAccountId(assignment);
+  if (primary) ids.add(primary);
+  for (const accountId of assignment?.accountIds ?? []) {
+    const normalized = String(accountId ?? "").trim();
+    if (normalized) ids.add(normalized);
+  }
+  return ids;
+}
+
 function providerValue(value: unknown): BrandInboxSource["provider"] {
   return value === "mailpool" || value === "customerio" ? value : "";
 }
@@ -69,10 +82,7 @@ export async function GET(
     listOutreachAccounts(),
   ]);
   const currentMailboxAccountId = assignedMailboxAccountId(assignment);
-  const allowedMailboxIds = new Set<string>();
-  if (currentMailboxAccountId) {
-    allowedMailboxIds.add(currentMailboxAccountId);
-  }
+  const allowedMailboxIds = assignedMailboxAccountIds(assignment);
   const visibleThreads = threads.filter((thread) => isVisibleInboxThread(thread, allowedMailboxIds));
   const visibleDraftThreadIds = new Set(visibleThreads.map((thread) => thread.id));
   const visibleDrafts = drafts.filter((draft) => visibleDraftThreadIds.has(draft.threadId));

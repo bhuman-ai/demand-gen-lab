@@ -3,6 +3,19 @@ import { getBrandById } from "@/lib/factory-data";
 import { getBrandOutreachAssignment } from "@/lib/outreach-data";
 import { getReplyThreadDetail } from "@/lib/reply-thread-state";
 
+function assignedMailboxAccountIds(
+  assignment: Awaited<ReturnType<typeof getBrandOutreachAssignment>>
+) {
+  const ids = new Set<string>();
+  const primary = String(assignment?.mailboxAccountId ?? assignment?.accountId ?? "").trim();
+  if (primary) ids.add(primary);
+  for (const accountId of assignment?.accountIds ?? []) {
+    const normalized = String(accountId ?? "").trim();
+    if (normalized) ids.add(normalized);
+  }
+  return ids;
+}
+
 export async function GET(
   _: Request,
   context: { params: Promise<{ brandId: string; threadId: string }> }
@@ -18,13 +31,11 @@ export async function GET(
     return NextResponse.json({ error: "thread not found" }, { status: 404 });
   }
   const assignment = await getBrandOutreachAssignment(brandId);
-  const assignedMailboxAccountId = String(
-    assignment?.mailboxAccountId ?? assignment?.accountId ?? ""
-  ).trim();
+  const assignedMailboxIds = assignedMailboxAccountIds(assignment);
   if (
-    assignedMailboxAccountId &&
+    assignedMailboxIds.size > 0 &&
     detail.thread.mailboxAccountId.trim() &&
-    detail.thread.mailboxAccountId.trim() !== assignedMailboxAccountId
+    !assignedMailboxIds.has(detail.thread.mailboxAccountId.trim())
   ) {
     return NextResponse.json({ error: "thread not found" }, { status: 404 });
   }

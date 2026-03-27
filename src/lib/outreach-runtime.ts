@@ -11117,7 +11117,7 @@ export async function launchExperimentRun(input: {
       completedAt: "",
       lastError: "",
       sourcingTraceSummary: {
-        phase: "queued",
+        phase: "plan_sourcing",
         selectedActorIds: [],
         lastActorInputError: "",
         failureStep: "",

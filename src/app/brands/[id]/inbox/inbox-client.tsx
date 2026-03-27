@@ -623,7 +623,7 @@ export default function InboxClient({ brand }: { brand: BrandRecord }) {
                       <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-[color:var(--muted-foreground)]">
                         <Badge variant="muted">{thread.sourceType}</Badge>
                         {thread.mailboxAccountId ? (
-                          <Badge variant="outline">
+                          <Badge variant="muted">
                             {(inboxSourceByMailboxId.get(thread.mailboxAccountId)?.email ||
                               inboxSourceByMailboxId.get(thread.mailboxAccountId)?.accountName ||
                               thread.mailboxAccountId)

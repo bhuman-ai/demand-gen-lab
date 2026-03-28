@@ -114,6 +114,9 @@ export async function GET(
   if (currentMailboxAccountId) {
     mailboxIds.add(currentMailboxAccountId);
   }
+  for (const mailboxAccountId of allowedMailboxIds) {
+    if (mailboxAccountId.trim()) mailboxIds.add(mailboxAccountId.trim());
+  }
 
   const inboxSources: BrandInboxSource[] = [...mailboxIds]
     .map((mailboxAccountId) => {

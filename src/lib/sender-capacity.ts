@@ -226,13 +226,7 @@ export function calculateSenderCapacityPolicy(input: {
   const domainActiveSenderRank = Math.max(0, Number(input.domainActiveSenderRank ?? 0) || 0);
   const domainLimitBlocked =
     domainActiveSenderRank > 0 && domainActiveSenderRank > activeSenderLimitPerDomain;
-  const gated =
-    nextAutomationFactor <= 0 ||
-    nextLaunchFactor <= 0 ||
-    nextHealthFactor <= 0 ||
-    nextDeliverabilityFactor <= 0 ||
-    domainLimitBlocked;
-  const dailyCap = gated ? 0 : Math.min(MAX_SENDER_DAILY_CAP, baseDailyCap);
+  const dailyCap = domainLimitBlocked ? 0 : Math.min(MAX_SENDER_DAILY_CAP, baseDailyCap);
   const hourlyCap =
     dailyCap <= 0 ? 0 : Math.min(dailyCap, Math.max(1, Math.ceil(dailyCap / safeBusinessHours)));
   const warmupStage = warmupStageLabel(stage);

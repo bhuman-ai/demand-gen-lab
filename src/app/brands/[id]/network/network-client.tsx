@@ -28,6 +28,7 @@ import {
   getOutreachAccountFromEmail,
   getOutreachAccountReplyToEmail,
 } from "@/lib/outreach-account-helpers";
+import { evaluateSenderReadiness, type SenderReadiness } from "@/lib/send-readiness";
 import { trackEvent } from "@/lib/telemetry-client";
 import type {
   BrandOutreachAssignment,
@@ -265,7 +266,16 @@ function automationTimingLabel(row: DomainRow) {
   return row.role === "brand" ? "No sender checks scheduled" : "Awaiting first automated check";
 }
 
-function filterBucket(row: DomainRow, capacity?: SenderCapacitySnapshot | null): Exclude<SenderFilter, "all"> {
+function filterBucket(
+  row: DomainRow,
+  capacity?: SenderCapacitySnapshot | null,
+  readiness?: SenderReadiness | null
+): Exclude<SenderFilter, "all"> {
+  if (row.role === "brand") return "ready";
+  if (readiness?.lifecycle === "blocked") return "attention";
+  if (readiness?.lifecycle === "setup") return "queued";
+  if (readiness?.lifecycle === "warming") return "warming";
+  if (readiness?.lifecycle === "ready") return "ready";
   if (capacity?.domainLimitBlocked) return "attention";
   const status = derivedAutomationStatus(row);
   if (status === "attention") return "attention";
@@ -318,10 +328,15 @@ function routingRoleForRow(row: DomainRow, routingRoleBySenderId: Map<string, Ro
 function senderCardStatus(
   row: DomainRow,
   routingRole: RoutingRole,
-  capacity?: SenderCapacitySnapshot | null
+  capacity?: SenderCapacitySnapshot | null,
+  readiness?: SenderReadiness | null
 ): SenderCardStatus {
   const automationStatus = derivedAutomationStatus(row);
   if (row.role === "brand") return "protected";
+  if (readiness?.lifecycle === "setup") return "setup";
+  if (readiness?.lifecycle === "blocked") return "fix";
+  if (readiness?.lifecycle === "warming") return "warming";
+  if (readiness?.lifecycle === "ready") return "ready";
   if (capacity?.domainLimitBlocked) return "fix";
   if (automationStatus === "attention" || routingRole === "blocked" || row.status === "risky") return "fix";
   if (!row.fromEmail || automationStatus === "testing" || automationStatus === "queued") return "setup";
@@ -395,12 +410,14 @@ function senderRouteLabel(
   status: SenderCardStatus,
   health: SenderHealthTone,
   provisioning: SenderProvisioningSnapshot | null,
-  capacity?: SenderCapacitySnapshot | null
+  capacity?: SenderCapacitySnapshot | null,
+  readiness?: SenderReadiness | null
 ) {
   if (status === "protected") return "Replies only";
   if (provisioning) return provisioning.headline;
   if (capacity?.domainLimitBlocked) return "Domain capped";
   if (status === "fix") {
+    if (readiness?.primaryBlockingReason) return "Blocked";
     if (row.dnsStatus === "error") return "Setup broken";
     if (isMonitorInboxIssue(row)) return "Need another inbox";
     if (health === "problem") return "Health problem";
@@ -425,12 +442,14 @@ function senderRouteDetail(
   status: SenderCardStatus,
   health: SenderHealthTone,
   provisioning: SenderProvisioningSnapshot | null,
-  capacity?: SenderCapacitySnapshot | null
+  capacity?: SenderCapacitySnapshot | null,
+  readiness?: SenderReadiness | null
 ) {
   if (status === "protected") return "Reply inbox only";
   if (provisioning) return provisioning.etaLabel;
   if (capacity?.domainLimitBlocked) return `Only ${capacity.activeSenderLimitPerDomain} inboxes can send on this domain`;
   if (status === "fix") {
+    if (readiness?.primaryBlockingReason) return readiness.primaryBlockingReason;
     if (row.dnsStatus === "error") return "Warmup cannot start";
     if (isMonitorInboxIssue(row)) return "Checks are paused";
     if (health === "problem") return "Out of rotation";
@@ -536,7 +555,8 @@ function senderTodaySummary(
   row: DomainRow,
   status: SenderCardStatus,
   provisioning: SenderProvisioningSnapshot | null,
-  capacity?: SenderCapacitySnapshot | null
+  capacity?: SenderCapacitySnapshot | null,
+  readiness?: SenderReadiness | null
 ) {
   const cap = senderDailyCap(row, capacity);
   if (status === "protected") {
@@ -549,7 +569,7 @@ function senderTodaySummary(
     return { value: "0", detail: `domain capped at ${capacity.activeSenderLimitPerDomain}` };
   }
   if (status === "fix") {
-    return { value: "0", detail: "paused today" };
+    return { value: "0", detail: readiness?.primaryBlockingReason || "paused today" };
   }
   if (status === "setup") {
     return { value: "0", detail: "not ready yet" };
@@ -588,7 +608,8 @@ function senderActionPlan(
   row: DomainRow,
   status: SenderCardStatus,
   health: SenderHealthTone,
-  provisioning: SenderProvisioningSnapshot | null
+  provisioning: SenderProvisioningSnapshot | null,
+  readiness?: SenderReadiness | null
 ): SenderActionPlan | null {
   if (status === "protected" || status === "ready") return null;
   if (provisioning) {
@@ -637,7 +658,9 @@ function senderActionPlan(
     return {
       kind: "open_settings",
       label: "Open outreach settings",
-      description: "Review deliverability settings and the sender inputs driving health checks.",
+      description:
+        readiness?.primaryBlockingReason ||
+        "Review sender setup and delivery settings driving this block.",
     };
   }
   return null;
@@ -649,7 +672,8 @@ function senderSummaryLine(
   routingRole: RoutingRole,
   health: SenderHealthTone,
   provisioning: SenderProvisioningSnapshot | null,
-  capacity?: SenderCapacitySnapshot | null
+  capacity?: SenderCapacitySnapshot | null,
+  readiness?: SenderReadiness | null
 ) {
   if (status === "protected") {
     return "This is your protected reply domain. It catches replies but does not send outbound mail.";
@@ -657,6 +681,9 @@ function senderSummaryLine(
   if (provisioning) return provisioning.summary;
   if (capacity?.domainLimitBlocked) {
     return `This inbox is healthy, but it is intentionally idle because ${row.domain} already has ${capacity.activeSenderLimitPerDomain} active sending inboxes.`;
+  }
+  if (status === "fix" && readiness?.primaryBlockingReason) {
+    return readiness.primaryBlockingReason;
   }
   if (status === "fix" && isMonitorInboxIssue(row)) {
     return "This sender is not broken. We just ran out of extra inboxes used to check it safely. Add 1 more inbox and checks will start again.";
@@ -889,11 +916,37 @@ export default function NetworkClient({
       (row.fromEmail ? senderCapacityByEmail.get(String(row.fromEmail).trim().toLowerCase()) ?? null : null),
     [senderCapacityByAccountId, senderCapacityByEmail]
   );
+  const readinessForRow = useCallback(
+    (row: DomainRow) => {
+      if (row.role === "brand") return null;
+      const account =
+        (getDomainDeliveryAccountId(row)
+          ? deliveryAccountById.get(getDomainDeliveryAccountId(row)) ?? null
+          : null) ||
+        (row.fromEmail ? deliveryAccountByEmail.get(String(row.fromEmail).trim().toLowerCase()) ?? null : null);
+      const fromEmail = String(row.fromEmail ?? "").trim().toLowerCase();
+      const mailboxAccount =
+        account && account.config.mailbox.email.trim().toLowerCase() === fromEmail
+          ? account
+          : assignedMailboxAccount;
+      return evaluateSenderReadiness({
+        account,
+        mailboxAccount,
+        hasDeliveryCredentials: account?.hasCredentials ?? false,
+        hasMailboxCredentials: mailboxAccount?.hasCredentials ?? false,
+        row,
+        capacity: capacityForRow(row),
+      });
+    },
+    [assignedMailboxAccount, capacityForRow, deliveryAccountByEmail, deliveryAccountById]
+  );
 
   const filtered = useMemo(() => {
     const needle = query.trim().toLowerCase();
     return senderDomains.filter((item) => {
-      if (statusFilter !== "all" && filterBucket(item, capacityForRow(item)) !== statusFilter) return false;
+      if (statusFilter !== "all" && filterBucket(item, capacityForRow(item), readinessForRow(item)) !== statusFilter) {
+        return false;
+      }
       if (!needle) return true;
       return [
         item.domain,
@@ -907,7 +960,7 @@ export default function NetworkClient({
         .toLowerCase()
         .includes(needle);
     });
-  }, [capacityForRow, query, senderDomains, statusFilter]);
+  }, [capacityForRow, query, readinessForRow, senderDomains, statusFilter]);
 
   const ledgerItems = useMemo(
     () =>
@@ -916,12 +969,12 @@ export default function NetworkClient({
         value: formatCount(
           filter === "all"
             ? senderDomains.length
-            : senderDomains.filter((item) => filterBucket(item, capacityForRow(item)) === filter).length
+            : senderDomains.filter((item) => filterBucket(item, capacityForRow(item), readinessForRow(item)) === filter).length
         ),
         active: statusFilter === filter,
         onClick: () => setStatusFilter(filter),
       })),
-    [capacityForRow, senderDomains, statusFilter]
+    [capacityForRow, readinessForRow, senderDomains, statusFilter]
   );
 
   const rankedRoutingSignals = useMemo(
@@ -936,21 +989,19 @@ export default function NetworkClient({
   const preferredRoutingSignal = useMemo(
     () =>
       rankedRoutingSignals.find((signal) => {
-        if (signal.automationStatus === "attention") return false;
-        const capacity = senderCapacityByAccountId.get(signal.senderAccountId) ?? null;
-        return Boolean(capacity && capacity.dailyCap > 0 && !capacity.domainLimitBlocked);
+        const row =
+          senderDomains.find((item) => getDomainDeliveryAccountId(item) === signal.senderAccountId) ?? null;
+        return Boolean(row && readinessForRow(row)?.canSendNow);
       }) ?? null,
-    [rankedRoutingSignals, senderCapacityByAccountId]
+    [rankedRoutingSignals, readinessForRow, senderDomains]
   );
   const routingRoleBySenderId = useMemo(() => {
     const next = new Map<string, "primary" | "standby" | "blocked" | "pending">();
     for (const signal of rankedRoutingSignals) {
-      const capacity = senderCapacityByAccountId.get(signal.senderAccountId) ?? null;
-      if (capacity?.domainLimitBlocked || (capacity && capacity.dailyCap <= 0)) {
-        next.set(signal.senderAccountId, "blocked");
-        continue;
-      }
-      if (signal.automationStatus === "attention") {
+      const row =
+        senderDomains.find((item) => getDomainDeliveryAccountId(item) === signal.senderAccountId) ?? null;
+      const readiness = row ? readinessForRow(row) : null;
+      if (readiness && !readiness.canSendNow) {
         next.set(signal.senderAccountId, "blocked");
         continue;
       }
@@ -961,10 +1012,15 @@ export default function NetworkClient({
       next.set(signal.senderAccountId, "standby");
     }
     return next;
-  }, [rankedRoutingSignals, preferredRoutingSignal, senderCapacityByAccountId]);
+  }, [preferredRoutingSignal, rankedRoutingSignals, readinessForRow, senderDomains]);
   const blockedRoutingSignals = useMemo(
-    () => rankedRoutingSignals.filter((signal) => signal.automationStatus === "attention"),
-    [rankedRoutingSignals]
+    () =>
+      rankedRoutingSignals.filter((signal) => {
+        const row =
+          senderDomains.find((item) => getDomainDeliveryAccountId(item) === signal.senderAccountId) ?? null;
+        return Boolean(row && readinessForRow(row) && !readinessForRow(row)?.canSendNow);
+      }),
+    [rankedRoutingSignals, readinessForRow, senderDomains]
   );
   const senderSummary = useMemo(
     () =>
@@ -977,14 +1033,15 @@ export default function NetworkClient({
             (row.fromEmail ? deliveryAccountByEmail.get(String(row.fromEmail).trim().toLowerCase()) ?? null : null);
           const capacity = capacityForRow(row);
           const routingRole = routingRoleForRow(row, routingRoleBySenderId);
-          const status = senderCardStatus(row, routingRole, capacity);
+          const readiness = readinessForRow(row);
+          const status = senderCardStatus(row, routingRole, capacity, readiness);
           const health = senderOverallHealth(row);
           const provisioning = senderProvisioningSnapshot(row, account);
-          const action = senderActionPlan(row, status, health, provisioning);
+          const action = senderActionPlan(row, status, health, provisioning, readiness);
 
           if (status === "ready") {
             summary.readyCount += 1;
-            summary.readyCapacity += senderDailyCap(row, capacity);
+            summary.readyCapacity += readiness?.canSendNow ? senderDailyCap(row, capacity) : 0;
           } else if (status === "warming") {
             summary.warmingCount += 1;
           } else if (status === "fix") {
@@ -1018,6 +1075,7 @@ export default function NetworkClient({
     [
       deliveryAccountByEmail,
       deliveryAccountById,
+      readinessForRow,
       routingRoleBySenderId,
       senderDomains,
       capacityForRow,
@@ -1044,24 +1102,29 @@ export default function NetworkClient({
     const row =
       senderDomains.find((item) => getDomainDeliveryAccountId(item) === preferredRoutingSignal.senderAccountId) ?? null;
     if (!row) return null;
+    const readiness = readinessForRow(row);
     const status = senderCardStatus(
       row,
       routingRoleForRow(row, routingRoleBySenderId),
-      capacityForRow(row)
+      capacityForRow(row),
+      readiness
     );
     return status === "ready" ? preferredRoutingSignal : null;
-  }, [capacityForRow, preferredRoutingSignal, routingRoleBySenderId, senderDomains]);
+  }, [capacityForRow, preferredRoutingSignal, readinessForRow, routingRoleBySenderId, senderDomains]);
   const readyBackupCount = Math.max(0, senderSummary.readyCount - (preferredReadyRoutingSignal ? 1 : 0));
   const sendingPower = useMemo(() => {
-    const totalDailyCap = senderCapacitySnapshots.reduce(
-      (sum, snapshot) => sum + Math.max(0, Number(snapshot.dailyCap) || 0),
+    const evaluated = senderDomains
+      .map((row) => ({ row, readiness: readinessForRow(row) }))
+      .filter((entry) => entry.row.role !== "brand" && entry.readiness);
+    const totalDailyCap = evaluated.reduce(
+      (sum, entry) => sum + (entry.readiness?.canSendNow ? entry.readiness.currentDailyCap : 0),
       0
     );
-    const usedToday = senderCapacitySnapshots.reduce(
-      (sum, snapshot) => sum + Math.max(0, Number(snapshot.dailySent) || 0),
+    const usedToday = evaluated.reduce(
+      (sum, entry) => sum + Math.max(0, Number(entry.readiness?.dailySent ?? 0) || 0),
       0
     );
-    const activeSenders = senderCapacitySnapshots.filter((snapshot) => (Number(snapshot.dailyCap) || 0) > 0).length;
+    const activeSenders = evaluated.filter((entry) => entry.readiness?.canSendNow).length;
     return {
       totalDailyCap,
       usedToday,
@@ -1069,7 +1132,7 @@ export default function NetworkClient({
       utilization: totalDailyCap > 0 ? Math.min(1, usedToday / totalDailyCap) : 0,
       activeSenders,
     };
-  }, [senderCapacitySnapshots]);
+  }, [readinessForRow, senderDomains]);
 
   useEffect(() => {
     trackEvent("ops_module_opened", { module: "senders", brandId: brand.id });
@@ -1444,13 +1507,15 @@ export default function NetworkClient({
                 (item.fromEmail ? deliveryAccountByEmail.get(String(item.fromEmail).trim().toLowerCase()) ?? null : null);
               const capacity = capacityForRow(item);
               const routingRole = routingRoleForRow(item, routingRoleBySenderId);
-              const status = senderCardStatus(item, routingRole, capacity);
+              const readiness = readinessForRow(item);
+              const status = senderCardStatus(item, routingRole, capacity, readiness);
               const overallHealth = senderOverallHealth(item);
               const provisioning = senderProvisioningSnapshot(item, account);
               const healthDisplay = senderHealthDisplay(item, status, overallHealth, provisioning);
-              const today = senderTodaySummary(item, status, provisioning, capacity);
-              const action = senderActionPlan(item, status, overallHealth, provisioning);
-              const nextStep = action?.label ?? senderNextStep(item, status, overallHealth, provisioning, capacity);
+              const today = senderTodaySummary(item, status, provisioning, capacity, readiness);
+              const action = senderActionPlan(item, status, overallHealth, provisioning, readiness);
+              const nextStep =
+                action?.label ?? senderNextStep(item, status, overallHealth, provisioning, capacity);
               const healthSignals = senderHealthSignals(item);
               const setupLine = provisioning
                 ? `${provisioning.headline} · ${provisioning.etaLabel}`
@@ -1473,7 +1538,7 @@ export default function NetworkClient({
                       <div className="flex flex-wrap items-center gap-2">
                         <Badge variant={senderCardStatusVariant(status)}>{senderCardStatusLabel(status)}</Badge>
                         <Badge variant={senderRouteVariant(status, routingRole)}>
-                          {senderRouteLabel(routingRole, item, status, overallHealth, provisioning, capacity)}
+                          {senderRouteLabel(routingRole, item, status, overallHealth, provisioning, capacity, readiness)}
                         </Badge>
                         <Badge variant={healthDisplay.variant}>{healthDisplay.badgeLabel}</Badge>
                       </div>
@@ -1503,10 +1568,10 @@ export default function NetworkClient({
                       <div className="rounded-[12px] border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-3">
                         <div className="text-[10px] uppercase tracking-[0.14em] text-[color:var(--muted-foreground)]">{statusHeading}</div>
                         <div className="mt-2 text-xl font-semibold text-[color:var(--foreground)]">
-                          {senderRouteLabel(routingRole, item, status, overallHealth, provisioning, capacity)}
+                          {senderRouteLabel(routingRole, item, status, overallHealth, provisioning, capacity, readiness)}
                         </div>
                         <div className="mt-1 text-xs leading-5 text-[color:var(--muted-foreground)]">
-                          {senderRouteDetail(routingRole, item, status, overallHealth, provisioning, capacity)}
+                          {senderRouteDetail(routingRole, item, status, overallHealth, provisioning, capacity, readiness)}
                         </div>
                       </div>
                       <div className="rounded-[12px] border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-3">
@@ -1520,7 +1585,7 @@ export default function NetworkClient({
                   </div>
 
                   <p className="mt-4 text-sm leading-6 text-[color:var(--foreground)]">
-                    {senderSummaryLine(item, status, routingRole, overallHealth, provisioning, capacity)}
+                    {senderSummaryLine(item, status, routingRole, overallHealth, provisioning, capacity, readiness)}
                   </p>
 
                   {action ? (

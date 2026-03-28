@@ -163,9 +163,6 @@ import {
 } from "@/lib/outreach-deliverability";
 import {
   enrichBrandWithSenderHealth,
-  evaluateSenderHealthGate,
-  type SenderHealthDimension,
-  type SenderHealthGateIssue,
 } from "@/lib/sender-health";
 import {
   buildSenderCapacitySnapshots,
@@ -175,6 +172,11 @@ import {
   scoreSenderRoutingSignal,
   type SenderRoutingSignals,
 } from "@/lib/sender-routing";
+import {
+  evaluateSenderReadiness,
+  summarizeSenderReadinessBlock,
+  type SenderReadiness,
+} from "@/lib/send-readiness";
 
 const DEFAULT_TIMEZONE = "America/Los_Angeles";
 const DEFAULT_REPLY_AUTOSEND_MIN_DELAY_MINUTES = 40;
@@ -333,12 +335,11 @@ type DeliverabilityProbeReferenceMessage = {
   senderFromEmail: string;
 };
 
-type SenderHealthGateSnapshot = {
+type SenderReadinessSnapshot = {
   senderAccountId: string;
   senderAccountName: string;
   fromEmail: string;
-  blockers: SenderHealthGateIssue[];
-  pending: SenderHealthGateIssue[];
+  readiness: SenderReadiness;
 };
 
 function nowIso() {
@@ -10163,67 +10164,17 @@ async function failRunWithDiagnostics(input: {
   });
 }
 
-function senderHealthDimensionLabel(dimension: SenderHealthDimension) {
-  if (dimension === "transport") return "transport";
-  if (dimension === "message") return "message";
-  return dimension;
-}
-
-function describeSenderHealthIssues(issues: SenderHealthGateIssue[]) {
-  return issues
-    .map((issue) => `${senderHealthDimensionLabel(issue.dimension)} ${issue.status}`)
-    .join(", ");
-}
-
-function buildSenderHealthLaunchFailure(input: {
-  senderLabel: string;
-  blockers: SenderHealthGateIssue[];
-  pending: SenderHealthGateIssue[];
-}) {
-  if (input.blockers.length) {
-    return `Sender launch blocked for ${input.senderLabel}: ${describeSenderHealthIssues(input.blockers)}.`;
-  }
-  if (input.pending.length) {
-    return `Sender launch blocked for ${input.senderLabel}: sender health checks are still settling (${describeSenderHealthIssues(
-      input.pending
-    )}).`;
-  }
-  return `Sender launch blocked for ${input.senderLabel}.`;
-}
-
-function formatSenderHealthIssues(issues: SenderHealthGateIssue[]) {
-  return issues.map((issue) => ({
-    dimension: issue.dimension,
-    status: issue.status,
-    summary: issue.summary,
-  }));
-}
-
-function summarizeSenderHealthPoolPause(input: {
-  healthBlocked: SenderHealthGateSnapshot[];
-  spamBlockedCount: number;
-}) {
-  if (input.healthBlocked.length && input.spamBlockedCount) {
+function buildSenderPoolUnavailableSummary(blockedSenders: SenderReadinessSnapshot[]) {
+  if (!blockedSenders.length) {
     return {
-      reason: "sender_pool_blocked",
-      summary: "Auto-paused: every sender in the brand pool is currently blocked by sender health or spam risk.",
+      reason: "sender_pool_empty",
+      summary: "No sender is currently eligible to send.",
     };
   }
-  if (input.healthBlocked.length) {
-    const hasRisk = input.healthBlocked.some((entry) => entry.blockers.length > 0);
-    return hasRisk
-      ? {
-          reason: "sender_health_gate",
-          summary: "Auto-paused: every sender in the brand pool is currently blocked by sender health.",
-        }
-      : {
-          reason: "sender_health_pending",
-          summary: "Auto-paused: every sender in the brand pool is still settling sender health checks.",
-        };
-  }
+  const first = blockedSenders[0];
   return {
-    reason: "deliverability_sender_pool_guard",
-    summary: "Auto-paused: every sender in the brand pool is currently flagged for spam risk.",
+    reason: "sender_pool_blocked",
+    summary: summarizeSenderReadinessBlock(first.readiness, first.fromEmail || first.senderAccountName),
   };
 }
 
@@ -10239,16 +10190,8 @@ async function resolveBrandSenderHealth(input: {
     return null;
   }
   const enrichedBrand = await enrichBrandWithSenderHealth(brand);
-  const gate = evaluateSenderHealthGate({
-    domains: enrichedBrand.domains,
-    accountId: input.accountId,
-    fromEmail: input.fromEmail,
-    requireInfrastructureReady: input.requireInfrastructureReady,
-    requireMessageReady: input.requireMessageReady,
-  });
   return {
     brand: enrichedBrand,
-    gate,
   };
 }
 
@@ -10997,26 +10940,23 @@ export async function launchExperimentRun(input: {
   }
 
   const senderFromEmail = getOutreachAccountFromEmail(brandAccount.deliveryAccount).trim().toLowerCase();
-  const requireReady = input.ownerType === "campaign";
-  const senderHealthState = await resolveBrandSenderHealth({
+  const businessWindow = businessWindowFromExperimentEnvelope(runtimeExperiment?.testEnvelope);
+  const senderPoolState = await resolveSenderPoolForBrand({
     brandId: input.brandId,
-    accountId: brandAccount.deliveryAccount.id,
-    fromEmail: senderFromEmail,
-    requireInfrastructureReady: requireReady,
-    requireMessageReady: requireReady,
+    preferredAccountId: brandAccount.deliveryAccount.id,
+    timeZone: experiment.runPolicy?.timezone || DEFAULT_TIMEZONE,
+    businessWindow,
   });
-  const senderHealthGate = senderHealthState?.gate ?? { row: null, blockers: [], pending: [] };
-  if (senderHealthGate.blockers.length || senderHealthGate.pending.length) {
-    const senderLabel =
-      senderHealthGate.row?.fromEmail?.trim() ||
-      senderFromEmail ||
-      brandAccount.deliveryAccount.name.trim() ||
-      "sender";
-    const reason = buildSenderHealthLaunchFailure({
-      senderLabel,
-      blockers: senderHealthGate.blockers,
-      pending: senderHealthGate.pending,
-    });
+  if (!senderPoolState.pool.length) {
+    const preferredReadiness =
+      senderPoolState.readinessByAccountId.get(brandAccount.deliveryAccount.id) ?? null;
+    const fallbackReadiness =
+      [...senderPoolState.readinessByAccountId.values()].find((entry) => entry.blockingIssues.length > 0) ?? null;
+    const senderLabel = senderFromEmail || brandAccount.deliveryAccount.name.trim() || "sender";
+    const reason =
+      preferredReadiness?.primaryBlockingReason ||
+      fallbackReadiness?.primaryBlockingReason ||
+      "No sender is currently eligible to send for this brand.";
     const failed = await createOutreachRun({
       brandId: input.brandId,
       campaignId: input.campaignId,
@@ -11042,8 +10982,11 @@ export async function launchExperimentRun(input: {
         reason,
         senderAccountId: brandAccount.deliveryAccount.id,
         fromEmail: senderLabel,
-        blockers: formatSenderHealthIssues(senderHealthGate.blockers),
-        pending: formatSenderHealthIssues(senderHealthGate.pending),
+        blockedSenders: [...senderPoolState.readinessByAccountId.entries()].map(([accountId, readiness]) => ({
+          accountId,
+          fromEmail: readiness.fromEmail,
+          primaryBlockingReason: readiness.primaryBlockingReason,
+        })),
       },
     });
     return {
@@ -11384,6 +11327,12 @@ async function resolveSenderPoolForBrand(input: {
     brand ? enrichBrandWithSenderHealth(brand) : Promise.resolve(null),
     listDeliverabilityProbeRuns({ brandId: input.brandId, limit: 300 }),
   ]);
+  const assignedMailboxAccountId = String(assignment?.mailboxAccountId ?? "").trim();
+  const assignedMailboxAccount =
+    (assignedMailboxAccountId
+      ? accounts.find((account) => account?.id === assignedMailboxAccountId) ?? null
+      : null) ??
+    (assignedMailboxAccountId ? await getOutreachAccount(assignedMailboxAccountId) : null);
   const activeAccounts = accounts.filter((account): account is ResolvedAccount => Boolean(account && account.status === "active"));
   const senderRows = enrichedBrand?.domains.filter((row) => row.role !== "brand") ?? [];
   const scorecards = buildSenderDeliverabilityScorecards({
@@ -11415,14 +11364,38 @@ async function resolveSenderPoolForBrand(input: {
     }).map((snapshot) => [snapshot.senderAccountId, snapshot] as const)
   );
   const pool: SenderDispatchSlot[] = [];
+  const readinessByAccountId = new Map<string, SenderReadiness>();
 
   for (const account of activeAccounts) {
     const fromEmail = getOutreachAccountFromEmail(account).trim();
     if (!fromEmail) continue;
     const secrets = await getOutreachAccountSecrets(account.id);
-    if (!secrets) continue;
     const policy = policyByAccountId.get(account.id);
-    if (!policy || policy.dailyCap <= 0) continue;
+    if (!policy) continue;
+    const selfMailboxEmail = account.config.mailbox.email.trim().toLowerCase();
+    const normalizedFromEmail = fromEmail.trim().toLowerCase();
+    const mailboxAccount =
+      selfMailboxEmail && selfMailboxEmail === normalizedFromEmail ? account : assignedMailboxAccount;
+    const mailboxSecrets =
+      mailboxAccount?.id === account.id
+        ? secrets
+        : mailboxAccount
+          ? await getOutreachAccountSecrets(mailboxAccount.id)
+          : null;
+    const row =
+      senderRows.find((item) => getDomainDeliveryAccountId(item) === account.id) ??
+      senderRows.find((item) => String(item.fromEmail ?? "").trim().toLowerCase() === normalizedFromEmail) ??
+      null;
+    const readiness = evaluateSenderReadiness({
+      account,
+      mailboxAccount,
+      hasDeliveryCredentials: Boolean(secrets),
+      hasMailboxCredentials: mailboxAccount ? Boolean(mailboxSecrets) : false,
+      row,
+      capacity: policy,
+    });
+    readinessByAccountId.set(account.id, readiness);
+    if (!secrets || !readiness.canSendNow) continue;
     pool.push({
       account,
       secrets,
@@ -11433,6 +11406,7 @@ async function resolveSenderPoolForBrand(input: {
   return {
     assignment,
     pool,
+    readinessByAccountId,
   };
 }
 
@@ -12132,36 +12106,23 @@ async function buildRunSenderRoutingContext(run: OutreachRun, input?: { preferre
     timeZone: run.timezone || DEFAULT_TIMEZONE,
     businessWindow,
   });
-  const requireReady = run.ownerType === "campaign";
-  const senderHealthState =
-    senderPoolState.pool.length > 0
-      ? await resolveBrandSenderHealth({
-          brandId: run.brandId,
-          accountId: preferredAccountId || run.accountId,
-          requireInfrastructureReady: requireReady,
-          requireMessageReady: requireReady,
-        })
-      : null;
-  const healthBlockedBySenderId = new Map<string, SenderHealthGateSnapshot>();
-  if (senderHealthState?.brand) {
-    for (const slot of senderPoolState.pool) {
-      const fromEmail = getOutreachAccountFromEmail(slot.account).trim().toLowerCase();
-      const gate = evaluateSenderHealthGate({
-        domains: senderHealthState.brand.domains,
-        accountId: slot.account.id,
-        fromEmail,
-        requireInfrastructureReady: requireReady,
-        requireMessageReady: requireReady,
-      });
-      if (!gate.blockers.length && !gate.pending.length) continue;
-      healthBlockedBySenderId.set(slot.account.id, {
-        senderAccountId: slot.account.id,
-        senderAccountName: slot.account.name,
-        fromEmail,
-        blockers: gate.blockers,
-        pending: gate.pending,
-      });
-    }
+  const senderHealthState = await resolveBrandSenderHealth({
+    brandId: run.brandId,
+    accountId: preferredAccountId || run.accountId,
+  });
+  const blockedBySenderId = new Map<string, SenderReadinessSnapshot>();
+  for (const accountId of senderPoolState.readinessByAccountId.keys()) {
+    const account =
+      senderPoolState.pool.find((slot) => slot.account.id === accountId)?.account ??
+      null;
+    const readiness = senderPoolState.readinessByAccountId.get(accountId);
+    if (!readiness || readiness.canSendNow) continue;
+    blockedBySenderId.set(accountId, {
+      senderAccountId: accountId,
+      senderAccountName: account?.name ?? readiness.fromEmail ?? "sender",
+      fromEmail: readiness.fromEmail,
+      readiness,
+    });
   }
 
   const senderScorecards = senderPoolState.pool.length
@@ -12171,18 +12132,11 @@ async function buildRunSenderRoutingContext(run: OutreachRun, input?: { preferre
         pool: senderPoolState.pool,
       })
     : [];
-  const autoPausedBySenderId = new Map(
-    senderScorecards
-      .filter((scorecard) => scorecard.autoPaused && scorecard.senderAccountId)
-      .map((scorecard) => [scorecard.senderAccountId, scorecard] as const)
-  );
   const routingSignalsBySenderId = buildSenderRoutingSignals({
     domains: senderHealthState?.brand?.domains,
     scorecards: senderScorecards,
   });
-  const dispatchPool = senderPoolState.pool.filter(
-    (slot) => !autoPausedBySenderId.has(slot.account.id) && !healthBlockedBySenderId.has(slot.account.id)
-  );
+  const dispatchPool = senderPoolState.pool.filter((slot) => !blockedBySenderId.has(slot.account.id));
   const senderUsage =
     senderPoolState.pool.length > 0
       ? await countBrandSenderUsage({
@@ -12206,9 +12160,8 @@ async function buildRunSenderRoutingContext(run: OutreachRun, input?: { preferre
     businessWindow,
     senderPoolState,
     senderHealthState,
-    healthBlockedBySenderId,
+    blockedBySenderId,
     senderScorecards,
-    autoPausedBySenderId,
     routingSignalsBySenderId,
     dispatchPool,
     senderUsage,
@@ -12257,19 +12210,19 @@ async function autoFailoverRunSender(input: {
   await createOutreachEvent({
     runId: input.run.id,
     eventType: "sender_route_changed_auto",
-    payload: {
-      reason: input.reason,
-      summary: input.summary,
-      fromAccountId: currentAccountId,
+      payload: {
+        reason: input.reason,
+        summary: input.summary,
+        fromAccountId: currentAccountId,
       fromAccountName: previousAccount?.name ?? "",
       fromEmail: previousAccount ? getOutreachAccountFromEmail(previousAccount).trim() : "",
-      toAccountId: nextSender.account.id,
-      toAccountName: nextSender.account.name,
-      toEmail: getOutreachAccountFromEmail(nextSender.account).trim(),
-      standbyCount: Math.max(0, routingContext.dispatchPool.length - 1),
-      blockedCount: routingContext.autoPausedBySenderId.size + routingContext.healthBlockedBySenderId.size,
-    },
-  });
+        toAccountId: nextSender.account.id,
+        toAccountName: nextSender.account.name,
+        toEmail: getOutreachAccountFromEmail(nextSender.account).trim(),
+        standbyCount: Math.max(0, routingContext.dispatchPool.length - 1),
+        blockedCount: routingContext.blockedBySenderId.size,
+      },
+    });
 
   const referenceMessage = await resolveDeliverabilityProbeReferenceMessage({
     runId: input.run.id,
@@ -14300,8 +14253,7 @@ async function processDispatchMessagesJob(job: OutreachJob) {
   const {
     businessWindow,
     senderPoolState,
-    healthBlockedBySenderId,
-    autoPausedBySenderId,
+    blockedBySenderId,
     routingSignalsBySenderId,
     dispatchPool,
     senderUsage,
@@ -14315,26 +14267,8 @@ async function processDispatchMessagesJob(job: OutreachJob) {
     return;
   }
   if (!dispatchPool.length) {
-    const healthBlocked = Array.from(healthBlockedBySenderId.values());
-    const pausedSenders = Array.from(autoPausedBySenderId.values()).map((scorecard) => ({
-      senderAccountId: scorecard.senderAccountId,
-      senderAccountName: scorecard.senderAccountName,
-      fromEmail: scorecard.fromEmail,
-      autoPauseUntil: scorecard.autoPauseUntil,
-      reason: scorecard.autoPauseReason,
-      summaryText: scorecard.summaryText,
-    }));
-    const senderHealthSenders = healthBlocked.map((entry) => ({
-      senderAccountId: entry.senderAccountId,
-      senderAccountName: entry.senderAccountName,
-      fromEmail: entry.fromEmail,
-      blockers: formatSenderHealthIssues(entry.blockers),
-      pending: formatSenderHealthIssues(entry.pending),
-    }));
-    const pauseSummary = summarizeSenderHealthPoolPause({
-      healthBlocked,
-      spamBlockedCount: autoPausedBySenderId.size,
-    });
+    const blockedSenders = Array.from(blockedBySenderId.values());
+    const pauseSummary = buildSenderPoolUnavailableSummary(blockedSenders);
     await updateOutreachRun(run.id, {
       status: "paused",
       pauseReason: pauseSummary.summary,
@@ -14347,8 +14281,12 @@ async function processDispatchMessagesJob(job: OutreachJob) {
       payload: {
         reason: pauseSummary.reason,
         summary: pauseSummary.summary,
-        pausedSenders,
-        senderHealthSenders,
+        blockedSenders: blockedSenders.map((entry) => ({
+          senderAccountId: entry.senderAccountId,
+          senderAccountName: entry.senderAccountName,
+          fromEmail: entry.fromEmail,
+          primaryBlockingReason: entry.readiness.primaryBlockingReason,
+        })),
       },
     });
     return;
@@ -14357,15 +14295,12 @@ async function processDispatchMessagesJob(job: OutreachJob) {
     routingContext.primarySender ??
     dispatchPool.find((slot) => slot.account.id === run.accountId) ??
     dispatchPool[0];
-  const currentHealthBlock = healthBlockedBySenderId.get(run.accountId) ?? null;
-  const currentSpamBlock = autoPausedBySenderId.get(run.accountId) ?? null;
-  if ((currentHealthBlock || currentSpamBlock) && primarySender.account.id !== run.accountId) {
+  const currentSenderBlocked = blockedBySenderId.get(run.accountId) ?? null;
+  if (currentSenderBlocked && primarySender.account.id !== run.accountId) {
     const failover = await autoFailoverRunSender({
       run,
-      reason: currentHealthBlock ? "sender_health_gate" : "sender_spam_risk",
-      summary: currentHealthBlock
-        ? "Current sender failed health checks and was replaced by the healthiest standby sender."
-        : "Current sender was removed from rotation for spam risk and replaced by the healthiest standby sender.",
+      reason: "sender_unavailable",
+      summary: "Current sender could not send, so the system switched to the healthiest eligible standby sender.",
     });
     if (failover.nextSender) {
       primarySender = failover.nextSender;
@@ -14995,24 +14930,20 @@ async function processAnalyzeRunJob(job: OutreachJob) {
 
     phase = "load_sender_account";
     const senderAccount = await getOutreachAccount(run.accountId);
-    const senderFromEmail = String(senderAccount?.config?.customerIo?.fromEmail ?? "").trim().toLowerCase();
-
-    phase = "resolve_sender_health";
-    const senderHealthState =
-      senderAccount && senderAccount.status === "active" && senderFromEmail
-        ? await resolveBrandSenderHealth({
-            brandId: run.brandId,
-            accountId: senderAccount.id,
-            fromEmail: senderFromEmail,
-          })
-        : null;
-    const senderHealthGate = senderHealthState?.gate ?? { row: null, blockers: [], pending: [] };
-    if (senderHealthGate.blockers.length) {
-      phase = "pause_for_sender_health";
+    const senderFromEmail = getOutreachAccountFromEmail(senderAccount).trim().toLowerCase();
+    const senderPoolState = await resolveSenderPoolForBrand({
+      brandId: run.brandId,
+      preferredAccountId: run.accountId,
+      timeZone: run.timezone || DEFAULT_TIMEZONE,
+      businessWindow: businessWindowFromExperimentEnvelope(null),
+    });
+    const currentSenderReadiness = senderPoolState.readinessByAccountId.get(run.accountId) ?? null;
+    if (currentSenderReadiness && !currentSenderReadiness.canSendNow) {
+      phase = "pause_for_sender_unavailability";
       const failover = await autoFailoverRunSender({
         run,
-        reason: "sender_health_gate",
-        summary: "Current sender failed health checks and the system attempted to switch to the healthiest standby sender.",
+        reason: "sender_unavailable",
+        summary: "Current sender could not send, and the system attempted to switch to the healthiest eligible standby sender.",
       });
       if (failover.switched) {
         await enqueueOutreachJob({
@@ -15022,7 +14953,9 @@ async function processAnalyzeRunJob(job: OutreachJob) {
         });
         return;
       }
-      const pauseReason = `Auto-paused due to sender health: ${describeSenderHealthIssues(senderHealthGate.blockers)}.`;
+      const pauseReason =
+        currentSenderReadiness.primaryBlockingReason ||
+        `Auto-paused because ${senderFromEmail || "the current sender"} is not currently eligible to send.`;
       await updateOutreachRun(run.id, {
         status: "paused",
         pauseReason,
@@ -15033,11 +14966,11 @@ async function processAnalyzeRunJob(job: OutreachJob) {
         runId: run.id,
         eventType: "run_paused_auto",
         payload: {
-          reason: "sender_health_gate",
+          reason: "sender_unavailable",
           summary: pauseReason,
           senderAccountId: senderAccount?.id ?? run.accountId,
-          fromEmail: senderHealthGate.row?.fromEmail ?? senderAccount?.config?.customerIo?.fromEmail ?? "",
-          blockers: formatSenderHealthIssues(senderHealthGate.blockers),
+          fromEmail: currentSenderReadiness.fromEmail || senderFromEmail,
+          blockingIssues: currentSenderReadiness.blockingIssues.map((issue) => issue.detail),
         },
       });
       return;

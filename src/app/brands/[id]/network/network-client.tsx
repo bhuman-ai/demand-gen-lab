@@ -1133,6 +1133,98 @@ export default function NetworkClient({
       activeSenders,
     };
   }, [readinessForRow, senderDomains]);
+  const brandReadiness = useMemo(() => {
+    const evaluated = senderDomains
+      .filter((row) => row.role !== "brand")
+      .map((row) => {
+        const account =
+          (getDomainDeliveryAccountId(row)
+            ? deliveryAccountById.get(getDomainDeliveryAccountId(row)) ?? null
+            : null) ||
+          (row.fromEmail ? deliveryAccountByEmail.get(String(row.fromEmail).trim().toLowerCase()) ?? null : null);
+        const capacity = capacityForRow(row);
+        const routingRole = routingRoleForRow(row, routingRoleBySenderId);
+        const readiness = readinessForRow(row);
+        const status = senderCardStatus(row, routingRole, capacity, readiness);
+        const provisioning = senderProvisioningSnapshot(row, account);
+        return {
+          row,
+          account,
+          capacity,
+          routingRole,
+          readiness,
+          status,
+          provisioning,
+        };
+      });
+
+    const readySenders = evaluated.filter((entry) => entry.readiness?.canSendNow);
+    if (readySenders.length) {
+      return {
+        state: "ready" as const,
+        value: "Yes",
+        detail: `${formatEmailCount(sendingPower.totalDailyCap)} available today across ${readySenders.length} sender${readySenders.length === 1 ? "" : "s"}.`,
+        note:
+          preferredReadyRoutingSignal
+            ? `${preferredReadyRoutingSignal.fromEmail} is first in line right now.`
+            : "A healthy sender is ready and available for dispatch.",
+      };
+    }
+
+    const provisioningSender = evaluated.find((entry) => entry.provisioning);
+    if (provisioningSender) {
+      return {
+        state: "provisioning" as const,
+        value: "No",
+        detail: provisioningSender.provisioning?.detail || "A sender is still being provisioned.",
+        note: provisioningSender.provisioning?.etaLabel || "Sending unlocks automatically when provisioning finishes.",
+      };
+    }
+
+    const blockedSender = evaluated.find((entry) => entry.readiness?.primaryBlockingReason);
+    if (blockedSender?.readiness) {
+      return {
+        state: "blocked" as const,
+        value: "No",
+        detail: blockedSender.readiness.primaryBlockingReason,
+        note: `${blockedSender.row.fromEmail || blockedSender.row.domain} is the first sender blocking outbound right now.`,
+      };
+    }
+
+    const setupSender = evaluated.find((entry) => entry.status === "setup");
+    if (setupSender) {
+      return {
+        state: "setup" as const,
+        value: "No",
+        detail: senderRouteDetail(
+          setupSender.routingRole,
+          setupSender.row,
+          setupSender.status,
+          senderOverallHealth(setupSender.row),
+          setupSender.provisioning,
+          setupSender.capacity,
+          setupSender.readiness
+        ),
+        note: "Finish sender setup and a ready sender will appear here automatically.",
+      };
+    }
+
+    return {
+      state: "empty" as const,
+      value: "No",
+      detail: "No sender is currently assigned and ready for outbound.",
+      note: "Assign or provision a sender to start sending.",
+    };
+  }, [
+    capacityForRow,
+    deliveryAccountByEmail,
+    deliveryAccountById,
+    preferredReadyRoutingSignal,
+    readinessForRow,
+    routingRoleBySenderId,
+    senderDomains,
+    sendingPower.totalDailyCap,
+  ]);
 
   useEffect(() => {
     trackEvent("ops_module_opened", { module: "senders", brandId: brand.id });
@@ -1335,57 +1427,27 @@ export default function NetworkClient({
             <div className="flex flex-wrap items-center gap-2">
               <Badge
                 variant={
-                  preferredReadyRoutingSignal
+                  brandReadiness.state === "ready"
                     ? "success"
-                    : primaryProvisioningSender
+                    : brandReadiness.state === "provisioning"
                       ? "accent"
-                      : senderSummary.autoFixCount
-                        ? "accent"
+                      : brandReadiness.state === "blocked"
+                        ? "danger"
                         : "muted"
                 }
               >
-                {preferredReadyRoutingSignal
-                  ? "Sending now"
-                  : primaryProvisioningSender
-                    ? primaryProvisioningSender.provisioning.headline
-                  : senderSummary.autoFixCount
-                    ? "Fixes available"
-                    : "Nobody ready yet"}
+                Can send now
               </Badge>
               {preferredReadyRoutingSignal ? <RoutingScoreDetails signal={preferredReadyRoutingSignal} /> : null}
               </div>
             <div>
-              <div className="text-lg font-semibold text-[color:var(--foreground)]">
-                {preferredReadyRoutingSignal?.fromEmail ||
-                  primaryProvisioningSender?.row.fromEmail ||
-                  "0 senders can send right now"}
-              </div>
+              <div className="text-lg font-semibold text-[color:var(--foreground)]">{brandReadiness.value}</div>
               <div className="mt-1 text-sm leading-6 text-[color:var(--muted-foreground)]">
-                {preferredReadyRoutingSignal
-                  ? `${preferredReadyRoutingSignal.senderAccountName} · ${preferredReadyRoutingSignal.domain}`
-                  : primaryProvisioningSender
-                    ? `${primaryProvisioningSender.provisioning.detail} ${primaryProvisioningSender.provisioning.etaLabel}`
-                  : [
-                      senderSummary.dnsWaitingCount
-                        ? `${senderSummary.dnsWaitingCount} waiting on DNS`
-                        : "",
-                      senderSummary.mailboxMissingCount
-                        ? `${senderSummary.mailboxMissingCount} missing a mailbox`
-                        : "",
-                      senderSummary.fixCount ? `${senderSummary.fixCount} paused` : "",
-                    ]
-                      .filter(Boolean)
-                      .join(" · ") || "Finish setup and the healthiest sender will show up here automatically."}
+                {brandReadiness.detail}
               </div>
             </div>
             <div className="text-sm leading-6 text-[color:var(--foreground)]">
-              {preferredReadyRoutingSignal
-                ? "This sender is first in line right now. If it slips, the system moves traffic to a healthy backup."
-                : primaryProvisioningSender
-                  ? "The sender exists and is being provisioned. Sending will unlock automatically once Mailpool finishes setup."
-                : senderSummary.autoFixCount
-                  ? "Use the fix buttons on the sender cards below. Setup problems can be repaired here without leaving the page."
-                  : "Use the cards below to see which senders are ready, which ones are warming up, and which ones need a fix."}
+              {brandReadiness.note}
             </div>
             <div className="flex flex-wrap items-center gap-2 text-xs text-[color:var(--muted-foreground)]">
               <span>

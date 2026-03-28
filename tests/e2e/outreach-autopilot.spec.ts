@@ -18,6 +18,51 @@ type SetupContext = {
   runId: string;
 };
 
+async function createMockOutreachAccount(
+  request: import("@playwright/test").APIRequestContext,
+  input: {
+    name: string;
+    fromEmail: string;
+    mailboxEmail?: string;
+  }
+) {
+  const mailboxEmail = input.mailboxEmail ?? input.fromEmail;
+  const accountRes = await request.post("/api/outreach/accounts", {
+    data: {
+      name: input.name,
+      config: {
+        customerIo: {
+          siteId: "site_123",
+          workspaceId: "ws_123",
+          fromEmail: input.fromEmail,
+        },
+        apify: {
+          defaultActorId: "apify/mock-actor",
+        },
+        mailbox: {
+          provider: "gmail",
+          email: mailboxEmail,
+          status: "connected",
+          host: "imap.gmail.com",
+          port: 993,
+          secure: true,
+        },
+      },
+      credentials: {
+        customerIoTrackApiKey: "track_key",
+        customerIoAppApiKey: "app_key",
+        apifyToken: "apify_token",
+        mailboxAccessToken: "mailbox_token",
+      },
+    },
+  });
+  expect(accountRes.ok()).toBeTruthy();
+  const accountJson = await accountRes.json();
+  const accountId = String(accountJson.account?.id ?? "");
+  expect(accountId).toBeTruthy();
+  return accountId;
+}
+
 async function setupAutopilotContext(request: import("@playwright/test").APIRequestContext): Promise<SetupContext> {
   const brandRes = await request.post("/api/brands", {
     data: {
@@ -40,39 +85,11 @@ async function setupAutopilotContext(request: import("@playwright/test").APIRequ
   const campaignId = String(campaignJson.campaign?.id ?? "");
   expect(campaignId).toBeTruthy();
 
-  const accountRes = await request.post("/api/outreach/accounts", {
-    data: {
-      name: "Primary Stack",
-      config: {
-        customerIo: {
-          siteId: "site_123",
-          workspaceId: "ws_123",
-          fromEmail: "sender@example.com",
-        },
-        apify: {
-          defaultActorId: "apify/mock-actor",
-        },
-        mailbox: {
-          provider: "gmail",
-          email: "ops@example.com",
-          status: "connected",
-          host: "imap.gmail.com",
-          port: 993,
-          secure: true,
-        },
-      },
-      credentials: {
-        customerIoTrackApiKey: "track_key",
-        customerIoAppApiKey: "app_key",
-        apifyToken: "apify_token",
-        mailboxAccessToken: "mailbox_token",
-      },
-    },
+  const accountId = await createMockOutreachAccount(request, {
+    name: "Primary Stack",
+    fromEmail: "sender@example.com",
+    mailboxEmail: "ops@example.com",
   });
-  expect(accountRes.ok()).toBeTruthy();
-  const accountJson = await accountRes.json();
-  const accountId = String(accountJson.account?.id ?? "");
-  expect(accountId).toBeTruthy();
 
   const assignRes = await request.put(`/api/brands/${brandId}/outreach-account`, {
     data: { accountId },
@@ -215,4 +232,49 @@ test("inbound reply creates draft and human send endpoint marks draft sent", asy
   const inboxAfterJson = await inboxAfter.json();
   const sentDraft = (inboxAfterJson.drafts ?? []).find((draft: { id: string }) => draft.id === draftId);
   expect(sentDraft?.status).toBe("sent");
+});
+
+test("brand inbox exposes all assigned mailbox accounts, not only synced ones", async ({ request }) => {
+  const brandRes = await request.post("/api/brands", {
+    data: {
+      name: "Inbox Aggregation Brand",
+      website: "https://aggregation.example.com",
+      tone: "direct",
+      notes: "inbox source coverage test",
+    },
+  });
+  expect(brandRes.ok()).toBeTruthy();
+  const brandJson = await brandRes.json();
+  const brandId = String(brandJson.brand?.id ?? "");
+  expect(brandId).toBeTruthy();
+
+  const primaryAccountId = await createMockOutreachAccount(request, {
+    name: "Primary Mailbox",
+    fromEmail: "primary@example.com",
+  });
+  const opsAccountId = await createMockOutreachAccount(request, {
+    name: "Ops Mailbox",
+    fromEmail: "ops@example.com",
+  });
+  const teamAccountId = await createMockOutreachAccount(request, {
+    name: "Team Mailbox",
+    fromEmail: "team@example.com",
+  });
+
+  const assignRes = await request.put(`/api/brands/${brandId}/outreach-account`, {
+    data: {
+      accountId: primaryAccountId,
+      accountIds: [primaryAccountId, opsAccountId, teamAccountId],
+    },
+  });
+  expect(assignRes.ok()).toBeTruthy();
+
+  const inboxRes = await request.get(`/api/brands/${brandId}/inbox/threads`);
+  expect(inboxRes.ok()).toBeTruthy();
+  const inboxJson = await inboxRes.json();
+  expect(Array.isArray(inboxJson.inboxSources)).toBeTruthy();
+  expect(inboxJson.inboxSources).toHaveLength(3);
+  expect(
+    (inboxJson.inboxSources ?? []).map((source: { email?: string }) => source.email).sort()
+  ).toEqual(["ops@example.com", "primary@example.com", "team@example.com"]);
 });

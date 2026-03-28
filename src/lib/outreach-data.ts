@@ -1619,9 +1619,19 @@ function supabaseErrorDebug(error: unknown) {
 
 function isMissingColumnError(error: unknown, columnName: string) {
   const dbg = supabaseErrorDebug(error);
-  const msg = dbg.message.toLowerCase();
+  const msg = `${dbg.message}\n${dbg.details}`.toLowerCase();
   const needle = columnName.toLowerCase();
-  return msg.includes(needle) && msg.includes("does not exist");
+  return msg.includes(needle) && (msg.includes("does not exist") || msg.includes("column") && msg.includes("schema cache"));
+}
+
+function missingColumnNameFromError(error: unknown) {
+  const dbg = supabaseErrorDebug(error);
+  const combined = `${dbg.message}\n${dbg.details}`;
+  const quotedMatch = combined.match(/['"]([a-z0-9_]+)['"]\s+column/i);
+  if (quotedMatch?.[1]) return quotedMatch[1].toLowerCase();
+  const relationMatch = combined.match(/column\s+([a-z0-9_]+)\s+of\s+relation/i);
+  if (relationMatch?.[1]) return relationMatch[1].toLowerCase();
+  return "";
 }
 
 function hintForSupabaseWriteError(error: unknown) {
@@ -5761,7 +5771,7 @@ export async function upsertSenderLaunch(
 
   const supabase = getSupabaseAdmin();
   if (supabase) {
-    const payload = {
+    let payload: Record<string, unknown> = {
       id: launch.id,
       sender_account_id: launch.senderAccountId,
       brand_id: launch.brandId,
@@ -5798,24 +5808,41 @@ export async function upsertSenderLaunch(
       created_at: launch.createdAt,
       updated_at: launch.updatedAt,
     };
-    const query = existing
-      ? supabase.from(TABLE_SENDER_LAUNCH).update(payload).eq("id", existing.id).select("*").single()
-      : supabase.from(TABLE_SENDER_LAUNCH).insert(payload).select("*").single();
-    const { data, error } = await query;
-    if (!error && data) {
-      return mapSenderLaunchRow(data);
+    const optionalColumns = new Set([
+      "autopilot_mode",
+      "autopilot_allowed_domains",
+      "autopilot_blocked_domains",
+    ]);
+    let lastError: unknown = null;
+    while (true) {
+      const query = existing
+        ? supabase.from(TABLE_SENDER_LAUNCH).update(payload).eq("id", existing.id).select("*").single()
+        : supabase.from(TABLE_SENDER_LAUNCH).insert(payload).select("*").single();
+      const { data, error } = await query;
+      if (!error && data) {
+        return mapSenderLaunchRow(data);
+      }
+      lastError = error;
+      const missingColumn = missingColumnNameFromError(error);
+      if (missingColumn && optionalColumns.has(missingColumn) && missingColumn in payload) {
+        const nextPayload = { ...payload };
+        delete nextPayload[missingColumn];
+        payload = nextPayload;
+        continue;
+      }
+      break;
     }
-    if (!(options.allowMissingTable && isMissingRelationError(error, TABLE_SENDER_LAUNCH)) && isVercel) {
+    if (!(options.allowMissingTable && isMissingRelationError(lastError, TABLE_SENDER_LAUNCH)) && isVercel) {
       throw new OutreachDataError("Failed to save sender launch in Supabase.", {
         status: 500,
-        hint: hintForSupabaseWriteError(error),
+        hint: hintForSupabaseWriteError(lastError),
         debug: {
           operation: "upsertSenderLaunch",
           runtime: runtimeLabel(),
           supabaseConfigured: supabaseConfigured(),
           brandId: launch.brandId,
           senderAccountId: launch.senderAccountId,
-          supabaseError: supabaseErrorDebug(error),
+          supabaseError: supabaseErrorDebug(lastError),
         },
       });
     }

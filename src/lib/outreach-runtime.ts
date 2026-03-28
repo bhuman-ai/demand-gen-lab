@@ -19,6 +19,7 @@ import type {
   LeadQualityPolicy,
   OutreachMessage,
   OutreachRun,
+  OutreachRunLead,
   ReplyThread,
   ReplyThreadStateDecision,
   SourcingActorMemory,
@@ -278,21 +279,77 @@ function findMatchingReplyThread(input: {
   contactEmail?: string;
 }) {
   const normalizedSubject = normalizeReplyThreadSubject(input.subject);
+  const normalizedContactEmail = String(input.contactEmail ?? "").trim().toLowerCase();
+  const normalizedMailboxAccountId = String(input.mailboxAccountId ?? "").trim();
   return (
     input.threads.find((thread) => {
       if (thread.sourceType !== input.sourceType) return false;
       if (normalizeReplyThreadSubject(thread.subject) !== normalizedSubject) return false;
       if (input.sourceType === "outreach") {
-        return thread.runId === (input.runId ?? "") && thread.leadId === (input.leadId ?? "");
+        if ((input.runId ?? "").trim() || (input.leadId ?? "").trim()) {
+          return thread.runId === (input.runId ?? "") && thread.leadId === (input.leadId ?? "");
+        }
+        return (
+          thread.contactEmail.trim().toLowerCase() === normalizedContactEmail &&
+          (!thread.mailboxAccountId ||
+            !normalizedMailboxAccountId ||
+            thread.mailboxAccountId === normalizedMailboxAccountId)
+        );
       }
       return (
-        thread.contactEmail.trim().toLowerCase() === String(input.contactEmail ?? "").trim().toLowerCase() &&
+        thread.contactEmail.trim().toLowerCase() === normalizedContactEmail &&
         (!thread.mailboxAccountId ||
-          !(input.mailboxAccountId ?? "").trim() ||
-          thread.mailboxAccountId === (input.mailboxAccountId ?? ""))
+          !normalizedMailboxAccountId ||
+          thread.mailboxAccountId === normalizedMailboxAccountId)
       );
     }) ?? null
   );
+}
+
+async function inferMailboxReplyOutreachContext(input: {
+  brandId: string;
+  mailboxAccountId?: string;
+  to: string;
+  subject: string;
+  contactEmail: string;
+}): Promise<{ run: OutreachRun; lead: OutreachRunLead } | null> {
+  const normalizedSubject = normalizeReplyThreadSubject(input.subject);
+  const normalizedContactEmail = String(input.contactEmail ?? "").trim().toLowerCase();
+  const normalizedMailboxAccountId = String(input.mailboxAccountId ?? "").trim();
+  const normalizedTo = (extractFirstEmailAddress(input.to) || input.to).trim().toLowerCase();
+  const runs = (await listBrandRuns(input.brandId)).sort((left, right) =>
+    toDate(left.updatedAt).getTime() > toDate(right.updatedAt).getTime() ? -1 : 1
+  );
+
+  for (const run of runs) {
+    const [leads, messages] = await Promise.all([listRunLeads(run.id), listRunMessages(run.id)]);
+    const lead = leads.find((candidate) => candidate.email.trim().toLowerCase() === normalizedContactEmail);
+    if (!lead) continue;
+
+    const matchingMessage = [...messages]
+      .filter((message) => {
+        if (message.leadId !== lead.id) return false;
+        if (!["sent", "replied"].includes(message.status)) return false;
+        if (normalizeReplyThreadSubject(message.subject) !== normalizedSubject) return false;
+        const senderAccountId = String(message.generationMeta?.senderAccountId ?? "").trim() || run.accountId;
+        const senderFromEmail = String(message.generationMeta?.senderFromEmail ?? "").trim().toLowerCase();
+        const replyToEmail = String(message.generationMeta?.replyToEmail ?? "").trim().toLowerCase();
+        if (normalizedMailboxAccountId && senderAccountId === normalizedMailboxAccountId) return true;
+        if (normalizedTo && (replyToEmail === normalizedTo || senderFromEmail === normalizedTo)) return true;
+        return !normalizedMailboxAccountId && !normalizedTo;
+      })
+      .sort((left, right) => {
+        const leftAt = left.sentAt || left.scheduledAt || left.createdAt;
+        const rightAt = right.sentAt || right.scheduledAt || right.createdAt;
+        return toDate(leftAt).getTime() > toDate(rightAt).getTime() ? -1 : 1;
+      })[0];
+
+    if (matchingMessage) {
+      return { run, lead };
+    }
+  }
+
+  return null;
 }
 
 type DeliverabilityProbeStage = "send" | "poll";
@@ -16200,21 +16257,55 @@ export async function ingestBrandInboxMessage(input: {
   if (thread && thread.brandId !== brand.id) {
     return { ok: false, threadId: "", draftId: "", reason: "Thread/brand mismatch" };
   }
+  const resolvedMailboxAccountId = mailbox?.account.id || input.mailboxAccountId || "";
+  let inferredOutreachContext: { run: OutreachRun; lead: OutreachRunLead } | null = null;
   if (!thread) {
     thread = findMatchingReplyThread({
       threads,
       sourceType: threadSourceType,
-      mailboxAccountId: mailbox?.account.id || input.mailboxAccountId || "",
+      mailboxAccountId: resolvedMailboxAccountId,
       contactEmail: normalizedFrom,
       subject: normalizedSubject,
     });
+  }
+  if (!thread && threadSourceType === "mailbox") {
+    thread = findMatchingReplyThread({
+      threads,
+      sourceType: "outreach",
+      mailboxAccountId: resolvedMailboxAccountId,
+      contactEmail: normalizedFrom,
+      subject: normalizedSubject,
+    });
+  }
+  if (!thread && threadSourceType === "mailbox") {
+    inferredOutreachContext = await inferMailboxReplyOutreachContext({
+      brandId: brand.id,
+      mailboxAccountId: resolvedMailboxAccountId,
+      to: input.to,
+      subject: normalizedSubject,
+      contactEmail: normalizedFrom,
+    });
+    if (inferredOutreachContext) {
+      thread = findMatchingReplyThread({
+        threads,
+        sourceType: "outreach",
+        runId: inferredOutreachContext.run.id,
+        leadId: inferredOutreachContext.lead.id,
+        mailboxAccountId: resolvedMailboxAccountId,
+        contactEmail: normalizedFrom,
+        subject: normalizedSubject,
+      });
+    }
   }
 
   if (!thread) {
     thread = await createReplyThread({
       brandId: brand.id,
-      sourceType: threadSourceType,
-      mailboxAccountId: mailbox?.account.id || input.mailboxAccountId || "",
+      campaignId: inferredOutreachContext?.run.campaignId ?? "",
+      runId: inferredOutreachContext?.run.id ?? "",
+      leadId: inferredOutreachContext?.lead.id ?? "",
+      sourceType: inferredOutreachContext ? "outreach" : threadSourceType,
+      mailboxAccountId: resolvedMailboxAccountId,
       contactEmail: normalizedFrom,
       contactName,
       contactCompany,
@@ -16225,8 +16316,8 @@ export async function ingestBrandInboxMessage(input: {
     });
   } else {
     const updated = await updateReplyThread(thread.id, {
-      sourceType: threadSourceType,
-      mailboxAccountId: mailbox?.account.id || thread.mailboxAccountId,
+      sourceType: thread.sourceType === "outreach" ? "outreach" : threadSourceType,
+      mailboxAccountId: resolvedMailboxAccountId || thread.mailboxAccountId,
       contactEmail: normalizedFrom || thread.contactEmail,
       contactName: contactName || thread.contactName,
       contactCompany: contactCompany || thread.contactCompany,
@@ -16242,7 +16333,7 @@ export async function ingestBrandInboxMessage(input: {
 
   await createReplyMessage({
     threadId: thread.id,
-    runId: "",
+    runId: thread.runId,
     direction: "inbound",
     from: normalizedFrom || input.from.trim(),
     to: normalizedTo || input.to.trim(),

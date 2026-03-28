@@ -234,6 +234,66 @@ test("inbound reply creates draft and human send endpoint marks draft sent", asy
   expect(sentDraft?.status).toBe("sent");
 });
 
+test("mailbox-ingested reply attaches back to the outreach thread", async ({ request }) => {
+  const { brandId, campaignId, runId } = await setupAutopilotContext(request);
+
+  const apifyWebhook = await request.post("/api/webhooks/apify/run-complete", {
+    data: {
+      runId,
+      leads: [
+        {
+          email: "mailbox-reply@example.com",
+          name: "Mailbox Reply",
+          company: "Example Co",
+          title: "Founder",
+          domain: "example.com",
+          sourceUrl: "https://example.com/profile/mailbox-reply",
+        },
+      ],
+    },
+  });
+  expect(apifyWebhook.ok()).toBeTruthy();
+
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const tick = await request.post("/api/internal/outreach/tick");
+    expect(tick.ok()).toBeTruthy();
+  }
+
+  const runRes = await request.get(`/api/brands/${brandId}/campaigns/${campaignId}/run`);
+  expect(runRes.ok()).toBeTruthy();
+  const runJson = await runRes.json();
+  const sentMessages = (runJson.run?.messages ?? []).filter(
+    (message: { status?: string; subject?: string }) =>
+      message.status === "sent" && String(message.subject ?? "").includes("Run founder wedge")
+  );
+  expect(sentMessages.length).toBeGreaterThan(0);
+
+  const inboxReplyRes = await request.post(`/api/brands/${brandId}/inbox/messages`, {
+    data: {
+      mailboxAccountId: "",
+      from: "Mailbox Reply <mailbox-reply@example.com>",
+      to: "ops@example.com",
+      subject: "Re: Run founder wedge",
+      body: "Interested. Can you send more details?",
+      messageId: `mailbox_${Date.now().toString(36)}`,
+      contactName: "Mailbox Reply",
+      contactCompany: "Example Co",
+    },
+  });
+  expect(inboxReplyRes.ok()).toBeTruthy();
+
+  const inboxRes = await request.get(`/api/brands/${brandId}/inbox/threads`);
+  expect(inboxRes.ok()).toBeTruthy();
+  const inboxJson = await inboxRes.json();
+  const replyThread = (inboxJson.threads ?? []).find(
+    (thread: { contactEmail?: string; subject?: string }) =>
+      thread.contactEmail === "mailbox-reply@example.com" && String(thread.subject ?? "").includes("Run founder wedge")
+  );
+  expect(replyThread).toBeTruthy();
+  expect(replyThread.sourceType).toBe("outreach");
+  expect(replyThread.runId).toBe(runId);
+});
+
 test("brand inbox exposes all assigned mailbox accounts, not only synced ones", async ({ request }) => {
   const brandRes = await request.post("/api/brands", {
     data: {

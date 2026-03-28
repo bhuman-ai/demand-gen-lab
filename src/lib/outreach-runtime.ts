@@ -10610,6 +10610,25 @@ async function resolveMailboxAccountForRun(run: { brandId: string; accountId: st
   return { account, secrets };
 }
 
+function assignedMailboxAccountIdsForAssignment(
+  assignment: Awaited<ReturnType<typeof getBrandOutreachAssignment>>
+) {
+  const mailboxIds = new Set<string>();
+  const primaryMailboxAccountId = String(
+    assignment?.mailboxAccountId ?? assignment?.accountId ?? ""
+  ).trim();
+  if (primaryMailboxAccountId) {
+    mailboxIds.add(primaryMailboxAccountId);
+  }
+  for (const accountId of assignment?.accountIds ?? []) {
+    const normalizedAccountId = String(accountId ?? "").trim();
+    if (normalizedAccountId) {
+      mailboxIds.add(normalizedAccountId);
+    }
+  }
+  return mailboxIds;
+}
+
 async function resolveMailboxAccountForBrand(input: {
   brandId: string;
   preferredMailboxAccountId?: string;
@@ -16118,14 +16137,12 @@ export async function ingestBrandInboxMessage(input: {
     return { ok: false, threadId: "", draftId: "", reason: "Brand not found" };
   }
   const assignment = await getBrandOutreachAssignment(brand.id);
-  const assignedMailboxAccountId = String(
-    assignment?.mailboxAccountId ?? assignment?.accountId ?? ""
-  ).trim();
+  const assignedMailboxAccountIds = assignedMailboxAccountIdsForAssignment(assignment);
   const requestedMailboxAccountId = input.mailboxAccountId?.trim() || "";
   if (
     requestedMailboxAccountId &&
-    assignedMailboxAccountId &&
-    requestedMailboxAccountId !== assignedMailboxAccountId
+    assignedMailboxAccountIds.size > 0 &&
+    !assignedMailboxAccountIds.has(requestedMailboxAccountId)
   ) {
     return {
       ok: false,
@@ -16159,7 +16176,7 @@ export async function ingestBrandInboxMessage(input: {
 
   const mailbox = await resolveMailboxAccountForBrand({
     brandId: brand.id,
-    preferredMailboxAccountId: assignedMailboxAccountId || requestedMailboxAccountId,
+    preferredMailboxAccountId: requestedMailboxAccountId || assignment?.mailboxAccountId || assignment?.accountId || "",
   });
   const replyPolicy = await evaluateReplyPolicy({
     brandName: brand.name,
@@ -16294,14 +16311,12 @@ export async function syncBrandInboxMailbox(input: {
     };
   }
   const assignment = await getBrandOutreachAssignment(brand.id);
-  const assignedMailboxAccountId = String(
-    assignment?.mailboxAccountId ?? assignment?.accountId ?? ""
-  ).trim();
+  const assignedMailboxAccountIds = assignedMailboxAccountIdsForAssignment(assignment);
   const requestedMailboxAccountId = input.mailboxAccountId?.trim() || "";
   if (
     requestedMailboxAccountId &&
-    assignedMailboxAccountId &&
-    requestedMailboxAccountId !== assignedMailboxAccountId
+    assignedMailboxAccountIds.size > 0 &&
+    !assignedMailboxAccountIds.has(requestedMailboxAccountId)
   ) {
     return {
       ok: false,
@@ -16318,7 +16333,7 @@ export async function syncBrandInboxMailbox(input: {
 
   const mailbox = await resolveMailboxAccountForBrand({
     brandId: brand.id,
-    preferredMailboxAccountId: assignedMailboxAccountId || requestedMailboxAccountId,
+    preferredMailboxAccountId: requestedMailboxAccountId || assignment?.mailboxAccountId || assignment?.accountId || "",
   });
   if (!mailbox) {
     return {

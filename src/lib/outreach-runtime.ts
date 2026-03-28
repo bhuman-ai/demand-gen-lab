@@ -172,6 +172,10 @@ import {
   type SenderHealthGateIssue,
 } from "@/lib/sender-health";
 import {
+  buildSenderCapacitySnapshots,
+  type SenderCapacityPolicy,
+} from "@/lib/sender-capacity";
+import {
   scoreSenderRoutingSignal,
   type SenderRoutingSignals,
 } from "@/lib/sender-routing";
@@ -379,16 +383,10 @@ type BusinessWindowPolicy = {
   days: number[];
 };
 
-type SenderWarmupPolicy = {
-  dailyCap: number;
-  hourlyCap: number;
-  warmupDay: number;
-};
-
 type SenderDispatchSlot = {
   account: ResolvedAccount;
   secrets: ResolvedSecrets;
-  policy: SenderWarmupPolicy;
+  policy: SenderCapacityPolicy;
 };
 
 type SenderUsageMap = Record<string, { dailySent: number; hourlySent: number }>;
@@ -505,32 +503,6 @@ function nextBusinessWindowCheckIso(input: Date, timeZone: string, policy: Busin
     probe = new Date(probe.getTime() + 60 * 60 * 1000);
   }
   return addHours(nowIso(), 1);
-}
-
-function senderWarmupDayNumber(createdAt: string, now: Date, timeZone: string) {
-  const created = toDate(createdAt);
-  const createdKey = timeZoneDateKey(created, timeZone || DEFAULT_TIMEZONE);
-  const nowKey = timeZoneDateKey(now, timeZone || DEFAULT_TIMEZONE);
-  const createdDay = Date.parse(`${createdKey}T00:00:00Z`);
-  const nowDay = Date.parse(`${nowKey}T00:00:00Z`);
-  if (!Number.isFinite(createdDay) || !Number.isFinite(nowDay)) return 1;
-  return Math.max(1, Math.floor((nowDay - createdDay) / DAY_MS) + 1);
-}
-
-function senderWarmupPolicy(input: {
-  account: ResolvedAccount;
-  now: Date;
-  timeZone: string;
-  businessWindow: BusinessWindowPolicy;
-}): SenderWarmupPolicy {
-  const warmupDay = senderWarmupDayNumber(input.account.createdAt, input.now, input.timeZone);
-  const dailyCap = Math.max(15, Math.min(120, warmupDay * 15));
-  const hourlyCap = Math.max(1, Math.ceil(dailyCap / businessWindowHours(input.businessWindow)));
-  return {
-    dailyCap,
-    hourlyCap,
-    warmupDay,
-  };
 }
 
 function alignToBusinessWindow(dateIso: string, timeZone: string, policy: BusinessWindowPolicy) {
@@ -11399,7 +11371,10 @@ async function resolveSenderPoolForBrand(input: {
   timeZone: string;
   businessWindow: BusinessWindowPolicy;
 }) {
-  const assignment = await getBrandOutreachAssignment(input.brandId);
+  const [assignment, brand] = await Promise.all([
+    getBrandOutreachAssignment(input.brandId),
+    getBrandById(input.brandId),
+  ]);
   const candidateAccountIds = Array.from(
     new Set(
       [input.preferredAccountId, assignment?.accountId ?? "", ...(assignment?.accountIds ?? [])]
@@ -11408,24 +11383,54 @@ async function resolveSenderPoolForBrand(input: {
     )
   );
   const now = new Date();
+  const [accounts, enrichedBrand, probeRuns] = await Promise.all([
+    Promise.all(candidateAccountIds.map((accountId) => getOutreachAccount(accountId))),
+    brand ? enrichBrandWithSenderHealth(brand) : Promise.resolve(null),
+    listDeliverabilityProbeRuns({ brandId: input.brandId, limit: 300 }),
+  ]);
+  const activeAccounts = accounts.filter((account): account is ResolvedAccount => Boolean(account && account.status === "active"));
+  const senderRows = enrichedBrand?.domains.filter((row) => row.role !== "brand") ?? [];
+  const scorecards = buildSenderDeliverabilityScorecards({
+    probeRuns,
+    senderAccounts: activeAccounts,
+  });
+  const scorecardByAccountId = new Map(
+    scorecards
+      .filter((scorecard) => scorecard.senderAccountId)
+      .map((scorecard) => [scorecard.senderAccountId, scorecard] as const)
+  );
+  const policyByAccountId = new Map(
+    buildSenderCapacitySnapshots({
+      senders: activeAccounts.map((account) => {
+        const fromEmail = getOutreachAccountFromEmail(account).trim().toLowerCase();
+        const row =
+          senderRows.find((item) => getDomainDeliveryAccountId(item) === account.id) ??
+          senderRows.find((item) => String(item.fromEmail ?? "").trim().toLowerCase() === fromEmail) ??
+          null;
+        return {
+          account,
+          row,
+          scorecard: scorecardByAccountId.get(account.id),
+        };
+      }),
+      timeZone: input.timeZone,
+      businessHoursPerDay: businessWindowHours(input.businessWindow),
+      now,
+    }).map((snapshot) => [snapshot.senderAccountId, snapshot] as const)
+  );
   const pool: SenderDispatchSlot[] = [];
 
-  for (const accountId of candidateAccountIds) {
-    const account = await getOutreachAccount(accountId);
-    if (!account || account.status !== "active") continue;
+  for (const account of activeAccounts) {
     const fromEmail = getOutreachAccountFromEmail(account).trim();
     if (!fromEmail) continue;
     const secrets = await getOutreachAccountSecrets(account.id);
     if (!secrets) continue;
+    const policy = policyByAccountId.get(account.id);
+    if (!policy || policy.dailyCap <= 0) continue;
     pool.push({
       account,
       secrets,
-      policy: senderWarmupPolicy({
-        account,
-        now,
-        timeZone: input.timeZone,
-        businessWindow: input.businessWindow,
-      }),
+      policy,
     });
   }
 

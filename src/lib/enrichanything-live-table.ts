@@ -3,7 +3,7 @@ import { clampExperimentSampleSize } from "@/lib/experiment-policy";
 import { listExperimentRecords, listScaleCampaignRecords } from "@/lib/experiment-data";
 import { resolveEnrichAnythingAppUrl } from "@/lib/enrichanything-app-url";
 import { getBrandOutreachAssignment, getOutreachAccount } from "@/lib/outreach-data";
-import { calculateSenderCapacityPolicy } from "@/lib/sender-capacity";
+import { buildSenderCapacitySnapshots } from "@/lib/sender-capacity";
 
 type ProspectTableConfig = {
   workspaceId: string;
@@ -371,17 +371,13 @@ async function resolveBrandSenderDailyCapacity(input: {
   }
 
   const accounts = await Promise.all(uniqueAccountIds.map((accountId) => getOutreachAccount(accountId)));
-  const totalCapacity = accounts.reduce((sum, account) => {
-    if (!account || account.status !== "active") {
-      return sum;
-    }
-    const policy = calculateSenderCapacityPolicy({
-      account,
-      timeZone: input.timeZone,
-      businessHoursPerDay: input.businessHoursPerDay,
-    });
-    return sum + Math.max(0, policy.dailyCap);
-  }, 0);
+  const totalCapacity = buildSenderCapacitySnapshots({
+    senders: accounts
+      .filter((account): account is NonNullable<typeof account> => Boolean(account && account.status === "active"))
+      .map((account) => ({ account })),
+    timeZone: input.timeZone,
+    businessHoursPerDay: input.businessHoursPerDay,
+  }).reduce((sum, snapshot) => sum + Math.max(0, snapshot.dailyCap), 0);
 
   return totalCapacity > 0 ? totalCapacity : Math.max(1, input.fallbackDailyCap);
 }

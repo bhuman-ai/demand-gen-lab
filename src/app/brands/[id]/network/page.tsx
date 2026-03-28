@@ -13,7 +13,7 @@ import { enrichBrandWithSenderHealth } from "@/lib/sender-health";
 import { buildSenderDeliverabilityScorecards } from "@/lib/outreach-deliverability";
 import {
   buildSenderUsageMap,
-  calculateSenderCapacityPolicy,
+  buildSenderCapacitySnapshots,
   type SenderCapacitySnapshot,
 } from "@/lib/sender-capacity";
 import {
@@ -192,29 +192,23 @@ export default async function NetworkPage({ params }: { params: Promise<{ id: st
     ),
     timeZone: usageTimeZone,
   });
-  const senderCapacitySnapshots: SenderCapacitySnapshot[] = brandSenderAccounts
-    .map((account) => {
+  const senderCapacitySnapshots: SenderCapacitySnapshot[] = buildSenderCapacitySnapshots({
+    senders: brandSenderAccounts.map((account) => {
       const fromEmail = getOutreachAccountFromEmail(account).trim().toLowerCase();
       const row =
         mergedBrand.domains.find((item) => getDomainDeliveryAccountId(item) === account.id) ??
         mergedBrand.domains.find((item) => String(item.fromEmail ?? "").trim().toLowerCase() === fromEmail) ??
         null;
-      const policy = calculateSenderCapacityPolicy({
+      return {
         account,
-        timeZone: usageTimeZone,
-        businessHoursPerDay: DEFAULT_SENDER_BUSINESS_HOURS,
         row,
         scorecard: scorecardByAccountId.get(account.id),
-      });
-      const usage = senderUsage[account.id] ?? { dailySent: 0, hourlySent: 0 };
-      return {
-        senderAccountId: account.id,
-        fromEmail,
-        dailySent: usage.dailySent,
-        hourlySent: usage.hourlySent,
-        ...policy,
       };
-    })
+    }),
+    timeZone: usageTimeZone,
+    businessHoursPerDay: DEFAULT_SENDER_BUSINESS_HOURS,
+    usage: senderUsage,
+  })
     .sort((left, right) => left.fromEmail.localeCompare(right.fromEmail));
 
   return (

@@ -13,6 +13,8 @@ import {
 } from "@/lib/outreach-customerio-billing";
 import { decryptJson, encryptJson } from "@/lib/outreach-encryption";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
+import { getOutreachAccountFromEmail } from "@/lib/outreach-account-helpers";
+import { MAX_ACTIVE_SENDERS_PER_DOMAIN } from "@/lib/sender-capacity";
 import type {
   ActorCapabilityProfile,
   BrandOutreachAssignment,
@@ -231,6 +233,39 @@ function normalizeAssignmentAccountIds(value: unknown, fallbackAccountId = ""): 
   const primary = fallbackAccountId.trim();
   if (primary) ids.add(primary);
   return Array.from(ids);
+}
+
+async function enforceAssignmentDomainLimit(accountIds: string[]) {
+  const accounts = await Promise.all(accountIds.map((accountId) => getOutreachAccount(accountId)));
+  const accountIdsByDomain = new Map<string, string[]>();
+
+  for (const account of accounts) {
+    if (!account) continue;
+    const fromEmail = getOutreachAccountFromEmail(account).trim().toLowerCase();
+    const domain = fromEmail.split("@")[1]?.trim().toLowerCase() || "";
+    if (!domain) continue;
+    const bucket = accountIdsByDomain.get(domain) ?? [];
+    bucket.push(account.id);
+    accountIdsByDomain.set(domain, bucket);
+  }
+
+  const violation = [...accountIdsByDomain.entries()].find(([, ids]) => ids.length > MAX_ACTIVE_SENDERS_PER_DOMAIN);
+  if (!violation) return;
+
+  const [domain, ids] = violation;
+  throw new OutreachDataError(
+    `Only ${MAX_ACTIVE_SENDERS_PER_DOMAIN} active sending inboxes are allowed on ${domain}.`,
+    {
+      status: 400,
+      hint: "Remove extra senders on that domain or split traffic across another sender domain before saving the brand assignment.",
+      debug: {
+        operation: "setBrandOutreachAssignment",
+        domain,
+        accountIds: ids,
+        maxActiveSendersPerDomain: MAX_ACTIVE_SENDERS_PER_DOMAIN,
+      },
+    }
+  );
 }
 
 function mapAssignmentRow(input: unknown): BrandOutreachAssignment {
@@ -2446,6 +2481,7 @@ export async function setBrandOutreachAssignment(
     patch.accountIds ?? existing?.accountIds ?? [],
     accountId
   );
+  await enforceAssignmentDomainLimit(accountIds);
 
   const now = nowIso();
   const assignment: BrandOutreachAssignment = {
@@ -4299,20 +4335,6 @@ export async function enqueueOutreachJob(input: {
   payload?: Record<string, unknown>;
   maxAttempts?: number;
 }): Promise<OutreachJob> {
-  if (input.jobType === "source_leads") {
-    throw new OutreachDataError(
-      "Legacy source_leads jobs are disabled. Launches must use approved EnrichAnything prospects with work emails.",
-      {
-        status: 400,
-        hint: "Seed runs from approved EnrichAnything table leads and queue schedule_messages instead.",
-        debug: {
-          runId: input.runId,
-          jobType: input.jobType,
-          migration: "enrichanything_only",
-        },
-      }
-    );
-  }
   const now = nowIso();
   const singletonJobType = SINGLETON_OUTREACH_JOB_TYPES.has(input.jobType);
   const requestedExecuteAfter = input.executeAfter ?? now;

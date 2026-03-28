@@ -3,12 +3,10 @@ import type {
   BrandOutreachAssignment,
   BrandRecord,
   DomainRow,
-  MailpoolInboxPlacementProvider,
   OutreachAccount,
   OutreachProvider,
 } from "@/lib/factory-types";
 import {
-  DEFAULT_MAILPOOL_INBOX_PROVIDERS,
   getOutreachMailboxEmail,
   getOutreachAccountFromEmail,
   getOutreachSenderBackingIssue,
@@ -35,11 +33,9 @@ import {
   updateOutreachProvisioningSettings,
 } from "@/lib/outreach-provider-settings";
 import {
-  createMailpoolInboxPlacement,
   createMailpoolMailbox,
   createMailpoolSpamCheck,
   getMailpoolDomainInfo,
-  getMailpoolInboxPlacement,
   getMailpoolSubscriptionSlots,
   getMailpoolSpamCheck,
   listMailpoolDomains,
@@ -47,12 +43,10 @@ import {
   listMailpoolMailboxes,
   registerMailpoolDomain,
   transferMailpoolDomain,
-  runMailpoolInboxPlacement,
   testMailpoolConnection,
   updateMailpoolSubscriptionSlots,
   type MailpoolDomain,
   type MailpoolDomainOwner,
-  type MailpoolInboxPlacement,
   type MailpoolMailbox,
   type MailpoolSpamCheck,
   type MailpoolSubscriptionSlots,
@@ -204,15 +198,6 @@ function normalizeEmailLocalPart(value: string) {
     .toLowerCase()
     .replace(/[^a-z0-9._+-]/g, "")
     .replace(/^\.+|\.+$/g, "");
-}
-
-function isMailpoolOptionalDeliverabilityCreditError(error: unknown) {
-  const message = error instanceof Error ? error.message.toLowerCase() : String(error ?? "").toLowerCase();
-  return (
-    message.includes("not enough credits") ||
-    message.includes("don't have enough credits") ||
-    message.includes("not enough credit")
-  );
 }
 
 function splitDomain(domain: string) {
@@ -1269,7 +1254,6 @@ async function ensureMailpoolHybridAccount(input: {
   accountName: string;
   mailbox: MailpoolMailbox;
   spamCheck?: MailpoolSpamCheck | null;
-  inboxPlacement?: MailpoolInboxPlacement | null;
   replyToEmail: string;
 }) {
   const allAccounts = await listOutreachAccounts();
@@ -1277,7 +1261,7 @@ async function ensureMailpoolHybridAccount(input: {
   const existing =
     allAccounts.find(
       (account) =>
-        account.provider === "mailpool" &&
+        account.accountType !== "mailbox" &&
         getOutreachAccountFromEmail(account).trim().toLowerCase() === fromEmail
     ) ?? null;
 
@@ -1299,7 +1283,7 @@ async function ensureMailpoolHybridAccount(input: {
         mailboxId: input.mailbox.id,
         mailboxType: input.mailbox.type,
         spamCheckId: String(input.spamCheck?.id ?? "").trim(),
-        inboxPlacementId: String(input.inboxPlacement?.id ?? "").trim(),
+        inboxPlacementId: "",
         status:
           input.mailbox.status === "active"
             ? "active"
@@ -1701,15 +1685,6 @@ async function waitForMailpoolSpamCheck(apiKey: string, spamCheckId: string) {
   for (let attempt = 0; attempt < 10 && current.state !== "completed"; attempt += 1) {
     await sleep(1500);
     current = await getMailpoolSpamCheck(apiKey, spamCheckId);
-  }
-  return current;
-}
-
-async function waitForMailpoolInboxPlacement(apiKey: string, inboxPlacementId: string) {
-  let current = await getMailpoolInboxPlacement(apiKey, inboxPlacementId);
-  for (let attempt = 0; attempt < 6 && current.state !== "completed"; attempt += 1) {
-    await sleep(2000);
-    current = await getMailpoolInboxPlacement(apiKey, inboxPlacementId);
   }
   return current;
 }
@@ -2288,8 +2263,6 @@ export async function provisionMailpoolSender(
   );
   let spamCheck: MailpoolSpamCheck | null = null;
   let resolvedSpamCheck: MailpoolSpamCheck | null = null;
-  let inboxPlacement: MailpoolInboxPlacement | null = null;
-  let resolvedInboxPlacement: MailpoolInboxPlacement | null = null;
 
   const warnings: string[] = [];
   const nextSteps: string[] = [];
@@ -2303,29 +2276,10 @@ export async function provisionMailpoolSender(
       spamCheck = await createMailpoolSpamCheck({ apiKey, mailboxId: mailbox.id });
       resolvedSpamCheck =
         spamCheck?.id ? await waitForMailpoolSpamCheck(apiKey, spamCheck.id) : null;
-
-      const inboxProviders =
-        settings.deliverability.mailpoolInboxProviders.length
-          ? settings.deliverability.mailpoolInboxProviders
-          : ([...DEFAULT_MAILPOOL_INBOX_PROVIDERS] as MailpoolInboxPlacementProvider[]);
-      inboxPlacement = await createMailpoolInboxPlacement({
-        apiKey,
-        mailboxId: mailbox.id,
-        providers: inboxProviders,
-      });
-      const runningInboxPlacement =
-        inboxPlacement?.id ? await runMailpoolInboxPlacement(apiKey, inboxPlacement.id) : inboxPlacement;
-      resolvedInboxPlacement =
-        runningInboxPlacement?.id
-          ? await waitForMailpoolInboxPlacement(apiKey, runningInboxPlacement.id)
-          : null;
     } catch (error) {
       if (isMailpoolGoogleCredentialsPendingError(error)) {
         warnings.push("Mailpool mailbox exists, but Google Workspace credentials are still provisioning.");
         nextSteps.push("Wait for Mailpool to finish Google Workspace mailbox setup, then refresh the sender.");
-      } else if (isMailpoolOptionalDeliverabilityCreditError(error)) {
-        warnings.push("Mailpool sender was provisioned, but optional deliverability checks were skipped because Mailpool is out of inbox-placement credits.");
-        nextSteps.push("Top up Mailpool inbox-placement credits, then refresh this sender to attach the optional deliverability checks.");
       } else {
         throw error;
       }
@@ -2339,7 +2293,6 @@ export async function provisionMailpoolSender(
     accountName: input.accountName.trim() || `${brand.name} ${domain}`,
     mailbox,
     spamCheck: resolvedSpamCheck,
-    inboxPlacement: resolvedInboxPlacement,
     replyToEmail: fromEmail,
   });
 
@@ -2400,9 +2353,6 @@ export async function provisionMailpoolSender(
   if (resolvedSpamCheck?.state !== "completed") {
     warnings.push("Mailpool spam check is still pending.");
   }
-  if (resolvedInboxPlacement && resolvedInboxPlacement.state !== "completed") {
-    warnings.push("Mailpool inbox placement is still pending.");
-  }
 
   if (mailpoolDomain.status !== "active") {
     nextSteps.push("Wait for Mailpool to finish domain activation and DNS propagation.");
@@ -2410,9 +2360,7 @@ export async function provisionMailpoolSender(
   if (input.domainMode === "transfer" && mailpoolDomain.status !== "active") {
     nextSteps.push("Wait for Mailpool to finish transferring the domain before treating this sender as live.");
   }
-  if (resolvedInboxPlacement && resolvedInboxPlacement.state !== "completed") {
-    nextSteps.push("Refresh inbox placement after Mailpool finishes the first run.");
-  }
+  nextSteps.push("Internal inbox placement monitors will start once the sender begins warming.");
   nextSteps.push("Run a sender test before launching live campaigns.");
 
   return {
@@ -2436,8 +2384,8 @@ export async function provisionMailpoolSender(
       mailboxStatus: String(mailbox.status ?? "").trim() || "pending",
       spamCheckId: String(resolvedSpamCheck?.id ?? spamCheck?.id ?? "").trim(),
       spamCheckStatus: String(resolvedSpamCheck?.state ?? spamCheck?.state ?? "pending"),
-      inboxPlacementId: String(resolvedInboxPlacement?.id ?? inboxPlacement?.id ?? "").trim(),
-      inboxPlacementStatus: String(resolvedInboxPlacement?.state ?? inboxPlacement?.state ?? "pending"),
+      inboxPlacementId: "",
+      inboxPlacementStatus: "internal",
     },
     warnings,
     nextSteps,

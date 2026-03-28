@@ -508,18 +508,17 @@ const TOOL_SPECS: OperatorToolSpec[] = [
       const result = await refreshMailpoolOutreachAccount(accountId);
       const fromEmail = result.account.config.customerIo.fromEmail || result.account.name;
       const spamSummary = result.account.config.mailpool.lastSpamCheckSummary.trim();
-      const inboxPlacementId = result.account.config.mailpool.inboxPlacementId.trim();
       const deliverabilityDetails = [
         result.domain?.domain ? `Domain: ${result.domain.domain}` : "No Mailpool domain match was found.",
         spamSummary ? `Spam check: ${spamSummary}` : "Spam check: not available yet.",
-        inboxPlacementId ? `Inbox placement id: ${inboxPlacementId}` : "Inbox placement: not created yet.",
+        "Inbox placement: handled by the internal monitor pool.",
         result.mailboxDeleted ? "Mailbox is deleted in Mailpool." : "Mailbox still exists in Mailpool.",
         ...result.deliverabilityKickoffErrors.slice(0, 2),
       ];
       return {
         summary:
           result.deliverabilityKickoffErrors.length > 0
-            ? `${fromEmail} refreshed. Spam checks were synced, but inbox placement still failed in Mailpool.`
+            ? `${fromEmail} refreshed. Spam checks were synced, but one or more Mailpool refresh checks still need attention.`
             : `${fromEmail} refreshed. Mailpool status is ${result.account.config.mailpool.status}.`,
         result: result as unknown as Record<string, unknown>,
         receipt: {

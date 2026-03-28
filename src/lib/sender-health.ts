@@ -197,13 +197,22 @@ function isMonitorPoolUnavailableReason(reason: string) {
   );
 }
 
+function isLegacyMailpoolInboxPlacementReason(reason: string) {
+  const normalized = reason.trim().toLowerCase();
+  return normalized.includes("mailpool post /inbox-placements/") || normalized.includes("mailpool inbox placement");
+}
+
+function isSpamFallbackEligibleFailureReason(reason: string) {
+  return isMonitorPoolUnavailableReason(reason) || isLegacyMailpoolInboxPlacementReason(reason);
+}
+
 function readMailpoolSpamFallback(
   account: OutreachAccount | null,
   automation: SenderAutomationContext,
   now: Date
 ): MailpoolSpamFallback | null {
   const latestFailure = latestProbeFailureReason(automation.latestProbe);
-  if (!isMonitorPoolUnavailableReason(latestFailure)) return null;
+  if (!isSpamFallbackEligibleFailureReason(latestFailure)) return null;
   if (!account) return null;
 
   const checkedAt = account.config.mailpool.lastSpamCheckAt.trim();
@@ -500,6 +509,12 @@ function latestProbeFailureReason(probeRun: DeliverabilityProbeRun | null) {
   return probeRun.lastError.trim() || "";
 }
 
+function latestBlockingProbeFailureReason(probeRun: DeliverabilityProbeRun | null) {
+  const reason = latestProbeFailureReason(probeRun);
+  if (isLegacyMailpoolInboxPlacementReason(reason)) return "";
+  return reason;
+}
+
 function buildAutomationSummary(input: {
   row: DomainRow;
   domain: HealthSignal;
@@ -525,7 +540,7 @@ function buildAutomationSummary(input: {
     return "Preparing sender. DNS verification must complete before control probes and warmup can begin.";
   }
 
-  const latestFailure = latestProbeFailureReason(input.automation.latestProbe);
+  const latestFailure = latestBlockingProbeFailureReason(input.automation.latestProbe);
   if (isMonitorPoolUnavailableReason(latestFailure)) {
     if (input.mailpoolSpamFallback) {
       return input.mailpoolSpamFallback.status === "risky"
@@ -597,7 +612,7 @@ function buildAutomationStatus(input: {
   if (input.row.dnsStatus === "error") return "attention";
   if (!input.row.fromEmail) return "queued";
   if (input.row.dnsStatus !== "verified") return "testing";
-  if (isMonitorPoolUnavailableReason(latestProbeFailureReason(input.automation.latestProbe))) {
+  if (isMonitorPoolUnavailableReason(latestBlockingProbeFailureReason(input.automation.latestProbe))) {
     if (!input.mailpoolSpamFallback) {
       return "attention";
     }

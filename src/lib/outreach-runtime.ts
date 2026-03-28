@@ -134,7 +134,6 @@ import {
   type ApifyLead,
 } from "@/lib/outreach-providers";
 import {
-  DEFAULT_MAILPOOL_INBOX_PROVIDERS,
   getDomainDeliveryAccountId,
   getDomainDeliveryAccountName,
   getOutreachAccountFromEmail,
@@ -152,11 +151,8 @@ import {
   updateOutreachProvisioningSettings,
 } from "@/lib/outreach-provider-settings";
 import {
-  createMailpoolInboxPlacement,
   createMailpoolSpamCheck,
-  getMailpoolInboxPlacement,
   getMailpoolSpamCheck,
-  runMailpoolInboxPlacement,
 } from "@/lib/mailpool-client";
 import {
   buildSenderDeliverabilityScorecards,
@@ -11869,15 +11865,6 @@ function summarizeDeliverabilityProbeResults(results: DeliverabilityProbeMonitor
   };
 }
 
-function mailpoolPlacementToMonitorPlacement(value: string): DeliverabilityProbeMonitorResult["placement"] {
-  const normalized = String(value ?? "").trim().toLowerCase();
-  if (normalized === "inbox") return "inbox";
-  if (normalized === "promotion") return "all_mail_only";
-  if (normalized === "spam") return "spam";
-  if (normalized === "unreceived") return "not_found";
-  return "error";
-}
-
 function isMailpoolCreditExhaustedError(error: unknown) {
   const message = error instanceof Error ? error.message : String(error ?? "");
   const normalized = message.trim().toLowerCase();
@@ -11889,15 +11876,6 @@ async function waitForMailpoolDeliverabilitySpamCheck(apiKey: string, spamCheckI
   for (let attempt = 0; attempt < 4 && current.state !== "completed"; attempt += 1) {
     await new Promise((resolve) => setTimeout(resolve, 1500));
     current = await getMailpoolSpamCheck(apiKey, spamCheckId);
-  }
-  return current;
-}
-
-async function waitForMailpoolDeliverabilityInboxPlacement(apiKey: string, inboxPlacementId: string) {
-  let current = await getMailpoolInboxPlacement(apiKey, inboxPlacementId);
-  for (let attempt = 0; attempt < 6 && current.state !== "completed"; attempt += 1) {
-    await new Promise((resolve) => setTimeout(resolve, 2000));
-    current = await getMailpoolInboxPlacement(apiKey, inboxPlacementId);
   }
   return current;
 }
@@ -11997,259 +11975,6 @@ async function queueDeliverabilityProbe(input: {
     executeAfter: input.executeAfter ?? nowIso(),
     payload: input.payload ?? {},
   });
-}
-
-async function processMailpoolDeliverabilityJob(input: {
-  run: OutreachRun;
-  probeRun: Awaited<ReturnType<typeof getDeliverabilityProbeRun>> | null;
-  probeVariant: DeliverabilityProbeVariant;
-  probeToken: string;
-  referenceMessage: {
-    id: string;
-    status: string;
-    sourceType: string;
-    nodeId: string;
-    leadId: string;
-    subject: string;
-    body: string;
-    contentHash: string;
-  };
-  senderChoice: SenderDispatchSlot;
-}) {
-  const senderAccount = input.senderChoice.account;
-  const mailboxId = senderAccount.config.mailpool.mailboxId.trim();
-  const fromEmail = getOutreachAccountFromEmail(senderAccount).trim();
-  const replyToEmail = getOutreachAccountReplyToEmail(senderAccount).trim() || fromEmail;
-  const failProbe = async (reason: string) => {
-    const failedProbe =
-      input.probeRun ??
-      (await createDeliverabilityProbeRun({
-        runId: input.run.id,
-        brandId: input.run.brandId,
-        campaignId: input.run.campaignId,
-        experimentId: input.run.experimentId,
-        probeToken: input.probeToken,
-        probeVariant: input.probeVariant,
-        status: "failed",
-        stage: "poll",
-        sourceMessageId: input.referenceMessage.id,
-        sourceMessageStatus: input.referenceMessage.status,
-        sourceType: input.referenceMessage.sourceType,
-        sourceNodeId: input.referenceMessage.nodeId,
-        sourceLeadId: input.referenceMessage.leadId,
-        senderAccountId: senderAccount.id,
-        senderAccountName: senderAccount.name,
-        fromEmail,
-        replyToEmail,
-        subject: input.referenceMessage.subject,
-        contentHash: input.referenceMessage.contentHash,
-        lastError: reason,
-        completedAt: nowIso(),
-      }));
-    if (input.probeRun) {
-      await updateDeliverabilityProbeRun(input.probeRun.id, {
-        status: "failed",
-        stage: "poll",
-        lastError: reason,
-        completedAt: nowIso(),
-      });
-    }
-    await createOutreachEvent({
-      runId: input.run.id,
-      eventType: "deliverability_probe_failed",
-      payload: {
-        reason,
-        probeRunId: failedProbe.id,
-        probeToken: input.probeToken,
-        probeVariant: input.probeVariant,
-        senderAccountId: senderAccount.id,
-        fromEmail,
-      },
-    });
-  };
-  const settings = await getOutreachProvisioningSettings();
-  const secrets = await getOutreachProvisioningSettingsSecrets();
-  const apiKey = String(secrets.mailpoolApiKey ?? "").trim();
-
-  if (!mailboxId || !apiKey) {
-    await failProbe("Mailpool mailbox is missing or Mailpool credentials are not configured");
-    return;
-  }
-
-  try {
-    const spamCheck = await createMailpoolSpamCheck({ apiKey, mailboxId });
-    const resolvedSpamCheck = await waitForMailpoolDeliverabilitySpamCheck(apiKey, String(spamCheck.id));
-
-    const providers =
-      settings.deliverability.mailpoolInboxProviders.length
-        ? settings.deliverability.mailpoolInboxProviders
-        : [...DEFAULT_MAILPOOL_INBOX_PROVIDERS];
-    let inboxPlacementId = senderAccount.config.mailpool.inboxPlacementId.trim();
-    if (!inboxPlacementId) {
-      const created = await createMailpoolInboxPlacement({
-        apiKey,
-        mailboxId,
-        providers,
-      });
-      inboxPlacementId = String(created.id).trim();
-    }
-
-    await runMailpoolInboxPlacement(apiKey, inboxPlacementId);
-    const resolvedPlacement = await waitForMailpoolDeliverabilityInboxPlacement(apiKey, inboxPlacementId);
-
-    await updateOutreachAccount(senderAccount.id, {
-      config: {
-        mailpool: {
-          spamCheckId: String(resolvedSpamCheck.id).trim(),
-          inboxPlacementId,
-          status: resolvedPlacement.state === "completed" ? "active" : "pending",
-          lastSpamCheckAt: resolvedSpamCheck.createdAt,
-          lastSpamCheckScore: Number(resolvedSpamCheck.result?.score ?? 0) || 0,
-          lastSpamCheckSummary:
-            resolvedSpamCheck.state === "completed"
-              ? `Spam score ${Number(resolvedSpamCheck.result?.score ?? 0) || 0}/100`
-              : "Spam check pending",
-        },
-      },
-    });
-
-    const finalResults =
-      resolvedPlacement.result?.checks?.length
-        ? resolvedPlacement.result.checks.map((check) => ({
-            accountId: String(check.mailboxId ?? check.provider ?? "mailpool").trim(),
-            email: String(check.email ?? check.provider ?? "mailpool").trim().toLowerCase(),
-            placement: mailpoolPlacementToMonitorPlacement(String(check.placement ?? "")),
-            matchedMailbox: String(check.email ?? "").trim().toLowerCase(),
-            matchedUid: 0,
-            ok: Boolean(check.placement),
-            error: "",
-          }))
-        : [
-            {
-              accountId: "mailpool",
-              email: "mailpool",
-              placement: resolvedPlacement.state === "completed" ? "error" : "not_found",
-              matchedMailbox: "",
-              matchedUid: 0,
-              ok: false,
-              error:
-                resolvedPlacement.state === "completed"
-                  ? "Mailpool inbox placement returned no provider checks"
-                  : "Mailpool inbox placement is still pending",
-            } satisfies DeliverabilityProbeMonitorResult,
-          ];
-    const aggregate = summarizeDeliverabilityProbeResults(finalResults);
-
-    const nextProbe =
-      input.probeRun
-        ? await updateDeliverabilityProbeRun(input.probeRun.id, {
-            status: resolvedPlacement.state === "completed" ? "completed" : "failed",
-            stage: "poll",
-            monitorTargets: finalResults.map((result) => ({
-              accountId: result.accountId,
-              email: result.email,
-            })),
-            results: finalResults,
-            pollAttempt: 1,
-            placement: aggregate.placement,
-            totalMonitors: aggregate.total,
-            counts: aggregate.counts,
-            summaryText: aggregate.summaryText,
-            lastError: resolvedPlacement.state === "completed" ? "" : "Mailpool inbox placement is still pending",
-            completedAt: nowIso(),
-          })
-        : await createDeliverabilityProbeRun({
-            runId: input.run.id,
-            brandId: input.run.brandId,
-            campaignId: input.run.campaignId,
-            experimentId: input.run.experimentId,
-            probeToken: input.probeToken,
-            probeVariant: input.probeVariant,
-            status: resolvedPlacement.state === "completed" ? "completed" : "failed",
-            stage: "poll",
-            sourceMessageId: input.referenceMessage.id,
-            sourceMessageStatus: input.referenceMessage.status,
-            sourceType: input.referenceMessage.sourceType,
-            sourceNodeId: input.referenceMessage.nodeId,
-            sourceLeadId: input.referenceMessage.leadId,
-            senderAccountId: senderAccount.id,
-            senderAccountName: senderAccount.name,
-            fromEmail,
-            replyToEmail,
-            subject: input.referenceMessage.subject,
-            contentHash: input.referenceMessage.contentHash,
-            monitorTargets: finalResults.map((result) => ({
-              accountId: result.accountId,
-              email: result.email,
-            })),
-            results: finalResults,
-            pollAttempt: 1,
-            placement: aggregate.placement,
-            totalMonitors: aggregate.total,
-            counts: aggregate.counts,
-            summaryText: aggregate.summaryText,
-            lastError: resolvedPlacement.state === "completed" ? "" : "Mailpool inbox placement is still pending",
-            completedAt: nowIso(),
-          });
-
-    await createOutreachEvent({
-      runId: input.run.id,
-      eventType: "deliverability_probe_result",
-      payload: {
-        probeToken: input.probeToken,
-        probeRunId: nextProbe?.id ?? "",
-        probeVariant: input.probeVariant,
-        subject: input.referenceMessage.subject,
-        sourceMessageId: input.referenceMessage.id,
-        sourceMessageStatus: input.referenceMessage.status,
-        sourceType: input.referenceMessage.sourceType,
-        nodeId: input.referenceMessage.nodeId,
-        leadId: input.referenceMessage.leadId,
-        contentHash: input.referenceMessage.contentHash,
-        senderAccountId: senderAccount.id,
-        senderAccountName: senderAccount.name,
-        fromEmail,
-        placement: aggregate.placement,
-        totalMonitors: aggregate.total,
-        counts: aggregate.counts,
-        summaryText: aggregate.summaryText,
-        spamCheckScore: Number(resolvedSpamCheck.result?.score ?? 0) || 0,
-        monitorResults: finalResults,
-      },
-    });
-
-    const senderScorecard = buildSenderDeliverabilityScorecards({
-      probeRuns: nextProbe ? [nextProbe] : [],
-      senderAccounts: [senderAccount],
-    })[0];
-
-    if (
-      senderScorecard?.autoPaused &&
-      senderScorecard.totalMonitors >= SENDER_DELIVERABILITY_MIN_MONITORS
-    ) {
-      await createOutreachEvent({
-        runId: input.run.id,
-        eventType: "sender_deliverability_paused_auto",
-        payload: {
-          senderAccountId: senderScorecard.senderAccountId,
-          senderAccountName: senderScorecard.senderAccountName,
-          fromEmail: senderScorecard.fromEmail,
-          spamRate: senderScorecard.spamRate,
-          inboxRate: senderScorecard.inboxRate,
-          totalMonitors: senderScorecard.totalMonitors,
-          summaryText: senderScorecard.summaryText,
-          autoPauseUntil: senderScorecard.autoPauseUntil,
-          reason: senderScorecard.autoPauseReason,
-        },
-      });
-    }
-  } catch (error) {
-    if (isMailpoolCreditExhaustedError(error)) {
-      await failProbe(error instanceof Error ? error.message : "Mailpool credits are exhausted");
-      return;
-    }
-    throw error;
-  }
 }
 
 async function findRecentDeliverabilityProbeForSender(input: {
@@ -12666,15 +12391,13 @@ async function processMonitorDeliverabilityJob(job: OutreachJob) {
   }
 
   if (senderChoice.slot.account.provider === "mailpool") {
-    await processMailpoolDeliverabilityJob({
-      run,
-      probeRun,
-      probeVariant,
-      probeToken,
-      referenceMessage,
-      senderChoice: senderChoice.slot,
-    });
-    return;
+    try {
+      await refreshMailpoolSpamCheckFallback(senderChoice.slot.account);
+    } catch (error) {
+      if (!isMailpoolCreditExhaustedError(error)) {
+        throw error;
+      }
+    }
   }
 
   const senderFromEmail = getOutreachAccountFromEmail(senderChoice.slot.account).trim();

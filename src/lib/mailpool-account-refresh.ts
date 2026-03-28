@@ -62,7 +62,7 @@ function buildMailpoolAccountPatch(mailbox: MailpoolMailbox, existingConfig: Out
               ? "deleted"
               : "pending",
         spamCheckId: String(existingConfig.mailpool.spamCheckId ?? "").trim(),
-        inboxPlacementId: String(existingConfig.mailpool.inboxPlacementId ?? "").trim(),
+        inboxPlacementId: "",
         lastSpamCheckAt: String(existingConfig.mailpool.lastSpamCheckAt ?? "").trim(),
         lastSpamCheckScore: Number(existingConfig.mailpool.lastSpamCheckScore ?? 0) || 0,
         lastSpamCheckSummary: String(existingConfig.mailpool.lastSpamCheckSummary ?? "").trim(),

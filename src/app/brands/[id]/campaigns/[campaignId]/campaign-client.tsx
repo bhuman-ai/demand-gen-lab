@@ -1182,20 +1182,20 @@ export default function CampaignClient({
           <CardHeader>
             <CardTitle className="text-base">Deliverability intelligence</CardTitle>
             <CardDescription>
-              Mailpool spam checks and inbox placement are active for Mailpool-managed senders.
+              Mailpool spam checks are active for Mailpool-managed senders. Inbox placement comes from the internal monitor pool.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-3 text-sm">
             <div className="rounded-[10px] border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3">
               <div className="flex flex-wrap items-center justify-between gap-2">
-                <div className="font-medium">Mailpool placement checks</div>
+                <div className="font-medium">Mailpool spam checks</div>
                 <Badge variant="success">mailpool</Badge>
               </div>
               <div className="mt-2 text-sm text-[color:var(--muted-foreground)]">
-                Providers {provisioningSettings.deliverability.mailpoolInboxProviders.join(", ")}
+                Internal monitor pool {provisioningSettings.deliverability.mailpoolInboxProviders.join(", ")}
               </div>
               <div className="mt-2 text-sm">
-                Sender scorecards above are driven by Mailpool inbox placement results and spam-check summaries.
+                Sender scorecards above combine Mailpool spam-check summaries with internal inbox-placement monitor results.
               </div>
             </div>
           </CardContent>

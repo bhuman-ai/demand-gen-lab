@@ -46,7 +46,7 @@ function mailboxConfigFromMailpool(
       mailboxId: mailbox.id,
       mailboxType: mailbox.type,
       spamCheckId: String(existingConfig?.mailpool.spamCheckId ?? "").trim(),
-      inboxPlacementId: String(existingConfig?.mailpool.inboxPlacementId ?? "").trim(),
+      inboxPlacementId: "",
       status:
         String(mailbox.status ?? "").trim().toLowerCase() === "active" ? "active" : "pending",
       lastSpamCheckAt: String(existingConfig?.mailpool.lastSpamCheckAt ?? "").trim(),

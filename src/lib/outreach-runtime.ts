@@ -11579,6 +11579,7 @@ async function listBlockedMonitorEmailsForSender(input: {
   brandId: string;
   senderAccountId: string;
   fromEmail: string;
+  contentHash?: string;
 }) {
   const reservations = await listDeliverabilitySeedReservations({
     brandId: input.brandId,
@@ -11588,14 +11589,17 @@ async function listBlockedMonitorEmailsForSender(input: {
   });
   const senderAccountId = input.senderAccountId.trim();
   const fromEmail = input.fromEmail.trim().toLowerCase();
+  const contentHash = String(input.contentHash ?? "").trim();
   const blocked = new Set<string>();
   for (const reservation of reservations) {
     const reservationSenderAccountId = reservation.senderAccountId.trim();
     const reservationFromEmail = reservation.fromEmail.trim().toLowerCase();
+    const reservationContentHash = reservation.contentHash.trim();
     const matchesSender =
       (senderAccountId && reservationSenderAccountId === senderAccountId) ||
       (fromEmail && reservationFromEmail === fromEmail);
-    if (!matchesSender) continue;
+    const matchesContent = !contentHash || reservationContentHash === contentHash;
+    if (!matchesSender || !matchesContent) continue;
     blocked.add(reservation.monitorEmail.trim().toLowerCase());
   }
   return blocked;
@@ -12493,6 +12497,7 @@ async function processMonitorDeliverabilityJob(job: OutreachJob) {
     brandId: run.brandId,
     senderAccountId: senderChoice.slot.account.id,
     fromEmail: senderFromEmail,
+    contentHash,
   });
   const monitorTargets = candidateMonitorTargets.filter((target) => {
     const monitorEmail = target.account.config.mailbox.email.trim().toLowerCase();

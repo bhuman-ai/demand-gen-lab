@@ -2995,6 +2995,62 @@ export async function sendMonitoringProbeMessage(params: {
   });
 }
 
+export async function sendManualPlacementSeedMessage(params: {
+  account: OutreachAccount;
+  secrets: OutreachAccountSecrets;
+  replyToEmail: string;
+  recipient: string;
+  runId: string;
+  experimentId: string;
+  subject: string;
+  body: string;
+  probeToken: string;
+  sourceMessageId?: string;
+  sourceMessageStatus?: string;
+  sourceType?: string;
+  sourceNodeId?: string;
+  sourceLeadId?: string;
+  contentHash?: string;
+}): Promise<{ ok: boolean; providerMessageId: string; error: string }> {
+  const fromEmail = getOutreachAccountFromEmail(params.account).trim();
+  const replyToEmail = params.replyToEmail.trim();
+  if (!fromEmail) {
+    return {
+      ok: false,
+      providerMessageId: "",
+      error: `${params.account.provider === "mailpool" ? "Mailpool" : "Customer.io"} From Email missing`,
+    };
+  }
+  if (!replyToEmail) {
+    return { ok: false, providerMessageId: "", error: "Reply-To email missing" };
+  }
+  return sendDeliveryEmail({
+    account: params.account,
+    secrets: params.secrets,
+    recipient: params.recipient,
+    fromEmail,
+    replyToEmail,
+    subject: params.subject,
+    body: params.body,
+    metadata: {
+      runId: params.runId,
+      experimentId: params.experimentId,
+      messageId: `placement_${params.probeToken}`,
+      step: 0,
+      monitoring: true,
+      manual_inbox_placement: true,
+      probeVariant: "production",
+      probeToken: params.probeToken,
+      sourceMessageId: params.sourceMessageId ?? "",
+      sourceMessageStatus: params.sourceMessageStatus ?? "",
+      sourceType: params.sourceType ?? "",
+      sourceNodeId: params.sourceNodeId ?? "",
+      sourceLeadId: params.sourceLeadId ?? "",
+      contentHash: params.contentHash ?? "",
+    },
+  });
+}
+
 export async function sendOutreachMessage(params: {
   message: OutreachMessage;
   account: OutreachAccount;

@@ -126,6 +126,7 @@ import {
   runApifyActorSyncGetDatasetItems,
   leadsFromApifyRows,
   resolveEmailFinderApiBaseUrl,
+  sendManualPlacementSeedMessage,
   sendMonitoringProbeMessage,
   sendOutreachMessage,
   sendReplyDraftAsEvent,
@@ -390,6 +391,7 @@ type DeliverabilityProbeReferenceMessage = {
   senderAccountId: string;
   senderAccountName: string;
   senderFromEmail: string;
+  replyToEmail: string;
 };
 
 type SenderReadinessSnapshot = {
@@ -401,6 +403,10 @@ type SenderReadinessSnapshot = {
 
 function nowIso() {
   return new Date().toISOString();
+}
+
+function looksLikeEmailAddress(value: string) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim());
 }
 
 function toDate(value: string) {
@@ -11840,6 +11846,7 @@ function buildDeliverabilityProbeReferenceMessage(
     senderAccountId: String(generationMeta.senderAccountId ?? "").trim(),
     senderAccountName: String(generationMeta.senderAccountName ?? "").trim(),
     senderFromEmail: String(generationMeta.senderFromEmail ?? "").trim(),
+    replyToEmail: String(generationMeta.replyToEmail ?? "").trim(),
   };
 }
 
@@ -15473,9 +15480,16 @@ export async function updateRunControl(input: {
   brandId: string;
   campaignId: string;
   runId: string;
-  action: "pause" | "resume" | "cancel" | "probe_deliverability" | "resume_sender_deliverability";
+  action:
+    | "pause"
+    | "resume"
+    | "cancel"
+    | "probe_deliverability"
+    | "resume_sender_deliverability"
+    | "seed_inbox_placement";
   reason?: string;
   senderAccountId?: string;
+  recipientEmail?: string;
 }): Promise<{ ok: boolean; reason: string }> {
   const run = await getOutreachRun(input.runId);
   if (!run || run.brandId !== input.brandId || run.campaignId !== input.campaignId) {
@@ -15612,6 +15626,93 @@ export async function updateRunControl(input: {
       },
     });
     return { ok: true, reason: "Sender returned to rotation" };
+  }
+
+  if (input.action === "seed_inbox_placement") {
+    const recipientEmail = String(input.recipientEmail ?? "").trim().toLowerCase();
+    if (!looksLikeEmailAddress(recipientEmail)) {
+      return { ok: false, reason: "A valid recipient email is required" };
+    }
+    const referenceMessage = await resolveDeliverabilityProbeReferenceMessage({
+      runId: run.id,
+      preferScheduled: true,
+    });
+    if (!referenceMessage) {
+      return {
+        ok: false,
+        reason: "No real scheduled or sent message exists for inbox placement seeding yet",
+      };
+    }
+    const senderAccountId = referenceMessage.senderAccountId.trim() || run.accountId.trim();
+    if (!senderAccountId) {
+      return { ok: false, reason: "No sender account is attached to the reference message" };
+    }
+    const senderAccount = await getOutreachAccount(senderAccountId);
+    if (!senderAccount) {
+      return { ok: false, reason: "Sender account not found" };
+    }
+    const senderSecrets = await getOutreachAccountSecrets(senderAccount.id);
+    if (!senderSecrets) {
+      return { ok: false, reason: "Sender account credentials not found" };
+    }
+    const replyToEmail =
+      referenceMessage.replyToEmail.trim() ||
+      getOutreachAccountReplyToEmail(senderAccount).trim() ||
+      getOutreachAccountFromEmail(senderAccount).trim();
+    const probeToken = generateDeliverabilityProbeToken();
+    const send = await sendManualPlacementSeedMessage({
+      account: senderAccount,
+      secrets: senderSecrets,
+      replyToEmail,
+      recipient: recipientEmail,
+      runId: run.id,
+      experimentId: run.experimentId,
+      subject: referenceMessage.subject,
+      body: referenceMessage.body,
+      probeToken,
+      sourceMessageId: referenceMessage.id,
+      sourceMessageStatus: referenceMessage.status,
+      sourceType: referenceMessage.sourceType,
+      sourceNodeId: referenceMessage.nodeId,
+      sourceLeadId: referenceMessage.leadId,
+      contentHash: referenceMessage.contentHash,
+    });
+    if (!send.ok) {
+      await createOutreachEvent({
+        runId: run.id,
+        eventType: "deliverability_probe_failed",
+        payload: {
+          reason: send.error || "Manual inbox placement seed failed",
+          recipientEmail,
+          manual: true,
+          probeVariant: "production",
+          sourceMessageId: referenceMessage.id,
+        },
+      });
+      return { ok: false, reason: send.error || "Manual inbox placement seed failed" };
+    }
+    await createOutreachEvent({
+      runId: run.id,
+      eventType: "deliverability_probe_sent",
+      payload: {
+        probeToken,
+        manual: true,
+        probeVariant: "production",
+        recipientEmail,
+        sourceMessageId: referenceMessage.id,
+        sourceMessageStatus: referenceMessage.status,
+        sourceType: referenceMessage.sourceType,
+        nodeId: referenceMessage.nodeId,
+        leadId: referenceMessage.leadId,
+        contentHash: referenceMessage.contentHash,
+        senderAccountId: senderAccount.id,
+        senderAccountName: senderAccount.name,
+        fromEmail: getOutreachAccountFromEmail(senderAccount).trim(),
+        replyToEmail,
+        providerMessageId: send.providerMessageId,
+      },
+    });
+    return { ok: true, reason: `Exact-content inbox placement seed sent to ${recipientEmail}` };
   }
 
   await updateOutreachRun(run.id, {

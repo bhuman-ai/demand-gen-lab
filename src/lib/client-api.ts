@@ -724,16 +724,28 @@ export async function controlScaleCampaignRunApi(
   brandId: string,
   campaignId: string,
   runId: string,
-  action: "pause" | "resume" | "cancel" | "probe_deliverability" | "resume_sender_deliverability",
+  action:
+    | "pause"
+    | "resume"
+    | "cancel"
+    | "probe_deliverability"
+    | "resume_sender_deliverability"
+    | "seed_inbox_placement",
   reason?: string,
   options?: {
     senderAccountId?: string;
+    recipientEmail?: string;
   }
 ) {
   const response = await fetch(`/api/brands/${brandId}/campaigns/${campaignId}/runs/${runId}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ action, reason, senderAccountId: options?.senderAccountId }),
+    body: JSON.stringify({
+      action,
+      reason,
+      senderAccountId: options?.senderAccountId,
+      recipientEmail: options?.recipientEmail,
+    }),
   });
   return await readJson(response);
 }

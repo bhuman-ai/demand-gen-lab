@@ -12949,6 +12949,17 @@ async function processMonitorDeliverabilityJob(job: OutreachJob) {
 
   const finalResults = [...previousResults, ...pollResults];
   const aggregate = summarizeDeliverabilityProbeResults(finalResults);
+  const completedReservationIds = monitorTargetsForPoll
+    .map((target) => target.reservationId ?? "")
+    .filter(Boolean);
+
+  if (completedReservationIds.length) {
+    await updateDeliverabilitySeedReservations(completedReservationIds, {
+      status: "released",
+      releasedAt: nowIso(),
+      releasedReason: "probe_completed",
+    });
+  }
 
   if (probeRun) {
     probeRun = await updateDeliverabilityProbeRun(probeRun.id, {

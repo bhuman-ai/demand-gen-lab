@@ -8,10 +8,14 @@ import type {
 } from "@/lib/factory-types";
 import {
   getOutreachAccountFromEmail,
+  getOutreachGmailUiLoginState,
   getOutreachAccountReplyToEmail,
+  supportsGmailUiDelivery,
   supportsMailpoolDelivery,
 } from "@/lib/outreach-account-helpers";
 import type { OutreachAccountSecrets } from "@/lib/outreach-data";
+import { sendGmailUiMessage, validateGmailUiMailboxConfig } from "@/lib/gmail-ui-delivery";
+import { resolveGmailUiUserDataDir } from "@/lib/gmail-ui-profile";
 
 export type ProviderTestResult = {
   ok: boolean;
@@ -2515,11 +2519,21 @@ export async function testOutreachProviders(
         if (!fromEmail) missing.push("From Email");
         customerIoDetail = missing.length ? `Missing: ${missing.join(", ")}` : "Customer.io config missing";
       } else {
-        if (!account.config.mailbox.smtpHost.trim()) missing.push("SMTP host");
-        if (!account.config.mailbox.smtpUsername.trim()) missing.push("SMTP username");
-        if (!mailboxSmtpPassword(secrets)) missing.push("SMTP password");
+        if (account.config.mailbox.deliveryMethod === "gmail_ui") {
+          if (account.config.mailbox.provider !== "gmail") missing.push("Gmail mailbox provider");
+          if (!account.config.mailbox.gmailUiUserDataDir.trim()) missing.push("Gmail UI user data dir");
+        } else {
+          if (!account.config.mailbox.smtpHost.trim()) missing.push("SMTP host");
+          if (!account.config.mailbox.smtpUsername.trim()) missing.push("SMTP username");
+          if (!mailboxSmtpPassword(secrets)) missing.push("SMTP password");
+        }
         if (!fromEmail) missing.push("From Email");
-        customerIoDetail = missing.length ? `Missing: ${missing.join(", ")}` : "Mailpool SMTP config missing";
+        customerIoDetail =
+          missing.length
+            ? `Missing: ${missing.join(", ")}`
+            : account.config.mailbox.deliveryMethod === "gmail_ui"
+              ? "Gmail UI config missing"
+              : "Mailpool SMTP config missing";
       }
       customerIoPass = false;
     } else if (account.provider === "customerio") {
@@ -2536,6 +2550,23 @@ export async function testOutreachProviders(
         if (auth.baseUrl) detailParts.push(`Base: ${auth.baseUrl.replace(/^https?:\/\//, "")}`);
         customerIoDetail = detailParts.join(" · ");
       }
+    } else if (supportsGmailUiDelivery(account)) {
+      const userDataDir = resolveGmailUiUserDataDir({
+        profileRoot: String(process.env.GMAIL_UI_PROFILE_ROOT ?? "").trim(),
+        existingUserDataDir: account.config.mailbox.gmailUiUserDataDir,
+        email: getOutreachAccountFromEmail(account),
+      }).userDataDir;
+      const validation = await validateGmailUiMailboxConfig({
+        userDataDir,
+        browserChannel: account.config.mailbox.gmailUiBrowserChannel,
+      });
+      const loginReady = getOutreachGmailUiLoginState(account) === "ready";
+      customerIoPass = validation.ok && loginReady;
+      customerIoDetail = validation.ok
+        ? loginReady
+          ? validation.message
+          : "Gmail UI profile exists, but Gmail is not logged in yet."
+        : validation.message;
     } else {
       try {
         const transport = nodemailer.createTransport({
@@ -2885,6 +2916,34 @@ async function sendMailpoolSmtpEmail(params: {
   }
 }
 
+async function sendMailpoolGmailUiEmail(params: {
+  account: OutreachAccount;
+  recipient: string;
+  fromEmail: string;
+  subject: string;
+  body: string;
+}): Promise<{ ok: boolean; providerMessageId: string; error: string }> {
+  const userDataDir = resolveGmailUiUserDataDir({
+    profileRoot: String(process.env.GMAIL_UI_PROFILE_ROOT ?? "").trim(),
+    existingUserDataDir: params.account.config.mailbox.gmailUiUserDataDir,
+    email: getOutreachAccountFromEmail(params.account),
+  }).userDataDir;
+  return sendGmailUiMessage({
+    userDataDir,
+    chromeProfileDirectory: params.account.config.mailbox.gmailUiProfileDirectory,
+    browserChannel: params.account.config.mailbox.gmailUiBrowserChannel,
+    proxyUrl: params.account.config.mailbox.proxyUrl,
+    proxyHost: params.account.config.mailbox.proxyHost,
+    proxyPort: params.account.config.mailbox.proxyPort,
+    proxyUsername: params.account.config.mailbox.proxyUsername,
+    proxyPassword: params.account.config.mailbox.proxyPassword,
+    expectedFrom: params.fromEmail,
+    recipient: params.recipient,
+    subject: params.subject,
+    body: params.body,
+  });
+}
+
 async function sendDeliveryEmail(params: {
   account: OutreachAccount;
   secrets: OutreachAccountSecrets;
@@ -2896,6 +2955,16 @@ async function sendDeliveryEmail(params: {
   metadata?: Record<string, unknown>;
 }) {
   if (params.account.provider === "mailpool") {
+    if (params.account.config.mailbox.deliveryMethod === "gmail_ui" && !supportsGmailUiDelivery(params.account)) {
+      return {
+        ok: false,
+        providerMessageId: "",
+        error: "Gmail UI delivery is selected but the Gmail UI profile is not fully configured.",
+      };
+    }
+    if (supportsGmailUiDelivery(params.account)) {
+      return sendMailpoolGmailUiEmail(params);
+    }
     return sendMailpoolSmtpEmail(params);
   }
   return sendCustomerIoTransactionalEmail(params);

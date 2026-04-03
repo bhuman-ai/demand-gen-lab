@@ -1652,6 +1652,93 @@ export async function fetchOutreachGmailUiCredentials(
   };
 }
 
+export async function getOutreachGmailUiSession(accountId: string) {
+  const response = await fetch(`/api/outreach/accounts/${accountId}/gmail-ui-session`, {
+    cache: "no-store",
+  });
+  const data = await readJson(response);
+  return {
+    ok: Boolean(data.ok),
+    accountId: String(data.accountId ?? ""),
+    fromEmail: String(data.fromEmail ?? ""),
+    step: String(data.step ?? "unknown"),
+    prompt: String(data.prompt ?? ""),
+    currentUrl: String(data.currentUrl ?? ""),
+    title: String(data.title ?? ""),
+    loginState: String(data.loginState ?? "login_required"),
+    screenshotPath: String(data.screenshotPath ?? ""),
+    updatedAt: String(data.updatedAt ?? ""),
+  } as {
+    ok: boolean;
+    accountId: string;
+    fromEmail: string;
+    step: string;
+    prompt: string;
+    currentUrl: string;
+    title: string;
+    loginState: "login_required" | "ready" | "error";
+    screenshotPath: string;
+    updatedAt: string;
+  };
+}
+
+export async function advanceOutreachGmailUiSession(
+  accountId: string,
+  input?: {
+    otp?: string;
+    password?: string;
+    ignoreConfiguredProxy?: boolean;
+    refreshMailpoolCredentials?: boolean;
+  }
+) {
+  const response = await fetch(`/api/outreach/accounts/${accountId}/gmail-ui-session`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      otp: String(input?.otp ?? "").trim(),
+      password: String(input?.password ?? "").trim(),
+      ignoreConfiguredProxy: Boolean(input?.ignoreConfiguredProxy),
+      refreshMailpoolCredentials: input?.refreshMailpoolCredentials !== false,
+    }),
+  });
+  const data = await readJson(response);
+  return {
+    ok: Boolean(data.ok),
+    accountId: String(data.accountId ?? ""),
+    fromEmail: String(data.fromEmail ?? ""),
+    step: String(data.step ?? "unknown"),
+    prompt: String(data.prompt ?? ""),
+    currentUrl: String(data.currentUrl ?? ""),
+    title: String(data.title ?? ""),
+    loginState: String(data.loginState ?? "login_required"),
+    screenshotPath: String(data.screenshotPath ?? ""),
+    updatedAt: String(data.updatedAt ?? ""),
+  } as {
+    ok: boolean;
+    accountId: string;
+    fromEmail: string;
+    step: string;
+    prompt: string;
+    currentUrl: string;
+    title: string;
+    loginState: "login_required" | "ready" | "error";
+    screenshotPath: string;
+    updatedAt: string;
+  };
+}
+
+export async function closeOutreachGmailUiSession(accountId: string) {
+  const response = await fetch(`/api/outreach/accounts/${accountId}/gmail-ui-session`, {
+    method: "DELETE",
+  });
+  const data = await readJson(response);
+  return {
+    ok: Boolean(data.ok),
+    accountId: String(data.accountId ?? ""),
+    closed: Boolean(data.closed),
+  };
+}
+
 export async function updateSenderLaunchPolicy(
   accountId: string,
   patch: {

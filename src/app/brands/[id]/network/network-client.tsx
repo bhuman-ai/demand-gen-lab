@@ -8,15 +8,17 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
-  fetchOutreachGmailUiCredentials,
+  advanceOutreachGmailUiSession,
   fetchBrand,
   fetchBrandOutreachAssignment,
   fetchBrands,
   fetchOutreachAccounts,
   fetchOutreachProvisioningSettings,
+  getOutreachGmailUiSession,
   provisionSenderDomain,
   refreshMailpoolOutreachAccount,
   testOutreachAccount,
+  closeOutreachGmailUiSession,
 } from "@/lib/client-api";
 import {
   buildSenderRoutingSignalFromDomainRow,
@@ -78,18 +80,17 @@ type SenderActionState = {
   error: string;
   success: string;
 };
-type GmailUiCredentialSnapshot = {
-  account: OutreachAccount;
-  refreshedAt: string;
-  credentials: {
-    mailboxEmail: string;
-    mailboxPassword: string;
-    mailboxAuthCode: string;
-    mailboxSmtpPassword: string;
-    mailboxAdminEmail: string;
-    mailboxAdminPassword: string;
-    mailboxAdminAuthCode: string;
-  };
+type GmailUiWorkerSnapshot = {
+  ok: boolean;
+  accountId: string;
+  fromEmail: string;
+  step: string;
+  prompt: string;
+  currentUrl: string;
+  title: string;
+  loginState: "login_required" | "ready" | "error";
+  screenshotPath: string;
+  updatedAt: string;
 };
 type SenderProvisioningSnapshot = {
   headline: string;
@@ -893,11 +894,13 @@ export default function NetworkClient({
   const [gmailVerifyRow, setGmailVerifyRow] = useState<DomainRow | null>(null);
   const [gmailVerifyAccountId, setGmailVerifyAccountId] = useState("");
   const [gmailVerifyLoading, setGmailVerifyLoading] = useState(false);
+  const [gmailVerifySubmitting, setGmailVerifySubmitting] = useState(false);
   const [gmailVerifyError, setGmailVerifyError] = useState("");
   const [gmailVerifyCheckMessage, setGmailVerifyCheckMessage] = useState("");
   const [gmailVerifyCheckPending, setGmailVerifyCheckPending] = useState(false);
-  const [gmailVerifyCopiedField, setGmailVerifyCopiedField] = useState("");
-  const [gmailVerifyData, setGmailVerifyData] = useState<GmailUiCredentialSnapshot | null>(null);
+  const [gmailVerifyOtpInput, setGmailVerifyOtpInput] = useState("");
+  const [gmailVerifyPasswordInput, setGmailVerifyPasswordInput] = useState("");
+  const [gmailVerifySession, setGmailVerifySession] = useState<GmailUiWorkerSnapshot | null>(null);
 
   const activeBrand = useMemo(() => ({ ...brand, domains }), [brand, domains]);
   const modalBrands = useMemo(() => [activeBrand], [activeBrand]);
@@ -1330,6 +1333,17 @@ export default function NetworkClient({
     setDomains(brand.domains || []);
   }, [brand.domains]);
 
+  useEffect(() => {
+    if (!gmailVerifyOpen || !gmailVerifyAccountId) return;
+    if (gmailVerifySession?.loginState === "ready") return;
+    const interval = window.setInterval(() => {
+      void refreshGmailVerifySession(gmailVerifyAccountId);
+    }, 3000);
+    return () => {
+      window.clearInterval(interval);
+    };
+  }, [gmailVerifyAccountId, gmailVerifyOpen, gmailVerifySession?.loginState]);
+
   async function loadSenderProvisioningModal() {
     setSenderModalLoading(true);
     setSenderModalError("");
@@ -1374,20 +1388,33 @@ export default function NetworkClient({
     }));
   }
 
-  async function loadGmailVerifyCredentials(accountId: string, refreshMailpool = true) {
+  async function startGmailVerifySession(accountId: string) {
     setGmailVerifyLoading(true);
     setGmailVerifyError("");
     try {
-      const snapshot = await fetchOutreachGmailUiCredentials(accountId, { refreshMailpool });
-      setGmailVerifyData(snapshot);
-      setSenderModalAccounts((prev) =>
-        prev.map((account) => (account.id === snapshot.account.id ? snapshot.account : account))
-      );
+      const snapshot = await advanceOutreachGmailUiSession(accountId, {
+        ignoreConfiguredProxy: true,
+        refreshMailpoolCredentials: true,
+      });
+      setGmailVerifySession(snapshot);
+      if (snapshot.step !== "awaiting_password") {
+        setGmailVerifyPasswordInput("");
+      }
     } catch (err) {
-      setGmailVerifyError(err instanceof Error ? err.message : "Failed to load Gmail verification details.");
-      setGmailVerifyData(null);
+      setGmailVerifyError(err instanceof Error ? err.message : "Failed to start Gmail verification.");
+      setGmailVerifySession(null);
     } finally {
       setGmailVerifyLoading(false);
+    }
+  }
+
+  async function refreshGmailVerifySession(accountId: string) {
+    if (!accountId) return;
+    try {
+      const snapshot = await getOutreachGmailUiSession(accountId);
+      setGmailVerifySession(snapshot);
+    } catch (err) {
+      setGmailVerifyError(err instanceof Error ? err.message : "Failed to refresh Gmail verification state.");
     }
   }
 
@@ -1396,23 +1423,11 @@ export default function NetworkClient({
     setGmailVerifyAccountId(accountId);
     setGmailVerifyOpen(true);
     setGmailVerifyCheckMessage("");
-    setGmailVerifyCopiedField("");
     setGmailVerifyError("");
-    setGmailVerifyData(null);
-    void loadGmailVerifyCredentials(accountId, true);
-  }
-
-  async function copyGmailVerifyField(value: string, field: string) {
-    if (!value.trim()) return;
-    try {
-      await navigator.clipboard.writeText(value);
-      setGmailVerifyCopiedField(field);
-      window.setTimeout(() => {
-        setGmailVerifyCopiedField((current) => (current === field ? "" : current));
-      }, 1500);
-    } catch (err) {
-      setGmailVerifyError(err instanceof Error ? err.message : "Failed to copy value.");
-    }
+    setGmailVerifySession(null);
+    setGmailVerifyOtpInput("");
+    setGmailVerifyPasswordInput("");
+    void startGmailVerifySession(accountId);
   }
 
   async function recheckGmailVerifiedSender() {
@@ -1421,9 +1436,9 @@ export default function NetworkClient({
     setGmailVerifyCheckMessage("");
     setGmailVerifyError("");
     try {
-      const result = await testOutreachAccount(gmailVerifyAccountId, "mailbox");
+      const result = await testOutreachAccount(gmailVerifyAccountId, "customerio");
       await refreshDomainsFromServer();
-      await loadGmailVerifyCredentials(gmailVerifyAccountId, false);
+      await refreshGmailVerifySession(gmailVerifyAccountId);
       setGmailVerifyCheckMessage(
         result.ok ? "Sender check passed. This sender should now show as ready." : result.message
       );
@@ -1431,6 +1446,33 @@ export default function NetworkClient({
       setGmailVerifyError(err instanceof Error ? err.message : "Sender check failed.");
     } finally {
       setGmailVerifyCheckPending(false);
+    }
+  }
+
+  async function submitGmailVerifyInput() {
+    if (!gmailVerifyAccountId) return;
+    setGmailVerifySubmitting(true);
+    setGmailVerifyError("");
+    setGmailVerifyCheckMessage("");
+    try {
+      const snapshot = await advanceOutreachGmailUiSession(gmailVerifyAccountId, {
+        otp: gmailVerifyOtpInput,
+        password: gmailVerifyPasswordInput,
+        ignoreConfiguredProxy: true,
+        refreshMailpoolCredentials: false,
+      });
+      setGmailVerifySession(snapshot);
+      setGmailVerifyOtpInput("");
+      if (snapshot.step !== "awaiting_password") {
+        setGmailVerifyPasswordInput("");
+      }
+      if (snapshot.loginState === "ready") {
+        await recheckGmailVerifiedSender();
+      }
+    } catch (err) {
+      setGmailVerifyError(err instanceof Error ? err.message : "Failed to submit Gmail verification input.");
+    } finally {
+      setGmailVerifySubmitting(false);
     }
   }
 
@@ -1964,29 +2006,41 @@ export default function NetworkClient({
         onOpenChange={(open) => {
           setGmailVerifyOpen(open);
           if (!open) {
+            const closingAccountId = gmailVerifyAccountId;
             setGmailVerifyError("");
             setGmailVerifyCheckMessage("");
-            setGmailVerifyCopiedField("");
+            setGmailVerifyOtpInput("");
+            setGmailVerifyPasswordInput("");
+            setGmailVerifySession(null);
+            setGmailVerifyRow(null);
+            setGmailVerifyAccountId("");
+            if (closingAccountId) {
+              void closeOutreachGmailUiSession(closingAccountId).catch(() => {});
+            }
           }
         }}
         title={gmailVerifyRow?.fromEmail ? `Verify ${gmailVerifyRow.fromEmail}` : "Verify sender"}
-        description="Use the live Mailpool password and auth code below, finish Google login in Gmail, then run the sender check here."
+        description="Enter the current code when Google asks for it. lastb2b will drive the live Gmail worker session and verify when the inbox is ready."
         panelClassName="max-w-3xl"
       >
         <div className="space-y-4">
           <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-4 py-4 text-sm leading-6 text-[color:var(--foreground)]">
-            <div className="font-medium">Do this in order</div>
+            <div className="font-medium">Live worker status</div>
             <div className="mt-2">
-              1. Open Gmail for <span className="font-medium">{gmailVerifyRow?.fromEmail || "this sender"}</span>.
+              {gmailVerifySession?.prompt ||
+                `Opening Gmail for ${gmailVerifyRow?.fromEmail || "this sender"} and moving it to the next login step.`}
             </div>
-            <div>2. Enter the password below.</div>
-            <div>3. If Google asks for a code, use the current auth code below.</div>
-            <div>4. When inbox access works, come back here and click <span className="font-medium">Re-check sender</span>.</div>
+            {gmailVerifySession ? (
+              <div className="mt-3 flex flex-wrap items-center gap-3 text-xs text-[color:var(--muted-foreground)]">
+                <span>Step: {gmailVerifySession.step.replaceAll("_", " ")}</span>
+                <span>Checked {formatRelativeTimeLabel(gmailVerifySession.updatedAt, "just now")}</span>
+              </div>
+            ) : null}
           </div>
 
-          {gmailVerifyLoading && !gmailVerifyData ? (
+          {gmailVerifyLoading && !gmailVerifySession ? (
             <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-4 py-6 text-sm text-[color:var(--muted-foreground)]">
-              Loading Gmail verification details...
+              Opening the Gmail worker session...
             </div>
           ) : null}
 
@@ -1996,108 +2050,52 @@ export default function NetworkClient({
             </div>
           ) : null}
 
-          {gmailVerifyData ? (
-            <div className="grid gap-4 md:grid-cols-2">
-              {[
-                { key: "email", label: "Sender email", value: gmailVerifyData.credentials.mailboxEmail },
-                { key: "password", label: "Password", value: gmailVerifyData.credentials.mailboxPassword },
-                { key: "auth_code", label: "Current auth code", value: gmailVerifyData.credentials.mailboxAuthCode },
-              ].map((field) => (
-                <div
-                  key={field.key}
-                  className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-4 py-4"
-                >
-                  <div className="flex items-center justify-between gap-3">
-                    <div className="text-[11px] uppercase tracking-[0.14em] text-[color:var(--muted-foreground)]">
-                      {field.label}
-                    </div>
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="outline"
-                      onClick={() => void copyGmailVerifyField(field.value, field.key)}
-                      disabled={!field.value.trim()}
-                    >
-                      {gmailVerifyCopiedField === field.key ? "Copied" : "Copy"}
-                    </Button>
-                  </div>
-                  <Input
-                    readOnly
-                    value={field.value}
-                    className="mt-3 font-mono text-sm"
-                  />
-                </div>
-              ))}
-
-              <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-4 py-4 md:col-span-2">
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <div>
-                    <div className="text-[11px] uppercase tracking-[0.14em] text-[color:var(--muted-foreground)]">
-                      Last Mailpool credential sync
-                    </div>
-                    <div className="mt-1 text-sm text-[color:var(--foreground)]">
-                      {formatRelativeTimeLabel(gmailVerifyData.refreshedAt, "Just now")}
-                    </div>
-                  </div>
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="outline"
-                    onClick={() => void loadGmailVerifyCredentials(gmailVerifyAccountId, true)}
-                    disabled={gmailVerifyLoading || !gmailVerifyAccountId}
-                  >
-                    Refresh code
-                  </Button>
-                </div>
-
-                {(gmailVerifyData.credentials.mailboxAdminEmail ||
-                  gmailVerifyData.credentials.mailboxAdminPassword ||
-                  gmailVerifyData.credentials.mailboxAdminAuthCode) ? (
-                  <details className="mt-4">
-                    <summary className="cursor-pointer text-sm font-medium text-[color:var(--foreground)]">
-                      Show admin credentials
-                    </summary>
-                    <div className="mt-3 grid gap-3 md:grid-cols-3">
-                      {[
-                        {
-                          key: "admin_email",
-                          label: "Admin email",
-                          value: gmailVerifyData.credentials.mailboxAdminEmail,
-                        },
-                        {
-                          key: "admin_password",
-                          label: "Admin password",
-                          value: gmailVerifyData.credentials.mailboxAdminPassword,
-                        },
-                        {
-                          key: "admin_auth_code",
-                          label: "Admin auth code",
-                          value: gmailVerifyData.credentials.mailboxAdminAuthCode,
-                        },
-                      ].map((field) => (
-                        <div key={field.key} className="space-y-2">
-                          <div className="flex items-center justify-between gap-2">
-                            <div className="text-[11px] uppercase tracking-[0.14em] text-[color:var(--muted-foreground)]">
-                              {field.label}
-                            </div>
-                            <Button
-                              type="button"
-                              size="sm"
-                              variant="outline"
-                              onClick={() => void copyGmailVerifyField(field.value, field.key)}
-                              disabled={!field.value.trim()}
-                            >
-                              {gmailVerifyCopiedField === field.key ? "Copied" : "Copy"}
-                            </Button>
-                          </div>
-                          <Input readOnly value={field.value} className="font-mono text-sm" />
-                        </div>
-                      ))}
-                    </div>
-                  </details>
-                ) : null}
+          {gmailVerifySession?.step === "awaiting_password" ? (
+            <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-4 py-4">
+              <div className="text-[11px] uppercase tracking-[0.14em] text-[color:var(--muted-foreground)]">
+                Password
               </div>
+              <Input
+                type="password"
+                value={gmailVerifyPasswordInput}
+                onChange={(event) => setGmailVerifyPasswordInput(event.target.value)}
+                placeholder="Enter the Gmail password if Google still needs it"
+                className="mt-3"
+              />
             </div>
+          ) : null}
+
+          {gmailVerifySession?.step === "awaiting_otp" ? (
+            <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-4 py-4">
+              <div className="text-[11px] uppercase tracking-[0.14em] text-[color:var(--muted-foreground)]">
+                One-time code
+              </div>
+              <Input
+                value={gmailVerifyOtpInput}
+                onChange={(event) => setGmailVerifyOtpInput(event.target.value)}
+                placeholder="Enter the current Google code for this sender"
+                inputMode="numeric"
+                className="mt-3 font-mono"
+              />
+            </div>
+          ) : null}
+
+          {gmailVerifySession?.loginState === "ready" ? (
+            <div className="rounded-xl border border-[color:var(--success-border)] bg-[color:var(--success-soft)] px-4 py-4 text-sm text-[color:var(--success)]">
+              Gmail inbox confirmed. Refreshing sender readiness will mark this sender ready if everything else is healthy.
+            </div>
+          ) : null}
+
+          {gmailVerifySession?.currentUrl ? (
+            <details className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-4 py-4">
+              <summary className="cursor-pointer text-sm font-medium text-[color:var(--foreground)]">
+                Worker details
+              </summary>
+              <div className="mt-3 space-y-2 text-sm text-[color:var(--muted-foreground)]">
+                <div>Page title: {gmailVerifySession.title || "Unknown"}</div>
+                <div className="break-all">Current URL: {gmailVerifySession.currentUrl}</div>
+              </div>
+            </details>
           ) : null}
 
           {gmailVerifyCheckMessage ? (
@@ -2110,10 +2108,44 @@ export default function NetworkClient({
           <Button
             type="button"
             variant="outline"
-            onClick={() => void recheckGmailVerifiedSender()}
-            disabled={gmailVerifyCheckPending || gmailVerifyLoading || !gmailVerifyAccountId}
+            onClick={() => void refreshGmailVerifySession(gmailVerifyAccountId)}
+            disabled={gmailVerifyLoading || gmailVerifySubmitting || !gmailVerifyAccountId}
           >
-            {gmailVerifyCheckPending ? "Checking..." : "Re-check sender"}
+            Refresh status
+          </Button>
+          {(gmailVerifySession?.step === "awaiting_password" || gmailVerifySession?.step === "awaiting_otp") ? (
+            <Button
+              type="button"
+              onClick={() => void submitGmailVerifyInput()}
+              disabled={
+                gmailVerifySubmitting ||
+                gmailVerifyLoading ||
+                !gmailVerifyAccountId ||
+                (gmailVerifySession?.step === "awaiting_password"
+                  ? !gmailVerifyPasswordInput.trim()
+                  : !gmailVerifyOtpInput.trim())
+              }
+            >
+              {gmailVerifySubmitting
+                ? "Submitting..."
+                : gmailVerifySession?.step === "awaiting_password"
+                  ? "Submit password"
+                  : "Submit code"}
+            </Button>
+          ) : null}
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => void recheckGmailVerifiedSender()}
+            disabled={
+              gmailVerifyCheckPending ||
+              gmailVerifyLoading ||
+              gmailVerifySubmitting ||
+              !gmailVerifyAccountId ||
+              gmailVerifySession?.loginState !== "ready"
+            }
+          >
+            {gmailVerifyCheckPending ? "Checking..." : "Verify sender"}
           </Button>
         </div>
       </SettingsModal>

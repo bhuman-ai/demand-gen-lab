@@ -622,7 +622,7 @@ function senderNextStep(
     if (row.dnsStatus !== "verified") return "Finish DNS";
     return "Wait for checks";
   }
-  if (status === "warming") return "Finish warmup";
+  if (status === "warming") return "Warmup runs automatically";
   return "Keep sending";
 }
 
@@ -1867,8 +1867,22 @@ export default function NetworkClient({
               const healthDisplay = senderHealthDisplay(item, status, overallHealth, provisioning);
               const today = senderTodaySummary(item, status, provisioning, capacity, readiness);
               const action = senderActionPlan(item, status, overallHealth, provisioning, account, readiness);
+              const passiveAction =
+                !action && status === "warming"
+                  ? {
+                      heading: "Verified",
+                      value: "No action needed",
+                      description: "This sender is already verified. Warmup is automatic right now.",
+                    }
+                  : !action && status === "ready"
+                    ? {
+                        heading: "Ready",
+                        value: "No action needed",
+                        description: "This sender is healthy and ready. You do not need to do anything here.",
+                      }
+                    : null;
               const nextStep =
-                action?.label ?? senderNextStep(item, status, overallHealth, provisioning, capacity);
+                action?.label ?? passiveAction?.value ?? senderNextStep(item, status, overallHealth, provisioning, capacity);
               const healthSignals = senderHealthSignals(item);
               const setupLine = provisioning
                 ? `${provisioning.headline} · ${provisioning.etaLabel}`
@@ -1879,7 +1893,7 @@ export default function NetworkClient({
               const warmupStage = senderWarmupStageLabel(item, capacity);
               const actionState = senderActionState[item.id] ?? EMPTY_SENDER_ACTION_STATE;
               const statusHeading = status === "fix" || status === "setup" ? "Issue" : "Status";
-              const nextStepHeading = action ? "Verify" : "Next step";
+              const nextStepHeading = action ? "Verify" : passiveAction?.heading ?? "Next step";
 
               return (
                 <article
@@ -1961,6 +1975,10 @@ export default function NetworkClient({
                         {actionState.pending ? "Working..." : action.label}
                       </Button>
                       <div className="text-sm text-[color:var(--muted-foreground)]">{action.description}</div>
+                    </div>
+                  ) : passiveAction ? (
+                    <div className="mt-4 rounded-[12px] border border-[color:var(--success-border)] bg-[color:var(--success-soft)] px-3 py-2 text-sm text-[color:var(--success)]">
+                      {passiveAction.description}
                     </div>
                   ) : null}
 

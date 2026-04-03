@@ -1600,6 +1600,70 @@ export default function NetworkClient({
     void loadSenderProvisioningModal();
   }
 
+  const gmailVerifyStepKey = !gmailVerifySession
+    ? "opening"
+    : gmailVerifySession.loginState === "ready"
+      ? "ready"
+      : gmailVerifySession.step === "awaiting_password"
+        ? "awaiting_password"
+        : gmailVerifySession.step === "awaiting_otp"
+          ? "awaiting_otp"
+          : "waiting";
+
+  const gmailVerifyStepIndex =
+    gmailVerifyStepKey === "ready"
+      ? 3
+      : gmailVerifyStepKey === "awaiting_password" || gmailVerifyStepKey === "awaiting_otp" || gmailVerifyStepKey === "waiting"
+        ? 2
+        : 1;
+
+  const gmailVerifyStatusCard =
+    gmailVerifyStepKey === "ready"
+      ? {
+          tone: "success" as const,
+          eyebrow: "Step 3",
+          title: "Finish setup",
+          body: "Google login is done. The inbox is open for this sender.",
+          next: "Click Finish setup to confirm the sender is ready.",
+        }
+      : gmailVerifyStepKey === "awaiting_password"
+        ? {
+            tone: "default" as const,
+            eyebrow: "Step 2",
+            title: "Google needs the password",
+            body: "Enter the Google password for this sender, then click Continue.",
+            next: "Only enter the password if Google is asking for it right now.",
+          }
+        : gmailVerifyStepKey === "awaiting_otp"
+          ? {
+              tone: "default" as const,
+              eyebrow: "Step 2",
+              title: "Google needs the 6-digit code",
+              body: "Open the authenticator app for this sender, enter the current code, then click Continue.",
+              next: "Use the newest code. Older codes will fail.",
+            }
+          : gmailVerifyStepKey === "waiting"
+            ? {
+                tone: "default" as const,
+                eyebrow: "Step 2",
+                title: "Google login is in progress",
+                body: "We are moving this sender through Google’s login flow.",
+                next: "Wait a few seconds, then click Check again if nothing changes.",
+              }
+            : {
+                tone: "default" as const,
+                eyebrow: "Step 1",
+                title: "Opening Google",
+                body: `We are opening Gmail for ${gmailVerifyRow?.fromEmail || "this sender"} and checking what Google asks for.`,
+                next: "This usually takes a few seconds.",
+              };
+
+  const gmailVerifyStepItems = [
+    { number: 1, label: "Open Google" },
+    { number: 2, label: "Prove it's you" },
+    { number: 3, label: "Finish sender" },
+  ];
+
   return (
     <div className="space-y-8">
       {error ? <div className="text-sm text-[color:var(--danger)]">{error}</div> : null}
@@ -2028,27 +2092,53 @@ export default function NetworkClient({
           }
         }}
         title={gmailVerifyRow?.fromEmail ? `Verify ${gmailVerifyRow.fromEmail}` : "Verify sender"}
-        description="Enter the current code when Google asks for it. lastb2b will drive the live Gmail worker session and verify when the inbox is ready."
+        description="One step at a time: we will tell you what Google is asking for, then finish the sender when the inbox is ready."
         panelClassName="max-w-3xl"
       >
         <div className="space-y-4">
-          <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-4 py-4 text-sm leading-6 text-[color:var(--foreground)]">
-            <div className="font-medium">Live worker status</div>
-            <div className="mt-2">
-              {gmailVerifySession?.prompt ||
-                `Opening Gmail for ${gmailVerifyRow?.fromEmail || "this sender"} and moving it to the next login step.`}
-            </div>
+          <div className="grid gap-2 sm:grid-cols-3">
+            {gmailVerifyStepItems.map((item) => {
+              const isDone = gmailVerifyStepIndex > item.number;
+              const isCurrent = gmailVerifyStepIndex === item.number;
+              return (
+                <div
+                  key={item.number}
+                  className={`rounded-xl border px-3 py-3 text-sm ${
+                    isCurrent
+                      ? "border-[color:var(--foreground)] bg-[color:var(--surface-muted)] text-[color:var(--foreground)]"
+                      : isDone
+                        ? "border-[color:var(--success-border)] bg-[color:var(--success-soft)] text-[color:var(--success)]"
+                        : "border-[color:var(--border)] bg-[color:var(--surface)] text-[color:var(--muted-foreground)]"
+                  }`}
+                >
+                  <div className="text-[11px] uppercase tracking-[0.14em]">{`Step ${item.number}`}</div>
+                  <div className="mt-1 font-medium">{item.label}</div>
+                </div>
+              );
+            })}
+          </div>
+
+          <div
+            className={`rounded-xl border px-4 py-4 text-sm leading-6 ${
+              gmailVerifyStatusCard.tone === "success"
+                ? "border-[color:var(--success-border)] bg-[color:var(--success-soft)] text-[color:var(--success)]"
+                : "border-[color:var(--border)] bg-[color:var(--surface-muted)] text-[color:var(--foreground)]"
+            }`}
+          >
+            <div className="text-[11px] uppercase tracking-[0.14em] opacity-80">{gmailVerifyStatusCard.eyebrow}</div>
+            <div className="mt-1 text-base font-semibold">{gmailVerifyStatusCard.title}</div>
+            <div className="mt-2">{gmailVerifyStatusCard.body}</div>
+            <div className="mt-2 text-xs opacity-80">{gmailVerifyStatusCard.next}</div>
             {gmailVerifySession ? (
-              <div className="mt-3 flex flex-wrap items-center gap-3 text-xs text-[color:var(--muted-foreground)]">
-                <span>Step: {gmailVerifySession.step.replaceAll("_", " ")}</span>
-                <span>Checked {formatRelativeTimeLabel(gmailVerifySession.updatedAt, "just now")}</span>
+              <div className="mt-3 text-xs opacity-80">
+                Checked {formatRelativeTimeLabel(gmailVerifySession.updatedAt, "just now")}
               </div>
             ) : null}
           </div>
 
           {gmailVerifyLoading && !gmailVerifySession ? (
             <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-4 py-6 text-sm text-[color:var(--muted-foreground)]">
-              Opening the Gmail worker session...
+              Opening Gmail now...
             </div>
           ) : null}
 
@@ -2060,46 +2150,43 @@ export default function NetworkClient({
 
           {gmailVerifySession?.step === "awaiting_password" ? (
             <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-4 py-4">
-              <div className="text-[11px] uppercase tracking-[0.14em] text-[color:var(--muted-foreground)]">
-                Password
-              </div>
+              <div className="text-[11px] uppercase tracking-[0.14em] text-[color:var(--muted-foreground)]">Google password</div>
               <Input
                 type="password"
                 value={gmailVerifyPasswordInput}
                 onChange={(event) => setGmailVerifyPasswordInput(event.target.value)}
-                placeholder="Enter the Gmail password if Google still needs it"
+                placeholder="Enter the Google password for this sender"
                 className="mt-3"
               />
+              <div className="mt-2 text-xs text-[color:var(--muted-foreground)]">
+                Only fill this if Google is asking for the password right now.
+              </div>
             </div>
           ) : null}
 
           {gmailVerifySession?.step === "awaiting_otp" ? (
             <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-4 py-4">
-              <div className="text-[11px] uppercase tracking-[0.14em] text-[color:var(--muted-foreground)]">
-                One-time code
-              </div>
+              <div className="text-[11px] uppercase tracking-[0.14em] text-[color:var(--muted-foreground)]">6-digit code</div>
               <Input
                 value={gmailVerifyOtpInput}
                 onChange={(event) => setGmailVerifyOtpInput(event.target.value)}
-                placeholder="Enter the current Google code for this sender"
+                placeholder="Enter the current code from the authenticator app"
                 inputMode="numeric"
                 className="mt-3 font-mono"
               />
-            </div>
-          ) : null}
-
-          {gmailVerifySession?.loginState === "ready" ? (
-            <div className="rounded-xl border border-[color:var(--success-border)] bg-[color:var(--success-soft)] px-4 py-4 text-sm text-[color:var(--success)]">
-              Gmail inbox confirmed. Refreshing sender readiness will mark this sender ready if everything else is healthy.
+              <div className="mt-2 text-xs text-[color:var(--muted-foreground)]">
+                Enter the newest code, then click Continue.
+              </div>
             </div>
           ) : null}
 
           {gmailVerifySession?.currentUrl ? (
             <details className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-4 py-4">
               <summary className="cursor-pointer text-sm font-medium text-[color:var(--foreground)]">
-                Worker details
+                Technical details
               </summary>
               <div className="mt-3 space-y-2 text-sm text-[color:var(--muted-foreground)]">
+                <div>{gmailVerifySession.prompt || "Worker status available."}</div>
                 <div>Page title: {gmailVerifySession.title || "Unknown"}</div>
                 <div className="break-all">Current URL: {gmailVerifySession.currentUrl}</div>
               </div>
@@ -2123,7 +2210,7 @@ export default function NetworkClient({
             }
             disabled={gmailVerifyLoading || gmailVerifySubmitting || !gmailVerifyAccountId}
           >
-            Refresh status
+            Check again
           </Button>
           {(gmailVerifySession?.step === "awaiting_password" || gmailVerifySession?.step === "awaiting_otp") ? (
             <Button
@@ -2138,16 +2225,11 @@ export default function NetworkClient({
                   : !gmailVerifyOtpInput.trim())
               }
             >
-              {gmailVerifySubmitting
-                ? "Submitting..."
-                : gmailVerifySession?.step === "awaiting_password"
-                  ? "Submit password"
-                  : "Submit code"}
+              {gmailVerifySubmitting ? "Continuing..." : "Continue"}
             </Button>
           ) : null}
           <Button
             type="button"
-            variant="outline"
             onClick={() => void recheckGmailVerifiedSender()}
             disabled={
               gmailVerifyCheckPending ||
@@ -2157,7 +2239,7 @@ export default function NetworkClient({
               gmailVerifySession?.loginState !== "ready"
             }
           >
-            {gmailVerifyCheckPending ? "Checking..." : "Verify sender"}
+            {gmailVerifyCheckPending ? "Finishing..." : "Finish setup"}
           </Button>
         </div>
       </SettingsModal>

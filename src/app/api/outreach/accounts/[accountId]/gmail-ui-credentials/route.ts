@@ -35,6 +35,7 @@ export async function GET(
     if (!secrets) {
       return NextResponse.json({ error: "account credentials missing" }, { status: 400 });
     }
+    const secretsRecord = secrets as Record<string, unknown>;
 
     return NextResponse.json({
       account,
@@ -42,11 +43,11 @@ export async function GET(
       credentials: {
         mailboxEmail: account.config.mailbox.email.trim() || account.config.customerIo.fromEmail.trim(),
         mailboxPassword: secrets.mailboxPassword.trim(),
-        mailboxAuthCode: secrets.mailboxAuthCode.trim(),
-        mailboxSmtpPassword: secrets.mailboxSmtpPassword.trim(),
-        mailboxAdminEmail: secrets.mailboxAdminEmail.trim(),
-        mailboxAdminPassword: secrets.mailboxAdminPassword.trim(),
-        mailboxAdminAuthCode: secrets.mailboxAdminAuthCode.trim(),
+        mailboxAuthCode: String(secretsRecord.mailboxAuthCode ?? "").trim(),
+        mailboxSmtpPassword: String(secretsRecord.mailboxSmtpPassword ?? "").trim(),
+        mailboxAdminEmail: String(secretsRecord.mailboxAdminEmail ?? "").trim(),
+        mailboxAdminPassword: String(secretsRecord.mailboxAdminPassword ?? "").trim(),
+        mailboxAdminAuthCode: String(secretsRecord.mailboxAdminAuthCode ?? "").trim(),
       },
     });
   } catch (err) {

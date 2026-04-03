@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { syncMailpoolOutreachAccountCredentials } from "@/lib/mailpool-account-refresh";
+import { refreshMailpoolOutreachAccount } from "@/lib/mailpool-account-refresh";
 import {
   OutreachDataError,
   getOutreachAccount,
@@ -25,7 +25,8 @@ export async function GET(
     }
 
     if (shouldRefresh && account.provider === "mailpool") {
-      account = await syncMailpoolOutreachAccountCredentials(accountId);
+      const result = await refreshMailpoolOutreachAccount(accountId);
+      account = result.account;
     }
 
     const secrets = await getOutreachAccountSecrets(accountId);

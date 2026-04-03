@@ -28,7 +28,6 @@ import {
   getDomainDeliveryAccountId,
   getDomainDeliveryAccountName,
   getOutreachAccountFromEmail,
-  getOutreachGmailUiLoginState,
   getOutreachAccountReplyToEmail,
 } from "@/lib/outreach-account-helpers";
 import { evaluateSenderReadiness, type SenderReadiness } from "@/lib/send-readiness";
@@ -652,7 +651,7 @@ function senderActionPlan(
   if (
     account &&
     account.config.mailbox.deliveryMethod === "gmail_ui" &&
-    getOutreachGmailUiLoginState(account) !== "ready" &&
+    String(account.config.mailbox.gmailUiLoginState ?? "").trim() !== "ready" &&
     row.fromEmail &&
     row.dnsStatus === "verified"
   ) {

@@ -388,6 +388,26 @@ async function clickNext(page: any) {
   await settlePage(page);
 }
 
+async function waitForStepAfterSubmit(
+  page: any,
+  previousStep: SessionStep
+): Promise<Omit<SessionSnapshot, "ok" | "accountId" | "fromEmail" | "updatedAt" | "screenshotPath">> {
+  let latest = await detectSessionStep(page);
+  if (latest.step !== previousStep || latest.loginState === "ready") {
+    return latest;
+  }
+
+  for (let attempt = 0; attempt < 6; attempt += 1) {
+    await page.waitForTimeout(900).catch(() => {});
+    latest = await detectSessionStep(page);
+    if (latest.step !== previousStep || latest.loginState === "ready") {
+      return latest;
+    }
+  }
+
+  return latest;
+}
+
 async function fillVisibleField(page: any, selectors: string[], value: string) {
   for (const selector of selectors) {
     const locator = page.locator(selector).first();
@@ -650,7 +670,7 @@ async function getOrCreateSession(accountId: string, input: AdvanceInput) {
 
 async function advanceSession(accountId: string, input: AdvanceInput = {}) {
   const handle = await getOrCreateSession(accountId, input);
-  const { gmailUiPassword } = await loadAccountBundle(
+  const { secrets, gmailUiPassword } = await loadAccountBundle(
     accountId,
     input.refreshMailpoolCredentials !== false
   );
@@ -690,7 +710,8 @@ async function advanceSession(accountId: string, input: AdvanceInput = {}) {
         const filled = await fillVisibleField(handle.page, ['input[type="password"]', 'input[name="Passwd"]'], password);
         if (filled) {
           await clickNext(handle.page);
-          continue;
+          const afterPassword = await waitForStepAfterSubmit(handle.page, "awaiting_password");
+          return takeSnapshot(handle, afterPassword);
         }
       }
     }
@@ -707,7 +728,16 @@ async function advanceSession(accountId: string, input: AdvanceInput = {}) {
         ], otp);
         if (filled) {
           await clickNext(handle.page);
-          continue;
+          const afterOtp = await waitForStepAfterSubmit(handle.page, "awaiting_otp");
+          const nextSnapshot =
+            afterOtp.step === "awaiting_otp"
+              ? {
+                  ...afterOtp,
+                  prompt:
+                    "Google is still asking for the 6-digit code. Wait for a fresh code, then try once more.",
+                }
+              : afterOtp;
+          return takeSnapshot(handle, nextSnapshot);
         }
       }
     }

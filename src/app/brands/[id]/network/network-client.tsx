@@ -634,6 +634,13 @@ function senderActionPlan(
   readiness?: SenderReadiness | null
 ): SenderActionPlan | null {
   if (status === "protected" || status === "ready") return null;
+  const mailboxConfig = account ? ((account.config.mailbox ?? {}) as Record<string, unknown>) : null;
+  const deliveryMethod = mailboxConfig
+    ? String(mailboxConfig.deliveryMethod ?? mailboxConfig.delivery_method ?? "").trim()
+    : "";
+  const gmailUiLoginState = mailboxConfig
+    ? String(mailboxConfig.gmailUiLoginState ?? mailboxConfig.gmail_ui_login_state ?? "").trim()
+    : "";
   if (provisioning) {
     return {
       kind: "refresh_mailpool",
@@ -650,14 +657,10 @@ function senderActionPlan(
   }
   if (
     account &&
-    (() => {
-      const mailboxConfig = (account.config.mailbox ?? {}) as Record<string, unknown>;
-      const deliveryMethod = String(mailboxConfig.deliveryMethod ?? mailboxConfig.delivery_method ?? "").trim();
-      const gmailUiLoginState = String(
-        mailboxConfig.gmailUiLoginState ?? mailboxConfig.gmail_ui_login_state ?? ""
-      ).trim();
-      return deliveryMethod === "gmail_ui" && gmailUiLoginState !== "ready";
-    })() &&
+    account.provider === "mailpool" &&
+    !isMonitorInboxIssue(row) &&
+    (deliveryMethod === "gmail_ui" || !deliveryMethod) &&
+    gmailUiLoginState !== "ready" &&
     row.fromEmail &&
     row.dnsStatus === "verified"
   ) {
@@ -696,6 +699,20 @@ function senderActionPlan(
     };
   }
   if (status === "fix" || health === "problem") {
+    if (
+      account &&
+      account.provider === "mailpool" &&
+      !isMonitorInboxIssue(row) &&
+      row.fromEmail &&
+      row.dnsStatus === "verified"
+    ) {
+      return {
+        kind: "verify_gmail_ui",
+        label: "Verify sender",
+        description:
+          "Open the Gmail verification panel. If login is already done, re-check the sender from there.",
+      };
+    }
     return {
       kind: "open_settings",
       label: "Verify sender",

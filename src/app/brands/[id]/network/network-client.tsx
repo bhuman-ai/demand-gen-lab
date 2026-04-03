@@ -1438,12 +1438,28 @@ export default function NetworkClient({
     updateSenderActionState(row.id, { pending: true, error: "", success: "" });
 
     try {
-      if (action.kind === "verify_gmail_ui") {
-        const accountId = resolveDeliveryAccountIdForRow(row);
-        if (!accountId) {
+      const resolvedDeliveryAccount = resolveDeliveryAccountForRow(row);
+      const resolvedDeliveryAccountId = resolvedDeliveryAccount?.id ?? resolveDeliveryAccountIdForRow(row);
+      const canOpenGmailVerify =
+        Boolean(row.fromEmail) &&
+        row.dnsStatus === "verified" &&
+        !isMonitorInboxIssue(row) &&
+        resolvedDeliveryAccount?.provider === "mailpool";
+
+      if ((action.kind === "verify_gmail_ui" || action.kind === "open_settings") && canOpenGmailVerify) {
+        if (!resolvedDeliveryAccountId) {
           throw new Error("This Gmail UI sender is missing its delivery account link.");
         }
-        openGmailVerifyModal(row, accountId);
+        openGmailVerifyModal(row, resolvedDeliveryAccountId);
+        updateSenderActionState(row.id, { pending: false, success: "" });
+        return;
+      }
+
+      if (action.kind === "verify_gmail_ui") {
+        if (!resolvedDeliveryAccountId) {
+          throw new Error("This Gmail UI sender is missing its delivery account link.");
+        }
+        openGmailVerifyModal(row, resolvedDeliveryAccountId);
         updateSenderActionState(row.id, { pending: false, success: "" });
         return;
       }
@@ -1470,11 +1486,10 @@ export default function NetworkClient({
       }
 
       if (action.kind === "refresh_mailpool") {
-        const accountId = resolveDeliveryAccountIdForRow(row);
-        if (!accountId) {
+        if (!resolvedDeliveryAccountId) {
           throw new Error("This sender is missing its Mailpool account link, so it cannot be refreshed here.");
         }
-        await refreshMailpoolOutreachAccount(accountId);
+        await refreshMailpoolOutreachAccount(resolvedDeliveryAccountId);
         await refreshDomainsFromServer();
         updateSenderActionState(row.id, {
           pending: false,

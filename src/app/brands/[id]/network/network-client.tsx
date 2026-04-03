@@ -930,6 +930,15 @@ export default function NetworkClient({
       ),
     [deliveryAccounts]
   );
+  const deliveryAccountByName = useMemo(
+    () =>
+      new Map(
+        deliveryAccounts
+          .map((account) => [account.name.trim().toLowerCase(), account] as const)
+          .filter(([name]) => Boolean(name))
+      ),
+    [deliveryAccounts]
+  );
   const mailboxAccountById = useMemo(
     () => new Map(mailboxAccounts.map((account) => [account.id, account] as const)),
     [mailboxAccounts]
@@ -937,6 +946,44 @@ export default function NetworkClient({
   const assignedMailboxAccount = activeAssignment?.mailboxAccountId
     ? mailboxAccountById.get(activeAssignment.mailboxAccountId) ?? null
     : null;
+  const assignedDeliveryAccounts = useMemo(() => {
+    const accountIds = [activeAssignment?.accountId ?? "", ...(activeAssignment?.accountIds ?? [])].filter(Boolean);
+    return accountIds
+      .map((accountId) => deliveryAccountById.get(accountId) ?? null)
+      .filter((account): account is OutreachAccount => Boolean(account));
+  }, [activeAssignment, deliveryAccountById]);
+  const resolveDeliveryAccountForRow = useCallback(
+    (row: DomainRow) => {
+      const deliveryAccountId = getDomainDeliveryAccountId(row);
+      if (deliveryAccountId) {
+        const account = deliveryAccountById.get(deliveryAccountId) ?? null;
+        if (account) return account;
+      }
+
+      const fromEmail = String(row.fromEmail ?? "").trim().toLowerCase();
+      if (fromEmail) {
+        const account = deliveryAccountByEmail.get(fromEmail) ?? null;
+        if (account) return account;
+      }
+
+      const deliveryAccountName = getDomainDeliveryAccountName(row).trim().toLowerCase();
+      if (deliveryAccountName) {
+        const account = deliveryAccountByName.get(deliveryAccountName) ?? null;
+        if (account) return account;
+      }
+
+      if (assignedDeliveryAccounts.length === 1) {
+        return assignedDeliveryAccounts[0] ?? null;
+      }
+
+      return null;
+    },
+    [assignedDeliveryAccounts, deliveryAccountByEmail, deliveryAccountById, deliveryAccountByName]
+  );
+  const resolveDeliveryAccountIdForRow = useCallback(
+    (row: DomainRow) => resolveDeliveryAccountForRow(row)?.id ?? getDomainDeliveryAccountId(row),
+    [resolveDeliveryAccountForRow]
+  );
   const syntheticPendingSenderRows = useMemo(() => {
     const assignedIds = new Set(
       [activeAssignment?.accountId ?? "", ...(activeAssignment?.accountIds ?? [])].filter(Boolean)
@@ -977,20 +1024,16 @@ export default function NetworkClient({
   );
   const capacityForRow = useCallback(
     (row: DomainRow) =>
-      (getDomainDeliveryAccountId(row)
-        ? senderCapacityByAccountId.get(getDomainDeliveryAccountId(row)) ?? null
+      (resolveDeliveryAccountIdForRow(row)
+        ? senderCapacityByAccountId.get(resolveDeliveryAccountIdForRow(row)) ?? null
         : null) ||
       (row.fromEmail ? senderCapacityByEmail.get(String(row.fromEmail).trim().toLowerCase()) ?? null : null),
-    [senderCapacityByAccountId, senderCapacityByEmail]
+    [resolveDeliveryAccountIdForRow, senderCapacityByAccountId, senderCapacityByEmail]
   );
   const readinessForRow = useCallback(
     (row: DomainRow) => {
       if (row.role === "brand") return null;
-      const account =
-        (getDomainDeliveryAccountId(row)
-          ? deliveryAccountById.get(getDomainDeliveryAccountId(row)) ?? null
-          : null) ||
-        (row.fromEmail ? deliveryAccountByEmail.get(String(row.fromEmail).trim().toLowerCase()) ?? null : null);
+      const account = resolveDeliveryAccountForRow(row);
       const fromEmail = String(row.fromEmail ?? "").trim().toLowerCase();
       const mailboxAccount =
         account && account.config.mailbox.email.trim().toLowerCase() === fromEmail
@@ -1005,7 +1048,7 @@ export default function NetworkClient({
         capacity: capacityForRow(row),
       });
     },
-    [assignedMailboxAccount, capacityForRow, deliveryAccountByEmail, deliveryAccountById]
+    [assignedMailboxAccount, capacityForRow, resolveDeliveryAccountForRow]
   );
 
   const filtered = useMemo(() => {
@@ -1093,11 +1136,7 @@ export default function NetworkClient({
     () =>
       senderDomains.reduce(
         (summary, row) => {
-          const account =
-            (getDomainDeliveryAccountId(row)
-              ? deliveryAccountById.get(getDomainDeliveryAccountId(row)) ?? null
-              : null) ||
-            (row.fromEmail ? deliveryAccountByEmail.get(String(row.fromEmail).trim().toLowerCase()) ?? null : null);
+          const account = resolveDeliveryAccountForRow(row);
           const capacity = capacityForRow(row);
           const routingRole = routingRoleForRow(row, routingRoleBySenderId);
           const readiness = readinessForRow(row);
@@ -1140,9 +1179,8 @@ export default function NetworkClient({
         }
       ),
     [
-      deliveryAccountByEmail,
-      deliveryAccountById,
       readinessForRow,
+      resolveDeliveryAccountForRow,
       routingRoleBySenderId,
       senderDomains,
       capacityForRow,
@@ -1152,16 +1190,12 @@ export default function NetworkClient({
     () =>
       senderDomains
         .map((row) => {
-          const account =
-            (getDomainDeliveryAccountId(row)
-              ? deliveryAccountById.get(getDomainDeliveryAccountId(row)) ?? null
-              : null) ||
-            (row.fromEmail ? deliveryAccountByEmail.get(String(row.fromEmail).trim().toLowerCase()) ?? null : null);
+          const account = resolveDeliveryAccountForRow(row);
           const provisioning = senderProvisioningSnapshot(row, account);
           return provisioning ? { row, provisioning } : null;
         })
         .filter((item): item is { row: DomainRow; provisioning: SenderProvisioningSnapshot } => Boolean(item)),
-    [deliveryAccountByEmail, deliveryAccountById, senderDomains]
+    [resolveDeliveryAccountForRow, senderDomains]
   );
   const primaryProvisioningSender = provisioningSenders[0] ?? null;
   const preferredReadyRoutingSignal = useMemo(() => {
@@ -1204,11 +1238,7 @@ export default function NetworkClient({
     const evaluated = senderDomains
       .filter((row) => row.role !== "brand")
       .map((row) => {
-        const account =
-          (getDomainDeliveryAccountId(row)
-            ? deliveryAccountById.get(getDomainDeliveryAccountId(row)) ?? null
-            : null) ||
-          (row.fromEmail ? deliveryAccountByEmail.get(String(row.fromEmail).trim().toLowerCase()) ?? null : null);
+        const account = resolveDeliveryAccountForRow(row);
         const capacity = capacityForRow(row);
         const routingRole = routingRoleForRow(row, routingRoleBySenderId);
         const readiness = readinessForRow(row);
@@ -1284,10 +1314,9 @@ export default function NetworkClient({
     };
   }, [
     capacityForRow,
-    deliveryAccountByEmail,
-    deliveryAccountById,
     preferredReadyRoutingSignal,
     readinessForRow,
+    resolveDeliveryAccountForRow,
     routingRoleBySenderId,
     senderDomains,
     sendingPower.totalDailyCap,
@@ -1410,7 +1439,7 @@ export default function NetworkClient({
 
     try {
       if (action.kind === "verify_gmail_ui") {
-        const accountId = getDomainDeliveryAccountId(row);
+        const accountId = resolveDeliveryAccountIdForRow(row);
         if (!accountId) {
           throw new Error("This Gmail UI sender is missing its delivery account link.");
         }
@@ -1441,7 +1470,7 @@ export default function NetworkClient({
       }
 
       if (action.kind === "refresh_mailpool") {
-        const accountId = getDomainDeliveryAccountId(row);
+        const accountId = resolveDeliveryAccountIdForRow(row);
         if (!accountId) {
           throw new Error("This sender is missing its Mailpool account link, so it cannot be refreshed here.");
         }
@@ -1699,11 +1728,7 @@ export default function NetworkClient({
         {filtered.length ? (
           <div className="space-y-3">
             {filtered.map((item) => {
-              const account =
-                (getDomainDeliveryAccountId(item)
-                  ? deliveryAccountById.get(getDomainDeliveryAccountId(item)) ?? null
-                  : null) ||
-                (item.fromEmail ? deliveryAccountByEmail.get(String(item.fromEmail).trim().toLowerCase()) ?? null : null);
+              const account = resolveDeliveryAccountForRow(item);
               const capacity = capacityForRow(item);
               const routingRole = routingRoleForRow(item, routingRoleBySenderId);
               const readiness = readinessForRow(item);

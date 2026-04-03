@@ -1616,6 +1616,42 @@ export async function refreshMailpoolOutreachAccount(accountId: string) {
   };
 }
 
+export async function fetchOutreachGmailUiCredentials(
+  accountId: string,
+  options?: { refreshMailpool?: boolean }
+) {
+  const query = options?.refreshMailpool === false ? "?refresh=0" : "?refresh=1";
+  const response = await fetch(`/api/outreach/accounts/${accountId}/gmail-ui-credentials${query}`, {
+    cache: "no-store",
+  });
+  const data = await readJson(response);
+  return {
+    account: data.account as OutreachAccount,
+    refreshedAt: String(data.refreshedAt ?? ""),
+    credentials: {
+      mailboxEmail: String(asObject(data.credentials).mailboxEmail ?? ""),
+      mailboxPassword: String(asObject(data.credentials).mailboxPassword ?? ""),
+      mailboxAuthCode: String(asObject(data.credentials).mailboxAuthCode ?? ""),
+      mailboxSmtpPassword: String(asObject(data.credentials).mailboxSmtpPassword ?? ""),
+      mailboxAdminEmail: String(asObject(data.credentials).mailboxAdminEmail ?? ""),
+      mailboxAdminPassword: String(asObject(data.credentials).mailboxAdminPassword ?? ""),
+      mailboxAdminAuthCode: String(asObject(data.credentials).mailboxAdminAuthCode ?? ""),
+    },
+  } as {
+    account: OutreachAccount;
+    refreshedAt: string;
+    credentials: {
+      mailboxEmail: string;
+      mailboxPassword: string;
+      mailboxAuthCode: string;
+      mailboxSmtpPassword: string;
+      mailboxAdminEmail: string;
+      mailboxAdminPassword: string;
+      mailboxAdminAuthCode: string;
+    };
+  };
+}
+
 export async function updateSenderLaunchPolicy(
   accountId: string,
   patch: {

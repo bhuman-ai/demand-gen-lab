@@ -3,11 +3,12 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import SenderProvisionCard from "@/app/settings/outreach/sender-provision-card";
-import { SettingsModal } from "@/app/settings/outreach/settings-primitives";
+import { SettingsModal, formatRelativeTimeLabel } from "@/app/settings/outreach/settings-primitives";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
+  fetchOutreachGmailUiCredentials,
   fetchBrand,
   fetchBrandOutreachAssignment,
   fetchBrands,
@@ -15,6 +16,7 @@ import {
   fetchOutreachProvisioningSettings,
   provisionSenderDomain,
   refreshMailpoolOutreachAccount,
+  testOutreachAccount,
 } from "@/lib/client-api";
 import {
   buildSenderRoutingSignalFromDomainRow,
@@ -26,6 +28,7 @@ import {
   getDomainDeliveryAccountId,
   getDomainDeliveryAccountName,
   getOutreachAccountFromEmail,
+  getOutreachGmailUiLoginState,
   getOutreachAccountReplyToEmail,
 } from "@/lib/outreach-account-helpers";
 import { evaluateSenderReadiness, type SenderReadiness } from "@/lib/send-readiness";
@@ -52,7 +55,13 @@ type SenderFilter = (typeof FILTERS)[number];
 type RoutingRole = "primary" | "standby" | "blocked" | "pending";
 type SenderCardStatus = "ready" | "warming" | "setup" | "fix" | "protected";
 type SenderHealthTone = "good" | "watch" | "checking" | "problem";
-type SenderActionKind = "repair_setup" | "refresh_mailpool" | "open_setup" | "open_settings" | "add_inbox";
+type SenderActionKind =
+  | "repair_setup"
+  | "refresh_mailpool"
+  | "open_setup"
+  | "open_settings"
+  | "add_inbox"
+  | "verify_gmail_ui";
 type SenderBadgeVariant = "default" | "success" | "accent" | "muted" | "danger";
 type HealthDimension = "domainHealth" | "emailHealth" | "ipHealth" | "messagingHealth";
 type HealthSummaryDimension =
@@ -69,6 +78,19 @@ type SenderActionState = {
   pending: boolean;
   error: string;
   success: string;
+};
+type GmailUiCredentialSnapshot = {
+  account: OutreachAccount;
+  refreshedAt: string;
+  credentials: {
+    mailboxEmail: string;
+    mailboxPassword: string;
+    mailboxAuthCode: string;
+    mailboxSmtpPassword: string;
+    mailboxAdminEmail: string;
+    mailboxAdminPassword: string;
+    mailboxAdminAuthCode: string;
+  };
 };
 type SenderProvisioningSnapshot = {
   headline: string;
@@ -609,6 +631,7 @@ function senderActionPlan(
   status: SenderCardStatus,
   health: SenderHealthTone,
   provisioning: SenderProvisioningSnapshot | null,
+  account: OutreachAccount | null,
   readiness?: SenderReadiness | null
 ): SenderActionPlan | null {
   if (status === "protected" || status === "ready") return null;
@@ -624,6 +647,19 @@ function senderActionPlan(
       kind: "open_setup",
       label: "Verify sender",
       description: "Open the sender flow and attach the missing mailbox.",
+    };
+  }
+  if (
+    account &&
+    account.config.mailbox.deliveryMethod === "gmail_ui" &&
+    getOutreachGmailUiLoginState(account) !== "ready" &&
+    row.fromEmail &&
+    row.dnsStatus === "verified"
+  ) {
+    return {
+      kind: "verify_gmail_ui",
+      label: "Verify sender",
+      description: "Open the Gmail verification panel with the current password and auth code.",
     };
   }
   if (row.provider === "mailpool" && row.dnsStatus !== "verified") {
@@ -831,6 +867,15 @@ export default function NetworkClient({
   const [senderModalSettings, setSenderModalSettings] =
     useState<OutreachProvisioningSettings | null>(initialProvisioningSettings);
   const [senderActionState, setSenderActionState] = useState<Record<string, SenderActionState>>({});
+  const [gmailVerifyOpen, setGmailVerifyOpen] = useState(false);
+  const [gmailVerifyRow, setGmailVerifyRow] = useState<DomainRow | null>(null);
+  const [gmailVerifyAccountId, setGmailVerifyAccountId] = useState("");
+  const [gmailVerifyLoading, setGmailVerifyLoading] = useState(false);
+  const [gmailVerifyError, setGmailVerifyError] = useState("");
+  const [gmailVerifyCheckMessage, setGmailVerifyCheckMessage] = useState("");
+  const [gmailVerifyCheckPending, setGmailVerifyCheckPending] = useState(false);
+  const [gmailVerifyCopiedField, setGmailVerifyCopiedField] = useState("");
+  const [gmailVerifyData, setGmailVerifyData] = useState<GmailUiCredentialSnapshot | null>(null);
 
   const activeBrand = useMemo(() => ({ ...brand, domains }), [brand, domains]);
   const modalBrands = useMemo(() => [activeBrand], [activeBrand]);
@@ -1037,7 +1082,7 @@ export default function NetworkClient({
           const status = senderCardStatus(row, routingRole, capacity, readiness);
           const health = senderOverallHealth(row);
           const provisioning = senderProvisioningSnapshot(row, account);
-          const action = senderActionPlan(row, status, health, provisioning, readiness);
+          const action = senderActionPlan(row, status, health, provisioning, account, readiness);
 
           if (status === "ready") {
             summary.readyCount += 1;
@@ -1055,7 +1100,7 @@ export default function NetworkClient({
           if (status === "setup" && !row.fromEmail) {
             summary.mailboxMissingCount += 1;
           }
-          if (action && action.kind !== "open_settings") {
+          if (action && action.kind !== "open_settings" && action.kind !== "verify_gmail_ui") {
             summary.autoFixCount += 1;
           }
 
@@ -1278,10 +1323,80 @@ export default function NetworkClient({
     }));
   }
 
+  async function loadGmailVerifyCredentials(accountId: string, refreshMailpool = true) {
+    setGmailVerifyLoading(true);
+    setGmailVerifyError("");
+    try {
+      const snapshot = await fetchOutreachGmailUiCredentials(accountId, { refreshMailpool });
+      setGmailVerifyData(snapshot);
+      setSenderModalAccounts((prev) =>
+        prev.map((account) => (account.id === snapshot.account.id ? snapshot.account : account))
+      );
+    } catch (err) {
+      setGmailVerifyError(err instanceof Error ? err.message : "Failed to load Gmail verification details.");
+      setGmailVerifyData(null);
+    } finally {
+      setGmailVerifyLoading(false);
+    }
+  }
+
+  function openGmailVerifyModal(row: DomainRow, accountId: string) {
+    setGmailVerifyRow(row);
+    setGmailVerifyAccountId(accountId);
+    setGmailVerifyOpen(true);
+    setGmailVerifyCheckMessage("");
+    setGmailVerifyCopiedField("");
+    setGmailVerifyError("");
+    setGmailVerifyData(null);
+    void loadGmailVerifyCredentials(accountId, true);
+  }
+
+  async function copyGmailVerifyField(value: string, field: string) {
+    if (!value.trim()) return;
+    try {
+      await navigator.clipboard.writeText(value);
+      setGmailVerifyCopiedField(field);
+      window.setTimeout(() => {
+        setGmailVerifyCopiedField((current) => (current === field ? "" : current));
+      }, 1500);
+    } catch (err) {
+      setGmailVerifyError(err instanceof Error ? err.message : "Failed to copy value.");
+    }
+  }
+
+  async function recheckGmailVerifiedSender() {
+    if (!gmailVerifyAccountId) return;
+    setGmailVerifyCheckPending(true);
+    setGmailVerifyCheckMessage("");
+    setGmailVerifyError("");
+    try {
+      const result = await testOutreachAccount(gmailVerifyAccountId, "mailbox");
+      await refreshDomainsFromServer();
+      await loadGmailVerifyCredentials(gmailVerifyAccountId, false);
+      setGmailVerifyCheckMessage(
+        result.ok ? "Sender check passed. This sender should now show as ready." : result.message
+      );
+    } catch (err) {
+      setGmailVerifyError(err instanceof Error ? err.message : "Sender check failed.");
+    } finally {
+      setGmailVerifyCheckPending(false);
+    }
+  }
+
   async function handleSenderAction(row: DomainRow, action: SenderActionPlan) {
     updateSenderActionState(row.id, { pending: true, error: "", success: "" });
 
     try {
+      if (action.kind === "verify_gmail_ui") {
+        const accountId = getDomainDeliveryAccountId(row);
+        if (!accountId) {
+          throw new Error("This Gmail UI sender is missing its delivery account link.");
+        }
+        openGmailVerifyModal(row, accountId);
+        updateSenderActionState(row.id, { pending: false, success: "" });
+        return;
+      }
+
       if (action.kind === "open_setup") {
         openSenderModal();
         updateSenderActionState(row.id, {
@@ -1575,7 +1690,7 @@ export default function NetworkClient({
               const provisioning = senderProvisioningSnapshot(item, account);
               const healthDisplay = senderHealthDisplay(item, status, overallHealth, provisioning);
               const today = senderTodaySummary(item, status, provisioning, capacity, readiness);
-              const action = senderActionPlan(item, status, overallHealth, provisioning, readiness);
+              const action = senderActionPlan(item, status, overallHealth, provisioning, account, readiness);
               const nextStep =
                 action?.label ?? senderNextStep(item, status, overallHealth, provisioning, capacity);
               const healthSignals = senderHealthSignals(item);
@@ -1779,6 +1894,165 @@ export default function NetworkClient({
               }}
             />
           ) : null}
+        </div>
+      </SettingsModal>
+
+      <SettingsModal
+        open={gmailVerifyOpen}
+        onOpenChange={(open) => {
+          setGmailVerifyOpen(open);
+          if (!open) {
+            setGmailVerifyError("");
+            setGmailVerifyCheckMessage("");
+            setGmailVerifyCopiedField("");
+          }
+        }}
+        title={gmailVerifyRow?.fromEmail ? `Verify ${gmailVerifyRow.fromEmail}` : "Verify sender"}
+        description="Use the live Mailpool password and auth code below, finish Google login in Gmail, then run the sender check here."
+        panelClassName="max-w-3xl"
+      >
+        <div className="space-y-4">
+          <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-4 py-4 text-sm leading-6 text-[color:var(--foreground)]">
+            <div className="font-medium">Do this in order</div>
+            <div className="mt-2">
+              1. Open Gmail for <span className="font-medium">{gmailVerifyRow?.fromEmail || "this sender"}</span>.
+            </div>
+            <div>2. Enter the password below.</div>
+            <div>3. If Google asks for a code, use the current auth code below.</div>
+            <div>4. When inbox access works, come back here and click <span className="font-medium">Re-check sender</span>.</div>
+          </div>
+
+          {gmailVerifyLoading && !gmailVerifyData ? (
+            <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-4 py-6 text-sm text-[color:var(--muted-foreground)]">
+              Loading Gmail verification details...
+            </div>
+          ) : null}
+
+          {gmailVerifyError ? (
+            <div className="rounded-xl border border-[color:var(--danger-border)] bg-[color:var(--danger-soft)] px-4 py-4 text-sm text-[color:var(--danger)]">
+              {gmailVerifyError}
+            </div>
+          ) : null}
+
+          {gmailVerifyData ? (
+            <div className="grid gap-4 md:grid-cols-2">
+              {[
+                { key: "email", label: "Sender email", value: gmailVerifyData.credentials.mailboxEmail },
+                { key: "password", label: "Password", value: gmailVerifyData.credentials.mailboxPassword },
+                { key: "auth_code", label: "Current auth code", value: gmailVerifyData.credentials.mailboxAuthCode },
+              ].map((field) => (
+                <div
+                  key={field.key}
+                  className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-4 py-4"
+                >
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="text-[11px] uppercase tracking-[0.14em] text-[color:var(--muted-foreground)]">
+                      {field.label}
+                    </div>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      onClick={() => void copyGmailVerifyField(field.value, field.key)}
+                      disabled={!field.value.trim()}
+                    >
+                      {gmailVerifyCopiedField === field.key ? "Copied" : "Copy"}
+                    </Button>
+                  </div>
+                  <Input
+                    readOnly
+                    value={field.value}
+                    className="mt-3 font-mono text-sm"
+                  />
+                </div>
+              ))}
+
+              <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-4 py-4 md:col-span-2">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <div className="text-[11px] uppercase tracking-[0.14em] text-[color:var(--muted-foreground)]">
+                      Last Mailpool credential sync
+                    </div>
+                    <div className="mt-1 text-sm text-[color:var(--foreground)]">
+                      {formatRelativeTimeLabel(gmailVerifyData.refreshedAt, "Just now")}
+                    </div>
+                  </div>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    onClick={() => void loadGmailVerifyCredentials(gmailVerifyAccountId, true)}
+                    disabled={gmailVerifyLoading || !gmailVerifyAccountId}
+                  >
+                    Refresh code
+                  </Button>
+                </div>
+
+                {(gmailVerifyData.credentials.mailboxAdminEmail ||
+                  gmailVerifyData.credentials.mailboxAdminPassword ||
+                  gmailVerifyData.credentials.mailboxAdminAuthCode) ? (
+                  <details className="mt-4">
+                    <summary className="cursor-pointer text-sm font-medium text-[color:var(--foreground)]">
+                      Show admin credentials
+                    </summary>
+                    <div className="mt-3 grid gap-3 md:grid-cols-3">
+                      {[
+                        {
+                          key: "admin_email",
+                          label: "Admin email",
+                          value: gmailVerifyData.credentials.mailboxAdminEmail,
+                        },
+                        {
+                          key: "admin_password",
+                          label: "Admin password",
+                          value: gmailVerifyData.credentials.mailboxAdminPassword,
+                        },
+                        {
+                          key: "admin_auth_code",
+                          label: "Admin auth code",
+                          value: gmailVerifyData.credentials.mailboxAdminAuthCode,
+                        },
+                      ].map((field) => (
+                        <div key={field.key} className="space-y-2">
+                          <div className="flex items-center justify-between gap-2">
+                            <div className="text-[11px] uppercase tracking-[0.14em] text-[color:var(--muted-foreground)]">
+                              {field.label}
+                            </div>
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="outline"
+                              onClick={() => void copyGmailVerifyField(field.value, field.key)}
+                              disabled={!field.value.trim()}
+                            >
+                              {gmailVerifyCopiedField === field.key ? "Copied" : "Copy"}
+                            </Button>
+                          </div>
+                          <Input readOnly value={field.value} className="font-mono text-sm" />
+                        </div>
+                      ))}
+                    </div>
+                  </details>
+                ) : null}
+              </div>
+            </div>
+          ) : null}
+
+          {gmailVerifyCheckMessage ? (
+            <div className="rounded-xl border border-[color:var(--success-border)] bg-[color:var(--success-soft)] px-4 py-4 text-sm text-[color:var(--success)]">
+              {gmailVerifyCheckMessage}
+            </div>
+          ) : null}
+        </div>
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => void recheckGmailVerifiedSender()}
+            disabled={gmailVerifyCheckPending || gmailVerifyLoading || !gmailVerifyAccountId}
+          >
+            {gmailVerifyCheckPending ? "Checking..." : "Re-check sender"}
+          </Button>
         </div>
       </SettingsModal>
     </div>

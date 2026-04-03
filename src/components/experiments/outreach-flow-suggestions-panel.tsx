@@ -34,34 +34,6 @@ const FORM_STORAGE_PREFIX = "factory.outreachFlow";
 const TURN_EASE = "motion-safe:ease-[cubic-bezier(0.22,1,0.36,1)]";
 const PLACEHOLDER_TICK_MS = 900;
 
-const DEFAULT_PERSONAS = [
-  "Editor of an industry journal or market note we operate",
-  "Research lead behind a benchmark, report, or field note",
-  "Organizer of a small operator roundtable in this space",
-  "Partnerships lead for a co-created spotlight or feature",
-].join("\n");
-
-const DEFAULT_ASSETS = [
-  "Editorial or case-study format we can publish from",
-  "Benchmark or report framework",
-  "Roundtable invite and summary format",
-  "Private notes memo we can send after the reply",
-].join("\n");
-
-const DEFAULT_CONSTRAINTS = [
-  "The opener must not read like cold outreach.",
-  "The first ask should be easy to answer in one line.",
-  "Bridge to the offer should happen only after real engagement.",
-  "Avoid invented authority or fake affiliations.",
-].join("\n");
-
-const DEFAULT_BAR = [
-  "Prefer identity-led entry vehicles over problem-first cold email.",
-  "Reward low-friction reply asks.",
-  "Prefer natural handoffs to a specialist over abrupt reveals.",
-  "Penalize angles that collapse under one skeptical follow-up.",
-].join("\n");
-
 const PLACEHOLDER_AGENTS = [
   {
     name: "Agent 1 · Editorial Operator",
@@ -100,13 +72,6 @@ type OutreachFlowFormState = {
   desiredOutcome: string;
   offer: string;
   channel: string;
-  availablePersonas: string;
-  availableAssets: string;
-  constraints: string;
-  qualityBar: string;
-  maxTurnsBeforeCTA: string;
-  agentCount: string;
-  ideasPerAgent: string;
 };
 
 type BrandIntakePrefill = Awaited<ReturnType<typeof fetchBrandIntakePrefill>>;
@@ -121,21 +86,7 @@ const INITIAL_FORM: OutreachFlowFormState = {
   desiredOutcome: "",
   offer: "",
   channel: "email",
-  availablePersonas: DEFAULT_PERSONAS,
-  availableAssets: DEFAULT_ASSETS,
-  constraints: DEFAULT_CONSTRAINTS,
-  qualityBar: DEFAULT_BAR,
-  maxTurnsBeforeCTA: "4",
-  agentCount: "4",
-  ideasPerAgent: "2",
 };
-
-function splitLines(value: string) {
-  return value
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean);
-}
 
 function normalizeWebsiteForPrefill(value: string) {
   const trimmed = value.trim();
@@ -387,7 +338,13 @@ export default function OutreachFlowSuggestionsPanel({ brandId }: { brandId: str
       const parsed = JSON.parse(raw) as Partial<OutreachFlowFormState>;
       setForm((current) => ({
         ...current,
-        ...parsed,
+        target: typeof parsed.target === "string" ? parsed.target : current.target,
+        desiredOutcome:
+          typeof parsed.desiredOutcome === "string"
+            ? parsed.desiredOutcome
+            : current.desiredOutcome,
+        offer: typeof parsed.offer === "string" ? parsed.offer : current.offer,
+        channel: typeof parsed.channel === "string" ? parsed.channel : current.channel,
       }));
     } catch {}
   }, [storageKey]);
@@ -515,13 +472,6 @@ export default function OutreachFlowSuggestionsPanel({ brandId }: { brandId: str
       desiredOutcome: form.desiredOutcome.trim(),
       offer: form.offer.trim(),
       channel: form.channel.trim() || "email",
-      availablePersonas: splitLines(form.availablePersonas),
-      availableAssets: splitLines(form.availableAssets),
-      constraints: splitLines(form.constraints),
-      qualityBar: splitLines(form.qualityBar),
-      maxTurnsBeforeCTA: Number(form.maxTurnsBeforeCTA) || 4,
-      agentCount: Number(form.agentCount) || 4,
-      ideasPerAgent: Number(form.ideasPerAgent) || 2,
     }),
     [form]
   );
@@ -746,101 +696,15 @@ export default function OutreachFlowSuggestionsPanel({ brandId }: { brandId: str
                   />
                 </FormField>
               </div>
-
-              <div className="grid gap-4 md:grid-cols-3">
-                <FormField label="Turns Before CTA">
-                  <Input
-                    type="number"
-                    min={1}
-                    max={8}
-                    value={form.maxTurnsBeforeCTA}
-                    onChange={(event) =>
-                      setForm((current) => ({
-                        ...current,
-                        maxTurnsBeforeCTA: event.target.value,
-                      }))
-                    }
-                  />
-                </FormField>
-                <FormField label="Agents">
-                  <Input
-                    type="number"
-                    min={1}
-                    max={6}
-                    value={form.agentCount}
-                    onChange={(event) =>
-                      setForm((current) => ({ ...current, agentCount: event.target.value }))
-                    }
-                  />
-                </FormField>
-                <FormField label="Ideas Per Agent">
-                  <Input
-                    type="number"
-                    min={1}
-                    max={4}
-                    value={form.ideasPerAgent}
-                    onChange={(event) =>
-                      setForm((current) => ({ ...current, ideasPerAgent: event.target.value }))
-                    }
-                  />
-                </FormField>
+              <div className="rounded-[16px] border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-4 py-3">
+                <p className="text-[11px] font-medium uppercase tracking-[0.16em] text-[color:var(--muted-foreground)]">
+                  Arena controls
+                </p>
+                <p className="mt-2 text-sm leading-6 text-[color:var(--foreground)]">
+                  Personas, assets, guardrails, agent count, and CTA timing are chosen on the fly
+                  from this brief and the saved brand context.
+                </p>
               </div>
-            </div>
-          </div>
-
-          <div className="rounded-[18px] border border-[color:var(--border)] bg-[color:var(--surface)] p-4">
-            <div className="grid gap-4">
-              <FormField
-                label="Available personas"
-                hint="One per line. These should be real roles your team can actually operate."
-              >
-                <Textarea
-                  value={form.availablePersonas}
-                  onChange={(event) =>
-                    setForm((current) => ({
-                      ...current,
-                      availablePersonas: event.target.value,
-                    }))
-                  }
-                  rows={5}
-                />
-              </FormField>
-
-              <FormField
-                label="Available assets"
-                hint="One per line. These are the proof points or containers that make the persona believable."
-              >
-                <Textarea
-                  value={form.availableAssets}
-                  onChange={(event) =>
-                    setForm((current) => ({
-                      ...current,
-                      availableAssets: event.target.value,
-                    }))
-                  }
-                  rows={5}
-                />
-              </FormField>
-
-              <FormField label="Constraints">
-                <Textarea
-                  value={form.constraints}
-                  onChange={(event) =>
-                    setForm((current) => ({ ...current, constraints: event.target.value }))
-                  }
-                  rows={4}
-                />
-              </FormField>
-
-              <FormField label="Quality bar">
-                <Textarea
-                  value={form.qualityBar}
-                  onChange={(event) =>
-                    setForm((current) => ({ ...current, qualityBar: event.target.value }))
-                  }
-                  rows={4}
-                />
-              </FormField>
             </div>
 
             <div className="mt-4 flex flex-wrap items-center gap-2">
@@ -1166,18 +1030,18 @@ export default function OutreachFlowSuggestionsPanel({ brandId }: { brandId: str
 
               <div className="rounded-[18px] border border-[color:var(--border)] bg-[color:var(--surface)] p-4">
                 <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-[color:var(--muted-foreground)]">
-                  Ready-to-edit defaults
+                  Automatic setup
                 </p>
                 <div className="mt-3 space-y-3 text-sm leading-6 text-[color:var(--foreground)]">
                   <p>
-                    Personas, assets, constraints, and scoring rules are already loaded with a safe
-                    starting point. The only fields you need to set to run are the target and the
-                    desired endpoint.
+                    The arena decides personas, assets, constraints, scoring rules, agent count,
+                    and CTA timing by itself for each run.
                   </p>
                   {brand ? (
                     <p className="text-[color:var(--muted-foreground)]">
                       Brand context loaded from <span className="font-medium text-[color:var(--foreground)]">{brand.name}</span>.
-                      Default offer was seeded from the current brand profile.
+                      Target, destination, and offer are seeded from the saved brand profile and
+                      site when available.
                     </p>
                   ) : null}
                 </div>

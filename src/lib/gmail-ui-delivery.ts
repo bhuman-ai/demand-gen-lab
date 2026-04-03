@@ -23,6 +23,19 @@ type GmailUiSendResult = {
   error: string;
 };
 
+function isRetryableProxyFailure(message: string) {
+  const normalized = message.toLowerCase();
+  return (
+    normalized.includes("connect tunnel failed") ||
+    normalized.includes("err_tunnel_connection_failed") ||
+    normalized.includes("err_proxy_connection_failed") ||
+    normalized.includes("err_no_supported_proxies") ||
+    normalized.includes("bandwidthlimit") ||
+    normalized.includes("402 payment required") ||
+    normalized.includes("proxy")
+  );
+}
+
 async function pathExists(targetPath: string) {
   try {
     await access(targetPath);
@@ -239,50 +252,69 @@ export async function sendGmailUiMessage(params: GmailUiSendParams): Promise<Gma
   await mkdir(screenshotDir, { recursive: true });
   ensureDisplayEnv();
 
-  let context: any = null;
-  let page: any = null;
-  try {
-    const playwright = await import("@playwright/test");
-    const chromium = (playwright as any).chromium;
-    const proxy = resolveProxyServer(params);
-    const executablePath = resolveChromeExecutablePath();
-    const launchOptions: Record<string, unknown> = {
-      headless: false,
-      viewport: { width: 1440, height: 980 },
-      args: params.chromeProfileDirectory?.trim()
-        ? [`--profile-directory=${params.chromeProfileDirectory.trim()}`]
-        : [],
-      proxy: proxy ?? undefined,
-    };
-    if (executablePath) {
-      launchOptions.executablePath = executablePath;
-    } else {
-      launchOptions.channel = params.browserChannel?.trim() || "chrome";
+  const playwright = await import("@playwright/test");
+  const chromium = (playwright as any).chromium;
+  const executablePath = resolveChromeExecutablePath();
+  const configuredProxy = resolveProxyServer(params);
+
+  const runAttempt = async (proxy: Record<string, unknown> | null, suffix: string): Promise<GmailUiSendResult> => {
+    let context: any = null;
+    let page: any = null;
+    try {
+      const launchOptions: Record<string, unknown> = {
+        headless: false,
+        viewport: { width: 1440, height: 980 },
+        args: params.chromeProfileDirectory?.trim()
+          ? [`--profile-directory=${params.chromeProfileDirectory.trim()}`]
+          : [],
+        proxy: proxy ?? undefined,
+      };
+      if (executablePath) {
+        launchOptions.executablePath = executablePath;
+      } else {
+        launchOptions.channel = params.browserChannel?.trim() || "chrome";
+      }
+      context = await chromium.launchPersistentContext(userDataDir, launchOptions);
+      page = context.pages()[0] ?? (await context.newPage());
+      await ensureGmailReady(page);
+      await fillCompose(page, {
+        recipient: params.recipient.trim(),
+        subject: params.subject.trim(),
+        body: params.body.trim(),
+        expectedFrom: params.expectedFrom?.trim() || "",
+      });
+      await sendCompose(page);
+      return {
+        ok: true,
+        providerMessageId: `gmail_ui_${Date.now().toString(36)}`,
+        error: "",
+      };
+    } catch (error) {
+      const failurePath = path.join(screenshotDir, `gmail-ui-failure-${suffix}-${Date.now()}.png`);
+      await page?.screenshot({ path: failurePath, fullPage: true }).catch(() => {});
+      return {
+        ok: false,
+        providerMessageId: "",
+        error: `${error instanceof Error ? error.message : String(error)}${page ? ` | screenshot: ${failurePath}` : ""}`,
+      };
+    } finally {
+      await context?.close().catch(() => {});
     }
-    context = await chromium.launchPersistentContext(userDataDir, launchOptions);
-    page = context.pages()[0] ?? (await context.newPage());
-    await ensureGmailReady(page);
-    await fillCompose(page, {
-      recipient: params.recipient.trim(),
-      subject: params.subject.trim(),
-      body: params.body.trim(),
-      expectedFrom: params.expectedFrom?.trim() || "",
-    });
-    await sendCompose(page);
-    return {
-      ok: true,
-      providerMessageId: `gmail_ui_${Date.now().toString(36)}`,
-      error: "",
-    };
-  } catch (error) {
-    const failurePath = path.join(screenshotDir, `gmail-ui-failure-${Date.now()}.png`);
-    await page?.screenshot({ path: failurePath, fullPage: true }).catch(() => {});
-    return {
-      ok: false,
-      providerMessageId: "",
-      error: `${error instanceof Error ? error.message : String(error)}${page ? ` | screenshot: ${failurePath}` : ""}`,
-    };
-  } finally {
-    await context?.close().catch(() => {});
+  };
+
+  const firstAttempt = await runAttempt(configuredProxy, configuredProxy ? "proxy" : "direct");
+  if (firstAttempt.ok || !configuredProxy || !isRetryableProxyFailure(firstAttempt.error)) {
+    return firstAttempt;
   }
+
+  const fallbackAttempt = await runAttempt(null, "direct-fallback");
+  if (fallbackAttempt.ok) {
+    return fallbackAttempt;
+  }
+
+  return {
+    ok: false,
+    providerMessageId: "",
+    error: `${firstAttempt.error} | fallback_without_proxy_failed: ${fallbackAttempt.error}`,
+  };
 }

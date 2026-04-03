@@ -40,7 +40,9 @@ export type TelemetryEvent =
   | "conversation_prompt_generated"
   | "conversation_prompt_rejected"
   | "conversation_prompt_failed"
-  | "conversation_prompt_previewed";
+  | "conversation_prompt_previewed"
+  | "outreach_flow_tournament_run"
+  | "outreach_flow_tournament_ready";
 
 export async function trackEvent(event: TelemetryEvent, payload: Record<string, unknown> = {}) {
   if (typeof window === "undefined") return;

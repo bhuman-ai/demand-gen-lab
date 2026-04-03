@@ -20,7 +20,9 @@ export async function GET(
       return NextResponse.json({ error: "account not found" }, { status: 404 });
     }
 
-    if (account.config.mailbox.deliveryMethod !== "gmail_ui") {
+    const mailboxConfig = (account.config.mailbox ?? {}) as Record<string, unknown>;
+    const deliveryMethod = String(mailboxConfig.deliveryMethod ?? mailboxConfig.delivery_method ?? "").trim();
+    if (deliveryMethod && deliveryMethod !== "gmail_ui") {
       return NextResponse.json({ error: "Only Gmail UI senders expose verification credentials." }, { status: 400 });
     }
 

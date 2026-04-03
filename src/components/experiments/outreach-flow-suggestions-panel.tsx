@@ -1,7 +1,7 @@
 "use client";
 
 import type { ReactNode } from "react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Bot,
   RefreshCcw,
@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import {
   fetchBrand,
+  fetchBrandIntakePrefill,
   streamOutreachFlowTournamentApi,
 } from "@/lib/client-api";
 import { trackEvent } from "@/lib/telemetry-client";
@@ -108,6 +109,13 @@ type OutreachFlowFormState = {
   ideasPerAgent: string;
 };
 
+type BrandIntakePrefill = Awaited<ReturnType<typeof fetchBrandIntakePrefill>>;
+
+type PrefillFeedback = {
+  tone: "idle" | "success" | "error";
+  message: string;
+};
+
 const INITIAL_FORM: OutreachFlowFormState = {
   target: "",
   desiredOutcome: "",
@@ -127,6 +135,127 @@ function splitLines(value: string) {
     .split("\n")
     .map((line) => line.trim())
     .filter(Boolean);
+}
+
+function normalizeWebsiteForPrefill(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed) return "";
+
+  const candidate = /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
+
+  try {
+    const parsed = new URL(candidate);
+    if (!parsed.hostname || !parsed.hostname.includes(".")) return "";
+    parsed.hash = "";
+    return parsed.toString();
+  } catch {
+    return "";
+  }
+}
+
+function mergePrefillValue(current: string, next: string, overwrite = false) {
+  const normalizedNext = next.trim();
+  if (!normalizedNext) return current;
+  if (overwrite || !current.trim()) return normalizedNext;
+  return current;
+}
+
+function firstMeaningful(...values: Array<string | null | undefined>) {
+  for (const value of values) {
+    const trimmed = String(value ?? "").trim();
+    if (trimmed) return trimmed;
+  }
+  return "";
+}
+
+function firstListItem(...lists: Array<string[] | undefined>) {
+  for (const list of lists) {
+    if (!Array.isArray(list)) continue;
+    for (const entry of list) {
+      const trimmed = String(entry ?? "").trim();
+      if (trimmed) return trimmed;
+    }
+  }
+  return "";
+}
+
+function trimSentence(value: string) {
+  return value.trim().replace(/\s+/g, " ").replace(/[.?!]+$/, "");
+}
+
+function hostnameFromWebsite(value: string) {
+  const normalized = normalizeWebsiteForPrefill(value);
+  if (!normalized) return "";
+  try {
+    return new URL(normalized).hostname.replace(/^www\./, "");
+  } catch {
+    return "";
+  }
+}
+
+function buildOfferDraft(brand: BrandRecord, sitePrefill?: BrandIntakePrefill | null) {
+  return trimSentence(
+    firstMeaningful(brand.product, sitePrefill?.prefill.product, brand.name)
+  );
+}
+
+function buildTargetDraft(
+  brand: BrandRecord,
+  offer: string,
+  sitePrefill?: BrandIntakePrefill | null
+) {
+  const buyer = firstMeaningful(
+    firstListItem(brand.idealCustomerProfiles),
+    firstListItem(sitePrefill?.prefill.idealCustomerProfiles)
+  );
+  const market = firstMeaningful(
+    firstListItem(brand.targetMarkets),
+    firstListItem(sitePrefill?.prefill.targetMarkets)
+  );
+  const benefit = firstMeaningful(
+    firstListItem(brand.keyBenefits),
+    firstListItem(sitePrefill?.prefill.keyBenefits)
+  );
+  const normalizedOffer = trimSentence(offer);
+
+  if (buyer && market && benefit) {
+    return `${buyer} at ${market} who is actively trying to improve ${trimSentence(benefit)}`;
+  }
+
+  if (buyer && market) {
+    return `${buyer} at ${market} who could realistically buy ${normalizedOffer}`;
+  }
+
+  if (buyer) {
+    return `${buyer} who could realistically buy ${normalizedOffer}`;
+  }
+
+  if (market) {
+    return `Decision-maker at ${market} who could realistically buy ${normalizedOffer}`;
+  }
+
+  return `Decision-maker at companies that look like a strong fit for ${normalizedOffer}`;
+}
+
+function buildDesiredOutcomeDraft(offer: string) {
+  const normalizedOffer = trimSentence(offer);
+  return `Get them into an async thread that naturally leads to a call to review ${normalizedOffer}`;
+}
+
+function buildBrandBriefDraft(brand: BrandRecord, sitePrefill?: BrandIntakePrefill | null) {
+  const offer = buildOfferDraft(brand, sitePrefill);
+  return {
+    offer,
+    target: buildTargetDraft(brand, offer, sitePrefill),
+    desiredOutcome: buildDesiredOutcomeDraft(offer),
+    hostname: firstMeaningful(sitePrefill?.signals.hostname, hostnameFromWebsite(brand.website)),
+  };
+}
+
+function prefillFeedbackClass(tone: PrefillFeedback["tone"]) {
+  if (tone === "success") return "text-[color:var(--success)]";
+  if (tone === "error") return "text-[color:var(--danger)]";
+  return "text-[color:var(--muted-foreground)]";
 }
 
 function progressLabel(result: OutreachFlowTournamentResult | null, running: boolean) {
@@ -226,6 +355,7 @@ function turnAcceptedCount(turn: OutreachFlowTournamentTurn) {
 
 export default function OutreachFlowSuggestionsPanel({ brandId }: { brandId: string }) {
   const controllerRef = useRef<AbortController | null>(null);
+  const autoPrefillKeyRef = useRef("");
   const [brand, setBrand] = useState<BrandRecord | null>(null);
   const [form, setForm] = useState<OutreachFlowFormState>(INITIAL_FORM);
   const [running, setRunning] = useState(false);
@@ -233,8 +363,21 @@ export default function OutreachFlowSuggestionsPanel({ brandId }: { brandId: str
   const [result, setResult] = useState<OutreachFlowTournamentResult | null>(null);
   const [placeholderAgentIndex, setPlaceholderAgentIndex] = useState(0);
   const [progressPercent, setProgressPercent] = useState(6);
+  const [prefillLoading, setPrefillLoading] = useState(false);
+  const [prefillFeedback, setPrefillFeedback] = useState<PrefillFeedback>({
+    tone: "idle",
+    message: "",
+  });
 
   const storageKey = `${FORM_STORAGE_PREFIX}:${brandId}`;
+  const normalizedBrandWebsite = useMemo(
+    () => normalizeWebsiteForPrefill(brand?.website ?? ""),
+    [brand?.website]
+  );
+  const brandHostname = useMemo(
+    () => hostnameFromWebsite(normalizedBrandWebsite),
+    [normalizedBrandWebsite]
+  );
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -256,10 +399,6 @@ export default function OutreachFlowSuggestionsPanel({ brandId }: { brandId: str
       .then((loadedBrand) => {
         if (!mounted) return;
         setBrand(loadedBrand);
-        setForm((current) => ({
-          ...current,
-          offer: current.offer.trim() ? current.offer : loadedBrand.product || loadedBrand.name,
-        }));
       })
       .catch(() => {});
 
@@ -280,6 +419,18 @@ export default function OutreachFlowSuggestionsPanel({ brandId }: { brandId: str
   }, []);
 
   useEffect(() => {
+    if (!brand) return;
+
+    const draft = buildBrandBriefDraft(brand);
+    setForm((current) => ({
+      ...current,
+      target: mergePrefillValue(current.target, draft.target),
+      desiredOutcome: mergePrefillValue(current.desiredOutcome, draft.desiredOutcome),
+      offer: mergePrefillValue(current.offer, draft.offer),
+    }));
+  }, [brand]);
+
+  useEffect(() => {
     if (!running) return;
     const interval = window.setInterval(() => {
       setPlaceholderAgentIndex((current) => (current + 1) % PLACEHOLDER_AGENTS.length);
@@ -287,6 +438,76 @@ export default function OutreachFlowSuggestionsPanel({ brandId }: { brandId: str
     }, PLACEHOLDER_TICK_MS);
     return () => window.clearInterval(interval);
   }, [running]);
+
+  const hydrateBriefFromBrand = useCallback(
+    async (options?: { overwrite?: boolean; source?: "auto" | "manual" }) => {
+      if (!brand) return;
+
+      const overwrite = Boolean(options?.overwrite);
+      const source = options?.source ?? "manual";
+      const fallbackDraft = buildBrandBriefDraft(brand);
+      const prefillKey = `${brand.id}:${normalizedBrandWebsite || "brand-profile"}`;
+
+      if (source === "manual") {
+        setPrefillFeedback({ tone: "idle", message: "" });
+      }
+
+      setForm((current) => ({
+        ...current,
+        target: mergePrefillValue(current.target, fallbackDraft.target, overwrite),
+        desiredOutcome: mergePrefillValue(current.desiredOutcome, fallbackDraft.desiredOutcome, overwrite),
+        offer: mergePrefillValue(current.offer, fallbackDraft.offer, overwrite),
+      }));
+
+      if (!normalizedBrandWebsite) {
+        if (source === "manual") {
+          setPrefillFeedback({
+            tone: "error",
+            message: "This brand does not have a usable website URL yet.",
+          });
+        }
+        autoPrefillKeyRef.current = prefillKey;
+        return;
+      }
+
+      setPrefillLoading(true);
+      try {
+        const sitePrefill = await fetchBrandIntakePrefill(normalizedBrandWebsite);
+        const draft = buildBrandBriefDraft(brand, sitePrefill);
+        setForm((current) => ({
+          ...current,
+          target: mergePrefillValue(current.target, draft.target, overwrite),
+          desiredOutcome: mergePrefillValue(current.desiredOutcome, draft.desiredOutcome, overwrite),
+          offer: mergePrefillValue(current.offer, draft.offer, overwrite),
+        }));
+        setPrefillFeedback({
+          tone: "success",
+          message:
+            source === "manual"
+              ? `Brief refreshed from ${draft.hostname || brandHostname || "the brand site"}.`
+              : `Brief drafted from ${draft.hostname || brandHostname || "the brand site"}.`,
+        });
+      } catch (err) {
+        if (source === "manual") {
+          setPrefillFeedback({
+            tone: "error",
+            message: err instanceof Error ? err.message : "Website analysis failed.",
+          });
+        }
+      } finally {
+        autoPrefillKeyRef.current = prefillKey;
+        setPrefillLoading(false);
+      }
+    },
+    [brand, brandHostname, normalizedBrandWebsite]
+  );
+
+  useEffect(() => {
+    if (!brand) return;
+    const prefillKey = `${brand.id}:${normalizedBrandWebsite || "brand-profile"}`;
+    if (autoPrefillKeyRef.current === prefillKey) return;
+    void hydrateBriefFromBrand({ source: "auto" });
+  }, [brand, hydrateBriefFromBrand, normalizedBrandWebsite]);
 
   const preparedInput = useMemo<OutreachFlowTournamentInput>(
     () => ({
@@ -443,8 +664,35 @@ export default function OutreachFlowSuggestionsPanel({ brandId }: { brandId: str
                   Tell the arena who to move and where to land them
                 </h4>
               </div>
-              {brand ? <Badge variant="muted">{brand.name}</Badge> : null}
+              <div className="flex flex-wrap items-center gap-2">
+                {brand ? <Badge variant="muted">{brand.name}</Badge> : null}
+                {brandHostname ? <Badge variant="muted">{brandHostname}</Badge> : null}
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={!brand || prefillLoading}
+                  onClick={() => {
+                    void hydrateBriefFromBrand({ overwrite: true, source: "manual" });
+                  }}
+                >
+                  <WandSparkles
+                    className={`h-4 w-4 ${prefillLoading ? "motion-safe:animate-pulse" : ""}`}
+                  />
+                  {prefillLoading ? "Refreshing..." : "Refresh from site"}
+                </Button>
+              </div>
             </div>
+
+            {prefillFeedback.message ? (
+              <p className={cn("mt-3 text-xs leading-5", prefillFeedbackClass(prefillFeedback.tone))}>
+                {prefillFeedback.message}
+              </p>
+            ) : brandHostname ? (
+              <p className="mt-3 text-xs leading-5 text-[color:var(--muted-foreground)]">
+                We auto-draft the brief from the saved brand profile and {brandHostname}.
+              </p>
+            ) : null}
 
             <div className="mt-4 grid gap-4">
               <FormField

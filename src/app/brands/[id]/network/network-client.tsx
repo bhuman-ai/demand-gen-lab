@@ -650,8 +650,14 @@ function senderActionPlan(
   }
   if (
     account &&
-    account.config.mailbox.deliveryMethod === "gmail_ui" &&
-    String(account.config.mailbox.gmailUiLoginState ?? "").trim() !== "ready" &&
+    (() => {
+      const mailboxConfig = (account.config.mailbox ?? {}) as Record<string, unknown>;
+      const deliveryMethod = String(mailboxConfig.deliveryMethod ?? mailboxConfig.delivery_method ?? "").trim();
+      const gmailUiLoginState = String(
+        mailboxConfig.gmailUiLoginState ?? mailboxConfig.gmail_ui_login_state ?? ""
+      ).trim();
+      return deliveryMethod === "gmail_ui" && gmailUiLoginState !== "ready";
+    })() &&
     row.fromEmail &&
     row.dnsStatus === "verified"
   ) {

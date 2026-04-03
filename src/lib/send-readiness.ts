@@ -1,9 +1,12 @@
 import type { DomainRow, OutreachAccount } from "@/lib/factory-types";
 import {
   getOutreachAccountFromEmail,
+  getOutreachMailboxDeliveryMethod,
   getOutreachAccountReplyToEmail,
   getOutreachSenderBackingIssue,
+  getOutreachGmailUiLoginState,
   getOutreachMailboxEmail,
+  supportsGmailUiDelivery,
 } from "@/lib/outreach-account-helpers";
 import type { SenderCapacitySnapshot } from "@/lib/sender-capacity";
 
@@ -20,6 +23,7 @@ export type SenderReadinessIssueCode =
   | "sender_not_backed_by_mailbox"
   | "mailpool_pending"
   | "mailpool_error"
+  | "gmail_ui_login_required"
   | "mailbox_disconnected"
   | "mailbox_error"
   | "dns_pending"
@@ -202,6 +206,40 @@ export function evaluateSenderReadiness(input: {
       summary: "Delivery credentials are missing",
       detail: "Reconnect the delivery account credentials before sending.",
     });
+  }
+
+  if (
+    account &&
+    account.provider === "mailpool" &&
+    getOutreachMailboxDeliveryMethod(account) === "gmail_ui" &&
+    !supportsGmailUiDelivery(account)
+  ) {
+    pushIssue(blockingIssues, {
+      code: "missing_delivery_credentials",
+      severity: "blocking",
+      kind: "setup",
+      summary: "Gmail UI delivery is not configured",
+      detail: "Set a logged-in Gmail UI profile path for this sender before sending.",
+    });
+  }
+
+  if (account && getOutreachMailboxDeliveryMethod(account) === "gmail_ui") {
+    const gmailUiState = getOutreachGmailUiLoginState(mailboxAccount ?? account);
+    if (gmailUiState !== "ready") {
+      const message =
+        (mailboxAccount ?? account).config.mailbox.gmailUiLoginMessage.trim() ||
+        "Open this sender on the worker and complete Gmail login before sending.";
+      pushIssue(blockingIssues, {
+        code: "gmail_ui_login_required",
+        severity: "blocking",
+        kind: "setup",
+        summary:
+          gmailUiState === "error"
+            ? "Gmail UI session check failed"
+            : "Gmail UI login is still required",
+        detail: message,
+      });
+    }
   }
 
   if (!mailboxAccount) {

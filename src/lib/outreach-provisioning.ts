@@ -53,6 +53,10 @@ import {
 } from "@/lib/mailpool-client";
 import { sanitizeCustomerIoBillingConfig } from "@/lib/outreach-customerio-billing";
 import { testOutreachProviders } from "@/lib/outreach-providers";
+import { pickWebshareProxy } from "@/lib/webshare-client";
+import { buildGmailUiUserDataDir } from "@/lib/gmail-ui-profile";
+import { normalizeGmailUiLoginStatus } from "@/lib/gmail-ui-login";
+import path from "path";
 
 type NamecheapHostRecord = {
   type: "A" | "AAAA" | "ALIAS" | "CNAME" | "FRAME" | "MX" | "MXE" | "NS" | "TXT" | "URL" | "URL301";
@@ -1224,6 +1228,7 @@ async function ensureCustomerIoDeliveryAccount(input: {
       },
       mailbox: {
         provider: "imap",
+        deliveryMethod: "smtp",
         email: "",
         host: "",
         port: 993,
@@ -1232,6 +1237,17 @@ async function ensureCustomerIoDeliveryAccount(input: {
         smtpPort: 587,
         smtpSecure: false,
         smtpUsername: "",
+        gmailUiUserDataDir: "",
+        gmailUiProfileDirectory: "",
+        gmailUiBrowserChannel: "chrome",
+        gmailUiLoginState: "unknown",
+        gmailUiLoginCheckedAt: "",
+        gmailUiLoginMessage: "",
+        proxyUrl: "",
+        proxyHost: "",
+        proxyPort: 0,
+        proxyUsername: "",
+        proxyPassword: "",
         status: "disconnected",
       },
     },
@@ -1242,12 +1258,56 @@ async function ensureCustomerIoDeliveryAccount(input: {
     } satisfies Partial<OutreachAccountSecrets>,
   };
 
-  if (existing) {
-    const updated = await updateOutreachAccount(existing.id, payload);
-    return updated ?? existing;
+  const account = existing
+    ? (await updateOutreachAccount(existing.id, payload)) ?? existing
+    : await createOutreachAccount(payload);
+
+  await maybeAssignWebshareProxy(account);
+  return account;
+}
+
+async function maybeAssignWebshareProxy(account: OutreachAccount) {
+  if (!account || account.provider !== "mailpool") return;
+  if (account.accountType === "mailbox") return;
+  if (account.config.mailbox.deliveryMethod !== "gmail_ui") return;
+  if (account.config.mailbox.proxyHost.trim() || account.config.mailbox.proxyUrl.trim()) return;
+  if (!process.env.WEBSHARE_API_KEY) return;
+  if (String(process.env.WEBSHARE_AUTO_ASSIGN_PROXY ?? "").trim().toLowerCase() !== "true") return;
+
+  const allAccounts = await listOutreachAccounts();
+  const used = new Set<string>();
+  for (const row of allAccounts) {
+    const host = row.config.mailbox.proxyHost.trim();
+    const port = Number(row.config.mailbox.proxyPort ?? 0) || 0;
+    if (host && port) {
+      used.add(`${host}:${port}`);
+      continue;
+    }
+    const url = row.config.mailbox.proxyUrl.trim();
+    if (url) {
+      try {
+        const parsed = new URL(url);
+        if (parsed.hostname && parsed.port) {
+          used.add(`${parsed.hostname}:${parsed.port}`);
+        }
+      } catch {}
+    }
   }
 
-  return createOutreachAccount(payload);
+  const choice = await pickWebshareProxy(used);
+  if (!choice.ok || !choice.proxy) return;
+
+  await updateOutreachAccount(account.id, {
+    config: {
+      mailbox: {
+        proxyUrl: choice.proxy.url,
+        proxyHost: choice.proxy.host,
+        proxyPort: choice.proxy.port,
+        proxyUsername: choice.proxy.username,
+        proxyPassword: choice.proxy.password,
+      },
+    },
+  });
 }
 
 async function ensureMailpoolHybridAccount(input: {
@@ -1264,6 +1324,14 @@ async function ensureMailpoolHybridAccount(input: {
         account.accountType !== "mailbox" &&
         getOutreachAccountFromEmail(account).trim().toLowerCase() === fromEmail
     ) ?? null;
+
+  const wantsWebshare = String(process.env.WEBSHARE_AUTO_ASSIGN_PROXY ?? "").trim().toLowerCase() === "true";
+  const profileRoot = String(process.env.GMAIL_UI_PROFILE_ROOT ?? "").trim();
+  const profileDir = buildGmailUiUserDataDir(profileRoot, fromEmail);
+  const loginStatus = normalizeGmailUiLoginStatus({
+    deliveryMethod: wantsWebshare ? "gmail_ui" : "smtp",
+    forceLoginRequired: wantsWebshare,
+  });
 
   const payload = {
     name: input.accountName.trim(),
@@ -1302,7 +1370,8 @@ async function ensureMailpoolHybridAccount(input: {
         defaultActorId: "",
       },
       mailbox: {
-        provider: "imap",
+        provider: wantsWebshare ? "gmail" : "imap",
+        deliveryMethod: wantsWebshare ? "gmail_ui" : "smtp",
         email: fromEmail,
         status: input.mailbox.imapHost ? "connected" : "disconnected",
         host: String(input.mailbox.imapHost ?? "").trim(),
@@ -1313,13 +1382,28 @@ async function ensureMailpoolHybridAccount(input: {
         smtpSecure: Boolean(input.mailbox.smtpTLS ?? false),
         smtpUsername:
           String(input.mailbox.smtpUsername ?? "").trim() || fromEmail,
+        gmailUiUserDataDir: profileDir,
+        gmailUiProfileDirectory: "",
+        gmailUiBrowserChannel: "chrome",
+        gmailUiLoginState: loginStatus.gmailUiLoginState,
+        gmailUiLoginCheckedAt: loginStatus.gmailUiLoginCheckedAt,
+        gmailUiLoginMessage: loginStatus.gmailUiLoginMessage,
+        proxyUrl: "",
+        proxyHost: "",
+        proxyPort: 0,
+        proxyUsername: "",
+        proxyPassword: "",
       },
     },
     credentials: {
       mailboxPassword:
         String(input.mailbox.imapPassword ?? input.mailbox.password ?? "").trim(),
+      mailboxAuthCode: String(input.mailbox.authCode ?? "").trim(),
       mailboxSmtpPassword:
         String(input.mailbox.smtpPassword ?? input.mailbox.password ?? "").trim(),
+      mailboxAdminEmail: String(input.mailbox.admin?.email ?? "").trim(),
+      mailboxAdminPassword: String(input.mailbox.admin?.password ?? "").trim(),
+      mailboxAdminAuthCode: String(input.mailbox.admin?.authCode ?? "").trim(),
     } satisfies Partial<OutreachAccountSecrets>,
   };
 
@@ -1890,6 +1974,7 @@ export async function provisionCustomerIoSender(
         },
         mailbox: {
           provider: "imap",
+          deliveryMethod: "smtp",
           email: "",
           status: "disconnected",
           host: "",
@@ -1899,6 +1984,17 @@ export async function provisionCustomerIoSender(
           smtpPort: 587,
           smtpSecure: false,
           smtpUsername: "",
+          gmailUiUserDataDir: "",
+          gmailUiProfileDirectory: "",
+          gmailUiBrowserChannel: "chrome",
+          gmailUiLoginState: "unknown",
+          gmailUiLoginCheckedAt: "",
+          gmailUiLoginMessage: "",
+          proxyUrl: "",
+          proxyHost: "",
+          proxyPort: 0,
+          proxyUsername: "",
+          proxyPassword: "",
         },
       },
     },
@@ -1938,6 +2034,7 @@ export async function provisionCustomerIoSender(
       },
       mailbox: {
         provider: "imap",
+        deliveryMethod: "smtp",
         email: "",
         status: "disconnected",
         host: "",
@@ -1947,6 +2044,17 @@ export async function provisionCustomerIoSender(
         smtpPort: 587,
         smtpSecure: false,
         smtpUsername: "",
+        gmailUiUserDataDir: "",
+        gmailUiProfileDirectory: "",
+        gmailUiBrowserChannel: "chrome",
+        gmailUiLoginState: "unknown",
+        gmailUiLoginCheckedAt: "",
+        gmailUiLoginMessage: "",
+        proxyUrl: "",
+        proxyHost: "",
+        proxyPort: 0,
+        proxyUsername: "",
+        proxyPassword: "",
       },
     },
     hasCredentials: true,
@@ -1965,7 +2073,11 @@ export async function provisionCustomerIoSender(
       mailboxAccessToken: "",
       mailboxRefreshToken: "",
       mailboxPassword: "",
+      mailboxAuthCode: "",
       mailboxSmtpPassword: "",
+      mailboxAdminEmail: "",
+      mailboxAdminPassword: "",
+      mailboxAdminAuthCode: "",
       mailboxRecoveryEmail: "",
       mailboxRecoveryCodes: "",
     },

@@ -69,6 +69,7 @@ export type MailpoolMailbox = {
   signature?: string;
   forwardTo?: string;
   password?: string;
+  authCode?: string;
   status?: string;
   avatar?: string;
   avatarUrl?: string;
@@ -83,6 +84,11 @@ export type MailpoolMailbox = {
   smtpUsername?: string;
   smtpPassword?: string;
   isAdmin?: boolean;
+  admin?: {
+    email?: string;
+    password?: string;
+    authCode?: string;
+  };
 };
 
 export type MailpoolSpamCheck = {
@@ -250,6 +256,7 @@ function mapDomainSuggestion(input: unknown): MailpoolDomainSuggestion {
 
 function mapMailbox(input: unknown): MailpoolMailbox {
   const row = asRecord(input);
+  const admin = asRecord(row.admin);
   return {
     id: String(row.id ?? "").trim(),
     type: (String(row.type ?? "google").trim().toLowerCase() as MailpoolMailboxType) || "google",
@@ -260,6 +267,7 @@ function mapMailbox(input: unknown): MailpoolMailbox {
     signature: String(row.signature ?? "").trim() || undefined,
     forwardTo: String(row.forwardTo ?? row.forward_to ?? "").trim() || undefined,
     password: String(row.password ?? "").trim() || undefined,
+    authCode: String(row.authCode ?? row.auth_code ?? "").trim() || undefined,
     status: String(row.status ?? "").trim() || undefined,
     avatar: String(row.avatar ?? row.avatarUrl ?? row.avatar_url ?? "").trim() || undefined,
     avatarUrl: String(row.avatarUrl ?? row.avatar_url ?? "").trim() || undefined,
@@ -274,6 +282,14 @@ function mapMailbox(input: unknown): MailpoolMailbox {
     smtpUsername: String(row.smtpUsername ?? row.smtp_username ?? "").trim() || undefined,
     smtpPassword: String(row.smtpPassword ?? row.smtp_password ?? "").trim() || undefined,
     isAdmin: typeof row.isAdmin === "boolean" ? row.isAdmin : undefined,
+    admin:
+      Object.keys(admin).length > 0
+        ? {
+            email: String(admin.email ?? "").trim() || undefined,
+            password: String(admin.password ?? "").trim() || undefined,
+            authCode: String(admin.authCode ?? admin.auth_code ?? "").trim() || undefined,
+          }
+        : undefined,
   };
 }
 

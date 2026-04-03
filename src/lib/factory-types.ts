@@ -619,6 +619,8 @@ export type OutreachProvisioningSettings = {
 export type MailboxProvider = "gmail" | "outlook" | "imap";
 
 export type MailboxStatus = "connected" | "disconnected" | "error";
+export type MailboxDeliveryMethod = "smtp" | "gmail_ui";
+export type GmailUiLoginState = "unknown" | "login_required" | "ready" | "error";
 
 export type OutreachAccountType = "delivery" | "mailbox" | "hybrid";
 
@@ -669,6 +671,7 @@ export type OutreachAccountConfig = {
   };
   mailbox: {
     provider: MailboxProvider;
+    deliveryMethod: MailboxDeliveryMethod;
     email: string;
     status: MailboxStatus;
     host: string;
@@ -678,6 +681,17 @@ export type OutreachAccountConfig = {
     smtpPort: number;
     smtpSecure: boolean;
     smtpUsername: string;
+    gmailUiUserDataDir: string;
+    gmailUiProfileDirectory: string;
+    gmailUiBrowserChannel: string;
+    gmailUiLoginState: GmailUiLoginState;
+    gmailUiLoginCheckedAt: string;
+    gmailUiLoginMessage: string;
+    proxyUrl: string;
+    proxyHost: string;
+    proxyPort: number;
+    proxyUsername: string;
+    proxyPassword: string;
   };
 };
 

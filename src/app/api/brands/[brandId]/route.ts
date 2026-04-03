@@ -11,6 +11,7 @@ import {
   getOutreachProvisioningSettings,
   updateOutreachProvisioningSettings,
 } from "@/lib/outreach-provider-settings";
+import { syncBrandGmailUiAssignments } from "@/lib/gmail-ui-brand-sync";
 import { enrichBrandWithSenderHealth } from "@/lib/sender-health";
 import { loadBrandSenderLaunchView } from "@/lib/sender-launch";
 
@@ -185,6 +186,8 @@ export async function PATCH(request: Request, context: { params: Promise<{ brand
   if (!brand) {
     return NextResponse.json({ error: "brand not found" }, { status: 404 });
   }
+
+  await syncBrandGmailUiAssignments({ brandIds: [brand.id] }).catch(() => null);
 
   if (Array.isArray(patch.domains)) {
     const senderDomains = brand.domains

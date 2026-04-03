@@ -60,7 +60,11 @@ export type OutreachAccountSecrets = {
   mailboxAccessToken: string;
   mailboxRefreshToken: string;
   mailboxPassword: string;
+  mailboxAuthCode: string;
   mailboxSmtpPassword: string;
+  mailboxAdminEmail: string;
+  mailboxAdminPassword: string;
+  mailboxAdminAuthCode: string;
   mailboxRecoveryEmail: string;
   mailboxRecoveryCodes: string;
 };
@@ -316,6 +320,9 @@ function deriveAccountType(config: OutreachAccountConfig): OutreachAccount["acco
   const hasDelivery = Boolean(
     config.customerIo.siteId.trim() ||
       config.mailpool.mailboxId.trim() ||
+      (config.mailbox.deliveryMethod === "gmail_ui" &&
+        config.mailbox.provider === "gmail" &&
+        config.mailbox.gmailUiUserDataDir.trim()) ||
       (config.mailbox.smtpHost.trim() && config.mailbox.smtpUsername.trim())
   );
   const hasMailbox = Boolean(config.mailbox.email.trim() && config.mailbox.host.trim());
@@ -365,6 +372,9 @@ function sanitizeAccountConfig(value: unknown): OutreachAccountConfig {
       provider: ["gmail", "outlook", "imap"].includes(String(mailbox.provider))
         ? (String(mailbox.provider) as OutreachAccountConfig["mailbox"]["provider"])
         : "gmail",
+      deliveryMethod: ["smtp", "gmail_ui"].includes(String(mailbox.deliveryMethod ?? mailbox.delivery_method))
+        ? (String(mailbox.deliveryMethod ?? mailbox.delivery_method) as OutreachAccountConfig["mailbox"]["deliveryMethod"])
+        : "smtp",
       email: String(mailbox.email ?? "").trim(),
       status: ["connected", "disconnected", "error"].includes(String(mailbox.status))
         ? (String(mailbox.status) as OutreachAccountConfig["mailbox"]["status"])
@@ -376,6 +386,31 @@ function sanitizeAccountConfig(value: unknown): OutreachAccountConfig {
       smtpPort: Number(mailbox.smtpPort ?? mailbox.smtp_port ?? 587),
       smtpSecure: Boolean(mailbox.smtpSecure ?? mailbox.smtp_secure ?? false),
       smtpUsername: String(mailbox.smtpUsername ?? mailbox.smtp_username ?? "").trim(),
+      gmailUiUserDataDir: String(mailbox.gmailUiUserDataDir ?? mailbox.gmail_ui_user_data_dir ?? "").trim(),
+      gmailUiProfileDirectory: String(
+        mailbox.gmailUiProfileDirectory ?? mailbox.gmail_ui_profile_directory ?? ""
+      ).trim(),
+      gmailUiBrowserChannel: String(
+        mailbox.gmailUiBrowserChannel ?? mailbox.gmail_ui_browser_channel ?? "chrome"
+      ).trim() || "chrome",
+      gmailUiLoginState: ["unknown", "login_required", "ready", "error"].includes(
+        String(mailbox.gmailUiLoginState ?? mailbox.gmail_ui_login_state ?? "").trim()
+      )
+        ? (String(
+            mailbox.gmailUiLoginState ?? mailbox.gmail_ui_login_state ?? ""
+          ).trim() as OutreachAccountConfig["mailbox"]["gmailUiLoginState"])
+        : "unknown",
+      gmailUiLoginCheckedAt: String(
+        mailbox.gmailUiLoginCheckedAt ?? mailbox.gmail_ui_login_checked_at ?? ""
+      ).trim(),
+      gmailUiLoginMessage: String(
+        mailbox.gmailUiLoginMessage ?? mailbox.gmail_ui_login_message ?? ""
+      ).trim(),
+      proxyUrl: String(mailbox.proxyUrl ?? mailbox.proxy_url ?? "").trim(),
+      proxyHost: String(mailbox.proxyHost ?? mailbox.proxy_host ?? "").trim(),
+      proxyPort: Number(mailbox.proxyPort ?? mailbox.proxy_port ?? 0) || 0,
+      proxyUsername: String(mailbox.proxyUsername ?? mailbox.proxy_username ?? "").trim(),
+      proxyPassword: String(mailbox.proxyPassword ?? mailbox.proxy_password ?? "").trim(),
     },
   };
 }
@@ -389,7 +424,11 @@ function defaultSecrets(): OutreachAccountSecrets {
     mailboxAccessToken: "",
     mailboxRefreshToken: "",
     mailboxPassword: "",
+    mailboxAuthCode: "",
     mailboxSmtpPassword: "",
+    mailboxAdminEmail: "",
+    mailboxAdminPassword: "",
+    mailboxAdminAuthCode: "",
     mailboxRecoveryEmail: "",
     mailboxRecoveryCodes: "",
   };
@@ -397,6 +436,7 @@ function defaultSecrets(): OutreachAccountSecrets {
 
 function sanitizeSecrets(value: unknown): OutreachAccountSecrets {
   const row = asRecord(value);
+  const admin = asRecord(row.mailboxAdmin ?? row.admin);
   const customerIoApiKey = String(
     row.customerIoApiKey ?? row.customerIoTrackApiKey ?? row.customerIoAppApiKey ?? ""
   ).trim();
@@ -408,7 +448,13 @@ function sanitizeSecrets(value: unknown): OutreachAccountSecrets {
     mailboxAccessToken: String(row.mailboxAccessToken ?? "").trim(),
     mailboxRefreshToken: String(row.mailboxRefreshToken ?? "").trim(),
     mailboxPassword: String(row.mailboxPassword ?? "").trim(),
+    mailboxAuthCode: String(row.mailboxAuthCode ?? row.authCode ?? row.auth_code ?? "").trim(),
     mailboxSmtpPassword: String(row.mailboxSmtpPassword ?? row.smtpPassword ?? "").trim(),
+    mailboxAdminEmail: String(row.mailboxAdminEmail ?? row.adminEmail ?? admin.email ?? "").trim(),
+    mailboxAdminPassword: String(row.mailboxAdminPassword ?? row.adminPassword ?? admin.password ?? "").trim(),
+    mailboxAdminAuthCode: String(
+      row.mailboxAdminAuthCode ?? row.adminAuthCode ?? admin.authCode ?? admin.auth_code ?? ""
+    ).trim(),
     mailboxRecoveryEmail: String(row.mailboxRecoveryEmail ?? "").trim(),
     mailboxRecoveryCodes:
       typeof row.mailboxRecoveryCodes === "string"
@@ -2217,7 +2263,11 @@ export async function updateOutreachAccount(
     mailboxAccessToken: patchSecrets.mailboxAccessToken || existingSecrets.mailboxAccessToken,
     mailboxRefreshToken: patchSecrets.mailboxRefreshToken || existingSecrets.mailboxRefreshToken,
     mailboxPassword: patchSecrets.mailboxPassword || existingSecrets.mailboxPassword,
+    mailboxAuthCode: patchSecrets.mailboxAuthCode || existingSecrets.mailboxAuthCode,
     mailboxSmtpPassword: patchSecrets.mailboxSmtpPassword || existingSecrets.mailboxSmtpPassword,
+    mailboxAdminEmail: patchSecrets.mailboxAdminEmail || existingSecrets.mailboxAdminEmail,
+    mailboxAdminPassword: patchSecrets.mailboxAdminPassword || existingSecrets.mailboxAdminPassword,
+    mailboxAdminAuthCode: patchSecrets.mailboxAdminAuthCode || existingSecrets.mailboxAdminAuthCode,
     mailboxRecoveryEmail: patchSecrets.mailboxRecoveryEmail || existingSecrets.mailboxRecoveryEmail,
     mailboxRecoveryCodes: patchSecrets.mailboxRecoveryCodes || existingSecrets.mailboxRecoveryCodes,
   };

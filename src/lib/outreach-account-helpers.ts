@@ -35,6 +35,37 @@ export function getOutreachMailboxEmail(account: Pick<OutreachAccount, "config">
   return account.config.mailbox.email.trim();
 }
 
+export function getOutreachMailboxDeliveryMethod(account: Pick<OutreachAccount, "config"> | null | undefined) {
+  if (!account) return "smtp";
+  return account.config.mailbox.deliveryMethod;
+}
+
+export function supportsGmailUiDelivery(account: Pick<OutreachAccount, "provider" | "accountType" | "config">) {
+  return (
+    account.provider === "mailpool" &&
+    account.accountType !== "mailbox" &&
+    account.config.mailbox.deliveryMethod === "gmail_ui" &&
+    Boolean(account.config.mailbox.gmailUiUserDataDir.trim()) &&
+    Boolean(getOutreachAccountFromEmail(account))
+  );
+}
+
+export function getOutreachGmailUiLoginState(account: Pick<OutreachAccount, "config"> | null | undefined) {
+  if (!account) return "unknown" as const;
+  if (account.config.mailbox.deliveryMethod !== "gmail_ui") {
+    return "unknown" as const;
+  }
+  const state = String(account.config.mailbox.gmailUiLoginState ?? "").trim();
+  if (state === "ready" || state === "error" || state === "login_required") {
+    return state;
+  }
+  return "login_required" as const;
+}
+
+export function isOutreachGmailUiLoginReady(account: Pick<OutreachAccount, "config"> | null | undefined) {
+  return getOutreachGmailUiLoginState(account) === "ready";
+}
+
 export function getOutreachSenderBackingIssue(
   deliveryAccount: Pick<OutreachAccount, "provider" | "accountType" | "config"> | null | undefined,
   mailboxAccount: Pick<OutreachAccount, "provider" | "accountType" | "config"> | null | undefined
@@ -71,9 +102,13 @@ export function supportsMailpoolDelivery(
   account: Pick<OutreachAccount, "provider" | "accountType" | "config">,
   secrets?: Pick<OutreachAccountSecrets, "mailboxPassword" | "mailboxSmtpPassword">
 ) {
+  if (account.provider !== "mailpool" || account.accountType === "mailbox") {
+    return false;
+  }
+  if (account.config.mailbox.deliveryMethod === "gmail_ui") {
+    return supportsGmailUiDelivery(account);
+  }
   return (
-    account.provider === "mailpool" &&
-    account.accountType !== "mailbox" &&
     Boolean(account.config.mailpool.mailboxId.trim()) &&
     Boolean(account.config.mailbox.smtpHost.trim()) &&
     Boolean(account.config.mailbox.smtpUsername.trim()) &&

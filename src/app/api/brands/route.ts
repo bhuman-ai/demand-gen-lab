@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { createBrand, listBrandsWithOptions } from "@/lib/factory-data";
+import { syncBrandGmailUiAssignments } from "@/lib/gmail-ui-brand-sync";
 
 function normalizeStringArray(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
@@ -45,5 +46,6 @@ export async function POST(request: Request) {
     keyFeatures,
     keyBenefits,
   });
+  await syncBrandGmailUiAssignments({ brandIds: [brand.id] }).catch(() => null);
   return NextResponse.json({ brand }, { status: 201 });
 }

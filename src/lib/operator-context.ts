@@ -3,7 +3,12 @@ import { listExperimentRecords, listScaleCampaignRecords } from "@/lib/experimen
 import { mapExperimentToListItem } from "@/lib/experiment-list-view";
 import type { BrandOutreachAssignment, BrandRecord, DomainRow, ExperimentListItem, OutreachAccount } from "@/lib/factory-types";
 import { listDeliverabilityProbeRuns, getBrandOutreachAssignment, listExperimentRuns, listOutreachAccounts, listOwnerRuns, listReplyThreadsByBrand } from "@/lib/outreach-data";
-import { getDomainDeliveryAccountId, getOutreachAccountFromEmail, getOutreachAccountReplyToEmail } from "@/lib/outreach-account-helpers";
+import {
+  getDomainDeliveryAccountId,
+  getOutreachAccountFromEmail,
+  getOutreachAccountReplyToEmail,
+  supportsGmailUiDelivery,
+} from "@/lib/outreach-account-helpers";
 import { listSavedMailpoolDomains } from "@/lib/outreach-provisioning";
 import { getOutreachProvisioningSettings } from "@/lib/outreach-provider-settings";
 import { buildSenderRoutingSignalFromDomainRow, rankSenderRoutingSignals, summarizeSenderRoutingScore, type SenderRoutingScoreLevel } from "@/lib/sender-routing";
@@ -566,11 +571,15 @@ export async function getOperatorSenderContext(accountId: string): Promise<Opera
 
   const latestProbe = recentProbeRuns[0] ?? null;
   const issues: string[] = [];
+  const usesGmailUi = supportsGmailUiDelivery(account);
   if (account.provider === "mailpool" && account.config.mailpool.status !== "active") {
     issues.push(`Mailpool mailbox is ${account.config.mailpool.status || "pending"} and not fully ready yet.`);
   }
-  if (!account.config.mailbox.smtpHost.trim()) {
+  if (!usesGmailUi && !account.config.mailbox.smtpHost.trim()) {
     issues.push("SMTP credentials are not available yet.");
+  }
+  if (usesGmailUi && !account.config.mailbox.gmailUiUserDataDir.trim()) {
+    issues.push("Gmail UI profile is not configured yet.");
   }
   if (!account.config.mailbox.host.trim()) {
     issues.push("IMAP credentials are not available yet.");
@@ -594,15 +603,19 @@ export async function getOperatorSenderContext(accountId: string): Promise<Opera
       readyToSend:
         account.status === "active" &&
         account.config.mailpool.status === "active" &&
-        Boolean(account.config.mailbox.smtpHost.trim()) &&
-        Boolean(account.config.mailbox.smtpUsername.trim()),
+        (usesGmailUi
+          ? Boolean(account.config.mailbox.gmailUiUserDataDir.trim())
+          : Boolean(account.config.mailbox.smtpHost.trim()) &&
+            Boolean(account.config.mailbox.smtpUsername.trim())),
     },
     mailpool: {
       domainId: account.config.mailpool.domainId,
       mailboxId: account.config.mailpool.mailboxId,
       status: account.config.mailpool.status,
       mailboxType: account.config.mailpool.mailboxType,
-      smtpReady: Boolean(account.config.mailbox.smtpHost.trim() && account.config.mailbox.smtpUsername.trim()),
+      smtpReady: usesGmailUi
+        ? Boolean(account.config.mailbox.gmailUiUserDataDir.trim())
+        : Boolean(account.config.mailbox.smtpHost.trim() && account.config.mailbox.smtpUsername.trim()),
       imapReady: Boolean(account.config.mailbox.host.trim()),
       spamCheckId: account.config.mailpool.spamCheckId,
       spamCheckSummary: account.config.mailpool.lastSpamCheckSummary,

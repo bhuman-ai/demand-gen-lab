@@ -2,6 +2,7 @@ import { listBrands, updateBrand } from "@/lib/factory-data";
 import type { DomainRow, OutreachAccount, OutreachAccountConfig } from "@/lib/factory-types";
 import { getOutreachAccount, updateOutreachAccount } from "@/lib/outreach-data";
 import { sanitizeCustomerIoBillingConfig } from "@/lib/outreach-customerio-billing";
+import { normalizeGmailUiLoginStatus } from "@/lib/gmail-ui-login";
 import { getDomainDeliveryAccountId, getOutreachAccountFromEmail } from "@/lib/outreach-account-helpers";
 import { getOutreachProvisioningSettingsSecrets } from "@/lib/outreach-provider-settings";
 import { kickoffMailpoolAccountDeliverability } from "@/lib/mailpool-deliverability-bootstrap";
@@ -22,6 +23,17 @@ export type MailpoolAccountRefreshResult = {
   refreshedAt: string;
 };
 
+function buildMailpoolMailboxCredentials(mailbox: MailpoolMailbox) {
+  return {
+    mailboxPassword: String(mailbox.imapPassword ?? mailbox.password ?? "").trim(),
+    mailboxAuthCode: String(mailbox.authCode ?? "").trim(),
+    mailboxSmtpPassword: String(mailbox.smtpPassword ?? mailbox.password ?? "").trim(),
+    mailboxAdminEmail: String(mailbox.admin?.email ?? "").trim(),
+    mailboxAdminPassword: String(mailbox.admin?.password ?? "").trim(),
+    mailboxAdminAuthCode: String(mailbox.admin?.authCode ?? "").trim(),
+  };
+}
+
 function normalizeDomain(value: string) {
   return value.trim().toLowerCase().replace(/^https?:\/\//, "").replace(/^www\./, "").replace(/\/.*$/, "");
 }
@@ -35,6 +47,13 @@ function mailpoolStatusToDnsStatus(status: string): DomainRow["dnsStatus"] {
 
 function buildMailpoolAccountPatch(mailbox: MailpoolMailbox, existingConfig: OutreachAccountConfig) {
   const fromEmail = mailbox.email.trim().toLowerCase();
+  const usesGmailUi = existingConfig.mailbox.deliveryMethod === "gmail_ui";
+  const loginStatus = normalizeGmailUiLoginStatus({
+    deliveryMethod: usesGmailUi ? "gmail_ui" : existingConfig.mailbox.deliveryMethod,
+    state: existingConfig.mailbox.gmailUiLoginState,
+    checkedAt: existingConfig.mailbox.gmailUiLoginCheckedAt,
+    message: existingConfig.mailbox.gmailUiLoginMessage,
+  });
   return {
     provider: "mailpool" as const,
     name:
@@ -68,7 +87,8 @@ function buildMailpoolAccountPatch(mailbox: MailpoolMailbox, existingConfig: Out
         lastSpamCheckSummary: String(existingConfig.mailpool.lastSpamCheckSummary ?? "").trim(),
       },
       mailbox: {
-        provider: "imap" as const,
+        provider: usesGmailUi ? ("gmail" as const) : ("imap" as const),
+        deliveryMethod: usesGmailUi ? ("gmail_ui" as const) : existingConfig.mailbox.deliveryMethod,
         email: fromEmail,
         status: mailbox.imapHost ? ("connected" as const) : ("disconnected" as const),
         host: String(mailbox.imapHost ?? "").trim(),
@@ -78,12 +98,20 @@ function buildMailpoolAccountPatch(mailbox: MailpoolMailbox, existingConfig: Out
         smtpPort: Number(mailbox.smtpPort ?? 587) || 587,
         smtpSecure: Boolean(mailbox.smtpTLS ?? false),
         smtpUsername: String(mailbox.smtpUsername ?? "").trim() || fromEmail,
+        gmailUiUserDataDir: String(existingConfig.mailbox.gmailUiUserDataDir ?? "").trim(),
+        gmailUiProfileDirectory: String(existingConfig.mailbox.gmailUiProfileDirectory ?? "").trim(),
+        gmailUiBrowserChannel: String(existingConfig.mailbox.gmailUiBrowserChannel ?? "chrome").trim() || "chrome",
+        gmailUiLoginState: loginStatus.gmailUiLoginState,
+        gmailUiLoginCheckedAt: loginStatus.gmailUiLoginCheckedAt,
+        gmailUiLoginMessage: loginStatus.gmailUiLoginMessage,
+        proxyUrl: String(existingConfig.mailbox.proxyUrl ?? "").trim(),
+        proxyHost: String(existingConfig.mailbox.proxyHost ?? "").trim(),
+        proxyPort: Number(existingConfig.mailbox.proxyPort ?? 0) || 0,
+        proxyUsername: String(existingConfig.mailbox.proxyUsername ?? "").trim(),
+        proxyPassword: String(existingConfig.mailbox.proxyPassword ?? "").trim(),
       },
     },
-    credentials: {
-      mailboxPassword: String(mailbox.imapPassword ?? mailbox.password ?? "").trim(),
-      mailboxSmtpPassword: String(mailbox.smtpPassword ?? mailbox.password ?? "").trim(),
-    },
+    credentials: buildMailpoolMailboxCredentials(mailbox),
   };
 }
 
@@ -229,4 +257,31 @@ export async function refreshMailpoolOutreachAccount(accountId: string): Promise
     deliverabilityKickoffErrors: deliverabilityKickoff.errors,
     refreshedAt: new Date().toISOString(),
   };
+}
+
+export async function syncMailpoolOutreachAccountCredentials(accountId: string): Promise<OutreachAccount> {
+  const account = await getOutreachAccount(accountId);
+  if (!account) {
+    throw new Error("Mailpool outreach account not found");
+  }
+  if (account.provider !== "mailpool") {
+    throw new Error("Only Mailpool accounts can sync Mailpool credentials");
+  }
+
+  const secrets = await getOutreachProvisioningSettingsSecrets();
+  const apiKey = secrets.mailpoolApiKey.trim();
+  if (!apiKey) {
+    throw new Error("Mailpool API key is not configured");
+  }
+
+  const mailboxId = account.config.mailpool.mailboxId.trim();
+  if (!mailboxId) {
+    throw new Error("Mailpool mailbox ID is missing on this account");
+  }
+
+  const mailbox = await getMailpoolMailbox(apiKey, mailboxId);
+  const updated = await updateOutreachAccount(account.id, {
+    credentials: buildMailpoolMailboxCredentials(mailbox),
+  });
+  return updated ?? account;
 }

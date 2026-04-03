@@ -615,52 +615,52 @@ function senderActionPlan(
   if (provisioning) {
     return {
       kind: "refresh_mailpool",
-      label: "Refresh status",
-      description: `${provisioning.detail} ${provisioning.etaLabel}`,
+      label: "Verify sender",
+      description: `${provisioning.detail} ${provisioning.etaLabel}`.trim(),
     };
   }
   if (!row.fromEmail) {
     return {
       kind: "open_setup",
-      label: "Finish setup",
-      description: "Open sender setup and attach the missing sender mailbox.",
+      label: "Verify sender",
+      description: "Open the sender flow and attach the missing mailbox.",
     };
   }
   if (row.provider === "mailpool" && row.dnsStatus !== "verified") {
     return {
       kind: "refresh_mailpool",
-      label: "Refresh status",
+      label: "Verify sender",
       description: "Pull the latest domain and mailbox state from Mailpool.",
     };
   }
   if (row.dnsStatus === "error") {
     return {
       kind: "repair_setup",
-      label: "Repair setup",
-      description: "Re-apply sender DNS, forwarding, and account setup for this domain.",
+      label: "Verify sender",
+      description: "Repair sender DNS, forwarding, and connection settings for this domain.",
     };
   }
   if (row.dnsStatus !== "verified") {
     return {
       kind: "repair_setup",
-      label: "Re-run setup",
-      description: "Re-apply sender DNS and forwarding while this domain finishes verifying.",
+      label: "Verify sender",
+      description: "Re-run sender checks while this domain finishes verifying.",
     };
   }
   if (isMonitorInboxIssue(row)) {
     return {
       kind: "add_inbox",
-      label: "Add inbox",
-      description: "Add 1 more reply inbox. We will open the right screen with the form already open.",
+      label: "Verify sender",
+      description: "Open the inbox flow and add 1 more reply inbox so checks can resume.",
     };
   }
   if (status === "fix" || health === "problem") {
     return {
       kind: "open_settings",
-      label: "Open outreach settings",
+      label: "Verify sender",
       description:
         readiness?.primaryBlockingReason ||
-        "Review sender setup and delivery settings driving this block.",
+        "Open sender checks and review what is blocking readiness.",
     };
   }
   return null;
@@ -1286,7 +1286,7 @@ export default function NetworkClient({
         openSenderModal();
         updateSenderActionState(row.id, {
           pending: false,
-          success: "Sender setup opened. Use the same domain to finish attaching the mailbox.",
+          success: "Verification opened. Attach the sender mailbox to continue.",
         });
         return;
       }
@@ -1312,7 +1312,7 @@ export default function NetworkClient({
         await refreshDomainsFromServer();
         updateSenderActionState(row.id, {
           pending: false,
-          success: "Pulled the latest Mailpool status for this sender.",
+          success: "Verification refreshed. Pulled the latest Mailpool status for this sender.",
         });
         return;
       }
@@ -1353,8 +1353,8 @@ export default function NetworkClient({
       updateSenderActionState(row.id, {
         pending: false,
         success: result.readyToSend
-          ? "Setup repaired. This sender is ready for traffic."
-          : result.warnings[0] || "Setup refreshed. DNS or checks may still need time.",
+          ? "Verification complete. This sender is ready for traffic."
+          : result.warnings[0] || "Verification refreshed. DNS or checks may still need time.",
       });
     } catch (err) {
       updateSenderActionState(row.id, {
@@ -1588,7 +1588,7 @@ export default function NetworkClient({
               const warmupStage = senderWarmupStageLabel(item, capacity);
               const actionState = senderActionState[item.id] ?? EMPTY_SENDER_ACTION_STATE;
               const statusHeading = status === "fix" || status === "setup" ? "Issue" : "Status";
-              const nextStepHeading = action ? "Fix" : "Next step";
+              const nextStepHeading = action ? "Verify" : "Next step";
 
               return (
                 <article

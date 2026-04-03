@@ -1,8 +1,10 @@
-import { mkdir } from "fs/promises";
+import { execFile as execFileCallback } from "child_process";
+import { mkdir, rm } from "fs/promises";
 import fs from "fs";
 import http from "http";
 import path from "path";
 import { chromium } from "playwright";
+import { promisify } from "util";
 
 type SessionStep =
   | "opening"
@@ -35,6 +37,7 @@ type SessionHandle = {
   page: any;
   updatedAt: string;
   screenshotPath: string;
+  started: boolean;
 };
 
 type AdvanceInput = {
@@ -44,11 +47,19 @@ type AdvanceInput = {
   refreshMailpoolCredentials?: boolean;
 };
 
+type AccountBundle = {
+  account: any;
+  secrets: any;
+  gmailUiPassword: string;
+  gmailUiAuthCode: string;
+};
+
 const sessions = new Map<string, SessionHandle>();
 const SCREENSHOT_DIR = path.join(process.cwd(), "output", "playwright", "gmail-ui-worker");
 const IDLE_TTL_MS = 15 * 60 * 1000;
 const COMPOSE_SELECTOR =
   'div[gh="cm"], [role="button"][gh="cm"], [role="button"][aria-label^="Compose"], div[role="button"]:has-text("Compose")';
+const execFile = promisify(execFileCallback);
 
 function loadLocalEnv() {
   const envPath = path.join(process.cwd(), ".env.local");
@@ -157,6 +168,93 @@ async function firstVisible(page: any, selectors: string[]) {
 async function settlePage(page: any) {
   await page.waitForTimeout(1200).catch(() => {});
   await page.waitForLoadState("domcontentloaded", { timeout: 5000 }).catch(() => {});
+}
+
+function looksLikeGoogleSessionUrl(currentUrl: string) {
+  return (
+    currentUrl.startsWith("https://mail.google.com/") ||
+    currentUrl.startsWith("https://accounts.google.com/") ||
+    currentUrl.startsWith("https://workspace.google.com/")
+  );
+}
+
+async function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function listProfileProcessIds(userDataDir: string) {
+  try {
+    const { stdout } = await execFile("pgrep", ["-f", `--user-data-dir=${userDataDir}`]);
+    return stdout
+      .split(/\s+/)
+      .map((value) => Number(value.trim()))
+      .filter((value) => Number.isFinite(value) && value > 0);
+  } catch (error: any) {
+    if (error?.code === 1) {
+      return [];
+    }
+    throw error;
+  }
+}
+
+function isPidAlive(pid: number) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function releaseProfileLock(userDataDir: string) {
+  const pids = await listProfileProcessIds(userDataDir);
+  for (const pid of pids) {
+    try {
+      process.kill(pid, "SIGTERM");
+    } catch {}
+  }
+
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    const remaining = pids.filter((pid) => isPidAlive(pid));
+    if (!remaining.length) break;
+    await sleep(300);
+    if (attempt === 9) {
+      for (const pid of remaining) {
+        try {
+          process.kill(pid, "SIGKILL");
+        } catch {}
+      }
+    }
+  }
+
+  for (const lockName of ["SingletonLock", "SingletonCookie", "SingletonSocket"]) {
+    await rm(path.join(userDataDir, lockName), { force: true }).catch(() => {});
+  }
+}
+
+async function moveToGoogleLogin(page: any) {
+  const currentUrl = String(page.url() ?? "");
+  const title = String((await page.title().catch(() => "")) ?? "");
+  const bodyText = String((await page.locator("body").innerText().catch(() => "")) ?? "").toLowerCase();
+  const looksLikeMarketingPage =
+    currentUrl.includes("workspace.google.com/intl/") ||
+    title.toLowerCase().includes("secure, ai-powered email for everyone") ||
+    (currentUrl.includes("workspace.google.com") && bodyText.includes("sign in"));
+  if (!looksLikeMarketingPage) {
+    return false;
+  }
+
+  await page
+    .goto(
+      "https://accounts.google.com/ServiceLogin?service=mail&continue=https%3A%2F%2Fmail.google.com%2Fmail%2Fu%2F0%2F%23inbox",
+      {
+        waitUntil: "domcontentloaded",
+        timeout: 60000,
+      }
+    )
+    .catch(() => {});
+  await settlePage(page);
+  return true;
 }
 
 async function detectSessionStep(page: any): Promise<Omit<SessionSnapshot, "ok" | "accountId" | "fromEmail" | "updatedAt" | "screenshotPath">> {
@@ -291,12 +389,47 @@ async function clickNext(page: any) {
 }
 
 async function fillVisibleField(page: any, selectors: string[], value: string) {
-  const locator = await firstVisible(page, selectors);
-  if (!locator) return false;
-  await locator.click().catch(() => {});
-  await locator.fill(value).catch(() => {});
-  await settlePage(page);
-  return true;
+  for (const selector of selectors) {
+    const locator = page.locator(selector).first();
+    if (!(await locator.isVisible().catch(() => false))) continue;
+    await locator.click().catch(() => {});
+    await locator.fill("").catch(() => {});
+    await locator.fill(value).catch(() => {});
+
+    let currentValue = String((await locator.inputValue().catch(() => "")) ?? "");
+    if (currentValue.trim() !== value.trim()) {
+      await locator.press("Meta+A").catch(() => {});
+      await locator.press("Control+A").catch(() => {});
+      await locator.pressSequentially(value, { delay: 35 }).catch(() => {});
+      currentValue = String((await locator.inputValue().catch(() => "")) ?? "");
+    }
+
+    if (currentValue.trim() !== value.trim()) {
+      const handle = await locator.elementHandle().catch(() => null);
+      if (handle) {
+        await page
+          .evaluate(
+            ({ element, nextValue }: { element: HTMLInputElement | HTMLTextAreaElement | null; nextValue: string }) => {
+              const input = element as HTMLInputElement | HTMLTextAreaElement | null;
+              if (!input) return;
+              input.focus();
+              input.value = nextValue;
+              input.dispatchEvent(new Event("input", { bubbles: true }));
+              input.dispatchEvent(new Event("change", { bubbles: true }));
+            },
+            { element: handle, nextValue: value }
+          )
+          .catch(() => {});
+        currentValue = String((await locator.inputValue().catch(() => "")) ?? "");
+      }
+    }
+
+    await settlePage(page);
+    if (currentValue.trim() === value.trim()) {
+      return true;
+    }
+  }
+  return false;
 }
 
 async function clickUseAnotherAccount(page: any) {
@@ -347,12 +480,14 @@ async function takeSnapshot(handle: SessionHandle, snapshot: Omit<SessionSnapsho
   return result;
 }
 
-async function loadAccountBundle(accountId: string, refreshMailpoolCredentials = true) {
+async function loadAccountBundle(accountId: string, refreshMailpoolCredentials = true): Promise<AccountBundle> {
   const {
     getOutreachAccount,
     getOutreachAccountSecrets,
   } = await import("@/lib/outreach-data");
   const { syncMailpoolOutreachAccountCredentials } = await import("@/lib/mailpool-account-refresh");
+  const { getOutreachProvisioningSettingsSecrets } = await import("@/lib/outreach-provider-settings");
+  const { getMailpoolMailbox } = await import("@/lib/mailpool-client");
 
   let account = await getOutreachAccount(accountId);
   if (!account) {
@@ -368,7 +503,21 @@ async function loadAccountBundle(accountId: string, refreshMailpoolCredentials =
     throw new Error("Outreach account credentials are missing.");
   }
 
-  return { account, secrets };
+  let gmailUiPassword = String(secrets.mailboxPassword ?? "").trim();
+  let gmailUiAuthCode = String(secrets.mailboxAuthCode ?? "").trim();
+  if (account.provider === "mailpool" && account.config.mailpool.mailboxId.trim()) {
+    try {
+      const providerSecrets = await getOutreachProvisioningSettingsSecrets();
+      const apiKey = String(providerSecrets.mailpoolApiKey ?? "").trim();
+      if (apiKey) {
+        const mailbox = await getMailpoolMailbox(apiKey, account.config.mailpool.mailboxId.trim());
+        gmailUiPassword = String(mailbox.password ?? gmailUiPassword).trim() || gmailUiPassword;
+        gmailUiAuthCode = String(mailbox.authCode ?? gmailUiAuthCode).trim() || gmailUiAuthCode;
+      }
+    } catch {}
+  }
+
+  return { account, secrets, gmailUiPassword, gmailUiAuthCode };
 }
 
 async function getOrCreateSession(accountId: string, input: AdvanceInput) {
@@ -398,7 +547,7 @@ async function getOrCreateSession(accountId: string, input: AdvanceInput) {
   const ignoreConfiguredProxy = input.ignoreConfiguredProxy ?? defaultIgnoreConfiguredProxy();
   const executablePath = resolveExecutablePath();
   const proxy = ignoreConfiguredProxy ? undefined : resolveProxy(account.config.mailbox);
-  const context = await chromium.launchPersistentContext(userDataDir, {
+  const launchOptions = {
     ...(executablePath
       ? { executablePath }
       : { channel: account.config.mailbox.gmailUiBrowserChannel || "chrome" }),
@@ -408,7 +557,18 @@ async function getOrCreateSession(accountId: string, input: AdvanceInput) {
       ? [`--profile-directory=${account.config.mailbox.gmailUiProfileDirectory.trim()}`]
       : [],
     proxy,
-  });
+  };
+  let context: any;
+  try {
+    context = await chromium.launchPersistentContext(userDataDir, launchOptions);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (!message.includes("ProcessSingleton")) {
+      throw error;
+    }
+    await releaseProfileLock(userDataDir);
+    context = await chromium.launchPersistentContext(userDataDir, launchOptions);
+  }
   const page = context.pages()[0] ?? (await context.newPage());
   const handle: SessionHandle = {
     accountId: account.id,
@@ -418,6 +578,7 @@ async function getOrCreateSession(accountId: string, input: AdvanceInput) {
     page,
     updatedAt: new Date().toISOString(),
     screenshotPath: "",
+    started: false,
   };
   sessions.set(accountId, handle);
   return handle;
@@ -425,15 +586,25 @@ async function getOrCreateSession(accountId: string, input: AdvanceInput) {
 
 async function advanceSession(accountId: string, input: AdvanceInput = {}) {
   const handle = await getOrCreateSession(accountId, input);
-  const { account, secrets } = await loadAccountBundle(accountId, input.refreshMailpoolCredentials !== false);
+  const { account, secrets, gmailUiPassword } = await loadAccountBundle(
+    accountId,
+    input.refreshMailpoolCredentials !== false
+  );
 
-  await handle.page.goto("https://mail.google.com/mail/u/0/#inbox", {
-    waitUntil: "domcontentloaded",
-    timeout: 60000,
-  }).catch(() => {});
-  await settlePage(handle.page);
+  const currentUrl = String(handle.page.url() ?? "").trim();
+  if (!handle.started || !currentUrl || currentUrl === "about:blank" || !looksLikeGoogleSessionUrl(currentUrl)) {
+    await handle.page.goto("https://mail.google.com/mail/u/0/#inbox", {
+      waitUntil: "domcontentloaded",
+      timeout: 60000,
+    }).catch(() => {});
+    await settlePage(handle.page);
+    handle.started = true;
+  }
 
   for (let attempt = 0; attempt < 5; attempt += 1) {
+    if (await moveToGoogleLogin(handle.page)) {
+      continue;
+    }
     const detected = await detectSessionStep(handle.page);
 
     if (detected.step === "account_picker") {
@@ -450,7 +621,7 @@ async function advanceSession(accountId: string, input: AdvanceInput = {}) {
     }
 
     if (detected.step === "awaiting_password") {
-      const password = String(input.password ?? "").trim() || secrets.mailboxPassword.trim();
+      const password = String(input.password ?? "").trim() || gmailUiPassword || secrets.mailboxPassword.trim();
       if (password) {
         const filled = await fillVisibleField(handle.page, ['input[type="password"]', 'input[name="Passwd"]'], password);
         if (filled) {

@@ -1334,15 +1334,22 @@ export default function NetworkClient({
   }, [brand.domains]);
 
   useEffect(() => {
-    if (!gmailVerifyOpen || !gmailVerifyAccountId) return;
+    if (!gmailVerifyOpen || !gmailVerifyAccountId || !gmailVerifySession) return;
     if (gmailVerifySession?.loginState === "ready") return;
+    if (gmailVerifySubmitting || gmailVerifyLoading) return;
     const interval = window.setInterval(() => {
       void refreshGmailVerifySession(gmailVerifyAccountId);
     }, 3000);
     return () => {
       window.clearInterval(interval);
     };
-  }, [gmailVerifyAccountId, gmailVerifyOpen, gmailVerifySession?.loginState]);
+  }, [
+    gmailVerifyAccountId,
+    gmailVerifyLoading,
+    gmailVerifyOpen,
+    gmailVerifySession?.loginState,
+    gmailVerifySubmitting,
+  ]);
 
   async function loadSenderProvisioningModal() {
     setSenderModalLoading(true);
@@ -1413,6 +1420,7 @@ export default function NetworkClient({
     try {
       const snapshot = await getOutreachGmailUiSession(accountId);
       setGmailVerifySession(snapshot);
+      setGmailVerifyError("");
     } catch (err) {
       setGmailVerifyError(err instanceof Error ? err.message : "Failed to refresh Gmail verification state.");
     }
@@ -2108,7 +2116,11 @@ export default function NetworkClient({
           <Button
             type="button"
             variant="outline"
-            onClick={() => void refreshGmailVerifySession(gmailVerifyAccountId)}
+            onClick={() =>
+              void (gmailVerifySession
+                ? refreshGmailVerifySession(gmailVerifyAccountId)
+                : startGmailVerifySession(gmailVerifyAccountId))
+            }
             disabled={gmailVerifyLoading || gmailVerifySubmitting || !gmailVerifyAccountId}
           >
             Refresh status

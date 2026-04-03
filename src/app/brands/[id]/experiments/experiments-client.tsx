@@ -621,9 +621,9 @@ export default function ExperimentsClient({
 
       <SettingsModal
         open={suggestionsOpen}
-        title="Suggested experiments"
-        description="Pick a strong idea and jump straight into the experiment instead of starting from scratch."
-        panelClassName="max-w-6xl"
+        title="Experiment lab"
+        description="Pressure-test experiment ideas or outreach-flow angles before you build from scratch."
+        panelClassName="max-w-7xl"
         bodyClassName="p-0"
         onOpenChange={setSuggestionsOpen}
       >

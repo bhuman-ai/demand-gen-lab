@@ -18,6 +18,9 @@ import type {
   ExperimentSuggestionGenerationResult,
   ExperimentSuggestionRecord,
   ExperimentSuggestionStreamEvent,
+  OutreachFlowTournamentInput,
+  OutreachFlowTournamentResult,
+  OutreachFlowTournamentStreamEvent,
   Hypothesis,
   InboxEvalRun,
   InboxEvalScenario,
@@ -358,6 +361,106 @@ export async function dismissExperimentSuggestion(brandId: string, suggestionId:
   );
   const data = await readJson(response);
   return data.suggestion as ExperimentSuggestionRecord;
+}
+
+export async function generateOutreachFlowTournamentApi(
+  brandId: string,
+  input: OutreachFlowTournamentInput
+) {
+  const response = await fetch(`/api/brands/${brandId}/experiments/outreach-flow`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  const data = await readJson(response);
+  return data.result as OutreachFlowTournamentResult;
+}
+
+export async function streamOutreachFlowTournamentApi(
+  brandId: string,
+  input: OutreachFlowTournamentInput & {
+    signal?: AbortSignal;
+    onEvent: (event: OutreachFlowTournamentStreamEvent) => void;
+  }
+) {
+  const response = await fetch(`/api/brands/${brandId}/experiments/outreach-flow/stream`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
+    body: JSON.stringify(input),
+    signal: input.signal,
+  });
+
+  if (!response.ok) {
+    let message = "Failed to stream outreach flows";
+    try {
+      const payload = (await response.json()) as Record<string, unknown>;
+      if (typeof payload.error === "string" && payload.error.trim()) {
+        message = payload.error;
+      }
+    } catch {
+      const text = await response.text().catch(() => "");
+      if (text.trim()) {
+        message = text.slice(0, 240);
+      }
+    }
+    throw new Error(message);
+  }
+
+  if (!response.body) {
+    throw new Error("Outreach-flow stream is unavailable");
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let doneResult: OutreachFlowTournamentResult | null = null;
+  let streamError = "";
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+    const parts = buffer.split("\n\n");
+    buffer = parts.pop() ?? "";
+
+    for (const part of parts) {
+      const parsed = parseEventStreamChunk(part);
+      if (!parsed) continue;
+      const event = parsed as OutreachFlowTournamentStreamEvent;
+      input.onEvent(event);
+      if (event.type === "done") {
+        doneResult = event.result;
+      }
+      if (event.type === "error") {
+        streamError = event.message || "Outreach-flow tournament failed";
+      }
+    }
+  }
+
+  if (buffer.trim()) {
+    const parsed = parseEventStreamChunk(buffer);
+    if (parsed) {
+      const event = parsed as OutreachFlowTournamentStreamEvent;
+      input.onEvent(event);
+      if (event.type === "done") {
+        doneResult = event.result;
+      }
+      if (event.type === "error") {
+        streamError = event.message || "Outreach-flow tournament failed";
+      }
+    }
+  }
+
+  if (streamError) {
+    throw new Error(streamError);
+  }
+
+  if (!doneResult) {
+    throw new Error("Outreach-flow tournament finished without a result");
+  }
+
+  return doneResult;
 }
 
 export async function fetchExperiment(brandId: string, experimentId: string) {

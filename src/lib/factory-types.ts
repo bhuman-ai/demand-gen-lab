@@ -280,6 +280,127 @@ export type ExperimentSuggestionStreamEvent =
       debug?: Record<string, unknown>;
     };
 
+export type OutreachFlowTournamentInput = {
+  target: string;
+  desiredOutcome: string;
+  offer?: string;
+  channel?: string;
+  availablePersonas?: string[];
+  availableAssets?: string[];
+  constraints?: string[];
+  qualityBar?: string[];
+  maxTurnsBeforeCTA?: number;
+  agentCount?: number;
+  ideasPerAgent?: number;
+};
+
+export type OutreachFlowTournamentBranch = {
+  branch: string;
+  targetReply: string;
+  response: string;
+  goal: string;
+};
+
+export type OutreachFlowTournamentIdea = {
+  title: string;
+  persona: string;
+  entryVehicle: string;
+  whyReply: string;
+  whyNow: string;
+  personaProof: string[];
+  assetBurdenLevel: "low" | "medium" | "high";
+  suspicionRiskLevel: "low" | "medium" | "high";
+  openerSubject: string;
+  openerBody: string;
+  branches: OutreachFlowTournamentBranch[];
+  bridgeMoment: string;
+  handoffPlan: string;
+  cta: string;
+  rationale: string;
+};
+
+export type OutreachFlowTournamentTurn = {
+  agentId: string;
+  agentName: string;
+  agentStyle: string;
+  brief: string;
+  ideas: OutreachFlowTournamentIdea[];
+  acceptedTitles: string[];
+};
+
+export type OutreachFlowTournamentCandidate = {
+  index: number;
+  title: string;
+  persona: string;
+  entryVehicle: string;
+  whyReply: string;
+  whyNow: string;
+  personaProof: string[];
+  openerSubject: string;
+  openerBody: string;
+  branches: OutreachFlowTournamentBranch[];
+  bridgeMoment: string;
+  handoffPlan: string;
+  cta: string;
+  rationale: string;
+  score: number;
+  replyLikelihood: number;
+  personaCredibility: number;
+  bridgeQuality: number;
+  assetFeasibility: number;
+  suspicionRisk: number;
+  decision: "promote" | "revise" | "reject";
+  summary: string;
+  strengths: string[];
+  risks: string[];
+  accepted: boolean;
+  rank: number;
+};
+
+export type OutreachFlowTournamentShortlistItem = {
+  index: number;
+  title: string;
+  category: string;
+  pitch: string;
+  note: string;
+};
+
+export type OutreachFlowTournamentSnapshot = {
+  agents: number;
+  ideas: number;
+  accepted: number;
+  denied: number;
+};
+
+export type OutreachFlowTournamentResult = {
+  shortlist: OutreachFlowTournamentShortlistItem[];
+  pressureSummary: string;
+  strongestUsefulDenial: string;
+  snapshot: OutreachFlowTournamentSnapshot;
+  turns: OutreachFlowTournamentTurn[];
+  allCandidates: OutreachFlowTournamentCandidate[];
+};
+
+export type OutreachFlowTournamentStreamEvent =
+  | {
+      type: "start";
+      requestedAgents: number;
+      ideasPerAgent: number;
+      phase: "launching";
+      phaseLabel: string;
+      progress: number;
+    }
+  | {
+      type: "done";
+      result: OutreachFlowTournamentResult;
+    }
+  | {
+      type: "error";
+      message: string;
+      hint?: string;
+      debug?: Record<string, unknown>;
+    };
+
 export type ScaleCampaignStatus =
   | "draft"
   | "active"

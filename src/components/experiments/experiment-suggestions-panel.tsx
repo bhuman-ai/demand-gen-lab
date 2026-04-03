@@ -26,6 +26,7 @@ import type {
   ExperimentSuggestionReviewCandidate,
   ExperimentSuggestionStreamEvent,
 } from "@/lib/factory-types";
+import OutreachFlowSuggestionsPanel from "@/components/experiments/outreach-flow-suggestions-panel";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 
@@ -319,6 +320,7 @@ function upsertTurn(
 export default function ExperimentSuggestionsPanel({ brandId }: { brandId: string }) {
   const router = useRouter();
   const streamControllerRef = useRef<AbortController | null>(null);
+  const [activeTab, setActiveTab] = useState<"experiments" | "outreach">("experiments");
   const [suggestions, setSuggestions] = useState<ExperimentSuggestionRecord[]>([]);
   const [bootstrapping, setBootstrapping] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -502,6 +504,54 @@ export default function ExperimentSuggestionsPanel({ brandId }: { brandId: strin
 
   return (
     <div className="space-y-4 p-4 md:p-6">
+      <section className="rounded-[18px] border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-4 py-4 md:px-5">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+          <div className="space-y-1">
+            <p className="text-[11px] font-medium uppercase tracking-[0.22em] text-[color:var(--muted-foreground)]">
+              Brainstorm lab
+            </p>
+            <h3 className="text-base font-semibold text-[color:var(--foreground)]">
+              Choose the lane you want to pressure-test.
+            </h3>
+            <p className="max-w-3xl text-sm leading-6 text-[color:var(--muted-foreground)]">
+              Keep the live experiment idea bank, or switch to outreach-flow tournaments when you
+              need a reply-first conversational path before you build anything.
+            </p>
+          </div>
+
+          <div className="inline-flex rounded-[14px] border border-[color:var(--border)] bg-[color:var(--surface)] p-1">
+            <button
+              type="button"
+              className={cn(
+                "rounded-[10px] px-3 py-2 text-sm font-medium transition-colors",
+                activeTab === "experiments"
+                  ? "bg-[color:var(--accent)] text-[color:var(--accent-foreground)]"
+                  : "text-[color:var(--muted-foreground)] hover:text-[color:var(--foreground)]"
+              )}
+              onClick={() => setActiveTab("experiments")}
+            >
+              Experiment ideas
+            </button>
+            <button
+              type="button"
+              className={cn(
+                "rounded-[10px] px-3 py-2 text-sm font-medium transition-colors",
+                activeTab === "outreach"
+                  ? "bg-[color:var(--accent)] text-[color:var(--accent-foreground)]"
+                  : "text-[color:var(--muted-foreground)] hover:text-[color:var(--foreground)]"
+              )}
+              onClick={() => setActiveTab("outreach")}
+            >
+              Outreach flows
+            </button>
+          </div>
+        </div>
+      </section>
+
+      {activeTab === "outreach" ? (
+        <OutreachFlowSuggestionsPanel brandId={brandId} />
+      ) : (
+        <>
       <section className="rounded-[18px] border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-4 py-4 md:px-5">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
           <div className="space-y-1">
@@ -1074,6 +1124,8 @@ export default function ExperimentSuggestionsPanel({ brandId }: { brandId: strin
             </Button>
           </div>
         </section>
+      )}
+        </>
       )}
     </div>
   );

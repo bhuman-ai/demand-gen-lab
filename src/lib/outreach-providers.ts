@@ -2551,22 +2551,30 @@ export async function testOutreachProviders(
         customerIoDetail = detailParts.join(" · ");
       }
     } else if (supportsGmailUiDelivery(account)) {
-      const userDataDir = resolveGmailUiUserDataDir({
-        profileRoot: String(process.env.GMAIL_UI_PROFILE_ROOT ?? "").trim(),
-        existingUserDataDir: account.config.mailbox.gmailUiUserDataDir,
-        email: getOutreachAccountFromEmail(account),
-      }).userDataDir;
-      const validation = await validateGmailUiMailboxConfig({
-        userDataDir,
-        browserChannel: account.config.mailbox.gmailUiBrowserChannel,
-      });
       const loginReady = getOutreachGmailUiLoginState(account) === "ready";
-      customerIoPass = validation.ok && loginReady;
-      customerIoDetail = validation.ok
-        ? loginReady
-          ? validation.message
-          : "Gmail UI profile exists, but Gmail is not logged in yet."
-        : validation.message;
+      const loginMessage = String(account.config.mailbox.gmailUiLoginMessage ?? "").trim();
+      if (process.env.VERCEL) {
+        customerIoPass = loginReady;
+        customerIoDetail = loginReady
+          ? loginMessage || "Gmail UI inbox is ready on the worker."
+          : loginMessage || "Gmail UI login is still required on the worker.";
+      } else {
+        const userDataDir = resolveGmailUiUserDataDir({
+          profileRoot: String(process.env.GMAIL_UI_PROFILE_ROOT ?? "").trim(),
+          existingUserDataDir: account.config.mailbox.gmailUiUserDataDir,
+          email: getOutreachAccountFromEmail(account),
+        }).userDataDir;
+        const validation = await validateGmailUiMailboxConfig({
+          userDataDir,
+          browserChannel: account.config.mailbox.gmailUiBrowserChannel,
+        });
+        customerIoPass = validation.ok && loginReady;
+        customerIoDetail = validation.ok
+          ? loginReady
+            ? loginMessage || validation.message
+            : loginMessage || "Gmail UI profile exists, but Gmail is not logged in yet."
+          : validation.message;
+      }
     } else {
       try {
         const transport = nodemailer.createTransport({

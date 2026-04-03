@@ -642,6 +642,16 @@ function senderActionPlan(
   const gmailUiLoginState = mailboxConfig
     ? String(mailboxConfig.gmailUiLoginState ?? mailboxConfig.gmail_ui_login_state ?? "").trim()
     : "";
+  const canVerifyViaGmailUi =
+    Boolean(
+      account &&
+        account.provider === "mailpool" &&
+        account.accountType !== "mailbox" &&
+        String(account.config.mailpool.mailboxType ?? "").trim().toLowerCase() === "google" &&
+        !isMonitorInboxIssue(row) &&
+        row.fromEmail &&
+        row.dnsStatus === "verified"
+    );
   if (provisioning) {
     return {
       kind: "refresh_mailpool",
@@ -657,18 +667,14 @@ function senderActionPlan(
     };
   }
   if (
-    account &&
-    account.provider === "mailpool" &&
-    !isMonitorInboxIssue(row) &&
-    (deliveryMethod === "gmail_ui" || !deliveryMethod) &&
-    gmailUiLoginState !== "ready" &&
-    row.fromEmail &&
-    row.dnsStatus === "verified"
+    canVerifyViaGmailUi &&
+    (deliveryMethod === "gmail_ui" || deliveryMethod === "smtp" || !deliveryMethod) &&
+    gmailUiLoginState !== "ready"
   ) {
     return {
       kind: "verify_gmail_ui",
       label: "Verify sender",
-      description: "Open the Gmail verification panel with the current password and auth code.",
+      description: "Open Google sign-in here and finish verification for this sender.",
     };
   }
   if (row.provider === "mailpool" && row.dnsStatus !== "verified") {
@@ -700,18 +706,11 @@ function senderActionPlan(
     };
   }
   if (status === "fix" || health === "problem") {
-    if (
-      account &&
-      account.provider === "mailpool" &&
-      !isMonitorInboxIssue(row) &&
-      row.fromEmail &&
-      row.dnsStatus === "verified"
-    ) {
+    if (canVerifyViaGmailUi) {
       return {
         kind: "verify_gmail_ui",
         label: "Verify sender",
-        description:
-          "Open the Gmail verification panel. If login is already done, re-check the sender from there.",
+        description: "Open Google sign-in here. If login is already done, finish the sender check from this panel.",
       };
     }
     return {
@@ -1494,7 +1493,9 @@ export default function NetworkClient({
         Boolean(row.fromEmail) &&
         row.dnsStatus === "verified" &&
         !isMonitorInboxIssue(row) &&
-        resolvedDeliveryAccount?.provider === "mailpool";
+        resolvedDeliveryAccount?.provider === "mailpool" &&
+        resolvedDeliveryAccount.accountType !== "mailbox" &&
+        String(resolvedDeliveryAccount.config.mailpool.mailboxType ?? "").trim().toLowerCase() === "google";
 
       if ((action.kind === "verify_gmail_ui" || action.kind === "open_settings") && canOpenGmailVerify) {
         if (!resolvedDeliveryAccountId) {
@@ -1506,12 +1507,7 @@ export default function NetworkClient({
       }
 
       if (action.kind === "verify_gmail_ui") {
-        if (!resolvedDeliveryAccountId) {
-          throw new Error("This Gmail UI sender is missing its delivery account link.");
-        }
-        openGmailVerifyModal(row, resolvedDeliveryAccountId);
-        updateSenderActionState(row.id, { pending: false, success: "" });
-        return;
+        throw new Error("This sender needs a Google-backed Mailpool inbox before it can use the Gmail verify flow.");
       }
 
       if (action.kind === "open_setup") {

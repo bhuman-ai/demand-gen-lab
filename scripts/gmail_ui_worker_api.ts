@@ -520,15 +520,79 @@ async function loadAccountBundle(accountId: string, refreshMailpoolCredentials =
   return { account, secrets, gmailUiPassword, gmailUiAuthCode };
 }
 
+async function ensureGmailUiDeliveryAccount(account: any) {
+  const { updateOutreachAccount } = await import("@/lib/outreach-data");
+  const { normalizeGmailUiLoginStatus } = await import("@/lib/gmail-ui-login");
+  const { getOutreachAccountFromEmail } = await import("@/lib/outreach-account-helpers");
+  const { resolveGmailUiUserDataDir } = await import("@/lib/gmail-ui-profile");
+
+  const deliveryMethod = String(account.config.mailbox.deliveryMethod ?? "").trim();
+  const fromEmail = getOutreachAccountFromEmail(account).trim().toLowerCase();
+  const isEligibleMailpoolGoogleSender =
+    account.provider === "mailpool" &&
+    account.accountType !== "mailbox" &&
+    String(account.config.mailpool.mailboxType ?? "").trim().toLowerCase() === "google" &&
+    Boolean(fromEmail);
+
+  if (!isEligibleMailpoolGoogleSender && deliveryMethod !== "gmail_ui") {
+    return account;
+  }
+
+  const existingUserDataDir = String(account.config.mailbox.gmailUiUserDataDir ?? "").trim();
+  const { userDataDir, rehomedProfile } = resolveGmailUiUserDataDir({
+    profileRoot: String(process.env.GMAIL_UI_PROFILE_ROOT ?? "").trim(),
+    existingUserDataDir,
+    email: fromEmail,
+  });
+  if (!userDataDir) {
+    throw new Error(`gmailUiUserDataDir missing for ${account.id}.`);
+  }
+
+  const needsPromotion = deliveryMethod !== "gmail_ui";
+  const missingProfile = !existingUserDataDir;
+  if (!needsPromotion && !rehomedProfile && !missingProfile) {
+    return account;
+  }
+
+  const loginStatus = normalizeGmailUiLoginStatus({
+    deliveryMethod: "gmail_ui",
+    state: account.config.mailbox.gmailUiLoginState,
+    checkedAt: account.config.mailbox.gmailUiLoginCheckedAt,
+    message: account.config.mailbox.gmailUiLoginMessage,
+    forceLoginRequired: needsPromotion || rehomedProfile || missingProfile,
+  });
+
+  const updated = await updateOutreachAccount(account.id, {
+    config: {
+      mailbox: {
+        provider: "gmail",
+        deliveryMethod: "gmail_ui",
+        email: fromEmail,
+        status: account.config.mailpool.status === "active" ? "connected" : "disconnected",
+        gmailUiUserDataDir: userDataDir,
+        gmailUiProfileDirectory: String(account.config.mailbox.gmailUiProfileDirectory ?? "").trim(),
+        gmailUiBrowserChannel:
+          String(account.config.mailbox.gmailUiBrowserChannel ?? "chrome").trim() || "chrome",
+        gmailUiLoginState: loginStatus.gmailUiLoginState,
+        gmailUiLoginCheckedAt: loginStatus.gmailUiLoginCheckedAt,
+        gmailUiLoginMessage: loginStatus.gmailUiLoginMessage,
+      },
+    },
+  });
+
+  return updated ?? account;
+}
+
 async function getOrCreateSession(accountId: string, input: AdvanceInput) {
   const existing = sessions.get(accountId);
   if (existing && !existing.page.isClosed()) {
     return existing;
   }
 
-  const { account } = await loadAccountBundle(accountId, input.refreshMailpoolCredentials !== false);
+  const bundle = await loadAccountBundle(accountId, input.refreshMailpoolCredentials !== false);
   const { getOutreachAccountFromEmail } = await import("@/lib/outreach-account-helpers");
   const { resolveGmailUiUserDataDir } = await import("@/lib/gmail-ui-profile");
+  const account = await ensureGmailUiDeliveryAccount(bundle.account);
 
   if (account.config.mailbox.deliveryMethod !== "gmail_ui") {
     throw new Error(`Account ${account.id} is not configured for gmail_ui delivery.`);
@@ -586,7 +650,7 @@ async function getOrCreateSession(accountId: string, input: AdvanceInput) {
 
 async function advanceSession(accountId: string, input: AdvanceInput = {}) {
   const handle = await getOrCreateSession(accountId, input);
-  const { account, secrets, gmailUiPassword } = await loadAccountBundle(
+  const { gmailUiPassword } = await loadAccountBundle(
     accountId,
     input.refreshMailpoolCredentials !== false
   );

@@ -17,6 +17,16 @@ import type {
   SocialDiscoveryStatus,
 } from "@/lib/social-discovery-types";
 
+function brandSummary(brand: Awaited<ReturnType<typeof getBrandById>>) {
+  return brand
+    ? {
+        id: brand.id,
+        name: brand.name,
+        socialDiscoveryPlatforms: brand.socialDiscoveryPlatforms,
+      }
+    : null;
+}
+
 function asRecord(value: unknown): Record<string, unknown> {
   if (value && typeof value === "object" && !Array.isArray(value)) {
     return value as Record<string, unknown>;
@@ -65,7 +75,7 @@ export async function GET(request: Request, context: { params: Promise<{ brandId
     listSocialDiscoveryRuns({ brandId, limit: 10 }),
   ]);
 
-  return NextResponse.json({ posts, runs });
+  return NextResponse.json({ brand: brandSummary(brand), posts, runs });
 }
 
 export async function POST(request: Request, context: { params: Promise<{ brandId: string }> }) {
@@ -96,7 +106,7 @@ export async function POST(request: Request, context: { params: Promise<{ brandI
   }
 
   const startedAt = new Date().toISOString();
-  const platforms = parseSocialDiscoveryPlatforms(body.platforms);
+  const platforms = parseSocialDiscoveryPlatforms(body.platforms ?? brand.socialDiscoveryPlatforms);
   const discovery = await discoverSocialPostsForBrand({
     brand,
     provider: normalizeProvider(body.provider),
@@ -120,6 +130,7 @@ export async function POST(request: Request, context: { params: Promise<{ brandI
   });
 
   return NextResponse.json({
+    brand: brandSummary(brand),
     run,
     posts: savedPosts,
     errors: discovery.errors,

@@ -543,6 +543,7 @@ export type BrandRecord = {
   tone: string;
   notes: string;
   product: string;
+  socialDiscoveryPlatforms: string[];
   targetMarkets: string[];
   idealCustomerProfiles: string[];
   keyFeatures: string[];

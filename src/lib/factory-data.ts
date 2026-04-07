@@ -1,5 +1,6 @@
 import { mkdir, readFile, writeFile } from "fs/promises";
 import { getSupabaseAdmin } from "./supabase-admin";
+import { DEFAULT_BRAND_SOCIAL_PLATFORMS } from "./social-platform-catalog";
 import type {
   BrandRecord,
   CampaignRecord,
@@ -49,6 +50,7 @@ const EMBEDDED_BRAND_FALLBACKS: BrandRecord[] = [
     tone: "",
     notes: "QA/testing brand workspace.",
     product: "",
+    socialDiscoveryPlatforms: [],
     targetMarkets: [],
     idealCustomerProfiles: [],
     keyFeatures: [],
@@ -67,6 +69,7 @@ const EMBEDDED_BRAND_FALLBACKS: BrandRecord[] = [
     notes:
       "Private collective for self-funded operators. Current outreach offer: AWS credits for founders with no institutional VC; angels and friends/family are acceptable. Use Marco Rosetti as the sender voice.",
     product: "Private operator collective with negotiated cloud and software deals for self-funded founders",
+    socialDiscoveryPlatforms: [],
     targetMarkets: ["Bootstrapped SaaS founders", "Self-funded operators"],
     idealCustomerProfiles: ["Founders with no institutional VC"],
     keyFeatures: [
@@ -92,6 +95,7 @@ const EMBEDDED_BRAND_FALLBACKS: BrandRecord[] = [
       "Claims: trusted by over 200,000 innovators; campaign metrics cited (2x opens, 7x click-throughs, 4x conversions) backed by customer campaign data; testimonials from Steve Anderson, Henry Reith, and Alasdair Sutherland praising ease of use and time savings.",
     product:
       "AI platform to create realistic personalized videos at scale (prompt-to-video generation and bulk personalization), with delivery and workflow automation via no-code tools and API.",
+    socialDiscoveryPlatforms: [],
     targetMarkets: [
       "B2B sales/outbound teams",
       "Marketing and growth teams",
@@ -137,6 +141,7 @@ const EMBEDDED_BRAND_FALLBACKS: BrandRecord[] = [
     tone: "",
     notes: "This is the user's art account. They want to do outreach to get new painting commissions.",
     product: "Painting commissions",
+    socialDiscoveryPlatforms: [],
     targetMarkets: [],
     idealCustomerProfiles: [],
     keyFeatures: [],
@@ -156,6 +161,7 @@ const EMBEDDED_BRAND_FALLBACKS: BrandRecord[] = [
       "Primary job: publish source-backed market notes and underlying prospect lists, then ask relevant agencies and operators for comment, corrections, and reactions. Priority themes right now: Shopify Meta/no-TikTok gaps, Klaviyo-without-SMS gaps, accounting automation gaps, and recently funded Europe GTM hiring gaps.",
     product:
       "Source-backed prospect discovery and market-note generation for overlooked B2B and e-commerce slices.",
+    socialDiscoveryPlatforms: [],
     targetMarkets: [
       "EU TikTok and paid-social agencies",
       "Email and SMS retention agencies",
@@ -194,6 +200,7 @@ const BRAND_BASE_SELECT = [
   "tone",
   "notes",
   "product",
+  "social_discovery_platforms",
   "target_markets",
   "ideal_customer_profiles",
   "key_features",
@@ -278,6 +285,9 @@ const mapBrandRow = (input: unknown): BrandRecord => {
     tone: String(row.tone ?? ""),
     notes: String(row.notes ?? ""),
     product: String(row.product ?? ""),
+    socialDiscoveryPlatforms: normalizeStringArray(
+      row.social_discovery_platforms ?? row.socialDiscoveryPlatforms ?? DEFAULT_BRAND_SOCIAL_PLATFORMS
+    ),
     targetMarkets: normalizeStringArray(row.target_markets ?? row.targetMarkets),
     idealCustomerProfiles: normalizeStringArray(
       row.ideal_customer_profiles ?? row.idealCustomerProfiles ?? row.target_buyers
@@ -460,6 +470,7 @@ export async function createBrand(input: {
   tone?: string;
   notes?: string;
   product?: string;
+  socialDiscoveryPlatforms?: string[];
   targetMarkets?: string[];
   idealCustomerProfiles?: string[];
   keyFeatures?: string[];
@@ -473,6 +484,7 @@ export async function createBrand(input: {
     tone: String(input.tone ?? "").trim(),
     notes: String(input.notes ?? "").trim(),
     product: String(input.product ?? "").trim(),
+    socialDiscoveryPlatforms: normalizeStringArray(input.socialDiscoveryPlatforms ?? DEFAULT_BRAND_SOCIAL_PLATFORMS),
     targetMarkets: normalizeStringArray(input.targetMarkets),
     idealCustomerProfiles: normalizeStringArray(input.idealCustomerProfiles),
     keyFeatures: normalizeStringArray(input.keyFeatures),
@@ -495,6 +507,7 @@ export async function createBrand(input: {
         tone: brand.tone,
         notes: brand.notes,
         product: brand.product,
+        social_discovery_platforms: brand.socialDiscoveryPlatforms,
         target_markets: brand.targetMarkets,
         ideal_customer_profiles: brand.idealCustomerProfiles,
         key_features: brand.keyFeatures,
@@ -526,6 +539,7 @@ export async function updateBrand(
       | "tone"
       | "notes"
       | "product"
+      | "socialDiscoveryPlatforms"
       | "targetMarkets"
       | "idealCustomerProfiles"
       | "keyFeatures"
@@ -544,6 +558,9 @@ export async function updateBrand(
     if (typeof patch.tone === "string") update.tone = patch.tone;
     if (typeof patch.notes === "string") update.notes = patch.notes;
     if (typeof patch.product === "string") update.product = patch.product;
+    if (Array.isArray(patch.socialDiscoveryPlatforms)) {
+      update.social_discovery_platforms = patch.socialDiscoveryPlatforms;
+    }
     if (Array.isArray(patch.targetMarkets)) update.target_markets = patch.targetMarkets;
     if (Array.isArray(patch.idealCustomerProfiles)) {
       update.ideal_customer_profiles = patch.idealCustomerProfiles;
@@ -567,14 +584,20 @@ export async function updateBrand(
   }
 
   const rows = await readJsonArray<BrandRecord>(BRANDS_PATH);
+  const existing = (await getBrandById(brandId, { includeEmbedded: true })) ?? rows.find((row) => row.id === brandId);
+  if (!existing) return null;
+
   const index = rows.findIndex((row) => row.id === brandId);
-  if (index < 0) return null;
   const next: BrandRecord = {
-    ...mapBrandRow(rows[index]),
+    ...mapBrandRow(existing),
     ...patch,
     updatedAt: nowIso(),
   };
-  rows[index] = next;
+  if (index < 0) {
+    rows.unshift(next);
+  } else {
+    rows[index] = next;
+  }
   await writeJsonArray(BRANDS_PATH, rows);
   return next;
 }

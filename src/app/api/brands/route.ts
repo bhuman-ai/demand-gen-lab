@@ -23,6 +23,7 @@ export async function POST(request: Request) {
   const tone = String(body?.tone ?? "").trim();
   const notes = String(body?.notes ?? body?.proof ?? "").trim();
   const product = String(body?.product ?? "").trim();
+  const socialDiscoveryPlatforms = normalizeStringArray(body?.socialDiscoveryPlatforms);
   const targetMarkets = normalizeStringArray(body?.targetMarkets);
   const idealCustomerProfiles = normalizeStringArray(body?.idealCustomerProfiles);
   const keyFeatures = normalizeStringArray(body?.keyFeatures);
@@ -41,6 +42,7 @@ export async function POST(request: Request) {
     tone,
     notes,
     product,
+    socialDiscoveryPlatforms,
     targetMarkets,
     idealCustomerProfiles,
     keyFeatures,

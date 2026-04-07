@@ -172,6 +172,9 @@ export async function PATCH(request: Request, context: { params: Promise<{ brand
   if (typeof body.notes === "string") patch.notes = body.notes.trim();
   if (typeof body.proof === "string") patch.notes = body.proof.trim();
   if (typeof body.product === "string") patch.product = body.product.trim();
+  if (Array.isArray(body.socialDiscoveryPlatforms)) {
+    patch.socialDiscoveryPlatforms = normalizeStringArray(body.socialDiscoveryPlatforms);
+  }
   if (Array.isArray(body.targetMarkets)) patch.targetMarkets = normalizeStringArray(body.targetMarkets);
   if (Array.isArray(body.idealCustomerProfiles)) {
     patch.idealCustomerProfiles = normalizeStringArray(body.idealCustomerProfiles);

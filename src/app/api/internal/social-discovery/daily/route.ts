@@ -94,9 +94,8 @@ async function handleDailySocialDiscovery(request: Request) {
   const provider = normalizeProvider(
     body.provider ?? url.searchParams.get("provider") ?? process.env.SOCIAL_DISCOVERY_PROVIDER
   );
-  const platforms = parseSocialDiscoveryPlatforms(
-    body.platforms ?? url.searchParams.get("platforms") ?? process.env.SOCIAL_DISCOVERY_PLATFORMS
-  );
+  const platformInput =
+    body.platforms ?? url.searchParams.get("platforms") ?? process.env.SOCIAL_DISCOVERY_PLATFORMS;
   const extraTerms = splitCsv(
     body.extraTerms ?? body.terms ?? url.searchParams.get("terms") ?? process.env.SOCIAL_DISCOVERY_EXTRA_TERMS
   );
@@ -118,6 +117,7 @@ async function handleDailySocialDiscovery(request: Request) {
 
   const results = [];
   for (const brand of brands) {
+    const platforms = parseSocialDiscoveryPlatforms(platformInput ?? brand.socialDiscoveryPlatforms);
     const startedAt = new Date().toISOString();
     const discovery = await discoverSocialPostsForBrand({
       brand,
@@ -175,7 +175,7 @@ async function handleDailySocialDiscovery(request: Request) {
     ok: true,
     brandsScanned: results.length,
     provider,
-    platforms,
+    platforms: platformInput ? parseSocialDiscoveryPlatforms(platformInput) : [],
     results,
   });
 }

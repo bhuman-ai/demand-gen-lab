@@ -9,6 +9,7 @@ import {
   Inbox,
   Mail,
   Network,
+  Radar,
   Settings,
   Sparkles,
   TestTubeDiagonal,
@@ -33,7 +34,7 @@ type NavItem = {
 };
 
 type MainNavItem = NavItem & {
-  id: "experiments" | "campaigns" | "network" | "leads" | "inbox";
+  id: "experiments" | "campaigns" | "network" | "leads" | "inbox" | "social-discovery";
 };
 
 const CHROMELESS_ROUTES = new Set(["/autoads", "/google-ads-review"]);
@@ -211,6 +212,12 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
       { id: "network", label: "Senders", href: hasActiveBrand ? `${brandRoot}/network` : "/brands", icon: Network },
       { id: "leads", label: "Leads", href: hasActiveBrand ? `${brandRoot}/leads` : "/brands", icon: Mail },
       { id: "inbox", label: "Inbox", href: hasActiveBrand ? `${brandRoot}/inbox` : "/brands", icon: Inbox },
+      {
+        id: "social-discovery",
+        label: "Social",
+        href: hasActiveBrand ? `${brandRoot}/social-discovery` : "/brands",
+        icon: Radar,
+      },
     ],
     [brandRoot, hasActiveBrand]
   );
@@ -222,6 +229,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
       if (pathname === `${brandRoot}/network` || pathname.startsWith(`${brandRoot}/network/`)) return "network";
       if (pathname === `${brandRoot}/leads` || pathname.startsWith(`${brandRoot}/leads/`)) return "leads";
       if (pathname === `${brandRoot}/inbox` || pathname.startsWith(`${brandRoot}/inbox/`)) return "inbox";
+      if (pathname === `${brandRoot}/social-discovery` || pathname.startsWith(`${brandRoot}/social-discovery/`)) return "social-discovery";
     }
     return "";
   }, [pathname, brandRoot, hasActiveBrand]);

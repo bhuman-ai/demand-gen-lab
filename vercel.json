@@ -4,6 +4,10 @@
     {
       "path": "/api/internal/outreach/tick",
       "schedule": "* * * * *"
+    },
+    {
+      "path": "/api/internal/social-discovery/daily",
+      "schedule": "0 6 * * *"
     }
   ]
 }

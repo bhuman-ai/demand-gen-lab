@@ -1,6 +1,5 @@
 import { mkdir, readFile, writeFile } from "fs/promises";
 import { getSupabaseAdmin } from "./supabase-admin";
-import { DEFAULT_BRAND_SOCIAL_PLATFORMS } from "./social-platform-catalog";
 import type {
   BrandRecord,
   CampaignRecord,
@@ -51,6 +50,8 @@ const EMBEDDED_BRAND_FALLBACKS: BrandRecord[] = [
     notes: "QA/testing brand workspace.",
     product: "",
     socialDiscoveryPlatforms: [],
+    operablePersonas: [],
+    availableAssets: [],
     targetMarkets: [],
     idealCustomerProfiles: [],
     keyFeatures: [],
@@ -70,6 +71,8 @@ const EMBEDDED_BRAND_FALLBACKS: BrandRecord[] = [
       "Private collective for self-funded operators. Current outreach offer: AWS credits for founders with no institutional VC; angels and friends/family are acceptable. Use Marco Rosetti as the sender voice.",
     product: "Private operator collective with negotiated cloud and software deals for self-funded founders",
     socialDiscoveryPlatforms: [],
+    operablePersonas: [],
+    availableAssets: [],
     targetMarkets: ["Bootstrapped SaaS founders", "Self-funded operators"],
     idealCustomerProfiles: ["Founders with no institutional VC"],
     keyFeatures: [
@@ -96,6 +99,17 @@ const EMBEDDED_BRAND_FALLBACKS: BrandRecord[] = [
     product:
       "AI platform to create realistic personalized videos at scale (prompt-to-video generation and bulk personalization), with delivery and workflow automation via no-code tools and API.",
     socialDiscoveryPlatforms: [],
+    operablePersonas: [
+      "Journalist covering creator workflows and AI video",
+      "Research lead interviewing creators about personalized video use",
+      "Founder inviting selected creators to test personalized video generation",
+    ],
+    availableAssets: [
+      "Article or interview series featuring creators",
+      "Founder interview access",
+      "Trial accounts for selected creators to test the product",
+      "Published coverage and follow-up visibility around featured creators",
+    ],
     targetMarkets: [
       "B2B sales/outbound teams",
       "Marketing and growth teams",
@@ -142,6 +156,8 @@ const EMBEDDED_BRAND_FALLBACKS: BrandRecord[] = [
     notes: "This is the user's art account. They want to do outreach to get new painting commissions.",
     product: "Painting commissions",
     socialDiscoveryPlatforms: [],
+    operablePersonas: [],
+    availableAssets: [],
     targetMarkets: [],
     idealCustomerProfiles: [],
     keyFeatures: [],
@@ -158,10 +174,12 @@ const EMBEDDED_BRAND_FALLBACKS: BrandRecord[] = [
     website: "https://www.enrichanything.com/",
     tone: "Direct, operator-to-operator, research-led",
     notes:
-      "Primary job: publish source-backed market notes and underlying prospect lists, then ask relevant agencies and operators for comment, corrections, and reactions. Priority themes right now: Shopify Meta/no-TikTok gaps, Klaviyo-without-SMS gaps, accounting automation gaps, and recently funded Europe GTM hiring gaps.",
+      "Primary job: publish source-backed market notes and underlying prospect lists, then ask relevant agencies and operators for comment, corrections, and reactions.",
     product:
       "Source-backed prospect discovery and market-note generation for overlooked B2B and e-commerce slices.",
     socialDiscoveryPlatforms: [],
+    operablePersonas: [],
+    availableAssets: [],
     targetMarkets: [
       "EU TikTok and paid-social agencies",
       "Email and SMS retention agencies",
@@ -193,7 +211,7 @@ const EMBEDDED_BRAND_FALLBACKS: BrandRecord[] = [
 
 const BRAND_TABLE = "demanddev_brands";
 const CAMPAIGN_TABLE = "demanddev_campaigns";
-const BRAND_BASE_SELECT = [
+const BRAND_SELECT_COLUMNS = [
   "id",
   "name",
   "website",
@@ -201,6 +219,8 @@ const BRAND_BASE_SELECT = [
   "notes",
   "product",
   "social_discovery_platforms",
+  "operable_personas",
+  "available_assets",
   "target_markets",
   "ideal_customer_profiles",
   "key_features",
@@ -208,8 +228,21 @@ const BRAND_BASE_SELECT = [
   "domains",
   "created_at",
   "updated_at",
+] as const;
+const OPTIONAL_BRAND_COLUMNS = [
+  "social_discovery_platforms",
+  "operable_personas",
+  "available_assets",
+] as const;
+const LEGACY_BRAND_SELECT_COLUMNS = BRAND_SELECT_COLUMNS.filter(
+  (column) => !OPTIONAL_BRAND_COLUMNS.includes(column as (typeof OPTIONAL_BRAND_COLUMNS)[number])
+);
+const BRAND_BASE_SELECT = [
+  ...BRAND_SELECT_COLUMNS,
 ].join(",");
+const LEGACY_BRAND_BASE_SELECT = [...LEGACY_BRAND_SELECT_COLUMNS].join(",");
 const BRAND_EMBEDDED_SELECT = `${BRAND_BASE_SELECT},leads,inbox`;
+const LEGACY_BRAND_EMBEDDED_SELECT = `${LEGACY_BRAND_BASE_SELECT},leads,inbox`;
 
 const nowIso = () => new Date().toISOString();
 
@@ -276,6 +309,21 @@ const normalizeStringArray = (value: unknown): string[] => {
   return [];
 };
 
+function supabaseErrorMessage(error: unknown) {
+  if (!error || typeof error !== "object") return "";
+  return String((error as { message?: unknown }).message ?? "").trim();
+}
+
+function isMissingSupabaseColumn(error: unknown, column: string) {
+  const message = supabaseErrorMessage(error).toLowerCase();
+  const normalizedColumn = column.toLowerCase();
+  return (
+    message.includes(`could not find the '${normalizedColumn}' column`) ||
+    message.includes(`.${normalizedColumn} does not exist`) ||
+    message.includes(`column ${normalizedColumn} does not exist`)
+  );
+}
+
 const mapBrandRow = (input: unknown): BrandRecord => {
   const row = asRecord(input);
   return {
@@ -286,7 +334,13 @@ const mapBrandRow = (input: unknown): BrandRecord => {
     notes: String(row.notes ?? ""),
     product: String(row.product ?? ""),
     socialDiscoveryPlatforms: normalizeStringArray(
-      row.social_discovery_platforms ?? row.socialDiscoveryPlatforms ?? DEFAULT_BRAND_SOCIAL_PLATFORMS
+      row.social_discovery_platforms ?? row.socialDiscoveryPlatforms ?? []
+    ),
+    operablePersonas: normalizeStringArray(
+      row.operable_personas ?? row.operablePersonas ?? row.real_personas ?? row.realPersonas
+    ),
+    availableAssets: normalizeStringArray(
+      row.available_assets ?? row.availableAssets ?? row.real_assets ?? row.realAssets
     ),
     targetMarkets: normalizeStringArray(row.target_markets ?? row.targetMarkets),
     idealCustomerProfiles: normalizeStringArray(
@@ -419,16 +473,27 @@ export async function listBrandsWithOptions(options?: {
   includeEmbedded?: boolean;
 }): Promise<BrandRecord[]> {
   const selectColumns = options?.includeEmbedded ? BRAND_EMBEDDED_SELECT : BRAND_BASE_SELECT;
+  const legacySelectColumns = options?.includeEmbedded ? LEGACY_BRAND_EMBEDDED_SELECT : LEGACY_BRAND_BASE_SELECT;
   const local = await readBrandRowsFromStore();
   const supabase = getSupabaseAdmin();
   if (supabase) {
-    const response = (await withTimeout(
+    let response = (await withTimeout(
       supabase
         .from(BRAND_TABLE)
         .select(selectColumns)
         .order("updated_at", { ascending: false }),
       SUPABASE_QUERY_TIMEOUT_MS
     )) as { data: unknown[] | null; error: unknown | null } | null;
+    const responseError = response?.error;
+    if (responseError && OPTIONAL_BRAND_COLUMNS.some((column) => isMissingSupabaseColumn(responseError, column))) {
+      response = (await withTimeout(
+        supabase
+          .from(BRAND_TABLE)
+          .select(legacySelectColumns)
+          .order("updated_at", { ascending: false }),
+        SUPABASE_QUERY_TIMEOUT_MS
+      )) as { data: unknown[] | null; error: unknown | null } | null;
+    }
     if (response && !response.error) {
       return mergeBrandStores(
         (response.data ?? []).map((row) => mapBrandRow(row)),
@@ -446,10 +511,11 @@ export async function getBrandById(
   }
 ): Promise<BrandRecord | null> {
   const selectColumns = options?.includeEmbedded ? BRAND_EMBEDDED_SELECT : BRAND_BASE_SELECT;
+  const legacySelectColumns = options?.includeEmbedded ? LEGACY_BRAND_EMBEDDED_SELECT : LEGACY_BRAND_BASE_SELECT;
   const local = await readBrandRowsFromStore();
   const supabase = getSupabaseAdmin();
   if (supabase) {
-    const response = (await withTimeout(
+    let response = (await withTimeout(
       supabase
         .from(BRAND_TABLE)
         .select(selectColumns)
@@ -457,6 +523,17 @@ export async function getBrandById(
         .maybeSingle(),
       SUPABASE_QUERY_TIMEOUT_MS
     )) as { data: unknown | null; error: unknown | null } | null;
+    const responseError = response?.error;
+    if (responseError && OPTIONAL_BRAND_COLUMNS.some((column) => isMissingSupabaseColumn(responseError, column))) {
+      response = (await withTimeout(
+        supabase
+          .from(BRAND_TABLE)
+          .select(legacySelectColumns)
+          .eq("id", brandId)
+          .maybeSingle(),
+        SUPABASE_QUERY_TIMEOUT_MS
+      )) as { data: unknown | null; error: unknown | null } | null;
+    }
     if (response && !response.error && response.data) {
       return mapBrandRow(response.data);
     }
@@ -471,6 +548,8 @@ export async function createBrand(input: {
   notes?: string;
   product?: string;
   socialDiscoveryPlatforms?: string[];
+  operablePersonas?: string[];
+  availableAssets?: string[];
   targetMarkets?: string[];
   idealCustomerProfiles?: string[];
   keyFeatures?: string[];
@@ -484,7 +563,9 @@ export async function createBrand(input: {
     tone: String(input.tone ?? "").trim(),
     notes: String(input.notes ?? "").trim(),
     product: String(input.product ?? "").trim(),
-    socialDiscoveryPlatforms: normalizeStringArray(input.socialDiscoveryPlatforms ?? DEFAULT_BRAND_SOCIAL_PLATFORMS),
+    socialDiscoveryPlatforms: normalizeStringArray(input.socialDiscoveryPlatforms ?? []),
+    operablePersonas: normalizeStringArray(input.operablePersonas),
+    availableAssets: normalizeStringArray(input.availableAssets),
     targetMarkets: normalizeStringArray(input.targetMarkets),
     idealCustomerProfiles: normalizeStringArray(input.idealCustomerProfiles),
     keyFeatures: normalizeStringArray(input.keyFeatures),
@@ -498,28 +579,48 @@ export async function createBrand(input: {
 
   const supabase = getSupabaseAdmin();
   if (supabase) {
-    const { data, error } = await supabase
+    const insertPayload = {
+      id: brand.id,
+      name: brand.name,
+      website: brand.website,
+      tone: brand.tone,
+      notes: brand.notes,
+      product: brand.product,
+      social_discovery_platforms: brand.socialDiscoveryPlatforms,
+      operable_personas: brand.operablePersonas,
+      available_assets: brand.availableAssets,
+      target_markets: brand.targetMarkets,
+      ideal_customer_profiles: brand.idealCustomerProfiles,
+      key_features: brand.keyFeatures,
+      key_benefits: brand.keyBenefits,
+      domains: brand.domains,
+      leads: brand.leads,
+      inbox: brand.inbox,
+    };
+    let { data, error } = await supabase
       .from(BRAND_TABLE)
-      .insert({
-        id: brand.id,
-        name: brand.name,
-        website: brand.website,
-        tone: brand.tone,
-        notes: brand.notes,
-        product: brand.product,
-        social_discovery_platforms: brand.socialDiscoveryPlatforms,
-        target_markets: brand.targetMarkets,
-        ideal_customer_profiles: brand.idealCustomerProfiles,
-        key_features: brand.keyFeatures,
-        key_benefits: brand.keyBenefits,
-        domains: brand.domains,
-        leads: brand.leads,
-        inbox: brand.inbox,
-      })
+      .insert(insertPayload)
       .select("*")
       .single();
+    if (OPTIONAL_BRAND_COLUMNS.some((column) => isMissingSupabaseColumn(error, column))) {
+      const legacyInsertPayload: Record<string, unknown> = { ...insertPayload };
+      delete legacyInsertPayload.social_discovery_platforms;
+      delete legacyInsertPayload.operable_personas;
+      delete legacyInsertPayload.available_assets;
+      const retried = await supabase
+        .from(BRAND_TABLE)
+        .insert(legacyInsertPayload)
+        .select(LEGACY_BRAND_EMBEDDED_SELECT)
+        .single();
+      data = retried.data;
+      error = retried.error;
+    }
     if (!error && data) {
       return mapBrandRow(data);
+    }
+    if (isVercel) {
+      const detail = supabaseErrorMessage(error);
+      throw new Error(detail ? `Failed to persist brand in Supabase: ${detail}` : "Failed to persist brand in Supabase.");
     }
   }
 
@@ -540,6 +641,8 @@ export async function updateBrand(
       | "notes"
       | "product"
       | "socialDiscoveryPlatforms"
+      | "operablePersonas"
+      | "availableAssets"
       | "targetMarkets"
       | "idealCustomerProfiles"
       | "keyFeatures"
@@ -561,6 +664,8 @@ export async function updateBrand(
     if (Array.isArray(patch.socialDiscoveryPlatforms)) {
       update.social_discovery_platforms = patch.socialDiscoveryPlatforms;
     }
+    if (Array.isArray(patch.operablePersonas)) update.operable_personas = patch.operablePersonas;
+    if (Array.isArray(patch.availableAssets)) update.available_assets = patch.availableAssets;
     if (Array.isArray(patch.targetMarkets)) update.target_markets = patch.targetMarkets;
     if (Array.isArray(patch.idealCustomerProfiles)) {
       update.ideal_customer_profiles = patch.idealCustomerProfiles;
@@ -571,12 +676,25 @@ export async function updateBrand(
     if (Array.isArray(patch.leads)) update.leads = patch.leads;
     if (Array.isArray(patch.inbox)) update.inbox = patch.inbox;
 
-    const { data, error } = await supabase
+    let { data, error } = await supabase
       .from(BRAND_TABLE)
       .update(update)
       .eq("id", brandId)
       .select("*")
       .maybeSingle();
+    if (OPTIONAL_BRAND_COLUMNS.some((column) => isMissingSupabaseColumn(error, column))) {
+      delete update.social_discovery_platforms;
+      delete update.operable_personas;
+      delete update.available_assets;
+      const retried = await supabase
+        .from(BRAND_TABLE)
+        .update(update)
+        .eq("id", brandId)
+        .select(LEGACY_BRAND_EMBEDDED_SELECT)
+        .maybeSingle();
+      data = retried.data;
+      error = retried.error;
+    }
 
     if (!error && data) {
       return mapBrandRow(data);

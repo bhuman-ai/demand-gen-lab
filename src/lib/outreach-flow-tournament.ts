@@ -1,4 +1,5 @@
 import { getBrandById } from "@/lib/factory-data";
+import { OUTREACH_FLOW_AGENTS } from "@/lib/outreach-flow-agent-data";
 import type {
   OutreachFlowTournamentBranch,
   OutreachFlowTournamentCandidate,
@@ -6,6 +7,7 @@ import type {
   OutreachFlowTournamentInput,
   OutreachFlowTournamentResult,
   OutreachFlowTournamentShortlistItem,
+  OutreachFlowTournamentStreamEvent,
   OutreachFlowTournamentTurn,
 } from "@/lib/factory-types";
 
@@ -13,55 +15,10 @@ const GENERATOR_MODEL = process.env.OUTREACH_FLOW_MODEL || "gpt-5.4";
 const JUDGE_MODEL =
   process.env.OUTREACH_FLOW_JUDGE_MODEL || process.env.OUTREACH_FLOW_MODEL || "gpt-5.4";
 const OPENAI_URL = process.env.OPENAI_RESPONSES_URL || "https://api.openai.com/v1/responses";
-const DEFAULT_TIMEOUT_MS = 120_000;
+const DEFAULT_TIMEOUT_MS = 240_000;
 const MAX_TURNS_BEFORE_CTA = 15;
 const MAX_AGENT_COUNT = 6;
 const MAX_IDEAS_PER_AGENT = 4;
-
-const AGENTS = [
-  {
-    id: "editorial-operator",
-    name: "Agent 1 · Editorial Operator",
-    style: "editorial-led",
-    brief:
-      "Create a feature, case study, quote request, or journal-style invitation that gives the target a status reason to reply.",
-  },
-  {
-    id: "research-lead",
-    name: "Agent 2 · Research Lead",
-    style: "research-led",
-    brief:
-      "Use a benchmark, report, survey, or field-observation frame that can uncover context without sounding commercial.",
-  },
-  {
-    id: "peer-convener",
-    name: "Agent 3 · Peer Convener",
-    style: "peer-context-led",
-    brief:
-      "Use a roundtable, operator discussion, panel, or peer exchange that the target may want to join.",
-  },
-  {
-    id: "collaboration-architect",
-    name: "Agent 4 · Collaboration Architect",
-    style: "collaboration-led",
-    brief:
-      "Use a partnership, contribution, or co-created content angle that opens a natural thread before the offer appears.",
-  },
-  {
-    id: "credibility-minimalist",
-    name: "Agent 5 · Credibility Minimalist",
-    style: "minimalist",
-    brief:
-      "Choose the simplest truthful persona with the lowest asset burden and the cleanest route to a reply.",
-  },
-  {
-    id: "contrarian",
-    name: "Agent 6 · Contrarian",
-    style: "contrarian",
-    brief:
-      "Bring a sharper, less expected entry vehicle that still feels credible and supportable.",
-  },
-] as const;
 
 type TournamentErrorInput = {
   message: string;
@@ -76,6 +33,8 @@ type BrandContext = {
   tone: string;
   notes: string;
   product: string;
+  operablePersonas: string[];
+  availableAssets: string[];
   markets: string[];
   icps: string[];
   features: string[];
@@ -95,6 +54,11 @@ type NormalizedTournamentBrief = {
   agentCount: number;
   ideasPerAgent: number;
   brandContext: BrandContext;
+};
+
+type ResolvedTournamentRun = {
+  brief: OutreachFlowTournamentInput;
+  result: OutreachFlowTournamentResult;
 };
 
 type StrategyPlan = Pick<
@@ -186,13 +150,42 @@ function inferOfferName(input: { product: string; name: string }) {
   return asString(input.product) || asString(input.name) || "the offer";
 }
 
+function extractStableBrandNotes(value: unknown) {
+  const note = asString(value);
+  if (!note) return "";
+
+  const markers = [
+    /(?:^|[.?!]\s+)priority themes?(?: right now)?\s*:/i,
+    /(?:^|[.?!]\s+)current themes?\s*:/i,
+    /(?:^|[.?!]\s+)active themes?\s*:/i,
+    /(?:^|[.?!]\s+)example themes?\s*:/i,
+    /(?:^|[.?!]\s+)campaign themes?\s*:/i,
+  ];
+
+  let cutoff = note.length;
+  for (const marker of markers) {
+    const match = note.search(marker);
+    if (match >= 0) {
+      cutoff = Math.min(cutoff, match);
+    }
+  }
+
+  return note
+    .slice(0, cutoff)
+    .trim()
+    .replace(/\s+/g, " ")
+    .replace(/[,:;\-]+$/, "");
+}
+
 function buildBrandContext(brand: Awaited<ReturnType<typeof getBrandById>>): BrandContext {
   return {
     name: asString(brand?.name),
     website: asString(brand?.website),
     tone: asString(brand?.tone),
-    notes: asString(brand?.notes),
+    notes: extractStableBrandNotes(brand?.notes),
     product: asString(brand?.product),
+    operablePersonas: clipLines(asStringArray(brand?.operablePersonas), 8),
+    availableAssets: clipLines(asStringArray(brand?.availableAssets), 8),
     markets: clipLines(asStringArray(brand?.targetMarkets), 8),
     icps: clipLines(asStringArray(brand?.idealCustomerProfiles), 8),
     features: clipLines(asStringArray(brand?.keyFeatures), 8),
@@ -231,8 +224,18 @@ function normalizeBrief(
     desiredOutcome,
     offer,
     channel,
-    availablePersonas: clipLines(asStringArray(input.availablePersonas), 8),
-    availableAssets: clipLines(asStringArray(input.availableAssets), 8),
+    availablePersonas: clipLines(
+      asStringArray(input.availablePersonas).length
+        ? asStringArray(input.availablePersonas)
+        : brandContext.operablePersonas,
+      8
+    ),
+    availableAssets: clipLines(
+      asStringArray(input.availableAssets).length
+        ? asStringArray(input.availableAssets)
+        : brandContext.availableAssets,
+      8
+    ),
     constraints: clipLines(asStringArray(input.constraints), 8),
     bar: clipLines(asStringArray(input.qualityBar), 8),
     maxTurnsBeforeCTA: clampInteger(
@@ -244,6 +247,22 @@ function normalizeBrief(
     agentCount: clampInteger(asInteger(input.agentCount, 0), 0, MAX_AGENT_COUNT, 0),
     ideasPerAgent: clampInteger(asInteger(input.ideasPerAgent, 0), 0, MAX_IDEAS_PER_AGENT, 0),
     brandContext,
+  };
+}
+
+function toStoredBrief(brief: NormalizedTournamentBrief): OutreachFlowTournamentInput {
+  return {
+    target: brief.target,
+    desiredOutcome: brief.desiredOutcome,
+    offer: brief.offer,
+    channel: brief.channel,
+    availablePersonas: clipLines(brief.availablePersonas, 8),
+    availableAssets: clipLines(brief.availableAssets, 8),
+    constraints: clipLines(brief.constraints, 8),
+    qualityBar: clipLines(brief.bar, 8),
+    maxTurnsBeforeCTA: brief.maxTurnsBeforeCTA,
+    agentCount: brief.agentCount,
+    ideasPerAgent: brief.ideasPerAgent,
   };
 }
 
@@ -361,14 +380,15 @@ async function deriveStrategyPlan(
     "",
     "Rules:",
     "- availablePersonas must be real, supportable roles the team could plausibly operate.",
-    "- availableAssets must be the proof, container, or lightweight infrastructure that makes those personas believable.",
+    "- availableAssets must be the proof, container, or operating asset that makes those personas believable.",
     "- constraints should be plain-English guardrails, not abstract strategy slogans.",
     "- bar should be the judge rubric: what stronger lanes must do better than weaker lanes.",
     "- maxTurnsBeforeCTA must reflect how much trust-building this sale needs. Use 3 to 15.",
     "- agentCount must be 3 to 6 and should reflect how many distinct approaches are worth competing.",
     "- ideasPerAgent must be 1 to 3 and should stay tight unless the territory is unusually broad.",
-    "- If brand context is sparse, favor low-asset personas and cleaner, more defensible entry vehicles.",
-    "- Prefer editorial, research, peer, collaboration, or inclusion-style lanes before audit-shaped outreach.",
+    "- Optimize for full bridge systems: real persona, real asset, clear first win, proof loop, and natural bridge trigger.",
+    "- Assume the assets you name are real and available for this run. Do not weaken the plan just to avoid asset-backed lanes.",
+    "- Prefer editorial, research, peer, collaboration, inclusion, benchmark, and trial-backed lanes before audit-shaped outreach.",
     "",
     `Target: ${brief.target}`,
     `DesiredOutcome: ${brief.desiredOutcome}`,
@@ -439,8 +459,9 @@ async function withDynamicStrategy(
 function noveltyKey(candidate: Record<string, unknown>) {
   return [
     oneLine(candidate.persona).toLowerCase(),
+    oneLine(candidate.backingAsset).toLowerCase(),
     oneLine(candidate.entryVehicle).toLowerCase(),
-    oneLine(candidate.bridgeMoment).toLowerCase(),
+    oneLine(candidate.bridgeTrigger).toLowerCase(),
   ].join("::");
 }
 
@@ -472,9 +493,13 @@ function normalizeIdea(value: unknown): OutreachFlowTournamentIdea | null {
   return {
     title,
     persona,
+    backingAsset: oneLine(row.backingAsset ?? row.backing_asset),
     entryVehicle,
+    firstValue: oneLine(row.firstValue ?? row.first_value),
     whyReply,
     whyNow: oneLine(row.whyNow),
+    proofLoop: oneLine(row.proofLoop ?? row.proof_loop),
+    bridgeTrigger: oneLine(row.bridgeTrigger ?? row.bridge_trigger),
     personaProof: clipLines(asStringArray(row.personaProof), 4),
     assetBurdenLevel:
       assetBurden === "low" || assetBurden === "high" ? assetBurden : "medium",
@@ -496,18 +521,26 @@ function normalizeIdea(value: unknown): OutreachFlowTournamentIdea | null {
 
 function normalizeTurn(value: unknown): OutreachFlowTournamentTurn | null {
   const row = asRecord(value);
+  const order = Math.max(1, asInteger(row.order, 0));
   const agentId = oneLine(row.agentId);
   const agentName = oneLine(row.agentName);
   if (!agentId || !agentName) return null;
+  const status = oneLine(row.status).toLowerCase();
   return {
+    order,
     agentId,
     agentName,
     agentStyle: oneLine(row.agentStyle),
     brief: oneLine(row.brief),
+    status:
+      status === "failed" || status === "drafted" ? (status as "failed" | "drafted") : "drafting",
     ideas: Array.isArray(row.ideas)
-      ? row.ideas.map((idea) => normalizeIdea(idea)).filter((idea): idea is OutreachFlowTournamentIdea => Boolean(idea))
+      ? row.ideas
+          .map((idea) => normalizeIdea(idea))
+          .filter((idea): idea is OutreachFlowTournamentIdea => Boolean(idea))
       : [],
     acceptedTitles: clipLines(asStringArray(row.acceptedTitles), 12),
+    error: oneLine(row.error),
   };
 }
 
@@ -527,9 +560,13 @@ function normalizeCandidate(value: unknown): OutreachFlowTournamentCandidate | n
     index,
     title,
     persona,
+    backingAsset: oneLine(row.backingAsset ?? row.backing_asset),
     entryVehicle,
+    firstValue: oneLine(row.firstValue ?? row.first_value),
     whyReply,
     whyNow: oneLine(row.whyNow),
+    proofLoop: oneLine(row.proofLoop ?? row.proof_loop),
+    bridgeTrigger: oneLine(row.bridgeTrigger ?? row.bridge_trigger),
     personaProof: clipLines(asStringArray(row.personaProof), 4),
     openerSubject: oneLine(row.openerSubject),
     openerBody,
@@ -600,28 +637,70 @@ function normalizeResult(value: RawRunnerResult): OutreachFlowTournamentResult {
   };
 }
 
+async function emitEvent(
+  handler:
+    | ((event: OutreachFlowTournamentStreamEvent) => Promise<void> | void)
+    | undefined,
+  event: OutreachFlowTournamentStreamEvent,
+  signal?: AbortSignal
+) {
+  if (signal?.aborted) return;
+  await handler?.(event);
+}
+
+function buildTurn(input: {
+  order: number;
+  agent: (typeof OUTREACH_FLOW_AGENTS)[number];
+  status: OutreachFlowTournamentTurn["status"];
+  ideas?: Array<Record<string, unknown>>;
+  acceptedTitles?: string[];
+  error?: string;
+}): OutreachFlowTournamentTurn {
+  return {
+    order: input.order,
+    agentId: input.agent.id,
+    agentName: input.agent.name,
+    agentStyle: input.agent.style,
+    brief: input.agent.brief,
+    status: input.status,
+    ideas: Array.isArray(input.ideas)
+      ? input.ideas
+          .map((idea) => normalizeIdea(idea))
+          .filter((idea): idea is OutreachFlowTournamentIdea => Boolean(idea))
+      : [],
+    acceptedTitles: clipLines(input.acceptedTitles ?? [], 12),
+    error: oneLine(input.error),
+  };
+}
+
 async function generateAgentCandidates(input: {
   brief: NormalizedTournamentBrief;
-  agent: (typeof AGENTS)[number];
+  agent: (typeof OUTREACH_FLOW_AGENTS)[number];
   occupiedTerritory: Array<Record<string, string>>;
   signal?: AbortSignal;
 }): Promise<Array<Record<string, unknown>>> {
   const prompt = [
     "You are one specialist inside an adversarial tournament for outreach-driven conversational flows.",
     "You only win if the downstream judge believes your flow will get a real reply and can naturally bridge toward the true desired outcome.",
-    "Do not write generic cold email. Start from a credible persona and an identity-led entry vehicle.",
+    "Do not write generic cold email. Design a full bridge system: credible persona, real asset, first win for the target, proof loop, bridge trigger, and natural endpoint.",
+    "Assume all listed personas and assets are real and available for this run.",
     "",
     `AgentName: ${input.agent.name}`,
     `AgentStyle: ${input.agent.style}`,
     `AgentBrief: ${input.agent.brief}`,
     "",
     "Return strict JSON only:",
-    '{ "candidates": [{ "title": string, "persona": string, "entryVehicle": string, "whyReply": string, "whyNow": string, "personaProof": string[], "assetBurden": "low"|"medium"|"high", "suspicionRisk": "low"|"medium"|"high", "openerSubject": string, "openerBody": string, "branches": [{ "branch": string, "targetReply": string, "response": string, "goal": string }], "bridgeMoment": string, "handoffPlan": string, "cta": string, "rationale": string }] }',
+    '{ "candidates": [{ "title": string, "persona": string, "backingAsset": string, "entryVehicle": string, "firstValue": string, "whyReply": string, "whyNow": string, "proofLoop": string, "bridgeTrigger": string, "personaProof": string[], "assetBurden": "low"|"medium"|"high", "suspicionRisk": "low"|"medium"|"high", "openerSubject": string, "openerBody": string, "branches": [{ "branch": string, "targetReply": string, "response": string, "goal": string }], "bridgeMoment": string, "handoffPlan": string, "cta": string, "rationale": string }] }',
     "",
     "Rules:",
     `- Generate exactly ${input.brief.ideasPerAgent} candidates.`,
     "- Use only personas the team could actually operate.",
-    "- Prefer editorial, research, peer, collaboration, or inclusion-style entry vehicles before audit-shaped outreach.",
+    "- Treat all listed assets as real. assetBurden means coordination complexity, not whether the asset exists.",
+    "- Prefer editorial, research, peer, collaboration, inclusion, benchmark, and trial-backed systems before audit-shaped outreach.",
+    "- backingAsset must name the real publication, benchmark, interview, event, founder access, trial, or other asset that makes the lane real.",
+    "- firstValue must state what the target gets before the commercial bridge appears.",
+    "- proofLoop must explain what becomes publicly, socially, or procedurally real after they engage, so later follow-up feels earned.",
+    "- bridgeTrigger must name the concrete event that makes the true offer relevant later.",
     "- Message one should be an easy reason to reply, not a disguised pitch.",
     "- openerBody should be a short real first message in plain English.",
     "- branches must include at least: positive, curious, skeptical, delegate, no reply.",
@@ -660,9 +739,13 @@ async function generateAgentCandidates(input: {
     .map((candidate) => ({
       title: candidate.title,
       persona: candidate.persona,
+      backingAsset: candidate.backingAsset,
       entryVehicle: candidate.entryVehicle,
+      firstValue: candidate.firstValue,
       whyReply: candidate.whyReply,
       whyNow: candidate.whyNow,
+      proofLoop: candidate.proofLoop,
+      bridgeTrigger: candidate.bridgeTrigger,
       personaProof: candidate.personaProof,
       assetBurden: candidate.assetBurdenLevel,
       suspicionRisk: candidate.suspicionRiskLevel,
@@ -720,10 +803,10 @@ async function judgeCandidates(
     "",
     "Scoring rules:",
     "- Use 0-100 integers, not 1-10 scales.",
-    "- Promote flows that create a genuine reason to reply and can sustain the conversation naturally.",
+    "- Promote flows that create a genuine first win, a believable proof loop, and a concrete bridge trigger to the real offer.",
     "- Penalize first messages that look like cold email, audits, disguised pitches, or over-constructed pretext.",
-    "- Penalize personas that require assets the team probably does not have.",
-    "- Penalize bridges that feel abrupt, manipulative, or too obviously engineered.",
+    "- Treat listed personas and assets as real and available. assetFeasibility measures operating cleanliness, not whether the asset exists.",
+    "- Penalize systems with weak first value, no proof loop, or a bridge trigger that feels abrupt, manipulative, or too obviously engineered.",
     "- Be strict. Most candidates should not be promoted.",
     "",
     `Target: ${brief.target}`,
@@ -762,10 +845,10 @@ function rankEvaluation(evaluation: Record<string, unknown>) {
   const decisionBoost = decision === "promote" ? 10 : decision === "revise" ? 2 : -15;
   return (
     asNumber(evaluation.score) +
-    asNumber(evaluation.replyLikelihood) * 0.45 +
+    asNumber(evaluation.replyLikelihood) * 0.4 +
     asNumber(evaluation.personaCredibility) * 0.35 +
-    asNumber(evaluation.bridgeQuality) * 0.3 +
-    asNumber(evaluation.assetFeasibility) * 0.2 -
+    asNumber(evaluation.bridgeQuality) * 0.45 +
+    asNumber(evaluation.assetFeasibility) * 0.1 -
     asNumber(evaluation.suspicionRisk) * 0.7 +
     decisionBoost
   );
@@ -776,9 +859,9 @@ function passesGate(evaluation: Record<string, unknown>) {
   if (asNumber(evaluation.score) < 72) return false;
   if (asNumber(evaluation.replyLikelihood) < 25) return false;
   if (asNumber(evaluation.personaCredibility) < 68) return false;
-  if (asNumber(evaluation.bridgeQuality) < 65) return false;
-  if (asNumber(evaluation.assetFeasibility) < 55) return false;
-  if (asNumber(evaluation.suspicionRisk) > 35) return false;
+  if (asNumber(evaluation.bridgeQuality) < 70) return false;
+  if (asNumber(evaluation.assetFeasibility) < 40) return false;
+  if (asNumber(evaluation.suspicionRisk) > 40) return false;
   return true;
 }
 
@@ -795,9 +878,14 @@ async function managerShortlist(input: {
       index,
       title: oneLine(candidate.title),
       persona: oneLine(candidate.persona),
+      backingAsset: oneLine(candidate.backingAsset),
       entryVehicle: oneLine(candidate.entryVehicle),
+      firstValue: oneLine(candidate.firstValue),
+      proofLoop: oneLine(candidate.proofLoop),
+      bridgeTrigger: oneLine(candidate.bridgeTrigger),
       openerBody: oneLine(candidate.openerBody),
       bridgeMoment: oneLine(candidate.bridgeMoment),
+      handoffPlan: oneLine(candidate.handoffPlan),
       cta: oneLine(candidate.cta),
       evaluation,
       rank: Math.round(rankEvaluation(evaluation) * 100) / 100,
@@ -818,8 +906,8 @@ async function managerShortlist(input: {
     "Rules:",
     "- shortlist should include 1 to 3 items.",
     "- category should be short, usually persona + entry vehicle.",
-    "- pitch should be one short sentence saying how the flow wins.",
-    "- note should say why it survived manager pressure.",
+    "- pitch should be one short sentence saying how the full bridge system wins.",
+    "- note should say why its first win, proof loop, and bridge trigger survived manager pressure.",
     "- strongestUsefulDenial should be the strongest reason not to use the top discarded lane, if that sharpens the recommendation.",
     "",
     `Target: ${input.brief.target}`,
@@ -858,26 +946,106 @@ async function managerShortlist(input: {
 
 async function executeRunner(
   brief: NormalizedTournamentBrief,
-  signal?: AbortSignal
+  options: {
+    signal?: AbortSignal;
+    onEvent?: (event: OutreachFlowTournamentStreamEvent) => Promise<void> | void;
+  }
 ): Promise<OutreachFlowTournamentResult> {
-  const activeAgents = AGENTS.slice(0, brief.agentCount);
+  const activeAgents = OUTREACH_FLOW_AGENTS.slice(0, brief.agentCount);
+
+  await emitEvent(
+    options.onEvent,
+    {
+      type: "phase",
+      phase: "generating",
+      phaseLabel: "Generating reply-first lanes",
+    },
+    options.signal
+  );
+
   const generatedByAgent = await Promise.all(
-    activeAgents.map(async (agent) => ({
-      agent,
-      ideas: await generateAgentCandidates({
-        brief,
-        agent,
-        occupiedTerritory: [],
-        signal,
-      }),
-    }))
+    activeAgents.map(async (agent, index) => {
+      const order = index + 1;
+      await emitEvent(
+        options.onEvent,
+        {
+          type: "turn_started",
+          turn: buildTurn({
+            order,
+            agent,
+            status: "drafting",
+          }),
+        },
+        options.signal
+      );
+
+      try {
+        const ideas = await generateAgentCandidates({
+          brief,
+          agent,
+          occupiedTerritory: [],
+          signal: options.signal,
+        });
+
+        await emitEvent(
+          options.onEvent,
+          {
+            type: "turn_completed",
+            turn: buildTurn({
+              order,
+              agent,
+              status: "drafted",
+              ideas,
+            }),
+          },
+          options.signal
+        );
+
+        return { order, agent, ideas, error: "" };
+      } catch (error) {
+        const message =
+          error instanceof Error && error.message.trim()
+            ? error.message.trim()
+            : `Generation failed for ${agent.name}.`;
+
+        await emitEvent(
+          options.onEvent,
+          {
+            type: "turn_failed",
+            turn: buildTurn({
+              order,
+              agent,
+              status: "failed",
+              error: message,
+            }),
+          },
+          options.signal
+        );
+
+        return { order, agent, ideas: null, error: message };
+      }
+    })
   );
 
   const occupiedTerritory: Array<Record<string, string>> = [];
-  const turns: Array<Record<string, unknown>> = [];
+  const turns: OutreachFlowTournamentTurn[] = [];
   const allCandidates: Array<Record<string, unknown>> = [];
 
-  for (const { agent, ideas } of generatedByAgent) {
+  for (const generated of generatedByAgent) {
+    const { agent, error, order } = generated;
+    if (!generated.ideas) {
+      turns.push(
+        buildTurn({
+          order,
+          agent,
+          status: "failed",
+          error,
+        })
+      );
+      continue;
+    }
+
+    const ideas = generated.ideas;
     const acceptedTitles: string[] = [];
     for (const idea of ideas) {
       const key = noveltyKey(idea);
@@ -885,20 +1053,22 @@ async function executeRunner(
       allCandidates.push(idea);
       occupiedTerritory.push({
         persona: oneLine(idea.persona),
+        backingAsset: oneLine(idea.backingAsset),
         entryVehicle: oneLine(idea.entryVehicle),
-        bridgeMoment: oneLine(idea.bridgeMoment),
+        bridgeTrigger: oneLine(idea.bridgeTrigger),
       });
       acceptedTitles.push(oneLine(idea.title));
     }
 
-    turns.push({
-      agentId: agent.id,
-      agentName: agent.name,
-      agentStyle: agent.style,
-      brief: agent.brief,
-      ideas,
-      acceptedTitles,
-    });
+    turns.push(
+      buildTurn({
+        order,
+        agent,
+        status: "drafted",
+        ideas,
+        acceptedTitles,
+      })
+    );
   }
 
   if (!allCandidates.length) {
@@ -909,7 +1079,17 @@ async function executeRunner(
     });
   }
 
-  const evaluations = await judgeCandidates(brief, allCandidates, signal);
+  await emitEvent(
+    options.onEvent,
+    {
+      type: "phase",
+      phase: "judging",
+      phaseLabel: "Applying judge pressure",
+    },
+    options.signal
+  );
+
+  const evaluations = await judgeCandidates(brief, allCandidates, options.signal);
   let accepted = 0;
   const reviewed = evaluations.map((evaluation) => {
     const index = asInteger(evaluation.index, -1);
@@ -925,11 +1105,21 @@ async function executeRunner(
     };
   });
 
+  await emitEvent(
+    options.onEvent,
+    {
+      type: "phase",
+      phase: "shortlisting",
+      phaseLabel: "Assembling the shortlist",
+    },
+    options.signal
+  );
+
   const manager = await managerShortlist({
     brief,
     candidates: allCandidates,
     evaluations,
-    signal,
+    signal: options.signal,
   });
 
   return normalizeResult({
@@ -951,7 +1141,8 @@ export async function runOutreachFlowTournament(input: {
   brandId: string;
   brief: OutreachFlowTournamentInput;
   signal?: AbortSignal;
-}) {
+  onEvent?: (event: OutreachFlowTournamentStreamEvent) => Promise<void> | void;
+}): Promise<ResolvedTournamentRun> {
   const brand = await getBrandById(input.brandId);
   if (!brand) {
     throw new OutreachFlowTournamentError({
@@ -967,8 +1158,35 @@ export async function runOutreachFlowTournament(input: {
 
   const brandContext = buildBrandContext(brand);
   const normalizedBrief = normalizeBrief(brandContext, input.brief);
+  if (needsDynamicStrategy(normalizedBrief)) {
+    await emitEvent(
+      input.onEvent,
+      {
+        type: "phase",
+        phase: "planning",
+        phaseLabel: "Planning arena controls",
+      },
+      signal
+    );
+  }
   const brief = await withDynamicStrategy(normalizedBrief, signal);
-  return await executeRunner(brief, signal);
+  await emitEvent(
+    input.onEvent,
+    {
+      type: "start",
+      requestedAgents: brief.agentCount,
+      ideasPerAgent: brief.ideasPerAgent,
+    },
+    signal
+  );
+  const result = await executeRunner(brief, {
+    signal,
+    onEvent: input.onEvent,
+  });
+  return {
+    brief: toStoredBrief(brief),
+    result,
+  };
 }
 
 export function serializeOutreachFlowTournamentError(error: unknown) {

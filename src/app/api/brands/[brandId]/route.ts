@@ -8,6 +8,10 @@ import {
   type LeadRow,
 } from "@/lib/factory-data";
 import {
+  inferBrandSocialPlatforms,
+  resolveSupportedDiscoveryPlatformsForBrand,
+} from "@/lib/social-platform-catalog";
+import {
   getOutreachProvisioningSettings,
   updateOutreachProvisioningSettings,
 } from "@/lib/outreach-provider-settings";
@@ -157,7 +161,13 @@ export async function GET(request: Request, context: { params: Promise<{ brandId
   if (!brand) {
     return NextResponse.json({ error: "brand not found" }, { status: 404 });
   }
-  return NextResponse.json({ brand });
+  return NextResponse.json({
+    brand: {
+      ...brand,
+      recommendedSocialDiscoveryPlatforms: inferBrandSocialPlatforms(brand),
+      recommendedSupportedDiscoveryPlatforms: resolveSupportedDiscoveryPlatformsForBrand(brand),
+    },
+  });
 }
 
 export async function PATCH(request: Request, context: { params: Promise<{ brandId: string }> }) {
@@ -174,6 +184,12 @@ export async function PATCH(request: Request, context: { params: Promise<{ brand
   if (typeof body.product === "string") patch.product = body.product.trim();
   if (Array.isArray(body.socialDiscoveryPlatforms)) {
     patch.socialDiscoveryPlatforms = normalizeStringArray(body.socialDiscoveryPlatforms);
+  }
+  if (Array.isArray(body.operablePersonas)) {
+    patch.operablePersonas = normalizeStringArray(body.operablePersonas);
+  }
+  if (Array.isArray(body.availableAssets)) {
+    patch.availableAssets = normalizeStringArray(body.availableAssets);
   }
   if (Array.isArray(body.targetMarkets)) patch.targetMarkets = normalizeStringArray(body.targetMarkets);
   if (Array.isArray(body.idealCustomerProfiles)) {

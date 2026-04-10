@@ -20,6 +20,7 @@ import type {
   ExperimentSuggestionStreamEvent,
   OutreachFlowTournamentInput,
   OutreachFlowTournamentResult,
+  OutreachFlowTournamentSavedResult,
   OutreachFlowTournamentStreamEvent,
   Hypothesis,
   InboxEvalRun,
@@ -55,6 +56,7 @@ import {
   EXPERIMENT_MAX_SAMPLE_SIZE,
   EXPERIMENT_MIN_VERIFIED_EMAIL_LEADS,
 } from "@/lib/experiment-policy";
+import { upsertCachedBrandDirectoryEntry } from "@/lib/brand-directory-client";
 
 function asObject(value: unknown): Record<string, unknown> {
   if (value && typeof value === "object" && !Array.isArray(value)) {
@@ -108,11 +110,13 @@ export async function fetchBrand(brandId: string, options?: { includeEmbedded?: 
 }
 
 export async function createBrandApi(input: {
-  name: string;
+  name?: string;
   website: string;
   tone?: string;
   notes?: string;
   product?: string;
+  operablePersonas?: string[];
+  availableAssets?: string[];
   targetMarkets?: string[];
   idealCustomerProfiles?: string[];
   keyFeatures?: string[];
@@ -124,7 +128,14 @@ export async function createBrandApi(input: {
     body: JSON.stringify(input),
   });
   const data = await readJson(response);
-  return data.brand as BrandRecord;
+  const brand = data.brand as BrandRecord;
+  if (brand?.id) {
+    upsertCachedBrandDirectoryEntry({
+      id: brand.id,
+      name: brand.name,
+    });
+  }
+  return brand;
 }
 
 export async function updateBrandApi(
@@ -137,6 +148,8 @@ export async function updateBrandApi(
       | "tone"
       | "notes"
       | "product"
+      | "operablePersonas"
+      | "availableAssets"
       | "targetMarkets"
       | "idealCustomerProfiles"
       | "keyFeatures"
@@ -374,6 +387,30 @@ export async function generateOutreachFlowTournamentApi(
   });
   const data = await readJson(response);
   return data.result as OutreachFlowTournamentResult;
+}
+
+export async function fetchSavedOutreachFlowTournamentApi(brandId: string) {
+  const response = await fetch(`/api/brands/${brandId}/experiments/outreach-flow`, {
+    cache: "no-store",
+  });
+  const data = await readJson(response);
+  return (data.savedResult ?? null) as OutreachFlowTournamentSavedResult | null;
+}
+
+export async function saveOutreachFlowTournamentResultApi(
+  brandId: string,
+  payload: {
+    brief: OutreachFlowTournamentInput;
+    result: OutreachFlowTournamentResult;
+  }
+) {
+  const response = await fetch(`/api/brands/${brandId}/experiments/outreach-flow`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const data = await readJson(response);
+  return (data.savedResult ?? null) as OutreachFlowTournamentSavedResult | null;
 }
 
 export async function streamOutreachFlowTournamentApi(

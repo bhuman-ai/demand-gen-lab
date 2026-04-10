@@ -304,9 +304,13 @@ export type OutreachFlowTournamentBranch = {
 export type OutreachFlowTournamentIdea = {
   title: string;
   persona: string;
+  backingAsset: string;
   entryVehicle: string;
+  firstValue: string;
   whyReply: string;
   whyNow: string;
+  proofLoop: string;
+  bridgeTrigger: string;
   personaProof: string[];
   assetBurdenLevel: "low" | "medium" | "high";
   suspicionRiskLevel: "low" | "medium" | "high";
@@ -320,21 +324,28 @@ export type OutreachFlowTournamentIdea = {
 };
 
 export type OutreachFlowTournamentTurn = {
+  order: number;
   agentId: string;
   agentName: string;
   agentStyle: string;
   brief: string;
+  status: "drafting" | "drafted" | "failed";
   ideas: OutreachFlowTournamentIdea[];
   acceptedTitles: string[];
+  error?: string;
 };
 
 export type OutreachFlowTournamentCandidate = {
   index: number;
   title: string;
   persona: string;
+  backingAsset: string;
   entryVehicle: string;
+  firstValue: string;
   whyReply: string;
   whyNow: string;
+  proofLoop: string;
+  bridgeTrigger: string;
   personaProof: string[];
   openerSubject: string;
   openerBody: string;
@@ -381,17 +392,32 @@ export type OutreachFlowTournamentResult = {
   allCandidates: OutreachFlowTournamentCandidate[];
 };
 
+export type OutreachFlowTournamentSavedResult = {
+  brandId: string;
+  brief: OutreachFlowTournamentInput;
+  result: OutreachFlowTournamentResult;
+  createdAt: string;
+  updatedAt: string;
+};
+
 export type OutreachFlowTournamentStreamEvent =
   | {
       type: "start";
       requestedAgents: number;
       ideasPerAgent: number;
-      phase: "launching";
+    }
+  | {
+      type: "phase";
+      phase: "planning" | "generating" | "judging" | "shortlisting";
       phaseLabel: string;
-      progress: number;
+    }
+  | {
+      type: "turn_started" | "turn_completed" | "turn_failed";
+      turn: OutreachFlowTournamentTurn;
     }
   | {
       type: "done";
+      brief: OutreachFlowTournamentInput;
       result: OutreachFlowTournamentResult;
     }
   | {
@@ -544,6 +570,8 @@ export type BrandRecord = {
   notes: string;
   product: string;
   socialDiscoveryPlatforms: string[];
+  operablePersonas: string[];
+  availableAssets: string[];
   targetMarkets: string[];
   idealCustomerProfiles: string[];
   keyFeatures: string[];
@@ -745,6 +773,48 @@ export type MailboxDeliveryMethod = "smtp" | "gmail_ui";
 export type GmailUiLoginState = "unknown" | "login_required" | "ready" | "error";
 
 export type OutreachAccountType = "delivery" | "mailbox" | "hybrid";
+export type SocialConnectionProvider = "manual" | "unipile" | "none";
+export type SocialLinkedProvider = "" | "linkedin" | "instagram" | "x" | "unknown";
+export type SocialActorRole =
+  | "operator"
+  | "specialist"
+  | "curator"
+  | "partner"
+  | "founder"
+  | "brand"
+  | "community";
+
+export type SocialAccountConfig = {
+  enabled: boolean;
+  connectionProvider: SocialConnectionProvider;
+  linkedProvider: SocialLinkedProvider;
+  externalAccountId: string;
+  handle: string;
+  profileUrl: string;
+  publicIdentifier: string;
+  displayName: string;
+  headline: string;
+  bio: string;
+  avatarUrl: string;
+  role: SocialActorRole;
+  topicTags: string[];
+  communityTags: string[];
+  platforms: string[];
+  regions: string[];
+  languages: string[];
+  audienceTypes: string[];
+  personaSummary: string;
+  voiceSummary: string;
+  trustLevel: number;
+  cooldownMinutes: number;
+  linkedAt: string;
+  lastProfileSyncAt: string;
+  lastSocialCommentAt: string;
+  recentActivity24h: number;
+  recentActivity7d: number;
+  coordinationGroup: string;
+  notes: string;
+};
 
 export type CustomerIoBillingConfig = {
   monthlyProfileLimit: number;
@@ -791,6 +861,7 @@ export type OutreachAccountConfig = {
   apify: {
     defaultActorId: string;
   };
+  social: SocialAccountConfig;
   mailbox: {
     provider: MailboxProvider;
     deliveryMethod: MailboxDeliveryMethod;
@@ -1027,6 +1098,17 @@ export type LeadAcceptanceDecision = {
   details: Record<string, unknown>;
 };
 
+export type EmailVerificationState = {
+  mode: "local" | "validatedmails" | "heuristic" | "";
+  provider: string;
+  verdict: string;
+  confidence: string;
+  reason: string;
+  mxStatus: string;
+  acceptAll: boolean | null;
+  catchAll: boolean | null;
+};
+
 export type SourcingTraceSummary = {
   phase: "plan_sourcing" | "probe_chain" | "execute_chain" | "completed" | "failed";
   selectedActorIds: string[];
@@ -1072,6 +1154,8 @@ export type OutreachRunLead = {
   title: string;
   domain: string;
   sourceUrl: string;
+  realVerifiedEmail?: boolean;
+  emailVerification?: EmailVerificationState | null;
   status: "new" | "suppressed" | "scheduled" | "sent" | "replied" | "bounced" | "unsubscribed";
   createdAt: string;
   updatedAt: string;

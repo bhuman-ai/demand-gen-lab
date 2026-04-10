@@ -519,6 +519,8 @@ export default function OutreachSettingsClient() {
   const [brandTone, setBrandTone] = useState("");
   const [brandProduct, setBrandProduct] = useState("");
   const [brandNotes, setBrandNotes] = useState("");
+  const [brandPersonasText, setBrandPersonasText] = useState("");
+  const [brandAssetsText, setBrandAssetsText] = useState("");
   const [brandMarketsText, setBrandMarketsText] = useState("");
   const [brandIcpText, setBrandIcpText] = useState("");
   const [brandFeaturesText, setBrandFeaturesText] = useState("");
@@ -668,6 +670,8 @@ export default function OutreachSettingsClient() {
       setBrandTone("");
       setBrandProduct("");
       setBrandNotes("");
+      setBrandPersonasText("");
+      setBrandAssetsText("");
       setBrandMarketsText("");
       setBrandIcpText("");
       setBrandFeaturesText("");
@@ -679,6 +683,8 @@ export default function OutreachSettingsClient() {
     setBrandTone(selectedBrand.tone || "");
     setBrandProduct(selectedBrand.product || "");
     setBrandNotes(selectedBrand.notes || "");
+    setBrandPersonasText((selectedBrand.operablePersonas ?? []).join("\n"));
+    setBrandAssetsText((selectedBrand.availableAssets ?? []).join("\n"));
     setBrandMarketsText((selectedBrand.targetMarkets ?? []).join("\n"));
       setBrandIcpText((selectedBrand.idealCustomerProfiles ?? []).join("\n"));
       setBrandFeaturesText((selectedBrand.keyFeatures ?? []).join("\n"));
@@ -735,6 +741,8 @@ export default function OutreachSettingsClient() {
   const draftIcpList = useMemo(() => normalizeLineList(brandIcpText), [brandIcpText]);
   const draftFeatureList = useMemo(() => normalizeLineList(brandFeaturesText), [brandFeaturesText]);
   const draftBenefitList = useMemo(() => normalizeLineList(brandBenefitsText), [brandBenefitsText]);
+  const draftPersonaList = useMemo(() => normalizeLineList(brandPersonasText), [brandPersonasText]);
+  const draftAssetList = useMemo(() => normalizeLineList(brandAssetsText), [brandAssetsText]);
   const normalizedBrandWebsite = useMemo(() => normalizeWebsiteForPrefill(brandWebsite), [brandWebsite]);
   const normalizedSavedWebsite = useMemo(
     () => normalizeWebsiteForPrefill(selectedBrand?.website ?? ""),
@@ -744,6 +752,8 @@ export default function OutreachSettingsClient() {
     brandProduct.trim() ||
       brandTone.trim() ||
       brandNotes.trim() ||
+      draftPersonaList.length ||
+      draftAssetList.length ||
       draftTargetMarkets.length ||
       draftIcpList.length ||
       draftFeatureList.length ||
@@ -902,6 +912,8 @@ export default function OutreachSettingsClient() {
         tone: brandTone.trim(),
         product: brandProduct.trim(),
         notes: brandNotes.trim(),
+        operablePersonas: draftPersonaList,
+        availableAssets: draftAssetList,
         targetMarkets: draftTargetMarkets,
         idealCustomerProfiles: draftIcpList,
         keyFeatures: draftFeatureList,
@@ -1416,14 +1428,32 @@ export default function OutreachSettingsClient() {
                           placeholder="Customer proof, strongest claims, objections to avoid, and anything the system should remember."
                         />
                       </div>
+                      <div className="grid gap-2">
+                        <Label htmlFor="brand-personas">Real personas you can operate (one per line)</Label>
+                        <Textarea
+                          id="brand-personas"
+                          value={brandPersonasText}
+                          onChange={(event) => setBrandPersonasText(event.target.value)}
+                          placeholder={"Journalist covering creator workflows\nResearch lead running a benchmark\nFounder inviting trial participants"}
+                        />
+                      </div>
+                      <div className="grid gap-2">
+                        <Label htmlFor="brand-assets">Real assets you have (one per line)</Label>
+                        <Textarea
+                          id="brand-assets"
+                          value={brandAssetsText}
+                          onChange={(event) => setBrandAssetsText(event.target.value)}
+                          placeholder={"Publication or article series\nFounder interview access\nTrial accounts for selected testers"}
+                        />
+                      </div>
                     </div>
 
                     <div className="grid gap-4">
                       <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-4 py-3 text-sm">
                         <div className="font-medium text-[color:var(--foreground)]">This feeds the rest of the system</div>
                         <div className="mt-1 text-[color:var(--muted-foreground)]">
-                          The brand brief shapes experiment ideas, targeting, and message prompts. If this is vague,
-                          everything downstream gets weaker.
+                          The brand brief shapes experiment ideas, targeting, message prompts, and bridge-system generation.
+                          If this is vague, everything downstream gets weaker.
                         </div>
                       </div>
                       <div className="grid gap-2">

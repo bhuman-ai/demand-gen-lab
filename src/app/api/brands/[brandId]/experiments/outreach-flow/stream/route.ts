@@ -2,6 +2,7 @@ import type {
   OutreachFlowTournamentInput,
   OutreachFlowTournamentStreamEvent,
 } from "@/lib/factory-types";
+import { saveOutreachFlowResult } from "@/lib/outreach-flow-result-data";
 import {
   runOutreachFlowTournament,
   serializeOutreachFlowTournamentError,
@@ -33,23 +34,20 @@ export async function POST(request: Request, context: { params: Promise<{ brandI
 
       void (async () => {
         try {
-          enqueue({
-            type: "start",
-            requestedAgents: Math.max(1, Math.min(6, Math.round(Number(body.agentCount ?? 4)) || 4)),
-            ideasPerAgent: Math.max(
-              1,
-              Math.min(4, Math.round(Number(body.ideasPerAgent ?? 2)) || 2)
-            ),
-            phase: "launching",
-            phaseLabel: "Launching the outreach-flow tournament",
-            progress: 8,
-          });
-          const result = await runOutreachFlowTournament({
+          const tournament = await runOutreachFlowTournament({
             brandId,
             brief: body,
             signal: request.signal,
+            onEvent: async (event) => {
+              enqueue(event);
+            },
           });
-          enqueue({ type: "done", result });
+          await saveOutreachFlowResult({
+            brandId,
+            brief: tournament.brief,
+            result: tournament.result,
+          });
+          enqueue({ type: "done", brief: tournament.brief, result: tournament.result });
         } catch (error) {
           if (!request.signal.aborted) {
             const payload = serializeOutreachFlowTournamentError(error);

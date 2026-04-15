@@ -10,16 +10,12 @@ import { getOutreachAccountFromEmail } from "@/lib/outreach-account-helpers";
 const DAY_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_TIMEZONE = "America/Los_Angeles";
 
-export const MAX_ACTIVE_SENDERS_PER_DOMAIN = 3;
+export const MAX_ACTIVE_SENDERS_PER_DOMAIN = 4;
 export const MAX_SENDER_DAILY_CAP = 100;
+export const MAX_WARMUP_CAMPAIGN_DAILY_CAP = 25;
+export const MAX_OUTBOUND_SENDER_DAILY_CAP = 60;
 
-const WARMUP_RAMP = [
-  { minDay: 1, maxDay: 3, dailyCap: 20, label: "Days 1-3" },
-  { minDay: 4, maxDay: 7, dailyCap: 35, label: "Days 4-7" },
-  { minDay: 8, maxDay: 14, dailyCap: 50, label: "Days 8-14" },
-  { minDay: 15, maxDay: 21, dailyCap: 75, label: "Days 15-21" },
-  { minDay: 22, maxDay: Number.POSITIVE_INFINITY, dailyCap: MAX_SENDER_DAILY_CAP, label: "Day 22+" },
-] as const;
+const OUTBOUND_RAMP_DAILY_CAPS = [3, 8, 15, 25, 40, MAX_OUTBOUND_SENDER_DAILY_CAP] as const;
 
 export type SenderUsageMap = Record<string, { dailySent: number; hourlySent: number }>;
 
@@ -130,8 +126,87 @@ function deliverabilityFactor(scorecard?: SenderDeliverabilityScorecard | null) 
   return 1;
 }
 
+function normalizeWarmupDay(day: number) {
+  const parsed = Math.max(1, Math.floor(Number(day) || 1));
+  return Number.isFinite(parsed) ? parsed : 1;
+}
+
+export function isWarmupCampaignName(value: string) {
+  return /\bwarmup\b/i.test(value);
+}
+
+export function warmupDailyCapForDay(day: number) {
+  return Math.min(MAX_SENDER_DAILY_CAP, normalizeWarmupDay(day) * 5);
+}
+
+export function warmupHourlyCapForDay(day: number, businessHoursPerDay = 8) {
+  const dailyCap = warmupDailyCapForDay(day);
+  const safeBusinessHours = Math.max(1, Math.round(businessHoursPerDay) || 8);
+  return Math.min(dailyCap, Math.max(1, Math.ceil(dailyCap / safeBusinessHours)));
+}
+
+export function warmupMinSpacingMinutesForDay(day: number, businessHoursPerDay = 8) {
+  const dailyCap = warmupDailyCapForDay(day);
+  const safeBusinessHours = Math.max(1, Math.round(businessHoursPerDay) || 8);
+  return Math.max(8, Math.floor((safeBusinessHours * 60) / Math.max(1, dailyCap)));
+}
+
+export function laneHourlyCapForDailyCap(dailyCap: number, businessHoursPerDay = 8) {
+  const safeDailyCap = Math.max(0, Math.round(Number(dailyCap) || 0));
+  if (safeDailyCap <= 0) return 0;
+  const safeBusinessHours = Math.max(1, Math.round(businessHoursPerDay) || 8);
+  return Math.min(safeDailyCap, Math.max(1, Math.ceil(safeDailyCap / safeBusinessHours)));
+}
+
+export function laneMinSpacingMinutesForDailyCap(dailyCap: number, businessHoursPerDay = 8) {
+  const safeDailyCap = Math.max(0, Math.round(Number(dailyCap) || 0));
+  if (safeDailyCap <= 0) return 0;
+  const safeBusinessHours = Math.max(1, Math.round(businessHoursPerDay) || 8);
+  return Math.max(8, Math.floor((safeBusinessHours * 60) / Math.max(1, safeDailyCap)));
+}
+
+export function warmupCampaignDailyCapForDay(day: number) {
+  return Math.min(MAX_WARMUP_CAMPAIGN_DAILY_CAP, normalizeWarmupDay(day) * 5);
+}
+
+export function warmupCampaignHourlyCapForDay(day: number, businessHoursPerDay = 8) {
+  return laneHourlyCapForDailyCap(warmupCampaignDailyCapForDay(day), businessHoursPerDay);
+}
+
+export function warmupCampaignMinSpacingMinutesForDay(day: number, businessHoursPerDay = 8) {
+  return laneMinSpacingMinutesForDailyCap(warmupCampaignDailyCapForDay(day), businessHoursPerDay);
+}
+
+export function outboundDailyCapForDay(day: number, targetDailyCap = MAX_OUTBOUND_SENDER_DAILY_CAP) {
+  const safeDay = normalizeWarmupDay(day);
+  const safeTargetDailyCap = Math.max(
+    1,
+    Math.min(MAX_OUTBOUND_SENDER_DAILY_CAP, Math.round(Number(targetDailyCap) || MAX_OUTBOUND_SENDER_DAILY_CAP))
+  );
+  const rampCap = OUTBOUND_RAMP_DAILY_CAPS[Math.min(safeDay - 1, OUTBOUND_RAMP_DAILY_CAPS.length - 1)];
+  return Math.min(safeTargetDailyCap, rampCap);
+}
+
+export function outboundHourlyCapForDay(day: number, targetDailyCap = MAX_OUTBOUND_SENDER_DAILY_CAP, businessHoursPerDay = 8) {
+  return laneHourlyCapForDailyCap(outboundDailyCapForDay(day, targetDailyCap), businessHoursPerDay);
+}
+
+export function outboundMinSpacingMinutesForDay(
+  day: number,
+  targetDailyCap = MAX_OUTBOUND_SENDER_DAILY_CAP,
+  businessHoursPerDay = 8
+) {
+  return laneMinSpacingMinutesForDailyCap(outboundDailyCapForDay(day, targetDailyCap), businessHoursPerDay);
+}
+
 function warmupRampStage(day: number) {
-  return WARMUP_RAMP.find((stage) => day >= stage.minDay && day <= stage.maxDay) ?? WARMUP_RAMP[WARMUP_RAMP.length - 1];
+  const safeDay = normalizeWarmupDay(day);
+  return {
+    minDay: safeDay,
+    maxDay: safeDay,
+    dailyCap: warmupDailyCapForDay(safeDay),
+    label: `Day ${safeDay}`,
+  };
 }
 
 function warmupStageLabel(stage: { label: string; dailyCap: number }) {
@@ -189,6 +264,36 @@ function compareSenderPriority(left: SenderCapacitySnapshot, right: SenderCapaci
     return right.healthFactor - left.healthFactor;
   }
   return left.fromEmail.localeCompare(right.fromEmail);
+}
+
+export function selectSenderAccountIdsWithinDomainLimit(
+  snapshots: SenderCapacitySnapshot[],
+  maxActiveSendersPerDomain = MAX_ACTIVE_SENDERS_PER_DOMAIN
+) {
+  const selected = new Set<string>();
+  const snapshotsByDomain = new Map<string, SenderCapacitySnapshot[]>();
+
+  for (const snapshot of snapshots) {
+    if (!snapshot.domain) {
+      selected.add(snapshot.senderAccountId);
+      continue;
+    }
+    const bucket = snapshotsByDomain.get(snapshot.domain) ?? [];
+    bucket.push(snapshot);
+    snapshotsByDomain.set(snapshot.domain, bucket);
+  }
+
+  for (const domainSnapshots of snapshotsByDomain.values()) {
+    domainSnapshots
+      .filter((snapshot) => snapshot.dailyCap > 0)
+      .sort(compareSenderPriority)
+      .slice(0, Math.max(1, maxActiveSendersPerDomain))
+      .forEach((snapshot) => {
+        selected.add(snapshot.senderAccountId);
+      });
+  }
+
+  return selected;
 }
 
 export function senderWarmupDayNumber(createdAt: string, now: Date, timeZone: string) {

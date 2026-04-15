@@ -21,6 +21,7 @@ export type LlmTask =
   | "reply_policy_evaluation"
   | "reply_thread_state_compile"
   | "reply_thread_draft_generate"
+  | "social_comment_planning"
   | "inbox_eval_roleplay"
   | "inbox_eval_score";
 
@@ -51,6 +52,7 @@ const TASK_BASE_TIER: Record<LlmTask, ModelTier> = {
   reply_policy_evaluation: "high",
   reply_thread_state_compile: "high",
   reply_thread_draft_generate: "high",
+  social_comment_planning: "default",
   inbox_eval_roleplay: "high",
   inbox_eval_score: "high",
 };

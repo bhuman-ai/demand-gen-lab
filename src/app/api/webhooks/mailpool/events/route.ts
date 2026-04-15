@@ -14,6 +14,7 @@ import { sanitizeCustomerIoBillingConfig } from "@/lib/outreach-customerio-billi
 import { getOutreachProvisioningSettingsSecrets } from "@/lib/outreach-provider-settings";
 import { kickoffMailpoolAccountDeliverability } from "@/lib/mailpool-deliverability-bootstrap";
 import { pickWebshareProxy } from "@/lib/webshare-client";
+import { defaultSocialAccountConfig } from "@/lib/social-account-config";
 import {
   parseMailpoolWebhookEvent,
   verifyMailpoolWebhookSignature,
@@ -77,6 +78,7 @@ function mailboxConfigFromMailpool(
     apify: {
       defaultActorId: String(existingConfig?.apify.defaultActorId ?? "").trim(),
     },
+    social: existingConfig?.social ?? defaultSocialAccountConfig(),
     mailbox: {
       provider: usesGmailUi ? "gmail" : "imap",
       deliveryMethod: usesGmailUi ? "gmail_ui" : "smtp",
@@ -111,6 +113,7 @@ async function reconcileMailbox(mailbox: MailpoolMailbox, deleted = false) {
     accounts.find((account) => getOutreachAccountFromEmail(account).trim().toLowerCase() === mailbox.email.trim().toLowerCase()) ??
     null;
   const nextConfig = mailboxConfigFromMailpool(mailbox, existing?.config);
+  const usesGmailUi = nextConfig.mailbox.deliveryMethod === "gmail_ui";
 
   const patch = {
     provider: "mailpool" as const,
@@ -128,7 +131,9 @@ async function reconcileMailbox(mailbox: MailpoolMailbox, deleted = false) {
       },
     },
     credentials: {
-      mailboxPassword: String(mailbox.imapPassword ?? mailbox.password ?? "").trim(),
+      mailboxPassword: usesGmailUi
+        ? String(mailbox.password ?? mailbox.imapPassword ?? "").trim()
+        : String(mailbox.imapPassword ?? mailbox.password ?? "").trim(),
       mailboxAuthCode: String(mailbox.authCode ?? "").trim(),
       mailboxSmtpPassword: String(mailbox.smtpPassword ?? mailbox.password ?? "").trim(),
       mailboxAdminEmail: String(mailbox.admin?.email ?? "").trim(),

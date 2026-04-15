@@ -49,7 +49,10 @@ const EMBEDDED_BRAND_FALLBACKS: BrandRecord[] = [
     tone: "",
     notes: "QA/testing brand workspace.",
     product: "",
+    socialDiscoveryCommentPrompt: "",
     socialDiscoveryPlatforms: [],
+    socialDiscoveryQueries: [],
+    socialDiscoveryYouTubeSubscriptions: [],
     operablePersonas: [],
     availableAssets: [],
     targetMarkets: [],
@@ -70,7 +73,10 @@ const EMBEDDED_BRAND_FALLBACKS: BrandRecord[] = [
     notes:
       "Private collective for self-funded operators. Current outreach offer: AWS credits for founders with no institutional VC; angels and friends/family are acceptable. Use Marco Rosetti as the sender voice.",
     product: "Private operator collective with negotiated cloud and software deals for self-funded founders",
+    socialDiscoveryCommentPrompt: "",
     socialDiscoveryPlatforms: [],
+    socialDiscoveryQueries: [],
+    socialDiscoveryYouTubeSubscriptions: [],
     operablePersonas: [],
     availableAssets: [],
     targetMarkets: ["Bootstrapped SaaS founders", "Self-funded operators"],
@@ -98,7 +104,10 @@ const EMBEDDED_BRAND_FALLBACKS: BrandRecord[] = [
       "Claims: trusted by over 200,000 innovators; campaign metrics cited (2x opens, 7x click-throughs, 4x conversions) backed by customer campaign data; testimonials from Steve Anderson, Henry Reith, and Alasdair Sutherland praising ease of use and time savings.",
     product:
       "AI platform to create realistic personalized videos at scale (prompt-to-video generation and bulk personalization), with delivery and workflow automation via no-code tools and API.",
+    socialDiscoveryCommentPrompt: "",
     socialDiscoveryPlatforms: [],
+    socialDiscoveryQueries: [],
+    socialDiscoveryYouTubeSubscriptions: [],
     operablePersonas: [
       "Journalist covering creator workflows and AI video",
       "Research lead interviewing creators about personalized video use",
@@ -155,7 +164,10 @@ const EMBEDDED_BRAND_FALLBACKS: BrandRecord[] = [
     tone: "",
     notes: "This is the user's art account. They want to do outreach to get new painting commissions.",
     product: "Painting commissions",
+    socialDiscoveryCommentPrompt: "",
     socialDiscoveryPlatforms: [],
+    socialDiscoveryQueries: [],
+    socialDiscoveryYouTubeSubscriptions: [],
     operablePersonas: [],
     availableAssets: [],
     targetMarkets: [],
@@ -177,7 +189,10 @@ const EMBEDDED_BRAND_FALLBACKS: BrandRecord[] = [
       "Primary job: publish source-backed market notes and underlying prospect lists, then ask relevant agencies and operators for comment, corrections, and reactions.",
     product:
       "Source-backed prospect discovery and market-note generation for overlooked B2B and e-commerce slices.",
+    socialDiscoveryCommentPrompt: "",
     socialDiscoveryPlatforms: [],
+    socialDiscoveryQueries: [],
+    socialDiscoveryYouTubeSubscriptions: [],
     operablePersonas: [],
     availableAssets: [],
     targetMarkets: [
@@ -218,7 +233,10 @@ const BRAND_SELECT_COLUMNS = [
   "tone",
   "notes",
   "product",
+  "social_discovery_comment_prompt",
   "social_discovery_platforms",
+  "social_discovery_queries",
+  "social_discovery_youtube_subscriptions",
   "operable_personas",
   "available_assets",
   "target_markets",
@@ -230,7 +248,10 @@ const BRAND_SELECT_COLUMNS = [
   "updated_at",
 ] as const;
 const OPTIONAL_BRAND_COLUMNS = [
+  "social_discovery_comment_prompt",
   "social_discovery_platforms",
+  "social_discovery_queries",
+  "social_discovery_youtube_subscriptions",
   "operable_personas",
   "available_assets",
 ] as const;
@@ -309,6 +330,115 @@ const normalizeStringArray = (value: unknown): string[] => {
   return [];
 };
 
+function normalizeBoolean(value: unknown, fallback = false) {
+  if (typeof value === "boolean") return value;
+  const normalized = String(value ?? "").trim().toLowerCase();
+  if (!normalized) return fallback;
+  return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on";
+}
+
+function normalizeNumber(value: unknown, fallback = 0) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function normalizeSocialDiscoveryYouTubeSubscriptions(value: unknown): BrandRecord["socialDiscoveryYouTubeSubscriptions"] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((entry, index) => {
+      const row = asRecord(entry);
+      const channelId = String(row.channelId ?? row.channel_id ?? "").trim();
+      if (!channelId) return null;
+      const status = String(row.status ?? "").trim().toLowerCase();
+      return {
+        id: String(row.id ?? `ytsub_${channelId || index}`),
+        channelId,
+        channelTitle: String(row.channelTitle ?? row.channel_title ?? "").trim(),
+        accountId: String(row.accountId ?? row.account_id ?? "").trim(),
+        accountName: String(row.accountName ?? row.account_name ?? "").trim(),
+        autoComment: normalizeBoolean(row.autoComment ?? row.auto_comment, true),
+        leaseSeconds: Math.max(0, Math.round(normalizeNumber(row.leaseSeconds ?? row.lease_seconds, 0))),
+        leaseExpiresAt: String(row.leaseExpiresAt ?? row.lease_expires_at ?? "").trim(),
+        status: ["pending", "active", "error"].includes(status)
+          ? (status as BrandRecord["socialDiscoveryYouTubeSubscriptions"][number]["status"])
+          : "pending",
+        callbackUrl: String(row.callbackUrl ?? row.callback_url ?? "").trim(),
+        topicUrl: String(row.topicUrl ?? row.topic_url ?? "").trim(),
+        lastSubscribeRequestedAt: String(row.lastSubscribeRequestedAt ?? row.last_subscribe_requested_at ?? "").trim(),
+        lastVerifiedAt: String(row.lastVerifiedAt ?? row.last_verified_at ?? "").trim(),
+        lastNotificationAt: String(row.lastNotificationAt ?? row.last_notification_at ?? "").trim(),
+        lastVideoId: String(row.lastVideoId ?? row.last_video_id ?? "").trim(),
+        lastVideoUrl: String(row.lastVideoUrl ?? row.last_video_url ?? "").trim(),
+        lastCommentId: String(row.lastCommentId ?? row.last_comment_id ?? "").trim(),
+        lastCommentUrl: String(row.lastCommentUrl ?? row.last_comment_url ?? "").trim(),
+        lastError: String(row.lastError ?? row.last_error ?? "").trim(),
+      };
+    })
+    .filter((entry): entry is BrandRecord["socialDiscoveryYouTubeSubscriptions"][number] => Boolean(entry));
+}
+
+const SOCIAL_DISCOVERY_COMMENT_PROMPT_NOTE_MARKER = "LASTB2B_SOCIAL_DISCOVERY_COMMENT_PROMPT:";
+const SOCIAL_DISCOVERY_QUERIES_NOTE_MARKER = "LASTB2B_SOCIAL_DISCOVERY_QUERIES:";
+
+function extractSocialDiscoveryCommentPromptFromNotes(notesRaw: string) {
+  const match = notesRaw.match(
+    new RegExp(`<!--\\s*${SOCIAL_DISCOVERY_COMMENT_PROMPT_NOTE_MARKER}([A-Za-z0-9+/=]+)\\s*-->`)
+  );
+  if (!match?.[1]) return "";
+  try {
+    return Buffer.from(match[1], "base64").toString("utf8").trim();
+  } catch {
+    return "";
+  }
+}
+
+function extractSocialDiscoveryQueriesFromNotes(notesRaw: string) {
+  const match = notesRaw.match(
+    new RegExp(`<!--\\s*${SOCIAL_DISCOVERY_QUERIES_NOTE_MARKER}([A-Za-z0-9+/=]+)\\s*-->`)
+  );
+  if (!match?.[1]) return [];
+  try {
+    const parsed = JSON.parse(Buffer.from(match[1], "base64").toString("utf8"));
+    return normalizeStringArray(parsed);
+  } catch {
+    return [];
+  }
+}
+
+function stripSocialDiscoveryMetadataFromNotes(notesRaw: string) {
+  return notesRaw
+    .replace(
+      new RegExp(`\\n*<!--\\s*${SOCIAL_DISCOVERY_COMMENT_PROMPT_NOTE_MARKER}[A-Za-z0-9+/=]+\\s*-->\\n*`, "g"),
+      "\n\n"
+    )
+    .replace(
+      new RegExp(`\\n*<!--\\s*${SOCIAL_DISCOVERY_QUERIES_NOTE_MARKER}[A-Za-z0-9+/=]+\\s*-->\\n*`, "g"),
+      "\n\n"
+    )
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function mergeNotesWithSocialDiscoveryMetadata(input: {
+  notes: string;
+  prompt: string;
+  queries: string[];
+}) {
+  const visibleNotes = stripSocialDiscoveryMetadataFromNotes(String(input.notes ?? "").trim());
+  const trimmedPrompt = String(input.prompt ?? "").trim();
+  const normalizedQueries = normalizeStringArray(input.queries);
+  const markers: string[] = [];
+  if (trimmedPrompt) {
+    const encodedPrompt = Buffer.from(trimmedPrompt, "utf8").toString("base64");
+    markers.push(`<!-- ${SOCIAL_DISCOVERY_COMMENT_PROMPT_NOTE_MARKER}${encodedPrompt} -->`);
+  }
+  if (normalizedQueries.length) {
+    const encodedQueries = Buffer.from(JSON.stringify(normalizedQueries), "utf8").toString("base64");
+    markers.push(`<!-- ${SOCIAL_DISCOVERY_QUERIES_NOTE_MARKER}${encodedQueries} -->`);
+  }
+  return [visibleNotes, ...markers].filter(Boolean).join("\n\n").trim();
+}
+
 function supabaseErrorMessage(error: unknown) {
   if (!error || typeof error !== "object") return "";
   return String((error as { message?: unknown }).message ?? "").trim();
@@ -326,15 +456,27 @@ function isMissingSupabaseColumn(error: unknown, column: string) {
 
 const mapBrandRow = (input: unknown): BrandRecord => {
   const row = asRecord(input);
+  const notesRaw = String(row.notes ?? "");
+  const promptFromNotes = extractSocialDiscoveryCommentPromptFromNotes(notesRaw);
+  const queriesFromNotes = extractSocialDiscoveryQueriesFromNotes(notesRaw);
   return {
     id: String(row.id ?? ""),
     name: String(row.name ?? "Untitled Brand"),
     website: String(row.website ?? ""),
     tone: String(row.tone ?? ""),
-    notes: String(row.notes ?? ""),
+    notes: stripSocialDiscoveryMetadataFromNotes(notesRaw),
     product: String(row.product ?? ""),
+    socialDiscoveryCommentPrompt: String(
+      row.social_discovery_comment_prompt ?? row.socialDiscoveryCommentPrompt ?? promptFromNotes
+    ),
     socialDiscoveryPlatforms: normalizeStringArray(
       row.social_discovery_platforms ?? row.socialDiscoveryPlatforms ?? []
+    ),
+    socialDiscoveryQueries: normalizeStringArray(
+      row.social_discovery_queries ?? row.socialDiscoveryQueries ?? queriesFromNotes
+    ),
+    socialDiscoveryYouTubeSubscriptions: normalizeSocialDiscoveryYouTubeSubscriptions(
+      row.social_discovery_youtube_subscriptions ?? row.socialDiscoveryYouTubeSubscriptions ?? []
     ),
     operablePersonas: normalizeStringArray(
       row.operable_personas ?? row.operablePersonas ?? row.real_personas ?? row.realPersonas
@@ -548,6 +690,9 @@ export async function createBrand(input: {
   notes?: string;
   product?: string;
   socialDiscoveryPlatforms?: string[];
+  socialDiscoveryQueries?: string[];
+  socialDiscoveryCommentPrompt?: string;
+  socialDiscoveryYouTubeSubscriptions?: BrandRecord["socialDiscoveryYouTubeSubscriptions"];
   operablePersonas?: string[];
   availableAssets?: string[];
   targetMarkets?: string[];
@@ -563,7 +708,12 @@ export async function createBrand(input: {
     tone: String(input.tone ?? "").trim(),
     notes: String(input.notes ?? "").trim(),
     product: String(input.product ?? "").trim(),
+    socialDiscoveryCommentPrompt: String(input.socialDiscoveryCommentPrompt ?? "").trim(),
     socialDiscoveryPlatforms: normalizeStringArray(input.socialDiscoveryPlatforms ?? []),
+    socialDiscoveryQueries: normalizeStringArray(input.socialDiscoveryQueries ?? []),
+    socialDiscoveryYouTubeSubscriptions: normalizeSocialDiscoveryYouTubeSubscriptions(
+      input.socialDiscoveryYouTubeSubscriptions ?? []
+    ),
     operablePersonas: normalizeStringArray(input.operablePersonas),
     availableAssets: normalizeStringArray(input.availableAssets),
     targetMarkets: normalizeStringArray(input.targetMarkets),
@@ -584,9 +734,16 @@ export async function createBrand(input: {
       name: brand.name,
       website: brand.website,
       tone: brand.tone,
-      notes: brand.notes,
+      notes: mergeNotesWithSocialDiscoveryMetadata({
+        notes: brand.notes,
+        prompt: brand.socialDiscoveryCommentPrompt,
+        queries: brand.socialDiscoveryQueries,
+      }),
       product: brand.product,
+      social_discovery_comment_prompt: brand.socialDiscoveryCommentPrompt,
       social_discovery_platforms: brand.socialDiscoveryPlatforms,
+      social_discovery_queries: brand.socialDiscoveryQueries,
+      social_discovery_youtube_subscriptions: brand.socialDiscoveryYouTubeSubscriptions,
       operable_personas: brand.operablePersonas,
       available_assets: brand.availableAssets,
       target_markets: brand.targetMarkets,
@@ -604,7 +761,10 @@ export async function createBrand(input: {
       .single();
     if (OPTIONAL_BRAND_COLUMNS.some((column) => isMissingSupabaseColumn(error, column))) {
       const legacyInsertPayload: Record<string, unknown> = { ...insertPayload };
+      delete legacyInsertPayload.social_discovery_comment_prompt;
       delete legacyInsertPayload.social_discovery_platforms;
+      delete legacyInsertPayload.social_discovery_queries;
+      delete legacyInsertPayload.social_discovery_youtube_subscriptions;
       delete legacyInsertPayload.operable_personas;
       delete legacyInsertPayload.available_assets;
       const retried = await supabase
@@ -640,7 +800,10 @@ export async function updateBrand(
       | "tone"
       | "notes"
       | "product"
+      | "socialDiscoveryCommentPrompt"
       | "socialDiscoveryPlatforms"
+      | "socialDiscoveryQueries"
+      | "socialDiscoveryYouTubeSubscriptions"
       | "operablePersonas"
       | "availableAssets"
       | "targetMarkets"
@@ -655,14 +818,49 @@ export async function updateBrand(
 ): Promise<BrandRecord | null> {
   const supabase = getSupabaseAdmin();
   if (supabase) {
+    const existingBrand =
+      typeof patch.notes === "string" ||
+      typeof patch.socialDiscoveryCommentPrompt === "string" ||
+      Array.isArray(patch.socialDiscoveryQueries)
+        ? await getBrandById(brandId, { includeEmbedded: true })
+        : null;
     const update: Record<string, unknown> = {};
     if (typeof patch.name === "string") update.name = patch.name;
     if (typeof patch.website === "string") update.website = patch.website;
     if (typeof patch.tone === "string") update.tone = patch.tone;
-    if (typeof patch.notes === "string") update.notes = patch.notes;
     if (typeof patch.product === "string") update.product = patch.product;
+    if (
+      typeof patch.notes === "string" ||
+      typeof patch.socialDiscoveryCommentPrompt === "string" ||
+      Array.isArray(patch.socialDiscoveryQueries)
+    ) {
+      const nextNotes = typeof patch.notes === "string" ? patch.notes : existingBrand?.notes ?? "";
+      const nextPrompt =
+        typeof patch.socialDiscoveryCommentPrompt === "string"
+          ? patch.socialDiscoveryCommentPrompt
+          : existingBrand?.socialDiscoveryCommentPrompt ?? "";
+      const nextQueries = Array.isArray(patch.socialDiscoveryQueries)
+        ? patch.socialDiscoveryQueries
+        : existingBrand?.socialDiscoveryQueries ?? [];
+      update.notes = mergeNotesWithSocialDiscoveryMetadata({
+        notes: nextNotes,
+        prompt: nextPrompt,
+        queries: nextQueries,
+      });
+    }
+    if (typeof patch.socialDiscoveryCommentPrompt === "string") {
+      update.social_discovery_comment_prompt = patch.socialDiscoveryCommentPrompt;
+    }
     if (Array.isArray(patch.socialDiscoveryPlatforms)) {
       update.social_discovery_platforms = patch.socialDiscoveryPlatforms;
+    }
+    if (Array.isArray(patch.socialDiscoveryQueries)) {
+      update.social_discovery_queries = patch.socialDiscoveryQueries;
+    }
+    if (Array.isArray(patch.socialDiscoveryYouTubeSubscriptions)) {
+      update.social_discovery_youtube_subscriptions = normalizeSocialDiscoveryYouTubeSubscriptions(
+        patch.socialDiscoveryYouTubeSubscriptions
+      );
     }
     if (Array.isArray(patch.operablePersonas)) update.operable_personas = patch.operablePersonas;
     if (Array.isArray(patch.availableAssets)) update.available_assets = patch.availableAssets;
@@ -683,7 +881,10 @@ export async function updateBrand(
       .select("*")
       .maybeSingle();
     if (OPTIONAL_BRAND_COLUMNS.some((column) => isMissingSupabaseColumn(error, column))) {
+      delete update.social_discovery_comment_prompt;
       delete update.social_discovery_platforms;
+      delete update.social_discovery_queries;
+      delete update.social_discovery_youtube_subscriptions;
       delete update.operable_personas;
       delete update.available_assets;
       const retried = await supabase
@@ -709,6 +910,9 @@ export async function updateBrand(
   const next: BrandRecord = {
     ...mapBrandRow(existing),
     ...patch,
+    socialDiscoveryYouTubeSubscriptions: Array.isArray(patch.socialDiscoveryYouTubeSubscriptions)
+      ? normalizeSocialDiscoveryYouTubeSubscriptions(patch.socialDiscoveryYouTubeSubscriptions)
+      : mapBrandRow(existing).socialDiscoveryYouTubeSubscriptions,
     updatedAt: nowIso(),
   };
   if (index < 0) {

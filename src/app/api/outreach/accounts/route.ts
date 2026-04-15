@@ -4,6 +4,7 @@ import {
   createOutreachAccount,
   getOutreachAccountLookupDebug,
   listOutreachAccounts,
+  listSocialRoutingAccounts,
 } from "@/lib/outreach-data";
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -13,9 +14,11 @@ function asRecord(value: unknown): Record<string, unknown> {
   return {};
 }
 
-export async function GET() {
+export async function GET(request: Request) {
   try {
-    const accounts = await listOutreachAccounts();
+    const url = new URL(request.url);
+    const scope = url.searchParams.get("scope");
+    const accounts = scope === "social" ? await listSocialRoutingAccounts() : await listOutreachAccounts();
     return NextResponse.json({ accounts });
   } catch (err) {
     if (err instanceof OutreachDataError) {

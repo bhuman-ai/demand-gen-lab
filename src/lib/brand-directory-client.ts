@@ -65,6 +65,20 @@ export function hydrateCachedBrandDirectory(rows: BrandDirectoryEntry[]) {
   cachedBrandDirectory = normalizeBrandDirectory(rows);
 }
 
+export function upsertCachedBrandDirectoryEntry(row: BrandDirectoryEntry) {
+  const normalized = normalizeBrandDirectory([row]);
+  const next = normalized[0];
+  if (!next) return;
+
+  const existingIndex = cachedBrandDirectory.findIndex((entry) => entry.id === next.id);
+  if (existingIndex >= 0) {
+    cachedBrandDirectory = cachedBrandDirectory.map((entry, index) => (index === existingIndex ? next : entry));
+    return;
+  }
+
+  cachedBrandDirectory = [next, ...cachedBrandDirectory];
+}
+
 export async function fetchBrandDirectory(options?: { force?: boolean }) {
   const force = options?.force ?? false;
 

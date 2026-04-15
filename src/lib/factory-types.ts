@@ -31,6 +31,7 @@ export type Hypothesis = {
 export type Angle = Hypothesis;
 
 export type RunCadence = "3_step_7_day";
+export type OutreachTrafficLane = "warmup" | "outbound";
 
 export type ExperimentRunPolicy = {
   cadence: RunCadence;
@@ -448,6 +449,7 @@ export type CampaignScalePolicy = {
   minSpacingMinutes: number;
   accountId: string;
   mailboxAccountId: string;
+  lane?: OutreachTrafficLane;
   safetyMode: "strict" | "balanced";
 };
 
@@ -562,6 +564,30 @@ export type InboxRow = {
   receivedAt: string;
 };
 
+export type SocialDiscoveryYouTubeSubscriptionStatus = "pending" | "active" | "error";
+
+export type SocialDiscoveryYouTubeSubscription = {
+  id: string;
+  channelId: string;
+  channelTitle: string;
+  accountId: string;
+  accountName: string;
+  autoComment: boolean;
+  leaseSeconds: number;
+  leaseExpiresAt: string;
+  status: SocialDiscoveryYouTubeSubscriptionStatus;
+  callbackUrl: string;
+  topicUrl: string;
+  lastSubscribeRequestedAt: string;
+  lastVerifiedAt: string;
+  lastNotificationAt: string;
+  lastVideoId: string;
+  lastVideoUrl: string;
+  lastCommentId: string;
+  lastCommentUrl: string;
+  lastError: string;
+};
+
 export type BrandRecord = {
   id: string;
   name: string;
@@ -569,7 +595,10 @@ export type BrandRecord = {
   tone: string;
   notes: string;
   product: string;
+  socialDiscoveryCommentPrompt: string;
   socialDiscoveryPlatforms: string[];
+  socialDiscoveryQueries: string[];
+  socialDiscoveryYouTubeSubscriptions: SocialDiscoveryYouTubeSubscription[];
   operablePersonas: string[];
   availableAssets: string[];
   targetMarkets: string[];
@@ -773,8 +802,8 @@ export type MailboxDeliveryMethod = "smtp" | "gmail_ui";
 export type GmailUiLoginState = "unknown" | "login_required" | "ready" | "error";
 
 export type OutreachAccountType = "delivery" | "mailbox" | "hybrid";
-export type SocialConnectionProvider = "manual" | "unipile" | "none";
-export type SocialLinkedProvider = "" | "linkedin" | "instagram" | "x" | "unknown";
+export type SocialConnectionProvider = "manual" | "unipile" | "youtube" | "none";
+export type SocialLinkedProvider = "" | "linkedin" | "instagram" | "x" | "youtube" | "unknown";
 export type SocialActorRole =
   | "operator"
   | "specialist"
@@ -908,6 +937,46 @@ export type BrandOutreachAssignment = {
   accountId: string;
   accountIds: string[];
   mailboxAccountId: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type CanonicalSenderState =
+  | "provisioning"
+  | "blocked"
+  | "warming"
+  | "ready"
+  | "restricted"
+  | "retired";
+
+export type CanonicalSender = {
+  id: string;
+  brandId: string;
+  fromEmail: string;
+  replyToEmail: string;
+  domain: string;
+  deliveryAccountId: string;
+  mailboxAccountId: string;
+  state: CanonicalSenderState;
+  readinessScore: number;
+  dailyCap: number;
+  hourlyCap: number;
+  blockedReason: string;
+  lastTestStatus: "unknown" | "pass" | "fail";
+  lastSendAt: string;
+  lastReplyAt: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type CanonicalSenderAccountAliasType = "current_delivery" | "current_mailbox" | "legacy";
+
+export type CanonicalSenderAccountAlias = {
+  id: string;
+  senderId: string;
+  accountId: string;
+  aliasType: CanonicalSenderAccountAliasType;
+  active: boolean;
   createdAt: string;
   updatedAt: string;
 };
@@ -1637,6 +1706,54 @@ export type OutreachRunJob = {
   maxAttempts: number;
   payload: Record<string, unknown>;
   lastError: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type CampaignPrepTaskStatus = "queued" | "running" | "blocked" | "ready" | "failed";
+
+export type CampaignPrepTaskBlockerCode =
+  | "none"
+  | "needs_sourcing"
+  | "dependency_misconfigured"
+  | "invalid_inventory"
+  | "blocked"
+  | "unknown";
+
+export type CampaignPrepTask = {
+  id: string;
+  brandId: string;
+  campaignId: string;
+  lane: OutreachTrafficLane;
+  status: CampaignPrepTaskStatus;
+  attempt: number;
+  executeAfter: string;
+  startedAt: string;
+  finishedAt: string;
+  blockerCode: CampaignPrepTaskBlockerCode;
+  summary: string;
+  lastError: string;
+  progress: Record<string, unknown>;
+  sourceVersion: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type OutreachLeaseType = "campaign_prep";
+export type OutreachLeaseScopeType = "campaign";
+export type OutreachLeaseStatus = "active" | "released" | "expired";
+
+export type OutreachLease = {
+  id: string;
+  leaseType: OutreachLeaseType;
+  scopeType: OutreachLeaseScopeType;
+  scopeId: string;
+  holder: string;
+  status: OutreachLeaseStatus;
+  expiresAt: string;
+  metadata: Record<string, unknown>;
+  releasedAt: string;
+  releasedReason: string;
   createdAt: string;
   updatedAt: string;
 };

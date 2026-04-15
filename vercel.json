@@ -2,12 +2,24 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "crons": [
     {
-      "path": "/api/internal/outreach/tick",
+      "path": "/api/internal/outreach/dispatch-tick",
       "schedule": "* * * * *"
+    },
+    {
+      "path": "/api/internal/outreach/prep-tick",
+      "schedule": "*/5 * * * *"
+    },
+    {
+      "path": "/api/internal/outreach/ops-tick",
+      "schedule": "*/5 * * * *"
     },
     {
       "path": "/api/internal/social-discovery/daily",
       "schedule": "0 6 * * *"
+    },
+    {
+      "path": "/api/internal/social-discovery/youtube-subscriptions",
+      "schedule": "0 */6 * * *"
     }
   ]
 }

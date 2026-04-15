@@ -51,6 +51,7 @@ import {
   type MailpoolSpamCheck,
   type MailpoolSubscriptionSlots,
 } from "@/lib/mailpool-client";
+import { defaultSocialAccountConfig } from "@/lib/social-account-config";
 import { sanitizeCustomerIoBillingConfig } from "@/lib/outreach-customerio-billing";
 import { testOutreachProviders } from "@/lib/outreach-providers";
 import { pickWebshareProxy } from "@/lib/webshare-client";
@@ -1226,6 +1227,7 @@ async function ensureCustomerIoDeliveryAccount(input: {
       apify: {
         defaultActorId: "",
       },
+      social: defaultSocialAccountConfig({ cooldownMinutes: 0 }),
       mailbox: {
         provider: "imap",
         deliveryMethod: "smtp",
@@ -1369,6 +1371,7 @@ async function ensureMailpoolHybridAccount(input: {
       apify: {
         defaultActorId: "",
       },
+      social: defaultSocialAccountConfig({ cooldownMinutes: 0 }),
       mailbox: {
         provider: wantsWebshare ? "gmail" : "imap",
         deliveryMethod: wantsWebshare ? "gmail_ui" : "smtp",
@@ -1972,6 +1975,7 @@ export async function provisionCustomerIoSender(
         apify: {
           defaultActorId: "",
         },
+        social: defaultSocialAccountConfig({ cooldownMinutes: 0 }),
         mailbox: {
           provider: "imap",
           deliveryMethod: "smtp",
@@ -2032,6 +2036,7 @@ export async function provisionCustomerIoSender(
       apify: {
         defaultActorId: "",
       },
+      social: defaultSocialAccountConfig({ cooldownMinutes: 0 }),
       mailbox: {
         provider: "imap",
         deliveryMethod: "smtp",
@@ -2070,6 +2075,9 @@ export async function provisionCustomerIoSender(
       customerIoTrackApiKey: customerIoConnection.trackingApiKey,
       customerIoAppApiKey: customerIoConnection.appApiKey,
       apifyToken: "",
+      youtubeClientId: "",
+      youtubeClientSecret: "",
+      youtubeRefreshToken: "",
       mailboxAccessToken: "",
       mailboxRefreshToken: "",
       mailboxPassword: "",

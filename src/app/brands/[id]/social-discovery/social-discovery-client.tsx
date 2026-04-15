@@ -1,87 +1,86 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ExternalLink, RefreshCw } from "lucide-react";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { EmptyState, PageIntro, SectionPanel, StatLedger } from "@/components/ui/page-layout";
+import { Input } from "@/components/ui/input";
+import { EmptyState, PageIntro, SectionPanel } from "@/components/ui/page-layout";
 import { Select } from "@/components/ui/select";
-import {
-  CURRENT_SOCIAL_DISCOVERY_PLATFORMS,
-  DEFAULT_BRAND_SOCIAL_PLATFORMS,
-  SOCIAL_PLATFORM_CATALOG,
-  isSupportedDiscoveryPlatform,
-} from "@/lib/social-platform-catalog";
+import { Textarea } from "@/components/ui/textarea";
+import { SocialAccountPoolPanel } from "./social-account-pool-panel";
+import type { OutreachAccount, SocialDiscoveryYouTubeSubscription } from "@/lib/factory-types";
+import { resolveSocialDiscoveryCommentPrompt } from "@/lib/social-discovery-comment-prompt";
 import { cn } from "@/lib/utils";
 import type {
+  SocialDiscoveryCommentDelivery,
   SocialDiscoveryPost,
+  SocialDiscoveryPromotionDraft,
+  SocialDiscoveryPromotionPurchase,
   SocialDiscoveryRun,
   SocialDiscoveryStatus,
 } from "@/lib/social-discovery-types";
 
 type InteractionPlan = SocialDiscoveryPost["interactionPlan"] & {
+  domainProfile?: string;
+  fitSummary?: string;
   targetStrength?: "target" | "watch" | "skip";
   commentPosture?: string;
   mentionPolicy?: string;
   analyticsTag?: string;
   exitRules?: string[];
+  routingSummary?: string;
+  recommendedAccounts?: NonNullable<SocialDiscoveryPost["interactionPlan"]["recommendedAccounts"]>;
 };
 
 type DiscoveryPost = SocialDiscoveryPost & {
   interactionPlan: InteractionPlan;
 };
 
-type DiscoveryResponse = {
-  posts: DiscoveryPost[];
-  runs: SocialDiscoveryRun[];
+type CommentAccountOption = {
+  accountId: string;
+  accountName: string;
+  handle: string;
+  fromEmail: string;
+  externalAccountId: string;
+  linkedProvider: string;
+  source: "recommended" | "manual";
 };
 
-type BrandSettingsResponse = {
+type YouTubeSubscriptionResponse = {
+  subscriptions?: SocialDiscoveryYouTubeSubscription[];
+};
+
+type DiscoveryResponse = {
   brand?: {
-    id: string;
-    name: string;
-    socialDiscoveryPlatforms?: string[];
+    id?: string;
+    name?: string;
+    socialDiscoveryCommentPrompt?: string;
+    socialDiscoveryQueries?: string[];
+  };
+  posts: DiscoveryPost[];
+  runs: SocialDiscoveryRun[];
+  savedQueries?: string[];
+  suggestedQueries?: string[];
+  errors?: Array<{
+    platform: string;
+    query: string;
+    message: string;
+  }>;
+  summary?: {
+    provider?: string;
+    platforms?: string[];
+    queries?: number;
+    found?: number;
+    saved?: number;
+    errors?: number;
   };
 };
 
-const statusOptions: Array<SocialDiscoveryStatus | "all"> = ["all", "new", "saved", "triaged", "dismissed"];
-const validPlatformIds = new Set(SOCIAL_PLATFORM_CATALOG.map((item) => item.id));
+const SCAN_PLATFORM = "instagram";
 
 function planFor(post: DiscoveryPost | null): InteractionPlan | null {
   return post?.interactionPlan ?? null;
-}
-
-function strengthFor(post: DiscoveryPost | null) {
-  return planFor(post)?.targetStrength || "skip";
-}
-
-function postureFor(plan: InteractionPlan | null) {
-  if (!plan?.commentPosture) return strengthForPlan(plan) === "skip" ? "no_comment" : "method_first";
-  return plan.commentPosture;
-}
-
-function strengthForPlan(plan: InteractionPlan | null) {
-  return plan?.targetStrength || "skip";
-}
-
-function mentionPolicyFor(plan: InteractionPlan | null) {
-  if (!plan?.mentionPolicy) return strengthForPlan(plan) === "skip" ? "never_mention" : "mention_only_if_asked";
-  return plan.mentionPolicy;
-}
-
-function hasCommentSequence(plan: InteractionPlan | null) {
-  if (!plan?.sequence?.length) return false;
-  if (strengthForPlan(plan) === "skip") return false;
-  if (postureFor(plan) === "no_comment" || postureFor(plan) === "watch_only") return false;
-  if (mentionPolicyFor(plan) === "never_mention") return false;
-  return true;
-}
-
-function badgeVariant(strength: string) {
-  if (strength === "target") return "success" as const;
-  if (strength === "watch") return "accent" as const;
-  return "muted" as const;
 }
 
 function formatDate(value: string) {
@@ -95,16 +94,173 @@ function formatDate(value: string) {
   }).format(new Date(parsed));
 }
 
-function normalizePlatformSelection(value: unknown, fallback: string[] = DEFAULT_BRAND_SOCIAL_PLATFORMS) {
-  if (!Array.isArray(value)) return [...fallback];
-  const normalized = value
-    .map((entry) => String(entry ?? "").trim())
-    .filter((entry, index, rows) => entry && validPlatformIds.has(entry) && rows.indexOf(entry) === index);
-  return normalized.length ? normalized : [...fallback];
+function formatPromotionPurchaseStatus(status: SocialDiscoveryPromotionPurchase["status"]) {
+  switch (status) {
+    case "submitted":
+      return "Order submitted";
+    case "requires_login":
+      return "Login required";
+    case "wallet_unavailable":
+      return "Wallet unavailable";
+    case "checkout_requires_input":
+      return "Checkout needs input";
+    case "requires_configuration":
+      return "Local setup required";
+    default:
+      return "Purchase failed";
+  }
 }
 
-function selectionKey(value: string[]) {
-  return [...value].sort().join("|");
+function trimTrailingSlashes(value: string) {
+  return value.replace(/\/+$/, "");
+}
+
+function buildInstagramPathCommentUrl(postUrl: string, commentId: string) {
+  const trimmedPostUrl = postUrl.trim();
+  const trimmedCommentId = commentId.trim();
+  if (!trimmedPostUrl || !trimmedCommentId) return "";
+  try {
+    const url = new URL(trimmedPostUrl);
+    url.search = "";
+    url.hash = "";
+    url.pathname = `${trimTrailingSlashes(url.pathname)}/c/${encodeURIComponent(trimmedCommentId)}/`;
+    return url.toString();
+  } catch {
+    const base = trimTrailingSlashes(trimmedPostUrl.split("#")[0]?.split("?")[0] ?? "");
+    return base ? `${base}/c/${encodeURIComponent(trimmedCommentId)}/` : "";
+  }
+}
+
+function buildCommentExportPayload(post: DiscoveryPost | null, delivery: SocialDiscoveryCommentDelivery | null) {
+  if (!post || !delivery) return null;
+  const altCommentUrl =
+    post.platform === "instagram" && delivery.commentId
+      ? buildInstagramPathCommentUrl(post.url, delivery.commentId)
+      : "";
+  return {
+    platform: post.platform,
+    postUrl: post.url,
+    postTitle: post.title,
+    commentId: delivery.commentId,
+    commentUrl: delivery.commentUrl,
+    altCommentUrl,
+    deliveryStatus: delivery.status,
+    deliverySource: delivery.source,
+    postedAt: delivery.postedAt,
+    account: {
+      id: delivery.accountId,
+      name: delivery.accountName,
+      handle: delivery.accountHandle,
+    },
+  };
+}
+
+function buildPromotionExportPayload(post: DiscoveryPost | null, draft: SocialDiscoveryPromotionDraft | null) {
+  if (!post || !draft) return null;
+  return {
+    channel: draft.channel,
+    objective: draft.objective,
+    campaignName: draft.campaignName,
+    destinationUrl: draft.destinationUrl,
+    sourcePostUrl: draft.sourcePostUrl,
+    sourceCommentUrl: draft.sourceCommentUrl,
+    audience: draft.audience,
+    headline: draft.headline,
+    primaryText: draft.primaryText,
+    ctaLabel: draft.ctaLabel,
+    rationale: draft.rationale,
+    generatedAt: draft.generatedAt,
+    postId: post.id,
+    brandId: post.brandId,
+  };
+}
+
+const discoveryCacheKey = (brandId: string) => `social-discovery-cache:${brandId}`;
+
+function readCachedDiscovery(brandId: string): DiscoveryResponse | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.localStorage.getItem(discoveryCacheKey(brandId));
+    if (!raw) return null;
+    const data = JSON.parse(raw) as DiscoveryResponse & { cachedAt?: string };
+    return {
+      brand: data.brand && typeof data.brand === "object" ? data.brand : undefined,
+      posts: Array.isArray(data.posts) ? data.posts : [],
+      runs: Array.isArray(data.runs) ? data.runs : [],
+      savedQueries: Array.isArray(data.savedQueries)
+        ? data.savedQueries.filter((entry): entry is string => typeof entry === "string")
+        : [],
+      suggestedQueries: Array.isArray(data.suggestedQueries)
+        ? data.suggestedQueries.filter((entry): entry is string => typeof entry === "string")
+        : [],
+      errors: Array.isArray(data.errors) ? data.errors : [],
+      summary: data.summary && typeof data.summary === "object" ? data.summary : undefined,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function writeCachedDiscovery(brandId: string, data: DiscoveryResponse) {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(
+      discoveryCacheKey(brandId),
+      JSON.stringify({
+        ...data,
+        posts: Array.isArray(data.posts) ? data.posts : [],
+        savedQueries: Array.isArray(data.savedQueries) ? data.savedQueries : [],
+        suggestedQueries: Array.isArray(data.suggestedQueries) ? data.suggestedQueries : [],
+        cachedAt: new Date().toISOString(),
+      })
+    );
+  } catch {
+    // Ignore cache write failures.
+  }
+}
+
+function clearCachedDiscovery(brandId: string) {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.removeItem(discoveryCacheKey(brandId));
+  } catch {
+    // Ignore cache clear failures.
+  }
+}
+
+function filterPostsByStatus(posts: DiscoveryPost[], status: SocialDiscoveryStatus | "all") {
+  return status === "all" ? posts : posts.filter((post) => post.status === status);
+}
+
+function scanMessageFrom(data: DiscoveryResponse) {
+  if (data.posts.length > 0) return "";
+  if (data.errors?.length) {
+    const first = data.errors[0];
+    return `Scan returned 0 candidates. ${first.platform}: ${first.query} -> ${first.message}`;
+  }
+  const provider = data.summary?.provider ? `${data.summary.provider}` : "search";
+  return `Scan returned 0 candidates from ${provider}. The current 1h filter may have eliminated everything fresh enough to keep.`;
+}
+
+function latestRunIdFrom(data: DiscoveryResponse | null | undefined) {
+  return typeof data?.runs?.[0]?.id === "string" ? data.runs[0].id : "";
+}
+
+function normalizeQueries(value: string[] | undefined) {
+  return (value ?? [])
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+}
+
+function sameQueries(left: string[], right: string[]) {
+  if (left.length !== right.length) return false;
+  return left.every((entry, index) => entry === right[index]);
+}
+
+function baselineQueriesFor(data: DiscoveryResponse | null | undefined) {
+  const saved = normalizeQueries(data?.savedQueries);
+  if (saved.length) return saved;
+  return normalizeQueries(data?.suggestedQueries);
 }
 
 async function readDiscoveryResponse(response: Response) {
@@ -113,56 +269,260 @@ async function readDiscoveryResponse(response: Response) {
     throw new Error(typeof data?.error === "string" ? data.error : "Social discovery request failed");
   }
   return {
+    brand: data?.brand && typeof data.brand === "object" ? data.brand : undefined,
     posts: Array.isArray(data?.posts) ? data.posts : [],
     runs: Array.isArray(data?.runs) ? data.runs : data?.run ? [data.run] : [],
+    savedQueries: Array.isArray(data?.savedQueries) ? data.savedQueries : [],
+    suggestedQueries: Array.isArray(data?.suggestedQueries) ? data.suggestedQueries : [],
+    errors: Array.isArray(data?.errors) ? data.errors : [],
+    summary: data?.summary && typeof data.summary === "object" ? data.summary : undefined,
   } as DiscoveryResponse;
-}
-
-async function readBrandSettingsResponse(response: Response) {
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    throw new Error(typeof data?.error === "string" ? data.error : "Brand request failed");
-  }
-  return data as BrandSettingsResponse;
 }
 
 export default function SocialDiscoveryClient({ brandId }: { brandId: string }) {
   const [posts, setPosts] = useState<DiscoveryPost[]>([]);
   const [runs, setRuns] = useState<SocialDiscoveryRun[]>([]);
   const [selectedId, setSelectedId] = useState("");
-  const [status, setStatus] = useState<SocialDiscoveryStatus | "all">("all");
+  const [status] = useState<SocialDiscoveryStatus | "all">("all");
   const [loading, setLoading] = useState(true);
   const [scanning, setScanning] = useState(false);
-  const [savingPlatforms, setSavingPlatforms] = useState(false);
-  const [selectedPlatforms, setSelectedPlatforms] = useState<string[]>([...DEFAULT_BRAND_SOCIAL_PLATFORMS]);
-  const [savedPlatforms, setSavedPlatforms] = useState<string[]>([...DEFAULT_BRAND_SOCIAL_PLATFORMS]);
   const [error, setError] = useState("");
+  const [scanMessage, setScanMessage] = useState("");
+  const [commentDraft, setCommentDraft] = useState("");
+  const [commentAccountId, setCommentAccountId] = useState("");
+  const [commentReplyId, setCommentReplyId] = useState("");
+  const [commentError, setCommentError] = useState("");
+  const [commentResult, setCommentResult] = useState<SocialDiscoveryCommentDelivery | null>(null);
+  const [sendingComment, setSendingComment] = useState(false);
+  const [promoError, setPromoError] = useState("");
+  const [creatingPromo, setCreatingPromo] = useState(false);
+  const [promoResult, setPromoResult] = useState<SocialDiscoveryPromotionDraft | null>(null);
+  const [purchaseResult, setPurchaseResult] = useState<SocialDiscoveryPromotionPurchase | null>(null);
+  const [queryDraft, setQueryDraft] = useState("");
+  const [savedQueries, setSavedQueries] = useState<string[]>([]);
+  const [suggestedQueries, setSuggestedQueries] = useState<string[]>([]);
+  const [savingQueries, setSavingQueries] = useState(false);
+  const [savedBrandCommentPrompt, setSavedBrandCommentPrompt] = useState("");
+  const [brandCommentPromptDraft, setBrandCommentPromptDraft] = useState("");
+  const [savingBrandCommentPrompt, setSavingBrandCommentPrompt] = useState(false);
+  const [brandCommentPromptError, setBrandCommentPromptError] = useState("");
+  const [socialAccounts, setSocialAccounts] = useState<OutreachAccount[]>([]);
+  const [youtubeSubscriptions, setYouTubeSubscriptions] = useState<SocialDiscoveryYouTubeSubscription[]>([]);
+  const [youtubeChannelIdDraft, setYouTubeChannelIdDraft] = useState("");
+  const [youtubeSubscriptionAccountId, setYouTubeSubscriptionAccountId] = useState("");
+  const [youtubeAutoCommentEnabled, setYouTubeAutoCommentEnabled] = useState(true);
+  const [youtubeSubscriptionError, setYouTubeSubscriptionError] = useState("");
+  const [savingYouTubeSubscription, setSavingYouTubeSubscription] = useState(false);
+  const [removingYouTubeChannelId, setRemovingYouTubeChannelId] = useState("");
+  const previousSelectedPostIdRef = useRef("");
+  const lastAutoCommentDraftRef = useRef("");
 
   const selectedPost = useMemo(
     () => posts.find((post) => post.id === selectedId) ?? posts[0] ?? null,
     [posts, selectedId]
   );
-  const selectedPlan = planFor(selectedPost);
-  const counts = useMemo(() => {
-    const target = posts.filter((post) => strengthFor(post) === "target").length;
-    const watch = posts.filter((post) => strengthFor(post) === "watch").length;
-    const skip = posts.filter((post) => strengthFor(post) === "skip").length;
-    return { target, watch, skip };
-  }, [posts]);
-  const platformGroups = useMemo(() => {
-    const rows = new Map<string, typeof SOCIAL_PLATFORM_CATALOG>();
-    for (const item of SOCIAL_PLATFORM_CATALOG) {
-      const group = rows.get(item.group) ?? [];
-      group.push(item);
-      rows.set(item.group, group);
-    }
-    return [...rows.entries()];
-  }, []);
-  const supportedSelectedPlatforms = useMemo(
-    () => selectedPlatforms.filter((platform) => isSupportedDiscoveryPlatform(platform)),
-    [selectedPlatforms]
+  const queryList = useMemo(() => normalizeQueries(queryDraft.split("\n")), [queryDraft]);
+  const baselineQueries = useMemo(
+    () => (savedQueries.length ? savedQueries : suggestedQueries),
+    [savedQueries, suggestedQueries]
   );
-  const platformsDirty = selectionKey(selectedPlatforms) !== selectionKey(savedPlatforms);
+  const queriesDirty = useMemo(() => !sameQueries(queryList, baselineQueries), [queryList, baselineQueries]);
+  const queryStatusMessage = savingQueries
+    ? "Saving prompts..."
+    : queriesDirty
+      ? "Unsaved changes."
+      : savedQueries.length
+        ? "Saved for this brand."
+        : "Using generated prompts for this brand.";
+  const effectiveSavedBrandCommentPrompt = useMemo(
+    () => resolveSocialDiscoveryCommentPrompt(savedBrandCommentPrompt),
+    [savedBrandCommentPrompt]
+  );
+  const brandCommentPromptDirty = brandCommentPromptDraft.trim() !== effectiveSavedBrandCommentPrompt.trim();
+  const brandCommentPromptStatusMessage = savingBrandCommentPrompt
+    ? "Saving prompt..."
+    : brandCommentPromptDirty
+      ? "Unsaved changes."
+      : savedBrandCommentPrompt.trim()
+        ? "Saved for this brand."
+        : "Using the default comment prompt.";
+  const selectedPlan = planFor(selectedPost);
+  const generatedCommentDraft = useMemo(() => {
+    if (selectedPlan?.generationPromptMode !== "auto") return "";
+    return selectedPlan.sequence?.[0]?.draft?.trim() ?? "";
+  }, [selectedPlan]);
+  const commentGenerationPending = Boolean(
+    selectedPost &&
+      selectedPlan?.targetStrength === "target" &&
+      !generatedCommentDraft
+  );
+  const selectedCommentPlatform = selectedPost?.platform === "youtube" ? "youtube" : "instagram";
+  const selectedCommentProvider = selectedCommentPlatform === "youtube" ? "youtube" : "unipile";
+  const selectedCommentPlatformLabel = selectedCommentPlatform === "youtube" ? "YouTube" : "Instagram";
+  const primaryRecommendedAccounts = useMemo(
+    () =>
+      (selectedPlan?.recommendedAccounts ?? []).filter(
+        (account) =>
+          account.useCase === "primary_comment" &&
+          account.connectionProvider === selectedCommentProvider &&
+          (selectedCommentProvider === "youtube" || Boolean(account.externalAccountId))
+      ),
+    [selectedCommentProvider, selectedPlan]
+  );
+  const commentAccountOptions = useMemo(() => {
+    const options = new Map<string, CommentAccountOption>();
+    for (const account of primaryRecommendedAccounts) {
+      options.set(account.accountId, {
+        accountId: account.accountId,
+        accountName: account.accountName,
+        handle: account.handle,
+        fromEmail: account.fromEmail,
+        externalAccountId: account.externalAccountId,
+        linkedProvider: account.linkedProvider,
+        source: "recommended",
+      });
+    }
+    for (const account of socialAccounts) {
+      if (account.status !== "active") continue;
+      if (!account.config.social.enabled) continue;
+      if (account.config.social.connectionProvider !== selectedCommentProvider) continue;
+      if (!account.config.social.platforms.includes(selectedCommentPlatform)) continue;
+      if (selectedCommentProvider !== "youtube") {
+        if (account.config.social.linkedProvider !== "instagram") continue;
+        if (!account.config.social.externalAccountId.trim()) continue;
+      }
+      if (options.has(account.id)) continue;
+      options.set(account.id, {
+        accountId: account.id,
+        accountName: account.name,
+        handle: account.config.social.handle.trim(),
+        fromEmail: account.config.customerIo.fromEmail.trim(),
+        externalAccountId: account.config.social.externalAccountId.trim(),
+        linkedProvider: account.config.social.linkedProvider.trim(),
+        source: "manual",
+      });
+    }
+    return Array.from(options.values());
+  }, [primaryRecommendedAccounts, selectedCommentPlatform, selectedCommentProvider, socialAccounts]);
+  const selectedCommentAccount = useMemo(
+    () => commentAccountOptions.find((account) => account.accountId === commentAccountId) ?? commentAccountOptions[0] ?? null,
+    [commentAccountId, commentAccountOptions]
+  );
+  const youtubeAccountOptions = useMemo(() => {
+    return socialAccounts
+      .filter(
+        (account) =>
+          account.status === "active" &&
+          account.config.social.enabled &&
+          account.config.social.connectionProvider === "youtube" &&
+          account.config.social.platforms.includes("youtube")
+      )
+      .map((account) => ({
+        accountId: account.id,
+        accountName: account.name,
+        handle: account.config.social.handle.trim(),
+        fromEmail: account.config.customerIo.fromEmail.trim(),
+        externalAccountId: account.config.social.externalAccountId.trim(),
+        linkedProvider: account.config.social.linkedProvider.trim(),
+        source: "manual" as const,
+      }));
+  }, [socialAccounts]);
+  const visibleCommentDelivery = commentResult ?? selectedPost?.commentDelivery ?? null;
+  const commentExportPayload = useMemo(
+    () => buildCommentExportPayload(selectedPost, visibleCommentDelivery),
+    [selectedPost, visibleCommentDelivery]
+  );
+  const commentExportJson = useMemo(
+    () => (commentExportPayload ? JSON.stringify(commentExportPayload, null, 2) : ""),
+    [commentExportPayload]
+  );
+  const visiblePromotionDraft = promoResult ?? selectedPost?.promotionDraft ?? null;
+  const promotionExportPayload = useMemo(
+    () => buildPromotionExportPayload(selectedPost, visiblePromotionDraft),
+    [selectedPost, visiblePromotionDraft]
+  );
+  const promotionExportJson = useMemo(
+    () => (promotionExportPayload ? JSON.stringify(promotionExportPayload, null, 2) : ""),
+    [promotionExportPayload]
+  );
+  const visiblePromotionPurchase = purchaseResult ?? selectedPost?.promotionPurchase ?? null;
+  const selectedCommentAccountNeedsOverride = Boolean(selectedCommentAccount && selectedCommentAccount.source === "manual");
+
+  useEffect(() => {
+    const nextPostId = selectedPost?.id ?? "";
+    if (!nextPostId) {
+      previousSelectedPostIdRef.current = "";
+      lastAutoCommentDraftRef.current = "";
+      return;
+    }
+
+    if (previousSelectedPostIdRef.current === nextPostId) {
+      if (!commentAccountId && commentAccountOptions[0]?.accountId) {
+        setCommentAccountId(commentAccountOptions[0].accountId);
+      }
+      return;
+    }
+
+    previousSelectedPostIdRef.current = nextPostId;
+    setCommentDraft(generatedCommentDraft);
+    lastAutoCommentDraftRef.current = generatedCommentDraft;
+    setCommentAccountId(commentAccountOptions[0]?.accountId ?? "");
+    setCommentReplyId("");
+    setCommentError("");
+    setCommentResult(null);
+    setPromoError("");
+    setPromoResult(null);
+    setPurchaseResult(null);
+  }, [selectedPost?.id, generatedCommentDraft, commentAccountOptions, commentAccountId]);
+
+  useEffect(() => {
+    if (!selectedPost?.id || !generatedCommentDraft) return;
+    if (!commentDraft.trim() || commentDraft === lastAutoCommentDraftRef.current) {
+      setCommentDraft(generatedCommentDraft);
+      lastAutoCommentDraftRef.current = generatedCommentDraft;
+    }
+  }, [selectedPost?.id, generatedCommentDraft, commentDraft]);
+
+  useEffect(() => {
+    if (youtubeSubscriptionAccountId && youtubeAccountOptions.some((account) => account.accountId === youtubeSubscriptionAccountId)) {
+      return;
+    }
+    setYouTubeSubscriptionAccountId(youtubeAccountOptions[0]?.accountId ?? "");
+  }, [youtubeAccountOptions, youtubeSubscriptionAccountId]);
+
+  async function loadCommentAccounts() {
+    try {
+      const response = await fetch("/api/outreach/accounts?scope=social", { cache: "no-store" });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(typeof data?.error === "string" ? data.error : "Failed to load social accounts");
+      }
+      setSocialAccounts(Array.isArray(data?.accounts) ? (data.accounts as OutreachAccount[]) : []);
+    } catch {
+      setSocialAccounts([]);
+    }
+  }
+
+  async function loadYouTubeSubscriptions() {
+    try {
+      const response = await fetch(`/api/brands/${brandId}/social-discovery/youtube-subscriptions`, {
+        cache: "no-store",
+      });
+      const data = (await response.json().catch(() => ({}))) as YouTubeSubscriptionResponse & {
+        error?: string;
+      };
+      if (!response.ok) {
+        throw new Error(typeof data?.error === "string" ? data.error : "Failed to load YouTube subscriptions");
+      }
+      setYouTubeSubscriptionError("");
+      setYouTubeSubscriptions(Array.isArray(data.subscriptions) ? data.subscriptions : []);
+    } catch (err) {
+      setYouTubeSubscriptionError(
+        err instanceof Error ? err.message : "Failed to load YouTube subscriptions"
+      );
+      setYouTubeSubscriptions([]);
+    }
+  }
 
   async function loadPosts(nextStatus = status) {
     setLoading(true);
@@ -171,75 +531,204 @@ export default function SocialDiscoveryClient({ brandId }: { brandId: string }) 
       const query = nextStatus === "all" ? "" : `?status=${nextStatus}`;
       const response = await fetch(`/api/brands/${brandId}/social-discovery${query}`, { cache: "no-store" });
       const data = await readDiscoveryResponse(response);
-      setPosts(data.posts);
-      setRuns(data.runs);
+      const cached = readCachedDiscovery(brandId);
+      const latestRunId = latestRunIdFrom(data);
+      const cachedLatestRunId = latestRunIdFrom(cached);
+      const shouldUseCachedPosts =
+        data.posts.length === 0 &&
+        Boolean(cached?.posts.length) &&
+        Boolean(latestRunId) &&
+        latestRunId === cachedLatestRunId;
+      const hasServerData =
+        data.posts.length > 0 ||
+        data.runs.length > 0 ||
+        normalizeQueries(data.savedQueries).length > 0 ||
+        normalizeQueries(data.suggestedQueries).length > 0;
+      const nextData = shouldUseCachedPosts
+        ? {
+            posts: filterPostsByStatus(cached?.posts ?? [], nextStatus),
+            runs: data.runs.length ? data.runs : cached?.runs ?? [],
+            savedQueries:
+              normalizeQueries(data.savedQueries).length
+                ? normalizeQueries(data.savedQueries)
+                : normalizeQueries(cached?.savedQueries),
+            suggestedQueries:
+              normalizeQueries(data.suggestedQueries).length
+                ? normalizeQueries(data.suggestedQueries)
+                : normalizeQueries(cached?.suggestedQueries),
+            errors: data.errors?.length ? data.errors : cached?.errors ?? [],
+            summary: data.summary ?? cached?.summary,
+            brand: data.brand ?? cached?.brand,
+          }
+        : hasServerData
+        ? data
+        : (() => {
+            if (!cached) return data;
+            return {
+              ...cached,
+              posts: filterPostsByStatus(cached.posts, nextStatus),
+            };
+          })();
+      setPosts(nextData.posts);
+      setRuns(nextData.runs);
+      const nextSavedQueries = normalizeQueries(nextData.savedQueries);
+      const nextSuggestedQueries = normalizeQueries(nextData.suggestedQueries);
+      const nextQueries = baselineQueriesFor(nextData);
+      const nextBrandCommentPrompt =
+        typeof nextData.brand?.socialDiscoveryCommentPrompt === "string" ? nextData.brand.socialDiscoveryCommentPrompt : "";
+      const nextEffectiveBrandCommentPrompt = resolveSocialDiscoveryCommentPrompt(nextBrandCommentPrompt);
+      setSavedQueries(nextSavedQueries);
+      setSuggestedQueries(nextSuggestedQueries);
+      setSavedBrandCommentPrompt(nextBrandCommentPrompt);
+      setBrandCommentPromptDraft((current) =>
+        !current.trim() || current.trim() === effectiveSavedBrandCommentPrompt.trim()
+          ? nextEffectiveBrandCommentPrompt
+          : current
+      );
+      setQueryDraft((current) => (current.trim() ? current : nextQueries.join("\n")));
+      setScanMessage(scanMessageFrom(nextData));
+      if (hasServerData) {
+        writeCachedDiscovery(brandId, {
+          ...data,
+          posts: nextStatus === "all" ? data.posts : filterPostsByStatus(data.posts, "all"),
+        });
+      }
       setSelectedId((current) =>
-        current && data.posts.some((post) => post.id === current) ? current : data.posts[0]?.id ?? ""
+        current && nextData.posts.some((post) => post.id === current) ? current : nextData.posts[0]?.id ?? ""
       );
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load social discovery");
       setPosts([]);
       setRuns([]);
+      setScanMessage("");
     } finally {
       setLoading(false);
     }
   }
 
-  useEffect(() => {
-    let cancelled = false;
-
-    async function loadBrandSettings() {
-      try {
-        const response = await fetch(`/api/brands/${brandId}`, { cache: "no-store" });
-        const data = await readBrandSettingsResponse(response);
-        if (cancelled) return;
-        const nextPlatforms = normalizePlatformSelection(data.brand?.socialDiscoveryPlatforms);
-        setSavedPlatforms(nextPlatforms);
-        setSelectedPlatforms(nextPlatforms);
-      } catch (err) {
-        if (cancelled) return;
-        setError(err instanceof Error ? err.message : "Failed to load brand settings");
+  async function saveQueries(options?: { silent?: boolean; nextQueries?: string[] }) {
+    const nextQueries = normalizeQueries(options?.nextQueries ?? queryDraft.split("\n"));
+    setSavingQueries(true);
+    setError("");
+    try {
+      const response = await fetch(`/api/brands/${brandId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          socialDiscoveryQueries: nextQueries,
+        }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(typeof data?.error === "string" ? data.error : "Failed to save search prompts");
       }
+      const nextSavedQueries = normalizeQueries(data?.brand?.socialDiscoveryQueries);
+      const nextSuggestedQueries = normalizeQueries(data?.socialDiscoverySuggestedQueries);
+      const nextBaselineQueries = nextSavedQueries.length ? nextSavedQueries : nextSuggestedQueries;
+      setSavedQueries(nextSavedQueries);
+      setSuggestedQueries(nextSuggestedQueries);
+      if (!options?.silent || nextQueries.length === 0) {
+        setQueryDraft(nextBaselineQueries.join("\n"));
+      }
+      const cached = readCachedDiscovery(brandId);
+      if (cached) {
+        writeCachedDiscovery(brandId, {
+          ...cached,
+          brand: {
+            ...cached.brand,
+            ...(data?.brand && typeof data.brand === "object" ? data.brand : {}),
+          },
+          savedQueries: nextSavedQueries,
+          suggestedQueries: nextSuggestedQueries,
+        });
+      }
+    } finally {
+      setSavingQueries(false);
     }
+  }
 
-    void loadBrandSettings();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [brandId]);
+  async function saveBrandCommentPrompt() {
+    setSavingBrandCommentPrompt(true);
+    setBrandCommentPromptError("");
+    try {
+      const response = await fetch(`/api/brands/${brandId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          socialDiscoveryCommentPrompt: brandCommentPromptDraft.trim(),
+        }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(typeof data?.error === "string" ? data.error : "Failed to save comment prompt");
+      }
+      const nextPrompt =
+        typeof data?.brand?.socialDiscoveryCommentPrompt === "string"
+          ? data.brand.socialDiscoveryCommentPrompt
+          : brandCommentPromptDraft.trim();
+      setSavedBrandCommentPrompt(nextPrompt);
+      setBrandCommentPromptDraft(resolveSocialDiscoveryCommentPrompt(nextPrompt));
+      const cached = readCachedDiscovery(brandId);
+      if (cached) {
+        writeCachedDiscovery(brandId, {
+          ...cached,
+          brand: {
+            ...cached.brand,
+            ...(data?.brand && typeof data.brand === "object" ? data.brand : {}),
+            socialDiscoveryCommentPrompt: nextPrompt,
+          },
+        });
+      }
+    } catch (err) {
+      setBrandCommentPromptError(err instanceof Error ? err.message : "Failed to save comment prompt");
+    } finally {
+      setSavingBrandCommentPrompt(false);
+    }
+  }
 
   useEffect(() => {
     void loadPosts(status);
+    void loadCommentAccounts();
+    void loadYouTubeSubscriptions();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [brandId, status]);
 
   async function runScan() {
-    if (!supportedSelectedPlatforms.length) {
-      setError(
-        `No supported scan platforms are selected. Current scanner supports ${CURRENT_SOCIAL_DISCOVERY_PLATFORMS.join(", ")}.`
-      );
-      return;
-    }
-
     setScanning(true);
     setError("");
+    setScanMessage("");
     try {
+      const nextQueries = normalizeQueries(queryDraft.split("\n"));
+      if (!sameQueries(nextQueries, baselineQueries)) {
+        await saveQueries({ silent: true, nextQueries });
+      }
       const response = await fetch(`/api/brands/${brandId}/social-discovery`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           action: "scan",
-          provider: "dataforseo",
-          platforms: supportedSelectedPlatforms,
+          provider: "auto",
+          platforms: [SCAN_PLATFORM],
+          queries: nextQueries,
           maxQueries: 6,
           limitPerQuery: 10,
         }),
       });
       const data = await readDiscoveryResponse(response);
-      setPosts(data.posts);
-      setSelectedId(data.posts[0]?.id ?? "");
-      await loadPosts(status);
+      writeCachedDiscovery(brandId, data);
+      const filteredPosts = filterPostsByStatus(data.posts, status);
+      setPosts(filteredPosts);
+      setRuns(data.runs);
+      const nextSavedQueries = normalizeQueries(data.savedQueries);
+      const nextSuggestedQueries = normalizeQueries(data.suggestedQueries);
+      setSavedQueries(nextSavedQueries);
+      setSuggestedQueries(nextSuggestedQueries);
+      setQueryDraft(baselineQueriesFor(data).join("\n"));
+      setSelectedId(filteredPosts[0]?.id ?? "");
+      setScanMessage(scanMessageFrom({ ...data, posts: filteredPosts }));
+      if (!filteredPosts.length) {
+        await loadPosts(status);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to run social discovery");
     } finally {
@@ -247,47 +736,77 @@ export default function SocialDiscoveryClient({ brandId }: { brandId: string }) 
     }
   }
 
-  async function savePlatforms() {
-    if (!selectedPlatforms.length) {
-      setError("Pick at least one platform before saving.");
+  async function saveYouTubeSubscription(options?: {
+    channelId?: string;
+    accountId?: string;
+    autoComment?: boolean;
+    leaseSeconds?: number;
+  }) {
+    const channelId = (options?.channelId ?? youtubeChannelIdDraft).trim();
+    const autoComment = options?.autoComment ?? youtubeAutoCommentEnabled;
+    const accountId = (options?.accountId ?? youtubeSubscriptionAccountId).trim();
+    if (!channelId) {
+      setYouTubeSubscriptionError("Enter a YouTube channel id first.");
+      return;
+    }
+    if (autoComment && !accountId) {
+      setYouTubeSubscriptionError("Pick a YouTube account before enabling auto comment.");
       return;
     }
 
-    setSavingPlatforms(true);
-    setError("");
+    setSavingYouTubeSubscription(true);
+    setYouTubeSubscriptionError("");
     try {
-      const response = await fetch(`/api/brands/${brandId}`, {
-        method: "PATCH",
+      const response = await fetch(`/api/brands/${brandId}/social-discovery/youtube-subscriptions`, {
+        method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ socialDiscoveryPlatforms: selectedPlatforms }),
+        body: JSON.stringify({
+          channelId,
+          accountId: accountId || undefined,
+          autoComment,
+          leaseSeconds: options?.leaseSeconds ?? undefined,
+        }),
       });
-      const data = await readBrandSettingsResponse(response);
-      const nextPlatforms = normalizePlatformSelection(data.brand?.socialDiscoveryPlatforms, []);
-      setSavedPlatforms(nextPlatforms);
-      setSelectedPlatforms(nextPlatforms);
+      const data = (await response.json().catch(() => ({}))) as YouTubeSubscriptionResponse & {
+        error?: string;
+      };
+      if (!response.ok) {
+        throw new Error(typeof data?.error === "string" ? data.error : "Failed to save YouTube subscription");
+      }
+      setYouTubeSubscriptions(Array.isArray(data.subscriptions) ? data.subscriptions : []);
+      setYouTubeChannelIdDraft("");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to save brand platforms");
+      setYouTubeSubscriptionError(
+        err instanceof Error ? err.message : "Failed to save YouTube subscription"
+      );
     } finally {
-      setSavingPlatforms(false);
+      setSavingYouTubeSubscription(false);
     }
   }
 
-  async function updateStatus(postId: string, nextStatus: SocialDiscoveryStatus) {
-    setError("");
+  async function removeYouTubeSubscription(channelId: string) {
+    if (!channelId.trim()) return;
+    setRemovingYouTubeChannelId(channelId);
+    setYouTubeSubscriptionError("");
     try {
-      const response = await fetch(`/api/brands/${brandId}/social-discovery`, {
-        method: "POST",
+      const response = await fetch(`/api/brands/${brandId}/social-discovery/youtube-subscriptions`, {
+        method: "DELETE",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "status", id: postId, status: nextStatus }),
+        body: JSON.stringify({ channelId }),
       });
-      const data = await response.json().catch(() => ({}));
+      const data = (await response.json().catch(() => ({}))) as YouTubeSubscriptionResponse & {
+        error?: string;
+      };
       if (!response.ok) {
-        throw new Error(typeof data?.error === "string" ? data.error : "Failed to update status");
+        throw new Error(typeof data?.error === "string" ? data.error : "Failed to remove YouTube subscription");
       }
-      const updated = data.post as DiscoveryPost;
-      setPosts((current) => current.map((post) => post.id === updated.id ? updated : post));
+      setYouTubeSubscriptions(Array.isArray(data.subscriptions) ? data.subscriptions : []);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to update status");
+      setYouTubeSubscriptionError(
+        err instanceof Error ? err.message : "Failed to remove YouTube subscription"
+      );
+    } finally {
+      setRemovingYouTubeChannelId("");
     }
   }
 
@@ -296,128 +815,453 @@ export default function SocialDiscoveryClient({ brandId }: { brandId: string }) 
     await navigator.clipboard.writeText(value);
   }
 
-  function togglePlatform(platformId: string) {
-    setSelectedPlatforms((current) =>
-      current.includes(platformId)
-        ? current.filter((entry) => entry !== platformId)
-        : [...current, platformId]
-    );
+  async function sendComment() {
+    if (!selectedPost) return;
+    if (!commentDraft.trim()) {
+      setCommentError("Write a comment before sending.");
+      return;
+    }
+    if (!commentAccountId) {
+      setCommentError(`Pick a routed ${selectedCommentPlatformLabel} account before sending.`);
+      return;
+    }
+
+    setSendingComment(true);
+    setCommentError("");
+    setCommentResult(null);
+    setPurchaseResult(null);
+    try {
+      const response = await fetch(`/api/brands/${brandId}/social-discovery/comment`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          postId: selectedPost.id,
+          accountId: commentAccountId,
+          text: commentDraft.trim(),
+          commentId: commentReplyId.trim() || undefined,
+        }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        if (response.status === 404 && typeof data?.error === "string" && data.error === "social discovery post not found") {
+          clearCachedDiscovery(brandId);
+          await loadPosts(status);
+          throw new Error("That post is no longer available. The list has been refreshed.");
+        }
+        throw new Error(typeof data?.error === "string" ? data.error : "Failed to send comment");
+      }
+      setPromoError("");
+
+      const updatedPost = data?.post as DiscoveryPost | undefined;
+      if (updatedPost?.id) {
+        setPosts((current) => {
+          const next = current.map((post) => (post.id === updatedPost.id ? updatedPost : post));
+          const cached = readCachedDiscovery(brandId);
+          if (cached) {
+            writeCachedDiscovery(brandId, {
+              ...cached,
+              posts: cached.posts.map((post) => (post.id === updatedPost.id ? updatedPost : post)),
+            });
+          }
+          return next;
+        });
+        setSelectedId(updatedPost.id);
+      } else {
+        await loadPosts(status);
+      }
+
+      const deliveryMessage =
+        typeof data?.result?.deliveryMessage === "string" && data.result.deliveryMessage.trim()
+          ? data.result.deliveryMessage.trim()
+          : "";
+      const deliveryStatus =
+        typeof data?.result?.deliveryStatus === "string" && data.result.deliveryStatus.trim()
+          ? data.result.deliveryStatus.trim()
+          : "";
+      const verified = deliveryStatus === "verified" || Boolean(data?.result?.verified);
+      const commentId =
+        typeof data?.result?.commentId === "string" && data.result.commentId.trim()
+          ? data.result.commentId.trim()
+          : "";
+      const commentUrl =
+        typeof data?.result?.commentUrl === "string" && data.result.commentUrl.trim()
+          ? data.result.commentUrl.trim()
+          : "";
+      const accountLabel = selectedCommentAccount
+        ? `${selectedCommentAccount.accountName}${selectedCommentAccount.handle ? ` ${selectedCommentAccount.handle}` : ""}`
+        : "";
+      setCommentResult({
+        commentId,
+        commentUrl,
+        status: verified ? "verified" : "accepted_unverified",
+        source:
+          typeof data?.result?.deliverySource === "string" && data.result.deliverySource.trim()
+            ? data.result.deliverySource.trim()
+            : "",
+        message:
+          deliveryMessage ||
+          (verified
+            ? `Comment verified on ${selectedCommentPlatformLabel}.`
+            : `${selectedCommentPlatformLabel} accepted the request, but visibility is still unverified. Do not resend yet.`),
+        postedAt: new Date().toISOString(),
+        accountId: selectedCommentAccount?.accountId ?? "",
+        accountName: selectedCommentAccount?.accountName ?? accountLabel,
+        accountHandle: selectedCommentAccount?.handle ?? "",
+      });
+      const promotionDraft = data?.promotionDraft as SocialDiscoveryPromotionDraft | undefined;
+      if (promotionDraft) {
+        setPromoResult(promotionDraft);
+      }
+      const promotionPurchase = data?.promotionPurchase as SocialDiscoveryPromotionPurchase | undefined;
+      if (promotionPurchase) {
+        setPurchaseResult(promotionPurchase);
+      }
+    } catch (err) {
+      setCommentError(err instanceof Error ? err.message : "Failed to send comment");
+    } finally {
+      setSendingComment(false);
+    }
+  }
+
+  async function createPromotionDraft() {
+    if (!selectedPost) return;
+    setCreatingPromo(true);
+    setPromoError("");
+    setPromoResult(null);
+    try {
+      const response = await fetch(`/api/brands/${brandId}/social-discovery/promote`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          postId: selectedPost.id,
+        }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        if (response.status === 404 && typeof data?.error === "string" && data.error === "social discovery post not found") {
+          clearCachedDiscovery(brandId);
+          await loadPosts(status);
+          throw new Error("That post is no longer available. The list has been refreshed.");
+        }
+        throw new Error(typeof data?.error === "string" ? data.error : "Failed to create promo brief");
+      }
+
+      const updatedPost = data?.post as DiscoveryPost | undefined;
+      if (updatedPost?.id) {
+        setPosts((current) => {
+          const next = current.map((post) => (post.id === updatedPost.id ? updatedPost : post));
+          const cached = readCachedDiscovery(brandId);
+          if (cached) {
+            writeCachedDiscovery(brandId, {
+              ...cached,
+              posts: cached.posts.map((post) => (post.id === updatedPost.id ? updatedPost : post)),
+            });
+          }
+          return next;
+        });
+        setSelectedId(updatedPost.id);
+      } else {
+        await loadPosts(status);
+      }
+
+      const promotionDraft = data?.promotionDraft as SocialDiscoveryPromotionDraft | undefined;
+      if (promotionDraft) {
+        setPromoResult(promotionDraft);
+      }
+    } catch (err) {
+      setPromoError(err instanceof Error ? err.message : "Failed to create promo brief");
+    } finally {
+      setCreatingPromo(false);
+    }
   }
 
   return (
     <div className="space-y-6">
       <PageIntro
-        title="Social discovery"
-        description="Pick the platforms this brand should operate in, save that selection on the brand, and scan the supported ones now."
+        title="Social comments"
+        description="Scan Instagram manually, or auto-comment new YouTube uploads from watched channels."
         actions={
-          <div className="flex flex-wrap gap-2">
-            <Select
-              value={status}
-              onChange={(event) => setStatus(event.target.value as SocialDiscoveryStatus | "all")}
-              className="h-10 w-[150px]"
-            >
-              {statusOptions.map((option) => (
-                <option key={option} value={option}>{option}</option>
-              ))}
-            </Select>
-            <Button type="button" onClick={runScan} disabled={scanning}>
-              <RefreshCw className={cn("h-4 w-4", scanning ? "animate-spin" : "")} />
-              {scanning ? "Scanning..." : "Run scan"}
-            </Button>
-          </div>
-        }
-        aside={
-          <StatLedger
-            items={[
-              { label: "Targets", value: counts.target, detail: "Ready for one real operator comment." },
-              { label: "Watch", value: counts.watch, detail: "Hold unless the thread asks a concrete question." },
-              { label: "Skip", value: counts.skip, detail: "No comment or product mention." },
-              {
-                label: "Last run",
-                value: runs[0] ? "Seen" : "None",
-                detail: runs[0] ? formatDate(runs[0].finishedAt) : "Run a scan to create candidates.",
-              },
-            ]}
-          />
+          <Button type="button" onClick={runScan} disabled={scanning}>
+            <RefreshCw className={cn("h-4 w-4", scanning ? "animate-spin" : "")} />
+            {scanning ? "Scanning..." : "Run Instagram scan"}
+          </Button>
         }
       />
 
       {error ? <div className="text-sm text-[color:var(--danger)]">{error}</div> : null}
-
-      <SectionPanel
-        title="Platforms"
-        description="Save the global platform list that fits this brand. The scanner uses the supported selections now and keeps the rest on the brand for future connectors."
-        actions={
-          <div className="flex flex-wrap items-center gap-2">
-            <Badge variant="muted">{selectedPlatforms.length} selected</Badge>
-            <Badge variant="muted">{supportedSelectedPlatforms.length} scan now</Badge>
-            <Button type="button" variant="outline" onClick={savePlatforms} disabled={!platformsDirty || savingPlatforms}>
-              {savingPlatforms ? "Saving..." : "Save platforms"}
-            </Button>
-          </div>
-        }
-      >
-        <div className="mb-4 flex flex-wrap gap-2 text-xs text-[color:var(--muted-foreground)]">
-          <span>Current scanner support:</span>
-          {CURRENT_SOCIAL_DISCOVERY_PLATFORMS.map((platform) => (
-            <Badge key={platform} variant="muted">{platform}</Badge>
-          ))}
+      {!error ? (
+        <div className="text-sm text-[color:var(--muted-foreground)]">
+          {runs[0] ? `Last scan ${formatDate(runs[0].finishedAt)}.` : "No scan yet."}
+          {scanMessage ? ` ${scanMessage}` : ""}
         </div>
-        <div className="grid gap-4 xl:grid-cols-3">
-          {platformGroups.map(([group, items]) => (
-            <div key={group} className="rounded-[10px] border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3">
-              <div className="mb-3 text-sm font-medium text-[color:var(--foreground)]">{group}</div>
-              <div className="grid gap-2">
-                {items.map((item) => {
-                  const checked = selectedPlatforms.includes(item.id);
-                  return (
-                    <label
-                      key={item.id}
-                      className="flex cursor-pointer items-start gap-3 rounded-[8px] px-2 py-2 transition-colors hover:bg-[color:var(--surface)]"
-                    >
-                      <input
-                        type="checkbox"
-                        checked={checked}
-                        onChange={() => togglePlatform(item.id)}
-                        className="mt-1 h-4 w-4 rounded border border-[color:var(--border)] bg-[color:var(--background)] accent-[color:var(--accent)]"
-                      />
-                      <span className="min-w-0">
-                        <span className="flex flex-wrap items-center gap-2">
-                          <span className="text-sm font-medium text-[color:var(--foreground)]">{item.label}</span>
-                          <Badge variant={item.scanStatus === "supported_now" ? "accent" : "muted"}>
-                            {item.scanStatus === "supported_now" ? "scan now" : "save only"}
-                          </Badge>
-                        </span>
-                        <span className="mt-0.5 block text-xs leading-5 text-[color:var(--muted-foreground)]">
-                          {item.description}
-                        </span>
-                      </span>
-                    </label>
-                  );
-                })}
-              </div>
-            </div>
-          ))}
-        </div>
-      </SectionPanel>
+      ) : null}
 
       {!loading && !posts.length ? (
         <EmptyState
-          title="No candidates yet."
-          description="Run a scan after saving the platforms you want this brand to operate in."
-          actions={<Button onClick={runScan} disabled={scanning}>Run scan</Button>}
+          title="No posts yet."
+          description="Run the Instagram scan or wait for watched YouTube uploads to arrive."
+          actions={<Button onClick={runScan} disabled={scanning}>Run Instagram scan</Button>}
         />
       ) : null}
 
-      <div className="grid gap-4 xl:grid-cols-[minmax(0,0.95fr)_minmax(420px,1.05fr)]">
+      <div className="grid gap-4 xl:grid-cols-2">
+        <SectionPanel title="Comment prompt" description="One saved prompt for this brand.">
+          <div className="space-y-2">
+            <Textarea
+              value={brandCommentPromptDraft}
+              onChange={(event) => setBrandCommentPromptDraft(event.target.value)}
+              rows={6}
+            />
+            <div className="text-xs text-[color:var(--muted-foreground)]">{brandCommentPromptStatusMessage}</div>
+            <div className="flex flex-wrap gap-2">
+              <Button
+                type="button"
+                size="sm"
+                onClick={() => {
+                  void saveBrandCommentPrompt();
+                }}
+                disabled={savingBrandCommentPrompt || !brandCommentPromptDirty}
+              >
+                Save
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  setBrandCommentPromptDraft(effectiveSavedBrandCommentPrompt);
+                  setBrandCommentPromptError("");
+                }}
+                disabled={savingBrandCommentPrompt || !brandCommentPromptDirty}
+              >
+                Reset
+              </Button>
+            </div>
+            {brandCommentPromptError ? (
+              <div className="rounded-[10px] border border-[color:var(--danger-border)] bg-[color:var(--danger-soft)] px-3 py-2 text-sm text-[color:var(--danger)]">
+                {brandCommentPromptError}
+              </div>
+            ) : null}
+            <div className="text-xs text-[color:var(--muted-foreground)]">
+              Clear it and save if you want to go back to the default prompt.
+            </div>
+          </div>
+        </SectionPanel>
+
+        <SectionPanel title="Instagram search queries" description="Edit the prompts used for manual Instagram scans.">
+          <div className="space-y-2">
+            <Textarea
+              value={queryDraft}
+              onChange={(event) => setQueryDraft(event.target.value)}
+              rows={6}
+              placeholder="One search prompt per line"
+            />
+            <div className="text-xs text-[color:var(--muted-foreground)]">
+              {queryList.length} prompts. {queryStatusMessage}
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <Button
+                type="button"
+                size="sm"
+                onClick={() => {
+                  void saveQueries().catch((err) =>
+                    setError(err instanceof Error ? err.message : "Failed to save search prompts")
+                  );
+                }}
+                disabled={savingQueries || !queriesDirty}
+              >
+                Save
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => setQueryDraft(baselineQueries.join("\n"))}
+                disabled={savingQueries}
+              >
+                Reset
+              </Button>
+            </div>
+          </div>
+        </SectionPanel>
+      </div>
+
+      <SectionPanel
+        title="YouTube watches"
+        description="Subscribe to channel upload notifications and auto-comment when a new video lands."
+      >
+        <div className="space-y-4">
+          {youtubeSubscriptionError ? (
+            <div className="rounded-[10px] border border-[color:var(--danger-border)] bg-[color:var(--danger-soft)] px-3 py-2 text-sm text-[color:var(--danger)]">
+              {youtubeSubscriptionError}
+            </div>
+          ) : null}
+
+          <div className="grid gap-4 xl:grid-cols-[minmax(0,1.2fr)_minmax(240px,0.8fr)_auto]">
+            <div className="space-y-2">
+              <label className="text-sm font-medium text-[color:var(--foreground)]">Channel id</label>
+              <Input
+                value={youtubeChannelIdDraft}
+                onChange={(event) => setYouTubeChannelIdDraft(event.target.value)}
+                placeholder="UC..."
+                disabled={savingYouTubeSubscription}
+              />
+            </div>
+
+            <div className="space-y-2">
+              <label className="text-sm font-medium text-[color:var(--foreground)]">Auto-comment account</label>
+              <Select
+                value={youtubeSubscriptionAccountId}
+                onChange={(event) => setYouTubeSubscriptionAccountId(event.target.value)}
+                disabled={savingYouTubeSubscription || !youtubeAccountOptions.length}
+              >
+                <option value="">{youtubeAutoCommentEnabled ? "Pick account" : "No account"}</option>
+                {youtubeAccountOptions.map((account) => (
+                  <option key={account.accountId} value={account.accountId}>
+                    {account.accountName} · {account.handle || account.fromEmail || account.accountId}
+                  </option>
+                ))}
+              </Select>
+            </div>
+
+            <div className="flex items-end">
+              <Button
+                type="button"
+                onClick={() => {
+                  void saveYouTubeSubscription();
+                }}
+                disabled={savingYouTubeSubscription}
+              >
+                {savingYouTubeSubscription ? "Saving..." : "Watch channel"}
+              </Button>
+            </div>
+          </div>
+
+          <label className="flex items-start gap-3 rounded-[10px] border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-3">
+            <input
+              type="checkbox"
+              checked={youtubeAutoCommentEnabled}
+              onChange={(event) => setYouTubeAutoCommentEnabled(event.target.checked)}
+              className="mt-1 h-4 w-4 rounded border border-[color:var(--border)] bg-[color:var(--background)] accent-[color:var(--accent)]"
+            />
+            <span className="min-w-0">
+              <span className="text-sm font-medium text-[color:var(--foreground)]">Auto-comment new uploads</span>
+              <span className="mt-1 block text-sm leading-6 text-[color:var(--muted-foreground)]">
+                YouTube pushes the upload event to this app, then the prepared draft is posted immediately. Cron only renews the subscription lease.
+              </span>
+            </span>
+          </label>
+
+          {!youtubeAccountOptions.length ? (
+            <div className="text-xs text-[color:var(--muted-foreground)]">
+              Add a social account below with `connection = youtube`, platform `youtube`, and valid OAuth credentials before enabling auto-comment.
+            </div>
+          ) : null}
+
+          {youtubeSubscriptions.length ? (
+            <div className="grid gap-3">
+              {youtubeSubscriptions.map((subscription) => (
+                <div
+                  key={subscription.id}
+                  className="rounded-[10px] border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-3"
+                >
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div className="space-y-1">
+                      <div className="text-sm font-medium text-[color:var(--foreground)]">
+                        {subscription.channelTitle || subscription.channelId}
+                      </div>
+                      <div className="text-xs text-[color:var(--muted-foreground)]">
+                        {subscription.channelId}
+                        {subscription.accountName ? ` · ${subscription.accountName}` : ""}
+                        {subscription.autoComment ? " · auto-comment on" : " · watch only"}
+                      </div>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => {
+                          void saveYouTubeSubscription({
+                            channelId: subscription.channelId,
+                            accountId: subscription.accountId,
+                            autoComment: subscription.autoComment,
+                            leaseSeconds: subscription.leaseSeconds || undefined,
+                          });
+                        }}
+                        disabled={savingYouTubeSubscription}
+                      >
+                        Renew now
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => {
+                          void removeYouTubeSubscription(subscription.channelId);
+                        }}
+                        disabled={removingYouTubeChannelId === subscription.channelId}
+                      >
+                        {removingYouTubeChannelId === subscription.channelId ? "Removing..." : "Remove"}
+                      </Button>
+                    </div>
+                  </div>
+
+                  <div className="mt-3 grid gap-1 text-xs text-[color:var(--muted-foreground)]">
+                    <div>Status: {subscription.status}</div>
+                    {subscription.leaseExpiresAt ? <div>Lease expires: {formatDate(subscription.leaseExpiresAt)}</div> : null}
+                    {subscription.lastVerifiedAt ? <div>Verified: {formatDate(subscription.lastVerifiedAt)}</div> : null}
+                    {subscription.lastNotificationAt ? <div>Last upload: {formatDate(subscription.lastNotificationAt)}</div> : null}
+                    {subscription.lastVideoUrl ? (
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span>Last video:</span>
+                        <Link href={subscription.lastVideoUrl} target="_blank" rel="noreferrer" className="underline underline-offset-2">
+                          Open
+                        </Link>
+                      </div>
+                    ) : null}
+                    {subscription.lastCommentUrl ? (
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span>Last comment:</span>
+                        <Link href={subscription.lastCommentUrl} target="_blank" rel="noreferrer" className="underline underline-offset-2">
+                          Open
+                        </Link>
+                      </div>
+                    ) : null}
+                    {subscription.lastError ? (
+                      <div className="text-[color:var(--danger)]">Last error: {subscription.lastError}</div>
+                    ) : null}
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="rounded-[10px] border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-3 text-sm text-[color:var(--muted-foreground)]">
+              No watched YouTube channels yet.
+            </div>
+          )}
+        </div>
+      </SectionPanel>
+
+      <SectionPanel title="Accounts" description="Choose and manage the social accounts used for Instagram comments and YouTube auto comments.">
+        <SocialAccountPoolPanel
+          brandId={brandId}
+          onChanged={() => {
+            void loadPosts(status);
+            void loadCommentAccounts();
+            void loadYouTubeSubscriptions();
+          }}
+        />
+      </SectionPanel>
+
+      <div className="grid gap-4 xl:grid-cols-[340px_minmax(0,1fr)]">
         <SectionPanel
-          title="Candidates"
-          description={loading ? "Loading candidates..." : `${posts.length} posts in this view.`}
+          title="Posts"
+          description={loading ? "Loading..." : `${posts.length} found`}
           contentClassName="p-0"
         >
           <div className="divide-y divide-[color:var(--border)]">
             {posts.map((post) => {
-              const plan = post.interactionPlan;
               const active = post.id === selectedPost?.id;
               return (
                 <button
@@ -425,22 +1269,14 @@ export default function SocialDiscoveryClient({ brandId }: { brandId: string }) 
                   type="button"
                   onClick={() => setSelectedId(post.id)}
                   className={cn(
-                    "grid w-full gap-2 px-4 py-3 text-left transition-colors hover:bg-[color:var(--surface-muted)]",
+                    "grid w-full gap-1 px-4 py-3 text-left transition-colors hover:bg-[color:var(--surface-muted)]",
                     active ? "bg-[color:var(--surface-muted)]" : ""
                   )}
                 >
-                  <div className="flex flex-wrap items-center gap-2">
-                    <Badge variant={badgeVariant(plan.targetStrength || "skip")}>{plan.targetStrength || "skip"}</Badge>
-                    <span className="text-xs text-[color:var(--muted-foreground)]">
-                      score {post.risingScore} · {post.engagementScore} eng · {formatDate(post.postedAt)}
-                    </span>
-                  </div>
                   <div className="line-clamp-2 text-sm font-medium leading-5 text-[color:var(--foreground)]">
                     {post.title}
                   </div>
-                  <div className="text-xs text-[color:var(--muted-foreground)]">
-                    {post.query} · {post.status}
-                  </div>
+                  <div className="text-xs text-[color:var(--muted-foreground)]">{formatDate(post.postedAt)}</div>
                 </button>
               );
             })}
@@ -448,8 +1284,8 @@ export default function SocialDiscoveryClient({ brandId }: { brandId: string }) 
         </SectionPanel>
 
         <SectionPanel
-          title="Interaction plan"
-          description={selectedPost ? selectedPost.title : "Choose a candidate."}
+          title="Comment"
+          description={selectedPost ? `Review the ${selectedCommentPlatformLabel} draft and post it.` : "Choose a post."}
           actions={
             selectedPost ? (
               <Button asChild variant="outline" size="sm">
@@ -463,67 +1299,365 @@ export default function SocialDiscoveryClient({ brandId }: { brandId: string }) 
         >
           {selectedPost && selectedPlan ? (
             <div className="space-y-4">
-              <div className="flex flex-wrap gap-2">
-                <Badge variant={badgeVariant(strengthForPlan(selectedPlan))}>
-                  {strengthForPlan(selectedPlan)}
-                </Badge>
-                <Badge variant="muted">{postureFor(selectedPlan)}</Badge>
-                <Badge variant="muted">{mentionPolicyFor(selectedPlan)}</Badge>
+              <div className="rounded-[10px] border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3">
+                <div className="text-sm font-medium text-[color:var(--foreground)]">{selectedPost.title}</div>
+                <div className="mt-1 text-xs text-[color:var(--muted-foreground)]">{formatDate(selectedPost.postedAt)}</div>
+                {selectedPost.body ? (
+                  <div className="mt-2 line-clamp-4 text-sm leading-6 text-[color:var(--muted-foreground)]">
+                    {selectedPost.body}
+                  </div>
+                ) : null}
               </div>
-
-              {hasCommentSequence(selectedPlan) ? (
-                <div className="grid gap-3">
-                  {selectedPlan.sequence.map((step, index) => (
-                    <div key={`${step.actorRole}-${index}`} className="rounded-[10px] border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3">
-                      <div className="mb-2 flex flex-wrap items-center justify-between gap-2 text-xs text-[color:var(--muted-foreground)]">
-                        <span>{step.actorRole} · {step.timing}</span>
-                        <Button type="button" variant="outline" size="sm" onClick={() => copyText(step.draft)}>
-                          Copy
-                        </Button>
-                      </div>
-                      <p className="text-sm leading-6 text-[color:var(--foreground)]">{step.draft}</p>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <div className="rounded-[10px] border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3">
-                  <div className="text-sm font-medium text-[color:var(--foreground)]">No comment recommended.</div>
-                  <p className="mt-1 text-sm leading-6 text-[color:var(--muted-foreground)]">
-                    Leave this post alone unless a real person has first-hand context and the thread directly asks for a relevant method or resource.
-                  </p>
-                </div>
-              )}
 
               <div className="rounded-[10px] border border-[color:var(--border)] p-3">
-                <div className="mb-2 flex flex-wrap items-center justify-between gap-2 text-xs text-[color:var(--muted-foreground)]">
-                  <span>Analytics</span>
-                  <Button type="button" variant="outline" size="sm" onClick={() => copyText(selectedPlan.analyticsTag || "")}>
-                    Copy tag
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <div className="text-sm font-medium text-[color:var(--foreground)]">Official promo</div>
+                    <div className="text-sm text-[color:var(--muted-foreground)]">
+                      {visiblePromotionDraft && visibleCommentDelivery
+                        ? "Prepared automatically after comment send. Refresh if you want a new brief."
+                        : "Turn this topic into a brand-owned ad brief."}
+                    </div>
+                  </div>
+                  <Button type="button" variant="outline" onClick={createPromotionDraft} disabled={creatingPromo}>
+                    {creatingPromo ? "Creating..." : visiblePromotionDraft ? "Refresh brief" : "Create promo brief"}
                   </Button>
                 </div>
-                <code className="break-all text-xs text-[color:var(--foreground)]">{selectedPlan.analyticsTag || "none"}</code>
+                {promoError ? (
+                  <div className="mt-3 rounded-[10px] border border-[color:var(--danger-border)] bg-[color:var(--danger-soft)] px-3 py-2 text-sm text-[color:var(--danger)]">
+                    {promoError}
+                  </div>
+                ) : null}
+                {visiblePromotionDraft ? (
+                  <div className="mt-3 grid gap-3">
+                    <div className="rounded-[10px] bg-[color:var(--surface-muted)] px-3 py-3">
+                      <div className="text-xs font-medium uppercase tracking-[0.16em] text-[color:var(--muted-foreground)]">
+                        Campaign
+                      </div>
+                      <div className="mt-1 text-sm font-medium text-[color:var(--foreground)]">
+                        {visiblePromotionDraft.campaignName}
+                      </div>
+                      <div className="mt-1 text-xs text-[color:var(--muted-foreground)]">
+                        {visiblePromotionDraft.objective} · {visiblePromotionDraft.channel}
+                      </div>
+                    </div>
+                    <div className="grid gap-2">
+                      <div className="text-sm font-medium text-[color:var(--foreground)]">Primary text</div>
+                      <div className="rounded-[10px] bg-[color:var(--surface-muted)] px-3 py-3 text-sm leading-6 text-[color:var(--foreground)]">
+                        {visiblePromotionDraft.primaryText}
+                      </div>
+                    </div>
+                    <div className="grid gap-2">
+                      <div className="text-sm font-medium text-[color:var(--foreground)]">Destination</div>
+                      <div className="break-all rounded-[10px] bg-[color:var(--surface-muted)] px-3 py-3 text-sm text-[color:var(--foreground)]">
+                        {visiblePromotionDraft.destinationUrl}
+                      </div>
+                    </div>
+                    <div className="grid gap-2">
+                      <div className="text-sm font-medium text-[color:var(--foreground)]">Audience</div>
+                      <div className="rounded-[10px] bg-[color:var(--surface-muted)] px-3 py-3 text-sm text-[color:var(--foreground)]">
+                        {visiblePromotionDraft.audience}
+                      </div>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => copyText(visiblePromotionDraft.primaryText)}
+                      >
+                        Copy text
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => copyText(promotionExportJson)}
+                        disabled={!promotionExportJson}
+                      >
+                        Copy brief
+                      </Button>
+                      <Button asChild type="button" variant="ghost" size="sm">
+                        <Link href={visiblePromotionDraft.destinationUrl} target="_blank" rel="noreferrer">
+                          Open destination
+                          <ExternalLink className="h-3.5 w-3.5" />
+                        </Link>
+                      </Button>
+                    </div>
+                    <div className="text-xs text-[color:var(--muted-foreground)]">
+                      Uses the source post as research only. Promote your own brand asset, not the third-party post.
+                    </div>
+                    {visiblePromotionPurchase ? (
+                      <div className="rounded-[10px] border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-3">
+                        <div className="flex flex-wrap items-center justify-between gap-3">
+                          <div>
+                            <div className="text-sm font-medium text-[color:var(--foreground)]">BuyShazam order</div>
+                            <div className="text-xs text-[color:var(--muted-foreground)]">
+                              {formatPromotionPurchaseStatus(visiblePromotionPurchase.status)}
+                            </div>
+                          </div>
+                          {visiblePromotionPurchase.orderUrl ? (
+                            <Button asChild type="button" variant="ghost" size="sm">
+                              <Link href={visiblePromotionPurchase.orderUrl} target="_blank" rel="noreferrer">
+                                Open order
+                                <ExternalLink className="h-3.5 w-3.5" />
+                              </Link>
+                            </Button>
+                          ) : visiblePromotionPurchase.checkoutUrl ? (
+                            <Button asChild type="button" variant="ghost" size="sm">
+                              <Link href={visiblePromotionPurchase.checkoutUrl} target="_blank" rel="noreferrer">
+                                Open checkout
+                                <ExternalLink className="h-3.5 w-3.5" />
+                              </Link>
+                            </Button>
+                          ) : null}
+                        </div>
+                        <div className="mt-2 text-sm text-[color:var(--foreground)]">
+                          {visiblePromotionPurchase.message}
+                        </div>
+                        <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-[color:var(--muted-foreground)]">
+                          <div>Cart: {visiblePromotionPurchase.addedToCart ? "added" : "not confirmed"}</div>
+                          {visiblePromotionPurchase.walletOptionLabel ? (
+                            <div>Wallet: {visiblePromotionPurchase.walletOptionLabel}</div>
+                          ) : null}
+                          {visiblePromotionPurchase.walletBalance ? (
+                            <div>Balance: {visiblePromotionPurchase.walletBalance}</div>
+                          ) : null}
+                          {visiblePromotionPurchase.orderId ? <div>Order #{visiblePromotionPurchase.orderId}</div> : null}
+                        </div>
+                        {visiblePromotionPurchase.missingFields.length ? (
+                          <div className="mt-2 text-xs text-[color:var(--warning)]">
+                            Missing checkout fields: {visiblePromotionPurchase.missingFields.join(", ")}
+                          </div>
+                        ) : null}
+                      </div>
+                    ) : null}
+                  </div>
+                ) : null}
               </div>
 
-              <div className="grid gap-2 text-sm text-[color:var(--muted-foreground)]">
-                {(selectedPlan.exitRules || []).map((rule) => (
-                  <div key={rule}>- {rule}</div>
-                ))}
-              </div>
+              {generatedCommentDraft ? (
+                <div className="rounded-[10px] border border-[color:var(--border)] p-3">
+                  <div className="mb-2 text-xs font-medium uppercase tracking-[0.16em] text-[color:var(--muted-foreground)]">
+                    Suggested
+                  </div>
+                  <div className="rounded-[10px] bg-[color:var(--surface-muted)] px-3 py-3 text-sm leading-6 text-[color:var(--foreground)]">
+                    {generatedCommentDraft}
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => {
+                        setCommentDraft(generatedCommentDraft);
+                        lastAutoCommentDraftRef.current = generatedCommentDraft;
+                      }}
+                    >
+                      Use suggestion
+                    </Button>
+                    <Button type="button" variant="ghost" size="sm" onClick={() => copyText(generatedCommentDraft)}>
+                      Copy
+                    </Button>
+                  </div>
+                </div>
+              ) : null}
 
-              <div className="flex flex-wrap gap-2 border-t border-[color:var(--border)] pt-4">
-                <Button type="button" variant="outline" onClick={() => updateStatus(selectedPost.id, "saved")}>
-                  Save
-                </Button>
-                <Button type="button" variant="outline" onClick={() => updateStatus(selectedPost.id, "triaged")}>
-                  Mark triaged
-                </Button>
-                <Button type="button" variant="ghost" onClick={() => updateStatus(selectedPost.id, "dismissed")}>
-                  Dismiss
-                </Button>
-              </div>
+              {commentAccountOptions.length ? (
+                <div className="space-y-3">
+                  {commentAccountOptions.length === 1 ? (
+                    <div className="rounded-[10px] border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-3">
+                      <div className="text-xs font-medium uppercase tracking-[0.16em] text-[color:var(--muted-foreground)]">
+                        Account
+                      </div>
+                      <div className="mt-1 text-sm font-medium text-[color:var(--foreground)]">
+                        {commentAccountOptions[0].accountName}
+                      </div>
+                      <div className="text-xs text-[color:var(--muted-foreground)]">
+                        {commentAccountOptions[0].handle || commentAccountOptions[0].fromEmail || commentAccountOptions[0].externalAccountId}
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="grid gap-2">
+                      <label className="text-sm font-medium text-[color:var(--foreground)]">Account</label>
+                      <Select value={commentAccountId} onChange={(event) => setCommentAccountId(event.target.value)}>
+                        {commentAccountOptions.map((account) => (
+                          <option key={account.accountId} value={account.accountId}>
+                            {account.accountName} · {account.handle || account.fromEmail || account.externalAccountId}
+                          </option>
+                        ))}
+                      </Select>
+                    </div>
+                  )}
+                  {selectedCommentAccountNeedsOverride ? (
+                    <div className="text-xs text-[color:var(--warning)]">Manual account selected.</div>
+                  ) : null}
+
+                  <div className="grid gap-2">
+                    <label className="text-sm font-medium text-[color:var(--foreground)]">Comment</label>
+                    {commentGenerationPending ? (
+                      <div className="text-xs text-[color:var(--muted-foreground)]">Generating comment...</div>
+                    ) : null}
+                    <Textarea
+                      value={commentDraft}
+                      onChange={(event) => {
+                        setCommentDraft(event.target.value);
+                        lastAutoCommentDraftRef.current = generatedCommentDraft;
+                      }}
+                      rows={7}
+                      maxLength={1250}
+                      placeholder={commentGenerationPending ? "Generating..." : "Write the comment"}
+                      disabled={commentGenerationPending || sendingComment}
+                    />
+                    <div className="text-xs text-[color:var(--muted-foreground)]">
+                      {commentGenerationPending ? "Waiting for the generated comment." : `${commentDraft.trim().length}/1250`}
+                    </div>
+                  </div>
+
+                  {selectedCommentPlatform === "instagram" ? (
+                    <details className="rounded-[10px] border border-[color:var(--border)] p-3">
+                      <summary className="cursor-pointer text-sm font-medium text-[color:var(--foreground)]">
+                        Reply to a specific comment
+                      </summary>
+                      <div className="mt-3 grid gap-2">
+                        <label className="text-sm text-[color:var(--muted-foreground)]">Comment id</label>
+                        <Input
+                          value={commentReplyId}
+                          onChange={(event) => setCommentReplyId(event.target.value)}
+                          placeholder="Leave empty for a normal post comment"
+                        />
+                      </div>
+                    </details>
+                  ) : null}
+
+                  {commentError ? (
+                    <div className="rounded-[10px] border border-[color:var(--danger-border)] bg-[color:var(--danger-soft)] px-3 py-2 text-sm text-[color:var(--danger)]">
+                      {commentError}
+                    </div>
+                  ) : null}
+                  {visibleCommentDelivery ? (
+                    <div
+                      className={cn(
+                        "rounded-[10px] border px-3 py-3",
+                        visibleCommentDelivery.status === "verified"
+                          ? "border-[color:var(--success-border)] bg-[color:var(--success-soft)]"
+                          : "border-[color:var(--warning-border)] bg-[color:var(--warning-soft)]"
+                      )}
+                    >
+                      <div
+                        className={cn(
+                          "text-sm font-medium",
+                          visibleCommentDelivery.status === "verified"
+                            ? "text-[color:var(--success)]"
+                            : "text-[color:var(--warning)]"
+                        )}
+                      >
+                        {visibleCommentDelivery.status === "verified" ? "Posted and verified" : "Posted, waiting on verification"}
+                      </div>
+                      <div className="mt-1 text-sm text-[color:var(--foreground)]">{visibleCommentDelivery.message}</div>
+                      <div className="mt-3 rounded-[10px] border border-[color:var(--border)] bg-[color:var(--background)] px-3 py-3">
+                        <div className="text-xs font-medium uppercase tracking-[0.16em] text-[color:var(--muted-foreground)]">
+                          Last posted comment
+                        </div>
+                        {visibleCommentDelivery.commentUrl ? (
+                          <div className="mt-2 space-y-2">
+                            <div className="break-all rounded-[8px] bg-[color:var(--surface-muted)] px-3 py-2 font-mono text-xs text-[color:var(--foreground)]">
+                              {visibleCommentDelivery.commentUrl}
+                            </div>
+                            <div className="flex flex-wrap gap-2">
+                              <Button asChild type="button" variant="outline" size="sm">
+                                <Link href={visibleCommentDelivery.commentUrl} target="_blank" rel="noreferrer">
+                                  Open comment
+                                  <ExternalLink className="h-3.5 w-3.5" />
+                                </Link>
+                              </Button>
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => copyText(visibleCommentDelivery.commentUrl)}
+                              >
+                                Copy link
+                              </Button>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="mt-2 text-sm text-[color:var(--muted-foreground)]">
+                            No permalink returned for this comment yet.
+                          </div>
+                        )}
+                      </div>
+                      {commentExportPayload ? (
+                        <div className="mt-3 rounded-[10px] border border-[color:var(--border)] bg-[color:var(--background)] px-3 py-3">
+                          <div className="text-xs font-medium uppercase tracking-[0.16em] text-[color:var(--muted-foreground)]">
+                            Export
+                          </div>
+                          <div className="mt-2 grid gap-3">
+                            {commentExportPayload.altCommentUrl ? (
+                              <div className="grid gap-2">
+                                <div className="text-sm font-medium text-[color:var(--foreground)]">Alt Instagram link</div>
+                                <div className="break-all rounded-[8px] bg-[color:var(--surface-muted)] px-3 py-2 font-mono text-xs text-[color:var(--foreground)]">
+                                  {commentExportPayload.altCommentUrl}
+                                </div>
+                                <div className="flex flex-wrap gap-2">
+                                  <Button
+                                    type="button"
+                                    variant="ghost"
+                                    size="sm"
+                                    onClick={() => copyText(commentExportPayload.altCommentUrl)}
+                                  >
+                                    Copy alt link
+                                  </Button>
+                                </div>
+                              </div>
+                            ) : null}
+                            <div className="flex flex-wrap gap-2">
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                onClick={() => copyText(commentExportJson)}
+                                disabled={!commentExportJson}
+                              >
+                                Copy JSON
+                              </Button>
+                            </div>
+                          </div>
+                        </div>
+                      ) : null}
+                      <div className="mt-2 space-y-1 text-xs text-[color:var(--muted-foreground)]">
+                        {visibleCommentDelivery.accountName ? (
+                          <div>
+                            Account: {visibleCommentDelivery.accountName}
+                            {visibleCommentDelivery.accountHandle ? ` ${visibleCommentDelivery.accountHandle}` : ""}
+                          </div>
+                        ) : null}
+                        {visibleCommentDelivery.commentId ? <div>Comment id: {visibleCommentDelivery.commentId}</div> : null}
+                        {visibleCommentDelivery.source ? <div>Checked via: {visibleCommentDelivery.source}</div> : null}
+                        <div>Updated: {formatDate(visibleCommentDelivery.postedAt)}</div>
+                      </div>
+                    </div>
+                  ) : null}
+
+                  <Button
+                    type="button"
+                    size="lg"
+                    onClick={sendComment}
+                    disabled={sendingComment || commentGenerationPending || !commentDraft.trim()}
+                  >
+                    {sendingComment ? "Posting..." : "Post comment"}
+                  </Button>
+                </div>
+              ) : (
+                <div className="rounded-[10px] border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-3 text-sm text-[color:var(--muted-foreground)]">
+                  {selectedCommentPlatform === "youtube"
+                    ? "Connect a YouTube OAuth account first."
+                    : "Connect an Instagram Unipile account first."}
+                </div>
+              )}
             </div>
           ) : (
-            <div className="text-sm text-[color:var(--muted-foreground)]">Select a candidate to see the plan.</div>
+            <div className="text-sm text-[color:var(--muted-foreground)]">Choose a post from the left.</div>
           )}
         </SectionPanel>
       </div>

@@ -14,10 +14,21 @@ import {
 import { decryptJson, encryptJson } from "@/lib/outreach-encryption";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { getOutreachAccountFromEmail } from "@/lib/outreach-account-helpers";
-import { MAX_ACTIVE_SENDERS_PER_DOMAIN } from "@/lib/sender-capacity";
+import {
+  defaultSocialAccountConfig,
+  hasExplicitSocialIdentity,
+  normalizeSocialLinkedProvider,
+} from "@/lib/social-account-config";
+import {
+  buildSenderCapacitySnapshots,
+  MAX_ACTIVE_SENDERS_PER_DOMAIN,
+  selectSenderAccountIdsWithinDomainLimit,
+} from "@/lib/sender-capacity";
 import type {
   ActorCapabilityProfile,
   BrandOutreachAssignment,
+  CampaignPrepTask,
+  CampaignPrepTaskBlockerCode,
   DeliverabilityProbeRun,
   DeliverabilityProbeStage,
   DeliverabilityProbeTarget,
@@ -28,6 +39,7 @@ import type {
   InboxSyncState,
   InboxEvalRun,
   LeadQualityPolicy,
+  EmailVerificationState,
   OutreachAccount,
   OutreachAccountConfig,
   OutreachMessage,
@@ -50,6 +62,8 @@ import type {
   SenderLaunchAction,
   SenderLaunch,
   SenderLaunchEvent,
+  OutreachLease,
+  OutreachLeaseStatus,
 } from "@/lib/factory-types";
 
 export type OutreachAccountSecrets = {
@@ -57,6 +71,9 @@ export type OutreachAccountSecrets = {
   customerIoTrackApiKey: string;
   customerIoAppApiKey: string;
   apifyToken: string;
+  youtubeClientId: string;
+  youtubeClientSecret: string;
+  youtubeRefreshToken: string;
   mailboxAccessToken: string;
   mailboxRefreshToken: string;
   mailboxPassword: string;
@@ -144,6 +161,8 @@ type OutreachStore = {
   anomalies: RunAnomaly[];
   events: OutreachEvent[];
   jobs: OutreachJob[];
+  campaignPrepTasks: CampaignPrepTask[];
+  outreachLeases: OutreachLease[];
   deliverabilityProbeRuns: DeliverabilityProbeRun[];
   deliverabilitySeedReservations: DeliverabilitySeedReservation[];
   sourcingActorProfiles: ActorCapabilityProfile[];
@@ -192,6 +211,8 @@ const TABLE_INBOX_SYNC_STATE = "demanddev_inbox_sync_state";
 const TABLE_INBOX_EVAL_RUN = "demanddev_inbox_eval_runs";
 const TABLE_EVENT = "demanddev_outreach_events";
 const TABLE_JOB = "demanddev_outreach_job_queue";
+const TABLE_CAMPAIGN_PREP_TASK = "demanddev_campaign_prep_tasks";
+const TABLE_OUTREACH_LEASE = "demanddev_outreach_leases";
 const TABLE_ANOMALY = "demanddev_run_anomalies";
 const TABLE_DELIVERABILITY_PROBE_RUN = "demanddev_deliverability_probe_runs";
 const TABLE_DELIVERABILITY_SEED_RESERVATION = "demanddev_deliverability_seed_reservations";
@@ -272,6 +293,80 @@ async function enforceAssignmentDomainLimit(accountIds: string[]) {
   );
 }
 
+const ASSIGNMENT_DOMAIN_LIMIT_TIMEZONE = "America/Los_Angeles";
+const ASSIGNMENT_DOMAIN_LIMIT_BUSINESS_HOURS = 8;
+
+async function trimAssignmentAccountIdsToDomainLimit(accountIds: string[]) {
+  const normalizedAccountIds = normalizeAssignmentAccountIds(accountIds);
+  if (normalizedAccountIds.length <= 1) {
+    return { accountIds: normalizedAccountIds, removedAccountIds: [] as string[] };
+  }
+
+  const accounts = await Promise.all(normalizedAccountIds.map((accountId) => getOutreachAccount(accountId)));
+  const resolvedAccounts = accounts.filter((account): account is OutreachAccount => Boolean(account));
+  if (!resolvedAccounts.length) {
+    return { accountIds: [] as string[], removedAccountIds: normalizedAccountIds };
+  }
+
+  const keepableAccountIds = selectSenderAccountIdsWithinDomainLimit(
+    buildSenderCapacitySnapshots({
+      senders: resolvedAccounts.map((account) => ({ account })),
+      timeZone: ASSIGNMENT_DOMAIN_LIMIT_TIMEZONE,
+      businessHoursPerDay: ASSIGNMENT_DOMAIN_LIMIT_BUSINESS_HOURS,
+    })
+  );
+
+  const nextAccountIds = normalizedAccountIds.filter((accountId) => keepableAccountIds.has(accountId));
+  return {
+    accountIds: nextAccountIds,
+    removedAccountIds: normalizedAccountIds.filter((accountId) => !keepableAccountIds.has(accountId)),
+  };
+}
+
+async function repairAssignmentDomainLimit(
+  assignment: BrandOutreachAssignment
+): Promise<BrandOutreachAssignment> {
+  const { accountIds, removedAccountIds } = await trimAssignmentAccountIdsToDomainLimit(assignment.accountIds);
+  if (!removedAccountIds.length) {
+    return assignment;
+  }
+
+  const nextAssignment: BrandOutreachAssignment = {
+    ...assignment,
+    accountId: accountIds.includes(assignment.accountId) ? assignment.accountId : accountIds[0] ?? "",
+    accountIds,
+    mailboxAccountId: removedAccountIds.includes(assignment.mailboxAccountId) ? "" : assignment.mailboxAccountId,
+    updatedAt: nowIso(),
+  };
+
+  const supabase = getSupabaseAdmin();
+  if (supabase) {
+    await supabase
+      .from(TABLE_ASSIGNMENT)
+      .upsert(
+        {
+          brand_id: nextAssignment.brandId,
+          account_id: nextAssignment.accountId,
+          account_ids: nextAssignment.accountIds,
+          mailbox_account_id: nextAssignment.mailboxAccountId || null,
+        },
+        { onConflict: "brand_id" }
+      );
+    return nextAssignment;
+  }
+
+  if (!isVercel) {
+    const store = await readLocalStore();
+    const idx = store.assignments.findIndex((row) => row.brandId === nextAssignment.brandId);
+    if (idx >= 0) {
+      store.assignments[idx] = nextAssignment;
+      await writeLocalStore(store);
+    }
+  }
+
+  return nextAssignment;
+}
+
 function mapAssignmentRow(input: unknown): BrandOutreachAssignment {
   const row = asRecord(input);
   const accountId = String(row.accountId ?? row.account_id ?? "").trim();
@@ -304,6 +399,8 @@ function defaultOutreachStore(): OutreachStore {
     anomalies: [],
     events: [],
     jobs: [],
+    campaignPrepTasks: [],
+    outreachLeases: [],
     deliverabilityProbeRuns: [],
     deliverabilitySeedReservations: [],
     sourcingActorProfiles: [],
@@ -337,8 +434,11 @@ function sanitizeAccountConfig(value: unknown): OutreachAccountConfig {
   const customerIo = asRecord(row.customerIo);
   const mailpool = asRecord(row.mailpool);
   const apify = asRecord(row.apify);
+  const social = asRecord(row.social);
   const mailbox = asRecord(row.mailbox);
   const mailpoolStatus = String(mailpool.status ?? "").trim().toLowerCase();
+  const socialRole = String(social.role ?? "").trim().toLowerCase();
+  const socialConnectionProvider = String(social.connectionProvider ?? social.connection_provider ?? "").trim().toLowerCase();
 
   return {
     customerIo: {
@@ -367,6 +467,63 @@ function sanitizeAccountConfig(value: unknown): OutreachAccountConfig {
     },
     apify: {
       defaultActorId: String(apify.defaultActorId ?? "").trim(),
+    },
+    social: {
+      ...defaultSocialAccountConfig(),
+      enabled: Boolean(social.enabled ?? false),
+      connectionProvider:
+        socialConnectionProvider === "unipile"
+          ? "unipile"
+          : socialConnectionProvider === "youtube"
+            ? "youtube"
+          : socialConnectionProvider === "manual"
+            ? "manual"
+            : "none",
+      linkedProvider: normalizeSocialLinkedProvider(
+        social.linkedProvider ?? social.linked_provider ?? social.provider ?? social.profile_provider
+      ),
+      externalAccountId: String(social.externalAccountId ?? social.external_account_id ?? "").trim(),
+      handle: String(social.handle ?? "").trim(),
+      profileUrl: String(social.profileUrl ?? social.profile_url ?? "").trim(),
+      publicIdentifier: String(social.publicIdentifier ?? social.public_identifier ?? social.username ?? "").trim(),
+      displayName: String(social.displayName ?? social.display_name ?? social.name ?? "").trim(),
+      headline: String(social.headline ?? social.title ?? "").trim(),
+      bio: String(social.bio ?? social.description ?? social.about ?? "").trim(),
+      avatarUrl: String(
+        social.avatarUrl ?? social.avatar_url ?? social.pictureUrl ?? social.picture_url ?? social.picture ?? ""
+      ).trim(),
+      role: ["operator", "specialist", "curator", "partner", "founder", "brand", "community"].includes(socialRole)
+        ? (socialRole as OutreachAccountConfig["social"]["role"])
+        : "operator",
+      topicTags: asArray(social.topicTags ?? social.topic_tags)
+        .map((entry) => String(entry ?? "").trim())
+        .filter(Boolean),
+      communityTags: asArray(social.communityTags ?? social.community_tags)
+        .map((entry) => String(entry ?? "").trim())
+        .filter(Boolean),
+      platforms: asArray(social.platforms)
+        .map((entry) => String(entry ?? "").trim().toLowerCase())
+        .filter(Boolean),
+      regions: asArray(social.regions)
+        .map((entry) => String(entry ?? "").trim())
+        .filter(Boolean),
+      languages: asArray(social.languages)
+        .map((entry) => String(entry ?? "").trim())
+        .filter(Boolean),
+      audienceTypes: asArray(social.audienceTypes ?? social.audience_types)
+        .map((entry) => String(entry ?? "").trim())
+        .filter(Boolean),
+      personaSummary: String(social.personaSummary ?? social.persona_summary ?? "").trim(),
+      voiceSummary: String(social.voiceSummary ?? social.voice_summary ?? "").trim(),
+      trustLevel: Math.max(0, Math.min(10, Number(social.trustLevel ?? social.trust_level ?? 0) || 0)),
+      cooldownMinutes: Math.max(0, Math.min(24 * 60, Number(social.cooldownMinutes ?? social.cooldown_minutes ?? 120) || 120)),
+      linkedAt: String(social.linkedAt ?? social.linked_at ?? "").trim(),
+      lastProfileSyncAt: String(social.lastProfileSyncAt ?? social.last_profile_sync_at ?? "").trim(),
+      lastSocialCommentAt: String(social.lastSocialCommentAt ?? social.last_social_comment_at ?? "").trim(),
+      recentActivity24h: Math.max(0, Number(social.recentActivity24h ?? social.recent_activity_24h ?? 0) || 0),
+      recentActivity7d: Math.max(0, Number(social.recentActivity7d ?? social.recent_activity_7d ?? 0) || 0),
+      coordinationGroup: String(social.coordinationGroup ?? social.coordination_group ?? "").trim(),
+      notes: String(social.notes ?? "").trim(),
     },
     mailbox: {
       provider: ["gmail", "outlook", "imap"].includes(String(mailbox.provider))
@@ -421,6 +578,9 @@ function defaultSecrets(): OutreachAccountSecrets {
     customerIoTrackApiKey: "",
     customerIoAppApiKey: "",
     apifyToken: "",
+    youtubeClientId: "",
+    youtubeClientSecret: "",
+    youtubeRefreshToken: "",
     mailboxAccessToken: "",
     mailboxRefreshToken: "",
     mailboxPassword: "",
@@ -445,6 +605,9 @@ function sanitizeSecrets(value: unknown): OutreachAccountSecrets {
     customerIoTrackApiKey: String(row.customerIoTrackApiKey ?? "").trim(),
     customerIoAppApiKey: String(row.customerIoAppApiKey ?? "").trim(),
     apifyToken: String(row.apifyToken ?? "").trim(),
+    youtubeClientId: String(row.youtubeClientId ?? row.googleClientId ?? "").trim(),
+    youtubeClientSecret: String(row.youtubeClientSecret ?? row.googleClientSecret ?? "").trim(),
+    youtubeRefreshToken: String(row.youtubeRefreshToken ?? row.googleRefreshToken ?? "").trim(),
     mailboxAccessToken: String(row.mailboxAccessToken ?? "").trim(),
     mailboxRefreshToken: String(row.mailboxRefreshToken ?? "").trim(),
     mailboxPassword: String(row.mailboxPassword ?? "").trim(),
@@ -636,6 +799,34 @@ function mapRunRow(input: unknown): OutreachRun {
 
 function mapRunLeadRow(input: unknown): OutreachRunLead {
   const row = asRecord(input);
+  const emailVerificationRaw = row.email_verification ?? row.emailVerification;
+  const emailVerification = (() => {
+    const value = asRecord(emailVerificationRaw);
+    if (!Object.keys(value).length) return null;
+    return {
+      mode:
+        value.mode === "local" || value.mode === "validatedmails" || value.mode === "heuristic"
+          ? (value.mode as EmailVerificationState["mode"])
+          : "",
+      provider: String(value.provider ?? ""),
+      verdict: String(value.verdict ?? ""),
+      confidence: String(value.confidence ?? ""),
+      reason: String(value.reason ?? ""),
+      mxStatus: String(value.mxStatus ?? value.mx_status ?? ""),
+      acceptAll:
+        typeof value.acceptAll === "boolean"
+          ? value.acceptAll
+          : typeof value.accept_all === "boolean"
+            ? value.accept_all
+            : null,
+      catchAll:
+        typeof value.catchAll === "boolean"
+          ? value.catchAll
+          : typeof value.catch_all === "boolean"
+            ? value.catch_all
+            : null,
+    } satisfies EmailVerificationState;
+  })();
   return {
     id: String(row.id ?? ""),
     runId: String(row.run_id ?? row.runId ?? ""),
@@ -647,6 +838,8 @@ function mapRunLeadRow(input: unknown): OutreachRunLead {
     title: String(row.title ?? ""),
     domain: String(row.domain ?? ""),
     sourceUrl: String(row.source_url ?? row.sourceUrl ?? ""),
+    realVerifiedEmail: row.real_verified_email === true || row.realVerifiedEmail === true,
+    emailVerification,
     status: ["new", "suppressed", "scheduled", "sent", "replied", "bounced", "unsubscribed"].includes(
       String(row.status)
     )
@@ -1129,6 +1322,60 @@ function mapJobRow(input: unknown): OutreachJob {
   };
 }
 
+function mapCampaignPrepTaskRow(input: unknown): CampaignPrepTask {
+  const row = asRecord(input);
+  const status = String(row.status ?? "").trim().toLowerCase();
+  const blockerCode = String(row.blocker_code ?? row.blockerCode ?? "").trim().toLowerCase();
+  const lane = String(row.lane ?? "").trim().toLowerCase();
+  return {
+    id: String(row.id ?? "").trim(),
+    brandId: String(row.brand_id ?? row.brandId ?? "").trim(),
+    campaignId: String(row.campaign_id ?? row.campaignId ?? "").trim(),
+    lane: lane === "warmup" ? "warmup" : "outbound",
+    status: ["queued", "running", "blocked", "ready", "failed"].includes(status)
+      ? (status as CampaignPrepTask["status"])
+      : "queued",
+    attempt: Math.max(0, Number(row.attempt ?? 0) || 0),
+    executeAfter: String(row.execute_after ?? row.executeAfter ?? nowIso()).trim(),
+    startedAt: String(row.started_at ?? row.startedAt ?? "").trim(),
+    finishedAt: String(row.finished_at ?? row.finishedAt ?? "").trim(),
+    blockerCode: ["none", "needs_sourcing", "dependency_misconfigured", "invalid_inventory", "blocked", "unknown"].includes(
+      blockerCode
+    )
+      ? (blockerCode as CampaignPrepTaskBlockerCode)
+      : "unknown",
+    summary: String(row.summary ?? "").trim(),
+    lastError: normalizeLegacyOutreachErrorText(row.last_error ?? row.lastError ?? ""),
+    progress: asRecord(normalizeLegacyOutreachValue(asRecord(row.progress))),
+    sourceVersion: String(row.source_version ?? row.sourceVersion ?? "").trim(),
+    createdAt: String(row.created_at ?? row.createdAt ?? nowIso()).trim(),
+    updatedAt: String(row.updated_at ?? row.updatedAt ?? nowIso()).trim(),
+  };
+}
+
+function mapOutreachLeaseRow(input: unknown): OutreachLease {
+  const row = asRecord(input);
+  const status = String(row.status ?? "").trim().toLowerCase();
+  const leaseType = String(row.lease_type ?? row.leaseType ?? "").trim().toLowerCase();
+  const scopeType = String(row.scope_type ?? row.scopeType ?? "").trim().toLowerCase();
+  return {
+    id: String(row.id ?? "").trim(),
+    leaseType: leaseType === "campaign_prep" ? "campaign_prep" : "campaign_prep",
+    scopeType: scopeType === "campaign" ? "campaign" : "campaign",
+    scopeId: String(row.scope_id ?? row.scopeId ?? "").trim(),
+    holder: String(row.holder ?? "").trim(),
+    status: ["active", "released", "expired"].includes(status)
+      ? (status as OutreachLeaseStatus)
+      : "active",
+    expiresAt: String(row.expires_at ?? row.expiresAt ?? nowIso()).trim(),
+    metadata: asRecord(normalizeLegacyOutreachValue(asRecord(row.metadata))),
+    releasedAt: String(row.released_at ?? row.releasedAt ?? "").trim(),
+    releasedReason: String(row.released_reason ?? row.releasedReason ?? "").trim(),
+    createdAt: String(row.created_at ?? row.createdAt ?? nowIso()).trim(),
+    updatedAt: String(row.updated_at ?? row.updatedAt ?? nowIso()).trim(),
+  };
+}
+
 function mapEventRow(input: unknown): OutreachEvent {
   const row = asRecord(input);
   return {
@@ -1533,6 +1780,8 @@ async function readLocalStore(): Promise<OutreachStore> {
       anomalies: asArray(row.anomalies).map((item) => mapAnomalyRow(item)),
       events: asArray(row.events).map((item) => mapEventRow(item)),
       jobs: asArray(row.jobs).map((item) => mapJobRow(item)),
+      campaignPrepTasks: asArray(row.campaignPrepTasks).map((item) => mapCampaignPrepTaskRow(item)),
+      outreachLeases: asArray(row.outreachLeases).map((item) => mapOutreachLeaseRow(item)),
       deliverabilityProbeRuns: asArray(row.deliverabilityProbeRuns).map((item) => mapDeliverabilityProbeRunRow(item)),
       deliverabilitySeedReservations: asArray(row.deliverabilitySeedReservations).map((item) =>
         mapDeliverabilitySeedReservationRow(item)
@@ -1701,6 +1950,9 @@ function hintForSupabaseWriteError(error: unknown) {
     if (msg.includes("demanddev_customerio_profile_admissions")) {
       return "Customer.io profile budget tables are missing. Apply supabase/migrations/20260310143000_customerio_profile_budget.sql, then redeploy.";
     }
+    if (msg.includes("demanddev_campaign_prep_tasks") || msg.includes("demanddev_outreach_leases")) {
+      return "Campaign prep task tables are missing. Apply supabase/migrations/20260414143000_campaign_prep_tasks.sql, then redeploy.";
+    }
     return "Supabase tables are missing. Apply migrations in supabase/migrations to your Supabase project, then redeploy.";
   }
 
@@ -1727,6 +1979,11 @@ function isMissingRelationError(error: unknown, relationName: string) {
   const dbg = supabaseErrorDebug(error);
   const message = `${dbg.message}\n${dbg.details}`.toLowerCase();
   return message.includes(relationName.toLowerCase()) && message.includes("does not exist");
+}
+
+function isUniqueViolationError(error: unknown) {
+  const dbg = supabaseErrorDebug(error);
+  return dbg.code === "23505";
 }
 
 async function hydrateOutreachAccountCustomerIoBilling(account: OutreachAccount): Promise<OutreachAccount> {
@@ -2018,6 +2275,11 @@ export async function listOutreachAccounts(): Promise<OutreachAccount[]> {
   );
 }
 
+export async function listSocialRoutingAccounts(): Promise<OutreachAccount[]> {
+  const accounts = await listOutreachAccounts();
+  return accounts.filter((account) => hasExplicitSocialIdentity(account.config.social));
+}
+
 export async function getOutreachAccount(accountId: string): Promise<OutreachAccount | null> {
   const supabase = getSupabaseAdmin();
   if (!supabase) {
@@ -2260,6 +2522,9 @@ export async function updateOutreachAccount(
     customerIoTrackApiKey: patchSecrets.customerIoTrackApiKey || existingSecrets.customerIoTrackApiKey,
     customerIoAppApiKey: patchSecrets.customerIoAppApiKey || existingSecrets.customerIoAppApiKey,
     apifyToken: patchSecrets.apifyToken || existingSecrets.apifyToken,
+    youtubeClientId: patchSecrets.youtubeClientId || existingSecrets.youtubeClientId,
+    youtubeClientSecret: patchSecrets.youtubeClientSecret || existingSecrets.youtubeClientSecret,
+    youtubeRefreshToken: patchSecrets.youtubeRefreshToken || existingSecrets.youtubeRefreshToken,
     mailboxAccessToken: patchSecrets.mailboxAccessToken || existingSecrets.mailboxAccessToken,
     mailboxRefreshToken: patchSecrets.mailboxRefreshToken || existingSecrets.mailboxRefreshToken,
     mailboxPassword: patchSecrets.mailboxPassword || existingSecrets.mailboxPassword,
@@ -2478,7 +2743,8 @@ export async function getBrandOutreachAssignment(
     }
 
     const store = await readLocalStore();
-    return store.assignments.find((row) => row.brandId === brandId) ?? null;
+    const assignment = store.assignments.find((row) => row.brandId === brandId) ?? null;
+    return assignment ? repairAssignmentDomainLimit(assignment) : null;
   }
 
   if (supabase) {
@@ -2488,14 +2754,15 @@ export async function getBrandOutreachAssignment(
       .eq("brand_id", brandId)
       .maybeSingle();
     if (!error && data) {
-      return mapAssignmentRow(data);
+      return repairAssignmentDomainLimit(mapAssignmentRow(data));
     }
   }
 
   if (isVercel) return null;
 
   const store = await readLocalStore();
-  return store.assignments.find((row) => row.brandId === brandId) ?? null;
+  const assignment = store.assignments.find((row) => row.brandId === brandId) ?? null;
+  return assignment ? repairAssignmentDomainLimit(assignment) : null;
 }
 
 export async function setBrandOutreachAssignment(
@@ -2687,8 +2954,8 @@ export async function createOutreachRun(input: {
   campaignId: string;
   experimentId: string;
   hypothesisId: string;
-  ownerType?: OutreachRun["ownerType"];
-  ownerId?: string;
+  ownerType: OutreachRun["ownerType"];
+  ownerId: string;
   accountId: string;
   status?: OutreachRun["status"];
   cadence?: OutreachRun["cadence"];
@@ -2700,20 +2967,56 @@ export async function createOutreachRun(input: {
   pauseReason?: string;
   lastError?: string;
 }): Promise<OutreachRun> {
+  const ownerType = input.ownerType;
+  const ownerId = String(input.ownerId ?? "").trim();
+  const campaignId = String(input.campaignId ?? "").trim();
+  const experimentId = String(input.experimentId ?? "").trim();
+
+  if (!ownerType) {
+    throw new Error("Outreach run requires explicit ownerType.");
+  }
+
+  if (ownerType === "campaign") {
+    if (!ownerId) {
+      throw new Error("Campaign-owned run requires explicit ownerId.");
+    }
+    const { getScaleCampaignRecordById } = await import("@/lib/experiment-data");
+    const ownerCampaign = await getScaleCampaignRecordById(input.brandId, ownerId);
+    if (!ownerCampaign) {
+      throw new Error("Campaign ownerId does not resolve to a scale campaign.");
+    }
+  } else if (ownerType === "experiment") {
+    if (!ownerId) {
+      throw new Error("Experiment-owned run requires explicit ownerId.");
+    }
+    const { getExperimentRecordById } = await import("@/lib/experiment-data");
+    const ownerExperiment = await getExperimentRecordById(input.brandId, ownerId);
+    if (!ownerExperiment) {
+      throw new Error("Experiment ownerId does not resolve to an experiment.");
+    }
+    const runtimeCampaignId = String(ownerExperiment.runtime.campaignId ?? "").trim();
+    const runtimeExperimentId = String(ownerExperiment.runtime.experimentId ?? "").trim();
+    if (!runtimeCampaignId || !runtimeExperimentId) {
+      throw new Error("Experiment ownerId does not resolve to an experiment runtime.");
+    }
+    if (campaignId !== runtimeCampaignId) {
+      throw new Error("Experiment-owned run campaignId does not match experiment runtime campaignId.");
+    }
+    if (experimentId !== runtimeExperimentId) {
+      throw new Error("Experiment-owned run experimentId does not match experiment runtime experimentId.");
+    }
+  }
+
   const now = nowIso();
   const sanitizedLastError = normalizeLegacyOutreachErrorText(input.lastError ?? "");
   const run: OutreachRun = {
     id: createId("run"),
     brandId: input.brandId,
-    campaignId: input.campaignId,
-    experimentId: input.experimentId,
+    campaignId,
+    experimentId,
     hypothesisId: input.hypothesisId,
-    ownerType: input.ownerType ?? "experiment",
-    ownerId:
-      input.ownerId ??
-      (input.ownerType === "campaign"
-        ? input.campaignId
-        : input.experimentId || input.campaignId),
+    ownerType,
+    ownerId,
     accountId: input.accountId,
     status: input.status ?? "queued",
     cadence: input.cadence ?? "3_step_7_day",
@@ -3049,9 +3352,20 @@ export async function upsertRunLeads(
   runId: string,
   brandId: string,
   campaignId: string,
-  leads: Array<Pick<OutreachRunLead, "email" | "name" | "company" | "title" | "domain" | "sourceUrl">>
+  leads: Array<
+    Pick<
+      OutreachRunLead,
+      "email" | "name" | "company" | "title" | "domain" | "sourceUrl" | "realVerifiedEmail" | "emailVerification"
+    >
+  >
 ): Promise<OutreachRunLead[]> {
-  const dedup = new Map<string, Pick<OutreachRunLead, "email" | "name" | "company" | "title" | "domain" | "sourceUrl">>();
+  const dedup = new Map<
+    string,
+    Pick<
+      OutreachRunLead,
+      "email" | "name" | "company" | "title" | "domain" | "sourceUrl" | "realVerifiedEmail" | "emailVerification"
+    >
+  >();
   for (const lead of leads) {
     const email = lead.email.trim().toLowerCase();
     if (!email) continue;
@@ -3062,6 +3376,8 @@ export async function upsertRunLeads(
       title: lead.title.trim(),
       domain: lead.domain.trim(),
       sourceUrl: lead.sourceUrl.trim(),
+      realVerifiedEmail: lead.realVerifiedEmail === true,
+      emailVerification: lead.emailVerification ?? null,
     });
   }
 
@@ -3077,6 +3393,8 @@ export async function upsertRunLeads(
     title: lead.title,
     domain: lead.domain,
     source_url: lead.sourceUrl,
+    real_verified_email: lead.realVerifiedEmail === true,
+    email_verification: lead.emailVerification ?? {},
     status: "new",
     updated_at: now,
   }));
@@ -3128,6 +3446,8 @@ export async function upsertRunLeads(
       existing.title = lead.title || existing.title;
       existing.domain = lead.domain || existing.domain;
       existing.sourceUrl = lead.sourceUrl || existing.sourceUrl;
+      existing.realVerifiedEmail = lead.realVerifiedEmail === true || existing.realVerifiedEmail === true;
+      existing.emailVerification = lead.emailVerification ?? existing.emailVerification ?? null;
       existing.updatedAt = now;
     } else {
       store.runLeads.push({
@@ -3141,6 +3461,8 @@ export async function upsertRunLeads(
         title: lead.title,
         domain: lead.domain,
         sourceUrl: lead.sourceUrl,
+        realVerifiedEmail: lead.realVerifiedEmail === true,
+        emailVerification: lead.emailVerification ?? null,
         status: "new",
         createdAt: now,
         updatedAt: now,
@@ -3248,18 +3570,36 @@ export async function loadHistoricalCompanyDomains(
 
 export async function updateRunLead(
   leadId: string,
-  patch: Partial<Pick<OutreachRunLead, "status" | "name" | "company" | "title" | "domain" | "sourceUrl">>
+  patch: Partial<
+    Pick<
+      OutreachRunLead,
+      | "email"
+      | "status"
+      | "name"
+      | "company"
+      | "title"
+      | "domain"
+      | "sourceUrl"
+      | "realVerifiedEmail"
+      | "emailVerification"
+    >
+  >
 ): Promise<OutreachRunLead | null> {
   const now = nowIso();
   const supabase = getSupabaseAdmin();
   if (supabase) {
     const update: Record<string, unknown> = { updated_at: now };
+    if (typeof patch.email === "string") update.email = patch.email;
     if (patch.status) update.status = patch.status;
     if (typeof patch.name === "string") update.name = patch.name;
     if (typeof patch.company === "string") update.company = patch.company;
     if (typeof patch.title === "string") update.title = patch.title;
     if (typeof patch.domain === "string") update.domain = patch.domain;
     if (typeof patch.sourceUrl === "string") update.source_url = patch.sourceUrl;
+    if (typeof patch.realVerifiedEmail === "boolean") update.real_verified_email = patch.realVerifiedEmail;
+    if (patch.emailVerification && typeof patch.emailVerification === "object") {
+      update.email_verification = patch.emailVerification;
+    }
     const { data, error } = await supabase
       .from(TABLE_RUN_LEAD)
       .update(update)
@@ -3387,6 +3727,38 @@ export async function listRunMessages(runId: string): Promise<OutreachMessage[]>
     .sort((a, b) => (a.scheduledAt < b.scheduledAt ? -1 : 1));
 }
 
+export async function listRunIdsForMessageStatuses(
+  statuses: OutreachMessage["status"][]
+): Promise<string[]> {
+  const normalizedStatuses = Array.from(
+    new Set(statuses.map((status) => String(status ?? "").trim()).filter(Boolean))
+  ) as OutreachMessage["status"][];
+  if (!normalizedStatuses.length) return [];
+
+  const supabase = getSupabaseAdmin();
+  if (supabase) {
+    const { data, error } = await supabase
+      .from(TABLE_MESSAGE)
+      .select("run_id")
+      .in("status", normalizedStatuses);
+    if (!error) {
+      return Array.from(
+        new Set((data ?? []).map((row: { run_id?: string | null }) => String(row.run_id ?? "").trim()).filter(Boolean))
+      );
+    }
+  }
+
+  const store = await readLocalStore();
+  return Array.from(
+    new Set(
+      store.messages
+        .filter((row) => normalizedStatuses.includes(row.status))
+        .map((row) => row.runId)
+        .filter(Boolean)
+    )
+  );
+}
+
 export async function getRunMessage(messageId: string): Promise<OutreachMessage | null> {
   const supabase = getSupabaseAdmin();
   if (supabase) {
@@ -3441,6 +3813,66 @@ export async function updateRunMessage(
   };
   await writeLocalStore(store);
   return store.messages[idx];
+}
+
+export async function updateRunMessages(
+  messageIds: string[],
+  patch: Partial<
+    Pick<OutreachMessage, "status" | "providerMessageId" | "sentAt" | "lastError" | "generationMeta">
+  >
+): Promise<OutreachMessage[]> {
+  const ids = Array.from(new Set(messageIds.map((item) => String(item ?? "").trim()).filter(Boolean)));
+  if (!ids.length) return [];
+
+  const now = nowIso();
+  const sanitizedLastError =
+    patch.lastError === undefined ? undefined : normalizeLegacyOutreachErrorText(patch.lastError);
+  const generationMetaRaw = patch.generationMeta;
+  const sanitizedGenerationMeta =
+    generationMetaRaw && typeof generationMetaRaw === "object" && !Array.isArray(generationMetaRaw)
+      ? (generationMetaRaw as Record<string, unknown>)
+      : generationMetaRaw === undefined
+        ? undefined
+        : {};
+
+  const supabase = getSupabaseAdmin();
+  if (supabase) {
+    const update: Record<string, unknown> = { updated_at: now };
+    if (patch.status !== undefined) update.status = patch.status;
+    if (patch.providerMessageId !== undefined) update.provider_message_id = patch.providerMessageId;
+    if (patch.sentAt !== undefined) update.sent_at = patch.sentAt || null;
+    if (sanitizedLastError !== undefined) update.last_error = sanitizedLastError;
+    if (sanitizedGenerationMeta !== undefined) update.generation_meta = sanitizedGenerationMeta;
+
+    const { data, error } = await supabase
+      .from(TABLE_MESSAGE)
+      .update(update)
+      .in("id", ids)
+      .select("*");
+    if (!error) {
+      return (data ?? []).map((row: unknown) => mapMessageRow(row));
+    }
+  }
+
+  const store = await readLocalStore();
+  const updated: OutreachMessage[] = [];
+  for (let index = 0; index < store.messages.length; index += 1) {
+    const row = store.messages[index];
+    if (!ids.includes(row.id)) continue;
+    const next: OutreachMessage = {
+      ...row,
+      ...patch,
+      ...(sanitizedLastError === undefined ? {} : { lastError: sanitizedLastError }),
+      ...(sanitizedGenerationMeta === undefined ? {} : { generationMeta: sanitizedGenerationMeta }),
+      updatedAt: now,
+    };
+    store.messages[index] = next;
+    updated.push(next);
+  }
+  if (updated.length) {
+    await writeLocalStore(store);
+  }
+  return updated;
 }
 
 export async function createReplyThread(input: {
@@ -4388,6 +4820,594 @@ export async function listRunJobs(runId: string, limit = 50): Promise<OutreachJo
     .slice(0, limit);
 }
 
+export async function getCampaignPrepTask(
+  brandId: string,
+  campaignId: string,
+  options: { allowMissingTable?: boolean } = {}
+): Promise<CampaignPrepTask | null> {
+  const normalizedBrandId = brandId.trim();
+  const normalizedCampaignId = campaignId.trim();
+  if (!normalizedBrandId || !normalizedCampaignId) return null;
+
+  const supabase = getSupabaseAdmin();
+  if (supabase) {
+    const { data, error } = await supabase
+      .from(TABLE_CAMPAIGN_PREP_TASK)
+      .select("*")
+      .eq("brand_id", normalizedBrandId)
+      .eq("campaign_id", normalizedCampaignId)
+      .maybeSingle();
+    if (!error) {
+      return data ? mapCampaignPrepTaskRow(data) : null;
+    }
+    if (options.allowMissingTable && isMissingRelationError(error, TABLE_CAMPAIGN_PREP_TASK)) {
+      return null;
+    }
+    if (isVercel) {
+      throw new OutreachDataError("Failed to load campaign prep task from Supabase.", {
+        status: 500,
+        hint: hintForSupabaseWriteError(error),
+        debug: {
+          operation: "getCampaignPrepTask",
+          runtime: runtimeLabel(),
+          supabaseConfigured: supabaseConfigured(),
+          brandId: normalizedBrandId,
+          campaignId: normalizedCampaignId,
+          supabaseError: supabaseErrorDebug(error),
+        },
+      });
+    }
+  }
+
+  const store = await readLocalStore();
+  return (
+    store.campaignPrepTasks.find(
+      (row) => row.brandId === normalizedBrandId && row.campaignId === normalizedCampaignId
+    ) ?? null
+  );
+}
+
+export async function listCampaignPrepTasks(
+  input: {
+    brandId?: string;
+    campaignId?: string;
+    lane?: CampaignPrepTask["lane"];
+    statuses?: CampaignPrepTask["status"][];
+    dueBefore?: string;
+    limit?: number;
+  } = {},
+  options: { allowMissingTable?: boolean } = {}
+): Promise<CampaignPrepTask[]> {
+  const normalizedBrandId = String(input.brandId ?? "").trim();
+  const normalizedCampaignId = String(input.campaignId ?? "").trim();
+  const normalizedLane = input.lane === "warmup" ? "warmup" : input.lane === "outbound" ? "outbound" : "";
+  const statuses = Array.from(
+    new Set((input.statuses ?? []).map((value) => String(value ?? "").trim()).filter(Boolean))
+  ) as CampaignPrepTask["status"][];
+  const dueBefore = String(input.dueBefore ?? "").trim();
+  const limit = Math.max(1, Math.min(500, Number(input.limit ?? 100) || 100));
+
+  const supabase = getSupabaseAdmin();
+  if (supabase) {
+    let query = supabase.from(TABLE_CAMPAIGN_PREP_TASK).select("*");
+    if (normalizedBrandId) query = query.eq("brand_id", normalizedBrandId);
+    if (normalizedCampaignId) query = query.eq("campaign_id", normalizedCampaignId);
+    if (normalizedLane) query = query.eq("lane", normalizedLane);
+    if (statuses.length) query = query.in("status", statuses);
+    if (dueBefore) query = query.lte("execute_after", dueBefore);
+    const { data, error } = await query.order("updated_at", { ascending: false }).limit(limit);
+    if (!error) {
+      return (data ?? []).map((row: unknown) => mapCampaignPrepTaskRow(row));
+    }
+    if (options.allowMissingTable && isMissingRelationError(error, TABLE_CAMPAIGN_PREP_TASK)) {
+      return [];
+    }
+    if (isVercel) {
+      throw new OutreachDataError("Failed to list campaign prep tasks from Supabase.", {
+        status: 500,
+        hint: hintForSupabaseWriteError(error),
+        debug: {
+          operation: "listCampaignPrepTasks",
+          runtime: runtimeLabel(),
+          supabaseConfigured: supabaseConfigured(),
+          brandId: normalizedBrandId,
+          campaignId: normalizedCampaignId,
+          lane: normalizedLane,
+          statuses,
+          dueBefore,
+          supabaseError: supabaseErrorDebug(error),
+        },
+      });
+    }
+  }
+
+  const store = await readLocalStore();
+  return store.campaignPrepTasks
+    .filter((row) => {
+      if (normalizedBrandId && row.brandId !== normalizedBrandId) return false;
+      if (normalizedCampaignId && row.campaignId !== normalizedCampaignId) return false;
+      if (normalizedLane && row.lane !== normalizedLane) return false;
+      if (statuses.length && !statuses.includes(row.status)) return false;
+      if (dueBefore && row.executeAfter > dueBefore) return false;
+      return true;
+    })
+    .sort((left, right) => {
+      if (left.updatedAt === right.updatedAt) {
+        return left.campaignId.localeCompare(right.campaignId);
+      }
+      return left.updatedAt < right.updatedAt ? 1 : -1;
+    })
+    .slice(0, limit);
+}
+
+export async function upsertCampaignPrepTask(
+  input: Omit<CampaignPrepTask, "id" | "createdAt" | "updatedAt"> & {
+    id?: string;
+    createdAt?: string;
+    updatedAt?: string;
+  },
+  options: { allowMissingTable?: boolean } = {}
+): Promise<CampaignPrepTask> {
+  const existing = await getCampaignPrepTask(input.brandId, input.campaignId, options);
+  const now = nowIso();
+  const task: CampaignPrepTask = {
+    id: existing?.id ?? input.id ?? createId("preptask"),
+    brandId: input.brandId.trim(),
+    campaignId: input.campaignId.trim(),
+    lane: input.lane,
+    status: input.status,
+    attempt: Math.max(0, Math.round(Number(input.attempt ?? 0) || 0)),
+    executeAfter: String(input.executeAfter ?? "").trim() || now,
+    startedAt: String(input.startedAt ?? "").trim(),
+    finishedAt: String(input.finishedAt ?? "").trim(),
+    blockerCode: input.blockerCode,
+    summary: String(input.summary ?? "").trim(),
+    lastError: normalizeLegacyOutreachErrorText(input.lastError ?? ""),
+    progress: asRecord(normalizeLegacyOutreachValue(input.progress ?? {})),
+    sourceVersion: String(input.sourceVersion ?? "").trim(),
+    createdAt: existing?.createdAt ?? input.createdAt ?? now,
+    updatedAt: now,
+  };
+
+  const supabase = getSupabaseAdmin();
+  if (supabase) {
+    const { data, error } = await supabase
+      .from(TABLE_CAMPAIGN_PREP_TASK)
+      .upsert(
+        {
+          id: task.id,
+          brand_id: task.brandId,
+          campaign_id: task.campaignId,
+          lane: task.lane,
+          status: task.status,
+          attempt: task.attempt,
+          execute_after: task.executeAfter,
+          started_at: task.startedAt || null,
+          finished_at: task.finishedAt || null,
+          blocker_code: task.blockerCode,
+          summary: task.summary,
+          last_error: task.lastError,
+          progress: task.progress,
+          source_version: task.sourceVersion,
+          created_at: task.createdAt,
+          updated_at: task.updatedAt,
+        },
+        { onConflict: "brand_id,campaign_id" }
+      )
+      .select("*")
+      .maybeSingle();
+    if (!error && data) {
+      return mapCampaignPrepTaskRow(data);
+    }
+    if (!(options.allowMissingTable && isMissingRelationError(error, TABLE_CAMPAIGN_PREP_TASK)) && isVercel) {
+      throw new OutreachDataError("Failed to save campaign prep task in Supabase.", {
+        status: 500,
+        hint: hintForSupabaseWriteError(error),
+        debug: {
+          operation: "upsertCampaignPrepTask",
+          runtime: runtimeLabel(),
+          supabaseConfigured: supabaseConfigured(),
+          brandId: task.brandId,
+          campaignId: task.campaignId,
+          status: task.status,
+          supabaseError: supabaseErrorDebug(error),
+        },
+      });
+    }
+  }
+
+  const store = await readLocalStore();
+  const index = store.campaignPrepTasks.findIndex(
+    (row) => row.brandId === task.brandId && row.campaignId === task.campaignId
+  );
+  if (index >= 0) {
+    store.campaignPrepTasks[index] = task;
+  } else {
+    store.campaignPrepTasks.unshift(task);
+  }
+  await writeLocalStore(store);
+  return task;
+}
+
+export async function claimOutreachLease(
+  input: Omit<OutreachLease, "id" | "status" | "releasedAt" | "releasedReason" | "createdAt" | "updatedAt"> & {
+    id?: string;
+  },
+  options: { allowMissingTable?: boolean } = {}
+): Promise<OutreachLease | null> {
+  const scopeId = input.scopeId.trim();
+  const holder = input.holder.trim();
+  if (!scopeId || !holder) return null;
+
+  const now = nowIso();
+  const lease: OutreachLease = {
+    id: input.id ?? createId("lease"),
+    leaseType: input.leaseType,
+    scopeType: input.scopeType,
+    scopeId,
+    holder,
+    status: "active",
+    expiresAt: String(input.expiresAt ?? "").trim() || now,
+    metadata: asRecord(normalizeLegacyOutreachValue(input.metadata ?? {})),
+    releasedAt: "",
+    releasedReason: "",
+    createdAt: now,
+    updatedAt: now,
+  };
+
+  const supabase = getSupabaseAdmin();
+  if (supabase) {
+    await supabase
+      .from(TABLE_OUTREACH_LEASE)
+      .update({
+        status: "expired",
+        released_at: now,
+        released_reason: "lease expired",
+        updated_at: now,
+      })
+      .eq("lease_type", lease.leaseType)
+      .eq("scope_type", lease.scopeType)
+      .eq("scope_id", lease.scopeId)
+      .eq("status", "active")
+      .lte("expires_at", now);
+
+    const { data, error } = await supabase
+      .from(TABLE_OUTREACH_LEASE)
+      .insert({
+        id: lease.id,
+        lease_type: lease.leaseType,
+        scope_type: lease.scopeType,
+        scope_id: lease.scopeId,
+        holder: lease.holder,
+        status: lease.status,
+        expires_at: lease.expiresAt,
+        metadata: lease.metadata,
+        released_at: null,
+        released_reason: "",
+        created_at: lease.createdAt,
+        updated_at: lease.updatedAt,
+      })
+      .select("*")
+      .maybeSingle();
+    if (!error && data) {
+      return mapOutreachLeaseRow(data);
+    }
+    if (isUniqueViolationError(error)) {
+      return null;
+    }
+    if (!(options.allowMissingTable && isMissingRelationError(error, TABLE_OUTREACH_LEASE)) && isVercel) {
+      throw new OutreachDataError("Failed to claim outreach lease in Supabase.", {
+        status: 500,
+        hint: hintForSupabaseWriteError(error),
+        debug: {
+          operation: "claimOutreachLease",
+          runtime: runtimeLabel(),
+          supabaseConfigured: supabaseConfigured(),
+          leaseType: lease.leaseType,
+          scopeType: lease.scopeType,
+          scopeId: lease.scopeId,
+          holder: lease.holder,
+          supabaseError: supabaseErrorDebug(error),
+        },
+      });
+    }
+  }
+
+  const store = await readLocalStore();
+  let changed = false;
+  store.outreachLeases = store.outreachLeases.map((row) => {
+    if (
+      row.leaseType === lease.leaseType &&
+      row.scopeType === lease.scopeType &&
+      row.scopeId === lease.scopeId &&
+      row.status === "active" &&
+      row.expiresAt <= now
+    ) {
+      changed = true;
+      return {
+        ...row,
+        status: "expired",
+        releasedAt: now,
+        releasedReason: "lease expired",
+        updatedAt: now,
+      };
+    }
+    return row;
+  });
+  const conflictingActive = store.outreachLeases.find(
+    (row) =>
+      row.leaseType === lease.leaseType &&
+      row.scopeType === lease.scopeType &&
+      row.scopeId === lease.scopeId &&
+      row.status === "active"
+  );
+  if (conflictingActive) {
+    if (changed) {
+      await writeLocalStore(store);
+    }
+    return null;
+  }
+  store.outreachLeases.unshift(lease);
+  await writeLocalStore(store);
+  return lease;
+}
+
+export async function releaseOutreachLease(
+  leaseId: string,
+  reason = "",
+  options: { allowMissingTable?: boolean } = {}
+): Promise<OutreachLease | null> {
+  const normalizedLeaseId = leaseId.trim();
+  if (!normalizedLeaseId) return null;
+
+  const now = nowIso();
+  const releasedReason = String(reason ?? "").trim();
+  const supabase = getSupabaseAdmin();
+  if (supabase) {
+    const { data, error } = await supabase
+      .from(TABLE_OUTREACH_LEASE)
+      .update({
+        status: "released",
+        released_at: now,
+        released_reason: releasedReason,
+        updated_at: now,
+      })
+      .eq("id", normalizedLeaseId)
+      .eq("status", "active")
+      .select("*")
+      .maybeSingle();
+    if (!error) {
+      return data ? mapOutreachLeaseRow(data) : null;
+    }
+    if (!(options.allowMissingTable && isMissingRelationError(error, TABLE_OUTREACH_LEASE)) && isVercel) {
+      throw new OutreachDataError("Failed to release outreach lease in Supabase.", {
+        status: 500,
+        hint: hintForSupabaseWriteError(error),
+        debug: {
+          operation: "releaseOutreachLease",
+          runtime: runtimeLabel(),
+          supabaseConfigured: supabaseConfigured(),
+          leaseId: normalizedLeaseId,
+          supabaseError: supabaseErrorDebug(error),
+        },
+      });
+    }
+  }
+
+  const store = await readLocalStore();
+  const index = store.outreachLeases.findIndex(
+    (row) => row.id === normalizedLeaseId && row.status === "active"
+  );
+  if (index < 0) return null;
+  const next: OutreachLease = {
+    ...store.outreachLeases[index],
+    status: "released",
+    releasedAt: now,
+    releasedReason,
+    updatedAt: now,
+  };
+  store.outreachLeases[index] = next;
+  await writeLocalStore(store);
+  return next;
+}
+
+export async function deleteCampaignPrepArtifactsByCampaignIds(
+  campaignIds: string[],
+  options: { allowMissingTable?: boolean } = {}
+): Promise<{ tasksDeleted: number; leasesDeleted: number }> {
+  const uniqueCampaignIds = Array.from(
+    new Set(campaignIds.map((value) => String(value ?? "").trim()).filter(Boolean))
+  );
+  if (!uniqueCampaignIds.length) {
+    return { tasksDeleted: 0, leasesDeleted: 0 };
+  }
+
+  let tasksDeleted = 0;
+  let leasesDeleted = 0;
+  const supabase = getSupabaseAdmin();
+  if (supabase) {
+    for (const campaignIdChunk of chunkStrings(uniqueCampaignIds)) {
+      const [{ data: taskRows, error: taskSelectError }, { data: leaseRows, error: leaseSelectError }] =
+        await Promise.all([
+          supabase.from(TABLE_CAMPAIGN_PREP_TASK).select("id").in("campaign_id", campaignIdChunk),
+          supabase
+            .from(TABLE_OUTREACH_LEASE)
+            .select("id")
+            .eq("lease_type", "campaign_prep")
+            .eq("scope_type", "campaign")
+            .in("scope_id", campaignIdChunk),
+        ]);
+
+      if (!(options.allowMissingTable && isMissingRelationError(taskSelectError, TABLE_CAMPAIGN_PREP_TASK)) && taskSelectError && isVercel) {
+        throw new OutreachDataError("Failed to inspect campaign prep tasks in Supabase.", {
+          status: 500,
+          hint: hintForSupabaseWriteError(taskSelectError),
+          debug: {
+            operation: "deleteCampaignPrepArtifactsByCampaignIds.selectTasks",
+            runtime: runtimeLabel(),
+            supabaseConfigured: supabaseConfigured(),
+            campaignIds: campaignIdChunk,
+            supabaseError: supabaseErrorDebug(taskSelectError),
+          },
+        });
+      }
+
+      if (!(options.allowMissingTable && isMissingRelationError(leaseSelectError, TABLE_OUTREACH_LEASE)) && leaseSelectError && isVercel) {
+        throw new OutreachDataError("Failed to inspect outreach leases in Supabase.", {
+          status: 500,
+          hint: hintForSupabaseWriteError(leaseSelectError),
+          debug: {
+            operation: "deleteCampaignPrepArtifactsByCampaignIds.selectLeases",
+            runtime: runtimeLabel(),
+            supabaseConfigured: supabaseConfigured(),
+            campaignIds: campaignIdChunk,
+            supabaseError: supabaseErrorDebug(leaseSelectError),
+          },
+        });
+      }
+
+      const [{ error: taskDeleteError }, { error: leaseDeleteError }] = await Promise.all([
+        supabase.from(TABLE_CAMPAIGN_PREP_TASK).delete().in("campaign_id", campaignIdChunk),
+        supabase
+          .from(TABLE_OUTREACH_LEASE)
+          .delete()
+          .eq("lease_type", "campaign_prep")
+          .eq("scope_type", "campaign")
+          .in("scope_id", campaignIdChunk),
+      ]);
+
+      if (!(options.allowMissingTable && isMissingRelationError(taskDeleteError, TABLE_CAMPAIGN_PREP_TASK)) && taskDeleteError && isVercel) {
+        throw new OutreachDataError("Failed to delete campaign prep tasks in Supabase.", {
+          status: 500,
+          hint: hintForSupabaseWriteError(taskDeleteError),
+          debug: {
+            operation: "deleteCampaignPrepArtifactsByCampaignIds.deleteTasks",
+            runtime: runtimeLabel(),
+            supabaseConfigured: supabaseConfigured(),
+            campaignIds: campaignIdChunk,
+            supabaseError: supabaseErrorDebug(taskDeleteError),
+          },
+        });
+      }
+
+      if (!(options.allowMissingTable && isMissingRelationError(leaseDeleteError, TABLE_OUTREACH_LEASE)) && leaseDeleteError && isVercel) {
+        throw new OutreachDataError("Failed to delete outreach leases in Supabase.", {
+          status: 500,
+          hint: hintForSupabaseWriteError(leaseDeleteError),
+          debug: {
+            operation: "deleteCampaignPrepArtifactsByCampaignIds.deleteLeases",
+            runtime: runtimeLabel(),
+            supabaseConfigured: supabaseConfigured(),
+            campaignIds: campaignIdChunk,
+            supabaseError: supabaseErrorDebug(leaseDeleteError),
+          },
+        });
+      }
+
+      tasksDeleted += (taskRows ?? []).length;
+      leasesDeleted += (leaseRows ?? []).length;
+    }
+  }
+
+  const store = await readLocalStore();
+  const campaignIdSet = new Set(uniqueCampaignIds);
+  const nextCampaignPrepTasks = store.campaignPrepTasks.filter((row) => !campaignIdSet.has(row.campaignId));
+  const nextOutreachLeases = store.outreachLeases.filter(
+    (row) =>
+      !(
+        row.leaseType === "campaign_prep" &&
+        row.scopeType === "campaign" &&
+        campaignIdSet.has(row.scopeId)
+      )
+  );
+  const localTasksDeleted = store.campaignPrepTasks.length - nextCampaignPrepTasks.length;
+  const localLeasesDeleted = store.outreachLeases.length - nextOutreachLeases.length;
+  if (localTasksDeleted > 0 || localLeasesDeleted > 0) {
+    store.campaignPrepTasks = nextCampaignPrepTasks;
+    store.outreachLeases = nextOutreachLeases;
+    await writeLocalStore(store);
+  }
+
+  if (!supabase) {
+    tasksDeleted = localTasksDeleted;
+    leasesDeleted = localLeasesDeleted;
+  }
+
+  return { tasksDeleted, leasesDeleted };
+}
+
+export async function listRunIdsForJobs(input: {
+  jobTypes?: OutreachJobType[];
+  statuses?: OutreachJobStatus[];
+}): Promise<string[]> {
+  const normalizedJobTypes = Array.from(
+    new Set((input.jobTypes ?? []).map((jobType) => String(jobType ?? "").trim()).filter(Boolean))
+  ) as OutreachJobType[];
+  const normalizedStatuses = Array.from(
+    new Set((input.statuses ?? []).map((status) => String(status ?? "").trim()).filter(Boolean))
+  ) as OutreachJobStatus[];
+
+  const supabase = getSupabaseAdmin();
+  if (supabase) {
+    let query = supabase.from(TABLE_JOB).select("run_id");
+    if (normalizedJobTypes.length) {
+      query = query.in("job_type", normalizedJobTypes);
+    }
+    if (normalizedStatuses.length) {
+      query = query.in("status", normalizedStatuses);
+    }
+    const { data, error } = await query;
+    if (!error) {
+      return Array.from(
+        new Set((data ?? []).map((row: { run_id?: string | null }) => String(row.run_id ?? "").trim()).filter(Boolean))
+      );
+    }
+  }
+
+  const store = await readLocalStore();
+  return Array.from(
+    new Set(
+      store.jobs
+        .filter((row) => {
+          if (normalizedJobTypes.length && !normalizedJobTypes.includes(row.jobType)) return false;
+          if (normalizedStatuses.length && !normalizedStatuses.includes(row.status)) return false;
+          return true;
+        })
+        .map((row) => row.runId)
+        .filter(Boolean)
+    )
+  );
+}
+
+export async function hasActiveRunJob(input: {
+  runId: string;
+  jobType: OutreachJobType;
+  statuses?: OutreachJobStatus[];
+}): Promise<boolean> {
+  const statuses = Array.from(new Set(input.statuses ?? ["queued", "running"]));
+  const supabase = getSupabaseAdmin();
+  if (supabase) {
+    const { data, error } = await supabase
+      .from(TABLE_JOB)
+      .select("id")
+      .eq("run_id", input.runId)
+      .eq("job_type", input.jobType)
+      .in("status", statuses)
+      .limit(1);
+    if (!error) {
+      return Boolean(data?.length);
+    }
+  }
+
+  const store = await readLocalStore();
+  return store.jobs.some(
+    (row) =>
+      row.runId === input.runId &&
+      row.jobType === input.jobType &&
+      statuses.includes(row.status)
+  );
+}
+
 export async function enqueueOutreachJob(input: {
   runId: string;
   jobType: OutreachJobType;
@@ -4689,6 +5709,59 @@ export async function updateOutreachJob(
   };
   await writeLocalStore(store);
   return store.jobs[idx];
+}
+
+export async function updateOutreachJobs(
+  jobIds: string[],
+  patch: Partial<Pick<OutreachJob, "status" | "executeAfter" | "attempts" | "lastError" | "payload">>
+): Promise<OutreachJob[]> {
+  const ids = Array.from(new Set(jobIds.map((item) => String(item ?? "").trim()).filter(Boolean)));
+  if (!ids.length) return [];
+
+  const now = nowIso();
+  const sanitizedLastError =
+    patch.lastError === undefined ? undefined : normalizeLegacyOutreachErrorText(patch.lastError);
+  const sanitizedPayload =
+    patch.payload === undefined ? undefined : asRecord(normalizeLegacyOutreachValue(patch.payload));
+
+  const supabase = getSupabaseAdmin();
+  if (supabase) {
+    const update: Record<string, unknown> = { updated_at: now };
+    if (patch.status !== undefined) update.status = patch.status;
+    if (patch.executeAfter !== undefined) update.execute_after = patch.executeAfter;
+    if (patch.attempts !== undefined) update.attempts = patch.attempts;
+    if (sanitizedLastError !== undefined) update.last_error = sanitizedLastError;
+    if (sanitizedPayload !== undefined) update.payload = sanitizedPayload;
+
+    const { data, error } = await supabase
+      .from(TABLE_JOB)
+      .update(update)
+      .in("id", ids)
+      .select("*");
+    if (!error) {
+      return (data ?? []).map((row: unknown) => mapJobRow(row));
+    }
+  }
+
+  const store = await readLocalStore();
+  const updated: OutreachJob[] = [];
+  for (let index = 0; index < store.jobs.length; index += 1) {
+    const row = store.jobs[index];
+    if (!ids.includes(row.id)) continue;
+    const next: OutreachJob = {
+      ...row,
+      ...patch,
+      ...(sanitizedLastError === undefined ? {} : { lastError: sanitizedLastError }),
+      ...(sanitizedPayload === undefined ? {} : { payload: sanitizedPayload }),
+      updatedAt: now,
+    };
+    store.jobs[index] = next;
+    updated.push(next);
+  }
+  if (updated.length) {
+    await writeLocalStore(store);
+  }
+  return updated;
 }
 
 export async function claimQueuedOutreachJob(jobId: string, attempts: number): Promise<OutreachJob | null> {
@@ -5192,6 +6265,52 @@ export async function updateDeliverabilitySeedReservations(
   return updated;
 }
 
+export async function updateRunAnomalies(
+  anomalyIds: string[],
+  patch: Partial<Pick<RunAnomaly, "severity" | "status" | "threshold" | "observed" | "details">>
+): Promise<RunAnomaly[]> {
+  const ids = Array.from(new Set(anomalyIds.map((item) => String(item ?? "").trim()).filter(Boolean)));
+  if (!ids.length) return [];
+
+  const now = nowIso();
+  const supabase = getSupabaseAdmin();
+  if (supabase) {
+    const update: Record<string, unknown> = { updated_at: now };
+    if (patch.severity !== undefined) update.severity = patch.severity;
+    if (patch.status !== undefined) update.status = patch.status;
+    if (patch.threshold !== undefined) update.threshold = patch.threshold;
+    if (patch.observed !== undefined) update.observed = patch.observed;
+    if (patch.details !== undefined) update.details = patch.details;
+
+    const { data, error } = await supabase
+      .from(TABLE_ANOMALY)
+      .update(update)
+      .in("id", ids)
+      .select("*");
+    if (!error) {
+      return (data ?? []).map((row: unknown) => mapAnomalyRow(row));
+    }
+  }
+
+  const store = await readLocalStore();
+  const updated: RunAnomaly[] = [];
+  for (let index = 0; index < store.anomalies.length; index += 1) {
+    const row = store.anomalies[index];
+    if (!ids.includes(row.id)) continue;
+    const next: RunAnomaly = {
+      ...row,
+      ...patch,
+      updatedAt: now,
+    };
+    store.anomalies[index] = next;
+    updated.push(next);
+  }
+  if (updated.length) {
+    await writeLocalStore(store);
+  }
+  return updated;
+}
+
 export async function createRunAnomaly(input: {
   runId: string;
   type: RunAnomaly["type"];
@@ -5216,6 +6335,34 @@ export async function createRunAnomaly(input: {
 
   const supabase = getSupabaseAdmin();
   if (supabase) {
+    const { data: existing, error: existingError } = await supabase
+      .from(TABLE_ANOMALY)
+      .select("*")
+      .eq("run_id", anomaly.runId)
+      .eq("type", anomaly.type)
+      .eq("status", "active")
+      .order("created_at", { ascending: false });
+    if (!existingError && existing?.length) {
+      const mapped = existing.map((row: unknown) => mapAnomalyRow(row));
+      const [primary, ...duplicates] = mapped;
+      const updated = await updateRunAnomalies([primary.id], {
+        severity: anomaly.severity,
+        status: "active",
+        threshold: anomaly.threshold,
+        observed: anomaly.observed,
+        details: anomaly.details,
+      });
+      if (duplicates.length) {
+        await updateRunAnomalies(
+          duplicates.map((row) => row.id),
+          {
+            status: "resolved",
+          }
+        );
+      }
+      return updated[0] ?? primary;
+    }
+
     const { data, error } = await supabase
       .from(TABLE_ANOMALY)
       .insert({
@@ -5236,6 +6383,38 @@ export async function createRunAnomaly(input: {
   }
 
   const store = await readLocalStore();
+  const activeMatches = store.anomalies
+    .filter((row) => row.runId === anomaly.runId && row.type === anomaly.type && row.status === "active")
+    .sort((left, right) => (left.createdAt < right.createdAt ? 1 : -1));
+  if (activeMatches.length) {
+    const [primary, ...duplicates] = activeMatches;
+    const next: RunAnomaly = {
+      ...primary,
+      severity: anomaly.severity,
+      status: "active",
+      threshold: anomaly.threshold,
+      observed: anomaly.observed,
+      details: anomaly.details,
+      updatedAt: now,
+    };
+    const primaryIndex = store.anomalies.findIndex((row) => row.id === primary.id);
+    if (primaryIndex >= 0) {
+      store.anomalies[primaryIndex] = next;
+    }
+    for (const duplicate of duplicates) {
+      const duplicateIndex = store.anomalies.findIndex((row) => row.id === duplicate.id);
+      if (duplicateIndex >= 0) {
+        store.anomalies[duplicateIndex] = {
+          ...store.anomalies[duplicateIndex],
+          status: "resolved",
+          updatedAt: now,
+        };
+      }
+    }
+    await writeLocalStore(store);
+    return next;
+  }
+
   store.anomalies.unshift(anomaly);
   await writeLocalStore(store);
   return anomaly;
@@ -5256,6 +6435,38 @@ export async function listRunAnomalies(runId: string): Promise<RunAnomaly[]> {
 
   const store = await readLocalStore();
   return store.anomalies.filter((row) => row.runId === runId).sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
+}
+
+export async function listRunIdsForAnomalyStatuses(
+  statuses: RunAnomaly["status"][]
+): Promise<string[]> {
+  const normalizedStatuses = Array.from(
+    new Set(statuses.map((status) => String(status ?? "").trim()).filter(Boolean))
+  ) as RunAnomaly["status"][];
+  if (!normalizedStatuses.length) return [];
+
+  const supabase = getSupabaseAdmin();
+  if (supabase) {
+    const { data, error } = await supabase
+      .from(TABLE_ANOMALY)
+      .select("run_id")
+      .in("status", normalizedStatuses);
+    if (!error) {
+      return Array.from(
+        new Set((data ?? []).map((row: { run_id?: string | null }) => String(row.run_id ?? "").trim()).filter(Boolean))
+      );
+    }
+  }
+
+  const store = await readLocalStore();
+  return Array.from(
+    new Set(
+      store.anomalies
+        .filter((row) => normalizedStatuses.includes(row.status))
+        .map((row) => row.runId)
+        .filter(Boolean)
+    )
+  );
 }
 
 export async function upsertSourcingActorProfiles(

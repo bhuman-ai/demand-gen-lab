@@ -1,9 +1,15 @@
 import { NextResponse } from "next/server";
 import { getBrandById } from "@/lib/factory-data";
 import {
+  buildSocialDiscoveryQueries,
   discoverSocialPostsForBrand,
   parseSocialDiscoveryPlatforms,
 } from "@/lib/social-discovery";
+import {
+  inferBrandSocialPlatforms,
+  isSupportedDiscoveryPlatform,
+  resolveSupportedDiscoveryPlatformsForBrand,
+} from "@/lib/social-platform-catalog";
 import {
   createSocialDiscoveryRun,
   listSocialDiscoveryPosts,
@@ -11,6 +17,7 @@ import {
   saveSocialDiscoveryPosts,
   updateSocialDiscoveryPostStatus,
 } from "@/lib/social-discovery-data";
+import { enrichSocialPostsWithAccountRouting } from "@/lib/social-account-routing";
 import type {
   SocialDiscoveryPlatform,
   SocialDiscoveryProvider,
@@ -22,9 +29,22 @@ function brandSummary(brand: Awaited<ReturnType<typeof getBrandById>>) {
     ? {
         id: brand.id,
         name: brand.name,
+        socialDiscoveryCommentPrompt: brand.socialDiscoveryCommentPrompt,
         socialDiscoveryPlatforms: brand.socialDiscoveryPlatforms,
+        socialDiscoveryQueries: brand.socialDiscoveryQueries,
+        recommendedSocialDiscoveryPlatforms: inferBrandSocialPlatforms(brand),
+        recommendedSupportedDiscoveryPlatforms: resolveSupportedDiscoveryPlatformsForBrand(brand),
       }
     : null;
+}
+
+function suggestedInstagramQueries(brand: Awaited<ReturnType<typeof getBrandById>>) {
+  if (!brand) return [];
+  return buildSocialDiscoveryQueries({
+    brand,
+    platform: "instagram",
+    maxQueries: 12,
+  });
 }
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -43,12 +63,14 @@ function normalizeStringArray(value: unknown): string[] {
 
 function normalizePlatform(value: unknown): SocialDiscoveryPlatform | undefined {
   const normalized = String(value ?? "").trim().toLowerCase();
-  return normalized === "reddit" || normalized === "instagram" ? normalized : undefined;
+  return isSupportedDiscoveryPlatform(normalized) ? (normalized as SocialDiscoveryPlatform) : undefined;
 }
 
 function normalizeProvider(value: unknown): SocialDiscoveryProvider | "auto" {
   const normalized = String(value ?? "").trim().toLowerCase();
-  if (normalized === "exa" || normalized === "dataforseo") return normalized;
+  if (normalized === "exa" || normalized === "dataforseo" || normalized === "youtube-websub") {
+    return normalized as SocialDiscoveryProvider;
+  }
   return "auto";
 }
 
@@ -74,8 +96,22 @@ export async function GET(request: Request, context: { params: Promise<{ brandId
     listSocialDiscoveryPosts({ brandId, platform, status, limit }),
     listSocialDiscoveryRuns({ brandId, limit: 10 }),
   ]);
+  const latestRun = runs[0] ?? null;
+  const latestRunPostIds = new Set((latestRun?.postIds ?? []).filter(Boolean));
+  const latestPosts = latestRun
+    ? latestRunPostIds.size
+      ? posts.filter((post) => latestRunPostIds.has(post.id))
+      : []
+    : posts;
+  const routedPosts = await enrichSocialPostsWithAccountRouting({ brand, posts: latestPosts });
 
-  return NextResponse.json({ brand: brandSummary(brand), posts, runs });
+  return NextResponse.json({
+    brand: brandSummary(brand),
+    posts: routedPosts,
+    runs,
+    savedQueries: brand.socialDiscoveryQueries,
+    suggestedQueries: suggestedInstagramQueries(brand),
+  });
 }
 
 export async function POST(request: Request, context: { params: Promise<{ brandId: string }> }) {
@@ -98,7 +134,8 @@ export async function POST(request: Request, context: { params: Promise<{ brandI
     if (!post) {
       return NextResponse.json({ error: "post not found" }, { status: 404 });
     }
-    return NextResponse.json({ post });
+    const [routedPost] = await enrichSocialPostsWithAccountRouting({ brand, posts: [post] });
+    return NextResponse.json({ post: routedPost ?? null });
   }
 
   if (action !== "scan") {
@@ -106,17 +143,20 @@ export async function POST(request: Request, context: { params: Promise<{ brandI
   }
 
   const startedAt = new Date().toISOString();
-  const platforms = parseSocialDiscoveryPlatforms(body.platforms ?? brand.socialDiscoveryPlatforms);
+  const parsedPlatforms = body.platforms ? parseSocialDiscoveryPlatforms(body.platforms) : [];
+  const platforms = parsedPlatforms.length ? parsedPlatforms : resolveSupportedDiscoveryPlatformsForBrand(brand);
   const discovery = await discoverSocialPostsForBrand({
     brand,
     provider: normalizeProvider(body.provider),
     platforms,
+    queries: normalizeStringArray(body.queries),
     extraTerms: normalizeStringArray(body.extraTerms ?? body.terms),
     subreddits: normalizeStringArray(body.subreddits),
     limitPerQuery: Number(body.limitPerQuery ?? body.limit ?? 25) || 25,
     maxQueries: Number(body.maxQueries ?? 12) || 12,
   });
   const savedPosts = await saveSocialDiscoveryPosts(discovery.posts);
+  const routedPosts = await enrichSocialPostsWithAccountRouting({ brand, posts: savedPosts });
   const run = await createSocialDiscoveryRun({
     brandId,
     provider: discovery.provider,
@@ -132,8 +172,10 @@ export async function POST(request: Request, context: { params: Promise<{ brandI
   return NextResponse.json({
     brand: brandSummary(brand),
     run,
-    posts: savedPosts,
+    posts: routedPosts,
     errors: discovery.errors,
+    savedQueries: brand.socialDiscoveryQueries,
+    suggestedQueries: suggestedInstagramQueries(brand),
     summary: {
       provider: discovery.provider,
       platforms: discovery.platforms,

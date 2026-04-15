@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getBrandById, listBrands, type BrandRecord } from "@/lib/factory-data";
 import { discoverSocialPostsForBrand, parseSocialDiscoveryPlatforms } from "@/lib/social-discovery";
+import { resolveSupportedDiscoveryPlatformsForBrand } from "@/lib/social-platform-catalog";
 import { createSocialDiscoveryRun, saveSocialDiscoveryPosts } from "@/lib/social-discovery-data";
 import type { SocialDiscoveryProvider } from "@/lib/social-discovery-types";
 
@@ -29,7 +30,9 @@ function splitCsv(value: unknown) {
 
 function normalizeProvider(value: unknown): SocialDiscoveryProvider | "auto" {
   const normalized = String(value ?? "").trim().toLowerCase();
-  if (normalized === "exa" || normalized === "dataforseo") return normalized;
+  if (normalized === "exa" || normalized === "dataforseo" || normalized === "youtube-websub") {
+    return normalized as SocialDiscoveryProvider;
+  }
   return "auto";
 }
 
@@ -117,7 +120,8 @@ async function handleDailySocialDiscovery(request: Request) {
 
   const results = [];
   for (const brand of brands) {
-    const platforms = parseSocialDiscoveryPlatforms(platformInput ?? brand.socialDiscoveryPlatforms);
+    const parsedPlatforms = platformInput ? parseSocialDiscoveryPlatforms(platformInput) : [];
+    const platforms = parsedPlatforms.length ? parsedPlatforms : resolveSupportedDiscoveryPlatformsForBrand(brand);
     const startedAt = new Date().toISOString();
     const discovery = await discoverSocialPostsForBrand({
       brand,

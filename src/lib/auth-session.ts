@@ -11,6 +11,29 @@ export const AUTH_SESSION_COOKIE = "lastb2b_session";
 
 const SESSION_MAX_AGE_SECONDS = 60 * 60 * 24 * 30;
 
+function configuredAuthHost() {
+  const raw =
+    String(process.env.APP_URL ?? "").trim() ||
+    String(process.env.NEXT_PUBLIC_APP_URL ?? "").trim() ||
+    String(process.env.VERCEL_PROJECT_PRODUCTION_URL ?? "").trim() ||
+    String(process.env.VERCEL_URL ?? "").trim();
+  if (!raw) return "";
+  try {
+    const normalized = raw.startsWith("http://") || raw.startsWith("https://") ? raw : `https://${raw}`;
+    return new URL(normalized).hostname.toLowerCase();
+  } catch {
+    return "";
+  }
+}
+
+function authCookieDomain() {
+  const host = configuredAuthHost();
+  if (host === "lastb2b.com" || host === "www.lastb2b.com") {
+    return ".lastb2b.com";
+  }
+  return undefined;
+}
+
 function authSecret() {
   return (
     process.env.AUTH_SESSION_SECRET ||
@@ -65,6 +88,7 @@ function isSessionShape(value: unknown): value is AppAuthSession {
 
 export function sessionCookieOptions(expiresAt?: string) {
   const expires = expiresAt ? new Date(expiresAt) : new Date(Date.now() + SESSION_MAX_AGE_SECONDS * 1000);
+  const domain = authCookieDomain();
   return {
     httpOnly: true,
     sameSite: "lax" as const,
@@ -72,6 +96,7 @@ export function sessionCookieOptions(expiresAt?: string) {
     path: "/",
     expires,
     maxAge: SESSION_MAX_AGE_SECONDS,
+    ...(domain ? { domain } : {}),
   };
 }
 

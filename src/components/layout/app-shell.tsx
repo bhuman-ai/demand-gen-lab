@@ -95,6 +95,13 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   const [operatorOpen, setOperatorOpen] = useState(false);
 
   useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (window.location.hostname !== "lastb2b.com") return;
+    const nextUrl = `https://www.lastb2b.com${window.location.pathname}${window.location.search}${window.location.hash}`;
+    window.location.replace(nextUrl);
+  }, []);
+
+  useEffect(() => {
     if (chromeless) return;
     if (pathBrandId) {
       localStorage.setItem(ACTIVE_BRAND_KEY, pathBrandId);

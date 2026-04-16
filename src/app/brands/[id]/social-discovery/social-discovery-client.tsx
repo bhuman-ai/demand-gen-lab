@@ -1154,7 +1154,7 @@ export default function SocialDiscoveryClient({ brandId }: { brandId: string }) 
 
           {!youtubeAccountOptions.length ? (
             <div className="text-xs text-[color:var(--muted-foreground)]">
-              Add a social account below, open it, and click `Connect YouTube` before enabling auto-comment.
+              Add a social account below, then click `Connect YouTube`. If Google app details are missing, the button will ask for them.
             </div>
           ) : null}
 

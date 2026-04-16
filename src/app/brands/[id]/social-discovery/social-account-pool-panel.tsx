@@ -13,6 +13,7 @@ import {
   Settings2,
   Youtube,
 } from "lucide-react";
+import { SettingsModal } from "@/app/settings/outreach/settings-primitives";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -62,6 +63,18 @@ type CredentialDraft = {
   youtubeRefreshToken: string;
 };
 
+type YouTubeCredentialField = "youtubeClientId" | "youtubeClientSecret";
+
+type YouTubeConnectResponse = {
+  url?: string;
+  error?: string;
+  errorCode?: string;
+  missingFields?: string[];
+  message?: string;
+};
+
+type StartYouTubeConnectResult = "redirected" | "needs_credentials";
+
 const ROLE_OPTIONS: Array<OutreachAccount["config"]["social"]["role"]> = [
   "operator",
   "specialist",
@@ -87,6 +100,8 @@ const LINKED_PROVIDER_OPTIONS: Array<OutreachAccount["config"]["social"]["linked
   "youtube",
   "unknown",
 ];
+
+const DEFAULT_YOUTUBE_MISSING_FIELDS: YouTubeCredentialField[] = ["youtubeClientId", "youtubeClientSecret"];
 
 function asRecord(value: unknown): Record<string, unknown> {
   if (value && typeof value === "object" && !Array.isArray(value)) {
@@ -255,7 +270,7 @@ function simplifyYouTubeError(message: string) {
     normalized.includes("youtube connect is not configured yet") ||
     normalized.includes("youtube connect is missing app oauth credentials")
   ) {
-    return "We need a Google client ID and client secret before YouTube can open. Open Advanced settings below, add those two values, save, then click Connect YouTube again.";
+    return "We need a Google client ID and client secret before YouTube can open. Click Connect YouTube again and the form will ask for them.";
   }
   return message;
 }
@@ -264,8 +279,18 @@ function shouldShowYouTubeCredentialHelp(message: string) {
   const normalized = message.trim().toLowerCase();
   return (
     normalized.includes("youtube connect is not configured yet") ||
-    normalized.includes("youtube connect is missing app oauth credentials")
+    normalized.includes("youtube connect is missing app oauth credentials") ||
+    normalized.includes("google client id and client secret")
   );
+}
+
+function normalizeYouTubeMissingFields(value: unknown): YouTubeCredentialField[] {
+  if (!Array.isArray(value)) return [...DEFAULT_YOUTUBE_MISSING_FIELDS];
+  const normalized = value.filter(
+    (entry): entry is YouTubeCredentialField =>
+      entry === "youtubeClientId" || entry === "youtubeClientSecret"
+  );
+  return normalized.length ? normalized : [...DEFAULT_YOUTUBE_MISSING_FIELDS];
 }
 
 function PlatformIcon({
@@ -308,6 +333,13 @@ export function SocialAccountPoolPanel({
   const [showAdvancedSettings, setShowAdvancedSettings] = useState(false);
   const [showAdvancedYouTubeCredentials, setShowAdvancedYouTubeCredentials] = useState(false);
   const [credentialDraft, setCredentialDraft] = useState<CredentialDraft>(emptyCredentialDraft());
+  const [youtubeCredentialModalOpen, setYouTubeCredentialModalOpen] = useState(false);
+  const [youtubeCredentialModalAccountId, setYouTubeCredentialModalAccountId] = useState("");
+  const [youtubeCredentialModalMissingFields, setYouTubeCredentialModalMissingFields] = useState<YouTubeCredentialField[]>(
+    [...DEFAULT_YOUTUBE_MISSING_FIELDS]
+  );
+  const [youtubeCredentialModalError, setYouTubeCredentialModalError] = useState("");
+  const [youtubeCredentialModalSaving, setYouTubeCredentialModalSaving] = useState(false);
 
   const selectedAccount = useMemo(
     () => accounts.find((account) => account.id === selectedAccountId) ?? accounts[0] ?? null,
@@ -682,7 +714,15 @@ export function SocialAccountPoolPanel({
     window.location.assign(url);
   }
 
-  async function startYouTubeConnect(account: OutreachAccount) {
+  function openYouTubeCredentialModal(accountId: string, missingFields?: unknown) {
+    setSelectedAccountId(accountId);
+    setYouTubeCredentialModalAccountId(accountId);
+    setYouTubeCredentialModalMissingFields(normalizeYouTubeMissingFields(missingFields));
+    setYouTubeCredentialModalError("");
+    setYouTubeCredentialModalOpen(true);
+  }
+
+  async function startYouTubeConnect(account: OutreachAccount): Promise<StartYouTubeConnectResult> {
     const response = await fetch(`/api/outreach/accounts/${account.id}/youtube-connect`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -690,10 +730,73 @@ export function SocialAccountPoolPanel({
         brandId,
       }),
     });
-    const data = await readJson<{ url: string }>(response, "Failed to start YouTube connect flow");
+    const data = (await response.json().catch(() => ({}))) as YouTubeConnectResponse;
+    if (!response.ok) {
+      if (data.errorCode === "youtube_oauth_credentials_missing") {
+        openYouTubeCredentialModal(account.id, data.missingFields);
+        return "needs_credentials";
+      }
+      throw new Error(
+        typeof data.error === "string"
+          ? data.error
+          : typeof data.message === "string"
+            ? data.message
+            : "Failed to start YouTube connect flow"
+      );
+    }
     const url = String(data.url ?? "").trim();
     if (!url) throw new Error("Google did not return a YouTube connect URL.");
     window.location.assign(url);
+    return "redirected";
+  }
+
+  async function saveYouTubeCredentialsAndContinue() {
+    const accountId = youtubeCredentialModalAccountId || selectedAccount?.id || "";
+    if (!accountId) {
+      setYouTubeCredentialModalError("Pick a YouTube account first.");
+      return;
+    }
+
+    const requiredFields = youtubeCredentialModalMissingFields.length
+      ? youtubeCredentialModalMissingFields
+      : DEFAULT_YOUTUBE_MISSING_FIELDS;
+    const missingInput = requiredFields.some((field) => !credentialDraft[field].trim());
+    if (missingInput) {
+      setYouTubeCredentialModalError("Enter the Google client ID and client secret.");
+      return;
+    }
+
+    const account = accounts.find((entry) => entry.id === accountId) ?? selectedAccount;
+    if (!account) {
+      setYouTubeCredentialModalError("The YouTube account is missing.");
+      return;
+    }
+
+    setYouTubeCredentialModalSaving(true);
+    setYouTubeCredentialModalError("");
+    setError("");
+    setLinkMessage("");
+    try {
+      const baseDraft = account.id === selectedAccount?.id && draft ? draft : buildDraft(account);
+      const nextDraft = {
+        ...baseDraft,
+        ...platformConfigPatch("youtube", baseDraft),
+      };
+      const saved = await persistSocialDraft(account, nextDraft, credentialDraft);
+      setYouTubeCredentialModalOpen(false);
+      setYouTubeCredentialModalAccountId("");
+      setLinkMessage("Opening YouTube sign-in...");
+      const result = await startYouTubeConnect(saved);
+      if (result === "needs_credentials") {
+        setLinkMessage("");
+      }
+    } catch (err) {
+      setYouTubeCredentialModalError(
+        err instanceof Error ? simplifyYouTubeError(err.message) : "Failed to save YouTube app credentials"
+      );
+    } finally {
+      setYouTubeCredentialModalSaving(false);
+    }
   }
 
   async function createAndConnectPlatform(platform: SupportedSocialPlatform) {
@@ -704,7 +807,10 @@ export function SocialAccountPoolPanel({
       const account = await createPlatformAccount(platform);
       setLinkMessage(`Opening ${platformLabel(platform)} sign-in...`);
       if (platform === "youtube") {
-        await startYouTubeConnect(account);
+        const result = await startYouTubeConnect(account);
+        if (result === "needs_credentials") {
+          setLinkMessage("Enter the Google client ID and client secret to continue.");
+        }
       } else {
         await startInstagramConnect(account);
       }
@@ -737,7 +843,10 @@ export function SocialAccountPoolPanel({
       const account = await prepareAccountForPlatform(selectedAccount, platform);
       setLinkMessage(`Opening ${platformLabel(platform)} sign-in...`);
       if (platform === "youtube") {
-        await startYouTubeConnect(account);
+        const result = await startYouTubeConnect(account);
+        if (result === "needs_credentials") {
+          setLinkMessage("Enter the Google client ID and client secret to continue.");
+        }
       } else {
         await startInstagramConnect(account);
       }
@@ -808,9 +917,12 @@ export function SocialAccountPoolPanel({
   }
 
   const selectedStatusLabel = selectedAccount ? accountStatus(selectedAccount) : "";
+  const showYouTubeClientIdField = youtubeCredentialModalMissingFields.includes("youtubeClientId");
+  const showYouTubeClientSecretField = youtubeCredentialModalMissingFields.includes("youtubeClientSecret");
 
   return (
-    <div className="space-y-5">
+    <>
+      <div className="space-y-5">
       <div className="space-y-3">
         <div className="text-sm text-[color:var(--muted-foreground)]">
           Pick a platform. We will create the account and open the right sign-in page for you.
@@ -1464,6 +1576,79 @@ export function SocialAccountPoolPanel({
           ) : null}
         </div>
       ) : null}
-    </div>
+      </div>
+
+      <SettingsModal
+        open={youtubeCredentialModalOpen}
+        title="Add YouTube app details"
+        description="We need your Google client ID and client secret before we can open YouTube sign-in."
+        onOpenChange={(open) => {
+          setYouTubeCredentialModalOpen(open);
+          if (!open) {
+            setYouTubeCredentialModalError("");
+            setYouTubeCredentialModalAccountId("");
+          }
+        }}
+        footer={
+          <div className="flex flex-wrap justify-end gap-2">
+            <Button
+              type="button"
+              variant="ghost"
+              onClick={() => {
+                setYouTubeCredentialModalOpen(false);
+                setYouTubeCredentialModalError("");
+                setYouTubeCredentialModalAccountId("");
+              }}
+            >
+              Cancel
+            </Button>
+            <Button type="button" onClick={() => void saveYouTubeCredentialsAndContinue()} disabled={youtubeCredentialModalSaving}>
+              {youtubeCredentialModalSaving ? "Saving..." : "Save and continue"}
+            </Button>
+          </div>
+        }
+      >
+        <div className="space-y-4">
+          <div className="text-sm text-[color:var(--muted-foreground)]">
+            This is the Google app that is allowed to request YouTube access for this account.
+          </div>
+
+          {showYouTubeClientIdField ? (
+            <div className="space-y-2">
+              <Label htmlFor="youtube-modal-client-id">Client ID</Label>
+              <Input
+                id="youtube-modal-client-id"
+                value={credentialDraft.youtubeClientId}
+                onChange={(event) =>
+                  setCredentialDraft((current) => ({ ...current, youtubeClientId: event.target.value }))
+                }
+                placeholder="Google OAuth client id"
+              />
+            </div>
+          ) : null}
+
+          {showYouTubeClientSecretField ? (
+            <div className="space-y-2">
+              <Label htmlFor="youtube-modal-client-secret">Client secret</Label>
+              <Input
+                id="youtube-modal-client-secret"
+                type="password"
+                value={credentialDraft.youtubeClientSecret}
+                onChange={(event) =>
+                  setCredentialDraft((current) => ({ ...current, youtubeClientSecret: event.target.value }))
+                }
+                placeholder="Google OAuth client secret"
+              />
+            </div>
+          ) : null}
+
+          {youtubeCredentialModalError ? (
+            <div className="rounded-[10px] border border-[color:var(--danger)]/30 bg-[color:var(--danger)]/10 px-3 py-3 text-sm text-[color:var(--danger)]">
+              {youtubeCredentialModalError}
+            </div>
+          ) : null}
+        </div>
+      </SettingsModal>
+    </>
   );
 }

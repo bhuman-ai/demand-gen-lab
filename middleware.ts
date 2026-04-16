@@ -10,6 +10,23 @@ import {
   readSignedSessionToken,
 } from "@/lib/auth-session";
 
+const LEGACY_LASTB2B_HOST = "lastb2b.com";
+const CANONICAL_LASTB2B_HOST = "www.lastb2b.com";
+
+function requestedHost(request: NextRequest) {
+  const forwardedHost = request.headers.get("x-forwarded-host")?.split(",")[0]?.trim().toLowerCase();
+  return forwardedHost || request.nextUrl.hostname.toLowerCase();
+}
+
+function canonicalHostRedirect(request: NextRequest) {
+  if (request.nextUrl.pathname.startsWith("/api/")) return null;
+  if (requestedHost(request) !== LEGACY_LASTB2B_HOST) return null;
+  const redirectUrl = request.nextUrl.clone();
+  redirectUrl.hostname = CANONICAL_LASTB2B_HOST;
+  redirectUrl.port = "";
+  return NextResponse.redirect(redirectUrl);
+}
+
 function loginRedirect(request: NextRequest) {
   const nextUrl = request.nextUrl.clone();
   const target = `${request.nextUrl.pathname}${request.nextUrl.search}`;
@@ -20,6 +37,11 @@ function loginRedirect(request: NextRequest) {
 }
 
 export async function middleware(request: NextRequest) {
+  const hostRedirect = canonicalHostRedirect(request);
+  if (hostRedirect) {
+    return hostRedirect;
+  }
+
   const { pathname } = request.nextUrl;
   const token = request.cookies.get(AUTH_SESSION_COOKIE)?.value;
   const session = await readSignedSessionToken(token);

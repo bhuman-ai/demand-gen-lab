@@ -665,6 +665,22 @@ export function SocialAccountPoolPanel({
     return applySavedAccount(data.account);
   }
 
+  async function persistYouTubeCredentials(accountId: string, nextCredentials: CredentialDraft) {
+    const response = await fetch(canonicalApiUrl(`/api/outreach/accounts/${accountId}`), {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        credentials: {
+          youtubeClientId: nextCredentials.youtubeClientId.trim(),
+          youtubeClientSecret: nextCredentials.youtubeClientSecret.trim(),
+          youtubeRefreshToken: nextCredentials.youtubeRefreshToken.trim(),
+        },
+      }),
+    });
+    const data = await readJson<{ account: OutreachAccount }>(response, "Failed to save YouTube app credentials");
+    return applySavedAccount(data.account);
+  }
+
   async function prepareAccountForPlatform(account: OutreachAccount, platform: SupportedSocialPlatform) {
     const baseDraft = account.id === selectedAccount?.id && draft ? draft : buildDraft(account);
     const nextDraft = {
@@ -778,12 +794,7 @@ export function SocialAccountPoolPanel({
     setError("");
     setLinkMessage("");
     try {
-      const baseDraft = account.id === selectedAccount?.id && draft ? draft : buildDraft(account);
-      const nextDraft = {
-        ...baseDraft,
-        ...platformConfigPatch("youtube", baseDraft),
-      };
-      const saved = await persistSocialDraft(account, nextDraft, credentialDraft);
+      const saved = await persistYouTubeCredentials(account.id, credentialDraft);
       setYouTubeCredentialModalOpen(false);
       setYouTubeCredentialModalAccountId("");
       setLinkMessage("Opening YouTube sign-in...");
@@ -841,7 +852,8 @@ export function SocialAccountPoolPanel({
     setError("");
     setLinkMessage("");
     try {
-      const account = await prepareAccountForPlatform(selectedAccount, platform);
+      const account =
+        platform === "youtube" ? selectedAccount : await prepareAccountForPlatform(selectedAccount, platform);
       setLinkMessage(`Opening ${platformLabel(platform)} sign-in...`);
       if (platform === "youtube") {
         const result = await startYouTubeConnect(account);

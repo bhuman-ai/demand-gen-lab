@@ -19,6 +19,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import { canonicalApiUrl } from "@/lib/client-api-url";
 import type { OutreachAccount } from "@/lib/factory-types";
 import { SOCIAL_PLATFORM_CATALOG } from "@/lib/social-platform-catalog";
 import { cn } from "@/lib/utils";
@@ -374,7 +375,7 @@ export function SocialAccountPoolPanel({
   }, [selectedAccount]);
 
   const loadAccountsSnapshot = useCallback(async () => {
-    const accountsResponse = await fetch("/api/outreach/accounts?scope=social", { cache: "no-store" });
+    const accountsResponse = await fetch(canonicalApiUrl("/api/outreach/accounts?scope=social"), { cache: "no-store" });
     const accountsData = await readJson<AccountsResponse>(accountsResponse, "Failed to load account pool");
     return sortAccounts(Array.isArray(accountsData.accounts) ? accountsData.accounts : []);
   }, []);
@@ -445,7 +446,7 @@ export function SocialAccountPoolPanel({
 
   const syncLinkedAccount = useCallback(
     async (accountId: string, externalAccountId: string) => {
-      const response = await fetch(`/api/outreach/accounts/${accountId}/social-link`, {
+      const response = await fetch(canonicalApiUrl(`/api/outreach/accounts/${accountId}/social-link`), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -620,7 +621,7 @@ export function SocialAccountPoolPanel({
     nextDraft: SocialDraft,
     nextCredentials: CredentialDraft
   ) {
-    const response = await fetch(`/api/outreach/accounts/${account.id}`, {
+    const response = await fetch(canonicalApiUrl(`/api/outreach/accounts/${account.id}`), {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -675,7 +676,7 @@ export function SocialAccountPoolPanel({
   }
 
   async function createPlatformAccount(platform: SupportedSocialPlatform) {
-    const response = await fetch("/api/outreach/accounts", {
+    const response = await fetch(canonicalApiUrl("/api/outreach/accounts"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -699,7 +700,7 @@ export function SocialAccountPoolPanel({
   }
 
   async function startInstagramConnect(account: OutreachAccount) {
-    const response = await fetch(`/api/outreach/accounts/${account.id}/social-link`, {
+    const response = await fetch(canonicalApiUrl(`/api/outreach/accounts/${account.id}/social-link`), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -723,7 +724,7 @@ export function SocialAccountPoolPanel({
   }
 
   async function startYouTubeConnect(account: OutreachAccount): Promise<StartYouTubeConnectResult> {
-    const response = await fetch(`/api/outreach/accounts/${account.id}/youtube-connect`, {
+    const response = await fetch(canonicalApiUrl(`/api/outreach/accounts/${account.id}/youtube-connect`), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({

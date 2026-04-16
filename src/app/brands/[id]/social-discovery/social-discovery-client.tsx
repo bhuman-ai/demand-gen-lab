@@ -9,6 +9,7 @@ import { EmptyState, PageIntro, SectionPanel } from "@/components/ui/page-layout
 import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { SocialAccountPoolPanel } from "./social-account-pool-panel";
+import { canonicalApiUrl } from "@/lib/client-api-url";
 import type { OutreachAccount, SocialDiscoveryYouTubeSubscription } from "@/lib/factory-types";
 import { resolveSocialDiscoveryCommentPrompt } from "@/lib/social-discovery-comment-prompt";
 import { cn } from "@/lib/utils";
@@ -492,7 +493,7 @@ export default function SocialDiscoveryClient({ brandId }: { brandId: string }) 
 
   async function loadCommentAccounts() {
     try {
-      const response = await fetch("/api/outreach/accounts?scope=social", { cache: "no-store" });
+      const response = await fetch(canonicalApiUrl("/api/outreach/accounts?scope=social"), { cache: "no-store" });
       const data = await response.json().catch(() => ({}));
       if (!response.ok) {
         throw new Error(typeof data?.error === "string" ? data.error : "Failed to load social accounts");
@@ -505,7 +506,7 @@ export default function SocialDiscoveryClient({ brandId }: { brandId: string }) 
 
   async function loadYouTubeSubscriptions() {
     try {
-      const response = await fetch(`/api/brands/${brandId}/social-discovery/youtube-subscriptions`, {
+      const response = await fetch(canonicalApiUrl(`/api/brands/${brandId}/social-discovery/youtube-subscriptions`), {
         cache: "no-store",
       });
       const data = (await response.json().catch(() => ({}))) as YouTubeSubscriptionResponse & {
@@ -529,7 +530,7 @@ export default function SocialDiscoveryClient({ brandId }: { brandId: string }) 
     setError("");
     try {
       const query = nextStatus === "all" ? "" : `?status=${nextStatus}`;
-      const response = await fetch(`/api/brands/${brandId}/social-discovery${query}`, { cache: "no-store" });
+      const response = await fetch(canonicalApiUrl(`/api/brands/${brandId}/social-discovery${query}`), { cache: "no-store" });
       const data = await readDiscoveryResponse(response);
       const cached = readCachedDiscovery(brandId);
       const latestRunId = latestRunIdFrom(data);
@@ -611,7 +612,7 @@ export default function SocialDiscoveryClient({ brandId }: { brandId: string }) 
     setSavingQueries(true);
     setError("");
     try {
-      const response = await fetch(`/api/brands/${brandId}`, {
+      const response = await fetch(canonicalApiUrl(`/api/brands/${brandId}`), {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -651,7 +652,7 @@ export default function SocialDiscoveryClient({ brandId }: { brandId: string }) 
     setSavingBrandCommentPrompt(true);
     setBrandCommentPromptError("");
     try {
-      const response = await fetch(`/api/brands/${brandId}`, {
+      const response = await fetch(canonicalApiUrl(`/api/brands/${brandId}`), {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -702,7 +703,7 @@ export default function SocialDiscoveryClient({ brandId }: { brandId: string }) 
       if (!sameQueries(nextQueries, baselineQueries)) {
         await saveQueries({ silent: true, nextQueries });
       }
-      const response = await fetch(`/api/brands/${brandId}/social-discovery`, {
+      const response = await fetch(canonicalApiUrl(`/api/brands/${brandId}/social-discovery`), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -757,7 +758,7 @@ export default function SocialDiscoveryClient({ brandId }: { brandId: string }) 
     setSavingYouTubeSubscription(true);
     setYouTubeSubscriptionError("");
     try {
-      const response = await fetch(`/api/brands/${brandId}/social-discovery/youtube-subscriptions`, {
+      const response = await fetch(canonicalApiUrl(`/api/brands/${brandId}/social-discovery/youtube-subscriptions`), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -789,7 +790,7 @@ export default function SocialDiscoveryClient({ brandId }: { brandId: string }) 
     setRemovingYouTubeChannelId(channelId);
     setYouTubeSubscriptionError("");
     try {
-      const response = await fetch(`/api/brands/${brandId}/social-discovery/youtube-subscriptions`, {
+      const response = await fetch(canonicalApiUrl(`/api/brands/${brandId}/social-discovery/youtube-subscriptions`), {
         method: "DELETE",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ channelId }),
@@ -831,7 +832,7 @@ export default function SocialDiscoveryClient({ brandId }: { brandId: string }) 
     setCommentResult(null);
     setPurchaseResult(null);
     try {
-      const response = await fetch(`/api/brands/${brandId}/social-discovery/comment`, {
+      const response = await fetch(canonicalApiUrl(`/api/brands/${brandId}/social-discovery/comment`), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -929,7 +930,7 @@ export default function SocialDiscoveryClient({ brandId }: { brandId: string }) 
     setPromoError("");
     setPromoResult(null);
     try {
-      const response = await fetch(`/api/brands/${brandId}/social-discovery/promote`, {
+      const response = await fetch(canonicalApiUrl(`/api/brands/${brandId}/social-discovery/promote`), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

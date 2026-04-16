@@ -269,7 +269,8 @@ function simplifyYouTubeError(message: string) {
   const normalized = message.trim().toLowerCase();
   if (
     normalized.includes("youtube connect is not configured yet") ||
-    normalized.includes("youtube connect is missing app oauth credentials")
+    normalized.includes("youtube connect is missing app oauth credentials") ||
+    normalized.includes("saved google app credentials are invalid")
   ) {
     return "We need a Google client ID and client secret before YouTube can open. Click Connect YouTube again and the form will ask for them.";
   }
@@ -281,6 +282,7 @@ function shouldShowYouTubeCredentialHelp(message: string) {
   return (
     normalized.includes("youtube connect is not configured yet") ||
     normalized.includes("youtube connect is missing app oauth credentials") ||
+    normalized.includes("saved google app credentials are invalid") ||
     normalized.includes("google client id and client secret")
   );
 }
@@ -1349,6 +1351,12 @@ export function SocialAccountPoolPanel({
                           onChange={(event) =>
                             setCredentialDraft((current) => ({ ...current, youtubeClientId: event.target.value }))
                           }
+                          autoCapitalize="none"
+                          autoCorrect="off"
+                          autoComplete="new-password"
+                          spellCheck={false}
+                          data-1p-ignore="true"
+                          data-lpignore="true"
                           placeholder="Google OAuth client id"
                         />
                       </div>
@@ -1361,6 +1369,12 @@ export function SocialAccountPoolPanel({
                           onChange={(event) =>
                             setCredentialDraft((current) => ({ ...current, youtubeClientSecret: event.target.value }))
                           }
+                          autoCapitalize="none"
+                          autoCorrect="off"
+                          autoComplete="new-password"
+                          spellCheck={false}
+                          data-1p-ignore="true"
+                          data-lpignore="true"
                           placeholder="Google OAuth client secret"
                         />
                       </div>
@@ -1635,6 +1649,12 @@ export function SocialAccountPoolPanel({
                 onChange={(event) =>
                   setCredentialDraft((current) => ({ ...current, youtubeClientId: event.target.value }))
                 }
+                autoCapitalize="none"
+                autoCorrect="off"
+                autoComplete="new-password"
+                spellCheck={false}
+                data-1p-ignore="true"
+                data-lpignore="true"
                 placeholder="Google OAuth client id"
               />
             </div>
@@ -1650,6 +1670,12 @@ export function SocialAccountPoolPanel({
                 onChange={(event) =>
                   setCredentialDraft((current) => ({ ...current, youtubeClientSecret: event.target.value }))
                 }
+                autoCapitalize="none"
+                autoCorrect="off"
+                autoComplete="new-password"
+                spellCheck={false}
+                data-1p-ignore="true"
+                data-lpignore="true"
                 placeholder="Google OAuth client secret"
               />
             </div>

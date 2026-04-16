@@ -1,7 +1,11 @@
 import { createHmac } from "crypto";
 import { getAppUrl } from "@/lib/app-url";
 import { getOutreachAccount, getOutreachAccountSecrets } from "@/lib/outreach-data";
-import { buildYouTubeOAuthAuthorizeUrl, resolveYouTubeOAuthClientCredentials } from "@/lib/youtube";
+import {
+  buildYouTubeOAuthAuthorizeUrl,
+  looksLikeGoogleOAuthClientId,
+  resolveYouTubeOAuthClientCredentials,
+} from "@/lib/youtube";
 
 type YouTubeConnectState = {
   accountId: string;
@@ -72,16 +76,22 @@ export async function prepareYouTubeConnectUrl(input: PrepareYouTubeConnectInput
 
   const secrets = await getOutreachAccountSecrets(accountId);
   const credentials = resolveYouTubeOAuthClientCredentials(secrets ?? undefined);
+  const invalidClientId = Boolean(credentials.clientId) && !looksLikeGoogleOAuthClientId(credentials.clientId);
   const missingFields = [
-    !credentials.clientId ? "youtubeClientId" : "",
-    !credentials.clientSecret ? "youtubeClientSecret" : "",
+    !credentials.clientId || invalidClientId ? "youtubeClientId" : "",
+    !credentials.clientSecret || invalidClientId ? "youtubeClientSecret" : "",
   ].filter(Boolean);
   if (missingFields.length) {
-    throw new YouTubeConnectError("We need a Google client ID and client secret before YouTube can open.", {
-      status: 409,
-      errorCode: "youtube_oauth_credentials_missing",
-      missingFields,
-    });
+    throw new YouTubeConnectError(
+      invalidClientId
+        ? "The saved Google app credentials are invalid. Enter the OAuth client ID and client secret from Google Cloud Console."
+        : "We need a Google client ID and client secret before YouTube can open.",
+      {
+        status: 409,
+        errorCode: "youtube_oauth_credentials_missing",
+        missingFields,
+      }
+    );
   }
 
   const loginHint =

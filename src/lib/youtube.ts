@@ -152,6 +152,11 @@ export function resolveYouTubeOAuthClientCredentials(
   };
 }
 
+export function looksLikeGoogleOAuthClientId(value: string) {
+  const normalized = String(value ?? "").trim();
+  return /^[0-9]+-[a-z0-9._-]+\.apps\.googleusercontent\.com$/i.test(normalized);
+}
+
 export function buildYouTubeOAuthAuthorizeUrl(input: {
   clientId: string;
   redirectUri: string;

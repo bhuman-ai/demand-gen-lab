@@ -14,8 +14,9 @@ import {
   Sparkles,
   TestTubeDiagonal,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useState } from "react";
 import { fetchBrandDirectory, readCachedBrandDirectory } from "@/lib/brand-directory-client";
+import { redirectToCanonicalLastB2bHost } from "@/lib/client-api-url";
 import { cn } from "@/lib/utils";
 import { trackEvent } from "@/lib/telemetry-client";
 import OperatorPanel from "@/components/operator/operator-panel";
@@ -94,11 +95,8 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   }));
   const [operatorOpen, setOperatorOpen] = useState(false);
 
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    if (window.location.hostname !== "lastb2b.com") return;
-    const nextUrl = `https://www.lastb2b.com${window.location.pathname}${window.location.search}${window.location.hash}`;
-    window.location.replace(nextUrl);
+  useLayoutEffect(() => {
+    redirectToCanonicalLastB2bHost();
   }, []);
 
   useEffect(() => {

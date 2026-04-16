@@ -9,7 +9,11 @@ import { EmptyState, PageIntro, SectionPanel } from "@/components/ui/page-layout
 import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { SocialAccountPoolPanel } from "./social-account-pool-panel";
-import { canonicalApiUrl } from "@/lib/client-api-url";
+import {
+  canonicalApiUrl,
+  redirectToCanonicalLastB2bHost,
+  shouldRedirectToCanonicalLastB2bHost,
+} from "@/lib/client-api-url";
 import type { OutreachAccount, SocialDiscoveryYouTubeSubscription } from "@/lib/factory-types";
 import { resolveSocialDiscoveryCommentPrompt } from "@/lib/social-discovery-comment-prompt";
 import { cn } from "@/lib/utils";
@@ -281,6 +285,7 @@ async function readDiscoveryResponse(response: Response) {
 }
 
 export default function SocialDiscoveryClient({ brandId }: { brandId: string }) {
+  const redirectingToCanonicalHost = shouldRedirectToCanonicalLastB2bHost();
   const [posts, setPosts] = useState<DiscoveryPost[]>([]);
   const [runs, setRuns] = useState<SocialDiscoveryRun[]>([]);
   const [selectedId, setSelectedId] = useState("");
@@ -358,6 +363,11 @@ export default function SocialDiscoveryClient({ brandId }: { brandId: string }) 
       !generatedCommentDraft
   );
   const selectedCommentPlatform = selectedPost?.platform === "youtube" ? "youtube" : "instagram";
+
+  useEffect(() => {
+    if (!redirectingToCanonicalHost) return;
+    redirectToCanonicalLastB2bHost();
+  }, [redirectingToCanonicalHost]);
   const selectedCommentProvider = selectedCommentPlatform === "youtube" ? "youtube" : "unipile";
   const selectedCommentPlatformLabel = selectedCommentPlatform === "youtube" ? "YouTube" : "Instagram";
   const primaryRecommendedAccounts = useMemo(
@@ -688,11 +698,12 @@ export default function SocialDiscoveryClient({ brandId }: { brandId: string }) 
   }
 
   useEffect(() => {
+    if (redirectingToCanonicalHost) return;
     void loadPosts(status);
     void loadCommentAccounts();
     void loadYouTubeSubscriptions();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [brandId, status]);
+  }, [brandId, redirectingToCanonicalHost, status]);
 
   async function runScan() {
     setScanning(true);
@@ -976,7 +987,15 @@ export default function SocialDiscoveryClient({ brandId }: { brandId: string }) 
     }
   }
 
-  return (
+  return redirectingToCanonicalHost ? (
+    <div className="space-y-6">
+      <PageIntro
+        eyebrow="last b2b / Social discovery"
+        title="Refreshing social discovery"
+        description="Moving this tab to www.lastb2b.com so account actions can use the authenticated API host."
+      />
+    </div>
+  ) : (
     <div className="space-y-6">
       <PageIntro
         title="Social comments"

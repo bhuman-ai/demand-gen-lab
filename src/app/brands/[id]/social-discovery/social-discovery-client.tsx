@@ -1154,7 +1154,7 @@ export default function SocialDiscoveryClient({ brandId }: { brandId: string }) 
 
           {!youtubeAccountOptions.length ? (
             <div className="text-xs text-[color:var(--muted-foreground)]">
-              Add a social account below with `connection = youtube`, platform `youtube`, and valid OAuth credentials before enabling auto-comment.
+              Add a social account below, open it, and click `Connect YouTube` before enabling auto-comment.
             </div>
           ) : null}
 
@@ -1243,7 +1243,10 @@ export default function SocialDiscoveryClient({ brandId }: { brandId: string }) 
         </div>
       </SectionPanel>
 
-      <SectionPanel title="Accounts" description="Choose and manage the social accounts used for Instagram comments and YouTube auto comments.">
+      <SectionPanel
+        title="Add accounts"
+        description="Use the buttons below to add Instagram or YouTube accounts, connect them, and see which ones are ready."
+      >
         <SocialAccountPoolPanel
           brandId={brandId}
           onChanged={() => {
@@ -1651,8 +1654,8 @@ export default function SocialDiscoveryClient({ brandId }: { brandId: string }) 
               ) : (
                 <div className="rounded-[10px] border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-3 text-sm text-[color:var(--muted-foreground)]">
                   {selectedCommentPlatform === "youtube"
-                    ? "Connect a YouTube OAuth account first."
-                    : "Connect an Instagram Unipile account first."}
+                    ? "Add a YouTube account first."
+                    : "Add an Instagram account first."}
                 </div>
               )}
             </div>

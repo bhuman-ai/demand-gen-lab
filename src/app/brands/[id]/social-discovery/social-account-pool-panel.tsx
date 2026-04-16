@@ -2,11 +2,20 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { Badge } from "@/components/ui/badge";
+import {
+  CheckCircle2,
+  ChevronDown,
+  ChevronUp,
+  CircleAlert,
+  Instagram,
+  Link2,
+  RefreshCw,
+  Settings2,
+  Youtube,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { SectionPanel } from "@/components/ui/page-layout";
 import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import type { OutreachAccount } from "@/lib/factory-types";
@@ -16,6 +25,8 @@ import { cn } from "@/lib/utils";
 type AccountsResponse = {
   accounts: OutreachAccount[];
 };
+
+type SupportedSocialPlatform = "instagram" | "youtube";
 
 type SocialDraft = {
   enabled: boolean;
@@ -178,6 +189,99 @@ function hasHydratedUnipileIdentity(account: OutreachAccount) {
   );
 }
 
+function inferSupportedPlatform(
+  social:
+    | Pick<SocialDraft, "connectionProvider" | "linkedProvider" | "platforms">
+    | OutreachAccount["config"]["social"]
+    | null
+) {
+  if (!social) return null;
+  if (
+    social.connectionProvider === "youtube" ||
+    social.linkedProvider === "youtube" ||
+    social.platforms.includes("youtube")
+  ) {
+    return "youtube" as const;
+  }
+  if (social.linkedProvider === "instagram" || social.platforms.includes("instagram")) {
+    return "instagram" as const;
+  }
+  return null;
+}
+
+function platformLabel(platform: SupportedSocialPlatform) {
+  return platform === "youtube" ? "YouTube" : "Instagram";
+}
+
+function platformLaunchDescription(platform: SupportedSocialPlatform) {
+  return platform === "youtube"
+    ? "Makes the account, opens Google, then brings you back here connected."
+    : "Makes the account, opens Instagram sign-in, then fills the profile back here.";
+}
+
+function nextPlatformAccountName(platform: SupportedSocialPlatform, accounts: OutreachAccount[]) {
+  const nextIndex =
+    accounts.filter((account) => inferSupportedPlatform(account.config.social) === platform).length + 1;
+  return `${platformLabel(platform)} account${nextIndex > 1 ? ` ${nextIndex}` : ""}`;
+}
+
+function platformConfigPatch(
+  platform: SupportedSocialPlatform,
+  current: Pick<SocialDraft, "platforms"> | OutreachAccount["config"]["social"]
+) {
+  return {
+    enabled: true,
+    connectionProvider: platform === "youtube" ? "youtube" : "unipile",
+    linkedProvider: platform === "youtube" ? "youtube" : "instagram",
+    platforms: Array.from(new Set([...(current.platforms ?? []), platform])),
+  } satisfies Partial<OutreachAccount["config"]["social"]>;
+}
+
+function hasConnectedIdentity(social: Pick<SocialDraft, "externalAccountId"> | OutreachAccount["config"]["social"]) {
+  return Boolean(social.externalAccountId.trim());
+}
+
+function accountStatus(account: OutreachAccount) {
+  const platform = inferSupportedPlatform(account.config.social);
+  if (!platform) return "Choose a platform";
+  if (!account.config.social.enabled) return "Turned off";
+  if (!hasConnectedIdentity(account.config.social)) return "Needs sign-in";
+  return "Connected";
+}
+
+function simplifyYouTubeError(message: string) {
+  const normalized = message.trim().toLowerCase();
+  if (
+    normalized.includes("youtube connect is not configured yet") ||
+    normalized.includes("youtube connect is missing app oauth credentials")
+  ) {
+    return "We need a Google client ID and client secret before YouTube can open. Open Advanced settings below, add those two values, save, then click Connect YouTube again.";
+  }
+  return message;
+}
+
+function shouldShowYouTubeCredentialHelp(message: string) {
+  const normalized = message.trim().toLowerCase();
+  return (
+    normalized.includes("youtube connect is not configured yet") ||
+    normalized.includes("youtube connect is missing app oauth credentials")
+  );
+}
+
+function PlatformIcon({
+  platform,
+  className,
+}: {
+  platform: SupportedSocialPlatform;
+  className?: string;
+}) {
+  return platform === "youtube" ? (
+    <Youtube className={className} />
+  ) : (
+    <Instagram className={className} />
+  );
+}
+
 export function SocialAccountPoolPanel({
   brandId,
   onChanged,
@@ -193,42 +297,48 @@ export function SocialAccountPoolPanel({
   const [draft, setDraft] = useState<SocialDraft | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [creating, setCreating] = useState(false);
+  const [creatingPlatform, setCreatingPlatform] = useState<SupportedSocialPlatform | "">("");
   const [linking, setLinking] = useState(false);
   const [syncing, setSyncing] = useState(false);
+  const [youtubeConnecting, setYouTubeConnecting] = useState(false);
   const [error, setError] = useState("");
   const [linkMessage, setLinkMessage] = useState("");
   const [handledAutoLinkKey, setHandledAutoLinkKey] = useState("");
+  const [handledYouTubeConnectKey, setHandledYouTubeConnectKey] = useState("");
+  const [showAdvancedSettings, setShowAdvancedSettings] = useState(false);
+  const [showAdvancedYouTubeCredentials, setShowAdvancedYouTubeCredentials] = useState(false);
   const [credentialDraft, setCredentialDraft] = useState<CredentialDraft>(emptyCredentialDraft());
 
   const selectedAccount = useMemo(
     () => accounts.find((account) => account.id === selectedAccountId) ?? accounts[0] ?? null,
     [accounts, selectedAccountId]
   );
-  const enabledCount = useMemo(
-    () => accounts.filter((account) => account.status === "active" && account.config.social.enabled).length,
-    [accounts]
+  const selectedPlatform = useMemo(
+    () => inferSupportedPlatform(draft ?? selectedAccount?.config.social ?? null),
+    [draft, selectedAccount]
   );
-  const connectedCount = useMemo(
-    () =>
-      accounts.filter(
-        (account) =>
-          account.status === "active" &&
-          account.config.social.enabled &&
-          account.config.social.connectionProvider === "unipile" &&
-          account.config.social.externalAccountId.trim()
-      ).length,
-    [accounts]
+  const selectedHasConnectedIdentity = useMemo(
+    () => (draft ? hasConnectedIdentity(draft) : selectedAccount ? hasConnectedIdentity(selectedAccount.config.social) : false),
+    [draft, selectedAccount]
   );
+  const showYouTubeCredentials =
+    selectedPlatform === "youtube" ||
+    Boolean(draft?.platforms.includes("youtube")) ||
+    draft?.linkedProvider === "youtube" ||
+    draft?.connectionProvider === "youtube";
 
   useEffect(() => {
     if (!selectedAccount) {
       setDraft(null);
       setCredentialDraft(emptyCredentialDraft());
+      setShowAdvancedSettings(false);
+      setShowAdvancedYouTubeCredentials(false);
       return;
     }
     setDraft(buildDraft(selectedAccount));
     setCredentialDraft(emptyCredentialDraft());
+    setShowAdvancedSettings(false);
+    setShowAdvancedYouTubeCredentials(false);
   }, [selectedAccount]);
 
   const loadAccountsSnapshot = useCallback(async () => {
@@ -311,7 +421,7 @@ export function SocialAccountPoolPanel({
           externalAccountId,
         }),
       });
-      const data = await readJson<{ account: OutreachAccount }>(response, "Failed to sync Unipile profile");
+      const data = await readJson<{ account: OutreachAccount }>(response, "Failed to sync Instagram profile");
       return applySavedAccount(data.account);
     },
     [applySavedAccount]
@@ -333,14 +443,14 @@ export function SocialAccountPoolPanel({
       setHandledAutoLinkKey(autoLinkKey);
       setSelectedAccountId(linkedAccount || "");
       if (unipileState !== "success") {
-        setLinkMessage("Unipile connection did not complete. You can retry the connect flow.");
+        setLinkMessage("Instagram sign-in did not finish. You can try again.");
         router.replace(pathname);
         return;
       }
 
       setSyncing(true);
       setError("");
-      setLinkMessage("Connecting account and pulling profile details from Unipile...");
+      setLinkMessage("Finishing Instagram connection...");
 
       try {
         if (linkedAccount && returnedExternalAccountId) {
@@ -348,8 +458,8 @@ export function SocialAccountPoolPanel({
           if (cancelled) return;
           setLinkMessage(
             saved.config.social.displayName.trim()
-              ? `Connected and filled this account from Unipile as ${saved.config.social.displayName.trim()}.`
-              : "Connected and filled this account from Unipile."
+              ? `Instagram connected as ${saved.config.social.displayName.trim()}.`
+              : "Instagram connected."
           );
           router.replace(pathname);
           return;
@@ -369,8 +479,8 @@ export function SocialAccountPoolPanel({
               setDraft(buildDraft(linked));
               setLinkMessage(
                 linked.config.social.displayName.trim()
-                  ? `Connected and filled this account from Unipile as ${linked.config.social.displayName.trim()}.`
-                  : "Connected and filled this account from Unipile."
+                  ? `Instagram connected as ${linked.config.social.displayName.trim()}.`
+                  : "Instagram connected."
               );
               router.replace(pathname);
               return;
@@ -379,8 +489,8 @@ export function SocialAccountPoolPanel({
             if (cancelled) return;
             setLinkMessage(
               saved.config.social.displayName.trim()
-                ? `Connected and filled this account from Unipile as ${saved.config.social.displayName.trim()}.`
-                : "Connected and filled this account from Unipile."
+                ? `Instagram connected as ${saved.config.social.displayName.trim()}.`
+                : "Instagram connected."
             );
             router.replace(pathname);
             return;
@@ -390,12 +500,12 @@ export function SocialAccountPoolPanel({
         }
 
         if (!cancelled) {
-          setLinkMessage("The account connected, but profile data has not landed yet. Refresh or try sync in a few seconds.");
+          setLinkMessage("Instagram connected, but the profile is still loading. Refresh or sync in a few seconds.");
           router.replace(pathname);
         }
       } catch (err) {
         if (!cancelled) {
-          setError(err instanceof Error ? err.message : "Failed to auto-fill linked Unipile profile");
+          setError(err instanceof Error ? err.message : "Failed to finish Instagram connection");
           router.replace(pathname);
         }
       } finally {
@@ -413,35 +523,241 @@ export function SocialAccountPoolPanel({
     };
   }, [handledAutoLinkKey, loadAccountsSnapshot, pathname, router, searchParams, syncLinkedAccount]);
 
-  async function createSocialAccount() {
-    const name = window.prompt("Name this social comment account");
-    if (!name || !name.trim()) return;
-    setCreating(true);
-    setError("");
-    try {
-      const response = await fetch("/api/outreach/accounts", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          name: name.trim(),
-          provider: "customerio",
-          accountType: "hybrid",
-          status: "active",
-          config: {
-            social: {
-              enabled: true,
-              role: "operator",
-            },
+  useEffect(() => {
+    const linkedAccount = searchParams.get("linkedAccount");
+    const youtubeState = searchParams.get("youtube");
+    const youtubeMessage = searchParams.get("youtubeMessage")?.trim() || "";
+    const youtubeConnectKey =
+      linkedAccount && youtubeState
+        ? `${linkedAccount}:${youtubeState}:${youtubeMessage || "none"}`
+        : "";
+    if (!youtubeConnectKey || handledYouTubeConnectKey === youtubeConnectKey) return;
+
+    let cancelled = false;
+
+    async function handleYouTubeReturn() {
+      setHandledYouTubeConnectKey(youtubeConnectKey);
+      setSelectedAccountId(linkedAccount || "");
+
+      if (youtubeState !== "success") {
+        setError(simplifyYouTubeError(youtubeMessage || "YouTube connection did not complete. You can retry."));
+        if (shouldShowYouTubeCredentialHelp(youtubeMessage)) {
+          setShowAdvancedSettings(true);
+          setShowAdvancedYouTubeCredentials(true);
+        }
+        router.replace(pathname);
+        return;
+      }
+
+      setYouTubeConnecting(true);
+      setError("");
+      setLinkMessage("Refreshing connected YouTube account...");
+
+      try {
+        const nextAccounts = await loadAccountsSnapshot();
+        if (cancelled) return;
+        setAccounts(nextAccounts);
+        setSelectedAccountId(linkedAccount || "");
+        const linked = nextAccounts.find((account) => account.id === linkedAccount) ?? null;
+        setLinkMessage(
+          linked?.config.social.displayName.trim()
+            ? `YouTube connected as ${linked.config.social.displayName.trim()}.`
+            : "YouTube connected."
+        );
+      } catch (err) {
+        if (!cancelled) {
+          setError(err instanceof Error ? err.message : "Failed to refresh connected YouTube account");
+        }
+      } finally {
+        if (!cancelled) {
+          setYouTubeConnecting(false);
+          router.replace(pathname);
+        }
+      }
+    }
+
+    void handleYouTubeReturn();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [handledYouTubeConnectKey, loadAccountsSnapshot, pathname, router, searchParams]);
+
+  async function persistSocialDraft(
+    account: OutreachAccount,
+    nextDraft: SocialDraft,
+    nextCredentials: CredentialDraft
+  ) {
+    const response = await fetch(`/api/outreach/accounts/${account.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        config: {
+          social: {
+            enabled: nextDraft.enabled,
+            connectionProvider: nextDraft.connectionProvider,
+            linkedProvider: nextDraft.linkedProvider,
+            externalAccountId: nextDraft.externalAccountId.trim(),
+            handle: nextDraft.handle.trim(),
+            profileUrl: nextDraft.profileUrl.trim(),
+            publicIdentifier: nextDraft.publicIdentifier.trim(),
+            displayName: nextDraft.displayName.trim(),
+            headline: nextDraft.headline.trim(),
+            bio: nextDraft.bio.trim(),
+            avatarUrl: nextDraft.avatarUrl.trim(),
+            role: nextDraft.role,
+            topicTags: parseCsv(nextDraft.topicTags),
+            communityTags: parseCsv(nextDraft.communityTags),
+            personaSummary: nextDraft.personaSummary.trim(),
+            voiceSummary: nextDraft.voiceSummary.trim(),
+            trustLevel: nextDraft.trustLevel,
+            cooldownMinutes: nextDraft.cooldownMinutes,
+            linkedAt: nextDraft.linkedAt.trim(),
+            lastProfileSyncAt: nextDraft.lastProfileSyncAt.trim(),
+            coordinationGroup: nextDraft.coordinationGroup.trim(),
+            recentActivity24h: nextDraft.recentActivity24h,
+            recentActivity7d: nextDraft.recentActivity7d,
+            notes: nextDraft.notes.trim(),
+            platforms: nextDraft.platforms,
           },
-        }),
-      });
-      const data = await readJson<{ account: OutreachAccount }>(response, "Failed to create social account");
-      await refresh(data.account.id);
-      await Promise.resolve(onChanged?.());
+        },
+        credentials: {
+          youtubeClientId: nextCredentials.youtubeClientId.trim(),
+          youtubeClientSecret: nextCredentials.youtubeClientSecret.trim(),
+          youtubeRefreshToken: nextCredentials.youtubeRefreshToken.trim(),
+        },
+      }),
+    });
+    const data = await readJson<{ account: OutreachAccount }>(response, "Failed to save social account");
+    return applySavedAccount(data.account);
+  }
+
+  async function prepareAccountForPlatform(account: OutreachAccount, platform: SupportedSocialPlatform) {
+    const baseDraft = account.id === selectedAccount?.id && draft ? draft : buildDraft(account);
+    const nextDraft = {
+      ...baseDraft,
+      ...platformConfigPatch(platform, baseDraft),
+    };
+    const nextCredentials = account.id === selectedAccount?.id ? credentialDraft : emptyCredentialDraft();
+    return persistSocialDraft(account, nextDraft, nextCredentials);
+  }
+
+  async function createPlatformAccount(platform: SupportedSocialPlatform) {
+    const response = await fetch("/api/outreach/accounts", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: nextPlatformAccountName(platform, accounts),
+        provider: "customerio",
+        accountType: "hybrid",
+        status: "active",
+        config: {
+          social: {
+            enabled: true,
+            role: "operator",
+            connectionProvider: platform === "youtube" ? "youtube" : "unipile",
+            linkedProvider: platform === "youtube" ? "youtube" : "instagram",
+            platforms: [platform],
+          },
+        },
+      }),
+    });
+    const data = await readJson<{ account: OutreachAccount }>(response, "Failed to create social account");
+    return applySavedAccount(data.account);
+  }
+
+  async function startInstagramConnect(account: OutreachAccount) {
+    const response = await fetch(`/api/outreach/accounts/${account.id}/social-link`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        action: "create_link",
+        brandId,
+        platforms: account.config.social.platforms,
+      }),
+    });
+    const data = await readJson<{ url: string }>(response, "Failed to create Instagram link");
+    const url = String(data.url ?? "").trim();
+    if (!url) throw new Error("Instagram did not return a hosted sign-in URL.");
+    window.location.assign(url);
+  }
+
+  async function startYouTubeConnect(account: OutreachAccount) {
+    const response = await fetch(`/api/outreach/accounts/${account.id}/youtube-connect`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        brandId,
+      }),
+    });
+    const data = await readJson<{ url: string }>(response, "Failed to start YouTube connect flow");
+    const url = String(data.url ?? "").trim();
+    if (!url) throw new Error("Google did not return a YouTube connect URL.");
+    window.location.assign(url);
+  }
+
+  async function createAndConnectPlatform(platform: SupportedSocialPlatform) {
+    setCreatingPlatform(platform);
+    setError("");
+    setLinkMessage("");
+    try {
+      const account = await createPlatformAccount(platform);
+      setLinkMessage(`Opening ${platformLabel(platform)} sign-in...`);
+      if (platform === "youtube") {
+        await startYouTubeConnect(account);
+      } else {
+        await startInstagramConnect(account);
+      }
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to create social account");
+      const message = err instanceof Error ? err.message : `Failed to add ${platformLabel(platform)} account`;
+      if (platform === "youtube") {
+        setError(simplifyYouTubeError(message));
+        if (shouldShowYouTubeCredentialHelp(message)) {
+          setShowAdvancedSettings(true);
+          setShowAdvancedYouTubeCredentials(true);
+        }
+      } else {
+        setError(message);
+      }
     } finally {
-      setCreating(false);
+      setCreatingPlatform("");
+    }
+  }
+
+  async function connectSelectedAccount(platform: SupportedSocialPlatform) {
+    if (!selectedAccount) return;
+    if (platform === "youtube") {
+      setYouTubeConnecting(true);
+    } else {
+      setLinking(true);
+    }
+    setError("");
+    setLinkMessage("");
+    try {
+      const account = await prepareAccountForPlatform(selectedAccount, platform);
+      setLinkMessage(`Opening ${platformLabel(platform)} sign-in...`);
+      if (platform === "youtube") {
+        await startYouTubeConnect(account);
+      } else {
+        await startInstagramConnect(account);
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : `Failed to connect ${platformLabel(platform)}`;
+      if (platform === "youtube") {
+        setError(simplifyYouTubeError(message));
+        if (shouldShowYouTubeCredentialHelp(message)) {
+          setShowAdvancedSettings(true);
+          setShowAdvancedYouTubeCredentials(true);
+        }
+      } else {
+        setError(message);
+      }
+    } finally {
+      if (platform === "youtube") {
+        setYouTubeConnecting(false);
+      } else {
+        setLinking(false);
+      }
     }
   }
 
@@ -451,55 +767,8 @@ export function SocialAccountPoolPanel({
     setSaving(true);
     setError("");
     try {
-      const response = await fetch(`/api/outreach/accounts/${selectedAccount.id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          config: {
-            social: {
-              enabled: draft.enabled,
-              connectionProvider: draft.connectionProvider,
-              linkedProvider: draft.linkedProvider,
-              externalAccountId: draft.externalAccountId.trim(),
-              handle: draft.handle.trim(),
-              profileUrl: draft.profileUrl.trim(),
-              publicIdentifier: draft.publicIdentifier.trim(),
-              displayName: draft.displayName.trim(),
-              headline: draft.headline.trim(),
-              bio: draft.bio.trim(),
-              avatarUrl: draft.avatarUrl.trim(),
-              role: draft.role,
-              topicTags: parseCsv(draft.topicTags),
-              communityTags: parseCsv(draft.communityTags),
-              personaSummary: draft.personaSummary.trim(),
-              voiceSummary: draft.voiceSummary.trim(),
-              trustLevel: draft.trustLevel,
-              cooldownMinutes: draft.cooldownMinutes,
-              linkedAt: draft.linkedAt.trim(),
-              lastProfileSyncAt: draft.lastProfileSyncAt.trim(),
-              coordinationGroup: draft.coordinationGroup.trim(),
-              recentActivity24h: draft.recentActivity24h,
-              recentActivity7d: draft.recentActivity7d,
-              notes: draft.notes.trim(),
-              platforms: draft.platforms,
-            },
-          },
-          credentials: {
-            youtubeClientId: credentialDraft.youtubeClientId.trim(),
-            youtubeClientSecret: credentialDraft.youtubeClientSecret.trim(),
-            youtubeRefreshToken: credentialDraft.youtubeRefreshToken.trim(),
-          },
-        }),
-      });
-      const data = await readJson<{ account: OutreachAccount }>(response, "Failed to save social account");
-      const saved = data.account;
-      const nextAccounts = sortAccounts(
-        accounts.map((account) => (account.id === saved.id ? saved : account))
-      );
-      setAccounts(nextAccounts);
-      setSelectedAccountId(saved.id);
-      setDraft(buildDraft(saved));
-      await Promise.resolve(onChanged?.());
+      await persistSocialDraft(selectedAccount, draft, credentialDraft);
+      setLinkMessage("Advanced settings saved.");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to save social account");
     } finally {
@@ -507,44 +776,18 @@ export function SocialAccountPoolPanel({
     }
   }
 
-  async function connectSelectedAccount() {
+  async function syncSelectedAccountFromInstagram() {
     if (!selectedAccount) return;
-    setLinking(true);
-    setError("");
-    setLinkMessage("");
-    try {
-      const response = await fetch(`/api/outreach/accounts/${selectedAccount.id}/social-link`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          action: "create_link",
-          brandId,
-          platforms: draft?.platforms ?? selectedAccount.config.social.platforms,
-        }),
-      });
-      const data = await readJson<{ url: string }>(response, "Failed to create Unipile link");
-      const url = String(data.url ?? "").trim();
-      if (!url) throw new Error("Unipile did not return a hosted auth URL.");
-      window.location.assign(url);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to start Unipile link");
-      setLinking(false);
-    }
-  }
-
-  async function syncSelectedAccountFromUnipile() {
-    if (!selectedAccount) return;
+    const externalAccountId = draft?.externalAccountId || selectedAccount.config.social.externalAccountId;
+    if (!externalAccountId.trim()) return;
     setSyncing(true);
     setError("");
     setLinkMessage("");
     try {
-      await syncLinkedAccount(
-        selectedAccount.id,
-        draft?.externalAccountId || selectedAccount.config.social.externalAccountId
-      );
-      setLinkMessage("Pulled the latest linked profile from Unipile.");
+      await syncLinkedAccount(selectedAccount.id, externalAccountId);
+      setLinkMessage("Pulled the latest Instagram profile.");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to sync Unipile profile");
+      setError(err instanceof Error ? err.message : "Failed to sync Instagram profile");
     } finally {
       setSyncing(false);
       setLinking(false);
@@ -564,277 +807,414 @@ export function SocialAccountPoolPanel({
     );
   }
 
-  const showYouTubeCredentials =
-    Boolean(draft?.platforms.includes("youtube")) ||
-    draft?.linkedProvider === "youtube" ||
-    draft?.connectionProvider === "youtube";
+  const selectedStatusLabel = selectedAccount ? accountStatus(selectedAccount) : "";
 
   return (
-    <SectionPanel
-      title="Social comment accounts"
-      description="Only real social identities live here. Link them with Unipile and use them for comment routing."
-      actions={
-        <div className="flex flex-wrap items-center gap-2">
-          <Badge variant="muted">{enabledCount} enabled</Badge>
-          <Badge variant="muted">{connectedCount} linked</Badge>
-          <Button type="button" variant="outline" onClick={createSocialAccount} disabled={creating || loading || saving}>
-            {creating ? "Creating..." : "New social account"}
-          </Button>
-          <Button type="button" variant="outline" onClick={() => void refresh()} disabled={loading || saving}>
+    <div className="space-y-5">
+      <div className="space-y-3">
+        <div className="text-sm text-[color:var(--muted-foreground)]">
+          Pick a platform. We will create the account and open the right sign-in page for you.
+        </div>
+        <div className="grid gap-3 md:grid-cols-2">
+          {(["instagram", "youtube"] as SupportedSocialPlatform[]).map((platform) => {
+            const busy = creatingPlatform === platform;
+            return (
+              <button
+                key={platform}
+                type="button"
+                onClick={() => void createAndConnectPlatform(platform)}
+                disabled={busy || linking || youtubeConnecting || saving || syncing}
+                className={cn(
+                  "rounded-[12px] border border-[color:var(--border)] bg-[color:var(--surface)] px-4 py-4 text-left transition-colors hover:bg-[color:var(--surface-muted)] disabled:cursor-not-allowed disabled:opacity-60"
+                )}
+              >
+                <div className="flex items-start gap-3">
+                  <div className="flex h-11 w-11 items-center justify-center rounded-[10px] border border-[color:var(--border)] bg-[color:var(--surface-muted)]">
+                    <PlatformIcon platform={platform} className="h-5 w-5 text-[color:var(--foreground)]" />
+                  </div>
+                  <div className="min-w-0">
+                    <div className="text-base font-semibold text-[color:var(--foreground)]">
+                      {busy ? `Opening ${platformLabel(platform)}...` : `Add ${platformLabel(platform)} account`}
+                    </div>
+                    <div className="mt-1 text-sm leading-6 text-[color:var(--muted-foreground)]">
+                      {platformLaunchDescription(platform)}
+                    </div>
+                  </div>
+                </div>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {error ? (
+        <div className="rounded-[10px] border border-[color:var(--danger)]/30 bg-[color:var(--danger)]/10 px-3 py-3 text-sm text-[color:var(--danger)]">
+          {error}
+        </div>
+      ) : null}
+
+      {linkMessage ? (
+        <div className="rounded-[10px] border border-[color:var(--success)]/30 bg-[color:var(--success)]/10 px-3 py-3 text-sm text-[color:var(--success)]">
+          {linkMessage}
+        </div>
+      ) : null}
+
+      <div className="space-y-3">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <div className="text-sm font-medium text-[color:var(--foreground)]">Existing accounts</div>
+            <div className="text-sm text-[color:var(--muted-foreground)]">
+              Click an account to reconnect it or open advanced settings.
+            </div>
+          </div>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => void refresh()}
+            disabled={loading || saving || linking || youtubeConnecting}
+          >
+            <RefreshCw className="h-4 w-4" />
             Refresh
           </Button>
         </div>
-      }
-    >
-      <div className="space-y-4">
-        {error ? <div className="text-sm text-[color:var(--danger)]">{error}</div> : null}
-        {linkMessage ? <div className="text-sm text-[color:var(--success)]">{linkMessage}</div> : null}
 
-        <div className="grid gap-4 xl:grid-cols-[320px_minmax(0,1fr)]">
-          <div className="space-y-2">
-            {loading ? (
-              <div className="rounded-[10px] border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3 text-sm text-[color:var(--muted-foreground)]">
-                Loading accounts...
-              </div>
-            ) : null}
+        {loading ? (
+          <div className="rounded-[10px] border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-3 text-sm text-[color:var(--muted-foreground)]">
+            Loading accounts...
+          </div>
+        ) : null}
 
-            {!loading && !accounts.length ? (
-              <div className="rounded-[10px] border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3 text-sm text-[color:var(--muted-foreground)]">
-                No social accounts yet. Create one, then link it with Unipile.
-              </div>
-            ) : null}
+        {!loading && !accounts.length ? (
+          <div className="rounded-[10px] border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-3 text-sm text-[color:var(--muted-foreground)]">
+            No accounts yet. Use one of the buttons above.
+          </div>
+        ) : null}
 
+        {accounts.length ? (
+          <div className="grid gap-3">
             {accounts.map((account) => {
+              const platform = inferSupportedPlatform(account.config.social);
               const active = account.id === selectedAccount?.id;
               return (
                 <button
                   key={account.id}
                   type="button"
-                  onClick={() => setSelectedAccountId(account.id)}
+                  onClick={() => {
+                    setSelectedAccountId(account.id);
+                    setError("");
+                    setLinkMessage("");
+                  }}
                   className={cn(
-                    "w-full rounded-[10px] border border-[color:var(--border)] px-3 py-3 text-left transition-colors hover:bg-[color:var(--surface-muted)]",
-                    active ? "bg-[color:var(--surface-muted)]" : "bg-[color:var(--surface)]"
+                    "rounded-[12px] border px-4 py-4 text-left transition-colors hover:bg-[color:var(--surface-muted)]",
+                    active
+                      ? "border-[color:var(--border-strong)] bg-[color:var(--surface-muted)]"
+                      : "border-[color:var(--border)] bg-[color:var(--surface)]"
                   )}
                 >
-                  <div className="flex flex-wrap items-center gap-2">
-                    <div className="text-sm font-medium text-[color:var(--foreground)]">{account.name}</div>
-                    <Badge variant={account.config.social.enabled ? "accent" : "muted"}>
-                      {account.config.social.enabled ? "enabled" : "off"}
-                    </Badge>
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div className="flex min-w-0 items-start gap-3">
+                      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[10px] border border-[color:var(--border)] bg-[color:var(--surface)]">
+                        {platform ? (
+                          <PlatformIcon platform={platform} className="h-4 w-4 text-[color:var(--foreground)]" />
+                        ) : (
+                          <Link2 className="h-4 w-4 text-[color:var(--muted-foreground)]" />
+                        )}
+                      </div>
+                      <div className="min-w-0">
+                        <div className="text-sm font-medium text-[color:var(--foreground)]">{account.name}</div>
+                        <div className="mt-1 text-xs text-[color:var(--muted-foreground)]">
+                          {platform ? `${platformLabel(platform)} account` : "Platform not picked yet"}
+                        </div>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2 text-xs font-medium text-[color:var(--muted-foreground)]">
+                      {accountStatus(account) === "Connected" ? (
+                        <CheckCircle2 className="h-4 w-4 text-[color:var(--success)]" />
+                      ) : (
+                        <CircleAlert className="h-4 w-4" />
+                      )}
+                      <span>{accountStatus(account)}</span>
+                    </div>
                   </div>
-                  <div className="mt-1 text-xs text-[color:var(--muted-foreground)]">
-                    {accountSubtitle(account)}
-                  </div>
-                  <div className="mt-2 flex flex-wrap gap-2 text-xs text-[color:var(--muted-foreground)]">
-                    <span>{account.config.social.role}</span>
-                    {account.config.social.connectionProvider === "unipile" ? <span>Unipile</span> : null}
-                    {account.config.social.connectionProvider === "youtube" ? <span>YouTube OAuth</span> : null}
-                    {account.config.social.linkedProvider ? <span>{account.config.social.linkedProvider}</span> : null}
-                  </div>
+                  <div className="mt-2 text-sm text-[color:var(--muted-foreground)]">{accountSubtitle(account)}</div>
                 </button>
               );
             })}
           </div>
+        ) : null}
+      </div>
 
-          <div className="rounded-[10px] border border-[color:var(--border)] p-4">
-            {selectedAccount && draft ? (
-              <div className="space-y-4">
-                <div className="flex flex-wrap items-start justify-between gap-3">
-                  <div>
-                    <div className="text-base font-semibold text-[color:var(--foreground)]">{selectedAccount.name}</div>
-                    <div className="mt-1 text-sm text-[color:var(--muted-foreground)]">
-                      {accountSubtitle(selectedAccount)}
-                    </div>
+      {selectedAccount && draft ? (
+        <div className="rounded-[12px] border border-[color:var(--border)] bg-[color:var(--surface)] px-4 py-4">
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div className="flex min-w-0 items-start gap-3">
+              <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-[10px] border border-[color:var(--border)] bg-[color:var(--surface-muted)]">
+                {selectedPlatform ? (
+                  <PlatformIcon platform={selectedPlatform} className="h-5 w-5 text-[color:var(--foreground)]" />
+                ) : (
+                  <Link2 className="h-5 w-5 text-[color:var(--muted-foreground)]" />
+                )}
+              </div>
+              <div className="min-w-0">
+                <div className="text-base font-semibold text-[color:var(--foreground)]">{selectedAccount.name}</div>
+                <div className="mt-1 text-sm text-[color:var(--muted-foreground)]">
+                  {selectedPlatform
+                    ? selectedHasConnectedIdentity
+                      ? `${platformLabel(selectedPlatform)} is connected.`
+                      : `Finish sign-in to connect ${platformLabel(selectedPlatform)}.`
+                    : "Pick whether this account is for Instagram or YouTube."}
+                </div>
+              </div>
+            </div>
+            <div className="flex items-center gap-2 text-sm text-[color:var(--muted-foreground)]">
+              {selectedStatusLabel === "Connected" ? (
+                <CheckCircle2 className="h-4 w-4 text-[color:var(--success)]" />
+              ) : (
+                <CircleAlert className="h-4 w-4" />
+              )}
+              <span>{selectedStatusLabel}</span>
+            </div>
+          </div>
+
+          <div className="mt-4 flex flex-wrap gap-2">
+            {selectedPlatform ? (
+              <Button
+                type="button"
+                onClick={() => void connectSelectedAccount(selectedPlatform)}
+                disabled={saving || syncing || linking || youtubeConnecting || Boolean(creatingPlatform)}
+              >
+                {selectedPlatform === "youtube"
+                  ? youtubeConnecting
+                    ? "Opening..."
+                    : selectedHasConnectedIdentity
+                      ? "Reconnect YouTube"
+                      : "Connect YouTube"
+                  : linking
+                    ? "Opening..."
+                    : selectedHasConnectedIdentity
+                      ? "Reconnect Instagram"
+                      : "Connect Instagram"}
+              </Button>
+            ) : (
+              <>
+                <Button
+                  type="button"
+                  onClick={() => void connectSelectedAccount("instagram")}
+                  disabled={saving || syncing || linking || youtubeConnecting || Boolean(creatingPlatform)}
+                >
+                  Use for Instagram
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => void connectSelectedAccount("youtube")}
+                  disabled={saving || syncing || linking || youtubeConnecting || Boolean(creatingPlatform)}
+                >
+                  Use for YouTube
+                </Button>
+              </>
+            )}
+
+            {selectedPlatform === "instagram" && draft.externalAccountId.trim() ? (
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => void syncSelectedAccountFromInstagram()}
+                disabled={syncing || saving || linking || youtubeConnecting}
+              >
+                {syncing ? "Syncing..." : "Pull latest Instagram profile"}
+              </Button>
+            ) : null}
+
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setShowAdvancedSettings((current) => !current)}
+              disabled={loading}
+            >
+              <Settings2 className="h-4 w-4" />
+              Advanced settings
+              {showAdvancedSettings ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+            </Button>
+          </div>
+
+          <div className="mt-4 grid gap-2 text-sm text-[color:var(--muted-foreground)] sm:grid-cols-2">
+            <div>{accountSubtitle(selectedAccount)}</div>
+            {draft.lastProfileSyncAt ? <div>Last profile sync: {draft.lastProfileSyncAt}</div> : null}
+            {draft.externalAccountId ? <div>Connected id: {draft.externalAccountId}</div> : null}
+            {draft.enabled ? <div>Used for routing: yes</div> : <div>Used for routing: no</div>}
+          </div>
+
+          {showAdvancedSettings ? (
+            <div className="mt-5 space-y-5 border-t border-[color:var(--border)] pt-5">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <div className="text-sm font-medium text-[color:var(--foreground)]">Advanced settings</div>
+                  <div className="text-sm text-[color:var(--muted-foreground)]">
+                    Most people can ignore this. Use it only if you need manual overrides.
                   </div>
-                  <Button type="button" onClick={saveSelectedAccount} disabled={saving}>
-                    {saving ? "Saving..." : "Save account"}
-                  </Button>
+                </div>
+                <Button type="button" onClick={saveSelectedAccount} disabled={saving || linking || youtubeConnecting}>
+                  {saving ? "Saving..." : "Save advanced settings"}
+                </Button>
+              </div>
+
+              <label className="flex items-start gap-3 rounded-[10px] border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-3">
+                <input
+                  type="checkbox"
+                  checked={draft.enabled}
+                  onChange={(event) => setDraft({ ...draft, enabled: event.target.checked })}
+                  className="mt-1 h-4 w-4 rounded border border-[color:var(--border)] bg-[color:var(--background)] accent-[color:var(--accent)]"
+                />
+                <span className="min-w-0">
+                  <span className="text-sm font-medium text-[color:var(--foreground)]">Use this account for routing</span>
+                  <span className="mt-1 block text-sm leading-6 text-[color:var(--muted-foreground)]">
+                    Turn this off if you want to keep the account saved without using it.
+                  </span>
+                </span>
+              </label>
+
+              <div className="grid gap-4 md:grid-cols-2">
+                <div className="space-y-2">
+                  <Label htmlFor="social-role">Role</Label>
+                  <Select
+                    id="social-role"
+                    value={draft.role}
+                    onChange={(event) =>
+                      setDraft({
+                        ...draft,
+                        role: event.target.value as SocialDraft["role"],
+                      })
+                    }
+                  >
+                    {ROLE_OPTIONS.map((role) => (
+                      <option key={role} value={role}>
+                        {role}
+                      </option>
+                    ))}
+                  </Select>
                 </div>
 
+                <div className="space-y-2">
+                  <Label htmlFor="social-connection">Connection</Label>
+                  <Select
+                    id="social-connection"
+                    value={draft.connectionProvider}
+                    onChange={(event) =>
+                      setDraft({
+                        ...draft,
+                        connectionProvider: event.target.value as SocialDraft["connectionProvider"],
+                      })
+                    }
+                  >
+                    {CONNECTION_OPTIONS.map((provider) => (
+                      <option key={provider} value={provider}>
+                        {provider}
+                      </option>
+                    ))}
+                  </Select>
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="social-handle">Handle</Label>
+                  <Input
+                    id="social-handle"
+                    value={draft.handle}
+                    onChange={(event) => setDraft({ ...draft, handle: event.target.value })}
+                    placeholder="@safelywithsam"
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="social-linked-provider">Linked provider</Label>
+                  <Select
+                    id="social-linked-provider"
+                    value={draft.linkedProvider}
+                    onChange={(event) =>
+                      setDraft({
+                        ...draft,
+                        linkedProvider: event.target.value as SocialDraft["linkedProvider"],
+                      })
+                    }
+                  >
+                    {LINKED_PROVIDER_OPTIONS.map((provider) => (
+                      <option key={provider || "none"} value={provider}>
+                        {provider || "none"}
+                      </option>
+                    ))}
+                  </Select>
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="social-external-id">External account id</Label>
+                  <Input
+                    id="social-external-id"
+                    value={draft.externalAccountId}
+                    onChange={(event) => setDraft({ ...draft, externalAccountId: event.target.value })}
+                    placeholder={draft.connectionProvider === "youtube" ? "UC..." : "acc_123"}
+                  />
+                </div>
+
+                <div className="space-y-2 md:col-span-2">
+                  <Label htmlFor="social-profile-url">Profile URL</Label>
+                  <Input
+                    id="social-profile-url"
+                    value={draft.profileUrl}
+                    onChange={(event) => setDraft({ ...draft, profileUrl: event.target.value })}
+                    placeholder="https://instagram.com/..."
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="social-public-id">Public identifier</Label>
+                  <Input
+                    id="social-public-id"
+                    value={draft.publicIdentifier}
+                    onChange={(event) => setDraft({ ...draft, publicIdentifier: event.target.value })}
+                    placeholder="sam-safeagain"
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="social-display-name">Display name</Label>
+                  <Input
+                    id="social-display-name"
+                    value={draft.displayName}
+                    onChange={(event) => setDraft({ ...draft, displayName: event.target.value })}
+                    placeholder="Sam Rivera"
+                  />
+                </div>
+
+                <div className="space-y-2 md:col-span-2">
+                  <Label htmlFor="social-avatar-url">Avatar URL</Label>
+                  <Input
+                    id="social-avatar-url"
+                    value={draft.avatarUrl}
+                    onChange={(event) => setDraft({ ...draft, avatarUrl: event.target.value })}
+                    placeholder="https://..."
+                  />
+                </div>
+              </div>
+
+              {showYouTubeCredentials ? (
                 <div className="rounded-[10px] border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3">
-                  <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
                     <div>
-                      <div className="text-sm font-medium text-[color:var(--foreground)]">
-                        {draft.connectionProvider === "youtube" ? "Provider connection" : "Unipile link"}
-                      </div>
+                      <div className="text-sm font-medium text-[color:var(--foreground)]">YouTube app credentials</div>
                       <p className="mt-1 text-sm leading-6 text-[color:var(--muted-foreground)]">
-                        {draft.connectionProvider === "youtube"
-                          ? "This account uses Google OAuth credentials for YouTube comments. Unipile is not involved."
-                          : "Connect a real social identity to this pool account, then sync its profile metadata for routing."}
+                        Only needed if the shared Google app credentials are missing. Usually leave this alone.
                       </p>
                     </div>
-                    {draft.connectionProvider === "youtube" ? null : (
-                      <div className="flex flex-wrap gap-2">
-                        <Button
-                          type="button"
-                          variant="outline"
-                          onClick={connectSelectedAccount}
-                          disabled={linking || saving}
-                        >
-                          {linking ? "Opening..." : draft.connectionProvider === "unipile" ? "Reconnect in Unipile" : "Connect in Unipile"}
-                        </Button>
-                        <Button
-                          type="button"
-                          variant="outline"
-                          onClick={syncSelectedAccountFromUnipile}
-                          disabled={syncing || !draft.externalAccountId.trim()}
-                        >
-                          {syncing ? "Syncing..." : "Sync from Unipile"}
-                        </Button>
-                      </div>
-                    )}
-                  </div>
-                  <div className="mt-3 flex flex-wrap gap-2 text-xs text-[color:var(--muted-foreground)]">
-                    {draft.externalAccountId ? <Badge variant="muted">linked {draft.externalAccountId}</Badge> : null}
-                    {draft.linkedProvider ? <Badge variant="muted">{draft.linkedProvider}</Badge> : null}
-                    {draft.lastProfileSyncAt ? <Badge variant="muted">synced {draft.lastProfileSyncAt}</Badge> : null}
-                  </div>
-                </div>
-
-                <label className="flex items-start gap-3 rounded-[10px] border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-3">
-                  <input
-                    type="checkbox"
-                    checked={draft.enabled}
-                    onChange={(event) => setDraft({ ...draft, enabled: event.target.checked })}
-                    className="mt-1 h-4 w-4 rounded border border-[color:var(--border)] bg-[color:var(--background)] accent-[color:var(--accent)]"
-                  />
-                  <span className="min-w-0">
-                    <span className="text-sm font-medium text-[color:var(--foreground)]">Use this account for routing</span>
-                    <span className="mt-1 block text-sm leading-6 text-[color:var(--muted-foreground)]">
-                      When this is off, the router ignores this account entirely.
-                    </span>
-                  </span>
-                </label>
-
-                <div className="grid gap-4 md:grid-cols-2">
-                  <div className="space-y-2">
-                    <Label htmlFor="social-role">Role</Label>
-                    <Select
-                      id="social-role"
-                      value={draft.role}
-                      onChange={(event) =>
-                        setDraft({
-                          ...draft,
-                          role: event.target.value as SocialDraft["role"],
-                        })
-                      }
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => setShowAdvancedYouTubeCredentials((current) => !current)}
                     >
-                      {ROLE_OPTIONS.map((role) => (
-                        <option key={role} value={role}>
-                          {role}
-                        </option>
-                      ))}
-                    </Select>
+                      {showAdvancedYouTubeCredentials ? "Hide fields" : "Show fields"}
+                    </Button>
                   </div>
 
-                  <div className="space-y-2">
-                    <Label htmlFor="social-connection">Connection</Label>
-                    <Select
-                      id="social-connection"
-                      value={draft.connectionProvider}
-                      onChange={(event) =>
-                        setDraft({
-                          ...draft,
-                          connectionProvider: event.target.value as SocialDraft["connectionProvider"],
-                        })
-                      }
-                    >
-                      {CONNECTION_OPTIONS.map((provider) => (
-                        <option key={provider} value={provider}>
-                          {provider}
-                        </option>
-                      ))}
-                    </Select>
-                  </div>
-
-                  <div className="space-y-2">
-                    <Label htmlFor="social-handle">Handle</Label>
-                    <Input
-                      id="social-handle"
-                      value={draft.handle}
-                      onChange={(event) => setDraft({ ...draft, handle: event.target.value })}
-                      placeholder="@safelywithsam"
-                    />
-                  </div>
-
-                  <div className="space-y-2">
-                    <Label htmlFor="social-linked-provider">Linked provider</Label>
-                    <Select
-                      id="social-linked-provider"
-                      value={draft.linkedProvider}
-                      onChange={(event) =>
-                        setDraft({
-                          ...draft,
-                          linkedProvider: event.target.value as SocialDraft["linkedProvider"],
-                        })
-                      }
-                    >
-                      {LINKED_PROVIDER_OPTIONS.map((provider) => (
-                        <option key={provider || "none"} value={provider}>
-                          {provider || "none"}
-                        </option>
-                      ))}
-                    </Select>
-                  </div>
-
-                  <div className="space-y-2">
-                    <Label htmlFor="social-external-id">External account id</Label>
-                    <Input
-                      id="social-external-id"
-                      value={draft.externalAccountId}
-                      onChange={(event) => setDraft({ ...draft, externalAccountId: event.target.value })}
-                      placeholder={draft.connectionProvider === "youtube" ? "UC..." : "acc_123"}
-                    />
-                  </div>
-
-                  <div className="space-y-2 md:col-span-2">
-                    <Label htmlFor="social-profile-url">Profile URL</Label>
-                    <Input
-                      id="social-profile-url"
-                      value={draft.profileUrl}
-                      onChange={(event) => setDraft({ ...draft, profileUrl: event.target.value })}
-                      placeholder="https://instagram.com/..."
-                    />
-                  </div>
-
-                  <div className="space-y-2">
-                    <Label htmlFor="social-public-id">Public identifier</Label>
-                    <Input
-                      id="social-public-id"
-                      value={draft.publicIdentifier}
-                      onChange={(event) => setDraft({ ...draft, publicIdentifier: event.target.value })}
-                      placeholder="sam-safeagain"
-                    />
-                  </div>
-
-                  <div className="space-y-2">
-                    <Label htmlFor="social-display-name">Display name</Label>
-                    <Input
-                      id="social-display-name"
-                      value={draft.displayName}
-                      onChange={(event) => setDraft({ ...draft, displayName: event.target.value })}
-                      placeholder="Sam Rivera"
-                    />
-                  </div>
-
-                  <div className="space-y-2 md:col-span-2">
-                    <Label htmlFor="social-avatar-url">Avatar URL</Label>
-                    <Input
-                      id="social-avatar-url"
-                      value={draft.avatarUrl}
-                      onChange={(event) => setDraft({ ...draft, avatarUrl: event.target.value })}
-                      placeholder="https://..."
-                    />
-                  </div>
-                </div>
-
-                {showYouTubeCredentials ? (
-                  <div className="rounded-[10px] border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3">
-                    <div className="text-sm font-medium text-[color:var(--foreground)]">YouTube OAuth</div>
-                    <p className="mt-1 text-sm leading-6 text-[color:var(--muted-foreground)]">
-                      Leave fields blank to keep the currently stored secret values. Saving with new values updates the
-                      encrypted account credentials used for YouTube comments.
-                    </p>
+                  {showAdvancedYouTubeCredentials ? (
                     <div className="mt-3 grid gap-4 md:grid-cols-2">
                       <div className="space-y-2">
                         <Label htmlFor="youtube-client-id">Client ID</Label>
@@ -867,210 +1247,223 @@ export function SocialAccountPoolPanel({
                           onChange={(event) =>
                             setCredentialDraft((current) => ({ ...current, youtubeRefreshToken: event.target.value }))
                           }
-                          placeholder="Google OAuth refresh token with YouTube comment scope"
+                          placeholder="Optional. Leave blank if you are using the normal Google connect flow."
                         />
                       </div>
                     </div>
-                  </div>
-                ) : null}
-
-                <div className="grid gap-4 md:grid-cols-2">
-                  <div className="space-y-2">
-                    <Label htmlFor="social-linked-at">Linked at</Label>
-                    <Input
-                      id="social-linked-at"
-                      value={draft.linkedAt}
-                      onChange={(event) => setDraft({ ...draft, linkedAt: event.target.value })}
-                      placeholder="2026-04-09T12:00:00.000Z"
-                    />
-                  </div>
-
-                  <div className="space-y-2">
-                    <Label htmlFor="social-last-sync">Last profile sync</Label>
-                    <Input
-                      id="social-last-sync"
-                      value={draft.lastProfileSyncAt}
-                      onChange={(event) => setDraft({ ...draft, lastProfileSyncAt: event.target.value })}
-                      placeholder="2026-04-09T12:05:00.000Z"
-                    />
-                  </div>
+                  ) : null}
                 </div>
+              ) : null}
 
-                <div className="grid gap-4 md:grid-cols-2">
-                  <div className="space-y-2">
-                    <Label htmlFor="social-headline">Headline</Label>
-                    <Textarea
-                      id="social-headline"
-                      value={draft.headline}
-                      onChange={(event) => setDraft({ ...draft, headline: event.target.value })}
-                      placeholder="Women’s safety educator and campus organizer"
-                    />
-                  </div>
-
-                  <div className="space-y-2">
-                    <Label htmlFor="social-bio">Bio</Label>
-                    <Textarea
-                      id="social-bio"
-                      value={draft.bio}
-                      onChange={(event) => setDraft({ ...draft, bio: event.target.value })}
-                      placeholder="Writes about night-walk routines, rideshare safety, and practical bystander habits."
-                    />
-                  </div>
+              <div className="grid gap-4 md:grid-cols-2">
+                <div className="space-y-2">
+                  <Label htmlFor="social-linked-at">Linked at</Label>
+                  <Input
+                    id="social-linked-at"
+                    value={draft.linkedAt}
+                    onChange={(event) => setDraft({ ...draft, linkedAt: event.target.value })}
+                    placeholder="2026-04-09T12:00:00.000Z"
+                  />
                 </div>
 
                 <div className="space-y-2">
-                  <Label>Platforms</Label>
-                  <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
-                    {SOCIAL_PLATFORM_CATALOG.map((platform) => {
-                      const checked = draft.platforms.includes(platform.id);
-                      return (
-                        <label
-                          key={platform.id}
-                          className="flex cursor-pointer items-start gap-3 rounded-[10px] border border-[color:var(--border)] px-3 py-2.5 transition-colors hover:bg-[color:var(--surface-muted)]"
-                        >
-                          <input
-                            type="checkbox"
-                            checked={checked}
-                            onChange={() => togglePlatform(platform.id)}
-                            className="mt-1 h-4 w-4 rounded border border-[color:var(--border)] bg-[color:var(--background)] accent-[color:var(--accent)]"
-                          />
-                          <span className="min-w-0">
-                            <span className="block text-sm font-medium text-[color:var(--foreground)]">
-                              {platform.label}
-                            </span>
-                            <span className="block text-xs leading-5 text-[color:var(--muted-foreground)]">
-                              {platform.scanStatus === "supported_now" ? "Scan now" : "Save only"}
-                            </span>
+                  <Label htmlFor="social-last-sync">Last profile sync</Label>
+                  <Input
+                    id="social-last-sync"
+                    value={draft.lastProfileSyncAt}
+                    onChange={(event) => setDraft({ ...draft, lastProfileSyncAt: event.target.value })}
+                    placeholder="2026-04-09T12:05:00.000Z"
+                  />
+                </div>
+              </div>
+
+              <div className="grid gap-4 md:grid-cols-2">
+                <div className="space-y-2">
+                  <Label htmlFor="social-headline">Headline</Label>
+                  <Textarea
+                    id="social-headline"
+                    value={draft.headline}
+                    onChange={(event) => setDraft({ ...draft, headline: event.target.value })}
+                    placeholder="Women’s safety educator and campus organizer"
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="social-bio">Bio</Label>
+                  <Textarea
+                    id="social-bio"
+                    value={draft.bio}
+                    onChange={(event) => setDraft({ ...draft, bio: event.target.value })}
+                    placeholder="Writes about night-walk routines, rideshare safety, and practical bystander habits."
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <Label>Platforms</Label>
+                <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+                  {SOCIAL_PLATFORM_CATALOG.map((platform) => {
+                    const checked = draft.platforms.includes(platform.id);
+                    return (
+                      <label
+                        key={platform.id}
+                        className="flex cursor-pointer items-start gap-3 rounded-[10px] border border-[color:var(--border)] px-3 py-2.5 transition-colors hover:bg-[color:var(--surface-muted)]"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={() => togglePlatform(platform.id)}
+                          className="mt-1 h-4 w-4 rounded border border-[color:var(--border)] bg-[color:var(--background)] accent-[color:var(--accent)]"
+                        />
+                        <span className="min-w-0">
+                          <span className="block text-sm font-medium text-[color:var(--foreground)]">
+                            {platform.label}
                           </span>
-                        </label>
-                      );
-                    })}
-                  </div>
-                </div>
-
-                <div className="grid gap-4 md:grid-cols-2">
-                  <div className="space-y-2">
-                    <Label htmlFor="social-trust">Trust level</Label>
-                    <Input
-                      id="social-trust"
-                      type="number"
-                      min={0}
-                      max={10}
-                      value={draft.trustLevel}
-                      onChange={(event) =>
-                        setDraft({
-                          ...draft,
-                          trustLevel: Math.max(0, Math.min(10, Number(event.target.value) || 0)),
-                        })
-                      }
-                    />
-                  </div>
-
-                  <div className="space-y-2">
-                    <Label htmlFor="social-activity-24h">Recent actions (24h)</Label>
-                    <Input
-                      id="social-activity-24h"
-                      type="number"
-                      min={0}
-                      value={draft.recentActivity24h}
-                      onChange={(event) =>
-                        setDraft({
-                          ...draft,
-                          recentActivity24h: Math.max(0, Number(event.target.value) || 0),
-                        })
-                      }
-                    />
-                  </div>
-
-                  <div className="space-y-2">
-                    <Label htmlFor="social-activity-7d">Recent actions (7d)</Label>
-                    <Input
-                      id="social-activity-7d"
-                      type="number"
-                      min={0}
-                      value={draft.recentActivity7d}
-                      onChange={(event) =>
-                        setDraft({
-                          ...draft,
-                          recentActivity7d: Math.max(0, Number(event.target.value) || 0),
-                        })
-                      }
-                    />
-                  </div>
-                </div>
-
-                <div className="grid gap-4 md:grid-cols-2">
-                  <div className="space-y-2">
-                    <Label htmlFor="social-persona-summary">Persona summary</Label>
-                    <Textarea
-                      id="social-persona-summary"
-                      value={draft.personaSummary}
-                      onChange={(event) => setDraft({ ...draft, personaSummary: event.target.value })}
-                      placeholder="Credible operator voice for empathy-first replies about women’s safety and routines."
-                    />
-                  </div>
-
-                  <div className="space-y-2">
-                    <Label htmlFor="social-voice-summary">Voice notes</Label>
-                    <Textarea
-                      id="social-voice-summary"
-                      value={draft.voiceSummary}
-                      onChange={(event) => setDraft({ ...draft, voiceSummary: event.target.value })}
-                      placeholder="Calm, practical, never alarmist. Good at method-first comments."
-                    />
-                  </div>
-
-                  <div className="space-y-2">
-                    <Label htmlFor="social-topics">Topic tags</Label>
-                    <Textarea
-                      id="social-topics"
-                      value={draft.topicTags}
-                      onChange={(event) => setDraft({ ...draft, topicTags: event.target.value })}
-                      placeholder="street harassment, solo travel, night walk"
-                    />
-                  </div>
-
-                  <div className="space-y-2">
-                    <Label htmlFor="social-communities">Community tags</Label>
-                    <Textarea
-                      id="social-communities"
-                      value={draft.communityTags}
-                      onChange={(event) => setDraft({ ...draft, communityTags: event.target.value })}
-                      placeholder="reddit women, campus safety, solo travelers"
-                    />
-                  </div>
-                </div>
-
-                <div className="grid gap-4 md:grid-cols-2">
-                  <div className="space-y-2">
-                    <Label htmlFor="social-coordination">Coordination group</Label>
-                    <Input
-                      id="social-coordination"
-                      value={draft.coordinationGroup}
-                      onChange={(event) => setDraft({ ...draft, coordinationGroup: event.target.value })}
-                      placeholder="safeagain-ops"
-                    />
-                  </div>
-
-                  <div className="space-y-2">
-                    <Label htmlFor="social-notes">Notes</Label>
-                    <Textarea
-                      id="social-notes"
-                      value={draft.notes}
-                      onChange={(event) => setDraft({ ...draft, notes: event.target.value })}
-                      placeholder="Campus safety voice. Good for empathy-first replies."
-                    />
-                  </div>
+                          <span className="block text-xs leading-5 text-[color:var(--muted-foreground)]">
+                            {platform.scanStatus === "supported_now" ? "Scan now" : "Save only"}
+                          </span>
+                        </span>
+                      </label>
+                    );
+                  })}
                 </div>
               </div>
-            ) : (
-              <div className="text-sm text-[color:var(--muted-foreground)]">
-                Pick an account to configure the social router.
+
+              <div className="grid gap-4 md:grid-cols-2">
+                <div className="space-y-2">
+                  <Label htmlFor="social-trust">Trust level</Label>
+                  <Input
+                    id="social-trust"
+                    type="number"
+                    min={0}
+                    max={10}
+                    value={draft.trustLevel}
+                    onChange={(event) =>
+                      setDraft({
+                        ...draft,
+                        trustLevel: Math.max(0, Math.min(10, Number(event.target.value) || 0)),
+                      })
+                    }
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="social-cooldown">Cooldown minutes</Label>
+                  <Input
+                    id="social-cooldown"
+                    type="number"
+                    min={0}
+                    max={24 * 60}
+                    value={draft.cooldownMinutes}
+                    onChange={(event) =>
+                      setDraft({
+                        ...draft,
+                        cooldownMinutes: Math.max(0, Math.min(24 * 60, Number(event.target.value) || 0)),
+                      })
+                    }
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="social-activity-24h">Recent actions (24h)</Label>
+                  <Input
+                    id="social-activity-24h"
+                    type="number"
+                    min={0}
+                    value={draft.recentActivity24h}
+                    onChange={(event) =>
+                      setDraft({
+                        ...draft,
+                        recentActivity24h: Math.max(0, Number(event.target.value) || 0),
+                      })
+                    }
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="social-activity-7d">Recent actions (7d)</Label>
+                  <Input
+                    id="social-activity-7d"
+                    type="number"
+                    min={0}
+                    value={draft.recentActivity7d}
+                    onChange={(event) =>
+                      setDraft({
+                        ...draft,
+                        recentActivity7d: Math.max(0, Number(event.target.value) || 0),
+                      })
+                    }
+                  />
+                </div>
               </div>
-            )}
-          </div>
+
+              <div className="grid gap-4 md:grid-cols-2">
+                <div className="space-y-2">
+                  <Label htmlFor="social-persona-summary">Persona summary</Label>
+                  <Textarea
+                    id="social-persona-summary"
+                    value={draft.personaSummary}
+                    onChange={(event) => setDraft({ ...draft, personaSummary: event.target.value })}
+                    placeholder="Credible operator voice for empathy-first replies about women’s safety and routines."
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="social-voice-summary">Voice notes</Label>
+                  <Textarea
+                    id="social-voice-summary"
+                    value={draft.voiceSummary}
+                    onChange={(event) => setDraft({ ...draft, voiceSummary: event.target.value })}
+                    placeholder="Calm, practical, never alarmist. Good at method-first comments."
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="social-topics">Topic tags</Label>
+                  <Textarea
+                    id="social-topics"
+                    value={draft.topicTags}
+                    onChange={(event) => setDraft({ ...draft, topicTags: event.target.value })}
+                    placeholder="street harassment, solo travel, night walk"
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="social-communities">Community tags</Label>
+                  <Textarea
+                    id="social-communities"
+                    value={draft.communityTags}
+                    onChange={(event) => setDraft({ ...draft, communityTags: event.target.value })}
+                    placeholder="reddit women, campus safety, solo travelers"
+                  />
+                </div>
+              </div>
+
+              <div className="grid gap-4 md:grid-cols-2">
+                <div className="space-y-2">
+                  <Label htmlFor="social-coordination">Coordination group</Label>
+                  <Input
+                    id="social-coordination"
+                    value={draft.coordinationGroup}
+                    onChange={(event) => setDraft({ ...draft, coordinationGroup: event.target.value })}
+                    placeholder="safeagain-ops"
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="social-notes">Notes</Label>
+                  <Textarea
+                    id="social-notes"
+                    value={draft.notes}
+                    onChange={(event) => setDraft({ ...draft, notes: event.target.value })}
+                    placeholder="Campus safety voice. Good for empathy-first replies."
+                  />
+                </div>
+              </div>
+            </div>
+          ) : null}
         </div>
-      </div>
-    </SectionPanel>
+      ) : null}
+    </div>
   );
 }

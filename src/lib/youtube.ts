@@ -2,8 +2,10 @@ import type { OutreachAccountSecrets } from "@/lib/outreach-data";
 import type { SocialDiscoveryPost } from "@/lib/social-discovery-types";
 
 const YOUTUBE_DATA_API_BASE_URL = "https://www.googleapis.com/youtube/v3";
+const YOUTUBE_OAUTH_AUTHORIZE_URL = "https://accounts.google.com/o/oauth2/v2/auth";
 const YOUTUBE_OAUTH_TOKEN_URL = "https://oauth2.googleapis.com/token";
 const YOUTUBE_WEBSUB_HUB_URL = "https://pubsubhubbub.appspot.com/subscribe";
+const YOUTUBE_COMMENT_SCOPE = "https://www.googleapis.com/auth/youtube.force-ssl";
 
 type YouTubeRequestOptions = {
   path: string;
@@ -30,6 +32,16 @@ export type YouTubeWebhookEntry = {
   publishedAt: string;
   updatedAt: string;
   rawXml: string;
+};
+
+export type YouTubeChannelProfile = {
+  channelId: string;
+  title: string;
+  description: string;
+  customUrl: string;
+  avatarUrl: string;
+  publishedAt: string;
+  raw: Record<string, unknown>;
 };
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -113,14 +125,67 @@ function youtubeRefreshToken(secrets: Pick<OutreachAccountSecrets, "youtubeRefre
   return String(secrets.youtubeRefreshToken ?? "").trim();
 }
 
+function youtubeEnvClientId() {
+  return (
+    String(process.env.YOUTUBE_OAUTH_CLIENT_ID ?? "").trim() ||
+    String(process.env.GOOGLE_OAUTH_CLIENT_ID ?? "").trim() ||
+    String(process.env.GOOGLE_CLIENT_ID ?? "").trim()
+  );
+}
+
+function youtubeEnvClientSecret() {
+  return (
+    String(process.env.YOUTUBE_OAUTH_CLIENT_SECRET ?? "").trim() ||
+    String(process.env.GOOGLE_OAUTH_CLIENT_SECRET ?? "").trim() ||
+    String(process.env.GOOGLE_CLIENT_SECRET ?? "").trim()
+  );
+}
+
+export function resolveYouTubeOAuthClientCredentials(
+  secrets?: Partial<Pick<OutreachAccountSecrets, "youtubeClientId" | "youtubeClientSecret">>
+) {
+  const clientId = String(secrets?.youtubeClientId ?? "").trim() || youtubeEnvClientId();
+  const clientSecret = String(secrets?.youtubeClientSecret ?? "").trim() || youtubeEnvClientSecret();
+  return {
+    clientId,
+    clientSecret,
+  };
+}
+
+export function buildYouTubeOAuthAuthorizeUrl(input: {
+  clientId: string;
+  redirectUri: string;
+  state: string;
+  loginHint?: string;
+}) {
+  const clientId = String(input.clientId ?? "").trim();
+  const redirectUri = String(input.redirectUri ?? "").trim();
+  const state = String(input.state ?? "").trim();
+  if (!clientId || !redirectUri || !state) {
+    throw new YouTubeApiError("clientId, redirectUri, and state are required to start YouTube OAuth.", {
+      status: 400,
+    });
+  }
+  const url = new URL(YOUTUBE_OAUTH_AUTHORIZE_URL);
+  url.searchParams.set("client_id", clientId);
+  url.searchParams.set("redirect_uri", redirectUri);
+  url.searchParams.set("response_type", "code");
+  url.searchParams.set("scope", YOUTUBE_COMMENT_SCOPE);
+  url.searchParams.set("access_type", "offline");
+  url.searchParams.set("include_granted_scopes", "true");
+  url.searchParams.set("prompt", "consent");
+  url.searchParams.set("state", state);
+  if (String(input.loginHint ?? "").trim()) {
+    url.searchParams.set("login_hint", String(input.loginHint ?? "").trim());
+  }
+  return url.toString();
+}
+
 export function hasYouTubeOAuthCredentials(
   secrets: Pick<OutreachAccountSecrets, "youtubeClientId" | "youtubeClientSecret" | "youtubeRefreshToken">
 ) {
-  return Boolean(
-    youtubeClientId(secrets) &&
-      youtubeClientSecret(secrets) &&
-      youtubeRefreshToken(secrets)
-  );
+  const credentials = resolveYouTubeOAuthClientCredentials(secrets);
+  return Boolean(credentials.clientId && credentials.clientSecret && youtubeRefreshToken(secrets));
 }
 
 export function supportsYouTubePostComments(platform: string) {
@@ -169,7 +234,8 @@ export function buildYouTubeCommentUrl(videoId: string, commentId: string) {
 async function refreshYouTubeAccessToken(
   secrets: Pick<OutreachAccountSecrets, "youtubeClientId" | "youtubeClientSecret" | "youtubeRefreshToken">
 ) {
-  if (!hasYouTubeOAuthCredentials(secrets)) {
+  const credentials = resolveYouTubeOAuthClientCredentials(secrets);
+  if (!credentials.clientId || !credentials.clientSecret || !youtubeRefreshToken(secrets)) {
     throw new YouTubeApiError("Set YouTube OAuth client id, client secret, and refresh token first.", {
       status: 400,
     });
@@ -181,8 +247,8 @@ async function refreshYouTubeAccessToken(
       "Content-Type": "application/x-www-form-urlencoded",
     },
     body: new URLSearchParams({
-      client_id: youtubeClientId(secrets),
-      client_secret: youtubeClientSecret(secrets),
+      client_id: credentials.clientId,
+      client_secret: credentials.clientSecret,
       refresh_token: youtubeRefreshToken(secrets),
       grant_type: "refresh_token",
     }).toString(),
@@ -211,6 +277,65 @@ async function refreshYouTubeAccessToken(
   }
 
   return accessToken;
+}
+
+export async function exchangeYouTubeOAuthCode(input: {
+  code: string;
+  clientId: string;
+  clientSecret: string;
+  redirectUri: string;
+}) {
+  const code = String(input.code ?? "").trim();
+  const clientId = String(input.clientId ?? "").trim();
+  const clientSecret = String(input.clientSecret ?? "").trim();
+  const redirectUri = String(input.redirectUri ?? "").trim();
+  if (!code || !clientId || !clientSecret || !redirectUri) {
+    throw new YouTubeApiError("code, clientId, clientSecret, and redirectUri are required.", { status: 400 });
+  }
+
+  const response = await fetch(YOUTUBE_OAUTH_TOKEN_URL, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded",
+    },
+    body: new URLSearchParams({
+      code,
+      client_id: clientId,
+      client_secret: clientSecret,
+      redirect_uri: redirectUri,
+      grant_type: "authorization_code",
+    }).toString(),
+  });
+  const raw = await response.text();
+  const payload = asRecord(raw ? JSON.parse(raw) : {});
+  if (!response.ok) {
+    throw new YouTubeApiError(
+      String(payload.error_description ?? payload.error ?? "").trim() ||
+        `YouTube OAuth code exchange failed with HTTP ${response.status}.`,
+      {
+        status: response.status,
+        type: String(payload.error ?? "").trim(),
+        details: payload,
+      }
+    );
+  }
+
+  const accessToken = String(payload.access_token ?? "").trim();
+  if (!accessToken) {
+    throw new YouTubeApiError("YouTube OAuth code exchange completed without an access token.", {
+      status: 502,
+      details: payload,
+    });
+  }
+
+  return {
+    accessToken,
+    refreshToken: String(payload.refresh_token ?? "").trim(),
+    scope: String(payload.scope ?? "").trim(),
+    tokenType: String(payload.token_type ?? "").trim(),
+    expiresIn: Number(payload.expires_in ?? 0) || 0,
+    raw: payload,
+  };
 }
 
 async function youtubeRequest<T = Record<string, unknown>>(input: YouTubeRequestOptions): Promise<T> {
@@ -263,6 +388,43 @@ async function getYouTubeVideoSnippet(input: {
   });
   const item = asRecord(asArray(payload.items)[0]);
   return asRecord(item.snippet);
+}
+
+export async function getAuthenticatedYouTubeChannelProfile(input: {
+  accessToken: string;
+}): Promise<YouTubeChannelProfile> {
+  const payload = await youtubeRequest<Record<string, unknown>>({
+    path: "/channels",
+    accessToken: input.accessToken,
+    query: {
+      part: "snippet",
+      mine: "true",
+    },
+  });
+  const item = asRecord(asArray(payload.items)[0]);
+  const snippet = asRecord(item.snippet);
+  const thumbnails = asRecord(snippet.thumbnails);
+  const thumbnail =
+    asRecord(thumbnails.high).url ??
+    asRecord(thumbnails.medium).url ??
+    asRecord(thumbnails.default).url ??
+    "";
+  const channelId = textValue(item.id);
+  if (!channelId) {
+    throw new YouTubeApiError("YouTube OAuth completed, but no channel identity was returned.", {
+      status: 422,
+      details: payload,
+    });
+  }
+  return {
+    channelId,
+    title: textValue(snippet.title),
+    description: textValue(snippet.description),
+    customUrl: textValue(snippet.customUrl),
+    avatarUrl: textValue(thumbnail),
+    publishedAt: textValue(snippet.publishedAt),
+    raw: item,
+  };
 }
 
 function rawYouTubeField(post: Pick<SocialDiscoveryPost, "raw">, key: string) {
@@ -429,4 +591,3 @@ export function parseYouTubeWebhookFeed(xml: string): YouTubeWebhookEntry[] {
     })
     .filter((entry): entry is YouTubeWebhookEntry => Boolean(entry));
 }
-

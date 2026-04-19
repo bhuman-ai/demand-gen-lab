@@ -613,7 +613,6 @@ export function SocialAccountPoolPanel({
         return;
       }
 
-      setYouTubeConnecting(true);
       setPendingYouTubeAccountId(linkedAccount || "");
       setError("");
       setLinkMessage("Refreshing connected YouTube account...");
@@ -653,7 +652,6 @@ export function SocialAccountPoolPanel({
         }
       } finally {
         if (!cancelled) {
-          setYouTubeConnecting(false);
           router.replace(pathname);
         }
       }
@@ -982,6 +980,11 @@ export function SocialAccountPoolPanel({
   const selectedStatusLabel = selectedAccount
     ? accountStatus(selectedAccount, { pendingYouTubeAccountId })
     : "";
+  const selectedYouTubeSyncing =
+    Boolean(selectedAccount) &&
+    pendingYouTubeAccountId === selectedAccount?.id &&
+    selectedPlatform === "youtube" &&
+    !selectedHasConnectedIdentity;
   const showYouTubeClientIdField = youtubeCredentialModalMissingFields.includes("youtubeClientId");
   const showYouTubeClientSecretField = youtubeCredentialModalMissingFields.includes("youtubeClientSecret");
 
@@ -1163,11 +1166,13 @@ export function SocialAccountPoolPanel({
               <Button
                 type="button"
                 onClick={() => void connectSelectedAccount(selectedPlatform)}
-                disabled={saving || syncing || linking || youtubeConnecting || Boolean(creatingPlatform)}
+                disabled={saving || syncing || linking || youtubeConnecting || selectedYouTubeSyncing || Boolean(creatingPlatform)}
               >
                 {selectedPlatform === "youtube"
                   ? youtubeConnecting
                     ? "Opening..."
+                    : selectedYouTubeSyncing
+                      ? "Syncing..."
                     : selectedHasConnectedIdentity
                       ? "Reconnect YouTube"
                       : "Connect YouTube"

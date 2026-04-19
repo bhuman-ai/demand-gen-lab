@@ -103,6 +103,8 @@ const LINKED_PROVIDER_OPTIONS: Array<OutreachAccount["config"]["social"]["linked
 ];
 
 const DEFAULT_YOUTUBE_MISSING_FIELDS: YouTubeCredentialField[] = ["youtubeClientId", "youtubeClientSecret"];
+const YOUTUBE_CONNECT_REFRESH_ATTEMPTS = 8;
+const YOUTUBE_CONNECT_REFRESH_DELAY_MS = 1500;
 
 function asRecord(value: unknown): Record<string, unknown> {
   if (value && typeof value === "object" && !Array.isArray(value)) {
@@ -182,7 +184,20 @@ function readJson<T>(response: Response, fallbackMessage: string) {
   });
 }
 
-function accountSubtitle(account: OutreachAccount) {
+function accountSubtitle(
+  account: OutreachAccount,
+  options?: {
+    pendingYouTubeAccountId?: string;
+  }
+) {
+  const platform = inferSupportedPlatform(account.config.social);
+  if (
+    options?.pendingYouTubeAccountId === account.id &&
+    platform === "youtube" &&
+    !hasConnectedIdentity(account.config.social)
+  ) {
+    return "Google sign-in finished. Waiting for YouTube details...";
+  }
   return (
     account.config.social.displayName ||
     account.config.social.handle ||
@@ -257,9 +272,21 @@ function hasConnectedIdentity(social: Pick<SocialDraft, "externalAccountId"> | O
   return Boolean(social.externalAccountId.trim());
 }
 
-function accountStatus(account: OutreachAccount) {
+function accountStatus(
+  account: OutreachAccount,
+  options?: {
+    pendingYouTubeAccountId?: string;
+  }
+) {
   const platform = inferSupportedPlatform(account.config.social);
-  if (!platform) return "Choose a platform";
+  if (
+    options?.pendingYouTubeAccountId === account.id &&
+    platform === "youtube" &&
+    !hasConnectedIdentity(account.config.social)
+  ) {
+    return "Finishing sign-in";
+  }
+  if (!platform) return "No platform selected";
   if (!account.config.social.enabled) return "Turned off";
   if (!hasConnectedIdentity(account.config.social)) return "Needs sign-in";
   return "Connected";
@@ -333,6 +360,7 @@ export function SocialAccountPoolPanel({
   const [linkMessage, setLinkMessage] = useState("");
   const [handledAutoLinkKey, setHandledAutoLinkKey] = useState("");
   const [handledYouTubeConnectKey, setHandledYouTubeConnectKey] = useState("");
+  const [pendingYouTubeAccountId, setPendingYouTubeAccountId] = useState("");
   const [showAdvancedSettings, setShowAdvancedSettings] = useState(false);
   const [showAdvancedYouTubeCredentials, setShowAdvancedYouTubeCredentials] = useState(false);
   const [credentialDraft, setCredentialDraft] = useState<CredentialDraft>(emptyCredentialDraft());
@@ -575,6 +603,7 @@ export function SocialAccountPoolPanel({
       setSelectedAccountId(linkedAccount || "");
 
       if (youtubeState !== "success") {
+        setPendingYouTubeAccountId("");
         setError(simplifyYouTubeError(youtubeMessage || "YouTube connection did not complete. You can retry."));
         if (shouldShowYouTubeCredentialHelp(youtubeMessage)) {
           setShowAdvancedSettings(true);
@@ -585,22 +614,41 @@ export function SocialAccountPoolPanel({
       }
 
       setYouTubeConnecting(true);
+      setPendingYouTubeAccountId(linkedAccount || "");
       setError("");
       setLinkMessage("Refreshing connected YouTube account...");
 
       try {
-        const nextAccounts = await loadAccountsSnapshot();
-        if (cancelled) return;
-        setAccounts(nextAccounts);
-        setSelectedAccountId(linkedAccount || "");
-        const linked = nextAccounts.find((account) => account.id === linkedAccount) ?? null;
-        setLinkMessage(
-          linked?.config.social.displayName.trim()
-            ? `YouTube connected as ${linked.config.social.displayName.trim()}.`
-            : "YouTube connected."
-        );
+        for (let attempt = 0; attempt < YOUTUBE_CONNECT_REFRESH_ATTEMPTS; attempt += 1) {
+          if (cancelled) return;
+          const nextAccounts = await loadAccountsSnapshot();
+          if (cancelled) return;
+          setAccounts(nextAccounts);
+          setSelectedAccountId(linkedAccount || "");
+          const linked = nextAccounts.find((account) => account.id === linkedAccount) ?? null;
+
+          if (linked && hasConnectedIdentity(linked.config.social)) {
+            setPendingYouTubeAccountId("");
+            setLinkMessage(
+              linked.config.social.displayName.trim()
+                ? `YouTube connected as ${linked.config.social.displayName.trim()}.`
+                : "YouTube connected."
+            );
+            return;
+          }
+
+          await new Promise((resolve) => window.setTimeout(resolve, YOUTUBE_CONNECT_REFRESH_DELAY_MS));
+        }
+
+        if (!cancelled) {
+          setPendingYouTubeAccountId("");
+          setLinkMessage(
+            "Google sign-in finished, but we're still syncing the YouTube account. Refresh in a few seconds."
+          );
+        }
       } catch (err) {
         if (!cancelled) {
+          setPendingYouTubeAccountId("");
           setError(err instanceof Error ? err.message : "Failed to refresh connected YouTube account");
         }
       } finally {
@@ -931,7 +979,9 @@ export function SocialAccountPoolPanel({
     );
   }
 
-  const selectedStatusLabel = selectedAccount ? accountStatus(selectedAccount) : "";
+  const selectedStatusLabel = selectedAccount
+    ? accountStatus(selectedAccount, { pendingYouTubeAccountId })
+    : "";
   const showYouTubeClientIdField = youtubeCredentialModalMissingFields.includes("youtubeClientId");
   const showYouTubeClientSecretField = youtubeCredentialModalMissingFields.includes("youtubeClientSecret");
 
@@ -1022,6 +1072,7 @@ export function SocialAccountPoolPanel({
             {accounts.map((account) => {
               const platform = inferSupportedPlatform(account.config.social);
               const active = account.id === selectedAccount?.id;
+              const statusLabel = accountStatus(account, { pendingYouTubeAccountId });
               return (
                 <button
                   key={account.id}
@@ -1050,20 +1101,22 @@ export function SocialAccountPoolPanel({
                       <div className="min-w-0">
                         <div className="text-sm font-medium text-[color:var(--foreground)]">{account.name}</div>
                         <div className="mt-1 text-xs text-[color:var(--muted-foreground)]">
-                          {platform ? `${platformLabel(platform)} account` : "Platform not picked yet"}
+                          {platform ? `${platformLabel(platform)} account` : "No platform selected"}
                         </div>
                       </div>
                     </div>
                     <div className="flex items-center gap-2 text-xs font-medium text-[color:var(--muted-foreground)]">
-                      {accountStatus(account) === "Connected" ? (
+                      {statusLabel === "Connected" ? (
                         <CheckCircle2 className="h-4 w-4 text-[color:var(--success)]" />
                       ) : (
                         <CircleAlert className="h-4 w-4" />
                       )}
-                      <span>{accountStatus(account)}</span>
+                      <span>{statusLabel}</span>
                     </div>
                   </div>
-                  <div className="mt-2 text-sm text-[color:var(--muted-foreground)]">{accountSubtitle(account)}</div>
+                  <div className="mt-2 text-sm text-[color:var(--muted-foreground)]">
+                    {accountSubtitle(account, { pendingYouTubeAccountId })}
+                  </div>
                 </button>
               );
             })}
@@ -1085,11 +1138,13 @@ export function SocialAccountPoolPanel({
               <div className="min-w-0">
                 <div className="text-base font-semibold text-[color:var(--foreground)]">{selectedAccount.name}</div>
                 <div className="mt-1 text-sm text-[color:var(--muted-foreground)]">
-                  {selectedPlatform
+                  {pendingYouTubeAccountId === selectedAccount.id && selectedPlatform === "youtube"
+                    ? "Finishing YouTube sign-in. This usually takes a few seconds."
+                    : selectedPlatform
                     ? selectedHasConnectedIdentity
                       ? `${platformLabel(selectedPlatform)} is connected.`
                       : `Finish sign-in to connect ${platformLabel(selectedPlatform)}.`
-                    : "Pick whether this account is for Instagram or YouTube."}
+                    : "Choose Instagram or YouTube for this account before connecting it."}
                 </div>
               </div>
             </div>
@@ -1166,7 +1221,7 @@ export function SocialAccountPoolPanel({
           </div>
 
           <div className="mt-4 grid gap-2 text-sm text-[color:var(--muted-foreground)] sm:grid-cols-2">
-            <div>{accountSubtitle(selectedAccount)}</div>
+            <div>{accountSubtitle(selectedAccount, { pendingYouTubeAccountId })}</div>
             {draft.lastProfileSyncAt ? <div>Last profile sync: {draft.lastProfileSyncAt}</div> : null}
             {draft.externalAccountId ? <div>Connected id: {draft.externalAccountId}</div> : null}
             {draft.enabled ? <div>Used for routing: yes</div> : <div>Used for routing: no</div>}

@@ -5,7 +5,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { ExternalLink, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { EmptyState, PageIntro, SectionPanel } from "@/components/ui/page-layout";
+import { PageIntro, SectionPanel } from "@/components/ui/page-layout";
 import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { SocialAccountPoolPanel } from "./social-account-pool-panel";
@@ -83,6 +83,42 @@ type DiscoveryResponse = {
 };
 
 const SCAN_PLATFORM = "instagram";
+
+function postRawRecord(post: DiscoveryPost | null) {
+  if (!post?.raw || typeof post.raw !== "object" || Array.isArray(post.raw)) return {};
+  return post.raw as Record<string, unknown>;
+}
+
+function youtubeRawRecord(post: DiscoveryPost | null) {
+  const raw = postRawRecord(post);
+  const youtube = raw.youtube;
+  if (!youtube || typeof youtube !== "object" || Array.isArray(youtube)) return {};
+  return youtube as Record<string, unknown>;
+}
+
+function youtubeRawText(post: DiscoveryPost | null, key: string) {
+  const value = youtubeRawRecord(post)[key];
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function youtubeRawNumber(post: DiscoveryPost | null, key: string) {
+  const value = Number(youtubeRawRecord(post)[key] ?? 0);
+  return Number.isFinite(value) ? value : 0;
+}
+
+function formatCompactNumber(value: number) {
+  if (!Number.isFinite(value) || value <= 0) return "0";
+  return new Intl.NumberFormat(undefined, {
+    notation: "compact",
+    maximumFractionDigits: value >= 1000 ? 1 : 0,
+  }).format(value);
+}
+
+function youtubeChannelUrl(post: DiscoveryPost | null) {
+  const channelId = youtubeRawText(post, "channelId");
+  if (!channelId) return "";
+  return `https://www.youtube.com/channel/${encodeURIComponent(channelId)}`;
+}
 
 function planFor(post: DiscoveryPost | null): InteractionPlan | null {
   return post?.interactionPlan ?? null;
@@ -237,16 +273,6 @@ function filterPostsByStatus(posts: DiscoveryPost[], status: SocialDiscoveryStat
   return status === "all" ? posts : posts.filter((post) => post.status === status);
 }
 
-function scanMessageFrom(data: DiscoveryResponse) {
-  if (data.posts.length > 0) return "";
-  if (data.errors?.length) {
-    const first = data.errors[0];
-    return `Scan returned 0 candidates. ${first.platform}: ${first.query} -> ${first.message}`;
-  }
-  const provider = data.summary?.provider ? `${data.summary.provider}` : "search";
-  return `Scan returned 0 candidates from ${provider}. The current 1h filter may have eliminated everything fresh enough to keep.`;
-}
-
 function latestRunIdFrom(data: DiscoveryResponse | null | undefined) {
   return typeof data?.runs?.[0]?.id === "string" ? data.runs[0].id : "";
 }
@@ -287,13 +313,11 @@ async function readDiscoveryResponse(response: Response) {
 export default function SocialDiscoveryClient({ brandId }: { brandId: string }) {
   const redirectingToCanonicalHost = shouldRedirectToCanonicalLastB2bHost();
   const [posts, setPosts] = useState<DiscoveryPost[]>([]);
-  const [runs, setRuns] = useState<SocialDiscoveryRun[]>([]);
   const [selectedId, setSelectedId] = useState("");
   const [status] = useState<SocialDiscoveryStatus | "all">("all");
   const [loading, setLoading] = useState(true);
   const [scanning, setScanning] = useState(false);
   const [error, setError] = useState("");
-  const [scanMessage, setScanMessage] = useState("");
   const [commentDraft, setCommentDraft] = useState("");
   const [commentAccountId, setCommentAccountId] = useState("");
   const [commentReplyId, setCommentReplyId] = useState("");
@@ -304,6 +328,10 @@ export default function SocialDiscoveryClient({ brandId }: { brandId: string }) 
   const [creatingPromo, setCreatingPromo] = useState(false);
   const [promoResult, setPromoResult] = useState<SocialDiscoveryPromotionDraft | null>(null);
   const [purchaseResult, setPurchaseResult] = useState<SocialDiscoveryPromotionPurchase | null>(null);
+  const [youtubeSearchDraft, setYouTubeSearchDraft] = useState("");
+  const [youtubeSearchError, setYouTubeSearchError] = useState("");
+  const [youtubeSearchSummary, setYouTubeSearchSummary] = useState("");
+  const [searchingYouTube, setSearchingYouTube] = useState(false);
   const [queryDraft, setQueryDraft] = useState("");
   const [savedQueries, setSavedQueries] = useState<string[]>([]);
   const [suggestedQueries, setSuggestedQueries] = useState<string[]>([]);
@@ -363,11 +391,6 @@ export default function SocialDiscoveryClient({ brandId }: { brandId: string }) 
       !generatedCommentDraft
   );
   const selectedCommentPlatform = selectedPost?.platform === "youtube" ? "youtube" : "instagram";
-
-  useEffect(() => {
-    if (!redirectingToCanonicalHost) return;
-    redirectToCanonicalLastB2bHost();
-  }, [redirectingToCanonicalHost]);
   const selectedCommentProvider = selectedCommentPlatform === "youtube" ? "youtube" : "unipile";
   const selectedCommentPlatformLabel = selectedCommentPlatform === "youtube" ? "YouTube" : "Instagram";
   const primaryRecommendedAccounts = useMemo(
@@ -458,6 +481,23 @@ export default function SocialDiscoveryClient({ brandId }: { brandId: string }) 
   );
   const visiblePromotionPurchase = purchaseResult ?? selectedPost?.promotionPurchase ?? null;
   const selectedCommentAccountNeedsOverride = Boolean(selectedCommentAccount && selectedCommentAccount.source === "manual");
+  const selectedYouTubeChannelId = youtubeRawText(selectedPost, "channelId");
+  const selectedYouTubeChannelTitle = youtubeRawText(selectedPost, "channelTitle");
+  const selectedYouTubeSubscriberCount = youtubeRawNumber(selectedPost, "subscriberCount");
+  const selectedYouTubeViewCount = youtubeRawNumber(selectedPost, "videoViewCount");
+  const selectedYouTubeCommentCount = youtubeRawNumber(selectedPost, "videoCommentCount");
+  const canRestoreSuggestedComment = Boolean(
+    generatedCommentDraft.trim() && generatedCommentDraft.trim() !== commentDraft.trim()
+  );
+  const selectedYouTubeChannelIsWatched = useMemo(
+    () => Boolean(selectedYouTubeChannelId && youtubeSubscriptions.some((entry) => entry.channelId === selectedYouTubeChannelId)),
+    [selectedYouTubeChannelId, youtubeSubscriptions]
+  );
+
+  useEffect(() => {
+    if (!redirectingToCanonicalHost) return;
+    redirectToCanonicalLastB2bHost();
+  }, [redirectingToCanonicalHost]);
 
   useEffect(() => {
     const nextPostId = selectedPost?.id ?? "";
@@ -540,7 +580,9 @@ export default function SocialDiscoveryClient({ brandId }: { brandId: string }) 
     setError("");
     try {
       const query = nextStatus === "all" ? "" : `?status=${nextStatus}`;
-      const response = await fetch(canonicalApiUrl(`/api/brands/${brandId}/social-discovery${query}`), { cache: "no-store" });
+      const response = await fetch(canonicalApiUrl(`/api/brands/${brandId}/social-discovery${query}`), {
+        cache: "no-store",
+      });
       const data = await readDiscoveryResponse(response);
       const cached = readCachedDiscovery(brandId);
       const latestRunId = latestRunIdFrom(data);
@@ -581,7 +623,6 @@ export default function SocialDiscoveryClient({ brandId }: { brandId: string }) 
             };
           })();
       setPosts(nextData.posts);
-      setRuns(nextData.runs);
       const nextSavedQueries = normalizeQueries(nextData.savedQueries);
       const nextSuggestedQueries = normalizeQueries(nextData.suggestedQueries);
       const nextQueries = baselineQueriesFor(nextData);
@@ -597,7 +638,6 @@ export default function SocialDiscoveryClient({ brandId }: { brandId: string }) 
           : current
       );
       setQueryDraft((current) => (current.trim() ? current : nextQueries.join("\n")));
-      setScanMessage(scanMessageFrom(nextData));
       if (hasServerData) {
         writeCachedDiscovery(brandId, {
           ...data,
@@ -610,8 +650,6 @@ export default function SocialDiscoveryClient({ brandId }: { brandId: string }) 
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load social discovery");
       setPosts([]);
-      setRuns([]);
-      setScanMessage("");
     } finally {
       setLoading(false);
     }
@@ -705,10 +743,49 @@ export default function SocialDiscoveryClient({ brandId }: { brandId: string }) 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [brandId, redirectingToCanonicalHost, status]);
 
+  async function runYouTubeSearch() {
+    const query = youtubeSearchDraft.trim();
+    if (!query) {
+      setYouTubeSearchError("Enter a niche or search term first.");
+      return;
+    }
+
+    setSearchingYouTube(true);
+    setYouTubeSearchError("");
+    setYouTubeSearchSummary("");
+    setError("");
+    try {
+      const response = await fetch(canonicalApiUrl(`/api/brands/${brandId}/social-discovery/youtube-discovery`), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          query,
+          accountId: youtubeAccountOptions[0]?.accountId || undefined,
+          maxResults: 12,
+        }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(typeof data?.error === "string" ? data.error : "Failed to search YouTube");
+      }
+      const nextPosts = Array.isArray(data?.posts) ? (data.posts as DiscoveryPost[]) : [];
+      setPosts(nextPosts);
+      setSelectedId(nextPosts[0]?.id ?? "");
+      setYouTubeSearchSummary(
+        nextPosts.length
+          ? `${nextPosts.length} video leads for "${query}".`
+          : `No recent YouTube video leads found for "${query}".`
+      );
+    } catch (err) {
+      setYouTubeSearchError(err instanceof Error ? err.message : "Failed to search YouTube");
+    } finally {
+      setSearchingYouTube(false);
+    }
+  }
+
   async function runScan() {
     setScanning(true);
     setError("");
-    setScanMessage("");
     try {
       const nextQueries = normalizeQueries(queryDraft.split("\n"));
       if (!sameQueries(nextQueries, baselineQueries)) {
@@ -730,14 +807,12 @@ export default function SocialDiscoveryClient({ brandId }: { brandId: string }) 
       writeCachedDiscovery(brandId, data);
       const filteredPosts = filterPostsByStatus(data.posts, status);
       setPosts(filteredPosts);
-      setRuns(data.runs);
       const nextSavedQueries = normalizeQueries(data.savedQueries);
       const nextSuggestedQueries = normalizeQueries(data.suggestedQueries);
       setSavedQueries(nextSavedQueries);
       setSuggestedQueries(nextSuggestedQueries);
       setQueryDraft(baselineQueriesFor(data).join("\n"));
       setSelectedId(filteredPosts[0]?.id ?? "");
-      setScanMessage(scanMessageFrom({ ...data, posts: filteredPosts }));
       if (!filteredPosts.length) {
         await loadPosts(status);
       }
@@ -987,333 +1062,114 @@ export default function SocialDiscoveryClient({ brandId }: { brandId: string }) 
     }
   }
 
-  return redirectingToCanonicalHost ? (
+  return (
     <div className="space-y-6">
       <PageIntro
-        eyebrow="last b2b / Social discovery"
-        title="Refreshing social discovery"
-        description="Moving this tab to www.lastb2b.com so account actions can use the authenticated API host."
-      />
-    </div>
-  ) : (
-    <div className="space-y-6">
-      <PageIntro
-        title="Social comments"
-        description="Scan Instagram manually, or auto-comment new YouTube uploads from watched channels."
-        actions={
-          <Button type="button" onClick={runScan} disabled={scanning}>
-            <RefreshCw className={cn("h-4 w-4", scanning ? "animate-spin" : "")} />
-            {scanning ? "Scanning..." : "Run Instagram scan"}
-          </Button>
-        }
+        title="Comment on YouTube videos"
+        description="Search, pick one video, and post one comment."
       />
 
       {error ? <div className="text-sm text-[color:var(--danger)]">{error}</div> : null}
-      {!error ? (
-        <div className="text-sm text-[color:var(--muted-foreground)]">
-          {runs[0] ? `Last scan ${formatDate(runs[0].finishedAt)}.` : "No scan yet."}
-          {scanMessage ? ` ${scanMessage}` : ""}
-        </div>
-      ) : null}
-
-      {!loading && !posts.length ? (
-        <EmptyState
-          title="No posts yet."
-          description="Run the Instagram scan or wait for watched YouTube uploads to arrive."
-          actions={<Button onClick={runScan} disabled={scanning}>Run Instagram scan</Button>}
-        />
-      ) : null}
-
-      <div className="grid gap-4 xl:grid-cols-2">
-        <SectionPanel title="Comment prompt" description="One saved prompt for this brand.">
-          <div className="space-y-2">
-            <Textarea
-              value={brandCommentPromptDraft}
-              onChange={(event) => setBrandCommentPromptDraft(event.target.value)}
-              rows={6}
-            />
-            <div className="text-xs text-[color:var(--muted-foreground)]">{brandCommentPromptStatusMessage}</div>
-            <div className="flex flex-wrap gap-2">
-              <Button
-                type="button"
-                size="sm"
-                onClick={() => {
-                  void saveBrandCommentPrompt();
-                }}
-                disabled={savingBrandCommentPrompt || !brandCommentPromptDirty}
-              >
-                Save
-              </Button>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={() => {
-                  setBrandCommentPromptDraft(effectiveSavedBrandCommentPrompt);
-                  setBrandCommentPromptError("");
-                }}
-                disabled={savingBrandCommentPrompt || !brandCommentPromptDirty}
-              >
-                Reset
-              </Button>
-            </div>
-            {brandCommentPromptError ? (
-              <div className="rounded-[10px] border border-[color:var(--danger-border)] bg-[color:var(--danger-soft)] px-3 py-2 text-sm text-[color:var(--danger)]">
-                {brandCommentPromptError}
-              </div>
-            ) : null}
-            <div className="text-xs text-[color:var(--muted-foreground)]">
-              Clear it and save if you want to go back to the default prompt.
-            </div>
-          </div>
-        </SectionPanel>
-
-        <SectionPanel title="Instagram search queries" description="Edit the prompts used for manual Instagram scans.">
-          <div className="space-y-2">
-            <Textarea
-              value={queryDraft}
-              onChange={(event) => setQueryDraft(event.target.value)}
-              rows={6}
-              placeholder="One search prompt per line"
-            />
-            <div className="text-xs text-[color:var(--muted-foreground)]">
-              {queryList.length} prompts. {queryStatusMessage}
-            </div>
-            <div className="flex flex-wrap gap-2">
-              <Button
-                type="button"
-                size="sm"
-                onClick={() => {
-                  void saveQueries().catch((err) =>
-                    setError(err instanceof Error ? err.message : "Failed to save search prompts")
-                  );
-                }}
-                disabled={savingQueries || !queriesDirty}
-              >
-                Save
-              </Button>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={() => setQueryDraft(baselineQueries.join("\n"))}
-                disabled={savingQueries}
-              >
-                Reset
-              </Button>
-            </div>
-          </div>
-        </SectionPanel>
-      </div>
 
       <SectionPanel
-        title="YouTube watches"
-        description="Subscribe to channel upload notifications and auto-comment when a new video lands."
+        title="1. Find videos"
+        description="Type a niche and press Search."
       >
         <div className="space-y-4">
-          {youtubeSubscriptionError ? (
+          {youtubeSearchError ? (
             <div className="rounded-[10px] border border-[color:var(--danger-border)] bg-[color:var(--danger-soft)] px-3 py-2 text-sm text-[color:var(--danger)]">
-              {youtubeSubscriptionError}
+              {youtubeSearchError}
             </div>
           ) : null}
-
-          <div className="grid gap-4 xl:grid-cols-[minmax(0,1.2fr)_minmax(240px,0.8fr)_auto]">
-            <div className="space-y-2">
-              <label className="text-sm font-medium text-[color:var(--foreground)]">Channel id</label>
-              <Input
-                value={youtubeChannelIdDraft}
-                onChange={(event) => setYouTubeChannelIdDraft(event.target.value)}
-                placeholder="UC..."
-                disabled={savingYouTubeSubscription}
-              />
-            </div>
-
-            <div className="space-y-2">
-              <label className="text-sm font-medium text-[color:var(--foreground)]">Auto-comment account</label>
-              <Select
-                value={youtubeSubscriptionAccountId}
-                onChange={(event) => setYouTubeSubscriptionAccountId(event.target.value)}
-                disabled={savingYouTubeSubscription || !youtubeAccountOptions.length}
-              >
-                <option value="">{youtubeAutoCommentEnabled ? "Pick account" : "No account"}</option>
-                {youtubeAccountOptions.map((account) => (
-                  <option key={account.accountId} value={account.accountId}>
-                    {account.accountName} · {account.handle || account.fromEmail || account.accountId}
-                  </option>
-                ))}
-              </Select>
-            </div>
-
-            <div className="flex items-end">
-              <Button
-                type="button"
-                onClick={() => {
-                  void saveYouTubeSubscription();
-                }}
-                disabled={savingYouTubeSubscription}
-              >
-                {savingYouTubeSubscription ? "Saving..." : "Watch channel"}
-              </Button>
-            </div>
-          </div>
-
-          <label className="flex items-start gap-3 rounded-[10px] border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-3">
-            <input
-              type="checkbox"
-              checked={youtubeAutoCommentEnabled}
-              onChange={(event) => setYouTubeAutoCommentEnabled(event.target.checked)}
-              className="mt-1 h-4 w-4 rounded border border-[color:var(--border)] bg-[color:var(--background)] accent-[color:var(--accent)]"
+          <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto]">
+            <Input
+              value={youtubeSearchDraft}
+              onChange={(event) => setYouTubeSearchDraft(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  void runYouTubeSearch();
+                }
+              }}
+              placeholder="b2b sales"
+              disabled={searchingYouTube}
             />
-            <span className="min-w-0">
-              <span className="text-sm font-medium text-[color:var(--foreground)]">Auto-comment new uploads</span>
-              <span className="mt-1 block text-sm leading-6 text-[color:var(--muted-foreground)]">
-                YouTube pushes the upload event to this app, then the prepared draft is posted immediately. Cron only renews the subscription lease.
-              </span>
-            </span>
-          </label>
-
-          {!youtubeAccountOptions.length ? (
-            <div className="text-xs text-[color:var(--muted-foreground)]">
-              Add a social account below, then click `Connect YouTube`. If Google app details are missing, the button will ask for them.
-            </div>
-          ) : null}
-
-          {youtubeSubscriptions.length ? (
-            <div className="grid gap-3">
-              {youtubeSubscriptions.map((subscription) => (
-                <div
-                  key={subscription.id}
-                  className="rounded-[10px] border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-3"
-                >
-                  <div className="flex flex-wrap items-start justify-between gap-3">
-                    <div className="space-y-1">
-                      <div className="text-sm font-medium text-[color:var(--foreground)]">
-                        {subscription.channelTitle || subscription.channelId}
-                      </div>
-                      <div className="text-xs text-[color:var(--muted-foreground)]">
-                        {subscription.channelId}
-                        {subscription.accountName ? ` · ${subscription.accountName}` : ""}
-                        {subscription.autoComment ? " · auto-comment on" : " · watch only"}
-                      </div>
-                    </div>
-                    <div className="flex flex-wrap gap-2">
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        onClick={() => {
-                          void saveYouTubeSubscription({
-                            channelId: subscription.channelId,
-                            accountId: subscription.accountId,
-                            autoComment: subscription.autoComment,
-                            leaseSeconds: subscription.leaseSeconds || undefined,
-                          });
-                        }}
-                        disabled={savingYouTubeSubscription}
-                      >
-                        Renew now
-                      </Button>
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => {
-                          void removeYouTubeSubscription(subscription.channelId);
-                        }}
-                        disabled={removingYouTubeChannelId === subscription.channelId}
-                      >
-                        {removingYouTubeChannelId === subscription.channelId ? "Removing..." : "Remove"}
-                      </Button>
-                    </div>
-                  </div>
-
-                  <div className="mt-3 grid gap-1 text-xs text-[color:var(--muted-foreground)]">
-                    <div>Status: {subscription.status}</div>
-                    {subscription.leaseExpiresAt ? <div>Lease expires: {formatDate(subscription.leaseExpiresAt)}</div> : null}
-                    {subscription.lastVerifiedAt ? <div>Verified: {formatDate(subscription.lastVerifiedAt)}</div> : null}
-                    {subscription.lastNotificationAt ? <div>Last upload: {formatDate(subscription.lastNotificationAt)}</div> : null}
-                    {subscription.lastVideoUrl ? (
-                      <div className="flex flex-wrap items-center gap-2">
-                        <span>Last video:</span>
-                        <Link href={subscription.lastVideoUrl} target="_blank" rel="noreferrer" className="underline underline-offset-2">
-                          Open
-                        </Link>
-                      </div>
-                    ) : null}
-                    {subscription.lastCommentUrl ? (
-                      <div className="flex flex-wrap items-center gap-2">
-                        <span>Last comment:</span>
-                        <Link href={subscription.lastCommentUrl} target="_blank" rel="noreferrer" className="underline underline-offset-2">
-                          Open
-                        </Link>
-                      </div>
-                    ) : null}
-                    {subscription.lastError ? (
-                      <div className="text-[color:var(--danger)]">Last error: {subscription.lastError}</div>
-                    ) : null}
-                  </div>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <div className="rounded-[10px] border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-3 text-sm text-[color:var(--muted-foreground)]">
-              No watched YouTube channels yet.
-            </div>
-          )}
+            <Button type="button" onClick={() => void runYouTubeSearch()} disabled={searchingYouTube}>
+              <RefreshCw className={cn("h-4 w-4", searchingYouTube ? "animate-spin" : "")} />
+              {searchingYouTube ? "Searching..." : "Search YouTube"}
+            </Button>
+          </div>
+          <div className="text-sm text-[color:var(--muted-foreground)]">
+            {youtubeSearchSummary || "Example: b2b sales demos"}
+          </div>
+          <div className="text-xs text-[color:var(--muted-foreground)]">
+            {youtubeAccountOptions[0]
+              ? `Ready to post with ${youtubeAccountOptions[0].accountName}.`
+              : "Need to post comments? Open Setup below and add a YouTube account."}
+          </div>
         </div>
       </SectionPanel>
 
-      <SectionPanel
-        title="Add accounts"
-        description="Use the buttons below to add Instagram or YouTube accounts, connect them, and see which ones are ready."
-      >
-        <SocialAccountPoolPanel
-          brandId={brandId}
-          onChanged={() => {
-            void loadPosts(status);
-            void loadCommentAccounts();
-            void loadYouTubeSubscriptions();
-          }}
-        />
-      </SectionPanel>
-
-      <div className="grid gap-4 xl:grid-cols-[340px_minmax(0,1fr)]">
+      <div className="space-y-4">
         <SectionPanel
-          title="Posts"
-          description={loading ? "Loading..." : `${posts.length} found`}
+          title="2. Choose a video"
+          description={loading ? "Loading..." : posts.length ? "Pick one result." : "Search first."}
           contentClassName="p-0"
         >
-          <div className="divide-y divide-[color:var(--border)]">
-            {posts.map((post) => {
-              const active = post.id === selectedPost?.id;
-              return (
-                <button
-                  key={post.id}
-                  type="button"
-                  onClick={() => setSelectedId(post.id)}
-                  className={cn(
-                    "grid w-full gap-1 px-4 py-3 text-left transition-colors hover:bg-[color:var(--surface-muted)]",
-                    active ? "bg-[color:var(--surface-muted)]" : ""
-                  )}
-                >
-                  <div className="line-clamp-2 text-sm font-medium leading-5 text-[color:var(--foreground)]">
-                    {post.title}
-                  </div>
-                  <div className="text-xs text-[color:var(--muted-foreground)]">{formatDate(post.postedAt)}</div>
-                </button>
-              );
-            })}
-          </div>
+          {!loading && !posts.length ? (
+            <div className="px-4 py-5 text-sm text-[color:var(--muted-foreground)]">
+              Search YouTube to load video leads here.
+            </div>
+          ) : (
+            <div className="divide-y divide-[color:var(--border)]">
+              {posts.map((post) => {
+                const active = post.id === selectedPost?.id;
+                const subscriberCount = youtubeRawNumber(post, "subscriberCount");
+                const channelTitle = youtubeRawText(post, "channelTitle");
+                return (
+                  <button
+                    key={post.id}
+                    type="button"
+                    onClick={() => setSelectedId(post.id)}
+                    aria-pressed={active}
+                    className={cn(
+                      "grid w-full gap-2 px-4 py-4 text-left transition-colors hover:bg-[color:var(--surface-muted)]",
+                      active ? "bg-[color:var(--surface-muted)]" : ""
+                    )}
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0 flex-1">
+                        <div className="line-clamp-2 text-sm font-medium leading-5 text-[color:var(--foreground)]">
+                          {post.title}
+                        </div>
+                      </div>
+                      {active ? (
+                        <div className="shrink-0 text-xs font-medium text-[color:var(--foreground)]">Selected</div>
+                      ) : null}
+                    </div>
+                    <div className="text-xs text-[color:var(--muted-foreground)]">
+                      {channelTitle || post.author || "Unknown channel"}
+                      {subscriberCount ? ` · ${formatCompactNumber(subscriberCount)} subs` : ""}
+                    </div>
+                    <div className="text-xs text-[color:var(--muted-foreground)]">
+                      {formatDate(post.postedAt)}
+                      {post.interactionPlan.targetStrength === "target" ? " · ready to comment" : " · watch"}
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          )}
         </SectionPanel>
 
         <SectionPanel
-          title="Comment"
-          description={selectedPost ? `Review the ${selectedCommentPlatformLabel} draft and post it.` : "Choose a post."}
+          title="3. Post comment"
+          description={selectedPost ? "Use the draft below, edit it if needed, then post." : "Pick a video first."}
           actions={
             selectedPost ? (
               <Button asChild variant="outline" size="sm">
                 <Link href={selectedPost.url} target="_blank" rel="noreferrer">
-                  Open post
+                  Open video
                   <ExternalLink className="h-3.5 w-3.5" />
                 </Link>
               </Button>
@@ -1322,205 +1178,242 @@ export default function SocialDiscoveryClient({ brandId }: { brandId: string }) 
         >
           {selectedPost && selectedPlan ? (
             <div className="space-y-4">
-              <div className="rounded-[10px] border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3">
-                <div className="text-sm font-medium text-[color:var(--foreground)]">{selectedPost.title}</div>
+              <div className="rounded-[10px] border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-4">
+                <div className="text-xs font-medium uppercase tracking-[0.16em] text-[color:var(--muted-foreground)]">
+                  Selected video
+                </div>
+                <div className="mt-2 text-sm font-medium text-[color:var(--foreground)]">{selectedPost.title}</div>
+                <div className="mt-1 text-sm text-[color:var(--muted-foreground)]">
+                  {selectedYouTubeChannelTitle || selectedPost.author || "Unknown channel"}
+                  {selectedYouTubeSubscriberCount ? ` · ${formatCompactNumber(selectedYouTubeSubscriberCount)} subscribers` : ""}
+                </div>
                 <div className="mt-1 text-xs text-[color:var(--muted-foreground)]">{formatDate(selectedPost.postedAt)}</div>
                 {selectedPost.body ? (
-                  <div className="mt-2 line-clamp-4 text-sm leading-6 text-[color:var(--muted-foreground)]">
+                  <div className="mt-3 line-clamp-3 text-sm leading-6 text-[color:var(--muted-foreground)]">
                     {selectedPost.body}
                   </div>
                 ) : null}
-              </div>
-
-              <div className="rounded-[10px] border border-[color:var(--border)] p-3">
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <div>
-                    <div className="text-sm font-medium text-[color:var(--foreground)]">Official promo</div>
-                    <div className="text-sm text-[color:var(--muted-foreground)]">
-                      {visiblePromotionDraft && visibleCommentDelivery
-                        ? "Prepared automatically after comment send. Refresh if you want a new brief."
-                        : "Turn this topic into a brand-owned ad brief."}
-                    </div>
-                  </div>
-                  <Button type="button" variant="outline" onClick={createPromotionDraft} disabled={creatingPromo}>
-                    {creatingPromo ? "Creating..." : visiblePromotionDraft ? "Refresh brief" : "Create promo brief"}
-                  </Button>
-                </div>
-                {promoError ? (
-                  <div className="mt-3 rounded-[10px] border border-[color:var(--danger-border)] bg-[color:var(--danger-soft)] px-3 py-2 text-sm text-[color:var(--danger)]">
-                    {promoError}
-                  </div>
-                ) : null}
-                {visiblePromotionDraft ? (
-                  <div className="mt-3 grid gap-3">
-                    <div className="rounded-[10px] bg-[color:var(--surface-muted)] px-3 py-3">
-                      <div className="text-xs font-medium uppercase tracking-[0.16em] text-[color:var(--muted-foreground)]">
-                        Campaign
-                      </div>
-                      <div className="mt-1 text-sm font-medium text-[color:var(--foreground)]">
-                        {visiblePromotionDraft.campaignName}
-                      </div>
-                      <div className="mt-1 text-xs text-[color:var(--muted-foreground)]">
-                        {visiblePromotionDraft.objective} · {visiblePromotionDraft.channel}
-                      </div>
-                    </div>
-                    <div className="grid gap-2">
-                      <div className="text-sm font-medium text-[color:var(--foreground)]">Primary text</div>
-                      <div className="rounded-[10px] bg-[color:var(--surface-muted)] px-3 py-3 text-sm leading-6 text-[color:var(--foreground)]">
-                        {visiblePromotionDraft.primaryText}
-                      </div>
-                    </div>
-                    <div className="grid gap-2">
-                      <div className="text-sm font-medium text-[color:var(--foreground)]">Destination</div>
-                      <div className="break-all rounded-[10px] bg-[color:var(--surface-muted)] px-3 py-3 text-sm text-[color:var(--foreground)]">
-                        {visiblePromotionDraft.destinationUrl}
-                      </div>
-                    </div>
-                    <div className="grid gap-2">
-                      <div className="text-sm font-medium text-[color:var(--foreground)]">Audience</div>
-                      <div className="rounded-[10px] bg-[color:var(--surface-muted)] px-3 py-3 text-sm text-[color:var(--foreground)]">
-                        {visiblePromotionDraft.audience}
-                      </div>
-                    </div>
-                    <div className="flex flex-wrap gap-2">
+                {selectedPost.platform === "youtube" ? (
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {selectedYouTubeChannelId ? (
                       <Button
                         type="button"
-                        variant="outline"
+                        variant={selectedYouTubeChannelIsWatched ? "outline" : "default"}
                         size="sm"
-                        onClick={() => copyText(visiblePromotionDraft.primaryText)}
+                        onClick={() => {
+                          void saveYouTubeSubscription({
+                            channelId: selectedYouTubeChannelId,
+                            autoComment: false,
+                          });
+                        }}
+                        disabled={savingYouTubeSubscription || selectedYouTubeChannelIsWatched}
                       >
-                        Copy text
+                        {selectedYouTubeChannelIsWatched ? "Watching channel" : savingYouTubeSubscription ? "Saving..." : "Watch channel"}
                       </Button>
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        onClick={() => copyText(promotionExportJson)}
-                        disabled={!promotionExportJson}
-                      >
-                        Copy brief
-                      </Button>
-                      <Button asChild type="button" variant="ghost" size="sm">
-                        <Link href={visiblePromotionDraft.destinationUrl} target="_blank" rel="noreferrer">
-                          Open destination
+                    ) : null}
+                    {youtubeChannelUrl(selectedPost) ? (
+                      <Button asChild type="button" variant="outline" size="sm">
+                        <Link href={youtubeChannelUrl(selectedPost)} target="_blank" rel="noreferrer">
+                          Open channel
                           <ExternalLink className="h-3.5 w-3.5" />
                         </Link>
                       </Button>
-                    </div>
-                    <div className="text-xs text-[color:var(--muted-foreground)]">
-                      Uses the source post as research only. Promote your own brand asset, not the third-party post.
-                    </div>
-                    {visiblePromotionPurchase ? (
-                      <div className="rounded-[10px] border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-3">
-                        <div className="flex flex-wrap items-center justify-between gap-3">
-                          <div>
-                            <div className="text-sm font-medium text-[color:var(--foreground)]">BuyShazam order</div>
-                            <div className="text-xs text-[color:var(--muted-foreground)]">
-                              {formatPromotionPurchaseStatus(visiblePromotionPurchase.status)}
-                            </div>
-                          </div>
-                          {visiblePromotionPurchase.orderUrl ? (
-                            <Button asChild type="button" variant="ghost" size="sm">
-                              <Link href={visiblePromotionPurchase.orderUrl} target="_blank" rel="noreferrer">
-                                Open order
-                                <ExternalLink className="h-3.5 w-3.5" />
-                              </Link>
-                            </Button>
-                          ) : visiblePromotionPurchase.checkoutUrl ? (
-                            <Button asChild type="button" variant="ghost" size="sm">
-                              <Link href={visiblePromotionPurchase.checkoutUrl} target="_blank" rel="noreferrer">
-                                Open checkout
-                                <ExternalLink className="h-3.5 w-3.5" />
-                              </Link>
-                            </Button>
-                          ) : null}
-                        </div>
-                        <div className="mt-2 text-sm text-[color:var(--foreground)]">
-                          {visiblePromotionPurchase.message}
-                        </div>
-                        <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-[color:var(--muted-foreground)]">
-                          <div>Cart: {visiblePromotionPurchase.addedToCart ? "added" : "not confirmed"}</div>
-                          {visiblePromotionPurchase.walletOptionLabel ? (
-                            <div>Wallet: {visiblePromotionPurchase.walletOptionLabel}</div>
-                          ) : null}
-                          {visiblePromotionPurchase.walletBalance ? (
-                            <div>Balance: {visiblePromotionPurchase.walletBalance}</div>
-                          ) : null}
-                          {visiblePromotionPurchase.orderId ? <div>Order #{visiblePromotionPurchase.orderId}</div> : null}
-                        </div>
-                        {visiblePromotionPurchase.missingFields.length ? (
-                          <div className="mt-2 text-xs text-[color:var(--warning)]">
-                            Missing checkout fields: {visiblePromotionPurchase.missingFields.join(", ")}
-                          </div>
-                        ) : null}
-                      </div>
                     ) : null}
                   </div>
                 ) : null}
+                {selectedPost.platform === "youtube" &&
+                (selectedPlan.fitSummary || selectedYouTubeViewCount || selectedYouTubeCommentCount) ? (
+                  <details className="mt-3">
+                    <summary className="cursor-pointer text-sm font-medium text-[color:var(--foreground)]">
+                      More details
+                    </summary>
+                    <div className="mt-3 space-y-2 text-sm text-[color:var(--muted-foreground)]">
+                      <div>
+                        {selectedYouTubeViewCount ? `${formatCompactNumber(selectedYouTubeViewCount)} views` : "Views unavailable"}
+                        {selectedYouTubeCommentCount ? ` · ${formatCompactNumber(selectedYouTubeCommentCount)} comments` : ""}
+                      </div>
+                      {selectedPlan.fitSummary ? <div>{selectedPlan.fitSummary}</div> : null}
+                    </div>
+                  </details>
+                ) : null}
               </div>
 
-              {generatedCommentDraft ? (
-                <div className="rounded-[10px] border border-[color:var(--border)] p-3">
-                  <div className="mb-2 text-xs font-medium uppercase tracking-[0.16em] text-[color:var(--muted-foreground)]">
-                    Suggested
+              {selectedPost.platform !== "youtube" ? (
+                <details className="rounded-[10px] border border-[color:var(--border)] p-3">
+                  <summary className="cursor-pointer text-sm font-medium text-[color:var(--foreground)]">
+                    Instagram extras
+                  </summary>
+                  <div className="mt-3">
+                    <div className="rounded-[10px] border border-[color:var(--border)] p-3">
+                      <div className="flex flex-wrap items-center justify-between gap-3">
+                        <div>
+                          <div className="text-sm font-medium text-[color:var(--foreground)]">Official promo</div>
+                          <div className="text-sm text-[color:var(--muted-foreground)]">
+                            {visiblePromotionDraft && visibleCommentDelivery
+                              ? "Prepared automatically after comment send. Refresh if you want a new brief."
+                              : "Turn this topic into a brand-owned ad brief."}
+                          </div>
+                        </div>
+                        <Button type="button" variant="outline" onClick={createPromotionDraft} disabled={creatingPromo}>
+                          {creatingPromo ? "Creating..." : visiblePromotionDraft ? "Refresh brief" : "Create promo brief"}
+                        </Button>
+                      </div>
+                      {promoError ? (
+                        <div className="mt-3 rounded-[10px] border border-[color:var(--danger-border)] bg-[color:var(--danger-soft)] px-3 py-2 text-sm text-[color:var(--danger)]">
+                          {promoError}
+                        </div>
+                      ) : null}
+                      {visiblePromotionDraft ? (
+                        <div className="mt-3 grid gap-3">
+                          <div className="rounded-[10px] bg-[color:var(--surface-muted)] px-3 py-3">
+                            <div className="text-xs font-medium uppercase tracking-[0.16em] text-[color:var(--muted-foreground)]">
+                              Campaign
+                            </div>
+                            <div className="mt-1 text-sm font-medium text-[color:var(--foreground)]">
+                              {visiblePromotionDraft.campaignName}
+                            </div>
+                            <div className="mt-1 text-xs text-[color:var(--muted-foreground)]">
+                              {visiblePromotionDraft.objective} · {visiblePromotionDraft.channel}
+                            </div>
+                          </div>
+                          <div className="grid gap-2">
+                            <div className="text-sm font-medium text-[color:var(--foreground)]">Primary text</div>
+                            <div className="rounded-[10px] bg-[color:var(--surface-muted)] px-3 py-3 text-sm leading-6 text-[color:var(--foreground)]">
+                              {visiblePromotionDraft.primaryText}
+                            </div>
+                          </div>
+                          <div className="grid gap-2">
+                            <div className="text-sm font-medium text-[color:var(--foreground)]">Destination</div>
+                            <div className="break-all rounded-[10px] bg-[color:var(--surface-muted)] px-3 py-3 text-sm text-[color:var(--foreground)]">
+                              {visiblePromotionDraft.destinationUrl}
+                            </div>
+                          </div>
+                          <div className="grid gap-2">
+                            <div className="text-sm font-medium text-[color:var(--foreground)]">Audience</div>
+                            <div className="rounded-[10px] bg-[color:var(--surface-muted)] px-3 py-3 text-sm text-[color:var(--foreground)]">
+                              {visiblePromotionDraft.audience}
+                            </div>
+                          </div>
+                          <div className="flex flex-wrap gap-2">
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              onClick={() => copyText(visiblePromotionDraft.primaryText)}
+                            >
+                              Copy text
+                            </Button>
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              onClick={() => copyText(promotionExportJson)}
+                              disabled={!promotionExportJson}
+                            >
+                              Copy brief
+                            </Button>
+                            <Button asChild type="button" variant="ghost" size="sm">
+                              <Link href={visiblePromotionDraft.destinationUrl} target="_blank" rel="noreferrer">
+                                Open destination
+                                <ExternalLink className="h-3.5 w-3.5" />
+                              </Link>
+                            </Button>
+                          </div>
+                          <div className="text-xs text-[color:var(--muted-foreground)]">
+                            Uses the source post as research only. Promote your own brand asset, not the third-party post.
+                          </div>
+                          {visiblePromotionPurchase ? (
+                            <div className="rounded-[10px] border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-3">
+                              <div className="flex flex-wrap items-center justify-between gap-3">
+                                <div>
+                                  <div className="text-sm font-medium text-[color:var(--foreground)]">BuyShazam order</div>
+                                  <div className="text-xs text-[color:var(--muted-foreground)]">
+                                    {formatPromotionPurchaseStatus(visiblePromotionPurchase.status)}
+                                  </div>
+                                </div>
+                                {visiblePromotionPurchase.orderUrl ? (
+                                  <Button asChild type="button" variant="ghost" size="sm">
+                                    <Link href={visiblePromotionPurchase.orderUrl} target="_blank" rel="noreferrer">
+                                      Open order
+                                      <ExternalLink className="h-3.5 w-3.5" />
+                                    </Link>
+                                  </Button>
+                                ) : visiblePromotionPurchase.checkoutUrl ? (
+                                  <Button asChild type="button" variant="ghost" size="sm">
+                                    <Link href={visiblePromotionPurchase.checkoutUrl} target="_blank" rel="noreferrer">
+                                      Open checkout
+                                      <ExternalLink className="h-3.5 w-3.5" />
+                                    </Link>
+                                  </Button>
+                                ) : null}
+                              </div>
+                              <div className="mt-2 text-sm text-[color:var(--foreground)]">
+                                {visiblePromotionPurchase.message}
+                              </div>
+                              <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-[color:var(--muted-foreground)]">
+                                <div>Cart: {visiblePromotionPurchase.addedToCart ? "added" : "not confirmed"}</div>
+                                {visiblePromotionPurchase.walletOptionLabel ? (
+                                  <div>Wallet: {visiblePromotionPurchase.walletOptionLabel}</div>
+                                ) : null}
+                                {visiblePromotionPurchase.walletBalance ? (
+                                  <div>Balance: {visiblePromotionPurchase.walletBalance}</div>
+                                ) : null}
+                                {visiblePromotionPurchase.orderId ? <div>Order #{visiblePromotionPurchase.orderId}</div> : null}
+                              </div>
+                              {visiblePromotionPurchase.missingFields.length ? (
+                                <div className="mt-2 text-xs text-[color:var(--warning)]">
+                                  Missing checkout fields: {visiblePromotionPurchase.missingFields.join(", ")}
+                                </div>
+                              ) : null}
+                            </div>
+                          ) : null}
+                        </div>
+                      ) : null}
+                    </div>
                   </div>
-                  <div className="rounded-[10px] bg-[color:var(--surface-muted)] px-3 py-3 text-sm leading-6 text-[color:var(--foreground)]">
-                    {generatedCommentDraft}
-                  </div>
-                  <div className="flex flex-wrap gap-2">
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      onClick={() => {
-                        setCommentDraft(generatedCommentDraft);
-                        lastAutoCommentDraftRef.current = generatedCommentDraft;
-                      }}
-                    >
-                      Use suggestion
-                    </Button>
-                    <Button type="button" variant="ghost" size="sm" onClick={() => copyText(generatedCommentDraft)}>
-                      Copy
-                    </Button>
-                  </div>
-                </div>
+                </details>
               ) : null}
 
               {commentAccountOptions.length ? (
                 <div className="space-y-3">
-                  {commentAccountOptions.length === 1 ? (
-                    <div className="rounded-[10px] border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-3">
-                      <div className="text-xs font-medium uppercase tracking-[0.16em] text-[color:var(--muted-foreground)]">
-                        Account
-                      </div>
-                      <div className="mt-1 text-sm font-medium text-[color:var(--foreground)]">
-                        {commentAccountOptions[0].accountName}
-                      </div>
-                      <div className="text-xs text-[color:var(--muted-foreground)]">
-                        {commentAccountOptions[0].handle || commentAccountOptions[0].fromEmail || commentAccountOptions[0].externalAccountId}
-                      </div>
+                  <div className="rounded-[10px] border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-3">
+                    <div className="text-xs font-medium uppercase tracking-[0.16em] text-[color:var(--muted-foreground)]">
+                      Posting as
                     </div>
-                  ) : (
-                    <div className="grid gap-2">
-                      <label className="text-sm font-medium text-[color:var(--foreground)]">Account</label>
-                      <Select value={commentAccountId} onChange={(event) => setCommentAccountId(event.target.value)}>
-                        {commentAccountOptions.map((account) => (
-                          <option key={account.accountId} value={account.accountId}>
-                            {account.accountName} · {account.handle || account.fromEmail || account.externalAccountId}
-                          </option>
-                        ))}
-                      </Select>
+                    <div className="mt-1 text-sm font-medium text-[color:var(--foreground)]">
+                      {selectedCommentAccount?.accountName ?? "Choose an account"}
                     </div>
-                  )}
-                  {selectedCommentAccountNeedsOverride ? (
-                    <div className="text-xs text-[color:var(--warning)]">Manual account selected.</div>
+                    <div className="text-xs text-[color:var(--muted-foreground)]">
+                      {selectedCommentAccount?.handle ||
+                        selectedCommentAccount?.fromEmail ||
+                        selectedCommentAccount?.externalAccountId ||
+                        ""}
+                    </div>
+                  </div>
+
+                  {commentAccountOptions.length > 1 ? (
+                    <details className="rounded-[10px] border border-[color:var(--border)] p-3">
+                      <summary className="cursor-pointer text-sm font-medium text-[color:var(--foreground)]">
+                        Change account
+                      </summary>
+                      <div className="mt-3 grid gap-2">
+                        <label className="text-sm font-medium text-[color:var(--foreground)]">Account</label>
+                        <Select value={commentAccountId} onChange={(event) => setCommentAccountId(event.target.value)}>
+                          {commentAccountOptions.map((account) => (
+                            <option key={account.accountId} value={account.accountId}>
+                              {account.accountName} · {account.handle || account.fromEmail || account.externalAccountId}
+                            </option>
+                          ))}
+                        </Select>
+                        {selectedCommentAccountNeedsOverride ? (
+                          <div className="text-xs text-[color:var(--warning)]">You chose a backup account.</div>
+                        ) : null}
+                      </div>
+                    </details>
                   ) : null}
 
                   <div className="grid gap-2">
                     <label className="text-sm font-medium text-[color:var(--foreground)]">Comment</label>
-                    {commentGenerationPending ? (
-                      <div className="text-xs text-[color:var(--muted-foreground)]">Generating comment...</div>
-                    ) : null}
                     <Textarea
                       value={commentDraft}
                       onChange={(event) => {
@@ -1529,12 +1422,32 @@ export default function SocialDiscoveryClient({ brandId }: { brandId: string }) 
                       }}
                       rows={7}
                       maxLength={1250}
-                      placeholder={commentGenerationPending ? "Generating..." : "Write the comment"}
+                      placeholder={commentGenerationPending ? "Writing draft..." : "Write the comment"}
                       disabled={commentGenerationPending || sendingComment}
                     />
-                    <div className="text-xs text-[color:var(--muted-foreground)]">
-                      {commentGenerationPending ? "Waiting for the generated comment." : `${commentDraft.trim().length}/1250`}
+                    <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-[color:var(--muted-foreground)]">
+                      <div>
+                        {commentGenerationPending
+                          ? "Writing a draft for you..."
+                          : "Edit the draft if you want, then press Post comment."}
+                      </div>
+                      <div>{commentDraft.trim().length}/1250</div>
                     </div>
+                    {canRestoreSuggestedComment ? (
+                      <div>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => {
+                            setCommentDraft(generatedCommentDraft);
+                            lastAutoCommentDraftRef.current = generatedCommentDraft;
+                          }}
+                        >
+                          Use draft again
+                        </Button>
+                      </div>
+                    ) : null}
                   </div>
 
                   {selectedCommentPlatform === "instagram" ? (
@@ -1558,6 +1471,7 @@ export default function SocialDiscoveryClient({ brandId }: { brandId: string }) 
                       {commentError}
                     </div>
                   ) : null}
+
                   {visibleCommentDelivery ? (
                     <div
                       className={cn(
@@ -1575,96 +1489,90 @@ export default function SocialDiscoveryClient({ brandId }: { brandId: string }) 
                             : "text-[color:var(--warning)]"
                         )}
                       >
-                        {visibleCommentDelivery.status === "verified" ? "Posted and verified" : "Posted, waiting on verification"}
+                        {visibleCommentDelivery.status === "verified" ? "Comment posted" : "Comment sent"}
                       </div>
                       <div className="mt-1 text-sm text-[color:var(--foreground)]">{visibleCommentDelivery.message}</div>
-                      <div className="mt-3 rounded-[10px] border border-[color:var(--border)] bg-[color:var(--background)] px-3 py-3">
-                        <div className="text-xs font-medium uppercase tracking-[0.16em] text-[color:var(--muted-foreground)]">
-                          Last posted comment
+                      {visibleCommentDelivery.commentUrl ? (
+                        <div className="mt-3 flex flex-wrap gap-2">
+                          <Button asChild type="button" variant="outline" size="sm">
+                            <Link href={visibleCommentDelivery.commentUrl} target="_blank" rel="noreferrer">
+                              Open comment
+                              <ExternalLink className="h-3.5 w-3.5" />
+                            </Link>
+                          </Button>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => copyText(visibleCommentDelivery.commentUrl)}
+                          >
+                            Copy link
+                          </Button>
                         </div>
-                        {visibleCommentDelivery.commentUrl ? (
-                          <div className="mt-2 space-y-2">
-                            <div className="break-all rounded-[8px] bg-[color:var(--surface-muted)] px-3 py-2 font-mono text-xs text-[color:var(--foreground)]">
-                              {visibleCommentDelivery.commentUrl}
-                            </div>
-                            <div className="flex flex-wrap gap-2">
-                              <Button asChild type="button" variant="outline" size="sm">
-                                <Link href={visibleCommentDelivery.commentUrl} target="_blank" rel="noreferrer">
-                                  Open comment
-                                  <ExternalLink className="h-3.5 w-3.5" />
-                                </Link>
-                              </Button>
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                size="sm"
-                                onClick={() => copyText(visibleCommentDelivery.commentUrl)}
-                              >
-                                Copy link
-                              </Button>
-                            </div>
-                          </div>
-                        ) : (
-                          <div className="mt-2 text-sm text-[color:var(--muted-foreground)]">
-                            No permalink returned for this comment yet.
-                          </div>
-                        )}
-                      </div>
-                      {commentExportPayload ? (
-                        <div className="mt-3 rounded-[10px] border border-[color:var(--border)] bg-[color:var(--background)] px-3 py-3">
-                          <div className="text-xs font-medium uppercase tracking-[0.16em] text-[color:var(--muted-foreground)]">
-                            Export
-                          </div>
-                          <div className="mt-2 grid gap-3">
-                            {commentExportPayload.altCommentUrl ? (
-                              <div className="grid gap-2">
-                                <div className="text-sm font-medium text-[color:var(--foreground)]">Alt Instagram link</div>
-                                <div className="break-all rounded-[8px] bg-[color:var(--surface-muted)] px-3 py-2 font-mono text-xs text-[color:var(--foreground)]">
-                                  {commentExportPayload.altCommentUrl}
-                                </div>
+                      ) : null}
+                      <details className="mt-3">
+                        <summary className="cursor-pointer text-sm font-medium text-[color:var(--foreground)]">
+                          Show details
+                        </summary>
+                        <div className="mt-3 space-y-3">
+                          {commentExportPayload ? (
+                            <div className="rounded-[10px] border border-[color:var(--border)] bg-[color:var(--background)] px-3 py-3">
+                              <div className="text-xs font-medium uppercase tracking-[0.16em] text-[color:var(--muted-foreground)]">
+                                Export
+                              </div>
+                              <div className="mt-2 grid gap-3">
+                                {commentExportPayload.altCommentUrl ? (
+                                  <div className="grid gap-2">
+                                    <div className="text-sm font-medium text-[color:var(--foreground)]">Alt Instagram link</div>
+                                    <div className="break-all rounded-[8px] bg-[color:var(--surface-muted)] px-3 py-2 font-mono text-xs text-[color:var(--foreground)]">
+                                      {commentExportPayload.altCommentUrl}
+                                    </div>
+                                    <div className="flex flex-wrap gap-2">
+                                      <Button
+                                        type="button"
+                                        variant="ghost"
+                                        size="sm"
+                                        onClick={() => copyText(commentExportPayload.altCommentUrl)}
+                                      >
+                                        Copy alt link
+                                      </Button>
+                                    </div>
+                                  </div>
+                                ) : null}
                                 <div className="flex flex-wrap gap-2">
                                   <Button
                                     type="button"
-                                    variant="ghost"
+                                    variant="outline"
                                     size="sm"
-                                    onClick={() => copyText(commentExportPayload.altCommentUrl)}
+                                    onClick={() => copyText(commentExportJson)}
+                                    disabled={!commentExportJson}
                                   >
-                                    Copy alt link
+                                    Copy JSON
                                   </Button>
                                 </div>
                               </div>
-                            ) : null}
-                            <div className="flex flex-wrap gap-2">
-                              <Button
-                                type="button"
-                                variant="outline"
-                                size="sm"
-                                onClick={() => copyText(commentExportJson)}
-                                disabled={!commentExportJson}
-                              >
-                                Copy JSON
-                              </Button>
                             </div>
+                          ) : null}
+                          <div className="space-y-1 text-xs text-[color:var(--muted-foreground)]">
+                            {visibleCommentDelivery.accountName ? (
+                              <div>
+                                Account: {visibleCommentDelivery.accountName}
+                                {visibleCommentDelivery.accountHandle ? ` ${visibleCommentDelivery.accountHandle}` : ""}
+                              </div>
+                            ) : null}
+                            {visibleCommentDelivery.commentId ? <div>Comment id: {visibleCommentDelivery.commentId}</div> : null}
+                            {visibleCommentDelivery.source ? <div>Checked via: {visibleCommentDelivery.source}</div> : null}
+                            <div>Updated: {formatDate(visibleCommentDelivery.postedAt)}</div>
                           </div>
                         </div>
-                      ) : null}
-                      <div className="mt-2 space-y-1 text-xs text-[color:var(--muted-foreground)]">
-                        {visibleCommentDelivery.accountName ? (
-                          <div>
-                            Account: {visibleCommentDelivery.accountName}
-                            {visibleCommentDelivery.accountHandle ? ` ${visibleCommentDelivery.accountHandle}` : ""}
-                          </div>
-                        ) : null}
-                        {visibleCommentDelivery.commentId ? <div>Comment id: {visibleCommentDelivery.commentId}</div> : null}
-                        {visibleCommentDelivery.source ? <div>Checked via: {visibleCommentDelivery.source}</div> : null}
-                        <div>Updated: {formatDate(visibleCommentDelivery.postedAt)}</div>
-                      </div>
+                      </details>
                     </div>
                   ) : null}
 
                   <Button
                     type="button"
                     size="lg"
+                    className="w-full sm:w-auto"
                     onClick={sendComment}
                     disabled={sendingComment || commentGenerationPending || !commentDraft.trim()}
                   >
@@ -1674,16 +1582,280 @@ export default function SocialDiscoveryClient({ brandId }: { brandId: string }) 
               ) : (
                 <div className="rounded-[10px] border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-3 text-sm text-[color:var(--muted-foreground)]">
                   {selectedCommentPlatform === "youtube"
-                    ? "Add a YouTube account first."
+                    ? 'You need one connected YouTube account before you can post. Open "Setup" below.'
                     : "Add an Instagram account first."}
                 </div>
               )}
             </div>
           ) : (
-            <div className="text-sm text-[color:var(--muted-foreground)]">Choose a post from the left.</div>
+            <div className="text-sm text-[color:var(--muted-foreground)]">Pick a video above.</div>
           )}
         </SectionPanel>
       </div>
+
+      <details className="rounded-[12px] border border-[color:var(--border)] bg-[color:var(--surface)]">
+        <summary className="cursor-pointer px-4 py-3 text-sm font-medium text-[color:var(--foreground)]">
+          Setup and older tools
+        </summary>
+        <div className="space-y-4 border-t border-[color:var(--border)] px-4 py-4">
+          <div className="grid gap-4 xl:grid-cols-2">
+            <SectionPanel title="Comment prompt" description="One saved prompt for this brand.">
+              <div className="space-y-2">
+                <Textarea
+                  value={brandCommentPromptDraft}
+                  onChange={(event) => setBrandCommentPromptDraft(event.target.value)}
+                  rows={6}
+                />
+                <div className="text-xs text-[color:var(--muted-foreground)]">{brandCommentPromptStatusMessage}</div>
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    type="button"
+                    size="sm"
+                    onClick={() => {
+                      void saveBrandCommentPrompt();
+                    }}
+                    disabled={savingBrandCommentPrompt || !brandCommentPromptDirty}
+                  >
+                    Save
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => {
+                      setBrandCommentPromptDraft(effectiveSavedBrandCommentPrompt);
+                      setBrandCommentPromptError("");
+                    }}
+                    disabled={savingBrandCommentPrompt || !brandCommentPromptDirty}
+                  >
+                    Reset
+                  </Button>
+                </div>
+                {brandCommentPromptError ? (
+                  <div className="rounded-[10px] border border-[color:var(--danger-border)] bg-[color:var(--danger-soft)] px-3 py-2 text-sm text-[color:var(--danger)]">
+                    {brandCommentPromptError}
+                  </div>
+                ) : null}
+                <div className="text-xs text-[color:var(--muted-foreground)]">
+                  Clear it and save if you want to go back to the default prompt.
+                </div>
+              </div>
+            </SectionPanel>
+
+            <SectionPanel title="Instagram scan" description="Keep the old manual Instagram workflow here.">
+              <div className="space-y-2">
+                <Textarea
+                  value={queryDraft}
+                  onChange={(event) => setQueryDraft(event.target.value)}
+                  rows={6}
+                  placeholder="One search prompt per line"
+                />
+                <div className="text-xs text-[color:var(--muted-foreground)]">
+                  {queryList.length} prompts. {queryStatusMessage}
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    type="button"
+                    size="sm"
+                    onClick={() => {
+                      void saveQueries().catch((err) =>
+                        setError(err instanceof Error ? err.message : "Failed to save search prompts")
+                      );
+                    }}
+                    disabled={savingQueries || !queriesDirty}
+                  >
+                    Save
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setQueryDraft(baselineQueries.join("\n"))}
+                    disabled={savingQueries}
+                  >
+                    Reset
+                  </Button>
+                  <Button type="button" variant="outline" size="sm" onClick={runScan} disabled={scanning}>
+                    <RefreshCw className={cn("h-4 w-4", scanning ? "animate-spin" : "")} />
+                    {scanning ? "Scanning..." : "Run scan"}
+                  </Button>
+                </div>
+              </div>
+            </SectionPanel>
+          </div>
+
+          <SectionPanel
+            title="YouTube watches"
+            description="Subscribe to channel upload notifications and optionally auto-comment future uploads."
+          >
+            <div className="space-y-4">
+              {youtubeSubscriptionError ? (
+                <div className="rounded-[10px] border border-[color:var(--danger-border)] bg-[color:var(--danger-soft)] px-3 py-2 text-sm text-[color:var(--danger)]">
+                  {youtubeSubscriptionError}
+                </div>
+              ) : null}
+
+              <div className="grid gap-4 xl:grid-cols-[minmax(0,1.2fr)_minmax(240px,0.8fr)_auto]">
+                <div className="space-y-2">
+                  <label className="text-sm font-medium text-[color:var(--foreground)]">Channel id</label>
+                  <Input
+                    value={youtubeChannelIdDraft}
+                    onChange={(event) => setYouTubeChannelIdDraft(event.target.value)}
+                    placeholder="UC..."
+                    disabled={savingYouTubeSubscription}
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-sm font-medium text-[color:var(--foreground)]">Auto-comment account</label>
+                  <Select
+                    value={youtubeSubscriptionAccountId}
+                    onChange={(event) => setYouTubeSubscriptionAccountId(event.target.value)}
+                    disabled={savingYouTubeSubscription || !youtubeAccountOptions.length}
+                  >
+                    <option value="">{youtubeAutoCommentEnabled ? "Pick account" : "No account"}</option>
+                    {youtubeAccountOptions.map((account) => (
+                      <option key={account.accountId} value={account.accountId}>
+                        {account.accountName} · {account.handle || account.fromEmail || account.accountId}
+                      </option>
+                    ))}
+                  </Select>
+                </div>
+
+                <div className="flex items-end">
+                  <Button
+                    type="button"
+                    onClick={() => {
+                      void saveYouTubeSubscription();
+                    }}
+                    disabled={savingYouTubeSubscription}
+                  >
+                    {savingYouTubeSubscription ? "Saving..." : "Watch channel"}
+                  </Button>
+                </div>
+              </div>
+
+              <label className="flex items-start gap-3 rounded-[10px] border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-3">
+                <input
+                  type="checkbox"
+                  checked={youtubeAutoCommentEnabled}
+                  onChange={(event) => setYouTubeAutoCommentEnabled(event.target.checked)}
+                  className="mt-1 h-4 w-4 rounded border border-[color:var(--border)] bg-[color:var(--background)] accent-[color:var(--accent)]"
+                />
+                <span className="min-w-0">
+                  <span className="text-sm font-medium text-[color:var(--foreground)]">Auto-comment new uploads</span>
+                  <span className="mt-1 block text-sm leading-6 text-[color:var(--muted-foreground)]">
+                    YouTube pushes the upload event here, then the prepared draft can post automatically.
+                  </span>
+                </span>
+              </label>
+
+              {!youtubeAccountOptions.length ? (
+                <div className="text-xs text-[color:var(--muted-foreground)]">
+                  Add a social account below, then click `Connect YouTube`. If Google app details are missing, the button will ask for them.
+                </div>
+              ) : null}
+
+              {youtubeSubscriptions.length ? (
+                <div className="grid gap-3">
+                  {youtubeSubscriptions.map((subscription) => (
+                    <div
+                      key={subscription.id}
+                      className="rounded-[10px] border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-3"
+                    >
+                      <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div className="space-y-1">
+                          <div className="text-sm font-medium text-[color:var(--foreground)]">
+                            {subscription.channelTitle || subscription.channelId}
+                          </div>
+                          <div className="text-xs text-[color:var(--muted-foreground)]">
+                            {subscription.channelId}
+                            {subscription.accountName ? ` · ${subscription.accountName}` : ""}
+                            {subscription.autoComment ? " · auto-comment on" : " · watch only"}
+                          </div>
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            onClick={() => {
+                              void saveYouTubeSubscription({
+                                channelId: subscription.channelId,
+                                accountId: subscription.accountId,
+                                autoComment: subscription.autoComment,
+                                leaseSeconds: subscription.leaseSeconds || undefined,
+                              });
+                            }}
+                            disabled={savingYouTubeSubscription}
+                          >
+                            Renew now
+                          </Button>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => {
+                              void removeYouTubeSubscription(subscription.channelId);
+                            }}
+                            disabled={removingYouTubeChannelId === subscription.channelId}
+                          >
+                            {removingYouTubeChannelId === subscription.channelId ? "Removing..." : "Remove"}
+                          </Button>
+                        </div>
+                      </div>
+
+                      <div className="mt-3 grid gap-1 text-xs text-[color:var(--muted-foreground)]">
+                        <div>Status: {subscription.status}</div>
+                        {subscription.leaseExpiresAt ? <div>Lease expires: {formatDate(subscription.leaseExpiresAt)}</div> : null}
+                        {subscription.lastVerifiedAt ? <div>Verified: {formatDate(subscription.lastVerifiedAt)}</div> : null}
+                        {subscription.lastNotificationAt ? <div>Last upload: {formatDate(subscription.lastNotificationAt)}</div> : null}
+                        {subscription.lastVideoUrl ? (
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span>Last video:</span>
+                            <Link href={subscription.lastVideoUrl} target="_blank" rel="noreferrer" className="underline underline-offset-2">
+                              Open
+                            </Link>
+                          </div>
+                        ) : null}
+                        {subscription.lastCommentUrl ? (
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span>Last comment:</span>
+                            <Link href={subscription.lastCommentUrl} target="_blank" rel="noreferrer" className="underline underline-offset-2">
+                              Open
+                            </Link>
+                          </div>
+                        ) : null}
+                        {subscription.lastError ? (
+                          <div className="text-[color:var(--danger)]">Last error: {subscription.lastError}</div>
+                        ) : null}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="rounded-[10px] border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-3 text-sm text-[color:var(--muted-foreground)]">
+                  No watched YouTube channels yet.
+                </div>
+              )}
+            </div>
+          </SectionPanel>
+
+          <SectionPanel
+            title="Add accounts"
+            description="Use the buttons below to add Instagram or YouTube accounts, connect them, and see which ones are ready."
+          >
+            <SocialAccountPoolPanel
+              brandId={brandId}
+              onChanged={() => {
+                void loadPosts(status);
+                void loadCommentAccounts();
+                void loadYouTubeSubscriptions();
+              }}
+            />
+          </SectionPanel>
+        </div>
+      </details>
     </div>
   );
 }

@@ -22,8 +22,8 @@ import {
   getBrandOutreachAssignment,
   getOutreachAccount,
   getOutreachAccountSecrets,
+  OutreachDataError,
   listOutreachAccounts,
-  setBrandOutreachAssignment,
   updateOutreachAccount,
   type OutreachAccountSecrets,
 } from "@/lib/outreach-data";
@@ -57,7 +57,9 @@ import { testOutreachProviders } from "@/lib/outreach-providers";
 import { pickWebshareProxy } from "@/lib/webshare-client";
 import { buildGmailUiUserDataDir } from "@/lib/gmail-ui-profile";
 import { normalizeGmailUiLoginStatus } from "@/lib/gmail-ui-login";
-import path from "path";
+import { MAX_ACTIVE_SENDERS_PER_DOMAIN } from "@/lib/sender-capacity";
+import { syncCanonicalSenderFromProvisionedAccount } from "@/lib/senders";
+import { setBrandOutreachAssignmentWithWarmup } from "@/lib/sender-warmup-campaigns";
 
 type NamecheapHostRecord = {
   type: "A" | "AAAA" | "ALIAS" | "CNAME" | "FRAME" | "MX" | "MXE" | "NS" | "TXT" | "URL" | "URL301";
@@ -195,6 +197,48 @@ function nowIso() {
 
 function normalizeDomain(value: string) {
   return value.trim().toLowerCase().replace(/^https?:\/\//, "").replace(/^www\./, "").replace(/\/.*$/, "");
+}
+
+async function assertBrandHasAutoAssignmentCapacity(input: {
+  brandId: string;
+  fromEmail: string;
+  assignToBrand?: boolean;
+}) {
+  if (input.assignToBrand === false) return;
+
+  const targetDomain = normalizeDomain(String(input.fromEmail.split("@")[1] ?? ""));
+  if (!targetDomain) return;
+
+  const assignment = await getBrandOutreachAssignment(input.brandId);
+  if (!assignment?.accountIds.length) return;
+
+  const existingAccounts = await Promise.all(
+    assignment.accountIds.map((accountId) => getOutreachAccount(accountId))
+  );
+  const activeSameDomainCount = existingAccounts.filter((account) => {
+    if (!account || account.status !== "active") return false;
+    const fromEmail = getOutreachAccountFromEmail(account).trim().toLowerCase();
+    return normalizeDomain(fromEmail.split("@")[1] ?? "") === targetDomain;
+  }).length;
+
+  if (activeSameDomainCount >= MAX_ACTIVE_SENDERS_PER_DOMAIN) {
+    throw new OutreachDataError(
+      `Only ${MAX_ACTIVE_SENDERS_PER_DOMAIN} active sending inboxes are allowed on ${targetDomain}.`,
+      {
+        status: 400,
+        hint: "Provision the sender as unassigned standby, or rotate an existing active sender off that domain first.",
+        debug: {
+          operation: "provisionSender:autoAssignmentCapacity",
+          brandId: input.brandId,
+          fromEmail: input.fromEmail,
+          targetDomain,
+          activeSameDomainCount,
+          maxActiveSendersPerDomain: MAX_ACTIVE_SENDERS_PER_DOMAIN,
+          assignmentAccountIds: assignment.accountIds,
+        },
+      }
+    );
+  }
 }
 
 function normalizeEmailLocalPart(value: string) {
@@ -1330,6 +1374,9 @@ async function ensureMailpoolHybridAccount(input: {
   const wantsWebshare = String(process.env.WEBSHARE_AUTO_ASSIGN_PROXY ?? "").trim().toLowerCase() === "true";
   const profileRoot = String(process.env.GMAIL_UI_PROFILE_ROOT ?? "").trim();
   const profileDir = buildGmailUiUserDataDir(profileRoot, fromEmail);
+  const mailboxPassword = wantsWebshare
+    ? String(input.mailbox.password ?? input.mailbox.imapPassword ?? "").trim()
+    : String(input.mailbox.imapPassword ?? input.mailbox.password ?? "").trim();
   const loginStatus = normalizeGmailUiLoginStatus({
     deliveryMethod: wantsWebshare ? "gmail_ui" : "smtp",
     forceLoginRequired: wantsWebshare,
@@ -1399,8 +1446,7 @@ async function ensureMailpoolHybridAccount(input: {
       },
     },
     credentials: {
-      mailboxPassword:
-        String(input.mailbox.imapPassword ?? input.mailbox.password ?? "").trim(),
+      mailboxPassword,
       mailboxAuthCode: String(input.mailbox.authCode ?? "").trim(),
       mailboxSmtpPassword:
         String(input.mailbox.smtpPassword ?? input.mailbox.password ?? "").trim(),
@@ -1931,6 +1977,11 @@ export async function provisionCustomerIoSender(
     throw new Error("Sender local-part is required");
   }
   const fromEmail = `${fromLocalPart}@${domain}`;
+  await assertBrandHasAutoAssignmentCapacity({
+    brandId: brand.id,
+    fromEmail,
+    assignToBrand: input.assignToBrand,
+  });
   const customerIoConnection = await resolveCustomerIoProvisioningConnection(input);
   const namecheapCredentials = await resolveNamecheapCredentials(input);
   const forwardingTargetUrl = input.forwardingTargetUrl?.trim()
@@ -2156,7 +2207,7 @@ export async function provisionCustomerIoSender(
   const assignment =
     input.assignToBrand === false
       ? null
-      : await setBrandOutreachAssignment(brand.id, {
+      : await setBrandOutreachAssignmentWithWarmup(brand.id, {
           accountId: account.id,
           mailboxAccountId: mailboxSelection,
         });
@@ -2207,6 +2258,13 @@ export async function provisionCustomerIoSender(
 
   const updatedBrand = await updateBrand(brand.id, {
     domains: nextDomains,
+  });
+  await syncCanonicalSenderFromProvisionedAccount({
+    brandId: brand.id,
+    accountId: account.id,
+    mailboxAccountId: assignment?.mailboxAccountId || mailboxSelection,
+    brand: updatedBrand ?? brand,
+    assignment,
   });
 
   const deliverabilitySettings = await getOutreachProvisioningSettings();
@@ -2307,6 +2365,11 @@ export async function provisionMailpoolSender(
       ? normalizeForwardingTargetUrl(brand.website)
       : "";
   const fromEmail = `${fromLocalPart}@${domain}`;
+  await assertBrandHasAutoAssignmentCapacity({
+    brandId: brand.id,
+    fromEmail,
+    assignToBrand: input.assignToBrand,
+  });
   const { firstName, lastName } = deriveMailboxNameParts({
     brand,
     accountName: input.accountName,
@@ -2419,7 +2482,7 @@ export async function provisionMailpoolSender(
   const assignment =
     input.assignToBrand === false
       ? null
-      : await setBrandOutreachAssignment(brand.id, {
+      : await setBrandOutreachAssignmentWithWarmup(brand.id, {
           accountId: account.id,
           mailboxAccountId: account.id,
         });
@@ -2451,6 +2514,13 @@ export async function provisionMailpoolSender(
   }
   const updatedBrand = await updateBrand(brand.id, {
     domains: nextDomains,
+  });
+  await syncCanonicalSenderFromProvisionedAccount({
+    brandId: brand.id,
+    accountId: account.id,
+    mailboxAccountId: account.id,
+    brand: updatedBrand ?? brand,
+    assignment,
   });
 
   if (settings.deliverability.provider !== "none") {

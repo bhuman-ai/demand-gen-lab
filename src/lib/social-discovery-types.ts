@@ -5,7 +5,7 @@ export type SocialDiscoveryPlatform =
   | "linkedin"
   | "product-hunt"
   | "youtube";
-export type SocialDiscoveryProvider = "exa" | "dataforseo" | "youtube-websub";
+export type SocialDiscoveryProvider = "exa" | "dataforseo" | "youtube-data-api" | "youtube-websub";
 export type SocialDiscoveryActorRole =
   | "operator"
   | "specialist"

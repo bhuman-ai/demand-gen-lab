@@ -18,6 +18,7 @@ import {
 import { syncBrandGmailUiAssignments } from "@/lib/gmail-ui-brand-sync";
 import { enrichBrandWithSenderHealth } from "@/lib/sender-health";
 import { loadBrandSenderLaunchView } from "@/lib/sender-launch";
+import { buildSocialDiscoveryQueries } from "@/lib/social-discovery";
 
 function asRecord(value: unknown): Record<string, unknown> {
   if (value && typeof value === "object" && !Array.isArray(value)) {
@@ -153,6 +154,15 @@ function normalizeStringArray(value: unknown): string[] {
     .filter((entry) => entry.length > 0);
 }
 
+function suggestedInstagramQueries(brand: Awaited<ReturnType<typeof getBrandById>>) {
+  if (!brand) return [];
+  return buildSocialDiscoveryQueries({
+    brand,
+    platform: "instagram",
+    maxQueries: 12,
+  });
+}
+
 export async function GET(request: Request, context: { params: Promise<{ brandId: string }> }) {
   const { brandId } = await context.params;
   const { searchParams } = new URL(request.url);
@@ -182,8 +192,14 @@ export async function PATCH(request: Request, context: { params: Promise<{ brand
   if (typeof body.notes === "string") patch.notes = body.notes.trim();
   if (typeof body.proof === "string") patch.notes = body.proof.trim();
   if (typeof body.product === "string") patch.product = body.product.trim();
+  if (typeof body.socialDiscoveryCommentPrompt === "string") {
+    patch.socialDiscoveryCommentPrompt = body.socialDiscoveryCommentPrompt.trim();
+  }
   if (Array.isArray(body.socialDiscoveryPlatforms)) {
     patch.socialDiscoveryPlatforms = normalizeStringArray(body.socialDiscoveryPlatforms);
+  }
+  if (Array.isArray(body.socialDiscoveryQueries)) {
+    patch.socialDiscoveryQueries = normalizeStringArray(body.socialDiscoveryQueries);
   }
   if (Array.isArray(body.operablePersonas)) {
     patch.operablePersonas = normalizeStringArray(body.operablePersonas);
@@ -238,7 +254,11 @@ export async function PATCH(request: Request, context: { params: Promise<{ brand
   }
 
   const launchView = await loadBrandSenderLaunchView(brand.id);
-  return NextResponse.json({ brand: launchView?.brand ?? (await enrichBrandWithSenderHealth(brand)) });
+  const responseBrand = launchView?.brand ?? (await enrichBrandWithSenderHealth(brand));
+  return NextResponse.json({
+    brand: responseBrand,
+    socialDiscoverySuggestedQueries: suggestedInstagramQueries(responseBrand),
+  });
 }
 
 export async function DELETE(_: Request, context: { params: Promise<{ brandId: string }> }) {

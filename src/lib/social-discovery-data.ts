@@ -63,6 +63,7 @@ function normalizePlatform(value: unknown): SocialDiscoveryPlatform {
 function normalizeProvider(value: unknown): SocialDiscoveryProvider {
   const normalized = String(value ?? "").trim().toLowerCase();
   if (normalized === "dataforseo") return "dataforseo";
+  if (normalized === "youtube-data-api" || normalized === "youtube_data_api") return "youtube-data-api";
   if (normalized === "youtube-websub" || normalized === "youtube_websub" || normalized === "websub") {
     return "youtube-websub";
   }

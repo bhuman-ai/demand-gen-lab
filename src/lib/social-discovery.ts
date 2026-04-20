@@ -2331,7 +2331,14 @@ export function buildScoredSocialDiscoveryPost(input: Omit<
   "matchedTerms" | "intent" | "relevanceScore" | "risingScore" | "status" | "interactionPlan"
 > & {
   brand: BrandRecord;
-}) : SocialDiscoveryPost | null {
+}): SocialDiscoveryPost | null;
+
+export function buildScoredSocialDiscoveryPost(input: Omit<
+  SocialDiscoveryPost,
+  "matchedTerms" | "intent" | "relevanceScore" | "risingScore" | "status" | "interactionPlan"
+> & {
+  brand: BrandRecord;
+}): SocialDiscoveryPost | null {
   return postWithScoring(input);
 }
 
@@ -2968,6 +2975,26 @@ function dedupePosts(posts: SocialDiscoveryPost[]) {
     if (left.relevanceScore !== right.relevanceScore) return right.relevanceScore - left.relevanceScore;
     return right.engagementScore - left.engagementScore;
   });
+}
+
+export async function prepareSocialDiscoveryPosts(input: {
+  brand: BrandRecord;
+  posts: SocialDiscoveryPost[];
+}) {
+  const dedupedPosts = dedupePosts(input.posts);
+  const liveContentPosts = await enrichPostsWithLiveContent({
+    brand: input.brand,
+    posts: dedupedPosts,
+  });
+  const plannedPosts = await enrichInteractionPlans({
+    brand: input.brand,
+    posts: liveContentPosts,
+  });
+  return plannedPosts.map((post) =>
+    isSendableCommentOpportunity(post, { requireInstagramLiveContent: false }) && !hasLiveInstagramContent(post)
+      ? markSnippetFallback(post)
+      : post
+  );
 }
 
 function expandQueriesForPlatform(input: {

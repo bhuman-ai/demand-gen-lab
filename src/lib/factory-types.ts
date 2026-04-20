@@ -1014,6 +1014,10 @@ export type LeadQualityPolicy = {
   requiredCompanyKeywords?: string[];
   excludedCompanyKeywords?: string[];
   minConfidenceScore: number;
+  allowHighConfidenceFallbackEmail?: boolean;
+  fallbackMinPValid?: number;
+  fallbackRequireMailReadyMx?: boolean;
+  fallbackOnlyWhenProviderUnavailable?: boolean;
 };
 
 export type ActorCapabilityProfile = {
@@ -1084,6 +1088,8 @@ export type DeliverabilityProbeVariant = "baseline" | "production";
 export type DeliverabilityProbeStage = "send" | "poll";
 export type DeliverabilityProbeRunStatus = "queued" | "sent" | "waiting" | "completed" | "failed";
 export type DeliverabilitySeedReservationStatus = "reserved" | "consumed" | "released";
+
+export type WarmupSeedReservationStatus = "reserved" | "released";
 
 export type DeliverabilityProbeTarget = {
   reservationId?: string;
@@ -1159,6 +1165,24 @@ export type DeliverabilitySeedReservation = {
   updatedAt: string;
 };
 
+export type WarmupSeedReservation = {
+  id: string;
+  runId: string;
+  brandId: string;
+  senderAccountId: string;
+  fromEmail: string;
+  monitorAccountId: string;
+  monitorEmail: string;
+  status: WarmupSeedReservationStatus;
+  providerMessageId: string;
+  releasedReason: string;
+  reservedAt: string;
+  consumedAt: string;
+  releasedAt: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
 export type LeadAcceptanceDecision = {
   email: string;
   accepted: boolean;
@@ -1176,6 +1200,9 @@ export type EmailVerificationState = {
   mxStatus: string;
   acceptAll: boolean | null;
   catchAll: boolean | null;
+  pValid?: number | null;
+  httpStatus?: number | null;
+  providerStatus?: string;
 };
 
 export type SourcingTraceSummary = {
@@ -1195,6 +1222,7 @@ export type OutreachRun = {
   ownerType: "experiment" | "campaign";
   ownerId: string;
   accountId: string;
+  lockedSenderAccountId: string;
   status: OutreachRunStatus;
   cadence: RunCadence;
   dailyCap: number;

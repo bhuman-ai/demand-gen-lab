@@ -10,7 +10,8 @@ const YOUTUBE_COMMENT_SCOPE = "https://www.googleapis.com/auth/youtube.force-ssl
 type YouTubeRequestOptions = {
   path: string;
   method?: "GET" | "POST";
-  accessToken: string;
+  accessToken?: string;
+  apiKey?: string;
   query?: Record<string, string | undefined>;
   body?: unknown;
 };
@@ -41,6 +42,24 @@ export type YouTubeChannelProfile = {
   customUrl: string;
   avatarUrl: string;
   publishedAt: string;
+  raw: Record<string, unknown>;
+};
+
+export type YouTubeVideoSearchResult = {
+  videoId: string;
+  title: string;
+  description: string;
+  url: string;
+  publishedAt: string;
+  channelId: string;
+  channelTitle: string;
+  channelCustomUrl: string;
+  channelThumbnailUrl: string;
+  thumbnailUrl: string;
+  subscriberCount: number;
+  videoViewCount: number;
+  videoCommentCount: number;
+  videoLikeCount: number;
   raw: Record<string, unknown>;
 };
 
@@ -113,14 +132,6 @@ export class YouTubeApiError extends Error {
   }
 }
 
-function youtubeClientId(secrets: Pick<OutreachAccountSecrets, "youtubeClientId">) {
-  return String(secrets.youtubeClientId ?? "").trim();
-}
-
-function youtubeClientSecret(secrets: Pick<OutreachAccountSecrets, "youtubeClientSecret">) {
-  return String(secrets.youtubeClientSecret ?? "").trim();
-}
-
 function youtubeRefreshToken(secrets: Pick<OutreachAccountSecrets, "youtubeRefreshToken">) {
   return String(secrets.youtubeRefreshToken ?? "").trim();
 }
@@ -138,6 +149,13 @@ function youtubeEnvClientSecret() {
     String(process.env.YOUTUBE_OAUTH_CLIENT_SECRET ?? "").trim() ||
     String(process.env.GOOGLE_OAUTH_CLIENT_SECRET ?? "").trim() ||
     String(process.env.GOOGLE_CLIENT_SECRET ?? "").trim()
+  );
+}
+
+function youtubeDataApiKey() {
+  return (
+    String(process.env.YOUTUBE_DATA_API_KEY ?? "").trim() ||
+    String(process.env.GOOGLE_API_KEY ?? "").trim()
   );
 }
 
@@ -344,17 +362,27 @@ export async function exchangeYouTubeOAuthCode(input: {
 }
 
 async function youtubeRequest<T = Record<string, unknown>>(input: YouTubeRequestOptions): Promise<T> {
+  const accessToken = String(input.accessToken ?? "").trim();
+  const apiKey = String(input.apiKey ?? "").trim();
+  if (!accessToken && !apiKey) {
+    throw new YouTubeApiError("Set YOUTUBE_DATA_API_KEY or use a connected YouTube account first.", {
+      status: 400,
+    });
+  }
   const url = new URL(`${YOUTUBE_DATA_API_BASE_URL}${input.path}`);
   for (const [key, value] of Object.entries(input.query ?? {})) {
     if (typeof value === "string" && value.trim()) {
       url.searchParams.set(key, value.trim());
     }
   }
+  if (apiKey) {
+    url.searchParams.set("key", apiKey);
+  }
 
   const response = await fetch(url.toString(), {
     method: input.method ?? "GET",
     headers: {
-      Authorization: `Bearer ${input.accessToken}`,
+      ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
       "Content-Type": "application/json",
     },
     body: input.body === undefined ? undefined : JSON.stringify(input.body),
@@ -377,6 +405,27 @@ async function youtubeRequest<T = Record<string, unknown>>(input: YouTubeRequest
   }
 
   return payload as T;
+}
+
+async function resolveYouTubeRequestCredentials(input?: {
+  secrets?: Pick<OutreachAccountSecrets, "youtubeClientId" | "youtubeClientSecret" | "youtubeRefreshToken">;
+}) {
+  if (input?.secrets && hasYouTubeOAuthCredentials(input.secrets)) {
+    return {
+      accessToken: await refreshYouTubeAccessToken(input.secrets),
+      apiKey: "",
+    };
+  }
+  const apiKey = youtubeDataApiKey();
+  if (!apiKey) {
+    throw new YouTubeApiError("Set YOUTUBE_DATA_API_KEY or connect a YouTube account first.", {
+      status: 400,
+    });
+  }
+  return {
+    accessToken: "",
+    apiKey,
+  };
 }
 
 async function getYouTubeVideoSnippet(input: {
@@ -430,6 +479,145 @@ export async function getAuthenticatedYouTubeChannelProfile(input: {
     publishedAt: textValue(snippet.publishedAt),
     raw: item,
   };
+}
+
+function numberValue(value: unknown) {
+  const parsed = Number(String(value ?? "").trim());
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function thumbnailUrlFromSnippet(snippetRaw: Record<string, unknown>) {
+  const thumbnails = asRecord(snippetRaw.thumbnails);
+  return (
+    textValue(asRecord(thumbnails.maxres).url) ||
+    textValue(asRecord(thumbnails.standard).url) ||
+    textValue(asRecord(thumbnails.high).url) ||
+    textValue(asRecord(thumbnails.medium).url) ||
+    textValue(asRecord(thumbnails.default).url)
+  );
+}
+
+export async function searchYouTubeVideos(input: {
+  query: string;
+  maxResults?: number;
+  publishedAfter?: string;
+  order?: "date" | "relevance" | "viewCount";
+  secrets?: Pick<OutreachAccountSecrets, "youtubeClientId" | "youtubeClientSecret" | "youtubeRefreshToken">;
+}): Promise<YouTubeVideoSearchResult[]> {
+  const query = String(input.query ?? "").trim();
+  if (!query) {
+    throw new YouTubeApiError("query is required", { status: 400 });
+  }
+
+  const credentials = await resolveYouTubeRequestCredentials({
+    secrets: input.secrets,
+  });
+  const maxResults = Math.max(1, Math.min(25, Number(input.maxResults ?? 12) || 12));
+  const searchPayload = await youtubeRequest<Record<string, unknown>>({
+    path: "/search",
+    accessToken: credentials.accessToken || undefined,
+    apiKey: credentials.apiKey || undefined,
+    query: {
+      part: "snippet",
+      type: "video",
+      q: query,
+      order: input.order ?? "date",
+      maxResults: String(maxResults),
+      publishedAfter: String(input.publishedAfter ?? "").trim() || undefined,
+      safeSearch: "moderate",
+    },
+  });
+
+  const searchItems = asArray(searchPayload.items)
+    .map((item) => asRecord(item))
+    .map((item) => {
+      const id = asRecord(item.id);
+      const snippet = asRecord(item.snippet);
+      const videoId = textValue(id.videoId);
+      const channelId = textValue(snippet.channelId);
+      if (!videoId || !channelId) return null;
+      return {
+        raw: item,
+        snippet,
+        videoId,
+        channelId,
+      };
+    })
+    .filter((item): item is { raw: Record<string, unknown>; snippet: Record<string, unknown>; videoId: string; channelId: string } => Boolean(item));
+
+  if (!searchItems.length) return [];
+
+  const videoIds = Array.from(new Set(searchItems.map((item) => item.videoId)));
+  const channelIds = Array.from(new Set(searchItems.map((item) => item.channelId)));
+  const [videosPayload, channelsPayload] = await Promise.all([
+    youtubeRequest<Record<string, unknown>>({
+      path: "/videos",
+      accessToken: credentials.accessToken || undefined,
+      apiKey: credentials.apiKey || undefined,
+      query: {
+        part: "snippet,statistics",
+        id: videoIds.join(","),
+        maxResults: String(videoIds.length),
+      },
+    }),
+    youtubeRequest<Record<string, unknown>>({
+      path: "/channels",
+      accessToken: credentials.accessToken || undefined,
+      apiKey: credentials.apiKey || undefined,
+      query: {
+        part: "snippet,statistics",
+        id: channelIds.join(","),
+        maxResults: String(channelIds.length),
+      },
+    }),
+  ]);
+
+  const videosById = new Map(
+    asArray(videosPayload.items).map((item) => {
+      const row = asRecord(item);
+      return [textValue(row.id), row] as const;
+    })
+  );
+  const channelsById = new Map(
+    asArray(channelsPayload.items).map((item) => {
+      const row = asRecord(item);
+      return [textValue(row.id), row] as const;
+    })
+  );
+
+  return searchItems.map((item) => {
+    const video = asRecord(videosById.get(item.videoId));
+    const videoSnippet = asRecord(video.snippet);
+    const videoStats = asRecord(video.statistics);
+    const channel = asRecord(channelsById.get(item.channelId));
+    const channelSnippet = asRecord(channel.snippet);
+    const channelStats = asRecord(channel.statistics);
+    const title = textValue(videoSnippet.title) || textValue(item.snippet.title);
+    const description = textValue(videoSnippet.description) || textValue(item.snippet.description);
+    const publishedAt = textValue(videoSnippet.publishedAt) || textValue(item.snippet.publishedAt);
+
+    return {
+      videoId: item.videoId,
+      title,
+      description,
+      url: `https://www.youtube.com/watch?v=${encodeURIComponent(item.videoId)}`,
+      publishedAt,
+      channelId: item.channelId,
+      channelTitle: textValue(channelSnippet.title) || textValue(item.snippet.channelTitle),
+      channelCustomUrl: textValue(channelSnippet.customUrl),
+      channelThumbnailUrl: thumbnailUrlFromSnippet(channelSnippet),
+      thumbnailUrl: thumbnailUrlFromSnippet(videoSnippet) || thumbnailUrlFromSnippet(item.snippet),
+      subscriberCount: numberValue(channelStats.subscriberCount),
+      videoViewCount: numberValue(videoStats.viewCount),
+      videoCommentCount: numberValue(videoStats.commentCount),
+      videoLikeCount: numberValue(videoStats.likeCount),
+      raw: {
+        search: item.raw,
+        video,
+        channel,
+      },
+    } satisfies YouTubeVideoSearchResult;
+  });
 }
 
 function rawYouTubeField(post: Pick<SocialDiscoveryPost, "raw">, key: string) {

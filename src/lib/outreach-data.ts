@@ -45,6 +45,8 @@ import type {
   OutreachMessage,
   OutreachRun,
   OutreachRunLead,
+  WarmupSeedReservation,
+  WarmupSeedReservationStatus,
   SourcingActorMemory,
   SourcingChainDecision,
   SourcingChainStep,
@@ -165,6 +167,7 @@ type OutreachStore = {
   outreachLeases: OutreachLease[];
   deliverabilityProbeRuns: DeliverabilityProbeRun[];
   deliverabilitySeedReservations: DeliverabilitySeedReservation[];
+  warmupSeedReservations: WarmupSeedReservation[];
   sourcingActorProfiles: ActorCapabilityProfile[];
   sourcingChainDecisions: SourcingChainDecision[];
   sourcingProbeResults: SourcingProbeResult[];
@@ -216,6 +219,7 @@ const TABLE_OUTREACH_LEASE = "demanddev_outreach_leases";
 const TABLE_ANOMALY = "demanddev_run_anomalies";
 const TABLE_DELIVERABILITY_PROBE_RUN = "demanddev_deliverability_probe_runs";
 const TABLE_DELIVERABILITY_SEED_RESERVATION = "demanddev_deliverability_seed_reservations";
+const TABLE_WARMUP_SEED_RESERVATION = "demanddev_warmup_seed_reservations";
 const TABLE_SOURCING_ACTOR_PROFILE = "demanddev_sourcing_actor_profiles";
 const TABLE_SOURCING_CHAIN_DECISION = "demanddev_sourcing_chain_decisions";
 const TABLE_SOURCING_PROBE_RESULT = "demanddev_sourcing_probe_results";
@@ -403,6 +407,7 @@ function defaultOutreachStore(): OutreachStore {
     outreachLeases: [],
     deliverabilityProbeRuns: [],
     deliverabilitySeedReservations: [],
+    warmupSeedReservations: [],
     sourcingActorProfiles: [],
     sourcingChainDecisions: [],
     sourcingProbeResults: [],
@@ -741,6 +746,7 @@ function mapRunRow(input: unknown): OutreachRun {
     ownerType,
     ownerId: String(row.owner_id ?? row.ownerId ?? ownerIdFallback),
     accountId: String(row.account_id ?? row.accountId ?? ""),
+    lockedSenderAccountId: String(row.locked_sender_account_id ?? row.lockedSenderAccountId ?? "").trim(),
     status: [
       "queued",
       "preflight_failed",
@@ -825,6 +831,19 @@ function mapRunLeadRow(input: unknown): OutreachRunLead {
           : typeof value.catch_all === "boolean"
             ? value.catch_all
             : null,
+      pValid:
+        typeof value.pValid === "number"
+          ? value.pValid
+          : typeof value.p_valid === "number"
+            ? value.p_valid
+            : null,
+      httpStatus:
+        typeof value.httpStatus === "number"
+          ? value.httpStatus
+          : typeof value.http_status === "number"
+            ? value.http_status
+            : null,
+      providerStatus: String(value.providerStatus ?? value.provider_status ?? ""),
     } satisfies EmailVerificationState;
   })();
   return {
@@ -1504,6 +1523,29 @@ function mapDeliverabilitySeedReservationRow(input: unknown): DeliverabilitySeed
   };
 }
 
+function mapWarmupSeedReservationRow(input: unknown): WarmupSeedReservation {
+  const row = asRecord(input);
+  return {
+    id: String(row.id ?? "").trim(),
+    runId: String(row.run_id ?? row.runId ?? "").trim(),
+    brandId: String(row.brand_id ?? row.brandId ?? "").trim(),
+    senderAccountId: String(row.sender_account_id ?? row.senderAccountId ?? "").trim(),
+    fromEmail: String(row.from_email ?? row.fromEmail ?? "").trim().toLowerCase(),
+    monitorAccountId: String(row.monitor_account_id ?? row.monitorAccountId ?? "").trim(),
+    monitorEmail: String(row.monitor_email ?? row.monitorEmail ?? "").trim().toLowerCase(),
+    status: ["reserved", "released"].includes(String(row.status))
+      ? (String(row.status) as WarmupSeedReservationStatus)
+      : "reserved",
+    providerMessageId: String(row.provider_message_id ?? row.providerMessageId ?? "").trim(),
+    releasedReason: String(row.released_reason ?? row.releasedReason ?? "").trim(),
+    reservedAt: String(row.reserved_at ?? row.reservedAt ?? nowIso()).trim(),
+    consumedAt: String(row.consumed_at ?? row.consumedAt ?? "").trim(),
+    releasedAt: String(row.released_at ?? row.releasedAt ?? "").trim(),
+    createdAt: String(row.created_at ?? row.createdAt ?? nowIso()),
+    updatedAt: String(row.updated_at ?? row.updatedAt ?? nowIso()),
+  };
+}
+
 function mapSenderLaunchRow(input: unknown): SenderLaunch {
   const row = asRecord(input);
   const planType = String(row.plan_type ?? row.planType ?? "").trim();
@@ -1786,6 +1828,7 @@ async function readLocalStore(): Promise<OutreachStore> {
       deliverabilitySeedReservations: asArray(row.deliverabilitySeedReservations).map((item) =>
         mapDeliverabilitySeedReservationRow(item)
       ),
+      warmupSeedReservations: asArray(row.warmupSeedReservations).map((item) => mapWarmupSeedReservationRow(item)),
       sourcingActorProfiles: asArray(row.sourcingActorProfiles).map((item) => mapSourcingActorProfileRow(item)),
       sourcingChainDecisions: asArray(row.sourcingChainDecisions).map((item) => mapSourcingChainDecisionRow(item)),
       sourcingProbeResults: asArray(row.sourcingProbeResults).map((item) => mapSourcingProbeResultRow(item)),
@@ -2963,6 +3006,31 @@ export async function setBrandOutreachAssignment(
   return store.assignments.find((row) => row.brandId === brandId) ?? assignment;
 }
 
+async function resolveOutreachRunLockedSenderAccountId(input: {
+  brandId: string;
+  ownerType: OutreachRun["ownerType"];
+  ownerId: string;
+  explicitLockedSenderAccountId?: string;
+}) {
+  const explicitLockedSenderAccountId = String(input.explicitLockedSenderAccountId ?? "").trim();
+  if (explicitLockedSenderAccountId) {
+    return explicitLockedSenderAccountId;
+  }
+  if (input.ownerType !== "campaign") {
+    return "";
+  }
+  const ownerId = String(input.ownerId ?? "").trim();
+  if (!ownerId) {
+    return "";
+  }
+  const { getScaleCampaignRecordById } = await import("@/lib/experiment-data");
+  const ownerCampaign = await getScaleCampaignRecordById(input.brandId, ownerId);
+  if (!ownerCampaign) {
+    return "";
+  }
+  return String(ownerCampaign.scalePolicy.accountId ?? ownerCampaign.scalePolicy.mailboxAccountId ?? "").trim();
+}
+
 export async function createOutreachRun(input: {
   brandId: string;
   campaignId: string;
@@ -2971,6 +3039,7 @@ export async function createOutreachRun(input: {
   ownerType: OutreachRun["ownerType"];
   ownerId: string;
   accountId: string;
+  lockedSenderAccountId?: string;
   status?: OutreachRun["status"];
   cadence?: OutreachRun["cadence"];
   dailyCap?: number;
@@ -3023,6 +3092,13 @@ export async function createOutreachRun(input: {
 
   const now = nowIso();
   const sanitizedLastError = normalizeLegacyOutreachErrorText(input.lastError ?? "");
+  const lockedSenderAccountId = await resolveOutreachRunLockedSenderAccountId({
+    brandId: input.brandId,
+    ownerType,
+    ownerId,
+    explicitLockedSenderAccountId: input.lockedSenderAccountId,
+  });
+  const accountId = lockedSenderAccountId || String(input.accountId ?? "").trim();
   const run: OutreachRun = {
     id: createId("run"),
     brandId: input.brandId,
@@ -3031,7 +3107,8 @@ export async function createOutreachRun(input: {
     hypothesisId: input.hypothesisId,
     ownerType,
     ownerId,
-    accountId: input.accountId,
+    accountId,
+    lockedSenderAccountId,
     status: input.status ?? "queued",
     cadence: input.cadence ?? "3_step_7_day",
     dailyCap: Number(input.dailyCap ?? 30),
@@ -3068,6 +3145,7 @@ export async function createOutreachRun(input: {
         owner_type: run.ownerType,
         owner_id: run.ownerId,
         account_id: run.accountId,
+        locked_sender_account_id: run.lockedSenderAccountId || null,
         status: run.status,
         cadence: run.cadence,
         daily_cap: run.dailyCap,
@@ -3100,6 +3178,7 @@ export async function updateOutreachRun(
     Pick<
       OutreachRun,
       | "accountId"
+      | "lockedSenderAccountId"
       | "status"
       | "dailyCap"
       | "hourlyCap"
@@ -3121,11 +3200,30 @@ export async function updateOutreachRun(
     patch.sourcingTraceSummary === undefined
       ? undefined
       : sanitizeRunTraceSummary(patch.sourcingTraceSummary);
+  const requestedLockedSenderAccountId =
+    patch.lockedSenderAccountId === undefined ? undefined : String(patch.lockedSenderAccountId ?? "").trim();
+  let normalizedLockedSenderAccountId = requestedLockedSenderAccountId;
+  if (requestedLockedSenderAccountId !== undefined) {
+    const existingRun = await getOutreachRun(runId);
+    const currentLockedSenderAccountId = String(existingRun?.lockedSenderAccountId ?? "").trim();
+    if (
+      currentLockedSenderAccountId &&
+      requestedLockedSenderAccountId &&
+      currentLockedSenderAccountId !== requestedLockedSenderAccountId
+    ) {
+      throw new Error(`Outreach run ${runId} sender lock is immutable.`);
+    }
+    normalizedLockedSenderAccountId =
+      currentLockedSenderAccountId || requestedLockedSenderAccountId || currentLockedSenderAccountId;
+  }
 
   const supabase = getSupabaseAdmin();
   if (supabase) {
     const update: Record<string, unknown> = { updated_at: now };
     if (patch.accountId !== undefined) update.account_id = patch.accountId;
+    if (normalizedLockedSenderAccountId !== undefined) {
+      update.locked_sender_account_id = normalizedLockedSenderAccountId || null;
+    }
     if (patch.status) update.status = patch.status;
     if (patch.dailyCap !== undefined) update.daily_cap = patch.dailyCap;
     if (patch.hourlyCap !== undefined) update.hourly_cap = patch.hourlyCap;
@@ -3155,6 +3253,9 @@ export async function updateOutreachRun(
   store.runs[idx] = {
     ...store.runs[idx],
     ...patch,
+    ...(normalizedLockedSenderAccountId === undefined
+      ? {}
+      : { lockedSenderAccountId: normalizedLockedSenderAccountId }),
     ...(sanitizedLastError === undefined ? {} : { lastError: sanitizedLastError }),
     ...(sanitizedTraceSummary === undefined ? {} : { sourcingTraceSummary: sanitizedTraceSummary }),
     updatedAt: now,
@@ -3306,6 +3407,7 @@ export async function deleteOutreachRunsByIds(runIds: string[]): Promise<number>
         supabase.from(TABLE_SOURCING_CHAIN_DECISION).delete().in("run_id", runIdChunk),
         supabase.from(TABLE_SOURCING_PROBE_RESULT).delete().in("run_id", runIdChunk),
         supabase.from(TABLE_DELIVERABILITY_SEED_RESERVATION).delete().in("run_id", runIdChunk),
+        supabase.from(TABLE_WARMUP_SEED_RESERVATION).delete().in("run_id", runIdChunk),
         supabase.from(TABLE_DELIVERABILITY_PROBE_RUN).delete().in("run_id", runIdChunk),
       ]);
 
@@ -3348,6 +3450,9 @@ export async function deleteOutreachRunsByIds(runIds: string[]): Promise<number>
       (row) => !runIdSet.has(row.runId)
     );
     store.deliverabilitySeedReservations = store.deliverabilitySeedReservations.filter(
+      (row) => !runIdSet.has(row.runId)
+    );
+    store.warmupSeedReservations = store.warmupSeedReservations.filter(
       (row) => !runIdSet.has(row.runId)
     );
     store.sourcingChainDecisions = store.sourcingChainDecisions.filter(
@@ -6279,6 +6384,188 @@ export async function updateDeliverabilitySeedReservations(
   return updated;
 }
 
+export async function listWarmupSeedReservations(input?: {
+  brandId?: string;
+  runId?: string;
+  senderAccountId?: string;
+  fromEmail?: string;
+  monitorAccountId?: string;
+  monitorEmail?: string;
+  statuses?: WarmupSeedReservationStatus[];
+}): Promise<WarmupSeedReservation[]> {
+  const brandId = String(input?.brandId ?? "").trim();
+  const runId = String(input?.runId ?? "").trim();
+  const senderAccountId = String(input?.senderAccountId ?? "").trim();
+  const fromEmail = String(input?.fromEmail ?? "").trim().toLowerCase();
+  const monitorAccountId = String(input?.monitorAccountId ?? "").trim();
+  const monitorEmail = String(input?.monitorEmail ?? "").trim().toLowerCase();
+  const statuses = (input?.statuses ?? []).filter(Boolean);
+
+  const supabase = getSupabaseAdmin();
+  if (supabase) {
+    let query = supabase
+      .from(TABLE_WARMUP_SEED_RESERVATION)
+      .select("*")
+      .order("created_at", { ascending: false });
+    if (brandId) query = query.eq("brand_id", brandId);
+    if (runId) query = query.eq("run_id", runId);
+    if (senderAccountId) query = query.eq("sender_account_id", senderAccountId);
+    if (fromEmail) query = query.eq("from_email", fromEmail);
+    if (monitorAccountId) query = query.eq("monitor_account_id", monitorAccountId);
+    if (monitorEmail) query = query.eq("monitor_email", monitorEmail);
+    if (statuses.length) query = query.in("status", statuses);
+    const { data, error } = await query;
+    if (!error) {
+      return (data ?? []).map((row: unknown) => mapWarmupSeedReservationRow(row));
+    }
+  }
+
+  const store = await readLocalStore();
+  return store.warmupSeedReservations
+    .filter((row) => {
+      if (brandId && row.brandId !== brandId) return false;
+      if (runId && row.runId !== runId) return false;
+      if (senderAccountId && row.senderAccountId !== senderAccountId) return false;
+      if (fromEmail && row.fromEmail !== fromEmail) return false;
+      if (monitorAccountId && row.monitorAccountId !== monitorAccountId) return false;
+      if (monitorEmail && row.monitorEmail !== monitorEmail) return false;
+      if (statuses.length && !statuses.includes(row.status)) return false;
+      return true;
+    })
+    .sort((left, right) => (left.createdAt < right.createdAt ? 1 : -1));
+}
+
+export async function createWarmupSeedReservations(input: {
+  runId: string;
+  brandId: string;
+  senderAccountId: string;
+  fromEmail: string;
+  targets: DeliverabilityProbeTarget[];
+}): Promise<WarmupSeedReservation[]> {
+  const now = nowIso();
+  const rows: WarmupSeedReservation[] = input.targets.map((target) => ({
+    id: createId("warmseed"),
+    runId: input.runId,
+    brandId: input.brandId,
+    senderAccountId: input.senderAccountId.trim(),
+    fromEmail: input.fromEmail.trim().toLowerCase(),
+    monitorAccountId: target.accountId.trim(),
+    monitorEmail: target.email.trim().toLowerCase(),
+    status: "reserved",
+    providerMessageId: "",
+    releasedReason: "",
+    reservedAt: now,
+    consumedAt: "",
+    releasedAt: "",
+    createdAt: now,
+    updatedAt: now,
+  }));
+  if (!rows.length) return [];
+
+  const supabase = getSupabaseAdmin();
+  if (supabase) {
+    const inserted: WarmupSeedReservation[] = [];
+    for (const row of rows) {
+      const payload = {
+        id: row.id,
+        run_id: row.runId,
+        brand_id: row.brandId,
+        sender_account_id: row.senderAccountId,
+        from_email: row.fromEmail,
+        monitor_account_id: row.monitorAccountId,
+        monitor_email: row.monitorEmail,
+        status: row.status,
+        provider_message_id: row.providerMessageId,
+        released_reason: row.releasedReason,
+        reserved_at: row.reservedAt,
+        consumed_at: null,
+        released_at: null,
+      };
+      const { data, error } = await supabase
+        .from(TABLE_WARMUP_SEED_RESERVATION)
+        .insert(payload)
+        .select("*");
+      if (!error) {
+        const hit = Array.isArray(data) ? data[0] : data;
+        if (hit) {
+          inserted.push(mapWarmupSeedReservationRow(hit));
+        }
+        continue;
+      }
+      if (isUniqueViolationError(error)) {
+        continue;
+      }
+      throw error;
+    }
+    return inserted;
+  }
+
+  const store = await readLocalStore();
+  const existingReservedByMonitorId = new Set(
+    store.warmupSeedReservations
+      .filter((row) => row.status === "reserved")
+      .map((row) => row.monitorAccountId)
+  );
+  const inserted: WarmupSeedReservation[] = [];
+  for (const row of rows) {
+    if (existingReservedByMonitorId.has(row.monitorAccountId)) {
+      continue;
+    }
+    store.warmupSeedReservations.unshift(row);
+    existingReservedByMonitorId.add(row.monitorAccountId);
+    inserted.push(row);
+  }
+  if (inserted.length) {
+    await writeLocalStore(store);
+  }
+  return inserted;
+}
+
+export async function updateWarmupSeedReservations(
+  reservationIds: string[],
+  patch: Partial<Pick<WarmupSeedReservation, "status" | "providerMessageId" | "releasedReason" | "consumedAt" | "releasedAt">>
+): Promise<WarmupSeedReservation[]> {
+  const ids = reservationIds.map((item) => String(item ?? "").trim()).filter(Boolean);
+  if (!ids.length) return [];
+  const now = nowIso();
+
+  const supabase = getSupabaseAdmin();
+  if (supabase) {
+    const update: Record<string, unknown> = { updated_at: now };
+    if (patch.status !== undefined) update.status = patch.status;
+    if (patch.providerMessageId !== undefined) update.provider_message_id = patch.providerMessageId;
+    if (patch.releasedReason !== undefined) update.released_reason = patch.releasedReason;
+    if (patch.consumedAt !== undefined) update.consumed_at = patch.consumedAt || null;
+    if (patch.releasedAt !== undefined) update.released_at = patch.releasedAt || null;
+
+    const { data, error } = await supabase
+      .from(TABLE_WARMUP_SEED_RESERVATION)
+      .update(update)
+      .in("id", ids)
+      .select("*");
+    if (!error) {
+      return (data ?? []).map((row: unknown) => mapWarmupSeedReservationRow(row));
+    }
+  }
+
+  const store = await readLocalStore();
+  const updated: WarmupSeedReservation[] = [];
+  for (let index = 0; index < store.warmupSeedReservations.length; index += 1) {
+    const row = store.warmupSeedReservations[index];
+    if (!ids.includes(row.id)) continue;
+    const next: WarmupSeedReservation = {
+      ...row,
+      ...patch,
+      updatedAt: now,
+    };
+    store.warmupSeedReservations[index] = next;
+    updated.push(next);
+  }
+  if (updated.length) {
+    await writeLocalStore(store);
+  }
+  return updated;
+}
 export async function updateRunAnomalies(
   anomalyIds: string[],
   patch: Partial<Pick<RunAnomaly, "severity" | "status" | "threshold" | "observed" | "details">>

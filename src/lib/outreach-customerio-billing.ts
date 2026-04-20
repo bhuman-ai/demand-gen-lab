@@ -100,6 +100,7 @@ export function mergeOutreachAccountConfig(
   const nextCustomerIo = asRecord(next.customerIo);
   const nextMailpool = asRecord(next.mailpool);
   const nextApify = asRecord(next.apify);
+  const nextSocial = asRecord(next.social);
   const nextMailbox = asRecord(next.mailbox);
   const nextBilling = asRecord(nextCustomerIo.billing);
 
@@ -120,6 +121,10 @@ export function mergeOutreachAccountConfig(
     apify: {
       ...existing.apify,
       ...nextApify,
+    },
+    social: {
+      ...existing.social,
+      ...nextSocial,
     },
     mailbox: {
       ...existing.mailbox,

@@ -1065,15 +1065,32 @@ export default function SocialDiscoveryClient({ brandId }: { brandId: string }) 
   return (
     <div className="space-y-6">
       <PageIntro
-        title="Comment on YouTube videos"
-        description="Search, pick one video, and post one comment."
+        title="YouTube comments"
+        description="Mode 1: search today's videos and comment manually. Mode 2: watch channels and auto-comment new uploads."
       />
 
       {error ? <div className="text-sm text-[color:var(--danger)]">{error}</div> : null}
 
+      <SectionPanel title="Choose mode" description="Two ways to use YouTube here.">
+        <div className="grid gap-3 lg:grid-cols-2">
+          <div className="rounded-[10px] border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-4 py-4">
+            <div className="text-sm font-medium text-[color:var(--foreground)]">Mode 1. Search today&apos;s videos</div>
+            <div className="mt-1 text-sm leading-6 text-[color:var(--muted-foreground)]">
+              Find fresh videos in your niche, pick one result, review it, then post one comment.
+            </div>
+          </div>
+          <div className="rounded-[10px] border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-4 py-4">
+            <div className="text-sm font-medium text-[color:var(--foreground)]">Mode 2. Watch channels</div>
+            <div className="mt-1 text-sm leading-6 text-[color:var(--muted-foreground)]">
+              Subscribe to channel uploads and optionally auto-comment when a new video lands.
+            </div>
+          </div>
+        </div>
+      </SectionPanel>
+
       <SectionPanel
-        title="1. Find videos"
-        description="Type a niche and press Search."
+        title="Mode 1. Search today&apos;s videos"
+        description="Type a niche and search the last 24 hours."
       >
         <div className="space-y-4">
           {youtubeSearchError ? (
@@ -1112,7 +1129,7 @@ export default function SocialDiscoveryClient({ brandId }: { brandId: string }) 
 
       <div className="space-y-4">
         <SectionPanel
-          title="2. Choose a video"
+          title="Pick one video"
           description={loading ? "Loading..." : posts.length ? "Pick one result." : "Search first."}
           contentClassName="p-0"
         >
@@ -1163,7 +1180,7 @@ export default function SocialDiscoveryClient({ brandId }: { brandId: string }) 
         </SectionPanel>
 
         <SectionPanel
-          title="3. Post comment"
+          title="Review and post comment"
           description={selectedPost ? "Use the draft below, edit it if needed, then post." : "Pick a video first."}
           actions={
             selectedPost ? (
@@ -1593,9 +1610,166 @@ export default function SocialDiscoveryClient({ brandId }: { brandId: string }) 
         </SectionPanel>
       </div>
 
+      <SectionPanel
+        title="Mode 2. Watch channels"
+        description="Subscribe to upload notifications and optionally auto-comment future uploads."
+      >
+        <div className="space-y-4">
+          {youtubeSubscriptionError ? (
+            <div className="rounded-[10px] border border-[color:var(--danger-border)] bg-[color:var(--danger-soft)] px-3 py-2 text-sm text-[color:var(--danger)]">
+              {youtubeSubscriptionError}
+            </div>
+          ) : null}
+
+          <div className="grid gap-4 xl:grid-cols-[minmax(0,1.2fr)_minmax(240px,0.8fr)_auto]">
+            <div className="space-y-2">
+              <label className="text-sm font-medium text-[color:var(--foreground)]">Channel id</label>
+              <Input
+                value={youtubeChannelIdDraft}
+                onChange={(event) => setYouTubeChannelIdDraft(event.target.value)}
+                placeholder="UC..."
+                disabled={savingYouTubeSubscription}
+              />
+            </div>
+
+            <div className="space-y-2">
+              <label className="text-sm font-medium text-[color:var(--foreground)]">Auto-comment account</label>
+              <Select
+                value={youtubeSubscriptionAccountId}
+                onChange={(event) => setYouTubeSubscriptionAccountId(event.target.value)}
+                disabled={savingYouTubeSubscription || !youtubeAccountOptions.length}
+              >
+                <option value="">{youtubeAutoCommentEnabled ? "Pick account" : "No account"}</option>
+                {youtubeAccountOptions.map((account) => (
+                  <option key={account.accountId} value={account.accountId}>
+                    {account.accountName} · {account.handle || account.fromEmail || account.accountId}
+                  </option>
+                ))}
+              </Select>
+            </div>
+
+            <div className="flex items-end">
+              <Button
+                type="button"
+                onClick={() => {
+                  void saveYouTubeSubscription();
+                }}
+                disabled={savingYouTubeSubscription}
+              >
+                {savingYouTubeSubscription ? "Saving..." : "Watch channel"}
+              </Button>
+            </div>
+          </div>
+
+          <label className="flex items-start gap-3 rounded-[10px] border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-3">
+            <input
+              type="checkbox"
+              checked={youtubeAutoCommentEnabled}
+              onChange={(event) => setYouTubeAutoCommentEnabled(event.target.checked)}
+              className="mt-1 h-4 w-4 rounded border border-[color:var(--border)] bg-[color:var(--background)] accent-[color:var(--accent)]"
+            />
+            <span className="min-w-0">
+              <span className="text-sm font-medium text-[color:var(--foreground)]">Auto-comment new uploads</span>
+              <span className="mt-1 block text-sm leading-6 text-[color:var(--muted-foreground)]">
+                Use this only for watched channels. Search mode above stays manual.
+              </span>
+            </span>
+          </label>
+
+          {!youtubeAccountOptions.length ? (
+            <div className="text-xs text-[color:var(--muted-foreground)]">
+              Need a YouTube account first? Open Setup below, add one account, then click `Connect YouTube`.
+            </div>
+          ) : null}
+
+          {youtubeSubscriptions.length ? (
+            <div className="grid gap-3">
+              {youtubeSubscriptions.map((subscription) => (
+                <div
+                  key={subscription.id}
+                  className="rounded-[10px] border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-3"
+                >
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div className="space-y-1">
+                      <div className="text-sm font-medium text-[color:var(--foreground)]">
+                        {subscription.channelTitle || subscription.channelId}
+                      </div>
+                      <div className="text-xs text-[color:var(--muted-foreground)]">
+                        {subscription.channelId}
+                        {subscription.accountName ? ` · ${subscription.accountName}` : ""}
+                        {subscription.autoComment ? " · auto-comment on" : " · watch only"}
+                      </div>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => {
+                          void saveYouTubeSubscription({
+                            channelId: subscription.channelId,
+                            accountId: subscription.accountId,
+                            autoComment: subscription.autoComment,
+                            leaseSeconds: subscription.leaseSeconds || undefined,
+                          });
+                        }}
+                        disabled={savingYouTubeSubscription}
+                      >
+                        Renew now
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => {
+                          void removeYouTubeSubscription(subscription.channelId);
+                        }}
+                        disabled={removingYouTubeChannelId === subscription.channelId}
+                      >
+                        {removingYouTubeChannelId === subscription.channelId ? "Removing..." : "Remove"}
+                      </Button>
+                    </div>
+                  </div>
+
+                  <div className="mt-3 grid gap-1 text-xs text-[color:var(--muted-foreground)]">
+                    <div>Status: {subscription.status}</div>
+                    {subscription.leaseExpiresAt ? <div>Lease expires: {formatDate(subscription.leaseExpiresAt)}</div> : null}
+                    {subscription.lastVerifiedAt ? <div>Verified: {formatDate(subscription.lastVerifiedAt)}</div> : null}
+                    {subscription.lastNotificationAt ? <div>Last upload: {formatDate(subscription.lastNotificationAt)}</div> : null}
+                    {subscription.lastVideoUrl ? (
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span>Last video:</span>
+                        <Link href={subscription.lastVideoUrl} target="_blank" rel="noreferrer" className="underline underline-offset-2">
+                          Open
+                        </Link>
+                      </div>
+                    ) : null}
+                    {subscription.lastCommentUrl ? (
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span>Last comment:</span>
+                        <Link href={subscription.lastCommentUrl} target="_blank" rel="noreferrer" className="underline underline-offset-2">
+                          Open
+                        </Link>
+                      </div>
+                    ) : null}
+                    {subscription.lastError ? (
+                      <div className="text-[color:var(--danger)]">Last error: {subscription.lastError}</div>
+                    ) : null}
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="rounded-[10px] border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-3 text-sm text-[color:var(--muted-foreground)]">
+              No watched YouTube channels yet.
+            </div>
+          )}
+        </div>
+      </SectionPanel>
+
       <details className="rounded-[12px] border border-[color:var(--border)] bg-[color:var(--surface)]">
         <summary className="cursor-pointer px-4 py-3 text-sm font-medium text-[color:var(--foreground)]">
-          Setup and older tools
+          Setup
         </summary>
         <div className="space-y-4 border-t border-[color:var(--border)] px-4 py-4">
           <div className="grid gap-4 xl:grid-cols-2">
@@ -1683,163 +1857,6 @@ export default function SocialDiscoveryClient({ brandId }: { brandId: string }) 
               </div>
             </SectionPanel>
           </div>
-
-          <SectionPanel
-            title="YouTube watches"
-            description="Subscribe to channel upload notifications and optionally auto-comment future uploads."
-          >
-            <div className="space-y-4">
-              {youtubeSubscriptionError ? (
-                <div className="rounded-[10px] border border-[color:var(--danger-border)] bg-[color:var(--danger-soft)] px-3 py-2 text-sm text-[color:var(--danger)]">
-                  {youtubeSubscriptionError}
-                </div>
-              ) : null}
-
-              <div className="grid gap-4 xl:grid-cols-[minmax(0,1.2fr)_minmax(240px,0.8fr)_auto]">
-                <div className="space-y-2">
-                  <label className="text-sm font-medium text-[color:var(--foreground)]">Channel id</label>
-                  <Input
-                    value={youtubeChannelIdDraft}
-                    onChange={(event) => setYouTubeChannelIdDraft(event.target.value)}
-                    placeholder="UC..."
-                    disabled={savingYouTubeSubscription}
-                  />
-                </div>
-
-                <div className="space-y-2">
-                  <label className="text-sm font-medium text-[color:var(--foreground)]">Auto-comment account</label>
-                  <Select
-                    value={youtubeSubscriptionAccountId}
-                    onChange={(event) => setYouTubeSubscriptionAccountId(event.target.value)}
-                    disabled={savingYouTubeSubscription || !youtubeAccountOptions.length}
-                  >
-                    <option value="">{youtubeAutoCommentEnabled ? "Pick account" : "No account"}</option>
-                    {youtubeAccountOptions.map((account) => (
-                      <option key={account.accountId} value={account.accountId}>
-                        {account.accountName} · {account.handle || account.fromEmail || account.accountId}
-                      </option>
-                    ))}
-                  </Select>
-                </div>
-
-                <div className="flex items-end">
-                  <Button
-                    type="button"
-                    onClick={() => {
-                      void saveYouTubeSubscription();
-                    }}
-                    disabled={savingYouTubeSubscription}
-                  >
-                    {savingYouTubeSubscription ? "Saving..." : "Watch channel"}
-                  </Button>
-                </div>
-              </div>
-
-              <label className="flex items-start gap-3 rounded-[10px] border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-3">
-                <input
-                  type="checkbox"
-                  checked={youtubeAutoCommentEnabled}
-                  onChange={(event) => setYouTubeAutoCommentEnabled(event.target.checked)}
-                  className="mt-1 h-4 w-4 rounded border border-[color:var(--border)] bg-[color:var(--background)] accent-[color:var(--accent)]"
-                />
-                <span className="min-w-0">
-                  <span className="text-sm font-medium text-[color:var(--foreground)]">Auto-comment new uploads</span>
-                  <span className="mt-1 block text-sm leading-6 text-[color:var(--muted-foreground)]">
-                    YouTube pushes the upload event here, then the prepared draft can post automatically.
-                  </span>
-                </span>
-              </label>
-
-              {!youtubeAccountOptions.length ? (
-                <div className="text-xs text-[color:var(--muted-foreground)]">
-                  Add a social account below, then click `Connect YouTube`. If Google app details are missing, the button will ask for them.
-                </div>
-              ) : null}
-
-              {youtubeSubscriptions.length ? (
-                <div className="grid gap-3">
-                  {youtubeSubscriptions.map((subscription) => (
-                    <div
-                      key={subscription.id}
-                      className="rounded-[10px] border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-3"
-                    >
-                      <div className="flex flex-wrap items-start justify-between gap-3">
-                        <div className="space-y-1">
-                          <div className="text-sm font-medium text-[color:var(--foreground)]">
-                            {subscription.channelTitle || subscription.channelId}
-                          </div>
-                          <div className="text-xs text-[color:var(--muted-foreground)]">
-                            {subscription.channelId}
-                            {subscription.accountName ? ` · ${subscription.accountName}` : ""}
-                            {subscription.autoComment ? " · auto-comment on" : " · watch only"}
-                          </div>
-                        </div>
-                        <div className="flex flex-wrap gap-2">
-                          <Button
-                            type="button"
-                            variant="outline"
-                            size="sm"
-                            onClick={() => {
-                              void saveYouTubeSubscription({
-                                channelId: subscription.channelId,
-                                accountId: subscription.accountId,
-                                autoComment: subscription.autoComment,
-                                leaseSeconds: subscription.leaseSeconds || undefined,
-                              });
-                            }}
-                            disabled={savingYouTubeSubscription}
-                          >
-                            Renew now
-                          </Button>
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => {
-                              void removeYouTubeSubscription(subscription.channelId);
-                            }}
-                            disabled={removingYouTubeChannelId === subscription.channelId}
-                          >
-                            {removingYouTubeChannelId === subscription.channelId ? "Removing..." : "Remove"}
-                          </Button>
-                        </div>
-                      </div>
-
-                      <div className="mt-3 grid gap-1 text-xs text-[color:var(--muted-foreground)]">
-                        <div>Status: {subscription.status}</div>
-                        {subscription.leaseExpiresAt ? <div>Lease expires: {formatDate(subscription.leaseExpiresAt)}</div> : null}
-                        {subscription.lastVerifiedAt ? <div>Verified: {formatDate(subscription.lastVerifiedAt)}</div> : null}
-                        {subscription.lastNotificationAt ? <div>Last upload: {formatDate(subscription.lastNotificationAt)}</div> : null}
-                        {subscription.lastVideoUrl ? (
-                          <div className="flex flex-wrap items-center gap-2">
-                            <span>Last video:</span>
-                            <Link href={subscription.lastVideoUrl} target="_blank" rel="noreferrer" className="underline underline-offset-2">
-                              Open
-                            </Link>
-                          </div>
-                        ) : null}
-                        {subscription.lastCommentUrl ? (
-                          <div className="flex flex-wrap items-center gap-2">
-                            <span>Last comment:</span>
-                            <Link href={subscription.lastCommentUrl} target="_blank" rel="noreferrer" className="underline underline-offset-2">
-                              Open
-                            </Link>
-                          </div>
-                        ) : null}
-                        {subscription.lastError ? (
-                          <div className="text-[color:var(--danger)]">Last error: {subscription.lastError}</div>
-                        ) : null}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <div className="rounded-[10px] border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-3 text-sm text-[color:var(--muted-foreground)]">
-                  No watched YouTube channels yet.
-                </div>
-              )}
-            </div>
-          </SectionPanel>
 
           <SectionPanel
             title="Add accounts"

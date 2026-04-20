@@ -2592,6 +2592,20 @@ export async function updateOutreachAccount(
         },
       });
     }
+
+    if (isVercel) {
+      throw new OutreachDataError("Supabase updated the outreach account, but no saved row was returned.", {
+        status: 500,
+        hint: "Inspect runtime logs for updateOutreachAccount to confirm whether the write matched a row.",
+        debug: {
+          operation: "updateOutreachAccount",
+          runtime: runtimeLabel(),
+          supabaseConfigured: supabaseConfigured(),
+          accountId,
+          matchedRow: false,
+        },
+      });
+    }
   }
 
   if (isVercel) return null;

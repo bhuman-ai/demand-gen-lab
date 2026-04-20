@@ -97,6 +97,16 @@ function normalizeYouTubeHandle(value: string) {
   return customUrl.startsWith("@") ? customUrl : "";
 }
 
+function hasSavedYouTubeIdentity(
+  account: { config?: { social?: { externalAccountId?: string | null } } } | null | undefined,
+  expectedChannelId?: string
+) {
+  const externalAccountId = String(account?.config?.social?.externalAccountId ?? "").trim();
+  if (!externalAccountId) return false;
+  if (!expectedChannelId) return true;
+  return externalAccountId === expectedChannelId;
+}
+
 export async function GET(request: Request) {
   const url = new URL(request.url);
   const state = decodeState(url.searchParams.get("state") ?? "");
@@ -118,6 +128,15 @@ export async function GET(request: Request) {
     const oauthError = String(url.searchParams.get("error") ?? "").trim();
     if (oauthError) {
       const description = String(url.searchParams.get("error_description") ?? "").trim();
+      console.warn(
+        "[youtube-callback] google returned oauth error",
+        JSON.stringify({
+          accountId: state.accountId,
+          brandId: state.brandId,
+          oauthError,
+          description,
+        })
+      );
       return failure(description || oauthError);
     }
 
@@ -125,6 +144,14 @@ export async function GET(request: Request) {
     if (!code) {
       return failure("Google did not return an authorization code.");
     }
+
+    console.info(
+      "[youtube-callback] received callback",
+      JSON.stringify({
+        accountId: state.accountId,
+        brandId: state.brandId,
+      })
+    );
 
     const account = await getOutreachAccount(state.accountId);
     if (!account) {
@@ -143,6 +170,13 @@ export async function GET(request: Request) {
       clientSecret: credentials.clientSecret,
       redirectUri: callbackUrl(),
     });
+    console.info(
+      "[youtube-callback] code exchange complete",
+      JSON.stringify({
+        accountId: state.accountId,
+        hasRefreshToken: Boolean(tokens.refreshToken),
+      })
+    );
     if (!tokens.refreshToken) {
       return failure("Google did not return a refresh token. Try connecting again and choose the Google consent prompt.");
     }
@@ -150,8 +184,16 @@ export async function GET(request: Request) {
     const channel = await getAuthenticatedYouTubeChannelProfile({
       accessToken: tokens.accessToken,
     });
+    console.info(
+      "[youtube-callback] youtube profile resolved",
+      JSON.stringify({
+        accountId: state.accountId,
+        channelId: channel.channelId,
+        hasTitle: Boolean(String(channel.title ?? "").trim()),
+      })
+    );
     const now = new Date().toISOString();
-    await updateOutreachAccount(state.accountId, {
+    const updated = await updateOutreachAccount(state.accountId, {
       config: {
         social: {
           enabled: true,
@@ -175,6 +217,36 @@ export async function GET(request: Request) {
         youtubeRefreshToken: tokens.refreshToken,
       },
     });
+    if (!hasSavedYouTubeIdentity(updated, channel.channelId)) {
+      const reloaded = await getOutreachAccount(state.accountId);
+      if (!hasSavedYouTubeIdentity(reloaded, channel.channelId)) {
+        console.error(
+          "[youtube-callback] persistence verification failed",
+          JSON.stringify({
+            accountId: state.accountId,
+            channelId: channel.channelId,
+            updateReturnedAccount: Boolean(updated),
+            reloadReturnedAccount: Boolean(reloaded),
+            reloadExternalAccountId: String(reloaded?.config?.social?.externalAccountId ?? "").trim(),
+          })
+        );
+        return failure("Google sign-in finished, but we could not save the YouTube account. Please try again.");
+      }
+      console.warn(
+        "[youtube-callback] update returned incomplete account but reload succeeded",
+        JSON.stringify({
+          accountId: state.accountId,
+          channelId: channel.channelId,
+        })
+      );
+    }
+    console.info(
+      "[youtube-callback] completed successfully",
+      JSON.stringify({
+        accountId: state.accountId,
+        channelId: channel.channelId,
+      })
+    );
 
     return NextResponse.redirect(
       redirectUrl({
@@ -190,6 +262,15 @@ export async function GET(request: Request) {
         : error instanceof Error
           ? error.message
           : "YouTube connect failed.";
+    console.error(
+      "[youtube-callback] failed",
+      JSON.stringify({
+        accountId: state.accountId,
+        brandId: state.brandId,
+        message,
+        errorName: error instanceof Error ? error.name : "UnknownError",
+      })
+    );
     return failure(message);
   }
 }

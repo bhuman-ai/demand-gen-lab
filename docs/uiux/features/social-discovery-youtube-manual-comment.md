@@ -1,13 +1,13 @@
 # Feature: social-discovery-youtube-manual-comment
 
 ## Request
-Fix regression where YouTube OAuth returns 'Google sign-in finished, but we could not save the YouTube account. Please try again.' after connecting an account in the social discovery / social account pool flow.
+Auto-generate the YouTube comment draft with GPT-5.4 so the user does not have to write it manually, using the selected brand and its context in the social discovery manual comment flow.
 ## Autonomy Mode
 holistic_autopilot
 ## Target Users
 operator/founder under time pressure
 ## Optimization Target
-Restore working YouTube account connect flow with minimal UI/API changes
+Show one ready-to-edit YouTube comment draft by default with minimal extra UI
 ## Hard Constraints
 - Preserve existing comment composer behavior
 - Keep YouTube path beginner-simple with one primary next action
@@ -17,7 +17,6 @@ Restore working YouTube account connect flow with minimal UI/API changes
 Optimize for decision speed with one primary action. Start with smallest coherent slice that proves Emergency override UI implementation for social discovery. Add the simplest YouTube manual-comment path for a core unit video lead workflow: search a niche, see videos with subscriber counts, pick one video, and use the existing comment composer/manual comment button. Scope is search + review + manual comment button only. Reduce visible controls and hide promotional clutter on the YouTube path..
 ## Touched Surfaces
 - social-discovery
-- outreach-account-connect
 ## Success Moment
 operator/founder under time pressure completes Emergency override UI implementation for social discovery. Add the simplest YouTube manual-comment path for a core unit video lead workflow: search a niche, see videos with subscriber counts, pick one video, and use the existing comment composer/manual comment button. Scope is search + review + manual comment button only. Reduce visible controls and hide promotional clutter on the YouTube path. and sees explicit confirmation of successful outcome.
 ## Failure Policy
@@ -26,6 +25,15 @@ operator/founder under time pressure completes Emergency override UI implementat
 ## Decisions
 - Scope: Optimize for decision speed with one primary action. Start with smallest coherent slice that proves Emergency override UI implementation for social discovery. Add the simplest YouTube manual-comment path for a core unit video lead workflow: search a niche, see videos with subscriber counts, pick one video, and use the existing comment composer/manual comment button. Scope is search + review + manual comment button only. Reduce visible controls and hide promotional clutter on the YouTube path.. (source: agent_assumption; why: Autopilot inferred default for feature_scope from request, audience, optimization target, and mode.)
 - Success Moment: operator/founder under time pressure completes Emergency override UI implementation for social discovery. Add the simplest YouTube manual-comment path for a core unit video lead workflow: search a niche, see videos with subscriber counts, pick one video, and use the existing comment composer/manual comment button. Scope is search + review + manual comment button only. Reduce visible controls and hide promotional clutter on the YouTube path. and sees explicit confirmation of successful outcome. (source: agent_assumption; why: Autopilot inferred default for success_moment from request, audience, optimization target, and mode.)
+- Typography Scale: Use existing repo typography rhythm first. If none exists, keep a tight hierarchy with distinct title, section, and body sizes. (source: agent_assumption; why: Autopilot inferred default for typography_scale from request, audience, optimization target, and mode.)
+- Primary Action: operator/founder under time pressure should be able to Auto-generate the YouTube comment draft with GPT-5.4 so the user does not have to write it manually, using the selected brand and its context in the social discovery manual comment . with one obvious first move. (source: agent_assumption; why: Autopilot inferred default for primary_action from request, audience, optimization target, and mode.)
+- Primary Risk: operator/founder under time pressure should not have to guess what matters first or what can go wrong. (source: agent_assumption; why: Autopilot inferred default for primary_risk from request, audience, optimization target, and mode.)
+- Information Budget: First screen shows one primary decision, one primary risk, and one current rationale. Audit detail stays behind an explicit drilldown. (source: agent_assumption; why: Autopilot inferred default for information_budget from request, audience, optimization target, and mode.)
+- View Model Contract: Primary user: operator/founder under time pressure
+Current decision: Auto-generate the YouTube comment draft with GPT-5.4 so the user does not have to write it manually, using the selected brand and its context in the social discovery manual comment .
+Why now: operator/founder under time pressure needs immediate clarity on this flow.
+Next action: Let Codex structure the surface around one dominant move.
+Top risk: operator/founder under time pressure should not have to guess what matters first or what can go wrong. (source: agent_assumption; why: Autopilot inferred default for view_model_contract from request, audience, optimization target, and mode.)
 ## Open Questions
 [TODO] Track unresolved blockers here.
 
@@ -45,6 +53,9 @@ operator/founder under time pressure completes Emergency override UI implementat
 - 2026-04-20 Implementation summary: Made the two YouTube modes explicit in the social discovery UI. Added a simple top-level 'Choose mode' section, renamed the manual path to 'Mode 1. Search today's videos', renamed the action steps to 'Pick one video' and 'Review and post comment', pulled watched-channel subscriptions out of the old setup disclosure into a first-class 'Mode 2. Watch channels' section, and reduced the setup disclosure to prompt/config/account plumbing only.
 - Files: /Users/don/lastb2b/src/app/brands/[id]/social-discovery/social-discovery-client.tsx
 - Components: SocialDiscoveryClient
+- 2026-04-20 Implementation summary: Made YouTube manual-comment drafts default to a stronger GPT-5.4-backed path without adding UI weight. The social comment planner now defaults to GPT-5.4 for `social_comment_planning`, uses platform-aware prompt framing for YouTube vs Instagram, includes richer brand context fields in the prompt, and increases the default LLM planning limit so all 12 visible YouTube search results can get generated drafts. On the client, the flow now auto-selects the best result with a ready draft first and prefills any available draft from the interaction plan, so the user no longer starts from a blank comment box.
+- Files: /Users/don/lastb2b/src/lib/social-discovery-comment-prompt.ts, /Users/don/lastb2b/src/lib/social-discovery.ts, /Users/don/lastb2b/src/app/brands/[id]/social-discovery/social-discovery-client.tsx
+- Components: SocialDiscoveryClient, social comment planner, social discovery comment prompt
 ## Doc Sync
 - 2026-04-20 Synced after implementation.
 - States touched: empty, loading, error
@@ -56,3 +67,33 @@ operator/founder under time pressure completes Emergency override UI implementat
 - Code touched: /Users/don/lastb2b/src/lib/outreach-customerio-billing.ts
 - 2026-04-20 Synced after implementation.
 - Code touched: /Users/don/lastb2b/src/app/brands/[id]/social-discovery/social-discovery-client.tsx
+- 2026-04-20 Synced after implementation.
+- Code touched: /Users/don/lastb2b/src/lib/social-discovery-comment-prompt.ts, /Users/don/lastb2b/src/lib/social-discovery.ts, /Users/don/lastb2b/src/app/brands/[id]/social-discovery/social-discovery-client.tsx
+## Primary Action
+operator/founder under time pressure should be able to Auto-generate the YouTube comment draft with GPT-5.4 so the user does not have to write it manually, using the selected brand and its context in the social discovery manual comment . with one obvious first move.
+
+## Primary Risk
+operator/founder under time pressure should not have to guess what matters first or what can go wrong.
+
+## Information Budget
+First screen shows one primary decision, one primary risk, and one current rationale. Audit detail stays behind an explicit drilldown.
+
+## View Model Contract
+Primary user: operator/founder under time pressure
+Current decision: Auto-generate the YouTube comment draft with GPT-5.4 so the user does not have to write it manually, using the selected brand and its context in the social discovery manual comment .
+Why now: operator/founder under time pressure needs immediate clarity on this flow.
+Next action: Let Codex structure the surface around one dominant move.
+Top risk: operator/founder under time pressure should not have to guess what matters first or what can go wrong.
+
+## Concept Options
+- 2026-04-20 Option A: Auto-generate comment draft immediately when a YouTube result is selected. Keep the existing comment box, prefill it with the generated draft, and let the user edit before posting.
+- 2026-04-20 Option B: Add a separate `Generate draft` button inside the comment section. User manually triggers generation, then edits and posts.
+- 2026-04-20 Option C: Add a side-by-side AI draft panel with multiple variants and rationale.
+- 2026-04-20 Preferred: Option A. Fastest path, lowest UI weight, matches the beginner-simple requirement, and removes the blank-state burden without adding a second decision.
+
+## Concept Winner
+- 2026-04-20 Winner: Option A.
+- Structure: Selecting a YouTube result automatically requests one GPT-5.4 comment draft using the selected brand context, video context, and existing social discovery comment prompt. The draft appears directly in the existing `Review and post comment` textarea.
+- Loading state: Replace the blank-draft state with `Writing draft...` inline in the current comment area.
+- Error state: Show a short inline error above the textarea and keep manual editing available.
+- Simplicity rule: No extra button, no alternate draft list, no new review pane. One generated draft, one editable textarea, one post action.

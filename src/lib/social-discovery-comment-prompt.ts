@@ -1,5 +1,5 @@
 export const DEFAULT_SOCIAL_DISCOVERY_COMMENT_PROMPT = [
-  "Write one natural Instagram comment for a real brand account.",
+  "Write one natural platform-native social comment for a real brand account.",
   "Sound like a normal person in the comments, not a strategist, founder, or AI assistant.",
   "Give one useful thought first, then optionally add one very light brand bridge if the brand actually has a relevant solution.",
   "Rules:",

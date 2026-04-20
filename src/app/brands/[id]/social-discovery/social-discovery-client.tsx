@@ -294,6 +294,18 @@ function baselineQueriesFor(data: DiscoveryResponse | null | undefined) {
   return normalizeQueries(data?.suggestedQueries);
 }
 
+function preferredPostId(posts: DiscoveryPost[]) {
+  return (
+    posts.find((post) => {
+      const plan = planFor(post);
+      return plan?.targetStrength === "target" && Boolean(plan.sequence?.[0]?.draft?.trim());
+    })?.id ||
+    posts.find((post) => Boolean(planFor(post)?.sequence?.[0]?.draft?.trim()))?.id ||
+    posts[0]?.id ||
+    ""
+  );
+}
+
 async function readDiscoveryResponse(response: Response) {
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
@@ -381,10 +393,7 @@ export default function SocialDiscoveryClient({ brandId }: { brandId: string }) 
         ? "Saved for this brand."
         : "Using the default comment prompt.";
   const selectedPlan = planFor(selectedPost);
-  const generatedCommentDraft = useMemo(() => {
-    if (selectedPlan?.generationPromptMode !== "auto") return "";
-    return selectedPlan.sequence?.[0]?.draft?.trim() ?? "";
-  }, [selectedPlan]);
+  const generatedCommentDraft = useMemo(() => selectedPlan?.sequence?.[0]?.draft?.trim() ?? "", [selectedPlan]);
   const commentGenerationPending = Boolean(
     selectedPost &&
       selectedPlan?.targetStrength === "target" &&
@@ -645,7 +654,7 @@ export default function SocialDiscoveryClient({ brandId }: { brandId: string }) 
         });
       }
       setSelectedId((current) =>
-        current && nextData.posts.some((post) => post.id === current) ? current : nextData.posts[0]?.id ?? ""
+        current && nextData.posts.some((post) => post.id === current) ? current : preferredPostId(nextData.posts)
       );
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load social discovery");
@@ -770,7 +779,7 @@ export default function SocialDiscoveryClient({ brandId }: { brandId: string }) 
       }
       const nextPosts = Array.isArray(data?.posts) ? (data.posts as DiscoveryPost[]) : [];
       setPosts(nextPosts);
-      setSelectedId(nextPosts[0]?.id ?? "");
+      setSelectedId(preferredPostId(nextPosts));
       setYouTubeSearchSummary(
         nextPosts.length
           ? `${nextPosts.length} video leads for "${query}".`
@@ -812,7 +821,7 @@ export default function SocialDiscoveryClient({ brandId }: { brandId: string }) 
       setSavedQueries(nextSavedQueries);
       setSuggestedQueries(nextSuggestedQueries);
       setQueryDraft(baselineQueriesFor(data).join("\n"));
-      setSelectedId(filteredPosts[0]?.id ?? "");
+      setSelectedId(preferredPostId(filteredPosts));
       if (!filteredPosts.length) {
         await loadPosts(status);
       }

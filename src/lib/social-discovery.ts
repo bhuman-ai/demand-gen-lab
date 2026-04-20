@@ -1735,7 +1735,7 @@ function buildInteractionPlan(input: {
 }
 
 function socialCommentPlannerLimit() {
-  return Math.max(1, Math.min(12, Number(process.env.SOCIAL_DISCOVERY_COMMENT_PLAN_LIMIT ?? 6) || 6));
+  return Math.max(1, Math.min(12, Number(process.env.SOCIAL_DISCOVERY_COMMENT_PLAN_LIMIT ?? 12) || 12));
 }
 
 function socialLiveContentEnrichmentLimit() {
@@ -2015,24 +2015,36 @@ function liveContentFromPost(post: SocialDiscoveryPost) {
   return asRecord(asRecord(post.raw).liveContent);
 }
 
+function socialCommentPlatformLabel(platform: SocialDiscoveryPlatform) {
+  if (platform === "youtube") return "YouTube";
+  if (platform === "instagram") return "Instagram";
+  return "social";
+}
+
 export function buildSocialCommentPlanningPrompt(input: {
   brand: BrandRecord;
   post: SocialDiscoveryPost;
 }) {
   const plan = input.post.interactionPlan as EnrichedInteractionPlan;
   const liveContent = liveContentFromPost(input.post);
+  const platformLabel = socialCommentPlatformLabel(input.post.platform);
   const brandCommentPrompt = resolveSocialDiscoveryCommentPrompt(input.brand.socialDiscoveryCommentPrompt).slice(0, 4000);
   return [
-    "You are writing one Instagram comment for a real brand account to post.",
+    `You are writing one ${platformLabel} comment for a real brand account to post.`,
     "Follow this comment prompt exactly:",
     brandCommentPrompt,
     "Return JSON only with keys: headline, fitSummary, shouldComment, commentDraft, assetNeeded, riskNotes, exitRules.",
     "",
+    `social_platform: ${input.post.platform}`,
     `brand_name: ${input.brand.name}`,
     `brand_website: ${input.brand.website || "unknown"}`,
     `brand_product: ${compactText(input.brand.product, 320)}`,
     `brand_tone: ${compactText(input.brand.tone, 200)}`,
     `brand_notes: ${compactText(input.brand.notes, 320)}`,
+    `brand_target_markets: ${compactText((input.brand.targetMarkets ?? []).join(" | "), 360)}`,
+    `brand_ideal_customer_profiles: ${compactText((input.brand.idealCustomerProfiles ?? []).join(" | "), 420)}`,
+    `brand_key_features: ${compactText((input.brand.keyFeatures ?? []).join(" | "), 420)}`,
+    `brand_key_benefits: ${compactText((input.brand.keyBenefits ?? []).join(" | "), 420)}`,
     `post_title: ${compactText(input.post.title, 320)}`,
     `post_body: ${compactText(input.post.body, 600)}`,
     `post_live_caption: ${compactText(liveContent.captionText, 900)}`,
@@ -2062,7 +2074,10 @@ async function enhanceInteractionPlanWithLlm(input: {
   const prompt = buildSocialCommentPlanningPrompt(input);
 
   try {
-    const model = resolveLlmModel("social_comment_planning", { prompt });
+    const model = resolveLlmModel("social_comment_planning", {
+      prompt,
+      legacyModelEnv: String(process.env.OPENAI_MODEL_SOCIAL_COMMENT_PLANNING ?? "").trim() || "gpt-5.4",
+    });
     const response = await fetch("https://api.openai.com/v1/responses", {
       method: "POST",
       headers: {

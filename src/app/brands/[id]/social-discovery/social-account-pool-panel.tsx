@@ -428,6 +428,23 @@ export function SocialAccountPoolPanel({
   );
 
   useEffect(() => {
+    if (!pendingYouTubeAccountId) return;
+    const linked = accounts.find((account) => account.id === pendingYouTubeAccountId);
+    if (!linked || !hasConnectedIdentity(linked.config.social)) return;
+
+    setPendingYouTubeAccountId("");
+    setYouTubeConnecting(false);
+    setSyncing(false);
+    setSelectedAccountId(linked.id);
+    setDraft(buildDraft(linked));
+    setLinkMessage(
+      linked.config.social.displayName.trim()
+        ? `YouTube connected as ${linked.config.social.displayName.trim()}.`
+        : "YouTube connected."
+    );
+  }, [accounts, pendingYouTubeAccountId]);
+
+  useEffect(() => {
     let cancelled = false;
 
     async function loadData() {
@@ -613,6 +630,8 @@ export function SocialAccountPoolPanel({
         return;
       }
 
+      setYouTubeConnecting(false);
+      setSyncing(false);
       setPendingYouTubeAccountId(linkedAccount || "");
       setError("");
       setLinkMessage("Refreshing connected YouTube account...");
@@ -628,6 +647,9 @@ export function SocialAccountPoolPanel({
 
           if (linked && hasConnectedIdentity(linked.config.social)) {
             setPendingYouTubeAccountId("");
+            setYouTubeConnecting(false);
+            setSyncing(false);
+            setDraft(buildDraft(linked));
             setLinkMessage(
               linked.config.social.displayName.trim()
                 ? `YouTube connected as ${linked.config.social.displayName.trim()}.`
@@ -652,6 +674,8 @@ export function SocialAccountPoolPanel({
         }
       } finally {
         if (!cancelled) {
+          setYouTubeConnecting(false);
+          setSyncing(false);
           router.replace(pathname);
         }
       }
@@ -1141,7 +1165,7 @@ export function SocialAccountPoolPanel({
               <div className="min-w-0">
                 <div className="text-base font-semibold text-[color:var(--foreground)]">{selectedAccount.name}</div>
                 <div className="mt-1 text-sm text-[color:var(--muted-foreground)]">
-                  {pendingYouTubeAccountId === selectedAccount.id && selectedPlatform === "youtube"
+                  {selectedYouTubeSyncing
                     ? "Finishing YouTube sign-in. This usually takes a few seconds."
                     : selectedPlatform
                     ? selectedHasConnectedIdentity

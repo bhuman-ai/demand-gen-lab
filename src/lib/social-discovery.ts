@@ -2024,17 +2024,30 @@ function socialCommentPlatformLabel(platform: SocialDiscoveryPlatform) {
 export function buildSocialCommentPlanningPrompt(input: {
   brand: BrandRecord;
   post: SocialDiscoveryPost;
+  mode?: "solo" | "thread";
 }) {
   const plan = input.post.interactionPlan as EnrichedInteractionPlan;
   const liveContent = liveContentFromPost(input.post);
   const platformLabel = socialCommentPlatformLabel(input.post.platform);
+  const draftMode = input.mode === "thread" ? "thread" : "solo";
   const brandCommentPrompt = resolveSocialDiscoveryCommentPrompt(input.brand.socialDiscoveryCommentPrompt).slice(0, 4000);
   return [
     `You are writing one ${platformLabel} comment for a real brand account to post.`,
-    "Follow this comment prompt exactly:",
+    draftMode === "thread"
+      ? "You are designing a two-comment thread from two different real accounts."
+      : "You are designing one standalone top-level comment only.",
+    "Use the following prompt for the top-level commentDraft:",
     brandCommentPrompt,
-    "Return JSON only with keys: headline, fitSummary, shouldComment, commentDraft, assetNeeded, riskNotes, exitRules.",
+    draftMode === "thread"
+      ? "Also provide replyDraft for second real account replying to first comment. Design both together."
+      : "Leave replyDraft empty.",
+    draftMode === "thread"
+      ? "Thread rules: commentDraft should set up natural opening, question, gap, or prompt. replyDraft should answer, recommend, or bridge naturally from different person."
+      : "Solo rules: commentDraft must work alone. No setup for another account.",
+    "replyDraft rules: keep it under 24 words, make it sound like second person, do not overpraise, do not sound coordinated, and leave it empty if fake or unnecessary.",
+    "Return JSON only with keys: headline, fitSummary, shouldComment, commentDraft, replyDraft, assetNeeded, riskNotes, exitRules.",
     "",
+    `draft_mode: ${draftMode}`,
     `social_platform: ${input.post.platform}`,
     `brand_name: ${input.brand.name}`,
     `brand_website: ${input.brand.website || "unknown"}`,
@@ -2059,6 +2072,7 @@ export function buildSocialCommentPlanningPrompt(input: {
     `heuristic_posture: ${plan.commentPosture}`,
     `heuristic_mention_policy: ${plan.mentionPolicy}`,
     `heuristic_comment: ${plan.sequence[0]?.draft || ""}`,
+    `heuristic_reply_comment: ${plan.sequence[1]?.draft || ""}`,
   ].join("\n");
 }
 
@@ -2069,6 +2083,7 @@ async function enhanceInteractionPlanWithLlm(
   },
   options?: {
     force?: boolean;
+    mode?: "solo" | "thread";
   }
 ): Promise<SocialDiscoveryPost> {
   const apiKey = String(process.env.OPENAI_API_KEY ?? "").trim();
@@ -2076,7 +2091,12 @@ async function enhanceInteractionPlanWithLlm(
 
   const plan = input.post.interactionPlan as EnrichedInteractionPlan;
   if (!options?.force && !shouldEnhanceInteractionPlanWithLlm(input.post)) return input.post;
-  const prompt = buildSocialCommentPlanningPrompt(input);
+  const draftMode = options?.mode === "thread" ? "thread" : "solo";
+  const prompt = buildSocialCommentPlanningPrompt({
+    brand: input.brand,
+    post: input.post,
+    mode: draftMode,
+  });
 
   try {
     const model = resolveLlmModel("social_comment_planning", {
@@ -2104,10 +2124,15 @@ async function enhanceInteractionPlanWithLlm(
     const fitSummary = compactText(row.fitSummary, 280) || plan.fitSummary;
     const shouldComment = row.shouldComment === false ? false : true;
     const commentDraft = compactText(row.commentDraft, 280);
+    const replyDraft = compactText(row.replyDraft, 220);
     const assetNeeded = compactText(row.assetNeeded, 120) || plan.assetNeeded;
     const riskNotes = normalizeCommentPlanStrings(row.riskNotes, 5, 160);
     const exitRules = normalizeCommentPlanStrings(row.exitRules, 5, 180);
     const nextCommentDraft = shouldComment ? commentDraft || plan.sequence[0]?.draft || "" : "";
+    const nextReplyDraft =
+      draftMode === "thread" && shouldComment && nextCommentDraft
+        ? replyDraft || plan.sequence[1]?.draft || ""
+        : "";
 
     return {
       ...input.post,
@@ -2132,6 +2157,18 @@ async function enhanceInteractionPlanWithLlm(
                 }),
                 draft: nextCommentDraft,
               },
+              ...(nextReplyDraft
+                ? [
+                    {
+                      ...(plan.sequence[1] ?? {
+                        actorRole: "community" as const,
+                        timing: "2-10 min after the first comment",
+                        move: "second_account_reply",
+                      }),
+                      draft: nextReplyDraft,
+                    },
+                  ]
+                : []),
             ]
           : [],
       },
@@ -2145,13 +2182,14 @@ export async function refreshSocialDiscoveryCommentDraft(input: {
   brand: BrandRecord;
   post: SocialDiscoveryPost;
   force?: boolean;
+  mode?: "solo" | "thread";
 }) {
   return enhanceInteractionPlanWithLlm(
     {
       brand: input.brand,
       post: input.post,
     },
-    { force: input.force }
+    { force: input.force, mode: input.mode }
   );
 }
 

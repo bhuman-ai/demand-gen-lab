@@ -635,6 +635,7 @@ export async function sendYouTubeVideoComment(input: {
   post: Pick<SocialDiscoveryPost, "platform" | "url" | "raw">;
   text: string;
   secrets: Pick<OutreachAccountSecrets, "youtubeClientId" | "youtubeClientSecret" | "youtubeRefreshToken">;
+  commentId?: string;
 }) {
   if (!supportsYouTubePostComments(input.post.platform)) {
     throw new YouTubeApiError(`YouTube commenting is not supported for ${input.post.platform}.`, { status: 400 });
@@ -659,38 +660,50 @@ export async function sendYouTubeVideoComment(input: {
     throw new YouTubeApiError("YouTube did not return a channel id for this video.", { status: 422, details: videoSnippet });
   }
 
+  const parentCommentId = String(input.commentId ?? "").trim();
   const payload = await youtubeRequest<Record<string, unknown>>({
-    path: "/commentThreads",
+    path: parentCommentId ? "/comments" : "/commentThreads",
     method: "POST",
     accessToken,
     query: {
       part: "snippet",
     },
-    body: {
-      snippet: {
-        channelId,
-        videoId,
-        topLevelComment: {
+    body: parentCommentId
+      ? {
           snippet: {
+            parentId: parentCommentId,
             textOriginal: input.text,
           },
+        }
+      : {
+          snippet: {
+            channelId,
+            videoId,
+            topLevelComment: {
+              snippet: {
+                textOriginal: input.text,
+              },
+            },
+          },
         },
-      },
-    },
   });
 
   const threadSnippet = asRecord(payload.snippet);
   const topLevelComment = asRecord(threadSnippet.topLevelComment);
   const topLevelCommentId = textValue(topLevelComment.id);
   const threadId = textValue(payload.id);
-  const commentId = topLevelCommentId || threadId;
+  const commentId = parentCommentId ? threadId : topLevelCommentId || threadId;
   const delivery: YouTubeCommentDeliveryResult = {
     status: commentId ? "verified" : "accepted_unverified",
     commentId,
     source: commentId ? "response" : "none",
     message: commentId
-      ? "YouTube created the top-level comment and returned its id."
-      : "YouTube accepted the request, but did not return a top-level comment id.",
+      ? parentCommentId
+        ? "YouTube created the reply and returned its id."
+        : "YouTube created the top-level comment and returned its id."
+      : parentCommentId
+        ? "YouTube accepted the reply request, but did not return a reply id."
+        : "YouTube accepted the request, but did not return a top-level comment id.",
   };
 
   return {

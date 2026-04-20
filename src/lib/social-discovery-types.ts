@@ -34,6 +34,7 @@ export type SocialDiscoveryCommentDelivery = {
   accountId: string;
   accountName: string;
   accountHandle: string;
+  replyDelivery?: SocialDiscoveryCommentDelivery;
 };
 
 export type SocialDiscoveryPromotionDraft = {

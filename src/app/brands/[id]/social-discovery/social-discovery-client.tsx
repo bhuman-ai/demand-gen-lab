@@ -193,6 +193,20 @@ function buildCommentExportPayload(post: DiscoveryPost | null, delivery: SocialD
       name: delivery.accountName,
       handle: delivery.accountHandle,
     },
+    reply: delivery.replyDelivery
+      ? {
+          commentId: delivery.replyDelivery.commentId,
+          commentUrl: delivery.replyDelivery.commentUrl,
+          deliveryStatus: delivery.replyDelivery.status,
+          deliverySource: delivery.replyDelivery.source,
+          postedAt: delivery.replyDelivery.postedAt,
+          account: {
+            id: delivery.replyDelivery.accountId,
+            name: delivery.replyDelivery.accountName,
+            handle: delivery.replyDelivery.accountHandle,
+          },
+        }
+      : null,
   };
 }
 
@@ -334,10 +348,14 @@ export default function SocialDiscoveryClient({ brandId }: { brandId: string }) 
   const [commentAccountId, setCommentAccountId] = useState("");
   const [commentReplyId, setCommentReplyId] = useState("");
   const [commentError, setCommentError] = useState("");
+  const [commentThreadWarning, setCommentThreadWarning] = useState("");
   const [commentResult, setCommentResult] = useState<SocialDiscoveryCommentDelivery | null>(null);
   const [draftingPostId, setDraftingPostId] = useState("");
   const [draftGenerationErrors, setDraftGenerationErrors] = useState<Record<string, string>>({});
   const [sendingComment, setSendingComment] = useState(false);
+  const [replyEnabled, setReplyEnabled] = useState(false);
+  const [replyDraft, setReplyDraft] = useState("");
+  const [replyAccountId, setReplyAccountId] = useState("");
   const [promoError, setPromoError] = useState("");
   const [creatingPromo, setCreatingPromo] = useState(false);
   const [promoResult, setPromoResult] = useState<SocialDiscoveryPromotionDraft | null>(null);
@@ -364,6 +382,7 @@ export default function SocialDiscoveryClient({ brandId }: { brandId: string }) 
   const [removingYouTubeChannelId, setRemovingYouTubeChannelId] = useState("");
   const previousSelectedPostIdRef = useRef("");
   const lastAutoCommentDraftRef = useRef("");
+  const lastAutoReplyDraftRef = useRef("");
   const attemptedAutoDraftPostIdsRef = useRef<Set<string>>(new Set());
 
   const selectedPost = useMemo(
@@ -397,6 +416,7 @@ export default function SocialDiscoveryClient({ brandId }: { brandId: string }) 
         : "Using the default comment prompt.";
   const selectedPlan = planFor(selectedPost);
   const generatedCommentDraft = useMemo(() => selectedPlan?.sequence?.[0]?.draft?.trim() ?? "", [selectedPlan]);
+  const generatedReplyDraft = useMemo(() => selectedPlan?.sequence?.[1]?.draft?.trim() ?? "", [selectedPlan]);
   const selectedDraftGenerationError = selectedPost ? draftGenerationErrors[selectedPost.id] ?? "" : "";
   const commentGenerationPending = Boolean(
     (selectedPost && selectedPost.id === draftingPostId) ||
@@ -456,6 +476,11 @@ export default function SocialDiscoveryClient({ brandId }: { brandId: string }) 
     () => commentAccountOptions.find((account) => account.accountId === commentAccountId) ?? commentAccountOptions[0] ?? null,
     [commentAccountId, commentAccountOptions]
   );
+  const replyAccountOptions = useMemo(
+    () => commentAccountOptions.filter((account) => account.accountId !== commentAccountId),
+    [commentAccountId, commentAccountOptions]
+  );
+  const canAddTeammateReply = selectedCommentPlatform === "youtube" && replyAccountOptions.length > 0;
   const youtubeAccountOptions = useMemo(() => {
     return socialAccounts
       .filter(
@@ -503,6 +528,9 @@ export default function SocialDiscoveryClient({ brandId }: { brandId: string }) 
   const canRestoreSuggestedComment = Boolean(
     generatedCommentDraft.trim() && generatedCommentDraft.trim() !== commentDraft.trim()
   );
+  const canRestoreSuggestedReply = Boolean(
+    generatedReplyDraft.trim() && generatedReplyDraft.trim() !== replyDraft.trim()
+  );
   const emptyCommentMessage = useMemo(() => {
     if (!selectedPost || !selectedPlan || generatedCommentDraft || commentGenerationPending) return "";
     if (selectedDraftGenerationError) return selectedDraftGenerationError;
@@ -520,14 +548,21 @@ export default function SocialDiscoveryClient({ brandId }: { brandId: string }) 
     setPosts((current) => current.map((post) => (post.id === nextPost.id ? nextPost : post)));
   }
 
-  async function requestCommentDraftForPost(postId: string) {
+  async function requestCommentDraftForPost(
+    postId: string,
+    options?: {
+      mode?: "solo" | "thread";
+      adoptFreshDrafts?: boolean;
+    }
+  ) {
+    const mode = options?.mode === "thread" ? "thread" : "solo";
     setDraftingPostId(postId);
     setDraftGenerationErrors((current) => ({ ...current, [postId]: "" }));
     try {
       const response = await fetch(canonicalApiUrl(`/api/brands/${brandId}/social-discovery/comment-draft`), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ postId }),
+        body: JSON.stringify({ postId, mode }),
       });
       const data = await response.json().catch(() => ({}));
       if (!response.ok) {
@@ -536,6 +571,15 @@ export default function SocialDiscoveryClient({ brandId }: { brandId: string }) 
       const updatedPost = data?.post && typeof data.post === "object" ? (data.post as DiscoveryPost) : null;
       if (!updatedPost) return;
       replacePost(updatedPost);
+      if (options?.adoptFreshDrafts) {
+        const nextPlan = planFor(updatedPost);
+        const nextCommentDraft = nextPlan?.sequence?.[0]?.draft?.trim() ?? "";
+        const nextReplyDraft = mode === "thread" ? nextPlan?.sequence?.[1]?.draft?.trim() ?? "" : "";
+        setCommentDraft(nextCommentDraft);
+        lastAutoCommentDraftRef.current = nextCommentDraft;
+        setReplyDraft(nextReplyDraft);
+        lastAutoReplyDraftRef.current = nextReplyDraft;
+      }
       if (!planFor(updatedPost)?.sequence?.[0]?.draft?.trim()) {
         setDraftGenerationErrors((current) => ({
           ...current,
@@ -553,7 +597,7 @@ export default function SocialDiscoveryClient({ brandId }: { brandId: string }) 
   }
 
   const generateCommentDraftForPost = useEffectEvent((postId: string) => {
-    void requestCommentDraftForPost(postId);
+    void requestCommentDraftForPost(postId, { mode: "solo" });
   });
 
   useEffect(() => {
@@ -566,6 +610,7 @@ export default function SocialDiscoveryClient({ brandId }: { brandId: string }) 
     if (!nextPostId) {
       previousSelectedPostIdRef.current = "";
       lastAutoCommentDraftRef.current = "";
+      lastAutoReplyDraftRef.current = "";
       return;
     }
 
@@ -579,14 +624,19 @@ export default function SocialDiscoveryClient({ brandId }: { brandId: string }) 
     previousSelectedPostIdRef.current = nextPostId;
     setCommentDraft(generatedCommentDraft);
     lastAutoCommentDraftRef.current = generatedCommentDraft;
+    setReplyDraft(generatedReplyDraft);
+    lastAutoReplyDraftRef.current = generatedReplyDraft;
+    setReplyEnabled(false);
     setCommentAccountId(commentAccountOptions[0]?.accountId ?? "");
+    setReplyAccountId("");
     setCommentReplyId("");
     setCommentError("");
+    setCommentThreadWarning("");
     setCommentResult(null);
     setPromoError("");
     setPromoResult(null);
     setPurchaseResult(null);
-  }, [selectedPost?.id, generatedCommentDraft, commentAccountOptions, commentAccountId]);
+  }, [selectedPost?.id, generatedCommentDraft, generatedReplyDraft, commentAccountOptions, commentAccountId]);
 
   useEffect(() => {
     if (!selectedPost?.id || !generatedCommentDraft) return;
@@ -595,6 +645,14 @@ export default function SocialDiscoveryClient({ brandId }: { brandId: string }) 
       lastAutoCommentDraftRef.current = generatedCommentDraft;
     }
   }, [selectedPost?.id, generatedCommentDraft, commentDraft]);
+
+  useEffect(() => {
+    if (!selectedPost?.id || !generatedReplyDraft) return;
+    if (!replyDraft.trim() || replyDraft === lastAutoReplyDraftRef.current) {
+      setReplyDraft(generatedReplyDraft);
+      lastAutoReplyDraftRef.current = generatedReplyDraft;
+    }
+  }, [selectedPost?.id, generatedReplyDraft, replyDraft]);
 
   useEffect(() => {
     const postId = selectedPost?.id ?? "";
@@ -613,6 +671,13 @@ export default function SocialDiscoveryClient({ brandId }: { brandId: string }) 
     }
     setYouTubeSubscriptionAccountId(youtubeAccountOptions[0]?.accountId ?? "");
   }, [youtubeAccountOptions, youtubeSubscriptionAccountId]);
+
+  useEffect(() => {
+    if (replyAccountId && replyAccountOptions.some((account) => account.accountId === replyAccountId)) {
+      return;
+    }
+    setReplyAccountId(replyAccountOptions[0]?.accountId ?? "");
+  }, [replyAccountId, replyAccountOptions]);
 
   async function loadCommentAccounts() {
     try {
@@ -994,9 +1059,18 @@ export default function SocialDiscoveryClient({ brandId }: { brandId: string }) 
       setCommentError(`Pick a routed ${selectedCommentPlatformLabel} account before sending.`);
       return;
     }
+    if (replyEnabled && !replyDraft.trim()) {
+      setCommentError("Write the teammate reply before sending the thread.");
+      return;
+    }
+    if (replyEnabled && !replyAccountId) {
+      setCommentError("Pick a second account for the teammate reply.");
+      return;
+    }
 
     setSendingComment(true);
     setCommentError("");
+    setCommentThreadWarning("");
     setCommentResult(null);
     setPurchaseResult(null);
     try {
@@ -1008,6 +1082,8 @@ export default function SocialDiscoveryClient({ brandId }: { brandId: string }) 
           accountId: commentAccountId,
           text: commentDraft.trim(),
           commentId: commentReplyId.trim() || undefined,
+          replyText: replyEnabled ? replyDraft.trim() : undefined,
+          replyAccountId: replyEnabled ? replyAccountId : undefined,
         }),
       });
       const data = await response.json().catch(() => ({}));
@@ -1039,6 +1115,10 @@ export default function SocialDiscoveryClient({ brandId }: { brandId: string }) 
         await loadPosts(status);
       }
 
+      if (typeof data?.replyError?.message === "string" && data.replyError.message.trim()) {
+        setCommentThreadWarning(`Main comment posted. Teammate reply failed: ${data.replyError.message.trim()}`);
+      }
+
       const deliveryMessage =
         typeof data?.result?.deliveryMessage === "string" && data.result.deliveryMessage.trim()
           ? data.result.deliveryMessage.trim()
@@ -1059,24 +1139,26 @@ export default function SocialDiscoveryClient({ brandId }: { brandId: string }) 
       const accountLabel = selectedCommentAccount
         ? `${selectedCommentAccount.accountName}${selectedCommentAccount.handle ? ` ${selectedCommentAccount.handle}` : ""}`
         : "";
-      setCommentResult({
-        commentId,
-        commentUrl,
-        status: verified ? "verified" : "accepted_unverified",
-        source:
-          typeof data?.result?.deliverySource === "string" && data.result.deliverySource.trim()
-            ? data.result.deliverySource.trim()
-            : "",
-        message:
-          deliveryMessage ||
-          (verified
-            ? `Comment verified on ${selectedCommentPlatformLabel}.`
-            : `${selectedCommentPlatformLabel} accepted the request, but visibility is still unverified. Do not resend yet.`),
-        postedAt: new Date().toISOString(),
-        accountId: selectedCommentAccount?.accountId ?? "",
-        accountName: selectedCommentAccount?.accountName ?? accountLabel,
-        accountHandle: selectedCommentAccount?.handle ?? "",
-      });
+      setCommentResult(
+        updatedPost?.commentDelivery ?? {
+          commentId,
+          commentUrl,
+          status: verified ? "verified" : "accepted_unverified",
+          source:
+            typeof data?.result?.deliverySource === "string" && data.result.deliverySource.trim()
+              ? data.result.deliverySource.trim()
+              : "",
+          message:
+            deliveryMessage ||
+            (verified
+              ? `Comment verified on ${selectedCommentPlatformLabel}.`
+              : `${selectedCommentPlatformLabel} accepted the request, but visibility is still unverified. Do not resend yet.`),
+          postedAt: new Date().toISOString(),
+          accountId: selectedCommentAccount?.accountId ?? "",
+          accountName: selectedCommentAccount?.accountName ?? accountLabel,
+          accountHandle: selectedCommentAccount?.handle ?? "",
+        }
+      );
       const promotionDraft = data?.promotionDraft as SocialDiscoveryPromotionDraft | undefined;
       if (promotionDraft) {
         setPromoResult(promotionDraft);
@@ -1570,6 +1652,102 @@ export default function SocialDiscoveryClient({ brandId }: { brandId: string }) 
                     ) : null}
                   </div>
 
+                    {canAddTeammateReply ? (
+                      replyEnabled ? (
+                        <div className="grid gap-3 rounded-[10px] border border-[color:var(--border)] p-3">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <div>
+                            <div className="text-sm font-medium text-[color:var(--foreground)]">Teammate reply</div>
+                            <div className="text-xs text-[color:var(--muted-foreground)]">
+                              Post one short reply from a second YouTube account after the main comment.
+                            </div>
+                          </div>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => {
+                              setReplyEnabled(false);
+                              setReplyDraft("");
+                              lastAutoReplyDraftRef.current = "";
+                              if (selectedPost?.id) {
+                                void requestCommentDraftForPost(selectedPost.id, {
+                                  mode: "solo",
+                                  adoptFreshDrafts: true,
+                                });
+                              }
+                            }}
+                          >
+                            Use single comment
+                          </Button>
+                        </div>
+                        <div className="grid gap-2">
+                          <label className="text-sm font-medium text-[color:var(--foreground)]">Reply account</label>
+                          <Select value={replyAccountId} onChange={(event) => setReplyAccountId(event.target.value)}>
+                            {replyAccountOptions.map((account) => (
+                              <option key={account.accountId} value={account.accountId}>
+                                {account.accountName} · {account.handle || account.fromEmail || account.externalAccountId}
+                              </option>
+                            ))}
+                          </Select>
+                        </div>
+                        <div className="grid gap-2">
+                          <label className="text-sm font-medium text-[color:var(--foreground)]">Reply</label>
+                          <Textarea
+                            value={replyDraft}
+                            onChange={(event) => {
+                              setReplyDraft(event.target.value);
+                              lastAutoReplyDraftRef.current = generatedReplyDraft;
+                            }}
+                            rows={4}
+                            maxLength={1250}
+                            placeholder="Write the teammate reply"
+                            disabled={commentGenerationPending || sendingComment}
+                          />
+                          <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-[color:var(--muted-foreground)]">
+                            <div>Keep it short so it reads like a real second person.</div>
+                            <div>{replyDraft.trim().length}/1250</div>
+                          </div>
+                          {canRestoreSuggestedReply ? (
+                            <div>
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => {
+                                  setReplyDraft(generatedReplyDraft);
+                                  lastAutoReplyDraftRef.current = generatedReplyDraft;
+                                }}
+                              >
+                                Use reply draft again
+                              </Button>
+                            </div>
+                          ) : null}
+                        </div>
+                      </div>
+                    ) : (
+                      <div>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={() => {
+                            setReplyEnabled(true);
+                            if (selectedPost?.id) {
+                              void requestCommentDraftForPost(selectedPost.id, {
+                                mode: "thread",
+                                adoptFreshDrafts: true,
+                              });
+                            }
+                          }}
+                          disabled={sendingComment || commentGenerationPending}
+                        >
+                          Add teammate reply
+                        </Button>
+                      </div>
+                    )
+                  ) : null}
+
                   {selectedCommentPlatform === "instagram" ? (
                     <details className="rounded-[10px] border border-[color:var(--border)] p-3">
                       <summary className="cursor-pointer text-sm font-medium text-[color:var(--foreground)]">
@@ -1589,6 +1767,12 @@ export default function SocialDiscoveryClient({ brandId }: { brandId: string }) 
                   {commentError ? (
                     <div className="rounded-[10px] border border-[color:var(--danger-border)] bg-[color:var(--danger-soft)] px-3 py-2 text-sm text-[color:var(--danger)]">
                       {commentError}
+                    </div>
+                  ) : null}
+
+                  {commentThreadWarning ? (
+                    <div className="rounded-[10px] border border-[color:var(--warning-border)] bg-[color:var(--warning-soft)] px-3 py-2 text-sm text-[color:var(--warning)]">
+                      {commentThreadWarning}
                     </div>
                   ) : null}
 
@@ -1612,6 +1796,38 @@ export default function SocialDiscoveryClient({ brandId }: { brandId: string }) 
                         {visibleCommentDelivery.status === "verified" ? "Comment posted" : "Comment sent"}
                       </div>
                       <div className="mt-1 text-sm text-[color:var(--foreground)]">{visibleCommentDelivery.message}</div>
+                      {visibleCommentDelivery.replyDelivery ? (
+                        <div className="mt-3 rounded-[10px] border border-[color:var(--success-border)] bg-[color:var(--background)] px-3 py-3">
+                          <div className="text-sm font-medium text-[color:var(--success)]">Teammate reply posted</div>
+                          <div className="mt-1 text-sm text-[color:var(--foreground)]">
+                            {visibleCommentDelivery.replyDelivery.message}
+                          </div>
+                          <div className="mt-2 text-xs text-[color:var(--muted-foreground)]">
+                            {visibleCommentDelivery.replyDelivery.accountName}
+                            {visibleCommentDelivery.replyDelivery.accountHandle
+                              ? ` ${visibleCommentDelivery.replyDelivery.accountHandle}`
+                              : ""}
+                          </div>
+                          {visibleCommentDelivery.replyDelivery.commentUrl ? (
+                            <div className="mt-3 flex flex-wrap gap-2">
+                              <Button asChild type="button" variant="outline" size="sm">
+                                <Link href={visibleCommentDelivery.replyDelivery.commentUrl} target="_blank" rel="noreferrer">
+                                  Open reply
+                                  <ExternalLink className="h-3.5 w-3.5" />
+                                </Link>
+                              </Button>
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => copyText(visibleCommentDelivery.replyDelivery?.commentUrl ?? "")}
+                              >
+                                Copy reply link
+                              </Button>
+                            </div>
+                          ) : null}
+                        </div>
+                      ) : null}
                       {visibleCommentDelivery.commentUrl ? (
                         <div className="mt-3 flex flex-wrap gap-2">
                           <Button asChild type="button" variant="outline" size="sm">
@@ -1680,7 +1896,18 @@ export default function SocialDiscoveryClient({ brandId }: { brandId: string }) 
                                 {visibleCommentDelivery.accountHandle ? ` ${visibleCommentDelivery.accountHandle}` : ""}
                               </div>
                             ) : null}
+                            {visibleCommentDelivery.replyDelivery?.accountName ? (
+                              <div>
+                                Reply account: {visibleCommentDelivery.replyDelivery.accountName}
+                                {visibleCommentDelivery.replyDelivery.accountHandle
+                                  ? ` ${visibleCommentDelivery.replyDelivery.accountHandle}`
+                                  : ""}
+                              </div>
+                            ) : null}
                             {visibleCommentDelivery.commentId ? <div>Comment id: {visibleCommentDelivery.commentId}</div> : null}
+                            {visibleCommentDelivery.replyDelivery?.commentId ? (
+                              <div>Reply id: {visibleCommentDelivery.replyDelivery.commentId}</div>
+                            ) : null}
                             {visibleCommentDelivery.source ? <div>Checked via: {visibleCommentDelivery.source}</div> : null}
                             <div>Updated: {formatDate(visibleCommentDelivery.postedAt)}</div>
                           </div>
@@ -1694,9 +1921,14 @@ export default function SocialDiscoveryClient({ brandId }: { brandId: string }) 
                     size="lg"
                     className="w-full sm:w-auto"
                     onClick={sendComment}
-                    disabled={sendingComment || commentGenerationPending || !commentDraft.trim()}
+                    disabled={
+                      sendingComment ||
+                      commentGenerationPending ||
+                      !commentDraft.trim() ||
+                      (replyEnabled && (!replyDraft.trim() || !replyAccountId))
+                    }
                   >
-                    {sendingComment ? "Posting..." : "Post comment"}
+                    {sendingComment ? "Posting..." : replyEnabled ? "Post thread" : "Post comment"}
                   </Button>
                 </div>
               ) : (

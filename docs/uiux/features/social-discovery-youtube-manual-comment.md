@@ -1,7 +1,7 @@
 # Feature: social-discovery-youtube-manual-comment
 
 ## Request
-Make clicking a YouTube search result generate or refresh the comment draft immediately so the comment box does not stay blank after selection.
+Change YouTube double-comment flow so GPT generates either a solo main comment or a coordinated two-comment thread. If teammate reply mode is off, only generate the main comment. If teammate reply mode is on, generate both comments together, with the first comment setting up the second reply naturally.
 ## Autonomy Mode
 holistic_autopilot
 ## Target Users
@@ -9,10 +9,10 @@ founder/operator
 ## Optimization Target
 decision speed and obvious next action
 ## Hard Constraints
-- Preserve existing comment composer behavior
-- Keep YouTube path beginner-simple with one primary next action
-- Use existing repo components and tokens
-- Hide advanced options until explicitly needed
+- Keep primary UI simple with one obvious main action
+- Hide thread controls until teammate reply mode is enabled
+- Preserve existing single-comment flow
+- Reuse current comment draft generation and send pipeline where possible
 ## Scope
 Optimize for decision speed with one primary action. Start with smallest coherent slice that proves Emergency override UI implementation for social discovery. Add the simplest YouTube manual-comment path for a core unit video lead workflow: search a niche, see videos with subscriber counts, pick one video, and use the existing comment composer/manual comment button. Scope is search + review + manual comment button only. Reduce visible controls and hide promotional clutter on the YouTube path..
 ## Touched Surfaces
@@ -59,6 +59,12 @@ Top risk: operator/founder under time pressure should not have to guess what mat
 - 2026-04-20 Implementation summary: Selecting a YouTube search result now auto-requests a fresh comment draft for that video instead of only switching the selected panel. Added a dedicated comment-draft API route, forced single-post GPT draft refresh on selection, and surfaced a simple watch-only/no-draft message plus retry action so the comment box no longer stays silently blank.
 - Files: src/lib/social-discovery.ts, src/app/api/brands/[brandId]/social-discovery/comment-draft/route.ts, src/app/brands/[id]/social-discovery/social-discovery-client.tsx
 - Components: SocialDiscoveryClient
+- 2026-04-20 Implementation summary: Added a simple optional two-level YouTube thread flow. The main comment still auto-generates on video selection. Operators can now reveal one teammate-reply block, choose a second YouTube account, use an auto-generated reply draft, and post the top comment plus one reply in sequence. Backend now supports YouTube replies via comments.insert and stores nested reply delivery under the primary comment delivery while preserving the main comment as the primary record. If the main comment succeeds but the reply fails, the UI shows a warning instead of implying the whole action failed.
+- Files: src/lib/social-discovery-types.ts, src/lib/social-discovery-data.ts, src/lib/youtube.ts, src/lib/social-discovery.ts, src/lib/social-discovery-comment-delivery.ts, src/app/api/brands/[brandId]/social-discovery/comment/route.ts, src/app/brands/[id]/social-discovery/social-discovery-client.tsx
+- Components: SocialDiscoveryClient
+- 2026-04-20 Implementation summary: Changed GPT draft generation for YouTube to explicit modes. Default mode is solo: only one standalone top-level comment is generated. When teammate reply mode is enabled, the client requests a thread-mode regeneration so GPT rewrites both messages together as a coordinated two-comment flow where the first comment sets up the second reply naturally. Turning teammate reply mode off regenerates the solo draft again. UI keeps teammate reply hidden until enabled.
+- Files: src/lib/social-discovery.ts, src/app/api/brands/[brandId]/social-discovery/comment-draft/route.ts, src/app/brands/[id]/social-discovery/social-discovery-client.tsx
+- Components: SocialDiscoveryClient
 ## Doc Sync
 - 2026-04-20 Synced after implementation.
 - States touched: empty, loading, error
@@ -74,6 +80,12 @@ Top risk: operator/founder under time pressure should not have to guess what mat
 - Code touched: /Users/don/lastb2b/src/lib/social-discovery-comment-prompt.ts, /Users/don/lastb2b/src/lib/social-discovery.ts, /Users/don/lastb2b/src/app/brands/[id]/social-discovery/social-discovery-client.tsx
 - 2026-04-20 Synced after implementation.
 - States touched: loading, partial
+- Code touched: src/lib/social-discovery.ts, src/app/api/brands/[brandId]/social-discovery/comment-draft/route.ts, src/app/brands/[id]/social-discovery/social-discovery-client.tsx
+- 2026-04-20 Synced after implementation.
+- States touched: partial
+- Code touched: src/lib/social-discovery-types.ts, src/lib/social-discovery-data.ts, src/lib/youtube.ts, src/lib/social-discovery.ts, src/lib/social-discovery-comment-delivery.ts, src/app/api/brands/[brandId]/social-discovery/comment/route.ts, src/app/brands/[id]/social-discovery/social-discovery-client.tsx
+- 2026-04-20 Synced after implementation.
+- States touched: partial
 - Code touched: src/lib/social-discovery.ts, src/app/api/brands/[brandId]/social-discovery/comment-draft/route.ts, src/app/brands/[id]/social-discovery/social-discovery-client.tsx
 ## Primary Action
 operator/founder under time pressure should be able to Auto-generate the YouTube comment draft with GPT-5.4 so the user does not have to write it manually, using the selected brand and its context in the social discovery manual comment . with one obvious first move.

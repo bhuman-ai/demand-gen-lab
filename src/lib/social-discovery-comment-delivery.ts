@@ -17,7 +17,12 @@ import {
 import { getOutreachAccount, getOutreachAccountSecrets, updateOutreachAccount } from "@/lib/outreach-data";
 import { sendUnipilePostComment, supportsUnipilePostComments, UnipileApiError } from "@/lib/unipile";
 import { sendYouTubeVideoComment, supportsYouTubePostComments, hasYouTubeOAuthCredentials, YouTubeApiError, buildYouTubeCommentUrl } from "@/lib/youtube";
-import type { SocialDiscoveryPost, SocialDiscoveryPromotionDraft, SocialDiscoveryPromotionPurchase } from "@/lib/social-discovery-types";
+import type {
+  SocialDiscoveryCommentDelivery,
+  SocialDiscoveryPost,
+  SocialDiscoveryPromotionDraft,
+  SocialDiscoveryPromotionPurchase,
+} from "@/lib/social-discovery-types";
 
 type ResolvedAccount = {
   id: string;
@@ -46,6 +51,15 @@ export type SocialDiscoveryCommentDeliveryOutcome = {
   promotionPurchase: SocialDiscoveryPromotionPurchase | null;
   account: ResolvedAccount;
   result: DeliveryResultPayload;
+  reply?: {
+    account: ResolvedAccount;
+    result: DeliveryResultPayload;
+  };
+  replyError?: {
+    message: string;
+    status: number;
+    details: Record<string, unknown>;
+  };
 };
 
 export class SocialCommentDeliveryError extends Error {
@@ -153,73 +167,8 @@ async function resolveSelectedAccount(input: {
   };
 }
 
-export async function deliverSocialDiscoveryComment(input: {
-  brand: BrandRecord;
-  brandId: string;
-  postId: string;
-  text: string;
-  requestedAccountId?: string;
-  requestedCommentId?: string;
-}) : Promise<SocialDiscoveryCommentDeliveryOutcome> {
-  const storedPost = await getSocialDiscoveryPost({ id: input.postId, brandId: input.brandId });
-  if (!storedPost) {
-    throw new SocialCommentDeliveryError("social discovery post not found", { status: 404 });
-  }
-
-  const { account, resolvedAccount } = await resolveSelectedAccount({
-    brand: input.brand,
-    post: storedPost,
-    requestedAccountId: input.requestedAccountId,
-  });
-
-  let platformResult:
-    | Awaited<ReturnType<typeof sendUnipilePostComment>>
-    | Awaited<ReturnType<typeof sendYouTubeVideoComment>>;
-  let deliveredCommentId = "";
-  let deliveredCommentUrl = "";
-  let deliverySource: DeliveryResultPayload["deliverySource"] = "none";
-  let deliveryStatus: DeliveryResultPayload["deliveryStatus"] = "accepted_unverified";
-  let deliveryMessage = "";
-  let verificationError: Record<string, unknown> | null = null;
-
-  if (supportsYouTubePostComments(storedPost.platform)) {
-    const secrets = await getOutreachAccountSecrets(account.id);
-    if (!secrets || !hasYouTubeOAuthCredentials(secrets)) {
-      throw new SocialCommentDeliveryError(
-        "selected outreach account is missing YouTube OAuth credentials",
-        { status: 400 }
-      );
-    }
-    const youtubeResult = await sendYouTubeVideoComment({
-      post: storedPost,
-      text: input.text,
-      secrets,
-    });
-    platformResult = youtubeResult;
-    deliveredCommentId = youtubeResult.delivery.commentId.trim();
-    deliveredCommentUrl = buildYouTubeCommentUrl(youtubeResult.videoId, deliveredCommentId);
-    deliverySource = youtubeResult.delivery.source;
-    deliveryStatus = youtubeResult.delivery.status;
-    deliveryMessage = youtubeResult.delivery.message;
-  } else {
-    const unipileResult = await sendUnipilePostComment({
-      post: storedPost,
-      accountId: account.config.social.externalAccountId.trim(),
-      text: input.text,
-      commentId: input.requestedCommentId,
-    });
-    platformResult = unipileResult;
-    deliveredCommentId =
-      unipileResult.delivery.commentId ||
-      String(unipileResult.payload.id ?? "").trim() ||
-      String((unipileResult.payload.comment as Record<string, unknown> | undefined)?.id ?? "").trim();
-    deliveredCommentUrl = buildInstagramCommentUrl(storedPost, deliveredCommentId);
-    deliverySource = unipileResult.delivery.source;
-    deliveryStatus = unipileResult.delivery.status;
-    deliveryMessage = unipileResult.delivery.message;
-    verificationError = unipileResult.delivery.verificationError ?? null;
-  }
-
+async function recordSocialCommentActivity(account: Awaited<ReturnType<typeof getOutreachAccount>>) {
+  if (!account) return;
   const now = new Date().toISOString();
   await updateOutreachAccount(account.id, {
     config: {
@@ -230,35 +179,119 @@ export async function deliverSocialDiscoveryComment(input: {
       },
     },
   });
+}
 
-  const nextStatus = deliveryStatus === "verified" ? "triaged" : "saved";
-  const commentDelivery = {
+async function deliverPlatformComment(input: {
+  post: SocialDiscoveryPost;
+  text: string;
+  account: NonNullable<Awaited<ReturnType<typeof getOutreachAccount>>>;
+  resolvedAccount: ResolvedAccount;
+  requestedCommentId?: string;
+}) {
+  let platformResult:
+    | Awaited<ReturnType<typeof sendUnipilePostComment>>
+    | Awaited<ReturnType<typeof sendYouTubeVideoComment>>;
+  let deliveredCommentId = "";
+  let deliveredCommentUrl = "";
+  let deliverySource: DeliveryResultPayload["deliverySource"] = "none";
+  let deliveryStatus: DeliveryResultPayload["deliveryStatus"] = "accepted_unverified";
+  let deliveryMessage = "";
+  let verificationError: Record<string, unknown> | null = null;
+
+  if (supportsYouTubePostComments(input.post.platform)) {
+    const secrets = await getOutreachAccountSecrets(input.account.id);
+    if (!secrets || !hasYouTubeOAuthCredentials(secrets)) {
+      throw new SocialCommentDeliveryError(
+        "selected outreach account is missing YouTube OAuth credentials",
+        { status: 400 }
+      );
+    }
+    const youtubeResult = await sendYouTubeVideoComment({
+      post: input.post,
+      text: input.text,
+      secrets,
+      commentId: input.requestedCommentId,
+    });
+    platformResult = youtubeResult;
+    deliveredCommentId = youtubeResult.delivery.commentId.trim();
+    deliveredCommentUrl = buildYouTubeCommentUrl(youtubeResult.videoId, deliveredCommentId);
+    deliverySource = youtubeResult.delivery.source;
+    deliveryStatus = youtubeResult.delivery.status;
+    deliveryMessage = youtubeResult.delivery.message;
+  } else {
+    const unipileResult = await sendUnipilePostComment({
+      post: input.post,
+      accountId: input.account.config.social.externalAccountId.trim(),
+      text: input.text,
+      commentId: input.requestedCommentId,
+    });
+    platformResult = unipileResult;
+    deliveredCommentId =
+      unipileResult.delivery.commentId ||
+      String(unipileResult.payload.id ?? "").trim() ||
+      String((unipileResult.payload.comment as Record<string, unknown> | undefined)?.id ?? "").trim();
+    deliveredCommentUrl = buildInstagramCommentUrl(input.post, deliveredCommentId);
+    deliverySource = unipileResult.delivery.source;
+    deliveryStatus = unipileResult.delivery.status;
+    deliveryMessage = unipileResult.delivery.message;
+    verificationError = unipileResult.delivery.verificationError ?? null;
+  }
+
+  await recordSocialCommentActivity(input.account);
+
+  const now = new Date().toISOString();
+  const delivery: SocialDiscoveryCommentDelivery = {
     commentId: deliveredCommentId,
     commentUrl: deliveredCommentUrl,
     status: deliveryStatus,
     source: deliverySource,
     message: deliveryMessage,
     postedAt: now,
-    accountId: account.id,
-    accountName: account.name,
-    accountHandle: resolvedAccount.handle,
+    accountId: input.account.id,
+    accountName: input.account.name,
+    accountHandle: input.resolvedAccount.handle,
   };
+
+  return {
+    delivery,
+    result: {
+      lookupId: String(platformResult.lookupId ?? "").trim(),
+      resolvedPostId: String(platformResult.resolvedPostId ?? "").trim(),
+      commentId: deliveredCommentId,
+      commentUrl: deliveredCommentUrl,
+      verified: deliveryStatus === "verified",
+      deliveryStatus,
+      deliverySource,
+      deliveryMessage,
+      verificationError,
+      response: platformResult.payload,
+    } satisfies DeliveryResultPayload,
+  };
+}
+
+async function persistCommentDelivery(input: {
+  brand: BrandRecord;
+  brandId: string;
+  post: SocialDiscoveryPost;
+  commentDelivery: SocialDiscoveryCommentDelivery;
+}) {
+  const nextStatus = input.commentDelivery.status === "verified" ? "triaged" : "saved";
   const updatedPost =
     (await updateSocialDiscoveryPostCommentDelivery({
-      id: storedPost.id,
+      id: input.post.id,
       brandId: input.brandId,
       status: nextStatus,
-      commentDelivery,
+      commentDelivery: input.commentDelivery,
     })) ??
     (await updateSocialDiscoveryPostStatus({
-      id: storedPost.id,
+      id: input.post.id,
       brandId: input.brandId,
       status: nextStatus,
     })) ??
-    storedPost;
+    input.post;
   const postWithCommentDelivery = {
     ...updatedPost,
-    commentDelivery,
+    commentDelivery: input.commentDelivery,
   };
   const promotionDraft = promotionDraftForComment({
     brand: input.brand,
@@ -275,15 +308,15 @@ export async function deliverSocialDiscoveryComment(input: {
       promotionDraft,
     };
   const promotionPurchase =
-    storedPost.platform === "instagram" && isBuyShazamCommentLikesDestinationUrl(promotionDraft.destinationUrl)
+    input.post.platform === "instagram" && isBuyShazamCommentLikesDestinationUrl(promotionDraft.destinationUrl)
       ? await (hasBuyShazamUiWorkerConfig()
           ? runBuyShazamWorkerPurchase({
               productUrl: promotionDraft.destinationUrl,
-              commentUrl: commentDelivery.commentUrl,
+              commentUrl: input.commentDelivery.commentUrl,
             })
           : runBuyShazamCommentLikesPurchase({
               productUrl: promotionDraft.destinationUrl,
-              commentUrl: commentDelivery.commentUrl,
+              commentUrl: input.commentDelivery.commentUrl,
             }))
       : null;
   const postWithPromotionPurchase =
@@ -307,19 +340,117 @@ export async function deliverSocialDiscoveryComment(input: {
     post: routedUpdatedPost ?? postWithPromotionPurchase,
     promotionDraft,
     promotionPurchase,
+  };
+}
+
+export async function deliverSocialDiscoveryComment(input: {
+  brand: BrandRecord;
+  brandId: string;
+  postId: string;
+  text: string;
+  requestedAccountId?: string;
+  requestedCommentId?: string;
+  replyText?: string;
+  replyAccountId?: string;
+}) : Promise<SocialDiscoveryCommentDeliveryOutcome> {
+  const storedPost = await getSocialDiscoveryPost({ id: input.postId, brandId: input.brandId });
+  if (!storedPost) {
+    throw new SocialCommentDeliveryError("social discovery post not found", { status: 404 });
+  }
+
+  const { account, resolvedAccount } = await resolveSelectedAccount({
+    brand: input.brand,
+    post: storedPost,
+    requestedAccountId: input.requestedAccountId,
+  });
+  const topLevel = await deliverPlatformComment({
+    post: storedPost,
+    text: input.text,
+    account,
+    resolvedAccount,
+    requestedCommentId: input.requestedCommentId,
+  });
+  let commentDelivery = topLevel.delivery;
+  let reply:
+    | {
+        account: ResolvedAccount;
+        result: DeliveryResultPayload;
+      }
+    | undefined;
+  let replyError:
+    | {
+        message: string;
+        status: number;
+        details: Record<string, unknown>;
+      }
+    | undefined;
+
+  const replyText = String(input.replyText ?? "").trim();
+  const replyAccountId = String(input.replyAccountId ?? "").trim();
+  if (replyText) {
+    if (!replyAccountId) {
+      throw new SocialCommentDeliveryError("Pick a second account before sending a reply.", { status: 400 });
+    }
+    if (replyAccountId === account.id) {
+      throw new SocialCommentDeliveryError("Pick a different account for the teammate reply.", { status: 400 });
+    }
+    if (!topLevel.delivery.commentId.trim()) {
+      replyError = {
+        message: "Top-level comment posted, but YouTube did not return a comment id, so the teammate reply was skipped.",
+        status: 409,
+        details: {},
+      };
+    } else {
+      try {
+        const { account: replyAccount, resolvedAccount: resolvedReplyAccount } = await resolveSelectedAccount({
+          brand: input.brand,
+          post: storedPost,
+          requestedAccountId: replyAccountId,
+        });
+        const replyDelivery = await deliverPlatformComment({
+          post: storedPost,
+          text: replyText,
+          account: replyAccount,
+          resolvedAccount: resolvedReplyAccount,
+          requestedCommentId: topLevel.delivery.commentId,
+        });
+        commentDelivery = {
+          ...topLevel.delivery,
+          replyDelivery: replyDelivery.delivery,
+        };
+        reply = {
+          account: resolvedReplyAccount,
+          result: replyDelivery.result,
+        };
+      } catch (error) {
+        if (isPlatformDeliveryError(error)) {
+          replyError = {
+            message: error.message,
+            status: error.status,
+            details: error.details,
+          };
+        } else {
+          throw error;
+        }
+      }
+    }
+  }
+
+  const persisted = await persistCommentDelivery({
+    brand: input.brand,
+    brandId: input.brandId,
+    post: storedPost,
+    commentDelivery,
+  });
+
+  return {
+    post: persisted.post,
+    promotionDraft: persisted.promotionDraft,
+    promotionPurchase: persisted.promotionPurchase,
     account: resolvedAccount,
-    result: {
-      lookupId: String(platformResult.lookupId ?? "").trim(),
-      resolvedPostId: String(platformResult.resolvedPostId ?? "").trim(),
-      commentId: deliveredCommentId,
-      commentUrl: deliveredCommentUrl,
-      verified: deliveryStatus === "verified",
-      deliveryStatus,
-      deliverySource,
-      deliveryMessage,
-      verificationError,
-      response: platformResult.payload,
-    },
+    result: topLevel.result,
+    reply,
+    replyError,
   };
 }
 

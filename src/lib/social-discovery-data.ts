@@ -119,6 +119,7 @@ function normalizeCommentDelivery(value: unknown): SocialDiscoveryCommentDeliver
     accountId,
     accountName,
     accountHandle,
+    replyDelivery: normalizeCommentDelivery(row.replyDelivery ?? row.reply_delivery),
   };
 }
 

@@ -28,6 +28,8 @@ export async function POST(request: Request, context: { params: Promise<{ brandI
     const accountId = String(body.accountId ?? body.account_id ?? "").trim();
     const text = String(body.text ?? "").trim();
     const commentId = String(body.commentId ?? body.comment_id ?? "").trim();
+    const replyText = String(body.replyText ?? body.reply_text ?? "").trim();
+    const replyAccountId = String(body.replyAccountId ?? body.reply_account_id ?? "").trim();
 
     if (!postId) {
       return NextResponse.json({ error: "postId is required" }, { status: 400 });
@@ -38,6 +40,9 @@ export async function POST(request: Request, context: { params: Promise<{ brandI
     if (text.length > 1250) {
       return NextResponse.json({ error: "text must be 1250 characters or less" }, { status: 400 });
     }
+    if (replyText.length > 1250) {
+      return NextResponse.json({ error: "replyText must be 1250 characters or less" }, { status: 400 });
+    }
 
     const delivery = await deliverSocialDiscoveryComment({
       brand,
@@ -46,6 +51,8 @@ export async function POST(request: Request, context: { params: Promise<{ brandI
       text,
       requestedAccountId: accountId || undefined,
       requestedCommentId: commentId || undefined,
+      replyText: replyText || undefined,
+      replyAccountId: replyAccountId || undefined,
     });
 
     return NextResponse.json({
@@ -55,6 +62,8 @@ export async function POST(request: Request, context: { params: Promise<{ brandI
       promotionPurchase: delivery.promotionPurchase,
       account: delivery.account,
       result: delivery.result,
+      reply: delivery.reply,
+      replyError: delivery.replyError,
     });
   } catch (error) {
     if (

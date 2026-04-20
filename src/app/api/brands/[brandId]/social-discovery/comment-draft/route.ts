@@ -21,6 +21,7 @@ export async function POST(request: Request, context: { params: Promise<{ brandI
   try {
     const body = asRecord(await request.json().catch(() => ({})));
     const postId = String(body.postId ?? body.post_id ?? "").trim();
+    const mode = String(body.mode ?? "").trim().toLowerCase() === "thread" ? "thread" : "solo";
     if (!postId) {
       return NextResponse.json({ error: "postId is required" }, { status: 400 });
     }
@@ -34,6 +35,7 @@ export async function POST(request: Request, context: { params: Promise<{ brandI
       brand,
       post,
       force: true,
+      mode,
     });
     const [savedPost] = await saveSocialDiscoveryPosts([refreshedPost]);
     const [routedPost] = await enrichSocialPostsWithAccountRouting({

@@ -5,6 +5,7 @@ import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import type {
   SocialDiscoveryCommentDelivery,
   SocialDiscoveryListOptions,
+  SocialDiscoveryPendingReply,
   SocialDiscoveryPlatform,
   SocialDiscoveryPost,
   SocialDiscoveryPromotionDraft,
@@ -123,6 +124,35 @@ function normalizeCommentDelivery(value: unknown): SocialDiscoveryCommentDeliver
   };
 }
 
+function normalizePendingReply(value: unknown): SocialDiscoveryPendingReply | undefined {
+  const row = asRecord(value);
+  const parentCommentId = String(row.parentCommentId ?? row.parent_comment_id ?? "").trim();
+  const text = String(row.text ?? "").trim();
+  const accountId = String(row.accountId ?? row.account_id ?? "").trim();
+  const accountName = String(row.accountName ?? row.account_name ?? "").trim();
+  const accountHandle = String(row.accountHandle ?? row.account_handle ?? "").trim();
+  const scheduledAt = String(row.scheduledAt ?? row.scheduled_at ?? "").trim();
+  const createdAt = String(row.createdAt ?? row.created_at ?? "").trim();
+  const attempts = Math.max(0, normalizeNumber(row.attempts, 0));
+  const lastAttemptAt = String(row.lastAttemptAt ?? row.last_attempt_at ?? "").trim();
+  const lastError = String(row.lastError ?? row.last_error ?? "").trim();
+  const status = String(row.status ?? "").trim();
+  if (!parentCommentId && !text && !accountId && !scheduledAt) return undefined;
+  return {
+    parentCommentId,
+    text,
+    accountId,
+    accountName,
+    accountHandle,
+    scheduledAt,
+    createdAt,
+    attempts,
+    lastAttemptAt,
+    lastError,
+    status: status === "failed" ? "failed" : "scheduled",
+  };
+}
+
 function normalizePromotionDraft(value: unknown): SocialDiscoveryPromotionDraft | undefined {
   const row = asRecord(value);
   const channel = String(row.channel ?? "").trim();
@@ -225,6 +255,9 @@ function mapPostRow(input: unknown): SocialDiscoveryPost {
   const commentDelivery = normalizeCommentDelivery(
     row.commentDelivery ?? row.comment_delivery ?? raw.commentDelivery ?? raw.comment_delivery
   );
+  const pendingReply = normalizePendingReply(
+    row.pendingReply ?? row.pending_reply ?? raw.pendingReply ?? raw.pending_reply
+  );
   const promotionDraft = normalizePromotionDraft(
     row.promotionDraft ?? row.promotion_draft ?? raw.promotionDraft ?? raw.promotion_draft
   );
@@ -252,6 +285,7 @@ function mapPostRow(input: unknown): SocialDiscoveryPost {
     status: normalizeStatus(row.status),
     interactionPlan: normalizeInteractionPlan(row.interactionPlan ?? row.interaction_plan),
     commentDelivery,
+    pendingReply,
     promotionDraft,
     promotionPurchase,
     raw,
@@ -378,6 +412,7 @@ function postDbPayload(
   const raw = {
     ...row.raw,
     ...(row.commentDelivery ? { commentDelivery: row.commentDelivery } : {}),
+    ...(row.pendingReply ? { pendingReply: row.pendingReply } : {}),
     ...(row.promotionDraft ? { promotionDraft: row.promotionDraft } : {}),
     ...(row.promotionPurchase ? { promotionPurchase: row.promotionPurchase } : {}),
   };
@@ -547,12 +582,14 @@ export async function saveSocialDiscoveryPosts(posts: SocialDiscoveryPost[]): Pr
   const normalizedPosts = posts.map((post) => {
     const existing = existingByKey.get(`${post.brandId}:${post.platform}:${post.externalId}`);
     const commentDelivery = post.commentDelivery ?? existing?.commentDelivery;
+    const pendingReply = post.pendingReply ?? existing?.pendingReply;
     const promotionDraft = post.promotionDraft ?? existing?.promotionDraft;
     const promotionPurchase = post.promotionPurchase ?? existing?.promotionPurchase;
     const raw = {
       ...(existing?.raw ?? {}),
       ...post.raw,
       ...(commentDelivery ? { commentDelivery } : {}),
+      ...(pendingReply ? { pendingReply } : {}),
       ...(promotionDraft ? { promotionDraft } : {}),
       ...(promotionPurchase ? { promotionPurchase } : {}),
     };
@@ -561,6 +598,7 @@ export async function saveSocialDiscoveryPosts(posts: SocialDiscoveryPost[]): Pr
       id: existing?.id ?? post.id,
       status: existing?.status ?? post.status,
       commentDelivery,
+      pendingReply,
       promotionDraft,
       promotionPurchase,
       raw,
@@ -596,6 +634,7 @@ export async function saveSocialDiscoveryPosts(posts: SocialDiscoveryPost[]): Pr
     const key = `${post.brandId}:${post.platform}:${post.externalId}`;
     const existing = localExistingByKey.get(key);
     const commentDelivery = post.commentDelivery ?? existing?.commentDelivery;
+    const pendingReply = post.pendingReply ?? existing?.pendingReply;
     const promotionDraft = post.promotionDraft ?? existing?.promotionDraft;
     const promotionPurchase = post.promotionPurchase ?? existing?.promotionPurchase;
     const mergedPost = {
@@ -603,12 +642,14 @@ export async function saveSocialDiscoveryPosts(posts: SocialDiscoveryPost[]): Pr
       id: existing?.id ?? post.id,
       status: existing?.status ?? post.status,
       commentDelivery,
+      pendingReply,
       promotionDraft,
       promotionPurchase,
       raw: {
         ...(existing?.raw ?? {}),
         ...post.raw,
         ...(commentDelivery ? { commentDelivery } : {}),
+        ...(pendingReply ? { pendingReply } : {}),
         ...(promotionDraft ? { promotionDraft } : {}),
         ...(promotionPurchase ? { promotionPurchase } : {}),
       },
@@ -710,6 +751,95 @@ export async function updateSocialDiscoveryPostCommentDelivery(input: {
   };
   await writeLocalStore(store);
   return store.posts[index];
+}
+
+export async function updateSocialDiscoveryPostPendingReply(input: {
+  id: string;
+  brandId: string;
+  pendingReply: SocialDiscoveryPendingReply | null;
+}): Promise<SocialDiscoveryPost | null> {
+  const updatedAt = nowIso();
+  const supabase = getSupabaseAdmin();
+  const existing = await getSocialDiscoveryPost({ id: input.id, brandId: input.brandId });
+  const raw = {
+    ...(existing?.raw ?? {}),
+    ...(input.pendingReply ? { pendingReply: input.pendingReply } : { pendingReply: undefined }),
+  };
+  if (supabase) {
+    const attempt = await supabase
+      .from(TABLE_POSTS)
+      .update({
+        raw,
+        updated_at: updatedAt,
+      })
+      .eq("id", input.id)
+      .eq("brand_id", input.brandId)
+      .select("*")
+      .maybeSingle();
+    if (!attempt.error && attempt.data) {
+      return mapPostRow(attempt.data);
+    }
+  }
+
+  const store = await readLocalStore();
+  const index = store.posts.findIndex((row) => row.id === input.id && row.brandId === input.brandId);
+  if (index < 0) return null;
+  store.posts[index] = {
+    ...store.posts[index],
+    pendingReply: input.pendingReply ?? undefined,
+    raw,
+    updatedAt,
+  };
+  await writeLocalStore(store);
+  return store.posts[index];
+}
+
+export async function listSocialDiscoveryPostsWithPendingReplies(input: {
+  brandIds?: string[];
+  limit?: number;
+  dueBefore?: string;
+}) {
+  const limit = Math.max(1, Math.min(500, Number(input.limit ?? 100) || 100));
+  const dueBefore = String(input.dueBefore ?? "").trim();
+  const dueBeforeMs = dueBefore ? Date.parse(dueBefore) : NaN;
+  const isDue = (post: SocialDiscoveryPost) => {
+    const pending = post.pendingReply;
+    if (!pending) return false;
+    if (pending.status === "failed") return false;
+    if (input.brandIds?.length && !input.brandIds.includes(post.brandId)) return false;
+    if (!dueBefore || !Number.isFinite(dueBeforeMs)) return true;
+    const scheduledMs = Date.parse(pending.scheduledAt);
+    return Number.isFinite(scheduledMs) && scheduledMs <= dueBeforeMs;
+  };
+
+  const supabase = getSupabaseAdmin();
+  if (supabase) {
+    let query = supabase
+      .from(TABLE_POSTS)
+      .select("*")
+      .eq("platform", "youtube")
+      .order("updated_at", { ascending: true })
+      .limit(limit * 5);
+    if (input.brandIds?.length) query = query.in("brand_id", input.brandIds);
+    const { data, error } = await query;
+    if (!error) {
+      return (data ?? [])
+        .map((row: unknown) => mapPostRow(row))
+        .filter(isDue)
+        .slice(0, limit);
+    }
+  }
+
+  const store = await readLocalStore();
+  return store.posts
+    .filter((row) => row.platform === "youtube")
+    .filter(isDue)
+    .sort((left, right) => {
+      const leftAt = String(left.pendingReply?.scheduledAt ?? "");
+      const rightAt = String(right.pendingReply?.scheduledAt ?? "");
+      return leftAt.localeCompare(rightAt);
+    })
+    .slice(0, limit);
 }
 
 export async function updateSocialDiscoveryPostPromotionDraft(input: {

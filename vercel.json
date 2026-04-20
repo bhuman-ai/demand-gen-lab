@@ -19,7 +19,7 @@
     },
     {
       "path": "/api/internal/social-discovery/youtube-subscriptions",
-      "schedule": "0 */6 * * *"
+      "schedule": "*/15 * * * *"
     }
   ]
 }

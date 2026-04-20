@@ -1,7 +1,7 @@
 # Feature: social-discovery-youtube-manual-comment
 
 ## Request
-Change YouTube double-comment flow so GPT generates either a solo main comment or a coordinated two-comment thread. If teammate reply mode is off, only generate the main comment. If teammate reply mode is on, generate both comments together, with the first comment setting up the second reply naturally.
+In two-comment YouTube thread mode, do not post the second reply immediately. Schedule it for a random delay between 1 and 6 hours after the first comment.
 ## Autonomy Mode
 holistic_autopilot
 ## Target Users
@@ -9,10 +9,10 @@ founder/operator
 ## Optimization Target
 decision speed and obvious next action
 ## Hard Constraints
-- Keep primary UI simple with one obvious main action
-- Hide thread controls until teammate reply mode is enabled
-- Preserve existing single-comment flow
-- Reuse current comment draft generation and send pipeline where possible
+- Keep single-comment mode unchanged
+- Keep teammate reply mode simple and low-clutter
+- Use existing background job or scheduler patterns if available
+- Do not imply immediate second reply in UI
 ## Scope
 Optimize for decision speed with one primary action. Start with smallest coherent slice that proves Emergency override UI implementation for social discovery. Add the simplest YouTube manual-comment path for a core unit video lead workflow: search a niche, see videos with subscriber counts, pick one video, and use the existing comment composer/manual comment button. Scope is search + review + manual comment button only. Reduce visible controls and hide promotional clutter on the YouTube path..
 ## Touched Surfaces
@@ -65,6 +65,12 @@ Top risk: operator/founder under time pressure should not have to guess what mat
 - 2026-04-20 Implementation summary: Changed GPT draft generation for YouTube to explicit modes. Default mode is solo: only one standalone top-level comment is generated. When teammate reply mode is enabled, the client requests a thread-mode regeneration so GPT rewrites both messages together as a coordinated two-comment flow where the first comment sets up the second reply naturally. Turning teammate reply mode off regenerates the solo draft again. UI keeps teammate reply hidden until enabled.
 - Files: src/lib/social-discovery.ts, src/app/api/brands/[brandId]/social-discovery/comment-draft/route.ts, src/app/brands/[id]/social-discovery/social-discovery-client.tsx
 - Components: SocialDiscoveryClient
+- 2026-04-20 Implementation summary: Changed two-comment YouTube thread mode so the second account reply is queued, not posted immediately. When thread mode is used, the first comment posts now and the second reply is scheduled for a random delay between 1 and 6 hours later. The post stores a pending teammate reply payload with scheduled time and account, an internal YouTube maintenance tick drains due replies, and the maintenance cron was tightened to hourly so delayed replies run close to schedule. UI now says the teammate reply posts later and shows scheduled or failed state instead of implying immediate posting.
+- Files: src/lib/social-discovery-types.ts, src/lib/social-discovery-data.ts, src/lib/social-discovery-comment-delivery.ts, src/app/api/internal/social-discovery/youtube-subscriptions/route.ts, src/app/brands/[id]/social-discovery/social-discovery-client.tsx, vercel.json
+- Components: SocialDiscoveryClient
+- 2026-04-20 Implementation summary: Changed two-comment YouTube thread mode so the second account reply is queued, not posted immediately. When thread mode is used, the first comment posts now and the second reply is scheduled for a random delay between 1 and 6 hours later. The post stores a pending teammate reply payload with scheduled time and account, an internal YouTube maintenance tick drains due replies, and the maintenance cron now runs every 15 minutes so delayed replies execute close to schedule. UI now says the teammate reply posts later and shows scheduled or failed state instead of implying immediate posting.
+- Files: src/lib/social-discovery-types.ts, src/lib/social-discovery-data.ts, src/lib/social-discovery-comment-delivery.ts, src/app/api/internal/social-discovery/youtube-subscriptions/route.ts, src/app/brands/[id]/social-discovery/social-discovery-client.tsx, vercel.json
+- Components: SocialDiscoveryClient
 ## Doc Sync
 - 2026-04-20 Synced after implementation.
 - States touched: empty, loading, error
@@ -87,6 +93,12 @@ Top risk: operator/founder under time pressure should not have to guess what mat
 - 2026-04-20 Synced after implementation.
 - States touched: partial
 - Code touched: src/lib/social-discovery.ts, src/app/api/brands/[brandId]/social-discovery/comment-draft/route.ts, src/app/brands/[id]/social-discovery/social-discovery-client.tsx
+- 2026-04-20 Synced after implementation.
+- States touched: partial
+- Code touched: src/lib/social-discovery-types.ts, src/lib/social-discovery-data.ts, src/lib/social-discovery-comment-delivery.ts, src/app/api/internal/social-discovery/youtube-subscriptions/route.ts, src/app/brands/[id]/social-discovery/social-discovery-client.tsx, vercel.json
+- 2026-04-20 Synced after implementation.
+- States touched: partial
+- Code touched: src/lib/social-discovery-types.ts, src/lib/social-discovery-data.ts, src/lib/social-discovery-comment-delivery.ts, src/app/api/internal/social-discovery/youtube-subscriptions/route.ts, src/app/brands/[id]/social-discovery/social-discovery-client.tsx, vercel.json
 ## Primary Action
 operator/founder under time pressure should be able to Auto-generate the YouTube comment draft with GPT-5.4 so the user does not have to write it manually, using the selected brand and its context in the social discovery manual comment . with one obvious first move.
 

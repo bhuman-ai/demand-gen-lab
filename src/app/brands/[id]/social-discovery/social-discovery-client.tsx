@@ -207,6 +207,17 @@ function buildCommentExportPayload(post: DiscoveryPost | null, delivery: SocialD
           },
         }
       : null,
+    pendingReply: post.pendingReply
+      ? {
+          scheduledAt: post.pendingReply.scheduledAt,
+          status: post.pendingReply.status,
+          account: {
+            id: post.pendingReply.accountId,
+            name: post.pendingReply.accountName,
+            handle: post.pendingReply.accountHandle,
+          },
+        }
+      : null,
   };
 }
 
@@ -501,6 +512,7 @@ export default function SocialDiscoveryClient({ brandId }: { brandId: string }) 
       }));
   }, [socialAccounts]);
   const visibleCommentDelivery = commentResult ?? selectedPost?.commentDelivery ?? null;
+  const visiblePendingReply = selectedPost?.pendingReply ?? null;
   const commentExportPayload = useMemo(
     () => buildCommentExportPayload(selectedPost, visibleCommentDelivery),
     [selectedPost, visibleCommentDelivery]
@@ -1659,7 +1671,7 @@ export default function SocialDiscoveryClient({ brandId }: { brandId: string }) 
                           <div>
                             <div className="text-sm font-medium text-[color:var(--foreground)]">Teammate reply</div>
                             <div className="text-xs text-[color:var(--muted-foreground)]">
-                              Post one short reply from a second YouTube account after the main comment.
+                              Queue one short reply from second YouTube account for 1-6 hours later.
                             </div>
                           </div>
                           <Button
@@ -1705,7 +1717,7 @@ export default function SocialDiscoveryClient({ brandId }: { brandId: string }) 
                             disabled={commentGenerationPending || sendingComment}
                           />
                           <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-[color:var(--muted-foreground)]">
-                            <div>Keep it short so it reads like a real second person.</div>
+                            <div>Keep it short. System posts it later, not right away.</div>
                             <div>{replyDraft.trim().length}/1250</div>
                           </div>
                           {canRestoreSuggestedReply ? (
@@ -1796,6 +1808,22 @@ export default function SocialDiscoveryClient({ brandId }: { brandId: string }) 
                         {visibleCommentDelivery.status === "verified" ? "Comment posted" : "Comment sent"}
                       </div>
                       <div className="mt-1 text-sm text-[color:var(--foreground)]">{visibleCommentDelivery.message}</div>
+                      {visiblePendingReply ? (
+                        <div className="mt-3 rounded-[10px] border border-[color:var(--border)] bg-[color:var(--background)] px-3 py-3">
+                          <div className="text-sm font-medium text-[color:var(--foreground)]">
+                            {visiblePendingReply.status === "failed" ? "Teammate reply failed" : "Teammate reply scheduled"}
+                          </div>
+                          <div className="mt-1 text-sm text-[color:var(--foreground)]">
+                            {visiblePendingReply.status === "failed"
+                              ? visiblePendingReply.lastError || "System could not post delayed teammate reply."
+                              : `System will post second reply from ${visiblePendingReply.accountName || "selected account"} around ${formatDate(visiblePendingReply.scheduledAt)}.`}
+                          </div>
+                          <div className="mt-2 text-xs text-[color:var(--muted-foreground)]">
+                            {visiblePendingReply.accountHandle ? `${visiblePendingReply.accountHandle} · ` : ""}
+                            {visiblePendingReply.attempts ? `Attempts: ${visiblePendingReply.attempts}` : "Delay chosen automatically between 1 and 6 hours."}
+                          </div>
+                        </div>
+                      ) : null}
                       {visibleCommentDelivery.replyDelivery ? (
                         <div className="mt-3 rounded-[10px] border border-[color:var(--success-border)] bg-[color:var(--background)] px-3 py-3">
                           <div className="text-sm font-medium text-[color:var(--success)]">Teammate reply posted</div>
@@ -1904,9 +1932,18 @@ export default function SocialDiscoveryClient({ brandId }: { brandId: string }) 
                                   : ""}
                               </div>
                             ) : null}
+                            {visiblePendingReply?.accountName ? (
+                              <div>
+                                Scheduled reply account: {visiblePendingReply.accountName}
+                                {visiblePendingReply.accountHandle ? ` ${visiblePendingReply.accountHandle}` : ""}
+                              </div>
+                            ) : null}
                             {visibleCommentDelivery.commentId ? <div>Comment id: {visibleCommentDelivery.commentId}</div> : null}
                             {visibleCommentDelivery.replyDelivery?.commentId ? (
                               <div>Reply id: {visibleCommentDelivery.replyDelivery.commentId}</div>
+                            ) : null}
+                            {visiblePendingReply?.scheduledAt ? (
+                              <div>Reply scheduled: {formatDate(visiblePendingReply.scheduledAt)}</div>
                             ) : null}
                             {visibleCommentDelivery.source ? <div>Checked via: {visibleCommentDelivery.source}</div> : null}
                             <div>Updated: {formatDate(visibleCommentDelivery.postedAt)}</div>

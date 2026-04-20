@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { isInternalCronAuthorized, runCronTask } from "@/lib/internal-cron";
+import { runSocialDiscoveryDelayedReplyTick } from "@/lib/social-discovery-comment-delivery";
 import { runSocialDiscoveryYouTubeSubscriptionRenewTick } from "@/lib/social-discovery-youtube-subscriptions-renew";
 
 export const maxDuration = 60;
@@ -47,6 +48,7 @@ async function handleRenew(request: Request) {
       process.env.SOCIAL_DISCOVERY_BRAND_IDS
   );
   const limit = numberOption(body.limit ?? url.searchParams.get("limit"), 50, 1, 200);
+  const replyLimit = numberOption(body.replyLimit ?? url.searchParams.get("replyLimit"), 50, 1, 200);
   const scanAllBrands =
     String(body.scanAllBrands ?? url.searchParams.get("scanAllBrands") ?? process.env.SOCIAL_DISCOVERY_SCAN_ALL_BRANDS)
       .trim()
@@ -66,11 +68,22 @@ async function handleRenew(request: Request) {
       }),
     { timeoutMs: 55_000 }
   );
+  const delayedReplies = await runCronTask(
+    "socialDiscoveryDelayedReplies",
+    () =>
+      runSocialDiscoveryDelayedReplyTick({
+        brandIds,
+        limit: replyLimit,
+        dryRun,
+      }),
+    { timeoutMs: 55_000 }
+  );
 
   return NextResponse.json({
-    ok: renew.ok,
-    criticalPath: "social-discovery-youtube-subscription-renew",
+    ok: renew.ok && delayedReplies.ok,
+    criticalPath: "social-discovery-youtube-maintenance",
     renew,
+    delayedReplies,
   });
 }
 

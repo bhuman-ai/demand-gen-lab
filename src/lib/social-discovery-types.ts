@@ -37,6 +37,20 @@ export type SocialDiscoveryCommentDelivery = {
   replyDelivery?: SocialDiscoveryCommentDelivery;
 };
 
+export type SocialDiscoveryPendingReply = {
+  parentCommentId: string;
+  text: string;
+  accountId: string;
+  accountName: string;
+  accountHandle: string;
+  scheduledAt: string;
+  createdAt: string;
+  attempts: number;
+  lastAttemptAt?: string;
+  lastError?: string;
+  status: "scheduled" | "failed";
+};
+
 export type SocialDiscoveryPromotionDraft = {
   channel: "instagram-ads";
   objective: "awareness" | "traffic";
@@ -100,6 +114,7 @@ export type SocialDiscoveryPost = {
   status: SocialDiscoveryStatus;
   interactionPlan: SocialDiscoveryInteractionPlan;
   commentDelivery?: SocialDiscoveryCommentDelivery;
+  pendingReply?: SocialDiscoveryPendingReply;
   promotionDraft?: SocialDiscoveryPromotionDraft;
   promotionPurchase?: SocialDiscoveryPromotionPurchase;
   raw: Record<string, unknown>;

@@ -1,8 +1,10 @@
-import type { BrandRecord } from "@/lib/factory-data";
+import { getBrandById, type BrandRecord } from "@/lib/factory-data";
 import { enrichSocialPostsWithAccountRouting } from "@/lib/social-account-routing";
 import {
   getSocialDiscoveryPost,
+  listSocialDiscoveryPostsWithPendingReplies,
   updateSocialDiscoveryPostCommentDelivery,
+  updateSocialDiscoveryPostPendingReply,
   updateSocialDiscoveryPostPromotionDraft,
   updateSocialDiscoveryPostPromotionPurchase,
   updateSocialDiscoveryPostStatus,
@@ -19,6 +21,7 @@ import { sendUnipilePostComment, supportsUnipilePostComments, UnipileApiError } 
 import { sendYouTubeVideoComment, supportsYouTubePostComments, hasYouTubeOAuthCredentials, YouTubeApiError, buildYouTubeCommentUrl } from "@/lib/youtube";
 import type {
   SocialDiscoveryCommentDelivery,
+  SocialDiscoveryPendingReply,
   SocialDiscoveryPost,
   SocialDiscoveryPromotionDraft,
   SocialDiscoveryPromotionPurchase,
@@ -73,6 +76,11 @@ export class SocialCommentDeliveryError extends Error {
     this.details = input.details ?? {};
   }
 }
+
+const MIN_DELAYED_REPLY_MINUTES = 60;
+const MAX_DELAYED_REPLY_MINUTES = 360;
+const RETRY_DELAY_MINUTES = 60;
+const MAX_DELAYED_REPLY_ATTEMPTS = 3;
 
 function accountConnectionProviderForPost(post: Pick<SocialDiscoveryPost, "platform">) {
   if (supportsYouTubePostComments(post.platform)) return "youtube";
@@ -165,6 +173,18 @@ async function resolveSelectedAccount(input: {
       handle: account.config.social.handle.trim(),
     } satisfies ResolvedAccount,
   };
+}
+
+function addMinutes(value: string, minutes: number) {
+  const parsed = Date.parse(value);
+  const base = Number.isFinite(parsed) ? parsed : Date.now();
+  return new Date(base + minutes * 60 * 1000).toISOString();
+}
+
+function randomIntInclusive(min: number, max: number) {
+  const safeMin = Math.ceil(min);
+  const safeMax = Math.floor(max);
+  return Math.floor(Math.random() * (safeMax - safeMin + 1)) + safeMin;
 }
 
 async function recordSocialCommentActivity(account: Awaited<ReturnType<typeof getOutreachAccount>>) {
@@ -343,6 +363,24 @@ async function persistCommentDelivery(input: {
   };
 }
 
+async function persistPendingReply(input: {
+  post: SocialDiscoveryPost;
+  brandId: string;
+  pendingReply: SocialDiscoveryPendingReply | null;
+}) {
+  return (
+    (await updateSocialDiscoveryPostPendingReply({
+      id: input.post.id,
+      brandId: input.brandId,
+      pendingReply: input.pendingReply,
+    })) ??
+    {
+      ...input.post,
+      pendingReply: input.pendingReply ?? undefined,
+    }
+  );
+}
+
 export async function deliverSocialDiscoveryComment(input: {
   brand: BrandRecord;
   brandId: string;
@@ -377,6 +415,7 @@ export async function deliverSocialDiscoveryComment(input: {
         result: DeliveryResultPayload;
       }
     | undefined;
+  let pendingReply: SocialDiscoveryPendingReply | null = null;
   let replyError:
     | {
         message: string;
@@ -407,21 +446,39 @@ export async function deliverSocialDiscoveryComment(input: {
           post: storedPost,
           requestedAccountId: replyAccountId,
         });
-        const replyDelivery = await deliverPlatformComment({
-          post: storedPost,
-          text: replyText,
-          account: replyAccount,
-          resolvedAccount: resolvedReplyAccount,
-          requestedCommentId: topLevel.delivery.commentId,
-        });
-        commentDelivery = {
-          ...topLevel.delivery,
-          replyDelivery: replyDelivery.delivery,
-        };
-        reply = {
-          account: resolvedReplyAccount,
-          result: replyDelivery.result,
-        };
+        if (supportsYouTubePostComments(storedPost.platform)) {
+          const scheduledAt = addMinutes(
+            topLevel.delivery.postedAt || new Date().toISOString(),
+            randomIntInclusive(MIN_DELAYED_REPLY_MINUTES, MAX_DELAYED_REPLY_MINUTES)
+          );
+          pendingReply = {
+            parentCommentId: topLevel.delivery.commentId,
+            text: replyText,
+            accountId: replyAccount.id,
+            accountName: replyAccount.name,
+            accountHandle: resolvedReplyAccount.handle,
+            scheduledAt,
+            createdAt: new Date().toISOString(),
+            attempts: 0,
+            status: "scheduled",
+          };
+        } else {
+          const replyDelivery = await deliverPlatformComment({
+            post: storedPost,
+            text: replyText,
+            account: replyAccount,
+            resolvedAccount: resolvedReplyAccount,
+            requestedCommentId: topLevel.delivery.commentId,
+          });
+          commentDelivery = {
+            ...topLevel.delivery,
+            replyDelivery: replyDelivery.delivery,
+          };
+          reply = {
+            account: resolvedReplyAccount,
+            result: replyDelivery.result,
+          };
+        }
       } catch (error) {
         if (isPlatformDeliveryError(error)) {
           replyError = {
@@ -442,9 +499,14 @@ export async function deliverSocialDiscoveryComment(input: {
     post: storedPost,
     commentDelivery,
   });
+  const postWithPendingReply = await persistPendingReply({
+    post: persisted.post,
+    brandId: input.brandId,
+    pendingReply,
+  });
 
   return {
-    post: persisted.post,
+    post: postWithPendingReply,
     promotionDraft: persisted.promotionDraft,
     promotionPurchase: persisted.promotionPurchase,
     account: resolvedAccount,
@@ -462,4 +524,162 @@ export function isPlatformDeliveryError(
     error instanceof UnipileApiError ||
     error instanceof YouTubeApiError
   );
+}
+
+export async function sendScheduledSocialDiscoveryReply(input: {
+  brand: BrandRecord;
+  brandId: string;
+  postId: string;
+}) {
+  const post = await getSocialDiscoveryPost({ id: input.postId, brandId: input.brandId });
+  if (!post?.pendingReply) {
+    throw new SocialCommentDeliveryError("No scheduled teammate reply found for this post.", { status: 404 });
+  }
+  if (!post.commentDelivery?.commentId.trim()) {
+    throw new SocialCommentDeliveryError("Top-level comment id missing for scheduled teammate reply.", { status: 409 });
+  }
+
+  const pending = post.pendingReply;
+  const { account, resolvedAccount } = await resolveSelectedAccount({
+    brand: input.brand,
+    post,
+    requestedAccountId: pending.accountId,
+  });
+  const replyDelivery = await deliverPlatformComment({
+    post,
+    text: pending.text,
+    account,
+    resolvedAccount,
+    requestedCommentId: pending.parentCommentId || post.commentDelivery.commentId,
+  });
+  const commentDelivery: SocialDiscoveryCommentDelivery = {
+    ...(post.commentDelivery ?? {
+      commentId: "",
+      commentUrl: "",
+      status: "",
+      source: "",
+      message: "",
+      postedAt: "",
+      accountId: "",
+      accountName: "",
+      accountHandle: "",
+    }),
+    replyDelivery: replyDelivery.delivery,
+  };
+  const nextStatus = replyDelivery.delivery.status === "verified" ? "triaged" : post.status;
+  const updatedPost =
+    (await updateSocialDiscoveryPostCommentDelivery({
+      id: post.id,
+      brandId: input.brandId,
+      status: nextStatus,
+      commentDelivery,
+    })) ?? { ...post, commentDelivery, status: nextStatus };
+  const clearedPost = await persistPendingReply({
+    post: updatedPost,
+    brandId: input.brandId,
+    pendingReply: null,
+  });
+
+  return {
+    post: clearedPost,
+    account: resolvedAccount,
+    result: replyDelivery.result,
+  };
+}
+
+export async function runSocialDiscoveryDelayedReplyTick(input: {
+  brandIds?: string[];
+  limit?: number;
+  dryRun?: boolean;
+}) {
+  const dryRun = Boolean(input.dryRun);
+  const duePosts = await listSocialDiscoveryPostsWithPendingReplies({
+    brandIds: input.brandIds,
+    limit: input.limit,
+    dueBefore: new Date().toISOString(),
+  });
+  const processed = [];
+
+  for (const post of duePosts) {
+    const pending = post.pendingReply;
+    if (!pending) continue;
+    const brand = await getBrandById(post.brandId);
+    if (!brand) {
+      processed.push({
+        brandId: post.brandId,
+        postId: post.id,
+        scheduledAt: pending.scheduledAt,
+        accountId: pending.accountId,
+        status: "error",
+        error: "brand not found",
+      });
+      continue;
+    }
+
+    if (dryRun) {
+      processed.push({
+        brandId: post.brandId,
+        postId: post.id,
+        scheduledAt: pending.scheduledAt,
+        accountId: pending.accountId,
+        status: "eligible",
+        error: "",
+      });
+      continue;
+    }
+
+    try {
+      const sent = await sendScheduledSocialDiscoveryReply({
+        brand,
+        brandId: post.brandId,
+        postId: post.id,
+      });
+      processed.push({
+        brandId: post.brandId,
+        postId: post.id,
+        scheduledAt: pending.scheduledAt,
+        accountId: pending.accountId,
+        status: "sent",
+        error: "",
+        commentId: sent.result.commentId,
+      });
+    } catch (error) {
+      const attempts = (pending.attempts ?? 0) + 1;
+      const failedPending: SocialDiscoveryPendingReply = {
+        ...pending,
+        attempts,
+        lastAttemptAt: new Date().toISOString(),
+        lastError: error instanceof Error ? error.message : "Failed to send scheduled teammate reply",
+        scheduledAt:
+          attempts >= MAX_DELAYED_REPLY_ATTEMPTS
+            ? pending.scheduledAt
+            : addMinutes(new Date().toISOString(), RETRY_DELAY_MINUTES),
+        status: attempts >= MAX_DELAYED_REPLY_ATTEMPTS ? "failed" : "scheduled",
+      };
+      await persistPendingReply({
+        post,
+        brandId: post.brandId,
+        pendingReply: failedPending,
+      });
+      processed.push({
+        brandId: post.brandId,
+        postId: post.id,
+        scheduledAt: pending.scheduledAt,
+        accountId: pending.accountId,
+        status: attempts >= MAX_DELAYED_REPLY_ATTEMPTS ? "failed" : "retry_scheduled",
+        error: error instanceof Error ? error.message : "Failed to send scheduled teammate reply",
+      });
+    }
+  }
+
+  return {
+    ok: true,
+    dryRun,
+    dueCount: duePosts.length,
+    processedCount: processed.length,
+    sentCount: processed.filter((row) => row.status === "sent").length,
+    retryCount: processed.filter((row) => row.status === "retry_scheduled").length,
+    failedCount: processed.filter((row) => row.status === "failed" || row.status === "error").length,
+    processed,
+  };
 }

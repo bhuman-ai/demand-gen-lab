@@ -1,13 +1,13 @@
 # Feature: social-discovery-youtube-manual-comment
 
 ## Request
-Auto-generate the YouTube comment draft with GPT-5.4 so the user does not have to write it manually, using the selected brand and its context in the social discovery manual comment flow.
+Make clicking a YouTube search result generate or refresh the comment draft immediately so the comment box does not stay blank after selection.
 ## Autonomy Mode
 holistic_autopilot
 ## Target Users
-operator/founder under time pressure
+founder/operator
 ## Optimization Target
-Show one ready-to-edit YouTube comment draft by default with minimal extra UI
+decision speed and obvious next action
 ## Hard Constraints
 - Preserve existing comment composer behavior
 - Keep YouTube path beginner-simple with one primary next action
@@ -20,8 +20,7 @@ Optimize for decision speed with one primary action. Start with smallest coheren
 ## Success Moment
 operator/founder under time pressure completes Emergency override UI implementation for social discovery. Add the simplest YouTube manual-comment path for a core unit video lead workflow: search a niche, see videos with subscriber counts, pick one video, and use the existing comment composer/manual comment button. Scope is search + review + manual comment button only. Reduce visible controls and hide promotional clutter on the YouTube path. and sees explicit confirmation of successful outcome.
 ## Failure Policy
-[TODO] Describe recovery path on failure.
-
+Retry inline when safe, preserve context, and escalate to support or fallback path if repeated failure continues.
 ## Decisions
 - Scope: Optimize for decision speed with one primary action. Start with smallest coherent slice that proves Emergency override UI implementation for social discovery. Add the simplest YouTube manual-comment path for a core unit video lead workflow: search a niche, see videos with subscriber counts, pick one video, and use the existing comment composer/manual comment button. Scope is search + review + manual comment button only. Reduce visible controls and hide promotional clutter on the YouTube path.. (source: agent_assumption; why: Autopilot inferred default for feature_scope from request, audience, optimization target, and mode.)
 - Success Moment: operator/founder under time pressure completes Emergency override UI implementation for social discovery. Add the simplest YouTube manual-comment path for a core unit video lead workflow: search a niche, see videos with subscriber counts, pick one video, and use the existing comment composer/manual comment button. Scope is search + review + manual comment button only. Reduce visible controls and hide promotional clutter on the YouTube path. and sees explicit confirmation of successful outcome. (source: agent_assumption; why: Autopilot inferred default for success_moment from request, audience, optimization target, and mode.)
@@ -34,6 +33,7 @@ Current decision: Auto-generate the YouTube comment draft with GPT-5.4 so the us
 Why now: operator/founder under time pressure needs immediate clarity on this flow.
 Next action: Let Codex structure the surface around one dominant move.
 Top risk: operator/founder under time pressure should not have to guess what matters first or what can go wrong. (source: agent_assumption; why: Autopilot inferred default for view_model_contract from request, audience, optimization target, and mode.)
+- Failure Policy: Retry inline when safe, preserve context, and escalate to support or fallback path if repeated failure continues. (source: agent_assumption; why: Autopilot inferred default for failure_policy from request, audience, optimization target, and mode.)
 ## Open Questions
 [TODO] Track unresolved blockers here.
 
@@ -56,6 +56,9 @@ Top risk: operator/founder under time pressure should not have to guess what mat
 - 2026-04-20 Implementation summary: Made YouTube manual-comment drafts default to a stronger GPT-5.4-backed path without adding UI weight. The social comment planner now defaults to GPT-5.4 for `social_comment_planning`, uses platform-aware prompt framing for YouTube vs Instagram, includes richer brand context fields in the prompt, and increases the default LLM planning limit so all 12 visible YouTube search results can get generated drafts. On the client, the flow now auto-selects the best result with a ready draft first and prefills any available draft from the interaction plan, so the user no longer starts from a blank comment box.
 - Files: /Users/don/lastb2b/src/lib/social-discovery-comment-prompt.ts, /Users/don/lastb2b/src/lib/social-discovery.ts, /Users/don/lastb2b/src/app/brands/[id]/social-discovery/social-discovery-client.tsx
 - Components: SocialDiscoveryClient, social comment planner, social discovery comment prompt
+- 2026-04-20 Implementation summary: Selecting a YouTube search result now auto-requests a fresh comment draft for that video instead of only switching the selected panel. Added a dedicated comment-draft API route, forced single-post GPT draft refresh on selection, and surfaced a simple watch-only/no-draft message plus retry action so the comment box no longer stays silently blank.
+- Files: src/lib/social-discovery.ts, src/app/api/brands/[brandId]/social-discovery/comment-draft/route.ts, src/app/brands/[id]/social-discovery/social-discovery-client.tsx
+- Components: SocialDiscoveryClient
 ## Doc Sync
 - 2026-04-20 Synced after implementation.
 - States touched: empty, loading, error
@@ -69,6 +72,9 @@ Top risk: operator/founder under time pressure should not have to guess what mat
 - Code touched: /Users/don/lastb2b/src/app/brands/[id]/social-discovery/social-discovery-client.tsx
 - 2026-04-20 Synced after implementation.
 - Code touched: /Users/don/lastb2b/src/lib/social-discovery-comment-prompt.ts, /Users/don/lastb2b/src/lib/social-discovery.ts, /Users/don/lastb2b/src/app/brands/[id]/social-discovery/social-discovery-client.tsx
+- 2026-04-20 Synced after implementation.
+- States touched: loading, partial
+- Code touched: src/lib/social-discovery.ts, src/app/api/brands/[brandId]/social-discovery/comment-draft/route.ts, src/app/brands/[id]/social-discovery/social-discovery-client.tsx
 ## Primary Action
 operator/founder under time pressure should be able to Auto-generate the YouTube comment draft with GPT-5.4 so the user does not have to write it manually, using the selected brand and its context in the social discovery manual comment . with one obvious first move.
 

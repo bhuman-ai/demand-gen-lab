@@ -2062,15 +2062,20 @@ export function buildSocialCommentPlanningPrompt(input: {
   ].join("\n");
 }
 
-async function enhanceInteractionPlanWithLlm(input: {
-  brand: BrandRecord;
-  post: SocialDiscoveryPost;
-}): Promise<SocialDiscoveryPost> {
+async function enhanceInteractionPlanWithLlm(
+  input: {
+    brand: BrandRecord;
+    post: SocialDiscoveryPost;
+  },
+  options?: {
+    force?: boolean;
+  }
+): Promise<SocialDiscoveryPost> {
   const apiKey = String(process.env.OPENAI_API_KEY ?? "").trim();
   if (!apiKey) return input.post;
 
   const plan = input.post.interactionPlan as EnrichedInteractionPlan;
-  if (!shouldEnhanceInteractionPlanWithLlm(input.post)) return input.post;
+  if (!options?.force && !shouldEnhanceInteractionPlanWithLlm(input.post)) return input.post;
   const prompt = buildSocialCommentPlanningPrompt(input);
 
   try {
@@ -2134,6 +2139,20 @@ async function enhanceInteractionPlanWithLlm(input: {
   } catch {
     return input.post;
   }
+}
+
+export async function refreshSocialDiscoveryCommentDraft(input: {
+  brand: BrandRecord;
+  post: SocialDiscoveryPost;
+  force?: boolean;
+}) {
+  return enhanceInteractionPlanWithLlm(
+    {
+      brand: input.brand,
+      post: input.post,
+    },
+    { force: input.force }
+  );
 }
 
 async function enrichInteractionPlans(input: {

@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
 import { ExternalLink, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -335,6 +335,8 @@ export default function SocialDiscoveryClient({ brandId }: { brandId: string }) 
   const [commentReplyId, setCommentReplyId] = useState("");
   const [commentError, setCommentError] = useState("");
   const [commentResult, setCommentResult] = useState<SocialDiscoveryCommentDelivery | null>(null);
+  const [draftingPostId, setDraftingPostId] = useState("");
+  const [draftGenerationErrors, setDraftGenerationErrors] = useState<Record<string, string>>({});
   const [sendingComment, setSendingComment] = useState(false);
   const [promoError, setPromoError] = useState("");
   const [creatingPromo, setCreatingPromo] = useState(false);
@@ -362,6 +364,7 @@ export default function SocialDiscoveryClient({ brandId }: { brandId: string }) 
   const [removingYouTubeChannelId, setRemovingYouTubeChannelId] = useState("");
   const previousSelectedPostIdRef = useRef("");
   const lastAutoCommentDraftRef = useRef("");
+  const attemptedAutoDraftPostIdsRef = useRef<Set<string>>(new Set());
 
   const selectedPost = useMemo(
     () => posts.find((post) => post.id === selectedId) ?? posts[0] ?? null,
@@ -394,10 +397,12 @@ export default function SocialDiscoveryClient({ brandId }: { brandId: string }) 
         : "Using the default comment prompt.";
   const selectedPlan = planFor(selectedPost);
   const generatedCommentDraft = useMemo(() => selectedPlan?.sequence?.[0]?.draft?.trim() ?? "", [selectedPlan]);
+  const selectedDraftGenerationError = selectedPost ? draftGenerationErrors[selectedPost.id] ?? "" : "";
   const commentGenerationPending = Boolean(
-    selectedPost &&
-      selectedPlan?.targetStrength === "target" &&
-      !generatedCommentDraft
+    (selectedPost && selectedPost.id === draftingPostId) ||
+      (selectedPost &&
+        selectedPlan?.targetStrength === "target" &&
+        !generatedCommentDraft)
   );
   const selectedCommentPlatform = selectedPost?.platform === "youtube" ? "youtube" : "instagram";
   const selectedCommentProvider = selectedCommentPlatform === "youtube" ? "youtube" : "unipile";
@@ -498,10 +503,58 @@ export default function SocialDiscoveryClient({ brandId }: { brandId: string }) 
   const canRestoreSuggestedComment = Boolean(
     generatedCommentDraft.trim() && generatedCommentDraft.trim() !== commentDraft.trim()
   );
+  const emptyCommentMessage = useMemo(() => {
+    if (!selectedPost || !selectedPlan || generatedCommentDraft || commentGenerationPending) return "";
+    if (selectedDraftGenerationError) return selectedDraftGenerationError;
+    if (selectedPlan.commentPosture === "watch_only" || selectedPlan.targetStrength === "watch") {
+      return "This video is watch-only for this brand, so no comment draft was created.";
+    }
+    return "No draft was created for this video yet. Pick another result or write your own comment.";
+  }, [commentGenerationPending, generatedCommentDraft, selectedDraftGenerationError, selectedPlan, selectedPost]);
   const selectedYouTubeChannelIsWatched = useMemo(
     () => Boolean(selectedYouTubeChannelId && youtubeSubscriptions.some((entry) => entry.channelId === selectedYouTubeChannelId)),
     [selectedYouTubeChannelId, youtubeSubscriptions]
   );
+
+  function replacePost(nextPost: DiscoveryPost) {
+    setPosts((current) => current.map((post) => (post.id === nextPost.id ? nextPost : post)));
+  }
+
+  async function requestCommentDraftForPost(postId: string) {
+    setDraftingPostId(postId);
+    setDraftGenerationErrors((current) => ({ ...current, [postId]: "" }));
+    try {
+      const response = await fetch(canonicalApiUrl(`/api/brands/${brandId}/social-discovery/comment-draft`), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ postId }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(typeof data?.error === "string" ? data.error : "Failed to generate a comment draft");
+      }
+      const updatedPost = data?.post && typeof data.post === "object" ? (data.post as DiscoveryPost) : null;
+      if (!updatedPost) return;
+      replacePost(updatedPost);
+      if (!planFor(updatedPost)?.sequence?.[0]?.draft?.trim()) {
+        setDraftGenerationErrors((current) => ({
+          ...current,
+          [postId]: "No clean draft for this video. Pick another video or write one manually.",
+        }));
+      }
+    } catch (err) {
+      setDraftGenerationErrors((current) => ({
+        ...current,
+        [postId]: err instanceof Error ? err.message : "Failed to generate a comment draft",
+      }));
+    } finally {
+      setDraftingPostId((current) => (current === postId ? "" : current));
+    }
+  }
+
+  const generateCommentDraftForPost = useEffectEvent((postId: string) => {
+    void requestCommentDraftForPost(postId);
+  });
 
   useEffect(() => {
     if (!redirectingToCanonicalHost) return;
@@ -542,6 +595,17 @@ export default function SocialDiscoveryClient({ brandId }: { brandId: string }) 
       lastAutoCommentDraftRef.current = generatedCommentDraft;
     }
   }, [selectedPost?.id, generatedCommentDraft, commentDraft]);
+
+  useEffect(() => {
+    const postId = selectedPost?.id ?? "";
+    if (!postId) return;
+    if (selectedCommentPlatform !== "youtube") return;
+    if (generatedCommentDraft) return;
+    if (draftingPostId === postId) return;
+    if (attemptedAutoDraftPostIdsRef.current.has(postId)) return;
+    attemptedAutoDraftPostIdsRef.current.add(postId);
+    void generateCommentDraftForPost(postId);
+  }, [draftingPostId, generatedCommentDraft, selectedCommentPlatform, selectedPost?.id]);
 
   useEffect(() => {
     if (youtubeSubscriptionAccountId && youtubeAccountOptions.some((account) => account.accountId === youtubeSubscriptionAccountId)) {
@@ -587,6 +651,9 @@ export default function SocialDiscoveryClient({ brandId }: { brandId: string }) 
   async function loadPosts(nextStatus = status) {
     setLoading(true);
     setError("");
+    attemptedAutoDraftPostIdsRef.current.clear();
+    setDraftingPostId("");
+    setDraftGenerationErrors({});
     try {
       const query = nextStatus === "all" ? "" : `?status=${nextStatus}`;
       const response = await fetch(canonicalApiUrl(`/api/brands/${brandId}/social-discovery${query}`), {
@@ -763,6 +830,9 @@ export default function SocialDiscoveryClient({ brandId }: { brandId: string }) 
     setYouTubeSearchError("");
     setYouTubeSearchSummary("");
     setError("");
+    attemptedAutoDraftPostIdsRef.current.clear();
+    setDraftingPostId("");
+    setDraftGenerationErrors({});
     try {
       const response = await fetch(canonicalApiUrl(`/api/brands/${brandId}/social-discovery/youtube-discovery`), {
         method: "POST",
@@ -795,6 +865,9 @@ export default function SocialDiscoveryClient({ brandId }: { brandId: string }) 
   async function runScan() {
     setScanning(true);
     setError("");
+    attemptedAutoDraftPostIdsRef.current.clear();
+    setDraftingPostId("");
+    setDraftGenerationErrors({});
     try {
       const nextQueries = normalizeQueries(queryDraft.split("\n"));
       if (!sameQueries(nextQueries, baselineQueries)) {
@@ -1139,7 +1212,7 @@ export default function SocialDiscoveryClient({ brandId }: { brandId: string }) 
       <div className="space-y-4">
         <SectionPanel
           title="Pick one video"
-          description={loading ? "Loading..." : posts.length ? "Pick one result." : "Search first."}
+          description={loading ? "Loading..." : posts.length ? "Pick one result. We draft the comment when you select it." : "Search first."}
           contentClassName="p-0"
         >
           {!loading && !posts.length ? (
@@ -1179,7 +1252,11 @@ export default function SocialDiscoveryClient({ brandId }: { brandId: string }) 
                     </div>
                     <div className="text-xs text-[color:var(--muted-foreground)]">
                       {formatDate(post.postedAt)}
-                      {post.interactionPlan.targetStrength === "target" ? " · ready to comment" : " · watch"}
+                      {planFor(post)?.sequence?.[0]?.draft?.trim()
+                        ? " · draft ready"
+                        : post.interactionPlan.targetStrength === "target"
+                          ? " · needs draft"
+                          : " · watch only"}
                     </div>
                   </button>
                 );
@@ -1190,7 +1267,7 @@ export default function SocialDiscoveryClient({ brandId }: { brandId: string }) 
 
         <SectionPanel
           title="Review and post comment"
-          description={selectedPost ? "Use the draft below, edit it if needed, then post." : "Pick a video first."}
+          description={selectedPost ? "Draft appears here as soon as you pick a video." : "Pick a video first."}
           actions={
             selectedPost ? (
               <Button asChild variant="outline" size="sm">
@@ -1471,6 +1548,23 @@ export default function SocialDiscoveryClient({ brandId }: { brandId: string }) 
                           }}
                         >
                           Use draft again
+                        </Button>
+                      </div>
+                    ) : null}
+                    {emptyCommentMessage && selectedPost ? (
+                      <div className="flex flex-wrap items-center gap-2 text-xs text-[color:var(--muted-foreground)]">
+                        <div>{emptyCommentMessage}</div>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => {
+                            attemptedAutoDraftPostIdsRef.current.add(selectedPost.id);
+                            void requestCommentDraftForPost(selectedPost.id);
+                          }}
+                          disabled={sendingComment || commentGenerationPending}
+                        >
+                          Try draft again
                         </Button>
                       </div>
                     ) : null}

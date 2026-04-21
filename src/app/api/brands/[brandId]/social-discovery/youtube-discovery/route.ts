@@ -27,6 +27,8 @@ function isoHoursAgo(hours: number) {
   return new Date(Date.now() - hours * 60 * 60 * 1000).toISOString();
 }
 
+const MIN_YOUTUBE_DISCOVERY_SUBSCRIBERS = 1000;
+
 function buildYouTubeDiscoveryPost(input: {
   brandId: string;
   query: string;
@@ -126,7 +128,8 @@ export async function POST(request: Request, context: { params: Promise<{ brandI
       secrets: secrets ?? undefined,
     });
 
-    const rawPosts = results.map((result, index) =>
+    const eligibleResults = results.filter((result) => result.subscriberCount > MIN_YOUTUBE_DISCOVERY_SUBSCRIBERS);
+    const rawPosts = eligibleResults.map((result, index) =>
       buildYouTubeDiscoveryPost({
         brandId,
         query,
@@ -146,7 +149,9 @@ export async function POST(request: Request, context: { params: Promise<{ brandI
       posts,
       summary: {
         found: results.length,
+        eligible: eligibleResults.length,
         saved: posts.length,
+        minSubscriberCount: MIN_YOUTUBE_DISCOVERY_SUBSCRIBERS,
         provider: "youtube-data-api",
       },
     });

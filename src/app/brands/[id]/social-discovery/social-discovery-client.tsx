@@ -77,12 +77,15 @@ type DiscoveryResponse = {
     platforms?: string[];
     queries?: number;
     found?: number;
+    eligible?: number;
     saved?: number;
+    minSubscriberCount?: number;
     errors?: number;
   };
 };
 
 const SCAN_PLATFORM = "instagram";
+const MIN_YOUTUBE_DRAFT_SUBSCRIBERS = 1000;
 
 function postRawRecord(post: DiscoveryPost | null) {
   if (!post?.raw || typeof post.raw !== "object" || Array.isArray(post.raw)) return {};
@@ -104,6 +107,15 @@ function youtubeRawText(post: DiscoveryPost | null, key: string) {
 function youtubeRawNumber(post: DiscoveryPost | null, key: string) {
   const value = Number(youtubeRawRecord(post)[key] ?? 0);
   return Number.isFinite(value) ? value : 0;
+}
+
+function isEligibleYouTubeDraftPost(post: DiscoveryPost) {
+  if (post.platform !== "youtube") return true;
+  return youtubeRawNumber(post, "subscriberCount") > MIN_YOUTUBE_DRAFT_SUBSCRIBERS;
+}
+
+function filterDraftEligiblePosts(posts: DiscoveryPost[]) {
+  return posts.filter(isEligibleYouTubeDraftPost);
 }
 
 function formatCompactNumber(value: number) {
@@ -775,7 +787,8 @@ export default function SocialDiscoveryClient({ brandId }: { brandId: string }) 
               posts: filterPostsByStatus(cached.posts, nextStatus),
             };
           })();
-      setPosts(nextData.posts);
+      const nextVisiblePosts = filterDraftEligiblePosts(nextData.posts);
+      setPosts(nextVisiblePosts);
       const nextSavedQueries = normalizeQueries(nextData.savedQueries);
       const nextSuggestedQueries = normalizeQueries(nextData.suggestedQueries);
       const nextQueries = baselineQueriesFor(nextData);
@@ -798,7 +811,7 @@ export default function SocialDiscoveryClient({ brandId }: { brandId: string }) 
         });
       }
       setSelectedId((current) =>
-        current && nextData.posts.some((post) => post.id === current) ? current : preferredPostId(nextData.posts)
+        current && nextVisiblePosts.some((post) => post.id === current) ? current : preferredPostId(nextVisiblePosts)
       );
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load social discovery");
@@ -924,13 +937,16 @@ export default function SocialDiscoveryClient({ brandId }: { brandId: string }) 
       if (!response.ok) {
         throw new Error(typeof data?.error === "string" ? data.error : "Failed to search YouTube");
       }
-      const nextPosts = Array.isArray(data?.posts) ? (data.posts as DiscoveryPost[]) : [];
+      const nextPosts = filterDraftEligiblePosts(Array.isArray(data?.posts) ? (data.posts as DiscoveryPost[]) : []);
+      const fetchedCount = Math.max(0, Number(data?.summary?.found ?? 0) || 0);
       setPosts(nextPosts);
       setSelectedId(preferredPostId(nextPosts));
       setYouTubeSearchSummary(
         nextPosts.length
-          ? `${nextPosts.length} videos for "${query}". Pick one to draft.`
-          : `No recent YouTube videos found for "${query}".`
+          ? `${nextPosts.length} videos from 1k+ channels for "${query}". Pick one to draft.`
+          : fetchedCount
+            ? `No 1k+ subscriber channel videos found for "${query}".`
+            : `No recent YouTube videos found for "${query}".`
       );
     } catch (err) {
       setYouTubeSearchError(err instanceof Error ? err.message : "Failed to search YouTube");

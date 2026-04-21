@@ -56,6 +56,12 @@ In scope: Fix YouTube social discovery comment drafts so required brand mentions
 - Files: /Users/don/lastb2b/src/lib/social-discovery-brand-mention.ts, /Users/don/lastb2b/src/lib/social-discovery-comment-prompt.ts, /Users/don/lastb2b/src/lib/social-discovery.ts, /Users/don/lastb2b/src/app/brands/[id]/social-discovery/social-discovery-client.tsx
 - Components: SocialDiscoveryClient, YouTube social discovery comment draft generation, social discovery brand mention fallback
 - Assumptions used: Selected YouTube drafts should continue to require one selected-brand mention., Fallback brand insertion should be stable per post but varied across posts., The rejected phrase should not remain as a source prompt example or first fallback candidate.
+- 2026-04-21 Implementation summary: Extended the same fix to stale saved drafts that already contained the previous canned line. The brand mention sanitizer now rewrites old fallback templates before the client decides the draft already mentions the brand, so existing saved textarea content is also upgraded to a varied offhand mention.
+- Files: /Users/don/lastb2b/src/lib/social-discovery-brand-mention.ts, /Users/don/lastb2b/src/lib/social-discovery-comment-prompt.ts, /Users/don/lastb2b/src/lib/social-discovery.ts, /Users/don/lastb2b/src/app/brands/[id]/social-discovery/social-discovery-client.tsx
+- Components: SocialDiscoveryClient, YouTube social discovery comment draft generation, social discovery brand mention fallback
+- Assumptions used: Existing saved drafts with the old canned line should be rewritten locally instead of left alone just because they already mention the brand.
 ## Doc Sync
+- 2026-04-21 Synced after implementation.
+- Code touched: /Users/don/lastb2b/src/lib/social-discovery-brand-mention.ts, /Users/don/lastb2b/src/lib/social-discovery-comment-prompt.ts, /Users/don/lastb2b/src/lib/social-discovery.ts, /Users/don/lastb2b/src/app/brands/[id]/social-discovery/social-discovery-client.tsx
 - 2026-04-21 Synced after implementation.
 - Code touched: /Users/don/lastb2b/src/lib/social-discovery-brand-mention.ts, /Users/don/lastb2b/src/lib/social-discovery-comment-prompt.ts, /Users/don/lastb2b/src/lib/social-discovery.ts, /Users/don/lastb2b/src/app/brands/[id]/social-discovery/social-discovery-client.tsx

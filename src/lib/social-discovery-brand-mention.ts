@@ -48,9 +48,12 @@ function casualBrandAside(draft: string, brandName: string, seed = "") {
 }
 
 function sanitizeAdLikeBrandMention(draft: string, brandName: string, maxLength: number, seed = "") {
-  const casualAside = casualBrandAside(draft, brandName, seed);
+  const casualAside = `${casualBrandAside(draft, brandName, seed)}.`;
   const brandPattern = escapeRegExp(brandName);
   const patterns = [
+    new RegExp(`We see the same at ${brandPattern} too\\.?`, "ig"),
+    new RegExp(`Same thing on our side at ${brandPattern} too\\.?`, "ig"),
+    new RegExp(`We see that a lot at ${brandPattern} too\\.?`, "ig"),
     new RegExp(`That exact gap is why ${brandPattern} exists\\.?`, "ig"),
     new RegExp(`That exact gap is why we built ${brandPattern}\\.?`, "ig"),
     new RegExp(`${brandPattern} fits that same shift[^.?!]*`, "ig"),

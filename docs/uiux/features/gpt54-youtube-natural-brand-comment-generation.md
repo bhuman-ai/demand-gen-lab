@@ -62,6 +62,12 @@ In scope: Replace YouTube Social Discovery draft behavior with GPT-5.4-generated
 - Files: /Users/don/lastb2b/src/lib/youtube.ts, /Users/don/lastb2b/src/app/api/brands/[brandId]/social-discovery/comment-draft/route.ts, /Users/don/lastb2b/src/lib/social-discovery.ts, /Users/don/lastb2b/src/lib/social-discovery-brand-mention.ts, /Users/don/lastb2b/src/app/brands/[id]/social-discovery/social-discovery-client.tsx
 - Components: YouTube transcript fetcher, Social Discovery comment-draft API, GPT-5.4 social comment planner prompt, SocialDiscoveryClient YouTube draft editor, social discovery brand mention validation
 - Assumptions used: OpenAI Responses model string gpt-5.4 is supported for this existing /v1/responses integration., YouTube transcripts are best-effort and drafts should still work from title, description, channel metadata, and brand context when captions are unavailable., For selected YouTube drafts, failing closed is better than showing a locally appended canned brand sentence.
+- 2026-04-21 Implementation summary: Extended the client regeneration trigger so old saved YouTube drafts with canned/ad-like brand phrasing are hidden and automatically regenerated through the GPT-5.4 context path, even though they already mention the brand. This prevents stale saved drafts from surviving just because they pass the simple brand-present check.
+- Files: /Users/don/lastb2b/src/app/brands/[id]/social-discovery/social-discovery-client.tsx
+- Components: SocialDiscoveryClient YouTube draft editor
+- Assumptions used: Old canned saved drafts should be treated as invalid and regenerated, not cleaned up locally and shown as if they were acceptable.
 ## Doc Sync
 - 2026-04-21 Synced after implementation.
 - Code touched: /Users/don/lastb2b/src/lib/youtube.ts, /Users/don/lastb2b/src/app/api/brands/[brandId]/social-discovery/comment-draft/route.ts, /Users/don/lastb2b/src/lib/social-discovery.ts, /Users/don/lastb2b/src/lib/social-discovery-brand-mention.ts, /Users/don/lastb2b/src/app/brands/[id]/social-discovery/social-discovery-client.tsx
+- 2026-04-21 Synced after implementation.
+- Code touched: /Users/don/lastb2b/src/app/brands/[id]/social-discovery/social-discovery-client.tsx

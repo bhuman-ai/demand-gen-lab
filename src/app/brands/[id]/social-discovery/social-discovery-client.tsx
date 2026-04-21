@@ -16,6 +16,7 @@ import {
 } from "@/lib/client-api-url";
 import type { OutreachAccount, SocialDiscoveryYouTubeSubscription } from "@/lib/factory-types";
 import {
+  brandMentionLooksCannedOrAdLike,
   commentBrandName,
   sanitizeCasualBrandMention,
   textMentionsBrand,
@@ -468,7 +469,8 @@ export default function SocialDiscoveryClient({
       selectedPost?.platform === "youtube" &&
       selectedBrandMentionName.trim() &&
       nextDraft.trim() &&
-      !textMentionsBrand(nextDraft, selectedBrandMentionName)
+      (!textMentionsBrand(nextDraft, selectedBrandMentionName) ||
+        brandMentionLooksCannedOrAdLike(generatedCommentDraft, selectedBrandMentionName))
     ) {
       return "";
     }
@@ -749,7 +751,12 @@ export default function SocialDiscoveryClient({
     if (!postId || !brandName) return;
     if (selectedCommentPlatform !== "youtube") return;
     if (!generatedCommentDraft) return;
-    if (textMentionsBrand(generatedCommentDraft, brandName)) return;
+    if (
+      textMentionsBrand(generatedCommentDraft, brandName) &&
+      !brandMentionLooksCannedOrAdLike(generatedCommentDraft, brandName)
+    ) {
+      return;
+    }
     if (draftingPostId === postId) return;
     const attemptKey = `${postId}:${brandName.toLowerCase()}:${replyEnabled ? "thread" : "solo"}`;
     if (attemptedBrandMentionDraftPostIdsRef.current.has(attemptKey)) return;

@@ -173,8 +173,8 @@ function trimTrailingSlashes(value: string) {
   return value.replace(/\/+$/, "");
 }
 
-function ensureBrandMentionInDraft(draft: string, brandName: string, maxLength = 1250) {
-  return ensureCasualBrandMention({ draft, brandName, maxLength });
+function ensureBrandMentionInDraft(draft: string, brandName: string, maxLength = 1250, seed = "") {
+  return ensureCasualBrandMention({ draft, brandName, maxLength, seed });
 }
 
 function buildInstagramPathCommentUrl(postUrl: string, commentId: string) {
@@ -458,8 +458,8 @@ export default function SocialDiscoveryClient({
   const selectedPlan = planFor(selectedPost);
   const generatedCommentDraft = useMemo(() => selectedPlan?.sequence?.[0]?.draft?.trim() ?? "", [selectedPlan]);
   const generatedCommentDraftWithBrand = useMemo(
-    () => ensureBrandMentionInDraft(generatedCommentDraft, selectedBrandMentionName, 1250),
-    [generatedCommentDraft, selectedBrandMentionName]
+    () => ensureBrandMentionInDraft(generatedCommentDraft, selectedBrandMentionName, 1250, selectedPost?.id ?? ""),
+    [generatedCommentDraft, selectedBrandMentionName, selectedPost?.id]
   );
   const generatedReplyDraft = useMemo(() => selectedPlan?.sequence?.[1]?.draft?.trim() ?? "", [selectedPlan]);
   const selectedDraftGenerationError = selectedPost ? draftGenerationErrors[selectedPost.id] ?? "" : "";
@@ -622,7 +622,8 @@ export default function SocialDiscoveryClient({
         const nextCommentDraft = ensureBrandMentionInDraft(
           nextPlan?.sequence?.[0]?.draft?.trim() ?? "",
           selectedBrandMentionName,
-          1250
+          1250,
+          postId
         );
         const nextReplyDraft = mode === "thread" ? nextPlan?.sequence?.[1]?.draft?.trim() ?? "" : "";
         setCommentDraft(nextCommentDraft);
@@ -706,7 +707,12 @@ export default function SocialDiscoveryClient({
   useEffect(() => {
     if (!selectedPost?.id || !selectedBrandMentionName.trim() || !commentDraft.trim()) return;
     if (textMentionsBrand(commentDraft, selectedBrandMentionName)) return;
-    const nextCommentDraft = ensureBrandMentionInDraft(commentDraft, selectedBrandMentionName, 1250);
+    const nextCommentDraft = ensureBrandMentionInDraft(
+      commentDraft,
+      selectedBrandMentionName,
+      1250,
+      selectedPost.id
+    );
     if (nextCommentDraft === commentDraft) return;
     setCommentDraft(nextCommentDraft);
     if (lastAutoCommentDraftRef.current === commentDraft) {
@@ -1155,7 +1161,12 @@ export default function SocialDiscoveryClient({
 
   async function sendComment() {
     if (!selectedPost) return;
-    const finalCommentDraft = ensureBrandMentionInDraft(commentDraft, selectedBrandMentionName, 1250).trim();
+    const finalCommentDraft = ensureBrandMentionInDraft(
+      commentDraft,
+      selectedBrandMentionName,
+      1250,
+      selectedPost.id
+    ).trim();
     if (!finalCommentDraft) {
       setCommentError("Write a comment before sending.");
       return;

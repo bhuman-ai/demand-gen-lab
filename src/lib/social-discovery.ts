@@ -356,7 +356,7 @@ function compactText(value: unknown, max = 600) {
     .slice(0, max);
 }
 
-function addSoftBrandMention(input: { draft: string; brandName: string; maxLength: number }) {
+function addSoftBrandMention(input: { draft: string; brandName: string; maxLength: number; seed?: string }) {
   return ensureCasualBrandMention(input);
 }
 
@@ -2051,7 +2051,7 @@ export function buildSocialCommentPlanningPrompt(input: {
     "Use the following prompt for the top-level commentDraft:",
     brandCommentPrompt,
     forceDraft
-      ? `Selected-video mode: mention ${brandName} exactly once as a casual side note from the brand account. Good shape: "We see the same at ${brandName} too." Bad shape: polished positioning, mini product explanation, or ad copy. Override heuristic_mention_policy if needed.`
+      ? `Selected-video mode: mention ${brandName} exactly once as a casual side note from the brand account. It should feel like an offhand observation, not a reusable line, polished positioning, mini product explanation, or ad copy. Override heuristic_mention_policy if needed.`
       : "",
     forceDraft && draftMode === "thread"
       ? `Thread mode: mention ${brandName} in either commentDraft or replyDraft, whichever feels more natural, not both, and keep it to one short casual clause.`
@@ -2166,19 +2166,22 @@ async function enhanceInteractionPlanWithLlm(
       Boolean(baseCommentDraft) &&
       !textMentionsBrand(baseCommentDraft, commentBrandName(input.brand.name)) &&
       !textMentionsBrand(baseReplyDraft, commentBrandName(input.brand.name));
-    const nextCommentDraft = forceNeedsBrand && draftMode === "solo"
-      ? addSoftBrandMention({
-          draft: baseCommentDraft,
-          brandName: commentBrandName(input.brand.name),
-          maxLength: 280,
-        })
-      : baseCommentDraft;
+    const nextCommentDraft =
+      forceNeedsBrand && draftMode === "solo"
+        ? addSoftBrandMention({
+            draft: baseCommentDraft,
+            brandName: commentBrandName(input.brand.name),
+            maxLength: 280,
+            seed: `${input.post.id}:${input.post.url}`,
+          })
+        : baseCommentDraft;
     const nextReplyDraft =
       forceNeedsBrand && draftMode === "thread" && baseReplyDraft
         ? addSoftBrandMention({
             draft: baseReplyDraft,
             brandName: commentBrandName(input.brand.name),
             maxLength: 220,
+            seed: `${input.post.id}:${input.post.url}:reply`,
           })
         : baseReplyDraft;
 

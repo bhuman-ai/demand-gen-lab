@@ -480,10 +480,6 @@ export default function SocialDiscoveryClient({
     () => ensureBrandMentionInDraft(generatedCommentDraft, selectedBrandMentionName, 1250),
     [generatedCommentDraft, selectedBrandMentionName]
   );
-  const commentDraftWithBrand = useMemo(
-    () => ensureBrandMentionInDraft(commentDraft, selectedBrandMentionName, 1250),
-    [commentDraft, selectedBrandMentionName]
-  );
   const generatedReplyDraft = useMemo(() => selectedPlan?.sequence?.[1]?.draft?.trim() ?? "", [selectedPlan]);
   const selectedDraftGenerationError = selectedPost ? draftGenerationErrors[selectedPost.id] ?? "" : "";
   const commentGenerationPending = Boolean(
@@ -728,12 +724,14 @@ export default function SocialDiscoveryClient({
 
   useEffect(() => {
     if (!selectedPost?.id || !selectedBrandMentionName.trim() || !commentDraft.trim()) return;
-    if (commentDraftWithBrand === commentDraft) return;
-    setCommentDraft(commentDraftWithBrand);
+    if (textMentionsBrand(commentDraft, selectedBrandMentionName)) return;
+    const nextCommentDraft = ensureBrandMentionInDraft(commentDraft, selectedBrandMentionName, 1250);
+    if (nextCommentDraft === commentDraft) return;
+    setCommentDraft(nextCommentDraft);
     if (lastAutoCommentDraftRef.current === commentDraft) {
-      lastAutoCommentDraftRef.current = commentDraftWithBrand;
+      lastAutoCommentDraftRef.current = nextCommentDraft;
     }
-  }, [commentDraft, commentDraftWithBrand, selectedBrandMentionName, selectedPost?.id]);
+  }, [commentDraft, selectedBrandMentionName, selectedPost?.id]);
 
   useEffect(() => {
     if (!selectedPost?.id || !generatedReplyDraft) return;
@@ -1726,7 +1724,7 @@ export default function SocialDiscoveryClient({
                   <div className="grid gap-2">
                     <label className="text-sm font-medium text-[color:var(--foreground)]">Comment</label>
                     <Textarea
-                      value={commentDraftWithBrand}
+                      value={commentDraft}
                       onChange={(event) => {
                         setCommentDraft(event.target.value);
                         lastAutoCommentDraftRef.current = generatedCommentDraftWithBrand;
@@ -1742,7 +1740,7 @@ export default function SocialDiscoveryClient({
                           ? "Writing a draft for you..."
                           : "Edit the draft if you want, then press Post comment."}
                       </div>
-                      <div>{commentDraftWithBrand.trim().length}/1250</div>
+                      <div>{commentDraft.length}/1250</div>
                     </div>
                     {canRestoreSuggestedComment ? (
                       <div>
@@ -2075,7 +2073,7 @@ export default function SocialDiscoveryClient({
                     disabled={
                       sendingComment ||
                       commentGenerationPending ||
-                      !commentDraftWithBrand.trim() ||
+                      !commentDraft.trim() ||
                       (replyEnabled && (!replyDraft.trim() || !replyAccountId))
                     }
                   >

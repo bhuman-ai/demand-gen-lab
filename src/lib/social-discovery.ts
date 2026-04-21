@@ -2078,7 +2078,7 @@ export function buildSocialCommentPlanningPrompt(input: {
           "- First infer what a real viewer would react to from the video title, description, transcript excerpt if available, channel, and brand context.",
           "- Write the comment from scratch in one pass. Do not write a normal comment and append a brand sentence.",
           "- The brand mention should be a small natural part of the thought, like something the account has seen from its own work, not an ad or CTA.",
-          "- No generic reusable lines. No 'we see the same at BRAND too'. No 'BRAND fits this'. No product pitch.",
+          "- No generic reusable lines. No 'we see the same at BRAND too'. No 'we see that at BRAND'. No 'we see that a lot at BRAND'. No 'on the BRAND side'. No 'BRAND fits this'. No product pitch.",
           "- If transcript is unavailable, use title + description + channel metadata and do not pretend to know details that are not present.",
         ].join("\n")
       : "",
@@ -2224,7 +2224,9 @@ async function enhanceInteractionPlanWithLlm(
         "",
         `Regenerate from scratch because the previous draft failed: ${initialProblem}.`,
         `The new comment must mention ${brandName} exactly once, naturally, inside the real video reaction.`,
-        "Do not append a standalone brand sentence. Do not use a reusable template. Return JSON only.",
+        `Do not append a standalone ${brandName} sentence.`,
+        `Do not use generic side notes like 'we see that at ${brandName}' or 'we see that a lot at ${brandName}'.`,
+        "Do not use a reusable template. Return JSON only.",
       ].join("\n");
       const retryRow = await requestSocialCommentPlan({ apiKey, model, prompt: promptUsed });
       if (retryRow) {
@@ -2280,7 +2282,7 @@ async function enhanceInteractionPlanWithLlm(
       !textMentionsBrand(baseCommentDraft, brandName) &&
       !textMentionsBrand(baseReplyDraft, brandName);
     const nextCommentDraft =
-      forceNeedsBrand && draftMode === "solo"
+      forceNeedsBrand && input.post.platform !== "youtube" && draftMode === "solo"
         ? addSoftBrandMention({
             draft: baseCommentDraft,
             brandName,
@@ -2289,7 +2291,7 @@ async function enhanceInteractionPlanWithLlm(
           })
         : baseCommentDraft;
     const nextReplyDraft =
-      forceNeedsBrand && draftMode === "thread" && baseReplyDraft
+      forceNeedsBrand && input.post.platform !== "youtube" && draftMode === "thread" && baseReplyDraft
         ? addSoftBrandMention({
             draft: baseReplyDraft,
             brandName,

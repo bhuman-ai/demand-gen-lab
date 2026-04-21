@@ -52,11 +52,31 @@ function brandMentionProblemPatterns(brandName: string) {
   return [
     new RegExp(`We see the same at ${brandPattern} too\\.?`, "ig"),
     new RegExp(`Same thing on our side at ${brandPattern} too\\.?`, "ig"),
+    new RegExp(`We see that at ${brandPattern}\\.?`, "ig"),
+    new RegExp(`We see that a lot at ${brandPattern}\\.?`, "ig"),
     new RegExp(`We see that a lot at ${brandPattern} too\\.?`, "ig"),
+    new RegExp(`That comes up at ${brandPattern} a lot\\.?`, "ig"),
+    new RegExp(`That tradeoff comes up at ${brandPattern} a lot\\.?`, "ig"),
+    new RegExp(`We run into that at ${brandPattern} too\\.?`, "ig"),
+    new RegExp(`Same pattern shows up at ${brandPattern}\\.?`, "ig"),
+    new RegExp(`That shows up on the ${brandPattern} side too\\.?`, "ig"),
+    new RegExp(`The ${brandPattern} side runs into that too\\.?`, "ig"),
+    new RegExp(`That infrastructure gap shows up at ${brandPattern} too\\.?`, "ig"),
+    new RegExp(`That comes up on the video side at ${brandPattern} too\\.?`, "ig"),
+    new RegExp(`The ${brandPattern} side runs into that with video too\\.?`, "ig"),
+    new RegExp(`${brandPattern} runs into that same video problem too\\.?`, "ig"),
     new RegExp(`That exact gap is why ${brandPattern} exists\\.?`, "ig"),
     new RegExp(`That exact gap is why we built ${brandPattern}\\.?`, "ig"),
     new RegExp(`${brandPattern} fits that same shift[^.?!]*`, "ig"),
     new RegExp(`${brandPattern}[^.?!]*(?:without going fully manual|fits this shift|exists for this)[^.?!]*`, "ig"),
+    new RegExp(
+      `(?:we|i|that|same|the)\\s+(?:see|saw|run into|notice|keep seeing|hear|deal with|comes up|shows up|happens)[^.?!]{0,80}\\b(?:at|on)\\s+(?:the\\s+)?${brandPattern}(?:\\s+side)?(?:\\s+too)?\\.?`,
+      "ig"
+    ),
+    new RegExp(
+      `(?:at|on)\\s+(?:the\\s+)?${brandPattern}(?:\\s+side)?\\s+(?:too|as well)\\.?`,
+      "ig"
+    ),
   ];
 }
 

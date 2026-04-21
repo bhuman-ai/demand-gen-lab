@@ -66,8 +66,14 @@ In scope: Replace YouTube Social Discovery draft behavior with GPT-5.4-generated
 - Files: /Users/don/lastb2b/src/app/brands/[id]/social-discovery/social-discovery-client.tsx
 - Components: SocialDiscoveryClient YouTube draft editor
 - Assumptions used: Old canned saved drafts should be treated as invalid and regenerated, not cleaned up locally and shown as if they were acceptable.
+- 2026-04-21 Implementation summary: Tightened the YouTube draft path so GPT-written drafts are accepted only when the brand mention is present and non-canned, removed client-side/local fallback rewriting for YouTube display and send, blanked stale auto-filled canned drafts while regeneration runs, expanded canned-phrase detection, and strengthened prompt bans against generic BHuman side-note phrasing.
+- Files: src/lib/social-discovery-brand-mention.ts, src/lib/social-discovery-comment-prompt.ts, src/lib/social-discovery.ts, src/app/brands/[id]/social-discovery/social-discovery-client.tsx
+- Components: SocialDiscoveryClient
 ## Doc Sync
 - 2026-04-21 Synced after implementation.
 - Code touched: /Users/don/lastb2b/src/lib/youtube.ts, /Users/don/lastb2b/src/app/api/brands/[brandId]/social-discovery/comment-draft/route.ts, /Users/don/lastb2b/src/lib/social-discovery.ts, /Users/don/lastb2b/src/lib/social-discovery-brand-mention.ts, /Users/don/lastb2b/src/app/brands/[id]/social-discovery/social-discovery-client.tsx
 - 2026-04-21 Synced after implementation.
 - Code touched: /Users/don/lastb2b/src/app/brands/[id]/social-discovery/social-discovery-client.tsx
+- 2026-04-21 Synced after implementation.
+- States touched: loading
+- Code touched: src/lib/social-discovery-brand-mention.ts, src/lib/social-discovery-comment-prompt.ts, src/lib/social-discovery.ts, src/app/brands/[id]/social-discovery/social-discovery-client.tsx

@@ -24,6 +24,7 @@ import {
   getOutreachAccountSecrets,
   OutreachDataError,
   listOutreachAccounts,
+  setBrandOutreachAssignment,
   updateOutreachAccount,
   type OutreachAccountSecrets,
 } from "@/lib/outreach-data";
@@ -58,8 +59,6 @@ import { pickWebshareProxy } from "@/lib/webshare-client";
 import { buildGmailUiUserDataDir } from "@/lib/gmail-ui-profile";
 import { normalizeGmailUiLoginStatus } from "@/lib/gmail-ui-login";
 import { MAX_ACTIVE_SENDERS_PER_DOMAIN } from "@/lib/sender-capacity";
-import { syncCanonicalSenderFromProvisionedAccount } from "@/lib/senders";
-import { setBrandOutreachAssignmentWithWarmup } from "@/lib/sender-warmup-campaigns";
 
 type NamecheapHostRecord = {
   type: "A" | "AAAA" | "ALIAS" | "CNAME" | "FRAME" | "MX" | "MXE" | "NS" | "TXT" | "URL" | "URL301";
@@ -2207,8 +2206,9 @@ export async function provisionCustomerIoSender(
   const assignment =
     input.assignToBrand === false
       ? null
-      : await setBrandOutreachAssignmentWithWarmup(brand.id, {
+      : await setBrandOutreachAssignment(brand.id, {
           accountId: account.id,
+          accountIds: [account.id],
           mailboxAccountId: mailboxSelection,
         });
 
@@ -2259,13 +2259,7 @@ export async function provisionCustomerIoSender(
   const updatedBrand = await updateBrand(brand.id, {
     domains: nextDomains,
   });
-  await syncCanonicalSenderFromProvisionedAccount({
-    brandId: brand.id,
-    accountId: account.id,
-    mailboxAccountId: assignment?.mailboxAccountId || mailboxSelection,
-    brand: updatedBrand ?? brand,
-    assignment,
-  });
+  void assignment;
 
   const deliverabilitySettings = await getOutreachProvisioningSettings();
   if (deliverabilitySettings.deliverability.provider === "google_postmaster") {
@@ -2482,8 +2476,9 @@ export async function provisionMailpoolSender(
   const assignment =
     input.assignToBrand === false
       ? null
-      : await setBrandOutreachAssignmentWithWarmup(brand.id, {
+      : await setBrandOutreachAssignment(brand.id, {
           accountId: account.id,
+          accountIds: [account.id],
           mailboxAccountId: account.id,
         });
 
@@ -2515,13 +2510,7 @@ export async function provisionMailpoolSender(
   const updatedBrand = await updateBrand(brand.id, {
     domains: nextDomains,
   });
-  await syncCanonicalSenderFromProvisionedAccount({
-    brandId: brand.id,
-    accountId: account.id,
-    mailboxAccountId: account.id,
-    brand: updatedBrand ?? brand,
-    assignment,
-  });
+  void assignment;
 
   if (settings.deliverability.provider !== "none") {
     const monitoredDomains = new Set(

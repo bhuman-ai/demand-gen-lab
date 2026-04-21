@@ -387,7 +387,13 @@ async function readDiscoveryResponse(response: Response) {
   } as DiscoveryResponse;
 }
 
-export default function SocialDiscoveryClient({ brandId }: { brandId: string }) {
+export default function SocialDiscoveryClient({
+  brandId,
+  initialBrandName = "",
+}: {
+  brandId: string;
+  initialBrandName?: string;
+}) {
   const redirectingToCanonicalHost = shouldRedirectToCanonicalLastB2bHost();
   const [posts, setPosts] = useState<DiscoveryPost[]>([]);
   const [selectedId, setSelectedId] = useState("");
@@ -419,7 +425,7 @@ export default function SocialDiscoveryClient({ brandId }: { brandId: string }) 
   const [savedQueries, setSavedQueries] = useState<string[]>([]);
   const [suggestedQueries, setSuggestedQueries] = useState<string[]>([]);
   const [savingQueries, setSavingQueries] = useState(false);
-  const [activeBrandName, setActiveBrandName] = useState("");
+  const [activeBrandName, setActiveBrandName] = useState(initialBrandName);
   const [savedBrandCommentPrompt, setSavedBrandCommentPrompt] = useState("");
   const [brandCommentPromptDraft, setBrandCommentPromptDraft] = useState("");
   const [savingBrandCommentPrompt, setSavingBrandCommentPrompt] = useState(false);
@@ -991,6 +997,10 @@ export default function SocialDiscoveryClient({ brandId }: { brandId: string }) 
     void loadYouTubeSubscriptions();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [brandId, redirectingToCanonicalHost, status]);
+
+  useEffect(() => {
+    setActiveBrandName(initialBrandName);
+  }, [brandId, initialBrandName]);
 
   async function runYouTubeSearch() {
     const query = youtubeSearchDraft.trim();

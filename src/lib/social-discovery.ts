@@ -351,6 +351,26 @@ function compactText(value: unknown, max = 600) {
     .slice(0, max);
 }
 
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function textMentionsBrand(text: string, brandName: string) {
+  const normalizedBrand = brandName.trim();
+  if (!normalizedBrand) return false;
+  return new RegExp(`\\b${escapeRegExp(normalizedBrand)}\\b`, "i").test(text);
+}
+
+function addSoftBrandMention(input: { draft: string; brandName: string; maxLength: number }) {
+  const draft = compactText(input.draft, input.maxLength);
+  const brandName = input.brandName.trim();
+  if (!draft || !brandName || textMentionsBrand(draft, brandName)) return draft;
+  const bridge = `That exact gap is why ${brandName} exists.`;
+  const baseMax = Math.max(0, input.maxLength - bridge.length - 1);
+  const base = compactText(draft, baseMax).replace(/[.!?,;:\s]+$/g, "");
+  return compactText([base, bridge].filter(Boolean).join(". "), input.maxLength);
+}
+
 function uniqueStrings(values: string[]) {
   const seen = new Set<string>();
   const out: string[] = [];
@@ -2025,11 +2045,13 @@ export function buildSocialCommentPlanningPrompt(input: {
   brand: BrandRecord;
   post: SocialDiscoveryPost;
   mode?: "solo" | "thread";
+  force?: boolean;
 }) {
   const plan = input.post.interactionPlan as EnrichedInteractionPlan;
   const liveContent = liveContentFromPost(input.post);
   const platformLabel = socialCommentPlatformLabel(input.post.platform);
   const draftMode = input.mode === "thread" ? "thread" : "solo";
+  const forceDraft = Boolean(input.force);
   const brandCommentPrompt = resolveSocialDiscoveryCommentPrompt(input.brand.socialDiscoveryCommentPrompt).slice(0, 4000);
   return [
     `You are writing one ${platformLabel} comment for a real brand account to post.`,
@@ -2038,6 +2060,15 @@ export function buildSocialCommentPlanningPrompt(input: {
       : "You are designing one standalone top-level comment only.",
     "Use the following prompt for the top-level commentDraft:",
     brandCommentPrompt,
+    forceDraft
+      ? `Selected-video mode: mention ${input.brand.name} exactly once in the most natural place. Make it subtle, not a pitch. Override heuristic_mention_policy if needed.`
+      : "",
+    forceDraft && draftMode === "thread"
+      ? `Thread mode: mention ${input.brand.name} in either commentDraft or replyDraft, whichever feels more natural, not both.`
+      : "",
+    forceDraft && draftMode === "solo"
+      ? `Solo mode: commentDraft must include ${input.brand.name} once while still sounding like a normal YouTube comment.`
+      : "",
     draftMode === "thread"
       ? "Also provide replyDraft for second real account replying to first comment. Design both together."
       : "Leave replyDraft empty.",
@@ -2099,6 +2130,7 @@ async function enhanceInteractionPlanWithLlm(
     brand: input.brand,
     post: input.post,
     mode: draftMode,
+    force: options?.force,
   });
 
   try {
@@ -2132,11 +2164,31 @@ async function enhanceInteractionPlanWithLlm(
     const assetNeeded = compactText(row.assetNeeded, 120) || plan.assetNeeded;
     const riskNotes = normalizeCommentPlanStrings(row.riskNotes, 5, 160);
     const exitRules = normalizeCommentPlanStrings(row.exitRules, 5, 180);
-    const nextCommentDraft = shouldComment ? commentDraft || plan.sequence[0]?.draft || "" : "";
-    const nextReplyDraft =
-      draftMode === "thread" && shouldComment && nextCommentDraft
+    const baseCommentDraft = shouldComment ? commentDraft || plan.sequence[0]?.draft || "" : "";
+    const baseReplyDraft =
+      draftMode === "thread" && shouldComment && baseCommentDraft
         ? replyDraft || plan.sequence[1]?.draft || ""
         : "";
+    const forceNeedsBrand =
+      forceDraft &&
+      Boolean(baseCommentDraft) &&
+      !textMentionsBrand(baseCommentDraft, input.brand.name) &&
+      !textMentionsBrand(baseReplyDraft, input.brand.name);
+    const nextCommentDraft = forceNeedsBrand && draftMode === "solo"
+      ? addSoftBrandMention({
+          draft: baseCommentDraft,
+          brandName: input.brand.name,
+          maxLength: 280,
+        })
+      : baseCommentDraft;
+    const nextReplyDraft =
+      forceNeedsBrand && draftMode === "thread" && baseReplyDraft
+        ? addSoftBrandMention({
+            draft: baseReplyDraft,
+            brandName: input.brand.name,
+            maxLength: 220,
+          })
+        : baseReplyDraft;
 
     return {
       ...input.post,

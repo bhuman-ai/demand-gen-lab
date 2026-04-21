@@ -1,7 +1,7 @@
 # Feature: social-discovery-youtube-manual-comment
 
 ## Request
-Manual YouTube search must show every fetched YouTube video result. Do not filter by relevance, off-topic, watch-only, draft-ready, or brand fit before displaying the picker. GPT should write the comment after selection.
+Comment draft generation should subtly mention the selected brand, e.g. BHuman, when writing the YouTube comment draft. Keep it natural and non-salesy; GPT should decide the most appropriate soft mention for the selected video and brand context.
 ## Autonomy Mode
 guided
 ## Target Users
@@ -83,6 +83,9 @@ Top risk: operator/founder under time pressure should not have to guess what mat
 - 2026-04-21 Implementation summary: Manual YouTube search now bypasses social-discovery brand-fit filtering. The YouTube discovery API saves and returns every fetched YouTube result as a selectable draft target, with a default target interaction plan. GPT drafting remains selected-video driven after the user clicks a result.
 - Files: /Users/don/lastb2b/src/app/api/brands/[brandId]/social-discovery/youtube-discovery/route.ts
 - Components: SocialDiscoveryClient
+- 2026-04-21 Implementation summary: Selected-video YouTube comment drafting now requires a subtle selected-brand mention. Force-mode GPT prompt tells the planner to mention the brand exactly once in the natural place, overriding heuristic no-mention policy. A post-processing guard adds a short soft bridge with the brand name if GPT returns a draft without the selected brand.
+- Files: /Users/don/lastb2b/src/lib/social-discovery.ts
+- Components: SocialDiscoveryCommentPlanner
 ## Doc Sync
 - 2026-04-20 Synced after implementation.
 - States touched: empty, loading, error
@@ -123,6 +126,8 @@ Top risk: operator/founder under time pressure should not have to guess what mat
 - 2026-04-21 Synced after implementation.
 - States touched: empty
 - Code touched: /Users/don/lastb2b/src/app/api/brands/[brandId]/social-discovery/youtube-discovery/route.ts
+- 2026-04-21 Synced after implementation.
+- Code touched: /Users/don/lastb2b/src/lib/social-discovery.ts
 ## Primary Action
 operator/founder under time pressure should be able to Auto-generate the YouTube comment draft with GPT-5.4 so the user does not have to write it manually, using the selected brand and its context in the social discovery manual comment . with one obvious first move.
 

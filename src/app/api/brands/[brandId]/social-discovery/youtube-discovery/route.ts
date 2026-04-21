@@ -2,7 +2,6 @@ import { NextResponse } from "next/server";
 import { createId, getBrandById } from "@/lib/factory-data";
 import { enrichSocialPostsWithAccountRouting } from "@/lib/social-account-routing";
 import { saveSocialDiscoveryPosts } from "@/lib/social-discovery-data";
-import { prepareSocialDiscoveryPosts } from "@/lib/social-discovery";
 import type { SocialDiscoveryPost } from "@/lib/social-discovery-types";
 import { getOutreachAccountSecrets } from "@/lib/outreach-data";
 import { searchYouTubeVideos, YouTubeApiError } from "@/lib/youtube";
@@ -59,8 +58,16 @@ function buildYouTubeDiscoveryPost(input: {
     providerRank: input.index + 1,
     status: "new",
     interactionPlan: {
-      headline: "",
-      actors: [],
+      headline: "Draft a comment for this video",
+      targetStrength: "target",
+      commentPosture: "method_first",
+      mentionPolicy: "mention_only_if_asked",
+      actors: [
+        {
+          role: "operator",
+          job: "Write one short native YouTube comment after review.",
+        },
+      ],
       sequence: [],
       assetNeeded: "none",
       riskNotes: [],
@@ -127,11 +134,7 @@ export async function POST(request: Request, context: { params: Promise<{ brandI
         result,
       })
     );
-    const preparedPosts = await prepareSocialDiscoveryPosts({
-      brand,
-      posts: rawPosts,
-    });
-    const savedPosts = preparedPosts.length ? await saveSocialDiscoveryPosts(preparedPosts) : [];
+    const savedPosts = rawPosts.length ? await saveSocialDiscoveryPosts(rawPosts) : [];
     const posts = await enrichSocialPostsWithAccountRouting({
       brand,
       posts: savedPosts,

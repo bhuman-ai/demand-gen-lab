@@ -1,7 +1,7 @@
 # Feature: social-discovery-youtube-manual-comment
 
 ## Request
-Manual YouTube Mode 1 must always generate a comment draft for the selected video. Remove no-draft/watch/off-topic fallback behavior from selected-video drafting. AI should decide the most appropriate comment for that video and brand instead of returning no comment.
+Manual YouTube search must show every fetched YouTube video result. Do not filter by relevance, off-topic, watch-only, draft-ready, or brand fit before displaying the picker. GPT should write the comment after selection.
 ## Autonomy Mode
 guided
 ## Target Users
@@ -80,6 +80,9 @@ Top risk: operator/founder under time pressure should not have to guess what mat
 - 2026-04-21 Implementation summary: Manual YouTube Mode 1 now treats selection as an instruction to write a comment for that exact video. The GPT prompt requires a non-empty commentDraft and shouldComment=true, the forced refresh ignores no-comment answers, and the UI no longer exposes no-draft/off-topic/watch-only states. Search says pick one to draft, selected videos show Writing draft while GPT works, and only a technical retry message appears if the AI response is malformed.
 - Files: /Users/don/lastb2b/src/lib/social-discovery.ts, /Users/don/lastb2b/src/app/brands/[id]/social-discovery/social-discovery-client.tsx
 - Components: SocialDiscoveryClient
+- 2026-04-21 Implementation summary: Manual YouTube search now bypasses social-discovery brand-fit filtering. The YouTube discovery API saves and returns every fetched YouTube result as a selectable draft target, with a default target interaction plan. GPT drafting remains selected-video driven after the user clicks a result.
+- Files: /Users/don/lastb2b/src/app/api/brands/[brandId]/social-discovery/youtube-discovery/route.ts
+- Components: SocialDiscoveryClient
 ## Doc Sync
 - 2026-04-20 Synced after implementation.
 - States touched: empty, loading, error
@@ -117,6 +120,9 @@ Top risk: operator/founder under time pressure should not have to guess what mat
 - 2026-04-21 Synced after implementation.
 - States touched: loading, error
 - Code touched: /Users/don/lastb2b/src/lib/social-discovery.ts, /Users/don/lastb2b/src/app/brands/[id]/social-discovery/social-discovery-client.tsx
+- 2026-04-21 Synced after implementation.
+- States touched: empty
+- Code touched: /Users/don/lastb2b/src/app/api/brands/[brandId]/social-discovery/youtube-discovery/route.ts
 ## Primary Action
 operator/founder under time pressure should be able to Auto-generate the YouTube comment draft with GPT-5.4 so the user does not have to write it manually, using the selected brand and its context in the social discovery manual comment . with one obvious first move.
 

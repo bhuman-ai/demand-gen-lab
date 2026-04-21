@@ -17,7 +17,7 @@ import {
 import type { OutreachAccount, SocialDiscoveryYouTubeSubscription } from "@/lib/factory-types";
 import {
   commentBrandName,
-  ensureCasualBrandMention,
+  sanitizeCasualBrandMention,
   textMentionsBrand,
 } from "@/lib/social-discovery-brand-mention";
 import { resolveSocialDiscoveryCommentPrompt } from "@/lib/social-discovery-comment-prompt";
@@ -174,7 +174,7 @@ function trimTrailingSlashes(value: string) {
 }
 
 function ensureBrandMentionInDraft(draft: string, brandName: string, maxLength = 1250, seed = "") {
-  return ensureCasualBrandMention({ draft, brandName, maxLength, seed });
+  return sanitizeCasualBrandMention({ draft, brandName, maxLength, seed });
 }
 
 function buildInstagramPathCommentUrl(postUrl: string, commentId: string) {
@@ -457,9 +457,28 @@ export default function SocialDiscoveryClient({
         : "Using the default comment prompt.";
   const selectedPlan = planFor(selectedPost);
   const generatedCommentDraft = useMemo(() => selectedPlan?.sequence?.[0]?.draft?.trim() ?? "", [selectedPlan]);
-  const generatedCommentDraftWithBrand = useMemo(
-    () => ensureBrandMentionInDraft(generatedCommentDraft, selectedBrandMentionName, 1250, selectedPost?.id ?? ""),
-    [generatedCommentDraft, selectedBrandMentionName, selectedPost?.id]
+  const generatedCommentDraftWithBrand = useMemo(() => {
+    const nextDraft = ensureBrandMentionInDraft(
+      generatedCommentDraft,
+      selectedBrandMentionName,
+      1250,
+      selectedPost?.id ?? ""
+    );
+    if (
+      selectedPost?.platform === "youtube" &&
+      selectedBrandMentionName.trim() &&
+      nextDraft.trim() &&
+      !textMentionsBrand(nextDraft, selectedBrandMentionName)
+    ) {
+      return "";
+    }
+    return nextDraft;
+  }, [generatedCommentDraft, selectedBrandMentionName, selectedPost?.id, selectedPost?.platform]);
+  const generatedYouTubeDraftNeedsBrand = Boolean(
+    selectedPost?.platform === "youtube" &&
+      selectedBrandMentionName.trim() &&
+      generatedCommentDraft.trim() &&
+      !generatedCommentDraftWithBrand.trim()
   );
   const generatedReplyDraft = useMemo(() => selectedPlan?.sequence?.[1]?.draft?.trim() ?? "", [selectedPlan]);
   const selectedDraftGenerationError = selectedPost ? draftGenerationErrors[selectedPost.id] ?? "" : "";
@@ -467,7 +486,8 @@ export default function SocialDiscoveryClient({
     (selectedPost && selectedPost.id === draftingPostId) ||
       (selectedPost &&
         selectedPlan?.targetStrength === "target" &&
-        !generatedCommentDraft)
+        !generatedCommentDraft) ||
+      generatedYouTubeDraftNeedsBrand
   );
   const selectedCommentPlatform = selectedPost?.platform === "youtube" ? "youtube" : "instagram";
   const selectedCommentProvider = selectedCommentPlatform === "youtube" ? "youtube" : "unipile";
@@ -703,22 +723,6 @@ export default function SocialDiscoveryClient({
       lastAutoCommentDraftRef.current = generatedCommentDraftWithBrand;
     }
   }, [selectedPost?.id, generatedCommentDraftWithBrand, commentDraft]);
-
-  useEffect(() => {
-    if (!selectedPost?.id || !selectedBrandMentionName.trim() || !commentDraft.trim()) return;
-    if (textMentionsBrand(commentDraft, selectedBrandMentionName)) return;
-    const nextCommentDraft = ensureBrandMentionInDraft(
-      commentDraft,
-      selectedBrandMentionName,
-      1250,
-      selectedPost.id
-    );
-    if (nextCommentDraft === commentDraft) return;
-    setCommentDraft(nextCommentDraft);
-    if (lastAutoCommentDraftRef.current === commentDraft) {
-      lastAutoCommentDraftRef.current = nextCommentDraft;
-    }
-  }, [commentDraft, selectedBrandMentionName, selectedPost?.id]);
 
   useEffect(() => {
     if (!selectedPost?.id || !generatedReplyDraft) return;
@@ -1169,6 +1173,14 @@ export default function SocialDiscoveryClient({
     ).trim();
     if (!finalCommentDraft) {
       setCommentError("Write a comment before sending.");
+      return;
+    }
+    if (
+      selectedCommentPlatform === "youtube" &&
+      selectedBrandMentionName.trim() &&
+      !textMentionsBrand(finalCommentDraft, selectedBrandMentionName)
+    ) {
+      setCommentError(`Regenerate the draft so GPT writes a natural ${selectedBrandMentionName} mention.`);
       return;
     }
     if (!commentAccountId) {

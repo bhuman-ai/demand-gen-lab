@@ -47,10 +47,9 @@ function casualBrandAside(draft: string, brandName: string, seed = "") {
   return candidates[stableIndex(`${draft}:${brandName}:${seed}`, candidates.length)];
 }
 
-function sanitizeAdLikeBrandMention(draft: string, brandName: string, maxLength: number, seed = "") {
-  const casualAside = `${casualBrandAside(draft, brandName, seed)}.`;
+function brandMentionProblemPatterns(brandName: string) {
   const brandPattern = escapeRegExp(brandName);
-  const patterns = [
+  return [
     new RegExp(`We see the same at ${brandPattern} too\\.?`, "ig"),
     new RegExp(`Same thing on our side at ${brandPattern} too\\.?`, "ig"),
     new RegExp(`We see that a lot at ${brandPattern} too\\.?`, "ig"),
@@ -59,6 +58,11 @@ function sanitizeAdLikeBrandMention(draft: string, brandName: string, maxLength:
     new RegExp(`${brandPattern} fits that same shift[^.?!]*`, "ig"),
     new RegExp(`${brandPattern}[^.?!]*(?:without going fully manual|fits this shift|exists for this)[^.?!]*`, "ig"),
   ];
+}
+
+function sanitizeAdLikeBrandMention(draft: string, brandName: string, maxLength: number, seed = "") {
+  const casualAside = `${casualBrandAside(draft, brandName, seed)}.`;
+  const patterns = brandMentionProblemPatterns(brandName);
 
   let next = draft;
   for (const pattern of patterns) {
@@ -82,6 +86,33 @@ export function textMentionsBrand(text: string, brandName: string) {
   const normalizedBrand = brandName.trim();
   if (!normalizedBrand) return false;
   return new RegExp(`\\b${escapeRegExp(normalizedBrand)}\\b`, "i").test(text);
+}
+
+export function brandMentionCount(text: string, brandName: string) {
+  const normalizedBrand = brandName.trim();
+  if (!normalizedBrand) return 0;
+  return Array.from(text.matchAll(new RegExp(`\\b${escapeRegExp(normalizedBrand)}\\b`, "gi"))).length;
+}
+
+export function brandMentionLooksCannedOrAdLike(text: string, brandName: string) {
+  const normalizedBrand = commentBrandName(brandName);
+  if (!text.trim() || !normalizedBrand) return false;
+  return brandMentionProblemPatterns(normalizedBrand).some((pattern) => {
+    pattern.lastIndex = 0;
+    return pattern.test(text);
+  });
+}
+
+export function sanitizeCasualBrandMention(input: {
+  draft: string;
+  brandName: string;
+  maxLength: number;
+  seed?: string;
+}) {
+  const draft = normalizeDraft(input.draft, input.maxLength);
+  const brandName = commentBrandName(input.brandName);
+  if (!draft || !brandName) return draft;
+  return sanitizeAdLikeBrandMention(draft, brandName, input.maxLength, input.seed);
 }
 
 export function ensureCasualBrandMention(input: {

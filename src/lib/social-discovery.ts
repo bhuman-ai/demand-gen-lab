@@ -2,6 +2,8 @@ import { createId, type BrandRecord } from "@/lib/factory-data";
 import { resolveLlmModel } from "@/lib/llm-router";
 import { listSocialRoutingAccounts } from "@/lib/outreach-data";
 import {
+  brandMentionCount,
+  brandMentionLooksCannedOrAdLike,
   commentBrandName,
   ensureCasualBrandMention,
   textMentionsBrand,
@@ -2024,6 +2026,14 @@ function liveContentFromPost(post: SocialDiscoveryPost) {
   return asRecord(asRecord(post.raw).liveContent);
 }
 
+function youtubeContextFromPost(post: SocialDiscoveryPost) {
+  return asRecord(asRecord(post.raw).youtube);
+}
+
+function youtubeTranscriptFromPost(post: SocialDiscoveryPost) {
+  return asRecord(youtubeContextFromPost(post).videoTranscript);
+}
+
 function socialCommentPlatformLabel(platform: SocialDiscoveryPlatform) {
   if (platform === "youtube") return "YouTube";
   if (platform === "instagram") return "Instagram";
@@ -2038,6 +2048,9 @@ export function buildSocialCommentPlanningPrompt(input: {
 }) {
   const plan = input.post.interactionPlan as EnrichedInteractionPlan;
   const liveContent = liveContentFromPost(input.post);
+  const youtube = youtubeContextFromPost(input.post);
+  const youtubeTranscript = youtubeTranscriptFromPost(input.post);
+  const youtubeTranscriptText = compactText(youtubeTranscript.text, 3600);
   const platformLabel = socialCommentPlatformLabel(input.post.platform);
   const draftMode = input.mode === "thread" ? "thread" : "solo";
   const forceDraft = Boolean(input.force);
@@ -2058,6 +2071,16 @@ export function buildSocialCommentPlanningPrompt(input: {
       : "",
     forceDraft && draftMode === "solo"
       ? `Solo mode: commentDraft must include ${brandName} once while still sounding like a normal YouTube comment. Mention it after the real reaction, not as the main point.`
+      : "",
+    input.post.platform === "youtube"
+      ? [
+          "YouTube draft quality bar:",
+          "- First infer what a real viewer would react to from the video title, description, transcript excerpt if available, channel, and brand context.",
+          "- Write the comment from scratch in one pass. Do not write a normal comment and append a brand sentence.",
+          "- The brand mention should be a small natural part of the thought, like something the account has seen from its own work, not an ad or CTA.",
+          "- No generic reusable lines. No 'we see the same at BRAND too'. No 'BRAND fits this'. No product pitch.",
+          "- If transcript is unavailable, use title + description + channel metadata and do not pretend to know details that are not present.",
+        ].join("\n")
       : "",
     draftMode === "thread"
       ? "Also provide replyDraft for second real account replying to first comment. Design both together."
@@ -2086,6 +2109,15 @@ export function buildSocialCommentPlanningPrompt(input: {
     `brand_key_benefits: ${compactText((input.brand.keyBenefits ?? []).join(" | "), 420)}`,
     `post_title: ${compactText(input.post.title, 320)}`,
     `post_body: ${compactText(input.post.body, 600)}`,
+    input.post.platform === "youtube" ? `youtube_video_title: ${compactText(youtube.videoTitle || input.post.title, 400)}` : "",
+    input.post.platform === "youtube" ? `youtube_video_description: ${compactText(youtube.videoDescription || input.post.body, 1800)}` : "",
+    input.post.platform === "youtube" ? `youtube_transcript_available: ${youtubeTranscriptText ? "yes" : "no"}` : "",
+    input.post.platform === "youtube" ? `youtube_transcript_language: ${compactText(youtubeTranscript.languageCode, 80)}` : "",
+    input.post.platform === "youtube" ? `youtube_transcript_excerpt: ${youtubeTranscriptText}` : "",
+    input.post.platform === "youtube" ? `youtube_channel_title: ${compactText(youtube.channelTitle || input.post.author, 180)}` : "",
+    input.post.platform === "youtube" ? `youtube_channel_subscribers: ${youtube.subscriberCount ?? "unknown"}` : "",
+    input.post.platform === "youtube" ? `youtube_video_views: ${youtube.videoViewCount ?? "unknown"}` : "",
+    input.post.platform === "youtube" ? `youtube_video_comments: ${youtube.videoCommentCount ?? "unknown"}` : "",
     `post_live_caption: ${compactText(liveContent.captionText, 900)}`,
     `post_live_accessibility: ${compactText(liveContent.accessibilityCaption, 700)}`,
     `post_live_owner: ${compactText(liveContent.ownerUsername, 120)}`,
@@ -2100,6 +2132,48 @@ export function buildSocialCommentPlanningPrompt(input: {
     `heuristic_comment: ${plan.sequence[0]?.draft || ""}`,
     `heuristic_reply_comment: ${plan.sequence[1]?.draft || ""}`,
   ].join("\n");
+}
+
+async function requestSocialCommentPlan(input: {
+  apiKey: string;
+  model: string;
+  prompt: string;
+}) {
+  const response = await fetch("https://api.openai.com/v1/responses", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${input.apiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model: input.model,
+      input: input.prompt,
+      text: { format: { type: "json_object" } },
+      max_output_tokens: 700,
+    }),
+  });
+  const raw = await response.text();
+  if (!response.ok) return null;
+  const payload = raw ? JSON.parse(raw) : {};
+  return asRecord(parseLooseJsonObject(extractOpenAiOutputText(payload)));
+}
+
+function youtubeForceDraftProblem(input: {
+  platform: SocialDiscoveryPlatform;
+  forceDraft: boolean;
+  brandName: string;
+  commentDraft: string;
+  replyDraft: string;
+}) {
+  if (!input.forceDraft || input.platform !== "youtube") return "";
+  const combinedDraft = [input.commentDraft, input.replyDraft].filter(Boolean).join("\n");
+  const mentionCount = brandMentionCount(combinedDraft, input.brandName);
+  if (mentionCount === 0) return `missing ${input.brandName}`;
+  if (mentionCount > 1) return `mentions ${input.brandName} more than once`;
+  if (brandMentionLooksCannedOrAdLike(combinedDraft, input.brandName)) {
+    return `uses canned or ad-like ${input.brandName} phrasing`;
+  }
+  return "";
 }
 
 async function enhanceInteractionPlanWithLlm(
@@ -2126,33 +2200,46 @@ async function enhanceInteractionPlanWithLlm(
   });
 
   try {
+    const brandName = commentBrandName(input.brand.name);
     const model = resolveLlmModel("social_comment_planning", {
       prompt,
       legacyModelEnv: String(process.env.OPENAI_MODEL_SOCIAL_COMMENT_PLANNING ?? "").trim() || "gpt-5.4",
     });
-    const response = await fetch("https://api.openai.com/v1/responses", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model,
-        input: prompt,
-        text: { format: { type: "json_object" } },
-        max_output_tokens: 700,
-      }),
+    let promptUsed = prompt;
+    let row = await requestSocialCommentPlan({ apiKey, model, prompt: promptUsed });
+    if (!row) return input.post;
+
+    let initialCommentDraft = compactText(row.commentDraft, 280);
+    let initialReplyDraft = compactText(row.replyDraft, 220);
+    const initialProblem = youtubeForceDraftProblem({
+      platform: input.post.platform,
+      forceDraft: Boolean(options?.force),
+      brandName,
+      commentDraft: initialCommentDraft,
+      replyDraft: initialReplyDraft,
     });
-    const raw = await response.text();
-    if (!response.ok) return input.post;
-    const payload = raw ? JSON.parse(raw) : {};
-    const row = asRecord(parseLooseJsonObject(extractOpenAiOutputText(payload)));
+    if (initialProblem) {
+      promptUsed = [
+        prompt,
+        "",
+        `Regenerate from scratch because the previous draft failed: ${initialProblem}.`,
+        `The new comment must mention ${brandName} exactly once, naturally, inside the real video reaction.`,
+        "Do not append a standalone brand sentence. Do not use a reusable template. Return JSON only.",
+      ].join("\n");
+      const retryRow = await requestSocialCommentPlan({ apiKey, model, prompt: promptUsed });
+      if (retryRow) {
+        row = retryRow;
+        initialCommentDraft = compactText(row.commentDraft, 280);
+        initialReplyDraft = compactText(row.replyDraft, 220);
+      }
+    }
+
     const headline = compactText(row.headline, 140) || plan.headline;
     const fitSummary = compactText(row.fitSummary, 280) || plan.fitSummary;
     const forceDraft = Boolean(options?.force);
     const shouldComment = forceDraft ? true : row.shouldComment === false ? false : true;
-    const commentDraft = compactText(row.commentDraft, 280);
-    const replyDraft = compactText(row.replyDraft, 220);
+    const commentDraft = initialCommentDraft;
+    const replyDraft = initialReplyDraft;
     const assetNeeded = compactText(row.assetNeeded, 120) || plan.assetNeeded;
     const riskNotes = normalizeCommentPlanStrings(row.riskNotes, 5, 160);
     const exitRules = normalizeCommentPlanStrings(row.exitRules, 5, 180);
@@ -2161,16 +2248,42 @@ async function enhanceInteractionPlanWithLlm(
       draftMode === "thread" && shouldComment && baseCommentDraft
         ? replyDraft || plan.sequence[1]?.draft || ""
         : "";
+    const finalProblem = youtubeForceDraftProblem({
+      platform: input.post.platform,
+      forceDraft,
+      brandName,
+      commentDraft: baseCommentDraft,
+      replyDraft: baseReplyDraft,
+    });
+    if (finalProblem) {
+      return {
+        ...input.post,
+        interactionPlan: {
+          ...plan,
+          generationPrompt: promptUsed,
+          generationPromptMode: "auto",
+          headline,
+          fitSummary,
+          targetStrength: "watch",
+          commentPosture: "watch_only",
+          sequence: [],
+          riskNotes: [
+            `GPT-5.4 draft rejected: ${finalProblem}. Try regenerating.`,
+            ...(plan.riskNotes ?? []),
+          ],
+        },
+      };
+    }
     const forceNeedsBrand =
       forceDraft &&
       Boolean(baseCommentDraft) &&
-      !textMentionsBrand(baseCommentDraft, commentBrandName(input.brand.name)) &&
-      !textMentionsBrand(baseReplyDraft, commentBrandName(input.brand.name));
+      !textMentionsBrand(baseCommentDraft, brandName) &&
+      !textMentionsBrand(baseReplyDraft, brandName);
     const nextCommentDraft =
       forceNeedsBrand && draftMode === "solo"
         ? addSoftBrandMention({
             draft: baseCommentDraft,
-            brandName: commentBrandName(input.brand.name),
+            brandName,
             maxLength: 280,
             seed: `${input.post.id}:${input.post.url}`,
           })
@@ -2179,7 +2292,7 @@ async function enhanceInteractionPlanWithLlm(
       forceNeedsBrand && draftMode === "thread" && baseReplyDraft
         ? addSoftBrandMention({
             draft: baseReplyDraft,
-            brandName: commentBrandName(input.brand.name),
+            brandName,
             maxLength: 220,
             seed: `${input.post.id}:${input.post.url}:reply`,
           })
@@ -2189,7 +2302,7 @@ async function enhanceInteractionPlanWithLlm(
       ...input.post,
       interactionPlan: {
         ...plan,
-        generationPrompt: prompt,
+        generationPrompt: promptUsed,
         generationPromptMode: "auto",
         headline,
         fitSummary,

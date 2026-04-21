@@ -1,6 +1,11 @@
 import { createId, type BrandRecord } from "@/lib/factory-data";
 import { resolveLlmModel } from "@/lib/llm-router";
 import { listSocialRoutingAccounts } from "@/lib/outreach-data";
+import {
+  commentBrandName,
+  ensureCasualBrandMention,
+  textMentionsBrand,
+} from "@/lib/social-discovery-brand-mention";
 import { resolveSocialDiscoveryCommentPrompt } from "@/lib/social-discovery-comment-prompt";
 import { CURRENT_SOCIAL_DISCOVERY_PLATFORMS } from "@/lib/social-platform-catalog";
 import type {
@@ -351,29 +356,8 @@ function compactText(value: unknown, max = 600) {
     .slice(0, max);
 }
 
-function escapeRegExp(value: string) {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-function textMentionsBrand(text: string, brandName: string) {
-  const normalizedBrand = brandName.trim();
-  if (!normalizedBrand) return false;
-  return new RegExp(`\\b${escapeRegExp(normalizedBrand)}\\b`, "i").test(text);
-}
-
-function commentBrandName(value: string) {
-  const trimmed = compactText(value, 120);
-  return compactText(trimmed.split("|")[0]?.replace(/\s+[-–—]\s+.*$/u, "") || trimmed, 80);
-}
-
 function addSoftBrandMention(input: { draft: string; brandName: string; maxLength: number }) {
-  const draft = compactText(input.draft, input.maxLength);
-  const brandName = input.brandName.trim();
-  if (!draft || !brandName || textMentionsBrand(draft, brandName)) return draft;
-  const bridge = `That exact gap is why ${brandName} exists.`;
-  const baseMax = Math.max(0, input.maxLength - bridge.length - 1);
-  const base = compactText(draft, baseMax).replace(/[.!?,;:\s]+$/g, "");
-  return compactText([base, bridge].filter(Boolean).join(". "), input.maxLength);
+  return ensureCasualBrandMention(input);
 }
 
 function uniqueStrings(values: string[]) {
@@ -2067,13 +2051,13 @@ export function buildSocialCommentPlanningPrompt(input: {
     "Use the following prompt for the top-level commentDraft:",
     brandCommentPrompt,
     forceDraft
-      ? `Selected-video mode: mention ${brandName} exactly once in the most natural place. Make it subtle, not a pitch. Override heuristic_mention_policy if needed.`
+      ? `Selected-video mode: mention ${brandName} exactly once as a casual side note from the brand account. Good shape: "We see the same at ${brandName} too." Bad shape: polished positioning, mini product explanation, or ad copy. Override heuristic_mention_policy if needed.`
       : "",
     forceDraft && draftMode === "thread"
-      ? `Thread mode: mention ${brandName} in either commentDraft or replyDraft, whichever feels more natural, not both.`
+      ? `Thread mode: mention ${brandName} in either commentDraft or replyDraft, whichever feels more natural, not both, and keep it to one short casual clause.`
       : "",
     forceDraft && draftMode === "solo"
-      ? `Solo mode: commentDraft must include ${brandName} once while still sounding like a normal YouTube comment.`
+      ? `Solo mode: commentDraft must include ${brandName} once while still sounding like a normal YouTube comment. Mention it after the real reaction, not as the main point.`
       : "",
     draftMode === "thread"
       ? "Also provide replyDraft for second real account replying to first comment. Design both together."
@@ -2081,6 +2065,7 @@ export function buildSocialCommentPlanningPrompt(input: {
     "Always return a non-empty commentDraft for this exact video. Do not leave commentDraft empty.",
     "Set shouldComment to true.",
     "If the video is weakly related, write the most natural light-touch comment that fits the video and brand context.",
+    "Brand mention rules: no polished bridge sentence, no full product framing, no feature list, no value-prop stack, no 'fits this shift', no 'exists for this', and no 'without going fully manual'.",
     draftMode === "thread"
       ? "Thread rules: commentDraft should set up natural opening, question, gap, or prompt. replyDraft should answer, recommend, or bridge naturally from different person."
       : "Solo rules: commentDraft must work alone. No setup for another account.",

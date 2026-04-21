@@ -15,6 +15,11 @@ import {
   shouldRedirectToCanonicalLastB2bHost,
 } from "@/lib/client-api-url";
 import type { OutreachAccount, SocialDiscoveryYouTubeSubscription } from "@/lib/factory-types";
+import {
+  commentBrandName,
+  ensureCasualBrandMention,
+  textMentionsBrand,
+} from "@/lib/social-discovery-brand-mention";
 import { resolveSocialDiscoveryCommentPrompt } from "@/lib/social-discovery-comment-prompt";
 import { cn } from "@/lib/utils";
 import type {
@@ -168,32 +173,8 @@ function trimTrailingSlashes(value: string) {
   return value.replace(/\/+$/, "");
 }
 
-function escapeRegExp(value: string) {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-function commentBrandName(value: unknown) {
-  const trimmed = String(value ?? "").replace(/\s+/g, " ").trim();
-  const shortName = trimmed.split("|")[0]?.replace(/\s+[-–—]\s+.*$/u, "").trim() || trimmed;
-  return shortName.slice(0, 80);
-}
-
-function textMentionsBrand(text: string, brandName: string) {
-  const normalizedBrand = brandName.trim();
-  if (!normalizedBrand) return false;
-  return new RegExp(`\\b${escapeRegExp(normalizedBrand)}\\b`, "i").test(text);
-}
-
 function ensureBrandMentionInDraft(draft: string, brandName: string, maxLength = 1250) {
-  const normalizedDraft = String(draft ?? "").replace(/\s+/g, " ").trim().slice(0, maxLength);
-  const normalizedBrand = brandName.trim();
-  if (!normalizedDraft || !normalizedBrand || textMentionsBrand(normalizedDraft, normalizedBrand)) {
-    return normalizedDraft;
-  }
-  const bridge = `That exact gap is why ${normalizedBrand} exists.`;
-  const baseMax = Math.max(0, maxLength - bridge.length - 1);
-  const base = normalizedDraft.slice(0, baseMax).replace(/[.!?,;:\s]+$/g, "");
-  return [base, bridge].filter(Boolean).join(". ").slice(0, maxLength);
+  return ensureCasualBrandMention({ draft, brandName, maxLength });
 }
 
 function buildInstagramPathCommentUrl(postUrl: string, commentId: string) {

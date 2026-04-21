@@ -1,13 +1,13 @@
 # Feature: social-discovery-youtube-manual-comment
 
 ## Request
-In two-comment YouTube thread mode, do not post the second reply immediately. Schedule it for a random delay between 1 and 6 hours after the first comment.
+Manual YouTube Mode 1 must always generate a comment draft for the selected video. Remove no-draft/watch/off-topic fallback behavior from selected-video drafting. AI should decide the most appropriate comment for that video and brand instead of returning no comment.
 ## Autonomy Mode
-holistic_autopilot
+guided
 ## Target Users
 founder/operator
 ## Optimization Target
-decision speed and obvious next action
+decision speed
 ## Hard Constraints
 - Keep single-comment mode unchanged
 - Keep teammate reply mode simple and low-clutter
@@ -16,7 +16,7 @@ decision speed and obvious next action
 ## Scope
 Optimize for decision speed with one primary action. Start with smallest coherent slice that proves Emergency override UI implementation for social discovery. Add the simplest YouTube manual-comment path for a core unit video lead workflow: search a niche, see videos with subscriber counts, pick one video, and use the existing comment composer/manual comment button. Scope is search + review + manual comment button only. Reduce visible controls and hide promotional clutter on the YouTube path..
 ## Touched Surfaces
-- social-discovery
+- social-discovery-youtube-manual-comment
 ## Success Moment
 operator/founder under time pressure completes Emergency override UI implementation for social discovery. Add the simplest YouTube manual-comment path for a core unit video lead workflow: search a niche, see videos with subscriber counts, pick one video, and use the existing comment composer/manual comment button. Scope is search + review + manual comment button only. Reduce visible controls and hide promotional clutter on the YouTube path. and sees explicit confirmation of successful outcome.
 ## Failure Policy
@@ -71,6 +71,15 @@ Top risk: operator/founder under time pressure should not have to guess what mat
 - 2026-04-20 Implementation summary: Changed two-comment YouTube thread mode so the second account reply is queued, not posted immediately. When thread mode is used, the first comment posts now and the second reply is scheduled for a random delay between 1 and 6 hours later. The post stores a pending teammate reply payload with scheduled time and account, an internal YouTube maintenance tick drains due replies, and the maintenance cron now runs every 15 minutes so delayed replies execute close to schedule. UI now says the teammate reply posts later and shows scheduled or failed state instead of implying immediate posting.
 - Files: src/lib/social-discovery-types.ts, src/lib/social-discovery-data.ts, src/lib/social-discovery-comment-delivery.ts, src/app/api/internal/social-discovery/youtube-subscriptions/route.ts, src/app/brands/[id]/social-discovery/social-discovery-client.tsx, vercel.json
 - Components: SocialDiscoveryClient
+- 2026-04-20 Implementation summary: Manual YouTube search now hides off-topic or watch-only results before they reach the pick list. Search summary tells the user how many results were hidden, and if a selected video still cannot produce a draft the composer now says it is off-topic for the brand instead of showing a vague no-clean-draft dead end.
+- Files: /Users/don/lastb2b/src/app/api/brands/[brandId]/social-discovery/youtube-discovery/route.ts, /Users/don/lastb2b/src/app/brands/[id]/social-discovery/social-discovery-client.tsx
+- Components: SocialDiscoveryClient
+- 2026-04-21 Implementation summary: Mode 1 manual YouTube search no longer exposes a watch-only state. Search results are filtered to draft-ready comment targets only, non-draftable or off-topic videos stay hidden, and the picker/composer language now uses plain draft-ready or off-topic wording instead of watch-only.
+- Files: /Users/don/lastb2b/src/app/api/brands/[brandId]/social-discovery/youtube-discovery/route.ts, /Users/don/lastb2b/src/app/brands/[id]/social-discovery/social-discovery-client.tsx
+- Components: SocialDiscoveryClient
+- 2026-04-21 Implementation summary: Manual YouTube Mode 1 now treats selection as an instruction to write a comment for that exact video. The GPT prompt requires a non-empty commentDraft and shouldComment=true, the forced refresh ignores no-comment answers, and the UI no longer exposes no-draft/off-topic/watch-only states. Search says pick one to draft, selected videos show Writing draft while GPT works, and only a technical retry message appears if the AI response is malformed.
+- Files: /Users/don/lastb2b/src/lib/social-discovery.ts, /Users/don/lastb2b/src/app/brands/[id]/social-discovery/social-discovery-client.tsx
+- Components: SocialDiscoveryClient
 ## Doc Sync
 - 2026-04-20 Synced after implementation.
 - States touched: empty, loading, error
@@ -99,6 +108,15 @@ Top risk: operator/founder under time pressure should not have to guess what mat
 - 2026-04-20 Synced after implementation.
 - States touched: partial
 - Code touched: src/lib/social-discovery-types.ts, src/lib/social-discovery-data.ts, src/lib/social-discovery-comment-delivery.ts, src/app/api/internal/social-discovery/youtube-subscriptions/route.ts, src/app/brands/[id]/social-discovery/social-discovery-client.tsx, vercel.json
+- 2026-04-20 Synced after implementation.
+- States touched: empty, partial
+- Code touched: /Users/don/lastb2b/src/app/api/brands/[brandId]/social-discovery/youtube-discovery/route.ts, /Users/don/lastb2b/src/app/brands/[id]/social-discovery/social-discovery-client.tsx
+- 2026-04-21 Synced after implementation.
+- States touched: empty, partial
+- Code touched: /Users/don/lastb2b/src/app/api/brands/[brandId]/social-discovery/youtube-discovery/route.ts, /Users/don/lastb2b/src/app/brands/[id]/social-discovery/social-discovery-client.tsx
+- 2026-04-21 Synced after implementation.
+- States touched: loading, error
+- Code touched: /Users/don/lastb2b/src/lib/social-discovery.ts, /Users/don/lastb2b/src/app/brands/[id]/social-discovery/social-discovery-client.tsx
 ## Primary Action
 operator/founder under time pressure should be able to Auto-generate the YouTube comment draft with GPT-5.4 so the user does not have to write it manually, using the selected brand and its context in the social discovery manual comment . with one obvious first move.
 

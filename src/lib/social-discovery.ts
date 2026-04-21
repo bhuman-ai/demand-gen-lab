@@ -2041,6 +2041,9 @@ export function buildSocialCommentPlanningPrompt(input: {
     draftMode === "thread"
       ? "Also provide replyDraft for second real account replying to first comment. Design both together."
       : "Leave replyDraft empty.",
+    "Always return a non-empty commentDraft for this exact video. Do not leave commentDraft empty.",
+    "Set shouldComment to true.",
+    "If the video is weakly related, write the most natural light-touch comment that fits the video and brand context.",
     draftMode === "thread"
       ? "Thread rules: commentDraft should set up natural opening, question, gap, or prompt. replyDraft should answer, recommend, or bridge naturally from different person."
       : "Solo rules: commentDraft must work alone. No setup for another account.",
@@ -2122,7 +2125,8 @@ async function enhanceInteractionPlanWithLlm(
     const row = asRecord(parseLooseJsonObject(extractOpenAiOutputText(payload)));
     const headline = compactText(row.headline, 140) || plan.headline;
     const fitSummary = compactText(row.fitSummary, 280) || plan.fitSummary;
-    const shouldComment = row.shouldComment === false ? false : true;
+    const forceDraft = Boolean(options?.force);
+    const shouldComment = forceDraft ? true : row.shouldComment === false ? false : true;
     const commentDraft = compactText(row.commentDraft, 280);
     const replyDraft = compactText(row.replyDraft, 220);
     const assetNeeded = compactText(row.assetNeeded, 120) || plan.assetNeeded;
@@ -2145,8 +2149,12 @@ async function enhanceInteractionPlanWithLlm(
         assetNeeded,
         riskNotes: riskNotes.length ? riskNotes : plan.riskNotes,
         exitRules: exitRules.length ? exitRules : plan.exitRules,
-        targetStrength: shouldComment && nextCommentDraft ? plan.targetStrength : "watch",
-        commentPosture: shouldComment && nextCommentDraft ? plan.commentPosture : "watch_only",
+        targetStrength: shouldComment && nextCommentDraft ? "target" : "watch",
+        commentPosture: shouldComment && nextCommentDraft
+          ? plan.commentPosture === "watch_only" || plan.commentPosture === "no_comment"
+            ? "method_first"
+            : plan.commentPosture
+          : "watch_only",
         sequence: shouldComment && nextCommentDraft
           ? [
               {

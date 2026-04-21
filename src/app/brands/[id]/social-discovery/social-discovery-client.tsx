@@ -547,9 +547,9 @@ export default function SocialDiscoveryClient({ brandId }: { brandId: string }) 
     if (!selectedPost || !selectedPlan || generatedCommentDraft || commentGenerationPending) return "";
     if (selectedDraftGenerationError) return selectedDraftGenerationError;
     if (selectedPlan.commentPosture === "watch_only" || selectedPlan.targetStrength === "watch") {
-      return "This video is watch-only for this brand, so no comment draft was created.";
+      return "Writing draft...";
     }
-    return "No draft was created for this video yet. Pick another result or write your own comment.";
+    return "Writing draft...";
   }, [commentGenerationPending, generatedCommentDraft, selectedDraftGenerationError, selectedPlan, selectedPost]);
   const selectedYouTubeChannelIsWatched = useMemo(
     () => Boolean(selectedYouTubeChannelId && youtubeSubscriptions.some((entry) => entry.channelId === selectedYouTubeChannelId)),
@@ -595,7 +595,7 @@ export default function SocialDiscoveryClient({ brandId }: { brandId: string }) 
       if (!planFor(updatedPost)?.sequence?.[0]?.draft?.trim()) {
         setDraftGenerationErrors((current) => ({
           ...current,
-          [postId]: "No clean draft for this video. Pick another video or write one manually.",
+          [postId]: "AI did not return a draft. Try draft again.",
         }));
       }
     } catch (err) {
@@ -929,8 +929,8 @@ export default function SocialDiscoveryClient({ brandId }: { brandId: string }) 
       setSelectedId(preferredPostId(nextPosts));
       setYouTubeSearchSummary(
         nextPosts.length
-          ? `${nextPosts.length} video leads for "${query}".`
-          : `No recent YouTube video leads found for "${query}".`
+          ? `${nextPosts.length} videos for "${query}". Pick one to draft.`
+          : `No recent YouTube videos found for "${query}".`
       );
     } catch (err) {
       setYouTubeSearchError(err instanceof Error ? err.message : "Failed to search YouTube");
@@ -1348,9 +1348,7 @@ export default function SocialDiscoveryClient({ brandId }: { brandId: string }) 
                       {formatDate(post.postedAt)}
                       {planFor(post)?.sequence?.[0]?.draft?.trim()
                         ? " · draft ready"
-                        : post.interactionPlan.targetStrength === "target"
-                          ? " · needs draft"
-                          : " · watch only"}
+                        : " · drafting..."}
                     </div>
                   </button>
                 );
@@ -2069,7 +2067,7 @@ export default function SocialDiscoveryClient({ brandId }: { brandId: string }) 
                       <div className="text-xs text-[color:var(--muted-foreground)]">
                         {subscription.channelId}
                         {subscription.accountName ? ` · ${subscription.accountName}` : ""}
-                        {subscription.autoComment ? " · auto-comment on" : " · watch only"}
+                        {subscription.autoComment ? " · auto-comment on" : " · auto-comment off"}
                       </div>
                     </div>
                     <div className="flex flex-wrap gap-2">

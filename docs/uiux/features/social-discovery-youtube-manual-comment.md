@@ -95,6 +95,9 @@ Top risk: operator/founder under time pressure should not have to guess what mat
 - 2026-04-21 Implementation summary: The visible YouTube comment textarea now uses a client-side brand-guaranteed draft. Auto-filled drafts are rewritten locally to include the selected short brand name before display or restore, so stale server drafts without the selected brand no longer remain visible in the textarea.
 - Files: /Users/don/lastb2b/src/app/brands/[id]/social-discovery/social-discovery-client.tsx
 - Components: SocialDiscoveryClient
+- 2026-04-21 Implementation summary: The visible YouTube comment field is now bound to a brand-enforced draft value. If the current comment text lacks the selected short brand name, the client immediately rewrites the live comment state and the displayed textarea value, and sendComment posts the brand-fixed version as the final payload.
+- Files: /Users/don/lastb2b/src/app/brands/[id]/social-discovery/social-discovery-client.tsx
+- Components: SocialDiscoveryClient
 ## Doc Sync
 - 2026-04-20 Synced after implementation.
 - States touched: empty, loading, error
@@ -143,6 +146,8 @@ Top risk: operator/founder under time pressure should not have to guess what mat
 - 2026-04-21 Synced after implementation.
 - States touched: loading
 - Code touched: /Users/don/lastb2b/src/lib/social-discovery.ts, /Users/don/lastb2b/src/app/api/brands/[brandId]/social-discovery/youtube-discovery/route.ts, /Users/don/lastb2b/src/app/brands/[id]/social-discovery/social-discovery-client.tsx
+- 2026-04-21 Synced after implementation.
+- Code touched: /Users/don/lastb2b/src/app/brands/[id]/social-discovery/social-discovery-client.tsx
 - 2026-04-21 Synced after implementation.
 - Code touched: /Users/don/lastb2b/src/app/brands/[id]/social-discovery/social-discovery-client.tsx
 ## Primary Action

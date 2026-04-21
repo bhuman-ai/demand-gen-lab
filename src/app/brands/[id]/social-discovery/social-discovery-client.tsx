@@ -474,6 +474,10 @@ export default function SocialDiscoveryClient({ brandId }: { brandId: string }) 
     () => ensureBrandMentionInDraft(generatedCommentDraft, selectedBrandMentionName, 1250),
     [generatedCommentDraft, selectedBrandMentionName]
   );
+  const commentDraftWithBrand = useMemo(
+    () => ensureBrandMentionInDraft(commentDraft, selectedBrandMentionName, 1250),
+    [commentDraft, selectedBrandMentionName]
+  );
   const generatedReplyDraft = useMemo(() => selectedPlan?.sequence?.[1]?.draft?.trim() ?? "", [selectedPlan]);
   const selectedDraftGenerationError = selectedPost ? draftGenerationErrors[selectedPost.id] ?? "" : "";
   const commentGenerationPending = Boolean(
@@ -715,6 +719,15 @@ export default function SocialDiscoveryClient({ brandId }: { brandId: string }) 
       lastAutoCommentDraftRef.current = generatedCommentDraftWithBrand;
     }
   }, [selectedPost?.id, generatedCommentDraftWithBrand, commentDraft]);
+
+  useEffect(() => {
+    if (!selectedPost?.id || !selectedBrandMentionName.trim() || !commentDraft.trim()) return;
+    if (commentDraftWithBrand === commentDraft) return;
+    setCommentDraft(commentDraftWithBrand);
+    if (lastAutoCommentDraftRef.current === commentDraft) {
+      lastAutoCommentDraftRef.current = commentDraftWithBrand;
+    }
+  }, [commentDraft, commentDraftWithBrand, selectedBrandMentionName, selectedPost?.id]);
 
   useEffect(() => {
     if (!selectedPost?.id || !generatedReplyDraft) return;
@@ -1153,7 +1166,8 @@ export default function SocialDiscoveryClient({ brandId }: { brandId: string }) 
 
   async function sendComment() {
     if (!selectedPost) return;
-    if (!commentDraft.trim()) {
+    const finalCommentDraft = ensureBrandMentionInDraft(commentDraft, selectedBrandMentionName, 1250).trim();
+    if (!finalCommentDraft) {
       setCommentError("Write a comment before sending.");
       return;
     }
@@ -1182,7 +1196,7 @@ export default function SocialDiscoveryClient({ brandId }: { brandId: string }) 
         body: JSON.stringify({
           postId: selectedPost.id,
           accountId: commentAccountId,
-          text: commentDraft.trim(),
+          text: finalCommentDraft,
           commentId: commentReplyId.trim() || undefined,
           replyText: replyEnabled ? replyDraft.trim() : undefined,
           replyAccountId: replyEnabled ? replyAccountId : undefined,
@@ -1201,6 +1215,8 @@ export default function SocialDiscoveryClient({ brandId }: { brandId: string }) 
 
       const updatedPost = data?.post as DiscoveryPost | undefined;
       if (updatedPost?.id) {
+        setCommentDraft(finalCommentDraft);
+        lastAutoCommentDraftRef.current = finalCommentDraft;
         setPosts((current) => {
           const next = current.map((post) => (post.id === updatedPost.id ? updatedPost : post));
           const cached = readCachedDiscovery(brandId);
@@ -1700,7 +1716,7 @@ export default function SocialDiscoveryClient({ brandId }: { brandId: string }) 
                   <div className="grid gap-2">
                     <label className="text-sm font-medium text-[color:var(--foreground)]">Comment</label>
                     <Textarea
-                      value={commentDraft}
+                      value={commentDraftWithBrand}
                       onChange={(event) => {
                         setCommentDraft(event.target.value);
                         lastAutoCommentDraftRef.current = generatedCommentDraftWithBrand;
@@ -1716,7 +1732,7 @@ export default function SocialDiscoveryClient({ brandId }: { brandId: string }) 
                           ? "Writing a draft for you..."
                           : "Edit the draft if you want, then press Post comment."}
                       </div>
-                      <div>{commentDraft.trim().length}/1250</div>
+                      <div>{commentDraftWithBrand.trim().length}/1250</div>
                     </div>
                     {canRestoreSuggestedComment ? (
                       <div>
@@ -2049,7 +2065,7 @@ export default function SocialDiscoveryClient({ brandId }: { brandId: string }) 
                     disabled={
                       sendingComment ||
                       commentGenerationPending ||
-                      !commentDraft.trim() ||
+                      !commentDraftWithBrand.trim() ||
                       (replyEnabled && (!replyDraft.trim() || !replyAccountId))
                     }
                   >

@@ -1,7 +1,7 @@
 # Feature: social-discovery-youtube-manual-comment
 
 ## Request
-Fix YouTube manual comment drafting so stale saved drafts that do not mention the currently selected brand are automatically regenerated, and generated drafts mention the short selected brand name naturally, e.g. BHuman instead of the full brand tagline.
+Ensure the visible YouTube comment draft always includes the selected short brand name, such as BHuman, before the user posts. Add a client-side guarantee so stale or noncompliant server drafts are rewritten locally in the textarea.
 ## Autonomy Mode
 guided
 ## Target Users
@@ -92,6 +92,9 @@ Top risk: operator/founder under time pressure should not have to guess what mat
 - 2026-04-21 Implementation summary: Selected-video YouTube drafts now use the short selected brand name, such as BHuman from a full breadcrumb-style brand name. The YouTube discovery route returns brand name metadata, and the client auto-regenerates a selected YouTube draft once if the saved draft does not mention the selected brand, fixing stale pre-prompt drafts that lacked a brand mention.
 - Files: /Users/don/lastb2b/src/lib/social-discovery.ts, /Users/don/lastb2b/src/app/api/brands/[brandId]/social-discovery/youtube-discovery/route.ts, /Users/don/lastb2b/src/app/brands/[id]/social-discovery/social-discovery-client.tsx
 - Components: SocialDiscoveryClient, SocialDiscoveryCommentPlanner
+- 2026-04-21 Implementation summary: The visible YouTube comment textarea now uses a client-side brand-guaranteed draft. Auto-filled drafts are rewritten locally to include the selected short brand name before display or restore, so stale server drafts without the selected brand no longer remain visible in the textarea.
+- Files: /Users/don/lastb2b/src/app/brands/[id]/social-discovery/social-discovery-client.tsx
+- Components: SocialDiscoveryClient
 ## Doc Sync
 - 2026-04-20 Synced after implementation.
 - States touched: empty, loading, error
@@ -140,6 +143,8 @@ Top risk: operator/founder under time pressure should not have to guess what mat
 - 2026-04-21 Synced after implementation.
 - States touched: loading
 - Code touched: /Users/don/lastb2b/src/lib/social-discovery.ts, /Users/don/lastb2b/src/app/api/brands/[brandId]/social-discovery/youtube-discovery/route.ts, /Users/don/lastb2b/src/app/brands/[id]/social-discovery/social-discovery-client.tsx
+- 2026-04-21 Synced after implementation.
+- Code touched: /Users/don/lastb2b/src/app/brands/[id]/social-discovery/social-discovery-client.tsx
 ## Primary Action
 operator/founder under time pressure should be able to Auto-generate the YouTube comment draft with GPT-5.4 so the user does not have to write it manually, using the selected brand and its context in the social discovery manual comment . with one obvious first move.
 

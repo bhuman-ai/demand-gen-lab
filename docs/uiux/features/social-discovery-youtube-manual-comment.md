@@ -1,7 +1,7 @@
 # Feature: social-discovery-youtube-manual-comment
 
 ## Request
-Manual YouTube search should only show videos from channels with more than 1,000 subscribers. Only those videos should be eligible for GPT comment drafts; low-subscriber channel videos should be ignored and not shown.
+Fix YouTube manual comment drafting so stale saved drafts that do not mention the currently selected brand are automatically regenerated, and generated drafts mention the short selected brand name naturally, e.g. BHuman instead of the full brand tagline.
 ## Autonomy Mode
 guided
 ## Target Users
@@ -89,6 +89,9 @@ Top risk: operator/founder under time pressure should not have to guess what mat
 - 2026-04-21 Implementation summary: Manual YouTube search and drafting now require channels to have more than 1,000 subscribers. The YouTube search route filters fetched results before saving/showing them, the client also filters stale cached YouTube posts below the threshold, and the comment-draft API refuses to generate drafts for stale low-subscriber YouTube posts.
 - Files: /Users/don/lastb2b/src/app/api/brands/[brandId]/social-discovery/youtube-discovery/route.ts, /Users/don/lastb2b/src/app/api/brands/[brandId]/social-discovery/comment-draft/route.ts, /Users/don/lastb2b/src/app/brands/[id]/social-discovery/social-discovery-client.tsx
 - Components: SocialDiscoveryClient
+- 2026-04-21 Implementation summary: Selected-video YouTube drafts now use the short selected brand name, such as BHuman from a full breadcrumb-style brand name. The YouTube discovery route returns brand name metadata, and the client auto-regenerates a selected YouTube draft once if the saved draft does not mention the selected brand, fixing stale pre-prompt drafts that lacked a brand mention.
+- Files: /Users/don/lastb2b/src/lib/social-discovery.ts, /Users/don/lastb2b/src/app/api/brands/[brandId]/social-discovery/youtube-discovery/route.ts, /Users/don/lastb2b/src/app/brands/[id]/social-discovery/social-discovery-client.tsx
+- Components: SocialDiscoveryClient, SocialDiscoveryCommentPlanner
 ## Doc Sync
 - 2026-04-20 Synced after implementation.
 - States touched: empty, loading, error
@@ -134,6 +137,9 @@ Top risk: operator/founder under time pressure should not have to guess what mat
 - 2026-04-21 Synced after implementation.
 - States touched: empty, error
 - Code touched: /Users/don/lastb2b/src/app/api/brands/[brandId]/social-discovery/youtube-discovery/route.ts, /Users/don/lastb2b/src/app/api/brands/[brandId]/social-discovery/comment-draft/route.ts, /Users/don/lastb2b/src/app/brands/[id]/social-discovery/social-discovery-client.tsx
+- 2026-04-21 Synced after implementation.
+- States touched: loading
+- Code touched: /Users/don/lastb2b/src/lib/social-discovery.ts, /Users/don/lastb2b/src/app/api/brands/[brandId]/social-discovery/youtube-discovery/route.ts, /Users/don/lastb2b/src/app/brands/[id]/social-discovery/social-discovery-client.tsx
 ## Primary Action
 operator/founder under time pressure should be able to Auto-generate the YouTube comment draft with GPT-5.4 so the user does not have to write it manually, using the selected brand and its context in the social discovery manual comment . with one obvious first move.
 

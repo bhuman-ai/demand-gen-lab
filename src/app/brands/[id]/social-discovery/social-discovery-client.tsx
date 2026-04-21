@@ -168,6 +168,22 @@ function trimTrailingSlashes(value: string) {
   return value.replace(/\/+$/, "");
 }
 
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function commentBrandName(value: unknown) {
+  const trimmed = String(value ?? "").replace(/\s+/g, " ").trim();
+  const shortName = trimmed.split("|")[0]?.replace(/\s+[-–—]\s+.*$/u, "").trim() || trimmed;
+  return shortName.slice(0, 80);
+}
+
+function textMentionsBrand(text: string, brandName: string) {
+  const normalizedBrand = brandName.trim();
+  if (!normalizedBrand) return false;
+  return new RegExp(`\\b${escapeRegExp(normalizedBrand)}\\b`, "i").test(text);
+}
+
 function buildInstagramPathCommentUrl(postUrl: string, commentId: string) {
   const trimmedPostUrl = postUrl.trim();
   const trimmedCommentId = commentId.trim();
@@ -391,6 +407,7 @@ export default function SocialDiscoveryClient({ brandId }: { brandId: string }) 
   const [savedQueries, setSavedQueries] = useState<string[]>([]);
   const [suggestedQueries, setSuggestedQueries] = useState<string[]>([]);
   const [savingQueries, setSavingQueries] = useState(false);
+  const [activeBrandName, setActiveBrandName] = useState("");
   const [savedBrandCommentPrompt, setSavedBrandCommentPrompt] = useState("");
   const [brandCommentPromptDraft, setBrandCommentPromptDraft] = useState("");
   const [savingBrandCommentPrompt, setSavingBrandCommentPrompt] = useState(false);
@@ -407,6 +424,7 @@ export default function SocialDiscoveryClient({ brandId }: { brandId: string }) 
   const lastAutoCommentDraftRef = useRef("");
   const lastAutoReplyDraftRef = useRef("");
   const attemptedAutoDraftPostIdsRef = useRef<Set<string>>(new Set());
+  const attemptedBrandMentionDraftPostIdsRef = useRef<Set<string>>(new Set());
 
   const selectedPost = useMemo(
     () => posts.find((post) => post.id === selectedId) ?? posts[0] ?? null,
@@ -429,6 +447,7 @@ export default function SocialDiscoveryClient({ brandId }: { brandId: string }) 
     () => resolveSocialDiscoveryCommentPrompt(savedBrandCommentPrompt),
     [savedBrandCommentPrompt]
   );
+  const selectedBrandMentionName = useMemo(() => commentBrandName(activeBrandName), [activeBrandName]);
   const brandCommentPromptDirty = brandCommentPromptDraft.trim() !== effectiveSavedBrandCommentPrompt.trim();
   const brandCommentPromptStatusMessage = savingBrandCommentPrompt
     ? "Saving prompt..."
@@ -624,6 +643,13 @@ export default function SocialDiscoveryClient({ brandId }: { brandId: string }) 
     void requestCommentDraftForPost(postId, { mode: "solo" });
   });
 
+  const regenerateBrandMentionDraftForPost = useEffectEvent((postId: string) => {
+    void requestCommentDraftForPost(postId, {
+      mode: replyEnabled ? "thread" : "solo",
+      adoptFreshDrafts: true,
+    });
+  });
+
   useEffect(() => {
     if (!redirectingToCanonicalHost) return;
     redirectToCanonicalLastB2bHost();
@@ -690,6 +716,27 @@ export default function SocialDiscoveryClient({ brandId }: { brandId: string }) 
   }, [draftingPostId, generatedCommentDraft, selectedCommentPlatform, selectedPost?.id]);
 
   useEffect(() => {
+    const postId = selectedPost?.id ?? "";
+    const brandName = selectedBrandMentionName.trim();
+    if (!postId || !brandName) return;
+    if (selectedCommentPlatform !== "youtube") return;
+    if (!generatedCommentDraft) return;
+    if (textMentionsBrand(generatedCommentDraft, brandName)) return;
+    if (draftingPostId === postId) return;
+    const attemptKey = `${postId}:${brandName.toLowerCase()}:${replyEnabled ? "thread" : "solo"}`;
+    if (attemptedBrandMentionDraftPostIdsRef.current.has(attemptKey)) return;
+    attemptedBrandMentionDraftPostIdsRef.current.add(attemptKey);
+    void regenerateBrandMentionDraftForPost(postId);
+  }, [
+    draftingPostId,
+    generatedCommentDraft,
+    replyEnabled,
+    selectedBrandMentionName,
+    selectedCommentPlatform,
+    selectedPost?.id,
+  ]);
+
+  useEffect(() => {
     if (youtubeSubscriptionAccountId && youtubeAccountOptions.some((account) => account.accountId === youtubeSubscriptionAccountId)) {
       return;
     }
@@ -741,6 +788,7 @@ export default function SocialDiscoveryClient({ brandId }: { brandId: string }) 
     setLoading(true);
     setError("");
     attemptedAutoDraftPostIdsRef.current.clear();
+    attemptedBrandMentionDraftPostIdsRef.current.clear();
     setDraftingPostId("");
     setDraftGenerationErrors({});
     try {
@@ -794,9 +842,11 @@ export default function SocialDiscoveryClient({ brandId }: { brandId: string }) 
       const nextQueries = baselineQueriesFor(nextData);
       const nextBrandCommentPrompt =
         typeof nextData.brand?.socialDiscoveryCommentPrompt === "string" ? nextData.brand.socialDiscoveryCommentPrompt : "";
+      const nextBrandName = typeof nextData.brand?.name === "string" ? nextData.brand.name : "";
       const nextEffectiveBrandCommentPrompt = resolveSocialDiscoveryCommentPrompt(nextBrandCommentPrompt);
       setSavedQueries(nextSavedQueries);
       setSuggestedQueries(nextSuggestedQueries);
+      if (nextBrandName) setActiveBrandName(nextBrandName);
       setSavedBrandCommentPrompt(nextBrandCommentPrompt);
       setBrandCommentPromptDraft((current) =>
         !current.trim() || current.trim() === effectiveSavedBrandCommentPrompt.trim()
@@ -921,6 +971,7 @@ export default function SocialDiscoveryClient({ brandId }: { brandId: string }) 
     setYouTubeSearchSummary("");
     setError("");
     attemptedAutoDraftPostIdsRef.current.clear();
+    attemptedBrandMentionDraftPostIdsRef.current.clear();
     setDraftingPostId("");
     setDraftGenerationErrors({});
     try {
@@ -936,6 +987,9 @@ export default function SocialDiscoveryClient({ brandId }: { brandId: string }) 
       const data = await response.json().catch(() => ({}));
       if (!response.ok) {
         throw new Error(typeof data?.error === "string" ? data.error : "Failed to search YouTube");
+      }
+      if (data?.brand && typeof data.brand === "object" && typeof data.brand.name === "string") {
+        setActiveBrandName(data.brand.name);
       }
       const nextPosts = filterDraftEligiblePosts(Array.isArray(data?.posts) ? (data.posts as DiscoveryPost[]) : []);
       const fetchedCount = Math.max(0, Number(data?.summary?.found ?? 0) || 0);

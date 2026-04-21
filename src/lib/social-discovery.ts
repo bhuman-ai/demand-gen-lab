@@ -361,6 +361,11 @@ function textMentionsBrand(text: string, brandName: string) {
   return new RegExp(`\\b${escapeRegExp(normalizedBrand)}\\b`, "i").test(text);
 }
 
+function commentBrandName(value: string) {
+  const trimmed = compactText(value, 120);
+  return compactText(trimmed.split("|")[0]?.replace(/\s+[-–—]\s+.*$/u, "") || trimmed, 80);
+}
+
 function addSoftBrandMention(input: { draft: string; brandName: string; maxLength: number }) {
   const draft = compactText(input.draft, input.maxLength);
   const brandName = input.brandName.trim();
@@ -2052,6 +2057,7 @@ export function buildSocialCommentPlanningPrompt(input: {
   const platformLabel = socialCommentPlatformLabel(input.post.platform);
   const draftMode = input.mode === "thread" ? "thread" : "solo";
   const forceDraft = Boolean(input.force);
+  const brandName = commentBrandName(input.brand.name);
   const brandCommentPrompt = resolveSocialDiscoveryCommentPrompt(input.brand.socialDiscoveryCommentPrompt).slice(0, 4000);
   return [
     `You are writing one ${platformLabel} comment for a real brand account to post.`,
@@ -2061,13 +2067,13 @@ export function buildSocialCommentPlanningPrompt(input: {
     "Use the following prompt for the top-level commentDraft:",
     brandCommentPrompt,
     forceDraft
-      ? `Selected-video mode: mention ${input.brand.name} exactly once in the most natural place. Make it subtle, not a pitch. Override heuristic_mention_policy if needed.`
+      ? `Selected-video mode: mention ${brandName} exactly once in the most natural place. Make it subtle, not a pitch. Override heuristic_mention_policy if needed.`
       : "",
     forceDraft && draftMode === "thread"
-      ? `Thread mode: mention ${input.brand.name} in either commentDraft or replyDraft, whichever feels more natural, not both.`
+      ? `Thread mode: mention ${brandName} in either commentDraft or replyDraft, whichever feels more natural, not both.`
       : "",
     forceDraft && draftMode === "solo"
-      ? `Solo mode: commentDraft must include ${input.brand.name} once while still sounding like a normal YouTube comment.`
+      ? `Solo mode: commentDraft must include ${brandName} once while still sounding like a normal YouTube comment.`
       : "",
     draftMode === "thread"
       ? "Also provide replyDraft for second real account replying to first comment. Design both together."
@@ -2083,7 +2089,8 @@ export function buildSocialCommentPlanningPrompt(input: {
     "",
     `draft_mode: ${draftMode}`,
     `social_platform: ${input.post.platform}`,
-    `brand_name: ${input.brand.name}`,
+    `brand_name: ${brandName}`,
+    `brand_full_name: ${input.brand.name}`,
     `brand_website: ${input.brand.website || "unknown"}`,
     `brand_product: ${compactText(input.brand.product, 320)}`,
     `brand_tone: ${compactText(input.brand.tone, 200)}`,
@@ -2172,12 +2179,12 @@ async function enhanceInteractionPlanWithLlm(
     const forceNeedsBrand =
       forceDraft &&
       Boolean(baseCommentDraft) &&
-      !textMentionsBrand(baseCommentDraft, input.brand.name) &&
-      !textMentionsBrand(baseReplyDraft, input.brand.name);
+      !textMentionsBrand(baseCommentDraft, commentBrandName(input.brand.name)) &&
+      !textMentionsBrand(baseReplyDraft, commentBrandName(input.brand.name));
     const nextCommentDraft = forceNeedsBrand && draftMode === "solo"
       ? addSoftBrandMention({
           draft: baseCommentDraft,
-          brandName: input.brand.name,
+          brandName: commentBrandName(input.brand.name),
           maxLength: 280,
         })
       : baseCommentDraft;
@@ -2185,7 +2192,7 @@ async function enhanceInteractionPlanWithLlm(
       forceNeedsBrand && draftMode === "thread" && baseReplyDraft
         ? addSoftBrandMention({
             draft: baseReplyDraft,
-            brandName: input.brand.name,
+            brandName: commentBrandName(input.brand.name),
             maxLength: 220,
           })
         : baseReplyDraft;

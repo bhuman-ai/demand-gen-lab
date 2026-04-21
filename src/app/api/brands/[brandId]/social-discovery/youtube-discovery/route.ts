@@ -146,6 +146,10 @@ export async function POST(request: Request, context: { params: Promise<{ brandI
     return NextResponse.json({
       ok: true,
       query,
+      brand: {
+        id: brand.id,
+        name: brand.name,
+      },
       posts,
       summary: {
         found: results.length,

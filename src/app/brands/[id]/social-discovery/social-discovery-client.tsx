@@ -209,6 +209,10 @@ function naturalYouTubeCommentDraft(draft: string, brandName: string) {
   return trimmedDraft;
 }
 
+function hasConnectedSocialIdentity(account: OutreachAccount) {
+  return Boolean(account.config.social.externalAccountId.trim());
+}
+
 function buildInstagramPathCommentUrl(postUrl: string, commentId: string) {
   const trimmedPostUrl = postUrl.trim();
   const trimmedCommentId = commentId.trim();
@@ -569,15 +573,27 @@ export default function SocialDiscoveryClient({
     [commentAccountId, commentAccountOptions]
   );
   const canAddTeammateReply = selectedCommentPlatform === "youtube" && replyAccountOptions.length > 0;
-  const youtubeAccountOptions = useMemo(() => {
-    return socialAccounts
-      .filter(
+  const configuredYouTubeSocialAccounts = useMemo(
+    () =>
+      socialAccounts.filter(
         (account) =>
           account.status === "active" &&
           account.config.social.enabled &&
           account.config.social.connectionProvider === "youtube" &&
           account.config.social.platforms.includes("youtube")
-      )
+      ),
+    [socialAccounts]
+  );
+  const connectedYouTubeSocialAccounts = useMemo(
+    () => configuredYouTubeSocialAccounts.filter(hasConnectedSocialIdentity),
+    [configuredYouTubeSocialAccounts]
+  );
+  const needsSignInYouTubeAccountCount = useMemo(
+    () => configuredYouTubeSocialAccounts.length - connectedYouTubeSocialAccounts.length,
+    [configuredYouTubeSocialAccounts.length, connectedYouTubeSocialAccounts.length]
+  );
+  const youtubeAccountOptions = useMemo(() => {
+    return connectedYouTubeSocialAccounts
       .map((account) => ({
         accountId: account.id,
         accountName: account.name,
@@ -587,7 +603,7 @@ export default function SocialDiscoveryClient({
         linkedProvider: account.config.social.linkedProvider.trim(),
         source: "manual" as const,
       }));
-  }, [socialAccounts]);
+  }, [connectedYouTubeSocialAccounts]);
   const visibleCommentDelivery = commentResult ?? selectedPost?.commentDelivery ?? null;
   const visiblePendingReply = selectedPost?.pendingReply ?? null;
   const commentExportPayload = useMemo(
@@ -2402,8 +2418,8 @@ export default function SocialDiscoveryClient({
           },
           {
             label: "Accounts",
-            value: youtubeAccountOptions.length,
-            detail: "YouTube posting identities",
+            value: connectedYouTubeSocialAccounts.length,
+            detail: "Connected YouTube accounts",
             active: activeWorkspace === "accounts",
             onClick: () => setActiveWorkspace("accounts"),
           },
@@ -2503,17 +2519,17 @@ export default function SocialDiscoveryClient({
       {activeWorkspace === "channels" ? renderChannelsWorkspace() : null}
 
       {activeWorkspace === "accounts" ? (
-        <SectionPanel title="Accounts" description="Manage the YouTube account fleet used by the queue and watched channels.">
+        <SectionPanel title="Accounts" description="See which YouTube accounts can post right now.">
           <div className="space-y-4">
             <StatLedger
               items={[
-                { label: "YouTube", value: youtubeAccountOptions.length, detail: "Accounts available to post" },
-                { label: "Watched", value: youtubeSubscriptions.length, detail: "Channels consuming account capacity" },
-                { label: "Attention", value: attentionQueueCount, detail: "Failures hitting ops right now" },
+                { label: "Connected", value: connectedYouTubeSocialAccounts.length, detail: "Ready to post" },
+                { label: "Needs sign-in", value: needsSignInYouTubeAccountCount, detail: "Finish Google connect" },
               ]}
             />
             <SocialAccountPoolPanel
               brandId={brandId}
+              platformFilter="youtube"
               onChanged={() => {
                 void loadPosts(status);
                 void loadCommentAccounts();

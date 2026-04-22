@@ -1,13 +1,13 @@
 # Feature: social-discovery-youtube-redesign
 
 ## Request
-Redesign the existing social discovery UI shown in this thread, focusing on the current brand/social discovery YouTube comment workflow screen. Preserve required functionality but rethink structure, hierarchy, and flow before coding.
+Simplify the Accounts workspace so the YouTube count matches what the operator can actually use, and reduce mixed-platform account noise. The user says the screen says 4 YouTube accounts but they only see one connected account. Primary action should be understanding usable YouTube accounts quickly.
 ## Autonomy Mode
-guided
+holistic_autopilot
 ## Target Users
-founder/operator running comment drafting and posting workflows
+founder/operator
 ## Optimization Target
-decision speed and one clear primary action
+clarity and decision speed
 ## Hard Constraints
 - Keep both automation and manual override paths covered.
 - Support roughly 15 YouTube accounts without repetitive one-account-at-a-time setup dominating the main view.
@@ -25,6 +25,7 @@ In scope: redesign Social Discovery around an automation-first YouTube workflow.
 Out of scope for this redesign pass: changing core comment-generation logic, replacing account connection internals, or expanding beyond directly related YouTube/social discovery surfaces.
 ## Touched Surfaces
 - social-discovery
+- social-account-pool
 ## Success Moment
 Operator opens Social Discovery and can immediately tell: what jobs are ready now, what is blocked, which account should act, and how to keep automation moving. They can approve or override one job fast, or jump into channels/accounts without losing the queue model.
 ## Failure Policy
@@ -206,6 +207,11 @@ Gate result: Concept B strongest. Concept A too mixed. Concept C over-optimizes 
 - 2026-04-22 Implementation summary: Implemented the winning Queue control tower concept on the social discovery surface. The default page now uses workspace tabs for Queue, Channels, Accounts, and Manual search. Queue shows KPI ledger cards, queue filters, a dense jobs list, and an inspector panel for the selected post. Channels now lives in its own workspace with watched/auto-comment/error summaries and channel management. Accounts now has its own workspace for the multi-account YouTube fleet and embeds the existing social account pool panel. Manual search is secondary and routes selected search results through the same inspector. Advanced setup is collapsed into a dedicated drilldown section. Queue behavior now distinguishes post attention from channel attention so top-level counts route to the correct workspace, queue items are sorted by operational priority, and the selected job row has a stronger visual state.
 - Files: src/app/brands/[id]/social-discovery/social-discovery-client.tsx
 - Components: SocialDiscoveryClient, SocialAccountPoolPanel, PageIntro, SectionPanel, StatLedger, EmptyState
+- 2026-04-22 Implementation summary: Polished the Accounts workspace to reduce YouTube-account confusion. The global Accounts stat now reports connected YouTube accounts rather than every account tagged for YouTube. Posting and channel-assignment options now only include connected YouTube identities. The Accounts workspace itself is filtered to YouTube accounts, shows only connected vs needs-sign-in counts, hides unrelated non-YouTube accounts from the main list, and removes extra metrics that did not help the next action. The add-account area is reduced to a single YouTube action in this workspace.
+- Files: src/app/brands/[id]/social-discovery/social-discovery-client.tsx, src/app/brands/[id]/social-discovery/social-account-pool-panel.tsx
+- Components: SocialDiscoveryClient, SocialAccountPoolPanel, StatLedger, SectionPanel
 ## Doc Sync
 - 2026-04-22 Synced after implementation.
 - Code touched: src/app/brands/[id]/social-discovery/social-discovery-client.tsx
+- 2026-04-22 Synced after implementation.
+- Code touched: src/app/brands/[id]/social-discovery/social-discovery-client.tsx, src/app/brands/[id]/social-discovery/social-account-pool-panel.tsx

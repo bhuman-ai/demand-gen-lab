@@ -340,9 +340,11 @@ function PlatformIcon({
 export function SocialAccountPoolPanel({
   brandId,
   onChanged,
+  platformFilter,
 }: {
   brandId: string;
   onChanged?: () => Promise<void> | void;
+  platformFilter?: SupportedSocialPlatform;
 }) {
   const router = useRouter();
   const pathname = usePathname();
@@ -372,9 +374,22 @@ export function SocialAccountPoolPanel({
   const [youtubeCredentialModalError, setYouTubeCredentialModalError] = useState("");
   const [youtubeCredentialModalSaving, setYouTubeCredentialModalSaving] = useState(false);
 
+  const visibleAccounts = useMemo(
+    () =>
+      platformFilter
+        ? accounts.filter((account) => inferSupportedPlatform(account.config.social) === platformFilter)
+        : accounts,
+    [accounts, platformFilter]
+  );
+  const hiddenAccountCount = accounts.length - visibleAccounts.length;
+  const connectedVisibleAccountsCount = useMemo(
+    () => visibleAccounts.filter((account) => hasConnectedIdentity(account.config.social)).length,
+    [visibleAccounts]
+  );
+  const needsSignInVisibleAccountsCount = visibleAccounts.length - connectedVisibleAccountsCount;
   const selectedAccount = useMemo(
-    () => accounts.find((account) => account.id === selectedAccountId) ?? accounts[0] ?? null,
-    [accounts, selectedAccountId]
+    () => visibleAccounts.find((account) => account.id === selectedAccountId) ?? visibleAccounts[0] ?? null,
+    [selectedAccountId, visibleAccounts]
   );
   const selectedPlatform = useMemo(
     () => inferSupportedPlatform(draft ?? selectedAccount?.config.social ?? null),
@@ -389,6 +404,16 @@ export function SocialAccountPoolPanel({
     Boolean(draft?.platforms.includes("youtube")) ||
     draft?.linkedProvider === "youtube" ||
     draft?.connectionProvider === "youtube";
+
+  useEffect(() => {
+    if (!visibleAccounts.length) {
+      if (selectedAccountId) setSelectedAccountId("");
+      return;
+    }
+    if (!visibleAccounts.some((account) => account.id === selectedAccountId)) {
+      setSelectedAccountId(visibleAccounts[0].id);
+    }
+  }, [selectedAccountId, visibleAccounts]);
 
   useEffect(() => {
     if (!selectedAccount) {
@@ -1017,10 +1042,12 @@ export function SocialAccountPoolPanel({
       <div className="space-y-5">
       <div className="space-y-3">
         <div className="text-sm text-[color:var(--muted-foreground)]">
-          Pick a platform. We will create the account and open the right sign-in page for you.
+          {platformFilter
+            ? `Add a ${platformLabel(platformFilter)} account. We open the sign-in flow and bring you back here.`
+            : "Pick a platform. We will create the account and open the right sign-in page for you."}
         </div>
-        <div className="grid gap-3 md:grid-cols-2">
-          {(["instagram", "youtube"] as SupportedSocialPlatform[]).map((platform) => {
+        <div className={cn("grid gap-3", platformFilter ? "" : "md:grid-cols-2")}>
+          {(platformFilter ? [platformFilter] : (["instagram", "youtube"] as SupportedSocialPlatform[])).map((platform) => {
             const busy = creatingPlatform === platform;
             return (
               <button
@@ -1066,9 +1093,13 @@ export function SocialAccountPoolPanel({
       <div className="space-y-3">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div>
-            <div className="text-sm font-medium text-[color:var(--foreground)]">Existing accounts</div>
+            <div className="text-sm font-medium text-[color:var(--foreground)]">
+              {platformFilter ? `${platformLabel(platformFilter)} accounts` : "Existing accounts"}
+            </div>
             <div className="text-sm text-[color:var(--muted-foreground)]">
-              Click an account to reconnect it or open advanced settings.
+              {platformFilter
+                ? `Connected: ${connectedVisibleAccountsCount}. Needs sign-in: ${needsSignInVisibleAccountsCount}.`
+                : "Click an account to reconnect it or open advanced settings."}
             </div>
           </div>
           <Button
@@ -1088,15 +1119,21 @@ export function SocialAccountPoolPanel({
           </div>
         ) : null}
 
-        {!loading && !accounts.length ? (
+        {!loading && !visibleAccounts.length ? (
           <div className="rounded-[10px] border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-3 text-sm text-[color:var(--muted-foreground)]">
-            No accounts yet. Use one of the buttons above.
+            {platformFilter ? `No ${platformLabel(platformFilter)} accounts yet. Use the button above.` : "No accounts yet. Use one of the buttons above."}
           </div>
         ) : null}
 
-        {accounts.length ? (
+        {platformFilter && hiddenAccountCount > 0 ? (
+          <div className="text-xs text-[color:var(--muted-foreground)]">
+            {hiddenAccountCount} non-{platformLabel(platformFilter)} account{hiddenAccountCount === 1 ? "" : "s"} hidden here.
+          </div>
+        ) : null}
+
+        {visibleAccounts.length ? (
           <div className="grid gap-3">
-            {accounts.map((account) => {
+            {visibleAccounts.map((account) => {
               const platform = inferSupportedPlatform(account.config.social);
               const active = account.id === selectedAccount?.id;
               const statusLabel = accountStatus(account, { pendingYouTubeAccountId });

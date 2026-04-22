@@ -224,6 +224,10 @@ Gate result: Concept B strongest. Concept A too mixed. Concept C over-optimizes 
 - Files: src/lib/social-discovery-brand-mention.ts, src/lib/social-discovery.ts, src/app/brands/[id]/social-discovery/social-discovery-client.tsx
 - Components: SocialDiscoveryClient
 - Assumptions used: It is better to show no draft plus an explicit retry error than to auto-insert any hardcoded brand-aside sentence., The existing single automatic retry is acceptable as long as canned brand mention drafts are rejected instead of displayed.
+- 2026-04-22 Implementation summary: Expanded canned YouTube brand-mention detection to catch another hardcoded-style ending observed in production: 'Seen that around BRAND too.' The detector now treats around/inside/with variants like at/on variants, catches no-subject 'Seen that around...' endings, and the social comment planning prompt explicitly bans 'seen that around BRAND too'. Verified the exact screenshot sentence is flagged and sanitized while a more integrated brand mention remains allowed.
+- Files: src/lib/social-discovery-brand-mention.ts, src/lib/social-discovery.ts
+- Components: SocialDiscoveryClient
+- Assumptions used: No-subject endings like 'Seen that around BRAND too' are canned brand-asides and should be rejected like 'we see that at BRAND'.
 ## Doc Sync
 - 2026-04-22 Synced after implementation.
 - Code touched: src/app/brands/[id]/social-discovery/social-discovery-client.tsx
@@ -237,3 +241,5 @@ Gate result: Concept B strongest. Concept A too mixed. Concept C over-optimizes 
 - Code touched: src/lib/social-discovery.ts, src/lib/llm-router.ts, src/app/api/brands/[brandId]/social-discovery/route.ts, src/app/api/brands/[brandId]/route.ts, src/app/brands/[id]/social-discovery/social-discovery-client.tsx
 - 2026-04-22 Synced after implementation.
 - Code touched: src/lib/social-discovery-brand-mention.ts, src/lib/social-discovery.ts, src/app/brands/[id]/social-discovery/social-discovery-client.tsx
+- 2026-04-22 Synced after implementation.
+- Code touched: src/lib/social-discovery-brand-mention.ts, src/lib/social-discovery.ts

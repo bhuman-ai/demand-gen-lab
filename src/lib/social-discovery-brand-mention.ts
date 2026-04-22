@@ -31,11 +31,12 @@ function brandMentionProblemPatterns(brandName: string) {
     new RegExp(`(?:we(?:'ve| have)?|i(?:'ve| have)?)\\s+noticed[^.?!]{0,100}\\b(?:at|on)\\s+(?:the\\s+)?${brandPattern}(?:\\s+side)?(?:\\s+too|\\s+as well)?\\.?`, "ig"),
     new RegExp(`(?:we(?:'ve| have)?|i(?:'ve| have)?)\\s+seen[^.?!]{0,100}\\b(?:at|on)\\s+(?:the\\s+)?${brandPattern}(?:\\s+side)?(?:\\s+too|\\s+as well)?\\.?`, "ig"),
     new RegExp(
-      `(?:we(?:'ve| have)?|i(?:'ve| have)?|we|i|that|same|the)\\s+(?:see|saw|seen|run into|ran into|notice|noticed|keep seeing|hear|heard|deal with|dealt with|comes up|came up|shows up|showed up|happens|happened)[^.?!]{0,120}\\b(?:at|on)\\s+(?:the\\s+)?${brandPattern}(?:\\s+side)?(?:\\s+too|\\s+as well)?\\.?`,
+      `(?:we(?:'ve| have)?|i(?:'ve| have)?|we|i|that|same|the)\\s+(?:see|saw|seen|run into|ran into|notice|noticed|keep seeing|hear|heard|deal with|dealt with|comes up|came up|shows up|showed up|happens|happened)[^.?!]{0,120}\\b(?:around|at|on|inside|with)\\s+(?:the\\s+)?${brandPattern}(?:\\s+side)?(?:\\s+too|\\s+as well)?\\.?`,
       "ig"
     ),
+    new RegExp(`(?:seen|noticed|saw|see)\\s+(?:that|this|it)?[^.?!]{0,100}\\b(?:around|at|on|inside|with)\\s+(?:the\\s+)?${brandPattern}(?:\\s+side)?(?:\\s+too|\\s+as well)?\\.?`, "ig"),
     new RegExp(
-      `(?:at|on)\\s+(?:the\\s+)?${brandPattern}(?:\\s+side)?\\s+(?:too|as well)\\.?`,
+      `(?:around|at|on|inside|with)\\s+(?:the\\s+)?${brandPattern}(?:\\s+side)?\\s+(?:too|as well)\\.?`,
       "ig"
     ),
   ];

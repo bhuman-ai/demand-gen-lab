@@ -513,7 +513,7 @@ export default function SocialDiscoveryClient({
       (selectedPost &&
         selectedPlan?.targetStrength === "target" &&
         !generatedCommentDraft) ||
-      generatedYouTubeDraftNeedsBrand
+      (generatedYouTubeDraftNeedsBrand && !selectedDraftGenerationError)
   );
   const selectedCommentPlatform = selectedPost?.platform === "youtube" ? "youtube" : "instagram";
   const selectedCommentProvider = selectedCommentPlatform === "youtube" ? "youtube" : "unipile";
@@ -632,13 +632,14 @@ export default function SocialDiscoveryClient({
     generatedReplyDraft.trim() && generatedReplyDraft.trim() !== replyDraft.trim()
   );
   const emptyCommentMessage = useMemo(() => {
-    if (!selectedPost || !selectedPlan || generatedCommentDraft || commentGenerationPending) return "";
+    if (!selectedPost || !selectedPlan) return "";
     if (selectedDraftGenerationError) return selectedDraftGenerationError;
+    if (generatedCommentDraftWithBrand || commentDraft.trim() || commentGenerationPending) return "";
     if (selectedPlan.commentPosture === "watch_only" || selectedPlan.targetStrength === "watch") {
       return "Writing draft...";
     }
     return "Writing draft...";
-  }, [commentGenerationPending, generatedCommentDraft, selectedDraftGenerationError, selectedPlan, selectedPost]);
+  }, [commentDraft, commentGenerationPending, generatedCommentDraftWithBrand, selectedDraftGenerationError, selectedPlan, selectedPost]);
   const selectedYouTubeChannelIsWatched = useMemo(
     () => Boolean(selectedYouTubeChannelId && youtubeSubscriptions.some((entry) => entry.channelId === selectedYouTubeChannelId)),
     [selectedYouTubeChannelId, youtubeSubscriptions]
@@ -874,6 +875,38 @@ export default function SocialDiscoveryClient({
   }, [
     draftingPostId,
     generatedCommentDraft,
+    replyEnabled,
+    selectedBrandMentionName,
+    selectedCommentPlatform,
+    selectedPost?.id,
+  ]);
+
+  useEffect(() => {
+    const postId = selectedPost?.id ?? "";
+    const brandName = selectedBrandMentionName.trim();
+    if (!postId || !brandName) return;
+    if (selectedCommentPlatform !== "youtube") return;
+    if (!generatedCommentDraft) return;
+    if (generatedCommentDraftWithBrand) {
+      setDraftGenerationErrors((current) => {
+        if (!current[postId]) return current;
+        const next = { ...current };
+        delete next[postId];
+        return next;
+      });
+      return;
+    }
+    if (draftingPostId === postId) return;
+    const attemptKey = `${postId}:${brandName.toLowerCase()}:${replyEnabled ? "thread" : "solo"}`;
+    if (!attemptedBrandMentionDraftPostIdsRef.current.has(attemptKey)) return;
+    setDraftGenerationErrors((current) => ({
+      ...current,
+      [postId]: `GPT draft still sounds canned around ${brandName}. Try draft again.`,
+    }));
+  }, [
+    draftingPostId,
+    generatedCommentDraft,
+    generatedCommentDraftWithBrand,
     replyEnabled,
     selectedBrandMentionName,
     selectedCommentPlatform,

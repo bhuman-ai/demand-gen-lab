@@ -2078,7 +2078,7 @@ export function buildSocialCommentPlanningPrompt(input: {
           "- First infer what a real viewer would react to from the video title, description, transcript excerpt if available, channel, and brand context.",
           "- Write the comment from scratch in one pass. Do not write a normal comment and append a brand sentence.",
           "- The brand mention should be a small natural part of the thought, like something the account has seen from its own work, not an ad or CTA.",
-          "- No generic reusable lines. No 'we see the same at BRAND too'. No 'we see that at BRAND'. No 'we see that a lot at BRAND'. No 'on the BRAND side'. No 'BRAND fits this'. No product pitch.",
+          "- No generic reusable lines. No 'we see the same at BRAND too'. No 'we see that at BRAND'. No 'we see that a lot at BRAND'. No 'we noticed that at BRAND'. No 'we've noticed that at BRAND'. No 'on the BRAND side'. No 'BRAND fits this'. No product pitch.",
           "- If transcript is unavailable, use title + description + channel metadata and do not pretend to know details that are not present.",
         ].join("\n")
       : "",

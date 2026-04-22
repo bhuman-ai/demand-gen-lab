@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
-import { CheckCircle2, ExternalLink, Search, Settings2, Users, Youtube, RefreshCw } from "lucide-react";
+import { CheckCircle2, ExternalLink, ListChecks, Search, Settings2, Users, Youtube, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { EmptyState, PageIntro, SectionPanel, StatLedger } from "@/components/ui/page-layout";
@@ -90,10 +90,9 @@ type DiscoveryResponse = {
   };
 };
 
-const SCAN_PLATFORM = "instagram";
 const MIN_YOUTUBE_DRAFT_SUBSCRIBERS = 1000;
 
-type SocialDiscoveryWorkspace = "queue" | "channels" | "accounts" | "manual";
+type SocialDiscoveryWorkspace = "queue" | "searches" | "channels" | "accounts" | "manual";
 type QueueViewFilter = "all" | "ready" | "drafting" | "attention" | "posted";
 type QueuePostState = "ready" | "drafting" | "attention" | "posted";
 
@@ -418,7 +417,6 @@ export default function SocialDiscoveryClient({
   const [activeWorkspace, setActiveWorkspace] = useState<SocialDiscoveryWorkspace>("queue");
   const [queueFilter, setQueueFilter] = useState<QueueViewFilter>("all");
   const [loading, setLoading] = useState(true);
-  const [scanning, setScanning] = useState(false);
   const [error, setError] = useState("");
   const [commentDraft, setCommentDraft] = useState("");
   const [commentAccountId, setCommentAccountId] = useState("");
@@ -473,13 +471,14 @@ export default function SocialDiscoveryClient({
     [savedQueries, suggestedQueries]
   );
   const queriesDirty = useMemo(() => !sameQueries(queryList, baselineQueries), [queryList, baselineQueries]);
+  const canSaveQueries = queriesDirty || (!savedQueries.length && queryList.length > 0);
   const queryStatusMessage = savingQueries
-    ? "Saving prompts..."
+    ? "Saving searches..."
     : queriesDirty
       ? "Unsaved changes."
       : savedQueries.length
         ? "Saved for this brand."
-        : "Using generated prompts for this brand.";
+        : "Using suggested searches for this brand.";
   const effectiveSavedBrandCommentPrompt = useMemo(
     () => resolveSocialDiscoveryCommentPrompt(savedBrandCommentPrompt),
     [savedBrandCommentPrompt]
@@ -1030,7 +1029,7 @@ export default function SocialDiscoveryClient({
       });
       const data = await response.json().catch(() => ({}));
       if (!response.ok) {
-        throw new Error(typeof data?.error === "string" ? data.error : "Failed to save search prompts");
+        throw new Error(typeof data?.error === "string" ? data.error : "Failed to save searches");
       }
       const nextSavedQueries = normalizeQueries(data?.brand?.socialDiscoveryQueries);
       const nextSuggestedQueries = normalizeQueries(data?.socialDiscoverySuggestedQueries);
@@ -1156,49 +1155,6 @@ export default function SocialDiscoveryClient({
       setYouTubeSearchError(err instanceof Error ? err.message : "Failed to search YouTube");
     } finally {
       setSearchingYouTube(false);
-    }
-  }
-
-  async function runScan() {
-    setScanning(true);
-    setError("");
-    attemptedAutoDraftPostIdsRef.current.clear();
-    setDraftingPostId("");
-    setDraftGenerationErrors({});
-    try {
-      const nextQueries = normalizeQueries(queryDraft.split("\n"));
-      if (!sameQueries(nextQueries, baselineQueries)) {
-        await saveQueries({ silent: true, nextQueries });
-      }
-      const response = await fetch(canonicalApiUrl(`/api/brands/${brandId}/social-discovery`), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          action: "scan",
-          provider: "auto",
-          platforms: [SCAN_PLATFORM],
-          queries: nextQueries,
-          maxQueries: 6,
-          limitPerQuery: 10,
-        }),
-      });
-      const data = await readDiscoveryResponse(response);
-      writeCachedDiscovery(brandId, data);
-      const filteredPosts = filterPostsByStatus(data.posts, status);
-      setPosts(filteredPosts);
-      const nextSavedQueries = normalizeQueries(data.savedQueries);
-      const nextSuggestedQueries = normalizeQueries(data.suggestedQueries);
-      setSavedQueries(nextSavedQueries);
-      setSuggestedQueries(nextSuggestedQueries);
-      setQueryDraft(baselineQueriesFor(data).join("\n"));
-      setSelectedId(preferredPostId(filteredPosts));
-      if (!filteredPosts.length) {
-        await loadPosts(status);
-      }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to run social discovery");
-    } finally {
-      setScanning(false);
     }
   }
 
@@ -2097,9 +2053,51 @@ export default function SocialDiscoveryClient({
     );
   }
 
+  function renderSearchesWorkspace() {
+    const brandLabel = commentBrandName(activeBrandName) || activeBrandName.trim() || "this brand";
+
+    return (
+      <SectionPanel
+        title="Searches"
+        description={`Saved YouTube searches for ${brandLabel}. Daily automation uses them to find 1k+ subscriber videos for the queue.`}
+        actions={
+          <Button
+            type="button"
+            onClick={() => {
+              void saveQueries().catch((err) => setError(err instanceof Error ? err.message : "Failed to save searches"));
+            }}
+            disabled={savingQueries || !canSaveQueries}
+          >
+            {savingQueries ? "Saving..." : "Save searches"}
+          </Button>
+        }
+      >
+        <div className="space-y-3">
+          <Textarea
+            value={queryDraft}
+            onChange={(event) => setQueryDraft(event.target.value)}
+            rows={8}
+            placeholder={"cold email agency\nai personalized video\nb2b sales demos"}
+          />
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="text-sm text-[color:var(--muted-foreground)]">
+              {queryList.length} searches in this draft. {queryStatusMessage}
+            </div>
+            <Button type="button" variant="outline" onClick={() => setQueryDraft(baselineQueries.join("\n"))} disabled={savingQueries}>
+              Reset
+            </Button>
+          </div>
+          <div className="text-xs leading-5 text-[color:var(--muted-foreground)]">
+            These searches are stored on {brandLabel}. Switching brands loads a different search list.
+          </div>
+        </div>
+      </SectionPanel>
+    );
+  }
+
   function renderChannelsWorkspace() {
     return (
-      <SectionPanel title="Channels" description="Watch channels, assign auto-comment behavior, and inspect recent automation state.">
+      <SectionPanel title="Channels" description="Known YouTube channels to watch. Saved searches run separately.">
         <div className="space-y-4">
           {youtubeSubscriptionError ? (
             <div className="rounded-[10px] border border-[color:var(--danger-border)] bg-[color:var(--danger-soft)] px-3 py-2 text-sm text-[color:var(--danger)]">
@@ -2163,7 +2161,7 @@ export default function SocialDiscoveryClient({
             <span className="min-w-0">
               <span className="text-sm font-medium text-[color:var(--foreground)]">Auto-comment new uploads</span>
               <span className="mt-1 block text-sm leading-6 text-[color:var(--muted-foreground)]">
-                Use this only for watched channels. Manual search stays separate.
+                Use this for known channels. Saved searches find new candidates separately.
               </span>
             </span>
           </label>
@@ -2267,72 +2265,42 @@ export default function SocialDiscoveryClient({
           </span>
         </summary>
         <div className="space-y-4 border-t border-[color:var(--border)] px-4 py-4">
-          <div className="grid gap-4 xl:grid-cols-2">
-            <SectionPanel title="Comment prompt" description="One saved prompt for this brand.">
-              <div className="space-y-2">
-                <Textarea value={brandCommentPromptDraft} onChange={(event) => setBrandCommentPromptDraft(event.target.value)} rows={6} />
-                <div className="text-xs text-[color:var(--muted-foreground)]">{brandCommentPromptStatusMessage}</div>
-                <div className="flex flex-wrap gap-2">
-                  <Button
-                    type="button"
-                    size="sm"
-                    onClick={() => {
-                      void saveBrandCommentPrompt();
-                    }}
-                    disabled={savingBrandCommentPrompt || !brandCommentPromptDirty}
-                  >
-                    Save
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    onClick={() => {
-                      setBrandCommentPromptDraft(effectiveSavedBrandCommentPrompt);
-                      setBrandCommentPromptError("");
-                    }}
-                    disabled={savingBrandCommentPrompt || !brandCommentPromptDirty}
-                  >
-                    Reset
-                  </Button>
-                </div>
-                {brandCommentPromptError ? (
-                  <div className="rounded-[10px] border border-[color:var(--danger-border)] bg-[color:var(--danger-soft)] px-3 py-2 text-sm text-[color:var(--danger)]">
-                    {brandCommentPromptError}
-                  </div>
-                ) : null}
-                <div className="text-xs text-[color:var(--muted-foreground)]">Clear it and save if you want to go back to the default prompt.</div>
+          <SectionPanel title="Comment prompt" description="One saved prompt for this brand.">
+            <div className="space-y-2">
+              <Textarea value={brandCommentPromptDraft} onChange={(event) => setBrandCommentPromptDraft(event.target.value)} rows={6} />
+              <div className="text-xs text-[color:var(--muted-foreground)]">{brandCommentPromptStatusMessage}</div>
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  type="button"
+                  size="sm"
+                  onClick={() => {
+                    void saveBrandCommentPrompt();
+                  }}
+                  disabled={savingBrandCommentPrompt || !brandCommentPromptDirty}
+                >
+                  Save
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    setBrandCommentPromptDraft(effectiveSavedBrandCommentPrompt);
+                    setBrandCommentPromptError("");
+                  }}
+                  disabled={savingBrandCommentPrompt || !brandCommentPromptDirty}
+                >
+                  Reset
+                </Button>
               </div>
-            </SectionPanel>
-
-            <SectionPanel title="Instagram scan" description="Legacy workflow stays here.">
-              <div className="space-y-2">
-                <Textarea value={queryDraft} onChange={(event) => setQueryDraft(event.target.value)} rows={6} placeholder="One search prompt per line" />
-                <div className="text-xs text-[color:var(--muted-foreground)]">
-                  {queryList.length} prompts. {queryStatusMessage}
+              {brandCommentPromptError ? (
+                <div className="rounded-[10px] border border-[color:var(--danger-border)] bg-[color:var(--danger-soft)] px-3 py-2 text-sm text-[color:var(--danger)]">
+                  {brandCommentPromptError}
                 </div>
-                <div className="flex flex-wrap gap-2">
-                  <Button
-                    type="button"
-                    size="sm"
-                    onClick={() => {
-                      void saveQueries().catch((err) => setError(err instanceof Error ? err.message : "Failed to save search prompts"));
-                    }}
-                    disabled={savingQueries || !queriesDirty}
-                  >
-                    Save
-                  </Button>
-                  <Button type="button" variant="outline" size="sm" onClick={() => setQueryDraft(baselineQueries.join("\n"))} disabled={savingQueries}>
-                    Reset
-                  </Button>
-                  <Button type="button" variant="outline" size="sm" onClick={runScan} disabled={scanning}>
-                    <RefreshCw className={cn("h-4 w-4", scanning ? "animate-spin" : "")} />
-                    {scanning ? "Scanning..." : "Run scan"}
-                  </Button>
-                </div>
-              </div>
-            </SectionPanel>
-          </div>
+              ) : null}
+              <div className="text-xs text-[color:var(--muted-foreground)]">Clear it and save if you want to go back to the default prompt.</div>
+            </div>
+          </SectionPanel>
         </div>
       </details>
     );
@@ -2342,12 +2310,16 @@ export default function SocialDiscoveryClient({
     <div className="space-y-6">
       <PageIntro
         title="Social discovery"
-        description="Automation-first YouTube comment ops. Work queue first. Channels, accounts, and manual override in dedicated workspaces."
+        description="Saved searches and watched channels feed the queue. Accounts post. Manual search is only for one-off overrides."
         actions={
           <div className="flex flex-wrap gap-2">
             <Button type="button" variant={activeWorkspace === "queue" ? "default" : "outline"} size="sm" onClick={() => setActiveWorkspace("queue")}>
               <CheckCircle2 className="h-3.5 w-3.5" />
               Queue
+            </Button>
+            <Button type="button" variant={activeWorkspace === "searches" ? "default" : "outline"} size="sm" onClick={() => setActiveWorkspace("searches")}>
+              <ListChecks className="h-3.5 w-3.5" />
+              Searches
             </Button>
             <Button type="button" variant={activeWorkspace === "channels" ? "default" : "outline"} size="sm" onClick={() => setActiveWorkspace("channels")}>
               <Youtube className="h-3.5 w-3.5" />
@@ -2406,6 +2378,13 @@ export default function SocialDiscoveryClient({
             },
           },
           {
+            label: "Searches",
+            value: savedQueries.length,
+            detail: "Saved for this brand",
+            active: activeWorkspace === "searches",
+            onClick: () => setActiveWorkspace("searches"),
+          },
+          {
             label: "Watched",
             value: youtubeSubscriptions.length,
             detail: `${autoCommentChannelCount} auto-commenting`,
@@ -2455,7 +2434,7 @@ export default function SocialDiscoveryClient({
                 description: filteredQueuePosts.length ? "Dense list of current opportunities." : "No queue items in this filter.",
                 posts: filteredQueuePosts,
                 emptyTitle: "No queue items here",
-                emptyDescription: queueFilter === "all" ? "Run manual search or wait for watched channels to produce more work." : "Try another queue filter.",
+                emptyDescription: queueFilter === "all" ? "Add saved searches or watched channels to produce more work." : "Try another queue filter.",
               })}
               {renderInspectorPanel("Inspector", "Selected job, draft, assigned account, and next action.")}
             </div>
@@ -2463,9 +2442,11 @@ export default function SocialDiscoveryClient({
         </div>
       ) : null}
 
+      {activeWorkspace === "searches" ? renderSearchesWorkspace() : null}
+
       {activeWorkspace === "manual" ? (
         <div className="space-y-4">
-          <SectionPanel title="Manual search" description="Search recent YouTube videos, then route one selected result through the same inspector.">
+          <SectionPanel title="Manual search" description="One-off YouTube search. Saved searches handle daily automation.">
             <div className="space-y-4">
               {youtubeSearchError ? (
                 <div className="rounded-[10px] border border-[color:var(--danger-border)] bg-[color:var(--danger-soft)] px-3 py-2 text-sm text-[color:var(--danger)]">

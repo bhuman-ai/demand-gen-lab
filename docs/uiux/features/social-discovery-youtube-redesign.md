@@ -1,7 +1,7 @@
 # Feature: social-discovery-youtube-redesign
 
 ## Request
-Simplify the Accounts workspace further. The user says it feels bulky and like an account within a box. They want a sleek easy list of connected YouTube accounts with profile pic/name, plus a clear button to add another YouTube account. Needs-sign-in accounts should feel secondary, not dominate the screen.
+Make saved searches a first-class brand-specific automation source in Social Discovery. Automation is not just watched channels: each brand has saved search terms, and the system should run them daily to find YouTube candidates. Update the UI/copy/navigation so saved searches are visible as brand-specific automation, not hidden under Advanced setup or implied to be manual-only.
 ## Autonomy Mode
 holistic_autopilot
 ## Target Users
@@ -25,7 +25,6 @@ In scope: redesign Social Discovery around an automation-first YouTube workflow.
 Out of scope for this redesign pass: changing core comment-generation logic, replacing account connection internals, or expanding beyond directly related YouTube/social discovery surfaces.
 ## Touched Surfaces
 - social-discovery
-- social-account-pool
 ## Success Moment
 Operator opens Social Discovery and can immediately tell: what jobs are ready now, what is blocked, which account should act, and how to keep automation moving. They can approve or override one job fast, or jump into channels/accounts without losing the queue model.
 ## Failure Policy
@@ -213,6 +212,10 @@ Gate result: Concept B strongest. Concept A too mixed. Concept C over-optimizes 
 - 2026-04-22 Implementation summary: Simplified the Accounts workspace from a stacked dashboard-plus-detail-card into a compact connected-accounts list. The parent Accounts view now removes the extra metric ledger and presents only the connected YouTube account list surface. Within the YouTube account pool panel, connected accounts are the default primary list with add and refresh actions in the header, sign-in-needed accounts move into a collapsed secondary section, and advanced controls are hidden until explicitly opened on one row. The always-visible selected-account box was removed from this YouTube view so the screen reads as one clean list instead of an account inside another account frame.
 - Files: src/app/brands/[id]/social-discovery/social-account-pool-panel.tsx, src/app/brands/[id]/social-discovery/social-discovery-client.tsx
 - Components: SocialAccountPoolPanel, SocialDiscoveryClient, SectionPanel, EmptyState
+- 2026-04-22 Implementation summary: Made saved searches a first-class brand-specific automation source in Social Discovery. Added a Searches workspace to the top navigation, moved the saved search editor out of Advanced setup, removed the confusing legacy Instagram scan panel from the default UI, and updated queue/channel/manual-search copy so automation is described as saved searches plus watched channels. Daily social discovery now uses each brand's saved socialDiscoveryQueries, runs saved YouTube searches through the YouTube Data API with the existing 1k-subscriber gate, and stores those candidates in the queue. Manual YouTube search now reuses the shared YouTube discovery helper. Suggested saved-search prompts now use YouTube-oriented suggestions instead of Instagram-oriented suggestions.
+- Files: src/app/brands/[id]/social-discovery/social-discovery-client.tsx, src/app/api/internal/social-discovery/daily/route.ts, src/app/api/brands/[brandId]/social-discovery/youtube-discovery/route.ts, src/app/api/brands/[brandId]/social-discovery/route.ts, src/lib/social-discovery-youtube-search.ts
+- Components: SocialDiscoveryClient, PageIntro, SectionPanel, StatLedger
+- Assumptions used: Saved searches are brand-specific socialDiscoveryQueries and should be visible as a normal automation input for the currently selected brand., Saved YouTube searches should obey the same >1,000 subscriber gate as manual YouTube discovery.
 ## Doc Sync
 - 2026-04-22 Synced after implementation.
 - Code touched: src/app/brands/[id]/social-discovery/social-discovery-client.tsx
@@ -220,3 +223,5 @@ Gate result: Concept B strongest. Concept A too mixed. Concept C over-optimizes 
 - Code touched: src/app/brands/[id]/social-discovery/social-discovery-client.tsx, src/app/brands/[id]/social-discovery/social-account-pool-panel.tsx
 - 2026-04-22 Synced after implementation.
 - Code touched: src/app/brands/[id]/social-discovery/social-account-pool-panel.tsx, src/app/brands/[id]/social-discovery/social-discovery-client.tsx
+- 2026-04-22 Synced after implementation.
+- Code touched: src/app/brands/[id]/social-discovery/social-discovery-client.tsx, src/app/api/internal/social-discovery/daily/route.ts, src/app/api/brands/[brandId]/social-discovery/youtube-discovery/route.ts, src/app/api/brands/[brandId]/social-discovery/route.ts, src/lib/social-discovery-youtube-search.ts

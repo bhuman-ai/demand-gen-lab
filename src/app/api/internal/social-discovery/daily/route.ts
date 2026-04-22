@@ -3,7 +3,12 @@ import { getBrandById, listBrands, type BrandRecord } from "@/lib/factory-data";
 import { discoverSocialPostsForBrand, parseSocialDiscoveryPlatforms } from "@/lib/social-discovery";
 import { resolveSupportedDiscoveryPlatformsForBrand } from "@/lib/social-platform-catalog";
 import { createSocialDiscoveryRun, saveSocialDiscoveryPosts } from "@/lib/social-discovery-data";
-import type { SocialDiscoveryProvider } from "@/lib/social-discovery-types";
+import { discoverYouTubeSearchPostsForBrand } from "@/lib/social-discovery-youtube-search";
+import type {
+  SocialDiscoveryPlatform,
+  SocialDiscoveryPost,
+  SocialDiscoveryProvider,
+} from "@/lib/social-discovery-types";
 
 function isAuthorized(request: Request) {
   const token =
@@ -26,6 +31,17 @@ function splitCsv(value: unknown) {
   return raw
     .map((entry) => String(entry ?? "").trim())
     .filter(Boolean);
+}
+
+function uniqueStrings(values: string[]) {
+  return Array.from(new Set(values.map((value) => value.trim()).filter(Boolean)));
+}
+
+function savedQueriesForBrand(brand: BrandRecord, maxQueries: number) {
+  return uniqueStrings(splitCsv(brand.socialDiscoveryQueries).map((query) => query.replace(/\s+/g, " "))).slice(
+    0,
+    maxQueries
+  );
 }
 
 function normalizeProvider(value: unknown): SocialDiscoveryProvider | "auto" {
@@ -77,6 +93,25 @@ async function resolveBrands(input: { body: Record<string, unknown>; url: URL })
   return (await listBrands()).slice(0, limit);
 }
 
+function topPostSummaries(posts: SocialDiscoveryPost[]) {
+  return posts
+    .slice()
+    .sort((left, right) => right.risingScore - left.risingScore)
+    .slice(0, 5)
+    .map((post) => ({
+      id: post.id,
+      platform: post.platform,
+      provider: post.provider,
+      risingScore: post.risingScore,
+      relevanceScore: post.relevanceScore,
+      intent: post.intent,
+      title: post.title,
+      url: post.url,
+      interactionPlan: post.interactionPlan.headline,
+      assetNeeded: post.interactionPlan.assetNeeded,
+    }));
+}
+
 async function handleDailySocialDiscovery(request: Request) {
   if (!isAuthorized(request)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
@@ -121,56 +156,103 @@ async function handleDailySocialDiscovery(request: Request) {
   const results = [];
   for (const brand of brands) {
     const parsedPlatforms = platformInput ? parseSocialDiscoveryPlatforms(platformInput) : [];
-    const platforms = parsedPlatforms.length ? parsedPlatforms : resolveSupportedDiscoveryPlatformsForBrand(brand);
-    const startedAt = new Date().toISOString();
-    const discovery = await discoverSocialPostsForBrand({
-      brand,
-      provider,
-      platforms,
-      extraTerms,
-      subreddits,
-      limitPerQuery,
-      maxQueries,
-    });
-    const savedPosts = await saveSocialDiscoveryPosts(discovery.posts);
-    const run = await createSocialDiscoveryRun({
-      brandId: brand.id,
-      provider: discovery.provider,
-      platforms: discovery.platforms,
-      queries: discovery.queries,
-      postIds: savedPosts.map((post) => post.id),
-      errorCount: discovery.errors.length,
-      errors: discovery.errors,
-      startedAt,
-      finishedAt: new Date().toISOString(),
-    });
-    const topPosts = savedPosts
-      .slice()
-      .sort((left, right) => right.risingScore - left.risingScore)
-      .slice(0, 5)
-      .map((post) => ({
-        id: post.id,
-        platform: post.platform,
-        provider: post.provider,
-        risingScore: post.risingScore,
-        relevanceScore: post.relevanceScore,
-        intent: post.intent,
-        title: post.title,
-        url: post.url,
-        interactionPlan: post.interactionPlan.headline,
-        assetNeeded: post.interactionPlan.assetNeeded,
-      }));
+    const configuredPlatforms = parsedPlatforms.length ? parsedPlatforms : resolveSupportedDiscoveryPlatformsForBrand(brand);
+    const savedQueries = savedQueriesForBrand(brand, maxQueries);
+    const platforms =
+      savedQueries.length && !platformInput && !configuredPlatforms.includes("youtube")
+        ? (["youtube", ...configuredPlatforms] as SocialDiscoveryPlatform[])
+        : configuredPlatforms;
+    const runSavedYouTubeSearches = savedQueries.length > 0 && platforms.includes("youtube");
+    const genericPlatforms = platforms.filter(
+      (platform) => !(runSavedYouTubeSearches && platform === "youtube")
+    );
+    const savedPosts: SocialDiscoveryPost[] = [];
+    const errors: Array<{ platform: SocialDiscoveryPlatform; query: string; message: string }> = [];
+    const runIds: string[] = [];
+    const runProviders: SocialDiscoveryProvider[] = [];
+    const runPlatforms = new Set<SocialDiscoveryPlatform>();
+    const runQueries: string[] = [];
+    let found = 0;
+    let eligible = 0;
+
+    if (runSavedYouTubeSearches) {
+      const startedAt = new Date().toISOString();
+      const youtubeDiscovery = await discoverYouTubeSearchPostsForBrand({
+        brand,
+        queries: savedQueries,
+        maxResults: limitPerQuery,
+      });
+      const nextSavedPosts = youtubeDiscovery.posts.length
+        ? await saveSocialDiscoveryPosts(youtubeDiscovery.posts)
+        : [];
+      const run = await createSocialDiscoveryRun({
+        brandId: brand.id,
+        provider: youtubeDiscovery.provider,
+        platforms: ["youtube"],
+        queries: youtubeDiscovery.queries,
+        postIds: nextSavedPosts.map((post) => post.id),
+        errorCount: youtubeDiscovery.errors.length,
+        errors: youtubeDiscovery.errors,
+        startedAt,
+        finishedAt: new Date().toISOString(),
+      });
+      savedPosts.push(...nextSavedPosts);
+      errors.push(...youtubeDiscovery.errors);
+      runIds.push(run.id);
+      runProviders.push(youtubeDiscovery.provider);
+      runPlatforms.add("youtube");
+      runQueries.push(...youtubeDiscovery.queries);
+      found += youtubeDiscovery.summary.found;
+      eligible += youtubeDiscovery.summary.eligible;
+    }
+
+    if (genericPlatforms.length) {
+      const startedAt = new Date().toISOString();
+      const discovery = await discoverSocialPostsForBrand({
+        brand,
+        provider,
+        platforms: genericPlatforms,
+        queries: savedQueries.length ? savedQueries : undefined,
+        extraTerms,
+        subreddits,
+        limitPerQuery,
+        maxQueries,
+      });
+      const nextSavedPosts = discovery.posts.length ? await saveSocialDiscoveryPosts(discovery.posts) : [];
+      const run = await createSocialDiscoveryRun({
+        brandId: brand.id,
+        provider: discovery.provider,
+        platforms: discovery.platforms,
+        queries: discovery.queries,
+        postIds: nextSavedPosts.map((post) => post.id),
+        errorCount: discovery.errors.length,
+        errors: discovery.errors,
+        startedAt,
+        finishedAt: new Date().toISOString(),
+      });
+      savedPosts.push(...nextSavedPosts);
+      errors.push(...discovery.errors);
+      runIds.push(run.id);
+      runProviders.push(discovery.provider);
+      discovery.platforms.forEach((platform) => runPlatforms.add(platform));
+      runQueries.push(...discovery.queries);
+      found += discovery.posts.length;
+    }
+    const topPosts = topPostSummaries(savedPosts);
 
     results.push({
       brandId: brand.id,
       brandName: brand.name,
-      runId: run.id,
-      provider: discovery.provider,
-      platforms: discovery.platforms,
-      queries: discovery.queries.length,
-      found: discovery.posts.length,
+      runId: runIds[0] ?? "",
+      runIds,
+      provider: runProviders.length === 1 ? runProviders[0] : runProviders.length ? "mixed" : provider,
+      platforms: Array.from(runPlatforms),
+      queries: uniqueStrings(runQueries).length,
+      savedSearches: savedQueries.length,
+      found,
+      eligible,
       saved: savedPosts.length,
-      errors: discovery.errors.length,
+      errors: errors.length,
       topPosts,
     });
   }

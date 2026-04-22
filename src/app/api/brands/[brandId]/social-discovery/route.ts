@@ -38,11 +38,11 @@ function brandSummary(brand: Awaited<ReturnType<typeof getBrandById>>) {
     : null;
 }
 
-function suggestedInstagramQueries(brand: Awaited<ReturnType<typeof getBrandById>>) {
+function suggestedYouTubeQueries(brand: Awaited<ReturnType<typeof getBrandById>>) {
   if (!brand) return [];
   return buildSocialDiscoveryQueries({
     brand,
-    platform: "instagram",
+    platform: "youtube",
     maxQueries: 12,
   });
 }
@@ -110,7 +110,7 @@ export async function GET(request: Request, context: { params: Promise<{ brandId
     posts: routedPosts,
     runs,
     savedQueries: brand.socialDiscoveryQueries,
-    suggestedQueries: suggestedInstagramQueries(brand),
+    suggestedQueries: suggestedYouTubeQueries(brand),
   });
 }
 
@@ -175,7 +175,7 @@ export async function POST(request: Request, context: { params: Promise<{ brandI
     posts: routedPosts,
     errors: discovery.errors,
     savedQueries: brand.socialDiscoveryQueries,
-    suggestedQueries: suggestedInstagramQueries(brand),
+    suggestedQueries: suggestedYouTubeQueries(brand),
     summary: {
       provider: discovery.provider,
       platforms: discovery.platforms,

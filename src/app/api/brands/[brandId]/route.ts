@@ -18,7 +18,7 @@ import {
 import { syncBrandGmailUiAssignments } from "@/lib/gmail-ui-brand-sync";
 import { enrichBrandWithSenderHealth } from "@/lib/sender-health";
 import { loadBrandSenderLaunchView } from "@/lib/sender-launch";
-import { buildSocialDiscoveryQueries } from "@/lib/social-discovery";
+import { brainstormSocialDiscoveryYouTubeQueries } from "@/lib/social-discovery";
 
 function asRecord(value: unknown): Record<string, unknown> {
   if (value && typeof value === "object" && !Array.isArray(value)) {
@@ -154,11 +154,10 @@ function normalizeStringArray(value: unknown): string[] {
     .filter((entry) => entry.length > 0);
 }
 
-function suggestedInstagramQueries(brand: Awaited<ReturnType<typeof getBrandById>>) {
+async function suggestedYouTubeQueries(brand: Awaited<ReturnType<typeof getBrandById>>) {
   if (!brand) return [];
-  return buildSocialDiscoveryQueries({
+  return brainstormSocialDiscoveryYouTubeQueries({
     brand,
-    platform: "instagram",
     maxQueries: 12,
   });
 }
@@ -257,7 +256,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ brand
   const responseBrand = launchView?.brand ?? (await enrichBrandWithSenderHealth(brand));
   return NextResponse.json({
     brand: responseBrand,
-    socialDiscoverySuggestedQueries: suggestedInstagramQueries(responseBrand),
+    socialDiscoverySuggestedQueries: responseBrand.socialDiscoveryQueries.length ? [] : await suggestedYouTubeQueries(responseBrand),
   });
 }
 

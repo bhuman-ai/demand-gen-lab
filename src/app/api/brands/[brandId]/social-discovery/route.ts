@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { getBrandById } from "@/lib/factory-data";
 import {
-  buildSocialDiscoveryQueries,
+  brainstormSocialDiscoveryYouTubeQueries,
   discoverSocialPostsForBrand,
   parseSocialDiscoveryPlatforms,
 } from "@/lib/social-discovery";
@@ -38,11 +38,10 @@ function brandSummary(brand: Awaited<ReturnType<typeof getBrandById>>) {
     : null;
 }
 
-function suggestedYouTubeQueries(brand: Awaited<ReturnType<typeof getBrandById>>) {
+async function suggestedYouTubeQueries(brand: Awaited<ReturnType<typeof getBrandById>>) {
   if (!brand) return [];
-  return buildSocialDiscoveryQueries({
+  return brainstormSocialDiscoveryYouTubeQueries({
     brand,
-    platform: "youtube",
     maxQueries: 12,
   });
 }
@@ -104,13 +103,14 @@ export async function GET(request: Request, context: { params: Promise<{ brandId
       : []
     : posts;
   const routedPosts = await enrichSocialPostsWithAccountRouting({ brand, posts: latestPosts });
+  const suggestedQueries = brand.socialDiscoveryQueries.length ? [] : await suggestedYouTubeQueries(brand);
 
   return NextResponse.json({
     brand: brandSummary(brand),
     posts: routedPosts,
     runs,
     savedQueries: brand.socialDiscoveryQueries,
-    suggestedQueries: suggestedYouTubeQueries(brand),
+    suggestedQueries,
   });
 }
 
@@ -157,6 +157,7 @@ export async function POST(request: Request, context: { params: Promise<{ brandI
   });
   const savedPosts = await saveSocialDiscoveryPosts(discovery.posts);
   const routedPosts = await enrichSocialPostsWithAccountRouting({ brand, posts: savedPosts });
+  const suggestedQueries = brand.socialDiscoveryQueries.length ? [] : await suggestedYouTubeQueries(brand);
   const run = await createSocialDiscoveryRun({
     brandId,
     provider: discovery.provider,
@@ -175,7 +176,7 @@ export async function POST(request: Request, context: { params: Promise<{ brandI
     posts: routedPosts,
     errors: discovery.errors,
     savedQueries: brand.socialDiscoveryQueries,
-    suggestedQueries: suggestedYouTubeQueries(brand),
+    suggestedQueries,
     summary: {
       provider: discovery.provider,
       platforms: discovery.platforms,

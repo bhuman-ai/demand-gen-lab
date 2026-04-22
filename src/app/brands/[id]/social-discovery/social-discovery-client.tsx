@@ -478,7 +478,7 @@ export default function SocialDiscoveryClient({
       ? "Unsaved changes."
       : savedQueries.length
         ? "Saved for this brand."
-        : "Using suggested searches for this brand.";
+        : "Using suggested searches from brand context.";
   const effectiveSavedBrandCommentPrompt = useMemo(
     () => resolveSocialDiscoveryCommentPrompt(savedBrandCommentPrompt),
     [savedBrandCommentPrompt]

@@ -2461,6 +2461,113 @@ export function buildSocialDiscoveryQueries(input: {
   return uniqueStrings(queries).slice(0, maxQueries);
 }
 
+function normalizeYouTubeSearchQuery(value: unknown) {
+  return String(value ?? "")
+    .replace(/["]/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 80);
+}
+
+function normalizeYouTubeSearchQueryList(value: unknown, maxQueries: number) {
+  return uniqueStrings(asArray(value).map(normalizeYouTubeSearchQuery).filter(Boolean)).slice(0, maxQueries);
+}
+
+function buildSocialDiscoverySearchPlanningPrompt(input: {
+  brand: BrandRecord;
+  maxQueries: number;
+  fallbackQueries: string[];
+}) {
+  return [
+    "You are planning saved YouTube searches for an automated comment discovery system.",
+    "The system runs these searches daily, finds recent YouTube videos from channels with over 1,000 subscribers, then drafts a short natural comment that can casually mention the brand.",
+    "The goal is to find videos where a real operator could leave an off-the-cuff useful comment, not an ad.",
+    "",
+    "Brainstorm search terms that are likely to surface relevant YouTube videos, creator discussions, demos, tutorials, agency advice, pain-point videos, comparisons, and workflow breakdowns.",
+    "Use the full brand context, but do not copy marketing claims or produce brand-positioning phrases.",
+    "Prefer short YouTube search phrases a human would actually type.",
+    "Include adjacent pains and buyer workflows, not only the brand name.",
+    "Avoid exact testimonials, proof claims, slogans, URLs, and long sentences.",
+    "Avoid generic terms like software, automation, ai, b2b, or tool unless paired with a concrete workflow.",
+    "",
+    "Return strict JSON only:",
+    `{ "searchQueries": string[] }`,
+    "",
+    `Return exactly ${input.maxQueries} search queries.`,
+    "Each query should be 2 to 7 words and under 80 characters.",
+    "",
+    "Brand context:",
+    `name: ${compactText(input.brand.name, 160)}`,
+    `website: ${compactText(input.brand.website, 220)}`,
+    `tone: ${compactText(input.brand.tone, 160)}`,
+    `product: ${compactText(input.brand.product, 600)}`,
+    `notes: ${compactText(input.brand.notes, 1400)}`,
+    `target_markets: ${input.brand.targetMarkets.map((entry) => compactText(entry, 160)).join(" | ")}`,
+    `ideal_customer_profiles: ${input.brand.idealCustomerProfiles.map((entry) => compactText(entry, 160)).join(" | ")}`,
+    `key_features: ${input.brand.keyFeatures.map((entry) => compactText(entry, 180)).join(" | ")}`,
+    `key_benefits: ${input.brand.keyBenefits.map((entry) => compactText(entry, 180)).join(" | ")}`,
+    "",
+    "Weak deterministic fallback examples to improve on:",
+    input.fallbackQueries.map((query) => `- ${query}`).join("\n"),
+  ].join("\n");
+}
+
+async function requestSocialSearchQueriesWithLlm(input: {
+  apiKey: string;
+  model: string;
+  prompt: string;
+}) {
+  const response = await fetch("https://api.openai.com/v1/responses", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${input.apiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model: input.model,
+      input: input.prompt,
+      text: { format: { type: "json_object" } },
+      max_output_tokens: 900,
+    }),
+  });
+  const raw = await response.text();
+  if (!response.ok) return null;
+  const payload = raw ? JSON.parse(raw) : {};
+  return asRecord(parseLooseJsonObject(extractOpenAiOutputText(payload)));
+}
+
+export async function brainstormSocialDiscoveryYouTubeQueries(input: {
+  brand: BrandRecord;
+  maxQueries?: number;
+}) {
+  const maxQueries = Math.max(1, Math.min(40, Number(input.maxQueries ?? 12) || 12));
+  const fallbackQueries = buildSocialDiscoveryQueries({
+    brand: input.brand,
+    platform: "youtube",
+    maxQueries,
+  });
+  const apiKey = String(process.env.OPENAI_API_KEY ?? "").trim();
+  if (!apiKey) return fallbackQueries;
+
+  const prompt = buildSocialDiscoverySearchPlanningPrompt({
+    brand: input.brand,
+    maxQueries,
+    fallbackQueries,
+  });
+
+  try {
+    const model = resolveLlmModel("social_search_planning", {
+      prompt,
+      legacyModelEnv: String(process.env.OPENAI_MODEL_SOCIAL_SEARCH_PLANNING ?? "").trim() || "gpt-5.4",
+    });
+    const row = await requestSocialSearchQueriesWithLlm({ apiKey, model, prompt });
+    const llmQueries = normalizeYouTubeSearchQueryList(row?.searchQueries ?? row?.queries, maxQueries);
+    return uniqueStrings([...llmQueries, ...fallbackQueries]).slice(0, maxQueries);
+  } catch {
+    return fallbackQueries;
+  }
+}
+
 function normalizeManualQueries(queries: string[] | undefined, maxQueries: number) {
   return uniqueStrings(
     (queries ?? [])

@@ -1,11 +1,11 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
-import { ExternalLink, RefreshCw } from "lucide-react";
+import { useCallback, useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
+import { CheckCircle2, ExternalLink, Search, Settings2, Users, Youtube, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { PageIntro, SectionPanel } from "@/components/ui/page-layout";
+import { EmptyState, PageIntro, SectionPanel, StatLedger } from "@/components/ui/page-layout";
 import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { SocialAccountPoolPanel } from "./social-account-pool-panel";
@@ -93,6 +93,10 @@ type DiscoveryResponse = {
 const SCAN_PLATFORM = "instagram";
 const MIN_YOUTUBE_DRAFT_SUBSCRIBERS = 1000;
 
+type SocialDiscoveryWorkspace = "queue" | "channels" | "accounts" | "manual";
+type QueueViewFilter = "all" | "ready" | "drafting" | "attention" | "posted";
+type QueuePostState = "ready" | "drafting" | "attention" | "posted";
+
 function postRawRecord(post: DiscoveryPost | null) {
   if (!post?.raw || typeof post.raw !== "object" || Array.isArray(post.raw)) return {};
   return post.raw as Record<string, unknown>;
@@ -124,6 +128,10 @@ function filterDraftEligiblePosts(posts: DiscoveryPost[]) {
   return posts.filter(isEligibleYouTubeDraftPost);
 }
 
+function hasGeneratedDraft(post: DiscoveryPost | null) {
+  return Boolean(planFor(post)?.sequence?.[0]?.draft?.trim());
+}
+
 function formatCompactNumber(value: number) {
   if (!Number.isFinite(value) || value <= 0) return "0";
   return new Intl.NumberFormat(undefined, {
@@ -151,6 +159,19 @@ function formatDate(value: string) {
     hour: "numeric",
     minute: "2-digit",
   }).format(new Date(parsed));
+}
+
+function queuePostStatePriority(state: QueuePostState) {
+  switch (state) {
+    case "ready":
+      return 0;
+    case "attention":
+      return 1;
+    case "drafting":
+      return 2;
+    case "posted":
+      return 3;
+  }
 }
 
 function formatPromotionPurchaseStatus(status: SocialDiscoveryPromotionPurchase["status"]) {
@@ -390,6 +411,8 @@ export default function SocialDiscoveryClient({
   const [posts, setPosts] = useState<DiscoveryPost[]>([]);
   const [selectedId, setSelectedId] = useState("");
   const [status] = useState<SocialDiscoveryStatus | "all">("all");
+  const [activeWorkspace, setActiveWorkspace] = useState<SocialDiscoveryWorkspace>("queue");
+  const [queueFilter, setQueueFilter] = useState<QueueViewFilter>("all");
   const [loading, setLoading] = useState(true);
   const [scanning, setScanning] = useState(false);
   const [error, setError] = useState("");
@@ -609,6 +632,74 @@ export default function SocialDiscoveryClient({
     () => Boolean(selectedYouTubeChannelId && youtubeSubscriptions.some((entry) => entry.channelId === selectedYouTubeChannelId)),
     [selectedYouTubeChannelId, youtubeSubscriptions]
   );
+  const queueStateForPost = useCallback(
+    (post: DiscoveryPost): QueuePostState => {
+      if (post.commentDelivery?.postedAt) return "posted";
+      if (draftGenerationErrors[post.id] || post.pendingReply?.status === "failed") return "attention";
+      if (hasGeneratedDraft(post)) return "ready";
+      return "drafting";
+    },
+    [draftGenerationErrors]
+  );
+  const readyQueueCount = useMemo(
+    () => posts.filter((post) => queueStateForPost(post) === "ready").length,
+    [posts, queueStateForPost]
+  );
+  const attentionQueueJobCount = useMemo(
+    () => posts.filter((post) => queueStateForPost(post) === "attention").length,
+    [posts, queueStateForPost]
+  );
+  const attentionChannelCount = useMemo(
+    () => youtubeSubscriptions.filter((subscription) => Boolean(subscription.lastError)).length,
+    [youtubeSubscriptions]
+  );
+  const attentionQueueCount = useMemo(
+    () => attentionQueueJobCount + attentionChannelCount,
+    [attentionChannelCount, attentionQueueJobCount]
+  );
+  const attentionQueueDetail = useMemo(
+    () =>
+      [attentionQueueJobCount ? `${attentionQueueJobCount} jobs` : "", attentionChannelCount ? `${attentionChannelCount} channels` : ""]
+        .filter(Boolean)
+        .join(" · ") || "Job or channel failures",
+    [attentionChannelCount, attentionQueueJobCount]
+  );
+  const postedQueueCount = useMemo(
+    () => posts.filter((post) => queueStateForPost(post) === "posted").length,
+    [posts, queueStateForPost]
+  );
+  const draftingQueueCount = useMemo(
+    () => posts.filter((post) => queueStateForPost(post) === "drafting").length,
+    [posts, queueStateForPost]
+  );
+  const autoCommentChannelCount = useMemo(
+    () => youtubeSubscriptions.filter((subscription) => subscription.autoComment).length,
+    [youtubeSubscriptions]
+  );
+  const filteredQueuePosts = useMemo(() => {
+    return [...posts]
+      .filter((post) => {
+        const queueState = queueStateForPost(post);
+        if (queueFilter === "all") return true;
+        return queueState === queueFilter;
+      })
+      .sort((left, right) => {
+        const statePriority = queuePostStatePriority(queueStateForPost(left)) - queuePostStatePriority(queueStateForPost(right));
+        if (statePriority !== 0) return statePriority;
+        const leftPostedAt = Date.parse(left.postedAt);
+        const rightPostedAt = Date.parse(right.postedAt);
+        return (Number.isFinite(rightPostedAt) ? rightPostedAt : 0) - (Number.isFinite(leftPostedAt) ? leftPostedAt : 0);
+      });
+  }, [posts, queueFilter, queueStateForPost]);
+
+  useEffect(() => {
+    if (!["queue", "manual"].includes(activeWorkspace)) return;
+    const visiblePosts = activeWorkspace === "queue" ? filteredQueuePosts : posts;
+    if (!visiblePosts.length) return;
+    if (!selectedId || !visiblePosts.some((post) => post.id === selectedId)) {
+      setSelectedId(visiblePosts[0].id);
+    }
+  }, [activeWorkspace, filteredQueuePosts, posts, selectedId]);
 
   function replacePost(nextPost: DiscoveryPost) {
     setPosts((current) => current.map((post) => (post.id === nextPost.id ? nextPost : post)));
@@ -1012,6 +1103,7 @@ export default function SocialDiscoveryClient({
       return;
     }
 
+    setActiveWorkspace("manual");
     setSearchingYouTube(true);
     setYouTubeSearchError("");
     setYouTubeSearchSummary("");
@@ -1369,758 +1461,651 @@ export default function SocialDiscoveryClient({
     }
   }
 
-  return (
-    <div className="space-y-6">
-      <PageIntro
-        title="YouTube comments"
-        description="Mode 1: search today's videos and comment manually. Mode 2: watch channels and auto-comment new uploads."
-      />
-
-      {error ? <div className="text-sm text-[color:var(--danger)]">{error}</div> : null}
-
-      <SectionPanel title="Choose mode" description="Two ways to use YouTube here.">
-        <div className="grid gap-3 lg:grid-cols-2">
-          <div className="rounded-[10px] border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-4 py-4">
-            <div className="text-sm font-medium text-[color:var(--foreground)]">Mode 1. Search today&apos;s videos</div>
-            <div className="mt-1 text-sm leading-6 text-[color:var(--muted-foreground)]">
-              Find fresh videos in your niche, pick one result, review it, then post one comment.
-            </div>
+  function renderOpportunityList(input: {
+    title: string;
+    description: string;
+    posts: DiscoveryPost[];
+    emptyTitle: string;
+    emptyDescription: string;
+  }) {
+    return (
+      <SectionPanel title={input.title} description={input.description} contentClassName="p-0">
+        {loading && !input.posts.length ? (
+          <div className="px-4 py-5 text-sm text-[color:var(--muted-foreground)]">Loading…</div>
+        ) : !input.posts.length ? (
+          <EmptyState title={input.emptyTitle} description={input.emptyDescription} className="m-4 border-dashed" />
+        ) : (
+          <div className="divide-y divide-[color:var(--border)]">
+            {input.posts.map((post) => {
+              const active = post.id === selectedPost?.id;
+              const subscriberCount = youtubeRawNumber(post, "subscriberCount");
+              const channelTitle = youtubeRawText(post, "channelTitle");
+              const queueState = queueStateForPost(post);
+              const queueLabel =
+                queueState === "posted"
+                  ? "Posted"
+                  : queueState === "attention"
+                    ? "Needs attention"
+                    : queueState === "ready"
+                      ? "Ready"
+                      : "Drafting";
+              return (
+                <button
+                  key={post.id}
+                  type="button"
+                  onClick={() => setSelectedId(post.id)}
+                  aria-pressed={active}
+                  className={cn(
+                    "grid w-full gap-2 px-4 py-4 text-left transition-colors hover:bg-[color:var(--surface-muted)]",
+                    active ? "bg-[color:var(--surface-muted)] shadow-[inset_2px_0_0_var(--foreground)]" : ""
+                  )}
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0 flex-1">
+                      <div className="line-clamp-2 text-sm font-medium leading-5 text-[color:var(--foreground)]">{post.title}</div>
+                    </div>
+                    <div className="shrink-0 rounded-full border border-[color:var(--border)] px-2 py-0.5 text-[11px] font-medium text-[color:var(--muted-foreground)]">
+                      {queueLabel}
+                    </div>
+                  </div>
+                  <div className="text-xs text-[color:var(--muted-foreground)]">
+                    {channelTitle || post.author || "Unknown channel"}
+                    {subscriberCount ? ` · ${formatCompactNumber(subscriberCount)} subs` : ""}
+                  </div>
+                  <div className="text-xs text-[color:var(--muted-foreground)]">
+                    {formatDate(post.postedAt)}
+                    {post.commentDelivery?.accountName ? ` · ${post.commentDelivery.accountName}` : ""}
+                  </div>
+                </button>
+              );
+            })}
           </div>
-          <div className="rounded-[10px] border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-4 py-4">
-            <div className="text-sm font-medium text-[color:var(--foreground)]">Mode 2. Watch channels</div>
-            <div className="mt-1 text-sm leading-6 text-[color:var(--muted-foreground)]">
-              Subscribe to channel uploads and optionally auto-comment when a new video lands.
-            </div>
-          </div>
-        </div>
+        )}
       </SectionPanel>
+    );
+  }
 
+  function renderInspectorPanel(title: string, description: string) {
+    return (
       <SectionPanel
-        title="Mode 1. Search today&apos;s videos"
-        description="Type a niche and search the last 24 hours."
-      >
-        <div className="space-y-4">
-          {youtubeSearchError ? (
-            <div className="rounded-[10px] border border-[color:var(--danger-border)] bg-[color:var(--danger-soft)] px-3 py-2 text-sm text-[color:var(--danger)]">
-              {youtubeSearchError}
-            </div>
-          ) : null}
-          <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto]">
-            <Input
-              value={youtubeSearchDraft}
-              onChange={(event) => setYouTubeSearchDraft(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter") {
-                  event.preventDefault();
-                  void runYouTubeSearch();
-                }
-              }}
-              placeholder="b2b sales"
-              disabled={searchingYouTube}
-            />
-            <Button type="button" onClick={() => void runYouTubeSearch()} disabled={searchingYouTube}>
-              <RefreshCw className={cn("h-4 w-4", searchingYouTube ? "animate-spin" : "")} />
-              {searchingYouTube ? "Searching..." : "Search YouTube"}
+        title={title}
+        description={description}
+        actions={
+          selectedPost ? (
+            <Button asChild variant="outline" size="sm">
+              <Link href={selectedPost.url} target="_blank" rel="noreferrer">
+                Open video
+                <ExternalLink className="h-3.5 w-3.5" />
+              </Link>
             </Button>
-          </div>
-          <div className="text-sm text-[color:var(--muted-foreground)]">
-            {youtubeSearchSummary || "Example: b2b sales demos"}
-          </div>
-          <div className="text-xs text-[color:var(--muted-foreground)]">
-            {youtubeAccountOptions[0]
-              ? `Ready to post with ${youtubeAccountOptions[0].accountName}.`
-              : "Need to post comments? Open Setup below and add a YouTube account."}
-          </div>
-        </div>
-      </SectionPanel>
-
-      <div className="space-y-4">
-        <SectionPanel
-          title="Pick one video"
-          description={loading ? "Loading..." : posts.length ? "Pick one result. We draft the comment when you select it." : "Search first."}
-          contentClassName="p-0"
-        >
-          {!loading && !posts.length ? (
-            <div className="px-4 py-5 text-sm text-[color:var(--muted-foreground)]">
-              Search YouTube to load video leads here.
-            </div>
-          ) : (
-            <div className="divide-y divide-[color:var(--border)]">
-              {posts.map((post) => {
-                const active = post.id === selectedPost?.id;
-                const subscriberCount = youtubeRawNumber(post, "subscriberCount");
-                const channelTitle = youtubeRawText(post, "channelTitle");
-                return (
-                  <button
-                    key={post.id}
-                    type="button"
-                    onClick={() => setSelectedId(post.id)}
-                    aria-pressed={active}
-                    className={cn(
-                      "grid w-full gap-2 px-4 py-4 text-left transition-colors hover:bg-[color:var(--surface-muted)]",
-                      active ? "bg-[color:var(--surface-muted)]" : ""
-                    )}
-                  >
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0 flex-1">
-                        <div className="line-clamp-2 text-sm font-medium leading-5 text-[color:var(--foreground)]">
-                          {post.title}
-                        </div>
-                      </div>
-                      {active ? (
-                        <div className="shrink-0 text-xs font-medium text-[color:var(--foreground)]">Selected</div>
-                      ) : null}
-                    </div>
-                    <div className="text-xs text-[color:var(--muted-foreground)]">
-                      {channelTitle || post.author || "Unknown channel"}
-                      {subscriberCount ? ` · ${formatCompactNumber(subscriberCount)} subs` : ""}
-                    </div>
-                    <div className="text-xs text-[color:var(--muted-foreground)]">
-                      {formatDate(post.postedAt)}
-                      {planFor(post)?.sequence?.[0]?.draft?.trim()
-                        ? " · draft ready"
-                        : " · drafting..."}
-                    </div>
-                  </button>
-                );
-              })}
-            </div>
-          )}
-        </SectionPanel>
-
-        <SectionPanel
-          title="Review and post comment"
-          description={selectedPost ? "Draft appears here as soon as you pick a video." : "Pick a video first."}
-          actions={
-            selectedPost ? (
-              <Button asChild variant="outline" size="sm">
-                <Link href={selectedPost.url} target="_blank" rel="noreferrer">
-                  Open video
-                  <ExternalLink className="h-3.5 w-3.5" />
-                </Link>
-              </Button>
-            ) : null
-          }
-        >
-          {selectedPost && selectedPlan ? (
-            <div className="space-y-4">
-              <div className="rounded-[10px] border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-4">
-                <div className="text-xs font-medium uppercase tracking-[0.16em] text-[color:var(--muted-foreground)]">
-                  Selected video
-                </div>
-                <div className="mt-2 text-sm font-medium text-[color:var(--foreground)]">{selectedPost.title}</div>
-                <div className="mt-1 text-sm text-[color:var(--muted-foreground)]">
-                  {selectedYouTubeChannelTitle || selectedPost.author || "Unknown channel"}
-                  {selectedYouTubeSubscriberCount ? ` · ${formatCompactNumber(selectedYouTubeSubscriberCount)} subscribers` : ""}
-                </div>
-                <div className="mt-1 text-xs text-[color:var(--muted-foreground)]">{formatDate(selectedPost.postedAt)}</div>
-                {selectedPost.body ? (
-                  <div className="mt-3 line-clamp-3 text-sm leading-6 text-[color:var(--muted-foreground)]">
-                    {selectedPost.body}
-                  </div>
-                ) : null}
-                {selectedPost.platform === "youtube" ? (
-                  <div className="mt-3 flex flex-wrap gap-2">
-                    {selectedYouTubeChannelId ? (
-                      <Button
-                        type="button"
-                        variant={selectedYouTubeChannelIsWatched ? "outline" : "default"}
-                        size="sm"
-                        onClick={() => {
-                          void saveYouTubeSubscription({
-                            channelId: selectedYouTubeChannelId,
-                            autoComment: false,
-                          });
-                        }}
-                        disabled={savingYouTubeSubscription || selectedYouTubeChannelIsWatched}
-                      >
-                        {selectedYouTubeChannelIsWatched ? "Watching channel" : savingYouTubeSubscription ? "Saving..." : "Watch channel"}
-                      </Button>
-                    ) : null}
-                    {youtubeChannelUrl(selectedPost) ? (
-                      <Button asChild type="button" variant="outline" size="sm">
-                        <Link href={youtubeChannelUrl(selectedPost)} target="_blank" rel="noreferrer">
-                          Open channel
-                          <ExternalLink className="h-3.5 w-3.5" />
-                        </Link>
-                      </Button>
-                    ) : null}
-                  </div>
-                ) : null}
-                {selectedPost.platform === "youtube" &&
-                (selectedPlan.fitSummary || selectedYouTubeViewCount || selectedYouTubeCommentCount) ? (
-                  <details className="mt-3">
-                    <summary className="cursor-pointer text-sm font-medium text-[color:var(--foreground)]">
-                      More details
-                    </summary>
-                    <div className="mt-3 space-y-2 text-sm text-[color:var(--muted-foreground)]">
-                      <div>
-                        {selectedYouTubeViewCount ? `${formatCompactNumber(selectedYouTubeViewCount)} views` : "Views unavailable"}
-                        {selectedYouTubeCommentCount ? ` · ${formatCompactNumber(selectedYouTubeCommentCount)} comments` : ""}
-                      </div>
-                      {selectedPlan.fitSummary ? <div>{selectedPlan.fitSummary}</div> : null}
-                    </div>
-                  </details>
-                ) : null}
+          ) : null
+        }
+      >
+        {selectedPost && selectedPlan ? (
+          <div className="space-y-4">
+            <div className="rounded-[10px] border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-4">
+              <div className="text-xs font-medium uppercase tracking-[0.16em] text-[color:var(--muted-foreground)]">Selected video</div>
+              <div className="mt-2 text-sm font-medium text-[color:var(--foreground)]">{selectedPost.title}</div>
+              <div className="mt-1 text-sm text-[color:var(--muted-foreground)]">
+                {selectedYouTubeChannelTitle || selectedPost.author || "Unknown channel"}
+                {selectedYouTubeSubscriberCount ? ` · ${formatCompactNumber(selectedYouTubeSubscriberCount)} subscribers` : ""}
               </div>
-
-              {selectedPost.platform !== "youtube" ? (
-                <details className="rounded-[10px] border border-[color:var(--border)] p-3">
-                  <summary className="cursor-pointer text-sm font-medium text-[color:var(--foreground)]">
-                    Instagram extras
-                  </summary>
-                  <div className="mt-3">
-                    <div className="rounded-[10px] border border-[color:var(--border)] p-3">
-                      <div className="flex flex-wrap items-center justify-between gap-3">
-                        <div>
-                          <div className="text-sm font-medium text-[color:var(--foreground)]">Official promo</div>
-                          <div className="text-sm text-[color:var(--muted-foreground)]">
-                            {visiblePromotionDraft && visibleCommentDelivery
-                              ? "Prepared automatically after comment send. Refresh if you want a new brief."
-                              : "Turn this topic into a brand-owned ad brief."}
-                          </div>
-                        </div>
-                        <Button type="button" variant="outline" onClick={createPromotionDraft} disabled={creatingPromo}>
-                          {creatingPromo ? "Creating..." : visiblePromotionDraft ? "Refresh brief" : "Create promo brief"}
-                        </Button>
-                      </div>
-                      {promoError ? (
-                        <div className="mt-3 rounded-[10px] border border-[color:var(--danger-border)] bg-[color:var(--danger-soft)] px-3 py-2 text-sm text-[color:var(--danger)]">
-                          {promoError}
-                        </div>
-                      ) : null}
-                      {visiblePromotionDraft ? (
-                        <div className="mt-3 grid gap-3">
-                          <div className="rounded-[10px] bg-[color:var(--surface-muted)] px-3 py-3">
-                            <div className="text-xs font-medium uppercase tracking-[0.16em] text-[color:var(--muted-foreground)]">
-                              Campaign
-                            </div>
-                            <div className="mt-1 text-sm font-medium text-[color:var(--foreground)]">
-                              {visiblePromotionDraft.campaignName}
-                            </div>
-                            <div className="mt-1 text-xs text-[color:var(--muted-foreground)]">
-                              {visiblePromotionDraft.objective} · {visiblePromotionDraft.channel}
-                            </div>
-                          </div>
-                          <div className="grid gap-2">
-                            <div className="text-sm font-medium text-[color:var(--foreground)]">Primary text</div>
-                            <div className="rounded-[10px] bg-[color:var(--surface-muted)] px-3 py-3 text-sm leading-6 text-[color:var(--foreground)]">
-                              {visiblePromotionDraft.primaryText}
-                            </div>
-                          </div>
-                          <div className="grid gap-2">
-                            <div className="text-sm font-medium text-[color:var(--foreground)]">Destination</div>
-                            <div className="break-all rounded-[10px] bg-[color:var(--surface-muted)] px-3 py-3 text-sm text-[color:var(--foreground)]">
-                              {visiblePromotionDraft.destinationUrl}
-                            </div>
-                          </div>
-                          <div className="grid gap-2">
-                            <div className="text-sm font-medium text-[color:var(--foreground)]">Audience</div>
-                            <div className="rounded-[10px] bg-[color:var(--surface-muted)] px-3 py-3 text-sm text-[color:var(--foreground)]">
-                              {visiblePromotionDraft.audience}
-                            </div>
-                          </div>
-                          <div className="flex flex-wrap gap-2">
-                            <Button
-                              type="button"
-                              variant="outline"
-                              size="sm"
-                              onClick={() => copyText(visiblePromotionDraft.primaryText)}
-                            >
-                              Copy text
-                            </Button>
-                            <Button
-                              type="button"
-                              variant="outline"
-                              size="sm"
-                              onClick={() => copyText(promotionExportJson)}
-                              disabled={!promotionExportJson}
-                            >
-                              Copy brief
-                            </Button>
-                            <Button asChild type="button" variant="ghost" size="sm">
-                              <Link href={visiblePromotionDraft.destinationUrl} target="_blank" rel="noreferrer">
-                                Open destination
-                                <ExternalLink className="h-3.5 w-3.5" />
-                              </Link>
-                            </Button>
-                          </div>
-                          <div className="text-xs text-[color:var(--muted-foreground)]">
-                            Uses the source post as research only. Promote your own brand asset, not the third-party post.
-                          </div>
-                          {visiblePromotionPurchase ? (
-                            <div className="rounded-[10px] border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-3">
-                              <div className="flex flex-wrap items-center justify-between gap-3">
-                                <div>
-                                  <div className="text-sm font-medium text-[color:var(--foreground)]">BuyShazam order</div>
-                                  <div className="text-xs text-[color:var(--muted-foreground)]">
-                                    {formatPromotionPurchaseStatus(visiblePromotionPurchase.status)}
-                                  </div>
-                                </div>
-                                {visiblePromotionPurchase.orderUrl ? (
-                                  <Button asChild type="button" variant="ghost" size="sm">
-                                    <Link href={visiblePromotionPurchase.orderUrl} target="_blank" rel="noreferrer">
-                                      Open order
-                                      <ExternalLink className="h-3.5 w-3.5" />
-                                    </Link>
-                                  </Button>
-                                ) : visiblePromotionPurchase.checkoutUrl ? (
-                                  <Button asChild type="button" variant="ghost" size="sm">
-                                    <Link href={visiblePromotionPurchase.checkoutUrl} target="_blank" rel="noreferrer">
-                                      Open checkout
-                                      <ExternalLink className="h-3.5 w-3.5" />
-                                    </Link>
-                                  </Button>
-                                ) : null}
-                              </div>
-                              <div className="mt-2 text-sm text-[color:var(--foreground)]">
-                                {visiblePromotionPurchase.message}
-                              </div>
-                              <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-[color:var(--muted-foreground)]">
-                                <div>Cart: {visiblePromotionPurchase.addedToCart ? "added" : "not confirmed"}</div>
-                                {visiblePromotionPurchase.walletOptionLabel ? (
-                                  <div>Wallet: {visiblePromotionPurchase.walletOptionLabel}</div>
-                                ) : null}
-                                {visiblePromotionPurchase.walletBalance ? (
-                                  <div>Balance: {visiblePromotionPurchase.walletBalance}</div>
-                                ) : null}
-                                {visiblePromotionPurchase.orderId ? <div>Order #{visiblePromotionPurchase.orderId}</div> : null}
-                              </div>
-                              {visiblePromotionPurchase.missingFields.length ? (
-                                <div className="mt-2 text-xs text-[color:var(--warning)]">
-                                  Missing checkout fields: {visiblePromotionPurchase.missingFields.join(", ")}
-                                </div>
-                              ) : null}
-                            </div>
-                          ) : null}
-                        </div>
-                      ) : null}
+              <div className="mt-1 text-xs text-[color:var(--muted-foreground)]">{formatDate(selectedPost.postedAt)}</div>
+              {selectedPost.body ? (
+                <div className="mt-3 line-clamp-3 text-sm leading-6 text-[color:var(--muted-foreground)]">{selectedPost.body}</div>
+              ) : null}
+              {selectedPost.platform === "youtube" ? (
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {selectedYouTubeChannelId ? (
+                    <Button
+                      type="button"
+                      variant={selectedYouTubeChannelIsWatched ? "outline" : "default"}
+                      size="sm"
+                      onClick={() => {
+                        void saveYouTubeSubscription({
+                          channelId: selectedYouTubeChannelId,
+                          autoComment: false,
+                        });
+                      }}
+                      disabled={savingYouTubeSubscription || selectedYouTubeChannelIsWatched}
+                    >
+                      {selectedYouTubeChannelIsWatched ? "Watching channel" : savingYouTubeSubscription ? "Saving..." : "Watch channel"}
+                    </Button>
+                  ) : null}
+                  {youtubeChannelUrl(selectedPost) ? (
+                    <Button asChild type="button" variant="outline" size="sm">
+                      <Link href={youtubeChannelUrl(selectedPost)} target="_blank" rel="noreferrer">
+                        Open channel
+                        <ExternalLink className="h-3.5 w-3.5" />
+                      </Link>
+                    </Button>
+                  ) : null}
+                </div>
+              ) : null}
+              {selectedPost.platform === "youtube" && (selectedPlan.fitSummary || selectedYouTubeViewCount || selectedYouTubeCommentCount) ? (
+                <details className="mt-3">
+                  <summary className="cursor-pointer text-sm font-medium text-[color:var(--foreground)]">More details</summary>
+                  <div className="mt-3 space-y-2 text-sm text-[color:var(--muted-foreground)]">
+                    <div>
+                      {selectedYouTubeViewCount ? `${formatCompactNumber(selectedYouTubeViewCount)} views` : "Views unavailable"}
+                      {selectedYouTubeCommentCount ? ` · ${formatCompactNumber(selectedYouTubeCommentCount)} comments` : ""}
                     </div>
+                    {selectedPlan.fitSummary ? <div>{selectedPlan.fitSummary}</div> : null}
                   </div>
                 </details>
               ) : null}
+            </div>
 
-              {commentAccountOptions.length ? (
-                <div className="space-y-3">
-                  <div className="rounded-[10px] border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-3">
-                    <div className="text-xs font-medium uppercase tracking-[0.16em] text-[color:var(--muted-foreground)]">
-                      Posting as
+            {selectedPost.platform !== "youtube" ? (
+              <details className="rounded-[10px] border border-[color:var(--border)] p-3">
+                <summary className="cursor-pointer text-sm font-medium text-[color:var(--foreground)]">Instagram extras</summary>
+                <div className="mt-3">
+                  <div className="rounded-[10px] border border-[color:var(--border)] p-3">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div>
+                        <div className="text-sm font-medium text-[color:var(--foreground)]">Official promo</div>
+                        <div className="text-sm text-[color:var(--muted-foreground)]">
+                          {visiblePromotionDraft && visibleCommentDelivery
+                            ? "Prepared automatically after comment send. Refresh if you want a new brief."
+                            : "Turn this topic into a brand-owned ad brief."}
+                        </div>
+                      </div>
+                      <Button type="button" variant="outline" onClick={createPromotionDraft} disabled={creatingPromo}>
+                        {creatingPromo ? "Creating..." : visiblePromotionDraft ? "Refresh brief" : "Create promo brief"}
+                      </Button>
                     </div>
-                    <div className="mt-1 text-sm font-medium text-[color:var(--foreground)]">
-                      {selectedCommentAccount?.accountName ?? "Choose an account"}
-                    </div>
-                    <div className="text-xs text-[color:var(--muted-foreground)]">
-                      {selectedCommentAccount?.handle ||
-                        selectedCommentAccount?.fromEmail ||
-                        selectedCommentAccount?.externalAccountId ||
-                        ""}
-                    </div>
+                    {promoError ? (
+                      <div className="mt-3 rounded-[10px] border border-[color:var(--danger-border)] bg-[color:var(--danger-soft)] px-3 py-2 text-sm text-[color:var(--danger)]">
+                        {promoError}
+                      </div>
+                    ) : null}
+                    {visiblePromotionDraft ? (
+                      <div className="mt-3 grid gap-3">
+                        <div className="rounded-[10px] bg-[color:var(--surface-muted)] px-3 py-3">
+                          <div className="text-xs font-medium uppercase tracking-[0.16em] text-[color:var(--muted-foreground)]">Campaign</div>
+                          <div className="mt-1 text-sm font-medium text-[color:var(--foreground)]">{visiblePromotionDraft.campaignName}</div>
+                          <div className="mt-1 text-xs text-[color:var(--muted-foreground)]">
+                            {visiblePromotionDraft.objective} · {visiblePromotionDraft.channel}
+                          </div>
+                        </div>
+                        <div className="grid gap-2">
+                          <div className="text-sm font-medium text-[color:var(--foreground)]">Primary text</div>
+                          <div className="rounded-[10px] bg-[color:var(--surface-muted)] px-3 py-3 text-sm leading-6 text-[color:var(--foreground)]">
+                            {visiblePromotionDraft.primaryText}
+                          </div>
+                        </div>
+                        <div className="grid gap-2">
+                          <div className="text-sm font-medium text-[color:var(--foreground)]">Destination</div>
+                          <div className="break-all rounded-[10px] bg-[color:var(--surface-muted)] px-3 py-3 text-sm text-[color:var(--foreground)]">
+                            {visiblePromotionDraft.destinationUrl}
+                          </div>
+                        </div>
+                        <div className="grid gap-2">
+                          <div className="text-sm font-medium text-[color:var(--foreground)]">Audience</div>
+                          <div className="rounded-[10px] bg-[color:var(--surface-muted)] px-3 py-3 text-sm text-[color:var(--foreground)]">
+                            {visiblePromotionDraft.audience}
+                          </div>
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                          <Button type="button" variant="outline" size="sm" onClick={() => copyText(visiblePromotionDraft.primaryText)}>
+                            Copy text
+                          </Button>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            onClick={() => copyText(promotionExportJson)}
+                            disabled={!promotionExportJson}
+                          >
+                            Copy brief
+                          </Button>
+                          <Button asChild type="button" variant="ghost" size="sm">
+                            <Link href={visiblePromotionDraft.destinationUrl} target="_blank" rel="noreferrer">
+                              Open destination
+                              <ExternalLink className="h-3.5 w-3.5" />
+                            </Link>
+                          </Button>
+                        </div>
+                        <div className="text-xs text-[color:var(--muted-foreground)]">
+                          Uses the source post as research only. Promote your own brand asset, not the third-party post.
+                        </div>
+                        {visiblePromotionPurchase ? (
+                          <div className="rounded-[10px] border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-3">
+                            <div className="flex flex-wrap items-center justify-between gap-3">
+                              <div>
+                                <div className="text-sm font-medium text-[color:var(--foreground)]">BuyShazam order</div>
+                                <div className="text-xs text-[color:var(--muted-foreground)]">
+                                  {formatPromotionPurchaseStatus(visiblePromotionPurchase.status)}
+                                </div>
+                              </div>
+                              {visiblePromotionPurchase.orderUrl ? (
+                                <Button asChild type="button" variant="ghost" size="sm">
+                                  <Link href={visiblePromotionPurchase.orderUrl} target="_blank" rel="noreferrer">
+                                    Open order
+                                    <ExternalLink className="h-3.5 w-3.5" />
+                                  </Link>
+                                </Button>
+                              ) : visiblePromotionPurchase.checkoutUrl ? (
+                                <Button asChild type="button" variant="ghost" size="sm">
+                                  <Link href={visiblePromotionPurchase.checkoutUrl} target="_blank" rel="noreferrer">
+                                    Open checkout
+                                    <ExternalLink className="h-3.5 w-3.5" />
+                                  </Link>
+                                </Button>
+                              ) : null}
+                            </div>
+                            <div className="mt-2 text-sm text-[color:var(--foreground)]">{visiblePromotionPurchase.message}</div>
+                            <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-[color:var(--muted-foreground)]">
+                              <div>Cart: {visiblePromotionPurchase.addedToCart ? "added" : "not confirmed"}</div>
+                              {visiblePromotionPurchase.walletOptionLabel ? <div>Wallet: {visiblePromotionPurchase.walletOptionLabel}</div> : null}
+                              {visiblePromotionPurchase.walletBalance ? <div>Balance: {visiblePromotionPurchase.walletBalance}</div> : null}
+                              {visiblePromotionPurchase.orderId ? <div>Order #{visiblePromotionPurchase.orderId}</div> : null}
+                            </div>
+                            {visiblePromotionPurchase.missingFields.length ? (
+                              <div className="mt-2 text-xs text-[color:var(--warning)]">
+                                Missing checkout fields: {visiblePromotionPurchase.missingFields.join(", ")}
+                              </div>
+                            ) : null}
+                          </div>
+                        ) : null}
+                      </div>
+                    ) : null}
                   </div>
+                </div>
+              </details>
+            ) : null}
 
-                  {commentAccountOptions.length > 1 ? (
-                    <details className="rounded-[10px] border border-[color:var(--border)] p-3">
-                      <summary className="cursor-pointer text-sm font-medium text-[color:var(--foreground)]">
-                        Change account
-                      </summary>
-                      <div className="mt-3 grid gap-2">
-                        <label className="text-sm font-medium text-[color:var(--foreground)]">Account</label>
-                        <Select value={commentAccountId} onChange={(event) => setCommentAccountId(event.target.value)}>
-                          {commentAccountOptions.map((account) => (
+            {commentAccountOptions.length ? (
+              <div className="space-y-3">
+                <div className="rounded-[10px] border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-3">
+                  <div className="text-xs font-medium uppercase tracking-[0.16em] text-[color:var(--muted-foreground)]">Posting as</div>
+                  <div className="mt-1 text-sm font-medium text-[color:var(--foreground)]">
+                    {selectedCommentAccount?.accountName ?? "Choose an account"}
+                  </div>
+                  <div className="text-xs text-[color:var(--muted-foreground)]">
+                    {selectedCommentAccount?.handle || selectedCommentAccount?.fromEmail || selectedCommentAccount?.externalAccountId || ""}
+                  </div>
+                </div>
+
+                {commentAccountOptions.length > 1 ? (
+                  <details className="rounded-[10px] border border-[color:var(--border)] p-3">
+                    <summary className="cursor-pointer text-sm font-medium text-[color:var(--foreground)]">Change account</summary>
+                    <div className="mt-3 grid gap-2">
+                      <label className="text-sm font-medium text-[color:var(--foreground)]">Account</label>
+                      <Select value={commentAccountId} onChange={(event) => setCommentAccountId(event.target.value)}>
+                        {commentAccountOptions.map((account) => (
+                          <option key={account.accountId} value={account.accountId}>
+                            {account.accountName} · {account.handle || account.fromEmail || account.externalAccountId}
+                          </option>
+                        ))}
+                      </Select>
+                      {selectedCommentAccountNeedsOverride ? (
+                        <div className="text-xs text-[color:var(--warning)]">You chose a backup account.</div>
+                      ) : null}
+                    </div>
+                  </details>
+                ) : null}
+
+                <div className="grid gap-2">
+                  <label className="text-sm font-medium text-[color:var(--foreground)]">Comment</label>
+                  <Textarea
+                    value={commentDraft}
+                    onChange={(event) => {
+                      setCommentDraft(event.target.value);
+                      lastAutoCommentDraftRef.current = generatedCommentDraftWithBrand;
+                    }}
+                    rows={7}
+                    maxLength={1250}
+                    placeholder={commentGenerationPending ? "Writing draft..." : "Write the comment"}
+                    disabled={commentGenerationPending || sendingComment}
+                  />
+                  <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-[color:var(--muted-foreground)]">
+                    <div>{commentGenerationPending ? "Writing a draft for you..." : "Edit the draft if you want, then press Post comment."}</div>
+                    <div>{commentDraft.length}/1250</div>
+                  </div>
+                  {canRestoreSuggestedComment ? (
+                    <div>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => {
+                          setCommentDraft(generatedCommentDraftWithBrand);
+                          lastAutoCommentDraftRef.current = generatedCommentDraftWithBrand;
+                        }}
+                      >
+                        Use draft again
+                      </Button>
+                    </div>
+                  ) : null}
+                  {emptyCommentMessage && selectedPost ? (
+                    <div className="flex flex-wrap items-center gap-2 text-xs text-[color:var(--muted-foreground)]">
+                      <div>{emptyCommentMessage}</div>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => {
+                          attemptedAutoDraftPostIdsRef.current.add(selectedPost.id);
+                          void requestCommentDraftForPost(selectedPost.id);
+                        }}
+                        disabled={sendingComment || commentGenerationPending}
+                      >
+                        Try draft again
+                      </Button>
+                    </div>
+                  ) : null}
+                </div>
+
+                {canAddTeammateReply ? (
+                  replyEnabled ? (
+                    <div className="grid gap-3 rounded-[10px] border border-[color:var(--border)] p-3">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div>
+                          <div className="text-sm font-medium text-[color:var(--foreground)]">Teammate reply</div>
+                          <div className="text-xs text-[color:var(--muted-foreground)]">
+                            Queue one short reply from second YouTube account for 1-6 hours later.
+                          </div>
+                        </div>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => {
+                            setReplyEnabled(false);
+                            setReplyDraft("");
+                            lastAutoReplyDraftRef.current = "";
+                            if (selectedPost?.id) {
+                              void requestCommentDraftForPost(selectedPost.id, {
+                                mode: "solo",
+                                adoptFreshDrafts: true,
+                              });
+                            }
+                          }}
+                        >
+                          Use single comment
+                        </Button>
+                      </div>
+                      <div className="grid gap-2">
+                        <label className="text-sm font-medium text-[color:var(--foreground)]">Reply account</label>
+                        <Select value={replyAccountId} onChange={(event) => setReplyAccountId(event.target.value)}>
+                          {replyAccountOptions.map((account) => (
                             <option key={account.accountId} value={account.accountId}>
                               {account.accountName} · {account.handle || account.fromEmail || account.externalAccountId}
                             </option>
                           ))}
                         </Select>
-                        {selectedCommentAccountNeedsOverride ? (
-                          <div className="text-xs text-[color:var(--warning)]">You chose a backup account.</div>
+                      </div>
+                      <div className="grid gap-2">
+                        <label className="text-sm font-medium text-[color:var(--foreground)]">Reply</label>
+                        <Textarea
+                          value={replyDraft}
+                          onChange={(event) => {
+                            setReplyDraft(event.target.value);
+                            lastAutoReplyDraftRef.current = generatedReplyDraft;
+                          }}
+                          rows={4}
+                          maxLength={1250}
+                          placeholder="Write the teammate reply"
+                          disabled={commentGenerationPending || sendingComment}
+                        />
+                        <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-[color:var(--muted-foreground)]">
+                          <div>Keep it short. System posts it later, not right away.</div>
+                          <div>{replyDraft.trim().length}/1250</div>
+                        </div>
+                        {canRestoreSuggestedReply ? (
+                          <div>
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => {
+                                setReplyDraft(generatedReplyDraft);
+                                lastAutoReplyDraftRef.current = generatedReplyDraft;
+                              }}
+                            >
+                              Use reply draft again
+                            </Button>
+                          </div>
                         ) : null}
                       </div>
-                    </details>
-                  ) : null}
-
-                  <div className="grid gap-2">
-                    <label className="text-sm font-medium text-[color:var(--foreground)]">Comment</label>
-                    <Textarea
-                      value={commentDraft}
-                      onChange={(event) => {
-                        setCommentDraft(event.target.value);
-                        lastAutoCommentDraftRef.current = generatedCommentDraftWithBrand;
-                      }}
-                      rows={7}
-                      maxLength={1250}
-                      placeholder={commentGenerationPending ? "Writing draft..." : "Write the comment"}
-                      disabled={commentGenerationPending || sendingComment}
-                    />
-                    <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-[color:var(--muted-foreground)]">
-                      <div>
-                        {commentGenerationPending
-                          ? "Writing a draft for you..."
-                          : "Edit the draft if you want, then press Post comment."}
-                      </div>
-                      <div>{commentDraft.length}/1250</div>
                     </div>
-                    {canRestoreSuggestedComment ? (
-                      <div>
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => {
-                            setCommentDraft(generatedCommentDraftWithBrand);
-                            lastAutoCommentDraftRef.current = generatedCommentDraftWithBrand;
-                          }}
-                        >
-                          Use draft again
-                        </Button>
-                      </div>
-                    ) : null}
-                    {emptyCommentMessage && selectedPost ? (
-                      <div className="flex flex-wrap items-center gap-2 text-xs text-[color:var(--muted-foreground)]">
-                        <div>{emptyCommentMessage}</div>
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => {
-                            attemptedAutoDraftPostIdsRef.current.add(selectedPost.id);
-                            void requestCommentDraftForPost(selectedPost.id);
-                          }}
-                          disabled={sendingComment || commentGenerationPending}
-                        >
-                          Try draft again
-                        </Button>
-                      </div>
-                    ) : null}
+                  ) : (
+                    <div>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => {
+                          setReplyEnabled(true);
+                          if (selectedPost?.id) {
+                            void requestCommentDraftForPost(selectedPost.id, {
+                              mode: "thread",
+                              adoptFreshDrafts: true,
+                            });
+                          }
+                        }}
+                        disabled={sendingComment || commentGenerationPending}
+                      >
+                        Add teammate reply
+                      </Button>
+                    </div>
+                  )
+                ) : null}
+
+                {selectedCommentPlatform === "instagram" ? (
+                  <details className="rounded-[10px] border border-[color:var(--border)] p-3">
+                    <summary className="cursor-pointer text-sm font-medium text-[color:var(--foreground)]">Reply to a specific comment</summary>
+                    <div className="mt-3 grid gap-2">
+                      <label className="text-sm text-[color:var(--muted-foreground)]">Comment id</label>
+                      <Input
+                        value={commentReplyId}
+                        onChange={(event) => setCommentReplyId(event.target.value)}
+                        placeholder="Leave empty for a normal post comment"
+                      />
+                    </div>
+                  </details>
+                ) : null}
+
+                {commentError ? (
+                  <div className="rounded-[10px] border border-[color:var(--danger-border)] bg-[color:var(--danger-soft)] px-3 py-2 text-sm text-[color:var(--danger)]">
+                    {commentError}
                   </div>
+                ) : null}
 
-                    {canAddTeammateReply ? (
-                      replyEnabled ? (
-                        <div className="grid gap-3 rounded-[10px] border border-[color:var(--border)] p-3">
-                        <div className="flex flex-wrap items-center justify-between gap-2">
-                          <div>
-                            <div className="text-sm font-medium text-[color:var(--foreground)]">Teammate reply</div>
-                            <div className="text-xs text-[color:var(--muted-foreground)]">
-                              Queue one short reply from second YouTube account for 1-6 hours later.
-                            </div>
-                          </div>
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => {
-                              setReplyEnabled(false);
-                              setReplyDraft("");
-                              lastAutoReplyDraftRef.current = "";
-                              if (selectedPost?.id) {
-                                void requestCommentDraftForPost(selectedPost.id, {
-                                  mode: "solo",
-                                  adoptFreshDrafts: true,
-                                });
-                              }
-                            }}
-                          >
-                            Use single comment
-                          </Button>
-                        </div>
-                        <div className="grid gap-2">
-                          <label className="text-sm font-medium text-[color:var(--foreground)]">Reply account</label>
-                          <Select value={replyAccountId} onChange={(event) => setReplyAccountId(event.target.value)}>
-                            {replyAccountOptions.map((account) => (
-                              <option key={account.accountId} value={account.accountId}>
-                                {account.accountName} · {account.handle || account.fromEmail || account.externalAccountId}
-                              </option>
-                            ))}
-                          </Select>
-                        </div>
-                        <div className="grid gap-2">
-                          <label className="text-sm font-medium text-[color:var(--foreground)]">Reply</label>
-                          <Textarea
-                            value={replyDraft}
-                            onChange={(event) => {
-                              setReplyDraft(event.target.value);
-                              lastAutoReplyDraftRef.current = generatedReplyDraft;
-                            }}
-                            rows={4}
-                            maxLength={1250}
-                            placeholder="Write the teammate reply"
-                            disabled={commentGenerationPending || sendingComment}
-                          />
-                          <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-[color:var(--muted-foreground)]">
-                            <div>Keep it short. System posts it later, not right away.</div>
-                            <div>{replyDraft.trim().length}/1250</div>
-                          </div>
-                          {canRestoreSuggestedReply ? (
-                            <div>
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                size="sm"
-                                onClick={() => {
-                                  setReplyDraft(generatedReplyDraft);
-                                  lastAutoReplyDraftRef.current = generatedReplyDraft;
-                                }}
-                              >
-                                Use reply draft again
-                              </Button>
-                            </div>
-                          ) : null}
-                        </div>
-                      </div>
-                    ) : (
-                      <div>
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          onClick={() => {
-                            setReplyEnabled(true);
-                            if (selectedPost?.id) {
-                              void requestCommentDraftForPost(selectedPost.id, {
-                                mode: "thread",
-                                adoptFreshDrafts: true,
-                              });
-                            }
-                          }}
-                          disabled={sendingComment || commentGenerationPending}
-                        >
-                          Add teammate reply
-                        </Button>
-                      </div>
-                    )
-                  ) : null}
+                {commentThreadWarning ? (
+                  <div className="rounded-[10px] border border-[color:var(--warning-border)] bg-[color:var(--warning-soft)] px-3 py-2 text-sm text-[color:var(--warning)]">
+                    {commentThreadWarning}
+                  </div>
+                ) : null}
 
-                  {selectedCommentPlatform === "instagram" ? (
-                    <details className="rounded-[10px] border border-[color:var(--border)] p-3">
-                      <summary className="cursor-pointer text-sm font-medium text-[color:var(--foreground)]">
-                        Reply to a specific comment
-                      </summary>
-                      <div className="mt-3 grid gap-2">
-                        <label className="text-sm text-[color:var(--muted-foreground)]">Comment id</label>
-                        <Input
-                          value={commentReplyId}
-                          onChange={(event) => setCommentReplyId(event.target.value)}
-                          placeholder="Leave empty for a normal post comment"
-                        />
-                      </div>
-                    </details>
-                  ) : null}
-
-                  {commentError ? (
-                    <div className="rounded-[10px] border border-[color:var(--danger-border)] bg-[color:var(--danger-soft)] px-3 py-2 text-sm text-[color:var(--danger)]">
-                      {commentError}
-                    </div>
-                  ) : null}
-
-                  {commentThreadWarning ? (
-                    <div className="rounded-[10px] border border-[color:var(--warning-border)] bg-[color:var(--warning-soft)] px-3 py-2 text-sm text-[color:var(--warning)]">
-                      {commentThreadWarning}
-                    </div>
-                  ) : null}
-
-                  {visibleCommentDelivery ? (
+                {visibleCommentDelivery ? (
+                  <div
+                    className={cn(
+                      "rounded-[10px] border px-3 py-3",
+                      visibleCommentDelivery.status === "verified"
+                        ? "border-[color:var(--success-border)] bg-[color:var(--success-soft)]"
+                        : "border-[color:var(--warning-border)] bg-[color:var(--warning-soft)]"
+                    )}
+                  >
                     <div
                       className={cn(
-                        "rounded-[10px] border px-3 py-3",
-                        visibleCommentDelivery.status === "verified"
-                          ? "border-[color:var(--success-border)] bg-[color:var(--success-soft)]"
-                          : "border-[color:var(--warning-border)] bg-[color:var(--warning-soft)]"
+                        "text-sm font-medium",
+                        visibleCommentDelivery.status === "verified" ? "text-[color:var(--success)]" : "text-[color:var(--warning)]"
                       )}
                     >
-                      <div
-                        className={cn(
-                          "text-sm font-medium",
-                          visibleCommentDelivery.status === "verified"
-                            ? "text-[color:var(--success)]"
-                            : "text-[color:var(--warning)]"
-                        )}
-                      >
-                        {visibleCommentDelivery.status === "verified" ? "Comment posted" : "Comment sent"}
-                      </div>
-                      <div className="mt-1 text-sm text-[color:var(--foreground)]">{visibleCommentDelivery.message}</div>
-                      {visiblePendingReply ? (
-                        <div className="mt-3 rounded-[10px] border border-[color:var(--border)] bg-[color:var(--background)] px-3 py-3">
-                          <div className="text-sm font-medium text-[color:var(--foreground)]">
-                            {visiblePendingReply.status === "failed" ? "Teammate reply failed" : "Teammate reply scheduled"}
-                          </div>
-                          <div className="mt-1 text-sm text-[color:var(--foreground)]">
-                            {visiblePendingReply.status === "failed"
-                              ? visiblePendingReply.lastError || "System could not post delayed teammate reply."
-                              : `System will post second reply from ${visiblePendingReply.accountName || "selected account"} around ${formatDate(visiblePendingReply.scheduledAt)}.`}
-                          </div>
-                          <div className="mt-2 text-xs text-[color:var(--muted-foreground)]">
-                            {visiblePendingReply.accountHandle ? `${visiblePendingReply.accountHandle} · ` : ""}
-                            {visiblePendingReply.attempts ? `Attempts: ${visiblePendingReply.attempts}` : "Delay chosen automatically between 1 and 6 hours."}
-                          </div>
-                        </div>
-                      ) : null}
-                      {visibleCommentDelivery.replyDelivery ? (
-                        <div className="mt-3 rounded-[10px] border border-[color:var(--success-border)] bg-[color:var(--background)] px-3 py-3">
-                          <div className="text-sm font-medium text-[color:var(--success)]">Teammate reply posted</div>
-                          <div className="mt-1 text-sm text-[color:var(--foreground)]">
-                            {visibleCommentDelivery.replyDelivery.message}
-                          </div>
-                          <div className="mt-2 text-xs text-[color:var(--muted-foreground)]">
-                            {visibleCommentDelivery.replyDelivery.accountName}
-                            {visibleCommentDelivery.replyDelivery.accountHandle
-                              ? ` ${visibleCommentDelivery.replyDelivery.accountHandle}`
-                              : ""}
-                          </div>
-                          {visibleCommentDelivery.replyDelivery.commentUrl ? (
-                            <div className="mt-3 flex flex-wrap gap-2">
-                              <Button asChild type="button" variant="outline" size="sm">
-                                <Link href={visibleCommentDelivery.replyDelivery.commentUrl} target="_blank" rel="noreferrer">
-                                  Open reply
-                                  <ExternalLink className="h-3.5 w-3.5" />
-                                </Link>
-                              </Button>
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                size="sm"
-                                onClick={() => copyText(visibleCommentDelivery.replyDelivery?.commentUrl ?? "")}
-                              >
-                                Copy reply link
-                              </Button>
-                            </div>
-                          ) : null}
-                        </div>
-                      ) : null}
-                      {visibleCommentDelivery.commentUrl ? (
-                        <div className="mt-3 flex flex-wrap gap-2">
-                          <Button asChild type="button" variant="outline" size="sm">
-                            <Link href={visibleCommentDelivery.commentUrl} target="_blank" rel="noreferrer">
-                              Open comment
-                              <ExternalLink className="h-3.5 w-3.5" />
-                            </Link>
-                          </Button>
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => copyText(visibleCommentDelivery.commentUrl)}
-                          >
-                            Copy link
-                          </Button>
-                        </div>
-                      ) : null}
-                      <details className="mt-3">
-                        <summary className="cursor-pointer text-sm font-medium text-[color:var(--foreground)]">
-                          Show details
-                        </summary>
-                        <div className="mt-3 space-y-3">
-                          {commentExportPayload ? (
-                            <div className="rounded-[10px] border border-[color:var(--border)] bg-[color:var(--background)] px-3 py-3">
-                              <div className="text-xs font-medium uppercase tracking-[0.16em] text-[color:var(--muted-foreground)]">
-                                Export
-                              </div>
-                              <div className="mt-2 grid gap-3">
-                                {commentExportPayload.altCommentUrl ? (
-                                  <div className="grid gap-2">
-                                    <div className="text-sm font-medium text-[color:var(--foreground)]">Alt Instagram link</div>
-                                    <div className="break-all rounded-[8px] bg-[color:var(--surface-muted)] px-3 py-2 font-mono text-xs text-[color:var(--foreground)]">
-                                      {commentExportPayload.altCommentUrl}
-                                    </div>
-                                    <div className="flex flex-wrap gap-2">
-                                      <Button
-                                        type="button"
-                                        variant="ghost"
-                                        size="sm"
-                                        onClick={() => copyText(commentExportPayload.altCommentUrl)}
-                                      >
-                                        Copy alt link
-                                      </Button>
-                                    </div>
-                                  </div>
-                                ) : null}
-                                <div className="flex flex-wrap gap-2">
-                                  <Button
-                                    type="button"
-                                    variant="outline"
-                                    size="sm"
-                                    onClick={() => copyText(commentExportJson)}
-                                    disabled={!commentExportJson}
-                                  >
-                                    Copy JSON
-                                  </Button>
-                                </div>
-                              </div>
-                            </div>
-                          ) : null}
-                          <div className="space-y-1 text-xs text-[color:var(--muted-foreground)]">
-                            {visibleCommentDelivery.accountName ? (
-                              <div>
-                                Account: {visibleCommentDelivery.accountName}
-                                {visibleCommentDelivery.accountHandle ? ` ${visibleCommentDelivery.accountHandle}` : ""}
-                              </div>
-                            ) : null}
-                            {visibleCommentDelivery.replyDelivery?.accountName ? (
-                              <div>
-                                Reply account: {visibleCommentDelivery.replyDelivery.accountName}
-                                {visibleCommentDelivery.replyDelivery.accountHandle
-                                  ? ` ${visibleCommentDelivery.replyDelivery.accountHandle}`
-                                  : ""}
-                              </div>
-                            ) : null}
-                            {visiblePendingReply?.accountName ? (
-                              <div>
-                                Scheduled reply account: {visiblePendingReply.accountName}
-                                {visiblePendingReply.accountHandle ? ` ${visiblePendingReply.accountHandle}` : ""}
-                              </div>
-                            ) : null}
-                            {visibleCommentDelivery.commentId ? <div>Comment id: {visibleCommentDelivery.commentId}</div> : null}
-                            {visibleCommentDelivery.replyDelivery?.commentId ? (
-                              <div>Reply id: {visibleCommentDelivery.replyDelivery.commentId}</div>
-                            ) : null}
-                            {visiblePendingReply?.scheduledAt ? (
-                              <div>Reply scheduled: {formatDate(visiblePendingReply.scheduledAt)}</div>
-                            ) : null}
-                            {visibleCommentDelivery.source ? <div>Checked via: {visibleCommentDelivery.source}</div> : null}
-                            <div>Updated: {formatDate(visibleCommentDelivery.postedAt)}</div>
-                          </div>
-                        </div>
-                      </details>
+                      {visibleCommentDelivery.status === "verified" ? "Comment posted" : "Comment sent"}
                     </div>
-                  ) : null}
+                    <div className="mt-1 text-sm text-[color:var(--foreground)]">{visibleCommentDelivery.message}</div>
+                    {visiblePendingReply ? (
+                      <div className="mt-3 rounded-[10px] border border-[color:var(--border)] bg-[color:var(--background)] px-3 py-3">
+                        <div className="text-sm font-medium text-[color:var(--foreground)]">
+                          {visiblePendingReply.status === "failed" ? "Teammate reply failed" : "Teammate reply scheduled"}
+                        </div>
+                        <div className="mt-1 text-sm text-[color:var(--foreground)]">
+                          {visiblePendingReply.status === "failed"
+                            ? visiblePendingReply.lastError || "System could not post delayed teammate reply."
+                            : `System will post second reply from ${visiblePendingReply.accountName || "selected account"} around ${formatDate(visiblePendingReply.scheduledAt)}.`}
+                        </div>
+                        <div className="mt-2 text-xs text-[color:var(--muted-foreground)]">
+                          {visiblePendingReply.accountHandle ? `${visiblePendingReply.accountHandle} · ` : ""}
+                          {visiblePendingReply.attempts ? `Attempts: ${visiblePendingReply.attempts}` : "Delay chosen automatically between 1 and 6 hours."}
+                        </div>
+                      </div>
+                    ) : null}
+                    {visibleCommentDelivery.replyDelivery ? (
+                      <div className="mt-3 rounded-[10px] border border-[color:var(--success-border)] bg-[color:var(--background)] px-3 py-3">
+                        <div className="text-sm font-medium text-[color:var(--success)]">Teammate reply posted</div>
+                        <div className="mt-1 text-sm text-[color:var(--foreground)]">{visibleCommentDelivery.replyDelivery.message}</div>
+                        <div className="mt-2 text-xs text-[color:var(--muted-foreground)]">
+                          {visibleCommentDelivery.replyDelivery.accountName}
+                          {visibleCommentDelivery.replyDelivery.accountHandle ? ` ${visibleCommentDelivery.replyDelivery.accountHandle}` : ""}
+                        </div>
+                        {visibleCommentDelivery.replyDelivery.commentUrl ? (
+                          <div className="mt-3 flex flex-wrap gap-2">
+                            <Button asChild type="button" variant="outline" size="sm">
+                              <Link href={visibleCommentDelivery.replyDelivery.commentUrl} target="_blank" rel="noreferrer">
+                                Open reply
+                                <ExternalLink className="h-3.5 w-3.5" />
+                              </Link>
+                            </Button>
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => copyText(visibleCommentDelivery.replyDelivery?.commentUrl ?? "")}
+                            >
+                              Copy reply link
+                            </Button>
+                          </div>
+                        ) : null}
+                      </div>
+                    ) : null}
+                    {visibleCommentDelivery.commentUrl ? (
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        <Button asChild type="button" variant="outline" size="sm">
+                          <Link href={visibleCommentDelivery.commentUrl} target="_blank" rel="noreferrer">
+                            Open comment
+                            <ExternalLink className="h-3.5 w-3.5" />
+                          </Link>
+                        </Button>
+                        <Button type="button" variant="ghost" size="sm" onClick={() => copyText(visibleCommentDelivery.commentUrl)}>
+                          Copy link
+                        </Button>
+                      </div>
+                    ) : null}
+                    <details className="mt-3">
+                      <summary className="cursor-pointer text-sm font-medium text-[color:var(--foreground)]">Show details</summary>
+                      <div className="mt-3 space-y-3">
+                        {commentExportPayload ? (
+                          <div className="rounded-[10px] border border-[color:var(--border)] bg-[color:var(--background)] px-3 py-3">
+                            <div className="text-xs font-medium uppercase tracking-[0.16em] text-[color:var(--muted-foreground)]">Export</div>
+                            <div className="mt-2 grid gap-3">
+                              {commentExportPayload.altCommentUrl ? (
+                                <div className="grid gap-2">
+                                  <div className="text-sm font-medium text-[color:var(--foreground)]">Alt Instagram link</div>
+                                  <div className="break-all rounded-[8px] bg-[color:var(--surface-muted)] px-3 py-2 font-mono text-xs text-[color:var(--foreground)]">
+                                    {commentExportPayload.altCommentUrl}
+                                  </div>
+                                  <div className="flex flex-wrap gap-2">
+                                    <Button type="button" variant="ghost" size="sm" onClick={() => copyText(commentExportPayload.altCommentUrl)}>
+                                      Copy alt link
+                                    </Button>
+                                  </div>
+                                </div>
+                              ) : null}
+                              <div className="flex flex-wrap gap-2">
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  size="sm"
+                                  onClick={() => copyText(commentExportJson)}
+                                  disabled={!commentExportJson}
+                                >
+                                  Copy JSON
+                                </Button>
+                              </div>
+                            </div>
+                          </div>
+                        ) : null}
+                        <div className="space-y-1 text-xs text-[color:var(--muted-foreground)]">
+                          {visibleCommentDelivery.accountName ? (
+                            <div>
+                              Account: {visibleCommentDelivery.accountName}
+                              {visibleCommentDelivery.accountHandle ? ` ${visibleCommentDelivery.accountHandle}` : ""}
+                            </div>
+                          ) : null}
+                          {visibleCommentDelivery.replyDelivery?.accountName ? (
+                            <div>
+                              Reply account: {visibleCommentDelivery.replyDelivery.accountName}
+                              {visibleCommentDelivery.replyDelivery.accountHandle ? ` ${visibleCommentDelivery.replyDelivery.accountHandle}` : ""}
+                            </div>
+                          ) : null}
+                          {visiblePendingReply?.accountName ? (
+                            <div>
+                              Scheduled reply account: {visiblePendingReply.accountName}
+                              {visiblePendingReply.accountHandle ? ` ${visiblePendingReply.accountHandle}` : ""}
+                            </div>
+                          ) : null}
+                          {visibleCommentDelivery.commentId ? <div>Comment id: {visibleCommentDelivery.commentId}</div> : null}
+                          {visibleCommentDelivery.replyDelivery?.commentId ? <div>Reply id: {visibleCommentDelivery.replyDelivery.commentId}</div> : null}
+                          {visiblePendingReply?.scheduledAt ? <div>Reply scheduled: {formatDate(visiblePendingReply.scheduledAt)}</div> : null}
+                          {visibleCommentDelivery.source ? <div>Checked via: {visibleCommentDelivery.source}</div> : null}
+                          <div>Updated: {formatDate(visibleCommentDelivery.postedAt)}</div>
+                        </div>
+                      </div>
+                    </details>
+                  </div>
+                ) : null}
 
-                  <Button
-                    type="button"
-                    size="lg"
-                    className="w-full sm:w-auto"
-                    onClick={sendComment}
-                    disabled={
-                      sendingComment ||
-                      commentGenerationPending ||
-                      !commentDraft.trim() ||
-                      (replyEnabled && (!replyDraft.trim() || !replyAccountId))
-                    }
-                  >
-                    {sendingComment ? "Posting..." : replyEnabled ? "Post thread" : "Post comment"}
-                  </Button>
-                </div>
-              ) : (
-                <div className="rounded-[10px] border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-3 text-sm text-[color:var(--muted-foreground)]">
-                  {selectedCommentPlatform === "youtube"
-                    ? 'You need one connected YouTube account before you can post. Open "Setup" below.'
-                    : "Add an Instagram account first."}
-                </div>
-              )}
-            </div>
-          ) : (
-            <div className="text-sm text-[color:var(--muted-foreground)]">Pick a video above.</div>
-          )}
-        </SectionPanel>
-      </div>
+                <Button
+                  type="button"
+                  size="lg"
+                  className="w-full sm:w-auto"
+                  onClick={sendComment}
+                  disabled={
+                    sendingComment || commentGenerationPending || !commentDraft.trim() || (replyEnabled && (!replyDraft.trim() || !replyAccountId))
+                  }
+                >
+                  {sendingComment ? "Posting..." : replyEnabled ? "Post thread" : "Post comment"}
+                </Button>
+              </div>
+            ) : (
+              <div className="rounded-[10px] border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-3 text-sm text-[color:var(--muted-foreground)]">
+                {selectedCommentPlatform === "youtube"
+                  ? 'You need one connected YouTube account before you can post. Open "Setup" below.'
+                  : "Add an Instagram account first."}
+              </div>
+            )}
+          </div>
+        ) : (
+          <div className="text-sm text-[color:var(--muted-foreground)]">Pick a video above.</div>
+        )}
+      </SectionPanel>
+    );
+  }
 
-      <SectionPanel
-        title="Mode 2. Watch channels"
-        description="Subscribe to upload notifications and optionally auto-comment future uploads."
-      >
+  function renderChannelsWorkspace() {
+    return (
+      <SectionPanel title="Channels" description="Watch channels, assign auto-comment behavior, and inspect recent automation state.">
         <div className="space-y-4">
           {youtubeSubscriptionError ? (
             <div className="rounded-[10px] border border-[color:var(--danger-border)] bg-[color:var(--danger-soft)] px-3 py-2 text-sm text-[color:var(--danger)]">
               {youtubeSubscriptionError}
             </div>
           ) : null}
+
+          <StatLedger
+            items={[
+              { label: "Watched", value: youtubeSubscriptions.length, detail: "Tracked channels" },
+              { label: "Auto-comment", value: autoCommentChannelCount, detail: "Channels with posting on" },
+              {
+                label: "Errors",
+                value: youtubeSubscriptions.filter((subscription) => Boolean(subscription.lastError)).length,
+                detail: "Channels needing a fix",
+              },
+            ]}
+          />
 
           <div className="grid gap-4 xl:grid-cols-[minmax(0,1.2fr)_minmax(240px,0.8fr)_auto]">
             <div className="space-y-2">
@@ -2150,13 +2135,7 @@ export default function SocialDiscoveryClient({
             </div>
 
             <div className="flex items-end">
-              <Button
-                type="button"
-                onClick={() => {
-                  void saveYouTubeSubscription();
-                }}
-                disabled={savingYouTubeSubscription}
-              >
+              <Button type="button" onClick={() => void saveYouTubeSubscription()} disabled={savingYouTubeSubscription}>
                 {savingYouTubeSubscription ? "Saving..." : "Watch channel"}
               </Button>
             </div>
@@ -2172,24 +2151,21 @@ export default function SocialDiscoveryClient({
             <span className="min-w-0">
               <span className="text-sm font-medium text-[color:var(--foreground)]">Auto-comment new uploads</span>
               <span className="mt-1 block text-sm leading-6 text-[color:var(--muted-foreground)]">
-                Use this only for watched channels. Search mode above stays manual.
+                Use this only for watched channels. Manual search stays separate.
               </span>
             </span>
           </label>
 
           {!youtubeAccountOptions.length ? (
             <div className="text-xs text-[color:var(--muted-foreground)]">
-              Need a YouTube account first? Open Setup below, add one account, then click `Connect YouTube`.
+              Need a YouTube account first? Open Accounts and connect one there.
             </div>
           ) : null}
 
           {youtubeSubscriptions.length ? (
             <div className="grid gap-3">
               {youtubeSubscriptions.map((subscription) => (
-                <div
-                  key={subscription.id}
-                  className="rounded-[10px] border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-3"
-                >
+                <div key={subscription.id} className="rounded-[10px] border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-3">
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div className="space-y-1">
                       <div className="text-sm font-medium text-[color:var(--foreground)]">
@@ -2253,34 +2229,36 @@ export default function SocialDiscoveryClient({
                         </Link>
                       </div>
                     ) : null}
-                    {subscription.lastError ? (
-                      <div className="text-[color:var(--danger)]">Last error: {subscription.lastError}</div>
-                    ) : null}
+                    {subscription.lastError ? <div className="text-[color:var(--danger)]">Last error: {subscription.lastError}</div> : null}
                   </div>
                 </div>
               ))}
             </div>
           ) : (
-            <div className="rounded-[10px] border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-3 text-sm text-[color:var(--muted-foreground)]">
-              No watched YouTube channels yet.
-            </div>
+            <EmptyState
+              title="No watched channels yet"
+              description="Add a channel, assign auto-comment behavior, and this workspace becomes your automation coverage map."
+            />
           )}
         </div>
       </SectionPanel>
+    );
+  }
 
+  function renderSetupPanel() {
+    return (
       <details className="rounded-[12px] border border-[color:var(--border)] bg-[color:var(--surface)]">
         <summary className="cursor-pointer px-4 py-3 text-sm font-medium text-[color:var(--foreground)]">
-          Setup
+          <span className="inline-flex items-center gap-2">
+            <Settings2 className="h-4 w-4" />
+            Advanced setup
+          </span>
         </summary>
         <div className="space-y-4 border-t border-[color:var(--border)] px-4 py-4">
           <div className="grid gap-4 xl:grid-cols-2">
             <SectionPanel title="Comment prompt" description="One saved prompt for this brand.">
               <div className="space-y-2">
-                <Textarea
-                  value={brandCommentPromptDraft}
-                  onChange={(event) => setBrandCommentPromptDraft(event.target.value)}
-                  rows={6}
-                />
+                <Textarea value={brandCommentPromptDraft} onChange={(event) => setBrandCommentPromptDraft(event.target.value)} rows={6} />
                 <div className="text-xs text-[color:var(--muted-foreground)]">{brandCommentPromptStatusMessage}</div>
                 <div className="flex flex-wrap gap-2">
                   <Button
@@ -2311,20 +2289,13 @@ export default function SocialDiscoveryClient({
                     {brandCommentPromptError}
                   </div>
                 ) : null}
-                <div className="text-xs text-[color:var(--muted-foreground)]">
-                  Clear it and save if you want to go back to the default prompt.
-                </div>
+                <div className="text-xs text-[color:var(--muted-foreground)]">Clear it and save if you want to go back to the default prompt.</div>
               </div>
             </SectionPanel>
 
-            <SectionPanel title="Instagram scan" description="Keep the old manual Instagram workflow here.">
+            <SectionPanel title="Instagram scan" description="Legacy workflow stays here.">
               <div className="space-y-2">
-                <Textarea
-                  value={queryDraft}
-                  onChange={(event) => setQueryDraft(event.target.value)}
-                  rows={6}
-                  placeholder="One search prompt per line"
-                />
+                <Textarea value={queryDraft} onChange={(event) => setQueryDraft(event.target.value)} rows={6} placeholder="One search prompt per line" />
                 <div className="text-xs text-[color:var(--muted-foreground)]">
                   {queryList.length} prompts. {queryStatusMessage}
                 </div>
@@ -2333,21 +2304,13 @@ export default function SocialDiscoveryClient({
                     type="button"
                     size="sm"
                     onClick={() => {
-                      void saveQueries().catch((err) =>
-                        setError(err instanceof Error ? err.message : "Failed to save search prompts")
-                      );
+                      void saveQueries().catch((err) => setError(err instanceof Error ? err.message : "Failed to save search prompts"));
                     }}
                     disabled={savingQueries || !queriesDirty}
                   >
                     Save
                   </Button>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    onClick={() => setQueryDraft(baselineQueries.join("\n"))}
-                    disabled={savingQueries}
-                  >
+                  <Button type="button" variant="outline" size="sm" onClick={() => setQueryDraft(baselineQueries.join("\n"))} disabled={savingQueries}>
                     Reset
                   </Button>
                   <Button type="button" variant="outline" size="sm" onClick={runScan} disabled={scanning}>
@@ -2358,11 +2321,197 @@ export default function SocialDiscoveryClient({
               </div>
             </SectionPanel>
           </div>
+        </div>
+      </details>
+    );
+  }
 
+  return (
+    <div className="space-y-6">
+      <PageIntro
+        title="Social discovery"
+        description="Automation-first YouTube comment ops. Work queue first. Channels, accounts, and manual override in dedicated workspaces."
+        actions={
+          <div className="flex flex-wrap gap-2">
+            <Button type="button" variant={activeWorkspace === "queue" ? "default" : "outline"} size="sm" onClick={() => setActiveWorkspace("queue")}>
+              <CheckCircle2 className="h-3.5 w-3.5" />
+              Queue
+            </Button>
+            <Button type="button" variant={activeWorkspace === "channels" ? "default" : "outline"} size="sm" onClick={() => setActiveWorkspace("channels")}>
+              <Youtube className="h-3.5 w-3.5" />
+              Channels
+            </Button>
+            <Button type="button" variant={activeWorkspace === "accounts" ? "default" : "outline"} size="sm" onClick={() => setActiveWorkspace("accounts")}>
+              <Users className="h-3.5 w-3.5" />
+              Accounts
+            </Button>
+            <Button type="button" variant={activeWorkspace === "manual" ? "default" : "outline"} size="sm" onClick={() => setActiveWorkspace("manual")}>
+              <Search className="h-3.5 w-3.5" />
+              Manual search
+            </Button>
+          </div>
+        }
+      />
+
+      {error ? <div className="text-sm text-[color:var(--danger)]">{error}</div> : null}
+
+      <StatLedger
+        items={[
+          {
+            label: "Ready",
+            value: readyQueueCount,
+            detail: "Draft-ready jobs",
+            active: activeWorkspace === "queue" && queueFilter === "ready",
+            onClick: () => {
+              setActiveWorkspace("queue");
+              setQueueFilter("ready");
+            },
+          },
+          {
+            label: "Needs attention",
+            value: attentionQueueCount,
+            detail: attentionQueueDetail,
+            active:
+              (activeWorkspace === "queue" && queueFilter === "attention") ||
+              (activeWorkspace === "channels" && attentionQueueJobCount === 0 && attentionChannelCount > 0),
+            onClick: () => {
+              if (attentionQueueJobCount > 0) {
+                setActiveWorkspace("queue");
+                setQueueFilter("attention");
+                return;
+              }
+              setActiveWorkspace("channels");
+            },
+          },
+          {
+            label: "Posted",
+            value: postedQueueCount,
+            detail: "Completed comments",
+            active: activeWorkspace === "queue" && queueFilter === "posted",
+            onClick: () => {
+              setActiveWorkspace("queue");
+              setQueueFilter("posted");
+            },
+          },
+          {
+            label: "Watched",
+            value: youtubeSubscriptions.length,
+            detail: `${autoCommentChannelCount} auto-commenting`,
+            active: activeWorkspace === "channels",
+            onClick: () => setActiveWorkspace("channels"),
+          },
+          {
+            label: "Accounts",
+            value: youtubeAccountOptions.length,
+            detail: "YouTube posting identities",
+            active: activeWorkspace === "accounts",
+            onClick: () => setActiveWorkspace("accounts"),
+          },
+        ]}
+      />
+
+      {activeWorkspace === "queue" ? (
+        <div className="space-y-4">
           <SectionPanel
-            title="Add accounts"
-            description="Use the buttons below to add Instagram or YouTube accounts, connect them, and see which ones are ready."
+            title="Queue"
+            description="See what needs action now. Pick one job, inspect context, and keep automation moving."
+            actions={
+              <div className="flex flex-wrap gap-2">
+                {([
+                  ["all", `All ${posts.length}`],
+                  ["ready", `Ready ${readyQueueCount}`],
+                  ["drafting", `Drafting ${draftingQueueCount}`],
+                  ["attention", `Attention ${attentionQueueJobCount}`],
+                  ["posted", `Posted ${postedQueueCount}`],
+                ] as Array<[QueueViewFilter, string]>).map(([value, label]) => (
+                  <Button
+                    key={value}
+                    type="button"
+                    size="sm"
+                    variant={queueFilter === value ? "secondary" : "ghost"}
+                    onClick={() => setQueueFilter(value)}
+                  >
+                    {label}
+                  </Button>
+                ))}
+              </div>
+            }
           >
+            <div className="grid gap-4 xl:grid-cols-[minmax(320px,0.85fr)_minmax(0,1.15fr)]">
+              {renderOpportunityList({
+                title: "Jobs",
+                description: filteredQueuePosts.length ? "Dense list of current opportunities." : "No queue items in this filter.",
+                posts: filteredQueuePosts,
+                emptyTitle: "No queue items here",
+                emptyDescription: queueFilter === "all" ? "Run manual search or wait for watched channels to produce more work." : "Try another queue filter.",
+              })}
+              {renderInspectorPanel("Inspector", "Selected job, draft, assigned account, and next action.")}
+            </div>
+          </SectionPanel>
+        </div>
+      ) : null}
+
+      {activeWorkspace === "manual" ? (
+        <div className="space-y-4">
+          <SectionPanel title="Manual search" description="Search recent YouTube videos, then route one selected result through the same inspector.">
+            <div className="space-y-4">
+              {youtubeSearchError ? (
+                <div className="rounded-[10px] border border-[color:var(--danger-border)] bg-[color:var(--danger-soft)] px-3 py-2 text-sm text-[color:var(--danger)]">
+                  {youtubeSearchError}
+                </div>
+              ) : null}
+              <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto]">
+                <Input
+                  value={youtubeSearchDraft}
+                  onChange={(event) => setYouTubeSearchDraft(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      event.preventDefault();
+                      void runYouTubeSearch();
+                    }
+                  }}
+                  placeholder="b2b sales"
+                  disabled={searchingYouTube}
+                />
+                <Button type="button" onClick={() => void runYouTubeSearch()} disabled={searchingYouTube}>
+                  <RefreshCw className={cn("h-4 w-4", searchingYouTube ? "animate-spin" : "")} />
+                  {searchingYouTube ? "Searching..." : "Search YouTube"}
+                </Button>
+              </div>
+              <div className="text-sm text-[color:var(--muted-foreground)]">{youtubeSearchSummary || "Example: b2b sales demos"}</div>
+              <div className="text-xs text-[color:var(--muted-foreground)]">
+                {youtubeAccountOptions[0]
+                  ? `Ready to post with ${youtubeAccountOptions[0].accountName}.`
+                  : "Need to post comments? Open Accounts and connect a YouTube account."}
+              </div>
+            </div>
+          </SectionPanel>
+
+          <div className="grid gap-4 xl:grid-cols-[minmax(320px,0.85fr)_minmax(0,1.15fr)]">
+            {renderOpportunityList({
+              title: "Search results",
+              description: loading ? "Loading..." : posts.length ? "Pick one result. Draft appears in inspector." : "Search first.",
+              posts,
+              emptyTitle: "No search results yet",
+              emptyDescription: "Run a YouTube search to load draftable videos.",
+            })}
+            {renderInspectorPanel("Manual inspector", "Selected result, draft, and posting controls.")}
+          </div>
+        </div>
+      ) : null}
+
+      {activeWorkspace === "channels" ? renderChannelsWorkspace() : null}
+
+      {activeWorkspace === "accounts" ? (
+        <SectionPanel title="Accounts" description="Manage the YouTube account fleet used by the queue and watched channels.">
+          <div className="space-y-4">
+            <StatLedger
+              items={[
+                { label: "YouTube", value: youtubeAccountOptions.length, detail: "Accounts available to post" },
+                { label: "Watched", value: youtubeSubscriptions.length, detail: "Channels consuming account capacity" },
+                { label: "Attention", value: attentionQueueCount, detail: "Failures hitting ops right now" },
+              ]}
+            />
             <SocialAccountPoolPanel
               brandId={brandId}
               onChanged={() => {
@@ -2371,9 +2520,11 @@ export default function SocialDiscoveryClient({
                 void loadYouTubeSubscriptions();
               }}
             />
-          </SectionPanel>
-        </div>
-      </details>
+          </div>
+        </SectionPanel>
+      ) : null}
+
+      {renderSetupPanel()}
     </div>
   );
 }

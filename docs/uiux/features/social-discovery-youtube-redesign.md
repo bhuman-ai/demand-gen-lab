@@ -1,7 +1,7 @@
 # Feature: social-discovery-youtube-redesign
 
 ## Request
-Simplify the Accounts workspace so the YouTube count matches what the operator can actually use, and reduce mixed-platform account noise. The user says the screen says 4 YouTube accounts but they only see one connected account. Primary action should be understanding usable YouTube accounts quickly.
+Simplify the Accounts workspace further. The user says it feels bulky and like an account within a box. They want a sleek easy list of connected YouTube accounts with profile pic/name, plus a clear button to add another YouTube account. Needs-sign-in accounts should feel secondary, not dominate the screen.
 ## Autonomy Mode
 holistic_autopilot
 ## Target Users
@@ -210,8 +210,13 @@ Gate result: Concept B strongest. Concept A too mixed. Concept C over-optimizes 
 - 2026-04-22 Implementation summary: Polished the Accounts workspace to reduce YouTube-account confusion. The global Accounts stat now reports connected YouTube accounts rather than every account tagged for YouTube. Posting and channel-assignment options now only include connected YouTube identities. The Accounts workspace itself is filtered to YouTube accounts, shows only connected vs needs-sign-in counts, hides unrelated non-YouTube accounts from the main list, and removes extra metrics that did not help the next action. The add-account area is reduced to a single YouTube action in this workspace.
 - Files: src/app/brands/[id]/social-discovery/social-discovery-client.tsx, src/app/brands/[id]/social-discovery/social-account-pool-panel.tsx
 - Components: SocialDiscoveryClient, SocialAccountPoolPanel, StatLedger, SectionPanel
+- 2026-04-22 Implementation summary: Simplified the Accounts workspace from a stacked dashboard-plus-detail-card into a compact connected-accounts list. The parent Accounts view now removes the extra metric ledger and presents only the connected YouTube account list surface. Within the YouTube account pool panel, connected accounts are the default primary list with add and refresh actions in the header, sign-in-needed accounts move into a collapsed secondary section, and advanced controls are hidden until explicitly opened on one row. The always-visible selected-account box was removed from this YouTube view so the screen reads as one clean list instead of an account inside another account frame.
+- Files: src/app/brands/[id]/social-discovery/social-account-pool-panel.tsx, src/app/brands/[id]/social-discovery/social-discovery-client.tsx
+- Components: SocialAccountPoolPanel, SocialDiscoveryClient, SectionPanel, EmptyState
 ## Doc Sync
 - 2026-04-22 Synced after implementation.
 - Code touched: src/app/brands/[id]/social-discovery/social-discovery-client.tsx
 - 2026-04-22 Synced after implementation.
 - Code touched: src/app/brands/[id]/social-discovery/social-discovery-client.tsx, src/app/brands/[id]/social-discovery/social-account-pool-panel.tsx
+- 2026-04-22 Synced after implementation.
+- Code touched: src/app/brands/[id]/social-discovery/social-account-pool-panel.tsx, src/app/brands/[id]/social-discovery/social-discovery-client.tsx

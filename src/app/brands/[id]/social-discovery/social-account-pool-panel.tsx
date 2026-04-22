@@ -17,6 +17,7 @@ import { SettingsModal } from "@/app/settings/outreach/settings-primitives";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { EmptyState } from "@/components/ui/page-layout";
 import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { canonicalApiUrl } from "@/lib/client-api-url";
@@ -207,6 +208,59 @@ function accountSubtitle(
   );
 }
 
+function accountDisplayLabel(account: OutreachAccount) {
+  return (
+    account.config.social.displayName.trim() ||
+    account.config.social.handle.trim() ||
+    account.config.social.publicIdentifier.trim() ||
+    account.name
+  );
+}
+
+function accountSupportLabel(
+  account: OutreachAccount,
+  options?: {
+    pendingYouTubeAccountId?: string;
+  }
+) {
+  const primary = accountDisplayLabel(account);
+  const pieces: string[] = [];
+  const handle = account.config.social.handle.trim();
+  const subtitle = accountSubtitle(account, options).trim();
+  const genericAccountNamePattern = /^(youtube|instagram) account(?: \d+)?$/i;
+
+  if (handle && handle !== primary) pieces.push(handle);
+  if (
+    account.name.trim() &&
+    account.name.trim() !== primary &&
+    !genericAccountNamePattern.test(account.name.trim())
+  ) {
+    pieces.push(account.name.trim());
+  }
+  if (subtitle && subtitle !== primary && !pieces.includes(subtitle)) pieces.push(subtitle);
+
+  return pieces[0] ?? "";
+}
+
+function accountAvatarImageStyle(account: OutreachAccount) {
+  const avatarUrl = account.config.social.avatarUrl.trim();
+  if (!avatarUrl) return undefined;
+  return {
+    backgroundImage: `url("${avatarUrl.replace(/"/g, '\\"')}")`,
+    backgroundPosition: "center",
+    backgroundSize: "cover",
+  } as const;
+}
+
+function initialsFromLabel(label: string) {
+  return label
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0]?.toUpperCase() ?? "")
+    .join("");
+}
+
 function hasHydratedUnipileIdentity(account: OutreachAccount) {
   const social = account.config.social;
   return Boolean(
@@ -395,6 +449,14 @@ export function SocialAccountPoolPanel({
     () => inferSupportedPlatform(draft ?? selectedAccount?.config.social ?? null),
     [draft, selectedAccount]
   );
+  const connectedVisibleAccounts = useMemo(
+    () => visibleAccounts.filter((account) => hasConnectedIdentity(account.config.social)),
+    [visibleAccounts]
+  );
+  const disconnectedVisibleAccounts = useMemo(
+    () => visibleAccounts.filter((account) => !hasConnectedIdentity(account.config.social)),
+    [visibleAccounts]
+  );
   const selectedHasConnectedIdentity = useMemo(
     () => (draft ? hasConnectedIdentity(draft) : selectedAccount ? hasConnectedIdentity(selectedAccount.config.social) : false),
     [draft, selectedAccount]
@@ -425,7 +487,6 @@ export function SocialAccountPoolPanel({
     }
     setDraft(buildDraft(selectedAccount));
     setCredentialDraft(emptyCredentialDraft());
-    setShowAdvancedSettings(false);
     setShowAdvancedYouTubeCredentials(false);
   }, [selectedAccount]);
 
@@ -939,8 +1000,8 @@ export function SocialAccountPoolPanel({
     }
   }
 
-  async function connectSelectedAccount(platform: SupportedSocialPlatform) {
-    if (!selectedAccount) return;
+  async function connectAccount(account: OutreachAccount, platform: SupportedSocialPlatform) {
+    setSelectedAccountId(account.id);
     if (platform === "youtube") {
       setYouTubeConnecting(true);
     } else {
@@ -949,16 +1010,15 @@ export function SocialAccountPoolPanel({
     setError("");
     setLinkMessage("");
     try {
-      const account =
-        platform === "youtube" ? selectedAccount : await prepareAccountForPlatform(selectedAccount, platform);
+      const preparedAccount = platform === "youtube" ? account : await prepareAccountForPlatform(account, platform);
       setLinkMessage(`Opening ${platformLabel(platform)} sign-in...`);
       if (platform === "youtube") {
-        const result = await startYouTubeConnect(account);
+        const result = await startYouTubeConnect(preparedAccount);
         if (result === "needs_credentials") {
           setLinkMessage("Enter the Google client ID and client secret to continue.");
         }
       } else {
-        await startInstagramConnect(account);
+        await startInstagramConnect(preparedAccount);
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : `Failed to connect ${platformLabel(platform)}`;
@@ -978,6 +1038,11 @@ export function SocialAccountPoolPanel({
         setLinking(false);
       }
     }
+  }
+
+  async function connectSelectedAccount(platform: SupportedSocialPlatform) {
+    if (!selectedAccount) return;
+    await connectAccount(selectedAccount, platform);
   }
 
   async function saveSelectedAccount() {
@@ -1036,6 +1101,701 @@ export function SocialAccountPoolPanel({
     !selectedHasConnectedIdentity;
   const showYouTubeClientIdField = youtubeCredentialModalMissingFields.includes("youtubeClientId");
   const showYouTubeClientSecretField = youtubeCredentialModalMissingFields.includes("youtubeClientSecret");
+
+  function selectAccountForEditing(accountId: string) {
+    setSelectedAccountId(accountId);
+    setError("");
+    setLinkMessage("");
+  }
+
+  function toggleAdvancedSettingsForAccount(accountId: string) {
+    selectAccountForEditing(accountId);
+    setShowAdvancedSettings((current) => (selectedAccountId === accountId ? !current : true));
+  }
+
+  function renderAccountAvatar(account: OutreachAccount) {
+    const platform = inferSupportedPlatform(account.config.social);
+    const avatarStyle = accountAvatarImageStyle(account);
+    const label = accountDisplayLabel(account);
+
+    return (
+      <div
+        className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-[color:var(--border)] bg-[color:var(--surface-muted)] text-sm font-medium text-[color:var(--foreground)]"
+        style={avatarStyle}
+        aria-hidden="true"
+      >
+        {avatarStyle ? null : initialsFromLabel(label) || (platform ? platformLabel(platform).slice(0, 1) : "?")}
+      </div>
+    );
+  }
+
+  function renderAdvancedSettingsForm() {
+    if (!selectedAccount || !draft || !showAdvancedSettings) return null;
+
+    return (
+      <div className="space-y-5">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <div className="text-sm font-medium text-[color:var(--foreground)]">Advanced settings</div>
+            <div className="text-sm text-[color:var(--muted-foreground)]">
+              Most people can ignore this. Use it only if you need manual overrides.
+            </div>
+          </div>
+          <Button type="button" onClick={saveSelectedAccount} disabled={saving || linking || youtubeConnecting}>
+            {saving ? "Saving..." : "Save advanced settings"}
+          </Button>
+        </div>
+
+        <label className="flex items-start gap-3 rounded-[10px] border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-3">
+          <input
+            type="checkbox"
+            checked={draft.enabled}
+            onChange={(event) => setDraft({ ...draft, enabled: event.target.checked })}
+            className="mt-1 h-4 w-4 rounded border border-[color:var(--border)] bg-[color:var(--background)] accent-[color:var(--accent)]"
+          />
+          <span className="min-w-0">
+            <span className="text-sm font-medium text-[color:var(--foreground)]">Use this account for routing</span>
+            <span className="mt-1 block text-sm leading-6 text-[color:var(--muted-foreground)]">
+              Turn this off if you want to keep the account saved without using it.
+            </span>
+          </span>
+        </label>
+
+        <div className="grid gap-4 md:grid-cols-2">
+          <div className="space-y-2">
+            <Label htmlFor="social-role">Role</Label>
+            <Select
+              id="social-role"
+              value={draft.role}
+              onChange={(event) =>
+                setDraft({
+                  ...draft,
+                  role: event.target.value as SocialDraft["role"],
+                })
+              }
+            >
+              {ROLE_OPTIONS.map((role) => (
+                <option key={role} value={role}>
+                  {role}
+                </option>
+              ))}
+            </Select>
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="social-connection">Connection</Label>
+            <Select
+              id="social-connection"
+              value={draft.connectionProvider}
+              onChange={(event) =>
+                setDraft({
+                  ...draft,
+                  connectionProvider: event.target.value as SocialDraft["connectionProvider"],
+                })
+              }
+            >
+              {CONNECTION_OPTIONS.map((provider) => (
+                <option key={provider} value={provider}>
+                  {provider}
+                </option>
+              ))}
+            </Select>
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="social-handle">Handle</Label>
+            <Input
+              id="social-handle"
+              value={draft.handle}
+              onChange={(event) => setDraft({ ...draft, handle: event.target.value })}
+              placeholder="@safelywithsam"
+            />
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="social-linked-provider">Linked provider</Label>
+            <Select
+              id="social-linked-provider"
+              value={draft.linkedProvider}
+              onChange={(event) =>
+                setDraft({
+                  ...draft,
+                  linkedProvider: event.target.value as SocialDraft["linkedProvider"],
+                })
+              }
+            >
+              {LINKED_PROVIDER_OPTIONS.map((provider) => (
+                <option key={provider || "none"} value={provider}>
+                  {provider || "none"}
+                </option>
+              ))}
+            </Select>
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="social-external-id">External account id</Label>
+            <Input
+              id="social-external-id"
+              value={draft.externalAccountId}
+              onChange={(event) => setDraft({ ...draft, externalAccountId: event.target.value })}
+              placeholder={draft.connectionProvider === "youtube" ? "UC..." : "acc_123"}
+            />
+          </div>
+
+          <div className="space-y-2 md:col-span-2">
+            <Label htmlFor="social-profile-url">Profile URL</Label>
+            <Input
+              id="social-profile-url"
+              value={draft.profileUrl}
+              onChange={(event) => setDraft({ ...draft, profileUrl: event.target.value })}
+              placeholder="https://instagram.com/..."
+            />
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="social-public-id">Public identifier</Label>
+            <Input
+              id="social-public-id"
+              value={draft.publicIdentifier}
+              onChange={(event) => setDraft({ ...draft, publicIdentifier: event.target.value })}
+              placeholder="sam-safeagain"
+            />
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="social-display-name">Display name</Label>
+            <Input
+              id="social-display-name"
+              value={draft.displayName}
+              onChange={(event) => setDraft({ ...draft, displayName: event.target.value })}
+              placeholder="Sam Rivera"
+            />
+          </div>
+
+          <div className="space-y-2 md:col-span-2">
+            <Label htmlFor="social-avatar-url">Avatar URL</Label>
+            <Input
+              id="social-avatar-url"
+              value={draft.avatarUrl}
+              onChange={(event) => setDraft({ ...draft, avatarUrl: event.target.value })}
+              placeholder="https://..."
+            />
+          </div>
+        </div>
+
+        {showYouTubeCredentials ? (
+          <div className="rounded-[10px] border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <div className="text-sm font-medium text-[color:var(--foreground)]">YouTube app credentials</div>
+                <p className="mt-1 text-sm leading-6 text-[color:var(--muted-foreground)]">
+                  Only needed if the shared Google app credentials are missing. Usually leave this alone.
+                </p>
+              </div>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setShowAdvancedYouTubeCredentials((current) => !current)}
+              >
+                {showAdvancedYouTubeCredentials ? "Hide fields" : "Show fields"}
+              </Button>
+            </div>
+
+            {showAdvancedYouTubeCredentials ? (
+              <div className="mt-3 grid gap-4 md:grid-cols-2">
+                <div className="space-y-2">
+                  <Label htmlFor="youtube-client-id">Client ID</Label>
+                  <Input
+                    id="youtube-client-id"
+                    value={credentialDraft.youtubeClientId}
+                    onChange={(event) =>
+                      setCredentialDraft((current) => ({ ...current, youtubeClientId: event.target.value }))
+                    }
+                    autoCapitalize="none"
+                    autoCorrect="off"
+                    autoComplete="new-password"
+                    spellCheck={false}
+                    data-1p-ignore="true"
+                    data-lpignore="true"
+                    placeholder="Google OAuth client id"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="youtube-client-secret">Client secret</Label>
+                  <Input
+                    id="youtube-client-secret"
+                    type="password"
+                    value={credentialDraft.youtubeClientSecret}
+                    onChange={(event) =>
+                      setCredentialDraft((current) => ({ ...current, youtubeClientSecret: event.target.value }))
+                    }
+                    autoCapitalize="none"
+                    autoCorrect="off"
+                    autoComplete="new-password"
+                    spellCheck={false}
+                    data-1p-ignore="true"
+                    data-lpignore="true"
+                    placeholder="Google OAuth client secret"
+                  />
+                </div>
+                <div className="space-y-2 md:col-span-2">
+                  <Label htmlFor="youtube-refresh-token">Refresh token</Label>
+                  <Textarea
+                    id="youtube-refresh-token"
+                    value={credentialDraft.youtubeRefreshToken}
+                    onChange={(event) =>
+                      setCredentialDraft((current) => ({ ...current, youtubeRefreshToken: event.target.value }))
+                    }
+                    placeholder="Optional. Leave blank if you are using the normal Google connect flow."
+                  />
+                </div>
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+
+        <div className="grid gap-4 md:grid-cols-2">
+          <div className="space-y-2">
+            <Label htmlFor="social-linked-at">Linked at</Label>
+            <Input
+              id="social-linked-at"
+              value={draft.linkedAt}
+              onChange={(event) => setDraft({ ...draft, linkedAt: event.target.value })}
+              placeholder="2026-04-09T12:00:00.000Z"
+            />
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="social-last-sync">Last profile sync</Label>
+            <Input
+              id="social-last-sync"
+              value={draft.lastProfileSyncAt}
+              onChange={(event) => setDraft({ ...draft, lastProfileSyncAt: event.target.value })}
+              placeholder="2026-04-09T12:05:00.000Z"
+            />
+          </div>
+        </div>
+
+        <div className="grid gap-4 md:grid-cols-2">
+          <div className="space-y-2">
+            <Label htmlFor="social-headline">Headline</Label>
+            <Textarea
+              id="social-headline"
+              value={draft.headline}
+              onChange={(event) => setDraft({ ...draft, headline: event.target.value })}
+              placeholder="Women’s safety educator and campus organizer"
+            />
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="social-bio">Bio</Label>
+            <Textarea
+              id="social-bio"
+              value={draft.bio}
+              onChange={(event) => setDraft({ ...draft, bio: event.target.value })}
+              placeholder="Writes about night-walk routines, rideshare safety, and practical bystander habits."
+            />
+          </div>
+        </div>
+
+        <div className="space-y-2">
+          <Label>Platforms</Label>
+          <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+            {SOCIAL_PLATFORM_CATALOG.map((platform) => {
+              const checked = draft.platforms.includes(platform.id);
+              return (
+                <label
+                  key={platform.id}
+                  className="flex cursor-pointer items-start gap-3 rounded-[10px] border border-[color:var(--border)] px-3 py-2.5 transition-colors hover:bg-[color:var(--surface-muted)]"
+                >
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    onChange={() => togglePlatform(platform.id)}
+                    className="mt-1 h-4 w-4 rounded border border-[color:var(--border)] bg-[color:var(--background)] accent-[color:var(--accent)]"
+                  />
+                  <span className="min-w-0">
+                    <span className="block text-sm font-medium text-[color:var(--foreground)]">{platform.label}</span>
+                    <span className="block text-xs leading-5 text-[color:var(--muted-foreground)]">
+                      {platform.scanStatus === "supported_now" ? "Scan now" : "Save only"}
+                    </span>
+                  </span>
+                </label>
+              );
+            })}
+          </div>
+        </div>
+
+        <div className="grid gap-4 md:grid-cols-2">
+          <div className="space-y-2">
+            <Label htmlFor="social-trust">Trust level</Label>
+            <Input
+              id="social-trust"
+              type="number"
+              min={0}
+              max={10}
+              value={draft.trustLevel}
+              onChange={(event) =>
+                setDraft({
+                  ...draft,
+                  trustLevel: Math.max(0, Math.min(10, Number(event.target.value) || 0)),
+                })
+              }
+            />
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="social-cooldown">Cooldown minutes</Label>
+            <Input
+              id="social-cooldown"
+              type="number"
+              min={0}
+              max={24 * 60}
+              value={draft.cooldownMinutes}
+              onChange={(event) =>
+                setDraft({
+                  ...draft,
+                  cooldownMinutes: Math.max(0, Math.min(24 * 60, Number(event.target.value) || 0)),
+                })
+              }
+            />
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="social-activity-24h">Recent actions (24h)</Label>
+            <Input
+              id="social-activity-24h"
+              type="number"
+              min={0}
+              value={draft.recentActivity24h}
+              onChange={(event) =>
+                setDraft({
+                  ...draft,
+                  recentActivity24h: Math.max(0, Number(event.target.value) || 0),
+                })
+              }
+            />
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="social-activity-7d">Recent actions (7d)</Label>
+            <Input
+              id="social-activity-7d"
+              type="number"
+              min={0}
+              value={draft.recentActivity7d}
+              onChange={(event) =>
+                setDraft({
+                  ...draft,
+                  recentActivity7d: Math.max(0, Number(event.target.value) || 0),
+                })
+              }
+            />
+          </div>
+        </div>
+
+        <div className="grid gap-4 md:grid-cols-2">
+          <div className="space-y-2">
+            <Label htmlFor="social-topic-tags">Topic tags</Label>
+            <Textarea
+              id="social-topic-tags"
+              value={draft.topicTags}
+              onChange={(event) => setDraft({ ...draft, topicTags: event.target.value })}
+              placeholder="women’s safety, campus safety, solo travel"
+            />
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="social-community-tags">Community tags</Label>
+            <Textarea
+              id="social-community-tags"
+              value={draft.communityTags}
+              onChange={(event) => setDraft({ ...draft, communityTags: event.target.value })}
+              placeholder="reddit women, campus safety, solo travelers"
+            />
+          </div>
+        </div>
+
+        <div className="grid gap-4 md:grid-cols-2">
+          <div className="space-y-2">
+            <Label htmlFor="social-coordination">Coordination group</Label>
+            <Input
+              id="social-coordination"
+              value={draft.coordinationGroup}
+              onChange={(event) => setDraft({ ...draft, coordinationGroup: event.target.value })}
+              placeholder="safeagain-ops"
+            />
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="social-notes">Notes</Label>
+            <Textarea
+              id="social-notes"
+              value={draft.notes}
+              onChange={(event) => setDraft({ ...draft, notes: event.target.value })}
+              placeholder="Campus safety voice. Good for empathy-first replies."
+            />
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  function renderYouTubeCredentialModal() {
+    return (
+      <SettingsModal
+        open={youtubeCredentialModalOpen}
+        title="Add YouTube app details"
+        description="We need your Google client ID and client secret before we can open YouTube sign-in."
+        onOpenChange={(open) => {
+          setYouTubeCredentialModalOpen(open);
+          if (!open) {
+            setYouTubeCredentialModalError("");
+            setYouTubeCredentialModalAccountId("");
+          }
+        }}
+        footer={
+          <div className="flex flex-wrap justify-end gap-2">
+            <Button
+              type="button"
+              variant="ghost"
+              onClick={() => {
+                setYouTubeCredentialModalOpen(false);
+                setYouTubeCredentialModalError("");
+                setYouTubeCredentialModalAccountId("");
+              }}
+            >
+              Cancel
+            </Button>
+            <Button type="button" onClick={() => void saveYouTubeCredentialsAndContinue()} disabled={youtubeCredentialModalSaving}>
+              {youtubeCredentialModalSaving ? "Saving..." : "Save and continue"}
+            </Button>
+          </div>
+        }
+      >
+        <div className="space-y-4">
+          <div className="text-sm text-[color:var(--muted-foreground)]">
+            This is the Google app that is allowed to request YouTube access for this account.
+          </div>
+
+          {showYouTubeClientIdField ? (
+            <div className="space-y-2">
+              <Label htmlFor="youtube-modal-client-id">Client ID</Label>
+              <Input
+                id="youtube-modal-client-id"
+                value={credentialDraft.youtubeClientId}
+                onChange={(event) =>
+                  setCredentialDraft((current) => ({ ...current, youtubeClientId: event.target.value }))
+                }
+                autoCapitalize="none"
+                autoCorrect="off"
+                autoComplete="new-password"
+                spellCheck={false}
+                data-1p-ignore="true"
+                data-lpignore="true"
+                placeholder="Google OAuth client id"
+              />
+            </div>
+          ) : null}
+
+          {showYouTubeClientSecretField ? (
+            <div className="space-y-2">
+              <Label htmlFor="youtube-modal-client-secret">Client secret</Label>
+              <Input
+                id="youtube-modal-client-secret"
+                type="password"
+                value={credentialDraft.youtubeClientSecret}
+                onChange={(event) =>
+                  setCredentialDraft((current) => ({ ...current, youtubeClientSecret: event.target.value }))
+                }
+                autoCapitalize="none"
+                autoCorrect="off"
+                autoComplete="new-password"
+                spellCheck={false}
+                data-1p-ignore="true"
+                data-lpignore="true"
+                placeholder="Google OAuth client secret"
+              />
+            </div>
+          ) : null}
+
+          {youtubeCredentialModalError ? (
+            <div className="rounded-[10px] border border-[color:var(--danger)]/30 bg-[color:var(--danger)]/10 px-3 py-3 text-sm text-[color:var(--danger)]">
+              {youtubeCredentialModalError}
+            </div>
+          ) : null}
+        </div>
+      </SettingsModal>
+    );
+  }
+
+  if (platformFilter) {
+    return (
+      <>
+        <div className="space-y-4">
+          {error ? (
+            <div className="rounded-[10px] border border-[color:var(--danger)]/30 bg-[color:var(--danger)]/10 px-3 py-3 text-sm text-[color:var(--danger)]">
+              {error}
+            </div>
+          ) : null}
+
+          {linkMessage ? (
+            <div className="rounded-[10px] border border-[color:var(--success)]/30 bg-[color:var(--success)]/10 px-3 py-3 text-sm text-[color:var(--success)]">
+              {linkMessage}
+            </div>
+          ) : null}
+
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <div className="text-sm font-medium text-[color:var(--foreground)]">Connected {platformLabel(platformFilter)} accounts</div>
+              <div className="text-sm text-[color:var(--muted-foreground)]">
+                {connectedVisibleAccounts.length} connected
+                {disconnectedVisibleAccounts.length ? ` · ${disconnectedVisibleAccounts.length} need sign-in` : ""}
+              </div>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <Button
+                type="button"
+                onClick={() => void createAndConnectPlatform(platformFilter)}
+                disabled={Boolean(creatingPlatform) || linking || youtubeConnecting || saving || syncing}
+              >
+                Add {platformLabel(platformFilter)} account
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => void refresh()}
+                disabled={loading || saving || linking || youtubeConnecting}
+              >
+                <RefreshCw className="h-4 w-4" />
+                Refresh
+              </Button>
+            </div>
+          </div>
+
+          {loading ? (
+            <div className="rounded-[12px] border border-[color:var(--border)] bg-[color:var(--surface)] px-4 py-4 text-sm text-[color:var(--muted-foreground)]">
+              Loading accounts...
+            </div>
+          ) : connectedVisibleAccounts.length ? (
+            <div className="overflow-hidden rounded-[12px] border border-[color:var(--border)] bg-[color:var(--surface)]">
+              {connectedVisibleAccounts.map((account, index) => {
+                const isExpanded = selectedAccount?.id === account.id && showAdvancedSettings;
+                const supportLabel = accountSupportLabel(account, { pendingYouTubeAccountId });
+                return (
+                  <div key={account.id} className={cn(index > 0 ? "border-t border-[color:var(--border)]" : "")}>
+                    <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
+                      <div className="flex min-w-0 items-center gap-3">
+                        {renderAccountAvatar(account)}
+                        <div className="min-w-0">
+                          <div className="truncate text-sm font-medium text-[color:var(--foreground)]">{accountDisplayLabel(account)}</div>
+                          {supportLabel ? (
+                            <div className="truncate text-xs text-[color:var(--muted-foreground)]">{supportLabel}</div>
+                          ) : null}
+                        </div>
+                      </div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <div className="inline-flex items-center gap-1.5 text-xs text-[color:var(--muted-foreground)]">
+                          <CheckCircle2 className="h-3.5 w-3.5 text-[color:var(--success)]" />
+                          Connected
+                        </div>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          onClick={() => void connectAccount(account, platformFilter)}
+                          disabled={saving || syncing || linking || youtubeConnecting || Boolean(creatingPlatform)}
+                        >
+                          Reconnect
+                        </Button>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant={isExpanded ? "secondary" : "ghost"}
+                          onClick={() => toggleAdvancedSettingsForAccount(account.id)}
+                          disabled={loading}
+                        >
+                          {isExpanded ? "Hide advanced" : "Advanced"}
+                        </Button>
+                      </div>
+                    </div>
+                    {isExpanded ? <div className="border-t border-[color:var(--border)] px-4 py-4">{renderAdvancedSettingsForm()}</div> : null}
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <EmptyState
+              title={`No connected ${platformLabel(platformFilter)} accounts yet`}
+              description={
+                disconnectedVisibleAccounts.length
+                  ? `Finish sign-in for an existing ${platformLabel(platformFilter)} account below, or add a new one.`
+                  : `Add a ${platformLabel(platformFilter)} account to start posting.`
+              }
+              actions={
+                <Button
+                  type="button"
+                  onClick={() => void createAndConnectPlatform(platformFilter)}
+                  disabled={Boolean(creatingPlatform) || linking || youtubeConnecting || saving || syncing}
+                >
+                  Add {platformLabel(platformFilter)} account
+                </Button>
+              }
+            />
+          )}
+
+          {disconnectedVisibleAccounts.length ? (
+            <details className="rounded-[12px] border border-[color:var(--border)] bg-[color:var(--surface)]">
+              <summary className="cursor-pointer px-4 py-3 text-sm font-medium text-[color:var(--foreground)]">
+                Needs sign-in ({disconnectedVisibleAccounts.length})
+              </summary>
+              <div className="border-t border-[color:var(--border)]">
+                {disconnectedVisibleAccounts.map((account, index) => {
+                  const supportLabel = accountSupportLabel(account, { pendingYouTubeAccountId });
+                  return (
+                    <div
+                      key={account.id}
+                      className={cn(
+                        "flex flex-wrap items-center justify-between gap-3 px-4 py-3",
+                        index > 0 ? "border-t border-[color:var(--border)]" : ""
+                      )}
+                    >
+                      <div className="flex min-w-0 items-center gap-3">
+                        {renderAccountAvatar(account)}
+                        <div className="min-w-0">
+                          <div className="truncate text-sm font-medium text-[color:var(--foreground)]">{accountDisplayLabel(account)}</div>
+                          <div className="truncate text-xs text-[color:var(--muted-foreground)]">
+                            {supportLabel || "No linked social identity yet"}
+                          </div>
+                        </div>
+                      </div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <div className="inline-flex items-center gap-1.5 text-xs text-[color:var(--muted-foreground)]">
+                          <CircleAlert className="h-3.5 w-3.5" />
+                          Needs sign-in
+                        </div>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          onClick={() => void connectAccount(account, platformFilter)}
+                          disabled={saving || syncing || linking || youtubeConnecting || Boolean(creatingPlatform)}
+                        >
+                          Finish sign-in
+                        </Button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </details>
+          ) : null}
+        </div>
+
+        {renderYouTubeCredentialModal()}
+      </>
+    );
+  }
 
   return (
     <>

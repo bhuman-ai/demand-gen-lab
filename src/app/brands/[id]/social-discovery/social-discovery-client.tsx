@@ -588,10 +588,6 @@ export default function SocialDiscoveryClient({
     () => configuredYouTubeSocialAccounts.filter(hasConnectedSocialIdentity),
     [configuredYouTubeSocialAccounts]
   );
-  const needsSignInYouTubeAccountCount = useMemo(
-    () => configuredYouTubeSocialAccounts.length - connectedYouTubeSocialAccounts.length,
-    [configuredYouTubeSocialAccounts.length, connectedYouTubeSocialAccounts.length]
-  );
   const youtubeAccountOptions = useMemo(() => {
     return connectedYouTubeSocialAccounts
       .map((account) => ({
@@ -2519,24 +2515,16 @@ export default function SocialDiscoveryClient({
       {activeWorkspace === "channels" ? renderChannelsWorkspace() : null}
 
       {activeWorkspace === "accounts" ? (
-        <SectionPanel title="Accounts" description="See which YouTube accounts can post right now.">
-          <div className="space-y-4">
-            <StatLedger
-              items={[
-                { label: "Connected", value: connectedYouTubeSocialAccounts.length, detail: "Ready to post" },
-                { label: "Needs sign-in", value: needsSignInYouTubeAccountCount, detail: "Finish Google connect" },
-              ]}
-            />
-            <SocialAccountPoolPanel
-              brandId={brandId}
-              platformFilter="youtube"
-              onChanged={() => {
-                void loadPosts(status);
-                void loadCommentAccounts();
-                void loadYouTubeSubscriptions();
-              }}
-            />
-          </div>
+        <SectionPanel title="Accounts" description="Connected YouTube accounts used for posting.">
+          <SocialAccountPoolPanel
+            brandId={brandId}
+            platformFilter="youtube"
+            onChanged={() => {
+              void loadPosts(status);
+              void loadCommentAccounts();
+              void loadYouTubeSubscriptions();
+            }}
+          />
         </SectionPanel>
       ) : null}
 

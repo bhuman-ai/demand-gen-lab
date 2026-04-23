@@ -2,6 +2,7 @@ import { createId, type BrandRecord } from "@/lib/factory-data";
 import { resolveLlmModel } from "@/lib/llm-router";
 import { listSocialRoutingAccounts } from "@/lib/outreach-data";
 import {
+  brandMentionCount,
   brandMentionLooksCannedOrAdLike,
   commentBrandName,
   ensureCasualBrandMention,
@@ -2063,13 +2064,13 @@ export function buildSocialCommentPlanningPrompt(input: {
     "Use the following prompt for the top-level commentDraft:",
     brandCommentPrompt,
     forceDraft
-      ? `Selected-video mode: realism first. ${brandName} mention is optional. Only mention ${brandName} if it feels genuinely plausible in a normal YouTube comment. If it feels forced, do not mention it.`
+      ? `Selected-video mode: mention ${brandName} exactly once, casually, inside the real reaction to the video. ${brandName} must be present, but it should feel incidental, not promotional.`
       : "",
     forceDraft && draftMode === "thread"
-      ? `Thread mode: decide the most natural two-account exchange. Brand mention is optional and can appear in either comment only if it feels organic.`
+      ? `Thread mode: decide the most natural two-account exchange. Mention ${brandName} exactly once across both comments, in whichever comment makes it feel most natural.`
       : "",
     forceDraft && draftMode === "solo"
-      ? `Solo mode: commentDraft should sound like a normal YouTube comment someone typed quickly. Do not force a brand mention.`
+      ? `Solo mode: commentDraft must mention ${brandName} exactly once, but ${brandName} should be context, not conclusion. Do not append a separate brand sentence.`
       : "",
     input.post.platform === "youtube"
       ? [
@@ -2081,8 +2082,8 @@ export function buildSocialCommentPlanningPrompt(input: {
           "- Do not sound like a marketer, strategist, founder, consultant, or brand writer.",
           "- Do not sound like you are trying to teach the audience or summarize the whole video.",
           "- A little roughness is okay. The comment should feel like it was typed in under 20 seconds.",
-          "- If you mention the brand, it must feel incidental and ordinary. No 'from our work', no 'we see that at BRAND', no 'we learned that at BRAND', no polished side note.",
-          "- Do not append a separate brand sentence. Do not force a mention.",
+          "- Mention the brand exactly once. Keep it incidental and ordinary. No 'from our work', no 'we see that at BRAND', no 'we learned that at BRAND', no polished side note.",
+          "- Do not append a separate brand sentence. Do not turn the comment into a pitch.",
           "- If transcript is unavailable, use title + description + channel metadata and do not pretend to know details that are not present.",
         ].join("\n")
       : "",
@@ -2092,7 +2093,7 @@ export function buildSocialCommentPlanningPrompt(input: {
     "Always return a non-empty commentDraft for this exact video. Do not leave commentDraft empty.",
     "Set shouldComment to true.",
     "If the video is weakly related, write the most natural light-touch comment that fits the video and brand context.",
-    "Brand mention rules: optional, rare, incidental. No polished bridge sentence, no full product framing, no feature list, no value-prop stack, no 'fits this shift', no 'exists for this', and no 'without going fully manual'.",
+    "Brand mention rules: exactly once, incidental, not promotional. No polished bridge sentence, no full product framing, no feature list, no value-prop stack, no 'fits this shift', no 'exists for this', and no 'without going fully manual'.",
     draftMode === "thread"
       ? "Thread rules: commentDraft should set up natural opening, question, gap, or prompt. replyDraft should answer, recommend, or bridge naturally from different person."
       : "Solo rules: commentDraft must work alone. No setup for another account.",
@@ -2171,6 +2172,9 @@ function youtubeForceDraftProblem(input: {
 }) {
   if (!input.forceDraft || input.platform !== "youtube") return "";
   const combinedDraft = [input.commentDraft, input.replyDraft].filter(Boolean).join("\n");
+  const mentionCount = brandMentionCount(combinedDraft, input.brandName);
+  if (mentionCount === 0) return `missing ${input.brandName}`;
+  if (mentionCount > 1) return `mentions ${input.brandName} more than once`;
   if (brandMentionLooksCannedOrAdLike(combinedDraft, input.brandName)) {
     return `uses canned or ad-like ${input.brandName} phrasing`;
   }
@@ -2225,7 +2229,10 @@ async function enhanceInteractionPlanWithLlm(
         "",
         `Regenerate from scratch because the previous draft failed: ${initialProblem}.`,
         "Make it shorter, rougher, and more ordinary.",
-        `If ${brandName} feels forced, omit it entirely.`,
+        `Mention ${brandName} exactly once, casually, inside the actual comment.`,
+        `${brandName} should be context, not conclusion.`,
+        `Do not append a standalone ${brandName} sentence.`,
+        `Do not explain what ${brandName} does unless the video directly calls for it.`,
         `Do not use generic side notes like 'we see that at ${brandName}' or 'we see that a lot at ${brandName}'.`,
         "Do not use a reusable template. Return JSON only.",
       ].join("\n");

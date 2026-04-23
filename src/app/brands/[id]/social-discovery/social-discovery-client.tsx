@@ -16,10 +16,10 @@ import {
 } from "@/lib/client-api-url";
 import type { OutreachAccount, SocialDiscoveryYouTubeSubscription } from "@/lib/factory-types";
 import {
+  brandMentionCount,
   brandMentionLooksCannedOrAdLike,
   commentBrandName,
   sanitizeCasualBrandMention,
-  textMentionsBrand,
 } from "@/lib/social-discovery-brand-mention";
 import { resolveSocialDiscoveryCommentPrompt } from "@/lib/social-discovery-comment-prompt";
 import { cn } from "@/lib/utils";
@@ -1203,10 +1203,20 @@ export default function SocialDiscoveryClient({
       setCommentError("Write a comment before sending.");
       return;
     }
+    if (selectedCommentPlatform === "youtube" && selectedBrandMentionName.trim()) {
+      const mentionCount = brandMentionCount(finalCommentDraft, selectedBrandMentionName);
+      if (mentionCount === 0) {
+        setCommentError(`Mention ${selectedBrandMentionName} once, casually, in the comment.`);
+        return;
+      }
+      if (mentionCount > 1) {
+        setCommentError(`Mention ${selectedBrandMentionName} only once.`);
+        return;
+      }
+    }
     if (
       selectedCommentPlatform === "youtube" &&
       selectedBrandMentionName.trim() &&
-      textMentionsBrand(finalCommentDraft, selectedBrandMentionName) &&
       brandMentionLooksCannedOrAdLike(finalCommentDraft, selectedBrandMentionName)
     ) {
       setCommentError(`Rewrite the ${selectedBrandMentionName} mention so it sounds ordinary, not canned.`);

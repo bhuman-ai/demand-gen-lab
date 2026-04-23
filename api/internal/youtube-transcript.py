@@ -1,13 +1,26 @@
 from http.server import BaseHTTPRequestHandler
 from urllib.parse import parse_qs, urlparse
 import json
+import os
 from datetime import datetime, timezone
 
 from youtube_transcript_api import YouTubeTranscriptApi
 
 
+def internal_token():
+    return (
+        os.environ.get("YOUTUBE_TRANSCRIPT_INTERNAL_TOKEN", "").strip()
+        or os.environ.get("OUTREACH_CRON_TOKEN", "").strip()
+        or os.environ.get("CRON_SECRET", "").strip()
+    )
+
+
 class handler(BaseHTTPRequestHandler):
     def do_GET(self):
+        token = internal_token()
+        if token and self.headers.get("authorization", "") != f"Bearer {token}":
+            return self._json({"error": "unauthorized"}, 401)
+
         parsed = urlparse(self.path)
         params = parse_qs(parsed.query)
         video_id = (params.get("videoId") or [""])[0].strip()

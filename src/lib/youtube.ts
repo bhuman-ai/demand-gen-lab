@@ -176,15 +176,23 @@ function youtubeTranscriptServiceUrl() {
   if (configured) return configured;
   const currentDeployment = String(process.env.VERCEL_URL ?? "").trim();
   if (currentDeployment) {
-    return `https://${currentDeployment.replace(/^https?:\/\//, "").replace(/\/+$/, "")}/api/python/youtube-transcript`;
+    return `https://${currentDeployment.replace(/^https?:\/\//, "").replace(/\/+$/, "")}/api/internal/youtube-transcript`;
   }
   const appUrl =
     String(process.env.APP_URL ?? "").trim() || String(process.env.NEXT_PUBLIC_APP_URL ?? "").trim();
   if (appUrl) {
     const normalized = appUrl.startsWith("http://") || appUrl.startsWith("https://") ? appUrl : `https://${appUrl}`;
-    return `${normalized.replace(/\/+$/, "")}/api/python/youtube-transcript`;
+    return `${normalized.replace(/\/+$/, "")}/api/internal/youtube-transcript`;
   }
-  return `${getAppUrl()}/api/python/youtube-transcript`;
+  return `${getAppUrl()}/api/internal/youtube-transcript`;
+}
+
+function youtubeTranscriptInternalToken() {
+  return (
+    String(process.env.YOUTUBE_TRANSCRIPT_INTERNAL_TOKEN ?? "").trim() ||
+    String(process.env.OUTREACH_CRON_TOKEN ?? "").trim() ||
+    String(process.env.CRON_SECRET ?? "").trim()
+  );
 }
 
 function youtubeDataApiKey() {
@@ -678,10 +686,12 @@ async function getYouTubeVideoTranscriptViaHttp(input: {
         url.searchParams.append("language", normalized);
       }
     }
+    const token = youtubeTranscriptInternalToken();
     const response = await fetch(url, {
       method: "GET",
       headers: {
         "Accept": "application/json",
+        ...(token ? { "Authorization": `Bearer ${token}` } : {}),
       },
       signal: AbortSignal.timeout(15000),
     });

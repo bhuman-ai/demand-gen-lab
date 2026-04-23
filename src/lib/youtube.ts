@@ -4,6 +4,7 @@ import { promisify } from "node:util";
 import { getAppUrl } from "@/lib/app-url";
 import type { OutreachAccountSecrets } from "@/lib/outreach-data";
 import type { SocialDiscoveryPost } from "@/lib/social-discovery-types";
+import { pickWebshareProxy } from "@/lib/webshare-client";
 
 const YOUTUBE_DATA_API_BASE_URL = "https://www.googleapis.com/youtube/v3";
 const YOUTUBE_OAUTH_AUTHORIZE_URL = "https://accounts.google.com/o/oauth2/v2/auth";
@@ -687,11 +688,19 @@ async function getYouTubeVideoTranscriptViaHttp(input: {
       }
     }
     const token = youtubeTranscriptInternalToken();
+    const proxyChoice = await pickWebshareProxy(new Set<string>()).catch(() => ({
+      ok: false as const,
+      error: "",
+      proxy: null,
+    }));
     const response = await fetch(url, {
       method: "GET",
       headers: {
         "Accept": "application/json",
         ...(token ? { "Authorization": `Bearer ${token}` } : {}),
+        ...(proxyChoice.ok && proxyChoice.proxy?.url
+          ? { "X-YouTube-Transcript-Proxy": proxyChoice.proxy.url }
+          : {}),
       },
       signal: AbortSignal.timeout(15000),
     });

@@ -74,9 +74,11 @@ def webshare_proxy_urls():
     return urls
 
 
-def fetch_with_retries(video_id, languages):
+def fetch_with_retries(video_id, languages, request_proxy_url=None):
     attempts = []
     proxy_urls = []
+    if request_proxy_url:
+        proxy_urls.append(request_proxy_url)
     configured_proxy = env("YOUTUBE_TRANSCRIPT_PROXY_URL")
     if configured_proxy:
         proxy_urls.append(configured_proxy)
@@ -109,8 +111,9 @@ class handler(BaseHTTPRequestHandler):
         if not video_id:
             return self._json({"error": "videoId is required"}, 400)
 
+        request_proxy_url = self.headers.get("x-youtube-transcript-proxy", "").strip()
         try:
-            transcript, attempts = fetch_with_retries(video_id, languages)
+            transcript, attempts = fetch_with_retries(video_id, languages, request_proxy_url)
         except Exception as error:
             return self._json(
                 {

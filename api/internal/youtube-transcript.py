@@ -6,7 +6,7 @@ import os
 from datetime import datetime, timezone
 
 from youtube_transcript_api import YouTubeTranscriptApi
-from youtube_transcript_api.proxies import GenericProxyConfig
+from youtube_transcript_api.proxies import GenericProxyConfig, WebshareProxyConfig
 
 
 def internal_token():
@@ -32,8 +32,30 @@ def transcript_api(proxy_url=None):
     )
 
 
+def residential_webshare_api():
+    username = env("WEBSHARE_PROXY_USERNAME")
+    password = env("WEBSHARE_PROXY_PASSWORD")
+    if not username or not password:
+        return None
+    locations = [env("WEBSHARE_PROXY_COUNTRY").upper()] if env("WEBSHARE_PROXY_COUNTRY") else None
+    return YouTubeTranscriptApi(
+        proxy_config=WebshareProxyConfig(
+            proxy_username=username,
+            proxy_password=password,
+            filter_ip_locations=locations,
+        )
+    )
+
+
 def fetch_transcript(video_id, languages, proxy_url=None):
     return transcript_api(proxy_url).fetch(video_id, languages=languages or ["en", "en-US"])
+
+
+def fetch_transcript_via_residential_webshare(video_id, languages):
+    api = residential_webshare_api()
+    if not api:
+        raise RuntimeError("residential_webshare_not_configured")
+    return api.fetch(video_id, languages=languages or ["en", "en-US"])
 
 
 def webshare_url(path, params):
@@ -88,6 +110,11 @@ def fetch_with_retries(video_id, languages, request_proxy_url=None):
         return fetch_transcript(video_id, languages), attempts
     except Exception as error:
         attempts.append(f"direct:{type(error).__name__}")
+
+    try:
+        return fetch_transcript_via_residential_webshare(video_id, languages), attempts
+    except Exception as error:
+        attempts.append(f"webshare_residential:{type(error).__name__}")
 
     for proxy_url in proxy_urls:
         try:

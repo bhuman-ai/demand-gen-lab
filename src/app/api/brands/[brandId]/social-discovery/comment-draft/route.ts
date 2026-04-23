@@ -22,6 +22,70 @@ function youtubeSubscriberCount(post: { raw: Record<string, unknown>; platform: 
   return Number.isFinite(count) ? count : 0;
 }
 
+function stringArray(value: unknown) {
+  return Array.isArray(value)
+    ? value.map((entry) => String(entry ?? "").trim()).filter(Boolean)
+    : [];
+}
+
+function numberValue(value: unknown, fallback = 0) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function fallbackPostFromBody(value: unknown, brandId: string): SocialDiscoveryPost | null {
+  const row = asRecord(value);
+  const id = String(row.id ?? "").trim();
+  const platform = String(row.platform ?? "").trim();
+  const externalId = String(row.externalId ?? row.external_id ?? "").trim();
+  const url = String(row.url ?? "").trim();
+  const title = String(row.title ?? "").trim();
+  if (!id || !platform || !externalId || !url || !title) return null;
+  if (String(row.brandId ?? row.brand_id ?? "").trim() !== brandId) return null;
+  if (platform !== "youtube") return null;
+
+  const now = new Date().toISOString();
+  return {
+    id,
+    brandId,
+    platform: "youtube",
+    provider: "youtube-data-api",
+    externalId,
+    url,
+    title,
+    body: String(row.body ?? "").trim(),
+    author: String(row.author ?? "").trim(),
+    community: String(row.community ?? "").trim(),
+    query: String(row.query ?? "").trim(),
+    matchedTerms: stringArray(row.matchedTerms ?? row.matched_terms),
+    intent: "noise",
+    relevanceScore: Math.max(0, Math.min(100, numberValue(row.relevanceScore ?? row.relevance_score))),
+    risingScore: Math.max(0, Math.min(100, numberValue(row.risingScore ?? row.rising_score))),
+    engagementScore: Math.max(0, numberValue(row.engagementScore ?? row.engagement_score)),
+    providerRank: Math.max(0, numberValue(row.providerRank ?? row.provider_rank)),
+    status: "new",
+    interactionPlan: {
+      headline: "Draft a comment for this video",
+      targetStrength: "target",
+      commentPosture: "method_first",
+      mentionPolicy: "mention_only_if_asked",
+      actors: [
+        {
+          role: "operator",
+          job: "Write one short native YouTube comment after review.",
+        },
+      ],
+      sequence: [],
+      assetNeeded: "none",
+      riskNotes: [],
+    },
+    raw: asRecord(row.raw),
+    postedAt: String(row.postedAt ?? row.posted_at ?? now).trim() || now,
+    discoveredAt: String(row.discoveredAt ?? row.discovered_at ?? now).trim() || now,
+    updatedAt: now,
+  };
+}
+
 async function withYouTubeTranscript(post: SocialDiscoveryPost): Promise<SocialDiscoveryPost> {
   if (post.platform !== "youtube") return post;
   const raw = asRecord(post.raw);
@@ -73,7 +137,12 @@ export async function POST(request: Request, context: { params: Promise<{ brandI
       return NextResponse.json({ error: "postId is required" }, { status: 400 });
     }
 
-    const post = await getSocialDiscoveryPost({ id: postId, brandId });
+    let post = await getSocialDiscoveryPost({ id: postId, brandId });
+    if (!post) {
+      const fallbackPost = fallbackPostFromBody(body.post, brandId);
+      const [savedFallbackPost] = fallbackPost ? await saveSocialDiscoveryPosts([fallbackPost]) : [];
+      post = savedFallbackPost ?? fallbackPost ?? null;
+    }
     if (!post) {
       return NextResponse.json({ error: "post not found" }, { status: 404 });
     }

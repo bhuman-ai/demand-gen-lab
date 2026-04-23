@@ -731,7 +731,11 @@ export default function SocialDiscoveryClient({
       const response = await fetch(canonicalApiUrl(`/api/brands/${brandId}/social-discovery/comment-draft`), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ postId, mode }),
+        body: JSON.stringify({
+          postId,
+          mode,
+          post: posts.find((post) => post.id === postId) ?? null,
+        }),
       });
       const data = await response.json().catch(() => ({}));
       if (!response.ok) {

@@ -198,14 +198,8 @@ function ensureBrandMentionInDraft(draft: string, brandName: string, maxLength =
   return sanitizeCasualBrandMention({ draft, brandName, maxLength, seed });
 }
 
-function naturalYouTubeCommentDraft(draft: string, brandName: string) {
-  const trimmedDraft = draft.trim();
-  const normalizedBrandName = commentBrandName(brandName);
-  if (!trimmedDraft) return "";
-  if (!normalizedBrandName) return trimmedDraft;
-  if (!textMentionsBrand(trimmedDraft, normalizedBrandName)) return "";
-  if (brandMentionLooksCannedOrAdLike(trimmedDraft, normalizedBrandName)) return "";
-  return trimmedDraft;
+function naturalYouTubeCommentDraft(draft: string) {
+  return draft.trim();
 }
 
 function hasConnectedSocialIdentity(account: OutreachAccount) {
@@ -459,7 +453,6 @@ export default function SocialDiscoveryClient({
   const lastAutoCommentDraftRef = useRef("");
   const lastAutoReplyDraftRef = useRef("");
   const attemptedAutoDraftPostIdsRef = useRef<Set<string>>(new Set());
-  const attemptedBrandMentionDraftPostIdsRef = useRef<Set<string>>(new Set());
 
   const selectedPost = useMemo(
     () => posts.find((post) => post.id === selectedId) ?? posts[0] ?? null,
@@ -494,26 +487,19 @@ export default function SocialDiscoveryClient({
         : "Using the default comment prompt.";
   const selectedPlan = planFor(selectedPost);
   const generatedCommentDraft = useMemo(() => selectedPlan?.sequence?.[0]?.draft?.trim() ?? "", [selectedPlan]);
-  const generatedCommentDraftWithBrand = useMemo(() => {
+  const generatedCommentDraftSuggested = useMemo(() => {
     if (selectedPost?.platform === "youtube") {
-      return naturalYouTubeCommentDraft(generatedCommentDraft, selectedBrandMentionName);
+      return naturalYouTubeCommentDraft(generatedCommentDraft);
     }
     return ensureBrandMentionInDraft(generatedCommentDraft, selectedBrandMentionName, 1250, selectedPost?.id ?? "");
   }, [generatedCommentDraft, selectedBrandMentionName, selectedPost?.id, selectedPost?.platform]);
-  const generatedYouTubeDraftNeedsBrand = Boolean(
-    selectedPost?.platform === "youtube" &&
-      selectedBrandMentionName.trim() &&
-      generatedCommentDraft.trim() &&
-      !generatedCommentDraftWithBrand.trim()
-  );
   const generatedReplyDraft = useMemo(() => selectedPlan?.sequence?.[1]?.draft?.trim() ?? "", [selectedPlan]);
   const selectedDraftGenerationError = selectedPost ? draftGenerationErrors[selectedPost.id] ?? "" : "";
   const commentGenerationPending = Boolean(
     (selectedPost && selectedPost.id === draftingPostId) ||
       (selectedPost &&
         selectedPlan?.targetStrength === "target" &&
-        !generatedCommentDraft) ||
-      (generatedYouTubeDraftNeedsBrand && !selectedDraftGenerationError)
+        !generatedCommentDraft)
   );
   const selectedCommentPlatform = selectedPost?.platform === "youtube" ? "youtube" : "instagram";
   const selectedCommentProvider = selectedCommentPlatform === "youtube" ? "youtube" : "unipile";
@@ -626,7 +612,7 @@ export default function SocialDiscoveryClient({
   const selectedYouTubeViewCount = youtubeRawNumber(selectedPost, "videoViewCount");
   const selectedYouTubeCommentCount = youtubeRawNumber(selectedPost, "videoCommentCount");
   const canRestoreSuggestedComment = Boolean(
-    generatedCommentDraftWithBrand.trim() && generatedCommentDraftWithBrand.trim() !== commentDraft.trim()
+    generatedCommentDraftSuggested.trim() && generatedCommentDraftSuggested.trim() !== commentDraft.trim()
   );
   const canRestoreSuggestedReply = Boolean(
     generatedReplyDraft.trim() && generatedReplyDraft.trim() !== replyDraft.trim()
@@ -634,12 +620,12 @@ export default function SocialDiscoveryClient({
   const emptyCommentMessage = useMemo(() => {
     if (!selectedPost || !selectedPlan) return "";
     if (selectedDraftGenerationError) return selectedDraftGenerationError;
-    if (generatedCommentDraftWithBrand || commentDraft.trim() || commentGenerationPending) return "";
+    if (generatedCommentDraftSuggested || commentDraft.trim() || commentGenerationPending) return "";
     if (selectedPlan.commentPosture === "watch_only" || selectedPlan.targetStrength === "watch") {
       return "Writing draft...";
     }
     return "Writing draft...";
-  }, [commentDraft, commentGenerationPending, generatedCommentDraftWithBrand, selectedDraftGenerationError, selectedPlan, selectedPost]);
+  }, [commentDraft, commentGenerationPending, generatedCommentDraftSuggested, selectedDraftGenerationError, selectedPlan, selectedPost]);
   const selectedYouTubeChannelIsWatched = useMemo(
     () => Boolean(selectedYouTubeChannelId && youtubeSubscriptions.some((entry) => entry.channelId === selectedYouTubeChannelId)),
     [selectedYouTubeChannelId, youtubeSubscriptions]
@@ -749,7 +735,7 @@ export default function SocialDiscoveryClient({
         const nextRawCommentDraft = nextPlan?.sequence?.[0]?.draft?.trim() ?? "";
         const nextCommentDraft =
           updatedPost.platform === "youtube"
-            ? naturalYouTubeCommentDraft(nextRawCommentDraft, selectedBrandMentionName)
+            ? naturalYouTubeCommentDraft(nextRawCommentDraft)
             : ensureBrandMentionInDraft(nextRawCommentDraft, selectedBrandMentionName, 1250, postId);
         const nextReplyDraft = mode === "thread" ? nextPlan?.sequence?.[1]?.draft?.trim() ?? "" : "";
         setCommentDraft(nextCommentDraft);
@@ -777,13 +763,6 @@ export default function SocialDiscoveryClient({
     void requestCommentDraftForPost(postId, { mode: "solo" });
   });
 
-  const regenerateBrandMentionDraftForPost = useEffectEvent((postId: string) => {
-    void requestCommentDraftForPost(postId, {
-      mode: replyEnabled ? "thread" : "solo",
-      adoptFreshDrafts: true,
-    });
-  });
-
   useEffect(() => {
     if (!redirectingToCanonicalHost) return;
     redirectToCanonicalLastB2bHost();
@@ -806,8 +785,8 @@ export default function SocialDiscoveryClient({
     }
 
     previousSelectedPostIdRef.current = nextPostId;
-    setCommentDraft(generatedCommentDraftWithBrand);
-    lastAutoCommentDraftRef.current = generatedCommentDraftWithBrand;
+    setCommentDraft(generatedCommentDraftSuggested);
+    lastAutoCommentDraftRef.current = generatedCommentDraftSuggested;
     setReplyDraft(generatedReplyDraft);
     lastAutoReplyDraftRef.current = generatedReplyDraft;
     setReplyEnabled(false);
@@ -820,25 +799,25 @@ export default function SocialDiscoveryClient({
     setPromoError("");
     setPromoResult(null);
     setPurchaseResult(null);
-  }, [selectedPost?.id, generatedCommentDraftWithBrand, generatedReplyDraft, commentAccountOptions, commentAccountId]);
+  }, [selectedPost?.id, generatedCommentDraftSuggested, generatedReplyDraft, commentAccountOptions, commentAccountId]);
 
   useEffect(() => {
-    if (!selectedPost?.id || !generatedCommentDraftWithBrand) return;
+    if (!selectedPost?.id || !generatedCommentDraftSuggested) return;
     if (!commentDraft.trim() || commentDraft === lastAutoCommentDraftRef.current) {
-      setCommentDraft(generatedCommentDraftWithBrand);
-      lastAutoCommentDraftRef.current = generatedCommentDraftWithBrand;
+      setCommentDraft(generatedCommentDraftSuggested);
+      lastAutoCommentDraftRef.current = generatedCommentDraftSuggested;
     }
-  }, [selectedPost?.id, generatedCommentDraftWithBrand, commentDraft]);
+  }, [selectedPost?.id, generatedCommentDraftSuggested, commentDraft]);
 
   useEffect(() => {
     if (!selectedPost?.id) return;
     if (selectedCommentPlatform !== "youtube") return;
-    if (generatedCommentDraftWithBrand) return;
+    if (generatedCommentDraftSuggested) return;
     if (!commentDraft.trim()) return;
     if (commentDraft !== lastAutoCommentDraftRef.current) return;
     setCommentDraft("");
     lastAutoCommentDraftRef.current = "";
-  }, [commentDraft, generatedCommentDraftWithBrand, selectedCommentPlatform, selectedPost?.id]);
+  }, [commentDraft, generatedCommentDraftSuggested, selectedCommentPlatform, selectedPost?.id]);
 
   useEffect(() => {
     if (!selectedPost?.id || !generatedReplyDraft) return;
@@ -858,64 +837,6 @@ export default function SocialDiscoveryClient({
     attemptedAutoDraftPostIdsRef.current.add(postId);
     void generateCommentDraftForPost(postId);
   }, [draftingPostId, generatedCommentDraft, selectedCommentPlatform, selectedPost?.id]);
-
-  useEffect(() => {
-    const postId = selectedPost?.id ?? "";
-    const brandName = selectedBrandMentionName.trim();
-    if (!postId || !brandName) return;
-    if (selectedCommentPlatform !== "youtube") return;
-    if (!generatedCommentDraft) return;
-    if (
-      textMentionsBrand(generatedCommentDraft, brandName) &&
-      !brandMentionLooksCannedOrAdLike(generatedCommentDraft, brandName)
-    ) {
-      return;
-    }
-    if (draftingPostId === postId) return;
-    const attemptKey = `${postId}:${brandName.toLowerCase()}:${replyEnabled ? "thread" : "solo"}`;
-    if (attemptedBrandMentionDraftPostIdsRef.current.has(attemptKey)) return;
-    attemptedBrandMentionDraftPostIdsRef.current.add(attemptKey);
-    void regenerateBrandMentionDraftForPost(postId);
-  }, [
-    draftingPostId,
-    generatedCommentDraft,
-    replyEnabled,
-    selectedBrandMentionName,
-    selectedCommentPlatform,
-    selectedPost?.id,
-  ]);
-
-  useEffect(() => {
-    const postId = selectedPost?.id ?? "";
-    const brandName = selectedBrandMentionName.trim();
-    if (!postId || !brandName) return;
-    if (selectedCommentPlatform !== "youtube") return;
-    if (!generatedCommentDraft) return;
-    if (generatedCommentDraftWithBrand) {
-      setDraftGenerationErrors((current) => {
-        if (!current[postId]) return current;
-        const next = { ...current };
-        delete next[postId];
-        return next;
-      });
-      return;
-    }
-    if (draftingPostId === postId) return;
-    const attemptKey = `${postId}:${brandName.toLowerCase()}:${replyEnabled ? "thread" : "solo"}`;
-    if (!attemptedBrandMentionDraftPostIdsRef.current.has(attemptKey)) return;
-    setDraftGenerationErrors((current) => ({
-      ...current,
-      [postId]: `GPT draft still sounds canned around ${brandName}. Try draft again.`,
-    }));
-  }, [
-    draftingPostId,
-    generatedCommentDraft,
-    generatedCommentDraftWithBrand,
-    replyEnabled,
-    selectedBrandMentionName,
-    selectedCommentPlatform,
-    selectedPost?.id,
-  ]);
 
   useEffect(() => {
     if (youtubeSubscriptionAccountId && youtubeAccountOptions.some((account) => account.accountId === youtubeSubscriptionAccountId)) {
@@ -969,7 +890,6 @@ export default function SocialDiscoveryClient({
     setLoading(true);
     setError("");
     attemptedAutoDraftPostIdsRef.current.clear();
-    attemptedBrandMentionDraftPostIdsRef.current.clear();
     setDraftingPostId("");
     setDraftGenerationErrors({});
     try {
@@ -1157,7 +1077,6 @@ export default function SocialDiscoveryClient({
     setYouTubeSearchSummary("");
     setError("");
     attemptedAutoDraftPostIdsRef.current.clear();
-    attemptedBrandMentionDraftPostIdsRef.current.clear();
     setDraftingPostId("");
     setDraftGenerationErrors({});
     try {
@@ -1287,10 +1206,10 @@ export default function SocialDiscoveryClient({
     if (
       selectedCommentPlatform === "youtube" &&
       selectedBrandMentionName.trim() &&
-      (!textMentionsBrand(finalCommentDraft, selectedBrandMentionName) ||
-        brandMentionLooksCannedOrAdLike(finalCommentDraft, selectedBrandMentionName))
+      textMentionsBrand(finalCommentDraft, selectedBrandMentionName) &&
+      brandMentionLooksCannedOrAdLike(finalCommentDraft, selectedBrandMentionName)
     ) {
-      setCommentError(`Regenerate the draft so GPT writes a real ${selectedBrandMentionName} mention, not a canned side note.`);
+      setCommentError(`Rewrite the ${selectedBrandMentionName} mention so it sounds ordinary, not canned.`);
       return;
     }
     if (!commentAccountId) {
@@ -1757,7 +1676,7 @@ export default function SocialDiscoveryClient({
                     value={commentDraft}
                     onChange={(event) => {
                       setCommentDraft(event.target.value);
-                      lastAutoCommentDraftRef.current = generatedCommentDraftWithBrand;
+                      lastAutoCommentDraftRef.current = generatedCommentDraftSuggested;
                     }}
                     rows={7}
                     maxLength={1250}
@@ -1775,8 +1694,8 @@ export default function SocialDiscoveryClient({
                         variant="ghost"
                         size="sm"
                         onClick={() => {
-                          setCommentDraft(generatedCommentDraftWithBrand);
-                          lastAutoCommentDraftRef.current = generatedCommentDraftWithBrand;
+                          setCommentDraft(generatedCommentDraftSuggested);
+                          lastAutoCommentDraftRef.current = generatedCommentDraftSuggested;
                         }}
                       >
                         Use draft again

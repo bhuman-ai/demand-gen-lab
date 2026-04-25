@@ -19,6 +19,7 @@ function splitCsv(value: unknown) {
 }
 
 function numberOption(value: unknown) {
+  if (String(value ?? "").trim() === "") return undefined;
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : undefined;
 }

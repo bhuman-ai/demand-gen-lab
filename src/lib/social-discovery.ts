@@ -2067,7 +2067,7 @@ export function buildSocialCommentPlanningPrompt(input: {
       ? `Selected-video mode: mention ${brandName} exactly once, casually, inside the real reaction to the video. ${brandName} must be present, but it should feel incidental, not promotional.`
       : "",
     forceDraft && draftMode === "thread"
-      ? `Thread mode: decide the most natural two-account exchange. Mention ${brandName} exactly once across both comments, in whichever comment makes it feel most natural.`
+      ? `Thread mode: decide the most natural two-account exchange. Mention ${brandName} exactly once across both comments, in whichever comment makes it feel most natural. The first comment can be a plain reaction or question. The reply should answer or add context without sounding staged.`
       : "",
     forceDraft && draftMode === "solo"
       ? `Solo mode: commentDraft must mention ${brandName} exactly once, but ${brandName} should be context, not conclusion. Do not append a separate brand sentence.`
@@ -2095,7 +2095,7 @@ export function buildSocialCommentPlanningPrompt(input: {
     "If the video is weakly related, write the most natural light-touch comment that fits the video and brand context.",
     "Brand mention rules: exactly once, incidental, not promotional. No polished bridge sentence, no full product framing, no feature list, no value-prop stack, no 'fits this shift', no 'exists for this', and no 'without going fully manual'.",
     draftMode === "thread"
-      ? "Thread rules: commentDraft should set up natural opening, question, gap, or prompt. replyDraft should answer, recommend, or bridge naturally from different person."
+      ? "Thread rules: commentDraft should work as a normal standalone YouTube comment. replyDraft should read like a real second person responding to that comment, not a coordinated ad. Do not make the first comment obviously tee up the brand."
       : "Solo rules: commentDraft must work alone. No setup for another account.",
     "replyDraft rules: keep it under 24 words, make it sound like second person, do not overpraise, do not sound coordinated, and leave it empty if fake or unnecessary.",
     "Return JSON only with keys: headline, fitSummary, shouldComment, commentDraft, replyDraft, assetNeeded, riskNotes, exitRules.",

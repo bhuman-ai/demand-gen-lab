@@ -453,6 +453,7 @@ export default function SocialDiscoveryClient({
   const lastAutoCommentDraftRef = useRef("");
   const lastAutoReplyDraftRef = useRef("");
   const attemptedAutoDraftPostIdsRef = useRef<Set<string>>(new Set());
+  const dismissedReplyDraftPostIdsRef = useRef<Set<string>>(new Set());
 
   const selectedPost = useMemo(
     () => posts.find((post) => post.id === selectedId) ?? posts[0] ?? null,
@@ -558,6 +559,7 @@ export default function SocialDiscoveryClient({
     [commentAccountId, commentAccountOptions]
   );
   const canAddTeammateReply = selectedCommentPlatform === "youtube" && replyAccountOptions.length > 0;
+  const selectedPostCanUseThreadDraft = Boolean(selectedPost?.platform === "youtube" && replyAccountOptions.length > 0);
   const configuredYouTubeSocialAccounts = useMemo(
     () =>
       socialAccounts.filter(
@@ -710,7 +712,7 @@ export default function SocialDiscoveryClient({
       adoptFreshDrafts?: boolean;
     }
   ) {
-    const mode = options?.mode === "thread" ? "thread" : "solo";
+    const mode = options?.mode === "thread" || (!options?.mode && selectedPostCanUseThreadDraft) ? "thread" : "solo";
     setDraftingPostId(postId);
     setDraftGenerationErrors((current) => ({ ...current, [postId]: "" }));
     try {
@@ -760,7 +762,8 @@ export default function SocialDiscoveryClient({
   }
 
   const generateCommentDraftForPost = useEffectEvent((postId: string) => {
-    void requestCommentDraftForPost(postId, { mode: "solo" });
+    const mode = selectedPostCanUseThreadDraft ? "thread" : "solo";
+    void requestCommentDraftForPost(postId, { mode });
   });
 
   useEffect(() => {
@@ -789,7 +792,7 @@ export default function SocialDiscoveryClient({
     lastAutoCommentDraftRef.current = generatedCommentDraftSuggested;
     setReplyDraft(generatedReplyDraft);
     lastAutoReplyDraftRef.current = generatedReplyDraft;
-    setReplyEnabled(false);
+    setReplyEnabled(Boolean(generatedReplyDraft && selectedPostCanUseThreadDraft && !dismissedReplyDraftPostIdsRef.current.has(nextPostId)));
     setCommentAccountId(commentAccountOptions[0]?.accountId ?? "");
     setReplyAccountId("");
     setCommentReplyId("");
@@ -799,7 +802,7 @@ export default function SocialDiscoveryClient({
     setPromoError("");
     setPromoResult(null);
     setPurchaseResult(null);
-  }, [selectedPost?.id, generatedCommentDraftSuggested, generatedReplyDraft, commentAccountOptions, commentAccountId]);
+  }, [selectedPost?.id, generatedCommentDraftSuggested, generatedReplyDraft, commentAccountOptions, commentAccountId, selectedPostCanUseThreadDraft]);
 
   useEffect(() => {
     if (!selectedPost?.id || !generatedCommentDraftSuggested) return;
@@ -826,6 +829,15 @@ export default function SocialDiscoveryClient({
       lastAutoReplyDraftRef.current = generatedReplyDraft;
     }
   }, [selectedPost?.id, generatedReplyDraft, replyDraft]);
+
+  useEffect(() => {
+    const postId = selectedPost?.id ?? "";
+    if (!postId) return;
+    if (!selectedPostCanUseThreadDraft) return;
+    if (!generatedReplyDraft.trim()) return;
+    if (dismissedReplyDraftPostIdsRef.current.has(postId)) return;
+    setReplyEnabled(true);
+  }, [generatedReplyDraft, selectedPost?.id, selectedPostCanUseThreadDraft]);
 
   useEffect(() => {
     const postId = selectedPost?.id ?? "";
@@ -890,6 +902,7 @@ export default function SocialDiscoveryClient({
     setLoading(true);
     setError("");
     attemptedAutoDraftPostIdsRef.current.clear();
+    dismissedReplyDraftPostIdsRef.current.clear();
     setDraftingPostId("");
     setDraftGenerationErrors({});
     try {
@@ -1077,6 +1090,7 @@ export default function SocialDiscoveryClient({
     setYouTubeSearchSummary("");
     setError("");
     attemptedAutoDraftPostIdsRef.current.clear();
+    dismissedReplyDraftPostIdsRef.current.clear();
     setDraftingPostId("");
     setDraftGenerationErrors({});
     try {
@@ -1204,23 +1218,28 @@ export default function SocialDiscoveryClient({
       return;
     }
     if (selectedCommentPlatform === "youtube" && selectedBrandMentionName.trim()) {
-      const mentionCount = brandMentionCount(finalCommentDraft, selectedBrandMentionName);
+      const brandCheckText = [finalCommentDraft, replyEnabled ? replyDraft.trim() : ""].filter(Boolean).join("\n");
+      const mentionCount = brandMentionCount(brandCheckText, selectedBrandMentionName);
       if (mentionCount === 0) {
-        setCommentError(`Mention ${selectedBrandMentionName} once, casually, in the comment.`);
+        setCommentError(
+          replyEnabled
+            ? `Mention ${selectedBrandMentionName} once across the comment and reply.`
+            : `Mention ${selectedBrandMentionName} once, casually, in the comment.`
+        );
         return;
       }
       if (mentionCount > 1) {
-        setCommentError(`Mention ${selectedBrandMentionName} only once.`);
+        setCommentError(
+          replyEnabled
+            ? `Mention ${selectedBrandMentionName} only once across the comment and reply.`
+            : `Mention ${selectedBrandMentionName} only once.`
+        );
         return;
       }
-    }
-    if (
-      selectedCommentPlatform === "youtube" &&
-      selectedBrandMentionName.trim() &&
-      brandMentionLooksCannedOrAdLike(finalCommentDraft, selectedBrandMentionName)
-    ) {
-      setCommentError(`Rewrite the ${selectedBrandMentionName} mention so it sounds ordinary, not canned.`);
-      return;
+      if (brandMentionLooksCannedOrAdLike(brandCheckText, selectedBrandMentionName)) {
+        setCommentError(`Rewrite the ${selectedBrandMentionName} mention so it sounds ordinary, not canned.`);
+        return;
+      }
     }
     if (!commentAccountId) {
       setCommentError(`Pick a routed ${selectedCommentPlatformLabel} account before sending.`);
@@ -1736,7 +1755,7 @@ export default function SocialDiscoveryClient({
                     <div className="grid gap-3 rounded-[10px] border border-[color:var(--border)] p-3">
                       <div className="flex flex-wrap items-center justify-between gap-2">
                         <div>
-                          <div className="text-sm font-medium text-[color:var(--foreground)]">Teammate reply</div>
+                          <div className="text-sm font-medium text-[color:var(--foreground)]">Reply comment</div>
                           <div className="text-xs text-[color:var(--muted-foreground)]">
                             Queue one short reply from second YouTube account for 1-6 hours later.
                           </div>
@@ -1746,6 +1765,9 @@ export default function SocialDiscoveryClient({
                           variant="ghost"
                           size="sm"
                           onClick={() => {
+                            if (selectedPost?.id) {
+                              dismissedReplyDraftPostIdsRef.current.add(selectedPost.id);
+                            }
                             setReplyEnabled(false);
                             setReplyDraft("");
                             lastAutoReplyDraftRef.current = "";
@@ -1811,6 +1833,9 @@ export default function SocialDiscoveryClient({
                         variant="outline"
                         size="sm"
                         onClick={() => {
+                          if (selectedPost?.id) {
+                            dismissedReplyDraftPostIdsRef.current.delete(selectedPost.id);
+                          }
                           setReplyEnabled(true);
                           if (selectedPost?.id) {
                             void requestCommentDraftForPost(selectedPost.id, {
@@ -1821,7 +1846,7 @@ export default function SocialDiscoveryClient({
                         }}
                         disabled={sendingComment || commentGenerationPending}
                       >
-                        Add teammate reply
+                        Draft comment + reply
                       </Button>
                     </div>
                   )

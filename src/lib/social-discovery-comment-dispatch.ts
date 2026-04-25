@@ -63,6 +63,7 @@ function boolEnv(name: string, fallback = false) {
 }
 
 function numberOption(value: unknown, fallback: number, min: number, max: number) {
+  if (String(value ?? "").trim() === "") return Math.max(min, Math.min(max, fallback));
   const parsed = Number(value);
   return Math.max(min, Math.min(max, Number.isFinite(parsed) ? parsed : fallback));
 }

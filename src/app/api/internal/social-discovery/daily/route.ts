@@ -88,13 +88,18 @@ async function requestJson(request: Request) {
 }
 
 async function resolveBrands(input: { body: Record<string, unknown>; url: URL }) {
-  const configuredBrandIds = splitCsv(
+  const requestedBrandIds = splitCsv(
     input.body.brandIds ??
       input.body.brandId ??
       input.url.searchParams.get("brandIds") ??
-      input.url.searchParams.get("brandId") ??
-      process.env.SOCIAL_DISCOVERY_BRAND_IDS
+      input.url.searchParams.get("brandId")
   );
+  const configuredBrandIds = requestedBrandIds.length
+    ? requestedBrandIds
+    : uniqueStrings([
+        ...splitCsv(process.env.SOCIAL_DISCOVERY_BRAND_IDS),
+        ...splitCsv(process.env.SOCIAL_DISCOVERY_AUTO_COMMENT_BRAND_IDS),
+      ]);
   const limit = numberOption(
     input.body.brandLimit ?? input.url.searchParams.get("brandLimit") ?? process.env.SOCIAL_DISCOVERY_DAILY_BRAND_LIMIT,
     5,

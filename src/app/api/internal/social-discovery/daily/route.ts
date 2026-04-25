@@ -1,9 +1,11 @@
 import { NextResponse } from "next/server";
 import { getBrandById, listBrands, type BrandRecord } from "@/lib/factory-data";
+import { getOutreachAccountSecrets, listSocialRoutingAccounts } from "@/lib/outreach-data";
 import { discoverSocialPostsForBrand, parseSocialDiscoveryPlatforms } from "@/lib/social-discovery";
 import { resolveSupportedDiscoveryPlatformsForBrand } from "@/lib/social-platform-catalog";
 import { createSocialDiscoveryRun, saveSocialDiscoveryPosts } from "@/lib/social-discovery-data";
 import { discoverYouTubeSearchPostsForBrand } from "@/lib/social-discovery-youtube-search";
+import { hasYouTubeOAuthCredentials } from "@/lib/youtube";
 import type {
   SocialDiscoveryPlatform,
   SocialDiscoveryPost,
@@ -50,6 +52,25 @@ function normalizeProvider(value: unknown): SocialDiscoveryProvider | "auto" {
     return normalized as SocialDiscoveryProvider;
   }
   return "auto";
+}
+
+async function resolveYouTubeSearchSecrets() {
+  const accounts = (await listSocialRoutingAccounts()).filter(
+    (account) =>
+      account.status === "active" &&
+      account.config.social.enabled &&
+      account.config.social.connectionProvider === "youtube" &&
+      account.config.social.platforms.includes("youtube")
+  );
+
+  for (const account of accounts) {
+    const secrets = await getOutreachAccountSecrets(account.id).catch(() => null);
+    if (secrets && hasYouTubeOAuthCredentials(secrets)) {
+      return { accountId: account.id, secrets };
+    }
+  }
+
+  return null;
 }
 
 function numberOption(value: unknown, fallback: number, min: number, max: number) {
@@ -174,13 +195,17 @@ async function handleDailySocialDiscovery(request: Request) {
     const runQueries: string[] = [];
     let found = 0;
     let eligible = 0;
+    let youtubeSearchAccountId = "";
 
     if (runSavedYouTubeSearches) {
       const startedAt = new Date().toISOString();
+      const youtubeSearchCredentials = await resolveYouTubeSearchSecrets();
+      youtubeSearchAccountId = youtubeSearchCredentials?.accountId ?? "";
       const youtubeDiscovery = await discoverYouTubeSearchPostsForBrand({
         brand,
         queries: savedQueries,
         maxResults: limitPerQuery,
+        secrets: youtubeSearchCredentials?.secrets,
       });
       const nextSavedPosts = youtubeDiscovery.posts.length
         ? await saveSocialDiscoveryPosts(youtubeDiscovery.posts)
@@ -253,6 +278,7 @@ async function handleDailySocialDiscovery(request: Request) {
       eligible,
       saved: savedPosts.length,
       errors: errors.length,
+      youtubeSearchAccountId,
       topPosts,
     });
   }

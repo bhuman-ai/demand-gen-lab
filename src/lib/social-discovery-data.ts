@@ -524,6 +524,99 @@ export async function listSocialDiscoveryPosts(options: SocialDiscoveryListOptio
     .slice(0, limit);
 }
 
+export async function listSocialDiscoveryAutoCommentCandidates(input: {
+  brandId: string;
+  limit?: number;
+  maxVideoAgeHours?: number;
+}): Promise<SocialDiscoveryPost[]> {
+  const limit = Math.max(1, Math.min(500, Number(input.limit ?? 100) || 100));
+  const maxVideoAgeHours = Math.max(1, Math.min(168, Number(input.maxVideoAgeHours ?? 24) || 24));
+  const newestAllowedMs = Date.now() - maxVideoAgeHours * 60 * 60 * 1000;
+  const isCandidate = (post: SocialDiscoveryPost) => {
+    if (post.brandId !== input.brandId) return false;
+    if (post.platform !== "youtube") return false;
+    if (post.provider !== "youtube-data-api") return false;
+    if (post.status !== "new") return false;
+    if (post.commentDelivery?.postedAt) return false;
+    if (post.pendingReply?.status === "scheduled") return false;
+    const postedMs = Date.parse(post.postedAt);
+    if (!Number.isFinite(postedMs) || postedMs < newestAllowedMs) return false;
+    return true;
+  };
+
+  const supabase = getSupabaseAdmin();
+  if (supabase) {
+    const { data, error } = await supabase
+      .from(TABLE_POSTS)
+      .select("*")
+      .eq("brand_id", input.brandId)
+      .eq("platform", "youtube")
+      .eq("provider", "youtube-data-api")
+      .eq("status", "new")
+      .order("rising_score", { ascending: false })
+      .order("relevance_score", { ascending: false })
+      .order("discovered_at", { ascending: false })
+      .limit(limit * 5);
+    if (!error) {
+      return (data ?? [])
+        .map((row: unknown) => mapPostRow(row))
+        .filter(isCandidate)
+        .slice(0, limit);
+    }
+  }
+
+  const store = await readLocalStore();
+  return store.posts
+    .filter(isCandidate)
+    .sort((left, right) => {
+      if (left.risingScore !== right.risingScore) return right.risingScore - left.risingScore;
+      if (left.relevanceScore !== right.relevanceScore) return right.relevanceScore - left.relevanceScore;
+      return right.discoveredAt.localeCompare(left.discoveredAt);
+    })
+    .slice(0, limit);
+}
+
+export async function listSocialDiscoveryCommentedPostsSince(input: {
+  brandId: string;
+  since: string;
+  platform?: SocialDiscoveryPlatform;
+  limit?: number;
+}): Promise<SocialDiscoveryPost[]> {
+  const limit = Math.max(1, Math.min(1000, Number(input.limit ?? 500) || 500));
+  const sinceMs = Date.parse(input.since);
+  const isRecent = (post: SocialDiscoveryPost) => {
+    if (post.brandId !== input.brandId) return false;
+    if (input.platform && post.platform !== input.platform) return false;
+    const postedAt = post.commentDelivery?.postedAt ?? "";
+    const postedMs = Date.parse(postedAt);
+    return Number.isFinite(sinceMs) && Number.isFinite(postedMs) && postedMs >= sinceMs;
+  };
+
+  const supabase = getSupabaseAdmin();
+  if (supabase) {
+    let query = supabase
+      .from(TABLE_POSTS)
+      .select("*")
+      .eq("brand_id", input.brandId)
+      .order("updated_at", { ascending: false })
+      .limit(limit * 3);
+    if (input.platform) query = query.eq("platform", input.platform);
+    const { data, error } = await query;
+    if (!error) {
+      return (data ?? [])
+        .map((row: unknown) => mapPostRow(row))
+        .filter(isRecent)
+        .slice(0, limit);
+    }
+  }
+
+  const store = await readLocalStore();
+  return store.posts
+    .filter(isRecent)
+    .sort((left, right) => String(right.commentDelivery?.postedAt ?? "").localeCompare(String(left.commentDelivery?.postedAt ?? "")))
+    .slice(0, limit);
+}
+
 export async function getSocialDiscoveryPost(input: {
   id: string;
   brandId: string;

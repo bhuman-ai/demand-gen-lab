@@ -71,6 +71,22 @@ function normalizeProvider(value: unknown): SocialDiscoveryProvider {
   return "exa";
 }
 
+function youtubeRawSource(raw: Record<string, unknown>) {
+  return String(asRecord(raw.youtube).source ?? "").trim();
+}
+
+function normalizeStoredProvider(value: unknown, raw: Record<string, unknown>): SocialDiscoveryProvider {
+  const provider = normalizeProvider(value);
+  if (provider === "youtube-websub" && youtubeRawSource(raw) === "youtube-data-api") {
+    return "youtube-data-api";
+  }
+  return provider;
+}
+
+function storageProvider(provider: SocialDiscoveryProvider): SocialDiscoveryProvider {
+  return provider === "youtube-data-api" ? "youtube-websub" : provider;
+}
+
 function normalizeStatus(value: unknown): SocialDiscoveryStatus {
   const normalized = String(value ?? "").trim().toLowerCase();
   if (["triaged", "saved", "dismissed"].includes(normalized)) {
@@ -268,7 +284,7 @@ function mapPostRow(input: unknown): SocialDiscoveryPost {
     id: String(row.id ?? createId("socialpost")),
     brandId: String(row.brandId ?? row.brand_id ?? ""),
     platform: normalizePlatform(row.platform),
-    provider: normalizeProvider(row.provider ?? row.source_provider),
+    provider: normalizeStoredProvider(row.provider ?? row.source_provider, raw),
     externalId: String(row.externalId ?? row.external_id ?? ""),
     url: String(row.url ?? ""),
     title: String(row.title ?? ""),
@@ -308,7 +324,7 @@ function mapRunRow(input: unknown): SocialDiscoveryRun {
   return {
     id: String(row.id ?? createId("socialrun")),
     brandId: String(row.brandId ?? row.brand_id ?? ""),
-    provider: normalizeProvider(row.provider ?? row.source_provider),
+    provider: normalizeStoredProvider(row.provider ?? row.source_provider, asRecord(row.raw)),
     platforms: normalizeStringArray(row.platforms).map(normalizePlatform),
     queries: normalizeStringArray(row.queries),
     postIds: normalizeStringArray(row.postIds ?? row.post_ids),
@@ -420,7 +436,7 @@ function postDbPayload(
     id: row.id,
     brand_id: row.brandId,
     platform: row.platform,
-    provider: row.provider,
+    provider: storageProvider(row.provider),
     external_id: row.externalId,
     url: row.url,
     title: row.title,
@@ -448,7 +464,7 @@ function runDbPayload(row: SocialDiscoveryRun) {
   return {
     id: row.id,
     brand_id: row.brandId,
-    provider: row.provider,
+    provider: storageProvider(row.provider),
     platforms: row.platforms,
     queries: row.queries,
     post_ids: row.postIds,
@@ -551,7 +567,7 @@ export async function listSocialDiscoveryAutoCommentCandidates(input: {
       .select("*")
       .eq("brand_id", input.brandId)
       .eq("platform", "youtube")
-      .eq("provider", "youtube-data-api")
+      .in("provider", ["youtube-data-api", "youtube-websub"])
       .eq("status", "new")
       .order("rising_score", { ascending: false })
       .order("relevance_score", { ascending: false })

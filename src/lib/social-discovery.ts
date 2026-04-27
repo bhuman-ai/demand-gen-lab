@@ -2090,10 +2090,9 @@ export function buildSocialCommentPlanningPrompt(input: {
     draftMode === "thread"
       ? "Also provide replyDraft for second real account replying to first comment. Design both together."
       : "Leave replyDraft empty.",
-    "Always return a non-empty commentDraft for this exact video. Do not leave commentDraft empty.",
-    "Set shouldComment to true.",
-    "If the video is weakly related, write the most natural light-touch comment that fits the video and brand context.",
-    "Brand mention rules: exactly once, incidental, not promotional. No polished bridge sentence, no full product framing, no feature list, no value-prop stack, no 'fits this shift', no 'exists for this', and no 'without going fully manual'.",
+    "Set shouldComment to true only when the exact video is a natural, brand-relevant surface for a real comment.",
+    "If the video is weakly related, off-topic, language-mismatched, too sensitive, or only matches the search query accidentally, set shouldComment to false and leave commentDraft and replyDraft empty.",
+    "Brand mention rules when shouldComment is true: exactly once, incidental, not promotional. No polished bridge sentence, no full product framing, no feature list, no value-prop stack, no 'fits this shift', no 'exists for this', and no 'without going fully manual'.",
     draftMode === "thread"
       ? "Thread rules: commentDraft should work as a normal standalone YouTube comment. replyDraft should read like a real second person responding to that comment, not a coordinated ad. Do not make the first comment obviously tee up the brand."
       : "Solo rules: commentDraft must work alone. No setup for another account.",
@@ -2216,13 +2215,16 @@ async function enhanceInteractionPlanWithLlm(
 
     let initialCommentDraft = compactText(row.commentDraft, 280);
     let initialReplyDraft = compactText(row.replyDraft, 220);
-    const initialProblem = youtubeForceDraftProblem({
-      platform: input.post.platform,
-      forceDraft: Boolean(options?.force),
-      brandName,
-      commentDraft: initialCommentDraft,
-      replyDraft: initialReplyDraft,
-    });
+    let rowShouldComment = row.shouldComment === false ? false : true;
+    const initialProblem = rowShouldComment
+      ? youtubeForceDraftProblem({
+          platform: input.post.platform,
+          forceDraft: Boolean(options?.force),
+          brandName,
+          commentDraft: initialCommentDraft,
+          replyDraft: initialReplyDraft,
+        })
+      : "";
     if (initialProblem) {
       promptUsed = [
         prompt,
@@ -2241,13 +2243,14 @@ async function enhanceInteractionPlanWithLlm(
         row = retryRow;
         initialCommentDraft = compactText(row.commentDraft, 280);
         initialReplyDraft = compactText(row.replyDraft, 220);
+        rowShouldComment = row.shouldComment === false ? false : true;
       }
     }
 
     const headline = compactText(row.headline, 140) || plan.headline;
     const fitSummary = compactText(row.fitSummary, 280) || plan.fitSummary;
     const forceDraft = Boolean(options?.force);
-    const shouldComment = forceDraft ? true : row.shouldComment === false ? false : true;
+    const shouldComment = rowShouldComment;
     const commentDraft = initialCommentDraft;
     const replyDraft = initialReplyDraft;
     const assetNeeded = compactText(row.assetNeeded, 120) || plan.assetNeeded;
@@ -2258,13 +2261,15 @@ async function enhanceInteractionPlanWithLlm(
       draftMode === "thread" && shouldComment && baseCommentDraft
         ? replyDraft || plan.sequence[1]?.draft || ""
         : "";
-    const finalProblem = youtubeForceDraftProblem({
-      platform: input.post.platform,
-      forceDraft,
-      brandName,
-      commentDraft: baseCommentDraft,
-      replyDraft: baseReplyDraft,
-    });
+    const finalProblem = shouldComment
+      ? youtubeForceDraftProblem({
+          platform: input.post.platform,
+          forceDraft,
+          brandName,
+          commentDraft: baseCommentDraft,
+          replyDraft: baseReplyDraft,
+        })
+      : "";
     if (finalProblem) {
       return {
         ...input.post,

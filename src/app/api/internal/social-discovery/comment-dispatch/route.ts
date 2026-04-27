@@ -67,6 +67,8 @@ async function handleDispatch(request: Request) {
         channelCooldownMinutes: numberOption(body.channelCooldownMinutes ?? url.searchParams.get("channelCooldownMinutes")),
         maxVideoAgeHours: numberOption(body.maxVideoAgeHours ?? url.searchParams.get("maxVideoAgeHours")),
         candidateLimit: numberOption(body.candidateLimit ?? url.searchParams.get("candidateLimit")),
+        minRelevanceScore: numberOption(body.minRelevanceScore ?? url.searchParams.get("minRelevanceScore")),
+        minRisingScore: numberOption(body.minRisingScore ?? url.searchParams.get("minRisingScore")),
       }),
     { timeoutMs: 55_000 }
   );

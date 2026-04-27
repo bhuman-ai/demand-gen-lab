@@ -1,5 +1,6 @@
 import { createId, type BrandRecord } from "@/lib/factory-data";
 import type { OutreachAccountSecrets } from "@/lib/outreach-data";
+import { buildScoredSocialDiscoveryPost } from "@/lib/social-discovery";
 import type { SocialDiscoveryPost } from "@/lib/social-discovery-types";
 import { searchYouTubeVideos } from "@/lib/youtube";
 
@@ -21,21 +22,39 @@ function socialDiscoveryLookbackHours() {
   return Math.max(1, Math.min(168, Number(process.env.SOCIAL_DISCOVERY_MAX_POST_AGE_HOURS ?? 24) || 24));
 }
 
+function numberEnv(name: string, fallback: number, min: number, max: number) {
+  const raw = String(process.env[name] ?? "").trim();
+  if (!raw) return Math.max(min, Math.min(max, fallback));
+  const parsed = Number(raw);
+  return Math.max(min, Math.min(max, Number.isFinite(parsed) ? parsed : fallback));
+}
+
 function isoHoursAgo(hours: number) {
   return new Date(Date.now() - hours * 60 * 60 * 1000).toISOString();
 }
 
+function isTargetGradeYouTubeDiscoveryPost(post: SocialDiscoveryPost) {
+  const minRelevanceScore = numberEnv("SOCIAL_DISCOVERY_YOUTUBE_REFILL_MIN_RELEVANCE_SCORE", 18, 0, 100);
+  const minRisingScore = numberEnv("SOCIAL_DISCOVERY_YOUTUBE_REFILL_MIN_RISING_SCORE", 30, 0, 100);
+  const plan = post.interactionPlan;
+  if (post.relevanceScore < minRelevanceScore) return false;
+  if (post.risingScore < minRisingScore) return false;
+  if (plan.targetStrength !== "target") return false;
+  if (plan.commentPosture === "no_comment" || plan.commentPosture === "watch_only") return false;
+  return true;
+}
+
 function buildYouTubeDiscoveryPost(input: {
-  brandId: string;
+  brand: BrandRecord;
   query: string;
   index: number;
   result: Awaited<ReturnType<typeof searchYouTubeVideos>>[number];
-}): SocialDiscoveryPost {
+}): SocialDiscoveryPost | null {
   const { result } = input;
   const now = new Date().toISOString();
-  return {
+  return buildScoredSocialDiscoveryPost({
     id: createId("socialpost"),
-    brandId: input.brandId,
+    brandId: input.brand.id,
     platform: "youtube",
     provider: "youtube-data-api",
     externalId: result.videoId,
@@ -45,31 +64,11 @@ function buildYouTubeDiscoveryPost(input: {
     author: result.channelTitle,
     community: result.channelTitle,
     query: input.query,
-    matchedTerms: [],
-    intent: "noise",
-    relevanceScore: 0,
-    risingScore: 0,
     engagementScore: Math.max(
       0,
       result.videoViewCount + result.videoCommentCount * 4 + result.videoLikeCount * 2
     ),
     providerRank: input.index + 1,
-    status: "new",
-    interactionPlan: {
-      headline: "Draft a comment for this video",
-      targetStrength: "target",
-      commentPosture: "method_first",
-      mentionPolicy: "mention_only_if_asked",
-      actors: [
-        {
-          role: "operator",
-          job: "Write one short native YouTube comment after review.",
-        },
-      ],
-      sequence: [],
-      assetNeeded: "none",
-      riskNotes: [],
-    },
     raw: {
       youtube: {
         searchQuery: input.query,
@@ -96,11 +95,12 @@ function buildYouTubeDiscoveryPost(input: {
     postedAt: result.publishedAt || now,
     discoveredAt: now,
     updatedAt: now,
-  };
+    brand: input.brand,
+  });
 }
 
 export async function discoverYouTubeSearchPostsForBrand(input: {
-  brand: Pick<BrandRecord, "id">;
+  brand: BrandRecord;
   queries: string[];
   maxResults?: number;
   secrets?: Pick<OutreachAccountSecrets, "youtubeClientId" | "youtubeClientSecret" | "youtubeRefreshToken">;
@@ -128,14 +128,17 @@ export async function discoverYouTubeSearchPostsForBrand(input: {
       const eligibleResults = results.filter((result) => result.subscriberCount > MIN_YOUTUBE_DISCOVERY_SUBSCRIBERS);
       eligible += eligibleResults.length;
       posts.push(
-        ...eligibleResults.map((result, index) =>
-          buildYouTubeDiscoveryPost({
-            brandId: input.brand.id,
-            query,
-            index,
-            result,
-          })
-        )
+        ...eligibleResults
+          .map((result, index) =>
+            buildYouTubeDiscoveryPost({
+              brand: input.brand,
+              query,
+              index,
+              result,
+            })
+          )
+          .filter((post): post is SocialDiscoveryPost => Boolean(post))
+          .filter(isTargetGradeYouTubeDiscoveryPost)
       );
     } catch (error) {
       errors.push({

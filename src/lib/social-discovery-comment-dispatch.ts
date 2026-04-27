@@ -35,6 +35,8 @@ type AutoCommentDispatchOptions = {
   channelCooldownMinutes?: number;
   maxVideoAgeHours?: number;
   candidateLimit?: number;
+  minRelevanceScore?: number;
+  minRisingScore?: number;
 };
 
 type AutoCommentDispatchResult = {
@@ -195,6 +197,18 @@ function draftProblem(post: SocialDiscoveryPost, brandName: string, needsReply: 
   return "";
 }
 
+function candidateQualityProblem(
+  post: SocialDiscoveryPost,
+  input: { minRelevanceScore: number; minRisingScore: number }
+) {
+  const plan = post.interactionPlan;
+  if (post.relevanceScore < input.minRelevanceScore) return "low_relevance";
+  if (post.risingScore < input.minRisingScore) return "low_rising_score";
+  if (plan.targetStrength && plan.targetStrength !== "target") return "not_target";
+  if (plan.commentPosture === "no_comment" || plan.commentPosture === "watch_only") return "not_commentable";
+  return "";
+}
+
 function isYouTubeAccount(account: OutreachAccount) {
   return (
     account.status === "active" &&
@@ -323,6 +337,18 @@ export async function runSocialDiscoveryAutoCommentDispatchTick(
     1,
     500
   );
+  const minRelevanceScore = numberOption(
+    options.minRelevanceScore ?? process.env.SOCIAL_DISCOVERY_AUTO_COMMENT_MIN_RELEVANCE_SCORE,
+    18,
+    0,
+    100
+  );
+  const minRisingScore = numberOption(
+    options.minRisingScore ?? process.env.SOCIAL_DISCOVERY_AUTO_COMMENT_MIN_RISING_SCORE,
+    30,
+    0,
+    100
+  );
 
   const brands = await resolveBrands(options);
   const result: AutoCommentDispatchResult = {
@@ -423,6 +449,24 @@ export async function runSocialDiscoveryAutoCommentDispatchTick(
         brandResult.details.push({ postId: candidate.id, skipped: true, reason: "subscriber_gate" });
         continue;
       }
+      const qualityProblem = candidateQualityProblem(candidate, { minRelevanceScore, minRisingScore });
+      if (qualityProblem) {
+        await markDispatchAttempt({
+          post: candidate,
+          status: "skipped",
+          reason: qualityProblem,
+          details: {
+            relevanceScore: candidate.relevanceScore,
+            risingScore: candidate.risingScore,
+            targetStrength: candidate.interactionPlan.targetStrength ?? "",
+            commentPosture: candidate.interactionPlan.commentPosture ?? "",
+          },
+        });
+        brandResult.skipped += 1;
+        result.skipped += 1;
+        brandResult.details.push({ postId: candidate.id, skipped: true, reason: qualityProblem });
+        continue;
+      }
       const channelId = youtubeChannelId(candidate);
       if (channelId && blockedChannels.has(channelId)) {
         brandResult.skipped += 1;
@@ -455,6 +499,14 @@ export async function runSocialDiscoveryAutoCommentDispatchTick(
         });
         const [savedDraft] = await saveSocialDiscoveryPosts([drafted]);
         const postToSend = savedDraft ?? drafted;
+        const draftedQualityProblem = candidateQualityProblem(postToSend, { minRelevanceScore, minRisingScore });
+        if (draftedQualityProblem) {
+          await markDispatchAttempt({ post: postToSend, status: "skipped", reason: draftedQualityProblem });
+          brandResult.skipped += 1;
+          result.skipped += 1;
+          brandResult.details.push({ postId: postToSend.id, skipped: true, reason: draftedQualityProblem });
+          continue;
+        }
         const brandName = commentBrandName(brand.name);
         const problem = draftProblem(postToSend, brandName, Boolean(reply));
         if (problem) {

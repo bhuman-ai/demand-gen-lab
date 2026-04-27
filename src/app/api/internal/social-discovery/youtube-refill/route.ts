@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { isInternalCronAuthorized, recordInternalCronRun, runCronTask } from "@/lib/internal-cron";
-import { runSocialDiscoveryAutoCommentDispatchTick } from "@/lib/social-discovery-comment-dispatch";
+import { runSocialDiscoveryYouTubeRefillTick } from "@/lib/social-discovery-youtube-refill";
 
 export const maxDuration = 60;
 
@@ -39,7 +39,7 @@ async function requestJson(request: Request) {
   }
 }
 
-async function handleDispatch(request: Request) {
+async function handleYouTubeRefill(request: Request) {
   if (!isInternalCronAuthorized(request)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
@@ -49,47 +49,39 @@ async function handleDispatch(request: Request) {
   const brandIds = splitCsv(
     body.brandIds ?? body.brandId ?? url.searchParams.get("brandIds") ?? url.searchParams.get("brandId")
   );
-  const dryRun = booleanOption(body.dryRun ?? url.searchParams.get("dryRun"));
-  const scanAllBrands = booleanOption(body.scanAllBrands ?? url.searchParams.get("scanAllBrands"));
-
-  const dispatch = await runCronTask(
-    "socialDiscoveryAutoCommentDispatch",
+  const refill = await runCronTask(
+    "socialDiscoveryYouTubeRefill",
     () =>
-      runSocialDiscoveryAutoCommentDispatchTick({
+      runSocialDiscoveryYouTubeRefillTick({
         brandIds,
-        scanAllBrands,
-        dryRun,
-        limit: numberOption(body.brandLimit ?? url.searchParams.get("brandLimit")),
-        hourlyCap: numberOption(body.hourlyCap ?? url.searchParams.get("hourlyCap")),
-        perRunCap: numberOption(body.perRunCap ?? url.searchParams.get("perRunCap")),
-        perAccountHourlyCap: numberOption(body.perAccountHourlyCap ?? url.searchParams.get("perAccountHourlyCap")),
-        minSpacingMinutes: numberOption(body.minSpacingMinutes ?? url.searchParams.get("minSpacingMinutes")),
-        channelCooldownMinutes: numberOption(body.channelCooldownMinutes ?? url.searchParams.get("channelCooldownMinutes")),
-        maxVideoAgeHours: numberOption(body.maxVideoAgeHours ?? url.searchParams.get("maxVideoAgeHours")),
-        candidateLimit: numberOption(body.candidateLimit ?? url.searchParams.get("candidateLimit")),
+        scanAllBrands: booleanOption(body.scanAllBrands ?? url.searchParams.get("scanAllBrands")),
+        brandLimit: numberOption(body.brandLimit ?? url.searchParams.get("brandLimit")),
+        maxQueries: numberOption(body.maxQueries ?? url.searchParams.get("maxQueries")),
+        limitPerQuery: numberOption(body.limitPerQuery ?? body.limit ?? url.searchParams.get("limitPerQuery") ?? url.searchParams.get("limit")),
       }),
     { timeoutMs: 55_000 }
   );
+
   await recordInternalCronRun({
-    taskName: dispatch.name,
+    taskName: refill.name,
     route: url.pathname,
-    ok: dispatch.ok,
-    durationMs: dispatch.durationMs,
-    details: dispatch.ok ? dispatch.value : null,
-    error: dispatch.ok ? "" : dispatch.error,
+    ok: refill.ok,
+    durationMs: refill.durationMs,
+    details: refill.ok ? refill.value : null,
+    error: refill.ok ? "" : refill.error,
   });
 
   return NextResponse.json({
-    ok: dispatch.ok,
-    criticalPath: "social-discovery-comment-dispatch",
-    dispatch,
+    ok: refill.ok,
+    criticalPath: "social-discovery-youtube-refill",
+    refill,
   });
 }
 
 export async function GET(request: Request) {
-  return handleDispatch(request);
+  return handleYouTubeRefill(request);
 }
 
 export async function POST(request: Request) {
-  return handleDispatch(request);
+  return handleYouTubeRefill(request);
 }

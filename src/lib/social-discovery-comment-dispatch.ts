@@ -395,6 +395,18 @@ export async function runSocialDiscoveryAutoCommentDispatchTick(
       limit: candidateLimit,
       maxVideoAgeHours,
     });
+    if (!candidates.length) {
+      brandResult.skipped += 1;
+      result.skipped += 1;
+      brandResult.details.push({
+        skipped: true,
+        reason: "no_candidates",
+        platform: "youtube",
+        maxVideoAgeHours,
+        candidateLimit,
+      });
+      continue;
+    }
     for (const candidate of candidates) {
       if (result.posted >= perRunCap || remainingForBrand <= 0) break;
       const retryReason = retryBlocked(candidate);

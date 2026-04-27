@@ -22,6 +22,10 @@
       "schedule": "*/15 * * * *"
     },
     {
+      "path": "/api/internal/social-discovery/youtube-refill",
+      "schedule": "12 * * * *"
+    },
+    {
       "path": "/api/internal/social-discovery/comment-dispatch",
       "schedule": "*/5 * * * *"
     }

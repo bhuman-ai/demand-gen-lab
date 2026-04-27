@@ -1,3 +1,8 @@
+import { randomUUID } from "node:crypto";
+import { getSupabaseAdmin } from "@/lib/supabase-admin";
+
+const TABLE_INTERNAL_CRON_RUNS = "demanddev_internal_cron_runs";
+
 export function isInternalCronAuthorized(request: Request) {
   const token =
     String(process.env.OUTREACH_CRON_TOKEN ?? "").trim() ||
@@ -58,5 +63,45 @@ export async function runCronTask<T>(
       durationMs: Date.now() - startedAt,
       error: cronErrorMessage(error),
     };
+  }
+}
+
+function jsonSafe(value: unknown) {
+  try {
+    return JSON.parse(JSON.stringify(value ?? null));
+  } catch {
+    return null;
+  }
+}
+
+export async function recordInternalCronRun(input: {
+  taskName: string;
+  route: string;
+  ok: boolean;
+  durationMs: number;
+  details?: unknown;
+  error?: string;
+}) {
+  const supabase = getSupabaseAdmin();
+  if (!supabase) return null;
+
+  try {
+    const { data, error } = await supabase
+      .from(TABLE_INTERNAL_CRON_RUNS)
+      .insert({
+        id: `cron_${randomUUID().replace(/-/g, "").slice(0, 16)}`,
+        task_name: input.taskName,
+        route: input.route,
+        ok: input.ok,
+        duration_ms: Math.max(0, Math.round(Number(input.durationMs) || 0)),
+        details: jsonSafe(input.details),
+        error: String(input.error ?? "").trim(),
+      })
+      .select("*")
+      .single();
+    if (error) return null;
+    return data;
+  } catch {
+    return null;
   }
 }

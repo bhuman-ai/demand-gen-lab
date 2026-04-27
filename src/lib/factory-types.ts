@@ -588,6 +588,34 @@ export type SocialDiscoveryYouTubeSubscription = {
   lastError: string;
 };
 
+export type SocialDiscoverySearchQueryFamily =
+  | "direct_category"
+  | "buyer_pain"
+  | "workflow"
+  | "audience"
+  | "trigger_event"
+  | "competitor_alt";
+
+export type SocialDiscoverySearchQuerySource = "manual" | "llm" | "fallback" | "system";
+
+export type SocialDiscoverySearchStrategyQuery = {
+  query: string;
+  family: SocialDiscoverySearchQueryFamily;
+  source: SocialDiscoverySearchQuerySource;
+  weight: number;
+  rationale: string;
+};
+
+export type SocialDiscoverySearchStrategy = {
+  version: number;
+  platform: "youtube";
+  generatedAt: string;
+  expiresAt: string;
+  source: "llm" | "fallback" | "mixed";
+  queries: SocialDiscoverySearchStrategyQuery[];
+  notes: string;
+};
+
 export type BrandRecord = {
   id: string;
   name: string;
@@ -599,6 +627,7 @@ export type BrandRecord = {
   socialDiscoveryPlatforms: string[];
   socialDiscoveryQueries: string[];
   socialDiscoveryYouTubeSubscriptions: SocialDiscoveryYouTubeSubscription[];
+  socialDiscoverySearchStrategy: SocialDiscoverySearchStrategy | null;
   operablePersonas: string[];
   availableAssets: string[];
   targetMarkets: string[];

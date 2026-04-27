@@ -53,6 +53,7 @@ const EMBEDDED_BRAND_FALLBACKS: BrandRecord[] = [
     socialDiscoveryPlatforms: [],
     socialDiscoveryQueries: [],
     socialDiscoveryYouTubeSubscriptions: [],
+    socialDiscoverySearchStrategy: null,
     operablePersonas: [],
     availableAssets: [],
     targetMarkets: [],
@@ -77,6 +78,7 @@ const EMBEDDED_BRAND_FALLBACKS: BrandRecord[] = [
     socialDiscoveryPlatforms: [],
     socialDiscoveryQueries: [],
     socialDiscoveryYouTubeSubscriptions: [],
+    socialDiscoverySearchStrategy: null,
     operablePersonas: [],
     availableAssets: [],
     targetMarkets: ["Bootstrapped SaaS founders", "Self-funded operators"],
@@ -108,6 +110,7 @@ const EMBEDDED_BRAND_FALLBACKS: BrandRecord[] = [
     socialDiscoveryPlatforms: [],
     socialDiscoveryQueries: [],
     socialDiscoveryYouTubeSubscriptions: [],
+    socialDiscoverySearchStrategy: null,
     operablePersonas: [
       "Journalist covering creator workflows and AI video",
       "Research lead interviewing creators about personalized video use",
@@ -168,6 +171,7 @@ const EMBEDDED_BRAND_FALLBACKS: BrandRecord[] = [
     socialDiscoveryPlatforms: [],
     socialDiscoveryQueries: [],
     socialDiscoveryYouTubeSubscriptions: [],
+    socialDiscoverySearchStrategy: null,
     operablePersonas: [],
     availableAssets: [],
     targetMarkets: [],
@@ -193,6 +197,7 @@ const EMBEDDED_BRAND_FALLBACKS: BrandRecord[] = [
     socialDiscoveryPlatforms: [],
     socialDiscoveryQueries: [],
     socialDiscoveryYouTubeSubscriptions: [],
+    socialDiscoverySearchStrategy: null,
     operablePersonas: [],
     availableAssets: [],
     targetMarkets: [
@@ -237,6 +242,7 @@ const BRAND_SELECT_COLUMNS = [
   "social_discovery_platforms",
   "social_discovery_queries",
   "social_discovery_youtube_subscriptions",
+  "social_discovery_search_strategy",
   "operable_personas",
   "available_assets",
   "target_markets",
@@ -252,6 +258,7 @@ const OPTIONAL_BRAND_COLUMNS = [
   "social_discovery_platforms",
   "social_discovery_queries",
   "social_discovery_youtube_subscriptions",
+  "social_discovery_search_strategy",
   "operable_personas",
   "available_assets",
 ] as const;
@@ -377,6 +384,57 @@ function normalizeSocialDiscoveryYouTubeSubscriptions(value: unknown): BrandReco
     .filter((entry): entry is BrandRecord["socialDiscoveryYouTubeSubscriptions"][number] => Boolean(entry));
 }
 
+function normalizeSocialDiscoverySearchStrategy(value: unknown): BrandRecord["socialDiscoverySearchStrategy"] {
+  type Strategy = NonNullable<BrandRecord["socialDiscoverySearchStrategy"]>;
+  const row = asRecord(value);
+  const platform = String(row.platform ?? "").trim().toLowerCase();
+  const rawQueries = Array.isArray(row.queries) ? row.queries : [];
+  const queries = rawQueries
+    .map((entry) => {
+      const queryRow = asRecord(entry);
+      const query = String(queryRow.query ?? "").replace(/\s+/g, " ").trim().slice(0, 80);
+      if (!query) return null;
+      const familyRaw = String(queryRow.family ?? "").trim().toLowerCase();
+      const family = [
+        "direct_category",
+        "buyer_pain",
+        "workflow",
+        "audience",
+        "trigger_event",
+        "competitor_alt",
+      ].includes(familyRaw)
+        ? (familyRaw as Strategy["queries"][number]["family"])
+        : "workflow";
+      const sourceRaw = String(queryRow.source ?? "").trim().toLowerCase();
+      const source = ["manual", "llm", "fallback", "system"].includes(sourceRaw)
+        ? (sourceRaw as Strategy["queries"][number]["source"])
+        : "fallback";
+      const weight = Math.max(0, Math.min(1, normalizeNumber(queryRow.weight, 0.5)));
+      return {
+        query,
+        family,
+        source,
+        weight,
+        rationale: String(queryRow.rationale ?? "").replace(/\s+/g, " ").trim().slice(0, 240),
+      };
+    })
+    .filter(
+      (entry): entry is NonNullable<BrandRecord["socialDiscoverySearchStrategy"]>["queries"][number] =>
+        Boolean(entry)
+    );
+  if (platform !== "youtube" || !queries.length) return null;
+  const sourceRaw = String(row.source ?? "").trim().toLowerCase();
+  return {
+    version: Math.max(1, Math.round(normalizeNumber(row.version, 1))),
+    platform: "youtube",
+    generatedAt: String(row.generatedAt ?? row.generated_at ?? "").trim(),
+    expiresAt: String(row.expiresAt ?? row.expires_at ?? "").trim(),
+    source: sourceRaw === "llm" || sourceRaw === "mixed" ? sourceRaw : "fallback",
+    queries,
+    notes: String(row.notes ?? "").replace(/\s+/g, " ").trim().slice(0, 500),
+  };
+}
+
 const SOCIAL_DISCOVERY_COMMENT_PROMPT_NOTE_MARKER = "LASTB2B_SOCIAL_DISCOVERY_COMMENT_PROMPT:";
 const SOCIAL_DISCOVERY_QUERIES_NOTE_MARKER = "LASTB2B_SOCIAL_DISCOVERY_QUERIES:";
 
@@ -477,6 +535,9 @@ const mapBrandRow = (input: unknown): BrandRecord => {
     ),
     socialDiscoveryYouTubeSubscriptions: normalizeSocialDiscoveryYouTubeSubscriptions(
       row.social_discovery_youtube_subscriptions ?? row.socialDiscoveryYouTubeSubscriptions ?? []
+    ),
+    socialDiscoverySearchStrategy: normalizeSocialDiscoverySearchStrategy(
+      row.social_discovery_search_strategy ?? row.socialDiscoverySearchStrategy
     ),
     operablePersonas: normalizeStringArray(
       row.operable_personas ?? row.operablePersonas ?? row.real_personas ?? row.realPersonas
@@ -693,6 +754,7 @@ export async function createBrand(input: {
   socialDiscoveryQueries?: string[];
   socialDiscoveryCommentPrompt?: string;
   socialDiscoveryYouTubeSubscriptions?: BrandRecord["socialDiscoveryYouTubeSubscriptions"];
+  socialDiscoverySearchStrategy?: BrandRecord["socialDiscoverySearchStrategy"];
   operablePersonas?: string[];
   availableAssets?: string[];
   targetMarkets?: string[];
@@ -714,6 +776,7 @@ export async function createBrand(input: {
     socialDiscoveryYouTubeSubscriptions: normalizeSocialDiscoveryYouTubeSubscriptions(
       input.socialDiscoveryYouTubeSubscriptions ?? []
     ),
+    socialDiscoverySearchStrategy: normalizeSocialDiscoverySearchStrategy(input.socialDiscoverySearchStrategy),
     operablePersonas: normalizeStringArray(input.operablePersonas),
     availableAssets: normalizeStringArray(input.availableAssets),
     targetMarkets: normalizeStringArray(input.targetMarkets),
@@ -744,6 +807,7 @@ export async function createBrand(input: {
       social_discovery_platforms: brand.socialDiscoveryPlatforms,
       social_discovery_queries: brand.socialDiscoveryQueries,
       social_discovery_youtube_subscriptions: brand.socialDiscoveryYouTubeSubscriptions,
+      social_discovery_search_strategy: brand.socialDiscoverySearchStrategy ?? {},
       operable_personas: brand.operablePersonas,
       available_assets: brand.availableAssets,
       target_markets: brand.targetMarkets,
@@ -765,6 +829,7 @@ export async function createBrand(input: {
       delete legacyInsertPayload.social_discovery_platforms;
       delete legacyInsertPayload.social_discovery_queries;
       delete legacyInsertPayload.social_discovery_youtube_subscriptions;
+      delete legacyInsertPayload.social_discovery_search_strategy;
       delete legacyInsertPayload.operable_personas;
       delete legacyInsertPayload.available_assets;
       const retried = await supabase
@@ -804,6 +869,7 @@ export async function updateBrand(
       | "socialDiscoveryPlatforms"
       | "socialDiscoveryQueries"
       | "socialDiscoveryYouTubeSubscriptions"
+      | "socialDiscoverySearchStrategy"
       | "operablePersonas"
       | "availableAssets"
       | "targetMarkets"
@@ -862,6 +928,9 @@ export async function updateBrand(
         patch.socialDiscoveryYouTubeSubscriptions
       );
     }
+    if (patch.socialDiscoverySearchStrategy !== undefined) {
+      update.social_discovery_search_strategy = normalizeSocialDiscoverySearchStrategy(patch.socialDiscoverySearchStrategy) ?? {};
+    }
     if (Array.isArray(patch.operablePersonas)) update.operable_personas = patch.operablePersonas;
     if (Array.isArray(patch.availableAssets)) update.available_assets = patch.availableAssets;
     if (Array.isArray(patch.targetMarkets)) update.target_markets = patch.targetMarkets;
@@ -885,6 +954,7 @@ export async function updateBrand(
       delete update.social_discovery_platforms;
       delete update.social_discovery_queries;
       delete update.social_discovery_youtube_subscriptions;
+      delete update.social_discovery_search_strategy;
       delete update.operable_personas;
       delete update.available_assets;
       const retried = await supabase
@@ -913,6 +983,10 @@ export async function updateBrand(
     socialDiscoveryYouTubeSubscriptions: Array.isArray(patch.socialDiscoveryYouTubeSubscriptions)
       ? normalizeSocialDiscoveryYouTubeSubscriptions(patch.socialDiscoveryYouTubeSubscriptions)
       : mapBrandRow(existing).socialDiscoveryYouTubeSubscriptions,
+    socialDiscoverySearchStrategy:
+      patch.socialDiscoverySearchStrategy !== undefined
+        ? normalizeSocialDiscoverySearchStrategy(patch.socialDiscoverySearchStrategy)
+        : mapBrandRow(existing).socialDiscoverySearchStrategy,
     updatedAt: nowIso(),
   };
   if (index < 0) {

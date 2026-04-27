@@ -1,9 +1,17 @@
-import { getBrandById, listBrands, type BrandRecord } from "@/lib/factory-data";
 import { getOutreachAccountSecrets, listSocialRoutingAccounts } from "@/lib/outreach-data";
 import { createSocialDiscoveryRun, saveSocialDiscoveryPosts } from "@/lib/social-discovery-data";
+import {
+  envFlag,
+  envNumber,
+  resolveYouTubeDiscoveryReadyBrands,
+  resolveYouTubeSearchStrategyForBrand,
+  selectYouTubeSearchQueriesForRun,
+  splitSocialDiscoveryCsv,
+} from "@/lib/social-discovery-search-strategy";
 import { discoverYouTubeSearchPostsForBrand } from "@/lib/social-discovery-youtube-search";
 import { hasYouTubeOAuthCredentials } from "@/lib/youtube";
 import type { SocialDiscoveryPost } from "@/lib/social-discovery-types";
+import type { SocialDiscoverySearchStrategyQuery } from "@/lib/factory-types";
 
 type YouTubeRefillOptions = {
   brandIds?: string[];
@@ -13,32 +21,8 @@ type YouTubeRefillOptions = {
   limitPerQuery?: number;
 };
 
-function splitCsv(value: unknown) {
-  const raw = Array.isArray(value) ? value : String(value ?? "").split(",");
-  return raw
-    .map((entry) => String(entry ?? "").trim())
-    .filter(Boolean);
-}
-
 function uniqueStrings(values: string[]) {
   return Array.from(new Set(values.map((value) => value.trim()).filter(Boolean)));
-}
-
-function numberOption(value: unknown, fallback: number, min: number, max: number) {
-  const parsed = Number(value);
-  return Math.max(min, Math.min(max, Number.isFinite(parsed) ? parsed : fallback));
-}
-
-function boolEnv(name: string, fallback = false) {
-  const raw = String(process.env[name] ?? "").trim().toLowerCase();
-  if (!raw) return fallback;
-  return ["1", "true", "yes", "on"].includes(raw);
-}
-
-function savedQueriesForBrand(brand: BrandRecord, maxQueries: number) {
-  return uniqueStrings(
-    splitCsv(brand.socialDiscoveryQueries).map((query) => query.replace(/\s+/g, " "))
-  ).slice(0, maxQueries);
 }
 
 async function resolveYouTubeSearchSecrets() {
@@ -60,33 +44,6 @@ async function resolveYouTubeSearchSecrets() {
   return null;
 }
 
-async function resolveBrands(input: YouTubeRefillOptions) {
-  const configuredBrandIds = input.brandIds?.length
-    ? input.brandIds
-    : uniqueStrings([
-        ...splitCsv(process.env.SOCIAL_DISCOVERY_YOUTUBE_REFILL_BRAND_IDS),
-        ...splitCsv(process.env.SOCIAL_DISCOVERY_AUTO_COMMENT_BRAND_IDS),
-      ]);
-  const limit = numberOption(
-    input.brandLimit ?? process.env.SOCIAL_DISCOVERY_YOUTUBE_REFILL_BRAND_LIMIT,
-    5,
-    1,
-    50
-  );
-
-  if (configuredBrandIds.length) {
-    const brands = await Promise.all(configuredBrandIds.map((brandId) => getBrandById(brandId)));
-    return brands.filter((brand): brand is BrandRecord => Boolean(brand)).slice(0, limit);
-  }
-
-  const scanAllBrands =
-    input.scanAllBrands ?? boolEnv("SOCIAL_DISCOVERY_YOUTUBE_REFILL_SCAN_ALL_BRANDS", false);
-  if (!scanAllBrands) return [];
-  return (await listBrands())
-    .filter((brand) => brand.socialDiscoveryPlatforms.includes("youtube"))
-    .slice(0, limit);
-}
-
 function topPostSummaries(posts: SocialDiscoveryPost[]) {
   return posts
     .slice(0, 5)
@@ -102,15 +59,65 @@ function topPostSummaries(posts: SocialDiscoveryPost[]) {
     }));
 }
 
+function queryFamilyCounts(queries: SocialDiscoverySearchStrategyQuery[]) {
+  return queries.reduce<Record<string, number>>((counts, query) => {
+    counts[query.family] = (counts[query.family] ?? 0) + 1;
+    return counts;
+  }, {});
+}
+
+function annotatePostsWithQueryStrategy(input: {
+  posts: SocialDiscoveryPost[];
+  queries: SocialDiscoverySearchStrategyQuery[];
+  strategyGeneratedAt: string;
+}) {
+  const byQuery = new Map(input.queries.map((query) => [query.query.toLowerCase(), query]));
+  return input.posts.map((post) => {
+    const strategyQuery = byQuery.get(post.query.toLowerCase());
+    if (!strategyQuery) return post;
+    return {
+      ...post,
+      raw: {
+        ...post.raw,
+        searchStrategy: {
+          family: strategyQuery.family,
+          source: strategyQuery.source,
+          weight: strategyQuery.weight,
+          rationale: strategyQuery.rationale,
+          generatedAt: input.strategyGeneratedAt,
+        },
+      },
+    };
+  });
+}
+
 export async function runSocialDiscoveryYouTubeRefillTick(options: YouTubeRefillOptions = {}) {
-  const brands = await resolveBrands(options);
-  const maxQueries = numberOption(
+  const configuredBrandIds = uniqueStrings([
+    ...splitSocialDiscoveryCsv(process.env.SOCIAL_DISCOVERY_YOUTUBE_REFILL_BRAND_IDS),
+    ...splitSocialDiscoveryCsv(process.env.SOCIAL_DISCOVERY_AUTO_COMMENT_BRAND_IDS),
+  ]);
+  const brandResolution = await resolveYouTubeDiscoveryReadyBrands({
+    explicitBrandIds: options.brandIds,
+    configuredBrandIds,
+    scanAllBrands: options.scanAllBrands ?? envFlag("SOCIAL_DISCOVERY_YOUTUBE_REFILL_SCAN_ALL_BRANDS", false),
+    scanAllReadyBrands: envFlag("SOCIAL_DISCOVERY_YOUTUBE_REFILL_SCAN_ALL_READY_BRANDS", true),
+    brandLimit: options.brandLimit ?? process.env.SOCIAL_DISCOVERY_YOUTUBE_REFILL_BRAND_LIMIT,
+    rotationBucketMinutes: 60,
+  });
+  const brands = brandResolution.brands;
+  const maxQueries = envNumber(
     options.maxQueries ?? process.env.SOCIAL_DISCOVERY_YOUTUBE_REFILL_MAX_QUERIES ?? process.env.SOCIAL_DISCOVERY_MAX_QUERIES,
-    20,
+    8,
     1,
     40
   );
-  const limitPerQuery = numberOption(
+  const strategyMaxQueries = envNumber(
+    process.env.SOCIAL_DISCOVERY_YOUTUBE_REFILL_STRATEGY_QUERIES,
+    Math.max(20, maxQueries),
+    maxQueries,
+    40
+  );
+  const limitPerQuery = envNumber(
     options.limitPerQuery ?? process.env.SOCIAL_DISCOVERY_YOUTUBE_REFILL_LIMIT_PER_QUERY,
     5,
     1,
@@ -121,14 +128,26 @@ export async function runSocialDiscoveryYouTubeRefillTick(options: YouTubeRefill
 
   for (const brand of brands) {
     const startedAt = new Date().toISOString();
-    const queries = savedQueriesForBrand(brand, maxQueries);
+    const strategyResult = await resolveYouTubeSearchStrategyForBrand({
+      brand,
+      maxQueries: strategyMaxQueries,
+      persist: true,
+    });
+    const queryPlan = selectYouTubeSearchQueriesForRun({
+      strategy: strategyResult.strategy,
+      maxQueries,
+      rotationBucketMinutes: 60,
+    });
+    const queries = uniqueStrings(queryPlan.map((query) => query.query));
     if (!queries.length) {
       results.push({
         brandId: brand.id,
         brandName: brand.name,
         skipped: true,
-        reason: "no_saved_queries",
+        reason: "no_strategy_queries",
         savedSearches: 0,
+        generatedStrategy: strategyResult.generated,
+        persistedStrategy: strategyResult.persisted,
         found: 0,
         eligible: 0,
         saved: 0,
@@ -143,7 +162,12 @@ export async function runSocialDiscoveryYouTubeRefillTick(options: YouTubeRefill
       maxResults: limitPerQuery,
       secrets: youtubeSearchCredentials?.secrets,
     });
-    const savedPosts = discovery.posts.length ? await saveSocialDiscoveryPosts(discovery.posts) : [];
+    const strategyPosts = annotatePostsWithQueryStrategy({
+      posts: discovery.posts,
+      queries: queryPlan,
+      strategyGeneratedAt: strategyResult.strategy.generatedAt,
+    });
+    const savedPosts = strategyPosts.length ? await saveSocialDiscoveryPosts(strategyPosts) : [];
     const run = await createSocialDiscoveryRun({
       brandId: brand.id,
       provider: discovery.provider,
@@ -161,6 +185,10 @@ export async function runSocialDiscoveryYouTubeRefillTick(options: YouTubeRefill
       brandName: brand.name,
       runId: run.id,
       savedSearches: queries.length,
+      generatedStrategy: strategyResult.generated,
+      persistedStrategy: strategyResult.persisted,
+      strategySource: strategyResult.strategy.source,
+      queryFamilies: queryFamilyCounts(queryPlan),
       found: discovery.summary.found,
       eligible: discovery.summary.eligible,
       saved: savedPosts.length,
@@ -173,6 +201,10 @@ export async function runSocialDiscoveryYouTubeRefillTick(options: YouTubeRefill
   return {
     ok: true,
     scannedBrands: brands.length,
+    configuredBrandIds: brandResolution.configuredBrandIds,
+    scannedAllReadyBrands: brandResolution.scannedAllReadyBrands,
+    skippedReadyCheck: brandResolution.skippedBrands.slice(0, 10),
+    strategyMaxQueries,
     maxQueries,
     limitPerQuery,
     results,

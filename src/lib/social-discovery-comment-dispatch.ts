@@ -1,4 +1,3 @@
-import { getBrandById, listBrands, type BrandRecord } from "@/lib/factory-data";
 import { listSocialRoutingAccounts } from "@/lib/outreach-data";
 import {
   listSocialDiscoveryAutoCommentCandidates,
@@ -16,6 +15,10 @@ import {
   brandMentionLooksCannedOrAdLike,
   commentBrandName,
 } from "@/lib/social-discovery-brand-mention";
+import {
+  resolveYouTubeDiscoveryReadyBrands,
+  splitSocialDiscoveryCsv,
+} from "@/lib/social-discovery-search-strategy";
 import type { OutreachAccount } from "@/lib/factory-types";
 import type { SocialDiscoveryPost } from "@/lib/social-discovery-types";
 import { getYouTubeVideoTranscript } from "@/lib/youtube";
@@ -66,13 +69,6 @@ function numberOption(value: unknown, fallback: number, min: number, max: number
   if (String(value ?? "").trim() === "") return Math.max(min, Math.min(max, fallback));
   const parsed = Number(value);
   return Math.max(min, Math.min(max, Number.isFinite(parsed) ? parsed : fallback));
-}
-
-function splitCsv(value: unknown) {
-  const raw = Array.isArray(value) ? value : String(value ?? "").split(",");
-  return raw
-    .map((entry) => String(entry ?? "").trim())
-    .filter(Boolean);
 }
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -266,19 +262,23 @@ function recentChannelIds(posts: SocialDiscoveryPost[], sinceMs: number) {
 async function resolveBrands(input: AutoCommentDispatchOptions) {
   const configuredBrandIds = input.brandIds?.length
     ? input.brandIds
-    : splitCsv(process.env.SOCIAL_DISCOVERY_AUTO_COMMENT_BRAND_IDS || process.env.SOCIAL_DISCOVERY_BRAND_IDS);
+    : [
+        ...splitSocialDiscoveryCsv(process.env.SOCIAL_DISCOVERY_AUTO_COMMENT_BRAND_IDS),
+        ...splitSocialDiscoveryCsv(process.env.SOCIAL_DISCOVERY_BRAND_IDS),
+      ];
   const limit = numberOption(input.limit ?? process.env.SOCIAL_DISCOVERY_AUTO_COMMENT_BRAND_LIMIT, 5, 1, 50);
-
-  if (configuredBrandIds.length) {
-    const brands = await Promise.all(configuredBrandIds.map((brandId) => getBrandById(brandId)));
-    return brands.filter((brand): brand is BrandRecord => Boolean(brand)).slice(0, limit);
-  }
-
   const scanAllBrands =
     input.scanAllBrands ??
     boolEnv("SOCIAL_DISCOVERY_AUTO_COMMENT_SCAN_ALL_BRANDS", boolEnv("SOCIAL_DISCOVERY_SCAN_ALL_BRANDS", false));
-  if (!scanAllBrands) return [];
-  return (await listBrands()).slice(0, limit);
+  const resolution = await resolveYouTubeDiscoveryReadyBrands({
+    explicitBrandIds: input.brandIds,
+    configuredBrandIds,
+    scanAllBrands,
+    scanAllReadyBrands: boolEnv("SOCIAL_DISCOVERY_AUTO_COMMENT_SCAN_ALL_READY_BRANDS", true),
+    brandLimit: limit,
+    rotationBucketMinutes: 5,
+  });
+  return resolution.brands;
 }
 
 export async function runSocialDiscoveryAutoCommentDispatchTick(

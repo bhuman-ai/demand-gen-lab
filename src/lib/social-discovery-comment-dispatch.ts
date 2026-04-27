@@ -115,6 +115,16 @@ function addMinutes(minutes: number) {
   return new Date(Date.now() + minutes * 60 * 1000).toISOString();
 }
 
+function isTerminalSkipReason(reason: string) {
+  return [
+    "subscriber_gate",
+    "low_relevance",
+    "low_rising_score",
+    "not_target",
+    "not_commentable",
+  ].includes(reason);
+}
+
 async function markDispatchAttempt(input: {
   post: SocialDiscoveryPost;
   status: "skipped" | "failed" | "posted" | "dry_run";
@@ -130,6 +140,10 @@ async function markDispatchAttempt(input: {
       : "";
   const nextPost = {
     ...input.post,
+    status:
+      input.status === "skipped" && isTerminalSkipReason(input.reason ?? "")
+        ? "dismissed"
+        : input.post.status,
     raw: {
       ...input.post.raw,
       autoCommentDispatch: {

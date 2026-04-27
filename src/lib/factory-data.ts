@@ -53,6 +53,7 @@ const EMBEDDED_BRAND_FALLBACKS: BrandRecord[] = [
     socialDiscoveryPlatforms: [],
     socialDiscoveryQueries: [],
     socialDiscoveryYouTubeSubscriptions: [],
+    socialDiscoveryYouTubeAutoCommentEnabled: false,
     socialDiscoverySearchStrategy: null,
     operablePersonas: [],
     availableAssets: [],
@@ -78,6 +79,7 @@ const EMBEDDED_BRAND_FALLBACKS: BrandRecord[] = [
     socialDiscoveryPlatforms: [],
     socialDiscoveryQueries: [],
     socialDiscoveryYouTubeSubscriptions: [],
+    socialDiscoveryYouTubeAutoCommentEnabled: false,
     socialDiscoverySearchStrategy: null,
     operablePersonas: [],
     availableAssets: [],
@@ -110,6 +112,7 @@ const EMBEDDED_BRAND_FALLBACKS: BrandRecord[] = [
     socialDiscoveryPlatforms: [],
     socialDiscoveryQueries: [],
     socialDiscoveryYouTubeSubscriptions: [],
+    socialDiscoveryYouTubeAutoCommentEnabled: false,
     socialDiscoverySearchStrategy: null,
     operablePersonas: [
       "Journalist covering creator workflows and AI video",
@@ -171,6 +174,7 @@ const EMBEDDED_BRAND_FALLBACKS: BrandRecord[] = [
     socialDiscoveryPlatforms: [],
     socialDiscoveryQueries: [],
     socialDiscoveryYouTubeSubscriptions: [],
+    socialDiscoveryYouTubeAutoCommentEnabled: false,
     socialDiscoverySearchStrategy: null,
     operablePersonas: [],
     availableAssets: [],
@@ -197,6 +201,7 @@ const EMBEDDED_BRAND_FALLBACKS: BrandRecord[] = [
     socialDiscoveryPlatforms: [],
     socialDiscoveryQueries: [],
     socialDiscoveryYouTubeSubscriptions: [],
+    socialDiscoveryYouTubeAutoCommentEnabled: false,
     socialDiscoverySearchStrategy: null,
     operablePersonas: [],
     availableAssets: [],
@@ -242,6 +247,7 @@ const BRAND_SELECT_COLUMNS = [
   "social_discovery_platforms",
   "social_discovery_queries",
   "social_discovery_youtube_subscriptions",
+  "social_discovery_youtube_auto_comment_enabled",
   "social_discovery_search_strategy",
   "operable_personas",
   "available_assets",
@@ -258,6 +264,7 @@ const OPTIONAL_BRAND_COLUMNS = [
   "social_discovery_platforms",
   "social_discovery_queries",
   "social_discovery_youtube_subscriptions",
+  "social_discovery_youtube_auto_comment_enabled",
   "social_discovery_search_strategy",
   "operable_personas",
   "available_assets",
@@ -363,7 +370,7 @@ function normalizeSocialDiscoveryYouTubeSubscriptions(value: unknown): BrandReco
         channelTitle: String(row.channelTitle ?? row.channel_title ?? "").trim(),
         accountId: String(row.accountId ?? row.account_id ?? "").trim(),
         accountName: String(row.accountName ?? row.account_name ?? "").trim(),
-        autoComment: normalizeBoolean(row.autoComment ?? row.auto_comment, true),
+        autoComment: normalizeBoolean(row.autoComment ?? row.auto_comment, false),
         leaseSeconds: Math.max(0, Math.round(normalizeNumber(row.leaseSeconds ?? row.lease_seconds, 0))),
         leaseExpiresAt: String(row.leaseExpiresAt ?? row.lease_expires_at ?? "").trim(),
         status: ["pending", "active", "error"].includes(status)
@@ -535,6 +542,10 @@ const mapBrandRow = (input: unknown): BrandRecord => {
     ),
     socialDiscoveryYouTubeSubscriptions: normalizeSocialDiscoveryYouTubeSubscriptions(
       row.social_discovery_youtube_subscriptions ?? row.socialDiscoveryYouTubeSubscriptions ?? []
+    ),
+    socialDiscoveryYouTubeAutoCommentEnabled: normalizeBoolean(
+      row.social_discovery_youtube_auto_comment_enabled ?? row.socialDiscoveryYouTubeAutoCommentEnabled,
+      false
     ),
     socialDiscoverySearchStrategy: normalizeSocialDiscoverySearchStrategy(
       row.social_discovery_search_strategy ?? row.socialDiscoverySearchStrategy
@@ -754,6 +765,7 @@ export async function createBrand(input: {
   socialDiscoveryQueries?: string[];
   socialDiscoveryCommentPrompt?: string;
   socialDiscoveryYouTubeSubscriptions?: BrandRecord["socialDiscoveryYouTubeSubscriptions"];
+  socialDiscoveryYouTubeAutoCommentEnabled?: boolean;
   socialDiscoverySearchStrategy?: BrandRecord["socialDiscoverySearchStrategy"];
   operablePersonas?: string[];
   availableAssets?: string[];
@@ -776,6 +788,7 @@ export async function createBrand(input: {
     socialDiscoveryYouTubeSubscriptions: normalizeSocialDiscoveryYouTubeSubscriptions(
       input.socialDiscoveryYouTubeSubscriptions ?? []
     ),
+    socialDiscoveryYouTubeAutoCommentEnabled: Boolean(input.socialDiscoveryYouTubeAutoCommentEnabled),
     socialDiscoverySearchStrategy: normalizeSocialDiscoverySearchStrategy(input.socialDiscoverySearchStrategy),
     operablePersonas: normalizeStringArray(input.operablePersonas),
     availableAssets: normalizeStringArray(input.availableAssets),
@@ -807,6 +820,7 @@ export async function createBrand(input: {
       social_discovery_platforms: brand.socialDiscoveryPlatforms,
       social_discovery_queries: brand.socialDiscoveryQueries,
       social_discovery_youtube_subscriptions: brand.socialDiscoveryYouTubeSubscriptions,
+      social_discovery_youtube_auto_comment_enabled: brand.socialDiscoveryYouTubeAutoCommentEnabled,
       social_discovery_search_strategy: brand.socialDiscoverySearchStrategy ?? {},
       operable_personas: brand.operablePersonas,
       available_assets: brand.availableAssets,
@@ -829,6 +843,7 @@ export async function createBrand(input: {
       delete legacyInsertPayload.social_discovery_platforms;
       delete legacyInsertPayload.social_discovery_queries;
       delete legacyInsertPayload.social_discovery_youtube_subscriptions;
+      delete legacyInsertPayload.social_discovery_youtube_auto_comment_enabled;
       delete legacyInsertPayload.social_discovery_search_strategy;
       delete legacyInsertPayload.operable_personas;
       delete legacyInsertPayload.available_assets;
@@ -869,6 +884,7 @@ export async function updateBrand(
       | "socialDiscoveryPlatforms"
       | "socialDiscoveryQueries"
       | "socialDiscoveryYouTubeSubscriptions"
+      | "socialDiscoveryYouTubeAutoCommentEnabled"
       | "socialDiscoverySearchStrategy"
       | "operablePersonas"
       | "availableAssets"
@@ -928,6 +944,9 @@ export async function updateBrand(
         patch.socialDiscoveryYouTubeSubscriptions
       );
     }
+    if (typeof patch.socialDiscoveryYouTubeAutoCommentEnabled === "boolean") {
+      update.social_discovery_youtube_auto_comment_enabled = patch.socialDiscoveryYouTubeAutoCommentEnabled;
+    }
     if (patch.socialDiscoverySearchStrategy !== undefined) {
       update.social_discovery_search_strategy = normalizeSocialDiscoverySearchStrategy(patch.socialDiscoverySearchStrategy) ?? {};
     }
@@ -954,6 +973,7 @@ export async function updateBrand(
       delete update.social_discovery_platforms;
       delete update.social_discovery_queries;
       delete update.social_discovery_youtube_subscriptions;
+      delete update.social_discovery_youtube_auto_comment_enabled;
       delete update.social_discovery_search_strategy;
       delete update.operable_personas;
       delete update.available_assets;
@@ -983,6 +1003,10 @@ export async function updateBrand(
     socialDiscoveryYouTubeSubscriptions: Array.isArray(patch.socialDiscoveryYouTubeSubscriptions)
       ? normalizeSocialDiscoveryYouTubeSubscriptions(patch.socialDiscoveryYouTubeSubscriptions)
       : mapBrandRow(existing).socialDiscoveryYouTubeSubscriptions,
+    socialDiscoveryYouTubeAutoCommentEnabled:
+      typeof patch.socialDiscoveryYouTubeAutoCommentEnabled === "boolean"
+        ? patch.socialDiscoveryYouTubeAutoCommentEnabled
+        : mapBrandRow(existing).socialDiscoveryYouTubeAutoCommentEnabled,
     socialDiscoverySearchStrategy:
       patch.socialDiscoverySearchStrategy !== undefined
         ? normalizeSocialDiscoverySearchStrategy(patch.socialDiscoverySearchStrategy)

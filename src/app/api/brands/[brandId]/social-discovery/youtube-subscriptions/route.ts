@@ -56,7 +56,7 @@ export async function POST(request: Request, context: { params: Promise<{ brandI
     const body = await requestJson(request);
     const channelId = String(body.channelId ?? body.channel_id ?? "").trim();
     const accountId = String(body.accountId ?? body.account_id ?? "").trim();
-    const autoComment = booleanFlag(body.autoComment ?? body.auto_comment, true);
+    const autoComment = booleanFlag(body.autoComment ?? body.auto_comment, false);
     const leaseSeconds = Number(body.leaseSeconds ?? body.lease_seconds ?? 0) || 0;
 
     const result = await subscribeBrandToYouTubeChannel({

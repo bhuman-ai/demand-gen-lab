@@ -185,7 +185,11 @@ export async function subscribeBrandToYouTubeChannel(input: {
   const channelId = normalizeChannelId(input.channelId);
   if (!channelId) throw new Error("channelId is required");
 
-  const autoComment = input.autoComment !== false;
+  const requestedAutoComment = input.autoComment === true;
+  if (requestedAutoComment && !brand.socialDiscoveryYouTubeAutoCommentEnabled) {
+    throw new Error("Turn on YouTube auto-commenting for this brand before enabling channel auto-comment.");
+  }
+  const autoComment = requestedAutoComment;
   const leaseSeconds = clampLeaseSeconds(input.leaseSeconds);
   const account = await resolveYouTubeAccount({
     accountId: input.accountId,

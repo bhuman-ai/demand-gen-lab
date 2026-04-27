@@ -402,6 +402,13 @@ export async function runSocialDiscoveryAutoCommentDispatchTick(
     };
     result.results.push(brandResult);
 
+    if (!brand.socialDiscoveryYouTubeAutoCommentEnabled) {
+      brandResult.skipped += 1;
+      result.skipped += 1;
+      brandResult.details.push({ skipped: true, reason: "brand_youtube_auto_comment_disabled" });
+      continue;
+    }
+
     const sinceOneHour = new Date(Date.now() - 60 * 60 * 1000).toISOString();
     const recent = await listSocialDiscoveryCommentedPostsSince({
       brandId: brand.id,

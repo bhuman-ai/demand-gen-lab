@@ -200,6 +200,9 @@ export async function PATCH(request: Request, context: { params: Promise<{ brand
   if (Array.isArray(body.socialDiscoveryQueries)) {
     patch.socialDiscoveryQueries = normalizeStringArray(body.socialDiscoveryQueries);
   }
+  if (typeof body.socialDiscoveryYouTubeAutoCommentEnabled === "boolean") {
+    patch.socialDiscoveryYouTubeAutoCommentEnabled = body.socialDiscoveryYouTubeAutoCommentEnabled;
+  }
   if (Array.isArray(body.operablePersonas)) {
     patch.operablePersonas = normalizeStringArray(body.operablePersonas);
   }

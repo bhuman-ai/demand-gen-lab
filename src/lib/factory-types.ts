@@ -627,6 +627,7 @@ export type BrandRecord = {
   socialDiscoveryPlatforms: string[];
   socialDiscoveryQueries: string[];
   socialDiscoveryYouTubeSubscriptions: SocialDiscoveryYouTubeSubscription[];
+  socialDiscoveryYouTubeAutoCommentEnabled: boolean;
   socialDiscoverySearchStrategy: SocialDiscoverySearchStrategy | null;
   operablePersonas: string[];
   availableAssets: string[];

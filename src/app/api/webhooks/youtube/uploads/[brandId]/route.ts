@@ -92,7 +92,8 @@ export async function POST(request: Request, context: { params: Promise<{ brandI
     const url = new URL(request.url);
     const watchedChannelId = url.searchParams.get("channelId")?.trim() ?? "";
     const preferredAccountId = url.searchParams.get("accountId")?.trim() ?? "";
-    const autoComment = booleanFlag(url.searchParams.get("autoComment"), false);
+    const autoCommentRequested = booleanFlag(url.searchParams.get("autoComment"), false);
+    const autoComment = autoCommentRequested && brand.socialDiscoveryYouTubeAutoCommentEnabled;
     const rawXml = await request.text();
     const entries = parseYouTubeWebhookFeed(rawXml);
 
@@ -230,7 +231,11 @@ export async function POST(request: Request, context: { params: Promise<{ brandI
         postId: (savedPost ?? post).id,
         saved: true,
         autoCommented: false,
-        reason: autoComment ? "no comment draft was generated for this upload" : "auto comment disabled",
+        reason: autoComment
+          ? "no comment draft was generated for this upload"
+          : autoCommentRequested
+            ? "brand youtube auto-comment disabled"
+            : "auto comment disabled",
       });
     }
 

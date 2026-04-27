@@ -68,6 +68,7 @@ type DiscoveryResponse = {
     name?: string;
     socialDiscoveryCommentPrompt?: string;
     socialDiscoveryQueries?: string[];
+    socialDiscoveryYouTubeAutoCommentEnabled?: boolean;
   };
   posts: DiscoveryPost[];
   runs: SocialDiscoveryRun[];
@@ -400,9 +401,11 @@ async function readDiscoveryResponse(response: Response) {
 export default function SocialDiscoveryClient({
   brandId,
   initialBrandName = "",
+  initialYouTubeAutoCommentEnabled = false,
 }: {
   brandId: string;
   initialBrandName?: string;
+  initialYouTubeAutoCommentEnabled?: boolean;
 }) {
   const redirectingToCanonicalHost = shouldRedirectToCanonicalLastB2bHost();
   const [posts, setPosts] = useState<DiscoveryPost[]>([]);
@@ -445,7 +448,10 @@ export default function SocialDiscoveryClient({
   const [youtubeSubscriptions, setYouTubeSubscriptions] = useState<SocialDiscoveryYouTubeSubscription[]>([]);
   const [youtubeChannelIdDraft, setYouTubeChannelIdDraft] = useState("");
   const [youtubeSubscriptionAccountId, setYouTubeSubscriptionAccountId] = useState("");
-  const [youtubeAutoCommentEnabled, setYouTubeAutoCommentEnabled] = useState(true);
+  const [brandYouTubeAutoCommentEnabled, setBrandYouTubeAutoCommentEnabled] = useState(initialYouTubeAutoCommentEnabled);
+  const [savingBrandYouTubeAutoComment, setSavingBrandYouTubeAutoComment] = useState(false);
+  const [brandYouTubeAutoCommentError, setBrandYouTubeAutoCommentError] = useState("");
+  const [youtubeAutoCommentEnabled, setYouTubeAutoCommentEnabled] = useState(false);
   const [youtubeSubscriptionError, setYouTubeSubscriptionError] = useState("");
   const [savingYouTubeSubscription, setSavingYouTubeSubscription] = useState(false);
   const [removingYouTubeChannelId, setRemovingYouTubeChannelId] = useState("");
@@ -957,10 +963,15 @@ export default function SocialDiscoveryClient({
       const nextBrandCommentPrompt =
         typeof nextData.brand?.socialDiscoveryCommentPrompt === "string" ? nextData.brand.socialDiscoveryCommentPrompt : "";
       const nextBrandName = typeof nextData.brand?.name === "string" ? nextData.brand.name : "";
+      const nextBrandYouTubeAutoCommentEnabled = nextData.brand?.socialDiscoveryYouTubeAutoCommentEnabled === true;
       const nextEffectiveBrandCommentPrompt = resolveSocialDiscoveryCommentPrompt(nextBrandCommentPrompt);
       setSavedQueries(nextSavedQueries);
       setSuggestedQueries(nextSuggestedQueries);
       if (nextBrandName) setActiveBrandName(nextBrandName);
+      setBrandYouTubeAutoCommentEnabled(nextBrandYouTubeAutoCommentEnabled);
+      if (!nextBrandYouTubeAutoCommentEnabled) {
+        setYouTubeAutoCommentEnabled(false);
+      }
       setSavedBrandCommentPrompt(nextBrandCommentPrompt);
       setBrandCommentPromptDraft((current) =>
         !current.trim() || current.trim() === effectiveSavedBrandCommentPrompt.trim()
@@ -1065,6 +1076,50 @@ export default function SocialDiscoveryClient({
     }
   }
 
+  async function saveBrandYouTubeAutoCommentEnabled(nextEnabled: boolean) {
+    const previous = brandYouTubeAutoCommentEnabled;
+    setSavingBrandYouTubeAutoComment(true);
+    setBrandYouTubeAutoCommentError("");
+    setBrandYouTubeAutoCommentEnabled(nextEnabled);
+    if (!nextEnabled) {
+      setYouTubeAutoCommentEnabled(false);
+    }
+    try {
+      const response = await fetch(canonicalApiUrl(`/api/brands/${brandId}`), {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          socialDiscoveryYouTubeAutoCommentEnabled: nextEnabled,
+        }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(typeof data?.error === "string" ? data.error : "Failed to save YouTube auto-comment setting");
+      }
+      const savedValue = data?.brand?.socialDiscoveryYouTubeAutoCommentEnabled === true;
+      setBrandYouTubeAutoCommentEnabled(savedValue);
+      if (!savedValue) {
+        setYouTubeAutoCommentEnabled(false);
+      }
+      const cached = readCachedDiscovery(brandId);
+      if (cached) {
+        writeCachedDiscovery(brandId, {
+          ...cached,
+          brand: {
+            ...cached.brand,
+            ...(data?.brand && typeof data.brand === "object" ? data.brand : {}),
+            socialDiscoveryYouTubeAutoCommentEnabled: savedValue,
+          },
+        });
+      }
+    } catch (err) {
+      setBrandYouTubeAutoCommentEnabled(previous);
+      setBrandYouTubeAutoCommentError(err instanceof Error ? err.message : "Failed to save YouTube auto-comment setting");
+    } finally {
+      setSavingBrandYouTubeAutoComment(false);
+    }
+  }
+
   useEffect(() => {
     if (redirectingToCanonicalHost) return;
     void loadPosts(status);
@@ -1135,10 +1190,15 @@ export default function SocialDiscoveryClient({
     leaseSeconds?: number;
   }) {
     const channelId = (options?.channelId ?? youtubeChannelIdDraft).trim();
-    const autoComment = options?.autoComment ?? youtubeAutoCommentEnabled;
+    const requestedAutoComment = options?.autoComment ?? youtubeAutoCommentEnabled;
+    const autoComment = brandYouTubeAutoCommentEnabled && requestedAutoComment;
     const accountId = (options?.accountId ?? youtubeSubscriptionAccountId).trim();
     if (!channelId) {
       setYouTubeSubscriptionError("Enter a YouTube channel id first.");
+      return;
+    }
+    if (requestedAutoComment && !brandYouTubeAutoCommentEnabled) {
+      setYouTubeSubscriptionError("Turn on YouTube auto-commenting for this brand first.");
       return;
     }
     if (autoComment && !accountId) {
@@ -2099,7 +2159,11 @@ export default function SocialDiscoveryClient({
           <StatLedger
             items={[
               { label: "Watched", value: youtubeSubscriptions.length, detail: "Tracked channels" },
-              { label: "Auto-comment", value: autoCommentChannelCount, detail: "Channels with posting on" },
+              {
+                label: "Auto-comment",
+                value: brandYouTubeAutoCommentEnabled ? autoCommentChannelCount : 0,
+                detail: brandYouTubeAutoCommentEnabled ? "Channels with posting on" : "Brand switch off",
+              },
               {
                 label: "Errors",
                 value: youtubeSubscriptions.filter((subscription) => Boolean(subscription.lastError)).length,
@@ -2107,6 +2171,35 @@ export default function SocialDiscoveryClient({
               },
             ]}
           />
+
+          <label className="flex items-start gap-3 rounded-[10px] border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-3">
+            <input
+              type="checkbox"
+              checked={brandYouTubeAutoCommentEnabled}
+              onChange={(event) => {
+                void saveBrandYouTubeAutoCommentEnabled(event.target.checked);
+              }}
+              disabled={savingBrandYouTubeAutoComment}
+              className="mt-1 h-4 w-4 rounded border border-[color:var(--border)] bg-[color:var(--background)] accent-[color:var(--accent)]"
+            />
+            <span className="min-w-0">
+              <span className="text-sm font-medium text-[color:var(--foreground)]">YouTube auto-commenting</span>
+              <span className="mt-1 block text-sm leading-6 text-[color:var(--muted-foreground)]">
+                {brandYouTubeAutoCommentEnabled
+                  ? "On for this brand. Automation may post YouTube comments when a candidate passes the safety gates."
+                  : "Off for this brand. Discovery can still find videos, but automation cannot post YouTube comments."}
+              </span>
+              {savingBrandYouTubeAutoComment ? (
+                <span className="mt-1 block text-xs text-[color:var(--muted-foreground)]">Saving...</span>
+              ) : null}
+            </span>
+          </label>
+
+          {brandYouTubeAutoCommentError ? (
+            <div className="rounded-[10px] border border-[color:var(--danger-border)] bg-[color:var(--danger-soft)] px-3 py-2 text-sm text-[color:var(--danger)]">
+              {brandYouTubeAutoCommentError}
+            </div>
+          ) : null}
 
           <div className="grid gap-4 xl:grid-cols-[minmax(0,1.2fr)_minmax(240px,0.8fr)_auto]">
             <div className="space-y-2">
@@ -2124,9 +2217,11 @@ export default function SocialDiscoveryClient({
               <Select
                 value={youtubeSubscriptionAccountId}
                 onChange={(event) => setYouTubeSubscriptionAccountId(event.target.value)}
-                disabled={savingYouTubeSubscription || !youtubeAccountOptions.length}
+                disabled={savingYouTubeSubscription || !youtubeAccountOptions.length || !brandYouTubeAutoCommentEnabled}
               >
-                <option value="">{youtubeAutoCommentEnabled ? "Pick account" : "No account"}</option>
+                <option value="">
+                  {brandYouTubeAutoCommentEnabled && youtubeAutoCommentEnabled ? "Pick account" : "No account"}
+                </option>
                 {youtubeAccountOptions.map((account) => (
                   <option key={account.accountId} value={account.accountId}>
                     {account.accountName} · {account.handle || account.fromEmail || account.accountId}
@@ -2145,14 +2240,16 @@ export default function SocialDiscoveryClient({
           <label className="flex items-start gap-3 rounded-[10px] border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-3">
             <input
               type="checkbox"
-              checked={youtubeAutoCommentEnabled}
+              checked={brandYouTubeAutoCommentEnabled && youtubeAutoCommentEnabled}
               onChange={(event) => setYouTubeAutoCommentEnabled(event.target.checked)}
+              disabled={!brandYouTubeAutoCommentEnabled}
               className="mt-1 h-4 w-4 rounded border border-[color:var(--border)] bg-[color:var(--background)] accent-[color:var(--accent)]"
             />
             <span className="min-w-0">
               <span className="text-sm font-medium text-[color:var(--foreground)]">Auto-comment new uploads</span>
               <span className="mt-1 block text-sm leading-6 text-[color:var(--muted-foreground)]">
                 Use this for known channels. Saved searches find new candidates separately.
+                {!brandYouTubeAutoCommentEnabled ? " Turn on brand-level YouTube auto-commenting first." : ""}
               </span>
             </span>
           </label>
@@ -2187,7 +2284,7 @@ export default function SocialDiscoveryClient({
                           void saveYouTubeSubscription({
                             channelId: subscription.channelId,
                             accountId: subscription.accountId,
-                            autoComment: subscription.autoComment,
+                            autoComment: brandYouTubeAutoCommentEnabled && subscription.autoComment,
                             leaseSeconds: subscription.leaseSeconds || undefined,
                           });
                         }}

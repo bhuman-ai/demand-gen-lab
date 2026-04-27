@@ -32,6 +32,7 @@ function brandSummary(brand: Awaited<ReturnType<typeof getBrandById>>) {
         socialDiscoveryCommentPrompt: brand.socialDiscoveryCommentPrompt,
         socialDiscoveryPlatforms: brand.socialDiscoveryPlatforms,
         socialDiscoveryQueries: brand.socialDiscoveryQueries,
+        socialDiscoveryYouTubeAutoCommentEnabled: brand.socialDiscoveryYouTubeAutoCommentEnabled,
         recommendedSocialDiscoveryPlatforms: inferBrandSocialPlatforms(brand),
         recommendedSupportedDiscoveryPlatforms: resolveSupportedDiscoveryPlatformsForBrand(brand),
       }

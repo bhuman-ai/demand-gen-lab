@@ -3,6 +3,7 @@ import {
   listSocialDiscoveryAutoCommentCandidates,
   listSocialDiscoveryCommentedPostsSince,
   saveSocialDiscoveryPosts,
+  updateSocialDiscoveryPostStatus,
 } from "@/lib/social-discovery-data";
 import { refreshSocialDiscoveryCommentDraft } from "@/lib/social-discovery";
 import {
@@ -132,6 +133,7 @@ async function markDispatchAttempt(input: {
   details?: Record<string, unknown>;
 }) {
   const current = dispatchMeta(input.post);
+  const terminalSkip = input.status === "skipped" && isTerminalSkipReason(input.reason ?? "");
   const attempts = Math.max(0, Number(current.attempts ?? 0) || 0);
   const nextAttempts = input.status === "failed" ? attempts + 1 : attempts;
   const nextAttemptAt =
@@ -158,6 +160,13 @@ async function markDispatchAttempt(input: {
     },
   };
   await saveSocialDiscoveryPosts([nextPost]);
+  if (terminalSkip) {
+    await updateSocialDiscoveryPostStatus({
+      id: input.post.id,
+      brandId: input.post.brandId,
+      status: "dismissed",
+    });
+  }
 }
 
 async function withTranscript(post: SocialDiscoveryPost) {

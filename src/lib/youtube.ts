@@ -203,6 +203,10 @@ function youtubeDataApiKey() {
   );
 }
 
+export function hasYouTubeDataApiKey() {
+  return Boolean(youtubeDataApiKey());
+}
+
 export function resolveYouTubeOAuthClientCredentials(
   secrets?: Partial<Pick<OutreachAccountSecrets, "youtubeClientId" | "youtubeClientSecret">>
 ) {
@@ -453,14 +457,21 @@ async function youtubeRequest<T = Record<string, unknown>>(input: YouTubeRequest
 
 async function resolveYouTubeRequestCredentials(input?: {
   secrets?: Pick<OutreachAccountSecrets, "youtubeClientId" | "youtubeClientSecret" | "youtubeRefreshToken">;
+  preferApiKey?: boolean;
 }) {
+  const apiKey = youtubeDataApiKey();
+  if (input?.preferApiKey && apiKey) {
+    return {
+      accessToken: "",
+      apiKey,
+    };
+  }
   if (input?.secrets && hasYouTubeOAuthCredentials(input.secrets)) {
     return {
       accessToken: await refreshYouTubeAccessToken(input.secrets),
       apiKey: "",
     };
   }
-  const apiKey = youtubeDataApiKey();
   if (!apiKey) {
     throw new YouTubeApiError("Set YOUTUBE_DATA_API_KEY or connect a YouTube account first.", {
       status: 400,
@@ -786,6 +797,7 @@ export async function searchYouTubeVideos(input: {
   publishedAfter?: string;
   order?: "date" | "relevance" | "viewCount";
   secrets?: Pick<OutreachAccountSecrets, "youtubeClientId" | "youtubeClientSecret" | "youtubeRefreshToken">;
+  preferApiKey?: boolean;
 }): Promise<YouTubeVideoSearchResult[]> {
   const query = String(input.query ?? "").trim();
   if (!query) {
@@ -794,6 +806,7 @@ export async function searchYouTubeVideos(input: {
 
   const credentials = await resolveYouTubeRequestCredentials({
     secrets: input.secrets,
+    preferApiKey: input.preferApiKey,
   });
   const maxResults = Math.max(1, Math.min(25, Number(input.maxResults ?? 12) || 12));
   const searchPayload = await youtubeRequest<Record<string, unknown>>({

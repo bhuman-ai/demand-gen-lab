@@ -9,7 +9,7 @@ import {
   splitSocialDiscoveryCsv,
 } from "@/lib/social-discovery-search-strategy";
 import { discoverYouTubeSearchPostsForBrand } from "@/lib/social-discovery-youtube-search";
-import { hasYouTubeOAuthCredentials } from "@/lib/youtube";
+import { hasYouTubeDataApiKey, hasYouTubeOAuthCredentials } from "@/lib/youtube";
 import type { SocialDiscoveryPost } from "@/lib/social-discovery-types";
 import type { SocialDiscoverySearchStrategyQuery } from "@/lib/factory-types";
 
@@ -123,7 +123,8 @@ export async function runSocialDiscoveryYouTubeRefillTick(options: YouTubeRefill
     1,
     25
   );
-  const youtubeSearchCredentials = await resolveYouTubeSearchSecrets();
+  const useApiKeySearch = hasYouTubeDataApiKey();
+  const youtubeSearchCredentials = useApiKeySearch ? null : await resolveYouTubeSearchSecrets();
   const results = [];
 
   for (const brand of brands) {
@@ -161,6 +162,7 @@ export async function runSocialDiscoveryYouTubeRefillTick(options: YouTubeRefill
       queries,
       maxResults: limitPerQuery,
       secrets: youtubeSearchCredentials?.secrets,
+      preferApiKey: true,
     });
     const strategyPosts = annotatePostsWithQueryStrategy({
       posts: discovery.posts,
@@ -194,6 +196,7 @@ export async function runSocialDiscoveryYouTubeRefillTick(options: YouTubeRefill
       saved: savedPosts.length,
       errors: discovery.errors.length,
       youtubeSearchAccountId: youtubeSearchCredentials?.accountId ?? "",
+      youtubeSearchAuthMode: useApiKeySearch ? "api_key" : youtubeSearchCredentials?.accountId ? "oauth" : "none",
       topPosts: topPostSummaries(savedPosts),
     });
   }

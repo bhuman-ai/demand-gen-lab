@@ -5,7 +5,7 @@ import { discoverSocialPostsForBrand, parseSocialDiscoveryPlatforms } from "@/li
 import { resolveSupportedDiscoveryPlatformsForBrand } from "@/lib/social-platform-catalog";
 import { createSocialDiscoveryRun, saveSocialDiscoveryPosts } from "@/lib/social-discovery-data";
 import { discoverYouTubeSearchPostsForBrand } from "@/lib/social-discovery-youtube-search";
-import { hasYouTubeOAuthCredentials } from "@/lib/youtube";
+import { hasYouTubeDataApiKey, hasYouTubeOAuthCredentials } from "@/lib/youtube";
 import type {
   SocialDiscoveryPlatform,
   SocialDiscoveryPost,
@@ -204,13 +204,15 @@ async function handleDailySocialDiscovery(request: Request) {
 
     if (runSavedYouTubeSearches) {
       const startedAt = new Date().toISOString();
-      const youtubeSearchCredentials = await resolveYouTubeSearchSecrets();
+      const useApiKeySearch = hasYouTubeDataApiKey();
+      const youtubeSearchCredentials = useApiKeySearch ? null : await resolveYouTubeSearchSecrets();
       youtubeSearchAccountId = youtubeSearchCredentials?.accountId ?? "";
       const youtubeDiscovery = await discoverYouTubeSearchPostsForBrand({
         brand,
         queries: savedQueries,
         maxResults: limitPerQuery,
         secrets: youtubeSearchCredentials?.secrets,
+        preferApiKey: true,
       });
       const nextSavedPosts = youtubeDiscovery.posts.length
         ? await saveSocialDiscoveryPosts(youtubeDiscovery.posts)

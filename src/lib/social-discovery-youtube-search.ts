@@ -104,6 +104,7 @@ export async function discoverYouTubeSearchPostsForBrand(input: {
   queries: string[];
   maxResults?: number;
   secrets?: Pick<OutreachAccountSecrets, "youtubeClientId" | "youtubeClientSecret" | "youtubeRefreshToken">;
+  preferApiKey?: boolean;
 }) {
   const queries = input.queries
     .map((query) => String(query ?? "").replace(/\s+/g, " ").trim())
@@ -123,6 +124,7 @@ export async function discoverYouTubeSearchPostsForBrand(input: {
         order: "date",
         publishedAfter,
         secrets: input.secrets,
+        preferApiKey: input.preferApiKey ?? true,
       });
       found += results.length;
       const eligibleResults = results.filter((result) => result.subscriberCount > MIN_YOUTUBE_DISCOVERY_SUBSCRIBERS);

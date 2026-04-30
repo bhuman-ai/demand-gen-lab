@@ -326,6 +326,27 @@ function hasConnectedIdentity(social: Pick<SocialDraft, "externalAccountId"> | O
   return Boolean(social.externalAccountId.trim());
 }
 
+function accountNeedsSignIn(
+  account: OutreachAccount,
+  options?: {
+    pendingYouTubeAccountId?: string;
+  }
+) {
+  const platform = inferSupportedPlatform(account.config.social);
+  if (options?.pendingYouTubeAccountId === account.id && platform === "youtube") return false;
+  if (!hasConnectedIdentity(account.config.social)) return true;
+  return account.socialCredentialHealth?.status === "needs_sign_in";
+}
+
+function accountIsConnected(
+  account: OutreachAccount,
+  options?: {
+    pendingYouTubeAccountId?: string;
+  }
+) {
+  return hasConnectedIdentity(account.config.social) && !accountNeedsSignIn(account, options);
+}
+
 function accountStatus(
   account: OutreachAccount,
   options?: {
@@ -342,7 +363,7 @@ function accountStatus(
   }
   if (!platform) return "No platform selected";
   if (!account.config.social.enabled) return "Turned off";
-  if (!hasConnectedIdentity(account.config.social)) return "Needs sign-in";
+  if (accountNeedsSignIn(account, options)) return "Needs sign-in";
   return "Connected";
 }
 
@@ -437,8 +458,8 @@ export function SocialAccountPoolPanel({
   );
   const hiddenAccountCount = accounts.length - visibleAccounts.length;
   const connectedVisibleAccountsCount = useMemo(
-    () => visibleAccounts.filter((account) => hasConnectedIdentity(account.config.social)).length,
-    [visibleAccounts]
+    () => visibleAccounts.filter((account) => accountIsConnected(account, { pendingYouTubeAccountId })).length,
+    [pendingYouTubeAccountId, visibleAccounts]
   );
   const needsSignInVisibleAccountsCount = visibleAccounts.length - connectedVisibleAccountsCount;
   const selectedAccount = useMemo(
@@ -449,17 +470,17 @@ export function SocialAccountPoolPanel({
     () => inferSupportedPlatform(draft ?? selectedAccount?.config.social ?? null),
     [draft, selectedAccount]
   );
-  const connectedVisibleAccounts = useMemo(
-    () => visibleAccounts.filter((account) => hasConnectedIdentity(account.config.social)),
-    [visibleAccounts]
-  );
   const disconnectedVisibleAccounts = useMemo(
-    () => visibleAccounts.filter((account) => !hasConnectedIdentity(account.config.social)),
-    [visibleAccounts]
+    () => visibleAccounts.filter((account) => accountNeedsSignIn(account, { pendingYouTubeAccountId })),
+    [pendingYouTubeAccountId, visibleAccounts]
   );
   const selectedHasConnectedIdentity = useMemo(
     () => (draft ? hasConnectedIdentity(draft) : selectedAccount ? hasConnectedIdentity(selectedAccount.config.social) : false),
     [draft, selectedAccount]
+  );
+  const selectedNeedsSignIn = useMemo(
+    () => (selectedAccount ? accountNeedsSignIn(selectedAccount, { pendingYouTubeAccountId }) : false),
+    [pendingYouTubeAccountId, selectedAccount]
   );
   const showYouTubeCredentials =
     selectedPlatform === "youtube" ||
@@ -1647,9 +1668,9 @@ export function SocialAccountPoolPanel({
 
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
-              <div className="text-sm font-medium text-[color:var(--foreground)]">Connected {platformLabel(platformFilter)} accounts</div>
+              <div className="text-sm font-medium text-[color:var(--foreground)]">{platformLabel(platformFilter)} accounts</div>
               <div className="text-sm text-[color:var(--muted-foreground)]">
-                {connectedVisibleAccounts.length} connected
+                {connectedVisibleAccountsCount} connected
                 {disconnectedVisibleAccounts.length ? ` · ${disconnectedVisibleAccounts.length} need sign-in` : ""}
               </div>
             </div>
@@ -1677,11 +1698,13 @@ export function SocialAccountPoolPanel({
             <div className="rounded-[12px] border border-[color:var(--border)] bg-[color:var(--surface)] px-4 py-4 text-sm text-[color:var(--muted-foreground)]">
               Loading accounts...
             </div>
-          ) : connectedVisibleAccounts.length ? (
+          ) : visibleAccounts.length ? (
             <div className="overflow-hidden rounded-[12px] border border-[color:var(--border)] bg-[color:var(--surface)]">
-              {connectedVisibleAccounts.map((account, index) => {
+              {visibleAccounts.map((account, index) => {
                 const isExpanded = selectedAccount?.id === account.id && showAdvancedSettings;
                 const supportLabel = accountSupportLabel(account, { pendingYouTubeAccountId });
+                const statusLabel = accountStatus(account, { pendingYouTubeAccountId });
+                const needsSignIn = statusLabel === "Needs sign-in";
                 return (
                   <div key={account.id} className={cn(index > 0 ? "border-t border-[color:var(--border)]" : "")}>
                     <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
@@ -1695,9 +1718,18 @@ export function SocialAccountPoolPanel({
                         </div>
                       </div>
                       <div className="flex flex-wrap items-center gap-2">
-                        <div className="inline-flex items-center gap-1.5 text-xs text-[color:var(--muted-foreground)]">
-                          <CheckCircle2 className="h-3.5 w-3.5 text-[color:var(--success)]" />
-                          Connected
+                        <div
+                          className={cn(
+                            "inline-flex items-center gap-1.5 text-xs",
+                            needsSignIn ? "font-medium text-[color:var(--danger)]" : "text-[color:var(--muted-foreground)]"
+                          )}
+                        >
+                          {needsSignIn ? (
+                            <CircleAlert className="h-3.5 w-3.5" />
+                          ) : (
+                            <CheckCircle2 className="h-3.5 w-3.5 text-[color:var(--success)]" />
+                          )}
+                          {statusLabel}
                         </div>
                         <Button
                           type="button"
@@ -1726,11 +1758,9 @@ export function SocialAccountPoolPanel({
             </div>
           ) : (
             <EmptyState
-              title={`No connected ${platformLabel(platformFilter)} accounts yet`}
+              title={`No ${platformLabel(platformFilter)} accounts yet`}
               description={
-                disconnectedVisibleAccounts.length
-                  ? `Finish sign-in for an existing ${platformLabel(platformFilter)} account below, or add a new one.`
-                  : `Add a ${platformLabel(platformFilter)} account to start posting.`
+                `Add a ${platformLabel(platformFilter)} account to start posting.`
               }
               actions={
                 <Button
@@ -1743,53 +1773,6 @@ export function SocialAccountPoolPanel({
               }
             />
           )}
-
-          {disconnectedVisibleAccounts.length ? (
-            <details className="rounded-[12px] border border-[color:var(--border)] bg-[color:var(--surface)]">
-              <summary className="cursor-pointer px-4 py-3 text-sm font-medium text-[color:var(--foreground)]">
-                Needs sign-in ({disconnectedVisibleAccounts.length})
-              </summary>
-              <div className="border-t border-[color:var(--border)]">
-                {disconnectedVisibleAccounts.map((account, index) => {
-                  const supportLabel = accountSupportLabel(account, { pendingYouTubeAccountId });
-                  return (
-                    <div
-                      key={account.id}
-                      className={cn(
-                        "flex flex-wrap items-center justify-between gap-3 px-4 py-3",
-                        index > 0 ? "border-t border-[color:var(--border)]" : ""
-                      )}
-                    >
-                      <div className="flex min-w-0 items-center gap-3">
-                        {renderAccountAvatar(account)}
-                        <div className="min-w-0">
-                          <div className="truncate text-sm font-medium text-[color:var(--foreground)]">{accountDisplayLabel(account)}</div>
-                          <div className="truncate text-xs text-[color:var(--muted-foreground)]">
-                            {supportLabel || "No linked social identity yet"}
-                          </div>
-                        </div>
-                      </div>
-                      <div className="flex flex-wrap items-center gap-2">
-                        <div className="inline-flex items-center gap-1.5 text-xs text-[color:var(--muted-foreground)]">
-                          <CircleAlert className="h-3.5 w-3.5" />
-                          Needs sign-in
-                        </div>
-                        <Button
-                          type="button"
-                          size="sm"
-                          variant="outline"
-                          onClick={() => void connectAccount(account, platformFilter)}
-                          disabled={saving || syncing || linking || youtubeConnecting || Boolean(creatingPlatform)}
-                        >
-                          Finish sign-in
-                        </Button>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </details>
-          ) : null}
         </div>
 
         {renderYouTubeCredentialModal()}
@@ -1966,7 +1949,9 @@ export function SocialAccountPoolPanel({
                     ? "Finishing YouTube sign-in. This usually takes a few seconds."
                     : selectedPlatform
                     ? selectedHasConnectedIdentity
-                      ? `${platformLabel(selectedPlatform)} is connected.`
+                      ? selectedNeedsSignIn
+                        ? `Reconnect ${platformLabel(selectedPlatform)} to post comments.`
+                        : `${platformLabel(selectedPlatform)} is connected.`
                       : `Finish sign-in to connect ${platformLabel(selectedPlatform)}.`
                     : "Choose Instagram or YouTube for this account before connecting it."}
                 </div>

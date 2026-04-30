@@ -954,6 +954,12 @@ export type OutreachAccount = {
   accountType: OutreachAccountType;
   status: "active" | "inactive";
   config: OutreachAccountConfig;
+  socialCredentialHealth?: {
+    provider: SocialLinkedProvider | "";
+    status: "connected" | "needs_sign_in" | "unknown";
+    message: string;
+    checkedAt: string;
+  };
   customerIoBilling?: CustomerIoBillingSummary;
   hasCredentials: boolean;
   lastTestAt: string;

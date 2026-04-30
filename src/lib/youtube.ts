@@ -259,6 +259,30 @@ export function hasYouTubeOAuthCredentials(
   return Boolean(credentials.clientId && credentials.clientSecret && youtubeRefreshToken(secrets));
 }
 
+export async function checkYouTubeOAuthCredentials(
+  secrets: Pick<OutreachAccountSecrets, "youtubeClientId" | "youtubeClientSecret" | "youtubeRefreshToken">
+) {
+  if (!hasYouTubeOAuthCredentials(secrets)) {
+    return {
+      ok: false,
+      message: "Missing YouTube sign-in credentials.",
+    };
+  }
+
+  try {
+    await refreshYouTubeAccessToken(secrets);
+    return {
+      ok: true,
+      message: "YouTube sign-in is active.",
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      message: error instanceof Error ? error.message : "YouTube sign-in needs reconnection.",
+    };
+  }
+}
+
 export function supportsYouTubePostComments(platform: string) {
   return String(platform ?? "").trim().toLowerCase() === "youtube";
 }

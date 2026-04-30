@@ -2,10 +2,13 @@ import { NextResponse } from "next/server";
 import {
   OutreachDataError,
   createOutreachAccount,
+  getOutreachAccountSecrets,
   getOutreachAccountLookupDebug,
   listOutreachAccounts,
   listSocialRoutingAccounts,
 } from "@/lib/outreach-data";
+import { checkYouTubeOAuthCredentials } from "@/lib/youtube";
+import type { OutreachAccount } from "@/lib/factory-types";
 
 function asRecord(value: unknown): Record<string, unknown> {
   if (value && typeof value === "object" && !Array.isArray(value)) {
@@ -14,11 +17,53 @@ function asRecord(value: unknown): Record<string, unknown> {
   return {};
 }
 
+function isYouTubeSocialAccount(account: OutreachAccount) {
+  return (
+    account.config.social.connectionProvider === "youtube" ||
+    account.config.social.linkedProvider === "youtube" ||
+    account.config.social.platforms.includes("youtube")
+  );
+}
+
+async function withSocialCredentialHealth(accounts: OutreachAccount[]) {
+  return Promise.all(
+    accounts.map(async (account) => {
+      if (!isYouTubeSocialAccount(account)) return account;
+
+      const checkedAt = new Date().toISOString();
+      const secrets = await getOutreachAccountSecrets(account.id).catch(() => null);
+      if (!secrets) {
+        return {
+          ...account,
+          socialCredentialHealth: {
+            provider: "youtube" as const,
+            status: "needs_sign_in" as const,
+            message: "Missing YouTube sign-in credentials.",
+            checkedAt,
+          },
+        };
+      }
+
+      const health = await checkYouTubeOAuthCredentials(secrets);
+      return {
+        ...account,
+        socialCredentialHealth: {
+          provider: "youtube" as const,
+          status: health.ok ? ("connected" as const) : ("needs_sign_in" as const),
+          message: health.message,
+          checkedAt,
+        },
+      };
+    })
+  );
+}
+
 export async function GET(request: Request) {
   try {
     const url = new URL(request.url);
     const scope = url.searchParams.get("scope");
-    const accounts = scope === "social" ? await listSocialRoutingAccounts() : await listOutreachAccounts();
+    const baseAccounts = scope === "social" ? await listSocialRoutingAccounts() : await listOutreachAccounts();
+    const accounts = scope === "social" ? await withSocialCredentialHealth(baseAccounts) : baseAccounts;
     return NextResponse.json({ accounts });
   } catch (err) {
     if (err instanceof OutreachDataError) {

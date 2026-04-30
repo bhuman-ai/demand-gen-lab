@@ -1,4 +1,4 @@
-import { listSocialRoutingAccounts } from "@/lib/outreach-data";
+import { getOutreachAccountSecrets, listSocialRoutingAccounts } from "@/lib/outreach-data";
 import {
   listSocialDiscoveryAutoCommentCandidates,
   listSocialDiscoveryCommentedPostsSince,
@@ -22,7 +22,7 @@ import {
 } from "@/lib/social-discovery-search-strategy";
 import type { OutreachAccount } from "@/lib/factory-types";
 import type { SocialDiscoveryPost } from "@/lib/social-discovery-types";
-import { getYouTubeVideoTranscript } from "@/lib/youtube";
+import { checkYouTubeOAuthCredentials, getYouTubeVideoTranscript } from "@/lib/youtube";
 
 type AutoCommentDispatchOptions = {
   brandIds?: string[];
@@ -241,6 +241,18 @@ function isYouTubeAccount(account: OutreachAccount) {
   );
 }
 
+async function filterConnectedYouTubeAccounts(accounts: OutreachAccount[]) {
+  const checked = await Promise.all(
+    accounts.map(async (account) => {
+      const secrets = await getOutreachAccountSecrets(account.id).catch(() => null);
+      if (!secrets) return null;
+      const health = await checkYouTubeOAuthCredentials(secrets);
+      return health.ok ? account : null;
+    })
+  );
+  return checked.filter((account): account is OutreachAccount => Boolean(account));
+}
+
 function recommendedAccountIds(post: SocialDiscoveryPost) {
   return (
     post.interactionPlan.recommendedAccounts
@@ -389,7 +401,14 @@ export async function runSocialDiscoveryAutoCommentDispatchTick(
 
   if (!enabled && !dryRun) return result;
 
-  const accounts = (await listSocialRoutingAccounts()).filter(isYouTubeAccount);
+  const configuredYouTubeAccounts = (await listSocialRoutingAccounts()).filter(isYouTubeAccount);
+  let connectedYouTubeAccounts: OutreachAccount[] | null = null;
+  const usableYouTubeAccounts = async () => {
+    if (!connectedYouTubeAccounts) {
+      connectedYouTubeAccounts = await filterConnectedYouTubeAccounts(configuredYouTubeAccounts);
+    }
+    return connectedYouTubeAccounts;
+  };
   for (const brand of brands) {
     if (result.posted >= perRunCap) break;
     const brandResult: AutoCommentDispatchResult["results"][number] = {
@@ -427,7 +446,7 @@ export async function runSocialDiscoveryAutoCommentDispatchTick(
     const blockedChannels = recentChannelIds(recent, channelSinceMs);
     let remainingForBrand = Math.max(0, hourlyCap - recentPosted);
 
-    if (!accounts.length) {
+    if (!configuredYouTubeAccounts.length) {
       brandResult.skipped += 1;
       result.skipped += 1;
       brandResult.details.push({ skipped: true, reason: "no_youtube_accounts" });
@@ -461,6 +480,13 @@ export async function runSocialDiscoveryAutoCommentDispatchTick(
         maxVideoAgeHours,
         candidateLimit,
       });
+      continue;
+    }
+    const accounts = await usableYouTubeAccounts();
+    if (!accounts.length) {
+      brandResult.skipped += 1;
+      result.skipped += 1;
+      brandResult.details.push({ skipped: true, reason: "no_connected_youtube_accounts" });
       continue;
     }
     for (const candidate of candidates) {

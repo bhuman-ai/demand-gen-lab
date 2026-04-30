@@ -100,16 +100,27 @@ export async function runSocialDiscoveryYouTubeRefillTick(options: YouTubeRefill
     explicitBrandIds: options.brandIds,
     configuredBrandIds,
     scanAllBrands: options.scanAllBrands ?? envFlag("SOCIAL_DISCOVERY_YOUTUBE_REFILL_SCAN_ALL_BRANDS", false),
-    scanAllReadyBrands: envFlag("SOCIAL_DISCOVERY_YOUTUBE_REFILL_SCAN_ALL_READY_BRANDS", true),
+    scanAllReadyBrands: envFlag("SOCIAL_DISCOVERY_YOUTUBE_REFILL_SCAN_ALL_READY_BRANDS", false),
     brandLimit: options.brandLimit ?? process.env.SOCIAL_DISCOVERY_YOUTUBE_REFILL_BRAND_LIMIT,
     rotationBucketMinutes: 60,
   });
-  const brands = brandResolution.brands;
+  const explicitBrandIds = uniqueStrings(options.brandIds ?? []);
+  const requireAutoCommentEnabled = !explicitBrandIds.length && !options.scanAllBrands;
+  const skippedAutoCommentDisabled: Array<{ brandId: string; brandName: string; reason: string }> = [];
+  const brands = brandResolution.brands.filter((brand) => {
+    if (!requireAutoCommentEnabled || brand.socialDiscoveryYouTubeAutoCommentEnabled) return true;
+    skippedAutoCommentDisabled.push({
+      brandId: brand.id,
+      brandName: brand.name,
+      reason: "youtube_auto_comment_disabled",
+    });
+    return false;
+  });
   const maxQueries = envNumber(
-    options.maxQueries ?? process.env.SOCIAL_DISCOVERY_YOUTUBE_REFILL_MAX_QUERIES ?? process.env.SOCIAL_DISCOVERY_MAX_QUERIES,
-    8,
+    options.maxQueries ?? process.env.SOCIAL_DISCOVERY_YOUTUBE_REFILL_MAX_QUERIES,
     1,
-    40
+    1,
+    6
   );
   const strategyMaxQueries = envNumber(
     process.env.SOCIAL_DISCOVERY_YOUTUBE_REFILL_STRATEGY_QUERIES,
@@ -207,6 +218,7 @@ export async function runSocialDiscoveryYouTubeRefillTick(options: YouTubeRefill
     configuredBrandIds: brandResolution.configuredBrandIds,
     scannedAllReadyBrands: brandResolution.scannedAllReadyBrands,
     skippedReadyCheck: brandResolution.skippedBrands.slice(0, 10),
+    skippedAutoCommentDisabled,
     strategyMaxQueries,
     maxQueries,
     limitPerQuery,

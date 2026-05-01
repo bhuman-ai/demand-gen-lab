@@ -66,6 +66,40 @@ function queryFamilyCounts(queries: SocialDiscoverySearchStrategyQuery[]) {
   }, {});
 }
 
+function countSavedPostsByQuery(posts: SocialDiscoveryPost[]) {
+  const counts = new Map<string, number>();
+  for (const post of posts) {
+    const query = post.query.trim().toLowerCase();
+    if (!query) continue;
+    counts.set(query, (counts.get(query) ?? 0) + 1);
+  }
+  return counts;
+}
+
+function queryRunDiagnostics(input: {
+  queryPlan: SocialDiscoverySearchStrategyQuery[];
+  discovery: Awaited<ReturnType<typeof discoverYouTubeSearchPostsForBrand>>;
+  savedPosts: SocialDiscoveryPost[];
+}) {
+  const byQuery = new Map(input.queryPlan.map((query) => [query.query.toLowerCase(), query]));
+  const savedByQuery = countSavedPostsByQuery(input.savedPosts);
+  return input.discovery.queryStats.map((stats) => {
+    const strategy = byQuery.get(stats.query.toLowerCase());
+    return {
+      query: stats.query,
+      family: strategy?.family ?? "",
+      source: strategy?.source ?? "",
+      found: stats.found,
+      eligible: stats.eligible,
+      accepted: stats.accepted,
+      saved: savedByQuery.get(stats.query.toLowerCase()) ?? 0,
+      rejectedSubscriberGate: stats.rejectedSubscriberGate,
+      rejectedTargetGrade: stats.rejectedTargetGrade,
+      ...(stats.error ? { error: stats.error } : {}),
+    };
+  });
+}
+
 function annotatePostsWithQueryStrategy(input: {
   posts: SocialDiscoveryPost[];
   queries: SocialDiscoverySearchStrategyQuery[];
@@ -118,9 +152,9 @@ export async function runSocialDiscoveryYouTubeRefillTick(options: YouTubeRefill
   });
   const maxQueries = envNumber(
     options.maxQueries ?? process.env.SOCIAL_DISCOVERY_YOUTUBE_REFILL_MAX_QUERIES,
+    4,
     1,
-    1,
-    6
+    8
   );
   const strategyMaxQueries = envNumber(
     process.env.SOCIAL_DISCOVERY_YOUTUBE_REFILL_STRATEGY_QUERIES,
@@ -162,8 +196,10 @@ export async function runSocialDiscoveryYouTubeRefillTick(options: YouTubeRefill
         persistedStrategy: strategyResult.persisted,
         found: 0,
         eligible: 0,
+        accepted: 0,
         saved: 0,
         errors: 0,
+        queryDiagnostics: [],
       });
       continue;
     }
@@ -181,6 +217,11 @@ export async function runSocialDiscoveryYouTubeRefillTick(options: YouTubeRefill
       strategyGeneratedAt: strategyResult.strategy.generatedAt,
     });
     const savedPosts = strategyPosts.length ? await saveSocialDiscoveryPosts(strategyPosts) : [];
+    const queryDiagnostics = queryRunDiagnostics({
+      queryPlan,
+      discovery,
+      savedPosts,
+    });
     const run = await createSocialDiscoveryRun({
       brandId: brand.id,
       provider: discovery.provider,
@@ -204,8 +245,10 @@ export async function runSocialDiscoveryYouTubeRefillTick(options: YouTubeRefill
       queryFamilies: queryFamilyCounts(queryPlan),
       found: discovery.summary.found,
       eligible: discovery.summary.eligible,
+      accepted: discovery.summary.accepted,
       saved: savedPosts.length,
       errors: discovery.errors.length,
+      queryDiagnostics,
       youtubeSearchAccountId: youtubeSearchCredentials?.accountId ?? "",
       youtubeSearchAuthMode: useApiKeySearch ? "api_key" : youtubeSearchCredentials?.accountId ? "oauth" : "none",
       topPosts: topPostSummaries(savedPosts),

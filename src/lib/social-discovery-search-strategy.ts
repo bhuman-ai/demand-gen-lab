@@ -231,7 +231,12 @@ function queryEntry(input: {
   };
 }
 
-function finalizePortfolio(entries: SocialDiscoverySearchStrategyQuery[], maxQueries: number) {
+function finalizePortfolio(
+  entries: SocialDiscoverySearchStrategyQuery[],
+  maxQueries: number,
+  options: { familyOrder?: SocialDiscoverySearchQueryFamily[] } = {}
+) {
+  const familyOrder = options.familyOrder?.length ? options.familyOrder : FAMILY_ORDER;
   const byQuery = new Map<string, SocialDiscoverySearchStrategyQuery>();
   for (const entry of entries) {
     const key = entry.query.toLowerCase();
@@ -254,7 +259,7 @@ function finalizePortfolio(entries: SocialDiscoverySearchStrategyQuery[], maxQue
   const result: SocialDiscoverySearchStrategyQuery[] = [];
   while (result.length < maxQueries) {
     const before = result.length;
-    for (const family of FAMILY_ORDER) {
+    for (const family of familyOrder) {
       if (result.length >= maxQueries) break;
       const group = grouped.get(family) ?? [];
       const next = group.shift();
@@ -266,8 +271,12 @@ function finalizePortfolio(entries: SocialDiscoverySearchStrategyQuery[], maxQue
   return result.slice(0, maxQueries);
 }
 
+function rotationBucket(bucketMinutes: number) {
+  return Math.floor(Date.now() / (Math.max(1, bucketMinutes) * 60 * 1000));
+}
+
 function rotateEntries(entries: SocialDiscoverySearchStrategyQuery[], bucketMinutes: number) {
-  const bucket = Math.floor(Date.now() / (Math.max(1, bucketMinutes) * 60 * 1000));
+  const bucket = rotationBucket(bucketMinutes);
   const grouped = new Map<SocialDiscoverySearchQueryFamily, SocialDiscoverySearchStrategyQuery[]>();
   for (const family of FAMILY_ORDER) grouped.set(family, []);
   for (const entry of entries) {
@@ -281,6 +290,22 @@ function rotateEntries(entries: SocialDiscoverySearchStrategyQuery[], bucketMinu
     const offset = (bucket + familyIndex) % group.length;
     return [...group.slice(offset), ...group.slice(0, offset)];
   });
+}
+
+function rotatedRunFamilyOrder(bucketMinutes: number) {
+  const adjacentFamilies: SocialDiscoverySearchQueryFamily[] = [
+    "buyer_pain",
+    "workflow",
+    "audience",
+    "trigger_event",
+    "competitor_alt",
+  ];
+  const offset = rotationBucket(bucketMinutes) % adjacentFamilies.length;
+  return [
+    ...adjacentFamilies.slice(offset),
+    ...adjacentFamilies.slice(0, offset),
+    "direct_category" as const,
+  ];
 }
 
 function buildFallbackEntries(brand: BrandRecord, maxQueries: number) {
@@ -635,8 +660,11 @@ export function selectYouTubeSearchQueriesForRun(input: {
   maxQueries: number;
   rotationBucketMinutes?: number;
 }) {
-  const rotated = rotateEntries(input.strategy.queries, input.rotationBucketMinutes ?? 60);
-  return finalizePortfolio(rotated, numberOption(input.maxQueries, 8, 1, 40));
+  const bucketMinutes = input.rotationBucketMinutes ?? 60;
+  const rotated = rotateEntries(input.strategy.queries, bucketMinutes);
+  return finalizePortfolio(rotated, numberOption(input.maxQueries, 8, 1, 40), {
+    familyOrder: rotatedRunFamilyOrder(bucketMinutes),
+  });
 }
 
 export function splitSocialDiscoveryCsv(value: unknown) {

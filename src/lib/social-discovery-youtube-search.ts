@@ -12,6 +12,16 @@ export type YouTubeDiscoveryError = {
   message: string;
 };
 
+export type YouTubeDiscoveryQueryStats = {
+  query: string;
+  found: number;
+  eligible: number;
+  accepted: number;
+  rejectedSubscriberGate: number;
+  rejectedTargetGrade: number;
+  error?: string;
+};
+
 function compactText(value: unknown, maxLength: number) {
   const normalized = String(value ?? "").replace(/\s+/g, " ").trim();
   if (normalized.length <= maxLength) return normalized;
@@ -113,6 +123,7 @@ export async function discoverYouTubeSearchPostsForBrand(input: {
   const publishedAfter = isoHoursAgo(socialDiscoveryLookbackHours());
   const posts: SocialDiscoveryPost[] = [];
   const errors: YouTubeDiscoveryError[] = [];
+  const queryStats: YouTubeDiscoveryQueryStats[] = [];
   let found = 0;
   let eligible = 0;
 
@@ -129,24 +140,41 @@ export async function discoverYouTubeSearchPostsForBrand(input: {
       found += results.length;
       const eligibleResults = results.filter((result) => result.subscriberCount > MIN_YOUTUBE_DISCOVERY_SUBSCRIBERS);
       eligible += eligibleResults.length;
-      posts.push(
-        ...eligibleResults
-          .map((result, index) =>
-            buildYouTubeDiscoveryPost({
-              brand: input.brand,
-              query,
-              index,
-              result,
-            })
-          )
-          .filter((post): post is SocialDiscoveryPost => Boolean(post))
-          .filter(isTargetGradeYouTubeDiscoveryPost)
-      );
+      const builtPosts = eligibleResults
+        .map((result, index) =>
+          buildYouTubeDiscoveryPost({
+            brand: input.brand,
+            query,
+            index,
+            result,
+          })
+        )
+        .filter((post): post is SocialDiscoveryPost => Boolean(post));
+      const acceptedPosts = builtPosts.filter(isTargetGradeYouTubeDiscoveryPost);
+      posts.push(...acceptedPosts);
+      queryStats.push({
+        query,
+        found: results.length,
+        eligible: eligibleResults.length,
+        accepted: acceptedPosts.length,
+        rejectedSubscriberGate: results.length - eligibleResults.length,
+        rejectedTargetGrade: builtPosts.length - acceptedPosts.length,
+      });
     } catch (error) {
+      const message = error instanceof Error ? error.message : "YouTube search failed";
       errors.push({
         platform: "youtube",
         query,
-        message: error instanceof Error ? error.message : "YouTube search failed",
+        message,
+      });
+      queryStats.push({
+        query,
+        found: 0,
+        eligible: 0,
+        accepted: 0,
+        rejectedSubscriberGate: 0,
+        rejectedTargetGrade: 0,
+        error: message,
       });
     }
   }
@@ -157,9 +185,11 @@ export async function discoverYouTubeSearchPostsForBrand(input: {
     queries,
     posts,
     errors,
+    queryStats,
     summary: {
       found,
       eligible,
+      accepted: posts.length,
       minSubscriberCount: MIN_YOUTUBE_DISCOVERY_SUBSCRIBERS,
     },
   };

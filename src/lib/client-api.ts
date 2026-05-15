@@ -52,6 +52,11 @@ import type {
   OperatorThreadDetail,
   OperatorToolName,
 } from "@/lib/operator-types";
+import type {
+  Mission,
+  MissionDetail,
+  MissionPlan,
+} from "@/lib/mission-types";
 import {
   EXPERIMENT_MAX_SAMPLE_SIZE,
   EXPERIMENT_MIN_VERIFIED_EMAIL_LEADS,
@@ -197,6 +202,60 @@ export async function fetchBrandIntakePrefill(url: string) {
       mode?: string;
     };
   };
+}
+
+export async function fetchMissions(brandId: string) {
+  const response = await fetch(`/api/brands/${brandId}/missions`, { cache: "no-store" });
+  const data = await readJson(response);
+  return (Array.isArray(data?.missions) ? data.missions : []) as Mission[];
+}
+
+export async function createMissionApi(brandId: string, input: {
+  websiteUrl: string;
+  targetCustomerText: string;
+}) {
+  const response = await fetch(`/api/brands/${brandId}/missions`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  const data = await readJson(response);
+  return data.mission as Mission;
+}
+
+export async function fetchMissionDetail(brandId: string, missionId: string) {
+  const response = await fetch(`/api/brands/${brandId}/missions/${missionId}`, { cache: "no-store" });
+  const data = await readJson(response);
+  return data as MissionDetail;
+}
+
+export async function updateMissionApi(
+  brandId: string,
+  missionId: string,
+  patch: {
+    generatedPlan?: MissionPlan;
+    approvedPlan?: MissionPlan;
+    websiteUrl?: string;
+    targetCustomerText?: string;
+  }
+) {
+  const response = await fetch(`/api/brands/${brandId}/missions/${missionId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+  const data = await readJson(response);
+  return data.mission as Mission;
+}
+
+export async function startMissionApi(brandId: string, missionId: string, approvedPlan: MissionPlan) {
+  const response = await fetch(`/api/brands/${brandId}/missions/${missionId}/start`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ approvedPlan }),
+  });
+  const data = await readJson(response);
+  return data.mission as Mission;
 }
 
 export async function deleteBrandApi(brandId: string) {

@@ -14,6 +14,8 @@ npm run dev
 Copy `.env.example` to `.env.local` and fill values:
 
 - `OPENAI_API_KEY`
+- `OPENAI_MODEL_MISSION_OPERATOR` (recommended: `gpt-5.5`)
+- `OPENAI_MISSION_REASONING_EFFORT` (recommended: `high`)
 - `SUPABASE_URL` (optional)
 - `SUPABASE_SERVICE_ROLE_KEY` (optional)
 - `OUTREACH_ENCRYPTION_KEY` (required for secure account secret storage)
@@ -25,21 +27,23 @@ Copy `.env.example` to `.env.local` and fill values:
 
 ## Scheduler (Cloudflare Worker)
 
-Vercel cron is intentionally disabled in this repo (`/Users/don/factory-platform/vercel.json`) so Hobby deploys are not blocked.
+Vercel cron is intentionally disabled in this repo, so Hobby deploys are not blocked.
 
 Use Cloudflare Worker cron instead:
 
 ```bash
-cd /Users/don/factory-platform/cloudflare/outreach-cron
+cd /Users/don/lastb2b/cloudflare/outreach-cron
 wrangler login
 wrangler secret put OUTREACH_CRON_TOKEN
 wrangler secret put MANUAL_TRIGGER_TOKEN
 wrangler deploy
 ```
 
+The worker calls the combined outreach operator tick every 5 minutes. That tick covers outreach dispatch, inbox sync, sendable prep, sender launch, deliverability supervision, and AI mission learning refreshes.
+
 The worker schedule is configured in:
 
-- `/Users/don/factory-platform/cloudflare/outreach-cron/wrangler.toml`
+- `/Users/don/lastb2b/cloudflare/outreach-cron/wrangler.toml`
 
 ## Namecheap Relay (Fixed IP)
 
@@ -83,6 +87,10 @@ The relay only accepts authenticated `POST /namecheap` requests and only forward
 - `GET/PATCH/DELETE /api/brands/:brandId/experiments/:experimentId` — experiment CRUD
 - `POST /api/brands/:brandId/experiments/:experimentId/launch` — launch experiment test
 - `POST /api/brands/:brandId/experiments/:experimentId/promote` — promote experiment to scale campaign
+- `GET /api/brands/:brandId/missions` — list AI campaign missions
+- `POST /api/brands/:brandId/missions` — analyze site + target customers and generate an editable mission plan
+- `GET/PATCH /api/brands/:brandId/missions/:missionId` — mission detail and plan edits
+- `POST /api/brands/:brandId/missions/:missionId/start` — approve the plan and let the operator start only when deliverability is ready
 - `GET /api/brands/:brandId/experiments/:experimentId/runs` — experiment run visibility
 - `PATCH /api/brands/:brandId/experiments/:experimentId/runs/:runId` — pause/resume/cancel experiment run
 - `GET /api/brands/:brandId/campaigns` — list promoted scale campaigns
@@ -101,6 +109,7 @@ The relay only accepts authenticated `POST /namecheap` requests and only forward
 - `POST /api/webhooks/customerio/events` — delivery/reply webhook intake
 - `POST /api/internal/outreach/tick` — cron worker tick
   - `GET` is also supported so Vercel Cron can call it directly.
+- `GET/POST /api/internal/missions/tick` — mission-only operator refresh, useful for manual checks
 
 ## UI routes
 
@@ -108,6 +117,8 @@ The relay only accepts authenticated `POST /namecheap` requests and only forward
 - `/brands` — brand directory
 - `/brands/new` — brand onboarding
 - `/brands/:brandId` — brand home
+- `/brands/:brandId/missions` — AI mission setup
+- `/brands/:brandId/missions/:missionId` — AI mission control room
 - `/brands/:brandId/experiments` — experiment list
 - `/brands/:brandId/experiments/:experimentId` — experiment workspace
 - `/brands/:brandId/experiments/:experimentId/flow` — conversation flow editor

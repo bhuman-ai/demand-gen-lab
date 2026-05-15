@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { ArrowRight, FolderKanban, FlaskConical, Inbox, Mail, Plus } from "lucide-react";
+import { ArrowRight, FolderKanban, FlaskConical, Inbox, Mail, Plus, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -125,14 +125,23 @@ export default function BrandHomeClient({ brandId }: { brandId: string }) {
       <PageIntro
         title={brand?.name || "Brand"}
         actions={
-          <Button
-            type="button"
-            onClick={() => setCreateOpen(true)}
-            disabled={!brand || creating}
-          >
-            <Plus className="h-4 w-4" />
-            {creating ? "Creating..." : "New experiment"}
-          </Button>
+          <>
+            <Button asChild disabled={!brand}>
+              <Link href={`/brands/${brandId}/missions`}>
+                <Sparkles className="h-4 w-4" />
+                Start AI campaign
+              </Link>
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setCreateOpen(true)}
+              disabled={!brand || creating}
+            >
+              <Plus className="h-4 w-4" />
+              {creating ? "Creating..." : "New experiment"}
+            </Button>
+          </>
         }
         aside={
           <StatLedger

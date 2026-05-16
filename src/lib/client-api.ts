@@ -213,6 +213,7 @@ export async function fetchMissions(brandId: string) {
 export async function createMissionApi(brandId: string, input: {
   websiteUrl: string;
   targetCustomerText: string;
+  autopilot?: boolean;
 }) {
   const response = await fetch(`/api/brands/${brandId}/missions`, {
     method: "POST",

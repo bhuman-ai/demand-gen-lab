@@ -3,6 +3,7 @@ import { runInboxSyncTick, runOutreachTick } from "@/lib/outreach-runtime";
 import { runExperimentSendablePrepTick } from "@/lib/experiment-sendable-prep";
 import { runSenderLaunchTick } from "@/lib/sender-launch";
 import { runMissionTick } from "@/lib/mission-learning";
+import { runMissionAutopilotTick } from "@/lib/mission-orchestrator";
 
 function isAuthorized(request: Request) {
   const token =
@@ -19,7 +20,7 @@ async function handleTick(request: Request) {
   }
 
   const requestOrigin = new URL(request.url).origin;
-  const [outreach, sendablePrep, inboxSync, senderLaunch, missions] = await Promise.all([
+  const [outreach, sendablePrep, inboxSync, senderLaunch] = await Promise.all([
     runOutreachTick(30),
     runExperimentSendablePrepTick(24, {
       requestOrigin,
@@ -28,15 +29,17 @@ async function handleTick(request: Request) {
     runSenderLaunchTick(12, {
       mailboxSync: false,
     }),
-    runMissionTick(25),
   ]);
+  const missionAutopilot = await runMissionAutopilotTick(10);
+  const missions = await runMissionTick(25);
 
   return NextResponse.json({
-    ok: missions.failed === 0,
+    ok: missionAutopilot.failed === 0 && missions.failed === 0,
     outreach,
     inboxSync,
     sendablePrep,
     senderLaunch,
+    missionAutopilot,
     missions,
   });
 }

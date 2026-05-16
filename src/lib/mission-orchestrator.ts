@@ -6,6 +6,7 @@ import {
   createMissionEvent,
   defaultMissionApprovalPolicy,
   getMission,
+  listMissionsByStatuses,
   updateMission,
 } from "@/lib/mission-data";
 import { inspectMissionDeliverability, refreshMissionRuntimeSummary } from "@/lib/mission-learning";
@@ -40,7 +41,124 @@ function buildMissionNotes(plan: MissionPlan) {
 }
 
 function shouldWaitForDeliverability(stage: Mission["deliverabilityState"]["stage"]) {
-  return stage === "preparing_inboxes" || stage === "warming_domains" || stage === "testing_inbox_placement";
+  return stage !== "ready";
+}
+
+function hasApprovedMissionPlan(mission: Mission) {
+  return Boolean(mission.approvalPolicy.planApprovedAt && mission.approvedPlan.offerSummary.trim());
+}
+
+async function ensureMissionRuntime(input: {
+  mission: Mission;
+  approvedPlan: MissionPlan;
+  brandName?: string;
+}): Promise<Mission> {
+  if (
+    input.mission.currentExperimentId &&
+    input.mission.currentRuntimeCampaignId &&
+    input.mission.currentRuntimeExperimentId
+  ) {
+    return input.mission;
+  }
+
+  const brand =
+    input.brandName
+      ? { name: input.brandName }
+      : await getBrandById(input.mission.brandId, { includeEmbedded: true });
+  const experiment = await createExperimentRecord({
+    brandId: input.mission.brandId,
+    name: `${brand?.name || "Brand"} Mission Test`,
+    offer: input.approvedPlan.offerSummary,
+    audience: input.approvedPlan.targetCustomers.join("; "),
+  });
+  const runtimeExperiment = await ensureRuntimeForExperiment(experiment);
+  await createMissionAgentDecision({
+    missionId: input.mission.id,
+    brandId: input.mission.brandId,
+    agent: "mission_operator",
+    action: "compile_to_internal_experiment",
+    rationale: "The user sees one mission, while the existing outreach runtime still uses experiments internally.",
+    riskLevel: "safe_write",
+    input: { missionId: input.mission.id },
+    output: {
+      experimentId: runtimeExperiment.id,
+      runtimeCampaignId: runtimeExperiment.runtime.campaignId,
+      runtimeExperimentId: runtimeExperiment.runtime.experimentId,
+    },
+  });
+
+  return (
+    (await updateMission(input.mission.brandId, input.mission.id, {
+      currentExperimentId: runtimeExperiment.id,
+      currentRuntimeCampaignId: runtimeExperiment.runtime.campaignId,
+      currentRuntimeExperimentId: runtimeExperiment.runtime.experimentId,
+    })) ?? input.mission
+  );
+}
+
+async function launchApprovedMissionFirstBatch(input: {
+  mission: Mission;
+  approvedPlan: MissionPlan;
+  deliverabilityState: Mission["deliverabilityState"];
+  brandName?: string;
+}): Promise<Mission> {
+  let mission = await ensureMissionRuntime(input);
+  if (mission.currentRunId) {
+    return refreshMissionRuntimeSummary(mission);
+  }
+
+  const launch = await launchExperimentRun({
+    brandId: mission.brandId,
+    campaignId: mission.currentRuntimeCampaignId,
+    experimentId: mission.currentRuntimeExperimentId,
+    trigger: "manual",
+    ownerType: "experiment",
+    ownerId: mission.currentExperimentId,
+    maxLeadsOverride: input.approvedPlan.firstBatchSize,
+  });
+
+  await createMissionAgentDecision({
+    missionId: mission.id,
+    brandId: mission.brandId,
+    agent: "launch_operator",
+    action: "launch_first_batch",
+    rationale: "The approved plan allows a small first batch. Scaling remains gated by learning and approval policy.",
+    riskLevel: launch.ok ? "guarded_write" : "blocked",
+    input: {
+      firstBatchSize: input.approvedPlan.firstBatchSize,
+      runtimeCampaignId: mission.currentRuntimeCampaignId,
+      runtimeExperimentId: mission.currentRuntimeExperimentId,
+    },
+    output: launch,
+  });
+
+  mission =
+    (await updateMission(mission.brandId, mission.id, {
+      currentRunId: launch.runId,
+      status: launch.ok ? "running" : "deliverability_blocked",
+      lastError: launch.ok ? "" : launch.reason,
+      deliverabilityState: launch.ok
+        ? input.deliverabilityState
+        : {
+            ...input.deliverabilityState,
+            stage: "needs_attention",
+            summary: launch.reason,
+            primaryBlocker: launch.reason,
+            lastCheckedAt: nowIso(),
+          },
+    })) ?? mission;
+
+  await createMissionEvent({
+    missionId: mission.id,
+    brandId: mission.brandId,
+    eventType: launch.ok ? "first_batch_launched" : "launch_blocked",
+    summary: launch.ok
+      ? `First batch launched for up to ${input.approvedPlan.firstBatchSize} contacts.`
+      : `Launch blocked: ${launch.reason}`,
+    payload: { launch },
+  });
+
+  return refreshMissionRuntimeSummary(mission);
 }
 
 export async function startMission(input: {
@@ -114,37 +232,18 @@ export async function startMission(input: {
     output: { deliverabilityState },
   });
 
-  const experiment = await createExperimentRecord({
-    brandId: input.brandId,
-    name: `${brand.name || "Brand"} Mission Test`,
-    offer: approvedPlan.offerSummary,
-    audience: approvedPlan.targetCustomers.join("; "),
-  });
-  const runtimeExperiment = await ensureRuntimeForExperiment(experiment);
-  await createMissionAgentDecision({
-    missionId: mission.id,
-    brandId: mission.brandId,
-    agent: "mission_operator",
-    action: "compile_to_internal_experiment",
-    rationale: "The user sees one mission, while the existing outreach runtime still uses experiments internally.",
-    riskLevel: "safe_write",
-    input: { missionId: mission.id },
-    output: {
-      experimentId: runtimeExperiment.id,
-      runtimeCampaignId: runtimeExperiment.runtime.campaignId,
-      runtimeExperimentId: runtimeExperiment.runtime.experimentId,
-    },
-  });
-
   let updatedMission =
     (await updateMission(input.brandId, input.missionId, {
-      currentExperimentId: runtimeExperiment.id,
-      currentRuntimeCampaignId: runtimeExperiment.runtime.campaignId,
-      currentRuntimeExperimentId: runtimeExperiment.runtime.experimentId,
       deliverabilityState,
       status: shouldWaitForDeliverability(deliverabilityState.stage) ? "deliverability_blocked" : "starting",
       lastError: shouldWaitForDeliverability(deliverabilityState.stage) ? deliverabilityState.primaryBlocker : "",
     })) ?? mission;
+
+  updatedMission = await ensureMissionRuntime({
+    mission: updatedMission,
+    approvedPlan,
+    brandName: brand.name,
+  });
 
   if (shouldWaitForDeliverability(deliverabilityState.stage)) {
     await createMissionEvent({
@@ -157,56 +256,78 @@ export async function startMission(input: {
     return updatedMission;
   }
 
-  const launch = await launchExperimentRun({
-    brandId: input.brandId,
-    campaignId: runtimeExperiment.runtime.campaignId,
-    experimentId: runtimeExperiment.runtime.experimentId,
-    trigger: "manual",
-    ownerType: "experiment",
-    ownerId: runtimeExperiment.id,
-    maxLeadsOverride: approvedPlan.firstBatchSize,
+  return launchApprovedMissionFirstBatch({
+    mission: updatedMission,
+    approvedPlan,
+    deliverabilityState,
+    brandName: brand.name,
   });
+}
 
-  await createMissionAgentDecision({
-    missionId: mission.id,
-    brandId: mission.brandId,
-    agent: "launch_operator",
-    action: "launch_first_batch",
-    rationale: "The approved plan allows a small first batch. Scaling remains gated by learning and approval policy.",
-    riskLevel: launch.ok ? "guarded_write" : "blocked",
-    input: {
-      firstBatchSize: approvedPlan.firstBatchSize,
-      runtimeCampaignId: runtimeExperiment.runtime.campaignId,
-      runtimeExperimentId: runtimeExperiment.runtime.experimentId,
-    },
-    output: launch,
-  });
+export async function runMissionAutopilotTick(limit = 10) {
+  const missions = await listMissionsByStatuses(["starting", "deliverability_blocked"]);
+  const rows = [];
+  for (const mission of missions.slice(0, limit)) {
+    if (!hasApprovedMissionPlan(mission)) {
+      rows.push({
+        missionId: mission.id,
+        brandId: mission.brandId,
+        status: mission.status,
+        ok: true,
+        skipped: "no_approved_plan",
+      });
+      continue;
+    }
 
-  updatedMission =
-    (await updateMission(input.brandId, input.missionId, {
-      currentRunId: launch.runId,
-      status: launch.ok ? "running" : "deliverability_blocked",
-      lastError: launch.ok ? "" : launch.reason,
-      deliverabilityState: launch.ok
-        ? deliverabilityState
-        : {
-            ...deliverabilityState,
-            stage: "needs_attention",
-            summary: launch.reason,
-            primaryBlocker: launch.reason,
-            lastCheckedAt: nowIso(),
-          },
-    })) ?? updatedMission;
+    try {
+      const deliverabilityState = await inspectMissionDeliverability(mission.brandId);
+      const updatedMission =
+        (await updateMission(mission.brandId, mission.id, {
+          deliverabilityState,
+          status: shouldWaitForDeliverability(deliverabilityState.stage) ? "deliverability_blocked" : "starting",
+          lastError: shouldWaitForDeliverability(deliverabilityState.stage) ? deliverabilityState.primaryBlocker : "",
+        })) ?? mission;
 
-  await createMissionEvent({
-    missionId: mission.id,
-    brandId: mission.brandId,
-    eventType: launch.ok ? "first_batch_launched" : "launch_blocked",
-    summary: launch.ok
-      ? `First batch launched for up to ${approvedPlan.firstBatchSize} contacts.`
-      : `Launch blocked: ${launch.reason}`,
-    payload: { launch },
-  });
+      if (shouldWaitForDeliverability(deliverabilityState.stage)) {
+        rows.push({
+          missionId: updatedMission.id,
+          brandId: updatedMission.brandId,
+          status: updatedMission.status,
+          deliverabilityStage: deliverabilityState.stage,
+          ok: true,
+          waiting: true,
+        });
+        continue;
+      }
 
-  return refreshMissionRuntimeSummary(updatedMission);
+      const launched = await launchApprovedMissionFirstBatch({
+        mission: updatedMission,
+        approvedPlan: updatedMission.approvedPlan,
+        deliverabilityState,
+      });
+      rows.push({
+        missionId: launched.id,
+        brandId: launched.brandId,
+        status: launched.status,
+        runId: launched.currentRunId,
+        ok: true,
+      });
+    } catch (error) {
+      rows.push({
+        missionId: mission.id,
+        brandId: mission.brandId,
+        status: mission.status,
+        ok: false,
+        error: error instanceof Error ? error.message : "mission autopilot failed",
+      });
+    }
+  }
+
+  return {
+    checked: missions.length,
+    advanced: rows.filter((row) => row.ok && !("waiting" in row) && !("skipped" in row)).length,
+    waiting: rows.filter((row) => "waiting" in row).length,
+    failed: rows.filter((row) => !row.ok).length,
+    missions: rows,
+  };
 }

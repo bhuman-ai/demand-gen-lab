@@ -15,11 +15,6 @@ import type {
   MissionStatus,
 } from "@/lib/mission-types";
 
-const isVercel = Boolean(process.env.VERCEL);
-const MISSION_STORE_PATH = isVercel
-  ? "/tmp/factory_missions.v1.json"
-  : `${process.cwd()}/data/missions.v1.json`;
-
 const TABLE_MISSION = "demanddev_missions";
 const TABLE_EVENT = "demanddev_mission_events";
 const TABLE_DECISION = "demanddev_mission_agent_decisions";
@@ -88,6 +83,32 @@ const METRICS_DEFAULT: MissionMetricsSummary = {
 
 function nowIso() {
   return new Date().toISOString();
+}
+
+function isDeployedRuntime() {
+  return Boolean(process.env.VERCEL || process.env.VERCEL_ENV);
+}
+
+function missionStorePath() {
+  return isDeployedRuntime() ? "/tmp/factory_missions.v1.json" : `${process.cwd()}/data/missions.v1.json`;
+}
+
+function errorMessage(error: unknown) {
+  if (!error) return "";
+  if (error instanceof Error) return error.message;
+  if (typeof error === "object" && "message" in error) {
+    return String((error as { message?: unknown }).message ?? "");
+  }
+  return String(error);
+}
+
+function assertLocalMissionStoreAllowed(operation: string, error?: unknown) {
+  if (!isDeployedRuntime()) return;
+  const detail = errorMessage(error);
+  throw new Error(
+    `Mission ${operation} requires Supabase storage in deployed runtime.` +
+      (detail ? ` Supabase error: ${detail}` : " Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY.")
+  );
 }
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -314,7 +335,7 @@ function missionToDb(row: Mission) {
 
 async function readLocalStore(): Promise<MissionStore> {
   try {
-    const raw = await readFile(MISSION_STORE_PATH, "utf8");
+    const raw = await readFile(missionStorePath(), "utf8");
     const parsed = JSON.parse(raw) as Partial<MissionStore>;
     return {
       missions: Array.isArray(parsed.missions) ? parsed.missions.map(mapMissionRow) : [],
@@ -328,8 +349,9 @@ async function readLocalStore(): Promise<MissionStore> {
 }
 
 async function writeLocalStore(store: MissionStore) {
-  await mkdir(MISSION_STORE_PATH.replace(/\/[^/]+$/, ""), { recursive: true });
-  await writeFile(MISSION_STORE_PATH, `${JSON.stringify(store, null, 2)}\n`, "utf8");
+  const storePath = missionStorePath();
+  await mkdir(storePath.replace(/\/[^/]+$/, ""), { recursive: true });
+  await writeFile(storePath, `${JSON.stringify(store, null, 2)}\n`, "utf8");
 }
 
 export function emptyMissionPlan(): MissionPlan {
@@ -381,6 +403,7 @@ export async function createMission(input: {
   };
 
   const supabase = getSupabaseAdmin();
+  let supabaseError: unknown = null;
   if (supabase) {
     const { data, error } = await supabase
       .from(TABLE_MISSION)
@@ -388,8 +411,10 @@ export async function createMission(input: {
       .select("*")
       .single();
     if (!error && data) return mapMissionRow(data);
+    supabaseError = error;
   }
 
+  assertLocalMissionStoreAllowed("create", supabaseError);
   const store = await readLocalStore();
   store.missions.unshift(mission);
   await writeLocalStore(store);
@@ -398,6 +423,7 @@ export async function createMission(input: {
 
 export async function listMissions(brandId: string): Promise<Mission[]> {
   const supabase = getSupabaseAdmin();
+  let supabaseError: unknown = null;
   if (supabase) {
     const { data, error } = await supabase
       .from(TABLE_MISSION)
@@ -405,8 +431,10 @@ export async function listMissions(brandId: string): Promise<Mission[]> {
       .eq("brand_id", brandId)
       .order("updated_at", { ascending: false });
     if (!error) return (data ?? []).map((row: unknown) => mapMissionRow(row));
+    supabaseError = error;
   }
 
+  assertLocalMissionStoreAllowed("list", supabaseError);
   const store = await readLocalStore();
   return store.missions
     .filter((mission) => mission.brandId === brandId)
@@ -417,6 +445,7 @@ export async function listMissionsByStatuses(statuses: MissionStatus[]): Promise
   const normalized = Array.from(new Set(statuses.map((status) => normalizeStatus(status))));
   if (!normalized.length) return [];
   const supabase = getSupabaseAdmin();
+  let supabaseError: unknown = null;
   if (supabase) {
     const { data, error } = await supabase
       .from(TABLE_MISSION)
@@ -424,8 +453,10 @@ export async function listMissionsByStatuses(statuses: MissionStatus[]): Promise
       .in("status", normalized)
       .order("updated_at", { ascending: false });
     if (!error) return (data ?? []).map((row: unknown) => mapMissionRow(row));
+    supabaseError = error;
   }
 
+  assertLocalMissionStoreAllowed("list by status", supabaseError);
   const store = await readLocalStore();
   return store.missions
     .filter((mission) => normalized.includes(mission.status))
@@ -434,6 +465,7 @@ export async function listMissionsByStatuses(statuses: MissionStatus[]): Promise
 
 export async function getMission(brandId: string, missionId: string): Promise<Mission | null> {
   const supabase = getSupabaseAdmin();
+  let supabaseError: unknown = null;
   if (supabase) {
     const { data, error } = await supabase
       .from(TABLE_MISSION)
@@ -442,8 +474,11 @@ export async function getMission(brandId: string, missionId: string): Promise<Mi
       .eq("id", missionId)
       .maybeSingle();
     if (!error && data) return mapMissionRow(data);
+    if (!error) return null;
+    supabaseError = error;
   }
 
+  assertLocalMissionStoreAllowed("load", supabaseError);
   const store = await readLocalStore();
   return store.missions.find((mission) => mission.brandId === brandId && mission.id === missionId) ?? null;
 }
@@ -486,6 +521,7 @@ export async function updateMission(
   };
 
   const supabase = getSupabaseAdmin();
+  let supabaseError: unknown = null;
   if (supabase) {
     const { data, error } = await supabase
       .from(TABLE_MISSION)
@@ -495,8 +531,11 @@ export async function updateMission(
       .select("*")
       .maybeSingle();
     if (!error && data) return mapMissionRow(data);
+    if (!error) return null;
+    supabaseError = error;
   }
 
+  assertLocalMissionStoreAllowed("update", supabaseError);
   const store = await readLocalStore();
   const index = store.missions.findIndex((mission) => mission.brandId === brandId && mission.id === missionId);
   if (index < 0) return null;
@@ -523,6 +562,7 @@ export async function createMissionEvent(input: {
   };
 
   const supabase = getSupabaseAdmin();
+  let supabaseError: unknown = null;
   if (supabase) {
     const { data, error } = await supabase
       .from(TABLE_EVENT)
@@ -538,8 +578,10 @@ export async function createMissionEvent(input: {
       .select("*")
       .single();
     if (!error && data) return mapEventRow(data);
+    supabaseError = error;
   }
 
+  assertLocalMissionStoreAllowed("event create", supabaseError);
   const store = await readLocalStore();
   store.events.unshift(event);
   await writeLocalStore(store);
@@ -570,6 +612,7 @@ export async function createMissionAgentDecision(input: {
   };
 
   const supabase = getSupabaseAdmin();
+  let supabaseError: unknown = null;
   if (supabase) {
     const { data, error } = await supabase
       .from(TABLE_DECISION)
@@ -588,8 +631,10 @@ export async function createMissionAgentDecision(input: {
       .select("*")
       .single();
     if (!error && data) return mapDecisionRow(data);
+    supabaseError = error;
   }
 
+  assertLocalMissionStoreAllowed("decision create", supabaseError);
   const store = await readLocalStore();
   store.decisions.unshift(decision);
   await writeLocalStore(store);
@@ -619,6 +664,7 @@ export async function createMissionLearning(input: {
   };
 
   const supabase = getSupabaseAdmin();
+  let supabaseError: unknown = null;
   if (supabase) {
     const { data, error } = await supabase
       .from(TABLE_LEARNING)
@@ -637,8 +683,10 @@ export async function createMissionLearning(input: {
       .select("*")
       .single();
     if (!error && data) return mapLearningRow(data);
+    supabaseError = error;
   }
 
+  assertLocalMissionStoreAllowed("learning create", supabaseError);
   const store = await readLocalStore();
   store.learnings.unshift(learning);
   await writeLocalStore(store);
@@ -668,6 +716,9 @@ export async function getMissionDetail(brandId: string, missionId: string): Prom
         .eq("mission_id", missionId)
         .order("created_at", { ascending: false }),
     ]);
+    if (events.error) assertLocalMissionStoreAllowed("detail events load", events.error);
+    if (decisions.error) assertLocalMissionStoreAllowed("detail decisions load", decisions.error);
+    if (learnings.error) assertLocalMissionStoreAllowed("detail learnings load", learnings.error);
     return {
       mission,
       events: events.error ? [] : (events.data ?? []).map((row: unknown) => mapEventRow(row)),
@@ -676,6 +727,7 @@ export async function getMissionDetail(brandId: string, missionId: string): Prom
     };
   }
 
+  assertLocalMissionStoreAllowed("detail load");
   const store = await readLocalStore();
   return {
     mission,

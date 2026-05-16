@@ -58,10 +58,11 @@ export default function MissionDetailClient({
   const currentMove = useMemo(() => {
     if (!mission) return "";
     if (mission.status === "deliverability_blocked") return "Preparing inboxes and deliverability before launch.";
+    if (mission.status === "starting") return "Checking deliverability and preparing the first safe batch.";
     if (mission.status === "running") return "Running the approved first batch.";
     if (mission.status === "monitoring") return "Watching replies, bounces, and sender health.";
     if (mission.status === "learning") return "Reviewing results and deciding the next move.";
-    if (mission.status === "plan_ready") return "Waiting for the plan to be approved.";
+    if (mission.status === "plan_ready") return "Plan is ready; autopilot has not started yet.";
     return statusLabel(mission.status);
   }, [mission]);
 
@@ -69,7 +70,7 @@ export default function MissionDetailClient({
     <div className="space-y-7">
       <PageIntro
         title="Mission control"
-        description="One place to see what the AI operator is doing, why, and what might block it."
+        description="One place to see what the AI operator is doing, why, and what might block launch."
         actions={
           <div className="flex gap-2">
             <Button asChild variant="outline">

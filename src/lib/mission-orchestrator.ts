@@ -185,7 +185,8 @@ export async function startMission(input: {
     planApprovedAt: nowIso(),
     allowAutoProvisioning: autoProvisioningAllowed,
     allowAutoDomainPurchase: autoProvisioningAllowed,
-    maxAutoProvisionedSenders: autoProvisioningAllowed ? 1 : 0,
+    maxAutoProvisionedSenders: autoProvisioningAllowed ? 3 : 0,
+    maxAutoDomainSpendUsd: autoProvisioningAllowed ? 40 : 0,
     requireApprovalForNewDomainPurchase: !autoProvisioningAllowed,
   };
 

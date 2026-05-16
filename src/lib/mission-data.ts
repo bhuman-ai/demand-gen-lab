@@ -60,6 +60,7 @@ const APPROVAL_DEFAULT: MissionApprovalPolicy = {
   allowAutoProvisioning: false,
   allowAutoDomainPurchase: false,
   maxAutoProvisionedSenders: 1,
+  maxAutoDomainSpendUsd: 40,
   requireApprovalForNewAudience: true,
   requireApprovalForNewClaim: true,
   requireApprovalForNewDomainPurchase: true,
@@ -210,6 +211,10 @@ function normalizeApproval(value: unknown): MissionApprovalPolicy {
         10,
         Math.round(asNumber(row.maxAutoProvisionedSenders ?? row.max_auto_provisioned_senders, 1))
       )
+    ),
+    maxAutoDomainSpendUsd: Math.max(
+      0,
+      Math.min(500, asNumber(row.maxAutoDomainSpendUsd ?? row.max_auto_domain_spend_usd, 40))
     ),
     requireApprovalForNewAudience: row.requireApprovalForNewAudience !== false && row.require_approval_for_new_audience !== false,
     requireApprovalForNewClaim: row.requireApprovalForNewClaim !== false && row.require_approval_for_new_claim !== false,

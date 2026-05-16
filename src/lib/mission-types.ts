@@ -58,6 +58,7 @@ export type MissionApprovalPolicy = {
   allowAutoProvisioning: boolean;
   allowAutoDomainPurchase: boolean;
   maxAutoProvisionedSenders: number;
+  maxAutoDomainSpendUsd: number;
   requireApprovalForNewAudience: boolean;
   requireApprovalForNewClaim: boolean;
   requireApprovalForNewDomainPurchase: boolean;

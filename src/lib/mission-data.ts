@@ -57,6 +57,9 @@ const APPROVAL_DEFAULT: MissionApprovalPolicy = {
   planApprovedAt: "",
   firstBatchLimit: 25,
   allowAutoScale: false,
+  allowAutoProvisioning: false,
+  allowAutoDomainPurchase: false,
+  maxAutoProvisionedSenders: 1,
   requireApprovalForNewAudience: true,
   requireApprovalForNewClaim: true,
   requireApprovalForNewDomainPurchase: true,
@@ -199,6 +202,15 @@ function normalizeApproval(value: unknown): MissionApprovalPolicy {
     planApprovedAt: asString(row.planApprovedAt ?? row.plan_approved_at),
     firstBatchLimit: Math.max(1, Math.min(100, Math.round(asNumber(row.firstBatchLimit ?? row.first_batch_limit, 25)))),
     allowAutoScale: row.allowAutoScale === true || row.allow_auto_scale === true,
+    allowAutoProvisioning: row.allowAutoProvisioning === true || row.allow_auto_provisioning === true,
+    allowAutoDomainPurchase: row.allowAutoDomainPurchase === true || row.allow_auto_domain_purchase === true,
+    maxAutoProvisionedSenders: Math.max(
+      0,
+      Math.min(
+        10,
+        Math.round(asNumber(row.maxAutoProvisionedSenders ?? row.max_auto_provisioned_senders, 1))
+      )
+    ),
     requireApprovalForNewAudience: row.requireApprovalForNewAudience !== false && row.require_approval_for_new_audience !== false,
     requireApprovalForNewClaim: row.requireApprovalForNewClaim !== false && row.require_approval_for_new_claim !== false,
     requireApprovalForNewDomainPurchase:

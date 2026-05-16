@@ -1,10 +1,12 @@
 import {
   getBrandOutreachAssignment,
   getOutreachRun,
+  listSenderLaunches,
   listOutreachAccounts,
   listRunAnomalies,
   listRunMessages,
 } from "@/lib/outreach-data";
+import { getOutreachAccountFromEmail } from "@/lib/outreach-account-helpers";
 import {
   createMissionEvent,
   createMissionLearning,
@@ -69,10 +71,21 @@ function outboundAsRecord(value: unknown) {
   return value && typeof value === "object" && !Array.isArray(value) ? value as { enabled?: unknown } : {};
 }
 
+function senderLaunchAllowsMissionOutbound(state: string) {
+  return state === "ready" || state === "restricted_send";
+}
+
+function senderLaunchIsStillPreparing(state: string) {
+  return state === "setup" || state === "observing" || state === "warming";
+}
+
 export async function inspectMissionDeliverability(brandId: string): Promise<MissionDeliverabilityState> {
   const base = defaultMissionDeliverabilityState();
   const assignment = await getBrandOutreachAssignment(brandId).catch(() => null);
-  const accounts = await listOutreachAccounts().catch(() => []);
+  const [accounts, launches] = await Promise.all([
+    listOutreachAccounts().catch(() => []),
+    listSenderLaunches({ brandId }, { allowMissingTable: true }).catch(() => []),
+  ]);
   const assignedIds = assignment?.accountIds?.length
     ? assignment.accountIds
     : assignment?.accountId
@@ -84,6 +97,22 @@ export async function inspectMissionDeliverability(brandId: string): Promise<Mis
   const activeAccounts = assignedAccounts.filter((account) => account.status === "active");
   const outboundAccounts = activeAccounts.filter((account) => isMissionOutboundReady(account));
   const warmingAccounts = activeAccounts.filter((account) => !isMissionOutboundReady(account));
+  const launchesByAccountId = new Map(launches.map((launch) => [launch.senderAccountId, launch]));
+  const launchesByEmail = new Map(launches.map((launch) => [launch.fromEmail.toLowerCase(), launch]));
+  const launchReadyAccounts = outboundAccounts.filter((account) => {
+    const fromEmail = getOutreachAccountFromEmail(account).toLowerCase();
+    const launch = launchesByAccountId.get(account.id) ?? launchesByEmail.get(fromEmail);
+    return !launch || senderLaunchAllowsMissionOutbound(launch.state);
+  });
+  const launchPreparingAccounts = outboundAccounts.filter((account) => {
+    const fromEmail = getOutreachAccountFromEmail(account).toLowerCase();
+    const launch = launchesByAccountId.get(account.id) ?? launchesByEmail.get(fromEmail);
+    return launch ? senderLaunchIsStillPreparing(launch.state) : false;
+  });
+  const topPreparingLaunch = launchPreparingAccounts
+    .map((account) => launchesByAccountId.get(account.id) ?? launchesByEmail.get(getOutreachAccountFromEmail(account).toLowerCase()))
+    .filter((launch): launch is NonNullable<typeof launch> => Boolean(launch))
+    .sort((left, right) => right.readinessScore - left.readinessScore)[0] ?? null;
 
   if (!assignedAccounts.length) {
     return {
@@ -98,15 +127,19 @@ export async function inspectMissionDeliverability(brandId: string): Promise<Mis
     };
   }
 
-  if (!outboundAccounts.length) {
+  if (!outboundAccounts.length || !launchReadyAccounts.length) {
     return {
       ...base,
       stage: "warming_domains",
-      summary: "Assigned inboxes are present, but they are still warmup-only or not ready for outbound.",
-      primaryBlocker: "Assigned inboxes are not outbound-ready.",
+      summary: topPreparingLaunch
+        ? `Assigned inbox ${topPreparingLaunch.fromEmail} is still ${topPreparingLaunch.state}. ${topPreparingLaunch.nextStep}`
+        : "Assigned inboxes are present, but they are still warmup-only or not ready for outbound.",
+      primaryBlocker: topPreparingLaunch
+        ? `Assigned inbox ${topPreparingLaunch.fromEmail} is still ${topPreparingLaunch.state}.`
+        : "Assigned inboxes are not outbound-ready.",
       senderCount: assignedAccounts.length,
       readySenderCount: 0,
-      warmingSenderCount: warmingAccounts.length || assignedAccounts.length,
+      warmingSenderCount: warmingAccounts.length || launchPreparingAccounts.length || assignedAccounts.length,
       lastCheckedAt: nowIso(),
     };
   }
@@ -114,9 +147,9 @@ export async function inspectMissionDeliverability(brandId: string): Promise<Mis
   return {
     ...base,
     stage: "ready",
-    summary: `${outboundAccounts.length} outbound-ready inbox${outboundAccounts.length === 1 ? "" : "es"} can be used for the first batch.`,
+    summary: `${launchReadyAccounts.length} outbound-ready inbox${launchReadyAccounts.length === 1 ? "" : "es"} can be used for the first batch.`,
     senderCount: assignedAccounts.length,
-    readySenderCount: outboundAccounts.length,
+    readySenderCount: launchReadyAccounts.length,
     warmingSenderCount: warmingAccounts.length,
     lastCheckedAt: nowIso(),
   };

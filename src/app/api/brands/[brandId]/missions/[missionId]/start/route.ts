@@ -25,6 +25,7 @@ export async function POST(
       brandId,
       missionId,
       approvedPlan: approvedPlan as MissionPlan,
+      autopilot: body.autopilot === true,
     });
     return NextResponse.json({ mission });
   } catch (error) {

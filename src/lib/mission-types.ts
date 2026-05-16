@@ -55,6 +55,9 @@ export type MissionApprovalPolicy = {
   planApprovedAt: string;
   firstBatchLimit: number;
   allowAutoScale: boolean;
+  allowAutoProvisioning: boolean;
+  allowAutoDomainPurchase: boolean;
+  maxAutoProvisionedSenders: number;
   requireApprovalForNewAudience: boolean;
   requireApprovalForNewClaim: boolean;
   requireApprovalForNewDomainPurchase: boolean;

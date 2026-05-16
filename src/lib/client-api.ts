@@ -249,11 +249,16 @@ export async function updateMissionApi(
   return data.mission as Mission;
 }
 
-export async function startMissionApi(brandId: string, missionId: string, approvedPlan: MissionPlan) {
+export async function startMissionApi(
+  brandId: string,
+  missionId: string,
+  approvedPlan: MissionPlan,
+  options: { autopilot?: boolean } = {}
+) {
   const response = await fetch(`/api/brands/${brandId}/missions/${missionId}/start`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ approvedPlan }),
+    body: JSON.stringify({ approvedPlan, autopilot: options.autopilot === true }),
   });
   const data = await readJson(response);
   return data.mission as Mission;

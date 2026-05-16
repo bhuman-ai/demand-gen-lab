@@ -9,7 +9,8 @@ import {
   listMissionsByStatuses,
   updateMission,
 } from "@/lib/mission-data";
-import { inspectMissionDeliverability, refreshMissionRuntimeSummary } from "@/lib/mission-learning";
+import { ensureMissionDeliverabilityCapacity } from "@/lib/mission-deliverability-capacity";
+import { refreshMissionRuntimeSummary } from "@/lib/mission-learning";
 import type { Mission, MissionPlan } from "@/lib/mission-types";
 
 function nowIso() {
@@ -165,6 +166,7 @@ export async function startMission(input: {
   brandId: string;
   missionId: string;
   approvedPlan: MissionPlan;
+  autopilot?: boolean;
 }): Promise<Mission> {
   const mission = await getMission(input.brandId, input.missionId);
   if (!mission) throw new Error("Mission not found.");
@@ -177,17 +179,23 @@ export async function startMission(input: {
     targetCustomers: asLines(input.approvedPlan.targetCustomers),
     avoidList: asLines(input.approvedPlan.avoidList),
   };
+  const autoProvisioningAllowed = Boolean(input.autopilot && approvedPlan.deliverabilityPlan.autoProvisioning !== false);
   const approvalPolicy = {
     ...defaultMissionApprovalPolicy(approvedPlan.firstBatchSize),
     planApprovedAt: nowIso(),
+    allowAutoProvisioning: autoProvisioningAllowed,
+    allowAutoDomainPurchase: autoProvisioningAllowed,
+    maxAutoProvisionedSenders: autoProvisioningAllowed ? 1 : 0,
+    requireApprovalForNewDomainPurchase: !autoProvisioningAllowed,
   };
 
-  await updateMission(input.brandId, input.missionId, {
-    status: "starting",
-    approvedPlan,
-    approvalPolicy,
-    lastError: "",
-  });
+  let updatedMission =
+    (await updateMission(input.brandId, input.missionId, {
+      status: "starting",
+      approvedPlan,
+      approvalPolicy,
+      lastError: "",
+    })) ?? mission;
   await createMissionEvent({
     missionId: mission.id,
     brandId: mission.brandId,
@@ -219,25 +227,31 @@ export async function startMission(input: {
     },
   });
 
-  const deliverabilityState = await inspectMissionDeliverability(input.brandId);
-  await updateMission(input.brandId, input.missionId, { deliverabilityState });
+  const capacity = await ensureMissionDeliverabilityCapacity({
+    mission: updatedMission,
+    approvedPlan,
+  });
+  const deliverabilityState = capacity.deliverabilityState;
+  updatedMission = capacity.mission;
   await createMissionAgentDecision({
     missionId: mission.id,
     brandId: mission.brandId,
     agent: "deliverability_operator",
-    action: "inspect_sender_readiness",
-    rationale: "Outbound should only launch after inboxes, warmup policy, and sender readiness are acceptable.",
+    action: input.autopilot ? "ensure_sender_capacity" : "inspect_sender_readiness",
+    rationale: input.autopilot
+      ? "Autopilot should actively assign, warm, or provision sender capacity, then only launch after readiness checks pass."
+      : "Outbound should only launch after inboxes, warmup policy, and sender readiness are acceptable.",
     riskLevel: deliverabilityState.stage === "ready" ? "read" : "guarded_write",
-    input: { brandId: input.brandId },
+    input: { brandId: input.brandId, autopilot: Boolean(input.autopilot), approvalPolicy },
     output: { deliverabilityState },
   });
 
-  let updatedMission =
+  updatedMission =
     (await updateMission(input.brandId, input.missionId, {
       deliverabilityState,
       status: shouldWaitForDeliverability(deliverabilityState.stage) ? "deliverability_blocked" : "starting",
       lastError: shouldWaitForDeliverability(deliverabilityState.stage) ? deliverabilityState.primaryBlocker : "",
-    })) ?? mission;
+    })) ?? updatedMission;
 
   updatedMission = await ensureMissionRuntime({
     mission: updatedMission,
@@ -280,7 +294,11 @@ export async function runMissionAutopilotTick(limit = 10) {
     }
 
     try {
-      const deliverabilityState = await inspectMissionDeliverability(mission.brandId);
+      const capacity = await ensureMissionDeliverabilityCapacity({
+        mission,
+        approvedPlan: mission.approvedPlan,
+      });
+      const deliverabilityState = capacity.deliverabilityState;
       const updatedMission =
         (await updateMission(mission.brandId, mission.id, {
           deliverabilityState,

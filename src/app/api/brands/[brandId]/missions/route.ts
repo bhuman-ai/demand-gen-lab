@@ -81,6 +81,7 @@ export async function POST(request: Request, context: { params: Promise<{ brandI
           brandId,
           missionId: mission.id,
           approvedPlan: generated.plan,
+          autopilot,
         });
         return NextResponse.json({ mission: startedMission }, { status: 201 });
       } catch (startError) {

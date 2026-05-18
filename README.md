@@ -29,6 +29,7 @@ Copy `.env.example` to `.env.local` and fill values:
 - `FORWARD_EMAIL_PROBE_MODE` (optional: `only`, `prefer`, or `off`; defaults to `only` when Forward Email is configured)
 - `FORWARD_EMAIL_PROBE_TARGETS_PER_RUN` (optional, default `1`, max `10`)
 - `FORWARD_EMAIL_PROBE_RECIPIENTS` (optional, comma/space-separated email or webhook recipients; IMAP storage is always enabled for probes)
+- `GMAIL_DELIVERABILITY_PROBE_TARGETS_PER_RUN` (optional, default `1`, max `5`; existing Gmail monitor mailboxes to use only after a Forward Email probe inboxes)
 - `DELIVERABILITY_PROBE_REPEAT_HOURS` (optional, default `24`; controls automatic recurring inbox placement probes)
 - `DELIVERABILITY_PRE_SEND_GATE` (optional, default `true`; when enabled, dispatch waits for a fresh passing probe for the sender/message content)
 
@@ -54,7 +55,7 @@ The worker schedule is configured in:
 
 ## Forward Email probe aliases
 
-Forward Email is used as the cheap control-probe receiver layer. When `FORWARD_EMAIL_API_TOKEN` and `FORWARD_EMAIL_PROBE_DOMAIN` are set, deliverability probes can create a fresh alias, send the probe from the real sender to that alias, poll the alias over IMAP, and delete the alias after the probe completes. These probes measure receipt, timing, and mailbox/header behavior for an owned control domain; they are not a substitute for Gmail or Outlook placement.
+Forward Email is used as the cheap control-probe receiver layer. When `FORWARD_EMAIL_API_TOKEN` and `FORWARD_EMAIL_PROBE_DOMAIN` are set, deliverability probes can create a fresh alias, send the probe from the real sender to that alias, poll the alias over IMAP, and delete the alias after the probe completes. If that Forward Email probe inboxes, the runtime can then queue an optional Gmail confirmation probe using an already-connected Gmail monitor mailbox that has not been used for that sender domain. Gmail is never used before the cheap Forward Email gate passes.
 
 The outreach runtime queues probes automatically when scheduled message content changes, repeats probes daily by default, and gates dispatch until the active sender/message has a fresh passing pre-send probe. The mission deliverability operator can also request a probe as an explicit AI tool when a run exists and delivery confidence is uncertain.
 

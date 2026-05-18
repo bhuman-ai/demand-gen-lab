@@ -205,6 +205,10 @@ const DELIVERABILITY_PRE_SEND_GATE_RECHECK_MINUTES = (() => {
   const parsed = Number(process.env.DELIVERABILITY_PRE_SEND_GATE_RECHECK_MINUTES ?? 4);
   return Number.isFinite(parsed) ? Math.max(1, parsed) : 4;
 })();
+const GMAIL_DELIVERABILITY_PROBE_TARGETS_PER_RUN = (() => {
+  const parsed = Number(process.env.GMAIL_DELIVERABILITY_PROBE_TARGETS_PER_RUN ?? 1);
+  return Number.isFinite(parsed) ? Math.max(1, Math.min(5, Math.round(parsed))) : 1;
+})();
 const DELIVERABILITY_INTELLIGENCE_REFRESH_HOURS = 6;
 const SELFFUNDED_AWS_APPLICATION_URL = "https://www.selffunded.dev/aws-credits/apply";
 
@@ -373,6 +377,7 @@ async function inferMailboxReplyOutreachContext(input: {
 type DeliverabilityProbeStage = "send" | "poll";
 type DeliverabilityProbeVariant = "baseline" | "production";
 type DeliverabilityProbeTriggerStage = "schedule" | "send" | "failover" | "manual" | "autonomous" | "pre_send_gate";
+type DeliverabilityMonitorProviderPreference = "auto" | "forward_email" | "gmail_mailbox";
 
 type MailboxDeliverabilityMonitorTarget = {
   kind: "mailbox";
@@ -11816,6 +11821,79 @@ async function maybeRefreshDeliverabilityIntelligence(run: {
   }
 }
 
+async function resolveMailboxDeliverabilityMonitorTargets(input: {
+  runBrandId: string;
+  excludeAccountIds: string[];
+  excludeEmails: string[];
+  gmailOnly?: boolean;
+  excludeSenderDomain?: string;
+  limit?: number;
+}): Promise<MailboxDeliverabilityMonitorTarget[]> {
+  const [accounts, brands] = await Promise.all([listOutreachAccounts(), listBrands()]);
+  const assignments = await Promise.all(
+    brands.map(async (brand) => ({
+      brandId: brand.id,
+      assignment: await getBrandOutreachAssignment(brand.id),
+    }))
+  );
+  const mailboxBrandByAccountId = new Map(
+    assignments
+      .filter((row) => row.assignment?.mailboxAccountId)
+      .map((row) => [String(row.assignment?.mailboxAccountId ?? "").trim(), row.brandId] as const)
+  );
+  const excludedAccountIds = new Set(input.excludeAccountIds.map((value) => value.trim()).filter(Boolean));
+  const excludedEmails = new Set(input.excludeEmails.map((value) => value.trim().toLowerCase()).filter(Boolean));
+  const excludedSenderDomain = String(input.excludeSenderDomain ?? "").trim().toLowerCase();
+  const domainUsedMonitorEmails = new Set<string>();
+  if (excludedSenderDomain) {
+    const reservations = await listDeliverabilitySeedReservations();
+    for (const reservation of reservations) {
+      if (senderDomainFromEmail(reservation.fromEmail) !== excludedSenderDomain) continue;
+      const monitorWasReservedOrSent =
+        reservation.status === "reserved" ||
+        reservation.status === "consumed" ||
+        Boolean(reservation.consumedAt || reservation.providerMessageId);
+      if (!monitorWasReservedOrSent) continue;
+      const monitorEmail = reservation.monitorEmail.trim().toLowerCase();
+      if (monitorEmail) domainUsedMonitorEmails.add(monitorEmail);
+    }
+  }
+
+  const candidates: MailboxDeliverabilityMonitorTarget[] = [];
+  for (const account of accounts) {
+    if (account.status !== "active" || !supportsMailbox(account)) continue;
+    const mailboxEmail = account.config.mailbox.email.trim().toLowerCase();
+    if (!mailboxEmail || account.config.mailbox.status !== "connected") continue;
+    if (input.gmailOnly && account.config.mailbox.provider !== "gmail") continue;
+    if (excludedAccountIds.has(account.id) || excludedEmails.has(mailboxEmail)) continue;
+    if (domainUsedMonitorEmails.has(mailboxEmail)) continue;
+    const secrets = await getOutreachAccountSecrets(account.id);
+    if (!secrets || !secrets.mailboxPassword.trim()) continue;
+    candidates.push({
+      kind: "mailbox",
+      account,
+      secrets,
+      brandId: mailboxBrandByAccountId.get(account.id) ?? "",
+    });
+  }
+
+  const dedicated = candidates.filter((candidate) => isDedicatedDeliverabilityMonitor(candidate.account));
+  const pool = dedicated.length ? dedicated : candidates;
+
+  const sortedMailboxTargets = pool.sort((left, right) => {
+    const leftDedicated = isDedicatedDeliverabilityMonitor(left.account) ? 0 : 1;
+    const rightDedicated = isDedicatedDeliverabilityMonitor(right.account) ? 0 : 1;
+    if (leftDedicated !== rightDedicated) return leftDedicated - rightDedicated;
+
+    const leftCrossBrand = left.brandId && left.brandId !== input.runBrandId ? 0 : 1;
+    const rightCrossBrand = right.brandId && right.brandId !== input.runBrandId ? 0 : 1;
+    if (leftCrossBrand !== rightCrossBrand) return leftCrossBrand - rightCrossBrand;
+
+    return left.account.name.localeCompare(right.account.name);
+  });
+  return input.limit && input.limit > 0 ? sortedMailboxTargets.slice(0, input.limit) : sortedMailboxTargets;
+}
+
 async function resolveDeliverabilityMonitorTargets(input: {
   runBrandId: string;
   excludeAccountIds: string[];
@@ -11841,50 +11919,10 @@ async function resolveDeliverabilityMonitorTargets(input: {
     return forwardEmailMonitorTargets;
   }
 
-  const [accounts, brands] = await Promise.all([listOutreachAccounts(), listBrands()]);
-  const assignments = await Promise.all(
-    brands.map(async (brand) => ({
-      brandId: brand.id,
-      assignment: await getBrandOutreachAssignment(brand.id),
-    }))
-  );
-  const mailboxBrandByAccountId = new Map(
-    assignments
-      .filter((row) => row.assignment?.mailboxAccountId)
-      .map((row) => [String(row.assignment?.mailboxAccountId ?? "").trim(), row.brandId] as const)
-  );
-  const excludedAccountIds = new Set(input.excludeAccountIds.map((value) => value.trim()).filter(Boolean));
-  const excludedEmails = new Set(input.excludeEmails.map((value) => value.trim().toLowerCase()).filter(Boolean));
-
-  const candidates: MailboxDeliverabilityMonitorTarget[] = [];
-  for (const account of accounts) {
-    if (account.status !== "active" || !supportsMailbox(account)) continue;
-    const mailboxEmail = account.config.mailbox.email.trim().toLowerCase();
-    if (!mailboxEmail || account.config.mailbox.status !== "connected") continue;
-    if (excludedAccountIds.has(account.id) || excludedEmails.has(mailboxEmail)) continue;
-    const secrets = await getOutreachAccountSecrets(account.id);
-    if (!secrets || !secrets.mailboxPassword.trim()) continue;
-    candidates.push({
-      kind: "mailbox",
-      account,
-      secrets,
-      brandId: mailboxBrandByAccountId.get(account.id) ?? "",
-    });
-  }
-
-  const dedicated = candidates.filter((candidate) => isDedicatedDeliverabilityMonitor(candidate.account));
-  const pool = dedicated.length ? dedicated : candidates;
-
-  const sortedMailboxTargets = pool.sort((left, right) => {
-    const leftDedicated = isDedicatedDeliverabilityMonitor(left.account) ? 0 : 1;
-    const rightDedicated = isDedicatedDeliverabilityMonitor(right.account) ? 0 : 1;
-    if (leftDedicated !== rightDedicated) return leftDedicated - rightDedicated;
-
-    const leftCrossBrand = left.brandId && left.brandId !== input.runBrandId ? 0 : 1;
-    const rightCrossBrand = right.brandId && right.brandId !== input.runBrandId ? 0 : 1;
-    if (leftCrossBrand !== rightCrossBrand) return leftCrossBrand - rightCrossBrand;
-
-    return left.account.name.localeCompare(right.account.name);
+  const sortedMailboxTargets = await resolveMailboxDeliverabilityMonitorTargets({
+    runBrandId: input.runBrandId,
+    excludeAccountIds: input.excludeAccountIds,
+    excludeEmails: input.excludeEmails,
   });
   return forwardEmailConfig?.mode === "prefer"
     ? [...forwardEmailMonitorTargets, ...sortedMailboxTargets]
@@ -11956,6 +11994,19 @@ function readDeliverabilityProbeResults(value: unknown): DeliverabilityProbeMoni
 
 function readDeliverabilityProbeVariant(value: unknown): DeliverabilityProbeVariant {
   return String(value ?? "").trim().toLowerCase() === "baseline" ? "baseline" : "production";
+}
+
+function readDeliverabilityMonitorProvider(value: unknown): DeliverabilityMonitorProviderPreference {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  if (normalized === "forward_email") return "forward_email";
+  if (
+    normalized === "gmail" ||
+    normalized === "gmail_mailbox" ||
+    normalized === "gmail_after_forward_email"
+  ) {
+    return "gmail_mailbox";
+  }
+  return "auto";
 }
 
 function hashDeliverabilityProbeContent(subject: string, body: string) {
@@ -12286,15 +12337,173 @@ function deliverabilityProbeRunAllowsDispatch(probeRun: DeliverabilityProbeRun) 
   return probeRun.status === "completed" && probeRun.placement === "inbox" && probeRun.totalMonitors > 0;
 }
 
+function deliverabilityProbeRunHasMailboxTarget(probeRun: DeliverabilityProbeRun) {
+  return probeRun.monitorTargets.some((target) => !isForwardEmailProbeTarget(target));
+}
+
+async function hasActiveOrRecentGmailProbeForReference(input: {
+  runId: string;
+  senderAccountId: string;
+  fromEmail: string;
+  probeVariant: DeliverabilityProbeVariant;
+  contentHash: string;
+  sourceMessageId: string;
+}) {
+  const [jobs, probeRuns] = await Promise.all([
+    listRunJobs(input.runId, 50),
+    listDeliverabilityProbeRuns({
+      runId: input.runId,
+      senderAccountId: input.senderAccountId,
+      fromEmail: input.fromEmail,
+      probeVariant: input.probeVariant,
+      statuses: ["queued", "sent", "waiting", "completed", "failed"],
+      limit: 50,
+    }),
+  ]);
+
+  const activeGmailJob = jobs.find((job) => {
+    if (job.jobType !== "monitor_deliverability" || !["queued", "running"].includes(job.status)) return false;
+    const payload = asRecord(job.payload);
+    if (readDeliverabilityMonitorProvider(payload.monitorProvider) !== "gmail_mailbox") return false;
+    if (readDeliverabilityProbeVariant(payload.probeVariant) !== input.probeVariant) return false;
+    const senderAccountId = String(payload.senderAccountId ?? "").trim();
+    const fromEmail = String(payload.fromEmail ?? "").trim().toLowerCase();
+    const contentHash = String(payload.contentHash ?? "").trim();
+    const sourceMessageId = String(payload.sourceMessageId ?? "").trim();
+    if (senderAccountId && senderAccountId !== input.senderAccountId) return false;
+    if (fromEmail && fromEmail !== input.fromEmail) return false;
+    if (input.contentHash) return contentHash === input.contentHash;
+    return Boolean(input.sourceMessageId && sourceMessageId === input.sourceMessageId);
+  });
+  if (activeGmailJob) return true;
+
+  return probeRuns.some((probeRun) => {
+    if (!deliverabilityProbeRunHasMailboxTarget(probeRun)) return false;
+    if (!deliverabilityProbeRunMatchesReference(probeRun, input)) return false;
+    if (probeRun.status === "failed" && deliverabilityProbeRunHasNoMeasurement(probeRun)) return false;
+    return deliverabilityProbeRunIsFresh(probeRun);
+  });
+}
+
+async function maybeQueueGmailProbeAfterForwardEmailPass(input: {
+  run: OutreachRun;
+  probeRun: DeliverabilityProbeRun | null;
+  monitorProviderPreference: DeliverabilityMonitorProviderPreference;
+  monitorTargets: DeliverabilityProbeTarget[];
+  aggregate: ReturnType<typeof summarizeDeliverabilityProbeResults>;
+  referenceMessage: DeliverabilityProbeReferenceMessage;
+  probeVariant: DeliverabilityProbeVariant;
+  contentHash: string;
+  senderAccountId: string;
+  senderAccountName: string;
+  senderFromEmail: string;
+  replyToEmail: string;
+  syntheticBaseline: boolean;
+}) {
+  if (input.monitorProviderPreference === "gmail_mailbox") return;
+  if (input.aggregate.placement !== "inbox" || input.aggregate.counts.inbox <= 0) return;
+  if (!input.monitorTargets.length || !input.monitorTargets.every((target) => isForwardEmailProbeTarget(target))) {
+    return;
+  }
+
+  const senderFromEmail = input.senderFromEmail.trim().toLowerCase();
+  const senderDomain = senderDomainFromEmail(senderFromEmail);
+  if (!senderFromEmail || !senderDomain) return;
+
+  const alreadyQueuedOrMeasured = await hasActiveOrRecentGmailProbeForReference({
+    runId: input.run.id,
+    senderAccountId: input.senderAccountId,
+    fromEmail: senderFromEmail,
+    probeVariant: input.probeVariant,
+    contentHash: input.contentHash,
+    sourceMessageId: input.referenceMessage.id,
+  });
+  if (alreadyQueuedOrMeasured) return;
+
+  const gmailTargets = await resolveMailboxDeliverabilityMonitorTargets({
+    runBrandId: input.run.brandId,
+    excludeAccountIds: [input.run.accountId],
+    excludeEmails: [input.replyToEmail, senderFromEmail],
+    gmailOnly: true,
+    excludeSenderDomain: senderDomain,
+    limit: GMAIL_DELIVERABILITY_PROBE_TARGETS_PER_RUN,
+  });
+
+  if (!gmailTargets.length) {
+    await createOutreachEvent({
+      runId: input.run.id,
+      eventType: "deliverability_gmail_probe_skipped",
+      payload: {
+        reason: "Forward Email inboxed, but no fresh Gmail monitor mailbox is available for this sender domain",
+        parentProbeRunId: input.probeRun?.id ?? "",
+        probeVariant: input.probeVariant,
+        sourceMessageId: input.referenceMessage.id,
+        contentHash: input.contentHash,
+        senderAccountId: input.senderAccountId,
+        fromEmail: senderFromEmail,
+        senderDomain,
+      },
+    });
+    return;
+  }
+
+  const gmailProbeToken = generateDeliverabilityProbeToken();
+  const gmailProbeTargets = gmailTargets.map((target) => monitorTargetToProbeTarget(target));
+  const gmailJob = await queueDeliverabilityProbe({
+    runId: input.run.id,
+    executeAfter: nowIso(),
+    force: true,
+    payload: {
+      stage: "send",
+      monitorProvider: "gmail_after_forward_email",
+      parentProbeRunId: input.probeRun?.id ?? "",
+      triggerStage: "autonomous",
+      syntheticBaseline: input.syntheticBaseline,
+      probeToken: gmailProbeToken,
+      probeVariant: input.probeVariant,
+      sourceMessageId: input.referenceMessage.id,
+      sourceMessageStatus: input.referenceMessage.status,
+      sourceType: input.referenceMessage.sourceType,
+      nodeId: input.referenceMessage.nodeId,
+      leadId: input.referenceMessage.leadId,
+      contentHash: input.contentHash,
+      senderAccountId: input.senderAccountId,
+      senderAccountName: input.senderAccountName,
+      fromEmail: senderFromEmail,
+      monitorTargets: gmailProbeTargets,
+    },
+  });
+
+  await createOutreachEvent({
+    runId: input.run.id,
+    eventType: "deliverability_gmail_probe_queued",
+    payload: {
+      reason: "Forward Email inboxed; queued Gmail placement confirmation with an unused Gmail monitor mailbox.",
+      parentProbeRunId: input.probeRun?.id ?? "",
+      jobId: gmailJob.id,
+      probeToken: gmailProbeToken,
+      probeVariant: input.probeVariant,
+      sourceMessageId: input.referenceMessage.id,
+      contentHash: input.contentHash,
+      senderAccountId: input.senderAccountId,
+      fromEmail: senderFromEmail,
+      senderDomain,
+      monitorEmails: gmailProbeTargets.map((target) => target.email),
+    },
+  });
+}
+
 function buildSyntheticDeliverabilityBaselineReference(input: {
   probeToken: string;
+  sourceMessageId?: string;
   contentHash: string;
   senderAccountId: string;
   senderAccountName: string;
   senderFromEmail: string;
 }): DeliverabilityProbeReferenceMessage {
+  const sourceMessageId = String(input.sourceMessageId ?? "").trim();
   return {
-    id: `synthetic_baseline_${input.probeToken}`,
+    id: sourceMessageId || `synthetic_baseline_${input.probeToken}`,
     leadId: "",
     status: "scheduled",
     sourceType: "cadence",
@@ -12908,6 +13117,7 @@ async function processMonitorDeliverabilityJob(job: OutreachJob) {
   const stageRaw = String(payload.stage ?? "send").trim().toLowerCase();
   const stage: DeliverabilityProbeStage = stageRaw === "poll" ? "poll" : "send";
   const probeVariant = readDeliverabilityProbeVariant(payload.probeVariant);
+  const monitorProviderPreference = readDeliverabilityMonitorProvider(payload.monitorProvider);
   const sourceMessageId = String(payload.sourceMessageId ?? "").trim();
   const syntheticBaseline =
     probeVariant === "baseline" &&
@@ -12927,6 +13137,7 @@ async function processMonitorDeliverabilityJob(job: OutreachJob) {
   if (!referenceMessage && syntheticBaseline) {
     referenceMessage = buildSyntheticDeliverabilityBaselineReference({
       probeToken,
+      sourceMessageId,
       contentHash: String(payload.contentHash ?? "").trim(),
       senderAccountId: String(payload.senderAccountId ?? run.accountId).trim(),
       senderAccountName: String(payload.senderAccountName ?? "").trim(),
@@ -13084,6 +13295,15 @@ async function processMonitorDeliverabilityJob(job: OutreachJob) {
       ? resolvedRequestedTargets
       : stage === "poll"
         ? []
+      : monitorProviderPreference === "gmail_mailbox"
+        ? await resolveMailboxDeliverabilityMonitorTargets({
+            runBrandId: run.brandId,
+            excludeAccountIds: [run.accountId, assignment?.mailboxAccountId ?? ""],
+            excludeEmails: [replyToEmail, senderFromEmail],
+            gmailOnly: true,
+            excludeSenderDomain: senderDomainFromEmail(senderFromEmail),
+            limit: GMAIL_DELIVERABILITY_PROBE_TARGETS_PER_RUN,
+          })
       : await resolveDeliverabilityMonitorTargets({
           runBrandId: run.brandId,
           excludeAccountIds: [run.accountId, assignment?.mailboxAccountId ?? ""],
@@ -13103,6 +13323,26 @@ async function processMonitorDeliverabilityJob(job: OutreachJob) {
 
   if (!monitorTargets.length) {
     await releaseForwardEmailProbeTargets(candidateMonitorTargets.map((target) => monitorTargetToProbeTarget(target)));
+    if (monitorProviderPreference === "gmail_mailbox") {
+      await createOutreachEvent({
+        runId: run.id,
+        eventType: "deliverability_gmail_probe_skipped",
+        payload: {
+          reason: candidateMonitorTargets.length
+            ? "No unused Gmail deliverability mailbox remains for this sender domain"
+            : "No Gmail deliverability mailbox is available",
+          probeVariant,
+          probeToken,
+          sourceMessageId: referenceMessage.id,
+          contentHash,
+          senderAccountId: senderChoice.slot.account.id,
+          fromEmail: senderFromEmail,
+          senderDomain: senderDomainFromEmail(senderFromEmail),
+          requestedAfterForwardEmailProbeRunId: String(payload.parentProbeRunId ?? "").trim(),
+        },
+      });
+      return;
+    }
     const monitorUnavailableReason = candidateMonitorTargets.length
       ? "No unused deliverability probe target remains for this sender"
       : "No deliverability probe target is connected";
@@ -13399,6 +13639,7 @@ async function processMonitorDeliverabilityJob(job: OutreachJob) {
       force: true,
       payload: {
         stage: "poll",
+        monitorProvider: monitorProviderPreference === "gmail_mailbox" ? "gmail_after_forward_email" : "auto",
         probeRunId: probeRun?.id ?? "",
         probeVariant,
         probeToken,
@@ -13552,6 +13793,7 @@ async function processMonitorDeliverabilityJob(job: OutreachJob) {
       force: true,
       payload: {
         stage: "poll",
+        monitorProvider: monitorProviderPreference === "gmail_mailbox" ? "gmail_after_forward_email" : "auto",
         probeRunId: probeRun?.id ?? "",
         probeVariant,
         probeToken,
@@ -13627,6 +13869,22 @@ async function processMonitorDeliverabilityJob(job: OutreachJob) {
       summaryText: aggregate.summaryText,
       monitorResults: finalResults,
     },
+  });
+
+  await maybeQueueGmailProbeAfterForwardEmailPass({
+    run,
+    probeRun,
+    monitorProviderPreference,
+    monitorTargets: monitorTargetsForPoll,
+    aggregate,
+    referenceMessage,
+    probeVariant,
+    contentHash,
+    senderAccountId: senderChoice.slot.account.id,
+    senderAccountName: senderChoice.slot.account.name,
+    senderFromEmail,
+    replyToEmail,
+    syntheticBaseline,
   });
 
   const senderScorecard = buildSenderDeliverabilityScorecards({

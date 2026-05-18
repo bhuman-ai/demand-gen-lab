@@ -14,6 +14,7 @@ import type {
   ActorCapabilityProfile,
   ConversationFlowGraph,
   ConversationFlowNode,
+  DeliverabilityProbeRun,
   DomainRow,
   LeadAcceptanceDecision,
   LeadQualityPolicy,
@@ -194,7 +195,16 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 const CONVERSATION_TICK_MINUTES = 15;
 const DEFAULT_EXPERIMENT_RUN_LEAD_TARGET = 500;
 const DELIVERABILITY_PROBE_POLL_DELAY_MINUTES = 3;
-const DELIVERABILITY_PROBE_REPEAT_HOURS = 24 * 7;
+const DELIVERABILITY_PROBE_REPEAT_HOURS = (() => {
+  const parsed = Number(process.env.DELIVERABILITY_PROBE_REPEAT_HOURS ?? 24);
+  return Number.isFinite(parsed) ? Math.max(1, parsed) : 24;
+})();
+const DELIVERABILITY_PRE_SEND_GATE_ENABLED =
+  String(process.env.DELIVERABILITY_PRE_SEND_GATE ?? "true").trim().toLowerCase() !== "false";
+const DELIVERABILITY_PRE_SEND_GATE_RECHECK_MINUTES = (() => {
+  const parsed = Number(process.env.DELIVERABILITY_PRE_SEND_GATE_RECHECK_MINUTES ?? 4);
+  return Number.isFinite(parsed) ? Math.max(1, parsed) : 4;
+})();
 const DELIVERABILITY_INTELLIGENCE_REFRESH_HOURS = 6;
 const SELFFUNDED_AWS_APPLICATION_URL = "https://www.selffunded.dev/aws-credits/apply";
 
@@ -362,6 +372,7 @@ async function inferMailboxReplyOutreachContext(input: {
 
 type DeliverabilityProbeStage = "send" | "poll";
 type DeliverabilityProbeVariant = "baseline" | "production";
+type DeliverabilityProbeTriggerStage = "schedule" | "send" | "failover" | "manual" | "autonomous" | "pre_send_gate";
 
 type MailboxDeliverabilityMonitorTarget = {
   kind: "mailbox";
@@ -12119,11 +12130,11 @@ async function queueDeliverabilityProbe(input: {
       if (requestedFromEmail && activeFromEmail && requestedFromEmail !== activeFromEmail) {
         return false;
       }
-      if (requestedSourceMessageId && activeSourceMessageId === requestedSourceMessageId) {
-        return true;
+      if (requestedContentHash) {
+        return activeContentHash === requestedContentHash;
       }
-      if (requestedContentHash && activeContentHash === requestedContentHash) {
-        return true;
+      if (requestedSourceMessageId) {
+        return activeSourceMessageId === requestedSourceMessageId;
       }
       return !requestedSourceMessageId && !requestedContentHash;
     });
@@ -12165,15 +12176,71 @@ async function findRecentDeliverabilityProbeForSender(input: {
       ) {
         return false;
       }
-      if (probeRun.contentHash && input.contentHash && probeRun.contentHash === input.contentHash) {
-        return true;
+      if (input.contentHash) {
+        return probeRun.contentHash === input.contentHash;
       }
-      if (probeRun.sourceMessageId && input.sourceMessageId && probeRun.sourceMessageId === input.sourceMessageId) {
-        return true;
-      }
-      return false;
+      return Boolean(input.sourceMessageId && probeRun.sourceMessageId === input.sourceMessageId);
     }) ?? null
   );
+}
+
+function deliverabilityProbeRunTimestamp(probeRun: DeliverabilityProbeRun) {
+  return toDate(probeRun.completedAt || probeRun.updatedAt || probeRun.createdAt).getTime();
+}
+
+function deliverabilityProbeRunMatchesReference(
+  probeRun: DeliverabilityProbeRun,
+  input: {
+    contentHash: string;
+    sourceMessageId: string;
+  }
+) {
+  if (input.contentHash) {
+    return probeRun.contentHash === input.contentHash;
+  }
+  return Boolean(input.sourceMessageId && probeRun.sourceMessageId === input.sourceMessageId);
+}
+
+function deliverabilityProbeRunHasNoMeasurement(probeRun: DeliverabilityProbeRun) {
+  return (
+    probeRun.status === "failed" &&
+    !probeRun.reservationIds.length &&
+    !probeRun.monitorTargets.length &&
+    !probeRun.results.length
+  );
+}
+
+async function findLatestDeliverabilityProbeForSender(input: {
+  runId: string;
+  senderAccountId: string;
+  fromEmail: string;
+  probeVariant: DeliverabilityProbeVariant;
+  contentHash: string;
+  sourceMessageId: string;
+}) {
+  const probeRuns = await listDeliverabilityProbeRuns({
+    runId: input.runId,
+    senderAccountId: input.senderAccountId,
+    fromEmail: input.fromEmail,
+    probeVariant: input.probeVariant,
+    statuses: ["queued", "sent", "waiting", "completed", "failed"],
+    limit: 50,
+  });
+  return (
+    probeRuns
+      .filter((probeRun) => !deliverabilityProbeRunHasNoMeasurement(probeRun))
+      .filter((probeRun) => deliverabilityProbeRunMatchesReference(probeRun, input))
+      .sort((left, right) => deliverabilityProbeRunTimestamp(right) - deliverabilityProbeRunTimestamp(left))[0] ?? null
+  );
+}
+
+function deliverabilityProbeRunIsFresh(probeRun: DeliverabilityProbeRun) {
+  const elapsed = Date.now() - deliverabilityProbeRunTimestamp(probeRun);
+  return elapsed < DELIVERABILITY_PROBE_REPEAT_HOURS * 60 * 60 * 1000;
+}
+
+function deliverabilityProbeRunAllowsDispatch(probeRun: DeliverabilityProbeRun) {
+  return probeRun.status === "completed" && probeRun.placement === "inbox" && probeRun.totalMonitors > 0;
 }
 
 async function maybeQueueAutomaticDeliverabilityProbeSet(
@@ -12188,7 +12255,7 @@ async function maybeQueueAutomaticDeliverabilityProbeSet(
     senderAccountId: string;
     senderAccountName: string;
     senderFromEmail: string;
-    triggerStage: "schedule" | "send" | "failover";
+    triggerStage: DeliverabilityProbeTriggerStage;
   }
 ) {
   const senderAccountId = input.senderAccountId.trim();
@@ -12282,6 +12349,317 @@ async function maybeQueueScheduledDeliverabilityProbe(run: OutreachRun) {
     senderFromEmail: getOutreachAccountFromEmail(senderSlot.account).trim(),
     triggerStage: "schedule",
   });
+}
+
+export async function requestRunDeliverabilityProbe(input: {
+  runId: string;
+  reason?: string;
+  force?: boolean;
+  manual?: boolean;
+  sourceMessageId?: string;
+  senderAccountId?: string;
+  variants?: DeliverabilityProbeVariant[];
+  triggerStage?: DeliverabilityProbeTriggerStage;
+}): Promise<{
+  ok: boolean;
+  reason: string;
+  jobsQueued: number;
+  runId: string;
+  sourceMessageId: string;
+  senderAccountId: string;
+  fromEmail: string;
+  probeVariants: DeliverabilityProbeVariant[];
+}> {
+  const run = await getOutreachRun(input.runId);
+  if (!run) {
+    return {
+      ok: false,
+      reason: "Run not found",
+      jobsQueued: 0,
+      runId: input.runId,
+      sourceMessageId: "",
+      senderAccountId: "",
+      fromEmail: "",
+      probeVariants: [],
+    };
+  }
+  if (["canceled", "failed", "preflight_failed"].includes(run.status)) {
+    return {
+      ok: false,
+      reason: `Run is ${run.status}`,
+      jobsQueued: 0,
+      runId: run.id,
+      sourceMessageId: "",
+      senderAccountId: "",
+      fromEmail: "",
+      probeVariants: [],
+    };
+  }
+
+  const referenceMessage = await resolveDeliverabilityProbeReferenceMessage({
+    runId: run.id,
+    sourceMessageId: input.sourceMessageId,
+    preferScheduled: true,
+  });
+  if (!referenceMessage) {
+    return {
+      ok: false,
+      reason: "No real scheduled or sent message exists for deliverability probing yet",
+      jobsQueued: 0,
+      runId: run.id,
+      sourceMessageId: "",
+      senderAccountId: "",
+      fromEmail: "",
+      probeVariants: [],
+    };
+  }
+
+  const preferredAccountId =
+    String(input.senderAccountId ?? "").trim() ||
+    referenceMessage.senderAccountId ||
+    run.accountId;
+  const routingContext = await buildRunSenderRoutingContext(run, {
+    preferredAccountId,
+  });
+  const senderSlot =
+    routingContext.senderPoolState.pool.find((slot) => slot.account.id === preferredAccountId) ??
+    routingContext.primarySender ??
+    routingContext.senderPoolState.pool.find((slot) => slot.account.id === run.accountId) ??
+    null;
+  if (!senderSlot) {
+    return {
+      ok: false,
+      reason: "No active sender account is available for deliverability probing",
+      jobsQueued: 0,
+      runId: run.id,
+      sourceMessageId: referenceMessage.id,
+      senderAccountId: preferredAccountId,
+      fromEmail: "",
+      probeVariants: [],
+    };
+  }
+
+  const senderFromEmail = getOutreachAccountFromEmail(senderSlot.account).trim().toLowerCase();
+  if (!senderFromEmail) {
+    return {
+      ok: false,
+      reason: "Selected sender account has no from email for deliverability probing",
+      jobsQueued: 0,
+      runId: run.id,
+      sourceMessageId: referenceMessage.id,
+      senderAccountId: senderSlot.account.id,
+      fromEmail: "",
+      probeVariants: [],
+    };
+  }
+
+  const requestedVariants = Array.from(
+    new Set((input.variants?.length ? input.variants : ["production", "baseline"]).map(readDeliverabilityProbeVariant))
+  );
+  const baselineContentHash = buildDeliverabilityBaselineProbe({
+    brandName: "",
+    senderDomain: senderDomainFromEmail(senderFromEmail),
+    probeToken: "control",
+  }).contentHash;
+  const jobs = [];
+  for (const variant of requestedVariants) {
+    const contentHash = variant === "baseline" ? baselineContentHash : referenceMessage.contentHash;
+    const job = await queueDeliverabilityProbe({
+      runId: run.id,
+      executeAfter: nowIso(),
+      force: input.force,
+      payload: {
+        stage: "send",
+        manual: input.manual === true,
+        triggerStage: input.triggerStage ?? (input.manual ? "manual" : "autonomous"),
+        probeToken: generateDeliverabilityProbeToken(),
+        probeVariant: variant,
+        sourceMessageId: referenceMessage.id,
+        sourceMessageStatus: referenceMessage.status,
+        sourceType: referenceMessage.sourceType,
+        nodeId: referenceMessage.nodeId,
+        leadId: referenceMessage.leadId,
+        contentHash,
+        senderAccountId: senderSlot.account.id,
+        senderAccountName: senderSlot.account.name,
+        fromEmail: senderFromEmail,
+      },
+    });
+    jobs.push(job);
+  }
+
+  const forwardEmailConfig = getForwardEmailProbeConfig();
+  await createOutreachEvent({
+    runId: run.id,
+    eventType: "deliverability_probe_requested",
+    payload: {
+      reason: input.reason?.trim() || (input.manual ? "Requested manually" : "Requested by autonomous deliverability operator"),
+      triggerStage: input.triggerStage ?? (input.manual ? "manual" : "autonomous"),
+      sourceMessageId: referenceMessage.id,
+      sourceMessageStatus: referenceMessage.status,
+      sourceType: referenceMessage.sourceType,
+      nodeId: referenceMessage.nodeId,
+      leadId: referenceMessage.leadId,
+      contentHash: referenceMessage.contentHash,
+      senderAccountId: senderSlot.account.id,
+      senderAccountName: senderSlot.account.name,
+      fromEmail: senderFromEmail,
+      probeVariants: requestedVariants,
+      monitorProvider: forwardEmailConfig ? "forward_email" : "mailbox",
+      forwardEmailMode: forwardEmailConfig?.mode ?? "",
+    },
+  });
+
+  return {
+    ok: true,
+    reason: "Deliverability probes queued",
+    jobsQueued: jobs.length,
+    runId: run.id,
+    sourceMessageId: referenceMessage.id,
+    senderAccountId: senderSlot.account.id,
+    fromEmail: senderFromEmail,
+    probeVariants: requestedVariants,
+  };
+}
+
+async function ensureDispatchDeliverabilityProbeGate(input: {
+  run: OutreachRun;
+  referenceMessage: DeliverabilityProbeReferenceMessage;
+  senderSlot: SenderDispatchSlot;
+}) {
+  if (!DELIVERABILITY_PRE_SEND_GATE_ENABLED) {
+    return { ok: true, reason: "pre-send deliverability gate disabled" };
+  }
+
+  const senderFromEmail = getOutreachAccountFromEmail(input.senderSlot.account).trim().toLowerCase();
+  if (!senderFromEmail) {
+    return { ok: false, reason: "Selected sender account has no from email" };
+  }
+
+  const latestProbe = await findLatestDeliverabilityProbeForSender({
+    runId: input.run.id,
+    senderAccountId: input.senderSlot.account.id,
+    fromEmail: senderFromEmail,
+    probeVariant: "production",
+    contentHash: input.referenceMessage.contentHash,
+    sourceMessageId: input.referenceMessage.id,
+  });
+
+  if (latestProbe) {
+    if (latestProbe.status === "completed" && deliverabilityProbeRunIsFresh(latestProbe)) {
+      if (deliverabilityProbeRunAllowsDispatch(latestProbe)) {
+        return {
+          ok: true,
+          reason: "fresh inbox placement probe passed",
+          probeRunId: latestProbe.id,
+        };
+      }
+      const pauseReason = `Pre-send inbox placement probe did not pass (${latestProbe.summaryText || latestProbe.placement || "unknown placement"})`;
+      await updateOutreachRun(input.run.id, {
+        status: "paused",
+        pauseReason,
+        lastError: pauseReason,
+      });
+      await markExperimentExecutionStatus(input.run.brandId, input.run.campaignId, input.run.experimentId, "paused");
+      await createOutreachEvent({
+        runId: input.run.id,
+        eventType: "run_paused_auto",
+        payload: {
+          reason: "pre_send_deliverability_probe_failed",
+          probeRunId: latestProbe.id,
+          placement: latestProbe.placement,
+          counts: latestProbe.counts,
+          summaryText: latestProbe.summaryText,
+          senderAccountId: input.senderSlot.account.id,
+          fromEmail: senderFromEmail,
+          sourceMessageId: input.referenceMessage.id,
+          contentHash: input.referenceMessage.contentHash,
+        },
+      });
+      return { ok: false, reason: pauseReason, probeRunId: latestProbe.id };
+    }
+
+    if (["queued", "sent", "waiting"].includes(latestProbe.status)) {
+      const waitReason = "Waiting for pre-send inbox placement probe to complete";
+      await createOutreachEvent({
+        runId: input.run.id,
+        eventType: "dispatch_waiting_deliverability_probe",
+        payload: {
+          reason: waitReason,
+          probeRunId: latestProbe.id,
+          probeStatus: latestProbe.status,
+          senderAccountId: input.senderSlot.account.id,
+          fromEmail: senderFromEmail,
+          sourceMessageId: input.referenceMessage.id,
+          contentHash: input.referenceMessage.contentHash,
+        },
+      });
+      await enqueueOutreachJob({
+        runId: input.run.id,
+        jobType: "dispatch_messages",
+        executeAfter: addMinutes(nowIso(), DELIVERABILITY_PRE_SEND_GATE_RECHECK_MINUTES),
+      });
+      return { ok: false, reason: waitReason, probeRunId: latestProbe.id };
+    }
+
+    if (latestProbe.status === "failed" && deliverabilityProbeRunIsFresh(latestProbe)) {
+      const pauseReason = `Pre-send inbox placement probe failed (${latestProbe.lastError || "unknown error"})`;
+      await updateOutreachRun(input.run.id, {
+        status: "paused",
+        pauseReason,
+        lastError: pauseReason,
+      });
+      await markExperimentExecutionStatus(input.run.brandId, input.run.campaignId, input.run.experimentId, "paused");
+      await createOutreachEvent({
+        runId: input.run.id,
+        eventType: "run_paused_auto",
+        payload: {
+          reason: "pre_send_deliverability_probe_failed",
+          probeRunId: latestProbe.id,
+          lastError: latestProbe.lastError,
+          senderAccountId: input.senderSlot.account.id,
+          fromEmail: senderFromEmail,
+          sourceMessageId: input.referenceMessage.id,
+          contentHash: input.referenceMessage.contentHash,
+        },
+      });
+      return { ok: false, reason: pauseReason, probeRunId: latestProbe.id };
+    }
+  }
+
+  const request = await requestRunDeliverabilityProbe({
+    runId: input.run.id,
+    reason: latestProbe
+      ? "Fresh daily pre-send inbox placement probe is due"
+      : "New message content needs pre-send inbox placement proof",
+    senderAccountId: input.senderSlot.account.id,
+    sourceMessageId: input.referenceMessage.id,
+    variants: ["production", "baseline"],
+    triggerStage: "pre_send_gate",
+  });
+  const waitReason = request.ok
+    ? "Queued pre-send inbox placement probe and waiting for result"
+    : request.reason;
+  await createOutreachEvent({
+    runId: input.run.id,
+    eventType: request.ok ? "dispatch_waiting_deliverability_probe" : "deliverability_probe_failed",
+    payload: {
+      reason: waitReason,
+      senderAccountId: input.senderSlot.account.id,
+      fromEmail: senderFromEmail,
+      sourceMessageId: input.referenceMessage.id,
+      contentHash: input.referenceMessage.contentHash,
+      jobsQueued: request.jobsQueued,
+    },
+  });
+  if (request.ok) {
+    await enqueueOutreachJob({
+      runId: input.run.id,
+      jobType: "dispatch_messages",
+      executeAfter: addMinutes(nowIso(), DELIVERABILITY_PRE_SEND_GATE_RECHECK_MINUTES),
+    });
+  }
+  return { ok: false, reason: waitReason };
 }
 
 async function buildRunSenderRoutingContext(run: OutreachRun, input?: { preferredAccountId?: string }) {
@@ -14618,6 +14996,15 @@ async function processDispatchMessagesJob(job: OutreachJob) {
     return;
   }
 
+  const preSendDeliverabilityGate = await ensureDispatchDeliverabilityProbeGate({
+    run,
+    referenceMessage: buildDeliverabilityProbeReferenceMessage(due[0]),
+    senderSlot: primarySender,
+  });
+  if (!preSendDeliverabilityGate.ok) {
+    return;
+  }
+
   const ownerUsage =
     run.ownerType === "campaign"
       ? await countOwnerSentUsage({
@@ -15685,78 +16072,16 @@ export async function updateRunControl(input: {
   }
 
   if (input.action === "probe_deliverability") {
-    const referenceMessage = await resolveDeliverabilityProbeReferenceMessage({
+    const result = await requestRunDeliverabilityProbe({
       runId: run.id,
-      preferScheduled: true,
-    });
-    if (!referenceMessage) {
-      return {
-        ok: false,
-        reason: "No real scheduled or sent message exists for deliverability probing yet",
-      };
-    }
-    const baselineContentHash = referenceMessage.senderFromEmail
-      ? buildDeliverabilityBaselineProbe({
-          brandName: "",
-          senderDomain: senderDomainFromEmail(referenceMessage.senderFromEmail),
-          probeToken: "control",
-        }).contentHash
-      : "";
-    await queueDeliverabilityProbe({
-      runId: run.id,
-      executeAfter: nowIso(),
+      reason: input.reason?.trim() || "Requested by user",
       force: true,
-      payload: {
-        stage: "send",
-        manual: true,
-        probeToken: generateDeliverabilityProbeToken(),
-        probeVariant: "production",
-        sourceMessageId: referenceMessage.id,
-        sourceMessageStatus: referenceMessage.status,
-        sourceType: referenceMessage.sourceType,
-        nodeId: referenceMessage.nodeId,
-        leadId: referenceMessage.leadId,
-        contentHash: referenceMessage.contentHash,
-        senderAccountId: referenceMessage.senderAccountId,
-        senderAccountName: referenceMessage.senderAccountName,
-        fromEmail: referenceMessage.senderFromEmail,
-      },
+      manual: true,
+      senderAccountId: input.senderAccountId,
+      variants: ["production", "baseline"],
+      triggerStage: "manual",
     });
-    await queueDeliverabilityProbe({
-      runId: run.id,
-      executeAfter: nowIso(),
-      force: true,
-      payload: {
-        stage: "send",
-        manual: true,
-        probeToken: generateDeliverabilityProbeToken(),
-        probeVariant: "baseline",
-        sourceMessageId: referenceMessage.id,
-        sourceMessageStatus: referenceMessage.status,
-        sourceType: referenceMessage.sourceType,
-        nodeId: referenceMessage.nodeId,
-        leadId: referenceMessage.leadId,
-        contentHash: baselineContentHash,
-        senderAccountId: referenceMessage.senderAccountId,
-        senderAccountName: referenceMessage.senderAccountName,
-        fromEmail: referenceMessage.senderFromEmail,
-      },
-    });
-    await createOutreachEvent({
-      runId: run.id,
-      eventType: "deliverability_probe_requested",
-      payload: {
-        reason: input.reason?.trim() || "Requested by user",
-        sourceMessageId: referenceMessage.id,
-        sourceMessageStatus: referenceMessage.status,
-        sourceType: referenceMessage.sourceType,
-        nodeId: referenceMessage.nodeId,
-        leadId: referenceMessage.leadId,
-        contentHash: referenceMessage.contentHash,
-        probeVariants: ["baseline", "production"],
-      },
-    });
-    return { ok: true, reason: "Deliverability probes queued" };
+    return { ok: result.ok, reason: result.reason };
   }
 
   if (input.action === "resume_sender_deliverability") {

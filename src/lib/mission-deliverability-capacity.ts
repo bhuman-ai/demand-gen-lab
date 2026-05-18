@@ -10,11 +10,13 @@ import {
   getOutreachProvisioningSettings,
   getOutreachProvisioningSettingsSecrets,
 } from "@/lib/outreach-provider-settings";
+import { getForwardEmailProbeConfig } from "@/lib/forward-email-client";
 import {
   provisionSender,
   selectAvailableMailpoolDomain,
   type MailpoolDomainSelection,
 } from "@/lib/outreach-provisioning";
+import { requestRunDeliverabilityProbe } from "@/lib/outreach-runtime";
 import { resolveLlmModel } from "@/lib/llm-router";
 import { createMissionAgentDecision, createMissionEvent } from "@/lib/mission-data";
 import { inspectMissionDeliverability } from "@/lib/mission-learning";
@@ -30,6 +32,7 @@ type CapacityResult = {
 type MissionDeliverabilityToolName =
   | "inspect_state"
   | "assign_sender"
+  | "run_delivery_probe"
   | "provision_mailpool_sender"
   | "wait_for_warmup"
   | "block_for_policy";
@@ -76,6 +79,7 @@ type MissionDeliverabilitySnapshot = {
     status: Mission["status"];
     websiteUrl: string;
     targetCustomerText: string;
+    currentRunId: string;
     approvedPlan: MissionPlan;
   };
   brand: {
@@ -114,6 +118,13 @@ type MissionDeliverabilitySnapshot = {
     mailpoolWebhookConfigured: boolean;
     deliverabilityProvider: string;
   };
+  probes: {
+    forwardEmailConfigured: boolean;
+    forwardEmailMode: string;
+    forwardEmailDomain: string;
+    cadenceHours: number;
+    preSendGateEnabled: boolean;
+  };
   guardrails: {
     canAutoProvisionSender: boolean;
     canAutoBuyDomain: boolean;
@@ -135,6 +146,7 @@ type ToolExecutionResult = {
 const TOOL_NAMES: MissionDeliverabilityToolName[] = [
   "inspect_state",
   "assign_sender",
+  "run_delivery_probe",
   "provision_mailpool_sender",
   "wait_for_warmup",
   "block_for_policy",
@@ -142,6 +154,11 @@ const TOOL_NAMES: MissionDeliverabilityToolName[] = [
 
 function nowIso() {
   return new Date().toISOString();
+}
+
+function deliverabilityProbeCadenceHours() {
+  const parsed = Number(process.env.DELIVERABILITY_PROBE_REPEAT_HOURS ?? 24);
+  return Number.isFinite(parsed) ? Math.max(1, parsed) : 24;
 }
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -214,7 +231,7 @@ function extractResponseText(payload: unknown) {
 }
 
 function riskForTool(toolName: MissionDeliverabilityToolName): MissionRiskLevel {
-  if (toolName === "assign_sender" || toolName === "provision_mailpool_sender") return "guarded_write";
+  if (toolName === "assign_sender" || toolName === "provision_mailpool_sender" || toolName === "run_delivery_probe") return "guarded_write";
   if (toolName === "block_for_policy") return "blocked";
   return "read";
 }
@@ -223,6 +240,13 @@ function allowedToolNames(snapshot: MissionDeliverabilitySnapshot): MissionDeliv
   const names: MissionDeliverabilityToolName[] = ["inspect_state", "wait_for_warmup", "block_for_policy"];
   if (snapshot.senders.some((sender) => sender.status === "active" && sender.fromEmail)) {
     names.push("assign_sender");
+  }
+  if (
+    snapshot.probes.forwardEmailConfigured &&
+    snapshot.mission.currentRunId &&
+    snapshot.senders.some((sender) => sender.status === "active" && sender.fromEmail && sender.assigned)
+  ) {
+    names.push("run_delivery_probe");
   }
   if (
     snapshot.guardrails.canAutoProvisionSender &&
@@ -301,6 +325,7 @@ async function buildMissionDeliverabilitySnapshot(input: {
     })
     .filter((sender) => sender.fromEmail || sender.assigned || sender.launch);
   const activeProvisioningSenderCount = launches.filter(launchIsActiveCapacity).length;
+  const forwardEmailProbeConfig = getForwardEmailProbeConfig();
   const guardrailsWithoutAllowed = {
     canAutoProvisionSender:
       input.mission.approvalPolicy.allowAutoProvisioning &&
@@ -321,6 +346,7 @@ async function buildMissionDeliverabilitySnapshot(input: {
       status: input.mission.status,
       websiteUrl: input.mission.websiteUrl,
       targetCustomerText: input.mission.targetCustomerText,
+      currentRunId: input.mission.currentRunId,
       approvedPlan: input.approvedPlan,
     },
     brand: compactBrand(brand, input.mission),
@@ -352,6 +378,14 @@ async function buildMissionDeliverabilitySnapshot(input: {
       mailpoolWebhookConfigured: Boolean(settings.mailpool.webhookUrl && secrets.mailpoolWebhookSecret),
       deliverabilityProvider: settings.deliverability.provider,
     },
+    probes: {
+      forwardEmailConfigured: Boolean(forwardEmailProbeConfig),
+      forwardEmailMode: forwardEmailProbeConfig?.mode ?? "",
+      forwardEmailDomain: forwardEmailProbeConfig?.domain ?? "",
+      cadenceHours: deliverabilityProbeCadenceHours(),
+      preSendGateEnabled:
+        String(process.env.DELIVERABILITY_PRE_SEND_GATE ?? "true").trim().toLowerCase() !== "false",
+    },
     guardrails: guardrailsWithoutAllowed,
   };
   snapshot.guardrails.allowedToolNames = allowedToolNames(snapshot);
@@ -371,6 +405,16 @@ function buildToolCatalog() {
       riskLevel: "guarded_write",
       description: "Assign an exact existing active sender account to the mission. The AI must choose accountId from snapshot.senders.",
       input: { accountId: "existing active sender account id", reason: "why this sender is the right next move" },
+    },
+    {
+      name: "run_delivery_probe",
+      riskLevel: "guarded_write",
+      description:
+        "Queue a fresh Forward Email inbox placement probe for the current run. Use this when sender readiness is uncertain, a daily proof is due, new messaging exists, or delivery proof should be gathered before continuing.",
+      input: {
+        senderAccountId: "optional assigned active sender account id; omit to use the current run sender",
+        reason: "why this probe is needed now",
+      },
     },
     {
       name: "provision_mailpool_sender",
@@ -405,7 +449,7 @@ function buildMissionOperatorPrompt(snapshot: MissionDeliverabilitySnapshot) {
     "You are the LastB2B mission deliverability operator.",
     "You are the decision-maker. The code will not pick a sender, domain, mailbox name, provider path, or next move for you.",
     "Choose exactly one tool from the tool catalog. If you choose a write tool, provide exact IDs/domains/local parts.",
-    "You may create new sender capacity when guardrails allow it. You may also wait, inspect, or block if that is the correct move.",
+    "You may create new sender capacity when guardrails allow it. You may request fresh Forward Email inbox placement probes when a current run exists. You may also wait, inspect, or block if that is the correct move.",
     "Hard guardrails are not optional: no sending before deliverability is ready, no domain purchase unless policy allows it, no provisioning above capacity, no spending above maxAutoDomainSpendUsd, and no invented account IDs.",
     "Do not output a generic plan. Select the next concrete tool call for this mission tick.",
     "Keep rationale, expectedOutcome, and toolInputJson concise.",
@@ -769,6 +813,57 @@ async function executeProvisionMailpoolSender(input: {
   }
 }
 
+async function executeRunDeliveryProbe(input: {
+  mission: Mission;
+  plan: MissionDeliverabilityAgentPlan;
+}): Promise<ToolExecutionResult> {
+  const runId = input.mission.currentRunId.trim();
+  if (!runId) {
+    return {
+      ok: false,
+      summary: "No current run exists for this mission yet, so there is no scheduled message to probe.",
+      riskLevel: "blocked",
+      result: { runId },
+    };
+  }
+
+  const result = await requestRunDeliverabilityProbe({
+    runId,
+    reason: asString(input.plan.toolInput.reason) || input.plan.rationale,
+    senderAccountId: asString(input.plan.toolInput.senderAccountId) || undefined,
+    variants: ["production", "baseline"],
+    triggerStage: "autonomous",
+  });
+  await createMissionEvent({
+    missionId: input.mission.id,
+    brandId: input.mission.brandId,
+    eventType: result.ok ? "ai_delivery_probe_queued" : "ai_delivery_probe_blocked",
+    summary: result.reason,
+    payload: {
+      runId,
+      senderAccountId: result.senderAccountId,
+      fromEmail: result.fromEmail,
+      sourceMessageId: result.sourceMessageId,
+      probeVariants: result.probeVariants,
+      jobsQueued: result.jobsQueued,
+    },
+  });
+
+  return {
+    ok: result.ok,
+    summary: result.reason,
+    riskLevel: result.ok ? "guarded_write" : "blocked",
+    result: {
+      runId,
+      sourceMessageId: result.sourceMessageId,
+      senderAccountId: result.senderAccountId,
+      fromEmail: result.fromEmail,
+      probeVariants: result.probeVariants,
+      jobsQueued: result.jobsQueued,
+    },
+  };
+}
+
 async function executeMissionTool(input: {
   mission: Mission;
   approvedPlan: MissionPlan;
@@ -792,6 +887,9 @@ async function executeMissionTool(input: {
   }
   if (input.plan.toolName === "provision_mailpool_sender") {
     return executeProvisionMailpoolSender(input);
+  }
+  if (input.plan.toolName === "run_delivery_probe") {
+    return executeRunDeliveryProbe({ mission: input.mission, plan: input.plan });
   }
   if (input.plan.toolName === "wait_for_warmup") {
     const reason = asString(input.plan.toolInput.reason) || input.plan.rationale;

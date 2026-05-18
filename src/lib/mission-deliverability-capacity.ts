@@ -912,7 +912,7 @@ function buildToolCatalog() {
       name: "run_delivery_probe",
       riskLevel: "guarded_write",
       description:
-        "Queue a fresh Forward Email inbox placement probe for the current run. If campaign messages exist, probe production and baseline content; otherwise probe a neutral baseline message for sender warmup. Use this when sender readiness is uncertain, a daily proof is due, new messaging exists, or delivery proof should be gathered before continuing.",
+        "Queue a fresh Forward Email inbox placement probe for the current run. If campaign messages exist, probe production and baseline content; otherwise probe a neutral baseline message for sender warmup. Use this when sender readiness is uncertain, a daily proof is due, new messaging exists, or delivery proof should be gathered before continuing. If senderAccountId is provided, it must be chosen from snapshot.senders where deliveryCapable is true; currentRun.accountId is not valid unless it also appears there.",
       input: {
         senderAccountId: "optional assigned active sender account id; omit to use the current run sender",
         reason: "why this probe is needed now",
@@ -955,6 +955,7 @@ function buildMissionOperatorPrompt(snapshot: MissionDeliverabilitySnapshot) {
     "Operating policy: Forward Email is the cheap first gate. Gmail/mailbox seed placement is the expensive confirmation only after Forward Email inboxes and an approved unused Gmail seed is available for this sender domain.",
     "Do not burn Gmail seed capacity when Forward Email has not inboxed. Do not request another Gmail-style confirmation when probeMemory already shows a fresh active or completed Gmail/mailbox probe for the same sender/content.",
     "If Gmail/mailbox placement is spam, all_mail_only, not_found, or failed, do not treat the sender as ready even if Forward Email passed. Prefer a healthier sender, wait for warmup/cooldown, or provision capacity if policy allows.",
+    "When selecting senderAccountId for assign_sender or run_delivery_probe, use only exact accountId values from snapshot.senders where deliveryCapable is true. Do not select currentRun.accountId unless that exact ID is also present in snapshot.senders and deliveryCapable is true.",
     "Approved Gmail seed usage is shown in gmailSeeds. Inbox cleanup/archiving for approved Gmail seed inbox hits happens automatically after placement inspection; do not ask the user to clean mailboxes.",
     "Hard guardrails are not optional: no sending before deliverability is ready, no domain purchase unless policy allows it, no provisioning above capacity, no spending above maxAutoDomainSpendUsd, and no invented account IDs.",
     "Do not output a generic plan. Select the next concrete tool call for this mission tick.",
@@ -1334,6 +1335,7 @@ async function executeProvisionMailpoolSender(input: {
 
 async function executeRunDeliveryProbe(input: {
   mission: Mission;
+  snapshot: MissionDeliverabilitySnapshot;
   plan: MissionDeliverabilityAgentPlan;
 }): Promise<ToolExecutionResult> {
   const runId = input.mission.currentRunId.trim();
@@ -1345,11 +1347,28 @@ async function executeRunDeliveryProbe(input: {
       result: { runId },
     };
   }
+  const requestedSenderAccountId = asString(input.plan.toolInput.senderAccountId);
+  if (requestedSenderAccountId) {
+    const requestedSender = input.snapshot.senders.find((sender) => sender.accountId === requestedSenderAccountId) ?? null;
+    if (!requestedSender || !requestedSender.deliveryCapable) {
+      return {
+        ok: false,
+        summary: "AI selected a sender account that is not delivery-capable in the current snapshot.",
+        riskLevel: "blocked",
+        result: {
+          requestedSenderAccountId,
+          validSenderAccountIds: input.snapshot.senders
+            .filter((sender) => sender.deliveryCapable)
+            .map((sender) => sender.accountId),
+        },
+      };
+    }
+  }
 
   const result = await requestRunDeliverabilityProbe({
     runId,
     reason: asString(input.plan.toolInput.reason) || input.plan.rationale,
-    senderAccountId: asString(input.plan.toolInput.senderAccountId) || undefined,
+    senderAccountId: requestedSenderAccountId || undefined,
     variants: ["production", "baseline"],
     triggerStage: "autonomous",
   });
@@ -1408,7 +1427,7 @@ async function executeMissionTool(input: {
     return executeProvisionMailpoolSender(input);
   }
   if (input.plan.toolName === "run_delivery_probe") {
-    return executeRunDeliveryProbe({ mission: input.mission, plan: input.plan });
+    return executeRunDeliveryProbe({ mission: input.mission, snapshot: input.snapshot, plan: input.plan });
   }
   if (input.plan.toolName === "wait_for_warmup") {
     const reason = asString(input.plan.toolInput.reason) || input.plan.rationale;

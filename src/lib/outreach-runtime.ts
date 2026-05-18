@@ -12406,7 +12406,19 @@ export async function requestRunDeliverabilityProbe(input: {
       probeVariants: [],
     };
   }
-  if (["canceled", "failed", "preflight_failed"].includes(run.status)) {
+  const referenceMessage = await resolveDeliverabilityProbeReferenceMessage({
+    runId: run.id,
+    sourceMessageId: input.sourceMessageId,
+    preferScheduled: true,
+  });
+  const requestedVariants = Array.from(
+    new Set((input.variants?.length ? input.variants : ["production", "baseline"]).map(readDeliverabilityProbeVariant))
+  );
+  const canRunSyntheticBaseline = !referenceMessage && requestedVariants.includes("baseline");
+  const canProbeRunStatus =
+    !["canceled", "failed"].includes(run.status) &&
+    (run.status !== "preflight_failed" || canRunSyntheticBaseline);
+  if (!canProbeRunStatus) {
     return {
       ok: false,
       reason: `Run is ${run.status}`,
@@ -12418,16 +12430,6 @@ export async function requestRunDeliverabilityProbe(input: {
       probeVariants: [],
     };
   }
-
-  const referenceMessage = await resolveDeliverabilityProbeReferenceMessage({
-    runId: run.id,
-    sourceMessageId: input.sourceMessageId,
-    preferScheduled: true,
-  });
-  const requestedVariants = Array.from(
-    new Set((input.variants?.length ? input.variants : ["production", "baseline"]).map(readDeliverabilityProbeVariant))
-  );
-  const canRunSyntheticBaseline = !referenceMessage && requestedVariants.includes("baseline");
 
   const assignment = await getBrandOutreachAssignment(run.brandId);
   const preferredAccountId =

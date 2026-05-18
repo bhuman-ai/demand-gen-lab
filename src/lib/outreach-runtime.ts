@@ -510,6 +510,43 @@ type SenderDispatchSlot = {
   policy: SenderCapacityPolicy;
 };
 
+function buildProbeSenderPolicy(account: ResolvedAccount): SenderCapacityPolicy {
+  const fromEmail = getOutreachAccountFromEmail(account).trim();
+  return {
+    warmupDay: 0,
+    warmupStage: "probe",
+    baseDailyCap: 1,
+    baseHourlyCap: 1,
+    maxDailyCap: 1,
+    dailyCap: 1,
+    hourlyCap: 1,
+    automationFactor: 1,
+    launchFactor: 1,
+    healthFactor: 1,
+    deliverabilityFactor: 1,
+    domain: senderDomainFromEmail(fromEmail),
+    domainActiveSenderRank: 1,
+    activeSenderLimitPerDomain: Number.MAX_SAFE_INTEGER,
+    domainLimitBlocked: false,
+    summary: "Probe-only sender policy",
+  };
+}
+
+async function resolveProbeSenderSlot(accountId: string): Promise<SenderDispatchSlot | null> {
+  const normalizedAccountId = accountId.trim();
+  if (!normalizedAccountId) return null;
+  const account = await getOutreachAccount(normalizedAccountId);
+  if (!account || account.status !== "active" || account.accountType === "mailbox") return null;
+  const secrets = await getOutreachAccountSecrets(account.id);
+  if (!secrets) return null;
+  if (!supportsCustomerIoDelivery(account) && !supportsMailpoolDelivery(account, secrets)) return null;
+  return {
+    account,
+    secrets,
+    policy: buildProbeSenderPolicy(account),
+  };
+}
+
 type SenderUsageMap = Record<string, { dailySent: number; hourlySent: number }>;
 
 const DEFAULT_BUSINESS_WINDOW: BusinessWindowPolicy = {
@@ -12440,11 +12477,14 @@ export async function requestRunDeliverabilityProbe(input: {
   const routingContext = await buildRunSenderRoutingContext(run, {
     preferredAccountId,
   });
-  const senderSlot =
+  let senderSlot =
     routingContext.senderPoolState.pool.find((slot) => slot.account.id === preferredAccountId) ??
     routingContext.primarySender ??
     routingContext.senderPoolState.pool.find((slot) => slot.account.id === run.accountId) ??
     null;
+  if (!senderSlot && canRunSyntheticBaseline) {
+    senderSlot = await resolveProbeSenderSlot(preferredAccountId);
+  }
   if (!senderSlot) {
     return {
       ok: false,
@@ -12910,7 +12950,14 @@ async function processMonitorDeliverabilityJob(job: OutreachJob) {
     timeZone: run.timezone || DEFAULT_TIMEZONE,
     businessWindow,
   });
-  if (!senderPoolState.pool.length) {
+  const fallbackProbeSenderSlot =
+    syntheticBaseline ? await resolveProbeSenderSlot(preferredSenderAccountId) : null;
+  const probeSenderPool = senderPoolState.pool.length
+    ? senderPoolState.pool
+    : fallbackProbeSenderSlot
+      ? [fallbackProbeSenderSlot]
+      : [];
+  if (!probeSenderPool.length) {
     await createOutreachEvent({
       runId: run.id,
       eventType: "deliverability_probe_failed",
@@ -12926,18 +12973,18 @@ async function processMonitorDeliverabilityJob(job: OutreachJob) {
   const strictSenderAccountId =
     String(payload.senderAccountId ?? "").trim() || referenceMessage.senderAccountId;
   const strictSenderSlot = strictSenderAccountId
-    ? senderPoolState.pool.find((slot) => slot.account.id === strictSenderAccountId) ?? null
+    ? probeSenderPool.find((slot) => slot.account.id === strictSenderAccountId) ?? null
     : null;
   const senderChoice =
     strictSenderSlot
       ? { slot: strictSenderSlot }
       : pickSenderForMessage({
-          pool: senderPoolState.pool,
+          pool: probeSenderPool,
           usage: senderUsage,
           preferredAccountId: preferredSenderAccountId,
         }) ??
-        senderPoolState.pool.find((slot) => slot.account.id === preferredSenderAccountId) ??
-        senderPoolState.pool[0];
+        probeSenderPool.find((slot) => slot.account.id === preferredSenderAccountId) ??
+        probeSenderPool[0];
   if (strictSenderAccountId && !strictSenderSlot) {
     await createOutreachEvent({
       runId: run.id,

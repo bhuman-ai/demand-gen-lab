@@ -452,6 +452,19 @@ export async function startMission(input: {
     approvedPlan,
     brandName: brand.name,
   });
+  await ensureMissionConversationMap({
+    mission: updatedMission,
+    approvedPlan,
+    brandName: brand.name,
+  }).catch(async (error) => {
+    await createMissionEvent({
+      missionId: updatedMission.id,
+      brandId: updatedMission.brandId,
+      eventType: "conversation_map_auto_publish_failed",
+      summary: error instanceof Error ? error.message : "Failed to auto-publish Conversation Map.",
+      payload: {},
+    });
+  });
 
   if (shouldWaitForDeliverability(deliverabilityState.stage)) {
     await createMissionEvent({
@@ -493,12 +506,28 @@ export async function runMissionAutopilotTick(limit = 10) {
         approvedPlan: mission.approvedPlan,
       });
       const deliverabilityState = capacity.deliverabilityState;
-      const updatedMission =
+      let updatedMission =
         (await updateMission(mission.brandId, mission.id, {
           deliverabilityState,
           status: shouldWaitForDeliverability(deliverabilityState.stage) ? "deliverability_blocked" : "starting",
           lastError: shouldWaitForDeliverability(deliverabilityState.stage) ? deliverabilityState.primaryBlocker : "",
         })) ?? mission;
+      updatedMission = await ensureMissionRuntime({
+        mission: updatedMission,
+        approvedPlan: updatedMission.approvedPlan,
+      });
+      await ensureMissionConversationMap({
+        mission: updatedMission,
+        approvedPlan: updatedMission.approvedPlan,
+      }).catch(async (error) => {
+        await createMissionEvent({
+          missionId: updatedMission.id,
+          brandId: updatedMission.brandId,
+          eventType: "conversation_map_auto_publish_failed",
+          summary: error instanceof Error ? error.message : "Failed to auto-publish Conversation Map.",
+          payload: {},
+        });
+      });
 
       if (shouldWaitForDeliverability(deliverabilityState.stage)) {
         rows.push({

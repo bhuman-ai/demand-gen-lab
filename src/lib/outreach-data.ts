@@ -1423,19 +1423,36 @@ function mapCustomerIoProfileAdmissionRow(input: unknown): CustomerIoProfileAdmi
 
 function mapDeliverabilityProbeTarget(input: unknown): DeliverabilityProbeTarget {
   const row = asRecord(input);
+  const provider = String(row.provider ?? "").trim();
   return {
     reservationId: String(row.reservation_id ?? row.reservationId ?? "").trim() || undefined,
     accountId: String(row.account_id ?? row.accountId ?? "").trim(),
     email: String(row.email ?? "").trim().toLowerCase(),
+    provider: provider === "forward_email" ? "forward_email" : provider === "mailbox" ? "mailbox" : undefined,
     providerMessageId: String(row.provider_message_id ?? row.providerMessageId ?? "").trim() || undefined,
+    forwardEmailDomain: String(row.forward_email_domain ?? row.forwardEmailDomain ?? "").trim().toLowerCase() || undefined,
+    forwardEmailAliasId: String(row.forward_email_alias_id ?? row.forwardEmailAliasId ?? "").trim() || undefined,
+    forwardEmailAliasName: String(row.forward_email_alias_name ?? row.forwardEmailAliasName ?? "").trim() || undefined,
+    imapHost: String(row.imap_host ?? row.imapHost ?? "").trim() || undefined,
+    imapPort: Number(row.imap_port ?? row.imapPort ?? 0) || undefined,
+    imapSecure:
+      row.imap_secure !== undefined || row.imapSecure !== undefined
+        ? Boolean(row.imap_secure ?? row.imapSecure)
+        : undefined,
+    imapUsername: String(row.imap_username ?? row.imapUsername ?? "").trim() || undefined,
+    imapPasswordEncrypted:
+      String(row.imap_password_encrypted ?? row.imapPasswordEncrypted ?? "").trim() || undefined,
+    expiresAt: String(row.expires_at ?? row.expiresAt ?? "").trim() || undefined,
   };
 }
 
 function mapDeliverabilityProbeMonitorResult(input: unknown): DeliverabilityProbeMonitorResult {
   const row = asRecord(input);
+  const provider = String(row.provider ?? "").trim();
   return {
     accountId: String(row.account_id ?? row.accountId ?? "").trim(),
     email: String(row.email ?? "").trim().toLowerCase(),
+    provider: provider === "forward_email" ? "forward_email" : provider === "mailbox" ? "mailbox" : undefined,
     placement: String(row.placement ?? "unknown").trim(),
     matchedMailbox: String(row.matched_mailbox ?? row.matchedMailbox ?? "").trim(),
     matchedUid: Math.max(0, Number(row.matched_uid ?? row.matchedUid ?? 0) || 0),

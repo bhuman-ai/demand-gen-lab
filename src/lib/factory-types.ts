@@ -1124,6 +1124,7 @@ export type DeliverabilityProbeVariant = "baseline" | "production";
 export type DeliverabilityProbeStage = "send" | "poll";
 export type DeliverabilityProbeRunStatus = "queued" | "sent" | "waiting" | "completed" | "failed";
 export type DeliverabilitySeedReservationStatus = "reserved" | "consumed" | "released";
+export type DeliverabilityProbeTargetProvider = "mailbox" | "forward_email";
 
 export type WarmupSeedReservationStatus = "reserved" | "released";
 
@@ -1131,12 +1132,23 @@ export type DeliverabilityProbeTarget = {
   reservationId?: string;
   accountId: string;
   email: string;
+  provider?: DeliverabilityProbeTargetProvider;
   providerMessageId?: string;
+  forwardEmailDomain?: string;
+  forwardEmailAliasId?: string;
+  forwardEmailAliasName?: string;
+  imapHost?: string;
+  imapPort?: number;
+  imapSecure?: boolean;
+  imapUsername?: string;
+  imapPasswordEncrypted?: string;
+  expiresAt?: string;
 };
 
 export type DeliverabilityProbeMonitorResult = {
   accountId: string;
   email: string;
+  provider?: DeliverabilityProbeTargetProvider;
   placement: string;
   matchedMailbox: string;
   matchedUid: number;

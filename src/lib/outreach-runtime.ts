@@ -148,6 +148,13 @@ import { admitCustomerIoProfileForSend } from "@/lib/outreach-customerio-budget"
 import { resolveLlmModel } from "@/lib/llm-router";
 import { inspectMailboxPlacement, listInboxMessages, type MailboxPlacementVerdict } from "@/lib/mailbox-imap";
 import {
+  allocateForwardEmailProbeTargets,
+  decryptForwardEmailProbePassword,
+  isForwardEmailProbeTarget,
+  releaseForwardEmailProbeTargets,
+} from "@/lib/forward-email-probes";
+import { getForwardEmailProbeConfig } from "@/lib/forward-email-client";
+import {
   getOutreachProvisioningSettings,
   getOutreachProvisioningSettingsSecrets,
   updateOutreachProvisioningSettings,
@@ -356,28 +363,71 @@ async function inferMailboxReplyOutreachContext(input: {
 type DeliverabilityProbeStage = "send" | "poll";
 type DeliverabilityProbeVariant = "baseline" | "production";
 
-type DeliverabilityMonitorTarget = {
+type MailboxDeliverabilityMonitorTarget = {
+  kind: "mailbox";
   account: ResolvedAccount;
   secrets: ResolvedSecrets;
   brandId: string;
 };
 
+type ForwardEmailDeliverabilityMonitorTarget = {
+  kind: "forward_email";
+  target: DeliverabilityProbeTarget;
+  brandId: string;
+};
+
+type DeliverabilityMonitorTarget = MailboxDeliverabilityMonitorTarget | ForwardEmailDeliverabilityMonitorTarget;
+
 type DeliverabilityProbeTarget = {
   reservationId?: string;
   accountId: string;
   email: string;
+  provider?: "mailbox" | "forward_email";
   providerMessageId?: string;
+  forwardEmailDomain?: string;
+  forwardEmailAliasId?: string;
+  forwardEmailAliasName?: string;
+  imapHost?: string;
+  imapPort?: number;
+  imapSecure?: boolean;
+  imapUsername?: string;
+  imapPasswordEncrypted?: string;
+  expiresAt?: string;
 };
 
 type DeliverabilityProbeMonitorResult = {
   accountId: string;
   email: string;
+  provider?: "mailbox" | "forward_email";
   placement: MailboxPlacementVerdict;
   matchedMailbox: string;
   matchedUid: number;
   ok: boolean;
   error: string;
 };
+
+function monitorTargetAccountId(target: DeliverabilityMonitorTarget) {
+  return target.kind === "forward_email" ? target.target.accountId : target.account.id;
+}
+
+function monitorTargetEmail(target: DeliverabilityMonitorTarget) {
+  return target.kind === "forward_email"
+    ? target.target.email.trim().toLowerCase()
+    : target.account.config.mailbox.email.trim().toLowerCase();
+}
+
+function monitorTargetProvider(target: DeliverabilityMonitorTarget) {
+  return target.kind === "forward_email" ? ("forward_email" as const) : ("mailbox" as const);
+}
+
+function monitorTargetToProbeTarget(target: DeliverabilityMonitorTarget): DeliverabilityProbeTarget {
+  if (target.kind === "forward_email") return target.target;
+  return {
+    provider: "mailbox",
+    accountId: target.account.id,
+    email: target.account.config.mailbox.email.trim().toLowerCase(),
+  };
+}
 
 type DeliverabilityProbeReferenceMessage = {
   id: string;
@@ -11722,7 +11772,27 @@ async function resolveDeliverabilityMonitorTargets(input: {
   runBrandId: string;
   excludeAccountIds: string[];
   excludeEmails: string[];
+  probeToken: string;
 }): Promise<DeliverabilityMonitorTarget[]> {
+  const forwardEmailConfig = getForwardEmailProbeConfig();
+  let forwardEmailTargets: DeliverabilityProbeTarget[] = [];
+  if (forwardEmailConfig) {
+    try {
+      forwardEmailTargets =
+        (await allocateForwardEmailProbeTargets({ probeToken: input.probeToken }))?.targets ?? [];
+    } catch (error) {
+      if (forwardEmailConfig.mode === "only") throw error;
+    }
+  }
+  const forwardEmailMonitorTargets = forwardEmailTargets.map((target) => ({
+    kind: "forward_email" as const,
+    target,
+    brandId: "",
+  }));
+  if (forwardEmailConfig?.mode === "only") {
+    return forwardEmailMonitorTargets;
+  }
+
   const [accounts, brands] = await Promise.all([listOutreachAccounts(), listBrands()]);
   const assignments = await Promise.all(
     brands.map(async (brand) => ({
@@ -11738,7 +11808,7 @@ async function resolveDeliverabilityMonitorTargets(input: {
   const excludedAccountIds = new Set(input.excludeAccountIds.map((value) => value.trim()).filter(Boolean));
   const excludedEmails = new Set(input.excludeEmails.map((value) => value.trim().toLowerCase()).filter(Boolean));
 
-  const candidates: DeliverabilityMonitorTarget[] = [];
+  const candidates: MailboxDeliverabilityMonitorTarget[] = [];
   for (const account of accounts) {
     if (account.status !== "active" || !supportsMailbox(account)) continue;
     const mailboxEmail = account.config.mailbox.email.trim().toLowerCase();
@@ -11747,6 +11817,7 @@ async function resolveDeliverabilityMonitorTargets(input: {
     const secrets = await getOutreachAccountSecrets(account.id);
     if (!secrets || !secrets.mailboxPassword.trim()) continue;
     candidates.push({
+      kind: "mailbox",
       account,
       secrets,
       brandId: mailboxBrandByAccountId.get(account.id) ?? "",
@@ -11756,7 +11827,7 @@ async function resolveDeliverabilityMonitorTargets(input: {
   const dedicated = candidates.filter((candidate) => isDedicatedDeliverabilityMonitor(candidate.account));
   const pool = dedicated.length ? dedicated : candidates;
 
-  return pool.sort((left, right) => {
+  const sortedMailboxTargets = pool.sort((left, right) => {
     const leftDedicated = isDedicatedDeliverabilityMonitor(left.account) ? 0 : 1;
     const rightDedicated = isDedicatedDeliverabilityMonitor(right.account) ? 0 : 1;
     if (leftDedicated !== rightDedicated) return leftDedicated - rightDedicated;
@@ -11767,6 +11838,9 @@ async function resolveDeliverabilityMonitorTargets(input: {
 
     return left.account.name.localeCompare(right.account.name);
   });
+  return forwardEmailConfig?.mode === "prefer"
+    ? [...forwardEmailMonitorTargets, ...sortedMailboxTargets]
+    : sortedMailboxTargets;
 }
 
 function readDeliverabilityProbeTargets(value: unknown): DeliverabilityProbeTarget[] {
@@ -11777,7 +11851,26 @@ function readDeliverabilityProbeTargets(value: unknown): DeliverabilityProbeTarg
       reservationId: String(entry.reservationId ?? entry.reservation_id ?? "").trim() || undefined,
       accountId: String(entry.accountId ?? "").trim(),
       email: String(entry.email ?? "").trim().toLowerCase(),
+      provider:
+        String(entry.provider ?? "").trim() === "forward_email"
+          ? ("forward_email" as const)
+          : String(entry.provider ?? "").trim() === "mailbox"
+            ? ("mailbox" as const)
+            : undefined,
       providerMessageId: String(entry.providerMessageId ?? entry.provider_message_id ?? "").trim() || undefined,
+      forwardEmailDomain: String(entry.forwardEmailDomain ?? entry.forward_email_domain ?? "").trim() || undefined,
+      forwardEmailAliasId: String(entry.forwardEmailAliasId ?? entry.forward_email_alias_id ?? "").trim() || undefined,
+      forwardEmailAliasName: String(entry.forwardEmailAliasName ?? entry.forward_email_alias_name ?? "").trim() || undefined,
+      imapHost: String(entry.imapHost ?? entry.imap_host ?? "").trim() || undefined,
+      imapPort: Number(entry.imapPort ?? entry.imap_port ?? 0) || undefined,
+      imapSecure:
+        entry.imapSecure !== undefined || entry.imap_secure !== undefined
+          ? Boolean(entry.imapSecure ?? entry.imap_secure)
+          : undefined,
+      imapUsername: String(entry.imapUsername ?? entry.imap_username ?? "").trim() || undefined,
+      imapPasswordEncrypted:
+        String(entry.imapPasswordEncrypted ?? entry.imap_password_encrypted ?? "").trim() || undefined,
+      expiresAt: String(entry.expiresAt ?? entry.expires_at ?? "").trim() || undefined,
     }))
     .filter((entry) => entry.accountId && entry.email);
 }
@@ -11789,6 +11882,12 @@ function readDeliverabilityProbeResults(value: unknown): DeliverabilityProbeMoni
     .map((entry) => ({
       accountId: String(entry.accountId ?? "").trim(),
       email: String(entry.email ?? "").trim().toLowerCase(),
+      provider:
+        String(entry.provider ?? "").trim() === "forward_email"
+          ? ("forward_email" as const)
+          : String(entry.provider ?? "").trim() === "mailbox"
+            ? ("mailbox" as const)
+            : undefined,
       placement:
         ["inbox", "spam", "all_mail_only", "not_found", "error"].includes(String(entry.placement ?? ""))
           ? (String(entry.placement ?? "") as MailboxPlacementVerdict)
@@ -12469,6 +12568,14 @@ async function processMonitorDeliverabilityJob(job: OutreachJob) {
   );
   const resolvedRequestedTargets: DeliverabilityMonitorTarget[] = [];
   for (const requestedTarget of requestedMonitorTargets) {
+    if (isForwardEmailProbeTarget(requestedTarget)) {
+      resolvedRequestedTargets.push({
+        kind: "forward_email",
+        target: requestedTarget,
+        brandId: "",
+      });
+      continue;
+    }
     const account = await getOutreachAccount(requestedTarget.accountId);
     const secrets = account ? await getOutreachAccountSecrets(account.id) : null;
     if (
@@ -12481,6 +12588,7 @@ async function processMonitorDeliverabilityJob(job: OutreachJob) {
       account.config.mailbox.email.trim().toLowerCase() === requestedTarget.email
     ) {
       resolvedRequestedTargets.push({
+        kind: "mailbox",
         account,
         secrets,
         brandId: "",
@@ -12490,10 +12598,13 @@ async function processMonitorDeliverabilityJob(job: OutreachJob) {
   const candidateMonitorTargets =
     resolvedRequestedTargets.length
       ? resolvedRequestedTargets
+      : stage === "poll"
+        ? []
       : await resolveDeliverabilityMonitorTargets({
           runBrandId: run.brandId,
           excludeAccountIds: [run.accountId, assignment?.mailboxAccountId ?? ""],
           excludeEmails: [replyToEmail, senderFromEmail],
+          probeToken,
         });
   const blockedMonitorEmails = await listBlockedMonitorEmailsForSender({
     brandId: run.brandId,
@@ -12501,15 +12612,16 @@ async function processMonitorDeliverabilityJob(job: OutreachJob) {
     fromEmail: senderFromEmail,
     contentHash,
   });
-  const monitorTargets = candidateMonitorTargets.filter((target) => {
-    const monitorEmail = target.account.config.mailbox.email.trim().toLowerCase();
-    return !blockedMonitorEmails.has(monitorEmail);
-  });
+  const monitorTargets =
+    stage === "send"
+      ? candidateMonitorTargets.filter((target) => !blockedMonitorEmails.has(monitorTargetEmail(target)))
+      : candidateMonitorTargets;
 
   if (!monitorTargets.length) {
+    await releaseForwardEmailProbeTargets(candidateMonitorTargets.map((target) => monitorTargetToProbeTarget(target)));
     const monitorUnavailableReason = candidateMonitorTargets.length
-      ? "No unused deliverability monitor mailbox remains for this sender"
-      : "No dedicated deliverability monitor group is connected";
+      ? "No unused deliverability probe target remains for this sender"
+      : "No deliverability probe target is connected";
     let spamCheckFallback:
       | {
           spamCheckId: string;
@@ -12627,10 +12739,7 @@ async function processMonitorDeliverabilityJob(job: OutreachJob) {
       probeVariant,
       contentHash,
       probeToken,
-      targets: monitorTargets.map((target) => ({
-        accountId: target.account.id,
-        email: target.account.config.mailbox.email.trim().toLowerCase(),
-      })),
+      targets: monitorTargets.map((target) => monitorTargetToProbeTarget(target)),
     });
     const reservationByMonitorKey = new Map(
       reservations.map((reservation) => [
@@ -12640,8 +12749,8 @@ async function processMonitorDeliverabilityJob(job: OutreachJob) {
     );
     const reservedMonitorTargets = monitorTargets
       .map((target) => {
-        const email = target.account.config.mailbox.email.trim().toLowerCase();
-        const reservation = reservationByMonitorKey.get(`${target.account.id}:${email}`) ?? null;
+        const email = monitorTargetEmail(target);
+        const reservation = reservationByMonitorKey.get(`${monitorTargetAccountId(target)}:${email}`) ?? null;
         if (!reservation) return null;
         return {
           reservation,
@@ -12651,10 +12760,9 @@ async function processMonitorDeliverabilityJob(job: OutreachJob) {
       .filter((entry): entry is { reservation: Awaited<typeof reservations>[number]; target: DeliverabilityMonitorTarget } =>
         Boolean(entry)
       );
-    const reservedTargets = reservedMonitorTargets.map(({ reservation }) => ({
+    const reservedTargets = reservedMonitorTargets.map(({ reservation, target }) => ({
+      ...monitorTargetToProbeTarget(target),
       reservationId: reservation.id,
-      accountId: reservation.monitorAccountId,
-      email: reservation.monitorEmail,
     }));
     probeRun = await updateDeliverabilityProbeRun(probeRun.id, {
       reservationIds: reservations.map((reservation) => reservation.id),
@@ -12668,7 +12776,8 @@ async function processMonitorDeliverabilityJob(job: OutreachJob) {
     const initialResults: DeliverabilityProbeMonitorResult[] = [];
 
     for (const { reservation, target: monitorTarget } of reservedMonitorTargets) {
-      const monitorEmail = monitorTarget.account.config.mailbox.email.trim();
+      const monitorEmail = monitorTargetEmail(monitorTarget);
+      const monitorAccountId = monitorTargetAccountId(monitorTarget);
       const send = await sendMonitoringProbeMessage({
         account: senderChoice.slot.account,
         secrets: senderChoice.slot.secrets,
@@ -12680,7 +12789,7 @@ async function processMonitorDeliverabilityJob(job: OutreachJob) {
         body,
         probeVariant,
         probeToken,
-        monitorAccountId: monitorTarget.account.id,
+        monitorAccountId,
         monitorEmail,
         sourceMessageId: referenceMessage.id,
         sourceMessageStatus: referenceMessage.status,
@@ -12691,16 +12800,16 @@ async function processMonitorDeliverabilityJob(job: OutreachJob) {
       });
       if (send.ok) {
         sentTargets.push({
+          ...monitorTargetToProbeTarget(monitorTarget),
           reservationId: reservation.id,
-          accountId: monitorTarget.account.id,
-          email: monitorEmail.toLowerCase(),
           providerMessageId: send.providerMessageId,
         });
         continue;
       }
       initialResults.push({
-        accountId: monitorTarget.account.id,
+        accountId: monitorAccountId,
         email: monitorEmail.toLowerCase(),
+        provider: monitorTargetProvider(monitorTarget),
         placement: "error",
         matchedMailbox: "",
         matchedUid: 0,
@@ -12734,23 +12843,27 @@ async function processMonitorDeliverabilityJob(job: OutreachJob) {
         releasedAt: nowIso(),
         releasedReason: "probe_send_failed",
       });
+      await releaseForwardEmailProbeTargets(
+        reservedTargets.filter((target) => failedReservationIds.includes(target.reservationId ?? ""))
+      );
     }
 
     if (!sentTargets.length) {
+      await releaseForwardEmailProbeTargets(reservedTargets);
       if (probeRun) {
         await updateDeliverabilityProbeRun(probeRun.id, {
           status: "failed",
           stage: "send",
           results: initialResults,
           totalMonitors: initialResults.length,
-          lastError: "Monitoring probe send failed for every seed mailbox",
+          lastError: "Monitoring probe send failed for every probe target",
         });
       }
       await createOutreachEvent({
         runId: run.id,
         eventType: "deliverability_probe_failed",
         payload: {
-          reason: "Monitoring probe send failed for every seed mailbox",
+          reason: "Monitoring probe send failed for every probe target",
           probeToken,
           probeRunId: probeRun?.id ?? "",
           probeVariant,
@@ -12765,12 +12878,7 @@ async function processMonitorDeliverabilityJob(job: OutreachJob) {
       probeRun = await updateDeliverabilityProbeRun(probeRun.id, {
         status: "sent",
         stage: "send",
-        monitorTargets: sentTargets.map(({ reservationId, accountId, email, providerMessageId }) => ({
-          reservationId,
-          accountId,
-          email,
-          providerMessageId,
-        })),
+        monitorTargets: sentTargets,
         results: initialResults,
         totalMonitors: sentTargets.length,
         lastError: "",
@@ -12820,12 +12928,7 @@ async function processMonitorDeliverabilityJob(job: OutreachJob) {
         senderAccountId: senderChoice.slot.account.id,
         senderAccountName: senderChoice.slot.account.name,
         fromEmail: senderFromEmail,
-        monitorTargets: sentTargets.map(({ reservationId, accountId, email, providerMessageId }) => ({
-          reservationId,
-          accountId,
-          email,
-          providerMessageId,
-        })),
+        monitorTargets: sentTargets,
         previousResults: initialResults,
         pollAttempt: 1,
       },
@@ -12841,51 +12944,82 @@ async function processMonitorDeliverabilityJob(job: OutreachJob) {
   const pollResults: DeliverabilityProbeMonitorResult[] = [];
 
   for (const target of monitorTargetsForPoll) {
-    const account = await getOutreachAccount(target.accountId);
-    const secrets = account ? await getOutreachAccountSecrets(account.id) : null;
-    if (
-      !account ||
-      !secrets ||
-      account.status !== "active" ||
-      !supportsMailbox(account) ||
-      !secrets.mailboxPassword.trim()
-    ) {
-      pollResults.push({
-        accountId: target.accountId,
-        email: target.email,
-        placement: "error",
-        matchedMailbox: "",
-        matchedUid: 0,
-        ok: false,
-        error: "Monitoring mailbox is missing, inactive, or no longer has credentials",
+    let placement: Awaited<ReturnType<typeof inspectMailboxPlacement>>;
+    if (isForwardEmailProbeTarget(target)) {
+      const password = decryptForwardEmailProbePassword(target);
+      const imapHost = String(target.imapHost ?? "").trim();
+      const imapUsername = String(target.imapUsername ?? target.email).trim();
+      if (!password || !imapHost || !imapUsername) {
+        pollResults.push({
+          accountId: target.accountId,
+          email: target.email,
+          provider: "forward_email",
+          placement: "error",
+          matchedMailbox: "",
+          matchedUid: 0,
+          ok: false,
+          error: "Forward Email probe target is missing IMAP credentials",
+        });
+        continue;
+      }
+      placement = await inspectMailboxPlacement({
+        mailbox: {
+          host: imapHost,
+          port: Number(target.imapPort ?? 993) || 993,
+          secure: target.imapSecure !== false,
+          email: imapUsername,
+          password,
+        },
+        fromEmail,
+        subject,
+        since: new Date(Date.now() - DAY_MS),
       });
-      continue;
+    } else {
+      const account = await getOutreachAccount(target.accountId);
+      const secrets = account ? await getOutreachAccountSecrets(account.id) : null;
+      if (
+        !account ||
+        !secrets ||
+        account.status !== "active" ||
+        !supportsMailbox(account) ||
+        !secrets.mailboxPassword.trim()
+      ) {
+        pollResults.push({
+          accountId: target.accountId,
+          email: target.email,
+          provider: "mailbox",
+          placement: "error",
+          matchedMailbox: "",
+          matchedUid: 0,
+          ok: false,
+          error: "Monitoring mailbox is missing, inactive, or no longer has credentials",
+        });
+        continue;
+      }
+
+      placement = await inspectMailboxPlacement({
+        mailbox: {
+          host: account.config.mailbox.host.trim(),
+          port: Number(account.config.mailbox.port ?? 993) || 993,
+          secure: account.config.mailbox.secure !== false,
+          email: account.config.mailbox.email.trim(),
+          password: secrets.mailboxPassword.trim(),
+        },
+        fromEmail,
+        subject,
+        since: new Date(Date.now() - DAY_MS),
+      });
     }
 
-    const placement = await inspectMailboxPlacement({
-      mailbox: {
-        host: account.config.mailbox.host.trim(),
-        port: Number(account.config.mailbox.port ?? 993) || 993,
-        secure: account.config.mailbox.secure !== false,
-        email: account.config.mailbox.email.trim(),
-        password: secrets.mailboxPassword.trim(),
-      },
-      fromEmail,
-      subject,
-      since: new Date(Date.now() - DAY_MS),
-    });
-
     if (placement.ok && placement.placement === "not_found" && pollAttempt < 3) {
-      pendingTargets.push({
-        accountId: target.accountId,
-        email: target.email,
-      });
+      pendingTargets.push(target);
       continue;
     }
 
     pollResults.push({
       accountId: target.accountId,
       email: target.email,
+      provider: isForwardEmailProbeTarget(target) ? "forward_email" : "mailbox",
       placement: placement.placement,
       matchedMailbox: placement.matchedMailbox,
       matchedUid: placement.matchedUid,
@@ -12967,6 +13101,7 @@ async function processMonitorDeliverabilityJob(job: OutreachJob) {
       releasedReason: "probe_completed",
     });
   }
+  await releaseForwardEmailProbeTargets(monitorTargetsForPoll);
 
   if (probeRun) {
     probeRun = await updateDeliverabilityProbeRun(probeRun.id, {

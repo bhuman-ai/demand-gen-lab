@@ -24,6 +24,11 @@ Copy `.env.example` to `.env.local` and fill values:
 - `CUSTOMER_IO_WEBHOOK_SECRET` (optional)
 - `NAMECHEAP_RELAY_URL` (optional, routes Namecheap API calls through a fixed-IP relay)
 - `NAMECHEAP_RELAY_TOKEN` (optional bearer token for that relay)
+- `FORWARD_EMAIL_API_TOKEN` (optional, enables fresh Forward Email control probe aliases)
+- `FORWARD_EMAIL_PROBE_DOMAIN` (optional, domain already configured in Forward Email for probe aliases)
+- `FORWARD_EMAIL_PROBE_MODE` (optional: `only`, `prefer`, or `off`; defaults to `only` when Forward Email is configured)
+- `FORWARD_EMAIL_PROBE_TARGETS_PER_RUN` (optional, default `1`, max `10`)
+- `FORWARD_EMAIL_PROBE_RECIPIENTS` (optional, comma/space-separated email or webhook recipients; IMAP storage is always enabled for probes)
 
 ## Scheduler (Cloudflare Worker)
 
@@ -44,6 +49,16 @@ The worker calls the combined outreach operator tick every 5 minutes. That tick 
 The worker schedule is configured in:
 
 - `/Users/don/lastb2b/cloudflare/outreach-cron/wrangler.toml`
+
+## Forward Email probe aliases
+
+Forward Email is used as the cheap control-probe receiver layer. When `FORWARD_EMAIL_API_TOKEN` and `FORWARD_EMAIL_PROBE_DOMAIN` are set, deliverability probes can create a fresh alias, send the probe from the real sender to that alias, poll the alias over IMAP, and delete the alias after the probe completes. These probes measure receipt, timing, and mailbox/header behavior for an owned control domain; they are not a substitute for Gmail or Outlook placement.
+
+Smoke test the API setup with:
+
+```bash
+npm run forward-email:probe-smoke
+```
 
 ## Namecheap Relay (Fixed IP)
 

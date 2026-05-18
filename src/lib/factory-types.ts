@@ -1152,6 +1152,8 @@ export type DeliverabilityProbeMonitorResult = {
   placement: string;
   matchedMailbox: string;
   matchedUid: number;
+  archivedAt?: string;
+  archiveError?: string;
   ok: boolean;
   error: string;
 };

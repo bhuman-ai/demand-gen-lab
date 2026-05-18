@@ -430,6 +430,8 @@ type DeliverabilityProbeMonitorResult = {
   placement: MailboxPlacementVerdict;
   matchedMailbox: string;
   matchedUid: number;
+  archivedAt?: string;
+  archiveError?: string;
   ok: boolean;
   error: string;
 };
@@ -12005,6 +12007,8 @@ function readDeliverabilityProbeResults(value: unknown): DeliverabilityProbeMoni
           : "error",
       matchedMailbox: String(entry.matchedMailbox ?? "").trim(),
       matchedUid: Math.max(0, Number(entry.matchedUid ?? 0) || 0),
+      archivedAt: String(entry.archivedAt ?? "").trim(),
+      archiveError: String(entry.archiveError ?? "").trim(),
       ok: entry.ok !== false,
       error: String(entry.error ?? "").trim(),
     }))
@@ -13753,6 +13757,9 @@ async function processMonitorDeliverabilityJob(job: OutreachJob) {
         fromEmail,
         subject,
         since: new Date(Date.now() - DAY_MS),
+        archiveMatchedInbox: GMAIL_DELIVERABILITY_MONITOR_EMAILS.has(
+          account.config.mailbox.email.trim().toLowerCase()
+        ),
       });
     }
 
@@ -13768,6 +13775,8 @@ async function processMonitorDeliverabilityJob(job: OutreachJob) {
       placement: placement.placement,
       matchedMailbox: placement.matchedMailbox,
       matchedUid: placement.matchedUid,
+      archivedAt: placement.archivedAt ?? "",
+      archiveError: placement.archiveError ?? "",
       ok: placement.ok,
       error: placement.error,
     });

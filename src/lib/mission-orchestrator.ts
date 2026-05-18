@@ -1,5 +1,6 @@
 import { createExperimentRecord, ensureRuntimeForExperiment } from "@/lib/experiment-data";
 import { getBrandById, updateBrand } from "@/lib/factory-data";
+import { getOutreachRun } from "@/lib/outreach-data";
 import { launchExperimentRun } from "@/lib/outreach-runtime";
 import {
   createMissionAgentDecision,
@@ -47,6 +48,10 @@ function shouldWaitForDeliverability(stage: Mission["deliverabilityState"]["stag
 
 function hasApprovedMissionPlan(mission: Mission) {
   return Boolean(mission.approvalPolicy.planApprovedAt && mission.approvedPlan.offerSummary.trim());
+}
+
+function runCanContinue(status: string) {
+  return ["queued", "sourcing", "scheduled", "sending", "monitoring", "paused"].includes(status);
 }
 
 async function ensureMissionRuntime(input: {
@@ -105,7 +110,27 @@ async function launchApprovedMissionFirstBatch(input: {
 }): Promise<Mission> {
   let mission = await ensureMissionRuntime(input);
   if (mission.currentRunId) {
-    return refreshMissionRuntimeSummary(mission);
+    const currentRun = await getOutreachRun(mission.currentRunId).catch(() => null);
+    if (currentRun && runCanContinue(currentRun.status)) {
+      return refreshMissionRuntimeSummary(mission);
+    }
+    await createMissionEvent({
+      missionId: mission.id,
+      brandId: mission.brandId,
+      eventType: "stale_run_replaced",
+      summary: currentRun
+        ? `Previous run is ${currentRun.status}; launching a fresh run.`
+        : "Previous run could not be found; launching a fresh run.",
+      payload: {
+        previousRunId: mission.currentRunId,
+        previousRunStatus: currentRun?.status ?? "missing",
+      },
+    });
+    mission =
+      (await updateMission(mission.brandId, mission.id, {
+        currentRunId: "",
+        lastError: "",
+      })) ?? mission;
   }
 
   const launch = await launchExperimentRun({

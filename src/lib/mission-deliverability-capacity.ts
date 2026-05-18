@@ -1,6 +1,7 @@
 import { getBrandById } from "@/lib/factory-data";
 import { getOutreachAccountFromEmail, getOutreachMailboxEmail } from "@/lib/outreach-account-helpers";
 import {
+  getOutreachRun,
   getBrandOutreachAssignment,
   listOutreachAccounts,
   listSenderLaunches,
@@ -80,6 +81,7 @@ type MissionDeliverabilitySnapshot = {
     websiteUrl: string;
     targetCustomerText: string;
     currentRunId: string;
+    currentRunStatus: string;
     approvedPlan: MissionPlan;
   };
   brand: {
@@ -244,6 +246,7 @@ function allowedToolNames(snapshot: MissionDeliverabilitySnapshot): MissionDeliv
   if (
     snapshot.probes.forwardEmailConfigured &&
     snapshot.mission.currentRunId &&
+    ["scheduled", "sending", "monitoring", "paused"].includes(snapshot.mission.currentRunStatus) &&
     snapshot.senders.some((sender) => sender.status === "active" && sender.fromEmail && sender.assigned)
   ) {
     names.push("run_delivery_probe");
@@ -300,7 +303,7 @@ async function buildMissionDeliverabilitySnapshot(input: {
 }): Promise<MissionDeliverabilitySnapshot> {
   await loadBrandSenderLaunchView(input.mission.brandId).catch(() => null);
 
-  const [brand, assignment, accounts, launches, settings, secrets, deliverabilityState] = await Promise.all([
+  const [brand, assignment, accounts, launches, settings, secrets, deliverabilityState, currentRun] = await Promise.all([
     getBrandById(input.mission.brandId, { includeEmbedded: true }).catch(() => null),
     getBrandOutreachAssignment(input.mission.brandId).catch(() => null),
     listOutreachAccounts().catch(() => []),
@@ -308,6 +311,7 @@ async function buildMissionDeliverabilitySnapshot(input: {
     getOutreachProvisioningSettings(),
     getOutreachProvisioningSettingsSecrets(),
     inspectMissionDeliverability(input.mission.brandId),
+    input.mission.currentRunId ? getOutreachRun(input.mission.currentRunId).catch(() => null) : Promise.resolve(null),
   ]);
 
   const assignedAccountIds = assignment?.accountIds?.length
@@ -347,6 +351,7 @@ async function buildMissionDeliverabilitySnapshot(input: {
       websiteUrl: input.mission.websiteUrl,
       targetCustomerText: input.mission.targetCustomerText,
       currentRunId: input.mission.currentRunId,
+      currentRunStatus: currentRun?.status ?? "",
       approvedPlan: input.approvedPlan,
     },
     brand: compactBrand(brand, input.mission),
@@ -449,7 +454,7 @@ function buildMissionOperatorPrompt(snapshot: MissionDeliverabilitySnapshot) {
     "You are the LastB2B mission deliverability operator.",
     "You are the decision-maker. The code will not pick a sender, domain, mailbox name, provider path, or next move for you.",
     "Choose exactly one tool from the tool catalog. If you choose a write tool, provide exact IDs/domains/local parts.",
-    "You may create new sender capacity when guardrails allow it. You may request fresh Forward Email inbox placement probes when a current run exists. You may also wait, inspect, or block if that is the correct move.",
+    "You may create new sender capacity when guardrails allow it. You may request fresh Forward Email inbox placement probes when a current run has scheduled or sent messages. You may also wait, inspect, or block if that is the correct move.",
     "Hard guardrails are not optional: no sending before deliverability is ready, no domain purchase unless policy allows it, no provisioning above capacity, no spending above maxAutoDomainSpendUsd, and no invented account IDs.",
     "Do not output a generic plan. Select the next concrete tool call for this mission tick.",
     "Keep rationale, expectedOutcome, and toolInputJson concise.",

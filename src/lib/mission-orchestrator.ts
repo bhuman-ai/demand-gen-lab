@@ -1,5 +1,15 @@
-import { createExperimentRecord, ensureRuntimeForExperiment } from "@/lib/experiment-data";
-import { getBrandById, updateBrand } from "@/lib/factory-data";
+import {
+  createExperimentRecord,
+  ensureRuntimeForExperiment,
+  getExperimentRecordByRuntimeRef,
+} from "@/lib/experiment-data";
+import { getBrandById, getCampaignById, updateBrand } from "@/lib/factory-data";
+import {
+  getPublishedConversationMapForExperiment,
+  publishConversationMap,
+  upsertConversationMapDraft,
+} from "@/lib/conversation-flow-data";
+import { generateScreenedConversationFlowGraph } from "@/lib/conversation-flow-generation";
 import { getOutreachRun } from "@/lib/outreach-data";
 import { launchExperimentRun } from "@/lib/outreach-runtime";
 import {
@@ -40,6 +50,15 @@ function buildMissionNotes(plan: MissionPlan) {
   ]
     .filter((line) => line.trim() !== "Avoid:")
     .join("\n");
+}
+
+function parseOfferAndCta(rawOffer: string) {
+  const text = String(rawOffer ?? "").trim();
+  if (!text) return { offer: "", cta: "" };
+  const ctaMatch = text.match(/\bCTA\s*:\s*([^\n]+)/i);
+  const cta = ctaMatch ? ctaMatch[1].trim() : "";
+  const offer = text.replace(/\bCTA\s*:\s*[^\n]+/gi, "").replace(/\s{2,}/g, " ").trim();
+  return { offer, cta };
 }
 
 function shouldWaitForDeliverability(stage: Mission["deliverabilityState"]["stage"]) {
@@ -102,6 +121,121 @@ async function ensureMissionRuntime(input: {
   );
 }
 
+async function ensureMissionConversationMap(input: {
+  mission: Mission;
+  approvedPlan: MissionPlan;
+  brandName?: string;
+}): Promise<{ ok: boolean; reason: string; publishedRevision: number }> {
+  if (!input.mission.currentRuntimeCampaignId || !input.mission.currentRuntimeExperimentId) {
+    return { ok: false, reason: "Mission runtime is not configured.", publishedRevision: 0 };
+  }
+
+  const existing = await getPublishedConversationMapForExperiment(
+    input.mission.brandId,
+    input.mission.currentRuntimeCampaignId,
+    input.mission.currentRuntimeExperimentId
+  );
+  if (existing?.publishedRevision) {
+    return { ok: true, reason: "Conversation Map already published.", publishedRevision: existing.publishedRevision };
+  }
+
+  const [brand, campaign, sourceExperiment] = await Promise.all([
+    getBrandById(input.mission.brandId, { includeEmbedded: true }).catch(() => null),
+    getCampaignById(input.mission.brandId, input.mission.currentRuntimeCampaignId).catch(() => null),
+    getExperimentRecordByRuntimeRef(
+      input.mission.brandId,
+      input.mission.currentRuntimeCampaignId,
+      input.mission.currentRuntimeExperimentId
+    ).catch(() => null),
+  ]);
+  if (!campaign) {
+    return { ok: false, reason: "Runtime campaign not found.", publishedRevision: 0 };
+  }
+  const variant = campaign.experiments.find((item) => item.id === input.mission.currentRuntimeExperimentId) ?? null;
+  if (!variant) {
+    return { ok: false, reason: "Runtime campaign variant not found.", publishedRevision: 0 };
+  }
+  const hypothesis = campaign.hypotheses.find((item) => item.id === variant.hypothesisId) ?? null;
+  const parsed = parseOfferAndCta(sourceExperiment?.offer ?? input.approvedPlan.offerSummary);
+
+  const generated = await generateScreenedConversationFlowGraph({
+    context: {
+      brand: {
+        name: brand?.name ?? input.brandName ?? "",
+        website: brand?.website ?? input.mission.websiteUrl,
+        tone: brand?.tone ?? "",
+        notes: brand?.notes ?? "",
+      },
+      campaign: {
+        campaignName: campaign.name,
+        objectiveGoal: campaign.objective?.goal ?? input.approvedPlan.successCriteria,
+        objectiveConstraints: campaign.objective?.constraints ?? input.approvedPlan.primaryRisk,
+        angleTitle: hypothesis?.title ?? input.approvedPlan.outreachAngle,
+        angleRationale: hypothesis?.rationale ?? "",
+        targetAudience: hypothesis?.actorQuery ?? input.approvedPlan.targetCustomers.join("; "),
+        variantName: variant.name,
+        variantNotes: variant.notes ?? "",
+      },
+      experiment: {
+        experimentRecordName: sourceExperiment?.name ?? variant.name,
+        offer: parsed.offer || sourceExperiment?.offer || input.approvedPlan.offerSummary,
+        cta: parsed.cta || "",
+        audience: sourceExperiment?.audience || input.approvedPlan.targetCustomers.join("; "),
+        ultimateGoal: input.approvedPlan.successCriteria,
+        testEnvelope: sourceExperiment?.testEnvelope ?? null,
+      },
+    },
+  });
+  await upsertConversationMapDraft({
+    brandId: input.mission.brandId,
+    campaignId: input.mission.currentRuntimeCampaignId,
+    experimentId: input.mission.currentRuntimeExperimentId,
+    name: `${variant.name || "Mission"} Conversation Flow`,
+    draftGraph: generated.graph,
+  });
+  const published = await publishConversationMap({
+    brandId: input.mission.brandId,
+    campaignId: input.mission.currentRuntimeCampaignId,
+    experimentId: input.mission.currentRuntimeExperimentId,
+  });
+  if (!published?.publishedRevision) {
+    return { ok: false, reason: "Failed to publish generated Conversation Map.", publishedRevision: 0 };
+  }
+
+  await createMissionAgentDecision({
+    missionId: input.mission.id,
+    brandId: input.mission.brandId,
+    agent: "conversation_map_operator",
+    action: "generate_and_publish_conversation_map",
+    rationale: "Autopilot missions must not require the user to manually build the first outbound message flow.",
+    riskLevel: "safe_write",
+    input: {
+      runtimeCampaignId: input.mission.currentRuntimeCampaignId,
+      runtimeExperimentId: input.mission.currentRuntimeExperimentId,
+      mode: generated.mode,
+    },
+    output: {
+      publishedRevision: published.publishedRevision,
+      summary: generated.summary,
+      selectedIndex: generated.selectedIndex,
+      score: generated.score,
+    },
+  });
+  await createMissionEvent({
+    missionId: input.mission.id,
+    brandId: input.mission.brandId,
+    eventType: "conversation_map_published_auto",
+    summary: "AI generated and published the first outbound Conversation Map.",
+    payload: {
+      publishedRevision: published.publishedRevision,
+      mode: generated.mode,
+      summary: generated.summary,
+    },
+  });
+
+  return { ok: true, reason: "Conversation Map generated and published.", publishedRevision: published.publishedRevision };
+}
+
 async function launchApprovedMissionFirstBatch(input: {
   mission: Mission;
   approvedPlan: MissionPlan;
@@ -131,6 +265,40 @@ async function launchApprovedMissionFirstBatch(input: {
         currentRunId: "",
         lastError: "",
       })) ?? mission;
+  }
+
+  const conversationMap = await ensureMissionConversationMap({
+    mission,
+    approvedPlan: input.approvedPlan,
+    brandName: input.brandName,
+  });
+  if (!conversationMap.ok) {
+    await createMissionAgentDecision({
+      missionId: mission.id,
+      brandId: mission.brandId,
+      agent: "conversation_map_operator",
+      action: "generate_and_publish_conversation_map",
+      rationale: "A published Conversation Map is required before launching the first batch.",
+      riskLevel: "blocked",
+      input: {
+        runtimeCampaignId: mission.currentRuntimeCampaignId,
+        runtimeExperimentId: mission.currentRuntimeExperimentId,
+      },
+      output: conversationMap,
+    });
+    mission =
+      (await updateMission(mission.brandId, mission.id, {
+        status: "deliverability_blocked",
+        lastError: conversationMap.reason,
+        deliverabilityState: {
+          ...input.deliverabilityState,
+          stage: "needs_attention",
+          summary: conversationMap.reason,
+          primaryBlocker: conversationMap.reason,
+          lastCheckedAt: nowIso(),
+        },
+      })) ?? mission;
+    return mission;
   }
 
   const launch = await launchExperimentRun({

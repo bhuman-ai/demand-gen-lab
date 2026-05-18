@@ -10650,7 +10650,7 @@ async function ensureBrandAccount(brandId: string): Promise<{
   let deliveryAccount: ResolvedAccount | null = null;
   for (const candidateAccountId of candidateAccountIds) {
     const candidate = await getOutreachAccount(candidateAccountId);
-    if (candidate && candidate.status === "active") {
+    if (candidate && candidate.status === "active" && supportsDelivery(candidate)) {
       resolvedAccountId = candidateAccountId;
       deliveryAccount = candidate;
       break;

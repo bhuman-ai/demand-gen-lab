@@ -58,6 +58,7 @@ type SenderSnapshot = {
   replyToEmail: string;
   domain: string;
   outboundEnabled: boolean;
+  deliveryCapable: boolean;
   hasCredentials: boolean;
   lastTestStatus: OutreachAccount["lastTestStatus"];
   assigned: boolean;
@@ -240,7 +241,7 @@ function riskForTool(toolName: MissionDeliverabilityToolName): MissionRiskLevel 
 
 function allowedToolNames(snapshot: MissionDeliverabilitySnapshot): MissionDeliverabilityToolName[] {
   const names: MissionDeliverabilityToolName[] = ["inspect_state", "wait_for_warmup", "block_for_policy"];
-  if (snapshot.senders.some((sender) => sender.status === "active" && sender.fromEmail)) {
+  if (snapshot.senders.some((sender) => sender.status === "active" && sender.fromEmail && sender.deliveryCapable)) {
     names.push("assign_sender");
   }
   if (
@@ -278,6 +279,7 @@ function summarizeSender(
     replyToEmail,
     domain: emailDomain(fromEmail),
     outboundEnabled: outboundEnabled(account),
+    deliveryCapable: account.accountType !== "mailbox" && outboundEnabled(account) && account.hasCredentials,
     hasCredentials: account.hasCredentials,
     lastTestStatus: account.lastTestStatus,
     assigned: assignedAccountIds.includes(account.id),
@@ -407,8 +409,8 @@ function buildToolCatalog() {
     {
       name: "assign_sender",
       riskLevel: "guarded_write",
-      description: "Assign an exact existing active sender account to the mission. The AI must choose accountId from snapshot.senders.",
-      input: { accountId: "existing active sender account id", reason: "why this sender is the right next move" },
+      description: "Assign an exact existing active delivery-capable sender account to the mission. The AI must choose accountId from snapshot.senders where deliveryCapable is true; never choose mailbox-only accounts.",
+      input: { accountId: "existing active delivery-capable sender account id", reason: "why this sender is the right next move" },
     },
     {
       name: "run_delivery_probe",
@@ -634,6 +636,19 @@ async function executeAssignSender(input: {
       summary: "AI selected a sender account that is not active or has no from email.",
       riskLevel: "blocked",
       result: { accountId, status: account.status, fromEmail },
+    };
+  }
+  if (account.accountType === "mailbox" || !outboundEnabled(account) || !account.hasCredentials) {
+    return {
+      ok: false,
+      summary: "AI selected an account that is not delivery-capable.",
+      riskLevel: "blocked",
+      result: {
+        accountId,
+        accountType: account.accountType,
+        outboundEnabled: outboundEnabled(account),
+        hasCredentials: account.hasCredentials,
+      },
     };
   }
 

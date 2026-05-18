@@ -12908,7 +12908,10 @@ async function processMonitorDeliverabilityJob(job: OutreachJob) {
   const stageRaw = String(payload.stage ?? "send").trim().toLowerCase();
   const stage: DeliverabilityProbeStage = stageRaw === "poll" ? "poll" : "send";
   const probeVariant = readDeliverabilityProbeVariant(payload.probeVariant);
-  const syntheticBaseline = payload.syntheticBaseline === true && probeVariant === "baseline";
+  const sourceMessageId = String(payload.sourceMessageId ?? "").trim();
+  const syntheticBaseline =
+    probeVariant === "baseline" &&
+    (payload.syntheticBaseline === true || sourceMessageId.startsWith("synthetic_baseline_"));
   if (["canceled", "failed"].includes(run.status)) return;
   if (run.status === "preflight_failed" && !syntheticBaseline) return;
   const probeToken = String(payload.probeToken ?? generateDeliverabilityProbeToken()).trim();
@@ -12916,7 +12919,6 @@ async function processMonitorDeliverabilityJob(job: OutreachJob) {
   let probeRun =
     (requestedProbeRunId ? await getDeliverabilityProbeRun(requestedProbeRunId) : null) ||
     (probeToken ? await findDeliverabilityProbeRun({ runId: run.id, probeToken, probeVariant }) : null);
-  const sourceMessageId = String(payload.sourceMessageId ?? "").trim();
   let referenceMessage = await resolveDeliverabilityProbeReferenceMessage({
     runId: run.id,
     sourceMessageId,
@@ -13413,6 +13415,7 @@ async function processMonitorDeliverabilityJob(job: OutreachJob) {
         monitorTargets: sentTargets,
         previousResults: initialResults,
         pollAttempt: 1,
+        syntheticBaseline,
       },
     });
     return;

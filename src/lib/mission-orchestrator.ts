@@ -70,7 +70,24 @@ function hasApprovedMissionPlan(mission: Mission) {
 }
 
 function runCanContinue(status: string) {
-  return ["queued", "sourcing", "scheduled", "sending", "monitoring", "paused"].includes(status);
+  return ["queued", "sourcing", "scheduled", "sending", "monitoring"].includes(status);
+}
+
+function textLooksDeliverabilityRelated(value: string) {
+  return /deliverability|inbox|placement|spam|seed|pre[-_ ]?send|sender|warmup/i.test(value);
+}
+
+async function shouldAutopilotProcessMission(mission: Mission) {
+  if (mission.status !== "paused") return true;
+  if (
+    textLooksDeliverabilityRelated(
+      `${mission.lastError} ${mission.deliverabilityState.primaryBlocker} ${mission.deliverabilityState.summary}`
+    )
+  ) {
+    return true;
+  }
+  const run = mission.currentRunId ? await getOutreachRun(mission.currentRunId).catch(() => null) : null;
+  return Boolean(run && textLooksDeliverabilityRelated(`${run.pauseReason} ${run.lastError}`));
 }
 
 async function ensureMissionRuntime(input: {
@@ -486,7 +503,7 @@ export async function startMission(input: {
 }
 
 export async function runMissionAutopilotTick(limit = 10) {
-  const missions = await listMissionsByStatuses(["starting", "deliverability_blocked"]);
+  const missions = await listMissionsByStatuses(["starting", "deliverability_blocked", "paused"]);
   const rows = [];
   for (const mission of missions.slice(0, limit)) {
     if (!hasApprovedMissionPlan(mission)) {
@@ -496,6 +513,17 @@ export async function runMissionAutopilotTick(limit = 10) {
         status: mission.status,
         ok: true,
         skipped: "no_approved_plan",
+      });
+      continue;
+    }
+
+    if (!(await shouldAutopilotProcessMission(mission))) {
+      rows.push({
+        missionId: mission.id,
+        brandId: mission.brandId,
+        status: mission.status,
+        ok: true,
+        skipped: "paused_not_deliverability",
       });
       continue;
     }

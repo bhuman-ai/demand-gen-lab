@@ -1456,6 +1456,8 @@ function mapDeliverabilityProbeMonitorResult(input: unknown): DeliverabilityProb
     placement: String(row.placement ?? "unknown").trim(),
     matchedMailbox: String(row.matched_mailbox ?? row.matchedMailbox ?? "").trim(),
     matchedUid: Math.max(0, Number(row.matched_uid ?? row.matchedUid ?? 0) || 0),
+    archivedAt: String(row.archived_at ?? row.archivedAt ?? "").trim(),
+    archiveError: String(row.archive_error ?? row.archiveError ?? "").trim(),
     ok: Boolean(row.ok),
     error: String(row.error ?? "").trim(),
   };

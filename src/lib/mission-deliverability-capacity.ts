@@ -3,9 +3,15 @@ import { getOutreachAccountFromEmail, getOutreachMailboxEmail } from "@/lib/outr
 import {
   getOutreachRun,
   getBrandOutreachAssignment,
+  listDeliverabilityProbeRuns,
+  listDeliverabilitySeedReservations,
   listOutreachAccounts,
+  listRunEvents,
+  listRunJobs,
   listSenderLaunches,
   setBrandOutreachAssignment,
+  type OutreachEvent,
+  type OutreachJob,
 } from "@/lib/outreach-data";
 import {
   getOutreachProvisioningSettings,
@@ -22,7 +28,15 @@ import { resolveLlmModel } from "@/lib/llm-router";
 import { createMissionAgentDecision, createMissionEvent } from "@/lib/mission-data";
 import { inspectMissionDeliverability } from "@/lib/mission-learning";
 import { loadBrandSenderLaunchView } from "@/lib/sender-launch";
-import type { BrandRecord, OutreachAccount, SenderLaunch } from "@/lib/factory-types";
+import type {
+  BrandRecord,
+  DeliverabilityProbeMonitorResult,
+  DeliverabilityProbeRun,
+  DeliverabilitySeedReservation,
+  OutreachAccount,
+  OutreachRun,
+  SenderLaunch,
+} from "@/lib/factory-types";
 import type { Mission, MissionDeliverabilityState, MissionPlan, MissionRiskLevel } from "@/lib/mission-types";
 
 type CapacityResult = {
@@ -48,6 +62,52 @@ type MissionDeliverabilityAgentPlan = {
   raw: Record<string, unknown>;
 };
 
+type ProbeTargetKind = "forward_email" | "gmail_mailbox" | "mailbox" | "unknown";
+
+type ProbeSummary = {
+  id: string;
+  runId: string;
+  status: DeliverabilityProbeRun["status"];
+  stage: DeliverabilityProbeRun["stage"];
+  probeVariant: DeliverabilityProbeRun["probeVariant"];
+  placement: string;
+  totalMonitors: number;
+  counts: Record<string, unknown>;
+  summaryText: string;
+  lastError: string;
+  senderAccountId: string;
+  fromEmail: string;
+  sourceMessageId: string;
+  contentHash: string;
+  targetKinds: ProbeTargetKind[];
+  monitorEmails: string[];
+  results: Array<{
+    email: string;
+    provider: ProbeTargetKind;
+    placement: string;
+    archivedAt: string;
+    archiveError: string;
+    ok: boolean;
+    error: string;
+  }>;
+  createdAt: string;
+  updatedAt: string;
+  completedAt: string;
+  observedAt: string;
+  ageHours: number | null;
+  fresh: boolean;
+};
+
+type SenderProbeMemory = {
+  latestForwardEmailPlacement: string;
+  latestForwardEmailSummary: string;
+  latestForwardEmailAt: string;
+  latestGmailPlacement: string;
+  latestGmailSummary: string;
+  latestGmailAt: string;
+  latestProbeStatus: string;
+};
+
 type SenderSnapshot = {
   accountId: string;
   name: string;
@@ -62,6 +122,7 @@ type SenderSnapshot = {
   hasCredentials: boolean;
   lastTestStatus: OutreachAccount["lastTestStatus"];
   assigned: boolean;
+  probeMemory: SenderProbeMemory;
   launch: {
     id: string;
     state: SenderLaunch["state"];
@@ -84,6 +145,15 @@ type MissionDeliverabilitySnapshot = {
     currentRunId: string;
     currentRunStatus: string;
     approvedPlan: MissionPlan;
+  };
+  currentRun: {
+    id: string;
+    status: OutreachRun["status"] | "";
+    accountId: string;
+    lockedSenderAccountId: string;
+    pauseReason: string;
+    lastError: string;
+    metrics: OutreachRun["metrics"] | null;
   };
   brand: {
     id: string;
@@ -112,6 +182,42 @@ type MissionDeliverabilitySnapshot = {
     summary: string;
     nextStep: string;
   }>;
+  probeMemory: {
+    latestForwardEmailProbe: ProbeSummary | null;
+    latestGmailProbe: ProbeSummary | null;
+    recentProbes: ProbeSummary[];
+    activeProbeJobs: Array<{
+      id: string;
+      status: OutreachJob["status"];
+      executeAfter: string;
+      attempts: number;
+      monitorProvider: string;
+      probeVariant: string;
+      senderAccountId: string;
+      fromEmail: string;
+      sourceMessageId: string;
+      contentHash: string;
+      lastError: string;
+    }>;
+    recentDeliverabilityEvents: Array<{
+      id: string;
+      eventType: string;
+      createdAt: string;
+      reason: string;
+      placement: string;
+      summaryText: string;
+      senderAccountId: string;
+      fromEmail: string;
+    }>;
+  };
+  gmailSeeds: {
+    approvedEmails: string[];
+    approvedCount: number;
+    assignedSenderDomain: string;
+    usedForAssignedSenderDomain: number;
+    remainingForAssignedSenderDomain: number;
+    lastUsedForAssignedSenderDomain: string;
+  };
   provisioning: {
     provider: "mailpool";
     hasMailpoolApiKey: boolean;
@@ -207,6 +313,335 @@ function launchIsActiveCapacity(launch: SenderLaunch) {
   return ["setup", "observing", "warming", "restricted_send", "ready"].includes(launch.state);
 }
 
+function roundTenth(value: number) {
+  return Math.round(value * 10) / 10;
+}
+
+function dateMs(value: string) {
+  const ms = new Date(value).getTime();
+  return Number.isFinite(ms) ? ms : 0;
+}
+
+function probeObservedAt(probeRun: DeliverabilityProbeRun) {
+  return probeRun.completedAt || probeRun.updatedAt || probeRun.createdAt;
+}
+
+function probeIsFresh(probeRun: DeliverabilityProbeRun, cadenceHours: number) {
+  const observedAt = dateMs(probeObservedAt(probeRun));
+  if (!observedAt) return false;
+  return Date.now() - observedAt < cadenceHours * 60 * 60 * 1000;
+}
+
+function parseDelimitedEmailSet(value: string | undefined) {
+  return new Set(
+    String(value ?? "")
+      .split(/[,\n;]/)
+      .map((entry) => entry.trim().toLowerCase())
+      .filter((entry) => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(entry))
+  );
+}
+
+function probeTargetProviderKind(
+  provider: unknown,
+  email: string,
+  approvedGmailSeedEmails: Set<string>
+): ProbeTargetKind {
+  const normalizedProvider = asString(provider).toLowerCase();
+  const normalizedEmail = email.trim().toLowerCase();
+  const domain = emailDomain(normalizedEmail);
+  if (normalizedProvider === "forward_email") return "forward_email";
+  if (
+    normalizedProvider === "mailbox" &&
+    (approvedGmailSeedEmails.has(normalizedEmail) || domain === "gmail.com" || domain === "googlemail.com")
+  ) {
+    return "gmail_mailbox";
+  }
+  if (normalizedProvider === "mailbox") return "mailbox";
+  return "unknown";
+}
+
+function probeTargetKinds(probeRun: DeliverabilityProbeRun, approvedGmailSeedEmails: Set<string>): ProbeTargetKind[] {
+  const kinds = new Set<ProbeTargetKind>();
+  for (const target of probeRun.monitorTargets) {
+    kinds.add(probeTargetProviderKind(target.provider, target.email, approvedGmailSeedEmails));
+  }
+  for (const result of probeRun.results) {
+    kinds.add(probeTargetProviderKind(result.provider, result.email, approvedGmailSeedEmails));
+  }
+  return kinds.size ? Array.from(kinds) : ["unknown"];
+}
+
+function probeResultProviderKind(
+  result: DeliverabilityProbeMonitorResult,
+  approvedGmailSeedEmails: Set<string>
+) {
+  return probeTargetProviderKind(result.provider, result.email, approvedGmailSeedEmails);
+}
+
+function compactProbeRun(probeRun: DeliverabilityProbeRun, approvedGmailSeedEmails: Set<string>): ProbeSummary {
+  const cadenceHours = deliverabilityProbeCadenceHours();
+  const observedAt = probeObservedAt(probeRun);
+  const observedMs = dateMs(observedAt);
+  return {
+    id: probeRun.id,
+    runId: probeRun.runId,
+    status: probeRun.status,
+    stage: probeRun.stage,
+    probeVariant: probeRun.probeVariant,
+    placement: probeRun.placement,
+    totalMonitors: probeRun.totalMonitors,
+    counts: probeRun.counts,
+    summaryText: probeRun.summaryText,
+    lastError: probeRun.lastError,
+    senderAccountId: probeRun.senderAccountId,
+    fromEmail: probeRun.fromEmail,
+    sourceMessageId: probeRun.sourceMessageId,
+    contentHash: probeRun.contentHash,
+    targetKinds: probeTargetKinds(probeRun, approvedGmailSeedEmails),
+    monitorEmails: Array.from(
+      new Set(
+        [...probeRun.monitorTargets.map((target) => target.email), ...probeRun.results.map((result) => result.email)]
+          .map((email) => email.trim().toLowerCase())
+          .filter(Boolean)
+      )
+    ),
+    results: probeRun.results.map((result) => ({
+      email: result.email,
+      provider: probeResultProviderKind(result, approvedGmailSeedEmails),
+      placement: result.placement,
+      archivedAt: result.archivedAt ?? "",
+      archiveError: result.archiveError ?? "",
+      ok: result.ok,
+      error: result.error,
+    })),
+    createdAt: probeRun.createdAt,
+    updatedAt: probeRun.updatedAt,
+    completedAt: probeRun.completedAt,
+    observedAt,
+    ageHours: observedMs ? roundTenth((Date.now() - observedMs) / (60 * 60 * 1000)) : null,
+    fresh: probeIsFresh(probeRun, cadenceHours),
+  };
+}
+
+function compactProbeRuns(probeRuns: DeliverabilityProbeRun[], approvedGmailSeedEmails: Set<string>) {
+  return probeRuns
+    .map((probeRun) => compactProbeRun(probeRun, approvedGmailSeedEmails))
+    .sort((left, right) => dateMs(right.observedAt) - dateMs(left.observedAt));
+}
+
+function probeIsBad(probe: ProbeSummary) {
+  if (probe.status === "failed") return true;
+  return ["spam", "all_mail_only", "not_found", "error"].includes(probe.placement);
+}
+
+function probeIsActive(probe: ProbeSummary) {
+  return ["queued", "sent", "waiting"].includes(probe.status);
+}
+
+function probeIsPassingInbox(probe: ProbeSummary) {
+  return probe.status === "completed" && probe.placement === "inbox" && probe.totalMonitors > 0;
+}
+
+function probeMatchesSender(probe: ProbeSummary, senderAccountId: string, fromEmail: string) {
+  const accountId = senderAccountId.trim();
+  const email = fromEmail.trim().toLowerCase();
+  if (accountId && probe.senderAccountId === accountId) return true;
+  return Boolean(email && probe.fromEmail === email);
+}
+
+function latestProbe(probes: ProbeSummary[], predicate: (probe: ProbeSummary) => boolean) {
+  return probes.find(predicate) ?? null;
+}
+
+function summarizeSenderProbeMemory(
+  probes: ProbeSummary[],
+  senderAccountId: string,
+  fromEmail: string
+): SenderProbeMemory {
+  const senderProbes = probes.filter((probe) => probeMatchesSender(probe, senderAccountId, fromEmail));
+  const latestForwardEmailProbe = latestProbe(senderProbes, (probe) => probe.targetKinds.includes("forward_email"));
+  const latestGmailProbe = latestProbe(senderProbes, (probe) =>
+    probe.targetKinds.some((kind) => kind === "gmail_mailbox" || kind === "mailbox")
+  );
+  const latestAnyProbe = senderProbes[0] ?? null;
+  return {
+    latestForwardEmailPlacement: latestForwardEmailProbe?.placement ?? "",
+    latestForwardEmailSummary: latestForwardEmailProbe?.summaryText ?? latestForwardEmailProbe?.lastError ?? "",
+    latestForwardEmailAt: latestForwardEmailProbe?.observedAt ?? "",
+    latestGmailPlacement: latestGmailProbe?.placement ?? "",
+    latestGmailSummary: latestGmailProbe?.summaryText ?? latestGmailProbe?.lastError ?? "",
+    latestGmailAt: latestGmailProbe?.observedAt ?? "",
+    latestProbeStatus: latestAnyProbe?.status ?? "",
+  };
+}
+
+function compactProbeJobs(jobs: OutreachJob[]) {
+  return jobs
+    .filter((job) => job.jobType === "monitor_deliverability" && ["queued", "running"].includes(job.status))
+    .map((job) => {
+      const payload = asRecord(job.payload);
+      return {
+        id: job.id,
+        status: job.status,
+        executeAfter: job.executeAfter,
+        attempts: job.attempts,
+        monitorProvider: asString(payload.monitorProvider),
+        probeVariant: asString(payload.probeVariant),
+        senderAccountId: asString(payload.senderAccountId),
+        fromEmail: asString(payload.fromEmail).toLowerCase(),
+        sourceMessageId: asString(payload.sourceMessageId),
+        contentHash: asString(payload.contentHash),
+        lastError: job.lastError,
+      };
+    });
+}
+
+function compactDeliverabilityEvents(events: OutreachEvent[]) {
+  return events
+    .filter((event) => /deliverability|inbox|seed|sender_deliverability|run_paused_auto/i.test(event.eventType))
+    .slice(0, 12)
+    .map((event) => {
+      const payload = asRecord(event.payload);
+      return {
+        id: event.id,
+        eventType: event.eventType,
+        createdAt: event.createdAt,
+        reason: asString(payload.reason),
+        placement: asString(payload.placement),
+        summaryText: asString(payload.summaryText),
+        senderAccountId: asString(payload.senderAccountId),
+        fromEmail: asString(payload.fromEmail).toLowerCase(),
+      };
+    });
+}
+
+function seedWasUsed(reservation: DeliverabilitySeedReservation) {
+  return (
+    reservation.status === "reserved" ||
+    reservation.status === "consumed" ||
+    Boolean(reservation.consumedAt || reservation.providerMessageId)
+  );
+}
+
+function summarizeGmailSeeds(input: {
+  approvedGmailSeedEmails: Set<string>;
+  assignedSenderDomain: string;
+  reservations: DeliverabilitySeedReservation[];
+}): MissionDeliverabilitySnapshot["gmailSeeds"] {
+  const approvedEmails = Array.from(input.approvedGmailSeedEmails).sort();
+  const reservationsForDomain = input.assignedSenderDomain
+    ? input.reservations.filter((reservation) => emailDomain(reservation.fromEmail) === input.assignedSenderDomain)
+    : [];
+  const usedEmails = new Set(
+    reservationsForDomain
+      .filter(seedWasUsed)
+      .map((reservation) => reservation.monitorEmail.trim().toLowerCase())
+      .filter(Boolean)
+  );
+  const lastUsedReservation = reservationsForDomain
+    .filter(seedWasUsed)
+    .sort(
+      (left, right) =>
+        dateMs(right.consumedAt || right.reservedAt || right.createdAt) -
+        dateMs(left.consumedAt || left.reservedAt || left.createdAt)
+    )[0];
+
+  return {
+    approvedEmails,
+    approvedCount: approvedEmails.length,
+    assignedSenderDomain: input.assignedSenderDomain,
+    usedForAssignedSenderDomain: usedEmails.size,
+    remainingForAssignedSenderDomain: Math.max(0, approvedEmails.filter((email) => !usedEmails.has(email)).length),
+    lastUsedForAssignedSenderDomain:
+      lastUsedReservation?.consumedAt || lastUsedReservation?.reservedAt || lastUsedReservation?.createdAt || "",
+  };
+}
+
+function runLooksDeliverabilityPaused(run: OutreachRun | null) {
+  if (!run) return false;
+  if (run.status === "preflight_failed") return true;
+  if (run.status !== "paused") return false;
+  return /deliverability|inbox|placement|spam|seed|pre[-_ ]?send|sender|warmup/i.test(
+    `${run.pauseReason} ${run.lastError}`
+  );
+}
+
+function runPauseClearedByFreshProof(run: OutreachRun | null, probes: ProbeSummary[]) {
+  if (!run || !runLooksDeliverabilityPaused(run)) return false;
+  const pausedAt = dateMs(run.updatedAt);
+  if (!pausedAt) return false;
+  return probes.some((probe) => probe.fresh && probeIsPassingInbox(probe) && dateMs(probe.observedAt) > pausedAt);
+}
+
+function buildEvidenceBackedDeliverabilityState(input: {
+  base: MissionDeliverabilityState;
+  currentRun: OutreachRun | null;
+  assignedSenderAccountIds: string[];
+  assignedFromEmails: string[];
+  probes: ProbeSummary[];
+  activeProbeJobs: ReturnType<typeof compactProbeJobs>;
+}): MissionDeliverabilityState {
+  const relevantProbes = input.probes.filter((probe) => {
+    if (input.assignedSenderAccountIds.includes(probe.senderAccountId)) return true;
+    return input.assignedFromEmails.includes(probe.fromEmail);
+  });
+  const probes = relevantProbes.length ? relevantProbes : input.probes;
+  const latestGmailProbe = latestProbe(probes, (probe) =>
+    probe.targetKinds.some((kind) => kind === "gmail_mailbox" || kind === "mailbox")
+  );
+  const latestForwardEmailProbe = latestProbe(probes, (probe) => probe.targetKinds.includes("forward_email"));
+  const activeProbe = probes.find(probeIsActive) ?? null;
+  const activeJob = input.activeProbeJobs[0] ?? null;
+
+  if (latestGmailProbe?.fresh && probeIsBad(latestGmailProbe)) {
+    const summary = `Gmail seed placement failed for ${latestGmailProbe.fromEmail || "the active sender"} (${latestGmailProbe.summaryText || latestGmailProbe.placement || latestGmailProbe.lastError || "no inbox placement"}).`;
+    return {
+      ...input.base,
+      stage: "needs_attention",
+      summary,
+      primaryBlocker: summary,
+      lastCheckedAt: nowIso(),
+    };
+  }
+
+  if (latestForwardEmailProbe?.fresh && probeIsBad(latestForwardEmailProbe)) {
+    const summary = `Forward Email placement failed for ${latestForwardEmailProbe.fromEmail || "the active sender"} (${latestForwardEmailProbe.summaryText || latestForwardEmailProbe.placement || latestForwardEmailProbe.lastError || "no inbox placement"}).`;
+    return {
+      ...input.base,
+      stage: "needs_attention",
+      summary,
+      primaryBlocker: summary,
+      lastCheckedAt: nowIso(),
+    };
+  }
+
+  if (runLooksDeliverabilityPaused(input.currentRun) && !runPauseClearedByFreshProof(input.currentRun, probes)) {
+    const reason = input.currentRun?.pauseReason || input.currentRun?.lastError || "The current run is paused by deliverability evidence.";
+    return {
+      ...input.base,
+      stage: "needs_attention",
+      summary: reason,
+      primaryBlocker: reason,
+      lastCheckedAt: nowIso(),
+    };
+  }
+
+  if (activeProbe || activeJob) {
+    const summary = activeProbe
+      ? `Waiting for inbox placement probe ${activeProbe.id} to complete.`
+      : `Waiting for inbox placement job ${activeJob?.id ?? ""} to complete.`;
+    return {
+      ...input.base,
+      stage: "testing_inbox_placement",
+      summary,
+      primaryBlocker: summary,
+      lastCheckedAt: nowIso(),
+    };
+  }
+
+  return input.base;
+}
+
 function compactBrand(brand: BrandRecord | null, mission: Mission): MissionDeliverabilitySnapshot["brand"] {
   return {
     id: brand?.id ?? mission.brandId,
@@ -265,7 +700,8 @@ function allowedToolNames(snapshot: MissionDeliverabilitySnapshot): MissionDeliv
 function summarizeSender(
   account: OutreachAccount,
   launch: SenderLaunch | null,
-  assignedAccountIds: string[]
+  assignedAccountIds: string[],
+  probes: ProbeSummary[]
 ): SenderSnapshot {
   const fromEmail = getOutreachAccountFromEmail(account).toLowerCase();
   const replyToEmail = getOutreachMailboxEmail(account).toLowerCase() || account.config.customerIo.replyToEmail.toLowerCase();
@@ -283,6 +719,7 @@ function summarizeSender(
     hasCredentials: account.hasCredentials,
     lastTestStatus: account.lastTestStatus,
     assigned: assignedAccountIds.includes(account.id),
+    probeMemory: summarizeSenderProbeMemory(probes, account.id, fromEmail),
     launch: launch
       ? {
           id: launch.id,
@@ -320,15 +757,51 @@ async function buildMissionDeliverabilitySnapshot(input: {
     : assignment?.accountId
       ? [assignment.accountId]
       : [];
+  const currentRunId = input.mission.currentRunId.trim();
+  const approvedGmailSeedEmails = parseDelimitedEmailSet(process.env.GMAIL_DELIVERABILITY_MONITOR_EMAILS);
+  const [probeRuns, runEvents, runJobs, seedReservations] = await Promise.all([
+    listDeliverabilityProbeRuns({
+      brandId: input.mission.brandId,
+      runId: currentRunId || undefined,
+      statuses: ["queued", "sent", "waiting", "completed", "failed"],
+      limit: 75,
+    }).catch(() => []),
+    currentRunId ? listRunEvents(currentRunId).catch(() => []) : Promise.resolve([]),
+    currentRunId ? listRunJobs(currentRunId, 75).catch(() => []) : Promise.resolve([]),
+    listDeliverabilitySeedReservations({ brandId: input.mission.brandId }).catch(() => []),
+  ]);
+  const probes = compactProbeRuns(probeRuns, approvedGmailSeedEmails);
+  const activeProbeJobs = compactProbeJobs(runJobs);
   const launchByAccountId = new Map(launches.map((launch) => [launch.senderAccountId, launch] as const));
   const launchByEmail = new Map(launches.map((launch) => [launch.fromEmail.toLowerCase(), launch] as const));
   const senders = accounts
     .filter((account) => account.status === "active" || assignedAccountIds.includes(account.id))
     .map((account) => {
       const fromEmail = getOutreachAccountFromEmail(account).toLowerCase();
-      return summarizeSender(account, launchByAccountId.get(account.id) ?? launchByEmail.get(fromEmail) ?? null, assignedAccountIds);
+      return summarizeSender(
+        account,
+        launchByAccountId.get(account.id) ?? launchByEmail.get(fromEmail) ?? null,
+        assignedAccountIds,
+        probes
+      );
     })
     .filter((sender) => sender.fromEmail || sender.assigned || sender.launch);
+  const assignedFromEmails = senders
+    .filter((sender) => sender.assigned)
+    .map((sender) => sender.fromEmail)
+    .filter(Boolean);
+  const firstRelevantProbeFromEmail =
+    probes.find((probe) => assignedAccountIds.includes(probe.senderAccountId) || assignedFromEmails.includes(probe.fromEmail))
+      ?.fromEmail ?? probes[0]?.fromEmail ?? "";
+  const assignedSenderDomain = emailDomain(assignedFromEmails[0] || firstRelevantProbeFromEmail);
+  const evidenceBackedDeliverabilityState = buildEvidenceBackedDeliverabilityState({
+    base: deliverabilityState,
+    currentRun,
+    assignedSenderAccountIds: assignedAccountIds,
+    assignedFromEmails,
+    probes,
+    activeProbeJobs,
+  });
   const activeProvisioningSenderCount = launches.filter(launchIsActiveCapacity).length;
   const forwardEmailProbeConfig = getForwardEmailProbeConfig();
   const guardrailsWithoutAllowed = {
@@ -355,9 +828,18 @@ async function buildMissionDeliverabilitySnapshot(input: {
       currentRunStatus: currentRun?.status ?? "",
       approvedPlan: input.approvedPlan,
     },
+    currentRun: {
+      id: currentRun?.id ?? "",
+      status: currentRun?.status ?? "",
+      accountId: currentRun?.accountId ?? "",
+      lockedSenderAccountId: currentRun?.lockedSenderAccountId ?? "",
+      pauseReason: currentRun?.pauseReason ?? "",
+      lastError: currentRun?.lastError ?? "",
+      metrics: currentRun?.metrics ?? null,
+    },
     brand: compactBrand(brand, input.mission),
     approvalPolicy: input.mission.approvalPolicy,
-    deliverabilityState,
+    deliverabilityState: evidenceBackedDeliverabilityState,
     assignment: {
       accountId: assignment?.accountId ?? "",
       accountIds: assignedAccountIds,
@@ -375,6 +857,20 @@ async function buildMissionDeliverabilitySnapshot(input: {
       summary: launch.summary,
       nextStep: launch.nextStep,
     })),
+    probeMemory: {
+      latestForwardEmailProbe: latestProbe(probes, (probe) => probe.targetKinds.includes("forward_email")),
+      latestGmailProbe: latestProbe(probes, (probe) =>
+        probe.targetKinds.some((kind) => kind === "gmail_mailbox" || kind === "mailbox")
+      ),
+      recentProbes: probes.slice(0, 20),
+      activeProbeJobs,
+      recentDeliverabilityEvents: compactDeliverabilityEvents(runEvents),
+    },
+    gmailSeeds: summarizeGmailSeeds({
+      approvedGmailSeedEmails,
+      assignedSenderDomain,
+      reservations: seedReservations,
+    }),
     provisioning: {
       provider: "mailpool",
       hasMailpoolApiKey: Boolean(secrets.mailpoolApiKey),
@@ -456,6 +952,10 @@ function buildMissionOperatorPrompt(snapshot: MissionDeliverabilitySnapshot) {
     "You are the decision-maker. The code will not pick a sender, domain, mailbox name, provider path, or next move for you.",
     "Choose exactly one tool from the tool catalog. If you choose a write tool, provide exact IDs/domains/local parts.",
     "You may create new sender capacity when guardrails allow it. You may request fresh Forward Email inbox placement probes; when no campaign message exists, the probe tool will send a neutral baseline warmup test. You may also wait, inspect, or block if that is the correct move.",
+    "Operating policy: Forward Email is the cheap first gate. Gmail/mailbox seed placement is the expensive confirmation only after Forward Email inboxes and an approved unused Gmail seed is available for this sender domain.",
+    "Do not burn Gmail seed capacity when Forward Email has not inboxed. Do not request another Gmail-style confirmation when probeMemory already shows a fresh active or completed Gmail/mailbox probe for the same sender/content.",
+    "If Gmail/mailbox placement is spam, all_mail_only, not_found, or failed, do not treat the sender as ready even if Forward Email passed. Prefer a healthier sender, wait for warmup/cooldown, or provision capacity if policy allows.",
+    "Approved Gmail seed usage is shown in gmailSeeds. Inbox cleanup/archiving for approved Gmail seed inbox hits happens automatically after placement inspection; do not ask the user to clean mailboxes.",
     "Hard guardrails are not optional: no sending before deliverability is ready, no domain purchase unless policy allows it, no provisioning above capacity, no spending above maxAutoDomainSpendUsd, and no invented account IDs.",
     "Do not output a generic plan. Select the next concrete tool call for this mission tick.",
     "Keep rationale, expectedOutcome, and toolInputJson concise.",
@@ -971,7 +1471,8 @@ export async function ensureMissionDeliverabilityCapacity(input: {
     snapshot,
     plan,
   });
-  const deliverabilityState = await inspectMissionDeliverability(input.mission.brandId);
+  const afterSnapshot = await buildMissionDeliverabilitySnapshot(input);
+  const deliverabilityState = afterSnapshot.deliverabilityState;
 
   await createMissionAgentDecision({
     missionId: input.mission.id,
@@ -993,6 +1494,7 @@ export async function ensureMissionDeliverabilityCapacity(input: {
       summary: execution.summary,
       result: execution.result,
       stateAfter: deliverabilityState,
+      probeMemoryAfter: afterSnapshot.probeMemory,
       recordedAt: nowIso(),
     },
   });

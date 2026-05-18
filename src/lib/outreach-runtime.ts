@@ -209,6 +209,9 @@ const GMAIL_DELIVERABILITY_PROBE_TARGETS_PER_RUN = (() => {
   const parsed = Number(process.env.GMAIL_DELIVERABILITY_PROBE_TARGETS_PER_RUN ?? 1);
   return Number.isFinite(parsed) ? Math.max(1, Math.min(5, Math.round(parsed))) : 1;
 })();
+const GMAIL_DELIVERABILITY_MONITOR_EMAILS = parseDelimitedEmailSet(
+  process.env.GMAIL_DELIVERABILITY_MONITOR_EMAILS
+);
 const DELIVERABILITY_INTELLIGENCE_REFRESH_HOURS = 6;
 const SELFFUNDED_AWS_APPLICATION_URL = "https://www.selffunded.dev/aws-credits/apply";
 
@@ -231,6 +234,15 @@ type ReplyPolicyInput = {
   leadEmail: string;
   leadCompany: string;
 };
+
+function parseDelimitedEmailSet(value: unknown) {
+  return new Set(
+    String(value ?? "")
+      .split(/[,\s]+/)
+      .map((entry) => entry.trim().toLowerCase())
+      .filter((entry) => entry.includes("@"))
+  );
+}
 
 type ReplyPolicyResult = {
   action: ReplyPolicyAction;
@@ -11865,6 +11877,13 @@ async function resolveMailboxDeliverabilityMonitorTargets(input: {
     const mailboxEmail = account.config.mailbox.email.trim().toLowerCase();
     if (!mailboxEmail || account.config.mailbox.status !== "connected") continue;
     if (input.gmailOnly && account.config.mailbox.provider !== "gmail") continue;
+    if (
+      input.gmailOnly &&
+      GMAIL_DELIVERABILITY_MONITOR_EMAILS.size > 0 &&
+      !GMAIL_DELIVERABILITY_MONITOR_EMAILS.has(mailboxEmail)
+    ) {
+      continue;
+    }
     if (excludedAccountIds.has(account.id) || excludedEmails.has(mailboxEmail)) continue;
     if (domainUsedMonitorEmails.has(mailboxEmail)) continue;
     const secrets = await getOutreachAccountSecrets(account.id);

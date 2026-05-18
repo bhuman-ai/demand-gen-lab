@@ -240,6 +240,11 @@ class ImapClient {
         reject(new Error("IMAP greeting timed out"));
       }, 15_000);
 
+      socket.setTimeout(15_000, () => {
+        cleanup();
+        reject(new Error("IMAP connection timed out"));
+      });
+
       const onConnect = () => {
         if (!this.options.secure) return;
       };
@@ -256,6 +261,7 @@ class ImapClient {
       };
       const cleanup = () => {
         clearTimeout(timeout);
+        socket.setTimeout(0);
         socket.off("connect", onConnect);
         socket.off("data", onData);
         socket.off("error", onError);

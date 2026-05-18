@@ -52,7 +52,9 @@ function envBoolean(name: string, fallback: boolean) {
 }
 
 function envNumber(name: string, fallback: number, min: number, max: number) {
-  const value = Number(envString(name));
+  const raw = envString(name);
+  if (!raw) return fallback;
+  const value = Number(raw);
   if (!Number.isFinite(value)) return fallback;
   return Math.max(min, Math.min(max, Math.round(value)));
 }

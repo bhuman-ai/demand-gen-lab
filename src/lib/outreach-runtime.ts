@@ -11910,7 +11910,7 @@ function readDeliverabilityProbeTargets(value: unknown): DeliverabilityProbeTarg
       forwardEmailAliasId: String(entry.forwardEmailAliasId ?? entry.forward_email_alias_id ?? "").trim() || undefined,
       forwardEmailAliasName: String(entry.forwardEmailAliasName ?? entry.forward_email_alias_name ?? "").trim() || undefined,
       imapHost: String(entry.imapHost ?? entry.imap_host ?? "").trim() || undefined,
-      imapPort: Number(entry.imapPort ?? entry.imap_port ?? 0) || undefined,
+      imapPort: normalizeProbeImapPort(entry.imapPort ?? entry.imap_port),
       imapSecure:
         entry.imapSecure !== undefined || entry.imap_secure !== undefined
           ? Boolean(entry.imapSecure ?? entry.imap_secure)
@@ -11921,6 +11921,12 @@ function readDeliverabilityProbeTargets(value: unknown): DeliverabilityProbeTarg
       expiresAt: String(entry.expiresAt ?? entry.expires_at ?? "").trim() || undefined,
     }))
     .filter((entry) => entry.accountId && entry.email);
+}
+
+function normalizeProbeImapPort(value: unknown) {
+  const port = Number(value);
+  if (!Number.isFinite(port) || port <= 1) return 993;
+  return Math.max(2, Math.min(65535, Math.round(port)));
 }
 
 function readDeliverabilityProbeResults(value: unknown): DeliverabilityProbeMonitorResult[] {

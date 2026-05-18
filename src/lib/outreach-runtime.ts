@@ -12243,6 +12243,29 @@ function deliverabilityProbeRunAllowsDispatch(probeRun: DeliverabilityProbeRun) 
   return probeRun.status === "completed" && probeRun.placement === "inbox" && probeRun.totalMonitors > 0;
 }
 
+function buildSyntheticDeliverabilityBaselineReference(input: {
+  probeToken: string;
+  contentHash: string;
+  senderAccountId: string;
+  senderAccountName: string;
+  senderFromEmail: string;
+}): DeliverabilityProbeReferenceMessage {
+  return {
+    id: `synthetic_baseline_${input.probeToken}`,
+    leadId: "",
+    status: "scheduled",
+    sourceType: "cadence",
+    nodeId: "deliverability_baseline",
+    subject: "",
+    body: "",
+    contentHash: input.contentHash,
+    senderAccountId: input.senderAccountId,
+    senderAccountName: input.senderAccountName,
+    senderFromEmail: input.senderFromEmail,
+    replyToEmail: "",
+  };
+}
+
 async function maybeQueueAutomaticDeliverabilityProbeSet(
   run: {
     id: string;
@@ -12401,22 +12424,16 @@ export async function requestRunDeliverabilityProbe(input: {
     sourceMessageId: input.sourceMessageId,
     preferScheduled: true,
   });
-  if (!referenceMessage) {
-    return {
-      ok: false,
-      reason: "No real scheduled or sent message exists for deliverability probing yet",
-      jobsQueued: 0,
-      runId: run.id,
-      sourceMessageId: "",
-      senderAccountId: "",
-      fromEmail: "",
-      probeVariants: [],
-    };
-  }
+  const requestedVariants = Array.from(
+    new Set((input.variants?.length ? input.variants : ["production", "baseline"]).map(readDeliverabilityProbeVariant))
+  );
+  const canRunSyntheticBaseline = !referenceMessage && requestedVariants.includes("baseline");
 
+  const assignment = await getBrandOutreachAssignment(run.brandId);
   const preferredAccountId =
     String(input.senderAccountId ?? "").trim() ||
-    referenceMessage.senderAccountId ||
+    referenceMessage?.senderAccountId ||
+    String(assignment?.accountId ?? "").trim() ||
     run.accountId;
   const routingContext = await buildRunSenderRoutingContext(run, {
     preferredAccountId,
@@ -12432,7 +12449,7 @@ export async function requestRunDeliverabilityProbe(input: {
       reason: "No active sender account is available for deliverability probing",
       jobsQueued: 0,
       runId: run.id,
-      sourceMessageId: referenceMessage.id,
+      sourceMessageId: referenceMessage?.id ?? "",
       senderAccountId: preferredAccountId,
       fromEmail: "",
       probeVariants: [],
@@ -12446,24 +12463,43 @@ export async function requestRunDeliverabilityProbe(input: {
       reason: "Selected sender account has no from email for deliverability probing",
       jobsQueued: 0,
       runId: run.id,
-      sourceMessageId: referenceMessage.id,
+      sourceMessageId: referenceMessage?.id ?? "",
       senderAccountId: senderSlot.account.id,
       fromEmail: "",
       probeVariants: [],
     };
   }
 
-  const requestedVariants = Array.from(
-    new Set((input.variants?.length ? input.variants : ["production", "baseline"]).map(readDeliverabilityProbeVariant))
-  );
   const baselineContentHash = buildDeliverabilityBaselineProbe({
     brandName: "",
     senderDomain: senderDomainFromEmail(senderFromEmail),
     probeToken: "control",
   }).contentHash;
+  const queueableVariants = referenceMessage
+    ? requestedVariants
+    : canRunSyntheticBaseline
+      ? (["baseline"] as DeliverabilityProbeVariant[])
+      : [];
+  if (!queueableVariants.length) {
+    return {
+      ok: false,
+      reason: "No real scheduled or sent message exists for production deliverability probing yet",
+      jobsQueued: 0,
+      runId: run.id,
+      sourceMessageId: "",
+      senderAccountId: senderSlot.account.id,
+      fromEmail: senderFromEmail,
+      probeVariants: [],
+    };
+  }
   const jobs = [];
-  for (const variant of requestedVariants) {
-    const contentHash = variant === "baseline" ? baselineContentHash : referenceMessage.contentHash;
+  let syntheticSourceMessageId = "";
+  for (const variant of queueableVariants) {
+    const probeToken = generateDeliverabilityProbeToken();
+    const syntheticBaseline = !referenceMessage && variant === "baseline";
+    const contentHash = variant === "baseline" ? baselineContentHash : referenceMessage?.contentHash ?? "";
+    const sourceMessageId = referenceMessage?.id ?? `synthetic_baseline_${probeToken}`;
+    if (syntheticBaseline) syntheticSourceMessageId = sourceMessageId;
     const job = await queueDeliverabilityProbe({
       runId: run.id,
       executeAfter: nowIso(),
@@ -12472,13 +12508,14 @@ export async function requestRunDeliverabilityProbe(input: {
         stage: "send",
         manual: input.manual === true,
         triggerStage: input.triggerStage ?? (input.manual ? "manual" : "autonomous"),
-        probeToken: generateDeliverabilityProbeToken(),
+        syntheticBaseline,
+        probeToken,
         probeVariant: variant,
-        sourceMessageId: referenceMessage.id,
-        sourceMessageStatus: referenceMessage.status,
-        sourceType: referenceMessage.sourceType,
-        nodeId: referenceMessage.nodeId,
-        leadId: referenceMessage.leadId,
+        sourceMessageId,
+        sourceMessageStatus: referenceMessage?.status ?? "scheduled",
+        sourceType: referenceMessage?.sourceType ?? "cadence",
+        nodeId: referenceMessage?.nodeId ?? "deliverability_baseline",
+        leadId: referenceMessage?.leadId ?? "",
         contentHash,
         senderAccountId: senderSlot.account.id,
         senderAccountName: senderSlot.account.name,
@@ -12495,16 +12532,17 @@ export async function requestRunDeliverabilityProbe(input: {
     payload: {
       reason: input.reason?.trim() || (input.manual ? "Requested manually" : "Requested by autonomous deliverability operator"),
       triggerStage: input.triggerStage ?? (input.manual ? "manual" : "autonomous"),
-      sourceMessageId: referenceMessage.id,
-      sourceMessageStatus: referenceMessage.status,
-      sourceType: referenceMessage.sourceType,
-      nodeId: referenceMessage.nodeId,
-      leadId: referenceMessage.leadId,
-      contentHash: referenceMessage.contentHash,
+      syntheticBaseline: !referenceMessage,
+      sourceMessageId: referenceMessage?.id ?? syntheticSourceMessageId,
+      sourceMessageStatus: referenceMessage?.status ?? "scheduled",
+      sourceType: referenceMessage?.sourceType ?? "cadence",
+      nodeId: referenceMessage?.nodeId ?? "deliverability_baseline",
+      leadId: referenceMessage?.leadId ?? "",
+      contentHash: referenceMessage?.contentHash ?? baselineContentHash,
       senderAccountId: senderSlot.account.id,
       senderAccountName: senderSlot.account.name,
       fromEmail: senderFromEmail,
-      probeVariants: requestedVariants,
+      probeVariants: queueableVariants,
       monitorProvider: forwardEmailConfig ? "forward_email" : "mailbox",
       forwardEmailMode: forwardEmailConfig?.mode ?? "",
     },
@@ -12515,10 +12553,10 @@ export async function requestRunDeliverabilityProbe(input: {
     reason: "Deliverability probes queued",
     jobsQueued: jobs.length,
     runId: run.id,
-    sourceMessageId: referenceMessage.id,
+    sourceMessageId: referenceMessage?.id ?? syntheticSourceMessageId,
     senderAccountId: senderSlot.account.id,
     fromEmail: senderFromEmail,
-    probeVariants: requestedVariants,
+    probeVariants: queueableVariants,
   };
 }
 
@@ -12814,7 +12852,6 @@ async function autoFailoverRunSender(input: {
 async function processMonitorDeliverabilityJob(job: OutreachJob) {
   const run = await getOutreachRun(job.runId);
   if (!run) return;
-  if (["canceled", "failed", "preflight_failed"].includes(run.status)) return;
 
   const payload =
     job.payload && typeof job.payload === "object" && !Array.isArray(job.payload)
@@ -12823,17 +12860,29 @@ async function processMonitorDeliverabilityJob(job: OutreachJob) {
   const stageRaw = String(payload.stage ?? "send").trim().toLowerCase();
   const stage: DeliverabilityProbeStage = stageRaw === "poll" ? "poll" : "send";
   const probeVariant = readDeliverabilityProbeVariant(payload.probeVariant);
+  const syntheticBaseline = payload.syntheticBaseline === true && probeVariant === "baseline";
+  if (["canceled", "failed"].includes(run.status)) return;
+  if (run.status === "preflight_failed" && !syntheticBaseline) return;
   const probeToken = String(payload.probeToken ?? generateDeliverabilityProbeToken()).trim();
   const requestedProbeRunId = String(payload.probeRunId ?? "").trim();
   let probeRun =
     (requestedProbeRunId ? await getDeliverabilityProbeRun(requestedProbeRunId) : null) ||
     (probeToken ? await findDeliverabilityProbeRun({ runId: run.id, probeToken, probeVariant }) : null);
   const sourceMessageId = String(payload.sourceMessageId ?? "").trim();
-  const referenceMessage = await resolveDeliverabilityProbeReferenceMessage({
+  let referenceMessage = await resolveDeliverabilityProbeReferenceMessage({
     runId: run.id,
     sourceMessageId,
     preferScheduled: stage === "send" && payload.manual === true,
   });
+  if (!referenceMessage && syntheticBaseline) {
+    referenceMessage = buildSyntheticDeliverabilityBaselineReference({
+      probeToken,
+      contentHash: String(payload.contentHash ?? "").trim(),
+      senderAccountId: String(payload.senderAccountId ?? run.accountId).trim(),
+      senderAccountName: String(payload.senderAccountName ?? "").trim(),
+      senderFromEmail: String(payload.fromEmail ?? "").trim(),
+    });
+  }
   if (!referenceMessage) {
     await createOutreachEvent({
       runId: run.id,

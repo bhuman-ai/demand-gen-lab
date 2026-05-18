@@ -246,7 +246,6 @@ function allowedToolNames(snapshot: MissionDeliverabilitySnapshot): MissionDeliv
   if (
     snapshot.probes.forwardEmailConfigured &&
     snapshot.mission.currentRunId &&
-    ["scheduled", "sending", "monitoring", "paused"].includes(snapshot.mission.currentRunStatus) &&
     snapshot.senders.some((sender) => sender.status === "active" && sender.fromEmail && sender.assigned)
   ) {
     names.push("run_delivery_probe");
@@ -415,7 +414,7 @@ function buildToolCatalog() {
       name: "run_delivery_probe",
       riskLevel: "guarded_write",
       description:
-        "Queue a fresh Forward Email inbox placement probe for the current run. Use this when sender readiness is uncertain, a daily proof is due, new messaging exists, or delivery proof should be gathered before continuing.",
+        "Queue a fresh Forward Email inbox placement probe for the current run. If campaign messages exist, probe production and baseline content; otherwise probe a neutral baseline message for sender warmup. Use this when sender readiness is uncertain, a daily proof is due, new messaging exists, or delivery proof should be gathered before continuing.",
       input: {
         senderAccountId: "optional assigned active sender account id; omit to use the current run sender",
         reason: "why this probe is needed now",
@@ -454,7 +453,7 @@ function buildMissionOperatorPrompt(snapshot: MissionDeliverabilitySnapshot) {
     "You are the LastB2B mission deliverability operator.",
     "You are the decision-maker. The code will not pick a sender, domain, mailbox name, provider path, or next move for you.",
     "Choose exactly one tool from the tool catalog. If you choose a write tool, provide exact IDs/domains/local parts.",
-    "You may create new sender capacity when guardrails allow it. You may request fresh Forward Email inbox placement probes when a current run has scheduled or sent messages. You may also wait, inspect, or block if that is the correct move.",
+    "You may create new sender capacity when guardrails allow it. You may request fresh Forward Email inbox placement probes; when no campaign message exists, the probe tool will send a neutral baseline warmup test. You may also wait, inspect, or block if that is the correct move.",
     "Hard guardrails are not optional: no sending before deliverability is ready, no domain purchase unless policy allows it, no provisioning above capacity, no spending above maxAutoDomainSpendUsd, and no invented account IDs.",
     "Do not output a generic plan. Select the next concrete tool call for this mission tick.",
     "Keep rationale, expectedOutcome, and toolInputJson concise.",

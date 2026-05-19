@@ -109,11 +109,17 @@ export function supportsMailpoolDelivery(
   if (account.provider !== "mailpool" || account.accountType === "mailbox") {
     return false;
   }
+  if (account.config.mailpool.status !== "active") {
+    return false;
+  }
   if (isMailpoolSharedWarmupOnly(account)) {
     return false;
   }
   if (account.config.mailbox.deliveryMethod === "gmail_ui") {
     return supportsGmailUiDelivery(account);
+  }
+  if (account.config.mailbox.status !== "connected") {
+    return false;
   }
   return (
     Boolean(account.config.mailpool.mailboxId.trim()) &&

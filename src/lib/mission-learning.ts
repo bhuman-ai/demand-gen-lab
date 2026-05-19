@@ -6,7 +6,11 @@ import {
   listRunAnomalies,
   listRunMessages,
 } from "@/lib/outreach-data";
-import { getOutreachAccountFromEmail, isMailpoolSharedWarmupOnly } from "@/lib/outreach-account-helpers";
+import {
+  getOutreachAccountFromEmail,
+  isMailpoolSharedWarmupOnly,
+  supportsAnyDelivery,
+} from "@/lib/outreach-account-helpers";
 import {
   createMissionEvent,
   createMissionLearning,
@@ -61,9 +65,10 @@ function missionStatusFromRun(run: OutreachRun | null, fallback: MissionStatus):
   return fallback;
 }
 
-function isMissionOutboundReady(account: Pick<OutreachAccount, "provider" | "config">) {
+function isMissionOutboundReady(account: Pick<OutreachAccount, "provider" | "accountType" | "config">) {
   const config = account.config && typeof account.config === "object" ? account.config as Record<string, unknown> : {};
   if (isMailpoolSharedWarmupOnly(account)) return false;
+  if (!supportsAnyDelivery(account)) return false;
   const outbound = config.outbound && typeof config.outbound === "object" ? outboundAsRecord(config.outbound) : null;
   return outbound ? outbound.enabled === true : true;
 }

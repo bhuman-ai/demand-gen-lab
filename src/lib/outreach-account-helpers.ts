@@ -102,6 +102,20 @@ export function isMailpoolSharedWarmupOnly(account: Pick<OutreachAccount, "provi
   return account.provider === "mailpool" && account.config.mailpool.mailboxType === "shared";
 }
 
+function supportsMailpoolSmtpDelivery(
+  account: Pick<OutreachAccount, "provider" | "accountType" | "config">,
+  secrets?: Pick<OutreachAccountSecrets, "mailboxPassword" | "mailboxSmtpPassword">
+) {
+  return (
+    account.config.mailbox.status === "connected" &&
+    Boolean(account.config.mailpool.mailboxId.trim()) &&
+    Boolean(account.config.mailbox.smtpHost.trim()) &&
+    Boolean(account.config.mailbox.smtpUsername.trim()) &&
+    Boolean(getOutreachAccountFromEmail(account)) &&
+    (!secrets || Boolean(secrets.mailboxSmtpPassword.trim() || secrets.mailboxPassword.trim()))
+  );
+}
+
 export function supportsMailpoolDelivery(
   account: Pick<OutreachAccount, "provider" | "accountType" | "config">,
   secrets?: Pick<OutreachAccountSecrets, "mailboxPassword" | "mailboxSmtpPassword">
@@ -116,18 +130,9 @@ export function supportsMailpoolDelivery(
     return false;
   }
   if (account.config.mailbox.deliveryMethod === "gmail_ui") {
-    return supportsGmailUiDelivery(account);
+    return supportsGmailUiDelivery(account) || supportsMailpoolSmtpDelivery(account, secrets);
   }
-  if (account.config.mailbox.status !== "connected") {
-    return false;
-  }
-  return (
-    Boolean(account.config.mailpool.mailboxId.trim()) &&
-    Boolean(account.config.mailbox.smtpHost.trim()) &&
-    Boolean(account.config.mailbox.smtpUsername.trim()) &&
-    Boolean(getOutreachAccountFromEmail(account)) &&
-    (!secrets || Boolean(secrets.mailboxSmtpPassword.trim() || secrets.mailboxPassword.trim()))
-  );
+  return supportsMailpoolSmtpDelivery(account, secrets);
 }
 
 export function supportsSmtpDelivery(

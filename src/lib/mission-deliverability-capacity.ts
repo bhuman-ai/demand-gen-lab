@@ -16,6 +16,7 @@ import {
   listRunJobs,
   listSenderLaunches,
   setBrandOutreachAssignment,
+  updateOutreachAccount,
   updateOutreachRun,
   type OutreachEvent,
   type OutreachJob,
@@ -1502,7 +1503,12 @@ async function executeAssignSender(input: {
 }): Promise<ToolExecutionResult> {
   const accountId = asString(input.plan.toolInput.accountId);
   const snapshotSender = input.snapshot.senders.find((sender) => sender.accountId === accountId) ?? null;
-  if (!snapshotSender || !snapshotSender.deliveryCapable) {
+  const canRepairDisabledOutbound =
+    Boolean(snapshotSender) &&
+    !snapshotSender?.deliveryCapable &&
+    snapshotSender?.outboundEnabled === false &&
+    snapshotSender?.hasCredentials === true;
+  if (!snapshotSender || (!snapshotSender.deliveryCapable && !canRepairDisabledOutbound)) {
     return {
       ok: false,
       summary: "AI selected a sender that is not assignable for this mission.",
@@ -1515,7 +1521,7 @@ async function executeAssignSender(input: {
     };
   }
   const accounts = await listOutreachAccounts();
-  const account = accounts.find((row) => row.id === accountId) ?? null;
+  let account = accounts.find((row) => row.id === accountId) ?? null;
   if (!account) {
     return {
       ok: false,
@@ -1533,7 +1539,13 @@ async function executeAssignSender(input: {
       result: { accountId, status: account.status, fromEmail },
     };
   }
-  if (account.accountType === "mailbox" || !outboundEnabled(account) || !account.hasCredentials) {
+  const canEnableOutbound =
+    !outboundEnabled(account) &&
+    account.accountType !== "mailbox" &&
+    account.hasCredentials &&
+    supportsAnyDelivery(account) &&
+    !isMailpoolSharedWarmupOnly(account);
+  if (account.accountType === "mailbox" || (!outboundEnabled(account) && !canEnableOutbound) || !account.hasCredentials) {
     return {
       ok: false,
       summary: "AI selected an account that is not delivery-capable.",
@@ -1545,6 +1557,18 @@ async function executeAssignSender(input: {
         hasCredentials: account.hasCredentials,
       },
     };
+  }
+  if (canEnableOutbound) {
+    account =
+      (await updateOutreachAccount(account.id, {
+        config: {
+          outbound: {
+            enabled: true,
+            disabledAt: "",
+            disabledReason: "",
+          },
+        },
+      })) ?? account;
   }
 
   const currentRunId = input.mission.currentRunId.trim();

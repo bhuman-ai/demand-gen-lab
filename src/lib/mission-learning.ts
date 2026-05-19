@@ -190,7 +190,12 @@ export async function refreshMissionRuntimeSummary(mission: Mission): Promise<Mi
     status,
     metricsSummary,
     deliverabilityState,
-    lastError: run?.status === "preflight_failed" ? run.lastError : mission.lastError,
+    lastError:
+      run?.status === "preflight_failed"
+        ? run.lastError
+        : deliverabilityState.stage === "ready"
+          ? ""
+          : mission.lastError,
   });
 
   if (updated && run?.status === "completed") {

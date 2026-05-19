@@ -516,6 +516,16 @@ function textLooksDeliverabilityRelated(value: string) {
 }
 
 async function shouldAutopilotProcessMission(mission: Mission) {
+  if (mission.status === "failed") {
+    const missionText = `${mission.lastError} ${mission.deliverabilityState.primaryBlocker} ${mission.deliverabilityState.summary}`;
+    if (textLooksDeliverabilityRelated(missionText)) return true;
+    const run = mission.currentRunId ? await getOutreachRun(mission.currentRunId).catch(() => null) : null;
+    return Boolean(
+      run &&
+        !["completed", "canceled"].includes(run.status) &&
+        textLooksDeliverabilityRelated(`${run.pauseReason} ${run.lastError}`)
+    );
+  }
   if (mission.status !== "paused") return true;
   if (
     textLooksDeliverabilityRelated(
@@ -1382,7 +1392,7 @@ export async function startMission(input: {
 }
 
 export async function runMissionAutopilotTick(limit = 10) {
-  const missions = await listMissionsByStatuses(["starting", "deliverability_blocked", "paused", "running"]);
+  const missions = await listMissionsByStatuses(["starting", "deliverability_blocked", "paused", "running", "failed"]);
   const rows = [];
   for (const mission of missions.slice(0, limit)) {
     if (!hasApprovedMissionPlan(mission)) {

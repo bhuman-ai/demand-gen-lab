@@ -813,6 +813,31 @@ function runPauseClearedByFreshProof(run: OutreachRun | null, probes: ProbeSumma
   );
 }
 
+function extractEmailAddresses(value: string) {
+  return Array.from(value.toLowerCase().matchAll(/[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/g)).map((match) => match[0]);
+}
+
+function runPauseMentionsOnlyOtherSender(run: OutreachRun | null, assignedFromEmails: string[]) {
+  if (!run || !assignedFromEmails.length) return false;
+  const mentionedEmails = extractEmailAddresses(`${run.pauseReason} ${run.lastError}`);
+  if (!mentionedEmails.length) return false;
+  const assigned = new Set(assignedFromEmails.map((email) => email.trim().toLowerCase()).filter(Boolean));
+  if (!assigned.size) return false;
+  return mentionedEmails.every((email) => !assigned.has(email));
+}
+
+function accountCanRecoverMissionAssignment(account: OutreachAccount | null | undefined): account is OutreachAccount {
+  return Boolean(
+    account &&
+      account.status === "active" &&
+      account.accountType !== "mailbox" &&
+      account.hasCredentials &&
+      supportsAnyDelivery(account) &&
+      !isMailpoolSharedWarmupOnly(account) &&
+      getOutreachAccountFromEmail(account)
+  );
+}
+
 function buildEvidenceBackedDeliverabilityState(input: {
   base: MissionDeliverabilityState;
   currentRun: OutreachRun | null;
@@ -906,7 +931,11 @@ function buildEvidenceBackedDeliverabilityState(input: {
     };
   }
 
-  if (runLooksDeliverabilityPaused(input.currentRun) && !runPauseClearedByFreshProof(input.currentRun, probes)) {
+  if (
+    runLooksDeliverabilityPaused(input.currentRun) &&
+    !runPauseClearedByFreshProof(input.currentRun, probes) &&
+    !runPauseMentionsOnlyOtherSender(input.currentRun, input.assignedFromEmails)
+  ) {
     const baselineOnlyReason =
       !campaignCopyProbes.length &&
       /baseline|spam|seed|placement|inbox/i.test(`${input.currentRun?.pauseReason ?? ""} ${input.currentRun?.lastError ?? ""}`);
@@ -1044,7 +1073,16 @@ async function buildMissionDeliverabilitySnapshot(input: {
 }): Promise<MissionDeliverabilitySnapshot> {
   await loadBrandSenderLaunchView(input.mission.brandId).catch(() => null);
 
-  const [brand, assignment, accounts, launches, settings, secrets, deliverabilityState, currentRun] = await Promise.all([
+  const [
+    brand,
+    initialAssignment,
+    accounts,
+    launches,
+    settings,
+    secrets,
+    initialDeliverabilityState,
+    currentRun,
+  ] = await Promise.all([
     getBrandById(input.mission.brandId, { includeEmbedded: true }).catch(() => null),
     getBrandOutreachAssignment(input.mission.brandId).catch(() => null),
     listOutreachAccounts().catch(() => []),
@@ -1055,6 +1093,33 @@ async function buildMissionDeliverabilitySnapshot(input: {
     input.mission.currentRunId ? getOutreachRun(input.mission.currentRunId).catch(() => null) : Promise.resolve(null),
   ]);
   const registrantProfile = await resolveMissionRegistrantProfile(input.mission.brandId);
+  let assignment = initialAssignment;
+  let deliverabilityState = initialDeliverabilityState;
+  if (!assignment?.accountId && !assignment?.accountIds?.length && currentRun?.accountId) {
+    const recoveredAccount = accounts.find((account) => account.id === currentRun.accountId) ?? null;
+    if (accountCanRecoverMissionAssignment(recoveredAccount)) {
+      assignment =
+        (await setBrandOutreachAssignment(input.mission.brandId, {
+          accountId: recoveredAccount.id,
+          accountIds: [recoveredAccount.id],
+          mailboxAccountId: recoveredAccount.id,
+        }).catch(() => null)) ?? assignment;
+      if (assignment) {
+        deliverabilityState = await inspectMissionDeliverability(input.mission.brandId).catch(() => deliverabilityState);
+        await createMissionEvent({
+          missionId: input.mission.id,
+          brandId: input.mission.brandId,
+          eventType: "sender_assignment_recovered_from_run",
+          summary: `Recovered mission sender assignment from current run account ${getOutreachAccountFromEmail(recoveredAccount)}.`,
+          payload: {
+            runId: currentRun.id,
+            accountId: recoveredAccount.id,
+            fromEmail: getOutreachAccountFromEmail(recoveredAccount),
+          },
+        }).catch(() => null);
+      }
+    }
+  }
 
   const assignedAccountIds = assignment?.accountIds?.length
     ? assignment.accountIds

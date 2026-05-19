@@ -229,6 +229,7 @@ export async function runMissionTick(limit = 25) {
     "monitoring",
     "learning",
     "deliverability_blocked",
+    "failed",
   ]);
   const rows = [];
   for (const mission of missions.slice(0, limit)) {

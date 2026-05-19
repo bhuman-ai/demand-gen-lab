@@ -621,9 +621,21 @@ function compactProbeRuns(probeRuns: DeliverabilityProbeRun[], approvedGmailSeed
 }
 
 function probeIsBad(probe: ProbeSummary) {
+  if (probeIsInfrastructureUnavailable(probe)) return false;
   if (probe.status === "failed") return true;
   if (probeHasTransientMonitorError(probe)) return false;
   return ["spam", "all_mail_only", "not_found", "error"].includes(probe.placement);
+}
+
+function probeIsInfrastructureUnavailable(probe: ProbeSummary) {
+  const detail = [
+    probe.summaryText,
+    probe.lastError,
+    ...probe.results.map((result) => result.error),
+  ].join(" ");
+  return /seed sending is disabled|deliverability seed sending is disabled|no deliverability probe target|no unused deliverability probe target|no unused gmail deliverability mailbox|no gmail deliverability mailbox/i.test(
+    detail
+  );
 }
 
 function probeHasTransientMonitorError(probe: ProbeSummary) {
@@ -821,10 +833,11 @@ function buildEvidenceBackedDeliverabilityState(input: {
   );
   const probes = hasAssignedSenderIdentity ? relevantProbes : input.probes;
   const campaignCopyProbes = probes.filter(probeIsCampaignCopy);
-  const latestGmailCampaignCopyProbe = latestProbe(campaignCopyProbes, (probe) =>
+  const campaignCopyEvidenceProbes = campaignCopyProbes.filter((probe) => !probeIsInfrastructureUnavailable(probe));
+  const latestGmailCampaignCopyProbe = latestProbe(campaignCopyEvidenceProbes, (probe) =>
     probe.targetKinds.some((kind) => kind === "gmail_mailbox" || kind === "mailbox")
   );
-  const latestForwardEmailCampaignCopyProbe = latestProbe(campaignCopyProbes, (probe) =>
+  const latestForwardEmailCampaignCopyProbe = latestProbe(campaignCopyEvidenceProbes, (probe) =>
     probe.targetKinds.includes("forward_email")
   );
   const activeProbe = campaignCopyProbes.find(probeIsActive) ?? null;

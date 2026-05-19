@@ -622,7 +622,18 @@ function compactProbeRuns(probeRuns: DeliverabilityProbeRun[], approvedGmailSeed
 
 function probeIsBad(probe: ProbeSummary) {
   if (probe.status === "failed") return true;
+  if (probeHasTransientMonitorError(probe)) return false;
   return ["spam", "all_mail_only", "not_found", "error"].includes(probe.placement);
+}
+
+function probeHasTransientMonitorError(probe: ProbeSummary) {
+  if (probe.placement !== "error") return false;
+  const detail = [
+    probe.summaryText,
+    probe.lastError,
+    ...probe.results.map((result) => result.error),
+  ].join(" ");
+  return /timed?\s*out|timeout|temporar|connection closed|econnreset|etimedout/i.test(detail);
 }
 
 function probeIsActive(probe: ProbeSummary) {

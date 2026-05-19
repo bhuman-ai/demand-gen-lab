@@ -12220,6 +12220,12 @@ function summarizeDeliverabilityProbeResults(results: DeliverabilityProbeMonitor
   };
 }
 
+function isTransientMailboxPlacementError(error: string) {
+  return /timed?\s*out|timeout|temporar|connection closed|econnreset|etimedout/i.test(
+    String(error ?? "")
+  );
+}
+
 function isMailpoolCreditExhaustedError(error: unknown) {
   const message = error instanceof Error ? error.message : String(error ?? "");
   const normalized = message.trim().toLowerCase();
@@ -13845,7 +13851,11 @@ async function processMonitorDeliverabilityJob(job: OutreachJob) {
       });
     }
 
-    if (placement.ok && placement.placement === "not_found" && pollAttempt < 3) {
+    if (
+      pollAttempt < 3 &&
+      ((placement.ok && placement.placement === "not_found") ||
+        (!placement.ok && isTransientMailboxPlacementError(placement.error)))
+    ) {
       pendingTargets.push(target);
       continue;
     }

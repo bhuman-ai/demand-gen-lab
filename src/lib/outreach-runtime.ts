@@ -10344,6 +10344,64 @@ async function failRunWithDiagnostics(input: {
   });
 }
 
+async function preservePreparedRunAfterTopUpFailure(input: {
+  run: OutreachRun;
+  reason: string;
+  payload?: Record<string, unknown>;
+  existingLeadCount: number;
+  targetLeadCount: number;
+  sampleOnly?: boolean;
+  deliverabilityProofOnly?: boolean;
+}) {
+  if (input.sampleOnly || input.existingLeadCount <= 0) return false;
+
+  const [messages, replyThreads] = await Promise.all([
+    listRunMessages(input.run.id).catch(() => []),
+    listReplyThreadsByBrand(input.run.brandId)
+      .then((result) => result.threads)
+      .catch(() => []),
+  ]);
+  const scheduledMessageCount = messages.filter((message) => message.status === "scheduled").length;
+  const sentMessageCount = messages.filter((message) => message.status === "sent").length;
+
+  await updateOutreachRun(input.run.id, {
+    status: "scheduled",
+    lastError: `Lead top-up paused: ${input.reason}`,
+    metrics: buildLiveRunMetrics({
+      run: input.run,
+      messages,
+      threads: replyThreads,
+      sourcedLeads: input.existingLeadCount,
+    }),
+  });
+  await createOutreachEvent({
+    runId: input.run.id,
+    eventType: "lead_sourcing_top_up_failed",
+    payload: {
+      reason: input.reason,
+      existingLeadCount: input.existingLeadCount,
+      targetLeadCount: input.targetLeadCount,
+      scheduledMessageCount,
+      sentMessageCount,
+      deliverabilityProofOnly: input.deliverabilityProofOnly === true,
+      ...(input.payload ?? {}),
+    },
+  });
+
+  if (scheduledMessageCount === 0 && sentMessageCount === 0) {
+    await enqueueOutreachJob({
+      runId: input.run.id,
+      jobType: "schedule_messages",
+      executeAfter: nowIso(),
+      payload: {
+        deliverabilityProofOnly: input.deliverabilityProofOnly === true,
+      },
+    });
+  }
+
+  return true;
+}
+
 function buildSenderPoolUnavailableSummary(blockedSenders: SenderReadinessSnapshot[]) {
   if (!blockedSenders.length) {
     return {
@@ -14260,6 +14318,17 @@ async function processSourceLeadsJob(job: OutreachJob) {
       Number(payload.maxLeadsOverride ?? sourceConfig.maxLeads ?? (sampleOnly ? APIFY_PROBE_MAX_LEADS : 100)) || 100
     )
   );
+  const existingLeadCountBeforeTopUp = existingLeads.length;
+  const preserveTopUpFailure = (reason: string, failurePayload: Record<string, unknown> = {}) =>
+    preservePreparedRunAfterTopUpFailure({
+      run,
+      reason,
+      payload: failurePayload,
+      existingLeadCount: existingLeadCountBeforeTopUp,
+      targetLeadCount: maxLeads,
+      sampleOnly,
+      deliverabilityProofOnly,
+    });
   if (existingLeads.length) {
     const existingRunMessages = await listRunMessages(run.id);
     const { threads } = await listReplyThreadsByBrand(run.brandId);
@@ -14472,6 +14541,15 @@ async function processSourceLeadsJob(job: OutreachJob) {
       resumeState,
     });
   } catch (error) {
+    if (
+      await preserveTopUpFailure("Lead top-up provider failed before adding new prospects.", {
+        providerError: error instanceof Error ? error.message : "Unknown error",
+        targetAudience,
+        triggerContext,
+      })
+    ) {
+      return;
+    }
     await setTrace({
       phase: "failed",
       failureStep: "probe_chain",
@@ -14744,6 +14822,15 @@ async function processSourceLeadsJob(job: OutreachJob) {
   });
 
   if (!exaSourcing.acceptedLeads.length) {
+    if (
+      await preserveTopUpFailure("Lead top-up found no additional sendable prospects.", {
+        queryDiagnostics: exaSourcing.diagnostics,
+        emailEnrichment: exaSourcing.emailEnrichment,
+        topRejections: summarizeTopReasons(exaSourcing.rejectedLeads),
+      })
+    ) {
+      return;
+    }
     await setTrace({
       phase: "failed",
       failureStep: "execute_chain",
@@ -14795,6 +14882,13 @@ async function processSourceLeadsJob(job: OutreachJob) {
     rejectedDecisions: exaSourcing.rejectedLeads,
     decision: exaDecision,
     emailEnrichment: exaSourcing.emailEnrichment,
+    topUpFailureContext:
+      existingLeadCountBeforeTopUp > 0 && existingLeadCountBeforeTopUp < maxLeads
+        ? {
+            existingLeadCount: existingLeadCountBeforeTopUp,
+            targetLeadCount: maxLeads,
+          }
+        : undefined,
   });
   return;
 
@@ -14812,6 +14906,10 @@ async function finishSourcingWithLeads(
     rejectedDecisions?: LeadAcceptanceDecision[];
     decision?: SourcingChainDecision | null;
     emailEnrichment?: ExaPeopleSourcingResult["emailEnrichment"] | null;
+    topUpFailureContext?: {
+      existingLeadCount: number;
+      targetLeadCount: number;
+    };
   } = {}
 ) {
   const runtimeExperiment = await getExperimentRecordByRuntimeRef(
@@ -14939,6 +15037,30 @@ async function finishSourcingWithLeads(
   }
 
   if (!filteredLeads.length) {
+    if (
+      options.topUpFailureContext &&
+      (await preservePreparedRunAfterTopUpFailure({
+        run,
+        reason: verificationUnavailable
+          ? "Lead top-up could not verify candidate emails."
+          : "Lead top-up candidates were rejected by quality or duplicate rules.",
+        payload: {
+          sourcedCount: leads.length,
+          blockedCount: leads.length,
+          suppressionCounts,
+          topPolicyRejections: summarizeTopReasons(policyRejections),
+          decisionId: options.decision?.id ?? "",
+          verificationUnavailable,
+          emailEnrichmentError,
+        },
+        existingLeadCount: options.topUpFailureContext.existingLeadCount,
+        targetLeadCount: options.topUpFailureContext.targetLeadCount,
+        sampleOnly: options.sampleOnly,
+        deliverabilityProofOnly: options.deliverabilityProofOnly,
+      }))
+    ) {
+      return;
+    }
     await failRunWithDiagnostics({
       run,
       reason: verificationUnavailable
@@ -14973,6 +15095,22 @@ async function finishSourcingWithLeads(
   );
 
   if (!upserted.length) {
+    if (
+      options.topUpFailureContext &&
+      (await preservePreparedRunAfterTopUpFailure({
+        run,
+        reason: "Lead top-up produced candidates but could not persist new prospects.",
+        payload: {
+          attempted: filteredLeads.length,
+        },
+        existingLeadCount: options.topUpFailureContext.existingLeadCount,
+        targetLeadCount: options.topUpFailureContext.targetLeadCount,
+        sampleOnly: options.sampleOnly,
+        deliverabilityProofOnly: options.deliverabilityProofOnly,
+      }))
+    ) {
+      return;
+    }
     await failRunWithDiagnostics({
       run,
       reason: "Lead persistence failed (0 leads stored)",

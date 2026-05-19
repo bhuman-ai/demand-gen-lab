@@ -15,6 +15,7 @@ import {
   getOutreachRun,
   listRunJobs,
   listRunLeads,
+  listRunEvents,
   listRunMessages,
   updateOutreachJob,
   updateOutreachRun,
@@ -197,6 +198,16 @@ type BatchReadinessSnapshot = {
     activeScheduleJobIds: string[];
     activeDispatchJobIds: string[];
   };
+  sourcing: {
+    recentFailures: Array<{
+      createdAt: string;
+      eventType: string;
+      reason: string;
+      existingLeadCount: number;
+      targetLeadCount: number;
+      scheduledMessageCount: number;
+    }>;
+  };
   allowedToolNames: BatchReadinessToolName[];
 };
 
@@ -268,10 +279,11 @@ async function buildBatchReadinessSnapshot(input: {
 }): Promise<BatchReadinessSnapshot | null> {
   const run = await getOutreachRun(input.runId).catch(() => null);
   if (!run) return null;
-  const [leads, messages, jobs] = await Promise.all([
+  const [leads, messages, jobs, events] = await Promise.all([
     listRunLeads(run.id).catch(() => []),
     listRunMessages(run.id).catch(() => []),
     listRunJobs(run.id, 50).catch(() => []),
+    listRunEvents(run.id).catch(() => []),
   ]);
   const scheduledMessages = messages.filter((message) => message.status === "scheduled");
   const sentMessageCount = messages.filter((message) => message.status === "sent").length;
@@ -317,6 +329,22 @@ async function buildBatchReadinessSnapshot(input: {
       activeScheduleJobIds: activeJobs.filter((job) => job.jobType === "schedule_messages").map((job) => job.id),
       activeDispatchJobIds: activeJobs.filter((job) => job.jobType === "dispatch_messages").map((job) => job.id),
     },
+    sourcing: {
+      recentFailures: events
+        .filter((event) => event.eventType === "lead_sourcing_top_up_failed" || event.eventType === "lead_sourcing_failed")
+        .slice(0, 5)
+        .map((event) => {
+          const payload = asRecord(event.payload);
+          return {
+            createdAt: event.createdAt,
+            eventType: event.eventType,
+            reason: asString(payload.reason),
+            existingLeadCount: asNumber(payload.existingLeadCount, 0),
+            targetLeadCount: asNumber(payload.targetLeadCount, 0),
+            scheduledMessageCount: asNumber(payload.scheduledMessageCount, 0),
+          };
+        }),
+    },
     allowedToolNames: [],
   };
   snapshot.allowedToolNames = allowedBatchReadinessTools(snapshot);
@@ -332,6 +360,7 @@ function buildBatchReadinessPrompt(snapshot: BatchReadinessSnapshot) {
     "You may still choose a tiny smoke test, but only if it is strategically better than sourcing more leads first. Explain why.",
     "If more leads are needed, choose source_more_leads. The system will top up and render campaign copy without dispatching until this gate passes again.",
     "If active sourcing or scheduling is already running, choose wait_for_batch_readiness.",
+    "If recent sourcing top-up failed and prepared campaign copy already exists, decide whether to retry with a changed reason, run a smoke test, dispatch the prepared batch, or block. Do not blindly repeat the same top-up loop.",
     "Return only JSON matching the schema. Put tool arguments in toolInputJson as a JSON object encoded in a string.",
     "",
     `Tool catalog JSON:\n${JSON.stringify(batchReadinessToolCatalog())}`,

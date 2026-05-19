@@ -60,6 +60,11 @@ function asNumber(value: unknown, fallback = 0) {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
+function missionOperatorMaxOutputTokens() {
+  const parsed = Number(process.env.OPENAI_MISSION_MAX_OUTPUT_TOKENS ?? 8000);
+  return Number.isFinite(parsed) ? Math.max(3000, Math.min(20000, Math.round(parsed))) : 8000;
+}
+
 function asLines(values: string[]) {
   return values.map((value) => value.trim()).filter(Boolean);
 }
@@ -439,7 +444,7 @@ async function planBatchReadinessAction(snapshot: BatchReadinessSnapshot): Promi
           },
         },
       },
-      max_output_tokens: 1800,
+      max_output_tokens: missionOperatorMaxOutputTokens(),
       store: false,
     }),
   });

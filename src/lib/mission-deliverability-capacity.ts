@@ -329,6 +329,11 @@ function deliverabilityProbeCadenceHours() {
   return Number.isFinite(parsed) ? Math.max(1, parsed) : 24;
 }
 
+function missionOperatorMaxOutputTokens() {
+  const parsed = Number(process.env.OPENAI_MISSION_MAX_OUTPUT_TOKENS ?? 8000);
+  return Number.isFinite(parsed) ? Math.max(3000, Math.min(20000, Math.round(parsed))) : 8000;
+}
+
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
 }
@@ -1356,7 +1361,7 @@ async function planMissionDeliverabilityAction(snapshot: MissionDeliverabilitySn
           },
         },
       },
-      max_output_tokens: 2200,
+      max_output_tokens: missionOperatorMaxOutputTokens(),
       store: false,
     }),
   });
@@ -1385,13 +1390,20 @@ async function planMissionDeliverabilityAction(snapshot: MissionDeliverabilitySn
   try {
     parsed = JSON.parse(extractResponseText(payload));
   } catch {
+    const payloadRow = asRecord(payload);
+    const incomplete = asRecord(payloadRow.incomplete_details);
+    const reason = [
+      extractResponseText(payload).slice(0, 500),
+      asString(payloadRow.status) ? `status=${asString(payloadRow.status)}` : "",
+      asString(incomplete.reason) ? `incomplete=${asString(incomplete.reason)}` : "",
+    ].filter(Boolean).join(" ");
     return normalizeAgentPlan(
       {},
       model,
       {
         toolName: "block_for_policy",
         rationale: "Mission deliverability AI returned invalid JSON.",
-        toolInput: { reason: extractResponseText(payload).slice(0, 500), desiredAction: "Retry AI mission deliverability operator." },
+        toolInput: { reason, desiredAction: "Retry AI mission deliverability operator." },
       }
     );
   }

@@ -2963,15 +2963,20 @@ async function sendDeliveryEmail(params: {
   metadata?: Record<string, unknown>;
 }) {
   if (params.account.provider === "mailpool") {
-    if (params.account.config.mailbox.deliveryMethod === "gmail_ui" && !supportsGmailUiDelivery(params.account)) {
+    const deliveryMethod = params.account.config.mailbox.deliveryMethod;
+    const gmailUiReady =
+      deliveryMethod === "gmail_ui" &&
+      supportsGmailUiDelivery(params.account) &&
+      getOutreachGmailUiLoginState(params.account) === "ready";
+    if (gmailUiReady) {
+      return sendMailpoolGmailUiEmail(params);
+    }
+    if (deliveryMethod === "gmail_ui" && !mailboxSmtpPassword(params.secrets)) {
       return {
         ok: false,
         providerMessageId: "",
-        error: "Gmail UI delivery is selected but the Gmail UI profile is not fully configured.",
+        error: "Gmail UI delivery is selected, but the Gmail UI session is not ready and SMTP fallback credentials are missing.",
       };
-    }
-    if (supportsGmailUiDelivery(params.account)) {
-      return sendMailpoolGmailUiEmail(params);
     }
     return sendMailpoolSmtpEmail(params);
   }

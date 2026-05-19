@@ -81,6 +81,22 @@ function pushIssue(
   });
 }
 
+function hasMailpoolSmtpFallback(input: {
+  account: OutreachAccount | null;
+  hasDeliveryCredentials?: boolean;
+  fromEmail: string;
+}) {
+  const account = input.account;
+  if (!account || account.provider !== "mailpool" || account.accountType === "mailbox") return false;
+  if (input.hasDeliveryCredentials === false) return false;
+  return Boolean(
+    input.fromEmail &&
+      account.config.mailbox.status === "connected" &&
+      account.config.mailbox.smtpHost.trim() &&
+      account.config.mailbox.smtpUsername.trim()
+  );
+}
+
 function rowHealthIssues(row: DomainRow | null | undefined) {
   if (!row) return [] as SenderReadinessIssue[];
   const issues: SenderReadinessIssue[] = [];
@@ -171,6 +187,11 @@ export function evaluateSenderReadiness(input: {
 
   const blockingIssues: SenderReadinessIssue[] = [];
   const warnings: SenderReadinessIssue[] = rowHealthIssues(row);
+  const mailpoolSmtpFallback = hasMailpoolSmtpFallback({
+    account,
+    hasDeliveryCredentials: input.hasDeliveryCredentials,
+    fromEmail,
+  });
 
   if (!account) {
     pushIssue(blockingIssues, {
@@ -214,7 +235,8 @@ export function evaluateSenderReadiness(input: {
     account &&
     account.provider === "mailpool" &&
     getOutreachMailboxDeliveryMethod(account) === "gmail_ui" &&
-    !supportsGmailUiDelivery(account)
+    !supportsGmailUiDelivery(account) &&
+    !mailpoolSmtpFallback
   ) {
     pushIssue(blockingIssues, {
       code: "missing_delivery_credentials",
@@ -227,7 +249,7 @@ export function evaluateSenderReadiness(input: {
 
   if (account && getOutreachMailboxDeliveryMethod(account) === "gmail_ui") {
     const gmailUiState = getOutreachGmailUiLoginState(mailboxAccount ?? account);
-    if (gmailUiState !== "ready") {
+    if (gmailUiState !== "ready" && !mailpoolSmtpFallback) {
       const message =
         (mailboxAccount ?? account).config.mailbox.gmailUiLoginMessage.trim() ||
         "Open this sender on the worker and complete Gmail login before sending.";

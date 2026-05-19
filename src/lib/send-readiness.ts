@@ -6,6 +6,7 @@ import {
   getOutreachSenderBackingIssue,
   getOutreachGmailUiLoginState,
   getOutreachMailboxEmail,
+  isMailpoolSharedWarmupOnly,
   supportsGmailUiDelivery,
 } from "@/lib/outreach-account-helpers";
 import type { SenderCapacitySnapshot } from "@/lib/sender-capacity";
@@ -21,6 +22,7 @@ export type SenderReadinessIssueCode =
   | "inactive_mailbox_account"
   | "missing_mailbox_credentials"
   | "sender_not_backed_by_mailbox"
+  | "mailpool_warmup_only"
   | "mailpool_pending"
   | "mailpool_error"
   | "gmail_ui_login_required"
@@ -283,7 +285,15 @@ export function evaluateSenderReadiness(input: {
 
   if (account?.provider === "mailpool") {
     const mailpoolStatus = account.config.mailpool.status;
-    if (mailpoolStatus === "pending" || mailpoolStatus === "updating") {
+    if (isMailpoolSharedWarmupOnly(account)) {
+      pushIssue(blockingIssues, {
+        code: "mailpool_warmup_only",
+        severity: "blocking",
+        kind: "policy",
+        summary: "Mailpool sender is warmup-only",
+        detail: "Shared Mailpool inboxes are warmup/probe infrastructure and cannot be used for real outbound.",
+      });
+    } else if (mailpoolStatus === "pending" || mailpoolStatus === "updating") {
       pushIssue(blockingIssues, {
         code: "mailpool_pending",
         severity: "blocking",

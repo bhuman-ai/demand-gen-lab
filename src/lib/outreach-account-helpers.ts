@@ -98,11 +98,18 @@ export function supportsCustomerIoDelivery(account: Pick<OutreachAccount, "provi
   );
 }
 
+export function isMailpoolSharedWarmupOnly(account: Pick<OutreachAccount, "provider" | "config">) {
+  return account.provider === "mailpool" && account.config.mailpool.mailboxType === "shared";
+}
+
 export function supportsMailpoolDelivery(
   account: Pick<OutreachAccount, "provider" | "accountType" | "config">,
   secrets?: Pick<OutreachAccountSecrets, "mailboxPassword" | "mailboxSmtpPassword">
 ) {
   if (account.provider !== "mailpool" || account.accountType === "mailbox") {
+    return false;
+  }
+  if (isMailpoolSharedWarmupOnly(account)) {
     return false;
   }
   if (account.config.mailbox.deliveryMethod === "gmail_ui") {

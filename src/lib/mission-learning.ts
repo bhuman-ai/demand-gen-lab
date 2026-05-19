@@ -6,7 +6,7 @@ import {
   listRunAnomalies,
   listRunMessages,
 } from "@/lib/outreach-data";
-import { getOutreachAccountFromEmail } from "@/lib/outreach-account-helpers";
+import { getOutreachAccountFromEmail, isMailpoolSharedWarmupOnly } from "@/lib/outreach-account-helpers";
 import {
   createMissionEvent,
   createMissionLearning,
@@ -15,7 +15,7 @@ import {
   listMissionsByStatuses,
   updateMission,
 } from "@/lib/mission-data";
-import type { OutreachMessage, OutreachRun } from "@/lib/factory-types";
+import type { OutreachAccount, OutreachMessage, OutreachRun } from "@/lib/factory-types";
 import type {
   Mission,
   MissionDeliverabilityState,
@@ -61,8 +61,9 @@ function missionStatusFromRun(run: OutreachRun | null, fallback: MissionStatus):
   return fallback;
 }
 
-function isMissionOutboundReady(account: { config?: unknown }) {
+function isMissionOutboundReady(account: Pick<OutreachAccount, "provider" | "config">) {
   const config = account.config && typeof account.config === "object" ? account.config as Record<string, unknown> : {};
+  if (isMailpoolSharedWarmupOnly(account)) return false;
   const outbound = config.outbound && typeof config.outbound === "object" ? outboundAsRecord(config.outbound) : null;
   return outbound ? outbound.enabled === true : true;
 }

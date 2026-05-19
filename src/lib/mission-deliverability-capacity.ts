@@ -1,5 +1,10 @@
 import { getBrandById } from "@/lib/factory-data";
-import { getOutreachAccountFromEmail, getOutreachMailboxEmail } from "@/lib/outreach-account-helpers";
+import {
+  getOutreachAccountFromEmail,
+  getOutreachMailboxEmail,
+  isMailpoolSharedWarmupOnly,
+  supportsAnyDelivery,
+} from "@/lib/outreach-account-helpers";
 import {
   getOutreachRun,
   getBrandOutreachAssignment,
@@ -761,7 +766,7 @@ function allowedToolNames(snapshot: MissionDeliverabilitySnapshot): MissionDeliv
   if (
     snapshot.probes.forwardEmailConfigured &&
     snapshot.mission.currentRunId &&
-    snapshot.senders.some((sender) => sender.status === "active" && sender.fromEmail && sender.assigned)
+    snapshot.senders.some((sender) => sender.status === "active" && sender.fromEmail && sender.assigned && sender.deliveryCapable)
   ) {
     names.push("run_delivery_probe");
   }
@@ -794,7 +799,12 @@ function summarizeSender(
     replyToEmail,
     domain: emailDomain(fromEmail),
     outboundEnabled: outboundEnabled(account),
-    deliveryCapable: account.accountType !== "mailbox" && outboundEnabled(account) && account.hasCredentials,
+    deliveryCapable:
+      account.accountType !== "mailbox" &&
+      outboundEnabled(account) &&
+      account.hasCredentials &&
+      supportsAnyDelivery(account) &&
+      !isMailpoolSharedWarmupOnly(account),
     hasCredentials: account.hasCredentials,
     lastTestStatus: account.lastTestStatus,
     assigned: assignedAccountIds.includes(account.id),
@@ -1076,6 +1086,7 @@ function buildMissionOperatorPrompt(snapshot: MissionDeliverabilitySnapshot) {
     "If campaign-copy Gmail/mailbox placement is spam, all_mail_only, not_found, or failed, do not treat the sender as ready even if Forward Email passed. Prefer a healthier sender, wait for warmup/cooldown, or provision capacity if policy allows.",
     "If campaignCopyProof.hasExactCopyAvailable is false, do not substitute a baseline probe as launch proof. Choose wait_for_warmup or block_for_policy unless another exact-copy materialization path is available.",
     "When selecting senderAccountId for assign_sender or run_delivery_probe, use only exact accountId values from snapshot.senders where deliveryCapable is true. Do not select currentRun.accountId unless that exact ID is also present in snapshot.senders and deliveryCapable is true.",
+    "If the assigned/current sender is not deliveryCapable, or currentRun.lastError says the sender is warmup-only, do not request another probe on it. Assign a different delivery-capable sender or provision new Mailpool sender capacity when guardrails allow it.",
     "Approved Gmail seed usage is shown in gmailSeeds. Inbox cleanup/archiving for approved Gmail seed inbox hits happens automatically after placement inspection; do not ask the user to clean mailboxes.",
     "Hard guardrails are not optional: no sending before deliverability is ready, no domain purchase unless policy allows it, no provisioning above capacity, no spending above maxAutoDomainSpendUsd, and no invented account IDs.",
     "Do not output a generic plan. Select the next concrete tool call for this mission tick.",

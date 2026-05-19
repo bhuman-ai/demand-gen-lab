@@ -10,7 +10,13 @@ import {
   upsertConversationMapDraft,
 } from "@/lib/conversation-flow-data";
 import { generateScreenedConversationFlowGraph } from "@/lib/conversation-flow-generation";
-import { getOutreachRun } from "@/lib/outreach-data";
+import {
+  enqueueOutreachJob,
+  getOutreachRun,
+  listRunJobs,
+  listRunMessages,
+  updateOutreachRun,
+} from "@/lib/outreach-data";
 import { launchExperimentRun } from "@/lib/outreach-runtime";
 import {
   createMissionAgentDecision,
@@ -71,6 +77,20 @@ function hasApprovedMissionPlan(mission: Mission) {
 
 function runCanContinue(status: string) {
   return ["queued", "sourcing", "scheduled", "sending", "monitoring"].includes(status);
+}
+
+function hasScheduledOrSentMessages(
+  messages: Awaited<ReturnType<typeof listRunMessages>>
+) {
+  return messages.some((message) => ["scheduled", "sent"].includes(message.status));
+}
+
+function hasActivePreparationJob(jobs: Awaited<ReturnType<typeof listRunJobs>>) {
+  return jobs.some(
+    (job) =>
+      ["queued", "running"].includes(job.status) &&
+      ["source_leads", "schedule_messages"].includes(job.jobType)
+  );
 }
 
 function textLooksDeliverabilityRelated(value: string) {
@@ -253,6 +273,161 @@ async function ensureMissionConversationMap(input: {
   return { ok: true, reason: "Conversation Map generated and published.", publishedRevision: published.publishedRevision };
 }
 
+async function ensureMissionPreparedForDeliverabilityProof(input: {
+  mission: Mission;
+  approvedPlan: MissionPlan;
+}): Promise<Mission> {
+  let mission = input.mission;
+  if (!mission.currentRuntimeCampaignId || !mission.currentRuntimeExperimentId) {
+    return mission;
+  }
+
+  if (mission.currentRunId) {
+    const currentRun = await getOutreachRun(mission.currentRunId).catch(() => null);
+    if (currentRun) {
+      const messages = await listRunMessages(currentRun.id).catch(() => []);
+      if (hasScheduledOrSentMessages(messages)) {
+        return mission;
+      }
+
+      const jobs = await listRunJobs(currentRun.id, 25).catch(() => []);
+      if (hasActivePreparationJob(jobs) && ["queued", "sourcing", "scheduled"].includes(currentRun.status)) {
+        return mission;
+      }
+
+      if (!["preflight_failed", "failed", "canceled", "completed"].includes(currentRun.status)) {
+        await updateOutreachRun(currentRun.id, {
+          status: "canceled",
+          completedAt: nowIso(),
+          pauseReason: "",
+          lastError: "Replaced by campaign-copy deliverability proof preparation.",
+        });
+      }
+      await createMissionEvent({
+        missionId: mission.id,
+        brandId: mission.brandId,
+        eventType: "stale_delivery_proof_run_replaced",
+        summary: "Previous run had no real campaign copy available for inbox-placement proof.",
+        payload: {
+          previousRunId: currentRun.id,
+          previousRunStatus: currentRun.status,
+          activePreparationJobs: jobs
+            .filter((job) => ["queued", "running"].includes(job.status))
+            .map((job) => ({ jobId: job.id, jobType: job.jobType, status: job.status })),
+        },
+      });
+    } else {
+      await createMissionEvent({
+        missionId: mission.id,
+        brandId: mission.brandId,
+        eventType: "stale_delivery_proof_run_replaced",
+        summary: "Previous run could not be found; preparing a fresh campaign-copy proof run.",
+        payload: { previousRunId: mission.currentRunId, previousRunStatus: "missing" },
+      });
+    }
+
+    mission =
+      (await updateMission(mission.brandId, mission.id, {
+        currentRunId: "",
+        lastError: "",
+      })) ?? mission;
+  }
+
+  const launch = await launchExperimentRun({
+    brandId: mission.brandId,
+    campaignId: mission.currentRuntimeCampaignId,
+    experimentId: mission.currentRuntimeExperimentId,
+    trigger: "manual",
+    ownerType: "experiment",
+    ownerId: mission.currentExperimentId,
+    maxLeadsOverride: clampFirstBatch(input.approvedPlan.firstBatchSize),
+    deliverabilityProofOnly: true,
+  });
+
+  await createMissionAgentDecision({
+    missionId: mission.id,
+    brandId: mission.brandId,
+    agent: "mission_operator",
+    action: "prepare_campaign_copy_for_delivery_proof",
+    rationale:
+      "Inbox placement must be tested with the actual first campaign email before any prospect dispatch is queued.",
+    riskLevel: launch.ok ? "guarded_write" : "blocked",
+    input: {
+      runtimeCampaignId: mission.currentRuntimeCampaignId,
+      runtimeExperimentId: mission.currentRuntimeExperimentId,
+      firstBatchSize: clampFirstBatch(input.approvedPlan.firstBatchSize),
+    },
+    output: launch,
+  });
+
+  mission =
+    (await updateMission(mission.brandId, mission.id, {
+      currentRunId: launch.runId || mission.currentRunId,
+      status: "deliverability_blocked",
+      lastError: launch.ok ? "" : launch.reason,
+    })) ?? mission;
+
+  await createMissionEvent({
+    missionId: mission.id,
+    brandId: mission.brandId,
+    eventType: launch.ok ? "campaign_copy_proof_preparing" : "campaign_copy_proof_prepare_blocked",
+    summary: launch.ok
+      ? "Queued real campaign-copy preparation for inbox-placement proof."
+      : `Could not prepare campaign-copy proof: ${launch.reason}`,
+    payload: { launch },
+  });
+
+  return mission;
+}
+
+async function queuePreparedRunDispatch(input: {
+  mission: Mission;
+  runId: string;
+}): Promise<{ queued: boolean; reason: string; scheduledMessageCount: number }> {
+  const run = await getOutreachRun(input.runId).catch(() => null);
+  if (!run) {
+    return { queued: false, reason: "Run not found.", scheduledMessageCount: 0 };
+  }
+  const messages = await listRunMessages(run.id).catch(() => []);
+  const scheduledMessageCount = messages.filter((message) => message.status === "scheduled").length;
+  if (scheduledMessageCount === 0) {
+    return {
+      queued: false,
+      reason: "No scheduled campaign messages are ready for dispatch.",
+      scheduledMessageCount,
+    };
+  }
+
+  if (run.status === "paused") {
+    await updateOutreachRun(run.id, {
+      status: "scheduled",
+      pauseReason: "",
+      lastError: "",
+    });
+  }
+  await enqueueOutreachJob({
+    runId: run.id,
+    jobType: "dispatch_messages",
+    executeAfter: nowIso(),
+    payload: {
+      source: "mission_deliverability_ready",
+    },
+  });
+  await createMissionEvent({
+    missionId: input.mission.id,
+    brandId: input.mission.brandId,
+    eventType: "prepared_run_dispatch_queued",
+    summary: `Deliverability is ready; queued dispatch for ${scheduledMessageCount} prepared messages.`,
+    payload: {
+      runId: run.id,
+      runStatus: run.status,
+      scheduledMessageCount,
+    },
+  });
+
+  return { queued: true, reason: "Dispatch queued.", scheduledMessageCount };
+}
+
 async function launchApprovedMissionFirstBatch(input: {
   mission: Mission;
   approvedPlan: MissionPlan;
@@ -263,7 +438,30 @@ async function launchApprovedMissionFirstBatch(input: {
   if (mission.currentRunId) {
     const currentRun = await getOutreachRun(mission.currentRunId).catch(() => null);
     if (currentRun && runCanContinue(currentRun.status)) {
-      return refreshMissionRuntimeSummary(mission);
+      if (input.deliverabilityState.stage === "ready" && currentRun.status === "scheduled") {
+        const dispatch = await queuePreparedRunDispatch({ mission, runId: currentRun.id });
+        if (dispatch.queued) {
+          mission =
+            (await updateMission(mission.brandId, mission.id, {
+              status: "running",
+              lastError: "",
+            })) ?? mission;
+          return refreshMissionRuntimeSummary(mission);
+        }
+      } else {
+        return refreshMissionRuntimeSummary(mission);
+      }
+    }
+    if (currentRun && currentRun.status === "paused" && input.deliverabilityState.stage === "ready") {
+      const dispatch = await queuePreparedRunDispatch({ mission, runId: currentRun.id });
+      if (dispatch.queued) {
+        mission =
+          (await updateMission(mission.brandId, mission.id, {
+            status: "running",
+            lastError: "",
+          })) ?? mission;
+        return refreshMissionRuntimeSummary(mission);
+      }
     }
     await createMissionEvent({
       missionId: mission.id,
@@ -438,6 +636,37 @@ export async function startMission(input: {
     },
   });
 
+  updatedMission = await ensureMissionRuntime({
+    mission: updatedMission,
+    approvedPlan,
+    brandName: brand.name,
+  });
+  const conversationMap = await ensureMissionConversationMap({
+    mission: updatedMission,
+    approvedPlan,
+    brandName: brand.name,
+  }).catch((error) => {
+    return {
+      ok: false,
+      reason: error instanceof Error ? error.message : "Failed to auto-publish Conversation Map.",
+      publishedRevision: 0,
+    };
+  });
+  if (!conversationMap.ok) {
+    await createMissionEvent({
+      missionId: updatedMission.id,
+      brandId: updatedMission.brandId,
+      eventType: "conversation_map_auto_publish_failed",
+      summary: conversationMap.reason,
+      payload: { publishedRevision: conversationMap.publishedRevision },
+    });
+  } else {
+    updatedMission = await ensureMissionPreparedForDeliverabilityProof({
+      mission: updatedMission,
+      approvedPlan,
+    });
+  }
+
   const capacity = await ensureMissionDeliverabilityCapacity({
     mission: updatedMission,
     approvedPlan,
@@ -463,25 +692,6 @@ export async function startMission(input: {
       status: shouldWaitForDeliverability(deliverabilityState.stage) ? "deliverability_blocked" : "starting",
       lastError: shouldWaitForDeliverability(deliverabilityState.stage) ? deliverabilityState.primaryBlocker : "",
     })) ?? updatedMission;
-
-  updatedMission = await ensureMissionRuntime({
-    mission: updatedMission,
-    approvedPlan,
-    brandName: brand.name,
-  });
-  await ensureMissionConversationMap({
-    mission: updatedMission,
-    approvedPlan,
-    brandName: brand.name,
-  }).catch(async (error) => {
-    await createMissionEvent({
-      missionId: updatedMission.id,
-      brandId: updatedMission.brandId,
-      eventType: "conversation_map_auto_publish_failed",
-      summary: error instanceof Error ? error.message : "Failed to auto-publish Conversation Map.",
-      payload: {},
-    });
-  });
 
   if (shouldWaitForDeliverability(deliverabilityState.stage)) {
     await createMissionEvent({
@@ -529,33 +739,47 @@ export async function runMissionAutopilotTick(limit = 10) {
     }
 
     try {
-      const capacity = await ensureMissionDeliverabilityCapacity({
+      let updatedMission = await ensureMissionRuntime({
         mission,
         approvedPlan: mission.approvedPlan,
       });
-      const deliverabilityState = capacity.deliverabilityState;
-      let updatedMission =
-        (await updateMission(mission.brandId, mission.id, {
-          deliverabilityState,
-          status: shouldWaitForDeliverability(deliverabilityState.stage) ? "deliverability_blocked" : "starting",
-          lastError: shouldWaitForDeliverability(deliverabilityState.stage) ? deliverabilityState.primaryBlocker : "",
-        })) ?? mission;
-      updatedMission = await ensureMissionRuntime({
+      const conversationMap = await ensureMissionConversationMap({
         mission: updatedMission,
         approvedPlan: updatedMission.approvedPlan,
+      }).catch((error) => {
+        return {
+          ok: false,
+          reason: error instanceof Error ? error.message : "Failed to auto-publish Conversation Map.",
+          publishedRevision: 0,
+        };
       });
-      await ensureMissionConversationMap({
-        mission: updatedMission,
-        approvedPlan: updatedMission.approvedPlan,
-      }).catch(async (error) => {
+      if (!conversationMap.ok) {
         await createMissionEvent({
           missionId: updatedMission.id,
           brandId: updatedMission.brandId,
           eventType: "conversation_map_auto_publish_failed",
-          summary: error instanceof Error ? error.message : "Failed to auto-publish Conversation Map.",
-          payload: {},
+          summary: conversationMap.reason,
+          payload: { publishedRevision: conversationMap.publishedRevision },
         });
+      } else {
+        updatedMission = await ensureMissionPreparedForDeliverabilityProof({
+          mission: updatedMission,
+          approvedPlan: updatedMission.approvedPlan,
+        });
+      }
+
+      const capacity = await ensureMissionDeliverabilityCapacity({
+        mission: updatedMission,
+        approvedPlan: updatedMission.approvedPlan,
       });
+      const deliverabilityState = capacity.deliverabilityState;
+      updatedMission = capacity.mission;
+      updatedMission =
+        (await updateMission(mission.brandId, mission.id, {
+          deliverabilityState,
+          status: shouldWaitForDeliverability(deliverabilityState.stage) ? "deliverability_blocked" : "starting",
+          lastError: shouldWaitForDeliverability(deliverabilityState.stage) ? deliverabilityState.primaryBlocker : "",
+        })) ?? updatedMission;
 
       if (shouldWaitForDeliverability(deliverabilityState.stage)) {
         rows.push({

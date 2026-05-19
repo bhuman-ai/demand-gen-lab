@@ -10952,6 +10952,7 @@ export async function launchExperimentRun(input: {
   ownerType?: "experiment" | "campaign";
   ownerId?: string;
   sampleOnly?: boolean;
+  deliverabilityProofOnly?: boolean;
   maxLeadsOverride?: number;
 }): Promise<{
   ok: boolean;
@@ -11248,6 +11249,7 @@ export async function launchExperimentRun(input: {
       executeAfter: nowIso(),
       payload: {
         maxLeadsOverride: maxSeedLeads,
+        deliverabilityProofOnly: input.deliverabilityProofOnly === true,
       },
     });
     await markExperimentExecutionStatus(input.brandId, input.campaignId, experiment.id, "queued");
@@ -11259,6 +11261,7 @@ export async function launchExperimentRun(input: {
         outcome: "source_from_zero",
         seededLeadCount: 0,
         maxLeadsOverride: maxSeedLeads,
+        deliverabilityProofOnly: input.deliverabilityProofOnly === true,
       },
     });
     return {
@@ -11316,6 +11319,9 @@ export async function launchExperimentRun(input: {
       runId: run.id,
       jobType: "schedule_messages",
       executeAfter: nowIso(),
+      payload: {
+        deliverabilityProofOnly: input.deliverabilityProofOnly === true,
+      },
     });
   }
   await markExperimentExecutionStatus(
@@ -11330,6 +11336,7 @@ export async function launchExperimentRun(input: {
     payload: {
       trigger: input.trigger,
       sampleOnly: input.sampleOnly === true,
+      deliverabilityProofOnly: input.deliverabilityProofOnly === true,
       seededLeadCount: seededLeads.length,
     },
   });
@@ -14190,6 +14197,7 @@ async function processSourceLeadsJob(job: OutreachJob) {
       ? (job.payload as Record<string, unknown>)
       : {};
   const sampleOnly = payload.sampleOnly === true;
+  const deliverabilityProofOnly = payload.deliverabilityProofOnly === true;
   const resumeState = parseDeferredSourcingState(payload.resumeState);
 
   const campaign = await getCampaignById(run.brandId, run.campaignId);
@@ -14263,6 +14271,7 @@ async function processSourceLeadsJob(job: OutreachJob) {
         count: existingLeads.length,
         targetLeadCount: maxLeads,
         sampleOnly,
+        deliverabilityProofOnly,
       },
     });
     if (!sampleOnly) {
@@ -14270,6 +14279,7 @@ async function processSourceLeadsJob(job: OutreachJob) {
         runId: run.id,
         jobType: "schedule_messages",
         executeAfter: nowIso(),
+        payload: { deliverabilityProofOnly },
       });
     }
     if (existingLeads.length >= maxLeads) {
@@ -14762,6 +14772,7 @@ async function processSourceLeadsJob(job: OutreachJob) {
 
   await finishSourcingWithLeads(run, exaSourcing.acceptedLeads, {
     sampleOnly,
+    deliverabilityProofOnly,
     allowMissingEmail: sampleOnly,
     qualityPolicy,
     rejectedDecisions: exaSourcing.rejectedLeads,
@@ -14778,6 +14789,7 @@ async function finishSourcingWithLeads(
   leads: ApifyLead[],
   options: {
     sampleOnly?: boolean;
+    deliverabilityProofOnly?: boolean;
     allowMissingEmail?: boolean;
     qualityPolicy?: LeadQualityPolicy;
     rejectedDecisions?: LeadAcceptanceDecision[];
@@ -14975,6 +14987,7 @@ async function finishSourcingWithLeads(
       suppressionCounts,
       topPolicyRejections: summarizeTopReasons(policyRejections),
       sampleOnly: options.sampleOnly === true,
+      deliverabilityProofOnly: options.deliverabilityProofOnly === true,
       decisionId: options.decision?.id ?? "",
       verificationUnavailable,
       emailEnrichmentError,
@@ -14986,6 +14999,9 @@ async function finishSourcingWithLeads(
       runId: run.id,
       jobType: "schedule_messages",
       executeAfter: nowIso(),
+      payload: {
+        deliverabilityProofOnly: options.deliverabilityProofOnly === true,
+      },
     });
   } else {
     await markExperimentExecutionStatus(run.brandId, run.campaignId, run.experimentId, "completed");
@@ -14996,6 +15012,8 @@ async function processScheduleMessagesJob(job: OutreachJob) {
   const run = await getOutreachRun(job.runId);
   if (!run) return;
   if (["paused", "completed", "canceled", "failed", "preflight_failed"].includes(run.status)) return;
+  const payload = asRecord(job.payload);
+  const deliverabilityProofOnly = payload.deliverabilityProofOnly === true;
 
   const existingMessages = await listRunMessages(run.id);
 
@@ -15230,6 +15248,23 @@ async function processScheduleMessagesJob(job: OutreachJob) {
   });
   await maybeQueueScheduledDeliverabilityProbe(run);
   await markExperimentExecutionStatus(run.brandId, run.campaignId, run.experimentId, "scheduled");
+  if (deliverabilityProofOnly) {
+    const refreshedMessages = await listRunMessages(run.id);
+    const proofMessageCount = refreshedMessages.filter((message) =>
+      ["scheduled", "sent"].includes(message.status)
+    ).length;
+    await createOutreachEvent({
+      runId: run.id,
+      eventType: "deliverability_proof_prepare_completed",
+      payload: {
+        proofMessageCount,
+        scheduledMessagesCount,
+        dispatchQueued: false,
+      },
+    });
+    return;
+  }
+
   await enqueueOutreachJob({ runId: run.id, jobType: "dispatch_messages", executeAfter: nowIso() });
   if (hasConversationMap) {
     await enqueueOutreachJob({

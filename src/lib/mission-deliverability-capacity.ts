@@ -16,6 +16,7 @@ import {
   listRunJobs,
   listSenderLaunches,
   setBrandOutreachAssignment,
+  updateOutreachRun,
   type OutreachEvent,
   type OutreachJob,
 } from "@/lib/outreach-data";
@@ -1487,11 +1488,38 @@ async function executeAssignSender(input: {
     };
   }
 
+  const currentRunId = input.mission.currentRunId.trim();
+  const currentRun = currentRunId ? await getOutreachRun(currentRunId).catch(() => null) : null;
+  if (
+    currentRun?.lockedSenderAccountId &&
+    currentRun.lockedSenderAccountId !== account.id
+  ) {
+    return {
+      ok: false,
+      summary: "AI selected a sender, but the current run is locked to a different sender.",
+      riskLevel: "blocked",
+      result: {
+        accountId: account.id,
+        lockedSenderAccountId: currentRun.lockedSenderAccountId,
+        runId: currentRun.id,
+      },
+    };
+  }
+
   const assignment = await setBrandOutreachAssignment(input.mission.brandId, {
     accountId: account.id,
     accountIds: [account.id],
     mailboxAccountId: account.id,
   });
+  const previousRunAccountId = currentRun?.accountId ?? "";
+  const updatedRun =
+    currentRun && currentRun.accountId !== account.id
+      ? await updateOutreachRun(currentRun.id, {
+          accountId: account.id,
+          pauseReason: currentRun.status === "paused" ? "" : currentRun.pauseReason,
+          lastError: "",
+        })
+      : currentRun;
   await createMissionEvent({
     missionId: input.mission.id,
     brandId: input.mission.brandId,
@@ -1501,6 +1529,9 @@ async function executeAssignSender(input: {
       accountId: account.id,
       fromEmail,
       reason: asString(input.plan.toolInput.reason) || input.plan.rationale,
+      runId: currentRun?.id ?? "",
+      previousRunAccountId,
+      updatedRunAccountId: updatedRun?.accountId ?? "",
     },
   });
 
@@ -1508,7 +1539,14 @@ async function executeAssignSender(input: {
     ok: true,
     summary: `Assigned ${fromEmail} as the mission sender.`,
     riskLevel: "guarded_write",
-    result: { assignment, accountId: account.id, fromEmail },
+    result: {
+      assignment,
+      accountId: account.id,
+      fromEmail,
+      runId: updatedRun?.id ?? "",
+      previousRunAccountId,
+      updatedRunAccountId: updatedRun?.accountId ?? "",
+    },
   };
 }
 

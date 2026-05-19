@@ -848,6 +848,13 @@ async function ensureBatchReadyForDispatch(input: {
       reason: asString(plan.toolInput.reason) || plan.rationale,
       minutes: 30,
     });
+    if (snapshot.run.status === "paused") {
+      await updateOutreachRun(input.runId, {
+        status: "sourcing",
+        pauseReason: "",
+        lastError: "",
+      });
+    }
     await enqueueOutreachJob({
       runId: input.runId,
       jobType: "source_leads",

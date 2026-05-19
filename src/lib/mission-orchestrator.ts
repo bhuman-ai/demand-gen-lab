@@ -203,6 +203,13 @@ type BatchReadinessSnapshot = {
     activeSourceJobIds: string[];
     activeScheduleJobIds: string[];
     activeDispatchJobIds: string[];
+    activeDispatchJobs: Array<{
+      id: string;
+      status: string;
+      executeAfter: string;
+      postponedByBatchReadinessGate: boolean;
+      postponedReason: string;
+    }>;
   };
   sourcing: {
     recentFailures: Array<{
@@ -301,6 +308,7 @@ async function buildBatchReadinessSnapshot(input: {
     )
   );
   const activeJobs = jobs.filter((job) => ["queued", "running"].includes(job.status));
+  const activeDispatchJobs = activeJobs.filter((job) => job.jobType === "dispatch_messages");
   const snapshot: BatchReadinessSnapshot = {
     mission: {
       id: input.mission.id,
@@ -333,11 +341,26 @@ async function buildBatchReadinessSnapshot(input: {
     jobs: {
       activeSourceJobIds: activeJobs.filter((job) => job.jobType === "source_leads").map((job) => job.id),
       activeScheduleJobIds: activeJobs.filter((job) => job.jobType === "schedule_messages").map((job) => job.id),
-      activeDispatchJobIds: activeJobs.filter((job) => job.jobType === "dispatch_messages").map((job) => job.id),
+      activeDispatchJobIds: activeDispatchJobs.map((job) => job.id),
+      activeDispatchJobs: activeDispatchJobs.map((job) => {
+        const payload = asRecord(job.payload);
+        return {
+          id: job.id,
+          status: job.status,
+          executeAfter: job.executeAfter,
+          postponedByBatchReadinessGate: payload.postponedByBatchReadinessGate === true,
+          postponedReason: asString(payload.postponedReason),
+        };
+      }),
     },
     sourcing: {
       recentFailures: events
-        .filter((event) => event.eventType === "lead_sourcing_top_up_failed" || event.eventType === "lead_sourcing_failed")
+        .filter(
+          (event) =>
+            event.eventType === "lead_sourcing_top_up_failed" ||
+            event.eventType === "lead_sourcing_failed" ||
+            event.eventType === "lead_sourcing_skipped"
+        )
         .slice(0, 5)
         .map((event) => {
           const payload = asRecord(event.payload);
@@ -349,7 +372,8 @@ async function buildBatchReadinessSnapshot(input: {
             targetLeadCount: asNumber(payload.targetLeadCount, 0),
             scheduledMessageCount: asNumber(payload.scheduledMessageCount, 0),
           };
-        }),
+        })
+        .filter((event) => !(event.eventType === "lead_sourcing_skipped" && event.reason === "leads_already_present")),
     },
     allowedToolNames: [],
   };
@@ -366,6 +390,8 @@ function buildBatchReadinessPrompt(snapshot: BatchReadinessSnapshot) {
     "You may still choose a tiny smoke test, but only if it is strategically better than sourcing more leads first. Explain why.",
     "If more leads are needed, choose source_more_leads. The system will top up and render campaign copy without dispatching until this gate passes again.",
     "If active sourcing or scheduling is already running, choose wait_for_batch_readiness.",
+    "A dispatch job with postponedByBatchReadinessGate=true is held by this gate; it is not evidence that dispatch is actively sending. If dispatch is now the right move, choose dispatch_prepared_batch to release it.",
+    "If recentFailures shows runtime_sourcing_disabled or repeated top-ups that did not increase leads/messages, do not keep choosing source_more_leads. Choose dispatch_prepared_batch, run_smoke_test, or block_for_policy based on the mission state.",
     "If recent sourcing top-up failed and prepared campaign copy already exists, decide whether to retry with a changed reason, run a smoke test, dispatch the prepared batch, or block. Do not blindly repeat the same top-up loop.",
     "Return only JSON matching the schema. Put tool arguments in toolInputJson as a JSON object encoded in a string.",
     "",
@@ -991,6 +1017,31 @@ async function queuePreparedRunDispatch(input: {
     (job) => job.jobType === "dispatch_messages" && ["queued", "running"].includes(job.status)
   );
   if (activeDispatchJob) {
+    const activeDispatchPayload = asRecord(activeDispatchJob.payload);
+    if (activeDispatchJob.status === "queued" && activeDispatchPayload.postponedByBatchReadinessGate === true) {
+      if (run.status === "paused") {
+        await updateOutreachRun(run.id, {
+          status: "scheduled",
+          pauseReason: "",
+          lastError: "",
+        });
+      }
+      await updateOutreachJob(activeDispatchJob.id, {
+        status: "queued",
+        executeAfter: nowIso(),
+        payload: {
+          ...activeDispatchPayload,
+          postponedByBatchReadinessGate: false,
+          releasedByBatchReadinessGate: true,
+          releasedAt: nowIso(),
+        },
+      });
+      return {
+        queued: true,
+        reason: "Dispatch was already queued and has been released by batch readiness.",
+        scheduledMessageCount,
+      };
+    }
     return {
       queued: true,
       reason: "Dispatch is already queued.",

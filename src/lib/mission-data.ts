@@ -480,6 +480,29 @@ export async function listMissionsByStatuses(statuses: MissionStatus[]): Promise
     .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1));
 }
 
+export async function listMissionEvents(missionId: string, limit = 50): Promise<MissionEvent[]> {
+  const safeLimit = Math.max(1, Math.min(200, Math.round(limit)));
+  const supabase = getSupabaseAdmin();
+  let supabaseError: unknown = null;
+  if (supabase) {
+    const { data, error } = await supabase
+      .from(TABLE_EVENT)
+      .select("*")
+      .eq("mission_id", missionId)
+      .order("created_at", { ascending: false })
+      .limit(safeLimit);
+    if (!error) return (data ?? []).map((row: unknown) => mapEventRow(row));
+    supabaseError = error;
+  }
+
+  assertLocalMissionStoreAllowed("event list", supabaseError);
+  const store = await readLocalStore();
+  return store.events
+    .filter((event) => event.missionId === missionId)
+    .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1))
+    .slice(0, safeLimit);
+}
+
 export async function getMission(brandId: string, missionId: string): Promise<Mission | null> {
   const supabase = getSupabaseAdmin();
   let supabaseError: unknown = null;

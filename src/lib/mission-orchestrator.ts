@@ -27,12 +27,15 @@ import {
   createMissionEvent,
   defaultMissionApprovalPolicy,
   getMission,
+  listMissionEvents,
   listMissionsByStatuses,
   updateMission,
 } from "@/lib/mission-data";
 import { ensureMissionDeliverabilityCapacity } from "@/lib/mission-deliverability-capacity";
 import { refreshMissionRuntimeSummary } from "@/lib/mission-learning";
 import type { Mission, MissionPlan } from "@/lib/mission-types";
+
+const BATCH_READINESS_APPROVAL_REUSE_HOURS = 6;
 
 function nowIso() {
   return new Date().toISOString();
@@ -288,6 +291,34 @@ function allowedBatchReadinessTools(snapshot: BatchReadinessSnapshot): BatchRead
     tools.push("source_more_leads");
   }
   return tools;
+}
+
+async function findReusableBatchReadinessApproval(input: {
+  missionId: string;
+  snapshot: BatchReadinessSnapshot;
+}) {
+  if (input.snapshot.deliverability.stage !== "ready") return null;
+  if (input.snapshot.batch.scheduledMessageCount <= 0) return null;
+  if (input.snapshot.jobs.activeSourceJobIds.length || input.snapshot.jobs.activeScheduleJobIds.length) return null;
+  if (
+    !input.snapshot.allowedToolNames.includes("dispatch_prepared_batch") &&
+    !input.snapshot.allowedToolNames.includes("run_smoke_test")
+  ) {
+    return null;
+  }
+
+  const minCreatedAt = Date.now() - BATCH_READINESS_APPROVAL_REUSE_HOURS * 60 * 60 * 1000;
+  const events = await listMissionEvents(input.missionId, 25).catch(() => []);
+  return (
+    events.find((event) => {
+      if (!["batch_dispatch_approved", "batch_smoke_test_approved"].includes(event.eventType)) return false;
+      if (dateMs(event.createdAt) < minCreatedAt) return false;
+      const payload = asRecord(event.payload);
+      const approvedScheduledCount = asNumber(payload.scheduledMessageCount, 0);
+      if (approvedScheduledCount <= 0) return false;
+      return input.snapshot.batch.scheduledMessageCount <= approvedScheduledCount;
+    }) ?? null
+  );
 }
 
 async function buildBatchReadinessSnapshot(input: {
@@ -845,6 +876,56 @@ async function ensureBatchReadyForDispatch(input: {
   const snapshot = await buildBatchReadinessSnapshot(input);
   if (!snapshot) {
     return { ready: false, reason: "Run not found.", scheduledMessageCount: 0, targetLeadCount: 0 };
+  }
+  const reusableApproval = await findReusableBatchReadinessApproval({
+    missionId: input.mission.id,
+    snapshot,
+  });
+  if (reusableApproval) {
+    const summary = `Reusing recent AI batch approval from ${reusableApproval.createdAt}.`;
+    await createMissionEvent({
+      missionId: input.mission.id,
+      brandId: input.mission.brandId,
+      eventType: "batch_dispatch_reused_recent_ai_approval",
+      summary,
+      payload: {
+        approvalEventId: reusableApproval.id,
+        approvalEventType: reusableApproval.eventType,
+        approvalSummary: reusableApproval.summary,
+        scheduledMessageCount: snapshot.batch.scheduledMessageCount,
+        targetLeadCount: snapshot.batch.targetLeadCount,
+      },
+    });
+    await createMissionAgentDecision({
+      missionId: input.mission.id,
+      brandId: input.mission.brandId,
+      agent: "mission_batch_readiness_operator",
+      action: "reuse_recent_batch_approval",
+      rationale: summary,
+      riskLevel: "guarded_write",
+      input: {
+        snapshot,
+        approvalEvent: {
+          id: reusableApproval.id,
+          eventType: reusableApproval.eventType,
+          summary: reusableApproval.summary,
+          createdAt: reusableApproval.createdAt,
+          payload: reusableApproval.payload,
+        },
+      },
+      output: {
+        ready: true,
+        scheduledMessageCount: snapshot.batch.scheduledMessageCount,
+        targetLeadCount: snapshot.batch.targetLeadCount,
+        recordedAt: nowIso(),
+      },
+    });
+    return {
+      ready: true,
+      reason: summary,
+      scheduledMessageCount: snapshot.batch.scheduledMessageCount,
+      targetLeadCount: snapshot.batch.targetLeadCount,
+    };
   }
   const plan = await planBatchReadinessAction(snapshot);
   let ok = false;

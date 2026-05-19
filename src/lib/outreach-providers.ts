@@ -13,7 +13,8 @@ import {
   supportsGmailUiDelivery,
   supportsMailpoolDelivery,
 } from "@/lib/outreach-account-helpers";
-import type { OutreachAccountSecrets } from "@/lib/outreach-data";
+import { getOutreachAccountSecrets, type OutreachAccountSecrets } from "@/lib/outreach-data";
+import { syncMailpoolOutreachAccountCredentials } from "@/lib/mailpool-account-refresh";
 import { sendGmailUiMessage, validateGmailUiMailboxConfig } from "@/lib/gmail-ui-delivery";
 import { resolveGmailUiUserDataDir } from "@/lib/gmail-ui-profile";
 
@@ -2924,6 +2925,50 @@ async function sendMailpoolSmtpEmail(params: {
   }
 }
 
+function shouldRefreshMailpoolSmtpCredentials(error: string) {
+  return /auth|credential|login|password|warmup only|set to warmup|535|5\.7/i.test(error);
+}
+
+async function sendMailpoolSmtpEmailWithCredentialRefresh(params: {
+  account: OutreachAccount;
+  secrets: OutreachAccountSecrets;
+  recipient: string;
+  fromEmail: string;
+  replyToEmail: string;
+  subject: string;
+  body: string;
+}): Promise<{ ok: boolean; providerMessageId: string; error: string }> {
+  const first = await sendMailpoolSmtpEmail(params);
+  if (first.ok || !shouldRefreshMailpoolSmtpCredentials(first.error)) {
+    return first;
+  }
+
+  try {
+    const refreshedAccount = await syncMailpoolOutreachAccountCredentials(params.account.id);
+    const refreshedSecrets = await getOutreachAccountSecrets(refreshedAccount.id);
+    if (!refreshedSecrets) return first;
+    const refreshedFromEmail = getOutreachAccountFromEmail(refreshedAccount).trim() || params.fromEmail;
+    const retry = await sendMailpoolSmtpEmail({
+      ...params,
+      account: refreshedAccount,
+      secrets: refreshedSecrets,
+      fromEmail: refreshedFromEmail,
+    });
+    if (retry.ok) return retry;
+    return {
+      ...retry,
+      error: `${first.error} · Retry after Mailpool credential refresh failed: ${retry.error}`,
+    };
+  } catch (error) {
+    return {
+      ...first,
+      error: `${first.error} · Mailpool credential refresh failed: ${
+        error instanceof Error ? error.message : "unknown error"
+      }`,
+    };
+  }
+}
+
 async function sendMailpoolGmailUiEmail(params: {
   account: OutreachAccount;
   recipient: string;
@@ -2978,7 +3023,7 @@ async function sendDeliveryEmail(params: {
         error: "Gmail UI delivery is selected, but the Gmail UI session is not ready and SMTP fallback credentials are missing.",
       };
     }
-    return sendMailpoolSmtpEmail(params);
+    return sendMailpoolSmtpEmailWithCredentialRefresh(params);
   }
   return sendCustomerIoTransactionalEmail(params);
 }

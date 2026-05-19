@@ -15513,7 +15513,14 @@ async function processDispatchMessagesJob(job: OutreachJob) {
       primarySender = failover.nextSender;
     }
   }
-  const assignment = await getBrandOutreachAssignment(run.brandId);
+  let assignment = await getBrandOutreachAssignment(run.brandId);
+  if (!assignment || !String(assignment.mailboxAccountId ?? "").trim()) {
+    assignment = await setBrandOutreachAssignment(run.brandId, {
+      accountId: primarySender.account.id,
+      accountIds: [primarySender.account.id],
+      mailboxAccountId: primarySender.account.id,
+    });
+  }
   const mailboxAccountId = String(assignment?.mailboxAccountId ?? "").trim();
   if (!mailboxAccountId) {
     await failRunWithDiagnostics({

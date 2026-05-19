@@ -2401,26 +2401,46 @@ export async function provisionMailpoolSender(
     existingDomains.find((entry) => entry.domain === domain) ?? null;
   let externalRegistrarFallback: "vercel" | "namecheap" | "" = "";
   if (input.domainMode === "register") {
-    const domainOwner = buildMailpoolDomainOwner({ brand, registrant: input.registrant });
-    try {
-      mailpoolDomain = await registerMailpoolDomain({
-        apiKey,
-        domain,
-        type: "google",
-        redirectUrl: forwardingTargetUrl || undefined,
-        domainOwner,
-      });
-    } catch (error) {
-      const refreshedDomains = await listMailpoolDomains(apiKey).catch(() => []);
-      mailpoolDomain = refreshedDomains.find((entry) => entry.domain === domain) ?? null;
-      if (!mailpoolDomain) {
+    if (!input.registrant) {
+      throw new Error("Registrant contact information is required to buy a new domain");
+    }
+    const registrant = input.registrant;
+    const domainOwner = buildMailpoolDomainOwner({ brand, registrant });
+    if (mailpoolDomain) {
+      const registrarSnapshot = resolveDomainRegistrarSnapshot();
+      if (registrarSnapshot.provider === "vercel" && mailpoolDomain.status !== "active") {
+        if (!registrarSnapshot.configured) {
+          throw new Error(
+            `Vercel domain registrar is selected, but ${registrarSnapshot.missing.join(", ") || "its API token"} is missing.`
+          );
+        }
+        const vercelRegistration = await buyVercelDomainAndAttachToMailpool({
+          mailpoolApiKey: apiKey,
+          domain,
+          registrant,
+          redirectUrl: forwardingTargetUrl || undefined,
+          domainOwner,
+          existingMailpoolDomain: mailpoolDomain,
+          maxPurchasePriceUsd: input.maxDomainPurchasePriceUsd,
+        });
+        mailpoolDomain = vercelRegistration.domain;
+        externalRegistrarFallback = "vercel";
+      }
+    } else {
+      try {
+        mailpoolDomain = await registerMailpoolDomain({
+          apiKey,
+          domain,
+          type: "google",
+          redirectUrl: forwardingTargetUrl || undefined,
+          domainOwner,
+        });
+      } catch (error) {
+        const refreshedDomains = await listMailpoolDomains(apiKey).catch(() => []);
+        mailpoolDomain = refreshedDomains.find((entry) => entry.domain === domain) ?? null;
         if (!isMailpoolRegistrationServerError(error)) {
           throw error;
         }
-        if (!input.registrant) {
-          throw error;
-        }
-
         const registrarSnapshot = resolveDomainRegistrarSnapshot();
         if (registrarSnapshot.provider === "vercel") {
           if (!registrarSnapshot.configured) {
@@ -2431,9 +2451,10 @@ export async function provisionMailpoolSender(
           const vercelRegistration = await buyVercelDomainAndAttachToMailpool({
             mailpoolApiKey: apiKey,
             domain,
-            registrant: input.registrant,
+            registrant,
             redirectUrl: forwardingTargetUrl || undefined,
             domainOwner,
+            existingMailpoolDomain: mailpoolDomain,
             maxPurchasePriceUsd: input.maxDomainPurchasePriceUsd,
           });
           mailpoolDomain = vercelRegistration.domain;
@@ -2446,7 +2467,7 @@ export async function provisionMailpoolSender(
             apiKey: namecheapCredentials.namecheapApiKey,
             clientIp: namecheapCredentials.namecheapClientIp,
             domain,
-            registrant: input.registrant,
+            registrant,
           });
           externalRegistrarFallback = "namecheap";
           mailpoolDomain = await transferMailpoolDomain({

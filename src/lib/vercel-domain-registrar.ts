@@ -52,6 +52,21 @@ type VercelDomainPrice = {
   transferPrice: number;
 };
 
+type VercelRegistrarOrder = {
+  orderId: string;
+  status: string;
+  domains: Array<{
+    domainName: string;
+    status: string;
+    price?: number;
+    error?: unknown;
+  }>;
+  error?: {
+    code?: string;
+    message?: string;
+  };
+};
+
 export class VercelDomainRegistrarError extends Error {
   status: number;
 
@@ -105,6 +120,27 @@ function compactVercelError(payload: unknown, fallback: string) {
     ? (row.error as Record<string, unknown>)
     : {};
   return String(error.message ?? row.message ?? row.error ?? fallback).replace(/\s+/g, " ").trim();
+}
+
+function describeVercelOrderError(order: VercelRegistrarOrder, domain: string) {
+  const domainRow = order.domains.find((entry) => normalizeDomain(entry.domainName) === normalizeDomain(domain));
+  const domainError = domainRow?.error && typeof domainRow.error === "object" && !Array.isArray(domainRow.error)
+    ? (domainRow.error as Record<string, unknown>)
+    : {};
+  const orderError = order.error ?? {};
+  return String(
+    domainError.message ??
+      domainError.code ??
+      orderError.message ??
+      orderError.code ??
+      `order ${order.status || "failed"}`
+  )
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 async function vercelRequest<T>(options: VercelRequestOptions): Promise<T> {
@@ -311,6 +347,124 @@ export async function buyVercelDomain(input: {
   });
 }
 
+export async function getVercelRegistrarOrder(input: {
+  token: string;
+  teamId?: string;
+  orderId: string;
+}) {
+  return vercelRequest<VercelRegistrarOrder>({
+    token: input.token,
+    teamId: input.teamId,
+    path: `/v1/registrar/orders/${encodeURIComponent(input.orderId.trim())}`,
+  });
+}
+
+async function waitForVercelRegistrarOrder(input: {
+  token: string;
+  teamId?: string;
+  orderId: string;
+  domain: string;
+  timeoutMs?: number;
+}) {
+  const startedAt = Date.now();
+  const timeoutMs = Math.max(1000, input.timeoutMs ?? 30000);
+  let latest: VercelRegistrarOrder | null = null;
+  while (Date.now() - startedAt < timeoutMs) {
+    latest = await getVercelRegistrarOrder({
+      token: input.token,
+      teamId: input.teamId,
+      orderId: input.orderId,
+    });
+    const domainRow = latest.domains.find((entry) => normalizeDomain(entry.domainName) === normalizeDomain(input.domain));
+    if (latest.status === "completed" && domainRow?.status === "completed") {
+      return latest;
+    }
+    if (latest.status === "failed" || domainRow?.status === "failed") {
+      throw new Error(`Vercel domain order ${input.orderId} failed for ${input.domain}: ${describeVercelOrderError(latest, input.domain)}`);
+    }
+    await sleep(750);
+  }
+  throw new Error(
+    `Vercel domain order ${input.orderId} for ${input.domain} did not complete within ${timeoutMs}ms${
+      latest?.status ? `; latest status was ${latest.status}` : ""
+    }.`
+  );
+}
+
+async function ensureVercelDomainPurchased(input: {
+  token: string;
+  teamId?: string;
+  domain: string;
+  registrant: DomainRegistrantContact;
+  maxPurchasePriceUsd: number;
+}) {
+  const existing = await getVercelDomain({
+    token: input.token,
+    teamId: input.teamId,
+    domain: input.domain,
+  });
+  if (existing?.expiresAt) {
+    return {
+      orderId: "",
+      price: { years: 1, purchasePrice: 0, renewalPrice: 0, transferPrice: 0 },
+      existing,
+    };
+  }
+
+  const available = await getVercelDomainAvailability({
+    token: input.token,
+    teamId: input.teamId,
+    domain: input.domain,
+  });
+  if (!available) {
+    throw new Error(`Vercel says ${input.domain} is not available to register, and it is not already owned in this Vercel team.`);
+  }
+
+  const price = await getVercelDomainPrice({
+    token: input.token,
+    teamId: input.teamId,
+    domain: input.domain,
+    years: 1,
+  });
+  if (price.purchasePrice <= 0) {
+    throw new Error(`Vercel did not return a usable purchase price for ${input.domain}.`);
+  }
+  if (price.purchasePrice > input.maxPurchasePriceUsd) {
+    throw new Error(
+      `Vercel price for ${input.domain} is ${price.purchasePrice}, above the active max domain purchase guardrail ${input.maxPurchasePriceUsd}.`
+    );
+  }
+
+  const order = await buyVercelDomain({
+    token: input.token,
+    teamId: input.teamId,
+    domain: input.domain,
+    registrant: input.registrant,
+    expectedPrice: price.purchasePrice,
+    years: price.years,
+  });
+  const orderId = String(order.orderId ?? "").trim();
+  if (!orderId) {
+    throw new Error(`Vercel domain purchase for ${input.domain} did not return an order id.`);
+  }
+  await waitForVercelRegistrarOrder({
+    token: input.token,
+    teamId: input.teamId,
+    orderId,
+    domain: input.domain,
+  });
+
+  const purchased = await getVercelDomain({
+    token: input.token,
+    teamId: input.teamId,
+    domain: input.domain,
+  });
+  if (!purchased?.expiresAt) {
+    throw new Error(`Vercel order ${orderId} completed, but ${input.domain} is not visible in the Vercel domain inventory yet.`);
+  }
+  return { orderId, price, existing: purchased };
+}
+
 export async function setVercelDomainNameservers(input: {
   token: string;
   teamId?: string;
@@ -370,6 +524,7 @@ export async function buyVercelDomainAndAttachToMailpool(input: {
   registrant: DomainRegistrantContact;
   redirectUrl?: string;
   domainOwner: MailpoolDomainOwner;
+  existingMailpoolDomain?: MailpoolDomain | null;
   maxPurchasePriceUsd?: number;
 }): Promise<{ domain: MailpoolDomain; orderId: string; price: VercelDomainPrice; nameservers: string[] }> {
   const config = resolveVercelDomainRegistrarConfig();
@@ -378,64 +533,28 @@ export async function buyVercelDomainAndAttachToMailpool(input: {
   }
 
   const domain = normalizeDomain(input.domain);
-  const available = await getVercelDomainAvailability({
-    token: config.token,
-    teamId: config.teamId,
-    domain,
-  });
-  const existingDomain = available
-    ? null
-    : await getVercelDomain({
-        token: config.token,
-        teamId: config.teamId,
-        domain,
-      });
-  if (!available && !existingDomain?.expiresAt) {
-    throw new Error(`Vercel says ${domain} is not available to register, and it is not already owned in this Vercel team.`);
-  }
-
   const maxPurchasePriceUsd =
     typeof input.maxPurchasePriceUsd === "number" &&
     Number.isFinite(input.maxPurchasePriceUsd) &&
     input.maxPurchasePriceUsd > 0
       ? Math.min(config.maxPurchasePriceUsd, Number(input.maxPurchasePriceUsd))
       : config.maxPurchasePriceUsd;
-  const price = available
-    ? await getVercelDomainPrice({
-        token: config.token,
-        teamId: config.teamId,
-        domain,
-        years: 1,
-      })
-    : { years: 1, purchasePrice: 0, renewalPrice: 0, transferPrice: 0 };
-  let orderId = "";
-  if (available) {
-    if (price.purchasePrice <= 0) {
-      throw new Error(`Vercel did not return a usable purchase price for ${domain}.`);
-    }
-    if (price.purchasePrice > maxPurchasePriceUsd) {
-      throw new Error(
-        `Vercel price for ${domain} is ${price.purchasePrice}, above the active max domain purchase guardrail ${maxPurchasePriceUsd}.`
-      );
-    }
-
-    const order = await buyVercelDomain({
-      token: config.token,
-      teamId: config.teamId,
-      domain,
-      registrant: input.registrant,
-      expectedPrice: price.purchasePrice,
-      years: price.years,
-    });
-    orderId = String(order.orderId ?? "").trim();
-  }
-
-  const mailpoolDomain = await transferMailpoolDomain({
-    apiKey: input.mailpoolApiKey,
+  const purchase = await ensureVercelDomainPurchased({
+    token: config.token,
+    teamId: config.teamId,
     domain,
-    redirectUrl: input.redirectUrl,
-    domainOwner: input.domainOwner,
+    registrant: input.registrant,
+    maxPurchasePriceUsd,
   });
+
+  const mailpoolDomain = input.existingMailpoolDomain?.domain === domain
+    ? input.existingMailpoolDomain
+    : await transferMailpoolDomain({
+        apiKey: input.mailpoolApiKey,
+        domain,
+        redirectUrl: input.redirectUrl,
+        domainOwner: input.domainOwner,
+      });
   const nameservers = mailpoolDomain.nameservers ?? [];
   if (nameservers.length) {
     await setVercelDomainNameservers({
@@ -448,8 +567,8 @@ export async function buyVercelDomainAndAttachToMailpool(input: {
 
   return {
     domain: mailpoolDomain,
-    orderId,
-    price,
+    orderId: purchase.orderId,
+    price: purchase.price,
     nameservers,
   };
 }

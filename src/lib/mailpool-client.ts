@@ -445,6 +445,7 @@ export async function registerMailpoolDomain(input: {
     path: "/domains/",
     body: {
       domains: [input.domain.trim().toLowerCase()],
+      type: input.type ?? "google",
       redirect: input.redirectUrl?.trim() || undefined,
       newDomainOwner: input.domainOwner,
     },

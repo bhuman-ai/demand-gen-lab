@@ -263,6 +263,17 @@ type MissionDeliverabilitySnapshot = {
     maxAutoProvisionedSenders: number;
     maxAutoDomainSpendUsd: number;
     activeProvisioningSenderCount: number;
+    provisioningCapacity: Array<{
+      launchId: string;
+      senderAccountId: string;
+      fromEmail: string;
+      domain: string;
+      state: SenderLaunch["state"];
+      consumesCapacity: boolean;
+      reason: string;
+      accountStatus: OutreachAccount["status"] | "";
+      provider: OutreachAccount["provider"] | "";
+    }>;
     allowedToolNames: MissionDeliverabilityToolName[];
   };
 };
@@ -333,6 +344,61 @@ function outboundEnabled(account: OutreachAccount) {
 
 function launchIsActiveCapacity(launch: SenderLaunch) {
   return ["setup", "observing", "warming", "restricted_send", "ready"].includes(launch.state);
+}
+
+function launchAgeHours(launch: SenderLaunch) {
+  const createdMs = dateMs(launch.createdAt);
+  if (!createdMs) return null;
+  return (Date.now() - createdMs) / (60 * 60 * 1000);
+}
+
+function setupLaunchStaleHours() {
+  const parsed = Number(process.env.MISSION_SENDER_SETUP_STALE_HOURS ?? 72);
+  return Number.isFinite(parsed) ? Math.max(1, parsed) : 72;
+}
+
+function mailpoolProviderStatus(account: OutreachAccount | null) {
+  const config = asRecord(account?.config);
+  const mailpool = asRecord(config.mailpool);
+  return asString(mailpool.status).toLowerCase();
+}
+
+function launchCapacityDetail(
+  launch: SenderLaunch,
+  account: OutreachAccount | null
+): MissionDeliverabilitySnapshot["guardrails"]["provisioningCapacity"][number] {
+  const stateConsumes = launchIsActiveCapacity(launch);
+  const ageHours = launchAgeHours(launch);
+  const staleSetup =
+    launch.state === "setup" && ageHours !== null && ageHours > setupLaunchStaleHours() && account?.status !== "active";
+  let consumesCapacity = stateConsumes;
+  let reason = stateConsumes ? "active_or_inflight_launch" : "terminal_or_blocked_launch";
+
+  if (consumesCapacity && account && isMailpoolSharedWarmupOnly(account)) {
+    consumesCapacity = false;
+    reason = "shared_mailpool_warmup_only";
+  } else if (consumesCapacity && account && mailpoolProviderStatus(account) === "deleted") {
+    consumesCapacity = false;
+    reason = "mailpool_sender_deleted";
+  } else if (consumesCapacity && account && account.status !== "active" && launch.state !== "setup") {
+    consumesCapacity = false;
+    reason = "inactive_sender_account";
+  } else if (consumesCapacity && staleSetup) {
+    consumesCapacity = false;
+    reason = "stale_setup_sender";
+  }
+
+  return {
+    launchId: launch.id,
+    senderAccountId: launch.senderAccountId,
+    fromEmail: (launch.fromEmail || (account ? getOutreachAccountFromEmail(account) : "")).toLowerCase(),
+    domain: launch.domain,
+    state: launch.state,
+    consumesCapacity,
+    reason,
+    accountStatus: account?.status ?? "",
+    provider: account?.provider ?? "",
+  };
 }
 
 function roundTenth(value: number) {
@@ -868,6 +934,7 @@ async function buildMissionDeliverabilitySnapshot(input: {
   }).length;
   const launchByAccountId = new Map(launches.map((launch) => [launch.senderAccountId, launch] as const));
   const launchByEmail = new Map(launches.map((launch) => [launch.fromEmail.toLowerCase(), launch] as const));
+  const accountById = new Map(accounts.map((account) => [account.id, account] as const));
   const launchAccountIds = new Set(launches.map((launch) => launch.senderAccountId).filter(Boolean));
   const launchFromEmails = new Set(launches.map((launch) => launch.fromEmail.toLowerCase()).filter(Boolean));
   const senders = accounts
@@ -910,7 +977,8 @@ async function buildMissionDeliverabilitySnapshot(input: {
     forwardEmailMode: forwardEmailProbeConfig?.mode ?? "",
     gmailCampaignCopyProofAvailable: gmailSeeds.remainingForAssignedSenderDomain > 0,
   });
-  const activeProvisioningSenderCount = launches.filter(launchIsActiveCapacity).length;
+  const provisioningCapacity = launches.map((launch) => launchCapacityDetail(launch, accountById.get(launch.senderAccountId) ?? null));
+  const activeProvisioningSenderCount = provisioningCapacity.filter((launch) => launch.consumesCapacity).length;
   const guardrailsWithoutAllowed = {
     canAutoProvisionSender:
       input.mission.approvalPolicy.allowAutoProvisioning &&
@@ -922,6 +990,7 @@ async function buildMissionDeliverabilitySnapshot(input: {
     maxAutoProvisionedSenders: Math.max(0, input.mission.approvalPolicy.maxAutoProvisionedSenders),
     maxAutoDomainSpendUsd: Math.max(0, input.mission.approvalPolicy.maxAutoDomainSpendUsd),
     activeProvisioningSenderCount,
+    provisioningCapacity,
     allowedToolNames: [] as MissionDeliverabilityToolName[],
   };
   const snapshot: MissionDeliverabilitySnapshot = {
@@ -1094,7 +1163,7 @@ function buildMissionOperatorPrompt(snapshot: MissionDeliverabilitySnapshot) {
     "When selecting senderAccountId for assign_sender or run_delivery_probe, use only exact accountId values from snapshot.senders where deliveryCapable is true. Do not select currentRun.accountId unless that exact ID is also present in snapshot.senders and deliveryCapable is true.",
     "If the assigned/current sender is not deliveryCapable, or currentRun.lastError says the sender is warmup-only, do not request another probe on it. Assign a different delivery-capable sender or provision new Mailpool sender capacity when guardrails allow it.",
     "Approved Gmail seed usage is shown in gmailSeeds. Inbox cleanup/archiving for approved Gmail seed inbox hits happens automatically after placement inspection; do not ask the user to clean mailboxes.",
-    "Hard guardrails are not optional: no sending before deliverability is ready, no domain purchase unless policy allows it, no provisioning above capacity, no spending above maxAutoDomainSpendUsd, and no invented account IDs.",
+    "Hard guardrails are not optional: no sending before deliverability is ready, no domain purchase unless policy allows it, no provisioning above usable or genuinely in-flight capacity, no spending above maxAutoDomainSpendUsd, and no invented account IDs.",
     "Do not output a generic plan. Select the next concrete tool call for this mission tick.",
     "Keep rationale, expectedOutcome, and toolInputJson concise.",
     "Return only JSON matching the schema. Put tool arguments in toolInputJson as a JSON object encoded in a string.",

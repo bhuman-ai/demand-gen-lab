@@ -1558,11 +1558,15 @@ async function executeAssignSender(input: {
     mailboxAccountId: account.id,
   });
   const previousRunAccountId = currentRun?.accountId ?? "";
+  const shouldClearRunPause =
+    currentRun?.status === "paused" &&
+    runLooksDeliverabilityPaused(currentRun) &&
+    Boolean((currentRun.pauseReason || currentRun.lastError || "").trim());
   const updatedRun =
-    currentRun && currentRun.accountId !== account.id
+    currentRun && (currentRun.accountId !== account.id || shouldClearRunPause)
       ? await updateOutreachRun(currentRun.id, {
           accountId: account.id,
-          pauseReason: currentRun.status === "paused" ? "" : currentRun.pauseReason,
+          pauseReason: shouldClearRunPause ? "" : currentRun.pauseReason,
           lastError: "",
         })
       : currentRun;
@@ -1578,6 +1582,7 @@ async function executeAssignSender(input: {
       runId: currentRun?.id ?? "",
       previousRunAccountId,
       updatedRunAccountId: updatedRun?.accountId ?? "",
+      clearedRunPause: shouldClearRunPause,
     },
   });
 
@@ -1592,6 +1597,7 @@ async function executeAssignSender(input: {
       runId: updatedRun?.id ?? "",
       previousRunAccountId,
       updatedRunAccountId: updatedRun?.accountId ?? "",
+      clearedRunPause: shouldClearRunPause,
     },
   };
 }

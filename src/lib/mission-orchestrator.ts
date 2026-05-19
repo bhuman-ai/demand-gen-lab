@@ -272,12 +272,18 @@ function allowedBatchReadinessTools(snapshot: BatchReadinessSnapshot): BatchRead
   if (snapshot.batch.scheduledMessageCount > 0 && snapshot.deliverability.stage === "ready") {
     tools.push("dispatch_prepared_batch", "run_smoke_test");
   }
+  const sourceTopUpUnavailable = snapshot.sourcing.recentFailures.some(
+    (event) =>
+      event.eventType === "lead_sourcing_skipped" &&
+      /runtime_sourcing_disabled/i.test(event.reason)
+  );
   if (
     snapshot.batch.deficitToTarget > 0 &&
     snapshot.run.status !== "completed" &&
     snapshot.run.status !== "canceled" &&
     snapshot.run.status !== "failed" &&
-    snapshot.jobs.activeSourceJobIds.length === 0
+    snapshot.jobs.activeSourceJobIds.length === 0 &&
+    !sourceTopUpUnavailable
   ) {
     tools.push("source_more_leads");
   }
@@ -391,7 +397,7 @@ function buildBatchReadinessPrompt(snapshot: BatchReadinessSnapshot) {
     "If more leads are needed, choose source_more_leads. The system will top up and render campaign copy without dispatching until this gate passes again.",
     "If active sourcing or scheduling is already running, choose wait_for_batch_readiness.",
     "A dispatch job with postponedByBatchReadinessGate=true is held by this gate; it is not evidence that dispatch is actively sending. If dispatch is now the right move, choose dispatch_prepared_batch to release it.",
-    "If recentFailures shows runtime_sourcing_disabled or repeated top-ups that did not increase leads/messages, do not keep choosing source_more_leads. Choose dispatch_prepared_batch, run_smoke_test, or block_for_policy based on the mission state.",
+    "If recentFailures shows runtime_sourcing_disabled or repeated top-ups that did not increase leads/messages, source_more_leads will be unavailable. Choose dispatch_prepared_batch, run_smoke_test, or block_for_policy based on the mission state.",
     "If recent sourcing top-up failed and prepared campaign copy already exists, decide whether to retry with a changed reason, run a smoke test, dispatch the prepared batch, or block. Do not blindly repeat the same top-up loop.",
     "Return only JSON matching the schema. Put tool arguments in toolInputJson as a JSON object encoded in a string.",
     "",

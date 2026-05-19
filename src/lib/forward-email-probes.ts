@@ -63,36 +63,44 @@ export async function allocateForwardEmailProbeTargets(input: {
 
   try {
     for (let index = 0; index < targetCount; index += 1) {
-      const alias = await createForwardEmailAlias({
-        config,
-        name: aliasName({ config, probeToken: input.probeToken, index }),
-        description: `LastB2B deliverability probe ${input.probeToken}`,
-        labels: ["lastb2b", "deliverability-probe"],
-        hasImap: true,
-      });
-      const credentials = await generateForwardEmailAliasPassword({
-        config,
-        aliasId: alias.id || alias.name,
-      });
-      const username = credentials.username || alias.email;
-      if (!credentials.password.trim() || !username.trim()) {
-        await deleteForwardEmailAlias({ config, aliasId: alias.id || alias.name }).catch(() => undefined);
-        throw new Error(`Forward Email alias ${alias.email} did not return IMAP credentials`);
+      let aliasId = "";
+      try {
+        const alias = await createForwardEmailAlias({
+          config,
+          name: aliasName({ config, probeToken: input.probeToken, index }),
+          description: `LastB2B deliverability probe ${input.probeToken}`,
+          labels: ["lastb2b", "deliverability-probe"],
+          hasImap: true,
+        });
+        aliasId = alias.id || alias.name;
+        const credentials = await generateForwardEmailAliasPassword({
+          config,
+          aliasId,
+        });
+        const username = credentials.username || alias.email;
+        if (!credentials.password.trim() || !username.trim()) {
+          throw new Error(`Forward Email alias ${alias.email} did not return IMAP credentials`);
+        }
+        targets.push({
+          provider: "forward_email",
+          accountId: getForwardEmailTargetId(aliasId),
+          email: alias.email,
+          forwardEmailDomain: alias.domain,
+          forwardEmailAliasId: alias.id,
+          forwardEmailAliasName: alias.name,
+          imapHost: config.imapHost,
+          imapPort: config.imapPort,
+          imapSecure: config.imapSecure,
+          imapUsername: username,
+          imapPasswordEncrypted: encryptJson({ password: credentials.password.trim() }),
+          expiresAt: nowPlusHours(config.aliasTtlHours),
+        });
+      } catch (error) {
+        if (aliasId) {
+          await deleteForwardEmailAlias({ config, aliasId }).catch(() => undefined);
+        }
+        throw error;
       }
-      targets.push({
-        provider: "forward_email",
-        accountId: getForwardEmailTargetId(alias.id || alias.name),
-        email: alias.email,
-        forwardEmailDomain: alias.domain,
-        forwardEmailAliasId: alias.id,
-        forwardEmailAliasName: alias.name,
-        imapHost: config.imapHost,
-        imapPort: config.imapPort,
-        imapSecure: config.imapSecure,
-        imapUsername: username,
-        imapPasswordEncrypted: encryptJson({ password: credentials.password.trim() }),
-        expiresAt: nowPlusHours(config.aliasTtlHours),
-      });
     }
   } catch (error) {
     await releaseForwardEmailProbeTargets(targets);

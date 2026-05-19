@@ -144,10 +144,11 @@ async function forwardEmailRequest<T>(input: {
     }
   }
   if (!response.ok) {
+    const detail = typeof payload === "string" ? payload : JSON.stringify(payload);
     throw new ForwardEmailApiError(
-      `Forward Email API request failed: ${method} ${input.path}`,
+      `Forward Email API request failed: ${method} ${input.path} (${response.status})${detail ? `: ${detail.slice(0, 600)}` : ""}`,
       response.status,
-      typeof payload === "string" ? payload : JSON.stringify(payload)
+      detail
     );
   }
   return payload as T;

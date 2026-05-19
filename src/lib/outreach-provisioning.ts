@@ -1790,6 +1790,11 @@ function buildMailpoolDomainOwner(input: {
   };
 }
 
+function isMailpoolRegistrationServerError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error ?? "");
+  return /Mailpool POST \/domains\/ failed \(HTTP 5\d\d\)/i.test(message);
+}
+
 function mailpoolStatusToDnsStatus(status: string): DomainRow["dnsStatus"] {
   const normalized = String(status ?? "").trim().toLowerCase();
   if (normalized === "active") return "verified";
@@ -2378,14 +2383,55 @@ export async function provisionMailpoolSender(
 
   let mailpoolDomain =
     existingDomains.find((entry) => entry.domain === domain) ?? null;
+  let domainRegisteredViaNamecheapFallback = false;
   if (input.domainMode === "register") {
-    mailpoolDomain = await registerMailpoolDomain({
-      apiKey,
-      domain,
-      type: "google",
-      redirectUrl: forwardingTargetUrl || undefined,
-      domainOwner: buildMailpoolDomainOwner({ brand, registrant: input.registrant }),
-    });
+    const domainOwner = buildMailpoolDomainOwner({ brand, registrant: input.registrant });
+    try {
+      mailpoolDomain = await registerMailpoolDomain({
+        apiKey,
+        domain,
+        type: "google",
+        redirectUrl: forwardingTargetUrl || undefined,
+        domainOwner,
+      });
+    } catch (error) {
+      const refreshedDomains = await listMailpoolDomains(apiKey).catch(() => []);
+      mailpoolDomain = refreshedDomains.find((entry) => entry.domain === domain) ?? null;
+      if (!mailpoolDomain) {
+        if (!isMailpoolRegistrationServerError(error)) {
+          throw error;
+        }
+        const namecheapCredentials = await resolveNamecheapCredentials(input);
+        if (!input.registrant) {
+          throw error;
+        }
+        await namecheapRegisterDomain({
+          apiUser: namecheapCredentials.namecheapApiUser,
+          userName: namecheapCredentials.namecheapUserName,
+          apiKey: namecheapCredentials.namecheapApiKey,
+          clientIp: namecheapCredentials.namecheapClientIp,
+          domain,
+          registrant: input.registrant,
+        });
+        domainRegisteredViaNamecheapFallback = true;
+        mailpoolDomain = await transferMailpoolDomain({
+          apiKey,
+          domain,
+          redirectUrl: forwardingTargetUrl || undefined,
+          domainOwner,
+        });
+        if (mailpoolDomain?.nameservers?.length) {
+          await namecheapSetCustomNameservers({
+            apiUser: namecheapCredentials.namecheapApiUser,
+            userName: namecheapCredentials.namecheapUserName,
+            apiKey: namecheapCredentials.namecheapApiKey,
+            clientIp: namecheapCredentials.namecheapClientIp,
+            domain,
+            nameservers: mailpoolDomain.nameservers,
+          });
+        }
+      }
+    }
   } else if (input.domainMode === "transfer" && !mailpoolDomain) {
     mailpoolDomain = await transferMailpoolDomain({
       apiKey,
@@ -2447,6 +2493,9 @@ export async function provisionMailpoolSender(
   if (input.domainMode === "register" && domainSelection?.source && domainSelection.source !== "requested" && requestedDomain !== domain) {
     warnings.push(`Mailpool switched to ${domain} because ${requestedDomain} was not available.`);
   }
+  if (domainRegisteredViaNamecheapFallback) {
+    warnings.push("Mailpool domain registration failed, so the domain was registered through Namecheap and attached to Mailpool.");
+  }
 
   if (mailboxReadyForDelivery && mailbox.id) {
     try {
@@ -2489,7 +2538,7 @@ export async function provisionMailpoolSender(
     replyMailboxEmail: fromEmail,
     dnsStatus: mailpoolStatusToDnsStatus(mailpoolDomain.status),
     forwardingTargetUrl: forwardingTargetUrl || mailpoolDomain.redirectUrl || "",
-    registrar: "mailpool",
+    registrar: domainRegisteredViaNamecheapFallback ? "namecheap" : "mailpool",
     provider: "mailpool",
     deliveryAccountId: account.id,
     deliveryAccountName: account.name,
@@ -2497,6 +2546,8 @@ export async function provisionMailpoolSender(
     notes:
       input.domainMode === "transfer"
         ? "Transferred into Mailpool and provisioned through Mailpool."
+        : domainRegisteredViaNamecheapFallback
+          ? "Registered through Namecheap after Mailpool registration failed, then attached to Mailpool."
         : "Provisioned through Mailpool.",
   });
   const protectedDomain = forwardingTargetUrl ? normalizeDomain(forwardingTargetUrl) : "";
@@ -2538,6 +2589,9 @@ export async function provisionMailpoolSender(
   }
   if (input.domainMode === "transfer" && mailpoolDomain.status !== "active") {
     nextSteps.push("Wait for Mailpool to finish transferring the domain before treating this sender as live.");
+  }
+  if (domainRegisteredViaNamecheapFallback && mailpoolDomain.status !== "active") {
+    nextSteps.push("Wait for Namecheap nameserver changes and Mailpool domain activation to propagate.");
   }
   nextSteps.push("Internal inbox placement monitors will start once the sender begins warming.");
   nextSteps.push("Run a sender test before launching live campaigns.");

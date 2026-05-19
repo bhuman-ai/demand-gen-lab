@@ -894,15 +894,16 @@ function extractResponseText(payload: unknown) {
   const row = asRecord(payload);
   if (typeof row.output_text === "string") return row.output_text;
   const output = Array.isArray(row.output) ? row.output : [];
+  const chunks: string[] = [];
   for (const item of output) {
     const content = asRecord(item).content;
     if (!Array.isArray(content)) continue;
     for (const contentItem of content) {
       const text = asRecord(contentItem).text;
-      if (typeof text === "string") return text;
+      if (typeof text === "string") chunks.push(text);
     }
   }
-  return "";
+  return chunks.join("");
 }
 
 function riskForTool(toolName: MissionDeliverabilityToolName): MissionRiskLevel {

@@ -824,10 +824,11 @@ function extractResponseText(payload: unknown) {
     .map((item) => asRecord(item))
     .flatMap((item) => (Array.isArray(item.content) ? item.content : []))
     .map((entry) => asRecord(entry))
-    .find((entry) => typeof entry.text === "string");
+    .map((entry) => (typeof entry.text === "string" ? entry.text : ""))
+    .join("");
   return (
     asString(row.output_text) ||
-    asString(outputTextFromItems?.text)
+    asString(outputTextFromItems)
   );
 }
 

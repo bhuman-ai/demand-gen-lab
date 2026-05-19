@@ -398,6 +398,18 @@ async function queuePreparedRunDispatch(input: {
     };
   }
 
+  const jobs = await listRunJobs(run.id, 25).catch(() => []);
+  const activeDispatchJob = jobs.find(
+    (job) => job.jobType === "dispatch_messages" && ["queued", "running"].includes(job.status)
+  );
+  if (activeDispatchJob) {
+    return {
+      queued: true,
+      reason: "Dispatch is already queued.",
+      scheduledMessageCount,
+    };
+  }
+
   if (run.status === "paused") {
     await updateOutreachRun(run.id, {
       status: "scheduled",
@@ -713,7 +725,7 @@ export async function startMission(input: {
 }
 
 export async function runMissionAutopilotTick(limit = 10) {
-  const missions = await listMissionsByStatuses(["starting", "deliverability_blocked", "paused"]);
+  const missions = await listMissionsByStatuses(["starting", "deliverability_blocked", "paused", "running"]);
   const rows = [];
   for (const mission of missions.slice(0, limit)) {
     if (!hasApprovedMissionPlan(mission)) {

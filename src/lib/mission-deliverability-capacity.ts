@@ -28,11 +28,13 @@ import {
   provisionSender,
   selectAvailableMailpoolDomain,
   type MailpoolDomainSelection,
+  type ProvisionSenderInput,
 } from "@/lib/outreach-provisioning";
 import { requestRunDeliverabilityProbe } from "@/lib/outreach-runtime";
 import { resolveLlmModel } from "@/lib/llm-router";
 import { createMissionAgentDecision, createMissionEvent } from "@/lib/mission-data";
 import { inspectMissionDeliverability } from "@/lib/mission-learning";
+import { getOperatorBrandMemory } from "@/lib/operator-memory";
 import { loadBrandSenderLaunchView } from "@/lib/sender-launch";
 import type {
   BrandRecord,
@@ -248,6 +250,9 @@ type MissionDeliverabilitySnapshot = {
     hasCustomerIoAppKey: boolean;
     mailpoolWebhookConfigured: boolean;
     deliverabilityProvider: string;
+    hasRegistrantDefaults: boolean;
+    registrantProfileSource: string;
+    missingRegistrantFields: string[];
   };
   probes: {
     forwardEmailConfigured: boolean;
@@ -285,6 +290,8 @@ type ToolExecutionResult = {
   result: Record<string, unknown>;
 };
 
+type RegistrantProfile = NonNullable<ProvisionSenderInput["registrant"]>;
+
 const TOOL_NAMES: MissionDeliverabilityToolName[] = [
   "inspect_state",
   "assign_sender",
@@ -293,6 +300,18 @@ const TOOL_NAMES: MissionDeliverabilityToolName[] = [
   "wait_for_warmup",
   "block_for_policy",
 ];
+
+const REGISTRANT_REQUIRED_FIELDS = [
+  "firstName",
+  "lastName",
+  "emailAddress",
+  "phone",
+  "address1",
+  "city",
+  "stateProvince",
+  "postalCode",
+  "country",
+] as const;
 
 function nowIso() {
   return new Date().toISOString();
@@ -314,6 +333,67 @@ function asString(value: unknown) {
 function asStringArray(value: unknown) {
   if (!Array.isArray(value)) return [];
   return value.map((entry) => asString(entry)).filter(Boolean);
+}
+
+function registrantFromRecord(value: unknown): RegistrantProfile {
+  const row = asRecord(value);
+  return {
+    firstName: asString(row.firstName),
+    lastName: asString(row.lastName),
+    organizationName: asString(row.organizationName),
+    emailAddress: asString(row.emailAddress),
+    phone: asString(row.phone),
+    address1: asString(row.address1),
+    city: asString(row.city),
+    stateProvince: asString(row.stateProvince),
+    postalCode: asString(row.postalCode),
+    country: asString(row.country),
+  };
+}
+
+function registrantFromEnv(): RegistrantProfile {
+  return {
+    firstName: asString(process.env.OUTREACH_REGISTRANT_FIRST_NAME),
+    lastName: asString(process.env.OUTREACH_REGISTRANT_LAST_NAME),
+    organizationName: asString(process.env.OUTREACH_REGISTRANT_ORGANIZATION),
+    emailAddress: asString(process.env.OUTREACH_REGISTRANT_EMAIL),
+    phone: asString(process.env.OUTREACH_REGISTRANT_PHONE),
+    address1: asString(process.env.OUTREACH_REGISTRANT_ADDRESS1),
+    city: asString(process.env.OUTREACH_REGISTRANT_CITY),
+    stateProvince: asString(process.env.OUTREACH_REGISTRANT_STATE_PROVINCE),
+    postalCode: asString(process.env.OUTREACH_REGISTRANT_POSTAL_CODE),
+    country: asString(process.env.OUTREACH_REGISTRANT_COUNTRY),
+  };
+}
+
+function missingRegistrantFields(registrant: RegistrantProfile) {
+  return REGISTRANT_REQUIRED_FIELDS.filter((field) => !asString(registrant[field]));
+}
+
+function completeRegistrantProfile(registrant: RegistrantProfile) {
+  return missingRegistrantFields(registrant).length === 0;
+}
+
+async function resolveMissionRegistrantProfile(brandId: string): Promise<{
+  registrant: RegistrantProfile | null;
+  source: "brand_memory" | "environment" | "";
+  missingFields: string[];
+}> {
+  const memory = await getOperatorBrandMemory(brandId).catch(() => null);
+  const brandRegistrant = registrantFromRecord(memory?.registrantDefaults ?? {});
+  if (completeRegistrantProfile(brandRegistrant)) {
+    return { registrant: brandRegistrant, source: "brand_memory", missingFields: [] };
+  }
+
+  const environmentRegistrant = registrantFromEnv();
+  if (completeRegistrantProfile(environmentRegistrant)) {
+    return { registrant: environmentRegistrant, source: "environment", missingFields: [] };
+  }
+
+  const brandMissing = missingRegistrantFields(brandRegistrant);
+  const environmentMissing = missingRegistrantFields(environmentRegistrant);
+  const missing = brandMissing.length <= environmentMissing.length ? brandMissing : environmentMissing;
+  return { registrant: null, source: "", missingFields: missing };
 }
 
 function normalizeDomain(value: string) {
@@ -840,6 +920,7 @@ function allowedToolNames(snapshot: MissionDeliverabilitySnapshot): MissionDeliv
     snapshot.guardrails.canAutoProvisionSender &&
     snapshot.guardrails.canAutoBuyDomain &&
     snapshot.guardrails.activeProvisioningSenderCount < snapshot.guardrails.maxAutoProvisionedSenders &&
+    snapshot.provisioning.hasRegistrantDefaults &&
     snapshot.provisioning.hasMailpoolApiKey
   ) {
     names.push("provision_mailpool_sender");
@@ -906,6 +987,7 @@ async function buildMissionDeliverabilitySnapshot(input: {
     inspectMissionDeliverability(input.mission.brandId),
     input.mission.currentRunId ? getOutreachRun(input.mission.currentRunId).catch(() => null) : Promise.resolve(null),
   ]);
+  const registrantProfile = await resolveMissionRegistrantProfile(input.mission.brandId);
 
   const assignedAccountIds = assignment?.accountIds?.length
     ? assignment.accountIds
@@ -1080,6 +1162,9 @@ async function buildMissionDeliverabilitySnapshot(input: {
       hasCustomerIoAppKey: Boolean(secrets.customerIoAppApiKey),
       mailpoolWebhookConfigured: Boolean(settings.mailpool.webhookUrl && secrets.mailpoolWebhookSecret),
       deliverabilityProvider: settings.deliverability.provider,
+      hasRegistrantDefaults: Boolean(registrantProfile.registrant),
+      registrantProfileSource: registrantProfile.source,
+      missingRegistrantFields: registrantProfile.missingFields,
     },
     probes: {
       forwardEmailConfigured: Boolean(forwardEmailProbeConfig),
@@ -1162,6 +1247,7 @@ function buildMissionOperatorPrompt(snapshot: MissionDeliverabilitySnapshot) {
     "If campaignCopyProof.hasExactCopyAvailable is false, do not substitute a baseline probe as launch proof. Choose wait_for_warmup or block_for_policy unless another exact-copy materialization path is available.",
     "When selecting senderAccountId for assign_sender or run_delivery_probe, use only exact accountId values from snapshot.senders where deliveryCapable is true. Do not select currentRun.accountId unless that exact ID is also present in snapshot.senders and deliveryCapable is true.",
     "If the assigned/current sender is not deliveryCapable, or currentRun.lastError says the sender is warmup-only, do not request another probe on it. Assign a different delivery-capable sender or provision new Mailpool sender capacity when guardrails allow it.",
+    "New domain purchase requires a stored registrant profile. If provisioning.hasRegistrantDefaults is false, choose block_for_policy and explain the missing registrant fields instead of inventing legal contact data.",
     "Approved Gmail seed usage is shown in gmailSeeds. Inbox cleanup/archiving for approved Gmail seed inbox hits happens automatically after placement inspection; do not ask the user to clean mailboxes.",
     "Hard guardrails are not optional: no sending before deliverability is ready, no domain purchase unless policy allows it, no provisioning above usable or genuinely in-flight capacity, no spending above maxAutoDomainSpendUsd, and no invented account IDs.",
     "Do not output a generic plan. Select the next concrete tool call for this mission tick.",
@@ -1432,6 +1518,17 @@ async function executeProvisionMailpoolSender(input: {
       },
     };
   }
+  const registrantProfile = await resolveMissionRegistrantProfile(input.mission.brandId);
+  if (!registrantProfile.registrant) {
+    return {
+      ok: false,
+      summary: "Registrant contact information is required before the AI can buy a new sender domain.",
+      riskLevel: "blocked",
+      result: {
+        missingRegistrantFields: registrantProfile.missingFields,
+      },
+    };
+  }
 
   const domain = normalizeDomain(asString(input.plan.toolInput.domain));
   const fromLocalPart = normalizeEmailLocalPart(asString(input.plan.toolInput.fromLocalPart));
@@ -1507,6 +1604,7 @@ async function executeProvisionMailpoolSender(input: {
       namecheapUserName: settings.namecheap.userName,
       namecheapApiKey: secrets.namecheapApiKey,
       namecheapClientIp: settings.namecheap.clientIp,
+      registrant: registrantProfile.registrant,
     });
     await loadBrandSenderLaunchView(input.mission.brandId).catch(() => null);
     await createMissionEvent({

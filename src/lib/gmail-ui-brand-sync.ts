@@ -204,13 +204,6 @@ export async function syncBrandGmailUiAssignments(options?: {
       mailboxAccountId: updated.id,
     });
 
-    for (const candidate of refreshedCandidates.slice(1)) {
-      if (candidate.account.id === updated.id) continue;
-      if (candidate.account.status !== "inactive") {
-        await updateOutreachAccount(candidate.account.id, { status: "inactive" });
-      }
-    }
-
     const warning =
       updated.config.mailpool.status === "active"
         ? ""

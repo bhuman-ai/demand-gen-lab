@@ -868,8 +868,14 @@ async function buildMissionDeliverabilitySnapshot(input: {
   }).length;
   const launchByAccountId = new Map(launches.map((launch) => [launch.senderAccountId, launch] as const));
   const launchByEmail = new Map(launches.map((launch) => [launch.fromEmail.toLowerCase(), launch] as const));
+  const launchAccountIds = new Set(launches.map((launch) => launch.senderAccountId).filter(Boolean));
+  const launchFromEmails = new Set(launches.map((launch) => launch.fromEmail.toLowerCase()).filter(Boolean));
   const senders = accounts
-    .filter((account) => account.status === "active" || assignedAccountIds.includes(account.id))
+    .filter((account) => {
+      const fromEmail = getOutreachAccountFromEmail(account).toLowerCase();
+      return assignedAccountIds.includes(account.id) || launchAccountIds.has(account.id) || launchFromEmails.has(fromEmail);
+    })
+    .filter((account) => account.status === "active" || assignedAccountIds.includes(account.id) || launchAccountIds.has(account.id))
     .map((account) => {
       const fromEmail = getOutreachAccountFromEmail(account).toLowerCase();
       return summarizeSender(
@@ -1248,9 +1254,23 @@ async function selectAiChosenAvailableDomain(input: {
 
 async function executeAssignSender(input: {
   mission: Mission;
+  snapshot: MissionDeliverabilitySnapshot;
   plan: MissionDeliverabilityAgentPlan;
 }): Promise<ToolExecutionResult> {
   const accountId = asString(input.plan.toolInput.accountId);
+  const snapshotSender = input.snapshot.senders.find((sender) => sender.accountId === accountId) ?? null;
+  if (!snapshotSender || !snapshotSender.deliveryCapable) {
+    return {
+      ok: false,
+      summary: "AI selected a sender that is not assignable for this mission.",
+      riskLevel: "blocked",
+      result: {
+        accountId,
+        knownForMission: Boolean(snapshotSender),
+        deliveryCapable: snapshotSender?.deliveryCapable ?? false,
+      },
+    };
+  }
   const accounts = await listOutreachAccounts();
   const account = accounts.find((row) => row.id === accountId) ?? null;
   if (!account) {
@@ -1557,7 +1577,7 @@ async function executeMissionTool(input: {
   }
 
   if (input.plan.toolName === "assign_sender") {
-    return executeAssignSender({ mission: input.mission, plan: input.plan });
+    return executeAssignSender({ mission: input.mission, snapshot: input.snapshot, plan: input.plan });
   }
   if (input.plan.toolName === "provision_mailpool_sender") {
     return executeProvisionMailpoolSender(input);

@@ -256,6 +256,34 @@ function buildMailpoolSpamFallbackSignal(input: {
   };
 }
 
+function buildLiveContentProofSignal(input: {
+  dimension: SenderHealthDimension;
+  production: ProbeObservation | null;
+}): HealthSignal | null {
+  if (!input.production) return null;
+  const status = healthFromScore(input.production.score);
+  const label =
+    input.dimension === "domain"
+      ? "domain"
+      : input.dimension === "email"
+        ? "mailbox"
+        : input.dimension === "transport"
+          ? "route"
+          : "message";
+  const monitorCount = Math.max(1, input.production.totalMonitors);
+  const tail =
+    status === "risky"
+      ? "Actual campaign copy did not place well, so this sender should not launch on that copy."
+      : status === "watch"
+        ? "This is usable direct proof while control probes continue to isolate the root cause."
+        : "This is direct live-content proof while control probes continue to isolate the root cause.";
+
+  return {
+    status,
+    summary: `Exact-content placement ${formatPercent(input.production.score)} for ${input.production.fromEmail} across ${monitorCount} monitor${monitorCount === 1 ? "" : "s"}. Using that as the current ${label} signal because no fresher isolated control signal exists. ${tail}`,
+  };
+}
+
 function fallbackSignal(
   row: DomainRow,
   dimension: "domain" | "email" | "transport" | "message"
@@ -305,6 +333,7 @@ function fallbackSignal(
 function buildTransportSignal(
   row: DomainRow,
   transportBaselines: ProbeObservation[],
+  latestProduction: ProbeObservation | null,
   mailpoolSpamFallback: MailpoolSpamFallback | null
 ): HealthSignal {
   if (row.role === "brand") {
@@ -314,6 +343,11 @@ function buildTransportSignal(
     };
   }
   if (!transportBaselines.length) {
+    const liveContentProof = buildLiveContentProofSignal({
+      dimension: "transport",
+      production: latestProduction,
+    });
+    if (liveContentProof) return liveContentProof;
     if (mailpoolSpamFallback) {
       return buildMailpoolSpamFallbackSignal({
         dimension: "transport",
@@ -341,10 +375,16 @@ function buildDomainSignal(input: {
   row: DomainRow;
   domainBaselines: ProbeObservation[];
   transportPeerBaselines: ProbeObservation[];
+  latestProduction: ProbeObservation | null;
   postmasterSnapshot: DeliverabilityDomainHealth | null;
   mailpoolSpamFallback: MailpoolSpamFallback | null;
 }) {
   if (!input.domainBaselines.length && !input.postmasterSnapshot) {
+    const liveContentProof = buildLiveContentProofSignal({
+      dimension: "domain",
+      production: input.latestProduction,
+    });
+    if (liveContentProof) return liveContentProof;
     if (input.mailpoolSpamFallback) {
       return buildMailpoolSpamFallbackSignal({
         dimension: "domain",
@@ -397,11 +437,17 @@ function buildDomainSignal(input: {
 function buildEmailSignal(input: {
   row: DomainRow;
   baseline: ProbeObservation | null;
+  latestProduction: ProbeObservation | null;
   domainPeerBaselines: ProbeObservation[];
   transportPeerBaselines: ProbeObservation[];
   mailpoolSpamFallback: MailpoolSpamFallback | null;
 }) {
   if (!input.row.fromEmail || !input.baseline) {
+    const liveContentProof = buildLiveContentProofSignal({
+      dimension: "email",
+      production: input.latestProduction,
+    });
+    if (input.row.fromEmail && liveContentProof) return liveContentProof;
     if (input.mailpoolSpamFallback) {
       return buildMailpoolSpamFallbackSignal({
         dimension: "email",
@@ -460,7 +506,10 @@ function buildMessageSignal(input: {
     return fallbackSignal(input.row, "message");
   }
   if (!input.baseline) {
-    return {
+    return buildLiveContentProofSignal({
+      dimension: "message",
+      production: input.production,
+    }) ?? {
       status: "queued",
       summary:
         "Live-content probe exists, but the control probe has not landed yet. Message risk cannot be isolated cleanly.",
@@ -773,17 +822,19 @@ export function buildBrandSenderHealthRows(input: {
       row,
       domainBaselines,
       transportPeerBaselines,
+      latestProduction: senderProduction,
       postmasterSnapshot,
       mailpoolSpamFallback,
     });
     const emailSignal = buildEmailSignal({
       row,
       baseline: senderBaseline,
+      latestProduction: senderProduction,
       domainPeerBaselines,
       transportPeerBaselines: emailTransportPeers,
       mailpoolSpamFallback,
     });
-    const transportSignal = buildTransportSignal(row, transportBaselines, mailpoolSpamFallback);
+    const transportSignal = buildTransportSignal(row, transportBaselines, senderProduction, mailpoolSpamFallback);
     const messageSignal = buildMessageSignal({
       row,
       baseline: senderBaseline,

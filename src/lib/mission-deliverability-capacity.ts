@@ -6,6 +6,7 @@ import {
   listDeliverabilityProbeRuns,
   listDeliverabilitySeedReservations,
   listOutreachAccounts,
+  listRunMessages,
   listRunEvents,
   listRunJobs,
   listSenderLaunches,
@@ -63,6 +64,7 @@ type MissionDeliverabilityAgentPlan = {
 };
 
 type ProbeTargetKind = "forward_email" | "gmail_mailbox" | "mailbox" | "unknown";
+type ProbeCopyKind = "campaign_copy" | "baseline_control";
 
 type ProbeSummary = {
   id: string;
@@ -78,7 +80,10 @@ type ProbeSummary = {
   senderAccountId: string;
   fromEmail: string;
   sourceMessageId: string;
+  sourceType: string;
+  sourceNodeId: string;
   contentHash: string;
+  copyKind: ProbeCopyKind;
   targetKinds: ProbeTargetKind[];
   monitorEmails: string[];
   results: Array<{
@@ -185,6 +190,9 @@ type MissionDeliverabilitySnapshot = {
   probeMemory: {
     latestForwardEmailProbe: ProbeSummary | null;
     latestGmailProbe: ProbeSummary | null;
+    latestForwardEmailCampaignCopyProbe: ProbeSummary | null;
+    latestGmailCampaignCopyProbe: ProbeSummary | null;
+    latestBaselineProbe: ProbeSummary | null;
     recentProbes: ProbeSummary[];
     activeProbeJobs: Array<{
       id: string;
@@ -193,6 +201,7 @@ type MissionDeliverabilitySnapshot = {
       attempts: number;
       monitorProvider: string;
       probeVariant: string;
+      copyKind: ProbeCopyKind;
       senderAccountId: string;
       fromEmail: string;
       sourceMessageId: string;
@@ -209,6 +218,14 @@ type MissionDeliverabilitySnapshot = {
       senderAccountId: string;
       fromEmail: string;
     }>;
+  };
+  campaignCopyProof: {
+    requiredForLaunch: boolean;
+    hasExactCopyAvailable: boolean;
+    scheduledOrSentMessageCount: number;
+    latestForwardEmailCampaignCopyPlacement: string;
+    latestGmailCampaignCopyPlacement: string;
+    baselineControlsAreDiagnosticOnly: boolean;
   };
   gmailSeeds: {
     approvedEmails: string[];
@@ -378,6 +395,13 @@ function probeResultProviderKind(
   return probeTargetProviderKind(result.provider, result.email, approvedGmailSeedEmails);
 }
 
+function probeCopyKind(probeRun: DeliverabilityProbeRun): ProbeCopyKind {
+  if (probeRun.probeVariant === "baseline" || probeRun.sourceMessageId.startsWith("synthetic_baseline_")) {
+    return "baseline_control";
+  }
+  return "campaign_copy";
+}
+
 function compactProbeRun(probeRun: DeliverabilityProbeRun, approvedGmailSeedEmails: Set<string>): ProbeSummary {
   const cadenceHours = deliverabilityProbeCadenceHours();
   const observedAt = probeObservedAt(probeRun);
@@ -396,7 +420,10 @@ function compactProbeRun(probeRun: DeliverabilityProbeRun, approvedGmailSeedEmai
     senderAccountId: probeRun.senderAccountId,
     fromEmail: probeRun.fromEmail,
     sourceMessageId: probeRun.sourceMessageId,
+    sourceType: probeRun.sourceType,
+    sourceNodeId: probeRun.sourceNodeId,
     contentHash: probeRun.contentHash,
+    copyKind: probeCopyKind(probeRun),
     targetKinds: probeTargetKinds(probeRun, approvedGmailSeedEmails),
     monitorEmails: Array.from(
       new Set(
@@ -442,6 +469,10 @@ function probeIsPassingInbox(probe: ProbeSummary) {
   return probe.status === "completed" && probe.placement === "inbox" && probe.totalMonitors > 0;
 }
 
+function probeIsCampaignCopy(probe: ProbeSummary) {
+  return probe.copyKind === "campaign_copy";
+}
+
 function probeMatchesSender(probe: ProbeSummary, senderAccountId: string, fromEmail: string) {
   const accountId = senderAccountId.trim();
   const email = fromEmail.trim().toLowerCase();
@@ -480,16 +511,23 @@ function compactProbeJobs(jobs: OutreachJob[]) {
     .filter((job) => job.jobType === "monitor_deliverability" && ["queued", "running"].includes(job.status))
     .map((job) => {
       const payload = asRecord(job.payload);
+      const probeVariant = asString(payload.probeVariant);
+      const sourceMessageId = asString(payload.sourceMessageId);
+      const copyKind: ProbeCopyKind =
+        probeVariant === "baseline" || sourceMessageId.startsWith("synthetic_baseline_")
+          ? "baseline_control"
+          : "campaign_copy";
       return {
         id: job.id,
         status: job.status,
         executeAfter: job.executeAfter,
         attempts: job.attempts,
         monitorProvider: asString(payload.monitorProvider),
-        probeVariant: asString(payload.probeVariant),
+        probeVariant,
+        copyKind,
         senderAccountId: asString(payload.senderAccountId),
         fromEmail: asString(payload.fromEmail).toLowerCase(),
-        sourceMessageId: asString(payload.sourceMessageId),
+        sourceMessageId,
         contentHash: asString(payload.contentHash),
         lastError: job.lastError,
       };
@@ -570,7 +608,9 @@ function runPauseClearedByFreshProof(run: OutreachRun | null, probes: ProbeSumma
   if (!run || !runLooksDeliverabilityPaused(run)) return false;
   const pausedAt = dateMs(run.updatedAt);
   if (!pausedAt) return false;
-  return probes.some((probe) => probe.fresh && probeIsPassingInbox(probe) && dateMs(probe.observedAt) > pausedAt);
+  return probes.some(
+    (probe) => probeIsCampaignCopy(probe) && probe.fresh && probeIsPassingInbox(probe) && dateMs(probe.observedAt) > pausedAt
+  );
 }
 
 function buildEvidenceBackedDeliverabilityState(input: {
@@ -586,15 +626,18 @@ function buildEvidenceBackedDeliverabilityState(input: {
     return input.assignedFromEmails.includes(probe.fromEmail);
   });
   const probes = relevantProbes.length ? relevantProbes : input.probes;
-  const latestGmailProbe = latestProbe(probes, (probe) =>
+  const campaignCopyProbes = probes.filter(probeIsCampaignCopy);
+  const latestGmailCampaignCopyProbe = latestProbe(campaignCopyProbes, (probe) =>
     probe.targetKinds.some((kind) => kind === "gmail_mailbox" || kind === "mailbox")
   );
-  const latestForwardEmailProbe = latestProbe(probes, (probe) => probe.targetKinds.includes("forward_email"));
-  const activeProbe = probes.find(probeIsActive) ?? null;
-  const activeJob = input.activeProbeJobs[0] ?? null;
+  const latestForwardEmailCampaignCopyProbe = latestProbe(campaignCopyProbes, (probe) =>
+    probe.targetKinds.includes("forward_email")
+  );
+  const activeProbe = campaignCopyProbes.find(probeIsActive) ?? null;
+  const activeJob = input.activeProbeJobs.find((job) => job.copyKind === "campaign_copy") ?? null;
 
-  if (latestGmailProbe?.fresh && probeIsBad(latestGmailProbe)) {
-    const summary = `Gmail seed placement failed for ${latestGmailProbe.fromEmail || "the active sender"} (${latestGmailProbe.summaryText || latestGmailProbe.placement || latestGmailProbe.lastError || "no inbox placement"}).`;
+  if (latestGmailCampaignCopyProbe?.fresh && probeIsBad(latestGmailCampaignCopyProbe)) {
+    const summary = `Campaign-copy Gmail seed placement failed for ${latestGmailCampaignCopyProbe.fromEmail || "the active sender"} (${latestGmailCampaignCopyProbe.summaryText || latestGmailCampaignCopyProbe.placement || latestGmailCampaignCopyProbe.lastError || "no inbox placement"}).`;
     return {
       ...input.base,
       stage: "needs_attention",
@@ -604,11 +647,28 @@ function buildEvidenceBackedDeliverabilityState(input: {
     };
   }
 
-  if (latestForwardEmailProbe?.fresh && probeIsBad(latestForwardEmailProbe)) {
-    const summary = `Forward Email placement failed for ${latestForwardEmailProbe.fromEmail || "the active sender"} (${latestForwardEmailProbe.summaryText || latestForwardEmailProbe.placement || latestForwardEmailProbe.lastError || "no inbox placement"}).`;
+  if (latestForwardEmailCampaignCopyProbe?.fresh && probeIsBad(latestForwardEmailCampaignCopyProbe)) {
+    const summary = `Campaign-copy Forward Email placement failed for ${latestForwardEmailCampaignCopyProbe.fromEmail || "the active sender"} (${latestForwardEmailCampaignCopyProbe.summaryText || latestForwardEmailCampaignCopyProbe.placement || latestForwardEmailCampaignCopyProbe.lastError || "no inbox placement"}).`;
     return {
       ...input.base,
       stage: "needs_attention",
+      summary,
+      primaryBlocker: summary,
+      lastCheckedAt: nowIso(),
+    };
+  }
+
+  if (
+    input.currentRun?.id &&
+    input.base.stage === "ready" &&
+    !latestGmailCampaignCopyProbe?.fresh &&
+    !activeProbe &&
+    !activeJob
+  ) {
+    const summary = "Exact campaign-copy inbox placement has not been proven yet. Baseline controls are diagnostic only.";
+    return {
+      ...input.base,
+      stage: "testing_inbox_placement",
       summary,
       primaryBlocker: summary,
       lastCheckedAt: nowIso(),
@@ -616,10 +676,15 @@ function buildEvidenceBackedDeliverabilityState(input: {
   }
 
   if (runLooksDeliverabilityPaused(input.currentRun) && !runPauseClearedByFreshProof(input.currentRun, probes)) {
-    const reason = input.currentRun?.pauseReason || input.currentRun?.lastError || "The current run is paused by deliverability evidence.";
+    const baselineOnlyReason =
+      !campaignCopyProbes.length &&
+      /baseline|spam|seed|placement|inbox/i.test(`${input.currentRun?.pauseReason ?? ""} ${input.currentRun?.lastError ?? ""}`);
+    const reason = baselineOnlyReason
+      ? "Current pause came from diagnostic/non-campaign-copy placement evidence. Exact campaign-copy placement is still required before launch."
+      : input.currentRun?.pauseReason || input.currentRun?.lastError || "The current run is paused by deliverability evidence.";
     return {
       ...input.base,
-      stage: "needs_attention",
+      stage: baselineOnlyReason ? "testing_inbox_placement" : "needs_attention",
       summary: reason,
       primaryBlocker: reason,
       lastCheckedAt: nowIso(),
@@ -759,7 +824,7 @@ async function buildMissionDeliverabilitySnapshot(input: {
       : [];
   const currentRunId = input.mission.currentRunId.trim();
   const approvedGmailSeedEmails = parseDelimitedEmailSet(process.env.GMAIL_DELIVERABILITY_MONITOR_EMAILS);
-  const [probeRuns, runEvents, runJobs, seedReservations] = await Promise.all([
+  const [probeRuns, runEvents, runJobs, runMessages, seedReservations] = await Promise.all([
     listDeliverabilityProbeRuns({
       brandId: input.mission.brandId,
       runId: currentRunId || undefined,
@@ -768,10 +833,15 @@ async function buildMissionDeliverabilitySnapshot(input: {
     }).catch(() => []),
     currentRunId ? listRunEvents(currentRunId).catch(() => []) : Promise.resolve([]),
     currentRunId ? listRunJobs(currentRunId, 75).catch(() => []) : Promise.resolve([]),
+    currentRunId ? listRunMessages(currentRunId).catch(() => []) : Promise.resolve([]),
     listDeliverabilitySeedReservations({ brandId: input.mission.brandId }).catch(() => []),
   ]);
   const probes = compactProbeRuns(probeRuns, approvedGmailSeedEmails);
   const activeProbeJobs = compactProbeJobs(runJobs);
+  const scheduledOrSentMessageCount = runMessages.filter((message) => {
+    if (!["scheduled", "sent"].includes(message.status)) return false;
+    return Boolean(message.subject.trim() && message.body.trim());
+  }).length;
   const launchByAccountId = new Map(launches.map((launch) => [launch.senderAccountId, launch] as const));
   const launchByEmail = new Map(launches.map((launch) => [launch.fromEmail.toLowerCase(), launch] as const));
   const senders = accounts
@@ -862,9 +932,38 @@ async function buildMissionDeliverabilitySnapshot(input: {
       latestGmailProbe: latestProbe(probes, (probe) =>
         probe.targetKinds.some((kind) => kind === "gmail_mailbox" || kind === "mailbox")
       ),
+      latestForwardEmailCampaignCopyProbe: latestProbe(
+        probes,
+        (probe) => probe.copyKind === "campaign_copy" && probe.targetKinds.includes("forward_email")
+      ),
+      latestGmailCampaignCopyProbe: latestProbe(
+        probes,
+        (probe) =>
+          probe.copyKind === "campaign_copy" &&
+          probe.targetKinds.some((kind) => kind === "gmail_mailbox" || kind === "mailbox")
+      ),
+      latestBaselineProbe: latestProbe(probes, (probe) => probe.copyKind === "baseline_control"),
       recentProbes: probes.slice(0, 20),
       activeProbeJobs,
       recentDeliverabilityEvents: compactDeliverabilityEvents(runEvents),
+    },
+    campaignCopyProof: {
+      requiredForLaunch: true,
+      hasExactCopyAvailable: scheduledOrSentMessageCount > 0,
+      scheduledOrSentMessageCount,
+      latestForwardEmailCampaignCopyPlacement:
+        latestProbe(
+          probes,
+          (probe) => probe.copyKind === "campaign_copy" && probe.targetKinds.includes("forward_email")
+        )?.placement ?? "",
+      latestGmailCampaignCopyPlacement:
+        latestProbe(
+          probes,
+          (probe) =>
+            probe.copyKind === "campaign_copy" &&
+            probe.targetKinds.some((kind) => kind === "gmail_mailbox" || kind === "mailbox")
+        )?.placement ?? "",
+      baselineControlsAreDiagnosticOnly: true,
     },
     gmailSeeds: summarizeGmailSeeds({
       approvedGmailSeedEmails,
@@ -912,9 +1011,10 @@ function buildToolCatalog() {
       name: "run_delivery_probe",
       riskLevel: "guarded_write",
       description:
-        "Queue a fresh Forward Email inbox placement probe for the current run. If campaign messages exist, probe production and baseline content; otherwise probe a neutral baseline message for sender warmup. Use this when sender readiness is uncertain, a daily proof is due, new messaging exists, or delivery proof should be gathered before continuing. If senderAccountId is provided, it must be chosen from snapshot.senders where deliveryCapable is true; currentRun.accountId is not valid unless it also appears there.",
+        "Queue a fresh inbox placement probe for the current run. Default copyMode is campaign_copy, which sends the actual scheduled/sent campaign email copy and is the only probe mode that can prove launch readiness. copyMode baseline_control is diagnostic/warmup only and never launch proof. If senderAccountId is provided, it must be chosen from snapshot.senders where deliveryCapable is true; currentRun.accountId is not valid unless it also appears there.",
       input: {
         senderAccountId: "optional assigned active sender account id; omit to use the current run sender",
+        copyMode: "optional: campaign_copy or baseline_control; default campaign_copy",
         reason: "why this probe is needed now",
       },
     },
@@ -951,10 +1051,12 @@ function buildMissionOperatorPrompt(snapshot: MissionDeliverabilitySnapshot) {
     "You are the LastB2B mission deliverability operator.",
     "You are the decision-maker. The code will not pick a sender, domain, mailbox name, provider path, or next move for you.",
     "Choose exactly one tool from the tool catalog. If you choose a write tool, provide exact IDs/domains/local parts.",
-    "You may create new sender capacity when guardrails allow it. You may request fresh Forward Email inbox placement probes; when no campaign message exists, the probe tool will send a neutral baseline warmup test. You may also wait, inspect, or block if that is the correct move.",
+    "You may create new sender capacity when guardrails allow it. You may request fresh inbox placement probes, but launch proof requires copyMode=campaign_copy: the actual scheduled/sent campaign email copy. You may also wait, inspect, or block if that is the correct move.",
     "Operating policy: Forward Email is the cheap first gate. Gmail/mailbox seed placement is the expensive confirmation only after Forward Email inboxes and an approved unused Gmail seed is available for this sender domain.",
     "Do not burn Gmail seed capacity when Forward Email has not inboxed. Do not request another Gmail-style confirmation when probeMemory already shows a fresh active or completed Gmail/mailbox probe for the same sender/content.",
-    "If Gmail/mailbox placement is spam, all_mail_only, not_found, or failed, do not treat the sender as ready even if Forward Email passed. Prefer a healthier sender, wait for warmup/cooldown, or provision capacity if policy allows.",
+    "Baseline probes are diagnostic only. They can inform warmup/sender health, but they cannot prove a campaign is safe to launch because spam filtering depends heavily on actual copy, links, CTA, personalization, and tracking.",
+    "If campaign-copy Gmail/mailbox placement is spam, all_mail_only, not_found, or failed, do not treat the sender as ready even if Forward Email passed. Prefer a healthier sender, wait for warmup/cooldown, or provision capacity if policy allows.",
+    "If campaignCopyProof.hasExactCopyAvailable is false, do not substitute a baseline probe as launch proof. Choose wait_for_warmup or block_for_policy unless another exact-copy materialization path is available.",
     "When selecting senderAccountId for assign_sender or run_delivery_probe, use only exact accountId values from snapshot.senders where deliveryCapable is true. Do not select currentRun.accountId unless that exact ID is also present in snapshot.senders and deliveryCapable is true.",
     "Approved Gmail seed usage is shown in gmailSeeds. Inbox cleanup/archiving for approved Gmail seed inbox hits happens automatically after placement inspection; do not ask the user to clean mailboxes.",
     "Hard guardrails are not optional: no sending before deliverability is ready, no domain purchase unless policy allows it, no provisioning above capacity, no spending above maxAutoDomainSpendUsd, and no invented account IDs.",
@@ -1365,11 +1467,14 @@ async function executeRunDeliveryProbe(input: {
     }
   }
 
+  const copyModeRaw = asString(input.plan.toolInput.copyMode).toLowerCase();
+  const baselineControl = copyModeRaw === "baseline_control" || copyModeRaw === "baseline_diagnostic";
+
   const result = await requestRunDeliverabilityProbe({
     runId,
     reason: asString(input.plan.toolInput.reason) || input.plan.rationale,
     senderAccountId: requestedSenderAccountId || undefined,
-    variants: ["production", "baseline"],
+    variants: baselineControl ? ["baseline"] : ["production"],
     triggerStage: "autonomous",
   });
   await createMissionEvent({
@@ -1383,6 +1488,7 @@ async function executeRunDeliveryProbe(input: {
       fromEmail: result.fromEmail,
       sourceMessageId: result.sourceMessageId,
       probeVariants: result.probeVariants,
+      copyMode: baselineControl ? "baseline_control" : "campaign_copy",
       jobsQueued: result.jobsQueued,
     },
   });
@@ -1397,6 +1503,7 @@ async function executeRunDeliveryProbe(input: {
       senderAccountId: result.senderAccountId,
       fromEmail: result.fromEmail,
       probeVariants: result.probeVariants,
+      copyMode: baselineControl ? "baseline_control" : "campaign_copy",
       jobsQueued: result.jobsQueued,
     },
   };

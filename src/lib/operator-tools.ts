@@ -533,7 +533,7 @@ const TOOL_SPECS: OperatorToolSpec[] = [
     name: "provision_mailpool_sender",
     riskLevel: "guarded_write",
     approvalMode: "confirm",
-    description: "Buy or attach a Mailpool domain, create a sender mailbox, and assign it to the brand.",
+    description: "Buy or attach a sender domain through Mailpool or the configured registrar, create a Mailpool mailbox, and assign it to the brand.",
     previewTitle: "Provision Mailpool sender",
     buildPreview: buildProvisionPreview,
     run: async (input) => {

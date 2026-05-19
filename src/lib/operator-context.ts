@@ -11,6 +11,7 @@ import {
 } from "@/lib/outreach-account-helpers";
 import { listSavedMailpoolDomains } from "@/lib/outreach-provisioning";
 import { getOutreachProvisioningSettings } from "@/lib/outreach-provider-settings";
+import { resolveDomainRegistrarSnapshot } from "@/lib/vercel-domain-registrar";
 import { buildSenderRoutingSignalFromDomainRow, rankSenderRoutingSignals, summarizeSenderRoutingScore, type SenderRoutingScoreLevel } from "@/lib/sender-routing";
 import { enrichBrandWithSenderHealth } from "@/lib/sender-health";
 
@@ -49,6 +50,12 @@ export type OperatorBrandContext = {
     mailpoolConfigured: boolean;
     mailpoolWebhookConfigured: boolean;
     deliverabilityProvider: string;
+    domainRegistrarProvider: string;
+    domainRegistrarConfigured: boolean;
+    domainRegistrarCanRegisterDomains: boolean;
+    domainRegistrarCanSetNameservers: boolean;
+    domainRegistrarMaxPurchasePriceUsd: number;
+    domainRegistrarMissing: string[];
     mailpoolDomainInventoryCount: number;
     mailpoolDomains: Array<{
       id: string;
@@ -409,6 +416,7 @@ export async function getOperatorBrandContext(brandId: string): Promise<Operator
     hasMailpoolInventory: mailpoolDomains.length > 0,
     mailpoolConfigured: settings.mailpool.hasApiKey,
   });
+  const registrar = resolveDomainRegistrarSnapshot();
 
   return {
     brand: {
@@ -427,6 +435,12 @@ export async function getOperatorBrandContext(brandId: string): Promise<Operator
       mailpoolConfigured: settings.mailpool.hasApiKey,
       mailpoolWebhookConfigured: settings.mailpool.hasWebhookSecret,
       deliverabilityProvider: settings.deliverability.provider,
+      domainRegistrarProvider: registrar.provider,
+      domainRegistrarConfigured: registrar.configured,
+      domainRegistrarCanRegisterDomains: registrar.canRegisterDomains,
+      domainRegistrarCanSetNameservers: registrar.canSetNameservers,
+      domainRegistrarMaxPurchasePriceUsd: registrar.maxPurchasePriceUsd,
+      domainRegistrarMissing: registrar.missing,
       mailpoolDomainInventoryCount: mailpoolDomains.length,
       mailpoolDomains: mailpoolDomains.map((domain) => ({
         id: domain.id,

@@ -30,6 +30,7 @@ import {
   type MailpoolDomainSelection,
   type ProvisionSenderInput,
 } from "@/lib/outreach-provisioning";
+import { resolveDomainRegistrarSnapshot } from "@/lib/vercel-domain-registrar";
 import { requestRunDeliverabilityProbe } from "@/lib/outreach-runtime";
 import { resolveLlmModel } from "@/lib/llm-router";
 import { createMissionAgentDecision, createMissionEvent } from "@/lib/mission-data";
@@ -253,6 +254,12 @@ type MissionDeliverabilitySnapshot = {
     hasRegistrantDefaults: boolean;
     registrantProfileSource: string;
     missingRegistrantFields: string[];
+    domainRegistrarProvider: string;
+    domainRegistrarConfigured: boolean;
+    domainRegistrarCanRegisterDomains: boolean;
+    domainRegistrarCanSetNameservers: boolean;
+    domainRegistrarMaxPurchasePriceUsd: number;
+    domainRegistrarMissing: string[];
   };
   probes: {
     forwardEmailConfigured: boolean;
@@ -1061,6 +1068,7 @@ async function buildMissionDeliverabilitySnapshot(input: {
   });
   const provisioningCapacity = launches.map((launch) => launchCapacityDetail(launch, accountById.get(launch.senderAccountId) ?? null));
   const activeProvisioningSenderCount = provisioningCapacity.filter((launch) => launch.consumesCapacity).length;
+  const domainRegistrar = resolveDomainRegistrarSnapshot();
   const guardrailsWithoutAllowed = {
     canAutoProvisionSender:
       input.mission.approvalPolicy.allowAutoProvisioning &&
@@ -1165,6 +1173,12 @@ async function buildMissionDeliverabilitySnapshot(input: {
       hasRegistrantDefaults: Boolean(registrantProfile.registrant),
       registrantProfileSource: registrantProfile.source,
       missingRegistrantFields: registrantProfile.missingFields,
+      domainRegistrarProvider: domainRegistrar.provider,
+      domainRegistrarConfigured: domainRegistrar.configured,
+      domainRegistrarCanRegisterDomains: domainRegistrar.canRegisterDomains,
+      domainRegistrarCanSetNameservers: domainRegistrar.canSetNameservers,
+      domainRegistrarMaxPurchasePriceUsd: domainRegistrar.maxPurchasePriceUsd,
+      domainRegistrarMissing: domainRegistrar.missing,
     },
     probes: {
       forwardEmailConfigured: Boolean(forwardEmailProbeConfig),
@@ -1247,6 +1261,7 @@ function buildMissionOperatorPrompt(snapshot: MissionDeliverabilitySnapshot) {
     "If campaignCopyProof.hasExactCopyAvailable is false, do not substitute a baseline probe as launch proof. Choose wait_for_warmup or block_for_policy unless another exact-copy materialization path is available.",
     "When selecting senderAccountId for assign_sender or run_delivery_probe, use only exact accountId values from snapshot.senders where deliveryCapable is true. Do not select currentRun.accountId unless that exact ID is also present in snapshot.senders and deliveryCapable is true.",
     "If the assigned/current sender is not deliveryCapable, or currentRun.lastError says the sender is warmup-only, do not request another probe on it. Assign a different delivery-capable sender or provision new Mailpool sender capacity when guardrails allow it.",
+    "Domain registrar capability is shown in provisioning.domainRegistrarProvider and related fields. If Vercel is configured, the system can buy the AI-selected domain there, delegate nameservers to Mailpool, and continue without Namecheap.",
     "New domain purchase requires a stored registrant profile. If provisioning.hasRegistrantDefaults is false, choose block_for_policy and explain the missing registrant fields instead of inventing legal contact data.",
     "Approved Gmail seed usage is shown in gmailSeeds. Inbox cleanup/archiving for approved Gmail seed inbox hits happens automatically after placement inspection; do not ask the user to clean mailboxes.",
     "Hard guardrails are not optional: no sending before deliverability is ready, no domain purchase unless policy allows it, no provisioning above usable or genuinely in-flight capacity, no spending above maxAutoDomainSpendUsd, and no invented account IDs.",
@@ -1595,6 +1610,7 @@ async function executeProvisionMailpoolSender(input: {
       domainCandidates: [],
       allowAlternativeDomains: false,
       fromLocalPart,
+      maxDomainPurchasePriceUsd: policy.maxAutoDomainSpendUsd,
       forwardingTargetUrl: brand?.website || input.mission.websiteUrl,
       customerIoSiteId: settings.customerIo.siteId,
       customerIoTrackingApiKey: secrets.customerIoTrackingApiKey,

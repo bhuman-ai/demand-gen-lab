@@ -1572,7 +1572,7 @@ export async function updateOutreachProvisioningSettingsApi(input: {
 }
 
 export async function testOutreachProvisioningSettings(
-  provider: "customerio" | "namecheap" | "mailpool" | "deliverability" | "all" = "all"
+  provider: "customerio" | "namecheap" | "mailpool" | "vercel" | "deliverability" | "all" = "all"
 ) {
   const response = await fetch("/api/outreach/provisioning-settings/test", {
     method: "POST",
@@ -1584,9 +1584,9 @@ export async function testOutreachProvisioningSettings(
     settings: data.settings as OutreachProvisioningSettings,
     tests: (data.tests ?? {}) as Partial<
       Record<
-        "customerIo" | "namecheap" | "mailpool" | "deliverability",
+        "customerIo" | "namecheap" | "mailpool" | "vercel" | "deliverability",
         {
-          provider: "customerio" | "namecheap" | "mailpool" | "deliverability";
+          provider: "customerio" | "namecheap" | "mailpool" | "vercel" | "deliverability";
           ok: boolean;
           message: string;
           details: Record<string, unknown>;

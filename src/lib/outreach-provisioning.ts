@@ -59,6 +59,11 @@ import { pickWebshareProxy } from "@/lib/webshare-client";
 import { buildGmailUiUserDataDir } from "@/lib/gmail-ui-profile";
 import { normalizeGmailUiLoginStatus } from "@/lib/gmail-ui-login";
 import { MAX_ACTIVE_SENDERS_PER_DOMAIN } from "@/lib/sender-capacity";
+import {
+  buyVercelDomainAndAttachToMailpool,
+  resolveDomainRegistrarSnapshot,
+  testVercelDomainRegistrarConnection,
+} from "@/lib/vercel-domain-registrar";
 
 type NamecheapHostRecord = {
   type: "A" | "AAAA" | "ALIAS" | "CNAME" | "FRAME" | "MX" | "MXE" | "NS" | "TXT" | "URL" | "URL301";
@@ -87,6 +92,7 @@ export type ProvisionSenderInput = {
   domainMode: "existing" | "register" | "transfer";
   domain: string;
   fromLocalPart: string;
+  maxDomainPurchasePriceUsd?: number;
   autoPickCustomerIoAccount?: boolean;
   customerIoSourceAccountId?: string;
   forwardingTargetUrl?: string;
@@ -179,7 +185,7 @@ export type NamecheapDomainAvailabilityItem = {
 };
 
 export type ProvisioningProviderTestResult = {
-  provider: "customerio" | "namecheap" | "mailpool" | "deliverability";
+  provider: "customerio" | "namecheap" | "mailpool" | "vercel" | "deliverability";
   ok: boolean;
   message: string;
   details: Record<string, unknown>;
@@ -893,6 +899,16 @@ export async function testMailpoolProvisioningConnection(input: {
     ok: true,
     message: "Mailpool API credentials are working.",
     details: {},
+  };
+}
+
+export async function testVercelProvisioningConnection(): Promise<ProvisioningProviderTestResult> {
+  const result = await testVercelDomainRegistrarConnection();
+  return {
+    provider: "vercel",
+    ok: result.ok,
+    message: result.message,
+    details: result.details,
   };
 }
 
@@ -2383,7 +2399,7 @@ export async function provisionMailpoolSender(
 
   let mailpoolDomain =
     existingDomains.find((entry) => entry.domain === domain) ?? null;
-  let domainRegisteredViaNamecheapFallback = false;
+  let externalRegistrarFallback: "vercel" | "namecheap" | "" = "";
   if (input.domainMode === "register") {
     const domainOwner = buildMailpoolDomainOwner({ brand, registrant: input.registrant });
     try {
@@ -2401,34 +2417,56 @@ export async function provisionMailpoolSender(
         if (!isMailpoolRegistrationServerError(error)) {
           throw error;
         }
-        const namecheapCredentials = await resolveNamecheapCredentials(input);
         if (!input.registrant) {
           throw error;
         }
-        await namecheapRegisterDomain({
-          apiUser: namecheapCredentials.namecheapApiUser,
-          userName: namecheapCredentials.namecheapUserName,
-          apiKey: namecheapCredentials.namecheapApiKey,
-          clientIp: namecheapCredentials.namecheapClientIp,
-          domain,
-          registrant: input.registrant,
-        });
-        domainRegisteredViaNamecheapFallback = true;
-        mailpoolDomain = await transferMailpoolDomain({
-          apiKey,
-          domain,
-          redirectUrl: forwardingTargetUrl || undefined,
-          domainOwner,
-        });
-        if (mailpoolDomain?.nameservers?.length) {
-          await namecheapSetCustomNameservers({
+
+        const registrarSnapshot = resolveDomainRegistrarSnapshot();
+        if (registrarSnapshot.provider === "vercel") {
+          if (!registrarSnapshot.configured) {
+            throw new Error(
+              `Vercel domain registrar is selected, but ${registrarSnapshot.missing.join(", ") || "its API token"} is missing.`
+            );
+          }
+          const vercelRegistration = await buyVercelDomainAndAttachToMailpool({
+            mailpoolApiKey: apiKey,
+            domain,
+            registrant: input.registrant,
+            redirectUrl: forwardingTargetUrl || undefined,
+            domainOwner,
+            maxPurchasePriceUsd: input.maxDomainPurchasePriceUsd,
+          });
+          mailpoolDomain = vercelRegistration.domain;
+          externalRegistrarFallback = "vercel";
+        } else if (registrarSnapshot.provider === "namecheap") {
+          const namecheapCredentials = await resolveNamecheapCredentials(input);
+          await namecheapRegisterDomain({
             apiUser: namecheapCredentials.namecheapApiUser,
             userName: namecheapCredentials.namecheapUserName,
             apiKey: namecheapCredentials.namecheapApiKey,
             clientIp: namecheapCredentials.namecheapClientIp,
             domain,
-            nameservers: mailpoolDomain.nameservers,
+            registrant: input.registrant,
           });
+          externalRegistrarFallback = "namecheap";
+          mailpoolDomain = await transferMailpoolDomain({
+            apiKey,
+            domain,
+            redirectUrl: forwardingTargetUrl || undefined,
+            domainOwner,
+          });
+          if (mailpoolDomain?.nameservers?.length) {
+            await namecheapSetCustomNameservers({
+              apiUser: namecheapCredentials.namecheapApiUser,
+              userName: namecheapCredentials.namecheapUserName,
+              apiKey: namecheapCredentials.namecheapApiKey,
+              clientIp: namecheapCredentials.namecheapClientIp,
+              domain,
+              nameservers: mailpoolDomain.nameservers,
+            });
+          }
+        } else {
+          throw error;
         }
       }
     }
@@ -2493,8 +2531,12 @@ export async function provisionMailpoolSender(
   if (input.domainMode === "register" && domainSelection?.source && domainSelection.source !== "requested" && requestedDomain !== domain) {
     warnings.push(`Mailpool switched to ${domain} because ${requestedDomain} was not available.`);
   }
-  if (domainRegisteredViaNamecheapFallback) {
-    warnings.push("Mailpool domain registration failed, so the domain was registered through Namecheap and attached to Mailpool.");
+  if (externalRegistrarFallback) {
+    warnings.push(
+      `Mailpool domain registration failed, so the domain was registered through ${
+        externalRegistrarFallback === "vercel" ? "Vercel" : "Namecheap"
+      } and attached to Mailpool.`
+    );
   }
 
   if (mailboxReadyForDelivery && mailbox.id) {
@@ -2538,7 +2580,7 @@ export async function provisionMailpoolSender(
     replyMailboxEmail: fromEmail,
     dnsStatus: mailpoolStatusToDnsStatus(mailpoolDomain.status),
     forwardingTargetUrl: forwardingTargetUrl || mailpoolDomain.redirectUrl || "",
-    registrar: domainRegisteredViaNamecheapFallback ? "namecheap" : "mailpool",
+    registrar: externalRegistrarFallback || "mailpool",
     provider: "mailpool",
     deliveryAccountId: account.id,
     deliveryAccountName: account.name,
@@ -2546,8 +2588,8 @@ export async function provisionMailpoolSender(
     notes:
       input.domainMode === "transfer"
         ? "Transferred into Mailpool and provisioned through Mailpool."
-        : domainRegisteredViaNamecheapFallback
-          ? "Registered through Namecheap after Mailpool registration failed, then attached to Mailpool."
+        : externalRegistrarFallback
+          ? `Registered through ${externalRegistrarFallback === "vercel" ? "Vercel" : "Namecheap"} after Mailpool registration failed, then attached to Mailpool.`
         : "Provisioned through Mailpool.",
   });
   const protectedDomain = forwardingTargetUrl ? normalizeDomain(forwardingTargetUrl) : "";
@@ -2590,8 +2632,10 @@ export async function provisionMailpoolSender(
   if (input.domainMode === "transfer" && mailpoolDomain.status !== "active") {
     nextSteps.push("Wait for Mailpool to finish transferring the domain before treating this sender as live.");
   }
-  if (domainRegisteredViaNamecheapFallback && mailpoolDomain.status !== "active") {
-    nextSteps.push("Wait for Namecheap nameserver changes and Mailpool domain activation to propagate.");
+  if (externalRegistrarFallback && mailpoolDomain.status !== "active") {
+    nextSteps.push(
+      `Wait for ${externalRegistrarFallback === "vercel" ? "Vercel" : "Namecheap"} nameserver changes and Mailpool domain activation to propagate.`
+    );
   }
   nextSteps.push("Internal inbox placement monitors will start once the sender begins warming.");
   nextSteps.push("Run a sender test before launching live campaigns.");

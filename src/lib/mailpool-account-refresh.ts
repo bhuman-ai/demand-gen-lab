@@ -159,7 +159,7 @@ async function reconcileBrandDomains(input: {
         ...row,
         dnsStatus: input.domain ? mailpoolStatusToDnsStatus(input.domain.status) : row.dnsStatus,
         forwardingTargetUrl: input.domain?.redirectUrl ?? row.forwardingTargetUrl,
-        registrar: "mailpool" as const,
+        registrar: row.registrar === "manual" || !row.registrar ? ("mailpool" as const) : row.registrar,
         provider: "mailpool" as const,
         deliveryAccountId: input.accountId,
         deliveryAccountName: input.accountName,

@@ -81,7 +81,9 @@ function normalizeDomains(value: unknown): DomainRow[] {
             ? ("namecheap" as DomainRow["registrar"])
             : String(row.registrar ?? "").toLowerCase() === "mailpool"
               ? ("mailpool" as DomainRow["registrar"])
-              : ("manual" as DomainRow["registrar"]),
+              : String(row.registrar ?? "").toLowerCase() === "vercel"
+                ? ("vercel" as DomainRow["registrar"])
+                : ("manual" as DomainRow["registrar"]),
         provider:
           String(row.provider ?? "").toLowerCase() === "customerio"
             ? ("customerio" as DomainRow["provider"])

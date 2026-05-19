@@ -518,7 +518,7 @@ export type DomainRow = {
   messagingHealthSummary?: string;
   seedPolicy?: "fresh_pool" | "rotating_pool" | "tainted_mailbox";
   role?: "brand" | "sender";
-  registrar?: "namecheap" | "mailpool" | "manual";
+  registrar?: "namecheap" | "mailpool" | "vercel" | "manual";
   provider?: "customerio" | "mailpool" | "manual";
   dnsStatus?: "pending" | "configured" | "verified" | "error";
   fromEmail?: string;

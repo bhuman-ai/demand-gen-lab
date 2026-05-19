@@ -644,6 +644,18 @@ function probeMatchesSender(probe: ProbeSummary, senderAccountId: string, fromEm
   return Boolean(email && probe.fromEmail === email);
 }
 
+function senderIdentityMatches(
+  senderAccountId: string,
+  fromEmail: string,
+  assignedSenderAccountIds: string[],
+  assignedFromEmails: string[]
+) {
+  const accountId = senderAccountId.trim();
+  const email = fromEmail.trim().toLowerCase();
+  if (accountId && assignedSenderAccountIds.includes(accountId)) return true;
+  return Boolean(email && assignedFromEmails.includes(email));
+}
+
 function latestProbe(probes: ProbeSummary[], predicate: (probe: ProbeSummary) => boolean) {
   return probes.find(predicate) ?? null;
 }
@@ -787,11 +799,16 @@ function buildEvidenceBackedDeliverabilityState(input: {
   forwardEmailMode: string;
   gmailCampaignCopyProofAvailable: boolean;
 }): MissionDeliverabilityState {
-  const relevantProbes = input.probes.filter((probe) => {
-    if (input.assignedSenderAccountIds.includes(probe.senderAccountId)) return true;
-    return input.assignedFromEmails.includes(probe.fromEmail);
-  });
-  const probes = relevantProbes.length ? relevantProbes : input.probes;
+  const hasAssignedSenderIdentity = Boolean(input.assignedSenderAccountIds.length || input.assignedFromEmails.length);
+  const relevantProbes = input.probes.filter((probe) =>
+    senderIdentityMatches(
+      probe.senderAccountId,
+      probe.fromEmail,
+      input.assignedSenderAccountIds,
+      input.assignedFromEmails
+    )
+  );
+  const probes = hasAssignedSenderIdentity ? relevantProbes : input.probes;
   const campaignCopyProbes = probes.filter(probeIsCampaignCopy);
   const latestGmailCampaignCopyProbe = latestProbe(campaignCopyProbes, (probe) =>
     probe.targetKinds.some((kind) => kind === "gmail_mailbox" || kind === "mailbox")
@@ -800,7 +817,18 @@ function buildEvidenceBackedDeliverabilityState(input: {
     probe.targetKinds.includes("forward_email")
   );
   const activeProbe = campaignCopyProbes.find(probeIsActive) ?? null;
-  const activeJob = input.activeProbeJobs.find((job) => job.copyKind === "campaign_copy") ?? null;
+  const activeJob =
+    input.activeProbeJobs.find(
+      (job) =>
+        job.copyKind === "campaign_copy" &&
+        (!hasAssignedSenderIdentity ||
+          senderIdentityMatches(
+            job.senderAccountId,
+            job.fromEmail,
+            input.assignedSenderAccountIds,
+            input.assignedFromEmails
+          ))
+    ) ?? null;
   const forwardEmailProofPassed = Boolean(
     latestForwardEmailCampaignCopyProbe?.fresh && probeIsPassingInbox(latestForwardEmailCampaignCopyProbe)
   );
@@ -1053,6 +1081,13 @@ async function buildMissionDeliverabilitySnapshot(input: {
     .filter((sender) => sender.assigned)
     .map((sender) => sender.fromEmail)
     .filter(Boolean);
+  const hasAssignedSenderIdentity = Boolean(assignedAccountIds.length || assignedFromEmails.length);
+  const assignedProbes = hasAssignedSenderIdentity
+    ? probes.filter((probe) => senderIdentityMatches(probe.senderAccountId, probe.fromEmail, assignedAccountIds, assignedFromEmails))
+    : probes;
+  const assignedActiveProbeJobs = hasAssignedSenderIdentity
+    ? activeProbeJobs.filter((job) => senderIdentityMatches(job.senderAccountId, job.fromEmail, assignedAccountIds, assignedFromEmails))
+    : activeProbeJobs;
   const firstRelevantProbeFromEmail =
     probes.find((probe) => assignedAccountIds.includes(probe.senderAccountId) || assignedFromEmails.includes(probe.fromEmail))
       ?.fromEmail ?? probes[0]?.fromEmail ?? "";
@@ -1068,8 +1103,8 @@ async function buildMissionDeliverabilitySnapshot(input: {
     currentRun,
     assignedSenderAccountIds: assignedAccountIds,
     assignedFromEmails,
-    probes,
-    activeProbeJobs,
+    probes: assignedProbes,
+    activeProbeJobs: assignedActiveProbeJobs,
     forwardEmailMode: forwardEmailProbeConfig?.mode ?? "",
     gmailCampaignCopyProofAvailable: gmailSeeds.remainingForAssignedSenderDomain > 0,
   });
@@ -1131,23 +1166,23 @@ async function buildMissionDeliverabilitySnapshot(input: {
       nextStep: launch.nextStep,
     })),
     probeMemory: {
-      latestForwardEmailProbe: latestProbe(probes, (probe) => probe.targetKinds.includes("forward_email")),
-      latestGmailProbe: latestProbe(probes, (probe) =>
+      latestForwardEmailProbe: latestProbe(assignedProbes, (probe) => probe.targetKinds.includes("forward_email")),
+      latestGmailProbe: latestProbe(assignedProbes, (probe) =>
         probe.targetKinds.some((kind) => kind === "gmail_mailbox" || kind === "mailbox")
       ),
       latestForwardEmailCampaignCopyProbe: latestProbe(
-        probes,
+        assignedProbes,
         (probe) => probe.copyKind === "campaign_copy" && probe.targetKinds.includes("forward_email")
       ),
       latestGmailCampaignCopyProbe: latestProbe(
-        probes,
+        assignedProbes,
         (probe) =>
           probe.copyKind === "campaign_copy" &&
           probe.targetKinds.some((kind) => kind === "gmail_mailbox" || kind === "mailbox")
       ),
-      latestBaselineProbe: latestProbe(probes, (probe) => probe.copyKind === "baseline_control"),
-      recentProbes: probes.slice(0, 20),
-      activeProbeJobs,
+      latestBaselineProbe: latestProbe(assignedProbes, (probe) => probe.copyKind === "baseline_control"),
+      recentProbes: assignedProbes.slice(0, 20),
+      activeProbeJobs: assignedActiveProbeJobs,
       recentDeliverabilityEvents: compactDeliverabilityEvents(runEvents),
     },
     campaignCopyProof: {
@@ -1156,12 +1191,12 @@ async function buildMissionDeliverabilitySnapshot(input: {
       scheduledOrSentMessageCount,
       latestForwardEmailCampaignCopyPlacement:
         latestProbe(
-          probes,
+          assignedProbes,
           (probe) => probe.copyKind === "campaign_copy" && probe.targetKinds.includes("forward_email")
         )?.placement ?? "",
       latestGmailCampaignCopyPlacement:
         latestProbe(
-          probes,
+          assignedProbes,
           (probe) =>
             probe.copyKind === "campaign_copy" &&
             probe.targetKinds.some((kind) => kind === "gmail_mailbox" || kind === "mailbox")

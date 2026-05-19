@@ -391,6 +391,26 @@ async function waitForVercelRegistrarOrder(input: {
   );
 }
 
+async function waitForVercelDomainInventory(input: {
+  token: string;
+  teamId?: string;
+  domain: string;
+  timeoutMs?: number;
+}) {
+  const startedAt = Date.now();
+  const timeoutMs = Math.max(1000, input.timeoutMs ?? 30000);
+  while (Date.now() - startedAt < timeoutMs) {
+    const domain = await getVercelDomain({
+      token: input.token,
+      teamId: input.teamId,
+      domain: input.domain,
+    });
+    if (domain?.expiresAt) return domain;
+    await sleep(750);
+  }
+  return null;
+}
+
 async function ensureVercelDomainPurchased(input: {
   token: string;
   teamId?: string;
@@ -447,14 +467,26 @@ async function ensureVercelDomainPurchased(input: {
   if (!orderId) {
     throw new Error(`Vercel domain purchase for ${input.domain} did not return an order id.`);
   }
-  await waitForVercelRegistrarOrder({
-    token: input.token,
-    teamId: input.teamId,
-    orderId,
-    domain: input.domain,
-  });
+  try {
+    await waitForVercelRegistrarOrder({
+      token: input.token,
+      teamId: input.teamId,
+      orderId,
+      domain: input.domain,
+    });
+  } catch (error) {
+    const recovered = await waitForVercelDomainInventory({
+      token: input.token,
+      teamId: input.teamId,
+      domain: input.domain,
+    });
+    if (recovered?.expiresAt) {
+      return { orderId, price, existing: recovered };
+    }
+    throw error;
+  }
 
-  const purchased = await getVercelDomain({
+  const purchased = await waitForVercelDomainInventory({
     token: input.token,
     teamId: input.teamId,
     domain: input.domain,

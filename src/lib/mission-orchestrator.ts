@@ -14,10 +14,13 @@ import {
   enqueueOutreachJob,
   getOutreachRun,
   listRunJobs,
+  listRunLeads,
   listRunMessages,
+  updateOutreachJob,
   updateOutreachRun,
 } from "@/lib/outreach-data";
 import { launchExperimentRun } from "@/lib/outreach-runtime";
+import { resolveLlmModel } from "@/lib/llm-router";
 import {
   createMissionAgentDecision,
   createMissionEvent,
@@ -32,6 +35,28 @@ import type { Mission, MissionPlan } from "@/lib/mission-types";
 
 function nowIso() {
   return new Date().toISOString();
+}
+
+function addMinutes(dateIso: string, minutes: number) {
+  return new Date(new Date(dateIso).getTime() + minutes * 60_000).toISOString();
+}
+
+function dateMs(value: string) {
+  const parsed = new Date(value).getTime();
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+function asString(value: unknown) {
+  return String(value ?? "").trim();
+}
+
+function asNumber(value: unknown, fallback = 0) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
 }
 
 function asLines(values: string[]) {
@@ -91,6 +116,332 @@ function hasActivePreparationJob(jobs: Awaited<ReturnType<typeof listRunJobs>>) 
       ["queued", "running"].includes(job.status) &&
       ["source_leads", "schedule_messages"].includes(job.jobType)
   );
+}
+
+function nextScheduledMessageAt(messages: Awaited<ReturnType<typeof listRunMessages>>) {
+  return [...messages]
+    .filter((message) => message.status === "scheduled")
+    .sort((left, right) => (left.scheduledAt < right.scheduledAt ? -1 : 1))[0]?.scheduledAt ?? "";
+}
+
+function extractResponseText(payload: unknown) {
+  const row = asRecord(payload);
+  if (typeof row.output_text === "string") return row.output_text;
+  const output = Array.isArray(row.output) ? row.output : [];
+  for (const item of output) {
+    const content = asRecord(item).content;
+    if (!Array.isArray(content)) continue;
+    for (const contentItem of content) {
+      const text = asRecord(contentItem).text;
+      if (typeof text === "string") return text;
+    }
+  }
+  return "";
+}
+
+type BatchReadinessToolName =
+  | "dispatch_prepared_batch"
+  | "source_more_leads"
+  | "run_smoke_test"
+  | "wait_for_batch_readiness"
+  | "block_for_policy";
+
+const BATCH_READINESS_TOOLS: BatchReadinessToolName[] = [
+  "dispatch_prepared_batch",
+  "source_more_leads",
+  "run_smoke_test",
+  "wait_for_batch_readiness",
+  "block_for_policy",
+];
+
+type BatchReadinessPlan = {
+  toolName: BatchReadinessToolName;
+  toolInput: Record<string, unknown>;
+  rationale: string;
+  expectedOutcome: string;
+  model: string;
+  raw: Record<string, unknown>;
+};
+
+type BatchReadinessSnapshot = {
+  mission: {
+    id: string;
+    brandId: string;
+    status: Mission["status"];
+    firstBatchTarget: number;
+    approvalFirstBatchLimit: number;
+    targetCustomers: string[];
+    primaryRisk: string;
+    successCriteria: string;
+  };
+  run: {
+    id: string;
+    status: string;
+    metrics: NonNullable<Awaited<ReturnType<typeof getOutreachRun>>>["metrics"] | null;
+    pauseReason: string;
+    lastError: string;
+  };
+  batch: {
+    leadCount: number;
+    scheduledMessageCount: number;
+    sentMessageCount: number;
+    failedMessageCount: number;
+    bouncedMessageCount: number;
+    targetLeadCount: number;
+    deficitToTarget: number;
+    nextScheduledAt: string;
+  };
+  deliverability: Mission["deliverabilityState"];
+  jobs: {
+    activeSourceJobIds: string[];
+    activeScheduleJobIds: string[];
+    activeDispatchJobIds: string[];
+  };
+  allowedToolNames: BatchReadinessToolName[];
+};
+
+function batchReadinessToolCatalog() {
+  return [
+    {
+      name: "dispatch_prepared_batch",
+      description: "Allow the currently prepared scheduled campaign messages to dispatch.",
+    },
+    {
+      name: "source_more_leads",
+      description:
+        "Queue autonomous lead sourcing/top-up before dispatch. Use when the prepared batch is below target and should not be treated as the full first batch.",
+      input: {
+        targetLeadCount: "desired total lead count for the run",
+        reason: "why more leads should be sourced before dispatch",
+      },
+    },
+    {
+      name: "run_smoke_test",
+      description:
+        "Intentionally dispatch fewer than the first-batch target as a tiny smoke test. Must explain why this is strategically better than topping up first.",
+      input: {
+        smokeTestSize: "number of scheduled messages to allow now",
+        reason: "why a tiny smoke test is warranted",
+      },
+    },
+    {
+      name: "wait_for_batch_readiness",
+      description: "Do not dispatch yet; wait for active sourcing/scheduling/proof work or another external condition.",
+      input: {
+        reason: "what the operator is waiting for",
+        nextCheckMinutes: "how long to postpone dispatch checks",
+      },
+    },
+    {
+      name: "block_for_policy",
+      description: "Block dispatch because policy, safety, quality, or missing context prevents a safe action.",
+      input: {
+        reason: "specific blocker",
+        desiredAction: "what should happen before this can continue",
+      },
+    },
+  ];
+}
+
+function allowedBatchReadinessTools(snapshot: BatchReadinessSnapshot): BatchReadinessToolName[] {
+  const tools: BatchReadinessToolName[] = ["wait_for_batch_readiness", "block_for_policy"];
+  if (snapshot.batch.scheduledMessageCount > 0 && snapshot.deliverability.stage === "ready") {
+    tools.push("dispatch_prepared_batch", "run_smoke_test");
+  }
+  if (
+    snapshot.batch.deficitToTarget > 0 &&
+    snapshot.run.status !== "completed" &&
+    snapshot.run.status !== "canceled" &&
+    snapshot.run.status !== "failed" &&
+    snapshot.jobs.activeSourceJobIds.length === 0
+  ) {
+    tools.push("source_more_leads");
+  }
+  return tools;
+}
+
+async function buildBatchReadinessSnapshot(input: {
+  mission: Mission;
+  approvedPlan: MissionPlan;
+  runId: string;
+  deliverabilityState: Mission["deliverabilityState"];
+}): Promise<BatchReadinessSnapshot | null> {
+  const run = await getOutreachRun(input.runId).catch(() => null);
+  if (!run) return null;
+  const [leads, messages, jobs] = await Promise.all([
+    listRunLeads(run.id).catch(() => []),
+    listRunMessages(run.id).catch(() => []),
+    listRunJobs(run.id, 50).catch(() => []),
+  ]);
+  const scheduledMessages = messages.filter((message) => message.status === "scheduled");
+  const sentMessageCount = messages.filter((message) => message.status === "sent").length;
+  const targetLeadCount = Math.max(
+    1,
+    Math.min(
+      input.mission.approvalPolicy.firstBatchLimit || clampFirstBatch(input.approvedPlan.firstBatchSize),
+      clampFirstBatch(input.approvedPlan.firstBatchSize)
+    )
+  );
+  const activeJobs = jobs.filter((job) => ["queued", "running"].includes(job.status));
+  const snapshot: BatchReadinessSnapshot = {
+    mission: {
+      id: input.mission.id,
+      brandId: input.mission.brandId,
+      status: input.mission.status,
+      firstBatchTarget: clampFirstBatch(input.approvedPlan.firstBatchSize),
+      approvalFirstBatchLimit: input.mission.approvalPolicy.firstBatchLimit,
+      targetCustomers: input.approvedPlan.targetCustomers,
+      primaryRisk: input.approvedPlan.primaryRisk,
+      successCriteria: input.approvedPlan.successCriteria,
+    },
+    run: {
+      id: run.id,
+      status: run.status,
+      metrics: run.metrics,
+      pauseReason: run.pauseReason,
+      lastError: run.lastError,
+    },
+    batch: {
+      leadCount: leads.length,
+      scheduledMessageCount: scheduledMessages.length,
+      sentMessageCount,
+      failedMessageCount: messages.filter((message) => message.status === "failed").length,
+      bouncedMessageCount: messages.filter((message) => message.status === "bounced").length,
+      targetLeadCount,
+      deficitToTarget: Math.max(0, targetLeadCount - Math.max(leads.length, scheduledMessages.length + sentMessageCount)),
+      nextScheduledAt: nextScheduledMessageAt(messages),
+    },
+    deliverability: input.deliverabilityState,
+    jobs: {
+      activeSourceJobIds: activeJobs.filter((job) => job.jobType === "source_leads").map((job) => job.id),
+      activeScheduleJobIds: activeJobs.filter((job) => job.jobType === "schedule_messages").map((job) => job.id),
+      activeDispatchJobIds: activeJobs.filter((job) => job.jobType === "dispatch_messages").map((job) => job.id),
+    },
+    allowedToolNames: [],
+  };
+  snapshot.allowedToolNames = allowedBatchReadinessTools(snapshot);
+  return snapshot;
+}
+
+function buildBatchReadinessPrompt(snapshot: BatchReadinessSnapshot) {
+  return [
+    "You are the LastB2B mission batch-readiness operator.",
+    "You are the decision-maker. The code will not decide whether a below-target prepared batch is acceptable.",
+    "Choose exactly one tool from the catalog. Provide exact tool arguments.",
+    "Use the mission goal and live state. If the first-batch target is 25 and only 2 are prepared, do not silently treat 2 as complete.",
+    "You may still choose a tiny smoke test, but only if it is strategically better than sourcing more leads first. Explain why.",
+    "If more leads are needed, choose source_more_leads. The system will top up and render campaign copy without dispatching until this gate passes again.",
+    "If active sourcing or scheduling is already running, choose wait_for_batch_readiness.",
+    "Return only JSON matching the schema. Put tool arguments in toolInputJson as a JSON object encoded in a string.",
+    "",
+    `Tool catalog JSON:\n${JSON.stringify(batchReadinessToolCatalog())}`,
+    "",
+    `Mission batch state JSON:\n${JSON.stringify(snapshot)}`,
+  ].join("\n");
+}
+
+function normalizeBatchReadinessPlan(
+  value: unknown,
+  model: string,
+  fallback: { toolName: BatchReadinessToolName; rationale: string; toolInput?: Record<string, unknown> }
+): BatchReadinessPlan {
+  const row = asRecord(value);
+  let toolInput = asRecord(row.toolInput);
+  const toolInputJson = asString(row.toolInputJson);
+  if (toolInputJson) {
+    try {
+      toolInput = asRecord(JSON.parse(toolInputJson));
+    } catch {
+      toolInput = {};
+    }
+  }
+  const requestedToolName = asString(row.toolName) as BatchReadinessToolName;
+  const toolName = BATCH_READINESS_TOOLS.includes(requestedToolName) ? requestedToolName : fallback.toolName;
+  return {
+    toolName,
+    toolInput: toolName === requestedToolName ? toolInput : (fallback.toolInput ?? {}),
+    rationale: asString(row.rationale) || fallback.rationale,
+    expectedOutcome: asString(row.expectedOutcome),
+    model,
+    raw: row,
+  };
+}
+
+async function planBatchReadinessAction(snapshot: BatchReadinessSnapshot): Promise<BatchReadinessPlan> {
+  const apiKey = asString(process.env.OPENAI_API_KEY);
+  const model = resolveLlmModel("mission_operator", {
+    input: snapshot,
+    overrideModel: asString(process.env.OPENAI_MODEL_MISSION_OPERATOR),
+  });
+  if (!apiKey) {
+    return normalizeBatchReadinessPlan({}, "mission-operator-unavailable", {
+      toolName: "wait_for_batch_readiness",
+      rationale: "OPENAI_API_KEY is missing, so the batch-readiness operator cannot choose whether to dispatch or top up.",
+      toolInput: { reason: "OPENAI_API_KEY is missing.", nextCheckMinutes: 30 },
+    });
+  }
+
+  const prompt = buildBatchReadinessPrompt(snapshot);
+  const response = await fetch("https://api.openai.com/v1/responses", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model,
+      input: prompt,
+      reasoning: { effort: asString(process.env.OPENAI_MISSION_REASONING_EFFORT) || "high" },
+      text: {
+        format: {
+          type: "json_schema",
+          name: "mission_batch_readiness_tool_choice",
+          schema: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              toolName: { type: "string", enum: BATCH_READINESS_TOOLS },
+              rationale: { type: "string", maxLength: 700 },
+              expectedOutcome: { type: "string", maxLength: 500 },
+              toolInputJson: { type: "string", maxLength: 1000 },
+            },
+            required: ["toolName", "rationale", "expectedOutcome", "toolInputJson"],
+          },
+        },
+      },
+      max_output_tokens: 1800,
+      store: false,
+    }),
+  });
+
+  const raw = await response.text();
+  if (!response.ok) {
+    return normalizeBatchReadinessPlan({}, model, {
+      toolName: "wait_for_batch_readiness",
+      rationale: `Mission batch-readiness AI request failed with HTTP ${response.status}.`,
+      toolInput: { reason: raw.slice(0, 500), nextCheckMinutes: 30 },
+    });
+  }
+
+  let payload: unknown = {};
+  try {
+    payload = JSON.parse(raw);
+  } catch {
+    payload = {};
+  }
+  try {
+    return normalizeBatchReadinessPlan(JSON.parse(extractResponseText(payload)), model, {
+      toolName: "wait_for_batch_readiness",
+      rationale: "Mission batch-readiness AI did not choose a valid tool.",
+      toolInput: { reason: "Invalid tool choice.", nextCheckMinutes: 30 },
+    });
+  } catch {
+    return normalizeBatchReadinessPlan({}, model, {
+      toolName: "wait_for_batch_readiness",
+      rationale: "Mission batch-readiness AI returned invalid JSON.",
+      toolInput: { reason: extractResponseText(payload).slice(0, 500), nextCheckMinutes: 30 },
+    });
+  }
 }
 
 function textLooksDeliverabilityRelated(value: string) {
@@ -380,9 +731,190 @@ async function ensureMissionPreparedForDeliverabilityProof(input: {
   return mission;
 }
 
+async function postponeDispatchJobs(input: {
+  jobs: Awaited<ReturnType<typeof listRunJobs>>;
+  reason: string;
+  minutes?: number;
+}) {
+  const nextCheckMinutes = Math.max(5, Math.min(240, Math.round(input.minutes ?? 30)));
+  const proposedExecuteAfter = addMinutes(nowIso(), nextCheckMinutes);
+  const activeDispatchJobs = input.jobs.filter(
+    (job) => job.jobType === "dispatch_messages" && ["queued", "running"].includes(job.status)
+  );
+  const updatedJobs: Array<{ jobId: string; executeAfter: string }> = [];
+  for (const job of activeDispatchJobs) {
+    const executeAfter =
+      dateMs(job.executeAfter) > dateMs(proposedExecuteAfter) ? job.executeAfter : proposedExecuteAfter;
+    await updateOutreachJob(job.id, {
+      status: "queued",
+      executeAfter,
+      payload: {
+        ...job.payload,
+        postponedByBatchReadinessGate: true,
+        postponedReason: input.reason,
+      },
+    });
+    updatedJobs.push({ jobId: job.id, executeAfter });
+  }
+  return { dispatchJobIds: activeDispatchJobs.map((job) => job.id), updatedJobs, nextCheckMinutes };
+}
+
+async function ensureBatchReadyForDispatch(input: {
+  mission: Mission;
+  approvedPlan: MissionPlan;
+  runId: string;
+  deliverabilityState: Mission["deliverabilityState"];
+}): Promise<{ ready: boolean; reason: string; scheduledMessageCount: number; targetLeadCount: number }> {
+  const snapshot = await buildBatchReadinessSnapshot(input);
+  if (!snapshot) {
+    return { ready: false, reason: "Run not found.", scheduledMessageCount: 0, targetLeadCount: 0 };
+  }
+  const plan = await planBatchReadinessAction(snapshot);
+  let ok = false;
+  let ready = false;
+  let summary = plan.rationale;
+  let result: Record<string, unknown> = {};
+  const jobs = await listRunJobs(input.runId, 50).catch(() => []);
+
+  if (!snapshot.allowedToolNames.includes(plan.toolName)) {
+    summary = `AI selected ${plan.toolName}, but current batch guardrails do not allow it.`;
+    result = {
+      selectedToolName: plan.toolName,
+      allowedToolNames: snapshot.allowedToolNames,
+    };
+  } else if (plan.toolName === "dispatch_prepared_batch" || plan.toolName === "run_smoke_test") {
+    ok = true;
+    ready = true;
+    summary =
+      plan.toolName === "run_smoke_test"
+        ? asString(plan.toolInput.reason) || plan.rationale
+        : plan.rationale || "Batch-readiness operator approved dispatch.";
+    result = {
+      mode: plan.toolName,
+      scheduledMessageCount: snapshot.batch.scheduledMessageCount,
+      targetLeadCount: snapshot.batch.targetLeadCount,
+      deficitToTarget: snapshot.batch.deficitToTarget,
+    };
+    await createMissionEvent({
+      missionId: input.mission.id,
+      brandId: input.mission.brandId,
+      eventType: plan.toolName === "run_smoke_test" ? "batch_smoke_test_approved" : "batch_dispatch_approved",
+      summary,
+      payload: result,
+    });
+  } else if (plan.toolName === "source_more_leads") {
+    const requestedTarget = Math.max(
+      snapshot.batch.leadCount + 1,
+      Math.min(500, Math.round(asNumber(plan.toolInput.targetLeadCount, snapshot.batch.targetLeadCount)))
+    );
+    const targetLeadCount = Math.max(snapshot.batch.targetLeadCount, requestedTarget);
+    const postponed = await postponeDispatchJobs({
+      jobs,
+      reason: asString(plan.toolInput.reason) || plan.rationale,
+      minutes: 30,
+    });
+    await enqueueOutreachJob({
+      runId: input.runId,
+      jobType: "source_leads",
+      executeAfter: nowIso(),
+      payload: {
+        maxLeadsOverride: targetLeadCount,
+        deliverabilityProofOnly: true,
+        reason: "mission_batch_readiness_top_up",
+      },
+    });
+    ok = true;
+    summary = asString(plan.toolInput.reason) || plan.rationale;
+    result = {
+      targetLeadCount,
+      currentLeadCount: snapshot.batch.leadCount,
+      scheduledMessageCount: snapshot.batch.scheduledMessageCount,
+      deficitToTarget: Math.max(0, targetLeadCount - snapshot.batch.leadCount),
+      postponedDispatch: postponed,
+    };
+    await createMissionEvent({
+      missionId: input.mission.id,
+      brandId: input.mission.brandId,
+      eventType: "batch_top_up_requested",
+      summary,
+      payload: result,
+    });
+  } else if (plan.toolName === "wait_for_batch_readiness") {
+    const nextCheckMinutes = Math.max(5, Math.min(240, Math.round(asNumber(plan.toolInput.nextCheckMinutes, 30))));
+    const postponed = await postponeDispatchJobs({
+      jobs,
+      reason: asString(plan.toolInput.reason) || plan.rationale,
+      minutes: nextCheckMinutes,
+    });
+    ok = true;
+    summary = asString(plan.toolInput.reason) || plan.rationale;
+    result = {
+      nextCheckMinutes,
+      postponedDispatch: postponed,
+    };
+    await createMissionEvent({
+      missionId: input.mission.id,
+      brandId: input.mission.brandId,
+      eventType: "batch_readiness_waiting",
+      summary,
+      payload: result,
+    });
+  } else {
+    const postponed = await postponeDispatchJobs({
+      jobs,
+      reason: asString(plan.toolInput.reason) || plan.rationale,
+      minutes: 60,
+    });
+    summary = asString(plan.toolInput.reason) || plan.rationale;
+    result = {
+      desiredAction: asString(plan.toolInput.desiredAction),
+      postponedDispatch: postponed,
+    };
+    await createMissionEvent({
+      missionId: input.mission.id,
+      brandId: input.mission.brandId,
+      eventType: "batch_readiness_blocked",
+      summary,
+      payload: result,
+    });
+  }
+
+  await createMissionAgentDecision({
+    missionId: input.mission.id,
+    brandId: input.mission.brandId,
+    agent: "mission_batch_readiness_operator",
+    action: plan.toolName,
+    rationale: plan.rationale,
+    riskLevel: ready ? "guarded_write" : ok ? "safe_write" : "blocked",
+    input: {
+      model: plan.model,
+      toolName: plan.toolName,
+      toolInput: plan.toolInput,
+      expectedOutcome: plan.expectedOutcome,
+      snapshot,
+    },
+    output: {
+      ok,
+      ready,
+      summary,
+      result,
+      recordedAt: nowIso(),
+    },
+  });
+
+  return {
+    ready,
+    reason: summary,
+    scheduledMessageCount: snapshot.batch.scheduledMessageCount,
+    targetLeadCount: snapshot.batch.targetLeadCount,
+  };
+}
+
 async function queuePreparedRunDispatch(input: {
   mission: Mission;
   runId: string;
+  approvedPlan: MissionPlan;
+  deliverabilityState: Mission["deliverabilityState"];
 }): Promise<{ queued: boolean; reason: string; scheduledMessageCount: number }> {
   const run = await getOutreachRun(input.runId).catch(() => null);
   if (!run) {
@@ -394,6 +926,20 @@ async function queuePreparedRunDispatch(input: {
     return {
       queued: false,
       reason: "No scheduled campaign messages are ready for dispatch.",
+      scheduledMessageCount,
+    };
+  }
+
+  const batchReadiness = await ensureBatchReadyForDispatch({
+    mission: input.mission,
+    approvedPlan: input.approvedPlan,
+    runId: run.id,
+    deliverabilityState: input.deliverabilityState,
+  });
+  if (!batchReadiness.ready) {
+    return {
+      queued: false,
+      reason: batchReadiness.reason,
       scheduledMessageCount,
     };
   }
@@ -451,7 +997,12 @@ async function launchApprovedMissionFirstBatch(input: {
     const currentRun = await getOutreachRun(mission.currentRunId).catch(() => null);
     if (currentRun && runCanContinue(currentRun.status)) {
       if (input.deliverabilityState.stage === "ready" && currentRun.status === "scheduled") {
-        const dispatch = await queuePreparedRunDispatch({ mission, runId: currentRun.id });
+        const dispatch = await queuePreparedRunDispatch({
+          mission,
+          runId: currentRun.id,
+          approvedPlan: input.approvedPlan,
+          deliverabilityState: input.deliverabilityState,
+        });
         if (dispatch.queued) {
           mission =
             (await updateMission(mission.brandId, mission.id, {
@@ -460,12 +1011,18 @@ async function launchApprovedMissionFirstBatch(input: {
             })) ?? mission;
           return refreshMissionRuntimeSummary(mission);
         }
+        return refreshMissionRuntimeSummary(mission);
       } else {
         return refreshMissionRuntimeSummary(mission);
       }
     }
     if (currentRun && currentRun.status === "paused" && input.deliverabilityState.stage === "ready") {
-      const dispatch = await queuePreparedRunDispatch({ mission, runId: currentRun.id });
+      const dispatch = await queuePreparedRunDispatch({
+        mission,
+        runId: currentRun.id,
+        approvedPlan: input.approvedPlan,
+        deliverabilityState: input.deliverabilityState,
+      });
       if (dispatch.queued) {
         mission =
           (await updateMission(mission.brandId, mission.id, {
@@ -474,6 +1031,7 @@ async function launchApprovedMissionFirstBatch(input: {
           })) ?? mission;
         return refreshMissionRuntimeSummary(mission);
       }
+      return refreshMissionRuntimeSummary(mission);
     }
     await createMissionEvent({
       missionId: mission.id,

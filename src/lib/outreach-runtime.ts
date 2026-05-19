@@ -12435,6 +12435,23 @@ async function maybeQueueGmailProbeAfterForwardEmailPass(input: {
   if (!input.monitorTargets.length || !input.monitorTargets.every((target) => isForwardEmailProbeTarget(target))) {
     return;
   }
+  const forwardEmailConfig = getForwardEmailProbeConfig();
+  if (forwardEmailConfig?.mode === "only") {
+    await createOutreachEvent({
+      runId: input.run.id,
+      eventType: "deliverability_gmail_probe_skipped",
+      payload: {
+        reason: "Forward Email probe mode is only; campaign-copy Forward Email inbox proof is sufficient for this gate.",
+        parentProbeRunId: input.probeRun?.id ?? "",
+        probeVariant: input.probeVariant,
+        sourceMessageId: input.referenceMessage.id,
+        contentHash: input.contentHash,
+        senderAccountId: input.senderAccountId,
+        fromEmail: input.senderFromEmail.trim().toLowerCase(),
+      },
+    });
+    return;
+  }
 
   const senderFromEmail = input.senderFromEmail.trim().toLowerCase();
   const senderDomain = senderDomainFromEmail(senderFromEmail);

@@ -620,6 +620,8 @@ function buildEvidenceBackedDeliverabilityState(input: {
   assignedFromEmails: string[];
   probes: ProbeSummary[];
   activeProbeJobs: ReturnType<typeof compactProbeJobs>;
+  forwardEmailMode: string;
+  gmailCampaignCopyProofAvailable: boolean;
 }): MissionDeliverabilityState {
   const relevantProbes = input.probes.filter((probe) => {
     if (input.assignedSenderAccountIds.includes(probe.senderAccountId)) return true;
@@ -635,6 +637,14 @@ function buildEvidenceBackedDeliverabilityState(input: {
   );
   const activeProbe = campaignCopyProbes.find(probeIsActive) ?? null;
   const activeJob = input.activeProbeJobs.find((job) => job.copyKind === "campaign_copy") ?? null;
+  const forwardEmailProofPassed = Boolean(
+    latestForwardEmailCampaignCopyProbe?.fresh && probeIsPassingInbox(latestForwardEmailCampaignCopyProbe)
+  );
+  const gmailProofPassed = Boolean(
+    latestGmailCampaignCopyProbe?.fresh && probeIsPassingInbox(latestGmailCampaignCopyProbe)
+  );
+  const gmailConfirmationRequired =
+    input.forwardEmailMode !== "only" && input.gmailCampaignCopyProofAvailable;
 
   if (latestGmailCampaignCopyProbe?.fresh && probeIsBad(latestGmailCampaignCopyProbe)) {
     const summary = `Campaign-copy Gmail seed placement failed for ${latestGmailCampaignCopyProbe.fromEmail || "the active sender"} (${latestGmailCampaignCopyProbe.summaryText || latestGmailCampaignCopyProbe.placement || latestGmailCampaignCopyProbe.lastError || "no inbox placement"}).`;
@@ -661,11 +671,15 @@ function buildEvidenceBackedDeliverabilityState(input: {
   if (
     input.currentRun?.id &&
     input.base.stage === "ready" &&
-    !latestGmailCampaignCopyProbe?.fresh &&
+    !gmailProofPassed &&
+    !(forwardEmailProofPassed && !gmailConfirmationRequired) &&
     !activeProbe &&
     !activeJob
   ) {
-    const summary = "Exact campaign-copy inbox placement has not been proven yet. Baseline controls are diagnostic only.";
+    const summary =
+      forwardEmailProofPassed && gmailConfirmationRequired
+        ? "Campaign-copy Forward Email placement passed; waiting for Gmail/mailbox confirmation before launch."
+        : "Exact campaign-copy inbox placement has not been proven yet. Baseline controls are diagnostic only.";
     return {
       ...input.base,
       stage: "testing_inbox_placement",
@@ -864,6 +878,12 @@ async function buildMissionDeliverabilitySnapshot(input: {
     probes.find((probe) => assignedAccountIds.includes(probe.senderAccountId) || assignedFromEmails.includes(probe.fromEmail))
       ?.fromEmail ?? probes[0]?.fromEmail ?? "";
   const assignedSenderDomain = emailDomain(assignedFromEmails[0] || firstRelevantProbeFromEmail);
+  const forwardEmailProbeConfig = getForwardEmailProbeConfig();
+  const gmailSeeds = summarizeGmailSeeds({
+    approvedGmailSeedEmails,
+    assignedSenderDomain,
+    reservations: seedReservations,
+  });
   const evidenceBackedDeliverabilityState = buildEvidenceBackedDeliverabilityState({
     base: deliverabilityState,
     currentRun,
@@ -871,9 +891,10 @@ async function buildMissionDeliverabilitySnapshot(input: {
     assignedFromEmails,
     probes,
     activeProbeJobs,
+    forwardEmailMode: forwardEmailProbeConfig?.mode ?? "",
+    gmailCampaignCopyProofAvailable: gmailSeeds.remainingForAssignedSenderDomain > 0,
   });
   const activeProvisioningSenderCount = launches.filter(launchIsActiveCapacity).length;
-  const forwardEmailProbeConfig = getForwardEmailProbeConfig();
   const guardrailsWithoutAllowed = {
     canAutoProvisionSender:
       input.mission.approvalPolicy.allowAutoProvisioning &&
@@ -965,11 +986,7 @@ async function buildMissionDeliverabilitySnapshot(input: {
         )?.placement ?? "",
       baselineControlsAreDiagnosticOnly: true,
     },
-    gmailSeeds: summarizeGmailSeeds({
-      approvedGmailSeedEmails,
-      assignedSenderDomain,
-      reservations: seedReservations,
-    }),
+    gmailSeeds,
     provisioning: {
       provider: "mailpool",
       hasMailpoolApiKey: Boolean(secrets.mailpoolApiKey),
@@ -1054,6 +1071,7 @@ function buildMissionOperatorPrompt(snapshot: MissionDeliverabilitySnapshot) {
     "You may create new sender capacity when guardrails allow it. You may request fresh inbox placement probes, but launch proof requires copyMode=campaign_copy: the actual scheduled/sent campaign email copy. You may also wait, inspect, or block if that is the correct move.",
     "Operating policy: Forward Email is the cheap first gate. Gmail/mailbox seed placement is the expensive confirmation only after Forward Email inboxes and an approved unused Gmail seed is available for this sender domain.",
     "Do not burn Gmail seed capacity when Forward Email has not inboxed. Do not request another Gmail-style confirmation when probeMemory already shows a fresh active or completed Gmail/mailbox probe for the same sender/content.",
+    "When probes.forwardEmailMode is only, a fresh campaign-copy Forward Email inbox result is sufficient launch proof; do not request Gmail/mailbox confirmation in that mode.",
     "Baseline probes are diagnostic only. They can inform warmup/sender health, but they cannot prove a campaign is safe to launch because spam filtering depends heavily on actual copy, links, CTA, personalization, and tracking.",
     "If campaign-copy Gmail/mailbox placement is spam, all_mail_only, not_found, or failed, do not treat the sender as ready even if Forward Email passed. Prefer a healthier sender, wait for warmup/cooldown, or provision capacity if policy allows.",
     "If campaignCopyProof.hasExactCopyAvailable is false, do not substitute a baseline probe as launch proof. Choose wait_for_warmup or block_for_policy unless another exact-copy materialization path is available.",

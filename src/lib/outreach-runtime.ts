@@ -14291,38 +14291,6 @@ async function processSourceLeadsJob(job: OutreachJob) {
     return;
   }
 
-  let existingLeads = await listRunLeads(run.id);
-  if (!existingLeads.length) {
-    const ownerRuns = await listOwnerRuns(run.brandId, run.ownerType, run.ownerId);
-    const donorRuns = ownerRuns.filter((candidate) => candidate.id !== run.id);
-    if (donorRuns.length) {
-      const donorLeadLists = await Promise.all(donorRuns.map((candidate) => listRunLeads(candidate.id)));
-      const donorLeads = donorLeadLists.flat();
-      if (donorLeads.length) {
-        existingLeads = await upsertRunLeads(
-          run.id,
-          run.brandId,
-          run.campaignId,
-          donorLeads.map((lead) => ({
-            email: lead.email,
-            name: lead.name,
-            company: lead.company,
-            title: lead.title,
-            domain: lead.domain,
-            sourceUrl: lead.sourceUrl,
-          }))
-        );
-        await createOutreachEvent({
-          runId: run.id,
-          eventType: "lead_sourcing_seeded_from_owner",
-          payload: {
-            donorRunIds: donorRuns.map((candidate) => candidate.id),
-            count: existingLeads.length,
-          },
-        });
-      }
-    }
-  }
   const payload =
     job.payload && typeof job.payload === "object" && !Array.isArray(job.payload)
       ? (job.payload as Record<string, unknown>)
@@ -14330,6 +14298,33 @@ async function processSourceLeadsJob(job: OutreachJob) {
   const sampleOnly = payload.sampleOnly === true;
   const deliverabilityProofOnly = payload.deliverabilityProofOnly === true;
   const resumeState = parseDeferredSourcingState(payload.resumeState);
+
+  let existingLeads = await listRunLeads(run.id);
+  if (!existingLeads.length) {
+    const maxReusableSeedLeads = Number(payload.maxLeadsOverride ?? 0);
+    const reusableSeedLeads = await collectReusableLaunchSeedLeads({
+      brandId: run.brandId,
+      campaignId: run.campaignId,
+      experimentId: run.experimentId,
+      ownerType: run.ownerType,
+      ownerId: run.ownerId,
+      excludeRunId: run.id,
+      maxLeads: maxReusableSeedLeads > 0 ? maxReusableSeedLeads : undefined,
+      requireRealVerifiedEmail: true,
+    });
+    if (reusableSeedLeads.length) {
+      existingLeads = await upsertRunLeads(run.id, run.brandId, run.campaignId, reusableSeedLeads);
+      await createOutreachEvent({
+        runId: run.id,
+        eventType: "lead_sourcing_seeded_from_owner",
+        payload: {
+          count: existingLeads.length,
+          source: run.ownerType ? `${run.ownerType}_owner_runs` : "runtime_experiment_runs",
+          realVerifiedEmailRequired: true,
+        },
+      });
+    }
+  }
 
   const campaign = await getCampaignById(run.brandId, run.campaignId);
   if (!campaign) {
@@ -14353,6 +14348,25 @@ async function processSourceLeadsJob(job: OutreachJob) {
   }
   const activeExperiment = experiment;
   const runtimeExperiment = await getExperimentRecordByRuntimeRef(run.brandId, run.campaignId, run.experimentId);
+
+  if (runtimeExperiment) {
+    const unverifiedReusableLeads = existingLeads.filter(
+      (lead) => lead.realVerifiedEmail !== true && isReusableExperimentLeadStatus(lead.status)
+    );
+    if (unverifiedReusableLeads.length) {
+      await Promise.all(unverifiedReusableLeads.map((lead) => updateRunLead(lead.id, { status: "suppressed" })));
+      existingLeads = await listRunLeads(run.id);
+      await createOutreachEvent({
+        runId: run.id,
+        eventType: "lead_sourcing_unverified_leads_suppressed",
+        payload: {
+          count: unverifiedReusableLeads.length,
+          strategy: "enrichanything_verified_prospect_table",
+          reason: "runtime experiment requires real-verified EnrichAnything emails",
+        },
+      });
+    }
+  }
 
   const account = await getOutreachAccount(run.accountId);
   const secrets = await getOutreachAccountSecrets(run.accountId);

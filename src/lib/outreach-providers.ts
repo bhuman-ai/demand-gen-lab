@@ -1,6 +1,7 @@
 import nodemailer from "nodemailer";
 import type {
   LeadAcceptanceDecision,
+  EmailVerificationState,
   LeadQualityPolicy,
   OutreachAccount,
   OutreachMessage,
@@ -39,6 +40,7 @@ export type ApifyLead = {
   domain: string;
   sourceUrl: string;
   realVerifiedEmail?: boolean;
+  emailVerification?: EmailVerificationState | null;
 };
 
 export type ApifyStoreActor = {
@@ -53,7 +55,7 @@ export type ApifyStoreActor = {
   trialMinutes: number;
 };
 
-export type EmailFinderVerificationMode = "validatedmails";
+export type EmailFinderVerificationMode = "local" | "smtp" | "validatedmails" | "heuristic";
 
 export type EmailFinderBatchEnrichmentResult = {
   ok: boolean;
@@ -669,6 +671,70 @@ function coerceRecord(value: unknown) {
     : {};
 }
 
+function normalizeEmailFinderMode(value: unknown): EmailFinderVerificationMode {
+  const rawDefault = process.env.EMAIL_FINDER_VERIFICATION_MODE ?? process.env.ENRICHANYTHING_EMAIL_VERIFICATION_MODE ?? "local";
+  const normalized = String(value ?? rawDefault)
+    .replace(/\\n/g, "")
+    .replace(/\n/g, "")
+    .trim()
+    .toLowerCase();
+  if (!normalized || normalized === "local" || normalized === "smtp" || normalized === "enrichanything" || normalized === "enrichanything-local") {
+    return "local";
+  }
+  if (normalized === "validatedmails") return "validatedmails";
+  if (["heuristic", "pattern", "none", "best_guess", "best-guess"].includes(normalized)) return "heuristic";
+  return "local";
+}
+
+function normalizeEmailFinderFromAddress() {
+  const value = String(
+    process.env.EMAIL_FINDER_SMTP_FROM_ADDRESS ??
+      process.env.ENRICHANYTHING_EMAIL_FINDER_FROM_ADDRESS ??
+      "probe@enrichanything.com"
+  )
+    .replace(/\\n/g, "")
+    .replace(/\n/g, "")
+    .trim()
+    .toLowerCase();
+  return extractFirstEmailAddress(value) || "probe@enrichanything.com";
+}
+
+function buildEmailVerificationStateFromCandidate(input: {
+  mode: EmailFinderVerificationMode;
+  candidate: {
+    verdict: string;
+    confidence: string;
+    pValid: number;
+    details: Record<string, unknown>;
+  };
+}): EmailVerificationState {
+  const details = input.candidate.details;
+  const provider = String(details.provider ?? (input.mode === "local" ? "enrichanything-local-email-finder" : "emailfinder"));
+  return {
+    mode: input.mode === "smtp" ? "local" : input.mode === "validatedmails" ? "validatedmails" : input.mode === "heuristic" ? "heuristic" : "local",
+    provider,
+    verdict: input.candidate.verdict,
+    confidence: input.candidate.confidence,
+    reason: String(details.reason ?? ""),
+    mxStatus: String(details.mx_status ?? ""),
+    acceptAll:
+      typeof details.accept_all === "boolean"
+        ? details.accept_all
+        : typeof details.acceptAll === "boolean"
+          ? details.acceptAll
+          : null,
+    catchAll:
+      typeof details.catch_all === "boolean"
+        ? details.catch_all
+        : typeof details.catchAll === "boolean"
+          ? details.catchAll
+          : null,
+    pValid: input.candidate.pValid >= 0 ? input.candidate.pValid : null,
+    httpStatus: typeof details.http_status === "number" ? details.http_status : null,
+    providerStatus: String(details.provider_status ?? details.smtp_status ?? ""),
+  };
+}
+
 export function resolveEmailFinderApiBaseUrl(explicit?: string) {
   const internalHost = String(
     process.env.EMAIL_FINDER_INTERNAL_HOST ??
@@ -708,6 +774,7 @@ export function resolveEmailFinderApiBaseUrl(explicit?: string) {
 function parseEmailFinderBestGuessEmail(
   result: unknown,
   options: {
+    verificationMode?: EmailFinderVerificationMode;
     allowBestGuessFallback?: boolean;
     minFallbackPValid?: number;
   } = {}
@@ -744,7 +811,7 @@ function parseEmailFinderBestGuessEmail(
     const pValid = typeof pValidRaw === "number" && Number.isFinite(pValidRaw) ? pValidRaw : -1;
     const attemptRaw = Number(candidate.attempt ?? 0);
     const attempt = Number.isFinite(attemptRaw) ? attemptRaw : 0;
-    return { email, verdict, confidence, pValid, attempt };
+    return { email, verdict, confidence, pValid, attempt, details };
   };
 
   // Treat any validator-positive result as acceptable.
@@ -755,6 +822,7 @@ function parseEmailFinderBestGuessEmail(
     confidence: string;
     pValid: number;
     attempt: number;
+    details: Record<string, unknown>;
   }) => Boolean(item.email) && allowedVerdicts.has(item.verdict);
 
   const confidenceScore = (level: string) => {
@@ -795,6 +863,10 @@ function parseEmailFinderBestGuessEmail(
     return {
       email: candidate.email,
       realVerifiedEmail: true,
+      emailVerification: buildEmailVerificationStateFromCandidate({
+        mode: options.verificationMode ?? "local",
+        candidate,
+      }),
     };
   }
 
@@ -821,6 +893,10 @@ function parseEmailFinderBestGuessEmail(
       return {
         email: candidate.email,
         realVerifiedEmail: false,
+        emailVerification: buildEmailVerificationStateFromCandidate({
+          mode: options.verificationMode ?? "local",
+          candidate,
+        }),
       };
     }
   }
@@ -828,6 +904,7 @@ function parseEmailFinderBestGuessEmail(
   return {
     email: "",
     realVerifiedEmail: false,
+    emailVerification: null,
   };
 }
 
@@ -954,25 +1031,9 @@ export async function enrichLeadsWithEmailFinderBatch(params: {
     };
   }
 
-  const verificationMode: EmailFinderVerificationMode = "validatedmails";
-  const requestedMode = String(params.verificationMode ?? "validatedmails")
-    .trim()
-    .toLowerCase();
-  if (requestedMode && requestedMode !== "validatedmails") {
-    return {
-      ok: false,
-      leads: params.leads,
-      attempted: items.length,
-      matched: 0,
-      failed: items.length,
-      provider: "emailfinder.batch",
-      error: "Only real verification mode 'validatedmails' is supported",
-      failureSummary: [{ reason: "unsupported_verification_mode", count: items.length }],
-      failedSamples: [],
-    };
-  }
+  const verificationMode = normalizeEmailFinderMode(params.verificationMode);
   const apiKey = String(params.validatedMailsApiKey ?? "").trim();
-  if (!apiKey) {
+  if (verificationMode === "validatedmails" && !apiKey) {
     return {
       ok: false,
       leads: params.leads,
@@ -980,7 +1041,7 @@ export async function enrichLeadsWithEmailFinderBatch(params: {
       matched: 0,
       failed: items.length,
       provider: "emailfinder.batch",
-      error: "validatedmails API key is required for real verification",
+      error: "validatedmails API key is required for validatedmails verification",
       failureSummary: [{ reason: "missing_validatedmails_api_key", count: items.length }],
       failedSamples: [],
     };
@@ -991,22 +1052,27 @@ export async function enrichLeadsWithEmailFinderBatch(params: {
   const concurrency = requestedConcurrency;
   const effectiveMaxCandidates = maxCandidates;
   const verifierProbeTimeoutSeconds = 8;
+  const requestVerificationMode = verificationMode === "local" ? "smtp" : verificationMode;
   const defaultItem: Record<string, unknown> = {
-    verification_mode: verificationMode,
+    verification_mode: requestVerificationMode,
     max_candidates: effectiveMaxCandidates,
     stop_on_first_hit: true,
     stop_on_min_confidence: "high",
     high_confidence_only: true,
     enable_risky_queue: true,
+    from_address: normalizeEmailFinderFromAddress(),
+    smtp_mx_quorum: 2,
   };
-  defaultItem.max_credits = maxCredits;
-  defaultItem.validatedmails_api_key = apiKey;
+  if (verificationMode === "validatedmails") {
+    defaultItem.max_credits = maxCredits;
+    defaultItem.validatedmails_api_key = apiKey;
+  }
   defaultItem.timeout_seconds = verifierProbeTimeoutSeconds;
 
   const itemById = new Map(items.map((item) => [item.id, item] as const));
 
   const buildResultFromEmailMap = (
-    emailByIndex: Map<number, { email: string; realVerifiedEmail: boolean }>,
+    emailByIndex: Map<number, { email: string; realVerifiedEmail: boolean; emailVerification?: EmailVerificationState | null }>,
     attempted: number,
     failed: number,
     error = "",
@@ -1031,6 +1097,7 @@ export async function enrichLeadsWithEmailFinderBatch(params: {
         email: enriched.email,
         domain: enriched.email.split("@")[1] || lead.domain,
         realVerifiedEmail: enriched.realVerifiedEmail,
+        emailVerification: enriched.emailVerification ?? null,
       };
     });
     return {
@@ -1058,7 +1125,7 @@ export async function enrichLeadsWithEmailFinderBatch(params: {
     results: unknown[],
     batchLevelError = ""
   ) => {
-    const emailByIndex = new Map<number, { email: string; realVerifiedEmail: boolean }>();
+    const emailByIndex = new Map<number, { email: string; realVerifiedEmail: boolean; emailVerification?: EmailVerificationState | null }>();
     const failureCounts = new Map<string, number>();
     const failedSamples: Array<{
       id: string;
@@ -1117,6 +1184,7 @@ export async function enrichLeadsWithEmailFinderBatch(params: {
       }
 
       const resolved = parseEmailFinderBestGuessEmail(item.result, {
+        verificationMode,
         allowBestGuessFallback: params.allowBestGuessFallback,
         minFallbackPValid: params.minBestGuessPValid,
       });
@@ -1183,7 +1251,7 @@ export async function enrichLeadsWithEmailFinderBatch(params: {
         const nonOkReason =
           !response.ok && (String(batch.error ?? "").trim() || `EmailFinder batch request failed (${response.status})`);
         return buildResultFromEmailMap(
-          new Map<number, { email: string; realVerifiedEmail: boolean }>(),
+          new Map<number, { email: string; realVerifiedEmail: boolean; emailVerification?: EmailVerificationState | null }>(),
           items.length,
           items.length,
           nonOkReason || "EmailFinder batch response was malformed"
@@ -1201,7 +1269,7 @@ export async function enrichLeadsWithEmailFinderBatch(params: {
           ? `EmailFinder batch request failed: ${message}`
           : "EmailFinder batch request failed";
       return buildResultFromEmailMap(
-        new Map<number, { email: string; realVerifiedEmail: boolean }>(),
+        new Map<number, { email: string; realVerifiedEmail: boolean; emailVerification?: EmailVerificationState | null }>(),
         items.length,
         items.length,
         reason,

@@ -32,6 +32,7 @@ type ImportedLead = {
   domain: string;
   sourceUrl: string;
   realVerifiedEmail?: boolean;
+  emailVerification?: ApifyLead["emailVerification"];
 };
 
 export type ImportExperimentProspectRowsResult = {
@@ -396,12 +397,6 @@ export async function importExperimentProspectRows(input: {
     throw new Error(firstError || "No importable prospects were found.");
   }
 
-  const validatedMailsApiKey = String(
-    process.env.EMAIL_FINDER_VALIDATEDMAILS_API_KEY ??
-      process.env.ENRICHANYTHING_VALIDATEDMAILS_API_KEY ??
-      process.env.VALIDATEDMAILS_API_KEY ??
-      ""
-  ).trim();
   const apiBaseUrl = resolveEmailFinderApiBaseUrl(
     input.emailFinderApiBaseUrl ||
       (input.requestOrigin ? emailFinderApiBaseUrl(input.requestOrigin) : "")
@@ -410,8 +405,7 @@ export async function importExperimentProspectRows(input: {
   const enrichment = await enrichLeadsWithEmailFinderBatch({
     leads: parsed.candidates.map((entry) => entry.lead),
     apiBaseUrl,
-    verificationMode: "validatedmails",
-    validatedMailsApiKey,
+    verificationMode: "local",
     maxCandidates: 12,
     maxCredits: 7,
     concurrency: 3,
@@ -455,6 +449,7 @@ export async function importExperimentProspectRows(input: {
       domain,
       sourceUrl: normalizeCell(lead.sourceUrl),
       realVerifiedEmail: lead.realVerifiedEmail === true,
+      emailVerification: lead.emailVerification ?? null,
     } satisfies ImportedLead;
 
     return [importedLead];

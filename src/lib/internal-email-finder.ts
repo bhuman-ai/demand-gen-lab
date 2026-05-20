@@ -1,8 +1,9 @@
 import { promises as dns } from "dns";
 import { readFile } from "fs/promises";
+import net from "net";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 
-type EmailFinderVerificationMode = "validatedmails" | "heuristic";
+type EmailFinderVerificationMode = "local" | "smtp" | "validatedmails" | "heuristic";
 
 type PatternShape = {
   separator: "." | "_" | "-" | "mixed" | "none";
@@ -78,8 +79,10 @@ type ValidationConfig = {
   knownEmails: string[];
   verificationMode: EmailFinderVerificationMode;
   validatedMailsApiKey: string;
+  fromAddress: string;
   maxCredits: number;
   timeoutSeconds: number;
+  smtpMxQuorum: number;
   stopOnFirstHit: boolean;
   stopOnMinConfidence: "none" | "low" | "medium" | "high";
   hitStatuses: string[];
@@ -132,6 +135,7 @@ const ROLE_LOCALS = new Set([
 const VALIDATEDMAILS_URL = "https://api.validatedmails.com/validate";
 const MAX_BATCH_ITEMS = 200;
 const MAX_BATCH_CONCURRENCY = 10;
+const DEFAULT_SMTP_MX_QUORUM = 2;
 
 function asRecord(value: unknown) {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -740,14 +744,36 @@ function normalizeConfidenceThreshold(value: unknown): ValidationConfig["stopOnM
 }
 
 function normalizeVerificationMode(value: unknown): EmailFinderVerificationMode {
-  const normalized = String(value ?? "validatedmails").trim().toLowerCase();
+  const defaultMode = process.env.EMAIL_FINDER_VERIFICATION_MODE ?? process.env.ENRICHANYTHING_EMAIL_VERIFICATION_MODE ?? "local";
+  const normalized = String(value ?? defaultMode)
+    .replace(/\\n/g, "")
+    .replace(/\n/g, "")
+    .trim()
+    .toLowerCase();
+  if (normalized === "local" || normalized === "smtp" || normalized === "enrichanything" || normalized === "enrichanything-local") {
+    return "local";
+  }
   if (normalized === "validatedmails") {
     return "validatedmails";
   }
   if (["heuristic", "pattern", "none", "best_guess", "best-guess"].includes(normalized)) {
     return "heuristic";
   }
-  throw new Error("Only verification modes 'validatedmails' and 'heuristic' are supported");
+  throw new Error("Only verification modes 'local', 'smtp', 'validatedmails', and 'heuristic' are supported");
+}
+
+function normalizeFromAddress(value: unknown) {
+  const raw = String(
+    value ??
+      process.env.EMAIL_FINDER_SMTP_FROM_ADDRESS ??
+      process.env.ENRICHANYTHING_EMAIL_FINDER_FROM_ADDRESS ??
+      "probe@enrichanything.com"
+  )
+    .replace(/\\n/g, "")
+    .replace(/\n/g, "")
+    .trim()
+    .toLowerCase();
+  return EMAIL_RE.test(raw) ? raw : "probe@enrichanything.com";
 }
 
 function parseValidationConfig(payload: unknown): ValidationConfig {
@@ -786,8 +812,10 @@ function parseValidationConfig(payload: unknown): ValidationConfig {
     knownEmails: rawKnownEmails.map((value) => extractFirstEmailAddress(value)).filter(Boolean),
     verificationMode,
     validatedMailsApiKey,
+    fromAddress: normalizeFromAddress(body.from_address),
     maxCredits: boundedInt(body.max_credits, 7, 1, 500),
     timeoutSeconds: boundedFloat(body.probe_timeout_seconds ?? body.timeout_seconds, 8, 1, 20),
+    smtpMxQuorum: boundedInt(body.smtp_mx_quorum, DEFAULT_SMTP_MX_QUORUM, 1, 5),
     stopOnFirstHit: parseBool(body.stop_on_first_hit, true),
     stopOnMinConfidence: normalizeConfidenceThreshold(body.stop_on_min_confidence),
     hitStatuses: rawHitStatuses
@@ -932,6 +960,276 @@ async function resolveDomainMailSignal(domain: string, timeoutMs: number): Promi
       error: String((error as Error)?.message ?? error ?? "mx lookup failed"),
     };
   }
+}
+
+type SmtpProbe = {
+  mxHost: string;
+  code: number | null;
+  message: string;
+  error: string;
+};
+
+function randomLocalPart(length = 14) {
+  const chars = "abcdefghijklmnopqrstuvwxyz0123456789";
+  let out = "";
+  for (let index = 0; index < Math.max(4, length); index += 1) {
+    out += chars[Math.floor(Math.random() * chars.length)] ?? "x";
+  }
+  return out;
+}
+
+function classifyLocalSmtp(code: number | null, catchAllLikely: boolean) {
+  if (code === 250 || code === 251) {
+    return catchAllLikely ? "accept-all-likely" : "accepted";
+  }
+  if (code === 252) return "cannot-verify";
+  if (typeof code === "number" && code >= 400 && code < 500) return "temporary-failure";
+  if (typeof code === "number" && code >= 500) return "rejected";
+  return "cannot-verify";
+}
+
+function aggregateLocalSmtpStatus(hostResults: Array<{ smtp_status: string }>) {
+  const statuses = hostResults.map((row) => String(row.smtp_status ?? "").trim().toLowerCase()).filter(Boolean);
+  if (!statuses.length) return { status: "unknown", reason: "no smtp host results" };
+
+  const accepted = statuses.filter((status) => status === "accepted").length;
+  const acceptAll = statuses.filter((status) => status === "accept-all-likely").length;
+  const rejected = statuses.filter((status) => status === "rejected").length;
+  const tempFail = statuses.filter((status) => status === "temporary-failure").length;
+  const cannotVerify = statuses.filter((status) => status === "cannot-verify" || status === "indeterminate").length;
+  const majority = Math.floor(statuses.length / 2) + 1;
+
+  if (rejected > 0 && (accepted > 0 || acceptAll > 0)) {
+    return { status: "indeterminate", reason: "mixed accepted and rejected across mx hosts" };
+  }
+  if (rejected >= majority) return { status: "rejected", reason: "majority rejected across mx hosts" };
+  if (acceptAll >= majority) return { status: "accept-all-likely", reason: "majority accept-all-likely across mx hosts" };
+  if (accepted >= majority) return { status: "accepted", reason: "majority accepted across mx hosts" };
+  if (accepted + acceptAll >= majority) {
+    return { status: "accept-all-likely", reason: "accepted across hosts with catch-all signal present" };
+  }
+  if (tempFail >= majority) return { status: "temporary-failure", reason: "majority temporary failures across mx hosts" };
+  if (cannotVerify >= majority) return { status: "cannot-verify", reason: "majority cannot-verify/indeterminate across mx hosts" };
+  return { status: "indeterminate", reason: "no clear majority across mx hosts" };
+}
+
+function localSmtpStatusToVerdict(status: string) {
+  if (status === "accepted") return { verdict: "likely-valid", reason: "smtp accepted recipient" };
+  if (status === "accept-all-likely") return { verdict: "risky-valid", reason: "domain appears accept-all" };
+  if (status === "rejected") return { verdict: "invalid", reason: "smtp rejected recipient" };
+  return { verdict: "unknown", reason: `smtp status=${status}` };
+}
+
+function inferLocalSmtpConfidence(status: string, hostResults: Array<{ smtp_status: string }>) {
+  if (status === "accepted") {
+    const statuses = new Set(hostResults.map((row) => String(row.smtp_status ?? "").trim().toLowerCase()).filter(Boolean));
+    return statuses.size === 1 && statuses.has("accepted") ? "high" : "medium";
+  }
+  if (status === "rejected") return "high";
+  return "low";
+}
+
+async function smtpRcptProbe(input: {
+  mxHost: string;
+  targetEmail: string;
+  fromAddress: string;
+  timeoutMs: number;
+}): Promise<SmtpProbe> {
+  const timeoutMs = Math.max(1000, input.timeoutMs);
+  const socket = net.createConnection({ host: input.mxHost, port: 25 });
+  socket.setEncoding("utf8");
+
+  let buffer = "";
+  let socketError = "";
+  let connected = false;
+
+  socket.on("data", (chunk) => {
+    buffer += String(chunk ?? "");
+  });
+  socket.on("error", (error) => {
+    socketError = String(error.message ?? error ?? "smtp socket error");
+  });
+  socket.on("timeout", () => {
+    socketError = "smtp socket timeout";
+    socket.destroy();
+  });
+  socket.setTimeout(timeoutMs);
+
+  const waitForConnect = async () =>
+    withTimeout(
+      new Promise<boolean>((resolve) => {
+        socket.once("connect", () => {
+          connected = true;
+          resolve(true);
+        });
+        socket.once("error", () => resolve(false));
+        socket.once("timeout", () => resolve(false));
+      }),
+      timeoutMs,
+      () => false
+    );
+
+  const waitForReply = async () =>
+    withTimeout(
+      new Promise<{ code: number | null; message: string }>((resolve) => {
+        const poll = () => {
+          const lines = buffer.split(/\r?\n/);
+          const completeIndex = lines.findIndex((line) => /^\d{3} /.test(line));
+          if (completeIndex >= 0) {
+            const completeLines = lines.slice(0, completeIndex + 1);
+            buffer = lines.slice(completeIndex + 1).join("\n");
+            const last = completeLines[completeLines.length - 1] ?? "";
+            const code = Number(last.slice(0, 3));
+            resolve({
+              code: Number.isFinite(code) ? code : null,
+              message: completeLines.join("\n").slice(0, 1000),
+            });
+            return;
+          }
+          if (socketError) {
+            resolve({ code: null, message: socketError });
+            return;
+          }
+          setTimeout(poll, 25);
+        };
+        poll();
+      }),
+      timeoutMs,
+      () => ({ code: null, message: "smtp reply timeout" })
+    );
+
+  const sendCommand = async (command: string) => {
+    if (connected && !socket.destroyed) socket.write(`${command}\r\n`);
+    return waitForReply();
+  };
+
+  try {
+    const didConnect = await waitForConnect();
+    if (!didConnect) {
+      return { mxHost: input.mxHost, code: null, message: "", error: socketError || "smtp connect timeout" };
+    }
+
+    const banner = await waitForReply();
+    if (banner.code !== null && banner.code >= 500) {
+      return { mxHost: input.mxHost, code: banner.code, message: banner.message, error: "smtp banner rejected" };
+    }
+
+    await sendCommand("EHLO enrichanything.local");
+    const mailFrom = await sendCommand(`MAIL FROM:<${input.fromAddress}>`);
+    if (typeof mailFrom.code === "number" && mailFrom.code >= 500) {
+      return {
+        mxHost: input.mxHost,
+        code: mailFrom.code,
+        message: mailFrom.message,
+        error: `MAIL FROM rejected: ${mailFrom.message}`,
+      };
+    }
+
+    const rcpt = await sendCommand(`RCPT TO:<${input.targetEmail}>`);
+    void sendCommand("QUIT").catch(() => null);
+    return {
+      mxHost: input.mxHost,
+      code: rcpt.code,
+      message: rcpt.message,
+      error: socketError,
+    };
+  } catch (error) {
+    return {
+      mxHost: input.mxHost,
+      code: null,
+      message: "",
+      error: String((error as Error)?.message ?? error ?? "smtp probe failed"),
+    };
+  } finally {
+    socket.destroy();
+  }
+}
+
+async function verifyWithLocalSmtp(input: {
+  email: string;
+  mx: DomainMailSignal;
+  timeoutSeconds: number;
+  fromAddress: string;
+  smtpMxQuorum: number;
+}) {
+  const domain = input.email.split("@")[1] ?? "";
+  const mxRecords = input.mx.records.slice(0, Math.max(1, Math.min(5, input.smtpMxQuorum)));
+  if (!mxRecords.length) {
+    return {
+      verdict: "unknown",
+      confidence: "low",
+      details: {
+        verdict: "unknown",
+        reason: input.mx.error || "no mx records available for local verification",
+        provider: "enrichanything-local-email-finder",
+        mx_status: input.mx.status,
+        mx_records: input.mx.records,
+      },
+    };
+  }
+
+  const timeoutMs = Math.max(1000, input.timeoutSeconds * 1000);
+  const hostResults = [] as Array<Record<string, unknown> & { smtp_status: string }>;
+
+  for (const record of mxRecords) {
+    const randomEmail = `${randomLocalPart()}@${domain}`;
+    const catchProbe = await smtpRcptProbe({
+      mxHost: record.host,
+      targetEmail: randomEmail,
+      fromAddress: input.fromAddress,
+      timeoutMs,
+    });
+    const catchAllLikely = classifyLocalSmtp(catchProbe.code, false) === "accepted";
+    const probe = await smtpRcptProbe({
+      mxHost: record.host,
+      targetEmail: input.email,
+      fromAddress: input.fromAddress,
+      timeoutMs,
+    });
+    const smtpStatus = classifyLocalSmtp(probe.code, catchAllLikely);
+    hostResults.push({
+      mx_host: record.host,
+      smtp_status: smtpStatus,
+      smtp_code: probe.code,
+      smtp_message: probe.message,
+      smtp_error: probe.error,
+      catch_all_likely: catchAllLikely,
+      catch_all_probe: {
+        email: randomEmail,
+        smtp_code: catchProbe.code,
+        smtp_message: catchProbe.message,
+        smtp_error: catchProbe.error,
+      },
+    });
+  }
+
+  const aggregate = aggregateLocalSmtpStatus(hostResults);
+  const verdict = localSmtpStatusToVerdict(aggregate.status);
+  const confidence = inferLocalSmtpConfidence(aggregate.status, hostResults);
+  const primary = hostResults[0] ?? {};
+
+  return {
+    verdict: verdict.verdict,
+    confidence,
+    details: {
+      verdict: verdict.verdict,
+      reason: aggregate.reason ? `${verdict.reason}; ${aggregate.reason}` : verdict.reason,
+      provider: "enrichanything-local-email-finder",
+      provider_status: aggregate.status,
+      mx_status: input.mx.status,
+      mx_records: input.mx.records,
+      smtp_status: aggregate.status,
+      smtp_code: primary.smtp_code ?? null,
+      smtp_message: primary.smtp_message ?? "",
+      smtp_error: primary.smtp_error ?? "",
+      accept_all: aggregate.status === "accept-all-likely",
+      catch_all: aggregate.status === "accept-all-likely",
+      local_validation: true,
+      multi_mx: {
+        host_statuses: hostResults,
+      },
+    },
+  };
 }
 
 async function loadHistoricalKnownEmails(domain: string, limit = 24): Promise<string[]> {
@@ -1212,6 +1510,14 @@ async function runGuess(
           pattern_sample_size: profile.sampleSize,
         },
       };
+    } else if (verificationModeUsed === "local" || verificationModeUsed === "smtp") {
+      outcome = await verifyWithLocalSmtp({
+        email,
+        mx: domainInsights.mx,
+        timeoutSeconds: config.timeoutSeconds,
+        fromAddress: config.fromAddress,
+        smtpMxQuorum: config.smtpMxQuorum,
+      });
     } else if (verificationModeUsed === "heuristic") {
       outcome = buildHeuristicVerificationOutcome({
         email,
@@ -1274,6 +1580,7 @@ async function runGuess(
       stop_on_first_hit: config.stopOnFirstHit,
       stop_on_min_confidence: config.stopOnMinConfidence,
       max_credits: verificationModeUsed === "validatedmails" ? config.maxCredits : 0,
+      smtp_mx_quorum: config.smtpMxQuorum,
       hit_statuses: config.hitStatuses,
       high_confidence_only: config.highConfidenceOnly,
       enable_risky_queue: config.enableRiskyQueue,
@@ -1293,7 +1600,12 @@ async function runGuess(
     attempts,
     verification: {
       mode: verificationModeUsed,
-      provider: verificationModeUsed === "validatedmails" ? "validatedmails" : "internal-email-finder",
+      provider:
+        verificationModeUsed === "validatedmails"
+          ? "validatedmails"
+          : verificationModeUsed === "local" || verificationModeUsed === "smtp"
+            ? "enrichanything-local-email-finder"
+            : "internal-email-finder",
       credits_used: creditsUsed,
       max_credits: verificationModeUsed === "validatedmails" ? config.maxCredits : 0,
       mx_status: domainInsights.mx.status,
@@ -1332,7 +1644,7 @@ export function emailFinderHealthPayload() {
   return {
     ok: true,
     service: "internal-email-finder",
-    method: "pattern-scored-ts",
+    method: "pattern-scored-ts-local-smtp",
   };
 }
 

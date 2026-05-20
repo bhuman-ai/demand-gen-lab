@@ -272,18 +272,10 @@ export async function POST(
     );
   }
 
-  const validatedMailsApiKey = String(
-    process.env.EMAIL_FINDER_VALIDATEDMAILS_API_KEY ??
-      process.env.ENRICHANYTHING_VALIDATEDMAILS_API_KEY ??
-      process.env.VALIDATEDMAILS_API_KEY ??
-      ""
-  ).trim();
-
   const enrichment = await enrichLeadsWithEmailFinderBatch({
     leads: parsed.candidates.map((entry) => entry.lead),
     apiBaseUrl: emailFinderApiBaseUrl(request),
-    verificationMode: "validatedmails",
-    validatedMailsApiKey,
+    verificationMode: "local",
     maxCandidates: 12,
     maxCredits: 7,
     concurrency: 3,
@@ -313,6 +305,8 @@ export async function POST(
         title: normalizeCell(lead.title),
         domain: normalizeDomainCandidate(lead.domain || email),
         sourceUrl: normalizeCell(lead.sourceUrl),
+        realVerifiedEmail: lead.realVerifiedEmail === true,
+        emailVerification: lead.emailVerification ?? null,
       },
     ];
   });

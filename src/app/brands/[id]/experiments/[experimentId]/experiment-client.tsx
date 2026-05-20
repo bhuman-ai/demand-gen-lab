@@ -292,7 +292,7 @@ function summarizeSendableLeadResolution(
   ) {
     return {
       status: "blocked",
-      message: "Work email verification is not configured yet. Add the ValidatedMails API key to keep preparing sendable contacts.",
+      message: "Work email verification is not configured yet. Enable the local EnrichAnything email verifier to keep preparing sendable contacts.",
       lastUpdatedAt: now,
       readyCount: result.sendableLeadCount,
       retryable: false,
@@ -307,7 +307,7 @@ function summarizeSendableLeadResolution(
   ) {
     return {
       status: "blocked",
-      message: "The work email verification key was rejected. Fix the verifier credential before launching.",
+      message: "The work email verifier rejected the request. Fix the local verifier before launching.",
       lastUpdatedAt: now,
       readyCount: result.sendableLeadCount,
       retryable: false,

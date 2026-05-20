@@ -3633,7 +3633,7 @@ async function sourceLeadsFromExa(input: {
   maxLeads: number;
   allowMissingEmail: boolean;
   emailFinderApiBaseUrl?: string;
-  emailFinderVerificationMode?: "validatedmails";
+  emailFinderVerificationMode?: "local" | "smtp" | "validatedmails" | "heuristic";
   emailFinderValidatedMailsApiKey?: string;
   resumeState?: DeferredSourcingState | null;
 }) {
@@ -14497,7 +14497,7 @@ async function processSourceLeadsJob(job: OutreachJob) {
       completedAt: sampleOnly ? nowIso() : "",
       sourcingTraceSummary: {
         phase: finalLeadCount > 0 ? "completed" : "failed",
-        selectedActorIds: ["enrichanything.live_table", "emailfinder.batch", "validatedmails"],
+        selectedActorIds: ["enrichanything.live_table", "emailfinder.batch", "enrichanything.local_email_validation"],
         lastActorInputError: prepResult.liveTopUpError || prepResult.enrichmentError || "",
         failureStep: finalLeadCount > 0 ? "" : "enrichanything_import",
         budgetUsedUsd: 0,
@@ -14753,13 +14753,7 @@ async function processSourceLeadsJob(job: OutreachJob) {
       maxLeads,
       allowMissingEmail: sampleOnly,
       emailFinderApiBaseUrl: resolveEmailFinderApiBaseUrl(),
-      emailFinderVerificationMode: "validatedmails",
-      emailFinderValidatedMailsApiKey: String(
-        process.env.EMAIL_FINDER_VALIDATEDMAILS_API_KEY ??
-          process.env.ENRICHANYTHING_VALIDATEDMAILS_API_KEY ??
-          process.env.VALIDATEDMAILS_API_KEY ??
-          ""
-      ).trim(),
+      emailFinderVerificationMode: "local",
       resumeState,
     });
   } catch (error) {

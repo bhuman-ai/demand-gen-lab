@@ -14539,9 +14539,12 @@ async function processSourceLeadsJob(job: OutreachJob) {
     });
 
     if (finalLeadCount <= 0) {
+      const verificationBlocker = prepResult.enrichmentError || prepResult.liveTopUpError || "";
       await failRunWithDiagnostics({
         run,
-        reason: "EnrichAnything returned no real-verified sendable prospects.",
+        reason: verificationBlocker
+          ? `EnrichAnything returned no real-verified sendable prospects: ${verificationBlocker}.`
+          : "EnrichAnything returned no real-verified sendable prospects.",
         eventType: "lead_sourcing_failed",
         payload: {
           targetLeadCount: maxLeads,

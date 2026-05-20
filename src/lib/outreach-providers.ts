@@ -860,6 +860,15 @@ function summarizeNoHitFromBatchResult(result: unknown) {
   let reason = "no_high_confidence_candidate";
   if (topHttpStatus === 401 || normalizedError.includes("unauthorized")) {
     reason = "validatedmails_unauthorized";
+  } else if (
+    topHttpStatus === 402 ||
+    normalizedError.includes("http 402") ||
+    normalizedError.includes("payment") ||
+    normalizedError.includes("billing") ||
+    normalizedError.includes("quota") ||
+    normalizedError.includes("credit")
+  ) {
+    reason = "validatedmails_billing_or_quota";
   } else if (normalizedError.includes("validatedmails api key is required")) {
     reason = "missing_validatedmails_api_key";
   } else if (mxStatus === "no-mail-route") {
@@ -877,6 +886,8 @@ function summarizeNoHitFromBatchResult(result: unknown) {
     error:
       reason === "validatedmails_unauthorized"
         ? "ValidatedMails rejected the API key (HTTP 401)."
+        : reason === "validatedmails_billing_or_quota"
+          ? "ValidatedMails rejected verification with HTTP 402. Check billing, credits, or quota."
         : rawError,
     topAttemptEmail: extractFirstEmailAddress(topAttempt.email),
     topAttemptVerdict: String(topAttempt.verdict ?? "").trim().toLowerCase(),

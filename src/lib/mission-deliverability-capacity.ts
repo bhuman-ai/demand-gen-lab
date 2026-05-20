@@ -829,7 +829,6 @@ function runPauseMentionsOnlyOtherSender(run: OutreachRun | null, assignedFromEm
 function accountCanRecoverMissionAssignment(account: OutreachAccount | null | undefined): account is OutreachAccount {
   return Boolean(
     account &&
-      account.status === "active" &&
       account.accountType !== "mailbox" &&
       account.hasCredentials &&
       supportsAnyDelivery(account) &&
@@ -1568,12 +1567,11 @@ async function executeAssignSender(input: {
 }): Promise<ToolExecutionResult> {
   const accountId = asString(input.plan.toolInput.accountId);
   const snapshotSender = input.snapshot.senders.find((sender) => sender.accountId === accountId) ?? null;
-  const canRepairDisabledOutbound =
+  const canRepairSenderState =
     Boolean(snapshotSender) &&
     !snapshotSender?.deliveryCapable &&
-    snapshotSender?.outboundEnabled === false &&
     snapshotSender?.hasCredentials === true;
-  if (!snapshotSender || (!snapshotSender.deliveryCapable && !canRepairDisabledOutbound)) {
+  if (!snapshotSender || (!snapshotSender.deliveryCapable && !canRepairSenderState)) {
     return {
       ok: false,
       summary: "AI selected a sender that is not assignable for this mission.",
@@ -1596,6 +1594,26 @@ async function executeAssignSender(input: {
     };
   }
   const fromEmail = getOutreachAccountFromEmail(account).toLowerCase();
+  const canActivateAccount =
+    account.status !== "active" &&
+    account.accountType !== "mailbox" &&
+    account.hasCredentials &&
+    supportsAnyDelivery(account) &&
+    !isMailpoolSharedWarmupOnly(account) &&
+    Boolean(fromEmail);
+  if (canActivateAccount) {
+    account =
+      (await updateOutreachAccount(account.id, {
+        status: "active",
+        config: {
+          outbound: {
+            enabled: true,
+            disabledAt: "",
+            disabledReason: "",
+          },
+        },
+      })) ?? account;
+  }
   if (account.status !== "active" || !fromEmail) {
     return {
       ok: false,

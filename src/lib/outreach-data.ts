@@ -238,6 +238,20 @@ const SINGLETON_OUTREACH_JOB_TYPES = new Set<OutreachJobType>([
   "conversation_tick",
 ]);
 
+function shouldPreserveDeferredDispatchJob(input: {
+  jobType: OutreachJobType;
+  existingExecuteAfter: string;
+  existingPayload: Record<string, unknown>;
+  requestedExecuteAfter: string;
+}) {
+  if (input.jobType !== "dispatch_messages") return false;
+  if (String(input.existingPayload.source ?? "") !== "business_hours") return false;
+  const existingMs = new Date(input.existingExecuteAfter).getTime();
+  const requestedMs = new Date(input.requestedExecuteAfter).getTime();
+  if (!Number.isFinite(existingMs) || !Number.isFinite(requestedMs)) return false;
+  return existingMs > Date.now() && requestedMs <= Date.now() + 60 * 1000;
+}
+
 function runtimeLabel(): "vercel" | "local" {
   return isVercel ? "vercel" : "local";
 }
@@ -5587,9 +5601,20 @@ export async function enqueueOutreachJob(input: {
       if (!existingError && existingQueued && existingQueued.length) {
         const mappedQueued = existingQueued.map((row: unknown) => mapJobRow(row));
         const [keep, ...duplicates] = mappedQueued;
-        const nextExecuteAfter =
-          keep.executeAfter <= requestedExecuteAfter ? keep.executeAfter : requestedExecuteAfter;
-        const nextPayload = { ...keep.payload, ...requestedPayload };
+        const preserveDeferredDispatch = shouldPreserveDeferredDispatchJob({
+          jobType: input.jobType,
+          existingExecuteAfter: keep.executeAfter,
+          existingPayload: keep.payload,
+          requestedExecuteAfter,
+        });
+        const nextExecuteAfter = preserveDeferredDispatch
+          ? keep.executeAfter
+          : keep.executeAfter <= requestedExecuteAfter
+            ? keep.executeAfter
+            : requestedExecuteAfter;
+        const nextPayload = preserveDeferredDispatch
+          ? { ...requestedPayload, ...keep.payload }
+          : { ...keep.payload, ...requestedPayload };
         const nextMaxAttempts = Math.max(keep.maxAttempts, requestedMaxAttempts);
         const shouldUpdate =
           keep.executeAfter !== nextExecuteAfter ||
@@ -5660,9 +5685,20 @@ export async function enqueueOutreachJob(input: {
       });
     if (queuedMatches.length) {
       const [keep, ...duplicates] = queuedMatches;
-      const nextExecuteAfter =
-        keep.executeAfter <= requestedExecuteAfter ? keep.executeAfter : requestedExecuteAfter;
-      const nextPayload = { ...keep.payload, ...requestedPayload };
+      const preserveDeferredDispatch = shouldPreserveDeferredDispatchJob({
+        jobType: input.jobType,
+        existingExecuteAfter: keep.executeAfter,
+        existingPayload: keep.payload,
+        requestedExecuteAfter,
+      });
+      const nextExecuteAfter = preserveDeferredDispatch
+        ? keep.executeAfter
+        : keep.executeAfter <= requestedExecuteAfter
+          ? keep.executeAfter
+          : requestedExecuteAfter;
+      const nextPayload = preserveDeferredDispatch
+        ? { ...requestedPayload, ...keep.payload }
+        : { ...keep.payload, ...requestedPayload };
       const nextMaxAttempts = Math.max(keep.maxAttempts, requestedMaxAttempts);
       const updatedKeep: OutreachJob = {
         ...keep,

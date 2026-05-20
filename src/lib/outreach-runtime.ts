@@ -9268,6 +9268,33 @@ function supportsDelivery(account: ResolvedAccount) {
   return account.accountType !== "mailbox";
 }
 
+function canAutoReactivateDeliveryAccount(account: ResolvedAccount) {
+  const mailpoolStatus = String(account.config.mailpool.status ?? "").trim().toLowerCase();
+  return (
+    account.status !== "active" &&
+    supportsDelivery(account) &&
+    account.hasCredentials &&
+    mailpoolStatus !== "deleted" &&
+    Boolean(getOutreachAccountFromEmail(account).trim())
+  );
+}
+
+async function autoReactivateDeliveryAccount(account: ResolvedAccount) {
+  if (!canAutoReactivateDeliveryAccount(account)) return account;
+  return (
+    (await updateOutreachAccount(account.id, {
+      status: "active",
+      config: {
+        outbound: {
+          enabled: true,
+          disabledAt: "",
+          disabledReason: "",
+        },
+      },
+    })) ?? account
+  );
+}
+
 function supportsMailbox(account: ResolvedAccount) {
   return account.accountType !== "delivery";
 }
@@ -10763,7 +10790,8 @@ async function ensureBrandAccount(brandId: string): Promise<{
   let resolvedAccountId = "";
   let deliveryAccount: ResolvedAccount | null = null;
   for (const candidateAccountId of candidateAccountIds) {
-    const candidate = await getOutreachAccount(candidateAccountId);
+    const candidateRow = await getOutreachAccount(candidateAccountId);
+    const candidate = candidateRow ? await autoReactivateDeliveryAccount(candidateRow) : null;
     if (candidate && candidate.status === "active" && supportsDelivery(candidate)) {
       resolvedAccountId = candidateAccountId;
       deliveryAccount = candidate;
@@ -11587,12 +11615,21 @@ async function resolveSenderPoolForBrand(input: {
         .filter(Boolean)
     )
   );
+  const preferredAccountId = input.preferredAccountId.trim();
+  const assignedAccountIds = Array.from(
+    new Set([assignment?.accountId ?? "", ...(assignment?.accountIds ?? [])].map((value) => value.trim()).filter(Boolean))
+  );
+  const routedAccountIds =
+    preferredAccountId && assignedAccountIds.length > 0 && !assignedAccountIds.includes(preferredAccountId)
+      ? [preferredAccountId]
+      : candidateAccountIds;
   const now = new Date();
-  const [accounts, enrichedBrand, probeRuns] = await Promise.all([
-    Promise.all(candidateAccountIds.map((accountId) => getOutreachAccount(accountId))),
+  const [accountRows, enrichedBrand, probeRuns] = await Promise.all([
+    Promise.all(routedAccountIds.map((accountId) => getOutreachAccount(accountId))),
     brand ? enrichBrandWithSenderHealth(brand) : Promise.resolve(null),
     listDeliverabilityProbeRuns({ brandId: input.brandId, limit: 300 }),
   ]);
+  const accounts = await Promise.all(accountRows.map((account) => (account ? autoReactivateDeliveryAccount(account) : null)));
   const assignedMailboxAccountId = String(assignment?.mailboxAccountId ?? "").trim();
   const assignedMailboxAccount =
     (assignedMailboxAccountId
@@ -15575,6 +15612,9 @@ async function processDispatchMessagesJob(job: OutreachJob) {
       runId: run.id,
       jobType: "dispatch_messages",
       executeAfter: resumeAt,
+      payload: {
+        source: "business_hours",
+      },
     });
     return;
   }

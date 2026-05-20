@@ -45,7 +45,6 @@ import {
   updateExperimentRecord,
   updateScaleCampaignRecord,
 } from "@/lib/experiment-data";
-import { isReportCommentExperiment } from "@/lib/experiment-policy";
 import {
   conversationPromptModeEnabled,
   generateConversationPromptMessage,
@@ -114,6 +113,7 @@ import {
   isReusableExperimentLeadStatus,
   isTerminalExperimentLeadStatus,
 } from "@/lib/experiment-prospect-import";
+import { prepareExperimentSendableContacts } from "@/lib/experiment-sendable-prep";
 import { assessReportCommentLeadQuality } from "@/lib/report-comment-lead-quality";
 import {
   enrichLeadsWithEmailFinderBatch,
@@ -10963,6 +10963,8 @@ type LaunchSeedLead = {
   title: string;
   domain: string;
   sourceUrl: string;
+  realVerifiedEmail?: boolean;
+  emailVerification?: OutreachRunLead["emailVerification"];
 };
 
 async function collectReusableLaunchSeedLeads(input: {
@@ -10973,6 +10975,7 @@ async function collectReusableLaunchSeedLeads(input: {
   ownerId?: string;
   excludeRunId?: string;
   maxLeads?: number;
+  requireRealVerifiedEmail?: boolean;
 }): Promise<LaunchSeedLead[]> {
   const donorRuns =
     input.ownerType && input.ownerId
@@ -11010,6 +11013,9 @@ async function collectReusableLaunchSeedLeads(input: {
       if (!isReusableExperimentLeadStatus(lead.status)) {
         continue;
       }
+      if (input.requireRealVerifiedEmail === true && lead.realVerifiedEmail !== true) {
+        continue;
+      }
       if (getLeadEmailSuppressionReason(email)) {
         continue;
       }
@@ -11020,6 +11026,8 @@ async function collectReusableLaunchSeedLeads(input: {
         title: lead.title,
         domain: lead.domain,
         sourceUrl: lead.sourceUrl,
+        realVerifiedEmail: lead.realVerifiedEmail === true,
+        emailVerification: lead.emailVerification ?? null,
       });
       if (selected.size >= maxLeads) {
         return [...selected.values()];
@@ -11295,6 +11303,7 @@ export async function launchExperimentRun(input: {
     ownerType: resolvedOwnerType,
     ownerId: resolvedOwnerId,
     maxLeads: maxSeedLeads,
+    requireRealVerifiedEmail: true,
   });
   if (!seedLeads.length) {
     const run = await createOutreachRun({
@@ -14343,6 +14352,7 @@ async function processSourceLeadsJob(job: OutreachJob) {
     return;
   }
   const activeExperiment = experiment;
+  const runtimeExperiment = await getExperimentRecordByRuntimeRef(run.brandId, run.campaignId, run.experimentId);
 
   const account = await getOutreachAccount(run.accountId);
   const secrets = await getOutreachAccountSecrets(run.accountId);
@@ -14366,6 +14376,14 @@ async function processSourceLeadsJob(job: OutreachJob) {
     )
   );
   const existingLeadCountBeforeTopUp = existingLeads.length;
+  const reusableVerifiedLeadCount = (leads: OutreachRunLead[]) =>
+    leads.filter(
+      (lead) =>
+        lead.realVerifiedEmail === true &&
+        isReusableExperimentLeadStatus(lead.status) &&
+        !getLeadEmailSuppressionReason(extractFirstEmailAddress(lead.email))
+    ).length;
+  const verifiedLeadCountBeforeTopUp = reusableVerifiedLeadCount(existingLeads);
   const preserveTopUpFailure = (reason: string, failurePayload: Record<string, unknown> = {}) =>
     preservePreparedRunAfterTopUpFailure({
       run,
@@ -14376,6 +14394,162 @@ async function processSourceLeadsJob(job: OutreachJob) {
       sampleOnly,
       deliverabilityProofOnly,
     });
+
+  if (runtimeExperiment) {
+    if (run.status === "queued") {
+      await updateOutreachRun(run.id, { status: "sourcing", lastError: "" });
+      await markExperimentExecutionStatus(run.brandId, run.campaignId, run.experimentId, "sourcing");
+      await createOutreachEvent({ runId: run.id, eventType: "run_started", payload: {} });
+    }
+
+    await createOutreachEvent({
+      runId: run.id,
+      eventType: "lead_sourcing_requested",
+      payload: {
+        strategy: "enrichanything_verified_prospect_table",
+        maxLeads,
+        existingLeadCount: existingLeads.length,
+        sampleOnly,
+        deliverabilityProofOnly,
+      },
+    });
+
+    let prepResult: Awaited<ReturnType<typeof prepareExperimentSendableContacts>>;
+    try {
+      prepResult = await prepareExperimentSendableContacts({
+        brandId: run.brandId,
+        experimentId: runtimeExperiment.id,
+        emailFinderApiBaseUrl: resolveEmailFinderApiBaseUrl(),
+        forceEnabled: true,
+        requireRealVerifiedEmail: true,
+      });
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : "EnrichAnything sourcing failed";
+      if (
+        verifiedLeadCountBeforeTopUp > 0 &&
+        (await preservePreparedRunAfterTopUpFailure({
+          run,
+          reason: "EnrichAnything top-up failed before adding new verified prospects.",
+          payload: {
+            providerError: reason,
+            experimentOwnerId: runtimeExperiment.id,
+          },
+          existingLeadCount: verifiedLeadCountBeforeTopUp,
+          targetLeadCount: maxLeads,
+          sampleOnly,
+          deliverabilityProofOnly,
+        }))
+      ) {
+        return;
+      }
+      await failRunWithDiagnostics({
+        run,
+        reason: `EnrichAnything sourcing failed: ${reason}`,
+        eventType: "lead_sourcing_failed",
+        payload: {
+          experimentOwnerId: runtimeExperiment.id,
+        },
+      });
+      return;
+    }
+
+    const reusableLeads = await collectReusableLaunchSeedLeads({
+      brandId: run.brandId,
+      campaignId: run.campaignId,
+      experimentId: run.experimentId,
+      ownerType: run.ownerType,
+      ownerId: run.ownerId,
+      excludeRunId: run.id,
+      maxLeads,
+      requireRealVerifiedEmail: true,
+    });
+    const currentEmails = new Set(
+      existingLeads.map((lead) => extractFirstEmailAddress(lead.email).toLowerCase()).filter(Boolean)
+    );
+    const missingLeads = reusableLeads
+      .filter((lead) => !currentEmails.has(extractFirstEmailAddress(lead.email).toLowerCase()))
+      .slice(0, Math.max(0, maxLeads - existingLeads.length));
+
+    if (missingLeads.length) {
+      existingLeads = await upsertRunLeads(run.id, run.brandId, run.campaignId, missingLeads);
+    }
+
+    const finalLeadCount = reusableVerifiedLeadCount(existingLeads);
+    const currentMessages = await listRunMessages(run.id);
+    const { threads } = await listReplyThreadsByBrand(run.brandId);
+    await updateOutreachRun(run.id, {
+      status: sampleOnly ? "completed" : finalLeadCount > 0 ? "scheduled" : "sourcing",
+      lastError: "",
+      completedAt: sampleOnly ? nowIso() : "",
+      sourcingTraceSummary: {
+        phase: finalLeadCount > 0 ? "completed" : "failed",
+        selectedActorIds: ["enrichanything.live_table", "emailfinder.batch", "validatedmails"],
+        lastActorInputError: prepResult.liveTopUpError || prepResult.enrichmentError || "",
+        failureStep: finalLeadCount > 0 ? "" : "enrichanything_import",
+        budgetUsedUsd: 0,
+      },
+      metrics: buildLiveRunMetrics({
+        run,
+        messages: currentMessages,
+        threads,
+        sourcedLeads: finalLeadCount,
+      }),
+    });
+
+    await createOutreachEvent({
+      runId: run.id,
+      eventType: finalLeadCount > verifiedLeadCountBeforeTopUp ? "lead_sourced" : "lead_sourcing_skipped",
+      payload: {
+        strategy: "enrichanything_verified_prospect_table",
+        source: "enrichanything",
+        count: finalLeadCount,
+        storedLeadCount: existingLeads.length,
+        addedCount: Math.max(0, finalLeadCount - verifiedLeadCountBeforeTopUp),
+        targetLeadCount: maxLeads,
+        importedCount: prepResult.importedCount,
+        matchedCount: prepResult.matchedCount,
+        skippedCount: prepResult.skippedCount,
+        dedupedCount: prepResult.dedupedCount,
+        parseErrorCount: prepResult.parseErrorCount,
+        liveTopUpAttempted: prepResult.liveTopUpAttempted,
+        liveTopUpRunId: prepResult.liveTopUpRunId,
+        liveTopUpRowsAppended: prepResult.liveTopUpRowsAppended,
+        liveTopUpStatus: prepResult.liveTopUpStatus,
+        liveTopUpError: prepResult.liveTopUpError,
+        enrichmentError: prepResult.enrichmentError,
+        failureSummary: prepResult.failureSummary,
+        realVerifiedEmailRequired: true,
+        sampleOnly,
+        deliverabilityProofOnly,
+      },
+    });
+
+    if (finalLeadCount <= 0) {
+      await failRunWithDiagnostics({
+        run,
+        reason: "EnrichAnything returned no real-verified sendable prospects.",
+        eventType: "lead_sourcing_failed",
+        payload: {
+          targetLeadCount: maxLeads,
+          prepResult,
+        },
+      });
+      return;
+    }
+
+    if (!sampleOnly) {
+      await enqueueOutreachJob({
+        runId: run.id,
+        jobType: "schedule_messages",
+        executeAfter: nowIso(),
+        payload: { deliverabilityProofOnly },
+      });
+    } else {
+      await markExperimentExecutionStatus(run.brandId, run.campaignId, run.experimentId, "completed");
+    }
+    return;
+  }
+
   if (existingLeads.length) {
     const existingRunMessages = await listRunMessages(run.id);
     const { threads } = await listReplyThreadsByBrand(run.brandId);
@@ -14419,36 +14593,20 @@ async function processSourceLeadsJob(job: OutreachJob) {
       return;
     }
   }
-  const runtimeExperiment = await getExperimentRecordByRuntimeRef(run.brandId, run.campaignId, run.experimentId);
-  if (
-    existingLeads.length > 0 &&
-    runtimeExperiment &&
-    isReportCommentExperiment(runtimeExperiment)
-  ) {
-    await createOutreachEvent({
-      runId: run.id,
-      eventType: "lead_sourcing_seeded_owner_preserved",
-      payload: {
-        count: existingLeads.length,
-        reason: "report_comment_seeded_owner_leads",
-      },
-    });
-    return;
-  }
   const baseAudienceContext = buildSourcingAudienceContext({
-    runtimeAudience: runtimeExperiment?.audience ?? "",
+    runtimeAudience: "",
     hypothesisAudience: hypothesis.actorQuery,
     experimentNotes: activeExperiment.notes,
   });
   const brand = await getBrandById(run.brandId);
-  const offerContext = runtimeExperiment?.offer?.trim() || activeExperiment.notes || hypothesis.rationale || "";
+  const offerContext = activeExperiment.notes || hypothesis.rationale || "";
   const audienceContext = await resolveSourcingAudienceContext({
     base: baseAudienceContext,
     brandName: brand?.name ?? "",
     brandWebsite: brand?.website ?? "",
-    experimentName: runtimeExperiment?.name?.trim() || activeExperiment.name,
+    experimentName: activeExperiment.name,
     offer: offerContext,
-    notes: [activeExperiment.notes, hypothesis.rationale, runtimeExperiment?.audience ?? ""].filter(Boolean).join(" | "),
+    notes: [activeExperiment.notes, hypothesis.rationale].filter(Boolean).join(" | "),
   });
   const targetAudience = audienceContext.targetAudience;
   const triggerContext = audienceContext.triggerContext;

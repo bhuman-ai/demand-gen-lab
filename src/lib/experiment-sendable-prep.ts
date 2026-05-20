@@ -104,13 +104,17 @@ export async function prepareExperimentSendableContacts(input: {
   experimentId: string;
   requestOrigin?: string;
   emailFinderApiBaseUrl?: string;
+  forceEnabled?: boolean;
+  requireRealVerifiedEmail?: boolean;
 }): Promise<ExperimentSendablePrepResult> {
   const experiment = await getExperimentRecordById(input.brandId, input.experimentId);
   if (!experiment) {
     throw new Error("experiment not found");
   }
 
-  const config = buildExperimentProspectTableConfig(experiment);
+  const config = buildExperimentProspectTableConfig(experiment, {
+    enabled: input.forceEnabled === true ? true : undefined,
+  });
   const targetSendableContacts = getExperimentVerifiedEmailLeadTarget(experiment);
   const hostManagedWorkspace = isHostManagedWorkspace(config.workspaceId);
   const emailFinderApiBaseUrl = resolveEmailFinderApiBaseUrl(input.emailFinderApiBaseUrl);
@@ -129,10 +133,13 @@ export async function prepareExperimentSendableContacts(input: {
           tableTitle: tableState.tableTitle,
           prompt: tableState.discoveryPrompt,
           entityType: tableState.entityType,
+          requireRealVerifiedEmail: input.requireRealVerifiedEmail === true,
         })
       : emptyImportResult();
 
-  let sendableSummary = await countExperimentSendableLeadContacts(input.brandId, input.experimentId);
+  let sendableSummary = await countExperimentSendableLeadContacts(input.brandId, input.experimentId, {
+    requireRealVerifiedEmail: input.requireRealVerifiedEmail === true,
+  });
   let liveTopUpAttempted = false;
   let liveTopUpRunId = "";
   let liveTopUpRowsAppended = 0;
@@ -167,10 +174,13 @@ export async function prepareExperimentSendableContacts(input: {
                   tableTitle: liveRun.tableTitle,
                   prompt: liveRun.discoveryPrompt,
                   entityType: liveRun.entityType,
+                  requireRealVerifiedEmail: input.requireRealVerifiedEmail === true,
                 })
               : emptyImportResult();
 
-          sendableSummary = await countExperimentSendableLeadContacts(input.brandId, input.experimentId);
+          sendableSummary = await countExperimentSendableLeadContacts(input.brandId, input.experimentId, {
+            requireRealVerifiedEmail: input.requireRealVerifiedEmail === true,
+          });
         } else {
           queryExhausted = sendableSummary.sendableLeadCount < targetSendableContacts;
         }

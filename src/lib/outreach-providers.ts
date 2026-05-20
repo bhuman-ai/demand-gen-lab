@@ -13,7 +13,8 @@ import {
   supportsGmailUiDelivery,
   supportsMailpoolDelivery,
 } from "@/lib/outreach-account-helpers";
-import type { OutreachAccountSecrets } from "@/lib/outreach-data";
+import { getOutreachAccountSecrets, type OutreachAccountSecrets } from "@/lib/outreach-data";
+import { syncMailpoolOutreachAccountCredentials } from "@/lib/mailpool-account-refresh";
 import { sendGmailUiMessage, validateGmailUiMailboxConfig } from "@/lib/gmail-ui-delivery";
 import { resolveGmailUiUserDataDir } from "@/lib/gmail-ui-profile";
 
@@ -694,6 +695,9 @@ export function resolveEmailFinderApiBaseUrl(explicit?: string) {
   for (const candidate of candidates) {
     const normalized = String(candidate ?? "")
       .trim()
+      .replace(/\\n/g, "")
+      .replace(/\n/g, "")
+      .replace(/\/n$/, "")
       .replace(/\/+$/, "");
     if (normalized) return normalized;
   }
@@ -856,6 +860,15 @@ function summarizeNoHitFromBatchResult(result: unknown) {
   let reason = "no_high_confidence_candidate";
   if (topHttpStatus === 401 || normalizedError.includes("unauthorized")) {
     reason = "validatedmails_unauthorized";
+  } else if (
+    topHttpStatus === 402 ||
+    normalizedError.includes("http 402") ||
+    normalizedError.includes("payment") ||
+    normalizedError.includes("billing") ||
+    normalizedError.includes("quota") ||
+    normalizedError.includes("credit")
+  ) {
+    reason = "validatedmails_billing_or_quota";
   } else if (normalizedError.includes("validatedmails api key is required")) {
     reason = "missing_validatedmails_api_key";
   } else if (mxStatus === "no-mail-route") {
@@ -873,6 +886,8 @@ function summarizeNoHitFromBatchResult(result: unknown) {
     error:
       reason === "validatedmails_unauthorized"
         ? "ValidatedMails rejected the API key (HTTP 401)."
+        : reason === "validatedmails_billing_or_quota"
+          ? "ValidatedMails rejected verification with HTTP 402. Check billing, credits, or quota."
         : rawError,
     topAttemptEmail: extractFirstEmailAddress(topAttempt.email),
     topAttemptVerdict: String(topAttempt.verdict ?? "").trim().toLowerCase(),
@@ -2924,6 +2939,50 @@ async function sendMailpoolSmtpEmail(params: {
   }
 }
 
+function shouldRefreshMailpoolSmtpCredentials(error: string) {
+  return /auth|credential|login|password|warmup only|set to warmup|535|5\.7/i.test(error);
+}
+
+async function sendMailpoolSmtpEmailWithCredentialRefresh(params: {
+  account: OutreachAccount;
+  secrets: OutreachAccountSecrets;
+  recipient: string;
+  fromEmail: string;
+  replyToEmail: string;
+  subject: string;
+  body: string;
+}): Promise<{ ok: boolean; providerMessageId: string; error: string }> {
+  const first = await sendMailpoolSmtpEmail(params);
+  if (first.ok || !shouldRefreshMailpoolSmtpCredentials(first.error)) {
+    return first;
+  }
+
+  try {
+    const refreshedAccount = await syncMailpoolOutreachAccountCredentials(params.account.id);
+    const refreshedSecrets = await getOutreachAccountSecrets(refreshedAccount.id);
+    if (!refreshedSecrets) return first;
+    const refreshedFromEmail = getOutreachAccountFromEmail(refreshedAccount).trim() || params.fromEmail;
+    const retry = await sendMailpoolSmtpEmail({
+      ...params,
+      account: refreshedAccount,
+      secrets: refreshedSecrets,
+      fromEmail: refreshedFromEmail,
+    });
+    if (retry.ok) return retry;
+    return {
+      ...retry,
+      error: `${first.error} · Retry after Mailpool credential refresh failed: ${retry.error}`,
+    };
+  } catch (error) {
+    return {
+      ...first,
+      error: `${first.error} · Mailpool credential refresh failed: ${
+        error instanceof Error ? error.message : "unknown error"
+      }`,
+    };
+  }
+}
+
 async function sendMailpoolGmailUiEmail(params: {
   account: OutreachAccount;
   recipient: string;
@@ -2963,17 +3022,22 @@ async function sendDeliveryEmail(params: {
   metadata?: Record<string, unknown>;
 }) {
   if (params.account.provider === "mailpool") {
-    if (params.account.config.mailbox.deliveryMethod === "gmail_ui" && !supportsGmailUiDelivery(params.account)) {
+    const deliveryMethod = params.account.config.mailbox.deliveryMethod;
+    const gmailUiReady =
+      deliveryMethod === "gmail_ui" &&
+      supportsGmailUiDelivery(params.account) &&
+      getOutreachGmailUiLoginState(params.account) === "ready";
+    if (gmailUiReady) {
+      return sendMailpoolGmailUiEmail(params);
+    }
+    if (deliveryMethod === "gmail_ui" && !mailboxSmtpPassword(params.secrets)) {
       return {
         ok: false,
         providerMessageId: "",
-        error: "Gmail UI delivery is selected but the Gmail UI profile is not fully configured.",
+        error: "Gmail UI delivery is selected, but the Gmail UI session is not ready and SMTP fallback credentials are missing.",
       };
     }
-    if (supportsGmailUiDelivery(params.account)) {
-      return sendMailpoolGmailUiEmail(params);
-    }
-    return sendMailpoolSmtpEmail(params);
+    return sendMailpoolSmtpEmailWithCredentialRefresh(params);
   }
   return sendCustomerIoTransactionalEmail(params);
 }

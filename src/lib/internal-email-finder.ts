@@ -1020,6 +1020,38 @@ async function verifyWithValidatedMails(email: string, apiKey: string, timeoutSe
     }
 
     const data = asRecord(payload);
+    if (response.status === 401 || response.status === 403) {
+      return {
+        verdict: "unknown",
+        confidence: "low",
+        details: {
+          verdict: "unknown",
+          reason: `validatedmails unauthorized (HTTP ${response.status})`,
+          provider: "validatedmails",
+          provider_status: "",
+          provider_reason: data.detail ?? data.message ?? data.error,
+          trace_id: data.trace_id,
+          http_status: response.status,
+          mx_status: "mail-ready",
+        },
+      };
+    }
+    if (!response.ok) {
+      return {
+        verdict: "unknown",
+        confidence: "low",
+        details: {
+          verdict: "unknown",
+          reason: `validatedmails HTTP ${response.status}`,
+          provider: "validatedmails",
+          provider_status: "",
+          provider_reason: data.detail ?? data.message ?? data.error,
+          trace_id: data.trace_id,
+          http_status: response.status,
+          mx_status: "mail-ready",
+        },
+      };
+    }
     const providerStatus = String(
       data.status ?? data.result ?? data.verdict ?? data.state ?? ""
     )

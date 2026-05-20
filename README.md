@@ -14,6 +14,8 @@ npm run dev
 Copy `.env.example` to `.env.local` and fill values:
 
 - `OPENAI_API_KEY`
+- `OPENAI_MODEL_MISSION_OPERATOR` (recommended: `gpt-5.5`)
+- `OPENAI_MISSION_REASONING_EFFORT` (recommended: `high`)
 - `SUPABASE_URL` (optional)
 - `SUPABASE_SERVICE_ROLE_KEY` (optional)
 - `OUTREACH_ENCRYPTION_KEY` (required for secure account secret storage)
@@ -22,24 +24,47 @@ Copy `.env.example` to `.env.local` and fill values:
 - `CUSTOMER_IO_WEBHOOK_SECRET` (optional)
 - `NAMECHEAP_RELAY_URL` (optional, routes Namecheap API calls through a fixed-IP relay)
 - `NAMECHEAP_RELAY_TOKEN` (optional bearer token for that relay)
+- `FORWARD_EMAIL_API_TOKEN` (optional, enables fresh Forward Email control probe aliases)
+- `FORWARD_EMAIL_PROBE_DOMAIN` (optional, domain already configured in Forward Email for probe aliases)
+- `FORWARD_EMAIL_PROBE_MODE` (optional: `only`, `prefer`, or `off`; defaults to `only` when Forward Email is configured)
+- `FORWARD_EMAIL_PROBE_TARGETS_PER_RUN` (optional, default `1`, max `10`)
+- `FORWARD_EMAIL_PROBE_RECIPIENTS` (optional, comma/space-separated email or webhook recipients; IMAP storage is always enabled for probes)
+- `GMAIL_DELIVERABILITY_MONITOR_EMAILS` (optional, comma/space-separated allowlist of Gmail-backed monitor inboxes approved for post-Forward Email placement confirmation)
+- `GMAIL_DELIVERABILITY_PROBE_TARGETS_PER_RUN` (optional, default `1`, max `5`; existing Gmail monitor mailboxes to use only after a Forward Email probe inboxes)
+- `DELIVERABILITY_PROBE_REPEAT_HOURS` (optional, default `24`; controls automatic recurring inbox placement probes)
+- `DELIVERABILITY_PRE_SEND_GATE` (optional, default `true`; when enabled, dispatch waits for a fresh passing probe for the sender/message content)
 
 ## Scheduler (Cloudflare Worker)
 
-Vercel cron is intentionally disabled in this repo (`/Users/don/factory-platform/vercel.json`) so Hobby deploys are not blocked.
+Vercel cron is intentionally disabled in this repo, so Hobby deploys are not blocked.
 
 Use Cloudflare Worker cron instead:
 
 ```bash
-cd /Users/don/factory-platform/cloudflare/outreach-cron
+cd /Users/don/lastb2b/cloudflare/outreach-cron
 wrangler login
 wrangler secret put OUTREACH_CRON_TOKEN
 wrangler secret put MANUAL_TRIGGER_TOKEN
 wrangler deploy
 ```
 
+The worker calls the combined outreach operator tick every 5 minutes. That tick covers outreach dispatch, inbox sync, sendable prep, sender launch, deliverability supervision, and AI mission learning refreshes.
+
 The worker schedule is configured in:
 
-- `/Users/don/factory-platform/cloudflare/outreach-cron/wrangler.toml`
+- `/Users/don/lastb2b/cloudflare/outreach-cron/wrangler.toml`
+
+## Forward Email probe aliases
+
+Forward Email is used as the cheap control-probe receiver layer. When `FORWARD_EMAIL_API_TOKEN` and `FORWARD_EMAIL_PROBE_DOMAIN` are set, deliverability probes can create a fresh alias, send the probe from the real sender to that alias, poll the alias over IMAP, and delete the alias after the probe completes. If that Forward Email probe inboxes, the runtime can then queue an optional Gmail confirmation probe using an already-connected Gmail monitor mailbox that has not been used for that sender domain. When `GMAIL_DELIVERABILITY_MONITOR_EMAILS` is set, only those approved Gmail-backed monitors can be selected. Gmail is never used before the cheap Forward Email gate passes. Matched Gmail seed messages found in Inbox are archived after placement is recorded so approved seed inboxes stay clean.
+
+The outreach runtime queues probes automatically when scheduled message content changes, repeats probes daily by default, and gates dispatch until the active sender/message has a fresh passing pre-send probe. The mission deliverability operator can also request a probe as an explicit AI tool when a run exists and delivery confidence is uncertain.
+
+Smoke test the API setup with:
+
+```bash
+npm run forward-email:probe-smoke
+```
 
 ## Namecheap Relay (Fixed IP)
 
@@ -83,6 +108,10 @@ The relay only accepts authenticated `POST /namecheap` requests and only forward
 - `GET/PATCH/DELETE /api/brands/:brandId/experiments/:experimentId` — experiment CRUD
 - `POST /api/brands/:brandId/experiments/:experimentId/launch` — launch experiment test
 - `POST /api/brands/:brandId/experiments/:experimentId/promote` — promote experiment to scale campaign
+- `GET /api/brands/:brandId/missions` — list AI campaign missions
+- `POST /api/brands/:brandId/missions` — analyze site + target customers and generate an editable mission plan
+- `GET/PATCH /api/brands/:brandId/missions/:missionId` — mission detail and plan edits
+- `POST /api/brands/:brandId/missions/:missionId/start` — approve the plan and let the operator start only when deliverability is ready
 - `GET /api/brands/:brandId/experiments/:experimentId/runs` — experiment run visibility
 - `PATCH /api/brands/:brandId/experiments/:experimentId/runs/:runId` — pause/resume/cancel experiment run
 - `GET /api/brands/:brandId/campaigns` — list promoted scale campaigns
@@ -101,6 +130,7 @@ The relay only accepts authenticated `POST /namecheap` requests and only forward
 - `POST /api/webhooks/customerio/events` — delivery/reply webhook intake
 - `POST /api/internal/outreach/tick` — cron worker tick
   - `GET` is also supported so Vercel Cron can call it directly.
+- `GET/POST /api/internal/missions/tick` — mission-only operator refresh, useful for manual checks
 
 ## UI routes
 
@@ -108,6 +138,8 @@ The relay only accepts authenticated `POST /namecheap` requests and only forward
 - `/brands` — brand directory
 - `/brands/new` — brand onboarding
 - `/brands/:brandId` — brand home
+- `/brands/:brandId/missions` — AI mission setup
+- `/brands/:brandId/missions/:missionId` — AI mission control room
 - `/brands/:brandId/experiments` — experiment list
 - `/brands/:brandId/experiments/:experimentId` — experiment workspace
 - `/brands/:brandId/experiments/:experimentId/flow` — conversation flow editor

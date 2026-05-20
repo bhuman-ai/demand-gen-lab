@@ -31,6 +31,7 @@ type ImportedLead = {
   title: string;
   domain: string;
   sourceUrl: string;
+  realVerifiedEmail?: boolean;
 };
 
 export type ImportExperimentProspectRowsResult = {
@@ -372,6 +373,7 @@ export async function importExperimentProspectRows(input: {
   tableTitle?: string;
   prompt?: string;
   entityType?: string;
+  requireRealVerifiedEmail?: boolean;
 }) : Promise<ImportExperimentProspectRowsResult> {
   const existing = await getExperimentRecordById(input.brandId, input.experimentId);
   if (!existing) {
@@ -413,7 +415,7 @@ export async function importExperimentProspectRows(input: {
     maxCandidates: 12,
     maxCredits: 7,
     concurrency: 3,
-    allowBestGuessFallback: true,
+    allowBestGuessFallback: input.requireRealVerifiedEmail === true ? false : true,
     minBestGuessPValid: 0.58,
   });
 
@@ -428,6 +430,11 @@ export async function importExperimentProspectRows(input: {
     if (!email) {
       const label = candidate?.lead.name || candidate?.lead.company || candidate?.lead.domain || "this row";
       parseErrors.push(`Row ${candidate?.rowNumber ?? index + 1}: no usable work email for ${label}.`);
+      return [];
+    }
+    if (input.requireRealVerifiedEmail === true && lead.realVerifiedEmail !== true) {
+      const label = candidate?.lead.name || candidate?.lead.company || candidate?.lead.domain || "this row";
+      parseErrors.push(`Row ${candidate?.rowNumber ?? index + 1}: no real-verified work email for ${label}.`);
       return [];
     }
 
@@ -447,6 +454,7 @@ export async function importExperimentProspectRows(input: {
       title: normalizeCell(lead.title),
       domain,
       sourceUrl: normalizeCell(lead.sourceUrl),
+      realVerifiedEmail: lead.realVerifiedEmail === true,
     } satisfies ImportedLead;
 
     return [importedLead];
@@ -619,7 +627,8 @@ export async function importExperimentProspectRows(input: {
 
 export async function countExperimentSendableLeadContacts(
   brandId: string,
-  experimentId: string
+  experimentId: string,
+  options: { requireRealVerifiedEmail?: boolean } = {}
 ): Promise<ExperimentSendableLeadSummary> {
   const experiment = await getExperimentRecordById(brandId, experimentId);
   if (!experiment) {
@@ -639,6 +648,7 @@ export async function countExperimentSendableLeadContacts(
 
   for (const lead of leadLists.flat()) {
     if (!isReusableExperimentLeadStatus(lead.status)) continue;
+    if (options.requireRealVerifiedEmail === true && lead.realVerifiedEmail !== true) continue;
     const email = extractFirstEmailAddress(lead.email).toLowerCase();
     if (!email) continue;
     const domain = normalizeDomainCandidate(lead.domain || email);

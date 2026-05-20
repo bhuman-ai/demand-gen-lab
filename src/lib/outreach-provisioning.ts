@@ -59,6 +59,11 @@ import { pickWebshareProxy } from "@/lib/webshare-client";
 import { buildGmailUiUserDataDir } from "@/lib/gmail-ui-profile";
 import { normalizeGmailUiLoginStatus } from "@/lib/gmail-ui-login";
 import { MAX_ACTIVE_SENDERS_PER_DOMAIN } from "@/lib/sender-capacity";
+import {
+  buyVercelDomainAndAttachToMailpool,
+  resolveDomainRegistrarSnapshot,
+  testVercelDomainRegistrarConnection,
+} from "@/lib/vercel-domain-registrar";
 
 type NamecheapHostRecord = {
   type: "A" | "AAAA" | "ALIAS" | "CNAME" | "FRAME" | "MX" | "MXE" | "NS" | "TXT" | "URL" | "URL301";
@@ -87,6 +92,7 @@ export type ProvisionSenderInput = {
   domainMode: "existing" | "register" | "transfer";
   domain: string;
   fromLocalPart: string;
+  maxDomainPurchasePriceUsd?: number;
   autoPickCustomerIoAccount?: boolean;
   customerIoSourceAccountId?: string;
   forwardingTargetUrl?: string;
@@ -179,7 +185,7 @@ export type NamecheapDomainAvailabilityItem = {
 };
 
 export type ProvisioningProviderTestResult = {
-  provider: "customerio" | "namecheap" | "mailpool" | "deliverability";
+  provider: "customerio" | "namecheap" | "mailpool" | "vercel" | "deliverability";
   ok: boolean;
   message: string;
   details: Record<string, unknown>;
@@ -893,6 +899,16 @@ export async function testMailpoolProvisioningConnection(input: {
     ok: true,
     message: "Mailpool API credentials are working.",
     details: {},
+  };
+}
+
+export async function testVercelProvisioningConnection(): Promise<ProvisioningProviderTestResult> {
+  const result = await testVercelDomainRegistrarConnection();
+  return {
+    provider: "vercel",
+    ok: result.ok,
+    message: result.message,
+    details: result.details,
   };
 }
 
@@ -1790,6 +1806,11 @@ function buildMailpoolDomainOwner(input: {
   };
 }
 
+function isMailpoolRegistrationServerError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error ?? "");
+  return /Mailpool POST \/domains\/ failed \(HTTP 5\d\d\)/i.test(message);
+}
+
 function mailpoolStatusToDnsStatus(status: string): DomainRow["dnsStatus"] {
   const normalized = String(status ?? "").trim().toLowerCase();
   if (normalized === "active") return "verified";
@@ -2378,14 +2399,98 @@ export async function provisionMailpoolSender(
 
   let mailpoolDomain =
     existingDomains.find((entry) => entry.domain === domain) ?? null;
+  let externalRegistrarFallback: "vercel" | "namecheap" | "" = "";
   if (input.domainMode === "register") {
-    mailpoolDomain = await registerMailpoolDomain({
-      apiKey,
-      domain,
-      type: "google",
-      redirectUrl: forwardingTargetUrl || undefined,
-      domainOwner: buildMailpoolDomainOwner({ brand, registrant: input.registrant }),
-    });
+    if (!input.registrant) {
+      throw new Error("Registrant contact information is required to buy a new domain");
+    }
+    const registrant = input.registrant;
+    const domainOwner = buildMailpoolDomainOwner({ brand, registrant });
+    if (mailpoolDomain) {
+      const registrarSnapshot = resolveDomainRegistrarSnapshot();
+      if (registrarSnapshot.provider === "vercel" && mailpoolDomain.status !== "active") {
+        if (!registrarSnapshot.configured) {
+          throw new Error(
+            `Vercel domain registrar is selected, but ${registrarSnapshot.missing.join(", ") || "its API token"} is missing.`
+          );
+        }
+        const vercelRegistration = await buyVercelDomainAndAttachToMailpool({
+          mailpoolApiKey: apiKey,
+          domain,
+          registrant,
+          redirectUrl: forwardingTargetUrl || undefined,
+          domainOwner,
+          existingMailpoolDomain: mailpoolDomain,
+          maxPurchasePriceUsd: input.maxDomainPurchasePriceUsd,
+        });
+        mailpoolDomain = vercelRegistration.domain;
+        externalRegistrarFallback = "vercel";
+      }
+    } else {
+      try {
+        mailpoolDomain = await registerMailpoolDomain({
+          apiKey,
+          domain,
+          type: "google",
+          redirectUrl: forwardingTargetUrl || undefined,
+          domainOwner,
+        });
+      } catch (error) {
+        const refreshedDomains = await listMailpoolDomains(apiKey).catch(() => []);
+        mailpoolDomain = refreshedDomains.find((entry) => entry.domain === domain) ?? null;
+        if (!isMailpoolRegistrationServerError(error)) {
+          throw error;
+        }
+        const registrarSnapshot = resolveDomainRegistrarSnapshot();
+        if (registrarSnapshot.provider === "vercel") {
+          if (!registrarSnapshot.configured) {
+            throw new Error(
+              `Vercel domain registrar is selected, but ${registrarSnapshot.missing.join(", ") || "its API token"} is missing.`
+            );
+          }
+          const vercelRegistration = await buyVercelDomainAndAttachToMailpool({
+            mailpoolApiKey: apiKey,
+            domain,
+            registrant,
+            redirectUrl: forwardingTargetUrl || undefined,
+            domainOwner,
+            existingMailpoolDomain: mailpoolDomain,
+            maxPurchasePriceUsd: input.maxDomainPurchasePriceUsd,
+          });
+          mailpoolDomain = vercelRegistration.domain;
+          externalRegistrarFallback = "vercel";
+        } else if (registrarSnapshot.provider === "namecheap") {
+          const namecheapCredentials = await resolveNamecheapCredentials(input);
+          await namecheapRegisterDomain({
+            apiUser: namecheapCredentials.namecheapApiUser,
+            userName: namecheapCredentials.namecheapUserName,
+            apiKey: namecheapCredentials.namecheapApiKey,
+            clientIp: namecheapCredentials.namecheapClientIp,
+            domain,
+            registrant,
+          });
+          externalRegistrarFallback = "namecheap";
+          mailpoolDomain = await transferMailpoolDomain({
+            apiKey,
+            domain,
+            redirectUrl: forwardingTargetUrl || undefined,
+            domainOwner,
+          });
+          if (mailpoolDomain?.nameservers?.length) {
+            await namecheapSetCustomNameservers({
+              apiUser: namecheapCredentials.namecheapApiUser,
+              userName: namecheapCredentials.namecheapUserName,
+              apiKey: namecheapCredentials.namecheapApiKey,
+              clientIp: namecheapCredentials.namecheapClientIp,
+              domain,
+              nameservers: mailpoolDomain.nameservers,
+            });
+          }
+        } else {
+          throw error;
+        }
+      }
+    }
   } else if (input.domainMode === "transfer" && !mailpoolDomain) {
     mailpoolDomain = await transferMailpoolDomain({
       apiKey,
@@ -2447,6 +2552,13 @@ export async function provisionMailpoolSender(
   if (input.domainMode === "register" && domainSelection?.source && domainSelection.source !== "requested" && requestedDomain !== domain) {
     warnings.push(`Mailpool switched to ${domain} because ${requestedDomain} was not available.`);
   }
+  if (externalRegistrarFallback) {
+    warnings.push(
+      `Mailpool domain registration failed, so the domain was registered through ${
+        externalRegistrarFallback === "vercel" ? "Vercel" : "Namecheap"
+      } and attached to Mailpool.`
+    );
+  }
 
   if (mailboxReadyForDelivery && mailbox.id) {
     try {
@@ -2489,7 +2601,7 @@ export async function provisionMailpoolSender(
     replyMailboxEmail: fromEmail,
     dnsStatus: mailpoolStatusToDnsStatus(mailpoolDomain.status),
     forwardingTargetUrl: forwardingTargetUrl || mailpoolDomain.redirectUrl || "",
-    registrar: "mailpool",
+    registrar: externalRegistrarFallback || "mailpool",
     provider: "mailpool",
     deliveryAccountId: account.id,
     deliveryAccountName: account.name,
@@ -2497,6 +2609,8 @@ export async function provisionMailpoolSender(
     notes:
       input.domainMode === "transfer"
         ? "Transferred into Mailpool and provisioned through Mailpool."
+        : externalRegistrarFallback
+          ? `Registered through ${externalRegistrarFallback === "vercel" ? "Vercel" : "Namecheap"} after Mailpool registration failed, then attached to Mailpool.`
         : "Provisioned through Mailpool.",
   });
   const protectedDomain = forwardingTargetUrl ? normalizeDomain(forwardingTargetUrl) : "";
@@ -2538,6 +2652,11 @@ export async function provisionMailpoolSender(
   }
   if (input.domainMode === "transfer" && mailpoolDomain.status !== "active") {
     nextSteps.push("Wait for Mailpool to finish transferring the domain before treating this sender as live.");
+  }
+  if (externalRegistrarFallback && mailpoolDomain.status !== "active") {
+    nextSteps.push(
+      `Wait for ${externalRegistrarFallback === "vercel" ? "Vercel" : "Namecheap"} nameserver changes and Mailpool domain activation to propagate.`
+    );
   }
   nextSteps.push("Internal inbox placement monitors will start once the sender begins warming.");
   nextSteps.push("Run a sender test before launching live campaigns.");

@@ -27,6 +27,8 @@ export type MailboxPlacementResult = {
   placement: MailboxPlacementVerdict;
   matchedMailbox: string;
   matchedUid: number;
+  archivedAt?: string;
+  archiveError?: string;
   searchedMailboxes: string[];
   error: string;
 };
@@ -175,6 +177,7 @@ class ImapClient {
   private connected = false;
   private tagCounter = 1;
   private selectedMailbox = "";
+  private selectedReadOnly = true;
 
   constructor(private readonly options: ImapMailboxConfig) {}
 
@@ -240,6 +243,11 @@ class ImapClient {
         reject(new Error("IMAP greeting timed out"));
       }, 15_000);
 
+      socket.setTimeout(15_000, () => {
+        cleanup();
+        reject(new Error("IMAP connection timed out"));
+      });
+
       const onConnect = () => {
         if (!this.options.secure) return;
       };
@@ -256,6 +264,7 @@ class ImapClient {
       };
       const cleanup = () => {
         clearTimeout(timeout);
+        socket.setTimeout(0);
         socket.off("connect", onConnect);
         socket.off("data", onData);
         socket.off("error", onError);
@@ -296,13 +305,23 @@ class ImapClient {
     return parseListMailboxes(result.raw);
   }
 
-  async examineMailbox(mailboxName: string) {
-    if (this.selectedMailbox === mailboxName) return;
-    const select = await this.command(`EXAMINE ${imapQuoted(mailboxName)}`);
+  private async openMailbox(mailboxName: string, readOnly: boolean) {
+    if (this.selectedMailbox === mailboxName && this.selectedReadOnly === readOnly) return;
+    const commandName = readOnly ? "EXAMINE" : "SELECT";
+    const select = await this.command(`${commandName} ${imapQuoted(mailboxName)}`);
     if (!select.ok) {
-      throw new Error(`IMAP EXAMINE failed for ${mailboxName}: ${select.raw.trim()}`);
+      throw new Error(`IMAP ${commandName} failed for ${mailboxName}: ${select.raw.trim()}`);
     }
     this.selectedMailbox = mailboxName;
+    this.selectedReadOnly = readOnly;
+  }
+
+  async examineMailbox(mailboxName: string) {
+    await this.openMailbox(mailboxName, true);
+  }
+
+  async selectMailbox(mailboxName: string) {
+    await this.openMailbox(mailboxName, false);
   }
 
   async searchMailbox(mailboxName: string, criteria: string[]) {
@@ -323,6 +342,40 @@ class ImapClient {
       throw new Error(`IMAP FETCH failed for ${mailboxName} uid ${uid}: ${fetch.raw.trim()}`);
     }
     return parseFetchedMailboxMessage(fetch.raw, mailboxName);
+  }
+
+  async archiveInboxMessage(mailboxName: string, uid: number, allMailName: string) {
+    if (!mailboxName || !uid) return { archived: false, error: "No matched message to archive" };
+    await this.selectMailbox(mailboxName);
+
+    const gmailArchive = await this.command(`UID STORE ${uid} -X-GM-LABELS (\\Inbox)`);
+    if (gmailArchive.ok) return { archived: true, error: "" };
+
+    if (allMailName && allMailName !== mailboxName) {
+      const copy = await this.command(`UID COPY ${uid} ${imapQuoted(allMailName)}`);
+      if (!copy.ok) {
+        return {
+          archived: false,
+          error: `IMAP archive copy failed: ${copy.raw.trim() || gmailArchive.raw.trim()}`,
+        };
+      }
+    }
+
+    const deleted = await this.command(`UID STORE ${uid} +FLAGS.SILENT (\\Deleted)`);
+    if (!deleted.ok) {
+      return {
+        archived: false,
+        error: `IMAP archive delete failed: ${deleted.raw.trim() || gmailArchive.raw.trim()}`,
+      };
+    }
+    const expunge = await this.command("EXPUNGE");
+    if (!expunge.ok) {
+      return {
+        archived: false,
+        error: `IMAP archive expunge failed: ${expunge.raw.trim() || gmailArchive.raw.trim()}`,
+      };
+    }
+    return { archived: true, error: "" };
   }
 
   async close() {
@@ -375,6 +428,7 @@ export async function inspectMailboxPlacement(input: {
   fromEmail: string;
   subject: string;
   since?: Date;
+  archiveMatchedInbox?: boolean;
 }) {
   const client = new ImapClient(input.mailbox);
   try {
@@ -399,51 +453,70 @@ export async function inspectMailboxPlacement(input: {
       searchedMailboxes.push(mailboxName);
       return client.searchMailbox(mailboxName, criteria);
     };
+    const finish = async (
+      result: Omit<MailboxPlacementResult, "archivedAt" | "archiveError">
+    ): Promise<MailboxPlacementResult> => {
+      if (
+        input.archiveMatchedInbox &&
+        result.ok &&
+        result.placement === "inbox" &&
+        result.matchedMailbox &&
+        result.matchedUid > 0
+      ) {
+        const archived = await client.archiveInboxMessage(result.matchedMailbox, result.matchedUid, allMail);
+        return {
+          ...result,
+          archivedAt: archived.archived ? new Date().toISOString() : "",
+          archiveError: archived.error,
+        };
+      }
+      return result;
+    };
 
     const inboxUids = await searchOne(inbox);
     if (inboxUids.length) {
-      return {
+      return finish({
         ok: true,
         placement: "inbox" as const,
         matchedMailbox: inbox,
         matchedUid: inboxUids[inboxUids.length - 1] ?? 0,
         searchedMailboxes,
         error: "",
-      };
+      });
     }
 
     const spamUids = await searchOne(spam);
     if (spamUids.length) {
-      return {
+      return finish({
         ok: true,
         placement: "spam" as const,
         matchedMailbox: spam,
         matchedUid: spamUids[spamUids.length - 1] ?? 0,
         searchedMailboxes,
         error: "",
-      };
+      });
     }
 
     const allMailUids = await searchOne(allMail);
     if (allMailUids.length) {
-      return {
+      return finish({
         ok: true,
         placement: "all_mail_only" as const,
         matchedMailbox: allMail,
         matchedUid: allMailUids[allMailUids.length - 1] ?? 0,
         searchedMailboxes,
         error: "",
-      };
+      });
     }
 
-    return {
+    return finish({
       ok: true,
       placement: "not_found" as const,
       matchedMailbox: "",
       matchedUid: 0,
       searchedMailboxes,
       error: "",
-    };
+    });
   } catch (error) {
     return {
       ok: false,

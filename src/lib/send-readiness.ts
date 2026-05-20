@@ -6,6 +6,7 @@ import {
   getOutreachSenderBackingIssue,
   getOutreachGmailUiLoginState,
   getOutreachMailboxEmail,
+  isMailpoolSharedWarmupOnly,
   supportsGmailUiDelivery,
 } from "@/lib/outreach-account-helpers";
 import type { SenderCapacitySnapshot } from "@/lib/sender-capacity";
@@ -21,6 +22,7 @@ export type SenderReadinessIssueCode =
   | "inactive_mailbox_account"
   | "missing_mailbox_credentials"
   | "sender_not_backed_by_mailbox"
+  | "mailpool_warmup_only"
   | "mailpool_pending"
   | "mailpool_error"
   | "gmail_ui_login_required"
@@ -77,6 +79,22 @@ function pushIssue(
     ...issue,
     detail: issue.detail?.trim() || issue.summary,
   });
+}
+
+function hasMailpoolSmtpFallback(input: {
+  account: OutreachAccount | null;
+  hasDeliveryCredentials?: boolean;
+  fromEmail: string;
+}) {
+  const account = input.account;
+  if (!account || account.provider !== "mailpool" || account.accountType === "mailbox") return false;
+  if (input.hasDeliveryCredentials === false) return false;
+  return Boolean(
+    input.fromEmail &&
+      account.config.mailbox.status === "connected" &&
+      account.config.mailbox.smtpHost.trim() &&
+      account.config.mailbox.smtpUsername.trim()
+  );
 }
 
 function rowHealthIssues(row: DomainRow | null | undefined) {
@@ -169,6 +187,11 @@ export function evaluateSenderReadiness(input: {
 
   const blockingIssues: SenderReadinessIssue[] = [];
   const warnings: SenderReadinessIssue[] = rowHealthIssues(row);
+  const mailpoolSmtpFallback = hasMailpoolSmtpFallback({
+    account,
+    hasDeliveryCredentials: input.hasDeliveryCredentials,
+    fromEmail,
+  });
 
   if (!account) {
     pushIssue(blockingIssues, {
@@ -212,7 +235,8 @@ export function evaluateSenderReadiness(input: {
     account &&
     account.provider === "mailpool" &&
     getOutreachMailboxDeliveryMethod(account) === "gmail_ui" &&
-    !supportsGmailUiDelivery(account)
+    !supportsGmailUiDelivery(account) &&
+    !mailpoolSmtpFallback
   ) {
     pushIssue(blockingIssues, {
       code: "missing_delivery_credentials",
@@ -225,7 +249,7 @@ export function evaluateSenderReadiness(input: {
 
   if (account && getOutreachMailboxDeliveryMethod(account) === "gmail_ui") {
     const gmailUiState = getOutreachGmailUiLoginState(mailboxAccount ?? account);
-    if (gmailUiState !== "ready") {
+    if (gmailUiState !== "ready" && !mailpoolSmtpFallback) {
       const message =
         (mailboxAccount ?? account).config.mailbox.gmailUiLoginMessage.trim() ||
         "Open this sender on the worker and complete Gmail login before sending.";
@@ -283,7 +307,15 @@ export function evaluateSenderReadiness(input: {
 
   if (account?.provider === "mailpool") {
     const mailpoolStatus = account.config.mailpool.status;
-    if (mailpoolStatus === "pending" || mailpoolStatus === "updating") {
+    if (isMailpoolSharedWarmupOnly(account)) {
+      pushIssue(blockingIssues, {
+        code: "mailpool_warmup_only",
+        severity: "blocking",
+        kind: "policy",
+        summary: "Mailpool sender is warmup-only",
+        detail: "Shared Mailpool inboxes are warmup/probe infrastructure and cannot be used for real outbound.",
+      });
+    } else if (mailpoolStatus === "pending" || mailpoolStatus === "updating") {
       pushIssue(blockingIssues, {
         code: "mailpool_pending",
         severity: "blocking",

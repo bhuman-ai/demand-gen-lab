@@ -9,6 +9,7 @@ import {
   testMailpoolProvisioningConnection,
   testCustomerIoProvisioningConnection,
   testNamecheapProvisioningConnection,
+  testVercelProvisioningConnection,
   type ProvisioningProviderTestResult,
 } from "@/lib/outreach-provisioning";
 import { testGooglePostmasterDeliverabilityConnection } from "@/lib/outreach-deliverability";
@@ -26,6 +27,7 @@ function providerSelection(value: unknown) {
     normalized === "customerio" ||
     normalized === "namecheap" ||
     normalized === "mailpool" ||
+    normalized === "vercel" ||
     normalized === "deliverability"
   ) {
     return normalized;
@@ -34,7 +36,7 @@ function providerSelection(value: unknown) {
 }
 
 function failureResult(
-  provider: "customerio" | "namecheap" | "mailpool" | "deliverability",
+  provider: "customerio" | "namecheap" | "mailpool" | "vercel" | "deliverability",
   message: string,
   details: Record<string, unknown> = {}
 ): ProvisioningProviderTestResult {
@@ -56,7 +58,7 @@ export async function POST(request: Request) {
     ]);
 
     const tests: Partial<
-      Record<"customerIo" | "namecheap" | "mailpool" | "deliverability", ProvisioningProviderTestResult>
+      Record<"customerIo" | "namecheap" | "mailpool" | "vercel" | "deliverability", ProvisioningProviderTestResult>
     > = {};
     const now = new Date().toISOString();
 
@@ -119,6 +121,17 @@ export async function POST(request: Request) {
         tests.mailpool = failureResult(
           "mailpool",
           error instanceof Error ? error.message : "Mailpool connection test failed"
+        );
+      }
+    }
+
+    if (provider === "vercel" || provider === "all") {
+      try {
+        tests.vercel = await testVercelProvisioningConnection();
+      } catch (error) {
+        tests.vercel = failureResult(
+          "vercel",
+          error instanceof Error ? error.message : "Vercel Registrar connection test failed"
         );
       }
     }

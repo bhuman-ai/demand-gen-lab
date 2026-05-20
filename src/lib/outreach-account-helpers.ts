@@ -98,6 +98,24 @@ export function supportsCustomerIoDelivery(account: Pick<OutreachAccount, "provi
   );
 }
 
+export function isMailpoolSharedWarmupOnly(account: Pick<OutreachAccount, "provider" | "config">) {
+  return account.provider === "mailpool" && account.config.mailpool.mailboxType === "shared";
+}
+
+function supportsMailpoolSmtpDelivery(
+  account: Pick<OutreachAccount, "provider" | "accountType" | "config">,
+  secrets?: Pick<OutreachAccountSecrets, "mailboxPassword" | "mailboxSmtpPassword">
+) {
+  return (
+    account.config.mailbox.status === "connected" &&
+    Boolean(account.config.mailpool.mailboxId.trim()) &&
+    Boolean(account.config.mailbox.smtpHost.trim()) &&
+    Boolean(account.config.mailbox.smtpUsername.trim()) &&
+    Boolean(getOutreachAccountFromEmail(account)) &&
+    (!secrets || Boolean(secrets.mailboxSmtpPassword.trim() || secrets.mailboxPassword.trim()))
+  );
+}
+
 export function supportsMailpoolDelivery(
   account: Pick<OutreachAccount, "provider" | "accountType" | "config">,
   secrets?: Pick<OutreachAccountSecrets, "mailboxPassword" | "mailboxSmtpPassword">
@@ -105,16 +123,16 @@ export function supportsMailpoolDelivery(
   if (account.provider !== "mailpool" || account.accountType === "mailbox") {
     return false;
   }
-  if (account.config.mailbox.deliveryMethod === "gmail_ui") {
-    return supportsGmailUiDelivery(account);
+  if (account.config.mailpool.status !== "active") {
+    return false;
   }
-  return (
-    Boolean(account.config.mailpool.mailboxId.trim()) &&
-    Boolean(account.config.mailbox.smtpHost.trim()) &&
-    Boolean(account.config.mailbox.smtpUsername.trim()) &&
-    Boolean(getOutreachAccountFromEmail(account)) &&
-    (!secrets || Boolean(secrets.mailboxSmtpPassword.trim() || secrets.mailboxPassword.trim()))
-  );
+  if (isMailpoolSharedWarmupOnly(account)) {
+    return false;
+  }
+  if (account.config.mailbox.deliveryMethod === "gmail_ui") {
+    return supportsGmailUiDelivery(account) || supportsMailpoolSmtpDelivery(account, secrets);
+  }
+  return supportsMailpoolSmtpDelivery(account, secrets);
 }
 
 export function supportsSmtpDelivery(

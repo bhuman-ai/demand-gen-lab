@@ -7,4 +7,4 @@ crons = ["*/5 * * * *"]
 
 [vars]
 # Set this to your deployed app URL.
-OUTREACH_TICK_URL = "https://factory-platform.vercel.app/api/internal/outreach/tick"
+OUTREACH_TICK_URL = "https://www.lastb2b.com/api/internal/outreach/tick"

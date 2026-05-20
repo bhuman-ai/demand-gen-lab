@@ -14,6 +14,7 @@ import type {
   ActorCapabilityProfile,
   ConversationFlowGraph,
   ConversationFlowNode,
+  DeliverabilityProbeRun,
   DomainRow,
   LeadAcceptanceDecision,
   LeadQualityPolicy,
@@ -44,7 +45,6 @@ import {
   updateExperimentRecord,
   updateScaleCampaignRecord,
 } from "@/lib/experiment-data";
-import { isReportCommentExperiment } from "@/lib/experiment-policy";
 import {
   conversationPromptModeEnabled,
   generateConversationPromptMessage,
@@ -113,6 +113,7 @@ import {
   isReusableExperimentLeadStatus,
   isTerminalExperimentLeadStatus,
 } from "@/lib/experiment-prospect-import";
+import { prepareExperimentSendableContacts } from "@/lib/experiment-sendable-prep";
 import { assessReportCommentLeadQuality } from "@/lib/report-comment-lead-quality";
 import {
   enrichLeadsWithEmailFinderBatch,
@@ -147,6 +148,13 @@ import {
 import { admitCustomerIoProfileForSend } from "@/lib/outreach-customerio-budget";
 import { resolveLlmModel } from "@/lib/llm-router";
 import { inspectMailboxPlacement, listInboxMessages, type MailboxPlacementVerdict } from "@/lib/mailbox-imap";
+import {
+  allocateForwardEmailProbeTargets,
+  decryptForwardEmailProbePassword,
+  isForwardEmailProbeTarget,
+  releaseForwardEmailProbeTargets,
+} from "@/lib/forward-email-probes";
+import { getForwardEmailProbeConfig } from "@/lib/forward-email-client";
 import {
   getOutreachProvisioningSettings,
   getOutreachProvisioningSettingsSecrets,
@@ -187,7 +195,23 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 const CONVERSATION_TICK_MINUTES = 15;
 const DEFAULT_EXPERIMENT_RUN_LEAD_TARGET = 500;
 const DELIVERABILITY_PROBE_POLL_DELAY_MINUTES = 3;
-const DELIVERABILITY_PROBE_REPEAT_HOURS = 24 * 7;
+const DELIVERABILITY_PROBE_REPEAT_HOURS = (() => {
+  const parsed = Number(process.env.DELIVERABILITY_PROBE_REPEAT_HOURS ?? 24);
+  return Number.isFinite(parsed) ? Math.max(1, parsed) : 24;
+})();
+const DELIVERABILITY_PRE_SEND_GATE_ENABLED =
+  String(process.env.DELIVERABILITY_PRE_SEND_GATE ?? "true").trim().toLowerCase() !== "false";
+const DELIVERABILITY_PRE_SEND_GATE_RECHECK_MINUTES = (() => {
+  const parsed = Number(process.env.DELIVERABILITY_PRE_SEND_GATE_RECHECK_MINUTES ?? 4);
+  return Number.isFinite(parsed) ? Math.max(1, parsed) : 4;
+})();
+const GMAIL_DELIVERABILITY_PROBE_TARGETS_PER_RUN = (() => {
+  const parsed = Number(process.env.GMAIL_DELIVERABILITY_PROBE_TARGETS_PER_RUN ?? 1);
+  return Number.isFinite(parsed) ? Math.max(1, Math.min(5, Math.round(parsed))) : 1;
+})();
+const GMAIL_DELIVERABILITY_MONITOR_EMAILS = parseDelimitedEmailSet(
+  process.env.GMAIL_DELIVERABILITY_MONITOR_EMAILS
+);
 const DELIVERABILITY_INTELLIGENCE_REFRESH_HOURS = 6;
 const SELFFUNDED_AWS_APPLICATION_URL = "https://www.selffunded.dev/aws-credits/apply";
 
@@ -210,6 +234,15 @@ type ReplyPolicyInput = {
   leadEmail: string;
   leadCompany: string;
 };
+
+function parseDelimitedEmailSet(value: unknown) {
+  return new Set(
+    String(value ?? "")
+      .split(/[,\s]+/)
+      .map((entry) => entry.trim().toLowerCase())
+      .filter((entry) => entry.includes("@"))
+  );
+}
 
 type ReplyPolicyResult = {
   action: ReplyPolicyAction;
@@ -355,29 +388,76 @@ async function inferMailboxReplyOutreachContext(input: {
 
 type DeliverabilityProbeStage = "send" | "poll";
 type DeliverabilityProbeVariant = "baseline" | "production";
+type DeliverabilityProbeTriggerStage = "schedule" | "send" | "failover" | "manual" | "autonomous" | "pre_send_gate";
+type DeliverabilityMonitorProviderPreference = "auto" | "forward_email" | "gmail_mailbox";
 
-type DeliverabilityMonitorTarget = {
+type MailboxDeliverabilityMonitorTarget = {
+  kind: "mailbox";
   account: ResolvedAccount;
   secrets: ResolvedSecrets;
   brandId: string;
 };
 
+type ForwardEmailDeliverabilityMonitorTarget = {
+  kind: "forward_email";
+  target: DeliverabilityProbeTarget;
+  brandId: string;
+};
+
+type DeliverabilityMonitorTarget = MailboxDeliverabilityMonitorTarget | ForwardEmailDeliverabilityMonitorTarget;
+
 type DeliverabilityProbeTarget = {
   reservationId?: string;
   accountId: string;
   email: string;
+  provider?: "mailbox" | "forward_email";
   providerMessageId?: string;
+  forwardEmailDomain?: string;
+  forwardEmailAliasId?: string;
+  forwardEmailAliasName?: string;
+  imapHost?: string;
+  imapPort?: number;
+  imapSecure?: boolean;
+  imapUsername?: string;
+  imapPasswordEncrypted?: string;
+  expiresAt?: string;
 };
 
 type DeliverabilityProbeMonitorResult = {
   accountId: string;
   email: string;
+  provider?: "mailbox" | "forward_email";
   placement: MailboxPlacementVerdict;
   matchedMailbox: string;
   matchedUid: number;
+  archivedAt?: string;
+  archiveError?: string;
   ok: boolean;
   error: string;
 };
+
+function monitorTargetAccountId(target: DeliverabilityMonitorTarget) {
+  return target.kind === "forward_email" ? target.target.accountId : target.account.id;
+}
+
+function monitorTargetEmail(target: DeliverabilityMonitorTarget) {
+  return target.kind === "forward_email"
+    ? target.target.email.trim().toLowerCase()
+    : target.account.config.mailbox.email.trim().toLowerCase();
+}
+
+function monitorTargetProvider(target: DeliverabilityMonitorTarget) {
+  return target.kind === "forward_email" ? ("forward_email" as const) : ("mailbox" as const);
+}
+
+function monitorTargetToProbeTarget(target: DeliverabilityMonitorTarget): DeliverabilityProbeTarget {
+  if (target.kind === "forward_email") return target.target;
+  return {
+    provider: "mailbox",
+    accountId: target.account.id,
+    email: target.account.config.mailbox.email.trim().toLowerCase(),
+  };
+}
 
 type DeliverabilityProbeReferenceMessage = {
   id: string;
@@ -448,6 +528,43 @@ type SenderDispatchSlot = {
   secrets: ResolvedSecrets;
   policy: SenderCapacityPolicy;
 };
+
+function buildProbeSenderPolicy(account: ResolvedAccount): SenderCapacityPolicy {
+  const fromEmail = getOutreachAccountFromEmail(account).trim();
+  return {
+    warmupDay: 0,
+    warmupStage: "probe",
+    baseDailyCap: 1,
+    baseHourlyCap: 1,
+    maxDailyCap: 1,
+    dailyCap: 1,
+    hourlyCap: 1,
+    automationFactor: 1,
+    launchFactor: 1,
+    healthFactor: 1,
+    deliverabilityFactor: 1,
+    domain: senderDomainFromEmail(fromEmail),
+    domainActiveSenderRank: 1,
+    activeSenderLimitPerDomain: Number.MAX_SAFE_INTEGER,
+    domainLimitBlocked: false,
+    summary: "Probe-only sender policy",
+  };
+}
+
+async function resolveProbeSenderSlot(accountId: string): Promise<SenderDispatchSlot | null> {
+  const normalizedAccountId = accountId.trim();
+  if (!normalizedAccountId) return null;
+  const account = await getOutreachAccount(normalizedAccountId);
+  if (!account || account.status !== "active" || account.accountType === "mailbox") return null;
+  const secrets = await getOutreachAccountSecrets(account.id);
+  if (!secrets) return null;
+  if (!supportsCustomerIoDelivery(account) && !supportsMailpoolDelivery(account, secrets)) return null;
+  return {
+    account,
+    secrets,
+    policy: buildProbeSenderPolicy(account),
+  };
+}
 
 type SenderUsageMap = Record<string, { dailySent: number; hourlySent: number }>;
 
@@ -9151,6 +9268,33 @@ function supportsDelivery(account: ResolvedAccount) {
   return account.accountType !== "mailbox";
 }
 
+function canAutoReactivateDeliveryAccount(account: ResolvedAccount) {
+  const mailpoolStatus = String(account.config.mailpool.status ?? "").trim().toLowerCase();
+  return (
+    account.status !== "active" &&
+    supportsDelivery(account) &&
+    account.hasCredentials &&
+    mailpoolStatus !== "deleted" &&
+    Boolean(getOutreachAccountFromEmail(account).trim())
+  );
+}
+
+async function autoReactivateDeliveryAccount(account: ResolvedAccount) {
+  if (!canAutoReactivateDeliveryAccount(account)) return account;
+  return (
+    (await updateOutreachAccount(account.id, {
+      status: "active",
+      config: {
+        outbound: {
+          enabled: true,
+          disabledAt: "",
+          disabledReason: "",
+        },
+      },
+    })) ?? account
+  );
+}
+
 function supportsMailbox(account: ResolvedAccount) {
   return account.accountType !== "delivery";
 }
@@ -10227,6 +10371,64 @@ async function failRunWithDiagnostics(input: {
   });
 }
 
+async function preservePreparedRunAfterTopUpFailure(input: {
+  run: OutreachRun;
+  reason: string;
+  payload?: Record<string, unknown>;
+  existingLeadCount: number;
+  targetLeadCount: number;
+  sampleOnly?: boolean;
+  deliverabilityProofOnly?: boolean;
+}) {
+  if (input.sampleOnly || input.existingLeadCount <= 0) return false;
+
+  const [messages, replyThreads] = await Promise.all([
+    listRunMessages(input.run.id).catch(() => []),
+    listReplyThreadsByBrand(input.run.brandId)
+      .then((result) => result.threads)
+      .catch(() => []),
+  ]);
+  const scheduledMessageCount = messages.filter((message) => message.status === "scheduled").length;
+  const sentMessageCount = messages.filter((message) => message.status === "sent").length;
+
+  await updateOutreachRun(input.run.id, {
+    status: "scheduled",
+    lastError: `Lead top-up paused: ${input.reason}`,
+    metrics: buildLiveRunMetrics({
+      run: input.run,
+      messages,
+      threads: replyThreads,
+      sourcedLeads: input.existingLeadCount,
+    }),
+  });
+  await createOutreachEvent({
+    runId: input.run.id,
+    eventType: "lead_sourcing_top_up_failed",
+    payload: {
+      reason: input.reason,
+      existingLeadCount: input.existingLeadCount,
+      targetLeadCount: input.targetLeadCount,
+      scheduledMessageCount,
+      sentMessageCount,
+      deliverabilityProofOnly: input.deliverabilityProofOnly === true,
+      ...(input.payload ?? {}),
+    },
+  });
+
+  if (scheduledMessageCount === 0 && sentMessageCount === 0) {
+    await enqueueOutreachJob({
+      runId: input.run.id,
+      jobType: "schedule_messages",
+      executeAfter: nowIso(),
+      payload: {
+        deliverabilityProofOnly: input.deliverabilityProofOnly === true,
+      },
+    });
+  }
+
+  return true;
+}
+
 function buildSenderPoolUnavailableSummary(blockedSenders: SenderReadinessSnapshot[]) {
   if (!blockedSenders.length) {
     return {
@@ -10588,8 +10790,9 @@ async function ensureBrandAccount(brandId: string): Promise<{
   let resolvedAccountId = "";
   let deliveryAccount: ResolvedAccount | null = null;
   for (const candidateAccountId of candidateAccountIds) {
-    const candidate = await getOutreachAccount(candidateAccountId);
-    if (candidate && candidate.status === "active") {
+    const candidateRow = await getOutreachAccount(candidateAccountId);
+    const candidate = candidateRow ? await autoReactivateDeliveryAccount(candidateRow) : null;
+    if (candidate && candidate.status === "active" && supportsDelivery(candidate)) {
       resolvedAccountId = candidateAccountId;
       deliveryAccount = candidate;
       break;
@@ -10760,6 +10963,8 @@ type LaunchSeedLead = {
   title: string;
   domain: string;
   sourceUrl: string;
+  realVerifiedEmail?: boolean;
+  emailVerification?: OutreachRunLead["emailVerification"];
 };
 
 async function collectReusableLaunchSeedLeads(input: {
@@ -10770,6 +10975,7 @@ async function collectReusableLaunchSeedLeads(input: {
   ownerId?: string;
   excludeRunId?: string;
   maxLeads?: number;
+  requireRealVerifiedEmail?: boolean;
 }): Promise<LaunchSeedLead[]> {
   const donorRuns =
     input.ownerType && input.ownerId
@@ -10807,6 +11013,9 @@ async function collectReusableLaunchSeedLeads(input: {
       if (!isReusableExperimentLeadStatus(lead.status)) {
         continue;
       }
+      if (input.requireRealVerifiedEmail === true && lead.realVerifiedEmail !== true) {
+        continue;
+      }
       if (getLeadEmailSuppressionReason(email)) {
         continue;
       }
@@ -10817,6 +11026,8 @@ async function collectReusableLaunchSeedLeads(input: {
         title: lead.title,
         domain: lead.domain,
         sourceUrl: lead.sourceUrl,
+        realVerifiedEmail: lead.realVerifiedEmail === true,
+        emailVerification: lead.emailVerification ?? null,
       });
       if (selected.size >= maxLeads) {
         return [...selected.values()];
@@ -10835,6 +11046,7 @@ export async function launchExperimentRun(input: {
   ownerType?: "experiment" | "campaign";
   ownerId?: string;
   sampleOnly?: boolean;
+  deliverabilityProofOnly?: boolean;
   maxLeadsOverride?: number;
 }): Promise<{
   ok: boolean;
@@ -11091,6 +11303,7 @@ export async function launchExperimentRun(input: {
     ownerType: resolvedOwnerType,
     ownerId: resolvedOwnerId,
     maxLeads: maxSeedLeads,
+    requireRealVerifiedEmail: true,
   });
   if (!seedLeads.length) {
     const run = await createOutreachRun({
@@ -11131,6 +11344,7 @@ export async function launchExperimentRun(input: {
       executeAfter: nowIso(),
       payload: {
         maxLeadsOverride: maxSeedLeads,
+        deliverabilityProofOnly: input.deliverabilityProofOnly === true,
       },
     });
     await markExperimentExecutionStatus(input.brandId, input.campaignId, experiment.id, "queued");
@@ -11142,6 +11356,7 @@ export async function launchExperimentRun(input: {
         outcome: "source_from_zero",
         seededLeadCount: 0,
         maxLeadsOverride: maxSeedLeads,
+        deliverabilityProofOnly: input.deliverabilityProofOnly === true,
       },
     });
     return {
@@ -11199,6 +11414,9 @@ export async function launchExperimentRun(input: {
       runId: run.id,
       jobType: "schedule_messages",
       executeAfter: nowIso(),
+      payload: {
+        deliverabilityProofOnly: input.deliverabilityProofOnly === true,
+      },
     });
   }
   await markExperimentExecutionStatus(
@@ -11213,6 +11431,7 @@ export async function launchExperimentRun(input: {
     payload: {
       trigger: input.trigger,
       sampleOnly: input.sampleOnly === true,
+      deliverabilityProofOnly: input.deliverabilityProofOnly === true,
       seededLeadCount: seededLeads.length,
     },
   });
@@ -11405,12 +11624,21 @@ async function resolveSenderPoolForBrand(input: {
         .filter(Boolean)
     )
   );
+  const preferredAccountId = input.preferredAccountId.trim();
+  const assignedAccountIds = Array.from(
+    new Set([assignment?.accountId ?? "", ...(assignment?.accountIds ?? [])].map((value) => value.trim()).filter(Boolean))
+  );
+  const routedAccountIds =
+    preferredAccountId && assignedAccountIds.length > 0 && !assignedAccountIds.includes(preferredAccountId)
+      ? [preferredAccountId]
+      : candidateAccountIds;
   const now = new Date();
-  const [accounts, enrichedBrand, probeRuns] = await Promise.all([
-    Promise.all(candidateAccountIds.map((accountId) => getOutreachAccount(accountId))),
+  const [accountRows, enrichedBrand, probeRuns] = await Promise.all([
+    Promise.all(routedAccountIds.map((accountId) => getOutreachAccount(accountId))),
     brand ? enrichBrandWithSenderHealth(brand) : Promise.resolve(null),
     listDeliverabilityProbeRuns({ brandId: input.brandId, limit: 300 }),
   ]);
+  const accounts = await Promise.all(accountRows.map((account) => (account ? autoReactivateDeliveryAccount(account) : null)));
   const assignedMailboxAccountId = String(assignment?.mailboxAccountId ?? "").trim();
   const assignedMailboxAccount =
     (assignedMailboxAccountId
@@ -11718,11 +11946,14 @@ async function maybeRefreshDeliverabilityIntelligence(run: {
   }
 }
 
-async function resolveDeliverabilityMonitorTargets(input: {
+async function resolveMailboxDeliverabilityMonitorTargets(input: {
   runBrandId: string;
   excludeAccountIds: string[];
   excludeEmails: string[];
-}): Promise<DeliverabilityMonitorTarget[]> {
+  gmailOnly?: boolean;
+  excludeSenderDomain?: string;
+  limit?: number;
+}): Promise<MailboxDeliverabilityMonitorTarget[]> {
   const [accounts, brands] = await Promise.all([listOutreachAccounts(), listBrands()]);
   const assignments = await Promise.all(
     brands.map(async (brand) => ({
@@ -11737,16 +11968,41 @@ async function resolveDeliverabilityMonitorTargets(input: {
   );
   const excludedAccountIds = new Set(input.excludeAccountIds.map((value) => value.trim()).filter(Boolean));
   const excludedEmails = new Set(input.excludeEmails.map((value) => value.trim().toLowerCase()).filter(Boolean));
+  const excludedSenderDomain = String(input.excludeSenderDomain ?? "").trim().toLowerCase();
+  const domainUsedMonitorEmails = new Set<string>();
+  if (excludedSenderDomain) {
+    const reservations = await listDeliverabilitySeedReservations();
+    for (const reservation of reservations) {
+      if (senderDomainFromEmail(reservation.fromEmail) !== excludedSenderDomain) continue;
+      const monitorWasReservedOrSent =
+        reservation.status === "reserved" ||
+        reservation.status === "consumed" ||
+        Boolean(reservation.consumedAt || reservation.providerMessageId);
+      if (!monitorWasReservedOrSent) continue;
+      const monitorEmail = reservation.monitorEmail.trim().toLowerCase();
+      if (monitorEmail) domainUsedMonitorEmails.add(monitorEmail);
+    }
+  }
 
-  const candidates: DeliverabilityMonitorTarget[] = [];
+  const candidates: MailboxDeliverabilityMonitorTarget[] = [];
   for (const account of accounts) {
     if (account.status !== "active" || !supportsMailbox(account)) continue;
     const mailboxEmail = account.config.mailbox.email.trim().toLowerCase();
     if (!mailboxEmail || account.config.mailbox.status !== "connected") continue;
+    if (input.gmailOnly && account.config.mailbox.provider !== "gmail") continue;
+    if (
+      input.gmailOnly &&
+      GMAIL_DELIVERABILITY_MONITOR_EMAILS.size > 0 &&
+      !GMAIL_DELIVERABILITY_MONITOR_EMAILS.has(mailboxEmail)
+    ) {
+      continue;
+    }
     if (excludedAccountIds.has(account.id) || excludedEmails.has(mailboxEmail)) continue;
+    if (domainUsedMonitorEmails.has(mailboxEmail)) continue;
     const secrets = await getOutreachAccountSecrets(account.id);
     if (!secrets || !secrets.mailboxPassword.trim()) continue;
     candidates.push({
+      kind: "mailbox",
       account,
       secrets,
       brandId: mailboxBrandByAccountId.get(account.id) ?? "",
@@ -11756,7 +12012,7 @@ async function resolveDeliverabilityMonitorTargets(input: {
   const dedicated = candidates.filter((candidate) => isDedicatedDeliverabilityMonitor(candidate.account));
   const pool = dedicated.length ? dedicated : candidates;
 
-  return pool.sort((left, right) => {
+  const sortedMailboxTargets = pool.sort((left, right) => {
     const leftDedicated = isDedicatedDeliverabilityMonitor(left.account) ? 0 : 1;
     const rightDedicated = isDedicatedDeliverabilityMonitor(right.account) ? 0 : 1;
     if (leftDedicated !== rightDedicated) return leftDedicated - rightDedicated;
@@ -11767,6 +12023,42 @@ async function resolveDeliverabilityMonitorTargets(input: {
 
     return left.account.name.localeCompare(right.account.name);
   });
+  return input.limit && input.limit > 0 ? sortedMailboxTargets.slice(0, input.limit) : sortedMailboxTargets;
+}
+
+async function resolveDeliverabilityMonitorTargets(input: {
+  runBrandId: string;
+  excludeAccountIds: string[];
+  excludeEmails: string[];
+  probeToken: string;
+}): Promise<DeliverabilityMonitorTarget[]> {
+  const forwardEmailConfig = getForwardEmailProbeConfig();
+  let forwardEmailTargets: DeliverabilityProbeTarget[] = [];
+  if (forwardEmailConfig) {
+    try {
+      forwardEmailTargets =
+        (await allocateForwardEmailProbeTargets({ probeToken: input.probeToken }))?.targets ?? [];
+    } catch (error) {
+      if (forwardEmailConfig.mode === "only") throw error;
+    }
+  }
+  const forwardEmailMonitorTargets = forwardEmailTargets.map((target) => ({
+    kind: "forward_email" as const,
+    target,
+    brandId: "",
+  }));
+  if (forwardEmailConfig?.mode === "only") {
+    return forwardEmailMonitorTargets;
+  }
+
+  const sortedMailboxTargets = await resolveMailboxDeliverabilityMonitorTargets({
+    runBrandId: input.runBrandId,
+    excludeAccountIds: input.excludeAccountIds,
+    excludeEmails: input.excludeEmails,
+  });
+  return forwardEmailConfig?.mode === "prefer"
+    ? [...forwardEmailMonitorTargets, ...sortedMailboxTargets]
+    : sortedMailboxTargets;
 }
 
 function readDeliverabilityProbeTargets(value: unknown): DeliverabilityProbeTarget[] {
@@ -11777,9 +12069,34 @@ function readDeliverabilityProbeTargets(value: unknown): DeliverabilityProbeTarg
       reservationId: String(entry.reservationId ?? entry.reservation_id ?? "").trim() || undefined,
       accountId: String(entry.accountId ?? "").trim(),
       email: String(entry.email ?? "").trim().toLowerCase(),
+      provider:
+        String(entry.provider ?? "").trim() === "forward_email"
+          ? ("forward_email" as const)
+          : String(entry.provider ?? "").trim() === "mailbox"
+            ? ("mailbox" as const)
+            : undefined,
       providerMessageId: String(entry.providerMessageId ?? entry.provider_message_id ?? "").trim() || undefined,
+      forwardEmailDomain: String(entry.forwardEmailDomain ?? entry.forward_email_domain ?? "").trim() || undefined,
+      forwardEmailAliasId: String(entry.forwardEmailAliasId ?? entry.forward_email_alias_id ?? "").trim() || undefined,
+      forwardEmailAliasName: String(entry.forwardEmailAliasName ?? entry.forward_email_alias_name ?? "").trim() || undefined,
+      imapHost: String(entry.imapHost ?? entry.imap_host ?? "").trim() || undefined,
+      imapPort: normalizeProbeImapPort(entry.imapPort ?? entry.imap_port),
+      imapSecure:
+        entry.imapSecure !== undefined || entry.imap_secure !== undefined
+          ? Boolean(entry.imapSecure ?? entry.imap_secure)
+          : undefined,
+      imapUsername: String(entry.imapUsername ?? entry.imap_username ?? "").trim() || undefined,
+      imapPasswordEncrypted:
+        String(entry.imapPasswordEncrypted ?? entry.imap_password_encrypted ?? "").trim() || undefined,
+      expiresAt: String(entry.expiresAt ?? entry.expires_at ?? "").trim() || undefined,
     }))
     .filter((entry) => entry.accountId && entry.email);
+}
+
+function normalizeProbeImapPort(value: unknown) {
+  const port = Number(value);
+  if (!Number.isFinite(port) || port <= 1) return 993;
+  return Math.max(2, Math.min(65535, Math.round(port)));
 }
 
 function readDeliverabilityProbeResults(value: unknown): DeliverabilityProbeMonitorResult[] {
@@ -11789,12 +12106,20 @@ function readDeliverabilityProbeResults(value: unknown): DeliverabilityProbeMoni
     .map((entry) => ({
       accountId: String(entry.accountId ?? "").trim(),
       email: String(entry.email ?? "").trim().toLowerCase(),
+      provider:
+        String(entry.provider ?? "").trim() === "forward_email"
+          ? ("forward_email" as const)
+          : String(entry.provider ?? "").trim() === "mailbox"
+            ? ("mailbox" as const)
+            : undefined,
       placement:
         ["inbox", "spam", "all_mail_only", "not_found", "error"].includes(String(entry.placement ?? ""))
           ? (String(entry.placement ?? "") as MailboxPlacementVerdict)
           : "error",
       matchedMailbox: String(entry.matchedMailbox ?? "").trim(),
       matchedUid: Math.max(0, Number(entry.matchedUid ?? 0) || 0),
+      archivedAt: String(entry.archivedAt ?? "").trim(),
+      archiveError: String(entry.archiveError ?? "").trim(),
       ok: entry.ok !== false,
       error: String(entry.error ?? "").trim(),
     }))
@@ -11803,6 +12128,19 @@ function readDeliverabilityProbeResults(value: unknown): DeliverabilityProbeMoni
 
 function readDeliverabilityProbeVariant(value: unknown): DeliverabilityProbeVariant {
   return String(value ?? "").trim().toLowerCase() === "baseline" ? "baseline" : "production";
+}
+
+function readDeliverabilityMonitorProvider(value: unknown): DeliverabilityMonitorProviderPreference {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  if (normalized === "forward_email") return "forward_email";
+  if (
+    normalized === "gmail" ||
+    normalized === "gmail_mailbox" ||
+    normalized === "gmail_after_forward_email"
+  ) {
+    return "gmail_mailbox";
+  }
+  return "auto";
 }
 
 function hashDeliverabilityProbeContent(subject: string, body: string) {
@@ -11928,6 +12266,12 @@ function summarizeDeliverabilityProbeResults(results: DeliverabilityProbeMonitor
   };
 }
 
+function isTransientMailboxPlacementError(error: string) {
+  return /timed?\s*out|timeout|temporar|connection closed|econnreset|etimedout/i.test(
+    String(error ?? "")
+  );
+}
+
 function isMailpoolCreditExhaustedError(error: unknown) {
   const message = error instanceof Error ? error.message : String(error ?? "");
   const normalized = message.trim().toLowerCase();
@@ -12020,11 +12364,11 @@ async function queueDeliverabilityProbe(input: {
       if (requestedFromEmail && activeFromEmail && requestedFromEmail !== activeFromEmail) {
         return false;
       }
-      if (requestedSourceMessageId && activeSourceMessageId === requestedSourceMessageId) {
-        return true;
+      if (requestedContentHash) {
+        return activeContentHash === requestedContentHash;
       }
-      if (requestedContentHash && activeContentHash === requestedContentHash) {
-        return true;
+      if (requestedSourceMessageId) {
+        return activeSourceMessageId === requestedSourceMessageId;
       }
       return !requestedSourceMessageId && !requestedContentHash;
     });
@@ -12066,15 +12410,269 @@ async function findRecentDeliverabilityProbeForSender(input: {
       ) {
         return false;
       }
-      if (probeRun.contentHash && input.contentHash && probeRun.contentHash === input.contentHash) {
-        return true;
+      if (input.contentHash) {
+        return probeRun.contentHash === input.contentHash;
       }
-      if (probeRun.sourceMessageId && input.sourceMessageId && probeRun.sourceMessageId === input.sourceMessageId) {
-        return true;
-      }
-      return false;
+      return Boolean(input.sourceMessageId && probeRun.sourceMessageId === input.sourceMessageId);
     }) ?? null
   );
+}
+
+function deliverabilityProbeRunTimestamp(probeRun: DeliverabilityProbeRun) {
+  return toDate(probeRun.completedAt || probeRun.updatedAt || probeRun.createdAt).getTime();
+}
+
+function deliverabilityProbeRunMatchesReference(
+  probeRun: DeliverabilityProbeRun,
+  input: {
+    contentHash: string;
+    sourceMessageId: string;
+  }
+) {
+  if (input.contentHash) {
+    return probeRun.contentHash === input.contentHash;
+  }
+  return Boolean(input.sourceMessageId && probeRun.sourceMessageId === input.sourceMessageId);
+}
+
+function deliverabilityProbeRunHasNoMeasurement(probeRun: DeliverabilityProbeRun) {
+  return (
+    probeRun.status === "failed" &&
+    !probeRun.reservationIds.length &&
+    !probeRun.monitorTargets.length &&
+    !probeRun.results.length
+  );
+}
+
+async function findLatestDeliverabilityProbeForSender(input: {
+  runId: string;
+  senderAccountId: string;
+  fromEmail: string;
+  probeVariant: DeliverabilityProbeVariant;
+  contentHash: string;
+  sourceMessageId: string;
+}) {
+  const probeRuns = await listDeliverabilityProbeRuns({
+    runId: input.runId,
+    senderAccountId: input.senderAccountId,
+    fromEmail: input.fromEmail,
+    probeVariant: input.probeVariant,
+    statuses: ["queued", "sent", "waiting", "completed", "failed"],
+    limit: 50,
+  });
+  return (
+    probeRuns
+      .filter((probeRun) => !deliverabilityProbeRunHasNoMeasurement(probeRun))
+      .filter((probeRun) => deliverabilityProbeRunMatchesReference(probeRun, input))
+      .sort((left, right) => deliverabilityProbeRunTimestamp(right) - deliverabilityProbeRunTimestamp(left))[0] ?? null
+  );
+}
+
+function deliverabilityProbeRunIsFresh(probeRun: DeliverabilityProbeRun) {
+  const elapsed = Date.now() - deliverabilityProbeRunTimestamp(probeRun);
+  return elapsed < DELIVERABILITY_PROBE_REPEAT_HOURS * 60 * 60 * 1000;
+}
+
+function deliverabilityProbeRunAllowsDispatch(probeRun: DeliverabilityProbeRun) {
+  return probeRun.status === "completed" && probeRun.placement === "inbox" && probeRun.totalMonitors > 0;
+}
+
+function deliverabilityProbeRunHasMailboxTarget(probeRun: DeliverabilityProbeRun) {
+  return probeRun.monitorTargets.some((target) => !isForwardEmailProbeTarget(target));
+}
+
+async function hasActiveOrRecentGmailProbeForReference(input: {
+  runId: string;
+  senderAccountId: string;
+  fromEmail: string;
+  probeVariant: DeliverabilityProbeVariant;
+  contentHash: string;
+  sourceMessageId: string;
+}) {
+  const [jobs, probeRuns] = await Promise.all([
+    listRunJobs(input.runId, 50),
+    listDeliverabilityProbeRuns({
+      runId: input.runId,
+      senderAccountId: input.senderAccountId,
+      fromEmail: input.fromEmail,
+      probeVariant: input.probeVariant,
+      statuses: ["queued", "sent", "waiting", "completed", "failed"],
+      limit: 50,
+    }),
+  ]);
+
+  const activeGmailJob = jobs.find((job) => {
+    if (job.jobType !== "monitor_deliverability" || !["queued", "running"].includes(job.status)) return false;
+    const payload = asRecord(job.payload);
+    if (readDeliverabilityMonitorProvider(payload.monitorProvider) !== "gmail_mailbox") return false;
+    if (readDeliverabilityProbeVariant(payload.probeVariant) !== input.probeVariant) return false;
+    const senderAccountId = String(payload.senderAccountId ?? "").trim();
+    const fromEmail = String(payload.fromEmail ?? "").trim().toLowerCase();
+    const contentHash = String(payload.contentHash ?? "").trim();
+    const sourceMessageId = String(payload.sourceMessageId ?? "").trim();
+    if (senderAccountId && senderAccountId !== input.senderAccountId) return false;
+    if (fromEmail && fromEmail !== input.fromEmail) return false;
+    if (input.contentHash) return contentHash === input.contentHash;
+    return Boolean(input.sourceMessageId && sourceMessageId === input.sourceMessageId);
+  });
+  if (activeGmailJob) return true;
+
+  return probeRuns.some((probeRun) => {
+    if (!deliverabilityProbeRunHasMailboxTarget(probeRun)) return false;
+    if (!deliverabilityProbeRunMatchesReference(probeRun, input)) return false;
+    if (probeRun.status === "failed" && deliverabilityProbeRunHasNoMeasurement(probeRun)) return false;
+    return deliverabilityProbeRunIsFresh(probeRun);
+  });
+}
+
+async function maybeQueueGmailProbeAfterForwardEmailPass(input: {
+  run: OutreachRun;
+  probeRun: DeliverabilityProbeRun | null;
+  monitorProviderPreference: DeliverabilityMonitorProviderPreference;
+  monitorTargets: DeliverabilityProbeTarget[];
+  aggregate: ReturnType<typeof summarizeDeliverabilityProbeResults>;
+  referenceMessage: DeliverabilityProbeReferenceMessage;
+  probeVariant: DeliverabilityProbeVariant;
+  contentHash: string;
+  senderAccountId: string;
+  senderAccountName: string;
+  senderFromEmail: string;
+  replyToEmail: string;
+  syntheticBaseline: boolean;
+}) {
+  if (input.monitorProviderPreference === "gmail_mailbox") return;
+  if (input.aggregate.placement !== "inbox" || input.aggregate.counts.inbox <= 0) return;
+  if (!input.monitorTargets.length || !input.monitorTargets.every((target) => isForwardEmailProbeTarget(target))) {
+    return;
+  }
+  const forwardEmailConfig = getForwardEmailProbeConfig();
+  if (forwardEmailConfig?.mode === "only") {
+    await createOutreachEvent({
+      runId: input.run.id,
+      eventType: "deliverability_gmail_probe_skipped",
+      payload: {
+        reason: "Forward Email probe mode is only; campaign-copy Forward Email inbox proof is sufficient for this gate.",
+        parentProbeRunId: input.probeRun?.id ?? "",
+        probeVariant: input.probeVariant,
+        sourceMessageId: input.referenceMessage.id,
+        contentHash: input.contentHash,
+        senderAccountId: input.senderAccountId,
+        fromEmail: input.senderFromEmail.trim().toLowerCase(),
+      },
+    });
+    return;
+  }
+
+  const senderFromEmail = input.senderFromEmail.trim().toLowerCase();
+  const senderDomain = senderDomainFromEmail(senderFromEmail);
+  if (!senderFromEmail || !senderDomain) return;
+
+  const alreadyQueuedOrMeasured = await hasActiveOrRecentGmailProbeForReference({
+    runId: input.run.id,
+    senderAccountId: input.senderAccountId,
+    fromEmail: senderFromEmail,
+    probeVariant: input.probeVariant,
+    contentHash: input.contentHash,
+    sourceMessageId: input.referenceMessage.id,
+  });
+  if (alreadyQueuedOrMeasured) return;
+
+  const gmailTargets = await resolveMailboxDeliverabilityMonitorTargets({
+    runBrandId: input.run.brandId,
+    excludeAccountIds: [input.run.accountId],
+    excludeEmails: [input.replyToEmail, senderFromEmail],
+    gmailOnly: true,
+    excludeSenderDomain: senderDomain,
+    limit: GMAIL_DELIVERABILITY_PROBE_TARGETS_PER_RUN,
+  });
+
+  if (!gmailTargets.length) {
+    await createOutreachEvent({
+      runId: input.run.id,
+      eventType: "deliverability_gmail_probe_skipped",
+      payload: {
+        reason: "Forward Email inboxed, but no fresh Gmail monitor mailbox is available for this sender domain",
+        parentProbeRunId: input.probeRun?.id ?? "",
+        probeVariant: input.probeVariant,
+        sourceMessageId: input.referenceMessage.id,
+        contentHash: input.contentHash,
+        senderAccountId: input.senderAccountId,
+        fromEmail: senderFromEmail,
+        senderDomain,
+      },
+    });
+    return;
+  }
+
+  const gmailProbeToken = generateDeliverabilityProbeToken();
+  const gmailProbeTargets = gmailTargets.map((target) => monitorTargetToProbeTarget(target));
+  const gmailJob = await queueDeliverabilityProbe({
+    runId: input.run.id,
+    executeAfter: nowIso(),
+    force: true,
+    payload: {
+      stage: "send",
+      monitorProvider: "gmail_after_forward_email",
+      parentProbeRunId: input.probeRun?.id ?? "",
+      triggerStage: "autonomous",
+      syntheticBaseline: input.syntheticBaseline,
+      probeToken: gmailProbeToken,
+      probeVariant: input.probeVariant,
+      sourceMessageId: input.referenceMessage.id,
+      sourceMessageStatus: input.referenceMessage.status,
+      sourceType: input.referenceMessage.sourceType,
+      nodeId: input.referenceMessage.nodeId,
+      leadId: input.referenceMessage.leadId,
+      contentHash: input.contentHash,
+      senderAccountId: input.senderAccountId,
+      senderAccountName: input.senderAccountName,
+      fromEmail: senderFromEmail,
+      monitorTargets: gmailProbeTargets,
+    },
+  });
+
+  await createOutreachEvent({
+    runId: input.run.id,
+    eventType: "deliverability_gmail_probe_queued",
+    payload: {
+      reason: "Forward Email inboxed; queued Gmail placement confirmation with an unused Gmail monitor mailbox.",
+      parentProbeRunId: input.probeRun?.id ?? "",
+      jobId: gmailJob.id,
+      probeToken: gmailProbeToken,
+      probeVariant: input.probeVariant,
+      sourceMessageId: input.referenceMessage.id,
+      contentHash: input.contentHash,
+      senderAccountId: input.senderAccountId,
+      fromEmail: senderFromEmail,
+      senderDomain,
+      monitorEmails: gmailProbeTargets.map((target) => target.email),
+    },
+  });
+}
+
+function buildSyntheticDeliverabilityBaselineReference(input: {
+  probeToken: string;
+  sourceMessageId?: string;
+  contentHash: string;
+  senderAccountId: string;
+  senderAccountName: string;
+  senderFromEmail: string;
+}): DeliverabilityProbeReferenceMessage {
+  const sourceMessageId = String(input.sourceMessageId ?? "").trim();
+  return {
+    id: sourceMessageId || `synthetic_baseline_${input.probeToken}`,
+    leadId: "",
+    status: "scheduled",
+    sourceType: "cadence",
+    nodeId: "deliverability_baseline",
+    subject: "",
+    body: "",
+    contentHash: input.contentHash,
+    senderAccountId: input.senderAccountId,
+    senderAccountName: input.senderAccountName,
+    senderFromEmail: input.senderFromEmail,
+    replyToEmail: "",
+  };
 }
 
 async function maybeQueueAutomaticDeliverabilityProbeSet(
@@ -12089,7 +12687,7 @@ async function maybeQueueAutomaticDeliverabilityProbeSet(
     senderAccountId: string;
     senderAccountName: string;
     senderFromEmail: string;
-    triggerStage: "schedule" | "send" | "failover";
+    triggerStage: DeliverabilityProbeTriggerStage;
   }
 ) {
   const senderAccountId = input.senderAccountId.trim();
@@ -12183,6 +12781,337 @@ async function maybeQueueScheduledDeliverabilityProbe(run: OutreachRun) {
     senderFromEmail: getOutreachAccountFromEmail(senderSlot.account).trim(),
     triggerStage: "schedule",
   });
+}
+
+export async function requestRunDeliverabilityProbe(input: {
+  runId: string;
+  reason?: string;
+  force?: boolean;
+  manual?: boolean;
+  sourceMessageId?: string;
+  senderAccountId?: string;
+  variants?: DeliverabilityProbeVariant[];
+  triggerStage?: DeliverabilityProbeTriggerStage;
+}): Promise<{
+  ok: boolean;
+  reason: string;
+  jobsQueued: number;
+  runId: string;
+  sourceMessageId: string;
+  senderAccountId: string;
+  fromEmail: string;
+  probeVariants: DeliverabilityProbeVariant[];
+}> {
+  const run = await getOutreachRun(input.runId);
+  if (!run) {
+    return {
+      ok: false,
+      reason: "Run not found",
+      jobsQueued: 0,
+      runId: input.runId,
+      sourceMessageId: "",
+      senderAccountId: "",
+      fromEmail: "",
+      probeVariants: [],
+    };
+  }
+  const referenceMessage = await resolveDeliverabilityProbeReferenceMessage({
+    runId: run.id,
+    sourceMessageId: input.sourceMessageId,
+    preferScheduled: true,
+  });
+  const requestedVariants = Array.from(
+    new Set((input.variants?.length ? input.variants : ["production", "baseline"]).map(readDeliverabilityProbeVariant))
+  );
+  const canRunSyntheticBaseline = !referenceMessage && requestedVariants.includes("baseline");
+  const canProbeRunStatus =
+    !["canceled", "failed"].includes(run.status) &&
+    (run.status !== "preflight_failed" || canRunSyntheticBaseline);
+  if (!canProbeRunStatus) {
+    return {
+      ok: false,
+      reason: `Run is ${run.status}`,
+      jobsQueued: 0,
+      runId: run.id,
+      sourceMessageId: "",
+      senderAccountId: "",
+      fromEmail: "",
+      probeVariants: [],
+    };
+  }
+
+  const assignment = await getBrandOutreachAssignment(run.brandId);
+  const preferredAccountId =
+    String(input.senderAccountId ?? "").trim() ||
+    referenceMessage?.senderAccountId ||
+    String(assignment?.accountId ?? "").trim() ||
+    run.accountId;
+  const routingContext = await buildRunSenderRoutingContext(run, {
+    preferredAccountId,
+  });
+  let senderSlot =
+    routingContext.senderPoolState.pool.find((slot) => slot.account.id === preferredAccountId) ??
+    routingContext.primarySender ??
+    routingContext.senderPoolState.pool.find((slot) => slot.account.id === run.accountId) ??
+    null;
+  if (!senderSlot && canRunSyntheticBaseline) {
+    senderSlot = await resolveProbeSenderSlot(preferredAccountId);
+  }
+  if (!senderSlot) {
+    return {
+      ok: false,
+      reason: "No active sender account is available for deliverability probing",
+      jobsQueued: 0,
+      runId: run.id,
+      sourceMessageId: referenceMessage?.id ?? "",
+      senderAccountId: preferredAccountId,
+      fromEmail: "",
+      probeVariants: [],
+    };
+  }
+
+  const senderFromEmail = getOutreachAccountFromEmail(senderSlot.account).trim().toLowerCase();
+  if (!senderFromEmail) {
+    return {
+      ok: false,
+      reason: "Selected sender account has no from email for deliverability probing",
+      jobsQueued: 0,
+      runId: run.id,
+      sourceMessageId: referenceMessage?.id ?? "",
+      senderAccountId: senderSlot.account.id,
+      fromEmail: "",
+      probeVariants: [],
+    };
+  }
+
+  const baselineContentHash = buildDeliverabilityBaselineProbe({
+    brandName: "",
+    senderDomain: senderDomainFromEmail(senderFromEmail),
+    probeToken: "control",
+  }).contentHash;
+  const queueableVariants = referenceMessage
+    ? requestedVariants
+    : canRunSyntheticBaseline
+      ? (["baseline"] as DeliverabilityProbeVariant[])
+      : [];
+  if (!queueableVariants.length) {
+    return {
+      ok: false,
+      reason: "No real scheduled or sent message exists for production deliverability probing yet",
+      jobsQueued: 0,
+      runId: run.id,
+      sourceMessageId: "",
+      senderAccountId: senderSlot.account.id,
+      fromEmail: senderFromEmail,
+      probeVariants: [],
+    };
+  }
+  const jobs = [];
+  let syntheticSourceMessageId = "";
+  for (const variant of queueableVariants) {
+    const probeToken = generateDeliverabilityProbeToken();
+    const syntheticBaseline = !referenceMessage && variant === "baseline";
+    const contentHash = variant === "baseline" ? baselineContentHash : referenceMessage?.contentHash ?? "";
+    const sourceMessageId = referenceMessage?.id ?? `synthetic_baseline_${probeToken}`;
+    if (syntheticBaseline) syntheticSourceMessageId = sourceMessageId;
+    const job = await queueDeliverabilityProbe({
+      runId: run.id,
+      executeAfter: nowIso(),
+      force: input.force,
+      payload: {
+        stage: "send",
+        manual: input.manual === true,
+        triggerStage: input.triggerStage ?? (input.manual ? "manual" : "autonomous"),
+        syntheticBaseline,
+        probeToken,
+        probeVariant: variant,
+        sourceMessageId,
+        sourceMessageStatus: referenceMessage?.status ?? "scheduled",
+        sourceType: referenceMessage?.sourceType ?? "cadence",
+        nodeId: referenceMessage?.nodeId ?? "deliverability_baseline",
+        leadId: referenceMessage?.leadId ?? "",
+        contentHash,
+        senderAccountId: senderSlot.account.id,
+        senderAccountName: senderSlot.account.name,
+        fromEmail: senderFromEmail,
+      },
+    });
+    jobs.push(job);
+  }
+
+  const forwardEmailConfig = getForwardEmailProbeConfig();
+  await createOutreachEvent({
+    runId: run.id,
+    eventType: "deliverability_probe_requested",
+    payload: {
+      reason: input.reason?.trim() || (input.manual ? "Requested manually" : "Requested by autonomous deliverability operator"),
+      triggerStage: input.triggerStage ?? (input.manual ? "manual" : "autonomous"),
+      syntheticBaseline: !referenceMessage,
+      sourceMessageId: referenceMessage?.id ?? syntheticSourceMessageId,
+      sourceMessageStatus: referenceMessage?.status ?? "scheduled",
+      sourceType: referenceMessage?.sourceType ?? "cadence",
+      nodeId: referenceMessage?.nodeId ?? "deliverability_baseline",
+      leadId: referenceMessage?.leadId ?? "",
+      contentHash: referenceMessage?.contentHash ?? baselineContentHash,
+      senderAccountId: senderSlot.account.id,
+      senderAccountName: senderSlot.account.name,
+      fromEmail: senderFromEmail,
+      probeVariants: queueableVariants,
+      monitorProvider: forwardEmailConfig ? "forward_email" : "mailbox",
+      forwardEmailMode: forwardEmailConfig?.mode ?? "",
+    },
+  });
+
+  return {
+    ok: true,
+    reason: "Deliverability probes queued",
+    jobsQueued: jobs.length,
+    runId: run.id,
+    sourceMessageId: referenceMessage?.id ?? syntheticSourceMessageId,
+    senderAccountId: senderSlot.account.id,
+    fromEmail: senderFromEmail,
+    probeVariants: queueableVariants,
+  };
+}
+
+async function ensureDispatchDeliverabilityProbeGate(input: {
+  run: OutreachRun;
+  referenceMessage: DeliverabilityProbeReferenceMessage;
+  senderSlot: SenderDispatchSlot;
+}) {
+  if (!DELIVERABILITY_PRE_SEND_GATE_ENABLED) {
+    return { ok: true, reason: "pre-send deliverability gate disabled" };
+  }
+
+  const senderFromEmail = getOutreachAccountFromEmail(input.senderSlot.account).trim().toLowerCase();
+  if (!senderFromEmail) {
+    return { ok: false, reason: "Selected sender account has no from email" };
+  }
+
+  const latestProbe = await findLatestDeliverabilityProbeForSender({
+    runId: input.run.id,
+    senderAccountId: input.senderSlot.account.id,
+    fromEmail: senderFromEmail,
+    probeVariant: "production",
+    contentHash: input.referenceMessage.contentHash,
+    sourceMessageId: input.referenceMessage.id,
+  });
+
+  if (latestProbe) {
+    if (latestProbe.status === "completed" && deliverabilityProbeRunIsFresh(latestProbe)) {
+      if (deliverabilityProbeRunAllowsDispatch(latestProbe)) {
+        return {
+          ok: true,
+          reason: "fresh inbox placement probe passed",
+          probeRunId: latestProbe.id,
+        };
+      }
+      const pauseReason = `Pre-send inbox placement probe did not pass (${latestProbe.summaryText || latestProbe.placement || "unknown placement"})`;
+      await updateOutreachRun(input.run.id, {
+        status: "paused",
+        pauseReason,
+        lastError: pauseReason,
+      });
+      await markExperimentExecutionStatus(input.run.brandId, input.run.campaignId, input.run.experimentId, "paused");
+      await createOutreachEvent({
+        runId: input.run.id,
+        eventType: "run_paused_auto",
+        payload: {
+          reason: "pre_send_deliverability_probe_failed",
+          probeRunId: latestProbe.id,
+          placement: latestProbe.placement,
+          counts: latestProbe.counts,
+          summaryText: latestProbe.summaryText,
+          senderAccountId: input.senderSlot.account.id,
+          fromEmail: senderFromEmail,
+          sourceMessageId: input.referenceMessage.id,
+          contentHash: input.referenceMessage.contentHash,
+        },
+      });
+      return { ok: false, reason: pauseReason, probeRunId: latestProbe.id };
+    }
+
+    if (["queued", "sent", "waiting"].includes(latestProbe.status)) {
+      const waitReason = "Waiting for pre-send inbox placement probe to complete";
+      await createOutreachEvent({
+        runId: input.run.id,
+        eventType: "dispatch_waiting_deliverability_probe",
+        payload: {
+          reason: waitReason,
+          probeRunId: latestProbe.id,
+          probeStatus: latestProbe.status,
+          senderAccountId: input.senderSlot.account.id,
+          fromEmail: senderFromEmail,
+          sourceMessageId: input.referenceMessage.id,
+          contentHash: input.referenceMessage.contentHash,
+        },
+      });
+      await enqueueOutreachJob({
+        runId: input.run.id,
+        jobType: "dispatch_messages",
+        executeAfter: addMinutes(nowIso(), DELIVERABILITY_PRE_SEND_GATE_RECHECK_MINUTES),
+      });
+      return { ok: false, reason: waitReason, probeRunId: latestProbe.id };
+    }
+
+    if (latestProbe.status === "failed" && deliverabilityProbeRunIsFresh(latestProbe)) {
+      const pauseReason = `Pre-send inbox placement probe failed (${latestProbe.lastError || "unknown error"})`;
+      await updateOutreachRun(input.run.id, {
+        status: "paused",
+        pauseReason,
+        lastError: pauseReason,
+      });
+      await markExperimentExecutionStatus(input.run.brandId, input.run.campaignId, input.run.experimentId, "paused");
+      await createOutreachEvent({
+        runId: input.run.id,
+        eventType: "run_paused_auto",
+        payload: {
+          reason: "pre_send_deliverability_probe_failed",
+          probeRunId: latestProbe.id,
+          lastError: latestProbe.lastError,
+          senderAccountId: input.senderSlot.account.id,
+          fromEmail: senderFromEmail,
+          sourceMessageId: input.referenceMessage.id,
+          contentHash: input.referenceMessage.contentHash,
+        },
+      });
+      return { ok: false, reason: pauseReason, probeRunId: latestProbe.id };
+    }
+  }
+
+  const request = await requestRunDeliverabilityProbe({
+    runId: input.run.id,
+    reason: latestProbe
+      ? "Fresh daily pre-send inbox placement probe is due"
+      : "New message content needs pre-send inbox placement proof",
+    senderAccountId: input.senderSlot.account.id,
+    sourceMessageId: input.referenceMessage.id,
+    variants: ["production", "baseline"],
+    triggerStage: "pre_send_gate",
+  });
+  const waitReason = request.ok
+    ? "Queued pre-send inbox placement probe and waiting for result"
+    : request.reason;
+  await createOutreachEvent({
+    runId: input.run.id,
+    eventType: request.ok ? "dispatch_waiting_deliverability_probe" : "deliverability_probe_failed",
+    payload: {
+      reason: waitReason,
+      senderAccountId: input.senderSlot.account.id,
+      fromEmail: senderFromEmail,
+      sourceMessageId: input.referenceMessage.id,
+      contentHash: input.referenceMessage.contentHash,
+      jobsQueued: request.jobsQueued,
+    },
+  });
+  if (request.ok) {
+    await enqueueOutreachJob({
+      runId: input.run.id,
+      jobType: "dispatch_messages",
+      executeAfter: addMinutes(nowIso(), DELIVERABILITY_PRE_SEND_GATE_RECHECK_MINUTES),
+    });
+  }
+  return { ok: false, reason: waitReason };
 }
 
 async function buildRunSenderRoutingContext(run: OutreachRun, input?: { preferredAccountId?: string }) {
@@ -12337,7 +13266,6 @@ async function autoFailoverRunSender(input: {
 async function processMonitorDeliverabilityJob(job: OutreachJob) {
   const run = await getOutreachRun(job.runId);
   if (!run) return;
-  if (["canceled", "failed", "preflight_failed"].includes(run.status)) return;
 
   const payload =
     job.payload && typeof job.payload === "object" && !Array.isArray(job.payload)
@@ -12346,17 +13274,33 @@ async function processMonitorDeliverabilityJob(job: OutreachJob) {
   const stageRaw = String(payload.stage ?? "send").trim().toLowerCase();
   const stage: DeliverabilityProbeStage = stageRaw === "poll" ? "poll" : "send";
   const probeVariant = readDeliverabilityProbeVariant(payload.probeVariant);
+  const monitorProviderPreference = readDeliverabilityMonitorProvider(payload.monitorProvider);
+  const sourceMessageId = String(payload.sourceMessageId ?? "").trim();
+  const syntheticBaseline =
+    probeVariant === "baseline" &&
+    (payload.syntheticBaseline === true || sourceMessageId.startsWith("synthetic_baseline_"));
+  if (["canceled", "failed"].includes(run.status)) return;
+  if (run.status === "preflight_failed" && !syntheticBaseline) return;
   const probeToken = String(payload.probeToken ?? generateDeliverabilityProbeToken()).trim();
   const requestedProbeRunId = String(payload.probeRunId ?? "").trim();
   let probeRun =
     (requestedProbeRunId ? await getDeliverabilityProbeRun(requestedProbeRunId) : null) ||
     (probeToken ? await findDeliverabilityProbeRun({ runId: run.id, probeToken, probeVariant }) : null);
-  const sourceMessageId = String(payload.sourceMessageId ?? "").trim();
-  const referenceMessage = await resolveDeliverabilityProbeReferenceMessage({
+  let referenceMessage = await resolveDeliverabilityProbeReferenceMessage({
     runId: run.id,
     sourceMessageId,
     preferScheduled: stage === "send" && payload.manual === true,
   });
+  if (!referenceMessage && syntheticBaseline) {
+    referenceMessage = buildSyntheticDeliverabilityBaselineReference({
+      probeToken,
+      sourceMessageId,
+      contentHash: String(payload.contentHash ?? "").trim(),
+      senderAccountId: String(payload.senderAccountId ?? run.accountId).trim(),
+      senderAccountName: String(payload.senderAccountName ?? "").trim(),
+      senderFromEmail: String(payload.fromEmail ?? "").trim(),
+    });
+  }
   if (!referenceMessage) {
     await createOutreachEvent({
       runId: run.id,
@@ -12382,7 +13326,14 @@ async function processMonitorDeliverabilityJob(job: OutreachJob) {
     timeZone: run.timezone || DEFAULT_TIMEZONE,
     businessWindow,
   });
-  if (!senderPoolState.pool.length) {
+  const fallbackProbeSenderSlot =
+    syntheticBaseline ? await resolveProbeSenderSlot(preferredSenderAccountId) : null;
+  const probeSenderPool = senderPoolState.pool.length
+    ? senderPoolState.pool
+    : fallbackProbeSenderSlot
+      ? [fallbackProbeSenderSlot]
+      : [];
+  if (!probeSenderPool.length) {
     await createOutreachEvent({
       runId: run.id,
       eventType: "deliverability_probe_failed",
@@ -12398,18 +13349,18 @@ async function processMonitorDeliverabilityJob(job: OutreachJob) {
   const strictSenderAccountId =
     String(payload.senderAccountId ?? "").trim() || referenceMessage.senderAccountId;
   const strictSenderSlot = strictSenderAccountId
-    ? senderPoolState.pool.find((slot) => slot.account.id === strictSenderAccountId) ?? null
+    ? probeSenderPool.find((slot) => slot.account.id === strictSenderAccountId) ?? null
     : null;
   const senderChoice =
     strictSenderSlot
       ? { slot: strictSenderSlot }
       : pickSenderForMessage({
-          pool: senderPoolState.pool,
+          pool: probeSenderPool,
           usage: senderUsage,
           preferredAccountId: preferredSenderAccountId,
         }) ??
-        senderPoolState.pool.find((slot) => slot.account.id === preferredSenderAccountId) ??
-        senderPoolState.pool[0];
+        probeSenderPool.find((slot) => slot.account.id === preferredSenderAccountId) ??
+        probeSenderPool[0];
   if (strictSenderAccountId && !strictSenderSlot) {
     await createOutreachEvent({
       runId: run.id,
@@ -12469,6 +13420,14 @@ async function processMonitorDeliverabilityJob(job: OutreachJob) {
   );
   const resolvedRequestedTargets: DeliverabilityMonitorTarget[] = [];
   for (const requestedTarget of requestedMonitorTargets) {
+    if (isForwardEmailProbeTarget(requestedTarget)) {
+      resolvedRequestedTargets.push({
+        kind: "forward_email",
+        target: requestedTarget,
+        brandId: "",
+      });
+      continue;
+    }
     const account = await getOutreachAccount(requestedTarget.accountId);
     const secrets = account ? await getOutreachAccountSecrets(account.id) : null;
     if (
@@ -12481,6 +13440,7 @@ async function processMonitorDeliverabilityJob(job: OutreachJob) {
       account.config.mailbox.email.trim().toLowerCase() === requestedTarget.email
     ) {
       resolvedRequestedTargets.push({
+        kind: "mailbox",
         account,
         secrets,
         brandId: "",
@@ -12490,10 +13450,22 @@ async function processMonitorDeliverabilityJob(job: OutreachJob) {
   const candidateMonitorTargets =
     resolvedRequestedTargets.length
       ? resolvedRequestedTargets
+      : stage === "poll"
+        ? []
+      : monitorProviderPreference === "gmail_mailbox"
+        ? await resolveMailboxDeliverabilityMonitorTargets({
+            runBrandId: run.brandId,
+            excludeAccountIds: [run.accountId, assignment?.mailboxAccountId ?? ""],
+            excludeEmails: [replyToEmail, senderFromEmail],
+            gmailOnly: true,
+            excludeSenderDomain: senderDomainFromEmail(senderFromEmail),
+            limit: GMAIL_DELIVERABILITY_PROBE_TARGETS_PER_RUN,
+          })
       : await resolveDeliverabilityMonitorTargets({
           runBrandId: run.brandId,
           excludeAccountIds: [run.accountId, assignment?.mailboxAccountId ?? ""],
           excludeEmails: [replyToEmail, senderFromEmail],
+          probeToken,
         });
   const blockedMonitorEmails = await listBlockedMonitorEmailsForSender({
     brandId: run.brandId,
@@ -12501,15 +13473,36 @@ async function processMonitorDeliverabilityJob(job: OutreachJob) {
     fromEmail: senderFromEmail,
     contentHash,
   });
-  const monitorTargets = candidateMonitorTargets.filter((target) => {
-    const monitorEmail = target.account.config.mailbox.email.trim().toLowerCase();
-    return !blockedMonitorEmails.has(monitorEmail);
-  });
+  const monitorTargets =
+    stage === "send"
+      ? candidateMonitorTargets.filter((target) => !blockedMonitorEmails.has(monitorTargetEmail(target)))
+      : candidateMonitorTargets;
 
   if (!monitorTargets.length) {
+    await releaseForwardEmailProbeTargets(candidateMonitorTargets.map((target) => monitorTargetToProbeTarget(target)));
+    if (monitorProviderPreference === "gmail_mailbox") {
+      await createOutreachEvent({
+        runId: run.id,
+        eventType: "deliverability_gmail_probe_skipped",
+        payload: {
+          reason: candidateMonitorTargets.length
+            ? "No unused Gmail deliverability mailbox remains for this sender domain"
+            : "No Gmail deliverability mailbox is available",
+          probeVariant,
+          probeToken,
+          sourceMessageId: referenceMessage.id,
+          contentHash,
+          senderAccountId: senderChoice.slot.account.id,
+          fromEmail: senderFromEmail,
+          senderDomain: senderDomainFromEmail(senderFromEmail),
+          requestedAfterForwardEmailProbeRunId: String(payload.parentProbeRunId ?? "").trim(),
+        },
+      });
+      return;
+    }
     const monitorUnavailableReason = candidateMonitorTargets.length
-      ? "No unused deliverability monitor mailbox remains for this sender"
-      : "No dedicated deliverability monitor group is connected";
+      ? "No unused deliverability probe target remains for this sender"
+      : "No deliverability probe target is connected";
     let spamCheckFallback:
       | {
           spamCheckId: string;
@@ -12627,10 +13620,7 @@ async function processMonitorDeliverabilityJob(job: OutreachJob) {
       probeVariant,
       contentHash,
       probeToken,
-      targets: monitorTargets.map((target) => ({
-        accountId: target.account.id,
-        email: target.account.config.mailbox.email.trim().toLowerCase(),
-      })),
+      targets: monitorTargets.map((target) => monitorTargetToProbeTarget(target)),
     });
     const reservationByMonitorKey = new Map(
       reservations.map((reservation) => [
@@ -12640,8 +13630,8 @@ async function processMonitorDeliverabilityJob(job: OutreachJob) {
     );
     const reservedMonitorTargets = monitorTargets
       .map((target) => {
-        const email = target.account.config.mailbox.email.trim().toLowerCase();
-        const reservation = reservationByMonitorKey.get(`${target.account.id}:${email}`) ?? null;
+        const email = monitorTargetEmail(target);
+        const reservation = reservationByMonitorKey.get(`${monitorTargetAccountId(target)}:${email}`) ?? null;
         if (!reservation) return null;
         return {
           reservation,
@@ -12651,10 +13641,9 @@ async function processMonitorDeliverabilityJob(job: OutreachJob) {
       .filter((entry): entry is { reservation: Awaited<typeof reservations>[number]; target: DeliverabilityMonitorTarget } =>
         Boolean(entry)
       );
-    const reservedTargets = reservedMonitorTargets.map(({ reservation }) => ({
+    const reservedTargets = reservedMonitorTargets.map(({ reservation, target }) => ({
+      ...monitorTargetToProbeTarget(target),
       reservationId: reservation.id,
-      accountId: reservation.monitorAccountId,
-      email: reservation.monitorEmail,
     }));
     probeRun = await updateDeliverabilityProbeRun(probeRun.id, {
       reservationIds: reservations.map((reservation) => reservation.id),
@@ -12668,7 +13657,8 @@ async function processMonitorDeliverabilityJob(job: OutreachJob) {
     const initialResults: DeliverabilityProbeMonitorResult[] = [];
 
     for (const { reservation, target: monitorTarget } of reservedMonitorTargets) {
-      const monitorEmail = monitorTarget.account.config.mailbox.email.trim();
+      const monitorEmail = monitorTargetEmail(monitorTarget);
+      const monitorAccountId = monitorTargetAccountId(monitorTarget);
       const send = await sendMonitoringProbeMessage({
         account: senderChoice.slot.account,
         secrets: senderChoice.slot.secrets,
@@ -12680,7 +13670,7 @@ async function processMonitorDeliverabilityJob(job: OutreachJob) {
         body,
         probeVariant,
         probeToken,
-        monitorAccountId: monitorTarget.account.id,
+        monitorAccountId,
         monitorEmail,
         sourceMessageId: referenceMessage.id,
         sourceMessageStatus: referenceMessage.status,
@@ -12691,16 +13681,16 @@ async function processMonitorDeliverabilityJob(job: OutreachJob) {
       });
       if (send.ok) {
         sentTargets.push({
+          ...monitorTargetToProbeTarget(monitorTarget),
           reservationId: reservation.id,
-          accountId: monitorTarget.account.id,
-          email: monitorEmail.toLowerCase(),
           providerMessageId: send.providerMessageId,
         });
         continue;
       }
       initialResults.push({
-        accountId: monitorTarget.account.id,
+        accountId: monitorAccountId,
         email: monitorEmail.toLowerCase(),
+        provider: monitorTargetProvider(monitorTarget),
         placement: "error",
         matchedMailbox: "",
         matchedUid: 0,
@@ -12734,23 +13724,27 @@ async function processMonitorDeliverabilityJob(job: OutreachJob) {
         releasedAt: nowIso(),
         releasedReason: "probe_send_failed",
       });
+      await releaseForwardEmailProbeTargets(
+        reservedTargets.filter((target) => failedReservationIds.includes(target.reservationId ?? ""))
+      );
     }
 
     if (!sentTargets.length) {
+      await releaseForwardEmailProbeTargets(reservedTargets);
       if (probeRun) {
         await updateDeliverabilityProbeRun(probeRun.id, {
           status: "failed",
           stage: "send",
           results: initialResults,
           totalMonitors: initialResults.length,
-          lastError: "Monitoring probe send failed for every seed mailbox",
+          lastError: "Monitoring probe send failed for every probe target",
         });
       }
       await createOutreachEvent({
         runId: run.id,
         eventType: "deliverability_probe_failed",
         payload: {
-          reason: "Monitoring probe send failed for every seed mailbox",
+          reason: "Monitoring probe send failed for every probe target",
           probeToken,
           probeRunId: probeRun?.id ?? "",
           probeVariant,
@@ -12765,12 +13759,7 @@ async function processMonitorDeliverabilityJob(job: OutreachJob) {
       probeRun = await updateDeliverabilityProbeRun(probeRun.id, {
         status: "sent",
         stage: "send",
-        monitorTargets: sentTargets.map(({ reservationId, accountId, email, providerMessageId }) => ({
-          reservationId,
-          accountId,
-          email,
-          providerMessageId,
-        })),
+        monitorTargets: sentTargets,
         results: initialResults,
         totalMonitors: sentTargets.length,
         lastError: "",
@@ -12807,6 +13796,7 @@ async function processMonitorDeliverabilityJob(job: OutreachJob) {
       force: true,
       payload: {
         stage: "poll",
+        monitorProvider: monitorProviderPreference === "gmail_mailbox" ? "gmail_after_forward_email" : "auto",
         probeRunId: probeRun?.id ?? "",
         probeVariant,
         probeToken,
@@ -12820,14 +13810,10 @@ async function processMonitorDeliverabilityJob(job: OutreachJob) {
         senderAccountId: senderChoice.slot.account.id,
         senderAccountName: senderChoice.slot.account.name,
         fromEmail: senderFromEmail,
-        monitorTargets: sentTargets.map(({ reservationId, accountId, email, providerMessageId }) => ({
-          reservationId,
-          accountId,
-          email,
-          providerMessageId,
-        })),
+        monitorTargets: sentTargets,
         previousResults: initialResults,
         pollAttempt: 1,
+        syntheticBaseline,
       },
     });
     return;
@@ -12841,54 +13827,94 @@ async function processMonitorDeliverabilityJob(job: OutreachJob) {
   const pollResults: DeliverabilityProbeMonitorResult[] = [];
 
   for (const target of monitorTargetsForPoll) {
-    const account = await getOutreachAccount(target.accountId);
-    const secrets = account ? await getOutreachAccountSecrets(account.id) : null;
-    if (
-      !account ||
-      !secrets ||
-      account.status !== "active" ||
-      !supportsMailbox(account) ||
-      !secrets.mailboxPassword.trim()
-    ) {
-      pollResults.push({
-        accountId: target.accountId,
-        email: target.email,
-        placement: "error",
-        matchedMailbox: "",
-        matchedUid: 0,
-        ok: false,
-        error: "Monitoring mailbox is missing, inactive, or no longer has credentials",
+    let placement: Awaited<ReturnType<typeof inspectMailboxPlacement>>;
+    if (isForwardEmailProbeTarget(target)) {
+      const password = decryptForwardEmailProbePassword(target);
+      const imapHost = String(target.imapHost ?? "").trim();
+      const imapUsername = String(target.imapUsername ?? target.email).trim();
+      if (!password || !imapHost || !imapUsername) {
+        pollResults.push({
+          accountId: target.accountId,
+          email: target.email,
+          provider: "forward_email",
+          placement: "error",
+          matchedMailbox: "",
+          matchedUid: 0,
+          ok: false,
+          error: "Forward Email probe target is missing IMAP credentials",
+        });
+        continue;
+      }
+      placement = await inspectMailboxPlacement({
+        mailbox: {
+          host: imapHost,
+          port: Number(target.imapPort ?? 993) || 993,
+          secure: target.imapSecure !== false,
+          email: imapUsername,
+          password,
+        },
+        fromEmail,
+        subject,
+        since: new Date(Date.now() - DAY_MS),
       });
-      continue;
+    } else {
+      const account = await getOutreachAccount(target.accountId);
+      const secrets = account ? await getOutreachAccountSecrets(account.id) : null;
+      if (
+        !account ||
+        !secrets ||
+        account.status !== "active" ||
+        !supportsMailbox(account) ||
+        !secrets.mailboxPassword.trim()
+      ) {
+        pollResults.push({
+          accountId: target.accountId,
+          email: target.email,
+          provider: "mailbox",
+          placement: "error",
+          matchedMailbox: "",
+          matchedUid: 0,
+          ok: false,
+          error: "Monitoring mailbox is missing, inactive, or no longer has credentials",
+        });
+        continue;
+      }
+
+      placement = await inspectMailboxPlacement({
+        mailbox: {
+          host: account.config.mailbox.host.trim(),
+          port: Number(account.config.mailbox.port ?? 993) || 993,
+          secure: account.config.mailbox.secure !== false,
+          email: account.config.mailbox.email.trim(),
+          password: secrets.mailboxPassword.trim(),
+        },
+        fromEmail,
+        subject,
+        since: new Date(Date.now() - DAY_MS),
+        archiveMatchedInbox: GMAIL_DELIVERABILITY_MONITOR_EMAILS.has(
+          account.config.mailbox.email.trim().toLowerCase()
+        ),
+      });
     }
 
-    const placement = await inspectMailboxPlacement({
-      mailbox: {
-        host: account.config.mailbox.host.trim(),
-        port: Number(account.config.mailbox.port ?? 993) || 993,
-        secure: account.config.mailbox.secure !== false,
-        email: account.config.mailbox.email.trim(),
-        password: secrets.mailboxPassword.trim(),
-      },
-      fromEmail,
-      subject,
-      since: new Date(Date.now() - DAY_MS),
-    });
-
-    if (placement.ok && placement.placement === "not_found" && pollAttempt < 3) {
-      pendingTargets.push({
-        accountId: target.accountId,
-        email: target.email,
-      });
+    if (
+      pollAttempt < 3 &&
+      ((placement.ok && placement.placement === "not_found") ||
+        (!placement.ok && isTransientMailboxPlacementError(placement.error)))
+    ) {
+      pendingTargets.push(target);
       continue;
     }
 
     pollResults.push({
       accountId: target.accountId,
       email: target.email,
+      provider: isForwardEmailProbeTarget(target) ? "forward_email" : "mailbox",
       placement: placement.placement,
       matchedMailbox: placement.matchedMailbox,
       matchedUid: placement.matchedUid,
+      archivedAt: placement.archivedAt ?? "",
+      archiveError: placement.archiveError ?? "",
       ok: placement.ok,
       error: placement.error,
     });
@@ -12933,6 +13959,7 @@ async function processMonitorDeliverabilityJob(job: OutreachJob) {
       force: true,
       payload: {
         stage: "poll",
+        monitorProvider: monitorProviderPreference === "gmail_mailbox" ? "gmail_after_forward_email" : "auto",
         probeRunId: probeRun?.id ?? "",
         probeVariant,
         probeToken,
@@ -12967,6 +13994,7 @@ async function processMonitorDeliverabilityJob(job: OutreachJob) {
       releasedReason: "probe_completed",
     });
   }
+  await releaseForwardEmailProbeTargets(monitorTargetsForPoll);
 
   if (probeRun) {
     probeRun = await updateDeliverabilityProbeRun(probeRun.id, {
@@ -13007,6 +14035,22 @@ async function processMonitorDeliverabilityJob(job: OutreachJob) {
       summaryText: aggregate.summaryText,
       monitorResults: finalResults,
     },
+  });
+
+  await maybeQueueGmailProbeAfterForwardEmailPass({
+    run,
+    probeRun,
+    monitorProviderPreference,
+    monitorTargets: monitorTargetsForPoll,
+    aggregate,
+    referenceMessage,
+    probeVariant,
+    contentHash,
+    senderAccountId: senderChoice.slot.account.id,
+    senderAccountName: senderChoice.slot.account.name,
+    senderFromEmail,
+    replyToEmail,
+    syntheticBaseline,
   });
 
   const senderScorecard = buildSenderDeliverabilityScorecards({
@@ -13247,44 +14291,40 @@ async function processSourceLeadsJob(job: OutreachJob) {
     return;
   }
 
-  let existingLeads = await listRunLeads(run.id);
-  if (!existingLeads.length) {
-    const ownerRuns = await listOwnerRuns(run.brandId, run.ownerType, run.ownerId);
-    const donorRuns = ownerRuns.filter((candidate) => candidate.id !== run.id);
-    if (donorRuns.length) {
-      const donorLeadLists = await Promise.all(donorRuns.map((candidate) => listRunLeads(candidate.id)));
-      const donorLeads = donorLeadLists.flat();
-      if (donorLeads.length) {
-        existingLeads = await upsertRunLeads(
-          run.id,
-          run.brandId,
-          run.campaignId,
-          donorLeads.map((lead) => ({
-            email: lead.email,
-            name: lead.name,
-            company: lead.company,
-            title: lead.title,
-            domain: lead.domain,
-            sourceUrl: lead.sourceUrl,
-          }))
-        );
-        await createOutreachEvent({
-          runId: run.id,
-          eventType: "lead_sourcing_seeded_from_owner",
-          payload: {
-            donorRunIds: donorRuns.map((candidate) => candidate.id),
-            count: existingLeads.length,
-          },
-        });
-      }
-    }
-  }
   const payload =
     job.payload && typeof job.payload === "object" && !Array.isArray(job.payload)
       ? (job.payload as Record<string, unknown>)
       : {};
   const sampleOnly = payload.sampleOnly === true;
+  const deliverabilityProofOnly = payload.deliverabilityProofOnly === true;
   const resumeState = parseDeferredSourcingState(payload.resumeState);
+
+  let existingLeads = await listRunLeads(run.id);
+  if (!existingLeads.length) {
+    const maxReusableSeedLeads = Number(payload.maxLeadsOverride ?? 0);
+    const reusableSeedLeads = await collectReusableLaunchSeedLeads({
+      brandId: run.brandId,
+      campaignId: run.campaignId,
+      experimentId: run.experimentId,
+      ownerType: run.ownerType,
+      ownerId: run.ownerId,
+      excludeRunId: run.id,
+      maxLeads: maxReusableSeedLeads > 0 ? maxReusableSeedLeads : undefined,
+      requireRealVerifiedEmail: true,
+    });
+    if (reusableSeedLeads.length) {
+      existingLeads = await upsertRunLeads(run.id, run.brandId, run.campaignId, reusableSeedLeads);
+      await createOutreachEvent({
+        runId: run.id,
+        eventType: "lead_sourcing_seeded_from_owner",
+        payload: {
+          count: existingLeads.length,
+          source: run.ownerType ? `${run.ownerType}_owner_runs` : "runtime_experiment_runs",
+          realVerifiedEmailRequired: true,
+        },
+      });
+    }
+  }
 
   const campaign = await getCampaignById(run.brandId, run.campaignId);
   if (!campaign) {
@@ -13307,6 +14347,26 @@ async function processSourceLeadsJob(job: OutreachJob) {
     return;
   }
   const activeExperiment = experiment;
+  const runtimeExperiment = await getExperimentRecordByRuntimeRef(run.brandId, run.campaignId, run.experimentId);
+
+  if (runtimeExperiment) {
+    const unverifiedReusableLeads = existingLeads.filter(
+      (lead) => lead.realVerifiedEmail !== true && isReusableExperimentLeadStatus(lead.status)
+    );
+    if (unverifiedReusableLeads.length) {
+      await Promise.all(unverifiedReusableLeads.map((lead) => updateRunLead(lead.id, { status: "suppressed" })));
+      existingLeads = await listRunLeads(run.id);
+      await createOutreachEvent({
+        runId: run.id,
+        eventType: "lead_sourcing_unverified_leads_suppressed",
+        payload: {
+          count: unverifiedReusableLeads.length,
+          strategy: "enrichanything_verified_prospect_table",
+          reason: "runtime experiment requires real-verified EnrichAnything emails",
+        },
+      });
+    }
+  }
 
   const account = await getOutreachAccount(run.accountId);
   const secrets = await getOutreachAccountSecrets(run.accountId);
@@ -13329,6 +14389,184 @@ async function processSourceLeadsJob(job: OutreachJob) {
       Number(payload.maxLeadsOverride ?? sourceConfig.maxLeads ?? (sampleOnly ? APIFY_PROBE_MAX_LEADS : 100)) || 100
     )
   );
+  const existingLeadCountBeforeTopUp = existingLeads.length;
+  const reusableVerifiedLeadCount = (leads: OutreachRunLead[]) =>
+    leads.filter(
+      (lead) =>
+        lead.realVerifiedEmail === true &&
+        isReusableExperimentLeadStatus(lead.status) &&
+        !getLeadEmailSuppressionReason(extractFirstEmailAddress(lead.email))
+    ).length;
+  const verifiedLeadCountBeforeTopUp = reusableVerifiedLeadCount(existingLeads);
+  const preserveTopUpFailure = (reason: string, failurePayload: Record<string, unknown> = {}) =>
+    preservePreparedRunAfterTopUpFailure({
+      run,
+      reason,
+      payload: failurePayload,
+      existingLeadCount: existingLeadCountBeforeTopUp,
+      targetLeadCount: maxLeads,
+      sampleOnly,
+      deliverabilityProofOnly,
+    });
+
+  if (runtimeExperiment) {
+    if (run.status === "queued") {
+      await updateOutreachRun(run.id, { status: "sourcing", lastError: "" });
+      await markExperimentExecutionStatus(run.brandId, run.campaignId, run.experimentId, "sourcing");
+      await createOutreachEvent({ runId: run.id, eventType: "run_started", payload: {} });
+    }
+
+    await createOutreachEvent({
+      runId: run.id,
+      eventType: "lead_sourcing_requested",
+      payload: {
+        strategy: "enrichanything_verified_prospect_table",
+        maxLeads,
+        existingLeadCount: existingLeads.length,
+        sampleOnly,
+        deliverabilityProofOnly,
+      },
+    });
+
+    let prepResult: Awaited<ReturnType<typeof prepareExperimentSendableContacts>>;
+    try {
+      prepResult = await prepareExperimentSendableContacts({
+        brandId: run.brandId,
+        experimentId: runtimeExperiment.id,
+        emailFinderApiBaseUrl: resolveEmailFinderApiBaseUrl(),
+        forceEnabled: true,
+        requireRealVerifiedEmail: true,
+      });
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : "EnrichAnything sourcing failed";
+      if (
+        verifiedLeadCountBeforeTopUp > 0 &&
+        (await preservePreparedRunAfterTopUpFailure({
+          run,
+          reason: "EnrichAnything top-up failed before adding new verified prospects.",
+          payload: {
+            providerError: reason,
+            experimentOwnerId: runtimeExperiment.id,
+          },
+          existingLeadCount: verifiedLeadCountBeforeTopUp,
+          targetLeadCount: maxLeads,
+          sampleOnly,
+          deliverabilityProofOnly,
+        }))
+      ) {
+        return;
+      }
+      await failRunWithDiagnostics({
+        run,
+        reason: `EnrichAnything sourcing failed: ${reason}`,
+        eventType: "lead_sourcing_failed",
+        payload: {
+          experimentOwnerId: runtimeExperiment.id,
+        },
+      });
+      return;
+    }
+
+    const reusableLeads = await collectReusableLaunchSeedLeads({
+      brandId: run.brandId,
+      campaignId: run.campaignId,
+      experimentId: run.experimentId,
+      ownerType: run.ownerType,
+      ownerId: run.ownerId,
+      excludeRunId: run.id,
+      maxLeads,
+      requireRealVerifiedEmail: true,
+    });
+    const currentEmails = new Set(
+      existingLeads.map((lead) => extractFirstEmailAddress(lead.email).toLowerCase()).filter(Boolean)
+    );
+    const missingLeads = reusableLeads
+      .filter((lead) => !currentEmails.has(extractFirstEmailAddress(lead.email).toLowerCase()))
+      .slice(0, Math.max(0, maxLeads - existingLeads.length));
+
+    if (missingLeads.length) {
+      existingLeads = await upsertRunLeads(run.id, run.brandId, run.campaignId, missingLeads);
+    }
+
+    const finalLeadCount = reusableVerifiedLeadCount(existingLeads);
+    const currentMessages = await listRunMessages(run.id);
+    const { threads } = await listReplyThreadsByBrand(run.brandId);
+    await updateOutreachRun(run.id, {
+      status: sampleOnly ? "completed" : finalLeadCount > 0 ? "scheduled" : "sourcing",
+      lastError: "",
+      completedAt: sampleOnly ? nowIso() : "",
+      sourcingTraceSummary: {
+        phase: finalLeadCount > 0 ? "completed" : "failed",
+        selectedActorIds: ["enrichanything.live_table", "emailfinder.batch", "validatedmails"],
+        lastActorInputError: prepResult.liveTopUpError || prepResult.enrichmentError || "",
+        failureStep: finalLeadCount > 0 ? "" : "enrichanything_import",
+        budgetUsedUsd: 0,
+      },
+      metrics: buildLiveRunMetrics({
+        run,
+        messages: currentMessages,
+        threads,
+        sourcedLeads: finalLeadCount,
+      }),
+    });
+
+    await createOutreachEvent({
+      runId: run.id,
+      eventType: finalLeadCount > verifiedLeadCountBeforeTopUp ? "lead_sourced" : "lead_sourcing_skipped",
+      payload: {
+        strategy: "enrichanything_verified_prospect_table",
+        source: "enrichanything",
+        count: finalLeadCount,
+        storedLeadCount: existingLeads.length,
+        addedCount: Math.max(0, finalLeadCount - verifiedLeadCountBeforeTopUp),
+        targetLeadCount: maxLeads,
+        importedCount: prepResult.importedCount,
+        matchedCount: prepResult.matchedCount,
+        skippedCount: prepResult.skippedCount,
+        dedupedCount: prepResult.dedupedCount,
+        parseErrorCount: prepResult.parseErrorCount,
+        liveTopUpAttempted: prepResult.liveTopUpAttempted,
+        liveTopUpRunId: prepResult.liveTopUpRunId,
+        liveTopUpRowsAppended: prepResult.liveTopUpRowsAppended,
+        liveTopUpStatus: prepResult.liveTopUpStatus,
+        liveTopUpError: prepResult.liveTopUpError,
+        enrichmentError: prepResult.enrichmentError,
+        failureSummary: prepResult.failureSummary,
+        realVerifiedEmailRequired: true,
+        sampleOnly,
+        deliverabilityProofOnly,
+      },
+    });
+
+    if (finalLeadCount <= 0) {
+      const verificationBlocker = prepResult.enrichmentError || prepResult.liveTopUpError || "";
+      await failRunWithDiagnostics({
+        run,
+        reason: verificationBlocker
+          ? `EnrichAnything returned no real-verified sendable prospects: ${verificationBlocker}.`
+          : "EnrichAnything returned no real-verified sendable prospects.",
+        eventType: "lead_sourcing_failed",
+        payload: {
+          targetLeadCount: maxLeads,
+          prepResult,
+        },
+      });
+      return;
+    }
+
+    if (!sampleOnly) {
+      await enqueueOutreachJob({
+        runId: run.id,
+        jobType: "schedule_messages",
+        executeAfter: nowIso(),
+        payload: { deliverabilityProofOnly },
+      });
+    } else {
+      await markExperimentExecutionStatus(run.brandId, run.campaignId, run.experimentId, "completed");
+    }
+    return;
+  }
+
   if (existingLeads.length) {
     const existingRunMessages = await listRunMessages(run.id);
     const { threads } = await listReplyThreadsByBrand(run.brandId);
@@ -13357,6 +14595,7 @@ async function processSourceLeadsJob(job: OutreachJob) {
         count: existingLeads.length,
         targetLeadCount: maxLeads,
         sampleOnly,
+        deliverabilityProofOnly,
       },
     });
     if (!sampleOnly) {
@@ -13364,42 +14603,27 @@ async function processSourceLeadsJob(job: OutreachJob) {
         runId: run.id,
         jobType: "schedule_messages",
         executeAfter: nowIso(),
+        payload: { deliverabilityProofOnly },
       });
     }
     if (existingLeads.length >= maxLeads) {
       return;
     }
   }
-  const runtimeExperiment = await getExperimentRecordByRuntimeRef(run.brandId, run.campaignId, run.experimentId);
-  if (
-    existingLeads.length > 0 &&
-    runtimeExperiment &&
-    isReportCommentExperiment(runtimeExperiment)
-  ) {
-    await createOutreachEvent({
-      runId: run.id,
-      eventType: "lead_sourcing_seeded_owner_preserved",
-      payload: {
-        count: existingLeads.length,
-        reason: "report_comment_seeded_owner_leads",
-      },
-    });
-    return;
-  }
   const baseAudienceContext = buildSourcingAudienceContext({
-    runtimeAudience: runtimeExperiment?.audience ?? "",
+    runtimeAudience: "",
     hypothesisAudience: hypothesis.actorQuery,
     experimentNotes: activeExperiment.notes,
   });
   const brand = await getBrandById(run.brandId);
-  const offerContext = runtimeExperiment?.offer?.trim() || activeExperiment.notes || hypothesis.rationale || "";
+  const offerContext = activeExperiment.notes || hypothesis.rationale || "";
   const audienceContext = await resolveSourcingAudienceContext({
     base: baseAudienceContext,
     brandName: brand?.name ?? "",
     brandWebsite: brand?.website ?? "",
-    experimentName: runtimeExperiment?.name?.trim() || activeExperiment.name,
+    experimentName: activeExperiment.name,
     offer: offerContext,
-    notes: [activeExperiment.notes, hypothesis.rationale, runtimeExperiment?.audience ?? ""].filter(Boolean).join(" | "),
+    notes: [activeExperiment.notes, hypothesis.rationale].filter(Boolean).join(" | "),
   });
   const targetAudience = audienceContext.targetAudience;
   const triggerContext = audienceContext.triggerContext;
@@ -13539,6 +14763,15 @@ async function processSourceLeadsJob(job: OutreachJob) {
       resumeState,
     });
   } catch (error) {
+    if (
+      await preserveTopUpFailure("Lead top-up provider failed before adding new prospects.", {
+        providerError: error instanceof Error ? error.message : "Unknown error",
+        targetAudience,
+        triggerContext,
+      })
+    ) {
+      return;
+    }
     await setTrace({
       phase: "failed",
       failureStep: "probe_chain",
@@ -13811,6 +15044,15 @@ async function processSourceLeadsJob(job: OutreachJob) {
   });
 
   if (!exaSourcing.acceptedLeads.length) {
+    if (
+      await preserveTopUpFailure("Lead top-up found no additional sendable prospects.", {
+        queryDiagnostics: exaSourcing.diagnostics,
+        emailEnrichment: exaSourcing.emailEnrichment,
+        topRejections: summarizeTopReasons(exaSourcing.rejectedLeads),
+      })
+    ) {
+      return;
+    }
     await setTrace({
       phase: "failed",
       failureStep: "execute_chain",
@@ -13856,11 +15098,19 @@ async function processSourceLeadsJob(job: OutreachJob) {
 
   await finishSourcingWithLeads(run, exaSourcing.acceptedLeads, {
     sampleOnly,
+    deliverabilityProofOnly,
     allowMissingEmail: sampleOnly,
     qualityPolicy,
     rejectedDecisions: exaSourcing.rejectedLeads,
     decision: exaDecision,
     emailEnrichment: exaSourcing.emailEnrichment,
+    topUpFailureContext:
+      existingLeadCountBeforeTopUp > 0 && existingLeadCountBeforeTopUp < maxLeads
+        ? {
+            existingLeadCount: existingLeadCountBeforeTopUp,
+            targetLeadCount: maxLeads,
+          }
+        : undefined,
   });
   return;
 
@@ -13872,11 +15122,16 @@ async function finishSourcingWithLeads(
   leads: ApifyLead[],
   options: {
     sampleOnly?: boolean;
+    deliverabilityProofOnly?: boolean;
     allowMissingEmail?: boolean;
     qualityPolicy?: LeadQualityPolicy;
     rejectedDecisions?: LeadAcceptanceDecision[];
     decision?: SourcingChainDecision | null;
     emailEnrichment?: ExaPeopleSourcingResult["emailEnrichment"] | null;
+    topUpFailureContext?: {
+      existingLeadCount: number;
+      targetLeadCount: number;
+    };
   } = {}
 ) {
   const runtimeExperiment = await getExperimentRecordByRuntimeRef(
@@ -14004,6 +15259,30 @@ async function finishSourcingWithLeads(
   }
 
   if (!filteredLeads.length) {
+    if (
+      options.topUpFailureContext &&
+      (await preservePreparedRunAfterTopUpFailure({
+        run,
+        reason: verificationUnavailable
+          ? "Lead top-up could not verify candidate emails."
+          : "Lead top-up candidates were rejected by quality or duplicate rules.",
+        payload: {
+          sourcedCount: leads.length,
+          blockedCount: leads.length,
+          suppressionCounts,
+          topPolicyRejections: summarizeTopReasons(policyRejections),
+          decisionId: options.decision?.id ?? "",
+          verificationUnavailable,
+          emailEnrichmentError,
+        },
+        existingLeadCount: options.topUpFailureContext.existingLeadCount,
+        targetLeadCount: options.topUpFailureContext.targetLeadCount,
+        sampleOnly: options.sampleOnly,
+        deliverabilityProofOnly: options.deliverabilityProofOnly,
+      }))
+    ) {
+      return;
+    }
     await failRunWithDiagnostics({
       run,
       reason: verificationUnavailable
@@ -14038,6 +15317,22 @@ async function finishSourcingWithLeads(
   );
 
   if (!upserted.length) {
+    if (
+      options.topUpFailureContext &&
+      (await preservePreparedRunAfterTopUpFailure({
+        run,
+        reason: "Lead top-up produced candidates but could not persist new prospects.",
+        payload: {
+          attempted: filteredLeads.length,
+        },
+        existingLeadCount: options.topUpFailureContext.existingLeadCount,
+        targetLeadCount: options.topUpFailureContext.targetLeadCount,
+        sampleOnly: options.sampleOnly,
+        deliverabilityProofOnly: options.deliverabilityProofOnly,
+      }))
+    ) {
+      return;
+    }
     await failRunWithDiagnostics({
       run,
       reason: "Lead persistence failed (0 leads stored)",
@@ -14069,6 +15364,7 @@ async function finishSourcingWithLeads(
       suppressionCounts,
       topPolicyRejections: summarizeTopReasons(policyRejections),
       sampleOnly: options.sampleOnly === true,
+      deliverabilityProofOnly: options.deliverabilityProofOnly === true,
       decisionId: options.decision?.id ?? "",
       verificationUnavailable,
       emailEnrichmentError,
@@ -14080,6 +15376,9 @@ async function finishSourcingWithLeads(
       runId: run.id,
       jobType: "schedule_messages",
       executeAfter: nowIso(),
+      payload: {
+        deliverabilityProofOnly: options.deliverabilityProofOnly === true,
+      },
     });
   } else {
     await markExperimentExecutionStatus(run.brandId, run.campaignId, run.experimentId, "completed");
@@ -14090,6 +15389,8 @@ async function processScheduleMessagesJob(job: OutreachJob) {
   const run = await getOutreachRun(job.runId);
   if (!run) return;
   if (["paused", "completed", "canceled", "failed", "preflight_failed"].includes(run.status)) return;
+  const payload = asRecord(job.payload);
+  const deliverabilityProofOnly = payload.deliverabilityProofOnly === true;
 
   const existingMessages = await listRunMessages(run.id);
 
@@ -14324,6 +15625,23 @@ async function processScheduleMessagesJob(job: OutreachJob) {
   });
   await maybeQueueScheduledDeliverabilityProbe(run);
   await markExperimentExecutionStatus(run.brandId, run.campaignId, run.experimentId, "scheduled");
+  if (deliverabilityProofOnly) {
+    const refreshedMessages = await listRunMessages(run.id);
+    const proofMessageCount = refreshedMessages.filter((message) =>
+      ["scheduled", "sent"].includes(message.status)
+    ).length;
+    await createOutreachEvent({
+      runId: run.id,
+      eventType: "deliverability_proof_prepare_completed",
+      payload: {
+        proofMessageCount,
+        scheduledMessagesCount,
+        dispatchQueued: false,
+      },
+    });
+    return;
+  }
+
   await enqueueOutreachJob({ runId: run.id, jobType: "dispatch_messages", executeAfter: nowIso() });
   if (hasConversationMap) {
     await enqueueOutreachJob({
@@ -14407,7 +15725,14 @@ async function processDispatchMessagesJob(job: OutreachJob) {
       primarySender = failover.nextSender;
     }
   }
-  const assignment = await getBrandOutreachAssignment(run.brandId);
+  let assignment = await getBrandOutreachAssignment(run.brandId);
+  if (!assignment || !String(assignment.mailboxAccountId ?? "").trim()) {
+    assignment = await setBrandOutreachAssignment(run.brandId, {
+      accountId: primarySender.account.id,
+      accountIds: [primarySender.account.id],
+      mailboxAccountId: primarySender.account.id,
+    });
+  }
   const mailboxAccountId = String(assignment?.mailboxAccountId ?? "").trim();
   if (!mailboxAccountId) {
     await failRunWithDiagnostics({
@@ -14462,6 +15787,9 @@ async function processDispatchMessagesJob(job: OutreachJob) {
       runId: run.id,
       jobType: "dispatch_messages",
       executeAfter: resumeAt,
+      payload: {
+        source: "business_hours",
+      },
     });
     return;
   }
@@ -14480,6 +15808,15 @@ async function processDispatchMessagesJob(job: OutreachJob) {
     });
     await markExperimentExecutionStatus(run.brandId, run.campaignId, run.experimentId, "monitoring");
     await enqueueOutreachJob({ runId: run.id, jobType: "analyze_run", executeAfter: addHours(nowIso(), 1) });
+    return;
+  }
+
+  const preSendDeliverabilityGate = await ensureDispatchDeliverabilityProbeGate({
+    run,
+    referenceMessage: buildDeliverabilityProbeReferenceMessage(due[0]),
+    senderSlot: primarySender,
+  });
+  if (!preSendDeliverabilityGate.ok) {
     return;
   }
 
@@ -15550,78 +16887,16 @@ export async function updateRunControl(input: {
   }
 
   if (input.action === "probe_deliverability") {
-    const referenceMessage = await resolveDeliverabilityProbeReferenceMessage({
+    const result = await requestRunDeliverabilityProbe({
       runId: run.id,
-      preferScheduled: true,
-    });
-    if (!referenceMessage) {
-      return {
-        ok: false,
-        reason: "No real scheduled or sent message exists for deliverability probing yet",
-      };
-    }
-    const baselineContentHash = referenceMessage.senderFromEmail
-      ? buildDeliverabilityBaselineProbe({
-          brandName: "",
-          senderDomain: senderDomainFromEmail(referenceMessage.senderFromEmail),
-          probeToken: "control",
-        }).contentHash
-      : "";
-    await queueDeliverabilityProbe({
-      runId: run.id,
-      executeAfter: nowIso(),
+      reason: input.reason?.trim() || "Requested by user",
       force: true,
-      payload: {
-        stage: "send",
-        manual: true,
-        probeToken: generateDeliverabilityProbeToken(),
-        probeVariant: "production",
-        sourceMessageId: referenceMessage.id,
-        sourceMessageStatus: referenceMessage.status,
-        sourceType: referenceMessage.sourceType,
-        nodeId: referenceMessage.nodeId,
-        leadId: referenceMessage.leadId,
-        contentHash: referenceMessage.contentHash,
-        senderAccountId: referenceMessage.senderAccountId,
-        senderAccountName: referenceMessage.senderAccountName,
-        fromEmail: referenceMessage.senderFromEmail,
-      },
+      manual: true,
+      senderAccountId: input.senderAccountId,
+      variants: ["production", "baseline"],
+      triggerStage: "manual",
     });
-    await queueDeliverabilityProbe({
-      runId: run.id,
-      executeAfter: nowIso(),
-      force: true,
-      payload: {
-        stage: "send",
-        manual: true,
-        probeToken: generateDeliverabilityProbeToken(),
-        probeVariant: "baseline",
-        sourceMessageId: referenceMessage.id,
-        sourceMessageStatus: referenceMessage.status,
-        sourceType: referenceMessage.sourceType,
-        nodeId: referenceMessage.nodeId,
-        leadId: referenceMessage.leadId,
-        contentHash: baselineContentHash,
-        senderAccountId: referenceMessage.senderAccountId,
-        senderAccountName: referenceMessage.senderAccountName,
-        fromEmail: referenceMessage.senderFromEmail,
-      },
-    });
-    await createOutreachEvent({
-      runId: run.id,
-      eventType: "deliverability_probe_requested",
-      payload: {
-        reason: input.reason?.trim() || "Requested by user",
-        sourceMessageId: referenceMessage.id,
-        sourceMessageStatus: referenceMessage.status,
-        sourceType: referenceMessage.sourceType,
-        nodeId: referenceMessage.nodeId,
-        leadId: referenceMessage.leadId,
-        contentHash: referenceMessage.contentHash,
-        probeVariants: ["baseline", "production"],
-      },
-    });
-    return { ok: true, reason: "Deliverability probes queued" };
+    return { ok: result.ok, reason: result.reason };
   }
 
   if (input.action === "resume_sender_deliverability") {

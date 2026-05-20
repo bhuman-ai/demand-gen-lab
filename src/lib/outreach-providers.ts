@@ -695,6 +695,9 @@ export function resolveEmailFinderApiBaseUrl(explicit?: string) {
   for (const candidate of candidates) {
     const normalized = String(candidate ?? "")
       .trim()
+      .replace(/\\n/g, "")
+      .replace(/\n/g, "")
+      .replace(/\/n$/, "")
       .replace(/\/+$/, "");
     if (normalized) return normalized;
   }

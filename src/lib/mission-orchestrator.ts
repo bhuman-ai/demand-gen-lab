@@ -321,6 +321,23 @@ async function findReusableBatchReadinessApproval(input: {
   );
 }
 
+function batchReadinessAiUnavailable(plan: BatchReadinessPlan) {
+  const text = `${plan.rationale} ${asString(plan.toolInput.reason)} ${plan.expectedOutcome}`.toLowerCase();
+  return /openai_api_key|ai request failed|billing_not_active|account is not active|temporar|rate limit|http 429|model|provider/.test(text);
+}
+
+function canContinueStartedBatchDuringAiOutage(snapshot: BatchReadinessSnapshot) {
+  if (snapshot.deliverability.stage !== "ready") return false;
+  if (snapshot.batch.scheduledMessageCount <= 0) return false;
+  if (snapshot.batch.sentMessageCount <= 0) return false;
+  if (snapshot.batch.failedMessageCount > 0 || snapshot.batch.bouncedMessageCount > 0) return false;
+  if (snapshot.jobs.activeSourceJobIds.length || snapshot.jobs.activeScheduleJobIds.length) return false;
+  return (
+    snapshot.allowedToolNames.includes("dispatch_prepared_batch") ||
+    snapshot.allowedToolNames.includes("run_smoke_test")
+  );
+}
+
 async function buildBatchReadinessSnapshot(input: {
   mission: Mission;
   approvedPlan: MissionPlan;
@@ -933,6 +950,54 @@ async function ensureBatchReadyForDispatch(input: {
   let summary = plan.rationale;
   let result: Record<string, unknown> = {};
   const jobs = await listRunJobs(input.runId, 50).catch(() => []);
+
+  if (
+    plan.toolName === "wait_for_batch_readiness" &&
+    batchReadinessAiUnavailable(plan) &&
+    canContinueStartedBatchDuringAiOutage(snapshot)
+  ) {
+    summary =
+      "AI batch-readiness provider is unavailable, but this batch already started, campaign-copy deliverability is ready, and the remaining scheduled messages have no active preparation blockers.";
+    result = {
+      mode: "continue_started_batch_during_ai_outage",
+      scheduledMessageCount: snapshot.batch.scheduledMessageCount,
+      sentMessageCount: snapshot.batch.sentMessageCount,
+      targetLeadCount: snapshot.batch.targetLeadCount,
+      providerFailure: asString(plan.toolInput.reason) || plan.rationale,
+    };
+    await createMissionEvent({
+      missionId: input.mission.id,
+      brandId: input.mission.brandId,
+      eventType: "batch_dispatch_released_during_ai_provider_outage",
+      summary,
+      payload: result,
+    });
+    await createMissionAgentDecision({
+      missionId: input.mission.id,
+      brandId: input.mission.brandId,
+      agent: "mission_batch_readiness_operator",
+      action: "continue_started_batch_during_ai_outage",
+      rationale: summary,
+      riskLevel: "guarded_write",
+      input: {
+        model: plan.model,
+        providerPlan: plan,
+        snapshot,
+      },
+      output: {
+        ready: true,
+        summary,
+        result,
+        recordedAt: nowIso(),
+      },
+    });
+    return {
+      ready: true,
+      reason: summary,
+      scheduledMessageCount: snapshot.batch.scheduledMessageCount,
+      targetLeadCount: snapshot.batch.targetLeadCount,
+    };
+  }
 
   if (!snapshot.allowedToolNames.includes(plan.toolName)) {
     summary = `AI selected ${plan.toolName}, but current batch guardrails do not allow it.`;

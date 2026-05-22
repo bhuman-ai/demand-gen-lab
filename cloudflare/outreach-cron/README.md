@@ -1,6 +1,8 @@
 # Cloudflare Outreach Cron Worker
 
-This worker replaces Vercel Cron and calls the app's combined operator tick:
+This worker is the legacy combined scheduler. Leave `OUTREACH_COMBINED_TICK_ENABLED=false` when Vercel split crons are active, otherwise this duplicates dispatch/prep/ops work.
+
+When enabled, it calls the app's combined operator tick:
 
 - `POST /api/internal/outreach/tick`
 

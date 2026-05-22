@@ -54,6 +54,7 @@ import {
 import { countScaleCampaignSendableLeadContacts } from "@/lib/scale-campaign-prospect-import";
 import { prepareScaleCampaignSendableContacts } from "@/lib/scale-campaign-sendable-prep";
 import { getCanonicalSenderPoolForBrand } from "@/lib/senders";
+import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { getVercelRegistrarMode } from "@/lib/vercel-domain-registrar";
 
 type ActivationAction =
@@ -195,6 +196,7 @@ type ActivationConfig = {
   dryRun: boolean;
   limitBrands: number;
   maxActionsPerTick: number;
+  planCooldownMinutes: number;
   provisionFailureCooldownMinutes: number;
   allowDomainRegistration: boolean;
   allowGrowthTools: boolean;
@@ -426,6 +428,7 @@ function readConfig(): ActivationConfig {
     dryRun: envBoolean("BRAND_ACTIVATION_AUTOPILOT_DRY_RUN", false),
     limitBrands: envNumber("BRAND_ACTIVATION_AUTOPILOT_LIMIT", 20, 1, 80),
     maxActionsPerTick: envNumber("BRAND_ACTIVATION_AUTOPILOT_ACTIONS_PER_TICK", 1, 1, 5),
+    planCooldownMinutes: envNumber("BRAND_ACTIVATION_AUTOPILOT_PLAN_COOLDOWN_MINUTES", 60, 5, 1440),
     provisionFailureCooldownMinutes: envNumber(
       "BRAND_ACTIVATION_AUTOPILOT_PROVISION_FAILURE_COOLDOWN_MINUTES",
       60,
@@ -1168,6 +1171,67 @@ function summarizeEligibleWork(snapshots: BrandActivationSnapshot[]) {
       executionSummary: snapshot.outreach.executionSummary,
       missions: snapshot.missions.slice(0, 3),
     }));
+}
+
+function latestSnapshotMissionUpdatedAt(snapshot: BrandActivationSnapshot) {
+  return snapshot.missions.reduce((latest, mission) => {
+    const timestamp = toTimestamp(mission.updatedAt);
+    return timestamp > latest ? timestamp : latest;
+  }, 0);
+}
+
+async function readRecentActivationDecisionTimes(brandIds: string[], sinceIso: string) {
+  const latestByBrandId = new Map<string, number>();
+  if (brandIds.length === 0) return latestByBrandId;
+
+  const supabase = getSupabaseAdmin();
+  if (!supabase) return latestByBrandId;
+
+  const { data, error } = await supabase
+    .from("demanddev_mission_agent_decisions")
+    .select("brand_id,created_at")
+    .eq("agent", "brand_activation_operator")
+    .in("brand_id", brandIds)
+    .gte("created_at", sinceIso)
+    .order("created_at", { ascending: false })
+    .limit(Math.max(brandIds.length * 8, 50));
+
+  if (error || !data) return latestByBrandId;
+
+  for (const row of data as Array<{ brand_id?: string; created_at?: string }>) {
+    const brandId = asString(row.brand_id);
+    const timestamp = toTimestamp(asString(row.created_at));
+    if (!brandId || timestamp <= 0) continue;
+    latestByBrandId.set(brandId, Math.max(latestByBrandId.get(brandId) ?? 0, timestamp));
+  }
+
+  return latestByBrandId;
+}
+
+async function filterSnapshotsDueForPlanning(snapshots: BrandActivationSnapshot[], config: ActivationConfig) {
+  const eligible = snapshots.filter(snapshotNeedsAutonomousWork);
+  if (eligible.length === 0) {
+    return { due: eligible, skipped: 0, eligible: 0 };
+  }
+
+  const cooldownMs = config.planCooldownMinutes * 60_000;
+  const sinceIso = new Date(Date.now() - cooldownMs).toISOString();
+  const recentByBrandId = await readRecentActivationDecisionTimes(
+    eligible.map((snapshot) => snapshot.brand.id),
+    sinceIso
+  );
+
+  const due = eligible.filter((snapshot) => {
+    const lastDecisionAt = recentByBrandId.get(snapshot.brand.id) ?? 0;
+    if (lastDecisionAt <= 0) return true;
+    return latestSnapshotMissionUpdatedAt(snapshot) > lastDecisionAt + 30_000;
+  });
+
+  return {
+    due,
+    skipped: eligible.length - due.length,
+    eligible: eligible.length,
+  };
 }
 
 async function buildSnapshots(config: ActivationConfig): Promise<BrandActivationSnapshot[]> {
@@ -3106,7 +3170,25 @@ export async function runBrandActivationAutopilot(limitOverride?: number) {
     };
   }
 
-  const { plan, model } = await planActivationWithLlm({ snapshots, config });
+  const planning = await filterSnapshotsDueForPlanning(snapshots, config);
+  if (!planning.due.length) {
+    return {
+      enabled: true,
+      dryRun: config.dryRun,
+      planned: 0,
+      executed: 0,
+      summary:
+        planning.eligible === 0
+          ? "No brands currently need autonomous GPT planning."
+          : `Skipped GPT planning for ${planning.skipped} eligible brand${
+              planning.skipped === 1 ? "" : "s"
+            }; each is still inside the ${config.planCooldownMinutes}-minute planning cooldown.`,
+      model: "",
+      actions: [] as BrandActivationResult[],
+    };
+  }
+
+  const { plan, model } = await planActivationWithLlm({ snapshots: planning.due, config });
   const statusByBrandId = new Map(
     (await buildOutreachStatusResponse({ limitBrands: Math.max(config.limitBrands, 50) })).brands.map((status) => [
       status.brandId,

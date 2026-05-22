@@ -1489,12 +1489,16 @@ function extractChatCompletionText(payloadRaw: unknown) {
 
 function resolveOpenRouterTaskModel(openAiModel: string, taskName: string) {
   const taskEnvKey = `OPENROUTER_MODEL_${taskName.toUpperCase().replace(/[^A-Z0-9]+/g, "_")}`;
+  const routineModel = cleanProviderSecret(process.env.OPENROUTER_MODEL_ROUTINE) || "google/gemini-3.5-flash";
   const configured = cleanProviderSecret(
     process.env[taskEnvKey] ??
       process.env.OPENROUTER_MODEL_DEFAULT ??
       ""
   );
-  const model = configured || openAiModel || "gpt-5.5";
+  const model =
+    configured && !/^openai\/gpt-5\.5(?:$|-)|^gpt-5\.5(?:$|-)/i.test(configured)
+      ? configured
+      : routineModel || openAiModel || "google/gemini-3.5-flash";
   if (model.includes("/")) return model;
   if (/^gpt-/i.test(model)) return `openai/${model}`;
   return model;

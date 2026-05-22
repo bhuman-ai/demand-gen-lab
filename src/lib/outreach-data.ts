@@ -441,11 +441,17 @@ function sanitizeAccountConfig(value: unknown): OutreachAccountConfig {
   const apify = asRecord(row.apify);
   const social = asRecord(row.social);
   const mailbox = asRecord(row.mailbox);
+  const outbound = asRecord(row.outbound);
   const mailpoolStatus = String(mailpool.status ?? "").trim().toLowerCase();
   const socialRole = String(social.role ?? "").trim().toLowerCase();
   const socialConnectionProvider = String(social.connectionProvider ?? social.connection_provider ?? "").trim().toLowerCase();
 
   return {
+    outbound: {
+      enabled: outbound.enabled === true,
+      disabledAt: String(outbound.disabledAt ?? outbound.disabled_at ?? "").trim(),
+      disabledReason: String(outbound.disabledReason ?? outbound.disabled_reason ?? "").trim(),
+    },
     customerIo: {
       siteId: String(customerIo.siteId ?? "").trim(),
       workspaceId: String(customerIo.workspaceId ?? "").trim(),
@@ -1433,6 +1439,7 @@ function mapDeliverabilityProbeTarget(input: unknown): DeliverabilityProbeTarget
 
 function mapDeliverabilityProbeMonitorResult(input: unknown): DeliverabilityProbeMonitorResult {
   const row = asRecord(input);
+  const cleanup = asRecord(row.cleanup);
   return {
     accountId: String(row.account_id ?? row.accountId ?? "").trim(),
     email: String(row.email ?? "").trim().toLowerCase(),
@@ -1441,6 +1448,16 @@ function mapDeliverabilityProbeMonitorResult(input: unknown): DeliverabilityProb
     matchedUid: Math.max(0, Number(row.matched_uid ?? row.matchedUid ?? 0) || 0),
     ok: Boolean(row.ok),
     error: String(row.error ?? "").trim(),
+    cleanup: Object.keys(cleanup).length
+      ? {
+          attempted: cleanup.attempted === true,
+          ok: cleanup.ok !== false,
+          actions: Array.isArray(cleanup.actions)
+            ? cleanup.actions.map((item) => String(item ?? "").trim()).filter(Boolean)
+            : [],
+          error: String(cleanup.error ?? "").trim(),
+        }
+      : undefined,
   };
 }
 
@@ -2632,20 +2649,6 @@ export async function updateOutreachAccount(
           supabaseConfigured: supabaseConfigured(),
           accountId,
           supabaseError: supabaseErrorDebug(error),
-        },
-      });
-    }
-
-    if (isVercel) {
-      throw new OutreachDataError("Supabase updated the outreach account, but no saved row was returned.", {
-        status: 500,
-        hint: "Inspect runtime logs for updateOutreachAccount to confirm whether the write matched a row.",
-        debug: {
-          operation: "updateOutreachAccount",
-          runtime: runtimeLabel(),
-          supabaseConfigured: supabaseConfigured(),
-          accountId,
-          matchedRow: false,
         },
       });
     }
@@ -6493,6 +6496,39 @@ export async function createWarmupSeedReservations(input: {
         continue;
       }
       if (isUniqueViolationError(error)) {
+        const { data: existing, error: existingError } = await supabase
+          .from(TABLE_WARMUP_SEED_RESERVATION)
+          .select("*")
+          .eq("run_id", row.runId)
+          .eq("monitor_account_id", row.monitorAccountId)
+          .maybeSingle();
+        if (existingError || !existing) {
+          continue;
+        }
+        const { data: reactivated, error: reactivateError } = await supabase
+          .from(TABLE_WARMUP_SEED_RESERVATION)
+          .update({
+            brand_id: row.brandId,
+            sender_account_id: row.senderAccountId,
+            from_email: row.fromEmail,
+            monitor_email: row.monitorEmail,
+            status: "reserved",
+            provider_message_id: "",
+            released_reason: "",
+            reserved_at: now,
+            consumed_at: null,
+            released_at: null,
+            updated_at: now,
+          })
+          .eq("id", String((existing as { id?: unknown }).id ?? ""))
+          .select("*");
+        if (reactivateError) {
+          throw reactivateError;
+        }
+        const hit = Array.isArray(reactivated) ? reactivated[0] : reactivated;
+        if (hit) {
+          inserted.push(mapWarmupSeedReservationRow(hit));
+        }
         continue;
       }
       throw error;
@@ -6509,6 +6545,25 @@ export async function createWarmupSeedReservations(input: {
   const inserted: WarmupSeedReservation[] = [];
   for (const row of rows) {
     if (existingReservedByMonitorId.has(row.monitorAccountId)) {
+      continue;
+    }
+    const existingIndex = store.warmupSeedReservations.findIndex(
+      (reservation) =>
+        reservation.runId === row.runId &&
+        reservation.monitorAccountId === row.monitorAccountId &&
+        reservation.status !== "reserved"
+    );
+    if (existingIndex >= 0) {
+      const reactivated = {
+        ...store.warmupSeedReservations[existingIndex],
+        ...row,
+        id: store.warmupSeedReservations[existingIndex].id,
+        createdAt: store.warmupSeedReservations[existingIndex].createdAt,
+        updatedAt: now,
+      };
+      store.warmupSeedReservations[existingIndex] = reactivated;
+      existingReservedByMonitorId.add(row.monitorAccountId);
+      inserted.push(reactivated);
       continue;
     }
     store.warmupSeedReservations.unshift(row);
@@ -6566,6 +6621,7 @@ export async function updateWarmupSeedReservations(
   }
   return updated;
 }
+
 export async function updateRunAnomalies(
   anomalyIds: string[],
   patch: Partial<Pick<RunAnomaly, "severity" | "status" | "threshold" | "observed" | "details">>

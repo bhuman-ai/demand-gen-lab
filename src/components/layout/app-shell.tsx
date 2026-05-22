@@ -12,7 +12,6 @@ import {
   Radar,
   Settings,
   Sparkles,
-  TestTubeDiagonal,
 } from "lucide-react";
 import { useEffect, useLayoutEffect, useMemo, useState } from "react";
 import { fetchBrandDirectory, readCachedBrandDirectory } from "@/lib/brand-directory-client";
@@ -34,8 +33,14 @@ type NavItem = {
   icon: React.ComponentType<{ className?: string }>;
 };
 
+type OperatorOpenRequest = {
+  id: number;
+  message: string;
+  autoSend: boolean;
+};
+
 type MainNavItem = NavItem & {
-  id: "experiments" | "campaigns" | "network" | "leads" | "inbox" | "social-discovery";
+  id: "missions" | "campaigns" | "network" | "leads" | "inbox" | "social-discovery";
 };
 
 const CHROMELESS_ROUTES = new Set(["/autoads", "/google-ads-review"]);
@@ -55,6 +60,11 @@ function breadcrumb(pathname: string, activeBrandName?: string) {
   if (parts[0] !== "brands") return `last b2b / ${parts.map(prettySegment).join(" / ")}`;
   if (parts[1] === "new") return "last b2b / New brand";
   const normalized = ["last b2b", activeBrandName || "Brand"];
+  if (parts[2] === "missions") {
+    normalized.push("Missions");
+    if (parts[3]) normalized.push("Mission");
+    return normalized.join(" / ");
+  }
   if (parts[2] === "experiments") {
     normalized.push("Experiments");
     if (parts[3] === "suggestions") {
@@ -94,6 +104,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
     name: readCachedBrandDirectory().find((row) => row.id === activeBrandId)?.name || "",
   }));
   const [operatorOpen, setOperatorOpen] = useState(false);
+  const [operatorRequest, setOperatorRequest] = useState<OperatorOpenRequest | null>(null);
 
   useLayoutEffect(() => {
     redirectToCanonicalLastB2bHost();
@@ -154,6 +165,21 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     if (chromeless) return;
+    const handleOpenOperator = (event: Event) => {
+      const detail = (event as CustomEvent<Partial<Pick<OperatorOpenRequest, "message" | "autoSend">>>).detail ?? {};
+      setOperatorRequest({
+        id: Date.now(),
+        message: typeof detail.message === "string" ? detail.message : "",
+        autoSend: Boolean(detail.autoSend),
+      });
+      setOperatorOpen(true);
+    };
+    window.addEventListener("lastb2b:open-operator", handleOpenOperator);
+    return () => window.removeEventListener("lastb2b:open-operator", handleOpenOperator);
+  }, [chromeless]);
+
+  useEffect(() => {
+    if (chromeless) return;
     const previous = sessionStorage.getItem("factory.previousPath");
     const beforePrevious = sessionStorage.getItem("factory.beforePreviousPath");
     if (beforePrevious && pathname === beforePrevious && previous && previous !== pathname) {
@@ -208,10 +234,10 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   const mainItems = useMemo<MainNavItem[]>(
     () => [
       {
-        id: "experiments",
-        label: "Experiments",
-        href: hasActiveBrand ? `${brandRoot}/experiments` : "/brands",
-        icon: TestTubeDiagonal,
+        id: "missions",
+        label: "Missions",
+        href: hasActiveBrand ? `${brandRoot}/missions` : "/brands",
+        icon: Sparkles,
       },
       { id: "campaigns", label: "Campaigns", href: hasActiveBrand ? `${brandRoot}/campaigns` : "/brands", icon: FolderKanban },
       { id: "network", label: "Senders", href: hasActiveBrand ? `${brandRoot}/network` : "/brands", icon: Network },
@@ -229,7 +255,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
 
   const activeMainItem = useMemo(() => {
     if (hasActiveBrand) {
-      if (pathname === `${brandRoot}/experiments` || pathname.startsWith(`${brandRoot}/experiments/`)) return "experiments";
+      if (pathname === `${brandRoot}/missions` || pathname.startsWith(`${brandRoot}/missions/`)) return "missions";
       if (pathname === `${brandRoot}/campaigns` || pathname.startsWith(`${brandRoot}/campaigns/`)) return "campaigns";
       if (pathname === `${brandRoot}/network` || pathname.startsWith(`${brandRoot}/network/`)) return "network";
       if (pathname === `${brandRoot}/leads` || pathname.startsWith(`${brandRoot}/leads/`)) return "leads";
@@ -346,6 +372,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
         onOpenChange={setOperatorOpen}
         activeBrandId={activeBrandId}
         activeBrandName={activeBrandName}
+        initialRequest={operatorRequest}
       />
     </div>
   );

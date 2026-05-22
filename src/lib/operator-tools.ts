@@ -32,6 +32,14 @@ import {
   updateScaleCampaignRecord,
 } from "@/lib/experiment-data";
 import { refreshMailpoolOutreachAccount } from "@/lib/mailpool-account-refresh";
+import {
+  createLeadrLinkedInAuthLink,
+  createLeadrLinkedInCampaign,
+  getLeadrChannelSnapshot,
+  resumeLeadrLinkedInCampaign,
+  syncLeadrLinkedInCampaign,
+} from "@/lib/leadr-channel";
+import { listLeadrAccounts } from "@/lib/leadr-client";
 import { getOperatorBrandContext, getOperatorSenderContext } from "@/lib/operator-context";
 import type { OperatorToolName, OperatorToolResult, OperatorToolSpec } from "@/lib/operator-types";
 import {
@@ -493,6 +501,66 @@ const TOOL_SPECS: OperatorToolSpec[] = [
     },
   },
   {
+    name: "get_leadr_snapshot",
+    riskLevel: "read",
+    approvalMode: "none",
+    description: "Inspect Leadr LinkedIn channel configuration, connected accounts, channel runs, and recent touches.",
+    previewTitle: "Get Leadr snapshot",
+    run: async (input) => {
+      const snapshot = await getLeadrChannelSnapshot({
+        brandId: asString(input.brandId),
+        userId: asString(input.userId),
+      });
+      return {
+        summary: snapshot.configured
+          ? `Leadr has ${snapshot.accounts.length} LinkedIn account${snapshot.accounts.length === 1 ? "" : "s"} available and ${snapshot.runs.length} recorded channel run${snapshot.runs.length === 1 ? "" : "s"}.`
+          : `Leadr is not fully configured. Missing ${snapshot.missingEnv.join(", ") || "configuration"}.`,
+        result: snapshot as Record<string, unknown>,
+      } satisfies OperatorToolResult;
+    },
+  },
+  {
+    name: "list_leadr_accounts",
+    riskLevel: "read",
+    approvalMode: "none",
+    description: "List LinkedIn accounts connected in Leadr and whether each one is runnable.",
+    previewTitle: "List Leadr accounts",
+    run: async (input) => {
+      const accounts = await listLeadrAccounts({ userId: asString(input.userId) });
+      return {
+        summary: `Leadr returned ${accounts.length} LinkedIn account${accounts.length === 1 ? "" : "s"}.`,
+        result: { accounts } as Record<string, unknown>,
+      } satisfies OperatorToolResult;
+    },
+  },
+  {
+    name: "create_leadr_auth_link",
+    riskLevel: "safe_write",
+    approvalMode: "none",
+    description: "Create a hosted Leadr LinkedIn auth link for a user to connect a LinkedIn account.",
+    previewTitle: "Create Leadr auth link",
+    buildPreview: (input) =>
+      buildSimplePreview(
+        "Create Leadr auth link",
+        `Create a LinkedIn connection link${asString(input.userId) ? ` for ${asString(input.userId)}` : ""}.`
+      ),
+    run: async (input) => {
+      const link = await createLeadrLinkedInAuthLink({
+        userId: asString(input.userId),
+        redirectUrl: asString(input.redirectUrl),
+      });
+      return {
+        summary: "Created a Leadr LinkedIn connection link.",
+        result: link as Record<string, unknown>,
+        receipt: {
+          title: "Leadr auth link created",
+          summary: "Use this link to connect a LinkedIn account in Leadr.",
+          details: [link.url ? `URL: ${link.url}` : "Leadr did not return a URL."],
+        },
+      } satisfies OperatorToolResult;
+    },
+  },
+  {
     name: "refresh_mailpool_sender",
     riskLevel: "safe_write",
     approvalMode: "none",
@@ -547,6 +615,8 @@ const TOOL_SPECS: OperatorToolSpec[] = [
         domainMode: asString(input.domainMode) === "register" ? "register" : "existing",
         domain: requireString(input, "domain"),
         fromLocalPart: requireString(input, "fromLocalPart"),
+        senderFirstName: requireString(input, "senderFirstName"),
+        senderLastName: requireString(input, "senderLastName"),
         autoPickCustomerIoAccount: false,
         customerIoSourceAccountId: "",
         forwardingTargetUrl: asString(input.forwardingTargetUrl),
@@ -1194,6 +1264,119 @@ const TOOL_SPECS: OperatorToolSpec[] = [
           title: "Campaign run updated",
           summary: `${campaign.name}: ${result.reason}.`,
           details: [`Run id: ${run.id}`],
+        },
+      } satisfies OperatorToolResult;
+    },
+  },
+  {
+    name: "create_leadr_campaign",
+    riskLevel: "guarded_write",
+    approvalMode: "confirm",
+    description:
+      "Launch a LinkedIn campaign through Leadr from a connected LinkedIn account, using the actual campaign copy.",
+    previewTitle: "Create Leadr campaign",
+    buildPreview: (input) =>
+      buildSimplePreview(
+        "Create Leadr campaign",
+        `Launch ${asString(input.name) || "a LinkedIn campaign"} through Leadr with ${
+          asNumber(input.limit, 25) || 25
+        } target${(asNumber(input.limit, 25) || 25) === 1 ? "" : "s"}.`
+      ),
+    run: async (input) => {
+      const brandId = requireString(input, "brandId");
+      const result = await createLeadrLinkedInCampaign({
+        brandId,
+        missionId: asString(input.missionId),
+        userId: asString(input.userId),
+        accountId: requireString(input, "accountId"),
+        campaignUrl: asString(input.campaignUrl),
+        sourceType: asString(input.sourceType) as Parameters<typeof createLeadrLinkedInCampaign>[0]["sourceType"],
+        managedWorkspaceId: asString(input.managedWorkspaceId),
+        managedTableId: asString(input.managedTableId),
+        enrichanythingOrigin: asString(input.enrichanythingOrigin),
+        name: asString(input.name),
+        message: requireString(input, "message"),
+        limit: Math.max(1, asNumber(input.limit, 25)),
+        invite: input.invite !== false,
+        timeZone: asString(input.timeZone),
+        startTime: asString(input.startTime),
+        daysOfWeek: asStringArray(input.daysOfWeek),
+        workflowActionOrder: asStringArray(input.workflowActionOrder),
+        sourceRunId: asString(input.sourceRunId),
+        sourceCampaignId: asString(input.sourceCampaignId),
+        sourceExperimentId: asString(input.sourceExperimentId),
+        targetSummary: asString(input.targetSummary),
+      });
+      return {
+        summary: `${result.channelRun.name || "Leadr campaign"} is queued in Leadr.`,
+        result: result as unknown as Record<string, unknown>,
+        receipt: {
+          title: "Leadr campaign created",
+          summary: result.providerCampaign?.id
+            ? `${result.channelRun.name} is linked to Leadr campaign ${result.providerCampaign.id}.`
+            : `${result.channelRun.name} was accepted by Leadr; provider id is still pending.`,
+          details: [
+            `Channel run: ${result.channelRun.id}`,
+            result.providerCampaign?.id ? `Provider campaign: ${result.providerCampaign.id}` : "Provider campaign id not found yet.",
+            `LinkedIn account: ${result.account.name || result.account.accountId}`,
+          ],
+        },
+      } satisfies OperatorToolResult;
+    },
+  },
+  {
+    name: "sync_leadr_campaign",
+    riskLevel: "safe_write",
+    approvalMode: "none",
+    description: "Sync a Leadr LinkedIn campaign's status, touches, and replies back into LastB2B.",
+    previewTitle: "Sync Leadr campaign",
+    buildPreview: (input) =>
+      buildSimplePreview(
+        "Sync Leadr campaign",
+        `Sync ${asString(input.channelRunId) || "the selected Leadr channel run"}.`
+      ),
+    run: async (input) => {
+      const result = await syncLeadrLinkedInCampaign({
+        channelRunId: requireString(input, "channelRunId"),
+        userId: asString(input.userId),
+      });
+      return {
+        summary: `Synced Leadr channel run ${result.channelRun.id}; ${result.touchesUpserted} touch${result.touchesUpserted === 1 ? "" : "es"} recorded.`,
+        result: result as unknown as Record<string, unknown>,
+        receipt: {
+          title: "Leadr campaign synced",
+          summary: `${result.channelRun.name || result.channelRun.id} is now ${result.channelRun.status}.`,
+          details: [
+            `Channel run: ${result.channelRun.id}`,
+            `Touches recorded: ${result.touchesUpserted}`,
+          ],
+        },
+      } satisfies OperatorToolResult;
+    },
+  },
+  {
+    name: "resume_leadr_campaign",
+    riskLevel: "guarded_write",
+    approvalMode: "confirm",
+    description: "Resume a halted Leadr LinkedIn campaign using its stored account and campaign IDs.",
+    previewTitle: "Resume Leadr campaign",
+    buildPreview: (input) =>
+      buildSimplePreview(
+        "Resume Leadr campaign",
+        `Resume ${asString(input.channelRunId) || "the selected Leadr channel run"}.`
+      ),
+    run: async (input) => {
+      const result = await resumeLeadrLinkedInCampaign({
+        channelRunId: requireString(input, "channelRunId"),
+        userId: asString(input.userId),
+      });
+      return {
+        summary: `Resumed Leadr channel run ${result.channelRun.id}.`,
+        result: result as unknown as Record<string, unknown>,
+        receipt: {
+          title: "Leadr campaign resumed",
+          summary: `${result.channelRun.name || result.channelRun.id} was resumed.`,
+          details: [`Channel run: ${result.channelRun.id}`],
         },
       } satisfies OperatorToolResult;
     },

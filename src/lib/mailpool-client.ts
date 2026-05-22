@@ -18,6 +18,7 @@ export type MailpoolDomainOwner = {
   firstName: string;
   lastName: string;
   email: string;
+  phone?: string;
   streetAddress1: string;
   streetAddress2?: string;
   city: string;
@@ -88,6 +89,10 @@ export type MailpoolMailbox = {
     email?: string;
     password?: string;
     authCode?: string;
+  };
+  error?: {
+    code?: number | string;
+    message?: string;
   };
 };
 
@@ -257,6 +262,7 @@ function mapDomainSuggestion(input: unknown): MailpoolDomainSuggestion {
 function mapMailbox(input: unknown): MailpoolMailbox {
   const row = asRecord(input);
   const admin = asRecord(row.admin);
+  const error = asRecord(row.error);
   return {
     id: String(row.id ?? "").trim(),
     type: (String(row.type ?? "google").trim().toLowerCase() as MailpoolMailboxType) || "google",
@@ -288,6 +294,16 @@ function mapMailbox(input: unknown): MailpoolMailbox {
             email: String(admin.email ?? "").trim() || undefined,
             password: String(admin.password ?? "").trim() || undefined,
             authCode: String(admin.authCode ?? admin.auth_code ?? "").trim() || undefined,
+          }
+        : undefined,
+    error:
+      Object.keys(error).length > 0
+        ? {
+            code:
+              typeof error.code === "number" || typeof error.code === "string"
+                ? error.code
+                : undefined,
+            message: String(error.message ?? "").trim() || undefined,
           }
         : undefined,
   };
@@ -445,6 +461,7 @@ export async function registerMailpoolDomain(input: {
     path: "/domains/",
     body: {
       domains: [input.domain.trim().toLowerCase()],
+      type: input.type ?? "google",
       redirect: input.redirectUrl?.trim() || undefined,
       newDomainOwner: input.domainOwner,
     },

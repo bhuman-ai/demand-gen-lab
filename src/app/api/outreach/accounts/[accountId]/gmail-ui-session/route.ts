@@ -4,6 +4,7 @@ import {
   closeGmailUiWorkerSession,
   getGmailUiWorkerSession,
 } from "@/lib/gmail-ui-worker-client";
+import { resolveMailpoolOutreachAccountAuthCode } from "@/lib/mailpool-account-refresh";
 
 export async function GET(
   _request: Request,
@@ -26,8 +27,10 @@ export async function POST(
   try {
     const { accountId } = await context.params;
     const body = (await request.json().catch(() => ({}))) as Record<string, unknown>;
+    const requestedOtp = String(body.otp ?? "").trim();
+    const otp = requestedOtp || (await resolveMailpoolOutreachAccountAuthCode(accountId).catch(() => ""));
     const snapshot = await advanceGmailUiWorkerSession(accountId, {
-      otp: String(body.otp ?? "").trim(),
+      otp,
       password: String(body.password ?? "").trim(),
       ignoreConfiguredProxy: Boolean(body.ignoreConfiguredProxy),
       refreshMailpoolCredentials: body.refreshMailpoolCredentials !== false,

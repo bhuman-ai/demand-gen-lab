@@ -14,32 +14,52 @@ npm run dev
 Copy `.env.example` to `.env.local` and fill values:
 
 - `OPENAI_API_KEY`
+- `OPENROUTER_API_KEY` (optional fallback for JSON LLM calls when OpenAI is unavailable)
+- `LLM_JSON_PROVIDER` (optional, `openai` or `openrouter`; blank tries OpenAI first then OpenRouter)
+- `OPENAI_MODEL_MISSION_OPERATOR` (recommended: `gpt-5.5`)
+- `OPENAI_MISSION_REASONING_EFFORT` (recommended: `high`)
+- `BRAND_ACTIVATION_AUTOPILOT_ENABLED` (optional, lets GPT activate brands, missions, and sender remediation from the ops tick)
+- `BRAND_ACTIVATION_AUTOPILOT_ACTIONS_PER_TICK` (optional, default `1`; cap on autonomous writes per tick)
+- `BRAND_ACTIVATION_AUTOPILOT_PROVISION_FAILURE_COOLDOWN_MINUTES` (optional, default `60`; prevents repeated domain-buy retries after provider failures)
+- `BRAND_ACTIVATION_AUTOPILOT_ALLOW_DOMAIN_REGISTRATION` (optional, set `true` only when sender domain purchase is allowed)
+- `BRAND_ACTIVATION_AUTOPILOT_ALLOW_GROWTH_TOOLS` (optional, default `true`; lets GPT call the generic growth tool registry)
+- `BRAND_ACTIVATION_AUTOPILOT_ALLOW_GUARDED_GROWTH_TOOLS`, `BRAND_ACTIVATION_AUTOPILOT_ALLOW_SPEND_GROWTH_TOOLS`, and `BRAND_ACTIVATION_AUTOPILOT_ALLOW_REPUTATION_GROWTH_TOOLS` (optional; widen tool guardrails for confirm-level, paid, or deliverability/reputation-risk actions)
+- `BRAND_ACTIVATION_AUTOPILOT_REGISTRANT_*` (required for autonomous domain registration)
+- `OUTREACH_DOMAIN_REGISTRAR` (optional, `mailpool`, `vercel`, or `auto`; `auto` falls back to Vercel when Mailpool registration fails)
+- `OUTREACH_VERCEL_API_TOKEN` (optional, enables guarded Vercel sender-domain registration)
+- `OUTREACH_VERCEL_TEAM_ID` (optional, scopes Vercel registrar requests to a team)
+- `OUTREACH_VERCEL_MAX_DOMAIN_PRICE_USD` (optional, default `20`; hard price guard before buying)
+- `OUTREACH_VERCEL_DOMAIN_AUTO_RENEW` (optional, default `false`)
 - `SUPABASE_URL` (optional)
 - `SUPABASE_SERVICE_ROLE_KEY` (optional)
 - `OUTREACH_ENCRYPTION_KEY` (required for secure account secret storage)
 - `OUTREACH_CRON_TOKEN` (optional, protects cron tick endpoint)
 - `CRON_SECRET` (optional legacy alias for tick auth token)
 - `CUSTOMER_IO_WEBHOOK_SECRET` (optional)
+- `AIRSCALE_API_KEY` (optional, enables Airscale as the external email waterfall provider)
+- `EMAIL_FINDER_EXTERNAL_WATERFALL_ENABLED` (optional, set `true` to let the email finder use external paid fallback)
 - `NAMECHEAP_RELAY_URL` (optional, routes Namecheap API calls through a fixed-IP relay)
 - `NAMECHEAP_RELAY_TOKEN` (optional bearer token for that relay)
 
 ## Scheduler (Cloudflare Worker)
 
-Vercel cron is intentionally disabled in this repo (`/Users/don/factory-platform/vercel.json`) so Hobby deploys are not blocked.
+Vercel cron is intentionally disabled in this repo, so Hobby deploys are not blocked.
 
 Use Cloudflare Worker cron instead:
 
 ```bash
-cd /Users/don/factory-platform/cloudflare/outreach-cron
+cd /Users/don/lastb2b/cloudflare/outreach-cron
 wrangler login
 wrangler secret put OUTREACH_CRON_TOKEN
 wrangler secret put MANUAL_TRIGGER_TOKEN
 wrangler deploy
 ```
 
+The worker calls the combined outreach operator tick every 5 minutes. That tick now covers outreach dispatch, inbox sync, sendable prep, sender warmup/launch, deliverability supervision, AI mission learning refreshes, and optional GPT-driven brand activation.
+
 The worker schedule is configured in:
 
-- `/Users/don/factory-platform/cloudflare/outreach-cron/wrangler.toml`
+- `/Users/don/lastb2b/cloudflare/outreach-cron/wrangler.toml`
 
 ## Namecheap Relay (Fixed IP)
 
@@ -83,6 +103,10 @@ The relay only accepts authenticated `POST /namecheap` requests and only forward
 - `GET/PATCH/DELETE /api/brands/:brandId/experiments/:experimentId` — experiment CRUD
 - `POST /api/brands/:brandId/experiments/:experimentId/launch` — launch experiment test
 - `POST /api/brands/:brandId/experiments/:experimentId/promote` — promote experiment to scale campaign
+- `GET /api/brands/:brandId/missions` — list AI campaign missions
+- `POST /api/brands/:brandId/missions` — analyze site + target customers and generate an editable mission plan
+- `GET/PATCH /api/brands/:brandId/missions/:missionId` — mission detail and plan edits
+- `POST /api/brands/:brandId/missions/:missionId/start` — approve the plan and let the operator start only when deliverability is ready
 - `GET /api/brands/:brandId/experiments/:experimentId/runs` — experiment run visibility
 - `PATCH /api/brands/:brandId/experiments/:experimentId/runs/:runId` — pause/resume/cancel experiment run
 - `GET /api/brands/:brandId/campaigns` — list promoted scale campaigns
@@ -101,6 +125,7 @@ The relay only accepts authenticated `POST /namecheap` requests and only forward
 - `POST /api/webhooks/customerio/events` — delivery/reply webhook intake
 - `POST /api/internal/outreach/tick` — cron worker tick
   - `GET` is also supported so Vercel Cron can call it directly.
+- `GET/POST /api/internal/missions/tick` — mission-only operator refresh, useful for manual checks
 
 ## UI routes
 
@@ -108,6 +133,8 @@ The relay only accepts authenticated `POST /namecheap` requests and only forward
 - `/brands` — brand directory
 - `/brands/new` — brand onboarding
 - `/brands/:brandId` — brand home
+- `/brands/:brandId/missions` — AI mission setup
+- `/brands/:brandId/missions/:missionId` — AI mission control room
 - `/brands/:brandId/experiments` — experiment list
 - `/brands/:brandId/experiments/:experimentId` — experiment workspace
 - `/brands/:brandId/experiments/:experimentId/flow` — conversation flow editor

@@ -1,8 +1,7 @@
 # Design System
 
 ## Typography Scale
-[TODO] Lock font sizes, weights, and line heights.
-
+Use existing repo typography rhythm first. If none exists, keep a tight hierarchy with distinct title, section, and body sizes.
 ## Color Variables
 Use existing semantic tokens only for status communication in the social account pool. Success states use existing success foreground and border tokens, warning or incomplete states use existing muted foreground plus border tokens, and error states use existing danger tokens. Do not introduce new colors or gradients for this feature.
 ## Color Variables

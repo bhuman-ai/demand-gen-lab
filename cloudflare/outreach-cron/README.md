@@ -1,10 +1,10 @@
 # Cloudflare Outreach Cron Worker
 
-This worker replaces Vercel Cron and calls:
+This worker replaces Vercel Cron and calls the app's combined operator tick:
 
 - `POST /api/internal/outreach/tick`
 
-It runs every 5 minutes (`*/5 * * * *`) and supports a protected manual trigger endpoint.
+It runs every 5 minutes (`*/5 * * * *`) and supports a protected manual trigger endpoint. The app tick handles outreach dispatch, inbox sync, sendable prep, sender warmup/launch, deliverability supervision, and AI mission learning refreshes.
 
 ## Files
 
@@ -19,7 +19,7 @@ It runs every 5 minutes (`*/5 * * * *`) and supports a protected manual trigger 
 3. Deploy worker:
 
 ```bash
-cd /Users/don/factory-platform/cloudflare/outreach-cron
+cd /Users/don/lastb2b/cloudflare/outreach-cron
 wrangler login
 wrangler secret put OUTREACH_CRON_TOKEN
 wrangler secret put MANUAL_TRIGGER_TOKEN

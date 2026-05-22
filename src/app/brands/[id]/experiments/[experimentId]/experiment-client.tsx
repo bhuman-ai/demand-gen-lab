@@ -288,11 +288,12 @@ function summarizeSendableLeadResolution(
 
   if (
     result.enrichmentError.toLowerCase().includes("validatedmails api key is required") ||
-    topFailure === "missing_validatedmails_api_key"
+    topFailure === "missing_validatedmails_api_key" ||
+    topFailure === "local_email_verifier_unavailable"
   ) {
     return {
       status: "blocked",
-      message: "Work email verification is not configured yet. Add the ValidatedMails API key to keep preparing sendable contacts.",
+      message: "Local EnrichAnything email verification is not reachable yet. Connect the SMTP-capable EmailFinder worker to keep preparing sendable contacts.",
       lastUpdatedAt: now,
       readyCount: result.sendableLeadCount,
       retryable: false,
@@ -303,11 +304,12 @@ function summarizeSendableLeadResolution(
 
   if (
     result.enrichmentError.toLowerCase().includes("rejected the api key") ||
-    topFailure === "validatedmails_unauthorized"
+    topFailure === "validatedmails_unauthorized" ||
+    topFailure === "email_verifier_unauthorized"
   ) {
     return {
       status: "blocked",
-      message: "The work email verification key was rejected. Fix the verifier credential before launching.",
+      message: "The local EnrichAnything email verifier rejected the request. Fix the verifier credential before launching.",
       lastUpdatedAt: now,
       readyCount: result.sendableLeadCount,
       retryable: false,

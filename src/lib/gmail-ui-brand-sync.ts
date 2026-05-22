@@ -10,7 +10,7 @@ import {
   setBrandOutreachAssignment,
   updateOutreachAccount,
 } from "@/lib/outreach-data";
-import { pickWebshareProxy } from "@/lib/webshare-client";
+import { ensureRequiredWebshareProxy } from "@/lib/webshare-proxy-assignment";
 
 type Candidate = {
   account: OutreachAccount;
@@ -38,13 +38,6 @@ export type BrandGmailUiSyncResult = {
 
 function normalizeEmail(value: string) {
   return value.trim().toLowerCase();
-}
-
-function proxyKey(account: OutreachAccount) {
-  const host = String(account.config.mailbox.proxyHost ?? "").trim();
-  const port = Number(account.config.mailbox.proxyPort ?? 0) || 0;
-  if (!host || !port) return "";
-  return `${host}:${port}`;
 }
 
 function isGoogleMailpoolAccount(account: OutreachAccount) {
@@ -94,17 +87,12 @@ export async function syncBrandGmailUiAssignments(options?: {
   const brands = (await listBrands()).filter((brand) => !brandFilter.size || brandFilter.has(brand.id));
   const accounts = await listOutreachAccounts();
   const accountByFromEmail = new Map<string, OutreachAccount[]>();
-  const usedProxyKeys = new Set<string>();
-
   for (const account of accounts) {
     const fromEmail = normalizeEmail(getOutreachAccountFromEmail(account));
     if (!fromEmail) continue;
     const bucket = accountByFromEmail.get(fromEmail) ?? [];
     bucket.push(account);
     accountByFromEmail.set(fromEmail, bucket);
-
-    const currentProxyKey = proxyKey(account);
-    if (currentProxyKey) usedProxyKeys.add(currentProxyKey);
   }
 
   const results: BrandGmailUiSyncRow[] = [];
@@ -143,26 +131,6 @@ export async function syncBrandGmailUiAssignments(options?: {
     });
     await mkdir(userDataDir, { recursive: true });
 
-    let proxyHost = chosen.account.config.mailbox.proxyHost.trim();
-    let proxyPort = Number(chosen.account.config.mailbox.proxyPort ?? 0) || 0;
-    let proxyUsername = chosen.account.config.mailbox.proxyUsername.trim();
-    let proxyPassword = chosen.account.config.mailbox.proxyPassword.trim();
-    let proxyUrl = chosen.account.config.mailbox.proxyUrl.trim();
-
-    if (!proxyHost || !proxyPort) {
-      const picked = await pickWebshareProxy(usedProxyKeys);
-      if (!picked.ok || !picked.proxy) {
-        warnings.push(`${brand.name}: ${picked.error || "proxy assignment failed"}`);
-      } else {
-        proxyHost = picked.proxy.host;
-        proxyPort = picked.proxy.port;
-        proxyUsername = picked.proxy.username;
-        proxyPassword = picked.proxy.password;
-        proxyUrl = picked.proxy.url;
-        usedProxyKeys.add(`${proxyHost}:${proxyPort}`);
-      }
-    }
-
     const loginStatus = normalizeGmailUiLoginStatus({
       deliveryMethod: "gmail_ui",
       state: chosen.account.config.mailbox.gmailUiLoginState,
@@ -185,11 +153,6 @@ export async function syncBrandGmailUiAssignments(options?: {
           gmailUiLoginState: loginStatus.gmailUiLoginState,
           gmailUiLoginCheckedAt: loginStatus.gmailUiLoginCheckedAt,
           gmailUiLoginMessage: loginStatus.gmailUiLoginMessage,
-          proxyUrl,
-          proxyHost,
-          proxyPort,
-          proxyUsername,
-          proxyPassword,
         },
       },
     });
@@ -198,21 +161,27 @@ export async function syncBrandGmailUiAssignments(options?: {
       warnings.push(`${brand.name}: failed to update account ${chosen.account.id}`);
       continue;
     }
+    const proxied = await ensureRequiredWebshareProxy(updated).catch((error) => {
+      warnings.push(
+        `${brand.name}: ${error instanceof Error ? error.message : "proxy assignment failed"}`
+      );
+      return updated;
+    });
 
     await setBrandOutreachAssignment(brand.id, {
-      accountId: updated.id,
-      mailboxAccountId: updated.id,
+      accountId: proxied.id,
+      mailboxAccountId: proxied.id,
     });
 
     for (const candidate of refreshedCandidates.slice(1)) {
-      if (candidate.account.id === updated.id) continue;
+      if (candidate.account.id === proxied.id) continue;
       if (candidate.account.status !== "inactive") {
         await updateOutreachAccount(candidate.account.id, { status: "inactive" });
       }
     }
 
     const warning =
-      updated.config.mailpool.status === "active"
+      proxied.config.mailpool.status === "active"
         ? ""
         : "Mailpool mailbox is not active yet; sender is configured but not ready to send.";
     if (warning) {
@@ -223,10 +192,10 @@ export async function syncBrandGmailUiAssignments(options?: {
       brandId: brand.id,
       brandName: brand.name,
       fromEmail,
-      accountId: updated.id,
-      accountStatus: updated.status,
-      mailpoolStatus: updated.config.mailpool.status,
-      proxyHost: updated.config.mailbox.proxyHost,
+      accountId: proxied.id,
+      accountStatus: proxied.status,
+      mailpoolStatus: proxied.config.mailpool.status,
+      proxyHost: proxied.config.mailbox.proxyHost,
       userDataDir,
       warning,
     });

@@ -40,6 +40,9 @@ export type OperatorToolName =
   | "get_experiment_snapshot"
   | "summarize_leads"
   | "summarize_inbox"
+  | "get_leadr_snapshot"
+  | "list_leadr_accounts"
+  | "create_leadr_auth_link"
   | "refresh_mailpool_sender"
   | "provision_mailpool_sender"
   | "create_brand"
@@ -57,6 +60,9 @@ export type OperatorToolName =
   | "delete_campaign"
   | "launch_campaign_run"
   | "control_campaign_run"
+  | "create_leadr_campaign"
+  | "sync_leadr_campaign"
+  | "resume_leadr_campaign"
   | "send_reply_draft"
   | "dismiss_reply_draft";
 

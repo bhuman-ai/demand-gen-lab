@@ -22,6 +22,7 @@ async function main() {
 
   const accounts = (await listOutreachAccounts()).filter(
     (account) =>
+      account.status === "active" &&
       account.provider === "mailpool" &&
       account.accountType !== "mailbox" &&
       account.config.mailbox.deliveryMethod === "gmail_ui"

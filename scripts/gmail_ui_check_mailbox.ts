@@ -174,17 +174,29 @@ async function main() {
 
   const executablePath = resolveExecutablePath(options);
   const proxy = options.ignoreConfiguredProxy ? undefined : resolveProxy(account.config.mailbox);
+  const profileDirectory = String(account.config.mailbox.gmailUiProfileDirectory ?? "").trim();
   const context = await chromium.launchPersistentContext(userDataDir, {
     ...(executablePath
       ? { executablePath }
       : { channel: options.browserChannel || account.config.mailbox.gmailUiBrowserChannel || "chrome" }),
     headless: false,
     viewport: { width: 1440, height: 980 },
-    args: account.config.mailbox.gmailUiProfileDirectory.trim()
-      ? [`--profile-directory=${account.config.mailbox.gmailUiProfileDirectory.trim()}`]
-      : [],
+    args: [
+      "--disable-blink-features=AutomationControlled",
+      ...(profileDirectory ? [`--profile-directory=${profileDirectory}`] : []),
+    ],
+    ignoreDefaultArgs: ["--enable-automation"],
     proxy,
   });
+  await context
+    .addInitScript(() => {
+      try {
+        Object.defineProperty(navigator, "webdriver", {
+          get: () => undefined,
+        });
+      } catch {}
+    })
+    .catch(() => {});
   const page = context.pages()[0] ?? (await context.newPage());
 
   try {

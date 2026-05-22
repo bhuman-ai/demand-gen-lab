@@ -29,6 +29,14 @@ export type MailboxPlacementResult = {
   matchedUid: number;
   searchedMailboxes: string[];
   error: string;
+  cleanup: MailboxPlacementCleanupResult;
+};
+
+export type MailboxPlacementCleanupResult = {
+  attempted: boolean;
+  ok: boolean;
+  actions: string[];
+  error: string;
 };
 
 export type MailboxFetchedMessage = {
@@ -175,6 +183,7 @@ class ImapClient {
   private connected = false;
   private tagCounter = 1;
   private selectedMailbox = "";
+  private selectedMailboxReadOnly = true;
 
   constructor(private readonly options: ImapMailboxConfig) {}
 
@@ -296,13 +305,18 @@ class ImapClient {
     return parseListMailboxes(result.raw);
   }
 
-  async examineMailbox(mailboxName: string) {
-    if (this.selectedMailbox === mailboxName) return;
-    const select = await this.command(`EXAMINE ${imapQuoted(mailboxName)}`);
+  async selectMailbox(mailboxName: string, readOnly: boolean) {
+    if (this.selectedMailbox === mailboxName && this.selectedMailboxReadOnly === readOnly) return;
+    const select = await this.command(`${readOnly ? "EXAMINE" : "SELECT"} ${imapQuoted(mailboxName)}`);
     if (!select.ok) {
-      throw new Error(`IMAP EXAMINE failed for ${mailboxName}: ${select.raw.trim()}`);
+      throw new Error(`IMAP ${readOnly ? "EXAMINE" : "SELECT"} failed for ${mailboxName}: ${select.raw.trim()}`);
     }
     this.selectedMailbox = mailboxName;
+    this.selectedMailboxReadOnly = readOnly;
+  }
+
+  async examineMailbox(mailboxName: string) {
+    return this.selectMailbox(mailboxName, true);
   }
 
   async searchMailbox(mailboxName: string, criteria: string[]) {
@@ -325,6 +339,32 @@ class ImapClient {
     return parseFetchedMailboxMessage(fetch.raw, mailboxName);
   }
 
+  async moveMailboxMessage(mailboxName: string, uid: number, destinationMailbox: string) {
+    await this.selectMailbox(mailboxName, false);
+    const move = await this.command(`UID MOVE ${Math.round(uid)} ${imapQuoted(destinationMailbox)}`);
+    if (!move.ok) {
+      throw new Error(`IMAP MOVE failed for ${mailboxName} uid ${uid}: ${move.raw.trim()}`);
+    }
+  }
+
+  async addGmailLabels(mailboxName: string, uid: number, labels: string[]) {
+    if (!labels.length) return;
+    await this.selectMailbox(mailboxName, false);
+    const store = await this.command(`UID STORE ${Math.round(uid)} +X-GM-LABELS (${labels.join(" ")})`);
+    if (!store.ok) {
+      throw new Error(`Gmail label add failed for ${mailboxName} uid ${uid}: ${store.raw.trim()}`);
+    }
+  }
+
+  async removeGmailLabels(mailboxName: string, uid: number, labels: string[]) {
+    if (!labels.length) return;
+    await this.selectMailbox(mailboxName, false);
+    const store = await this.command(`UID STORE ${Math.round(uid)} -X-GM-LABELS (${labels.join(" ")})`);
+    if (!store.ok) {
+      throw new Error(`Gmail label remove failed for ${mailboxName} uid ${uid}: ${store.raw.trim()}`);
+    }
+  }
+
   async close() {
     if (!this.socket) return;
     try {
@@ -338,6 +378,71 @@ class ImapClient {
     this.socket.destroy();
     this.socket = null;
     this.connected = false;
+  }
+}
+
+const NO_MAILBOX_CLEANUP: MailboxPlacementCleanupResult = {
+  attempted: false,
+  ok: true,
+  actions: [],
+  error: "",
+};
+
+function isGmailImapHost(host: string) {
+  return /(^|\.)(gmail|googlemail)\.com$/i.test(host.trim());
+}
+
+async function cleanupMatchedPlacement(input: {
+  client: ImapClient;
+  mailbox: ImapMailboxConfig;
+  placement: MailboxPlacementVerdict;
+  matchedMailbox: string;
+  matchedUid: number;
+  inboxMailbox: string;
+  archiveMailbox: string;
+  moveSpamToInbox: boolean;
+  archiveInboxHits: boolean;
+}) {
+  if (!input.matchedMailbox || !input.matchedUid) return NO_MAILBOX_CLEANUP;
+
+  const actions: string[] = [];
+  try {
+    if (input.placement === "spam" && input.moveSpamToInbox) {
+      if (isGmailImapHost(input.mailbox.host)) {
+        await input.client.addGmailLabels(input.matchedMailbox, input.matchedUid, ["\\Inbox"]);
+        await input.client.removeGmailLabels(input.matchedMailbox, input.matchedUid, ["\\Spam"]);
+      } else {
+        await input.client.moveMailboxMessage(input.matchedMailbox, input.matchedUid, input.inboxMailbox);
+      }
+      actions.push("moved_spam_to_inbox");
+      return { attempted: true, ok: true, actions, error: "" };
+    }
+
+    if (input.placement === "inbox" && input.archiveInboxHits) {
+      if (isGmailImapHost(input.mailbox.host)) {
+        await input.client.removeGmailLabels(input.matchedMailbox, input.matchedUid, ["\\Inbox"]);
+      } else if (input.archiveMailbox && input.archiveMailbox !== input.matchedMailbox) {
+        await input.client.moveMailboxMessage(input.matchedMailbox, input.matchedUid, input.archiveMailbox);
+      } else {
+        return {
+          attempted: false,
+          ok: true,
+          actions,
+          error: "No archive mailbox was available",
+        };
+      }
+      actions.push("archived_inbox_hit");
+      return { attempted: true, ok: true, actions, error: "" };
+    }
+
+    return NO_MAILBOX_CLEANUP;
+  } catch (error) {
+    return {
+      attempted: true,
+      ok: false,
+      actions,
+      error: error instanceof Error ? error.message : "Mailbox cleanup failed",
+    };
   }
 }
 
@@ -375,6 +480,10 @@ export async function inspectMailboxPlacement(input: {
   fromEmail: string;
   subject: string;
   since?: Date;
+  cleanup?: {
+    archiveInboxHits?: boolean;
+    moveSpamToInbox?: boolean;
+  };
 }) {
   const client = new ImapClient(input.mailbox);
   try {
@@ -402,25 +511,49 @@ export async function inspectMailboxPlacement(input: {
 
     const inboxUids = await searchOne(inbox);
     if (inboxUids.length) {
+      const matchedUid = inboxUids[inboxUids.length - 1] ?? 0;
       return {
         ok: true,
         placement: "inbox" as const,
         matchedMailbox: inbox,
-        matchedUid: inboxUids[inboxUids.length - 1] ?? 0,
+        matchedUid,
         searchedMailboxes,
         error: "",
+        cleanup: await cleanupMatchedPlacement({
+          client,
+          mailbox: input.mailbox,
+          placement: "inbox",
+          matchedMailbox: inbox,
+          matchedUid,
+          inboxMailbox: inbox,
+          archiveMailbox: allMail,
+          archiveInboxHits: input.cleanup?.archiveInboxHits === true,
+          moveSpamToInbox: input.cleanup?.moveSpamToInbox === true,
+        }),
       };
     }
 
     const spamUids = await searchOne(spam);
     if (spamUids.length) {
+      const matchedUid = spamUids[spamUids.length - 1] ?? 0;
       return {
         ok: true,
         placement: "spam" as const,
         matchedMailbox: spam,
-        matchedUid: spamUids[spamUids.length - 1] ?? 0,
+        matchedUid,
         searchedMailboxes,
         error: "",
+        cleanup: await cleanupMatchedPlacement({
+          client,
+          mailbox: input.mailbox,
+          placement: "spam",
+          matchedMailbox: spam,
+          matchedUid,
+          inboxMailbox: inbox,
+          archiveMailbox: allMail,
+          archiveInboxHits: input.cleanup?.archiveInboxHits === true,
+          moveSpamToInbox: input.cleanup?.moveSpamToInbox === true,
+        }),
       };
     }
 
@@ -433,6 +566,7 @@ export async function inspectMailboxPlacement(input: {
         matchedUid: allMailUids[allMailUids.length - 1] ?? 0,
         searchedMailboxes,
         error: "",
+        cleanup: NO_MAILBOX_CLEANUP,
       };
     }
 
@@ -443,6 +577,7 @@ export async function inspectMailboxPlacement(input: {
       matchedUid: 0,
       searchedMailboxes,
       error: "",
+      cleanup: NO_MAILBOX_CLEANUP,
     };
   } catch (error) {
     return {
@@ -452,6 +587,7 @@ export async function inspectMailboxPlacement(input: {
       matchedUid: 0,
       searchedMailboxes: [],
       error: error instanceof Error ? error.message : "Mailbox placement check failed",
+      cleanup: NO_MAILBOX_CLEANUP,
     };
   } finally {
     await client.close();

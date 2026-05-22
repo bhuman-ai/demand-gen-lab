@@ -5,10 +5,12 @@ import http from "http";
 import path from "path";
 import { chromium } from "playwright";
 import { promisify } from "util";
+import { runBuyShazamCommentLikesPurchase } from "@/lib/buyshazam-ui-purchase";
 
 type SessionStep =
   | "opening"
   | "account_picker"
+  | "confirm_identity"
   | "awaiting_email"
   | "awaiting_password"
   | "awaiting_otp"
@@ -45,6 +47,32 @@ type AdvanceInput = {
   password?: string;
   ignoreConfiguredProxy?: boolean;
   refreshMailpoolCredentials?: boolean;
+  proxyRotationAttempted?: boolean;
+};
+
+type SendInput = AdvanceInput & {
+  recipient?: string;
+  subject?: string;
+  body?: string;
+  expectedFrom?: string;
+};
+
+type SendResult = {
+  ok: boolean;
+  accountId: string;
+  fromEmail: string;
+  providerMessageId: string;
+  error: string;
+  screenshotPath: string;
+  currentUrl: string;
+  title: string;
+  updatedAt: string;
+};
+
+type ExpectedSentMessage = {
+  recipient: string;
+  subject: string;
+  body: string;
 };
 
 type AccountBundle = {
@@ -59,6 +87,50 @@ const SCREENSHOT_DIR = path.join(process.cwd(), "output", "playwright", "gmail-u
 const IDLE_TTL_MS = 15 * 60 * 1000;
 const COMPOSE_SELECTOR =
   'div[gh="cm"], [role="button"][gh="cm"], [role="button"][aria-label^="Compose"], div[role="button"]:has-text("Compose")';
+const SEND_BUTTON_SELECTOR =
+  'div[role="button"][data-tooltip^="Send"], button[aria-label^="Send"], div[role="button"][aria-label^="Send"], div[role="button"][data-tooltip*="Send"], div[role="button"][aria-label*="Send"], button:has-text("Send"), div[role="button"]:has-text("Send")';
+const DOM_SEND_BUTTON_SELECTOR =
+  '[data-tooltip^="Send"], button[aria-label^="Send"], [aria-label^="Send"], [data-tooltip*="Send"]';
+const COMPOSE_OPEN_SELECTOR =
+  'input[name="subjectbox"], div[aria-label="Message Body"], div[role="textbox"][g_editable="true"]';
+const TO_INPUT_SELECTOR =
+  'input[aria-label="To recipients"], input[peoplekit-id], textarea[aria-label="To"], div[aria-label="To"] input';
+const INBOX_SHELL_SELECTOR = [
+  '[role="main"]',
+  '[role="navigation"]',
+  '[aria-label*="Inbox"]',
+  '[aria-label*="Mail"]',
+  'input[aria-label*="Search in mail"]',
+  'input[placeholder="Search mail"]',
+].join(", ");
+const COMPOSE_DIALOG_SELECTOR = 'div[role="dialog"]:has(input[name="subjectbox"])';
+const COMPOSE_SUBJECT_SELECTOR = 'input[name="subjectbox"]';
+const COMPOSE_BODY_SELECTOR = 'div[aria-label="Message Body"], div[role="textbox"][g_editable="true"]';
+const COMPOSE_RECIPIENT_SELECTOR = [
+  TO_INPUT_SELECTOR,
+  'input[aria-label*="Recipients"]',
+  'textarea[aria-label*="Recipients"]',
+  'input[placeholder*="Recipients"]',
+].join(", ");
+const DOM_COMPOSE_RECIPIENT_SELECTOR = [
+  'input[aria-label="To recipients"]',
+  'input[peoplekit-id]',
+  'textarea[aria-label="To"]',
+  'div[aria-label="To"] input',
+  'input[aria-label*="Recipients"]',
+  'textarea[aria-label*="Recipients"]',
+  'input[placeholder*="Recipients"]',
+].join(", ");
+const COMPOSE_ROOT_MARKER = "data-lastb2b-compose-root";
+const DISCARD_DRAFT_SELECTOR =
+  'img[aria-label^="Discard draft"], div[aria-label^="Discard draft"], button[aria-label^="Discard draft"]';
+const OTP_FIELD_SELECTORS = [
+  'input[autocomplete="one-time-code"]',
+  'input[name="totpPin"]',
+  'input[type="tel"]',
+  'input[inputmode="numeric"]',
+  'input[aria-label*="code" i]',
+];
 const execFile = promisify(execFileCallback);
 
 function loadLocalEnv() {
@@ -165,6 +237,23 @@ async function firstVisible(page: any, selectors: string[]) {
   return null;
 }
 
+async function lastVisible(root: any, selector: string) {
+  const locator = root.locator(selector);
+  const count = await locator.count().catch(() => 0);
+  for (let index = count - 1; index >= 0; index -= 1) {
+    const candidate = locator.nth(index);
+    if (await candidate.isVisible().catch(() => false)) {
+      return candidate;
+    }
+  }
+  return null;
+}
+
+function interactionContexts(page: any) {
+  const frames = typeof page.frames === "function" ? page.frames() : [];
+  return [page, ...frames];
+}
+
 async function settlePage(page: any) {
   await page.waitForTimeout(1200).catch(() => {});
   await page.waitForLoadState("domcontentloaded", { timeout: 5000 }).catch(() => {});
@@ -184,7 +273,7 @@ async function sleep(ms: number) {
 
 async function listProfileProcessIds(userDataDir: string) {
   try {
-    const { stdout } = await execFile("pgrep", ["-f", `--user-data-dir=${userDataDir}`]);
+    const { stdout } = await execFile("pgrep", ["-f", "--", `--user-data-dir=${userDataDir}`]);
     return stdout
       .split(/\s+/)
       .map((value) => Number(value.trim()))
@@ -260,12 +349,48 @@ async function moveToGoogleLogin(page: any) {
 async function detectSessionStep(page: any): Promise<Omit<SessionSnapshot, "ok" | "accountId" | "fromEmail" | "updatedAt" | "screenshotPath">> {
   const currentUrl = String(page.url() ?? "");
   const title = String((await page.title().catch(() => "")) ?? "");
+  const titleLower = title.toLowerCase();
+  const bodyText = String((await page.locator("body").innerText().catch(() => "")) ?? "").toLowerCase();
   const composeVisible = await page.locator(COMPOSE_SELECTOR).first().isVisible().catch(() => false);
 
   if (composeVisible) {
     return {
       step: "ready",
       prompt: "Gmail inbox is open. This sender profile is logged in.",
+      currentUrl,
+      title,
+      loginState: "ready",
+    };
+  }
+
+  const inboxShellVisible =
+    currentUrl.includes("mail.google.com/mail/") &&
+    !currentUrl.includes("accounts.google.com") &&
+    !currentUrl.startsWith("chrome-error://") &&
+    titleLower.includes("mail") &&
+    (
+      /#(inbox|all|starred|snoozed|sent|drafts|spam|trash|label|search|settings)/i.test(currentUrl) ||
+      currentUrl.includes("tf=cm") ||
+      currentUrl.includes("fs=1") ||
+      titleLower.includes("compose mail") ||
+      bodyText.includes("inbox") ||
+      bodyText.includes("compose") ||
+      bodyText.includes("search in mail") ||
+      bodyText.includes("search mail") ||
+      Boolean(
+        await firstVisible(page, [
+          INBOX_SHELL_SELECTOR,
+          '[aria-label*="Inbox"]',
+          'a[title*="Inbox"]',
+          '[role="main"]',
+          '[aria-label*="Mail"]',
+        ])
+      )
+    );
+  if (inboxShellVisible) {
+    return {
+      step: "ready",
+      prompt: "Gmail inbox shell is open. This sender profile is logged in.",
       currentUrl,
       title,
       loginState: "ready",
@@ -285,6 +410,20 @@ async function detectSessionStep(page: any): Promise<Omit<SessionSnapshot, "ok" 
       currentUrl,
       title,
       loginState: "login_required",
+    };
+  }
+
+  const googleAccountNotFound =
+    bodyText.includes("couldn’t find your google account") ||
+    bodyText.includes("couldn't find your google account") ||
+    bodyText.includes("could not find your google account");
+  if (googleAccountNotFound) {
+    return {
+      step: "error",
+      prompt: "Google could not find this sender account. The mailbox is not a usable Google login yet.",
+      currentUrl,
+      title,
+      loginState: "error",
     };
   }
 
@@ -318,7 +457,27 @@ async function detectSessionStep(page: any): Promise<Omit<SessionSnapshot, "ok" 
     };
   }
 
-  const bodyText = String((await page.locator("body").innerText().catch(() => "")) ?? "").toLowerCase();
+  const nextVisible = await firstVisible(page, [
+    '#identifierNext button',
+    '#passwordNext button',
+    'button:has-text("Next")',
+    'div[role="button"]:has-text("Next")',
+  ]);
+  const confirmIdentityPrompt =
+    currentUrl.includes("/signin/confirmidentifier") ||
+    bodyText.includes("verify it’s you") ||
+    bodyText.includes("verify it's you") ||
+    bodyText.includes("please sign in again to continue to gmail");
+  if (nextVisible && confirmIdentityPrompt) {
+    return {
+      step: "confirm_identity",
+      prompt: "Google wants a confirmation click before continuing sign-in.",
+      currentUrl,
+      title,
+      loginState: "login_required",
+    };
+  }
+
   const otpInput = await firstVisible(page, [
     'input[autocomplete="one-time-code"]',
     'input[name="totpPin"]',
@@ -346,6 +505,22 @@ async function detectSessionStep(page: any): Promise<Omit<SessionSnapshot, "ok" 
       currentUrl,
       title,
       loginState: "login_required",
+    };
+  }
+
+  const googleRejectedBrowser =
+    currentUrl.includes("/signin/rejected") ||
+    titleLower.includes("couldn") ||
+    bodyText.includes("this browser or app may not be secure") ||
+    bodyText.includes("try using a different browser");
+  if (googleRejectedBrowser) {
+    return {
+      step: "error",
+      prompt:
+        "Google rejected this Gmail UI browser as insecure during sign-in. The worker needs a hardened browser launch or a manually bootstrapped profile for this sender.",
+      currentUrl,
+      title,
+      loginState: "error",
     };
   }
 
@@ -500,6 +675,743 @@ async function takeSnapshot(handle: SessionHandle, snapshot: Omit<SessionSnapsho
   return result;
 }
 
+async function dismissGmailOverlays(page: any, options: { useEscape?: boolean } = {}) {
+  if (options.useEscape !== false) {
+    await page.keyboard.press("Escape").catch(() => {});
+    await page.waitForTimeout(250).catch(() => {});
+  }
+
+  const dismissCandidates = [
+    'button:has-text("Got it")',
+    'button:has-text("Not now")',
+    'button:has-text("No thanks")',
+    'div[role="button"]:has-text("No thanks")',
+    "text=No thanks",
+    "text=OK",
+    'button:has-text("Done")',
+    'button:has-text("Close")',
+    'div[role="button"][aria-label="Close"]',
+    'button[aria-label="Close"]',
+  ];
+
+  for (const selector of dismissCandidates) {
+    const candidate = page.locator(selector).first();
+    if (await candidate.isVisible().catch(() => false)) {
+      await candidate.click().catch(() => {});
+      await page.waitForTimeout(250).catch(() => {});
+    }
+  }
+}
+
+async function closeOpenComposeWindows(page: any) {
+  for (let attempt = 0; attempt < 6; attempt += 1) {
+    const composeCount = await countVisibleComposeSubjects(page);
+    if (composeCount <= 0) return;
+    const composeRoot = await latestComposeRoot(page).catch(() => null);
+    if (!composeRoot) {
+      await page.keyboard.press("Escape").catch(() => {});
+      await page.waitForTimeout(250).catch(() => {});
+      continue;
+    }
+    const discardButton = composeRoot.locator(DISCARD_DRAFT_SELECTOR).last();
+    if (await discardButton.isVisible().catch(() => false)) {
+      await discardButton.click().catch(() => {});
+      await page.waitForTimeout(250).catch(() => {});
+      continue;
+    }
+    const bodyInput = composeRoot.locator(COMPOSE_BODY_SELECTOR).last();
+    await bodyInput.click({ force: true }).catch(() => {});
+    await page.keyboard.press("Escape").catch(() => {});
+    await page.waitForTimeout(250).catch(() => {});
+  }
+}
+
+async function countVisibleComposeSubjects(page: any) {
+  const subjects = page.locator(COMPOSE_SUBJECT_SELECTOR);
+  const count = await subjects.count().catch(() => 0);
+  let visible = 0;
+  for (let index = 0; index < count; index += 1) {
+    if (await subjects.nth(index).isVisible().catch(() => false)) {
+      visible += 1;
+    }
+  }
+  return visible;
+}
+
+async function markLatestComposeRoot(page: any) {
+  const subjects = page.locator(COMPOSE_SUBJECT_SELECTOR);
+  const count = await subjects.count().catch(() => 0);
+  await page
+    .evaluate((marker: string) => {
+      document.querySelectorAll(`[${marker}]`).forEach((element) => element.removeAttribute(marker));
+    }, COMPOSE_ROOT_MARKER)
+    .catch(() => {});
+
+  for (let index = count - 1; index >= 0; index -= 1) {
+    const subject = subjects.nth(index);
+    if (!(await subject.isVisible().catch(() => false))) continue;
+    const marked = await subject
+      .evaluate(
+        (
+          input: HTMLElement,
+          {
+            marker,
+            sendSelector,
+            bodySelector,
+            recipientSelector,
+          }: { marker: string; sendSelector: string; bodySelector: string; recipientSelector: string }
+        ) => {
+          let fallback: HTMLElement | null = input.parentElement;
+          for (let current = input.parentElement; current; current = current.parentElement) {
+            const hasSend = Boolean(current.querySelector(sendSelector));
+            const hasBody = Boolean(current.querySelector(bodySelector));
+            const hasRecipient = Boolean(current.querySelector(recipientSelector));
+            if (!fallback && (hasBody || hasSend)) {
+              fallback = current;
+            }
+            if (hasSend && hasBody) {
+              current.setAttribute(marker, "true");
+              return true;
+            }
+            if (current.getAttribute("role") === "dialog" && (hasSend || hasBody || hasRecipient)) {
+              current.setAttribute(marker, "true");
+              return true;
+            }
+          }
+          const target = fallback ?? input;
+          target.setAttribute(marker, "true");
+          return true;
+        },
+        {
+          marker: COMPOSE_ROOT_MARKER,
+          sendSelector: DOM_SEND_BUTTON_SELECTOR,
+          bodySelector: COMPOSE_BODY_SELECTOR,
+          recipientSelector: DOM_COMPOSE_RECIPIENT_SELECTOR,
+        }
+      )
+      .catch(() => false);
+    if (marked) {
+      return page.locator(`[${COMPOSE_ROOT_MARKER}="true"]`).last();
+    }
+  }
+
+  return null;
+}
+
+async function openCompose(page: any) {
+  const compose = page.locator(COMPOSE_SELECTOR).first();
+  const initialCount = await countVisibleComposeSubjects(page);
+
+  await compose.waitFor({ state: "visible", timeout: 30000 });
+  await dismissGmailOverlays(page);
+
+  try {
+    await compose.click({ timeout: 5000 });
+  } catch {
+    await compose.click({ force: true });
+  }
+
+  await page
+    .waitForFunction(
+      (
+        { subjectSelector, expectedCount }: { subjectSelector: string; expectedCount: number }
+      ) => {
+        const isVisible = (element: Element) => {
+          const node = element as HTMLElement;
+          const style = window.getComputedStyle(node);
+          const rect = node.getBoundingClientRect();
+          return style.visibility !== "hidden" && style.display !== "none" && rect.width > 0 && rect.height > 0;
+        };
+        return Array.from(document.querySelectorAll(subjectSelector)).filter(isVisible).length > expectedCount;
+      },
+      { subjectSelector: COMPOSE_SUBJECT_SELECTOR, expectedCount: initialCount },
+      { timeout: 3000 }
+    )
+    .catch(() => {});
+
+  let composeRoot = await latestComposeRoot(page);
+  let subject = composeRoot.locator(COMPOSE_SUBJECT_SELECTOR).last();
+  if (!(await subject.isVisible().catch(() => false))) {
+    await page.keyboard.press("c").catch(() => {});
+    composeRoot = await latestComposeRoot(page);
+    subject = composeRoot.locator(COMPOSE_SUBJECT_SELECTOR).last();
+  }
+  await subject.waitFor({ state: "visible", timeout: 30000 });
+  return composeRoot;
+}
+
+async function openPrefilledCompose(
+  page: any,
+  input: { recipient: string; subject: string; body: string }
+) {
+  const composeUrls = [
+    `https://mail.google.com/mail/u/0/?${new URLSearchParams({
+      view: "cm",
+      fs: "1",
+      tf: "1",
+      to: input.recipient,
+      su: input.subject,
+      body: input.body,
+    }).toString()}`,
+  ];
+
+  for (const url of composeUrls) {
+    await page
+      .goto(url, {
+        waitUntil: "domcontentloaded",
+        timeout: 60000,
+      })
+      .catch(() => {});
+    await settlePage(page);
+    await page
+      .waitForFunction(
+        (
+          {
+            sendSelector,
+          }: { sendSelector: string }
+        ) => {
+          const isVisible = (element: Element | null) => {
+            if (!element) return false;
+            const node = element as HTMLElement;
+            const style = window.getComputedStyle(node);
+            const rect = node.getBoundingClientRect();
+            return style.visibility !== "hidden" && style.display !== "none" && rect.width > 0 && rect.height > 0;
+          };
+          return isVisible(document.querySelector(sendSelector));
+        },
+        {
+          sendSelector: DOM_SEND_BUTTON_SELECTOR,
+        },
+        { timeout: 8000 }
+      )
+      .catch(() => {});
+
+    const composeRoot = await latestComposeRoot(page).catch(() => null);
+    if (composeRoot) {
+      const subjectInput = composeRoot.locator(COMPOSE_SUBJECT_SELECTOR).last();
+      if (await subjectInput.isVisible().catch(() => false)) {
+        return composeRoot;
+      }
+    }
+
+    const currentUrl = String(page.url() ?? "");
+    if (currentUrl.startsWith("chrome-error://")) {
+      continue;
+    }
+
+    const title = String((await page.title().catch(() => "")) ?? "");
+    const isComposeMailPage =
+      currentUrl.includes("fs=1") ||
+      currentUrl.includes("tf=cm") ||
+      title.toLowerCase().includes("compose mail");
+    if (isComposeMailPage) {
+      return page.locator("body");
+    }
+  }
+
+  return null;
+}
+
+async function verifyFromAddress(composeRoot: any, expectedFrom: string) {
+  if (!expectedFrom.trim()) return;
+  const fromInput = composeRoot.locator('input[aria-label*="From"], input[name="from"]').last();
+  if (await fromInput.isVisible().catch(() => false)) {
+    const current = String((await fromInput.inputValue().catch(() => "")) ?? "").trim().toLowerCase();
+    if (current && current !== expectedFrom.trim().toLowerCase()) {
+      throw new Error(`Compose window from-address mismatch. Expected ${expectedFrom}, got ${current}`);
+    }
+  }
+}
+
+function normalizeEmail(value: string) {
+  return value.trim().toLowerCase();
+}
+
+async function latestComposeRoot(page: any) {
+  const composeRoot = await markLatestComposeRoot(page);
+  if (composeRoot) {
+    return composeRoot;
+  }
+  throw new Error("Gmail compose root could not be resolved.");
+}
+
+async function readSelectedRecipientEmails(composeRoot: any) {
+  const values = await composeRoot
+    .evaluate((root: HTMLElement, { bodySelector, subjectSelector }: { bodySelector: string; subjectSelector: string }) => {
+      const emails = new Set<string>();
+      const addEmails = (raw: string | null) => {
+        if (!raw) return;
+        const matches = raw.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi) ?? [];
+        for (const match of matches) emails.add(match.toLowerCase());
+      };
+
+      const clone = root.cloneNode(true) as HTMLElement;
+      clone.querySelectorAll(bodySelector).forEach((element) => element.remove());
+      clone.querySelectorAll(subjectSelector).forEach((element) => element.remove());
+
+      clone.querySelectorAll("[email], [data-hovercard-id], [aria-label], [title]").forEach((element) => {
+        addEmails(element.getAttribute("email"));
+        addEmails(element.getAttribute("data-hovercard-id"));
+        addEmails(element.getAttribute("aria-label"));
+        addEmails(element.getAttribute("title"));
+        addEmails(element.textContent);
+      });
+
+      return Array.from(emails);
+    }, { bodySelector: COMPOSE_BODY_SELECTOR, subjectSelector: COMPOSE_SUBJECT_SELECTOR })
+    .catch(() => []);
+  return Array.isArray(values) ? values.map((value) => normalizeEmail(String(value))) : [];
+}
+
+async function hasSelectedRecipient(composeRoot: any, recipient: string) {
+  const normalizedRecipient = normalizeEmail(recipient);
+  if (!normalizedRecipient) return false;
+  const selectedEmails = await readSelectedRecipientEmails(composeRoot);
+  return selectedEmails.includes(normalizedRecipient);
+}
+
+async function resolveRecipientInput(composeRoot: any, page: any) {
+  let toInput = composeRoot.locator(COMPOSE_RECIPIENT_SELECTOR).last();
+  if (await toInput.isVisible().catch(() => false)) {
+    return toInput;
+  }
+
+  const recipientLabel = composeRoot.locator('text=/^Recipients$|^To$/').first();
+  if (await recipientLabel.isVisible().catch(() => false)) {
+    await recipientLabel.click({ force: true }).catch(() => {});
+    await page.waitForTimeout(250).catch(() => {});
+  }
+
+  toInput = composeRoot.locator(COMPOSE_RECIPIENT_SELECTOR).last();
+  return toInput;
+}
+
+async function fillToRecipient(composeRoot: any, page: any, recipient: string) {
+  if (await hasSelectedRecipient(composeRoot, recipient)) {
+    return;
+  }
+
+  const toInput = await resolveRecipientInput(composeRoot, page);
+  const selectedDescription = String((await toInput.getAttribute("aria-description").catch(() => "")) ?? "");
+  if (selectedDescription.toLowerCase().includes("selected")) {
+    const selectedEmails = await readSelectedRecipientEmails(composeRoot);
+    if (!selectedEmails.length || selectedEmails.includes(normalizeEmail(recipient))) {
+      return;
+    }
+    throw new Error(`Compose window already has a different recipient selected: ${selectedEmails.join(", ")}`);
+  }
+
+  await toInput.waitFor({ state: "visible", timeout: 30000 });
+  await toInput.click({ force: true }).catch(() => {});
+  await page.waitForTimeout(150).catch(() => {});
+  await toInput.press("Meta+A").catch(() => {});
+  await toInput.press("Control+A").catch(() => {});
+  await page.keyboard.press("Backspace").catch(() => {});
+  await toInput.pressSequentially(recipient, { delay: 25 }).catch(() => {});
+  await page.keyboard.press("Enter").catch(() => {});
+  await page.waitForTimeout(250).catch(() => {});
+  if (await hasSelectedRecipient(composeRoot, recipient)) {
+    return;
+  }
+  await page.keyboard.press("Tab").catch(() => {});
+  await page.waitForTimeout(150).catch(() => {});
+  if (await hasSelectedRecipient(composeRoot, recipient)) {
+    return;
+  }
+  await toInput.click({ force: true }).catch(() => {});
+  await toInput.fill("").catch(() => {});
+  await toInput.fill(recipient).catch(() => {});
+  await page.keyboard.press("Enter").catch(() => {});
+  await page.keyboard.press("Tab").catch(() => {});
+  await page.waitForTimeout(250).catch(() => {});
+  if (!(await hasSelectedRecipient(composeRoot, recipient))) {
+    throw new Error(`Gmail did not keep the recipient chip for ${recipient}.`);
+  }
+}
+
+async function fillCompose(page: any, input: { recipient: string; subject: string; body: string; expectedFrom?: string }) {
+  await closeOpenComposeWindows(page);
+  let composeRoot = await openPrefilledCompose(page, input).catch(() => null);
+  const recipientPrefilled = Boolean(composeRoot);
+  if (!composeRoot) {
+    composeRoot = await openCompose(page);
+  }
+  await verifyFromAddress(composeRoot, input.expectedFrom ?? "");
+  await dismissGmailOverlays(page, { useEscape: false });
+
+  if (!recipientPrefilled) {
+    await fillToRecipient(composeRoot, page, input.recipient);
+    const subjectInput = composeRoot.locator(COMPOSE_SUBJECT_SELECTOR).last();
+    await subjectInput.fill(input.subject);
+
+    const bodyInput = composeRoot.locator(COMPOSE_BODY_SELECTOR).last();
+    await bodyInput.waitFor({ state: "visible", timeout: 30000 });
+    await bodyInput.click({ force: true }).catch(() => {});
+    await bodyInput.fill(input.body);
+  }
+  return composeRoot;
+}
+
+async function isComposeStillOpen(composeRoot: any) {
+  return composeRoot.isVisible().catch(() => false);
+}
+
+async function visibleGmailSendError(composeRoot: any, page: any) {
+  const candidates = [
+    'div[role="alert"]',
+    'div[aria-live="assertive"]',
+    'span:has-text("Please specify at least one recipient")',
+    'span:has-text("Address not found")',
+    'span:has-text("Invalid")',
+    'span:has-text("Message not sent")',
+  ];
+  for (const selector of candidates) {
+    const locator = composeRoot.locator(selector).first();
+    if (await locator.isVisible().catch(() => false)) {
+      const text = String((await locator.innerText().catch(() => "")) ?? "").trim();
+      if (text) return text;
+    }
+  }
+  const globalCandidates = [
+    'div[role="dialog"]:has-text("Please specify at least one recipient")',
+    'div[role="alertdialog"]:has-text("Please specify at least one recipient")',
+    'div[role="alert"]:has-text("Message not sent")',
+    'div[aria-live="assertive"]:has-text("Message not sent")',
+    'text=/Enable desktop notifications/i',
+  ];
+  for (const selector of globalCandidates) {
+    const locator = page.locator(selector).first();
+    if (await locator.isVisible().catch(() => false)) {
+      const text = String((await locator.innerText().catch(() => "")) ?? "").trim();
+      if (text) return text;
+    }
+  }
+  return "";
+}
+
+function isIgnorableGmailSendPrompt(text: string) {
+  return text.toLowerCase().includes("enable desktop notifications");
+}
+
+function isTransientGmailSendStatus(text: string) {
+  const normalized = text.toLowerCase();
+  return (
+    normalized === "sending..." ||
+    normalized === "sending" ||
+    normalized.startsWith("sending...") ||
+    normalized.startsWith("sending ")
+  );
+}
+
+function isSuccessfulGmailSendStatus(text: string) {
+  const normalized = text.toLowerCase().replace(/\s+/g, " ").trim();
+  return (
+    normalized === "message sent" ||
+    normalized.startsWith("message sent ") ||
+    (normalized.includes("message sent") &&
+      (normalized.includes("undo") || normalized.includes("view message")))
+  );
+}
+
+async function isFullScreenComposePage(page: any) {
+  const title = String((await page.title().catch(() => "")) ?? "").toLowerCase();
+  const currentUrl = String(page.url() ?? "");
+  return currentUrl.includes("tf=cm") || currentUrl.includes("fs=1") || title.includes("compose mail");
+}
+
+async function resolvePrimarySendButton(page: any, composeRoot: any) {
+  const contexts = [composeRoot, ...interactionContexts(page)];
+  for (const context of contexts) {
+    if (!context || typeof context.locator !== "function") continue;
+    const candidates = [
+      context.locator('button[aria-label^="Send"]').last(),
+      context.locator('div[role="button"][aria-label^="Send"]').last(),
+      typeof context.getByRole === "function"
+        ? context.getByRole("button", { name: /^Send(?:\b| )/ }).last()
+        : null,
+      context.locator('button:has-text("Send")').last(),
+      context.locator('div[role="button"]:has-text("Send")').last(),
+      context.locator(SEND_BUTTON_SELECTOR).last(),
+    ].filter(Boolean);
+
+    for (const candidate of candidates) {
+      if (await candidate.isVisible().catch(() => false)) {
+        return candidate;
+      }
+    }
+  }
+
+  return null;
+}
+
+async function describeVisibleSendControls(page: any, composeRoot: any) {
+  const contexts = [composeRoot, ...interactionContexts(page)];
+  const results: string[] = [];
+  for (const context of contexts) {
+    if (!context || typeof context.evaluate !== "function") continue;
+    const controls = await context
+      .evaluate((root: HTMLElement) => {
+        const describeRoot = () => {
+          const win = root.ownerDocument.defaultView;
+          const frame = win?.frameElement as HTMLElement | null;
+          if (!frame) return "main";
+          const title = frame.getAttribute("title") ?? "";
+          const name = frame.getAttribute("name") ?? "";
+          const aria = frame.getAttribute("aria-label") ?? "";
+          return `frame:${title || name || aria || "unnamed"}`;
+        };
+        const isVisible = (element: Element) => {
+          const node = element as HTMLElement;
+          const style = window.getComputedStyle(node);
+        const rect = node.getBoundingClientRect();
+        return style.visibility !== "hidden" && style.display !== "none" && rect.width > 0 && rect.height > 0;
+      };
+
+      return Array.from(root.querySelectorAll('button, [role="button"]'))
+        .filter((element) => isVisible(element))
+        .map((element) => {
+          const text = (element.textContent ?? "").replace(/\s+/g, " ").trim();
+          const ariaLabel = (element.getAttribute("aria-label") ?? "").trim();
+          const tooltip = (element.getAttribute("data-tooltip") ?? "").trim();
+          const disabled =
+            element.getAttribute("aria-disabled") === "true" ||
+            (element as HTMLButtonElement).disabled === true;
+          const rect = (element as HTMLElement).getBoundingClientRect();
+          return {
+            root: describeRoot(),
+            tag: element.tagName.toLowerCase(),
+            text,
+            ariaLabel,
+            tooltip,
+            disabled,
+            x: Math.round(rect.x),
+            y: Math.round(rect.y),
+            w: Math.round(rect.width),
+            h: Math.round(rect.height),
+          };
+        })
+        .filter((entry) => {
+          const haystack = `${entry.text} ${entry.ariaLabel} ${entry.tooltip}`.toLowerCase();
+          return haystack.includes("send");
+        })
+        .slice(-8);
+      })
+      .catch(() => []);
+    if (Array.isArray(controls) && controls.length) {
+      results.push(...controls.map((entry) => JSON.stringify(entry)));
+    }
+  }
+  return `[${results.join(",")}]`;
+}
+
+async function waitForFullScreenComposeReady(page: any, composeRoot: any) {
+  for (let attempt = 0; attempt < 30; attempt += 1) {
+    const sendButton = await resolvePrimarySendButton(page, composeRoot);
+    if (sendButton && (await sendButton.isVisible().catch(() => false))) {
+      return sendButton;
+    }
+    await dismissGmailOverlays(page, { useEscape: false });
+    await page.waitForTimeout(500).catch(() => {});
+  }
+  return null;
+}
+
+async function clickFullScreenComposeSend(page: any) {
+  const viewport = page.viewportSize?.() ?? { width: 1440, height: 980 };
+  const targetX = Math.round(Math.max(140, Math.min(180, viewport.width * 0.105)));
+  const targetY = Math.round(Math.max(120, viewport.height - 38));
+  await page.mouse.click(targetX, targetY).catch(() => {});
+}
+
+async function triggerFullScreenComposeSend(page: any) {
+  await clickFullScreenComposeSend(page);
+  await page.waitForTimeout(300).catch(() => {});
+  await page.keyboard.press("Alt+KeyS").catch(() => {});
+  await page.waitForTimeout(300).catch(() => {});
+  await page.keyboard.press("Control+Enter").catch(() => {});
+  await page.keyboard.press("Meta+Enter").catch(() => {});
+}
+
+async function describeLocator(locator: any) {
+  const details = await locator
+    .evaluate((element: Element) => {
+      const node = element as HTMLElement;
+      const rect = node.getBoundingClientRect();
+      return {
+        tag: element.tagName.toLowerCase(),
+        text: (element.textContent ?? "").replace(/\s+/g, " ").trim(),
+        ariaLabel: (element.getAttribute("aria-label") ?? "").trim(),
+        tooltip: (element.getAttribute("data-tooltip") ?? "").trim(),
+        role: (element.getAttribute("role") ?? "").trim(),
+        disabled:
+          element.getAttribute("aria-disabled") === "true" ||
+          (element as HTMLButtonElement).disabled === true,
+        x: Math.round(rect.x),
+        y: Math.round(rect.y),
+        w: Math.round(rect.width),
+        h: Math.round(rect.height),
+      };
+    })
+    .catch(() => null);
+  return JSON.stringify(details);
+}
+
+function gmailSearchPhrase(value: string) {
+  return value.replace(/["\\]/g, " ").replace(/\s+/g, " ").trim().slice(0, 80);
+}
+
+async function verifyMessageInSent(page: any, expected: ExpectedSentMessage | undefined) {
+  if (!expected?.recipient) return false;
+  const phrase = gmailSearchPhrase(expected.body) || gmailSearchPhrase(expected.subject);
+  if (!phrase) return false;
+  const query = `in:sent to:${expected.recipient} "${phrase}"`;
+  await page
+    .goto(`https://mail.google.com/mail/u/0/#search/${encodeURIComponent(query)}`, {
+      waitUntil: "domcontentloaded",
+      timeout: 60000,
+    })
+    .catch(() => {});
+
+  for (let attempt = 0; attempt < 24; attempt += 1) {
+    const bodyText = String((await page.locator("body").innerText().catch(() => "")) ?? "")
+      .replace(/\s+/g, " ")
+      .trim();
+    const lowerText = bodyText.toLowerCase();
+    if (lowerText.includes("no messages matched your search")) {
+      return false;
+    }
+    if (lowerText.includes(expected.recipient.toLowerCase())) {
+      return true;
+    }
+    await page.waitForTimeout(1000).catch(() => {});
+  }
+
+  return false;
+}
+
+async function waitForSendConfirmation(
+  page: any,
+  composeRoot: any,
+  expectedSent?: ExpectedSentMessage
+) {
+  const startedOnFullScreenCompose = await isFullScreenComposePage(page);
+  const toast = page.locator("text=Message sent").first();
+  for (let attempt = 0; attempt < 24; attempt += 1) {
+    if (await toast.isVisible().catch(() => false)) {
+      return;
+    }
+    if (startedOnFullScreenCompose) {
+      if (!(await isFullScreenComposePage(page))) {
+        return;
+      }
+    } else if (!(await isComposeStillOpen(composeRoot))) {
+      return;
+    }
+    await dismissGmailOverlays(page, { useEscape: false });
+    const sendError = await visibleGmailSendError(composeRoot, page);
+    if (sendError) {
+      if (isSuccessfulGmailSendStatus(sendError)) {
+        return;
+      }
+      if (isIgnorableGmailSendPrompt(sendError)) {
+        await dismissGmailOverlays(page, { useEscape: false });
+        await page.waitForTimeout(500).catch(() => {});
+        continue;
+      }
+      if (isTransientGmailSendStatus(sendError)) {
+        await page.waitForTimeout(500).catch(() => {});
+        continue;
+      }
+      throw new Error(`Gmail did not send the draft: ${sendError}`);
+    }
+    await page.waitForTimeout(1000).catch(() => {});
+  }
+
+  if (startedOnFullScreenCompose) {
+    if (!(await isFullScreenComposePage(page))) {
+      return;
+    }
+    const activeSendButton = await resolvePrimarySendButton(page, composeRoot);
+    if (!activeSendButton) {
+      return;
+    }
+    if (await verifyMessageInSent(page, expectedSent)) {
+      return;
+    }
+    const sendControls = await describeVisibleSendControls(page, composeRoot);
+    throw new Error(
+      `Gmail send confirmation did not appear and the compose window is still open. visibleSendControls=${sendControls}`
+    );
+  } else if (!(await isComposeStillOpen(composeRoot))) {
+    return;
+  }
+  throw new Error("Gmail send confirmation did not appear and the compose window is still open.");
+}
+
+function isPageClosedError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error ?? "");
+  return (
+    message.includes("Target page, context or browser has been closed") ||
+    message.includes("page, context or browser has been closed") ||
+    message.includes("Browser has been closed") ||
+    message.includes("Target closed")
+  );
+}
+
+async function sendCompose(
+  page: any,
+  composeRoot: any,
+  expectedSent: ExpectedSentMessage,
+  onSendAttempt?: () => void
+) {
+  await dismissGmailOverlays(page, { useEscape: false });
+  const fullScreenCompose = await isFullScreenComposePage(page);
+  const sendButton = fullScreenCompose
+    ? await waitForFullScreenComposeReady(page, composeRoot)
+    : await resolvePrimarySendButton(page, composeRoot);
+  const sendButtonMeta = sendButton ? await describeLocator(sendButton) : "null";
+  if (sendButton) {
+    try {
+      await sendButton.click({ timeout: 5000 });
+      onSendAttempt?.();
+    } catch (error) {
+      if (isPageClosedError(error)) throw error;
+      await dismissGmailOverlays(page, { useEscape: false });
+      try {
+        await sendButton.click({ force: true, timeout: 5000 });
+        onSendAttempt?.();
+      } catch (forceClickError) {
+        if (isPageClosedError(forceClickError)) throw forceClickError;
+        try {
+          await sendButton.evaluate((node: HTMLElement) => node.click());
+          onSendAttempt?.();
+        } catch (domClickError) {
+          if (isPageClosedError(domClickError)) throw domClickError;
+          if (fullScreenCompose) {
+            await triggerFullScreenComposeSend(page);
+          } else {
+            await page.keyboard.press("Control+Enter");
+          }
+          onSendAttempt?.();
+        }
+      }
+    }
+  } else {
+    if (fullScreenCompose) {
+      await triggerFullScreenComposeSend(page);
+    } else {
+      await page.keyboard.press("Control+Enter");
+    }
+    onSendAttempt?.();
+  }
+  try {
+    await waitForSendConfirmation(page, composeRoot, expectedSent);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`${message} resolvedSendButton=${sendButtonMeta}`);
+  }
+}
+
 async function loadAccountBundle(accountId: string, refreshMailpoolCredentials = true): Promise<AccountBundle> {
   const {
     getOutreachAccount,
@@ -524,7 +1436,7 @@ async function loadAccountBundle(accountId: string, refreshMailpoolCredentials =
   }
 
   let gmailUiPassword = String(secrets.mailboxPassword ?? "").trim();
-  let gmailUiAuthCode = String(secrets.mailboxAuthCode ?? "").trim();
+  let gmailUiAuthCode = String(secrets.mailboxAuthCode || secrets.mailboxAdminAuthCode || "").trim();
   if (account.provider === "mailpool" && account.config.mailpool.mailboxId.trim()) {
     try {
       const providerSecrets = await getOutreachProvisioningSettingsSecrets();
@@ -532,7 +1444,10 @@ async function loadAccountBundle(accountId: string, refreshMailpoolCredentials =
       if (apiKey) {
         const mailbox = await getMailpoolMailbox(apiKey, account.config.mailpool.mailboxId.trim());
         gmailUiPassword = String(mailbox.password ?? gmailUiPassword).trim() || gmailUiPassword;
-        gmailUiAuthCode = String(mailbox.authCode ?? gmailUiAuthCode).trim() || gmailUiAuthCode;
+        gmailUiAuthCode =
+          String(mailbox.authCode ?? "").trim() ||
+          String(mailbox.admin?.authCode ?? "").trim() ||
+          gmailUiAuthCode;
       }
     } catch {}
   }
@@ -540,11 +1455,48 @@ async function loadAccountBundle(accountId: string, refreshMailpoolCredentials =
   return { account, secrets, gmailUiPassword, gmailUiAuthCode };
 }
 
+async function resolveGmailUiAuthCode(input: {
+  accountId: string;
+  requestedOtp?: string;
+  fallbackOtp?: string;
+}) {
+  const requestedOtp = String(input.requestedOtp ?? "").trim();
+  if (requestedOtp) return requestedOtp;
+
+  const bundle = await loadAccountBundle(input.accountId, true).catch(() => null);
+  return (
+    String(bundle?.gmailUiAuthCode ?? "").trim() ||
+    String(bundle?.secrets?.mailboxAuthCode ?? "").trim() ||
+    String(bundle?.secrets?.mailboxAdminAuthCode ?? "").trim() ||
+    String(input.fallbackOtp ?? "").trim()
+  );
+}
+
+async function waitForFreshGmailUiAuthCode(input: {
+  accountId: string;
+  previousOtp: string;
+  fallbackOtp?: string;
+}) {
+  const previousOtp = String(input.previousOtp ?? "").trim();
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    await sleep(4000);
+    const otp = await resolveGmailUiAuthCode({
+      accountId: input.accountId,
+      fallbackOtp: input.fallbackOtp,
+    });
+    if (otp && otp !== previousOtp) {
+      return otp;
+    }
+  }
+  return "";
+}
+
 async function ensureGmailUiDeliveryAccount(account: any) {
   const { updateOutreachAccount } = await import("@/lib/outreach-data");
   const { normalizeGmailUiLoginStatus } = await import("@/lib/gmail-ui-login");
   const { getOutreachAccountFromEmail } = await import("@/lib/outreach-account-helpers");
   const { resolveGmailUiUserDataDir } = await import("@/lib/gmail-ui-profile");
+  const { ensureRequiredWebshareProxy } = await import("@/lib/webshare-proxy-assignment");
 
   const deliveryMethod = String(account.config.mailbox.deliveryMethod ?? "").trim();
   const fromEmail = getOutreachAccountFromEmail(account).trim().toLowerCase();
@@ -553,6 +1505,11 @@ async function ensureGmailUiDeliveryAccount(account: any) {
     account.accountType !== "mailbox" &&
     String(account.config.mailpool.mailboxType ?? "").trim().toLowerCase() === "google" &&
     Boolean(fromEmail);
+
+  const mailpoolStatus = String(account.config.mailpool.status ?? "").trim().toLowerCase();
+  if (isEligibleMailpoolGoogleSender && mailpoolStatus && mailpoolStatus !== "active") {
+    throw new Error(`Mailpool sender ${fromEmail} is ${mailpoolStatus}, so Gmail UI login is blocked until Mailpool reports it active.`);
+  }
 
   if (!isEligibleMailpoolGoogleSender && deliveryMethod !== "gmail_ui") {
     return account;
@@ -571,7 +1528,7 @@ async function ensureGmailUiDeliveryAccount(account: any) {
   const needsPromotion = deliveryMethod !== "gmail_ui";
   const missingProfile = !existingUserDataDir;
   if (!needsPromotion && !rehomedProfile && !missingProfile) {
-    return account;
+    return ensureRequiredWebshareProxy(account);
   }
 
   const loginStatus = normalizeGmailUiLoginStatus({
@@ -600,7 +1557,7 @@ async function ensureGmailUiDeliveryAccount(account: any) {
     },
   });
 
-  return updated ?? account;
+  return ensureRequiredWebshareProxy(updated ?? account);
 }
 
 async function getOrCreateSession(accountId: string, input: AdvanceInput) {
@@ -631,15 +1588,19 @@ async function getOrCreateSession(accountId: string, input: AdvanceInput) {
   const ignoreConfiguredProxy = input.ignoreConfiguredProxy ?? defaultIgnoreConfiguredProxy();
   const executablePath = resolveExecutablePath();
   const proxy = ignoreConfiguredProxy ? undefined : resolveProxy(account.config.mailbox);
+  const profileDirectory = String(account.config.mailbox.gmailUiProfileDirectory ?? "").trim();
+  const launchArgs = [
+    "--disable-blink-features=AutomationControlled",
+    ...(profileDirectory ? [`--profile-directory=${profileDirectory}`] : []),
+  ];
   const launchOptions = {
     ...(executablePath
       ? { executablePath }
       : { channel: account.config.mailbox.gmailUiBrowserChannel || "chrome" }),
     headless: false,
     viewport: { width: 1440, height: 980 },
-    args: account.config.mailbox.gmailUiProfileDirectory.trim()
-      ? [`--profile-directory=${account.config.mailbox.gmailUiProfileDirectory.trim()}`]
-      : [],
+    args: launchArgs,
+    ignoreDefaultArgs: ["--enable-automation"],
     proxy,
   };
   let context: any;
@@ -653,6 +1614,15 @@ async function getOrCreateSession(accountId: string, input: AdvanceInput) {
     await releaseProfileLock(userDataDir);
     context = await chromium.launchPersistentContext(userDataDir, launchOptions);
   }
+  await context
+    .addInitScript(() => {
+      try {
+        Object.defineProperty(navigator, "webdriver", {
+          get: () => undefined,
+        });
+      } catch {}
+    })
+    .catch(() => {});
   const page = context.pages()[0] ?? (await context.newPage());
   const handle: SessionHandle = {
     accountId: account.id,
@@ -668,9 +1638,24 @@ async function getOrCreateSession(accountId: string, input: AdvanceInput) {
   return handle;
 }
 
+async function rotateProxyAndRestartSession(accountId: string, input: AdvanceInput) {
+  const { getOutreachAccount } = await import("@/lib/outreach-data");
+  const { rotateRequiredWebshareProxy } = await import("@/lib/webshare-proxy-assignment");
+  const account = await getOutreachAccount(accountId);
+  if (!account) {
+    throw new Error(`Account ${accountId} was not found for proxy rotation.`);
+  }
+  await closeSession(accountId);
+  await rotateRequiredWebshareProxy(account);
+  return getOrCreateSession(accountId, {
+    ...input,
+    proxyRotationAttempted: true,
+  });
+}
+
 async function advanceSession(accountId: string, input: AdvanceInput = {}) {
-  const handle = await getOrCreateSession(accountId, input);
-  const { secrets, gmailUiPassword } = await loadAccountBundle(
+  let handle = await getOrCreateSession(accountId, input);
+  const { secrets, gmailUiPassword, gmailUiAuthCode } = await loadAccountBundle(
     accountId,
     input.refreshMailpoolCredentials !== false
   );
@@ -684,16 +1669,72 @@ async function advanceSession(accountId: string, input: AdvanceInput = {}) {
     await settlePage(handle.page);
     handle.started = true;
   }
+  if (
+    String(handle.page.url() ?? "").startsWith("chrome-error://") &&
+    !input.ignoreConfiguredProxy &&
+    !input.proxyRotationAttempted
+  ) {
+    try {
+      handle = await rotateProxyAndRestartSession(accountId, input);
+      await handle.page.goto("https://mail.google.com/mail/u/0/#inbox", {
+        waitUntil: "domcontentloaded",
+        timeout: 60000,
+      }).catch(() => {});
+      await settlePage(handle.page);
+      handle.started = true;
+    } catch (error) {
+      return takeSnapshot(handle, {
+        step: "error",
+        prompt: `Gmail failed to load through configured proxy, and proxy rotation failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+        currentUrl: String(handle.page.url() ?? ""),
+        title: String((await handle.page.title().catch(() => "")) ?? ""),
+        loginState: "error",
+      });
+    }
+  }
 
   for (let attempt = 0; attempt < 5; attempt += 1) {
     if (await moveToGoogleLogin(handle.page)) {
       continue;
     }
     const detected = await detectSessionStep(handle.page);
+    if (
+      detected.currentUrl.startsWith("chrome-error://") &&
+      !input.ignoreConfiguredProxy &&
+      !input.proxyRotationAttempted
+    ) {
+      try {
+        handle = await rotateProxyAndRestartSession(accountId, input);
+        await handle.page.goto("https://mail.google.com/mail/u/0/#inbox", {
+          waitUntil: "domcontentloaded",
+          timeout: 60000,
+        }).catch(() => {});
+        await settlePage(handle.page);
+        handle.started = true;
+        continue;
+      } catch (error) {
+        return takeSnapshot(handle, {
+          step: "error",
+          prompt: `Gmail failed to load through configured proxy, and proxy rotation failed: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+          currentUrl: detected.currentUrl,
+          title: detected.title,
+          loginState: "error",
+        });
+      }
+    }
 
     if (detected.step === "account_picker") {
       const clicked = await clickUseAnotherAccount(handle.page);
       if (clicked) continue;
+    }
+
+    if (detected.step === "confirm_identity") {
+      await clickNext(handle.page);
+      continue;
     }
 
     if (detected.step === "awaiting_email" && handle.fromEmail) {
@@ -711,41 +1752,206 @@ async function advanceSession(accountId: string, input: AdvanceInput = {}) {
         if (filled) {
           await clickNext(handle.page);
           const afterPassword = await waitForStepAfterSubmit(handle.page, "awaiting_password");
+          if (afterPassword.loginState === "ready") {
+            return takeSnapshot(handle, afterPassword);
+          }
+          if (afterPassword.step !== "awaiting_password" && afterPassword.step !== "error") {
+            continue;
+          }
           return takeSnapshot(handle, afterPassword);
         }
       }
     }
 
     if (detected.step === "awaiting_otp") {
-      const otp = String(input.otp ?? "").trim();
-      if (otp) {
-        const filled = await fillVisibleField(handle.page, [
-          'input[autocomplete="one-time-code"]',
-          'input[name="totpPin"]',
-          'input[type="tel"]',
-          'input[inputmode="numeric"]',
-          'input[aria-label*="code" i]',
-        ], otp);
+      let lastOtpSnapshot = detected;
+      let attemptedOtp = "";
+      for (let otpAttempt = 0; otpAttempt < 2; otpAttempt += 1) {
+        const otp =
+          otpAttempt === 0
+            ? await resolveGmailUiAuthCode({
+                accountId,
+                requestedOtp: input.otp,
+                fallbackOtp: gmailUiAuthCode || secrets.mailboxAuthCode.trim(),
+              })
+            : await waitForFreshGmailUiAuthCode({
+                accountId,
+                previousOtp: attemptedOtp,
+                fallbackOtp: gmailUiAuthCode || secrets.mailboxAuthCode.trim(),
+              });
+        if (!otp || otp === attemptedOtp) {
+          break;
+        }
+        attemptedOtp = otp;
+        const filled = await fillVisibleField(handle.page, OTP_FIELD_SELECTORS, otp);
         if (filled) {
           await clickNext(handle.page);
           const afterOtp = await waitForStepAfterSubmit(handle.page, "awaiting_otp");
-          const nextSnapshot =
+          lastOtpSnapshot = afterOtp;
+          if (afterOtp.step === "awaiting_otp" && !String(input.otp ?? "").trim() && otpAttempt === 0) {
+            continue;
+          }
+          return takeSnapshot(
+            handle,
             afterOtp.step === "awaiting_otp"
               ? {
                   ...afterOtp,
-                  prompt:
-                    "Google is still asking for the 6-digit code. Wait for a fresh code, then try once more.",
+                  prompt: "Google is still asking for the 6-digit code after trying the latest Mailpool code.",
                 }
-              : afterOtp;
-          return takeSnapshot(handle, nextSnapshot);
+              : afterOtp
+          );
         }
       }
+      return takeSnapshot(
+        handle,
+        lastOtpSnapshot.step === "awaiting_otp"
+          ? {
+              ...lastOtpSnapshot,
+              prompt: "Google is asking for the one-time code, but no fresh Mailpool code could be applied.",
+            }
+          : lastOtpSnapshot
+      );
     }
 
     return takeSnapshot(handle, detected);
   }
 
   return takeSnapshot(handle, await detectSessionStep(handle.page));
+}
+
+async function ensureSessionReadyForSend(accountId: string, input: AdvanceInput = {}) {
+  let snapshot = await advanceSession(accountId, input);
+  if (snapshot.loginState === "ready") {
+    return snapshot;
+  }
+
+  for (let attempt = 0; attempt < 7; attempt += 1) {
+    await sleep(snapshot.step === "awaiting_otp" ? 1200 : 400);
+    snapshot = await advanceSession(accountId, input);
+    if (snapshot.loginState === "ready") {
+      return snapshot;
+    }
+    if (snapshot.step === "error") {
+      break;
+    }
+  }
+
+  throw new Error(snapshot.prompt || "Gmail UI login is still required on the worker.");
+}
+
+async function navigateSessionToInbox(handle: SessionHandle | null) {
+  if (!handle || handle.page.isClosed()) return;
+  await handle.page
+    .goto("https://mail.google.com/mail/u/0/#inbox", {
+      waitUntil: "domcontentloaded",
+      timeout: 60000,
+    })
+    .catch(() => {});
+  await settlePage(handle.page);
+}
+
+async function sendMessage(accountId: string, input: SendInput = {}): Promise<SendResult> {
+  const recipient = String(input.recipient ?? "").trim().toLowerCase();
+  const subject = String(input.subject ?? "").trim();
+  const body = String(input.body ?? "").trim();
+  const expectedFrom = String(input.expectedFrom ?? "").trim().toLowerCase();
+  if (!recipient || !subject || !body) {
+    throw new Error("Recipient, subject, and body are required.");
+  }
+
+  let lastHandle: SessionHandle | null = null;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    let sendAttempted = false;
+    let handle: SessionHandle | null = null;
+
+    try {
+      await navigateSessionToInbox(sessions.get(accountId) ?? null);
+      await ensureSessionReadyForSend(accountId, input);
+      handle = sessions.get(accountId) ?? null;
+      lastHandle = handle;
+      if (!handle || handle.page.isClosed()) {
+        throw new Error("No active Gmail worker session for this sender.");
+      }
+
+      await navigateSessionToInbox(handle);
+
+      const detected = await detectSessionStep(handle.page);
+      if (detected.loginState !== "ready") {
+        throw new Error(detected.prompt || "Gmail inbox is not ready on the worker.");
+      }
+
+      const composeRoot = await fillCompose(handle.page, {
+        recipient,
+        subject,
+        body,
+        expectedFrom,
+      });
+      await sendCompose(
+        handle.page,
+        composeRoot,
+        { recipient, subject, body },
+        () => {
+          sendAttempted = true;
+        }
+      );
+
+      await navigateSessionToInbox(handle);
+      const screenshotPath = path.join(
+        SCREENSHOT_DIR,
+        `${handle.accountId}-send-${Date.now().toString(36)}.png`
+      );
+      await handle.page.screenshot({ path: screenshotPath, fullPage: true }).catch(() => {});
+      handle.updatedAt = new Date().toISOString();
+      handle.screenshotPath = screenshotPath;
+
+      return {
+        ok: true,
+        accountId: handle.accountId,
+        fromEmail: handle.fromEmail,
+        providerMessageId: `gmail_ui_${Date.now().toString(36)}`,
+        error: "",
+        screenshotPath,
+        currentUrl: String(handle.page.url() ?? "").trim(),
+        title: String((await handle.page.title().catch(() => "")) ?? ""),
+        updatedAt: handle.updatedAt,
+      };
+    } catch (error) {
+      if (attempt === 0 && !sendAttempted && isPageClosedError(error)) {
+        await closeSession(accountId).catch(() => {});
+        continue;
+      }
+
+      const failedHandle = handle ?? lastHandle;
+      if (!failedHandle) {
+        throw error;
+      }
+      const screenshotPath = path.join(
+        SCREENSHOT_DIR,
+        `${failedHandle.accountId}-send-failure-${Date.now().toString(36)}.png`
+      );
+      await failedHandle.page.screenshot({ path: screenshotPath, fullPage: true }).catch(() => {});
+      failedHandle.updatedAt = new Date().toISOString();
+      failedHandle.screenshotPath = screenshotPath;
+
+      return {
+        ok: false,
+        accountId: failedHandle.accountId,
+        fromEmail: failedHandle.fromEmail,
+        providerMessageId: "",
+        error: error instanceof Error ? error.message : "Failed to send Gmail UI message on the worker.",
+        screenshotPath,
+        currentUrl: String(failedHandle.page.url() ?? "").trim(),
+        title: String((await failedHandle.page.title().catch(() => "")) ?? ""),
+        updatedAt: failedHandle.updatedAt,
+      };
+    }
+  }
+
+  throw new Error(
+    lastHandle
+      ? "Gmail UI send failed after reopening a closed browser session."
+      : "Gmail UI send failed before a browser session was created."
+  );
 }
 
 async function getSessionSnapshot(accountId: string) {
@@ -782,6 +1988,20 @@ async function route(request: http.IncomingMessage, response: http.ServerRespons
   const url = new URL(request.url ?? "/", "http://localhost");
   if (request.method === "GET" && url.pathname === "/health") {
     sendJson(response, 200, { ok: true, status: "ok", sessions: sessions.size });
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/buyshazam/purchase") {
+    const body = await readJsonBody(request);
+    try {
+      const result = await runBuyShazamCommentLikesPurchase({
+        productUrl: String(body.productUrl ?? "").trim(),
+        commentUrl: String(body.commentUrl ?? "").trim(),
+      });
+      sendJson(response, 200, result as unknown as Record<string, unknown>);
+    } catch (err) {
+      sendJson(response, 500, { error: err instanceof Error ? err.message : "Failed to run BuyShazam purchase" });
+    }
     return;
   }
 
@@ -822,6 +2042,30 @@ async function route(request: http.IncomingMessage, response: http.ServerRespons
       sendJson(response, 200, snapshot);
     } catch (err) {
       sendJson(response, 500, { error: err instanceof Error ? err.message : "Failed to advance Gmail session" });
+    }
+    return;
+  }
+
+  const sendMatch = url.pathname.match(/^\/accounts\/([^/]+)\/send$/);
+  if (request.method === "POST" && sendMatch) {
+    const body = await readJsonBody(request);
+    try {
+      const result = await sendMessage(decodeURIComponent(sendMatch[1]), {
+        recipient: String(body.recipient ?? "").trim(),
+        subject: String(body.subject ?? "").trim(),
+        body: String(body.body ?? "").trim(),
+        expectedFrom: String(body.expectedFrom ?? "").trim(),
+        otp: String(body.otp ?? "").trim(),
+        password: String(body.password ?? "").trim(),
+        ignoreConfiguredProxy:
+          body.ignoreConfiguredProxy === undefined
+            ? undefined
+            : Boolean(body.ignoreConfiguredProxy),
+        refreshMailpoolCredentials: body.refreshMailpoolCredentials !== false,
+      });
+      sendJson(response, 200, result);
+    } catch (err) {
+      sendJson(response, 500, { error: err instanceof Error ? err.message : "Failed to send Gmail UI message" });
     }
     return;
   }

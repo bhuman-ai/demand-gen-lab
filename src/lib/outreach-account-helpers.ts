@@ -45,6 +45,7 @@ export function supportsGmailUiDelivery(account: Pick<OutreachAccount, "provider
     account.provider === "mailpool" &&
     account.accountType !== "mailbox" &&
     account.config.mailbox.deliveryMethod === "gmail_ui" &&
+    getOutreachGmailUiLoginState(account) === "ready" &&
     Boolean(account.config.mailbox.gmailUiUserDataDir.trim()) &&
     Boolean(getOutreachAccountFromEmail(account))
   );
@@ -64,6 +65,10 @@ export function getOutreachGmailUiLoginState(account: Pick<OutreachAccount, "con
 
 export function isOutreachGmailUiLoginReady(account: Pick<OutreachAccount, "config"> | null | undefined) {
   return getOutreachGmailUiLoginState(account) === "ready";
+}
+
+export function isOutreachOutboundEnabled(account: Pick<OutreachAccount, "config"> | null | undefined) {
+  return account?.config.outbound?.enabled === true;
 }
 
 export function getOutreachSenderBackingIssue(

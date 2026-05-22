@@ -102,10 +102,19 @@ export function mergeOutreachAccountConfig(
   const nextApify = asRecord(next.apify);
   const nextSocial = asRecord(next.social);
   const nextMailbox = asRecord(next.mailbox);
+  const nextOutbound = asRecord(next.outbound);
   const nextBilling = asRecord(nextCustomerIo.billing);
 
   return {
     ...existing,
+    outbound: {
+      enabled:
+        typeof nextOutbound.enabled === "boolean"
+          ? nextOutbound.enabled
+          : existing.outbound?.enabled === true,
+      disabledAt: String(nextOutbound.disabledAt ?? existing.outbound?.disabledAt ?? "").trim(),
+      disabledReason: String(nextOutbound.disabledReason ?? existing.outbound?.disabledReason ?? "").trim(),
+    },
     customerIo: {
       ...existing.customerIo,
       ...nextCustomerIo,

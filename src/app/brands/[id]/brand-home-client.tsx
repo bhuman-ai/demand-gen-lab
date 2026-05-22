@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { ArrowRight, FolderKanban, FlaskConical, Inbox, Mail, Plus } from "lucide-react";
+import { ArrowRight, FolderKanban, FlaskConical, Inbox, Mail, Network, Plus, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -31,6 +31,14 @@ function nextWorkspace(experiment: ExperimentRecord | null) {
 
 function formatCount(value: number) {
   return value.toString().padStart(2, "0");
+}
+
+function openBrandOperator(message: string, autoSend = false) {
+  window.dispatchEvent(
+    new CustomEvent("lastb2b:open-operator", {
+      detail: { message, autoSend },
+    })
+  );
 }
 
 export default function BrandHomeClient({ brandId }: { brandId: string }) {
@@ -125,14 +133,36 @@ export default function BrandHomeClient({ brandId }: { brandId: string }) {
       <PageIntro
         title={brand?.name || "Brand"}
         actions={
-          <Button
-            type="button"
-            onClick={() => setCreateOpen(true)}
-            disabled={!brand || creating}
-          >
-            <Plus className="h-4 w-4" />
-            {creating ? "Creating..." : "New experiment"}
-          </Button>
+          <>
+            <Button
+              type="button"
+              disabled={!brand}
+              onClick={() => openBrandOperator("What should GPT do next for this brand?", true)}
+            >
+              <Sparkles className="h-4 w-4" />
+              Ask GPT
+            </Button>
+            <Button
+              type="button"
+              variant="secondary"
+              disabled={!brand}
+              onClick={() =>
+                openBrandOperator(
+                  "Connect LinkedIn for this brand. If a human login is needed, create the Leadr sign-in link.",
+                  true
+                )
+              }
+            >
+              <Network className="h-4 w-4" />
+              Connect LinkedIn
+            </Button>
+            <Button asChild variant="outline" disabled={!brand}>
+              <Link href={`/brands/${brandId}/missions`}>
+                <Sparkles className="h-4 w-4" />
+                Start AI campaign
+              </Link>
+            </Button>
+          </>
         }
         aside={
           <StatLedger
@@ -304,6 +334,16 @@ export default function BrandHomeClient({ brandId }: { brandId: string }) {
               <Link href={`/brands/${brandId}/experiments`}>
                 <FlaskConical className="h-4 w-4" /> Open Experiments
               </Link>
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              className="justify-start"
+              onClick={() => setCreateOpen(true)}
+              disabled={!brand || creating}
+            >
+              <Plus className="h-4 w-4" />
+              {creating ? "Creating..." : "New experiment"}
             </Button>
         </SectionPanel>
       </div>

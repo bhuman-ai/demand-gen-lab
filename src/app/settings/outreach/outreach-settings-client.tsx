@@ -26,6 +26,7 @@ import {
 import {
   getDomainDeliveryAccountId,
   getOutreachAccountFromEmail,
+  isOutreachOutboundEnabled,
   outreachProviderLabel,
 } from "@/lib/outreach-account-helpers";
 import { trackEvent } from "@/lib/telemetry-client";
@@ -290,6 +291,7 @@ function AccountInventoryCard({
   >({});
   const [testingByAccountId, setTestingByAccountId] = useState<Record<string, boolean>>({});
   const [refreshingByAccountId, setRefreshingByAccountId] = useState<Record<string, boolean>>({});
+  const [outboundTogglingByAccountId, setOutboundTogglingByAccountId] = useState<Record<string, boolean>>({});
   const [deletingByAccountId, setDeletingByAccountId] = useState<Record<string, boolean>>({});
 
   const testLabel = testScope === "customerio" ? "Check sender" : "Check inbox";
@@ -346,6 +348,43 @@ function AccountInventoryCard({
                       </div>
                     ) : null}
                     {isSender ? <CustomerIoBudgetMeter account={account} /> : null}
+                    {isSender ? (
+                      <label className="mt-2 inline-flex items-center gap-2 text-xs text-[color:var(--foreground)]">
+                        <input
+                          type="checkbox"
+                          role="switch"
+                          className="h-4 w-4"
+                          checked={isOutreachOutboundEnabled(account)}
+                          disabled={Boolean(
+                            deletingByAccountId[account.id] ||
+                              refreshingByAccountId[account.id] ||
+                              outboundTogglingByAccountId[account.id]
+                          )}
+                          onChange={async (event) => {
+                            const enabled = event.target.checked;
+                            setError("");
+                            try {
+                              setOutboundTogglingByAccountId((prev) => ({ ...prev, [account.id]: true }));
+                              const updated = await updateOutreachAccountApi(account.id, {
+                                config: {
+                                  outbound: {
+                                    enabled,
+                                    disabledAt: enabled ? "" : new Date().toISOString(),
+                                    disabledReason: enabled ? "" : "Paused by operator",
+                                  },
+                                },
+                              });
+                              setAccounts((prev) => prev.map((row) => (row.id === account.id ? updated : row)));
+                            } catch (err) {
+                              setError(err instanceof Error ? err.message : "Failed to update outbound setting");
+                            } finally {
+                              setOutboundTogglingByAccountId((prev) => ({ ...prev, [account.id]: false }));
+                            }
+                          }}
+                        />
+                        <span>{isOutreachOutboundEnabled(account) ? "Outbound on" : "Outbound off"}</span>
+                      </label>
+                    ) : null}
                     <div className="mt-2 flex flex-wrap items-center gap-2">
                       <Badge variant={healthBadge}>
                         {account.lastTestStatus === "unknown" ? "Not checked" : account.lastTestStatus}

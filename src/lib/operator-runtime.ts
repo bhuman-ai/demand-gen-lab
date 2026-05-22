@@ -2922,6 +2922,8 @@ export async function runOperatorChatTurn(input: OperatorChatRequest): Promise<O
     ? structuredAction
     : continuation?.kind === "message_override"
       ? filterRequestedActionForMessage(inferredFallbackAction, effectiveMessage)
+    : plannerUnavailable
+      ? null
     : llmPlan
       ? (
           llmPlan.requestedAction ??

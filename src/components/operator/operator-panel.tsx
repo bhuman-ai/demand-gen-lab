@@ -473,8 +473,8 @@ function MessageBody({
 }
 
 const DEFAULT_PROMPTS = [
-  "What should GPT do next?",
-  "Connect LinkedIn",
+  "Any replies?",
+  "What changed today?",
   "Add a sender for this brand",
 ] as const;
 
@@ -529,7 +529,7 @@ export default function OperatorPanel({
   );
   const latestExecution = latestExecutionMessage ? readMessageExecution(latestExecutionMessage) : null;
   const latestTaskSummary = latestExecution ? executionSummary(latestExecution) : "";
-  const threadTitle = asString(threadDetail?.thread.title) || (activeBrandName ? `${activeBrandName} operator thread` : "Operator");
+  const threadTitle = asString(threadDetail?.thread.title) || (activeBrandName ? `${activeBrandName} Brand GPT thread` : "Brand GPT");
 
   useEffect(() => {
     if (!open) return;
@@ -567,7 +567,7 @@ export default function OperatorPanel({
         setThreadDetail(detail);
       } catch (nextError) {
         if (!mounted) return;
-        setError(nextError instanceof Error ? nextError.message : "Failed to load Operator thread");
+        setError(nextError instanceof Error ? nextError.message : "Failed to load Brand GPT thread");
       } finally {
         if (mounted) setLoadingThread(false);
       }
@@ -609,7 +609,7 @@ export default function OperatorPanel({
     const trimmed = input.message.trim();
     if (!trimmed || sending) return;
     if (!activeBrandId) {
-      setError("Open a brand first so Operator has account context.");
+      setError("Open a brand first so Brand GPT has account context.");
       return;
     }
 
@@ -625,7 +625,7 @@ export default function OperatorPanel({
       setInput("");
       await refreshThread(response.thread.id);
     } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : "Operator request failed");
+      setError(nextError instanceof Error ? nextError.message : "Brand GPT request failed");
     } finally {
       setSending(false);
     }
@@ -635,7 +635,7 @@ export default function OperatorPanel({
     const trimmed = message.trim();
     if (!trimmed || sending) return;
     if (!activeBrandId) {
-      setError("Open a brand first so Operator has account context.");
+      setError("Open a brand first so Brand GPT has account context.");
       return;
     }
 
@@ -650,7 +650,7 @@ export default function OperatorPanel({
       setInput("");
       await refreshThread(response.thread.id);
     } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : "Operator request failed");
+      setError(nextError instanceof Error ? nextError.message : "Brand GPT request failed");
     } finally {
       setSending(false);
     }
@@ -658,7 +658,7 @@ export default function OperatorPanel({
 
   async function handleSubmitForm(form: OperatorExecutionForm, values: Record<string, string>) {
     if (form.toolName !== "provision_mailpool_sender") {
-      setError("This Operator form is not wired yet.");
+      setError("This Brand GPT form is not wired yet.");
       return;
     }
 
@@ -757,7 +757,7 @@ export default function OperatorPanel({
       return;
     }
 
-    setError("This Operator form type is not wired yet.");
+    setError("This Brand GPT form type is not wired yet.");
   }
 
   async function handleConfirm(actionId: string) {
@@ -768,7 +768,7 @@ export default function OperatorPanel({
       await confirmOperatorActionApi(actionId);
       await refreshThread(threadDetail.thread.id);
     } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : "Failed to confirm Operator action");
+      setError(nextError instanceof Error ? nextError.message : "Failed to confirm Brand GPT action");
     } finally {
       setActionBusyId("");
     }
@@ -782,7 +782,7 @@ export default function OperatorPanel({
       await cancelOperatorActionApi(actionId);
       await refreshThread(threadDetail.thread.id);
     } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : "Failed to cancel Operator action");
+      setError(nextError instanceof Error ? nextError.message : "Failed to cancel Brand GPT action");
     } finally {
       setActionBusyId("");
     }
@@ -792,7 +792,7 @@ export default function OperatorPanel({
 
   return (
     <div className="fixed inset-0 z-50 flex justify-end bg-[color:color-mix(in_oklab,var(--foreground)_18%,transparent)]/75">
-      <button type="button" className="flex-1" aria-label="Close Operator" onClick={() => onOpenChange(false)} />
+      <button type="button" className="flex-1" aria-label="Close Brand GPT" onClick={() => onOpenChange(false)} />
       <aside className="relative flex h-full w-full max-w-[38rem] flex-col border-l border-[color:var(--border)] bg-[color:var(--background)] shadow-[0_18px_48px_-28px_color-mix(in_oklab,var(--shadow)_88%,transparent)]">
         <div className="border-b border-[color:var(--border)] px-5 py-4">
           <div className="flex items-start justify-between gap-3">
@@ -800,7 +800,7 @@ export default function OperatorPanel({
               <div className="flex items-center gap-2">
                 <div className="inline-flex h-9 items-center gap-2 rounded-[10px] border border-[color:var(--border)] bg-[color:var(--surface)] px-3 text-sm font-medium text-[color:var(--foreground)]">
                   <Sparkles className="h-4 w-4" />
-                  Operator
+                  Brand GPT
                 </div>
                 {activeBrandName ? (
                   <div className="inline-flex h-9 items-center rounded-[10px] border border-[color:var(--border)] bg-[color:var(--surface)] px-3 text-sm text-[color:var(--muted-foreground)]">
@@ -810,10 +810,10 @@ export default function OperatorPanel({
               </div>
               <div className="mt-3 text-sm font-medium text-[color:var(--foreground)]">{threadTitle}</div>
               <div className="mt-1 text-sm leading-6 text-[color:var(--muted-foreground)]">
-                Ask anything. If Operator makes a change, it will show exactly what it did.
+                Ask anything. If Brand GPT makes a change, it will show exactly what it did.
               </div>
             </div>
-            <Button type="button" variant="ghost" size="icon" onClick={() => onOpenChange(false)} aria-label="Close Operator">
+            <Button type="button" variant="ghost" size="icon" onClick={() => onOpenChange(false)} aria-label="Close Brand GPT">
               <X className="h-4 w-4" />
             </Button>
           </div>
@@ -829,8 +829,8 @@ export default function OperatorPanel({
                 </div>
                 <div className="mt-1 text-sm leading-6 text-[color:var(--muted-foreground)]">
                   {latestExecution
-                    ? latestTaskSummary || "Operator is tracking the latest actionable step in this thread."
-                    : "Start with a question or tell Operator what you want done for this brand."}
+                    ? latestTaskSummary || "Brand GPT is tracking the latest actionable step in this thread."
+                    : "Ask a question or tell Brand GPT what you want done for this brand."}
                 </div>
               </div>
               <Badge variant={latestExecution ? (latestExecution.state === "completed" ? "success" : latestExecution.state === "failed" ? "danger" : latestExecution.state === "awaiting_confirmation" || latestExecution.state === "need_info" ? "accent" : "muted") : "muted"}>
@@ -843,14 +843,14 @@ export default function OperatorPanel({
         <div ref={scrollerRef} className="flex-1 space-y-5 overflow-y-auto px-5 py-5">
           {!activeBrandId ? (
             <div className="rounded-[12px] border border-[color:var(--border)] bg-[color:var(--surface)] px-4 py-4 text-sm text-[color:var(--muted-foreground)]">
-              Select a brand first. Operator is scoped to the active brand context.
+              Select a brand first. Brand GPT is scoped to the active brand context.
             </div>
           ) : null}
 
           {loadingThread ? (
             <div className="inline-flex items-center gap-2 rounded-[12px] border border-[color:var(--border)] bg-[color:var(--surface)] px-4 py-3 text-sm text-[color:var(--muted-foreground)]">
               <Loader2 className="h-4 w-4 animate-spin" />
-              Loading Operator thread...
+              Loading Brand GPT thread...
             </div>
           ) : null}
 
@@ -905,7 +905,7 @@ export default function OperatorPanel({
                   {isAssistant ? (
                     <div className="mb-2 flex items-center gap-2 text-[11px] font-medium uppercase tracking-[0.12em] text-[color:var(--muted-foreground)]">
                       <Clock3 className="h-3.5 w-3.5" />
-                      Operator
+                      Brand GPT
                     </div>
                   ) : null}
                   <MessageBody
@@ -957,8 +957,8 @@ export default function OperatorPanel({
               }}
               placeholder={
                 activeBrandId
-                  ? "Ask anything, or tell Operator what you want it to do."
-                  : "Select a brand to use Operator."
+                  ? "Ask anything about this brand, or tell Brand GPT what to do."
+                  : "Select a brand to use Brand GPT."
               }
               className="min-h-[104px] rounded-[12px] bg-[color:var(--surface)]"
               disabled={sending || !activeBrandId}

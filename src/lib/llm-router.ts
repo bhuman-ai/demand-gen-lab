@@ -19,6 +19,7 @@ export type LlmTask =
   | "lead_chain_selection"
   | "mission_plan_generation"
   | "mission_operator"
+  | "operator_chat"
   | "company_domain_matcher"
   | "reply_policy_evaluation"
   | "reply_thread_state_compile"
@@ -53,6 +54,7 @@ const TASK_BASE_TIER: Record<LlmTask, ModelTier> = {
   lead_chain_selection: "high",
   mission_plan_generation: "high",
   mission_operator: "high",
+  operator_chat: "high",
   company_domain_matcher: "fast",
   reply_policy_evaluation: "high",
   reply_thread_state_compile: "high",

@@ -21,6 +21,7 @@ import {
 } from "@/lib/operator-memory";
 import { getOperatorBrandContext } from "@/lib/operator-context";
 import { getOperatorToolSpec, listOperatorToolSpecs } from "@/lib/operator-tools";
+import { generateJsonWithLlm } from "@/lib/llm-json";
 import type {
   OperatorAction,
   OperatorActionSummary,
@@ -41,7 +42,6 @@ import type {
   OperatorToolSpec,
 } from "@/lib/operator-types";
 
-const DEFAULT_OPERATOR_MODEL = String(process.env.OPENAI_MODEL_OPERATOR ?? "").trim() || "gpt-5.4";
 const DEFAULT_OPERATOR_REASONING = (() => {
   const value = String(process.env.OPENAI_OPERATOR_REASONING_EFFORT ?? "").trim().toLowerCase();
   return ["minimal", "low", "medium", "high", "xhigh"].includes(value) ? value : "low";
@@ -130,8 +130,8 @@ function isNegativeMessage(message: string) {
 function buildGreetingAssistant(brandName?: string): OperatorChatAssistantReply {
   return {
     summary: brandName
-      ? `Hi. I'm Operator for ${brandName}. Tell me what you want to do, or ask me anything about the account.`
-      : "Hi. I'm Operator. Tell me what you want to do, or ask me anything about the account.",
+      ? `Hi. I'm Brand GPT for ${brandName}. Tell me what you want to do, or ask me anything about the account.`
+      : "Hi. I'm Brand GPT. Tell me what you want to do, or ask me anything about the account.",
     findings: [],
     recommendations: [],
   };
@@ -872,20 +872,6 @@ function summarizeActionPreview(action: OperatorAction): OperatorChatAssistantRe
     findings: [],
     recommendations: [],
   };
-}
-
-function extractResponseText(payload: unknown) {
-  const row = asRecord(payload);
-  const output = Array.isArray(row.output) ? row.output : [];
-  const outputTextFromItems = output
-    .map((item) => asRecord(item))
-    .flatMap((item) => (Array.isArray(item.content) ? item.content : []))
-    .map((entry) => asRecord(entry))
-    .find((entry) => typeof entry.text === "string");
-  return (
-    asString(row.output_text) ||
-    asString(outputTextFromItems?.text)
-  );
 }
 
 function summarizePromptMessages(messages: OperatorMessage[]) {
@@ -2193,7 +2179,7 @@ function buildOperatorPrompt(input: {
   }));
 
   return [
-    "You are Operator, the LastB2B account assistant.",
+    "You are Brand GPT, the LastB2B account assistant.",
     "You are inside a multi-step planning loop.",
     "Respond with JSON only.",
     'The JSON object must contain: message (string), done (boolean), toolName (string), and toolInputJson (string).',
@@ -2274,76 +2260,52 @@ async function planOperatorReplyWithLlm(input: {
   brandMemory: OperatorBrandMemory | null;
   fallbackAssistant: OperatorChatAssistantReply;
 }): Promise<OperatorPlannerResult | null> {
-  const apiKey = String(process.env.OPENAI_API_KEY ?? "").trim();
-  if (!apiKey) return null;
-
-  const model = DEFAULT_OPERATOR_MODEL;
   const greetingOnly = isCasualGreeting(input.message);
   const trace: OperatorPlannerResult["trace"] = [];
   const maxSteps = 4;
+  let model = "operator-chat";
 
   try {
     let assistant = input.fallbackAssistant;
 
     for (let stepNumber = 1; stepNumber <= maxSteps; stepNumber += 1) {
-      const response = await fetch("https://api.openai.com/v1/responses", {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          model,
-          input: buildOperatorPrompt({
-            ...input,
-            trace,
-            stepNumber,
-            maxSteps,
-          }),
-          reasoning: { effort: DEFAULT_OPERATOR_REASONING },
-          text: {
-            format: {
-              type: "json_schema",
-              name: "operator_agent_step",
-              schema: {
-                type: "object",
-                additionalProperties: false,
-                properties: {
-                  message: { type: "string" },
-                  done: { type: "boolean" },
-                  toolName: { type: "string" },
-                  toolInputJson: { type: "string" },
-                },
-                required: ["message", "done", "toolName", "toolInputJson"],
-              },
-            },
-          },
-          max_output_tokens: 900,
-          store: false,
+      const result = await generateJsonWithLlm({
+        task: "operator_chat",
+        prompt: buildOperatorPrompt({
+          ...input,
+          trace,
+          stepNumber,
+          maxSteps,
         }),
+        reasoningEffort: DEFAULT_OPERATOR_REASONING,
+        openAiOverrideModel: asString(process.env.OPENAI_MODEL_OPERATOR),
+        openRouterOverrideModel: asString(process.env.OPENROUTER_MODEL_OPERATOR),
+        maxOutputTokens: 900,
+        format: {
+          type: "json_schema",
+          name: "operator_agent_step",
+          schema: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              message: { type: "string" },
+              done: { type: "boolean" },
+              toolName: { type: "string" },
+              toolInputJson: { type: "string" },
+            },
+            required: ["message", "done", "toolName", "toolInputJson"],
+          },
+        },
       });
-
-      const raw = await response.text();
-      if (!response.ok) {
-        console.error("Operator OpenAI request failed", raw.slice(0, 800));
-        return null;
-      }
-
-      let payload: unknown = {};
-      try {
-        payload = JSON.parse(raw);
-      } catch {
-        payload = {};
-      }
-
-      const outputText = extractResponseText(payload);
+      model = `${result.provider}:${result.model}`;
+      const outputText = result.text;
       if (!outputText) return null;
 
       let parsed: unknown = {};
       try {
         parsed = JSON.parse(outputText);
       } catch {
-        console.error("Operator OpenAI JSON parse failed", outputText.slice(0, 800));
+        console.error("Operator LLM JSON parse failed", outputText.slice(0, 800));
         return null;
       }
 
@@ -2447,7 +2409,7 @@ async function planOperatorReplyWithLlm(input: {
       trace,
     };
   } catch (error) {
-    console.error("Operator OpenAI planning threw", error);
+    console.error("Operator LLM planning threw", error);
     return null;
   }
 }
@@ -2929,15 +2891,15 @@ export async function runOperatorChatTurn(input: OperatorChatRequest): Promise<O
           context: brandContext,
           brandMemory,
           source: "continuation",
-        })
+      })
     : null;
-  const llmPlan = structuredAction
-    ? null
-    : continuation?.kind === "confirm_action" ||
-        continuation?.kind === "cancel_action" ||
-        continuation?.kind === "message_override"
-      ? null
-    : await planOperatorReplyWithLlm({
+  const shouldUsePlanner =
+    !structuredAction &&
+    continuation?.kind !== "confirm_action" &&
+    continuation?.kind !== "cancel_action" &&
+    continuation?.kind !== "message_override";
+  const llmPlan = shouldUsePlanner
+    ? await planOperatorReplyWithLlm({
         brandId: resolvedBrandId,
         message: effectiveMessage,
         mode: input.mode,
@@ -2945,7 +2907,9 @@ export async function runOperatorChatTurn(input: OperatorChatRequest): Promise<O
         context: brandContext,
         brandMemory,
         fallbackAssistant,
-      });
+      })
+    : null;
+  const plannerUnavailable = shouldUsePlanner && !llmPlan && !greetingOnly;
   const inferredFallbackAction = inferActionFromMessage(
     {
       ...input,
@@ -3336,7 +3300,14 @@ export async function runOperatorChatTurn(input: OperatorChatRequest): Promise<O
         assistant = disambiguation.assistant;
         execution = disambiguation.execution;
       } else {
-        assistant = makeUnexecutedActionAssistant(effectiveMessage, llmPlan?.assistant ?? fallbackAssistant);
+        assistant = plannerUnavailable
+          ? {
+              summary:
+                "I couldn't reach the AI planner for this turn, so I don't trust a real account answer yet. I did not make any changes.",
+              findings: [],
+              recommendations: [],
+            }
+          : makeUnexecutedActionAssistant(effectiveMessage, llmPlan?.assistant ?? fallbackAssistant);
         execution = isExplicitMutationRequest(effectiveMessage)
           ? buildNeedInfoEnvelope({
               missingFields: [],

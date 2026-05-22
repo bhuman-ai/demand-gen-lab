@@ -19,6 +19,7 @@ Copy `.env.example` to `.env.local` and fill values:
 - `OPENROUTER_MODEL_ROUTINE` (recommended: `google/gemini-3.5-flash`; used for routine copy, lead planning, and quality-policy calls)
 - `OPENROUTER_MODEL_DEFAULT` (recommended: `google/gemini-3.5-flash`; do not point this at GPT-5.5 unless routine automation spend is intentional)
 - `OPENROUTER_MODEL_MISSION_OPERATOR` (recommended: `openai/gpt-5.5`; reserved for strategic mission/operator decisions)
+- `OPENROUTER_MODEL_TASK_OPERATOR_CHAT` (recommended: `openai/gpt-5.5`; used for interactive Brand GPT chat)
 - `OPENAI_MODEL_MISSION_OPERATOR` (recommended: `gpt-5.5`)
 - `OPENAI_MISSION_REASONING_EFFORT` (recommended: `high`)
 - `BRAND_ACTIVATION_AUTOPILOT_ENABLED` (optional, lets GPT activate brands, missions, and sender remediation from the ops tick)

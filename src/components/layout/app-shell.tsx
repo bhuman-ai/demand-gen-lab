@@ -359,7 +359,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
                   className="inline-flex h-10 items-center gap-2 rounded-[10px] border border-[color:var(--border)] bg-[color:var(--surface)] px-3 text-sm font-medium text-[color:var(--foreground)] transition-colors hover:bg-[color:var(--surface-hover)]"
                 >
                   <Sparkles className="h-3.5 w-3.5" />
-                  Operator
+                  Brand GPT
                 </button>
               </div>
             </div>

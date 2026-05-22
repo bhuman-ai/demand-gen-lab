@@ -84,8 +84,8 @@ function openRouterTaskEnvKey(task: LlmTask) {
   return `OPENROUTER_MODEL_TASK_${task.toUpperCase().replace(/[^A-Z0-9]+/g, "_")}`;
 }
 
-function isStrategicMissionTask(task: LlmTask) {
-  return task === "mission_operator" || task === "mission_plan_generation";
+function canUseHighIntelligenceModel(task: LlmTask) {
+  return task === "mission_operator" || task === "mission_plan_generation" || task === "operator_chat";
 }
 
 function routineOpenRouterModel() {
@@ -102,17 +102,17 @@ function resolveOpenRouterModel(task: LlmTask, overrideModel?: string) {
 
   const configured =
     asString(process.env[openRouterTaskEnvKey(task)]) ||
-    (isStrategicMissionTask(task) ? asString(process.env.OPENROUTER_MODEL_MISSION_OPERATOR) : "") ||
+    (canUseHighIntelligenceModel(task) ? asString(process.env.OPENROUTER_MODEL_MISSION_OPERATOR) : "") ||
     asString(process.env.OPENROUTER_MODEL_DEFAULT) ||
     asString(process.env.OPENROUTER_MODEL);
 
   if (configured) {
-    return !isStrategicMissionTask(task) && isGpt55Model(configured)
+    return !canUseHighIntelligenceModel(task) && isGpt55Model(configured)
       ? routineOpenRouterModel()
       : configured;
   }
 
-  return isStrategicMissionTask(task) ? "openai/gpt-5.5" : routineOpenRouterModel();
+  return canUseHighIntelligenceModel(task) ? "openai/gpt-5.5" : routineOpenRouterModel();
 }
 
 async function callOpenAiResponses(input: {

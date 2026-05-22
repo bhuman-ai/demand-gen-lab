@@ -12,6 +12,7 @@ const DEFAULT_TIMEZONE = "America/Los_Angeles";
 
 export const MAX_ACTIVE_SENDERS_PER_DOMAIN = 4;
 export const MAX_SENDER_DAILY_CAP = 100;
+export const MIN_WARMUP_CAMPAIGN_DAILY_CAP = 20;
 export const MAX_WARMUP_CAMPAIGN_DAILY_CAP = 25;
 export const MAX_OUTBOUND_SENDER_DAILY_CAP = 60;
 
@@ -136,7 +137,7 @@ export function isWarmupCampaignName(value: string) {
 }
 
 export function warmupDailyCapForDay(day: number) {
-  return Math.min(MAX_SENDER_DAILY_CAP, normalizeWarmupDay(day) * 5);
+  return Math.min(MAX_SENDER_DAILY_CAP, Math.max(MIN_WARMUP_CAMPAIGN_DAILY_CAP, normalizeWarmupDay(day) * 5));
 }
 
 export function warmupHourlyCapForDay(day: number, businessHoursPerDay = 8) {
@@ -166,7 +167,10 @@ export function laneMinSpacingMinutesForDailyCap(dailyCap: number, businessHours
 }
 
 export function warmupCampaignDailyCapForDay(day: number) {
-  return Math.min(MAX_WARMUP_CAMPAIGN_DAILY_CAP, normalizeWarmupDay(day) * 5);
+  return Math.min(
+    MAX_WARMUP_CAMPAIGN_DAILY_CAP,
+    Math.max(MIN_WARMUP_CAMPAIGN_DAILY_CAP, normalizeWarmupDay(day) * 5)
+  );
 }
 
 export function warmupCampaignHourlyCapForDay(day: number, businessHoursPerDay = 8) {

@@ -1,8 +1,16 @@
 import { promises as dns } from "dns";
 import { readFile } from "fs/promises";
+import { createClient } from "@supabase/supabase-js";
+import type { EmailVerificationState } from "@/lib/factory-types";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
+import { appendEmailFinderAuditEntry } from "@/lib/email-finder-observability";
+import {
+  localVerifyEmail,
+  remoteVerifyEmail,
+  resolveLocalVerificationConfig,
+} from "@/lib/email-verification-local";
 
-type EmailFinderVerificationMode = "validatedmails" | "heuristic";
+type EmailFinderVerificationMode = "local" | "heuristic";
 
 type PatternShape = {
   separator: "." | "_" | "-" | "mixed" | "none";
@@ -58,6 +66,26 @@ type DomainInsights = {
   domain: string;
   mx: DomainMailSignal;
   historicalKnownEmails: string[];
+  enrichAnythingKnownEmails: string[];
+  enrichAnythingObservedContacts: EmailIntelligenceContact[];
+  enrichAnythingDomainRecord: EmailIntelligenceDomainRecord | null;
+};
+
+type EmailIntelligenceContact = {
+  email: string;
+  displayName: string;
+  localPart: string;
+  domain: string;
+  validityStatus: string;
+  observedValid: boolean | null;
+  lastSeenAt: string;
+};
+
+type EmailIntelligenceDomainRecord = {
+  domain: string;
+  inferredPattern: string;
+  patternConfidence: number | null;
+  patternSampleCount: number;
 };
 
 type QueueItem = {
@@ -71,13 +99,17 @@ type QueueItem = {
 };
 
 type ValidationConfig = {
+  requestId: string;
+  auditSource: string;
+  auditContext: Record<string, unknown>;
   id: string;
   name: string;
+  companyName: string;
   domain: string;
+  linkedinProfileUrl: string;
   maxCandidates: number;
   knownEmails: string[];
   verificationMode: EmailFinderVerificationMode;
-  validatedMailsApiKey: string;
   maxCredits: number;
   timeoutSeconds: number;
   stopOnFirstHit: boolean;
@@ -90,6 +122,16 @@ type ValidationConfig = {
   canaryHardBounces: number;
   canaryMinSamples: number;
   canaryMaxHardBounceRate: number;
+  localVerificationEnabled: boolean;
+  localFallbackOnRisky: boolean;
+  externalProviderFallbackEnabled: boolean;
+  externalProviderNames: string[];
+};
+
+export type ExactEmailVerificationResult = {
+  email: string;
+  realVerifiedEmail: boolean;
+  emailVerification: EmailVerificationState | null;
 };
 
 const TABLE_RUN_LEAD = "demanddev_outreach_run_leads";
@@ -97,7 +139,7 @@ const EMAIL_RE = /^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9
 const DOMAIN_RE = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9-]+)+$/;
 const PREVIEW_PLACEHOLDER_EMAIL_PREFIX = "preview-missing-email+";
 const OUTREACH_PATH = process.env.VERCEL ? "/tmp/factory_outreach.v1.json" : `${process.cwd()}/data/outreach.v1.json`;
-const TRUSTED_STATUSES = new Set(["new", "scheduled", "sent", "replied", "unsubscribed"]);
+const TRUSTED_STATUSES = new Set(["replied", "unsubscribed"]);
 const NON_COMPANY_PROFILE_DOMAIN_ROOTS = new Set([
   "linkedin.com",
   "linkedin.co",
@@ -129,9 +171,9 @@ const ROLE_LOCALS = new Set([
   "support",
   "team",
 ]);
-const VALIDATEDMAILS_URL = "https://api.validatedmails.com/validate";
 const MAX_BATCH_ITEMS = 200;
 const MAX_BATCH_CONCURRENCY = 10;
+const DEFAULT_EXTERNAL_EMAIL_PROVIDERS = ["airscale"];
 
 function asRecord(value: unknown) {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -164,6 +206,22 @@ function parseBool(value: unknown, fallback: boolean) {
   }
   if (typeof value === "number") return value !== 0;
   return fallback;
+}
+
+function toNullableBool(value: unknown): boolean | null {
+  if (typeof value === "boolean") return value;
+  const normalized = String(value ?? "").trim().toLowerCase();
+  if (!normalized) return null;
+  if (["true", "1", "yes", "y", "on"].includes(normalized)) return true;
+  if (["false", "0", "no", "n", "off"].includes(normalized)) return false;
+  return null;
+}
+
+function generateRequestId() {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return `emailfinder-${Date.now()}`;
 }
 
 function normalizeDomain(value: unknown) {
@@ -236,6 +294,53 @@ function extractFirstEmailAddress(value: unknown) {
   return embedded?.[1]?.toLowerCase() ?? "";
 }
 
+function cleanEnvValue(value: unknown) {
+  return String(value ?? "")
+    .replace(/\\r|\\n/g, "")
+    .trim();
+}
+
+function normalizeLinkedInProfileUrl(value: unknown) {
+  const raw = String(value ?? "").trim();
+  if (!raw) return "";
+  try {
+    const url = new URL(raw.startsWith("http") ? raw : `https://${raw}`);
+    const host = url.hostname.toLowerCase().replace(/^www\./, "");
+    if (!["linkedin.com", "linkedin.co"].some((root) => host === root || host.endsWith(`.${root}`))) {
+      return "";
+    }
+    return url.toString();
+  } catch {
+    return "";
+  }
+}
+
+function normalizeProviderNames(value: unknown) {
+  const raw =
+    typeof value === "string"
+      ? value
+      : Array.isArray(value)
+        ? value.join(",")
+        : cleanEnvValue(process.env.EMAIL_FINDER_EXTERNAL_PROVIDERS ?? process.env.EMAIL_FINDER_PAID_PROVIDERS);
+  const normalized = raw
+    .split(",")
+    .map((item) => item.trim().toLowerCase())
+    .filter(Boolean);
+  return uniqueInOrder(normalized.length ? normalized : DEFAULT_EXTERNAL_EMAIL_PROVIDERS);
+}
+
+function normalizeExternalProviderFallbackEnabled(value: unknown) {
+  const explicit = String(value ?? "").trim();
+  if (explicit) return parseBool(explicit, false);
+  const envValue = cleanEnvValue(
+    process.env.EMAIL_FINDER_EXTERNAL_WATERFALL_ENABLED ??
+      process.env.EMAIL_FINDER_PAID_PROVIDER_FALLBACK_ENABLED ??
+      process.env.EMAIL_FINDER_AIRSCALE_ENABLED
+  );
+  if (envValue) return parseBool(envValue, false);
+  return false;
+}
+
 function looksLikeRoleInbox(email: string) {
   const local = email.split("@", 1)[0] ?? "";
   return ROLE_LOCALS.has(local);
@@ -250,6 +355,93 @@ function isUsableKnownEmail(email: string, domain: string) {
   if (isNonCompanyProfileDomain(emailDomain)) return false;
   if (looksLikeRoleInbox(normalized)) return false;
   return true;
+}
+
+function parsePersonName(value: unknown) {
+  const parts = normalizeNameParts(value);
+  if (parts.length < 2) return null;
+  return {
+    first: parts[0] ?? "",
+    last: parts[parts.length - 1] ?? "",
+  };
+}
+
+function generatePatternLocalPart(pattern: string, personName: string) {
+  const person = parsePersonName(personName);
+  if (!person) return "";
+  const firstInitial = person.first[0] ?? "";
+  const lastInitial = person.last[0] ?? "";
+  const normalized = pattern.trim().toLowerCase();
+  const localPart =
+    normalized === "first"
+      ? person.first
+      : normalized === "first.last"
+        ? `${person.first}.${person.last}`
+        : normalized === "first_last"
+          ? `${person.first}_${person.last}`
+          : normalized === "first-last"
+            ? `${person.first}-${person.last}`
+            : normalized === "firstlast"
+              ? `${person.first}${person.last}`
+              : normalized === "flast"
+                ? `${firstInitial}${person.last}`
+                : normalized === "firstl"
+                  ? `${person.first}${lastInitial}`
+                  : normalized === "f.last"
+                    ? `${firstInitial}.${person.last}`
+                    : normalized === "first.l"
+                      ? `${person.first}.${lastInitial}`
+                      : normalized === "last.first"
+                        ? `${person.last}.${person.first}`
+                        : normalized === "lastf"
+                          ? `${person.last}${firstInitial}`
+                          : normalized === "f_last"
+                            ? `${firstInitial}_${person.last}`
+                            : normalized === "last"
+                              ? person.last
+                              : "";
+  return normalizeLocalPart(localPart);
+}
+
+function findObservedPersonContactEmails(personName: string, contacts: EmailIntelligenceContact[]) {
+  const person = parsePersonName(personName);
+  if (!person) return [];
+  const generatedLocals = new Set(generateLocalParts(personName));
+  const scored = [] as Array<{ email: string; score: number }>;
+
+  for (const contact of contacts) {
+    const contactPerson = parsePersonName(contact.displayName);
+    let score = 0;
+    if (contactPerson?.first === person.first && contactPerson.last === person.last) {
+      score += 100;
+    } else if (contactPerson?.last === person.last) {
+      score += 20;
+    }
+    if (generatedLocals.has(contact.localPart)) {
+      score += 30;
+    }
+    if (score >= 100) {
+      scored.push({ email: contact.email, score });
+    }
+  }
+
+  return scored
+    .sort((left, right) => right.score - left.score)
+    .map((row) => row.email);
+}
+
+function inferredPatternCandidateEmail(input: {
+  personName: string;
+  domain: string;
+  domainRecord: EmailIntelligenceDomainRecord | null;
+}) {
+  const domainRecord = input.domainRecord;
+  if (!domainRecord?.inferredPattern) return "";
+  if ((domainRecord.patternConfidence ?? 0) < 0.5 || domainRecord.patternSampleCount < 1) return "";
+  const localPart = generatePatternLocalPart(domainRecord.inferredPattern, input.personName);
+  if (!localPart) return "";
+  const email = `${localPart}@${input.domain}`;
+  return isUsableKnownEmail(email, input.domain) ? email : "";
 }
 
 function localShape(localPart: string): PatternShape {
@@ -431,32 +623,46 @@ function buildPatternScores(emails: string[], profile: PatternProfile) {
   return rows;
 }
 
-function buildCandidates(config: ValidationConfig, knownEmails: string[]) {
+function buildCandidates(config: ValidationConfig, knownEmails: string[], priorityEmails: string[] = []) {
   const localParts = generateLocalParts(config.name);
   if (!localParts.length) {
     throw new Error("could not generate candidates from name");
   }
 
-  const generated = localParts.slice(0, config.maxCandidates).map((localPart) => `${localPart}@${config.domain}`);
+  const generated = localParts.map((localPart) => `${localPart}@${config.domain}`);
   const cleanedKnownEmails = uniqueInOrder(knownEmails.filter((email) => isUsableKnownEmail(email, config.domain)));
+  const priorityCandidates = uniqueInOrder(
+    priorityEmails
+      .map((email) => extractFirstEmailAddress(email))
+      .filter((email) => isUsableKnownEmail(email, config.domain))
+  );
 
   if (!cleanedKnownEmails.length) {
+    const orderedCandidates = uniqueInOrder([...priorityCandidates, ...generated]).slice(0, config.maxCandidates);
     return {
-      orderedCandidates: generated,
+      orderedCandidates,
       patternScores: {} as Record<string, number>,
-      orderingMeta: { method: "generation_order" },
+      orderingMeta: {
+        method: priorityCandidates.length ? "priority_then_generation_order" : "generation_order",
+        priority_candidates: priorityCandidates,
+      },
       profile: buildPatternProfile([], config.domain),
     };
   }
 
   const profile = buildPatternProfile(cleanedKnownEmails, config.domain);
   const rows = buildPatternScores(generated, profile);
+  const orderedCandidates = uniqueInOrder([...priorityCandidates, ...rows.map((row) => row.email)]).slice(
+    0,
+    config.maxCandidates
+  );
 
   return {
-    orderedCandidates: rows.map((row) => row.email),
+    orderedCandidates,
     patternScores: Object.fromEntries(rows.map((row) => [row.email, row.pattern_score])),
     orderingMeta: {
-      method: "pattern_score",
+      method: priorityCandidates.length ? "priority_then_pattern_score" : "pattern_score",
+      priority_candidates: priorityCandidates,
       profile: {
         stage: profile.stage,
         sample_size: profile.sampleSize,
@@ -545,6 +751,58 @@ function confidenceRank(level: string) {
   if (normalized === "medium") return 1;
   if (normalized === "low") return 0;
   return -1;
+}
+
+function buildEmailVerificationStateFromAttempt(input: {
+  verificationModeUsed: EmailFinderVerificationMode;
+  attempt: Record<string, unknown>;
+}): EmailVerificationState | null {
+  const details = asRecord(input.attempt.details);
+  const snapshot: EmailVerificationState = {
+    mode: input.verificationModeUsed,
+    provider: String(details.provider ?? "").trim().toLowerCase(),
+    verdict: String(input.attempt.verdict ?? "").trim().toLowerCase(),
+    confidence: String(input.attempt.confidence ?? "").trim().toLowerCase(),
+    reason: String(details.reason ?? details.provider_reason ?? "").trim(),
+    mxStatus: String(details.mx_status ?? "").trim().toLowerCase(),
+    acceptAll: toNullableBool(details.accept_all ?? details.acceptall),
+    catchAll: toNullableBool(details.catch_all ?? details.catchall),
+    pValid:
+      typeof input.attempt.p_valid === "number" && Number.isFinite(input.attempt.p_valid)
+        ? input.attempt.p_valid
+        : typeof details.p_valid === "number" && Number.isFinite(details.p_valid)
+          ? details.p_valid
+          : null,
+    httpStatus:
+      typeof details.http_status === "number" && Number.isFinite(details.http_status)
+        ? details.http_status
+        : null,
+    providerStatus: String(details.provider_status ?? details.providerStatus ?? "").trim(),
+  };
+  if (
+    !snapshot.mode &&
+    !snapshot.provider &&
+    !snapshot.verdict &&
+    !snapshot.confidence &&
+    !snapshot.reason &&
+    !snapshot.mxStatus &&
+    snapshot.acceptAll === null &&
+    snapshot.catchAll === null
+  ) {
+    return null;
+  }
+  return snapshot;
+}
+
+function isSafeExactVerificationState(state: EmailVerificationState | null) {
+  if (!state) return false;
+  const verdict = String(state.verdict ?? "").trim().toLowerCase();
+  return (
+    state.mode !== "heuristic" &&
+    ["likely-valid", "valid", "accepted", "deliverable"].includes(verdict) &&
+    state.acceptAll !== true &&
+    state.catchAll !== true
+  );
 }
 
 function queueItemFromAttempt(attempt: Record<string, unknown>, route: string, reason: string): QueueItem {
@@ -740,18 +998,42 @@ function normalizeConfidenceThreshold(value: unknown): ValidationConfig["stopOnM
 }
 
 function normalizeVerificationMode(value: unknown): EmailFinderVerificationMode {
-  const normalized = String(value ?? "validatedmails").trim().toLowerCase();
+  const normalized = String(value ?? "local").trim().toLowerCase();
+  if (["local", "smtp", "smtp_local", "smtp-local", "enrichanything", "enrichanything-local"].includes(normalized)) {
+    return "local";
+  }
+  // Legacy callers used "validatedmails" to mean "real verification".
+  // LastB2B now uses the local EnrichAnything verifier for that contract.
   if (normalized === "validatedmails") {
-    return "validatedmails";
+    return "local";
   }
   if (["heuristic", "pattern", "none", "best_guess", "best-guess"].includes(normalized)) {
     return "heuristic";
   }
-  throw new Error("Only verification modes 'validatedmails' and 'heuristic' are supported");
+  throw new Error("Only verification modes 'local' and 'heuristic' are supported");
+}
+
+function normalizeLocalVerificationEnabled(value: unknown) {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  if (!normalized) {
+    return String(process.env.EMAIL_FINDER_LOCAL_VERIFICATION_ENABLED ?? "true").toLowerCase() === "true";
+  }
+  return ["true", "1", "yes", "y", "on"].includes(normalized);
+}
+
+function normalizeLocalFallbackOnRisky(value: unknown) {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  if (!normalized) {
+    return String(process.env.EMAIL_FINDER_LOCAL_FALLBACK_ON_RISKY ?? "false").toLowerCase() === "true";
+  }
+  return ["true", "1", "yes", "y", "on"].includes(normalized);
 }
 
 function parseValidationConfig(payload: unknown): ValidationConfig {
   const body = asRecord(payload);
+  const requestId = String(body.request_id ?? "").trim() || generateRequestId();
+  const auditSource = String(body.audit_source ?? "").trim() || "unspecified";
+  const auditContext = asRecord(body.audit_context);
   const name = String(body.name ?? "").trim();
   const domain = normalizeDomain(body.domain);
   if (!name) {
@@ -772,20 +1054,20 @@ function parseValidationConfig(payload: unknown): ValidationConfig {
   const canaryPolicy = asRecord(body.canary_policy);
   const rawHitStatuses = Array.isArray(body.hit_statuses) ? body.hit_statuses : null;
   const verificationMode = normalizeVerificationMode(body.verification_mode);
-  const validatedMailsApiKey = String(body.validatedmails_api_key ?? "").trim();
-
-  if (verificationMode === "validatedmails" && !validatedMailsApiKey) {
-    throw new Error("validatedmails_api_key is required for real verification");
-  }
-
   return {
+    requestId,
+    auditSource,
+    auditContext,
     id: String(body.id ?? "").trim() || "lead-0",
     name,
+    companyName: String(body.company_name ?? body.companyName ?? "").trim(),
     domain,
+    linkedinProfileUrl: normalizeLinkedInProfileUrl(
+      body.linkedin_url ?? body.linkedinUrl ?? body.linkedin_profile_url ?? body.linkedinProfileUrl ?? body.source_url
+    ),
     maxCandidates: boundedInt(body.max_candidates, 12, 1, 20),
     knownEmails: rawKnownEmails.map((value) => extractFirstEmailAddress(value)).filter(Boolean),
     verificationMode,
-    validatedMailsApiKey,
     maxCredits: boundedInt(body.max_credits, 7, 1, 500),
     timeoutSeconds: boundedFloat(body.probe_timeout_seconds ?? body.timeout_seconds, 8, 1, 20),
     stopOnFirstHit: parseBool(body.stop_on_first_hit, true),
@@ -801,6 +1083,12 @@ function parseValidationConfig(payload: unknown): ValidationConfig {
     canaryHardBounces: boundedInt(canaryObservations.hard_bounces, 0, 0, 1_000_000),
     canaryMinSamples: boundedInt(canaryPolicy.min_samples, 25, 1, 100_000),
     canaryMaxHardBounceRate: boundedFloat(canaryPolicy.max_hard_bounce_rate, 0.03, 0, 1),
+    localVerificationEnabled: normalizeLocalVerificationEnabled(body.local_verification),
+    localFallbackOnRisky: normalizeLocalFallbackOnRisky(body.local_fallback_on_risky),
+    externalProviderFallbackEnabled: normalizeExternalProviderFallbackEnabled(
+      body.external_provider_fallback ?? body.paid_provider_fallback
+    ),
+    externalProviderNames: normalizeProviderNames(body.external_providers ?? body.paid_providers),
   };
 }
 
@@ -860,6 +1148,165 @@ function buildHeuristicVerificationOutcome(input: {
       candidate_count: input.candidateCount,
     },
   };
+}
+
+function hasHighConfidenceSendableAttempt(attempts: Array<Record<string, unknown>>) {
+  return attempts.some((attempt) => {
+    const verdict = String(attempt.verdict ?? "").trim().toLowerCase();
+    const confidence = String(attempt.confidence ?? "").trim().toLowerCase();
+    return ["likely-valid", "valid", "deliverable"].includes(verdict) && confidence === "high";
+  });
+}
+
+function shouldRunExternalProviderFallback(input: {
+  config: ValidationConfig;
+  domainInsights: DomainInsights;
+  attempts: Array<Record<string, unknown>>;
+  creditsUsed: number;
+}) {
+  if (!input.config.externalProviderFallbackEnabled) return false;
+  if (!input.config.externalProviderNames.length) return false;
+  if (input.config.maxCredits <= input.creditsUsed) return false;
+  if (input.domainInsights.mx.status === "no-mail-route") return false;
+  if (hasHighConfidenceSendableAttempt(input.attempts)) return false;
+  return true;
+}
+
+async function lookupExternalProviderEmail(input: {
+  config: ValidationConfig;
+  timeoutMs: number;
+}): Promise<ExternalEmailProviderLookupResult> {
+  for (const providerName of input.config.externalProviderNames) {
+    if (providerName === "airscale") {
+      const result = await lookupAirscaleEmail(input);
+      if (result.email || result.status !== "skipped") return result;
+      continue;
+    }
+  }
+
+  return {
+    provider: input.config.externalProviderNames[0] ?? "none",
+    email: "",
+    verdict: "unknown",
+    confidence: "low",
+    reason: "no_supported_external_provider_configured",
+    status: "skipped",
+    httpStatus: null,
+    raw: {},
+    creditsUsed: 0,
+  };
+}
+
+async function verifyExternalProviderEmail(input: {
+  email: string;
+  providerResult: ExternalEmailProviderLookupResult;
+  domainInsights: DomainInsights;
+  config: ValidationConfig;
+  localConfig: ReturnType<typeof resolveLocalVerificationConfig>;
+  timeoutMs: number;
+}) {
+  let outcome = {
+    verdict: input.providerResult.verdict,
+    confidence: input.providerResult.confidence,
+    details: {
+      provider: input.providerResult.provider,
+      reason: input.providerResult.reason,
+      provider_status: input.providerResult.status,
+      http_status: input.providerResult.httpStatus,
+      mx_status: input.domainInsights.mx.status,
+      mx_records: input.domainInsights.mx.records,
+      external_provider_fallback: true,
+      external_provider: input.providerResult.provider,
+      external_provider_status: input.providerResult.status,
+      external_provider_http_status: input.providerResult.httpStatus,
+      external_verification_only: true,
+    } as Record<string, unknown>,
+  };
+
+  if (!input.config.localVerificationEnabled) return outcome;
+
+  const hasRemoteLocalVerifier = Boolean(input.localConfig.serviceUrl && input.localConfig.serviceToken);
+  const localVerifierSource = hasRemoteLocalVerifier ? "remote-service" : "app-smtp";
+  const localProbeTimeoutMs = Math.max(
+    1_000,
+    Math.min(input.localConfig.timeoutMs, Math.round(input.timeoutMs))
+  );
+  const localResult = hasRemoteLocalVerifier
+    ? await remoteVerifyEmail({
+        email: input.email,
+        serviceUrl: input.localConfig.serviceUrl,
+        serviceToken: input.localConfig.serviceToken,
+        allowPaidFallback: false,
+        timeoutMs: localProbeTimeoutMs,
+      })
+    : await localVerifyEmail({
+        email: input.email,
+        heloDomain: input.localConfig.heloDomain,
+        mailFrom: input.localConfig.mailFrom,
+        enableSmtp: input.localConfig.enableSmtp,
+        enableStartTls: input.localConfig.enableStartTls,
+        checkCatchAll: input.localConfig.checkCatchAll,
+        timeoutMs: localProbeTimeoutMs,
+      });
+
+  if (!localResult) return outcome;
+
+  const externalValid =
+    input.providerResult.verdict === "likely-valid" && input.providerResult.confidence === "high";
+  const localDetails = asRecord(localResult.details);
+  if (externalValid && localResult.verdict !== "invalid") {
+    return {
+      verdict: input.providerResult.verdict,
+      confidence: input.providerResult.confidence,
+      details: {
+        provider: input.providerResult.provider,
+        reason:
+          localResult.verdict === "risky-valid"
+            ? "external_provider_valid_overrode_local_catchall_uncertainty"
+            : input.providerResult.reason,
+        provider_status: input.providerResult.status,
+        http_status: input.providerResult.httpStatus,
+        mx_status: String(localDetails.mx_status ?? input.domainInsights.mx.status).trim().toLowerCase(),
+        mx_records: localDetails.mx_records ?? input.domainInsights.mx.records,
+        accept_all: false,
+        catch_all: false,
+        external_provider_fallback: true,
+        external_provider: input.providerResult.provider,
+        external_provider_status: input.providerResult.status,
+        external_provider_http_status: input.providerResult.httpStatus,
+        external_provider_verdict: input.providerResult.verdict,
+        external_provider_confidence: input.providerResult.confidence,
+        external_provider_reason: input.providerResult.reason,
+        local_verification: true,
+        local_verifier_source: localVerifierSource,
+        local_verdict: localResult.verdict,
+        local_confidence: localResult.confidence,
+        local_reason: localResult.reason,
+        local_accept_all: toNullableBool(localDetails.accept_all ?? localDetails.acceptall),
+        local_catch_all: toNullableBool(localDetails.catch_all ?? localDetails.catchall),
+        local_details: localDetails,
+      },
+    };
+  }
+
+  outcome = {
+    verdict: localResult.verdict,
+    confidence: localResult.confidence,
+    details: {
+      ...localDetails,
+      local_verification: true,
+      local_verifier_source: localVerifierSource,
+      local_reason: localResult.reason,
+      external_provider_fallback: true,
+      external_provider: input.providerResult.provider,
+      external_provider_status: input.providerResult.status,
+      external_provider_http_status: input.providerResult.httpStatus,
+      external_provider_verdict: input.providerResult.verdict,
+      external_provider_confidence: input.providerResult.confidence,
+      external_provider_reason: input.providerResult.reason,
+    },
+  };
+  return outcome;
 }
 
 async function withTimeout<T>(task: Promise<T>, timeoutMs: number, onTimeout: () => T): Promise<T> {
@@ -934,14 +1381,218 @@ async function resolveDomainMailSignal(domain: string, timeoutMs: number): Promi
   }
 }
 
+type ExternalEmailProviderLookupResult = {
+  provider: string;
+  email: string;
+  verdict: string;
+  confidence: string;
+  reason: string;
+  status: string;
+  httpStatus: number | null;
+  raw: Record<string, unknown>;
+  creditsUsed: number;
+};
+
+function airscaleApiKey() {
+  return cleanEnvValue(process.env.AIRSCALE_API_KEY ?? process.env.EMAIL_FINDER_AIRSCALE_API_KEY);
+}
+
+function airscaleBaseUrl() {
+  return (
+    cleanEnvValue(process.env.AIRSCALE_API_BASE_URL ?? process.env.EMAIL_FINDER_AIRSCALE_BASE_URL) ||
+    "https://api.airscale.io"
+  ).replace(/\/+$/, "");
+}
+
+let airscaleCreditCache: { expiresAt: number; credits: number | null } | null = null;
+
+async function getAirscaleCreditCount(input: {
+  key: string;
+  timeoutMs: number;
+}): Promise<number | null> {
+  const now = Date.now();
+  if (airscaleCreditCache && airscaleCreditCache.expiresAt > now) {
+    return airscaleCreditCache.credits;
+  }
+
+  const controller = new AbortController();
+  const timeoutHandle = setTimeout(() => controller.abort(), Math.max(1_000, input.timeoutMs));
+  try {
+    const response = await fetch(`${airscaleBaseUrl()}/v1/credits`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${input.key}`,
+        "Content-Type": "application/json",
+      },
+      signal: controller.signal,
+      body: JSON.stringify({}),
+    });
+    const raw = await response.text();
+    let payload: Record<string, unknown> = {};
+    try {
+      payload = raw ? asRecord(JSON.parse(raw)) : {};
+    } catch {
+      payload = {};
+    }
+    const responsePayload = asRecord(payload.response);
+    const credits = Number(responsePayload.credits ?? payload.credits);
+    const normalizedCredits = Number.isFinite(credits) ? Math.max(0, Math.trunc(credits)) : null;
+    airscaleCreditCache = {
+      credits: normalizedCredits,
+      expiresAt: Date.now() + 5 * 60 * 1000,
+    };
+    return normalizedCredits;
+  } catch {
+    airscaleCreditCache = {
+      credits: null,
+      expiresAt: Date.now() + 60 * 1000,
+    };
+    return null;
+  } finally {
+    clearTimeout(timeoutHandle);
+  }
+}
+
+function mapExternalEmailStatusToOutcome(status: string) {
+  const normalized = status.trim().toLowerCase().replace(/[\s_]+/g, "-");
+  if (["valid", "verified", "deliverable", "safe", "success"].includes(normalized)) {
+    return {
+      verdict: "likely-valid",
+      confidence: "high",
+      reason: normalized || "external_provider_valid",
+    };
+  }
+  if (["catch-all", "accept-all", "risky", "risky-valid", "unknown", "unverified"].includes(normalized)) {
+    return {
+      verdict: "risky-valid",
+      confidence: "medium",
+      reason: normalized || "external_provider_risky",
+    };
+  }
+  if (["invalid", "undeliverable", "bounced", "not-found", "not-found-on-provider"].includes(normalized)) {
+    return {
+      verdict: "invalid",
+      confidence: "high",
+      reason: normalized || "external_provider_invalid",
+    };
+  }
+  return {
+    verdict: "unknown",
+    confidence: "low",
+    reason: normalized || "external_provider_unknown",
+  };
+}
+
+async function lookupAirscaleEmail(input: {
+  config: ValidationConfig;
+  timeoutMs: number;
+}): Promise<ExternalEmailProviderLookupResult> {
+  const key = airscaleApiKey();
+  if (!key) {
+    return {
+      provider: "airscale",
+      email: "",
+      verdict: "unknown",
+      confidence: "low",
+      reason: "missing_airscale_api_key",
+      status: "skipped",
+      httpStatus: null,
+      raw: {},
+      creditsUsed: 0,
+    };
+  }
+
+  const remainingCredits = await getAirscaleCreditCount({
+    key,
+    timeoutMs: Math.min(5_000, Math.max(1_000, input.timeoutMs)),
+  });
+  if (remainingCredits === 0) {
+    return {
+      provider: "airscale",
+      email: "",
+      verdict: "unknown",
+      confidence: "low",
+      reason: "airscale_no_credits",
+      status: "no_credits",
+      httpStatus: null,
+      raw: {},
+      creditsUsed: 0,
+    };
+  }
+
+  const person = parsePersonName(input.config.name);
+  const controller = new AbortController();
+  const timeoutHandle = setTimeout(() => controller.abort(), Math.max(1_000, input.timeoutMs));
+  try {
+    const response = await fetch(`${airscaleBaseUrl()}/v1/email`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${key}`,
+        "Content-Type": "application/json",
+      },
+      signal: controller.signal,
+      body: JSON.stringify({
+        first_name: person?.first ?? "",
+        last_name: person?.last ?? "",
+        full_name: input.config.name,
+        domain: input.config.domain,
+        company_name: input.config.companyName,
+        linkedin_profile_url: input.config.linkedinProfileUrl,
+      }),
+    });
+    const rawText = await response.text();
+    let raw: Record<string, unknown> = {};
+    try {
+      raw = rawText ? asRecord(JSON.parse(rawText)) : {};
+    } catch {
+      raw = { raw: rawText.slice(0, 500) };
+    }
+
+    const email = extractFirstEmailAddress(raw.email ?? raw.professional_email ?? raw.work_email);
+    const providerStatus = String(raw.email_status ?? raw.status ?? raw.verification_status ?? "")
+      .trim()
+      .toLowerCase();
+    const outcome = mapExternalEmailStatusToOutcome(providerStatus || (email ? "valid" : "not-found"));
+    const error = String(raw.error ?? raw.message ?? "").trim();
+    return {
+      provider: "airscale",
+      email,
+      verdict: response.ok ? outcome.verdict : "unknown",
+      confidence: response.ok ? outcome.confidence : "low",
+      reason: response.ok ? outcome.reason : error || `airscale_http_${response.status}`,
+      status: providerStatus || (response.ok ? (email ? "found" : "not_found") : "error"),
+      httpStatus: response.status,
+      raw,
+      creditsUsed: response.ok && email ? 1 : 0,
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error ?? "airscale request failed");
+    return {
+      provider: "airscale",
+      email: "",
+      verdict: "unknown",
+      confidence: "low",
+      reason: message,
+      status: "error",
+      httpStatus: null,
+      raw: {},
+      creditsUsed: 0,
+    };
+  } finally {
+    clearTimeout(timeoutHandle);
+  }
+}
+
 async function loadHistoricalKnownEmails(domain: string, limit = 24): Promise<string[]> {
   if (isNonCompanyProfileDomain(domain)) return [];
   const accepted = new Set<string>();
 
-  const acceptEmail = (email: unknown, status: unknown) => {
+  const acceptEmail = (email: unknown, status: unknown, realVerifiedEmail: unknown = false) => {
     const normalized = extractFirstEmailAddress(email);
     const normalizedStatus = String(status ?? "").trim().toLowerCase();
-    if (!TRUSTED_STATUSES.has(normalizedStatus)) return;
+    const trustedByVerification = realVerifiedEmail === true;
+    const trustedByOutcome = TRUSTED_STATUSES.has(normalizedStatus);
+    if (!trustedByVerification && !trustedByOutcome) return;
     if (!isUsableKnownEmail(normalized, domain)) return;
     accepted.add(normalized);
   };
@@ -951,13 +1602,13 @@ async function loadHistoricalKnownEmails(domain: string, limit = 24): Promise<st
     try {
       const { data } = await supabase
         .from(TABLE_RUN_LEAD)
-        .select("email,status,updated_at")
+        .select("email,status,real_verified_email,updated_at")
         .eq("domain", domain)
         .order("updated_at", { ascending: false })
         .limit(Math.max(limit * 4, limit));
       for (const row of data ?? []) {
         const record = asRecord(row);
-        acceptEmail(record.email, record.status);
+        acceptEmail(record.email, record.status, record.real_verified_email);
         if (accepted.size >= limit) break;
       }
       return [...accepted];
@@ -973,7 +1624,7 @@ async function loadHistoricalKnownEmails(domain: string, limit = 24): Promise<st
     for (let index = runLeads.length - 1; index >= 0; index -= 1) {
       const row = asRecord(runLeads[index]);
       if (normalizeDomain(row.domain) !== domain) continue;
-      acceptEmail(row.email, row.status);
+      acceptEmail(row.email, row.status, row.real_verified_email ?? row.realVerifiedEmail);
       if (accepted.size >= limit) break;
     }
   } catch {
@@ -983,155 +1634,151 @@ async function loadHistoricalKnownEmails(domain: string, limit = 24): Promise<st
   return [...accepted];
 }
 
+let enrichAnythingEmailSupabase:
+  | ReturnType<typeof createClient>
+  | null
+  | undefined;
+
+function getEnrichAnythingEmailSupabase() {
+  if (enrichAnythingEmailSupabase !== undefined) {
+    return enrichAnythingEmailSupabase;
+  }
+
+  const url = cleanEnvValue(
+    process.env.ENRICHANYTHING_EMAIL_INTELLIGENCE_SUPABASE_URL ??
+      process.env.ENRICHANYTHING_SUPABASE_URL ??
+      process.env.ENRICHANYTHING_INTERNAL_SUPABASE_URL
+  );
+  const key = cleanEnvValue(
+    process.env.ENRICHANYTHING_EMAIL_INTELLIGENCE_SUPABASE_SERVICE_ROLE_KEY ??
+      process.env.ENRICHANYTHING_SUPABASE_SERVICE_ROLE_KEY ??
+      process.env.ENRICHANYTHING_SUPABASE_SERVICE_KEY ??
+      process.env.ENRICHANYTHING_SUPABASE_SECRET_KEY
+  );
+
+  if (!url || !key) {
+    enrichAnythingEmailSupabase = null;
+    return null;
+  }
+
+  enrichAnythingEmailSupabase = createClient(url, key, {
+    auth: {
+      autoRefreshToken: false,
+      persistSession: false,
+    },
+  });
+  return enrichAnythingEmailSupabase;
+}
+
+function normalizeEmailIntelligenceContact(row: Record<string, unknown>, domain: string): EmailIntelligenceContact | null {
+  const email = extractFirstEmailAddress(row.email);
+  if (!isUsableKnownEmail(email, domain)) return null;
+  const observedValid = toNullableBool(row.observed_valid ?? row.observedValid);
+  if (observedValid === false) return null;
+  const validityStatus = String(row.validity_status ?? row.validityStatus ?? "")
+    .trim()
+    .toLowerCase();
+  if (["invalid", "bounced", "suppressed", "unsubscribed"].includes(validityStatus)) return null;
+  return {
+    email,
+    displayName: String(row.display_name ?? row.displayName ?? "").trim(),
+    localPart: String(row.local_part ?? row.localPart ?? email.split("@", 1)[0] ?? "")
+      .trim()
+      .toLowerCase(),
+    domain,
+    validityStatus,
+    observedValid,
+    lastSeenAt: String(row.last_seen_at ?? row.lastSeenAt ?? "").trim(),
+  };
+}
+
+async function loadEnrichAnythingEmailIntelligence(domain: string): Promise<{
+  knownEmails: string[];
+  observedContacts: EmailIntelligenceContact[];
+  domainRecord: EmailIntelligenceDomainRecord | null;
+}> {
+  const empty = {
+    knownEmails: [] as string[],
+    observedContacts: [] as EmailIntelligenceContact[],
+    domainRecord: null as EmailIntelligenceDomainRecord | null,
+  };
+  if (isNonCompanyProfileDomain(domain)) return empty;
+
+  const supabase = getEnrichAnythingEmailSupabase();
+  if (!supabase) return empty;
+
+  try {
+    const [domainResult, contactsResult, mailboxesResult] = await Promise.all([
+      supabase
+        .from("app_email_domains")
+        .select("domain,inferred_pattern,pattern_confidence,pattern_sample_count")
+        .eq("domain", domain)
+        .limit(1)
+        .maybeSingle(),
+      supabase
+        .from("app_email_contacts")
+        .select("email,display_name,local_part,domain,validity_status,observed_valid,last_seen_at")
+        .eq("domain", domain)
+        .order("last_seen_at", { ascending: false, nullsFirst: false })
+        .limit(40),
+      supabase
+        .from("app_email_mailboxes")
+        .select("sender_email,sender_name,account_domain,last_sync_status,contact_count,message_count")
+        .eq("account_domain", domain)
+        .eq("last_sync_status", "success")
+        .order("contact_count", { ascending: false, nullsFirst: false })
+        .limit(20),
+    ]);
+
+    const contacts = (contactsResult.data ?? [])
+      .map((row) => normalizeEmailIntelligenceContact(asRecord(row), domain))
+      .filter((row): row is EmailIntelligenceContact => Boolean(row));
+    const mailboxEmails = (mailboxesResult.data ?? [])
+      .map((row) => extractFirstEmailAddress(asRecord(row).sender_email))
+      .filter((email) => isUsableKnownEmail(email, domain));
+    const knownEmails = uniqueInOrder([
+      ...contacts.map((contact) => contact.email),
+      ...mailboxEmails,
+    ]);
+    const domainRow = asRecord(domainResult.data);
+    const patternConfidence =
+      typeof domainRow.pattern_confidence === "number" && Number.isFinite(domainRow.pattern_confidence)
+        ? domainRow.pattern_confidence
+        : null;
+    const domainRecord = domainResult.error
+      ? null
+      : {
+          domain,
+          inferredPattern: String(domainRow.inferred_pattern ?? "").trim().toLowerCase(),
+          patternConfidence,
+          patternSampleCount: Math.max(0, Math.trunc(Number(domainRow.pattern_sample_count ?? 0) || 0)),
+        };
+
+    return {
+      knownEmails,
+      observedContacts: contacts,
+      domainRecord,
+    };
+  } catch {
+    return empty;
+  }
+}
+
 async function loadDomainInsights(domain: string, timeoutMs: number): Promise<DomainInsights> {
-  const [mx, historicalKnownEmails] = await Promise.all([
+  const [mx, historicalKnownEmails, enrichAnythingEmailIntelligence] = await Promise.all([
     resolveDomainMailSignal(domain, timeoutMs),
     loadHistoricalKnownEmails(domain),
+    loadEnrichAnythingEmailIntelligence(domain),
   ]);
 
   return {
     domain,
     mx,
     historicalKnownEmails,
+    enrichAnythingKnownEmails: enrichAnythingEmailIntelligence.knownEmails,
+    enrichAnythingObservedContacts: enrichAnythingEmailIntelligence.observedContacts,
+    enrichAnythingDomainRecord: enrichAnythingEmailIntelligence.domainRecord,
   };
-}
-
-async function verifyWithValidatedMails(email: string, apiKey: string, timeoutSeconds: number) {
-  const controller = new AbortController();
-  const timeoutHandle = setTimeout(() => controller.abort(), Math.max(1000, timeoutSeconds * 1000));
-
-  try {
-    const response = await fetch(VALIDATEDMAILS_URL, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
-      body: JSON.stringify({ email }),
-      signal: controller.signal,
-    });
-
-    let payload: unknown = {};
-    try {
-      payload = await response.json();
-    } catch {
-      payload = {};
-    }
-
-    const data = asRecord(payload);
-    const providerStatus = String(
-      data.status ?? data.result ?? data.verdict ?? data.state ?? ""
-    )
-      .trim()
-      .toLowerCase();
-    const toBoolish = (value: unknown) => {
-      if (typeof value === "boolean") return value;
-      const normalized = String(value ?? "").trim().toLowerCase();
-      if (!normalized) return null;
-      if (["true", "1", "yes"].includes(normalized)) return true;
-      if (["false", "0", "no"].includes(normalized)) return false;
-      return null;
-    };
-    const acceptAll =
-      toBoolish(data.accept_all) === true ||
-      toBoolish(data.acceptall) === true ||
-      toBoolish(data.catch_all) === true ||
-      toBoolish(data.catchall) === true;
-    const isValid = toBoolish(data.is_valid);
-    const isDeliverable =
-      toBoolish(data.deliverable) === true ||
-      toBoolish(data.is_deliverable) === true ||
-      toBoolish(data.smtp_ok) === true ||
-      toBoolish(data.smtp_check) === true ||
-      toBoolish(data.smtp_valid) === true ||
-      toBoolish(data.reachable) === true;
-    const status = providerStatus;
-
-    let verdict = "unknown";
-    let reason = "unrecognized response status";
-    if (
-      [
-        "valid",
-        "deliverable",
-        "accepted",
-        "ok",
-        "safe",
-        "safe-to-send",
-        "safe_to_send",
-        "reachable",
-      ].includes(status)
-    ) {
-      verdict = acceptAll ? "risky-valid" : "likely-valid";
-      reason = acceptAll ? `${status} + catch-all=true` : `${status} + catch-all=false`;
-    } else if (
-      ["catch-all", "catch_all", "accept-all", "accept_all", "catchall", "risky-valid", "risky_valid", "risky"].includes(
-        status
-      )
-    ) {
-      verdict = "risky-valid";
-      reason = `${status} + catch-all routing`;
-    } else if (["invalid", "undeliverable", "rejected", "bounce", "bounced", "failed", "bad"].includes(status)) {
-      verdict = "invalid";
-      reason = `status=${status}`;
-    } else if (status === "unknown") {
-      verdict = "unknown";
-      reason = "status=unknown";
-    } else if (isDeliverable) {
-      verdict = acceptAll ? "risky-valid" : "likely-valid";
-      reason = acceptAll ? "deliverable=true + catch-all=true" : "deliverable=true";
-    } else if (isValid === true) {
-      verdict = acceptAll ? "risky-valid" : "likely-valid";
-      reason = acceptAll ? "is_valid=true + catch-all=true" : "is_valid=true";
-    } else if (isValid === false) {
-      verdict = "invalid";
-      reason = "is_valid=false";
-    }
-
-    let confidence = "low";
-    const rawScore = typeof data.score === "number" ? data.score : Number(data.score);
-    const score = Number.isFinite(rawScore) ? rawScore : null;
-    if (status === "invalid" || verdict === "invalid") {
-      confidence = "high";
-    } else if (verdict === "likely-valid") {
-      confidence = acceptAll ? "medium" : score !== null && score >= 90 ? "high" : "medium";
-    } else if (verdict === "risky-valid") {
-      confidence = score !== null && score >= 85 ? "medium" : "low";
-    }
-
-    return {
-      verdict,
-      confidence,
-      details: {
-        verdict,
-        reason,
-        provider: "validatedmails",
-        provider_status: providerStatus,
-        provider_reason: data.reason,
-        accept_all: data.accept_all,
-        catch_all: data.catch_all ?? data.catchall,
-        deliverable: data.deliverable ?? data.is_deliverable,
-        smtp_ok: data.smtp_ok,
-        score: data.score,
-        trace_id: data.trace_id,
-        http_status: response.status,
-        mx_status: "mail-ready",
-      },
-    };
-  } catch (error) {
-    return {
-      verdict: "unknown",
-      confidence: "low",
-      details: {
-        verdict: "unknown",
-        reason: "validatedmails request failed",
-        provider: "validatedmails",
-        error: String((error as Error)?.message ?? error ?? "request failed"),
-      },
-    };
-  } finally {
-    clearTimeout(timeoutHandle);
-  }
 }
 
 async function runGuess(
@@ -1146,25 +1793,55 @@ async function runGuess(
       domain: config.domain,
       mx: { status: "unknown", records: [], error: "" },
       historicalKnownEmails: [],
+      enrichAnythingKnownEmails: [],
+      enrichAnythingObservedContacts: [],
+      enrichAnythingDomainRecord: null,
     };
 
   const combinedKnownEmails = uniqueInOrder([
     ...config.knownEmails,
     ...domainInsights.historicalKnownEmails,
+    ...domainInsights.enrichAnythingKnownEmails,
+  ]).filter((email) => isUsableKnownEmail(email, config.domain));
+  const priorityCandidateEmails = uniqueInOrder([
+    ...findObservedPersonContactEmails(config.name, domainInsights.enrichAnythingObservedContacts),
+    inferredPatternCandidateEmail({
+      personName: config.name,
+      domain: config.domain,
+      domainRecord: domainInsights.enrichAnythingDomainRecord,
+    }),
   ]).filter((email) => isUsableKnownEmail(email, config.domain));
 
-  const { orderedCandidates, patternScores, orderingMeta, profile } = buildCandidates(config, combinedKnownEmails);
+  const { orderedCandidates, patternScores, orderingMeta, profile } = buildCandidates(
+    config,
+    combinedKnownEmails,
+    priorityCandidateEmails
+  );
 
   const attempts = [] as Array<Record<string, unknown>>;
+  const externalProviderAttempts = [] as Array<Record<string, unknown>>;
   let creditsUsed = 0;
   const verificationModeUsed = config.verificationMode;
+
+  const localConfig = resolveLocalVerificationConfig();
+  if (
+    verificationModeUsed === "local" &&
+    config.localVerificationEnabled &&
+    !localConfig.serviceUrl &&
+    process.env.VERCEL &&
+    String(process.env.EMAIL_FINDER_ALLOW_SERVERLESS_SMTP ?? "").trim().toLowerCase() !== "true"
+  ) {
+    throw new Error(
+      "Local EnrichAnything email validation requires an SMTP-capable EmailFinder worker; Vercel serverless cannot run SMTP probes. Set EMAIL_FINDER_API_BASE_URL or EMAIL_FINDER_LOCAL_VERIFIER_URL to that worker."
+    );
+  }
 
   for (const [index, email] of orderedCandidates.entries()) {
     let outcome: {
       verdict: string;
       confidence: string;
       details: Record<string, unknown>;
-    };
+    } | null = null;
 
     if (domainInsights.mx.status === "no-mail-route") {
       outcome = {
@@ -1190,11 +1867,103 @@ async function runGuess(
         candidateCount: orderedCandidates.length,
       });
     } else {
-      if (creditsUsed >= config.maxCredits) {
-        break;
+      let localResult: Awaited<ReturnType<typeof localVerifyEmail>> | null = null;
+      let localVerifierSource = "none";
+      if (config.localVerificationEnabled) {
+        const hasRemoteLocalVerifier = Boolean(localConfig.serviceUrl && localConfig.serviceToken);
+        localVerifierSource = hasRemoteLocalVerifier ? "remote-service" : "app-smtp";
+        const localProbeTimeoutMs = Math.max(
+          1_000,
+          Math.min(localConfig.timeoutMs, Math.round(config.timeoutSeconds * 1000))
+        );
+        const nextLocalResult = hasRemoteLocalVerifier
+          ? await remoteVerifyEmail({
+              email,
+              serviceUrl: localConfig.serviceUrl,
+              serviceToken: localConfig.serviceToken,
+              // Keep paid-provider fallback under the app's control so spend is auditable here.
+              allowPaidFallback: false,
+              timeoutMs: localProbeTimeoutMs,
+            })
+          : await localVerifyEmail({
+              email,
+              heloDomain: localConfig.heloDomain,
+              mailFrom: localConfig.mailFrom,
+              enableSmtp: localConfig.enableSmtp,
+              enableStartTls: localConfig.enableStartTls,
+              checkCatchAll: localConfig.checkCatchAll,
+              timeoutMs: localProbeTimeoutMs,
+            });
+        if (nextLocalResult) {
+          localResult = nextLocalResult;
+          const localVerdict = localResult.verdict;
+          const localPaidUsed = Boolean(asRecord(localResult.details).paid_used);
+          if (localPaidUsed) {
+            creditsUsed += 1;
+          }
+          const localIsFinal =
+            localPaidUsed ||
+            localVerdict === "invalid" ||
+            localVerdict === "likely-valid" ||
+            (localVerdict === "risky-valid" && !config.localFallbackOnRisky);
+          if (localIsFinal) {
+            outcome = {
+              verdict: localResult.verdict,
+              confidence: localResult.confidence,
+              details: {
+                ...asRecord(localResult.details),
+                local_verification: true,
+                local_verifier_source: localVerifierSource,
+                local_reason: localResult.reason,
+              },
+            };
+          }
+        }
       }
-      outcome = await verifyWithValidatedMails(email, config.validatedMailsApiKey, config.timeoutSeconds);
-      creditsUsed += 1;
+
+      if (!outcome && verificationModeUsed === "local") {
+        outcome = localResult
+          ? {
+              verdict: localResult.verdict,
+              confidence: localResult.confidence,
+              details: {
+                ...asRecord(localResult.details),
+                local_verification: true,
+                local_verifier_source: localVerifierSource,
+                local_reason: localResult.reason,
+              },
+            }
+          : {
+              verdict: "unknown",
+              confidence: "low",
+              details: {
+                provider: "local-verification-gate",
+                reason: config.localVerificationEnabled ? "local_result_missing" : "local_verification_disabled",
+                local_verification: false,
+              },
+            };
+      }
+
+      if (!outcome) {
+        outcome = {
+          verdict: "unknown",
+          confidence: "low",
+          details: {
+            provider: "local-verification-gate",
+            reason: config.localVerificationEnabled ? "local_non_final_result" : "local_verification_disabled",
+            local_verification: Boolean(localResult),
+            local_verifier_source: localVerifierSource,
+            local_result: localResult
+              ? {
+                  verdict: localResult.verdict,
+                  confidence: localResult.confidence,
+                  reason: localResult.reason,
+                  details: localResult.details,
+                }
+              : null,
+          },
+        };
+      }
     }
 
     const attempt = {
@@ -1225,6 +1994,66 @@ async function runGuess(
     }
   }
 
+  if (
+    verificationModeUsed === "local" &&
+    shouldRunExternalProviderFallback({
+      config,
+      domainInsights,
+      attempts,
+      creditsUsed,
+    })
+  ) {
+    const externalResult = await lookupExternalProviderEmail({
+      config,
+      timeoutMs: Math.max(1_000, Math.min(localConfig.timeoutMs, Math.round(config.timeoutSeconds * 1000))),
+    });
+    externalProviderAttempts.push({
+      provider: externalResult.provider,
+      status: externalResult.status,
+      email_found: Boolean(externalResult.email),
+      verdict: externalResult.verdict,
+      confidence: externalResult.confidence,
+      reason: externalResult.reason,
+      http_status: externalResult.httpStatus,
+      credits_used: externalResult.creditsUsed,
+    });
+    creditsUsed += externalResult.creditsUsed;
+
+    const email = externalResult.email;
+    const priorAttempt = attempts.find((attempt) => extractFirstEmailAddress(attempt.email) === email);
+    const priorVerdict = String(priorAttempt?.verdict ?? "").trim().toLowerCase();
+    if (
+      email &&
+      isUsableKnownEmail(email, config.domain) &&
+      priorVerdict !== "invalid"
+    ) {
+      const outcome = await verifyExternalProviderEmail({
+        email,
+        providerResult: externalResult,
+        domainInsights,
+        config,
+        localConfig,
+        timeoutMs: Math.max(1_000, Math.min(localConfig.timeoutMs, Math.round(config.timeoutSeconds * 1000))),
+      });
+      const attempt = {
+        attempt: attempts.length + 1,
+        email,
+        verdict: outcome.verdict,
+        confidence: outcome.confidence,
+        is_hit: config.hitStatuses.includes(outcome.verdict),
+        details: outcome.details,
+      } as Record<string, unknown>;
+      const pValid = computeAttemptPValid({
+        attempt,
+        candidateIndex: orderedCandidates.length,
+        candidateCount: orderedCandidates.length + 1,
+      });
+      attempt.p_valid = pValid;
+      asRecord(attempt.details).p_valid = pValid;
+      attempts.push(attempt);
+    }
+  }
+
   const routing = routeAttempts(attempts, config);
   const bestGuess = buildBestGuess(attempts, routing);
 
@@ -1237,14 +2066,18 @@ async function runGuess(
       max_candidates: config.maxCandidates,
       known_emails_count: config.knownEmails.length,
       historical_known_emails_count: domainInsights.historicalKnownEmails.length,
+      enrichanything_known_emails_count: domainInsights.enrichAnythingKnownEmails.length,
+      enrichanything_observed_contact_count: domainInsights.enrichAnythingObservedContacts.length,
       verification_mode: config.verificationMode,
       verification_mode_used: verificationModeUsed,
       stop_on_first_hit: config.stopOnFirstHit,
       stop_on_min_confidence: config.stopOnMinConfidence,
-      max_credits: verificationModeUsed === "validatedmails" ? config.maxCredits : 0,
+      max_credits: config.maxCredits,
       hit_statuses: config.hitStatuses,
       high_confidence_only: config.highConfidenceOnly,
       enable_risky_queue: config.enableRiskyQueue,
+      external_provider_fallback_enabled: config.externalProviderFallbackEnabled,
+      external_providers: config.externalProviderNames,
       canary_mode: config.canaryMode,
       canary_observations: {
         sent: config.canarySent,
@@ -1261,28 +2094,46 @@ async function runGuess(
     attempts,
     verification: {
       mode: verificationModeUsed,
-      provider: verificationModeUsed === "validatedmails" ? "validatedmails" : "internal-email-finder",
+      provider: verificationModeUsed === "local" ? "local" : "internal-email-finder",
       credits_used: creditsUsed,
-      max_credits: verificationModeUsed === "validatedmails" ? config.maxCredits : 0,
+      max_credits: config.maxCredits,
       mx_status: domainInsights.mx.status,
       mx_records: domainInsights.mx.records,
       mx_error: domainInsights.mx.error,
       historical_known_emails: domainInsights.historicalKnownEmails,
+      enrichanything_known_emails_count: domainInsights.enrichAnythingKnownEmails.length,
+      enrichanything_observed_contact_count: domainInsights.enrichAnythingObservedContacts.length,
+      enrichanything_inferred_pattern: domainInsights.enrichAnythingDomainRecord?.inferredPattern ?? "",
+      priority_candidates: priorityCandidateEmails,
+      external_provider_fallback_enabled: config.externalProviderFallbackEnabled,
+      external_providers: config.externalProviderNames,
+      external_provider_attempts: externalProviderAttempts,
     },
     routing,
     domain_fingerprint: {
-      enabled: domainInsights.historicalKnownEmails.length > 0,
-      source: "outreach-history",
+      enabled:
+        domainInsights.historicalKnownEmails.length > 0 ||
+        domainInsights.enrichAnythingKnownEmails.length > 0 ||
+        Boolean(domainInsights.enrichAnythingDomainRecord?.inferredPattern),
+      source:
+        domainInsights.enrichAnythingKnownEmails.length > 0 ||
+        Boolean(domainInsights.enrichAnythingDomainRecord?.inferredPattern)
+          ? "outreach-history+enrichanything-email-intelligence"
+          : "outreach-history",
       summary: {
         domain: config.domain,
-        sample_size: domainInsights.historicalKnownEmails.length,
+        sample_size: domainInsights.historicalKnownEmails.length + domainInsights.enrichAnythingKnownEmails.length,
+        historical_sample_size: domainInsights.historicalKnownEmails.length,
+        enrichanything_sample_size: domainInsights.enrichAnythingKnownEmails.length,
+        enrichanything_observed_contact_count: domainInsights.enrichAnythingObservedContacts.length,
+        inferred_pattern: domainInsights.enrichAnythingDomainRecord?.inferredPattern ?? "",
         mx_status: domainInsights.mx.status,
         risk_hint:
           domainInsights.mx.status === "no-mail-route"
             ? "no-mail-route"
-            : domainInsights.historicalKnownEmails.length >= 3
+            : domainInsights.historicalKnownEmails.length + domainInsights.enrichAnythingKnownEmails.length >= 3
               ? "pattern-backed"
-              : domainInsights.historicalKnownEmails.length > 0
+              : domainInsights.historicalKnownEmails.length + domainInsights.enrichAnythingKnownEmails.length > 0
                 ? "small-sample"
                 : "cold-start",
       },
@@ -1296,11 +2147,204 @@ async function runGuess(
   };
 }
 
+export async function verifyExactEmailAddress(input: {
+  email: string;
+  verificationMode?: "local" | "smtp" | "validatedmails" | "heuristic";
+  timeoutSeconds?: number;
+  localVerificationEnabled?: boolean;
+  localFallbackOnRisky?: boolean;
+}): Promise<ExactEmailVerificationResult> {
+  const normalizedEmail = extractFirstEmailAddress(input.email);
+  if (!normalizedEmail || !EMAIL_RE.test(normalizedEmail)) {
+    return {
+      email: normalizedEmail,
+      realVerifiedEmail: false,
+      emailVerification: {
+        mode: "",
+        provider: "exact-email-verifier",
+        verdict: "invalid",
+        confidence: "high",
+        reason: "invalid_syntax",
+        mxStatus: "",
+        acceptAll: null,
+        catchAll: null,
+        pValid: 0,
+        httpStatus: null,
+        providerStatus: "",
+      },
+    };
+  }
+
+  const domain = normalizedEmail.split("@")[1] ?? "";
+  let verificationModeUsed: EmailFinderVerificationMode = "local";
+  try {
+    verificationModeUsed = normalizeVerificationMode(
+      input.verificationMode ?? "local"
+    );
+  } catch {
+    verificationModeUsed = "local";
+  }
+
+  const timeoutSeconds = boundedFloat(input.timeoutSeconds, 8, 1, 20);
+  const localConfig = resolveLocalVerificationConfig();
+  if (
+    verificationModeUsed === "local" &&
+    !localConfig.serviceUrl &&
+    process.env.VERCEL &&
+    String(process.env.EMAIL_FINDER_ALLOW_SERVERLESS_SMTP ?? "").trim().toLowerCase() !== "true"
+  ) {
+    return {
+      email: normalizedEmail,
+      realVerifiedEmail: false,
+      emailVerification: {
+        mode: "local",
+        provider: "local-verification-gate",
+        verdict: "unknown",
+        confidence: "low",
+        reason: "smtp_unavailable_in_serverless",
+        mxStatus: "",
+        acceptAll: null,
+        catchAll: null,
+        pValid: null,
+        httpStatus: null,
+        providerStatus: "",
+      },
+    };
+  }
+  const domainInsights = await loadDomainInsights(domain, timeoutSeconds * 1000);
+  let outcome:
+    | {
+        verdict: string;
+        confidence: string;
+        details: Record<string, unknown>;
+      }
+    | null = null;
+
+  if (domainInsights.mx.status === "no-mail-route") {
+    outcome = {
+      verdict: "invalid",
+      confidence: "high",
+      details: {
+        verdict: "invalid",
+        reason: domainInsights.mx.error || "domain has no mail route",
+        provider: "real-verification-gate",
+        mx_status: domainInsights.mx.status,
+        mx_records: domainInsights.mx.records,
+      },
+    };
+  } else if (verificationModeUsed === "heuristic") {
+    outcome = buildHeuristicVerificationOutcome({
+      email: normalizedEmail,
+      profile: buildPatternProfile([], domain),
+      mx: domainInsights.mx,
+      candidateIndex: 0,
+      candidateCount: 1,
+    });
+  } else {
+    let localResult: Awaited<ReturnType<typeof localVerifyEmail>> | null = null;
+    let localVerifierSource = "none";
+    const localVerificationEnabled =
+      typeof input.localVerificationEnabled === "boolean"
+        ? input.localVerificationEnabled
+        : normalizeLocalVerificationEnabled(undefined);
+    const localFallbackOnRisky =
+      typeof input.localFallbackOnRisky === "boolean"
+        ? input.localFallbackOnRisky
+        : normalizeLocalFallbackOnRisky(undefined);
+
+    if (localVerificationEnabled) {
+      const hasRemoteLocalVerifier = Boolean(localConfig.serviceUrl && localConfig.serviceToken);
+      localVerifierSource = hasRemoteLocalVerifier ? "remote-service" : "app-smtp";
+      const localProbeTimeoutMs = Math.max(
+        1_000,
+        Math.min(
+          localConfig.timeoutMs,
+          Math.round(Math.max(1, Number(input.timeoutSeconds ?? 8) || 8) * 1000)
+        )
+      );
+      localResult = hasRemoteLocalVerifier
+        ? await remoteVerifyEmail({
+            email: normalizedEmail,
+            serviceUrl: localConfig.serviceUrl,
+            serviceToken: localConfig.serviceToken,
+            allowPaidFallback: false,
+            timeoutMs: localProbeTimeoutMs,
+          })
+        : await localVerifyEmail({
+            email: normalizedEmail,
+            heloDomain: localConfig.heloDomain,
+            mailFrom: localConfig.mailFrom,
+            enableSmtp: localConfig.enableSmtp,
+            enableStartTls: localConfig.enableStartTls,
+            checkCatchAll: localConfig.checkCatchAll,
+            timeoutMs: localProbeTimeoutMs,
+          });
+
+      if (localResult) {
+        const localPaidUsed = Boolean(asRecord(localResult.details).paid_used);
+        const localIsFinal =
+          localPaidUsed ||
+          localResult.verdict === "invalid" ||
+          localResult.verdict === "likely-valid" ||
+          (localResult.verdict === "risky-valid" && !localFallbackOnRisky);
+        if (localIsFinal || verificationModeUsed === "local") {
+          outcome = {
+            verdict: localResult.verdict,
+            confidence: localResult.confidence,
+            details: {
+              ...asRecord(localResult.details),
+              local_verification: true,
+              local_verifier_source: localVerifierSource,
+              local_reason: localResult.reason,
+            },
+          };
+        }
+      }
+    }
+  }
+
+  const finalizedOutcome =
+    outcome ??
+    {
+      verdict: "unknown",
+      confidence: "low",
+      details: {
+        provider: "exact-email-verifier",
+        reason: "verification_unavailable",
+        mx_status: domainInsights.mx.status,
+      },
+    };
+  const attempt = {
+    attempt: 1,
+    email: normalizedEmail,
+    verdict: finalizedOutcome.verdict,
+    confidence: finalizedOutcome.confidence,
+    details: finalizedOutcome.details,
+  } as Record<string, unknown>;
+  const pValid = computeAttemptPValid({
+    attempt,
+    candidateIndex: 0,
+    candidateCount: 1,
+  });
+  attempt.p_valid = pValid;
+  asRecord(attempt.details).p_valid = pValid;
+
+  const emailVerification = buildEmailVerificationStateFromAttempt({
+    verificationModeUsed,
+    attempt,
+  });
+  return {
+    email: normalizedEmail,
+    realVerifiedEmail: isSafeExactVerificationState(emailVerification),
+    emailVerification,
+  };
+}
+
 export function emailFinderHealthPayload() {
   return {
     ok: true,
     service: "internal-email-finder",
-    method: "pattern-scored-ts",
+    method: "pattern-scored-ts-local-enrichanything",
   };
 }
 
@@ -1318,6 +2362,8 @@ export async function buildEmailFinderGuessResponse(payload: unknown) {
 export async function buildEmailFinderBatchResponse(payload: unknown) {
   const body = asRecord(payload);
   const defaultItem = asRecord(body.default_item);
+  const batchRequestId =
+    String(body.request_id ?? defaultItem.request_id ?? "").trim() || generateRequestId();
   const rawItems = Array.isArray(body.items) ? body.items : [];
   const items = rawItems.slice(0, MAX_BATCH_ITEMS);
   const continueOnError = parseBool(body.continue_on_error, true);
@@ -1351,7 +2397,12 @@ export async function buildEmailFinderBatchResponse(payload: unknown) {
       if (index >= items.length || aborted) return;
 
       const item = asRecord(items[index]);
-      const mergedPayload = { ...defaultItem, ...item };
+      const mergedPayload: Record<string, unknown> = {
+        ...defaultItem,
+        ...item,
+        request_id:
+          String(item.request_id ?? defaultItem.request_id ?? "").trim() || batchRequestId,
+      };
       const id = String(mergedPayload.id ?? `lead-${index}`).trim() || `lead-${index}`;
 
       try {
@@ -1382,6 +2433,66 @@ export async function buildEmailFinderBatchResponse(payload: unknown) {
   await Promise.all(workers);
 
   const finalized = results.filter(Boolean);
+  const requestedVerificationMode = String(
+    defaultItem.verification_mode ?? body.verification_mode ?? "local"
+  )
+    .trim()
+    .toLowerCase();
+  const effectiveModes = new Set<string>();
+  let okCount = 0;
+  let matchedCount = 0;
+  let creditsUsed = 0;
+  let cacheHits = 0;
+  let cacheHitLeads = 0;
+  const failedIds = [] as string[];
+
+  for (const row of finalized) {
+    if (!row.ok) {
+      failedIds.push(row.id);
+      continue;
+    }
+
+    okCount += 1;
+    const result = asRecord(row.result);
+    const verification = asRecord(result.verification);
+    const bestGuess = asRecord(result.best_guess);
+    const attempts = Array.isArray(result.attempts) ? result.attempts.map((item) => asRecord(item)) : [];
+    const itemCacheHits = attempts.filter((attempt) => asRecord(attempt.details).cache_hit === true).length;
+
+    const mode = String(verification.mode ?? "")
+      .trim()
+      .toLowerCase();
+    if (mode) effectiveModes.add(mode);
+    creditsUsed += Math.max(0, Number(verification.credits_used ?? 0) || 0);
+    cacheHits += itemCacheHits;
+    if (itemCacheHits > 0) cacheHitLeads += 1;
+    if (String(bestGuess.email ?? "").trim()) matchedCount += 1;
+  }
+
+  await appendEmailFinderAuditEntry({
+    requestId: batchRequestId,
+    source: String(body.audit_source ?? defaultItem.audit_source ?? "unspecified").trim() || "unspecified",
+    context: asRecord(body.audit_context ?? defaultItem.audit_context),
+    itemCount: items.length,
+    resultsCount: finalized.length,
+    okCount,
+    failedCount: finalized.length - okCount,
+    matchedCount,
+    failedIds: failedIds.slice(0, 12),
+    verificationModeRequested: requestedVerificationMode || "local",
+    verificationModesUsed: Array.from(effectiveModes).sort(),
+    maxCreditsPerLead: Math.max(0, Number(defaultItem.max_credits ?? 0) || 0),
+    timeoutSeconds: Math.max(
+      0,
+      Number(defaultItem.timeout_seconds ?? defaultItem.probe_timeout_seconds ?? 0) || 0
+    ),
+    concurrency,
+    continueOnError,
+    creditsUsed,
+    cacheHits,
+    cacheHitLeads,
+  });
+
   return {
     ok: finalized.every((row) => row.ok),
     mode: "batch",

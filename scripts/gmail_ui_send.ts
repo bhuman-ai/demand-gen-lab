@@ -3,7 +3,7 @@ import fs from "fs";
 import path from "path";
 import readline from "readline/promises";
 import { stdin as input, stdout as output } from "process";
-import { chromium, type BrowserContext, type Page } from "playwright";
+import { chromium, type BrowserContext, type Locator, type Page } from "playwright";
 
 type CliOptions = {
   csvPath: string;
@@ -34,6 +34,16 @@ type SendRow = {
   subject: string;
   body: string;
 };
+
+const SEND_BUTTON_SELECTOR =
+  'div[role="button"][data-tooltip^="Send"], button[aria-label^="Send"], div[role="button"][aria-label^="Send"], div[role="button"][data-tooltip*="Send"], div[role="button"][aria-label*="Send"]';
+const COMPOSE_OPEN_SELECTOR =
+  'input[name="subjectbox"], div[aria-label="Message Body"], div[role="textbox"][g_editable="true"]';
+const TO_INPUT_SELECTOR =
+  'input[aria-label="To recipients"], input[peoplekit-id], textarea[aria-label="To"], div[aria-label="To"] input';
+const COMPOSE_DIALOG_SELECTOR = 'div[role="dialog"]:has(input[name="subjectbox"])';
+const DISCARD_DRAFT_SELECTOR =
+  'img[aria-label^="Discard draft"], div[aria-label^="Discard draft"], button[aria-label^="Discard draft"]';
 
 function loadLocalEnv() {
   const envPath = path.join(process.cwd(), ".env.local");
@@ -392,6 +402,9 @@ async function dismissGmailOverlays(page: Page, options: { useEscape?: boolean }
     'button:has-text("Got it")',
     'button:has-text("Not now")',
     'button:has-text("No thanks")',
+    'div[role="button"]:has-text("No thanks")',
+    "text=No thanks",
+    "text=OK",
     'button:has-text("Done")',
     'button:has-text("Close")',
     'div[role="button"][aria-label="Close"]',
@@ -406,6 +419,21 @@ async function dismissGmailOverlays(page: Page, options: { useEscape?: boolean }
   }
 }
 
+async function closeOpenComposeWindows(page: Page) {
+  for (let attempt = 0; attempt < 6; attempt += 1) {
+    const openDialogs = await page.locator(COMPOSE_DIALOG_SELECTOR).count().catch(() => 0);
+    if (openDialogs <= 0) return;
+    const discardButton = page.locator(DISCARD_DRAFT_SELECTOR).last();
+    if (await discardButton.isVisible().catch(() => false)) {
+      await discardButton.click().catch(() => {});
+      await page.waitForTimeout(250).catch(() => {});
+      continue;
+    }
+    await page.keyboard.press("Escape").catch(() => {});
+    await page.waitForTimeout(250).catch(() => {});
+  }
+}
+
 async function verifyFromAddress(page: Page, expectedFrom: string) {
   if (!expectedFrom.trim()) return;
   const fromInput = page.locator('input[aria-label*="From"], input[name="from"]').last();
@@ -417,19 +445,77 @@ async function verifyFromAddress(page: Page, expectedFrom: string) {
   }
 }
 
+function normalizeEmail(value: string) {
+  return value.trim().toLowerCase();
+}
+
+async function latestComposeRoot(page: Page) {
+  const dialog = page.locator(COMPOSE_DIALOG_SELECTOR).last();
+  if ((await dialog.count().catch(() => 0)) > 0) {
+    return dialog;
+  }
+  return page.locator("body");
+}
+
+async function readSelectedRecipientEmails(composeRoot: Locator) {
+  const values = await composeRoot
+    .evaluate((root: HTMLElement) => {
+      const emails = new Set<string>();
+      const addEmails = (raw: string | null) => {
+        if (!raw) return;
+        const matches = raw.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi) ?? [];
+        for (const match of matches) emails.add(match.toLowerCase());
+      };
+
+      root.querySelectorAll("[email], [data-hovercard-id], [aria-label], [title]").forEach((element) => {
+        addEmails(element.getAttribute("email"));
+        addEmails(element.getAttribute("data-hovercard-id"));
+        addEmails(element.getAttribute("aria-label"));
+        addEmails(element.getAttribute("title"));
+        addEmails(element.textContent);
+      });
+
+      return Array.from(emails);
+    })
+    .catch(() => []);
+  return Array.isArray(values) ? values.map((value) => normalizeEmail(String(value))) : [];
+}
+
+async function hasSelectedRecipient(composeRoot: Locator, recipient: string) {
+  const normalizedRecipient = normalizeEmail(recipient);
+  if (!normalizedRecipient) return false;
+  const selectedEmails = await readSelectedRecipientEmails(composeRoot);
+  return selectedEmails.includes(normalizedRecipient);
+}
+
+async function fillToRecipient(page: Page, recipient: string) {
+  const composeRoot = await latestComposeRoot(page);
+  if (await hasSelectedRecipient(composeRoot, recipient)) {
+    return;
+  }
+
+  const toInput = composeRoot.locator(TO_INPUT_SELECTOR).last();
+  const selectedDescription = String((await toInput.getAttribute("aria-description").catch(() => "")) ?? "");
+  if (selectedDescription.toLowerCase().includes("selected")) {
+    const selectedEmails = await readSelectedRecipientEmails(composeRoot);
+    if (!selectedEmails.length || selectedEmails.includes(normalizeEmail(recipient))) {
+      return;
+    }
+    throw new Error(`Compose window already has a different recipient selected: ${selectedEmails.join(", ")}`);
+  }
+
+  await toInput.waitFor({ state: "visible", timeout: 30000 });
+  await toInput.fill(recipient);
+  await page.keyboard.press("Tab").catch(() => {});
+}
+
 async function fillCompose(page: Page, row: SendRow, expectedFrom: string) {
+  await closeOpenComposeWindows(page);
   await openCompose(page);
   await verifyFromAddress(page, expectedFrom);
   await dismissGmailOverlays(page, { useEscape: false });
 
-  const toInput = page
-    .locator(
-      'input[aria-label="To recipients"], input[peoplekit-id], textarea[aria-label="To"], div[aria-label="To"] input'
-    )
-    .first();
-  await toInput.waitFor({ state: "visible", timeout: 30000 });
-  await toInput.fill(row.email);
-  await page.keyboard.press("Tab");
+  await fillToRecipient(page, row.email);
 
   const subject = page.locator('input[name="subjectbox"]').last();
   await subject.fill(row.subject);
@@ -444,15 +530,109 @@ async function fillCompose(page: Page, row: SendRow, expectedFrom: string) {
   await body.fill(row.body);
 }
 
-async function sendCompose(page: Page) {
-  const sendButton = page
-    .locator(
-      'div[role="button"][data-tooltip^="Send"], div[role="button"][aria-label*="Send"], [command="Files"]'
-    )
-    .first();
-  await sendButton.waitFor({ state: "visible", timeout: 30000 });
-  await sendButton.click();
-  await page.locator("text=Message sent").first().waitFor({ state: "visible", timeout: 30000 });
+async function isComposeStillOpen(page: Page) {
+  return page.locator(COMPOSE_OPEN_SELECTOR).last().isVisible().catch(() => false);
+}
+
+async function visibleGmailSendError(page: Page) {
+  const candidates = [
+    'div[role="alert"]',
+    'div[aria-live="assertive"]',
+    'span:has-text("Please specify at least one recipient")',
+    'span:has-text("Address not found")',
+    'span:has-text("Invalid")',
+    'span:has-text("Message not sent")',
+  ];
+  for (const selector of candidates) {
+    const locator = page.locator(selector).first();
+    if (await locator.isVisible().catch(() => false)) {
+      const text = String((await locator.innerText().catch(() => "")) ?? "").trim();
+      if (text) return text;
+    }
+  }
+  return "";
+}
+
+function isIgnorableGmailSendPrompt(text: string) {
+  return text.toLowerCase().includes("enable desktop notifications");
+}
+
+function isSuccessfulGmailSendStatus(text: string) {
+  const normalized = text.toLowerCase().replace(/\s+/g, " ").trim();
+  return (
+    normalized === "message sent" ||
+    normalized.startsWith("message sent ") ||
+    (normalized.includes("message sent") &&
+      (normalized.includes("undo") || normalized.includes("view message")))
+  );
+}
+
+async function waitForSendConfirmation(page: Page) {
+  const toast = page.locator("text=Message sent").first();
+  for (let attempt = 0; attempt < 24; attempt += 1) {
+    if (await toast.isVisible().catch(() => false)) {
+      return;
+    }
+    if (!(await isComposeStillOpen(page))) {
+      return;
+    }
+    await dismissGmailOverlays(page, { useEscape: false });
+    const sendError = await visibleGmailSendError(page);
+    if (sendError) {
+      if (isSuccessfulGmailSendStatus(sendError)) {
+        return;
+      }
+      if (isIgnorableGmailSendPrompt(sendError)) {
+        await dismissGmailOverlays(page, { useEscape: false });
+        await page.waitForTimeout(500).catch(() => {});
+        continue;
+      }
+      throw new Error(`Gmail did not send the draft: ${sendError}`);
+    }
+    await page.waitForTimeout(1000).catch(() => {});
+  }
+
+  if (!(await isComposeStillOpen(page))) {
+    return;
+  }
+  throw new Error("Gmail send confirmation did not appear and the compose window is still open.");
+}
+
+function isPageClosedError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error ?? "");
+  return (
+    message.includes("Target page, context or browser has been closed") ||
+    message.includes("page, context or browser has been closed") ||
+    message.includes("Browser has been closed") ||
+    message.includes("Target closed")
+  );
+}
+
+async function sendCompose(page: Page, onSendAttempt?: () => void) {
+  await dismissGmailOverlays(page, { useEscape: false });
+  const sendButton = page.locator(SEND_BUTTON_SELECTOR).first();
+  const sendVisible = await sendButton.isVisible().catch(() => false);
+  if (sendVisible) {
+    try {
+      await sendButton.click({ timeout: 5000 });
+      onSendAttempt?.();
+    } catch (error) {
+      if (isPageClosedError(error)) throw error;
+      await dismissGmailOverlays(page, { useEscape: false });
+      try {
+        await sendButton.click({ force: true, timeout: 5000 });
+        onSendAttempt?.();
+      } catch (forceClickError) {
+        if (isPageClosedError(forceClickError)) throw forceClickError;
+        await page.keyboard.press("Control+Enter");
+        onSendAttempt?.();
+      }
+    }
+  } else {
+    await page.keyboard.press("Control+Enter");
+    onSendAttempt?.();
+  }
+  await waitForSendConfirmation(page);
 }
 
 async function closeCompose(page: Page) {

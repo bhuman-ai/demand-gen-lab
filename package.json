@@ -15,6 +15,7 @@
     "gmail-ui:send": "npx tsx scripts/gmail_ui_send.ts",
     "gmail-ui:sync-creds": "npx tsx scripts/gmail_ui_sync_mailpool_credentials.ts",
     "gmail-ui:worker-api": "npx tsx scripts/gmail_ui_worker_api.ts",
+    "mailpool:identity-audit": "npx tsx scripts/mailpool_sender_identity_audit.ts",
     "extensions:new": "node scripts/extensions/new.mjs",
     "extensions:validate": "node scripts/extensions/validate.mjs",
     "extensions:generate": "node scripts/extensions/generate.mjs",

@@ -6,6 +6,7 @@ Minimal HTTP JSON API for ordered email candidate generation + sequential verifi
 
 Endpoints:
 - GET /health
+- POST /verify
 - POST /v1/guess
 - POST /v1/guess/batch
 """
@@ -75,6 +76,23 @@ def parse_bool(value: Any, default: bool) -> bool:
         if lowered in {"0", "false", "no", "n", "off"}:
             return False
     return default
+
+
+def expected_api_token() -> str:
+    return str(
+        os.getenv("EMAIL_FINDER_API_TOKEN")
+        or os.getenv("EMAIL_FINDER_LOCAL_VERIFIER_TOKEN")
+        or os.getenv("EMAIL_VERIFIER_SERVICE_TOKEN")
+        or ""
+    ).strip()
+
+
+def is_authorized(handler: BaseHTTPRequestHandler) -> bool:
+    expected = expected_api_token()
+    if not expected:
+        return True
+    header = str(handler.headers.get("Authorization", "")).strip()
+    return header == f"Bearer {expected}" or header == expected
 
 
 def utc_now_iso() -> str:
@@ -441,9 +459,11 @@ def validate_input(
         raise ValueError("known_emails must be an array")
     known_emails = [str(x).strip().lower() for x in known_emails if str(x).strip()]
 
-    mode = str(payload.get("verification_mode", "validatedmails")).strip().lower()
-    if mode not in {"none", "smtp", "validatedmails"}:
-        raise ValueError("verification_mode must be one of: none, smtp, validatedmails")
+    mode = str(payload.get("verification_mode", "smtp")).strip().lower()
+    if mode in {"local", "enrichanything", "enrichanything-local", "validatedmails"}:
+        mode = "smtp"
+    if mode not in {"none", "smtp"}:
+        raise ValueError("verification_mode must be one of: none, smtp")
 
     timeout_seconds = bounded_float(
         payload.get("probe_timeout_seconds", 8.0),
@@ -1718,6 +1738,121 @@ def build_best_guess(attempts: list[dict[str, Any]], routing: dict[str, Any] | N
     }
 
 
+def default_smtp_from_address() -> str:
+    return str(
+        os.getenv("EMAIL_FINDER_SMTP_MAIL_FROM")
+        or os.getenv("EMAIL_FINDER_FROM_ADDRESS")
+        or os.getenv("EMAIL_VERIFIER_FROM_ADDRESS")
+        or "probe@localhost"
+    ).strip()
+
+
+def run_verify_endpoint(payload: dict[str, Any]) -> dict[str, Any]:
+    started = time.perf_counter()
+    email = str(payload.get("email", "")).strip().lower()
+    if not EMAIL_ADDR_RE.match(email):
+        return {
+            "ok": True,
+            "email": email,
+            "verdict": "invalid",
+            "confidence": "high",
+            "reason": "invalid_syntax",
+            "paid_used": False,
+            "cached": False,
+            "details": {
+                "verdict": "invalid",
+                "reason": "invalid_syntax",
+            },
+            "elapsed_ms": round((time.perf_counter() - started) * 1000, 2),
+        }
+
+    raw_timeout_seconds = payload.get("probe_timeout_seconds", payload.get("timeout_seconds"))
+    if raw_timeout_seconds is None and payload.get("timeout_ms") is not None:
+        try:
+            raw_timeout_seconds = float(payload.get("timeout_ms")) / 1000.0
+        except (TypeError, ValueError):
+            raw_timeout_seconds = None
+    timeout_seconds = bounded_float(
+        raw_timeout_seconds,
+        field="probe_timeout_seconds",
+        default=8.0,
+        min_value=1.0,
+        max_value=30.0,
+    )
+
+    from_address = str(payload.get("from_address") or default_smtp_from_address()).strip()
+    if "@" not in from_address:
+        raise ValueError("from_address must look like an email address")
+
+    smtp_mx_quorum = bounded_int(
+        payload.get("smtp_mx_quorum", DEFAULT_SMTP_MX_QUORUM),
+        field="smtp_mx_quorum",
+        default=DEFAULT_SMTP_MX_QUORUM,
+        min_value=1,
+        max_value=5,
+    )
+    smtp_sequence_check = parse_bool(payload.get("smtp_sequence_check", True), default=True)
+
+    try:
+        attempts, verification_meta = verify_candidates(
+            ordered_emails=[email],
+            mode="smtp",
+            timeout_seconds=timeout_seconds,
+            pause_ms=0,
+            from_address=from_address,
+            api_key="",
+            stop_on_first_hit=True,
+            hit_statuses=["likely-valid", "risky-valid"],
+            max_credits=0,
+            stop_on_min_confidence="low",
+            pattern_scores=None,
+            smtp_mx_quorum=smtp_mx_quorum,
+            smtp_sequence_check=smtp_sequence_check,
+        )
+    except ValueError as exc:
+        message = str(exc)
+        if "no mx records" not in message.lower():
+            raise
+        return {
+            "ok": True,
+            "email": email,
+            "verdict": "invalid",
+            "confidence": "high",
+            "reason": "no_mx",
+            "paid_used": False,
+            "cached": False,
+            "details": {
+                "verdict": "invalid",
+                "reason": "no_mx",
+                "error": message,
+            },
+            "verification": {
+                "mode": "smtp",
+                "error": message,
+            },
+            "elapsed_ms": round((time.perf_counter() - started) * 1000, 2),
+        }
+
+    attempt = attempts[0] if attempts else {}
+    details = attempt.get("details", {}) if isinstance(attempt, dict) else {}
+    if not isinstance(details, dict):
+        details = {}
+    reason = str(details.get("reason") or attempt.get("reason") or "smtp verification completed")
+    return {
+        "ok": True,
+        "email": email,
+        "verdict": str(attempt.get("verdict", "unknown")),
+        "confidence": str(attempt.get("confidence", "low")),
+        "reason": reason,
+        "paid_used": False,
+        "cached": False,
+        "details": details,
+        "attempts": attempts,
+        "verification": verification_meta,
+        "elapsed_ms": round((time.perf_counter() - started) * 1000, 2),
+    }
+
+
 def run_single_guess(payload: dict[str, Any]) -> dict[str, Any]:
     started = time.perf_counter()
     (
@@ -1955,7 +2090,7 @@ class EmailFinderApiHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:  # noqa: N802
         path = self.path.split("?", 1)[0]
-        if path not in {"/v1/guess", "/v1/guess/batch", "/v1/outcomes", "/v1/retry-queue/run"}:
+        if path not in {"/verify", "/v1/guess", "/v1/guess/batch", "/v1/outcomes", "/v1/retry-queue/run"}:
             json_response(self, 404, {"ok": False, "error": "not found"})
             return
 
@@ -1977,6 +2112,18 @@ class EmailFinderApiHandler(BaseHTTPRequestHandler):
             return
         if not isinstance(payload, dict):
             json_response(self, 400, {"ok": False, "error": "json body must be an object"})
+            return
+
+        if path == "/verify":
+            if not is_authorized(self):
+                json_response(self, 401, {"ok": False, "error": "unauthorized"})
+                return
+            try:
+                json_response(self, 200, run_verify_endpoint(payload))
+            except ValueError as exc:
+                json_response(self, 400, {"ok": False, "error": str(exc)})
+            except Exception as exc:  # noqa: BLE001
+                json_response(self, 500, {"ok": False, "error": "internal error", "detail": str(exc)})
             return
 
         if path == "/v1/guess":
@@ -2127,6 +2274,7 @@ def main() -> None:
     args = parse_args()
     server = ThreadingHTTPServer((args.host, args.port), EmailFinderApiHandler)
     print(f"Email Finder API listening on http://{args.host}:{args.port}")
+    print("POST /verify")
     print("POST /v1/guess")
     print("POST /v1/guess/batch")
     print("POST /v1/outcomes")

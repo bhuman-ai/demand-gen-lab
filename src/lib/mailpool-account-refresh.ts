@@ -1,6 +1,11 @@
 import { listBrands, updateBrand } from "@/lib/factory-data";
 import type { DomainRow, OutreachAccount, OutreachAccountConfig } from "@/lib/factory-types";
-import { getOutreachAccount, updateOutreachAccount } from "@/lib/outreach-data";
+import {
+  getOutreachAccount,
+  getOutreachAccountSecrets,
+  listOutreachAccounts,
+  updateOutreachAccount,
+} from "@/lib/outreach-data";
 import { sanitizeCustomerIoBillingConfig } from "@/lib/outreach-customerio-billing";
 import { normalizeGmailUiLoginStatus } from "@/lib/gmail-ui-login";
 import { getDomainDeliveryAccountId, getOutreachAccountFromEmail } from "@/lib/outreach-account-helpers";
@@ -23,6 +28,15 @@ export type MailpoolAccountRefreshResult = {
   refreshedAt: string;
 };
 
+export type MailpoolOutreachAccountSyncTickResult = {
+  accountsEligible: number;
+  accountsChecked: number;
+  accountsSynced: number;
+  accountsInactive: number;
+  accountsDeleted: number;
+  errors: Array<{ accountId: string; fromEmail: string; error: string }>;
+};
+
 function buildMailpoolMailboxCredentials(mailbox: MailpoolMailbox) {
   return {
     mailboxPassword: String(mailbox.imapPassword ?? mailbox.password ?? "").trim(),
@@ -32,6 +46,10 @@ function buildMailpoolMailboxCredentials(mailbox: MailpoolMailbox) {
     mailboxAdminPassword: String(mailbox.admin?.password ?? "").trim(),
     mailboxAdminAuthCode: String(mailbox.admin?.authCode ?? "").trim(),
   };
+}
+
+function mailpoolMailboxErrorMessage(mailbox: MailpoolMailbox) {
+  return String(mailbox.error?.message ?? "").trim();
 }
 
 function normalizeDomain(value: string) {
@@ -45,14 +63,47 @@ function mailpoolStatusToDnsStatus(status: string): DomainRow["dnsStatus"] {
   return "error";
 }
 
+function shouldDisableMailpoolAccount(mailbox: MailpoolMailbox) {
+  const mailboxStatus = String(mailbox.status ?? "").trim().toLowerCase();
+  return (
+    Boolean(mailpoolMailboxErrorMessage(mailbox)) ||
+    mailboxStatus === "inactive" ||
+    mailboxStatus === "deleted"
+  );
+}
+
+function hasBlockingGmailUiLoginState(config: OutreachAccountConfig) {
+  return (
+    config.mailbox.deliveryMethod === "gmail_ui" &&
+    normalizeGmailUiLoginStatus({
+      deliveryMethod: config.mailbox.deliveryMethod,
+      state: config.mailbox.gmailUiLoginState,
+      checkedAt: config.mailbox.gmailUiLoginCheckedAt,
+      message: config.mailbox.gmailUiLoginMessage,
+    }).gmailUiLoginState !== "ready"
+  );
+}
+
+function mailpoolMailboxResourceStatus(mailbox: MailpoolMailbox) {
+  const providerError = mailpoolMailboxErrorMessage(mailbox);
+  const mailboxStatus = String(mailbox.status ?? "").trim().toLowerCase();
+  if (providerError || mailboxStatus === "inactive") return "error" as const;
+  if (mailboxStatus === "active") return "active" as const;
+  if (mailboxStatus === "deleted") return "deleted" as const;
+  if (mailboxStatus === "updating") return "updating" as const;
+  return "pending" as const;
+}
+
 function buildMailpoolAccountPatch(mailbox: MailpoolMailbox, existingConfig: OutreachAccountConfig) {
   const fromEmail = mailbox.email.trim().toLowerCase();
   const usesGmailUi = existingConfig.mailbox.deliveryMethod === "gmail_ui";
+  const providerError = mailpoolMailboxErrorMessage(mailbox);
+  const disabled = shouldDisableMailpoolAccount(mailbox) || hasBlockingGmailUiLoginState(existingConfig);
   const loginStatus = normalizeGmailUiLoginStatus({
     deliveryMethod: usesGmailUi ? "gmail_ui" : existingConfig.mailbox.deliveryMethod,
     state: existingConfig.mailbox.gmailUiLoginState,
     checkedAt: existingConfig.mailbox.gmailUiLoginCheckedAt,
-    message: existingConfig.mailbox.gmailUiLoginMessage,
+    message: providerError || existingConfig.mailbox.gmailUiLoginMessage,
   });
   return {
     provider: "mailpool" as const,
@@ -61,7 +112,7 @@ function buildMailpoolAccountPatch(mailbox: MailpoolMailbox, existingConfig: Out
         ? `${mailbox.firstName} ${mailbox.lastName}`
         : mailbox.email,
     accountType: "hybrid" as const,
-    status: mailbox.status === "deleted" ? ("inactive" as const) : ("active" as const),
+    status: disabled ? ("inactive" as const) : ("active" as const),
     config: {
       customerIo: {
         siteId: String(existingConfig.customerIo.siteId ?? "").trim(),
@@ -74,12 +125,7 @@ function buildMailpoolAccountPatch(mailbox: MailpoolMailbox, existingConfig: Out
         domainId: String(mailbox.domain?.id ?? "").trim(),
         mailboxId: mailbox.id,
         mailboxType: mailbox.type,
-        status:
-          mailbox.status === "active"
-            ? "active"
-            : mailbox.status === "deleted"
-              ? "deleted"
-              : "pending",
+        status: mailpoolMailboxResourceStatus(mailbox),
         spamCheckId: String(existingConfig.mailpool.spamCheckId ?? "").trim(),
         inboxPlacementId: "",
         lastSpamCheckAt: String(existingConfig.mailpool.lastSpamCheckAt ?? "").trim(),
@@ -103,7 +149,7 @@ function buildMailpoolAccountPatch(mailbox: MailpoolMailbox, existingConfig: Out
         gmailUiBrowserChannel: String(existingConfig.mailbox.gmailUiBrowserChannel ?? "chrome").trim() || "chrome",
         gmailUiLoginState: loginStatus.gmailUiLoginState,
         gmailUiLoginCheckedAt: loginStatus.gmailUiLoginCheckedAt,
-        gmailUiLoginMessage: loginStatus.gmailUiLoginMessage,
+        gmailUiLoginMessage: providerError || loginStatus.gmailUiLoginMessage,
         proxyUrl: String(existingConfig.mailbox.proxyUrl ?? "").trim(),
         proxyHost: String(existingConfig.mailbox.proxyHost ?? "").trim(),
         proxyPort: Number(existingConfig.mailbox.proxyPort ?? 0) || 0,
@@ -279,9 +325,120 @@ export async function syncMailpoolOutreachAccountCredentials(accountId: string):
     throw new Error("Mailpool mailbox ID is missing on this account");
   }
 
-  const mailbox = await getMailpoolMailbox(apiKey, mailboxId);
+  let mailbox: MailpoolMailbox | null = null;
+  try {
+    mailbox = await getMailpoolMailbox(apiKey, mailboxId);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Mailpool mailbox lookup failed";
+    if (!message.includes("HTTP 404")) {
+      throw error;
+    }
+    const updated = await updateOutreachAccount(account.id, {
+      status: "inactive",
+      config: {
+        mailpool: {
+          status: "deleted",
+        },
+        mailbox: {
+          status: "disconnected",
+          gmailUiLoginState: "error",
+          gmailUiLoginMessage: "Mailpool mailbox no longer exists.",
+        },
+      },
+    });
+    return updated ?? account;
+  }
+
+  const providerError = mailpoolMailboxErrorMessage(mailbox);
+  const disabled = shouldDisableMailpoolAccount(mailbox) || hasBlockingGmailUiLoginState(account.config);
   const updated = await updateOutreachAccount(account.id, {
+    status: disabled ? ("inactive" as const) : ("active" as const),
+    config: {
+      mailpool: {
+        status: mailpoolMailboxResourceStatus(mailbox),
+      },
+      mailbox: {
+        ...(providerError ? { gmailUiLoginState: "error" as const, gmailUiLoginMessage: providerError } : {}),
+      },
+    },
     credentials: buildMailpoolMailboxCredentials(mailbox),
   });
   return updated ?? account;
+}
+
+function mailpoolAccountSyncPriority(account: OutreachAccount) {
+  let priority = 0;
+  if (account.status === "active" && account.config.mailpool.status === "deleted") priority += 1000;
+  if (account.config.mailpool.status !== "active") priority += 500;
+  if (account.config.mailbox.status !== "connected") priority += 150;
+  if (account.config.mailbox.deliveryMethod === "gmail_ui" && account.config.mailbox.gmailUiLoginState === "error") {
+    priority += 50;
+  }
+  return priority;
+}
+
+function isFinishedDeletedMailpoolAccount(account: OutreachAccount) {
+  return account.status === "inactive" && account.config.mailpool.status === "deleted";
+}
+
+export async function runMailpoolOutreachAccountSyncTick(
+  limit = 8
+): Promise<MailpoolOutreachAccountSyncTickResult> {
+  const accounts = await listOutreachAccounts();
+  const candidates = accounts
+    .filter(
+      (account) =>
+        account.provider === "mailpool" &&
+        account.accountType !== "mailbox" &&
+        !isFinishedDeletedMailpoolAccount(account) &&
+        Boolean(account.config.mailpool.mailboxId.trim())
+    )
+    .sort((left, right) => {
+      const priorityDiff = mailpoolAccountSyncPriority(right) - mailpoolAccountSyncPriority(left);
+      if (priorityDiff !== 0) return priorityDiff;
+      if (left.updatedAt !== right.updatedAt) return left.updatedAt < right.updatedAt ? -1 : 1;
+      return left.id.localeCompare(right.id);
+    });
+
+  const selected = candidates.slice(0, Math.max(1, Math.min(50, Math.round(Number(limit) || 8))));
+  const result: MailpoolOutreachAccountSyncTickResult = {
+    accountsEligible: candidates.length,
+    accountsChecked: selected.length,
+    accountsSynced: 0,
+    accountsInactive: 0,
+    accountsDeleted: 0,
+    errors: [],
+  };
+
+  for (const account of selected) {
+    try {
+      const updated = await syncMailpoolOutreachAccountCredentials(account.id);
+      result.accountsSynced += 1;
+      if (updated.status !== "active") {
+        result.accountsInactive += 1;
+      }
+      if (updated.config.mailpool.status === "deleted") {
+        result.accountsDeleted += 1;
+      }
+    } catch (error) {
+      result.errors.push({
+        accountId: account.id,
+        fromEmail: getOutreachAccountFromEmail(account),
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  return result;
+}
+
+export async function resolveMailpoolOutreachAccountAuthCode(accountId: string) {
+  const account = await getOutreachAccount(accountId);
+  if (!account || account.provider !== "mailpool") {
+    return "";
+  }
+
+  await syncMailpoolOutreachAccountCredentials(accountId);
+  const secrets = await getOutreachAccountSecrets(accountId);
+  return String(secrets?.mailboxAuthCode || secrets?.mailboxAdminAuthCode || "").trim();
 }

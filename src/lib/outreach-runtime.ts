@@ -15,17 +15,24 @@ import type {
   ConversationFlowGraph,
   ConversationFlowNode,
   DomainRow,
+  EmailVerificationState,
   LeadAcceptanceDecision,
   LeadQualityPolicy,
+  BrandRecord,
   OutreachMessage,
+  OutreachTrafficLane,
+  RunAnomaly,
   OutreachRun,
   OutreachRunLead,
   ReplyThread,
   ReplyThreadStateDecision,
+  ScaleCampaignRecord,
   SourcingActorMemory,
   SourcingChainDecision,
   SourcingChainStep,
   SourcingTraceSummary,
+  DeliverabilitySeedReservation,
+  WarmupSeedReservation,
 } from "@/lib/factory-types";
 import {
   createConversationEvent,
@@ -35,16 +42,33 @@ import {
   listConversationSessionsByRun,
   updateConversationSession,
 } from "@/lib/conversation-flow-data";
+import { ensureConversationMapForVariant } from "@/lib/conversation-map-bootstrap";
 import {
+  ensureSenderOwnedScaleCampaignSourceExperiment,
   ensureRuntimeForExperiment,
   getExperimentRecordById,
   getExperimentRecordByRuntimeRef,
   getScaleCampaignRecordById,
+  listExperimentRecords,
   listScaleCampaignRecords,
+  promoteExperimentRecordToCampaign,
+  resolveScaleCampaignLane,
   updateExperimentRecord,
   updateScaleCampaignRecord,
 } from "@/lib/experiment-data";
-import { isReportCommentExperiment } from "@/lib/experiment-policy";
+import {
+  EXPERIMENT_MIN_VERIFIED_EMAIL_LEADS,
+  isReportCommentExperiment,
+} from "@/lib/experiment-policy";
+import {
+  countExperimentSendableLeadContacts,
+  WARMUP_IMPORT_LEAD_QUALITY_POLICY,
+} from "@/lib/experiment-prospect-import";
+import { countScaleCampaignSendableLeadContacts } from "@/lib/scale-campaign-prospect-import";
+import {
+  resolveEnrichAnythingPrepRequestTimeoutMs,
+} from "@/lib/outreach-prep-policy";
+import { prepareScaleCampaignSendableContacts } from "@/lib/scale-campaign-sendable-prep";
 import {
   conversationPromptModeEnabled,
   generateConversationPromptMessage,
@@ -62,6 +86,7 @@ import {
   createSourcingChainDecision,
   createSourcingProbeResults,
   createRunAnomaly,
+  createWarmupSeedReservations,
   createRunMessages,
   enqueueOutreachJob,
   claimQueuedOutreachJob,
@@ -77,22 +102,26 @@ import {
   getReplyDraft,
   getReplyThread,
   getSourcingActorMemory,
+  hasActiveRunJob,
   listCampaignRuns,
   listBrandRuns,
   listDueOutreachJobs,
   listExperimentRuns,
+  listActiveOutreachJobsByType,
   listOutreachAccounts,
   listDeliverabilitySeedReservations,
   listDeliverabilityProbeRuns,
+  listWarmupSeedReservations,
   listReplyThreadsByBrand,
   listReplyMessagesByRun,
+  listRunAnomalies,
   listRunEvents,
   listRunJobs,
   reclaimStaleRunningOutreachJobs,
   listRunLeads,
   listRunMessages,
   listOwnerRuns,
-  setBrandOutreachAssignment,
+  updateOutreachJobs,
   updateOutreachJob,
   updateOutreachAccount,
   updateOutreachRun,
@@ -100,19 +129,28 @@ import {
   updateDeliverabilitySeedReservations,
   updateReplyDraft,
   updateReplyThread,
+  updateRunAnomalies,
   updateSourcingChainDecision,
   updateRunLead,
+  updateRunMessages,
   updateRunMessage,
+  updateWarmupSeedReservations,
   upsertInboxSyncState,
   upsertSourcingActorMemory,
   upsertSourcingActorProfiles,
   upsertRunLeads,
   type OutreachJob,
+  type OutreachJobType,
 } from "@/lib/outreach-data";
+import { setBrandOutreachAssignmentWithWarmup } from "@/lib/sender-warmup-campaigns";
 import {
-  isReusableExperimentLeadStatus,
-  isTerminalExperimentLeadStatus,
-} from "@/lib/experiment-prospect-import";
+  buildWarmupSeedLead,
+  buildWarmupSeedLeads,
+  isWarmupSeedLead,
+  parseWarmupSeedSourceUrlAccountId,
+  reserveWarmupSeedLeads,
+  resolveWarmupSeedMonitorTargets,
+} from "@/lib/warmup-seed-targets";
 import { assessReportCommentLeadQuality } from "@/lib/report-comment-lead-quality";
 import {
   enrichLeadsWithEmailFinderBatch,
@@ -134,13 +172,21 @@ import {
   startApifyActorRun,
   type ApifyStoreActor,
   type ApifyLead,
+  type EmailFinderDecisionSignal,
+  type EmailFinderDecisionSummary,
+  type EmailFinderVerificationMode,
 } from "@/lib/outreach-providers";
+import { advanceGmailUiWorkerSession, hasGmailUiWorkerConfig } from "@/lib/gmail-ui-worker-client";
+import { resolveMailpoolOutreachAccountAuthCode } from "@/lib/mailpool-account-refresh";
 import {
   getDomainDeliveryAccountId,
   getDomainDeliveryAccountName,
   getOutreachAccountFromEmail,
+  getOutreachGmailUiLoginState,
   getOutreachAccountReplyToEmail,
   getOutreachSenderBackingIssue,
+  isOutreachOutboundEnabled,
+  supportsAnyDelivery,
   supportsCustomerIoDelivery,
   supportsMailpoolDelivery,
 } from "@/lib/outreach-account-helpers";
@@ -168,7 +214,19 @@ import {
 } from "@/lib/sender-health";
 import {
   buildSenderCapacitySnapshots,
+  isWarmupCampaignName,
+  laneHourlyCapForDailyCap,
+  MIN_WARMUP_CAMPAIGN_DAILY_CAP,
+  MAX_OUTBOUND_SENDER_DAILY_CAP,
+  MAX_WARMUP_CAMPAIGN_DAILY_CAP,
+  outboundDailyCapForDay,
+  outboundHourlyCapForDay,
+  outboundMinSpacingMinutesForDay,
+  senderWarmupDayNumber,
   type SenderCapacityPolicy,
+  warmupCampaignDailyCapForDay,
+  warmupCampaignHourlyCapForDay,
+  warmupCampaignMinSpacingMinutesForDay,
 } from "@/lib/sender-capacity";
 import {
   scoreSenderRoutingSignal,
@@ -179,17 +237,31 @@ import {
   summarizeSenderReadinessBlock,
   type SenderReadiness,
 } from "@/lib/send-readiness";
+import {
+  getCanonicalSenderPoolForBrand,
+  type CanonicalSenderPool,
+} from "@/lib/senders";
 
 const DEFAULT_TIMEZONE = "America/Los_Angeles";
 const DEFAULT_REPLY_AUTOSEND_MIN_DELAY_MINUTES = 40;
 const DEFAULT_REPLY_AUTOSEND_RANDOM_ADDITIONAL_DELAY_MINUTES = 20;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const CONVERSATION_TICK_MINUTES = 15;
-const DEFAULT_EXPERIMENT_RUN_LEAD_TARGET = 500;
+const DEFAULT_EXPERIMENT_RUN_LEAD_TARGET = EXPERIMENT_MIN_VERIFIED_EMAIL_LEADS;
 const DELIVERABILITY_PROBE_POLL_DELAY_MINUTES = 3;
 const DELIVERABILITY_PROBE_REPEAT_HOURS = 24 * 7;
+const DEFAULT_DELIVERABILITY_RESERVED_STALE_MINUTES = 15;
+const DEFAULT_DELIVERABILITY_PROBE_MAX_MONITORS = 3;
 const DELIVERABILITY_INTELLIGENCE_REFRESH_HOURS = 6;
 const SELFFUNDED_AWS_APPLICATION_URL = "https://www.selffunded.dev/aws-credits/apply";
+const DEFAULT_OUTBOUND_LEAD_QUALITY_POLICY: LeadQualityPolicy = {
+  allowFreeDomains: false,
+  allowRoleInboxes: false,
+  requirePersonName: true,
+  requireCompany: true,
+  requireTitle: false,
+  minConfidenceScore: 0.42,
+};
 
 type ReplyPolicyAction = "reply" | "no_reply" | "manual_review";
 type ReplyPlaybook = "selffunded_aws" | "bhuman_private_drop" | "generic";
@@ -332,7 +404,8 @@ async function inferMailboxReplyOutreachContext(input: {
         if (message.leadId !== lead.id) return false;
         if (!["sent", "replied"].includes(message.status)) return false;
         if (normalizeReplyThreadSubject(message.subject) !== normalizedSubject) return false;
-        const senderAccountId = String(message.generationMeta?.senderAccountId ?? "").trim() || run.accountId;
+        const senderAccountId =
+          String(message.generationMeta?.senderAccountId ?? "").trim() || effectiveRunSenderAccountId(run);
         const senderFromEmail = String(message.generationMeta?.senderFromEmail ?? "").trim().toLowerCase();
         const replyToEmail = String(message.generationMeta?.replyToEmail ?? "").trim().toLowerCase();
         if (normalizedMailboxAccountId && senderAccountId === normalizedMailboxAccountId) return true;
@@ -377,6 +450,12 @@ type DeliverabilityProbeMonitorResult = {
   matchedUid: number;
   ok: boolean;
   error: string;
+  cleanup?: {
+    attempted: boolean;
+    ok: boolean;
+    actions: string[];
+    error: string;
+  };
 };
 
 type DeliverabilityProbeReferenceMessage = {
@@ -446,10 +525,21 @@ type BusinessWindowPolicy = {
 type SenderDispatchSlot = {
   account: ResolvedAccount;
   secrets: ResolvedSecrets;
+  mailboxAccount: ResolvedAccount;
+  mailboxSecrets: ResolvedSecrets;
   policy: SenderCapacityPolicy;
 };
 
-type SenderUsageMap = Record<string, { dailySent: number; hourlySent: number }>;
+type SenderUsageCounters = {
+  dailySent: number;
+  hourlySent: number;
+  warmupDailySent: number;
+  warmupHourlySent: number;
+  outboundDailySent: number;
+  outboundHourlySent: number;
+};
+
+type SenderUsageMap = Record<string, SenderUsageCounters>;
 
 const DEFAULT_BUSINESS_WINDOW: BusinessWindowPolicy = {
   enabled: true,
@@ -550,19 +640,75 @@ function isInsideBusinessWindow(input: Date, timeZone: string, policy: BusinessW
   return hour >= policy.startHour || hour < policy.endHour;
 }
 
-function nextBusinessWindowCheckIso(input: Date, timeZone: string, policy: BusinessWindowPolicy) {
-  if (!policy.enabled) return nowIso();
-  if (isInsideBusinessWindow(input, timeZone, policy)) {
-    return nowIso();
+function getLeadEmailSuppressionReasonForTrafficLane(
+  lead: Pick<OutreachRunLead, "email" | "sourceUrl">,
+  trafficLane: OutreachTrafficLane
+) {
+  const email = extractFirstEmailAddress(lead.email).toLowerCase();
+  if (!email) return "invalid_email";
+  if (trafficLane === "warmup" && isWarmupSeedLead(lead)) {
+    return "";
   }
-  let probe = new Date(input.getTime() + 60 * 60 * 1000);
-  for (let steps = 0; steps < 24 * 14; steps += 1) {
-    if (isInsideBusinessWindow(probe, timeZone, policy)) {
-      return probe.toISOString();
+  return getLeadEmailSuppressionReason(email);
+}
+
+function isLeadSendableForTrafficLane(
+  lead: Pick<
+    OutreachRunLead,
+    "email" | "name" | "company" | "title" | "domain" | "sourceUrl" | "realVerifiedEmail" | "emailVerification"
+  >,
+  trafficLane: OutreachTrafficLane
+) {
+  if (trafficLane === "warmup") {
+    if (isWarmupSeedLead(lead)) {
+      return true;
     }
-    probe = new Date(probe.getTime() + 60 * 60 * 1000);
+    const email = extractFirstEmailAddress(lead.email);
+    if (!email) {
+      return false;
+    }
+    if (getLeadEmailSuppressionReason(email)) {
+      return false;
+    }
+    return evaluateLeadAgainstQualityPolicy({
+      lead: {
+        email,
+        name: lead.name,
+        company: lead.company,
+        title: lead.title,
+        domain: lead.domain,
+        sourceUrl: lead.sourceUrl,
+        realVerifiedEmail: lead.realVerifiedEmail === true,
+        emailVerification: lead.emailVerification ?? null,
+      },
+      policy: WARMUP_IMPORT_LEAD_QUALITY_POLICY,
+    }).accepted;
   }
-  return addHours(nowIso(), 1);
+  const email = extractFirstEmailAddress(lead.email);
+  if (!email) {
+    return false;
+  }
+  if (getLeadEmailSuppressionReason(email)) {
+    return false;
+  }
+  return evaluateLeadAgainstQualityPolicy({
+    lead: {
+      email,
+      name: lead.name,
+      company: lead.company,
+      title: lead.title,
+      domain: lead.domain,
+      sourceUrl: lead.sourceUrl,
+      realVerifiedEmail: lead.realVerifiedEmail === true,
+      emailVerification: lead.emailVerification ?? null,
+    },
+    policy: DEFAULT_OUTBOUND_LEAD_QUALITY_POLICY,
+  }).accepted;
+}
+
+function isReusableExperimentLeadStatus(status: string) {
+  const normalized = String(status ?? "").trim().toLowerCase();
+  return normalized === "new" || normalized === "scheduled";
 }
 
 function alignToBusinessWindow(dateIso: string, timeZone: string, policy: BusinessWindowPolicy) {
@@ -579,6 +725,75 @@ function alignToBusinessWindow(dateIso: string, timeZone: string, policy: Busine
     }
   }
   return addHours(scheduled.toISOString(), 1);
+}
+
+const DISPATCH_CAPACITY_RETRY_MINUTES = 5;
+const DISPATCH_CAPACITY_SEARCH_STEP_MINUTES = 5;
+const DISPATCH_CAPACITY_SEARCH_HOURS = 72;
+const WARMUP_ACTIVE_RESERVATION_BUSINESS_HOURS = 8;
+
+function nextDispatchCapacityRetryAt(input: {
+  sentTimestamps?: string[];
+  timeZone: string;
+  businessWindow: BusinessWindowPolicy;
+  dailyCap: number;
+  hourlyCap: number;
+  now?: Date;
+}) {
+  const now = input.now ?? new Date();
+  const dailyCap = Math.max(1, Math.round(Number(input.dailyCap) || 0));
+  const hourlyCap = Math.max(1, Math.round(Number(input.hourlyCap) || 0));
+  const sentTimestamps = Array.from(
+    new Set(
+      (input.sentTimestamps ?? [])
+        .map((value) => String(value ?? "").trim())
+        .filter((value) => Number.isFinite(Date.parse(value)))
+    )
+  )
+    .map((value) => Date.parse(value))
+    .sort((left, right) => left - right);
+
+  let probe = new Date(now.getTime() + DISPATCH_CAPACITY_RETRY_MINUTES * 60 * 1000);
+  const alignedProbe = alignToBusinessWindow(probe.toISOString(), input.timeZone, input.businessWindow);
+  const alignedProbeMs = Date.parse(alignedProbe);
+  if (Number.isFinite(alignedProbeMs) && alignedProbeMs > probe.getTime()) {
+    probe = new Date(alignedProbeMs);
+  }
+
+  const stepMs = DISPATCH_CAPACITY_SEARCH_STEP_MINUTES * 60 * 1000;
+  const maxSteps = Math.max(
+    1,
+    Math.floor((DISPATCH_CAPACITY_SEARCH_HOURS * 60) / DISPATCH_CAPACITY_SEARCH_STEP_MINUTES)
+  );
+
+  for (let step = 0; step < maxSteps; step += 1) {
+    if (isInsideBusinessWindow(probe, input.timeZone, input.businessWindow)) {
+      const probeMs = probe.getTime();
+      const hourlyFloorMs = probeMs - 60 * 60 * 1000;
+      const probeDayKey = timeZoneDateKey(probe, input.timeZone || DEFAULT_TIMEZONE);
+      let hourlySent = 0;
+      let dailySent = 0;
+
+      for (const sentAtMs of sentTimestamps) {
+        if (sentAtMs > probeMs) {
+          break;
+        }
+        if (sentAtMs >= hourlyFloorMs) {
+          hourlySent += 1;
+        }
+        if (timeZoneDateKey(new Date(sentAtMs), input.timeZone || DEFAULT_TIMEZONE) === probeDayKey) {
+          dailySent += 1;
+        }
+      }
+
+      if (hourlySent < hourlyCap && dailySent < dailyCap) {
+        return probe.toISOString();
+      }
+    }
+    probe = new Date(probe.getTime() + stepMs);
+  }
+
+  return alignToBusinessWindow(addHours(now.toISOString(), 24), input.timeZone, input.businessWindow);
 }
 
 function normalizeReplyTimingPolicy(graph?: ConversationFlowGraph | null) {
@@ -616,6 +831,68 @@ function randomDelayMinutes(maxAdditionalDelayMinutes: number) {
 
 function isRunOpen(status: string) {
   return ["queued", "sourcing", "scheduled", "sending", "monitoring", "paused"].includes(status);
+}
+
+function isRunActivelyProcessing(status: string) {
+  return ["queued", "sourcing", "scheduled", "sending", "monitoring"].includes(status);
+}
+
+type OpenRunSnapshot = {
+  run: OutreachRun;
+  messages: Awaited<ReturnType<typeof listRunMessages>>;
+  sentCount: number;
+  scheduledCount: number;
+};
+
+const OPEN_RUN_STATUS_PRIORITY: Record<OutreachRun["status"], number> = {
+  queued: 1,
+  preflight_failed: 0,
+  sourcing: 2,
+  scheduled: 4,
+  sending: 5,
+  monitoring: 3,
+  paused: 0,
+  completed: 0,
+  canceled: 0,
+  failed: 0,
+};
+
+function duplicateOpenRunKey(
+  run: Pick<OutreachRun, "brandId" | "ownerType" | "ownerId" | "campaignId" | "experimentId">
+) {
+  return [run.brandId, run.ownerType, run.ownerId, run.campaignId, run.experimentId].join("|");
+}
+
+async function buildOpenRunSnapshots(runs: OutreachRun[]): Promise<OpenRunSnapshot[]> {
+  return Promise.all(
+    runs.map(async (run) => {
+      const messages = await listRunMessages(run.id);
+      return {
+        run,
+        messages,
+        sentCount: messages.filter((message) => message.status === "sent").length,
+        scheduledCount: messages.filter((message) => message.status === "scheduled").length,
+      } satisfies OpenRunSnapshot;
+    })
+  );
+}
+
+function compareOpenRunSnapshots(left: OpenRunSnapshot, right: OpenRunSnapshot) {
+  if (left.sentCount !== right.sentCount) return right.sentCount - left.sentCount;
+  if (left.scheduledCount !== right.scheduledCount) return right.scheduledCount - left.scheduledCount;
+  const leftActive = isRunActivelyProcessing(left.run.status) ? 1 : 0;
+  const rightActive = isRunActivelyProcessing(right.run.status) ? 1 : 0;
+  if (leftActive !== rightActive) return rightActive - leftActive;
+  const leftStatusPriority = OPEN_RUN_STATUS_PRIORITY[left.run.status] ?? 0;
+  const rightStatusPriority = OPEN_RUN_STATUS_PRIORITY[right.run.status] ?? 0;
+  if (leftStatusPriority !== rightStatusPriority) return rightStatusPriority - leftStatusPriority;
+  const leftCreatedAt = toDate(left.run.createdAt).getTime();
+  const rightCreatedAt = toDate(right.run.createdAt).getTime();
+  if (leftCreatedAt !== rightCreatedAt) return leftCreatedAt - rightCreatedAt;
+  const leftUpdatedAt = toDate(left.run.updatedAt || left.run.createdAt).getTime();
+  const rightUpdatedAt = toDate(right.run.updatedAt || right.run.createdAt).getTime();
+  if (leftUpdatedAt !== rightUpdatedAt) return rightUpdatedAt - leftUpdatedAt;
+  return left.run.id.localeCompare(right.run.id);
 }
 
 function findHypothesis(campaign: CampaignRecord, hypothesisId: string) {
@@ -872,7 +1149,8 @@ function asRecord(value: unknown): Record<string, unknown> {
 
 function parseDeferredSourcingState(value: unknown): DeferredSourcingState | null {
   const row = asRecord(value);
-  if (row.phase !== "waiting_dataforseo") return null;
+  const phase = String(row.phase ?? "").trim();
+  if (phase !== "waiting_dataforseo" && phase !== "email_enrichment") return null;
   const pendingDataForSeoTasks = Array.isArray(row.pendingDataForSeoTasks)
     ? row.pendingDataForSeoTasks
         .map((entry) => asRecord(entry))
@@ -904,9 +1182,13 @@ function parseDeferredSourcingState(value: unknown): DeferredSourcingState | nul
     : [];
   return {
     version: 1,
-    phase: "waiting_dataforseo",
+    phase,
     queryPlan: (row.queryPlan as ExaPeopleQueryPlan) ?? ({
       rationale: "",
+      plannerProvider: "fallback",
+      plannerModel: "",
+      plannerError: "missing_deferred_query_plan",
+      sourceAttempt: 0,
       mode: "people_first",
       fallbackReason: "",
       searchSpec: {
@@ -949,6 +1231,7 @@ function parseDeferredSourcingState(value: unknown): DeferredSourcingState | nul
     observedExaCostUsd: Number(row.observedExaCostUsd ?? 0) || 0,
     observedDataForSeoCostUsd: Number(row.observedDataForSeoCostUsd ?? 0) || 0,
     officialWebsiteQueryLimit: Math.max(0, Number(row.officialWebsiteQueryLimit ?? 0) || 0),
+    emailEnrichmentOffset: Math.max(0, Math.trunc(Number(row.emailEnrichmentOffset ?? 0) || 0)),
   };
 }
 
@@ -1059,7 +1342,7 @@ async function resolveSourcingAudienceContext(input: {
     } satisfies ResolvedSourcingAudienceContext;
   }
 
-  const apiKey = process.env.OPENAI_API_KEY;
+  const apiKey = cleanProviderSecret(process.env.OPENAI_API_KEY);
   if (!apiKey) {
     return {
       ...input.base,
@@ -1172,6 +1455,137 @@ function extractOutputText(payloadRaw: unknown) {
   );
 }
 
+function sanitizeProviderError(value: string) {
+  return value.replace(/sk-[A-Za-z0-9_*.-]+/g, "sk-***").slice(0, 300);
+}
+
+function cleanProviderSecret(value: unknown) {
+  return String(value ?? "")
+    .replace(/\\r|\\n|\r|\n/g, "")
+    .trim();
+}
+
+function extractChatCompletionText(payloadRaw: unknown) {
+  const payload = asRecord(payloadRaw);
+  const choices = Array.isArray(payload.choices) ? payload.choices : [];
+  const firstChoice = asRecord(choices[0]);
+  const message = asRecord(firstChoice.message);
+  const content = message.content;
+  if (typeof content === "string") {
+    return content || "{}";
+  }
+  if (Array.isArray(content)) {
+    const parts = content
+      .map((part) => {
+        if (typeof part === "string") return part;
+        const row = asRecord(part);
+        return String(row.text ?? row.content ?? "");
+      })
+      .join("");
+    return parts || "{}";
+  }
+  return "{}";
+}
+
+function resolveOpenRouterTaskModel(openAiModel: string, taskName: string) {
+  const taskEnvKey = `OPENROUTER_MODEL_${taskName.toUpperCase().replace(/[^A-Z0-9]+/g, "_")}`;
+  const configured = cleanProviderSecret(
+    process.env[taskEnvKey] ??
+      process.env.OPENROUTER_MODEL_DEFAULT ??
+      ""
+  );
+  const model = configured || openAiModel || "gpt-5.5";
+  if (model.includes("/")) return model;
+  if (/^gpt-/i.test(model)) return `openai/${model}`;
+  return model;
+}
+
+function shouldPreferOpenRouterForTask(openAiModel: string, taskName: string) {
+  if (!cleanProviderSecret(process.env.OPENROUTER_API_KEY)) return false;
+  const taskEnvKey = `OPENROUTER_MODEL_${taskName.toUpperCase().replace(/[^A-Z0-9]+/g, "_")}`;
+  return Boolean(
+    openAiModel.includes("/") ||
+      cleanProviderSecret(process.env[taskEnvKey]) ||
+      cleanProviderSecret(process.env.OPENROUTER_MODEL_DEFAULT)
+  );
+}
+
+async function callOpenRouterJsonObject(input: {
+  prompt: string;
+  openAiModel: string;
+  taskName: string;
+  maxTokens?: number;
+  signal?: AbortSignal;
+}) {
+  const apiKey = cleanProviderSecret(process.env.OPENROUTER_API_KEY);
+  if (!apiKey) {
+    throw new Error("OPENROUTER_API_KEY missing");
+  }
+  const model = resolveOpenRouterTaskModel(input.openAiModel, input.taskName);
+  const maxTokens = Math.max(512, Math.min(4000, Number(input.maxTokens ?? 900) || 900));
+  const requestJson = async (prompt: string, isRepair = false) => {
+    const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+      method: "POST",
+      signal: input.signal,
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+        "HTTP-Referer": process.env.NEXT_PUBLIC_APP_URL || process.env.APP_URL || "https://www.lastb2b.com",
+        "X-Title": "LastB2B",
+      },
+      body: JSON.stringify({
+        model,
+        messages: [
+          {
+            role: "system",
+            content:
+              "You are a JSON API. Return exactly one valid JSON object. No markdown, prose, headings, or analysis.",
+          },
+          { role: "user", content: prompt },
+        ],
+        response_format: { type: "json_object" },
+        temperature: isRepair ? 0 : 0.1,
+        max_tokens: maxTokens,
+      }),
+    });
+    const raw = await response.text();
+    if (!response.ok) {
+      throw new Error(`OpenRouter HTTP ${response.status} ${sanitizeProviderError(raw)}`);
+    }
+    let payload: unknown = {};
+    try {
+      payload = JSON.parse(raw);
+    } catch {
+      payload = {};
+    }
+    const text = extractChatCompletionText(payload);
+    return {
+      text,
+      parsed: parseLooseJsonObject(text),
+    };
+  };
+
+  try {
+    return (await requestJson(input.prompt)).parsed;
+  } catch (error) {
+    const firstError = error instanceof Error ? error.message : String(error ?? "json_parse_failed");
+    const repairPrompt = [
+      input.prompt,
+      "",
+      "The previous response was not valid JSON.",
+      `Repair requirement: return exactly one JSON object for task "${input.taskName}".`,
+      "The first character must be { and the last character must be }.",
+    ].join("\n");
+    try {
+      return (await requestJson(repairPrompt, true)).parsed;
+    } catch (repairError) {
+      const repairMessage =
+        repairError instanceof Error ? repairError.message : String(repairError ?? "json_repair_failed");
+      throw new Error(`${firstError}; JSON repair failed: ${repairMessage}`);
+    }
+  }
+}
+
 function parseLooseJsonObject(rawText: string): unknown {
   const direct = rawText.trim();
   if (!direct) return {};
@@ -1251,6 +1665,10 @@ type QualifiedCompany = {
 
 type ExaPeopleQueryPlan = {
   rationale: string;
+  plannerProvider: "openai" | "openrouter" | "fallback";
+  plannerModel: string;
+  plannerError: string;
+  sourceAttempt: number;
   mode: "people_first" | "people_then_company";
   fallbackReason: string;
   searchSpec: ExaSearchSpec;
@@ -1315,12 +1733,42 @@ type ExaPeopleSourcingResult = {
       topAttemptConfidence: string;
       topAttemptReason: string;
     }>;
+    decisionSignals: EmailFinderDecisionSignal[];
+    decisionSummary: EmailFinderDecisionSummary;
   };
   budgetUsedUsd: number;
   exaSpendUsd: number;
   dataForSeoSpendUsd: number;
   pendingDataForSeo?: DeferredSourcingState | null;
+  pendingEmailEnrichment?: DeferredSourcingState | null;
 };
+
+function emptyEmailFinderDecisionSummary(): EmailFinderDecisionSummary {
+  return {
+    sendNow: 0,
+    canaryProbe: 0,
+    retryLater: 0,
+    keepSourcing: 0,
+    manualReview: 0,
+    suppress: 0,
+    topAction: "",
+    topReason: "",
+  };
+}
+
+function emptyExaEmailEnrichment(): ExaPeopleSourcingResult["emailEnrichment"] {
+  return {
+    attempted: 0,
+    matched: 0,
+    failed: 0,
+    provider: "emailfinder.batch",
+    error: "",
+    failureSummary: [],
+    failedSamples: [],
+    decisionSignals: [],
+    decisionSummary: emptyEmailFinderDecisionSummary(),
+  };
+}
 
 type ExaLeadCandidate = ApifyLead & {
   companyEntityId?: string;
@@ -1396,7 +1844,7 @@ type DataForSeoPendingTask = {
 
 type DeferredSourcingState = {
   version: 1;
-  phase: "waiting_dataforseo";
+  phase: "waiting_dataforseo" | "email_enrichment";
   queryPlan: ExaPeopleQueryPlan;
   rawLeads: ExaLeadCandidate[];
   diagnostics: ExaQueryDiagnostic[];
@@ -1405,6 +1853,7 @@ type DeferredSourcingState = {
   observedExaCostUsd: number;
   observedDataForSeoCostUsd: number;
   officialWebsiteQueryLimit: number;
+  emailEnrichmentOffset: number;
 };
 
 const DATAFORSEO_AGGREGATOR_DOMAIN_ROOTS = new Set([
@@ -1430,6 +1879,34 @@ const DATAFORSEO_ASYNC_REQUEUE_SECONDS = Math.max(
 const DATAFORSEO_ASYNC_MAX_POLLS = Math.max(
   3,
   Math.min(60, Number(process.env.DATAFORSEO_ASYNC_MAX_POLLS ?? 12) || 12)
+);
+const EXA_SEARCH_TIMEOUT_MS = Math.max(
+  8_000,
+  Math.min(60_000, Number(process.env.EXA_SEARCH_TIMEOUT_MS ?? 20_000) || 20_000)
+);
+const OUTREACH_DYNAMIC_SOURCE_MAX_LEADS_PER_ATTEMPT = Math.max(
+  5,
+  Math.min(100, Number(process.env.OUTREACH_DYNAMIC_SOURCE_MAX_LEADS_PER_ATTEMPT ?? 25) || 25)
+);
+const OUTREACH_DYNAMIC_SOURCE_ATTEMPT_TIMEOUT_MS = Math.max(
+  45_000,
+  Math.min(170_000, Number(process.env.OUTREACH_DYNAMIC_SOURCE_ATTEMPT_TIMEOUT_MS ?? 150_000) || 150_000)
+);
+const OUTREACH_OWNER_LIVE_TOP_UP_TIMEOUT_MS = Math.max(
+  10_000,
+  Math.min(45_000, Number(process.env.OUTREACH_OWNER_LIVE_TOP_UP_TIMEOUT_MS ?? 35_000) || 35_000)
+);
+const OUTREACH_DYNAMIC_EMAIL_ENRICHMENT_REQUEUE_SECONDS = Math.max(
+  3,
+  Math.min(60, Number(process.env.OUTREACH_DYNAMIC_EMAIL_ENRICHMENT_REQUEUE_SECONDS ?? 5) || 5)
+);
+const OUTREACH_DYNAMIC_SOURCE_NO_PROGRESS_REQUEUE_SECONDS = Math.max(
+  15,
+  Math.min(900, Number(process.env.OUTREACH_DYNAMIC_SOURCE_NO_PROGRESS_REQUEUE_SECONDS ?? 60) || 60)
+);
+const OUTREACH_DYNAMIC_SOURCE_MAX_TOP_UP_ATTEMPTS = Math.max(
+  10,
+  Math.min(500, Math.trunc(Number(process.env.OUTREACH_DYNAMIC_SOURCE_MAX_TOP_UP_ATTEMPTS ?? 120) || 120))
 );
 
 const REGION_ALIASES = new Map<string, string>([
@@ -1469,6 +1946,18 @@ const DEFAULT_EXA_COMPANY_KEYWORDS = ["B2B software", "SaaS", "cloud platform"];
 const DEFAULT_EXA_ROLE_TITLES = ["Demand Generation Manager", "Growth Marketing Manager"];
 const MAX_COMPANY_NAMES_PER_PEOPLE_QUERY = 4;
 const EXA_QUERY_BROADENING_ENABLED = false;
+const BAD_COMPANY_DESCRIPTOR_PATTERNS = [
+  /\bat\s+scale\b/i,
+  /\bneed(?:s|ed|ing)?\b/i,
+  /\bwant(?:s|ed|ing)?\b/i,
+  /\bresponsible\s+for\b/i,
+  /\busing\b/i,
+  /\bworkflows?\b/i,
+  /\bfollow-?ups?\b/i,
+  /\bproduct\s+updates?\b/i,
+  /\bsocial\s+posts?\b/i,
+  /\bads?\s+at\s+scale\b/i,
+];
 const TITLE_HINT_TOKENS = new Set([
   "manager",
   "director",
@@ -1503,45 +1992,115 @@ function isLikelyTitlePhrase(value: string) {
   return Array.from(TITLE_HINT_TOKENS).some((token) => normalized.includes(token));
 }
 
-function extractAudienceCompanyDescriptorSegment(targetAudience: string) {
-  const normalized = normalizeText(targetAudience);
-  if (!normalized) return "";
-  const afterAt = normalized.split(/\bat\b/i).slice(1).join(" at ").trim();
-  if (!afterAt) return "";
-  const cut = afterAt
-    .split(/\b(?:who|that|which|running|run|using|with|where|active|actively|focused|focus)\b/i)[0]
-    ?.trim() ?? "";
+function splitAudienceClauses(value: string) {
+  return normalizeText(value)
+    .split(/\s*(?:[.;]\s+|;|\n|•|-{2,})\s*/g)
+    .map((part) => normalizeText(part))
+    .filter(Boolean);
+}
+
+function rotateForAttempt(values: string[], sourceAttempt = 0) {
+  const uniqueValues = uniqueTrimmed(values);
+  if (uniqueValues.length <= 1) return uniqueValues;
+  const offset = Math.abs(Math.trunc(Number(sourceAttempt) || 0)) % uniqueValues.length;
+  return [...uniqueValues.slice(offset), ...uniqueValues.slice(0, offset)];
+}
+
+function cleanCompanyDescriptor(value: string) {
   return normalizeText(
-    cut
+    value
       .replace(/\([^)]*employees[^)]*\)/gi, " ")
       .replace(/\b\d[\d,\s-–to]{1,20}\s+employees\b/gi, " ")
+      .replace(/[.;:!?]+$/g, " ")
       .replace(/\b(company|companies|team|teams|organization|organizations|business|businesses)\b/gi, " ")
       .replace(/\s+/g, " ")
   );
 }
 
-function deriveAudienceCompanyDescriptors(targetAudience: string, limit = 6) {
-  const segment = extractAudienceCompanyDescriptorSegment(targetAudience);
-  if (!segment) return [] as string[];
-  const rawParts = segment
-    .split(/\s*,\s*|\s+\bor\b\s+|\s+\band\b\s+/i)
-    .map((part) =>
-      normalizeText(
-        part
-          .replace(/^[^a-z0-9]+/i, "")
-          .replace(/\b(company|companies|team|teams|organization|organizations|business|businesses)\b/gi, " ")
-          .replace(/\s+/g, " ")
-      )
-    )
-    .filter(Boolean)
-    .filter((part) => !AUDIENCE_COMPANY_KEYWORD_STOPWORDS.has(part.toLowerCase()))
-    .filter((part) => part.length >= 3)
-    .filter((part) => !["b2b", "tech", "technology"].includes(part.toLowerCase()));
+function isPlausibleCompanyDescriptor(value: string) {
+  const normalized = cleanCompanyDescriptor(value);
+  if (!normalized) return false;
+  const lowered = normalized.toLowerCase();
+  if (AUDIENCE_COMPANY_KEYWORD_STOPWORDS.has(lowered)) return false;
+  if (BAD_COMPANY_DESCRIPTOR_PATTERNS.some((pattern) => pattern.test(lowered))) return false;
+  if (lowered.length > 64) return false;
+  if (lowered.split(/\s+/).length > 6) return false;
+  if (/^[^a-z0-9]+$/i.test(lowered)) return false;
+  if (["b2b", "tech", "technology", "scale", "n/a", "na"].includes(lowered)) return false;
+  return true;
+}
 
-  const descriptors = uniqueTrimmed(rawParts, limit);
+function extractAudienceCompanyDescriptorSegment(clause: string) {
+  const normalized = normalizeText(clause);
+  if (!normalized) return "";
+  const explicitCompanyMatch = normalized.match(
+    /\bat\s+(.+?\b(?:companies|businesses|organizations|agencies|firms|startups|saas|software|platforms|vendors|providers)\b)/i
+  );
+  if (!explicitCompanyMatch) return "";
+  const cut =
+    explicitCompanyMatch[1]
+      ?.split(/\b(?:who|that|which|running|run|using|with|where|active|actively|focused|focus)\b/i)[0]
+      ?.trim() ?? "";
+  return cleanCompanyDescriptor(cut);
+}
+
+function deriveAudienceRoleTitleHints(targetAudience: string, limit = 8, sourceAttempt = 0) {
+  const text = normalizeText(targetAudience).toLowerCase();
+  const titles: string[] = [];
+
+  if (/\b(?:sales|outbound|sdr|bdr|linkedin|crm)\b/i.test(text)) {
+    titles.push("Head of Sales", "VP Sales", "Sales Development Manager", "Sales Operations Manager");
+  }
+  if (/\b(?:marketing|growth|campaign|nurture|demand|abm|ads?)\b/i.test(text)) {
+    titles.push("Demand Generation Manager", "Growth Marketing Manager", "Campaign Marketing Manager", "Lifecycle Marketing Manager");
+  }
+  if (/\b(?:revops|revenue operations|sales operations|gtm operations)\b/i.test(text)) {
+    titles.push("Head of Revenue Operations", "Revenue Operations Manager", "Sales Operations Manager");
+  }
+  if (/\b(?:agency|agencies|client campaigns?)\b/i.test(text)) {
+    titles.push("Agency Founder", "Managing Director", "Account Director", "Client Strategy Director");
+  }
+
+  return rotateForAttempt(titles, sourceAttempt).filter(isLikelyTitlePhrase).slice(0, limit);
+}
+
+function deriveImplicitCompanyDescriptors(targetAudience: string, limit = 6, sourceAttempt = 0) {
+  const text = normalizeText(targetAudience).toLowerCase();
+  const descriptors: string[] = [];
+
+  if (/\bb2b\b|\bsaas\b|\bsoftware\b/i.test(text)) {
+    descriptors.push("B2B software", "SaaS", "sales-led software companies");
+  }
+  if (/\b(?:sales|outbound|crm|linkedin|sdr|bdr)\b/i.test(text)) {
+    descriptors.push("B2B software", "CRM software", "sales engagement software");
+  }
+  if (/\b(?:marketing|growth|campaign|nurture|demand|abm|ads?)\b/i.test(text)) {
+    descriptors.push("B2B SaaS", "marketing technology companies", "growth-stage software companies");
+  }
+  if (/\b(?:revops|revenue operations|sales operations|gtm operations)\b/i.test(text)) {
+    descriptors.push("B2B SaaS", "sales-led SaaS", "revenue operations software");
+  }
+  if (/\b(?:agency|agencies|client campaigns?)\b/i.test(text)) {
+    descriptors.push("B2B marketing agencies", "demand generation agencies", "sales enablement agencies");
+  }
+
+  const cleaned = descriptors.map(cleanCompanyDescriptor).filter(isPlausibleCompanyDescriptor);
+  return rotateForAttempt(cleaned, sourceAttempt).slice(0, limit);
+}
+
+function deriveAudienceCompanyDescriptors(targetAudience: string, limit = 6, sourceAttempt = 0) {
+  const rawParts = splitAudienceClauses(targetAudience)
+    .flatMap((clause) => {
+      const segment = extractAudienceCompanyDescriptorSegment(clause);
+      if (!segment) return [] as string[];
+      return segment.split(/\s*,\s*|\s+\bor\s+|\s+\band\s+/i);
+    })
+    .map((part) => cleanCompanyDescriptor(part.replace(/^[^a-z0-9]+/i, "")))
+    .filter(isPlausibleCompanyDescriptor);
+
+  const descriptors = rotateForAttempt(rawParts, sourceAttempt).slice(0, limit);
   if (descriptors.length) return descriptors;
-  const fallback = normalizeText(segment);
-  return fallback ? [trimText(fallback, 48)] : [];
+  return deriveImplicitCompanyDescriptors(targetAudience, limit, sourceAttempt);
 }
 
 function deriveExplicitRegionCodes(...parts: Array<string | undefined>) {
@@ -1628,7 +2187,7 @@ function buildPeopleSearchAdditionalQueries(input: {
   const target = input.includeCompanySentence && companyNames
     ? `at ${companyNames}`
     : companyProfile
-      ? `at ${companyProfile} companies`
+      ? `at ${companyProfileTargetLabel(companyProfile)}`
       : "at companies";
   const variants = uniqueTrimmed(
     [
@@ -1644,6 +2203,15 @@ function buildPeopleSearchAdditionalQueries(input: {
   return variants.filter((query) => query && query !== primary).map((query) => trimText(query, 320));
 }
 
+function companyProfileTargetLabel(profile: string) {
+  const normalized = normalizeText(profile);
+  if (!normalized) return "companies";
+  if (/\b(?:agencies|firms|vendors|providers|platforms|startups)\b/i.test(normalized)) {
+    return normalized;
+  }
+  return `${normalized} companies`;
+}
+
 function buildHumanCompanySearchQuery(spec: ExaSearchSpec) {
   const companyProfile = humanList(
     spec.companyKeywords.length ? spec.companyKeywords : spec.includeIndustries,
@@ -1653,7 +2221,7 @@ function buildHumanCompanySearchQuery(spec: ExaSearchSpec) {
   const eventSignals = humanList(spec.eventSignals, 3, "or");
   const excludedIndustries = humanList(spec.excludeIndustries, 3, "or");
   const parts = [
-    companyProfile ? `${companyProfile} companies` : "companies",
+    companyProfile ? companyProfileTargetLabel(companyProfile) : "companies",
     eventSignals ? `running ${eventSignals}` : "",
     spec.companySizeHint || "",
     excludedIndustries ? `excluding ${excludedIndustries}` : "",
@@ -1682,7 +2250,7 @@ function buildHumanPeopleSearchQuery(input: {
   const target = input.includeCompanySentence && companyNames
     ? `at ${companyNames}`
     : industries
-      ? `at ${industries} companies`
+      ? `at ${companyProfileTargetLabel(industries)}`
       : "at companies";
   const parts = [
     roles || "marketing leaders",
@@ -1727,18 +2295,27 @@ function extractCompanySizeHint(text: string) {
   return "";
 }
 
-function fallbackRoleTitles(targetAudience: string, qualityPolicy?: LeadQualityPolicy) {
-  const roleFromAudience = trimText(targetAudience.split(/\s+at\s+/i)[0] ?? "", 80);
-  const titles = roleFromAudience && isLikelyTitlePhrase(roleFromAudience) ? [roleFromAudience] : [];
+function fallbackRoleTitles(targetAudience: string, qualityPolicy?: LeadQualityPolicy, sourceAttempt = 0) {
+  const titles: string[] = [];
+  for (const clause of splitAudienceClauses(targetAudience)) {
+    const phrase =
+      clause
+        .split(/\b(?:who|that|which|need|needs|want|wants|using|responsible|create|creates|running|with)\b/i)[0]
+        ?.trim() ?? "";
+    if (!phrase || phrase.split(/\s+/).length > 6) continue;
+    if (!isLikelyTitlePhrase(phrase)) continue;
+    titles.push(phrase);
+  }
   if (qualityPolicy?.requiredTitleKeywords?.length) {
     for (const keyword of qualityPolicy.requiredTitleKeywords) {
       const normalized = normalizeText(keyword);
       if (!normalized) continue;
-       if (!isLikelyTitlePhrase(normalized)) continue;
+      if (!isLikelyTitlePhrase(normalized)) continue;
       titles.push(normalized);
     }
   }
-  const uniqueTitles = uniqueTrimmed(titles, 6);
+  titles.push(...deriveAudienceRoleTitleHints(targetAudience, 8, sourceAttempt));
+  const uniqueTitles = rotateForAttempt(titles, sourceAttempt).slice(0, 6);
   return uniqueTitles.length ? uniqueTitles : DEFAULT_EXA_ROLE_TITLES;
 }
 
@@ -1762,11 +2339,13 @@ function buildFallbackExaSearchSpec(input: {
   targetAudience: string;
   triggerContext: string;
   qualityPolicy?: LeadQualityPolicy;
+  sourceAttempt?: number;
 }) {
   const combined = `${input.targetAudience} ${input.triggerContext}`.trim();
+  const sourceAttempt = Math.max(0, Math.trunc(Number(input.sourceAttempt ?? 0) || 0));
   const regions = deriveExplicitRegionCodes(input.targetAudience, input.triggerContext);
-  const roleTitles = fallbackRoleTitles(input.targetAudience, input.qualityPolicy);
-  const audienceCompanyDescriptors = deriveAudienceCompanyDescriptors(input.targetAudience, 6);
+  const roleTitles = fallbackRoleTitles(input.targetAudience, input.qualityPolicy, sourceAttempt);
+  const audienceCompanyDescriptors = deriveAudienceCompanyDescriptors(input.targetAudience, 6, sourceAttempt);
   const companyKeywords = audienceCompanyDescriptors.length
     ? audienceCompanyDescriptors
     : uniqueTrimmed(
@@ -1800,7 +2379,7 @@ function buildFallbackExaSearchSpec(input: {
 
 function buildExaSearchSpecFromModel(
   root: Record<string, unknown>,
-  input: { targetAudience: string; triggerContext: string; qualityPolicy?: LeadQualityPolicy }
+  input: { targetAudience: string; triggerContext: string; qualityPolicy?: LeadQualityPolicy; sourceAttempt?: number }
 ) {
   const fallback = buildFallbackExaSearchSpec(input);
   const regions = uniqueTrimmed(
@@ -2215,6 +2794,55 @@ function isUsableCompanyDomain(domain: string) {
   );
 }
 
+function countKnownDomainEmailCandidates(rawLeads: ExaLeadCandidate[]) {
+  let existingEmailCount = 0;
+  let enrichmentReadyCount = 0;
+  for (const lead of rawLeads) {
+    if (extractFirstEmailAddress(lead.email)) {
+      existingEmailCount += 1;
+      continue;
+    }
+    if (String(lead.name ?? "").trim() && isUsableCompanyDomain(String(lead.domain ?? ""))) {
+      enrichmentReadyCount += 1;
+    }
+  }
+  return {
+    existingEmailCount,
+    enrichmentReadyCount,
+    immediateLeadCount: existingEmailCount + enrichmentReadyCount,
+  };
+}
+
+function minKnownDomainCandidatesBeforeDataForSeoWait(maxLeads: number) {
+  const configured = Math.trunc(Number(process.env.OUTREACH_DATAFORSEO_MIN_READY_BEFORE_WAIT ?? 3) || 3);
+  return Math.max(1, Math.min(Math.max(1, maxLeads), configured));
+}
+
+function dynamicEmailFinderBatchLeadCap(maxLeads: number) {
+  const fallback = maxLeads >= 20 ? 4 : 2;
+  const configured = Math.trunc(
+    Number(
+      process.env.OUTREACH_DYNAMIC_EMAIL_FINDER_BATCH_LEAD_CAP ??
+        process.env.OUTREACH_SOURCE_EMAIL_FINDER_BATCH_LEAD_CAP ??
+        fallback
+    ) || fallback
+  );
+  return Math.max(1, Math.min(Math.max(1, maxLeads), 12, configured));
+}
+
+function shouldWaitForDataForSeoBeforeEmailEnrichment(input: {
+  rawLeads: ExaLeadCandidate[];
+  maxLeads: number;
+}) {
+  const readiness = countKnownDomainEmailCandidates(input.rawLeads);
+  const minReady = minKnownDomainCandidatesBeforeDataForSeoWait(input.maxLeads);
+  return {
+    ...readiness,
+    minReady,
+    shouldWait: readiness.immediateLeadCount < minReady,
+  };
+}
+
 function isNonCompanyProfileDomain(domain: string) {
   const normalized = String(domain ?? "")
     .trim()
@@ -2259,6 +2887,7 @@ async function exaSearch(input: {
   searchType?: "auto" | "deep" | "deep-reasoning";
   outputSchema?: Record<string, unknown>;
   additionalQueries?: string[];
+  signal?: AbortSignal;
 }): Promise<ExaSearchResponse> {
   const payload: Record<string, unknown> = {
     query: input.query,
@@ -2285,14 +2914,29 @@ async function exaSearch(input: {
     payload.outputSchema = input.outputSchema;
   }
 
-  const response = await fetch("https://api.exa.ai/search", {
-    method: "POST",
-    headers: {
-      "x-api-key": input.apiKey,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(payload),
-  });
+  let response: Response;
+  try {
+    response = await fetch("https://api.exa.ai/search", {
+      method: "POST",
+      headers: {
+        "x-api-key": input.apiKey,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+      signal:
+        input.signal && typeof AbortSignal.any === "function"
+          ? AbortSignal.any([input.signal, AbortSignal.timeout(EXA_SEARCH_TIMEOUT_MS)])
+          : input.signal ?? AbortSignal.timeout(EXA_SEARCH_TIMEOUT_MS),
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const isTimeout = error instanceof Error && ["AbortError", "TimeoutError"].includes(error.name);
+    throw new Error(
+      isTimeout
+        ? `Exa search timed out after ${Math.round(EXA_SEARCH_TIMEOUT_MS / 1000)}s`
+        : `Exa search failed before response: ${message}`
+    );
+  }
   const raw = await response.text();
   if (!response.ok) {
     throw new Error(`Exa search failed (${response.status}): ${trimText(raw, 240)}`);
@@ -2389,21 +3033,23 @@ async function planExaPeopleQueries(input: {
   targetAudience: string;
   triggerContext: string;
   offer: string;
+  sourceAttempt?: number;
   maxCompanyQueries: number;
   maxPeopleQueries: number;
   companyResultsPerQuery: number;
   peopleResultsPerQuery: number;
   qualityPolicy: LeadQualityPolicy;
+  signal?: AbortSignal;
 }): Promise<ExaPeopleQueryPlan> {
-  const apiKey = process.env.OPENAI_API_KEY;
+  const apiKey = cleanProviderSecret(process.env.OPENAI_API_KEY);
+  const sourceAttempt = Math.max(0, Math.trunc(Number(input.sourceAttempt ?? 0) || 0));
   const fallbackSpec = buildFallbackExaSearchSpec({
     targetAudience: input.targetAudience,
     triggerContext: input.triggerContext,
     qualityPolicy: input.qualityPolicy,
+    sourceAttempt,
   });
-  const deterministicOnly =
-    hasRoleCompanyIcpSignal(input.targetAudience) && !likelyTriggerOnlyAudience(input.targetAudience);
-  if (!apiKey || deterministicOnly) {
+  if (!apiKey && !cleanProviderSecret(process.env.OPENROUTER_API_KEY)) {
     const companyRequests = buildCompanySearchRequests({
       spec: fallbackSpec,
       maxRequests: input.maxCompanyQueries,
@@ -2411,6 +3057,10 @@ async function planExaPeopleQueries(input: {
     });
     return {
       rationale: fallbackSpec.rationale,
+      plannerProvider: "fallback",
+      plannerModel: "",
+      plannerError: "no_llm_provider_configured",
+      sourceAttempt,
       mode: "people_first",
       fallbackReason: "",
       searchSpec: fallbackSpec,
@@ -2450,45 +3100,106 @@ async function planExaPeopleQueries(input: {
     "- excludeIndustries should be major false-positive sectors to avoid.",
     "- Default to the fewest regions needed.",
     "- Never output generic broad phrases like 'technology companies' unless the context is truly broad.",
+    "- sourceAttempt is the autonomous retry number for this run.",
+    "- When sourceAttempt is greater than 0, deliberately explore a fresh ICP lane inferred from the same offer and audience; vary roleTitles and companyKeywords instead of repeating the prior obvious query.",
+    "- Prefer concrete buyer/operator titles and concrete company descriptors likely to have valid business email routes.",
     "Return JSON only:",
     '{ "rationale": string, "regions": string[], "roleTitles": string[], "companyKeywords": string[], "eventSignals": string[], "companySizeHint": string, "includeIndustries": string[], "excludeIndustries": string[] }',
     `Context: ${JSON.stringify({
       targetAudience: input.targetAudience,
       triggerContext: input.triggerContext,
       offer: input.offer,
+      sourceAttempt,
       maxCompanyQueries: input.maxCompanyQueries,
       maxPeopleQueries: input.maxPeopleQueries,
       qualityPolicy: input.qualityPolicy,
     })}`,
   ].join("\n");
   let searchSpec = fallbackSpec;
+  let plannerProvider: ExaPeopleQueryPlan["plannerProvider"] = "fallback";
+  let plannerModel = "";
+  let plannerError = "";
   try {
     const model = resolveLlmModel("lead_actor_query_planning", { prompt });
-    const response = await fetch("https://api.openai.com/v1/responses", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model,
-        input: prompt,
-        text: { format: { type: "json_object" } },
-        max_output_tokens: 700,
-      }),
-    });
-    const raw = await response.text();
-    if (!response.ok) {
-      throw new Error(`LLM query planner failed (${response.status}): ${trimText(raw, 220)}`);
+    plannerModel = model;
+    let parsed: unknown = {};
+    if (shouldPreferOpenRouterForTask(model, "lead_actor_query_planning")) {
+      plannerProvider = "openrouter";
+      plannerModel = resolveOpenRouterTaskModel(model, "lead_actor_query_planning");
+      parsed = await callOpenRouterJsonObject({
+        prompt,
+        openAiModel: model,
+        taskName: "lead_actor_query_planning",
+        maxTokens: 1800,
+        signal: input.signal,
+      });
+    } else if (apiKey) {
+      const response = await fetch("https://api.openai.com/v1/responses", {
+        method: "POST",
+        signal: input.signal,
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          model,
+          input: prompt,
+          text: { format: { type: "json_object" } },
+          max_output_tokens: 700,
+        }),
+      });
+      const raw = await response.text();
+      if (response.ok) {
+        plannerProvider = "openai";
+        let payload: unknown = {};
+        try {
+          payload = JSON.parse(raw);
+        } catch {
+          payload = {};
+        }
+        parsed = parseLooseJsonObject(extractOutputText(payload));
+      } else if (cleanProviderSecret(process.env.OPENROUTER_API_KEY)) {
+        plannerProvider = "openrouter";
+        plannerModel = resolveOpenRouterTaskModel(model, "lead_actor_query_planning");
+        parsed = await callOpenRouterJsonObject({
+          prompt,
+          openAiModel: model,
+          taskName: "lead_actor_query_planning",
+          maxTokens: 1800,
+          signal: input.signal,
+        });
+      } else {
+        throw new Error(`LLM query planner failed (${response.status}): ${trimText(raw, 220)}`);
+      }
+    } else {
+      plannerProvider = "openrouter";
+      plannerModel = resolveOpenRouterTaskModel(model, "lead_actor_query_planning");
+      parsed = await callOpenRouterJsonObject({
+        prompt,
+        openAiModel: model,
+        taskName: "lead_actor_query_planning",
+        maxTokens: 1800,
+        signal: input.signal,
+      });
     }
-    const payload = JSON.parse(raw) as unknown;
-    const parsed = parseLooseJsonObject(extractOutputText(payload));
     searchSpec = buildExaSearchSpecFromModel(asRecord(parsed), {
       targetAudience: input.targetAudience,
       triggerContext: input.triggerContext,
       qualityPolicy: input.qualityPolicy,
+      sourceAttempt,
     });
-  } catch {
+    if (
+      (plannerProvider === "openai" || plannerProvider === "openrouter") &&
+      searchSpec.rationale === fallbackSpec.rationale
+    ) {
+      searchSpec = {
+        ...searchSpec,
+        rationale: `${plannerProvider}_structured_search_spec`,
+      };
+    }
+  } catch (error) {
+    plannerError = error instanceof Error ? error.message : String(error ?? "query_planner_failed");
+    plannerProvider = "fallback";
     searchSpec = fallbackSpec;
   }
 
@@ -2500,6 +3211,10 @@ async function planExaPeopleQueries(input: {
 
   return {
     rationale: searchSpec.rationale || "structured_exa_search_spec",
+    plannerProvider,
+    plannerModel,
+    plannerError: trimText(sanitizeProviderError(plannerError), 300),
+    sourceAttempt,
     mode: "people_first",
     fallbackReason: "",
     searchSpec,
@@ -2870,7 +3585,7 @@ function parseDataForSeoOrganicCandidates(companyName: string, payload: Record<s
 }
 
 async function openAiJsonObjectCall(input: { prompt: string; model: string; maxOutputTokens?: number }) {
-  const apiKey = process.env.OPENAI_API_KEY;
+  const apiKey = cleanProviderSecret(process.env.OPENAI_API_KEY);
   if (!apiKey) {
     throw new Error("OPENAI_API_KEY is missing.");
   }
@@ -3464,6 +4179,7 @@ async function runExaFallbackCompanyResolution(input: {
   diagnostics: ExaQueryDiagnostic[];
   exaFallbackLimit: number;
   onExaCost?: (costUsd: number) => void;
+  signal?: AbortSignal;
 }) {
   if (input.exaFallbackLimit <= 0) return;
   for (const group of input.unresolvedGroups.slice(0, input.exaFallbackLimit)) {
@@ -3474,6 +4190,7 @@ async function runExaFallbackCompanyResolution(input: {
         query,
         category: "company",
         numResults: 1,
+        signal: input.signal,
       });
       input.onExaCost?.(response.costUsd);
       const resolvedDomain = registrableDomainFromUrl(response.hits[0]?.url ?? "");
@@ -3516,9 +4233,11 @@ async function sourceLeadsFromExa(input: {
   maxLeads: number;
   allowMissingEmail: boolean;
   emailFinderApiBaseUrl?: string;
-  emailFinderVerificationMode?: "validatedmails";
-  emailFinderValidatedMailsApiKey?: string;
+  emailFinderVerificationMode?: EmailFinderVerificationMode;
   resumeState?: DeferredSourcingState | null;
+  candidateOffset?: number;
+  sourceAttempt?: number;
+  signal?: AbortSignal;
 }) {
   const companyQueryLimit = Math.max(1, Math.min(2, input.maxLeads <= 50 ? 1 : 2));
   const peopleQueryLimit = Math.max(1, Math.min(2, input.maxLeads <= 50 ? 1 : 2));
@@ -3558,36 +4277,40 @@ async function sourceLeadsFromExa(input: {
       });
       backfillLeadDomains({ rawLeads, companyDomainByEntityId, companyDomainByName });
       if (polled.stillPending.length) {
-        return {
-          queryPlan,
-          acceptedLeads: [],
-          rejectedLeads: [],
-          diagnostics,
-          emailEnrichment: {
-            attempted: 0,
-            matched: 0,
-            failed: 0,
-            provider: "emailfinder.batch",
-            error: "",
-            failureSummary: [],
-            failedSamples: [],
-          },
-          budgetUsedUsd: Number((observedExaCostUsd + observedDataForSeoCostUsd).toFixed(3)),
-          exaSpendUsd: Number(observedExaCostUsd.toFixed(3)),
-          dataForSeoSpendUsd: Number(observedDataForSeoCostUsd.toFixed(3)),
-          pendingDataForSeo: {
-            version: 1,
-            phase: "waiting_dataforseo",
+        const readiness = shouldWaitForDataForSeoBeforeEmailEnrichment({ rawLeads, maxLeads: input.maxLeads });
+        if (readiness.shouldWait) {
+          return {
             queryPlan,
-            rawLeads,
+            acceptedLeads: [],
+            rejectedLeads: [],
             diagnostics,
-            companyDomainEntries: companyDomainEntriesFromMap(companyDomainByName),
-            pendingDataForSeoTasks: polled.stillPending,
-            observedExaCostUsd,
-            observedDataForSeoCostUsd,
-            officialWebsiteQueryLimit,
-          },
-        } satisfies ExaPeopleSourcingResult;
+            emailEnrichment: emptyExaEmailEnrichment(),
+            budgetUsedUsd: Number((observedExaCostUsd + observedDataForSeoCostUsd).toFixed(3)),
+            exaSpendUsd: Number(observedExaCostUsd.toFixed(3)),
+            dataForSeoSpendUsd: Number(observedDataForSeoCostUsd.toFixed(3)),
+            pendingDataForSeo: {
+              version: 1,
+              phase: "waiting_dataforseo",
+              queryPlan,
+              rawLeads,
+              diagnostics,
+              companyDomainEntries: companyDomainEntriesFromMap(companyDomainByName),
+              pendingDataForSeoTasks: polled.stillPending,
+              observedExaCostUsd,
+              observedDataForSeoCostUsd,
+              officialWebsiteQueryLimit,
+              emailEnrichmentOffset: input.resumeState.emailEnrichmentOffset,
+            },
+          } satisfies ExaPeopleSourcingResult;
+        }
+        diagnostics.push({
+          stage: "company",
+          provider: "dataforseo",
+          query: `DataForSEO wait bypassed: ${readiness.immediateLeadCount} known-domain leads ready; ${polled.stillPending.length} company lookups still pending`,
+          count: 0,
+          includeDomainsCount: readiness.immediateLeadCount,
+          error: `known_domain_candidates_ready:${readiness.immediateLeadCount}/${readiness.minReady}`,
+        });
       }
     }
 
@@ -3601,21 +4324,36 @@ async function sourceLeadsFromExa(input: {
       companyDomainByName,
       diagnostics,
       exaFallbackLimit: officialWebsiteQueryLimit,
+      signal: input.signal,
       onExaCost: (costUsd) => {
         observedExaCostUsd += costUsd;
       },
     });
     backfillLeadDomains({ rawLeads, companyDomainByEntityId, companyDomainByName });
+  } else if (input.resumeState?.phase === "email_enrichment") {
+    queryPlan = input.resumeState.queryPlan;
+    diagnostics = [...input.resumeState.diagnostics];
+    rawLeads = input.resumeState.rawLeads.map((lead) => ({ ...lead }));
+    backfillLeadDomains({ rawLeads, companyDomainByEntityId, companyDomainByName });
+    diagnostics.push({
+      stage: "email_enrichment",
+      provider: "exa",
+      query: `EmailFinder resume: continuing at candidate offset ${input.resumeState.emailEnrichmentOffset}`,
+      count: 0,
+      includeDomainsCount: rawLeads.length,
+    });
   } else {
     queryPlan = await planExaPeopleQueries({
       targetAudience: input.targetAudience,
       triggerContext: input.triggerContext,
       offer: input.offer,
+      sourceAttempt: input.sourceAttempt,
       maxCompanyQueries: companyQueryLimit,
       maxPeopleQueries: peopleQueryLimit,
       companyResultsPerQuery,
       peopleResultsPerQuery,
       qualityPolicy: input.qualityPolicy,
+      signal: input.signal,
     });
 
     diagnostics = [];
@@ -3643,11 +4381,12 @@ async function sourceLeadsFromExa(input: {
         apiKey: input.exaApiKey,
         query: request.query,
         category: request.category,
-        numResults: 100,
+        numResults: Math.min(request.numResults, Math.max(12, input.maxLeads)),
         userLocation: request.userLocation,
-        searchType: "deep-reasoning",
+        searchType: "auto",
         outputSchema: exaDirectPeopleOutputSchema(),
         additionalQueries: request.additionalQueries,
+        signal: input.signal,
       });
       observedExaCostUsd += response.costUsd;
       const structuredLeads = parseExaStructuredLeads(response.output);
@@ -3689,11 +4428,26 @@ async function sourceLeadsFromExa(input: {
       });
     }
 
-    await resolveCompanyDomainsWithHistoricalAndClearout({
+    const directDomainReadiness = shouldWaitForDataForSeoBeforeEmailEnrichment({
       rawLeads,
-      companyDomainByName,
-      diagnostics,
+      maxLeads: input.maxLeads,
     });
+    if (directDomainReadiness.shouldWait) {
+      await resolveCompanyDomainsWithHistoricalAndClearout({
+        rawLeads,
+        companyDomainByName,
+        diagnostics,
+      });
+    } else {
+      diagnostics.push({
+        stage: "company",
+        provider: "exa",
+        query: `Company-domain enrichment skipped: ${directDomainReadiness.immediateLeadCount} known-domain leads ready from direct people search`,
+        count: 0,
+        includeDomainsCount: directDomainReadiness.immediateLeadCount,
+        error: `known_domain_candidates_ready:${directDomainReadiness.immediateLeadCount}/${directDomainReadiness.minReady}`,
+      });
+    }
     backfillLeadDomains({ rawLeads, companyDomainByEntityId, companyDomainByName });
 
     const directProbeAlignment = deterministicProbeIcpAlignment({
@@ -3758,6 +4512,7 @@ async function sourceLeadsFromExa(input: {
           numResults: request.numResults,
           userLocation: request.userLocation,
           additionalQueries: request.additionalQueries,
+          signal: input.signal,
         });
         observedExaCostUsd += response.costUsd;
         diagnostics.push({
@@ -3813,6 +4568,7 @@ async function sourceLeadsFromExa(input: {
           category: request.category,
           numResults: request.numResults,
           userLocation: request.userLocation,
+          signal: input.signal,
         });
         observedExaCostUsd += response.costUsd;
         diagnostics.push({
@@ -3837,11 +4593,26 @@ async function sourceLeadsFromExa(input: {
         });
       }
 
-      await resolveCompanyDomainsWithHistoricalAndClearout({
+      const fallbackDomainReadiness = shouldWaitForDataForSeoBeforeEmailEnrichment({
         rawLeads,
-        companyDomainByName,
-        diagnostics,
+        maxLeads: input.maxLeads,
       });
+      if (fallbackDomainReadiness.shouldWait) {
+        await resolveCompanyDomainsWithHistoricalAndClearout({
+          rawLeads,
+          companyDomainByName,
+          diagnostics,
+        });
+      } else {
+        diagnostics.push({
+          stage: "company",
+          provider: "exa",
+          query: `Company-domain enrichment skipped: ${fallbackDomainReadiness.immediateLeadCount} known-domain leads ready after fallback people search`,
+          count: 0,
+          includeDomainsCount: fallbackDomainReadiness.immediateLeadCount,
+          error: `known_domain_candidates_ready:${fallbackDomainReadiness.immediateLeadCount}/${fallbackDomainReadiness.minReady}`,
+        });
+      }
       backfillLeadDomains({ rawLeads, companyDomainByEntityId, companyDomainByName });
     } else {
       queryPlan.mode = "people_first";
@@ -3857,42 +4628,49 @@ async function sourceLeadsFromExa(input: {
         rawLeads,
         companyDomainByName,
       });
-      const pendingTasks = await submitPendingDataForSeoTasks({
-        unresolvedGroups: unresolvedAfterClearout,
-        credentials: input.dataForSeoCredentials,
-        diagnostics,
-      });
-      if (pendingTasks.length) {
-        return {
-          queryPlan,
-          acceptedLeads: [],
-          rejectedLeads: [],
-          diagnostics,
-          emailEnrichment: {
-            attempted: 0,
-            matched: 0,
-            failed: 0,
-            provider: "emailfinder.batch",
-            error: "",
-            failureSummary: [],
-            failedSamples: [],
-          },
-          budgetUsedUsd: Number((observedExaCostUsd + observedDataForSeoCostUsd).toFixed(3)),
-          exaSpendUsd: Number(observedExaCostUsd.toFixed(3)),
-          dataForSeoSpendUsd: Number(observedDataForSeoCostUsd.toFixed(3)),
-          pendingDataForSeo: {
-            version: 1,
-            phase: "waiting_dataforseo",
-            queryPlan,
-            rawLeads,
+      if (unresolvedAfterClearout.length) {
+        const readiness = shouldWaitForDataForSeoBeforeEmailEnrichment({ rawLeads, maxLeads: input.maxLeads });
+        if (readiness.shouldWait) {
+          const pendingTasks = await submitPendingDataForSeoTasks({
+            unresolvedGroups: unresolvedAfterClearout,
+            credentials: input.dataForSeoCredentials,
             diagnostics,
-            companyDomainEntries: companyDomainEntriesFromMap(companyDomainByName),
-            pendingDataForSeoTasks: pendingTasks,
-            observedExaCostUsd,
-            observedDataForSeoCostUsd,
-            officialWebsiteQueryLimit,
-          },
-        } satisfies ExaPeopleSourcingResult;
+          });
+          if (pendingTasks.length) {
+            return {
+              queryPlan,
+              acceptedLeads: [],
+              rejectedLeads: [],
+              diagnostics,
+              emailEnrichment: emptyExaEmailEnrichment(),
+              budgetUsedUsd: Number((observedExaCostUsd + observedDataForSeoCostUsd).toFixed(3)),
+              exaSpendUsd: Number(observedExaCostUsd.toFixed(3)),
+              dataForSeoSpendUsd: Number(observedDataForSeoCostUsd.toFixed(3)),
+              pendingDataForSeo: {
+                version: 1,
+                phase: "waiting_dataforseo",
+                queryPlan,
+                rawLeads,
+                diagnostics,
+                companyDomainEntries: companyDomainEntriesFromMap(companyDomainByName),
+                pendingDataForSeoTasks: pendingTasks,
+                observedExaCostUsd,
+                observedDataForSeoCostUsd,
+                officialWebsiteQueryLimit,
+                emailEnrichmentOffset: 0,
+              },
+            } satisfies ExaPeopleSourcingResult;
+          }
+        } else {
+          diagnostics.push({
+            stage: "company",
+            provider: "dataforseo",
+            query: `DataForSEO submit skipped: ${readiness.immediateLeadCount} known-domain leads ready; ${unresolvedAfterClearout.length} unresolved companies left for later top-up`,
+            count: 0,
+            includeDomainsCount: readiness.immediateLeadCount,
+            error: `known_domain_candidates_ready:${readiness.immediateLeadCount}/${readiness.minReady}`,
+          });
+        }
       }
     }
 
@@ -3906,6 +4684,7 @@ async function sourceLeadsFromExa(input: {
       companyDomainByName,
       diagnostics,
       exaFallbackLimit: officialWebsiteQueryLimit,
+      signal: input.signal,
       onExaCost: (costUsd) => {
         observedExaCostUsd += costUsd;
       },
@@ -3913,31 +4692,27 @@ async function sourceLeadsFromExa(input: {
     backfillLeadDomains({ rawLeads, companyDomainByEntityId, companyDomainByName });
   }
 
-  const emailEnrichment = {
-    attempted: 0,
-    matched: 0,
-    failed: 0,
-    provider: "emailfinder.batch",
-    error: "",
-    failureSummary: [] as Array<{ reason: string; count: number }>,
-    failedSamples: [] as Array<{
-      id: string;
-      name: string;
-      domain: string;
-      reason: string;
-      error: string;
-      topAttemptEmail: string;
-      topAttemptVerdict: string;
-      topAttemptConfidence: string;
-      topAttemptReason: string;
-    }>,
-  };
+  const emailEnrichment = emptyExaEmailEnrichment();
+  const emailFinderApiMode = String(input.emailFinderApiBaseUrl ?? "")
+    .replace(/\r|\n/g, "")
+    .trim()
+    .toLowerCase();
+  const hasRemoteLocalVerifier = Boolean(
+    String(process.env.EMAIL_FINDER_LOCAL_VERIFIER_URL ?? process.env.EMAIL_VERIFIER_SERVICE_URL ?? "")
+      .replace(/\\r|\\n|\r|\n/g, "")
+      .trim()
+  );
+  const shouldUseLocalEmailFinder =
+    ["local", "internal", "direct"].includes(emailFinderApiMode) ||
+    (!emailFinderApiMode && hasRemoteLocalVerifier);
   const emailFinderApiBaseUrl = resolveEmailFinderApiBaseUrl(input.emailFinderApiBaseUrl);
+  const canRunEmailFinder = Boolean(emailFinderApiBaseUrl || shouldUseLocalEmailFinder);
   const leadsNeedingEmailEnrichment = rawLeads.filter((lead) => !extractFirstEmailAddress(lead.email)).length;
   const enrichmentEligibleLeads = rawLeads.filter((lead) => {
     if (extractFirstEmailAddress(lead.email)) return false;
     return Boolean(String(lead.name ?? "").trim()) && isUsableCompanyDomain(String(lead.domain ?? ""));
   });
+  let pendingEmailEnrichment: DeferredSourcingState | null = null;
   diagnostics.push({
     stage: "email_enrichment",
     provider: "exa",
@@ -3945,29 +4720,67 @@ async function sourceLeadsFromExa(input: {
     count: enrichmentEligibleLeads.length,
     includeDomainsCount: rawLeads.length,
   });
-  if (leadsNeedingEmailEnrichment > 0 && !emailFinderApiBaseUrl) {
+  if (leadsNeedingEmailEnrichment > 0 && enrichmentEligibleLeads.length > 0 && !canRunEmailFinder) {
     emailEnrichment.error = "EMAIL_FINDER_API_BASE_URL is missing";
-      diagnostics.push({
-        stage: "email_enrichment",
-        provider: "exa",
-        query: `EmailFinder batch skipped: ${emailEnrichment.error}`,
-        count: 0,
-        includeDomainsCount: leadsNeedingEmailEnrichment,
+    diagnostics.push({
+      stage: "email_enrichment",
+      provider: "exa",
+      query: `EmailFinder batch skipped: ${emailEnrichment.error}`,
+      count: 0,
+      includeDomainsCount: leadsNeedingEmailEnrichment,
     });
   }
-  if (emailFinderApiBaseUrl) {
+  if (canRunEmailFinder && enrichmentEligibleLeads.length > 0) {
+    const eligibleIndexedLeads = rawLeads
+      .map((lead, index) => ({ lead, index }))
+      .filter(({ lead }) => {
+        if (extractFirstEmailAddress(lead.email)) return false;
+        return Boolean(String(lead.name ?? "").trim()) && isUsableCompanyDomain(String(lead.domain ?? ""));
+      });
+    const enrichmentLeadCap = dynamicEmailFinderBatchLeadCap(input.maxLeads);
+    const requestedCandidateOffset = Math.max(
+      0,
+      Math.trunc(Number(input.candidateOffset ?? input.resumeState?.emailEnrichmentOffset ?? 0) || 0)
+    );
+    const candidateOffset = Math.min(requestedCandidateOffset, eligibleIndexedLeads.length);
+    const enrichmentSelection = eligibleIndexedLeads.slice(candidateOffset, candidateOffset + enrichmentLeadCap);
+    const nextEmailEnrichmentOffset = candidateOffset + enrichmentSelection.length;
+    const enrichmentInputLeads = enrichmentSelection.map((row) => row.lead);
     const enrichment = await enrichLeadsWithEmailFinderBatch({
-      leads: rawLeads,
-      apiBaseUrl: emailFinderApiBaseUrl,
+      leads: enrichmentInputLeads,
+      apiBaseUrl: shouldUseLocalEmailFinder ? "local" : emailFinderApiBaseUrl,
       verificationMode: input.emailFinderVerificationMode,
-      validatedMailsApiKey: input.emailFinderValidatedMailsApiKey,
-      maxCandidates: 12,
-      maxCredits: 7,
-      concurrency: 4,
-      timeoutMs: Math.max(
-        20_000,
-        Math.min(180_000, Number(process.env.EMAIL_FINDER_TIMEOUT_MS ?? 90_000) || 90_000)
+      maxCandidates: Math.max(
+        4,
+        Math.min(12, Math.trunc(Number(process.env.OUTREACH_DYNAMIC_EMAIL_FINDER_MAX_CANDIDATES ?? 8) || 8))
       ),
+      maxCredits: 1,
+      maxTotalCredits: Math.max(1, input.maxLeads),
+      concurrency: Math.min(2, enrichmentLeadCap),
+      timeoutMs: Math.max(
+        15_000,
+        Math.min(
+          75_000,
+          Number(
+            process.env.OUTREACH_DYNAMIC_EMAIL_FINDER_TIMEOUT_MS ??
+              process.env.EMAIL_FINDER_TIMEOUT_MS ??
+              45_000
+          ) || 45_000
+        )
+      ),
+      allowBestGuessFallback: input.qualityPolicy.allowHighConfidenceFallbackEmail === true,
+      minBestGuessPValid: input.qualityPolicy.fallbackMinPValid,
+      retryOnFailure: false,
+      signal: input.signal,
+      audit: {
+        source: "outreach-runtime.sourcing",
+        context: {
+          triggerContext: input.triggerContext,
+          targetAudience: input.targetAudience,
+          maxLeads: input.maxLeads,
+          verificationMode: input.emailFinderVerificationMode ?? "local",
+        },
+      },
     });
     emailEnrichment.attempted = enrichment.attempted;
     emailEnrichment.matched = enrichment.matched;
@@ -3976,17 +4789,39 @@ async function sourceLeadsFromExa(input: {
     emailEnrichment.error = enrichment.error;
     emailEnrichment.failureSummary = enrichment.failureSummary;
     emailEnrichment.failedSamples = enrichment.failedSamples;
-    rawLeads.splice(0, rawLeads.length, ...enrichment.leads);
+    emailEnrichment.decisionSignals = enrichment.decisionSignals;
+    emailEnrichment.decisionSummary = enrichment.decisionSummary;
+    enrichment.leads.forEach((lead, index) => {
+      const rawIndex = enrichmentSelection[index]?.index;
+      if (typeof rawIndex === "number") {
+        rawLeads[rawIndex] = lead;
+      }
+    });
     if (enrichment.attempted > 0 || enrichment.error) {
       diagnostics.push({
         stage: "email_enrichment",
         provider: "exa",
         query: enrichment.ok
-          ? `EmailFinder batch matched ${enrichment.matched}/${enrichment.attempted}`
-          : `EmailFinder batch failed: ${trimText(enrichment.error, 180)}`,
+          ? `EmailFinder batch matched ${enrichment.matched}/${enrichment.attempted}; decision=${enrichment.decisionSummary.topAction || "none"}:${trimText(enrichment.decisionSummary.topReason, 90)} (cap ${enrichmentLeadCap}, offset ${candidateOffset})`
+          : `EmailFinder batch failed: ${trimText(enrichment.error, 120)}; decision=${enrichment.decisionSummary.topAction || "none"}:${trimText(enrichment.decisionSummary.topReason, 90)} (cap ${enrichmentLeadCap}, offset ${candidateOffset})`,
         count: enrichment.matched,
         includeDomainsCount: enrichment.attempted,
       });
+    }
+    if (nextEmailEnrichmentOffset < eligibleIndexedLeads.length && enrichment.matched === 0) {
+      pendingEmailEnrichment = {
+        version: 1,
+        phase: "email_enrichment",
+        queryPlan,
+        rawLeads,
+        diagnostics,
+        companyDomainEntries: companyDomainEntriesFromMap(companyDomainByName),
+        pendingDataForSeoTasks: [],
+        observedExaCostUsd,
+        observedDataForSeoCostUsd,
+        officialWebsiteQueryLimit,
+        emailEnrichmentOffset: nextEmailEnrichmentOffset,
+      };
     }
   }
 
@@ -4048,6 +4883,7 @@ async function sourceLeadsFromExa(input: {
     exaSpendUsd,
     dataForSeoSpendUsd,
     pendingDataForSeo: null,
+    pendingEmailEnrichment,
   } satisfies ExaPeopleSourcingResult;
 }
 
@@ -7932,10 +8768,6 @@ async function generateAdaptiveLeadQualityPolicy(input: {
   experimentName: string;
 }): Promise<LeadQualityPolicy> {
   const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) {
-    throw new Error("OPENAI_API_KEY missing for adaptive lead quality policy");
-  }
-
   const prompt = [
     "Generate a strict B2B lead quality policy for outbound outreach.",
     "Optimize for quality over quantity, but keep policy feasible for real-world actor outputs.",
@@ -7950,42 +8782,85 @@ async function generateAdaptiveLeadQualityPolicy(input: {
     "- requiredCompanyKeywords (string[])",
     "- excludedCompanyKeywords (string[])",
     "- minConfidenceScore (number 0..1)",
+    "- allowHighConfidenceFallbackEmail (boolean)",
+    "- fallbackMinPValid (number 0..1)",
+    "- fallbackRequireMailReadyMx (boolean)",
+    "- fallbackOnlyWhenProviderUnavailable (boolean)",
     "Rules:",
     "- default to rejecting low-signal generic emails when unsure.",
     "- if targetAudience references a specific role/persona (e.g. manager/director/head/vp/chief), requireTitle should be true and requiredTitleKeywords should capture that role intent.",
     "- requiredCompanyKeywords should only be used when explicitly supported by targetAudience or offer; otherwise return [].",
     "- excludedCompanyKeywords should only contain exclusions explicitly stated or directly implied by the original targetAudience/offer context. Do not invent sector exclusions.",
     "- minConfidenceScore should usually be between 0.52 and 0.68.",
+    "- allowHighConfidenceFallbackEmail lets the runtime use a high-probability EmailFinder best guess only when verification is inconclusive; set it true only when p_valid can safely gate the guess.",
+    "- fallbackMinPValid should usually be 0.70-0.85. Use higher thresholds for cold-start domains or broad audiences.",
+    "- fallbackRequireMailReadyMx should be true for outbound campaigns.",
+    "- fallbackOnlyWhenProviderUnavailable should be true for outbound campaigns so exact positive verification still wins.",
+    "- Never rely on fallback for catch-all, accept-all, risky-valid, free-domain, or role-inbox addresses.",
     `Context: ${JSON.stringify(input)}`,
   ].join("\n");
 
   const model = resolveLlmModel("lead_quality_policy", { prompt });
-  const response = await fetch("https://api.openai.com/v1/responses", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model,
-      input: prompt,
-      text: { format: { type: "json_object" } },
-      max_output_tokens: 900,
-    }),
-  });
+  let parsed: unknown = {};
+  if (shouldPreferOpenRouterForTask(model, "lead_quality_policy")) {
+    parsed = await callOpenRouterJsonObject({
+      prompt,
+      openAiModel: model,
+      taskName: "lead_quality_policy",
+      maxTokens: 1400,
+    });
+  } else if (apiKey) {
+    const response = await fetch("https://api.openai.com/v1/responses", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model,
+        input: prompt,
+        text: { format: { type: "json_object" } },
+        max_output_tokens: 900,
+      }),
+    });
 
-  const raw = await response.text();
-  if (!response.ok) {
-    throw new Error(`Lead quality policy generation failed: HTTP ${response.status} ${raw.slice(0, 240)}`);
+    const raw = await response.text();
+    if (response.ok) {
+      let payload: unknown = {};
+      try {
+        payload = JSON.parse(raw);
+      } catch {
+        payload = {};
+      }
+      parsed = parseLooseJsonObject(extractOutputText(payload));
+    } else if (cleanProviderSecret(process.env.OPENROUTER_API_KEY)) {
+      try {
+        parsed = await callOpenRouterJsonObject({
+          prompt,
+          openAiModel: model,
+          taskName: "lead_quality_policy",
+          maxTokens: 1400,
+        });
+      } catch (fallbackError) {
+        const fallbackMessage =
+          fallbackError instanceof Error ? fallbackError.message : String(fallbackError ?? "unknown");
+        throw new Error(
+          `Lead quality policy generation failed: OpenAI HTTP ${response.status} ${sanitizeProviderError(
+            raw
+          )}; OpenRouter fallback failed: ${fallbackMessage}`
+        );
+      }
+    } else {
+      throw new Error(`Lead quality policy generation failed: HTTP ${response.status} ${sanitizeProviderError(raw)}`);
+    }
+  } else {
+    parsed = await callOpenRouterJsonObject({
+      prompt,
+      openAiModel: model,
+      taskName: "lead_quality_policy",
+      maxTokens: 1400,
+    });
   }
-
-  let payload: unknown = {};
-  try {
-    payload = JSON.parse(raw);
-  } catch {
-    payload = {};
-  }
-  const parsed = parseLooseJsonObject(extractOutputText(payload));
 
   const row = asRecord(parsed);
   const likelyB2B = isLikelyB2BOutreachContext({
@@ -8000,6 +8875,10 @@ async function generateAdaptiveLeadQualityPolicy(input: {
   const requestedRequireCompany = Boolean(row.requireCompany ?? true);
   const requestedRequireTitle = Boolean(row.requireTitle ?? false);
   const requestedMinConfidence = Number(row.minConfidenceScore ?? 0.6) || 0.6;
+  const requestedAllowHighConfidenceFallbackEmail = Boolean(row.allowHighConfidenceFallbackEmail ?? false);
+  const requestedFallbackMinPValid = Number(row.fallbackMinPValid ?? 0.76) || 0.76;
+  const requestedFallbackRequireMailReadyMx = row.fallbackRequireMailReadyMx !== false;
+  const requestedFallbackOnlyWhenProviderUnavailable = row.fallbackOnlyWhenProviderUnavailable !== false;
   const requestedTitleKeywords = Array.isArray(row.requiredTitleKeywords)
     ? row.requiredTitleKeywords.map((item) => normalizeText(item)).filter(Boolean)
     : [];
@@ -8060,6 +8939,10 @@ async function generateAdaptiveLeadQualityPolicy(input: {
     requiredCompanyKeywords: companyKeywordPolicy,
     excludedCompanyKeywords: explicitExcludedKeywords,
     minConfidenceScore: Math.max(minFloor, Math.min(maxCap, requestedMinConfidence || defaultConfidence)),
+    allowHighConfidenceFallbackEmail: requestedAllowHighConfidenceFallbackEmail,
+    fallbackMinPValid: Math.max(0.7, Math.min(0.9, requestedFallbackMinPValid)),
+    fallbackRequireMailReadyMx: requestedFallbackRequireMailReadyMx,
+    fallbackOnlyWhenProviderUnavailable: requestedFallbackOnlyWhenProviderUnavailable,
   };
   return policy;
 }
@@ -8103,6 +8986,10 @@ function buildFallbackLeadQualityPolicy(input: {
       input.experimentName
     ),
     minConfidenceScore: likelyB2B ? 0.62 : 0.58,
+    allowHighConfidenceFallbackEmail: false,
+    fallbackMinPValid: 0.78,
+    fallbackRequireMailReadyMx: true,
+    fallbackOnlyWhenProviderUnavailable: true,
   };
 }
 
@@ -9698,6 +10585,17 @@ function addMinutes(dateIso: string, minutes: number) {
   return new Date(date.getTime() + Math.max(0, minutes) * 60 * 1000).toISOString();
 }
 
+function addSeconds(dateIso: string, seconds: number) {
+  const date = new Date(dateIso);
+  return new Date(date.getTime() + Math.max(0, seconds) * 1000).toISOString();
+}
+
+function rejectAfterMs<T>(timeoutMs: number, message: string) {
+  return new Promise<T>((_, reject) => {
+    setTimeout(() => reject(new Error(message)), Math.max(1_000, Math.trunc(timeoutMs)));
+  });
+}
+
 function conversationNodeById(graph: ConversationFlowGraph, nodeId: string): ConversationFlowNode | null {
   return graph.nodes.find((node) => node.id === nodeId) ?? null;
 }
@@ -9815,6 +10713,26 @@ function effectiveCampaignGoal(goal: string, variantName: string) {
   const trimmedVariant = variantName.trim();
   if (trimmedVariant) return trimmedVariant;
   return "outbound pipeline performance";
+}
+
+function buildConversationGenerationSignature(input: {
+  mapId?: string;
+  mapRevision?: number;
+  campaignGoal?: string;
+  experimentOffer?: string;
+  experimentAudience?: string;
+}) {
+  return hashProbeInput({
+    mapId: String(input.mapId ?? "").trim(),
+    mapRevision: Math.max(0, Number(input.mapRevision ?? 0) || 0),
+    campaignGoal: String(input.campaignGoal ?? "").trim(),
+    experimentOffer: String(input.experimentOffer ?? "").trim(),
+    experimentAudience: String(input.experimentAudience ?? "").trim(),
+  });
+}
+
+function readConversationGenerationSignature(message: Pick<OutreachMessage, "generationMeta">) {
+  return String(message.generationMeta?.conversationGenerationSignature ?? "").trim();
 }
 
 function clampConfidenceValue(value: unknown, fallback = 0) {
@@ -10159,6 +11077,38 @@ async function generateConversationNodeContent(input: {
       context: promptContext,
     });
     if (!generated.ok) {
+      const allowStaticWarmupFallback =
+        normalizeText(input.campaignName ?? "").toLowerCase().startsWith("warmup -") ||
+        normalizeText(input.node.title).toLowerCase().includes("warmup");
+      if (allowStaticWarmupFallback) {
+        const rendered = renderConversationNode({
+          node: input.node,
+          leadName: input.lead.name,
+          leadCompany: input.lead.company ?? "",
+          leadTitle: input.lead.title ?? "",
+          brandName: input.brandName,
+          campaignGoal: input.campaignGoal,
+          variantName: input.variantName,
+          replyPreview: input.latestInboundBody,
+        });
+        if (rendered.ok) {
+          return {
+            ok: true,
+            subject: rendered.subject,
+            body: rendered.body,
+            trace: {
+              ...generated.trace,
+              mode: "prompt_v1_static_warmup_fallback",
+              fallbackReason: generated.reason,
+              validation: {
+                ...(generated.trace.validation ?? {}),
+                passed: true,
+                reason: "prompt_generation_failed_static_warmup_fallback",
+              },
+            },
+          };
+        }
+      }
       return {
         ok: false,
         reason: generated.reason,
@@ -10209,19 +11159,343 @@ function addHours(dateIso: string, hours: number) {
   return new Date(date.getTime() + hours * 60 * 60 * 1000).toISOString();
 }
 
+const TERMINAL_RUN_STATUSES = new Set<OutreachRun["status"]>([
+  "completed",
+  "canceled",
+  "failed",
+  "preflight_failed",
+]);
+
+const RUN_JOB_TYPES_CLOSED_ON_TERMINAL: OutreachJobType[] = [
+  "source_leads",
+  "schedule_messages",
+  "dispatch_messages",
+  "sync_replies",
+  "analyze_run",
+  "conversation_tick",
+  "monitor_deliverability",
+];
+
+function terminalRunCleanupReason(status: OutreachRun["status"], reason: string) {
+  const trimmed = reason.trim();
+  if (!trimmed) return `Run marked ${status}.`;
+  if (status === "canceled") return `Run canceled: ${trimmed}`;
+  if (status === "completed") return `Run completed: ${trimmed}`;
+  return `Run ${status}: ${trimmed}`;
+}
+
+async function reconcileTerminalRunArtifacts(input: {
+  run: Pick<OutreachRun, "id" | "brandId">;
+  cleanupReason: string;
+}) {
+  const [messages, jobs, anomalies] = await Promise.all([
+    listRunMessages(input.run.id),
+    listRunJobs(input.run.id, 200),
+    listRunAnomalies(input.run.id),
+  ]);
+
+  const scheduledMessageIds = messages
+    .filter((message) => message.status === "scheduled")
+    .map((message) => message.id);
+  if (scheduledMessageIds.length) {
+    await updateRunMessages(scheduledMessageIds, {
+      status: "canceled",
+      lastError: input.cleanupReason,
+    });
+  }
+
+  const activeJobIds = jobs
+    .filter(
+      (job) =>
+        RUN_JOB_TYPES_CLOSED_ON_TERMINAL.includes(job.jobType) &&
+        ["queued", "running"].includes(job.status)
+    )
+    .map((job) => job.id);
+  if (activeJobIds.length) {
+    await updateOutreachJobs(activeJobIds, {
+      status: "completed",
+      lastError: input.cleanupReason,
+    });
+  }
+
+  const activeAnomalyIds = anomalies
+    .filter((anomaly) => anomaly.status === "active")
+    .map((anomaly) => anomaly.id);
+  if (activeAnomalyIds.length) {
+    await updateRunAnomalies(activeAnomalyIds, {
+      status: "resolved",
+    });
+  }
+
+  const refreshedMessages =
+    scheduledMessageIds.length > 0 ? await listRunMessages(input.run.id) : messages;
+
+  return {
+    messages: refreshedMessages,
+    scheduledMessageCount: scheduledMessageIds.length,
+    closedJobCount: activeJobIds.length,
+    resolvedAnomalyCount: activeAnomalyIds.length,
+  };
+}
+
+function invalidCampaignRunReason(input: {
+  campaign: ScaleCampaignRecord | null;
+  senderAccount: Awaited<ReturnType<typeof getOutreachAccount>> | null;
+  senderAccountId: string;
+  assignedAccountIds: string[];
+}) {
+  if (!input.campaign) {
+    return "Run canceled: campaign no longer exists.";
+  }
+  if (
+    resolveScaleCampaignLane(input.campaign) === "warmup" &&
+    !input.assignedAccountIds.includes(input.senderAccountId)
+  ) {
+    return "Run canceled: sender is no longer assigned to this brand.";
+  }
+  if (input.campaign.status !== "active") {
+    return `Run canceled: campaign is ${input.campaign.status}, not active.`;
+  }
+  const account = input.senderAccount;
+  if (!account) {
+    return "Run canceled: sender account no longer exists.";
+  }
+  if (account.status !== "active") {
+    return "Run canceled: sender account is inactive.";
+  }
+  if (account.provider === "mailpool" && account.config.mailpool.status === "deleted") {
+    return "Run canceled: Mailpool mailbox no longer exists.";
+  }
+  if (account.config.mailbox.status === "disconnected") {
+    return "Run canceled: sender mailbox is disconnected.";
+  }
+  return "";
+}
+
+async function reconcileInvalidCampaignOpenRuns(input: {
+  brands: BrandRecord[];
+  openRuns: OutreachRun[];
+  limit: number;
+}) {
+  const candidates = input.openRuns
+    .filter((run) => run.ownerType === "campaign" && run.ownerId)
+    .sort((left, right) => {
+      const leftAt = toDate(left.updatedAt || left.createdAt).getTime();
+      const rightAt = toDate(right.updatedAt || right.createdAt).getTime();
+      return leftAt - rightAt;
+    })
+    .slice(0, Math.max(1, Math.min(200, Math.round(Number(input.limit) || 40))));
+  const campaignByBrandId = new Map<string, Map<string, ScaleCampaignRecord>>();
+  const assignedAccountIdsByBrandId = new Map<string, string[]>();
+  await Promise.all(
+    input.brands.map(async (brand) => {
+      const [campaigns, assignment] = await Promise.all([
+        listScaleCampaignRecords(brand.id),
+        getBrandOutreachAssignment(brand.id),
+      ]);
+      campaignByBrandId.set(brand.id, new Map(campaigns.map((campaign) => [campaign.id, campaign] as const)));
+      assignedAccountIdsByBrandId.set(
+        brand.id,
+        Array.from(
+          new Set(
+            [assignment?.accountId ?? "", ...(assignment?.accountIds ?? [])]
+              .map((accountId) => accountId.trim())
+              .filter(Boolean)
+          )
+        )
+      );
+    })
+  );
+
+  let runsCanceled = 0;
+  let scheduledMessagesCanceled = 0;
+  let jobsClosed = 0;
+  let anomaliesResolved = 0;
+  for (const run of candidates) {
+    const campaign = campaignByBrandId.get(run.brandId)?.get(run.ownerId) ?? null;
+    const senderAccountId = run.lockedSenderAccountId || run.accountId;
+    const senderAccount = senderAccountId ? await getOutreachAccount(senderAccountId) : null;
+    const reason = invalidCampaignRunReason({
+      campaign,
+      senderAccount,
+      senderAccountId,
+      assignedAccountIds: assignedAccountIdsByBrandId.get(run.brandId) ?? [],
+    });
+    if (!reason) {
+      continue;
+    }
+    const cleanup = await reconcileTerminalRunArtifacts({
+      run,
+      cleanupReason: reason,
+    });
+    await updateOutreachRun(run.id, {
+      status: "canceled",
+      pauseReason: reason,
+      lastError: reason,
+      completedAt: nowIso(),
+    });
+    await createOutreachEvent({
+      runId: run.id,
+      eventType: "run_terminal_reconciled",
+      payload: {
+        status: "canceled",
+        reason: "invalid_campaign_or_sender",
+        summary: reason,
+        canceledScheduledMessages: cleanup.scheduledMessageCount,
+        closedJobs: cleanup.closedJobCount,
+        resolvedAnomalies: cleanup.resolvedAnomalyCount,
+      },
+    });
+    runsCanceled += 1;
+    scheduledMessagesCanceled += cleanup.scheduledMessageCount;
+    jobsClosed += cleanup.closedJobCount;
+    anomaliesResolved += cleanup.resolvedAnomalyCount;
+  }
+
+  return {
+    runsEvaluated: candidates.length,
+    runsCanceled,
+    scheduledMessagesCanceled,
+    jobsClosed,
+    anomaliesResolved,
+  };
+}
+
+async function cancelDuplicateOpenRun(input: {
+  snapshot: OpenRunSnapshot;
+  canonicalRun: Pick<OutreachRun, "id" | "status">;
+  threadsByBrandId: Map<string, ReplyThread[]>;
+}) {
+  const duplicateReason = `Duplicate open run reconciled; preserved canonical run ${input.canonicalRun.id}.`;
+  const cleanup = await reconcileTerminalRunArtifacts({
+    run: input.snapshot.run,
+    cleanupReason: terminalRunCleanupReason("canceled", duplicateReason),
+  });
+  const leads = await listRunLeads(input.snapshot.run.id);
+  let threads = input.threadsByBrandId.get(input.snapshot.run.brandId) ?? null;
+  if (!threads) {
+    threads = (await listReplyThreadsByBrand(input.snapshot.run.brandId)).threads;
+    input.threadsByBrandId.set(input.snapshot.run.brandId, threads);
+  }
+  await updateOutreachRun(input.snapshot.run.id, {
+    status: "canceled",
+    completedAt: nowIso(),
+    pauseReason: duplicateReason,
+    lastError: "",
+    metrics: buildLiveRunMetrics({
+      run: input.snapshot.run,
+      messages: cleanup.messages,
+      threads,
+      sourcedLeads: leads.length,
+    }),
+  });
+  await createOutreachEvent({
+    runId: input.snapshot.run.id,
+    eventType: "run_duplicate_reconciled",
+    payload: {
+      canonicalRunId: input.canonicalRun.id,
+      canonicalRunStatus: input.canonicalRun.status,
+      canceledScheduledMessages: cleanup.scheduledMessageCount,
+      closedJobs: cleanup.closedJobCount,
+      resolvedAnomalies: cleanup.resolvedAnomalyCount,
+    },
+  });
+
+  return cleanup;
+}
+
+async function reconcileDuplicateOpenRuns(input: {
+  runs: OutreachRun[];
+  limit: number;
+}) {
+  const grouped = new Map<string, OutreachRun[]>();
+  for (const run of input.runs) {
+    if (!run.ownerId.trim() || !isRunOpen(run.status)) continue;
+    const key = duplicateOpenRunKey(run);
+    const bucket = grouped.get(key) ?? [];
+    bucket.push(run);
+    grouped.set(key, bucket);
+  }
+
+  const duplicateGroups = [...grouped.values()]
+    .filter((group) => group.length > 1)
+    .sort((left, right) => {
+      const leftAt = Math.max(...left.map((run) => toDate(run.updatedAt || run.createdAt).getTime()));
+      const rightAt = Math.max(...right.map((run) => toDate(run.updatedAt || run.createdAt).getTime()));
+      return rightAt - leftAt;
+    })
+    .slice(0, Math.max(1, Math.min(200, Math.round(Number(input.limit) || 40))));
+
+  let runsRepaired = 0;
+  let scheduledMessagesCanceled = 0;
+  let jobsClosed = 0;
+  let anomaliesResolved = 0;
+  const threadsByBrandId = new Map<string, ReplyThread[]>();
+
+  for (const group of duplicateGroups) {
+    const snapshots = await buildOpenRunSnapshots(group);
+    const [canonicalSnapshot, ...duplicates] = snapshots.sort(compareOpenRunSnapshots);
+    if (!canonicalSnapshot) continue;
+
+    for (const duplicate of duplicates) {
+      const cleanup = await cancelDuplicateOpenRun({
+        snapshot: duplicate,
+        canonicalRun: canonicalSnapshot.run,
+        threadsByBrandId,
+      });
+      runsRepaired += 1;
+      scheduledMessagesCanceled += cleanup.scheduledMessageCount;
+      jobsClosed += cleanup.closedJobCount;
+      anomaliesResolved += cleanup.resolvedAnomalyCount;
+    }
+  }
+
+  return {
+    groupsEvaluated: duplicateGroups.length,
+    runsRepaired,
+    scheduledMessagesCanceled,
+    jobsClosed,
+    anomaliesResolved,
+  };
+}
+
 async function failRunWithDiagnostics(input: {
-  run: { id: string; brandId: string; campaignId: string; experimentId: string };
+  run: Pick<OutreachRun, "id" | "brandId" | "campaignId" | "experimentId" | "metrics">;
   reason: string;
   eventType?: string;
   payload?: Record<string, unknown>;
 }) {
-  await updateOutreachRun(input.run.id, { status: "failed", lastError: input.reason });
+  const cleanupReason = terminalRunCleanupReason("failed", input.reason);
+  const cleanup = await reconcileTerminalRunArtifacts({
+    run: input.run,
+    cleanupReason,
+  });
+  const [leads, { threads }] = await Promise.all([
+    listRunLeads(input.run.id),
+    listReplyThreadsByBrand(input.run.brandId),
+  ]);
+
+  await updateOutreachRun(input.run.id, {
+    status: "failed",
+    completedAt: nowIso(),
+    pauseReason: "",
+    lastError: input.reason,
+    metrics: buildLiveRunMetrics({
+      run: input.run,
+      messages: cleanup.messages,
+      threads,
+      sourcedLeads: leads.length,
+    }),
+  });
   await markExperimentExecutionStatus(input.run.brandId, input.run.campaignId, input.run.experimentId, "failed");
   await createOutreachEvent({
     runId: input.run.id,
     eventType: input.eventType ?? "run_failed",
     payload: {
       reason: input.reason,
+      canceledScheduledMessages: cleanup.scheduledMessageCount,
+      closedJobs: cleanup.closedJobCount,
+      resolvedAnomalies: cleanup.resolvedAnomalyCount,
       ...(input.payload ?? {}),
     },
   });
@@ -10239,6 +11513,91 @@ function buildSenderPoolUnavailableSummary(blockedSenders: SenderReadinessSnapsh
     reason: "sender_pool_blocked",
     summary: summarizeSenderReadinessBlock(first.readiness, first.fromEmail || first.senderAccountName),
   };
+}
+
+function isLlmProviderUnavailableError(reason: string) {
+  const normalized = String(reason ?? "").toLowerCase();
+  return (
+    normalized.includes("insufficient_quota") ||
+    normalized.includes("exceeded your current quota") ||
+    normalized.includes("invalid_api_key") ||
+    normalized.includes("incorrect api key") ||
+    normalized.includes("openai_api_key is missing") ||
+    normalized.includes("openrouter_api_key is missing") ||
+    normalized.includes("openrouter message generation failed") ||
+    normalized.includes("openrouter output was not valid json") ||
+    normalized.includes("http 402") ||
+    normalized.includes("credits") ||
+    normalized.includes("rate limit")
+  );
+}
+
+function withOutboundDisabledReadiness(readiness: SenderReadiness, fromEmail: string): SenderReadiness {
+  const issue = {
+    code: "sender_paused" as const,
+    severity: "blocking" as const,
+    kind: "policy" as const,
+    summary: "Outbound is off for this sender",
+    detail: `${fromEmail || "This sender"} is set to warmup only. Turn outbound on before using it for real outreach.`,
+  };
+  return {
+    ...readiness,
+    canSendNow: false,
+    lifecycle: "blocked",
+    blockingIssues: [issue, ...readiness.blockingIssues],
+    primaryBlockingReason: issue.detail,
+  };
+}
+
+function findSenderDomainRow(
+  senderRows: DomainRow[],
+  input: {
+    deliveryAccountId?: string;
+    fromEmail?: string;
+  }
+) {
+  const normalizedFromEmail = String(input.fromEmail ?? "").trim().toLowerCase();
+  if (normalizedFromEmail) {
+    const byEmail =
+      senderRows.find((row) => String(row.fromEmail ?? "").trim().toLowerCase() === normalizedFromEmail) ??
+      null;
+    if (byEmail) return byEmail;
+  }
+
+  const deliveryAccountId = String(input.deliveryAccountId ?? "").trim();
+  if (!deliveryAccountId) return null;
+  return senderRows.find((row) => getDomainDeliveryAccountId(row) === deliveryAccountId) ?? null;
+}
+
+function selectCanonicalSenderCandidates(
+  pool: CanonicalSenderPool,
+  candidateAccountIds: string[],
+  options?: {
+    exactAccountId?: string;
+  }
+) {
+  const exactAccountId = String(options?.exactAccountId ?? "").trim();
+  if (exactAccountId) {
+    const exactSender = pool.senderByAccountId.get(exactAccountId) ?? null;
+    if (exactSender) {
+      return [exactSender];
+    }
+    return [];
+  }
+
+  const matchedSenderIds = new Set<string>();
+  for (const accountId of candidateAccountIds) {
+    const sender = pool.senderByAccountId.get(accountId.trim());
+    if (sender) {
+      matchedSenderIds.add(sender.id);
+    }
+  }
+
+  if (!matchedSenderIds.size) {
+    return candidateAccountIds.length ? [] : pool.senders;
+  }
+
+  return pool.senders.filter((sender) => matchedSenderIds.has(sender.id));
 }
 
 async function resolveBrandSenderHealth(input: {
@@ -10359,10 +11718,7 @@ function buildLiveRunMetrics(input: {
   return {
     ...input.run.metrics,
     sourcedLeads: Math.max(input.run.metrics.sourcedLeads, input.sourcedLeads ?? input.run.metrics.sourcedLeads),
-    scheduledMessages: Math.max(
-      input.run.metrics.scheduledMessages,
-      calculateScheduledRunMessages(input.run.id, input.messages)
-    ),
+    scheduledMessages: calculateScheduledRunMessages(input.run.id, input.messages),
     sentMessages: liveMetrics.sentMessages,
     bouncedMessages: liveMetrics.bouncedMessages,
     failedMessages: liveMetrics.failedMessages,
@@ -10410,6 +11766,9 @@ async function scheduleConversationNodeMessage(input: {
   latestInboundSubject?: string;
   latestInboundBody?: string;
   replyPolicy?: ConversationPromptRenderContext["replyPolicy"];
+  mapId?: string;
+  mapRevision?: number;
+  generationSignature?: string;
   existingMessages: Awaited<ReturnType<typeof listRunMessages>>;
 }): Promise<{ ok: boolean; reason: string; messageId: string }> {
   if (input.node.kind !== "message") {
@@ -10461,6 +11820,28 @@ async function scheduleConversationNodeMessage(input: {
     replyPolicy: input.replyPolicy,
   });
   if (!composed.ok) {
+    if (isLlmProviderUnavailableError(composed.reason)) {
+      await createConversationEvent({
+        sessionId: input.sessionId,
+        runId: input.run.id,
+        eventType: "conversation_prompt_provider_unavailable",
+        payload: {
+          nodeId: input.node.id,
+          reason: composed.reason,
+          trace: composed.trace,
+        },
+      });
+      await createOutreachEvent({
+        runId: input.run.id,
+        eventType: "conversation_prompt_provider_unavailable",
+        payload: {
+          nodeId: input.node.id,
+          reason: composed.reason,
+        },
+      });
+      return { ok: false, reason: composed.reason, messageId: "" };
+    }
+
     const failedRows = await createRunMessages([
       {
         runId: input.run.id,
@@ -10522,6 +11903,12 @@ async function scheduleConversationNodeMessage(input: {
     input.run.timezone || DEFAULT_TIMEZONE,
     input.businessWindow ?? DEFAULT_BUSINESS_WINDOW
   );
+  const generationMeta = {
+    ...composed.trace,
+    conversationMapId: String(input.mapId ?? "").trim(),
+    conversationMapRevision: Math.max(0, Number(input.mapRevision ?? 0) || 0),
+    conversationGenerationSignature: String(input.generationSignature ?? "").trim(),
+  };
   const created = await createRunMessages([
     {
       runId: input.run.id,
@@ -10537,7 +11924,7 @@ async function scheduleConversationNodeMessage(input: {
       sessionId: input.sessionId,
       nodeId: input.node.id,
       parentMessageId: input.parentMessageId ?? "",
-      generationMeta: composed.trace,
+      generationMeta,
     },
   ]);
   if (!created.length) {
@@ -10567,7 +11954,13 @@ async function scheduleConversationNodeMessage(input: {
   return { ok: true, reason: "", messageId: created[0].id };
 }
 
-async function ensureBrandAccount(brandId: string): Promise<{
+async function ensureBrandAccount(
+  brandId: string,
+  options?: {
+    preferredAccountId?: string;
+    preferredMailboxAccountId?: string;
+  }
+): Promise<{
   ok: boolean;
   reason: string;
   accountId: string;
@@ -10578,20 +11971,49 @@ async function ensureBrandAccount(brandId: string): Promise<{
   mailboxSecrets?: ResolvedSecrets;
 }> {
   const assignment = await getBrandOutreachAssignment(brandId);
-  const candidateAccountIds = Array.from(
-    new Set([assignment?.accountId ?? "", ...(assignment?.accountIds ?? [])].map((value) => value.trim()).filter(Boolean))
+  const canonicalPool = await getCanonicalSenderPoolForBrand(brandId);
+  const preferredAccountId = String(options?.preferredAccountId ?? "").trim();
+  const preferredMailboxAccountId = String(options?.preferredMailboxAccountId ?? "").trim();
+  const legacyCandidateAccountIds = Array.from(
+    new Set(
+      [preferredAccountId, assignment?.accountId ?? "", ...(assignment?.accountIds ?? [])]
+        .map((value) => value.trim())
+        .filter(Boolean)
+    )
   );
-  if (!assignment || !candidateAccountIds.length) {
+  const canonicalCandidates = selectCanonicalSenderCandidates(canonicalPool, legacyCandidateAccountIds, {
+    exactAccountId: preferredAccountId,
+  });
+  const candidateAccountIds = canonicalCandidates.length
+    ? Array.from(
+        new Set(
+          canonicalCandidates
+            .map((sender) => sender.deliveryAccountId)
+            .map((value) => value.trim())
+            .filter(Boolean)
+        )
+      )
+    : preferredAccountId
+      ? [preferredAccountId]
+      : legacyCandidateAccountIds;
+  if ((!assignment && !canonicalCandidates.length) || !candidateAccountIds.length) {
     return { ok: false, reason: "No outreach delivery account assigned to brand", accountId: "" };
   }
 
   let resolvedAccountId = "";
   let deliveryAccount: ResolvedAccount | null = null;
+  let resolvedCanonicalSender =
+    preferredAccountId ? canonicalPool.senderByAccountId.get(preferredAccountId) ?? null : null;
   for (const candidateAccountId of candidateAccountIds) {
     const candidate = await getOutreachAccount(candidateAccountId);
     if (candidate && candidate.status === "active") {
       resolvedAccountId = candidateAccountId;
       deliveryAccount = candidate;
+      resolvedCanonicalSender =
+        resolvedCanonicalSender ??
+        canonicalCandidates.find((sender) => sender.deliveryAccountId === candidateAccountId) ??
+        canonicalPool.senderByAccountId.get(candidateAccountId) ??
+        null;
       break;
     }
   }
@@ -10613,7 +12035,12 @@ async function ensureBrandAccount(brandId: string): Promise<{
     };
   }
 
-  const mailboxAccountId = assignment.mailboxAccountId || resolvedAccountId;
+  const mailboxAccountId =
+    preferredMailboxAccountId ||
+    resolvedCanonicalSender?.mailboxAccountId ||
+    (preferredAccountId && resolvedAccountId === preferredAccountId ? preferredAccountId : "") ||
+    assignment?.mailboxAccountId ||
+    resolvedAccountId;
   const mailboxAccount =
     mailboxAccountId === deliveryAccount.id
       ? deliveryAccount
@@ -10659,9 +12086,19 @@ async function ensureBrandAccount(brandId: string): Promise<{
   };
 }
 
-async function resolveMailboxAccountForRun(run: { brandId: string; accountId: string }) {
+async function resolveMailboxAccountForRun(run: {
+  brandId: string;
+  accountId: string;
+  lockedSenderAccountId?: string;
+}) {
   const assignment = await getBrandOutreachAssignment(run.brandId);
-  const mailboxAccountId = assignment?.mailboxAccountId || assignment?.accountId || run.accountId;
+  const canonicalPool = await getCanonicalSenderPoolForBrand(run.brandId);
+  const senderAccountId = effectiveRunSenderAccountId(run);
+  const mailboxAccountId =
+    canonicalPool.senderByAccountId.get(senderAccountId)?.mailboxAccountId ||
+    assignment?.mailboxAccountId ||
+    assignment?.accountId ||
+    senderAccountId;
   const account = await getOutreachAccount(mailboxAccountId);
   if (!account || account.status !== "active" || !supportsMailbox(account)) {
     return null;
@@ -10697,8 +12134,12 @@ async function resolveMailboxAccountForBrand(input: {
   preferredMailboxAccountId?: string;
 }) {
   const assignment = await getBrandOutreachAssignment(input.brandId);
+  const canonicalPool = await getCanonicalSenderPoolForBrand(input.brandId);
+  const canonicalMailboxAccountId =
+    canonicalPool.senderByAccountId.get(assignment?.accountId ?? "")?.mailboxAccountId || "";
   const mailboxAccountId =
     input.preferredMailboxAccountId?.trim() ||
+    canonicalMailboxAccountId ||
     assignment?.mailboxAccountId ||
     assignment?.accountId ||
     "";
@@ -10760,7 +12201,19 @@ type LaunchSeedLead = {
   title: string;
   domain: string;
   sourceUrl: string;
+  realVerifiedEmail?: boolean;
+  emailVerification?: EmailVerificationState | null;
 };
+
+function isLaunchSeedBlockingLeadStatus(status: string) {
+  const normalized = String(status ?? "").trim().toLowerCase();
+  return (
+    normalized === "sent" ||
+    normalized === "replied" ||
+    normalized === "bounced" ||
+    normalized === "unsubscribed"
+  );
+}
 
 async function collectReusableLaunchSeedLeads(input: {
   brandId: string;
@@ -10768,13 +12221,27 @@ async function collectReusableLaunchSeedLeads(input: {
   experimentId: string;
   ownerType?: "experiment" | "campaign";
   ownerId?: string;
+  seedExperimentOwnerId?: string;
   excludeRunId?: string;
   maxLeads?: number;
+  trafficLane?: OutreachTrafficLane;
+  excludeSeedAccountIds?: string[];
+  excludeSeedEmails?: string[];
 }): Promise<LaunchSeedLead[]> {
-  const donorRuns =
+  const maxLeads = Math.max(
+    1,
+    Number(input.maxLeads ?? DEFAULT_EXPERIMENT_RUN_LEAD_TARGET) || DEFAULT_EXPERIMENT_RUN_LEAD_TARGET
+  );
+  const trafficLane = input.trafficLane ?? "outbound";
+  const primaryDonorRuns =
     input.ownerType && input.ownerId
       ? await listOwnerRuns(input.brandId, input.ownerType, input.ownerId)
       : await listExperimentRuns(input.brandId, input.campaignId, input.experimentId);
+  const fallbackExperimentRuns =
+    input.ownerType === "campaign" && input.seedExperimentOwnerId
+      ? await listOwnerRuns(input.brandId, "experiment", input.seedExperimentOwnerId)
+      : [];
+  const donorRuns = [...primaryDonorRuns, ...fallbackExperimentRuns];
 
   const sortedRuns = donorRuns
     .filter((run) => run.id !== input.excludeRunId)
@@ -10785,18 +12252,18 @@ async function collectReusableLaunchSeedLeads(input: {
 
   const leadLists = await Promise.all(sortedRuns.map((run) => listRunLeads(run.id)));
   const blockedEmails = new Set<string>();
+  for (const email of input.excludeSeedEmails ?? []) {
+    const normalized = extractFirstEmailAddress(email).toLowerCase();
+    if (normalized) blockedEmails.add(normalized);
+  }
   for (const lead of leadLists.flat()) {
     const email = extractFirstEmailAddress(lead.email).toLowerCase();
     if (!email) continue;
-    if (isTerminalExperimentLeadStatus(lead.status)) {
+    if (isLaunchSeedBlockingLeadStatus(lead.status)) {
       blockedEmails.add(email);
     }
   }
 
-  const maxLeads = Math.max(
-    1,
-    Number(input.maxLeads ?? DEFAULT_EXPERIMENT_RUN_LEAD_TARGET) || DEFAULT_EXPERIMENT_RUN_LEAD_TARGET
-  );
   const selected = new Map<string, LaunchSeedLead>();
   for (const leads of leadLists) {
     for (const lead of leads) {
@@ -10804,7 +12271,13 @@ async function collectReusableLaunchSeedLeads(input: {
       if (!email || blockedEmails.has(email) || selected.has(email)) {
         continue;
       }
+      if (trafficLane === "warmup" && isWarmupSeedLead(lead)) {
+        continue;
+      }
       if (!isReusableExperimentLeadStatus(lead.status)) {
+        continue;
+      }
+      if (!isLeadSendableForTrafficLane(lead, trafficLane)) {
         continue;
       }
       if (getLeadEmailSuppressionReason(email)) {
@@ -10817,6 +12290,8 @@ async function collectReusableLaunchSeedLeads(input: {
         title: lead.title,
         domain: lead.domain,
         sourceUrl: lead.sourceUrl,
+        realVerifiedEmail: lead.realVerifiedEmail === true,
+        emailVerification: lead.emailVerification ?? null,
       });
       if (selected.size >= maxLeads) {
         return [...selected.values()];
@@ -10825,6 +12300,141 @@ async function collectReusableLaunchSeedLeads(input: {
   }
 
   return [...selected.values()];
+}
+
+async function supplementActiveWarmupCampaignRun(input: {
+  brandId: string;
+  scaleCampaign: ScaleCampaignRecord;
+  targetCount?: number;
+}): Promise<{
+  active: boolean;
+  ok: boolean;
+  runId: string;
+  reason: string;
+  appendedLeadCount?: number;
+  debug?: Record<string, unknown>;
+}> {
+  const runs = await listOwnerRuns(input.brandId, "campaign", input.scaleCampaign.id);
+  const activeRun =
+    runs.find((run) => ["queued", "sourcing", "scheduled", "sending", "monitoring"].includes(run.status)) ?? null;
+  if (!activeRun) {
+    return { active: false, ok: false, runId: "", reason: "No active warmup run found." };
+  }
+
+  const [messages, leads, { threads }] = await Promise.all([
+    listRunMessages(activeRun.id),
+    listRunLeads(activeRun.id),
+    listReplyThreadsByBrand(activeRun.brandId),
+  ]);
+  const scheduledOrSentCount = messages.filter((message) => ["scheduled", "sent"].includes(message.status)).length;
+  const targetCount = Math.max(
+    MIN_WARMUP_CAMPAIGN_DAILY_CAP,
+    Math.min(
+      MAX_WARMUP_CAMPAIGN_DAILY_CAP,
+      Math.round(Number(input.targetCount ?? MIN_WARMUP_CAMPAIGN_DAILY_CAP) || MIN_WARMUP_CAMPAIGN_DAILY_CAP)
+    )
+  );
+  const deficit = Math.max(0, targetCount - scheduledOrSentCount);
+  if (deficit <= 0) {
+    return {
+      active: true,
+      ok: true,
+      runId: activeRun.id,
+      reason: `Active warmup run already has ${scheduledOrSentCount}/${targetCount} scheduled or sent.`,
+      debug: {
+        scheduledOrSentCount,
+        targetCount,
+        status: activeRun.status,
+      },
+    };
+  }
+
+  const senderAccount = await getOutreachAccount(effectiveRunSenderAccountId(activeRun));
+  const senderEmail = senderAccount ? getOutreachAccountFromEmail(senderAccount).trim().toLowerCase() : "";
+  const excludedEmails = Array.from(
+    new Set([
+      senderEmail,
+      ...leads.map((lead) => lead.email),
+      ...messages.map((message) => {
+        const lead = leads.find((candidate) => candidate.id === message.leadId);
+        return lead?.email ?? "";
+      }),
+    ])
+  );
+
+  const seedLeads = await collectReusableLaunchSeedLeads({
+    brandId: activeRun.brandId,
+    campaignId: activeRun.campaignId,
+    experimentId: activeRun.experimentId,
+    ownerType: "campaign",
+    ownerId: input.scaleCampaign.id,
+    excludeRunId: activeRun.id,
+    maxLeads: deficit,
+    trafficLane: "warmup",
+    excludeSeedEmails: excludedEmails,
+  });
+
+  if (!seedLeads.length) {
+    return {
+      active: true,
+      ok: false,
+      runId: activeRun.id,
+      reason: `Active warmup run needs ${deficit} more, but no reusable campaign leads are available.`,
+      debug: {
+        scheduledOrSentCount,
+        targetCount,
+        existingLeadCount: leads.length,
+        excludedEmailCount: excludedEmails.filter(Boolean).length,
+      },
+    };
+  }
+
+  const upserted = await upsertRunLeads(activeRun.id, activeRun.brandId, activeRun.campaignId, seedLeads);
+  await updateOutreachRun(activeRun.id, {
+    lastError: "",
+    pauseReason: "",
+    metrics: buildLiveRunMetrics({
+      run: activeRun,
+      messages,
+      threads,
+      sourcedLeads: upserted.length,
+    }),
+  });
+  await createOutreachEvent({
+    runId: activeRun.id,
+    eventType: "warmup_run_supplemented",
+    payload: {
+      appendedLeadCount: seedLeads.length,
+      scheduledOrSentCount,
+      targetCount,
+      deficit,
+      source: "campaign_owned_verified_leads",
+    },
+  });
+  await enqueueOutreachJob({
+    runId: activeRun.id,
+    jobType: "schedule_messages",
+    executeAfter: nowIso(),
+    payload: {
+      reason: "active_warmup_top_up",
+      appendedLeadCount: seedLeads.length,
+      targetCount,
+    },
+  });
+
+  return {
+    active: true,
+    ok: true,
+    runId: activeRun.id,
+    reason: `Appended ${seedLeads.length} warmup leads to active run ${activeRun.id}.`,
+    appendedLeadCount: seedLeads.length,
+    debug: {
+      scheduledOrSentCount,
+      targetCount,
+      deficit,
+      appendedLeadCount: seedLeads.length,
+    },
+  };
 }
 
 export async function launchExperimentRun(input: {
@@ -10836,6 +12446,11 @@ export async function launchExperimentRun(input: {
   ownerId?: string;
   sampleOnly?: boolean;
   maxLeadsOverride?: number;
+  preferredAccountId?: string;
+  preferredMailboxAccountId?: string;
+  allowRestartFromPaused?: boolean;
+  seedExperimentOwnerId?: string;
+  trafficLane?: OutreachTrafficLane;
 }): Promise<{
   ok: boolean;
   runId: string;
@@ -10859,21 +12474,35 @@ export async function launchExperimentRun(input: {
   }
   const runtimeExperiment = await getExperimentRecordByRuntimeRef(input.brandId, input.campaignId, experiment.id);
   const resolvedOwnerType = input.ownerType ?? "experiment";
-  const resolvedOwnerId = String(input.ownerId ?? "").trim() || experiment.id;
+  const resolvedOwnerId =
+    String(input.ownerId ?? "").trim() ||
+    (resolvedOwnerType === "experiment" ? String(runtimeExperiment?.id ?? "").trim() : "");
+  if (!resolvedOwnerId) {
+    return {
+      ok: false,
+      runId: "",
+      reason:
+        resolvedOwnerType === "campaign"
+          ? "Campaign-owned launch requires an explicit ownerId."
+          : "Experiment owner record not found for this launch.",
+    };
+  }
   const audienceContext = buildSourcingAudienceContext({
     runtimeAudience: runtimeExperiment?.audience ?? "",
     hypothesisAudience: hypothesis.actorQuery,
     experimentNotes: experiment.notes,
   });
+  const trafficLane = input.trafficLane ?? "outbound";
 
   if (hypothesis.status !== "approved" && input.trigger !== "manual") {
     return { ok: false, runId: "", reason: "Hypothesis must be approved before auto-run" };
   }
 
-  const activeRuns = await listExperimentRuns(input.brandId, input.campaignId, experiment.id);
-  const openRun =
-    activeRuns.find((run) => ["queued", "sourcing", "scheduled", "sending", "monitoring", "paused"].includes(run.status)) ??
-    null;
+  const blockingStatuses = input.allowRestartFromPaused
+    ? ["queued", "sourcing", "scheduled", "sending", "monitoring"]
+    : ["queued", "sourcing", "scheduled", "sending", "monitoring", "paused"];
+  const activeRuns = await listOwnerRuns(input.brandId, resolvedOwnerType, resolvedOwnerId);
+  const openRun = activeRuns.find((run) => blockingStatuses.includes(run.status)) ?? null;
   if (openRun) {
     return {
       ok: false,
@@ -10883,7 +12512,11 @@ export async function launchExperimentRun(input: {
     };
   }
 
-  const brandAccount = await ensureBrandAccount(input.brandId);
+  const requestedAccountId = String(input.preferredAccountId ?? "").trim();
+  const brandAccount = await ensureBrandAccount(input.brandId, {
+    preferredAccountId: input.preferredAccountId,
+    preferredMailboxAccountId: input.preferredMailboxAccountId,
+  });
   if (
     !brandAccount.ok ||
     !brandAccount.deliveryAccount ||
@@ -10913,6 +12546,43 @@ export async function launchExperimentRun(input: {
       payload: { trigger: input.trigger, outcome: "preflight_failed", reason: brandAccount.reason },
     });
     return { ok: false, runId: failed.id, reason: brandAccount.reason };
+  }
+  if (requestedAccountId && brandAccount.accountId !== requestedAccountId) {
+    const requestedAccount = await getOutreachAccount(requestedAccountId);
+    const reason =
+      !requestedAccount
+        ? "Requested sender account was not found."
+        : requestedAccount.status !== "active"
+          ? "Requested sender account is inactive."
+          : "Requested sender account is not currently available.";
+    const failed = await createOutreachRun({
+      brandId: input.brandId,
+      campaignId: input.campaignId,
+      experimentId: experiment.id,
+      hypothesisId: hypothesis.id,
+      ownerType: resolvedOwnerType,
+      ownerId: resolvedOwnerId,
+      accountId: requestedAccountId,
+      status: "preflight_failed",
+      dailyCap: experiment.runPolicy?.dailyCap ?? 30,
+      hourlyCap: experiment.runPolicy?.hourlyCap ?? 6,
+      timezone: experiment.runPolicy?.timezone || DEFAULT_TIMEZONE,
+      minSpacingMinutes: experiment.runPolicy?.minSpacingMinutes ?? 8,
+      lastError: reason,
+    });
+    await markExperimentExecutionStatus(input.brandId, input.campaignId, experiment.id, "failed");
+    await createOutreachEvent({
+      runId: failed.id,
+      eventType: "hypothesis_approved_auto_run_queued",
+      payload: {
+        trigger: input.trigger,
+        outcome: "preflight_failed",
+        reason,
+        requestedSenderAccountId: requestedAccountId,
+        resolvedSenderAccountId: brandAccount.accountId,
+      },
+    });
+    return { ok: false, runId: failed.id, reason };
   }
 
   const reason = preflightReason({
@@ -10958,12 +12628,63 @@ export async function launchExperimentRun(input: {
       debug: diagnostic.debug,
     };
   }
+  if (trafficLane === "outbound" && !isOutreachOutboundEnabled(brandAccount.deliveryAccount)) {
+    const senderLabel =
+      getOutreachAccountFromEmail(brandAccount.deliveryAccount).trim().toLowerCase() ||
+      brandAccount.deliveryAccount.name.trim() ||
+      brandAccount.deliveryAccount.id;
+    const pauseReason = `${senderLabel} is set to warmup only. Turn outbound on before launching real outreach.`;
+    const failed = await createOutreachRun({
+      brandId: input.brandId,
+      campaignId: input.campaignId,
+      experimentId: experiment.id,
+      hypothesisId: hypothesis.id,
+      ownerType: resolvedOwnerType,
+      ownerId: resolvedOwnerId,
+      accountId: brandAccount.deliveryAccount.id,
+      status: "preflight_failed",
+      dailyCap: experiment.runPolicy?.dailyCap ?? 30,
+      hourlyCap: experiment.runPolicy?.hourlyCap ?? 6,
+      timezone: experiment.runPolicy?.timezone || DEFAULT_TIMEZONE,
+      minSpacingMinutes: experiment.runPolicy?.minSpacingMinutes ?? 8,
+      lastError: pauseReason,
+    });
+    await markExperimentExecutionStatus(input.brandId, input.campaignId, experiment.id, "failed");
+    await createOutreachEvent({
+      runId: failed.id,
+      eventType: "hypothesis_approved_auto_run_queued",
+      payload: {
+        trigger: input.trigger,
+        outcome: "preflight_failed",
+        reason: "sender_outbound_disabled",
+        summary: pauseReason,
+        senderAccountId: brandAccount.deliveryAccount.id,
+      },
+    });
+    return { ok: false, runId: failed.id, reason: pauseReason };
+  }
 
-  const publishedFlowMap = await getPublishedConversationMapForExperiment(
+  let publishedFlowMap = await getPublishedConversationMapForExperiment(
     input.brandId,
     input.campaignId,
     experiment.id
   );
+  if (!input.sampleOnly && !publishedFlowMap) {
+    try {
+      const bootstrappedMap = await ensureConversationMapForVariant({
+        brandId: input.brandId,
+        campaignId: input.campaignId,
+        experimentId: experiment.id,
+        publish: true,
+      });
+      publishedFlowMap =
+        bootstrappedMap?.map.publishedRevision && bootstrappedMap.published
+          ? bootstrappedMap.map
+          : await getPublishedConversationMapForExperiment(input.brandId, input.campaignId, experiment.id);
+    } catch {
+      // Keep existing preflight failure path if the map could not be bootstrapped safely.
+    }
+  }
   const flowStartNode = publishedFlowMap
     ? conversationNodeById(publishedFlowMap.publishedGraph, publishedFlowMap.publishedGraph.startNodeId)
     : null;
@@ -11030,17 +12751,79 @@ export async function launchExperimentRun(input: {
     preferredAccountId: brandAccount.deliveryAccount.id,
     timeZone: experiment.runPolicy?.timezone || DEFAULT_TIMEZONE,
     businessWindow,
+    exactAccountId: requestedAccountId || "",
   });
-  if (!senderPoolState.pool.length) {
+  const launchEligibleSenderPool =
+    trafficLane === "outbound"
+      ? senderPoolState.pool.filter((slot) => isOutreachOutboundEnabled(slot.account))
+      : senderPoolState.pool;
+  const requestedReadiness = requestedAccountId
+    ? senderPoolState.readinessByAccountId.get(requestedAccountId) ??
+      (requestedAccountId === brandAccount.deliveryAccount.id
+        ? senderPoolState.readinessByAccountId.get(brandAccount.deliveryAccount.id) ?? null
+        : null)
+    : null;
+  const requestedSenderInPool = requestedAccountId
+    ? launchEligibleSenderPool.some((slot) => slot.account.id === requestedAccountId)
+    : false;
+  if (requestedAccountId && (!requestedReadiness?.canSendNow || !requestedSenderInPool)) {
+    const requestedAccount =
+      requestedAccountId === brandAccount.deliveryAccount.id
+        ? brandAccount.deliveryAccount
+        : await getOutreachAccount(requestedAccountId);
+    const requestedSenderLabel =
+      getOutreachAccountFromEmail(requestedAccount).trim().toLowerCase() ||
+      requestedAccount?.name.trim() ||
+      requestedAccountId;
+    const reason =
+      requestedReadiness?.primaryBlockingReason ||
+      `Requested sender ${requestedSenderLabel} is not currently eligible to send.`;
+    const failed = await createOutreachRun({
+      brandId: input.brandId,
+      campaignId: input.campaignId,
+      experimentId: experiment.id,
+      hypothesisId: hypothesis.id,
+      ownerType: resolvedOwnerType,
+      ownerId: resolvedOwnerId,
+      accountId: requestedAccountId,
+      status: "preflight_failed",
+      dailyCap: experiment.runPolicy?.dailyCap ?? 30,
+      hourlyCap: experiment.runPolicy?.hourlyCap ?? 6,
+      timezone: experiment.runPolicy?.timezone || DEFAULT_TIMEZONE,
+      minSpacingMinutes: experiment.runPolicy?.minSpacingMinutes ?? 8,
+      lastError: reason,
+    });
+    await markExperimentExecutionStatus(input.brandId, input.campaignId, experiment.id, "failed");
+    await createOutreachEvent({
+      runId: failed.id,
+      eventType: "hypothesis_approved_auto_run_queued",
+      payload: {
+        trigger: input.trigger,
+        outcome: "preflight_failed",
+        reason,
+        requestedSenderAccountId: requestedAccountId,
+        requestedSenderFromEmail: requestedSenderLabel,
+        blockedSenders: [...senderPoolState.readinessByAccountId.entries()].map(([accountId, readiness]) => ({
+          accountId,
+          fromEmail: readiness.fromEmail,
+          primaryBlockingReason: readiness.primaryBlockingReason,
+        })),
+      },
+    });
+    return { ok: false, runId: failed.id, reason };
+  }
+  if (!launchEligibleSenderPool.length) {
     const preferredReadiness =
       senderPoolState.readinessByAccountId.get(brandAccount.deliveryAccount.id) ?? null;
     const fallbackReadiness =
       [...senderPoolState.readinessByAccountId.values()].find((entry) => entry.blockingIssues.length > 0) ?? null;
     const senderLabel = senderFromEmail || brandAccount.deliveryAccount.name.trim() || "sender";
     const reason =
-      preferredReadiness?.primaryBlockingReason ||
-      fallbackReadiness?.primaryBlockingReason ||
-      "No sender is currently eligible to send for this brand.";
+      trafficLane === "outbound" && senderPoolState.pool.length > 0
+        ? "All eligible senders are set to warmup only. Turn outbound on for one sender before launching real outreach."
+        : preferredReadiness?.primaryBlockingReason ||
+          fallbackReadiness?.primaryBlockingReason ||
+          "No sender is currently eligible to send for this brand.";
     const failed = await createOutreachRun({
       brandId: input.brandId,
       campaignId: input.campaignId,
@@ -11084,15 +12867,58 @@ export async function launchExperimentRun(input: {
     input.maxLeadsOverride !== undefined
       ? Math.max(1, Math.min(500, Number(input.maxLeadsOverride) || 0))
       : DEFAULT_EXPERIMENT_RUN_LEAD_TARGET;
+  const replyToEmail = brandAccount.mailboxAccount.config.mailbox.email.trim().toLowerCase();
   const seedLeads = await collectReusableLaunchSeedLeads({
     brandId: input.brandId,
     campaignId: input.campaignId,
     experimentId: experiment.id,
     ownerType: resolvedOwnerType,
     ownerId: resolvedOwnerId,
+    seedExperimentOwnerId: input.seedExperimentOwnerId,
     maxLeads: maxSeedLeads,
+    trafficLane,
+    excludeSeedAccountIds: [brandAccount.deliveryAccount.id, brandAccount.mailboxAccount.id],
+    excludeSeedEmails: [senderFromEmail, replyToEmail],
   });
   if (!seedLeads.length) {
+    if (trafficLane !== "outbound") {
+      const reason =
+        "No EnrichAnything-backed sendable leads are available for this launch";
+      const failed = await createOutreachRun({
+        brandId: input.brandId,
+        campaignId: input.campaignId,
+        experimentId: experiment.id,
+        hypothesisId: hypothesis.id,
+        ownerType: resolvedOwnerType,
+        ownerId: resolvedOwnerId,
+        accountId: brandAccount.deliveryAccount.id,
+        status: "preflight_failed",
+        dailyCap: experiment.runPolicy?.dailyCap ?? 30,
+        hourlyCap: experiment.runPolicy?.hourlyCap ?? 6,
+        timezone: experiment.runPolicy?.timezone || DEFAULT_TIMEZONE,
+        minSpacingMinutes: experiment.runPolicy?.minSpacingMinutes ?? 8,
+        lastError: reason,
+      });
+      await markExperimentExecutionStatus(input.brandId, input.campaignId, experiment.id, "failed");
+      await createOutreachEvent({
+        runId: failed.id,
+        eventType: "hypothesis_approved_auto_run_queued",
+        payload: {
+          trigger: input.trigger,
+          outcome: "blocked_no_enrichanything_leads",
+          seededLeadCount: 0,
+          maxLeadsOverride: maxSeedLeads,
+          reason,
+        },
+      });
+      return {
+        ok: false,
+        runId: failed.id,
+        reason,
+        hint: "Approve or refresh the EnrichAnything table first. Runtime sourcing is disabled so paid validation only happens during table import.",
+      };
+    }
+
     const run = await createOutreachRun({
       brandId: input.brandId,
       campaignId: input.campaignId,
@@ -11108,12 +12934,10 @@ export async function launchExperimentRun(input: {
       minSpacingMinutes: experiment.runPolicy?.minSpacingMinutes ?? 8,
     });
     await updateOutreachRun(run.id, {
-      status: "sourcing",
-      completedAt: "",
       lastError: "",
       sourcingTraceSummary: {
         phase: "plan_sourcing",
-        selectedActorIds: [],
+        selectedActorIds: ["exa.people.search", "emailfinder.batch"],
         lastActorInputError: "",
         failureStep: "",
         budgetUsedUsd: 0,
@@ -11130,16 +12954,28 @@ export async function launchExperimentRun(input: {
       jobType: "source_leads",
       executeAfter: nowIso(),
       payload: {
-        maxLeadsOverride: maxSeedLeads,
+        reason: "autonomous_launch_needs_leads",
+        targetLeadCount: maxSeedLeads,
+        currentLeadCount: 0,
+        sourceTopUpAttempt: 0,
       },
     });
     await markExperimentExecutionStatus(input.brandId, input.campaignId, experiment.id, "queued");
     await createOutreachEvent({
       runId: run.id,
+      eventType: "lead_sourcing_requested",
+      payload: {
+        reason: "no_seed_leads_autonomous_sourcing",
+        targetLeadCount: maxSeedLeads,
+        trafficLane,
+      },
+    });
+    await createOutreachEvent({
+      runId: run.id,
       eventType: "hypothesis_approved_auto_run_queued",
       payload: {
         trigger: input.trigger,
-        outcome: "source_from_zero",
+        outcome: "queued_for_autonomous_sourcing",
         seededLeadCount: 0,
         maxLeadsOverride: maxSeedLeads,
       },
@@ -11147,8 +12983,7 @@ export async function launchExperimentRun(input: {
     return {
       ok: true,
       runId: run.id,
-      reason: "Run queued for fresh lead sourcing",
-      hint: "No reusable approved prospects existed, so lead sourcing was queued from zero.",
+      reason: "Run queued for autonomous lead sourcing",
     };
   }
 
@@ -11167,6 +13002,51 @@ export async function launchExperimentRun(input: {
     minSpacingMinutes: experiment.runPolicy?.minSpacingMinutes ?? 8,
   });
 
+  const activeRunsAfterCreate = await listOwnerRuns(
+    input.brandId,
+    resolvedOwnerType,
+    resolvedOwnerId
+  );
+  const blockingRunsAfterCreate = activeRunsAfterCreate.filter((candidate) =>
+    blockingStatuses.includes(candidate.status)
+  );
+  const createdRunStillOpen = blockingRunsAfterCreate.some((candidate) => candidate.id === run.id);
+  if (!createdRunStillOpen) {
+    const canonicalRun = blockingRunsAfterCreate.sort((left, right) =>
+      toDate(left.createdAt).getTime() - toDate(right.createdAt).getTime()
+    )[0];
+    return {
+      ok: false,
+      runId: canonicalRun?.id ?? run.id,
+      reason: "Experiment already has an active run",
+      hint: canonicalRun
+        ? `Active run ${canonicalRun.id.slice(-6)} survived concurrent launch reconciliation.`
+        : "A concurrent launch superseded this run before scheduling started.",
+    };
+  }
+  if (blockingRunsAfterCreate.length > 1) {
+    const snapshots = await buildOpenRunSnapshots(blockingRunsAfterCreate);
+    const [canonicalSnapshot, ...duplicates] = snapshots.sort(compareOpenRunSnapshots);
+    if (canonicalSnapshot) {
+      const threadsByBrandId = new Map<string, ReplyThread[]>();
+      for (const duplicate of duplicates) {
+        await cancelDuplicateOpenRun({
+          snapshot: duplicate,
+          canonicalRun: canonicalSnapshot.run,
+          threadsByBrandId,
+        });
+      }
+      if (canonicalSnapshot.run.id !== run.id) {
+        return {
+          ok: false,
+          runId: canonicalSnapshot.run.id,
+          reason: "Experiment already has an active run",
+          hint: `Concurrent launch created duplicate run ${run.id.slice(-6)}. Canonical run ${canonicalSnapshot.run.id.slice(-6)} was preserved.`,
+        };
+      }
+    }
+  }
+
   const seededLeads = await upsertRunLeads(run.id, input.brandId, input.campaignId, seedLeads);
   await updateOutreachRun(run.id, {
     status: input.sampleOnly ? "completed" : "queued",
@@ -11174,7 +13054,10 @@ export async function launchExperimentRun(input: {
     lastError: "",
     sourcingTraceSummary: {
       phase: "completed",
-      selectedActorIds: ["approved_owner_leads"],
+      selectedActorIds:
+        trafficLane === "warmup"
+          ? ["campaign_owner_verified_leads"]
+          : ["approved_owner_leads"],
       lastActorInputError: "",
       failureStep: "",
       budgetUsedUsd: 0,
@@ -11191,7 +13074,12 @@ export async function launchExperimentRun(input: {
     eventType: "lead_sourcing_seeded_from_owner",
     payload: {
       count: seededLeads.length,
-      source: input.ownerType ? `${input.ownerType}_owner_runs` : "runtime_experiment_runs",
+      source:
+        trafficLane === "warmup"
+          ? "campaign_owner_verified_leads"
+          : input.ownerType
+            ? `${input.ownerType}_owner_runs`
+            : "runtime_experiment_runs",
     },
   });
   if (!input.sampleOnly) {
@@ -11235,22 +13123,39 @@ export async function launchScaleCampaignRun(input: {
   if (!scaleCampaign) {
     return { ok: false, runId: "", reason: "campaign not found" };
   }
+  if (resolveScaleCampaignLane(scaleCampaign) !== "warmup" && !isOutboundSendingEnabled()) {
+    return { ok: false, runId: "", reason: OUTBOUND_SENDING_DISABLED_REASON };
+  }
 
-  const sourceExperiment = await getExperimentRecordById(input.brandId, scaleCampaign.sourceExperimentId);
+  const usesDedicatedCampaignSender = Boolean(
+    String(scaleCampaign.scalePolicy.accountId ?? "").trim() ||
+      String(scaleCampaign.scalePolicy.mailboxAccountId ?? "").trim()
+  );
+  const isolatedCampaignState = usesDedicatedCampaignSender
+    ? await ensureSenderOwnedScaleCampaignSourceExperiment({
+        brandId: input.brandId,
+        campaignId: scaleCampaign.id,
+      })
+    : null;
+  const resolvedScaleCampaign = isolatedCampaignState?.campaign ?? scaleCampaign;
+  const sourceExperiment =
+    isolatedCampaignState?.sourceExperiment ??
+    (await getExperimentRecordById(input.brandId, resolvedScaleCampaign.sourceExperimentId));
   if (!sourceExperiment) {
     return { ok: false, runId: "", reason: "source experiment not found" };
   }
+  const isWarmupScaleCampaign = resolveScaleCampaignLane(scaleCampaign) === "warmup";
 
   const experiment = await ensureRuntimeForExperiment(sourceExperiment);
   if (!experiment.runtime.campaignId || !experiment.runtime.experimentId) {
     return { ok: false, runId: "", reason: "experiment runtime is not configured" };
   }
 
-  if (scaleCampaign.scalePolicy.accountId) {
-    await setBrandOutreachAssignment(input.brandId, {
-      accountId: scaleCampaign.scalePolicy.accountId,
+  if (resolvedScaleCampaign.scalePolicy.accountId && !usesDedicatedCampaignSender) {
+    await setBrandOutreachAssignmentWithWarmup(input.brandId, {
+      accountId: resolvedScaleCampaign.scalePolicy.accountId,
       mailboxAccountId:
-        scaleCampaign.scalePolicy.mailboxAccountId || scaleCampaign.scalePolicy.accountId,
+        resolvedScaleCampaign.scalePolicy.mailboxAccountId || resolvedScaleCampaign.scalePolicy.accountId,
     });
   }
 
@@ -11273,15 +13178,178 @@ export async function launchScaleCampaignRun(input: {
             ...variant,
             runPolicy: {
               ...variant.runPolicy,
-              dailyCap: scaleCampaign.scalePolicy.dailyCap,
-              hourlyCap: scaleCampaign.scalePolicy.hourlyCap,
-              timezone: scaleCampaign.scalePolicy.timezone,
-              minSpacingMinutes: scaleCampaign.scalePolicy.minSpacingMinutes,
+              dailyCap: resolvedScaleCampaign.scalePolicy.dailyCap,
+              hourlyCap: resolvedScaleCampaign.scalePolicy.hourlyCap,
+              timezone: resolvedScaleCampaign.scalePolicy.timezone,
+              minSpacingMinutes: resolvedScaleCampaign.scalePolicy.minSpacingMinutes,
             },
           }
         : variant
     ),
   });
+
+  let activeWarmupSupplement:
+    | Awaited<ReturnType<typeof supplementActiveWarmupCampaignRun>>
+    | null = null;
+  if (isWarmupScaleCampaign && usesDedicatedCampaignSender) {
+    activeWarmupSupplement = await supplementActiveWarmupCampaignRun({
+      brandId: input.brandId,
+      scaleCampaign: resolvedScaleCampaign,
+      targetCount: MIN_WARMUP_CAMPAIGN_DAILY_CAP,
+    });
+    if (activeWarmupSupplement.active && activeWarmupSupplement.ok) {
+      return {
+        ok: true,
+        runId: activeWarmupSupplement.runId,
+        reason: activeWarmupSupplement.reason,
+        debug: activeWarmupSupplement.debug,
+      };
+    }
+  }
+
+  if (usesDedicatedCampaignSender) {
+    const requestedLaunchPrepTimeoutMs = Math.trunc(
+      Number(process.env.SCALE_CAMPAIGN_LAUNCH_PREP_TIMEOUT_MS ?? 45_000) || 45_000
+    );
+    const maxLaunchPrepTimeoutMs = isWarmupScaleCampaign ? 180_000 : 60_000;
+    const launchPrepTimeoutMs = Math.max(
+      5_000,
+      Math.min(maxLaunchPrepTimeoutMs, requestedLaunchPrepTimeoutMs)
+    );
+    const enrichAnythingRunTimeoutMs = Math.max(
+      4_000,
+      Math.min(launchPrepTimeoutMs - 1_000, resolveEnrichAnythingPrepRequestTimeoutMs())
+    );
+    const dedicatedInventoryHint =
+      "Dedicated outbound campaigns only launch from their own campaign-owned inventory.";
+    const readDedicatedInventoryDebug = async () => {
+      const [campaignInventory, experimentInventory] = await Promise.all([
+        countScaleCampaignSendableLeadContacts(input.brandId, resolvedScaleCampaign.id),
+        countExperimentSendableLeadContacts(input.brandId, sourceExperiment.id),
+      ]);
+      return {
+        inventorySourceKind: "campaign",
+        inventoryOwnerType: "campaign",
+        inventoryOwnerId: resolvedScaleCampaign.id,
+        inventoryBridgeActive: false,
+        campaignOwnedSendableLeadCount: campaignInventory.sendableLeadCount,
+        campaignOwnedRunsChecked: campaignInventory.runsChecked,
+        experimentOwnedSendableLeadCount: experimentInventory.sendableLeadCount,
+        experimentOwnedRunsChecked: experimentInventory.runsChecked,
+      } as const;
+    };
+    let prep: Awaited<ReturnType<typeof prepareScaleCampaignSendableContacts>> | null = null;
+    let prepFallbackDebug: Record<string, unknown> | null = null;
+    try {
+      prep = await Promise.race([
+        prepareScaleCampaignSendableContacts({
+          brandId: input.brandId,
+          campaignId: resolvedScaleCampaign.id,
+          allowLiveTopUp: true,
+          maxLiveTopUpPasses: isWarmupScaleCampaign ? 6 : 1,
+          enrichAnythingRunTimeoutMs,
+        }),
+        new Promise<Awaited<ReturnType<typeof prepareScaleCampaignSendableContacts>>>((_, reject) => {
+          setTimeout(
+            () => reject(new Error(`Sender-owned campaign prep timed out after ${launchPrepTimeoutMs}ms.`)),
+            launchPrepTimeoutMs
+          );
+        }),
+      ]);
+    } catch (error) {
+      const inventoryDebug = await readDedicatedInventoryDebug();
+      const hasUsableDedicatedInventory = inventoryDebug.campaignOwnedSendableLeadCount > 0;
+      if (hasUsableDedicatedInventory) {
+        prepFallbackDebug = {
+          blockingState: "prep_timeout_with_usable_inventory",
+          reason: error instanceof Error ? error.message : "Sender-owned campaign prep failed.",
+          ...inventoryDebug,
+        };
+      } else if (activeWarmupSupplement?.active) {
+        return {
+          ok: false,
+          runId: activeWarmupSupplement.runId,
+          reason: error instanceof Error ? error.message : "Sender-owned campaign prep failed.",
+          hint: "Active warmup run still needs more leads, but live prep could not create enough reusable inventory.",
+          debug: {
+            ...inventoryDebug,
+            activeWarmupSupplement,
+          },
+        };
+      }
+      else {
+        return {
+          ok: false,
+          runId: "",
+          reason: error instanceof Error ? error.message : "Sender-owned campaign prep failed.",
+          hint:
+            inventoryDebug.experimentOwnedSendableLeadCount > 0
+              ? `${dedicatedInventoryHint} Source experiment leads exist, but this launch path will not borrow them.`
+              : dedicatedInventoryHint,
+          debug: inventoryDebug,
+        };
+      }
+    }
+    if (activeWarmupSupplement?.active && !activeWarmupSupplement.ok) {
+      const retrySupplement = await supplementActiveWarmupCampaignRun({
+        brandId: input.brandId,
+        scaleCampaign: resolvedScaleCampaign,
+        targetCount: MIN_WARMUP_CAMPAIGN_DAILY_CAP,
+      });
+      if (retrySupplement.ok) {
+        return {
+          ok: true,
+          runId: retrySupplement.runId,
+          reason: retrySupplement.reason,
+          debug: retrySupplement.debug,
+        };
+      }
+      return {
+        ok: false,
+        runId: retrySupplement.runId || activeWarmupSupplement.runId,
+        reason: retrySupplement.reason,
+        hint: "Active warmup run exists, but reusable campaign inventory is still below the 20-message target.",
+        debug: {
+          beforePrep: activeWarmupSupplement,
+          afterPrep: retrySupplement,
+          prep: prep
+            ? {
+                blockingState: prep.blockingState,
+                targetCount: prep.targetCount,
+                savedProspectCount: prep.savedProspectCount,
+                sendableLeadCount: prep.sendableLeadCount,
+                failureSummary: prep.failureSummary,
+              }
+            : prepFallbackDebug,
+        },
+      };
+    }
+    if (prep && prep.sendableLeadCount <= 0) {
+      const inventoryDebug = await readDedicatedInventoryDebug();
+      return {
+        ok: false,
+        runId: "",
+        reason: prep.blockingReason,
+        hint: [
+          prep.blockingHint,
+          inventoryDebug.experimentOwnedSendableLeadCount > 0
+            ? `${dedicatedInventoryHint} Source experiment leads exist, but this launch path will not borrow them.`
+            : dedicatedInventoryHint,
+        ]
+          .filter(Boolean)
+          .join(" "),
+        debug: {
+          blockingState: prep.blockingState,
+          targetCount: prep.targetCount,
+          savedProspectCount: prep.savedProspectCount,
+          sendableLeadCount: prep.sendableLeadCount,
+          parseErrors: prep.parseErrors.slice(0, 10),
+          failureSummary: prep.failureSummary,
+          ...inventoryDebug,
+        },
+      };
+    }
+  }
 
   const result = await launchExperimentRun({
     brandId: input.brandId,
@@ -11289,7 +13357,15 @@ export async function launchScaleCampaignRun(input: {
     experimentId: runtimeVariant.id,
     trigger: "manual",
     ownerType: "campaign",
-    ownerId: scaleCampaign.id,
+    ownerId: resolvedScaleCampaign.id,
+    preferredAccountId: String(resolvedScaleCampaign.scalePolicy.accountId ?? "").trim(),
+    preferredMailboxAccountId: String(
+      resolvedScaleCampaign.scalePolicy.mailboxAccountId || resolvedScaleCampaign.scalePolicy.accountId || ""
+    ).trim(),
+    allowRestartFromPaused: isWarmupScaleCampaign,
+    maxLeadsOverride: isWarmupScaleCampaign ? MIN_WARMUP_CAMPAIGN_DAILY_CAP : undefined,
+    seedExperimentOwnerId: usesDedicatedCampaignSender ? "" : resolvedScaleCampaign.sourceExperimentId,
+    trafficLane: isWarmupScaleCampaign ? "warmup" : "outbound",
   });
 
   if (!result.ok) {
@@ -11297,11 +13373,134 @@ export async function launchScaleCampaignRun(input: {
   }
 
   await Promise.all([
-    updateScaleCampaignRecord(input.brandId, scaleCampaign.id, { status: "active" }),
+    updateScaleCampaignRecord(input.brandId, resolvedScaleCampaign.id, { status: "active" }),
     updateExperimentRecord(input.brandId, experiment.id, { status: "promoted" }),
   ]);
 
   return result;
+}
+
+function emptySenderUsageCounters(): SenderUsageCounters {
+  return {
+    dailySent: 0,
+    hourlySent: 0,
+    warmupDailySent: 0,
+    warmupHourlySent: 0,
+    outboundDailySent: 0,
+    outboundHourlySent: 0,
+  };
+}
+
+function senderUsageForLane(counters: SenderUsageCounters | undefined, lane: OutreachTrafficLane | "total") {
+  const safeCounters = counters ?? emptySenderUsageCounters();
+  if (lane === "warmup") {
+    return {
+      dailySent: safeCounters.warmupDailySent,
+      hourlySent: safeCounters.warmupHourlySent,
+    };
+  }
+  if (lane === "outbound") {
+    return {
+      dailySent: safeCounters.outboundDailySent,
+      hourlySent: safeCounters.outboundHourlySent,
+    };
+  }
+  return {
+    dailySent: safeCounters.dailySent,
+    hourlySent: safeCounters.hourlySent,
+  };
+}
+
+function senderLaneCapacityForSlot(slot: SenderDispatchSlot, lane: OutreachTrafficLane | "total") {
+  if (slot.policy.dailyCap <= 0 || slot.policy.hourlyCap <= 0) {
+    return { dailyCap: 0, hourlyCap: 0 };
+  }
+  if (lane === "warmup") {
+    if (isWarmupVerificationWindowEnabled()) {
+      return {
+        dailyCap: MAX_WARMUP_CAMPAIGN_DAILY_CAP,
+        hourlyCap: warmupVerificationHourlyCap(),
+      };
+    }
+    return {
+      dailyCap: MAX_WARMUP_CAMPAIGN_DAILY_CAP,
+      hourlyCap: laneHourlyCapForDailyCap(MAX_WARMUP_CAMPAIGN_DAILY_CAP),
+    };
+  }
+  if (lane === "outbound") {
+    return {
+      dailyCap: MAX_OUTBOUND_SENDER_DAILY_CAP,
+      hourlyCap: laneHourlyCapForDailyCap(MAX_OUTBOUND_SENDER_DAILY_CAP),
+    };
+  }
+  return {
+    dailyCap: slot.policy.dailyCap,
+    hourlyCap: slot.policy.hourlyCap,
+  };
+}
+
+function resolveRunDispatchPolicy(input: {
+  run: Pick<OutreachRun, "dailyCap" | "hourlyCap" | "minSpacingMinutes" | "createdAt" | "timezone">;
+  trafficLane: OutreachTrafficLane;
+  launchedAt: string;
+  businessHoursPerDay: number;
+  now?: Date;
+}) {
+  const now = input.now ?? new Date();
+  const launchStartedAt = String(input.launchedAt || input.run.createdAt).trim() || input.run.createdAt;
+  const launchDay = senderWarmupDayNumber(launchStartedAt, now, input.run.timezone || DEFAULT_TIMEZONE);
+
+  if (input.trafficLane === "warmup") {
+    if (isWarmupVerificationWindowEnabled()) {
+      return {
+        launchDay,
+        dailyCap: MAX_WARMUP_CAMPAIGN_DAILY_CAP,
+        hourlyCap: warmupVerificationHourlyCap(),
+        minSpacingMinutes: 0,
+      };
+    }
+    const dailyCap = warmupCampaignDailyCapForDay(launchDay);
+    return {
+      launchDay,
+      dailyCap,
+      hourlyCap: warmupCampaignHourlyCapForDay(launchDay, input.businessHoursPerDay),
+      minSpacingMinutes: warmupCampaignMinSpacingMinutesForDay(launchDay, input.businessHoursPerDay),
+    };
+  }
+
+  const targetDailyCap = Math.max(
+    1,
+    Math.min(MAX_OUTBOUND_SENDER_DAILY_CAP, Math.round(Number(input.run.dailyCap) || MAX_OUTBOUND_SENDER_DAILY_CAP))
+  );
+  const dailyCap = outboundDailyCapForDay(launchDay, targetDailyCap);
+  return {
+    launchDay,
+    dailyCap,
+    hourlyCap: Math.max(
+      1,
+      Math.min(
+        Math.max(1, Number(input.run.hourlyCap || 0) || 1),
+        outboundHourlyCapForDay(launchDay, targetDailyCap, input.businessHoursPerDay)
+      )
+    ),
+    minSpacingMinutes: Math.max(
+      Math.max(1, Number(input.run.minSpacingMinutes || 0) || 1),
+      outboundMinSpacingMinutesForDay(launchDay, targetDailyCap, input.businessHoursPerDay)
+    ),
+  };
+}
+
+function targetWarmupActiveReservationCount(
+  run: Pick<OutreachRun, "dailyCap" | "hourlyCap" | "minSpacingMinutes" | "createdAt" | "timezone">,
+  launchedAt?: string
+) {
+  const policy = resolveRunDispatchPolicy({
+    run,
+    trafficLane: "warmup",
+    launchedAt: String(launchedAt || run.createdAt).trim() || run.createdAt,
+    businessHoursPerDay: WARMUP_ACTIVE_RESERVATION_BUSINESS_HOURS,
+  });
+  return Math.max(1, Math.min(policy.dailyCap, policy.hourlyCap));
 }
 
 async function countOwnerSentUsage(input: {
@@ -11341,6 +13540,14 @@ async function countOwnerSentUsage(input: {
     ownerRuns,
     hourlySent,
     dailySent,
+    sentTimestamps: sentMessages
+      .map((message) => String(message.sentAt ?? "").trim())
+      .filter((value) => Number.isFinite(Date.parse(value))),
+    launchedAt:
+      ownerRuns
+        .map((run) => String(run.startedAt || run.createdAt).trim())
+        .filter(Boolean)
+        .sort()[0] ?? "",
   };
 }
 
@@ -11355,6 +13562,24 @@ async function countBrandSenderUsage(input: {
     if (isRunOpen(run.status)) return true;
     return Date.now() - toDate(run.createdAt).getTime() <= 7 * DAY_MS;
   });
+  const campaignIds = Array.from(
+    new Set(
+      recentRuns
+        .filter((run) => run.ownerType === "campaign")
+        .map((run) => run.ownerId.trim())
+        .filter(Boolean)
+    )
+  );
+  const campaignLaneByOwnerId = new Map<string, OutreachTrafficLane>(
+    (
+      await Promise.all(
+        campaignIds.map(async (campaignId) => {
+          const campaign = await getScaleCampaignRecordById(input.brandId, campaignId);
+          return [campaignId, resolveScaleCampaignLane(campaign)] as const;
+        })
+      )
+    ).map(([campaignId, lane]) => [campaignId, lane] as const)
+  );
   const messagesByRun = await Promise.all(
     recentRuns.map(async (run) => ({
       run,
@@ -11369,17 +13594,34 @@ async function countBrandSenderUsage(input: {
   const todayKey = timeZoneDateKey(new Date(), input.timezone || DEFAULT_TIMEZONE);
 
   for (const entry of messagesByRun) {
+    const lane: OutreachTrafficLane =
+      entry.run.ownerType === "campaign"
+        ? campaignLaneByOwnerId.get(entry.run.ownerId.trim()) ?? "outbound"
+        : "outbound";
     for (const message of entry.messages) {
       if (message.status !== "sent" || !message.sentAt) continue;
       const senderAccountId =
-        String(message.generationMeta?.senderAccountId ?? "").trim() || entry.run.accountId.trim();
+        String(message.generationMeta?.senderAccountId ?? "").trim() || effectiveRunSenderAccountId(entry.run);
       if (!senderAccountId) continue;
-      const bucket = usage[senderAccountId] ?? { dailySent: 0, hourlySent: 0 };
-      if (timeZoneDateKey(toDate(message.sentAt), input.timezone || DEFAULT_TIMEZONE) === todayKey) {
+      const bucket = usage[senderAccountId] ?? emptySenderUsageCounters();
+      const sentAt = toDate(message.sentAt);
+      const sentToday = timeZoneDateKey(sentAt, input.timezone || DEFAULT_TIMEZONE) === todayKey;
+      const sentThisHour = sentAt.getTime() >= oneHourAgo;
+      if (sentToday) {
         bucket.dailySent += 1;
+        if (lane === "warmup") {
+          bucket.warmupDailySent += 1;
+        } else {
+          bucket.outboundDailySent += 1;
+        }
       }
-      if (toDate(message.sentAt).getTime() >= oneHourAgo) {
+      if (sentThisHour) {
         bucket.hourlySent += 1;
+        if (lane === "warmup") {
+          bucket.warmupHourlySent += 1;
+        } else {
+          bucket.outboundHourlySent += 1;
+        }
       }
       usage[senderAccountId] = bucket;
     }
@@ -11393,35 +13635,76 @@ async function resolveSenderPoolForBrand(input: {
   preferredAccountId: string;
   timeZone: string;
   businessWindow: BusinessWindowPolicy;
+  exactAccountId?: string;
 }) {
-  const [assignment, brand] = await Promise.all([
+  const [assignment, brand, canonicalPool] = await Promise.all([
     getBrandOutreachAssignment(input.brandId),
     getBrandById(input.brandId),
+    getCanonicalSenderPoolForBrand(input.brandId),
   ]);
-  const candidateAccountIds = Array.from(
+  const legacyCandidateAccountIds = Array.from(
     new Set(
       [input.preferredAccountId, assignment?.accountId ?? "", ...(assignment?.accountIds ?? [])]
         .map((value) => value.trim())
         .filter(Boolean)
     )
   );
+  const exactAccountId = String(input.exactAccountId ?? "").trim();
+  const canonicalCandidates = selectCanonicalSenderCandidates(canonicalPool, legacyCandidateAccountIds, {
+    exactAccountId,
+  });
+  const candidateAccountIds = Array.from(
+    new Set(
+      (canonicalCandidates.length
+        ? canonicalCandidates.map((sender) => sender.deliveryAccountId)
+        : exactAccountId
+          ? [exactAccountId]
+          : legacyCandidateAccountIds
+      )
+        .map((value) => value.trim())
+        .filter(Boolean)
+    )
+  );
   const now = new Date();
-  const [accounts, enrichedBrand, probeRuns] = await Promise.all([
+  const [rawAccounts, enrichedBrand, probeRuns] = await Promise.all([
     Promise.all(candidateAccountIds.map((accountId) => getOutreachAccount(accountId))),
     brand ? enrichBrandWithSenderHealth(brand) : Promise.resolve(null),
     listDeliverabilityProbeRuns({ brandId: input.brandId, limit: 300 }),
   ]);
+  const accounts = await Promise.all(rawAccounts.map((account) => maybeAutoAdvanceMailpoolGmailUiLogin(account)));
+  const accountById = new Map(
+    accounts.filter((account): account is ResolvedAccount => Boolean(account)).map((account) => [account.id, account] as const)
+  );
   const assignedMailboxAccountId = String(assignment?.mailboxAccountId ?? "").trim();
   const assignedMailboxAccount =
     (assignedMailboxAccountId
       ? accounts.find((account) => account?.id === assignedMailboxAccountId) ?? null
       : null) ??
     (assignedMailboxAccountId ? await getOutreachAccount(assignedMailboxAccountId) : null);
-  const activeAccounts = accounts.filter((account): account is ResolvedAccount => Boolean(account && account.status === "active"));
   const senderRows = enrichedBrand?.domains.filter((row) => row.role !== "brand") ?? [];
+  const activeSenders = canonicalCandidates.length
+    ? canonicalCandidates
+        .map((sender) => {
+          const account = sender.deliveryAccountId ? accountById.get(sender.deliveryAccountId) ?? null : null;
+          if (!account || account.status !== "active") return null;
+          return {
+            sender,
+            account,
+          };
+        })
+        .filter(
+          (entry): entry is { sender: (typeof canonicalCandidates)[number]; account: ResolvedAccount } =>
+            Boolean(entry)
+        )
+    : accounts
+        .filter((account): account is ResolvedAccount => Boolean(account && account.status === "active"))
+        .map((account) => ({
+          sender: null,
+          account,
+        }));
   const scorecards = buildSenderDeliverabilityScorecards({
     probeRuns,
-    senderAccounts: activeAccounts,
+    senderAccounts: activeSenders.map((entry) => entry.account),
   });
   const scorecardByAccountId = new Map(
     scorecards
@@ -11430,12 +13713,13 @@ async function resolveSenderPoolForBrand(input: {
   );
   const policyByAccountId = new Map(
     buildSenderCapacitySnapshots({
-      senders: activeAccounts.map((account) => {
-        const fromEmail = getOutreachAccountFromEmail(account).trim().toLowerCase();
+      senders: activeSenders.map(({ sender, account }) => {
+        const fromEmail = sender?.fromEmail || getOutreachAccountFromEmail(account).trim().toLowerCase();
         const row =
-          senderRows.find((item) => getDomainDeliveryAccountId(item) === account.id) ??
-          senderRows.find((item) => String(item.fromEmail ?? "").trim().toLowerCase() === fromEmail) ??
-          null;
+          findSenderDomainRow(senderRows, {
+            deliveryAccountId: account.id,
+            fromEmail,
+          }) ?? null;
         return {
           account,
           row,
@@ -11450,26 +13734,35 @@ async function resolveSenderPoolForBrand(input: {
   const pool: SenderDispatchSlot[] = [];
   const readinessByAccountId = new Map<string, SenderReadiness>();
 
-  for (const account of activeAccounts) {
-    const fromEmail = getOutreachAccountFromEmail(account).trim();
+  for (const { sender, account } of activeSenders) {
+    const fromEmail = sender?.fromEmail || getOutreachAccountFromEmail(account).trim();
     if (!fromEmail) continue;
     const secrets = await getOutreachAccountSecrets(account.id);
     const policy = policyByAccountId.get(account.id);
     if (!policy) continue;
-    const selfMailboxEmail = account.config.mailbox.email.trim().toLowerCase();
+    const selfMailboxEmail =
+      sender?.mailboxAccountId && sender.mailboxAccountId !== account.id
+        ? ""
+        : account.config.mailbox.email.trim().toLowerCase();
     const normalizedFromEmail = fromEmail.trim().toLowerCase();
     const mailboxAccount =
-      selfMailboxEmail && selfMailboxEmail === normalizedFromEmail ? account : assignedMailboxAccount;
+      (sender?.mailboxAccountId
+        ? sender.mailboxAccountId === account.id
+          ? account
+          : await getOutreachAccount(sender.mailboxAccountId)
+        : selfMailboxEmail && selfMailboxEmail === normalizedFromEmail
+          ? account
+          : assignedMailboxAccount) ?? null;
     const mailboxSecrets =
       mailboxAccount?.id === account.id
         ? secrets
         : mailboxAccount
           ? await getOutreachAccountSecrets(mailboxAccount.id)
           : null;
-    const row =
-      senderRows.find((item) => getDomainDeliveryAccountId(item) === account.id) ??
-      senderRows.find((item) => String(item.fromEmail ?? "").trim().toLowerCase() === normalizedFromEmail) ??
-      null;
+    const row = findSenderDomainRow(senderRows, {
+      deliveryAccountId: account.id,
+      fromEmail: normalizedFromEmail,
+    });
     const readiness = evaluateSenderReadiness({
       account,
       mailboxAccount,
@@ -11479,10 +13772,12 @@ async function resolveSenderPoolForBrand(input: {
       capacity: policy,
     });
     readinessByAccountId.set(account.id, readiness);
-    if (!secrets || !readiness.canSendNow) continue;
+    if (!secrets || !mailboxAccount || !mailboxSecrets || !readiness.canSendNow) continue;
     pool.push({
       account,
       secrets,
+      mailboxAccount,
+      mailboxSecrets,
       policy,
     });
   }
@@ -11494,20 +13789,49 @@ async function resolveSenderPoolForBrand(input: {
   };
 }
 
+async function maybeAutoAdvanceMailpoolGmailUiLogin(account: ResolvedAccount | null) {
+  if (!account || !hasGmailUiWorkerConfig()) {
+    return account;
+  }
+  if (account.provider !== "mailpool" || account.config.mailbox.deliveryMethod !== "gmail_ui") {
+    return account;
+  }
+  if (getOutreachGmailUiLoginState(account) === "ready") {
+    return account;
+  }
+
+  const otp = await resolveMailpoolOutreachAccountAuthCode(account.id).catch(() => "");
+  const secrets = await getOutreachAccountSecrets(account.id).catch(() => null);
+  const password = String(secrets?.mailboxPassword ?? "").trim();
+  if (!otp && !password) {
+    return account;
+  }
+
+  await advanceGmailUiWorkerSession(account.id, {
+    otp,
+    password,
+    refreshMailpoolCredentials: true,
+  }).catch(() => null);
+  return (await getOutreachAccount(account.id)) ?? account;
+}
+
 function pickSenderForMessage(input: {
   pool: SenderDispatchSlot[];
   usage: SenderUsageMap;
   preferredAccountId: string;
   routingSignalsBySenderId?: Map<string, SenderRoutingSignals>;
+  trafficLane?: OutreachTrafficLane | "total";
 }) {
   const ranked = input.pool
     .map((slot) => {
-      const usage = input.usage[slot.account.id] ?? { dailySent: 0, hourlySent: 0 };
-      const dailyRemaining = Math.max(0, slot.policy.dailyCap - usage.dailySent);
-      const hourlyRemaining = Math.max(0, slot.policy.hourlyCap - usage.hourlySent);
+      const lane = input.trafficLane ?? "total";
+      const usage = senderUsageForLane(input.usage[slot.account.id], lane);
+      const laneCapacity = senderLaneCapacityForSlot(slot, lane);
+      const dailyRemaining = Math.max(0, laneCapacity.dailyCap - usage.dailySent);
+      const hourlyRemaining = Math.max(0, laneCapacity.hourlyCap - usage.hourlySent);
       const availability = Math.min(dailyRemaining, hourlyRemaining);
-      const dailyRatio = slot.policy.dailyCap > 0 ? usage.dailySent / slot.policy.dailyCap : 1;
-      const hourlyRatio = slot.policy.hourlyCap > 0 ? usage.hourlySent / slot.policy.hourlyCap : 1;
+      const dailyRatio = laneCapacity.dailyCap > 0 ? usage.dailySent / laneCapacity.dailyCap : 1;
+      const hourlyRatio = laneCapacity.hourlyCap > 0 ? usage.hourlySent / laneCapacity.hourlyCap : 1;
       const routing =
         input.routingSignalsBySenderId?.get(slot.account.id) ?? {
           senderAccountId: slot.account.id,
@@ -11527,11 +13851,12 @@ function pickSenderForMessage(input: {
       const { healthScore, routingScore: baseRoutingScore } = scoreSenderRoutingSignal(routing);
       const routingScore =
         baseRoutingScore +
-        availability / Math.max(1, Math.min(slot.policy.dailyCap, slot.policy.hourlyCap)) +
+        availability / Math.max(1, Math.min(laneCapacity.dailyCap, laneCapacity.hourlyCap)) +
         (routing.checkedAt ? 0.5 : 0);
       return {
         slot,
         usage,
+        laneCapacity,
         dailyRemaining,
         hourlyRemaining,
         availability,
@@ -11575,6 +13900,321 @@ async function listCampaignDeliverabilityEvents(input: { brandId: string; campai
 
 function generateDeliverabilityProbeToken() {
   return `probe_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+const DELIVERABILITY_SEEDING_DISABLED_REASON =
+  "Deliverability seed sending is disabled platform-wide.";
+const DELIVERABILITY_SEND_ATTEMPT_STARTED_REASON = "probe_send_attempt_started";
+const DELIVERABILITY_STALE_UNKNOWN_SEND_PROVIDER_ID = "unknown_stale_send_attempt";
+const OUTBOUND_SENDING_DISABLED_REASON = "Outbound sending is disabled platform-wide.";
+const CAMPAIGN_HOPPER_RECOVERY_COOLDOWN_MS = 30 * 60 * 1000;
+const DEFAULT_WARMUP_VERIFICATION_HOURLY_CAP = 4;
+
+function isDeliverabilitySeedingEnabled() {
+  const raw = String(process.env.DELIVERABILITY_SEEDING_ENABLED ?? "").trim().toLowerCase();
+  return ["1", "true", "yes", "on"].includes(raw);
+}
+
+function deliverabilityReservedStaleMinutes() {
+  return Math.max(
+    5,
+    Math.min(
+      120,
+      Math.round(
+        Number(
+          process.env.DELIVERABILITY_RESERVED_STALE_MINUTES ??
+            DEFAULT_DELIVERABILITY_RESERVED_STALE_MINUTES
+        ) || DEFAULT_DELIVERABILITY_RESERVED_STALE_MINUTES
+      )
+    )
+  );
+}
+
+function deliverabilityProbeMaxMonitors() {
+  return Math.max(
+    1,
+    Math.min(
+      25,
+      Math.round(
+        Number(process.env.DELIVERABILITY_PROBE_MAX_MONITORS ?? DEFAULT_DELIVERABILITY_PROBE_MAX_MONITORS) ||
+          DEFAULT_DELIVERABILITY_PROBE_MAX_MONITORS
+      )
+    )
+  );
+}
+
+function isOutboundSendingEnabled() {
+  const raw = String(process.env.OUTBOUND_SENDING_ENABLED ?? "").trim().toLowerCase();
+  return ["1", "true", "yes", "on"].includes(raw);
+}
+
+function isWarmupVerificationWindowEnabled() {
+  const raw = String(process.env.WARMUP_VERIFICATION_MODE ?? "").trim().toLowerCase();
+  return ["1", "true", "yes", "on"].includes(raw);
+}
+
+function warmupVerificationHourlyCap() {
+  return Math.max(
+    1,
+    Math.min(
+      MAX_WARMUP_CAMPAIGN_DAILY_CAP,
+      Math.round(
+        Number(process.env.WARMUP_VERIFICATION_HOURLY_CAP ?? DEFAULT_WARMUP_VERIFICATION_HOURLY_CAP) ||
+          DEFAULT_WARMUP_VERIFICATION_HOURLY_CAP
+      )
+    )
+  );
+}
+
+function effectiveBusinessWindowPolicy(
+  policy: BusinessWindowPolicy,
+  trafficLane: OutreachTrafficLane
+) {
+  if (trafficLane === "warmup" && isWarmupVerificationWindowEnabled()) {
+    return {
+      ...policy,
+      enabled: false,
+    };
+  }
+  return policy;
+}
+
+function isSenderOwnedScaleCampaignRecord(
+  campaign: {
+    scalePolicy: { accountId?: string; mailboxAccountId?: string };
+  }
+) {
+  return Boolean(
+    String(campaign.scalePolicy.accountId ?? "").trim() ||
+      String(campaign.scalePolicy.mailboxAccountId ?? "").trim()
+  );
+}
+
+async function isScaleCampaignPinnedSenderCurrentlySendable(campaign: {
+  scalePolicy: { accountId?: string; mailboxAccountId?: string };
+}) {
+  const deliveryAccountId = String(campaign.scalePolicy.accountId ?? "").trim();
+  const mailboxAccountId = String(campaign.scalePolicy.mailboxAccountId || deliveryAccountId).trim();
+  if (!deliveryAccountId) return false;
+
+  const [deliveryAccount, mailboxAccount] = await Promise.all([
+    getOutreachAccount(deliveryAccountId),
+    mailboxAccountId ? getOutreachAccount(mailboxAccountId) : Promise.resolve(null),
+  ]);
+  if (!deliveryAccount || deliveryAccount.status !== "active") return false;
+  if (deliveryAccount.accountType === "mailbox") return false;
+  if (!supportsAnyDelivery(deliveryAccount)) return false;
+  if (!mailboxAccount || mailboxAccount.status !== "active") return false;
+  if (getOutreachSenderBackingIssue(deliveryAccount, mailboxAccount)) return false;
+  return true;
+}
+
+function campaignHopperIssueText(
+  run: Pick<OutreachRun, "pauseReason" | "lastError">
+) {
+  return `${String(run.pauseReason ?? "").trim()} ${String(run.lastError ?? "").trim()}`
+    .trim()
+    .toLowerCase();
+}
+
+function isRecoverableSenderCampaignIssue(
+  run: Pick<OutreachRun, "pauseReason" | "lastError">
+) {
+  const issue = campaignHopperIssueText(run);
+  if (!issue) return false;
+
+  const nonRecoverablePatterns = [
+    "auto-paused due to anomaly",
+    "seed monitor",
+    "spam",
+    "customerio profile budget",
+    "negative reply",
+    "provider error rate",
+    "hard bounce",
+    "paused by user",
+    "canceled by user",
+  ];
+  if (nonRecoverablePatterns.some((pattern) => issue.includes(pattern))) {
+    return false;
+  }
+
+  const recoverablePatterns = [
+    "enrichanything",
+    "prospect table",
+    "sendable lead",
+    "outbound data quality issue",
+    "outbound sending is disabled",
+    "active sender accounts with delivery credentials",
+    "requested sender account is not currently available",
+    "requested sender account is inactive",
+    "assigned outreach delivery account is missing or inactive",
+    "assigned mailbox account is missing or inactive",
+    "assigned delivery account credentials are missing",
+    "assigned mailbox account credentials are missing",
+    "currently eligible to send",
+    "one-time code",
+    "gmail session",
+    "gmail login",
+    "verification screen",
+    "worker opened chrome",
+    "warmup dispatch",
+    "sender_pool",
+  ];
+  return recoverablePatterns.some((pattern) => issue.includes(pattern));
+}
+
+function isWarmupRunAutoResumable(run: Pick<OutreachRun, "status" | "pauseReason" | "lastError">) {
+  return run.status === "paused" && isRecoverableSenderCampaignIssue(run);
+}
+
+function isSenderCampaignPausedAutoResumable(
+  run: Pick<OutreachRun, "status" | "pauseReason" | "lastError">
+) {
+  return run.status === "paused" && isRecoverableSenderCampaignIssue(run);
+}
+
+function isSenderCampaignLaunchRetryable(
+  run: Pick<OutreachRun, "status" | "pauseReason" | "lastError">
+) {
+  return ["failed", "preflight_failed"].includes(run.status) && isRecoverableSenderCampaignIssue(run);
+}
+
+function isCampaignHopperRecoveryCoolingDown(
+  run: Pick<OutreachRun, "createdAt" | "updatedAt">
+) {
+  const referenceAt = String(run.updatedAt || run.createdAt).trim() || run.createdAt;
+  return Date.now() - toDate(referenceAt).getTime() < CAMPAIGN_HOPPER_RECOVERY_COOLDOWN_MS;
+}
+
+function shouldAutoActivateWarmupCampaign(input: {
+  campaign: Pick<ScaleCampaignRecord, "status" | "name" | "scalePolicy">;
+  latestRun: OutreachRun | null;
+}) {
+  if (resolveScaleCampaignLane(input.campaign) !== "warmup" || input.campaign.status === "active") {
+    return false;
+  }
+  if (input.campaign.status === "archived") {
+    return false;
+  }
+  if (input.campaign.status === "draft" || input.campaign.status === "completed") {
+    return true;
+  }
+  if (input.campaign.status === "paused") {
+    return (
+      !input.latestRun ||
+      isWarmupRunAutoResumable(input.latestRun) ||
+      isSenderCampaignLaunchRetryable(input.latestRun)
+    );
+  }
+  return false;
+}
+
+async function pauseRunForOutboundSendingDisabled(run: {
+  id: string;
+  brandId: string;
+  campaignId: string;
+  experimentId: string;
+  status: string;
+}) {
+  if (run.status !== "paused") {
+    await updateOutreachRun(run.id, {
+      status: "paused",
+      pauseReason: OUTBOUND_SENDING_DISABLED_REASON,
+      lastError: OUTBOUND_SENDING_DISABLED_REASON,
+    });
+    await markExperimentExecutionStatus(run.brandId, run.campaignId, run.experimentId, "paused");
+  }
+  await createOutreachEvent({
+    runId: run.id,
+    eventType: "run_paused_auto",
+    payload: {
+      reason: "outbound_sending_disabled",
+      summary: OUTBOUND_SENDING_DISABLED_REASON,
+    },
+  });
+}
+
+function deliverabilityReservationReservedAtMs(
+  reservation: Pick<DeliverabilitySeedReservation, "reservedAt" | "createdAt" | "updatedAt">
+) {
+  return toDate(reservation.reservedAt || reservation.createdAt || reservation.updatedAt).getTime();
+}
+
+async function reconcileStaleDeliverabilitySeedReservationsForSender(input: {
+  runId: string;
+  brandId: string;
+  senderAccountId: string;
+  fromEmail: string;
+  contentHash?: string;
+}) {
+  const reservations = await listDeliverabilitySeedReservations({
+    brandId: input.brandId,
+    senderAccountId: input.senderAccountId,
+    fromEmail: input.fromEmail,
+    statuses: ["reserved"],
+  });
+  const staleBeforeMs = Date.now() - deliverabilityReservedStaleMinutes() * 60 * 1000;
+  const senderAccountId = input.senderAccountId.trim();
+  const fromEmail = input.fromEmail.trim().toLowerCase();
+  const contentHash = String(input.contentHash ?? "").trim();
+  const releaseIds: string[] = [];
+  const unknownAttemptIds: string[] = [];
+
+  for (const reservation of reservations) {
+    if (reservation.providerMessageId.trim()) continue;
+    const reservedAtMs = deliverabilityReservationReservedAtMs(reservation);
+    if (reservedAtMs <= 0 || reservedAtMs > staleBeforeMs) continue;
+    const matchesSender =
+      (senderAccountId && reservation.senderAccountId.trim() === senderAccountId) ||
+      (fromEmail && reservation.fromEmail.trim().toLowerCase() === fromEmail);
+    const matchesContent = !contentHash || reservation.contentHash.trim() === contentHash;
+    if (!matchesSender || !matchesContent) continue;
+
+    if (reservation.releasedReason.trim() === DELIVERABILITY_SEND_ATTEMPT_STARTED_REASON) {
+      unknownAttemptIds.push(reservation.id);
+    } else {
+      releaseIds.push(reservation.id);
+    }
+  }
+
+  if (!releaseIds.length && !unknownAttemptIds.length) {
+    return { releasedCount: 0, unknownAttemptCount: 0 };
+  }
+
+  const updatedAt = nowIso();
+  await Promise.all([
+    releaseIds.length
+      ? updateDeliverabilitySeedReservations(releaseIds, {
+          status: "released",
+          releasedAt: updatedAt,
+          releasedReason: "stale_unattempted_probe_reservation",
+        })
+      : Promise.resolve([]),
+    unknownAttemptIds.length
+      ? updateDeliverabilitySeedReservations(unknownAttemptIds, {
+          status: "consumed",
+          providerMessageId: DELIVERABILITY_STALE_UNKNOWN_SEND_PROVIDER_ID,
+          consumedAt: updatedAt,
+          releasedAt: "",
+          releasedReason: "stale_probe_send_attempt_unknown_delivery",
+        })
+      : Promise.resolve([]),
+  ]);
+
+  await createOutreachEvent({
+    runId: input.runId,
+    eventType: "deliverability_seed_reservations_reconciled",
+    payload: {
+      senderAccountId,
+      fromEmail,
+      contentHash,
+      releasedUnattemptedCount: releaseIds.length,
+      consumedUnknownAttemptCount: unknownAttemptIds.length,
+      staleAfterMinutes: deliverabilityReservedStaleMinutes(),
+    },
+  });
+
+  return { releasedCount: releaseIds.length, unknownAttemptCount: unknownAttemptIds.length };
 }
 
 async function listBlockedMonitorEmailsForSender(input: {
@@ -11723,50 +14363,604 @@ async function resolveDeliverabilityMonitorTargets(input: {
   excludeAccountIds: string[];
   excludeEmails: string[];
 }): Promise<DeliverabilityMonitorTarget[]> {
-  const [accounts, brands] = await Promise.all([listOutreachAccounts(), listBrands()]);
-  const assignments = await Promise.all(
-    brands.map(async (brand) => ({
-      brandId: brand.id,
-      assignment: await getBrandOutreachAssignment(brand.id),
-    }))
-  );
-  const mailboxBrandByAccountId = new Map(
-    assignments
-      .filter((row) => row.assignment?.mailboxAccountId)
-      .map((row) => [String(row.assignment?.mailboxAccountId ?? "").trim(), row.brandId] as const)
-  );
-  const excludedAccountIds = new Set(input.excludeAccountIds.map((value) => value.trim()).filter(Boolean));
-  const excludedEmails = new Set(input.excludeEmails.map((value) => value.trim().toLowerCase()).filter(Boolean));
+  return resolveWarmupSeedMonitorTargets(input);
+}
 
-  const candidates: DeliverabilityMonitorTarget[] = [];
-  for (const account of accounts) {
-    if (account.status !== "active" || !supportsMailbox(account)) continue;
-    const mailboxEmail = account.config.mailbox.email.trim().toLowerCase();
-    if (!mailboxEmail || account.config.mailbox.status !== "connected") continue;
-    if (excludedAccountIds.has(account.id) || excludedEmails.has(mailboxEmail)) continue;
-    const secrets = await getOutreachAccountSecrets(account.id);
-    if (!secrets || !secrets.mailboxPassword.trim()) continue;
-    candidates.push({
-      account,
-      secrets,
-      brandId: mailboxBrandByAccountId.get(account.id) ?? "",
+function readWarmupSeedLeadTarget(
+  lead: Pick<OutreachRunLead, "email" | "sourceUrl"> | null | undefined
+): { accountId: string; email: string } | null {
+  if (!lead || !isWarmupSeedLead(lead)) return null;
+  const accountId = parseWarmupSeedSourceUrlAccountId(lead.sourceUrl);
+  const email = extractFirstEmailAddress(lead.email).toLowerCase();
+  if (!accountId || !email) return null;
+  return { accountId, email };
+}
+
+async function releaseWarmupSeedReservationsForRun(runId: string, releasedReason: string) {
+  const reservations = await listWarmupSeedReservations({
+    runId,
+    statuses: ["reserved"],
+  });
+  const reservationIds = reservations.map((reservation) => reservation.id).filter(Boolean);
+  if (!reservationIds.length) return 0;
+  await updateWarmupSeedReservations(reservationIds, {
+    status: "released",
+    releasedAt: nowIso(),
+    releasedReason,
+  });
+  return reservationIds.length;
+}
+
+async function releaseWarmupSeedReservationsForLeads(input: {
+  runId: string;
+  leads: Array<Pick<OutreachRunLead, "email" | "sourceUrl">>;
+  releasedReason: string;
+}) {
+  const targets = input.leads
+    .map((lead) => readWarmupSeedLeadTarget(lead))
+    .filter((target): target is NonNullable<typeof target> => Boolean(target));
+  if (!targets.length) return 0;
+
+  const targetKeys = new Set(targets.map((target) => `${target.accountId}:${target.email}`));
+  const reservations = await listWarmupSeedReservations({
+    runId: input.runId,
+    statuses: ["reserved"],
+  });
+  const reservationIds = reservations
+    .filter((reservation) =>
+      targetKeys.has(
+        `${String(reservation.monitorAccountId ?? "").trim()}:${String(
+          reservation.monitorEmail ?? ""
+        )
+          .trim()
+          .toLowerCase()}`
+      )
+    )
+    .map((reservation) => reservation.id)
+    .filter(Boolean);
+  if (!reservationIds.length) return 0;
+
+  await updateWarmupSeedReservations(reservationIds, {
+    status: "released",
+    releasedAt: nowIso(),
+    releasedReason: input.releasedReason,
+  });
+  return reservationIds.length;
+}
+
+function warmupSeedCapacityPauseReason() {
+  return "Warmup seed pool is fully reserved by other active warmup runs. Add more connected monitors or wait for another warmup run to finish.";
+}
+
+function warmupConversationConfigDriftReason() {
+  return "Warmup configuration changed; rebuilding queued warmup copy with current outbound intent.";
+}
+
+function runNeedsWarmupSeedReservations(
+  run: Pick<OutreachRun, "status" | "pauseReason" | "lastError">,
+  scheduledSeedCount: number
+) {
+  const status = String(run.status ?? "").trim().toLowerCase();
+  if (scheduledSeedCount <= 0) {
+    return false;
+  }
+  if (["scheduled", "sending"].includes(status)) {
+    return true;
+  }
+  if (status === "paused" && scheduledSeedCount > 0) {
+    const pauseText = `${String(run.pauseReason ?? "").trim()} ${String(run.lastError ?? "").trim()}`.toLowerCase();
+    return pauseText.includes("warmup seed pool");
+  }
+  return false;
+}
+
+async function alignWarmupSeedReservationsToScheduledMessages(input: {
+  run: Pick<
+    OutreachRun,
+    "id" | "brandId" | "accountId" | "dailyCap" | "hourlyCap" | "minSpacingMinutes" | "createdAt" | "timezone"
+  >;
+  fromEmail: string;
+  leads: OutreachRunLead[];
+  messages: Awaited<ReturnType<typeof listRunMessages>>;
+}) {
+  const scheduledMessages = input.messages
+    .filter((message) => message.status === "scheduled")
+    .sort((left, right) => (left.scheduledAt < right.scheduledAt ? -1 : 1));
+  const leadById = new Map(input.leads.map((lead) => [lead.id, lead] as const));
+  const orderedTargets: Array<{ accountId: string; email: string }> = [];
+  const seenTargetKeys = new Set<string>();
+
+  for (const message of scheduledMessages) {
+    const lead = leadById.get(message.leadId) ?? null;
+    const target = readWarmupSeedLeadTarget(lead);
+    if (!target) continue;
+    const key = `${target.accountId}:${target.email}`;
+    if (seenTargetKeys.has(key)) continue;
+    seenTargetKeys.add(key);
+    orderedTargets.push(target);
+  }
+
+  const desiredTargetCount = Math.min(
+    orderedTargets.length,
+    targetWarmupActiveReservationCount(input.run, input.run.createdAt)
+  );
+  const desiredTargets = orderedTargets.slice(0, desiredTargetCount);
+  const desiredTargetKeys = new Set(
+    desiredTargets.map((target) => `${target.accountId}:${target.email}`)
+  );
+
+  const existingReservations = await listWarmupSeedReservations({
+    runId: input.run.id,
+    statuses: ["reserved"],
+  });
+  const staleReservationIds = existingReservations
+    .filter(
+      (reservation) =>
+        !desiredTargetKeys.has(
+          `${String(reservation.monitorAccountId ?? "").trim()}:${String(
+            reservation.monitorEmail ?? ""
+          )
+            .trim()
+            .toLowerCase()}`
+        )
+    )
+    .map((reservation) => reservation.id)
+    .filter(Boolean);
+  if (staleReservationIds.length) {
+    await updateWarmupSeedReservations(staleReservationIds, {
+      status: "released",
+      releasedAt: nowIso(),
+      releasedReason: "warmup_schedule_alignment_stale_target",
     });
   }
 
-  const dedicated = candidates.filter((candidate) => isDedicatedDeliverabilityMonitor(candidate.account));
-  const pool = dedicated.length ? dedicated : candidates;
+  const refreshedReservations = staleReservationIds.length
+    ? await listWarmupSeedReservations({
+        runId: input.run.id,
+        statuses: ["reserved"],
+      })
+    : existingReservations;
+  const reservedTargetKeys = new Set(
+    refreshedReservations.map(
+      (reservation) =>
+        `${String(reservation.monitorAccountId ?? "").trim()}:${String(reservation.monitorEmail ?? "")
+          .trim()
+          .toLowerCase()}`
+    )
+  );
 
-  return pool.sort((left, right) => {
-    const leftDedicated = isDedicatedDeliverabilityMonitor(left.account) ? 0 : 1;
-    const rightDedicated = isDedicatedDeliverabilityMonitor(right.account) ? 0 : 1;
-    if (leftDedicated !== rightDedicated) return leftDedicated - rightDedicated;
+  for (const target of desiredTargets) {
+    const key = `${target.accountId}:${target.email}`;
+    if (reservedTargetKeys.has(key)) continue;
+    const created = await createWarmupSeedReservations({
+      runId: input.run.id,
+      brandId: input.run.brandId,
+      senderAccountId: input.run.accountId,
+      fromEmail: input.fromEmail,
+      targets: [
+        {
+          accountId: target.accountId,
+          email: target.email,
+        },
+      ],
+    });
+    if (!created.length) continue;
+    reservedTargetKeys.add(key);
+  }
+}
 
-    const leftCrossBrand = left.brandId && left.brandId !== input.runBrandId ? 0 : 1;
-    const rightCrossBrand = right.brandId && right.brandId !== input.runBrandId ? 0 : 1;
-    if (leftCrossBrand !== rightCrossBrand) return leftCrossBrand - rightCrossBrand;
+async function reconcileWarmupSeedReservationState(limit = 40) {
+  const [brands, reservedReservations] = await Promise.all([
+    listBrands(),
+    listWarmupSeedReservations({ statuses: ["reserved"] }),
+  ]);
+  const warmupCampaignIds = new Set<string>();
+  const allRuns: OutreachRun[] = [];
 
-    return left.account.name.localeCompare(right.account.name);
+  for (const brand of brands) {
+    const [campaigns, runs] = await Promise.all([
+      listScaleCampaignRecords(brand.id),
+      listBrandRuns(brand.id),
+    ]);
+    for (const campaign of campaigns) {
+      if (resolveScaleCampaignLane(campaign) === "warmup") {
+        warmupCampaignIds.add(campaign.id);
+      }
+    }
+    allRuns.push(...runs);
+  }
+
+  const runById = new Map(allRuns.map((run) => [run.id, run]));
+  const messagesByRunId = new Map<string, Awaited<ReturnType<typeof listRunMessages>>>();
+  const leadsByRunId = new Map<string, Awaited<ReturnType<typeof listRunLeads>>>();
+  const loadMessages = async (runId: string) => {
+    const cached = messagesByRunId.get(runId);
+    if (cached) return cached;
+    const messages = await listRunMessages(runId);
+    messagesByRunId.set(runId, messages);
+    return messages;
+  };
+  const loadLeads = async (runId: string) => {
+    const cached = leadsByRunId.get(runId);
+    if (cached) return cached;
+    const leads = await listRunLeads(runId);
+    leadsByRunId.set(runId, leads);
+    return leads;
+  };
+
+  const releasableReservationIds: string[] = [];
+  for (const reservation of reservedReservations) {
+    const run = runById.get(reservation.runId) ?? null;
+    if (!run || run.ownerType !== "campaign" || !warmupCampaignIds.has(run.ownerId) || !isRunOpen(run.status)) {
+      releasableReservationIds.push(reservation.id);
+      continue;
+    }
+    const [messages, leads] = await Promise.all([loadMessages(run.id), loadLeads(run.id)]);
+    const scheduledLeadIds = new Set(
+      messages.filter((message) => message.status === "scheduled").map((message) => message.leadId)
+    );
+    const scheduledSeedCount = leads.filter(
+      (lead) => scheduledLeadIds.has(lead.id) && isWarmupSeedLead(lead)
+    ).length;
+    if (!runNeedsWarmupSeedReservations(run, scheduledSeedCount)) {
+      releasableReservationIds.push(reservation.id);
+    }
+  }
+  if (releasableReservationIds.length) {
+    await updateWarmupSeedReservations(releasableReservationIds, {
+      status: "released",
+      releasedAt: nowIso(),
+      releasedReason: "run_no_longer_needs_warmup_seed",
+    });
+  }
+
+  const activeWarmupRuns = allRuns
+    .filter((run) => run.ownerType === "campaign" && warmupCampaignIds.has(run.ownerId) && isRunOpen(run.status))
+    .slice(0, Math.max(1, Math.min(200, Math.round(Number(limit) || 40))));
+  const runSnapshots = await Promise.all(
+    activeWarmupRuns.map(async (run) => {
+      const [messages, leads] = await Promise.all([loadMessages(run.id), loadLeads(run.id)]);
+      const scheduledLeadIds = new Set(
+        messages
+          .filter((message) => message.status === "scheduled")
+          .map((message) => message.leadId)
+      );
+      const seedTargets = leads
+        .map((lead) => ({
+          lead,
+          target: readWarmupSeedLeadTarget(lead),
+        }))
+        .filter((entry): entry is { lead: OutreachRunLead; target: { accountId: string; email: string } } =>
+          Boolean(entry.target)
+        );
+      const scheduledSeedTargets = seedTargets.filter((entry) => scheduledLeadIds.has(entry.lead.id));
+      return {
+        run,
+        messages,
+        seedTargets,
+        scheduledSeedTargets,
+        sentCount: messages.filter((message) => message.status === "sent").length,
+        scheduledCount: messages.filter((message) => message.status === "scheduled").length,
+        scheduledSeedCount: scheduledSeedTargets.length,
+      };
+    })
+  );
+  const candidateRunSnapshots = runSnapshots.filter((snapshot) =>
+    runNeedsWarmupSeedReservations(snapshot.run, snapshot.scheduledSeedCount)
+  );
+
+  const currentReservations = await listWarmupSeedReservations({ statuses: ["reserved"] });
+  const reservationsByRunId = new Map<string, WarmupSeedReservation[]>();
+  const claimedMonitorIds = new Set<string>();
+  for (const reservation of currentReservations) {
+    const existing = reservationsByRunId.get(reservation.runId) ?? [];
+    existing.push(reservation);
+    reservationsByRunId.set(reservation.runId, existing);
+    claimedMonitorIds.add(reservation.monitorAccountId);
+  }
+  candidateRunSnapshots.sort((left, right) => {
+    const leftReserved = (reservationsByRunId.get(left.run.id) ?? []).length;
+    const rightReserved = (reservationsByRunId.get(right.run.id) ?? []).length;
+    if (leftReserved !== rightReserved) return leftReserved - rightReserved;
+    if (left.sentCount !== right.sentCount) return left.sentCount - right.sentCount;
+    const leftAt = toDate(left.run.createdAt).getTime();
+    const rightAt = toDate(right.run.createdAt).getTime();
+    return leftAt - rightAt;
   });
+
+  let runsRepaired = 0;
+  let runsPaused = 0;
+  let runsResumed = 0;
+  let conflictsDetected = 0;
+
+  for (const snapshot of candidateRunSnapshots) {
+    const candidateTargets = snapshot.scheduledSeedTargets.length
+      ? snapshot.scheduledSeedTargets
+      : snapshot.seedTargets;
+    if (!candidateTargets.length) {
+      continue;
+    }
+    let existingReservations = reservationsByRunId.get(snapshot.run.id) ?? [];
+    const senderAccount = await getOutreachAccount(snapshot.run.accountId);
+    const senderFromEmail = senderAccount ? getOutreachAccountFromEmail(senderAccount).trim() : "";
+    const targetReservationCount = targetWarmupActiveReservationCount(snapshot.run, snapshot.run.createdAt);
+    const targetOrder = new Map(
+      candidateTargets.map(({ target }, index) => [target.accountId, index] as const)
+    );
+    const staleReservations = existingReservations.filter(
+      (reservation) => !targetOrder.has(reservation.monitorAccountId)
+    );
+    if (staleReservations.length) {
+      await updateWarmupSeedReservations(
+        staleReservations.map((reservation) => reservation.id),
+        {
+          status: "released",
+          releasedAt: nowIso(),
+          releasedReason: "warmup_rebalance_stale_target",
+        }
+      );
+      for (const reservation of staleReservations) {
+        claimedMonitorIds.delete(reservation.monitorAccountId);
+      }
+      const staleReservationIds = new Set(staleReservations.map((reservation) => reservation.id));
+      existingReservations = existingReservations.filter((reservation) => !staleReservationIds.has(reservation.id));
+      reservationsByRunId.set(snapshot.run.id, existingReservations);
+    }
+    const prioritizedReservations = existingReservations.slice().sort((left, right) => {
+      const leftOrder = targetOrder.get(left.monitorAccountId) ?? Number.MAX_SAFE_INTEGER;
+      const rightOrder = targetOrder.get(right.monitorAccountId) ?? Number.MAX_SAFE_INTEGER;
+      if (leftOrder !== rightOrder) return leftOrder - rightOrder;
+      return toDate(left.createdAt).getTime() - toDate(right.createdAt).getTime();
+    });
+    const excessReservations = prioritizedReservations.slice(targetReservationCount);
+    if (excessReservations.length) {
+      await updateWarmupSeedReservations(
+        excessReservations.map((reservation) => reservation.id),
+        {
+          status: "released",
+          releasedAt: nowIso(),
+          releasedReason: "warmup_rebalance_excess_capacity",
+        }
+      );
+      for (const reservation of excessReservations) {
+        claimedMonitorIds.delete(reservation.monitorAccountId);
+      }
+      existingReservations = prioritizedReservations.slice(0, targetReservationCount);
+      reservationsByRunId.set(snapshot.run.id, existingReservations);
+    }
+    const existingByMonitorId = new Map(
+      existingReservations.map((reservation) => [reservation.monitorAccountId, reservation] as const)
+    );
+    let repaired = staleReservations.length > 0;
+    for (const { target } of candidateTargets) {
+      if (existingByMonitorId.size >= targetReservationCount) {
+        break;
+      }
+      if (existingByMonitorId.has(target.accountId)) {
+        claimedMonitorIds.add(target.accountId);
+        continue;
+      }
+      if (claimedMonitorIds.has(target.accountId)) {
+        conflictsDetected += 1;
+        continue;
+      }
+      const created = await createWarmupSeedReservations({
+        runId: snapshot.run.id,
+        brandId: snapshot.run.brandId,
+        senderAccountId: snapshot.run.accountId,
+        fromEmail: senderFromEmail,
+        targets: [
+          {
+            accountId: target.accountId,
+            email: target.email,
+          },
+        ],
+      });
+      if (!created.length) {
+        conflictsDetected += 1;
+        continue;
+      }
+      const nextReservations = reservationsByRunId.get(snapshot.run.id) ?? [];
+      nextReservations.push(...created);
+      reservationsByRunId.set(snapshot.run.id, nextReservations);
+      for (const reservation of created) {
+        existingByMonitorId.set(reservation.monitorAccountId, reservation);
+      }
+      existingReservations = nextReservations;
+      claimedMonitorIds.add(target.accountId);
+      repaired = true;
+    }
+    if (repaired) {
+      runsRepaired += 1;
+    }
+
+    const reservedForRun = reservationsByRunId.get(snapshot.run.id) ?? [];
+    const reservedEmails = new Set(reservedForRun.map((reservation) => reservation.monitorEmail));
+    const hasScheduledMessages = snapshot.scheduledSeedCount > 0;
+    const blockedByCapacity = hasScheduledMessages && reservedEmails.size === 0;
+    const currentRunError = `${snapshot.run.pauseReason} ${snapshot.run.lastError}`.toLowerCase();
+    if (blockedByCapacity && snapshot.run.status !== "paused") {
+      const reason = warmupSeedCapacityPauseReason();
+      await updateOutreachRun(snapshot.run.id, {
+        status: "paused",
+        pauseReason: reason,
+        lastError: reason,
+      });
+      await markExperimentExecutionStatus(
+        snapshot.run.brandId,
+        snapshot.run.campaignId,
+        snapshot.run.experimentId,
+        "paused"
+      );
+      await createOutreachEvent({
+        runId: snapshot.run.id,
+        eventType: "run_paused_auto",
+        payload: {
+          reason: "warmup_seed_capacity",
+          summary: reason,
+          scheduledMessages: snapshot.scheduledSeedCount,
+          reservedSeedCount: reservedEmails.size,
+        },
+      });
+      runsPaused += 1;
+    } else if (
+      snapshot.run.status === "paused" &&
+      hasScheduledMessages &&
+      reservedEmails.size > 0 &&
+      currentRunError.includes("warmup seed pool")
+    ) {
+      await updateOutreachRun(snapshot.run.id, {
+        status: "scheduled",
+        pauseReason: "",
+        lastError: "",
+      });
+      await markExperimentExecutionStatus(
+        snapshot.run.brandId,
+        snapshot.run.campaignId,
+        snapshot.run.experimentId,
+        "scheduled"
+      );
+      await enqueueOutreachJob({
+        runId: snapshot.run.id,
+        jobType: "dispatch_messages",
+        executeAfter: nowIso(),
+        payload: {
+          source: "warmup_seed_capacity_recovered",
+          reservedSeedCount: reservedEmails.size,
+        },
+      });
+      await createOutreachEvent({
+        runId: snapshot.run.id,
+        eventType: "run_resumed_auto",
+        payload: {
+          reason: "warmup_seed_capacity_recovered",
+          reservedSeedCount: reservedEmails.size,
+        },
+      });
+      runsResumed += 1;
+    }
+  }
+
+  return {
+    runsEvaluated: candidateRunSnapshots.length,
+    runsRepaired,
+    reservationsReleased: releasableReservationIds.length,
+    conflictsDetected,
+    runsPaused,
+    runsResumed,
+  };
+}
+
+async function reconcileWarmupConversationConfigState(limit = 40) {
+  const brands = await listBrands();
+  const allRuns = (
+    await Promise.all(brands.map(async (brand) => listBrandRuns(brand.id)))
+  ).flat();
+  const candidateRuns = allRuns
+    .filter((run) => isRunOpen(run.status) && run.metrics.scheduledMessages > 0)
+    .sort((left, right) => {
+      const leftAt = toDate(left.updatedAt || left.createdAt).getTime();
+      const rightAt = toDate(right.updatedAt || right.createdAt).getTime();
+      return rightAt - leftAt;
+    })
+    .slice(0, Math.max(1, Math.min(200, Math.round(Number(limit) || 40))));
+
+  let runsRepaired = 0;
+  let scheduledMessagesCanceled = 0;
+  let reservationsReleased = 0;
+
+  for (const run of candidateRuns) {
+    const messages = await listRunMessages(run.id);
+    const scheduledConversationMessages = messages.filter(
+      (message) => message.status === "scheduled" && message.sourceType === "conversation"
+    );
+    if (!scheduledConversationMessages.length) {
+      continue;
+    }
+
+    const routingContext = await buildRunSenderRoutingContext(run);
+    if (routingContext.trafficLane !== "warmup") {
+      continue;
+    }
+
+    const [campaign, runtimeExperiment, flowMap] = await Promise.all([
+      getCampaignById(run.brandId, run.campaignId),
+      getExperimentRecordByRuntimeRef(run.brandId, run.campaignId, run.experimentId),
+      getPublishedConversationMapForExperiment(run.brandId, run.campaignId, run.experimentId),
+    ]);
+    if (!campaign || !flowMap?.publishedRevision) {
+      continue;
+    }
+
+    const currentSignature = buildConversationGenerationSignature({
+      mapId: flowMap.id,
+      mapRevision: flowMap.publishedRevision,
+      campaignGoal: campaign.objective.goal,
+      experimentOffer: runtimeExperiment?.offer ?? "",
+      experimentAudience: runtimeExperiment?.audience ?? "",
+    });
+    const staleMessages = scheduledConversationMessages.filter(
+      (message) => readConversationGenerationSignature(message) !== currentSignature
+    );
+    if (!staleMessages.length) {
+      continue;
+    }
+
+    const staleLeadIds = new Set(staleMessages.map((message) => message.leadId));
+    const leads = await listRunLeads(run.id);
+    const staleLeads = leads.filter((lead) => staleLeadIds.has(lead.id));
+
+    await updateRunMessages(
+      staleMessages.map((message) => message.id),
+      {
+        status: "canceled",
+        lastError: warmupConversationConfigDriftReason(),
+      }
+    );
+    const releasedCount = await releaseWarmupSeedReservationsForLeads({
+      runId: run.id,
+      leads: staleLeads,
+      releasedReason: "warmup_config_changed",
+    });
+
+    await updateOutreachRun(run.id, {
+      status: "scheduled",
+      pauseReason: "",
+      lastError: "",
+    });
+    await markExperimentExecutionStatus(run.brandId, run.campaignId, run.experimentId, "scheduled");
+    if (!(await hasActiveRunJob({ runId: run.id, jobType: "schedule_messages" }))) {
+      await enqueueOutreachJob({
+        runId: run.id,
+        jobType: "schedule_messages",
+        executeAfter: nowIso(),
+        payload: {
+          source: "warmup_config_repair",
+          canceledMessageCount: staleMessages.length,
+        },
+      });
+    }
+    await createOutreachEvent({
+      runId: run.id,
+      eventType: "warmup_config_repaired",
+      payload: {
+        staleScheduledMessages: staleMessages.length,
+        releasedReservations: releasedCount,
+        mapRevision: flowMap.publishedRevision,
+      },
+    });
+
+    runsRepaired += 1;
+    scheduledMessagesCanceled += staleMessages.length;
+    reservationsReleased += releasedCount;
+  }
+
+  return {
+    runsEvaluated: candidateRuns.length,
+    runsRepaired,
+    scheduledMessagesCanceled,
+    reservationsReleased,
+  };
 }
 
 function readDeliverabilityProbeTargets(value: unknown): DeliverabilityProbeTarget[] {
@@ -11797,6 +14991,18 @@ function readDeliverabilityProbeResults(value: unknown): DeliverabilityProbeMoni
       matchedUid: Math.max(0, Number(entry.matchedUid ?? 0) || 0),
       ok: entry.ok !== false,
       error: String(entry.error ?? "").trim(),
+      cleanup: (() => {
+        const cleanup = asRecord(entry.cleanup);
+        if (!Object.keys(cleanup).length) return undefined;
+        return {
+          attempted: cleanup.attempted === true,
+          ok: cleanup.ok !== false,
+          actions: Array.isArray(cleanup.actions)
+            ? cleanup.actions.map((item) => String(item ?? "").trim()).filter(Boolean)
+            : [],
+          error: String(cleanup.error ?? "").trim(),
+        };
+      })(),
     }))
     .filter((entry) => entry.accountId && entry.email);
 }
@@ -11993,6 +15199,9 @@ async function queueDeliverabilityProbe(input: {
   payload?: Record<string, unknown>;
   force?: boolean;
 }) {
+  if (!isDeliverabilitySeedingEnabled()) {
+    return null;
+  }
   const jobs = await listRunJobs(input.runId, 50);
   if (!input.force) {
     const requestedPayload = asRecord(input.payload);
@@ -12092,6 +15301,9 @@ async function maybeQueueAutomaticDeliverabilityProbeSet(
     triggerStage: "schedule" | "send" | "failover";
   }
 ) {
+  if (!isDeliverabilitySeedingEnabled()) {
+    return null;
+  }
   const senderAccountId = input.senderAccountId.trim();
   const senderFromEmail = input.senderFromEmail.trim().toLowerCase();
   if (!senderAccountId || !senderFromEmail) return;
@@ -12161,6 +15373,9 @@ async function maybeQueueAutomaticDeliverabilityProbe(run: {
 }
 
 async function maybeQueueScheduledDeliverabilityProbe(run: OutreachRun) {
+  if (!isDeliverabilitySeedingEnabled()) {
+    return null;
+  }
   const referenceMessage = await resolveDeliverabilityProbeReferenceMessage({
     runId: run.id,
     preferScheduled: true,
@@ -12168,15 +15383,16 @@ async function maybeQueueScheduledDeliverabilityProbe(run: OutreachRun) {
   if (!referenceMessage) return null;
 
   const routingContext = await buildRunSenderRoutingContext(run, {
-    preferredAccountId: run.accountId,
+    preferredAccountId: effectiveRunSenderAccountId(run),
   });
+  const effectiveRun = routingContext.run;
   const senderSlot =
     routingContext.primarySender ??
-    routingContext.senderPoolState.pool.find((slot) => slot.account.id === run.accountId) ??
+    routingContext.senderPoolState.pool.find((slot) => slot.account.id === effectiveRun.accountId) ??
     null;
   if (!senderSlot) return null;
 
-  return maybeQueueAutomaticDeliverabilityProbeSet(run, {
+  return maybeQueueAutomaticDeliverabilityProbeSet(effectiveRun, {
     referenceMessage,
     senderAccountId: senderSlot.account.id,
     senderAccountName: senderSlot.account.name,
@@ -12185,19 +15401,85 @@ async function maybeQueueScheduledDeliverabilityProbe(run: OutreachRun) {
   });
 }
 
+function persistedRunLockedSenderAccountId(run: { lockedSenderAccountId?: string | null }) {
+  return String(run.lockedSenderAccountId ?? "").trim();
+}
+
+function effectiveRunSenderAccountId(run: { accountId?: string | null; lockedSenderAccountId?: string | null }) {
+  return persistedRunLockedSenderAccountId(run) || String(run.accountId ?? "").trim();
+}
+
+async function resolveRunLockedSenderContext(run: OutreachRun) {
+  const persistedLockedSenderAccountId = persistedRunLockedSenderAccountId(run);
+  const ownerCampaign =
+    run.ownerType === "campaign" && run.ownerId
+      ? await getScaleCampaignRecordById(run.brandId, run.ownerId)
+      : null;
+  const trafficLane =
+    run.ownerType === "campaign" ? resolveScaleCampaignLane(ownerCampaign) : "outbound";
+  const derivedLockedSenderAccountId =
+    ownerCampaign && isSenderOwnedScaleCampaignRecord(ownerCampaign)
+      ? String(ownerCampaign.scalePolicy.accountId || ownerCampaign.scalePolicy.mailboxAccountId || "").trim()
+      : "";
+  const lockedSenderAccountId = persistedLockedSenderAccountId || derivedLockedSenderAccountId;
+  return {
+    trafficLane,
+    lockedSenderAccountId,
+  };
+}
+
+async function repairRunLockedSenderAccount(run: OutreachRun, lockedSenderAccountId: string) {
+  const normalizedLockedSenderAccountId = String(lockedSenderAccountId).trim();
+  const currentLockedSenderAccountId = String(run.lockedSenderAccountId ?? "").trim();
+  const needsLockBackfill = Boolean(
+    normalizedLockedSenderAccountId && currentLockedSenderAccountId !== normalizedLockedSenderAccountId
+  );
+  const needsAccountRepair = Boolean(
+    normalizedLockedSenderAccountId && run.accountId !== normalizedLockedSenderAccountId
+  );
+  if (!normalizedLockedSenderAccountId || (!needsLockBackfill && !needsAccountRepair)) {
+    return run;
+  }
+  await updateOutreachRun(run.id, {
+    ...(needsAccountRepair ? { accountId: normalizedLockedSenderAccountId } : {}),
+    ...(needsLockBackfill ? { lockedSenderAccountId: normalizedLockedSenderAccountId } : {}),
+  });
+  if (needsAccountRepair) {
+    await createOutreachEvent({
+      runId: run.id,
+      eventType: "run_sender_account_repaired",
+      payload: {
+        previousAccountId: run.accountId,
+        lockedSenderAccountId: normalizedLockedSenderAccountId,
+        source: currentLockedSenderAccountId ? "persisted_run_sender_lock" : "owner_campaign_sender_lock",
+      },
+    });
+  }
+  return {
+    ...run,
+    accountId: normalizedLockedSenderAccountId,
+    lockedSenderAccountId: normalizedLockedSenderAccountId,
+    updatedAt: nowIso(),
+  };
+}
+
 async function buildRunSenderRoutingContext(run: OutreachRun, input?: { preferredAccountId?: string }) {
-  const preferredAccountId = String(input?.preferredAccountId ?? run.accountId).trim();
+  const { trafficLane, lockedSenderAccountId } = await resolveRunLockedSenderContext(run);
+  const effectiveRun = await repairRunLockedSenderAccount(run, lockedSenderAccountId);
+  const currentSenderAccountId = effectiveRunSenderAccountId(effectiveRun);
+  const preferredAccountId = String(input?.preferredAccountId ?? currentSenderAccountId).trim();
   const runtimeExperiment = await getExperimentRecordByRuntimeRef(run.brandId, run.campaignId, run.experimentId);
   const businessWindow = businessWindowFromExperimentEnvelope(runtimeExperiment?.testEnvelope);
   const senderPoolState = await resolveSenderPoolForBrand({
-    brandId: run.brandId,
-    preferredAccountId: preferredAccountId || run.accountId,
-    timeZone: run.timezone || DEFAULT_TIMEZONE,
+    brandId: effectiveRun.brandId,
+    preferredAccountId: preferredAccountId || currentSenderAccountId,
+    timeZone: effectiveRun.timezone || DEFAULT_TIMEZONE,
     businessWindow,
+    exactAccountId: lockedSenderAccountId,
   });
   const senderHealthState = await resolveBrandSenderHealth({
-    brandId: run.brandId,
-    accountId: preferredAccountId || run.accountId,
+    brandId: effectiveRun.brandId,
+    accountId: lockedSenderAccountId || preferredAccountId || currentSenderAccountId,
   });
   const blockedBySenderId = new Map<string, SenderReadinessSnapshot>();
   for (const accountId of senderPoolState.readinessByAccountId.keys()) {
@@ -12213,11 +15495,25 @@ async function buildRunSenderRoutingContext(run: OutreachRun, input?: { preferre
       readiness,
     });
   }
+  if (trafficLane === "outbound") {
+    for (const slot of senderPoolState.pool) {
+      if (isOutreachOutboundEnabled(slot.account)) continue;
+      const readiness = senderPoolState.readinessByAccountId.get(slot.account.id);
+      const fromEmail = getOutreachAccountFromEmail(slot.account).trim().toLowerCase();
+      if (!readiness) continue;
+      blockedBySenderId.set(slot.account.id, {
+        senderAccountId: slot.account.id,
+        senderAccountName: slot.account.name || fromEmail || "sender",
+        fromEmail,
+        readiness: withOutboundDisabledReadiness(readiness, fromEmail),
+      });
+    }
+  }
 
   const senderScorecards = senderPoolState.pool.length
     ? await scoreSenderPoolDeliverability({
-        brandId: run.brandId,
-        campaignId: run.campaignId,
+        brandId: effectiveRun.brandId,
+        campaignId: effectiveRun.campaignId,
         pool: senderPoolState.pool,
       })
     : [];
@@ -12229,8 +15525,8 @@ async function buildRunSenderRoutingContext(run: OutreachRun, input?: { preferre
   const senderUsage =
     senderPoolState.pool.length > 0
       ? await countBrandSenderUsage({
-          brandId: run.brandId,
-          timezone: run.timezone || DEFAULT_TIMEZONE,
+          brandId: effectiveRun.brandId,
+          timezone: effectiveRun.timezone || DEFAULT_TIMEZONE,
         })
       : {};
   const primarySender =
@@ -12238,14 +15534,17 @@ async function buildRunSenderRoutingContext(run: OutreachRun, input?: { preferre
       ? pickSenderForMessage({
           pool: dispatchPool,
           usage: senderUsage,
-          preferredAccountId: preferredAccountId || run.accountId,
+          preferredAccountId: preferredAccountId || currentSenderAccountId,
           routingSignalsBySenderId,
+          trafficLane,
         })?.slot ??
-        dispatchPool.find((slot) => slot.account.id === (preferredAccountId || run.accountId)) ??
+        dispatchPool.find((slot) => slot.account.id === (preferredAccountId || currentSenderAccountId)) ??
         dispatchPool[0]
       : null;
 
   return {
+    run: effectiveRun,
+    lockedSenderAccountId,
     businessWindow,
     senderPoolState,
     senderHealthState,
@@ -12255,6 +15554,7 @@ async function buildRunSenderRoutingContext(run: OutreachRun, input?: { preferre
     dispatchPool,
     senderUsage,
     primarySender,
+    trafficLane,
   };
 }
 
@@ -12265,10 +15565,17 @@ async function autoFailoverRunSender(input: {
   currentAccountId?: string;
   excludeCurrent?: boolean;
 }) {
-  const currentAccountId = String(input.currentAccountId ?? input.run.accountId).trim();
+  const currentAccountId = String(input.currentAccountId ?? effectiveRunSenderAccountId(input.run)).trim();
   const routingContext = await buildRunSenderRoutingContext(input.run, {
-    preferredAccountId: currentAccountId || input.run.accountId,
+    preferredAccountId: currentAccountId || effectiveRunSenderAccountId(input.run),
   });
+  if (routingContext.lockedSenderAccountId) {
+    return {
+      switched: false,
+      nextSender: null,
+      routingContext,
+    };
+  }
   const eligiblePool = input.excludeCurrent
     ? routingContext.dispatchPool.filter((slot) => slot.account.id !== currentAccountId)
     : routingContext.dispatchPool;
@@ -12277,8 +15584,9 @@ async function autoFailoverRunSender(input: {
       ? pickSenderForMessage({
           pool: eligiblePool,
           usage: routingContext.senderUsage,
-          preferredAccountId: currentAccountId || input.run.accountId,
+          preferredAccountId: currentAccountId || effectiveRunSenderAccountId(input.run),
           routingSignalsBySenderId: routingContext.routingSignalsBySenderId,
+          trafficLane: routingContext.trafficLane,
         })?.slot ??
         eligiblePool[0]
       : null;
@@ -12352,6 +15660,30 @@ async function processMonitorDeliverabilityJob(job: OutreachJob) {
     (requestedProbeRunId ? await getDeliverabilityProbeRun(requestedProbeRunId) : null) ||
     (probeToken ? await findDeliverabilityProbeRun({ runId: run.id, probeToken, probeVariant }) : null);
   const sourceMessageId = String(payload.sourceMessageId ?? "").trim();
+
+  if (stage === "send" && !isDeliverabilitySeedingEnabled()) {
+    if (probeRun) {
+      await updateDeliverabilityProbeRun(probeRun.id, {
+        status: "failed",
+        lastError: DELIVERABILITY_SEEDING_DISABLED_REASON,
+        completedAt: nowIso(),
+      });
+    }
+    await createOutreachEvent({
+      runId: run.id,
+      eventType: "deliverability_probe_disabled",
+      payload: {
+        reason: DELIVERABILITY_SEEDING_DISABLED_REASON,
+        jobId: job.id,
+        probeRunId: probeRun?.id ?? "",
+        probeToken,
+        probeVariant,
+        requestedSourceMessageId: sourceMessageId,
+      },
+    });
+    return;
+  }
+
   const referenceMessage = await resolveDeliverabilityProbeReferenceMessage({
     runId: run.id,
     sourceMessageId,
@@ -12373,7 +15705,11 @@ async function processMonitorDeliverabilityJob(job: OutreachJob) {
   const preferredSenderAccountId =
     String(payload.senderAccountId ?? "").trim() ||
     referenceMessage.senderAccountId ||
-    run.accountId;
+    effectiveRunSenderAccountId(run);
+  const strictSenderAccountId =
+    String(payload.senderAccountId ?? "").trim() ||
+    referenceMessage.senderAccountId ||
+    effectiveRunSenderAccountId(run);
   const runtimeExperiment = await getExperimentRecordByRuntimeRef(run.brandId, run.campaignId, run.experimentId);
   const businessWindow = businessWindowFromExperimentEnvelope(runtimeExperiment?.testEnvelope);
   const senderPoolState = await resolveSenderPoolForBrand({
@@ -12381,6 +15717,7 @@ async function processMonitorDeliverabilityJob(job: OutreachJob) {
     preferredAccountId: preferredSenderAccountId,
     timeZone: run.timezone || DEFAULT_TIMEZONE,
     businessWindow,
+    exactAccountId: strictSenderAccountId,
   });
   if (!senderPoolState.pool.length) {
     await createOutreachEvent({
@@ -12395,8 +15732,6 @@ async function processMonitorDeliverabilityJob(job: OutreachJob) {
     brandId: run.brandId,
     timezone: run.timezone || DEFAULT_TIMEZONE,
   });
-  const strictSenderAccountId =
-    String(payload.senderAccountId ?? "").trim() || referenceMessage.senderAccountId;
   const strictSenderSlot = strictSenderAccountId
     ? senderPoolState.pool.find((slot) => slot.account.id === strictSenderAccountId) ?? null
     : null;
@@ -12443,10 +15778,8 @@ async function processMonitorDeliverabilityJob(job: OutreachJob) {
   }
 
   const senderFromEmail = getOutreachAccountFromEmail(senderChoice.slot.account).trim();
-  const assignment = await getBrandOutreachAssignment(run.brandId);
-  const replyMailbox =
-    assignment?.mailboxAccountId ? await getOutreachAccount(assignment.mailboxAccountId) : null;
-  const replyToEmail = replyMailbox?.config.mailbox.email.trim() || senderFromEmail;
+  const replyMailbox = senderChoice.slot.mailboxAccount;
+  const replyToEmail = replyMailbox.config.mailbox.email.trim() || senderFromEmail;
   const brand = await getBrandById(run.brandId);
   const baselineProbe = buildDeliverabilityBaselineProbe({
     brandName: brand?.name || "",
@@ -12492,21 +15825,33 @@ async function processMonitorDeliverabilityJob(job: OutreachJob) {
       ? resolvedRequestedTargets
       : await resolveDeliverabilityMonitorTargets({
           runBrandId: run.brandId,
-          excludeAccountIds: [run.accountId, assignment?.mailboxAccountId ?? ""],
+          excludeAccountIds: [senderChoice.slot.account.id, replyMailbox.id],
           excludeEmails: [replyToEmail, senderFromEmail],
         });
+  if (stage === "send") {
+    await reconcileStaleDeliverabilitySeedReservationsForSender({
+      runId: run.id,
+      brandId: run.brandId,
+      senderAccountId: senderChoice.slot.account.id,
+      fromEmail: senderFromEmail,
+      contentHash,
+    });
+  }
   const blockedMonitorEmails = await listBlockedMonitorEmailsForSender({
     brandId: run.brandId,
     senderAccountId: senderChoice.slot.account.id,
     fromEmail: senderFromEmail,
     contentHash,
   });
-  const monitorTargets = candidateMonitorTargets.filter((target) => {
+  const unblockedMonitorTargets = candidateMonitorTargets.filter((target) => {
     const monitorEmail = target.account.config.mailbox.email.trim().toLowerCase();
     return !blockedMonitorEmails.has(monitorEmail);
   });
+  const monitorTargets = resolvedRequestedTargets.length
+    ? unblockedMonitorTargets
+    : unblockedMonitorTargets.slice(0, deliverabilityProbeMaxMonitors());
 
-  if (!monitorTargets.length) {
+  if (stage === "send" && !monitorTargets.length) {
     const monitorUnavailableReason = candidateMonitorTargets.length
       ? "No unused deliverability monitor mailbox remains for this sender"
       : "No dedicated deliverability monitor group is connected";
@@ -12553,6 +15898,7 @@ async function processMonitorDeliverabilityJob(job: OutreachJob) {
         subject,
         contentHash,
         lastError: monitorUnavailableReason,
+        completedAt: nowIso(),
       });
     } else {
       probeRun = await updateDeliverabilityProbeRun(probeRun.id, {
@@ -12565,6 +15911,7 @@ async function processMonitorDeliverabilityJob(job: OutreachJob) {
         subject,
         contentHash,
         lastError: monitorUnavailableReason,
+        completedAt: nowIso(),
       });
     }
     await createOutreachEvent({
@@ -12669,6 +16016,9 @@ async function processMonitorDeliverabilityJob(job: OutreachJob) {
 
     for (const { reservation, target: monitorTarget } of reservedMonitorTargets) {
       const monitorEmail = monitorTarget.account.config.mailbox.email.trim();
+      await updateDeliverabilitySeedReservations([reservation.id], {
+        releasedReason: DELIVERABILITY_SEND_ATTEMPT_STARTED_REASON,
+      });
       const send = await sendMonitoringProbeMessage({
         account: senderChoice.slot.account,
         secrets: senderChoice.slot.secrets,
@@ -12744,6 +16094,7 @@ async function processMonitorDeliverabilityJob(job: OutreachJob) {
           results: initialResults,
           totalMonitors: initialResults.length,
           lastError: "Monitoring probe send failed for every seed mailbox",
+          completedAt: nowIso(),
         });
       }
       await createOutreachEvent({
@@ -12873,6 +16224,10 @@ async function processMonitorDeliverabilityJob(job: OutreachJob) {
       fromEmail,
       subject,
       since: new Date(Date.now() - DAY_MS),
+      cleanup: {
+        archiveInboxHits: true,
+        moveSpamToInbox: true,
+      },
     });
 
     if (placement.ok && placement.placement === "not_found" && pollAttempt < 3) {
@@ -12891,6 +16246,7 @@ async function processMonitorDeliverabilityJob(job: OutreachJob) {
       matchedUid: placement.matchedUid,
       ok: placement.ok,
       error: placement.error,
+      cleanup: placement.cleanup,
     });
   }
 
@@ -13136,58 +16492,227 @@ async function processMonitorDeliverabilityJob(job: OutreachJob) {
   }
 }
 
-async function ensureActiveCampaignHoppers() {
+function isOutboundCoverageExperiment(input: {
+  experiment: Awaited<ReturnType<typeof listExperimentRecords>>[number];
+  campaignBySourceExperimentId: Map<string, ScaleCampaignRecord>;
+}) {
+  if (input.experiment.status !== "ready" && input.experiment.status !== "promoted") {
+    return false;
+  }
+  const linkedCampaign = input.campaignBySourceExperimentId.get(input.experiment.id) ?? null;
+  if (linkedCampaign) {
+    return resolveScaleCampaignLane(linkedCampaign) === "outbound";
+  }
+  return !isWarmupCampaignName(input.experiment.name);
+}
+
+async function ensureMissingOutboundCampaignCoverage(limit = 2) {
+  const brands = await listBrands();
+  let brandsChecked = 0;
+  let campaignsEnsured = 0;
+
+  for (const brand of brands) {
+    if (campaignsEnsured >= limit) {
+      break;
+    }
+
+    brandsChecked += 1;
+
+    try {
+      const [campaigns, experiments] = await Promise.all([
+        listScaleCampaignRecords(brand.id),
+        listExperimentRecords(brand.id),
+      ]);
+      const campaignBySourceExperimentId = new Map(
+        campaigns.map((campaign) => [campaign.sourceExperimentId, campaign] as const)
+      );
+      const liveOutboundCampaigns = campaigns.filter((campaign) => {
+        if (resolveScaleCampaignLane(campaign) !== "outbound") {
+          return false;
+        }
+        return campaign.status !== "completed" && campaign.status !== "archived";
+      });
+      if (liveOutboundCampaigns.length > 0) {
+        continue;
+      }
+
+      const targetExperiment = experiments.find((experiment) =>
+        isOutboundCoverageExperiment({
+          experiment,
+          campaignBySourceExperimentId,
+        })
+      );
+      if (!targetExperiment) {
+        continue;
+      }
+
+      const sender = await ensureBrandAccount(brand.id);
+      if (!sender.ok) {
+        continue;
+      }
+
+      let ensuredCampaign = await promoteExperimentRecordToCampaign({
+        brandId: brand.id,
+        experimentId: targetExperiment.id,
+      });
+      if (ensuredCampaign.status !== "active") {
+        ensuredCampaign =
+          (await updateScaleCampaignRecord(brand.id, ensuredCampaign.id, { status: "active" })) ??
+          ensuredCampaign;
+      }
+      campaignsEnsured += 1;
+    } catch (error) {
+      console.warn("[outreach] failed to ensure outbound campaign coverage", {
+        brandId: brand.id,
+        brandName: brand.name,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  return {
+    brandsChecked,
+    campaignsEnsured,
+  };
+}
+
+async function ensureActiveCampaignHoppers(limit = 2) {
+  const actionBudget = Math.max(1, Math.min(50, Math.round(Number(limit) || 0) || 2));
+  await ensureMissingOutboundCampaignCoverage(actionBudget);
+
   const brands = await listBrands();
   let campaignsEvaluated = 0;
   let campaignsLaunched = 0;
+  let campaignsRecovered = 0;
   let campaignsBlocked = 0;
 
   for (const brand of brands) {
+    if (campaignsLaunched + campaignsRecovered >= actionBudget) {
+      break;
+    }
     const campaigns = await listScaleCampaignRecords(brand.id);
-    for (const campaign of campaigns) {
-      if (campaign.status !== "active") continue;
-      campaignsEvaluated += 1;
-
-      const usage = await countOwnerSentUsage({
-        brandId: brand.id,
-        ownerType: "campaign",
-        ownerId: campaign.id,
-        timezone: campaign.scalePolicy.timezone || DEFAULT_TIMEZONE,
-      });
-      const openRun = usage.ownerRuns.find((run) => isRunOpen(run.status)) ?? null;
-      if (openRun) {
-        continue;
+    for (const existingCampaign of campaigns) {
+      if (campaignsLaunched + campaignsRecovered >= actionBudget) {
+        break;
       }
+      try {
+        const usage = await countOwnerSentUsage({
+          brandId: brand.id,
+          ownerType: "campaign",
+          ownerId: existingCampaign.id,
+          timezone: existingCampaign.scalePolicy.timezone || DEFAULT_TIMEZONE,
+        });
+        const latestRun = usage.ownerRuns[0] ?? null;
+        let campaign = existingCampaign;
+        const isSenderOwnedCampaign = isSenderOwnedScaleCampaignRecord(campaign);
+        const pinnedSenderSendable = isSenderOwnedCampaign
+          ? await isScaleCampaignPinnedSenderCurrentlySendable(campaign)
+          : true;
 
-      const latestRun = usage.ownerRuns[0] ?? null;
-      if (latestRun && ["failed", "preflight_failed", "paused"].includes(latestRun.status)) {
-        campaignsBlocked += 1;
-        continue;
-      }
-
-      const dailyTarget = Math.max(1, Number(campaign.scalePolicy.dailyCap || 30));
-      if (usage.dailySent >= dailyTarget) {
-        continue;
-      }
-
-      if (latestRun && latestRun.status === "completed" && latestRun.metrics.sentMessages === 0) {
-        const cooloffMs = Date.now() - toDate(latestRun.updatedAt).getTime();
-        if (cooloffMs < 30 * 60 * 1000) {
+        if (!pinnedSenderSendable) {
+          if (campaign.status === "active") {
+            await updateScaleCampaignRecord(brand.id, campaign.id, { status: "paused" });
+          }
           campaignsBlocked += 1;
           continue;
         }
-      }
 
-      const launch = await launchScaleCampaignRun({
-        brandId: brand.id,
-        scaleCampaignId: campaign.id,
-        trigger: "auto_hopper",
-      });
+        if (campaign.status !== "active") {
+          const campaignLane = resolveScaleCampaignLane(campaign);
+          const shouldAutoActivateSenderCampaign =
+            campaign.status === "paused" &&
+            campaignLane !== "warmup" &&
+            isSenderOwnedCampaign &&
+            Boolean(latestRun) &&
+            !isCampaignHopperRecoveryCoolingDown(latestRun!) &&
+            (isSenderCampaignPausedAutoResumable(latestRun!) ||
+              isSenderCampaignLaunchRetryable(latestRun!));
+          if (!shouldAutoActivateWarmupCampaign({ campaign, latestRun }) && !shouldAutoActivateSenderCampaign) {
+            continue;
+          }
+          campaign =
+            (await updateScaleCampaignRecord(brand.id, campaign.id, { status: "active" })) ?? campaign;
+        }
 
-      if (launch.ok) {
-        campaignsLaunched += 1;
-      } else {
+        campaignsEvaluated += 1;
+        const openRun = usage.ownerRuns.find((run) => isRunActivelyProcessing(run.status)) ?? null;
+        if (openRun) {
+          continue;
+        }
+
+        const refreshedLatestRun = usage.ownerRuns[0] ?? null;
+        if (refreshedLatestRun?.status === "paused") {
+          if (
+            !isCampaignHopperRecoveryCoolingDown(refreshedLatestRun) &&
+            ((resolveScaleCampaignLane(campaign) === "warmup" &&
+              isWarmupRunAutoResumable(refreshedLatestRun)) ||
+              (isSenderOwnedScaleCampaignRecord(campaign) &&
+                isSenderCampaignPausedAutoResumable(refreshedLatestRun)))
+          ) {
+            const resumed = await updateRunControl({
+              brandId: brand.id,
+              campaignId: refreshedLatestRun.campaignId,
+              runId: refreshedLatestRun.id,
+              action: "resume",
+            });
+            if (resumed.ok) {
+              campaignsRecovered += 1;
+              continue;
+            }
+          }
+          campaignsBlocked += 1;
+          continue;
+        }
+
+        if (
+          refreshedLatestRun &&
+          ["failed", "preflight_failed"].includes(refreshedLatestRun.status) &&
+          !(
+            isSenderOwnedScaleCampaignRecord(campaign) &&
+            isSenderCampaignLaunchRetryable(refreshedLatestRun) &&
+            !isCampaignHopperRecoveryCoolingDown(refreshedLatestRun)
+          )
+        ) {
+          campaignsBlocked += 1;
+          continue;
+        }
+
+        const dailyTarget = Math.max(1, Number(campaign.scalePolicy.dailyCap || 30));
+        if (usage.dailySent >= dailyTarget) {
+          continue;
+        }
+
+        if (
+          refreshedLatestRun &&
+          refreshedLatestRun.status === "completed" &&
+          refreshedLatestRun.metrics.sentMessages === 0
+        ) {
+          const cooloffMs = Date.now() - toDate(refreshedLatestRun.updatedAt).getTime();
+          if (cooloffMs < 30 * 60 * 1000) {
+            campaignsBlocked += 1;
+            continue;
+          }
+        }
+
+        const launch = await launchScaleCampaignRun({
+          brandId: brand.id,
+          scaleCampaignId: campaign.id,
+          trigger: "auto_hopper",
+        });
+
+        if (launch.ok) {
+          campaignsLaunched += 1;
+        } else {
+          campaignsBlocked += 1;
+        }
+      } catch (error) {
         campaignsBlocked += 1;
+        console.warn("[outreach] campaign hopper skipped campaign", {
+          brandId: brand.id,
+          campaignId: existingCampaign.id,
+          campaignName: existingCampaign.name,
+          error: error instanceof Error ? error.message : String(error),
+        });
       }
     }
   }
@@ -13195,8 +16720,18 @@ async function ensureActiveCampaignHoppers() {
   return {
     campaignsEvaluated,
     campaignsLaunched,
+    campaignsRecovered,
     campaignsBlocked,
   };
+}
+
+export async function runCampaignHopperTick(limit = 2): Promise<{
+  campaignsEvaluated: number;
+  campaignsLaunched: number;
+  campaignsRecovered: number;
+  campaignsBlocked: number;
+}> {
+  return ensureActiveCampaignHoppers(limit);
 }
 
 export async function autoQueueApprovedHypothesisRuns(input: {
@@ -13240,13 +16775,756 @@ export async function autoQueueApprovedHypothesisRuns(input: {
   }
 }
 
+function runtimeLeadInventoryTarget(run: OutreachRun, trafficLane: OutreachTrafficLane) {
+  if (trafficLane === "warmup") {
+    return MIN_WARMUP_CAMPAIGN_DAILY_CAP;
+  }
+  const explicitTarget = Math.round(Number(process.env.OUTREACH_RUN_LEAD_INVENTORY_TARGET ?? 0) || 0);
+  if (explicitTarget > 0) {
+    return Math.max(1, Math.min(500, explicitTarget));
+  }
+  const dailyCap = Math.max(1, Math.round(Number(run.dailyCap) || 30));
+  return Math.max(DEFAULT_EXPERIMENT_RUN_LEAD_TARGET, Math.min(500, dailyCap * 3));
+}
+
+function sourceTopUpAttempt(job: OutreachJob) {
+  return Math.max(0, Math.round(Number(job.payload?.sourceTopUpAttempt ?? 0) || 0));
+}
+
+function relaxedDynamicSourceQualityPolicy(policy: LeadQualityPolicy): LeadQualityPolicy {
+  return {
+    ...policy,
+    requireTitle: false,
+    requiredTitleKeywords: [],
+    requiredCompanyKeywords: [],
+    minConfidenceScore: Math.min(policy.minConfidenceScore || 0.58, 0.58),
+  };
+}
+
+async function topUpRunLeadsFromDynamicSourcing(input: {
+  job: OutreachJob;
+  run: OutreachRun;
+  targetLeadCount: number;
+  existingLeads: OutreachRunLead[];
+  trafficLane: OutreachTrafficLane;
+}) {
+  const deficit = Math.max(0, input.targetLeadCount - input.existingLeads.length);
+  if (deficit <= 0 || input.trafficLane !== "outbound") {
+    return {
+      leads: input.existingLeads,
+      attempted: false,
+      pending: false,
+      appendedCount: 0,
+      error: "",
+    };
+  }
+
+  const payload = asRecord(input.job.payload);
+  const resumeState = parseDeferredSourcingState(payload.resumeState);
+  const maxLeads = Math.max(
+    1,
+    Math.min(
+      500,
+      deficit,
+      OUTREACH_DYNAMIC_SOURCE_MAX_LEADS_PER_ATTEMPT,
+      Number(payload.maxLeadsOverride ?? input.targetLeadCount) || input.targetLeadCount
+    )
+  );
+  const existingEmails = new Set(input.existingLeads.map((lead) => lead.email.toLowerCase()));
+
+  const campaign = await getCampaignById(input.run.brandId, input.run.campaignId);
+  const hypothesis = campaign ? findHypothesis(campaign, input.run.hypothesisId) : null;
+  const experiment = campaign ? findExperiment(campaign, input.run.experimentId) : null;
+  if (!campaign || !hypothesis || !experiment) {
+    const error = !campaign ? "Campaign not found" : "Hypothesis or experiment missing";
+    await createOutreachEvent({
+      runId: input.run.id,
+      eventType: "lead_sourcing_dynamic_top_up_skipped",
+      payload: {
+        jobId: input.job.id,
+        reason: error,
+        targetLeadCount: input.targetLeadCount,
+        existingLeadCount: input.existingLeads.length,
+      },
+    });
+    return {
+      leads: input.existingLeads,
+      attempted: false,
+      pending: false,
+      appendedCount: 0,
+      error,
+    };
+  }
+
+  const runtimeExperiment = await getExperimentRecordByRuntimeRef(
+    input.run.brandId,
+    input.run.campaignId,
+    input.run.experimentId
+  );
+  const brand = await getBrandById(input.run.brandId);
+  const offerContext = runtimeExperiment?.offer?.trim() || experiment.notes || hypothesis.rationale || "";
+  const baseAudienceContext = buildSourcingAudienceContext({
+    runtimeAudience: runtimeExperiment?.audience ?? "",
+    hypothesisAudience: hypothesis.actorQuery,
+    experimentNotes: experiment.notes,
+  });
+  const audienceContext = await resolveSourcingAudienceContext({
+    base: baseAudienceContext,
+    brandName: brand?.name ?? "",
+    brandWebsite: brand?.website ?? "",
+    experimentName: runtimeExperiment?.name?.trim() || experiment.name,
+    offer: offerContext,
+    notes: [experiment.notes, hypothesis.rationale, runtimeExperiment?.audience ?? ""].filter(Boolean).join(" | "),
+  });
+  const targetAudience = audienceContext.targetAudience;
+  const triggerContext = audienceContext.triggerContext;
+  const exaApiKey = platformExaApiKey();
+  const dataForSeoCredentials = platformDataForSeoCredentials();
+
+  if (!targetAudience || !exaApiKey) {
+    const error = !targetAudience ? "Target Audience is empty for this hypothesis" : "EXA_API_KEY is missing";
+    await createOutreachEvent({
+      runId: input.run.id,
+      eventType: "lead_sourcing_dynamic_top_up_skipped",
+      payload: {
+        jobId: input.job.id,
+        reason: error,
+        targetLeadCount: input.targetLeadCount,
+        existingLeadCount: input.existingLeads.length,
+        audienceContext,
+      },
+    });
+    return {
+      leads: input.existingLeads,
+      attempted: false,
+      pending: false,
+      appendedCount: 0,
+      error,
+    };
+  }
+
+  let qualityPolicy: LeadQualityPolicy;
+  try {
+    qualityPolicy = await generateAdaptiveLeadQualityPolicy({
+      brandName: brand?.name ?? "",
+      brandWebsite: brand?.website ?? "",
+      targetAudience,
+      offer: offerContext,
+      experimentName: experiment.name ?? "",
+    });
+  } catch (error) {
+    const fallbackReason = error instanceof Error ? error.message : "quality_policy_failed";
+    qualityPolicy = buildFallbackLeadQualityPolicy({
+      brandWebsite: brand?.website ?? "",
+      targetAudience,
+      offer: offerContext,
+      experimentName: experiment.name ?? "",
+    });
+    qualityPolicy = relaxedDynamicSourceQualityPolicy(qualityPolicy);
+    await createOutreachEvent({
+      runId: input.run.id,
+      eventType: "lead_quality_policy_fallback",
+      payload: {
+        source: "dynamic_source_top_up",
+        reason: fallbackReason,
+        fallbackPolicy: qualityPolicy,
+      },
+    });
+  }
+
+  await createOutreachEvent({
+    runId: input.run.id,
+    eventType: "lead_sourcing_dynamic_top_up_requested",
+    payload: {
+      jobId: input.job.id,
+      targetLeadCount: input.targetLeadCount,
+      existingLeadCount: input.existingLeads.length,
+      deficit,
+      maxLeads,
+      audienceContext,
+      sourceAttempt: sourceTopUpAttempt(input.job),
+      resumeState: resumeState
+        ? {
+            phase: resumeState.phase,
+            pendingCount:
+              resumeState.phase === "waiting_dataforseo"
+                ? resumeState.pendingDataForSeoTasks.length
+                : Math.max(0, resumeState.rawLeads.length - resumeState.emailEnrichmentOffset),
+            emailEnrichmentOffset: resumeState.emailEnrichmentOffset,
+          }
+        : null,
+    },
+  });
+  await updateOutreachRun(input.run.id, {
+    status: input.run.status === "queued" ? "sourcing" : input.run.status,
+    lastError: "",
+    sourcingTraceSummary: {
+      phase: "probe_chain",
+      selectedActorIds: ["exa.people.search", "emailfinder.batch"],
+      lastActorInputError: "",
+      failureStep: "",
+      budgetUsedUsd: input.run.sourcingTraceSummary.budgetUsedUsd,
+    },
+  });
+
+  let exaSourcing: ExaPeopleSourcingResult;
+  const sourceController = new AbortController();
+  const sourceTimeout = setTimeout(() => {
+    sourceController.abort(
+      new Error(`Dynamic source top-up timed out after ${Math.round(OUTREACH_DYNAMIC_SOURCE_ATTEMPT_TIMEOUT_MS / 1000)}s`)
+    );
+  }, OUTREACH_DYNAMIC_SOURCE_ATTEMPT_TIMEOUT_MS);
+  try {
+    await createOutreachEvent({
+      runId: input.run.id,
+      eventType: "lead_sourcing_dynamic_top_up_source_started",
+      payload: {
+        jobId: input.job.id,
+        maxLeads,
+        timeoutSeconds: Math.round(OUTREACH_DYNAMIC_SOURCE_ATTEMPT_TIMEOUT_MS / 1000),
+        verificationMode: "local",
+      },
+    });
+    const sourceTask = sourceLeadsFromExa({
+      exaApiKey,
+      dataForSeoCredentials,
+      targetAudience,
+      triggerContext,
+      offer: offerContext,
+      qualityPolicy,
+      maxLeads,
+      allowMissingEmail: false,
+      emailFinderVerificationMode: "local",
+      resumeState,
+      candidateOffset:
+        resumeState?.phase === "email_enrichment"
+          ? resumeState.emailEnrichmentOffset
+          : 0,
+      sourceAttempt: sourceTopUpAttempt(input.job),
+      signal: sourceController.signal,
+    });
+    sourceTask.catch(() => null);
+    exaSourcing = await Promise.race([
+      sourceTask,
+      rejectAfterMs<ExaPeopleSourcingResult>(
+        OUTREACH_DYNAMIC_SOURCE_ATTEMPT_TIMEOUT_MS,
+        `Dynamic source top-up timed out after ${Math.round(OUTREACH_DYNAMIC_SOURCE_ATTEMPT_TIMEOUT_MS / 1000)}s`
+      ),
+    ]);
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : "exa_sourcing_failed";
+    await createOutreachEvent({
+      runId: input.run.id,
+      eventType: "lead_sourcing_dynamic_top_up_failed",
+      payload: {
+        jobId: input.job.id,
+        reason,
+        targetAudience,
+        triggerContext,
+        targetLeadCount: input.targetLeadCount,
+        existingLeadCount: input.existingLeads.length,
+      },
+    });
+    await updateOutreachRun(input.run.id, {
+      lastError: "",
+      sourcingTraceSummary: {
+        phase: "execute_chain",
+        selectedActorIds: ["exa.people.search", "emailfinder.batch"],
+        lastActorInputError: reason,
+        failureStep: "dynamic_source_top_up",
+        budgetUsedUsd: input.run.sourcingTraceSummary.budgetUsedUsd,
+      },
+    });
+    return {
+      leads: input.existingLeads,
+      attempted: true,
+      pending: false,
+      appendedCount: 0,
+      error: reason,
+    };
+  } finally {
+    clearTimeout(sourceTimeout);
+  }
+
+  if (exaSourcing.pendingDataForSeo?.pendingDataForSeoTasks?.length) {
+    const pendingCount = exaSourcing.pendingDataForSeo.pendingDataForSeoTasks.length;
+    await createOutreachEvent({
+      runId: input.run.id,
+      eventType: "lead_sourcing_waiting_dataforseo",
+      payload: {
+        source: "dynamic_source_top_up",
+        pendingCount,
+        nextPollSeconds: DATAFORSEO_ASYNC_REQUEUE_SECONDS,
+        maxPolls: DATAFORSEO_ASYNC_MAX_POLLS,
+      },
+    });
+    await enqueueOutreachJob({
+      runId: input.run.id,
+      jobType: "source_leads",
+      executeAfter: new Date(Date.now() + DATAFORSEO_ASYNC_REQUEUE_SECONDS * 1000).toISOString(),
+      payload: {
+        ...payload,
+        reason: "continue_dynamic_source_top_up",
+        sourceTopUpAttempt: sourceTopUpAttempt(input.job),
+        targetLeadCount: input.targetLeadCount,
+        currentLeadCount: input.existingLeads.length,
+        resumeState: exaSourcing.pendingDataForSeo,
+      },
+    });
+    await updateOutreachRun(input.run.id, {
+      status: input.existingLeads.length ? input.run.status : "sourcing",
+      lastError: "",
+      sourcingTraceSummary: {
+        phase: "probe_chain",
+        selectedActorIds: ["exa.people.search", "dataforseo.google.organic"],
+        lastActorInputError: `waiting_dataforseo:${pendingCount}`,
+        failureStep: "",
+        budgetUsedUsd: exaSourcing.budgetUsedUsd,
+      },
+    });
+    return {
+      leads: input.existingLeads,
+      attempted: true,
+      pending: true,
+      appendedCount: 0,
+      error: "",
+    };
+  }
+
+  const acceptedNewLeads = exaSourcing.acceptedLeads.filter(
+    (lead) => !existingEmails.has(lead.email.trim().toLowerCase())
+  );
+  await createOutreachEvent({
+    runId: input.run.id,
+    eventType: "lead_sourcing_dynamic_top_up_result",
+    payload: {
+      jobId: input.job.id,
+      strategy: "exa_people_dynamic_queries",
+      acceptedCount: exaSourcing.acceptedLeads.length,
+      acceptedNewCount: acceptedNewLeads.length,
+      rejectedCount: exaSourcing.rejectedLeads.length,
+      queryPlan: exaSourcing.queryPlan,
+      queryDiagnostics: exaSourcing.diagnostics,
+      emailEnrichment: exaSourcing.emailEnrichment,
+      topRejections: summarizeTopReasons(exaSourcing.rejectedLeads),
+      budgetUsedUsd: exaSourcing.budgetUsedUsd,
+    },
+  });
+
+  if (!acceptedNewLeads.length && exaSourcing.pendingEmailEnrichment?.phase === "email_enrichment") {
+    const remainingCandidates = Math.max(
+      0,
+      exaSourcing.pendingEmailEnrichment.rawLeads.length - exaSourcing.pendingEmailEnrichment.emailEnrichmentOffset
+    );
+    await createOutreachEvent({
+      runId: input.run.id,
+      eventType: "lead_sourcing_waiting_email_enrichment",
+      payload: {
+        source: "dynamic_source_top_up",
+        jobId: input.job.id,
+        nextPollSeconds: OUTREACH_DYNAMIC_EMAIL_ENRICHMENT_REQUEUE_SECONDS,
+        remainingCandidates,
+        emailEnrichmentOffset: exaSourcing.pendingEmailEnrichment.emailEnrichmentOffset,
+      },
+    });
+    await enqueueOutreachJob({
+      runId: input.run.id,
+      jobType: "source_leads",
+      executeAfter: new Date(Date.now() + OUTREACH_DYNAMIC_EMAIL_ENRICHMENT_REQUEUE_SECONDS * 1000).toISOString(),
+      payload: {
+        ...payload,
+        reason: "continue_dynamic_email_enrichment",
+        sourceTopUpAttempt: sourceTopUpAttempt(input.job),
+        targetLeadCount: input.targetLeadCount,
+        currentLeadCount: input.existingLeads.length,
+        resumeState: exaSourcing.pendingEmailEnrichment,
+      },
+    });
+    await updateOutreachRun(input.run.id, {
+      status: input.existingLeads.length ? input.run.status : "sourcing",
+      lastError: "",
+      sourcingTraceSummary: {
+        phase: "execute_chain",
+        selectedActorIds: ["exa.people.search", "emailfinder.batch"],
+        lastActorInputError: `waiting_email_enrichment:${remainingCandidates}`,
+        failureStep: "",
+        budgetUsedUsd: exaSourcing.budgetUsedUsd,
+      },
+    });
+    return {
+      leads: input.existingLeads,
+      attempted: true,
+      pending: true,
+      appendedCount: 0,
+      error: "",
+    };
+  }
+
+  if (!acceptedNewLeads.length) {
+    const error = "No new quality leads accepted from dynamic sourcing";
+    await updateOutreachRun(input.run.id, {
+      lastError: "",
+      sourcingTraceSummary: {
+        phase: "execute_chain",
+        selectedActorIds: ["exa.people.search", "emailfinder.batch"],
+        lastActorInputError: error,
+        failureStep: "dynamic_source_top_up",
+        budgetUsedUsd: exaSourcing.budgetUsedUsd,
+      },
+    });
+    return {
+      leads: input.existingLeads,
+      attempted: true,
+      pending: false,
+      appendedCount: 0,
+      error,
+    };
+  }
+
+  await finishSourcingWithLeads(input.run, acceptedNewLeads, {
+    allowMissingEmail: false,
+    qualityPolicy,
+    rejectedDecisions: exaSourcing.rejectedLeads,
+    emailEnrichment: exaSourcing.emailEnrichment,
+    failWhenEmpty: false,
+  });
+  const refreshedLeads = await listRunLeads(input.run.id);
+  const appendedCount = Math.max(0, refreshedLeads.length - input.existingLeads.length);
+  await createOutreachEvent({
+    runId: input.run.id,
+    eventType: "lead_sourcing_dynamic_top_up_completed",
+    payload: {
+      jobId: input.job.id,
+      targetLeadCount: input.targetLeadCount,
+      previousLeadCount: input.existingLeads.length,
+      currentLeadCount: refreshedLeads.length,
+      appendedCount,
+      budgetUsedUsd: exaSourcing.budgetUsedUsd,
+    },
+  });
+  await updateOutreachRun(input.run.id, {
+    lastError: "",
+    sourcingTraceSummary: {
+      phase: refreshedLeads.length >= input.targetLeadCount ? "completed" : "execute_chain",
+      selectedActorIds: ["exa.people.search", "emailfinder.batch"],
+      lastActorInputError: refreshedLeads.length >= input.targetLeadCount ? "" : "lead_inventory_target_not_met_yet",
+      failureStep: refreshedLeads.length >= input.targetLeadCount ? "" : "dynamic_source_top_up",
+      budgetUsedUsd: exaSourcing.budgetUsedUsd,
+    },
+  });
+
+  return {
+    leads: refreshedLeads,
+    attempted: true,
+    pending: false,
+    appendedCount,
+    error: "",
+  };
+}
+
+async function prepareRunOwnerLeadInventory(input: {
+  run: OutreachRun;
+  targetLeadCount: number;
+  existingLeadCount: number;
+  sourceAttempt: number;
+}) {
+  const deficit = Math.max(0, input.targetLeadCount - input.existingLeadCount);
+  if (deficit <= 0) {
+    return null;
+  }
+
+  const enrichAnythingRunTimeoutMs = resolveEnrichAnythingPrepRequestTimeoutMs();
+  const emailFinderTimeoutMs = Math.max(
+    30_000,
+    Math.min(75_000, Math.trunc(Number(process.env.OUTREACH_SOURCE_EMAIL_FINDER_TIMEOUT_MS ?? 45_000) || 45_000))
+  );
+  const maxCandidatesPerBatch = Math.max(
+    2,
+    Math.min(12, Math.trunc(Number(process.env.OUTREACH_SOURCE_IMPORT_MAX_CANDIDATES ?? 6) || 6))
+  );
+
+  if (input.run.ownerType === "experiment" && input.run.ownerId.trim()) {
+    const { prepareExperimentSendableContacts } = await import("@/lib/experiment-sendable-prep");
+    const prep = await prepareExperimentSendableContacts({
+      brandId: input.run.brandId,
+      experimentId: input.run.ownerId,
+      allowLiveTopUp: true,
+      backgroundMode: false,
+      maxLiveTopUpPasses: 1,
+      enrichAnythingRunTimeoutMs,
+      targetSendableContactsOverride: input.targetLeadCount,
+      emailFinderTimeoutMs,
+      emailFinderMaxCredits: 1,
+      emailFinderRetryOnFailure: false,
+      maxCandidatesPerBatch,
+      prepAttempt: input.sourceAttempt + 1,
+    });
+    return {
+      ownerType: "experiment",
+      targetCount: prep.targetCount,
+      sendableLeadCount: prep.sendableLeadCount,
+      sendableLeadRemaining: prep.sendableLeadRemaining,
+      liveTopUpAttempted: prep.liveTopUpAttempted,
+      liveTopUpAttempts: prep.liveTopUpAttempts,
+      liveTopUpRowsAppended: prep.liveTopUpRowsAppended,
+      liveTopUpStatus: prep.liveTopUpStatus,
+      liveTopUpError: prep.liveTopUpError,
+      importedCount: prep.importedCount,
+      storedLeadCount: prep.storedLeadCount,
+      storedForVerificationCount: prep.storedForVerificationCount,
+      queryExhausted: prep.queryExhausted,
+    };
+  }
+
+  if (input.run.ownerType === "campaign" && input.run.ownerId.trim()) {
+    const prep = await prepareScaleCampaignSendableContacts({
+      brandId: input.run.brandId,
+      campaignId: input.run.ownerId,
+      allowLiveTopUp: true,
+      backgroundMode: false,
+      maxLiveTopUpPasses: 1,
+      enrichAnythingRunTimeoutMs,
+    });
+    return {
+      ownerType: "campaign",
+      targetCount: prep.targetCount,
+      sendableLeadCount: prep.sendableLeadCount,
+      sendableLeadRemaining: prep.sendableLeadRemaining,
+      liveTopUpAttempted: prep.liveTopUpAttempted,
+      liveTopUpAttempts: prep.liveTopUpAttempts,
+      liveTopUpRowsAppended: prep.liveTopUpRowsAppended,
+      liveTopUpStatus: prep.liveTopUpStatus,
+      liveTopUpError: prep.liveTopUpError,
+      importedCount: prep.importedCount,
+      storedLeadCount: prep.storedLeadCount,
+      storedForVerificationCount: prep.storedForVerificationCount,
+      queryExhausted: prep.queryExhausted,
+    };
+  }
+
+  return null;
+}
+
 async function processSourceLeadsJob(job: OutreachJob) {
   const run = await getOutreachRun(job.runId);
   if (!run) return;
   if (!["queued", "sourcing", "scheduled", "sending", "monitoring"].includes(run.status)) {
     return;
   }
+  const { trafficLane } = await resolveRunLockedSenderContext(run);
+  const payload = asRecord(job.payload);
+  const explicitTargetLeadCount = Math.trunc(Number(payload.targetLeadCount ?? 0) || 0);
+  const targetLeadCount =
+    explicitTargetLeadCount > 0
+      ? Math.max(1, Math.min(500, explicitTargetLeadCount))
+      : runtimeLeadInventoryTarget(run, trafficLane);
+  let existingTableBackedLeads = await listRunLeads(run.id);
+  let liveTopUpError = "";
+  const resumeState = parseDeferredSourcingState(payload.resumeState);
+  const shouldAttemptOwnerLiveTopUp =
+    payload.skipOwnerLiveTopUp !== true && !resumeState && sourceTopUpAttempt(job) === 0 && job.attempts <= 1;
 
+  if (existingTableBackedLeads.length < targetLeadCount && shouldAttemptOwnerLiveTopUp) {
+    try {
+      const topUpTask = prepareRunOwnerLeadInventory({
+        run,
+        targetLeadCount,
+        existingLeadCount: existingTableBackedLeads.length,
+        sourceAttempt: sourceTopUpAttempt(job),
+      });
+      topUpTask.catch(() => null);
+      const topUp = await Promise.race([
+        topUpTask,
+        rejectAfterMs<Awaited<ReturnType<typeof prepareRunOwnerLeadInventory>>>(
+          OUTREACH_OWNER_LIVE_TOP_UP_TIMEOUT_MS,
+          `Owner lead inventory top-up timed out after ${OUTREACH_OWNER_LIVE_TOP_UP_TIMEOUT_MS}ms.`
+        ),
+      ]);
+      if (topUp) {
+        await createOutreachEvent({
+          runId: run.id,
+          eventType: "lead_sourcing_live_top_up",
+          payload: {
+            jobId: job.id,
+            targetLeadCount,
+            existingLeadCount: existingTableBackedLeads.length,
+            trafficLane,
+            ...topUp,
+          },
+        });
+      }
+    } catch (error) {
+      liveTopUpError = error instanceof Error ? error.message : "Live lead top-up failed.";
+      await createOutreachEvent({
+        runId: run.id,
+        eventType: "lead_sourcing_live_top_up_failed",
+        payload: {
+          jobId: job.id,
+          targetLeadCount,
+          existingLeadCount: existingTableBackedLeads.length,
+          trafficLane,
+          reason: liveTopUpError,
+        },
+      });
+    }
+  }
+
+  if (existingTableBackedLeads.length < targetLeadCount) {
+    const reusableOwnerLeads = await collectReusableLaunchSeedLeads({
+      brandId: run.brandId,
+      campaignId: run.campaignId,
+      experimentId: run.experimentId,
+      ownerType: run.ownerType,
+      ownerId: run.ownerId,
+      excludeRunId: run.id,
+      maxLeads: Math.max(1, Math.min(500, targetLeadCount - existingTableBackedLeads.length)),
+      trafficLane,
+      excludeSeedEmails: existingTableBackedLeads.map((lead) => lead.email),
+    });
+    if (reusableOwnerLeads.length) {
+      existingTableBackedLeads = await upsertRunLeads(
+        run.id,
+        run.brandId,
+        run.campaignId,
+        reusableOwnerLeads
+      );
+      await createOutreachEvent({
+        runId: run.id,
+        eventType: "lead_sourcing_seeded_from_owner",
+        payload: {
+          source: "source_leads_reusable_owner_inventory",
+          jobId: job.id,
+          count: reusableOwnerLeads.length,
+          trafficLane,
+        },
+      });
+    }
+  }
+  if (existingTableBackedLeads.length < targetLeadCount) {
+    const dynamicTopUp = await topUpRunLeadsFromDynamicSourcing({
+      job,
+      run,
+      targetLeadCount,
+      existingLeads: existingTableBackedLeads,
+      trafficLane,
+    });
+    existingTableBackedLeads = dynamicTopUp.leads;
+    if (dynamicTopUp.pending) {
+      return;
+    }
+    if (dynamicTopUp.error) {
+      liveTopUpError = liveTopUpError
+        ? `${liveTopUpError}; dynamic_top_up:${dynamicTopUp.error}`
+        : `dynamic_top_up:${dynamicTopUp.error}`;
+    }
+  }
+  if (existingTableBackedLeads.length) {
+    await createOutreachEvent({
+      runId: run.id,
+      eventType: "lead_sourcing_progress",
+      payload: {
+        reason: "enrichanything_inventory_top_up",
+        existingLeadCount: existingTableBackedLeads.length,
+        targetLeadCount,
+        liveTopUpError,
+        jobId: job.id,
+      },
+    });
+    await updateOutreachRun(run.id, {
+      status: run.status === "queued" || run.status === "sourcing" ? "scheduled" : run.status,
+      lastError: "",
+      metrics: {
+        ...run.metrics,
+        sourcedLeads: existingTableBackedLeads.length,
+      },
+      sourcingTraceSummary: {
+        phase: existingTableBackedLeads.length >= targetLeadCount ? "completed" : "execute_chain",
+        selectedActorIds: ["approved_owner_leads", "enrichanything.local_email_validation"],
+        lastActorInputError: liveTopUpError,
+        failureStep: liveTopUpError ? "live_top_up" : "",
+        budgetUsedUsd: 0,
+      },
+    });
+    await enqueueOutreachJob({
+      runId: run.id,
+      jobType: "schedule_messages",
+      executeAfter: nowIso(),
+      payload: {
+        reason:
+          existingTableBackedLeads.length >= targetLeadCount
+            ? "lead_inventory_target_ready"
+            : "lead_inventory_partial_ready",
+        targetLeadCount,
+        existingLeadCount: existingTableBackedLeads.length,
+      },
+    });
+    if (
+      existingTableBackedLeads.length < targetLeadCount &&
+      sourceTopUpAttempt(job) < OUTREACH_DYNAMIC_SOURCE_MAX_TOP_UP_ATTEMPTS
+    ) {
+      const dynamicOnlyRetry = liveTopUpError.startsWith("dynamic_top_up:");
+      await enqueueOutreachJob({
+        runId: run.id,
+        jobType: "source_leads",
+        executeAfter: dynamicOnlyRetry
+          ? addSeconds(nowIso(), OUTREACH_DYNAMIC_SOURCE_NO_PROGRESS_REQUEUE_SECONDS)
+          : addMinutes(nowIso(), liveTopUpError ? 15 : 5),
+        payload: {
+          reason: "continue_enrichanything_live_top_up",
+          sourceTopUpAttempt: sourceTopUpAttempt(job) + 1,
+          targetLeadCount,
+          currentLeadCount: existingTableBackedLeads.length,
+        },
+      });
+    }
+    return;
+  }
+  const nextSourceTopUpAttempt = sourceTopUpAttempt(job) + 1;
+  const retryAllowed = nextSourceTopUpAttempt < OUTREACH_DYNAMIC_SOURCE_MAX_TOP_UP_ATTEMPTS;
+  const noProgressReason = liveTopUpError || "No quality leads accepted from autonomous sourcing yet.";
+  await updateOutreachRun(run.id, {
+    status: run.status === "queued" ? "sourcing" : run.status,
+    lastError: noProgressReason,
+    sourcingTraceSummary: {
+      phase: "execute_chain",
+      selectedActorIds: ["exa.people.search", "emailfinder.batch"],
+      lastActorInputError: noProgressReason,
+      failureStep: "",
+      budgetUsedUsd: run.sourcingTraceSummary.budgetUsedUsd,
+    },
+  });
+  await createOutreachEvent({
+    runId: run.id,
+    eventType: retryAllowed ? "lead_sourcing_waiting_email_enrichment" : "lead_sourcing_no_progress",
+    payload: {
+      reason: "no_quality_leads_accepted",
+      jobId: job.id,
+      existingLeadCount: existingTableBackedLeads.length,
+      targetLeadCount,
+      liveTopUpError,
+      nextSourceTopUpAttempt: retryAllowed ? nextSourceTopUpAttempt : null,
+    },
+  });
+  if (retryAllowed) {
+    await enqueueOutreachJob({
+      runId: run.id,
+      jobType: "source_leads",
+      executeAfter: addSeconds(nowIso(), OUTREACH_DYNAMIC_SOURCE_NO_PROGRESS_REQUEUE_SECONDS),
+      payload: {
+        reason: "continue_dynamic_email_enrichment",
+        sourceTopUpAttempt: nextSourceTopUpAttempt,
+        targetLeadCount,
+        currentLeadCount: existingTableBackedLeads.length,
+        skipOwnerLiveTopUp: true,
+      },
+    });
+  }
+}
+
+async function processSourceLeadsJobLegacyDisabled(
+  job: OutreachJob,
+  run: NonNullable<Awaited<ReturnType<typeof getOutreachRun>>>
+) {
   let existingLeads = await listRunLeads(run.id);
   if (!existingLeads.length) {
     const ownerRuns = await listOwnerRuns(run.brandId, run.ownerType, run.ownerId);
@@ -13308,8 +17586,9 @@ async function processSourceLeadsJob(job: OutreachJob) {
   }
   const activeExperiment = experiment;
 
-  const account = await getOutreachAccount(run.accountId);
-  const secrets = await getOutreachAccountSecrets(run.accountId);
+  const senderAccountId = effectiveRunSenderAccountId(run);
+  const account = await getOutreachAccount(senderAccountId);
+  const secrets = await getOutreachAccountSecrets(senderAccountId);
   if (!account || !secrets) {
     await failRunWithDiagnostics({
       run,
@@ -13528,14 +17807,7 @@ async function processSourceLeadsJob(job: OutreachJob) {
       qualityPolicy,
       maxLeads,
       allowMissingEmail: sampleOnly,
-      emailFinderApiBaseUrl: resolveEmailFinderApiBaseUrl(),
-      emailFinderVerificationMode: "validatedmails",
-      emailFinderValidatedMailsApiKey: String(
-        process.env.EMAIL_FINDER_VALIDATEDMAILS_API_KEY ??
-          process.env.ENRICHANYTHING_VALIDATEDMAILS_API_KEY ??
-          process.env.VALIDATEDMAILS_API_KEY ??
-          ""
-      ).trim(),
+      emailFinderVerificationMode: "local",
       resumeState,
     });
   } catch (error) {
@@ -13877,6 +18149,7 @@ async function finishSourcingWithLeads(
     rejectedDecisions?: LeadAcceptanceDecision[];
     decision?: SourcingChainDecision | null;
     emailEnrichment?: ExaPeopleSourcingResult["emailEnrichment"] | null;
+    failWhenEmpty?: boolean;
   } = {}
 ) {
   const runtimeExperiment = await getExperimentRecordByRuntimeRef(
@@ -14004,21 +18277,30 @@ async function finishSourcingWithLeads(
   }
 
   if (!filteredLeads.length) {
+    const emptyPayload = {
+      sourcedCount: leads.length,
+      blockedCount: leads.length,
+      suppressionCounts,
+      topPolicyRejections: summarizeTopReasons(policyRejections),
+      decisionId: options.decision?.id ?? "",
+      verificationUnavailable,
+      emailEnrichmentError,
+    };
+    if (options.failWhenEmpty === false) {
+      await createOutreachEvent({
+        runId: run.id,
+        eventType: "lead_sourcing_empty",
+        payload: emptyPayload,
+      });
+      return;
+    }
     await failRunWithDiagnostics({
       run,
       reason: verificationUnavailable
         ? "Email verification unavailable; no leads could be verified"
         : "All sourced leads were suppressed by quality/duplicate rules",
       eventType: "lead_sourcing_failed",
-      payload: {
-        sourcedCount: leads.length,
-        blockedCount: leads.length,
-        suppressionCounts,
-        topPolicyRejections: summarizeTopReasons(policyRejections),
-        decisionId: options.decision?.id ?? "",
-        verificationUnavailable,
-        emailEnrichmentError,
-      },
+      payload: emptyPayload,
     });
     return;
   }
@@ -14034,10 +18316,23 @@ async function finishSourcingWithLeads(
       title: lead.title,
       domain: lead.domain,
       sourceUrl: lead.sourceUrl,
+      realVerifiedEmail: lead.realVerifiedEmail === true,
+      emailVerification: lead.emailVerification ?? null,
     }))
   );
 
   if (!upserted.length) {
+    if (options.failWhenEmpty === false) {
+      await createOutreachEvent({
+        runId: run.id,
+        eventType: "lead_sourcing_empty",
+        payload: {
+          reason: "Lead persistence returned 0 stored leads",
+          attempted: filteredLeads.length,
+        },
+      });
+      return;
+    }
     await failRunWithDiagnostics({
       run,
       reason: "Lead persistence failed (0 leads stored)",
@@ -14090,6 +18385,11 @@ async function processScheduleMessagesJob(job: OutreachJob) {
   const run = await getOutreachRun(job.runId);
   if (!run) return;
   if (["paused", "completed", "canceled", "failed", "preflight_failed"].includes(run.status)) return;
+  const runLane = (await resolveRunLockedSenderContext(run)).trafficLane;
+  if (runLane !== "warmup" && !isOutboundSendingEnabled()) {
+    await pauseRunForOutboundSendingDisabled(run);
+    return;
+  }
 
   const existingMessages = await listRunMessages(run.id);
 
@@ -14115,26 +18415,77 @@ async function processScheduleMessagesJob(job: OutreachJob) {
     return;
   }
   const runtimeExperiment = await getExperimentRecordByRuntimeRef(run.brandId, run.campaignId, run.experimentId);
-  const businessWindow = businessWindowFromExperimentEnvelope(runtimeExperiment?.testEnvelope);
   const routingPreview = await buildRunSenderRoutingContext(run);
+  if (routingPreview.trafficLane === "outbound" && !routingPreview.dispatchPool.length) {
+    const blockedSenders = Array.from(routingPreview.blockedBySenderId.values());
+    const pauseSummary = buildSenderPoolUnavailableSummary(blockedSenders);
+    await updateOutreachRun(run.id, {
+      status: "paused",
+      pauseReason: pauseSummary.summary,
+      lastError: pauseSummary.summary,
+    });
+    await markExperimentExecutionStatus(run.brandId, run.campaignId, run.experimentId, "paused");
+    await createOutreachEvent({
+      runId: run.id,
+      eventType: "run_paused_auto",
+      payload: {
+        reason: pauseSummary.reason,
+        summary: pauseSummary.summary,
+        source: "schedule_sender_outbound_gate",
+      },
+    });
+    return;
+  }
+  const businessWindow =
+    routingPreview.trafficLane === "warmup" && isWarmupVerificationWindowEnabled()
+      ? { ...DEFAULT_BUSINESS_WINDOW, enabled: false }
+      : effectiveBusinessWindowPolicy(
+          businessWindowFromExperimentEnvelope(runtimeExperiment?.testEnvelope),
+          routingPreview.trafficLane
+        );
   const launchParallelism = Math.max(
     1,
     routingPreview.dispatchPool.length || routingPreview.senderPoolState.pool.length || 1
   );
   const effectiveSpacingMinutes =
-    run.minSpacingMinutes <= 0 ? 0 : Math.max(1, Math.floor(run.minSpacingMinutes / launchParallelism));
+    routingPreview.trafficLane === "warmup" && isWarmupVerificationWindowEnabled()
+      ? 0
+      : run.minSpacingMinutes <= 0
+        ? 0
+        : Math.max(1, Math.floor(run.minSpacingMinutes / launchParallelism));
   const parsedOffer = parseOfferAndCta(runtimeExperiment?.offer ?? "");
   const experimentOffer = parsedOffer.offer || runtimeExperiment?.offer || "";
   const experimentCta = parsedOffer.cta;
   const experimentAudience = runtimeExperiment?.audience || hypothesis.actorQuery;
 
-  const leads = await listRunLeads(run.id);
+  const allLeads = await listRunLeads(run.id);
+  const invalidLeads = allLeads.filter((lead) => !isLeadSendableForTrafficLane(lead, routingPreview.trafficLane));
+  if (invalidLeads.length) {
+    await Promise.all(
+      invalidLeads
+        .filter((lead) => lead.status === "new")
+        .map((lead) => updateRunLead(lead.id, { status: "suppressed" }))
+    );
+    await createOutreachEvent({
+      runId: run.id,
+      eventType: "lead_sendability_filtered",
+      payload: {
+        blockedCount: invalidLeads.length,
+        sample: invalidLeads.slice(0, 5).map((lead) => ({
+          email: lead.email,
+          domain: lead.domain,
+          sourceUrl: lead.sourceUrl,
+        })),
+      },
+    });
+  }
+  const leads = allLeads.filter((lead) => !invalidLeads.some((blocked) => blocked.id === lead.id));
   if (!leads.length) {
     await failRunWithDiagnostics({
       run,
-      reason: "No leads sourced",
+      reason: "No sendable leads sourced",
       eventType: "schedule_failed",
-      payload: { sourcedLeads: run.metrics.sourcedLeads },
+      payload: { sourcedLeads: run.metrics.sourcedLeads, blockedBySendabilityGate: invalidLeads.length },
     });
     return;
   }
@@ -14158,6 +18509,13 @@ async function processScheduleMessagesJob(job: OutreachJob) {
     const existingConversationMessages = existingMessages;
     const campaignGoal = campaign.objective.goal.trim();
     const brandName = brand?.name ?? "";
+    const conversationGenerationSignature = buildConversationGenerationSignature({
+      mapId: flowMap.id,
+      mapRevision: flowMap.publishedRevision,
+      campaignGoal,
+      experimentOffer,
+      experimentAudience,
+    });
 
     let firstScheduleFailureReason = "";
     for (const [index, lead] of leads.entries()) {
@@ -14242,6 +18600,9 @@ async function processScheduleMessagesJob(job: OutreachJob) {
         experimentAudience,
         experimentNotes: experiment.notes ?? "",
         maxDepth: graph.maxDepth,
+        mapId: flowMap.id,
+        mapRevision: flowMap.publishedRevision,
+        generationSignature: conversationGenerationSignature,
         waitMinutes: index * effectiveSpacingMinutes,
         businessWindow,
         existingMessages: existingConversationMessages,
@@ -14273,6 +18634,25 @@ async function processScheduleMessagesJob(job: OutreachJob) {
     ).length;
 
     if (scheduledMessagesCount === 0 && totalSchedulableMessages === 0) {
+      if (firstScheduleFailureReason && isLlmProviderUnavailableError(firstScheduleFailureReason)) {
+        await updateOutreachRun(run.id, {
+          status: "paused",
+          pauseReason: firstScheduleFailureReason,
+          lastError: firstScheduleFailureReason,
+        });
+        await markExperimentExecutionStatus(run.brandId, run.campaignId, run.experimentId, "paused");
+        await createOutreachEvent({
+          runId: run.id,
+          eventType: "run_paused_auto",
+          payload: {
+            reason: "llm_provider_unavailable",
+            summary: firstScheduleFailureReason,
+            source: "schedule_message_generation",
+          },
+        });
+        return;
+      }
+
       await failRunWithDiagnostics({
         run,
         reason:
@@ -14312,28 +18692,62 @@ async function processScheduleMessagesJob(job: OutreachJob) {
     return;
   }
 
-  const { threads } = await listReplyThreadsByBrand(run.brandId);
-  await updateOutreachRun(run.id, {
-    status: "scheduled",
-    metrics: buildLiveRunMetrics({
-      run,
-      messages: existingMessages,
-      threads,
-      sourcedLeads: leads.length,
-    }),
-  });
-  await maybeQueueScheduledDeliverabilityProbe(run);
-  await markExperimentExecutionStatus(run.brandId, run.campaignId, run.experimentId, "scheduled");
-  await enqueueOutreachJob({ runId: run.id, jobType: "dispatch_messages", executeAfter: nowIso() });
-  if (hasConversationMap) {
-    await enqueueOutreachJob({
-      runId: run.id,
-      jobType: "conversation_tick",
-      executeAfter: addMinutes(nowIso(), CONVERSATION_TICK_MINUTES),
+  let finalizationPhase = "load_threads";
+  try {
+    const { threads } = await listReplyThreadsByBrand(run.brandId);
+    finalizationPhase = "load_scheduled_messages";
+    const scheduledMessages = await listRunMessages(run.id);
+    if (routingPreview.trafficLane === "warmup") {
+      finalizationPhase = "align_warmup_seed_reservations";
+      const senderAccount = await getOutreachAccount(run.accountId);
+      const senderFromEmail = senderAccount ? getOutreachAccountFromEmail(senderAccount).trim().toLowerCase() : "";
+      await alignWarmupSeedReservationsToScheduledMessages({
+        run,
+        fromEmail: senderFromEmail,
+        leads,
+        messages: scheduledMessages,
+      });
+    }
+    finalizationPhase = "update_run_status";
+    await updateOutreachRun(run.id, {
+      status: "scheduled",
+      metrics: buildLiveRunMetrics({
+        run,
+        messages: scheduledMessages,
+        threads,
+        sourcedLeads: leads.length,
+      }),
     });
+    finalizationPhase = "queue_dispatch";
+    await enqueueOutreachJob({ runId: run.id, jobType: "dispatch_messages", executeAfter: nowIso() });
+    finalizationPhase = "mark_experiment_scheduled";
+    await markExperimentExecutionStatus(run.brandId, run.campaignId, run.experimentId, "scheduled");
+
+    try {
+      await maybeQueueScheduledDeliverabilityProbe(run);
+    } catch (error) {
+      await recordDeliverabilityProbeQueueFailure({
+        runId: run.id,
+        stage: "schedule",
+        error,
+      });
+    }
+
+    if (hasConversationMap) {
+      finalizationPhase = "queue_conversation_tick";
+      await enqueueOutreachJob({
+        runId: run.id,
+        jobType: "conversation_tick",
+        executeAfter: addMinutes(nowIso(), CONVERSATION_TICK_MINUTES),
+      });
+    }
+    finalizationPhase = "queue_analyze_run";
+    await enqueueOutreachJob({ runId: run.id, jobType: "analyze_run", executeAfter: addHours(nowIso(), 1) });
+    finalizationPhase = "queue_sync_replies";
+    await enqueueOutreachJob({ runId: run.id, jobType: "sync_replies", executeAfter: addHours(nowIso(), 1) });
+  } catch (error) {
+    throw contextualizeJobError("schedule_messages", finalizationPhase, error);
   }
-  await enqueueOutreachJob({ runId: run.id, jobType: "analyze_run", executeAfter: addHours(nowIso(), 1) });
-  await enqueueOutreachJob({ runId: run.id, jobType: "sync_replies", executeAfter: addHours(nowIso(), 1) });
 }
 
 function nextDispatchTime(messages: Awaited<ReturnType<typeof listRunMessages>>) {
@@ -14344,13 +18758,19 @@ function nextDispatchTime(messages: Awaited<ReturnType<typeof listRunMessages>>)
 }
 
 async function processDispatchMessagesJob(job: OutreachJob) {
-  const run = await getOutreachRun(job.runId);
+  let run = await getOutreachRun(job.runId);
   if (!run) return;
   if (["paused", "completed", "canceled", "failed", "preflight_failed"].includes(run.status)) {
     return;
   }
+  const runLane = (await resolveRunLockedSenderContext(run)).trafficLane;
+  if (runLane !== "warmup" && !isOutboundSendingEnabled()) {
+    await pauseRunForOutboundSendingDisabled(run);
+    return;
+  }
 
   const routingContext = await buildRunSenderRoutingContext(run);
+  run = routingContext.run;
   const {
     businessWindow,
     senderPoolState,
@@ -14359,7 +18779,44 @@ async function processDispatchMessagesJob(job: OutreachJob) {
     dispatchPool,
     senderUsage,
   } = routingContext;
+  const effectiveBusinessWindow = effectiveBusinessWindowPolicy(
+    businessWindow,
+    routingContext.trafficLane
+  );
   if (!senderPoolState.pool.length) {
+    const blockedSenders = Array.from(blockedBySenderId.values());
+    if (blockedSenders.length > 0) {
+      const pauseSummary = buildSenderPoolUnavailableSummary(blockedSenders);
+      await updateOutreachRun(run.id, {
+        status: "paused",
+        pauseReason: pauseSummary.summary,
+        lastError: pauseSummary.summary,
+      });
+      await markExperimentExecutionStatus(run.brandId, run.campaignId, run.experimentId, "paused");
+      await createOutreachEvent({
+        runId: run.id,
+        eventType: "run_paused_auto",
+        payload: {
+          reason: pauseSummary.reason,
+          summary: pauseSummary.summary,
+          blockedSenders: blockedSenders.map((entry) => ({
+            senderAccountId: entry.senderAccountId,
+            senderAccountName: entry.senderAccountName,
+            fromEmail: entry.fromEmail,
+            primaryBlockingReason: entry.readiness.primaryBlockingReason,
+          })),
+        },
+      });
+      await queueRunAutoRecoveryAnalysis(run, {
+        reason: pauseSummary.reason,
+        blockedSenders: blockedSenders.map((entry) => ({
+          senderAccountId: entry.senderAccountId,
+          fromEmail: entry.fromEmail,
+          primaryBlockingReason: entry.readiness.primaryBlockingReason,
+        })),
+      });
+      return;
+    }
     await failRunWithDiagnostics({
       run,
       reason: "No active sender accounts with delivery credentials are assigned to this brand",
@@ -14407,67 +18864,185 @@ async function processDispatchMessagesJob(job: OutreachJob) {
       primarySender = failover.nextSender;
     }
   }
-  const assignment = await getBrandOutreachAssignment(run.brandId);
-  const mailboxAccountId = String(assignment?.mailboxAccountId ?? "").trim();
-  if (!mailboxAccountId) {
-    await failRunWithDiagnostics({
-      run,
-      reason: "Reply mailbox assignment is required for sending",
-      eventType: "dispatch_failed",
-    });
-    return;
-  }
-  const mailboxAccount =
-    mailboxAccountId === primarySender.account.id
-      ? primarySender.account
-      : await getOutreachAccount(mailboxAccountId);
-  if (!mailboxAccount || mailboxAccount.status !== "active") {
-    await failRunWithDiagnostics({
-      run,
-      reason: "Assigned reply mailbox account is missing or inactive",
-      eventType: "dispatch_failed",
-    });
-    return;
-  }
-  const replyToEmail = mailboxAccount.config.mailbox.email.trim();
-  if (!replyToEmail) {
-    await failRunWithDiagnostics({
-      run,
-      reason: "Assigned reply mailbox email is empty",
-      eventType: "dispatch_failed",
-    });
-    return;
-  }
 
   await updateOutreachRun(run.id, { status: "sending" });
   await markExperimentExecutionStatus(run.brandId, run.campaignId, run.experimentId, "sending");
 
-  const messages = await listRunMessages(run.id);
-  const leads = await listRunLeads(run.id);
-  if (!isInsideBusinessWindow(new Date(), run.timezone || DEFAULT_TIMEZONE, businessWindow)) {
-    const resumeAt = nextBusinessWindowCheckIso(new Date(), run.timezone || DEFAULT_TIMEZONE, businessWindow);
-    await createOutreachEvent({
-      runId: run.id,
-      eventType: "dispatch_waiting_business_hours",
-      payload: {
-        timezone: run.timezone || DEFAULT_TIMEZONE,
-        businessHoursEnabled: businessWindow.enabled,
-        businessHoursStartHour: businessWindow.startHour,
-        businessHoursEndHour: businessWindow.endHour,
-        businessDays: businessWindow.days,
-        resumeAt,
-      },
+  let messages = await listRunMessages(run.id);
+  let leads = await listRunLeads(run.id);
+  const warmupSeedReservationsByEmail =
+    routingContext.trafficLane === "warmup"
+      ? new Map(
+          (
+            await listWarmupSeedReservations({
+              runId: run.id,
+              statuses: ["reserved"],
+            })
+          ).map((reservation) => [reservation.monitorEmail, reservation] as const)
+        )
+      : new Map<string, WarmupSeedReservation>();
+  const releaseWarmupReservationForLead = async (
+    lead: OutreachRunLead | null | undefined,
+    releasedReason: string,
+    patch: Partial<
+      Pick<WarmupSeedReservation, "providerMessageId" | "consumedAt" | "releasedAt">
+    > = {}
+  ) => {
+    if (routingContext.trafficLane !== "warmup" || !lead || !isWarmupSeedLead(lead)) {
+      return;
+    }
+    const warmupTarget = readWarmupSeedLeadTarget(lead);
+    if (!warmupTarget) return;
+    const reservation = warmupSeedReservationsByEmail.get(warmupTarget.email) ?? null;
+    if (!reservation) return;
+    await updateWarmupSeedReservations([reservation.id], {
+      status: "released",
+      releasedReason,
+      releasedAt: patch.releasedAt ?? nowIso(),
+      consumedAt: patch.consumedAt,
+      providerMessageId: patch.providerMessageId,
     });
-    await enqueueOutreachJob({
-      runId: run.id,
-      jobType: "dispatch_messages",
-      executeAfter: resumeAt,
-    });
-    return;
+    warmupSeedReservationsByEmail.delete(warmupTarget.email);
+  };
+  const findLeadForMessage = (message: Awaited<ReturnType<typeof listRunMessages>>[number]) =>
+    leads.find((item) => item.id === message.leadId);
+  const hasWarmupReservationForMessage = (
+    message: Awaited<ReturnType<typeof listRunMessages>>[number]
+  ) => {
+    const lead = findLeadForMessage(message);
+    if (!lead || !isWarmupSeedLead(lead)) return true;
+    const warmupTarget = readWarmupSeedLeadTarget(lead);
+    if (!warmupTarget) return true;
+    return warmupSeedReservationsByEmail.has(warmupTarget.email);
+  };
+  const nextReservedWarmupDispatchAt = () => {
+    if (routingContext.trafficLane !== "warmup") return "";
+    return (
+      messages
+        .filter((message) => message.status === "scheduled" && hasWarmupReservationForMessage(message))
+        .sort((left, right) => (left.scheduledAt < right.scheduledAt ? -1 : 1))[0]?.scheduledAt ?? ""
+    );
+  };
+  const computeDueState = () => {
+    const nextReservedAt = nextReservedWarmupDispatchAt();
+    const dueMessages = messages.filter(
+      (message) => message.status === "scheduled" && toDate(message.scheduledAt).getTime() <= Date.now()
+    );
+    const dispatchableMessages =
+      routingContext.trafficLane === "warmup"
+        ? dueMessages.filter((message) => hasWarmupReservationForMessage(message))
+        : dueMessages;
+    return {
+      dueMessages,
+      dispatchableMessages,
+      nextReservedAt,
+    };
+  };
+  if (routingContext.trafficLane === "warmup") {
+    let mutatedDueMessages = false;
+    const initialDue = messages.filter(
+      (message) => message.status === "scheduled" && toDate(message.scheduledAt).getTime() <= Date.now()
+    );
+    for (const message of initialDue) {
+      const lead = findLeadForMessage(message);
+      if (!lead || !lead.email) {
+        await updateRunMessage(message.id, {
+          status: "failed",
+          lastError: "Lead email missing",
+        });
+        await releaseWarmupReservationForLead(lead, "warmup_message_missing_email");
+        mutatedDueMessages = true;
+        continue;
+      }
+      if (isWarmupSeedLead(lead)) {
+        const warmupTarget = readWarmupSeedLeadTarget(lead);
+        if (!warmupTarget) {
+          const reasonText = "Lead blocked: invalid warmup seed target";
+          await updateRunMessage(message.id, {
+            status: "canceled",
+            lastError: reasonText,
+          });
+          await createOutreachEvent({
+            runId: run.id,
+            eventType: "lead_suppressed_before_send",
+            payload: {
+              reason: reasonText,
+              email: lead.email,
+              messageId: message.id,
+              sourceUrl: lead.sourceUrl,
+            },
+          });
+          mutatedDueMessages = true;
+          continue;
+        }
+      }
+      const suppressionReason = getLeadEmailSuppressionReasonForTrafficLane(
+        lead,
+        routingContext.trafficLane
+      );
+      if (suppressionReason) {
+        const reasonText =
+          suppressionReason === "role_account"
+            ? "Lead blocked: role-based inbox"
+            : suppressionReason === "placeholder_domain"
+              ? "Lead blocked: placeholder/test domain"
+              : "Lead blocked: invalid email";
+        await updateRunMessage(message.id, {
+          status: "canceled",
+          lastError: reasonText,
+        });
+        await updateRunLead(lead.id, { status: "suppressed" });
+        await releaseWarmupReservationForLead(lead, "warmup_message_suppressed");
+        await createOutreachEvent({
+          runId: run.id,
+          eventType: "lead_suppressed_before_send",
+          payload: {
+            reason: reasonText,
+            suppressionReason,
+            email: lead.email,
+            messageId: message.id,
+          },
+        });
+        mutatedDueMessages = true;
+        continue;
+      }
+      if (!isLeadSendableForTrafficLane(lead, routingContext.trafficLane)) {
+        await updateRunMessage(message.id, {
+          status: "canceled",
+          lastError: "Lead blocked: sendability gate failed before send",
+        });
+        await updateRunLead(lead.id, { status: "suppressed" });
+        await releaseWarmupReservationForLead(lead, "warmup_message_sendability_failed");
+        await createOutreachEvent({
+          runId: run.id,
+          eventType: "lead_suppressed_before_send",
+          payload: {
+            reason: "Lead blocked: sendability gate failed before send",
+            email: lead.email,
+            messageId: message.id,
+            verification: lead.emailVerification ?? null,
+            realVerifiedEmail: lead.realVerifiedEmail === true,
+          },
+        });
+        mutatedDueMessages = true;
+        continue;
+      }
+      if (["unsubscribed", "bounced", "suppressed"].includes(lead.status)) {
+        await updateRunMessage(message.id, {
+          status: "canceled",
+          lastError: `Lead blocked by suppression status: ${lead.status}`,
+        });
+        await releaseWarmupReservationForLead(lead, "warmup_message_lead_status_blocked");
+        mutatedDueMessages = true;
+      }
+    }
+    if (mutatedDueMessages) {
+      messages = await listRunMessages(run.id);
+      leads = await listRunLeads(run.id);
+    }
   }
-  const due = messages.filter(
-    (message) => message.status === "scheduled" && toDate(message.scheduledAt).getTime() <= Date.now()
-  );
+  const { dueMessages: due, dispatchableMessages: dispatchableDue, nextReservedAt } =
+    computeDueState();
   if (!due.length) {
     const nextAt = nextDispatchTime(messages);
     if (nextAt) {
@@ -14479,21 +19054,62 @@ async function processDispatchMessagesJob(job: OutreachJob) {
       status: "monitoring",
     });
     await markExperimentExecutionStatus(run.brandId, run.campaignId, run.experimentId, "monitoring");
+    if (routingContext.trafficLane === "warmup") {
+      await releaseWarmupSeedReservationsForRun(run.id, "warmup_dispatch_completed");
+    }
     await enqueueOutreachJob({ runId: run.id, jobType: "analyze_run", executeAfter: addHours(nowIso(), 1) });
     return;
   }
+  if (routingContext.trafficLane === "warmup" && !dispatchableDue.length) {
+    if (warmupSeedReservationsByEmail.size > 0 && nextReservedAt) {
+      const nextReservedAtMs = toDate(nextReservedAt).getTime();
+      await updateOutreachRun(run.id, {
+        status: "scheduled",
+        pauseReason: "",
+        lastError: "",
+      });
+      await markExperimentExecutionStatus(run.brandId, run.campaignId, run.experimentId, "scheduled");
+      await enqueueOutreachJob({
+        runId: run.id,
+        jobType: "dispatch_messages",
+        executeAfter: nextReservedAtMs <= Date.now() ? nowIso() : nextReservedAt,
+        payload: {
+          source: "warmup_reserved_seed_wait",
+          dueCount: due.length,
+          reservedSeedCount: warmupSeedReservationsByEmail.size,
+          nextReservedAt,
+        },
+      });
+      return;
+    }
+    const reason = warmupSeedCapacityPauseReason();
+    await updateOutreachRun(run.id, {
+      status: "paused",
+      pauseReason: reason,
+      lastError: reason,
+    });
+    await markExperimentExecutionStatus(run.brandId, run.campaignId, run.experimentId, "paused");
+    await createOutreachEvent({
+      runId: run.id,
+      eventType: "run_paused_auto",
+      payload: {
+        reason: "warmup_seed_capacity",
+        summary: reason,
+        scheduledMessages: due.length,
+        reservedSeedCount: warmupSeedReservationsByEmail.size,
+      },
+    });
+    return;
+  }
 
-  const ownerUsage =
-    run.ownerType === "campaign"
-      ? await countOwnerSentUsage({
-          brandId: run.brandId,
-          ownerType: "campaign",
-          ownerId: run.ownerId,
-          timezone: run.timezone || DEFAULT_TIMEZONE,
-          currentRunId: run.id,
-          currentRunMessages: messages,
-        })
-      : null;
+  const ownerUsage = await countOwnerSentUsage({
+    brandId: run.brandId,
+    ownerType: run.ownerType,
+    ownerId: run.ownerId,
+    timezone: run.timezone || DEFAULT_TIMEZONE,
+    currentRunId: run.id,
+    currentRunMessages: messages,
+  });
   const hourlySent =
     ownerUsage?.hourlySent ??
     messages.filter(
@@ -14511,44 +19127,90 @@ async function processDispatchMessagesJob(job: OutreachJob) {
         message.sentAt &&
         timeZoneDateKey(toDate(message.sentAt), run.timezone || DEFAULT_TIMEZONE) === runDayKey
     ).length;
+  const effectiveRunPolicy = resolveRunDispatchPolicy({
+    run,
+    trafficLane: routingContext.trafficLane,
+    launchedAt: ownerUsage?.launchedAt ?? run.createdAt,
+    businessHoursPerDay: businessWindowHours(effectiveBusinessWindow),
+  });
 
   const senderHourlySlots = dispatchPool.reduce((total, slot) => {
-    const usage = senderUsage[slot.account.id] ?? { dailySent: 0, hourlySent: 0 };
-    return total + Math.max(0, slot.policy.hourlyCap - usage.hourlySent);
+    const usage = senderUsageForLane(senderUsage[slot.account.id], routingContext.trafficLane);
+    const laneCapacity = senderLaneCapacityForSlot(slot, routingContext.trafficLane);
+    return total + Math.max(0, laneCapacity.hourlyCap - usage.hourlySent);
   }, 0);
   const senderDailySlots = dispatchPool.reduce((total, slot) => {
-    const usage = senderUsage[slot.account.id] ?? { dailySent: 0, hourlySent: 0 };
-    return total + Math.max(0, slot.policy.dailyCap - usage.dailySent);
+    const usage = senderUsageForLane(senderUsage[slot.account.id], routingContext.trafficLane);
+    const laneCapacity = senderLaneCapacityForSlot(slot, routingContext.trafficLane);
+    return total + Math.max(0, laneCapacity.dailyCap - usage.dailySent);
   }, 0);
-  const hourlySlots =
-    run.ownerType === "campaign"
-      ? Math.max(0, Math.min(run.hourlyCap - hourlySent, senderHourlySlots))
-      : Math.max(0, senderHourlySlots);
-  const dailySlots =
-    run.ownerType === "campaign"
-      ? Math.max(0, Math.min(run.dailyCap - dailySent, senderDailySlots))
-      : Math.max(0, senderDailySlots);
+  const hourlySlots = Math.max(0, Math.min(effectiveRunPolicy.hourlyCap - hourlySent, senderHourlySlots));
+  const dailySlots = Math.max(0, Math.min(effectiveRunPolicy.dailyCap - dailySent, senderDailySlots));
   const available = Math.max(0, Math.min(hourlySlots, dailySlots));
 
   if (available <= 0) {
+    const nextRetryAt = nextDispatchCapacityRetryAt({
+      sentTimestamps: ownerUsage?.sentTimestamps ?? [],
+      timeZone: run.timezone || DEFAULT_TIMEZONE,
+      businessWindow: effectiveBusinessWindow,
+      dailyCap: effectiveRunPolicy.dailyCap,
+      hourlyCap: effectiveRunPolicy.hourlyCap,
+    });
     await enqueueOutreachJob({
       runId: run.id,
       jobType: "dispatch_messages",
-      executeAfter: addHours(nowIso(), 1),
+      executeAfter: nextRetryAt,
+      payload: {
+        source: "dispatch_capacity_retry",
+        available,
+        ownerHourlySent: hourlySent,
+        ownerDailySent: dailySent,
+        senderHourlySlots,
+        senderDailySlots,
+      },
     });
     return;
   }
 
-  for (const message of due.slice(0, available)) {
+  for (const message of dispatchableDue.slice(0, available)) {
     const lead = leads.find((item) => item.id === message.leadId);
     if (!lead || !lead.email) {
       await updateRunMessage(message.id, {
         status: "failed",
         lastError: "Lead email missing",
       });
+      await releaseWarmupReservationForLead(lead, "warmup_message_missing_email");
       continue;
     }
-    const suppressionReason = getLeadEmailSuppressionReason(lead.email);
+    if (routingContext.trafficLane === "warmup" && isWarmupSeedLead(lead)) {
+      const warmupTarget = readWarmupSeedLeadTarget(lead);
+      if (!warmupTarget) {
+        const reasonText = "Lead blocked: invalid warmup seed target";
+        await updateRunMessage(message.id, {
+          status: "canceled",
+          lastError: reasonText,
+        });
+        await createOutreachEvent({
+          runId: run.id,
+          eventType: "lead_suppressed_before_send",
+          payload: {
+            reason: reasonText,
+            email: lead.email,
+            messageId: message.id,
+            sourceUrl: lead.sourceUrl,
+          },
+        });
+        continue;
+      }
+      const reservation = warmupSeedReservationsByEmail.get(warmupTarget.email) ?? null;
+      if (!reservation) {
+        continue;
+      }
+    }
+    const suppressionReason = getLeadEmailSuppressionReasonForTrafficLane(
+      lead,
+      routingContext.trafficLane
+    );
     if (suppressionReason) {
       const reasonText =
         suppressionReason === "role_account"
@@ -14561,6 +19223,7 @@ async function processDispatchMessagesJob(job: OutreachJob) {
         lastError: reasonText,
       });
       await updateRunLead(lead.id, { status: "suppressed" });
+      await releaseWarmupReservationForLead(lead, "warmup_message_suppressed");
       await createOutreachEvent({
         runId: run.id,
         eventType: "lead_suppressed_before_send",
@@ -14573,11 +19236,32 @@ async function processDispatchMessagesJob(job: OutreachJob) {
       });
       continue;
     }
+    if (!isLeadSendableForTrafficLane(lead, routingContext.trafficLane)) {
+      await updateRunMessage(message.id, {
+        status: "canceled",
+        lastError: "Lead blocked: sendability gate failed before send",
+      });
+      await updateRunLead(lead.id, { status: "suppressed" });
+      await releaseWarmupReservationForLead(lead, "warmup_message_sendability_failed");
+      await createOutreachEvent({
+        runId: run.id,
+        eventType: "lead_suppressed_before_send",
+        payload: {
+          reason: "Lead blocked: sendability gate failed before send",
+          email: lead.email,
+          messageId: message.id,
+          verification: lead.emailVerification ?? null,
+          realVerifiedEmail: lead.realVerifiedEmail === true,
+        },
+      });
+      continue;
+    }
     if (["unsubscribed", "bounced", "suppressed"].includes(lead.status)) {
       await updateRunMessage(message.id, {
         status: "canceled",
         lastError: `Lead blocked by suppression status: ${lead.status}`,
       });
+      await releaseWarmupReservationForLead(lead, "warmup_message_lead_status_blocked");
       continue;
     }
 
@@ -14586,17 +19270,52 @@ async function processDispatchMessagesJob(job: OutreachJob) {
       usage: senderUsage,
       preferredAccountId: primarySender.account.id,
       routingSignalsBySenderId,
+      trafficLane: routingContext.trafficLane,
     });
     if (!senderChoice) {
+      const nextRetryAt = nextDispatchCapacityRetryAt({
+        sentTimestamps: ownerUsage?.sentTimestamps ?? [],
+        timeZone: run.timezone || DEFAULT_TIMEZONE,
+        businessWindow: effectiveBusinessWindow,
+        dailyCap: effectiveRunPolicy.dailyCap,
+        hourlyCap: effectiveRunPolicy.hourlyCap,
+      });
       await enqueueOutreachJob({
         runId: run.id,
         jobType: "dispatch_messages",
-        executeAfter: addHours(nowIso(), 1),
+        executeAfter: nextRetryAt,
+        payload: {
+          source: "dispatch_sender_retry",
+          senderAccountId: primarySender.account.id,
+        },
       });
       return;
     }
     let account = senderChoice.slot.account;
     const secrets = senderChoice.slot.secrets;
+    const replyMailbox = senderChoice.slot.mailboxAccount;
+    const replyToEmail = replyMailbox.config.mailbox.email.trim();
+    if (!replyToEmail) {
+      await updateRunMessage(message.id, {
+        status: "failed",
+        lastError: "Assigned reply mailbox email is empty",
+      });
+      await releaseWarmupReservationForLead(lead, "warmup_message_reply_mailbox_missing");
+      await createOutreachEvent({
+        runId: run.id,
+        eventType: "dispatch_failed",
+        payload: {
+          accountId: account.id,
+          fromEmail: getOutreachAccountFromEmail(account).trim(),
+          messageId: message.id,
+          sourceType: message.sourceType,
+          nodeId: message.nodeId,
+          sessionId: message.sessionId,
+          error: "Assigned reply mailbox email is empty",
+        },
+      });
+      continue;
+    }
     if (account.provider === "customerio") {
       const budgetAdmission = await admitCustomerIoProfileForSend({
         account,
@@ -14613,6 +19332,7 @@ async function processDispatchMessagesJob(job: OutreachJob) {
           pauseReason,
           lastError: pauseReason,
         });
+        await releaseWarmupReservationForLead(lead, "warmup_run_paused_customerio_budget");
         await markExperimentExecutionStatus(run.brandId, run.campaignId, run.experimentId, "paused");
         await createOutreachEvent({
           runId: run.id,
@@ -14660,10 +19380,22 @@ async function processDispatchMessagesJob(job: OutreachJob) {
         lastError: "",
         generationMeta: nextGenerationMeta,
       });
+      await releaseWarmupReservationForLead(lead, "warmup_message_sent", {
+        providerMessageId: send.providerMessageId,
+        consumedAt: sentAt,
+        releasedAt: sentAt,
+      });
       await updateRunLead(lead.id, { status: "sent" });
-      const usage = senderUsage[account.id] ?? { dailySent: 0, hourlySent: 0 };
+      const usage = senderUsage[account.id] ?? emptySenderUsageCounters();
       usage.dailySent += 1;
       usage.hourlySent += 1;
+      if (routingContext.trafficLane === "warmup") {
+        usage.warmupDailySent += 1;
+        usage.warmupHourlySent += 1;
+      } else {
+        usage.outboundDailySent += 1;
+        usage.outboundHourlySent += 1;
+      }
       senderUsage[account.id] = usage;
       await createOutreachEvent({
         runId: run.id,
@@ -14677,17 +19409,28 @@ async function processDispatchMessagesJob(job: OutreachJob) {
           sessionId: message.sessionId,
         },
       });
-      await maybeQueueAutomaticDeliverabilityProbe(run, {
-        message: {
-          ...message,
-          status: "sent",
-          sentAt,
-          generationMeta: nextGenerationMeta,
-        },
-        senderAccountId: account.id,
-        senderAccountName: account.name,
-        senderFromEmail: getOutreachAccountFromEmail(account).trim(),
-      });
+      try {
+        await maybeQueueAutomaticDeliverabilityProbe(run, {
+          message: {
+            ...message,
+            status: "sent",
+            sentAt,
+            generationMeta: nextGenerationMeta,
+          },
+          senderAccountId: account.id,
+          senderAccountName: account.name,
+          senderFromEmail: getOutreachAccountFromEmail(account).trim(),
+        });
+      } catch (error) {
+        await recordDeliverabilityProbeQueueFailure({
+          runId: run.id,
+          stage: "send",
+          sourceMessageId: message.id,
+          sourceType: message.sourceType,
+          nodeId: message.nodeId,
+          error,
+        });
+      }
     } else {
       const nextGenerationMeta = {
         ...message.generationMeta,
@@ -14701,6 +19444,7 @@ async function processDispatchMessagesJob(job: OutreachJob) {
         lastError: send.error,
         generationMeta: nextGenerationMeta,
       });
+      await releaseWarmupReservationForLead(lead, "warmup_message_failed");
       await createOutreachEvent({
         runId: run.id,
         eventType: "dispatch_failed",
@@ -14730,6 +19474,40 @@ async function processDispatchMessagesJob(job: OutreachJob) {
     }),
   });
 
+  if (routingContext.trafficLane === "warmup") {
+    const remainingWarmupReservations = await listWarmupSeedReservations({
+      runId: run.id,
+      statuses: ["reserved"],
+    });
+    const leadById = new Map(leads.map((lead) => [lead.id, lead] as const));
+    const remainingScheduledMessages = refreshedMessages.filter((message) => message.status === "scheduled").length;
+    const remainingScheduledSeedMessages = refreshedMessages.filter((message) => {
+      if (message.status !== "scheduled") return false;
+      const lead = leadById.get(message.leadId) ?? null;
+      return Boolean(lead && isWarmupSeedLead(lead));
+    }).length;
+    if (remainingScheduledSeedMessages > 0 && remainingWarmupReservations.length === 0) {
+      const reason = warmupSeedCapacityPauseReason();
+      await updateOutreachRun(run.id, {
+        status: "paused",
+        pauseReason: reason,
+        lastError: reason,
+      });
+      await markExperimentExecutionStatus(run.brandId, run.campaignId, run.experimentId, "paused");
+      await createOutreachEvent({
+        runId: run.id,
+        eventType: "run_paused_auto",
+        payload: {
+          reason: "warmup_seed_capacity",
+          summary: reason,
+          scheduledMessages: remainingScheduledSeedMessages,
+          reservedSeedCount: 0,
+        },
+      });
+      return;
+    }
+  }
+
   const nextAt = nextDispatchTime(refreshedMessages);
   if (nextAt) {
     await enqueueOutreachJob({ runId: run.id, jobType: "dispatch_messages", executeAfter: nextAt });
@@ -14738,6 +19516,9 @@ async function processDispatchMessagesJob(job: OutreachJob) {
       status: "monitoring",
     });
     await markExperimentExecutionStatus(run.brandId, run.campaignId, run.experimentId, "monitoring");
+    if (routingContext.trafficLane === "warmup") {
+      await releaseWarmupSeedReservationsForRun(run.id, "warmup_dispatch_completed");
+    }
     await enqueueOutreachJob({ runId: run.id, jobType: "analyze_run", executeAfter: addHours(nowIso(), 1) });
   }
 }
@@ -14795,6 +19576,13 @@ async function processConversationTickJob(job: OutreachJob) {
   const experimentOffer = parsedOffer.offer || runtimeExperiment?.offer || "";
   const experimentCta = parsedOffer.cta;
   const experimentAudience = runtimeExperiment?.audience || hypothesis?.actorQuery || "";
+  const conversationGenerationSignature = buildConversationGenerationSignature({
+    mapId: map.id,
+    mapRevision: map.publishedRevision,
+    campaignGoal,
+    experimentOffer,
+    experimentAudience,
+  });
 
   let scheduledCount = 0;
   let completedCount = 0;
@@ -14937,6 +19725,9 @@ async function processConversationTickJob(job: OutreachJob) {
       experimentNotes: variant?.notes ?? "",
       threadHistory,
       maxDepth: graph.maxDepth,
+      mapId: map.id,
+      mapRevision: map.publishedRevision,
+      generationSignature: conversationGenerationSignature,
       waitMinutes:
         Math.max(0, Number(timerEdge.waitMinutes ?? 0) || 0) > 0
           ? 0
@@ -14970,7 +19761,15 @@ async function processConversationTickJob(job: OutreachJob) {
   }
 
   if (scheduledCount > 0) {
-    await maybeQueueScheduledDeliverabilityProbe(run);
+    try {
+      await maybeQueueScheduledDeliverabilityProbe(run);
+    } catch (error) {
+      await recordDeliverabilityProbeQueueFailure({
+        runId: run.id,
+        stage: "schedule",
+        error,
+      });
+    }
     const { threads } = await listReplyThreadsByBrand(run.brandId);
     await updateOutreachRun(run.id, {
       metrics: buildLiveRunMetrics({
@@ -15020,8 +19819,207 @@ function contextualizeJobError(operation: string, phase: string, error: unknown)
   return next;
 }
 
-async function processAnalyzeRunJob(job: OutreachJob) {
+function summarizeUnknownOutreachError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error ?? "Unknown error");
+  const stack =
+    error instanceof Error && typeof error.stack === "string"
+      ? error.stack
+          .split("\n")
+          .slice(0, 12)
+          .join("\n")
+      : "";
+  return { message, stack };
+}
+
+async function recordDeliverabilityProbeQueueFailure(input: {
+  runId: string;
+  stage: "schedule" | "send";
+  sourceMessageId?: string;
+  sourceType?: string;
+  nodeId?: string;
+  error: unknown;
+}) {
+  const { message, stack } = summarizeUnknownOutreachError(input.error);
+  await createOutreachEvent({
+    runId: input.runId,
+    eventType: "deliverability_probe_failed",
+    payload: {
+      reason: message,
+      stack,
+      triggerStage: input.stage,
+      sourceMessageId: String(input.sourceMessageId ?? "").trim(),
+      sourceType: String(input.sourceType ?? "").trim(),
+      nodeId: String(input.nodeId ?? "").trim(),
+    },
+  }).catch(() => undefined);
+  console.error("[outreach] deliverability probe queue failed", {
+    runId: input.runId,
+    triggerStage: input.stage,
+    sourceMessageId: String(input.sourceMessageId ?? "").trim(),
+    error: message,
+  });
+}
+
+const NON_PROVIDER_ERROR_PATTERNS = [
+  /gmail ui delivery is only available in the local operator runtime/i,
+  /lead email missing/i,
+  /lead blocked:/i,
+  /suppression status/i,
+];
+const PROVIDER_ERROR_RATE_THRESHOLD = 0.2;
+const PROVIDER_ERROR_RATE_MIN_ATTEMPTS = 5;
+const PROVIDER_ERROR_RATE_MIN_FAILURES = 3;
+const PROVIDER_ERROR_RATE_LOOKBACK_MS = 6 * 60 * 60 * 1000;
+const AUTO_PAUSE_RECOVERY_RETRY_MINUTES = 30;
+
+function countsTowardProviderErrorRate(lastError: string) {
+  const normalized = lastError.trim();
+  if (!normalized) return true;
+  return !NON_PROVIDER_ERROR_PATTERNS.some((pattern) => pattern.test(normalized));
+}
+
+function messageActivityAtMs(message: Pick<OutreachMessage, "updatedAt" | "sentAt" | "scheduledAt" | "createdAt">) {
+  const reference =
+    String(message.updatedAt || "").trim() ||
+    String(message.sentAt || "").trim() ||
+    String(message.scheduledAt || "").trim() ||
+    String(message.createdAt || "").trim();
+  return toDate(reference).getTime();
+}
+
+function calculateProviderErrorMetrics(
+  messages: Awaited<ReturnType<typeof listRunMessages>>,
+  options: { lookbackMs?: number } = {}
+) {
+  const lookbackMs = Math.max(0, Math.round(Number(options.lookbackMs ?? PROVIDER_ERROR_RATE_LOOKBACK_MS) || 0));
+  const windowStartMs = lookbackMs > 0 ? Date.now() - lookbackMs : 0;
+  const attemptedMessages = messages.filter((message) => {
+    if (!["sent", "failed", "bounced"].includes(message.status)) return false;
+    if (lookbackMs <= 0) return true;
+    return messageActivityAtMs(message) >= windowStartMs;
+  });
+  const providerErrorCount = attemptedMessages.filter(
+    (message) =>
+      message.status === "failed" &&
+      countsTowardProviderErrorRate(String(message.lastError ?? ""))
+  ).length;
+  const delivered = attemptedMessages.filter((message) => ["sent", "bounced"].includes(message.status)).length;
+  const attempted = delivered + providerErrorCount;
+  const providerErrorRate = attempted > 0 ? providerErrorCount / attempted : 0;
+  return {
+    providerErrorCount,
+    delivered,
+    attempted,
+    providerErrorRate,
+  };
+}
+
+function shouldPauseForProviderError(metrics: {
+  providerErrorCount: number;
+  attempted: number;
+  providerErrorRate: number;
+}) {
+  return (
+    metrics.attempted >= PROVIDER_ERROR_RATE_MIN_ATTEMPTS &&
+    metrics.providerErrorCount >= PROVIDER_ERROR_RATE_MIN_FAILURES &&
+    metrics.providerErrorRate > PROVIDER_ERROR_RATE_THRESHOLD
+  );
+}
+
+function activeRunAnomalies(anomalies: RunAnomaly[]) {
+  return anomalies.filter((anomaly) => anomaly.status === "active");
+}
+
+function activeRunAnomalyIdsByType(anomalies: RunAnomaly[], types: RunAnomaly["type"][]) {
+  return activeRunAnomalies(anomalies)
+    .filter((anomaly) => types.includes(anomaly.type))
+    .map((anomaly) => anomaly.id);
+}
+
+function isPausedRunAutoRecoveryEligible(
+  run: Pick<OutreachRun, "status" | "pauseReason" | "lastError">,
+  anomalies: RunAnomaly[]
+) {
+  if (run.status !== "paused") return false;
+  const issue = campaignHopperIssueText(run);
+  if (issue.includes("paused by user") || issue.includes("canceled by user")) {
+    return false;
+  }
+  const active = activeRunAnomalies(anomalies);
+  if (active.length > 0) {
+    return active.every((anomaly) => anomaly.type === "provider_error_rate");
+  }
+  return isRecoverableSenderCampaignIssue(run);
+}
+
+function nextAutoPauseRecoveryAt(run: Pick<OutreachRun, "createdAt" | "updatedAt">) {
+  const referenceAt = String(run.updatedAt || run.createdAt).trim() || run.createdAt;
+  const executeAfterMs =
+    toDate(referenceAt).getTime() + AUTO_PAUSE_RECOVERY_RETRY_MINUTES * 60 * 1000;
+  return executeAfterMs <= Date.now() ? nowIso() : new Date(executeAfterMs).toISOString();
+}
+
+async function queueRunAutoRecoveryAnalysis(
+  run: Pick<OutreachRun, "id" | "createdAt" | "updatedAt">,
+  payload: Record<string, unknown>
+) {
+  if (
+    await hasActiveRunJob({
+      runId: run.id,
+      jobType: "analyze_run",
+    })
+  ) {
+    return false;
+  }
+
+  const executeAfter = nextAutoPauseRecoveryAt(run);
+  await enqueueOutreachJob({
+    runId: run.id,
+    jobType: "analyze_run",
+    executeAfter,
+    payload: {
+      source: "pause_recovery",
+      ...payload,
+    },
+  });
+  await createOutreachEvent({
+    runId: run.id,
+    eventType: "run_pause_recovery_queued",
+    payload: {
+      executeAfter,
+      ...payload,
+    },
+  });
+  return true;
+}
+
+async function jobRequiresLocalOperatorRuntime(job: OutreachJob) {
+  if (!["dispatch_messages", "monitor_deliverability"].includes(job.jobType)) {
+    return false;
+  }
+
   const run = await getOutreachRun(job.runId);
+  if (!run) return false;
+  const account = await getOutreachAccount(effectiveRunSenderAccountId(run));
+  if (!account) return false;
+  if (!(account.provider === "mailpool" && account.config.mailbox.deliveryMethod === "gmail_ui")) {
+    return false;
+  }
+  if (process.env.VERCEL && hasGmailUiWorkerConfig()) {
+    return false;
+  }
+  return true;
+}
+
+async function canCurrentRuntimeProcessJob(job: OutreachJob) {
+  if (!process.env.VERCEL) {
+    return true;
+  }
+  return !(await jobRequiresLocalOperatorRuntime(job));
+}
+
+async function processAnalyzeRunJob(job: OutreachJob) {
+  let run = await getOutreachRun(job.runId);
   if (!run) return;
   if (["canceled", "completed", "failed", "preflight_failed"].includes(run.status)) return;
 
@@ -15029,15 +20027,29 @@ async function processAnalyzeRunJob(job: OutreachJob) {
   try {
     await maybeRefreshDeliverabilityIntelligence(run);
 
+    phase = "load_run_state";
+    const [messages, leads, anomalies, replyThreadState] = await Promise.all([
+      listRunMessages(run.id),
+      listRunLeads(run.id),
+      listRunAnomalies(run.id),
+      listReplyThreadsByBrand(run.brandId),
+    ]);
+    const { threads } = replyThreadState;
+    const runWasPaused = run.status === "paused";
+    const pausedRecoveryEligible = isPausedRunAutoRecoveryEligible(run, anomalies);
+    if (runWasPaused && !pausedRecoveryEligible) {
+      return;
+    }
+    const providerErrorMetrics = calculateProviderErrorMetrics(messages);
+    const providerErrorAnomalyIds = activeRunAnomalyIdsByType(anomalies, ["provider_error_rate"]);
+    let providerErrorAnomaliesResolved = false;
+
     phase = "load_sender_account";
+    const routingContext = await buildRunSenderRoutingContext(run);
+    run = routingContext.run;
     const senderAccount = await getOutreachAccount(run.accountId);
     const senderFromEmail = getOutreachAccountFromEmail(senderAccount).trim().toLowerCase();
-    const senderPoolState = await resolveSenderPoolForBrand({
-      brandId: run.brandId,
-      preferredAccountId: run.accountId,
-      timeZone: run.timezone || DEFAULT_TIMEZONE,
-      businessWindow: businessWindowFromExperimentEnvelope(null),
-    });
+    const senderPoolState = routingContext.senderPoolState;
     const currentSenderReadiness = senderPoolState.readinessByAccountId.get(run.accountId) ?? null;
     if (currentSenderReadiness && !currentSenderReadiness.canSendNow) {
       phase = "pause_for_sender_unavailability";
@@ -15074,60 +20086,31 @@ async function processAnalyzeRunJob(job: OutreachJob) {
           blockingIssues: currentSenderReadiness.blockingIssues.map((issue) => issue.detail),
         },
       });
+      if (pausedRecoveryEligible) {
+        await queueRunAutoRecoveryAnalysis(run, {
+          reason: "sender_unavailable",
+          senderAccountId: senderAccount?.id ?? run.accountId,
+          fromEmail: currentSenderReadiness.fromEmail || senderFromEmail,
+        });
+      }
       return;
     }
 
-    phase = "load_run_state";
-    const messages = await listRunMessages(run.id);
-    const leads = await listRunLeads(run.id);
-    const jobs = await listRunJobs(run.id, 100);
-    const { threads } = await listReplyThreadsByBrand(run.brandId);
     const metrics = calculateRunMetricsFromMessages(run.id, messages, threads);
-    const targetLeadCount = run.ownerType === "experiment" ? DEFAULT_EXPERIMENT_RUN_LEAD_TARGET : 0;
-    const hasOpenSourceJob = jobs.some(
-      (queuedJob) =>
-        queuedJob.jobType === "source_leads" && ["queued", "running"].includes(queuedJob.status)
-    );
-    const shouldTopUpLeads =
-      targetLeadCount > 0 &&
-      leads.length < targetLeadCount &&
-      metrics.sentMessages < targetLeadCount &&
-      !hasOpenSourceJob;
-
-    if (shouldTopUpLeads) {
-      phase = "request_lead_top_up";
-      await enqueueOutreachJob({
-        runId: run.id,
-        jobType: "source_leads",
-        executeAfter: nowIso(),
-        payload: {
-          maxLeadsOverride: targetLeadCount,
-        },
-      });
-      await createOutreachEvent({
-        runId: run.id,
-        eventType: "lead_sourcing_top_up_requested",
-        payload: {
-          currentLeadCount: leads.length,
-          sentMessages: metrics.sentMessages,
-          targetLeadCount,
-        },
-      });
-    }
 
     const delivered = Math.max(1, metrics.sentMessages + metrics.bouncedMessages);
-    const attempted = Math.max(1, metrics.sentMessages + metrics.failedMessages + metrics.bouncedMessages);
     const replyCount = Math.max(1, metrics.replies);
 
     const bounceRate = metrics.bouncedMessages / delivered;
-    const providerErrorRate = metrics.failedMessages / attempted;
+    const providerErrorRate = providerErrorMetrics.providerErrorRate;
     const negativeReplyRate = metrics.negativeReplies / replyCount;
 
-    let paused = false;
+    let shouldPauseRun = false;
+    let providerErrorPauseTriggered = false;
 
     if (metrics.bouncedMessages >= 5 && bounceRate > 0.05) {
       phase = "record_hard_bounce_anomaly";
-      paused = true;
+      shouldPauseRun = true;
       await createRunAnomaly({
         runId: run.id,
         type: "hard_bounce_rate",
@@ -15138,22 +20121,58 @@ async function processAnalyzeRunJob(job: OutreachJob) {
       });
     }
 
-    if (!paused && providerErrorRate > 0.2) {
-      phase = "record_provider_error_anomaly";
-      paused = true;
-      await createRunAnomaly({
-        runId: run.id,
-        type: "provider_error_rate",
-        severity: "critical",
-        threshold: 0.2,
-        observed: providerErrorRate,
-        details: "Provider error rate exceeded 20%.",
-      });
+    if (!shouldPauseRun && shouldPauseForProviderError(providerErrorMetrics)) {
+      if (runWasPaused && providerErrorAnomalyIds.length > 0) {
+        phase = "provider_error_recovery_failover";
+        const failover = await autoFailoverRunSender({
+          run,
+          reason: "provider_error_rate",
+          summary:
+            "Provider errors stayed elevated on the current sender and the system attempted to move the run onto the healthiest eligible standby sender.",
+        });
+        if (!failover.switched) {
+          await queueRunAutoRecoveryAnalysis(run, {
+            reason: "provider_error_rate",
+            providerErrorCount: providerErrorMetrics.providerErrorCount,
+            attempted: providerErrorMetrics.attempted,
+            providerErrorRate,
+          });
+          return;
+        }
+        phase = "resolve_provider_error_anomaly_after_failover";
+        await updateRunAnomalies(providerErrorAnomalyIds, {
+          status: "resolved",
+        });
+        providerErrorAnomaliesResolved = true;
+        await createOutreachEvent({
+          runId: run.id,
+          eventType: "run_resumed_auto",
+          payload: {
+            reason: "provider_error_rate_failover",
+            resolvedAnomalyCount: providerErrorAnomalyIds.length,
+            providerErrorCount: providerErrorMetrics.providerErrorCount,
+            attempted: providerErrorMetrics.attempted,
+            providerErrorRate,
+          },
+        });
+      } else {
+        phase = "record_provider_error_anomaly";
+        shouldPauseRun = true;
+        providerErrorPauseTriggered = true;
+        await createRunAnomaly({
+          runId: run.id,
+          type: "provider_error_rate",
+          severity: "critical",
+          threshold: PROVIDER_ERROR_RATE_THRESHOLD,
+          observed: providerErrorRate,
+          details: `Provider error rate exceeded ${Math.round(PROVIDER_ERROR_RATE_THRESHOLD * 100)}% across recent send attempts.`,
+        });
+      }
     }
 
-    if (!paused && metrics.replies >= 4 && negativeReplyRate > 0.25) {
+    if (!shouldPauseRun && metrics.replies >= 4 && negativeReplyRate > 0.25) {
       phase = "record_negative_reply_anomaly";
-      paused = true;
+      shouldPauseRun = true;
       await createRunAnomaly({
         runId: run.id,
         type: "negative_reply_rate_spike",
@@ -15164,7 +20183,7 @@ async function processAnalyzeRunJob(job: OutreachJob) {
       });
     }
 
-    if (paused) {
+    if (shouldPauseRun) {
       phase = "pause_for_anomaly";
       await updateOutreachRun(run.id, {
         status: "paused",
@@ -15182,30 +20201,79 @@ async function processAnalyzeRunJob(job: OutreachJob) {
         eventType: "run_paused_auto",
         payload: { bounceRate, providerErrorRate, negativeReplyRate },
       });
+      if (providerErrorPauseTriggered) {
+        await queueRunAutoRecoveryAnalysis(run, {
+          reason: "provider_error_rate",
+          providerErrorCount: providerErrorMetrics.providerErrorCount,
+          attempted: providerErrorMetrics.attempted,
+          providerErrorRate,
+        });
+      }
       return;
     }
 
-    const pendingScheduled = messages.some((message) => message.status === "scheduled");
-    if (!pendingScheduled) {
-      if (
-        targetLeadCount > 0 &&
-        metrics.sentMessages < targetLeadCount &&
-        (leads.length < targetLeadCount || hasOpenSourceJob)
-      ) {
-        phase = "wait_for_top_up";
+    if (runWasPaused && providerErrorAnomalyIds.length > 0 && !providerErrorAnomaliesResolved) {
+      phase = "resolve_provider_error_anomaly";
+      await updateRunAnomalies(providerErrorAnomalyIds, {
+        status: "resolved",
+      });
+      providerErrorAnomaliesResolved = true;
+      await createOutreachEvent({
+        runId: run.id,
+        eventType: "run_resumed_auto",
+        payload: {
+          reason: "provider_error_rate_recovered",
+          resolvedAnomalyCount: providerErrorAnomalyIds.length,
+          providerErrorCount: providerErrorMetrics.providerErrorCount,
+          attempted: providerErrorMetrics.attempted,
+          providerErrorRate,
+        },
+      });
+    }
+
+    const pendingScheduledMessages = messages.filter((message) => message.status === "scheduled");
+    if (!pendingScheduledMessages.length) {
+      const { trafficLane } = await resolveRunLockedSenderContext(run);
+      const targetLeadCount = runtimeLeadInventoryTarget(run, trafficLane);
+      if (trafficLane === "outbound" && leads.length < targetLeadCount) {
+        phase = "continue_source_top_up";
         await updateOutreachRun(run.id, {
           status: "monitoring",
+          pauseReason: "",
+          lastError: "",
           metrics: buildLiveRunMetrics({
             run,
             messages,
             threads,
             sourcedLeads: leads.length,
           }),
+          sourcingTraceSummary: {
+            phase: "execute_chain",
+            selectedActorIds: ["approved_owner_leads", "enrichanything.local_email_validation"],
+            lastActorInputError: "lead_inventory_target_not_met_yet",
+            failureStep: "dynamic_source_top_up",
+            budgetUsedUsd: run.sourcingTraceSummary.budgetUsedUsd,
+          },
         });
         await enqueueOutreachJob({
           runId: run.id,
-          jobType: "analyze_run",
-          executeAfter: addMinutes(nowIso(), 10),
+          jobType: "source_leads",
+          executeAfter: nowIso(),
+          payload: {
+            reason: "analysis_continues_lead_inventory_top_up",
+            targetLeadCount,
+            currentLeadCount: leads.length,
+            sourceTopUpAttempt: 0,
+          },
+        });
+        await createOutreachEvent({
+          runId: run.id,
+          eventType: "run_continues_source_top_up",
+          payload: {
+            targetLeadCount,
+            currentLeadCount: leads.length,
+            trafficLane,
+          },
         });
         return;
       }
@@ -15224,9 +20292,18 @@ async function processAnalyzeRunJob(job: OutreachJob) {
       return;
     }
 
+    phase = "load_dispatch_jobs";
+    const jobs = await listRunJobs(run.id, 50);
+    const hasActiveDispatchJob = jobs.some(
+      (queuedJob) =>
+        queuedJob.jobType === "dispatch_messages" && ["queued", "running"].includes(queuedJob.status)
+    );
+
     phase = "reschedule_analysis";
     await updateOutreachRun(run.id, {
       status: "monitoring",
+      pauseReason: "",
+      lastError: "",
       metrics: buildLiveRunMetrics({
         run,
         messages,
@@ -15234,6 +20311,21 @@ async function processAnalyzeRunJob(job: OutreachJob) {
         sourcedLeads: leads.length,
       }),
     });
+    if (!hasActiveDispatchJob) {
+      phase = "requeue_dispatch";
+      await enqueueOutreachJob({
+        runId: run.id,
+        jobType: "dispatch_messages",
+        executeAfter: nowIso(),
+      });
+      await createOutreachEvent({
+        runId: run.id,
+        eventType: "dispatch_requeued_from_analysis",
+        payload: {
+          scheduledCount: pendingScheduledMessages.length,
+        },
+      });
+    }
     await enqueueOutreachJob({
       runId: run.id,
       jobType: "analyze_run",
@@ -15272,6 +20364,370 @@ async function processOutreachJob(job: OutreachJob) {
   await processAnalyzeRunJob(job);
 }
 
+export async function reconcileOutreachStateInvariants(limit = 40): Promise<{
+  runsEvaluated: number;
+  runsRepaired: number;
+  scheduledMessagesCanceled: number;
+  jobsClosed: number;
+  anomaliesResolved: number;
+}> {
+  const recentTerminalWindowMs = 60 * 24 * 60 * 60 * 1000;
+  const [brands] = await Promise.all([listBrands()]);
+  const allRuns = (await Promise.all(brands.map(async (brand) => listBrandRuns(brand.id)))).flat();
+  const openRuns = allRuns.filter((run) => isRunOpen(run.status));
+  const invalidOpenRunRepair = await reconcileInvalidCampaignOpenRuns({
+    brands,
+    openRuns,
+    limit,
+  });
+  const pinnedSenderCandidates = openRuns
+    .filter((run) => run.ownerType === "campaign" && run.ownerId)
+    .sort((left, right) => {
+      const leftAt = toDate(left.updatedAt || left.createdAt).getTime();
+      const rightAt = toDate(right.updatedAt || right.createdAt).getTime();
+      return rightAt - leftAt;
+    })
+    .slice(0, Math.max(1, Math.min(200, Math.round(Number(limit) || 40))));
+  let pinnedSenderRepairs = 0;
+  for (const run of pinnedSenderCandidates) {
+    const { lockedSenderAccountId } = await resolveRunLockedSenderContext(run);
+    if (
+      !lockedSenderAccountId ||
+      (persistedRunLockedSenderAccountId(run) === lockedSenderAccountId && run.accountId === lockedSenderAccountId)
+    ) {
+      continue;
+    }
+    await repairRunLockedSenderAccount(run, lockedSenderAccountId);
+    pinnedSenderRepairs += 1;
+  }
+  const duplicateRepair = await reconcileDuplicateOpenRuns({
+    runs: openRuns,
+    limit,
+  });
+  const warmupReservationRepair = await reconcileWarmupSeedReservationState(limit);
+  const warmupConfigRepair = await reconcileWarmupConversationConfigState(limit);
+  const terminalRuns = allRuns.filter((run) => TERMINAL_RUN_STATUSES.has(run.status));
+
+  const candidates = terminalRuns
+    .filter((run) => {
+      const updatedAtMs = toDate(run.updatedAt || run.createdAt).getTime();
+      return (
+        run.metrics.scheduledMessages > 0 ||
+        Number.isFinite(updatedAtMs) && updatedAtMs >= Date.now() - recentTerminalWindowMs
+      );
+    })
+    .sort((left, right) => {
+      const leftPriority = left.metrics.scheduledMessages > 0 ? 1 : 0;
+      const rightPriority = right.metrics.scheduledMessages > 0 ? 1 : 0;
+      if (leftPriority !== rightPriority) return rightPriority - leftPriority;
+      const leftAt = toDate(left.updatedAt || left.createdAt).getTime();
+      const rightAt = toDate(right.updatedAt || right.createdAt).getTime();
+      return rightAt - leftAt;
+    })
+    .slice(0, Math.max(1, Math.min(200, Math.round(Number(limit) || 40))));
+
+  let runsRepaired =
+    duplicateRepair.runsRepaired +
+    invalidOpenRunRepair.runsCanceled +
+    pinnedSenderRepairs +
+    warmupReservationRepair.runsRepaired +
+    warmupReservationRepair.runsPaused +
+    warmupReservationRepair.runsResumed +
+    warmupConfigRepair.runsRepaired;
+  let scheduledMessagesCanceled =
+    duplicateRepair.scheduledMessagesCanceled +
+    invalidOpenRunRepair.scheduledMessagesCanceled +
+    warmupConfigRepair.scheduledMessagesCanceled;
+  let jobsClosed = duplicateRepair.jobsClosed + invalidOpenRunRepair.jobsClosed;
+  let anomaliesResolved = duplicateRepair.anomaliesResolved + invalidOpenRunRepair.anomaliesResolved;
+  const threadsByBrandId = new Map<string, ReplyThread[]>();
+
+  for (const run of candidates) {
+    const [messages, jobs, anomalies] = await Promise.all([
+      listRunMessages(run.id),
+      listRunJobs(run.id, 200),
+      listRunAnomalies(run.id),
+    ]);
+    const hasScheduledMessages = messages.some((message) => message.status === "scheduled");
+    const hasActiveJobs = jobs.some(
+      (job) =>
+        RUN_JOB_TYPES_CLOSED_ON_TERMINAL.includes(job.jobType) &&
+        ["queued", "running"].includes(job.status)
+    );
+    const hasActiveAnomalies = anomalies.some((anomaly) => anomaly.status === "active");
+    if (!hasScheduledMessages && !hasActiveJobs && !hasActiveAnomalies) {
+      continue;
+    }
+
+    const cleanup = await reconcileTerminalRunArtifacts({
+      run,
+      cleanupReason: terminalRunCleanupReason(
+        run.status,
+        run.lastError || run.pauseReason || "Reconciled terminal run artifacts"
+      ),
+    });
+    const leads = await listRunLeads(run.id);
+    let threads = threadsByBrandId.get(run.brandId) ?? null;
+    if (!threads) {
+      threads = (await listReplyThreadsByBrand(run.brandId)).threads;
+      threadsByBrandId.set(run.brandId, threads);
+    }
+    await updateOutreachRun(run.id, {
+      completedAt: run.completedAt || nowIso(),
+      metrics: buildLiveRunMetrics({
+        run,
+        messages: cleanup.messages,
+        threads,
+        sourcedLeads: leads.length,
+      }),
+    });
+    await createOutreachEvent({
+      runId: run.id,
+      eventType: "run_terminal_reconciled",
+      payload: {
+        status: run.status,
+        canceledScheduledMessages: cleanup.scheduledMessageCount,
+        closedJobs: cleanup.closedJobCount,
+        resolvedAnomalies: cleanup.resolvedAnomalyCount,
+      },
+    });
+    runsRepaired += 1;
+    scheduledMessagesCanceled += cleanup.scheduledMessageCount;
+    jobsClosed += cleanup.closedJobCount;
+    anomaliesResolved += cleanup.resolvedAnomalyCount;
+  }
+
+  return {
+    runsEvaluated:
+      duplicateRepair.groupsEvaluated +
+      invalidOpenRunRepair.runsEvaluated +
+      candidates.length +
+      pinnedSenderCandidates.length +
+      warmupReservationRepair.runsEvaluated +
+      warmupConfigRepair.runsEvaluated,
+    runsRepaired,
+    scheduledMessagesCanceled,
+    jobsClosed,
+    anomaliesResolved,
+  };
+}
+
+async function ensureRunDispatchCoverage(limit = 60) {
+  const [brands, activeDispatchJobs] = await Promise.all([
+    listBrands(),
+    listActiveOutreachJobsByType({
+      jobType: "dispatch_messages",
+      statuses: ["queued", "running"],
+      limit: 200,
+    }),
+  ]);
+
+  const activeDispatchByRunId = new Map<string, OutreachJob[]>();
+  for (const job of activeDispatchJobs) {
+    const existing = activeDispatchByRunId.get(job.runId) ?? [];
+    existing.push(job);
+    activeDispatchByRunId.set(job.runId, existing);
+  }
+
+  const candidateRunLimit = Math.max(10, Math.min(200, Math.round(limit) || 60));
+  const allActiveRuns = (
+    await Promise.all(
+      brands.map(async (brand) => {
+        const runs = await listBrandRuns(brand.id);
+        return runs.filter((run) => ["scheduled", "sending", "monitoring"].includes(run.status));
+      })
+    )
+  ).flat();
+  const sortedActiveRuns = allActiveRuns.sort((left, right) => {
+    const leftHasDispatch = activeDispatchByRunId.has(left.id) ? 1 : 0;
+    const rightHasDispatch = activeDispatchByRunId.has(right.id) ? 1 : 0;
+    if (leftHasDispatch !== rightHasDispatch) {
+      return rightHasDispatch - leftHasDispatch;
+    }
+    const leftAt = toDate(left.updatedAt || left.createdAt).getTime();
+    const rightAt = toDate(right.updatedAt || right.createdAt).getTime();
+    if (leftAt !== rightAt) {
+      return leftAt - rightAt;
+    }
+    return left.createdAt < right.createdAt ? -1 : 1;
+  });
+  const candidateRuns = sortedActiveRuns
+    .filter((run, index, runs) => runs.findIndex((candidate) => candidate.id === run.id) === index)
+    .slice(0, candidateRunLimit);
+
+  let runsRecovered = 0;
+
+  for (const run of candidateRuns) {
+    const messages = await listRunMessages(run.id);
+    const pendingMessages = messages
+      .filter((message) => message.status === "scheduled")
+      .sort((left, right) => (left.scheduledAt < right.scheduledAt ? -1 : 1));
+    if (!pendingMessages.length) {
+      continue;
+    }
+
+    const dueCount = pendingMessages.filter(
+      (message) => toDate(message.scheduledAt).getTime() <= Date.now()
+    ).length;
+    let desiredExecuteAfter = dueCount > 0 ? nowIso() : pendingMessages[0]?.scheduledAt || "";
+    if (dueCount > 0) {
+      const [{ trafficLane }, runtimeExperiment] = await Promise.all([
+        resolveRunLockedSenderContext(run),
+        getExperimentRecordByRuntimeRef(run.brandId, run.campaignId, run.experimentId),
+      ]);
+      const businessWindow = effectiveBusinessWindowPolicy(
+        businessWindowFromExperimentEnvelope(runtimeExperiment?.testEnvelope),
+        trafficLane
+      );
+      if (!isInsideBusinessWindow(new Date(), run.timezone || DEFAULT_TIMEZONE, businessWindow)) {
+        desiredExecuteAfter = alignToBusinessWindow(nowIso(), run.timezone || DEFAULT_TIMEZONE, businessWindow);
+      }
+    }
+    if (!desiredExecuteAfter) {
+      continue;
+    }
+
+    const activeJobsForRun = activeDispatchByRunId.get(run.id) ?? [];
+    if (!activeJobsForRun.length) {
+      const hasHiddenActiveDispatch = await hasActiveRunJob({
+        runId: run.id,
+        jobType: "dispatch_messages",
+      });
+      if (hasHiddenActiveDispatch) {
+        continue;
+      }
+    }
+
+    const runningDispatch = activeJobsForRun.some((job) => job.status === "running");
+    if (runningDispatch) {
+      continue;
+    }
+
+    const queuedDispatch = activeJobsForRun
+      .filter((job) => job.status === "queued")
+      .sort((left, right) => (left.executeAfter < right.executeAfter ? -1 : 1));
+    const earliestQueued = queuedDispatch[0] ?? null;
+    const desiredExecuteAfterMs = toDate(desiredExecuteAfter).getTime();
+    const earliestQueuedMs = earliestQueued ? toDate(earliestQueued.executeAfter).getTime() : 0;
+    if (earliestQueued && earliestQueuedMs <= desiredExecuteAfterMs) {
+      continue;
+    }
+
+    await enqueueOutreachJob({
+      runId: run.id,
+      jobType: "dispatch_messages",
+      executeAfter: desiredExecuteAfter,
+      payload: {
+        source: "dispatch_watchdog",
+        dueCount,
+        scheduledCount: pendingMessages.length,
+        previousExecuteAfter: earliestQueued?.executeAfter ?? "",
+      },
+    });
+    await createOutreachEvent({
+      runId: run.id,
+      eventType: "dispatch_recovered_watchdog",
+      payload: {
+        runStatus: run.status,
+        dueCount,
+        scheduledCount: pendingMessages.length,
+        previousExecuteAfter: earliestQueued?.executeAfter ?? "",
+        nextExecuteAfter: desiredExecuteAfter,
+      },
+    });
+    runsRecovered += 1;
+  }
+
+  return {
+    runsEvaluated: candidateRuns.length,
+    runsRecovered,
+  };
+}
+
+async function ensurePausedRunRecoveryCoverage(limit = 40) {
+  const [brands, activeAnalyzeJobs] = await Promise.all([
+    listBrands(),
+    listActiveOutreachJobsByType({
+      jobType: "analyze_run",
+      statuses: ["queued", "running"],
+      limit: 200,
+    }),
+  ]);
+  const activeAnalyzeByRunId = new Map<string, OutreachJob[]>();
+  for (const job of activeAnalyzeJobs) {
+    const bucket = activeAnalyzeByRunId.get(job.runId) ?? [];
+    bucket.push(job);
+    activeAnalyzeByRunId.set(job.runId, bucket);
+  }
+  const candidateRunLimit = Math.max(10, Math.min(200, Math.round(limit) || 40));
+  const pausedRuns = (
+    await Promise.all(
+      brands.map(async (brand) => {
+        const runs = await listBrandRuns(brand.id);
+        return runs.filter((run) => run.status === "paused");
+      })
+    )
+  )
+    .flat()
+    .sort((left, right) => {
+      const leftAt = toDate(left.updatedAt || left.createdAt).getTime();
+      const rightAt = toDate(right.updatedAt || right.createdAt).getTime();
+      return leftAt - rightAt;
+    })
+    .slice(0, candidateRunLimit);
+
+  for (const run of pausedRuns) {
+    const activeAnalyzeForRun = activeAnalyzeByRunId.get(run.id) ?? [];
+    if (activeAnalyzeForRun.some((job) => job.status === "running")) continue;
+
+    const [messages, anomalies] = await Promise.all([
+      listRunMessages(run.id),
+      listRunAnomalies(run.id),
+    ]);
+    const scheduledCount = messages.filter((message) => message.status === "scheduled").length;
+    if (scheduledCount <= 0) continue;
+    if (!isPausedRunAutoRecoveryEligible(run, anomalies)) continue;
+
+    const payload = {
+      source: "pause_watchdog",
+      scheduledCount,
+      anomalyTypes: activeRunAnomalies(anomalies).map((anomaly) => anomaly.type),
+    };
+    const executeAfter = nextAutoPauseRecoveryAt(run);
+    const queuedAnalyze = activeAnalyzeForRun
+      .filter((job) => job.status === "queued")
+      .sort((left, right) => (left.executeAfter < right.executeAfter ? -1 : 1))[0] ?? null;
+    if (queuedAnalyze) {
+      const queuedMs = toDate(queuedAnalyze.executeAfter).getTime();
+      const desiredMs = toDate(executeAfter).getTime();
+      if (Number.isFinite(queuedMs) && Number.isFinite(desiredMs) && queuedMs <= desiredMs) {
+        continue;
+      }
+      await updateOutreachJob(queuedAnalyze.id, {
+        executeAfter,
+        payload: {
+          ...queuedAnalyze.payload,
+          ...payload,
+          previousExecuteAfter: queuedAnalyze.executeAfter,
+        },
+      });
+      await createOutreachEvent({
+        runId: run.id,
+        eventType: "run_pause_recovery_advanced",
+        payload: {
+          jobId: queuedAnalyze.id,
+          executeAfter,
+          previousExecuteAfter: queuedAnalyze.executeAfter,
+          ...payload,
+        },
+      });
+      continue;
+    }
+
+    await queueRunAutoRecoveryAnalysis(run, payload);
+  }
+}
+
 export async function runOutreachTick(
   limit = 20,
   options: { includeCampaignHopper?: boolean } = {}
@@ -15279,12 +20735,21 @@ export async function runOutreachTick(
   processed: number;
   completed: number;
   failed: number;
+  repairedRunsEvaluated: number;
+  repairedRunsFixed: number;
+  repairedScheduledMessagesCanceled: number;
+  repairedJobsClosed: number;
+  repairedAnomaliesResolved: number;
+  dispatchRunsEvaluated: number;
+  dispatchRunsRecovered: number;
   campaignsEvaluated: number;
   campaignsLaunched: number;
+  campaignsRecovered: number;
   campaignsBlocked: number;
 }> {
+  const invariantRepair = await reconcileOutreachStateInvariants(Math.max(limit * 3, 30));
   const reclaimed = await reclaimStaleRunningOutreachJobs({
-    staleAfterMinutes: 6,
+    staleAfterMinutes: 4,
     limit,
   });
   for (const job of reclaimed) {
@@ -15299,13 +20764,21 @@ export async function runOutreachTick(
     });
   }
 
-  const jobs = await listDueOutreachJobs(limit);
+  const dispatchCoverage = await ensureRunDispatchCoverage(limit * 4);
+  await ensurePausedRunRecoveryCoverage(limit * 3);
+  const jobs = await listDueOutreachJobs(Math.max(limit, limit * 5));
 
   let processed = 0;
   let completed = 0;
   let failed = 0;
 
   for (const job of jobs) {
+    if (processed >= limit) {
+      break;
+    }
+    if (!(await canCurrentRuntimeProcessJob(job))) {
+      continue;
+    }
     const attempts = job.attempts + 1;
     const claimedJob = await claimQueuedOutreachJob(job.id, attempts);
     if (!claimedJob) {
@@ -15348,6 +20821,12 @@ export async function runOutreachTick(
               .slice(0, 12)
               .join("\n")
           : "";
+      if (claimedJob.jobType === "schedule_messages") {
+        await releaseWarmupSeedReservationsForRun(
+          claimedJob.runId,
+          `schedule_job_failed:${trimText(message, 120)}`
+        ).catch(() => 0);
+      }
       if (attempts >= claimedJob.maxAttempts) {
         await updateOutreachJob(claimedJob.id, {
           status: "failed",
@@ -15381,15 +20860,31 @@ export async function runOutreachTick(
 
   const hopper =
     options.includeCampaignHopper === false
-      ? { campaignsEvaluated: 0, campaignsLaunched: 0, campaignsBlocked: 0 }
-      : await ensureActiveCampaignHoppers();
+      ? { campaignsEvaluated: 0, campaignsLaunched: 0, campaignsRecovered: 0, campaignsBlocked: 0 }
+      : await runCampaignHopperTick().catch((error) => {
+          console.error("[outreach] campaign hopper failed", error);
+          return {
+            campaignsEvaluated: 0,
+            campaignsLaunched: 0,
+            campaignsRecovered: 0,
+            campaignsBlocked: 0,
+          };
+        });
 
   return {
     processed,
     completed,
     failed,
+    repairedRunsEvaluated: invariantRepair.runsEvaluated,
+    repairedRunsFixed: invariantRepair.runsRepaired,
+    repairedScheduledMessagesCanceled: invariantRepair.scheduledMessagesCanceled,
+    repairedJobsClosed: invariantRepair.jobsClosed,
+    repairedAnomaliesResolved: invariantRepair.anomaliesResolved,
+    dispatchRunsEvaluated: dispatchCoverage.runsEvaluated,
+    dispatchRunsRecovered: dispatchCoverage.runsRecovered,
     campaignsEvaluated: hopper.campaignsEvaluated,
     campaignsLaunched: hopper.campaignsLaunched,
+    campaignsRecovered: hopper.campaignsRecovered,
     campaignsBlocked: hopper.campaignsBlocked,
   };
 }
@@ -15464,7 +20959,7 @@ export async function runInboxSyncTick(limit = 12): Promise<{
     const result = await syncBrandInboxMailbox({
       brandId: candidate.brandId,
       mailboxAccountId: candidate.mailboxAccountId,
-      maxMessages: 25,
+      maxMessages: 10,
     });
     if (result.ok) {
       mailboxesSynced += 1;
@@ -15509,7 +21004,7 @@ export async function updateRunControl(input: {
   senderAccountId?: string;
   recipientEmail?: string;
 }): Promise<{ ok: boolean; reason: string }> {
-  const run = await getOutreachRun(input.runId);
+  let run = await getOutreachRun(input.runId);
   if (!run || run.brandId !== input.brandId || run.campaignId !== input.campaignId) {
     return { ok: false, reason: "Run not found" };
   }
@@ -15524,12 +21019,20 @@ export async function updateRunControl(input: {
   }
 
   if (input.action === "resume") {
+    const { trafficLane } = await resolveRunLockedSenderContext(run);
+    if (trafficLane !== "warmup" && !isOutboundSendingEnabled()) {
+      return { ok: false, reason: OUTBOUND_SENDING_DISABLED_REASON };
+    }
     if (run.status !== "paused") {
       return { ok: false, reason: "Run is not paused" };
     }
+    const { lockedSenderAccountId } = await resolveRunLockedSenderContext(run);
+    run = await repairRunLockedSenderAccount(run, lockedSenderAccountId);
     await updateOutreachRun(run.id, {
+      accountId: run.accountId,
       status: "sending",
       pauseReason: "",
+      lastError: "",
     });
     await markExperimentExecutionStatus(run.brandId, run.campaignId, run.experimentId, "sending");
     await enqueueOutreachJob({
@@ -15550,6 +21053,9 @@ export async function updateRunControl(input: {
   }
 
   if (input.action === "probe_deliverability") {
+    if (!isDeliverabilitySeedingEnabled()) {
+      return { ok: false, reason: DELIVERABILITY_SEEDING_DISABLED_REASON };
+    }
     const referenceMessage = await resolveDeliverabilityProbeReferenceMessage({
       runId: run.id,
       preferScheduled: true,
@@ -15647,6 +21153,9 @@ export async function updateRunControl(input: {
   }
 
   if (input.action === "seed_inbox_placement") {
+    if (!isDeliverabilitySeedingEnabled()) {
+      return { ok: false, reason: DELIVERABILITY_SEEDING_DISABLED_REASON };
+    }
     const recipientEmail = String(input.recipientEmail ?? "").trim().toLowerCase();
     if (!looksLikeEmailAddress(recipientEmail)) {
       return { ok: false, reason: "A valid recipient email is required" };
@@ -15661,7 +21170,7 @@ export async function updateRunControl(input: {
         reason: "No real scheduled or sent message exists for inbox placement seeding yet",
       };
     }
-    const senderAccountId = referenceMessage.senderAccountId.trim() || run.accountId.trim();
+    const senderAccountId = referenceMessage.senderAccountId.trim() || effectiveRunSenderAccountId(run);
     if (!senderAccountId) {
       return { ok: false, reason: "No sender account is attached to the reference message" };
     }
@@ -15733,12 +21242,39 @@ export async function updateRunControl(input: {
     return { ok: true, reason: `Exact-content inbox placement seed sent to ${recipientEmail}` };
   }
 
+  const cancelReason = input.reason?.trim() || "Canceled by user";
+  const cleanup = await reconcileTerminalRunArtifacts({
+    run,
+    cleanupReason: terminalRunCleanupReason("canceled", cancelReason),
+  });
+  const [leads, { threads }] = await Promise.all([
+    listRunLeads(run.id),
+    listReplyThreadsByBrand(run.brandId),
+  ]);
+
   await updateOutreachRun(run.id, {
     status: "canceled",
     completedAt: nowIso(),
-    pauseReason: input.reason?.trim() || "Canceled by user",
+    pauseReason: cancelReason,
+    lastError: "",
+    metrics: buildLiveRunMetrics({
+      run,
+      messages: cleanup.messages,
+      threads,
+      sourcedLeads: leads.length,
+    }),
   });
   await markExperimentExecutionStatus(run.brandId, run.campaignId, run.experimentId, "failed");
+  await createOutreachEvent({
+    runId: run.id,
+    eventType: "run_canceled",
+    payload: {
+      reason: cancelReason,
+      canceledScheduledMessages: cleanup.scheduledMessageCount,
+      closedJobs: cleanup.closedJobCount,
+      resolvedAnomalies: cleanup.resolvedAnomalyCount,
+    },
+  });
   return { ok: true, reason: "Run canceled" };
 }
 
@@ -15894,6 +21430,15 @@ export async function ingestInboundReply(input: {
   };
   const flowMap = await getPublishedConversationMapForExperiment(run.brandId, run.campaignId, run.experimentId);
   const session = flowMap ? await getConversationSessionByLead({ runId: run.id, leadId: lead.id }) : null;
+  const replyConversationGenerationSignature = flowMap?.publishedRevision
+    ? buildConversationGenerationSignature({
+        mapId: flowMap.id,
+        mapRevision: flowMap.publishedRevision,
+        campaignGoal: campaign?.objective.goal ?? "",
+        experimentOffer,
+        experimentAudience,
+      })
+    : "";
 
   if (flowMap?.publishedRevision && session && session.state !== "completed" && session.state !== "failed") {
     const graph = flowMap.publishedGraph;
@@ -16061,6 +21606,9 @@ export async function ingestInboundReply(input: {
                   priorNodePath: [session.currentNodeId, nextNode.id],
                   threadHistory,
                   maxDepth: graph.maxDepth,
+                  mapId: flowMap.id,
+                  mapRevision: flowMap.publishedRevision,
+                  generationSignature: replyConversationGenerationSignature,
                   waitMinutes: replyTriggeredWaitMinutes,
                   businessWindow,
                   latestInboundSubject: normalizedSubject,
@@ -16766,12 +22314,14 @@ export async function approveReplyDraftAndSend(input: {
     return { ok: true, reason: "Reply sent" };
   }
 
-  const mailbox = await resolveMailboxAccountForRun(run);
+  const routingContext = await buildRunSenderRoutingContext(run);
+  const effectiveRun = routingContext.run;
+  const mailbox = await resolveMailboxAccountForRun(effectiveRun);
   if (!mailbox) {
     return { ok: false, reason: "Reply mailbox account missing or invalid" };
   }
 
-  const deliveryAccount = await getOutreachAccount(run.accountId);
+  const deliveryAccount = await getOutreachAccount(effectiveRun.accountId);
   const deliverySecrets = deliveryAccount ? await getOutreachAccountSecrets(deliveryAccount.id) : null;
   const sendAccount =
     deliveryAccount &&

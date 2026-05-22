@@ -1,0 +1,17 @@
+.git/**
+node_modules/**
+EnrichAnything/.git/**
+EnrichAnything/**
+EmailFinder/**
+EnrichAnything/node_modules/**
+EnrichAnything/output/**
+output/**
+logs/**
+.playwright-cli/**
+.next/**
+api/internal/__pycache__/**
+supabase/.temp/**
+data/gmail-ui-profile/**
+data/gmail-ui-profiles/**
+data/chrome-userdata-lequarterly/**
+data/buyshazam-ui-profile/**

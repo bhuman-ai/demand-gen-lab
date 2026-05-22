@@ -53,8 +53,7 @@ async function main() {
   accounts = accounts.filter(
     (row) =>
       row.provider === "mailpool" &&
-      row.accountType !== "mailbox" &&
-      row.config.mailbox.deliveryMethod === "gmail_ui"
+      row.accountType !== "mailbox"
   );
 
   let targets = accounts;
@@ -74,8 +73,8 @@ async function main() {
       accountId: updated.id,
       fromEmail: getOutreachAccountFromEmail(updated),
       mailpoolStatus: updated.config.mailpool.status,
-      hasMailboxAuthCode: Boolean(secrets?.mailboxAuthCode.trim()),
-      hasMailboxAdminAuthCode: Boolean(secrets?.mailboxAdminAuthCode.trim()),
+      hasMailboxAuthCode: Boolean(String(secrets?.mailboxAuthCode ?? "").trim()),
+      hasMailboxAdminAuthCode: Boolean(String(secrets?.mailboxAdminAuthCode ?? "").trim()),
     });
   }
 

@@ -34,6 +34,8 @@ export async function POST(
       domainMode,
       domain: String(body.domain ?? ""),
       fromLocalPart: String(body.fromLocalPart ?? ""),
+      senderFirstName: String(body.senderFirstName ?? ""),
+      senderLastName: String(body.senderLastName ?? ""),
       autoPickCustomerIoAccount: body.autoPickCustomerIoAccount !== false,
       customerIoSourceAccountId: String(body.customerIoSourceAccountId ?? ""),
       forwardingTargetUrl: String(body.forwardingTargetUrl ?? ""),

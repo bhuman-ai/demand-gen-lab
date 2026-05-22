@@ -6,6 +6,7 @@ import {
   Check,
   ChevronRight,
   Clock3,
+  ExternalLink,
   Loader2,
   MessageSquareText,
   SendHorizontal,
@@ -139,6 +140,11 @@ function readMessageExecution(message: OperatorMessage | null) {
   return execution as OperatorExecutionEnvelope;
 }
 
+function extractUrl(value: string) {
+  const match = value.match(/https?:\/\/[^\s)]+/);
+  return match?.[0] ?? "";
+}
+
 function ExecutionCard({
   execution,
   action,
@@ -168,6 +174,8 @@ function ExecutionCard({
   const canConfirm = execution.state === "awaiting_confirmation" && Boolean(actionId) && action?.status === "awaiting_approval";
   const headline = executionHeadline(execution);
   const summary = executionSummary(execution);
+  const receiptDetails = asStringArray(receipt?.details);
+  const receiptUrls = receiptDetails.map(extractUrl).filter(Boolean);
 
   return (
     <div className={cn("mt-3 rounded-[12px] border px-3 py-3", executionCardTone(execution.state))}>
@@ -195,11 +203,51 @@ function ExecutionCard({
             </div>
           </div>
         ) : null}
-        {execution.toolName ? (
-          <div>
-            <span className="text-[color:var(--muted-foreground)]">Tool:</span>{" "}
-            <span className="font-mono text-xs">{execution.toolName}</span>
+        {receiptUrls.length ? (
+          <div className="flex flex-wrap gap-2">
+            {receiptUrls.map((url) => (
+              <Button key={url} asChild size="sm">
+                <a href={url} target="_blank" rel="noreferrer">
+                  Open sign-in link
+                  <ExternalLink className="h-3.5 w-3.5" />
+                </a>
+              </Button>
+            ))}
           </div>
+        ) : null}
+        {receiptDetails.length ? (
+          <div className="rounded-[10px] border border-[color:var(--border)] bg-[color:var(--surface)]/70 px-3 py-3">
+            <div className="text-[11px] font-medium uppercase tracking-[0.12em] text-[color:var(--muted-foreground)]">
+              Details
+            </div>
+            <ul className="mt-2 grid gap-1.5">
+              {receiptDetails.slice(0, 5).map((detail, index) => {
+                const url = extractUrl(detail);
+                return (
+                  <li key={`${detail}-${index}`} className="break-words text-sm text-[color:var(--foreground)]">
+                    {url ? (
+                      <a
+                        href={url}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="underline decoration-[color:var(--border-strong)] underline-offset-4"
+                      >
+                        {detail.replace(url, "sign-in link")}
+                      </a>
+                    ) : (
+                      detail
+                    )}
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+        ) : null}
+        {execution.toolName ? (
+          <details className="rounded-[10px] border border-[color:var(--border)] bg-[color:var(--surface)]/60 px-3 py-2 text-xs text-[color:var(--muted-foreground)]">
+            <summary className="cursor-pointer">Technical detail</summary>
+            <div className="mt-2 font-mono">{execution.toolName}</div>
+          </details>
         ) : null}
         {missingFields.length ? (
           <div>
@@ -425,23 +473,29 @@ function MessageBody({
 }
 
 const DEFAULT_PROMPTS = [
-  "What needs attention right now?",
+  "What should GPT do next?",
+  "Connect LinkedIn",
   "Add a sender for this brand",
-  "Why isn't the current sender ready?",
-  "Summarize inbox activity",
-  "What should I do next?",
 ] as const;
+
+type OperatorInitialRequest = {
+  id: number;
+  message: string;
+  autoSend: boolean;
+};
 
 export default function OperatorPanel({
   open,
   onOpenChange,
   activeBrandId,
   activeBrandName,
+  initialRequest,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   activeBrandId: string;
   activeBrandName: string;
+  initialRequest?: OperatorInitialRequest | null;
 }) {
   const [threadDetail, setThreadDetail] = useState<OperatorThreadDetail | null>(null);
   const [loadingThread, setLoadingThread] = useState(false);
@@ -450,6 +504,7 @@ export default function OperatorPanel({
   const [error, setError] = useState("");
   const [input, setInput] = useState("");
   const scrollerRef = useRef<HTMLDivElement | null>(null);
+  const lastInitialRequestIdRef = useRef(0);
 
   const visibleMessages = useMemo(
     () =>
@@ -527,6 +582,17 @@ export default function OperatorPanel({
     if (!open) return;
     scrollerRef.current?.scrollTo({ top: scrollerRef.current.scrollHeight, behavior: "smooth" });
   }, [open, threadDetail]);
+
+  useEffect(() => {
+    if (!open || !activeBrandId || !initialRequest || lastInitialRequestIdRef.current === initialRequest.id) return;
+    lastInitialRequestIdRef.current = initialRequest.id;
+    const message = initialRequest.message.trim();
+    if (!message) return;
+    setInput(message);
+    if (initialRequest.autoSend) {
+      void handleSend(message);
+    }
+  }, [activeBrandId, initialRequest, open]);
 
   async function refreshThread(threadId: string) {
     const detail = await fetchOperatorThreadDetail(threadId);
@@ -620,8 +686,8 @@ export default function OperatorPanel({
           domain: parts.domain,
         };
       } else {
-        const fromLocalPart = asString(values.fromLocalPart);
-        const domain = asString(values.domain).toLowerCase();
+        const fromLocalPart = asString(values.fromLocalPart) || asString(nextInput.fromLocalPart);
+        const domain = (asString(values.domain) || asString(nextInput.domain)).toLowerCase();
         if (!fromLocalPart || !domain) {
           setError("Choose the sender local-part and domain.");
           return;
@@ -633,12 +699,25 @@ export default function OperatorPanel({
         };
       }
 
+      const senderFirstName = asString(values.senderFirstName) || asString(nextInput.senderFirstName);
+      const senderLastName = asString(values.senderLastName) || asString(nextInput.senderLastName);
+      if (!senderFirstName || !senderLastName) {
+        setError("Enter the real sender first and last name.");
+        return;
+      }
+      nextInput = {
+        ...nextInput,
+        senderFirstName,
+        senderLastName,
+      };
+
       const fromLocalPart = asString(nextInput.fromLocalPart);
       const domain = asString(nextInput.domain);
+      const senderName = `${senderFirstName} ${senderLastName}`.trim();
       const message =
         asString(nextInput.domainMode) === "register"
-          ? `Add a sender for this brand by buying ${domain} and creating ${fromLocalPart}@${domain}.`
-          : `Add a sender for this brand using ${domain}. Create ${fromLocalPart}@${domain}.`;
+          ? `Add a sender for this brand by buying ${domain} and creating ${fromLocalPart}@${domain} as ${senderName}.`
+          : `Add a sender for this brand using ${domain}. Create ${fromLocalPart}@${domain} as ${senderName}.`;
       await handleStructuredAction({
         message,
         structuredAction: {

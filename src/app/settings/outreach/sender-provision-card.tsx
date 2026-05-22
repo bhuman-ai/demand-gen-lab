@@ -38,6 +38,8 @@ type SetupState = {
   brandId: string;
   provider: "customerio" | "mailpool";
   fromLocalPart: string;
+  senderFirstName: string;
+  senderLastName: string;
   assignToBrand: boolean;
   selectedMailboxAccountId: string;
   forwardingTargetUrl: string;
@@ -71,6 +73,8 @@ const INITIAL_SETUP: SetupState = {
   brandId: "",
   provider: "customerio",
   fromLocalPart: "hello",
+  senderFirstName: "",
+  senderLastName: "",
   assignToBrand: true,
   selectedMailboxAccountId: "",
   forwardingTargetUrl: "",
@@ -552,6 +556,10 @@ export default function SenderProvisionCard({
       setError("Save Mailpool credentials in provisioning settings before using Mailpool sender setup.");
       return false;
     }
+    if (setup.provider === "mailpool" && (!setup.senderFirstName.trim() || !setup.senderLastName.trim())) {
+      setError("Enter the real sender first and last name.");
+      return false;
+    }
     if (setup.provider === "mailpool") return true;
     if (setup.customerIoStrategy === "specific") {
       if (!setup.customerIoSourceAccountId) {
@@ -662,6 +670,8 @@ export default function SenderProvisionCard({
         domainMode,
         domain: normalizedDomain,
         fromLocalPart: setup.fromLocalPart.trim(),
+        senderFirstName: setup.senderFirstName.trim(),
+        senderLastName: setup.senderLastName.trim(),
         autoPickCustomerIoAccount: setup.customerIoStrategy === "auto",
         customerIoSourceAccountId:
           setup.customerIoStrategy === "specific" ? setup.customerIoSourceAccountId : "",
@@ -951,6 +961,28 @@ export default function SenderProvisionCard({
               placeholder="hello"
             />
           </div>
+          {setup.provider === "mailpool" ? (
+            <>
+              <div className="grid gap-2">
+                <Label htmlFor="setup-sender-first-name">Sender first name</Label>
+                <Input
+                  id="setup-sender-first-name"
+                  value={setup.senderFirstName}
+                  onChange={(event) => setSetup((prev) => ({ ...prev, senderFirstName: event.target.value }))}
+                  placeholder="Marco"
+                />
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor="setup-sender-last-name">Sender last name</Label>
+                <Input
+                  id="setup-sender-last-name"
+                  value={setup.senderLastName}
+                  onChange={(event) => setSetup((prev) => ({ ...prev, senderLastName: event.target.value }))}
+                  placeholder="Rosetti"
+                />
+              </div>
+            </>
+          ) : null}
           {advancedMode ? (
             <div className="grid gap-2">
               <Label htmlFor="setup-mailbox">Reply Mailbox</Label>
@@ -1024,7 +1056,7 @@ export default function SenderProvisionCard({
       {showGuidedBuyWizard ? (
         <div className="grid gap-4 rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-4">
           <div className="grid gap-1">
-            <div className="text-sm font-semibold">Start with these 2 answers</div>
+            <div className="text-sm font-semibold">Start with these answers</div>
             <div className="text-sm text-[color:var(--muted-foreground)]">
               We will use this to find a new sender domain you can buy next.
             </div>
@@ -1056,7 +1088,7 @@ export default function SenderProvisionCard({
             </div>
           ) : null}
 
-          <div className="grid gap-3 md:grid-cols-2">
+          <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-4">
             <div className="grid gap-2">
               <Label htmlFor="guided-forwarding-target">1. What&apos;s your main domain?</Label>
               <Input
@@ -1079,6 +1111,30 @@ export default function SenderProvisionCard({
               />
               <div className="text-[11px] text-[color:var(--muted-foreground)]">
                 Example: {setup.fromLocalPart.trim() || "hello"}@your-new-domain.com
+              </div>
+            </div>
+            <div className="grid gap-2">
+              <Label htmlFor="guided-sender-first-name">3. Sender first name</Label>
+              <Input
+                id="guided-sender-first-name"
+                value={setup.senderFirstName}
+                onChange={(event) => setSetup((prev) => ({ ...prev, senderFirstName: event.target.value }))}
+                placeholder="Marco"
+              />
+              <div className="text-[11px] text-[color:var(--muted-foreground)]">
+                Shown as the person sending.
+              </div>
+            </div>
+            <div className="grid gap-2">
+              <Label htmlFor="guided-sender-last-name">4. Sender last name</Label>
+              <Input
+                id="guided-sender-last-name"
+                value={setup.senderLastName}
+                onChange={(event) => setSetup((prev) => ({ ...prev, senderLastName: event.target.value }))}
+                placeholder="Rosetti"
+              />
+              <div className="text-[11px] text-[color:var(--muted-foreground)]">
+                Do not use a brand name here.
               </div>
             </div>
           </div>

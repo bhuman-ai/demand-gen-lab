@@ -193,15 +193,6 @@ async function enrichPreviewLeadsWithRealEmails(
   }
 
   const apiBaseUrl = resolveEmailFinderApiBaseUrl();
-  if (!apiBaseUrl) {
-    return {
-      leads,
-      previewEmailEnrichment: {
-        ...previewEmailEnrichment,
-        error: "EMAIL_FINDER_API_BASE_URL is missing",
-      },
-    };
-  }
 
   const enrichment = await enrichLeadsWithEmailFinderBatch({
     leads: pending.map(({ lead }) => ({
@@ -213,13 +204,7 @@ async function enrichPreviewLeadsWithRealEmails(
       sourceUrl: lead.sourceUrl,
     })),
     apiBaseUrl,
-    verificationMode: "validatedmails",
-    validatedMailsApiKey: String(
-      process.env.EMAIL_FINDER_VALIDATEDMAILS_API_KEY ??
-        process.env.ENRICHANYTHING_VALIDATEDMAILS_API_KEY ??
-        process.env.VALIDATEDMAILS_API_KEY ??
-        ""
-    ).trim(),
+    verificationMode: "local",
     maxCandidates: 12,
     maxCredits: 7,
     concurrency: 3,

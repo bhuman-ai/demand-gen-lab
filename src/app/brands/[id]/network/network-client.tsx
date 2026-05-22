@@ -19,6 +19,7 @@ import {
   refreshMailpoolOutreachAccount,
   testOutreachAccount,
   closeOutreachGmailUiSession,
+  updateOutreachAccountApi,
 } from "@/lib/client-api";
 import {
   buildSenderRoutingSignalFromDomainRow,
@@ -31,6 +32,7 @@ import {
   getDomainDeliveryAccountName,
   getOutreachAccountFromEmail,
   getOutreachAccountReplyToEmail,
+  isOutreachOutboundEnabled,
 } from "@/lib/outreach-account-helpers";
 import { evaluateSenderReadiness, type SenderReadiness } from "@/lib/send-readiness";
 import { trackEvent } from "@/lib/telemetry-client";
@@ -889,6 +891,7 @@ export default function NetworkClient({
   const [senderModalSettings, setSenderModalSettings] =
     useState<OutreachProvisioningSettings | null>(initialProvisioningSettings);
   const [senderActionState, setSenderActionState] = useState<Record<string, SenderActionState>>({});
+  const [outboundToggleByAccountId, setOutboundToggleByAccountId] = useState<Record<string, boolean>>({});
   const [gmailVerifyOpen, setGmailVerifyOpen] = useState(false);
   const [gmailVerifyRow, setGmailVerifyRow] = useState<DomainRow | null>(null);
   const [gmailVerifyAccountId, setGmailVerifyAccountId] = useState("");
@@ -1051,6 +1054,29 @@ export default function NetworkClient({
       });
     },
     [assignedMailboxAccount, capacityForRow, resolveDeliveryAccountForRow]
+  );
+  const handleSenderOutboundToggle = useCallback(
+    async (account: OutreachAccount, enabled: boolean) => {
+      setError("");
+      try {
+        setOutboundToggleByAccountId((prev) => ({ ...prev, [account.id]: true }));
+        const updated = await updateOutreachAccountApi(account.id, {
+          config: {
+            outbound: {
+              enabled,
+              disabledAt: enabled ? "" : new Date().toISOString(),
+              disabledReason: enabled ? "" : "Paused by operator",
+            },
+          },
+        });
+        setSenderModalAccounts((prev) => prev.map((row) => (row.id === account.id ? updated : row)));
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Failed to update outbound setting");
+      } finally {
+        setOutboundToggleByAccountId((prev) => ({ ...prev, [account.id]: false }));
+      }
+    },
+    []
   );
 
   const filtered = useMemo(() => {
@@ -1890,6 +1916,7 @@ export default function NetworkClient({
               const actionState = senderActionState[item.id] ?? EMPTY_SENDER_ACTION_STATE;
               const statusHeading = status === "fix" || status === "setup" ? "Issue" : "Status";
               const nextStepHeading = action ? "Verify" : passiveAction?.heading ?? "Next step";
+              const outboundEnabled = isOutreachOutboundEnabled(account);
 
               return (
                 <article
@@ -1907,6 +1934,19 @@ export default function NetworkClient({
                       </div>
                       <div className="mt-3 text-lg font-semibold text-[color:var(--foreground)]">{item.domain}</div>
                       <div className="mt-1 text-sm text-[color:var(--foreground)]">{item.fromEmail || "Mailbox pending"}</div>
+                      {account ? (
+                        <label className="mt-3 inline-flex items-center gap-2 text-xs text-[color:var(--foreground)]">
+                          <input
+                            type="checkbox"
+                            role="switch"
+                            className="h-4 w-4"
+                            checked={outboundEnabled}
+                            disabled={Boolean(outboundToggleByAccountId[account.id])}
+                            onChange={(event) => void handleSenderOutboundToggle(account, event.target.checked)}
+                          />
+                          <span>{outboundEnabled ? "Outbound on" : "Outbound off"}</span>
+                        </label>
+                      ) : null}
                       {setupLine ? (
                         <div className="mt-2 text-xs leading-5 text-[color:var(--muted-foreground)]">{setupLine}</div>
                       ) : null}

@@ -45,6 +45,8 @@ import {
   registerMailpoolDomain,
   transferMailpoolDomain,
   testMailpoolConnection,
+  updateMailpoolMailbox,
+  deleteMailpoolMailbox,
   updateMailpoolSubscriptionSlots,
   type MailpoolDomain,
   type MailpoolDomainOwner,
@@ -55,10 +57,19 @@ import {
 import { defaultSocialAccountConfig } from "@/lib/social-account-config";
 import { sanitizeCustomerIoBillingConfig } from "@/lib/outreach-customerio-billing";
 import { testOutreachProviders } from "@/lib/outreach-providers";
-import { pickWebshareProxy } from "@/lib/webshare-client";
 import { buildGmailUiUserDataDir } from "@/lib/gmail-ui-profile";
 import { normalizeGmailUiLoginStatus } from "@/lib/gmail-ui-login";
+import {
+  ensureRequiredWebshareProxy,
+  resolveRequiredWebshareProxyConfig,
+} from "@/lib/webshare-proxy-assignment";
 import { MAX_ACTIVE_SENDERS_PER_DOMAIN } from "@/lib/sender-capacity";
+import {
+  ensureVercelRegisteredDomain,
+  getVercelRegistrarMode,
+  updateVercelDomainNameservers,
+  type VercelDomainPurchaseResult,
+} from "@/lib/vercel-domain-registrar";
 
 type NamecheapHostRecord = {
   type: "A" | "AAAA" | "ALIAS" | "CNAME" | "FRAME" | "MX" | "MXE" | "NS" | "TXT" | "URL" | "URL301";
@@ -87,6 +98,8 @@ export type ProvisionSenderInput = {
   domainMode: "existing" | "register" | "transfer";
   domain: string;
   fromLocalPart: string;
+  senderFirstName?: string;
+  senderLastName?: string;
   autoPickCustomerIoAccount?: boolean;
   customerIoSourceAccountId?: string;
   forwardingTargetUrl?: string;
@@ -146,6 +159,15 @@ export type ProvisionSenderResult = {
     spamCheckStatus: string;
     inboxPlacementId: string;
     inboxPlacementStatus: string;
+  };
+  vercel?: {
+    registrarMode: "mailpool" | "auto" | "vercel";
+    domain: string;
+    alreadyOwned: boolean;
+    orderId: string;
+    purchasePrice: number;
+    nameserversUpdated: boolean;
+    nameserverUpdateError: string;
   };
   warnings: string[];
   nextSteps: string[];
@@ -1312,47 +1334,8 @@ async function ensureCustomerIoDeliveryAccount(input: {
 }
 
 async function maybeAssignWebshareProxy(account: OutreachAccount) {
-  if (!account || account.provider !== "mailpool") return;
-  if (account.accountType === "mailbox") return;
-  if (account.config.mailbox.deliveryMethod !== "gmail_ui") return;
-  if (account.config.mailbox.proxyHost.trim() || account.config.mailbox.proxyUrl.trim()) return;
-  if (!process.env.WEBSHARE_API_KEY) return;
-  if (String(process.env.WEBSHARE_AUTO_ASSIGN_PROXY ?? "").trim().toLowerCase() !== "true") return;
-
-  const allAccounts = await listOutreachAccounts();
-  const used = new Set<string>();
-  for (const row of allAccounts) {
-    const host = row.config.mailbox.proxyHost.trim();
-    const port = Number(row.config.mailbox.proxyPort ?? 0) || 0;
-    if (host && port) {
-      used.add(`${host}:${port}`);
-      continue;
-    }
-    const url = row.config.mailbox.proxyUrl.trim();
-    if (url) {
-      try {
-        const parsed = new URL(url);
-        if (parsed.hostname && parsed.port) {
-          used.add(`${parsed.hostname}:${parsed.port}`);
-        }
-      } catch {}
-    }
-  }
-
-  const choice = await pickWebshareProxy(used);
-  if (!choice.ok || !choice.proxy) return;
-
-  await updateOutreachAccount(account.id, {
-    config: {
-      mailbox: {
-        proxyUrl: choice.proxy.url,
-        proxyHost: choice.proxy.host,
-        proxyPort: choice.proxy.port,
-        proxyUsername: choice.proxy.username,
-        proxyPassword: choice.proxy.password,
-      },
-    },
-  });
+  if (!account) return;
+  await ensureRequiredWebshareProxy(account);
 }
 
 async function ensureMailpoolHybridAccount(input: {
@@ -1371,14 +1354,28 @@ async function ensureMailpoolHybridAccount(input: {
     ) ?? null;
 
   const wantsWebshare = String(process.env.WEBSHARE_AUTO_ASSIGN_PROXY ?? "").trim().toLowerCase() === "true";
+  const proxyConfig = wantsWebshare
+    ? await resolveRequiredWebshareProxyConfig({
+        excludeAccountId: existing?.id,
+        currentConfig: existing?.config.mailbox,
+      })
+    : {
+        proxyUrl: String(existing?.config.mailbox.proxyUrl ?? "").trim(),
+        proxyHost: String(existing?.config.mailbox.proxyHost ?? "").trim(),
+        proxyPort: Number(existing?.config.mailbox.proxyPort ?? 0) || 0,
+        proxyUsername: String(existing?.config.mailbox.proxyUsername ?? "").trim(),
+        proxyPassword: String(existing?.config.mailbox.proxyPassword ?? "").trim(),
+      };
   const profileRoot = String(process.env.GMAIL_UI_PROFILE_ROOT ?? "").trim();
   const profileDir = buildGmailUiUserDataDir(profileRoot, fromEmail);
   const mailboxPassword = wantsWebshare
     ? String(input.mailbox.password ?? input.mailbox.imapPassword ?? "").trim()
     : String(input.mailbox.imapPassword ?? input.mailbox.password ?? "").trim();
+  const providerError = String(input.mailbox.error?.message ?? "").trim();
   const loginStatus = normalizeGmailUiLoginStatus({
     deliveryMethod: wantsWebshare ? "gmail_ui" : "smtp",
     forceLoginRequired: wantsWebshare,
+    message: providerError,
   });
 
   const payload = {
@@ -1401,11 +1398,13 @@ async function ensureMailpoolHybridAccount(input: {
         spamCheckId: String(input.spamCheck?.id ?? "").trim(),
         inboxPlacementId: "",
         status:
-          input.mailbox.status === "active"
-            ? "active"
-            : input.mailbox.status === "deleted"
-              ? "deleted"
-              : "pending",
+          providerError
+            ? "error"
+            : input.mailbox.status === "active"
+              ? "active"
+              : input.mailbox.status === "deleted"
+                ? "deleted"
+                : "pending",
         lastSpamCheckAt:
           input.spamCheck?.state === "completed" ? input.spamCheck.createdAt : "",
         lastSpamCheckScore: Number(input.spamCheck?.result?.score ?? 0) || 0,
@@ -1436,12 +1435,12 @@ async function ensureMailpoolHybridAccount(input: {
         gmailUiBrowserChannel: "chrome",
         gmailUiLoginState: loginStatus.gmailUiLoginState,
         gmailUiLoginCheckedAt: loginStatus.gmailUiLoginCheckedAt,
-        gmailUiLoginMessage: loginStatus.gmailUiLoginMessage,
-        proxyUrl: "",
-        proxyHost: "",
-        proxyPort: 0,
-        proxyUsername: "",
-        proxyPassword: "",
+        gmailUiLoginMessage: providerError || loginStatus.gmailUiLoginMessage,
+        proxyUrl: proxyConfig.proxyUrl,
+        proxyHost: proxyConfig.proxyHost,
+        proxyPort: proxyConfig.proxyPort,
+        proxyUsername: proxyConfig.proxyUsername,
+        proxyPassword: proxyConfig.proxyPassword,
       },
     },
     credentials: {
@@ -1641,6 +1640,32 @@ function uniqueNormalizedDomains(values: string[]) {
   );
 }
 
+function brandDomainSlug(brand: BrandRecord) {
+  const websiteLabel = normalizeDomain(brand.website).split(".")[0] ?? "";
+  const source = websiteLabel || brand.name;
+  return source
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "")
+    .slice(0, 18);
+}
+
+function existingMailpoolDomainCandidate(input: {
+  brand: BrandRecord;
+  domains: MailpoolDomain[];
+  preferredDomains: string[];
+}) {
+  const preferred = input.domains.find((entry) => input.preferredDomains.includes(entry.domain));
+  if (preferred) return preferred;
+  const slug = brandDomainSlug(input.brand);
+  if (!slug) return null;
+  return (
+    input.domains.find((entry) => {
+      const label = normalizeDomain(entry.domain).split(".")[0] ?? "";
+      return label.includes(slug) || slug.includes(label);
+    }) ?? null
+  );
+}
+
 async function getFirstAvailableMailpoolDomain(input: {
   apiKey: string;
   domains: string[];
@@ -1781,12 +1806,65 @@ function buildMailpoolDomainOwner(input: {
     firstName: registrant.firstName.trim(),
     lastName: registrant.lastName.trim(),
     email: registrant.emailAddress.trim(),
+    phone: registrant.phone.trim(),
     streetAddress1: registrant.address1.trim(),
     streetAddress2: "",
     city: registrant.city.trim(),
     state: registrant.stateProvince.trim(),
     postalCode: registrant.postalCode.trim(),
     country: registrant.country.trim().toUpperCase(),
+  };
+}
+
+function looksLikeMailpoolDomainRegistrationServerError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error ?? "");
+  const normalized = message.toLowerCase();
+  return (
+    normalized.includes("mailpool post /domains/ failed") &&
+    (normalized.includes("http 500") || normalized.includes("internal server error"))
+  );
+}
+
+async function registerVercelDomainThenAttachToMailpool(input: {
+  apiKey: string;
+  brand: BrandRecord;
+  domain: string;
+  forwardingTargetUrl: string;
+  registrant: NonNullable<ProvisionSenderInput["registrant"]>;
+}) {
+  const purchase = await ensureVercelRegisteredDomain({
+    domain: input.domain,
+    registrant: input.registrant,
+  });
+  const mailpoolDomain = await transferMailpoolDomain({
+    apiKey: input.apiKey,
+    domain: input.domain,
+    redirectUrl: input.forwardingTargetUrl || undefined,
+    domainOwner: buildMailpoolDomainOwner({
+      brand: input.brand,
+      registrant: input.registrant,
+    }),
+  });
+
+  let nameserversUpdated = false;
+  let nameserverUpdateError = "";
+  if (mailpoolDomain.nameservers?.length) {
+    try {
+      const nameserverUpdate = await updateVercelDomainNameservers({
+        domain: input.domain,
+        nameservers: mailpoolDomain.nameservers,
+      });
+      nameserversUpdated = Boolean(nameserverUpdate.updated);
+    } catch (error) {
+      nameserverUpdateError = error instanceof Error ? error.message : "Vercel nameserver update failed";
+    }
+  }
+
+  return {
+    mailpoolDomain,
+    purchase,
+    nameserversUpdated,
+    nameserverUpdateError,
   };
 }
 
@@ -1801,15 +1879,94 @@ function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function deriveMailboxNameParts(input: { brand: BrandRecord; accountName: string; emailLocalPart: string }) {
-  const raw = input.accountName.trim() || input.brand.name.trim() || input.emailLocalPart.replace(/[._+-]+/g, " ");
-  const tokens = raw
-    .split(/\s+/)
-    .map((token) => token.trim())
-    .filter(Boolean);
-  const firstName = tokens[0] || "Sales";
-  const lastName = tokens.slice(1).join(" ") || input.brand.name.trim() || "Team";
+function normalizeSenderNamePart(value = "") {
+  return String(value || "").replace(/\s+/g, " ").trim();
+}
+
+function normalizeIdentityComparable(value = "") {
+  return normalizeSenderNamePart(value)
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function looksLikeGenericMailboxLocalPart(value = "") {
+  return [
+    "admin",
+    "contact",
+    "hello",
+    "help",
+    "info",
+    "mail",
+    "marketing",
+    "ops",
+    "research",
+    "sales",
+    "support",
+    "team",
+  ].includes(normalizeIdentityComparable(value));
+}
+
+function resolveMailboxNameParts(input: {
+  brand: BrandRecord;
+  accountName: string;
+  emailLocalPart: string;
+  senderFirstName?: string;
+  senderLastName?: string;
+}) {
+  const firstName = normalizeSenderNamePart(input.senderFirstName);
+  const lastName = normalizeSenderNamePart(input.senderLastName);
+  const displayName = `${firstName} ${lastName}`.trim();
+  const comparableDisplayName = normalizeIdentityComparable(displayName);
+  const comparableBrandName = normalizeIdentityComparable(input.brand.name);
+
+  if (!firstName || !lastName) {
+    throw new Error(
+      "Mailpool sender identity requires a real person first and last name. Do not use the brand or mailbox label as the sender name."
+    );
+  }
+  if (looksLikeGenericMailboxLocalPart(firstName) || looksLikeGenericMailboxLocalPart(lastName)) {
+    throw new Error("Mailpool sender identity must be a person name, not a generic mailbox label.");
+  }
+  if (comparableDisplayName && comparableDisplayName === comparableBrandName) {
+    throw new Error("Mailpool sender identity cannot be the brand name.");
+  }
+  if (displayName.includes("@") || displayName.includes(".")) {
+    throw new Error("Mailpool sender identity must be a person name, not an email address or domain.");
+  }
+
   return { firstName, lastName };
+}
+
+function buildPersonMailboxSignature(firstName: string, lastName: string) {
+  return `Best regards,\n${firstName} ${lastName}`.trim();
+}
+
+function resolveMailpoolInternalAccountName(input: {
+  accountName: string;
+  brand: BrandRecord;
+  domain: string;
+  fromEmail: string;
+  firstName: string;
+  lastName: string;
+}) {
+  const displayName = `${input.firstName} ${input.lastName}`.trim();
+  const accountName = normalizeSenderNamePart(input.accountName);
+  const comparableAccountName = normalizeIdentityComparable(accountName);
+  const comparableBrandName = normalizeIdentityComparable(input.brand.name);
+  const comparableDomain = normalizeIdentityComparable(input.domain);
+
+  if (
+    accountName &&
+    comparableAccountName !== comparableBrandName &&
+    comparableAccountName !== comparableDomain &&
+    !accountName.toLowerCase().includes(input.domain.toLowerCase())
+  ) {
+    return accountName;
+  }
+
+  return `${displayName} (${input.fromEmail.trim().toLowerCase()})`;
 }
 
 async function waitForMailpoolSpamCheck(apiKey: string, spamCheckId: string) {
@@ -1833,10 +1990,84 @@ function isMailpoolGoogleCredentialsPendingError(error: unknown) {
   return error instanceof Error && /google workspace credentials not found/i.test(error.message);
 }
 
+async function reclaimInactiveMailpoolGoogleSlot(apiKey: string) {
+  if (String(process.env.MAILPOOL_AUTO_RECLAIM_INACTIVE_SLOTS ?? "true").trim().toLowerCase() === "false") {
+    return null;
+  }
+  const [mailboxes, accounts] = await Promise.all([
+    listMailpoolMailboxes(apiKey),
+    listOutreachAccounts(),
+  ]);
+  const accountByMailboxId = new Map(
+    accounts
+      .filter((account) => account.provider === "mailpool" && account.config.mailpool.mailboxId.trim())
+      .map((account) => [account.config.mailpool.mailboxId.trim(), account] as const)
+  );
+  const candidates = mailboxes
+    .filter((mailbox) => mailbox.type === "google")
+    .map((mailbox) => {
+      const account = accountByMailboxId.get(mailbox.id);
+      const inactiveAccount = !account || account.status !== "active";
+      const providerTerminal =
+        account?.config.mailpool.status === "deleted" ||
+        account?.config.mailpool.status === "error" ||
+        mailbox.status === "inactive" ||
+        mailbox.status === "deleted";
+      return {
+        mailbox,
+        account,
+        score:
+          inactiveAccount && providerTerminal
+            ? 100
+            : inactiveAccount
+              ? 20
+              : 0,
+      };
+    })
+    .filter((entry) => entry.score > 0)
+    .sort((left, right) => right.score - left.score);
+
+  const candidate = candidates[0];
+  if (!candidate) {
+    return null;
+  }
+
+  await deleteMailpoolMailbox(apiKey, candidate.mailbox.id);
+  if (candidate.account) {
+    await updateOutreachAccount(candidate.account.id, {
+      status: "inactive",
+      config: {
+        mailpool: {
+          status: "deleted",
+        },
+        mailbox: {
+          gmailUiLoginState: "error",
+          gmailUiLoginCheckedAt: nowIso(),
+          gmailUiLoginMessage: "Mailbox reclaimed automatically to free a Mailpool Google slot.",
+        },
+      },
+    });
+  }
+  await sleep(1500);
+  return {
+    mailboxId: candidate.mailbox.id,
+    email: candidate.mailbox.email,
+    accountId: candidate.account?.id ?? "",
+  };
+}
+
 async function ensureMailpoolGoogleSlots(apiKey: string, requiredAvailable = 1) {
   let current = await getMailpoolSubscriptionSlots(apiKey);
   if (availableMailpoolGoogleSlots(current) >= requiredAvailable) {
     return current;
+  }
+
+  const reclaimed = await reclaimInactiveMailpoolGoogleSlot(apiKey);
+  if (reclaimed) {
+    current = await getMailpoolSubscriptionSlots(apiKey);
+    if (availableMailpoolGoogleSlots(current) >= requiredAvailable) {
+      return current;
+    }
   }
 
   const targetQuantity = Math.max(
@@ -2336,8 +2567,19 @@ export async function provisionMailpoolSender(
   }
 
   const apiKey = await resolveMailpoolApiKey(input);
+  const existingDomainsForSelection =
+    input.domainMode === "register" ? await listMailpoolDomains(apiKey) : [];
+  const requestedOrCandidateDomains = uniqueNormalizedDomains([
+    requestedDomain,
+    ...(input.domainCandidates ?? []),
+  ]);
+  const existingManagedCandidate = existingMailpoolDomainCandidate({
+    brand,
+    domains: existingDomainsForSelection,
+    preferredDomains: requestedOrCandidateDomains,
+  });
   const domainSelection =
-    input.domainMode === "register"
+    input.domainMode === "register" && !existingManagedCandidate
       ? await selectAvailableMailpoolDomain({
           preferredDomain: requestedDomain,
           domainCandidates: input.domainCandidates,
@@ -2345,8 +2587,8 @@ export async function provisionMailpoolSender(
           mailpoolApiKey: apiKey,
         })
       : null;
-  const domain = domainSelection?.domain || requestedDomain;
-  if (input.domainMode === "register" && (!domainSelection || !domainSelection.available || !domain)) {
+  const domain = existingManagedCandidate?.domain || domainSelection?.domain || requestedDomain;
+  if (input.domainMode === "register" && !existingManagedCandidate && (!domainSelection || !domainSelection.available || !domain)) {
     throw new Error(
       domainSelection?.checkedDomains?.length
         ? `Mailpool could not find an available domain to register. Checked: ${domainSelection.checkedDomains.join(", ")}`
@@ -2364,28 +2606,69 @@ export async function provisionMailpoolSender(
     fromEmail,
     assignToBrand: input.assignToBrand,
   });
-  const { firstName, lastName } = deriveMailboxNameParts({
+  const { firstName, lastName } = resolveMailboxNameParts({
     brand,
     accountName: input.accountName,
     emailLocalPart: fromLocalPart,
+    senderFirstName: input.senderFirstName,
+    senderLastName: input.senderLastName,
   });
+  const mailboxSignature = buildPersonMailboxSignature(firstName, lastName);
 
   const [settings, existingDomains, existingMailboxes] = await Promise.all([
     getOutreachProvisioningSettings(),
-    listMailpoolDomains(apiKey),
+    existingDomainsForSelection.length ? Promise.resolve(existingDomainsForSelection) : listMailpoolDomains(apiKey),
     listMailpoolMailboxes(apiKey),
   ]);
 
   let mailpoolDomain =
     existingDomains.find((entry) => entry.domain === domain) ?? null;
-  if (input.domainMode === "register") {
-    mailpoolDomain = await registerMailpoolDomain({
-      apiKey,
-      domain,
-      type: "google",
-      redirectUrl: forwardingTargetUrl || undefined,
-      domainOwner: buildMailpoolDomainOwner({ brand, registrant: input.registrant }),
-    });
+  const registrarMode = getVercelRegistrarMode();
+  let vercelPurchase: VercelDomainPurchaseResult | null = null;
+  let vercelNameserversUpdated = false;
+  let vercelNameserverUpdateError = "";
+  if (input.domainMode === "register" && !mailpoolDomain) {
+    if (!input.registrant) {
+      throw new Error("Registrant contact information is required to buy a new domain");
+    }
+    if (registrarMode === "vercel") {
+      const attached = await registerVercelDomainThenAttachToMailpool({
+        apiKey,
+        brand,
+        domain,
+        forwardingTargetUrl,
+        registrant: input.registrant,
+      });
+      mailpoolDomain = attached.mailpoolDomain;
+      vercelPurchase = attached.purchase;
+      vercelNameserversUpdated = attached.nameserversUpdated;
+      vercelNameserverUpdateError = attached.nameserverUpdateError;
+    } else {
+      try {
+        mailpoolDomain = await registerMailpoolDomain({
+          apiKey,
+          domain,
+          type: "google",
+          redirectUrl: forwardingTargetUrl || undefined,
+          domainOwner: buildMailpoolDomainOwner({ brand, registrant: input.registrant }),
+        });
+      } catch (error) {
+        if (registrarMode !== "auto" || !looksLikeMailpoolDomainRegistrationServerError(error)) {
+          throw error;
+        }
+        const attached = await registerVercelDomainThenAttachToMailpool({
+          apiKey,
+          brand,
+          domain,
+          forwardingTargetUrl,
+          registrant: input.registrant,
+        });
+        mailpoolDomain = attached.mailpoolDomain;
+        vercelPurchase = attached.purchase;
+        vercelNameserversUpdated = attached.nameserversUpdated;
+        vercelNameserverUpdateError = attached.nameserverUpdateError;
+      }
+    }
   } else if (input.domainMode === "transfer" && !mailpoolDomain) {
     mailpoolDomain = await transferMailpoolDomain({
       apiKey,
@@ -2401,22 +2684,33 @@ export async function provisionMailpoolSender(
     throw new Error("This domain is not managed in Mailpool yet. Transfer it into Mailpool first or switch to buy new.");
   }
 
+  const warnings: string[] = [];
+  const nextSteps: string[] = [];
   let mailbox =
     existingMailboxes.find((entry) => entry.email === fromEmail.toLowerCase()) ?? null;
   if (!mailbox) {
-    await ensureMailpoolGoogleSlots(apiKey, 1);
+    let slotAutoscaleError = "";
+    try {
+      await ensureMailpoolGoogleSlots(apiKey, 1);
+    } catch (error) {
+      slotAutoscaleError = error instanceof Error ? error.message : "Mailpool Google inbox slot auto-scaling failed";
+    }
     try {
       mailbox = await createMailpoolMailbox({
         apiKey,
         email: fromEmail,
         firstName,
         lastName,
-        signature: `Best regards,\n${firstName} ${lastName}`.trim(),
+        signature: mailboxSignature,
         type: "google",
       });
     } catch (error) {
       if (!isMailpoolMailboxLimitError(error)) {
         throw error;
+      }
+      if (slotAutoscaleError) {
+        const mailboxError = error instanceof Error ? error.message : "mailbox creation failed";
+        throw new Error(`${slotAutoscaleError}; mailbox creation also failed: ${mailboxError}`);
       }
       await ensureMailpoolGoogleSlots(apiKey, 1);
       await sleep(1500);
@@ -2425,10 +2719,27 @@ export async function provisionMailpoolSender(
         email: fromEmail,
         firstName,
         lastName,
-        signature: `Best regards,\n${firstName} ${lastName}`.trim(),
+        signature: mailboxSignature,
         type: "google",
       });
     }
+    if (slotAutoscaleError) {
+      warnings.push(`Mailpool slot auto-scaling reported an error, but mailbox creation still continued: ${slotAutoscaleError}`);
+    }
+  } else if (
+    normalizeSenderNamePart(mailbox.firstName) !== firstName ||
+    normalizeSenderNamePart(mailbox.lastName) !== lastName ||
+    normalizeSenderNamePart(mailbox.signature ?? "") !== mailboxSignature
+  ) {
+    mailbox = await updateMailpoolMailbox({
+      apiKey,
+      mailboxId: mailbox.id,
+      patch: {
+        firstName,
+        lastName,
+        signature: mailboxSignature,
+      },
+    });
   }
 
   const mailboxReadyForDelivery = Boolean(
@@ -2440,9 +2751,6 @@ export async function provisionMailpoolSender(
   );
   let spamCheck: MailpoolSpamCheck | null = null;
   let resolvedSpamCheck: MailpoolSpamCheck | null = null;
-
-  const warnings: string[] = [];
-  const nextSteps: string[] = [];
 
   if (input.domainMode === "register" && domainSelection?.source && domainSelection.source !== "requested" && requestedDomain !== domain) {
     warnings.push(`Mailpool switched to ${domain} because ${requestedDomain} was not available.`);
@@ -2467,7 +2775,14 @@ export async function provisionMailpoolSender(
   }
 
   const account = await ensureMailpoolHybridAccount({
-    accountName: input.accountName.trim() || `${brand.name} ${domain}`,
+    accountName: resolveMailpoolInternalAccountName({
+      accountName: input.accountName,
+      brand,
+      domain,
+      fromEmail,
+      firstName,
+      lastName,
+    }),
     mailbox,
     spamCheck: resolvedSpamCheck,
     replyToEmail: fromEmail,
@@ -2489,13 +2804,15 @@ export async function provisionMailpoolSender(
     replyMailboxEmail: fromEmail,
     dnsStatus: mailpoolStatusToDnsStatus(mailpoolDomain.status),
     forwardingTargetUrl: forwardingTargetUrl || mailpoolDomain.redirectUrl || "",
-    registrar: "mailpool",
+    registrar: vercelPurchase ? "vercel" : "mailpool",
     provider: "mailpool",
     deliveryAccountId: account.id,
     deliveryAccountName: account.name,
     mailpoolDomainId: mailpoolDomain.id,
     notes:
-      input.domainMode === "transfer"
+      vercelPurchase
+        ? "Registered through Vercel and attached to Mailpool."
+        : input.domainMode === "transfer"
         ? "Transferred into Mailpool and provisioned through Mailpool."
         : "Provisioned through Mailpool.",
   });
@@ -2529,6 +2846,16 @@ export async function provisionMailpoolSender(
   if (mailpoolDomain.status !== "active") {
     warnings.push(`Mailpool domain is still ${mailpoolDomain.status}. DNS may still be propagating.`);
   }
+  if (vercelPurchase && !vercelPurchase.alreadyOwned) {
+    warnings.push(`Vercel bought ${domain} for $${vercelPurchase.purchasePrice}. Mailpool activation may still need DNS propagation.`);
+  }
+  if (vercelPurchase && !vercelNameserversUpdated && mailpoolDomain.nameservers?.length) {
+    warnings.push(
+      vercelNameserverUpdateError
+        ? `Vercel nameserver update failed: ${vercelNameserverUpdateError}`
+        : "Mailpool returned nameservers, but Vercel did not confirm an update."
+    );
+  }
   if (resolvedSpamCheck?.state !== "completed") {
     warnings.push("Mailpool spam check is still pending.");
   }
@@ -2538,6 +2865,9 @@ export async function provisionMailpoolSender(
   }
   if (input.domainMode === "transfer" && mailpoolDomain.status !== "active") {
     nextSteps.push("Wait for Mailpool to finish transferring the domain before treating this sender as live.");
+  }
+  if (vercelPurchase && mailpoolDomain.nameservers?.length && !vercelNameserversUpdated) {
+    nextSteps.push("Update the Vercel nameservers to the Mailpool nameservers shown on the domain.");
   }
   nextSteps.push("Internal inbox placement monitors will start once the sender begins warming.");
   nextSteps.push("Run a sender test before launching live campaigns.");
@@ -2566,6 +2896,17 @@ export async function provisionMailpoolSender(
       inboxPlacementId: "",
       inboxPlacementStatus: "internal",
     },
+    vercel: vercelPurchase
+      ? {
+          registrarMode,
+          domain,
+          alreadyOwned: vercelPurchase.alreadyOwned,
+          orderId: vercelPurchase.orderId,
+          purchasePrice: vercelPurchase.purchasePrice,
+          nameserversUpdated: vercelNameserversUpdated,
+          nameserverUpdateError: vercelNameserverUpdateError,
+        }
+      : undefined,
     warnings,
     nextSteps,
   };

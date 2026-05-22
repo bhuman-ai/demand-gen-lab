@@ -201,6 +201,46 @@ function escapeRegExp(value: string) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+function sanitizeProviderError(value: string) {
+  return value.replace(/sk-[A-Za-z0-9_*.-]+/g, "sk-***").slice(0, 300);
+}
+
+function extractChatCompletionText(payloadRaw: unknown) {
+  const payload = asRecord(payloadRaw);
+  const choices = Array.isArray(payload.choices) ? payload.choices : [];
+  const firstChoice = asRecord(choices[0]);
+  const message = asRecord(firstChoice.message);
+  return String(message.content ?? "") || "{}";
+}
+
+function normalizeProviderName(value: unknown) {
+  return String(value ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/[\s_-]+/g, "");
+}
+
+function resolveConversationPromptProvider(): "openai" | "openrouter" {
+  const provider = normalizeProviderName(
+    process.env.CONVERSATION_PROMPT_PROVIDER || process.env.LLM_PROVIDER
+  );
+  if (provider === "openrouter") return "openrouter";
+  return "openai";
+}
+
+function resolveOpenRouterModel(openAiModel: string) {
+  const configured = String(
+    process.env.OPENROUTER_MODEL_CONVERSATION_PROMPT_RENDER ||
+      process.env.OPENROUTER_MODEL_DEFAULT ||
+      ""
+  ).trim();
+  const model = configured || openAiModel;
+  if (!model) return "openai/gpt-5.5";
+  if (model.includes("/")) return model;
+  if (/^gpt-/i.test(model)) return `openai/${model}`;
+  return model;
+}
+
 function unresolvedTemplateTokens(text: string) {
   return (
     /{{\s*[^}]+\s*}}/.test(text) ||
@@ -218,6 +258,17 @@ function findBannedPhrase(subject: string, body: string) {
   for (const phrase of BANNED_VAGUE_PHRASES) {
     if (combined.includes(phrase)) return phrase;
   }
+  return "";
+}
+
+function badSubjectPattern(subject: string) {
+  const normalized = oneLine(subject).toLowerCase();
+  if (!normalized) return "";
+  if (/\bquick\s+question\b/.test(normalized)) return "quick question";
+  if (/^quick\b/.test(normalized)) return "quick";
+  if (/\bquestions?\b/.test(normalized)) return "question";
+  if (/^question\s+(for|on|about|re)\b/.test(normalized)) return "question";
+  if (/^(checking in|following up|touching base)\b/.test(normalized)) return "generic follow-up";
   return "";
 }
 
@@ -279,6 +330,7 @@ function buildPrompt(input: {
 }) {
   const nodePrompt = sanitizeNodePromptTemplate(input.node.promptTemplate.trim());
   const replyContext = hasInboundContext(input.context);
+  const warmupContext = /warmup/i.test(input.node.title) || /inbox warmup/i.test(nodePrompt);
   const replyPolicy = input.context.replyPolicy;
   const replyGuidance = Array.isArray(replyPolicy?.guidance)
     ? replyPolicy?.guidance.map((entry) => oneLine(String(entry ?? ""))).filter(Boolean)
@@ -294,6 +346,10 @@ function buildPrompt(input: {
     "",
     "Hard constraints:",
     "- Body must be specific, concrete, and easy to understand.",
+    "- Subject must state the concrete topic of the email, not a generic opener.",
+    "- Never use subject patterns like 'Quick question', 'Quick question for...', 'Question for...', 'Checking in', or 'Following up'.",
+    "- Never use the word 'question' or 'questions' in the subject. Use 'inquiry', 'advice', 'fit', 'setup', or the concrete topic instead.",
+    "- Prefer content-specific inquiry subjects like 'studio furniture purchase inquiry', 'low-volume inbox warmup advice', or 'AWS credits eligibility'.",
     "- No buzzwords, no placeholder tokens, no unresolved variables.",
     "- Treat node prompt template as direction only. Do not copy any example text verbatim.",
     replyContext
@@ -322,7 +378,15 @@ function buildPrompt(input: {
     ...replyGuidance.map((entry) => `- ${entry}`),
     ...replyProhibited.map((entry) => `- Never use: ${entry}`),
     replyContext ? "" : "- Keep first-touch copy to 2-3 short paragraphs and ~55-75 words.",
-    replyContext ? "" : "- Include one concrete example or proof, then ask one simple next-step CTA.",
+    !replyContext && warmupContext
+      ? "- For warmup copy, do not invent proof, statistics, customer stories, prior work, third-party client needs, or examples unless they are explicitly present in context."
+      : "",
+    !replyContext && warmupContext
+      ? "- For warmup copy, the CTA should be a low-friction question, not a meeting request, pitch, or proof-backed sales ask."
+      : "",
+    !replyContext && !warmupContext
+      ? "- Include one concrete example or proof, then ask one simple next-step CTA."
+      : "",
     input.policy.subjectMaxWords > 0
       ? `- Keep subject concise (max ${input.policy.subjectMaxWords} words).`
       : "",
@@ -364,7 +428,9 @@ async function openAiJsonCall(input: { prompt: string; model: string }): Promise
 
   const raw = await response.text();
   if (!response.ok) {
-    throw new Error(`OpenAI message generation failed (HTTP ${response.status}): ${raw.slice(0, 300)}`);
+    throw new Error(
+      `OpenAI message generation failed (HTTP ${response.status}): ${sanitizeProviderError(raw)}`
+    );
   }
 
   let payload: unknown = {};
@@ -385,6 +451,57 @@ async function openAiJsonCall(input: { prompt: string; model: string }): Promise
   return asRecord(parsed);
 }
 
+async function openRouterJsonCall(input: {
+  prompt: string;
+  model: string;
+}): Promise<Record<string, unknown>> {
+  const apiKey = process.env.OPENROUTER_API_KEY;
+  if (!apiKey) {
+    throw new Error("OPENROUTER_API_KEY is missing.");
+  }
+
+  const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+      "HTTP-Referer": process.env.NEXT_PUBLIC_APP_URL || "https://www.lastb2b.com",
+      "X-Title": "LastB2B",
+    },
+    body: JSON.stringify({
+      model: input.model,
+      messages: [{ role: "user", content: input.prompt }],
+      response_format: { type: "json_object" },
+      temperature: 0.4,
+      max_tokens: 1200,
+    }),
+  });
+
+  const raw = await response.text();
+  if (!response.ok) {
+    throw new Error(
+      `OpenRouter message generation failed (HTTP ${response.status}): ${sanitizeProviderError(raw)}`
+    );
+  }
+
+  let payload: unknown = {};
+  try {
+    payload = JSON.parse(raw);
+  } catch {
+    payload = {};
+  }
+
+  const outputText = extractChatCompletionText(payload);
+  let parsed: unknown = {};
+  try {
+    parsed = JSON.parse(outputText);
+  } catch {
+    throw new Error(`OpenRouter output was not valid JSON: ${outputText.slice(0, 220)}`);
+  }
+
+  return asRecord(parsed);
+}
+
 function validateOutput(input: {
   subject: string;
   body: string;
@@ -396,6 +513,7 @@ function validateOutput(input: {
   const bodyWords = wordCount(input.body);
   const unresolved = unresolvedTemplateTokens(input.subject) || unresolvedTemplateTokens(input.body);
   const bannedPhrase = findBannedPhrase(input.subject, input.body);
+  const bannedSubject = badSubjectPattern(input.subject);
 
   let ctaOccurrences = 0;
   const cta = oneLine(input.cta);
@@ -410,6 +528,17 @@ function validateOutput(input: {
   }
   if (!input.body.trim()) {
     return { ok: false as const, reason: "Generated body is empty", subjectWords, bodyWords, ctaOccurrences, unresolved, bannedPhrase };
+  }
+  if (bannedSubject) {
+    return {
+      ok: false as const,
+      reason: `Generated subject is too generic or spammy: ${bannedSubject}`,
+      subjectWords,
+      bodyWords,
+      ctaOccurrences,
+      unresolved,
+      bannedPhrase: bannedSubject,
+    };
   }
   // Runtime no longer blocks on style/policy validation.
   // We keep telemetry fields (word counts, unresolved token detection, banned phrase detection)
@@ -427,11 +556,16 @@ export async function generateConversationPromptMessage(input: {
   context: ConversationPromptRenderContext;
   model?: string;
 }): Promise<ConversationPromptRenderResult> {
-  const model = resolveLlmModel("conversation_prompt_render", {
+  const openAiModel = resolveLlmModel("conversation_prompt_render", {
     overrideModel: input.model,
     legacyModelEnv: process.env.CONVERSATION_PROMPT_MODEL,
   });
-  const trace = defaultTrace(input.node, model);
+  const provider = resolveConversationPromptProvider();
+  const providerModel = provider === "openrouter" ? resolveOpenRouterModel(openAiModel) : openAiModel;
+  const trace = defaultTrace(
+    input.node,
+    provider === "openrouter" ? `openrouter:${providerModel}` : providerModel
+  );
 
   if (input.node.kind !== "message") {
     return { ok: false, reason: "Node is not a message node", trace };
@@ -458,7 +592,10 @@ export async function generateConversationPromptMessage(input: {
     trace.promptHash = createHash("sha256").update(prompt).digest("hex").slice(0, 24);
 
     try {
-      const parsed = await openAiJsonCall({ prompt, model });
+      const parsed =
+        provider === "openrouter"
+          ? await openRouterJsonCall({ prompt, model: providerModel })
+          : await openAiJsonCall({ prompt, model: providerModel });
       const qualityRaw = asRecord(parsed.quality);
       trace.quality = {
         clarity: clampQuality(qualityRaw.clarity, 0),

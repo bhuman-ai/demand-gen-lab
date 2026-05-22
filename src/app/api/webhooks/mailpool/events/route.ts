@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { listBrands, updateBrand } from "@/lib/factory-data";
-import type { BrandRecord, DomainRow, OutreachAccountConfig } from "@/lib/factory-types";
+import type { BrandRecord, DomainRow, OutreachAccount, OutreachAccountConfig } from "@/lib/factory-types";
 import { syncBrandGmailUiAssignments } from "@/lib/gmail-ui-brand-sync";
 import { normalizeGmailUiLoginStatus } from "@/lib/gmail-ui-login";
 import { buildGmailUiUserDataDir } from "@/lib/gmail-ui-profile";
@@ -13,8 +13,8 @@ import { getOutreachAccountFromEmail } from "@/lib/outreach-account-helpers";
 import { sanitizeCustomerIoBillingConfig } from "@/lib/outreach-customerio-billing";
 import { getOutreachProvisioningSettingsSecrets } from "@/lib/outreach-provider-settings";
 import { kickoffMailpoolAccountDeliverability } from "@/lib/mailpool-deliverability-bootstrap";
-import { pickWebshareProxy } from "@/lib/webshare-client";
 import { defaultSocialAccountConfig } from "@/lib/social-account-config";
+import { ensureRequiredWebshareProxy, wantsWebshareProxy } from "@/lib/webshare-proxy-assignment";
 import {
   parseMailpoolWebhookEvent,
   verifyMailpoolWebhookSignature,
@@ -31,10 +31,6 @@ function mailpoolStatusToDnsStatus(status: string): DomainRow["dnsStatus"] {
   if (normalized === "active") return "verified";
   if (normalized === "pending") return "configured";
   return "error";
-}
-
-function wantsWebshareProxy() {
-  return String(process.env.WEBSHARE_AUTO_ASSIGN_PROXY ?? "").trim().toLowerCase() === "true";
 }
 
 function gmailUiProfileDir(fromEmail: string) {
@@ -161,53 +157,9 @@ async function reconcileMailbox(mailbox: MailpoolMailbox, deleted = false) {
   return null;
 }
 
-async function maybeAssignWebshareProxy(account: {
-  id: string;
-  config: OutreachAccountConfig;
-  provider: string;
-  accountType: string;
-}) {
+async function maybeAssignWebshareProxy(account: OutreachAccount) {
   if (!wantsWebshareProxy()) return;
-  if (account.provider !== "mailpool") return;
-  if (account.accountType === "mailbox") return;
-  if (account.config.mailbox.deliveryMethod !== "gmail_ui") return;
-  if (account.config.mailbox.proxyHost.trim() || account.config.mailbox.proxyUrl.trim()) return;
-  if (!process.env.WEBSHARE_API_KEY) return;
-
-  const allAccounts = await listOutreachAccounts();
-  const used = new Set<string>();
-  for (const row of allAccounts) {
-    const host = row.config.mailbox.proxyHost.trim();
-    const port = Number(row.config.mailbox.proxyPort ?? 0) || 0;
-    if (host && port) {
-      used.add(`${host}:${port}`);
-      continue;
-    }
-    const url = row.config.mailbox.proxyUrl.trim();
-    if (url) {
-      try {
-        const parsed = new URL(url);
-        if (parsed.hostname && parsed.port) {
-          used.add(`${parsed.hostname}:${parsed.port}`);
-        }
-      } catch {}
-    }
-  }
-
-  const choice = await pickWebshareProxy(used);
-  if (!choice.ok || !choice.proxy) return;
-
-  await updateOutreachAccount(account.id, {
-    config: {
-      mailbox: {
-        proxyUrl: choice.proxy.url,
-        proxyHost: choice.proxy.host,
-        proxyPort: choice.proxy.port,
-        proxyUsername: choice.proxy.username,
-        proxyPassword: choice.proxy.password,
-      },
-    },
-  });
+  await ensureRequiredWebshareProxy(account);
 }
 
 async function reconcileDomain(domain: MailpoolDomain) {

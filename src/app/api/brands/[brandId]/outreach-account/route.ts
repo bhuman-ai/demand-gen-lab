@@ -6,6 +6,7 @@ import {
   setBrandOutreachAssignment,
 } from "@/lib/outreach-data";
 import { getOutreachSenderBackingIssue, supportsCustomerIoDelivery } from "@/lib/outreach-account-helpers";
+import { syncCanonicalSenderFromProvisionedAccount } from "@/lib/senders";
 
 function asRecord(value: unknown): Record<string, unknown> {
   if (value && typeof value === "object" && !Array.isArray(value)) {
@@ -23,6 +24,22 @@ function normalizeAccountIds(value: unknown, fallbackAccountId = "") {
   const primary = fallbackAccountId.trim();
   if (primary) ids.add(primary);
   return Array.from(ids);
+}
+
+async function syncAssignedCanonicalSenders(
+  brandId: string,
+  assignment: Awaited<ReturnType<typeof setBrandOutreachAssignment>>
+) {
+  if (!assignment) return;
+  await Promise.all(
+    assignment.accountIds.map((accountId) =>
+      syncCanonicalSenderFromProvisionedAccount({
+        brandId,
+        accountId,
+        mailboxAccountId: assignment.mailboxAccountId || accountId,
+      }).catch(() => null)
+    )
+  );
 }
 
 export async function GET(
@@ -108,6 +125,7 @@ export async function PUT(
         ? { accountId, accountIds, mailboxAccountId }
         : { accountId, accountIds }
     );
+    await syncAssignedCanonicalSenders(brandId, assignment);
     const account = assignment ? await getOutreachAccount(assignment.accountId) : null;
     const mailboxAccount = assignment
       ? await getOutreachAccount(assignment.mailboxAccountId || assignment.accountId)

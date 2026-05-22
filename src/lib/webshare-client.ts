@@ -12,12 +12,17 @@ type WebshareProxyRow = {
   city_name?: string;
 };
 
+type WebshareConnectionMode = "direct" | "backbone";
+
 type WebshareListResponse = {
   count: number;
   next: string | null;
   previous: string | null;
   results: WebshareProxyRow[];
 };
+
+const WEBHARE_PROXY_LIST_TTL_MS = 60_000;
+const proxyListCache = new Map<WebshareConnectionMode, { expiresAt: number; proxies: WebshareProxyRow[] }>();
 
 function readEnv(name: string) {
   return String(process.env[name] ?? "").trim();
@@ -28,7 +33,8 @@ function webshareApiKey() {
 }
 
 function webshareProxyMode() {
-  return readEnv("WEBSHARE_PROXY_MODE") || "direct";
+  const value = readEnv("WEBSHARE_PROXY_MODE").toLowerCase();
+  return value === "backbone" ? "backbone" : "direct";
 }
 
 function webshareProxyType() {
@@ -47,8 +53,10 @@ function buildWebshareUrl(path: string, params: Record<string, string>) {
   return url.toString();
 }
 
-function normalizeProxyRow(raw: Record<string, unknown>): WebshareProxyRow | null {
-  const proxy_address = String(raw.proxy_address ?? raw.proxyAddress ?? "").trim();
+function normalizeProxyRow(raw: Record<string, unknown>, mode: WebshareConnectionMode): WebshareProxyRow | null {
+  const proxy_address =
+    String(raw.proxy_address ?? raw.proxyAddress ?? "").trim() ||
+    (mode === "backbone" ? "p.webshare.io" : "");
   const port = Number(raw.port ?? raw.proxy_port ?? 0) || 0;
   const username = String(raw.username ?? raw.user ?? "").trim();
   const password = String(raw.password ?? raw.pass ?? "").trim();
@@ -88,7 +96,12 @@ async function fetchWebsharePage(url: string, apiKey: string): Promise<WebshareL
   };
 }
 
-export async function listWebshareProxies() {
+async function listWebshareProxiesForMode(mode: WebshareConnectionMode) {
+  const cached = proxyListCache.get(mode);
+  if (cached && cached.expiresAt > Date.now()) {
+    return { ok: true as const, error: "", proxies: cached.proxies };
+  }
+
   const apiKey = webshareApiKey();
   if (!apiKey) {
     return { ok: false as const, error: "WEBSHARE_API_KEY missing", proxies: [] as WebshareProxyRow[] };
@@ -96,7 +109,7 @@ export async function listWebshareProxies() {
 
   const params: Record<string, string> = {
     page_size: "100",
-    mode: webshareProxyMode(),
+    mode,
   };
   const type = webshareProxyType();
   if (type) params.type = type;
@@ -108,14 +121,55 @@ export async function listWebshareProxies() {
   for (let page = 0; page < 20; page += 1) {
     const payload = await fetchWebsharePage(url, apiKey);
     for (const raw of payload.results) {
-      const normalized = normalizeProxyRow(raw as unknown as Record<string, unknown>);
+      const normalized = normalizeProxyRow(raw as unknown as Record<string, unknown>, mode);
       if (normalized) proxies.push(normalized);
     }
     if (!payload.next) break;
     url = payload.next;
   }
 
+  proxyListCache.set(mode, {
+    expiresAt: Date.now() + WEBHARE_PROXY_LIST_TTL_MS,
+    proxies,
+  });
   return { ok: true as const, error: "", proxies };
+}
+
+function isResidentialDirectModeError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error ?? "");
+  return (
+    message.includes("Cannot use direct connection mode with residential proxies") ||
+    message.includes("\"mode\"") && message.includes("residential proxies")
+  );
+}
+
+function isWebshareRateLimitError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error ?? "");
+  return message.includes("Webshare HTTP 429");
+}
+
+export async function listWebshareProxies() {
+  const preferredMode = webshareProxyMode();
+  try {
+    return await listWebshareProxiesForMode(preferredMode);
+  } catch (error) {
+    const cached = proxyListCache.get(preferredMode);
+    if (cached && isWebshareRateLimitError(error)) {
+      return { ok: true as const, error: "", proxies: cached.proxies };
+    }
+    if (preferredMode === "direct" && isResidentialDirectModeError(error)) {
+      try {
+        return await listWebshareProxiesForMode("backbone");
+      } catch (fallbackError) {
+        const fallbackCached = proxyListCache.get("backbone");
+        if (fallbackCached && isWebshareRateLimitError(fallbackError)) {
+          return { ok: true as const, error: "", proxies: fallbackCached.proxies };
+        }
+        throw fallbackError;
+      }
+    }
+    throw error;
+  }
 }
 
 export type WebshareProxyChoice = {

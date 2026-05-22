@@ -1,5 +1,6 @@
 import nodemailer from "nodemailer";
 import type {
+  EmailVerificationState,
   LeadAcceptanceDecision,
   LeadQualityPolicy,
   OutreachAccount,
@@ -14,8 +15,10 @@ import {
   supportsMailpoolDelivery,
 } from "@/lib/outreach-account-helpers";
 import type { OutreachAccountSecrets } from "@/lib/outreach-data";
-import { sendGmailUiMessage, validateGmailUiMailboxConfig } from "@/lib/gmail-ui-delivery";
+import { validateGmailUiMailboxConfig } from "@/lib/gmail-ui-delivery";
 import { resolveGmailUiUserDataDir } from "@/lib/gmail-ui-profile";
+import { hasGmailUiWorkerConfig, sendGmailUiWorkerMessage } from "@/lib/gmail-ui-worker-client";
+import { resolveMailpoolOutreachAccountAuthCode } from "@/lib/mailpool-account-refresh";
 
 export type ProviderTestResult = {
   ok: boolean;
@@ -38,6 +41,7 @@ export type ApifyLead = {
   domain: string;
   sourceUrl: string;
   realVerifiedEmail?: boolean;
+  emailVerification?: EmailVerificationState | null;
 };
 
 export type ApifyStoreActor = {
@@ -52,7 +56,7 @@ export type ApifyStoreActor = {
   trialMinutes: number;
 };
 
-export type EmailFinderVerificationMode = "validatedmails";
+export type EmailFinderVerificationMode = "local" | "heuristic";
 
 export type EmailFinderBatchEnrichmentResult = {
   ok: boolean;
@@ -74,6 +78,61 @@ export type EmailFinderBatchEnrichmentResult = {
     topAttemptConfidence: string;
     topAttemptReason: string;
   }>;
+  decisionSignals: EmailFinderDecisionSignal[];
+  decisionSummary: EmailFinderDecisionSummary;
+};
+
+export type EmailFinderDecisionAction =
+  | "send_now"
+  | "canary_probe"
+  | "retry_later"
+  | "keep_sourcing"
+  | "manual_review"
+  | "suppress";
+
+export type EmailFinderDecisionSignal = {
+  id: string;
+  name: string;
+  domain: string;
+  status: "matched" | "no_match" | "error";
+  recommendedAction: EmailFinderDecisionAction;
+  reason: string;
+  topCandidateEmail: string;
+  topCandidateVerdict: string;
+  topCandidateConfidence: string;
+  topCandidatePValid: number | null;
+  topCandidateRoute: string;
+  topCandidateReason: string;
+  mxStatus: string;
+  historicalKnownEmailsCount: number;
+  attemptsCount: number;
+  orderedCandidateCount: number;
+  queueCounts: {
+    eligibleSendNow: number;
+    highConfidence: number;
+    risky: number;
+    review: number;
+    suppressed: number;
+  };
+  acceptAll: boolean | null;
+  catchAll: boolean | null;
+};
+
+export type EmailFinderDecisionSummary = {
+  sendNow: number;
+  canaryProbe: number;
+  retryLater: number;
+  keepSourcing: number;
+  manualReview: number;
+  suppress: number;
+  topAction: EmailFinderDecisionAction | "";
+  topReason: string;
+};
+
+export type EmailFinderAuditContext = {
+  source: string;
+  context?: Record<string, unknown>;
+  requestId?: string;
 };
 
 export type ApifyActorSchemaProfile = {
@@ -192,8 +251,32 @@ const NON_COMPANY_PROFILE_DOMAIN_ROOTS = new Set([
 const STRICT_EMAIL_PATTERN = /^([a-z0-9._%+-]+)@([a-z0-9.-]+\.[a-z]{2,})$/i;
 const EMBEDDED_EMAIL_PATTERN = /([a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,})/i;
 
+function resolveEmailFinderVerificationMode(
+  value: unknown,
+  fallback: EmailFinderVerificationMode = "local"
+): EmailFinderVerificationMode {
+  const normalized = String(value ?? fallback).trim().toLowerCase();
+  if (["local", "smtp", "smtp_local", "smtp-local", "enrichanything", "enrichanything-local"].includes(normalized)) {
+    return "local";
+  }
+  if (normalized === "validatedmails") return "local";
+  if (["heuristic", "pattern", "none", "best_guess", "best-guess"].includes(normalized)) {
+    return "heuristic";
+  }
+  return fallback;
+}
+
 export function isPreviewPlaceholderEmail(email: string) {
   return extractFirstEmailAddress(email).startsWith(PREVIEW_PLACEHOLDER_EMAIL_PREFIX);
+}
+
+function toNullableBool(value: unknown): boolean | null {
+  if (typeof value === "boolean") return value;
+  const normalized = String(value ?? "").trim().toLowerCase();
+  if (!normalized) return null;
+  if (["true", "1", "yes", "y", "on"].includes(normalized)) return true;
+  if (["false", "0", "no", "n", "off"].includes(normalized)) return false;
+  return null;
 }
 
 function isRoleAccountLocal(local: string) {
@@ -668,7 +751,37 @@ function coerceRecord(value: unknown) {
     : {};
 }
 
+function cleanEnvValue(value: unknown) {
+  return String(value ?? "")
+    .replace(/\\r|\\n/g, "")
+    .trim();
+}
+
+function parseEnvBool(value: unknown, fallback: boolean) {
+  const normalized = cleanEnvValue(value).toLowerCase();
+  if (!normalized) return fallback;
+  if (["1", "true", "yes", "y", "on"].includes(normalized)) return true;
+  if (["0", "false", "no", "n", "off"].includes(normalized)) return false;
+  return fallback;
+}
+
+function externalEmailWaterfallEnabled() {
+  return parseEnvBool(
+    process.env.EMAIL_FINDER_EXTERNAL_WATERFALL_ENABLED ??
+      process.env.EMAIL_FINDER_PAID_PROVIDER_FALLBACK_ENABLED ??
+      process.env.EMAIL_FINDER_AIRSCALE_ENABLED,
+    false
+  );
+}
+
 export function resolveEmailFinderApiBaseUrl(explicit?: string) {
+  const explicitMode = String(explicit ?? "")
+    .replace(/\\r|\\n/g, "")
+    .trim()
+    .toLowerCase();
+  if (["local", "internal", "direct"].includes(explicitMode)) {
+    return "";
+  }
   const internalHost = String(
     process.env.EMAIL_FINDER_INTERNAL_HOST ??
       process.env.NEXT_PUBLIC_SITE_URL ??
@@ -693,12 +806,24 @@ export function resolveEmailFinderApiBaseUrl(explicit?: string) {
 
   for (const candidate of candidates) {
     const normalized = String(candidate ?? "")
+      .replace(/\\r|\\n/g, "")
       .trim()
       .replace(/\/+$/, "");
     if (normalized) return normalized;
   }
 
   return "";
+}
+
+function resolveEmailFinderSmtpFromAddress() {
+  return String(
+    process.env.EMAIL_FINDER_SMTP_MAIL_FROM ??
+      process.env.EMAIL_FINDER_FROM_ADDRESS ??
+      process.env.EMAIL_VERIFIER_FROM_ADDRESS ??
+      ""
+  )
+    .replace(/\\r|\\n/g, "")
+    .trim();
 }
 
 function parseEmailFinderBestGuessEmail(
@@ -740,7 +865,31 @@ function parseEmailFinderBestGuessEmail(
     const pValid = typeof pValidRaw === "number" && Number.isFinite(pValidRaw) ? pValidRaw : -1;
     const attemptRaw = Number(candidate.attempt ?? 0);
     const attempt = Number.isFinite(attemptRaw) ? attemptRaw : 0;
-    return { email, verdict, confidence, pValid, attempt };
+    const httpStatusRaw =
+      typeof candidate.http_status === "number"
+        ? candidate.http_status
+        : typeof details.http_status === "number"
+          ? details.http_status
+          : null;
+    const httpStatus =
+      typeof httpStatusRaw === "number" && Number.isFinite(httpStatusRaw) ? httpStatusRaw : null;
+    const acceptAll = toNullableBool(details.accept_all ?? details.acceptall);
+    const catchAll = toNullableBool(details.catch_all ?? details.catchall);
+    const reason = String(details.reason ?? candidate.reason ?? candidate.route_reason ?? "").trim();
+    const providerStatus = String(candidate.provider_status ?? details.provider_status ?? "").trim();
+    return {
+      email,
+      verdict,
+      confidence,
+      pValid,
+      attempt,
+      details,
+      acceptAll,
+      catchAll,
+      httpStatus,
+      reason,
+      providerStatus,
+    };
   };
 
   // Treat any validator-positive result as acceptable.
@@ -785,12 +934,75 @@ function parseEmailFinderBestGuessEmail(
       return left.attempt - right.attempt;
     });
 
+  const verification = coerceRecord(root.verification);
+  const verificationMode = String(verification.mode ?? "")
+    .trim()
+    .toLowerCase();
+  const normalizedVerificationMode: EmailVerificationState["mode"] =
+    verificationMode === "smtp" || verificationMode === "local"
+      ? "local"
+      : verificationMode === "none" || verificationMode === "heuristic"
+        ? "heuristic"
+        : verificationMode === "validatedmails"
+          ? "local"
+          : "";
+  const isHeuristicOnly = normalizedVerificationMode === "heuristic";
+  const buildVerificationState = (candidate: {
+    verdict: string;
+    confidence: string;
+    details: Record<string, unknown>;
+    acceptAll: boolean | null;
+    catchAll: boolean | null;
+    pValid: number;
+    httpStatus: number | null;
+    reason: string;
+    providerStatus: string;
+  }): EmailVerificationState | null => {
+    const snapshot: EmailVerificationState = {
+      mode: normalizedVerificationMode,
+      provider: String(candidate.details.provider ?? verification.provider ?? "").trim().toLowerCase(),
+      verdict: candidate.verdict,
+      confidence: candidate.confidence,
+      reason: candidate.reason || String(candidate.details.provider_reason ?? "").trim(),
+      mxStatus: String(candidate.details.mx_status ?? verification.mx_status ?? "").trim().toLowerCase(),
+      acceptAll: candidate.acceptAll,
+      catchAll: candidate.catchAll,
+      pValid: Number.isFinite(candidate.pValid) && candidate.pValid >= 0 ? candidate.pValid : null,
+      httpStatus: candidate.httpStatus,
+      providerStatus:
+        candidate.providerStatus || String(candidate.details.providerStatus ?? "").trim(),
+    };
+    if (
+      !snapshot.mode &&
+      !snapshot.provider &&
+      !snapshot.verdict &&
+      !snapshot.confidence &&
+      !snapshot.reason &&
+      !snapshot.mxStatus &&
+      snapshot.acceptAll === null &&
+      snapshot.catchAll === null
+    ) {
+      return null;
+    }
+    return snapshot;
+  };
+  const isSafeVerifiedCandidate = (candidate: {
+    verdict: string;
+    acceptAll: boolean | null;
+    catchAll: boolean | null;
+  }) =>
+    !isHeuristicOnly &&
+    candidate.verdict !== "risky-valid" &&
+    candidate.acceptAll !== true &&
+    candidate.catchAll !== true;
+
   for (const candidate of candidates) {
     const suppressionReason = getLeadEmailSuppressionReason(candidate.email);
     if (suppressionReason) continue;
     return {
       email: candidate.email,
-      realVerifiedEmail: true,
+      realVerifiedEmail: isSafeVerifiedCandidate(candidate),
+      emailVerification: buildVerificationState(candidate),
     };
   }
 
@@ -817,6 +1029,7 @@ function parseEmailFinderBestGuessEmail(
       return {
         email: candidate.email,
         realVerifiedEmail: false,
+        emailVerification: buildVerificationState(candidate),
       };
     }
   }
@@ -824,6 +1037,198 @@ function parseEmailFinderBestGuessEmail(
   return {
     email: "",
     realVerifiedEmail: false,
+    emailVerification: null,
+  };
+}
+
+function numericOrNull(value: unknown): number | null {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function emailFinderQueueCount(value: unknown) {
+  return Array.isArray(value) ? value.length : 0;
+}
+
+function extractEmailFinderCandidateForDecision(row: unknown, routeFallback = "") {
+  const candidate = coerceRecord(row);
+  const details = coerceRecord(candidate.details);
+  const pValid =
+    typeof candidate.p_valid === "number"
+      ? candidate.p_valid
+      : typeof details.p_valid === "number"
+        ? details.p_valid
+        : null;
+  return {
+    email: extractFirstEmailAddress(candidate.email),
+    verdict: String(candidate.verdict ?? "").trim().toLowerCase(),
+    confidence: String(candidate.confidence ?? "").trim().toLowerCase(),
+    pValid: numericOrNull(pValid),
+    attempt: Math.max(0, Math.trunc(Number(candidate.attempt ?? 0) || 0)),
+    route: String(candidate.route ?? routeFallback).trim(),
+    reason: String(details.reason ?? candidate.reason ?? candidate.route_reason ?? "").trim(),
+    mxStatus: String(details.mx_status ?? "").trim().toLowerCase(),
+    acceptAll: toNullableBool(details.accept_all ?? details.acceptall),
+    catchAll: toNullableBool(details.catch_all ?? details.catchall),
+  };
+}
+
+function summarizeEmailFinderDecisionSignals(signals: EmailFinderDecisionSignal[]): EmailFinderDecisionSummary {
+  const summary: EmailFinderDecisionSummary = {
+    sendNow: 0,
+    canaryProbe: 0,
+    retryLater: 0,
+    keepSourcing: 0,
+    manualReview: 0,
+    suppress: 0,
+    topAction: "",
+    topReason: "",
+  };
+  for (const signal of signals) {
+    if (signal.recommendedAction === "send_now") summary.sendNow += 1;
+    else if (signal.recommendedAction === "canary_probe") summary.canaryProbe += 1;
+    else if (signal.recommendedAction === "retry_later") summary.retryLater += 1;
+    else if (signal.recommendedAction === "manual_review") summary.manualReview += 1;
+    else if (signal.recommendedAction === "suppress") summary.suppress += 1;
+    else summary.keepSourcing += 1;
+  }
+
+  const actionPriority: EmailFinderDecisionAction[] = [
+    "send_now",
+    "canary_probe",
+    "retry_later",
+    "keep_sourcing",
+    "manual_review",
+    "suppress",
+  ];
+  const topAction = actionPriority.find((action) =>
+    signals.some((signal) => signal.recommendedAction === action)
+  );
+  if (topAction) {
+    const topSignal = signals.find((signal) => signal.recommendedAction === topAction);
+    summary.topAction = topAction;
+    summary.topReason = topSignal?.reason ?? "";
+  }
+  return summary;
+}
+
+function summarizeEmailFinderDecisionSignal(input: {
+  result: unknown;
+  itemId: string;
+  name: string;
+  domain: string;
+  status: "matched" | "no_match" | "error";
+  reason: string;
+}): EmailFinderDecisionSignal {
+  const root = coerceRecord(input.result);
+  const routing = coerceRecord(root.routing);
+  const queues = coerceRecord(routing.queues);
+  const verification = coerceRecord(root.verification);
+  const attempts = Array.isArray(root.attempts) ? root.attempts : [];
+  const orderedCandidates = Array.isArray(root.ordered_candidates) ? root.ordered_candidates : [];
+  const historicalKnownEmails = Array.isArray(verification.historical_known_emails)
+    ? verification.historical_known_emails
+    : [];
+  const candidateRows = [
+    ...(Array.isArray(queues.eligible_send_now) ? queues.eligible_send_now : []).map((row) => ({
+      row,
+      route: "eligible_send_now",
+    })),
+    ...(Array.isArray(queues.high_confidence) ? queues.high_confidence : []).map((row) => ({
+      row,
+      route: "high_confidence",
+    })),
+    ...(Array.isArray(queues.risky_queue) ? queues.risky_queue : []).map((row) => ({
+      row,
+      route: "risky_queue",
+    })),
+    ...(Array.isArray(queues.review_queue) ? queues.review_queue : []).map((row) => ({
+      row,
+      route: "review_queue",
+    })),
+    root.best_guess ? { row: root.best_guess, route: "best_guess" } : null,
+    ...attempts.map((row) => ({ row, route: "attempt" })),
+  ].filter(Boolean) as Array<{ row: unknown; route: string }>;
+  const routeRank = (route: string) => {
+    if (route === "eligible_send_now") return 6;
+    if (route === "high_confidence") return 5;
+    if (route === "best_guess") return 4;
+    if (route === "risky_queue") return 3;
+    if (route === "review_queue") return 2;
+    return 1;
+  };
+  const topCandidate = candidateRows
+    .map(({ row, route }) => extractEmailFinderCandidateForDecision(row, route))
+    .filter((candidate) => Boolean(candidate.email))
+    .sort((left, right) => {
+      const routeDelta = routeRank(right.route) - routeRank(left.route);
+      if (routeDelta !== 0) return routeDelta;
+      const pDelta = Number(right.pValid ?? -1) - Number(left.pValid ?? -1);
+      if (pDelta !== 0) return pDelta;
+      return left.attempt - right.attempt;
+    })[0];
+
+  const queueCounts = {
+    eligibleSendNow: emailFinderQueueCount(queues.eligible_send_now),
+    highConfidence: emailFinderQueueCount(queues.high_confidence),
+    risky: emailFinderQueueCount(queues.risky_queue),
+    review: emailFinderQueueCount(queues.review_queue),
+    suppressed: emailFinderQueueCount(queues.suppressed),
+  };
+  const mxStatus = String(verification.mx_status ?? topCandidate?.mxStatus ?? "")
+    .trim()
+    .toLowerCase();
+  const normalizedReason = input.reason.trim().toLowerCase();
+  const pValid = topCandidate?.pValid ?? null;
+  const hasTopCandidate = Boolean(topCandidate?.email);
+  const hasHighProbabilityCandidate = hasTopCandidate && typeof pValid === "number" && pValid >= 0.7;
+  const hasRiskySignal = queueCounts.risky > 0 || topCandidate?.verdict === "risky-valid";
+  const isCatchAll = topCandidate?.catchAll === true || topCandidate?.acceptAll === true;
+
+  let recommendedAction: EmailFinderDecisionAction = "keep_sourcing";
+  if (input.status === "matched" || queueCounts.eligibleSendNow > 0 || queueCounts.highConfidence > 0) {
+    recommendedAction = "send_now";
+  } else if (
+    normalizedReason.includes("unauthorized") ||
+    normalizedReason.includes("timed out") ||
+    normalizedReason.includes("timeout") ||
+    normalizedReason.includes("request failed") ||
+    normalizedReason.includes("verifier_unavailable") ||
+    normalizedReason.includes("local_email_verifier_unavailable")
+  ) {
+    recommendedAction = "retry_later";
+  } else if (
+    normalizedReason.includes("no_mail_route") ||
+    normalizedReason.includes("all_candidates_invalid") ||
+    mxStatus === "no-mail-route"
+  ) {
+    recommendedAction = "suppress";
+  } else if ((hasRiskySignal || hasHighProbabilityCandidate) && !isCatchAll) {
+    recommendedAction = "canary_probe";
+  } else if (hasTopCandidate) {
+    recommendedAction = "manual_review";
+  }
+
+  return {
+    id: input.itemId,
+    name: input.name,
+    domain: input.domain,
+    status: input.status,
+    recommendedAction,
+    reason: input.reason,
+    topCandidateEmail: topCandidate?.email ?? "",
+    topCandidateVerdict: topCandidate?.verdict ?? "",
+    topCandidateConfidence: topCandidate?.confidence ?? "",
+    topCandidatePValid: pValid,
+    topCandidateRoute: topCandidate?.route ?? "",
+    topCandidateReason: topCandidate?.reason ?? "",
+    mxStatus,
+    historicalKnownEmailsCount: historicalKnownEmails.length,
+    attemptsCount: attempts.length,
+    orderedCandidateCount: orderedCandidates.length,
+    queueCounts,
+    acceptAll: topCandidate?.acceptAll ?? null,
+    catchAll: topCandidate?.catchAll ?? null,
   };
 }
 
@@ -855,9 +1260,13 @@ function summarizeNoHitFromBatchResult(result: unknown) {
 
   let reason = "no_high_confidence_candidate";
   if (topHttpStatus === 401 || normalizedError.includes("unauthorized")) {
-    reason = "validatedmails_unauthorized";
-  } else if (normalizedError.includes("validatedmails api key is required")) {
-    reason = "missing_validatedmails_api_key";
+    reason = "email_verifier_unauthorized";
+  } else if (
+    normalizedError.includes("local enrichanything email validation requires") ||
+    normalizedError.includes("smtp-capable emailfinder worker") ||
+    normalizedError.includes("smtp_unavailable_in_serverless")
+  ) {
+    reason = "local_email_verifier_unavailable";
   } else if (mxStatus === "no-mail-route") {
     reason = "no_mail_route";
   } else if (attempts.length > 0 && invalidAttempts === attempts.length) {
@@ -871,8 +1280,8 @@ function summarizeNoHitFromBatchResult(result: unknown) {
   return {
     reason,
     error:
-      reason === "validatedmails_unauthorized"
-        ? "ValidatedMails rejected the API key (HTTP 401)."
+      reason === "email_verifier_unauthorized"
+        ? "The local email verifier rejected the request (HTTP 401)."
         : rawError,
     topAttemptEmail: extractFirstEmailAddress(topAttempt.email),
     topAttemptVerdict: String(topAttempt.verdict ?? "").trim().toLowerCase(),
@@ -885,43 +1294,43 @@ export async function enrichLeadsWithEmailFinderBatch(params: {
   leads: ApifyLead[];
   apiBaseUrl: string;
   verificationMode?: EmailFinderVerificationMode;
-  validatedMailsApiKey?: string;
   maxCandidates?: number;
   maxCredits?: number;
+  maxTotalCredits?: number;
   timeoutMs?: number;
   concurrency?: number;
   allowBestGuessFallback?: boolean;
   minBestGuessPValid?: number;
+  retryOnFailure?: boolean;
+  signal?: AbortSignal;
+  audit?: EmailFinderAuditContext;
 }): Promise<EmailFinderBatchEnrichmentResult> {
   const apiBaseUrl = resolveEmailFinderApiBaseUrl(params.apiBaseUrl);
-  if (!apiBaseUrl) {
-    return {
-      ok: false,
-      leads: params.leads,
-      attempted: 0,
-      matched: 0,
-      failed: 0,
-      provider: "emailfinder.batch",
-      error: "EMAIL_FINDER_API_BASE_URL is missing",
-      failureSummary: [{ reason: "missing_api_base_url", count: 1 }],
-      failedSamples: [],
-    };
-  }
 
-  const items: Array<{ id: string; name: string; domain: string }> = [];
+  const items: Array<{
+    id: string;
+    name: string;
+    domain: string;
+    company_name?: string;
+    source_url?: string;
+  }> = [];
   for (const [index, lead] of params.leads.entries()) {
     const existingEmail = extractFirstEmailAddress(lead.email);
     if (existingEmail) continue;
     const name = String(lead.name ?? "").trim();
-    const domain = String(lead.domain ?? "")
-      .trim()
-      .toLowerCase()
-      .replace(/^www\./, "");
+    const domain = toRegistrableDomain(
+      String(lead.domain ?? "")
+        .trim()
+        .toLowerCase()
+        .replace(/^www\./, "")
+    );
     if (!name || !domain || !domain.includes(".") || isNonCompanyProfileDomain(domain)) continue;
     items.push({
       id: `lead-${index}`,
       name,
       domain,
+      company_name: String(lead.company ?? "").trim() || undefined,
+      source_url: String(lead.sourceUrl ?? "").trim() || undefined,
     });
   }
 
@@ -936,62 +1345,71 @@ export async function enrichLeadsWithEmailFinderBatch(params: {
       error: "",
       failureSummary: [],
       failedSamples: [],
+      decisionSignals: [],
+      decisionSummary: summarizeEmailFinderDecisionSignals([]),
     };
   }
 
-  const verificationMode: EmailFinderVerificationMode = "validatedmails";
-  const requestedMode = String(params.verificationMode ?? "validatedmails")
-    .trim()
-    .toLowerCase();
-  if (requestedMode && requestedMode !== "validatedmails") {
-    return {
-      ok: false,
-      leads: params.leads,
-      attempted: items.length,
-      matched: 0,
-      failed: items.length,
-      provider: "emailfinder.batch",
-      error: "Only real verification mode 'validatedmails' is supported",
-      failureSummary: [{ reason: "unsupported_verification_mode", count: items.length }],
-      failedSamples: [],
-    };
-  }
-  const apiKey = String(params.validatedMailsApiKey ?? "").trim();
-  if (!apiKey) {
-    return {
-      ok: false,
-      leads: params.leads,
-      attempted: items.length,
-      matched: 0,
-      failed: items.length,
-      provider: "emailfinder.batch",
-      error: "validatedmails API key is required for real verification",
-      failureSummary: [{ reason: "missing_validatedmails_api_key", count: items.length }],
-      failedSamples: [],
-    };
-  }
+  const requestedVerificationMode = resolveEmailFinderVerificationMode(params.verificationMode, "local");
+  const verificationMode = requestedVerificationMode;
+  const emailFinderPayloadVerificationMode =
+    verificationMode === "local" ? "smtp" : verificationMode === "heuristic" ? "none" : verificationMode;
   const maxCandidates = Math.max(4, Math.min(20, Number(params.maxCandidates ?? 12) || 12));
   const maxCredits = Math.max(1, Math.min(25, Number(params.maxCredits ?? 7) || 7));
+  const maxTotalCredits = Math.max(
+    0,
+    Math.min(500, Math.trunc(Number(params.maxTotalCredits ?? 0) || 0))
+  );
+  const externalWaterfallEnabled = externalEmailWaterfallEnabled();
+  const externalProviders =
+    cleanEnvValue(process.env.EMAIL_FINDER_EXTERNAL_PROVIDERS ?? process.env.EMAIL_FINDER_PAID_PROVIDERS) ||
+    "airscale";
+  const maxExternalCreditsPerLead = externalWaterfallEnabled
+    ? Math.max(
+        1,
+        Math.min(
+          maxCredits,
+          Math.trunc(Number(process.env.EMAIL_FINDER_EXTERNAL_MAX_CREDITS_PER_LEAD ?? 1) || 1)
+        )
+      )
+    : 0;
   const requestedConcurrency = Math.max(1, Math.min(10, Number(params.concurrency ?? 4) || 4));
   const concurrency = requestedConcurrency;
   const effectiveMaxCandidates = maxCandidates;
-  const verifierProbeTimeoutSeconds = 8;
+  const verifierProbeTimeoutSeconds = Math.max(
+    3,
+    Math.min(10, Math.round(Number(process.env.EMAIL_FINDER_PROBE_TIMEOUT_SECONDS ?? 6) || 6))
+  );
   const defaultItem: Record<string, unknown> = {
-    verification_mode: verificationMode,
+    verification_mode: emailFinderPayloadVerificationMode,
     max_candidates: effectiveMaxCandidates,
     stop_on_first_hit: true,
     stop_on_min_confidence: "high",
     high_confidence_only: true,
     enable_risky_queue: true,
+    local_verification: true,
+    local_fallback_on_risky: false,
+    external_provider_fallback: externalWaterfallEnabled,
+    external_providers: externalProviders,
   };
-  defaultItem.max_credits = maxCredits;
-  defaultItem.validatedmails_api_key = apiKey;
+  const smtpFromAddress = resolveEmailFinderSmtpFromAddress();
+  if (smtpFromAddress) {
+    defaultItem.from_address = smtpFromAddress;
+  }
+  defaultItem.max_credits = maxExternalCreditsPerLead;
   defaultItem.timeout_seconds = verifierProbeTimeoutSeconds;
+  defaultItem.probe_timeout_seconds = verifierProbeTimeoutSeconds;
+  if (maxTotalCredits > 0) {
+    defaultItem.max_total_credits = maxTotalCredits;
+  }
 
   const itemById = new Map(items.map((item) => [item.id, item] as const));
 
   const buildResultFromEmailMap = (
-    emailByIndex: Map<number, { email: string; realVerifiedEmail: boolean }>,
+    emailByIndex: Map<
+      number,
+      { email: string; realVerifiedEmail: boolean; emailVerification: EmailVerificationState | null }
+    >,
     attempted: number,
     failed: number,
     error = "",
@@ -1006,16 +1424,20 @@ export async function enrichLeadsWithEmailFinderBatch(params: {
       topAttemptVerdict: string;
       topAttemptConfidence: string;
       topAttemptReason: string;
-    }> = []
+    }> = [],
+    decisionSignals: EmailFinderDecisionSignal[] = []
   ) => {
     const leads = params.leads.map((lead, index) => {
       const enriched = emailByIndex.get(index);
       if (!enriched?.email) return lead;
+      const canonicalEmailDomain = toRegistrableDomain(enriched.email.split("@")[1] ?? "");
       return {
         ...lead,
         email: enriched.email,
-        domain: enriched.email.split("@")[1] || lead.domain,
+        // Keep the company domain canonical. The mailbox itself may live on a subdomain.
+        domain: toRegistrableDomain(String(lead.domain ?? "").trim()) || canonicalEmailDomain,
         realVerifiedEmail: enriched.realVerifiedEmail,
+        emailVerification: enriched.emailVerification,
       };
     });
     return {
@@ -1028,6 +1450,8 @@ export async function enrichLeadsWithEmailFinderBatch(params: {
       error,
       failureSummary,
       failedSamples,
+      decisionSignals,
+      decisionSummary: summarizeEmailFinderDecisionSignals(decisionSignals),
     } satisfies EmailFinderBatchEnrichmentResult;
   };
 
@@ -1037,13 +1461,19 @@ export async function enrichLeadsWithEmailFinderBatch(params: {
   const estimatedWorstCaseMs = Math.ceil(
     (Math.ceil(items.length / effectiveConcurrency) * maxCredits * verifierProbeTimeoutSeconds * 1000 * 3) / 4 + 15_000
   );
-  const batchTimeoutMs = Math.max(30_000, Math.min(600_000, Math.max(baseTimeoutMs, estimatedWorstCaseMs)));
+  const batchTimeoutMs =
+    baseTimeoutMs > 0
+      ? Math.max(5_000, Math.min(600_000, baseTimeoutMs))
+      : Math.max(12_000, Math.min(600_000, estimatedWorstCaseMs));
 
   const buildResultFromBatchRows = (
     results: unknown[],
     batchLevelError = ""
   ) => {
-    const emailByIndex = new Map<number, { email: string; realVerifiedEmail: boolean }>();
+    const emailByIndex = new Map<
+      number,
+      { email: string; realVerifiedEmail: boolean; emailVerification: EmailVerificationState | null }
+    >();
     const failureCounts = new Map<string, number>();
     const failedSamples: Array<{
       id: string;
@@ -1056,6 +1486,7 @@ export async function enrichLeadsWithEmailFinderBatch(params: {
       topAttemptConfidence: string;
       topAttemptReason: string;
     }> = [];
+    const decisionSignals: EmailFinderDecisionSignal[] = [];
     let failed = 0;
     let firstError = "";
 
@@ -1090,14 +1521,33 @@ export async function enrichLeadsWithEmailFinderBatch(params: {
       if (!Boolean(item.ok)) {
         failed += 1;
         const itemError = String(item.error ?? "").trim();
+        const normalizedItemError = itemError.toLowerCase();
         if (!firstError && itemError) firstError = itemError;
         pushFailure({
           reason:
-            itemError.includes("401") || /unauthorized/i.test(itemError)
-              ? "validatedmails_unauthorized"
+            normalizedItemError.includes("credit cap")
+              ? "batch_credit_cap_reached"
+              : itemError.includes("401") || /unauthorized/i.test(itemError)
+              ? "email_verifier_unauthorized"
+              : normalizedItemError.includes("local enrichanything email validation requires") ||
+                  normalizedItemError.includes("smtp-capable emailfinder worker") ||
+                  normalizedItemError.includes("smtp_unavailable_in_serverless")
+                ? "local_email_verifier_unavailable"
               : "item_error",
           error: itemError,
         });
+        if (itemMeta) {
+          decisionSignals.push(
+            summarizeEmailFinderDecisionSignal({
+              result: item.result,
+              itemId,
+              name: itemMeta.name,
+              domain: itemMeta.domain,
+              status: "error",
+              reason: itemError || "item_error",
+            })
+          );
+        }
         continue;
       }
 
@@ -1110,12 +1560,36 @@ export async function enrichLeadsWithEmailFinderBatch(params: {
         const summary = summarizeNoHitFromBatchResult(item.result);
         if (!firstError && summary.error) firstError = summary.error;
         pushFailure(summary);
+        if (itemMeta) {
+          decisionSignals.push(
+            summarizeEmailFinderDecisionSignal({
+              result: item.result,
+              itemId,
+              name: itemMeta.name,
+              domain: itemMeta.domain,
+              status: "no_match",
+              reason: summary.reason,
+            })
+          );
+        }
         continue;
       }
 
       const numericIndex = Number(itemId.replace("lead-", ""));
       if (Number.isInteger(numericIndex) && numericIndex >= 0 && numericIndex < params.leads.length) {
         emailByIndex.set(numericIndex, resolved);
+        if (itemMeta) {
+          decisionSignals.push(
+            summarizeEmailFinderDecisionSignal({
+              result: item.result,
+              itemId,
+              name: itemMeta.name,
+              domain: itemMeta.domain,
+              status: "matched",
+              reason: "accepted_by_emailfinder_policy",
+            })
+          );
+        }
       } else {
         failed += 1;
         const parseError = `Unable to parse numeric lead index from id '${itemId}'`;
@@ -1131,69 +1605,131 @@ export async function enrichLeadsWithEmailFinderBatch(params: {
     const failureSummary = Array.from(failureCounts.entries())
       .map(([reason, count]) => ({ reason, count }))
       .sort((a, b) => b.count - a.count || a.reason.localeCompare(b.reason));
-    return buildResultFromEmailMap(emailByIndex, items.length, failed, error, failureSummary, failedSamples);
+    return buildResultFromEmailMap(
+      emailByIndex,
+      items.length,
+      failed,
+      error,
+      failureSummary,
+      failedSamples,
+      decisionSignals.slice(0, 50)
+    );
+  };
+
+  const buildBatchPayload = (requestConcurrency: number) => ({
+    concurrency: requestConcurrency,
+    continue_on_error: true,
+    default_item: defaultItem,
+    items,
+    request_id: params.audit?.requestId,
+    audit_source: params.audit?.source,
+    audit_context: params.audit?.context,
+  });
+
+  const runLocalBatchGuessPass = async (requestConcurrency: number) => {
+    const { buildEmailFinderBatchResponse } = await import("@/lib/internal-email-finder");
+    const payload = await buildEmailFinderBatchResponse(buildBatchPayload(requestConcurrency));
+    const batch = coerceRecord(payload);
+    const results = Array.isArray(batch.results) ? batch.results : null;
+    if (!results) {
+      return buildResultFromEmailMap(
+        new Map<number, { email: string; realVerifiedEmail: boolean; emailVerification: EmailVerificationState | null }>(),
+        items.length,
+        items.length,
+        String(batch.error ?? "").trim() || "EmailFinder local batch response was malformed"
+      );
+    }
+    const batchLevelError = Boolean(batch.ok) ? "" : String(batch.error ?? "").trim();
+    return buildResultFromBatchRows(results, batchLevelError);
   };
 
   const runBatchGuessPass = async (input: { timeoutMs: number; requestConcurrency: number }) => {
+    if (!apiBaseUrl) {
+      return runLocalBatchGuessPass(input.requestConcurrency);
+    }
+
     const controller = new AbortController();
+    const abortSignals = [controller.signal];
+    if (params.signal) abortSignals.push(params.signal);
     let timedOut = false;
-    const timeoutHandle = setTimeout(() => {
+    const timeoutReason = `EmailFinder batch timed out after ${input.timeoutMs}ms`;
+    const timeoutResult = () => {
       timedOut = true;
       controller.abort();
-    }, input.timeoutMs);
-    try {
-      const response = await fetch(`${apiBaseUrl}/v1/guess/batch`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        signal: controller.signal,
-        body: JSON.stringify({
-          concurrency: input.requestConcurrency,
-          continue_on_error: true,
-          default_item: defaultItem,
-          items,
-        }),
-      });
-      const raw = await response.text();
-      let payload: unknown = {};
+      return buildResultFromEmailMap(
+        new Map<number, { email: string; realVerifiedEmail: boolean; emailVerification: EmailVerificationState | null }>(),
+        items.length,
+        items.length,
+        timeoutReason,
+        [{ reason: "timeout", count: items.length }]
+      );
+    };
+    let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+    const timeoutPromise = new Promise<EmailFinderBatchEnrichmentResult>((resolve) => {
+      timeoutHandle = setTimeout(() => resolve(timeoutResult()), input.timeoutMs);
+    });
+    const requestPromise = (async (): Promise<EmailFinderBatchEnrichmentResult> => {
       try {
-        payload = raw ? JSON.parse(raw) : {};
-      } catch {
-        payload = {};
-      }
-      const batch = coerceRecord(payload);
-      const results = Array.isArray(batch.results) ? batch.results : null;
-      if (!results) {
-        const nonOkReason =
+        const response = await fetch(`${apiBaseUrl}/v1/guess/batch`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          signal:
+            abortSignals.length > 1 && typeof AbortSignal.any === "function"
+              ? AbortSignal.any(abortSignals)
+              : controller.signal,
+          body: JSON.stringify(buildBatchPayload(input.requestConcurrency)),
+        });
+        const raw = await response.text();
+        let payload: unknown = {};
+        try {
+          payload = raw ? JSON.parse(raw) : {};
+        } catch {
+          payload = {};
+        }
+        const batch = coerceRecord(payload);
+        const results = Array.isArray(batch.results) ? batch.results : null;
+        if (response.status === 404 && !results) {
+          return runLocalBatchGuessPass(input.requestConcurrency);
+        }
+        if (!results) {
+          const nonOkReason =
+            !response.ok && (String(batch.error ?? "").trim() || `EmailFinder batch request failed (${response.status})`);
+          return buildResultFromEmailMap(
+            new Map<number, { email: string; realVerifiedEmail: boolean; emailVerification: EmailVerificationState | null }>(),
+            items.length,
+            items.length,
+            nonOkReason || "EmailFinder batch response was malformed"
+          );
+        }
+        const batchLevelError =
           !response.ok && (String(batch.error ?? "").trim() || `EmailFinder batch request failed (${response.status})`);
+        return buildResultFromBatchRows(results, batchLevelError || "");
+      } catch (error) {
+        const message = error instanceof Error ? compactText(error.message, 180) : compactText(String(error ?? ""), 180);
+        const isAbortError =
+          timedOut ||
+          params.signal?.aborted === true ||
+          String((error as { name?: unknown })?.name ?? "").toLowerCase() === "aborterror";
+        const reason = isAbortError
+          ? timeoutReason
+          : message
+            ? `EmailFinder batch request failed: ${message}`
+            : "EmailFinder batch request failed";
         return buildResultFromEmailMap(
-          new Map<number, { email: string; realVerifiedEmail: boolean }>(),
+          new Map<number, { email: string; realVerifiedEmail: boolean; emailVerification: EmailVerificationState | null }>(),
           items.length,
           items.length,
-          nonOkReason || "EmailFinder batch response was malformed"
+          reason,
+          [{ reason: isAbortError ? "timeout" : "request_failed", count: items.length }]
         );
       }
-      const batchLevelError =
-        !response.ok && (String(batch.error ?? "").trim() || `EmailFinder batch request failed (${response.status})`);
-      return buildResultFromBatchRows(results, batchLevelError || "");
-    } catch (error) {
-      const message = error instanceof Error ? compactText(error.message, 180) : compactText(String(error ?? ""), 180);
-      const isAbortError = timedOut || String((error as { name?: unknown })?.name ?? "").toLowerCase() === "aborterror";
-      const reason = isAbortError
-        ? `EmailFinder batch timed out after ${input.timeoutMs}ms`
-        : message
-          ? `EmailFinder batch request failed: ${message}`
-          : "EmailFinder batch request failed";
-      return buildResultFromEmailMap(
-        new Map<number, { email: string; realVerifiedEmail: boolean }>(),
-        items.length,
-        items.length,
-        reason,
-        [{ reason: isAbortError ? "timeout" : "request_failed", count: items.length }]
-      );
+    })();
+    try {
+      return await Promise.race([requestPromise, timeoutPromise]);
     } finally {
-      clearTimeout(timeoutHandle);
+      if (timeoutHandle) clearTimeout(timeoutHandle);
     }
   };
 
@@ -1203,6 +1739,7 @@ export async function enrichLeadsWithEmailFinderBatch(params: {
   });
   const initialError = initial.error.trim().toLowerCase();
   const shouldRetry =
+    params.retryOnFailure !== false &&
     initial.matched === 0 &&
     initial.attempted > 0 &&
     Boolean(initialError) &&
@@ -1256,6 +1793,19 @@ function escapeHtml(value: string) {
 
 function htmlFromPlainText(value: string) {
   return escapeHtml(value).replace(/\r?\n/g, "<br />");
+}
+
+function isGmailUiWorkerUnavailableError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error ?? "");
+  const normalized = message.trim().toLowerCase();
+  return (
+    normalized.includes("fetch failed") ||
+    normalized.includes("connect timeout") ||
+    normalized.includes("timed out") ||
+    normalized.includes("econnrefused") ||
+    normalized.includes("enotfound") ||
+    normalized.includes("network error")
+  );
 }
 
 function customerIoResponseMessageId(payload: unknown, fallback = "") {
@@ -1424,7 +1974,12 @@ function safeHostname(input: string) {
 function toRegistrableDomain(hostname: string) {
   const normalized = hostname.replace(/^www\./, "").toLowerCase();
   if (!normalized) return "";
-  return normalized;
+  const parts = normalized.split(".").filter(Boolean);
+  if (parts.length <= 2) return normalized;
+  const usesSecondLevelTld =
+    parts[parts.length - 1]?.length === 2 &&
+    ["ac", "co", "com", "edu", "gov", "net", "org"].includes(parts[parts.length - 2] ?? "");
+  return parts.slice(usesSecondLevelTld ? -3 : -2).join(".");
 }
 
 async function apifyRunSyncGetDatasetItems(input: {
@@ -1664,7 +2219,9 @@ export function evaluateLeadAgainstQualityPolicy(input: {
 }): LeadQualityDecision {
   const allowMissingEmail = input.allowMissingEmail === true;
   const rawEmail = extractFirstEmailAddress(input.lead.email);
-  const floorReason = rawEmail ? getLeadEmailSuppressionReason(rawEmail) : "";
+  const rawFloorReason = rawEmail ? getLeadEmailSuppressionReason(rawEmail) : "";
+  const floorReason =
+    rawFloorReason === "role_account" && input.policy.allowRoleInboxes ? "" : rawFloorReason;
   const sourceUrl = String(input.lead.sourceUrl ?? "").trim();
   const hasSourceUrl = Boolean(sourceUrl);
   const sourceHostname = safeHostname(sourceUrl);
@@ -1673,9 +2230,10 @@ export function evaluateLeadAgainstQualityPolicy(input: {
   const normalizedCompany = String(input.lead.company ?? "").trim();
   const normalizedTitle = String(input.lead.title ?? "").trim();
   const hasTwoPartName = normalizedName.split(/\s+/).filter(Boolean).length >= 2;
-  const fallbackDomainRaw = String(input.lead.domain ?? "").trim().toLowerCase();
+  const fallbackDomainRaw = toRegistrableDomain(String(input.lead.domain ?? "").trim().toLowerCase());
   const fallbackDomain = isNonCompanyProfileDomain(fallbackDomainRaw) ? "" : fallbackDomainRaw;
   const fallbackProfileReady = Boolean(hasTwoPartName && fallbackDomain);
+  const emailVerification = input.lead.emailVerification ?? null;
 
   if ((!rawEmail || floorReason) && !(allowMissingEmail && fallbackProfileReady)) {
     return {
@@ -1694,11 +2252,46 @@ export function evaluateLeadAgainstQualityPolicy(input: {
 
   const email = !floorReason ? rawEmail : "";
   const local = email ? email.split("@")[0] ?? "" : "";
-  const domain = email ? email.split("@")[1] ?? "" : fallbackDomain;
+  const exactEmailDomain = email ? String(email.split("@")[1] ?? "").trim().toLowerCase() : "";
+  const emailRootDomain = exactEmailDomain ? toRegistrableDomain(exactEmailDomain) : "";
+  const domain = email ? emailRootDomain : fallbackDomain;
   const sourceDomainMatchesLead =
     Boolean(sourceDomain) &&
     (domain === sourceDomain || domain.endsWith(`.${sourceDomain}`) || sourceDomain.endsWith(`.${domain}`));
-  const hasRealVerifiedEmail = input.lead.realVerifiedEmail === true;
+  const verificationCatchAll =
+    emailVerification?.acceptAll === true ||
+    emailVerification?.catchAll === true ||
+    String(emailVerification?.verdict ?? "").trim().toLowerCase() === "risky-valid";
+  const hasRealVerifiedEmail = input.lead.realVerifiedEmail === true && !verificationCatchAll;
+  const fallbackPValid = Number(emailVerification?.pValid ?? Number.NaN);
+  const fallbackHttpStatus = Number(emailVerification?.httpStatus ?? 0) || 0;
+  const fallbackReason = String(emailVerification?.reason ?? "").trim().toLowerCase();
+  const fallbackMinPValid = Math.max(
+    0,
+    Math.min(1, Number(input.policy.fallbackMinPValid ?? 0.7) || 0.7)
+  );
+  const providerUnavailableForFallback =
+    emailVerification?.mode === "heuristic" ||
+    [401, 402, 408, 429].includes(fallbackHttpStatus) ||
+    fallbackReason.includes("unrecognized response status") ||
+    fallbackReason.includes("local_result_missing") ||
+    fallbackReason.includes("local_non_final_result") ||
+    fallbackReason.includes("local_verification_disabled") ||
+    fallbackReason.includes("insufficient") ||
+    fallbackReason.includes("unauthorized") ||
+    fallbackReason.includes("timed out") ||
+    fallbackReason.includes("timeout") ||
+    fallbackReason.includes("aborted") ||
+    fallbackReason.includes("request failed");
+  const allowHighConfidenceFallbackEmail =
+    email &&
+    input.policy.allowHighConfidenceFallbackEmail === true &&
+    !verificationCatchAll &&
+    Number.isFinite(fallbackPValid) &&
+    fallbackPValid >= fallbackMinPValid &&
+    (input.policy.fallbackRequireMailReadyMx !== true ||
+      String(emailVerification?.mxStatus ?? "").trim().toLowerCase() === "mail-ready") &&
+    (!input.policy.fallbackOnlyWhenProviderUnavailable || providerUnavailableForFallback);
   const rawConfidence = Number((input.lead as unknown as Record<string, unknown>).confidence);
   const hasExplicitConfidence = Number.isFinite(rawConfidence);
   const explicitConfidence = hasExplicitConfidence ? Math.max(0, Math.min(1, rawConfidence)) : 0;
@@ -1730,6 +2323,80 @@ export function evaluateLeadAgainstQualityPolicy(input: {
       details: { local, policy: "allowRoleInboxes=false" },
     };
   }
+  if (emailRootDomain && fallbackDomain && emailRootDomain !== fallbackDomain) {
+    return {
+      email,
+      accepted: false,
+      confidence: 0.05,
+      reason: "email_domain_company_mismatch",
+      details: {
+        emailDomain: exactEmailDomain,
+        emailRootDomain,
+        canonicalCompanyDomain: fallbackDomain,
+      },
+    };
+  }
+  if (exactEmailDomain && fallbackDomain && exactEmailDomain !== fallbackDomain) {
+    return {
+      email,
+      accepted: false,
+      confidence: 0.08,
+      reason: "subdomain_mail_domain_unverified",
+      details: {
+        emailDomain: exactEmailDomain,
+        canonicalCompanyDomain: fallbackDomain,
+      },
+    };
+  }
+  if (email && !hasRealVerifiedEmail && allowHighConfidenceFallbackEmail) {
+    return {
+      email,
+      accepted: true,
+      confidence: Math.max(0.72, Math.min(0.92, fallbackPValid)),
+      reason: "accepted",
+      details: {
+        realVerifiedEmail: false,
+        emailVerification,
+        policyBypass: "high_confidence_fallback_email",
+        providerUnavailableForFallback,
+        fallbackPValid,
+      },
+    };
+  }
+  if (
+    email &&
+    !hasRealVerifiedEmail &&
+    input.policy.allowRoleInboxes === true &&
+    hasSourceUrl &&
+    sourceDomainMatchesLead &&
+    hasIndependentPersonEvidence
+  ) {
+    return {
+      email,
+      accepted: true,
+      confidence: 0.72,
+      reason: "accepted",
+      details: {
+        realVerifiedEmail: false,
+        emailVerification,
+        policyBypass: "first_party_warmup_public_email",
+        sourceDomain,
+      },
+    };
+  }
+  if (email && !hasRealVerifiedEmail) {
+    return {
+      email,
+      accepted: false,
+      confidence: 0.02,
+      reason: verificationCatchAll ? "catch_all_email_blocked" : "email_not_likely_valid",
+      details: {
+        realVerifiedEmail: input.lead.realVerifiedEmail === true,
+        verificationCatchAll,
+        emailVerification,
+      },
+    };
+  }
   // Real verified emails bypass heuristic policy scoring (title/company keyword penalties, confidence threshold).
   if (hasRealVerifiedEmail) {
     return {
@@ -1739,6 +2406,7 @@ export function evaluateLeadAgainstQualityPolicy(input: {
       reason: "accepted",
       details: {
         realVerifiedEmail: true,
+        emailVerification,
         policyBypass: "heuristic_confidence",
       },
     };
@@ -1926,6 +2594,9 @@ export function evaluateLeadAgainstQualityPolicy(input: {
       companyPresent: Boolean(normalizedCompany),
       titlePresent: Boolean(normalizedTitle),
       domainPresent: Boolean(domain),
+      realVerifiedEmail: hasRealVerifiedEmail,
+      verificationCatchAll,
+      emailVerification,
       titleKeywordPenalty,
       companyKeywordPenalty,
     },
@@ -2931,25 +3602,43 @@ async function sendMailpoolGmailUiEmail(params: {
   subject: string;
   body: string;
 }): Promise<{ ok: boolean; providerMessageId: string; error: string }> {
-  const userDataDir = resolveGmailUiUserDataDir({
-    profileRoot: String(process.env.GMAIL_UI_PROFILE_ROOT ?? "").trim(),
-    existingUserDataDir: params.account.config.mailbox.gmailUiUserDataDir,
-    email: getOutreachAccountFromEmail(params.account),
-  }).userDataDir;
-  return sendGmailUiMessage({
-    userDataDir,
-    chromeProfileDirectory: params.account.config.mailbox.gmailUiProfileDirectory,
-    browserChannel: params.account.config.mailbox.gmailUiBrowserChannel,
-    proxyUrl: params.account.config.mailbox.proxyUrl,
-    proxyHost: params.account.config.mailbox.proxyHost,
-    proxyPort: params.account.config.mailbox.proxyPort,
-    proxyUsername: params.account.config.mailbox.proxyUsername,
-    proxyPassword: params.account.config.mailbox.proxyPassword,
-    expectedFrom: params.fromEmail,
-    recipient: params.recipient,
-    subject: params.subject,
-    body: params.body,
-  });
+  if (hasGmailUiWorkerConfig()) {
+    try {
+      const otp = await resolveMailpoolOutreachAccountAuthCode(params.account.id).catch(() => "");
+      const ignoreConfiguredProxy = ["1", "true", "yes", "on"].includes(
+        String(process.env.GMAIL_UI_WORKER_IGNORE_CONFIGURED_PROXY ?? "").trim().toLowerCase()
+      );
+      const result = await sendGmailUiWorkerMessage(params.account.id, {
+        recipient: params.recipient,
+        subject: params.subject,
+        body: params.body,
+        expectedFrom: params.fromEmail,
+        otp,
+        ignoreConfiguredProxy,
+        refreshMailpoolCredentials: true,
+      });
+      return {
+        ok: result.ok,
+        providerMessageId: result.providerMessageId,
+        error: result.error,
+      };
+    } catch (error) {
+      if (!isGmailUiWorkerUnavailableError(error)) {
+        throw error;
+      }
+      return {
+        ok: false,
+        providerMessageId: "",
+        error: `Remote Gmail UI worker unavailable: ${error instanceof Error ? error.message : String(error ?? "unknown error")}`,
+      };
+    }
+  }
+
+  return {
+    ok: false,
+    providerMessageId: "",
+    error: "Remote Gmail UI worker is not configured in this runtime.",
+  };
 }
 
 async function sendDeliveryEmail(params: {

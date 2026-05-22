@@ -10,18 +10,30 @@ import {
   type Experiment,
   type Hypothesis,
 } from "@/lib/factory-data";
-import { getPublishedConversationMapForExperiment } from "@/lib/conversation-flow-data";
+import {
+  getConversationMapByExperiment,
+  getPublishedConversationMapForExperiment,
+  publishConversationMap,
+  upsertConversationMapDraft,
+} from "@/lib/conversation-flow-data";
 import {
   clampExperimentSampleSize,
   EXPERIMENT_MIN_VERIFIED_EMAIL_LEADS,
 } from "@/lib/experiment-policy";
 import {
+  deleteCampaignPrepArtifactsByCampaignIds,
   deleteOutreachRunsByIds,
   getBrandOutreachAssignment,
   listExperimentRuns,
   listOwnerRuns,
-  setBrandOutreachAssignment,
 } from "@/lib/outreach-data";
+import {
+  isWarmupCampaignName,
+  senderWarmupDayNumber,
+  warmupCampaignDailyCapForDay,
+  warmupCampaignHourlyCapForDay,
+  warmupCampaignMinSpacingMinutesForDay,
+} from "@/lib/sender-capacity";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import type {
   CampaignScalePolicy,
@@ -30,6 +42,7 @@ import type {
   ExperimentRuntimeRef,
   ExperimentSuccessMetric,
   ExperimentTestEnvelope,
+  OutreachTrafficLane,
   ScaleCampaignRecord,
 } from "@/lib/factory-types";
 
@@ -120,8 +133,33 @@ function defaultScalePolicy(): CampaignScalePolicy {
     minSpacingMinutes: 8,
     accountId: "",
     mailboxAccountId: "",
+    lane: "outbound",
     safetyMode: "strict",
   };
+}
+
+function isSenderOwnedScaleCampaign(input: {
+  scalePolicy?: { accountId?: string; mailboxAccountId?: string } | null;
+}) {
+  return Boolean(
+    String(input.scalePolicy?.accountId ?? "").trim() ||
+      String(input.scalePolicy?.mailboxAccountId ?? "").trim()
+  );
+}
+
+function buildSenderOwnedSourceExperimentName(
+  campaign: ScaleCampaignRecord,
+  sourceExperiment: ExperimentRecord
+) {
+  const campaignName = campaign.name.trim();
+  const sourceName = sourceExperiment.name.trim();
+  if (campaignName) {
+    return `${campaignName} Source`;
+  }
+  if (sourceName) {
+    return `${sourceName} Source`;
+  }
+  return "Sender Campaign Source";
 }
 
 function mapLegacyScaleCampaignStatus(sourceExperiment: ExperimentRecord): ScaleCampaignRecord["status"] {
@@ -196,11 +234,19 @@ function mapScaleCampaignRow(input: unknown): ScaleCampaignRecord {
   const snapshot = asRecord(row.snapshot);
   const scalePolicy = asRecord(row.scale_policy ?? row.scalePolicy);
   const metricsSummary = asRecord(row.metrics_summary ?? row.metricsSummary);
+  const name = String(row.name ?? "Untitled Campaign");
+  const laneRaw = String(scalePolicy.lane ?? "").trim();
+  const lane: OutreachTrafficLane =
+    laneRaw === "warmup" || laneRaw === "outbound"
+      ? (laneRaw as OutreachTrafficLane)
+      : isWarmupCampaignName(name)
+        ? "warmup"
+        : "outbound";
 
   return {
     id: String(row.id ?? ""),
     brandId: String(row.brand_id ?? row.brandId ?? ""),
-    name: String(row.name ?? "Untitled Campaign"),
+    name,
     status: ["draft", "active", "paused", "completed", "archived"].includes(String(row.status ?? ""))
       ? (String(row.status) as ScaleCampaignRecord["status"])
       : "draft",
@@ -218,6 +264,7 @@ function mapScaleCampaignRow(input: unknown): ScaleCampaignRecord {
       minSpacingMinutes: Math.max(1, asNumber(scalePolicy.minSpacingMinutes, 8)),
       accountId: String(scalePolicy.accountId ?? ""),
       mailboxAccountId: String(scalePolicy.mailboxAccountId ?? ""),
+      lane,
       safetyMode: String(scalePolicy.safetyMode) === "balanced" ? "balanced" : "strict",
     },
     lastRunId: String(row.last_run_id ?? row.lastRunId ?? ""),
@@ -346,6 +393,7 @@ function mapExperimentStatusFromRun(input: {
   sentMessages?: number;
 }): ExperimentRecord["status"] {
   if (input.currentStatus === "archived") return "archived";
+  if (input.currentStatus === "paused") return "paused";
 
   if (!input.runStatus) {
     if (input.promotedCampaignId) return "promoted";
@@ -601,7 +649,18 @@ async function hydrateExperimentRecord(record: ExperimentRecord): Promise<Experi
   };
 }
 
+export function resolveScaleCampaignLane(
+  record: Pick<ScaleCampaignRecord, "name" | "scalePolicy"> | null | undefined
+): OutreachTrafficLane {
+  const laneRaw = String(record?.scalePolicy?.lane ?? "").trim();
+  if (laneRaw === "warmup" || laneRaw === "outbound") {
+    return laneRaw as OutreachTrafficLane;
+  }
+  return isWarmupCampaignName(String(record?.name ?? "")) ? "warmup" : "outbound";
+}
+
 async function hydrateScaleCampaignRecord(record: ScaleCampaignRecord): Promise<ScaleCampaignRecord> {
+  const scalePolicy = await resolveDynamicScalePolicy(record);
   let runs = [] as Awaited<ReturnType<typeof listOwnerRuns>>;
   try {
     runs = await listOwnerRuns(record.brandId, "campaign", record.id);
@@ -611,7 +670,23 @@ async function hydrateScaleCampaignRecord(record: ScaleCampaignRecord): Promise<
   const latestRun = runs[0] ?? null;
 
   if (!latestRun) {
-    return record;
+    return {
+      ...record,
+      scalePolicy,
+    };
+  }
+
+  const isSenderOwnedCampaign = Boolean(
+    String(record.scalePolicy.accountId ?? "").trim() ||
+      String(record.scalePolicy.mailboxAccountId ?? "").trim()
+  );
+  if (isSenderOwnedCampaign && record.status === "active") {
+    return {
+      ...record,
+      scalePolicy,
+      lastRunId: latestRun.id,
+      metricsSummary: runSummaryFromMetrics(latestRun.metrics),
+    };
   }
 
   const status: ScaleCampaignRecord["status"] =
@@ -625,9 +700,31 @@ async function hydrateScaleCampaignRecord(record: ScaleCampaignRecord): Promise<
 
   return {
     ...record,
+    scalePolicy,
     status,
     lastRunId: latestRun.id,
     metricsSummary: runSummaryFromMetrics(latestRun.metrics),
+  };
+}
+
+export function isWarmupScaleCampaign(
+  record: Pick<ScaleCampaignRecord, "name" | "scalePolicy"> | null | undefined
+) {
+  return resolveScaleCampaignLane(record) === "warmup";
+}
+
+async function resolveDynamicScalePolicy(record: ScaleCampaignRecord): Promise<CampaignScalePolicy> {
+  if (!isWarmupScaleCampaign(record)) {
+    return record.scalePolicy;
+  }
+
+  const timeZone = String(record.scalePolicy.timezone ?? "America/Los_Angeles") || "America/Los_Angeles";
+  const warmupDay = senderWarmupDayNumber(record.createdAt, new Date(), timeZone);
+  return {
+    ...record.scalePolicy,
+    dailyCap: warmupCampaignDailyCapForDay(warmupDay),
+    hourlyCap: warmupCampaignHourlyCapForDay(warmupDay, 8),
+    minSpacingMinutes: warmupCampaignMinSpacingMinutesForDay(warmupDay, 8),
   };
 }
 
@@ -700,14 +797,16 @@ async function normalizeLegacyRuntimeCampaign(input: {
   } catch {
     assignment = null;
   }
+  const name =
+    input.sourceExperiment.name.trim() ||
+    runtimeCampaign.name.replace(/\s+Runtime$/, "").trim() ||
+    runtimeCampaign.name;
+  const lane: OutreachTrafficLane = isWarmupCampaignName(name) ? "warmup" : "outbound";
 
   return {
     id: runtimeCampaign.id,
     brandId: input.brandId,
-    name:
-      input.sourceExperiment.name.trim() ||
-      runtimeCampaign.name.replace(/\s+Runtime$/, "").trim() ||
-      runtimeCampaign.name,
+    name,
     status: mapLegacyScaleCampaignStatus(input.sourceExperiment),
     sourceExperimentId: input.sourceExperiment.id,
     snapshot: {
@@ -724,6 +823,7 @@ async function normalizeLegacyRuntimeCampaign(input: {
       minSpacingMinutes: input.sourceExperiment.testEnvelope.minSpacingMinutes,
       accountId: assignment?.accountId ?? "",
       mailboxAccountId: assignment?.mailboxAccountId ?? "",
+      lane,
     },
     lastRunId: input.sourceExperiment.lastRunId,
     metricsSummary: input.sourceExperiment.metricsSummary ?? defaultMetricsSummary(),
@@ -850,9 +950,13 @@ async function persistScaleCampaign(record: ScaleCampaignRecord): Promise<ScaleC
       .select("*")
       .single();
 
-    if (!error && data) {
-      return mapScaleCampaignRow(data);
+    if (error) {
+      throw new Error(`Failed to persist scale campaign ${record.id}: ${error.message}`);
     }
+    if (!data) {
+      throw new Error(`Failed to persist scale campaign ${record.id}: no row returned`);
+    }
+    return mapScaleCampaignRow(data);
   }
 
   const rows = await readJsonArray<ScaleCampaignRecord>(SCALE_CAMPAIGNS_PATH);
@@ -864,6 +968,138 @@ async function persistScaleCampaign(record: ScaleCampaignRecord): Promise<ScaleC
   }
   await writeJsonArray(SCALE_CAMPAIGNS_PATH, rows);
   return record;
+}
+
+async function rebindScaleCampaignSourceExperiment(input: {
+  campaign: ScaleCampaignRecord;
+  sourceExperiment: ExperimentRecord;
+}) {
+  const next: ScaleCampaignRecord = {
+    ...input.campaign,
+    sourceExperimentId: input.sourceExperiment.id,
+    snapshot: {
+      offer: input.sourceExperiment.offer,
+      audience: input.sourceExperiment.audience,
+      mapId: input.sourceExperiment.messageFlow.mapId,
+      publishedRevision: input.sourceExperiment.messageFlow.publishedRevision,
+    },
+    updatedAt: nowIso(),
+  };
+  const persisted = await persistScaleCampaign(next);
+  return hydrateScaleCampaignRecord(persisted);
+}
+
+async function createScaleCampaignFromExperiment(input: {
+  experiment: ExperimentRecord;
+  campaignName?: string;
+  status?: ScaleCampaignRecord["status"];
+  lane?: OutreachTrafficLane;
+  scalePolicy?: Partial<CampaignScalePolicy>;
+}) {
+  if (input.experiment.promotedCampaignId.trim()) {
+    const existing = await getScaleCampaignRecordById(
+      input.experiment.brandId,
+      input.experiment.promotedCampaignId.trim()
+    );
+    if (existing) {
+      return existing;
+    }
+  }
+
+  const baseScalePolicy: CampaignScalePolicy = {
+    ...defaultScalePolicy(),
+    dailyCap: input.experiment.testEnvelope.dailyCap,
+    hourlyCap: input.experiment.testEnvelope.hourlyCap,
+    timezone: input.experiment.testEnvelope.timezone,
+    minSpacingMinutes: input.experiment.testEnvelope.minSpacingMinutes,
+  };
+  const patch = input.scalePolicy ?? {};
+  const now = nowIso();
+  const row: ScaleCampaignRecord = {
+    id: createId("camp"),
+    brandId: input.experiment.brandId,
+    name: input.campaignName?.trim() || `${input.experiment.name} Campaign`,
+    status: input.status ?? "draft",
+    sourceExperimentId: input.experiment.id,
+    snapshot: {
+      offer: input.experiment.offer,
+      audience: input.experiment.audience,
+      mapId: input.experiment.messageFlow.mapId,
+      publishedRevision: input.experiment.messageFlow.publishedRevision,
+    },
+    scalePolicy: {
+      ...baseScalePolicy,
+      dailyCap: Math.max(1, Number(patch.dailyCap ?? baseScalePolicy.dailyCap)),
+      hourlyCap: Math.max(1, Number(patch.hourlyCap ?? baseScalePolicy.hourlyCap)),
+      timezone: String(patch.timezone ?? baseScalePolicy.timezone),
+      minSpacingMinutes: Math.max(
+        1,
+        Number(patch.minSpacingMinutes ?? baseScalePolicy.minSpacingMinutes)
+      ),
+      accountId: String(patch.accountId ?? baseScalePolicy.accountId),
+      mailboxAccountId: String(patch.mailboxAccountId ?? baseScalePolicy.mailboxAccountId),
+      lane:
+        patch.lane === "warmup" || patch.lane === "outbound"
+          ? patch.lane
+          : input.lane ?? baseScalePolicy.lane ?? "outbound",
+      safetyMode: patch.safetyMode === "balanced" ? "balanced" : baseScalePolicy.safetyMode,
+    },
+    lastRunId: "",
+    metricsSummary: defaultMetricsSummary(),
+    createdAt: now,
+    updatedAt: now,
+  };
+
+  const persistedCampaign = await persistScaleCampaign(row);
+
+  await updateExperimentRecord(input.experiment.brandId, input.experiment.id, {
+    status: "promoted",
+    promotedCampaignId: persistedCampaign.id,
+  });
+
+  return hydrateScaleCampaignRecord(persistedCampaign);
+}
+
+async function copyConversationMapBetweenExperiments(input: {
+  brandId: string;
+  sourceExperiment: ExperimentRecord;
+  targetExperiment: ExperimentRecord;
+}) {
+  const sourceRuntime = input.sourceExperiment.runtime;
+  const targetRuntime = input.targetExperiment.runtime;
+  if (
+    !sourceRuntime.campaignId ||
+    !sourceRuntime.experimentId ||
+    !targetRuntime.campaignId ||
+    !targetRuntime.experimentId
+  ) {
+    return;
+  }
+
+  const sourceMap = await getConversationMapByExperiment(
+    input.brandId,
+    sourceRuntime.campaignId,
+    sourceRuntime.experimentId
+  );
+  if (!sourceMap) {
+    return;
+  }
+
+  await upsertConversationMapDraft({
+    brandId: input.brandId,
+    campaignId: targetRuntime.campaignId,
+    experimentId: targetRuntime.experimentId,
+    name: sourceMap.name,
+    draftGraph: sourceMap.draftGraph,
+  });
+
+  if (sourceMap.publishedRevision > 0) {
+    await publishConversationMap({
+      brandId: input.brandId,
+      campaignId: targetRuntime.campaignId,
+      experimentId: targetRuntime.experimentId,
+    });
+  }
 }
 
 export async function listExperimentRecords(brandId: string): Promise<ExperimentRecord[]> {
@@ -1070,6 +1306,15 @@ export async function deleteExperimentRecord(brandId: string, experimentId: stri
   const existing = await getExperimentRecordById(brandId, experimentId);
   if (!existing) return false;
 
+  const linkedScaleCampaigns = (await listScaleCampaignRowsFromStore(brandId)).filter(
+    (row) => row.sourceExperimentId === experimentId
+  );
+  for (const campaign of linkedScaleCampaigns) {
+    await deleteScaleCampaignRecordInternal(brandId, campaign.id, {
+      skipSourceExperimentCleanup: true,
+    });
+  }
+
   const ownerRuns = await listOwnerRuns(brandId, "experiment", experimentId);
   const runtimeRuns =
     existing.runtime.campaignId && existing.runtime.experimentId
@@ -1084,7 +1329,14 @@ export async function deleteExperimentRecord(brandId: string, experimentId: stri
 
   const supabase = getSupabaseAdmin();
   if (supabase) {
-    await supabase.from(EXPERIMENT_TABLE).delete().eq("brand_id", brandId).eq("id", experimentId);
+    const { error } = await supabase
+      .from(EXPERIMENT_TABLE)
+      .delete()
+      .eq("brand_id", brandId)
+      .eq("id", experimentId);
+    if (error) {
+      throw new Error(`Failed to delete experiment ${experimentId}: ${error.message}`);
+    }
   }
 
   const localRows = await readJsonArray<ExperimentRecord>(EXPERIMENTS_PATH);
@@ -1128,10 +1380,75 @@ export async function getScaleCampaignRecordById(
   return normalizeLegacyRuntimeCampaign({ brandId, sourceExperiment });
 }
 
+export async function ensureSenderOwnedScaleCampaignSourceExperiment(input: {
+  brandId: string;
+  campaignId: string;
+}): Promise<{
+  campaign: ScaleCampaignRecord;
+  sourceExperiment: ExperimentRecord;
+}> {
+  const campaign = await getScaleCampaignRecordById(input.brandId, input.campaignId);
+  if (!campaign) {
+    throw new Error("campaign not found");
+  }
+
+  const sourceExperiment = await getExperimentRecordById(input.brandId, campaign.sourceExperimentId);
+  if (!sourceExperiment) {
+    throw new Error("source experiment not found");
+  }
+
+  if (!isSenderOwnedScaleCampaign(campaign)) {
+    return { campaign, sourceExperiment };
+  }
+
+  const campaigns = await listScaleCampaignRowsFromStore(input.brandId);
+  const sharedByOtherCampaigns = campaigns.some(
+    (entry) => entry.id !== campaign.id && entry.sourceExperimentId === campaign.sourceExperimentId
+  );
+  const alreadyDedicated =
+    !sharedByOtherCampaigns && sourceExperiment.promotedCampaignId.trim() === campaign.id;
+
+  if (alreadyDedicated) {
+    return { campaign, sourceExperiment };
+  }
+
+  const cloneBase = await createExperimentRecord({
+    brandId: input.brandId,
+    name: buildSenderOwnedSourceExperimentName(campaign, sourceExperiment),
+    offer: sourceExperiment.offer,
+    audience: sourceExperiment.audience,
+  });
+  const cloneWithPolicy = await updateExperimentRecord(input.brandId, cloneBase.id, {
+    status: "promoted",
+    testEnvelope: sourceExperiment.testEnvelope,
+    successMetric: sourceExperiment.successMetric,
+    promotedCampaignId: campaign.id,
+  });
+  const isolatedExperiment = cloneWithPolicy ?? cloneBase;
+
+  await copyConversationMapBetweenExperiments({
+    brandId: input.brandId,
+    sourceExperiment,
+    targetExperiment: isolatedExperiment,
+  });
+
+  const hydratedIsolatedExperiment =
+    (await getExperimentRecordById(input.brandId, isolatedExperiment.id)) ?? isolatedExperiment;
+  const reboundCampaign = await rebindScaleCampaignSourceExperiment({
+    campaign,
+    sourceExperiment: hydratedIsolatedExperiment,
+  });
+
+  return {
+    campaign: reboundCampaign,
+    sourceExperiment: hydratedIsolatedExperiment,
+  };
+}
+
 export async function updateScaleCampaignRecord(
   brandId: string,
   campaignId: string,
-  patch: Partial<Pick<ScaleCampaignRecord, "name" | "status" | "scalePolicy">>
+  patch: Partial<Pick<ScaleCampaignRecord, "name" | "status" | "scalePolicy" | "snapshot">>
 ): Promise<ScaleCampaignRecord | null> {
   const rows = await listScaleCampaignRowsFromStore(brandId);
   const persistedRow = rows.find((row) => row.id === campaignId) ?? null;
@@ -1165,6 +1482,12 @@ export async function updateScaleCampaignRecord(
 
     const updatedExperiment = await updateExperimentRecord(brandId, sourceExperiment.id, {
       ...(typeof patch.name === "string" ? { name: patch.name } : {}),
+      ...(patch.snapshot
+        ? {
+            offer: String(patch.snapshot.offer ?? sourceExperiment.offer).trim(),
+            audience: String(patch.snapshot.audience ?? sourceExperiment.audience).trim(),
+          }
+        : {}),
       ...(testEnvelopePatch ? { testEnvelope: testEnvelopePatch } : {}),
       ...(nextStatus ? { status: nextStatus } : {}),
     });
@@ -1173,7 +1496,10 @@ export async function updateScaleCampaignRecord(
       const nextAccountId = String(patch.scalePolicy.accountId ?? "").trim();
       const nextMailboxAccountId = String(patch.scalePolicy.mailboxAccountId ?? "").trim();
       if (nextAccountId || nextMailboxAccountId) {
-        await setBrandOutreachAssignment(brandId, {
+        const { setBrandOutreachAssignmentWithWarmup } = await import(
+          "@/lib/sender-warmup-campaigns"
+        );
+        await setBrandOutreachAssignmentWithWarmup(brandId, {
           accountId: nextAccountId,
           mailboxAccountId: nextMailboxAccountId,
         });
@@ -1193,6 +1519,17 @@ export async function updateScaleCampaignRecord(
       patch.status && ["draft", "active", "paused", "completed", "archived"].includes(patch.status)
         ? patch.status
         : existing.status,
+    snapshot: patch.snapshot
+      ? {
+          offer: String(patch.snapshot.offer ?? existing.snapshot.offer).trim(),
+          audience: String(patch.snapshot.audience ?? existing.snapshot.audience).trim(),
+          mapId: String(patch.snapshot.mapId ?? existing.snapshot.mapId).trim(),
+          publishedRevision: Math.max(
+            0,
+            Number(patch.snapshot.publishedRevision ?? existing.snapshot.publishedRevision) || 0
+          ),
+        }
+      : existing.snapshot,
     scalePolicy: patch.scalePolicy
       ? {
           ...existing.scalePolicy,
@@ -1207,6 +1544,10 @@ export async function updateScaleCampaignRecord(
           mailboxAccountId: String(
             patch.scalePolicy.mailboxAccountId ?? existing.scalePolicy.mailboxAccountId
           ),
+          lane:
+            patch.scalePolicy.lane === "warmup" || patch.scalePolicy.lane === "outbound"
+              ? patch.scalePolicy.lane
+              : existing.scalePolicy.lane,
           safetyMode: patch.scalePolicy.safetyMode === "balanced" ? "balanced" : "strict",
         }
       : existing.scalePolicy,
@@ -1217,20 +1558,48 @@ export async function updateScaleCampaignRecord(
   return hydrateScaleCampaignRecord(persisted);
 }
 
-export async function deleteScaleCampaignRecord(
+async function deleteScaleCampaignRecordInternal(
   brandId: string,
-  campaignId: string
+  campaignId: string,
+  options: { skipSourceExperimentCleanup?: boolean } = {}
 ): Promise<boolean> {
   const existing = await getScaleCampaignRecordById(brandId, campaignId);
   if (!existing) return false;
 
+  const campaignOwnerRuns = await listOwnerRuns(brandId, "campaign", campaignId);
+  if (campaignOwnerRuns.length) {
+    await deleteOutreachRunsByIds(campaignOwnerRuns.map((run) => run.id));
+  }
+
+  await deleteCampaignPrepArtifactsByCampaignIds([campaignId], {
+    allowMissingTable: true,
+  });
+
+  let promotedCampaignReplacementId = "";
+  let shouldUpdateSourceExperiment = false;
+  let sourceExperimentId = existing.sourceExperimentId;
+  if (!options.skipSourceExperimentCleanup) {
+    const sourceExperiment = await getExperimentRecordById(brandId, existing.sourceExperimentId);
+    if (sourceExperiment?.promotedCampaignId.trim() === campaignId) {
+      shouldUpdateSourceExperiment = true;
+      const siblingCampaign = (await listScaleCampaignRowsFromStore(brandId)).find(
+        (row) => row.id !== campaignId && row.sourceExperimentId === existing.sourceExperimentId
+      );
+      promotedCampaignReplacementId = siblingCampaign?.id ?? "";
+      sourceExperimentId = sourceExperiment.id;
+    }
+  }
+
   const supabase = getSupabaseAdmin();
   if (supabase) {
-    await supabase
+    const { error } = await supabase
       .from(SCALE_CAMPAIGN_TABLE)
       .delete()
       .eq("brand_id", brandId)
       .eq("id", campaignId);
+    if (error) {
+      throw new Error(`Failed to delete scale campaign ${campaignId}: ${error.message}`);
+    }
   }
 
   const rows = await readJsonArray<ScaleCampaignRecord>(SCALE_CAMPAIGNS_PATH);
@@ -1241,7 +1610,42 @@ export async function deleteScaleCampaignRecord(
     await writeJsonArray(SCALE_CAMPAIGNS_PATH, next);
   }
 
+  if (shouldUpdateSourceExperiment && sourceExperimentId) {
+    await updateExperimentRecord(brandId, sourceExperimentId, {
+      promotedCampaignId: promotedCampaignReplacementId,
+    });
+  }
+
   return true;
+}
+
+export async function deleteScaleCampaignRecord(
+  brandId: string,
+  campaignId: string
+): Promise<boolean> {
+  return deleteScaleCampaignRecordInternal(brandId, campaignId);
+}
+
+export async function createScaleCampaignRecordFromExperiment(input: {
+  brandId: string;
+  experimentId: string;
+  campaignName?: string;
+  status?: ScaleCampaignRecord["status"];
+  lane?: OutreachTrafficLane;
+  scalePolicy?: Partial<CampaignScalePolicy>;
+}): Promise<ScaleCampaignRecord> {
+  const experiment = await getExperimentRecordById(input.brandId, input.experimentId);
+  if (!experiment) {
+    throw new Error("experiment not found");
+  }
+
+  return createScaleCampaignFromExperiment({
+    experiment,
+    campaignName: input.campaignName,
+    status: input.status,
+    lane: input.lane,
+    scalePolicy: input.scalePolicy,
+  });
 }
 
 export async function promoteExperimentRecordToCampaign(input: {
@@ -1280,47 +1684,11 @@ export async function promoteExperimentRecordToCampaign(input: {
     throw new Error("Cannot promote before at least one test run exists");
   }
 
-  if (experiment.promotedCampaignId.trim()) {
-    const existing = await getScaleCampaignRecordById(input.brandId, experiment.promotedCampaignId.trim());
-    if (existing) {
-      return existing;
-    }
-  }
-
-  const now = nowIso();
-  const row: ScaleCampaignRecord = {
-    id: createId("camp"),
-    brandId: input.brandId,
-    name: input.campaignName?.trim() || `${experiment.name} Campaign`,
+  return createScaleCampaignFromExperiment({
+    experiment,
+    campaignName: input.campaignName,
     status: "draft",
-    sourceExperimentId: experiment.id,
-    snapshot: {
-      offer: experiment.offer,
-      audience: experiment.audience,
-      mapId: experiment.messageFlow.mapId,
-      publishedRevision: experiment.messageFlow.publishedRevision,
-    },
-    scalePolicy: {
-      ...defaultScalePolicy(),
-      dailyCap: experiment.testEnvelope.dailyCap,
-      hourlyCap: experiment.testEnvelope.hourlyCap,
-      timezone: experiment.testEnvelope.timezone,
-      minSpacingMinutes: experiment.testEnvelope.minSpacingMinutes,
-    },
-    lastRunId: "",
-    metricsSummary: defaultMetricsSummary(),
-    createdAt: now,
-    updatedAt: now,
-  };
-
-  const persistedCampaign = await persistScaleCampaign(row);
-
-  await updateExperimentRecord(input.brandId, experiment.id, {
-    status: "promoted",
-    promotedCampaignId: persistedCampaign.id,
   });
-
-  return hydrateScaleCampaignRecord(persistedCampaign);
 }
 
 export async function resolveRuntimeCampaignForExperiment(

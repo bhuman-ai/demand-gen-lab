@@ -518,7 +518,7 @@ export type DomainRow = {
   messagingHealthSummary?: string;
   seedPolicy?: "fresh_pool" | "rotating_pool" | "tainted_mailbox";
   role?: "brand" | "sender";
-  registrar?: "namecheap" | "mailpool" | "manual";
+  registrar?: "namecheap" | "mailpool" | "vercel" | "manual";
   provider?: "customerio" | "mailpool" | "manual";
   dnsStatus?: "pending" | "configured" | "verified" | "error";
   fromEmail?: string;
@@ -899,6 +899,11 @@ export type CustomerIoBillingSummary = {
 };
 
 export type OutreachAccountConfig = {
+  outbound?: {
+    enabled: boolean;
+    disabledAt: string;
+    disabledReason: string;
+  };
   customerIo: {
     siteId: string;
     workspaceId: string;
@@ -1142,6 +1147,12 @@ export type DeliverabilityProbeMonitorResult = {
   matchedUid: number;
   ok: boolean;
   error: string;
+  cleanup?: {
+    attempted: boolean;
+    ok: boolean;
+    actions: string[];
+    error: string;
+  };
 };
 
 export type DeliverabilityProbeRun = {

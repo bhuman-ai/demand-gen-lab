@@ -137,7 +137,7 @@ export default function BrandHomeClient({ brandId }: { brandId: string }) {
             <Button
               type="button"
               disabled={!brand}
-              onClick={() => openBrandOperator("What should GPT do next for this brand?", true)}
+              onClick={() => openBrandOperator("", false)}
             >
               <Sparkles className="h-4 w-4" />
               Ask GPT

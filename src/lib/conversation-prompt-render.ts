@@ -229,13 +229,16 @@ function resolveConversationPromptProvider(): "openai" | "openrouter" {
 }
 
 function resolveOpenRouterModel(openAiModel: string) {
-  const configured = String(
-    process.env.OPENROUTER_MODEL_CONVERSATION_PROMPT_RENDER ||
-      process.env.OPENROUTER_MODEL_DEFAULT ||
-      ""
-  ).trim();
+  const explicit = String(process.env.OPENROUTER_MODEL_CONVERSATION_PROMPT_RENDER || "").trim();
+  const routine = String(process.env.OPENROUTER_MODEL_ROUTINE || "").trim() || "google/gemini-3.5-flash";
+  const defaultModel = String(process.env.OPENROUTER_MODEL_DEFAULT || "").trim();
+  const configured =
+    explicit ||
+    (defaultModel && !/^openai\/gpt-5\.5(?:$|-)|^gpt-5\.5(?:$|-)/i.test(defaultModel)
+      ? defaultModel
+      : routine);
   const model = configured || openAiModel;
-  if (!model) return "openai/gpt-5.5";
+  if (!model) return routine;
   if (model.includes("/")) return model;
   if (/^gpt-/i.test(model)) return `openai/${model}`;
   return model;

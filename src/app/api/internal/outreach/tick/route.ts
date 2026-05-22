@@ -16,6 +16,15 @@ async function handleTick(request: Request) {
   if (!isInternalCronAuthorized(request)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
+  const combinedTickEnabled = String(process.env.OUTREACH_COMBINED_TICK_ENABLED ?? "false").trim().toLowerCase();
+  if (!["1", "true", "yes", "on"].includes(combinedTickEnabled)) {
+    return NextResponse.json({
+      ok: true,
+      skipped: true,
+      reason:
+        "Combined outreach tick is disabled. Vercel split crons handle dispatch, prep, and ops without duplicating the Cloudflare combined cron.",
+    });
+  }
 
   const requestOrigin = new URL(request.url).origin;
   const mailpoolSync = await runCronTask("mailpoolSync", () => runMailpoolOutreachAccountSyncTick(6), {

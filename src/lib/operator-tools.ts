@@ -41,6 +41,13 @@ import {
   syncLeadrLinkedInCampaign,
 } from "@/lib/leadr-channel";
 import { listLeadrAccounts } from "@/lib/leadr-client";
+import {
+  closeGmailUiWorkerSession,
+  getGmailUiWorkerSession,
+  searchGmailUiWorkerMailbox,
+  sendGmailUiWorkerMessage,
+  verifyGmailUiWorkerSentMessage,
+} from "@/lib/gmail-ui-worker-client";
 import { getOperatorBrandContext, getOperatorSenderContext } from "@/lib/operator-context";
 import type { OperatorToolName, OperatorToolResult, OperatorToolSpec } from "@/lib/operator-types";
 import {
@@ -947,6 +954,140 @@ const TOOL_SPECS: OperatorToolSpec[] = [
           summary: "Use this link to connect a LinkedIn account in Leadr.",
           details: [link.url ? `URL: ${link.url}` : "Leadr did not return a URL."],
         },
+      } satisfies OperatorToolResult;
+    },
+  },
+  {
+    name: "gmail_ui_observe_account",
+    riskLevel: "read",
+    approvalMode: "none",
+    description:
+      "Observe the live Gmail UI worker browser session for a sender account, including login state, URL, title, and screenshot path. Input: accountId.",
+    previewTitle: "Observe Gmail UI account",
+    run: async (input) => {
+      const accountId = requireString(input, "accountId");
+      const snapshot = await getGmailUiWorkerSession(accountId);
+      return {
+        summary: `${snapshot.fromEmail || accountId} Gmail UI session is ${snapshot.loginState}: ${snapshot.prompt}`,
+        result: snapshot as unknown as Record<string, unknown>,
+      } satisfies OperatorToolResult;
+    },
+  },
+  {
+    name: "gmail_ui_search_mailbox",
+    riskLevel: "read",
+    approvalMode: "none",
+    description:
+      "Search a live Gmail UI worker mailbox with Gmail search syntax and return the visible mailbox text excerpt plus screenshot path. Input: accountId, query.",
+    previewTitle: "Search Gmail UI mailbox",
+    run: async (input) => {
+      const accountId = requireString(input, "accountId");
+      const query = requireString(input, "query");
+      const result = await searchGmailUiWorkerMailbox(accountId, {
+        query,
+        ignoreConfiguredProxy:
+          input.ignoreConfiguredProxy === undefined ? undefined : Boolean(input.ignoreConfiguredProxy),
+        refreshMailpoolCredentials: input.refreshMailpoolCredentials !== false,
+      });
+      return {
+        summary: `Searched ${result.fromEmail || accountId} Gmail UI mailbox for "${query}".`,
+        result: result as unknown as Record<string, unknown>,
+      } satisfies OperatorToolResult;
+    },
+  },
+  {
+    name: "gmail_ui_verify_sent",
+    riskLevel: "read",
+    approvalMode: "none",
+    description:
+      "Verify from the live Gmail UI worker that an expected message exists in the sender's Sent Mail before trusting a send. Input: accountId, recipient, subject and/or body.",
+    previewTitle: "Verify Gmail UI sent mail",
+    run: async (input) => {
+      const accountId = requireString(input, "accountId");
+      const recipient = requireString(input, "recipient");
+      const subject = asString(input.subject);
+      const body = asString(input.body);
+      if (!subject && !body) {
+        throw new Error("subject or body is required");
+      }
+      const result = await verifyGmailUiWorkerSentMessage(accountId, {
+        recipient,
+        subject,
+        body,
+        ignoreConfiguredProxy:
+          input.ignoreConfiguredProxy === undefined ? undefined : Boolean(input.ignoreConfiguredProxy),
+        refreshMailpoolCredentials: input.refreshMailpoolCredentials !== false,
+      });
+      return {
+        summary: result.verification.verified
+          ? `Verified the expected message in ${result.fromEmail || accountId} Sent Mail.`
+          : `Could not verify the expected message in ${result.fromEmail || accountId} Sent Mail: ${result.verification.reason}`,
+        result: result as unknown as Record<string, unknown>,
+      } satisfies OperatorToolResult;
+    },
+  },
+  {
+    name: "gmail_ui_send_message",
+    riskLevel: "guarded_write",
+    approvalMode: "confirm",
+    description:
+      "Send a message through the live Gmail UI worker and require Sent Mail verification before reporting success. Input: accountId, recipient, subject, body, optional expectedFrom.",
+    previewTitle: "Send Gmail UI message",
+    buildPreview: (input) =>
+      buildSimplePreview(
+        "Send Gmail UI message",
+        `Send "${asString(input.subject) || "email"}" to ${asString(input.recipient) || "the selected recipient"} through ${asString(input.accountId) || "the selected Gmail UI sender"}.`
+      ),
+    run: async (input) => {
+      const accountId = requireString(input, "accountId");
+      const recipient = requireString(input, "recipient");
+      const subject = requireString(input, "subject");
+      const body = requireString(input, "body");
+      const result = await sendGmailUiWorkerMessage(accountId, {
+        recipient,
+        subject,
+        body,
+        expectedFrom: asString(input.expectedFrom),
+        ignoreConfiguredProxy:
+          input.ignoreConfiguredProxy === undefined ? undefined : Boolean(input.ignoreConfiguredProxy),
+        refreshMailpoolCredentials: input.refreshMailpoolCredentials !== false,
+      });
+      if (!result.ok) {
+        throw new Error(result.error || "Gmail UI worker did not verify the send.");
+      }
+      return {
+        summary: `Sent and verified "${subject}" to ${recipient} through ${result.fromEmail || accountId}.`,
+        result: result as unknown as Record<string, unknown>,
+        receipt: {
+          title: "Gmail UI message sent",
+          summary: `Sent "${subject}" to ${recipient}.`,
+          details: [
+            result.sentVerified ? "Sent Mail verification passed." : "Sent Mail verification did not pass.",
+            result.providerMessageId ? `Provider message id: ${result.providerMessageId}` : "No provider id returned.",
+          ],
+        },
+      } satisfies OperatorToolResult;
+    },
+  },
+  {
+    name: "gmail_ui_close_session",
+    riskLevel: "safe_write",
+    approvalMode: "none",
+    description: "Close a live Gmail UI worker browser session for a sender account. Input: accountId.",
+    previewTitle: "Close Gmail UI session",
+    buildPreview: (input) =>
+      buildSimplePreview(
+        "Close Gmail UI session",
+        `Close Gmail UI worker session for ${asString(input.accountId) || "the selected sender"}.`
+      ),
+    run: async (input) => {
+      const accountId = requireString(input, "accountId");
+      const result = await closeGmailUiWorkerSession(accountId);
+      return {
+        summary: result.closed
+          ? `Closed Gmail UI worker session for ${accountId}.`
+          : `No open Gmail UI worker session existed for ${accountId}.`,
+        result: result as Record<string, unknown>,
       } satisfies OperatorToolResult;
     },
   },

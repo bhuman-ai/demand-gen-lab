@@ -27,6 +27,44 @@ export type GmailUiWorkerSendResult = {
   fromEmail: string;
   providerMessageId: string;
   error: string;
+  sentVerified: boolean;
+  sentVerification: GmailUiWorkerSentVerification | null;
+  screenshotPath: string;
+  currentUrl: string;
+  title: string;
+  updatedAt: string;
+};
+
+export type GmailUiWorkerSentVerification = {
+  verified: boolean;
+  query: string;
+  reason: string;
+  recipientMatched: boolean;
+  subjectMatched: boolean;
+  phraseMatched: boolean;
+  bodyExcerpt: string;
+  currentUrl: string;
+  title: string;
+  checkedAt: string;
+};
+
+export type GmailUiWorkerSearchResult = {
+  ok: boolean;
+  accountId: string;
+  fromEmail: string;
+  query: string;
+  bodyExcerpt: string;
+  screenshotPath: string;
+  currentUrl: string;
+  title: string;
+  updatedAt: string;
+};
+
+export type GmailUiWorkerSentVerifyResult = {
+  ok: boolean;
+  accountId: string;
+  fromEmail: string;
+  verification: GmailUiWorkerSentVerification;
   screenshotPath: string;
   currentUrl: string;
   title: string;
@@ -147,6 +185,25 @@ function parseSnapshot(data: Record<string, unknown>): GmailUiWorkerSessionSnaps
   };
 }
 
+function parseSentVerification(value: unknown): GmailUiWorkerSentVerification | null {
+  const data = value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+  if (!data) return null;
+  return {
+    verified: Boolean(data.verified),
+    query: String(data.query ?? "").trim(),
+    reason: String(data.reason ?? "").trim(),
+    recipientMatched: Boolean(data.recipientMatched),
+    subjectMatched: Boolean(data.subjectMatched),
+    phraseMatched: Boolean(data.phraseMatched),
+    bodyExcerpt: String(data.bodyExcerpt ?? "").trim(),
+    currentUrl: String(data.currentUrl ?? "").trim(),
+    title: String(data.title ?? "").trim(),
+    checkedAt: String(data.checkedAt ?? "").trim(),
+  };
+}
+
 export async function getGmailUiWorkerSession(accountId: string) {
   const data = await workerRequest(`/accounts/${encodeURIComponent(accountId)}`);
   return parseSnapshot(data);
@@ -216,6 +273,88 @@ export async function sendGmailUiWorkerMessage(
     fromEmail: String(data.fromEmail ?? "").trim(),
     providerMessageId: String(data.providerMessageId ?? "").trim(),
     error: String(data.error ?? "").trim(),
+    sentVerified: Boolean(data.sentVerified),
+    sentVerification: parseSentVerification(data.sentVerification),
+    screenshotPath: String(data.screenshotPath ?? "").trim(),
+    currentUrl: String(data.currentUrl ?? "").trim(),
+    title: String(data.title ?? "").trim(),
+    updatedAt: String(data.updatedAt ?? "").trim(),
+  };
+}
+
+export async function searchGmailUiWorkerMailbox(
+  accountId: string,
+  input: {
+    query: string;
+    otp?: string;
+    password?: string;
+    ignoreConfiguredProxy?: boolean;
+    refreshMailpoolCredentials?: boolean;
+  }
+): Promise<GmailUiWorkerSearchResult> {
+  const data = await workerRequest(`/accounts/${encodeURIComponent(accountId)}/search`, {
+    method: "POST",
+    body: JSON.stringify({
+      query: String(input.query ?? "").trim(),
+      otp: String(input.otp ?? "").trim(),
+      password: String(input.password ?? "").trim(),
+      ignoreConfiguredProxy: input.ignoreConfiguredProxy,
+      refreshMailpoolCredentials: input.refreshMailpoolCredentials !== false,
+    }),
+  });
+  return {
+    ok: Boolean(data.ok),
+    accountId: String(data.accountId ?? "").trim(),
+    fromEmail: String(data.fromEmail ?? "").trim(),
+    query: String(data.query ?? "").trim(),
+    bodyExcerpt: String(data.bodyExcerpt ?? "").trim(),
+    screenshotPath: String(data.screenshotPath ?? "").trim(),
+    currentUrl: String(data.currentUrl ?? "").trim(),
+    title: String(data.title ?? "").trim(),
+    updatedAt: String(data.updatedAt ?? "").trim(),
+  };
+}
+
+export async function verifyGmailUiWorkerSentMessage(
+  accountId: string,
+  input: {
+    recipient: string;
+    subject?: string;
+    body?: string;
+    otp?: string;
+    password?: string;
+    ignoreConfiguredProxy?: boolean;
+    refreshMailpoolCredentials?: boolean;
+  }
+): Promise<GmailUiWorkerSentVerifyResult> {
+  const data = await workerRequest(`/accounts/${encodeURIComponent(accountId)}/sent/verify`, {
+    method: "POST",
+    body: JSON.stringify({
+      recipient: String(input.recipient ?? "").trim(),
+      subject: String(input.subject ?? "").trim(),
+      body: String(input.body ?? "").trim(),
+      otp: String(input.otp ?? "").trim(),
+      password: String(input.password ?? "").trim(),
+      ignoreConfiguredProxy: input.ignoreConfiguredProxy,
+      refreshMailpoolCredentials: input.refreshMailpoolCredentials !== false,
+    }),
+  });
+  return {
+    ok: Boolean(data.ok),
+    accountId: String(data.accountId ?? "").trim(),
+    fromEmail: String(data.fromEmail ?? "").trim(),
+    verification: parseSentVerification(data.verification) ?? {
+      verified: false,
+      query: "",
+      reason: "Worker did not return verification details.",
+      recipientMatched: false,
+      subjectMatched: false,
+      phraseMatched: false,
+      bodyExcerpt: "",
+      currentUrl: String(data.currentUrl ?? "").trim(),
+      title: String(data.title ?? "").trim(),
+      checkedAt: "",
+    },
     screenshotPath: String(data.screenshotPath ?? "").trim(),
     currentUrl: String(data.currentUrl ?? "").trim(),
     title: String(data.title ?? "").trim(),

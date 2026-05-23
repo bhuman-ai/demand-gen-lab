@@ -195,11 +195,17 @@ function inferExecutionVerb(toolName: OperatorToolName, input: Record<string, un
     case "promote_experiment_to_campaign":
       return "promote";
     case "send_reply_draft":
+    case "gmail_ui_send_message":
       return "send";
     case "dismiss_reply_draft":
       return "dismiss";
     case "refresh_mailpool_sender":
+    case "gmail_ui_close_session":
       return "refresh";
+    case "gmail_ui_search_mailbox":
+      return "search";
+    case "gmail_ui_verify_sent":
+      return "verify";
     case "sync_leadr_campaign":
       return "sync";
     case "resume_leadr_campaign":
@@ -229,6 +235,11 @@ function inferExecutionObjectType(toolName: OperatorToolName) {
     case "refresh_mailpool_sender":
     case "provision_mailpool_sender":
     case "get_sender_snapshot":
+    case "gmail_ui_observe_account":
+    case "gmail_ui_search_mailbox":
+    case "gmail_ui_verify_sent":
+    case "gmail_ui_send_message":
+    case "gmail_ui_close_session":
       return "sender";
     case "get_leadr_snapshot":
     case "list_leadr_accounts":
@@ -2033,7 +2044,17 @@ function normalizeRequestedAction(input: {
     }
   }
 
-  if (toolName === "refresh_mailpool_sender" || toolName === "get_sender_snapshot") {
+  if (
+    [
+      "refresh_mailpool_sender",
+      "get_sender_snapshot",
+      "gmail_ui_observe_account",
+      "gmail_ui_search_mailbox",
+      "gmail_ui_verify_sent",
+      "gmail_ui_send_message",
+      "gmail_ui_close_session",
+    ].includes(toolName)
+  ) {
     const accountId = resolveSenderAccountId(toolInput, input.context);
     if (!accountId) return null;
     toolInput.accountId = accountId;

@@ -47,6 +47,80 @@ const OPERATOR_TOOL_DEFINITIONS: OperatorGrowthToolDefinition[] = [
     inputSchema: objectSchema({ accountId: stringProp("Sender account id") }, ["accountId"]),
   },
   {
+    name: "gmail_ui.account.observe",
+    operatorToolName: "gmail_ui_observe_account",
+    title: "Observe Gmail UI session",
+    description: "Inspect the live Gmail UI worker browser state for a sender account.",
+    provider: "gmail_ui_worker",
+    category: "sender_infra",
+    capability: "inspect_state",
+    inputSchema: objectSchema({ accountId: stringProp("Sender account id") }, ["accountId"]),
+  },
+  {
+    name: "gmail_ui.mailbox.search",
+    operatorToolName: "gmail_ui_search_mailbox",
+    title: "Search Gmail UI mailbox",
+    description: "Search a live Gmail mailbox through the worker using Gmail search syntax.",
+    provider: "gmail_ui_worker",
+    category: "analytics",
+    capability: "inspect_state",
+    inputSchema: objectSchema(
+      {
+        accountId: stringProp("Sender account id"),
+        query: stringProp("Gmail search query"),
+      },
+      ["accountId", "query"]
+    ),
+  },
+  {
+    name: "gmail_ui.sent.verify",
+    operatorToolName: "gmail_ui_verify_sent",
+    title: "Verify Gmail UI sent mail",
+    description: "Verify that a specific expected message appears in Gmail Sent Mail.",
+    provider: "gmail_ui_worker",
+    category: "deliverability",
+    capability: "inspect_state",
+    inputSchema: objectSchema(
+      {
+        accountId: stringProp("Sender account id"),
+        recipient: stringProp("Recipient email"),
+        subject: stringProp("Expected subject"),
+        body: stringProp("Expected message body or distinctive body phrase"),
+      },
+      ["accountId", "recipient"]
+    ),
+  },
+  {
+    name: "gmail_ui.message.send",
+    operatorToolName: "gmail_ui_send_message",
+    title: "Send Gmail UI message",
+    description: "Send through the live Gmail UI worker and only report success after Sent Mail verification.",
+    provider: "gmail_ui_worker",
+    category: "channel",
+    capability: "control_campaign",
+    risk: { reputationRisk: true },
+    inputSchema: objectSchema(
+      {
+        accountId: stringProp("Sender account id"),
+        recipient: stringProp("Recipient email"),
+        subject: stringProp("Email subject"),
+        body: stringProp("Email body"),
+        expectedFrom: stringProp("Expected sender email"),
+      },
+      ["accountId", "recipient", "subject", "body"]
+    ),
+  },
+  {
+    name: "gmail_ui.session.close",
+    operatorToolName: "gmail_ui_close_session",
+    title: "Close Gmail UI session",
+    description: "Close a live Gmail UI worker browser session for a sender account.",
+    provider: "gmail_ui_worker",
+    category: "sender_infra",
+    capability: "refresh_sender",
+    inputSchema: objectSchema({ accountId: stringProp("Sender account id") }, ["accountId"]),
+  },
+  {
     name: "lastb2b.campaign.status",
     operatorToolName: "summarize_campaign_status",
     title: "Summarize campaign status",

@@ -12,7 +12,7 @@ import {
 import { listSavedMailpoolDomains } from "@/lib/outreach-provisioning";
 import { getOutreachProvisioningSettings } from "@/lib/outreach-provider-settings";
 import { buildSenderRoutingSignalFromDomainRow, rankSenderRoutingSignals, summarizeSenderRoutingScore, type SenderRoutingScoreLevel } from "@/lib/sender-routing";
-import { enrichBrandWithSenderHealth } from "@/lib/sender-health";
+import { enrichBrandWithSenderHealth, isDeliverabilitySeedSendingDisabledReason } from "@/lib/sender-health";
 
 export type OperatorSenderSnapshot = {
   accountId: string;
@@ -273,9 +273,18 @@ function summarizeNextActions(input: {
     );
     return nextActions;
   }
+  const hasSeedSendingDisabled = input.senderSnapshots.some((row) =>
+    isDeliverabilitySeedSendingDisabledReason(row.automationSummary)
+  );
   const usableSenderCount = input.senderSnapshots.filter((row) => row.usableForRouting).length;
   const fullyReadySenderCount = input.senderSnapshots.filter((row) => row.automationStatus === "ready").length;
-  if (input.senderSnapshots.some((row) => isPendingAutomation(row.automationStatus) || row.mailpoolStatus === "pending")) {
+  if (hasSeedSendingDisabled) {
+    nextActions.push("Enable platform-wide deliverability seed sending, then rerun inbox placement probes.");
+  }
+  if (
+    !hasSeedSendingDisabled &&
+    input.senderSnapshots.some((row) => isPendingAutomation(row.automationStatus) || row.mailpoolStatus === "pending")
+  ) {
     nextActions.push("Refresh the pending Mailpool sender to pull mailbox and deliverability state.");
   }
   if (input.senderSnapshots.some((row) => row.automationStatus === "attention")) {
@@ -587,8 +596,10 @@ export async function getOperatorSenderContext(accountId: string): Promise<Opera
   if (!brandEntries.length) {
     issues.push("This sender is not attached to any brand domain row yet.");
   }
-  if (latestProbe?.status === "failed") {
+  if (latestProbe?.status === "failed" && !isDeliverabilitySeedSendingDisabledReason(latestProbe.lastError)) {
     issues.push(latestProbe.lastError.trim() || "The latest deliverability probe failed.");
+  } else if (latestProbe?.status === "failed") {
+    issues.push("Inbox placement probes are paused because platform-wide deliverability seed sending is disabled.");
   }
 
   return {

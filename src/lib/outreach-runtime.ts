@@ -14218,23 +14218,25 @@ async function listBlockedMonitorEmailsForSender(input: {
 }) {
   const reservations = await listDeliverabilitySeedReservations({
     brandId: input.brandId,
-    senderAccountId: input.senderAccountId,
-    fromEmail: input.fromEmail,
-    statuses: ["reserved", "consumed"],
   });
   const senderAccountId = input.senderAccountId.trim();
   const fromEmail = input.fromEmail.trim().toLowerCase();
-  const contentHash = String(input.contentHash ?? "").trim();
+  const fromDomain = senderDomainFromEmail(fromEmail);
   const blocked = new Set<string>();
   for (const reservation of reservations) {
     const reservationSenderAccountId = reservation.senderAccountId.trim();
     const reservationFromEmail = reservation.fromEmail.trim().toLowerCase();
-    const reservationContentHash = reservation.contentHash.trim();
+    const reservationFromDomain = senderDomainFromEmail(reservationFromEmail);
     const matchesSender =
       (senderAccountId && reservationSenderAccountId === senderAccountId) ||
-      (fromEmail && reservationFromEmail === fromEmail);
-    const matchesContent = !contentHash || reservationContentHash === contentHash;
-    if (!matchesSender || !matchesContent) continue;
+      (fromEmail && reservationFromEmail === fromEmail) ||
+      (fromDomain && reservationFromDomain === fromDomain);
+    const mayHaveSeenSender =
+      reservation.status === "reserved" ||
+      reservation.status === "consumed" ||
+      Boolean(reservation.providerMessageId.trim()) ||
+      reservation.releasedReason.trim() === "probe_completed";
+    if (!matchesSender || !mayHaveSeenSender) continue;
     blocked.add(reservation.monitorEmail.trim().toLowerCase());
   }
   return blocked;
@@ -16227,6 +16229,8 @@ async function processMonitorDeliverabilityJob(job: OutreachJob) {
       pendingTargets.push({
         accountId: target.accountId,
         email: target.email,
+        reservationId: target.reservationId,
+        providerMessageId: target.providerMessageId,
       });
       continue;
     }

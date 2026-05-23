@@ -998,37 +998,36 @@ export default function OperatorPanel({
       className={cn(
         "relative flex h-full w-full flex-col bg-[color:var(--background)]",
         isInline
-          ? "min-h-[680px] overflow-hidden rounded-[12px] border border-[color:var(--border)] shadow-[0_10px_30px_-26px_color-mix(in_oklab,var(--shadow)_82%,transparent)]"
+          ? "min-h-[680px] overflow-hidden"
           : "max-w-[38rem] border-l border-[color:var(--border)] shadow-[0_18px_48px_-28px_color-mix(in_oklab,var(--shadow)_88%,transparent)]",
         className
       )}
     >
-      <div className="border-b border-[color:var(--border)] px-5 py-4">
-        <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0">
-            <div className="flex flex-wrap items-center gap-2">
-              <div className="inline-flex h-9 items-center gap-2 rounded-[10px] border border-[color:var(--border)] bg-[color:var(--surface)] px-3 text-sm font-medium text-[color:var(--foreground)]">
-                <Sparkles className="h-4 w-4" />
-                Brand GPT
-              </div>
-              {activeBrandName ? (
-                <div className="inline-flex h-9 items-center rounded-[10px] border border-[color:var(--border)] bg-[color:var(--surface)] px-3 text-sm text-[color:var(--muted-foreground)]">
-                  {activeBrandName}
+      {!isInline ? (
+        <div className="border-b border-[color:var(--border)] px-5 py-4">
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="inline-flex h-9 items-center gap-2 rounded-[10px] border border-[color:var(--border)] bg-[color:var(--surface)] px-3 text-sm font-medium text-[color:var(--foreground)]">
+                  <Sparkles className="h-4 w-4" />
+                  Brand GPT
                 </div>
-              ) : null}
+                {activeBrandName ? (
+                  <div className="inline-flex h-9 items-center rounded-[10px] border border-[color:var(--border)] bg-[color:var(--surface)] px-3 text-sm text-[color:var(--muted-foreground)]">
+                    {activeBrandName}
+                  </div>
+                ) : null}
+              </div>
+              <div className="mt-3 text-sm font-medium text-[color:var(--foreground)]">{threadTitle}</div>
+              <div className="mt-1 text-sm leading-6 text-[color:var(--muted-foreground)]">
+                Ask anything. If Brand GPT makes a change, it will show exactly what it did.
+              </div>
             </div>
-            <div className="mt-3 text-sm font-medium text-[color:var(--foreground)]">{threadTitle}</div>
-            <div className="mt-1 text-sm leading-6 text-[color:var(--muted-foreground)]">
-              Ask anything. If Brand GPT makes a change, it will show exactly what it did.
-            </div>
-          </div>
-          {!isInline ? (
             <Button type="button" variant="ghost" size="icon" onClick={() => onOpenChange(false)} aria-label="Close Brand GPT">
               <X className="h-4 w-4" />
             </Button>
-          ) : null}
-        </div>
-        <div className="mt-4 rounded-[12px] border border-[color:var(--border)] bg-[color:var(--surface)] px-4 py-3">
+          </div>
+          <div className="mt-4 rounded-[12px] border border-[color:var(--border)] bg-[color:var(--surface)] px-4 py-3">
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
               <div className="flex items-center gap-2 text-xs font-medium text-[color:var(--muted-foreground)]">
@@ -1064,9 +1063,10 @@ export default function OperatorPanel({
             </Badge>
           </div>
         </div>
-      </div>
+        </div>
+      ) : null}
 
-      <div ref={scrollerRef} className="flex-1 space-y-5 overflow-y-auto px-5 py-5">
+      <div ref={scrollerRef} className={cn("flex-1 space-y-5 overflow-y-auto", isInline ? "px-0 py-8" : "px-5 py-5")}>
         {!activeBrandId ? (
           <div className="rounded-[12px] border border-[color:var(--border)] bg-[color:var(--surface)] px-4 py-4 text-sm text-[color:var(--muted-foreground)]">
             Select a brand first. Brand GPT is scoped to the active brand context.
@@ -1099,12 +1099,24 @@ export default function OperatorPanel({
         ) : null}
 
         {!loadingThread && activeBrandId && !visibleMessages.length ? (
-          <div className="space-y-3">
-            <div className="flex items-center gap-2 text-xs font-medium text-[color:var(--muted-foreground)]">
-              <Bot className="h-3.5 w-3.5" />
-              Start here
-            </div>
-            <div className="grid gap-2">
+          <div
+            className={cn(
+              isInline
+                ? "mx-auto flex min-h-[22rem] w-full max-w-3xl flex-col items-center justify-center gap-5 text-center"
+                : "space-y-3"
+            )}
+          >
+            {isInline ? (
+              <h2 className="text-2xl font-semibold text-[color:var(--foreground)]">
+                What should {activeBrandName || "this brand"} do next?
+              </h2>
+            ) : (
+              <div className="flex items-center gap-2 text-xs font-medium text-[color:var(--muted-foreground)]">
+                <Bot className="h-3.5 w-3.5" />
+                Start here
+              </div>
+            )}
+            <div className={cn("grid gap-2", isInline ? "w-full sm:grid-cols-3" : "")}>
               {DEFAULT_PROMPTS.map((prompt) => (
                 <button
                   key={prompt}
@@ -1121,7 +1133,7 @@ export default function OperatorPanel({
           </div>
         ) : null}
 
-        {!!visibleMessages.length ? (
+        {!isInline && !!visibleMessages.length ? (
           <div className="flex items-center gap-2 text-xs font-medium text-[color:var(--muted-foreground)]">
             <MessageSquareText className="h-3.5 w-3.5" />
             Conversation
@@ -1132,7 +1144,7 @@ export default function OperatorPanel({
           const isUser = message.role === "user" && message.kind === "message";
           const isAssistant = message.role === "assistant" && message.kind === "message";
           return (
-            <div key={message.id} className={cn("flex", isUser ? "justify-end" : "justify-start")}>
+            <div key={message.id} className={cn("flex", isInline ? "mx-auto w-full max-w-3xl" : "", isUser ? "justify-end" : "justify-start")}>
               <div
                 className={cn(
                   "max-w-[94%] rounded-[12px] border px-4 py-3",
@@ -1163,8 +1175,8 @@ export default function OperatorPanel({
         })}
       </div>
 
-      <div className="border-t border-[color:var(--border)] px-5 py-4">
-        {visibleMessages.length ? (
+      <div className={cn("py-4", isInline ? "px-0" : "border-t border-[color:var(--border)] px-5")}>
+        {!isInline && visibleMessages.length ? (
           <div className="mb-3 flex flex-wrap gap-2">
             {DEFAULT_PROMPTS.slice(0, 3).map((prompt) => (
               <Button
@@ -1181,7 +1193,11 @@ export default function OperatorPanel({
           </div>
         ) : null}
         <form
-          className="space-y-3"
+          className={cn(
+            isInline
+              ? "mx-auto w-full max-w-3xl rounded-[24px] border border-[color:var(--border)] bg-[color:var(--surface)] px-4 py-3 shadow-[0_12px_36px_-30px_color-mix(in_oklab,var(--shadow)_85%,transparent)]"
+              : "space-y-3"
+          )}
           onSubmit={(event) => {
             event.preventDefault();
             void handleSend(input);
@@ -1201,16 +1217,28 @@ export default function OperatorPanel({
                 ? "Ask anything about this brand, or tell Brand GPT what to do."
                 : "Select a brand to use Brand GPT."
             }
-            className="min-h-[104px] rounded-[12px] bg-[color:var(--surface)]"
+            className={cn(
+              isInline
+                ? "min-h-[72px] resize-none rounded-none border-0 bg-transparent px-0 py-0 focus-visible:border-transparent focus-visible:ring-0"
+                : "min-h-[104px] rounded-[12px] bg-[color:var(--surface)]"
+            )}
             disabled={agentBusy || !activeBrandId}
           />
-          <div className="flex items-center justify-between gap-3">
-            <div className="text-xs text-[color:var(--muted-foreground)]">
+          <div className={cn("flex items-center gap-3", isInline ? "justify-end" : "justify-between")}>
+            {!isInline ? (
+              <div className="text-xs text-[color:var(--muted-foreground)]">
               `Enter` sends. `Shift+Enter` adds a new line.
-            </div>
-            <Button type="submit" disabled={agentBusy || !activeBrandId || !input.trim()}>
+              </div>
+            ) : null}
+            <Button
+              type="submit"
+              size={isInline ? "icon" : "md"}
+              className={isInline ? "rounded-full" : ""}
+              aria-label={isInline ? "Send message" : undefined}
+              disabled={agentBusy || !activeBrandId || !input.trim()}
+            >
               {agentBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <SendHorizontal className="h-4 w-4" />}
-              Send
+              {isInline ? null : "Send"}
             </Button>
           </div>
         </form>

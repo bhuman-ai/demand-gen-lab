@@ -12,7 +12,6 @@ import {
   Network,
   Radar,
   Settings,
-  ShieldAlert,
   Sparkles,
   Target,
 } from "lucide-react";
@@ -20,7 +19,6 @@ import OperatorPanel from "@/components/operator/operator-panel";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
-import { PageIntro, SectionPanel } from "@/components/ui/page-layout";
 import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import {
@@ -209,12 +207,26 @@ export default function BrandHomeClient({ brandId }: { brandId: string }) {
     },
   ];
 
+  const allLinks = [...workLinks, ...secondaryLinks];
+
   return (
-    <div className="space-y-5">
-      <PageIntro
-        title={brand?.name ? `${brand.name} agent` : "Brand agent"}
-        description="Message the agent for this brand."
-      />
+    <div className="mx-auto flex min-h-[calc(100vh-7rem)] w-full max-w-3xl flex-col gap-4">
+      <header className="flex flex-wrap items-center justify-between gap-3 border-b border-[color:var(--border)] pb-3">
+        <div className="min-w-0">
+          <div className="text-xs font-medium uppercase tracking-[0.12em] text-[color:var(--muted-foreground)]">
+            Brand GPT
+          </div>
+          <h1 className="mt-1 truncate text-xl font-semibold text-[color:var(--foreground)]">
+            {brand?.name || "Brand"}
+          </h1>
+        </div>
+        <div className="flex min-w-0 flex-wrap items-center gap-2 text-sm text-[color:var(--muted-foreground)]">
+          <Badge variant={latestMission?.status === "failed" ? "danger" : latestMission ? "accent" : "muted"}>
+            {latestMission ? formatStatus(latestMission.status) : "Ready"}
+          </Badge>
+          <span className="max-w-[32rem] truncate">{currentRisk}</span>
+        </div>
+      </header>
 
       {error ? (
         <div className="rounded-[12px] border border-[color:var(--danger-border)] bg-[color:var(--danger-soft)] px-4 py-3 text-sm text-[color:var(--danger)]">
@@ -223,77 +235,31 @@ export default function BrandHomeClient({ brandId }: { brandId: string }) {
       ) : null}
       {loading ? <div className="text-sm text-[color:var(--muted-foreground)]">Loading brand...</div> : null}
 
-      <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_21rem]">
-        <OperatorPanel
-          open={Boolean(brandId)}
-          onOpenChange={() => undefined}
-          activeBrandId={brandId}
-          activeBrandName={brand?.name || ""}
-          variant="inline"
-          className="lg:min-h-[calc(100vh-11rem)]"
-        />
+      <OperatorPanel
+        open={Boolean(brandId)}
+        onOpenChange={() => undefined}
+        activeBrandId={brandId}
+        activeBrandName={brand?.name || ""}
+        variant="inline"
+        className="flex-1 lg:min-h-[calc(100vh-14rem)]"
+      />
 
-        <aside className="space-y-4">
-          <SectionPanel title="Current focus" contentClassName="space-y-3">
-            <div className="flex items-start gap-2">
-              <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0 text-[color:var(--muted-foreground)]" />
-              <div className="min-w-0">
-                <div className="text-sm font-medium text-[color:var(--foreground)]">Primary risk</div>
-                <div className="mt-1 text-sm leading-6 text-[color:var(--muted-foreground)]">{currentRisk}</div>
-              </div>
+      <details className="rounded-[12px] border border-[color:var(--border)] bg-[color:var(--surface)]">
+        <summary className="cursor-pointer px-4 py-3 text-sm font-medium text-[color:var(--foreground)]">
+          Details
+        </summary>
+        <div className="grid gap-5 border-t border-[color:var(--border)] px-4 py-4 lg:grid-cols-[minmax(0,1fr)_20rem]">
+          <div className="grid gap-4">
+            <div className="grid gap-2">
+              <Label htmlFor="product">Product summary</Label>
+              <Textarea
+                id="product"
+                value={product}
+                onChange={(event) => setProduct(event.target.value)}
+                placeholder="What the product does and why it matters."
+              />
             </div>
-            <div className="flex flex-wrap gap-2">
-              <Badge variant={latestMission?.status === "failed" ? "danger" : latestMission ? "accent" : "muted"}>
-                {latestMission ? formatStatus(latestMission.status) : "No mission"}
-              </Badge>
-              {latestMission?.deliverabilityState.stage ? (
-                <Badge variant="muted">{formatStatus(latestMission.deliverabilityState.stage)}</Badge>
-              ) : null}
-            </div>
-            <Button asChild variant="outline" className="w-full justify-start">
-              <Link href={missionHref(brandId, latestMission)}>
-                Open mission control
-                <ChevronRight className="h-4 w-4" />
-              </Link>
-            </Button>
-          </SectionPanel>
-
-          <SectionPanel title="Work" contentClassName="grid gap-2">
-            {workLinks.map((item) => {
-              const Icon = item.icon;
-              return (
-                <Link
-                  key={item.label}
-                  href={item.href}
-                  className="flex items-center justify-between gap-3 rounded-[10px] border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-3 text-sm transition-colors hover:bg-[color:var(--surface-hover)]"
-                >
-                  <span className="flex min-w-0 items-center gap-3">
-                    <Icon className="h-4 w-4 shrink-0 text-[color:var(--muted-foreground)]" />
-                    <span className="min-w-0">
-                      <span className="block font-medium text-[color:var(--foreground)]">{item.label}</span>
-                      <span className="block truncate text-xs text-[color:var(--muted-foreground)]">{item.detail}</span>
-                    </span>
-                  </span>
-                  <ChevronRight className="h-4 w-4 shrink-0 text-[color:var(--muted-foreground)]" />
-                </Link>
-              );
-            })}
-          </SectionPanel>
-
-          <details className="rounded-[12px] border border-[color:var(--border)] bg-[color:var(--surface)]">
-            <summary className="cursor-pointer px-4 py-3 text-sm font-medium text-[color:var(--foreground)]">
-              Brand context
-            </summary>
-            <div className="grid gap-4 border-t border-[color:var(--border)] px-4 py-4">
-              <div className="grid gap-2">
-                <Label htmlFor="product">Product summary</Label>
-                <Textarea
-                  id="product"
-                  value={product}
-                  onChange={(event) => setProduct(event.target.value)}
-                  placeholder="What the product does and why it matters."
-                />
-              </div>
+            <div className="grid gap-2 md:grid-cols-2">
               <div className="grid gap-2">
                 <Label htmlFor="targetMarkets">Target markets</Label>
                 <Textarea
@@ -312,6 +278,8 @@ export default function BrandHomeClient({ brandId }: { brandId: string }) {
                   placeholder="VP Sales at 50-500 employee SaaS&#10;Founder-led teams"
                 />
               </div>
+            </div>
+            <div className="grid gap-2 md:grid-cols-2">
               <div className="grid gap-2">
                 <Label htmlFor="features">Key features</Label>
                 <Textarea
@@ -330,40 +298,37 @@ export default function BrandHomeClient({ brandId }: { brandId: string }) {
                   placeholder="Higher reply rates&#10;Lower manual workload"
                 />
               </div>
-              <Button
-                type="button"
-                disabled={!brand || profileSaving}
-                onClick={async () => {
-                  if (!brand) return;
-                  setProfileSaving(true);
-                  setError("");
-                  try {
-                    const updated = await updateBrandApi(brand.id, {
-                      product: product.trim(),
-                      targetMarkets: normalizeLines(targetMarketsText),
-                      idealCustomerProfiles: normalizeLines(icpText),
-                      keyFeatures: normalizeLines(featuresText),
-                      keyBenefits: normalizeLines(benefitsText),
-                    });
-                    setBrand(updated);
-                  } catch (err) {
-                    setError(err instanceof Error ? err.message : "Failed to save brand context");
-                  } finally {
-                    setProfileSaving(false);
-                  }
-                }}
-              >
-                {profileSaving ? "Saving..." : "Save context"}
-              </Button>
             </div>
-          </details>
+            <Button
+              type="button"
+              disabled={!brand || profileSaving}
+              onClick={async () => {
+                if (!brand) return;
+                setProfileSaving(true);
+                setError("");
+                try {
+                  const updated = await updateBrandApi(brand.id, {
+                    product: product.trim(),
+                    targetMarkets: normalizeLines(targetMarketsText),
+                    idealCustomerProfiles: normalizeLines(icpText),
+                    keyFeatures: normalizeLines(featuresText),
+                    keyBenefits: normalizeLines(benefitsText),
+                  });
+                  setBrand(updated);
+                } catch (err) {
+                  setError(err instanceof Error ? err.message : "Failed to save brand context");
+                } finally {
+                  setProfileSaving(false);
+                }
+              }}
+            >
+              {profileSaving ? "Saving..." : "Save context"}
+            </Button>
+          </div>
 
-          <details className="rounded-[12px] border border-[color:var(--border)] bg-[color:var(--surface)]">
-            <summary className="cursor-pointer px-4 py-3 text-sm font-medium text-[color:var(--foreground)]">
-              More work
-            </summary>
-            <div className="grid gap-2 border-t border-[color:var(--border)] px-4 py-4">
-              {secondaryLinks.map((item) => {
+          <div className="grid content-start gap-3">
+            <div className="grid gap-2">
+              {allLinks.map((item) => {
                 const Icon = item.icon;
                 return (
                   <Link
@@ -383,13 +348,8 @@ export default function BrandHomeClient({ brandId }: { brandId: string }) {
                 );
               })}
             </div>
-          </details>
 
-          <details className="rounded-[12px] border border-[color:var(--border)] bg-[color:var(--surface)]">
-            <summary className="cursor-pointer px-4 py-3 text-sm font-medium text-[color:var(--foreground)]">
-              Setup
-            </summary>
-            <div className="grid gap-3 border-t border-[color:var(--border)] px-4 py-4">
+            <div className="grid gap-3 border-t border-[color:var(--border)] pt-3">
               <Label htmlFor="assignedAccount">Delivery account</Label>
               <Select
                 id="assignedAccount"
@@ -433,9 +393,9 @@ export default function BrandHomeClient({ brandId }: { brandId: string }) {
                 </Link>
               </Button>
             </div>
-          </details>
-        </aside>
-      </div>
+          </div>
+        </div>
+      </details>
     </div>
   );
 }

@@ -3,34 +3,57 @@
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { ArrowRight, FolderKanban, FlaskConical, Inbox, Mail, Network, Plus, Sparkles } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import {
+  ChevronRight,
+  ExternalLink,
+  FolderKanban,
+  Inbox,
+  Mail,
+  Network,
+  Radar,
+  Settings,
+  ShieldAlert,
+  Sparkles,
+  Target,
+} from "lucide-react";
+import OperatorPanel from "@/components/operator/operator-panel";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Label } from "@/components/ui/label";
+import { PageIntro, SectionPanel } from "@/components/ui/page-layout";
+import { Select } from "@/components/ui/select";
+import { Textarea } from "@/components/ui/textarea";
 import {
   assignBrandOutreachAccount,
   fetchBrand,
-  fetchBrands,
   fetchBrandOutreachAssignment,
+  fetchBrands,
   fetchExperiments,
+  fetchMissions,
   fetchOutreachAccounts,
   fetchScaleCampaigns,
   updateBrandApi,
 } from "@/lib/client-api";
-import { trackEvent } from "@/lib/telemetry-client";
 import type { BrandRecord, ExperimentRecord, OutreachAccount, ScaleCampaignRecord } from "@/lib/factory-types";
-import CreateExperimentModal from "@/components/experiments/create-experiment-modal";
-import { Select } from "@/components/ui/select";
-import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
-import { EmptyState, PageIntro, SectionPanel, StatLedger } from "@/components/ui/page-layout";
-
-function nextWorkspace(experiment: ExperimentRecord | null) {
-  if (!experiment) return "experiments";
-  return `experiments/${experiment.id}`;
-}
+import type { Mission } from "@/lib/mission-types";
 
 function formatCount(value: number) {
   return value.toString().padStart(2, "0");
+}
+
+function formatStatus(value: string) {
+  return value.replace(/_/g, " ");
+}
+
+function normalizeLines(value: string) {
+  return value
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+}
+
+function missionHref(brandId: string, mission: Mission | null) {
+  return mission ? `/brands/${brandId}/missions/${mission.id}` : `/brands/${brandId}/missions`;
 }
 
 function openBrandOperator(message: string, autoSend = false) {
@@ -46,11 +69,10 @@ export default function BrandHomeClient({ brandId }: { brandId: string }) {
   const [brand, setBrand] = useState<BrandRecord | null>(null);
   const [experiments, setExperiments] = useState<ExperimentRecord[]>([]);
   const [campaigns, setCampaigns] = useState<ScaleCampaignRecord[]>([]);
+  const [missions, setMissions] = useState<Mission[]>([]);
   const [accounts, setAccounts] = useState<OutreachAccount[]>([]);
   const [assignedAccountId, setAssignedAccountId] = useState("");
   const [loading, setLoading] = useState(true);
-  const [creating, setCreating] = useState(false);
-  const [createOpen, setCreateOpen] = useState(false);
   const [profileSaving, setProfileSaving] = useState(false);
   const [error, setError] = useState("");
   const [product, setProduct] = useState("");
@@ -67,14 +89,16 @@ export default function BrandHomeClient({ brandId }: { brandId: string }) {
       fetchBrand(brandId),
       fetchExperiments(brandId),
       fetchScaleCampaigns(brandId),
+      fetchMissions(brandId),
       fetchOutreachAccounts(),
       fetchBrandOutreachAssignment(brandId),
     ])
-      .then(([brandRow, experimentRows, campaignRows, accountRows, assignment]) => {
+      .then(([brandRow, experimentRows, campaignRows, missionRows, accountRows, assignment]) => {
         if (!mounted) return;
         setBrand(brandRow);
         setExperiments(experimentRows);
         setCampaigns(campaignRows);
+        setMissions(missionRows);
         setAccounts(accountRows);
         setAssignedAccountId(assignment.assignment?.accountId ?? "");
         setProduct(brandRow.product || "");
@@ -98,7 +122,7 @@ export default function BrandHomeClient({ brandId }: { brandId: string }) {
               router.replace(`/brands/${fallbackBrandId}`);
             })
             .catch(() => {
-              // keep original error state
+              // Keep the original error visible.
             });
         }
 
@@ -106,6 +130,9 @@ export default function BrandHomeClient({ brandId }: { brandId: string }) {
         setBrand(null);
         setExperiments([]);
         setCampaigns([]);
+        setMissions([]);
+        setAccounts([]);
+        setAssignedAccountId("");
       })
       .finally(() => {
         if (mounted) setLoading(false);
@@ -116,351 +143,299 @@ export default function BrandHomeClient({ brandId }: { brandId: string }) {
     };
   }, [brandId, router]);
 
-  const activeExperiment = useMemo(
-    () =>
-      experiments.find((row) => ["running", "ready", "draft"].includes(row.status)) ??
-      experiments[0] ??
-      null,
-    [experiments]
-  );
   const activeExperiments = useMemo(
     () => experiments.filter((row) => ["running", "ready", "paused", "draft"].includes(row.status)).slice(0, 4),
     [experiments]
   );
+  const latestMission = useMemo(() => missions[0] ?? null, [missions]);
+  const assignedAccount = useMemo(
+    () => accounts.find((account) => account.id === assignedAccountId) ?? null,
+    [accounts, assignedAccountId]
+  );
+  const currentRisk = useMemo(() => {
+    if (latestMission?.lastError) return latestMission.lastError;
+    if (latestMission?.deliverabilityState.primaryBlocker) return latestMission.deliverabilityState.primaryBlocker;
+    if (!brand?.product?.trim()) return "Brand context is thin. Tell the agent what this product does.";
+    if (!(brand?.idealCustomerProfiles?.length ?? 0)) return "Ideal customers are not set yet.";
+    if (!assignedAccountId) return "No delivery account is assigned yet.";
+    return "No blocker showing right now.";
+  }, [assignedAccountId, brand, latestMission]);
+
+  const workLinks = [
+    {
+      label: "Mission control",
+      detail: latestMission ? formatStatus(latestMission.status) : "Start or review campaign work",
+      href: missionHref(brandId, latestMission),
+      icon: Sparkles,
+    },
+    {
+      label: "Inbox",
+      detail: `${formatCount(brand?.inbox?.length ?? 0)} reply signals`,
+      href: `/brands/${brandId}/inbox`,
+      icon: Inbox,
+    },
+    {
+      label: "Leads",
+      detail: `${formatCount(brand?.leads?.length ?? 0)} known leads`,
+      href: `/brands/${brandId}/leads`,
+      icon: Mail,
+    },
+  ];
+
+  const secondaryLinks = [
+    {
+      label: "Campaigns",
+      detail: `${formatCount(campaigns.length)} promoted`,
+      href: `/brands/${brandId}/campaigns`,
+      icon: FolderKanban,
+    },
+    {
+      label: "Experiments",
+      detail: `${formatCount(activeExperiments.length)} active`,
+      href: `/brands/${brandId}/experiments`,
+      icon: Target,
+    },
+    {
+      label: "Social",
+      detail: "Discovery and comments",
+      href: `/brands/${brandId}/social-discovery`,
+      icon: Radar,
+    },
+    {
+      label: "Delivery",
+      detail: assignedAccount?.name || "No account assigned",
+      href: `/brands/${brandId}/network`,
+      icon: Network,
+    },
+  ];
 
   return (
-    <div className="space-y-8">
+    <div className="space-y-5">
       <PageIntro
-        title={brand?.name || "Brand"}
-        actions={
-          <>
-            <Button
-              type="button"
-              disabled={!brand}
-              onClick={() => openBrandOperator("", false)}
-            >
-              <Sparkles className="h-4 w-4" />
-              Ask GPT
-            </Button>
-            <Button
-              type="button"
-              variant="secondary"
-              disabled={!brand}
-              onClick={() =>
-                openBrandOperator(
-                  "Connect LinkedIn for this brand. If a human login is needed, create the Leadr sign-in link.",
-                  true
-                )
-              }
-            >
-              <Network className="h-4 w-4" />
-              Connect LinkedIn
-            </Button>
-            <Button asChild variant="outline" disabled={!brand}>
-              <Link href={`/brands/${brandId}/missions`}>
-                <Sparkles className="h-4 w-4" />
-                Start AI campaign
-              </Link>
-            </Button>
-          </>
-        }
-        aside={
-          <StatLedger
-            items={[
-              {
-                label: "Tone",
-                value: brand?.tone ? "Set" : "Open",
-                detail: brand?.tone || "Voice still needs a clear articulation.",
-              },
-              {
-                label: "Markets",
-                value: formatCount(brand?.targetMarkets?.length ?? 0),
-                detail: `${brand?.targetMarkets?.slice(0, 2).join(", ") || "No markets chosen yet"}`,
-              },
-              {
-                label: "Experiments",
-                value: formatCount(experiments.length),
-                detail: experiments.length ? "Tests are attached to the same brand context." : "No experiments started yet.",
-              },
-              {
-                label: "Campaigns",
-                value: formatCount(campaigns.length),
-                detail: campaigns.length ? "Promoted work is live in this desk." : "Nothing has been promoted yet.",
-              },
-            ]}
-          />
-        }
+        title={brand?.name ? `${brand.name} agent` : "Brand agent"}
+        description="Message the agent for this brand."
       />
 
-      <SectionPanel
-        title="Brand profile"
-        description="Manage target markets, ICPs, and product context after onboarding."
-      >
-        <div className="grid gap-4">
-          <div className="grid gap-2">
-            <Label htmlFor="product">Product summary</Label>
-            <Textarea
-              id="product"
-              value={product}
-              onChange={(event) => setProduct(event.target.value)}
-              placeholder="What the product does and why it matters."
-            />
-          </div>
-          <div className="grid gap-4 md:grid-cols-2">
-            <div className="grid gap-2">
-              <Label htmlFor="targetMarkets">Target markets (one per line)</Label>
-              <Textarea
-                id="targetMarkets"
-                value={targetMarketsText}
-                onChange={(event) => setTargetMarketsText(event.target.value)}
-                placeholder="Mid-market B2B SaaS&#10;Agencies"
-              />
-            </div>
-            <div className="grid gap-2">
-              <Label htmlFor="icps">Ideal customer profiles (one per line)</Label>
-              <Textarea
-                id="icps"
-                value={icpText}
-                onChange={(event) => setIcpText(event.target.value)}
-                placeholder="VP Sales at 50-500 employee SaaS&#10;Founder-led teams"
-              />
-            </div>
-            <div className="grid gap-2">
-              <Label htmlFor="features">Key features (one per line)</Label>
-              <Textarea
-                id="features"
-                value={featuresText}
-                onChange={(event) => setFeaturesText(event.target.value)}
-                placeholder="AI-personalized video&#10;Automated outreach orchestration"
-              />
-            </div>
-            <div className="grid gap-2">
-              <Label htmlFor="benefits">Key benefits (one per line)</Label>
-              <Textarea
-                id="benefits"
-                value={benefitsText}
-                onChange={(event) => setBenefitsText(event.target.value)}
-                placeholder="Higher reply rates&#10;Lower manual workload"
-              />
-            </div>
-          </div>
-          <div className="flex gap-2">
-            <Button
-              type="button"
-              disabled={!brand || profileSaving}
-              onClick={async () => {
-                if (!brand) return;
-                const normalize = (value: string) =>
-                  value
-                    .split("\n")
-                    .map((line) => line.trim())
-                    .filter((line) => line.length > 0);
-                setProfileSaving(true);
-                setError("");
-                try {
-                  const updated = await updateBrandApi(brand.id, {
-                    product: product.trim(),
-                    targetMarkets: normalize(targetMarketsText),
-                    idealCustomerProfiles: normalize(icpText),
-                    keyFeatures: normalize(featuresText),
-                    keyBenefits: normalize(benefitsText),
-                  });
-                  setBrand(updated);
-                } catch (err) {
-                  setError(err instanceof Error ? err.message : "Failed to save brand profile");
-                } finally {
-                  setProfileSaving(false);
-                }
-              }}
-            >
-              {profileSaving ? "Saving profile..." : "Save Brand Profile"}
-            </Button>
-          </div>
+      {error ? (
+        <div className="rounded-[12px] border border-[color:var(--danger-border)] bg-[color:var(--danger-soft)] px-4 py-3 text-sm text-[color:var(--danger)]">
+          {error}
         </div>
-      </SectionPanel>
-
-      {error ? <div className="text-sm text-[color:var(--danger)]">{error}</div> : null}
+      ) : null}
       {loading ? <div className="text-sm text-[color:var(--muted-foreground)]">Loading brand...</div> : null}
 
-      <div className="grid gap-5 lg:grid-cols-[1.2fr_0.8fr]">
-        <SectionPanel
-          title="Next move"
-          description="Continue the highest-value experiment now."
-          contentClassName="py-6"
-        >
-            {activeExperiment ? (
-              <div className="space-y-3">
-                <Badge variant="accent">{activeExperiment.name}</Badge>
-                <div className="text-sm text-[color:var(--muted-foreground)]">
-                  Status: <strong>{activeExperiment.status}</strong>
-                </div>
-                <Button asChild>
-                  <Link href={`/brands/${brandId}/${nextWorkspace(activeExperiment)}`}>
-                    Continue Experiment
-                    <ArrowRight className="h-4 w-4" />
-                  </Link>
-                </Button>
-              </div>
-            ) : (
-              <div className="space-y-3 text-sm text-[color:var(--muted-foreground)]">
-                <p>No experiment yet. Create one to start testing.</p>
-                <Button asChild>
-                  <Link href={`/brands/${brandId}/experiments`}>Open Experiments</Link>
-                </Button>
-              </div>
-            )}
-        </SectionPanel>
+      <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_21rem]">
+        <OperatorPanel
+          open={Boolean(brandId)}
+          onOpenChange={() => undefined}
+          activeBrandId={brandId}
+          activeBrandName={brand?.name || ""}
+          variant="inline"
+          className="lg:min-h-[calc(100vh-11rem)]"
+        />
 
-        <SectionPanel
-          title="Active experiments"
-          description="Running, sourcing, ready, or paused work."
-          contentClassName="grid gap-2"
-        >
-            {activeExperiments.length ? (
-              activeExperiments.map((item) => (
-                <Link
-                  key={item.id}
-                  href={`/brands/${brandId}/experiments/${item.id}`}
-                  className="rounded-[10px] border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-2.5 text-sm transition-colors hover:bg-[color:var(--surface-hover)]"
-                >
-                  <div className="font-medium">{item.name}</div>
-                  <div className="text-xs text-[color:var(--muted-foreground)]">{item.status}</div>
-                </Link>
-              ))
-            ) : (
-              <div className="text-sm text-[color:var(--muted-foreground)]">No active experiments yet.</div>
-            )}
-            <Button asChild variant="outline" className="justify-start">
-              <Link href={`/brands/${brandId}/experiments`}>
-                <FlaskConical className="h-4 w-4" /> Open Experiments
+        <aside className="space-y-4">
+          <SectionPanel title="Current focus" contentClassName="space-y-3">
+            <div className="flex items-start gap-2">
+              <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0 text-[color:var(--muted-foreground)]" />
+              <div className="min-w-0">
+                <div className="text-sm font-medium text-[color:var(--foreground)]">Primary risk</div>
+                <div className="mt-1 text-sm leading-6 text-[color:var(--muted-foreground)]">{currentRisk}</div>
+              </div>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <Badge variant={latestMission?.status === "failed" ? "danger" : latestMission ? "accent" : "muted"}>
+                {latestMission ? formatStatus(latestMission.status) : "No mission"}
+              </Badge>
+              {latestMission?.deliverabilityState.stage ? (
+                <Badge variant="muted">{formatStatus(latestMission.deliverabilityState.stage)}</Badge>
+              ) : null}
+            </div>
+            <Button asChild variant="outline" className="w-full justify-start">
+              <Link href={missionHref(brandId, latestMission)}>
+                Open mission control
+                <ChevronRight className="h-4 w-4" />
               </Link>
             </Button>
-            <Button
-              type="button"
-              variant="outline"
-              className="justify-start"
-              onClick={() => setCreateOpen(true)}
-              disabled={!brand || creating}
-            >
-              <Plus className="h-4 w-4" />
-              {creating ? "Creating..." : "New experiment"}
-            </Button>
-        </SectionPanel>
+          </SectionPanel>
+
+          <SectionPanel title="Work" contentClassName="grid gap-2">
+            {workLinks.map((item) => {
+              const Icon = item.icon;
+              return (
+                <Link
+                  key={item.label}
+                  href={item.href}
+                  className="flex items-center justify-between gap-3 rounded-[10px] border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-3 text-sm transition-colors hover:bg-[color:var(--surface-hover)]"
+                >
+                  <span className="flex min-w-0 items-center gap-3">
+                    <Icon className="h-4 w-4 shrink-0 text-[color:var(--muted-foreground)]" />
+                    <span className="min-w-0">
+                      <span className="block font-medium text-[color:var(--foreground)]">{item.label}</span>
+                      <span className="block truncate text-xs text-[color:var(--muted-foreground)]">{item.detail}</span>
+                    </span>
+                  </span>
+                  <ChevronRight className="h-4 w-4 shrink-0 text-[color:var(--muted-foreground)]" />
+                </Link>
+              );
+            })}
+          </SectionPanel>
+
+          <details className="rounded-[12px] border border-[color:var(--border)] bg-[color:var(--surface)]">
+            <summary className="cursor-pointer px-4 py-3 text-sm font-medium text-[color:var(--foreground)]">
+              Brand context
+            </summary>
+            <div className="grid gap-4 border-t border-[color:var(--border)] px-4 py-4">
+              <div className="grid gap-2">
+                <Label htmlFor="product">Product summary</Label>
+                <Textarea
+                  id="product"
+                  value={product}
+                  onChange={(event) => setProduct(event.target.value)}
+                  placeholder="What the product does and why it matters."
+                />
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor="targetMarkets">Target markets</Label>
+                <Textarea
+                  id="targetMarkets"
+                  value={targetMarketsText}
+                  onChange={(event) => setTargetMarketsText(event.target.value)}
+                  placeholder="Mid-market B2B SaaS&#10;Agencies"
+                />
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor="icps">Ideal customers</Label>
+                <Textarea
+                  id="icps"
+                  value={icpText}
+                  onChange={(event) => setIcpText(event.target.value)}
+                  placeholder="VP Sales at 50-500 employee SaaS&#10;Founder-led teams"
+                />
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor="features">Key features</Label>
+                <Textarea
+                  id="features"
+                  value={featuresText}
+                  onChange={(event) => setFeaturesText(event.target.value)}
+                  placeholder="AI-personalized video&#10;Automated outreach orchestration"
+                />
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor="benefits">Key benefits</Label>
+                <Textarea
+                  id="benefits"
+                  value={benefitsText}
+                  onChange={(event) => setBenefitsText(event.target.value)}
+                  placeholder="Higher reply rates&#10;Lower manual workload"
+                />
+              </div>
+              <Button
+                type="button"
+                disabled={!brand || profileSaving}
+                onClick={async () => {
+                  if (!brand) return;
+                  setProfileSaving(true);
+                  setError("");
+                  try {
+                    const updated = await updateBrandApi(brand.id, {
+                      product: product.trim(),
+                      targetMarkets: normalizeLines(targetMarketsText),
+                      idealCustomerProfiles: normalizeLines(icpText),
+                      keyFeatures: normalizeLines(featuresText),
+                      keyBenefits: normalizeLines(benefitsText),
+                    });
+                    setBrand(updated);
+                  } catch (err) {
+                    setError(err instanceof Error ? err.message : "Failed to save brand context");
+                  } finally {
+                    setProfileSaving(false);
+                  }
+                }}
+              >
+                {profileSaving ? "Saving..." : "Save context"}
+              </Button>
+            </div>
+          </details>
+
+          <details className="rounded-[12px] border border-[color:var(--border)] bg-[color:var(--surface)]">
+            <summary className="cursor-pointer px-4 py-3 text-sm font-medium text-[color:var(--foreground)]">
+              More work
+            </summary>
+            <div className="grid gap-2 border-t border-[color:var(--border)] px-4 py-4">
+              {secondaryLinks.map((item) => {
+                const Icon = item.icon;
+                return (
+                  <Link
+                    key={item.label}
+                    href={item.href}
+                    className="flex items-center justify-between gap-3 rounded-[10px] border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-3 text-sm transition-colors hover:bg-[color:var(--surface-hover)]"
+                  >
+                    <span className="flex min-w-0 items-center gap-3">
+                      <Icon className="h-4 w-4 shrink-0 text-[color:var(--muted-foreground)]" />
+                      <span className="min-w-0">
+                        <span className="block font-medium text-[color:var(--foreground)]">{item.label}</span>
+                        <span className="block truncate text-xs text-[color:var(--muted-foreground)]">{item.detail}</span>
+                      </span>
+                    </span>
+                    <ChevronRight className="h-4 w-4 shrink-0 text-[color:var(--muted-foreground)]" />
+                  </Link>
+                );
+              })}
+            </div>
+          </details>
+
+          <details className="rounded-[12px] border border-[color:var(--border)] bg-[color:var(--surface)]">
+            <summary className="cursor-pointer px-4 py-3 text-sm font-medium text-[color:var(--foreground)]">
+              Setup
+            </summary>
+            <div className="grid gap-3 border-t border-[color:var(--border)] px-4 py-4">
+              <Label htmlFor="assignedAccount">Delivery account</Label>
+              <Select
+                id="assignedAccount"
+                value={assignedAccountId}
+                onChange={async (event) => {
+                  const accountId = event.target.value;
+                  setAssignedAccountId(accountId);
+                  try {
+                    await assignBrandOutreachAccount(brandId, accountId);
+                  } catch (err) {
+                    setError(err instanceof Error ? err.message : "Failed to assign delivery account");
+                  }
+                }}
+              >
+                <option value="">Unassigned</option>
+                {accounts.map((account) => (
+                  <option key={account.id} value={account.id}>
+                    {account.name}
+                  </option>
+                ))}
+              </Select>
+              <Button
+                type="button"
+                variant="outline"
+                className="justify-start"
+                onClick={() =>
+                  openBrandOperator(
+                    "Connect LinkedIn for this brand. If a human login is needed, create the sign-in link.",
+                    true
+                  )
+                }
+              >
+                <Network className="h-4 w-4" />
+                Connect LinkedIn
+              </Button>
+              <Button asChild variant="outline" className="justify-start">
+                <Link href="/settings/outreach">
+                  <Settings className="h-4 w-4" />
+                  Outreach settings
+                  <ExternalLink className="h-3.5 w-3.5" />
+                </Link>
+              </Button>
+            </div>
+          </details>
+        </aside>
       </div>
-
-      <div className="grid gap-4 md:grid-cols-3">
-        <SectionPanel
-          title="Campaigns"
-          description="Scaled programs promoted from experiment winners."
-          contentClassName="space-y-3"
-        >
-          <div className="font-[family:var(--font-brand)] text-[2.4rem] leading-none tracking-[-0.07em]">{campaigns.length}</div>
-          <Button asChild variant="outline">
-            <Link href={`/brands/${brandId}/campaigns`}>
-              <FolderKanban className="h-4 w-4" /> Open campaigns
-            </Link>
-          </Button>
-        </SectionPanel>
-        <SectionPanel
-          title="Lead pool"
-          description="Verified and operational leads in this workspace."
-          contentClassName="space-y-3"
-        >
-          <div className="font-[family:var(--font-brand)] text-[2.4rem] leading-none tracking-[-0.07em]">{brand?.leads?.length ?? 0}</div>
-          <Button asChild variant="outline">
-            <Link href={`/brands/${brandId}/leads`}>
-              <Mail className="h-4 w-4" /> Open leads
-            </Link>
-          </Button>
-        </SectionPanel>
-        <SectionPanel
-          title="Reply signals"
-          description="Recent conversations and action-ready replies."
-          contentClassName="space-y-3"
-        >
-          <div className="font-[family:var(--font-brand)] text-[2.4rem] leading-none tracking-[-0.07em]">{brand?.inbox?.length ?? 0}</div>
-          <Button asChild variant="outline">
-            <Link href={`/brands/${brandId}/inbox`}>
-              <Inbox className="h-4 w-4" /> Open inbox
-            </Link>
-          </Button>
-        </SectionPanel>
-      </div>
-
-      <SectionPanel
-        title="Outreach delivery account"
-        description="Choose the sender account for this brand. Reply mailbox assignment is handled in Outreach Settings."
-      >
-        <div className="grid gap-3 md:grid-cols-[1fr_auto] md:items-center">
-          <Select
-            value={assignedAccountId}
-            onChange={async (event) => {
-              const accountId = event.target.value;
-              setAssignedAccountId(accountId);
-              try {
-                await assignBrandOutreachAccount(brandId, accountId);
-              } catch (err) {
-                setError(err instanceof Error ? err.message : "Failed to assign outreach account");
-              }
-            }}
-          >
-            <option value="">Unassigned</option>
-            {accounts.map((account) => (
-              <option key={account.id} value={account.id}>
-                {account.name}
-              </option>
-            ))}
-          </Select>
-          <Button asChild variant="outline">
-            <Link href="/settings/outreach">Manage Accounts</Link>
-          </Button>
-        </div>
-      </SectionPanel>
-
-      {campaigns.length ? (
-        <SectionPanel
-          title="Promoted campaigns"
-          description="Scale-only campaigns promoted from successful experiments."
-          contentClassName="grid gap-2"
-        >
-          {campaigns.slice(0, 5).map((campaign) => (
-            <Link
-              key={campaign.id}
-              href={`/brands/${brandId}/campaigns/${campaign.id}`}
-              className="rounded-[10px] border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-2.5 text-sm transition-colors hover:bg-[color:var(--surface-hover)]"
-            >
-              {campaign.name} · {campaign.status}
-            </Link>
-          ))}
-        </SectionPanel>
-      ) : (
-        <EmptyState
-          title="No promoted campaigns yet."
-          description="Promote a winning experiment and it will appear here with the sender, proof, and current state still attached."
-          actions={
-            <Button asChild variant="outline">
-              <Link href={`/brands/${brandId}/experiments`}>Open experiments</Link>
-            </Button>
-          }
-        />
-      )}
-
-      {brand ? (
-        <CreateExperimentModal
-          brandId={brand.id}
-          open={createOpen}
-          defaultName={`Experiment ${experiments.length + 1}`}
-          onOpenChange={(open) => {
-            setCreateOpen(open);
-            if (!open) setCreating(false);
-          }}
-          onCreated={(experiment, source) => {
-            setCreating(false);
-            trackEvent("experiment_created", { brandId: brand.id, experimentId: experiment.id, source });
-            router.push(`/brands/${brand.id}/experiments/${experiment.id}/setup`);
-          }}
-        />
-      ) : null}
     </div>
   );
 }

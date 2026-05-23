@@ -490,12 +490,16 @@ export default function OperatorPanel({
   activeBrandId,
   activeBrandName,
   initialRequest,
+  variant = "drawer",
+  className,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   activeBrandId: string;
   activeBrandName: string;
   initialRequest?: OperatorInitialRequest | null;
+  variant?: "drawer" | "inline";
+  className?: string;
 }) {
   const [threadDetail, setThreadDetail] = useState<OperatorThreadDetail | null>(null);
   const [loadingThread, setLoadingThread] = useState(false);
@@ -505,6 +509,7 @@ export default function OperatorPanel({
   const [input, setInput] = useState("");
   const scrollerRef = useRef<HTMLDivElement | null>(null);
   const lastInitialRequestIdRef = useRef(0);
+  const handleSendRef = useRef<(message: string) => void>(() => undefined);
 
   const visibleMessages = useMemo(
     () =>
@@ -589,13 +594,19 @@ export default function OperatorPanel({
   }, [open, threadDetail]);
 
   useEffect(() => {
+    handleSendRef.current = (message: string) => {
+      void handleSend(message);
+    };
+  });
+
+  useEffect(() => {
     if (!open || !activeBrandId || !initialRequest || lastInitialRequestIdRef.current === initialRequest.id) return;
     lastInitialRequestIdRef.current = initialRequest.id;
     const message = initialRequest.message.trim();
     if (!message) return;
     setInput(message);
     if (initialRequest.autoSend) {
-      void handleSend(message);
+      handleSendRef.current(message);
     }
   }, [activeBrandId, initialRequest, open]);
 
@@ -795,141 +806,151 @@ export default function OperatorPanel({
 
   if (!open) return null;
 
-  return (
-    <div className="fixed inset-0 z-50 flex justify-end bg-[color:color-mix(in_oklab,var(--foreground)_18%,transparent)]/75">
-      <button type="button" className="flex-1" aria-label="Close Brand GPT" onClick={() => onOpenChange(false)} />
-      <aside className="relative flex h-full w-full max-w-[38rem] flex-col border-l border-[color:var(--border)] bg-[color:var(--background)] shadow-[0_18px_48px_-28px_color-mix(in_oklab,var(--shadow)_88%,transparent)]">
-        <div className="border-b border-[color:var(--border)] px-5 py-4">
-          <div className="flex items-start justify-between gap-3">
-            <div className="min-w-0">
-              <div className="flex items-center gap-2">
-                <div className="inline-flex h-9 items-center gap-2 rounded-[10px] border border-[color:var(--border)] bg-[color:var(--surface)] px-3 text-sm font-medium text-[color:var(--foreground)]">
-                  <Sparkles className="h-4 w-4" />
-                  Brand GPT
+  const isInline = variant === "inline";
+  const panel = (
+    <aside
+      className={cn(
+        "relative flex h-full w-full flex-col bg-[color:var(--background)]",
+        isInline
+          ? "min-h-[680px] overflow-hidden rounded-[12px] border border-[color:var(--border)] shadow-[0_10px_30px_-26px_color-mix(in_oklab,var(--shadow)_82%,transparent)]"
+          : "max-w-[38rem] border-l border-[color:var(--border)] shadow-[0_18px_48px_-28px_color-mix(in_oklab,var(--shadow)_88%,transparent)]",
+        className
+      )}
+    >
+      <div className="border-b border-[color:var(--border)] px-5 py-4">
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="inline-flex h-9 items-center gap-2 rounded-[10px] border border-[color:var(--border)] bg-[color:var(--surface)] px-3 text-sm font-medium text-[color:var(--foreground)]">
+                <Sparkles className="h-4 w-4" />
+                Brand GPT
+              </div>
+              {activeBrandName ? (
+                <div className="inline-flex h-9 items-center rounded-[10px] border border-[color:var(--border)] bg-[color:var(--surface)] px-3 text-sm text-[color:var(--muted-foreground)]">
+                  {activeBrandName}
                 </div>
-                {activeBrandName ? (
-                  <div className="inline-flex h-9 items-center rounded-[10px] border border-[color:var(--border)] bg-[color:var(--surface)] px-3 text-sm text-[color:var(--muted-foreground)]">
-                    {activeBrandName}
-                  </div>
-                ) : null}
-              </div>
-              <div className="mt-3 text-sm font-medium text-[color:var(--foreground)]">{threadTitle}</div>
-              <div className="mt-1 text-sm leading-6 text-[color:var(--muted-foreground)]">
-                Ask anything. If Brand GPT makes a change, it will show exactly what it did.
-              </div>
+              ) : null}
             </div>
+            <div className="mt-3 text-sm font-medium text-[color:var(--foreground)]">{threadTitle}</div>
+            <div className="mt-1 text-sm leading-6 text-[color:var(--muted-foreground)]">
+              Ask anything. If Brand GPT makes a change, it will show exactly what it did.
+            </div>
+          </div>
+          {!isInline ? (
             <Button type="button" variant="ghost" size="icon" onClick={() => onOpenChange(false)} aria-label="Close Brand GPT">
               <X className="h-4 w-4" />
             </Button>
-          </div>
-          <div className="mt-4 rounded-[12px] border border-[color:var(--border)] bg-[color:var(--surface)] px-4 py-3">
-            <div className="flex items-start justify-between gap-3">
-              <div className="min-w-0">
-                <div className="flex items-center gap-2 text-xs font-medium uppercase tracking-[0.12em] text-[color:var(--muted-foreground)]">
-                  <ListTodo className="h-3.5 w-3.5" />
-                  Current task
-                </div>
-                <div className="mt-2 text-sm font-medium text-[color:var(--foreground)]">
-                  {latestExecution ? executionHeadline(latestExecution) : "No active task"}
-                </div>
-                <div className="mt-1 text-sm leading-6 text-[color:var(--muted-foreground)]">
-                  {latestExecution
-                    ? latestTaskSummary || "Brand GPT is tracking the latest actionable step in this thread."
-                    : "Ask a question or tell Brand GPT what you want done for this brand."}
-                </div>
+          ) : null}
+        </div>
+        <div className="mt-4 rounded-[12px] border border-[color:var(--border)] bg-[color:var(--surface)] px-4 py-3">
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <div className="flex items-center gap-2 text-xs font-medium text-[color:var(--muted-foreground)]">
+                <ListTodo className="h-3.5 w-3.5" />
+                Current task
               </div>
-              <Badge variant={latestExecution ? (latestExecution.state === "completed" ? "success" : latestExecution.state === "failed" ? "danger" : latestExecution.state === "awaiting_confirmation" || latestExecution.state === "need_info" ? "accent" : "muted") : "muted"}>
-                {latestExecution ? executionStateLabel(latestExecution.state) : "Idle"}
-              </Badge>
+              <div className="mt-2 text-sm font-medium text-[color:var(--foreground)]">
+                {latestExecution ? executionHeadline(latestExecution) : "No active task"}
+              </div>
+              <div className="mt-1 text-sm leading-6 text-[color:var(--muted-foreground)]">
+                {latestExecution
+                  ? latestTaskSummary || "Brand GPT is tracking the latest actionable step in this thread."
+                  : "Ask a question or tell Brand GPT what you want done for this brand."}
+              </div>
             </div>
+            <Badge variant={latestExecution ? (latestExecution.state === "completed" ? "success" : latestExecution.state === "failed" ? "danger" : latestExecution.state === "awaiting_confirmation" || latestExecution.state === "need_info" ? "accent" : "muted") : "muted"}>
+              {latestExecution ? executionStateLabel(latestExecution.state) : "Idle"}
+            </Badge>
           </div>
         </div>
+      </div>
 
-        <div ref={scrollerRef} className="flex-1 space-y-5 overflow-y-auto px-5 py-5">
-          {!activeBrandId ? (
-            <div className="rounded-[12px] border border-[color:var(--border)] bg-[color:var(--surface)] px-4 py-4 text-sm text-[color:var(--muted-foreground)]">
-              Select a brand first. Brand GPT is scoped to the active brand context.
+      <div ref={scrollerRef} className="flex-1 space-y-5 overflow-y-auto px-5 py-5">
+        {!activeBrandId ? (
+          <div className="rounded-[12px] border border-[color:var(--border)] bg-[color:var(--surface)] px-4 py-4 text-sm text-[color:var(--muted-foreground)]">
+            Select a brand first. Brand GPT is scoped to the active brand context.
+          </div>
+        ) : null}
+
+        {loadingThread ? (
+          <div className="inline-flex items-center gap-2 rounded-[12px] border border-[color:var(--border)] bg-[color:var(--surface)] px-4 py-3 text-sm text-[color:var(--muted-foreground)]">
+            <Loader2 className="h-4 w-4 animate-spin" />
+            Loading Brand GPT thread...
+          </div>
+        ) : null}
+
+        {error ? (
+          <div className="rounded-[14px] border border-[color:var(--danger-border)] bg-[color:var(--danger-soft)] px-4 py-3 text-sm text-[color:var(--danger)]">
+            {error}
+          </div>
+        ) : null}
+
+        {!loadingThread && activeBrandId && !visibleMessages.length ? (
+          <div className="space-y-3">
+            <div className="flex items-center gap-2 text-xs font-medium text-[color:var(--muted-foreground)]">
+              <Bot className="h-3.5 w-3.5" />
+              Start here
             </div>
-          ) : null}
-
-          {loadingThread ? (
-            <div className="inline-flex items-center gap-2 rounded-[12px] border border-[color:var(--border)] bg-[color:var(--surface)] px-4 py-3 text-sm text-[color:var(--muted-foreground)]">
-              <Loader2 className="h-4 w-4 animate-spin" />
-              Loading Brand GPT thread...
-            </div>
-          ) : null}
-
-          {error ? (
-            <div className="rounded-[14px] border border-[color:var(--danger-border)] bg-[color:var(--danger-soft)] px-4 py-3 text-sm text-[color:var(--danger)]">
-              {error}
-            </div>
-          ) : null}
-
-          {!loadingThread && activeBrandId && !visibleMessages.length ? (
-            <div className="space-y-3">
-              <div className="flex items-center gap-2 text-xs font-medium uppercase tracking-[0.12em] text-[color:var(--muted-foreground)]">
-                <Bot className="h-3.5 w-3.5" />
-                Start here
-              </div>
-              <div className="grid gap-2">
-                {DEFAULT_PROMPTS.map((prompt) => (
-                  <button
-                    key={prompt}
-                    type="button"
-                    onClick={() => void handleSend(prompt)}
-                    className="flex items-center justify-between rounded-[10px] border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-3 text-left text-sm text-[color:var(--foreground)] transition-colors hover:bg-[color:var(--surface-hover)]"
-                  >
-                    <span>{prompt}</span>
-                    <ChevronRight className="h-4 w-4 text-[color:var(--muted-foreground)]" />
-                  </button>
-                ))}
-              </div>
-            </div>
-          ) : null}
-
-          {!!visibleMessages.length ? (
-            <div className="flex items-center gap-2 text-xs font-medium uppercase tracking-[0.12em] text-[color:var(--muted-foreground)]">
-              <MessageSquareText className="h-3.5 w-3.5" />
-              Conversation
-            </div>
-          ) : null}
-
-          {visibleMessages.map((message) => {
-            const isUser = message.role === "user" && message.kind === "message";
-            const isAssistant = message.role === "assistant" && message.kind === "message";
-            return (
-              <div key={message.id} className={cn("flex", isUser ? "justify-end" : "justify-start")}>
-                <div
-                  className={cn(
-                    "max-w-[94%] rounded-[12px] border px-4 py-3",
-                    messageCardTone(message),
-                    isUser ? "max-w-[80%]" : "",
-                    isAssistant ? "w-full max-w-none border-transparent bg-transparent px-0 py-0" : ""
-                  )}
+            <div className="grid gap-2">
+              {DEFAULT_PROMPTS.map((prompt) => (
+                <button
+                  key={prompt}
+                  type="button"
+                  onClick={() => void handleSend(prompt)}
+                  className="flex items-center justify-between rounded-[10px] border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-3 text-left text-sm text-[color:var(--foreground)] transition-colors hover:bg-[color:var(--surface-hover)]"
                 >
-                  {isAssistant ? (
-                    <div className="mb-2 flex items-center gap-2 text-[11px] font-medium uppercase tracking-[0.12em] text-[color:var(--muted-foreground)]">
-                      <Clock3 className="h-3.5 w-3.5" />
-                      Brand GPT
-                    </div>
-                  ) : null}
-                  <MessageBody
-                    message={message}
-                    actionsById={actionsById}
-                    onConfirm={(actionId) => void handleConfirm(actionId)}
-                    onCancel={(actionId) => void handleCancel(actionId)}
-                    onChooseReply={(message) => void handleSend(message)}
-                    onSubmitForm={(form, values) => void handleSubmitForm(form, values)}
-                    actionBusyId={actionBusyId}
-                    sending={sending}
-                  />
-                </div>
-              </div>
-            );
-          })}
-        </div>
+                  <span>{prompt}</span>
+                  <ChevronRight className="h-4 w-4 text-[color:var(--muted-foreground)]" />
+                </button>
+              ))}
+            </div>
+          </div>
+        ) : null}
 
-        <div className="border-t border-[color:var(--border)] px-5 py-4">
+        {!!visibleMessages.length ? (
+          <div className="flex items-center gap-2 text-xs font-medium text-[color:var(--muted-foreground)]">
+            <MessageSquareText className="h-3.5 w-3.5" />
+            Conversation
+          </div>
+        ) : null}
+
+        {visibleMessages.map((message) => {
+          const isUser = message.role === "user" && message.kind === "message";
+          const isAssistant = message.role === "assistant" && message.kind === "message";
+          return (
+            <div key={message.id} className={cn("flex", isUser ? "justify-end" : "justify-start")}>
+              <div
+                className={cn(
+                  "max-w-[94%] rounded-[12px] border px-4 py-3",
+                  messageCardTone(message),
+                  isUser ? "max-w-[80%]" : "",
+                  isAssistant ? "w-full max-w-none border-transparent bg-transparent px-0 py-0" : ""
+                )}
+              >
+                {isAssistant ? (
+                  <div className="mb-2 flex items-center gap-2 text-[11px] font-medium text-[color:var(--muted-foreground)]">
+                    <Clock3 className="h-3.5 w-3.5" />
+                    Brand GPT
+                  </div>
+                ) : null}
+                <MessageBody
+                  message={message}
+                  actionsById={actionsById}
+                  onConfirm={(actionId) => void handleConfirm(actionId)}
+                  onCancel={(actionId) => void handleCancel(actionId)}
+                  onChooseReply={(message) => void handleSend(message)}
+                  onSubmitForm={(form, values) => void handleSubmitForm(form, values)}
+                  actionBusyId={actionBusyId}
+                  sending={sending}
+                />
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="border-t border-[color:var(--border)] px-5 py-4">
+        {visibleMessages.length ? (
           <div className="mb-3 flex flex-wrap gap-2">
             {DEFAULT_PROMPTS.slice(0, 3).map((prompt) => (
               <Button
@@ -944,42 +965,53 @@ export default function OperatorPanel({
               </Button>
             ))}
           </div>
-          <form
-            className="space-y-3"
-            onSubmit={(event) => {
-              event.preventDefault();
-              void handleSend(input);
-            }}
-          >
-            <Textarea
-              value={input}
-              onChange={(event) => setInput(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter" && !event.shiftKey) {
-                  event.preventDefault();
-                  void handleSend(input);
-                }
-              }}
-              placeholder={
-                activeBrandId
-                  ? "Ask anything about this brand, or tell Brand GPT what to do."
-                  : "Select a brand to use Brand GPT."
+        ) : null}
+        <form
+          className="space-y-3"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void handleSend(input);
+          }}
+        >
+          <Textarea
+            value={input}
+            onChange={(event) => setInput(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" && !event.shiftKey) {
+                event.preventDefault();
+                void handleSend(input);
               }
-              className="min-h-[104px] rounded-[12px] bg-[color:var(--surface)]"
-              disabled={sending || !activeBrandId}
-            />
-            <div className="flex items-center justify-between gap-3">
-              <div className="text-xs text-[color:var(--muted-foreground)]">
-                `Enter` sends. `Shift+Enter` adds a new line.
-              </div>
-              <Button type="submit" disabled={sending || !activeBrandId || !input.trim()}>
-                {sending ? <Loader2 className="h-4 w-4 animate-spin" /> : <SendHorizontal className="h-4 w-4" />}
-                Send
-              </Button>
+            }}
+            placeholder={
+              activeBrandId
+                ? "Ask anything about this brand, or tell Brand GPT what to do."
+                : "Select a brand to use Brand GPT."
+            }
+            className="min-h-[104px] rounded-[12px] bg-[color:var(--surface)]"
+            disabled={sending || !activeBrandId}
+          />
+          <div className="flex items-center justify-between gap-3">
+            <div className="text-xs text-[color:var(--muted-foreground)]">
+              `Enter` sends. `Shift+Enter` adds a new line.
             </div>
-          </form>
-        </div>
-      </aside>
+            <Button type="submit" disabled={sending || !activeBrandId || !input.trim()}>
+              {sending ? <Loader2 className="h-4 w-4 animate-spin" /> : <SendHorizontal className="h-4 w-4" />}
+              Send
+            </Button>
+          </div>
+        </form>
+      </div>
+    </aside>
+  );
+
+  if (isInline) {
+    return panel;
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex justify-end bg-[color:color-mix(in_oklab,var(--foreground)_18%,transparent)]/75">
+      <button type="button" className="flex-1" aria-label="Close Brand GPT" onClick={() => onOpenChange(false)} />
+      {panel}
     </div>
   );
 }

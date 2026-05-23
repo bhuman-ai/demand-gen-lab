@@ -1645,6 +1645,7 @@ const TOOLS_WITH_BRAND_CONTEXT = new Set<OperatorToolName>([
   "get_experiment_snapshot",
   "summarize_leads",
   "summarize_inbox",
+  "investigate_brand_data",
   "get_leadr_snapshot",
   "provision_mailpool_sender",
   "update_brand",
@@ -1996,12 +1997,13 @@ function normalizeRequestedAction(input: {
   brandMemory: OperatorBrandMemory | null;
   source: "llm" | "heuristic" | "structured" | "continuation";
 }): OperatorRequestedAction | null {
-  if (input.mode === "recommendation_only") return null;
   const row = asRecord(input.raw);
   const toolName = asString(row.toolName) as OperatorToolName;
   if (!toolName || !listOperatorToolSpecs().some((tool) => tool.name === toolName)) {
     return null;
   }
+  const tool = getOperatorToolSpec(toolName);
+  if (input.mode === "recommendation_only" && tool?.riskLevel !== "read") return null;
 
   const toolInput = { ...asRecord(row.input) };
   if (input.brandId && TOOLS_WITH_BRAND_CONTEXT.has(toolName) && !asString(toolInput.brandId)) {
@@ -2190,6 +2192,10 @@ function buildOperatorPrompt(input: {
     "Talk like a sharp human teammate, not a dashboard, support bot, or structured report.",
     "Reply in plain conversational language.",
     "Think like an open-ended, high-agency assistant. Use the rules here only as safety rails, not as an excuse to act dumb or overly literal.",
+    "Operate like Codex for this brand: inspect live evidence, decide what to inspect next, chain read tools, and answer from what you actually checked.",
+    "Do not answer that you lack data until you have used the broad read tools available to you. If compact context is missing detail, call investigate_brand_data with the user's question and any known IDs.",
+    "For questions like what did they say, show me the email, quote it, why did this happen, what changed, what failed, what should we reply, or anything that asks for actual content, use investigate_brand_data before answering.",
+    "Reads are intentionally broad and low risk. Use read tools freely. Writes, sends, purchases, deletes, launches, and external actions still require the matching write tool and its safety policy.",
     "Do not use headings, bullets, or sections like 'What I found' or 'What I recommend'.",
     "Only mention operational status when it is relevant to the user's message.",
     "Treat the active brand as the default frame for the conversation.",
@@ -2205,6 +2211,7 @@ function buildOperatorPrompt(input: {
     "Do not say everything is draft unless the context actually shows no running, sourcing, ready, completed, paused, or promoted experiments.",
     "Do not contradict the numeric counts or statuses in the supplied context.",
     "Prefer using read tools to inspect live state before giving confident operational advice or choosing a write action.",
+    "If a first read tool returns only metadata or a summary, keep going with investigate_brand_data rather than apologizing for missing details.",
     "Treat normal user language as valid intent. If the user is clearly asking you to do something, do not wait for rigid command phrasing.",
     "For non-destructive actions, choose the tool directly when the user's intent is clear from normal speech.",
     "For guarded actions, choose the tool when it is the right action and let the UI handle confirmation.",
@@ -2262,11 +2269,46 @@ async function planOperatorReplyWithLlm(input: {
 }): Promise<OperatorPlannerResult | null> {
   const greetingOnly = isCasualGreeting(input.message);
   const trace: OperatorPlannerResult["trace"] = [];
-  const maxSteps = 4;
+  const configuredMaxSteps = Number(process.env.OPERATOR_CHAT_MAX_STEPS);
+  const maxSteps = Math.min(8, Math.max(4, Number.isFinite(configuredMaxSteps) ? configuredMaxSteps : 8));
   let model = "operator-chat";
 
   try {
     let assistant = input.fallbackAssistant;
+    if (!greetingOnly && input.brandId) {
+      const investigationTool = getOperatorToolSpec("investigate_brand_data");
+      const investigationInput = {
+        brandId: input.brandId,
+        query: input.message,
+        maxThreads: 5,
+        maxRuns: 5,
+        maxMessages: 8,
+      };
+      if (investigationTool) {
+        try {
+          const result = await investigationTool.run(investigationInput);
+          trace.push({
+            step: 0,
+            toolName: investigationTool.name,
+            riskLevel: investigationTool.riskLevel,
+            input: investigationInput,
+            summary: result.summary,
+            result: asRecord(result.result),
+            error: "",
+          });
+        } catch (error) {
+          trace.push({
+            step: 0,
+            toolName: "investigate_brand_data",
+            riskLevel: "read",
+            input: investigationInput,
+            summary: "",
+            result: {},
+            error: error instanceof Error ? error.message : "Brand investigation failed",
+          });
+        }
+      }
+    }
 
     for (let stepNumber = 1; stepNumber <= maxSteps; stepNumber += 1) {
       const result = await generateJsonWithLlm({

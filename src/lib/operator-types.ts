@@ -40,6 +40,7 @@ export type OperatorToolName =
   | "get_experiment_snapshot"
   | "summarize_leads"
   | "summarize_inbox"
+  | "investigate_brand_data"
   | "get_leadr_snapshot"
   | "list_leadr_accounts"
   | "create_leadr_auth_link"

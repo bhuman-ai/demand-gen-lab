@@ -25,6 +25,7 @@ import {
   deleteExperimentRecord,
   ensureRuntimeForExperiment,
   getExperimentRecordById,
+  listExperimentRecords,
   getScaleCampaignRecordById,
   listScaleCampaignRecords,
   promoteExperimentRecordToCampaign,
@@ -46,8 +47,14 @@ import {
   getOutreachRun,
   getReplyDraft,
   getReplyThread,
+  getReplyThreadState,
+  listReplyMessagesByThread,
+  listReplyThreadFeedback,
   listExperimentRuns,
   listOwnerRuns,
+  listRunEvents,
+  listRunLeads,
+  listRunMessages,
   listReplyThreadsByBrand,
   updateReplyDraft,
 } from "@/lib/outreach-data";
@@ -164,6 +171,150 @@ function summarizeCampaignCounts(campaigns: ScaleCampaignRecord[]) {
   };
 }
 
+function truncateText(value: unknown, maxLength = 3000) {
+  const text = asString(value);
+  return text.length > maxLength ? `${text.slice(0, maxLength)}...` : text;
+}
+
+function stripSensitiveKeys(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map((entry) => stripSensitiveKeys(entry));
+  if (!value || typeof value !== "object") return value;
+  const clean: Record<string, unknown> = {};
+  for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
+    if (/(api[_-]?key|password|secret|token|authorization|credential|authcode|refresh[_-]?token|access[_-]?token)/i.test(key)) {
+      clean[key] = "[redacted]";
+      continue;
+    }
+    clean[key] = stripSensitiveKeys(entry);
+  }
+  return clean;
+}
+
+function searchTerms(value: unknown) {
+  return Array.from(
+    new Set(
+      asString(value)
+        .toLowerCase()
+        .split(/[^a-z0-9@._-]+/i)
+        .map((term) => term.trim())
+        .filter((term) => term.length >= 3)
+        .filter(
+          (term) =>
+            ![
+              "the",
+              "and",
+              "that",
+              "this",
+              "with",
+              "what",
+              "when",
+              "where",
+              "from",
+              "have",
+              "does",
+              "did",
+              "say",
+              "said",
+              "email",
+              "reply",
+              "thread",
+            ].includes(term)
+        )
+    )
+  );
+}
+
+function scoreTextForQuery(text: string, terms: string[]) {
+  const haystack = text.toLowerCase();
+  return terms.reduce((score, term) => score + (haystack.includes(term) ? 1 : 0), 0);
+}
+
+function selectByQuery<T>(
+  items: T[],
+  input: {
+    query: string;
+    limit: number;
+    text: (item: T) => string;
+    forceInclude?: (item: T) => boolean;
+  }
+) {
+  const terms = searchTerms(input.query);
+  const withScores = items.map((item, index) => ({
+    item,
+    index,
+    forced: input.forceInclude?.(item) === true,
+    score: scoreTextForQuery(input.text(item), terms),
+  }));
+  return withScores
+    .filter((row) => row.forced || !terms.length || row.score > 0)
+    .sort((left, right) => {
+      if (left.forced !== right.forced) return left.forced ? -1 : 1;
+      if (left.score !== right.score) return right.score - left.score;
+      return left.index - right.index;
+    })
+    .slice(0, Math.max(1, input.limit))
+    .map((row) => row.item);
+}
+
+function compactReplyMessage(message: Awaited<ReturnType<typeof listReplyMessagesByThread>>[number]) {
+  return {
+    id: message.id,
+    direction: message.direction,
+    from: message.from,
+    to: message.to,
+    subject: message.subject,
+    body: truncateText(message.body, 5000),
+    providerMessageId: message.providerMessageId,
+    receivedAt: message.receivedAt,
+    createdAt: message.createdAt,
+  };
+}
+
+function compactRunMessage(message: Awaited<ReturnType<typeof listRunMessages>>[number]) {
+  return {
+    id: message.id,
+    leadId: message.leadId,
+    step: message.step,
+    subject: message.subject,
+    body: truncateText(message.body, 5000),
+    sourceType: message.sourceType,
+    nodeId: message.nodeId,
+    parentMessageId: message.parentMessageId,
+    status: message.status,
+    providerMessageId: message.providerMessageId,
+    scheduledAt: message.scheduledAt,
+    sentAt: message.sentAt,
+    lastError: message.lastError,
+    generationMeta: stripSensitiveKeys(message.generationMeta),
+  };
+}
+
+function compactRunLead(lead: Awaited<ReturnType<typeof listRunLeads>>[number]) {
+  return {
+    id: lead.id,
+    email: lead.email,
+    name: lead.name,
+    company: lead.company,
+    title: lead.title,
+    domain: lead.domain,
+    sourceUrl: lead.sourceUrl,
+    realVerifiedEmail: lead.realVerifiedEmail ?? false,
+    emailVerification: stripSensitiveKeys(lead.emailVerification ?? null),
+    status: lead.status,
+    createdAt: lead.createdAt,
+    updatedAt: lead.updatedAt,
+  };
+}
+
+function compactEvent(event: Awaited<ReturnType<typeof listRunEvents>>[number]) {
+  return {
+    id: event.id,
+    eventType: event.eventType,
+    payload: stripSensitiveKeys(event.payload),
+    createdAt: event.createdAt,
+  };
+}
+
 async function getBrandOrThrow(brandId: string) {
   const brand = await getBrandById(brandId, { includeEmbedded: true });
   if (!brand) throw new Error("Brand not found");
@@ -266,6 +417,236 @@ async function resolveCampaignRunTarget(input: {
   }
 
   throw new Error("No run found for this campaign");
+}
+
+async function investigateBrandData(input: Record<string, unknown>): Promise<OperatorToolResult> {
+  const brandId = requireString(input, "brandId");
+  const query = asString(input.query) || "latest important brand state";
+  const threadId = asString(input.threadId);
+  const runId = asString(input.runId);
+  const leadId = asString(input.leadId);
+  const campaignId = asString(input.campaignId);
+  const maxThreads = Math.min(8, Math.max(1, asNumber(input.maxThreads, 5)));
+  const maxRuns = Math.min(8, Math.max(1, asNumber(input.maxRuns, 4)));
+  const maxMessages = Math.min(20, Math.max(1, asNumber(input.maxMessages, 8)));
+
+  const [brand, context, campaigns, experiments, inbox] = await Promise.all([
+    getBrandOrThrow(brandId),
+    getOperatorBrandContext(brandId),
+    listScaleCampaignRecords(brandId),
+    listExperimentRecords(brandId),
+    listReplyThreadsByBrand(brandId, { includeEval: true }),
+  ]);
+
+  const selectedThreads = selectByQuery(inbox.threads, {
+    query,
+    limit: maxThreads,
+    text: (thread) =>
+      [
+        thread.id,
+        thread.subject,
+        thread.contactEmail,
+        thread.contactName,
+        thread.contactCompany,
+        thread.sentiment,
+        thread.intent,
+        thread.status,
+        thread.runId,
+        thread.leadId,
+        thread.campaignId,
+        JSON.stringify(thread.stateSummary ?? {}),
+      ].join(" "),
+    forceInclude: (thread) =>
+      Boolean(threadId && thread.id === threadId) ||
+      Boolean(runId && thread.runId === runId) ||
+      Boolean(leadId && thread.leadId === leadId) ||
+      Boolean(campaignId && thread.campaignId === campaignId),
+  });
+
+  const threadDetails = await Promise.all(
+    selectedThreads.map(async (thread) => {
+      const [messages, state, feedback] = await Promise.all([
+        listReplyMessagesByThread(thread.id),
+        getReplyThreadState(thread.id),
+        listReplyThreadFeedback(thread.id),
+      ]);
+      return {
+        thread,
+        state: stripSensitiveKeys(state),
+        messages: messages.slice(0, maxMessages).map(compactReplyMessage),
+        drafts: inbox.drafts
+          .filter((draft) => draft.threadId === thread.id)
+          .slice(0, 6)
+          .map((draft) => ({
+            id: draft.id,
+            subject: draft.subject,
+            body: truncateText(draft.body, 5000),
+            status: draft.status,
+            reason: draft.reason,
+            runId: draft.runId,
+            createdAt: draft.createdAt,
+            updatedAt: draft.updatedAt,
+            sentAt: draft.sentAt,
+          })),
+        feedback: feedback.slice(0, 6),
+      };
+    })
+  );
+
+  const ownerRunGroups = await Promise.all([
+    ...campaigns.slice(0, 20).map((campaign) => listOwnerRuns(brandId, "campaign", campaign.id)),
+    ...experiments.slice(0, 20).map((experiment) => listOwnerRuns(brandId, "experiment", experiment.id)),
+  ]);
+  const runById = new Map(ownerRunGroups.flat().map((run) => [run.id, run] as const));
+  if (runId) {
+    const explicitRun = await getOutreachRun(runId);
+    if (explicitRun?.brandId === brandId) runById.set(explicitRun.id, explicitRun);
+  }
+  for (const thread of selectedThreads) {
+    if (!thread.runId || runById.has(thread.runId)) continue;
+    const threadRun = await getOutreachRun(thread.runId);
+    if (threadRun?.brandId === brandId) runById.set(threadRun.id, threadRun);
+  }
+  const allRuns = Array.from(runById.values()).sort((left, right) =>
+    left.updatedAt < right.updatedAt ? 1 : -1
+  );
+  const forcedRunIds = new Set([runId, ...selectedThreads.map((thread) => thread.runId)].filter(Boolean));
+  const selectedRuns = selectByQuery(allRuns, {
+    query,
+    limit: maxRuns,
+    text: (run) =>
+      [
+        run.id,
+        run.campaignId,
+        run.experimentId,
+        run.status,
+        run.lastError,
+        run.externalRef,
+        JSON.stringify(run.metrics ?? {}),
+        JSON.stringify(run.sourcingTraceSummary ?? {}),
+      ].join(" "),
+    forceInclude: (run) =>
+      forcedRunIds.has(run.id) ||
+      Boolean(campaignId && run.campaignId === campaignId),
+  });
+
+  const runDetails = await Promise.all(
+    selectedRuns.map(async (run) => {
+      const [messages, leads, events] = await Promise.all([
+        listRunMessages(run.id),
+        listRunLeads(run.id),
+        listRunEvents(run.id),
+      ]);
+      const selectedMessages = selectByQuery(messages, {
+        query,
+        limit: maxMessages,
+        text: (message) =>
+          [
+            message.id,
+            message.leadId,
+            message.subject,
+            message.body,
+            message.status,
+            message.lastError,
+            message.nodeId,
+            message.providerMessageId,
+          ].join(" "),
+        forceInclude: (message) => Boolean(leadId && message.leadId === leadId),
+      });
+      const selectedLeads = selectByQuery(leads, {
+        query,
+        limit: maxMessages,
+        text: (lead) =>
+          [
+            lead.id,
+            lead.email,
+            lead.name,
+            lead.company,
+            lead.title,
+            lead.domain,
+            lead.status,
+            JSON.stringify(lead.emailVerification ?? {}),
+          ].join(" "),
+        forceInclude: (lead) => Boolean(leadId && lead.id === leadId),
+      });
+      return {
+        run: {
+          id: run.id,
+          brandId: run.brandId,
+          campaignId: run.campaignId,
+          experimentId: run.experimentId,
+          accountId: run.accountId,
+          status: run.status,
+          lastError: run.lastError,
+          metrics: run.metrics,
+          sourcingTraceSummary: stripSensitiveKeys(run.sourcingTraceSummary ?? {}),
+          startedAt: run.startedAt,
+          completedAt: run.completedAt,
+          createdAt: run.createdAt,
+          updatedAt: run.updatedAt,
+        },
+        messages: selectedMessages.map(compactRunMessage),
+        leads: selectedLeads.map(compactRunLead),
+        events: events.slice(0, 12).map(compactEvent),
+      };
+    })
+  );
+
+  const selectedCampaigns = selectByQuery(campaigns, {
+    query,
+    limit: 8,
+    text: (campaign) =>
+      [
+        campaign.id,
+        campaign.name,
+        campaign.status,
+        campaign.sourceExperimentId,
+        campaign.lastRunId,
+        JSON.stringify(campaign),
+      ].join(" "),
+    forceInclude: (campaign) => Boolean(campaignId && campaign.id === campaignId),
+  });
+  const selectedExperiments = selectByQuery(experiments, {
+    query,
+    limit: 8,
+    text: (experiment) => [experiment.id, experiment.name, experiment.status, JSON.stringify(experiment)].join(" "),
+  });
+
+  const inboundCount = threadDetails.reduce(
+    (count, detail) => count + detail.messages.filter((message) => message.direction === "inbound").length,
+    0
+  );
+
+  return {
+    summary: `Investigated ${brand.name}: ${threadDetails.length} inbox thread${threadDetails.length === 1 ? "" : "s"} with ${inboundCount} inbound message${inboundCount === 1 ? "" : "s"}, ${runDetails.length} run${runDetails.length === 1 ? "" : "s"}, campaign/experiment context, and sender context.`,
+    result: {
+      query,
+      brand: {
+        id: brand.id,
+        name: brand.name,
+        website: brand.website,
+        product: brand.product,
+        notes: truncateText(brand.notes, 1500),
+        targetMarkets: brand.targetMarkets,
+        idealCustomerProfiles: brand.idealCustomerProfiles,
+        keyFeatures: brand.keyFeatures,
+        keyBenefits: brand.keyBenefits,
+      },
+      senderContext: context?.senders ?? null,
+      routingContext: context?.routing ?? null,
+      inbox: {
+        totalThreads: inbox.threads.length,
+        totalDrafts: inbox.drafts.length,
+        selectedThreads: threadDetails,
+      },
+      campaigns: selectedCampaigns,
+      experiments: selectedExperiments,
+      runs: runDetails,
+      brandLeads: brand.leads.slice(0, 25),
+      evidencePolicy:
+        "Raw email bodies, sent message bodies, drafts, run events, and leads are included when available. If a needed body is not present here, call this tool again with a more specific threadId, runId, leadId, or query.",
+    } as Record<string, unknown>,
+  };
 }
 
 const TOOL_SPECS: OperatorToolSpec[] = [
@@ -499,6 +880,15 @@ const TOOL_SPECS: OperatorToolSpec[] = [
         },
       } satisfies OperatorToolResult;
     },
+  },
+  {
+    name: "investigate_brand_data",
+    riskLevel: "read",
+    approvalMode: "none",
+    description:
+      "Broad Codex-style read-only investigation across the active brand. Fetches raw reply bodies, sent message bodies, drafts, leads, runs, events, campaigns, experiments, sender/routing context, and related evidence. Use whenever the compact snapshot is not enough.",
+    previewTitle: "Investigate brand data",
+    run: investigateBrandData,
   },
   {
     name: "get_leadr_snapshot",

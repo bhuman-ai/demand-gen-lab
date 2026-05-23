@@ -2812,8 +2812,15 @@ async function executeToolAction(input: {
 
 export async function runOperatorChatTurn(input: OperatorChatRequest): Promise<OperatorChatResponse> {
   let runId = "";
-  let thread =
-    input.threadId?.trim() ? await getOperatorThread(input.threadId.trim()) : null;
+  const requestedThreadId = input.threadId?.trim() ?? "";
+  const requestedBrandId = asString(input.brandId);
+  const loadedThread = requestedThreadId ? await getOperatorThread(requestedThreadId) : null;
+  const loadedThreadBrandId = asString(loadedThread?.brandId);
+  const threadCanContinue =
+    Boolean(loadedThread) &&
+    loadedThread?.status === "active" &&
+    (!requestedBrandId || !loadedThreadBrandId || loadedThreadBrandId === requestedBrandId);
+  let thread = threadCanContinue ? loadedThread : null;
   if (!thread) {
     thread = await createOperatorThread({
       userId: input.userId,

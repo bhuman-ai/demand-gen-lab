@@ -20731,6 +20731,22 @@ async function ensurePausedRunRecoveryCoverage(limit = 40) {
   }
 }
 
+function isSenderRuntimeExclusiveJob(job: Pick<OutreachJob, "jobType" | "payload">) {
+  if (job.jobType === "dispatch_messages") return true;
+  if (job.jobType !== "monitor_deliverability") return false;
+  const payload = asRecord(job.payload);
+  const stage = String(payload.stage ?? "send").trim().toLowerCase();
+  return stage !== "poll";
+}
+
+async function hasRunningSenderRuntimeJobForRun(job: OutreachJob) {
+  if (!isSenderRuntimeExclusiveJob(job)) return false;
+  const runningJobs = (await listRunJobs(job.runId, 50)).filter(
+    (candidate) => candidate.id !== job.id && candidate.status === "running"
+  );
+  return runningJobs.some((candidate) => isSenderRuntimeExclusiveJob(candidate));
+}
+
 export async function runOutreachTick(
   limit = 20,
   options: { includeCampaignHopper?: boolean } = {}
@@ -20780,6 +20796,9 @@ export async function runOutreachTick(
       break;
     }
     if (!(await canCurrentRuntimeProcessJob(job))) {
+      continue;
+    }
+    if (await hasRunningSenderRuntimeJobForRun(job)) {
       continue;
     }
     const attempts = job.attempts + 1;

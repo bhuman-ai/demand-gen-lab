@@ -530,6 +530,10 @@ export default function OperatorPanel({
   const latestExecution = latestExecutionMessage ? readMessageExecution(latestExecutionMessage) : null;
   const latestTaskSummary = latestExecution ? executionSummary(latestExecution) : "";
   const threadTitle = asString(threadDetail?.thread.title) || (activeBrandName ? `${activeBrandName} Brand GPT thread` : "Brand GPT");
+  const activeThreadId =
+    threadDetail?.thread.status === "active" && threadDetail.thread.brandId === activeBrandId
+      ? threadDetail.thread.id
+      : undefined;
 
   useEffect(() => {
     if (!open) return;
@@ -554,6 +558,7 @@ export default function OperatorPanel({
       }
       setLoadingThread(true);
       setError("");
+      setThreadDetail(null);
       try {
         const threads = await fetchOperatorThreads({ brandId: activeBrandId, status: "active" });
         if (!mounted) return;
@@ -564,7 +569,7 @@ export default function OperatorPanel({
         }
         const detail = await fetchOperatorThreadDetail(latest.id);
         if (!mounted) return;
-        setThreadDetail(detail);
+        setThreadDetail(detail?.thread.status === "active" && detail.thread.brandId === activeBrandId ? detail : null);
       } catch (nextError) {
         if (!mounted) return;
         setError(nextError instanceof Error ? nextError.message : "Failed to load Brand GPT thread");
@@ -596,7 +601,7 @@ export default function OperatorPanel({
 
   async function refreshThread(threadId: string) {
     const detail = await fetchOperatorThreadDetail(threadId);
-    setThreadDetail(detail);
+    setThreadDetail(detail?.thread.status === "active" && detail.thread.brandId === activeBrandId ? detail : null);
   }
 
   async function handleStructuredAction(input: {
@@ -617,7 +622,7 @@ export default function OperatorPanel({
     setError("");
     try {
       const response = await sendOperatorChat({
-        threadId: threadDetail?.thread.id,
+        threadId: activeThreadId,
         brandId: activeBrandId,
         message: trimmed,
         structuredAction: input.structuredAction,
@@ -643,7 +648,7 @@ export default function OperatorPanel({
     setError("");
     try {
       const response = await sendOperatorChat({
-        threadId: threadDetail?.thread.id,
+        threadId: activeThreadId,
         brandId: activeBrandId,
         message: trimmed,
       });

@@ -35,6 +35,7 @@ import {
   listDeliverabilitySeedReservations,
   listDeliverabilityProbeRuns,
   listOutreachAccounts,
+  listRunAnomalies,
   listRunJobs,
   listRunLeads,
   listRunMessages,
@@ -2032,13 +2033,15 @@ async function readRunToolState(runId: string) {
   if (!run) {
     throw new Error("Run not found.");
   }
-  const [leads, messages, jobs] = await Promise.all([
+  const [leads, messages, jobs, anomalies] = await Promise.all([
     listRunLeads(run.id),
     listRunMessages(run.id),
     listRunJobs(run.id, 100),
+    listRunAnomalies(run.id),
   ]);
   const activeJobs = jobs.filter((job) => job.status === "queued" || job.status === "running");
   const activeJobTypes = new Set(activeJobs.map((job) => job.jobType));
+  const activeAnomalies = anomalies.filter((anomaly) => anomaly.status === "active");
   const scheduledMessages = messages.filter((message) => message.status === "scheduled");
   const dueMessages = scheduledMessages.filter(
     (message) => timestampMs(message.scheduledAt) > 0 && timestampMs(message.scheduledAt) <= Date.now()
@@ -2054,6 +2057,8 @@ async function readRunToolState(runId: string) {
     leads,
     messages,
     jobs,
+    anomalies,
+    activeAnomalies,
     activeJobs,
     activeJobTypes,
     scheduledMessages,
@@ -2069,6 +2074,7 @@ async function readRunToolState(runId: string) {
       scheduledMessageCount: scheduledMessages.length,
       dueMessageCount: dueMessages.length,
       activeJobTypes: [...activeJobTypes],
+      activeAnomalyTypes: activeAnomalies.map((anomaly) => anomaly.type),
       lastError: run.lastError,
       pauseReason: run.pauseReason,
       sourcingTraceSummary: run.sourcingTraceSummary,
@@ -2082,7 +2088,7 @@ function isTerminalRunStatus(status: string) {
 
 function planRunRepairJobs(state: Awaited<ReturnType<typeof readRunToolState>>) {
   const jobs: Array<{
-    jobType: "source_leads" | "schedule_messages" | "dispatch_messages";
+    jobType: "source_leads" | "schedule_messages" | "dispatch_messages" | "analyze_run";
     executeAfter: string;
     payload: Record<string, unknown>;
   }> = [];
@@ -2091,9 +2097,22 @@ function planRunRepairJobs(state: Awaited<ReturnType<typeof readRunToolState>>) 
   const hasSourceJob = state.activeJobTypes.has("source_leads");
   const hasScheduleJob = state.activeJobTypes.has("schedule_messages");
   const hasDispatchJob = state.activeJobTypes.has("dispatch_messages");
+  const hasAnalyzeJob = state.activeJobTypes.has("analyze_run");
   const targetLeadCount = clampRunLeadTarget(
     Math.max(state.run.metrics.sourcedLeads || 0, state.leads.length, 10)
   );
+
+  if ((state.run.status === "paused" || state.activeAnomalies.length > 0) && !hasAnalyzeJob) {
+    jobs.push({
+      jobType: "analyze_run",
+      executeAfter: nowIso(),
+      payload: {
+        reason: "gpt_operator_run_repair_anomaly_recheck",
+        activeAnomalyTypes: state.activeAnomalies.map((anomaly) => anomaly.type),
+        pauseReason: state.run.pauseReason,
+      },
+    });
+  }
 
   if (state.leads.length <= 0 && !hasSourceJob) {
     jobs.push({

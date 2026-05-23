@@ -19858,6 +19858,11 @@ const NON_PROVIDER_ERROR_PATTERNS = [
   /lead email missing/i,
   /lead blocked:/i,
   /suppression status/i,
+  /message generation failed/i,
+  /openai message generation failed/i,
+  /openrouter message generation failed/i,
+  /billing_not_active/i,
+  /rate limit/i,
 ];
 const PROVIDER_ERROR_RATE_THRESHOLD = 0.2;
 const PROVIDER_ERROR_RATE_MIN_ATTEMPTS = 5;
@@ -19939,8 +19944,9 @@ function isPausedRunAutoRecoveryEligible(
     return false;
   }
   const active = activeRunAnomalies(anomalies);
-  if (active.length > 0) {
-    return active.every((anomaly) => anomaly.type === "provider_error_rate");
+  const activeCritical = active.filter((anomaly) => anomaly.severity === "critical");
+  if (activeCritical.length > 0) {
+    return activeCritical.every((anomaly) => anomaly.type === "provider_error_rate");
   }
   return isRecoverableSenderCampaignIssue(run);
 }

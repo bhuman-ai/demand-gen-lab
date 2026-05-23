@@ -1,4 +1,5 @@
 import { sanitizeAiText } from "@/lib/ai-sanitize";
+import { detectAutomatedReply, type AutomatedReplyDetection } from "@/lib/automated-reply-detection";
 import { getBrandById, getCampaignById } from "@/lib/factory-data";
 import type {
   ReplyDraft,
@@ -27,6 +28,7 @@ import {
   listRunLeads,
   listRunMessages,
   updateReplyDraft,
+  updateReplyThread,
   upsertReplyThreadState,
 } from "@/lib/outreach-data";
 import {
@@ -88,6 +90,29 @@ const SIGNOFF_LINE = /^(best|best regards|regards|kind regards|thanks|thank you|
 
 function containsDraftPlaceholderToken(value: string) {
   return DRAFT_PLACEHOLDER_TOKEN.test(String(value ?? ""));
+}
+
+function automatedReplyDecision(reason: string): ReplyThreadStateDecision {
+  return {
+    recommendedMove: "stay_silent",
+    objectiveForThisTurn: "Do not reply to an automated inbox response.",
+    rationale: reason || "Automated reply detected.",
+    confidence: 0.98,
+    autopilotOk: false,
+    manualReviewReason: "",
+  };
+}
+
+function detectLatestInboundAutomatedReply(input: {
+  thread: ReplyThread;
+  latestInbound?: ReplyThreadHistoryItem | null;
+  latestInboundBody?: string;
+}): AutomatedReplyDetection {
+  return detectAutomatedReply({
+    from: input.thread.contactEmail,
+    subject: input.latestInbound?.subject || input.thread.subject,
+    body: input.latestInbound?.body ?? input.latestInboundBody ?? "",
+  });
 }
 
 function stripInlineDraftPlaceholders(value: string) {
@@ -316,6 +341,22 @@ function buildFallbackDecision(input: {
   latestDraft: ReplyDraft | null;
   hint?: SyncDecisionHint;
 }): ReplyThreadStateDecision {
+  const automated = detectAutomatedReply({
+    from: input.thread.contactEmail,
+    subject: input.thread.subject,
+    body: input.latestInboundBody,
+  });
+  if (automated.skip) {
+    return {
+      recommendedMove: "stay_silent",
+      objectiveForThisTurn: input.hint?.objectiveForThisTurn?.trim() || "Do not reply to an automated inbox response.",
+      rationale: input.hint?.rationale?.trim() || automated.reason,
+      confidence: clampZeroOne(input.hint?.confidence, 0.98),
+      autopilotOk: false,
+      manualReviewReason: "",
+    };
+  }
+
   const softDefer = isLowPriorityDefer(input.latestInboundBody);
   const recommendedMove =
     input.hint?.recommendedMove && input.hint.recommendedMove.trim()
@@ -650,6 +691,11 @@ async function compileCanonicalState(input: {
         });
   const latestInboundMessage = latestInbound(history);
   const latestInboundBody = latestInboundMessage?.body ?? "";
+  const automatedReply = detectLatestInboundAutomatedReply({
+    thread: input.thread,
+    latestInbound: latestInboundMessage,
+    latestInboundBody,
+  });
 
   const parsedOffer = parseOfferAndCta(sourceExperiment?.offer ?? "");
   const desiredOutcome =
@@ -665,29 +711,33 @@ async function compileCanonicalState(input: {
     latestDraft: input.latestDraft,
     hint: input.decisionHint,
   });
-  const fallbackStage = inferStageFromThread(input.thread, fallbackDecision.recommendedMove, latestInboundBody);
+  const fallbackStage = automatedReply.skip
+    ? "closed"
+    : inferStageFromThread(input.thread, fallbackDecision.recommendedMove, latestInboundBody);
   const fallbackPolicyMoves = preferredMovesForStage(fallbackStage);
 
-  const llmCompiled = await compileWithLlm({
-    brandName: brand?.name ?? "",
-    brandWebsite: brand?.website ?? "",
-    brandTone: brand?.tone ?? "",
-    brandNotes: brand?.notes ?? "",
-    productSummary: brand?.product ?? "",
-    offer: parsedOffer.offer || sourceExperiment?.offer || "",
-    cta: parsedOffer.cta,
-    desiredOutcome,
-    leadName: contactName,
-    leadCompany: contactCompany,
-    leadTitle: contactTitle,
-    relationshipValue: relationshipValue(contactTitle, input.thread.sentiment),
-    latestInboundBody,
-    fallbackDecision,
-    history,
-  });
+  const llmCompiled = automatedReply.skip
+    ? null
+    : await compileWithLlm({
+        brandName: brand?.name ?? "",
+        brandWebsite: brand?.website ?? "",
+        brandTone: brand?.tone ?? "",
+        brandNotes: brand?.notes ?? "",
+        productSummary: brand?.product ?? "",
+        offer: parsedOffer.offer || sourceExperiment?.offer || "",
+        cta: parsedOffer.cta,
+        desiredOutcome,
+        leadName: contactName,
+        leadCompany: contactCompany,
+        leadTitle: contactTitle,
+        relationshipValue: relationshipValue(contactTitle, input.thread.sentiment),
+        latestInboundBody,
+        fallbackDecision,
+        history,
+      });
 
-  const currentStage = llmCompiled?.thread.currentStage ?? fallbackStage;
-  const latestDecision = llmCompiled?.decision ?? fallbackDecision;
+  const currentStage = automatedReply.skip ? "closed" : llmCompiled?.thread.currentStage ?? fallbackStage;
+  const latestDecision = automatedReply.skip ? fallbackDecision : llmCompiled?.decision ?? fallbackDecision;
   const sourcesUsed = [
     "brand",
     input.thread.sourceType,
@@ -959,6 +1009,35 @@ export async function generateReplyThreadDraft(input: {
 }): Promise<ReplyDraft | null> {
   const detail = await getReplyThreadDetail(input.threadId);
   if (!detail?.state) return null;
+
+  const latestInboundMessage = latestInbound(detail.history);
+  const automated = detectLatestInboundAutomatedReply({
+    thread: detail.thread,
+    latestInbound: latestInboundMessage,
+  });
+  if (automated.skip) {
+    const activeDraft = detail.drafts.find((draft) => draft.status === "draft") ?? null;
+    if (activeDraft) {
+      await updateReplyDraft(activeDraft.id, {
+        status: "dismissed",
+        sentAt: "",
+        reason: automated.reason,
+      });
+    }
+    if (detail.thread.status !== "closed") {
+      await updateReplyThread(detail.thread.id, {
+        status: "closed",
+        sentiment: "neutral",
+        intent: "other",
+      });
+    }
+    await syncReplyThreadState({
+      threadId: detail.thread.id,
+      decisionHint: automatedReplyDecision(automated.reason),
+    });
+    return null;
+  }
+
   if (["stay_silent", "respect_opt_out"].includes(detail.state.latestDecision.recommendedMove)) {
     return null;
   }

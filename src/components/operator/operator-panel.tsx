@@ -20,7 +20,9 @@ import {
   confirmOperatorActionApi,
   fetchOperatorThreadDetail,
   fetchOperatorThreads,
+  processOperatorRunApi,
   sendOperatorChat,
+  startOperatorChat,
 } from "@/lib/client-api";
 import type {
   OperatorAction,
@@ -29,6 +31,7 @@ import type {
   OperatorExecutionEnvelope,
   OperatorExecutionForm,
   OperatorMessage,
+  OperatorRun,
   OperatorThreadDetail,
 } from "@/lib/operator-types";
 import { cn } from "@/lib/utils";
@@ -107,6 +110,28 @@ function executionCardTone(state: OperatorExecutionEnvelope["state"]) {
   }
 }
 
+function runStatusLabel(status: OperatorRun["status"]) {
+  switch (status) {
+    case "running":
+      return "Running";
+    case "completed":
+      return "Done";
+    case "failed":
+      return "Failed";
+    case "canceled":
+      return "Canceled";
+    default:
+      return "Queued";
+  }
+}
+
+function runBadgeVariant(status: OperatorRun["status"]): "success" | "danger" | "muted" | "accent" {
+  if (status === "completed") return "success";
+  if (status === "failed") return "danger";
+  if (status === "running") return "accent";
+  return "muted";
+}
+
 function messageCardTone(message: OperatorMessage) {
   if (message.kind === "system_note") {
     return "border-[color:var(--danger-border)] bg-[color:var(--danger-soft)]";
@@ -141,6 +166,18 @@ function readMessageExecution(message: OperatorMessage | null) {
   const state = asString(execution.state);
   if (!state || state === "answer_only") return null;
   return execution as OperatorExecutionEnvelope;
+}
+
+function readMessageRun(message: OperatorMessage | null): Pick<OperatorRun, "id" | "status" | "model"> | null {
+  const run = asRecord(asRecord(message?.content).run);
+  const id = asString(run.id);
+  const status = asString(run.status);
+  if (!id || !["running", "completed", "failed", "canceled"].includes(status)) return null;
+  return {
+    id,
+    status: status as OperatorRun["status"],
+    model: asString(run.model),
+  };
 }
 
 function readEvidenceTrace(value: unknown): OperatorEvidenceTraceEntry[] {
@@ -540,6 +577,7 @@ function MessageBody({
   if (message.kind === "message" && message.role === "assistant") {
     const assistant = asRecord(content.assistant);
     const execution = asRecord(content.execution);
+    const run = readMessageRun(message);
     const evidenceTrace = readEvidenceTrace(content.evidenceTrace);
     const evidenceCheck = readEvidenceCheck(content.evidenceCheck);
     const actionId = asString(execution.actionId);
@@ -547,6 +585,13 @@ function MessageBody({
     return (
       <div>
         <div className="whitespace-pre-wrap text-sm leading-6">{asString(content.text) || asString(assistant.summary)}</div>
+        {run ? (
+          <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-[color:var(--muted-foreground)]">
+            <Badge variant={runBadgeVariant(run.status)}>{runStatusLabel(run.status)}</Badge>
+            {run.model ? <span>{run.model}</span> : null}
+            <span className="font-mono">{run.id}</span>
+          </div>
+        ) : null}
         <EvidenceTrace trace={evidenceTrace} check={evidenceCheck} />
         {asString(execution.state) && asString(execution.state) !== "answer_only" ? (
           <ExecutionCard
@@ -612,6 +657,8 @@ export default function OperatorPanel({
   const [threadDetail, setThreadDetail] = useState<OperatorThreadDetail | null>(null);
   const [loadingThread, setLoadingThread] = useState(false);
   const [sending, setSending] = useState(false);
+  const [processingRunId, setProcessingRunId] = useState("");
+  const [pendingRun, setPendingRun] = useState<OperatorRun | null>(null);
   const [actionBusyId, setActionBusyId] = useState("");
   const [error, setError] = useState("");
   const [input, setInput] = useState("");
@@ -633,6 +680,7 @@ export default function OperatorPanel({
     () => new Map((threadDetail?.actions ?? []).map((action) => [action.id, action] as const)),
     [threadDetail]
   );
+  const runs = useMemo(() => threadDetail?.runs ?? [], [threadDetail]);
   const latestExecutionMessage = useMemo(
     () =>
       [...visibleMessages]
@@ -641,6 +689,12 @@ export default function OperatorPanel({
     [visibleMessages]
   );
   const latestExecution = latestExecutionMessage ? readMessageExecution(latestExecutionMessage) : null;
+  const latestMessageRun = latestExecutionMessage ? readMessageRun(latestExecutionMessage) : null;
+  const activeRun =
+    (pendingRun?.status === "running" ? pendingRun : null) ??
+    runs.find((run) => run.status === "running") ??
+    null;
+  const latestRun = activeRun ?? runs[0] ?? (pendingRun && pendingRun.status !== "running" ? pendingRun : null);
   const latestTaskSummary = latestExecution ? executionSummary(latestExecution) : "";
   const threadTitle = asString(threadDetail?.thread.title) || (activeBrandName ? `${activeBrandName} Brand GPT thread` : "Brand GPT");
   const activeThreadId =
@@ -718,9 +772,30 @@ export default function OperatorPanel({
     }
   }, [activeBrandId, initialRequest, open]);
 
+  useEffect(() => {
+    if (!pendingRun) return;
+    const refreshed = runs.find((run) => run.id === pendingRun.id);
+    if (refreshed && refreshed.status !== pendingRun.status) {
+      setPendingRun(refreshed);
+    }
+  }, [pendingRun, runs]);
+
   async function refreshThread(threadId: string) {
     const detail = await fetchOperatorThreadDetail(threadId);
     setThreadDetail(detail?.thread.status === "active" && detail.thread.brandId === activeBrandId ? detail : null);
+  }
+
+  async function processStartedRun(runId: string, threadId: string) {
+    setProcessingRunId(runId);
+    try {
+      const response = await processOperatorRunApi(runId);
+      await refreshThread(response.thread.id || threadId);
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : "Brand GPT run failed");
+      await refreshThread(threadId).catch(() => undefined);
+    } finally {
+      setProcessingRunId("");
+    }
   }
 
   async function handleStructuredAction(input: {
@@ -731,7 +806,7 @@ export default function OperatorPanel({
     };
   }) {
     const trimmed = input.message.trim();
-    if (!trimmed || sending) return;
+    if (!trimmed || sending || processingRunId) return;
     if (!activeBrandId) {
       setError("Open a brand first so Brand GPT has account context.");
       return;
@@ -757,7 +832,7 @@ export default function OperatorPanel({
 
   async function handleSend(message: string) {
     const trimmed = message.trim();
-    if (!trimmed || sending) return;
+    if (!trimmed || sending || processingRunId) return;
     if (!activeBrandId) {
       setError("Open a brand first so Brand GPT has account context.");
       return;
@@ -766,13 +841,15 @@ export default function OperatorPanel({
     setSending(true);
     setError("");
     try {
-      const response = await sendOperatorChat({
+      const response = await startOperatorChat({
         threadId: activeThreadId,
         brandId: activeBrandId,
         message: trimmed,
       });
+      setPendingRun(response.run);
       setInput("");
       await refreshThread(response.thread.id);
+      void processStartedRun(response.run.id, response.thread.id);
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : "Brand GPT request failed");
     } finally {
@@ -885,7 +962,7 @@ export default function OperatorPanel({
   }
 
   async function handleConfirm(actionId: string) {
-    if (!threadDetail || actionBusyId) return;
+    if (!threadDetail || actionBusyId || processingRunId) return;
     setActionBusyId(actionId);
     setError("");
     try {
@@ -899,7 +976,7 @@ export default function OperatorPanel({
   }
 
   async function handleCancel(actionId: string) {
-    if (!threadDetail || actionBusyId) return;
+    if (!threadDetail || actionBusyId || processingRunId) return;
     setActionBusyId(actionId);
     setError("");
     try {
@@ -915,6 +992,7 @@ export default function OperatorPanel({
   if (!open) return null;
 
   const isInline = variant === "inline";
+  const agentBusy = sending || Boolean(processingRunId);
   const panel = (
     <aside
       className={cn(
@@ -958,16 +1036,31 @@ export default function OperatorPanel({
                 Current task
               </div>
               <div className="mt-2 text-sm font-medium text-[color:var(--foreground)]">
-                {latestExecution ? executionHeadline(latestExecution) : "No active task"}
+                {activeRun
+                  ? "Brand GPT is running"
+                  : latestExecution
+                    ? executionHeadline(latestExecution)
+                    : "No active task"}
               </div>
               <div className="mt-1 text-sm leading-6 text-[color:var(--muted-foreground)]">
-                {latestExecution
+                {activeRun
+                  ? "The agent run has been started and is processing the brand context, tools, and evidence."
+                  : latestExecution
                   ? latestTaskSummary || "Brand GPT is tracking the latest actionable step in this thread."
                   : "Ask a question or tell Brand GPT what you want done for this brand."}
               </div>
+              {latestRun ? (
+                <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-[color:var(--muted-foreground)]">
+                  {latestRun.model ? <span>{latestRun.model}</span> : null}
+                  <span className="font-mono">{latestRun.id}</span>
+                  {latestMessageRun?.model && latestMessageRun.model !== latestRun.model ? (
+                    <span>last answer: {latestMessageRun.model}</span>
+                  ) : null}
+                </div>
+              ) : null}
             </div>
-            <Badge variant={latestExecution ? (latestExecution.state === "completed" ? "success" : latestExecution.state === "failed" ? "danger" : latestExecution.state === "awaiting_confirmation" || latestExecution.state === "need_info" ? "accent" : "muted") : "muted"}>
-              {latestExecution ? executionStateLabel(latestExecution.state) : "Idle"}
+            <Badge variant={activeRun ? "accent" : latestRun ? runBadgeVariant(latestRun.status) : latestExecution ? (latestExecution.state === "completed" ? "success" : latestExecution.state === "failed" ? "danger" : latestExecution.state === "awaiting_confirmation" || latestExecution.state === "need_info" ? "accent" : "muted") : "muted"}>
+              {activeRun ? "Running" : latestRun ? runStatusLabel(latestRun.status) : latestExecution ? executionStateLabel(latestExecution.state) : "Idle"}
             </Badge>
           </div>
         </div>
@@ -993,6 +1086,18 @@ export default function OperatorPanel({
           </div>
         ) : null}
 
+        {activeRun ? (
+          <div className="rounded-[12px] border border-[color:var(--accent-border)] bg-[color:var(--accent-soft)] px-4 py-3 text-sm text-[color:var(--foreground)]">
+            <div className="flex items-center gap-2 font-medium">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              Brand GPT agent run in progress
+            </div>
+            <div className="mt-1 text-xs leading-5 text-[color:var(--muted-foreground)]">
+              It is using the same Operator tool loop as the autonomous runner. Results and evidence will appear in this thread.
+            </div>
+          </div>
+        ) : null}
+
         {!loadingThread && activeBrandId && !visibleMessages.length ? (
           <div className="space-y-3">
             <div className="flex items-center gap-2 text-xs font-medium text-[color:var(--muted-foreground)]">
@@ -1006,6 +1111,7 @@ export default function OperatorPanel({
                   type="button"
                   onClick={() => void handleSend(prompt)}
                   className="flex items-center justify-between rounded-[10px] border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-3 text-left text-sm text-[color:var(--foreground)] transition-colors hover:bg-[color:var(--surface-hover)]"
+                  disabled={agentBusy}
                 >
                   <span>{prompt}</span>
                   <ChevronRight className="h-4 w-4 text-[color:var(--muted-foreground)]" />
@@ -1049,7 +1155,7 @@ export default function OperatorPanel({
                   onChooseReply={(message) => void handleSend(message)}
                   onSubmitForm={(form, values) => void handleSubmitForm(form, values)}
                   actionBusyId={actionBusyId}
-                  sending={sending}
+                  sending={agentBusy}
                 />
               </div>
             </div>
@@ -1067,7 +1173,7 @@ export default function OperatorPanel({
                 size="sm"
                 variant="secondary"
                 onClick={() => void handleSend(prompt)}
-                disabled={sending || !activeBrandId}
+                disabled={agentBusy || !activeBrandId}
               >
                 {prompt}
               </Button>
@@ -1096,14 +1202,14 @@ export default function OperatorPanel({
                 : "Select a brand to use Brand GPT."
             }
             className="min-h-[104px] rounded-[12px] bg-[color:var(--surface)]"
-            disabled={sending || !activeBrandId}
+            disabled={agentBusy || !activeBrandId}
           />
           <div className="flex items-center justify-between gap-3">
             <div className="text-xs text-[color:var(--muted-foreground)]">
               `Enter` sends. `Shift+Enter` adds a new line.
             </div>
-            <Button type="submit" disabled={sending || !activeBrandId || !input.trim()}>
-              {sending ? <Loader2 className="h-4 w-4 animate-spin" /> : <SendHorizontal className="h-4 w-4" />}
+            <Button type="submit" disabled={agentBusy || !activeBrandId || !input.trim()}>
+              {agentBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <SendHorizontal className="h-4 w-4" />}
               Send
             </Button>
           </div>

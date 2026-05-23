@@ -48,6 +48,7 @@ import type {
 import type {
   OperatorAction,
   OperatorChatResponse,
+  OperatorChatStartResponse,
   OperatorThread,
   OperatorThreadDetail,
   OperatorToolName,
@@ -2245,6 +2246,32 @@ export async function sendOperatorChat(input: {
   } | null;
 }) {
   const response = await fetch("/api/operator/chat", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  const data = await readJson(response);
+  return data as unknown as OperatorChatResponse;
+}
+
+export async function startOperatorChat(input: {
+  threadId?: string;
+  userId?: string;
+  brandId?: string;
+  message: string;
+  mode?: "default" | "recommendation_only";
+}) {
+  const response = await fetch("/api/operator/chat", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ...input, async: true }),
+  });
+  const data = await readJson(response);
+  return data as unknown as OperatorChatStartResponse;
+}
+
+export async function processOperatorRunApi(runId: string, input: { userId?: string } = {}) {
+  const response = await fetch(`/api/operator/runs/${runId}/process`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(input),

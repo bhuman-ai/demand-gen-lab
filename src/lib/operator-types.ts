@@ -249,6 +249,12 @@ export type OperatorChatRequest = {
   structuredAction?: OperatorRequestedAction | null;
 };
 
+export type OperatorChatStartResponse = {
+  thread: OperatorThread;
+  run: OperatorRun;
+  message: OperatorMessage;
+};
+
 export type OperatorChatAssistantReply = {
   summary: string;
   findings: string[];
@@ -289,6 +295,7 @@ export type OperatorChatResponse = {
 
 export type OperatorThreadDetail = {
   thread: OperatorThread;
+  runs: OperatorRun[];
   messages: OperatorMessage[];
   actions: OperatorAction[];
 };

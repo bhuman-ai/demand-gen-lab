@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { OutreachDataError } from "@/lib/outreach-data";
 import { OperatorDataError } from "@/lib/operator-data";
-import { runOperatorChatTurn } from "@/lib/operator-runtime";
+import { runOperatorChatTurn, startOperatorChatRun } from "@/lib/operator-runtime";
 import type { OperatorToolName } from "@/lib/operator-types";
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -15,7 +15,7 @@ export async function POST(request: Request) {
   try {
     const body = asRecord(await request.json());
     const structuredActionRaw = asRecord(body.structuredAction);
-    const result = await runOperatorChatTurn({
+    const requestPayload = {
       threadId: String(body.threadId ?? ""),
       userId: String(body.userId ?? ""),
       brandId: String(body.brandId ?? ""),
@@ -28,7 +28,11 @@ export async function POST(request: Request) {
               input: asRecord(structuredActionRaw.input),
             }
           : null,
-    });
+    } as const;
+    const result =
+      body.async === true && !requestPayload.structuredAction
+        ? await startOperatorChatRun(requestPayload)
+        : await runOperatorChatTurn(requestPayload);
     return NextResponse.json(result);
   } catch (error) {
     if (error instanceof OperatorDataError) {

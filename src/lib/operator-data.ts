@@ -512,7 +512,7 @@ export async function createOperatorRun(input: {
 
 export async function updateOperatorRun(
   runId: string,
-  patch: Partial<Pick<OperatorRun, "status" | "plan" | "contextSnapshot" | "errorText" | "completedAt">>
+  patch: Partial<Pick<OperatorRun, "status" | "model" | "plan" | "contextSnapshot" | "errorText" | "completedAt">>
 ): Promise<OperatorRun | null> {
   const supabase = getSupabaseAdmin();
   let existing: OperatorRun | null = null;
@@ -529,6 +529,7 @@ export async function updateOperatorRun(
   const next: OperatorRun = {
     ...existing,
     status: patch.status ?? existing.status,
+    model: patch.model !== undefined ? String(patch.model ?? "").trim() : existing.model,
     plan: patch.plan ?? existing.plan,
     contextSnapshot: patch.contextSnapshot ?? existing.contextSnapshot,
     errorText: patch.errorText !== undefined ? String(patch.errorText ?? "").trim() : existing.errorText,
@@ -540,6 +541,7 @@ export async function updateOperatorRun(
       .from(TABLE_RUN)
       .update({
         status: next.status,
+        model: next.model,
         plan: next.plan,
         context_snapshot: next.contextSnapshot,
         error_text: next.errorText,
@@ -580,6 +582,30 @@ export async function getOperatorRun(runId: string): Promise<OperatorRun | null>
 
   const store = await readLocalStore();
   return store.runs.find((run) => run.id === runId) ?? null;
+}
+
+export async function listOperatorRunsByThread(threadId: string): Promise<OperatorRun[]> {
+  const supabase = getSupabaseAdmin();
+  if (supabase) {
+    const { data, error } = await supabase
+      .from(TABLE_RUN)
+      .select("*")
+      .eq("thread_id", threadId)
+      .order("started_at", { ascending: false });
+    if (!error) return (data ?? []).map((row: unknown) => mapRunRow(row));
+    if (isVercel) {
+      throw new OperatorDataError("Failed to list Operator runs from Supabase.", {
+        status: 500,
+        hint: "Apply the Operator migrations, then redeploy.",
+        debug: { table: TABLE_RUN, threadId, supabaseError: error.message },
+      });
+    }
+  }
+
+  const store = await readLocalStore();
+  return store.runs
+    .filter((run) => run.threadId === threadId)
+    .sort((a, b) => (a.startedAt < b.startedAt ? 1 : -1));
 }
 
 export async function getOperatorAction(actionId: string): Promise<OperatorAction | null> {

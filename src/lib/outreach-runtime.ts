@@ -74,6 +74,7 @@ import {
   generateConversationPromptMessage,
   type ConversationPromptRenderContext,
 } from "@/lib/conversation-prompt-render";
+import { detectAutomatedReply } from "@/lib/automated-reply-detection";
 import { generateReplyThreadDraft, syncReplyThreadState } from "@/lib/reply-thread-state";
 import {
   createOutreachEvent,
@@ -10229,40 +10230,6 @@ function classifyIntentConfidenceFallback(body: string): { intent: ReplyThread["
   return { intent, confidence: 0.56 };
 }
 
-function detectAutomatedReply(input: { from: string; subject: string; body: string }) {
-  const from = String(input.from ?? "").toLowerCase();
-  const subject = String(input.subject ?? "").toLowerCase();
-  const body = String(input.body ?? "").toLowerCase();
-  const combined = `${subject}\n${body}`;
-
-  if (
-    /\b(mailer-daemon|postmaster|mail delivery subsystem)\b/.test(from) ||
-    /\b(delivery status notification|undeliverable|delivery has failed|returned mail|failure notice)\b/.test(
-      combined
-    )
-  ) {
-    return { skip: true, kind: "delivery_status", reason: "Automated delivery-status reply" };
-  }
-
-  if (
-    /\b(out of office|automatic reply|autoreply|auto reply|vacation|away from the office|ooo)\b/.test(
-      combined
-    )
-  ) {
-    return { skip: true, kind: "out_of_office", reason: "Out-of-office auto reply" };
-  }
-
-  if (
-    /\b(verify you are human|challenge[- ]response|approve sender|whitelist this sender|click the link below to complete delivery)\b/.test(
-      combined
-    )
-  ) {
-    return { skip: true, kind: "anti_spam_challenge", reason: "Automated anti-spam challenge" };
-  }
-
-  return { skip: false, kind: "", reason: "" };
-}
-
 function isAcknowledgementOnlyReply(body: string) {
   const normalized = normalizeText(body.toLowerCase());
   if (!normalized) return false;
@@ -10375,6 +10342,26 @@ function buildReplyPolicyGuidance(
 
 function buildFallbackReplyPolicy(input: ReplyPolicyInput): ReplyPolicyResult {
   const playbook = detectReplyPlaybook(input);
+  const automated = detectAutomatedReply(input);
+  if (automated.skip) {
+    const route = `automated_${automated.kind || "reply"}`;
+    return {
+      action: "no_reply",
+      intent: "other",
+      sentiment: "neutral",
+      confidence: 0.98,
+      route,
+      reason: automated.reason,
+      playbook,
+      closeThread: true,
+      autoSendAllowed: false,
+      guidance: [
+        "Do not draft or send a prospect reply to automated availability, delivery, or challenge messages.",
+        "Record the message for inbox context only.",
+      ],
+      prohibited: replyPolicyProhibitedPhrases(playbook),
+    };
+  }
   const normalizedBody = input.body.toLowerCase();
   const sentiment = classifySentimentFallback(input.body);
   const { intent, confidence } = classifyIntentConfidenceFallback(input.body);
@@ -10460,6 +10447,7 @@ function buildFallbackReplyPolicy(input: ReplyPolicyInput): ReplyPolicyResult {
 
 async function evaluateReplyPolicy(input: ReplyPolicyInput): Promise<ReplyPolicyResult> {
   const fallback = buildFallbackReplyPolicy(input);
+  if (fallback.route.startsWith("automated_")) return fallback;
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) {
     return fallback;
@@ -10495,6 +10483,7 @@ async function evaluateReplyPolicy(input: ReplyPolicyInput): Promise<ReplyPolicy
     "Core rules:",
     "- Use reply when there is a real next step, a real question, or meaningful context worth acknowledging.",
     "- Use no_reply for thanks-only acknowledgements, completion confirmations, or messages where replying would feel robotic.",
+    "- Use no_reply for automated availability replies, including travel, slow-response, urgent-contact, vacation, and out-of-office messages.",
     "- Use manual_review for nuanced, strategic, partnership, distribution, referral, intro, or high-value messages.",
     "- Unsubscribe/remove-me requests should be no_reply with intent=unsubscribe.",
     ...playbookRules.map((rule) => `- ${rule}`),

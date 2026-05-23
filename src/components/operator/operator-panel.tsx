@@ -6,6 +6,7 @@ import {
   Check,
   ChevronRight,
   Clock3,
+  FileSearch,
   ExternalLink,
   Loader2,
   MessageSquareText,
@@ -23,6 +24,8 @@ import {
 } from "@/lib/client-api";
 import type {
   OperatorAction,
+  OperatorEvidenceCheck,
+  OperatorEvidenceTraceEntry,
   OperatorExecutionEnvelope,
   OperatorExecutionForm,
   OperatorMessage,
@@ -138,6 +141,48 @@ function readMessageExecution(message: OperatorMessage | null) {
   const state = asString(execution.state);
   if (!state || state === "answer_only") return null;
   return execution as OperatorExecutionEnvelope;
+}
+
+function readEvidenceTrace(value: unknown): OperatorEvidenceTraceEntry[] {
+  return Array.isArray(value)
+    ? value
+        .map((entry) => {
+          const row = asRecord(entry);
+          return {
+            step: Number(row.step ?? 0) || 0,
+            toolName: asString(row.toolName),
+            riskLevel: asString(row.riskLevel),
+            rationale: asString(row.rationale),
+            inputSummary: asString(row.inputSummary),
+            resultSummary: asString(row.resultSummary),
+            error: asString(row.error),
+          };
+        })
+        .filter((entry) => entry.toolName)
+    : [];
+}
+
+function readEvidenceCheck(value: unknown): OperatorEvidenceCheck | null {
+  const row = asRecord(value);
+  const status = asString(row.status);
+  if (!["verified", "inconclusive", "insufficient"].includes(status)) return null;
+  return {
+    status: status as OperatorEvidenceCheck["status"],
+    summary: asString(row.summary),
+    gaps: asStringArray(row.gaps),
+  };
+}
+
+function evidenceStatusLabel(status: OperatorEvidenceCheck["status"]) {
+  if (status === "verified") return "Verified";
+  if (status === "inconclusive") return "Inconclusive";
+  return "Insufficient";
+}
+
+function evidenceTone(status: OperatorEvidenceCheck["status"]) {
+  if (status === "verified") return "border-[color:var(--success-border)] bg-[color:var(--success-soft)]";
+  if (status === "inconclusive") return "border-[color:var(--accent-border)] bg-[color:var(--accent-soft)]";
+  return "border-[color:var(--danger-border)] bg-[color:var(--danger-soft)]";
 }
 
 function extractUrl(value: string) {
@@ -412,6 +457,66 @@ function ExecutionCard({
   );
 }
 
+function EvidenceTrace({
+  trace,
+  check,
+}: {
+  trace: OperatorEvidenceTraceEntry[];
+  check: OperatorEvidenceCheck | null;
+}) {
+  if (!trace.length && !check) return null;
+  const status = check?.status ?? (trace.length ? "inconclusive" : "insufficient");
+  return (
+    <details className={cn("mt-3 rounded-[12px] border px-3 py-2", evidenceTone(status))}>
+      <summary className="flex cursor-pointer list-none items-center justify-between gap-3 text-xs font-medium text-[color:var(--foreground)]">
+        <span className="inline-flex min-w-0 items-center gap-2">
+          <FileSearch className="h-3.5 w-3.5 shrink-0" />
+          <span>Evidence</span>
+          <span className="text-[color:var(--muted-foreground)]">
+            {evidenceStatusLabel(status)}{trace.length ? ` · ${trace.length} tool call${trace.length === 1 ? "" : "s"}` : ""}
+          </span>
+        </span>
+        <ChevronRight className="h-3.5 w-3.5 shrink-0 text-[color:var(--muted-foreground)]" />
+      </summary>
+      <div className="mt-3 space-y-3">
+        {check?.summary ? (
+          <div className="text-xs leading-5 text-[color:var(--foreground)]">{check.summary}</div>
+        ) : null}
+        {check?.gaps.length ? (
+          <div className="space-y-1">
+            {check.gaps.map((gap, index) => (
+              <div key={`${gap}-${index}`} className="text-xs leading-5 text-[color:var(--muted-foreground)]">
+                Gap: {gap}
+              </div>
+            ))}
+          </div>
+        ) : null}
+        {trace.length ? (
+          <div className="space-y-2">
+            {trace.map((entry) => (
+              <div key={`${entry.step}-${entry.toolName}`} className="rounded-[10px] border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-2">
+                <div className="flex flex-wrap items-center gap-2 text-xs font-medium text-[color:var(--foreground)]">
+                  <span>{entry.step ? `${entry.step}. ` : ""}{entry.toolName}</span>
+                  {entry.riskLevel ? <Badge variant="muted">{entry.riskLevel}</Badge> : null}
+                </div>
+                {entry.rationale ? (
+                  <div className="mt-1 text-xs leading-5 text-[color:var(--muted-foreground)]">Why: {entry.rationale}</div>
+                ) : null}
+                {entry.inputSummary ? (
+                  <div className="mt-1 text-xs leading-5 text-[color:var(--muted-foreground)]">Input: {entry.inputSummary}</div>
+                ) : null}
+                <div className={cn("mt-1 text-xs leading-5", entry.error ? "text-[color:var(--danger)]" : "text-[color:var(--foreground)]")}>
+                  {entry.error ? `Error: ${entry.error}` : entry.resultSummary || "Completed."}
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : null}
+      </div>
+    </details>
+  );
+}
+
 function MessageBody({
   message,
   actionsById,
@@ -435,11 +540,14 @@ function MessageBody({
   if (message.kind === "message" && message.role === "assistant") {
     const assistant = asRecord(content.assistant);
     const execution = asRecord(content.execution);
+    const evidenceTrace = readEvidenceTrace(content.evidenceTrace);
+    const evidenceCheck = readEvidenceCheck(content.evidenceCheck);
     const actionId = asString(execution.actionId);
     const action = actionId ? actionsById.get(actionId) : undefined;
     return (
       <div>
         <div className="whitespace-pre-wrap text-sm leading-6">{asString(content.text) || asString(assistant.summary)}</div>
+        <EvidenceTrace trace={evidenceTrace} check={evidenceCheck} />
         {asString(execution.state) && asString(execution.state) !== "answer_only" ? (
           <ExecutionCard
             execution={execution as OperatorExecutionEnvelope}

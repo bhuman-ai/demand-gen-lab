@@ -978,7 +978,7 @@ const TOOL_SPECS: OperatorToolSpec[] = [
     riskLevel: "read",
     approvalMode: "none",
     description:
-      "Search a live Gmail UI worker mailbox with Gmail search syntax and return the visible mailbox text excerpt plus screenshot path. Input: accountId, query.",
+      "Search a live Gmail UI worker mailbox with Gmail search syntax and return the visible mailbox text excerpt plus screenshot path. Use this for discovery and orientation only; broad search results are not proof that a specific message was sent to a specific recipient. Input: accountId, query.",
     previewTitle: "Search Gmail UI mailbox",
     run: async (input) => {
       const accountId = requireString(input, "accountId");
@@ -1000,7 +1000,7 @@ const TOOL_SPECS: OperatorToolSpec[] = [
     riskLevel: "read",
     approvalMode: "none",
     description:
-      "Verify from the live Gmail UI worker that an expected message exists in the sender's Sent Mail before trusting a send. Input: accountId, recipient, subject and/or body.",
+      "Verify from the live Gmail UI worker that an exact expected message exists in the sender's Sent Mail. This is the proof tool for specific sent-email claims; provide recipient plus subject and/or body. Input: accountId, recipient, subject and/or body.",
     previewTitle: "Verify Gmail UI sent mail",
     run: async (input) => {
       const accountId = requireString(input, "accountId");

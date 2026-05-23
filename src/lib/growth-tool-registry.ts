@@ -60,7 +60,8 @@ const OPERATOR_TOOL_DEFINITIONS: OperatorGrowthToolDefinition[] = [
     name: "gmail_ui.mailbox.search",
     operatorToolName: "gmail_ui_search_mailbox",
     title: "Search Gmail UI mailbox",
-    description: "Search a live Gmail mailbox through the worker using Gmail search syntax.",
+    description:
+      "Search a live Gmail mailbox through the worker using Gmail search syntax. Discovery only; not exact proof that a specific email was sent.",
     provider: "gmail_ui_worker",
     category: "analytics",
     capability: "inspect_state",
@@ -76,7 +77,8 @@ const OPERATOR_TOOL_DEFINITIONS: OperatorGrowthToolDefinition[] = [
     name: "gmail_ui.sent.verify",
     operatorToolName: "gmail_ui_verify_sent",
     title: "Verify Gmail UI sent mail",
-    description: "Verify that a specific expected message appears in Gmail Sent Mail.",
+    description:
+      "Verify that a specific expected message appears in Gmail Sent Mail. This is the proof tool for exact sent-message claims.",
     provider: "gmail_ui_worker",
     category: "deliverability",
     capability: "inspect_state",

@@ -255,6 +255,24 @@ export type OperatorChatAssistantReply = {
   recommendations: string[];
 };
 
+export type OperatorEvidenceStatus = "verified" | "inconclusive" | "insufficient";
+
+export type OperatorEvidenceCheck = {
+  status: OperatorEvidenceStatus;
+  summary: string;
+  gaps: string[];
+};
+
+export type OperatorEvidenceTraceEntry = {
+  step: number;
+  toolName: string;
+  riskLevel: string;
+  rationale: string;
+  inputSummary: string;
+  resultSummary: string;
+  error: string;
+};
+
 export type OperatorActionSummary = Pick<
   OperatorAction,
   "id" | "toolName" | "riskLevel" | "approvalMode" | "status" | "preview"

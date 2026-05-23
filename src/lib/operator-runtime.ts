@@ -21,13 +21,15 @@ import {
 } from "@/lib/operator-memory";
 import { getOperatorBrandContext } from "@/lib/operator-context";
 import { getOperatorToolSpec, listOperatorToolSpecs } from "@/lib/operator-tools";
-import { runBrandAgentTurn } from "@/lib/brand-agent-runtime";
+import { runBrandAgentTurn, type BrandAgentEvidenceCheck, type BrandAgentTraceEntry } from "@/lib/brand-agent-runtime";
 import type {
   OperatorAction,
   OperatorActionSummary,
   OperatorChatAssistantReply,
   OperatorChatRequest,
   OperatorChatResponse,
+  OperatorEvidenceCheck,
+  OperatorEvidenceTraceEntry,
   OperatorExecutionEnvelope,
   OperatorExecutionForm,
   OperatorExecutionFormField,
@@ -51,15 +53,8 @@ type OperatorPlannerResult = {
   assistant: OperatorChatAssistantReply;
   requestedAction: OperatorRequestedAction | null;
   model: string;
-  trace: Array<{
-    step: number;
-    toolName: string;
-    riskLevel: string;
-    input: Record<string, unknown>;
-    summary: string;
-    result: Record<string, unknown>;
-    error: string;
-  }>;
+  trace: BrandAgentTraceEntry[];
+  evidenceCheck: BrandAgentEvidenceCheck | null;
 };
 
 function nowIso() {
@@ -75,6 +70,79 @@ function asRecord(value: unknown): Record<string, unknown> {
     return value as Record<string, unknown>;
   }
   return {};
+}
+
+function truncateForEvidence(value: string, maxLength = 420) {
+  const clean = value.replace(/\s+/g, " ").trim();
+  return clean.length > maxLength ? `${clean.slice(0, maxLength)}...` : clean;
+}
+
+function evidenceJsonSummary(value: unknown, maxLength = 420) {
+  try {
+    return truncateForEvidence(JSON.stringify(value), maxLength);
+  } catch {
+    return "";
+  }
+}
+
+function summarizeEvidenceInput(input: Record<string, unknown>) {
+  const pieces = [
+    asString(input.accountId) ? `account ${asString(input.accountId)}` : "",
+    asString(input.brandId) ? `brand ${asString(input.brandId)}` : "",
+    asString(input.query) ? `query "${asString(input.query)}"` : "",
+    asString(input.recipient) ? `recipient ${asString(input.recipient)}` : "",
+    asString(input.subject) ? `subject "${asString(input.subject)}"` : "",
+    asString(input.campaignId) ? `campaign ${asString(input.campaignId)}` : "",
+    asString(input.runId) ? `run ${asString(input.runId)}` : "",
+    asString(input.threadId) ? `thread ${asString(input.threadId)}` : "",
+    asString(input.action) ? `action ${asString(input.action)}` : "",
+  ].filter(Boolean);
+  return pieces.join(" | ") || evidenceJsonSummary(input);
+}
+
+function summarizeEvidenceResult(entry: BrandAgentTraceEntry) {
+  if (entry.error) return entry.error;
+  const result = asRecord(entry.result);
+  const verification = asRecord(result.verification);
+  if (Object.keys(verification).length) {
+    const verified = verification.verified === true ? "verified" : "not verified";
+    const reason = asString(verification.reason);
+    return truncateForEvidence(`${verified}${reason ? `: ${reason}` : ""}`);
+  }
+  const bodyExcerpt = asString(result.bodyExcerpt);
+  const screenshotPath = asString(result.screenshotPath);
+  const prompt = asString(result.prompt);
+  return truncateForEvidence(
+    [
+      entry.summary,
+      prompt ? `Prompt: ${prompt}` : "",
+      bodyExcerpt ? `Excerpt: ${bodyExcerpt}` : "",
+      screenshotPath ? `Screenshot: ${screenshotPath}` : "",
+    ]
+      .filter(Boolean)
+      .join(" ")
+  ) || evidenceJsonSummary(result);
+}
+
+function buildEvidenceTrace(trace: BrandAgentTraceEntry[] | undefined): OperatorEvidenceTraceEntry[] {
+  return (trace ?? []).slice(0, 12).map((entry) => ({
+    step: entry.step,
+    toolName: entry.toolName,
+    riskLevel: entry.riskLevel,
+    rationale: truncateForEvidence(asString(entry.rationale), 260),
+    inputSummary: summarizeEvidenceInput(entry.input),
+    resultSummary: summarizeEvidenceResult(entry),
+    error: truncateForEvidence(entry.error),
+  }));
+}
+
+function buildEvidenceCheck(check: BrandAgentEvidenceCheck | null | undefined): OperatorEvidenceCheck | null {
+  if (!check) return null;
+  return {
+    status: check.status,
+    summary: truncateForEvidence(check.summary, 700),
+    gaps: check.gaps.map((gap) => truncateForEvidence(gap, 260)).filter(Boolean).slice(0, 6),
+  };
 }
 
 function isCasualGreeting(message: string) {
@@ -2540,7 +2608,11 @@ async function buildChatResponseFromThread(input: {
 async function createAssistantMessage(
   threadId: string,
   assistant: OperatorChatAssistantReply,
-  execution: OperatorExecutionEnvelope | null = null
+  execution: OperatorExecutionEnvelope | null = null,
+  evidence?: {
+    trace?: OperatorEvidenceTraceEntry[];
+    check?: OperatorEvidenceCheck | null;
+  }
 ) {
   return createOperatorMessage({
     threadId,
@@ -2550,6 +2622,8 @@ async function createAssistantMessage(
       text: assistant.summary,
       assistant,
       execution,
+      evidenceTrace: evidence?.trace ?? [],
+      evidenceCheck: evidence?.check ?? null,
     },
   });
 }
@@ -3118,7 +3192,10 @@ export async function runOperatorChatTurn(input: OperatorChatRequest): Promise<O
       }
     }
 
-    const assistantMessage = await createAssistantMessage(thread.id, assistant, execution);
+    const assistantMessage = await createAssistantMessage(thread.id, assistant, execution, {
+      trace: buildEvidenceTrace(llmPlan?.trace),
+      check: buildEvidenceCheck(llmPlan?.evidenceCheck),
+    });
     const updatedThread =
       (await updateOperatorThread(thread.id, {
         lastSummary: assistant.summary,

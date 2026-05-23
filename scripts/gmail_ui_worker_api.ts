@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { execFile as execFileCallback } from "child_process";
 import { mkdir, rm } from "fs/promises";
 import fs from "fs";
@@ -63,6 +64,54 @@ type SendResult = {
   fromEmail: string;
   providerMessageId: string;
   error: string;
+  sentVerified?: boolean;
+  sentVerification?: SentVerificationResult;
+  screenshotPath: string;
+  currentUrl: string;
+  title: string;
+  updatedAt: string;
+};
+
+type MailboxSearchInput = AdvanceInput & {
+  query?: string;
+};
+
+type MailboxSearchResult = {
+  ok: boolean;
+  accountId: string;
+  fromEmail: string;
+  query: string;
+  bodyExcerpt: string;
+  screenshotPath: string;
+  currentUrl: string;
+  title: string;
+  updatedAt: string;
+};
+
+type SentVerificationInput = AdvanceInput & {
+  recipient?: string;
+  subject?: string;
+  body?: string;
+};
+
+type SentVerificationResult = {
+  verified: boolean;
+  query: string;
+  reason: string;
+  recipientMatched: boolean;
+  subjectMatched: boolean;
+  phraseMatched: boolean;
+  bodyExcerpt: string;
+  currentUrl: string;
+  title: string;
+  checkedAt: string;
+};
+
+type SentVerificationResponse = {
+  ok: boolean;
+  accountId: string;
+  fromEmail: string;
+  verification: SentVerificationResult;
   screenshotPath: string;
   currentUrl: string;
   title: string;
@@ -1260,33 +1309,119 @@ function gmailSearchPhrase(value: string) {
   return value.replace(/["\\]/g, " ").replace(/\s+/g, " ").trim().slice(0, 80);
 }
 
-async function verifyMessageInSent(page: any, expected: ExpectedSentMessage | undefined) {
-  if (!expected?.recipient) return false;
-  const phrase = gmailSearchPhrase(expected.body) || gmailSearchPhrase(expected.subject);
-  if (!phrase) return false;
-  const query = `in:sent to:${expected.recipient} "${phrase}"`;
+function normalizeVisibleText(value: string) {
+  return value.replace(/\s+/g, " ").trim();
+}
+
+function buildSentSearchQuery(expected: ExpectedSentMessage | undefined) {
+  const recipient = String(expected?.recipient ?? "").trim().toLowerCase();
+  if (!recipient) return "";
+  const phrase = gmailSearchPhrase(expected?.body ?? "") || gmailSearchPhrase(expected?.subject ?? "");
+  if (!phrase) return "";
+  return `in:sent to:${recipient} "${phrase}"`;
+}
+
+function excerptAround(text: string, needles: string[], maxLength = 1200) {
+  const clean = normalizeVisibleText(text);
+  if (clean.length <= maxLength) return clean;
+  const lower = clean.toLowerCase();
+  const matchIndex = needles
+    .map((needle) => lower.indexOf(needle.toLowerCase()))
+    .filter((index) => index >= 0)
+    .sort((left, right) => left - right)[0];
+  if (matchIndex === undefined) {
+    return `${clean.slice(0, maxLength)}...`;
+  }
+  const start = Math.max(0, matchIndex - Math.floor(maxLength / 3));
+  const end = Math.min(clean.length, start + maxLength);
+  return `${start > 0 ? "..." : ""}${clean.slice(start, end)}${end < clean.length ? "..." : ""}`;
+}
+
+async function runGmailSearch(page: any, query: string, stopWhen?: (bodyText: string) => boolean) {
   await page
-    .goto(`https://mail.google.com/mail/u/0/#search/${encodeURIComponent(query)}`, {
+    .goto(`https://mail.google.com/mail/u/0/#search/${encodeURIComponent(query.trim())}`, {
       waitUntil: "domcontentloaded",
       timeout: 60000,
     })
     .catch(() => {});
+  await settlePage(page);
 
+  let bodyText = "";
   for (let attempt = 0; attempt < 24; attempt += 1) {
-    const bodyText = String((await page.locator("body").innerText().catch(() => "")) ?? "")
-      .replace(/\s+/g, " ")
-      .trim();
-    const lowerText = bodyText.toLowerCase();
-    if (lowerText.includes("no messages matched your search")) {
-      return false;
-    }
-    if (lowerText.includes(expected.recipient.toLowerCase())) {
-      return true;
-    }
+    bodyText = normalizeVisibleText(String((await page.locator("body").innerText().catch(() => "")) ?? ""));
+    if (bodyText && (stopWhen?.(bodyText) || attempt >= 2)) break;
     await page.waitForTimeout(1000).catch(() => {});
   }
+  return {
+    bodyText,
+    currentUrl: String(page.url() ?? "").trim(),
+    title: String((await page.title().catch(() => "")) ?? ""),
+  };
+}
 
-  return false;
+async function verifyMessageInSentDetailed(
+  page: any,
+  expected: ExpectedSentMessage | undefined
+): Promise<SentVerificationResult> {
+  const query = buildSentSearchQuery(expected);
+  const checkedAt = new Date().toISOString();
+  if (!query || !expected) {
+    return {
+      verified: false,
+      query,
+      reason: "recipient and either body or subject are required",
+      recipientMatched: false,
+      subjectMatched: false,
+      phraseMatched: false,
+      bodyExcerpt: "",
+      currentUrl: String(page.url() ?? "").trim(),
+      title: String((await page.title().catch(() => "")) ?? ""),
+      checkedAt,
+    };
+  }
+
+  const recipient = expected.recipient.toLowerCase();
+  const subject = gmailSearchPhrase(expected.subject).toLowerCase();
+  const phrase = (gmailSearchPhrase(expected.body) || gmailSearchPhrase(expected.subject)).toLowerCase();
+  const search = await runGmailSearch(page, query, (bodyText) => {
+    const lowerText = bodyText.toLowerCase();
+    return (
+      lowerText.includes("no messages matched your search") ||
+      lowerText.includes("no conversations matched your search") ||
+      lowerText.includes("no results found") ||
+      (lowerText.includes(recipient) && (lowerText.includes(phrase) || lowerText.includes(subject)))
+    );
+  });
+  const lowerText = search.bodyText.toLowerCase();
+  const recipientMatched = lowerText.includes(recipient);
+  const subjectMatched = subject ? lowerText.includes(subject) : false;
+  const phraseMatched = phrase ? lowerText.includes(phrase) : false;
+  const noMessages =
+    lowerText.includes("no messages matched your search") ||
+    lowerText.includes("no conversations matched your search") ||
+    lowerText.includes("no results found");
+  const verified = !noMessages && recipientMatched && (phraseMatched || subjectMatched);
+
+  return {
+    verified,
+    query,
+    reason: verified
+      ? "matching message found in Sent Mail"
+      : noMessages
+        ? "Gmail reported no Sent Mail results for the expected message"
+        : "Sent Mail search did not show the expected recipient and message phrase",
+    recipientMatched,
+    subjectMatched,
+    phraseMatched,
+    bodyExcerpt: excerptAround(search.bodyText, [recipient, phrase, subject].filter(Boolean), 1200),
+    currentUrl: search.currentUrl,
+    title: search.title,
+    checkedAt,
+  };
+}
+
+async function verifyMessageInSent(page: any, expected: ExpectedSentMessage | undefined) {
+  return (await verifyMessageInSentDetailed(page, expected)).verified;
 }
 
 async function waitForSendConfirmation(
@@ -1850,6 +1985,86 @@ async function navigateSessionToInbox(handle: SessionHandle | null) {
   await settlePage(handle.page);
 }
 
+async function ensureReadySession(accountId: string, input: AdvanceInput = {}) {
+  await navigateSessionToInbox(sessions.get(accountId) ?? null);
+  await ensureSessionReadyForSend(accountId, input);
+  const handle = sessions.get(accountId) ?? null;
+  if (!handle || handle.page.isClosed()) {
+    throw new Error("No active Gmail worker session for this sender.");
+  }
+  const detected = await detectSessionStep(handle.page);
+  if (detected.loginState !== "ready") {
+    throw new Error(detected.prompt || "Gmail inbox is not ready on the worker.");
+  }
+  return handle;
+}
+
+async function captureSessionPage(handle: SessionHandle, label: string) {
+  await mkdir(SCREENSHOT_DIR, { recursive: true });
+  const screenshotPath = path.join(
+    SCREENSHOT_DIR,
+    `${handle.accountId}-${label}-${Date.now().toString(36)}.png`
+  );
+  await handle.page.screenshot({ path: screenshotPath, fullPage: true }).catch(() => {});
+  handle.updatedAt = new Date().toISOString();
+  handle.screenshotPath = screenshotPath;
+  return {
+    screenshotPath,
+    currentUrl: String(handle.page.url() ?? "").trim(),
+    title: String((await handle.page.title().catch(() => "")) ?? ""),
+    updatedAt: handle.updatedAt,
+  };
+}
+
+async function searchMailbox(accountId: string, input: MailboxSearchInput = {}): Promise<MailboxSearchResult> {
+  const query = String(input.query ?? "").trim();
+  if (!query) throw new Error("query is required.");
+  const handle = await ensureReadySession(accountId, input);
+  const search = await runGmailSearch(handle.page, query);
+  const page = await captureSessionPage(handle, "search");
+  return {
+    ok: true,
+    accountId: handle.accountId,
+    fromEmail: handle.fromEmail,
+    query,
+    bodyExcerpt: excerptAround(search.bodyText, [query], 3000),
+    screenshotPath: page.screenshotPath,
+    currentUrl: page.currentUrl,
+    title: page.title,
+    updatedAt: page.updatedAt,
+  };
+}
+
+async function verifySentMessage(
+  accountId: string,
+  input: SentVerificationInput = {}
+): Promise<SentVerificationResponse> {
+  const recipient = String(input.recipient ?? "").trim().toLowerCase();
+  const subject = String(input.subject ?? "").trim();
+  const body = String(input.body ?? "").trim();
+  if (!recipient || (!subject && !body)) {
+    throw new Error("recipient and either subject or body are required.");
+  }
+
+  const handle = await ensureReadySession(accountId, input);
+  const verification = await verifyMessageInSentDetailed(handle.page, {
+    recipient,
+    subject,
+    body,
+  });
+  const page = await captureSessionPage(handle, verification.verified ? "sent-verified" : "sent-unverified");
+  return {
+    ok: true,
+    accountId: handle.accountId,
+    fromEmail: handle.fromEmail,
+    verification,
+    screenshotPath: page.screenshotPath,
+    currentUrl: page.currentUrl,
+    title: page.title,
+    updatedAt: page.updatedAt,
+  };
+}
+
 async function sendMessage(accountId: string, input: SendInput = {}): Promise<SendResult> {
   const recipient = String(input.recipient ?? "").trim().toLowerCase();
   const subject = String(input.subject ?? "").trim();
@@ -1865,13 +2080,8 @@ async function sendMessage(accountId: string, input: SendInput = {}): Promise<Se
     let handle: SessionHandle | null = null;
 
     try {
-      await navigateSessionToInbox(sessions.get(accountId) ?? null);
-      await ensureSessionReadyForSend(accountId, input);
-      handle = sessions.get(accountId) ?? null;
+      handle = await ensureReadySession(accountId, input);
       lastHandle = handle;
-      if (!handle || handle.page.isClosed()) {
-        throw new Error("No active Gmail worker session for this sender.");
-      }
 
       await navigateSessionToInbox(handle);
 
@@ -1895,14 +2105,26 @@ async function sendMessage(accountId: string, input: SendInput = {}): Promise<Se
         }
       );
 
+      const sentVerification = await verifyMessageInSentDetailed(handle.page, { recipient, subject, body });
+      if (!sentVerification.verified) {
+        const page = await captureSessionPage(handle, "send-unverified");
+        return {
+          ok: false,
+          accountId: handle.accountId,
+          fromEmail: handle.fromEmail,
+          providerMessageId: "",
+          error: `Gmail UI send was not verified in Sent Mail for ${recipient}: ${sentVerification.reason}`,
+          sentVerified: false,
+          sentVerification,
+          screenshotPath: page.screenshotPath,
+          currentUrl: page.currentUrl,
+          title: page.title,
+          updatedAt: page.updatedAt,
+        };
+      }
+
       await navigateSessionToInbox(handle);
-      const screenshotPath = path.join(
-        SCREENSHOT_DIR,
-        `${handle.accountId}-send-${Date.now().toString(36)}.png`
-      );
-      await handle.page.screenshot({ path: screenshotPath, fullPage: true }).catch(() => {});
-      handle.updatedAt = new Date().toISOString();
-      handle.screenshotPath = screenshotPath;
+      const page = await captureSessionPage(handle, "send");
 
       return {
         ok: true,
@@ -1910,10 +2132,12 @@ async function sendMessage(accountId: string, input: SendInput = {}): Promise<Se
         fromEmail: handle.fromEmail,
         providerMessageId: `gmail_ui_${Date.now().toString(36)}`,
         error: "",
-        screenshotPath,
-        currentUrl: String(handle.page.url() ?? "").trim(),
-        title: String((await handle.page.title().catch(() => "")) ?? ""),
-        updatedAt: handle.updatedAt,
+        sentVerified: true,
+        sentVerification,
+        screenshotPath: page.screenshotPath,
+        currentUrl: page.currentUrl,
+        title: page.title,
+        updatedAt: page.updatedAt,
       };
     } catch (error) {
       if (attempt === 0 && !sendAttempted && isPageClosedError(error)) {
@@ -1925,13 +2149,7 @@ async function sendMessage(accountId: string, input: SendInput = {}): Promise<Se
       if (!failedHandle) {
         throw error;
       }
-      const screenshotPath = path.join(
-        SCREENSHOT_DIR,
-        `${failedHandle.accountId}-send-failure-${Date.now().toString(36)}.png`
-      );
-      await failedHandle.page.screenshot({ path: screenshotPath, fullPage: true }).catch(() => {});
-      failedHandle.updatedAt = new Date().toISOString();
-      failedHandle.screenshotPath = screenshotPath;
+      const page = await captureSessionPage(failedHandle, "send-failure");
 
       return {
         ok: false,
@@ -1939,10 +2157,11 @@ async function sendMessage(accountId: string, input: SendInput = {}): Promise<Se
         fromEmail: failedHandle.fromEmail,
         providerMessageId: "",
         error: error instanceof Error ? error.message : "Failed to send Gmail UI message on the worker.",
-        screenshotPath,
-        currentUrl: String(failedHandle.page.url() ?? "").trim(),
-        title: String((await failedHandle.page.title().catch(() => "")) ?? ""),
-        updatedAt: failedHandle.updatedAt,
+        sentVerified: false,
+        screenshotPath: page.screenshotPath,
+        currentUrl: page.currentUrl,
+        title: page.title,
+        updatedAt: page.updatedAt,
       };
     }
   }
@@ -2042,6 +2261,50 @@ async function route(request: http.IncomingMessage, response: http.ServerRespons
       sendJson(response, 200, snapshot);
     } catch (err) {
       sendJson(response, 500, { error: err instanceof Error ? err.message : "Failed to advance Gmail session" });
+    }
+    return;
+  }
+
+  const searchMatch = url.pathname.match(/^\/accounts\/([^/]+)\/search$/);
+  if (request.method === "POST" && searchMatch) {
+    const body = await readJsonBody(request);
+    try {
+      const result = await searchMailbox(decodeURIComponent(searchMatch[1]), {
+        query: String(body.query ?? "").trim(),
+        otp: String(body.otp ?? "").trim(),
+        password: String(body.password ?? "").trim(),
+        ignoreConfiguredProxy:
+          body.ignoreConfiguredProxy === undefined
+            ? undefined
+            : Boolean(body.ignoreConfiguredProxy),
+        refreshMailpoolCredentials: body.refreshMailpoolCredentials !== false,
+      });
+      sendJson(response, 200, result as unknown as Record<string, unknown>);
+    } catch (err) {
+      sendJson(response, 500, { error: err instanceof Error ? err.message : "Failed to search Gmail UI mailbox" });
+    }
+    return;
+  }
+
+  const sentVerifyMatch = url.pathname.match(/^\/accounts\/([^/]+)\/sent\/verify$/);
+  if (request.method === "POST" && sentVerifyMatch) {
+    const body = await readJsonBody(request);
+    try {
+      const result = await verifySentMessage(decodeURIComponent(sentVerifyMatch[1]), {
+        recipient: String(body.recipient ?? "").trim(),
+        subject: String(body.subject ?? "").trim(),
+        body: String(body.body ?? "").trim(),
+        otp: String(body.otp ?? "").trim(),
+        password: String(body.password ?? "").trim(),
+        ignoreConfiguredProxy:
+          body.ignoreConfiguredProxy === undefined
+            ? undefined
+            : Boolean(body.ignoreConfiguredProxy),
+        refreshMailpoolCredentials: body.refreshMailpoolCredentials !== false,
+      });
+      sendJson(response, 200, result as unknown as Record<string, unknown>);
+    } catch (err) {
+      sendJson(response, 500, { error: err instanceof Error ? err.message : "Failed to verify Gmail UI sent mail" });
     }
     return;
   }

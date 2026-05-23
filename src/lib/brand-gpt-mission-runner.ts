@@ -160,7 +160,6 @@ async function ensureMissionThread(mission: Mission) {
   })).find((thread) => thread.title === title);
   if (existing) return existing;
   return createOperatorThread({
-    userId: RUNNER_AGENT,
     brandId: mission.brandId,
     title,
     lastSummary: "Brand GPT autonomous mission runner is ready.",
@@ -299,7 +298,6 @@ async function runMission(input: {
     mode: input.config.mode,
   });
   const response = await runOperatorChatTurn({
-    userId: RUNNER_AGENT,
     brandId: refreshed.brandId,
     threadId: thread.id,
     message,

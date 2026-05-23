@@ -193,7 +193,12 @@ import {
 } from "@/lib/outreach-account-helpers";
 import { admitCustomerIoProfileForSend } from "@/lib/outreach-customerio-budget";
 import { resolveLlmModel } from "@/lib/llm-router";
-import { inspectMailboxPlacement, listInboxMessages, type MailboxPlacementVerdict } from "@/lib/mailbox-imap";
+import {
+  inspectMailboxPlacement,
+  listInboxMessages,
+  verifySentMailboxMessage,
+  type MailboxPlacementVerdict,
+} from "@/lib/mailbox-imap";
 import {
   getOutreachProvisioningSettings,
   getOutreachProvisioningSettingsSecrets,
@@ -16351,7 +16356,75 @@ async function processMonitorDeliverabilityJob(job: OutreachJob) {
     return;
   }
 
-  const finalResults = [...previousResults, ...pollResults];
+  let finalResults = [...previousResults, ...pollResults];
+  let senderSentVerification:
+    | {
+        checked: boolean;
+        allVerified: boolean;
+        checks: Array<{
+          email: string;
+          ok: boolean;
+          found: boolean;
+          matchedMailbox: string;
+          matchedUid: number;
+          error: string;
+        }>;
+      }
+    | null = null;
+
+  if (finalResults.length && finalResults.every((result) => result.placement === "not_found")) {
+    const senderMailbox = senderChoice.slot.account.config.mailbox;
+    const senderPassword = senderChoice.slot.secrets.mailboxPassword.trim();
+    if (
+      senderMailbox.host.trim() &&
+      senderMailbox.email.trim() &&
+      senderPassword &&
+      senderChoice.slot.account.config.mailbox.deliveryMethod === "gmail_ui"
+    ) {
+      const checks = await Promise.all(
+        finalResults.map(async (result) => {
+          const verification = await verifySentMailboxMessage({
+            mailbox: {
+              host: senderMailbox.host.trim(),
+              port: Number(senderMailbox.port ?? 993) || 993,
+              secure: senderMailbox.secure !== false,
+              email: senderMailbox.email.trim(),
+              password: senderPassword,
+            },
+            recipient: result.email,
+            subject,
+            since: new Date(Date.now() - DAY_MS),
+          });
+          return {
+            email: result.email,
+            ok: verification.ok,
+            found: verification.found,
+            matchedMailbox: verification.matchedMailbox,
+            matchedUid: verification.matchedUid,
+            error: verification.error,
+          };
+        })
+      );
+      const decisiveChecks = checks.filter((check) => check.ok);
+      const allVerified = checks.length > 0 && checks.every((check) => check.ok && check.found);
+      senderSentVerification = {
+        checked: true,
+        allVerified,
+        checks,
+      };
+
+      if (decisiveChecks.length > 0 && decisiveChecks.every((check) => !check.found)) {
+        finalResults = finalResults.map((result) => ({
+          ...result,
+          placement: "error",
+          ok: false,
+          error:
+            "Sender sent-mail verification did not find this probe, so the system is treating the check as a send-verification failure instead of a deliverability placement result.",
+        }));
+      }
+    }
+  }
+
   const aggregate = summarizeDeliverabilityProbeResults(finalResults);
   const completedReservationIds = monitorTargetsForPoll
     .map((target) => target.reservationId ?? "")
@@ -16403,6 +16476,7 @@ async function processMonitorDeliverabilityJob(job: OutreachJob) {
       counts: aggregate.counts,
       summaryText: aggregate.summaryText,
       monitorResults: finalResults,
+      senderSentVerification,
     },
   });
 

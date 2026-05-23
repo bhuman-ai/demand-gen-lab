@@ -178,6 +178,20 @@ function resolveAllMailMailbox(mailboxes: ImapMailbox[]) {
   );
 }
 
+function resolveSentMailbox(mailboxes: ImapMailbox[]) {
+  return (
+    mailboxByAttribute(mailboxes, ["\\Sent"]) ??
+    mailboxByName(mailboxes, /(^|\/)(sent|sent mail)$/i)
+  );
+}
+
+function normalizeMailboxSubject(value: string) {
+  return String(value ?? "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
 class ImapClient {
   private socket: tls.TLSSocket | net.Socket | null = null;
   private connected = false;
@@ -470,6 +484,73 @@ export async function listInboxMessages(input: {
       if (fetched) messages.push(fetched);
     }
     return messages;
+  } finally {
+    await client.close();
+  }
+}
+
+export async function verifySentMailboxMessage(input: {
+  mailbox: ImapMailboxConfig;
+  recipient: string;
+  subject: string;
+  since?: Date;
+  maxCandidates?: number;
+}) {
+  const client = new ImapClient(input.mailbox);
+  try {
+    await client.connect();
+    const mailboxes = await client.listMailboxes();
+    const sent = resolveSentMailbox(mailboxes)?.name ?? "";
+    if (!sent) {
+      return {
+        ok: false,
+        found: false,
+        matchedMailbox: "",
+        matchedUid: 0,
+        error: "No sent mailbox was available",
+      };
+    }
+
+    const since = formatImapSinceDate(input.since ?? new Date(Date.now() - 24 * 60 * 60 * 1000));
+    const uids = await client.searchMailbox(sent, [
+      "SINCE",
+      since,
+      "TO",
+      imapQuoted(input.recipient),
+    ]);
+    const expectedSubject = normalizeMailboxSubject(input.subject);
+    const candidateLimit = Math.max(1, Math.min(25, Math.round(Number(input.maxCandidates ?? 10) || 10)));
+    const candidates = uids.slice(-candidateLimit).reverse();
+
+    for (const uid of candidates) {
+      const message = await client.fetchMailboxMessage(sent, uid, 4_000);
+      const candidateSubject = normalizeMailboxSubject(message?.subject ?? "");
+      if (message && candidateSubject === expectedSubject) {
+        return {
+          ok: true,
+          found: true,
+          matchedMailbox: sent,
+          matchedUid: uid,
+          error: "",
+        };
+      }
+    }
+
+    return {
+      ok: true,
+      found: false,
+      matchedMailbox: "",
+      matchedUid: 0,
+      error: "",
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      found: false,
+      matchedMailbox: "",
+      matchedUid: 0,
+      error: error instanceof Error ? error.message : "Sent mailbox verification failed",
+    };
   } finally {
     await client.close();
   }

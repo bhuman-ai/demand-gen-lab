@@ -15637,6 +15637,17 @@ async function autoFailoverRunSender(input: {
   };
 }
 
+function isRetryableMonitoringProbeSendError(error: string) {
+  const normalized = String(error ?? "").toLowerCase();
+  return (
+    normalized.includes("gmail send confirmation did not appear") ||
+    normalized.includes("opening in existing browser session") ||
+    normalized.includes("target page, context or browser has been closed") ||
+    normalized.includes("browser has been closed") ||
+    (normalized.includes("locator.click") && normalized.includes("compose"))
+  );
+}
+
 async function processMonitorDeliverabilityJob(job: OutreachJob) {
   const run = await getOutreachRun(job.runId);
   if (!run) return;
@@ -16082,6 +16093,39 @@ async function processMonitorDeliverabilityJob(job: OutreachJob) {
     }
 
     if (!sentTargets.length) {
+      const retryableSendFailure = initialResults.some((result) =>
+        isRetryableMonitoringProbeSendError(result.error)
+      );
+      if (retryableSendFailure && job.attempts < job.maxAttempts) {
+        if (probeRun) {
+          await updateDeliverabilityProbeRun(probeRun.id, {
+            status: "queued",
+            stage: "send",
+            results: initialResults,
+            totalMonitors: initialResults.length,
+            lastError: "Retrying transient Gmail UI probe send failure",
+          });
+        }
+        await createOutreachEvent({
+          runId: run.id,
+          eventType: "deliverability_probe_send_retry_queued",
+          payload: {
+            reason: "Transient Gmail UI send failure; job will retry with the sender profile reset.",
+            probeToken,
+            probeRunId: probeRun?.id ?? "",
+            probeVariant,
+            attempt: job.attempts,
+            maxAttempts: job.maxAttempts,
+            initialResults,
+          },
+        });
+        throw new Error(
+          `Retryable monitoring probe send failed for every seed mailbox: ${initialResults
+            .map((result) => result.error)
+            .filter(Boolean)
+            .join(" | ")}`
+        );
+      }
       if (probeRun) {
         await updateDeliverabilityProbeRun(probeRun.id, {
           status: "failed",

@@ -1,0 +1,366 @@
+import { generateJsonWithLlm } from "@/lib/llm-json";
+import type {
+  OperatorChatAssistantReply,
+  OperatorChatRequest,
+  OperatorRequestedAction,
+  OperatorToolName,
+  OperatorToolResult,
+  OperatorToolSpec,
+} from "@/lib/operator-types";
+
+export type BrandAgentTraceEntry = {
+  step: number;
+  toolName: string;
+  riskLevel: string;
+  input: Record<string, unknown>;
+  summary: string;
+  result: Record<string, unknown>;
+  error: string;
+  rationale?: string;
+};
+
+export type BrandAgentRecentMessage = {
+  role: string;
+  kind: string;
+  text: string;
+};
+
+export type BrandAgentTurnResult = {
+  assistant: OperatorChatAssistantReply;
+  requestedAction: OperatorRequestedAction | null;
+  model: string;
+  trace: BrandAgentTraceEntry[];
+};
+
+type AgentStep = {
+  message: string;
+  done: boolean;
+  toolName: string;
+  toolInputJson: string;
+  rationale: string;
+};
+
+function asString(value: unknown) {
+  return String(value ?? "").trim();
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    return value as Record<string, unknown>;
+  }
+  return {};
+}
+
+function maybeJson(value: unknown) {
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return "";
+  }
+}
+
+function truncateText(value: string, maxLength: number) {
+  return value.length > maxLength ? `${value.slice(0, maxLength)}... [truncated]` : value;
+}
+
+function redactSensitiveKeys(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map((entry) => redactSensitiveKeys(entry));
+  if (!value || typeof value !== "object") return value;
+  const clean: Record<string, unknown> = {};
+  for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
+    if (/(api[_-]?key|password|secret|token|authorization|credential|authcode|refresh[_-]?token|access[_-]?token)/i.test(key)) {
+      clean[key] = "[redacted]";
+      continue;
+    }
+    clean[key] = redactSensitiveKeys(entry);
+  }
+  return clean;
+}
+
+function compactForPrompt(value: unknown, maxLength: number) {
+  const redacted = redactSensitiveKeys(value);
+  const json = maybeJson(redacted);
+  if (!json) return redacted;
+  if (json.length <= maxLength) return redacted;
+  return {
+    truncated: true,
+    excerpt: truncateText(json, maxLength),
+  };
+}
+
+function normalizeAssistantReply(value: unknown, fallback: OperatorChatAssistantReply): OperatorChatAssistantReply {
+  const row = asRecord(value);
+  const summary = asString(row.message) || asString(row.summary) || fallback.summary;
+  return {
+    summary,
+    findings: [],
+    recommendations: [],
+  };
+}
+
+function parseAgentStep(rawText: string): AgentStep | null {
+  if (!rawText) return null;
+  let parsed: unknown = {};
+  try {
+    parsed = JSON.parse(rawText);
+  } catch {
+    console.error("Brand agent JSON parse failed", rawText.slice(0, 800));
+    return null;
+  }
+  const row = asRecord(parsed);
+  return {
+    message: asString(row.message),
+    done: row.done === true,
+    toolName: asString(row.toolName),
+    toolInputJson: asString(row.toolInputJson) || "{}",
+    rationale: asString(row.rationale),
+  };
+}
+
+function parseToolInput(value: string) {
+  try {
+    return asRecord(JSON.parse(value || "{}"));
+  } catch {
+    return {};
+  }
+}
+
+function buildToolCatalog(tools: OperatorToolSpec[]) {
+  return tools.map((tool) => ({
+    name: tool.name,
+    riskLevel: tool.riskLevel,
+    approvalMode: tool.approvalMode,
+    description: tool.description,
+  }));
+}
+
+function buildAgentPrompt(input: {
+  brandId: string;
+  message: string;
+  mode: OperatorChatRequest["mode"];
+  recentMessages: BrandAgentRecentMessage[];
+  compactContext: Record<string, unknown>;
+  memory: Record<string, unknown> | null;
+  tools: OperatorToolSpec[];
+  trace: BrandAgentTraceEntry[];
+  stepNumber: number;
+  maxSteps: number;
+}) {
+  const finalStep = input.stepNumber >= input.maxSteps;
+  const promptParts = [
+    "You are Brand GPT, an autonomous LastB2B growth operator running inside a Codex-style harness.",
+    "You are the reasoning engine. The host app only gives you scoped tools, permissions, tenant isolation, budgets, and audit logging.",
+    "Do not behave like a scripted support chatbot. Inspect evidence, decide the next useful tool call, observe results, and continue until you can answer or choose an action.",
+    "Respond with JSON only.",
+    'Return: {"message": string, "done": boolean, "toolName": string, "toolInputJson": string, "rationale": string}.',
+    'Use toolName "" and toolInputJson "{}" when you are not calling a tool.',
+    "Call at most one tool per step.",
+    "Read tools are your senses. Use them freely when the compact context is insufficient, stale, ambiguous, or lacks raw evidence.",
+    "If the user asks for actual content, causes, live account state, replies, drafts, campaign copy, deliverability evidence, leads, runs, or what changed, inspect with tools before answering from memory.",
+    "If you are unsure which read tool fits, call investigate_brand_data with brandId, query, and any known IDs.",
+    "Write tools are your hands. If a write/send/launch/delete/provision/buy action is the right next move, choose the matching write tool and stop; the host will execute or request confirmation according to risk.",
+    "Do not invent IDs, email bodies, replies, leads, sender state, domains, accounts, or metrics.",
+    "Do not expose credentials or internal API secrets.",
+    "Use the active brand as the default scope.",
+    "For tool inputs, include brandId when the tool is brand-scoped. Use IDs from context or previous tool results when available.",
+    "For broad investigations, useful inputs are brandId, query, threadId, runId, leadId, campaignId, experimentId, maxThreads, maxMessages, and maxRuns.",
+    "If mode is recommendation_only, do not choose safe_write or guarded_write tools.",
+    "Speak plainly and directly in message. No headings unless the user asks for a report.",
+    finalStep
+      ? "This is the final planning step. If you do not already have enough evidence for another safe read, answer with the best supported statement and no tool call."
+      : "If another read is useful, call it now instead of guessing.",
+    `Mode: ${input.mode === "recommendation_only" ? "recommendation_only" : "default"}`,
+    `Active brandId: ${input.brandId || "(none)"}`,
+    `Planning step: ${input.stepNumber} of ${input.maxSteps}`,
+    `Tool catalog JSON: ${JSON.stringify(buildToolCatalog(input.tools))}`,
+    `Recent conversation JSON: ${JSON.stringify(compactForPrompt(input.recentMessages, 6000))}`,
+    `Compact brand context JSON: ${JSON.stringify(compactForPrompt(input.compactContext, 12000))}`,
+    `Brand memory JSON: ${JSON.stringify(compactForPrompt(input.memory, 5000))}`,
+    `Tool observations so far JSON: ${JSON.stringify(
+      input.trace.map((entry) => ({
+        ...entry,
+        result: compactForPrompt(entry.result, 7000),
+      }))
+    )}`,
+    `Latest user message: ${input.message}`,
+  ];
+  return promptParts.join("\n\n");
+}
+
+export async function runBrandAgentTurn(input: {
+  brandId: string;
+  message: string;
+  mode: OperatorChatRequest["mode"];
+  recentMessages: BrandAgentRecentMessage[];
+  compactContext: Record<string, unknown>;
+  memory: Record<string, unknown> | null;
+  fallbackAssistant: OperatorChatAssistantReply;
+  tools: OperatorToolSpec[];
+  maxSteps: number;
+  reasoningEffort: string;
+  openAiOverrideModel?: string;
+  openRouterOverrideModel?: string;
+  normalizeToolCall: (call: OperatorRequestedAction) => OperatorRequestedAction | null;
+}): Promise<BrandAgentTurnResult | null> {
+  const trace: BrandAgentTraceEntry[] = [];
+  const toolByName = new Map(input.tools.map((tool) => [tool.name, tool]));
+  let assistant = input.fallbackAssistant;
+  let model = "brand-agent";
+
+  try {
+    for (let stepNumber = 1; stepNumber <= input.maxSteps; stepNumber += 1) {
+      const result = await generateJsonWithLlm({
+        task: "operator_chat",
+        prompt: buildAgentPrompt({
+          brandId: input.brandId,
+          message: input.message,
+          mode: input.mode,
+          recentMessages: input.recentMessages,
+          compactContext: input.compactContext,
+          memory: input.memory,
+          tools: input.tools,
+          trace,
+          stepNumber,
+          maxSteps: input.maxSteps,
+        }),
+        reasoningEffort: input.reasoningEffort,
+        openAiOverrideModel: input.openAiOverrideModel,
+        openRouterOverrideModel: input.openRouterOverrideModel,
+        maxOutputTokens: 1100,
+        format: {
+          type: "json_schema",
+          name: "brand_agent_step",
+          schema: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              message: { type: "string" },
+              done: { type: "boolean" },
+              toolName: { type: "string" },
+              toolInputJson: { type: "string" },
+              rationale: { type: "string" },
+            },
+            required: ["message", "done", "toolName", "toolInputJson", "rationale"],
+          },
+        },
+      });
+      model = `${result.provider}:${result.model}`;
+      const step = parseAgentStep(result.text);
+      if (!step) return null;
+
+      assistant = normalizeAssistantReply(step, input.fallbackAssistant);
+      const rawToolName = step.toolName as OperatorToolName;
+      if (!rawToolName) {
+        return {
+          assistant,
+          requestedAction: null,
+          model,
+          trace,
+        };
+      }
+
+      const tool = toolByName.get(rawToolName);
+      const rawToolInput = parseToolInput(step.toolInputJson);
+      if (!tool) {
+        trace.push({
+          step: stepNumber,
+          toolName: step.toolName,
+          riskLevel: "unknown",
+          input: rawToolInput,
+          summary: "",
+          result: {},
+          error: "The requested tool is not registered in this brand agent session.",
+          rationale: step.rationale,
+        });
+        continue;
+      }
+
+      if (input.mode === "recommendation_only" && tool.riskLevel !== "read") {
+        trace.push({
+          step: stepNumber,
+          toolName: tool.name,
+          riskLevel: tool.riskLevel,
+          input: rawToolInput,
+          summary: "",
+          result: {},
+          error: "The session is recommendation_only, so write tools are disabled.",
+          rationale: step.rationale,
+        });
+        continue;
+      }
+
+      const normalizedAction = input.normalizeToolCall({
+        toolName: tool.name,
+        input: rawToolInput,
+      });
+      if (!normalizedAction) {
+        trace.push({
+          step: stepNumber,
+          toolName: tool.name,
+          riskLevel: tool.riskLevel,
+          input: rawToolInput,
+          summary: "",
+          result: {},
+          error: "The tool call could not be resolved against the current brand context.",
+          rationale: step.rationale,
+        });
+        continue;
+      }
+
+      if (tool.riskLevel !== "read") {
+        return {
+          assistant,
+          requestedAction: normalizedAction,
+          model,
+          trace,
+        };
+      }
+
+      try {
+        const toolResult: OperatorToolResult = await tool.run(normalizedAction.input);
+        trace.push({
+          step: stepNumber,
+          toolName: normalizedAction.toolName,
+          riskLevel: tool.riskLevel,
+          input: normalizedAction.input,
+          summary: toolResult.summary,
+          result: asRecord(toolResult.result),
+          error: "",
+          rationale: step.rationale,
+        });
+      } catch (error) {
+        trace.push({
+          step: stepNumber,
+          toolName: normalizedAction.toolName,
+          riskLevel: tool.riskLevel,
+          input: normalizedAction.input,
+          summary: "",
+          result: {},
+          error: error instanceof Error ? error.message : "Brand agent tool call failed",
+          rationale: step.rationale,
+        });
+      }
+    }
+
+    return {
+      assistant:
+        trace.length > 0
+          ? {
+              summary:
+                assistant.summary ||
+                trace[trace.length - 1]?.error ||
+                trace[trace.length - 1]?.summary ||
+                input.fallbackAssistant.summary,
+              findings: [],
+              recommendations: [],
+            }
+          : input.fallbackAssistant,
+      requestedAction: null,
+      model,
+      trace,
+    };
+  } catch (error) {
+    console.error("Brand agent turn failed", error);
+    return null;
+  }
+}

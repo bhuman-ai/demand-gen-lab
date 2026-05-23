@@ -30,6 +30,15 @@ export type BrandAgentTurnResult = {
   requestedAction: OperatorRequestedAction | null;
   model: string;
   trace: BrandAgentTraceEntry[];
+  evidenceCheck: BrandAgentEvidenceCheck | null;
+};
+
+export type BrandAgentEvidenceStatus = "verified" | "inconclusive" | "insufficient";
+
+export type BrandAgentEvidenceCheck = {
+  status: BrandAgentEvidenceStatus;
+  summary: string;
+  gaps: string[];
 };
 
 type AgentStep = {
@@ -38,6 +47,9 @@ type AgentStep = {
   toolName: string;
   toolInputJson: string;
   rationale: string;
+  evidenceStatus: BrandAgentEvidenceStatus | "";
+  evidenceSummary: string;
+  evidenceGaps: string[];
 };
 
 function asString(value: unknown) {
@@ -98,6 +110,25 @@ function normalizeAssistantReply(value: unknown, fallback: OperatorChatAssistant
   };
 }
 
+function normalizeEvidenceStatus(value: unknown): BrandAgentEvidenceStatus | "" {
+  const normalized = asString(value).toLowerCase();
+  if (normalized === "verified" || normalized === "inconclusive" || normalized === "insufficient") {
+    return normalized;
+  }
+  return "";
+}
+
+function normalizeEvidenceCheck(step: AgentStep, trace: BrandAgentTraceEntry[]): BrandAgentEvidenceCheck | null {
+  const status = step.evidenceStatus || (trace.length ? "inconclusive" : "");
+  const summary = step.evidenceSummary || (trace.length ? "Tool observations were gathered, but the agent did not label what they prove." : "");
+  if (!status && !summary && !step.evidenceGaps.length) return null;
+  return {
+    status: status || "insufficient",
+    summary: summary || "No evidence self-check was provided.",
+    gaps: step.evidenceGaps,
+  };
+}
+
 function parseAgentStep(rawText: string): AgentStep | null {
   if (!rawText) return null;
   let parsed: unknown = {};
@@ -114,6 +145,11 @@ function parseAgentStep(rawText: string): AgentStep | null {
     toolName: asString(row.toolName),
     toolInputJson: asString(row.toolInputJson) || "{}",
     rationale: asString(row.rationale),
+    evidenceStatus: normalizeEvidenceStatus(row.evidenceStatus),
+    evidenceSummary: asString(row.evidenceSummary),
+    evidenceGaps: Array.isArray(row.evidenceGaps)
+      ? row.evidenceGaps.map((entry) => asString(entry)).filter(Boolean).slice(0, 6)
+      : [],
   };
 }
 
@@ -152,7 +188,7 @@ function buildAgentPrompt(input: {
     "You are the reasoning engine. The host app only gives you scoped tools, permissions, tenant isolation, budgets, and audit logging.",
     "Do not behave like a scripted support chatbot. Inspect evidence, decide the next useful tool call, observe results, and continue until you can answer or choose an action.",
     "Respond with JSON only.",
-    'Return: {"message": string, "done": boolean, "toolName": string, "toolInputJson": string, "rationale": string}.',
+    'Return: {"message": string, "done": boolean, "toolName": string, "toolInputJson": string, "rationale": string, "evidenceStatus": "verified"|"inconclusive"|"insufficient", "evidenceSummary": string, "evidenceGaps": string[]}.',
     'Use toolName "" and toolInputJson "{}" when you are not calling a tool.',
     "Call at most one tool per step.",
     "Read tools are your senses. Use them freely when the compact context is insufficient, stale, ambiguous, or lacks raw evidence.",
@@ -161,6 +197,8 @@ function buildAgentPrompt(input: {
     "Write tools are your hands. If a write/send/launch/delete/provision/buy action is the right next move, choose the matching write tool and stop; the host will execute or request confirmation according to risk.",
     "Do not invent IDs, email bodies, replies, leads, sender state, domains, accounts, or metrics.",
     "Do not expose credentials or internal API secrets.",
+    "Before every final answer, run an evidence self-check in the JSON fields. evidenceStatus=verified only when the observations directly prove the claim. Use inconclusive when evidence partially supports the answer but a key exact proof is missing. Use insufficient when you have not inspected enough live evidence.",
+    "For Gmail/send questions: broad Gmail searches such as in:sent prove only that matching mailbox rows exist. They do not prove a specific message was sent to a specific recipient. A specific sent-email claim needs gmail_ui_verify_sent with the exact recipient plus subject and/or body. If that exact verification is not present, say what broad search showed and mark the specific claim inconclusive.",
     "Use the active brand as the default scope.",
     "For tool inputs, include brandId when the tool is brand-scoped. Use IDs from context or previous tool results when available.",
     "For broad investigations, useful inputs are brandId, query, threadId, runId, leadId, campaignId, experimentId, maxThreads, maxMessages, and maxRuns.",
@@ -226,7 +264,7 @@ export async function runBrandAgentTurn(input: {
         reasoningEffort: input.reasoningEffort,
         openAiOverrideModel: input.openAiOverrideModel,
         openRouterOverrideModel: input.openRouterOverrideModel,
-        maxOutputTokens: 1100,
+        maxOutputTokens: 1600,
         format: {
           type: "json_schema",
           name: "brand_agent_step",
@@ -239,8 +277,20 @@ export async function runBrandAgentTurn(input: {
               toolName: { type: "string" },
               toolInputJson: { type: "string" },
               rationale: { type: "string" },
+              evidenceStatus: { type: "string", enum: ["verified", "inconclusive", "insufficient"] },
+              evidenceSummary: { type: "string" },
+              evidenceGaps: { type: "array", items: { type: "string" } },
             },
-            required: ["message", "done", "toolName", "toolInputJson", "rationale"],
+            required: [
+              "message",
+              "done",
+              "toolName",
+              "toolInputJson",
+              "rationale",
+              "evidenceStatus",
+              "evidenceSummary",
+              "evidenceGaps",
+            ],
           },
         },
       });
@@ -256,6 +306,7 @@ export async function runBrandAgentTurn(input: {
           requestedAction: null,
           model,
           trace,
+          evidenceCheck: normalizeEvidenceCheck(step, trace),
         };
       }
 
@@ -313,6 +364,7 @@ export async function runBrandAgentTurn(input: {
           requestedAction: normalizedAction,
           model,
           trace,
+          evidenceCheck: normalizeEvidenceCheck(step, trace),
         };
       }
 
@@ -358,6 +410,16 @@ export async function runBrandAgentTurn(input: {
       requestedAction: null,
       model,
       trace,
+      evidenceCheck: {
+        status: trace.some((entry) => entry.error) ? "inconclusive" : "insufficient",
+        summary:
+          trace.length > 0
+            ? "The agent reached the step limit after gathering evidence. Treat the answer as bounded by the visible observations."
+            : "The agent reached the step limit without gathering live evidence.",
+        gaps: trace.some((entry) => entry.error)
+          ? ["One or more tool calls failed before the final answer."]
+          : [],
+      },
     };
   } catch (error) {
     console.error("Brand agent turn failed", error);

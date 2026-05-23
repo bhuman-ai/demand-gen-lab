@@ -152,6 +152,13 @@ function riskFromResponse(response: OperatorChatResponse): MissionRiskLevel {
   return executionRisk;
 }
 
+function isPlannerUnavailableResponse(response: OperatorChatResponse, summary: string) {
+  return (
+    response.run.model === "operator-v1" &&
+    summary.toLowerCase().includes("couldn't reach the ai planner")
+  );
+}
+
 async function ensureMissionThread(mission: Mission) {
   const title = `${RUNNER_THREAD_PREFIX} ${mission.id}`;
   const existing = (await listOperatorThreads({
@@ -305,7 +312,56 @@ async function runMission(input: {
   });
   const evidence = extractEvidence(response);
   const summary = truncateText(response.assistant.summary, 1200);
+  const plannerUnavailable = isPlannerUnavailableResponse(response, summary);
   const action = response.execution?.toolName || response.actions[0]?.toolName || "autonomous_heartbeat";
+
+  if (plannerUnavailable) {
+    await createMissionAgentDecision({
+      missionId: refreshed.id,
+      brandId: refreshed.brandId,
+      agent: RUNNER_AGENT,
+      action: "planner_unavailable",
+      rationale: "Brand GPT could not reach the planner during this autonomous heartbeat.",
+      riskLevel: "read",
+      input: {
+        threadId: response.thread.id,
+        mode: input.config.mode,
+        prompt: "autonomous mission heartbeat",
+      },
+      output: {
+        runId: response.run.id,
+        model: response.run.model,
+        runStatus: response.run.status,
+        assistant: response.assistant,
+      },
+    });
+    await createMissionEvent({
+      missionId: refreshed.id,
+      brandId: refreshed.brandId,
+      eventType: "brand_gpt_planner_unavailable",
+      summary,
+      payload: {
+        threadId: response.thread.id,
+        runId: response.run.id,
+        model: response.run.model,
+      },
+    });
+    return {
+      missionId: refreshed.id,
+      brandId: refreshed.brandId,
+      brandName,
+      status: refreshed.status,
+      ok: false,
+      skipped: false,
+      reason: "planner_unavailable",
+      threadId: response.thread.id,
+      runId: response.run.id,
+      model: response.run.model,
+      summary,
+      evidenceStatus: "",
+      error: "Brand GPT planner was unavailable for this mission tick.",
+    };
+  }
 
   await createMissionAgentDecision({
     missionId: refreshed.id,

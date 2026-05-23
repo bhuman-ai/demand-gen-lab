@@ -9,6 +9,7 @@ import {
   getOperatorThread,
   listOperatorActionsByThread,
   listOperatorMessages,
+  listOperatorRunsByThread,
   updateOperatorAction,
   updateOperatorRun,
   updateOperatorThread,
@@ -28,6 +29,7 @@ import type {
   OperatorChatAssistantReply,
   OperatorChatRequest,
   OperatorChatResponse,
+  OperatorChatStartResponse,
   OperatorEvidenceCheck,
   OperatorEvidenceTraceEntry,
   OperatorExecutionEnvelope,
@@ -38,7 +40,9 @@ import type {
   OperatorMessage,
   OperatorRequestedAction,
   OperatorReceipt,
+  OperatorRun,
   OperatorRunStatus,
+  OperatorThread,
   OperatorThreadDetail,
   OperatorToolName,
   OperatorToolSpec,
@@ -55,6 +59,12 @@ type OperatorPlannerResult = {
   model: string;
   trace: BrandAgentTraceEntry[];
   evidenceCheck: BrandAgentEvidenceCheck | null;
+};
+
+type OperatorChatTurnInternalRequest = OperatorChatRequest & {
+  existingRunId?: string;
+  existingThread?: OperatorThread;
+  skipUserMessage?: boolean;
 };
 
 function nowIso() {
@@ -2612,6 +2622,7 @@ async function createAssistantMessage(
   evidence?: {
     trace?: OperatorEvidenceTraceEntry[];
     check?: OperatorEvidenceCheck | null;
+    run?: Pick<OperatorRun, "id" | "status" | "model" | "startedAt" | "completedAt">;
   }
 ) {
   return createOperatorMessage({
@@ -2624,6 +2635,7 @@ async function createAssistantMessage(
       execution,
       evidenceTrace: evidence?.trace ?? [],
       evidenceCheck: evidence?.check ?? null,
+      run: evidence?.run ?? null,
     },
   });
 }
@@ -2670,8 +2682,14 @@ async function executeToolAction(input: {
   return { result, updatedAction };
 }
 
-export async function runOperatorChatTurn(input: OperatorChatRequest): Promise<OperatorChatResponse> {
-  let runId = "";
+async function resolveOperatorThread(input: {
+  threadId?: string;
+  userId?: string;
+  brandId?: string;
+  message: string;
+  existingThread?: OperatorThread;
+}) {
+  if (input.existingThread) return input.existingThread;
   const requestedThreadId = input.threadId?.trim() ?? "";
   const requestedBrandId = asString(input.brandId);
   const loadedThread = requestedThreadId ? await getOperatorThread(requestedThreadId) : null;
@@ -2690,14 +2708,138 @@ export async function runOperatorChatTurn(input: OperatorChatRequest): Promise<O
   } else if (!thread.title.trim()) {
     thread = (await updateOperatorThread(thread.id, { title: titleFromMessage(input.message) })) ?? thread;
   }
+  return thread;
+}
 
+export async function startOperatorChatRun(input: OperatorChatRequest): Promise<OperatorChatStartResponse> {
+  const thread = await resolveOperatorThread(input);
   const resolvedBrandId = asString(input.brandId) || thread.brandId;
-  await createOperatorMessage({
+  const message = await createOperatorMessage({
     threadId: thread.id,
     role: "user",
     kind: "message",
     content: { text: input.message },
   });
+  const brandContext = resolvedBrandId ? await getOperatorBrandContext(resolvedBrandId) : null;
+  const run = await createOperatorRun({
+    threadId: thread.id,
+    brandId: resolvedBrandId,
+    model: "operator-agent-queued",
+    contextSnapshot: {
+      ...snapshotContext(brandContext),
+      pendingMessageId: message.id,
+      requestedMode: input.mode === "recommendation_only" ? "recommendation_only" : "default",
+      queuedAt: nowIso(),
+    },
+    plan: [
+      {
+        step: "queued",
+        status: "running",
+        summary: "Brand GPT run is queued and ready for the tool loop.",
+      },
+    ],
+  });
+  const updatedThread =
+    (await updateOperatorThread(thread.id, {
+      lastSummary: "Brand GPT is working on the latest request.",
+    })) ?? thread;
+  return {
+    thread: updatedThread,
+    run,
+    message,
+  };
+}
+
+export async function processOperatorChatRun(input: {
+  runId: string;
+  userId?: string;
+}): Promise<OperatorChatResponse> {
+  const run = await getOperatorRun(input.runId);
+  if (!run) {
+    const error = new Error("Operator run not found") as Error & { status?: number };
+    error.status = 404;
+    throw error;
+  }
+  const thread = await getOperatorThread(run.threadId);
+  if (!thread) {
+    const error = new Error("Operator thread not found") as Error & { status?: number };
+    error.status = 404;
+    throw error;
+  }
+  if (run.status !== "running") {
+    return buildChatResponseFromThread({
+      threadId: thread.id,
+      runId: run.id,
+      runStatus: run.status,
+      model: run.model,
+    });
+  }
+
+  const messages = await listOperatorMessages(thread.id);
+  const pendingMessageId = asString(run.contextSnapshot.pendingMessageId);
+  const pendingMessage =
+    (pendingMessageId ? messages.find((message) => message.id === pendingMessageId) : null) ??
+    [...messages].reverse().find((message) => message.role === "user" && message.kind === "message") ??
+    null;
+  const message = asString(pendingMessage?.content.text);
+  if (!message) {
+    const errorText = "Brand GPT run has no user message to process.";
+    await updateOperatorRun(run.id, {
+      status: "failed",
+      errorText,
+      completedAt: nowIso(),
+    });
+    await createAssistantMessage(
+      thread.id,
+      {
+        summary: errorText,
+        findings: [],
+        recommendations: [],
+      },
+      buildExecutionEnvelope({ state: "failed", error: errorText }),
+      {
+        run: {
+          id: run.id,
+          status: "failed",
+          model: run.model,
+          startedAt: run.startedAt,
+          completedAt: nowIso(),
+        },
+      }
+    );
+    return buildChatResponseFromThread({
+      threadId: thread.id,
+      runId: run.id,
+      runStatus: "failed",
+      model: run.model,
+    });
+  }
+
+  return runOperatorChatTurn({
+    threadId: thread.id,
+    userId: input.userId,
+    brandId: run.brandId || thread.brandId,
+    message,
+    mode: asString(run.contextSnapshot.requestedMode) === "recommendation_only" ? "recommendation_only" : "default",
+    existingRunId: run.id,
+    existingThread: thread,
+    skipUserMessage: true,
+  });
+}
+
+export async function runOperatorChatTurn(input: OperatorChatTurnInternalRequest): Promise<OperatorChatResponse> {
+  let runId = "";
+  const thread = await resolveOperatorThread(input);
+
+  const resolvedBrandId = asString(input.brandId) || thread.brandId;
+  if (!input.skipUserMessage) {
+    await createOperatorMessage({
+      threadId: thread.id,
+      role: "user",
+      kind: "message",
+      content: { text: input.message },
+    });
+  }
 
   const [brandContext, brandMemory] = resolvedBrandId
     ? await Promise.all([
@@ -2799,36 +2941,61 @@ export async function runOperatorChatTurn(input: OperatorChatRequest): Promise<O
             : null)
         )
       : filterRequestedActionForMessage(inferredFallbackAction, effectiveMessage);
-  const run = await createOperatorRun({
-    threadId: thread.id,
-    brandId: resolvedBrandId,
-    model:
-      llmPlan?.model ??
-      (structuredAction
-        ? "operator-structured-action"
-        : continuation?.kind === "confirm_action"
-          ? "operator-inline-confirm"
-          : continuation?.kind === "cancel_action"
-            ? "operator-inline-cancel"
-            : "operator-v1"),
-    contextSnapshot: snapshotContext(brandContext),
-    plan: [
-      ...((llmPlan?.trace ?? []).map((entry) => ({
-        step: entry.toolName,
-        status: entry.error ? "completed_with_error" : "completed",
-        summary: entry.error || entry.summary,
-      })) as Array<Record<string, unknown>>),
-      ...(continuation?.kind === "confirm_action"
-        ? [{ step: "confirm_action", status: "in_progress", actionId: continuation.actionId }]
-        : []),
-      ...(continuation?.kind === "cancel_action"
-        ? [{ step: "cancel_action", status: "in_progress", actionId: continuation.actionId }]
-        : []),
-      ...(requestedAction
-        ? [{ step: requestedAction.toolName, status: "in_progress" }]
-        : []),
-    ],
-  });
+  const runModel =
+    llmPlan?.model ??
+    (structuredAction
+      ? "operator-structured-action"
+      : continuation?.kind === "confirm_action"
+        ? "operator-inline-confirm"
+        : continuation?.kind === "cancel_action"
+          ? "operator-inline-cancel"
+          : "operator-v1");
+  const runPlan = [
+    ...((llmPlan?.trace ?? []).map((entry) => ({
+      step: entry.toolName,
+      status: entry.error ? "completed_with_error" : "completed",
+      summary: entry.error || entry.summary,
+    })) as Array<Record<string, unknown>>),
+    ...(continuation?.kind === "confirm_action"
+      ? [{ step: "confirm_action", status: "in_progress", actionId: continuation.actionId }]
+      : []),
+    ...(continuation?.kind === "cancel_action"
+      ? [{ step: "cancel_action", status: "in_progress", actionId: continuation.actionId }]
+      : []),
+    ...(requestedAction
+      ? [{ step: requestedAction.toolName, status: "in_progress" }]
+      : []),
+  ];
+  let run = input.existingRunId ? await getOperatorRun(input.existingRunId) : null;
+  if (input.existingRunId && !run) {
+    const error = new Error("Operator run not found") as Error & { status?: number };
+    error.status = 404;
+    throw error;
+  }
+  if (run && run.threadId !== thread.id) {
+    throw new Error("Operator run does not belong to this thread.");
+  }
+  if (run) {
+    run =
+      (await updateOperatorRun(run.id, {
+        status: "running",
+        model: runModel,
+        contextSnapshot: {
+          ...run.contextSnapshot,
+          ...snapshotContext(brandContext),
+          processingStartedAt: nowIso(),
+        },
+        plan: runPlan,
+      })) ?? run;
+  } else {
+    run = await createOperatorRun({
+      threadId: thread.id,
+      brandId: resolvedBrandId,
+      model: runModel,
+      contextSnapshot: snapshotContext(brandContext),
+      plan: runPlan,
+    });
+  }
   runId = run.id;
 
   try {
@@ -3168,15 +3335,19 @@ export async function runOperatorChatTurn(input: OperatorChatRequest): Promise<O
       if (disambiguation) {
         assistant = disambiguation.assistant;
         execution = disambiguation.execution;
+      } else if (plannerUnavailable) {
+        assistant = {
+          summary:
+            "I couldn't reach the AI planner for this turn, so I don't trust a real account answer yet. I did not make any changes.",
+          findings: [],
+          recommendations: [],
+        };
+        execution = buildExecutionEnvelope({
+          state: "failed",
+          error: "Brand GPT planner was unavailable for this run.",
+        });
       } else {
-        assistant = plannerUnavailable
-          ? {
-              summary:
-                "I couldn't reach the AI planner for this turn, so I don't trust a real account answer yet. I did not make any changes.",
-              findings: [],
-              recommendations: [],
-            }
-          : makeUnexecutedActionAssistant(effectiveMessage, llmPlan?.assistant ?? fallbackAssistant);
+        assistant = makeUnexecutedActionAssistant(effectiveMessage, llmPlan?.assistant ?? fallbackAssistant);
         execution = isExplicitMutationRequest(effectiveMessage)
           ? buildNeedInfoEnvelope({
               missingFields: [],
@@ -3192,19 +3363,27 @@ export async function runOperatorChatTurn(input: OperatorChatRequest): Promise<O
       }
     }
 
+    const runStatus = execution?.state === "failed" ? "failed" : "completed";
+    const completedAt = nowIso();
     const assistantMessage = await createAssistantMessage(thread.id, assistant, execution, {
       trace: buildEvidenceTrace(llmPlan?.trace),
       check: buildEvidenceCheck(llmPlan?.evidenceCheck),
+      run: {
+        id: run.id,
+        status: runStatus,
+        model: run.model,
+        startedAt: run.startedAt,
+        completedAt,
+      },
     });
     const updatedThread =
       (await updateOperatorThread(thread.id, {
         lastSummary: assistant.summary,
       })) ?? thread;
-    const runStatus = execution?.state === "failed" ? "failed" : "completed";
     await updateOperatorRun(run.id, {
       status: runStatus,
       contextSnapshot: snapshotContext(brandContext),
-      completedAt: nowIso(),
+      completedAt,
     });
 
     return {
@@ -3419,12 +3598,14 @@ export async function cancelOperatorAction(input: {
 export async function getOperatorThreadDetail(threadId: string): Promise<OperatorThreadDetail | null> {
   const thread = await getOperatorThread(threadId);
   if (!thread) return null;
-  const [messages, actions] = await Promise.all([
+  const [messages, actions, runs] = await Promise.all([
     listOperatorMessages(threadId),
     listOperatorActionsByThread(threadId),
+    listOperatorRunsByThread(threadId),
   ]);
   return {
     thread,
+    runs,
     messages,
     actions,
   };

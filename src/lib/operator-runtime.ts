@@ -21,7 +21,7 @@ import {
 } from "@/lib/operator-memory";
 import { getOperatorBrandContext } from "@/lib/operator-context";
 import { getOperatorToolSpec, listOperatorToolSpecs } from "@/lib/operator-tools";
-import { generateJsonWithLlm } from "@/lib/llm-json";
+import { runBrandAgentTurn } from "@/lib/brand-agent-runtime";
 import type {
   OperatorAction,
   OperatorActionSummary,
@@ -135,10 +135,6 @@ function buildGreetingAssistant(brandName?: string): OperatorChatAssistantReply 
     findings: [],
     recommendations: [],
   };
-}
-
-function looksLikeStatusSummary(summary: string) {
-  return /\bhas \d+\b|\bconfigured senders\b|\bcampaigns\b|\binbox thread\b|\brouting\b/i.test(summary);
 }
 
 function buildDefaultAssistantReply(input: {
@@ -939,22 +935,6 @@ function summarizePromptContext(
     },
     issues: context.issues,
     nextActions: context.nextActions,
-  };
-}
-
-function normalizeAssistantReply(
-  value: unknown,
-  fallback: OperatorChatAssistantReply,
-  options: { plainGreeting?: boolean } = {}
-): OperatorChatAssistantReply {
-  const row = asRecord(value);
-  const rawSummary = asString(row.message) || asString(row.summary) || fallback.summary;
-  const summary =
-    options.plainGreeting && looksLikeStatusSummary(rawSummary) ? fallback.summary : rawSummary;
-  return {
-    summary,
-    findings: [],
-    recommendations: [],
   };
 }
 
@@ -2161,103 +2141,6 @@ function shouldUseHeuristicFallbackAction(
   return true;
 }
 
-function buildOperatorPrompt(input: {
-  message: string;
-  mode: OperatorChatRequest["mode"];
-  messages: OperatorMessage[];
-  brandId: string;
-  context: Awaited<ReturnType<typeof getOperatorBrandContext>>;
-  brandMemory: OperatorBrandMemory | null;
-  trace: OperatorPlannerResult["trace"];
-  stepNumber: number;
-  maxSteps: number;
-}) {
-  const includeCampaigns = /\bcampaigns?\b/i.test(input.message);
-  const toolCatalog = listOperatorToolSpecs().map((tool) => ({
-    name: tool.name,
-    riskLevel: tool.riskLevel,
-    approvalMode: tool.approvalMode,
-    description: tool.description,
-  }));
-
-  return [
-    "You are Brand GPT, the LastB2B account assistant.",
-    "You are inside a multi-step planning loop.",
-    "Respond with JSON only.",
-    'The JSON object must contain: message (string), done (boolean), toolName (string), and toolInputJson (string).',
-    'Use toolName as an empty string when you are not calling a tool in this step.',
-    'Use toolInputJson as a JSON object string like "{}" or "{\\"brandId\\":\\"...\\"}".',
-    "You may call at most one tool per step.",
-    "Ground every statement in the supplied account context and recent thread messages.",
-    "Talk like a sharp human teammate, not a dashboard, support bot, or structured report.",
-    "Reply in plain conversational language.",
-    "Think like an open-ended, high-agency assistant. Use the rules here only as safety rails, not as an excuse to act dumb or overly literal.",
-    "Operate like Codex for this brand: inspect live evidence, decide what to inspect next, chain read tools, and answer from what you actually checked.",
-    "Do not answer that you lack data until you have used the broad read tools available to you. If compact context is missing detail, call investigate_brand_data with the user's question and any known IDs.",
-    "For questions like what did they say, show me the email, quote it, why did this happen, what changed, what failed, what should we reply, or anything that asks for actual content, use investigate_brand_data before answering.",
-    "Reads are intentionally broad and low risk. Use read tools freely. Writes, sends, purchases, deletes, launches, and external actions still require the matching write tool and its safety policy.",
-    "Do not use headings, bullets, or sections like 'What I found' or 'What I recommend'.",
-    "Only mention operational status when it is relevant to the user's message.",
-    "Treat the active brand as the default frame for the conversation.",
-    "If the user mentions a domain or brand name that already matches the active brand, do not switch into create_brand just because the name appears in the message.",
-    "Domains mentioned inside requests about experiments, campaigns, senders, leads, inbox, or settings are usually context, not a create_brand command.",
-    "When experiment data is present, prefer talking about experiments instead of campaigns unless the user specifically asks about campaigns.",
-    "If the context shows a usable preferred sender but it is still in testing or warming, explain that distinction instead of saying no sender is ready.",
-    "For Mailpool senders, spam checks come from Mailpool, but inbox placement uses the internal monitor pool. Treat them as separate checks.",
-    "A Mailpool spam score near 100 is strong. Do not describe 95/100 or similar scores as weak.",
-    "Do not infer missing inbox placement just because Mailpool inboxPlacementId is empty; Mailpool senders use the internal monitor pool for placement checks.",
-    "Do not merge experiments and campaigns into one count or one status line.",
-    "If experiments.running or experiments.sourcing is greater than 0, explicitly acknowledge that there is live experiment work.",
-    "Do not say everything is draft unless the context actually shows no running, sourcing, ready, completed, paused, or promoted experiments.",
-    "Do not contradict the numeric counts or statuses in the supplied context.",
-    "Prefer using read tools to inspect live state before giving confident operational advice or choosing a write action.",
-    "If a first read tool returns only metadata or a summary, keep going with investigate_brand_data rather than apologizing for missing details.",
-    "Treat normal user language as valid intent. If the user is clearly asking you to do something, do not wait for rigid command phrasing.",
-    "For non-destructive actions, choose the tool directly when the user's intent is clear from normal speech.",
-    "For guarded actions, choose the tool when it is the right action and let the UI handle confirmation.",
-    "Do not trigger write actions just because they might be helpful.",
-    "If the user asks you to take an action and you are not choosing a write tool, say clearly that you did not make changes yet.",
-    "Do not say 'I can do that', 'I'll set that up', or similar if toolName is empty.",
-    "If mode is recommendation_only, never choose a tool with riskLevel safe_write or guarded_write.",
-    "If the latest user message is only a casual greeting like hi, hey, or hello, reply like a normal human assistant in 1 or 2 short sentences.",
-    "For a casual greeting, do not dump account status and do not propose an action.",
-    "Only use toolName values from the provided tool catalog.",
-    "Never invent IDs, emails, or domains that are not in the provided context or the latest user message.",
-    "If the user asks to create, update, launch, pause, resume, cancel, send, dismiss, or delete something and there is a matching tool, you may choose that tool after enough inspection.",
-    "When matching experiments, campaigns, leads, or reply drafts, prefer the IDs and names in the provided context items.",
-    "If there is exactly one obvious running, draft, active, or pending object that matches the user's words, it is okay to target it.",
-    "For refresh_mailpool_sender and get_sender_snapshot, prefer using accountId from the context.",
-    "For provision_mailpool_sender, include any known fields such as brandId, domain, fromLocalPart, domainMode, senderFirstName, senderLastName, and registrant fields.",
-    "For provision_mailpool_sender, never use the brand name, domain, or mailbox local-part as the senderFirstName/senderLastName. If the real person name is unknown, ask for it.",
-    "If the user says things like `you decide`, `pick one`, or `choose for me` during sender provisioning, you may choose fromLocalPart and domain yourself instead of asking for an exact sender email.",
-    "For Leadr/LinkedIn work, first inspect get_leadr_snapshot unless the needed accountId/channelRunId is already known.",
-    "For create_leadr_campaign, only use real campaign copy in message. Never use synthetic delivery-probe text as campaign copy.",
-    "For create_leadr_campaign, require a connected runnable accountId and either a LinkedIn campaignUrl or a managedTableId.",
-    "Do not claim Leadr pause is supported; the available Leadr control tool is resume_leadr_campaign plus sync_leadr_campaign.",
-    "For create_brand, website is optional.",
-    "If the user names a brand in normal prose, pass that exact brand name in create_brand.input.name.",
-    "If the user explains what the brand does or wants, include that in create_brand.input.notes or create_brand.input.product when useful.",
-    "For create_experiment, if the user describes the offer and audience but does not provide a formal experiment name, synthesize a short clear name and still create it.",
-    "For create_experiment, fill audience and offer from the user's described idea whenever those are clear.",
-    "When the user is clearly asking for a new experiment, be willing to draft the first experiment from their prose instead of waiting for rigid field-by-field instructions.",
-    "Ask follow-up questions only when a missing field truly blocks the action or would create a bad result.",
-    "Never claim a change already happened unless the change is present in the tool results so far.",
-    "If you need live data, choose a read tool and set done to false.",
-    "If you need user input, set done to true, leave toolName empty, and ask only for the missing information.",
-    "If you have enough information to answer with no more tools, set done to true and leave toolName empty.",
-    "If you are choosing a write tool, that is the final action for this turn. Set done to true.",
-    `Mode: ${input.mode === "recommendation_only" ? "recommendation_only" : "default"}`,
-    `Resolved brandId: ${input.brandId || "(none)"}`,
-    `Planning step: ${input.stepNumber} of ${input.maxSteps}`,
-    `Tool catalog JSON: ${JSON.stringify(toolCatalog)}`,
-    `Recent thread messages JSON: ${JSON.stringify(summarizePromptMessages(input.messages))}`,
-    `Current brand context JSON: ${JSON.stringify(summarizePromptContext(input.context, { includeCampaigns }))}`,
-    `Operator brand memory JSON: ${JSON.stringify(input.brandMemory)}`,
-    `Tool results so far JSON: ${JSON.stringify(input.trace)}`,
-    `Latest user message: ${input.message}`,
-  ].join("\n\n");
-}
-
 async function planOperatorReplyWithLlm(input: {
   brandId: string;
   message: string;
@@ -2267,193 +2150,33 @@ async function planOperatorReplyWithLlm(input: {
   brandMemory: OperatorBrandMemory | null;
   fallbackAssistant: OperatorChatAssistantReply;
 }): Promise<OperatorPlannerResult | null> {
-  const greetingOnly = isCasualGreeting(input.message);
-  const trace: OperatorPlannerResult["trace"] = [];
   const configuredMaxSteps = Number(process.env.OPERATOR_CHAT_MAX_STEPS);
   const maxSteps = Math.min(8, Math.max(4, Number.isFinite(configuredMaxSteps) ? configuredMaxSteps : 8));
-  let model = "operator-chat";
-
-  try {
-    let assistant = input.fallbackAssistant;
-    if (!greetingOnly && input.brandId) {
-      const investigationTool = getOperatorToolSpec("investigate_brand_data");
-      const investigationInput = {
-        brandId: input.brandId,
-        query: input.message,
-        maxThreads: 5,
-        maxRuns: 5,
-        maxMessages: 8,
-      };
-      if (investigationTool) {
-        try {
-          const result = await investigationTool.run(investigationInput);
-          trace.push({
-            step: 0,
-            toolName: investigationTool.name,
-            riskLevel: investigationTool.riskLevel,
-            input: investigationInput,
-            summary: result.summary,
-            result: asRecord(result.result),
-            error: "",
-          });
-        } catch (error) {
-          trace.push({
-            step: 0,
-            toolName: "investigate_brand_data",
-            riskLevel: "read",
-            input: investigationInput,
-            summary: "",
-            result: {},
-            error: error instanceof Error ? error.message : "Brand investigation failed",
-          });
-        }
-      }
-    }
-
-    for (let stepNumber = 1; stepNumber <= maxSteps; stepNumber += 1) {
-      const result = await generateJsonWithLlm({
-        task: "operator_chat",
-        prompt: buildOperatorPrompt({
-          ...input,
-          trace,
-          stepNumber,
-          maxSteps,
-        }),
-        reasoningEffort: DEFAULT_OPERATOR_REASONING,
-        openAiOverrideModel: asString(process.env.OPENAI_MODEL_OPERATOR),
-        openRouterOverrideModel: asString(process.env.OPENROUTER_MODEL_OPERATOR),
-        maxOutputTokens: 900,
-        format: {
-          type: "json_schema",
-          name: "operator_agent_step",
-          schema: {
-            type: "object",
-            additionalProperties: false,
-            properties: {
-              message: { type: "string" },
-              done: { type: "boolean" },
-              toolName: { type: "string" },
-              toolInputJson: { type: "string" },
-            },
-            required: ["message", "done", "toolName", "toolInputJson"],
-          },
-        },
-      });
-      model = `${result.provider}:${result.model}`;
-      const outputText = result.text;
-      if (!outputText) return null;
-
-      let parsed: unknown = {};
-      try {
-        parsed = JSON.parse(outputText);
-      } catch {
-        console.error("Operator LLM JSON parse failed", outputText.slice(0, 800));
-        return null;
-      }
-
-      const row = asRecord(parsed);
-      assistant = normalizeAssistantReply(row, input.fallbackAssistant, { plainGreeting: greetingOnly });
-
-      const rawToolName = asString(row.toolName);
-      let rawToolInput: Record<string, unknown> = {};
-      const rawToolInputJson = asString(row.toolInputJson);
-      if (rawToolInputJson) {
-        try {
-          rawToolInput = asRecord(JSON.parse(rawToolInputJson));
-        } catch {
-          rawToolInput = {};
-        }
-      }
-      if (!rawToolName) {
-        return {
-          assistant,
-          requestedAction: null,
-          model,
-          trace,
-        };
-      }
-
-      const normalizedAction = normalizeRequestedAction({
-        raw: {
-          toolName: rawToolName,
-          input: rawToolInput,
-        },
+  const result = await runBrandAgentTurn({
+    brandId: input.brandId,
+    message: input.message,
+    mode: input.mode,
+    recentMessages: summarizePromptMessages(input.messages),
+    compactContext: summarizePromptContext(input.context, { includeCampaigns: true }),
+    memory: input.brandMemory ? (input.brandMemory as unknown as Record<string, unknown>) : null,
+    fallbackAssistant: input.fallbackAssistant,
+    tools: listOperatorToolSpecs(),
+    maxSteps,
+    reasoningEffort: DEFAULT_OPERATOR_REASONING,
+    openAiOverrideModel: asString(process.env.OPENAI_MODEL_OPERATOR),
+    openRouterOverrideModel: asString(process.env.OPENROUTER_MODEL_OPERATOR),
+    normalizeToolCall: (call) =>
+      normalizeRequestedAction({
+        raw: call,
         brandId: input.brandId,
         mode: input.mode,
         message: input.message,
         context: input.context,
         brandMemory: input.brandMemory,
         source: "llm",
-      });
-      const tool = normalizedAction ? getOperatorToolSpec(normalizedAction.toolName) : null;
-
-      if (!normalizedAction || !tool) {
-        trace.push({
-          step: stepNumber,
-          toolName: rawToolName,
-          riskLevel: tool?.riskLevel ?? "unknown",
-          input: rawToolInput,
-          summary: "",
-          result: {},
-          error: "Operator could not resolve that tool call from the current live context.",
-        });
-        continue;
-      }
-
-      if (tool.riskLevel !== "read") {
-        return {
-          assistant,
-          requestedAction: normalizedAction,
-          model,
-          trace,
-        };
-      }
-
-      try {
-        const result = await tool.run(normalizedAction.input);
-        trace.push({
-          step: stepNumber,
-          toolName: normalizedAction.toolName,
-          riskLevel: tool.riskLevel,
-          input: normalizedAction.input,
-          summary: result.summary,
-          result: asRecord(result.result),
-          error: "",
-        });
-      } catch (error) {
-        const message = error instanceof Error ? error.message : "Operator tool call failed";
-        trace.push({
-          step: stepNumber,
-          toolName: normalizedAction.toolName,
-          riskLevel: tool.riskLevel,
-          input: normalizedAction.input,
-          summary: "",
-          result: {},
-          error: message,
-        });
-      }
-    }
-
-    return {
-      assistant:
-        trace.length > 0
-          ? {
-              summary:
-                trace[trace.length - 1]?.error ||
-                trace[trace.length - 1]?.summary ||
-                input.fallbackAssistant.summary,
-              findings: [],
-              recommendations: [],
-            }
-          : input.fallbackAssistant,
-      requestedAction: null,
-      model,
-      trace,
-    };
-  } catch (error) {
-    console.error("Operator LLM planning threw", error);
-    return null;
-  }
+      }),
+  });
+  return result;
 }
 
 function inferActionFromMessage(

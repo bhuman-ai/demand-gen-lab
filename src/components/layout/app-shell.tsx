@@ -8,6 +8,7 @@ import {
   FlaskConical,
   Inbox,
   Mail,
+  MessageSquareText,
   Network,
   Radar,
   Settings,
@@ -40,7 +41,7 @@ type OperatorOpenRequest = {
 };
 
 type MainNavItem = NavItem & {
-  id: "missions" | "campaigns" | "network" | "leads" | "inbox" | "social-discovery";
+  id: "agent" | "missions" | "campaigns" | "network" | "leads" | "inbox" | "social-discovery";
 };
 
 const CHROMELESS_ROUTES = new Set(["/autoads", "/google-ads-review"]);
@@ -234,15 +235,27 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   const mainItems = useMemo<MainNavItem[]>(
     () => [
       {
+        id: "agent",
+        label: "Agent",
+        href: brandRoot,
+        icon: MessageSquareText,
+      },
+      {
         id: "missions",
         label: "Missions",
         href: hasActiveBrand ? `${brandRoot}/missions` : "/brands",
         icon: Sparkles,
       },
-      { id: "campaigns", label: "Campaigns", href: hasActiveBrand ? `${brandRoot}/campaigns` : "/brands", icon: FolderKanban },
-      { id: "network", label: "Senders", href: hasActiveBrand ? `${brandRoot}/network` : "/brands", icon: Network },
-      { id: "leads", label: "Leads", href: hasActiveBrand ? `${brandRoot}/leads` : "/brands", icon: Mail },
       { id: "inbox", label: "Inbox", href: hasActiveBrand ? `${brandRoot}/inbox` : "/brands", icon: Inbox },
+      { id: "leads", label: "Leads", href: hasActiveBrand ? `${brandRoot}/leads` : "/brands", icon: Mail },
+    ],
+    [brandRoot, hasActiveBrand]
+  );
+
+  const moreItems = useMemo<MainNavItem[]>(
+    () => [
+      { id: "campaigns", label: "Campaigns", href: hasActiveBrand ? `${brandRoot}/campaigns` : "/brands", icon: FolderKanban },
+      { id: "network", label: "Delivery", href: hasActiveBrand ? `${brandRoot}/network` : "/brands", icon: Network },
       {
         id: "social-discovery",
         label: "Social",
@@ -255,6 +268,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
 
   const activeMainItem = useMemo(() => {
     if (hasActiveBrand) {
+      if (pathname === brandRoot) return "agent";
       if (pathname === `${brandRoot}/missions` || pathname.startsWith(`${brandRoot}/missions/`)) return "missions";
       if (pathname === `${brandRoot}/campaigns` || pathname.startsWith(`${brandRoot}/campaigns/`)) return "campaigns";
       if (pathname === `${brandRoot}/network` || pathname.startsWith(`${brandRoot}/network/`)) return "network";
@@ -265,11 +279,15 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
     return "";
   }, [pathname, brandRoot, hasActiveBrand]);
 
+  const moreActive = moreItems.some((item) => item.id === activeMainItem);
+  const agentHomeActive = activeMainItem === "agent";
+
   const toolItems: NavItem[] = [
     { label: "Settings", href: "/settings/outreach", icon: Settings },
     { label: "Logic", href: "/logic", icon: Activity },
     { label: "Doctor", href: "/doctor", icon: FlaskConical },
   ];
+  const toolActive = toolItems.some((item) => pathname === item.href);
 
   if (chromeless) {
     return <>{children}</>;
@@ -315,31 +333,61 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
                   );
                 })}
               </nav>
+              <details className="mt-2" open={moreActive || undefined}>
+                <summary className="cursor-pointer rounded-[8px] px-3 py-2 text-sm text-[color:var(--muted-foreground)] hover:bg-[color:var(--surface)] hover:text-[color:var(--foreground)]">
+                  More
+                </summary>
+                <nav className="mt-1 grid gap-1.5">
+                  {moreItems.map((item) => {
+                    const active = item.id === activeMainItem;
+                    const Icon = item.icon;
+                    return (
+                      <Link
+                        key={item.id}
+                        href={item.href}
+                        className={cn(
+                          "inline-flex items-center gap-3 rounded-[8px] border px-3 py-2.5 text-sm transition-colors duration-150",
+                          active
+                            ? "border-[color:var(--border-strong)] bg-[color:var(--surface)] text-[color:var(--foreground)]"
+                            : "border-transparent text-[color:var(--muted-foreground)] hover:border-[color:var(--border)] hover:bg-[color:var(--surface)] hover:text-[color:var(--foreground)]"
+                        )}
+                      >
+                        <Icon className="h-4 w-4" />
+                        {item.label}
+                      </Link>
+                    );
+                  })}
+                </nav>
+              </details>
             </div>
 
             <div className="mt-6 border-t border-[color:var(--border)] pt-5">
-              <div className="mb-2 text-[12px] text-[color:var(--muted-foreground)]">System</div>
-              <nav className="grid gap-1.5">
-                {toolItems.map((item) => {
-                  const active = pathname === item.href;
-                  const Icon = item.icon;
-                  return (
-                    <Link
-                      key={item.href}
-                      href={item.href}
-                      className={cn(
-                        "inline-flex items-center gap-3 rounded-[8px] border px-3 py-2.5 text-sm transition-colors duration-150",
-                        active
-                          ? "border-[color:var(--border-strong)] bg-[color:var(--surface)] text-[color:var(--foreground)]"
-                          : "border-transparent text-[color:var(--muted-foreground)] hover:border-[color:var(--border)] hover:bg-[color:var(--surface)] hover:text-[color:var(--foreground)]"
-                      )}
-                    >
-                      <Icon className="h-4 w-4" />
-                      {item.label}
-                    </Link>
-                  );
-                })}
-              </nav>
+              <details open={toolActive || undefined}>
+                <summary className="cursor-pointer rounded-[8px] px-3 py-2 text-sm text-[color:var(--muted-foreground)] hover:bg-[color:var(--surface)] hover:text-[color:var(--foreground)]">
+                  System
+                </summary>
+                <nav className="mt-1 grid gap-1.5">
+                  {toolItems.map((item) => {
+                    const active = pathname === item.href;
+                    const Icon = item.icon;
+                    return (
+                      <Link
+                        key={item.href}
+                        href={item.href}
+                        className={cn(
+                          "inline-flex items-center gap-3 rounded-[8px] border px-3 py-2.5 text-sm transition-colors duration-150",
+                          active
+                            ? "border-[color:var(--border-strong)] bg-[color:var(--surface)] text-[color:var(--foreground)]"
+                            : "border-transparent text-[color:var(--muted-foreground)] hover:border-[color:var(--border)] hover:bg-[color:var(--surface)] hover:text-[color:var(--foreground)]"
+                        )}
+                      >
+                        <Icon className="h-4 w-4" />
+                        {item.label}
+                      </Link>
+                    );
+                  })}
+                </nav>
+              </details>
             </div>
 
           </div>
@@ -353,14 +401,16 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
               </div>
               <div className="flex items-center gap-2">
                 <GlobalCommandPalette activeBrandId={activeBrandId} />
-                <button
-                  type="button"
-                  onClick={() => setOperatorOpen(true)}
-                  className="inline-flex h-10 items-center gap-2 rounded-[10px] border border-[color:var(--border)] bg-[color:var(--surface)] px-3 text-sm font-medium text-[color:var(--foreground)] transition-colors hover:bg-[color:var(--surface-hover)]"
-                >
-                  <Sparkles className="h-3.5 w-3.5" />
-                  Brand GPT
-                </button>
+                {!agentHomeActive ? (
+                  <button
+                    type="button"
+                    onClick={() => setOperatorOpen(true)}
+                    className="inline-flex h-10 items-center gap-2 rounded-[10px] border border-[color:var(--border)] bg-[color:var(--surface)] px-3 text-sm font-medium text-[color:var(--foreground)] transition-colors hover:bg-[color:var(--surface-hover)]"
+                  >
+                    <Sparkles className="h-3.5 w-3.5" />
+                    Brand GPT
+                  </button>
+                ) : null}
               </div>
             </div>
           </header>

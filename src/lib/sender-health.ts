@@ -17,6 +17,7 @@ import { getOutreachProvisioningSettings } from "@/lib/outreach-provider-setting
 const HEALTH_WINDOW_DAYS = 21;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const MAILPOOL_SPAM_FALLBACK_MAX_AGE_DAYS = 7;
+const DELIVERABILITY_SEED_SENDING_DISABLED_TEXT = "deliverability seed sending is disabled platform-wide";
 const MONITOR_POOL_UNAVAILABLE_REASONS = [
   "No unused deliverability monitor mailbox remains for this sender",
   "No dedicated deliverability monitor group is connected",
@@ -197,13 +198,21 @@ function isMonitorPoolUnavailableReason(reason: string) {
   );
 }
 
+export function isDeliverabilitySeedSendingDisabledReason(reason: string) {
+  return reason.trim().toLowerCase().includes(DELIVERABILITY_SEED_SENDING_DISABLED_TEXT);
+}
+
 function isLegacyMailpoolInboxPlacementReason(reason: string) {
   const normalized = reason.trim().toLowerCase();
   return normalized.includes("mailpool post /inbox-placements/") || normalized.includes("mailpool inbox placement");
 }
 
 function isSpamFallbackEligibleFailureReason(reason: string) {
-  return isMonitorPoolUnavailableReason(reason) || isLegacyMailpoolInboxPlacementReason(reason);
+  return (
+    isMonitorPoolUnavailableReason(reason) ||
+    isDeliverabilitySeedSendingDisabledReason(reason) ||
+    isLegacyMailpoolInboxPlacementReason(reason)
+  );
 }
 
 function readMailpoolSpamFallback(
@@ -504,6 +513,29 @@ type SenderAutomationContext = {
   consumedReservationCount: number;
 };
 
+function findRiskySignal(input: {
+  domain: HealthSignal;
+  email: HealthSignal;
+  transport: HealthSignal;
+  message: HealthSignal;
+}) {
+  return (
+    [
+      ["message", input.message],
+      ["transport", input.transport],
+      ["domain", input.domain],
+      ["email", input.email],
+    ] as const
+  ).find((entry) => entry[1].status === "risky");
+}
+
+function riskySignalPauseLabel(dimension: SenderHealthDimension) {
+  if (dimension === "message") return "Paused: message risk.";
+  if (dimension === "transport") return "Paused: transport risk.";
+  if (dimension === "domain") return "Paused: domain risk.";
+  return "Paused: mailbox risk.";
+}
+
 function latestProbeFailureReason(probeRun: DeliverabilityProbeRun | null) {
   if (!probeRun || probeRun.status !== "failed") return "";
   return probeRun.lastError.trim() || "";
@@ -541,6 +573,16 @@ function buildAutomationSummary(input: {
   }
 
   const latestFailure = latestBlockingProbeFailureReason(input.automation.latestProbe);
+  if (isDeliverabilitySeedSendingDisabledReason(latestFailure)) {
+    const prefix = input.mailpoolSpamFallback
+      ? `Mailpool spam check is ${input.mailpoolSpamFallback.status} (${input.mailpoolSpamFallback.score}/100). `
+      : "";
+    const risky = findRiskySignal(input);
+    if (risky) {
+      return `${prefix}Inbox placement probes are paused because deliverability seed sending is disabled platform-wide. Last completed ${risky[0]} signal is still risky: ${risky[1].summary}`;
+    }
+    return `${prefix}Inbox placement probes are paused because deliverability seed sending is disabled platform-wide. This is a platform config blocker, not a sender reputation failure.`;
+  }
   if (isMonitorPoolUnavailableReason(latestFailure)) {
     if (input.mailpoolSpamFallback) {
       return input.mailpoolSpamFallback.status === "risky"
@@ -557,24 +599,9 @@ function buildAutomationSummary(input: {
     return "Validating sender. Seed probes are in flight and the system is waiting for placement results.";
   }
 
-  const risky = (
-    [
-      ["message", input.message],
-      ["transport", input.transport],
-      ["domain", input.domain],
-      ["email", input.email],
-    ] as const
-  ).find((entry) => entry[1].status === "risky");
+  const risky = findRiskySignal(input);
   if (risky) {
-    const label =
-      risky[0] === "message"
-        ? "Paused: message risk."
-        : risky[0] === "transport"
-          ? "Paused: transport risk."
-          : risky[0] === "domain"
-            ? "Paused: domain risk."
-            : "Paused: mailbox risk.";
-    return `${label} ${risky[1].summary}`;
+    return `${riskySignalPauseLabel(risky[0])} ${risky[1].summary}`;
   }
 
   if (!input.automation.latestBaseline) {
@@ -612,6 +639,16 @@ function buildAutomationStatus(input: {
   if (input.row.dnsStatus === "error") return "attention";
   if (!input.row.fromEmail) return "queued";
   if (input.row.dnsStatus !== "verified") return "testing";
+  if (isDeliverabilitySeedSendingDisabledReason(latestBlockingProbeFailureReason(input.automation.latestProbe))) {
+    if (input.mailpoolSpamFallback?.status === "risky" || findRiskySignal(input)) {
+      return "attention";
+    }
+    if (!input.automation.latestBaseline) return "testing";
+    if (input.row.status === "warming" || !input.automation.latestProduction) {
+      return "warming";
+    }
+    return "ready";
+  }
   if (isMonitorPoolUnavailableReason(latestBlockingProbeFailureReason(input.automation.latestProbe))) {
     if (!input.mailpoolSpamFallback) {
       return "attention";

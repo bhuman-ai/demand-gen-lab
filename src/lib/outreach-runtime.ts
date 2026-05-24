@@ -21210,10 +21210,61 @@ export async function updateRunControl(input: {
         reason: "No real scheduled or sent message exists for deliverability probing yet",
       };
     }
-    const baselineContentHash = referenceMessage.senderFromEmail
+    const scheduledSenderContext =
+      referenceMessage.status === "sent"
+        ? null
+        : await buildRunSenderRoutingContext(run, {
+            preferredAccountId: String(input.senderAccountId ?? "").trim() || effectiveRunSenderAccountId(run),
+          });
+    const scheduledSenderSlot = scheduledSenderContext?.primarySender ?? null;
+    if (referenceMessage.status !== "sent" && !scheduledSenderSlot) {
+      return { ok: false, reason: "No live sender route is available for deliverability probing" };
+    }
+    if (
+      scheduledSenderSlot &&
+      !persistedRunLockedSenderAccountId(run) &&
+      run.accountId !== scheduledSenderSlot.account.id
+    ) {
+      await updateOutreachRun(run.id, {
+        accountId: scheduledSenderSlot.account.id,
+      });
+      await createOutreachEvent({
+        runId: run.id,
+        eventType: "run_sender_account_repaired",
+        payload: {
+          previousAccountId: run.accountId,
+          lockedSenderAccountId: "",
+          source: "manual_deliverability_probe_live_route",
+          toAccountId: scheduledSenderSlot.account.id,
+          toAccountName: scheduledSenderSlot.account.name,
+          toEmail: getOutreachAccountFromEmail(scheduledSenderSlot.account).trim(),
+        },
+      });
+      run = {
+        ...run,
+        accountId: scheduledSenderSlot.account.id,
+        updatedAt: nowIso(),
+      };
+    }
+    const probeSenderPayload =
+      referenceMessage.status === "sent"
+        ? {
+            senderAccountId: referenceMessage.senderAccountId,
+            senderAccountName: referenceMessage.senderAccountName,
+            fromEmail: referenceMessage.senderFromEmail,
+          }
+        : {
+            senderAccountId: scheduledSenderSlot?.account.id ?? "",
+            senderAccountName: scheduledSenderSlot?.account.name ?? "",
+            fromEmail: scheduledSenderSlot
+              ? getOutreachAccountFromEmail(scheduledSenderSlot.account).trim()
+              : "",
+          };
+    const probeSenderFromEmail = String(probeSenderPayload.fromEmail ?? "").trim();
+    const baselineContentHash = probeSenderFromEmail
       ? buildDeliverabilityBaselineProbe({
           brandName: "",
-          senderDomain: senderDomainFromEmail(referenceMessage.senderFromEmail),
+          senderDomain: senderDomainFromEmail(probeSenderFromEmail),
           probeToken: "control",
         }).contentHash
       : "";
@@ -21232,13 +21283,7 @@ export async function updateRunControl(input: {
         nodeId: referenceMessage.nodeId,
         leadId: referenceMessage.leadId,
         contentHash: referenceMessage.contentHash,
-        ...(referenceMessage.status === "sent"
-          ? {
-              senderAccountId: referenceMessage.senderAccountId,
-              senderAccountName: referenceMessage.senderAccountName,
-              fromEmail: referenceMessage.senderFromEmail,
-            }
-          : {}),
+        ...probeSenderPayload,
       },
     });
     await queueDeliverabilityProbe({
@@ -21256,13 +21301,7 @@ export async function updateRunControl(input: {
         nodeId: referenceMessage.nodeId,
         leadId: referenceMessage.leadId,
         contentHash: baselineContentHash,
-        ...(referenceMessage.status === "sent"
-          ? {
-              senderAccountId: referenceMessage.senderAccountId,
-              senderAccountName: referenceMessage.senderAccountName,
-              fromEmail: referenceMessage.senderFromEmail,
-            }
-          : {}),
+        ...probeSenderPayload,
       },
     });
     await createOutreachEvent({
@@ -21276,6 +21315,9 @@ export async function updateRunControl(input: {
         nodeId: referenceMessage.nodeId,
         leadId: referenceMessage.leadId,
         contentHash: referenceMessage.contentHash,
+        senderAccountId: probeSenderPayload.senderAccountId,
+        senderAccountName: probeSenderPayload.senderAccountName,
+        fromEmail: probeSenderPayload.fromEmail,
         probeVariants: ["baseline", "production"],
       },
     });
@@ -21322,15 +21364,27 @@ export async function updateRunControl(input: {
         reason: "No real scheduled or sent message exists for inbox placement seeding yet",
       };
     }
-    const senderAccountId = referenceMessage.senderAccountId.trim() || effectiveRunSenderAccountId(run);
+    const scheduledSenderContext =
+      referenceMessage.status === "sent"
+        ? null
+        : await buildRunSenderRoutingContext(run, {
+            preferredAccountId: String(input.senderAccountId ?? "").trim() || effectiveRunSenderAccountId(run),
+          });
+    const scheduledSenderSlot = scheduledSenderContext?.primarySender ?? null;
+    const senderAccountId =
+      referenceMessage.status === "sent"
+        ? referenceMessage.senderAccountId.trim()
+        : scheduledSenderSlot?.account.id ?? "";
     if (!senderAccountId) {
-      return { ok: false, reason: "No sender account is attached to the reference message" };
+      return { ok: false, reason: "No live sender route is available for inbox placement seeding" };
     }
-    const senderAccount = await getOutreachAccount(senderAccountId);
+    const senderAccount =
+      scheduledSenderSlot?.account ?? (await getOutreachAccount(senderAccountId));
     if (!senderAccount) {
       return { ok: false, reason: "Sender account not found" };
     }
-    const senderSecrets = await getOutreachAccountSecrets(senderAccount.id);
+    const senderSecrets =
+      scheduledSenderSlot?.secrets ?? (await getOutreachAccountSecrets(senderAccount.id));
     if (!senderSecrets) {
       return { ok: false, reason: "Sender account credentials not found" };
     }

@@ -15464,23 +15464,31 @@ async function repairRunLockedSenderAccount(run: OutreachRun, lockedSenderAccoun
   };
 }
 
-async function buildRunSenderRoutingContext(run: OutreachRun, input?: { preferredAccountId?: string }) {
+async function buildRunSenderRoutingContext(
+  run: OutreachRun,
+  input?: { preferredAccountId?: string; ignoreCurrentSenderPreference?: boolean }
+) {
   const { trafficLane, lockedSenderAccountId } = await resolveRunLockedSenderContext(run);
   const effectiveRun = await repairRunLockedSenderAccount(run, lockedSenderAccountId);
   const currentSenderAccountId = effectiveRunSenderAccountId(effectiveRun);
-  const preferredAccountId = String(input?.preferredAccountId ?? currentSenderAccountId).trim();
+  const preferredAccountId =
+    String(input?.preferredAccountId ?? "").trim() ||
+    (input?.ignoreCurrentSenderPreference ? "" : currentSenderAccountId);
   const runtimeExperiment = await getExperimentRecordByRuntimeRef(run.brandId, run.campaignId, run.experimentId);
   const businessWindow = businessWindowFromExperimentEnvelope(runtimeExperiment?.testEnvelope);
   const senderPoolState = await resolveSenderPoolForBrand({
     brandId: effectiveRun.brandId,
-    preferredAccountId: preferredAccountId || currentSenderAccountId,
+    preferredAccountId: preferredAccountId || (input?.ignoreCurrentSenderPreference ? "" : currentSenderAccountId),
     timeZone: effectiveRun.timezone || DEFAULT_TIMEZONE,
     businessWindow,
     exactAccountId: lockedSenderAccountId,
   });
   const senderHealthState = await resolveBrandSenderHealth({
     brandId: effectiveRun.brandId,
-    accountId: lockedSenderAccountId || preferredAccountId || currentSenderAccountId,
+    accountId:
+      lockedSenderAccountId ||
+      preferredAccountId ||
+      (input?.ignoreCurrentSenderPreference ? "" : currentSenderAccountId),
   });
   const blockedBySenderId = new Map<string, SenderReadinessSnapshot>();
   for (const accountId of senderPoolState.readinessByAccountId.keys()) {
@@ -15535,11 +15543,15 @@ async function buildRunSenderRoutingContext(run: OutreachRun, input?: { preferre
       ? pickSenderForMessage({
           pool: dispatchPool,
           usage: senderUsage,
-          preferredAccountId: preferredAccountId || currentSenderAccountId,
+          preferredAccountId: preferredAccountId || (input?.ignoreCurrentSenderPreference ? "" : currentSenderAccountId),
           routingSignalsBySenderId,
           trafficLane,
         })?.slot ??
-        dispatchPool.find((slot) => slot.account.id === (preferredAccountId || currentSenderAccountId)) ??
+        dispatchPool.find(
+          (slot) =>
+            slot.account.id ===
+            (preferredAccountId || (input?.ignoreCurrentSenderPreference ? "" : currentSenderAccountId))
+        ) ??
         dispatchPool[0]
       : null;
 
@@ -21214,7 +21226,8 @@ export async function updateRunControl(input: {
       referenceMessage.status === "sent"
         ? null
         : await buildRunSenderRoutingContext(run, {
-            preferredAccountId: String(input.senderAccountId ?? "").trim() || effectiveRunSenderAccountId(run),
+            preferredAccountId: String(input.senderAccountId ?? "").trim(),
+            ignoreCurrentSenderPreference: true,
           });
     const scheduledSenderSlot = scheduledSenderContext?.primarySender ?? null;
     if (referenceMessage.status !== "sent" && !scheduledSenderSlot) {
@@ -21368,7 +21381,8 @@ export async function updateRunControl(input: {
       referenceMessage.status === "sent"
         ? null
         : await buildRunSenderRoutingContext(run, {
-            preferredAccountId: String(input.senderAccountId ?? "").trim() || effectiveRunSenderAccountId(run),
+            preferredAccountId: String(input.senderAccountId ?? "").trim(),
+            ignoreCurrentSenderPreference: true,
           });
     const scheduledSenderSlot = scheduledSenderContext?.primarySender ?? null;
     const senderAccountId =

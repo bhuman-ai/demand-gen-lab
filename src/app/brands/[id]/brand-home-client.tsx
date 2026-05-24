@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   ChevronDown,
@@ -79,6 +79,15 @@ export default function BrandHomeClient({ brandId }: { brandId: string }) {
   const [icpText, setIcpText] = useState("");
   const [featuresText, setFeaturesText] = useState("");
   const [benefitsText, setBenefitsText] = useState("");
+  const detailsRef = useRef<HTMLDetailsElement | null>(null);
+
+  useEffect(() => {
+    const openDetails = () => {
+      if (detailsRef.current) detailsRef.current.open = true;
+    };
+    window.addEventListener("lastb2b:open-brand-details", openDetails);
+    return () => window.removeEventListener("lastb2b:open-brand-details", openDetails);
+  }, []);
 
   useEffect(() => {
     let mounted = true;
@@ -223,7 +232,7 @@ export default function BrandHomeClient({ brandId }: { brandId: string }) {
           </div>
         </div>
 
-        <details className="relative shrink-0">
+        <details ref={detailsRef} className="relative shrink-0">
           <summary className="inline-flex h-9 cursor-pointer list-none items-center gap-2 rounded-[10px] px-3 text-sm text-[color:var(--muted-foreground)] hover:bg-[color:var(--surface-muted)] hover:text-[color:var(--foreground)] [&::-webkit-details-marker]:hidden">
             Details
             <ChevronDown className="h-4 w-4" />
@@ -387,12 +396,12 @@ export default function BrandHomeClient({ brandId }: { brandId: string }) {
       </header>
 
       {error ? (
-        <div className="mx-auto mt-4 w-full max-w-3xl rounded-[12px] border border-[color:var(--danger-border)] bg-[color:var(--danger-soft)] px-4 py-3 text-sm text-[color:var(--danger)]">
+        <div className="mx-auto mt-4 w-full max-w-[52rem] rounded-[12px] border border-[color:var(--danger-border)] bg-[color:var(--danger-soft)] px-4 py-3 text-sm text-[color:var(--danger)]">
           {error}
         </div>
       ) : null}
       {loading ? (
-        <div className="mx-auto mt-4 w-full max-w-3xl text-sm text-[color:var(--muted-foreground)]">
+        <div className="mx-auto mt-4 w-full max-w-[52rem] text-sm text-[color:var(--muted-foreground)]">
           Loading brand...
         </div>
       ) : null}

@@ -10,6 +10,7 @@ import {
   ExternalLink,
   Loader2,
   MessageSquareText,
+  Plus,
   SendHorizontal,
   Sparkles,
   X,
@@ -1068,27 +1069,27 @@ export default function OperatorPanel({
 
       <div ref={scrollerRef} className={cn("flex-1 space-y-5 overflow-y-auto", isInline ? "px-4 pt-10 pb-6" : "px-5 py-5")}>
         {!activeBrandId ? (
-          <div className={cn("rounded-[12px] border border-[color:var(--border)] bg-[color:var(--surface)] px-4 py-4 text-sm text-[color:var(--muted-foreground)]", isInline ? "mx-auto max-w-3xl" : "")}>
+          <div className={cn("rounded-[12px] border border-[color:var(--border)] bg-[color:var(--surface)] px-4 py-4 text-sm text-[color:var(--muted-foreground)]", isInline ? "mx-auto max-w-[52rem]" : "")}>
             Select a brand first. Brand GPT is scoped to the active brand context.
           </div>
         ) : null}
 
         {loadingThread ? (
-          <div className={cn("inline-flex items-center gap-2 rounded-[12px] border border-[color:var(--border)] bg-[color:var(--surface)] px-4 py-3 text-sm text-[color:var(--muted-foreground)]", isInline ? "mx-auto flex max-w-3xl" : "")}>
+          <div className={cn("inline-flex items-center gap-2 rounded-[12px] border border-[color:var(--border)] bg-[color:var(--surface)] px-4 py-3 text-sm text-[color:var(--muted-foreground)]", isInline ? "mx-auto flex max-w-[52rem]" : "")}>
             <Loader2 className="h-4 w-4 animate-spin" />
             Loading Brand GPT thread...
           </div>
         ) : null}
 
         {error ? (
-          <div className={cn("rounded-[14px] border border-[color:var(--danger-border)] bg-[color:var(--danger-soft)] px-4 py-3 text-sm text-[color:var(--danger)]", isInline ? "mx-auto max-w-3xl" : "")}>
+          <div className={cn("rounded-[14px] border border-[color:var(--danger-border)] bg-[color:var(--danger-soft)] px-4 py-3 text-sm text-[color:var(--danger)]", isInline ? "mx-auto max-w-[52rem]" : "")}>
             {error}
           </div>
         ) : null}
 
         {activeRun ? (
           isInline ? (
-            <div className="mx-auto flex max-w-3xl items-center gap-2 text-sm text-[color:var(--muted-foreground)]">
+            <div className="mx-auto flex max-w-[52rem] items-center gap-2 text-sm text-[color:var(--muted-foreground)]">
               <Loader2 className="h-4 w-4 animate-spin" />
               Working...
             </div>
@@ -1109,7 +1110,7 @@ export default function OperatorPanel({
           <div
             className={cn(
               isInline
-                ? "mx-auto flex min-h-[calc(100vh-22rem)] w-full max-w-3xl flex-col items-center justify-center gap-6 text-center"
+                ? "mx-auto flex min-h-[calc(100vh-22rem)] w-full max-w-[52rem] flex-col items-center justify-center gap-6 text-center"
                 : "space-y-3"
             )}
           >
@@ -1151,7 +1152,7 @@ export default function OperatorPanel({
           const isUser = message.role === "user" && message.kind === "message";
           const isAssistant = message.role === "assistant" && message.kind === "message";
           return (
-            <div key={message.id} className={cn("flex", isInline ? "mx-auto w-full max-w-3xl" : "", isUser ? "justify-end" : "justify-start")}>
+            <div key={message.id} className={cn("flex", isInline ? "mx-auto w-full max-w-[52rem]" : "", isUser ? "justify-end" : "justify-start")}>
               <div
                 className={cn(
                   "max-w-[94%] rounded-[12px] border px-4 py-3",
@@ -1203,7 +1204,7 @@ export default function OperatorPanel({
         <form
           className={cn(
             isInline
-              ? "mx-auto w-full max-w-3xl rounded-[26px] border border-[color:var(--border)] bg-[color:var(--surface)] px-4 py-3 shadow-[0_16px_44px_-34px_color-mix(in_oklab,var(--shadow)_85%,transparent)]"
+              ? "mx-auto w-full max-w-[52rem] rounded-[28px] border border-[color:var(--border)] bg-[color:var(--surface)] px-3.5 py-3 shadow-[0_16px_44px_-34px_color-mix(in_oklab,var(--shadow)_85%,transparent)]"
               : "space-y-3"
           )}
           onSubmit={(event) => {
@@ -1211,44 +1212,70 @@ export default function OperatorPanel({
             void handleSend(input);
           }}
         >
-          <Textarea
-            value={input}
-            onChange={(event) => setInput(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Enter" && !event.shiftKey) {
-                event.preventDefault();
-                void handleSend(input);
-              }
-            }}
-            placeholder={
-              activeBrandId
-                ? "Message Brand GPT"
-                : "Select a brand to use Brand GPT."
-            }
-            className={cn(
-              isInline
-                ? "min-h-[48px] resize-none rounded-none border-0 bg-transparent px-0 py-0 focus-visible:border-transparent focus-visible:ring-0"
-                : "min-h-[104px] rounded-[12px] bg-[color:var(--surface)]"
-            )}
-            disabled={agentBusy || !activeBrandId}
-          />
-          <div className={cn("flex items-center gap-3", isInline ? "justify-end" : "justify-between")}>
-            {!isInline ? (
+          {isInline ? (
+            <div className="flex items-end gap-2">
+              <button
+                type="button"
+                aria-label="Open brand details"
+                title="Open brand details"
+                onClick={() => window.dispatchEvent(new CustomEvent("lastb2b:open-brand-details"))}
+                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-[color:var(--muted-foreground)] hover:bg-[color:var(--surface-hover)] hover:text-[color:var(--foreground)]"
+              >
+                <Plus className="h-5 w-5" />
+              </button>
+              <Textarea
+                value={input}
+                onChange={(event) => setInput(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" && !event.shiftKey) {
+                    event.preventDefault();
+                    void handleSend(input);
+                  }
+                }}
+                placeholder={activeBrandId ? "Ask anything" : "Select a brand to use Brand GPT."}
+                className="min-h-[40px] flex-1 resize-none rounded-none border-0 bg-transparent px-0 py-2 focus-visible:border-transparent focus-visible:ring-0"
+                disabled={agentBusy || !activeBrandId}
+              />
+              <Button
+                type="submit"
+                size="icon"
+                className="shrink-0 rounded-full"
+                aria-label="Send message"
+                disabled={agentBusy || !activeBrandId || !input.trim()}
+              >
+                {agentBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <SendHorizontal className="h-4 w-4" />}
+              </Button>
+            </div>
+          ) : (
+            <>
+              <Textarea
+                value={input}
+                onChange={(event) => setInput(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" && !event.shiftKey) {
+                    event.preventDefault();
+                    void handleSend(input);
+                  }
+                }}
+                placeholder={activeBrandId ? "Message Brand GPT" : "Select a brand to use Brand GPT."}
+                className="min-h-[104px] rounded-[12px] bg-[color:var(--surface)]"
+                disabled={agentBusy || !activeBrandId}
+              />
+              <div className="flex items-center justify-between gap-3">
               <div className="text-xs text-[color:var(--muted-foreground)]">
               `Enter` sends. `Shift+Enter` adds a new line.
               </div>
-            ) : null}
-            <Button
-              type="submit"
-              size={isInline ? "icon" : "md"}
-              className={isInline ? "rounded-full" : ""}
-              aria-label={isInline ? "Send message" : undefined}
-              disabled={agentBusy || !activeBrandId || !input.trim()}
-            >
-              {agentBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <SendHorizontal className="h-4 w-4" />}
-              {isInline ? null : "Send"}
-            </Button>
-          </div>
+                <Button
+                  type="submit"
+                  size="md"
+                  disabled={agentBusy || !activeBrandId || !input.trim()}
+                >
+                  {agentBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <SendHorizontal className="h-4 w-4" />}
+                  Send
+                </Button>
+              </div>
+            </>
+          )}
         </form>
       </div>
     </aside>

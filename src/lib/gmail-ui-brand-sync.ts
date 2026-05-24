@@ -105,6 +105,7 @@ export async function syncBrandGmailUiAssignments(options?: {
   );
   const brands = (await listBrands()).filter((brand) => !brandFilter.size || brandFilter.has(brand.id));
   const accounts = await listOutreachAccounts();
+  const accountById = new Map(accounts.map((account) => [account.id, account] as const));
   const accountByFromEmail = new Map<string, OutreachAccount[]>();
   for (const account of accounts) {
     const fromEmail = normalizeEmail(getOutreachAccountFromEmail(account));
@@ -188,6 +189,32 @@ export async function syncBrandGmailUiAssignments(options?: {
       );
       return updated;
     });
+
+    const currentPrimaryAccount = assignment?.accountId
+      ? accountById.get(assignment.accountId) ?? null
+      : null;
+    if (
+      currentPrimaryAccount &&
+      currentPrimaryAccount.id !== proxied.id &&
+      currentPrimaryAccount.status === "active" &&
+      !isGoogleMailpoolAccount(currentPrimaryAccount)
+    ) {
+      const currentMailboxAccountId =
+        assignment?.mailboxAccountId && assignment.mailboxAccountId !== proxied.id
+          ? assignment.mailboxAccountId
+          : currentPrimaryAccount.id;
+      await setBrandOutreachAssignment(brand.id, {
+        accountId: currentPrimaryAccount.id,
+        accountIds: [currentPrimaryAccount.id],
+        mailboxAccountId: currentMailboxAccountId,
+      });
+      warnings.push(
+        `${brand.name}: kept existing non-Gmail sender ${getOutreachAccountFromEmail(
+          currentPrimaryAccount
+        )} instead of Gmail UI sender ${fromEmail}.`
+      );
+      continue;
+    }
 
     const signalsByAccountId = new Map(
       enrichedBrand.domains

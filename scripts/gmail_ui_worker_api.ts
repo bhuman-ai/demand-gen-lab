@@ -746,10 +746,31 @@ async function dismissGmailSmartFeaturesDialog(page: any) {
       return;
     }
 
-    const turnOff = dialog.locator('text=/Turn off smart features/i').last();
-    if (await turnOff.isVisible().catch(() => false)) {
-      await turnOff.click({ force: true }).catch(() => {});
-      await page.waitForTimeout(250).catch(() => {});
+    const turnOffRadio =
+      typeof dialog.getByRole === "function"
+        ? dialog.getByRole("radio", { name: /Turn off smart features/i }).last()
+        : null;
+    if (turnOffRadio && (await turnOffRadio.isVisible().catch(() => false))) {
+      await turnOffRadio.click({ force: true }).catch(() => {});
+      await page.waitForTimeout(150).catch(() => {});
+    }
+
+    const radios = dialog.locator('[role="radio"], input[type="radio"]');
+    const count = await radios.count().catch(() => 0);
+    if (count >= 2) {
+      await radios.nth(count - 1).click({ force: true }).catch(() => {});
+      await page.waitForTimeout(150).catch(() => {});
+    }
+
+    const turnOffText = dialog.locator('text=/Turn off smart features/i').last();
+    if (await turnOffText.isVisible().catch(() => false)) {
+      const box = await turnOffText.boundingBox().catch(() => null);
+      if (box) {
+        await page.mouse.click(Math.max(1, box.x - 46), box.y + box.height / 2).catch(() => {});
+      } else {
+        await turnOffText.click({ force: true }).catch(() => {});
+      }
+      await page.waitForTimeout(300).catch(() => {});
     }
 
     const primaryButtons = [

@@ -400,22 +400,42 @@ function pickPrimarySender(input: {
   senderInfos: SenderStatusInfo[];
   activeRun: OutreachRun | null;
   activeCampaign: ScaleCampaignRecord | null;
+  assignment: BrandOutreachAssignment | null;
 }) {
   const byDeliveryAccountId = new Map(
     input.senderInfos
       .map((info) => [String(info.deliveryAccount?.id ?? info.sender.deliveryAccountId).trim(), info] as const)
       .filter(([accountId]) => Boolean(accountId))
   );
+  const assignedAccountIds = unique(
+    [
+      input.assignment?.accountId ?? "",
+      ...(input.assignment?.accountIds ?? []),
+    ]
+      .map((accountId) => accountId.trim())
+      .filter(Boolean)
+  );
+  const assignedAccountIdSet = new Set(assignedAccountIds);
 
   if (input.activeRun?.accountId) {
     const runSender = byDeliveryAccountId.get(input.activeRun.accountId.trim()) ?? null;
-    if (runSender) return runSender;
+    if (runSender && (!assignedAccountIdSet.size || assignedAccountIdSet.has(input.activeRun.accountId.trim()))) {
+      return runSender;
+    }
+  }
+
+  const assignedPrimaryAccountId = String(input.assignment?.accountId ?? "").trim();
+  if (assignedPrimaryAccountId) {
+    const assignmentSender = byDeliveryAccountId.get(assignedPrimaryAccountId) ?? null;
+    if (assignmentSender) return assignmentSender;
   }
 
   const preferredCampaignAccountId = String(input.activeCampaign?.scalePolicy.accountId ?? "").trim();
   if (preferredCampaignAccountId) {
     const campaignSender = byDeliveryAccountId.get(preferredCampaignAccountId) ?? null;
-    if (campaignSender) return campaignSender;
+    if (campaignSender && (!assignedAccountIdSet.size || assignedAccountIdSet.has(preferredCampaignAccountId))) {
+      return campaignSender;
+    }
   }
 
   return (
@@ -996,6 +1016,7 @@ async function assembleBrandStatus(
     senderInfos,
     activeRun: activeOutboundRun,
     activeCampaign: activeOutboundCampaign,
+    assignment,
   });
 
   const senderCounts = senderInfos.reduce(

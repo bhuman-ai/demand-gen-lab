@@ -1078,26 +1078,52 @@ async function fillToRecipient(composeRoot: any, page: any, recipient: string) {
   }
 }
 
+function normalizeComposeFieldText(value: string) {
+  return normalizeVisibleText(value.replace(/\u00a0/g, " "));
+}
+
+async function ensureComposeSubject(composeRoot: any, subject: string) {
+  const expected = String(subject ?? "").trim();
+  const subjectInput = composeRoot.locator(COMPOSE_SUBJECT_SELECTOR).last();
+  await subjectInput.waitFor({ state: "visible", timeout: 30000 });
+  const current = String((await subjectInput.inputValue().catch(() => "")) ?? "").trim();
+  if (current !== expected) {
+    await subjectInput.fill(expected);
+  }
+  const updated = String((await subjectInput.inputValue().catch(() => "")) ?? "").trim();
+  if (updated !== expected) {
+    throw new Error(`Gmail compose subject did not stick. Expected "${expected}", got "${updated}".`);
+  }
+}
+
+async function ensureComposeBody(composeRoot: any, page: any, body: string) {
+  const expected = String(body ?? "");
+  const bodyInput = composeRoot.locator(COMPOSE_BODY_SELECTOR).last();
+  await bodyInput.waitFor({ state: "visible", timeout: 30000 });
+  const current = String((await bodyInput.innerText().catch(() => "")) ?? "");
+  if (normalizeComposeFieldText(current) !== normalizeComposeFieldText(expected)) {
+    await bodyInput.click({ force: true }).catch(() => {});
+    await bodyInput.fill(expected);
+  }
+  await page.waitForTimeout(150).catch(() => {});
+  const updated = String((await bodyInput.innerText().catch(() => "")) ?? "");
+  if (normalizeComposeFieldText(updated) !== normalizeComposeFieldText(expected)) {
+    throw new Error("Gmail compose body did not match the expected message after filling.");
+  }
+}
+
 async function fillCompose(page: any, input: { recipient: string; subject: string; body: string; expectedFrom?: string }) {
   await closeOpenComposeWindows(page);
   let composeRoot = await openPrefilledCompose(page, input).catch(() => null);
-  const recipientPrefilled = Boolean(composeRoot);
   if (!composeRoot) {
     composeRoot = await openCompose(page);
   }
   await verifyFromAddress(composeRoot, input.expectedFrom ?? "");
   await dismissGmailOverlays(page, { useEscape: false });
 
-  if (!recipientPrefilled) {
-    await fillToRecipient(composeRoot, page, input.recipient);
-    const subjectInput = composeRoot.locator(COMPOSE_SUBJECT_SELECTOR).last();
-    await subjectInput.fill(input.subject);
-
-    const bodyInput = composeRoot.locator(COMPOSE_BODY_SELECTOR).last();
-    await bodyInput.waitFor({ state: "visible", timeout: 30000 });
-    await bodyInput.click({ force: true }).catch(() => {});
-    await bodyInput.fill(input.body);
-  }
+  await fillToRecipient(composeRoot, page, input.recipient);
+  await ensureComposeSubject(composeRoot, input.subject);
+  await ensureComposeBody(composeRoot, page, input.body);
   return composeRoot;
 }
 
@@ -1489,7 +1515,13 @@ async function waitForSendConfirmation(
   } else if (!(await isComposeStillOpen(composeRoot))) {
     return;
   }
-  throw new Error("Gmail send confirmation did not appear and the compose window is still open.");
+  if (await verifyMessageInSent(page, expectedSent)) {
+    return;
+  }
+  const sendControls = await describeVisibleSendControls(page, composeRoot);
+  throw new Error(
+    `Gmail send confirmation did not appear and the compose window is still open. visibleSendControls=${sendControls}`
+  );
 }
 
 function isPageClosedError(error: unknown) {

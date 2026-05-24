@@ -34,6 +34,7 @@ export type OperatorMemorySensitivity = "normal" | "sensitive";
 export type OperatorToolName =
   | "get_brand_snapshot"
   | "get_sender_snapshot"
+  | "inspect_sender_delivery_evidence"
   | "summarize_campaign_status"
   | "get_campaign_snapshot"
   | "summarize_experiments"

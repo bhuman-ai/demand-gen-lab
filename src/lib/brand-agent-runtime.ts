@@ -10,6 +10,7 @@ import type {
 
 export type BrandAgentTraceEntry = {
   step: number;
+  objectType?: string;
   toolName: string;
   riskLevel: string;
   input: Record<string, unknown>;
@@ -17,6 +18,8 @@ export type BrandAgentTraceEntry = {
   result: Record<string, unknown>;
   error: string;
   rationale?: string;
+  evidenceNeeded?: string[];
+  avoidedWrongPaths?: string[];
 };
 
 export type BrandAgentRecentMessage = {
@@ -44,13 +47,30 @@ export type BrandAgentEvidenceCheck = {
 type AgentStep = {
   message: string;
   done: boolean;
+  objectType: string;
   toolName: string;
   toolInputJson: string;
   rationale: string;
   evidenceStatus: BrandAgentEvidenceStatus | "";
   evidenceSummary: string;
   evidenceGaps: string[];
+  evidenceNeeded: string[];
+  avoidedWrongPaths: string[];
 };
+
+const SENDER_DELIVERY_OBJECT_TYPES = new Set([
+  "sender_delivery",
+  "deliverability",
+  "inboxing",
+  "sender_readiness",
+]);
+
+const SENDER_DELIVERY_WRONG_TOOLS = new Set<OperatorToolName>([
+  "summarize_experiments",
+  "get_experiment_snapshot",
+  "summarize_campaign_status",
+  "get_campaign_snapshot",
+]);
 
 function asString(value: unknown) {
   return String(value ?? "").trim();
@@ -142,6 +162,7 @@ function parseAgentStep(rawText: string): AgentStep | null {
   return {
     message: asString(row.message),
     done: row.done === true,
+    objectType: asString(row.objectType),
     toolName: asString(row.toolName),
     toolInputJson: asString(row.toolInputJson) || "{}",
     rationale: asString(row.rationale),
@@ -149,6 +170,12 @@ function parseAgentStep(rawText: string): AgentStep | null {
     evidenceSummary: asString(row.evidenceSummary),
     evidenceGaps: Array.isArray(row.evidenceGaps)
       ? row.evidenceGaps.map((entry) => asString(entry)).filter(Boolean).slice(0, 6)
+      : [],
+    evidenceNeeded: Array.isArray(row.evidenceNeeded)
+      ? row.evidenceNeeded.map((entry) => asString(entry)).filter(Boolean).slice(0, 8)
+      : [],
+    avoidedWrongPaths: Array.isArray(row.avoidedWrongPaths)
+      ? row.avoidedWrongPaths.map((entry) => asString(entry)).filter(Boolean).slice(0, 8)
       : [],
   };
 }
@@ -188,12 +215,16 @@ function buildAgentPrompt(input: {
     "You are the reasoning engine. The host app only gives you scoped tools, permissions, tenant isolation, budgets, and audit logging.",
     "Do not behave like a scripted support chatbot. Inspect evidence, decide the next useful tool call, observe results, and continue until you can answer or choose an action.",
     "Respond with JSON only.",
-    'Return: {"message": string, "done": boolean, "toolName": string, "toolInputJson": string, "rationale": string, "evidenceStatus": "verified"|"inconclusive"|"insufficient", "evidenceSummary": string, "evidenceGaps": string[]}.',
+    'Return: {"message": string, "done": boolean, "objectType": string, "toolName": string, "toolInputJson": string, "rationale": string, "evidenceNeeded": string[], "avoidedWrongPaths": string[], "evidenceStatus": "verified"|"inconclusive"|"insufficient", "evidenceSummary": string, "evidenceGaps": string[]}.',
     'Use toolName "" and toolInputJson "{}" when you are not calling a tool.',
     "Call at most one tool per step.",
+    "Before choosing a tool, classify the object the user is asking about. Use stable objectType values such as sender_delivery, sender, inbox, reply_thread, campaign, experiment, lead, brand, leadr, gmail_ui, or unknown.",
+    "sender_delivery means sender readiness, warmup, control checks, deliverability, inbox placement, spam placement, Mailpool spam checks, seed inbox results, or questions like which sender emails are landing in Gmail inbox vs spam.",
+    "For sender_delivery, call inspect_sender_delivery_evidence first. Do not inspect experiments or campaigns unless the user explicitly asks about a campaign, experiment, variant, generated copy, run, or leads tied to a specific outbound test.",
+    "If the user asks what an internal status means, answer in product English and inspect the domain object behind that status before choosing any unrelated object.",
     "Read tools are your senses. Use them freely when the compact context is insufficient, stale, ambiguous, or lacks raw evidence.",
     "If the user asks for actual content, causes, live account state, replies, drafts, campaign copy, deliverability evidence, leads, runs, or what changed, inspect with tools before answering from memory.",
-    "If you are unsure which read tool fits, call investigate_brand_data with brandId, query, and any known IDs.",
+    "If you are unsure which read tool fits after deciding the objectType, call investigate_brand_data with brandId, query, and any known IDs.",
     "Write tools are your hands. If a write/send/launch/delete/provision/buy action is the right next move, choose the matching write tool and stop; the host will execute or request confirmation according to risk.",
     "Do not invent IDs, email bodies, replies, leads, sender state, domains, accounts, or metrics.",
     "Do not expose credentials or internal API secrets.",
@@ -283,9 +314,12 @@ export async function runBrandAgentTurn(input: {
             properties: {
               message: { type: "string" },
               done: { type: "boolean" },
+              objectType: { type: "string" },
               toolName: { type: "string" },
               toolInputJson: { type: "string" },
               rationale: { type: "string" },
+              evidenceNeeded: { type: "array", items: { type: "string" } },
+              avoidedWrongPaths: { type: "array", items: { type: "string" } },
               evidenceStatus: { type: "string", enum: ["verified", "inconclusive", "insufficient"] },
               evidenceSummary: { type: "string" },
               evidenceGaps: { type: "array", items: { type: "string" } },
@@ -293,9 +327,12 @@ export async function runBrandAgentTurn(input: {
             required: [
               "message",
               "done",
+              "objectType",
               "toolName",
               "toolInputJson",
               "rationale",
+              "evidenceNeeded",
+              "avoidedWrongPaths",
               "evidenceStatus",
               "evidenceSummary",
               "evidenceGaps",
@@ -309,6 +346,12 @@ export async function runBrandAgentTurn(input: {
 
       assistant = normalizeAssistantReply(step, input.fallbackAssistant);
       const rawToolName = step.toolName as OperatorToolName;
+      const rawToolInput = parseToolInput(step.toolInputJson);
+      const traceMeta = {
+        objectType: step.objectType || "unknown",
+        evidenceNeeded: step.evidenceNeeded,
+        avoidedWrongPaths: step.avoidedWrongPaths,
+      };
       if (!rawToolName) {
         return {
           assistant,
@@ -319,11 +362,30 @@ export async function runBrandAgentTurn(input: {
         };
       }
 
+      if (
+        SENDER_DELIVERY_OBJECT_TYPES.has(step.objectType.toLowerCase()) &&
+        SENDER_DELIVERY_WRONG_TOOLS.has(rawToolName)
+      ) {
+        trace.push({
+          step: stepNumber,
+          ...traceMeta,
+          toolName: rawToolName,
+          riskLevel: "read",
+          input: rawToolInput,
+          summary: "",
+          result: {},
+          error:
+            "Object route mismatch: this is a sender-delivery/inboxing question, so inspect sender delivery evidence before campaign or experiment objects.",
+          rationale: step.rationale,
+        });
+        continue;
+      }
+
       const tool = toolByName.get(rawToolName);
-      const rawToolInput = parseToolInput(step.toolInputJson);
       if (!tool) {
         trace.push({
           step: stepNumber,
+          ...traceMeta,
           toolName: step.toolName,
           riskLevel: "unknown",
           input: rawToolInput,
@@ -338,6 +400,7 @@ export async function runBrandAgentTurn(input: {
       if (input.mode === "recommendation_only" && tool.riskLevel !== "read") {
         trace.push({
           step: stepNumber,
+          ...traceMeta,
           toolName: tool.name,
           riskLevel: tool.riskLevel,
           input: rawToolInput,
@@ -356,6 +419,7 @@ export async function runBrandAgentTurn(input: {
       if (!normalizedAction) {
         trace.push({
           step: stepNumber,
+          ...traceMeta,
           toolName: tool.name,
           riskLevel: tool.riskLevel,
           input: rawToolInput,
@@ -381,6 +445,7 @@ export async function runBrandAgentTurn(input: {
         const toolResult: OperatorToolResult = await tool.run(normalizedAction.input);
         trace.push({
           step: stepNumber,
+          ...traceMeta,
           toolName: normalizedAction.toolName,
           riskLevel: tool.riskLevel,
           input: normalizedAction.input,
@@ -392,6 +457,7 @@ export async function runBrandAgentTurn(input: {
       } catch (error) {
         trace.push({
           step: stepNumber,
+          ...traceMeta,
           toolName: normalizedAction.toolName,
           riskLevel: tool.riskLevel,
           input: normalizedAction.input,

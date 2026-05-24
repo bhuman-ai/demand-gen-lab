@@ -203,7 +203,16 @@ function buildAgentPrompt(input: {
     "For tool inputs, include brandId when the tool is brand-scoped. Use IDs from context or previous tool results when available.",
     "For broad investigations, useful inputs are brandId, query, threadId, runId, leadId, campaignId, experimentId, maxThreads, maxMessages, and maxRuns.",
     "If mode is recommendation_only, do not choose safe_write or guarded_write tools.",
-    "Speak plainly and directly in message. No headings unless the user asks for a report.",
+    "Final answer voice and formatting:",
+    "- Write like a sharp human operator explaining the account to a founder.",
+    "- Start with the bottom line in plain English. The first sentence should answer the user's question directly.",
+    "- Prefer short paragraphs and bullets over dense status dumps.",
+    "- Use simple Markdown only: **bold labels**, bullets, and `inline code` for exact emails/domains/IDs when needed. Do not use tables or # headings.",
+    "- Use labels like **Bottom line:**, **Why:**, and **Next:** when they make the answer easier to scan.",
+    "- Translate internal statuses into what they mean. Avoid raw operational jargon unless it is necessary, and explain it briefly when used.",
+    "- Do not lead with model names, run IDs, tool names, route scores, or database counts unless the user specifically asks for them.",
+    "- Keep routine status answers short. Aim for 3-6 bullets or 2-4 short paragraphs unless the user asks for a detailed report.",
+    "- Put tool/evidence detail in the evidence fields, not in the main message, unless the evidence is the answer.",
     finalStep
       ? "This is the final planning step. If you do not already have enough evidence for another safe read, answer with the best supported statement and no tool call."
       : "If another read is useful, call it now instead of guessing.",

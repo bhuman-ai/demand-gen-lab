@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import type { ReactNode } from "react";
 import {
   Bot,
   Check,
@@ -555,6 +556,124 @@ function EvidenceTrace({
   );
 }
 
+function renderInlineFormatting(text: string, keyPrefix: string) {
+  const nodes: ReactNode[] = [];
+  const pattern = /(\*\*[^*\n]+?\*\*|`[^`\n]+?`)/g;
+  let lastIndex = 0;
+  let index = 0;
+
+  for (const match of text.matchAll(pattern)) {
+    const value = match[0] ?? "";
+    const matchIndex = match.index ?? 0;
+    if (matchIndex > lastIndex) {
+      nodes.push(text.slice(lastIndex, matchIndex));
+    }
+    if (value.startsWith("**") && value.endsWith("**")) {
+      nodes.push(
+        <strong key={`${keyPrefix}-strong-${index}`} className="font-semibold text-[color:var(--foreground)]">
+          {value.slice(2, -2)}
+        </strong>
+      );
+    } else if (value.startsWith("`") && value.endsWith("`")) {
+      nodes.push(
+        <code
+          key={`${keyPrefix}-code-${index}`}
+          className="rounded-[6px] bg-[color:var(--surface-muted)] px-1.5 py-0.5 font-mono text-[0.92em]"
+        >
+          {value.slice(1, -1)}
+        </code>
+      );
+    }
+    lastIndex = matchIndex + value.length;
+    index += 1;
+  }
+
+  if (lastIndex < text.length) {
+    nodes.push(text.slice(lastIndex));
+  }
+  return nodes;
+}
+
+function FormattedAssistantText({ text }: { text: string }) {
+  const lines = text.replace(/\r\n/g, "\n").trim().split("\n");
+  const blocks: ReactNode[] = [];
+  let paragraph: string[] = [];
+  let unorderedItems: string[] = [];
+  let orderedItems: string[] = [];
+
+  const flushParagraph = () => {
+    if (!paragraph.length) return;
+    const value = paragraph.join("\n").trim();
+    if (value) {
+      blocks.push(
+        <p key={`p-${blocks.length}`} className="whitespace-pre-wrap">
+          {renderInlineFormatting(value, `p-${blocks.length}`)}
+        </p>
+      );
+    }
+    paragraph = [];
+  };
+
+  const flushUnordered = () => {
+    if (!unorderedItems.length) return;
+    blocks.push(
+      <ul key={`ul-${blocks.length}`} className="list-disc space-y-1 pl-5">
+        {unorderedItems.map((item, index) => (
+          <li key={`${item}-${index}`}>{renderInlineFormatting(item, `ul-${blocks.length}-${index}`)}</li>
+        ))}
+      </ul>
+    );
+    unorderedItems = [];
+  };
+
+  const flushOrdered = () => {
+    if (!orderedItems.length) return;
+    blocks.push(
+      <ol key={`ol-${blocks.length}`} className="list-decimal space-y-1 pl-5">
+        {orderedItems.map((item, index) => (
+          <li key={`${item}-${index}`}>{renderInlineFormatting(item, `ol-${blocks.length}-${index}`)}</li>
+        ))}
+      </ol>
+    );
+    orderedItems = [];
+  };
+
+  const flushLists = () => {
+    flushUnordered();
+    flushOrdered();
+  };
+
+  lines.forEach((line) => {
+    const trimmed = line.trim();
+    const unordered = trimmed.match(/^[-*]\s+(.+)$/);
+    const ordered = trimmed.match(/^\d+[.)]\s+(.+)$/);
+    if (!trimmed) {
+      flushParagraph();
+      flushLists();
+      return;
+    }
+    if (unordered) {
+      flushParagraph();
+      flushOrdered();
+      unorderedItems.push(unordered[1] ?? "");
+      return;
+    }
+    if (ordered) {
+      flushParagraph();
+      flushUnordered();
+      orderedItems.push(ordered[1] ?? "");
+      return;
+    }
+    flushLists();
+    paragraph.push(line);
+  });
+
+  flushParagraph();
+  flushLists();
+
+  return <div className="space-y-4 text-[15px] leading-7">{blocks.length ? blocks : text}</div>;
+}
+
 function MessageBody({
   message,
   actionsById,
@@ -564,6 +683,7 @@ function MessageBody({
   onSubmitForm,
   actionBusyId,
   sending,
+  inline = false,
 }: {
   message: OperatorMessage;
   actionsById: Map<string, OperatorAction>;
@@ -573,6 +693,7 @@ function MessageBody({
   onSubmitForm: (form: OperatorExecutionForm, values: Record<string, string>) => void;
   actionBusyId: string;
   sending: boolean;
+  inline?: boolean;
 }) {
   const content = asRecord(message.content);
   if (message.kind === "message" && message.role === "assistant") {
@@ -583,10 +704,11 @@ function MessageBody({
     const evidenceCheck = readEvidenceCheck(content.evidenceCheck);
     const actionId = asString(execution.actionId);
     const action = actionId ? actionsById.get(actionId) : undefined;
+    const answerText = asString(content.text) || asString(assistant.summary);
     return (
       <div>
-        <div className="whitespace-pre-wrap text-sm leading-6">{asString(content.text) || asString(assistant.summary)}</div>
-        {run ? (
+        <FormattedAssistantText text={answerText} />
+        {run && !inline ? (
           <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-[color:var(--muted-foreground)]">
             <Badge variant={runBadgeVariant(run.status)}>{runStatusLabel(run.status)}</Badge>
             {run.model ? <span>{run.model}</span> : null}
@@ -1173,6 +1295,7 @@ export default function OperatorPanel({
                       onSubmitForm={(form, values) => void handleSubmitForm(form, values)}
                       actionBusyId={actionBusyId}
                       sending={agentBusy}
+                      inline
                     />
                   </div>
                 ) : (
@@ -1186,6 +1309,7 @@ export default function OperatorPanel({
                       onSubmitForm={(form, values) => void handleSubmitForm(form, values)}
                       actionBusyId={actionBusyId}
                       sending={agentBusy}
+                      inline
                     />
                   </div>
                 )}

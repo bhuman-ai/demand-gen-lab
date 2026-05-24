@@ -724,11 +724,63 @@ async function takeSnapshot(handle: SessionHandle, snapshot: Omit<SessionSnapsho
   return result;
 }
 
+async function dismissGmailSmartFeaturesDialog(page: any) {
+  for (let attempt = 0; attempt < 6; attempt += 1) {
+    const dialog = page
+      .locator('div[role="dialog"]:has-text("Turn on smart features"), div[role="dialog"]:has-text("smart features")')
+      .first();
+    if (!(await dialog.isVisible().catch(() => false))) {
+      return;
+    }
+
+    const turnOff = dialog.locator('text=/Turn off smart features/i').last();
+    if (await turnOff.isVisible().catch(() => false)) {
+      await turnOff.click({ force: true }).catch(() => {});
+      await page.waitForTimeout(250).catch(() => {});
+    }
+
+    const primaryButtons = [
+      dialog.getByRole?.("button", { name: /^(Next|Done|Save|Continue|Reload)$/i }).last(),
+      dialog.locator('button:has-text("Next"), div[role="button"]:has-text("Next")').last(),
+      dialog.locator('button:has-text("Done"), div[role="button"]:has-text("Done")').last(),
+      dialog.locator('button:has-text("Save"), div[role="button"]:has-text("Save")').last(),
+      dialog.locator('button:has-text("Continue"), div[role="button"]:has-text("Continue")').last(),
+      dialog.locator('button:has-text("Reload"), div[role="button"]:has-text("Reload")').last(),
+    ].filter(Boolean);
+
+    let advanced = false;
+    for (const button of primaryButtons) {
+      if (!(await button.isVisible().catch(() => false))) continue;
+      const disabled =
+        (await button.getAttribute("aria-disabled").catch(() => "")) === "true" ||
+        (await button.evaluate((node: HTMLButtonElement) => node.disabled === true).catch(() => false));
+      if (disabled) continue;
+      await button.click({ force: true }).catch(() => {});
+      await page.waitForTimeout(700).catch(() => {});
+      advanced = true;
+      break;
+    }
+
+    if (!advanced) {
+      const close = dialog.locator('button[aria-label="Close"], div[role="button"][aria-label="Close"]').last();
+      if (await close.isVisible().catch(() => false)) {
+        await close.click({ force: true }).catch(() => {});
+        await page.waitForTimeout(500).catch(() => {});
+        continue;
+      }
+      await page.keyboard.press("Escape").catch(() => {});
+      await page.waitForTimeout(500).catch(() => {});
+    }
+  }
+}
+
 async function dismissGmailOverlays(page: any, options: { useEscape?: boolean } = {}) {
   if (options.useEscape !== false) {
     await page.keyboard.press("Escape").catch(() => {});
     await page.waitForTimeout(250).catch(() => {});
   }
+
+  await dismissGmailSmartFeaturesDialog(page);
 
   const dismissCandidates = [
     'button:has-text("Got it")',

@@ -467,6 +467,17 @@ function brandSummaryFromState(state: CanonicalSender["state"]) {
   };
 }
 
+function liveSenderSummaryState(info: SenderStatusInfo): CanonicalSender["state"] {
+  if (info.readiness.lifecycle === "ready" || info.readiness.canSendNow) return "ready";
+  if (info.readiness.lifecycle === "warming") return "warming";
+  if (info.readiness.lifecycle === "setup") {
+    return info.sender.state === "retired" ? "retired" : "provisioning";
+  }
+  if (info.sender.state === "retired") return "retired";
+  if (info.sender.state === "restricted") return "restricted";
+  return "blocked";
+}
+
 function structuralSenderIssue(readiness: SenderReadiness | null) {
   if (!readiness) return null;
   return readiness.blockingIssues.find((issue) => issue.kind !== "capacity") ?? null;
@@ -1030,7 +1041,7 @@ async function assembleBrandStatus(
 
   const senderCounts = senderInfos.reduce(
     (acc, info) => {
-      const counts = brandSummaryFromState(info.sender.state);
+      const counts = brandSummaryFromState(liveSenderSummaryState(info));
       acc.ready += counts.ready;
       acc.warming += counts.warming;
       acc.restricted += counts.restricted;
@@ -1431,7 +1442,7 @@ async function assembleBrandStatus(
       retiredSenderCount: senderCounts.retired,
       primarySenderId: primarySender?.sender.id ?? "",
       primarySenderEmail: primarySender?.sender.fromEmail ?? "",
-      primarySenderState: primarySender?.sender.state ?? "",
+      primarySenderState: primarySender ? liveSenderSummaryState(primarySender) : "",
     },
     campaignSummary: {
       activeOutboundCampaignCount: activeOutboundCampaigns.length,

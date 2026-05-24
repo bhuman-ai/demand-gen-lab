@@ -386,7 +386,15 @@ const OPERATOR_TOOL_DEFINITIONS: OperatorGrowthToolDefinition[] = [
         campaignId: stringProp("Campaign id"),
         runId: stringProp("Run id"),
         action: enumProp(
-          ["pause", "resume", "cancel", "probe_deliverability", "resume_sender_deliverability", "seed_inbox_placement"],
+          [
+            "pause",
+            "resume",
+            "cancel",
+            "probe_deliverability",
+            "probe_all_senders_deliverability",
+            "resume_sender_deliverability",
+            "seed_inbox_placement",
+          ],
           "Control action"
         ),
         reason: stringProp("Reason for the action"),

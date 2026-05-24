@@ -929,6 +929,7 @@ export async function controlScaleCampaignRunApi(
     | "resume"
     | "cancel"
     | "probe_deliverability"
+    | "probe_all_senders_deliverability"
     | "resume_sender_deliverability"
     | "seed_inbox_placement",
   reason?: string,

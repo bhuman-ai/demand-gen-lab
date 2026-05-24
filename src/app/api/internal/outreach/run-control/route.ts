@@ -10,6 +10,7 @@ const RUN_CONTROL_ACTIONS = new Set([
   "resume",
   "cancel",
   "probe_deliverability",
+  "probe_all_senders_deliverability",
   "resume_sender_deliverability",
   "seed_inbox_placement",
 ]);
@@ -43,7 +44,7 @@ export async function POST(request: Request) {
     return NextResponse.json(
       {
         error:
-          "action must be pause, resume, cancel, probe_deliverability, resume_sender_deliverability, or seed_inbox_placement",
+          "action must be pause, resume, cancel, probe_deliverability, probe_all_senders_deliverability, resume_sender_deliverability, or seed_inbox_placement",
       },
       { status: 400 }
     );
@@ -63,6 +64,7 @@ export async function POST(request: Request) {
       | "resume"
       | "cancel"
       | "probe_deliverability"
+      | "probe_all_senders_deliverability"
       | "resume_sender_deliverability"
       | "seed_inbox_placement",
     reason: typeof body.reason === "string" ? body.reason : undefined,

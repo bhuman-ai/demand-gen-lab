@@ -2405,7 +2405,14 @@ function inferActionFromMessage(
     if (message.includes("probe") && campaignId) {
       return {
         toolName: "control_campaign_run",
-        input: { brandId: context.brand.id, campaignId, action: "probe_deliverability" },
+        input: {
+          brandId: context.brand.id,
+          campaignId,
+          action:
+            message.includes("all sender") || message.includes("all the sender")
+              ? "probe_all_senders_deliverability"
+              : "probe_deliverability",
+        },
       };
     }
     if ((message.includes("delete") || message.includes("remove")) && campaignId) {

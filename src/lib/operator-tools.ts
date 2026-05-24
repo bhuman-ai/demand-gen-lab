@@ -2011,12 +2011,13 @@ const TOOL_SPECS: OperatorToolSpec[] = [
           "resume",
           "cancel",
           "probe_deliverability",
+          "probe_all_senders_deliverability",
           "resume_sender_deliverability",
           "seed_inbox_placement",
         ].includes(action)
       ) {
         throw new Error(
-          "action must be pause, resume, cancel, probe_deliverability, resume_sender_deliverability, or seed_inbox_placement"
+          "action must be pause, resume, cancel, probe_deliverability, probe_all_senders_deliverability, resume_sender_deliverability, or seed_inbox_placement"
         );
       }
       const { campaign, run } = await resolveCampaignRunTarget({
@@ -2033,6 +2034,7 @@ const TOOL_SPECS: OperatorToolSpec[] = [
           | "resume"
           | "cancel"
           | "probe_deliverability"
+          | "probe_all_senders_deliverability"
           | "resume_sender_deliverability"
           | "seed_inbox_placement",
         reason: asString(input.reason) || undefined,

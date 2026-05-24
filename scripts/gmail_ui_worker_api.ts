@@ -8,6 +8,8 @@ import { chromium } from "playwright";
 import { promisify } from "util";
 import { runBuyShazamCommentLikesPurchase } from "@/lib/buyshazam-ui-purchase";
 
+loadLocalEnv();
+
 type SessionStep =
   | "opening"
   | "account_picker"
@@ -131,6 +133,29 @@ type AccountBundle = {
   gmailUiAuthCode: string;
 };
 
+function loadLocalEnv() {
+  for (const envPath of [path.join(process.cwd(), ".env.local"), path.join(process.cwd(), ".env")]) {
+    if (!fs.existsSync(envPath)) continue;
+    const contents = fs.readFileSync(envPath, "utf8");
+    for (const rawLine of contents.split(/\r?\n/)) {
+      const line = rawLine.trim();
+      if (!line || line.startsWith("#")) continue;
+      const match = line.match(/^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)=(.*)$/);
+      if (!match) continue;
+      const key = match[1];
+      if (process.env[key] !== undefined) continue;
+      let value = match[2].trim();
+      if (
+        (value.startsWith('"') && value.endsWith('"')) ||
+        (value.startsWith("'") && value.endsWith("'"))
+      ) {
+        value = value.slice(1, -1);
+      }
+      process.env[key] = value;
+    }
+  }
+}
+
 const sessions = new Map<string, SessionHandle>();
 const SCREENSHOT_DIR = path.join(process.cwd(), "output", "playwright", "gmail-ui-worker");
 const IDLE_TTL_MS = 15 * 60 * 1000;
@@ -181,18 +206,6 @@ const OTP_FIELD_SELECTORS = [
   'input[aria-label*="code" i]',
 ];
 const execFile = promisify(execFileCallback);
-
-function loadLocalEnv() {
-  const envPath = path.join(process.cwd(), ".env.local");
-  if (!fs.existsSync(envPath)) return;
-  const text = fs.readFileSync(envPath, "utf8");
-  for (const line of text.split(/\r?\n/)) {
-    const match = line.match(/^([A-Z0-9_]+)=(.*)$/);
-    if (!match) continue;
-    if (process.env[match[1]]) continue;
-    process.env[match[1]] = match[2].replace(/^"|"$/g, "").trim();
-  }
-}
 
 function ensureDisplayEnv() {
   if (String(process.env.DISPLAY ?? "").trim()) return;

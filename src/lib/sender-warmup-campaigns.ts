@@ -65,6 +65,7 @@ export type BrandSenderWarmupCampaignsResult = {
   removedAccountIds: string[];
   ensuredCampaignIds: string[];
   pausedCampaignIds: string[];
+  reassignedCampaignIds: string[];
 };
 
 export type SenderWarmupBackfillSummary = {
@@ -74,6 +75,7 @@ export type SenderWarmupBackfillSummary = {
   assignmentsCleaned: number;
   campaignsEnsured: number;
   campaignsPaused: number;
+  campaignsReassigned: number;
   results: BrandSenderWarmupCampaignsResult[];
   errors: Array<{ brandId: string; brandName: string; error: string }>;
 };
@@ -177,6 +179,37 @@ function selectHealthyWarmupSenderAccountIds(input: {
 function sameStringList(left: string[], right: string[]) {
   if (left.length !== right.length) return false;
   return left.every((value, index) => value === right[index]);
+}
+
+async function repairDedicatedCampaignSenderPolicies(input: {
+  brandId: string;
+  campaigns: ScaleCampaignRecord[];
+  healthyAccountIds: string[];
+}) {
+  const preferredAccountId = normalizeText(input.healthyAccountIds[0]);
+  if (!preferredAccountId) return [] as string[];
+
+  const healthyAccountIdSet = new Set(input.healthyAccountIds.map((accountId) => normalizeText(accountId)).filter(Boolean));
+  const repairedCampaignIds: string[] = [];
+
+  for (const campaign of input.campaigns) {
+    if (campaign.status === "archived") continue;
+    const dedicatedAccountId = normalizeText(campaign.scalePolicy.accountId);
+    const dedicatedMailboxAccountId = normalizeText(campaign.scalePolicy.mailboxAccountId);
+    const pinnedAccountId = dedicatedAccountId || dedicatedMailboxAccountId;
+    if (!pinnedAccountId || healthyAccountIdSet.has(pinnedAccountId)) continue;
+
+    await updateScaleCampaignRecord(input.brandId, campaign.id, {
+      scalePolicy: {
+        ...campaign.scalePolicy,
+        accountId: preferredAccountId,
+        mailboxAccountId: preferredAccountId,
+      },
+    });
+    repairedCampaignIds.push(campaign.id);
+  }
+
+  return repairedCampaignIds;
 }
 
 function dedupeWarmupSenderAccountIds(
@@ -929,6 +962,7 @@ export async function ensureBrandSenderWarmupCampaigns(input: {
     removedAccountIds: [],
     ensuredCampaignIds: ensured.map((campaign) => campaign.id),
     pausedCampaignIds,
+    reassignedCampaignIds: [],
   } satisfies BrandSenderWarmupCampaignsResult;
 }
 
@@ -1011,6 +1045,7 @@ export async function reconcileAssignedSenderWarmupCampaigns(input: {
         accountById
       );
       const removedAccountIds = assignedAccountIds.filter((accountId) => !usableAssignedAccountIds.includes(accountId));
+      const existingCampaigns = await listScaleCampaignRecords(brand.id);
 
       if (assignedAccountIds.length > 0 && !sameStringList(assignedAccountIds, usableAssignedAccountIds)) {
         const preservedMailboxAccountId = normalizeText(assignment?.mailboxAccountId);
@@ -1024,6 +1059,12 @@ export async function reconcileAssignedSenderWarmupCampaigns(input: {
         assignmentsCleaned += 1;
       }
 
+      const reassignedCampaignIds = await repairDedicatedCampaignSenderPolicies({
+        brandId: brand.id,
+        campaigns: existingCampaigns,
+        healthyAccountIds: usableAssignedAccountIds,
+      });
+
       const ensured = await ensureBrandSenderWarmupCampaigns({
         brandId: brand.id,
         accountIds: usableAssignedAccountIds,
@@ -1031,6 +1072,7 @@ export async function reconcileAssignedSenderWarmupCampaigns(input: {
       results.push({
         ...ensured,
         removedAccountIds,
+        reassignedCampaignIds,
       });
     } catch (error) {
       errors.push({
@@ -1048,6 +1090,7 @@ export async function reconcileAssignedSenderWarmupCampaigns(input: {
     assignmentsCleaned,
     campaignsEnsured: results.reduce((sum, result) => sum + result.ensuredCampaignIds.length, 0),
     campaignsPaused: results.reduce((sum, result) => sum + result.pausedCampaignIds.length, 0),
+    campaignsReassigned: results.reduce((sum, result) => sum + result.reassignedCampaignIds.length, 0),
     results,
     errors,
   };

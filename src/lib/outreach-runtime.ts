@@ -11246,7 +11246,8 @@ function invalidCampaignRunReason(input: {
     return "Run canceled: campaign no longer exists.";
   }
   if (
-    resolveScaleCampaignLane(input.campaign) === "warmup" &&
+    input.assignedAccountIds.length > 0 &&
+    input.senderAccountId &&
     !input.assignedAccountIds.includes(input.senderAccountId)
   ) {
     return "Run canceled: sender is no longer assigned to this brand.";

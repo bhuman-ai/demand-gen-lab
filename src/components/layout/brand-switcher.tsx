@@ -34,7 +34,7 @@ function buildPathWithBrandId(pathname: string, brandId: string) {
   return `/${next.join("/")}`;
 }
 
-export default function BrandSwitcher() {
+export default function BrandSwitcher({ variant = "default" }: { variant?: "default" | "chat" }) {
   const router = useRouter();
   const pathname = usePathname();
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -173,9 +173,11 @@ export default function BrandSwitcher() {
     router.push("/brands/new");
   }
 
+  const compact = variant === "chat";
+
   return (
-    <div className="grid w-full min-w-0 gap-2">
-      <div className="text-[12px] text-[color:var(--muted-foreground)]">Active brand</div>
+    <div className={cn("grid w-full min-w-0", compact ? "gap-1" : "gap-2")}>
+      {!compact ? <div className="text-[12px] text-[color:var(--muted-foreground)]">Active brand</div> : null}
       <div ref={containerRef} className="relative w-full min-w-0 max-w-full">
         <button
           type="button"
@@ -183,19 +185,25 @@ export default function BrandSwitcher() {
           aria-expanded={menuOpen}
           onClick={() => setMenuOpen((prev) => !prev)}
           className={cn(
-            "flex w-full max-w-full items-center justify-between gap-3 overflow-hidden rounded-[14px] border px-3.5 py-3 text-left transition-all duration-150",
-            "border-[color:var(--border)] bg-[color:var(--surface)] shadow-[0_1px_0_rgba(15,23,42,0.02)]",
-            "hover:border-[color:var(--border-strong)] hover:bg-[color:var(--surface-hover)]",
-            menuOpen ? "border-[color:var(--border-strong)] bg-[color:var(--surface-hover)]" : ""
+            "flex w-full max-w-full items-center justify-between gap-3 overflow-hidden text-left transition-all duration-150",
+            compact
+              ? "rounded-[10px] px-2.5 py-2 text-[color:var(--foreground)] hover:bg-[color:var(--surface-hover)]"
+              : "rounded-[14px] border border-[color:var(--border)] bg-[color:var(--surface)] px-3.5 py-3 shadow-[0_1px_0_rgba(15,23,42,0.02)] hover:border-[color:var(--border-strong)] hover:bg-[color:var(--surface-hover)]",
+            menuOpen ? (compact ? "bg-[color:var(--surface-hover)]" : "border-[color:var(--border-strong)] bg-[color:var(--surface-hover)]") : ""
           )}
         >
           <div className="min-w-0 flex-1 overflow-hidden pr-1">
-            <div className="truncate text-[15px] font-medium text-[color:var(--foreground)]">{triggerLabel}</div>
-            <div className="mt-0.5 truncate text-[11px] text-[color:var(--muted-foreground)]">{triggerHint}</div>
+            <div className={cn("truncate font-medium text-[color:var(--foreground)]", compact ? "text-sm" : "text-[15px]")}>
+              {triggerLabel}
+            </div>
+            {!compact ? (
+              <div className="mt-0.5 truncate text-[11px] text-[color:var(--muted-foreground)]">{triggerHint}</div>
+            ) : null}
           </div>
           <div
             className={cn(
-              "flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-[color:var(--border)] bg-[color:var(--background)] text-[color:var(--muted-foreground)] transition-transform duration-150",
+              "flex shrink-0 items-center justify-center text-[color:var(--muted-foreground)] transition-transform duration-150",
+              compact ? "h-6 w-6" : "h-8 w-8 rounded-full border border-[color:var(--border)] bg-[color:var(--background)]",
               menuOpen ? "rotate-180" : ""
             )}
           >
@@ -257,8 +265,8 @@ export default function BrandSwitcher() {
                 <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-[color:var(--border)] bg-[color:var(--background)] text-[color:var(--muted-foreground)]">
                   <Plus className="h-4 w-4" />
                 </div>
-                <div className="min-w-0 overflow-hidden">
-                  <div className="truncate text-sm font-medium">+ New Brand</div>
+                  <div className="min-w-0 overflow-hidden">
+                  <div className="truncate text-sm font-medium">New brand</div>
                   <div className="mt-0.5 truncate text-[11px] text-[color:var(--muted-foreground)]">
                     Create another brand workspace
                   </div>

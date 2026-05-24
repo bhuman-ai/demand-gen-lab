@@ -10,6 +10,7 @@ import {
   Mail,
   MessageSquareText,
   Network,
+  PanelLeft,
   Radar,
   Settings,
   Sparkles,
@@ -295,29 +296,45 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
 
   return (
     <div className="min-h-screen bg-[color:var(--background)] text-[color:var(--foreground)]">
-      <div className="grid min-h-screen grid-cols-1 md:grid-cols-[260px_1fr]">
+      <div className={cn("grid min-h-screen grid-cols-1", agentHomeActive ? "md:grid-cols-[320px_1fr]" : "md:grid-cols-[260px_1fr]")}>
         <aside
           className={cn(
-            "min-w-0 border-b border-[color:var(--border)] bg-[color:var(--sidebar)] px-4 py-5 md:border-b-0 md:border-r md:px-5",
+            "min-w-0 border-b border-[color:var(--border)] bg-[color:var(--sidebar)] md:border-b-0 md:border-r",
+            agentHomeActive ? "px-3 py-3" : "px-4 py-5 md:px-5",
             agentHomeActive ? "hidden md:block" : ""
           )}
         >
           <div className="flex h-full min-w-0 flex-col">
-            <Link href="/" className="group block border-b border-[color:var(--border)] pb-4">
-              <BrandWordmark
-                animated
-                lastClassName="text-[2rem]"
-                b2bClassName="mb-[0.26em] text-[0.72rem] tracking-[0.1em] transition-colors group-hover:text-[color:var(--foreground)]"
-              />
-            </Link>
+            {agentHomeActive ? (
+              <Link
+                href="/"
+                className="flex h-10 items-center justify-between rounded-[10px] px-2.5 text-[1.3rem] font-semibold text-[color:var(--foreground)] hover:bg-[color:var(--surface-hover)]"
+              >
+                LastB2B
+                <PanelLeft className="h-4 w-4 text-[color:var(--muted-foreground)]" />
+              </Link>
+            ) : (
+              <Link href="/" className="group block border-b border-[color:var(--border)] pb-4">
+                <BrandWordmark
+                  animated
+                  lastClassName="text-[2rem]"
+                  b2bClassName="mb-[0.26em] text-[0.72rem] tracking-[0.1em] transition-colors group-hover:text-[color:var(--foreground)]"
+                />
+              </Link>
+            )}
 
-            <div className="mt-5 min-w-0">
-              <BrandSwitcher />
+            <div className={cn("min-w-0", agentHomeActive ? "mt-4" : "mt-5")}>
+              {agentHomeActive ? (
+                <div className="mb-1 px-2.5 text-xs font-medium text-[color:var(--muted-foreground)]">Brand</div>
+              ) : null}
+              <BrandSwitcher variant={agentHomeActive ? "chat" : "default"} />
             </div>
 
-            <div className="mt-6">
-              <div className="mb-2 text-[12px] text-[color:var(--muted-foreground)]">Work</div>
-              <nav className="grid gap-1.5">
+            <div className={cn(agentHomeActive ? "mt-5" : "mt-6")}>
+              <div className={cn("mb-2 text-[12px] text-[color:var(--muted-foreground)]", agentHomeActive ? "px-2.5 font-medium" : "")}>
+                Work
+              </div>
+              <nav className={cn("grid", agentHomeActive ? "gap-1" : "gap-1.5")}>
                 {mainItems.map((item) => {
                   const active = item.id === activeMainItem;
                   const Icon = item.icon;
@@ -326,23 +343,33 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
                       key={item.id}
                       href={item.href}
                       className={cn(
-                        "inline-flex items-center gap-3 rounded-[8px] border px-3 py-2.5 text-sm transition-colors duration-150",
+                        "inline-flex items-center gap-3 text-sm transition-colors duration-150",
+                        agentHomeActive ? "rounded-[10px] px-2.5 py-2.5" : "rounded-[8px] border px-3 py-2.5",
                         active
-                          ? "border-[color:var(--border-strong)] bg-[color:var(--surface)] text-[color:var(--foreground)]"
-                          : "border-transparent text-[color:var(--muted-foreground)] hover:border-[color:var(--border)] hover:bg-[color:var(--surface)] hover:text-[color:var(--foreground)]"
+                          ? agentHomeActive
+                            ? "bg-[color:var(--surface-hover)] text-[color:var(--foreground)]"
+                            : "border-[color:var(--border-strong)] bg-[color:var(--surface)] text-[color:var(--foreground)]"
+                          : agentHomeActive
+                            ? "text-[color:var(--foreground)] hover:bg-[color:var(--surface-hover)]"
+                            : "border-transparent text-[color:var(--muted-foreground)] hover:border-[color:var(--border)] hover:bg-[color:var(--surface)] hover:text-[color:var(--foreground)]"
                       )}
                     >
-                      <Icon className="h-4 w-4" />
+                      <Icon className="h-4 w-4 shrink-0" />
                       {item.label}
                     </Link>
                   );
                 })}
               </nav>
               <details className="mt-2" open={moreActive || undefined}>
-                <summary className="cursor-pointer rounded-[8px] px-3 py-2 text-sm text-[color:var(--muted-foreground)] hover:bg-[color:var(--surface)] hover:text-[color:var(--foreground)]">
+                <summary
+                  className={cn(
+                    "cursor-pointer text-sm text-[color:var(--muted-foreground)] hover:text-[color:var(--foreground)]",
+                    agentHomeActive ? "rounded-[10px] px-2.5 py-2 hover:bg-[color:var(--surface-hover)]" : "rounded-[8px] px-3 py-2 hover:bg-[color:var(--surface)]"
+                  )}
+                >
                   More
                 </summary>
-                <nav className="mt-1 grid gap-1.5">
+                <nav className={cn("mt-1 grid", agentHomeActive ? "gap-1" : "gap-1.5")}>
                   {moreItems.map((item) => {
                     const active = item.id === activeMainItem;
                     const Icon = item.icon;
@@ -351,13 +378,18 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
                         key={item.id}
                         href={item.href}
                         className={cn(
-                          "inline-flex items-center gap-3 rounded-[8px] border px-3 py-2.5 text-sm transition-colors duration-150",
+                          "inline-flex items-center gap-3 text-sm transition-colors duration-150",
+                          agentHomeActive ? "rounded-[10px] px-2.5 py-2.5" : "rounded-[8px] border px-3 py-2.5",
                           active
-                            ? "border-[color:var(--border-strong)] bg-[color:var(--surface)] text-[color:var(--foreground)]"
-                            : "border-transparent text-[color:var(--muted-foreground)] hover:border-[color:var(--border)] hover:bg-[color:var(--surface)] hover:text-[color:var(--foreground)]"
+                            ? agentHomeActive
+                              ? "bg-[color:var(--surface-hover)] text-[color:var(--foreground)]"
+                              : "border-[color:var(--border-strong)] bg-[color:var(--surface)] text-[color:var(--foreground)]"
+                            : agentHomeActive
+                              ? "text-[color:var(--foreground)] hover:bg-[color:var(--surface-hover)]"
+                              : "border-transparent text-[color:var(--muted-foreground)] hover:border-[color:var(--border)] hover:bg-[color:var(--surface)] hover:text-[color:var(--foreground)]"
                         )}
                       >
-                        <Icon className="h-4 w-4" />
+                        <Icon className="h-4 w-4 shrink-0" />
                         {item.label}
                       </Link>
                     );
@@ -366,12 +398,17 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
               </details>
             </div>
 
-            <div className="mt-6 border-t border-[color:var(--border)] pt-5">
+            <div className={cn("mt-6 pt-5", agentHomeActive ? "border-t border-[color:var(--border)]" : "border-t border-[color:var(--border)]")}>
               <details open={toolActive || undefined}>
-                <summary className="cursor-pointer rounded-[8px] px-3 py-2 text-sm text-[color:var(--muted-foreground)] hover:bg-[color:var(--surface)] hover:text-[color:var(--foreground)]">
+                <summary
+                  className={cn(
+                    "cursor-pointer text-sm text-[color:var(--muted-foreground)] hover:text-[color:var(--foreground)]",
+                    agentHomeActive ? "rounded-[10px] px-2.5 py-2 hover:bg-[color:var(--surface-hover)]" : "rounded-[8px] px-3 py-2 hover:bg-[color:var(--surface)]"
+                  )}
+                >
                   System
                 </summary>
-                <nav className="mt-1 grid gap-1.5">
+                <nav className={cn("mt-1 grid", agentHomeActive ? "gap-1" : "gap-1.5")}>
                   {toolItems.map((item) => {
                     const active = pathname === item.href;
                     const Icon = item.icon;
@@ -380,13 +417,18 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
                         key={item.href}
                         href={item.href}
                         className={cn(
-                          "inline-flex items-center gap-3 rounded-[8px] border px-3 py-2.5 text-sm transition-colors duration-150",
+                          "inline-flex items-center gap-3 text-sm transition-colors duration-150",
+                          agentHomeActive ? "rounded-[10px] px-2.5 py-2.5" : "rounded-[8px] border px-3 py-2.5",
                           active
-                            ? "border-[color:var(--border-strong)] bg-[color:var(--surface)] text-[color:var(--foreground)]"
-                            : "border-transparent text-[color:var(--muted-foreground)] hover:border-[color:var(--border)] hover:bg-[color:var(--surface)] hover:text-[color:var(--foreground)]"
+                            ? agentHomeActive
+                              ? "bg-[color:var(--surface-hover)] text-[color:var(--foreground)]"
+                              : "border-[color:var(--border-strong)] bg-[color:var(--surface)] text-[color:var(--foreground)]"
+                            : agentHomeActive
+                              ? "text-[color:var(--foreground)] hover:bg-[color:var(--surface-hover)]"
+                              : "border-transparent text-[color:var(--muted-foreground)] hover:border-[color:var(--border)] hover:bg-[color:var(--surface)] hover:text-[color:var(--foreground)]"
                         )}
                       >
-                        <Icon className="h-4 w-4" />
+                        <Icon className="h-4 w-4 shrink-0" />
                         {item.label}
                       </Link>
                     );
@@ -394,6 +436,20 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
                 </nav>
               </details>
             </div>
+
+            {agentHomeActive ? (
+              <div className="mt-auto border-t border-[color:var(--border)] pt-3">
+                <div className="flex items-center gap-3 rounded-[12px] px-2.5 py-2 text-sm text-[color:var(--foreground)] hover:bg-[color:var(--surface-hover)]">
+                  <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[color:var(--accent)] text-xs font-medium text-[color:var(--accent-foreground)]">
+                    LB
+                  </div>
+                  <div className="min-w-0">
+                    <div className="truncate font-medium">LastB2B</div>
+                    <div className="truncate text-xs text-[color:var(--muted-foreground)]">Growth workspace</div>
+                  </div>
+                </div>
+              </div>
+            ) : null}
 
           </div>
         </aside>

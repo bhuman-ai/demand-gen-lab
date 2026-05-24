@@ -15754,11 +15754,19 @@ async function processMonitorDeliverabilityJob(job: OutreachJob) {
     businessWindow,
     exactAccountId: strictSenderAccountId,
   });
-  if (!senderPoolState.pool.length) {
+  if (!senderPoolState.probePool.length) {
     await createOutreachEvent({
       runId: run.id,
       eventType: "deliverability_probe_failed",
-      payload: { reason: "No active sender accounts assigned to this brand", probeVariant },
+      payload: { reason: "No active sender with delivery and mailbox credentials is available for probing", probeVariant },
+    });
+    return;
+  }
+  if (!senderPoolState.pool.length && !strictSenderAccountId) {
+    await createOutreachEvent({
+      runId: run.id,
+      eventType: "deliverability_probe_failed",
+      payload: { reason: "No dispatchable sender account is currently available for automatic probing", probeVariant },
     });
     return;
   }
@@ -15768,7 +15776,7 @@ async function processMonitorDeliverabilityJob(job: OutreachJob) {
     timezone: run.timezone || DEFAULT_TIMEZONE,
   });
   const strictSenderSlot = strictSenderAccountId
-    ? senderPoolState.pool.find((slot) => slot.account.id === strictSenderAccountId) ?? null
+    ? senderPoolState.probePool.find((slot) => slot.account.id === strictSenderAccountId) ?? null
     : null;
   const senderChoice =
     strictSenderSlot

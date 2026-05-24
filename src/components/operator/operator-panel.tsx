@@ -1151,6 +1151,7 @@ export default function OperatorPanel({
         {visibleMessages.map((message) => {
           const isUser = message.role === "user" && message.kind === "message";
           const isAssistant = message.role === "assistant" && message.kind === "message";
+          const isInlineAssistantLike = isInline && !isUser;
           return (
             <div key={message.id} className={cn("flex", isInline ? "mx-auto w-full max-w-[52rem]" : "", isUser ? "justify-end" : "justify-start")}>
               <div
@@ -1158,7 +1159,8 @@ export default function OperatorPanel({
                   "max-w-[94%] rounded-[12px] border px-4 py-3",
                   messageCardTone(message),
                   isUser ? "max-w-[80%]" : "",
-                  isInline && isUser ? "max-w-[72%] rounded-[18px] border-transparent bg-[color:var(--surface-muted)] text-[color:var(--foreground)]" : "",
+                  isInline && isUser ? "max-w-[72%] rounded-[18px] border-transparent bg-[color:var(--surface-muted)] px-5 py-3 text-[color:var(--foreground)]" : "",
+                  isInlineAssistantLike ? "w-full max-w-none rounded-none border-transparent bg-transparent px-0 py-0" : "",
                   isAssistant ? "w-full max-w-none border-transparent bg-transparent px-0 py-0" : ""
                 )}
               >

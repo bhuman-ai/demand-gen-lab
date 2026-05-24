@@ -13635,6 +13635,7 @@ async function resolveSenderPoolForBrand(input: {
   timeZone: string;
   businessWindow: BusinessWindowPolicy;
   exactAccountId?: string;
+  includeAllCanonicalSenders?: boolean;
 }) {
   const [assignment, brand, canonicalPool] = await Promise.all([
     getBrandOutreachAssignment(input.brandId),
@@ -13649,9 +13650,11 @@ async function resolveSenderPoolForBrand(input: {
     )
   );
   const exactAccountId = String(input.exactAccountId ?? "").trim();
-  const canonicalCandidates = selectCanonicalSenderCandidates(canonicalPool, legacyCandidateAccountIds, {
-    exactAccountId,
-  });
+  const canonicalCandidates = input.includeAllCanonicalSenders
+    ? canonicalPool.senders
+    : selectCanonicalSenderCandidates(canonicalPool, legacyCandidateAccountIds, {
+        exactAccountId,
+      });
   const candidateAccountIds = Array.from(
     new Set(
       (canonicalCandidates.length
@@ -13731,6 +13734,7 @@ async function resolveSenderPoolForBrand(input: {
     }).map((snapshot) => [snapshot.senderAccountId, snapshot] as const)
   );
   const pool: SenderDispatchSlot[] = [];
+  const probePool: SenderDispatchSlot[] = [];
   const readinessByAccountId = new Map<string, SenderReadiness>();
 
   for (const { sender, account } of activeSenders) {
@@ -13771,19 +13775,23 @@ async function resolveSenderPoolForBrand(input: {
       capacity: policy,
     });
     readinessByAccountId.set(account.id, readiness);
-    if (!secrets || !mailboxAccount || !mailboxSecrets || !readiness.canSendNow) continue;
-    pool.push({
+    if (!secrets || !mailboxAccount || !mailboxSecrets || !supportsAnyDelivery(account)) continue;
+    const slot = {
       account,
       secrets,
       mailboxAccount,
       mailboxSecrets,
       policy,
-    });
+    };
+    probePool.push(slot);
+    if (!readiness.canSendNow) continue;
+    pool.push(slot);
   }
 
   return {
     assignment,
     pool,
+    probePool,
     readinessByAccountId,
   };
 }
@@ -21154,6 +21162,7 @@ export async function updateRunControl(input: {
     | "resume"
     | "cancel"
     | "probe_deliverability"
+    | "probe_all_senders_deliverability"
     | "resume_sender_deliverability"
     | "seed_inbox_placement";
   reason?: string;
@@ -21335,6 +21344,97 @@ export async function updateRunControl(input: {
       },
     });
     return { ok: true, reason: "Deliverability probes queued" };
+  }
+
+  if (input.action === "probe_all_senders_deliverability") {
+    if (!isDeliverabilitySeedingEnabled()) {
+      return { ok: false, reason: DELIVERABILITY_SEEDING_DISABLED_REASON };
+    }
+    const referenceMessage = await resolveDeliverabilityProbeReferenceMessage({
+      runId: run.id,
+      preferScheduled: true,
+    });
+    if (!referenceMessage) {
+      return {
+        ok: false,
+        reason: "No real scheduled or sent message exists for deliverability probing yet",
+      };
+    }
+
+    const runtimeExperiment = await getExperimentRecordByRuntimeRef(
+      run.brandId,
+      run.campaignId,
+      run.experimentId
+    );
+    const businessWindow = businessWindowFromExperimentEnvelope(runtimeExperiment?.testEnvelope);
+    const senderPoolState = await resolveSenderPoolForBrand({
+      brandId: run.brandId,
+      preferredAccountId: "",
+      timeZone: run.timezone || DEFAULT_TIMEZONE,
+      businessWindow,
+      includeAllCanonicalSenders: true,
+    });
+    const seenSenderIds = new Set<string>();
+    const probeSlots = senderPoolState.probePool.filter((slot) => {
+      const fromEmail = getOutreachAccountFromEmail(slot.account).trim();
+      if (!fromEmail || seenSenderIds.has(slot.account.id)) return false;
+      seenSenderIds.add(slot.account.id);
+      return true;
+    });
+
+    if (!probeSlots.length) {
+      return { ok: false, reason: "No active sender with delivery and mailbox credentials is available for probing" };
+    }
+
+    const queued: Array<{ senderAccountId: string; senderAccountName: string; fromEmail: string }> = [];
+    for (const slot of probeSlots) {
+      const fromEmail = getOutreachAccountFromEmail(slot.account).trim();
+      await queueDeliverabilityProbe({
+        runId: run.id,
+        executeAfter: nowIso(),
+        force: true,
+        payload: {
+          stage: "send",
+          manual: true,
+          allSenders: true,
+          probeToken: generateDeliverabilityProbeToken(),
+          probeVariant: "production",
+          sourceMessageId: referenceMessage.id,
+          sourceMessageStatus: referenceMessage.status,
+          sourceType: referenceMessage.sourceType,
+          nodeId: referenceMessage.nodeId,
+          leadId: referenceMessage.leadId,
+          contentHash: referenceMessage.contentHash,
+          senderAccountId: slot.account.id,
+          senderAccountName: slot.account.name,
+          fromEmail,
+        },
+      });
+      queued.push({
+        senderAccountId: slot.account.id,
+        senderAccountName: slot.account.name,
+        fromEmail,
+      });
+    }
+
+    await createOutreachEvent({
+      runId: run.id,
+      eventType: "deliverability_probe_requested",
+      payload: {
+        reason: input.reason?.trim() || "Requested by user",
+        mode: "all_senders",
+        sourceMessageId: referenceMessage.id,
+        sourceMessageStatus: referenceMessage.status,
+        sourceType: referenceMessage.sourceType,
+        nodeId: referenceMessage.nodeId,
+        leadId: referenceMessage.leadId,
+        contentHash: referenceMessage.contentHash,
+        probeVariants: ["production"],
+        senderCount: queued.length,
+        senders: queued,
+      },
+    });
+    return { ok: true, reason: `Production-copy deliverability probes queued for ${queued.length} sender${queued.length === 1 ? "" : "s"}` };
   }
 
   if (input.action === "resume_sender_deliverability") {

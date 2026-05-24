@@ -855,6 +855,15 @@ async function assembleBrandStatus(
   const knownSenderAccountIds = new Set(
     canonicalPool.senders.map((sender) => sender.deliveryAccountId).filter(Boolean)
   );
+  const extraAssignedAccountIds = unique(
+    [
+      assignment?.accountId ?? "",
+      assignment?.mailboxAccountId ?? "",
+      ...(assignment?.accountIds ?? []),
+    ]
+      .map((accountId) => accountId.trim())
+      .filter(Boolean)
+  );
   const extraCampaignAccountIds = unique(
     activeOutboundCampaigns
       .flatMap((campaign) => [
@@ -863,7 +872,7 @@ async function assembleBrandStatus(
       ])
       .filter(Boolean)
   );
-  const extraSenders = extraCampaignAccountIds
+  const extraSenders = unique([...extraAssignedAccountIds, ...extraCampaignAccountIds])
     .filter((accountId) => !knownSenderAccountIds.has(accountId))
     .map((accountId) => context.accountById.get(accountId) ?? null)
     .filter((account): account is OutreachAccount => Boolean(account))

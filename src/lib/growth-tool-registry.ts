@@ -1,8 +1,10 @@
 import { createGrowthToolCall, updateGrowthToolCall } from "@/lib/growth-tool-data";
+import { reserveBrandBudget, settleBrandBudgetReservation } from "@/lib/brand-budget";
 import type {
   GrowthToolCapability,
   GrowthToolCategory,
   GrowthToolContext,
+  GrowthToolCostPolicy,
   GrowthToolRisk,
   GrowthToolRunResult,
   GrowthToolSchema,
@@ -22,6 +24,7 @@ type OperatorGrowthToolDefinition = {
   category: GrowthToolCategory;
   capability: GrowthToolCapability;
   risk?: Partial<GrowthToolRisk>;
+  costPolicy?: GrowthToolCostPolicy;
   inputSchema: GrowthToolSchema;
 };
 
@@ -143,6 +146,11 @@ const OPERATOR_TOOL_DEFINITIONS: OperatorGrowthToolDefinition[] = [
     category: "sender_infra",
     capability: "provision_sender",
     risk: { spendRisk: true },
+    costPolicy: {
+      estimatedUnitCostUsd: 20,
+      maxUnitsPerCall: 1,
+      budgetKey: "sender_infra",
+    },
     inputSchema: objectSchema(
       {
         brandId: stringProp("Brand id"),
@@ -475,6 +483,16 @@ function estimateCostUsd(tool: GrowthToolSpec, input: Record<string, unknown>) {
   return Math.round(units * tool.costPolicy.estimatedUnitCostUsd * 10000) / 10000;
 }
 
+function budgetCategoryForTool(tool: GrowthToolSpec, input: Record<string, unknown>) {
+  if (tool.category === "sender_infra") {
+    return asString(input.domainMode) === "register" ? "domains" : "mailboxes";
+  }
+  if (tool.category === "lead_source") return "data_enrichment";
+  if (tool.category === "enrichment" || tool.category === "validation") return "data_enrichment";
+  if (tool.provider === "leadr") return "linkedin";
+  return "other";
+}
+
 function validateRequiredInput(tool: GrowthToolSpec, input: Record<string, unknown>) {
   const missing = (tool.inputSchema.required ?? []).filter((key) => !asString(input[key]));
   if (missing.length) {
@@ -499,6 +517,7 @@ function buildOperatorGrowthTool(definition: OperatorGrowthToolDefinition): Grow
     category: definition.category,
     capability: definition.capability,
     risk,
+    costPolicy: definition.costPolicy,
     inputSchema: definition.inputSchema,
     enabled: () => Boolean(getOperatorToolSpec(definition.operatorToolName)),
     run: async (input, context) => {
@@ -600,6 +619,7 @@ export async function invokeGrowthTool(input: {
   }
 
   const estimatedCostUsd = estimateCostUsd(tool, input.toolInput);
+  let budgetReservationId = "";
   const call = await createGrowthToolCall({
     brandId: input.context.brandId,
     missionId: input.context.missionId,
@@ -651,8 +671,33 @@ export async function invokeGrowthTool(input: {
         output,
       };
     }
+    if (tool.risk.spendRisk && estimatedCostUsd > 0) {
+      const reservation = await reserveBrandBudget({
+        brandId: input.context.brandId,
+        amountUsd: estimatedCostUsd,
+        category: budgetCategoryForTool(tool, input.toolInput),
+        sourceType: "growth_tool_call",
+        sourceId: call.id,
+        description: `${tool.title} budget reservation`,
+        metadata: {
+          toolName: tool.name,
+          provider: tool.provider,
+          missionId: input.context.missionId,
+          budgetKey: tool.costPolicy?.budgetKey ?? "",
+        },
+      });
+      budgetReservationId = reservation?.id ?? "";
+    }
 
     const result = await tool.run(input.toolInput, input.context);
+    if (budgetReservationId) {
+      await settleBrandBudgetReservation({
+        reservationId: budgetReservationId,
+        status: "spent",
+        finalAmountUsd: estimatedCostUsd,
+        metadata: { callId: call.id, completed: true },
+      });
+    }
     await updateGrowthToolCall(call.id, {
       status: "completed",
       output: result.output,
@@ -681,6 +726,13 @@ export async function invokeGrowthTool(input: {
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : "Growth tool execution failed.";
+    if (budgetReservationId) {
+      await settleBrandBudgetReservation({
+        reservationId: budgetReservationId,
+        status: "cancelled",
+        metadata: { callId: call.id, error: message },
+      }).catch(() => null);
+    }
     await updateGrowthToolCall(call.id, {
       status: "failed",
       output: {},

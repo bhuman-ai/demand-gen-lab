@@ -96,9 +96,17 @@ function isGpt55Model(model: string) {
   return /^openai\/gpt-5\.5(?:$|-)|^gpt-5\.5(?:$|-)/i.test(model.trim());
 }
 
+function allowExpensiveOpenRouterModel() {
+  return asString(process.env.ALLOW_EXPENSIVE_OPENROUTER).toLowerCase() === "true";
+}
+
 function resolveOpenRouterModel(task: LlmTask, overrideModel?: string) {
   const explicitOverride = asString(overrideModel);
-  if (explicitOverride) return explicitOverride;
+  if (explicitOverride) {
+    return isGpt55Model(explicitOverride) && !allowExpensiveOpenRouterModel()
+      ? routineOpenRouterModel()
+      : explicitOverride;
+  }
 
   const configured =
     asString(process.env[openRouterTaskEnvKey(task)]) ||
@@ -107,12 +115,10 @@ function resolveOpenRouterModel(task: LlmTask, overrideModel?: string) {
     asString(process.env.OPENROUTER_MODEL);
 
   if (configured) {
-    return !canUseHighIntelligenceModel(task) && isGpt55Model(configured)
-      ? routineOpenRouterModel()
-      : configured;
+    return isGpt55Model(configured) && !allowExpensiveOpenRouterModel() ? routineOpenRouterModel() : configured;
   }
 
-  return canUseHighIntelligenceModel(task) ? "openai/gpt-5.5" : routineOpenRouterModel();
+  return routineOpenRouterModel();
 }
 
 async function callOpenAiResponses(input: {

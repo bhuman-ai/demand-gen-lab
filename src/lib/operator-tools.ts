@@ -7,6 +7,7 @@ import {
 } from "@/lib/factory-data";
 import type {
   BrandRecord,
+  DeliverabilityProbeRun,
   LeadRow,
   ScaleCampaignRecord,
 } from "@/lib/factory-types";
@@ -55,6 +56,7 @@ import {
   getReplyDraft,
   getReplyThread,
   getReplyThreadState,
+  listDeliverabilityProbeRuns,
   listReplyMessagesByThread,
   listReplyThreadFeedback,
   listExperimentRuns,
@@ -72,6 +74,7 @@ import {
   launchScaleCampaignRun,
   updateRunControl,
 } from "@/lib/outreach-runtime";
+import { isDeliverabilitySeedSendingDisabledReason } from "@/lib/sender-health";
 
 const RUN_OPEN_STATUSES = new Set([
   "queued",
@@ -656,6 +659,246 @@ async function investigateBrandData(input: Record<string, unknown>): Promise<Ope
   };
 }
 
+function normalizeProbeCounts(probe: DeliverabilityProbeRun) {
+  const countsRecord = asRecord(probe.counts);
+  const counts = {
+    inbox: asNumber(countsRecord.inbox),
+    spam: asNumber(countsRecord.spam),
+    allMailOnly: asNumber(countsRecord.all_mail_only),
+    notFound: asNumber(countsRecord.not_found),
+    error: asNumber(countsRecord.error),
+  };
+  let total = asNumber(probe.totalMonitors);
+  if (total <= 0) {
+    total = counts.inbox + counts.spam + counts.allMailOnly + counts.notFound + counts.error;
+  }
+  if (total <= 0 && probe.placement) {
+    total = 1;
+    if (probe.placement === "inbox") counts.inbox = 1;
+    else if (probe.placement === "spam") counts.spam = 1;
+    else if (probe.placement === "all_mail_only") counts.allMailOnly = 1;
+    else if (probe.placement === "not_found") counts.notFound = 1;
+    else counts.error = 1;
+  }
+  return {
+    ...counts,
+    total,
+    inboxRate: total > 0 ? counts.inbox / total : 0,
+    spamRate: total > 0 ? counts.spam / total : 0,
+  };
+}
+
+function summarizeProbePlacement(probe: DeliverabilityProbeRun | null) {
+  if (!probe) return "No inbox-placement probe has run yet.";
+  if (probe.status === "failed") {
+    return isDeliverabilitySeedSendingDisabledReason(probe.lastError)
+      ? "Inbox-placement seed sending is paused platform-wide, so this sender does not have fresh placement evidence."
+      : probe.lastError || "The latest inbox-placement probe failed before it produced placement evidence.";
+  }
+  if (probe.status !== "completed") {
+    return `The latest inbox-placement probe is ${probe.status}; it has not produced final inbox/spam evidence yet.`;
+  }
+  const counts = normalizeProbeCounts(probe);
+  if (counts.total <= 0) return probe.summaryText || "The latest probe completed but did not return seed inbox counts.";
+  return `${counts.inbox} inbox, ${counts.spam} spam, ${counts.allMailOnly} all-mail-only, ${counts.notFound} missing, and ${counts.error} error across ${counts.total} seed inbox${counts.total === 1 ? "" : "es"}.`;
+}
+
+function describeSenderDeliveryState(input: {
+  automationStatus: string;
+  usableForRouting: boolean;
+  latestProbe: DeliverabilityProbeRun | null;
+}) {
+  const status = input.automationStatus.trim().toLowerCase();
+  if (status === "ready") {
+    return "This sender has cleared the current system checks and can be considered the cleanest route.";
+  }
+  if (status === "attention" || status === "blocked") {
+    return "This sender needs attention before it should carry real outbound.";
+  }
+  if (input.latestProbe?.status === "completed") {
+    return input.usableForRouting
+      ? "This sender can be used carefully, but the system is still collecting enough inbox-placement evidence before scaling."
+      : "This sender has some placement evidence, but the route is not strong enough to scale yet.";
+  }
+  return input.usableForRouting
+    ? "This sender looks usable, but it still needs fresh inbox-placement proof before aggressive volume."
+    : "This sender is still being prepared or checked and should not be treated as fully ready.";
+}
+
+function compactProbeRun(probe: DeliverabilityProbeRun) {
+  const counts = normalizeProbeCounts(probe);
+  return {
+    id: probe.id,
+    status: probe.status,
+    stage: probe.stage,
+    probeVariant: probe.probeVariant,
+    senderAccountId: probe.senderAccountId,
+    fromEmail: probe.fromEmail,
+    subject: probe.subject,
+    sourceMessageStatus: probe.sourceMessageStatus,
+    placement: probe.placement,
+    counts,
+    summaryText: probe.summaryText,
+    lastError: probe.lastError,
+    createdAt: probe.createdAt,
+    updatedAt: probe.updatedAt,
+    completedAt: probe.completedAt,
+    seedResults: probe.results.slice(0, 25).map((result) => ({
+      accountId: result.accountId,
+      email: result.email,
+      placement: result.placement,
+      matchedMailbox: result.matchedMailbox,
+      ok: result.ok,
+      error: result.error,
+      cleanup: result.cleanup,
+    })),
+  };
+}
+
+function extractEmailFromText(value: string) {
+  return value.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i)?.[0]?.toLowerCase() ?? "";
+}
+
+async function inspectSenderDeliveryEvidence(input: Record<string, unknown>): Promise<OperatorToolResult> {
+  const brandId = requireString(input, "brandId");
+  const query = asString(input.query);
+  const requestedSenderAccountId = asString(input.senderAccountId);
+  const requestedFromEmail = (asString(input.fromEmail) || extractEmailFromText(query)).toLowerCase();
+  const maxProbeRuns = Math.min(120, Math.max(10, asNumber(input.maxProbeRuns, 80)));
+  const perSenderHistory = Math.min(8, Math.max(1, asNumber(input.perSenderHistory, 5)));
+
+  const [brand, context, probeRuns] = await Promise.all([
+    getBrandOrThrow(brandId),
+    getOperatorBrandContext(brandId),
+    listDeliverabilityProbeRuns({ brandId, limit: maxProbeRuns }),
+  ]);
+  if (!context) throw new Error("Brand not found");
+
+  const matchingSenders = context.senders.snapshots.filter((sender) => {
+    if (requestedSenderAccountId && sender.accountId !== requestedSenderAccountId) return false;
+    if (requestedFromEmail && sender.fromEmail.toLowerCase() !== requestedFromEmail) return false;
+    if (!query) return true;
+    const terms = searchTerms(query);
+    if (!terms.length || requestedSenderAccountId || requestedFromEmail) return true;
+    const text = [
+      sender.accountId,
+      sender.accountName,
+      sender.fromEmail,
+      sender.domain,
+      sender.automationStatus,
+      sender.automationSummary,
+      sender.routeLabel,
+      sender.spamCheckSummary,
+      sender.dnsStatus,
+    ].join(" ");
+    return scoreTextForQuery(text, terms) > 0;
+  });
+  const senders = matchingSenders.length ? matchingSenders : context.senders.snapshots;
+
+  const recentBySender = new Map<string, DeliverabilityProbeRun[]>();
+  for (const probe of probeRuns) {
+    const keys = [probe.senderAccountId, probe.fromEmail.toLowerCase()].filter(Boolean);
+    for (const key of keys) {
+      if (!recentBySender.has(key)) recentBySender.set(key, []);
+      recentBySender.get(key)!.push(probe);
+    }
+  }
+
+  const senderRows = senders.map((sender) => {
+    const senderProbeRuns = [
+      ...(recentBySender.get(sender.accountId) ?? []),
+      ...(recentBySender.get(sender.fromEmail.toLowerCase()) ?? []),
+    ]
+      .filter((probe, index, rows) => rows.findIndex((row) => row.id === probe.id) === index)
+      .sort((left, right) => {
+        const leftAt = left.completedAt || left.updatedAt || left.createdAt;
+        const rightAt = right.completedAt || right.updatedAt || right.createdAt;
+        return leftAt < rightAt ? 1 : -1;
+      });
+    const latestProbe = senderProbeRuns[0] ?? null;
+    const completedProbe = senderProbeRuns.find((probe) => probe.status === "completed") ?? null;
+    return {
+      accountId: sender.accountId,
+      accountName: sender.accountName,
+      fromEmail: sender.fromEmail,
+      domain: sender.domain,
+      provider: sender.provider,
+      accountStatus: sender.status,
+      dnsStatus: sender.dnsStatus,
+      mailpoolStatus: sender.mailpoolStatus,
+      mailpoolSpamCheck: sender.spamCheckSummary,
+      inboxPlacementId: sender.inboxPlacementId,
+      automationStatus: sender.automationStatus,
+      automationSummary: sender.automationSummary,
+      routeScore: sender.routeScore,
+      routeLabel: sender.routeLabel,
+      usableForRouting: sender.usableForRouting,
+      hasCompletedPlacementEvidence: Boolean(completedProbe),
+      plainStatus: describeSenderDeliveryState({
+        automationStatus: sender.automationStatus,
+        usableForRouting: sender.usableForRouting,
+        latestProbe,
+      }),
+      latestPlacementSummary: summarizeProbePlacement(latestProbe),
+      latestCompletedPlacementSummary: summarizeProbePlacement(completedProbe),
+      latestProbe: latestProbe ? compactProbeRun(latestProbe) : null,
+      recentProbes: senderProbeRuns.slice(0, perSenderHistory).map(compactProbeRun),
+    };
+  });
+
+  const completedEvidenceCount = senderRows.filter((row) => row.hasCompletedPlacementEvidence).length;
+  const failedDueToPausedSeeds = senderRows.filter((row) =>
+    row.latestProbe?.lastError ? isDeliverabilitySeedSendingDisabledReason(row.latestProbe.lastError) : false
+  ).length;
+  const usableCount = senderRows.filter((row) => row.usableForRouting).length;
+  const readyCount = senderRows.filter((row) => row.automationStatus === "ready").length;
+  const blockedCount = senderRows.filter((row) => row.automationStatus === "attention" || row.automationStatus === "blocked").length;
+
+  const summaryParts = [
+    `${brand.name}: ${readyCount} ready sender${readyCount === 1 ? "" : "s"}`,
+    `${usableCount} usable`,
+    `${blockedCount} needing attention`,
+    `${completedEvidenceCount}/${senderRows.length} with completed inbox-placement evidence`,
+  ];
+  if (failedDueToPausedSeeds) {
+    summaryParts.push(`${failedDueToPausedSeeds} blocked by paused seed sending`);
+  }
+
+  return {
+    summary: summaryParts.join(", ") + ".",
+    result: {
+      objectType: "sender_delivery",
+      brand: {
+        id: brand.id,
+        name: brand.name,
+      },
+      query,
+      requestedSenderAccountId,
+      requestedFromEmail,
+      plainEnglish: {
+        warmupOrControlChecks:
+          "This means the system is checking whether real test emails land in inbox vs spam before it scales outbound volume.",
+        inboxPlacementEvidence:
+          "Use completed probe rows and seedResults for the actual inbox/spam/all-mail/missing evidence. Mailpool spam score is useful, but it is not the same as Gmail inbox placement.",
+        scaleRule:
+          "If there is no completed placement evidence, or the latest evidence is spam/missing-heavy, the sender should stay low-volume or blocked until a fresh check improves.",
+      },
+      brandWide: {
+        totalSenders: context.senders.total,
+        ready: context.senders.ready,
+        pending: context.senders.pending,
+        blocked: context.senders.blocked,
+        preferredSenderAccountId: context.routing.preferredSenderAccountId,
+        preferredSenderEmail: context.routing.preferredSenderEmail,
+        preferredSenderSummary: context.routing.preferredSenderSummary,
+      },
+      senderDeliveryEvidence: senderRows,
+      evidencePolicy:
+        "This tool answers sender readiness, warmup/control checks, inbox placement, spam placement, Mailpool checks, and which seed inboxes saw the message. Do not ask the user to choose an experiment unless they explicitly ask about experiments, campaign variants, or a specific experiment run.",
+    },
+  } satisfies OperatorToolResult;
+}
+
 const TOOL_SPECS: OperatorToolSpec[] = [
   {
     name: "get_brand_snapshot",
@@ -693,6 +936,15 @@ const TOOL_SPECS: OperatorToolSpec[] = [
         result: context as unknown as Record<string, unknown>,
       } satisfies OperatorToolResult;
     },
+  },
+  {
+    name: "inspect_sender_delivery_evidence",
+    riskLevel: "read",
+    approvalMode: "none",
+    description:
+      "Inspect sender delivery evidence for warmup/control checks, Gmail inbox/spam placement, Mailpool spam checks, seed inbox results, sender readiness, and which sender emails are actually landing in inbox vs spam. Use this for deliverability/inboxing questions, not experiment questions.",
+    previewTitle: "Inspect sender delivery evidence",
+    run: inspectSenderDeliveryEvidence,
   },
   {
     name: "summarize_campaign_status",

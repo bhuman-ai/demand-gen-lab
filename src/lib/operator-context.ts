@@ -234,7 +234,7 @@ function summarizeBrandIssues(input: {
   if (input.senderSnapshots.length && fullyReadySenderCount === 0) {
     issues.push(
       usableSenderCount > 0
-        ? "You have a usable sender route, but no sender has fully cleared warmup and probe checks yet."
+        ? "You have a usable sender route, but no sender has enough inbox-placement proof to scale yet."
         : "No sender is routeable yet."
     );
   }
@@ -245,9 +245,9 @@ function summarizeBrandIssues(input: {
   if ((input.activeCampaignCount > 0 || input.activeExperimentCount > 0) && usableSenderCount === 0) {
     issues.push("There is live outbound work queued, but no sender route is available yet.");
   } else if (input.activeExperimentCount > 0 && fullyReadySenderCount === 0 && usableSenderCount > 0) {
-    issues.push("A live experiment is running, but the preferred sender is still finishing control checks.");
+    issues.push("A live experiment is running, but the preferred sender is still proving inbox placement.");
   } else if (input.activeCampaignCount > 0 && fullyReadySenderCount === 0 && usableSenderCount > 0) {
-    issues.push("A live campaign is active, but the preferred sender is still finishing control checks.");
+    issues.push("A live campaign is active, but the preferred sender is still proving inbox placement.");
   }
   if (!input.brand.domains.some((row) => row.role !== "brand")) {
     issues.push("No sender domains are attached to this brand yet.");
@@ -293,7 +293,7 @@ function summarizeNextActions(input: {
   if (usableSenderCount === 0) {
     nextActions.push("Wait for at least one sender route to become usable before routing live traffic.");
   } else if (fullyReadySenderCount === 0) {
-    nextActions.push("Keep the preferred sender in place, but let the control and content probes settle before scaling volume.");
+    nextActions.push("Keep the preferred sender in place, but hold volume low until fresh inbox-placement checks show where test emails land.");
   }
   return uniqueStrings(nextActions);
 }
@@ -455,7 +455,7 @@ export async function getOperatorBrandContext(brandId: string): Promise<Operator
       preferredSenderEmail: preferred?.fromEmail ?? "",
       preferredSenderSummary:
         preferred?.automationSummary ||
-        "No sender has cleared setup, warmup, and probes yet.",
+        "No sender has enough setup and inbox-placement evidence to scale yet.",
       standbyCount: senderSnapshots.filter(
         (row) => row.automationStatus !== "attention" && row.accountId !== preferred?.accountId
       ).length,

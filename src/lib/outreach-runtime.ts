@@ -533,6 +533,7 @@ type SenderDispatchSlot = {
   secrets: ResolvedSecrets;
   mailboxAccount: ResolvedAccount;
   mailboxSecrets: ResolvedSecrets;
+  replyToEmail: string;
   policy: SenderCapacityPolicy;
 };
 
@@ -944,14 +945,6 @@ function platformDataForSeoCredentials(): DataForSeoCredentials | null {
 
 type ResolvedAccount = NonNullable<Awaited<ReturnType<typeof getOutreachAccount>>>;
 type ResolvedSecrets = NonNullable<Awaited<ReturnType<typeof getOutreachAccountSecrets>>>;
-
-function effectiveCustomerIoApiKey(secrets: ResolvedSecrets) {
-  return (
-    secrets.customerIoApiKey.trim() ||
-    secrets.customerIoTrackApiKey.trim() ||
-    secrets.customerIoAppApiKey.trim()
-  );
-}
 
 type LeadChainStepStage = "prospect_discovery" | "website_enrichment" | "email_discovery";
 
@@ -10090,8 +10083,8 @@ function preflightReason(input: {
   ) {
     return "Delivery account is missing provider credentials";
   }
-  if (input.deliveryAccount.provider === "customerio" && !effectiveCustomerIoApiKey(input.deliverySecrets)) {
-    return "Customer.io API key missing";
+  if (input.deliveryAccount.provider === "customerio" && !input.deliverySecrets.customerIoAppApiKey.trim()) {
+    return "Customer.io App API key missing";
   }
   if (!getOutreachAccountFromEmail(input.deliveryAccount).trim()) {
     return `${input.deliveryAccount.provider === "mailpool" ? "Mailpool" : "Customer.io"} From Email is required`;
@@ -13762,25 +13755,40 @@ async function resolveSenderPoolForBrand(input: {
         : mailboxAccount
           ? await getOutreachAccountSecrets(mailboxAccount.id)
           : null;
+    const customerIoDeliveryRoute = supportsCustomerIoDelivery(account);
+    const effectiveMailboxAccount = mailboxAccount ?? (customerIoDeliveryRoute ? account : null);
+    const effectiveMailboxSecrets =
+      mailboxSecrets ?? (effectiveMailboxAccount?.id === account.id ? secrets : null);
+    const replyToEmail =
+      getOutreachAccountReplyToEmail(effectiveMailboxAccount ?? account).trim().toLowerCase() ||
+      getOutreachAccountReplyToEmail(account).trim().toLowerCase() ||
+      fromEmail.trim().toLowerCase();
     const row = findSenderDomainRow(senderRows, {
       deliveryAccountId: account.id,
       fromEmail: normalizedFromEmail,
     });
     const readiness = evaluateSenderReadiness({
       account,
-      mailboxAccount,
-      hasDeliveryCredentials: Boolean(secrets),
-      hasMailboxCredentials: mailboxAccount ? Boolean(mailboxSecrets) : false,
+      mailboxAccount: effectiveMailboxAccount,
+      hasDeliveryCredentials: account.provider === "customerio" ? Boolean(secrets?.customerIoAppApiKey.trim()) : Boolean(secrets),
+      hasMailboxCredentials: effectiveMailboxAccount ? Boolean(effectiveMailboxSecrets) : false,
       row,
       capacity: policy,
     });
     readinessByAccountId.set(account.id, readiness);
-    if (!secrets || !mailboxAccount || !mailboxSecrets || !supportsAnyDelivery(account)) continue;
+    if (
+      !secrets ||
+      !effectiveMailboxAccount ||
+      !effectiveMailboxSecrets ||
+      !replyToEmail ||
+      !supportsAnyDelivery(account, secrets)
+    ) continue;
     const slot = {
       account,
       secrets,
-      mailboxAccount,
-      mailboxSecrets,
+      mailboxAccount: effectiveMailboxAccount,
+      mailboxSecrets: effectiveMailboxSecrets,
+      replyToEmail,
       policy,
     };
     probePool.push(slot);
@@ -15822,7 +15830,11 @@ async function processMonitorDeliverabilityJob(job: OutreachJob) {
 
   const senderFromEmail = getOutreachAccountFromEmail(senderChoice.slot.account).trim();
   const replyMailbox = senderChoice.slot.mailboxAccount;
-  const replyToEmail = replyMailbox.config.mailbox.email.trim() || senderFromEmail;
+  const replyToEmail =
+    senderChoice.slot.replyToEmail ||
+    getOutreachAccountReplyToEmail(replyMailbox).trim() ||
+    getOutreachAccountReplyToEmail(senderChoice.slot.account).trim() ||
+    senderFromEmail;
   const brand = await getBrandById(run.brandId);
   const baselineProbe = buildDeliverabilityBaselineProbe({
     brandName: brand?.name || "",
@@ -15909,13 +15921,15 @@ async function processMonitorDeliverabilityJob(job: OutreachJob) {
       | null = null;
     let spamCheckFallbackError = "";
 
-    try {
-      spamCheckFallback = await refreshMailpoolSpamCheckFallback(senderChoice.slot.account);
-    } catch (error) {
-      if (isMailpoolCreditExhaustedError(error)) {
-        spamCheckFallbackError = error instanceof Error ? error.message : "Mailpool credits are exhausted";
-      } else {
-        throw error;
+    if (senderChoice.slot.account.provider === "mailpool") {
+      try {
+        spamCheckFallback = await refreshMailpoolSpamCheckFallback(senderChoice.slot.account);
+      } catch (error) {
+        if (isMailpoolCreditExhaustedError(error)) {
+          spamCheckFallbackError = error instanceof Error ? error.message : "Mailpool credits are exhausted";
+        } else {
+          throw error;
+        }
       }
     }
 
@@ -19441,7 +19455,10 @@ async function processDispatchMessagesJob(job: OutreachJob) {
     let account = senderChoice.slot.account;
     const secrets = senderChoice.slot.secrets;
     const replyMailbox = senderChoice.slot.mailboxAccount;
-    const replyToEmail = replyMailbox.config.mailbox.email.trim();
+    const replyToEmail =
+      senderChoice.slot.replyToEmail ||
+      getOutreachAccountReplyToEmail(replyMailbox).trim() ||
+      getOutreachAccountReplyToEmail(account).trim();
     if (!replyToEmail) {
       await updateRunMessage(message.id, {
         status: "failed",

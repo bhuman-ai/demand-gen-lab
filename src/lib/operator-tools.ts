@@ -1994,7 +1994,8 @@ const TOOL_SPECS: OperatorToolSpec[] = [
     name: "control_campaign_run",
     riskLevel: "guarded_write",
     approvalMode: "confirm",
-    description: "Pause, resume, cancel, or deliverability-control a campaign run.",
+    description:
+      "Pause, resume, cancel, or deliverability-control a campaign run. Use probe_all_senders_deliverability to compare Gmail UI, Mailpool SMTP, and Customer.io transports with the same live campaign copy before choosing a route.",
     previewTitle: "Control campaign run",
     buildPreview: (input) =>
       buildSimplePreview(

@@ -375,7 +375,8 @@ const OPERATOR_TOOL_DEFINITIONS: OperatorGrowthToolDefinition[] = [
     name: "campaign.control_email_run",
     operatorToolName: "control_campaign_run",
     title: "Control email campaign run",
-    description: "Pause, resume, cancel, or request deliverability action for an email campaign run.",
+    description:
+      "Pause, resume, cancel, or request deliverability action for an email campaign run. Deliverability actions test the exact campaign copy across every currently routable sender transport, including Gmail UI, Mailpool SMTP, and Customer.io when configured.",
     provider: "lastb2b",
     category: "channel",
     capability: "control_campaign",

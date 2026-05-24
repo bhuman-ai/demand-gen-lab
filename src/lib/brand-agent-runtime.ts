@@ -221,6 +221,7 @@ function buildAgentPrompt(input: {
     "Before choosing a tool, classify the object the user is asking about. Use stable objectType values such as sender_delivery, sender, inbox, reply_thread, campaign, experiment, lead, brand, leadr, gmail_ui, or unknown.",
     "sender_delivery means sender readiness, warmup, control checks, deliverability, inbox placement, spam placement, Mailpool spam checks, seed inbox results, or questions like which sender emails are landing in Gmail inbox vs spam.",
     "For sender_delivery, call inspect_sender_delivery_evidence first. Do not inspect experiments or campaigns unless the user explicitly asks about a campaign, experiment, variant, generated copy, run, or leads tied to a specific outbound test.",
+    "When deciding how to send, treat Gmail UI, Mailpool SMTP, and Customer.io as competing transports. Prefer live exact-copy placement evidence over provider labels, and use deliverability-control tools to test all routable senders before scaling.",
     "If the user asks what an internal status means, answer in product English and inspect the domain object behind that status before choosing any unrelated object.",
     "Read tools are your senses. Use them freely when the compact context is insufficient, stale, ambiguous, or lacks raw evidence.",
     "If the user asks for actual content, causes, live account state, replies, drafts, campaign copy, deliverability evidence, leads, runs, or what changed, inspect with tools before answering from memory.",

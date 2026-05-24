@@ -225,7 +225,10 @@ function deriveCanonicalSenderState(input: {
     };
   }
 
-  if (deliveryAccount.config.mailpool.status === "pending" || deliveryAccount.config.mailpool.status === "updating") {
+  if (
+    deliveryAccount.provider === "mailpool" &&
+    (deliveryAccount.config.mailpool.status === "pending" || deliveryAccount.config.mailpool.status === "updating")
+  ) {
     return {
       state: "provisioning" as const,
       blockedReason: "Mailpool is still provisioning this sender.",
@@ -239,7 +242,7 @@ function deriveCanonicalSenderState(input: {
     };
   }
 
-  if (deliveryAccount.config.mailpool.status === "deleted") {
+  if (deliveryAccount.provider === "mailpool" && deliveryAccount.config.mailpool.status === "deleted") {
     return {
       state: "retired" as const,
       blockedReason: "Mailpool deleted this sender.",
@@ -572,8 +575,21 @@ async function persistCanonicalSenderBundle(bundle: CanonicalSenderBundle, stric
     return bundle.sender;
   }
 
+  const existingSenderResult = await supabase
+    .from(TABLE_SENDER)
+    .select("id, created_at")
+    .eq("brand_id", bundle.sender.brandId)
+    .eq("from_email", bundle.sender.fromEmail)
+    .maybeSingle();
+  if (existingSenderResult.error && strict && !isMissingRelationError(existingSenderResult.error, TABLE_SENDER)) {
+    throw existingSenderResult.error;
+  }
+  const existingSender = asRecord(existingSenderResult.data);
+  const senderId = String(existingSender.id ?? bundle.sender.id).trim() || bundle.sender.id;
+  const createdAt = String(existingSender.created_at ?? bundle.sender.createdAt).trim() || bundle.sender.createdAt;
+
   const senderPayload = {
-    id: bundle.sender.id,
+    id: senderId,
     brand_id: bundle.sender.brandId,
     from_email: bundle.sender.fromEmail,
     reply_to_email: bundle.sender.replyToEmail,
@@ -588,7 +604,7 @@ async function persistCanonicalSenderBundle(bundle: CanonicalSenderBundle, stric
     last_test_status: bundle.sender.lastTestStatus,
     last_send_at: bundle.sender.lastSendAt || null,
     last_reply_at: bundle.sender.lastReplyAt || null,
-    created_at: bundle.sender.createdAt,
+    created_at: createdAt,
     updated_at: bundle.sender.updatedAt,
   } satisfies Record<string, unknown>;
 

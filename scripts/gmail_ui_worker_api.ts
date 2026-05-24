@@ -1337,7 +1337,12 @@ function excerptAround(text: string, needles: string[], maxLength = 1200) {
   return `${start > 0 ? "..." : ""}${clean.slice(start, end)}${end < clean.length ? "..." : ""}`;
 }
 
-async function runGmailSearch(page: any, query: string, stopWhen?: (bodyText: string) => boolean) {
+async function runGmailSearch(
+  page: any,
+  query: string,
+  stopWhen?: (bodyText: string) => boolean,
+  options: { maxAttempts?: number; minAttempts?: number } = {}
+) {
   await page
     .goto(`https://mail.google.com/mail/u/0/#search/${encodeURIComponent(query.trim())}`, {
       waitUntil: "domcontentloaded",
@@ -1347,9 +1352,13 @@ async function runGmailSearch(page: any, query: string, stopWhen?: (bodyText: st
   await settlePage(page);
 
   let bodyText = "";
-  for (let attempt = 0; attempt < 24; attempt += 1) {
+  const maxAttempts = Math.max(1, Math.min(90, Number(options.maxAttempts ?? 24) || 24));
+  const minAttempts = Math.max(1, Math.min(maxAttempts, Number(options.minAttempts ?? 3) || 3));
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     bodyText = normalizeVisibleText(String((await page.locator("body").innerText().catch(() => "")) ?? ""));
-    if (bodyText && (stopWhen?.(bodyText) || attempt >= 2)) break;
+    const stopMatched = stopWhen?.(bodyText) === true;
+    if (bodyText && stopMatched && attempt + 1 >= minAttempts) break;
+    if (bodyText && !stopWhen && attempt + 1 >= minAttempts) break;
     await page.waitForTimeout(1000).catch(() => {});
   }
   return {
@@ -1386,11 +1395,11 @@ async function verifyMessageInSentDetailed(
   const search = await runGmailSearch(page, query, (bodyText) => {
     const lowerText = bodyText.toLowerCase();
     return (
-      lowerText.includes("no messages matched your search") ||
-      lowerText.includes("no conversations matched your search") ||
-      lowerText.includes("no results found") ||
-      (lowerText.includes(recipient) && (lowerText.includes(phrase) || lowerText.includes(subject)))
+      lowerText.includes(recipient) && (lowerText.includes(phrase) || lowerText.includes(subject))
     );
+  }, {
+    maxAttempts: 30,
+    minAttempts: 2,
   });
   const lowerText = search.bodyText.toLowerCase();
   const recipientMatched = lowerText.includes(recipient);
@@ -1543,6 +1552,27 @@ async function sendCompose(
     await waitForSendConfirmation(page, composeRoot, expectedSent);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
+    const composeStillOpen = fullScreenCompose
+      ? await isFullScreenComposePage(page).catch(() => false)
+      : await isComposeStillOpen(composeRoot).catch(() => false);
+    if (composeStillOpen) {
+      try {
+        await dismissGmailOverlays(page, { useEscape: false });
+        if (fullScreenCompose) {
+          await triggerFullScreenComposeSend(page);
+        } else {
+          await page.keyboard.press("Control+Enter");
+        }
+        onSendAttempt?.();
+        await waitForSendConfirmation(page, composeRoot, expectedSent);
+        return;
+      } catch (retryError) {
+        const retryMessage = retryError instanceof Error ? retryError.message : String(retryError);
+        throw new Error(
+          `${message}; retry with keyboard send also failed: ${retryMessage} resolvedSendButton=${sendButtonMeta}`
+        );
+      }
+    }
     throw new Error(`${message} resolvedSendButton=${sendButtonMeta}`);
   }
 }

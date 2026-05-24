@@ -2498,6 +2498,14 @@ async function runInboxPlacementTestForRun(input: {
   }
 
   const generationMeta = asRecord(sourceMessage.generationMeta);
+  const senderHint =
+    sourceMessage.status === "sent"
+      ? {
+          senderAccountId: asString(generationMeta.senderAccountId),
+          senderAccountName: asString(generationMeta.senderAccountName),
+          fromEmail: asString(generationMeta.senderFromEmail),
+        }
+      : {};
   const payload = {
     source: "gpt_operator",
     reason: input.decision.rationale,
@@ -2510,9 +2518,7 @@ async function runInboxPlacementTestForRun(input: {
     sourceType: sourceMessage.sourceType,
     nodeId: sourceMessage.nodeId,
     leadId: sourceMessage.leadId,
-    senderAccountId: asString(generationMeta.senderAccountId),
-    senderAccountName: asString(generationMeta.senderAccountName),
-    fromEmail: asString(generationMeta.senderFromEmail),
+    ...senderHint,
   };
 
   if (input.dryRun) {

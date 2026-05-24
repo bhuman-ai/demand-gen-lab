@@ -41,6 +41,12 @@ import {
   setBrandOutreachAssignment,
 } from "@/lib/outreach-data";
 import { getOutreachAccountFromEmail, supportsAnyDelivery } from "@/lib/outreach-account-helpers";
+import { enrichBrandWithSenderHealth } from "@/lib/sender-health";
+import {
+  buildSenderRoutingSignalFromDomainRow,
+  rankSenderRoutingSignals,
+  summarizeSenderRoutingScore,
+} from "@/lib/sender-routing";
 import { syncCanonicalSenderFromProvisionedAccount } from "@/lib/senders";
 import {
   warmupCampaignDailyCapForDay,
@@ -134,6 +140,38 @@ function isUsableWarmupSenderAccount(account: Awaited<ReturnType<typeof listOutr
       account.config.mailbox.status !== "disconnected" &&
       supportsAnyDelivery(account)
   );
+}
+
+function warmupAutoRepairLimit() {
+  const parsed = Number(process.env.WARMUP_ASSIGNMENT_AUTO_REPAIR_LIMIT ?? 1);
+  if (!Number.isFinite(parsed)) return 1;
+  return Math.max(1, Math.min(5, Math.round(parsed)));
+}
+
+function selectHealthyWarmupSenderAccountIds(input: {
+  brand: BrandRecord;
+  accountById: Map<string, Awaited<ReturnType<typeof listOutreachAccounts>>[number]>;
+}) {
+  const rankedSignals = rankSenderRoutingSignals(
+    input.brand.domains
+      .map((row) => buildSenderRoutingSignalFromDomainRow(row))
+      .filter((row): row is NonNullable<ReturnType<typeof buildSenderRoutingSignalFromDomainRow>> => Boolean(row))
+  );
+
+  const selected: string[] = [];
+  const seen = new Set<string>();
+  for (const signal of rankedSignals) {
+    const account = input.accountById.get(signal.senderAccountId);
+    if (!isUsableWarmupSenderAccount(account)) continue;
+    const score = summarizeSenderRoutingScore(signal);
+    if (signal.automationStatus === "attention" || score.level === "weak") continue;
+    const fromEmail = account ? getOutreachAccountFromEmail(account).trim().toLowerCase() : "";
+    const dedupeKey = fromEmail || signal.senderAccountId;
+    if (seen.has(dedupeKey)) continue;
+    seen.add(dedupeKey);
+    selected.push(signal.senderAccountId);
+  }
+  return selected;
 }
 
 function sameStringList(left: string[], right: string[]) {
@@ -898,7 +936,15 @@ export async function setBrandOutreachAssignmentWithWarmup(
   brandId: string,
   input: { accountId?: string; accountIds?: string[]; mailboxAccountId?: string } | string
 ): Promise<BrandOutreachAssignment | null> {
-  const assignment = await setBrandOutreachAssignment(brandId, input);
+  const normalizedInput =
+    typeof input === "string"
+      ? { accountId: input, accountIds: [input] }
+      : Array.isArray(input.accountIds)
+        ? input
+        : input.accountId
+          ? { ...input, accountIds: [input.accountId] }
+          : input;
+  const assignment = await setBrandOutreachAssignment(brandId, normalizedInput);
   if (!assignment) {
     return null;
   }
@@ -938,6 +984,12 @@ export async function reconcileAssignedSenderWarmupCampaigns(input: {
   for (const brand of brands) {
     try {
       const assignment = await getBrandOutreachAssignment(brand.id);
+      const healthEnrichedBrand = await enrichBrandWithSenderHealth(brand).catch(() => brand);
+      const healthyWarmupAccountIds = selectHealthyWarmupSenderAccountIds({
+        brand: healthEnrichedBrand,
+        accountById,
+      });
+      const healthyWarmupAccountIdSet = new Set(healthyWarmupAccountIds);
       const assignedAccountIds = Array.from(
         new Set(
           [
@@ -948,8 +1000,14 @@ export async function reconcileAssignedSenderWarmupCampaigns(input: {
             .filter(Boolean)
         )
       );
+      const healthyAssignedAccountIds = assignedAccountIds.filter((accountId) =>
+        healthyWarmupAccountIdSet.has(accountId)
+      );
+      const repairFallbackAccountIds = healthyWarmupAccountIds.slice(0, warmupAutoRepairLimit());
       const usableAssignedAccountIds = dedupeWarmupSenderAccountIds(
-        assignedAccountIds.filter((accountId) => isUsableWarmupSenderAccount(accountById.get(accountId))),
+        (healthyAssignedAccountIds.length ? healthyAssignedAccountIds : repairFallbackAccountIds).filter((accountId) =>
+          isUsableWarmupSenderAccount(accountById.get(accountId))
+        ),
         accountById
       );
       const removedAccountIds = assignedAccountIds.filter((accountId) => !usableAssignedAccountIds.includes(accountId));

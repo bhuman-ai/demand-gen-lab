@@ -1151,16 +1151,55 @@ export default function OperatorPanel({
         {visibleMessages.map((message) => {
           const isUser = message.role === "user" && message.kind === "message";
           const isAssistant = message.role === "assistant" && message.kind === "message";
-          const isInlineAssistantLike = isInline && !isUser;
+          if (isInline) {
+            return (
+              <div
+                key={message.id}
+                data-operator-message-role={isUser ? "user" : "assistant"}
+                data-operator-message-inline="true"
+                className={cn("mx-auto flex w-full max-w-[52rem]", isUser ? "justify-end" : "justify-start")}
+              >
+                {isUser ? (
+                  <div
+                    data-operator-message-bubble="user"
+                    className="max-w-[72%] rounded-[18px] bg-[color:var(--surface-muted)] px-5 py-3 text-[color:var(--foreground)]"
+                  >
+                    <MessageBody
+                      message={message}
+                      actionsById={actionsById}
+                      onConfirm={(actionId) => void handleConfirm(actionId)}
+                      onCancel={(actionId) => void handleCancel(actionId)}
+                      onChooseReply={(message) => void handleSend(message)}
+                      onSubmitForm={(form, values) => void handleSubmitForm(form, values)}
+                      actionBusyId={actionBusyId}
+                      sending={agentBusy}
+                    />
+                  </div>
+                ) : (
+                  <div data-operator-message-body="assistant" className="w-full max-w-none text-[color:var(--foreground)]">
+                    <MessageBody
+                      message={message}
+                      actionsById={actionsById}
+                      onConfirm={(actionId) => void handleConfirm(actionId)}
+                      onCancel={(actionId) => void handleCancel(actionId)}
+                      onChooseReply={(message) => void handleSend(message)}
+                      onSubmitForm={(form, values) => void handleSubmitForm(form, values)}
+                      actionBusyId={actionBusyId}
+                      sending={agentBusy}
+                    />
+                  </div>
+                )}
+              </div>
+            );
+          }
+
           return (
-            <div key={message.id} className={cn("flex", isInline ? "mx-auto w-full max-w-[52rem]" : "", isUser ? "justify-end" : "justify-start")}>
+            <div key={message.id} className={cn("flex", isUser ? "justify-end" : "justify-start")}>
               <div
                 className={cn(
                   "max-w-[94%] rounded-[12px] border px-4 py-3",
                   messageCardTone(message),
                   isUser ? "max-w-[80%]" : "",
-                  isInline && isUser ? "max-w-[72%] rounded-[18px] border-transparent bg-[color:var(--surface-muted)] px-5 py-3 text-[color:var(--foreground)]" : "",
-                  isInlineAssistantLike ? "w-full max-w-none rounded-none border-transparent bg-transparent px-0 py-0" : "",
                   isAssistant ? "w-full max-w-none border-transparent bg-transparent px-0 py-0" : ""
                 )}
               >

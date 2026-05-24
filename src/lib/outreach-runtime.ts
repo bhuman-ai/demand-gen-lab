@@ -15713,13 +15713,16 @@ async function processMonitorDeliverabilityJob(job: OutreachJob) {
     });
     return;
   }
+  const payloadSenderAccountId = String(payload.senderAccountId ?? "").trim();
+  const sentReferenceSenderAccountId =
+    referenceMessage.status === "sent" ? referenceMessage.senderAccountId : "";
   const preferredSenderAccountId =
-    String(payload.senderAccountId ?? "").trim() ||
-    referenceMessage.senderAccountId ||
+    payloadSenderAccountId ||
+    sentReferenceSenderAccountId ||
     effectiveRunSenderAccountId(run);
   const strictSenderAccountId =
-    String(payload.senderAccountId ?? "").trim() ||
-    referenceMessage.senderAccountId ||
+    payloadSenderAccountId ||
+    sentReferenceSenderAccountId ||
     effectiveRunSenderAccountId(run);
   const runtimeExperiment = await getExperimentRecordByRuntimeRef(run.brandId, run.campaignId, run.experimentId);
   const businessWindow = businessWindowFromExperimentEnvelope(runtimeExperiment?.testEnvelope);
@@ -15795,8 +15798,8 @@ async function processMonitorDeliverabilityJob(job: OutreachJob) {
   const baselineProbe = buildDeliverabilityBaselineProbe({
     brandName: brand?.name || "",
     senderDomain:
-      senderDomainFromEmail(referenceMessage.senderFromEmail) ||
-      senderDomainFromEmail(senderFromEmail),
+      senderDomainFromEmail(senderFromEmail) ||
+      senderDomainFromEmail(referenceMessage.senderFromEmail),
     probeToken,
   });
   const queuedSubject = typeof payload.subject === "string" ? payload.subject : "";
@@ -21228,9 +21231,13 @@ export async function updateRunControl(input: {
         nodeId: referenceMessage.nodeId,
         leadId: referenceMessage.leadId,
         contentHash: referenceMessage.contentHash,
-        senderAccountId: referenceMessage.senderAccountId,
-        senderAccountName: referenceMessage.senderAccountName,
-        fromEmail: referenceMessage.senderFromEmail,
+        ...(referenceMessage.status === "sent"
+          ? {
+              senderAccountId: referenceMessage.senderAccountId,
+              senderAccountName: referenceMessage.senderAccountName,
+              fromEmail: referenceMessage.senderFromEmail,
+            }
+          : {}),
       },
     });
     await queueDeliverabilityProbe({
@@ -21248,9 +21255,13 @@ export async function updateRunControl(input: {
         nodeId: referenceMessage.nodeId,
         leadId: referenceMessage.leadId,
         contentHash: baselineContentHash,
-        senderAccountId: referenceMessage.senderAccountId,
-        senderAccountName: referenceMessage.senderAccountName,
-        fromEmail: referenceMessage.senderFromEmail,
+        ...(referenceMessage.status === "sent"
+          ? {
+              senderAccountId: referenceMessage.senderAccountId,
+              senderAccountName: referenceMessage.senderAccountName,
+              fromEmail: referenceMessage.senderFromEmail,
+            }
+          : {}),
       },
     });
     await createOutreachEvent({

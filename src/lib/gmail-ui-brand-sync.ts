@@ -6,10 +6,16 @@ import { normalizeGmailUiLoginStatus } from "@/lib/gmail-ui-login";
 import { resolveGmailUiUserDataDir } from "@/lib/gmail-ui-profile";
 import { getOutreachAccountFromEmail } from "@/lib/outreach-account-helpers";
 import {
+  getBrandOutreachAssignment,
   listOutreachAccounts,
   setBrandOutreachAssignment,
   updateOutreachAccount,
 } from "@/lib/outreach-data";
+import { enrichBrandWithSenderHealth } from "@/lib/sender-health";
+import {
+  buildSenderRoutingSignalFromDomainRow,
+  rankSenderRoutingSignals,
+} from "@/lib/sender-routing";
 import { ensureRequiredWebshareProxy } from "@/lib/webshare-proxy-assignment";
 
 type Candidate = {
@@ -73,6 +79,19 @@ function scoreCandidate(candidate: Candidate, currentAssignmentId: string) {
   return score;
 }
 
+function assignedAccountIds(assignment: Awaited<ReturnType<typeof getBrandOutreachAssignment>>) {
+  return Array.from(
+    new Set(
+      [
+        assignment?.accountId ?? "",
+        ...(assignment?.accountIds ?? []),
+      ]
+        .map((entry) => String(entry ?? "").trim())
+        .filter(Boolean)
+    )
+  );
+}
+
 export async function syncBrandGmailUiAssignments(options?: {
   brandIds?: string[];
 }): Promise<BrandGmailUiSyncResult> {
@@ -99,7 +118,9 @@ export async function syncBrandGmailUiAssignments(options?: {
   const warnings: string[] = [];
 
   for (const brand of brands) {
-    const senderDomains = brand.domains.filter(isMailpoolSenderDomain);
+    const assignment = await getBrandOutreachAssignment(brand.id);
+    const enrichedBrand = await enrichBrandWithSenderHealth(brand).catch(() => brand);
+    const senderDomains = enrichedBrand.domains.filter(isMailpoolSenderDomain);
     if (!senderDomains.length) continue;
 
     const candidates: Candidate[] = senderDomains.flatMap((domainRow) => {
@@ -168,10 +189,48 @@ export async function syncBrandGmailUiAssignments(options?: {
       return updated;
     });
 
-    await setBrandOutreachAssignment(brand.id, {
-      accountId: proxied.id,
-      mailboxAccountId: proxied.id,
-    });
+    const signalsByAccountId = new Map(
+      enrichedBrand.domains
+        .map((row) => buildSenderRoutingSignalFromDomainRow(row))
+        .filter((signal): signal is NonNullable<ReturnType<typeof buildSenderRoutingSignalFromDomainRow>> =>
+          Boolean(signal)
+        )
+        .map((signal) => [signal.senderAccountId, signal] as const)
+    );
+    const chosenSignal = signalsByAccountId.get(proxied.id) ?? null;
+    const currentSignals = assignedAccountIds(assignment)
+      .map((accountId) => signalsByAccountId.get(accountId) ?? null)
+      .filter((signal): signal is NonNullable<typeof signal> => Boolean(signal));
+    const bestCurrentSignal =
+      rankSenderRoutingSignals(currentSignals).find((signal) => signal.automationStatus !== "attention") ??
+      rankSenderRoutingSignals(currentSignals)[0] ??
+      null;
+    const preferredSignal = rankSenderRoutingSignals(
+      [bestCurrentSignal, chosenSignal].filter((signal): signal is NonNullable<typeof signal> => Boolean(signal))
+    )[0] ?? null;
+    const assignmentSignal =
+      preferredSignal && preferredSignal.senderAccountId !== proxied.id && preferredSignal.automationStatus !== "attention"
+        ? preferredSignal
+        : chosenSignal;
+
+    if (assignmentSignal) {
+      await setBrandOutreachAssignment(brand.id, {
+        accountId: assignmentSignal.senderAccountId,
+        accountIds: [assignmentSignal.senderAccountId],
+        mailboxAccountId: assignmentSignal.senderAccountId,
+      });
+      if (assignmentSignal.senderAccountId !== proxied.id) {
+        warnings.push(
+          `${brand.name}: kept healthier sender ${assignmentSignal.fromEmail} instead of Gmail UI sender ${fromEmail}.`
+        );
+      }
+    } else {
+      await setBrandOutreachAssignment(brand.id, {
+        accountId: proxied.id,
+        accountIds: [proxied.id],
+        mailboxAccountId: proxied.id,
+      });
+    }
 
     for (const candidate of refreshedCandidates.slice(1)) {
       if (candidate.account.id === proxied.id) continue;

@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { isInternalCronAuthorized } from "@/lib/internal-cron";
+import { getOutreachRun } from "@/lib/outreach-data";
 import { updateRunControl } from "@/lib/outreach-runtime";
 
 export const maxDuration = 60;
@@ -48,9 +49,14 @@ export async function POST(request: Request) {
     );
   }
 
+  const run = await getOutreachRun(runId);
+  if (!run || run.brandId !== brandId) {
+    return NextResponse.json({ ok: false, error: "Run not found" }, { status: 404 });
+  }
+
   const result = await updateRunControl({
     brandId,
-    campaignId,
+    campaignId: run.campaignId || campaignId,
     runId,
     action: action as
       | "pause"

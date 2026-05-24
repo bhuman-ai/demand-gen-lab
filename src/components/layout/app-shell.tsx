@@ -296,7 +296,12 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   return (
     <div className="min-h-screen bg-[color:var(--background)] text-[color:var(--foreground)]">
       <div className="grid min-h-screen grid-cols-1 md:grid-cols-[260px_1fr]">
-        <aside className="min-w-0 border-b border-[color:var(--border)] bg-[color:var(--sidebar)] px-4 py-5 md:border-b-0 md:border-r md:px-5">
+        <aside
+          className={cn(
+            "min-w-0 border-b border-[color:var(--border)] bg-[color:var(--sidebar)] px-4 py-5 md:border-b-0 md:border-r md:px-5",
+            agentHomeActive ? "hidden md:block" : ""
+          )}
+        >
           <div className="flex h-full min-w-0 flex-col">
             <Link href="/" className="group block border-b border-[color:var(--border)] pb-4">
               <BrandWordmark
@@ -393,15 +398,15 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
           </div>
         </aside>
 
-        <main className="min-w-0">
-          <header className="sticky top-0 z-20 border-b border-[color:var(--border)] bg-[color:var(--background)]/96 px-4 py-3 backdrop-blur-sm md:px-8">
-            <div className="flex flex-wrap items-center justify-between gap-4">
-              <div className="min-w-0 text-sm text-[color:var(--muted-foreground)]">
-                {breadcrumb(pathname, activeBrandId ? activeBrandName : "")}
-              </div>
-              <div className="flex items-center gap-2">
-                <GlobalCommandPalette activeBrandId={activeBrandId} />
-                {!agentHomeActive ? (
+        <main className={cn("min-w-0", agentHomeActive ? "min-h-screen" : "")}>
+          {!agentHomeActive ? (
+            <header className="sticky top-0 z-20 border-b border-[color:var(--border)] bg-[color:var(--background)]/96 px-4 py-3 backdrop-blur-sm md:px-8">
+              <div className="flex flex-wrap items-center justify-between gap-4">
+                <div className="min-w-0 text-sm text-[color:var(--muted-foreground)]">
+                  {breadcrumb(pathname, activeBrandId ? activeBrandName : "")}
+                </div>
+                <div className="flex items-center gap-2">
+                  <GlobalCommandPalette activeBrandId={activeBrandId} />
                   <button
                     type="button"
                     onClick={() => setOperatorOpen(true)}
@@ -410,11 +415,11 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
                     <Sparkles className="h-3.5 w-3.5" />
                     Brand GPT
                   </button>
-                ) : null}
+                </div>
               </div>
-            </div>
-          </header>
-          <div className="p-4 md:px-8 md:py-7">{children}</div>
+            </header>
+          ) : null}
+          <div className={agentHomeActive ? "min-h-screen" : "p-4 md:px-8 md:py-7"}>{children}</div>
         </main>
       </div>
       <OperatorPanel

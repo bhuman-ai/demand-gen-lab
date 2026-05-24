@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
+  ChevronDown,
   ChevronRight,
   ExternalLink,
   FolderKanban,
@@ -210,30 +211,191 @@ export default function BrandHomeClient({ brandId }: { brandId: string }) {
   const allLinks = [...workLinks, ...secondaryLinks];
 
   return (
-    <div className="mx-auto flex min-h-[calc(100vh-7rem)] w-full max-w-3xl flex-col gap-4">
-      <header className="flex flex-wrap items-center justify-between gap-3 border-b border-[color:var(--border)] pb-3">
-        <div className="min-w-0">
-          <div className="text-xs font-medium uppercase tracking-[0.12em] text-[color:var(--muted-foreground)]">
+    <div className="flex min-h-screen flex-col bg-[color:var(--background)]">
+      <header className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-[color:var(--border)] px-4 md:px-6">
+        <div className="flex min-w-0 items-center gap-2">
+          <div className="inline-flex h-9 shrink-0 items-center gap-2 rounded-[10px] px-2.5 text-sm font-medium text-[color:var(--foreground)] hover:bg-[color:var(--surface-muted)]">
             Brand GPT
+            <ChevronDown className="h-4 w-4 text-[color:var(--muted-foreground)]" />
           </div>
-          <h1 className="mt-1 truncate text-xl font-semibold text-[color:var(--foreground)]">
+          <div className="min-w-0 truncate text-sm text-[color:var(--muted-foreground)]">
             {brand?.name || "Brand"}
-          </h1>
+          </div>
         </div>
-        <div className="flex min-w-0 flex-wrap items-center gap-2 text-sm text-[color:var(--muted-foreground)]">
-          <Badge variant={latestMission?.status === "failed" ? "danger" : latestMission ? "accent" : "muted"}>
-            {latestMission ? formatStatus(latestMission.status) : "Ready"}
-          </Badge>
-          <span className="max-w-[32rem] truncate">{currentRisk}</span>
-        </div>
+
+        <details className="relative shrink-0">
+          <summary className="inline-flex h-9 cursor-pointer list-none items-center gap-2 rounded-[10px] px-3 text-sm text-[color:var(--muted-foreground)] hover:bg-[color:var(--surface-muted)] hover:text-[color:var(--foreground)] [&::-webkit-details-marker]:hidden">
+            Details
+            <ChevronDown className="h-4 w-4" />
+          </summary>
+          <div className="absolute right-0 z-30 mt-2 max-h-[calc(100vh-7rem)] w-[min(44rem,calc(100vw-2rem))] overflow-auto rounded-[16px] border border-[color:var(--border)] bg-[color:var(--surface)] p-4 shadow-[0_24px_70px_-36px_color-mix(in_oklab,var(--shadow)_90%,transparent)]">
+            <div className="mb-4 flex flex-wrap items-center gap-2 text-sm text-[color:var(--muted-foreground)]">
+              <Badge variant={latestMission?.status === "failed" ? "danger" : latestMission ? "accent" : "muted"}>
+                {latestMission ? formatStatus(latestMission.status) : "Ready"}
+              </Badge>
+              <span className="min-w-0 flex-1">{currentRisk}</span>
+            </div>
+            <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_17rem]">
+              <div className="grid gap-4">
+                <div className="grid gap-2">
+                  <Label htmlFor="product">Product summary</Label>
+                  <Textarea
+                    id="product"
+                    value={product}
+                    onChange={(event) => setProduct(event.target.value)}
+                    placeholder="What the product does and why it matters."
+                  />
+                </div>
+                <div className="grid gap-2 md:grid-cols-2">
+                  <div className="grid gap-2">
+                    <Label htmlFor="targetMarkets">Target markets</Label>
+                    <Textarea
+                      id="targetMarkets"
+                      value={targetMarketsText}
+                      onChange={(event) => setTargetMarketsText(event.target.value)}
+                      placeholder="Mid-market B2B SaaS&#10;Agencies"
+                    />
+                  </div>
+                  <div className="grid gap-2">
+                    <Label htmlFor="icps">Ideal customers</Label>
+                    <Textarea
+                      id="icps"
+                      value={icpText}
+                      onChange={(event) => setIcpText(event.target.value)}
+                      placeholder="VP Sales at 50-500 employee SaaS&#10;Founder-led teams"
+                    />
+                  </div>
+                </div>
+                <div className="grid gap-2 md:grid-cols-2">
+                  <div className="grid gap-2">
+                    <Label htmlFor="features">Key features</Label>
+                    <Textarea
+                      id="features"
+                      value={featuresText}
+                      onChange={(event) => setFeaturesText(event.target.value)}
+                      placeholder="AI-personalized video&#10;Automated outreach orchestration"
+                    />
+                  </div>
+                  <div className="grid gap-2">
+                    <Label htmlFor="benefits">Key benefits</Label>
+                    <Textarea
+                      id="benefits"
+                      value={benefitsText}
+                      onChange={(event) => setBenefitsText(event.target.value)}
+                      placeholder="Higher reply rates&#10;Lower manual workload"
+                    />
+                  </div>
+                </div>
+                <Button
+                  type="button"
+                  disabled={!brand || profileSaving}
+                  onClick={async () => {
+                    if (!brand) return;
+                    setProfileSaving(true);
+                    setError("");
+                    try {
+                      const updated = await updateBrandApi(brand.id, {
+                        product: product.trim(),
+                        targetMarkets: normalizeLines(targetMarketsText),
+                        idealCustomerProfiles: normalizeLines(icpText),
+                        keyFeatures: normalizeLines(featuresText),
+                        keyBenefits: normalizeLines(benefitsText),
+                      });
+                      setBrand(updated);
+                    } catch (err) {
+                      setError(err instanceof Error ? err.message : "Failed to save brand context");
+                    } finally {
+                      setProfileSaving(false);
+                    }
+                  }}
+                >
+                  {profileSaving ? "Saving..." : "Save context"}
+                </Button>
+              </div>
+
+              <div className="grid content-start gap-3">
+                <div className="grid gap-2">
+                  {allLinks.map((item) => {
+                    const Icon = item.icon;
+                    return (
+                      <Link
+                        key={item.label}
+                        href={item.href}
+                        className="flex items-center justify-between gap-3 rounded-[10px] border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-3 text-sm transition-colors hover:bg-[color:var(--surface-hover)]"
+                      >
+                        <span className="flex min-w-0 items-center gap-3">
+                          <Icon className="h-4 w-4 shrink-0 text-[color:var(--muted-foreground)]" />
+                          <span className="min-w-0">
+                            <span className="block font-medium text-[color:var(--foreground)]">{item.label}</span>
+                            <span className="block truncate text-xs text-[color:var(--muted-foreground)]">{item.detail}</span>
+                          </span>
+                        </span>
+                        <ChevronRight className="h-4 w-4 shrink-0 text-[color:var(--muted-foreground)]" />
+                      </Link>
+                    );
+                  })}
+                </div>
+
+                <div className="grid gap-3 border-t border-[color:var(--border)] pt-3">
+                  <Label htmlFor="assignedAccount">Delivery account</Label>
+                  <Select
+                    id="assignedAccount"
+                    value={assignedAccountId}
+                    onChange={async (event) => {
+                      const accountId = event.target.value;
+                      setAssignedAccountId(accountId);
+                      try {
+                        await assignBrandOutreachAccount(brandId, accountId);
+                      } catch (err) {
+                        setError(err instanceof Error ? err.message : "Failed to assign delivery account");
+                      }
+                    }}
+                  >
+                    <option value="">Unassigned</option>
+                    {accounts.map((account) => (
+                      <option key={account.id} value={account.id}>
+                        {account.name}
+                      </option>
+                    ))}
+                  </Select>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="justify-start"
+                    onClick={() =>
+                      openBrandOperator(
+                        "Connect LinkedIn for this brand. If a human login is needed, create the sign-in link.",
+                        true
+                      )
+                    }
+                  >
+                    <Network className="h-4 w-4" />
+                    Connect LinkedIn
+                  </Button>
+                  <Button asChild variant="outline" className="justify-start">
+                    <Link href="/settings/outreach">
+                      <Settings className="h-4 w-4" />
+                      Outreach settings
+                      <ExternalLink className="h-3.5 w-3.5" />
+                    </Link>
+                  </Button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </details>
       </header>
 
       {error ? (
-        <div className="rounded-[12px] border border-[color:var(--danger-border)] bg-[color:var(--danger-soft)] px-4 py-3 text-sm text-[color:var(--danger)]">
+        <div className="mx-auto mt-4 w-full max-w-3xl rounded-[12px] border border-[color:var(--danger-border)] bg-[color:var(--danger-soft)] px-4 py-3 text-sm text-[color:var(--danger)]">
           {error}
         </div>
       ) : null}
-      {loading ? <div className="text-sm text-[color:var(--muted-foreground)]">Loading brand...</div> : null}
+      {loading ? (
+        <div className="mx-auto mt-4 w-full max-w-3xl text-sm text-[color:var(--muted-foreground)]">
+          Loading brand...
+        </div>
+      ) : null}
 
       <OperatorPanel
         open={Boolean(brandId)}
@@ -241,161 +403,8 @@ export default function BrandHomeClient({ brandId }: { brandId: string }) {
         activeBrandId={brandId}
         activeBrandName={brand?.name || ""}
         variant="inline"
-        className="flex-1 lg:min-h-[calc(100vh-14rem)]"
+        className="min-h-0 flex-1"
       />
-
-      <details className="rounded-[12px] border border-[color:var(--border)] bg-[color:var(--surface)]">
-        <summary className="cursor-pointer px-4 py-3 text-sm font-medium text-[color:var(--foreground)]">
-          Details
-        </summary>
-        <div className="grid gap-5 border-t border-[color:var(--border)] px-4 py-4 lg:grid-cols-[minmax(0,1fr)_20rem]">
-          <div className="grid gap-4">
-            <div className="grid gap-2">
-              <Label htmlFor="product">Product summary</Label>
-              <Textarea
-                id="product"
-                value={product}
-                onChange={(event) => setProduct(event.target.value)}
-                placeholder="What the product does and why it matters."
-              />
-            </div>
-            <div className="grid gap-2 md:grid-cols-2">
-              <div className="grid gap-2">
-                <Label htmlFor="targetMarkets">Target markets</Label>
-                <Textarea
-                  id="targetMarkets"
-                  value={targetMarketsText}
-                  onChange={(event) => setTargetMarketsText(event.target.value)}
-                  placeholder="Mid-market B2B SaaS&#10;Agencies"
-                />
-              </div>
-              <div className="grid gap-2">
-                <Label htmlFor="icps">Ideal customers</Label>
-                <Textarea
-                  id="icps"
-                  value={icpText}
-                  onChange={(event) => setIcpText(event.target.value)}
-                  placeholder="VP Sales at 50-500 employee SaaS&#10;Founder-led teams"
-                />
-              </div>
-            </div>
-            <div className="grid gap-2 md:grid-cols-2">
-              <div className="grid gap-2">
-                <Label htmlFor="features">Key features</Label>
-                <Textarea
-                  id="features"
-                  value={featuresText}
-                  onChange={(event) => setFeaturesText(event.target.value)}
-                  placeholder="AI-personalized video&#10;Automated outreach orchestration"
-                />
-              </div>
-              <div className="grid gap-2">
-                <Label htmlFor="benefits">Key benefits</Label>
-                <Textarea
-                  id="benefits"
-                  value={benefitsText}
-                  onChange={(event) => setBenefitsText(event.target.value)}
-                  placeholder="Higher reply rates&#10;Lower manual workload"
-                />
-              </div>
-            </div>
-            <Button
-              type="button"
-              disabled={!brand || profileSaving}
-              onClick={async () => {
-                if (!brand) return;
-                setProfileSaving(true);
-                setError("");
-                try {
-                  const updated = await updateBrandApi(brand.id, {
-                    product: product.trim(),
-                    targetMarkets: normalizeLines(targetMarketsText),
-                    idealCustomerProfiles: normalizeLines(icpText),
-                    keyFeatures: normalizeLines(featuresText),
-                    keyBenefits: normalizeLines(benefitsText),
-                  });
-                  setBrand(updated);
-                } catch (err) {
-                  setError(err instanceof Error ? err.message : "Failed to save brand context");
-                } finally {
-                  setProfileSaving(false);
-                }
-              }}
-            >
-              {profileSaving ? "Saving..." : "Save context"}
-            </Button>
-          </div>
-
-          <div className="grid content-start gap-3">
-            <div className="grid gap-2">
-              {allLinks.map((item) => {
-                const Icon = item.icon;
-                return (
-                  <Link
-                    key={item.label}
-                    href={item.href}
-                    className="flex items-center justify-between gap-3 rounded-[10px] border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-3 text-sm transition-colors hover:bg-[color:var(--surface-hover)]"
-                  >
-                    <span className="flex min-w-0 items-center gap-3">
-                      <Icon className="h-4 w-4 shrink-0 text-[color:var(--muted-foreground)]" />
-                      <span className="min-w-0">
-                        <span className="block font-medium text-[color:var(--foreground)]">{item.label}</span>
-                        <span className="block truncate text-xs text-[color:var(--muted-foreground)]">{item.detail}</span>
-                      </span>
-                    </span>
-                    <ChevronRight className="h-4 w-4 shrink-0 text-[color:var(--muted-foreground)]" />
-                  </Link>
-                );
-              })}
-            </div>
-
-            <div className="grid gap-3 border-t border-[color:var(--border)] pt-3">
-              <Label htmlFor="assignedAccount">Delivery account</Label>
-              <Select
-                id="assignedAccount"
-                value={assignedAccountId}
-                onChange={async (event) => {
-                  const accountId = event.target.value;
-                  setAssignedAccountId(accountId);
-                  try {
-                    await assignBrandOutreachAccount(brandId, accountId);
-                  } catch (err) {
-                    setError(err instanceof Error ? err.message : "Failed to assign delivery account");
-                  }
-                }}
-              >
-                <option value="">Unassigned</option>
-                {accounts.map((account) => (
-                  <option key={account.id} value={account.id}>
-                    {account.name}
-                  </option>
-                ))}
-              </Select>
-              <Button
-                type="button"
-                variant="outline"
-                className="justify-start"
-                onClick={() =>
-                  openBrandOperator(
-                    "Connect LinkedIn for this brand. If a human login is needed, create the sign-in link.",
-                    true
-                  )
-                }
-              >
-                <Network className="h-4 w-4" />
-                Connect LinkedIn
-              </Button>
-              <Button asChild variant="outline" className="justify-start">
-                <Link href="/settings/outreach">
-                  <Settings className="h-4 w-4" />
-                  Outreach settings
-                  <ExternalLink className="h-3.5 w-3.5" />
-                </Link>
-              </Button>
-            </div>
-          </div>
-        </div>
-      </details>
     </div>
   );
 }

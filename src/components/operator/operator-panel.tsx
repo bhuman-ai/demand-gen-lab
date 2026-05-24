@@ -998,7 +998,7 @@ export default function OperatorPanel({
       className={cn(
         "relative flex h-full w-full flex-col bg-[color:var(--background)]",
         isInline
-          ? "min-h-[680px] overflow-hidden"
+          ? "min-h-0 overflow-hidden"
           : "max-w-[38rem] border-l border-[color:var(--border)] shadow-[0_18px_48px_-28px_color-mix(in_oklab,var(--shadow)_88%,transparent)]",
         className
       )}
@@ -1066,48 +1066,55 @@ export default function OperatorPanel({
         </div>
       ) : null}
 
-      <div ref={scrollerRef} className={cn("flex-1 space-y-5 overflow-y-auto", isInline ? "px-0 py-8" : "px-5 py-5")}>
+      <div ref={scrollerRef} className={cn("flex-1 space-y-5 overflow-y-auto", isInline ? "px-4 pt-10 pb-6" : "px-5 py-5")}>
         {!activeBrandId ? (
-          <div className="rounded-[12px] border border-[color:var(--border)] bg-[color:var(--surface)] px-4 py-4 text-sm text-[color:var(--muted-foreground)]">
+          <div className={cn("rounded-[12px] border border-[color:var(--border)] bg-[color:var(--surface)] px-4 py-4 text-sm text-[color:var(--muted-foreground)]", isInline ? "mx-auto max-w-3xl" : "")}>
             Select a brand first. Brand GPT is scoped to the active brand context.
           </div>
         ) : null}
 
         {loadingThread ? (
-          <div className="inline-flex items-center gap-2 rounded-[12px] border border-[color:var(--border)] bg-[color:var(--surface)] px-4 py-3 text-sm text-[color:var(--muted-foreground)]">
+          <div className={cn("inline-flex items-center gap-2 rounded-[12px] border border-[color:var(--border)] bg-[color:var(--surface)] px-4 py-3 text-sm text-[color:var(--muted-foreground)]", isInline ? "mx-auto flex max-w-3xl" : "")}>
             <Loader2 className="h-4 w-4 animate-spin" />
             Loading Brand GPT thread...
           </div>
         ) : null}
 
         {error ? (
-          <div className="rounded-[14px] border border-[color:var(--danger-border)] bg-[color:var(--danger-soft)] px-4 py-3 text-sm text-[color:var(--danger)]">
+          <div className={cn("rounded-[14px] border border-[color:var(--danger-border)] bg-[color:var(--danger-soft)] px-4 py-3 text-sm text-[color:var(--danger)]", isInline ? "mx-auto max-w-3xl" : "")}>
             {error}
           </div>
         ) : null}
 
         {activeRun ? (
-          <div className="rounded-[12px] border border-[color:var(--accent-border)] bg-[color:var(--accent-soft)] px-4 py-3 text-sm text-[color:var(--foreground)]">
-            <div className="flex items-center gap-2 font-medium">
+          isInline ? (
+            <div className="mx-auto flex max-w-3xl items-center gap-2 text-sm text-[color:var(--muted-foreground)]">
               <Loader2 className="h-4 w-4 animate-spin" />
-              Brand GPT agent run in progress
+              Working...
             </div>
-            <div className="mt-1 text-xs leading-5 text-[color:var(--muted-foreground)]">
-              It is using the same Operator tool loop as the autonomous runner. Results and evidence will appear in this thread.
+          ) : (
+            <div className="rounded-[12px] border border-[color:var(--accent-border)] bg-[color:var(--accent-soft)] px-4 py-3 text-sm text-[color:var(--foreground)]">
+              <div className="flex items-center gap-2 font-medium">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Brand GPT agent run in progress
+              </div>
+              <div className="mt-1 text-xs leading-5 text-[color:var(--muted-foreground)]">
+                It is using the same Operator tool loop as the autonomous runner. Results and evidence will appear in this thread.
+              </div>
             </div>
-          </div>
+          )
         ) : null}
 
         {!loadingThread && activeBrandId && !visibleMessages.length ? (
           <div
             className={cn(
               isInline
-                ? "mx-auto flex min-h-[22rem] w-full max-w-3xl flex-col items-center justify-center gap-5 text-center"
+                ? "mx-auto flex min-h-[calc(100vh-22rem)] w-full max-w-3xl flex-col items-center justify-center gap-6 text-center"
                 : "space-y-3"
             )}
           >
             {isInline ? (
-              <h2 className="text-2xl font-semibold text-[color:var(--foreground)]">
+              <h2 className="text-[1.75rem] font-semibold leading-tight text-[color:var(--foreground)]">
                 What should {activeBrandName || "this brand"} do next?
               </h2>
             ) : (
@@ -1122,7 +1129,7 @@ export default function OperatorPanel({
                   key={prompt}
                   type="button"
                   onClick={() => void handleSend(prompt)}
-                  className="flex items-center justify-between rounded-[10px] border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-3 text-left text-sm text-[color:var(--foreground)] transition-colors hover:bg-[color:var(--surface-hover)]"
+                  className="flex min-h-14 items-center justify-between rounded-[16px] border border-[color:var(--border)] bg-[color:var(--surface)] px-4 py-3 text-left text-sm text-[color:var(--foreground)] transition-colors hover:bg-[color:var(--surface-hover)]"
                   disabled={agentBusy}
                 >
                   <span>{prompt}</span>
@@ -1150,10 +1157,11 @@ export default function OperatorPanel({
                   "max-w-[94%] rounded-[12px] border px-4 py-3",
                   messageCardTone(message),
                   isUser ? "max-w-[80%]" : "",
+                  isInline && isUser ? "max-w-[72%] rounded-[18px] border-transparent bg-[color:var(--surface-muted)] text-[color:var(--foreground)]" : "",
                   isAssistant ? "w-full max-w-none border-transparent bg-transparent px-0 py-0" : ""
                 )}
               >
-                {isAssistant ? (
+                {isAssistant && !isInline ? (
                   <div className="mb-2 flex items-center gap-2 text-[11px] font-medium text-[color:var(--muted-foreground)]">
                     <Clock3 className="h-3.5 w-3.5" />
                     Brand GPT
@@ -1175,7 +1183,7 @@ export default function OperatorPanel({
         })}
       </div>
 
-      <div className={cn("py-4", isInline ? "px-0" : "border-t border-[color:var(--border)] px-5")}>
+      <div className={cn(isInline ? "shrink-0 bg-[color:var(--background)] px-4 pb-5 pt-2" : "border-t border-[color:var(--border)] px-5 py-4")}>
         {!isInline && visibleMessages.length ? (
           <div className="mb-3 flex flex-wrap gap-2">
             {DEFAULT_PROMPTS.slice(0, 3).map((prompt) => (
@@ -1195,7 +1203,7 @@ export default function OperatorPanel({
         <form
           className={cn(
             isInline
-              ? "mx-auto w-full max-w-3xl rounded-[24px] border border-[color:var(--border)] bg-[color:var(--surface)] px-4 py-3 shadow-[0_12px_36px_-30px_color-mix(in_oklab,var(--shadow)_85%,transparent)]"
+              ? "mx-auto w-full max-w-3xl rounded-[26px] border border-[color:var(--border)] bg-[color:var(--surface)] px-4 py-3 shadow-[0_16px_44px_-34px_color-mix(in_oklab,var(--shadow)_85%,transparent)]"
               : "space-y-3"
           )}
           onSubmit={(event) => {
@@ -1214,12 +1222,12 @@ export default function OperatorPanel({
             }}
             placeholder={
               activeBrandId
-                ? "Ask anything about this brand, or tell Brand GPT what to do."
+                ? "Message Brand GPT"
                 : "Select a brand to use Brand GPT."
             }
             className={cn(
               isInline
-                ? "min-h-[72px] resize-none rounded-none border-0 bg-transparent px-0 py-0 focus-visible:border-transparent focus-visible:ring-0"
+                ? "min-h-[48px] resize-none rounded-none border-0 bg-transparent px-0 py-0 focus-visible:border-transparent focus-visible:ring-0"
                 : "min-h-[104px] rounded-[12px] bg-[color:var(--surface)]"
             )}
             disabled={agentBusy || !activeBrandId}

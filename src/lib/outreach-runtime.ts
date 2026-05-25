@@ -15717,6 +15717,23 @@ async function processMonitorDeliverabilityJob(job: OutreachJob) {
     (probeToken ? await findDeliverabilityProbeRun({ runId: run.id, probeToken, probeVariant }) : null);
   const sourceMessageId = String(payload.sourceMessageId ?? "").trim();
 
+  if (stage === "poll" && probeRun && ["completed", "failed"].includes(probeRun.status)) {
+    await createOutreachEvent({
+      runId: run.id,
+      eventType: "deliverability_probe_poll_skipped",
+      payload: {
+        reason: "Probe already reached a terminal state before this poll job ran",
+        jobId: job.id,
+        probeRunId: probeRun.id,
+        probeToken,
+        probeVariant,
+        status: probeRun.status,
+        placement: probeRun.placement,
+      },
+    });
+    return;
+  }
+
   if (stage === "send" && !isDeliverabilitySeedingEnabled()) {
     if (probeRun) {
       await updateDeliverabilityProbeRun(probeRun.id, {

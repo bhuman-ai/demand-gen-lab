@@ -29,6 +29,14 @@ type CustomerIoReportingEvent = {
   data: Record<string, unknown>;
 };
 
+type CustomerIoWebhookVerification = {
+  ok: boolean;
+  configured: boolean;
+  verified: boolean;
+  error: string;
+  method: "none" | "hmac" | "url_token";
+};
+
 const DELIVERY_SUCCESS_METRICS = new Set(["delivered", "opened", "clicked"]);
 const DELIVERY_FAILURE_METRICS = new Set([
   "bounced",
@@ -92,10 +100,16 @@ function safeEqualHex(leftHex: string, rightHex: string) {
   return left.length > 0 && left.length === right.length && timingSafeEqual(left, right);
 }
 
-function verifyCustomerIoSignature(request: Request, rawBody: string) {
+function safeEqualText(leftText: string, rightText: string) {
+  const left = Buffer.from(leftText);
+  const right = Buffer.from(rightText);
+  return left.length > 0 && left.length === right.length && timingSafeEqual(left, right);
+}
+
+function verifyCustomerIoSignature(request: Request, rawBody: string): CustomerIoWebhookVerification {
   const secret = customerIoSigningSecret();
   if (!secret) {
-    return { ok: true, configured: false, verified: false, error: "" };
+    return { ok: true, configured: false, verified: false, error: "", method: "none" };
   }
 
   const timestamp = asString(request.headers.get("x-cio-timestamp"));
@@ -106,6 +120,7 @@ function verifyCustomerIoSignature(request: Request, rawBody: string) {
       configured: true,
       verified: false,
       error: "Missing Customer.io signature headers",
+      method: "hmac",
     };
   }
 
@@ -122,6 +137,29 @@ function verifyCustomerIoSignature(request: Request, rawBody: string) {
     configured: true,
     verified,
     error: verified ? "" : "Customer.io signature mismatch",
+    method: "hmac",
+  };
+}
+
+function verifyCustomerIoReportingAccess(request: Request, rawBody: string): CustomerIoWebhookVerification {
+  const signature = verifyCustomerIoSignature(request, rawBody);
+  if (signature.configured) return signature;
+
+  const expectedToken = asString(process.env.CUSTOMER_IO_WEBHOOK_SECRET);
+  if (!expectedToken) return signature;
+
+  const url = new URL(request.url);
+  const providedToken =
+    asString(url.searchParams.get("token")) ||
+    asString(url.searchParams.get("secret")) ||
+    asString(request.headers.get("x-webhook-secret"));
+  const verified = safeEqualText(providedToken, expectedToken);
+  return {
+    ok: verified,
+    configured: true,
+    verified,
+    error: verified ? "" : "Customer.io webhook token mismatch",
+    method: "url_token",
   };
 }
 
@@ -157,7 +195,7 @@ function looksLikeCustomerIoReportingWebhook(body: Record<string, unknown>) {
   return Boolean(body.metric || body.event_id || body.object_type || asRecord(body.data).delivery_id);
 }
 
-function reportingPayload(event: CustomerIoReportingEvent, signature: ReturnType<typeof verifyCustomerIoSignature>) {
+function reportingPayload(event: CustomerIoReportingEvent, signature: CustomerIoWebhookVerification) {
   return {
     provider: "customerio",
     deliveryId: event.deliveryId,
@@ -172,6 +210,7 @@ function reportingPayload(event: CustomerIoReportingEvent, signature: ReturnType
     signature: {
       configured: signature.configured,
       verified: signature.verified,
+      method: signature.method,
     },
   };
 }
@@ -303,7 +342,7 @@ async function queueProbePollFromCustomerIoWebhook(probeRunId: string) {
 
 async function handleCustomerIoReportingWebhook(
   event: CustomerIoReportingEvent,
-  signature: ReturnType<typeof verifyCustomerIoSignature>
+  signature: CustomerIoWebhookVerification
 ) {
   if (!event.deliveryId) {
     return NextResponse.json({ ok: true, ignored: true, reason: "missing_delivery_id" });
@@ -547,7 +586,7 @@ export async function POST(request: Request) {
   }
 
   if (looksLikeCustomerIoReportingWebhook(body)) {
-    const signature = verifyCustomerIoSignature(request, rawBody);
+    const signature = verifyCustomerIoReportingAccess(request, rawBody);
     if (!signature.ok) {
       return NextResponse.json({ error: signature.error }, { status: 401 });
     }

@@ -415,6 +415,7 @@ const OPERATOR_TOOL_DEFINITIONS: OperatorGrowthToolDefinition[] = [
         brandId: stringProp("Brand id"),
         campaignId: stringProp("Campaign id"),
         runId: stringProp("Run id"),
+        senderAccountId: stringProp("Optional sender account id to resume or use for deliverability control"),
         action: enumProp(
           [
             "pause",

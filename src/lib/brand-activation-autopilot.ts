@@ -1169,15 +1169,15 @@ function customerIoRouteEvidence(snapshot: BrandActivationSnapshot) {
   return snapshot.outreach.senderRouteEvidence.filter((evidence) => evidence.routeKind === "customerio");
 }
 
-function verifiedCustomerIoInboxRoutesFromRoutes(routes: OutreachBrandStatus["senderRouteEvidence"]) {
+function verifiedPromotableInboxRoutesFromRoutes(routes: OutreachBrandStatus["senderRouteEvidence"]) {
   return routes
     .filter(
       (evidence) =>
-        evidence.routeKind === "customerio" &&
         routeEvidenceShowsInbox(evidence) &&
         evidence.accountId &&
         evidence.fromEmail &&
-        evidence.state !== "retired"
+        evidence.routeKind !== "unknown" &&
+        evidence.state === "ready"
     )
     .sort((left, right) => {
       const timestampDelta = toTimestamp(right.checkedAt) - toTimestamp(left.checkedAt);
@@ -1186,8 +1186,8 @@ function verifiedCustomerIoInboxRoutesFromRoutes(routes: OutreachBrandStatus["se
     });
 }
 
-function verifiedCustomerIoInboxRoutes(snapshot: BrandActivationSnapshot) {
-  return verifiedCustomerIoInboxRoutesFromRoutes(snapshot.outreach.senderRouteEvidence);
+function verifiedPromotableInboxRoutes(snapshot: BrandActivationSnapshot) {
+  return verifiedPromotableInboxRoutesFromRoutes(snapshot.outreach.senderRouteEvidence);
 }
 
 function statusNeedsTransportFallback(status: Pick<OutreachBrandStatus, "campaignSummary" | "executionSummary" | "senderRouteEvidence">) {
@@ -1209,7 +1209,7 @@ function statusNeedsVerifiedTransportPromotion(status: Pick<
   if (!status.executionSummary.activeOutboundRunId || !status.campaignSummary.activeOutboundCampaignId) {
     return false;
   }
-  if (verifiedCustomerIoInboxRoutesFromRoutes(status.senderRouteEvidence).length === 0) return false;
+  if (verifiedPromotableInboxRoutesFromRoutes(status.senderRouteEvidence).length === 0) return false;
   if (gmailUiSpamEvidenceFromRoutes(status.senderRouteEvidence).length > 0) return true;
   if (status.executionSummary.activeOutboundRunStatus === "paused") return true;
   if (status.executionSummary.dueMessageCount > 0 && status.executionSummary.activeDispatchJobCount <= 0) return true;
@@ -1271,7 +1271,7 @@ function summarizeTransportFallback(snapshot: BrandActivationSnapshot) {
 }
 
 function summarizeVerifiedTransportPromotion(snapshot: BrandActivationSnapshot) {
-  const verifiedRoutes = verifiedCustomerIoInboxRoutes(snapshot);
+  const verifiedRoutes = verifiedPromotableInboxRoutes(snapshot);
   const activeRunId = snapshot.outreach.executionSummary.activeOutboundRunId;
   const activeCampaignId = snapshot.outreach.campaignSummary.activeOutboundCampaignId;
   const due = snapshotNeedsVerifiedTransportPromotion(snapshot);
@@ -1280,11 +1280,12 @@ function summarizeVerifiedTransportPromotion(snapshot: BrandActivationSnapshot) 
     due,
     reason:
       due && bestRoute
-        ? "Customer.io has exact-copy inbox placement evidence; promote that route for the active run instead of waiting for manual instruction."
+        ? "A ready sender route has exact-copy inbox placement evidence; promote that route for the active run instead of waiting for manual instruction."
         : "",
-    verifiedCustomerIoInboxEvidence: verifiedRoutes.slice(0, 3).map((evidence) => ({
+    verifiedInboxRouteEvidence: verifiedRoutes.slice(0, 3).map((evidence) => ({
       accountId: evidence.accountId,
       fromEmail: evidence.fromEmail,
+      routeKind: evidence.routeKind,
       state: evidence.state,
       placement: evidence.placement,
       checkedAt: evidence.checkedAt,
@@ -1303,7 +1304,7 @@ function summarizeVerifiedTransportPromotion(snapshot: BrandActivationSnapshot) 
             runId: activeRunId,
             action: "resume_sender_deliverability",
             senderAccountId: bestRoute.accountId,
-            reason: `Customer.io sender ${bestRoute.fromEmail} passed exact-copy inbox placement; promote it for the active run.`,
+            reason: `Sender ${bestRoute.fromEmail} passed exact-copy inbox placement and is ready; promote it for the active run.`,
           }
         : {},
   };
@@ -1374,18 +1375,18 @@ function buildProbeAllSenderTransportsDecision(
   };
 }
 
-function buildPromoteVerifiedCustomerIoRouteDecision(
+function buildPromoteVerifiedSenderRouteDecision(
   snapshot: BrandActivationSnapshot
 ): ActivationDecision | null {
   const campaignId = snapshot.outreach.campaignSummary.activeOutboundCampaignId;
   const runId = snapshot.outreach.executionSummary.activeOutboundRunId;
-  const route = verifiedCustomerIoInboxRoutes(snapshot)[0] ?? null;
+  const route = verifiedPromotableInboxRoutes(snapshot)[0] ?? null;
   if (!campaignId || !runId || !route) return null;
   return {
     brandId: snapshot.brand.id,
     action: "use_growth_tool",
     rationale:
-      `Customer.io sender ${route.fromEmail} has exact-copy inbox placement evidence, so the autonomous next move is to promote that route for the active campaign run and resume dispatch instead of waiting for a human prompt.`,
+      `Sender ${route.fromEmail} has exact-copy inbox placement evidence and is ready, so the autonomous next move is to promote that route for the active campaign run and resume dispatch instead of waiting for a human prompt.`,
     riskLevel: "guarded_write",
     ...emptyDecisionParts(),
     growthTool: {
@@ -1398,7 +1399,7 @@ function buildPromoteVerifiedCustomerIoRouteDecision(
         senderAccountId: route.accountId,
         accountId: route.accountId,
         reason:
-          `Customer.io sender ${route.fromEmail} passed exact-copy inbox placement (${route.inboxCount}/${route.totalMonitors} inbox, ${route.spamCount} spam); promote it for the active run.`,
+          `Sender ${route.fromEmail} passed exact-copy inbox placement (${route.inboxCount}/${route.totalMonitors} inbox, ${route.spamCount} spam) and is ready; promote it for the active run.`,
       },
     },
   };
@@ -1479,7 +1480,7 @@ function applyAutonomousVerifiedTransportPromotion(input: {
   for (const snapshot of input.snapshots) {
     if (!snapshotNeedsVerifiedTransportPromotion(snapshot)) continue;
     if (plannedPromotionBrandIds.has(snapshot.brand.id)) continue;
-    const decision = buildPromoteVerifiedCustomerIoRouteDecision(snapshot);
+    const decision = buildPromoteVerifiedSenderRouteDecision(snapshot);
     if (!decision) continue;
     plannedPromotionBrandIds.add(snapshot.brand.id);
     promotionActions.push(decision);
@@ -1496,8 +1497,8 @@ function applyAutonomousVerifiedTransportPromotion(input: {
   ].slice(0, input.config.maxActionsPerTick);
   return {
     summary: input.plan.summary
-      ? `${input.plan.summary} Added autonomous Customer.io route promotion from live inbox evidence.`
-      : "Added autonomous Customer.io route promotion from live inbox evidence.",
+      ? `${input.plan.summary} Added autonomous sender route promotion from live inbox evidence.`
+      : "Added autonomous sender route promotion from live inbox evidence.",
     actions,
   };
 }
@@ -1825,7 +1826,7 @@ async function planActivationWithLlm(input: {
     "- If an active run has real scheduled or sent campaign messages and no other urgent blocker, choose run_inbox_placement_test early in the run so deliverability is measured on the real copy before volume ramps. Put activeOutboundRunId in placementTest.runId. Leave placementTest.messageId blank unless you know the exact message.",
     "- Inbox placement tests must use actual campaign copy, never synthetic delivery-probe copy. The runtime will skip duplicates when a recent production probe already exists.",
     "- If transportFallback.due is true because Gmail UI landed in spam, do not wait for a human to ask. If a Customer.io route exists, choose use_growth_tool with campaign.control_email_run and action probe_all_senders_deliverability so all available transports are tested against the same real campaign copy. If no Customer.io route exists, choose customerio.sender.provision when growth tools and spend guardrails allow it.",
-    "- If transportPromotion.due is true because Customer.io has exact-copy inbox evidence, do not ask the user what to do. Choose use_growth_tool with campaign.control_email_run, action resume_sender_deliverability, and senderAccountId set to the proven Customer.io account. This promotes the route and resumes the active run.",
+    "- If transportPromotion.due is true because a ready sender route has exact-copy inbox evidence, do not ask the user what to do. Choose use_growth_tool with campaign.control_email_run, action resume_sender_deliverability, and senderAccountId set to the proven ready account. This promotes the route and resumes the active run.",
     "- Never choose the brand's primary website domain as the sender domain. Choose a related but separate sending domain and provide alternatives.",
     "- Choose targetCustomerText from the brand's actual product, ICPs, target markets, and notes. Do not invent unsupported proof or claims.",
     "- Lead refill must prepare real campaign prospects for the actual mission messaging, not synthetic delivery probes.",

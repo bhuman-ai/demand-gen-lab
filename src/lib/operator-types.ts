@@ -52,6 +52,7 @@ export type OperatorToolName =
   | "gmail_ui_close_session"
   | "refresh_mailpool_sender"
   | "provision_mailpool_sender"
+  | "provision_customerio_sender"
   | "create_brand"
   | "update_brand"
   | "delete_brand"

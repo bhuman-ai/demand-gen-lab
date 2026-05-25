@@ -159,6 +159,11 @@ export function evaluateSenderReadiness(input: {
   const fromEmail = normalizeEmail(getOutreachAccountFromEmail(account));
   const replyToEmail = normalizeEmail(getOutreachAccountReplyToEmail(mailboxAccount ?? account));
   const mailboxEmail = normalizeEmail(getOutreachMailboxEmail(mailboxAccount));
+  const isCustomerIoDeliveryRoute =
+    account?.provider === "customerio" &&
+    account.accountType !== "mailbox" &&
+    Boolean(fromEmail) &&
+    Boolean(replyToEmail);
   const currentDailyCap = Math.max(0, Number(capacity?.dailyCap ?? 0) || 0);
   const currentHourlyCap = Math.max(0, Number(capacity?.hourlyCap ?? 0) || 0);
   const maxDailyCap = Math.max(currentDailyCap, Number(capacity?.maxDailyCap ?? currentDailyCap) || currentDailyCap);
@@ -242,7 +247,7 @@ export function evaluateSenderReadiness(input: {
     }
   }
 
-  if (!mailboxAccount) {
+  if (!mailboxAccount && !isCustomerIoDeliveryRoute) {
     pushIssue(blockingIssues, {
       code: "missing_mailbox_account",
       severity: "blocking",
@@ -250,7 +255,7 @@ export function evaluateSenderReadiness(input: {
       summary: "Backing mailbox is missing",
       detail: "Each sender must be backed by a real mailbox inbox.",
     });
-  } else if (mailboxAccount.status !== "active") {
+  } else if (mailboxAccount && mailboxAccount.status !== "active" && !isCustomerIoDeliveryRoute) {
     pushIssue(blockingIssues, {
       code: "inactive_mailbox_account",
       severity: "blocking",
@@ -260,7 +265,7 @@ export function evaluateSenderReadiness(input: {
     });
   }
 
-  if (mailboxAccount && input.hasMailboxCredentials === false) {
+  if (mailboxAccount && input.hasMailboxCredentials === false && !isCustomerIoDeliveryRoute) {
     pushIssue(blockingIssues, {
       code: "missing_mailbox_credentials",
       severity: "blocking",
@@ -303,7 +308,7 @@ export function evaluateSenderReadiness(input: {
   }
 
   const mailboxStatus = mailboxAccount?.config.mailbox.status ?? account?.config.mailbox.status ?? "";
-  if (mailboxStatus === "disconnected") {
+  if (mailboxStatus === "disconnected" && !isCustomerIoDeliveryRoute) {
     pushIssue(blockingIssues, {
       code: "mailbox_disconnected",
       severity: "blocking",
@@ -311,7 +316,7 @@ export function evaluateSenderReadiness(input: {
       summary: "Mailbox is disconnected",
       detail: "Reconnect the mailbox before sending.",
     });
-  } else if (mailboxStatus === "error") {
+  } else if (mailboxStatus === "error" && !isCustomerIoDeliveryRoute) {
     pushIssue(blockingIssues, {
       code: "mailbox_error",
       severity: "blocking",

@@ -79,6 +79,14 @@ export function getOutreachSenderBackingIssue(
   const mailboxEmail = getOutreachMailboxEmail(mailboxAccount).trim().toLowerCase();
 
   if (!fromEmail) return "From email is missing.";
+  if (deliveryAccount?.provider === "customerio" && deliveryAccount.accountType !== "mailbox") {
+    const replyToEmail = getOutreachAccountReplyToEmail(deliveryAccount).trim().toLowerCase();
+    if (!replyToEmail) return "Customer.io Reply-To email is missing.";
+    if (mailboxEmail && replyToEmail !== mailboxEmail) {
+      return `Customer.io Reply-To email ${replyToEmail} is not backed by the assigned mailbox ${mailboxEmail}.`;
+    }
+    return "";
+  }
   if (!mailboxAccount) return "A real mailbox account must be assigned before sending.";
   if (!mailboxEmail) return "Assigned mailbox inbox email is missing.";
   if (fromEmail !== mailboxEmail) {
@@ -99,7 +107,8 @@ export function supportsCustomerIoDelivery(account: Pick<OutreachAccount, "provi
     account.provider === "customerio" &&
     account.accountType !== "mailbox" &&
     Boolean(account.config.customerIo.siteId.trim()) &&
-    Boolean(account.config.customerIo.fromEmail.trim())
+    Boolean(account.config.customerIo.fromEmail.trim()) &&
+    Boolean(getOutreachAccountReplyToEmail(account).trim())
   );
 }
 
@@ -129,8 +138,14 @@ export function supportsSmtpDelivery(
   return supportsMailpoolDelivery(account, secrets);
 }
 
-export function supportsAnyDelivery(account: Pick<OutreachAccount, "provider" | "accountType" | "config">) {
-  return supportsCustomerIoDelivery(account) || supportsMailpoolDelivery(account);
+export function supportsAnyDelivery(
+  account: Pick<OutreachAccount, "provider" | "accountType" | "config">,
+  secrets?: Pick<OutreachAccountSecrets, "customerIoAppApiKey" | "mailboxPassword" | "mailboxSmtpPassword">
+) {
+  if (account.provider === "customerio") {
+    return supportsCustomerIoDelivery(account) && (!secrets || Boolean(secrets.customerIoAppApiKey.trim()));
+  }
+  return supportsMailpoolDelivery(account, secrets);
 }
 
 export function outreachProviderLabel(provider: Pick<OutreachAccount, "provider"> | OutreachAccount["provider"]) {

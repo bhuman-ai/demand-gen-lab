@@ -112,7 +112,7 @@ export async function PUT(
           {
             error: issue,
             hint:
-              "Customer.io senders must use a real connected mailbox with the exact same email address as the From address.",
+              "Customer.io senders must use a real connected Reply-To mailbox. The From address can be a verified Customer.io sender identity.",
           },
           { status: 400 }
         );

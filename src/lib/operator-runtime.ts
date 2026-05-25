@@ -82,6 +82,18 @@ function asRecord(value: unknown): Record<string, unknown> {
   return {};
 }
 
+function isProvisionSenderToolName(toolName: OperatorToolName | "") {
+  return toolName === "provision_mailpool_sender" || toolName === "provision_customerio_sender";
+}
+
+function provisionProviderForTool(toolName: OperatorToolName | "") {
+  return toolName === "provision_customerio_sender" ? "customerio" : "mailpool";
+}
+
+function provisionProviderLabel(toolName: OperatorToolName | "") {
+  return toolName === "provision_customerio_sender" ? "Customer.io" : "Mailpool";
+}
+
 function truncateForEvidence(value: string, maxLength = 420) {
   const clean = value.replace(/\s+/g, " ").trim();
   return clean.length > maxLength ? `${clean.slice(0, maxLength)}...` : clean;
@@ -289,6 +301,7 @@ function inferExecutionVerb(toolName: OperatorToolName, input: Record<string, un
     case "resume_leadr_campaign":
       return "resume";
     case "provision_mailpool_sender":
+    case "provision_customerio_sender":
       return normalizeProvisionDomainMode(input.domainMode) === "register" ? "buy and provision" : "provision";
     case "control_experiment_run":
     case "control_campaign_run":
@@ -312,6 +325,7 @@ function inferExecutionObjectType(toolName: OperatorToolName) {
       return "brand";
     case "refresh_mailpool_sender":
     case "provision_mailpool_sender":
+    case "provision_customerio_sender":
     case "get_sender_snapshot":
     case "gmail_ui_observe_account":
     case "gmail_ui_search_mailbox":
@@ -480,8 +494,10 @@ function buildProvisionForms(input: {
   brandMemory: OperatorBrandMemory | null;
   toolInput: Record<string, unknown>;
   missingFields: string[];
+  toolName: OperatorToolName;
 }): OperatorExecutionForm[] {
   const forms: OperatorExecutionForm[] = [];
+  const providerLabel = provisionProviderLabel(input.toolName);
   const inventory = input.brandContext?.provisioning.mailpoolDomains ?? [];
   const inventoryOptions = inventory.map((item) => ({
     label: item.domain,
@@ -532,9 +548,9 @@ function buildProvisionForms(input: {
       forms.push({
         id: "provision-existing-sender",
         formType: "provision_sender_email",
-        toolName: "provision_mailpool_sender",
+        toolName: input.toolName,
         title: "Sender details",
-        description: "Pick the existing Mailpool domain and local-part for the sender you want to create.",
+        description: `Pick the existing ${providerLabel} domain and local-part for the sender you want to create.`,
         submitLabel: "Continue",
         input: input.toolInput,
         fields: [
@@ -562,7 +578,7 @@ function buildProvisionForms(input: {
       forms.push({
         id: "provision-sender-email",
         formType: "provision_sender_email",
-        toolName: "provision_mailpool_sender",
+        toolName: input.toolName,
         title: "Sender details",
         description:
           domainMode === "register"
@@ -589,7 +605,7 @@ function buildProvisionForms(input: {
                   required: true,
                   value: "",
                   options: [
-                    { label: "Use an existing Mailpool domain", value: "existing" },
+                    { label: `Use an existing ${providerLabel} domain`, value: "existing" },
                     { label: "Buy a new sender domain", value: "register" },
                   ],
                 }),
@@ -605,11 +621,11 @@ function buildProvisionForms(input: {
     forms.push({
       id: "provision-sender-identity",
       formType: "provision_sender_email",
-      toolName: "provision_mailpool_sender",
+      toolName: input.toolName,
       title: "Sender person",
       description: senderEmail
-        ? `Set the real person name Mailpool should show for ${senderEmail}.`
-        : "Set the real person name Mailpool should show for this sender.",
+        ? `Set the real person name ${providerLabel} should show for ${senderEmail}.`
+        : `Set the real person name ${providerLabel} should show for this sender.`,
       submitLabel: "Continue",
       input: input.toolInput,
       fields: senderIdentityFields,
@@ -621,11 +637,11 @@ function buildProvisionForms(input: {
     forms.push({
       id: "provision-registrant",
       formType: "provision_registrant",
-      toolName: "provision_mailpool_sender",
+      toolName: input.toolName,
       title: "Registrant details",
       description: senderEmail
-        ? `Mailpool needs domain owner details before it can buy ${domain} and provision ${senderEmail}.`
-        : "Mailpool needs domain owner details before it can buy the domain and finish setup.",
+        ? `${providerLabel} needs domain owner details before it can buy ${domain} and provision ${senderEmail}.`
+        : `${providerLabel} needs domain owner details before it can buy the domain and finish setup.`,
       submitLabel: "Continue",
       input: input.toolInput,
       fields: [
@@ -1042,16 +1058,18 @@ function makeUnexecutedActionAssistant(message: string, assistant: OperatorChatA
   };
 }
 
-function buildProvisionMissingFields(toolInput: Record<string, unknown>) {
+function buildProvisionMissingFields(toolInput: Record<string, unknown>, toolName: OperatorToolName = "provision_mailpool_sender") {
   const missingFields: string[] = [];
   if (!asString(toolInput.fromLocalPart) || !asString(toolInput.domain)) {
     missingFields.push("sender email");
   }
-  if (!asString(toolInput.senderFirstName)) {
-    missingFields.push("sender first name");
-  }
-  if (!asString(toolInput.senderLastName)) {
-    missingFields.push("sender last name");
+  if (toolName === "provision_mailpool_sender") {
+    if (!asString(toolInput.senderFirstName)) {
+      missingFields.push("sender first name");
+    }
+    if (!asString(toolInput.senderLastName)) {
+      missingFields.push("sender last name");
+    }
   }
   if (normalizeProvisionDomainMode(toolInput.domainMode) === "register") {
     const registrant = asRecord(toolInput.registrant);
@@ -1471,6 +1489,7 @@ function mergeProvisionInputFromContinuation(input: {
   baseInput: Record<string, unknown>;
   brandContext: Awaited<ReturnType<typeof getOperatorBrandContext>>;
   brandMemory: OperatorBrandMemory | null;
+  toolName: OperatorToolName;
 }): Record<string, unknown> {
   const lowered = input.message.trim().toLowerCase();
   const needsSenderEmail = !asString(input.baseInput.fromLocalPart) || !asString(input.baseInput.domain);
@@ -1482,12 +1501,12 @@ function mergeProvisionInputFromContinuation(input: {
   const optionMatch = findQuestionOptionMatch(
     buildExecutionEnvelope({
       state: "need_info",
-      toolName: "provision_mailpool_sender",
+      toolName: input.toolName,
       toolInput: input.baseInput,
       questions: buildProvisionQuestions({
         hasMailpoolInventory: (input.brandContext?.provisioning.mailpoolDomainInventoryCount ?? 0) > 0,
         domainMode: normalizeProvisionDomainMode(input.baseInput.domainMode),
-        missingFields: buildProvisionMissingFields(input.baseInput),
+        missingFields: buildProvisionMissingFields(input.baseInput, input.toolName),
       }),
     }),
     input.message
@@ -1497,7 +1516,8 @@ function mergeProvisionInputFromContinuation(input: {
   if (
     lowered.includes("existing domain") ||
     lowered.includes("use existing") ||
-    optionMessage.includes("existing mailpool domain")
+    optionMessage.includes("existing mailpool domain") ||
+    optionMessage.includes("existing customer.io domain")
   ) {
     nextInput.domainMode = "existing";
   } else if (
@@ -1602,7 +1622,7 @@ function inferContinuationFromPendingExecution(input: {
     return null;
   }
 
-  if (pending.execution.toolName !== "provision_mailpool_sender") {
+  if (!isProvisionSenderToolName(pending.execution.toolName)) {
     if (optionMatch?.message) {
       return {
         kind: "message_override",
@@ -1621,11 +1641,12 @@ function inferContinuationFromPendingExecution(input: {
     baseInput: {
       ...baseInput,
       brandId: input.brandId || asString(baseInput.brandId),
-      provider: "mailpool",
+      provider: provisionProviderForTool(pending.execution.toolName),
       domainMode: normalizeProvisionDomainMode(baseInput.domainMode),
     },
     brandContext: input.brandContext,
     brandMemory: input.brandMemory,
+    toolName: pending.execution.toolName,
   });
 
   const needsSenderEmail = !asString(baseInput.fromLocalPart) || !asString(baseInput.domain);
@@ -1668,7 +1689,7 @@ function inferContinuationFromPendingExecution(input: {
   return {
     kind: "structured_action",
     requestedAction: {
-      toolName: "provision_mailpool_sender",
+      toolName: pending.execution.toolName,
       input: nextInput,
     },
   };
@@ -1717,6 +1738,7 @@ const TOOLS_WITH_BRAND_CONTEXT = new Set<OperatorToolName>([
   "investigate_brand_data",
   "get_leadr_snapshot",
   "provision_mailpool_sender",
+  "provision_customerio_sender",
   "update_brand",
   "delete_brand",
   "add_brand_lead",
@@ -2079,8 +2101,8 @@ function normalizeRequestedAction(input: {
     toolInput.brandId = input.brandId;
   }
 
-  if (toolName === "provision_mailpool_sender") {
-    toolInput.provider = "mailpool";
+  if (isProvisionSenderToolName(toolName)) {
+    toolInput.provider = provisionProviderForTool(toolName);
     toolInput.domainMode = normalizeProvisionDomainMode(toolInput.domainMode);
     if (!asString(toolInput.domainMode)) {
       const message = input.message.toLowerCase();
@@ -2484,16 +2506,18 @@ function inferActionFromMessage(
     /\b(add|create|set up|setup|provision)\b.*\bsender\b/.test(message) ||
     /\bbuy\b.*\bdomain\b/.test(message) ||
     /\bnew sender domain\b/.test(message) ||
-    /\bexisting mailpool domain\b/.test(message);
+    /\bexisting mailpool domain\b/.test(message) ||
+    /\bcustomer\.?io\b.*\bsender\b/.test(message);
 
   if (context?.brand.id && wantsSenderProvision) {
     const emailParts = extractEmailParts(message);
     const parsedDomain = emailParts?.domain || extractDomain(message);
+    const useCustomerIo = /\bcustomer\.?io\b/.test(message);
     return {
-      toolName: "provision_mailpool_sender",
+      toolName: useCustomerIo ? "provision_customerio_sender" : "provision_mailpool_sender",
       input: {
         brandId: context.brand.id,
-        provider: "mailpool",
+        provider: useCustomerIo ? "customerio" : "mailpool",
         domain: parsedDomain,
         fromLocalPart: emailParts?.fromLocalPart ?? "",
         domainMode:
@@ -3069,15 +3093,20 @@ export async function runOperatorChatTurn(input: OperatorChatTurnInternalRequest
           error: assistant.summary,
         });
       } else if (
-        tool.name === "provision_mailpool_sender" &&
+        isProvisionSenderToolName(tool.name) &&
         (!asString(requestedAction.input.domain) || !asString(requestedAction.input.fromLocalPart))
       ) {
         const hasInventory = (brandContext?.provisioning.mailpoolDomainInventoryCount ?? 0) > 0;
-        const missingFields = buildProvisionMissingFields(requestedAction.input);
+        const missingFields = buildProvisionMissingFields(requestedAction.input, tool.name);
+        const providerLabel = provisionProviderLabel(tool.name);
+        const senderExample =
+          tool.name === "provision_mailpool_sender"
+            ? "`marco@getselffunded.com, Marco Rosetti`"
+            : "`marco@getselffunded.com`";
         assistant = {
           summary: hasInventory
-            ? `I can add the sender. Tell me the exact sender email and the real person's first and last name, for example \`marco@getselffunded.com, Marco Rosetti\`, and whether I should use an existing Mailpool domain or buy a new one.`
-            : "I can add the sender. Tell me the exact sender email and the real person's first and last name, for example `marco@getselffunded.com, Marco Rosetti`. If this needs a new domain, say `buy` or `register` and I'll prepare that flow.",
+            ? `I can add the sender. Tell me the exact sender email${tool.name === "provision_mailpool_sender" ? " and the real person's first and last name" : ""}, for example ${senderExample}, and whether I should use an existing ${providerLabel} domain or buy a new one.`
+            : `I can add the sender. Tell me the exact sender email${tool.name === "provision_mailpool_sender" ? " and the real person's first and last name" : ""}, for example ${senderExample}. If this needs a new domain, say \`buy\` or \`register\` and I'll prepare that flow.`,
           findings: [],
           recommendations: [],
         };
@@ -3096,13 +3125,14 @@ export async function runOperatorChatTurn(input: OperatorChatTurnInternalRequest
             brandMemory,
             toolInput: requestedAction.input,
             missingFields,
+            toolName: tool.name,
           }),
         });
       } else if (
         tool.name === "provision_mailpool_sender" &&
         (!asString(requestedAction.input.senderFirstName) || !asString(requestedAction.input.senderLastName))
       ) {
-        const missingFields = buildProvisionMissingFields(requestedAction.input);
+        const missingFields = buildProvisionMissingFields(requestedAction.input, tool.name);
         assistant = {
           summary:
             "I can provision that Mailpool sender, but I need the real person's first and last name first. Mailpool sender names cannot default to the brand or mailbox label.",
@@ -3124,10 +3154,11 @@ export async function runOperatorChatTurn(input: OperatorChatTurnInternalRequest
             brandMemory,
             toolInput: requestedAction.input,
             missingFields,
+            toolName: tool.name,
           }),
         });
       } else if (
-        tool.name === "provision_mailpool_sender" &&
+        isProvisionSenderToolName(tool.name) &&
         normalizeProvisionDomainMode(requestedAction.input.domainMode) === "register"
       ) {
         const registrant = asRecord(requestedAction.input.registrant);
@@ -3149,17 +3180,18 @@ export async function runOperatorChatTurn(input: OperatorChatTurnInternalRequest
             toolName: tool.name,
             toolInput: requestedAction.input,
             preview: buildToolPreview(tool, requestedAction.input),
-            missingFields: buildProvisionMissingFields(requestedAction.input),
+            missingFields: buildProvisionMissingFields(requestedAction.input, tool.name),
             questions: buildProvisionQuestions({
               hasMailpoolInventory: (brandContext?.provisioning.mailpoolDomainInventoryCount ?? 0) > 0,
               domainMode: normalizeProvisionDomainMode(requestedAction.input.domainMode),
-              missingFields: buildProvisionMissingFields(requestedAction.input),
+              missingFields: buildProvisionMissingFields(requestedAction.input, tool.name),
             }),
             forms: buildProvisionForms({
               brandContext,
               brandMemory,
               toolInput: requestedAction.input,
-              missingFields: buildProvisionMissingFields(requestedAction.input),
+              missingFields: buildProvisionMissingFields(requestedAction.input, tool.name),
+              toolName: tool.name,
             }),
           });
         } else if (tool.approvalMode === "confirm") {
@@ -3249,7 +3281,7 @@ export async function runOperatorChatTurn(input: OperatorChatTurnInternalRequest
           }
         }
       } else if (tool.approvalMode === "confirm") {
-        if (resolvedBrandId && tool.name === "provision_mailpool_sender") {
+        if (resolvedBrandId && isProvisionSenderToolName(tool.name)) {
           await rememberProvisionMailpoolSenderInput(resolvedBrandId, requestedAction.input);
         }
         const action = await createOperatorAction({
@@ -3270,7 +3302,7 @@ export async function runOperatorChatTurn(input: OperatorChatTurnInternalRequest
           preview: action.preview,
         });
       } else {
-        if (resolvedBrandId && tool.name === "provision_mailpool_sender") {
+        if (resolvedBrandId && isProvisionSenderToolName(tool.name)) {
           await rememberProvisionMailpoolSenderInput(resolvedBrandId, requestedAction.input);
         }
         const action = await createOperatorAction({

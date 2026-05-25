@@ -149,6 +149,24 @@ function buildProvisionPreview(input: Record<string, unknown>) {
   };
 }
 
+function buildCustomerIoProvisionPreview(input: Record<string, unknown>) {
+  const domain = asString(input.domain) || "new Customer.io sender domain";
+  const fromLocalPart = asString(input.fromLocalPart) || "sender local-part";
+  const rawDomainMode = asString(input.domainMode);
+  const domainMode =
+    rawDomainMode === "register" ? "register" : rawDomainMode === "transfer" ? "transfer" : "existing";
+  return {
+    title: "Add Customer.io sender",
+    summary:
+      domainMode === "register"
+        ? `Buy ${domain} through the configured registrar, create ${fromLocalPart}@${domain} in Customer.io, apply DNS, and attach it to the brand.`
+        : `Use ${domain}, create ${fromLocalPart}@${domain} in Customer.io, apply DNS, and attach it to the brand.`,
+    domainMode,
+    domain,
+    fromLocalPart,
+  };
+}
+
 function buildSimplePreview(title: string, summary: string) {
   return { title, summary };
 }
@@ -1429,6 +1447,55 @@ const TOOL_SPECS: OperatorToolSpec[] = [
     },
   },
   {
+    name: "provision_customerio_sender",
+    riskLevel: "guarded_write",
+    approvalMode: "confirm",
+    description:
+      "Buy or attach a domain, create a Customer.io sender identity, apply DNS through the configured registrar, and assign it to the brand with a real reply mailbox.",
+    previewTitle: "Provision Customer.io sender",
+    buildPreview: buildCustomerIoProvisionPreview,
+    run: async (input) => {
+      const brandId = requireString(input, "brandId");
+      const result = await provisionSender({
+        brandId,
+        provider: "customerio",
+        accountName: asString(input.accountName),
+        assignToBrand: input.assignToBrand !== false,
+        selectedMailboxAccountId: asString(input.selectedMailboxAccountId),
+        domainMode: asString(input.domainMode) === "register" ? "register" : "existing",
+        domain: requireString(input, "domain"),
+        fromLocalPart: requireString(input, "fromLocalPart"),
+        senderFirstName: asString(input.senderFirstName),
+        senderLastName: asString(input.senderLastName),
+        autoPickCustomerIoAccount: input.autoPickCustomerIoAccount !== false,
+        customerIoSourceAccountId: asString(input.customerIoSourceAccountId),
+        forwardingTargetUrl: asString(input.forwardingTargetUrl),
+        customerIoSiteId: asString(input.customerIoSiteId),
+        customerIoTrackingApiKey: asString(input.customerIoTrackingApiKey),
+        customerIoAppApiKey: asString(input.customerIoAppApiKey),
+        mailpoolApiKey: "",
+        namecheapApiUser: asString(input.namecheapApiUser),
+        namecheapUserName: asString(input.namecheapUserName),
+        namecheapApiKey: asString(input.namecheapApiKey),
+        namecheapClientIp: asString(input.namecheapClientIp),
+        registrant: buildRegistrant(input.registrant),
+      });
+      return {
+        summary: `Provisioned Customer.io sender ${result.fromEmail} for ${result.brand.name}.`,
+        result: result as unknown as Record<string, unknown>,
+        receipt: {
+          title: "Customer.io sender provisioning started",
+          summary: `${result.fromEmail} is now attached to ${result.brand.name}.`,
+          details: [
+            `Domain: ${result.domain}`,
+            result.readyToSend ? "Sender can be tested now." : "Sender still needs verification or propagation before production sending.",
+            ...(result.warnings ?? []).slice(0, 3),
+          ],
+        },
+      } satisfies OperatorToolResult;
+    },
+  },
+  {
     name: "create_brand",
     riskLevel: "safe_write",
     approvalMode: "none",
@@ -1994,7 +2061,8 @@ const TOOL_SPECS: OperatorToolSpec[] = [
     name: "control_campaign_run",
     riskLevel: "guarded_write",
     approvalMode: "confirm",
-    description: "Pause, resume, cancel, or deliverability-control a campaign run.",
+    description:
+      "Pause, resume, cancel, or deliverability-control a campaign run. Use probe_all_senders_deliverability to compare Gmail UI, Mailpool SMTP, and Customer.io transports with the same live campaign copy before choosing a route.",
     previewTitle: "Control campaign run",
     buildPreview: (input) =>
       buildSimplePreview(

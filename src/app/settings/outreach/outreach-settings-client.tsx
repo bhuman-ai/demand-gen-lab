@@ -1286,7 +1286,7 @@ export default function OutreachSettingsClient() {
     ? selectedBrand
       ? `${selectedBrandSenderAccounts.length} sender${selectedBrandSenderAccounts.length === 1 ? "" : "s"} ready for ${selectedBrand.name}`
       : `${deliveryAccounts.length} sender${deliveryAccounts.length === 1 ? "" : "s"} available`
-    : "Connect Customer.io and Namecheap first";
+    : "Connect Customer.io and a domain registrar first";
   const emailSummary = mailboxAccounts.length
     ? `${mailboxAccounts.length} reply inbox${mailboxAccounts.length === 1 ? "" : "es"} ready`
     : "Add the inbox that should receive replies";

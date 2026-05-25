@@ -1834,6 +1834,153 @@ function customerIoResponseMessageId(payload: unknown, fallback = "") {
   return fallback.trim();
 }
 
+function readCustomerIoMessage(payload: unknown) {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return null;
+  const row = payload as Record<string, unknown>;
+  const message =
+    row.message && typeof row.message === "object" && !Array.isArray(row.message)
+      ? (row.message as Record<string, unknown>)
+      : row.data && typeof row.data === "object" && !Array.isArray(row.data)
+        ? (row.data as Record<string, unknown>)
+        : row;
+  return message && typeof message === "object" && !Array.isArray(message) ? message : null;
+}
+
+function readCustomerIoMessageMetrics(message: Record<string, unknown> | null) {
+  const metrics =
+    message?.metrics && typeof message.metrics === "object" && !Array.isArray(message.metrics)
+      ? (message.metrics as Record<string, unknown>)
+      : {};
+  const hasMetric = (names: string[]) =>
+    names.some((name) => {
+      const value = metrics[name];
+      if (typeof value === "number") return value > 0;
+      if (typeof value === "string") return value.trim().length > 0;
+      return Boolean(value);
+    });
+  return {
+    processed: hasMetric(["processed"]),
+    sent: hasMetric(["sent"]),
+    delivered: hasMetric(["delivered"]),
+    opened: hasMetric(["opened"]),
+    clicked: hasMetric(["clicked"]),
+    bounced: hasMetric(["bounced", "hard_bounced", "soft_bounced"]),
+    dropped: hasMetric(["dropped", "suppressed", "undeliverable"]),
+    spam: hasMetric(["spammed", "marked_spam"]),
+    failed: hasMetric(["failed"]),
+    raw: metrics,
+  };
+}
+
+function customerIoFailureMessage(message: Record<string, unknown> | null) {
+  for (const field of ["failure_message", "failureMessage", "failure_reason", "failureReason", "error"] as const) {
+    const value = String(message?.[field] ?? "").trim();
+    if (value) return value;
+  }
+  return "";
+}
+
+export async function getCustomerIoMessageDeliveryState(params: {
+  secrets: OutreachAccountSecrets;
+  providerMessageId: string;
+}): Promise<{
+  ok: boolean;
+  state: "delivered" | "sent" | "failed" | "unknown";
+  delivered: boolean;
+  terminal: boolean;
+  detail: string;
+  metrics: Record<string, unknown>;
+  error: string;
+}> {
+  const appApiKey = customerIoAppApiKey(params.secrets);
+  const providerMessageId = params.providerMessageId.trim();
+  if (!appApiKey) {
+    return {
+      ok: false,
+      state: "unknown",
+      delivered: false,
+      terminal: false,
+      detail: "",
+      metrics: {},
+      error: "Customer.io App API key missing",
+    };
+  }
+  if (!providerMessageId) {
+    return {
+      ok: false,
+      state: "unknown",
+      delivered: false,
+      terminal: false,
+      detail: "",
+      metrics: {},
+      error: "Customer.io provider message id missing",
+    };
+  }
+
+  const errors: string[] = [];
+  for (const baseUrl of customerIoAppBaseUrls()) {
+    try {
+      const response = await fetch(`${baseUrl}/messages/${encodeURIComponent(providerMessageId)}`, {
+        headers: {
+          Authorization: `Bearer ${appApiKey}`,
+          Accept: "application/json",
+        },
+        cache: "no-store",
+      });
+      const raw = await response.text();
+      const payload: unknown = raw
+        ? (() => {
+            try {
+              return JSON.parse(raw);
+            } catch {
+              return {};
+            }
+          })()
+        : {};
+      if (!response.ok) {
+        const detail = raw.trim().slice(0, 300);
+        errors.push(`Customer.io message ${baseUrl} HTTP ${response.status}${detail ? `: ${detail}` : ""}`);
+        continue;
+      }
+
+      const message = readCustomerIoMessage(payload);
+      const metrics = readCustomerIoMessageMetrics(message);
+      const failure = customerIoFailureMessage(message);
+      const failed = Boolean(failure) || metrics.failed || metrics.bounced || metrics.dropped || metrics.spam;
+      const delivered = metrics.delivered || metrics.opened || metrics.clicked;
+      const sent = metrics.sent || metrics.processed;
+      const state = delivered ? "delivered" : failed ? "failed" : sent ? "sent" : "unknown";
+      const metricNames = Object.entries(metrics.raw)
+        .filter(([, value]) => Boolean(value))
+        .map(([key]) => key)
+        .join(", ");
+      return {
+        ok: true,
+        state,
+        delivered,
+        terminal: delivered || failed,
+        detail:
+          failure ||
+          (metricNames ? `Customer.io metrics: ${metricNames}` : "Customer.io has no decisive delivery metric yet"),
+        metrics: metrics.raw,
+        error: "",
+      };
+    } catch (error) {
+      errors.push(error instanceof Error ? error.message : `Customer.io message lookup failed for ${baseUrl}`);
+    }
+  }
+
+  return {
+    ok: false,
+    state: "unknown",
+    delivered: false,
+    terminal: false,
+    detail: "",
+    metrics: {},
+    error: errors.join(" · ") || "Customer.io message lookup failed",
+  };
+}
+
 async function testCustomerIoTrackCredentials(input: {
   siteId: string;
   apiKey: string;

@@ -20170,7 +20170,12 @@ async function jobRequiresLocalOperatorRuntime(job: OutreachJob) {
 
   const run = await getOutreachRun(job.runId);
   if (!run) return false;
-  const account = await getOutreachAccount(effectiveRunSenderAccountId(run));
+  const payload = asRecord(job.payload);
+  const jobSenderAccountId =
+    job.jobType === "monitor_deliverability"
+      ? String(payload.senderAccountId ?? "").trim()
+      : "";
+  const account = await getOutreachAccount(jobSenderAccountId || effectiveRunSenderAccountId(run));
   if (!account) return false;
   if (!(account.provider === "mailpool" && account.config.mailbox.deliveryMethod === "gmail_ui")) {
     return false;

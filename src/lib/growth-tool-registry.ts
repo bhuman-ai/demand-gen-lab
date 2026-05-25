@@ -260,6 +260,7 @@ const OPERATOR_TOOL_DEFINITIONS: OperatorGrowthToolDefinition[] = [
         brandId: stringProp("Brand id"),
         domainMode: enumProp(["existing", "register"], "Use an existing domain or register a new one"),
         domain: stringProp("Sender domain"),
+        domainCandidates: arrayProp("Alternative domains to try"),
         fromLocalPart: stringProp("Sender local-part"),
         selectedMailboxAccountId: stringProp("Optional reply mailbox account id"),
         customerIoSourceAccountId: stringProp("Optional Customer.io account id to clone credentials from"),

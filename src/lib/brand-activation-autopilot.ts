@@ -160,7 +160,8 @@ type BrandActivationSnapshot = {
     | "campaignSummary"
     | "experimentSummary"
     | "capacitySummary"
-      | "executionSummary"
+    | "executionSummary"
+    | "senderRouteEvidence"
   >;
   seedPool: DeliverabilitySeedPoolSnapshot;
   missions: Array<{
@@ -597,7 +598,7 @@ function normalizeActivationPlan(value: unknown, maxActions: number): Activation
   };
 }
 
-function brandSlug(brand: BrandRecord) {
+function brandSlug(brand: Pick<BrandRecord, "name" | "website">) {
   const domain = normalizeDomain(brand.website).split(".")[0] ?? "";
   const source = domain || brand.name;
   const slug = source
@@ -607,7 +608,7 @@ function brandSlug(brand: BrandRecord) {
   return slug || "outbound";
 }
 
-function fallbackDomainCandidates(brand: BrandRecord, preferred = "") {
+function fallbackDomainCandidates(brand: Pick<BrandRecord, "name" | "website">, preferred = "") {
   const slug = brandSlug(brand);
   return uniqueStrings([
     normalizeDomain(preferred),
@@ -620,7 +621,7 @@ function fallbackDomainCandidates(brand: BrandRecord, preferred = "") {
   ]).filter((domain) => domain.includes("."));
 }
 
-function primaryWebsiteDomain(brand: BrandRecord) {
+function primaryWebsiteDomain(brand: Pick<BrandRecord, "website">) {
   return normalizeDomain(brand.website);
 }
 
@@ -1130,8 +1131,258 @@ function snapshotNeedsInboxPlacementTest(snapshot: BrandActivationSnapshot) {
   return statusNeedsInboxPlacementTest(snapshot.outreach);
 }
 
+function routeEvidenceHasPlacement(
+  evidence: OutreachBrandStatus["senderRouteEvidence"][number]
+) {
+  return Boolean(evidence.checkedAt && evidence.totalMonitors > 0);
+}
+
+function routeEvidenceShowsSpam(
+  evidence: OutreachBrandStatus["senderRouteEvidence"][number]
+) {
+  if (!routeEvidenceHasPlacement(evidence)) return false;
+  if (evidence.placement === "spam") return true;
+  if (evidence.totalMonitors >= 2 && evidence.spamRate >= 0.5) return true;
+  return evidence.spamCount > 0 && evidence.inboxCount === 0;
+}
+
+function gmailUiSpamEvidence(snapshot: BrandActivationSnapshot) {
+  return gmailUiSpamEvidenceFromRoutes(snapshot.outreach.senderRouteEvidence);
+}
+
+function gmailUiSpamEvidenceFromRoutes(routes: OutreachBrandStatus["senderRouteEvidence"]) {
+  return routes
+    .filter((evidence) => evidence.routeKind === "gmail_ui" && routeEvidenceShowsSpam(evidence))
+    .sort((left, right) => toTimestamp(right.checkedAt) - toTimestamp(left.checkedAt));
+}
+
+function customerIoRouteEvidence(snapshot: BrandActivationSnapshot) {
+  return snapshot.outreach.senderRouteEvidence.filter((evidence) => evidence.routeKind === "customerio");
+}
+
+function statusNeedsTransportFallback(status: Pick<OutreachBrandStatus, "campaignSummary" | "executionSummary" | "senderRouteEvidence">) {
+  if (gmailUiSpamEvidenceFromRoutes(status.senderRouteEvidence).length === 0) return false;
+  return Boolean(
+    status.executionSummary.activeOutboundRunId &&
+      status.campaignSummary.activeOutboundCampaignId
+  );
+}
+
+function snapshotNeedsTransportFallback(snapshot: BrandActivationSnapshot) {
+  return statusNeedsTransportFallback(snapshot.outreach);
+}
+
+function summarizeTransportFallback(snapshot: BrandActivationSnapshot) {
+  const gmailSpam = gmailUiSpamEvidence(snapshot);
+  const customerIoRoutes = customerIoRouteEvidence(snapshot);
+  const customerIoTestedRoutes = customerIoRoutes.filter(routeEvidenceHasPlacement);
+  const activeRunId = snapshot.outreach.executionSummary.activeOutboundRunId;
+  const activeCampaignId = snapshot.outreach.campaignSummary.activeOutboundCampaignId;
+  const due = snapshotNeedsTransportFallback(snapshot);
+  return {
+    due,
+    reason: due
+      ? "Gmail UI route has fresh spam placement evidence; compare/provision another transport using the same real campaign copy."
+      : "",
+    gmailUiSpamEvidence: gmailSpam.slice(0, 3).map((evidence) => ({
+      accountId: evidence.accountId,
+      fromEmail: evidence.fromEmail,
+      placement: evidence.placement,
+      checkedAt: evidence.checkedAt,
+      totalMonitors: evidence.totalMonitors,
+      inboxCount: evidence.inboxCount,
+      spamCount: evidence.spamCount,
+      spamRate: evidence.spamRate,
+      summaryText: evidence.summaryText,
+    })),
+    customerIo: {
+      assignedRouteCount: customerIoRoutes.length,
+      testedRouteCount: customerIoTestedRoutes.length,
+      untestedRouteCount: customerIoRoutes.length - customerIoTestedRoutes.length,
+    },
+    recommendedTool:
+      due && customerIoRoutes.length > 0
+        ? "campaign.control_email_run"
+        : due
+          ? "customerio.sender.provision"
+          : "",
+    recommendedInput:
+      due && customerIoRoutes.length > 0
+        ? {
+            brandId: snapshot.brand.id,
+            campaignId: activeCampaignId,
+            runId: activeRunId,
+            action: "probe_all_senders_deliverability",
+            reason:
+              "Gmail UI exact-copy inbox placement landed in spam; test all sender transports with the same campaign copy.",
+          }
+      : {},
+  };
+}
+
+function emptyDecisionParts() {
+  return {
+    shouldCreateMission: false,
+    shouldStartMission: false,
+    shouldProvisionSender: false,
+    refreshAccountId: "",
+    targetCustomerText: "",
+    leadRefill: {
+      campaignId: "",
+      experimentId: "",
+      targetSendableLeads: 25,
+      maxLiveTopUpPasses: 1,
+    },
+    runTool: {
+      runId: "",
+      targetLeadCount: 25,
+    },
+    placementTest: {
+      runId: "",
+      messageId: "",
+      recentProbeCooldownHours: 12,
+    },
+    sender: {
+      domainMode: "" as const,
+      domain: "",
+      domainCandidates: [] as string[],
+      fromLocalPart: "",
+      senderFirstName: "",
+      senderLastName: "",
+      accountName: "",
+    },
+    growthTool: {
+      toolName: "",
+      input: {} as Record<string, unknown>,
+    },
+  };
+}
+
+function buildProbeAllSenderTransportsDecision(
+  snapshot: BrandActivationSnapshot
+): ActivationDecision | null {
+  const campaignId = snapshot.outreach.campaignSummary.activeOutboundCampaignId;
+  const runId = snapshot.outreach.executionSummary.activeOutboundRunId;
+  if (!campaignId || !runId) return null;
+  return {
+    brandId: snapshot.brand.id,
+    action: "use_growth_tool",
+    rationale:
+      "Gmail UI exact-copy inbox placement landed in spam, so the next autonomous move is to test every available sender transport with the same campaign copy before scaling or choosing a route.",
+    riskLevel: "guarded_write",
+    ...emptyDecisionParts(),
+    growthTool: {
+      toolName: "campaign.control_email_run",
+      input: {
+        brandId: snapshot.brand.id,
+        campaignId,
+        runId,
+        action: "probe_all_senders_deliverability",
+        reason:
+          "Gmail UI exact-copy inbox placement landed in spam; compare all available sender transports using the same campaign copy.",
+      },
+    },
+  };
+}
+
+function buildProvisionCustomerIoFallbackDecision(input: {
+  snapshot: BrandActivationSnapshot;
+  config: ActivationConfig;
+}): ActivationDecision | null {
+  if (
+    !input.config.allowGrowthTools ||
+    !input.config.allowGuardedGrowthTools ||
+    !input.config.allowSpendGrowthTools ||
+    !input.config.allowDomainRegistration ||
+    !input.config.registrant
+  ) {
+    return null;
+  }
+  const protectedDomain = normalizeDomain(input.snapshot.brand.website);
+  const domainCandidates = fallbackDomainCandidates(input.snapshot.brand).filter(
+    (domain) => domain && domain !== protectedDomain
+  );
+  const domain = domainCandidates[0] ?? "";
+  if (!domain) return null;
+  return {
+    brandId: input.snapshot.brand.id,
+    action: "use_growth_tool",
+    rationale:
+      "Gmail UI exact-copy placement is spam-heavy and no Customer.io route is assigned yet, so provision a Customer.io sender route for the agent to test with the real campaign copy.",
+    riskLevel: "guarded_write",
+    ...emptyDecisionParts(),
+    growthTool: {
+      toolName: "customerio.sender.provision",
+      input: {
+        brandId: input.snapshot.brand.id,
+        domainMode: "register",
+        domain,
+        domainCandidates,
+        fromLocalPart: "hello",
+        accountName: `${input.snapshot.brand.name || "Brand"} Customer.io ${domain}`,
+      },
+    },
+  };
+}
+
+function decisionHandlesTransportFallback(decision: ActivationDecision) {
+  if (decision.action === "run_inbox_placement_test") return true;
+  if (decision.action !== "use_growth_tool") return false;
+  const toolName = decision.growthTool.toolName;
+  const action = asString(decision.growthTool.input.action);
+  return (
+    toolName === "customerio.sender.provision" ||
+    toolName === "provision_customerio_sender" ||
+    (toolName === "campaign.control_email_run" && action === "probe_all_senders_deliverability")
+  );
+}
+
+function applyAutonomousTransportFallback(input: {
+  plan: ActivationPlan;
+  snapshots: BrandActivationSnapshot[];
+  config: ActivationConfig;
+}) {
+  const plannedFallbackBrandIds = new Set(
+    input.plan.actions
+      .filter(decisionHandlesTransportFallback)
+      .map((decision) => decision.brandId)
+  );
+  const fallbackActions: ActivationDecision[] = [];
+  for (const snapshot of input.snapshots) {
+    if (!snapshotNeedsTransportFallback(snapshot)) continue;
+    if (plannedFallbackBrandIds.has(snapshot.brand.id)) continue;
+    const customerIoRoutes = customerIoRouteEvidence(snapshot);
+    const decision =
+      customerIoRoutes.length > 0
+        ? buildProbeAllSenderTransportsDecision(snapshot)
+        : buildProvisionCustomerIoFallbackDecision({ snapshot, config: input.config });
+    if (!decision) continue;
+    plannedFallbackBrandIds.add(snapshot.brand.id);
+    fallbackActions.push(decision);
+  }
+  if (fallbackActions.length === 0) return input.plan;
+  const actions = [
+    ...fallbackActions,
+    ...input.plan.actions.filter(
+      (decision) =>
+        !fallbackActions.some(
+          (fallback) => fallback.brandId === decision.brandId && decision.action === "observe"
+        )
+    ),
+  ].slice(0, input.config.maxActionsPerTick);
+  return {
+    summary: input.plan.summary
+      ? `${input.plan.summary} Added autonomous transport fallback for Gmail UI spam evidence.`
+      : "Added autonomous transport fallback for Gmail UI spam evidence.",
+    actions,
+  };
+}
+
 function snapshotNeedsAutonomousWork(snapshot: BrandActivationSnapshot) {
   if (snapshot.seedPool.needsRepair) {
+    return true;
+  }
+  if (snapshotNeedsTransportFallback(snapshot)) {
     return true;
   }
   if (
@@ -1166,8 +1417,10 @@ function summarizeEligibleWork(snapshots: BrandActivationSnapshot[]) {
       primaryBlockerSummary: snapshot.outreach.primaryBlockerSummary,
       repairableOpenWork: snapshotHasRepairableOpenOutboundWork(snapshot),
       inboxPlacementCandidate: snapshotNeedsInboxPlacementTest(snapshot),
+      transportFallback: summarizeTransportFallback(snapshot),
       seedPool: snapshot.seedPool,
       senderSummary: snapshot.outreach.senderSummary,
+      senderRouteEvidence: snapshot.outreach.senderRouteEvidence,
       campaignSummary: snapshot.outreach.campaignSummary,
       executionSummary: snapshot.outreach.executionSummary,
       missions: snapshot.missions.slice(0, 3),
@@ -1175,10 +1428,14 @@ function summarizeEligibleWork(snapshots: BrandActivationSnapshot[]) {
 }
 
 function latestSnapshotMissionUpdatedAt(snapshot: BrandActivationSnapshot) {
-  return snapshot.missions.reduce((latest, mission) => {
+  const missionLatest = snapshot.missions.reduce((latest, mission) => {
     const timestamp = toTimestamp(mission.updatedAt);
     return timestamp > latest ? timestamp : latest;
   }, 0);
+  return snapshot.outreach.senderRouteEvidence.reduce((latest, evidence) => {
+    const timestamp = toTimestamp(evidence.checkedAt);
+    return timestamp > latest ? timestamp : latest;
+  }, missionLatest);
 }
 
 async function readRecentActivationDecisionTimes(brandIds: string[], sinceIso: string) {
@@ -1262,10 +1519,20 @@ async function buildSnapshots(config: ActivationConfig): Promise<BrandActivation
       const missionPriority = status.campaignSummary.activeOutboundCampaignCount === 0 ? 40 : 0;
       const blockedPriority = status.primaryBlockerDomain === "sender" ? 25 : 0;
       const placementPriority = statusNeedsInboxPlacementTest(status) ? 35 : 0;
-      const livePenalty = hasOpenOutboundWork(status) && placementPriority === 0 ? -100 : 0;
+      const transportFallbackPriority = statusNeedsTransportFallback(status) ? 70 : 0;
+      const livePenalty =
+        hasOpenOutboundWork(status) && placementPriority === 0 && transportFallbackPriority === 0
+          ? -100
+          : 0;
       return {
         status,
-        score: senderPriority + missionPriority + blockedPriority + placementPriority + livePenalty,
+        score:
+          senderPriority +
+          missionPriority +
+          blockedPriority +
+          placementPriority +
+          transportFallbackPriority +
+          livePenalty,
       };
     })
     .sort((left, right) => right.score - left.score)
@@ -1290,6 +1557,7 @@ async function buildSnapshots(config: ActivationConfig): Promise<BrandActivation
           experimentSummary: status.experimentSummary,
           capacitySummary: status.capacitySummary,
           executionSummary: status.executionSummary,
+          senderRouteEvidence: status.senderRouteEvidence,
         },
         seedPool,
         missions: missions.slice(0, 5).map(summarizeMission),
@@ -1352,6 +1620,7 @@ async function planActivationWithLlm(input: {
     "- Do not choose repair_seed_pool when seedPool.needsRepair is false. Historical failed monitor counts alone are not actionable when activeUsable and availableUsableEstimate are healthy.",
     "- If an active run has real scheduled or sent campaign messages and no other urgent blocker, choose run_inbox_placement_test early in the run so deliverability is measured on the real copy before volume ramps. Put activeOutboundRunId in placementTest.runId. Leave placementTest.messageId blank unless you know the exact message.",
     "- Inbox placement tests must use actual campaign copy, never synthetic delivery-probe copy. The runtime will skip duplicates when a recent production probe already exists.",
+    "- If transportFallback.due is true because Gmail UI landed in spam, do not wait for a human to ask. If a Customer.io route exists, choose use_growth_tool with campaign.control_email_run and action probe_all_senders_deliverability so all available transports are tested against the same real campaign copy. If no Customer.io route exists, choose customerio.sender.provision when growth tools and spend guardrails allow it.",
     "- Never choose the brand's primary website domain as the sender domain. Choose a related but separate sending domain and provide alternatives.",
     "- Choose targetCustomerText from the brand's actual product, ICPs, target markets, and notes. Do not invent unsupported proof or claims.",
     "- Lead refill must prepare real campaign prospects for the actual mission messaging, not synthetic delivery probes.",
@@ -1504,6 +1773,10 @@ async function planActivationWithLlm(input: {
                             status: { type: "string" },
                             domainMode: { type: "string" },
                             domain: { type: "string" },
+                            domainCandidates: {
+                              type: "array",
+                              items: { type: "string" },
+                            },
                             fromLocalPart: { type: "string" },
                             senderFirstName: { type: "string" },
                             senderLastName: { type: "string" },
@@ -1538,6 +1811,7 @@ async function planActivationWithLlm(input: {
                             "status",
                             "domainMode",
                             "domain",
+                            "domainCandidates",
                             "fromLocalPart",
                             "senderFirstName",
                             "senderLastName",
@@ -1594,7 +1868,11 @@ async function planActivationWithLlm(input: {
   } catch {
     parsed = {};
   }
-  const plan = normalizeActivationPlan(parsed, input.config.maxActionsPerTick);
+  const plan = applyAutonomousTransportFallback({
+    plan: normalizeActivationPlan(parsed, input.config.maxActionsPerTick),
+    snapshots: input.snapshots,
+    config: input.config,
+  });
   if (eligibleWork.length > 0 && plan.actions.length === 0) {
     const retry = await generateJsonWithLlm({
       task: "mission_operator",
@@ -1622,7 +1900,11 @@ async function planActivationWithLlm(input: {
       retryParsed = {};
     }
     return {
-      plan: normalizeActivationPlan(retryParsed, input.config.maxActionsPerTick),
+      plan: applyAutonomousTransportFallback({
+        plan: normalizeActivationPlan(retryParsed, input.config.maxActionsPerTick),
+        snapshots: input.snapshots,
+        config: input.config,
+      }),
       model: `${retry.provider}:${retry.model}`,
     };
   }

@@ -21553,10 +21553,84 @@ export async function updateRunControl(input: {
     if (!senderAccountId) {
       return { ok: false, reason: "Sender account id is required" };
     }
+    if (TERMINAL_RUN_STATUSES.has(run.status)) {
+      return { ok: false, reason: `Run is ${run.status} and cannot resume sender deliverability` };
+    }
     const account = await getOutreachAccount(senderAccountId);
     if (!account) {
       return { ok: false, reason: "Sender account not found" };
     }
+    const runtimeExperiment = await getExperimentRecordByRuntimeRef(
+      run.brandId,
+      run.campaignId,
+      run.experimentId
+    );
+    const businessWindow = businessWindowFromExperimentEnvelope(runtimeExperiment?.testEnvelope);
+    const senderPoolState = await resolveSenderPoolForBrand({
+      brandId: run.brandId,
+      preferredAccountId: senderAccountId,
+      timeZone: run.timezone || DEFAULT_TIMEZONE,
+      businessWindow,
+      exactAccountId: senderAccountId,
+    });
+    const dispatchSlot =
+      senderPoolState.pool.find((slot) => slot.account.id === senderAccountId) ?? null;
+    if (!dispatchSlot) {
+      const blocked = senderPoolState.readinessByAccountId.get(senderAccountId);
+      return {
+        ok: false,
+        reason: blocked && !blocked.canSendNow
+          ? `Sender is still blocked: ${blocked.primaryBlockingReason || "not sendable yet"}`
+          : "Sender is not currently eligible for dispatch",
+      };
+    }
+    const { trafficLane } = await resolveRunLockedSenderContext(run);
+    if (trafficLane === "outbound" && !isOutreachOutboundEnabled(dispatchSlot.account)) {
+      return { ok: false, reason: "Sender is not enabled for outbound dispatch yet" };
+    }
+
+    const canonicalPool = await getCanonicalSenderPoolForBrand(run.brandId);
+    const canonicalSender = canonicalPool.senderByAccountId.get(senderAccountId) ?? null;
+    const mailboxAccountId = canonicalSender?.mailboxAccountId?.trim() || senderAccountId;
+    const ownerCampaign =
+      run.ownerType === "campaign" && run.ownerId
+        ? await getScaleCampaignRecordById(run.brandId, run.ownerId)
+        : null;
+    if (ownerCampaign) {
+      await updateScaleCampaignRecord(run.brandId, ownerCampaign.id, {
+        scalePolicy: {
+          ...ownerCampaign.scalePolicy,
+          accountId: senderAccountId,
+          mailboxAccountId,
+        },
+      });
+    }
+
+    const shouldLockRunSender =
+      Boolean(String(run.lockedSenderAccountId ?? "").trim()) ||
+      Boolean(ownerCampaign && isSenderOwnedScaleCampaignRecord(ownerCampaign));
+    const previousAccountId = run.accountId;
+    const previousLockedSenderAccountId = String(run.lockedSenderAccountId ?? "").trim();
+    const nextStatus = run.status === "paused" ? "sending" : run.status;
+    await updateOutreachRun(run.id, {
+      accountId: senderAccountId,
+      ...(shouldLockRunSender ? { lockedSenderAccountId: senderAccountId } : {}),
+      status: nextStatus,
+      pauseReason: "",
+      lastError: "",
+    });
+    if (nextStatus === "sending") {
+      await markExperimentExecutionStatus(run.brandId, run.campaignId, run.experimentId, "sending");
+    }
+    await enqueueOutreachJob({
+      runId: run.id,
+      jobType: "dispatch_messages",
+      executeAfter: nowIso(),
+      payload: {
+        reason: "sender_deliverability_resumed",
+        senderAccountId,
+      },
+    });
     await createOutreachEvent({
       runId: run.id,
       eventType: "sender_deliverability_resumed_manual",
@@ -21564,10 +21638,14 @@ export async function updateRunControl(input: {
         senderAccountId: account.id,
         senderAccountName: account.name,
         fromEmail: getOutreachAccountFromEmail(account).trim(),
+        previousAccountId,
+        previousLockedSenderAccountId,
+        campaignId: ownerCampaign?.id ?? "",
+        mailboxAccountId,
         reason: input.reason?.trim() || "Manually resumed by user",
       },
     });
-    return { ok: true, reason: "Sender returned to rotation" };
+    return { ok: true, reason: "Sender promoted for active run and returned to rotation" };
   }
 
   if (input.action === "seed_inbox_placement") {

@@ -19,6 +19,7 @@ import type {
   LeadAcceptanceDecision,
   LeadQualityPolicy,
   BrandRecord,
+  OutreachAccount,
   OutreachMessage,
   OutreachTrafficLane,
   RunAnomaly,
@@ -160,6 +161,7 @@ import {
   extractFirstEmailAddress,
   fetchApifyActorDatasetItems,
   fetchApifyActorSchemaProfile,
+  getCustomerIoMessageDeliveryState,
   getLeadEmailSuppressionReason,
   pollApifyActorRun,
   runApifyActorSyncGetDatasetItems,
@@ -255,6 +257,8 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 const CONVERSATION_TICK_MINUTES = 15;
 const DEFAULT_EXPERIMENT_RUN_LEAD_TARGET = EXPERIMENT_MIN_VERIFIED_EMAIL_LEADS;
 const DELIVERABILITY_PROBE_POLL_DELAY_MINUTES = 3;
+const DEFAULT_DELIVERABILITY_PROBE_MAX_POLLS = 3;
+const DEFAULT_CUSTOMER_IO_DELIVERABILITY_PROBE_MAX_POLLS = 8;
 const DELIVERABILITY_PROBE_REPEAT_HOURS = 24 * 7;
 const DEFAULT_DELIVERABILITY_RESERVED_STALE_MINUTES = 15;
 const DEFAULT_DELIVERABILITY_PROBE_MAX_MONITORS = 3;
@@ -13958,6 +13962,18 @@ function deliverabilityProbeMaxMonitors() {
   );
 }
 
+function deliverabilityProbeMaxPollsForSender(account: OutreachAccount) {
+  const envKey =
+    account.provider === "customerio"
+      ? "CUSTOMER_IO_DELIVERABILITY_PROBE_MAX_POLLS"
+      : "DELIVERABILITY_PROBE_MAX_POLLS";
+  const fallback =
+    account.provider === "customerio"
+      ? DEFAULT_CUSTOMER_IO_DELIVERABILITY_PROBE_MAX_POLLS
+      : DEFAULT_DELIVERABILITY_PROBE_MAX_POLLS;
+  return Math.max(1, Math.min(20, Math.round(Number(process.env[envKey] ?? fallback) || fallback)));
+}
+
 function isOutboundSendingEnabled() {
   const raw = String(process.env.OUTBOUND_SENDING_ENABLED ?? "").trim().toLowerCase();
   return ["1", "true", "yes", "on"].includes(raw);
@@ -16275,6 +16291,7 @@ async function processMonitorDeliverabilityJob(job: OutreachJob) {
   }
 
   const pollAttempt = Math.max(1, Number(payload.pollAttempt ?? 1) || 1);
+  const maxPollAttempts = deliverabilityProbeMaxPollsForSender(senderChoice.slot.account);
   const fromEmail = String(payload.fromEmail ?? senderFromEmail).trim();
   const previousResults = readDeliverabilityProbeResults(payload.previousResults);
   const monitorTargetsForPoll = readDeliverabilityProbeTargets(payload.monitorTargets);
@@ -16320,14 +16337,60 @@ async function processMonitorDeliverabilityJob(job: OutreachJob) {
       },
     });
 
-    if (placement.ok && placement.placement === "not_found" && pollAttempt < 3) {
-      pendingTargets.push({
-        accountId: target.accountId,
-        email: target.email,
-        reservationId: target.reservationId,
-        providerMessageId: target.providerMessageId,
-      });
-      continue;
+    if (placement.ok && placement.placement === "not_found") {
+      if (senderChoice.slot.account.provider === "customerio") {
+        const deliveryState = await getCustomerIoMessageDeliveryState({
+          secrets: senderChoice.slot.secrets,
+          providerMessageId: target.providerMessageId ?? "",
+        });
+        if (deliveryState.ok && deliveryState.state === "failed") {
+          pollResults.push({
+            accountId: target.accountId,
+            email: target.email,
+            placement: "error",
+            matchedMailbox: "",
+            matchedUid: 0,
+            ok: false,
+            error: `Customer.io delivery failed before seed mailbox placement could be measured. ${deliveryState.detail}`.trim(),
+            cleanup: placement.cleanup,
+          });
+          continue;
+        }
+        if (!deliveryState.ok || !deliveryState.delivered) {
+          if (pollAttempt < maxPollAttempts) {
+            pendingTargets.push({
+              accountId: target.accountId,
+              email: target.email,
+              reservationId: target.reservationId,
+              providerMessageId: target.providerMessageId,
+            });
+            continue;
+          }
+          pollResults.push({
+            accountId: target.accountId,
+            email: target.email,
+            placement: "error",
+            matchedMailbox: "",
+            matchedUid: 0,
+            ok: false,
+            error: deliveryState.ok
+              ? `Customer.io accepted the send but has not confirmed delivery after ${pollAttempt} polls. ${deliveryState.detail}`
+              : `Customer.io delivery verification failed after ${pollAttempt} polls. ${deliveryState.error}`,
+            cleanup: placement.cleanup,
+          });
+          continue;
+        }
+      }
+
+      if (pollAttempt < maxPollAttempts) {
+        pendingTargets.push({
+          accountId: target.accountId,
+          email: target.email,
+          reservationId: target.reservationId,
+          providerMessageId: target.providerMessageId,
+        });
+        continue;
+      }
     }
 
     pollResults.push({
@@ -16342,7 +16405,7 @@ async function processMonitorDeliverabilityJob(job: OutreachJob) {
     });
   }
 
-  if (pendingTargets.length && pollAttempt < 3) {
+  if (pendingTargets.length && pollAttempt < maxPollAttempts) {
     if (probeRun) {
       probeRun = await updateDeliverabilityProbeRun(probeRun.id, {
         status: "waiting",
@@ -16373,6 +16436,7 @@ async function processMonitorDeliverabilityJob(job: OutreachJob) {
         pendingMonitorCount: pendingTargets.length,
         pendingMonitorEmails: pendingTargets.map((target) => target.email),
         pollAttempt,
+        maxPollAttempts,
       },
     });
     await queueDeliverabilityProbe({

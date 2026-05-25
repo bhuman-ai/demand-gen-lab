@@ -3898,6 +3898,34 @@ export async function getRunMessage(messageId: string): Promise<OutreachMessage 
   return store.messages.find((row) => row.id === messageId) ?? null;
 }
 
+export async function findRunMessageByProviderMessageId(
+  providerMessageId: string
+): Promise<OutreachMessage | null> {
+  const normalized = providerMessageId.trim();
+  if (!normalized) return null;
+
+  const supabase = getSupabaseAdmin();
+  if (supabase) {
+    const { data, error } = await supabase
+      .from(TABLE_MESSAGE)
+      .select("*")
+      .eq("provider_message_id", normalized)
+      .order("updated_at", { ascending: false })
+      .limit(1);
+    if (!error) {
+      const row = (data ?? [])[0];
+      return row ? mapMessageRow(row) : null;
+    }
+  }
+
+  const store = await readLocalStore();
+  return (
+    store.messages
+      .filter((row) => row.providerMessageId === normalized)
+      .sort((left, right) => (left.updatedAt < right.updatedAt ? 1 : -1))[0] ?? null
+  );
+}
+
 export async function updateRunMessage(
   messageId: string,
   patch: Partial<
@@ -6267,6 +6295,30 @@ export async function listDeliverabilitySeedReservations(input?: {
       if (statuses.length && !statuses.includes(row.status)) return false;
       return true;
     })
+    .sort((left, right) => (left.createdAt < right.createdAt ? 1 : -1));
+}
+
+export async function listDeliverabilitySeedReservationsByProviderMessageId(
+  providerMessageId: string
+): Promise<DeliverabilitySeedReservation[]> {
+  const normalized = providerMessageId.trim();
+  if (!normalized) return [];
+
+  const supabase = getSupabaseAdmin();
+  if (supabase) {
+    const { data, error } = await supabase
+      .from(TABLE_DELIVERABILITY_SEED_RESERVATION)
+      .select("*")
+      .eq("provider_message_id", normalized)
+      .order("created_at", { ascending: false });
+    if (!error) {
+      return (data ?? []).map((row: unknown) => mapDeliverabilitySeedReservationRow(row));
+    }
+  }
+
+  const store = await readLocalStore();
+  return store.deliverabilitySeedReservations
+    .filter((row) => row.providerMessageId === normalized)
     .sort((left, right) => (left.createdAt < right.createdAt ? 1 : -1));
 }
 

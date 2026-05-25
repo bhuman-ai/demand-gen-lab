@@ -2073,11 +2073,43 @@ async function planActivationWithLlm(input: {
       openRouterOverrideModel: asString(process.env.OPENROUTER_MODEL_MISSION_OPERATOR),
     });
   } catch (error) {
+    try {
+      const relaxed = await generateJsonWithLlm({
+        task: "mission_operator",
+        prompt: [
+          prompt,
+          "",
+          "The strict JSON schema interface was unavailable for this turn. Return the same plan shape as plain JSON with summary and actions.",
+          "Use the exact action names and tool names from the prompt. Do not include markdown.",
+        ].join("\n"),
+        format: { type: "json_object" },
+        maxOutputTokens: 1800,
+        reasoningEffort: asString(process.env.OPENAI_MISSION_REASONING_EFFORT) || "high",
+        openAiOverrideModel: asString(process.env.OPENAI_MODEL_MISSION_OPERATOR),
+        openRouterOverrideModel: asString(process.env.OPENROUTER_MODEL_MISSION_OPERATOR),
+      });
+      let relaxedParsed: unknown = {};
+      try {
+        relaxedParsed = JSON.parse(relaxed.text || "{}");
+      } catch {
+        relaxedParsed = {};
+      }
+      return {
+        plan: applyAutonomousEvidenceActions({
+          plan: normalizeActivationPlan(relaxedParsed, input.config.maxActionsPerTick),
+          snapshots: input.snapshots,
+          config: input.config,
+        }),
+        model: `${relaxed.provider}:${relaxed.model}:relaxed_json`,
+      };
+    } catch {
+      // Fall through to evidence-only recovery below.
+    }
     const fallbackPlan = buildTransportFallbackOnlyPlan({
       snapshots: input.snapshots,
       config: input.config,
       summary:
-        "LLM planning was unavailable, so LastB2B used live deliverability evidence to run the transport fallback only.",
+        "LLM planning was unavailable after strict and relaxed JSON attempts, so LastB2B used live deliverability evidence to run the transport fallback only.",
     });
     if (fallbackPlan.actions.length > 0) {
       return {
@@ -2121,11 +2153,43 @@ async function planActivationWithLlm(input: {
         openRouterOverrideModel: asString(process.env.OPENROUTER_MODEL_MISSION_OPERATOR),
       });
     } catch (error) {
+      try {
+        const relaxedRetry = await generateJsonWithLlm({
+          task: "mission_operator",
+          prompt: [
+            prompt,
+            "",
+            "Your previous response normalized to zero actions, and the strict JSON schema retry was unavailable.",
+            "Return at least one concrete backend action as plain JSON with summary and actions. Do not include markdown.",
+          ].join("\n"),
+          format: { type: "json_object" },
+          maxOutputTokens: 1800,
+          reasoningEffort: asString(process.env.OPENAI_MISSION_REASONING_EFFORT) || "high",
+          openAiOverrideModel: asString(process.env.OPENAI_MODEL_MISSION_OPERATOR),
+          openRouterOverrideModel: asString(process.env.OPENROUTER_MODEL_MISSION_OPERATOR),
+        });
+        let relaxedRetryParsed: unknown = {};
+        try {
+          relaxedRetryParsed = JSON.parse(relaxedRetry.text || "{}");
+        } catch {
+          relaxedRetryParsed = {};
+        }
+        return {
+          plan: applyAutonomousEvidenceActions({
+            plan: normalizeActivationPlan(relaxedRetryParsed, input.config.maxActionsPerTick),
+            snapshots: input.snapshots,
+            config: input.config,
+          }),
+          model: `${relaxedRetry.provider}:${relaxedRetry.model}:relaxed_json`,
+        };
+      } catch {
+        // Fall through to evidence-only recovery below.
+      }
       const fallbackPlan = buildTransportFallbackOnlyPlan({
         snapshots: input.snapshots,
         config: input.config,
         summary:
-          "LLM retry planning was unavailable, so LastB2B used live deliverability evidence to run the transport fallback only.",
+          "LLM retry planning was unavailable after strict and relaxed JSON attempts, so LastB2B used live deliverability evidence to run the transport fallback only.",
       });
       if (fallbackPlan.actions.length > 0) {
         return {

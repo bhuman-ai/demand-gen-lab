@@ -637,7 +637,7 @@ export default function SenderProvisionCard({
     }
     if (domainMode === "register" && !advancedMode) {
       if (!namecheapInventory.configured) {
-        setError("Connect Namecheap first so we can run a live domain availability check.");
+        setError("Connect a domain registrar first so we can run a live domain availability check.");
         return;
       }
       if (availabilityState.checking) {
@@ -887,7 +887,7 @@ export default function SenderProvisionCard({
           </div>
         ) : (
           <div className="text-sm text-[color:var(--muted-foreground)]">
-            Advanced mode keeps the old provider-level setup for Customer.io + Namecheap and Mailpool.
+            Advanced mode keeps provider-level setup for Customer.io sender domains and Mailpool inboxes.
           </div>
         )}
       </div>
@@ -940,7 +940,7 @@ export default function SenderProvisionCard({
                   }))
                 }
               >
-                <option value="customerio">Customer.io + Namecheap</option>
+                <option value="customerio">Customer.io sender domain</option>
                 <option value="mailpool">Mailpool</option>
               </Select>
             </div>

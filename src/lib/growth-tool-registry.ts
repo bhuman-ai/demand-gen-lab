@@ -241,6 +241,34 @@ const OPERATOR_TOOL_DEFINITIONS: OperatorGrowthToolDefinition[] = [
     ),
   },
   {
+    name: "customerio.sender.provision",
+    operatorToolName: "provision_customerio_sender",
+    title: "Provision Customer.io sender",
+    description:
+      "Buy or attach a domain, create a Customer.io sender identity, apply DNS through Vercel or saved DNS provider settings, and attach it to a brand with a real Reply-To mailbox.",
+    provider: "customerio",
+    category: "sender_infra",
+    capability: "provision_sender",
+    risk: { spendRisk: true },
+    costPolicy: {
+      estimatedUnitCostUsd: 20,
+      maxUnitsPerCall: 1,
+      budgetKey: "sender_infra",
+    },
+    inputSchema: objectSchema(
+      {
+        brandId: stringProp("Brand id"),
+        domainMode: enumProp(["existing", "register"], "Use an existing domain or register a new one"),
+        domain: stringProp("Sender domain"),
+        fromLocalPart: stringProp("Sender local-part"),
+        selectedMailboxAccountId: stringProp("Optional reply mailbox account id"),
+        customerIoSourceAccountId: stringProp("Optional Customer.io account id to clone credentials from"),
+        accountName: stringProp("Account name"),
+      },
+      ["brandId", "domainMode", "domain", "fromLocalPart"]
+    ),
+  },
+  {
     name: "experiment.create",
     operatorToolName: "create_experiment",
     title: "Create outreach experiment",

@@ -66,9 +66,12 @@ import {
 import { MAX_ACTIVE_SENDERS_PER_DOMAIN } from "@/lib/sender-capacity";
 import {
   ensureVercelRegisteredDomain,
+  ensureVercelManagedDomain,
   getVercelRegistrarMode,
   updateVercelDomainNameservers,
+  upsertVercelDnsRecords,
   type VercelDomainPurchaseResult,
+  type VercelDnsRecordInput,
 } from "@/lib/vercel-domain-registrar";
 
 type NamecheapHostRecord = {
@@ -168,6 +171,14 @@ export type ProvisionSenderResult = {
     purchasePrice: number;
     nameserversUpdated: boolean;
     nameserverUpdateError: string;
+    managedInVercel?: boolean;
+    domainAdded?: boolean;
+    verified?: boolean;
+    intendedNameservers?: string[];
+    existingRecordCount?: number;
+    appliedRecordCount?: number;
+    skippedRecordCount?: number;
+    deletedRecordCount?: number;
   };
   warnings: string[];
   nextSteps: string[];
@@ -713,6 +724,16 @@ function mergeNamecheapHosts(existing: NamecheapHostRecord[], desired: DnsRecord
   }
 
   return merged;
+}
+
+function toVercelDnsRecords(records: DnsRecord[]): VercelDnsRecordInput[] {
+  return records.map((record) => ({
+    type: record.type,
+    name: record.name,
+    value: record.value,
+    ttl: record.ttl,
+    mxPriority: record.mxPref,
+  }));
 }
 
 function normalizeForwardingTargetUrl(value: string) {
@@ -2213,7 +2234,9 @@ export async function provisionCustomerIoSender(
     assignToBrand: input.assignToBrand,
   });
   const customerIoConnection = await resolveCustomerIoProvisioningConnection(input);
-  const namecheapCredentials = await resolveNamecheapCredentials(input);
+  const registrarMode = getVercelRegistrarMode();
+  const useVercelRegistrar = registrarMode !== "mailpool";
+  const namecheapCredentials = useVercelRegistrar ? null : await resolveNamecheapCredentials(input);
   const forwardingTargetUrl = input.forwardingTargetUrl?.trim()
     ? normalizeForwardingTargetUrl(input.forwardingTargetUrl)
     : brand.website.trim()
@@ -2376,27 +2399,60 @@ export async function provisionCustomerIoSender(
     throw new Error(connectivityCheck.message || "Customer.io connectivity test failed");
   }
 
-  if (input.domainMode === "register") {
-    if (!input.registrant) {
-      throw new Error("Registrant contact information is required to buy a new domain");
+  let existingHosts: NamecheapHostRecord[] = [];
+  let vercelPurchase: VercelDomainPurchaseResult | null = null;
+  let vercelDomain:
+    | Awaited<ReturnType<typeof ensureVercelManagedDomain>>
+    | null = null;
+  const provisioningWarnings: string[] = [];
+
+  if (useVercelRegistrar) {
+    if (input.domainMode === "register") {
+      if (!input.registrant) {
+        throw new Error("Registrant contact information is required to buy a new domain");
+      }
+      vercelPurchase = await ensureVercelRegisteredDomain({
+        domain,
+        registrant: input.registrant,
+      });
     }
-    await namecheapRegisterDomain({
+    vercelDomain = await ensureVercelManagedDomain(domain);
+    if (vercelDomain.added && vercelDomain.intendedNameservers.length) {
+      provisioningWarnings.push(
+        `Vercel added ${domain}, but the registrar must use Vercel nameservers before its DNS records are authoritative: ${vercelDomain.intendedNameservers.join(", ")}.`
+      );
+    }
+    if (!vercelDomain.verified) {
+      provisioningWarnings.push(
+        `${domain} is not verified in Vercel yet. Customer.io DNS records were queued in Vercel, but they may not be live until Vercel DNS is authoritative.`
+      );
+    }
+  } else {
+    if (!namecheapCredentials) {
+      throw new Error("Namecheap credentials are required when Vercel registrar mode is disabled.");
+    }
+    if (input.domainMode === "register") {
+      if (!input.registrant) {
+        throw new Error("Registrant contact information is required to buy a new domain");
+      }
+      await namecheapRegisterDomain({
+        apiUser: namecheapCredentials.namecheapApiUser,
+        userName: namecheapCredentials.namecheapUserName,
+        apiKey: namecheapCredentials.namecheapApiKey,
+        clientIp: namecheapCredentials.namecheapClientIp,
+        domain,
+        registrant: input.registrant,
+      });
+    }
+
+    existingHosts = await namecheapGetHosts({
       apiUser: namecheapCredentials.namecheapApiUser,
       userName: namecheapCredentials.namecheapUserName,
       apiKey: namecheapCredentials.namecheapApiKey,
       clientIp: namecheapCredentials.namecheapClientIp,
       domain,
-      registrant: input.registrant,
     });
   }
-
-  const existingHosts = await namecheapGetHosts({
-    apiUser: namecheapCredentials.namecheapApiUser,
-    userName: namecheapCredentials.namecheapUserName,
-    apiKey: namecheapCredentials.namecheapApiKey,
-    clientIp: namecheapCredentials.namecheapClientIp,
-    domain,
-  });
 
   const senderBootstrap = await bootstrapCustomerIoSender({
     siteId: customerIoConnection.siteId,
@@ -2408,7 +2464,26 @@ export async function provisionCustomerIoSender(
   });
 
   const desiredDnsRecords = senderBootstrap.dnsRecords;
-  if (desiredDnsRecords.length || forwardingTargetUrl) {
+  let vercelDns:
+    | Awaited<ReturnType<typeof upsertVercelDnsRecords>>
+    | null = null;
+  if (useVercelRegistrar) {
+    if (desiredDnsRecords.length) {
+      vercelDns = await upsertVercelDnsRecords({
+        domain,
+        records: toVercelDnsRecords(desiredDnsRecords),
+        comment: "Customer.io sender authentication",
+      });
+    }
+    if (forwardingTargetUrl) {
+      provisioningWarnings.push(
+        "Vercel DNS records were applied, but URL forwarding is not configured by this path."
+      );
+    }
+  } else if (desiredDnsRecords.length || forwardingTargetUrl) {
+    if (!namecheapCredentials) {
+      throw new Error("Namecheap credentials are required to apply Customer.io DNS records.");
+    }
     let nextHosts = desiredDnsRecords.length ? mergeNamecheapHosts(existingHosts, desiredDnsRecords, domain) : existingHosts;
     if (forwardingTargetUrl) {
       nextHosts = mergeNamecheapForwardingHosts(nextHosts, forwardingTargetUrl);
@@ -2443,7 +2518,7 @@ export async function provisionCustomerIoSender(
           mailboxAccountId: mailboxSelection,
         });
 
-  const warnings = [...senderBootstrap.warnings];
+  const warnings = [...senderBootstrap.warnings, ...provisioningWarnings];
   const dnsStatus: DomainRow["dnsStatus"] = desiredDnsRecords.length
     ? senderBootstrap.status === "error"
       ? "error"
@@ -2461,6 +2536,12 @@ export async function provisionCustomerIoSender(
   if (!forwardingTargetUrl) {
     warnings.push("No forwarding target is set for this domain yet.");
   }
+  if (vercelPurchase && !vercelPurchase.alreadyOwned) {
+    warnings.push(`Vercel bought ${domain} for $${vercelPurchase.purchasePrice}. Customer.io DNS verification may still need propagation.`);
+  }
+  if (vercelDns && vercelDns.appliedRecordCount > 0) {
+    warnings.push(`Applied ${vercelDns.appliedRecordCount} Customer.io DNS record${vercelDns.appliedRecordCount === 1 ? "" : "s"} in Vercel.`);
+  }
 
   let nextDomains = updateBrandDomainRow({
     brand,
@@ -2469,13 +2550,15 @@ export async function provisionCustomerIoSender(
     replyMailboxEmail,
     dnsStatus,
     forwardingTargetUrl,
-    registrar: "namecheap",
+    registrar: useVercelRegistrar ? "vercel" : "namecheap",
     provider: "customerio",
     deliveryAccountId: customerIoConnection.sourceAccountId || account.id,
     deliveryAccountName: customerIoConnection.sourceAccountName || account.name,
     notes:
       desiredDnsRecords.length > 0
-        ? "Provisioned through outreach settings."
+        ? useVercelRegistrar
+          ? "Provisioned through Customer.io and Vercel DNS."
+          : "Provisioned through outreach settings."
         : "Provisioned partially. Customer.io sender verification still needs attention.",
   });
   const protectedDomain = forwardingTargetUrl ? normalizeDomain(forwardingTargetUrl) : "";
@@ -2513,6 +2596,8 @@ export async function provisionCustomerIoSender(
   }
   if (!forwardingTargetUrl) {
     nextSteps.push("Set a forwarding target so this domain redirects to the protected brand site.");
+  } else if (useVercelRegistrar) {
+    nextSteps.push("If this sender domain should redirect in a browser, attach it to a Vercel redirect project.");
   }
   if (!replyMailboxEmail) {
     nextSteps.push("Assign a reply mailbox to the brand before launching outreach.");
@@ -2528,14 +2613,16 @@ export async function provisionCustomerIoSender(
     brand: updatedBrand ?? brand,
     account,
     assignment,
-    namecheap: {
-      mode: input.domainMode === "register" ? "register" : "existing",
-      domainStatus: input.domainMode === "register" ? "registered" : "existing",
-      existingRecordCount: existingHosts.length,
-      appliedRecordCount: desiredDnsRecords.length,
-      forwardingEnabled: Boolean(forwardingTargetUrl),
-      forwardingTargetUrl,
-    },
+    namecheap: useVercelRegistrar
+      ? undefined
+      : {
+          mode: input.domainMode === "register" ? "register" : "existing",
+          domainStatus: input.domainMode === "register" ? "registered" : "existing",
+          existingRecordCount: existingHosts.length,
+          appliedRecordCount: desiredDnsRecords.length,
+          forwardingEnabled: Boolean(forwardingTargetUrl),
+          forwardingTargetUrl,
+        },
     customerIo: {
       senderIdentityStatus: senderBootstrap.status,
       dnsRecordCount: desiredDnsRecords.length,
@@ -2543,6 +2630,25 @@ export async function provisionCustomerIoSender(
       sourceAccountName: customerIoConnection.sourceAccountName || account.name,
     },
     mailpool: undefined,
+    vercel: useVercelRegistrar
+      ? {
+          registrarMode,
+          domain,
+          alreadyOwned: vercelPurchase?.alreadyOwned ?? Boolean(vercelDomain && !vercelDomain.added),
+          orderId: vercelPurchase?.orderId ?? "",
+          purchasePrice: vercelPurchase?.purchasePrice ?? 0,
+          nameserversUpdated: false,
+          nameserverUpdateError: "",
+          managedInVercel: Boolean(vercelDomain),
+          domainAdded: vercelDomain?.added ?? false,
+          verified: vercelDomain?.verified ?? false,
+          intendedNameservers: vercelDomain?.intendedNameservers ?? [],
+          existingRecordCount: vercelDns?.existingRecordCount ?? 0,
+          appliedRecordCount: vercelDns?.appliedRecordCount ?? 0,
+          skippedRecordCount: vercelDns?.skippedRecordCount ?? 0,
+          deletedRecordCount: vercelDns?.deletedRecordCount ?? 0,
+        }
+      : undefined,
     warnings,
     nextSteps,
   };

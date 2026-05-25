@@ -1378,6 +1378,21 @@ function applyAutonomousTransportFallback(input: {
   };
 }
 
+function buildTransportFallbackOnlyPlan(input: {
+  snapshots: BrandActivationSnapshot[];
+  config: ActivationConfig;
+  summary: string;
+}) {
+  return applyAutonomousTransportFallback({
+    plan: {
+      summary: input.summary,
+      actions: [],
+    },
+    snapshots: input.snapshots,
+    config: input.config,
+  });
+}
+
 function snapshotNeedsAutonomousWork(snapshot: BrandActivationSnapshot) {
   if (snapshot.seedPool.needsRepair) {
     return true;
@@ -1849,19 +1864,36 @@ async function planActivationWithLlm(input: {
             },
             required: ["summary", "actions"],
   } satisfies Record<string, unknown>;
-  const generated = await generateJsonWithLlm({
-    task: "mission_operator",
-    prompt,
-    format: {
-      type: "json_schema",
-      name: "brand_activation_plan",
-      schema,
-    },
-    maxOutputTokens: 1800,
-    reasoningEffort: asString(process.env.OPENAI_MISSION_REASONING_EFFORT) || "high",
-    openAiOverrideModel: asString(process.env.OPENAI_MODEL_MISSION_OPERATOR),
-    openRouterOverrideModel: asString(process.env.OPENROUTER_MODEL_MISSION_OPERATOR),
-  });
+  let generated: Awaited<ReturnType<typeof generateJsonWithLlm>>;
+  try {
+    generated = await generateJsonWithLlm({
+      task: "mission_operator",
+      prompt,
+      format: {
+        type: "json_schema",
+        name: "brand_activation_plan",
+        schema,
+      },
+      maxOutputTokens: 1800,
+      reasoningEffort: asString(process.env.OPENAI_MISSION_REASONING_EFFORT) || "high",
+      openAiOverrideModel: asString(process.env.OPENAI_MODEL_MISSION_OPERATOR),
+      openRouterOverrideModel: asString(process.env.OPENROUTER_MODEL_MISSION_OPERATOR),
+    });
+  } catch (error) {
+    const fallbackPlan = buildTransportFallbackOnlyPlan({
+      snapshots: input.snapshots,
+      config: input.config,
+      summary:
+        "LLM planning was unavailable, so LastB2B used live deliverability evidence to run the transport fallback only.",
+    });
+    if (fallbackPlan.actions.length > 0) {
+      return {
+        plan: fallbackPlan,
+        model: "evidence:transport_fallback",
+      };
+    }
+    throw error;
+  }
   let parsed: unknown = {};
   try {
     parsed = JSON.parse(generated.text || "{}");
@@ -1874,25 +1906,42 @@ async function planActivationWithLlm(input: {
     config: input.config,
   });
   if (eligibleWork.length > 0 && plan.actions.length === 0) {
-    const retry = await generateJsonWithLlm({
-      task: "mission_operator",
-      prompt: [
-        prompt,
-        "",
-        "Your previous response normalized to zero actions even though eligibleWork is non-empty.",
-        "Return at least one concrete backend action now. Do not return an empty actions array.",
-        "If you think a brand should not launch yet, provision or refresh the sender/domain/warmup prerequisite instead.",
-      ].join("\n"),
-      format: {
-        type: "json_schema",
-        name: "brand_activation_plan",
-        schema,
-      },
-      maxOutputTokens: 1800,
-      reasoningEffort: asString(process.env.OPENAI_MISSION_REASONING_EFFORT) || "high",
-      openAiOverrideModel: asString(process.env.OPENAI_MODEL_MISSION_OPERATOR),
-      openRouterOverrideModel: asString(process.env.OPENROUTER_MODEL_MISSION_OPERATOR),
-    });
+    let retry: Awaited<ReturnType<typeof generateJsonWithLlm>>;
+    try {
+      retry = await generateJsonWithLlm({
+        task: "mission_operator",
+        prompt: [
+          prompt,
+          "",
+          "Your previous response normalized to zero actions even though eligibleWork is non-empty.",
+          "Return at least one concrete backend action now. Do not return an empty actions array.",
+          "If you think a brand should not launch yet, provision or refresh the sender/domain/warmup prerequisite instead.",
+        ].join("\n"),
+        format: {
+          type: "json_schema",
+          name: "brand_activation_plan",
+          schema,
+        },
+        maxOutputTokens: 1800,
+        reasoningEffort: asString(process.env.OPENAI_MISSION_REASONING_EFFORT) || "high",
+        openAiOverrideModel: asString(process.env.OPENAI_MODEL_MISSION_OPERATOR),
+        openRouterOverrideModel: asString(process.env.OPENROUTER_MODEL_MISSION_OPERATOR),
+      });
+    } catch (error) {
+      const fallbackPlan = buildTransportFallbackOnlyPlan({
+        snapshots: input.snapshots,
+        config: input.config,
+        summary:
+          "LLM retry planning was unavailable, so LastB2B used live deliverability evidence to run the transport fallback only.",
+      });
+      if (fallbackPlan.actions.length > 0) {
+        return {
+          plan: fallbackPlan,
+          model: "evidence:transport_fallback",
+        };
+      }
+      throw error;
+    }
     let retryParsed: unknown = {};
     try {
       retryParsed = JSON.parse(retry.text || "{}");

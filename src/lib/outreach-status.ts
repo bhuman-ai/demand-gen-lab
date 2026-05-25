@@ -7,7 +7,6 @@ import type {
   DomainRow,
   ExperimentRecord,
   OutreachAccount,
-  OutreachMessage,
   OutreachRun,
   RunAnomaly,
   ScaleCampaignRecord,
@@ -21,7 +20,6 @@ import {
   listRunAnomalies,
   listRunJobs,
   listRunMessages,
-  type OutreachJob,
 } from "@/lib/outreach-data";
 import {
   listExperimentRecords,
@@ -213,6 +211,25 @@ export type OutreachBrandExecutionSummary = {
   activeCriticalOutboundAnomalyCount: number;
 };
 
+export type OutreachBrandSenderRouteEvidence = {
+  senderId: string;
+  accountId: string;
+  provider: OutreachAccount["provider"] | "";
+  deliveryMethod: OutreachAccount["config"]["mailbox"]["deliveryMethod"] | "";
+  routeKind: "customerio" | "gmail_ui" | "mailpool_smtp" | "mailpool_other" | "unknown";
+  fromEmail: string;
+  state: CanonicalSender["state"] | "";
+  placement: string;
+  checkedAt: string;
+  totalMonitors: number;
+  inboxCount: number;
+  spamCount: number;
+  inboxRate: number;
+  spamRate: number;
+  autoPaused: boolean;
+  summaryText: string;
+};
+
 export type OutreachBrandStatus = {
   brandId: string;
   brandName: string;
@@ -231,6 +248,7 @@ export type OutreachBrandStatus = {
   inventorySummary: OutreachBrandInventorySummary;
   capacitySummary: OutreachBrandCapacitySummary;
   executionSummary: OutreachBrandExecutionSummary;
+  senderRouteEvidence: OutreachBrandSenderRouteEvidence[];
 };
 
 export type OutreachStatusResponse = {
@@ -476,6 +494,46 @@ function liveSenderSummaryState(info: SenderStatusInfo): CanonicalSender["state"
   if (info.sender.state === "retired") return "retired";
   if (info.sender.state === "restricted") return "restricted";
   return "blocked";
+}
+
+function senderRouteKind(account: OutreachAccount | null): OutreachBrandSenderRouteEvidence["routeKind"] {
+  if (!account) return "unknown";
+  if (account.provider === "customerio") return "customerio";
+  if (account.provider === "mailpool" && account.config.mailbox.deliveryMethod === "gmail_ui") {
+    return "gmail_ui";
+  }
+  if (account.provider === "mailpool" && account.config.mailbox.deliveryMethod === "smtp") {
+    return "mailpool_smtp";
+  }
+  if (account.provider === "mailpool") return "mailpool_other";
+  return "unknown";
+}
+
+function buildSenderRouteEvidence(senderInfos: SenderStatusInfo[]): OutreachBrandSenderRouteEvidence[] {
+  return senderInfos.map((info) => {
+    const account = info.deliveryAccount;
+    const scorecard = info.scorecard;
+    return {
+      senderId: info.sender.id,
+      accountId: account?.id ?? info.sender.deliveryAccountId,
+      provider: account?.provider ?? "",
+      deliveryMethod: account?.config.mailbox.deliveryMethod ?? "",
+      routeKind: senderRouteKind(account),
+      fromEmail:
+        info.sender.fromEmail ||
+        (account ? getOutreachAccountFromEmail(account).trim().toLowerCase() : ""),
+      state: liveSenderSummaryState(info),
+      placement: scorecard?.placement ?? "unknown",
+      checkedAt: scorecard?.checkedAt ?? "",
+      totalMonitors: scorecard?.totalMonitors ?? 0,
+      inboxCount: scorecard?.inboxCount ?? 0,
+      spamCount: scorecard?.spamCount ?? 0,
+      inboxRate: scorecard?.inboxRate ?? 0,
+      spamRate: scorecard?.spamRate ?? 0,
+      autoPaused: scorecard?.autoPaused ?? false,
+      summaryText: scorecard?.summaryText ?? "No seed-group check yet",
+    };
+  });
 }
 
 function structuralSenderIssue(readiness: SenderReadiness | null) {
@@ -1474,6 +1532,7 @@ async function assembleBrandStatus(
       activeDispatchJobCount,
       activeCriticalOutboundAnomalyCount,
     },
+    senderRouteEvidence: buildSenderRouteEvidence(senderInfos),
   };
 }
 
@@ -1562,6 +1621,7 @@ function buildFailedBrandStatus(
       activeDispatchJobCount: 0,
       activeCriticalOutboundAnomalyCount: 0,
     },
+    senderRouteEvidence: [],
   };
 }
 

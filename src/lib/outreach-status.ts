@@ -51,6 +51,7 @@ import {
   getOutreachAccountFromEmail,
   getOutreachAccountReplyToEmail,
   getOutreachMailboxEmail,
+  isOutreachOutboundEnabled,
 } from "@/lib/outreach-account-helpers";
 
 export type OutreachStatusSourceMode = "live_assembly";
@@ -218,6 +219,7 @@ export type OutreachBrandSenderRouteEvidence = {
   deliveryMethod: OutreachAccount["config"]["mailbox"]["deliveryMethod"] | "";
   routeKind: "customerio" | "gmail_ui" | "mailpool_smtp" | "mailpool_other" | "unknown";
   fromEmail: string;
+  outboundEnabled: boolean;
   state: CanonicalSender["state"] | "";
   placement: string;
   checkedAt: string;
@@ -522,6 +524,7 @@ function buildSenderRouteEvidence(senderInfos: SenderStatusInfo[]): OutreachBran
       fromEmail:
         info.sender.fromEmail ||
         (account ? getOutreachAccountFromEmail(account).trim().toLowerCase() : ""),
+      outboundEnabled: isOutreachOutboundEnabled(account),
       state: liveSenderSummaryState(info),
       placement: scorecard?.placement ?? "unknown",
       checkedAt: scorecard?.checkedAt ?? "",

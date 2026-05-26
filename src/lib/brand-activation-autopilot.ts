@@ -1229,14 +1229,55 @@ function snapshotNeedsVerifiedTransportPromotion(snapshot: BrandActivationSnapsh
   return statusNeedsVerifiedTransportPromotion(snapshot.outreach);
 }
 
+function readyOutboundEnabledRoutes(status: Pick<OutreachBrandStatus, "senderRouteEvidence">) {
+  return status.senderRouteEvidence.filter(
+    (route) => route.accountId && route.state === "ready" && route.outboundEnabled
+  );
+}
+
+function readyWarmupOnlyRoutes(status: Pick<OutreachBrandStatus, "senderRouteEvidence">) {
+  return status.senderRouteEvidence.filter(
+    (route) => route.accountId && route.state === "ready" && !route.outboundEnabled
+  );
+}
+
+function statusNeedsSenderOutboundEnablement(status: Pick<
+  OutreachBrandStatus,
+  "campaignSummary" | "inventorySummary" | "primaryBlockerCode" | "senderRouteEvidence"
+>) {
+  if (readyOutboundEnabledRoutes(status).length > 0) return false;
+  if (readyWarmupOnlyRoutes(status).length === 0) return false;
+  if (status.primaryBlockerCode !== "no_active_outbound_campaign") return false;
+  return Boolean(
+    status.campaignSummary.activeWarmupCampaignCount > 0 ||
+      status.campaignSummary.readyOutboundCampaignCount > 0 ||
+      status.campaignSummary.activeOutboundCampaignId ||
+      status.inventorySummary.inventoryDispatchable
+  );
+}
+
+function snapshotNeedsSenderOutboundEnablement(snapshot: BrandActivationSnapshot) {
+  return statusNeedsSenderOutboundEnablement(snapshot.outreach);
+}
+
+function findSenderOutboundEnablementRoute(snapshot: BrandActivationSnapshot) {
+  return readyWarmupOnlyRoutes(snapshot.outreach)[0] ?? null;
+}
+
 function statusNeedsCampaignLaunch(status: Pick<
   OutreachBrandStatus,
-  "campaignSummary" | "executionSummary" | "senderSummary" | "primaryBlockerDomain" | "primaryBlockerCode"
+  | "campaignSummary"
+  | "executionSummary"
+  | "senderSummary"
+  | "senderRouteEvidence"
+  | "primaryBlockerDomain"
+  | "primaryBlockerCode"
 >) {
   if (!status.campaignSummary.activeOutboundCampaignId) return false;
   if (status.executionSummary.activeOutboundRunId || status.executionSummary.openOutboundRunCount > 0) return false;
   if (status.campaignSummary.readyOutboundCampaignCount <= 0) return false;
   if (status.senderSummary.readySenderCount <= 0) return false;
+  if (readyOutboundEnabledRoutes(status).length <= 0) return false;
   if (
     status.primaryBlockerDomain === "sender" ||
     status.primaryBlockerDomain === "capacity" ||
@@ -1422,6 +1463,30 @@ function summarizeCampaignLaunch(snapshot: BrandActivationSnapshot) {
             "Ready outbound campaign is idle with no open run; launch a limited real-copy run so the autonomous system can source, schedule, test, and dispatch.",
         }
       : {},
+  };
+}
+
+function summarizeSenderOutboundEnablement(snapshot: BrandActivationSnapshot) {
+  const due = snapshotNeedsSenderOutboundEnablement(snapshot);
+  const route = findSenderOutboundEnablementRoute(snapshot);
+  return {
+    due,
+    reason: due
+      ? "A sender route is ready but still warmup-only. Enable outbound for that ready sender before launching real campaign mail."
+      : "",
+    accountId: route?.accountId ?? "",
+    fromEmail: route?.fromEmail ?? "",
+    routeKind: route?.routeKind ?? "",
+    recommendedTool: due && route ? "sender.enable_outbound" : "",
+    recommendedInput:
+      due && route
+        ? {
+            brandId: snapshot.brand.id,
+            accountId: route.accountId,
+            reason:
+              "Ready sender is blocked only by outbound-disabled warmup mode; enable it so the autonomous campaign launch can proceed.",
+          }
+        : {},
   };
 }
 
@@ -1611,6 +1676,28 @@ function buildLaunchActiveCampaignDecision(snapshot: BrandActivationSnapshot): A
   };
 }
 
+function buildEnableSenderOutboundDecision(snapshot: BrandActivationSnapshot): ActivationDecision | null {
+  const route = findSenderOutboundEnablementRoute(snapshot);
+  if (!route?.accountId) return null;
+  return {
+    brandId: snapshot.brand.id,
+    action: "use_growth_tool",
+    rationale:
+      `Sender ${route.fromEmail || route.accountId} is ready but warmup-only. Enable outbound on the ready route before trying to launch real campaign mail.`,
+    riskLevel: "guarded_write",
+    ...emptyDecisionParts(),
+    growthTool: {
+      toolName: "sender.enable_outbound",
+      input: {
+        brandId: snapshot.brand.id,
+        accountId: route.accountId,
+        reason:
+          "Ready sender is currently warmup-only; enabling outbound removes the launch blocker without changing campaign copy.",
+      },
+    },
+  };
+}
+
 function buildRepairProviderErrorDecision(snapshot: BrandActivationSnapshot): ActivationDecision | null {
   const runId = snapshot.outreach.executionSummary.activeOutboundRunId;
   if (!runId) return null;
@@ -1667,6 +1754,10 @@ function decisionHandlesCampaignLaunch(decision: ActivationDecision) {
   return decision.action === "use_growth_tool" && decision.growthTool.toolName === "campaign.launch_email_run";
 }
 
+function decisionHandlesSenderOutboundEnablement(decision: ActivationDecision) {
+  return decision.action === "use_growth_tool" && decision.growthTool.toolName === "sender.enable_outbound";
+}
+
 function decisionHandlesProviderErrorRepair(decision: ActivationDecision) {
   return decision.action === "repair_outreach_run" && Boolean(decision.runTool.runId);
 }
@@ -1708,6 +1799,43 @@ function applyAutonomousCampaignLaunch(input: {
     summary: input.plan.summary
       ? `${input.plan.summary} Added autonomous launch for ready idle campaigns.`
       : "Added autonomous launch for ready idle campaigns.",
+    actions,
+  };
+}
+
+function applyAutonomousSenderOutboundEnablement(input: {
+  plan: ActivationPlan;
+  snapshots: BrandActivationSnapshot[];
+  config: ActivationConfig;
+}) {
+  const plannedBrandIds = new Set(
+    input.plan.actions
+      .filter(decisionHandlesSenderOutboundEnablement)
+      .map((decision) => decision.brandId)
+  );
+  const actionsToAdd: ActivationDecision[] = [];
+  for (const snapshot of input.snapshots) {
+    if (!snapshotNeedsSenderOutboundEnablement(snapshot)) continue;
+    if (plannedBrandIds.has(snapshot.brand.id)) continue;
+    const decision = buildEnableSenderOutboundDecision(snapshot);
+    if (!decision) continue;
+    plannedBrandIds.add(snapshot.brand.id);
+    actionsToAdd.push(decision);
+  }
+  if (actionsToAdd.length === 0) return input.plan;
+  const actions = [
+    ...actionsToAdd,
+    ...input.plan.actions.filter(
+      (decision) =>
+        !actionsToAdd.some(
+          (added) => added.brandId === decision.brandId && decision.action === "observe"
+        )
+    ),
+  ].slice(0, input.config.maxActionsPerTick);
+  return {
+    summary: input.plan.summary
+      ? `${input.plan.summary} Added autonomous sender outbound enablement for ready warmup-only routes.`
+      : "Added autonomous sender outbound enablement for ready warmup-only routes.",
     actions,
   };
 }
@@ -1871,9 +1999,13 @@ function applyAutonomousEvidenceActions(input: {
 }) {
   return applyAutonomousProviderErrorRepair({
     plan: applyAutonomousSenderDeliveryRepair({
-      plan: applyAutonomousCampaignLaunch({
-        plan: applyAutonomousTransportFallback({
-          plan: applyAutonomousVerifiedTransportPromotion(input),
+      plan: applyAutonomousSenderOutboundEnablement({
+        plan: applyAutonomousCampaignLaunch({
+          plan: applyAutonomousTransportFallback({
+            plan: applyAutonomousVerifiedTransportPromotion(input),
+            snapshots: input.snapshots,
+            config: input.config,
+          }),
           snapshots: input.snapshots,
           config: input.config,
         }),
@@ -1909,6 +2041,8 @@ function activationDecisionKey(decision: ActivationDecision) {
     decision.action,
     decision.growthTool.toolName,
     decision.growthTool.input.action,
+    decision.growthTool.input.accountId,
+    decision.growthTool.input.campaignId,
     decision.growthTool.input.runId,
     decision.growthTool.input.senderAccountId,
     decision.refreshAccountId,
@@ -1952,6 +2086,9 @@ function snapshotNeedsAutonomousWork(snapshot: BrandActivationSnapshot) {
   if (snapshotNeedsCampaignLaunch(snapshot)) {
     return true;
   }
+  if (snapshotNeedsSenderOutboundEnablement(snapshot)) {
+    return true;
+  }
   if (snapshotNeedsProviderErrorRepair(snapshot)) {
     return true;
   }
@@ -1990,6 +2127,7 @@ function summarizeEligibleWork(snapshots: BrandActivationSnapshot[]) {
       primaryBlockerSummary: snapshot.outreach.primaryBlockerSummary,
       repairableOpenWork: snapshotHasRepairableOpenOutboundWork(snapshot),
       inboxPlacementCandidate: snapshotNeedsInboxPlacementTest(snapshot),
+      senderOutboundEnablement: summarizeSenderOutboundEnablement(snapshot),
       campaignLaunch: summarizeCampaignLaunch(snapshot),
       providerErrorRepair: summarizeProviderErrorRepair(snapshot),
       senderDeliveryRepair: summarizeSenderDeliveryRepair(snapshot),
@@ -2061,6 +2199,7 @@ async function filterSnapshotsDueForPlanning(snapshots: BrandActivationSnapshot[
       snapshotNeedsTransportFallback(snapshot) ||
       snapshotNeedsVerifiedTransportPromotion(snapshot) ||
       snapshotNeedsCampaignLaunch(snapshot) ||
+      snapshotNeedsSenderOutboundEnablement(snapshot) ||
       snapshotNeedsProviderErrorRepair(snapshot) ||
       snapshotNeedsSenderDeliveryRepair(snapshot)
     ) {
@@ -2108,6 +2247,7 @@ async function buildSnapshots(config: ActivationConfig): Promise<BrandActivation
       const transportFallbackPriority = statusNeedsTransportFallback(status) ? 70 : 0;
       const transportPromotionPriority = statusNeedsVerifiedTransportPromotion(status) ? 80 : 0;
       const campaignLaunchPriority = statusNeedsCampaignLaunch(status) ? 65 : 0;
+      const senderOutboundEnablementPriority = statusNeedsSenderOutboundEnablement(status) ? 70 : 0;
       const providerErrorRepairPriority = statusNeedsProviderErrorRepair(status) ? 90 : 0;
       const senderDeliveryRepairPriority = statusNeedsSenderDeliveryRepair(status) ? 75 : 0;
       const livePenalty =
@@ -2116,6 +2256,7 @@ async function buildSnapshots(config: ActivationConfig): Promise<BrandActivation
         transportFallbackPriority === 0 &&
         transportPromotionPriority === 0 &&
         campaignLaunchPriority === 0 &&
+        senderOutboundEnablementPriority === 0 &&
         providerErrorRepairPriority === 0 &&
         senderDeliveryRepairPriority === 0
           ? -100
@@ -2130,6 +2271,7 @@ async function buildSnapshots(config: ActivationConfig): Promise<BrandActivation
           transportFallbackPriority +
           transportPromotionPriority +
           campaignLaunchPriority +
+          senderOutboundEnablementPriority +
           providerErrorRepairPriority +
           senderDeliveryRepairPriority +
           livePenalty,
@@ -2224,6 +2366,7 @@ async function planActivationWithLlm(input: {
     "- provision_mailpool_sender: buy/attach a Mailpool sender when the brand has no usable sender and a real inbox is needed.",
     "- refresh_mailpool_sender: refresh a pending Mailpool sender using refreshAccountId.",
     "- use_growth_tool: call a registered growth capability by name when it is the best next action or when an older fixed action is too narrow. Put the chosen tool name and structured input in growthTool.",
+    "  - For ready warmup-only senders blocking real outreach, use sender.enable_outbound before launching a campaign run.",
     "  - For ready idle outbound campaigns, use campaign.launch_email_run so real campaign-copy messages are created and the rest of the system can source, schedule, test, and dispatch.",
     "- observe: do nothing when action is unsafe, premature, or insufficiently grounded.",
     "",
@@ -2243,6 +2386,7 @@ async function planActivationWithLlm(input: {
     "- If an active run is queued/sourcing/scheduled/sending but appears stuck, choose repair_outreach_run and put the activeOutboundRunId in runTool.runId.",
     "- If primaryBlockerCode is provider_error_rate and activeOutboundRunId exists, choose repair_outreach_run. This lets the runtime recheck the provider anomaly, fail over to a healthier sender when available, and resume safely.",
     "- If an active run needs more prospects, has inventory/top-up errors, or is below the intended batch size, choose source_more_leads and set runTool.targetLeadCount to the desired total sendable leads for that run.",
+    "- If senderOutboundEnablement.due is true, choose use_growth_tool with sender.enable_outbound and the provided accountId. Do this before campaign.launch_email_run; a warmup-only ready sender will block real outbound launches.",
     "- If activeOutboundCampaignId is present, readyOutboundCampaignCount > 0, there is no activeOutboundRunId/open run, and sender/inventory state is not structurally blocked, choose use_growth_tool with campaign.launch_email_run. Do not wait for a human to press launch.",
     "- If primaryBlockerCode is missing_delivery_credentials or gmail_ui_login_required for a Mailpool Gmail UI route, choose refresh_mailpool_sender with refreshAccountId. The runtime will refresh Mailpool and switch to SMTP automatically when SMTP credentials are available.",
     "- If seedPool.needsRepair is true, prefer repair_seed_pool before trying more inbox placement tests. This is infrastructure repair; do not also create missions or provision senders in the same action.",

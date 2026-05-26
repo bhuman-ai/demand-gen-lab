@@ -21339,7 +21339,8 @@ export async function updateRunControl(input: {
     if (!referenceMessage) {
       return {
         ok: false,
-        reason: "No real scheduled or sent message exists for deliverability probing yet",
+        reason:
+          "No real scheduled or sent message exists for deliverability probing yet. Next action: run launch_campaign_run for this campaign to create real campaign-copy scheduled messages, then retry probe_all_senders_deliverability.",
       };
     }
     const scheduledSenderContext =
@@ -21468,7 +21469,8 @@ export async function updateRunControl(input: {
     if (!referenceMessage) {
       return {
         ok: false,
-        reason: "No real scheduled or sent message exists for deliverability probing yet",
+        reason:
+          "No real scheduled or sent message exists for deliverability probing yet. Next action: run launch_campaign_run for this campaign to create real campaign-copy scheduled messages, then retry probe_all_senders_deliverability.",
       };
     }
 
@@ -21663,7 +21665,8 @@ export async function updateRunControl(input: {
     if (!referenceMessage) {
       return {
         ok: false,
-        reason: "No real scheduled or sent message exists for inbox placement seeding yet",
+        reason:
+          "No real scheduled or sent message exists for inbox placement seeding yet. Next action: run launch_campaign_run for this campaign to create real campaign-copy scheduled messages, then retry seed_inbox_placement with the seed recipient.",
       };
     }
     const scheduledSenderContext =

@@ -2427,7 +2427,7 @@ const TOOL_SPECS: OperatorToolSpec[] = [
     riskLevel: "guarded_write",
     approvalMode: "confirm",
     description:
-      "Pause, resume, cancel, or deliverability-control a campaign run. Use probe_all_senders_deliverability to compare Gmail UI, Mailpool SMTP, and Customer.io transports with the same live campaign copy before choosing a route.",
+      "Pause, resume, cancel, or deliverability-control a campaign run. Valid deliverability actions are exact strings: probe_deliverability, probe_all_senders_deliverability, resume_sender_deliverability, and seed_inbox_placement. Use probe_all_senders_deliverability to compare Gmail UI, Mailpool SMTP, and Customer.io transports with the same live campaign copy before choosing a route. If no real scheduled or sent campaign message exists yet, run launch_campaign_run for the campaign first, then retry the probe.",
     previewTitle: "Control campaign run",
     buildPreview: (input) =>
       buildSimplePreview(

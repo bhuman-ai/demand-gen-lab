@@ -253,6 +253,7 @@ export type OperatorChatRequest = {
   mode?: "default" | "recommendation_only";
   executionPolicy?: OperatorExecutionPolicy;
   autonomousToolAllowlist?: string[];
+  disableLocalHeuristics?: boolean;
   structuredAction?: OperatorRequestedAction | null;
 };
 

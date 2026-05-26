@@ -328,6 +328,7 @@ async function runMission(input: {
     mode: input.config.mode,
     executionPolicy: input.config.executionPolicy,
     autonomousToolAllowlist: input.config.autonomousToolAllowlist,
+    disableLocalHeuristics: true,
   });
   const evidence = extractEvidence(response);
   const summary = truncateText(response.assistant.summary, 1200);

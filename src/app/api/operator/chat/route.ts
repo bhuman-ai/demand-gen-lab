@@ -26,6 +26,7 @@ export async function POST(request: Request) {
       autonomousToolAllowlist: Array.isArray(body.autonomousToolAllowlist)
         ? body.autonomousToolAllowlist.map((entry) => String(entry ?? "").trim()).filter(Boolean)
         : [],
+      disableLocalHeuristics: body.disableLocalHeuristics === true,
       structuredAction:
         Object.keys(structuredActionRaw).length > 0
           ? {

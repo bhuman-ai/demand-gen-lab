@@ -10085,7 +10085,11 @@ function preflightReason(input: {
     !supportsCustomerIoDelivery(input.deliveryAccount) &&
     !supportsMailpoolDelivery(input.deliveryAccount, input.deliverySecrets)
   ) {
-    return "Delivery account is missing provider credentials";
+    const senderLabel =
+      getOutreachAccountFromEmail(input.deliveryAccount).trim() ||
+      input.deliveryAccount.name.trim() ||
+      input.deliveryAccount.id;
+    return `Delivery account ${senderLabel} is missing provider credentials`;
   }
   if (input.deliveryAccount.provider === "customerio" && !input.deliverySecrets.customerIoAppApiKey.trim()) {
     return "Customer.io App API key missing";
@@ -10136,6 +10140,13 @@ function preflightDiagnostic(input: {
   if (input.reason === "Platform lead sourcing is not configured (EXA_API_KEY missing)") {
     return {
       hint: "Platform lead sourcing is not configured in this deployment. Set EXA_API_KEY in project environment variables.",
+      debug,
+    };
+  }
+  if (input.reason.toLowerCase().includes("missing provider credentials")) {
+    return {
+      hint:
+        "Repair the sender credentials before launch. For Mailpool senders, run refresh_mailpool_sender on the account and confirm SMTP/IMAP credentials exist; if they remain missing, provision a replacement sender and use that route.",
       debug,
     };
   }

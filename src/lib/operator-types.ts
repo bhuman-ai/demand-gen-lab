@@ -27,6 +27,8 @@ export type OperatorActionStatus =
 
 export type OperatorApprovalDecision = "approved" | "rejected";
 
+export type OperatorExecutionPolicy = "confirm_required" | "autonomous";
+
 export type OperatorMemoryScopeType = "account" | "brand" | "thread";
 
 export type OperatorMemorySensitivity = "normal" | "sensitive";
@@ -34,6 +36,7 @@ export type OperatorMemorySensitivity = "normal" | "sensitive";
 export type OperatorToolName =
   | "get_brand_snapshot"
   | "get_sender_snapshot"
+  | "inspect_outbound_blocker_chain"
   | "inspect_sender_delivery_evidence"
   | "summarize_campaign_status"
   | "get_campaign_snapshot"
@@ -248,6 +251,8 @@ export type OperatorChatRequest = {
   brandId?: string;
   message: string;
   mode?: "default" | "recommendation_only";
+  executionPolicy?: OperatorExecutionPolicy;
+  autonomousToolAllowlist?: string[];
   structuredAction?: OperatorRequestedAction | null;
 };
 

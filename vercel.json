@@ -15,7 +15,7 @@
     },
     {
       "path": "/api/internal/brand-gpt/mission-tick",
-      "schedule": "17 * * * *"
+      "schedule": "*/15 * * * *"
     },
     {
       "path": "/api/internal/social-discovery/daily",

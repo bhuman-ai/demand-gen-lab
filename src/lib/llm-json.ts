@@ -1,4 +1,6 @@
+import { randomUUID } from "crypto";
 import { resolveLlmModel, type LlmTask } from "@/lib/llm-router";
+import { getSupabaseAdmin } from "@/lib/supabase-admin";
 
 export type LlmJsonFormat =
   | { type: "json_object" }
@@ -8,10 +10,25 @@ export type LlmJsonResult = {
   text: string;
   model: string;
   provider: "openai" | "openrouter";
+  usage?: LlmTokenUsage;
+};
+
+type LlmProvider = LlmJsonResult["provider"];
+
+type LlmTokenUsage = {
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+  source: "api" | "estimate";
 };
 
 function asString(value: unknown) {
   return String(value ?? "").trim();
+}
+
+function asNumber(value: unknown, fallback = 0) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
 }
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -53,6 +70,62 @@ function extractOpenRouterOutputText(payload: unknown) {
     }
   }
   return "";
+}
+
+function normalizeApiUsage(input: {
+  promptTokens: unknown;
+  completionTokens: unknown;
+  totalTokens: unknown;
+}): LlmTokenUsage | undefined {
+  const promptTokens = Math.max(0, Math.round(asNumber(input.promptTokens, 0)));
+  const completionTokens = Math.max(0, Math.round(asNumber(input.completionTokens, 0)));
+  const explicitTotal = Math.max(0, Math.round(asNumber(input.totalTokens, 0)));
+  const totalTokens = explicitTotal || promptTokens + completionTokens;
+  if (promptTokens === 0 && completionTokens === 0 && totalTokens === 0) return undefined;
+  return {
+    promptTokens,
+    completionTokens,
+    totalTokens,
+    source: "api",
+  };
+}
+
+function extractOpenAiUsage(payload: unknown) {
+  const usage = asRecord(asRecord(payload).usage);
+  return normalizeApiUsage({
+    promptTokens: usage.input_tokens,
+    completionTokens: usage.output_tokens,
+    totalTokens: usage.total_tokens,
+  });
+}
+
+function extractOpenRouterUsage(payload: unknown) {
+  const usage = asRecord(asRecord(payload).usage);
+  return normalizeApiUsage({
+    promptTokens: usage.prompt_tokens,
+    completionTokens: usage.completion_tokens,
+    totalTokens: usage.total_tokens,
+  });
+}
+
+function estimateTokens(text: string) {
+  if (!text) return 0;
+  return Math.max(1, Math.ceil(text.length / 4));
+}
+
+function usageWithEstimates(input: {
+  prompt: string;
+  completion: string;
+  usage?: LlmTokenUsage;
+}): LlmTokenUsage {
+  const promptTokens = input.usage?.promptTokens || estimateTokens(input.prompt);
+  const completionTokens = input.usage?.completionTokens || estimateTokens(input.completion);
+  return {
+    promptTokens,
+    completionTokens,
+    totalTokens: input.usage?.totalTokens || promptTokens + completionTokens,
+    source: input.usage?.source || "estimate",
+  };
 }
 
 function openAiTextFormat(format: LlmJsonFormat) {
@@ -121,6 +194,112 @@ function resolveOpenRouterModel(task: LlmTask, overrideModel?: string) {
   return routineOpenRouterModel();
 }
 
+async function recordLlmJsonCall(input: {
+  task: LlmTask;
+  provider: LlmProvider;
+  model: string;
+  status: "completed" | "failed";
+  prompt: string;
+  completion: string;
+  usage?: LlmTokenUsage;
+  format: LlmJsonFormat;
+  maxOutputTokens: number;
+  reasoningEffort: string;
+  durationMs: number;
+  error: string;
+  metadata: Record<string, unknown>;
+}) {
+  const supabase = getSupabaseAdmin();
+  if (!supabase) return;
+
+  const usage = usageWithEstimates({
+    prompt: input.prompt,
+    completion: input.completion,
+    usage: input.usage,
+  });
+
+  try {
+    const { error } = await supabase.from("demanddev_llm_json_calls").insert({
+      id: randomUUID(),
+      task: input.task,
+      provider: input.provider,
+      model: input.model,
+      status: input.status,
+      format_type: input.format.type,
+      prompt_chars: input.prompt.length,
+      completion_chars: input.completion.length,
+      prompt_tokens: usage.promptTokens,
+      completion_tokens: usage.completionTokens,
+      total_tokens: usage.totalTokens,
+      token_source: usage.source,
+      max_output_tokens: input.maxOutputTokens,
+      reasoning_effort: input.reasoningEffort,
+      duration_ms: input.durationMs,
+      error: input.error,
+      metadata: input.metadata,
+    });
+    if (error) return;
+  } catch {
+    // Telemetry must never block an operator turn.
+  }
+}
+
+async function callAndRecordLlmJson(input: {
+  task: LlmTask;
+  provider: LlmProvider;
+  expectedModel: string;
+  prompt: string;
+  format: LlmJsonFormat;
+  maxOutputTokens: number;
+  reasoningEffort: string;
+  providerMode: string;
+  attempt: string;
+  execute: () => Promise<LlmJsonResult>;
+}) {
+  const startedAt = Date.now();
+  try {
+    const result = await input.execute();
+    await recordLlmJsonCall({
+      task: input.task,
+      provider: result.provider,
+      model: result.model || input.expectedModel,
+      status: "completed",
+      prompt: input.prompt,
+      completion: result.text,
+      usage: result.usage,
+      format: input.format,
+      maxOutputTokens: input.maxOutputTokens,
+      reasoningEffort: input.reasoningEffort,
+      durationMs: Date.now() - startedAt,
+      error: "",
+      metadata: {
+        providerMode: input.providerMode,
+        attempt: input.attempt,
+      },
+    });
+    return result;
+  } catch (error) {
+    await recordLlmJsonCall({
+      task: input.task,
+      provider: input.provider,
+      model: input.expectedModel,
+      status: "failed",
+      prompt: input.prompt,
+      completion: "",
+      format: input.format,
+      maxOutputTokens: input.maxOutputTokens,
+      reasoningEffort: input.reasoningEffort,
+      durationMs: Date.now() - startedAt,
+      error: error instanceof Error ? error.message.slice(0, 1200) : asString(error).slice(0, 1200),
+      metadata: {
+        providerMode: input.providerMode,
+        attempt: input.attempt,
+      },
+    });
+    throw error;
+  }
+}
+
 async function callOpenAiResponses(input: {
   task: LlmTask;
   prompt: string;
@@ -166,6 +345,7 @@ async function callOpenAiResponses(input: {
     text: extractOpenAiOutputText(payload),
     model,
     provider: "openai" as const,
+    usage: extractOpenAiUsage(payload),
   };
 }
 
@@ -211,6 +391,7 @@ async function callOpenRouterChat(input: {
     text: extractOpenRouterOutputText(payload),
     model,
     provider: "openrouter" as const,
+    usage: extractOpenRouterUsage(payload),
   };
 }
 
@@ -226,44 +407,98 @@ export async function generateJsonWithLlm(input: {
   const provider = asString(process.env.LLM_JSON_PROVIDER).toLowerCase();
   const reasoningEffort = input.reasoningEffort || "high";
   if (provider === "openrouter") {
-    return callOpenRouterChat({
+    return callAndRecordLlmJson({
       task: input.task,
-      prompt: input.prompt,
-      format: input.format,
-      maxOutputTokens: input.maxOutputTokens,
-      overrideModel: input.openRouterOverrideModel,
-    });
-  }
-  if (provider === "openai") {
-    return callOpenAiResponses({
-      task: input.task,
+      provider: "openrouter",
+      expectedModel: resolveOpenRouterModel(input.task, input.openRouterOverrideModel),
       prompt: input.prompt,
       format: input.format,
       maxOutputTokens: input.maxOutputTokens,
       reasoningEffort,
-      overrideModel: input.openAiOverrideModel,
+      providerMode: provider,
+      attempt: "primary",
+      execute: () =>
+        callOpenRouterChat({
+          task: input.task,
+          prompt: input.prompt,
+          format: input.format,
+          maxOutputTokens: input.maxOutputTokens,
+          overrideModel: input.openRouterOverrideModel,
+        }),
+    });
+  }
+  if (provider === "openai") {
+    return callAndRecordLlmJson({
+      task: input.task,
+      provider: "openai",
+      expectedModel: resolveLlmModel(input.task, {
+        prompt: input.prompt,
+        overrideModel: input.openAiOverrideModel,
+      }),
+      prompt: input.prompt,
+      format: input.format,
+      maxOutputTokens: input.maxOutputTokens,
+      reasoningEffort,
+      providerMode: provider,
+      attempt: "primary",
+      execute: () =>
+        callOpenAiResponses({
+          task: input.task,
+          prompt: input.prompt,
+          format: input.format,
+          maxOutputTokens: input.maxOutputTokens,
+          reasoningEffort,
+          overrideModel: input.openAiOverrideModel,
+        }),
     });
   }
 
   try {
-    return await callOpenAiResponses({
+    return await callAndRecordLlmJson({
       task: input.task,
+      provider: "openai",
+      expectedModel: resolveLlmModel(input.task, {
+        prompt: input.prompt,
+        overrideModel: input.openAiOverrideModel,
+      }),
       prompt: input.prompt,
       format: input.format,
       maxOutputTokens: input.maxOutputTokens,
       reasoningEffort,
-      overrideModel: input.openAiOverrideModel,
+      providerMode: provider || "auto",
+      attempt: "auto_openai",
+      execute: () =>
+        callOpenAiResponses({
+          task: input.task,
+          prompt: input.prompt,
+          format: input.format,
+          maxOutputTokens: input.maxOutputTokens,
+          reasoningEffort,
+          overrideModel: input.openAiOverrideModel,
+        }),
     });
   } catch (openAiError) {
     if (!asString(process.env.OPENROUTER_API_KEY)) {
       throw openAiError;
     }
-    return callOpenRouterChat({
+    return callAndRecordLlmJson({
       task: input.task,
+      provider: "openrouter",
+      expectedModel: resolveOpenRouterModel(input.task, input.openRouterOverrideModel),
       prompt: input.prompt,
       format: input.format,
       maxOutputTokens: input.maxOutputTokens,
-      overrideModel: input.openRouterOverrideModel,
+      reasoningEffort,
+      providerMode: provider || "auto",
+      attempt: "fallback_openrouter",
+      execute: () =>
+        callOpenRouterChat({
+          task: input.task,
+          prompt: input.prompt,
+          format: input.format,
+          maxOutputTokens: input.maxOutputTokens,
+          overrideModel: input.openRouterOverrideModel,
+        }),
     });
   }
 }

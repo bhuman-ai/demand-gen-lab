@@ -21,6 +21,11 @@ export async function POST(request: Request) {
       brandId: String(body.brandId ?? ""),
       message: String(body.message ?? ""),
       mode: String(body.mode ?? "") === "recommendation_only" ? "recommendation_only" : "default",
+      executionPolicy:
+        String(body.executionPolicy ?? "") === "autonomous" ? "autonomous" : "confirm_required",
+      autonomousToolAllowlist: Array.isArray(body.autonomousToolAllowlist)
+        ? body.autonomousToolAllowlist.map((entry) => String(entry ?? "").trim()).filter(Boolean)
+        : [],
       structuredAction:
         Object.keys(structuredActionRaw).length > 0
           ? {

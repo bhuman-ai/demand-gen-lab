@@ -2241,6 +2241,8 @@ export async function sendOperatorChat(input: {
   brandId?: string;
   message: string;
   mode?: "default" | "recommendation_only";
+  executionPolicy?: "confirm_required" | "autonomous";
+  autonomousToolAllowlist?: string[];
   structuredAction?: {
     toolName: OperatorToolName;
     input: Record<string, unknown>;
@@ -2249,7 +2251,7 @@ export async function sendOperatorChat(input: {
   const response = await fetch("/api/operator/chat", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(input),
+    body: JSON.stringify({ executionPolicy: "autonomous", ...input }),
   });
   const data = await readJson(response);
   return data as unknown as OperatorChatResponse;
@@ -2261,11 +2263,13 @@ export async function startOperatorChat(input: {
   brandId?: string;
   message: string;
   mode?: "default" | "recommendation_only";
+  executionPolicy?: "confirm_required" | "autonomous";
+  autonomousToolAllowlist?: string[];
 }) {
   const response = await fetch("/api/operator/chat", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ ...input, async: true }),
+    body: JSON.stringify({ executionPolicy: "autonomous", ...input, async: true }),
   });
   const data = await readJson(response);
   return data as unknown as OperatorChatStartResponse;

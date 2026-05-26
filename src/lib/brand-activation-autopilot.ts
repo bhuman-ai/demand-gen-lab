@@ -2287,14 +2287,46 @@ async function planActivationWithLlm(input: {
       } catch {
         relaxedParsed = {};
       }
+      let relaxedPlan = applyAutonomousEvidenceActions({
+        plan: normalizeActivationPlan(relaxedParsed, planningConfig.maxActionsPerTick),
+        snapshots: planningSnapshots,
+        config: planningConfig,
+      });
+      if (eligibleWork.length > 0 && relaxedPlan.actions.length === 0) {
+        const relaxedRetry = await generateJsonWithLlm({
+          task: "mission_operator",
+          prompt: [
+            prompt,
+            "",
+            "Your previous relaxed JSON response normalized to zero executable actions even though eligibleWork is non-empty.",
+            "Return at least one concrete backend action as plain JSON with summary and actions. Do not include markdown.",
+            "A status summary without an action is invalid. If the brand lacks a sender, provision or refresh the sender route. If a campaign is ready and idle, launch it. If a run is stuck, repair it.",
+          ].join("\n"),
+          format: { type: "json_object" },
+          maxOutputTokens: 1800,
+          reasoningEffort: asString(process.env.OPENAI_MISSION_REASONING_EFFORT) || "high",
+          openAiOverrideModel: asString(process.env.OPENAI_MODEL_MISSION_OPERATOR),
+          openRouterOverrideModel: asString(process.env.OPENROUTER_MODEL_MISSION_OPERATOR),
+        });
+        let relaxedRetryParsed: unknown = {};
+        try {
+          relaxedRetryParsed = JSON.parse(relaxedRetry.text || "{}");
+        } catch {
+          relaxedRetryParsed = {};
+        }
+        relaxedPlan = applyAutonomousEvidenceActions({
+          plan: normalizeActivationPlan(relaxedRetryParsed, planningConfig.maxActionsPerTick),
+          snapshots: planningSnapshots,
+          config: planningConfig,
+        });
+      }
+      if (eligibleWork.length > 0 && relaxedPlan.actions.length === 0) {
+        throw new Error("Relaxed mission operator plan returned zero executable actions for eligible work.");
+      }
       return {
         plan: mergeEvidenceFirstPlan({
           evidencePlan: evidenceFirstPlan,
-          llmPlan: applyAutonomousEvidenceActions({
-            plan: normalizeActivationPlan(relaxedParsed, planningConfig.maxActionsPerTick),
-            snapshots: planningSnapshots,
-            config: planningConfig,
-          }),
+          llmPlan: relaxedPlan,
           config: input.config,
         }),
         model:
@@ -2377,14 +2409,18 @@ async function planActivationWithLlm(input: {
         } catch {
           relaxedRetryParsed = {};
         }
+        const relaxedRetryPlan = applyAutonomousEvidenceActions({
+          plan: normalizeActivationPlan(relaxedRetryParsed, planningConfig.maxActionsPerTick),
+          snapshots: planningSnapshots,
+          config: planningConfig,
+        });
+        if (eligibleWork.length > 0 && relaxedRetryPlan.actions.length === 0) {
+          throw new Error("Relaxed retry plan returned zero executable actions for eligible work.");
+        }
         return {
           plan: mergeEvidenceFirstPlan({
             evidencePlan: evidenceFirstPlan,
-            llmPlan: applyAutonomousEvidenceActions({
-              plan: normalizeActivationPlan(relaxedRetryParsed, planningConfig.maxActionsPerTick),
-              snapshots: planningSnapshots,
-              config: planningConfig,
-            }),
+            llmPlan: relaxedRetryPlan,
             config: input.config,
           }),
           model:
@@ -2418,14 +2454,33 @@ async function planActivationWithLlm(input: {
     } catch {
       retryParsed = {};
     }
+    const retryPlan = applyAutonomousEvidenceActions({
+      plan: normalizeActivationPlan(retryParsed, planningConfig.maxActionsPerTick),
+      snapshots: planningSnapshots,
+      config: planningConfig,
+    });
+    if (eligibleWork.length > 0 && retryPlan.actions.length === 0) {
+      const fallbackPlan =
+        evidenceFirstPlan.actions.length > 0
+          ? evidenceFirstPlan
+          : buildAutonomousEvidenceOnlyPlan({
+              snapshots: input.snapshots,
+              config: input.config,
+              summary:
+                "LLM retry planning returned zero executable actions, so LastB2B used live evidence only.",
+            });
+      if (fallbackPlan.actions.length > 0) {
+        return {
+          plan: fallbackPlan,
+          model: "evidence:first_pass:llm_zero_action_retry",
+        };
+      }
+      throw new Error("Mission operator retry returned zero executable actions for eligible work.");
+    }
     return {
       plan: mergeEvidenceFirstPlan({
         evidencePlan: evidenceFirstPlan,
-        llmPlan: applyAutonomousEvidenceActions({
-          plan: normalizeActivationPlan(retryParsed, planningConfig.maxActionsPerTick),
-          snapshots: planningSnapshots,
-          config: planningConfig,
-        }),
+        llmPlan: retryPlan,
         config: input.config,
       }),
       model:

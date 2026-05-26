@@ -70,6 +70,12 @@ function asString(value: unknown) {
   return String(value ?? "").trim();
 }
 
+function hasConcreteMissingCapability(value: string) {
+  const normalized = value.trim().toLowerCase();
+  if (!normalized) return false;
+  return !["none", "no", "n/a", "na", "not applicable", "unknown", "no missing capability"].includes(normalized);
+}
+
 function asRecord(value: unknown): Record<string, unknown> {
   if (value && typeof value === "object" && !Array.isArray(value)) {
     return value as Record<string, unknown>;
@@ -226,6 +232,7 @@ function buildAgentPrompt(input: {
     "Write tools are your hands. If a write/send/launch/delete/provision/buy action is the right next move, choose the matching write tool and stop; the host will execute or request confirmation according to risk.",
     "After a tool failure, do not simply summarize the failure. Either try a materially different available tool, inspect the cause with a read tool, or prove that the remaining blocker is missing credentials, missing permissions, budget/risk approval, or a missing platform capability.",
     "When no existing tool can move the objective, call record_capability_gap with the missing capability and the tool contract the platform should add. This is better than asking the user to manually push a workflow forward.",
+    'Set missingCapability to "" unless there is a concrete platform capability missing. Never set missingCapability to "none", "unknown", or "n/a".',
     "Do not invent IDs, email bodies, replies, leads, sender state, domains, accounts, or metrics.",
     "Do not expose credentials or internal API secrets.",
     "Before every final answer, run an evidence self-check in the JSON fields. evidenceStatus=verified only when the observations directly prove the claim. Use inconclusive when evidence partially supports the answer but a key exact proof is missing. Use insufficient when you have not inspected enough live evidence.",
@@ -364,7 +371,7 @@ export async function runBrandAgentTurn(input: {
         evidenceNeeded: step.evidenceNeeded,
         avoidedWrongPaths: step.avoidedWrongPaths,
       };
-      if (!rawToolName && step.missingCapability && input.mode !== "recommendation_only") {
+      if (!rawToolName && hasConcreteMissingCapability(step.missingCapability) && input.mode !== "recommendation_only") {
         rawToolName = "record_capability_gap";
         rawToolInput = {
           brandId: input.brandId,

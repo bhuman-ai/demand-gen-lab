@@ -1000,10 +1000,10 @@ export default function InboxClient({ brand }: { brand: BrandRecord }) {
             <Link href={`/brands/${brand.id}/inbox/evals`}>Eval Lab</Link>
           </Button>
           <Button asChild variant="outline">
-            <Link href={`/brands/${brand.id}`}>Back to Brand Home</Link>
+            <Link href={`/brands/${brand.id}`}>Back to Brand GPT</Link>
           </Button>
           <Button asChild>
-            <Link href={`/brands/${brand.id}/campaigns`}>Go to Campaigns</Link>
+            <Link href={`/brands/${brand.id}/campaigns`}>Go to Outbound</Link>
           </Button>
         </div>
       </SectionPanel>

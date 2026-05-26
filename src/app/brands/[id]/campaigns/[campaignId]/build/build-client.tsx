@@ -192,7 +192,7 @@ export default function BuildClient({ brandId, campaignId }: { brandId: string; 
               Reload
             </Button>
             <Button asChild type="button" variant="outline">
-              <Link href={`/brands/${brandId}/campaigns`}>Back to Campaigns</Link>
+              <Link href={`/brands/${brandId}/campaigns`}>Back to Outbound</Link>
             </Button>
           </CardContent>
         </Card>

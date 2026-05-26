@@ -69,7 +69,7 @@ function friendlyRunLaunchError(error: unknown) {
     return "Run did not start: platform prospect sourcing credentials are missing in this deployment.";
   }
   if (message.includes("Experiment already has an active run")) {
-    return "This experiment already has an active run. Cancel it to restart, or wait for it to finish.";
+    return "This test already has an active run. Cancel it to restart, or wait for it to finish.";
   }
   return message;
 }
@@ -294,10 +294,10 @@ export default function ExperimentsClient({ brandId, campaignId }: { brandId: st
                 Reload
               </Button>
               <Button asChild type="button" variant="outline">
-                <Link href={`/brands/${brandId}/campaigns`}>Back to Campaigns</Link>
+                <Link href={`/brands/${brandId}/campaigns`}>Back to Outbound</Link>
               </Button>
               <Button asChild type="button" variant="ghost">
-                <Link href={`/brands/${brandId}`}>Back to Brand Home</Link>
+                <Link href={`/brands/${brandId}`}>Back to Brand GPT</Link>
               </Button>
             </CardContent>
           </Card>
@@ -483,7 +483,7 @@ export default function ExperimentsClient({ brandId, campaignId }: { brandId: st
             <Card key={experiment.id}>
               <CardHeader className="space-y-2">
                 <div className="flex items-center justify-between gap-2">
-                  <CardTitle className="text-base">Experiment {index + 1}</CardTitle>
+                  <CardTitle className="text-base">Test {index + 1}</CardTitle>
                   <Badge variant={experiment.status === "scaling" ? "success" : "muted"}>{experiment.status}</Badge>
                 </div>
               </CardHeader>
@@ -908,7 +908,7 @@ export default function ExperimentsClient({ brandId, campaignId }: { brandId: st
             <CardHeader>
               <CardTitle className="text-base">Start Here</CardTitle>
               <CardDescription>
-                Experiments turn hypotheses into runnable variants. Launch runs only after you have delivery and reply accounts configured.
+                Tests turn hypotheses into runnable variants. Launch runs only after you have delivery and reply accounts configured.
               </CardDescription>
             </CardHeader>
             <CardContent className="grid gap-3">
@@ -949,7 +949,7 @@ export default function ExperimentsClient({ brandId, campaignId }: { brandId: st
       <Card>
         <CardContent className="flex flex-wrap gap-2 py-4">
           <Button type="button" onClick={() => void save(false)} disabled={saving}>
-            {saving ? "Saving..." : "Save Experiments"}
+            {saving ? "Saving..." : "Save Tests"}
           </Button>
           <Button type="button" variant="outline" onClick={() => void save(true)} disabled={saving || !experiments.length}>
             Save & Continue

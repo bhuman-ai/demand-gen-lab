@@ -253,7 +253,7 @@ export default function WorkspaceOverview() {
       detail: currentBrand ? currentBrand.brand.name : "None picked",
     },
     {
-      label: "Leads",
+      label: "Audience",
       value: totals.leads,
       detail: totals.leads ? "Loaded" : "Empty",
     },
@@ -268,7 +268,7 @@ export default function WorkspaceOverview() {
       detail: totals.liveExperiments ? "Ready or running" : "Quiet",
     },
     {
-      label: "Campaigns live",
+      label: "Outbound live",
       value: totals.liveCampaigns,
       detail: totals.liveCampaigns ? "Sending now" : "None live",
     },
@@ -278,7 +278,7 @@ export default function WorkspaceOverview() {
     return (
       <EmptyState
         title="No brands yet."
-        description="Create a brand first. After that, this page becomes the quick place to check replies, tests, campaigns, and leads."
+        description="Create a brand first. After that, this page becomes the quick place to check replies, tests, outbound, and audience."
         actions={
           <Button asChild>
             <Link href="/brands/new">
@@ -386,7 +386,7 @@ export default function WorkspaceOverview() {
 
                   <div className="grid grid-cols-2 gap-x-4 gap-y-3 text-sm">
                     <div>
-                      <div className="text-[12px] text-[color:var(--muted-foreground)]">Leads</div>
+                      <div className="text-[12px] text-[color:var(--muted-foreground)]">Audience</div>
                       <div className="mt-1 font-medium text-[color:var(--foreground)]">{leads}</div>
                     </div>
                     <div>
@@ -398,7 +398,7 @@ export default function WorkspaceOverview() {
                       <div className="mt-1 font-medium text-[color:var(--foreground)]">{liveExperiments}</div>
                     </div>
                     <div>
-                      <div className="text-[12px] text-[color:var(--muted-foreground)]">Campaigns live</div>
+                      <div className="text-[12px] text-[color:var(--muted-foreground)]">Outbound live</div>
                       <div className="mt-1 font-medium text-[color:var(--foreground)]">{liveCampaigns}</div>
                     </div>
                   </div>
@@ -416,7 +416,7 @@ export default function WorkspaceOverview() {
                     <Button size="sm" variant="outline" asChild>
                       <Link href={`/brands/${entry.brand.id}/campaigns`}>
                         <FolderKanban className="h-4 w-4" />
-                        Campaigns
+                        Outbound
                       </Link>
                     </Button>
                   </div>

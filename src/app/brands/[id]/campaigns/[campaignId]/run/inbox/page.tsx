@@ -9,7 +9,7 @@ export default async function RunInboxReplacedPage({
   return (
     <RouteReplacedCard
       title="Run inbox replaced"
-      description="Inbox handling is now consolidated in Experiment/Campaign run visibility and Brand Inbox."
+      description="Inbox handling is now consolidated in Test/Outbound run visibility and Brand Inbox."
       brandId={id}
     />
   );

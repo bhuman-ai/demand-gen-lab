@@ -41,7 +41,7 @@ export default function MissionDetailClient({
       const next = await fetchMissionDetail(brandId, missionId);
       setDetail(next);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load mission");
+      setError(err instanceof Error ? err.message : "Failed to load goal");
     } finally {
       setLoading(false);
     }
@@ -68,14 +68,14 @@ export default function MissionDetailClient({
   return (
     <div className="space-y-7">
       <PageIntro
-        title="Mission control"
+        title="Goal control"
         description="One place to see what the AI operator is doing, why, and what might block it."
         actions={
           <div className="flex gap-2">
             <Button asChild variant="outline">
               <Link href={`/brands/${brandId}/missions`}>
                 <ArrowLeft className="h-4 w-4" />
-                Missions
+                Goals
               </Link>
             </Button>
             <Button type="button" variant="outline" onClick={() => void load()} disabled={loading}>
@@ -87,7 +87,7 @@ export default function MissionDetailClient({
       />
 
       {error ? <div className="text-sm text-[color:var(--danger)]">{error}</div> : null}
-      {loading && !mission ? <div className="text-sm text-[color:var(--muted-foreground)]">Loading mission...</div> : null}
+      {loading && !mission ? <div className="text-sm text-[color:var(--muted-foreground)]">Loading goal...</div> : null}
 
       {mission ? (
         <>
@@ -98,7 +98,7 @@ export default function MissionDetailClient({
                   {
                     label: "Status",
                     value: statusLabel(mission.status),
-                    detail: mission.lastError || "Mission state is current.",
+                    detail: mission.lastError || "Goal state is current.",
                   },
                   {
                     label: "Deliverability",

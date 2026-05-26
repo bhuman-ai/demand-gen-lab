@@ -9,7 +9,7 @@ export default async function HypothesesReplacedPage({
   return (
     <RouteReplacedCard
       title="Hypotheses step replaced"
-      description="Use the Experiments workspace. Hypothesis/variant jargon has been replaced with a single experiment-first flow."
+      description="Use the Tests workspace. Hypothesis/variant jargon has been replaced with a single test-first flow."
       brandId={id}
     />
   );

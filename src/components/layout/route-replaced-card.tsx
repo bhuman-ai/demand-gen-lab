@@ -32,10 +32,10 @@ export default function RouteReplacedCard({
       </CardHeader>
       <CardContent className="flex flex-wrap gap-2">
         <Button asChild>
-          <Link href={`/brands/${brandId}/experiments`}>Open Experiments</Link>
+          <Link href={`/brands/${brandId}/experiments`}>Open Tests</Link>
         </Button>
         <Button asChild variant="outline">
-          <Link href={`/brands/${brandId}/campaigns`}>Open Campaigns</Link>
+          <Link href={`/brands/${brandId}/campaigns`}>Open Outbound</Link>
         </Button>
       </CardContent>
     </Card>

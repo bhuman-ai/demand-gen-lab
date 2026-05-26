@@ -9,7 +9,7 @@ export default async function RunOverviewReplacedPage({
   return (
     <RouteReplacedCard
       title="Run overview replaced"
-      description="Open the Experiment or Campaign page for live run visibility, logs, and controls."
+      description="Open the Test or Outbound page for live run visibility, logs, and controls."
       brandId={id}
     />
   );

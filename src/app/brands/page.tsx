@@ -57,7 +57,7 @@ export default function BrandsPage() {
       <PageIntro
         eyebrow="Brand directory"
         title="Every brand, sequence, and operating note in one cabinet."
-        description="Choose a brand to open campaigns, network, leads, inbox, and experiments without losing the thread between them."
+        description="Choose a brand to open Brand GPT, inbox, audience, delivery, outbound, and tests without losing the thread between them."
         actions={
           <>
             <Button asChild>
@@ -104,7 +104,7 @@ export default function BrandsPage() {
 
       <SectionPanel
         title="Brands"
-        description="Open the working brand, jump directly to campaigns, or remove a workspace that should not live here anymore."
+        description="Open the working brand, inspect outbound, or remove a workspace that should not live here anymore."
       >
         <div className="grid gap-3">
           {filtered.map((brand) => (
@@ -125,7 +125,7 @@ export default function BrandsPage() {
                   <Link href={`/brands/${brand.id}`}>Open</Link>
                 </Button>
                 <Button size="sm" variant="outline" asChild>
-                  <Link href={`/brands/${brand.id}/campaigns`}>Campaigns</Link>
+                  <Link href={`/brands/${brand.id}/campaigns`}>Outbound</Link>
                 </Button>
                 <Button
                   size="sm"

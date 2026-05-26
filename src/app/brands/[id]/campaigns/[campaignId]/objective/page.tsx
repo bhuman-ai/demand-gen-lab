@@ -9,7 +9,7 @@ export default async function ObjectiveReplacedPage({
   return (
     <RouteReplacedCard
       title="Objective step replaced"
-      description="Objective setup now lives inside each Experiment page."
+      description="Objective setup now lives inside each Test page."
       brandId={id}
     />
   );

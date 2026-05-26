@@ -66,7 +66,7 @@ export default function LeadsClient({ brand }: { brand: BrandRecord }) {
   return (
     <div className="space-y-8">
       <PageIntro
-        title="Leads"
+        title="Audience"
         aside={
           <StatLedger
             items={[
@@ -78,12 +78,12 @@ export default function LeadsClient({ brand }: { brand: BrandRecord }) {
               {
                 label: "Qualified",
                 value: formatCount(qualified),
-                detail: qualified ? "Leads already marked as viable." : "No lead has been qualified yet.",
+                detail: qualified ? "People already marked as viable." : "No person has been qualified yet.",
               },
               {
                 label: "Open",
                 value: formatCount(leads.filter((lead) => lead.status !== "closed").length),
-                detail: "Leads still in motion.",
+                detail: "People still in motion.",
               },
             ]}
           />
@@ -92,15 +92,15 @@ export default function LeadsClient({ brand }: { brand: BrandRecord }) {
 
       {!leads.length ? (
         <EmptyState
-          title="No leads yet."
-          description="This table is your lead pool. Add leads manually or start campaign work that will create and update the record."
+          title="No audience yet."
+          description="This is the people pool Brand GPT can work from. Add people manually or let outbound work create and update the record."
           actions={
             <>
             <Button asChild size="sm" variant="outline">
-              <Link href={`/brands/${brand.id}/campaigns`}>Open Campaigns</Link>
+              <Link href={`/brands/${brand.id}/campaigns`}>Open Outbound</Link>
             </Button>
             <Button asChild size="sm" variant="outline">
-              <Link href="/settings/outreach">Outreach Settings</Link>
+              <Link href="/settings/outreach">Open Settings</Link>
             </Button>
             </>
           }
@@ -141,14 +141,14 @@ export default function LeadsClient({ brand }: { brand: BrandRecord }) {
               }}
               disabled={saving}
             >
-              Add Lead
+              Add person
             </Button>
           </div>
         </div>
       </SectionPanel>
 
       <SectionPanel
-        title="Lead register"
+        title="Audience register"
         description="Filter the pool, review status at a glance, and keep the operating record current."
         actions={<Input placeholder="Filter leads" value={query} onChange={(event) => setQuery(event.target.value)} className="w-[18rem]" />}
       >
@@ -188,10 +188,10 @@ export default function LeadsClient({ brand }: { brand: BrandRecord }) {
       <SectionPanel>
         <div className="flex flex-wrap gap-2">
           <Button asChild variant="outline">
-            <Link href={`/brands/${brand.id}`}>Back to Brand Home</Link>
+            <Link href={`/brands/${brand.id}`}>Back to Brand GPT</Link>
           </Button>
           <Button asChild>
-            <Link href={`/brands/${brand.id}/campaigns`}>Go to Campaigns</Link>
+            <Link href={`/brands/${brand.id}/campaigns`}>Go to Outbound</Link>
           </Button>
         </div>
       </SectionPanel>

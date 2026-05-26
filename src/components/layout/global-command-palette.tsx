@@ -14,7 +14,7 @@ import { Input } from "@/components/ui/input";
 
 type SearchEntity = {
   id: string;
-  group: "Experiments" | "Campaigns" | "Leads" | "Inbox";
+  group: "Tests" | "Outbound" | "Audience" | "Inbox";
   title: string;
   subtitle: string;
   href: string;
@@ -132,7 +132,7 @@ export default function GlobalCommandPalette({ activeBrandId }: { activeBrandId:
 
         const experimentEntities: SearchEntity[] = experiments.map((item) => ({
           id: `experiment:${item.id}`,
-          group: "Experiments",
+          group: "Tests",
           title: item.name,
           subtitle: `${item.status} · ${item.audience || "No audience"}`,
           href: `/brands/${activeBrandId}/experiments/${item.id}`,
@@ -141,7 +141,7 @@ export default function GlobalCommandPalette({ activeBrandId }: { activeBrandId:
 
         const campaignEntities: SearchEntity[] = campaigns.map((item) => ({
           id: `campaign:${item.id}`,
-          group: "Campaigns",
+          group: "Outbound",
           title: item.name,
           subtitle: `${item.status} · Replies ${item.metricsSummary.replies}`,
           href: `/brands/${activeBrandId}/campaigns/${item.id}`,
@@ -150,7 +150,7 @@ export default function GlobalCommandPalette({ activeBrandId }: { activeBrandId:
 
         const leadEntities: SearchEntity[] = (brand.leads || []).map((lead) => ({
           id: `lead:${lead.id}`,
-          group: "Leads",
+          group: "Audience",
           title: lead.name || "Unnamed lead",
           subtitle: `${lead.channel} · ${lead.status}`,
           href: `/brands/${activeBrandId}/leads`,
@@ -184,9 +184,9 @@ export default function GlobalCommandPalette({ activeBrandId }: { activeBrandId:
 
   const grouped = useMemo(() => {
     const map: Record<SearchEntity["group"], SearchEntity[]> = {
-      Experiments: [],
-      Campaigns: [],
-      Leads: [],
+      Tests: [],
+      Outbound: [],
+      Audience: [],
       Inbox: [],
     };
     for (const item of filtered) map[item.group].push(item);
@@ -229,7 +229,7 @@ export default function GlobalCommandPalette({ activeBrandId }: { activeBrandId:
                   setQuery(event.target.value);
                   setSelectedIndex(0);
                 }}
-                placeholder="Search experiments, campaigns, leads, inbox"
+                placeholder="Search tests, outbound, audience, inbox"
               />
             </div>
 
@@ -240,7 +240,7 @@ export default function GlobalCommandPalette({ activeBrandId }: { activeBrandId:
                 <div className="p-2 text-sm text-[color:var(--muted-foreground)]">No results.</div>
               ) : null}
 
-              {(["Experiments", "Campaigns", "Leads", "Inbox"] as const).map((group) => {
+              {(["Tests", "Outbound", "Audience", "Inbox"] as const).map((group) => {
                 const rows = grouped[group];
                 if (!rows.length) return null;
                 return (

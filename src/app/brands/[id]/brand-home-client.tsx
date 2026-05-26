@@ -7,7 +7,6 @@ import {
   Activity,
   AlertCircle,
   ChevronDown,
-  ChevronRight,
   Clock3,
   ExternalLink,
   FolderKanban,
@@ -23,6 +22,7 @@ import OperatorPanel from "@/components/operator/operator-panel";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
+import { OperatorDrilldownLink, OperatorStatusStrip } from "@/components/ui/operator-workspace";
 import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import {
@@ -146,32 +146,21 @@ function AgentActivityFeed({ brandId }: { brandId: string }) {
   const detail = error || activity?.detail || "Ask Brand GPT something to create the first activity.";
 
   return (
-    <details className="mx-auto mt-3 w-full max-w-[52rem] rounded-[14px] border border-[color:var(--border)] bg-[color:var(--surface)] px-4 py-3">
-      <summary className="flex cursor-pointer list-none items-center justify-between gap-3 [&::-webkit-details-marker]:hidden">
-        <span className="flex min-w-0 items-start gap-3">
-          <span className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[color:var(--surface-muted)] text-[color:var(--muted-foreground)]">
-            {state === "failed" ? <AlertCircle className="h-4 w-4" /> : <Activity className="h-4 w-4" />}
+    <OperatorStatusStrip
+      icon={state === "failed" ? <AlertCircle className="h-4 w-4" /> : <Activity className="h-4 w-4" />}
+      badge={activityStateLabel(state)}
+      badgeVariant={activityBadgeVariant(state)}
+      title={headline}
+      detail={detail}
+      meta={
+        updatedLabel ? (
+          <span className="hidden items-center gap-1 sm:inline-flex">
+            <Clock3 className="h-3.5 w-3.5" />
+            {updatedLabel}
           </span>
-          <span className="min-w-0">
-            <span className="flex flex-wrap items-center gap-2">
-              <Badge variant={activityBadgeVariant(state)}>{activityStateLabel(state)}</Badge>
-              <span className="text-sm font-medium text-[color:var(--foreground)]">{headline}</span>
-            </span>
-            <span className="mt-1 block text-xs leading-5 text-[color:var(--muted-foreground)]">{detail}</span>
-          </span>
-        </span>
-        <span className="flex shrink-0 items-center gap-2 text-xs text-[color:var(--muted-foreground)]">
-          {updatedLabel ? (
-            <span className="hidden items-center gap-1 sm:inline-flex">
-              <Clock3 className="h-3.5 w-3.5" />
-              {updatedLabel}
-            </span>
-          ) : null}
-          <ChevronDown className="h-4 w-4" />
-        </span>
-      </summary>
-
-      <div className="mt-3 border-t border-[color:var(--border)] pt-3">
+        ) : null
+      }
+    >
         {activity?.items.length ? (
           <ol className="grid gap-3">
             {activity.items.map((item) => (
@@ -195,8 +184,7 @@ function AgentActivityFeed({ brandId }: { brandId: string }) {
             No activity has been recorded for this brand yet.
           </div>
         )}
-      </div>
-    </details>
+    </OperatorStatusStrip>
   );
 }
 
@@ -308,8 +296,8 @@ export default function BrandHomeClient({ brandId }: { brandId: string }) {
 
   const workLinks = [
     {
-      label: "Mission control",
-      detail: latestMission ? formatStatus(latestMission.status) : "Start or review campaign work",
+      label: "Goals",
+      detail: latestMission ? formatStatus(latestMission.status) : "Tell Brand GPT what outcome to chase",
       href: missionHref(brandId, latestMission),
       icon: Sparkles,
     },
@@ -320,7 +308,7 @@ export default function BrandHomeClient({ brandId }: { brandId: string }) {
       icon: Inbox,
     },
     {
-      label: "Leads",
+      label: "Audience",
       detail: `${formatCount(brand?.leads?.length ?? 0)} known leads`,
       href: `/brands/${brandId}/leads`,
       icon: Mail,
@@ -329,13 +317,13 @@ export default function BrandHomeClient({ brandId }: { brandId: string }) {
 
   const secondaryLinks = [
     {
-      label: "Campaigns",
+      label: "Outbound",
       detail: `${formatCount(campaigns.length)} promoted`,
       href: `/brands/${brandId}/campaigns`,
       icon: FolderKanban,
     },
     {
-      label: "Experiments",
+      label: "Tests",
       detail: `${formatCount(activeExperiments.length)} active`,
       href: `/brands/${brandId}/experiments`,
       icon: Target,
@@ -462,22 +450,14 @@ export default function BrandHomeClient({ brandId }: { brandId: string }) {
               <div className="grid content-start gap-3">
                 <div className="grid gap-2">
                   {allLinks.map((item) => {
-                    const Icon = item.icon;
                     return (
-                      <Link
+                      <OperatorDrilldownLink
                         key={item.label}
                         href={item.href}
-                        className="flex items-center justify-between gap-3 rounded-[10px] border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-3 text-sm transition-colors hover:bg-[color:var(--surface-hover)]"
-                      >
-                        <span className="flex min-w-0 items-center gap-3">
-                          <Icon className="h-4 w-4 shrink-0 text-[color:var(--muted-foreground)]" />
-                          <span className="min-w-0">
-                            <span className="block font-medium text-[color:var(--foreground)]">{item.label}</span>
-                            <span className="block truncate text-xs text-[color:var(--muted-foreground)]">{item.detail}</span>
-                          </span>
-                        </span>
-                        <ChevronRight className="h-4 w-4 shrink-0 text-[color:var(--muted-foreground)]" />
-                      </Link>
+                        icon={item.icon}
+                        label={item.label}
+                        detail={item.detail}
+                      />
                     );
                   })}
                 </div>

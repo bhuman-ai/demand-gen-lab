@@ -104,13 +104,13 @@ function nextActivityForItem(item: ExperimentListItem) {
 
   if (item.status === "Promoted") {
     return {
-      primary: "Experiment was promoted into a campaign.",
+      primary: "Test was promoted into outbound.",
       secondary: `Last activity ${item.lastActivityLabel}`,
     };
   }
 
   return {
-    primary: "Open the experiment to inspect the latest state.",
+    primary: "Open the test to inspect the latest state.",
     secondary: `Last activity ${item.lastActivityLabel}`,
   };
 }
@@ -129,7 +129,7 @@ function launchNoticeForItem(item: ExperimentListItem | null, loading: boolean) 
     return {
       tone:
         "border-[color:var(--border)] bg-[color:var(--surface-muted)] text-[color:var(--foreground)]",
-      title: "Checking launched experiment",
+      title: "Checking launched test",
       detail: "Refreshing the latest run status.",
     };
   }
@@ -142,7 +142,7 @@ function launchNoticeForItem(item: ExperimentListItem | null, loading: boolean) 
     return {
       tone:
         "border-[color:var(--success-border)] bg-[color:var(--success-soft)] text-[color:var(--success)]",
-      title: "Experiment launched and is now sending.",
+      title: "Test launched and is now sending.",
       detail: "The list below reflects its latest live state.",
     };
   }
@@ -151,7 +151,7 @@ function launchNoticeForItem(item: ExperimentListItem | null, loading: boolean) 
     return {
       tone:
         "border-[color:var(--accent-border)] bg-[color:var(--accent-soft)] text-[color:var(--accent)]",
-      title: "Experiment launched and is sourcing prospects.",
+      title: "Test launched and is sourcing prospects.",
       detail: "The list below reflects its latest live state.",
     };
   }
@@ -161,7 +161,7 @@ function launchNoticeForItem(item: ExperimentListItem | null, loading: boolean) 
       tone:
         "border-[color:var(--danger-border)] bg-[color:var(--danger-soft)] text-[color:var(--danger)]",
       title: "Launch was submitted, but the latest status is blocked.",
-      detail: "Open the experiment to inspect the run and fix what stopped it.",
+      detail: "Open the test to inspect the run and fix what stopped it.",
     };
   }
 
@@ -169,15 +169,15 @@ function launchNoticeForItem(item: ExperimentListItem | null, loading: boolean) 
     return {
       tone:
         "border-[color:var(--warning-border)] bg-[color:var(--warning-soft)] text-[color:var(--warning)]",
-      title: "Experiment launched, but it is currently paused.",
-      detail: "Open the experiment to review the run before resuming it.",
+      title: "Test launched, but it is currently paused.",
+      detail: "Open the test to review the run before resuming it.",
     };
   }
 
   return {
     tone:
       "border-[color:var(--border-strong)] bg-[color:var(--surface-muted)] text-[color:var(--foreground)]",
-    title: `Experiment launched. Latest status: ${item.status}.`,
+    title: `Test launched. Latest status: ${item.status}.`,
     detail: "The list below reflects the current state after refresh.",
   };
 }
@@ -219,7 +219,7 @@ export default function ExperimentsClient({
     void refresh()
       .catch((err: unknown) => {
         if (!mounted) return;
-        setError(err instanceof Error ? err.message : "Failed to load experiments");
+        setError(err instanceof Error ? err.message : "Failed to load tests");
       })
       .finally(() => {
         if (mounted) setLoading(false);
@@ -285,7 +285,7 @@ export default function ExperimentsClient({
       });
       router.push(`/brands/${brandId}/experiments/${duplicate.id}/setup`);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to duplicate experiment");
+      setError(err instanceof Error ? err.message : "Failed to duplicate test");
     } finally {
       setDuplicatingId("");
     }
@@ -301,7 +301,7 @@ export default function ExperimentsClient({
       setDeleteTarget(null);
       await refresh();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to delete experiment");
+      setError(err instanceof Error ? err.message : "Failed to delete test");
     } finally {
       setDeletingId("");
     }
@@ -357,7 +357,7 @@ export default function ExperimentsClient({
   return (
     <div className="space-y-8">
       {error ? <div className="text-sm text-[color:var(--danger)]">{error}</div> : null}
-      {loading ? <div className="text-sm text-[color:var(--muted-foreground)]">Loading experiments...</div> : null}
+      {loading ? <div className="text-sm text-[color:var(--muted-foreground)]">Loading tests...</div> : null}
       {launchNotice ? (
         <div className={cn("rounded-[12px] border px-4 py-3 text-sm", launchNotice.tone)}>
           <div className="font-medium">{launchNotice.title}</div>
@@ -366,8 +366,8 @@ export default function ExperimentsClient({
       ) : null}
 
       <PageIntro
-        title="Experiments"
-        description="Test new offers and audiences before promoting them to campaigns."
+        title="Tests"
+        description="Try new offers and audiences before Brand GPT promotes winners into outbound."
         actions={
           <>
             <Button
@@ -379,7 +379,7 @@ export default function ExperimentsClient({
               }}
             >
               <Plus className="h-4 w-4" />
-              {creating ? "Creating..." : "Create experiment"}
+              {creating ? "Creating..." : "Create test"}
             </Button>
             <Button type="button" variant="outline" onClick={() => setSuggestionsOpen(true)}>
               View suggestions
@@ -430,7 +430,7 @@ export default function ExperimentsClient({
               <Input
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
-                placeholder="Search experiments"
+                placeholder="Search tests"
                 className="pl-9"
               />
             </div>
@@ -612,7 +612,7 @@ export default function ExperimentsClient({
             </TableShell>
           ) : (
             <EmptyState
-              title="No experiments match this filter."
+              title="No tests match this filter."
               description="Adjust the status filter or search query, or create a new test for this brand."
             />
           )}
@@ -621,8 +621,8 @@ export default function ExperimentsClient({
 
       <SettingsModal
         open={suggestionsOpen}
-        title="Experiment lab"
-        description="Pressure-test experiment ideas or outreach-flow angles before you build from scratch."
+        title="Test lab"
+        description="Pressure-test ideas or outreach-flow angles before you build from scratch."
         panelClassName="max-w-7xl"
         bodyClassName="p-0"
         onOpenChange={setSuggestionsOpen}
@@ -633,7 +633,7 @@ export default function ExperimentsClient({
       <CreateExperimentModal
         brandId={brandId}
         open={createOpen}
-        defaultName={`Experiment ${items.length + 1}`}
+        defaultName={`Test ${items.length + 1}`}
         onOpenChange={(open) => {
           setCreateOpen(open);
           if (!open) setCreating(false);
@@ -647,11 +647,11 @@ export default function ExperimentsClient({
 
       <SettingsModal
         open={Boolean(deleteTarget)}
-        title="Delete experiment?"
+        title="Delete test?"
         description={
           deleteTarget
             ? `Delete "${deleteTarget.name}" and all of its run history?`
-            : "Delete this experiment and all of its run history?"
+            : "Delete this test and all of its run history?"
         }
         onOpenChange={(open) => {
           if (!open && !deletingId) {
@@ -682,7 +682,7 @@ export default function ExperimentsClient({
         }
       >
         <div className="text-sm text-[color:var(--muted-foreground)]">
-          This removes the experiment, its runs, and the related run history from this brand.
+          This removes the test, its runs, and the related run history from this brand.
         </div>
       </SettingsModal>
     </div>

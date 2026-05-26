@@ -1,28 +1,16 @@
 # Design System
 
 ## Typography Scale
-Use existing repo typography rhythm first. If none exists, keep a tight hierarchy with distinct title, section, and body sizes.
+Use the existing loaded fonts: Bricolage Grotesque for sparse brand/display moments, Instrument Sans for interface copy, and IBM Plex Mono only for tool ids, timestamps, and technical evidence. Founder-facing pages should use restrained type: compact top bars, readable chat prose, small status labels, and no oversized dashboard hero headings inside the app.
 ## Color Variables
-Use existing semantic tokens only for status communication in the social account pool. Success states use existing success foreground and border tokens, warning or incomplete states use existing muted foreground plus border tokens, and error states use existing danger tokens. Do not introduce new colors or gradients for this feature.
-## Color Variables
-Use existing semantic tokens only for status communication in the social account pool. Success states use existing success foreground/border tokens, warning or incomplete states use existing muted foreground plus border tokens, and error states use existing danger tokens. Do not introduce new colors or gradients for this feature.
+Use existing semantic tokens only: background, surface, surface-muted, surface-hover, sidebar, foreground, muted-foreground, border, border-strong, accent, success, warning, and danger. The product should read as warm neutral and focused, not purple/blue AI SaaS. Color communicates state and action priority, not decoration.
 ## Spacing System
-Preserve the current panel rhythm and control spacing already used in the social account pool. Status copy should fit within the existing card layout with no new spacing scale. Prefer tightening copy before changing layout spacing.
-## Spacing System
-Preserve the current panel rhythm and control spacing already used in the social account pool. Status copy should fit within the existing card layout with no new spacing scale. Prefer tightening copy before changing layout spacing.
+Default app rhythm is dense but calm: 14px top bars, 8-12px control gaps, 16px panel padding, and 52rem chat/evidence width unless a drilldown needs tables. Avoid stacking page intro, stat ledger, and section panels above the user's main task. Prefer one primary work column with secondary detail hidden in Details or drilldowns.
 ## Border & Shadow Logic
-Keep the current card, modal, and inline alert border treatment. This fix should clarify state through copy, icon choice, and deterministic row selection rather than adding stronger shadows or new elevation layers.
-## Border & Shadow Logic
-Keep the current card, modal, and inline alert border treatment. This fix should clarify state through copy, icon choice, and deterministic row selection rather than adding stronger shadows or new elevation layers.
+Use borders and flat surfaces as the default. Shadows are reserved for overlays, floating composers, and popovers. Avoid nested cards and decorative elevation. Chat assistant text should be unboxed prose; user prompts can use one muted rounded bubble. Evidence/activity rows use thin borders and disclosure, not heavy cards.
 ## Component Reuse Rules
-Reuse the existing account row, Button, Input, Label, Textarea, Select, and inline status icon patterns already present in the surface. Do not add new status badge components for this fix unless the existing row cannot express the state clearly.
-## Component Reuse Rules
-Reuse the existing account row, Button, Input, Label, Textarea, Select, and inline status icon patterns already present in the surface. Do not add new status badge components for this fix unless the existing row cannot express the state clearly.
+Prefer shared primitives before page-specific chrome: AppShell navigation, BrandSwitcher, OperatorPanel, Button, Badge, Input, Textarea, Select, PageIntro, SectionPanel, EmptyState, and the operator-workspace primitives. New pages should use operator workspace primitives for status strips, drilldown links, evidence/activity rows, and simple page headers instead of inventing cards or local nav.
 ## Interaction States
-When an OAuth return is processing, show a loading message tied to the affected account and avoid presenting conflicting idle actions. Once processing completes, the selected row should reflect the final state immediately. Keep existing hover, selected, focus, and disabled patterns for rows and buttons.
-## Interaction States
-When an OAuth return is processing, show a loading message tied to the affected account and avoid presenting conflicting idle actions. Once processing completes, the selected row should reflect the final state immediately. Keep existing hover, selected, focus, and disabled patterns for rows and buttons.
+Every important state must be written in plain English: working, needs attention, blocked, waiting, completed, failed. Loading should preserve the surrounding shape. Errors should say what failed and what the agent/user can do next. Advanced/debug data should be accessible through disclosure, not shown as default body copy.
 ## Accessibility Defaults
-Status text must be understandable without color alone. Pair icons with explicit labels such as Connected, Needs sign-in, Syncing, or No platform selected. Preserve button labels that describe the next action in plain language.
-## Accessibility Defaults
-Status text must be understandable without color alone. Pair icons with explicit labels such as Connected, Needs sign-in, Syncing, or No platform selected. Preserve button labels that describe the next action in plain language.
+Use visible text labels for primary controls, not icon-only actions. Status must not depend on color alone. Interactive rows need clear hover/focus states. Details disclosures must have meaningful summary text. Keep keyboard focus visible with the existing ring token. Avoid truncating critical brand, blocker, or action text without another way to read it.

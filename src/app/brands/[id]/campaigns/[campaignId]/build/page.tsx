@@ -9,7 +9,7 @@ export default async function CampaignBuildReplacedPage({
   return (
     <RouteReplacedCard
       title="Build route replaced"
-      description="Campaign setup now lives in Experiments. Create or edit an experiment, then launch tests from there."
+      description="Outbound setup now lives in Tests. Create or edit a test, then launch from there."
       brandId={id}
     />
   );

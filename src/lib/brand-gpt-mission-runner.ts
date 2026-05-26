@@ -118,8 +118,9 @@ function envList(name: string, fallback: string[] = []) {
 function getConfig(): BrandGptMissionRunnerConfig {
   const rawMode = asString(process.env.BRAND_GPT_MISSION_RUNNER_MODE).toLowerCase();
   const rawExecutionPolicy = asString(process.env.BRAND_GPT_MISSION_RUNNER_EXECUTION_POLICY).toLowerCase();
+  const activationAutopilotEnabled = envBoolean("BRAND_ACTIVATION_AUTOPILOT_ENABLED", false);
   return {
-    enabled: envBoolean("BRAND_GPT_MISSION_RUNNER_ENABLED", false),
+    enabled: envBoolean("BRAND_GPT_MISSION_RUNNER_ENABLED", activationAutopilotEnabled),
     limit: envNumber("BRAND_GPT_MISSION_RUNNER_LIMIT", 3, 1, 25),
     cooldownMinutes: envNumber("BRAND_GPT_MISSION_RUNNER_COOLDOWN_MINUTES", 15, 5, 1440),
     maxTurnsPerMission: envNumber("BRAND_GPT_MISSION_RUNNER_MAX_TURNS_PER_MISSION", 4, 1, 10),

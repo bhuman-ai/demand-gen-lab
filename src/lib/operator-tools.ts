@@ -51,6 +51,7 @@ import {
   verifyGmailUiWorkerSentMessage,
 } from "@/lib/gmail-ui-worker-client";
 import { getOperatorBrandContext, getOperatorSenderContext } from "@/lib/operator-context";
+import { createMissionEvent, createMissionLearning } from "@/lib/mission-data";
 import type { OperatorToolName, OperatorToolResult, OperatorToolSpec } from "@/lib/operator-types";
 import {
   getCampaignPrepTask,
@@ -1315,6 +1316,8 @@ const TOOL_SPECS: OperatorToolSpec[] = [
     approvalMode: "none",
     description:
       "Inspect why real outbound is or is not sending for a brand. Walks the live blocker chain in order: sender route, outbound-enabled flag, active campaign, inventory/prep, run, scheduled messages, and dispatch jobs. Use this before answering questions like why aren't we sending real mail, why no outbound, what is blocked, or what needs to happen next.",
+    autonomyHint:
+      "Use this as a broad diagnostic when growth is stalled. It should reveal whether the next move is sender repair, campaign launch, lead sourcing, dispatch, or a missing capability.",
     previewTitle: "Inspect outbound blocker chain",
     run: inspectOutboundBlockerChain,
   },
@@ -1324,8 +1327,67 @@ const TOOL_SPECS: OperatorToolSpec[] = [
     approvalMode: "none",
     description:
       "Inspect sender delivery evidence for warmup/control checks, Gmail inbox/spam placement, Mailpool spam checks, seed inbox results, sender readiness, and which sender emails are actually landing in inbox vs spam. Use this for deliverability/inboxing questions, not experiment questions.",
+    autonomyHint:
+      "Use when the agent needs live deliverability proof before deciding whether to scale, switch transport, retry a sender, or keep volume low.",
     previewTitle: "Inspect sender delivery evidence",
     run: inspectSenderDeliveryEvidence,
+  },
+  {
+    name: "record_capability_gap",
+    riskLevel: "safe_write",
+    approvalMode: "none",
+    description:
+      "Record that the agent cannot complete an objective because the current toolset lacks a required capability, credential, permission, provider route, or execution primitive. Use this only after inspecting available tools and evidence. Input: brandId, optional missionId, capability, whyNeeded, blocker, attemptedTools, suggestedToolContract.",
+    autonomyHint:
+      "Use as the open-world escape hatch when no existing tool can move the objective. This is how the agent asks the platform to add a new tool instead of pretending a hardcoded workflow can solve it.",
+    previewTitle: "Record capability gap",
+    run: async (input) => {
+      const brandId = asString(input.brandId);
+      const missionId = asString(input.missionId);
+      const capability = requireString(input, "capability");
+      const whyNeeded = asString(input.whyNeeded);
+      const blocker = asString(input.blocker);
+      const attemptedTools = asStringArray(input.attemptedTools).slice(0, 12);
+      const suggestedToolContract = asString(input.suggestedToolContract);
+      const summary = `Capability gap recorded: ${capability}${blocker ? ` (${blocker})` : ""}.`;
+      const payload = {
+        brandId,
+        missionId,
+        capability,
+        whyNeeded,
+        blocker,
+        attemptedTools,
+        suggestedToolContract,
+      };
+
+      if (brandId && missionId) {
+        await createMissionEvent({
+          missionId,
+          brandId,
+          eventType: "brand_gpt_capability_gap",
+          summary,
+          payload,
+        });
+        await createMissionLearning({
+          missionId,
+          brandId,
+          learningType: "brand_gpt_capability_gap",
+          summary: whyNeeded ? `${summary} ${whyNeeded}` : summary,
+          confidence: 0.8,
+          evidence: payload,
+          recommendedAction: suggestedToolContract || capability,
+        });
+      }
+
+      return {
+        summary,
+        result: {
+          ...payload,
+          plainEnglish:
+            "The agent has hit the edge of the available platform tools. Add or repair this capability before expecting the agent to complete the objective autonomously.",
+        },
+      } satisfies OperatorToolResult;
+    },
   },
   {
     name: "summarize_campaign_status",
@@ -1527,6 +1589,8 @@ const TOOL_SPECS: OperatorToolSpec[] = [
     approvalMode: "none",
     description:
       "Broad Codex-style read-only investigation across the active brand. Fetches raw reply bodies, sent message bodies, drafts, leads, runs, events, campaigns, experiments, sender/routing context, and related evidence. Use whenever the compact snapshot is not enough.",
+    autonomyHint:
+      "Use for open-ended questions, self-checks, and recovery after a confusing result. This is the closest read tool to browsing the brand workspace like Codex.",
     previewTitle: "Investigate brand data",
     run: investigateBrandData,
   },
@@ -1766,6 +1830,8 @@ const TOOL_SPECS: OperatorToolSpec[] = [
     riskLevel: "guarded_write",
     approvalMode: "confirm",
     description: "Buy or attach a Mailpool domain, create a sender mailbox, and assign it to the brand.",
+    autonomyHint:
+      "Use when the blocker is no usable Mailpool sender and the required domain, local part, sender identity, and any registrant details are available or can be inferred from memory/context.",
     previewTitle: "Provision Mailpool sender",
     buildPreview: buildProvisionPreview,
     run: async (input) => {
@@ -1816,6 +1882,8 @@ const TOOL_SPECS: OperatorToolSpec[] = [
     approvalMode: "confirm",
     description:
       "Buy or attach a domain, create a Customer.io sender identity, apply DNS through the configured registrar, and assign it to the brand with a real reply mailbox.",
+    autonomyHint:
+      "Use when Gmail UI/Mailpool delivery is weak or blocked and the agent should create a Customer.io-backed sender route using available provider credentials.",
     previewTitle: "Provision Customer.io sender",
     buildPreview: buildCustomerIoProvisionPreview,
     run: async (input) => {
@@ -2393,6 +2461,8 @@ const TOOL_SPECS: OperatorToolSpec[] = [
     riskLevel: "guarded_write",
     approvalMode: "confirm",
     description: "Launch a campaign run.",
+    autonomyHint:
+      "Use when a campaign is ready and the next safe autonomous move is to create real scheduled outbound messages from the actual campaign copy.",
     previewTitle: "Launch campaign",
     buildPreview: (input) =>
       buildSimplePreview(
@@ -2428,6 +2498,8 @@ const TOOL_SPECS: OperatorToolSpec[] = [
     approvalMode: "confirm",
     description:
       "Pause, resume, cancel, or deliverability-control a campaign run. Valid deliverability actions are exact strings: probe_deliverability, probe_all_senders_deliverability, resume_sender_deliverability, and seed_inbox_placement. Use probe_all_senders_deliverability to compare Gmail UI, Mailpool SMTP, and Customer.io transports with the same live campaign copy before choosing a route. If no real scheduled or sent campaign message exists yet, run launch_campaign_run for the campaign first, then retry the probe.",
+    autonomyHint:
+      "Use after inspecting campaign/run state to pause risk, resume safe work, refresh a sender, or run exact-copy deliverability probes across available sender routes.",
     previewTitle: "Control campaign run",
     buildPreview: (input) =>
       buildSimplePreview(

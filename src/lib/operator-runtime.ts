@@ -1774,6 +1774,7 @@ const TOOLS_WITH_BRAND_CONTEXT = new Set<OperatorToolName>([
   "get_brand_snapshot",
   "inspect_outbound_blocker_chain",
   "summarize_campaign_status",
+  "record_capability_gap",
   "get_campaign_snapshot",
   "summarize_experiments",
   "get_experiment_snapshot",

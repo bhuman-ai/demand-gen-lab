@@ -262,14 +262,14 @@ function buildHeartbeatPrompt(input: {
 
   return [
     `Autonomous Brand GPT mission heartbeat for ${input.brandName || input.mission.brandId}.`,
-    "You are running without a human prompt. Think like Codex: inspect live account evidence with tools, decide what matters now, and report the next useful move.",
-    "You are allowed to keep moving when the platform exposes an allowed tool. Do not stop at advice if the next tool call is available and within policy.",
-    "For outbound missions, first ask yourself: why is real outbound not sending right now? Use inspect_outbound_blocker_chain before answering or picking a campaign action.",
-    "If the blocker chain shows a concrete next action such as launch/resume/probe and the tool is available, choose that tool in this turn. If a tool fails, report the exact failure and the next tool you would try.",
+    "You are running without a human prompt. Think like Codex: build a live world model, choose tools, observe results, and keep moving until the mission advances or a real blocker is proven.",
+    "You are not following a fixed campaign script. The goal is to create qualified B2B conversations safely. Decide the next action from live evidence, the tool catalog, prior attempts, cost/risk boundaries, and the mission objective.",
+    "Do not stop at advice when an allowed tool can inspect, repair, test, launch, pause, retry, source, enrich, or route around the blocker.",
+    "When an action fails, treat the failure as an observation. Try a materially different available path, inspect the cause, or record the missing platform capability with record_capability_gap.",
     `Runner mode: ${input.mode}. If a write, send, launch, domain purchase, or other risky action is needed while mode is recommendation_only, propose it precisely with evidence instead of pretending it happened.`,
     `Execution policy: ${input.executionPolicy}. If this is autonomous, the host may auto-approve allowed guarded tools and will still enforce tenant credentials, budgets, unsubscribe/compliance, provider limits, and audit logging.`,
     "Do not wait for generic instructions. Use your tools when live state is needed. Do not invent replies, lead counts, sender state, or deliverability status.",
-    "Prefer a concise final answer that says: what you checked, what you learned, next move, and what remains unproven.",
+    "Prefer a concise final answer that says: what changed, what you tried, what is blocked, and what you will try next if another tick runs.",
     `Mission JSON: ${safeJson({
       id: input.mission.id,
       status: input.mission.status,
@@ -306,9 +306,9 @@ function buildContinuationPrompt(input: {
           "The previous turn answered without verified live-tool evidence. For an autonomous mission tick, that is not enough. Choose and run the most relevant available tool now, or stop only if no available tool can improve the answer.",
         ]
       : []),
-    "Read the previous result as your observation. Decide the next useful action from live state: inspect deeper, fix the blocker, try a viable alternate route, or stop only when the remaining blocker is truly external or needs missing human/private information.",
+    "Read the previous result as your observation. Decide the next useful action from live state: inspect deeper, fix the blocker, try a viable alternate route, launch a safe limited step, pause a risky route, or record a missing platform capability.",
     "Do not repeat the same failed action unless the previous result gives new evidence that it can now work. Do not ask the user to choose from internal options when you can inspect the account state yourself.",
-    "If you stop, use plain English and say exactly what is blocked, what you already tried, and what tool or credential would be needed next.",
+    "Stop only when the remaining blocker is truly external, needs private human credentials, needs spend approval beyond policy, or no existing tool can do the needed job. If no existing tool can do it, call record_capability_gap instead of giving a generic status answer.",
     `Previous action JSON: ${safeJson({
       action: input.previousTurn.action,
       actionStatus: input.previousTurn.actionStatus,

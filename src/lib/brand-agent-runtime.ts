@@ -18,6 +18,10 @@ export type BrandAgentTraceEntry = {
   result: Record<string, unknown>;
   error: string;
   rationale?: string;
+  goal?: string;
+  hypothesis?: string;
+  stopReason?: string;
+  missingCapability?: string;
   evidenceNeeded?: string[];
   avoidedWrongPaths?: string[];
 };
@@ -51,26 +55,16 @@ type AgentStep = {
   toolName: string;
   toolInputJson: string;
   rationale: string;
+  goal: string;
+  hypothesis: string;
+  stopReason: string;
+  missingCapability: string;
   evidenceStatus: BrandAgentEvidenceStatus | "";
   evidenceSummary: string;
   evidenceGaps: string[];
   evidenceNeeded: string[];
   avoidedWrongPaths: string[];
 };
-
-const SENDER_DELIVERY_OBJECT_TYPES = new Set([
-  "sender_delivery",
-  "deliverability",
-  "inboxing",
-  "sender_readiness",
-]);
-
-const SENDER_DELIVERY_WRONG_TOOLS = new Set<OperatorToolName>([
-  "summarize_experiments",
-  "get_experiment_snapshot",
-  "summarize_campaign_status",
-  "get_campaign_snapshot",
-]);
 
 function asString(value: unknown) {
   return String(value ?? "").trim();
@@ -166,6 +160,10 @@ function parseAgentStep(rawText: string): AgentStep | null {
     toolName: asString(row.toolName),
     toolInputJson: asString(row.toolInputJson) || "{}",
     rationale: asString(row.rationale),
+    goal: asString(row.goal),
+    hypothesis: asString(row.hypothesis),
+    stopReason: asString(row.stopReason),
+    missingCapability: asString(row.missingCapability),
     evidenceStatus: normalizeEvidenceStatus(row.evidenceStatus),
     evidenceSummary: asString(row.evidenceSummary),
     evidenceGaps: Array.isArray(row.evidenceGaps)
@@ -194,6 +192,7 @@ function buildToolCatalog(tools: OperatorToolSpec[]) {
     riskLevel: tool.riskLevel,
     approvalMode: tool.approvalMode,
     description: tool.description,
+    autonomyHint: tool.autonomyHint ?? "",
   }));
 }
 
@@ -213,22 +212,20 @@ function buildAgentPrompt(input: {
   const promptParts = [
     "You are Brand GPT, an autonomous LastB2B growth operator running inside a Codex-style harness.",
     "You are the reasoning engine. The host app only gives you scoped tools, permissions, tenant isolation, budgets, and audit logging.",
-    "Do not behave like a scripted support chatbot. Inspect evidence, decide the next useful tool call, observe results, and continue until you can answer or choose an action.",
+    "Do not behave like a scripted support chatbot. You own the workflow: form a goal, inspect evidence, choose the most useful tool, observe results, recover from failures, and continue until the objective is advanced or a real blocker is proven.",
     "Respond with JSON only.",
-    'Return: {"message": string, "done": boolean, "objectType": string, "toolName": string, "toolInputJson": string, "rationale": string, "evidenceNeeded": string[], "avoidedWrongPaths": string[], "evidenceStatus": "verified"|"inconclusive"|"insufficient", "evidenceSummary": string, "evidenceGaps": string[]}.',
+    'Return: {"message": string, "done": boolean, "goal": string, "hypothesis": string, "objectType": string, "toolName": string, "toolInputJson": string, "rationale": string, "stopReason": string, "missingCapability": string, "evidenceNeeded": string[], "avoidedWrongPaths": string[], "evidenceStatus": "verified"|"inconclusive"|"insufficient", "evidenceSummary": string, "evidenceGaps": string[]}.',
     'Use toolName "" and toolInputJson "{}" when you are not calling a tool.',
     "Call at most one tool per step.",
-    "Before choosing a tool, classify the object the user is asking about. Use stable objectType values such as sender_delivery, sender, inbox, reply_thread, campaign, experiment, lead, brand, leadr, gmail_ui, or unknown.",
-    "outbound_blocker_chain means questions like why aren't we sending, why no real outbound mail, what is blocked, why are there no scheduled messages, why isn't a campaign running, or what has to happen before mail sends.",
-    "For outbound_blocker_chain, call inspect_outbound_blocker_chain first. Do not answer from sender labels, generic warmup language, or compact context.",
-    "sender_delivery means sender readiness, warmup, control checks, deliverability, inbox placement, spam placement, Mailpool spam checks, seed inbox results, or questions like which sender emails are landing in Gmail inbox vs spam.",
-    "For sender_delivery, call inspect_sender_delivery_evidence first. If the user asks why real outbound is not sending, inspect_outbound_blocker_chain is a better first tool than sender evidence because sender health may not be the actual blocker.",
-    "When deciding how to send, treat Gmail UI, Mailpool SMTP, and Customer.io as competing transports. Prefer live exact-copy placement evidence over provider labels, and use deliverability-control tools to test all routable senders before scaling.",
-    "If the user asks what an internal status means, answer in product English and inspect the domain object behind that status before choosing any unrelated object.",
-    "Read tools are your senses. Use them freely when the compact context is insufficient, stale, ambiguous, or lacks raw evidence.",
+    "Classify the object only to orient yourself. Use stable objectType values such as sender_delivery, sender, inbox, reply_thread, campaign, experiment, lead, brand, transport, provider, leadr, gmail_ui, capability_gap, or unknown.",
+    "The tool catalog is your action space. Choose tools by their descriptions and autonomy hints, not by a fixed path. If a better tool exists, use it even if it was not named in the prompt.",
+    "Before selecting a tool, check whether the tool's object matches the goal. If it does not, choose a broader read tool or a better object-specific tool instead.",
+    "Read tools are your senses. Use them freely when the compact context is insufficient, stale, ambiguous, or lacks raw evidence. Prefer broad investigation over guessing.",
     "If the user asks for actual content, causes, live account state, replies, drafts, campaign copy, deliverability evidence, leads, runs, or what changed, inspect with tools before answering from memory.",
-    "If you are unsure which read tool fits after deciding the objectType, call investigate_brand_data with brandId, query, and any known IDs.",
+    "If you are unsure which read tool fits, call investigate_brand_data with brandId, query, and any known IDs. If the question is about real outbound not moving, inspect the full blocker chain rather than one local status.",
     "Write tools are your hands. If a write/send/launch/delete/provision/buy action is the right next move, choose the matching write tool and stop; the host will execute or request confirmation according to risk.",
+    "After a tool failure, do not simply summarize the failure. Either try a materially different available tool, inspect the cause with a read tool, or prove that the remaining blocker is missing credentials, missing permissions, budget/risk approval, or a missing platform capability.",
+    "When no existing tool can move the objective, call record_capability_gap with the missing capability and the tool contract the platform should add. This is better than asking the user to manually push a workflow forward.",
     "Do not invent IDs, email bodies, replies, leads, sender state, domains, accounts, or metrics.",
     "Do not expose credentials or internal API secrets.",
     "Before every final answer, run an evidence self-check in the JSON fields. evidenceStatus=verified only when the observations directly prove the claim. Use inconclusive when evidence partially supports the answer but a key exact proof is missing. Use insufficient when you have not inspected enough live evidence.",
@@ -317,10 +314,14 @@ export async function runBrandAgentTurn(input: {
             properties: {
               message: { type: "string" },
               done: { type: "boolean" },
+              goal: { type: "string" },
+              hypothesis: { type: "string" },
               objectType: { type: "string" },
               toolName: { type: "string" },
               toolInputJson: { type: "string" },
               rationale: { type: "string" },
+              stopReason: { type: "string" },
+              missingCapability: { type: "string" },
               evidenceNeeded: { type: "array", items: { type: "string" } },
               avoidedWrongPaths: { type: "array", items: { type: "string" } },
               evidenceStatus: { type: "string", enum: ["verified", "inconclusive", "insufficient"] },
@@ -330,10 +331,14 @@ export async function runBrandAgentTurn(input: {
             required: [
               "message",
               "done",
+              "goal",
+              "hypothesis",
               "objectType",
               "toolName",
               "toolInputJson",
               "rationale",
+              "stopReason",
+              "missingCapability",
               "evidenceNeeded",
               "avoidedWrongPaths",
               "evidenceStatus",
@@ -348,14 +353,65 @@ export async function runBrandAgentTurn(input: {
       if (!step) return null;
 
       assistant = normalizeAssistantReply(step, input.fallbackAssistant);
-      const rawToolName = step.toolName as OperatorToolName;
-      const rawToolInput = parseToolInput(step.toolInputJson);
+      let rawToolName = step.toolName as OperatorToolName;
+      let rawToolInput = parseToolInput(step.toolInputJson);
       const traceMeta = {
         objectType: step.objectType || "unknown",
+        goal: step.goal,
+        hypothesis: step.hypothesis,
+        stopReason: step.stopReason,
+        missingCapability: step.missingCapability,
         evidenceNeeded: step.evidenceNeeded,
         avoidedWrongPaths: step.avoidedWrongPaths,
       };
+      if (!rawToolName && step.missingCapability && input.mode !== "recommendation_only") {
+        rawToolName = "record_capability_gap";
+        rawToolInput = {
+          brandId: input.brandId,
+          capability: step.missingCapability,
+          whyNeeded: step.rationale || step.message || step.goal,
+          blocker: step.stopReason,
+          attemptedTools: trace.map((entry) => entry.toolName).filter(Boolean),
+          suggestedToolContract: step.hypothesis,
+        };
+      }
       if (!rawToolName) {
+        if (
+          step.done &&
+          step.evidenceStatus !== "verified" &&
+          trace.length === 0 &&
+          input.brandId &&
+          stepNumber < input.maxSteps
+        ) {
+          trace.push({
+            step: stepNumber,
+            ...traceMeta,
+            toolName: "agent_answer_without_evidence",
+            riskLevel: "unknown",
+            input: {},
+            summary: "",
+            result: {},
+            error:
+              "The agent tried to finish without live evidence. Continuing so it must inspect state or explicitly record a blocker.",
+            rationale: step.rationale || step.goal || step.hypothesis,
+          });
+          continue;
+        }
+        if (!step.done && stepNumber < input.maxSteps) {
+          trace.push({
+            step: stepNumber,
+            ...traceMeta,
+            toolName: "agent_no_tool_selected",
+            riskLevel: "unknown",
+            input: {},
+            summary: "",
+            result: {},
+            error:
+              "The agent said the objective is not done but did not select a tool. Continuing so it must either use a tool or prove a real blocker.",
+            rationale: step.rationale || step.goal || step.hypothesis,
+          });
+          continue;
+        }
         return {
           assistant,
           requestedAction: null,
@@ -363,25 +419,6 @@ export async function runBrandAgentTurn(input: {
           trace,
           evidenceCheck: normalizeEvidenceCheck(step, trace),
         };
-      }
-
-      if (
-        SENDER_DELIVERY_OBJECT_TYPES.has(step.objectType.toLowerCase()) &&
-        SENDER_DELIVERY_WRONG_TOOLS.has(rawToolName)
-      ) {
-        trace.push({
-          step: stepNumber,
-          ...traceMeta,
-          toolName: rawToolName,
-          riskLevel: "read",
-          input: rawToolInput,
-          summary: "",
-          result: {},
-          error:
-            "Object route mismatch: this is a sender-delivery/inboxing question, so inspect sender delivery evidence before campaign or experiment objects.",
-          rationale: step.rationale,
-        });
-        continue;
       }
 
       const tool = toolByName.get(rawToolName);

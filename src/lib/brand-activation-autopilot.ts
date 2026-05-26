@@ -159,6 +159,7 @@ type BrandActivationSnapshot = {
     | "senderSummary"
     | "campaignSummary"
     | "experimentSummary"
+    | "inventorySummary"
     | "capacitySummary"
     | "executionSummary"
     | "senderRouteEvidence"
@@ -425,8 +426,10 @@ function readRegistrantFromEnv(): ProvisionSenderInput["registrant"] | undefined
 }
 
 function readConfig(): ActivationConfig {
+  const enabled = envBoolean("BRAND_ACTIVATION_AUTOPILOT_ENABLED", false);
+  const allowDomainRegistration = envBoolean("BRAND_ACTIVATION_AUTOPILOT_ALLOW_DOMAIN_REGISTRATION", false);
   return {
-    enabled: envBoolean("BRAND_ACTIVATION_AUTOPILOT_ENABLED", false),
+    enabled,
     dryRun: envBoolean("BRAND_ACTIVATION_AUTOPILOT_DRY_RUN", false),
     limitBrands: envNumber("BRAND_ACTIVATION_AUTOPILOT_LIMIT", 20, 1, 80),
     maxActionsPerTick: envNumber("BRAND_ACTIVATION_AUTOPILOT_ACTIONS_PER_TICK", 1, 1, 5),
@@ -437,11 +440,11 @@ function readConfig(): ActivationConfig {
       0,
       1440
     ),
-    allowDomainRegistration: envBoolean("BRAND_ACTIVATION_AUTOPILOT_ALLOW_DOMAIN_REGISTRATION", false),
+    allowDomainRegistration,
     allowGrowthTools: envBoolean("BRAND_ACTIVATION_AUTOPILOT_ALLOW_GROWTH_TOOLS", true),
-    allowGuardedGrowthTools: envBoolean("BRAND_ACTIVATION_AUTOPILOT_ALLOW_GUARDED_GROWTH_TOOLS", false),
+    allowGuardedGrowthTools: envBoolean("BRAND_ACTIVATION_AUTOPILOT_ALLOW_GUARDED_GROWTH_TOOLS", enabled),
     allowSpendGrowthTools: envBoolean("BRAND_ACTIVATION_AUTOPILOT_ALLOW_SPEND_GROWTH_TOOLS", false),
-    allowReputationGrowthTools: envBoolean("BRAND_ACTIVATION_AUTOPILOT_ALLOW_REPUTATION_GROWTH_TOOLS", false),
+    allowReputationGrowthTools: envBoolean("BRAND_ACTIVATION_AUTOPILOT_ALLOW_REPUTATION_GROWTH_TOOLS", enabled),
     brandAllowlist: envSet("BRAND_ACTIVATION_AUTOPILOT_BRAND_IDS"),
     brandDenylist: envSet("BRAND_ACTIVATION_AUTOPILOT_DENY_BRAND_IDS"),
     brandNameDenylist: envLowercaseSet(
@@ -1222,6 +1225,32 @@ function snapshotNeedsVerifiedTransportPromotion(snapshot: BrandActivationSnapsh
   return statusNeedsVerifiedTransportPromotion(snapshot.outreach);
 }
 
+function statusNeedsCampaignLaunch(status: Pick<
+  OutreachBrandStatus,
+  "campaignSummary" | "executionSummary" | "senderSummary" | "primaryBlockerDomain" | "primaryBlockerCode"
+>) {
+  if (!status.campaignSummary.activeOutboundCampaignId) return false;
+  if (status.executionSummary.activeOutboundRunId || status.executionSummary.openOutboundRunCount > 0) return false;
+  if (status.campaignSummary.readyOutboundCampaignCount <= 0) return false;
+  if (status.senderSummary.readySenderCount <= 0) return false;
+  if (
+    status.primaryBlockerDomain === "sender" ||
+    status.primaryBlockerDomain === "capacity" ||
+    status.primaryBlockerDomain === "provider" ||
+    status.primaryBlockerDomain === "execution"
+  ) {
+    return false;
+  }
+  if (status.primaryBlockerDomain === "experiment" && status.primaryBlockerCode !== "no_active_outbound_campaign") {
+    return false;
+  }
+  return true;
+}
+
+function snapshotNeedsCampaignLaunch(snapshot: BrandActivationSnapshot) {
+  return statusNeedsCampaignLaunch(snapshot.outreach);
+}
+
 function summarizeTransportFallback(snapshot: BrandActivationSnapshot) {
   const gmailSpam = gmailUiSpamEvidence(snapshot);
   const customerIoRoutes = customerIoRouteEvidence(snapshot);
@@ -1306,7 +1335,31 @@ function summarizeVerifiedTransportPromotion(snapshot: BrandActivationSnapshot) 
             senderAccountId: bestRoute.accountId,
             reason: `Sender ${bestRoute.fromEmail} passed exact-copy inbox placement and is ready; promote it for the active run.`,
           }
-        : {},
+      : {},
+  };
+}
+
+function summarizeCampaignLaunch(snapshot: BrandActivationSnapshot) {
+  const due = snapshotNeedsCampaignLaunch(snapshot);
+  const campaignId = snapshot.outreach.campaignSummary.activeOutboundCampaignId;
+  return {
+    due,
+    reason: due
+      ? "A ready outbound campaign has no open run. Launching it creates real campaign-copy messages so sourcing, dispatch, and exact-copy deliverability tests can proceed."
+      : "",
+    campaignId,
+    campaignName: snapshot.outreach.campaignSummary.activeOutboundCampaignName,
+    readyOutboundCampaignCount: snapshot.outreach.campaignSummary.readyOutboundCampaignCount,
+    inventory: snapshot.outreach.inventorySummary,
+    recommendedTool: due ? "campaign.launch_email_run" : "",
+    recommendedInput: due
+      ? {
+          brandId: snapshot.brand.id,
+          campaignId,
+          reason:
+            "Ready outbound campaign is idle with no open run; launch a limited real-copy run so the autonomous system can source, schedule, test, and dispatch.",
+        }
+      : {},
   };
 }
 
@@ -1445,6 +1498,28 @@ function buildProvisionCustomerIoFallbackDecision(input: {
   };
 }
 
+function buildLaunchActiveCampaignDecision(snapshot: BrandActivationSnapshot): ActivationDecision | null {
+  const campaignId = snapshot.outreach.campaignSummary.activeOutboundCampaignId;
+  if (!campaignId) return null;
+  return {
+    brandId: snapshot.brand.id,
+    action: "use_growth_tool",
+    rationale:
+      "A real outbound campaign is ready but idle with no open run. The autonomous next move is to launch a limited campaign run so real campaign-copy messages exist for sourcing, dispatch, inbox placement, and learning.",
+    riskLevel: "guarded_write",
+    ...emptyDecisionParts(),
+    growthTool: {
+      toolName: "campaign.launch_email_run",
+      input: {
+        brandId: snapshot.brand.id,
+        campaignId,
+        reason:
+          "Ready outbound campaign is idle with no open run; launch a limited real-copy run so automation can keep moving.",
+      },
+    },
+  };
+}
+
 function decisionHandlesTransportFallback(decision: ActivationDecision) {
   if (decision.action === "run_inbox_placement_test") return true;
   if (decision.action !== "use_growth_tool") return false;
@@ -1464,6 +1539,47 @@ function decisionHandlesVerifiedTransportPromotion(decision: ActivationDecision)
     decision.growthTool.toolName === "campaign.control_email_run" &&
     asString(decision.growthTool.input.action) === "resume_sender_deliverability"
   );
+}
+
+function decisionHandlesCampaignLaunch(decision: ActivationDecision) {
+  return decision.action === "use_growth_tool" && decision.growthTool.toolName === "campaign.launch_email_run";
+}
+
+function applyAutonomousCampaignLaunch(input: {
+  plan: ActivationPlan;
+  snapshots: BrandActivationSnapshot[];
+  config: ActivationConfig;
+}) {
+  const plannedLaunchBrandIds = new Set(
+    input.plan.actions
+      .filter(decisionHandlesCampaignLaunch)
+      .map((decision) => decision.brandId)
+  );
+  const launchActions: ActivationDecision[] = [];
+  for (const snapshot of input.snapshots) {
+    if (!snapshotNeedsCampaignLaunch(snapshot)) continue;
+    if (plannedLaunchBrandIds.has(snapshot.brand.id)) continue;
+    const decision = buildLaunchActiveCampaignDecision(snapshot);
+    if (!decision) continue;
+    plannedLaunchBrandIds.add(snapshot.brand.id);
+    launchActions.push(decision);
+  }
+  if (launchActions.length === 0) return input.plan;
+  const actions = [
+    ...launchActions,
+    ...input.plan.actions.filter(
+      (decision) =>
+        !launchActions.some(
+          (launch) => launch.brandId === decision.brandId && decision.action === "observe"
+        )
+    ),
+  ].slice(0, input.config.maxActionsPerTick);
+  return {
+    summary: input.plan.summary
+      ? `${input.plan.summary} Added autonomous launch for ready idle campaigns.`
+      : "Added autonomous launch for ready idle campaigns.",
+    actions,
+  };
 }
 
 function applyAutonomousVerifiedTransportPromotion(input: {
@@ -1549,8 +1665,12 @@ function applyAutonomousEvidenceActions(input: {
   snapshots: BrandActivationSnapshot[];
   config: ActivationConfig;
 }) {
-  return applyAutonomousTransportFallback({
-    plan: applyAutonomousVerifiedTransportPromotion(input),
+  return applyAutonomousCampaignLaunch({
+    plan: applyAutonomousTransportFallback({
+      plan: applyAutonomousVerifiedTransportPromotion(input),
+      snapshots: input.snapshots,
+      config: input.config,
+    }),
     snapshots: input.snapshots,
     config: input.config,
   });
@@ -1615,6 +1735,9 @@ function snapshotNeedsAutonomousWork(snapshot: BrandActivationSnapshot) {
   if (snapshotNeedsVerifiedTransportPromotion(snapshot)) {
     return true;
   }
+  if (snapshotNeedsCampaignLaunch(snapshot)) {
+    return true;
+  }
   if (
     snapshotHasOpenOutboundWork(snapshot) &&
     !snapshotHasRepairableOpenOutboundWork(snapshot) &&
@@ -1647,6 +1770,7 @@ function summarizeEligibleWork(snapshots: BrandActivationSnapshot[]) {
       primaryBlockerSummary: snapshot.outreach.primaryBlockerSummary,
       repairableOpenWork: snapshotHasRepairableOpenOutboundWork(snapshot),
       inboxPlacementCandidate: snapshotNeedsInboxPlacementTest(snapshot),
+      campaignLaunch: summarizeCampaignLaunch(snapshot),
       transportFallback: summarizeTransportFallback(snapshot),
       transportPromotion: summarizeVerifiedTransportPromotion(snapshot),
       seedPool: snapshot.seedPool,
@@ -1711,7 +1835,11 @@ async function filterSnapshotsDueForPlanning(snapshots: BrandActivationSnapshot[
   );
 
   const due = eligible.filter((snapshot) => {
-    if (snapshotNeedsTransportFallback(snapshot) || snapshotNeedsVerifiedTransportPromotion(snapshot)) {
+    if (
+      snapshotNeedsTransportFallback(snapshot) ||
+      snapshotNeedsVerifiedTransportPromotion(snapshot) ||
+      snapshotNeedsCampaignLaunch(snapshot)
+    ) {
       return true;
     }
     const lastDecisionAt = recentByBrandId.get(snapshot.brand.id) ?? 0;
@@ -1755,11 +1883,13 @@ async function buildSnapshots(config: ActivationConfig): Promise<BrandActivation
       const placementPriority = statusNeedsInboxPlacementTest(status) ? 35 : 0;
       const transportFallbackPriority = statusNeedsTransportFallback(status) ? 70 : 0;
       const transportPromotionPriority = statusNeedsVerifiedTransportPromotion(status) ? 80 : 0;
+      const campaignLaunchPriority = statusNeedsCampaignLaunch(status) ? 65 : 0;
       const livePenalty =
         hasOpenOutboundWork(status) &&
         placementPriority === 0 &&
         transportFallbackPriority === 0 &&
-        transportPromotionPriority === 0
+        transportPromotionPriority === 0 &&
+        campaignLaunchPriority === 0
           ? -100
           : 0;
       return {
@@ -1771,6 +1901,7 @@ async function buildSnapshots(config: ActivationConfig): Promise<BrandActivation
           placementPriority +
           transportFallbackPriority +
           transportPromotionPriority +
+          campaignLaunchPriority +
           livePenalty,
       };
     })
@@ -1794,6 +1925,7 @@ async function buildSnapshots(config: ActivationConfig): Promise<BrandActivation
           senderSummary: status.senderSummary,
           campaignSummary: status.campaignSummary,
           experimentSummary: status.experimentSummary,
+          inventorySummary: status.inventorySummary,
           capacitySummary: status.capacitySummary,
           executionSummary: status.executionSummary,
           senderRouteEvidence: status.senderRouteEvidence,
@@ -1862,6 +1994,7 @@ async function planActivationWithLlm(input: {
     "- provision_mailpool_sender: buy/attach a Mailpool sender when the brand has no usable sender and a real inbox is needed.",
     "- refresh_mailpool_sender: refresh a pending Mailpool sender using refreshAccountId.",
     "- use_growth_tool: call a registered growth capability by name when it is the best next action or when an older fixed action is too narrow. Put the chosen tool name and structured input in growthTool.",
+    "  - For ready idle outbound campaigns, use campaign.launch_email_run so real campaign-copy messages are created and the rest of the system can source, schedule, test, and dispatch.",
     "- observe: do nothing when action is unsafe, premature, or insufficiently grounded.",
     "",
     "Growth tool registry:",
@@ -1879,6 +2012,7 @@ async function planActivationWithLlm(input: {
     "- If a mission is blocked by no EnrichAnything-backed sendable leads, no campaign-owned inventory, or no sendable leads, and the brand has a ready sender, choose refill_campaign_leads. Set leadRefill.experimentId to the mission currentExperimentId when present, campaignId only when known, targetSendableLeads to a realistic first-batch pool, and maxLiveTopUpPasses to 1-3.",
     "- If an active run is queued/sourcing/scheduled/sending but appears stuck, choose repair_outreach_run and put the activeOutboundRunId in runTool.runId.",
     "- If an active run needs more prospects, has inventory/top-up errors, or is below the intended batch size, choose source_more_leads and set runTool.targetLeadCount to the desired total sendable leads for that run.",
+    "- If activeOutboundCampaignId is present, readyOutboundCampaignCount > 0, there is no activeOutboundRunId/open run, and sender/inventory state is not structurally blocked, choose use_growth_tool with campaign.launch_email_run. Do not wait for a human to press launch.",
     "- If seedPool.needsRepair is true, prefer repair_seed_pool before trying more inbox placement tests. This is infrastructure repair; do not also create missions or provision senders in the same action.",
     "- Do not choose repair_seed_pool when seedPool.needsRepair is false. Historical failed monitor counts alone are not actionable when activeUsable and availableUsableEstimate are healthy.",
     "- If an active run has real scheduled or sent campaign messages and no other urgent blocker, choose run_inbox_placement_test early in the run so deliverability is measured on the real copy before volume ramps. Put activeOutboundRunId in placementTest.runId. Leave placementTest.messageId blank unless you know the exact message.",

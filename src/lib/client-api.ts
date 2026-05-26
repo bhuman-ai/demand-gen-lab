@@ -47,6 +47,7 @@ import type {
 } from "@/lib/factory-types";
 import type {
   OperatorAction,
+  OperatorActivitySummary,
   OperatorAttentionRequest,
   OperatorChatResponse,
   OperatorChatStartResponse,
@@ -2247,6 +2248,19 @@ export async function fetchOperatorAttention(input: {
     count: Number(data.count ?? requests.length) || 0,
     requests,
   };
+}
+
+export async function fetchOperatorActivity(input: {
+  brandId?: string;
+  limit?: number;
+} = {}) {
+  const params = new URLSearchParams();
+  if (input.brandId?.trim()) params.set("brandId", input.brandId.trim());
+  if (input.limit) params.set("limit", String(input.limit));
+  const query = params.toString();
+  const response = await fetch(`/api/operator/activity${query ? `?${query}` : ""}`, { cache: "no-store" });
+  const data = await readJson(response);
+  return data.activity as OperatorActivitySummary;
 }
 
 export async function fetchOperatorThreadDetail(threadId: string) {

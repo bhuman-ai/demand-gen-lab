@@ -4,8 +4,11 @@ import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
+  Activity,
+  AlertCircle,
   ChevronDown,
   ChevronRight,
+  Clock3,
   ExternalLink,
   FolderKanban,
   Inbox,
@@ -25,6 +28,7 @@ import { Textarea } from "@/components/ui/textarea";
 import {
   assignBrandOutreachAccount,
   fetchBrand,
+  fetchOperatorActivity,
   fetchBrandOutreachAssignment,
   fetchBrands,
   fetchExperiments,
@@ -35,6 +39,7 @@ import {
 } from "@/lib/client-api";
 import type { BrandRecord, ExperimentRecord, OutreachAccount, ScaleCampaignRecord } from "@/lib/factory-types";
 import type { Mission } from "@/lib/mission-types";
+import type { OperatorActivitySummary } from "@/lib/operator-types";
 
 function formatCount(value: number) {
   return value.toString().padStart(2, "0");
@@ -42,6 +47,33 @@ function formatCount(value: number) {
 
 function formatStatus(value: string) {
   return value.replace(/_/g, " ");
+}
+
+function formatRelativeTime(value: string) {
+  const timestamp = Date.parse(value);
+  if (!Number.isFinite(timestamp)) return "";
+  const seconds = Math.max(0, Math.round((Date.now() - timestamp) / 1000));
+  if (seconds < 60) return "just now";
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.round(hours / 24);
+  return `${days}d ago`;
+}
+
+function activityBadgeVariant(
+  state: OperatorActivitySummary["state"]
+): "success" | "danger" | "muted" | "accent" {
+  if (state === "failed") return "danger";
+  if (state === "running" || state === "needs_attention") return "accent";
+  if (state === "active") return "success";
+  return "muted";
+}
+
+function activityStateLabel(state: OperatorActivitySummary["state"]) {
+  if (state === "needs_attention") return "Needs attention";
+  return formatStatus(state);
 }
 
 function normalizeLines(value: string) {
@@ -60,6 +92,111 @@ function openBrandOperator(message: string, autoSend = false) {
     new CustomEvent("lastb2b:open-operator", {
       detail: { message, autoSend },
     })
+  );
+}
+
+function AgentActivityFeed({ brandId }: { brandId: string }) {
+  const [activity, setActivity] = useState<OperatorActivitySummary | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      if (!brandId) {
+        setActivity(null);
+        setLoading(false);
+        return;
+      }
+      try {
+        const next = await fetchOperatorActivity({ brandId, limit: 8 });
+        if (!cancelled) {
+          setActivity(next);
+          setError("");
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setError(err instanceof Error ? err.message : "Activity unavailable");
+        }
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    };
+    const handleOperatorUpdated = () => {
+      void load();
+    };
+
+    void load();
+    window.addEventListener("lastb2b:operator-updated", handleOperatorUpdated);
+    const interval = window.setInterval(load, 60_000);
+    return () => {
+      cancelled = true;
+      window.removeEventListener("lastb2b:operator-updated", handleOperatorUpdated);
+      window.clearInterval(interval);
+    };
+  }, [brandId]);
+
+  const state = activity?.state ?? "quiet";
+  const updatedLabel = activity?.updatedAt ? formatRelativeTime(activity.updatedAt) : "";
+  const headline = loading
+    ? "Checking Brand GPT activity..."
+    : error
+      ? "Activity is unavailable."
+      : activity?.headline ?? "No agent activity yet.";
+  const detail = error || activity?.detail || "Ask Brand GPT something to create the first activity.";
+
+  return (
+    <details className="mx-auto mt-3 w-full max-w-[52rem] rounded-[14px] border border-[color:var(--border)] bg-[color:var(--surface)] px-4 py-3">
+      <summary className="flex cursor-pointer list-none items-center justify-between gap-3 [&::-webkit-details-marker]:hidden">
+        <span className="flex min-w-0 items-start gap-3">
+          <span className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[color:var(--surface-muted)] text-[color:var(--muted-foreground)]">
+            {state === "failed" ? <AlertCircle className="h-4 w-4" /> : <Activity className="h-4 w-4" />}
+          </span>
+          <span className="min-w-0">
+            <span className="flex flex-wrap items-center gap-2">
+              <Badge variant={activityBadgeVariant(state)}>{activityStateLabel(state)}</Badge>
+              <span className="text-sm font-medium text-[color:var(--foreground)]">{headline}</span>
+            </span>
+            <span className="mt-1 block text-xs leading-5 text-[color:var(--muted-foreground)]">{detail}</span>
+          </span>
+        </span>
+        <span className="flex shrink-0 items-center gap-2 text-xs text-[color:var(--muted-foreground)]">
+          {updatedLabel ? (
+            <span className="hidden items-center gap-1 sm:inline-flex">
+              <Clock3 className="h-3.5 w-3.5" />
+              {updatedLabel}
+            </span>
+          ) : null}
+          <ChevronDown className="h-4 w-4" />
+        </span>
+      </summary>
+
+      <div className="mt-3 border-t border-[color:var(--border)] pt-3">
+        {activity?.items.length ? (
+          <ol className="grid gap-3">
+            {activity.items.map((item) => (
+              <li key={`${item.type}-${item.id}`} className="grid gap-1 text-sm">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="font-medium text-[color:var(--foreground)]">{item.title}</span>
+                  {item.status ? <Badge variant="muted">{formatStatus(item.status)}</Badge> : null}
+                  {item.toolName ? (
+                    <span className="font-mono text-xs text-[color:var(--muted-foreground)]">{item.toolName}</span>
+                  ) : null}
+                  <span className="text-xs text-[color:var(--muted-foreground)]">{formatRelativeTime(item.createdAt)}</span>
+                </div>
+                {item.summary ? (
+                  <div className="text-sm leading-6 text-[color:var(--muted-foreground)]">{item.summary}</div>
+                ) : null}
+              </li>
+            ))}
+          </ol>
+        ) : (
+          <div className="text-sm text-[color:var(--muted-foreground)]">
+            No activity has been recorded for this brand yet.
+          </div>
+        )}
+      </div>
+    </details>
   );
 }
 
@@ -405,6 +542,8 @@ export default function BrandHomeClient({ brandId }: { brandId: string }) {
           Loading brand...
         </div>
       ) : null}
+
+      <AgentActivityFeed brandId={brandId} />
 
       <OperatorPanel
         open={Boolean(brandId)}

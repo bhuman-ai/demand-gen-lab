@@ -1345,6 +1345,9 @@ const TOOL_SPECS: OperatorToolSpec[] = [
       const brandId = asString(input.brandId);
       const missionId = asString(input.missionId);
       const capability = requireString(input, "capability");
+      if (["none", "no", "n/a", "na", "not applicable", "unknown", "no missing capability"].includes(capability.toLowerCase())) {
+        throw new Error("capability must name a concrete missing platform ability, permission, provider route, or credential.");
+      }
       const whyNeeded = asString(input.whyNeeded);
       const blocker = asString(input.blocker);
       const attemptedTools = asStringArray(input.attemptedTools).slice(0, 12);

@@ -25,10 +25,11 @@ import type { Mission, MissionPlan, MissionRiskLevel } from "@/lib/mission-types
 import { refreshMailpoolOutreachAccount } from "@/lib/mailpool-account-refresh";
 import { inspectMailboxPlacement } from "@/lib/mailbox-imap";
 import { generateJsonWithLlm } from "@/lib/llm-json";
-import { getOutreachAccountFromEmail } from "@/lib/outreach-account-helpers";
+import { getOutreachAccountFromEmail, supportsGmailUiDelivery } from "@/lib/outreach-account-helpers";
 import {
   createOutreachEvent,
   enqueueOutreachJob,
+  getOutreachAccount,
   getBrandOutreachAssignment,
   getOutreachAccountSecrets,
   getOutreachRun,
@@ -1107,6 +1108,9 @@ function snapshotHasRepairableOpenOutboundWork(snapshot: BrandActivationSnapshot
   if (snapshot.outreach.primaryBlockerDomain === "execution" || snapshot.outreach.primaryBlockerDomain === "inventory") {
     return true;
   }
+  if (snapshot.outreach.primaryBlockerCode === "provider_error_rate") {
+    return true;
+  }
   if (execution.duplicateOpenRunCount > 0) return true;
   if (execution.dueMessageCount > 0 && execution.activeDispatchJobCount <= 0) return true;
   if (
@@ -1251,6 +1255,64 @@ function snapshotNeedsCampaignLaunch(snapshot: BrandActivationSnapshot) {
   return statusNeedsCampaignLaunch(snapshot.outreach);
 }
 
+function statusNeedsProviderErrorRepair(status: Pick<
+  OutreachBrandStatus,
+  "primaryBlockerCode" | "executionSummary"
+>) {
+  return Boolean(
+    status.primaryBlockerCode === "provider_error_rate" &&
+      status.executionSummary.activeOutboundRunId
+  );
+}
+
+function snapshotNeedsProviderErrorRepair(snapshot: BrandActivationSnapshot) {
+  return statusNeedsProviderErrorRepair(snapshot.outreach);
+}
+
+function findSenderDeliveryRepairRoute(snapshot: BrandActivationSnapshot) {
+  return (
+    snapshot.outreach.senderRouteEvidence
+      .filter(
+        (evidence) =>
+          evidence.accountId &&
+          evidence.provider === "mailpool" &&
+          evidence.routeKind === "gmail_ui" &&
+          (evidence.state === "provisioning" || evidence.state === "ready")
+      )
+      .sort((left, right) => {
+        if (left.state !== right.state) return left.state === "provisioning" ? -1 : 1;
+        const primaryEmail = snapshot.outreach.senderSummary.primarySenderEmail.trim().toLowerCase();
+        const leftPrimary = left.fromEmail.trim().toLowerCase() === primaryEmail ? 1 : 0;
+        const rightPrimary = right.fromEmail.trim().toLowerCase() === primaryEmail ? 1 : 0;
+        if (leftPrimary !== rightPrimary) return rightPrimary - leftPrimary;
+        return toTimestamp(right.checkedAt) - toTimestamp(left.checkedAt);
+      })[0] ?? null
+  );
+}
+
+function statusNeedsSenderDeliveryRepair(status: Pick<
+  OutreachBrandStatus,
+  "primaryBlockerCode" | "senderRouteEvidence" | "senderSummary"
+>) {
+  if (
+    status.primaryBlockerCode !== "missing_delivery_credentials" &&
+    status.primaryBlockerCode !== "gmail_ui_login_required"
+  ) {
+    return false;
+  }
+  return status.senderRouteEvidence.some(
+    (evidence) =>
+      evidence.accountId &&
+      evidence.provider === "mailpool" &&
+      evidence.routeKind === "gmail_ui" &&
+      (evidence.state === "provisioning" || evidence.state === "ready")
+  );
+}
+
+function snapshotNeedsSenderDeliveryRepair(snapshot: BrandActivationSnapshot) {
+  return statusNeedsSenderDeliveryRepair(snapshot.outreach);
+}
+
 function summarizeTransportFallback(snapshot: BrandActivationSnapshot) {
   const gmailSpam = gmailUiSpamEvidence(snapshot);
   const customerIoRoutes = customerIoRouteEvidence(snapshot);
@@ -1360,6 +1422,35 @@ function summarizeCampaignLaunch(snapshot: BrandActivationSnapshot) {
             "Ready outbound campaign is idle with no open run; launch a limited real-copy run so the autonomous system can source, schedule, test, and dispatch.",
         }
       : {},
+  };
+}
+
+function summarizeProviderErrorRepair(snapshot: BrandActivationSnapshot) {
+  const due = snapshotNeedsProviderErrorRepair(snapshot);
+  return {
+    due,
+    reason: due
+      ? "The active run has a provider-error-rate blocker. Queue run analysis/repair so the runtime can recheck the anomaly, fail over sender if needed, and resume dispatch safely."
+      : "",
+    runId: snapshot.outreach.executionSummary.activeOutboundRunId,
+    activeOutboundRunStatus: snapshot.outreach.executionSummary.activeOutboundRunStatus,
+    activeCriticalOutboundAnomalyCount: snapshot.outreach.executionSummary.activeCriticalOutboundAnomalyCount,
+    recommendedAction: due ? "repair_outreach_run" : "",
+  };
+}
+
+function summarizeSenderDeliveryRepair(snapshot: BrandActivationSnapshot) {
+  const due = snapshotNeedsSenderDeliveryRepair(snapshot);
+  const route = findSenderDeliveryRepairRoute(snapshot);
+  return {
+    due,
+    reason: due
+      ? "A Mailpool Gmail UI sender is blocked by delivery credentials/login state. Refresh it and, when SMTP credentials are available, switch the sender to SMTP so automation can continue without waiting for manual Gmail UI setup."
+      : "",
+    accountId: route?.accountId ?? "",
+    fromEmail: route?.fromEmail ?? "",
+    state: route?.state ?? "",
+    recommendedAction: due && route ? "refresh_mailpool_sender" : "",
   };
 }
 
@@ -1520,6 +1611,37 @@ function buildLaunchActiveCampaignDecision(snapshot: BrandActivationSnapshot): A
   };
 }
 
+function buildRepairProviderErrorDecision(snapshot: BrandActivationSnapshot): ActivationDecision | null {
+  const runId = snapshot.outreach.executionSummary.activeOutboundRunId;
+  if (!runId) return null;
+  return {
+    brandId: snapshot.brand.id,
+    action: "repair_outreach_run",
+    rationale:
+      "The active outbound run is blocked by provider-error-rate evidence. The autonomous next move is to queue run analysis/repair so the runtime can recheck the anomaly, fail over to a healthier sender if needed, and resume dispatch without waiting for a human.",
+    riskLevel: "safe_write",
+    ...emptyDecisionParts(),
+    runTool: {
+      runId,
+      targetLeadCount: 25,
+    },
+  };
+}
+
+function buildRepairSenderDeliveryDecision(snapshot: BrandActivationSnapshot): ActivationDecision | null {
+  const route = findSenderDeliveryRepairRoute(snapshot);
+  if (!route?.accountId) return null;
+  return {
+    brandId: snapshot.brand.id,
+    action: "refresh_mailpool_sender",
+    rationale:
+      `Sender ${route.fromEmail || route.accountId} is blocked by Gmail UI delivery credentials. Refresh Mailpool state and switch to SMTP automatically when Mailpool SMTP credentials are present, so the brand can become dispatchable without manual UI setup.`,
+    riskLevel: "safe_write",
+    ...emptyDecisionParts(),
+    refreshAccountId: route.accountId,
+  };
+}
+
 function decisionHandlesTransportFallback(decision: ActivationDecision) {
   if (decision.action === "run_inbox_placement_test") return true;
   if (decision.action !== "use_growth_tool") return false;
@@ -1543,6 +1665,14 @@ function decisionHandlesVerifiedTransportPromotion(decision: ActivationDecision)
 
 function decisionHandlesCampaignLaunch(decision: ActivationDecision) {
   return decision.action === "use_growth_tool" && decision.growthTool.toolName === "campaign.launch_email_run";
+}
+
+function decisionHandlesProviderErrorRepair(decision: ActivationDecision) {
+  return decision.action === "repair_outreach_run" && Boolean(decision.runTool.runId);
+}
+
+function decisionHandlesSenderDeliveryRepair(decision: ActivationDecision) {
+  return decision.action === "refresh_mailpool_sender" && Boolean(decision.refreshAccountId);
 }
 
 function applyAutonomousCampaignLaunch(input: {
@@ -1578,6 +1708,80 @@ function applyAutonomousCampaignLaunch(input: {
     summary: input.plan.summary
       ? `${input.plan.summary} Added autonomous launch for ready idle campaigns.`
       : "Added autonomous launch for ready idle campaigns.",
+    actions,
+  };
+}
+
+function applyAutonomousProviderErrorRepair(input: {
+  plan: ActivationPlan;
+  snapshots: BrandActivationSnapshot[];
+  config: ActivationConfig;
+}) {
+  const plannedRepairBrandIds = new Set(
+    input.plan.actions
+      .filter(decisionHandlesProviderErrorRepair)
+      .map((decision) => decision.brandId)
+  );
+  const repairActions: ActivationDecision[] = [];
+  for (const snapshot of input.snapshots) {
+    if (!snapshotNeedsProviderErrorRepair(snapshot)) continue;
+    if (plannedRepairBrandIds.has(snapshot.brand.id)) continue;
+    const decision = buildRepairProviderErrorDecision(snapshot);
+    if (!decision) continue;
+    plannedRepairBrandIds.add(snapshot.brand.id);
+    repairActions.push(decision);
+  }
+  if (repairActions.length === 0) return input.plan;
+  const actions = [
+    ...repairActions,
+    ...input.plan.actions.filter(
+      (decision) =>
+        !repairActions.some(
+          (repair) => repair.brandId === decision.brandId && decision.action === "observe"
+        )
+    ),
+  ].slice(0, input.config.maxActionsPerTick);
+  return {
+    summary: input.plan.summary
+      ? `${input.plan.summary} Added autonomous provider-error repair for blocked active runs.`
+      : "Added autonomous provider-error repair for blocked active runs.",
+    actions,
+  };
+}
+
+function applyAutonomousSenderDeliveryRepair(input: {
+  plan: ActivationPlan;
+  snapshots: BrandActivationSnapshot[];
+  config: ActivationConfig;
+}) {
+  const plannedRepairBrandIds = new Set(
+    input.plan.actions
+      .filter(decisionHandlesSenderDeliveryRepair)
+      .map((decision) => decision.brandId)
+  );
+  const repairActions: ActivationDecision[] = [];
+  for (const snapshot of input.snapshots) {
+    if (!snapshotNeedsSenderDeliveryRepair(snapshot)) continue;
+    if (plannedRepairBrandIds.has(snapshot.brand.id)) continue;
+    const decision = buildRepairSenderDeliveryDecision(snapshot);
+    if (!decision) continue;
+    plannedRepairBrandIds.add(snapshot.brand.id);
+    repairActions.push(decision);
+  }
+  if (repairActions.length === 0) return input.plan;
+  const actions = [
+    ...repairActions,
+    ...input.plan.actions.filter(
+      (decision) =>
+        !repairActions.some(
+          (repair) => repair.brandId === decision.brandId && decision.action === "observe"
+        )
+    ),
+  ].slice(0, input.config.maxActionsPerTick);
+  return {
+    summary: input.plan.summary
+      ? `${input.plan.summary} Added autonomous sender delivery repair for credential-blocked routes.`
+      : "Added autonomous sender delivery repair for credential-blocked routes.",
     actions,
   };
 }
@@ -1665,9 +1869,17 @@ function applyAutonomousEvidenceActions(input: {
   snapshots: BrandActivationSnapshot[];
   config: ActivationConfig;
 }) {
-  return applyAutonomousCampaignLaunch({
-    plan: applyAutonomousTransportFallback({
-      plan: applyAutonomousVerifiedTransportPromotion(input),
+  return applyAutonomousProviderErrorRepair({
+    plan: applyAutonomousSenderDeliveryRepair({
+      plan: applyAutonomousCampaignLaunch({
+        plan: applyAutonomousTransportFallback({
+          plan: applyAutonomousVerifiedTransportPromotion(input),
+          snapshots: input.snapshots,
+          config: input.config,
+        }),
+        snapshots: input.snapshots,
+        config: input.config,
+      }),
       snapshots: input.snapshots,
       config: input.config,
     }),
@@ -1699,6 +1911,8 @@ function activationDecisionKey(decision: ActivationDecision) {
     decision.growthTool.input.action,
     decision.growthTool.input.runId,
     decision.growthTool.input.senderAccountId,
+    decision.refreshAccountId,
+    decision.runTool.runId,
   ].join(":");
 }
 
@@ -1738,6 +1952,12 @@ function snapshotNeedsAutonomousWork(snapshot: BrandActivationSnapshot) {
   if (snapshotNeedsCampaignLaunch(snapshot)) {
     return true;
   }
+  if (snapshotNeedsProviderErrorRepair(snapshot)) {
+    return true;
+  }
+  if (snapshotNeedsSenderDeliveryRepair(snapshot)) {
+    return true;
+  }
   if (
     snapshotHasOpenOutboundWork(snapshot) &&
     !snapshotHasRepairableOpenOutboundWork(snapshot) &&
@@ -1771,6 +1991,8 @@ function summarizeEligibleWork(snapshots: BrandActivationSnapshot[]) {
       repairableOpenWork: snapshotHasRepairableOpenOutboundWork(snapshot),
       inboxPlacementCandidate: snapshotNeedsInboxPlacementTest(snapshot),
       campaignLaunch: summarizeCampaignLaunch(snapshot),
+      providerErrorRepair: summarizeProviderErrorRepair(snapshot),
+      senderDeliveryRepair: summarizeSenderDeliveryRepair(snapshot),
       transportFallback: summarizeTransportFallback(snapshot),
       transportPromotion: summarizeVerifiedTransportPromotion(snapshot),
       seedPool: snapshot.seedPool,
@@ -1838,7 +2060,9 @@ async function filterSnapshotsDueForPlanning(snapshots: BrandActivationSnapshot[
     if (
       snapshotNeedsTransportFallback(snapshot) ||
       snapshotNeedsVerifiedTransportPromotion(snapshot) ||
-      snapshotNeedsCampaignLaunch(snapshot)
+      snapshotNeedsCampaignLaunch(snapshot) ||
+      snapshotNeedsProviderErrorRepair(snapshot) ||
+      snapshotNeedsSenderDeliveryRepair(snapshot)
     ) {
       return true;
     }
@@ -1884,12 +2108,16 @@ async function buildSnapshots(config: ActivationConfig): Promise<BrandActivation
       const transportFallbackPriority = statusNeedsTransportFallback(status) ? 70 : 0;
       const transportPromotionPriority = statusNeedsVerifiedTransportPromotion(status) ? 80 : 0;
       const campaignLaunchPriority = statusNeedsCampaignLaunch(status) ? 65 : 0;
+      const providerErrorRepairPriority = statusNeedsProviderErrorRepair(status) ? 90 : 0;
+      const senderDeliveryRepairPriority = statusNeedsSenderDeliveryRepair(status) ? 75 : 0;
       const livePenalty =
         hasOpenOutboundWork(status) &&
         placementPriority === 0 &&
         transportFallbackPriority === 0 &&
         transportPromotionPriority === 0 &&
-        campaignLaunchPriority === 0
+        campaignLaunchPriority === 0 &&
+        providerErrorRepairPriority === 0 &&
+        senderDeliveryRepairPriority === 0
           ? -100
           : 0;
       return {
@@ -1902,6 +2130,8 @@ async function buildSnapshots(config: ActivationConfig): Promise<BrandActivation
           transportFallbackPriority +
           transportPromotionPriority +
           campaignLaunchPriority +
+          providerErrorRepairPriority +
+          senderDeliveryRepairPriority +
           livePenalty,
       };
     })
@@ -2011,8 +2241,10 @@ async function planActivationWithLlm(input: {
     "- If a brand has no ready/warming/provisioning sender, and domain registration is allowed, choose the best sender transport from the tool catalog. Prefer customerio.sender.provision when a verified Customer.io sending domain plus real Reply-To mailbox is enough; prefer Mailpool when a full mailbox/inbox is required.",
     "- If a mission is blocked by no EnrichAnything-backed sendable leads, no campaign-owned inventory, or no sendable leads, and the brand has a ready sender, choose refill_campaign_leads. Set leadRefill.experimentId to the mission currentExperimentId when present, campaignId only when known, targetSendableLeads to a realistic first-batch pool, and maxLiveTopUpPasses to 1-3.",
     "- If an active run is queued/sourcing/scheduled/sending but appears stuck, choose repair_outreach_run and put the activeOutboundRunId in runTool.runId.",
+    "- If primaryBlockerCode is provider_error_rate and activeOutboundRunId exists, choose repair_outreach_run. This lets the runtime recheck the provider anomaly, fail over to a healthier sender when available, and resume safely.",
     "- If an active run needs more prospects, has inventory/top-up errors, or is below the intended batch size, choose source_more_leads and set runTool.targetLeadCount to the desired total sendable leads for that run.",
     "- If activeOutboundCampaignId is present, readyOutboundCampaignCount > 0, there is no activeOutboundRunId/open run, and sender/inventory state is not structurally blocked, choose use_growth_tool with campaign.launch_email_run. Do not wait for a human to press launch.",
+    "- If primaryBlockerCode is missing_delivery_credentials or gmail_ui_login_required for a Mailpool Gmail UI route, choose refresh_mailpool_sender with refreshAccountId. The runtime will refresh Mailpool and switch to SMTP automatically when SMTP credentials are available.",
     "- If seedPool.needsRepair is true, prefer repair_seed_pool before trying more inbox placement tests. This is infrastructure repair; do not also create missions or provision senders in the same action.",
     "- Do not choose repair_seed_pool when seedPool.needsRepair is false. Historical failed monitor counts alone are not actionable when activeUsable and availableUsableEstimate are healthy.",
     "- If an active run has real scheduled or sent campaign messages and no other urgent blocker, choose run_inbox_placement_test early in the run so deliverability is measured on the real copy before volume ramps. Put activeOutboundRunId in placementTest.runId. Leave placementTest.messageId blank unless you know the exact message.",
@@ -3637,6 +3869,111 @@ async function ensureCompiledMission(input: {
   );
 }
 
+function mailpoolAccountHasSmtpDelivery(
+  account: OutreachAccount,
+  secrets: OutreachAccountSecrets | null
+) {
+  return Boolean(
+    account.provider === "mailpool" &&
+      account.accountType !== "mailbox" &&
+      account.config.mailpool.mailboxId.trim() &&
+      account.config.mailbox.smtpHost.trim() &&
+      account.config.mailbox.smtpUsername.trim() &&
+      getOutreachAccountFromEmail(account).trim() &&
+      (secrets?.mailboxSmtpPassword.trim() || secrets?.mailboxPassword.trim())
+  );
+}
+
+async function repairMailpoolSenderDelivery(input: {
+  accountId: string;
+  dryRun: boolean;
+}) {
+  const before = await getOutreachAccount(input.accountId);
+  if (!before) {
+    throw new Error("Mailpool sender account not found.");
+  }
+  if (before.provider !== "mailpool") {
+    throw new Error("Only Mailpool sender accounts can be refreshed by this repair path.");
+  }
+
+  if (input.dryRun) {
+    const secrets = await getOutreachAccountSecrets(before.id).catch(() => null);
+    return {
+      dryRun: true,
+      accountId: before.id,
+      fromEmail: getOutreachAccountFromEmail(before),
+      deliveryMethod: before.config.mailbox.deliveryMethod,
+      gmailUiReady: supportsGmailUiDelivery(before),
+      smtpFallbackAvailable: mailpoolAccountHasSmtpDelivery(before, secrets),
+      planned:
+        before.config.mailbox.deliveryMethod === "gmail_ui" && !supportsGmailUiDelivery(before)
+          ? "refresh_mailpool_then_switch_to_smtp_if_available"
+          : "refresh_mailpool",
+    };
+  }
+
+  const refresh = await refreshMailpoolOutreachAccount(before.id);
+  const refreshed = refresh.account;
+  const secrets = await getOutreachAccountSecrets(refreshed.id).catch(() => null);
+  const needsGmailUiRepair =
+    refreshed.config.mailbox.deliveryMethod === "gmail_ui" && !supportsGmailUiDelivery(refreshed);
+  const smtpFallbackAvailable = mailpoolAccountHasSmtpDelivery(refreshed, secrets);
+
+  if (!needsGmailUiRepair || !smtpFallbackAvailable) {
+    return {
+      dryRun: false,
+      accountId: refreshed.id,
+      fromEmail: getOutreachAccountFromEmail(refreshed),
+      refreshed,
+      switchedToSmtp: false,
+      smtpFallbackAvailable,
+      reason: needsGmailUiRepair
+        ? "Mailpool refreshed, but SMTP credentials were not available; Gmail UI setup is still required."
+        : "Mailpool sender refreshed and Gmail UI delivery is already configured.",
+      refresh: {
+        mailboxDeleted: refresh.mailboxDeleted,
+        updatedDomains: refresh.updatedDomains,
+        deliverabilityKickoffTriggered: refresh.deliverabilityKickoffTriggered,
+        deliverabilityKickoffErrors: refresh.deliverabilityKickoffErrors,
+      },
+    };
+  }
+
+  const switched =
+    (await updateOutreachAccount(refreshed.id, {
+      status: "active",
+      config: {
+        mailbox: {
+          provider: refreshed.config.mailbox.provider === "gmail" ? "gmail" : refreshed.config.mailbox.provider,
+          deliveryMethod: "smtp",
+          status: "connected",
+          gmailUiLoginState: "unknown",
+          gmailUiLoginMessage:
+            "Autonomous repair switched this sender to Mailpool SMTP because Gmail UI delivery was not configured.",
+        },
+      },
+      lastTestAt: nowIso(),
+      lastTestStatus: "pass",
+    })) ?? refreshed;
+
+  return {
+    dryRun: false,
+    accountId: switched.id,
+    fromEmail: getOutreachAccountFromEmail(switched),
+    refreshed,
+    switched,
+    switchedToSmtp: true,
+    smtpFallbackAvailable,
+    reason: "Mailpool sender refreshed and switched to SMTP because Gmail UI delivery was not configured.",
+    refresh: {
+      mailboxDeleted: refresh.mailboxDeleted,
+      updatedDomains: refresh.updatedDomains,
+      deliverabilityKickoffTriggered: refresh.deliverabilityKickoffTriggered,
+      deliverabilityKickoffErrors: refresh.deliverabilityKickoffErrors,
+    },
+  };
+}
+
 async function provisionMailpoolSenderForBrand(input: {
   brand: BrandRecord;
   mission: Mission | null;
@@ -3867,11 +4204,10 @@ async function executeDecision(input: {
   }
 
   if (input.decision.refreshAccountId && input.decision.action === "refresh_mailpool_sender") {
-    if (!input.config.dryRun) {
-      details.refresh = await refreshMailpoolOutreachAccount(input.decision.refreshAccountId);
-    } else {
-      details.refresh = { dryRun: true, accountId: input.decision.refreshAccountId };
-    }
+    details.refresh = await repairMailpoolSenderDelivery({
+      accountId: input.decision.refreshAccountId,
+      dryRun: input.config.dryRun,
+    });
   }
 
   if (input.decision.action === "repair_seed_pool") {

@@ -2220,7 +2220,7 @@ async function filterSnapshotsDueForPlanning(snapshots: BrandActivationSnapshot[
 async function buildSnapshots(config: ActivationConfig): Promise<BrandActivationSnapshot[]> {
   const [brands, statusResponse, seedPool] = await Promise.all([
     listBrands(),
-    buildOutreachStatusResponse({ limitBrands: Math.max(config.limitBrands, 50) }),
+    buildOutreachStatusResponse({ limitBrands: Math.max(config.limitBrands, 50), includeWarmup: true }),
     readDeliverabilitySeedPoolSnapshot(),
   ]);
   const brandById = new Map(brands.map((brand) => [brand.id, brand] as const));
@@ -4643,7 +4643,7 @@ export async function runBrandActivationAutopilot(limitOverride?: number) {
 
   const { plan, model } = await planActivationWithLlm({ snapshots: planning.due, config });
   const statusByBrandId = new Map(
-    (await buildOutreachStatusResponse({ limitBrands: Math.max(config.limitBrands, 50) })).brands.map((status) => [
+    (await buildOutreachStatusResponse({ limitBrands: Math.max(config.limitBrands, 50), includeWarmup: true })).brands.map((status) => [
       status.brandId,
       status,
     ] as const)

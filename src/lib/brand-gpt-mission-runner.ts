@@ -191,6 +191,15 @@ function actionFromResponse(response: OperatorChatResponse) {
   return response.execution?.toolName || response.actions[0]?.toolName || "autonomous_heartbeat";
 }
 
+function needsLiveToolSelfCorrection(turn: MissionTurnResult) {
+  return (
+    turn.action === "autonomous_heartbeat" &&
+    turn.evidence.check?.status !== "verified" &&
+    turn.executionState !== "need_info" &&
+    turn.executionState !== "awaiting_confirmation"
+  );
+}
+
 function shouldContinueAfterTurn(input: {
   turn: MissionTurnResult;
   turnIndex: number;
@@ -198,7 +207,9 @@ function shouldContinueAfterTurn(input: {
 }) {
   if (input.turn.plannerUnavailable) return false;
   if (input.turnIndex + 1 >= input.maxTurns) return false;
-  if (!input.turn.action || input.turn.action === "autonomous_heartbeat") return false;
+  if (!input.turn.action) return false;
+  if (needsLiveToolSelfCorrection(input.turn)) return true;
+  if (input.turn.action === "autonomous_heartbeat") return false;
   if (input.turn.executionState === "need_info") return false;
   if (input.turn.executionState === "awaiting_confirmation") return false;
   if (input.turn.executionState === "running") return false;
@@ -287,6 +298,11 @@ function buildContinuationPrompt(input: {
   return [
     `Continue autonomous Brand GPT mission execution for ${input.brandName || input.mission.brandId}.`,
     `This is turn ${input.turnNumber} of ${input.maxTurns}. The previous turn already ran or attempted a tool. Do not wait for the human if a useful next tool is available.`,
+    ...(needsLiveToolSelfCorrection(input.previousTurn)
+      ? [
+          "The previous turn answered without verified live-tool evidence. For an autonomous mission tick, that is not enough. Choose and run the most relevant available tool now, or stop only if no available tool can improve the answer.",
+        ]
+      : []),
     "Read the previous result as your observation. Decide the next useful action from live state: inspect deeper, fix the blocker, try a viable alternate route, or stop only when the remaining blocker is truly external or needs missing human/private information.",
     "Do not repeat the same failed action unless the previous result gives new evidence that it can now work. Do not ask the user to choose from internal options when you can inspect the account state yourself.",
     "If you stop, use plain English and say exactly what is blocked, what you already tried, and what tool or credential would be needed next.",

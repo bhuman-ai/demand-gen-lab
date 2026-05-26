@@ -179,6 +179,32 @@ export type OperatorAttentionRequest = {
   resolvedByUserMessageId: string;
 };
 
+export type OperatorActivityItemType = "run" | "action" | "attention" | "message";
+
+export type OperatorActivityItem = {
+  id: string;
+  type: OperatorActivityItemType;
+  threadId: string;
+  threadTitle: string;
+  title: string;
+  summary: string;
+  status: string;
+  toolName: string;
+  riskLevel: string;
+  model: string;
+  createdAt: string;
+};
+
+export type OperatorActivitySummary = {
+  brandId: string;
+  state: "running" | "needs_attention" | "failed" | "active" | "quiet";
+  headline: string;
+  detail: string;
+  updatedAt: string;
+  openAttentionCount: number;
+  items: OperatorActivityItem[];
+};
+
 export type OperatorMessage = {
   id: string;
   threadId: string;

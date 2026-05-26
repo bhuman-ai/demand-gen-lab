@@ -3058,7 +3058,9 @@ export async function runOperatorChatTurn(input: OperatorChatTurnInternalRequest
   ]);
   const continuation = input.structuredAction
     ? null
-    : inferContinuationFromPendingExecution({
+    : input.disableLocalHeuristics
+      ? null
+      : inferContinuationFromPendingExecution({
         message: input.message,
         messages: messageHistory,
         actions: threadActions,
@@ -3106,14 +3108,16 @@ export async function runOperatorChatTurn(input: OperatorChatTurnInternalRequest
       })
     : null;
   const plannerUnavailable = shouldUsePlanner && !llmPlan && !greetingOnly;
-  const inferredFallbackAction = inferActionFromMessage(
-    {
-      ...input,
-      message: effectiveMessage,
-    },
-    brandContext,
-    brandMemory
-  );
+  const inferredFallbackAction = input.disableLocalHeuristics
+    ? null
+    : inferActionFromMessage(
+        {
+          ...input,
+          message: effectiveMessage,
+        },
+        brandContext,
+        brandMemory
+      );
   const requestedAction = structuredAction
     ? structuredAction
     : continuation?.kind === "message_override"
@@ -3575,10 +3579,12 @@ export async function runOperatorChatTurn(input: OperatorChatTurnInternalRequest
         }
       }
     } else {
-      const disambiguation = inferDisambiguationTurn({
-        message: input.message,
-        brandContext,
-      });
+      const disambiguation = input.disableLocalHeuristics
+        ? null
+        : inferDisambiguationTurn({
+            message: input.message,
+            brandContext,
+          });
       if (disambiguation) {
         assistant = disambiguation.assistant;
         execution = disambiguation.execution;

@@ -24,6 +24,7 @@ type BrandGptMissionRunnerConfig = {
   limit: number;
   cooldownMinutes: number;
   maxTurnsPerMission: number;
+  maxRuntimeMs: number;
   mode: MissionRunnerMode;
   executionPolicy: NonNullable<OperatorChatRequest["executionPolicy"]>;
   autonomousToolAllowlist: string[];
@@ -45,6 +46,7 @@ export type BrandGptMissionTickRow = {
   model: string;
   turns: number;
   actions: string[];
+  stopReason: string;
   summary: string;
   evidenceStatus: string;
   error: string;
@@ -121,6 +123,7 @@ function getConfig(): BrandGptMissionRunnerConfig {
     limit: envNumber("BRAND_GPT_MISSION_RUNNER_LIMIT", 3, 1, 25),
     cooldownMinutes: envNumber("BRAND_GPT_MISSION_RUNNER_COOLDOWN_MINUTES", 15, 5, 1440),
     maxTurnsPerMission: envNumber("BRAND_GPT_MISSION_RUNNER_MAX_TURNS_PER_MISSION", 4, 1, 10),
+    maxRuntimeMs: envNumber("BRAND_GPT_MISSION_RUNNER_MAX_RUNTIME_MS", 90_000, 15_000, 240_000),
     mode: rawMode === "recommendation_only" ? "recommendation_only" : "default",
     executionPolicy: rawExecutionPolicy === "confirm_required" ? "confirm_required" : "autonomous",
     autonomousToolAllowlist: envList("BRAND_GPT_MISSION_RUNNER_AUTONOMOUS_TOOLS"),
@@ -362,6 +365,7 @@ async function runMission(input: {
       model: "",
       turns: 0,
       actions: [],
+      stopReason: "mission_detail_missing",
       summary: "",
       evidenceStatus: "",
       error: "Mission detail could not be loaded.",
@@ -390,6 +394,7 @@ async function runMission(input: {
       model: "",
       turns: 0,
       actions: [],
+      stopReason: skipReason,
       summary: "",
       evidenceStatus: "",
       error: "",
@@ -405,8 +410,15 @@ async function runMission(input: {
     executionPolicy: input.config.executionPolicy,
   });
   const turns: MissionTurnResult[] = [];
+  const missionStartedAt = Date.now();
+  let stopReason = "";
 
   for (let turnIndex = 0; turnIndex < input.config.maxTurnsPerMission; turnIndex += 1) {
+    if (Date.now() - missionStartedAt >= input.config.maxRuntimeMs) {
+      stopReason = "runtime_budget_exhausted";
+      break;
+    }
+
     const response = await runOperatorChatTurn({
       brandId: refreshed.brandId,
       threadId: thread.id,
@@ -429,6 +441,11 @@ async function runMission(input: {
     };
     turns.push(turn);
 
+    if (Date.now() - missionStartedAt >= input.config.maxRuntimeMs) {
+      stopReason = "runtime_budget_exhausted";
+      break;
+    }
+
     if (
       !shouldContinueAfterTurn({
         turn,
@@ -436,6 +453,12 @@ async function runMission(input: {
         maxTurns: input.config.maxTurnsPerMission,
       })
     ) {
+      stopReason = turn.plannerUnavailable ? "planner_unavailable" : "no_followup_tool_needed";
+      break;
+    }
+
+    if (input.config.maxRuntimeMs - (Date.now() - missionStartedAt) < 20_000) {
+      stopReason = "runtime_budget_low";
       break;
     }
 
@@ -446,6 +469,9 @@ async function runMission(input: {
       turnNumber: turnIndex + 2,
       maxTurns: input.config.maxTurnsPerMission,
     });
+  }
+  if (!stopReason && turns.length >= input.config.maxTurnsPerMission) {
+    stopReason = "max_turns_reached";
   }
 
   const finalTurn = turns[turns.length - 1];
@@ -472,6 +498,7 @@ async function runMission(input: {
         mode: input.config.mode,
         executionPolicy: input.config.executionPolicy,
         maxTurnsPerMission: input.config.maxTurnsPerMission,
+        maxRuntimeMs: input.config.maxRuntimeMs,
         turns: turns.length,
         actions,
         prompt: "autonomous mission heartbeat",
@@ -493,6 +520,7 @@ async function runMission(input: {
         threadId: response.thread.id,
         runId: response.run.id,
         model: response.run.model,
+        stopReason,
         turns: turns.length,
         actions,
       },
@@ -510,6 +538,7 @@ async function runMission(input: {
       model: response.run.model,
       turns: turns.length,
       actions,
+      stopReason,
       summary,
       evidenceStatus: "",
       error: "Brand GPT planner was unavailable for this mission tick.",
@@ -532,6 +561,7 @@ async function runMission(input: {
         prompt: index === 0 ? "autonomous mission heartbeat" : "autonomous mission continuation",
         turn: index + 1,
         maxTurnsPerMission: input.config.maxTurnsPerMission,
+        maxRuntimeMs: input.config.maxRuntimeMs,
         actions,
       },
       output: {
@@ -559,6 +589,7 @@ async function runMission(input: {
       action,
       actions,
       turns: turns.length,
+      stopReason,
     },
   });
   if (summary) {
@@ -578,6 +609,7 @@ async function runMission(input: {
         runId: response.run.id,
         actions,
         turns: turns.length,
+        stopReason,
         evidenceCheck: evidence.check,
         evidenceTrace: evidence.trace,
       },
@@ -598,6 +630,7 @@ async function runMission(input: {
     model: response.run.model,
     turns: turns.length,
     actions,
+    stopReason,
     summary,
     evidenceStatus: evidence.check?.status ?? "",
     error: "",
@@ -612,6 +645,7 @@ export async function runBrandGptMissionTick() {
       mode: config.mode,
       executionPolicy: config.executionPolicy,
       maxTurnsPerMission: config.maxTurnsPerMission,
+      maxRuntimeMs: config.maxRuntimeMs,
       checked: 0,
       ran: 0,
       skipped: 0,
@@ -644,6 +678,7 @@ export async function runBrandGptMissionTick() {
         model: "",
         turns: 0,
         actions: [],
+        stopReason: "exception",
         summary: "",
         evidenceStatus: "",
         error: error instanceof Error ? error.message : "Brand GPT mission runner failed.",
@@ -657,6 +692,7 @@ export async function runBrandGptMissionTick() {
     mode: config.mode,
     executionPolicy: config.executionPolicy,
     maxTurnsPerMission: config.maxTurnsPerMission,
+    maxRuntimeMs: config.maxRuntimeMs,
     checked: missions.length,
     ran,
     skipped: rows.filter((row) => row.skipped).length,

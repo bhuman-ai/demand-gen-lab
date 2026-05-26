@@ -153,6 +153,30 @@ function openRouterResponseFormat(format: LlmJsonFormat) {
   };
 }
 
+function looseJsonPrompt(input: { prompt: string; format: LlmJsonFormat }) {
+  const instructions = [
+    "Return only valid JSON. Do not include Markdown, code fences, prose, comments, or trailing commas.",
+  ];
+  if (input.format.type === "json_schema") {
+    instructions.push(`The JSON must conform to this schema: ${JSON.stringify(input.format.schema)}`);
+  } else {
+    instructions.push("The top-level response must be a JSON object.");
+  }
+  return `${input.prompt.trim()}\n\n${instructions.join("\n")}`;
+}
+
+function cleanJsonText(text: string) {
+  const trimmed = text.trim();
+  const fenced = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
+  const unfenced = (fenced ? fenced[1] : trimmed).trim();
+  const objectStart = unfenced.indexOf("{");
+  const objectEnd = unfenced.lastIndexOf("}");
+  if (objectStart >= 0 && objectEnd > objectStart) {
+    return unfenced.slice(objectStart, objectEnd + 1).trim();
+  }
+  return unfenced;
+}
+
 function openRouterTaskEnvKey(task: LlmTask) {
   return `OPENROUTER_MODEL_TASK_${task.toUpperCase().replace(/[^A-Z0-9]+/g, "_")}`;
 }
@@ -351,12 +375,26 @@ async function callOpenRouterChat(input: {
   format: LlmJsonFormat;
   maxOutputTokens: number;
   overrideModel?: string;
+  looseJson?: boolean;
 }) {
   const apiKey = asString(process.env.OPENROUTER_API_KEY);
   if (!apiKey) {
     throw new Error("OPENROUTER_API_KEY is not configured.");
   }
   const model = resolveOpenRouterModel(input.task, input.overrideModel);
+  const body = input.looseJson
+    ? {
+        model,
+        messages: [{ role: "user", content: looseJsonPrompt({ prompt: input.prompt, format: input.format }) }],
+        max_tokens: input.maxOutputTokens,
+      }
+    : {
+        model,
+        messages: [{ role: "user", content: input.prompt }],
+        response_format: openRouterResponseFormat(input.format),
+        max_tokens: input.maxOutputTokens,
+        provider: { require_parameters: true },
+      };
   const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
     method: "POST",
     headers: {
@@ -365,13 +403,7 @@ async function callOpenRouterChat(input: {
       "HTTP-Referer": asString(process.env.NEXT_PUBLIC_APP_URL) || "https://www.lastb2b.com",
       "X-OpenRouter-Title": "LastB2B",
     },
-    body: JSON.stringify({
-      model,
-      messages: [{ role: "user", content: input.prompt }],
-      response_format: openRouterResponseFormat(input.format),
-      max_tokens: input.maxOutputTokens,
-      provider: { require_parameters: true },
-    }),
+    body: JSON.stringify(body),
   });
   const raw = await response.text();
   if (!response.ok) {
@@ -384,7 +416,7 @@ async function callOpenRouterChat(input: {
     payload = {};
   }
   return {
-    text: extractOpenRouterOutputText(payload),
+    text: cleanJsonText(extractOpenRouterOutputText(payload)),
     model,
     provider: "openrouter" as const,
     usage: extractOpenRouterUsage(payload),
@@ -424,6 +456,34 @@ export async function generateJsonWithLlm(input: {
           }),
       });
     } catch (openRouterError) {
+      if (asString(process.env.OPENROUTER_API_KEY)) {
+        try {
+          return await callAndRecordLlmJson({
+            task: input.task,
+            provider: "openrouter",
+            expectedModel: resolveOpenRouterModel(input.task, input.openRouterOverrideModel),
+            prompt: input.prompt,
+            format: input.format,
+            maxOutputTokens: input.maxOutputTokens,
+            reasoningEffort,
+            providerMode: provider,
+            attempt: "openrouter_loose_json_retry",
+            execute: () =>
+              callOpenRouterChat({
+                task: input.task,
+                prompt: input.prompt,
+                format: input.format,
+                maxOutputTokens: input.maxOutputTokens,
+                overrideModel: input.openRouterOverrideModel,
+                looseJson: true,
+              }),
+          });
+        } catch (openRouterLooseError) {
+          if (!asString(process.env.OPENAI_API_KEY)) {
+            throw openRouterLooseError;
+          }
+        }
+      }
       if (!asString(process.env.OPENAI_API_KEY)) {
         throw openRouterError;
       }
@@ -506,24 +566,47 @@ export async function generateJsonWithLlm(input: {
     if (!asString(process.env.OPENROUTER_API_KEY)) {
       throw openAiError;
     }
-    return callAndRecordLlmJson({
-      task: input.task,
-      provider: "openrouter",
-      expectedModel: resolveOpenRouterModel(input.task, input.openRouterOverrideModel),
-      prompt: input.prompt,
-      format: input.format,
-      maxOutputTokens: input.maxOutputTokens,
-      reasoningEffort,
-      providerMode: provider || "auto",
-      attempt: "fallback_openrouter",
-      execute: () =>
-        callOpenRouterChat({
-          task: input.task,
-          prompt: input.prompt,
-          format: input.format,
-          maxOutputTokens: input.maxOutputTokens,
-          overrideModel: input.openRouterOverrideModel,
-        }),
-    });
+    try {
+      return await callAndRecordLlmJson({
+        task: input.task,
+        provider: "openrouter",
+        expectedModel: resolveOpenRouterModel(input.task, input.openRouterOverrideModel),
+        prompt: input.prompt,
+        format: input.format,
+        maxOutputTokens: input.maxOutputTokens,
+        reasoningEffort,
+        providerMode: provider || "auto",
+        attempt: "fallback_openrouter",
+        execute: () =>
+          callOpenRouterChat({
+            task: input.task,
+            prompt: input.prompt,
+            format: input.format,
+            maxOutputTokens: input.maxOutputTokens,
+            overrideModel: input.openRouterOverrideModel,
+          }),
+      });
+    } catch {
+      return callAndRecordLlmJson({
+        task: input.task,
+        provider: "openrouter",
+        expectedModel: resolveOpenRouterModel(input.task, input.openRouterOverrideModel),
+        prompt: input.prompt,
+        format: input.format,
+        maxOutputTokens: input.maxOutputTokens,
+        reasoningEffort,
+        providerMode: provider || "auto",
+        attempt: "fallback_openrouter_loose_json_retry",
+        execute: () =>
+          callOpenRouterChat({
+            task: input.task,
+            prompt: input.prompt,
+            format: input.format,
+            maxOutputTokens: input.maxOutputTokens,
+            overrideModel: input.openRouterOverrideModel,
+            looseJson: true,
+          }),
+      });
+    }
   }
 }

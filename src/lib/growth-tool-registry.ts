@@ -214,6 +214,24 @@ const OPERATOR_TOOL_DEFINITIONS: OperatorGrowthToolDefinition[] = [
     inputSchema: objectSchema({ accountId: stringProp("Sender account id") }, ["accountId"]),
   },
   {
+    name: "sender.enable_outbound",
+    operatorToolName: "enable_sender_outbound",
+    title: "Enable sender outbound",
+    description:
+      "Turn on real outbound for a ready sender that is currently warmup-only, then verify the setting persisted.",
+    provider: "lastb2b",
+    category: "sender_infra",
+    capability: "refresh_sender",
+    risk: { reputationRisk: true },
+    inputSchema: objectSchema(
+      {
+        brandId: stringProp("Brand id"),
+        accountId: stringProp("Ready sender account id"),
+      },
+      ["brandId", "accountId"]
+    ),
+  },
+  {
     name: "mailpool.sender.provision",
     operatorToolName: "provision_mailpool_sender",
     title: "Provision Mailpool sender",

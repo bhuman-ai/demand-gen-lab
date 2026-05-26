@@ -70,6 +70,7 @@ import {
   listRunLeads,
   listRunMessages,
   listReplyThreadsByBrand,
+  updateOutreachAccount,
   updateReplyDraft,
 } from "@/lib/outreach-data";
 import { provisionSender } from "@/lib/outreach-provisioning";
@@ -1925,6 +1926,89 @@ const TOOL_SPECS: OperatorToolSpec[] = [
           title: "Mailpool sender refreshed",
           summary: `${result.account.name} was refreshed from Mailpool.`,
           details: deliverabilityDetails,
+        },
+      } satisfies OperatorToolResult;
+    },
+  },
+  {
+    name: "enable_sender_outbound",
+    riskLevel: "guarded_write",
+    approvalMode: "confirm",
+    description: "Enable outbound sending for a ready sender that is currently limited to warmup.",
+    autonomyHint:
+      "Use when a ready sender is blocked only because outbound is disabled and the next autonomous move is real campaign outreach.",
+    previewTitle: "Enable sender outbound",
+    buildPreview: (input) =>
+      buildSimplePreview(
+        "Enable sender outbound",
+        `Enable outbound for ${asString(input.fromEmail) || asString(input.accountId) || "the selected sender"}.`
+      ),
+    run: async (input) => {
+      const brandId = requireString(input, "brandId");
+      const accountId = requireString(input, "accountId");
+      const account = await getOutreachAccount(accountId);
+      if (!account) throw new Error("Sender account not found.");
+      const fromEmail = getOutreachAccountFromEmail(account).trim().toLowerCase() || account.name || account.id;
+
+      if (account.status !== "active") {
+        throw new Error(`${fromEmail} is not active yet, so outbound cannot be enabled safely.`);
+      }
+
+      const status = await buildOutreachStatusResponse({ brandId, includeWarmup: true, limitBrands: 1 });
+      const route = status.brands[0]?.senderRouteEvidence.find((row) => row.accountId === accountId) ?? null;
+      if (route && route.state !== "ready") {
+        throw new Error(`${fromEmail} is not ready yet; current sender state is ${route.state || "unknown"}.`);
+      }
+
+      if (isOutreachOutboundEnabled(account)) {
+        return {
+          summary: `${fromEmail} is already enabled for outbound.`,
+          result: {
+            accountId,
+            fromEmail,
+            outboundEnabled: true,
+            alreadyEnabled: true,
+            route,
+          },
+          receipt: {
+            title: "Sender already outbound-enabled",
+            summary: `${fromEmail} was already enabled for outbound.`,
+            details: [],
+          },
+        } satisfies OperatorToolResult;
+      }
+
+      const updated = await updateOutreachAccount(accountId, {
+        config: {
+          outbound: {
+            enabled: true,
+            disabledAt: "",
+            disabledReason: "",
+          },
+        },
+        lastTestAt: nowIso(),
+        lastTestStatus: "pass",
+      });
+      if (!updated || !isOutreachOutboundEnabled(updated)) {
+        throw new Error("Sender outbound enablement did not persist.");
+      }
+
+      return {
+        summary: `${fromEmail} is now enabled for outbound.`,
+        result: {
+          accountId,
+          fromEmail,
+          outboundEnabled: true,
+          previousOutboundEnabled: false,
+          route,
+        },
+        receipt: {
+          title: "Sender outbound enabled",
+          summary: `${fromEmail} can now be used for real outbound.`,
+          details: [
+            route?.routeKind ? `Route: ${route.routeKind}` : "Route: current sender route",
+            route?.placement ? `Placement: ${route.placement}` : "Placement evidence not available yet",
+          ],
         },
       } satisfies OperatorToolResult;
     },

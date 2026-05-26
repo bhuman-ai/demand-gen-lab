@@ -1556,7 +1556,7 @@ function applyAutonomousEvidenceActions(input: {
   });
 }
 
-function buildTransportFallbackOnlyPlan(input: {
+function buildAutonomousEvidenceOnlyPlan(input: {
   snapshots: BrandActivationSnapshot[];
   config: ActivationConfig;
   summary: string;
@@ -1569,6 +1569,40 @@ function buildTransportFallbackOnlyPlan(input: {
     snapshots: input.snapshots,
     config: input.config,
   });
+}
+
+function activationDecisionKey(decision: ActivationDecision) {
+  return [
+    decision.brandId,
+    decision.action,
+    decision.growthTool.toolName,
+    decision.growthTool.input.action,
+    decision.growthTool.input.runId,
+    decision.growthTool.input.senderAccountId,
+  ].join(":");
+}
+
+function mergeEvidenceFirstPlan(input: {
+  evidencePlan: ActivationPlan;
+  llmPlan: ActivationPlan;
+  config: ActivationConfig;
+}) {
+  if (input.evidencePlan.actions.length === 0) return input.llmPlan;
+
+  const actions = [...input.evidencePlan.actions];
+  const seen = new Set(actions.map(activationDecisionKey));
+  for (const decision of input.llmPlan.actions) {
+    if (actions.length >= input.config.maxActionsPerTick) break;
+    const key = activationDecisionKey(decision);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    actions.push(decision);
+  }
+
+  return {
+    summary: [input.evidencePlan.summary, input.llmPlan.summary].filter(Boolean).join(" "),
+    actions,
+  };
 }
 
 function snapshotNeedsAutonomousWork(snapshot: BrandActivationSnapshot) {
@@ -1775,7 +1809,31 @@ async function planActivationWithLlm(input: {
   snapshots: BrandActivationSnapshot[];
   config: ActivationConfig;
 }): Promise<{ plan: ActivationPlan; model: string }> {
-  const eligibleWork = summarizeEligibleWork(input.snapshots);
+  const evidenceFirstPlan = buildAutonomousEvidenceOnlyPlan({
+    snapshots: input.snapshots,
+    config: input.config,
+    summary:
+      "Used live evidence before GPT planning, so obvious sender-route or transport-fallback actions do not require an LLM call.",
+  });
+  const evidenceHandledBrandIds = new Set(evidenceFirstPlan.actions.map((action) => action.brandId));
+  const remainingCapacity = input.config.maxActionsPerTick - evidenceFirstPlan.actions.length;
+  const planningSnapshots =
+    evidenceHandledBrandIds.size > 0
+      ? input.snapshots.filter((snapshot) => !evidenceHandledBrandIds.has(snapshot.brand.id))
+      : input.snapshots;
+  const planningConfig: ActivationConfig = {
+    ...input.config,
+    maxActionsPerTick: Math.max(0, remainingCapacity),
+  };
+  const eligibleWork = summarizeEligibleWork(planningSnapshots);
+
+  if (evidenceFirstPlan.actions.length > 0 && (planningConfig.maxActionsPerTick <= 0 || eligibleWork.length === 0)) {
+    return {
+      plan: evidenceFirstPlan,
+      model: "evidence:first_pass",
+    };
+  }
+
   const growthToolCatalog = listGrowthToolCatalog()
     .filter((tool) => tool.enabled)
     .map((tool) => ({
@@ -1838,16 +1896,17 @@ async function planActivationWithLlm(input: {
     "- If eligibleWork JSON is non-empty, actions must contain at least one non-observe action. Returning an empty actions array is invalid.",
     "- If a mission is deliverability_blocked because no sending route is assigned, and no ready/warming/provisioning sender exists, choose customerio.sender.provision through use_growth_tool or provision_mailpool_sender based on which transport is most likely to unblock exact-copy placement tests.",
     "",
-    `allowDomainRegistration: ${input.config.allowDomainRegistration}`,
-    `allowGrowthTools: ${input.config.allowGrowthTools}`,
-    `allowGuardedGrowthTools: ${input.config.allowGuardedGrowthTools}`,
-    `allowSpendGrowthTools: ${input.config.allowSpendGrowthTools}`,
-    `allowReputationGrowthTools: ${input.config.allowReputationGrowthTools}`,
-    `maxActions: ${input.config.maxActionsPerTick}`,
-    `hasRegistrantForDomainPurchases: ${Boolean(input.config.registrant)}`,
+    `allowDomainRegistration: ${planningConfig.allowDomainRegistration}`,
+    `allowGrowthTools: ${planningConfig.allowGrowthTools}`,
+    `allowGuardedGrowthTools: ${planningConfig.allowGuardedGrowthTools}`,
+    `allowSpendGrowthTools: ${planningConfig.allowSpendGrowthTools}`,
+    `allowReputationGrowthTools: ${planningConfig.allowReputationGrowthTools}`,
+    `maxActions: ${planningConfig.maxActionsPerTick}`,
+    `hasRegistrantForDomainPurchases: ${Boolean(planningConfig.registrant)}`,
+    `evidenceFirstActionsAlreadyPlanned JSON: ${JSON.stringify(evidenceFirstPlan.actions)}`,
     `growthToolCatalog JSON: ${JSON.stringify(growthToolCatalog)}`,
     `eligibleWork JSON: ${JSON.stringify(eligibleWork)}`,
-    `brand snapshots JSON: ${JSON.stringify(input.snapshots)}`,
+    `brand snapshots JSON: ${JSON.stringify(planningSnapshots)}`,
   ].join("\n");
 
   const schema = {
@@ -1858,7 +1917,7 @@ async function planActivationWithLlm(input: {
               actions: {
                 type: "array",
                 minItems: eligibleWork.length > 0 ? 1 : 0,
-                maxItems: input.config.maxActionsPerTick,
+                maxItems: planningConfig.maxActionsPerTick,
                 items: {
                   type: "object",
                   additionalProperties: false,
@@ -2095,26 +2154,36 @@ async function planActivationWithLlm(input: {
         relaxedParsed = {};
       }
       return {
-        plan: applyAutonomousEvidenceActions({
-          plan: normalizeActivationPlan(relaxedParsed, input.config.maxActionsPerTick),
-          snapshots: input.snapshots,
+        plan: mergeEvidenceFirstPlan({
+          evidencePlan: evidenceFirstPlan,
+          llmPlan: applyAutonomousEvidenceActions({
+            plan: normalizeActivationPlan(relaxedParsed, planningConfig.maxActionsPerTick),
+            snapshots: planningSnapshots,
+            config: planningConfig,
+          }),
           config: input.config,
         }),
-        model: `${relaxed.provider}:${relaxed.model}:relaxed_json`,
+        model:
+          evidenceFirstPlan.actions.length > 0
+            ? `evidence:first_pass+${relaxed.provider}:${relaxed.model}:relaxed_json`
+            : `${relaxed.provider}:${relaxed.model}:relaxed_json`,
       };
     } catch {
       // Fall through to evidence-only recovery below.
     }
-    const fallbackPlan = buildTransportFallbackOnlyPlan({
-      snapshots: input.snapshots,
-      config: input.config,
-      summary:
-        "LLM planning was unavailable after strict and relaxed JSON attempts, so LastB2B used live deliverability evidence to run the transport fallback only.",
-    });
+    const fallbackPlan =
+      evidenceFirstPlan.actions.length > 0
+        ? evidenceFirstPlan
+        : buildAutonomousEvidenceOnlyPlan({
+            snapshots: input.snapshots,
+            config: input.config,
+            summary:
+              "LLM planning was unavailable after strict and relaxed JSON attempts, so LastB2B used live deliverability evidence only.",
+          });
     if (fallbackPlan.actions.length > 0) {
       return {
         plan: fallbackPlan,
-        model: "evidence:transport_fallback",
+        model: "evidence:first_pass:llm_unavailable",
       };
     }
     throw error;
@@ -2126,9 +2195,9 @@ async function planActivationWithLlm(input: {
     parsed = {};
   }
   const plan = applyAutonomousEvidenceActions({
-    plan: normalizeActivationPlan(parsed, input.config.maxActionsPerTick),
-    snapshots: input.snapshots,
-    config: input.config,
+    plan: normalizeActivationPlan(parsed, planningConfig.maxActionsPerTick),
+    snapshots: planningSnapshots,
+    config: planningConfig,
   });
   if (eligibleWork.length > 0 && plan.actions.length === 0) {
     let retry: Awaited<ReturnType<typeof generateJsonWithLlm>>;
@@ -2175,26 +2244,36 @@ async function planActivationWithLlm(input: {
           relaxedRetryParsed = {};
         }
         return {
-          plan: applyAutonomousEvidenceActions({
-            plan: normalizeActivationPlan(relaxedRetryParsed, input.config.maxActionsPerTick),
-            snapshots: input.snapshots,
+          plan: mergeEvidenceFirstPlan({
+            evidencePlan: evidenceFirstPlan,
+            llmPlan: applyAutonomousEvidenceActions({
+              plan: normalizeActivationPlan(relaxedRetryParsed, planningConfig.maxActionsPerTick),
+              snapshots: planningSnapshots,
+              config: planningConfig,
+            }),
             config: input.config,
           }),
-          model: `${relaxedRetry.provider}:${relaxedRetry.model}:relaxed_json`,
+          model:
+            evidenceFirstPlan.actions.length > 0
+              ? `evidence:first_pass+${relaxedRetry.provider}:${relaxedRetry.model}:relaxed_json`
+              : `${relaxedRetry.provider}:${relaxedRetry.model}:relaxed_json`,
         };
       } catch {
         // Fall through to evidence-only recovery below.
       }
-      const fallbackPlan = buildTransportFallbackOnlyPlan({
-        snapshots: input.snapshots,
-        config: input.config,
-        summary:
-          "LLM retry planning was unavailable after strict and relaxed JSON attempts, so LastB2B used live deliverability evidence to run the transport fallback only.",
-      });
+      const fallbackPlan =
+        evidenceFirstPlan.actions.length > 0
+          ? evidenceFirstPlan
+          : buildAutonomousEvidenceOnlyPlan({
+              snapshots: input.snapshots,
+              config: input.config,
+              summary:
+                "LLM retry planning was unavailable after strict and relaxed JSON attempts, so LastB2B used live deliverability evidence only.",
+            });
       if (fallbackPlan.actions.length > 0) {
         return {
           plan: fallbackPlan,
-          model: "evidence:transport_fallback",
+          model: "evidence:first_pass:llm_unavailable",
         };
       }
       throw error;
@@ -2206,17 +2285,31 @@ async function planActivationWithLlm(input: {
       retryParsed = {};
     }
     return {
-      plan: applyAutonomousEvidenceActions({
-        plan: normalizeActivationPlan(retryParsed, input.config.maxActionsPerTick),
-        snapshots: input.snapshots,
+      plan: mergeEvidenceFirstPlan({
+        evidencePlan: evidenceFirstPlan,
+        llmPlan: applyAutonomousEvidenceActions({
+          plan: normalizeActivationPlan(retryParsed, planningConfig.maxActionsPerTick),
+          snapshots: planningSnapshots,
+          config: planningConfig,
+        }),
         config: input.config,
       }),
-      model: `${retry.provider}:${retry.model}`,
+      model:
+        evidenceFirstPlan.actions.length > 0
+          ? `evidence:first_pass+${retry.provider}:${retry.model}`
+          : `${retry.provider}:${retry.model}`,
     };
   }
   return {
-    plan,
-    model: `${generated.provider}:${generated.model}`,
+    plan: mergeEvidenceFirstPlan({
+      evidencePlan: evidenceFirstPlan,
+      llmPlan: plan,
+      config: input.config,
+    }),
+    model:
+      evidenceFirstPlan.actions.length > 0
+        ? `evidence:first_pass+${generated.provider}:${generated.model}`
+        : `${generated.provider}:${generated.model}`,
   };
 }
 

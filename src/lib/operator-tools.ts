@@ -30,6 +30,7 @@ import {
   getScaleCampaignRecordById,
   listScaleCampaignRecords,
   promoteExperimentRecordToCampaign,
+  resolveScaleCampaignLane,
   updateExperimentRecord,
   updateScaleCampaignRecord,
 } from "@/lib/experiment-data";
@@ -52,10 +53,13 @@ import {
 import { getOperatorBrandContext, getOperatorSenderContext } from "@/lib/operator-context";
 import type { OperatorToolName, OperatorToolResult, OperatorToolSpec } from "@/lib/operator-types";
 import {
+  getCampaignPrepTask,
+  getOutreachAccount,
   getOutreachRun,
   getReplyDraft,
   getReplyThread,
   getReplyThreadState,
+  listRunJobs,
   listDeliverabilityProbeRuns,
   listReplyMessagesByThread,
   listReplyThreadFeedback,
@@ -74,6 +78,11 @@ import {
   launchScaleCampaignRun,
   updateRunControl,
 } from "@/lib/outreach-runtime";
+import { buildOutreachStatusResponse } from "@/lib/outreach-status";
+import {
+  getOutreachAccountFromEmail,
+  isOutreachOutboundEnabled,
+} from "@/lib/outreach-account-helpers";
 import { isDeliverabilitySeedSendingDisabledReason } from "@/lib/sender-health";
 
 const RUN_OPEN_STATUSES = new Set([
@@ -777,6 +786,351 @@ function extractEmailFromText(value: string) {
   return value.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i)?.[0]?.toLowerCase() ?? "";
 }
 
+function uniqueValues(values: string[]) {
+  return Array.from(new Set(values.map((value) => value.trim()).filter(Boolean)));
+}
+
+function activeOutboundCampaigns(campaigns: ScaleCampaignRecord[]) {
+  return campaigns.filter(
+    (campaign) => campaign.status === "active" && resolveScaleCampaignLane(campaign) === "outbound"
+  );
+}
+
+function sortByNewestUpdate<T extends { updatedAt?: string; createdAt?: string }>(rows: T[]) {
+  return [...rows].sort((left, right) => {
+    const leftAt = asString(left.updatedAt) || asString(left.createdAt);
+    const rightAt = asString(right.updatedAt) || asString(right.createdAt);
+    return leftAt < rightAt ? 1 : -1;
+  });
+}
+
+function compactOutboundRun(run: Awaited<ReturnType<typeof listOwnerRuns>>[number] | null) {
+  if (!run) return null;
+  return {
+    id: run.id,
+    status: run.status,
+    campaignId: run.campaignId,
+    experimentId: run.experimentId,
+    ownerType: run.ownerType,
+    ownerId: run.ownerId,
+    accountId: run.accountId,
+    lockedSenderAccountId: run.lockedSenderAccountId,
+    dailyCap: run.dailyCap,
+    hourlyCap: run.hourlyCap,
+    minSpacingMinutes: run.minSpacingMinutes,
+    metrics: run.metrics,
+    lastError: run.lastError,
+    pauseReason: run.pauseReason,
+    startedAt: run.startedAt,
+    completedAt: run.completedAt,
+    createdAt: run.createdAt,
+    updatedAt: run.updatedAt,
+  };
+}
+
+function compactRunJob(job: Awaited<ReturnType<typeof listRunJobs>>[number]) {
+  return {
+    id: job.id,
+    jobType: job.jobType,
+    status: job.status,
+    executeAfter: job.executeAfter,
+    lastError: job.lastError,
+    createdAt: job.createdAt,
+    updatedAt: job.updatedAt,
+  };
+}
+
+function summarizeMessageQueue(messages: Awaited<ReturnType<typeof listRunMessages>>) {
+  return {
+    total: messages.length,
+    scheduled: messages.filter((message) => message.status === "scheduled").length,
+    due: messages.filter(
+      (message) =>
+        message.status === "scheduled" &&
+        message.scheduledAt &&
+        Date.parse(message.scheduledAt) <= Date.now()
+    ).length,
+    sent: messages.filter((message) => message.status === "sent").length,
+    failed: messages.filter((message) => message.status === "failed").length,
+    canceled: messages.filter((message) => message.status === "canceled").length,
+  };
+}
+
+function blockerStep(input: {
+  layer: string;
+  status: "ok" | "blocked" | "waiting" | "unknown";
+  summary: string;
+  details?: Record<string, unknown>;
+}) {
+  return {
+    layer: input.layer,
+    status: input.status,
+    summary: input.summary,
+    details: input.details ?? {},
+  };
+}
+
+async function inspectOutboundBlockerChain(input: Record<string, unknown>): Promise<OperatorToolResult> {
+  const brandId = requireString(input, "brandId");
+  const requestedCampaignId = asString(input.campaignId);
+
+  const [brand, context, outreachStatus, campaigns] = await Promise.all([
+    getBrandOrThrow(brandId),
+    getOperatorBrandContext(brandId),
+    buildOutreachStatusResponse({ brandId, includeWarmup: true, limitBrands: 1 }),
+    listScaleCampaignRecords(brandId),
+  ]);
+  if (!context) throw new Error("Brand not found");
+
+  const brandStatus = outreachStatus.brands[0] ?? null;
+  const outboundCampaigns = activeOutboundCampaigns(campaigns);
+  const selectedCampaign =
+    (requestedCampaignId
+      ? campaigns.find((campaign) => campaign.id === requestedCampaignId) ?? null
+      : null) ??
+    (brandStatus?.campaignSummary.activeOutboundCampaignId
+      ? campaigns.find((campaign) => campaign.id === brandStatus.campaignSummary.activeOutboundCampaignId) ?? null
+      : null) ??
+    sortByNewestUpdate(outboundCampaigns)[0] ??
+    null;
+
+  const selectedCampaignId = selectedCampaign?.id ?? "";
+  const [prepTask, campaignRuns] = selectedCampaignId
+    ? await Promise.all([
+        getCampaignPrepTask(brandId, selectedCampaignId, { allowMissingTable: true }),
+        listOwnerRuns(brandId, "campaign", selectedCampaignId),
+      ])
+    : [null, [] as Awaited<ReturnType<typeof listOwnerRuns>>];
+  const latestRun = pickRun(sortByNewestUpdate(campaignRuns));
+  const [runMessages, runLeads, runJobs] = latestRun
+    ? await Promise.all([
+        listRunMessages(latestRun.id),
+        listRunLeads(latestRun.id),
+        listRunJobs(latestRun.id),
+      ])
+    : [
+        [] as Awaited<ReturnType<typeof listRunMessages>>,
+        [] as Awaited<ReturnType<typeof listRunLeads>>,
+        [] as Awaited<ReturnType<typeof listRunJobs>>,
+      ];
+
+  const evidenceRows = brandStatus?.senderRouteEvidence ?? [];
+  const senderAccountIds = uniqueValues([
+    ...evidenceRows.map((row) => row.accountId),
+    selectedCampaign?.scalePolicy.accountId ?? "",
+    selectedCampaign?.scalePolicy.mailboxAccountId ?? "",
+    context.assignment?.accountId ?? "",
+    ...(context.assignment?.accountIds ?? []),
+    context.assignment?.mailboxAccountId ?? "",
+  ]);
+  const accounts = await Promise.all(senderAccountIds.map((accountId) => getOutreachAccount(accountId)));
+  const accountById = new Map(
+    accounts
+      .filter((account): account is NonNullable<typeof account> => Boolean(account))
+      .map((account) => [account.id, account] as const)
+  );
+
+  const senderRows = evidenceRows.map((row) => {
+    const account = accountById.get(row.accountId) ?? null;
+    return {
+      accountId: row.accountId,
+      fromEmail: row.fromEmail || (account ? getOutreachAccountFromEmail(account) : ""),
+      routeKind: row.routeKind,
+      provider: row.provider,
+      accountStatus: account?.status ?? "",
+      outboundEnabled: isOutreachOutboundEnabled(account),
+      state: row.state,
+      placement: row.placement,
+      inboxRate: row.inboxRate,
+      spamRate: row.spamRate,
+      autoPaused: row.autoPaused,
+      checkedAt: row.checkedAt,
+      summaryText: row.summaryText,
+    };
+  });
+  const selectedSenderAccountId =
+    asString(selectedCampaign?.scalePolicy.accountId) ||
+    asString(latestRun?.accountId) ||
+    asString(context.assignment?.accountId);
+  const selectedAccount = selectedSenderAccountId ? accountById.get(selectedSenderAccountId) ?? await getOutreachAccount(selectedSenderAccountId) : null;
+  const selectedSenderEvidence =
+    senderRows.find((row) => row.accountId === selectedSenderAccountId) ?? null;
+  const outboundEnabledReadySenders = senderRows.filter(
+    (row) => row.state === "ready" && row.accountStatus === "active" && row.outboundEnabled
+  );
+
+  const messageQueue = summarizeMessageQueue(runMessages);
+  const activeDispatchJobs = runJobs.filter(
+    (job) => job.jobType === "dispatch_messages" && ["queued", "running"].includes(job.status)
+  );
+  const openRunStatuses = new Set(["queued", "sourcing", "scheduled", "sending", "monitoring", "paused"]);
+  const latestRunOpen = latestRun ? openRunStatuses.has(latestRun.status) : false;
+
+  const chain = [
+    blockerStep({
+      layer: "sender_routes",
+      status: outboundEnabledReadySenders.length > 0 ? "ok" : senderRows.length > 0 ? "blocked" : "unknown",
+      summary: outboundEnabledReadySenders.length
+        ? `${outboundEnabledReadySenders.length} sender route${outboundEnabledReadySenders.length === 1 ? "" : "s"} are ready and enabled for outbound.`
+        : senderRows.length
+          ? "Sender routes exist, but none are both ready and enabled for outbound."
+          : "No sender route evidence was found.",
+      details: {
+        selectedSenderAccountId,
+        selectedSenderEmail:
+          selectedSenderEvidence?.fromEmail ||
+          (selectedAccount ? getOutreachAccountFromEmail(selectedAccount).trim().toLowerCase() : ""),
+        selectedSenderOutboundEnabled: isOutreachOutboundEnabled(selectedAccount),
+        readyOutboundSenderCount: outboundEnabledReadySenders.length,
+      },
+    }),
+    blockerStep({
+      layer: "active_campaign",
+      status: selectedCampaign && selectedCampaign.status === "active" ? "ok" : outboundCampaigns.length ? "waiting" : "blocked",
+      summary: selectedCampaign
+        ? `${selectedCampaign.name} is ${selectedCampaign.status} on the ${resolveScaleCampaignLane(selectedCampaign)} lane.`
+        : "No active outbound campaign is selected.",
+      details: {
+        campaignId: selectedCampaign?.id ?? "",
+        activeOutboundCampaignCount: outboundCampaigns.length,
+        pinnedSenderAccountId: selectedCampaign?.scalePolicy.accountId ?? "",
+      },
+    }),
+    blockerStep({
+      layer: "inventory",
+      status:
+        brandStatus?.inventorySummary.inventoryBlockerCode &&
+        brandStatus.inventorySummary.inventoryBlockerCode !== "none"
+          ? "blocked"
+          : brandStatus?.inventorySummary.inventoryDispatchable
+            ? "ok"
+            : "waiting",
+      summary:
+        brandStatus?.inventorySummary.inventoryBlockerCode &&
+        brandStatus.inventorySummary.inventoryBlockerCode !== "none"
+          ? brandStatus.inventorySummary.inventoryBlockerSummary || "Campaign inventory is not ready."
+          : brandStatus?.inventorySummary.inventoryDispatchable
+            ? "Campaign inventory is dispatchable."
+            : "Campaign inventory is not dispatchable yet.",
+      details: {
+        prepTask: prepTask
+          ? {
+              id: prepTask.id,
+              status: prepTask.status,
+              attempt: prepTask.attempt,
+              executeAfter: prepTask.executeAfter,
+              blockerCode: prepTask.blockerCode,
+              summary: prepTask.summary,
+              lastError: prepTask.lastError,
+              progress: stripSensitiveKeys(prepTask.progress),
+            }
+          : null,
+        inventorySummary: brandStatus?.inventorySummary ?? null,
+      },
+    }),
+    blockerStep({
+      layer: "run",
+      status: latestRunOpen ? "ok" : latestRun ? "blocked" : "waiting",
+      summary: latestRun
+        ? latestRunOpen
+          ? `Latest campaign run is open with status ${latestRun.status}.`
+          : `Latest campaign run is ${latestRun.status}; there is no open outbound run${
+              messageQueue.scheduled === 0 ? " and no scheduled messages" : ""
+            }${latestRun.lastError ? `: ${latestRun.lastError}` : ""}.`
+        : "No campaign run exists for the selected campaign.",
+      details: {
+        latestRun: compactOutboundRun(latestRun),
+        totalCampaignRuns: campaignRuns.length,
+      },
+    }),
+    blockerStep({
+      layer: "message_queue",
+      status: messageQueue.due > 0 || messageQueue.scheduled > 0 ? "ok" : latestRunOpen ? "waiting" : "blocked",
+      summary:
+        messageQueue.due > 0
+          ? `${messageQueue.due} scheduled message${messageQueue.due === 1 ? " is" : "s are"} due now.`
+          : messageQueue.scheduled > 0
+            ? `${messageQueue.scheduled} message${messageQueue.scheduled === 1 ? " is" : "s are"} scheduled for later.`
+            : "There are no scheduled outbound messages.",
+      details: {
+        messageQueue,
+        leadCount: runLeads.length,
+        sampleMessages: runMessages.slice(0, 5).map(compactRunMessage),
+        sampleLeads: runLeads.slice(0, 5).map(compactRunLead),
+      },
+    }),
+    blockerStep({
+      layer: "dispatch",
+      status: brandStatus?.capacitySummary.dispatchableNow ? "ok" : activeDispatchJobs.length ? "waiting" : "blocked",
+      summary: brandStatus?.capacitySummary.dispatchableNow
+        ? "The brand has dispatchable mail now."
+        : activeDispatchJobs.length
+          ? "A dispatch job is queued or running."
+          : "There is no dispatchable mail right now.",
+      details: {
+        capacitySummary: brandStatus?.capacitySummary ?? null,
+        executionSummary: brandStatus?.executionSummary ?? null,
+        activeDispatchJobs: activeDispatchJobs.map(compactRunJob),
+      },
+    }),
+  ];
+  const firstBlocker = chain.find((step) => step.status === "blocked") ?? chain.find((step) => step.status === "waiting") ?? null;
+  const nextActions: string[] = [];
+  if (!selectedCampaign) {
+    nextActions.push("Create or activate an outbound campaign for the selected mission/experiment.");
+  } else if (!outboundEnabledReadySenders.length) {
+    nextActions.push("Enable one inbox-proven ready sender for outbound or switch the campaign to an outbound-enabled sender.");
+  } else if (brandStatus?.inventorySummary.inventoryBlockerCode && brandStatus.inventorySummary.inventoryBlockerCode !== "none") {
+    nextActions.push("Repair campaign prep and keep sourcing/importing smaller batches until sendable leads exist.");
+  } else if (!latestRunOpen) {
+    nextActions.push("Restart or launch the campaign now that sender and inventory gates are clear.");
+  } else if (messageQueue.scheduled === 0) {
+    nextActions.push("Schedule real campaign-copy messages for sendable leads.");
+  } else if (!activeDispatchJobs.length && messageQueue.due > 0) {
+    nextActions.push("Queue a dispatch job for due messages.");
+  }
+
+  const summary = firstBlocker
+    ? `${brand.name} is not sending because ${firstBlocker.summary[0]?.toLowerCase()}${firstBlocker.summary.slice(1)}`
+    : `${brand.name} has no active outbound blocker in the inspected chain.`;
+
+  return {
+    summary,
+    result: {
+      objectType: "outbound_blocker_chain",
+      brand: { id: brand.id, name: brand.name },
+      selectedCampaign: selectedCampaign
+        ? {
+            id: selectedCampaign.id,
+            name: selectedCampaign.name,
+            status: selectedCampaign.status,
+            lane: resolveScaleCampaignLane(selectedCampaign),
+            sourceExperimentId: selectedCampaign.sourceExperimentId,
+            scalePolicy: selectedCampaign.scalePolicy,
+          }
+        : null,
+      blocker: firstBlocker,
+      chain,
+      senderRoutes: senderRows,
+      nextActions,
+      liveStatus: brandStatus
+        ? {
+            primaryBlockerDomain: brandStatus.primaryBlockerDomain,
+            primaryBlockerCode: brandStatus.primaryBlockerCode,
+            primaryBlockerSummary: brandStatus.primaryBlockerSummary,
+            senderSummary: brandStatus.senderSummary,
+            campaignSummary: brandStatus.campaignSummary,
+            inventorySummary: brandStatus.inventorySummary,
+            executionSummary: brandStatus.executionSummary,
+            capacitySummary: brandStatus.capacitySummary,
+          }
+        : null,
+      evidencePolicy:
+        "Use this tool before answering why real outbound is not sending. It checks the blocker chain in order: sender route, outbound-enabled flag, campaign, inventory, run, message queue, dispatch.",
+    },
+  } satisfies OperatorToolResult;
+}
+
 async function inspectSenderDeliveryEvidence(input: Record<string, unknown>): Promise<OperatorToolResult> {
   const brandId = requireString(input, "brandId");
   const query = asString(input.query);
@@ -954,6 +1308,15 @@ const TOOL_SPECS: OperatorToolSpec[] = [
         result: context as unknown as Record<string, unknown>,
       } satisfies OperatorToolResult;
     },
+  },
+  {
+    name: "inspect_outbound_blocker_chain",
+    riskLevel: "read",
+    approvalMode: "none",
+    description:
+      "Inspect why real outbound is or is not sending for a brand. Walks the live blocker chain in order: sender route, outbound-enabled flag, active campaign, inventory/prep, run, scheduled messages, and dispatch jobs. Use this before answering questions like why aren't we sending real mail, why no outbound, what is blocked, or what needs to happen next.",
+    previewTitle: "Inspect outbound blocker chain",
+    run: inspectOutboundBlockerChain,
   },
   {
     name: "inspect_sender_delivery_evidence",

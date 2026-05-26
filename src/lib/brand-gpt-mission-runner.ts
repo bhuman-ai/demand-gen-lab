@@ -24,6 +24,8 @@ type BrandGptMissionRunnerConfig = {
   limit: number;
   cooldownMinutes: number;
   mode: MissionRunnerMode;
+  executionPolicy: NonNullable<OperatorChatRequest["executionPolicy"]>;
+  autonomousToolAllowlist: string[];
   brandAllowlist: Set<string>;
   brandDenylist: Set<string>;
   brandNameDenylist: Set<string>;
@@ -89,13 +91,22 @@ function envSet(name: string, fallback: string[] = []) {
   return new Set(values.map((value) => value.trim().toLowerCase()).filter(Boolean));
 }
 
+function envList(name: string, fallback: string[] = []) {
+  const raw = asString(process.env[name]);
+  const values = raw ? raw.split(",") : fallback;
+  return values.map((value) => value.trim()).filter(Boolean);
+}
+
 function getConfig(): BrandGptMissionRunnerConfig {
   const rawMode = asString(process.env.BRAND_GPT_MISSION_RUNNER_MODE).toLowerCase();
+  const rawExecutionPolicy = asString(process.env.BRAND_GPT_MISSION_RUNNER_EXECUTION_POLICY).toLowerCase();
   return {
     enabled: envBoolean("BRAND_GPT_MISSION_RUNNER_ENABLED", false),
     limit: envNumber("BRAND_GPT_MISSION_RUNNER_LIMIT", 3, 1, 25),
-    cooldownMinutes: envNumber("BRAND_GPT_MISSION_RUNNER_COOLDOWN_MINUTES", 60, 5, 1440),
-    mode: rawMode === "default" ? "default" : "recommendation_only",
+    cooldownMinutes: envNumber("BRAND_GPT_MISSION_RUNNER_COOLDOWN_MINUTES", 15, 5, 1440),
+    mode: rawMode === "recommendation_only" ? "recommendation_only" : "default",
+    executionPolicy: rawExecutionPolicy === "confirm_required" ? "confirm_required" : "autonomous",
+    autonomousToolAllowlist: envList("BRAND_GPT_MISSION_RUNNER_AUTONOMOUS_TOOLS"),
     brandAllowlist: envSet("BRAND_GPT_MISSION_RUNNER_BRAND_IDS"),
     brandDenylist: envSet("BRAND_GPT_MISSION_RUNNER_DENY_BRAND_IDS"),
     brandNameDenylist: envSet("BRAND_GPT_MISSION_RUNNER_DENY_BRAND_NAMES", DEFAULT_DENY_BRAND_NAMES),
@@ -178,6 +189,7 @@ function buildHeartbeatPrompt(input: {
   detail: MissionDetail;
   brandName: string;
   mode: MissionRunnerMode;
+  executionPolicy: NonNullable<OperatorChatRequest["executionPolicy"]>;
 }) {
   const recentEvents = input.detail.events.slice(0, 8).map((event) => ({
     type: event.eventType,
@@ -202,7 +214,11 @@ function buildHeartbeatPrompt(input: {
   return [
     `Autonomous Brand GPT mission heartbeat for ${input.brandName || input.mission.brandId}.`,
     "You are running without a human prompt. Think like Codex: inspect live account evidence with tools, decide what matters now, and report the next useful move.",
+    "You are allowed to keep moving when the platform exposes an allowed tool. Do not stop at advice if the next tool call is available and within policy.",
+    "For outbound missions, first ask yourself: why is real outbound not sending right now? Use inspect_outbound_blocker_chain before answering or picking a campaign action.",
+    "If the blocker chain shows a concrete next action such as launch/resume/probe and the tool is available, choose that tool in this turn. If a tool fails, report the exact failure and the next tool you would try.",
     `Runner mode: ${input.mode}. If a write, send, launch, domain purchase, or other risky action is needed while mode is recommendation_only, propose it precisely with evidence instead of pretending it happened.`,
+    `Execution policy: ${input.executionPolicy}. If this is autonomous, the host may auto-approve allowed guarded tools and will still enforce tenant credentials, budgets, unsubscribe/compliance, provider limits, and audit logging.`,
     "Do not wait for generic instructions. Use your tools when live state is needed. Do not invent replies, lead counts, sender state, or deliverability status.",
     "Prefer a concise final answer that says: what you checked, what you learned, next move, and what remains unproven.",
     `Mission JSON: ${safeJson({
@@ -303,12 +319,15 @@ async function runMission(input: {
     detail,
     brandName,
     mode: input.config.mode,
+    executionPolicy: input.config.executionPolicy,
   });
   const response = await runOperatorChatTurn({
     brandId: refreshed.brandId,
     threadId: thread.id,
     message,
     mode: input.config.mode,
+    executionPolicy: input.config.executionPolicy,
+    autonomousToolAllowlist: input.config.autonomousToolAllowlist,
   });
   const evidence = extractEvidence(response);
   const summary = truncateText(response.assistant.summary, 1200);
@@ -326,6 +345,7 @@ async function runMission(input: {
       input: {
         threadId: response.thread.id,
         mode: input.config.mode,
+        executionPolicy: input.config.executionPolicy,
         prompt: "autonomous mission heartbeat",
       },
       output: {
@@ -373,6 +393,8 @@ async function runMission(input: {
     input: {
       threadId: response.thread.id,
       mode: input.config.mode,
+      executionPolicy: input.config.executionPolicy,
+      autonomousToolAllowlist: input.config.autonomousToolAllowlist,
       prompt: "autonomous mission heartbeat",
     },
     output: {
@@ -444,6 +466,7 @@ export async function runBrandGptMissionTick() {
     return {
       enabled: false,
       mode: config.mode,
+      executionPolicy: config.executionPolicy,
       checked: 0,
       ran: 0,
       skipped: 0,
@@ -485,6 +508,7 @@ export async function runBrandGptMissionTick() {
   return {
     enabled: true,
     mode: config.mode,
+    executionPolicy: config.executionPolicy,
     checked: missions.length,
     ran,
     skipped: rows.filter((row) => row.skipped).length,

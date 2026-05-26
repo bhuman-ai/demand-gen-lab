@@ -67,6 +67,21 @@ type OperatorChatTurnInternalRequest = OperatorChatRequest & {
   skipUserMessage?: boolean;
 };
 
+// Safety boundary only: this is not a strategy heuristic. Strategy still comes from the agent;
+// this list controls which guarded tools may run without a human confirmation click by default.
+const DEFAULT_AUTONOMOUS_GUARDED_TOOLS = [
+  "gmail_ui_send_message",
+  "provision_mailpool_sender",
+  "provision_customerio_sender",
+  "launch_experiment_run",
+  "control_experiment_run",
+  "promote_experiment_to_campaign",
+  "launch_campaign_run",
+  "control_campaign_run",
+  "create_leadr_campaign",
+  "resume_leadr_campaign",
+] satisfies OperatorToolName[];
+
 function nowIso() {
   return new Date().toISOString();
 }
@@ -80,6 +95,34 @@ function asRecord(value: unknown): Record<string, unknown> {
     return value as Record<string, unknown>;
   }
   return {};
+}
+
+function parseCsvSet(value: string) {
+  return new Set(
+    value
+      .split(",")
+      .map((entry) => entry.trim())
+      .filter(Boolean)
+  );
+}
+
+function autonomousGuardedToolAllowlist(input: OperatorChatRequest) {
+  if (Array.isArray(input.autonomousToolAllowlist) && input.autonomousToolAllowlist.length > 0) {
+    return new Set(input.autonomousToolAllowlist.map((entry) => entry.trim()).filter(Boolean));
+  }
+  const configured = asString(process.env.OPERATOR_AUTONOMOUS_GUARDED_TOOLS);
+  if (configured) return parseCsvSet(configured);
+  return new Set(DEFAULT_AUTONOMOUS_GUARDED_TOOLS);
+}
+
+function canAutonomouslyApproveTool(input: OperatorChatRequest, tool: OperatorToolSpec) {
+  if (input.executionPolicy !== "autonomous") return false;
+  if (input.mode === "recommendation_only") return false;
+  if (tool.approvalMode !== "confirm") return false;
+  if (tool.riskLevel === "blocked") return false;
+  const allowlist = autonomousGuardedToolAllowlist(input);
+  if (allowlist.has("none")) return false;
+  return allowlist.has("*") || allowlist.has(tool.name);
 }
 
 function isProvisionSenderToolName(toolName: OperatorToolName | "") {
@@ -1729,6 +1772,7 @@ function resolveSenderAccountId(
 
 const TOOLS_WITH_BRAND_CONTEXT = new Set<OperatorToolName>([
   "get_brand_snapshot",
+  "inspect_outbound_blocker_chain",
   "summarize_campaign_status",
   "get_campaign_snapshot",
   "summarize_experiments",
@@ -2355,6 +2399,29 @@ function inferActionFromMessage(
     };
   }
 
+  const asksWhyOutboundIsNotSending =
+    context?.brand.id &&
+    (/\bwhy\b/.test(message) || /\bwhat'?s?\b/.test(message) || /\bwhat is\b/.test(message) || /\bblock/.test(message)) &&
+    (
+      /\bsend(ing|s)?\b/.test(message) ||
+      /\boutbound\b/.test(message) ||
+      /\breal mail\b/.test(message) ||
+      /\breal email\b/.test(message) ||
+      /\bscheduled messages?\b/.test(message) ||
+      /\bcampaign\b/.test(message)
+    );
+
+  if (asksWhyOutboundIsNotSending) {
+    return {
+      toolName: "inspect_outbound_blocker_chain",
+      input: {
+        brandId: context.brand.id,
+        campaignId,
+        query: input.message,
+      },
+    };
+  }
+
   if (context?.brand.id && message.includes("inbox")) {
     return {
       toolName: "summarize_inbox",
@@ -2713,6 +2780,86 @@ async function executeToolAction(input: {
   return { result, updatedAction };
 }
 
+async function executeAutonomousConfirmedTool(input: {
+  threadId: string;
+  runId: string;
+  userId?: string;
+  tool: OperatorToolSpec;
+  toolInput: Record<string, unknown>;
+  preview: Record<string, unknown>;
+}) {
+  const action = await createOperatorAction({
+    runId: input.runId,
+    toolName: input.tool.name,
+    riskLevel: input.tool.riskLevel,
+    approvalMode: input.tool.approvalMode,
+    status: "running",
+    input: input.toolInput,
+    preview: input.preview,
+  });
+  await createOperatorApproval({
+    actionId: action.id,
+    requestedByUserId: input.userId,
+    decidedByUserId: input.userId,
+    decision: "approved",
+    note: "Autonomously approved by Brand GPT under the active execution policy.",
+  });
+
+  try {
+    const executed = await executeToolAction({
+      threadId: input.threadId,
+      actionId: action.id,
+      tool: input.tool,
+      toolInput: input.toolInput,
+    });
+    const receipt =
+      executed.result.receipt ??
+      ({
+        title: "Action completed",
+        summary: executed.result.summary,
+        details: [],
+      } satisfies OperatorReceipt);
+    return {
+      action: executed.updatedAction ?? action,
+      assistant: {
+        summary: executed.result.summary,
+        findings: [],
+        recommendations: [],
+      } satisfies OperatorChatAssistantReply,
+      execution: buildExecutionEnvelope({
+        state: "completed",
+        actionId: executed.updatedAction?.id ?? action.id,
+        toolName: input.tool.name,
+        toolInput: input.toolInput,
+        preview: input.preview,
+        receipt,
+      }),
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Operator action failed";
+    const failedAction = await updateOperatorAction(action.id, {
+      status: "failed",
+      errorText: message,
+    });
+    return {
+      action: failedAction ?? action,
+      assistant: {
+        summary: `It failed. ${message}`,
+        findings: [],
+        recommendations: [],
+      } satisfies OperatorChatAssistantReply,
+      execution: buildExecutionEnvelope({
+        state: "failed",
+        actionId: failedAction?.id ?? action.id,
+        toolName: input.tool.name,
+        toolInput: input.toolInput,
+        preview: input.preview,
+        error: message,
+      }),
+    };
+  }
+}
+
 async function resolveOperatorThread(input: {
   threadId?: string;
   userId?: string;
@@ -2760,6 +2907,10 @@ export async function startOperatorChatRun(input: OperatorChatRequest): Promise<
       ...snapshotContext(brandContext),
       pendingMessageId: message.id,
       requestedMode: input.mode === "recommendation_only" ? "recommendation_only" : "default",
+      executionPolicy: input.executionPolicy === "autonomous" ? "autonomous" : "confirm_required",
+      autonomousToolAllowlist: Array.isArray(input.autonomousToolAllowlist)
+        ? input.autonomousToolAllowlist.map((entry) => asString(entry)).filter(Boolean).slice(0, 80)
+        : [],
       queuedAt: nowIso(),
     },
     plan: [
@@ -2852,6 +3003,11 @@ export async function processOperatorChatRun(input: {
     brandId: run.brandId || thread.brandId,
     message,
     mode: asString(run.contextSnapshot.requestedMode) === "recommendation_only" ? "recommendation_only" : "default",
+    executionPolicy:
+      asString(run.contextSnapshot.executionPolicy) === "autonomous" ? "autonomous" : "confirm_required",
+    autonomousToolAllowlist: Array.isArray(run.contextSnapshot.autonomousToolAllowlist)
+      ? (run.contextSnapshot.autonomousToolAllowlist as unknown[]).map((entry) => asString(entry)).filter(Boolean)
+      : [],
     existingRunId: run.id,
     existingThread: thread,
     skipUserMessage: true,
@@ -3014,6 +3170,10 @@ export async function runOperatorChatTurn(input: OperatorChatTurnInternalRequest
         contextSnapshot: {
           ...run.contextSnapshot,
           ...snapshotContext(brandContext),
+          executionPolicy: input.executionPolicy === "autonomous" ? "autonomous" : "confirm_required",
+          autonomousToolAllowlist: Array.isArray(input.autonomousToolAllowlist)
+            ? input.autonomousToolAllowlist.map((entry) => asString(entry)).filter(Boolean).slice(0, 80)
+            : [],
           processingStartedAt: nowIso(),
         },
         plan: runPlan,
@@ -3023,7 +3183,13 @@ export async function runOperatorChatTurn(input: OperatorChatTurnInternalRequest
       threadId: thread.id,
       brandId: resolvedBrandId,
       model: runModel,
-      contextSnapshot: snapshotContext(brandContext),
+      contextSnapshot: {
+        ...snapshotContext(brandContext),
+        executionPolicy: input.executionPolicy === "autonomous" ? "autonomous" : "confirm_required",
+        autonomousToolAllowlist: Array.isArray(input.autonomousToolAllowlist)
+          ? input.autonomousToolAllowlist.map((entry) => asString(entry)).filter(Boolean).slice(0, 80)
+          : [],
+      },
       plan: runPlan,
     });
   }
@@ -3042,7 +3208,13 @@ export async function runOperatorChatTurn(input: OperatorChatTurnInternalRequest
       });
       await updateOperatorRun(run.id, {
         status: "completed",
-        contextSnapshot: snapshotContext(brandContext),
+        contextSnapshot: {
+          ...snapshotContext(brandContext),
+          executionPolicy: input.executionPolicy === "autonomous" ? "autonomous" : "confirm_required",
+          autonomousToolAllowlist: Array.isArray(input.autonomousToolAllowlist)
+            ? input.autonomousToolAllowlist.map((entry) => asString(entry)).filter(Boolean).slice(0, 80)
+            : [],
+        },
         completedAt: nowIso(),
       });
       return buildChatResponseFromThread({
@@ -3059,7 +3231,13 @@ export async function runOperatorChatTurn(input: OperatorChatTurnInternalRequest
       });
       await updateOperatorRun(run.id, {
         status: "completed",
-        contextSnapshot: snapshotContext(brandContext),
+        contextSnapshot: {
+          ...snapshotContext(brandContext),
+          executionPolicy: input.executionPolicy === "autonomous" ? "autonomous" : "confirm_required",
+          autonomousToolAllowlist: Array.isArray(input.autonomousToolAllowlist)
+            ? input.autonomousToolAllowlist.map((entry) => asString(entry)).filter(Boolean).slice(0, 80)
+            : [],
+        },
         completedAt: nowIso(),
       });
       return buildChatResponseFromThread({
@@ -3198,23 +3376,38 @@ export async function runOperatorChatTurn(input: OperatorChatTurnInternalRequest
           if (resolvedBrandId) {
             await rememberProvisionMailpoolSenderInput(resolvedBrandId, requestedAction.input);
           }
-          const action = await createOperatorAction({
-            runId: run.id,
-            toolName: tool.name,
-            riskLevel: tool.riskLevel,
-            approvalMode: tool.approvalMode,
-            input: requestedAction.input,
-            preview: buildToolPreview(tool, requestedAction.input),
-          });
-          actions.push(action);
-          assistant = summarizeActionPreview(action);
-          execution = buildExecutionEnvelope({
-            state: "awaiting_confirmation",
-            actionId: action.id,
-            toolName: tool.name,
-            toolInput: requestedAction.input,
-            preview: action.preview,
-          });
+          const preview = buildToolPreview(tool, requestedAction.input);
+          if (canAutonomouslyApproveTool(input, tool)) {
+            const outcome = await executeAutonomousConfirmedTool({
+              threadId: thread.id,
+              runId: run.id,
+              userId: input.userId,
+              tool,
+              toolInput: requestedAction.input,
+              preview,
+            });
+            actions.push(outcome.action);
+            assistant = outcome.assistant;
+            execution = outcome.execution;
+          } else {
+            const action = await createOperatorAction({
+              runId: run.id,
+              toolName: tool.name,
+              riskLevel: tool.riskLevel,
+              approvalMode: tool.approvalMode,
+              input: requestedAction.input,
+              preview,
+            });
+            actions.push(action);
+            assistant = summarizeActionPreview(action);
+            execution = buildExecutionEnvelope({
+              state: "awaiting_confirmation",
+              actionId: action.id,
+              toolName: tool.name,
+              toolInput: requestedAction.input,
+              preview: action.preview,
+            });
+          }
         } else {
           if (resolvedBrandId) {
             await rememberProvisionMailpoolSenderInput(resolvedBrandId, requestedAction.input);
@@ -3284,23 +3477,38 @@ export async function runOperatorChatTurn(input: OperatorChatTurnInternalRequest
         if (resolvedBrandId && isProvisionSenderToolName(tool.name)) {
           await rememberProvisionMailpoolSenderInput(resolvedBrandId, requestedAction.input);
         }
-        const action = await createOperatorAction({
-          runId: run.id,
-          toolName: tool.name,
-          riskLevel: tool.riskLevel,
-          approvalMode: tool.approvalMode,
-          input: requestedAction.input,
-          preview: buildToolPreview(tool, requestedAction.input),
-        });
-        actions.push(action);
-        assistant = summarizeActionPreview(action);
-        execution = buildExecutionEnvelope({
-          state: "awaiting_confirmation",
-          actionId: action.id,
-          toolName: tool.name,
-          toolInput: requestedAction.input,
-          preview: action.preview,
-        });
+        const preview = buildToolPreview(tool, requestedAction.input);
+        if (canAutonomouslyApproveTool(input, tool)) {
+          const outcome = await executeAutonomousConfirmedTool({
+            threadId: thread.id,
+            runId: run.id,
+            userId: input.userId,
+            tool,
+            toolInput: requestedAction.input,
+            preview,
+          });
+          actions.push(outcome.action);
+          assistant = outcome.assistant;
+          execution = outcome.execution;
+        } else {
+          const action = await createOperatorAction({
+            runId: run.id,
+            toolName: tool.name,
+            riskLevel: tool.riskLevel,
+            approvalMode: tool.approvalMode,
+            input: requestedAction.input,
+            preview,
+          });
+          actions.push(action);
+          assistant = summarizeActionPreview(action);
+          execution = buildExecutionEnvelope({
+            state: "awaiting_confirmation",
+            actionId: action.id,
+            toolName: tool.name,
+            toolInput: requestedAction.input,
+            preview: action.preview,
+          });
+        }
       } else {
         if (resolvedBrandId && isProvisionSenderToolName(tool.name)) {
           await rememberProvisionMailpoolSenderInput(resolvedBrandId, requestedAction.input);
@@ -3421,7 +3629,13 @@ export async function runOperatorChatTurn(input: OperatorChatTurnInternalRequest
       })) ?? thread;
     await updateOperatorRun(run.id, {
       status: runStatus,
-      contextSnapshot: snapshotContext(brandContext),
+      contextSnapshot: {
+        ...snapshotContext(brandContext),
+        executionPolicy: input.executionPolicy === "autonomous" ? "autonomous" : "confirm_required",
+        autonomousToolAllowlist: Array.isArray(input.autonomousToolAllowlist)
+          ? input.autonomousToolAllowlist.map((entry) => asString(entry)).filter(Boolean).slice(0, 80)
+          : [],
+      },
       completedAt,
     });
 

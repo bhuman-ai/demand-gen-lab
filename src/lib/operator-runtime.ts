@@ -1775,6 +1775,7 @@ const TOOLS_WITH_BRAND_CONTEXT = new Set<OperatorToolName>([
   "inspect_outbound_blocker_chain",
   "summarize_campaign_status",
   "record_capability_gap",
+  "request_user_attention",
   "get_campaign_snapshot",
   "summarize_experiments",
   "get_experiment_snapshot",
@@ -2722,13 +2723,15 @@ async function createAssistantMessage(
     trace?: OperatorEvidenceTraceEntry[];
     check?: OperatorEvidenceCheck | null;
     run?: Pick<OperatorRun, "id" | "status" | "model" | "startedAt" | "completedAt">;
-  }
+  },
+  extraContent: Record<string, unknown> = {}
 ) {
   return createOperatorMessage({
     threadId,
     role: "assistant",
     kind: "message",
     content: {
+      ...extraContent,
       text: assistant.summary,
       assistant,
       execution,
@@ -2737,6 +2740,14 @@ async function createAssistantMessage(
       run: evidence?.run ?? null,
     },
   });
+}
+
+function assistantMessageExtraContentFromToolResult(result: Record<string, unknown>) {
+  const attentionRequest = asRecord(result.attentionRequest);
+  if (Object.keys(attentionRequest).length) {
+    return { attentionRequest };
+  }
+  return {};
 }
 
 async function executeToolAction(input: {
@@ -3204,6 +3215,7 @@ export async function runOperatorChatTurn(input: OperatorChatTurnInternalRequest
     let assistant: OperatorChatAssistantReply;
     let execution: OperatorExecutionEnvelope | null = buildExecutionEnvelope({ state: "answer_only" });
     const actions: OperatorAction[] = [];
+    let assistantMessageExtraContent: Record<string, unknown> = {};
 
     if (continuation?.kind === "confirm_action") {
       await confirmOperatorAction({
@@ -3433,6 +3445,7 @@ export async function runOperatorChatTurn(input: OperatorChatTurnInternalRequest
               tool,
               toolInput: requestedAction.input,
             });
+            assistantMessageExtraContent = assistantMessageExtraContentFromToolResult(executed.result.result);
             actions.push(executed.updatedAction ?? action);
             assistant = {
               summary: executed.result.summary,
@@ -3534,6 +3547,7 @@ export async function runOperatorChatTurn(input: OperatorChatTurnInternalRequest
             tool,
             toolInput: requestedAction.input,
           });
+          assistantMessageExtraContent = assistantMessageExtraContentFromToolResult(executed.result.result);
           actions.push(executed.updatedAction ?? action);
           assistant = {
             summary: executed.result.summary,
@@ -3629,7 +3643,7 @@ export async function runOperatorChatTurn(input: OperatorChatTurnInternalRequest
         startedAt: run.startedAt,
         completedAt,
       },
-    });
+    }, assistantMessageExtraContent);
     const updatedThread =
       (await updateOperatorThread(thread.id, {
         lastSummary: assistant.summary,

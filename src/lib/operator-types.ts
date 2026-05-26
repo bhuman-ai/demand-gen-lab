@@ -39,6 +39,7 @@ export type OperatorToolName =
   | "inspect_outbound_blocker_chain"
   | "inspect_sender_delivery_evidence"
   | "record_capability_gap"
+  | "request_user_attention"
   | "summarize_campaign_status"
   | "get_campaign_snapshot"
   | "summarize_experiments"
@@ -160,6 +161,22 @@ export type OperatorThread = {
   createdAt: string;
   updatedAt: string;
   archivedAt: string;
+};
+
+export type OperatorAttentionRequest = {
+  id: string;
+  brandId: string;
+  threadId: string;
+  messageId: string;
+  title: string;
+  message: string;
+  reason: string;
+  attentionKind: string;
+  urgency: "low" | "normal" | "high";
+  suggestedActions: OperatorExecutionQuestionOption[];
+  evidence: string[];
+  createdAt: string;
+  resolvedByUserMessageId: string;
 };
 
 export type OperatorMessage = {

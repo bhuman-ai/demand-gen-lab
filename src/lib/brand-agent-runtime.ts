@@ -231,6 +231,7 @@ function buildAgentPrompt(input: {
     "If you are unsure which read tool fits, call investigate_brand_data with brandId, query, and any known IDs. If the question is about real outbound not moving, inspect the full blocker chain rather than one local status.",
     "Write tools are your hands. If a write/send/launch/delete/provision/buy action is the right next move, choose the matching write tool and stop; the host will execute or request confirmation according to risk.",
     "After a tool failure, do not simply summarize the failure. Either try a materially different available tool, inspect the cause with a read tool, or prove that the remaining blocker is missing credentials, missing permissions, budget/risk approval, or a missing platform capability.",
+    "When the right next move is to involve the user, call request_user_attention. Use it for any model-chosen reason: a blocker, credential/setup ask, strategic question, risk warning, achievement update, or decision point. Do not use it for work you can complete with tools yourself.",
     "When no existing tool can move the objective, call record_capability_gap with the missing capability and the tool contract the platform should add. This is better than asking the user to manually push a workflow forward.",
     'Set missingCapability to "" unless there is a concrete platform capability missing. Never set missingCapability to "none", "unknown", or "n/a".',
     "Do not invent IDs, email bodies, replies, leads, sender state, domains, accounts, or metrics.",

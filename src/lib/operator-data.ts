@@ -4,6 +4,7 @@ import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import type {
   OperatorAction,
   OperatorActionStatus,
+  OperatorAttentionRequest,
   OperatorApproval,
   OperatorMemory,
   OperatorMessage,
@@ -62,6 +63,10 @@ function asArray(value: unknown): unknown[] {
   return Array.isArray(value) ? value : [];
 }
 
+function asString(value: unknown) {
+  return String(value ?? "").trim();
+}
+
 function defaultStore(): OperatorStore {
   return {
     threads: [],
@@ -71,6 +76,33 @@ function defaultStore(): OperatorStore {
     approvals: [],
     memory: [],
   };
+}
+
+function normalizeAttentionUrgency(value: unknown): OperatorAttentionRequest["urgency"] {
+  const normalized = asString(value).toLowerCase();
+  if (normalized === "high") return "high";
+  if (normalized === "low") return "low";
+  return "normal";
+}
+
+function readSuggestedAttentionActions(value: unknown): OperatorAttentionRequest["suggestedActions"] {
+  return asArray(value)
+    .map((entry) => {
+      const row = asRecord(entry);
+      return {
+        label: asString(row.label),
+        message: asString(row.message),
+      };
+    })
+    .filter((entry) => entry.label && entry.message)
+    .slice(0, 5);
+}
+
+function readAttentionEvidence(value: unknown): string[] {
+  return asArray(value)
+    .map((entry) => asString(entry))
+    .filter(Boolean)
+    .slice(0, 8);
 }
 
 async function readLocalStore(): Promise<OperatorStore> {
@@ -409,6 +441,67 @@ export async function listOperatorMessages(threadId: string): Promise<OperatorMe
   return store.messages
     .filter((message) => message.threadId === threadId)
     .sort((a, b) => (a.createdAt < b.createdAt ? -1 : 1));
+}
+
+export async function listOperatorAttentionRequests(input: {
+  brandId?: string;
+  status?: "open" | "resolved";
+  limit?: number;
+} = {}): Promise<OperatorAttentionRequest[]> {
+  const brandId = asString(input.brandId);
+  const limit = Math.max(1, Math.min(100, Math.round(Number(input.limit ?? 20)) || 20));
+  const threads = await listOperatorThreads({
+    brandId,
+    status: "active",
+  });
+  const messagesByThread = await Promise.all(
+    threads.slice(0, 80).map(async (thread) => ({
+      thread,
+      messages: await listOperatorMessages(thread.id),
+    }))
+  );
+  const requests: OperatorAttentionRequest[] = [];
+
+  for (const { thread, messages } of messagesByThread) {
+    for (const message of messages) {
+      const content = asRecord(message.content);
+      const attention = asRecord(content.attentionRequest);
+      if (!Object.keys(attention).length) continue;
+      const title = asString(attention.title);
+      const body = asString(attention.message) || asString(content.text);
+      if (!title && !body) continue;
+
+      const createdAtMs = Date.parse(message.createdAt);
+      const resolvedByUser = messages.find((candidate) => {
+        if (candidate.role !== "user" || candidate.kind !== "message") return false;
+        const candidateCreatedAtMs = Date.parse(candidate.createdAt);
+        return Number.isFinite(candidateCreatedAtMs) && candidateCreatedAtMs > createdAtMs;
+      });
+      const explicitStatus = asString(attention.status).toLowerCase();
+      const effectiveStatus = explicitStatus === "resolved" || resolvedByUser ? "resolved" : "open";
+      if (input.status && input.status !== effectiveStatus) continue;
+
+      requests.push({
+        id: asString(attention.id) || message.id,
+        brandId: thread.brandId,
+        threadId: thread.id,
+        messageId: message.id,
+        title: title || thread.title || "Brand GPT needs attention",
+        message: body,
+        reason: asString(attention.reason),
+        attentionKind: asString(attention.attentionKind) || asString(attention.kind),
+        urgency: normalizeAttentionUrgency(attention.urgency),
+        suggestedActions: readSuggestedAttentionActions(attention.suggestedActions),
+        evidence: readAttentionEvidence(attention.evidence),
+        createdAt: message.createdAt,
+        resolvedByUserMessageId: resolvedByUser?.id ?? "",
+      });
+    }
+  }
+
+  return requests
+    .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1))
+    .slice(0, limit);
 }
 
 export async function createOperatorMessage(input: {

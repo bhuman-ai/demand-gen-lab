@@ -212,6 +212,32 @@ function readEvidenceCheck(value: unknown): OperatorEvidenceCheck | null {
   };
 }
 
+function readMessageAttentionRequest(message: OperatorMessage) {
+  const attention = asRecord(asRecord(message.content).attentionRequest);
+  if (!Object.keys(attention).length) return null;
+  const title = asString(attention.title);
+  const reason = asString(attention.reason);
+  const urgency = asString(attention.urgency);
+  const suggestedActions = Array.isArray(attention.suggestedActions)
+    ? attention.suggestedActions
+        .map((entry) => {
+          const row = asRecord(entry);
+          return {
+            label: asString(row.label),
+            message: asString(row.message),
+          };
+        })
+        .filter((entry) => entry.label && entry.message)
+        .slice(0, 5)
+    : [];
+  return {
+    title,
+    reason,
+    urgency: urgency === "high" || urgency === "low" ? urgency : "normal",
+    suggestedActions,
+  };
+}
+
 function evidenceStatusLabel(status: OperatorEvidenceCheck["status"]) {
   if (status === "verified") return "Verified";
   if (status === "inconclusive") return "Inconclusive";
@@ -702,12 +728,38 @@ function MessageBody({
     const run = readMessageRun(message);
     const evidenceTrace = readEvidenceTrace(content.evidenceTrace);
     const evidenceCheck = readEvidenceCheck(content.evidenceCheck);
+    const attentionRequest = readMessageAttentionRequest(message);
     const actionId = asString(execution.actionId);
     const action = actionId ? actionsById.get(actionId) : undefined;
     const answerText = asString(content.text) || asString(assistant.summary);
     return (
       <div>
+        {attentionRequest ? (
+          <div className="mb-3 flex flex-wrap items-center gap-2 text-xs text-[color:var(--muted-foreground)]">
+            <Badge variant={attentionRequest.urgency === "high" ? "accent" : "muted"}>
+              Needs attention
+            </Badge>
+            {attentionRequest.title ? <span>{attentionRequest.title}</span> : null}
+            {attentionRequest.reason ? <span>{attentionRequest.reason}</span> : null}
+          </div>
+        ) : null}
         <FormattedAssistantText text={answerText} />
+        {attentionRequest?.suggestedActions.length ? (
+          <div className="mt-3 flex flex-wrap gap-2">
+            {attentionRequest.suggestedActions.map((action, index) => (
+              <Button
+                key={`${action.label}-${index}`}
+                type="button"
+                size="sm"
+                variant="secondary"
+                onClick={() => onChooseReply(action.message)}
+                disabled={sending || Boolean(actionBusyId)}
+              >
+                {action.label}
+              </Button>
+            ))}
+          </div>
+        ) : null}
         {run && !inline ? (
           <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-[color:var(--muted-foreground)]">
             <Badge variant={runBadgeVariant(run.status)}>{runStatusLabel(run.status)}</Badge>
@@ -906,6 +958,7 @@ export default function OperatorPanel({
   async function refreshThread(threadId: string) {
     const detail = await fetchOperatorThreadDetail(threadId);
     setThreadDetail(detail?.thread.status === "active" && detail.thread.brandId === activeBrandId ? detail : null);
+    window.dispatchEvent(new CustomEvent("lastb2b:operator-updated", { detail: { brandId: activeBrandId } }));
   }
 
   async function processStartedRun(runId: string, threadId: string) {

@@ -136,7 +136,7 @@ export default async function MarketingHomePage() {
                   <div className="grid gap-3 sm:grid-cols-3">
                     <div className="rounded-[18px] border border-[color:var(--border)] bg-[color:var(--surface)] p-4">
                       <TestTubeDiagonal className="h-4 w-4 text-[color:var(--foreground)]" />
-                      <div className="mt-3 text-sm font-medium">Experiments</div>
+                      <div className="mt-3 text-sm font-medium">Tests</div>
                       <div className="mt-1 text-xs text-[color:var(--muted-foreground)]">Draft, waiting, sending, blocked.</div>
                     </div>
                     <div className="rounded-[18px] border border-[color:var(--border)] bg-[color:var(--surface)] p-4">

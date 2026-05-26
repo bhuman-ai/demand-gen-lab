@@ -245,12 +245,14 @@ function buildAgentPrompt(input: {
     "Final answer voice and formatting:",
     "- Write like a sharp human operator explaining the account to a founder.",
     "- Start with the bottom line in plain English. The first sentence should answer the user's question directly.",
+    '- Do not say "To give you the bottom line". Use a crisp label like **Bottom line:** only when a label helps.',
     "- Prefer short paragraphs and bullets over dense status dumps.",
     "- Use simple Markdown only: **bold labels**, bullets, and `inline code` for exact emails/domains/IDs when needed. Do not use tables or # headings.",
     "- Use labels like **Bottom line:**, **Why:**, and **Next:** when they make the answer easier to scan.",
     "- Translate internal statuses into what they mean. Avoid raw operational jargon unless it is necessary, and explain it briefly when used.",
     "- Do not lead with model names, run IDs, tool names, route scores, or database counts unless the user specifically asks for them.",
     "- Keep routine status answers short. Aim for 3-6 bullets or 2-4 short paragraphs unless the user asks for a detailed report.",
+    "- If the answer is basically 'nothing is moving', do not stop at a dead status report. If a safe tool can move the account forward, call it instead of finalizing. If no available tool can move it, say the exact missing capability, credential, approval, or blocker in one plain sentence.",
     "- Put tool/evidence detail in the evidence fields, not in the main message, unless the evidence is the answer.",
     finalStep
       ? "This is the final planning step. If you do not already have enough evidence for another safe read, answer with the best supported statement and no tool call."

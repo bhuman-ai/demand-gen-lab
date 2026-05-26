@@ -9,7 +9,7 @@ export default async function RunLeadsReplacedPage({
   return (
     <RouteReplacedCard
       title="Run leads replaced"
-      description="Leads are now available in Experiment/Campaign Run visibility and the brand Leads module."
+      description="Audience is now available in Test/Outbound run visibility and the brand Audience module."
       brandId={id}
     />
   );

@@ -237,12 +237,12 @@ export default function CampaignsClient({ brandId }: { brandId: string }) {
       <PageIntro
         title={
           <span className="inline-flex items-center gap-2">
-            <span>Campaigns</span>
+            <span>Outbound</span>
             <ExplainableHint
-              label="Explain Campaigns"
+              label="Explain outbound"
               title="What this page shows"
             >
-              <p>Campaigns are experiments that graduated into live production sending.</p>
+              <p>Outbound shows tests that graduated into live production sending.</p>
               <p>
                 The system keeps choosing the healthiest sender route, watches deliverability automatically, and pauses
                 or reroutes when a sender or message starts to degrade.
@@ -332,7 +332,7 @@ export default function CampaignsClient({ brandId }: { brandId: string }) {
           </div>
           <div className="mt-1 font-medium text-[color:var(--foreground)]">{formatRoutingCount(autoRoutedCampaignCount)}</div>
           <div className="mt-1 text-xs leading-5 text-[color:var(--muted-foreground)]">
-            Campaigns using health-first sender selection.
+            Outbound using health-first sender selection.
           </div>
         </div>
         <div>
@@ -343,7 +343,7 @@ export default function CampaignsClient({ brandId }: { brandId: string }) {
               title="Locked route"
             >
               <p>
-                Locked campaigns are pinned to a specific sender account instead of following the default health-first
+                Locked outbound is pinned to a specific sender account instead of following the default health-first
                 route order.
               </p>
               <p>
@@ -354,7 +354,7 @@ export default function CampaignsClient({ brandId }: { brandId: string }) {
           </div>
           <div className="mt-1 font-medium text-[color:var(--foreground)]">{formatRoutingCount(lockedCampaignCount)}</div>
           <div className="mt-1 text-xs leading-5 text-[color:var(--muted-foreground)]">
-            Campaigns pinned to a specific sender account.
+            Outbound pinned to a specific sender account.
           </div>
         </div>
         <div>

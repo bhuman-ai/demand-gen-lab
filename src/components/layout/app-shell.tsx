@@ -42,7 +42,7 @@ type OperatorOpenRequest = {
 };
 
 type MainNavItem = NavItem & {
-  id: "agent" | "missions" | "campaigns" | "network" | "leads" | "inbox" | "social-discovery";
+  id: "agent" | "missions" | "campaigns" | "experiments" | "network" | "leads" | "inbox" | "social-discovery";
 };
 
 const CHROMELESS_ROUTES = new Set(["/autoads", "/google-ads-review"]);
@@ -72,29 +72,37 @@ function breadcrumb(pathname: string, activeBrandName?: string) {
   if (parts[1] === "new") return "last b2b / New brand";
   const normalized = ["last b2b", activeBrandName || "Brand"];
   if (parts[2] === "missions") {
-    normalized.push("Missions");
-    if (parts[3]) normalized.push("Mission");
+    normalized.push("Goals");
+    if (parts[3]) normalized.push("Goal");
     return normalized.join(" / ");
   }
   if (parts[2] === "experiments") {
-    normalized.push("Experiments");
+    normalized.push("Tests");
     if (parts[3] === "suggestions") {
       normalized.push("Suggestions");
       return normalized.join(" / ");
     }
-    if (parts[3]) normalized.push("Experiment");
+    if (parts[3]) normalized.push("Test");
     if (parts[4]) {
       normalized.push(prettySegment(parts[4]));
     }
     return normalized.join(" / ");
   }
   if (parts[2] === "campaigns") {
-    normalized.push("Campaigns");
+    normalized.push("Outbound");
     if (parts[3]) normalized.push("Campaign");
     return normalized.join(" / ");
   }
   if (parts[2] === "network") {
-    normalized.push("Senders");
+    normalized.push("Delivery");
+    return normalized.join(" / ");
+  }
+  if (parts[2] === "leads") {
+    normalized.push("Audience");
+    return normalized.join(" / ");
+  }
+  if (parts[2] === "social-discovery") {
+    normalized.push("Social");
     return normalized.join(" / ");
   }
   if (parts[2]) {
@@ -282,26 +290,32 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
     () => [
       {
         id: "agent",
-        label: "Agent",
+        label: "Brand GPT",
         href: brandRoot,
         icon: MessageSquareText,
       },
-      {
-        id: "missions",
-        label: "Missions",
-        href: hasActiveBrand ? `${brandRoot}/missions` : "/brands",
-        icon: Sparkles,
-      },
       { id: "inbox", label: "Inbox", href: hasActiveBrand ? `${brandRoot}/inbox` : "/brands", icon: Inbox },
-      { id: "leads", label: "Leads", href: hasActiveBrand ? `${brandRoot}/leads` : "/brands", icon: Mail },
+      {
+        id: "leads",
+        label: "Audience",
+        href: hasActiveBrand ? `${brandRoot}/leads` : "/brands",
+        icon: Mail,
+      },
+      { id: "network", label: "Delivery", href: hasActiveBrand ? `${brandRoot}/network` : "/brands", icon: Network },
     ],
     [brandRoot, hasActiveBrand]
   );
 
   const moreItems = useMemo<MainNavItem[]>(
     () => [
-      { id: "campaigns", label: "Campaigns", href: hasActiveBrand ? `${brandRoot}/campaigns` : "/brands", icon: FolderKanban },
-      { id: "network", label: "Delivery", href: hasActiveBrand ? `${brandRoot}/network` : "/brands", icon: Network },
+      {
+        id: "missions",
+        label: "Goals",
+        href: hasActiveBrand ? `${brandRoot}/missions` : "/brands",
+        icon: Sparkles,
+      },
+      { id: "campaigns", label: "Outbound", href: hasActiveBrand ? `${brandRoot}/campaigns` : "/brands", icon: FolderKanban },
+      { id: "experiments", label: "Tests", href: hasActiveBrand ? `${brandRoot}/experiments` : "/brands", icon: Activity },
       {
         id: "social-discovery",
         label: "Social",
@@ -317,6 +331,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
       if (pathname === brandRoot) return "agent";
       if (pathname === `${brandRoot}/missions` || pathname.startsWith(`${brandRoot}/missions/`)) return "missions";
       if (pathname === `${brandRoot}/campaigns` || pathname.startsWith(`${brandRoot}/campaigns/`)) return "campaigns";
+      if (pathname === `${brandRoot}/experiments` || pathname.startsWith(`${brandRoot}/experiments/`)) return "experiments";
       if (pathname === `${brandRoot}/network` || pathname.startsWith(`${brandRoot}/network/`)) return "network";
       if (pathname === `${brandRoot}/leads` || pathname.startsWith(`${brandRoot}/leads/`)) return "leads";
       if (pathname === `${brandRoot}/inbox` || pathname.startsWith(`${brandRoot}/inbox/`)) return "inbox";
@@ -330,8 +345,8 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
 
   const toolItems: NavItem[] = [
     { label: "Settings", href: "/settings/outreach", icon: Settings },
+    { label: "Diagnostics", href: "/doctor", icon: FlaskConical },
     { label: "Logic", href: "/logic", icon: Activity },
-    { label: "Doctor", href: "/doctor", icon: FlaskConical },
   ];
   const toolActive = toolItems.some((item) => pathname === item.href);
 

@@ -97,10 +97,10 @@ export default function ObjectiveClient({ brandId, campaignId }: { brandId: stri
                 Reload
               </Button>
               <Button asChild type="button" variant="outline">
-                <Link href={`/brands/${brandId}/campaigns`}>Back to Campaigns</Link>
+                <Link href={`/brands/${brandId}/campaigns`}>Back to Outbound</Link>
               </Button>
               <Button asChild type="button" variant="ghost">
-                <Link href={`/brands/${brandId}`}>Back to Brand Home</Link>
+                <Link href={`/brands/${brandId}`}>Back to Brand GPT</Link>
               </Button>
             </CardContent>
           </Card>

@@ -1,20 +1,20 @@
 # UI/UX Foundation
 
 ## Object Definition
-Comment automation queue.
+Brand-scoped AI growth operator workspace.
 
-This surface is no longer mainly a one-off manual comment composer. Its core object is a YouTube comment opportunity moving through assignment, drafting, approval, posting, and recovery across many accounts.
+The primary object is not a campaign, experiment, sender, or social queue. The primary object is the AI operator assigned to a brand. Campaigns, tests, leads, sender health, inbox replies, social actions, and delivery checks are supporting evidence/tool surfaces that the operator can use or expose when needed.
 ## Magic Moment
-Operator opens Social Discovery and immediately sees which auto-comment jobs are ready, risky, blocked, or failing. One selected job shows video context, assigned account, GPT draft, and next action. Healthy jobs flow without babysitting; bad jobs are obvious and contain a fix path.
+The founder opens a brand and immediately understands that Brand GPT is alive: what it is doing now, what it just did, what it needs, and whether growth is blocked. The user can simply type a request or answer the one surfaced blocker instead of navigating through campaigns, experiments, sender settings, and logs.
 ## Technical Constraints
-- Web app with async API work and background automation jobs.
-- Must support automatic YouTube commenting, not just manual post-by-post use.
-- Must orchestrate across roughly 15 YouTube accounts without collapsing into repeated single-account controls.
-- Must preserve queue, draft, and assignment context across loading, retries, and partial failures.
-- Must expose account-level health and job-level health separately.
-- Must support safe retry, pause, reroute, and manual override paths.
-- Existing manual search/post flow must remain covered, but no longer own the entire first screen.
+- Preserve existing routes and runtime behavior while changing product grammar incrementally.
+- Brand GPT remains the default per-brand workspace and primary action surface.
+- Legacy concepts such as missions, experiments, campaigns, delivery, social discovery, and diagnostics remain available as drilldowns.
+- The app must support async agent runs, live tool evidence, attention requests, inbox replies, lead sourcing, sender/domain provisioning, and deliverability monitoring.
+- Default UI must not expose all internal machinery at equal weight.
+- Founder-facing surfaces prioritize current state, next action, top blocker, and evidence receipts.
+- Dense operational detail belongs in explicit drilldowns, Details panels, or diagnostic/admin surfaces.
 ## Volume & Density
-High density.
+Progressive density.
 
-This is ops-heavy work: many accounts, many watched channels, many auto-comment opportunities, and many failure/retry states. Default UI should use dense lists/tables plus one focused inspector, not stacked marketing cards.
+The home workspace should feel calm and chat-first: one main agent conversation, one current status, one top risk, and one obvious next action. Drilldowns can be dense when the job is operational, especially Inbox, Audience, Delivery, and Diagnostics. The product should not default to stacked dashboards or repeated cards.

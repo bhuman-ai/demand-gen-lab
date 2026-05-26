@@ -23,11 +23,11 @@ export default function LogicPage() {
         <div className="space-y-3">
           <Badge variant="muted">Active brand context: {brandId || "none selected"}</Badge>
           <p className="text-sm text-[color:var(--muted-foreground)]">
-            Use this tool surface for sequencing rules, guardrails, and cross-campaign conditions.
+            Use this tool surface for sequencing rules, guardrails, and cross-outbound conditions.
           </p>
           {brandId ? (
             <Button asChild>
-              <Link href={`/brands/${brandId}/campaigns`}>Open Active Brand Campaigns</Link>
+              <Link href={`/brands/${brandId}/campaigns`}>Open active brand outbound</Link>
             </Button>
           ) : (
             <Button asChild>

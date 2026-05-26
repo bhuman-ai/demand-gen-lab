@@ -165,7 +165,7 @@ export default function AuthScreen({ mode }: { mode: AuthMode }) {
               </div>
               <div className="flex items-center gap-3">
                 <Workflow className="h-4 w-4 text-[color:var(--foreground)]" />
-                Experiments, campaigns, and inbox work stay in the same authenticated surface.
+                Tests, outbound, and inbox work stay in the same authenticated surface.
               </div>
               <div className="flex items-center gap-3">
                 <Inbox className="h-4 w-4 text-[color:var(--foreground)]" />

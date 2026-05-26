@@ -135,7 +135,7 @@ export default function InboxEvalLabClient({ brand }: { brand: BrandRecord }) {
   return (
     <div className="space-y-8">
       <PageIntro
-        title="Inbox Eval Lab"
+        title="Inbox test lab"
         description="Run replayable roleplay scenarios against the inbox manager, then inspect transcripts, scorecards, and failure patterns."
         actions={
           <>
@@ -143,7 +143,7 @@ export default function InboxEvalLabClient({ brand }: { brand: BrandRecord }) {
               <Link href={`/brands/${brand.id}/inbox`}>Back to Inbox</Link>
             </Button>
             <Button asChild>
-              <Link href={`/brands/${brand.id}/campaigns`}>Go to Campaigns</Link>
+              <Link href={`/brands/${brand.id}/campaigns`}>Go to Outbound</Link>
             </Button>
           </>
         }
@@ -170,7 +170,7 @@ export default function InboxEvalLabClient({ brand }: { brand: BrandRecord }) {
       ) : null}
 
       <SectionPanel
-        title="Scenario Library"
+        title="Scenario library"
         description="These scenarios drive deterministic roleplay and end-of-run scoring. Start with the normal cases, then move into curveballs and adversarial probes."
       >
         <div className="grid gap-3 md:grid-cols-2">

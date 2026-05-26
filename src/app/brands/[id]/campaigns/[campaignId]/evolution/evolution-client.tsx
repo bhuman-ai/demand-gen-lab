@@ -102,10 +102,10 @@ export default function EvolutionClient({ brandId, campaignId }: { brandId: stri
                 Reload
               </Button>
               <Button asChild type="button" variant="outline">
-                <Link href={`/brands/${brandId}/campaigns`}>Back to Campaigns</Link>
+                <Link href={`/brands/${brandId}/campaigns`}>Back to Outbound</Link>
               </Button>
               <Button asChild type="button" variant="ghost">
-                <Link href={`/brands/${brandId}`}>Back to Brand Home</Link>
+                <Link href={`/brands/${brandId}`}>Back to Brand GPT</Link>
               </Button>
             </CardContent>
           </Card>
@@ -310,7 +310,7 @@ export default function EvolutionClient({ brandId, campaignId }: { brandId: stri
                   Add First Snapshot
                 </Button>
                 <Button asChild size="sm" variant="outline">
-                  <Link href={`/brands/${brandId}/campaigns/${campaignId}/experiments`}>Go to Experiments</Link>
+                  <Link href={`/brands/${brandId}/campaigns/${campaignId}/experiments`}>Go to Tests</Link>
                 </Button>
               </div>
               <div className="text-xs text-[color:var(--muted-foreground)]">
@@ -376,7 +376,7 @@ export default function EvolutionClient({ brandId, campaignId }: { brandId: stri
             Mark Step Complete
           </Button>
           <Button asChild variant="ghost">
-            <Link href={`/brands/${brandId}/campaigns`}>Back to Campaigns</Link>
+            <Link href={`/brands/${brandId}/campaigns`}>Back to Outbound</Link>
           </Button>
         </CardContent>
       </Card>

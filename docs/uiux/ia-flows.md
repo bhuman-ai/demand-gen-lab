@@ -1,41 +1,46 @@
 # IA & Flows
 
 ## Technical Sitemap
-- Social Discovery route
-  - Queue (default)
-    - Ready
-    - Needs review
-    - Scheduled / posted
-    - Failed / paused
-    - Job inspector
-  - Channels
-    - Watched channels list
-    - Channel rules / assignment
-    - Last upload / last comment state
-  - Accounts
-    - YouTube account fleet
-    - Capacity / cooldown / health / role
-    - Connect / edit / pause
-  - Manual search
-    - Search results
-    - Selected video inspector
-    - Manual draft / post
-  - Advanced setup
-    - Brand comment prompt
-    - Legacy Instagram scan
+- Brand GPT / Agent home (default)
+  - Chat with brand-scoped AI operator
+  - Agent activity feed
+  - Attention requests and evidence receipts
+  - Details panel for brand context, delivery account, connected tools, and advanced links
+- Inbox
+  - Prospect replies
+  - Drafts and follow-ups
+  - Reply quality/evaluation
+- Audience
+  - Leads and accounts
+  - Sourcing and enrichment
+  - Prospect import/review
+- Delivery
+  - Senders, domains, DNS, warmup, inbox placement, and routing
+  - Customer.io/Mailpool/Gmail UI/provider health
+- Outbound
+  - Production campaigns and graduated sends
+  - Live run state and performance
+- Tests
+  - Messaging experiments and variants
+  - Conversation flow and launch prep
+- Social
+  - Social discovery and comment opportunities
+  - Account/channel operations
+- Settings & Diagnostics
+  - Provider credentials, provisioning, system health, debug/doctor/logic tools
 ## Psychological Sitemap
-- Default state answers one question fast: what needs action now?
-- Queue is first because operator stress comes from uncertainty, not from missing knobs.
-- Healthy automation should disappear into compact status rows.
-- Risky or blocked jobs should expand into one selected inspector with exact failure, assigned account, and recovery action.
-- Channels and accounts move into dedicated surfaces so scale work does not pollute moment-to-moment approval work.
-- Manual search remains available as override and research path, not the dominant mental model.
-- Setup stays secondary and collapsible because it is important but not the primary hourly task.
+- Default state answers: what is Brand GPT doing, what does it need, and can I trust it?
+- The agent is first because the product promise is autonomy, not manual campaign management.
+- Inbox, Audience, Delivery, Outbound, Tests, and Social are drilldowns for inspection and intervention.
+- Healthy automation should recede into short activity/evidence rows.
+- Blockers should appear as one plain-English issue with a suggested next reply/action.
+- Internal tool names, provider state, and raw logs should be available but not visually equal to the user's next decision.
+- Navigation should feel like one workspace, not a list of unrelated growth tools.
 ## Navigation Paradigm
-Persistent product navigation inside the social discovery surface: Queue, Channels, Accounts, Manual Search. Default to Queue. Use selection-driven inspectors instead of nesting more cards in the main canvas.
+Agent home with drilldowns. The persistent sidebar should put Brand GPT first, then the core support surfaces: Inbox, Audience, Delivery. More detailed work surfaces such as Outbound, Tests, and Social can live behind a secondary group. System-only areas such as Settings, Diagnostics, and Logic stay visually secondary.
 ## Happy Paths
-1. Automation queue: system finds new upload -> generates draft -> assigns account -> operator reviews selected job -> approve/post or skip/pause.
-2. Watched channel setup: add channel -> choose auto-comment behavior -> assign account or account pool -> monitor latest upload and last comment.
-3. Account fleet setup: connect YouTube account -> set role/cooldown/coordination info -> mark healthy -> use in assignments.
-4. Manual override: search YouTube -> pick one video -> inspect context -> edit draft -> post comment.
-5. Failure recovery: open failed job/account -> see exact reason -> retry, reroute, pause, or remove without losing context.
+1. Start a brand: user enters site and target customers -> Brand GPT builds context -> agent proposes first moves -> user edits only what is wrong.
+2. Let the agent work: Brand GPT sources leads, tests copy, checks delivery, sends safe batches, watches replies, and logs evidence.
+3. Resolve a blocker: agent asks for attention -> user answers in chat or opens the relevant drilldown -> agent continues.
+4. Inspect proof: user opens Activity/Evidence/Delivery/Inbox to see exactly what happened without leaving the brand context.
+5. Manual intervention: user opens a drilldown, changes sender/context/lead/reply state, then returns to Brand GPT as the home base.

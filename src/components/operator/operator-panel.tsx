@@ -244,10 +244,10 @@ function evidenceStatusLabel(status: OperatorEvidenceCheck["status"]) {
   return "Insufficient";
 }
 
-function evidenceTone(status: OperatorEvidenceCheck["status"]) {
-  if (status === "verified") return "border-[color:var(--success-border)] bg-[color:var(--success-soft)]";
-  if (status === "inconclusive") return "border-[color:var(--accent-border)] bg-[color:var(--accent-soft)]";
-  return "border-[color:var(--danger-border)] bg-[color:var(--danger-soft)]";
+function evidenceStatusClass(status: OperatorEvidenceCheck["status"]) {
+  if (status === "verified") return "text-[color:var(--success)]";
+  if (status === "inconclusive") return "text-[color:var(--accent)]";
+  return "text-[color:var(--danger)]";
 }
 
 function extractUrl(value: string) {
@@ -532,18 +532,19 @@ function EvidenceTrace({
   if (!trace.length && !check) return null;
   const status = check?.status ?? (trace.length ? "inconclusive" : "insufficient");
   return (
-    <details className={cn("mt-3 rounded-[12px] border px-3 py-2", evidenceTone(status))}>
-      <summary className="flex cursor-pointer list-none items-center justify-between gap-3 text-xs font-medium text-[color:var(--foreground)]">
-        <span className="inline-flex min-w-0 items-center gap-2">
+    <details className="group mt-2 max-w-full text-xs text-[color:var(--muted-foreground)]">
+      <summary className="inline-flex max-w-full cursor-pointer list-none items-center gap-2 rounded-[8px] py-1 text-[color:var(--muted-foreground)] transition-colors hover:text-[color:var(--foreground)] [&::-webkit-details-marker]:hidden">
+        <span className="inline-flex min-w-0 items-center gap-1.5">
           <FileSearch className="h-3.5 w-3.5 shrink-0" />
-          <span>Evidence</span>
-          <span className="text-[color:var(--muted-foreground)]">
-            {evidenceStatusLabel(status)}{trace.length ? ` · ${trace.length} tool call${trace.length === 1 ? "" : "s"}` : ""}
+          <span>Proof</span>
+          <span className={cn("font-medium", evidenceStatusClass(status))}>
+            {evidenceStatusLabel(status).toLowerCase()}
           </span>
+          {trace.length ? <span>· {trace.length} check{trace.length === 1 ? "" : "s"}</span> : null}
         </span>
-        <ChevronRight className="h-3.5 w-3.5 shrink-0 text-[color:var(--muted-foreground)]" />
+        <ChevronRight className="h-3.5 w-3.5 shrink-0 transition-transform group-open:rotate-90" />
       </summary>
-      <div className="mt-3 space-y-3">
+      <div className="mt-2 max-w-[min(42rem,100%)] space-y-3 rounded-[10px] border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-2">
         {check?.summary ? (
           <div className="text-xs leading-5 text-[color:var(--foreground)]">{check.summary}</div>
         ) : null}

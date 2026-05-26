@@ -115,7 +115,7 @@ export default function MissionsClient({ brandId }: { brandId: string }) {
       })
       .catch((err) => {
         if (!mounted) return;
-        setError(err instanceof Error ? err.message : "Failed to load missions");
+        setError(err instanceof Error ? err.message : "Failed to load goals");
       })
       .finally(() => {
         if (mounted) setLoading(false);
@@ -131,15 +131,15 @@ export default function MissionsClient({ brandId }: { brandId: string }) {
   return (
     <div className="space-y-7">
       <PageIntro
-        title="Start AI campaign"
-        description="Paste the site, describe the customers, edit what AI inferred, then let LastB2B run the work."
+        title="Set a goal for Brand GPT"
+        description="Give the AI the site and target customers. Edit only what it gets wrong, then let it run the first safe batch."
       />
 
       {error ? <div className="text-sm text-[color:var(--danger)]">{error}</div> : null}
       {loading ? <div className="text-sm text-[color:var(--muted-foreground)]">Loading...</div> : null}
 
       <SectionPanel
-        title="Campaign goal"
+        title="Goal"
         description="Keep this simple. The AI will handle targeting, tests, inbox warmup, and deliverability checks."
       >
         <div className="grid gap-4">
@@ -177,7 +177,7 @@ export default function MissionsClient({ brandId }: { brandId: string }) {
                   setPlanForm(planToForm(mission.generatedPlan));
                   setMissions((current) => [mission, ...current.filter((row) => row.id !== mission.id)]);
                 } catch (err) {
-                  setError(err instanceof Error ? err.message : "Failed to generate mission plan");
+                  setError(err instanceof Error ? err.message : "Failed to generate goal plan");
                 } finally {
                   setGenerating(false);
                 }
@@ -207,13 +207,13 @@ export default function MissionsClient({ brandId }: { brandId: string }) {
                   const mission = await startMissionApi(brandId, activeMission.id, approvedPlan);
                   router.push(`/brands/${brandId}/missions/${mission.id}`);
                 } catch (err) {
-                  setError(err instanceof Error ? err.message : "Failed to start mission");
+                  setError(err instanceof Error ? err.message : "Failed to start goal");
                 } finally {
                   setStarting(false);
                 }
               }}
             >
-              {starting ? "Starting..." : "Start campaign"}
+              {starting ? "Starting..." : "Start goal"}
               <ArrowRight className="h-4 w-4" />
             </Button>
           }
@@ -330,7 +330,7 @@ export default function MissionsClient({ brandId }: { brandId: string }) {
       ) : null}
 
       {latestMission ? (
-        <SectionPanel title="Recent missions" description="Open a mission to see its current move, risk, and results.">
+        <SectionPanel title="Recent goals" description="Open a goal to see its current move, risk, and results.">
           <div className="grid gap-2">
             {missions.slice(0, 5).map((mission) => (
               <Link
@@ -346,8 +346,8 @@ export default function MissionsClient({ brandId }: { brandId: string }) {
         </SectionPanel>
       ) : !loading ? (
         <EmptyState
-          title="No missions yet."
-          description={brand ? `Start the first AI campaign for ${brand.name}.` : "Start the first AI campaign."}
+          title="No goals yet."
+          description={brand ? `Set the first Brand GPT goal for ${brand.name}.` : "Set the first Brand GPT goal."}
         />
       ) : null}
     </div>

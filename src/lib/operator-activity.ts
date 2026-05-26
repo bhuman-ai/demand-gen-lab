@@ -159,7 +159,7 @@ function summarizeActivity(input: {
             : "No agent activity yet.";
   const detail =
     state === "quiet"
-      ? "Ask Brand GPT something or start a mission to create the first activity."
+      ? "Ask Brand GPT something or set a goal to create the first activity."
       : state === "needs_attention" && latestAttention
         ? `${latestAttention.title}: ${compactText(latestAttention.summary, 120)}`
         : state === "needs_attention"

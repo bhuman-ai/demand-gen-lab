@@ -232,8 +232,8 @@ export default function NewBrandPage() {
     <div className="mx-auto grid max-w-6xl gap-8 pb-28">
       <PageIntro
         eyebrow="New brand"
-        title="Set the brand up once. Let the experiment feed inherit the context."
-        description="Website, niche, personas, proof, and product language should all be captured here before you ask the system to suggest outbound work."
+        title="Set the brand up once. Let Brand GPT inherit the context."
+        description="Website, niche, personas, proof, and product language should all be captured before the AI starts sourcing, testing, and sending."
         aside={
           <StatLedger
             items={[
@@ -245,7 +245,7 @@ export default function NewBrandPage() {
         }
       />
 
-      <SectionPanel title="Setup progress" description="Complete the intake in order, then generate the first experiment feed.">
+      <SectionPanel title="Setup progress" description="Complete the intake in order, then let Brand GPT create the first tests.">
         <div className="grid gap-2 md:grid-cols-4">
           <Badge variant={stepProgress.website ? "success" : "muted"}>1 Website</Badge>
           <Badge variant={stepProgress.niche ? "success" : "muted"}>2 Primary niche</Badge>

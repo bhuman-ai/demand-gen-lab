@@ -8,8 +8,8 @@ export default async function ExperimentsReplacedPage({
   const { id } = await params;
   return (
     <RouteReplacedCard
-      title="Legacy experiments step replaced"
-      description="Use the new Experiments section at the brand level."
+      title="Legacy tests step replaced"
+      description="Use the new Tests section at the brand level."
       brandId={id}
     />
   );

@@ -9,7 +9,7 @@ export default async function RunVariantsReplacedPage({
   return (
     <RouteReplacedCard
       title="Run variants replaced"
-      description="Variant controls now live in Experiment detail."
+      description="Variant controls now live in Test detail."
       brandId={id}
     />
   );

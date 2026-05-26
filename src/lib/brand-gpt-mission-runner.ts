@@ -23,6 +23,7 @@ type BrandGptMissionRunnerConfig = {
   enabled: boolean;
   limit: number;
   cooldownMinutes: number;
+  maxTurnsPerMission: number;
   mode: MissionRunnerMode;
   executionPolicy: NonNullable<OperatorChatRequest["executionPolicy"]>;
   autonomousToolAllowlist: string[];
@@ -42,9 +43,24 @@ export type BrandGptMissionTickRow = {
   threadId: string;
   runId: string;
   model: string;
+  turns: number;
+  actions: string[];
   summary: string;
   evidenceStatus: string;
   error: string;
+};
+
+type MissionTurnResult = {
+  response: OperatorChatResponse;
+  evidence: {
+    check: OperatorEvidenceCheck | null;
+    trace: OperatorEvidenceTraceEntry[];
+  };
+  summary: string;
+  action: string;
+  executionState: string;
+  actionStatus: string;
+  plannerUnavailable: boolean;
 };
 
 const ACTIVE_MISSION_STATUSES: Mission["status"][] = [
@@ -104,6 +120,7 @@ function getConfig(): BrandGptMissionRunnerConfig {
     enabled: envBoolean("BRAND_GPT_MISSION_RUNNER_ENABLED", false),
     limit: envNumber("BRAND_GPT_MISSION_RUNNER_LIMIT", 3, 1, 25),
     cooldownMinutes: envNumber("BRAND_GPT_MISSION_RUNNER_COOLDOWN_MINUTES", 15, 5, 1440),
+    maxTurnsPerMission: envNumber("BRAND_GPT_MISSION_RUNNER_MAX_TURNS_PER_MISSION", 4, 1, 10),
     mode: rawMode === "recommendation_only" ? "recommendation_only" : "default",
     executionPolicy: rawExecutionPolicy === "confirm_required" ? "confirm_required" : "autonomous",
     autonomousToolAllowlist: envList("BRAND_GPT_MISSION_RUNNER_AUTONOMOUS_TOOLS"),
@@ -168,6 +185,24 @@ function isPlannerUnavailableResponse(response: OperatorChatResponse, summary: s
     response.run.model === "operator-v1" &&
     summary.toLowerCase().includes("couldn't reach the ai planner")
   );
+}
+
+function actionFromResponse(response: OperatorChatResponse) {
+  return response.execution?.toolName || response.actions[0]?.toolName || "autonomous_heartbeat";
+}
+
+function shouldContinueAfterTurn(input: {
+  turn: MissionTurnResult;
+  turnIndex: number;
+  maxTurns: number;
+}) {
+  if (input.turn.plannerUnavailable) return false;
+  if (input.turnIndex + 1 >= input.maxTurns) return false;
+  if (!input.turn.action || input.turn.action === "autonomous_heartbeat") return false;
+  if (input.turn.executionState === "need_info") return false;
+  if (input.turn.executionState === "awaiting_confirmation") return false;
+  if (input.turn.executionState === "running") return false;
+  return Boolean(input.turn.response.actions.length || input.turn.executionState === "failed");
 }
 
 async function ensureMissionThread(mission: Mission) {
@@ -242,6 +277,34 @@ function buildHeartbeatPrompt(input: {
   ].join("\n\n");
 }
 
+function buildContinuationPrompt(input: {
+  mission: Mission;
+  brandName: string;
+  previousTurn: MissionTurnResult;
+  turnNumber: number;
+  maxTurns: number;
+}) {
+  return [
+    `Continue autonomous Brand GPT mission execution for ${input.brandName || input.mission.brandId}.`,
+    `This is turn ${input.turnNumber} of ${input.maxTurns}. The previous turn already ran or attempted a tool. Do not wait for the human if a useful next tool is available.`,
+    "Read the previous result as your observation. Decide the next useful action from live state: inspect deeper, fix the blocker, try a viable alternate route, or stop only when the remaining blocker is truly external or needs missing human/private information.",
+    "Do not repeat the same failed action unless the previous result gives new evidence that it can now work. Do not ask the user to choose from internal options when you can inspect the account state yourself.",
+    "If you stop, use plain English and say exactly what is blocked, what you already tried, and what tool or credential would be needed next.",
+    `Previous action JSON: ${safeJson({
+      action: input.previousTurn.action,
+      actionStatus: input.previousTurn.actionStatus,
+      executionState: input.previousTurn.executionState,
+      assistantSummary: input.previousTurn.summary,
+      execution: input.previousTurn.response.execution,
+      actions: input.previousTurn.response.actions,
+      evidenceCheck: input.previousTurn.evidence.check,
+      evidenceTrace: input.previousTurn.evidence.trace,
+      runId: input.previousTurn.response.run.id,
+      model: input.previousTurn.response.run.model,
+    })}`,
+  ].join("\n\n");
+}
+
 async function shouldSkipMission(input: {
   mission: Mission;
   detail: MissionDetail;
@@ -281,6 +344,8 @@ async function runMission(input: {
       threadId: "",
       runId: "",
       model: "",
+      turns: 0,
+      actions: [],
       summary: "",
       evidenceStatus: "",
       error: "Mission detail could not be loaded.",
@@ -307,6 +372,8 @@ async function runMission(input: {
       threadId: "",
       runId: "",
       model: "",
+      turns: 0,
+      actions: [],
       summary: "",
       evidenceStatus: "",
       error: "",
@@ -314,26 +381,67 @@ async function runMission(input: {
   }
 
   const thread = await ensureMissionThread(refreshed);
-  const message = buildHeartbeatPrompt({
+  let message = buildHeartbeatPrompt({
     mission: refreshed,
     detail,
     brandName,
     mode: input.config.mode,
     executionPolicy: input.config.executionPolicy,
   });
-  const response = await runOperatorChatTurn({
-    brandId: refreshed.brandId,
-    threadId: thread.id,
-    message,
-    mode: input.config.mode,
-    executionPolicy: input.config.executionPolicy,
-    autonomousToolAllowlist: input.config.autonomousToolAllowlist,
-    disableLocalHeuristics: true,
-  });
-  const evidence = extractEvidence(response);
-  const summary = truncateText(response.assistant.summary, 1200);
-  const plannerUnavailable = isPlannerUnavailableResponse(response, summary);
-  const action = response.execution?.toolName || response.actions[0]?.toolName || "autonomous_heartbeat";
+  const turns: MissionTurnResult[] = [];
+
+  for (let turnIndex = 0; turnIndex < input.config.maxTurnsPerMission; turnIndex += 1) {
+    const response = await runOperatorChatTurn({
+      brandId: refreshed.brandId,
+      threadId: thread.id,
+      message,
+      mode: input.config.mode,
+      executionPolicy: input.config.executionPolicy,
+      autonomousToolAllowlist: input.config.autonomousToolAllowlist,
+      disableLocalHeuristics: true,
+    });
+    const evidence = extractEvidence(response);
+    const summary = truncateText(response.assistant.summary, 1200);
+    const turn: MissionTurnResult = {
+      response,
+      evidence,
+      summary,
+      action: actionFromResponse(response),
+      executionState: response.execution?.state ?? "",
+      actionStatus: response.actions[0]?.status ?? "",
+      plannerUnavailable: isPlannerUnavailableResponse(response, summary),
+    };
+    turns.push(turn);
+
+    if (
+      !shouldContinueAfterTurn({
+        turn,
+        turnIndex,
+        maxTurns: input.config.maxTurnsPerMission,
+      })
+    ) {
+      break;
+    }
+
+    message = buildContinuationPrompt({
+      mission: refreshed,
+      brandName,
+      previousTurn: turn,
+      turnNumber: turnIndex + 2,
+      maxTurns: input.config.maxTurnsPerMission,
+    });
+  }
+
+  const finalTurn = turns[turns.length - 1];
+  if (!finalTurn) {
+    throw new Error("Brand GPT mission runner did not produce a turn.");
+  }
+  const response = finalTurn.response;
+  const evidence = finalTurn.evidence;
+  const summary = finalTurn.summary;
+  const plannerUnavailable = finalTurn.plannerUnavailable;
+  const action = finalTurn.action;
+  const actions = turns.map((turn) => turn.action);
 
   if (plannerUnavailable) {
     await createMissionAgentDecision({
@@ -347,6 +455,9 @@ async function runMission(input: {
         threadId: response.thread.id,
         mode: input.config.mode,
         executionPolicy: input.config.executionPolicy,
+        maxTurnsPerMission: input.config.maxTurnsPerMission,
+        turns: turns.length,
+        actions,
         prompt: "autonomous mission heartbeat",
       },
       output: {
@@ -354,6 +465,7 @@ async function runMission(input: {
         model: response.run.model,
         runStatus: response.run.status,
         assistant: response.assistant,
+        execution: response.execution,
       },
     });
     await createMissionEvent({
@@ -365,6 +477,8 @@ async function runMission(input: {
         threadId: response.thread.id,
         runId: response.run.id,
         model: response.run.model,
+        turns: turns.length,
+        actions,
       },
     });
     return {
@@ -378,37 +492,44 @@ async function runMission(input: {
       threadId: response.thread.id,
       runId: response.run.id,
       model: response.run.model,
+      turns: turns.length,
+      actions,
       summary,
       evidenceStatus: "",
       error: "Brand GPT planner was unavailable for this mission tick.",
     };
   }
 
-  await createMissionAgentDecision({
-    missionId: refreshed.id,
-    brandId: refreshed.brandId,
-    agent: RUNNER_AGENT,
-    action,
-    rationale: summary,
-    riskLevel: riskFromResponse(response),
-    input: {
-      threadId: response.thread.id,
-      mode: input.config.mode,
-      executionPolicy: input.config.executionPolicy,
-      autonomousToolAllowlist: input.config.autonomousToolAllowlist,
-      prompt: "autonomous mission heartbeat",
-    },
-    output: {
-      runId: response.run.id,
-      model: response.run.model,
-      runStatus: response.run.status,
-      execution: response.execution,
-      actions: response.actions,
-      assistant: response.assistant,
-      evidenceCheck: evidence.check,
-      evidenceTrace: evidence.trace,
-    },
-  });
+  for (const [index, turn] of turns.entries()) {
+    await createMissionAgentDecision({
+      missionId: refreshed.id,
+      brandId: refreshed.brandId,
+      agent: RUNNER_AGENT,
+      action: index === turns.length - 1 ? turn.action : `continued:${turn.action}`,
+      rationale: turn.summary,
+      riskLevel: riskFromResponse(turn.response),
+      input: {
+        threadId: turn.response.thread.id,
+        mode: input.config.mode,
+        executionPolicy: input.config.executionPolicy,
+        autonomousToolAllowlist: input.config.autonomousToolAllowlist,
+        prompt: index === 0 ? "autonomous mission heartbeat" : "autonomous mission continuation",
+        turn: index + 1,
+        maxTurnsPerMission: input.config.maxTurnsPerMission,
+        actions,
+      },
+      output: {
+        runId: turn.response.run.id,
+        model: turn.response.run.model,
+        runStatus: turn.response.run.status,
+        execution: turn.response.execution,
+        actions: turn.response.actions,
+        assistant: turn.response.assistant,
+        evidenceCheck: turn.evidence.check,
+        evidenceTrace: turn.evidence.trace,
+      },
+    });
+  }
   await createMissionEvent({
     missionId: refreshed.id,
     brandId: refreshed.brandId,
@@ -420,6 +541,8 @@ async function runMission(input: {
       model: response.run.model,
       evidenceCheck: evidence.check,
       action,
+      actions,
+      turns: turns.length,
     },
   });
   if (summary) {
@@ -437,6 +560,8 @@ async function runMission(input: {
       evidence: {
         threadId: response.thread.id,
         runId: response.run.id,
+        actions,
+        turns: turns.length,
         evidenceCheck: evidence.check,
         evidenceTrace: evidence.trace,
       },
@@ -455,6 +580,8 @@ async function runMission(input: {
     threadId: response.thread.id,
     runId: response.run.id,
     model: response.run.model,
+    turns: turns.length,
+    actions,
     summary,
     evidenceStatus: evidence.check?.status ?? "",
     error: "",
@@ -468,6 +595,7 @@ export async function runBrandGptMissionTick() {
       enabled: false,
       mode: config.mode,
       executionPolicy: config.executionPolicy,
+      maxTurnsPerMission: config.maxTurnsPerMission,
       checked: 0,
       ran: 0,
       skipped: 0,
@@ -498,6 +626,8 @@ export async function runBrandGptMissionTick() {
         threadId: "",
         runId: "",
         model: "",
+        turns: 0,
+        actions: [],
         summary: "",
         evidenceStatus: "",
         error: error instanceof Error ? error.message : "Brand GPT mission runner failed.",
@@ -510,6 +640,7 @@ export async function runBrandGptMissionTick() {
     enabled: true,
     mode: config.mode,
     executionPolicy: config.executionPolicy,
+    maxTurnsPerMission: config.maxTurnsPerMission,
     checked: missions.length,
     ran,
     skipped: rows.filter((row) => row.skipped).length,

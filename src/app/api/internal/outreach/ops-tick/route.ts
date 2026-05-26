@@ -32,14 +32,24 @@ async function handleOpsTick(request: Request) {
       });
 
   const requestOrigin = new URL(request.url).origin;
-  const mailpoolSync = await runCronTask("mailpoolSync", () => runMailpoolOutreachAccountSyncTick(6), {
-    timeoutMs: 30_000,
-  });
-  const warmupCampaigns = await runCronTask("warmupCampaigns", () => reconcileAssignedSenderWarmupCampaigns(), {
-    timeoutMs: 45_000,
-  });
-
-  const [campaignPrep, gmailUiWorker, inboxSync, senderLaunch, missions, leadrSync] = await Promise.all([
+  const [
+    mailpoolSync,
+    warmupCampaigns,
+    campaignPrep,
+    gmailUiWorker,
+    inboxSync,
+    senderLaunch,
+    missions,
+    leadrSync,
+    brandActivation,
+    campaignHopper,
+  ] = await Promise.all([
+    runCronTask("mailpoolSync", () => runMailpoolOutreachAccountSyncTick(6), {
+      timeoutMs: 30_000,
+    }),
+    runCronTask("warmupCampaigns", () => reconcileAssignedSenderWarmupCampaigns(), {
+      timeoutMs: 45_000,
+    }),
     runCronTask(
       "campaignPrep",
       () =>
@@ -57,13 +67,13 @@ async function handleOpsTick(request: Request) {
     }),
     runCronTask("missions", () => runMissionTick(25), { timeoutMs: 45_000 }),
     runCronTask("leadrSync", () => runLeadrChannelSyncTick(8), { timeoutMs: 45_000 }),
+    runCronTask("brandActivation", () => runBrandActivationAutopilot(), {
+      timeoutMs: 105_000,
+    }),
+    runCronTask("campaignHopper", () => runCampaignHopperTick(3), {
+      timeoutMs: 120_000,
+    }),
   ]);
-  const brandActivation = await runCronTask("brandActivation", () => runBrandActivationAutopilot(), {
-    timeoutMs: 105_000,
-  });
-  const campaignHopper = await runCronTask("campaignHopper", () => runCampaignHopperTick(3), {
-    timeoutMs: 120_000,
-  });
 
   return NextResponse.json({
     ok:

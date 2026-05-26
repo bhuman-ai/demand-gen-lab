@@ -27,15 +27,26 @@ async function handleTick(request: Request) {
   }
 
   const requestOrigin = new URL(request.url).origin;
-  const mailpoolSync = await runCronTask("mailpoolSync", () => runMailpoolOutreachAccountSyncTick(6), {
-    timeoutMs: 30_000,
-  });
-  const warmupCampaigns = await runCronTask("warmupCampaigns", () => reconcileAssignedSenderWarmupCampaigns(), {
-    timeoutMs: 45_000,
-  });
-
-  const [outreach, sendablePrep, campaignPrep, inboxSync, senderLaunch, missions, leadrSync] = await Promise.all([
-    runCronTask("outreach", () => runOutreachTick(8, { includeCampaignHopper: false }), { timeoutMs: 180_000 }),
+  const [
+    mailpoolSync,
+    warmupCampaigns,
+    outreach,
+    sendablePrep,
+    campaignPrep,
+    inboxSync,
+    senderLaunch,
+    missions,
+    leadrSync,
+    brandActivation,
+    campaignHopper,
+  ] = await Promise.all([
+    runCronTask("mailpoolSync", () => runMailpoolOutreachAccountSyncTick(6), {
+      timeoutMs: 30_000,
+    }),
+    runCronTask("warmupCampaigns", () => reconcileAssignedSenderWarmupCampaigns(), {
+      timeoutMs: 45_000,
+    }),
+    runCronTask("outreach", () => runOutreachTick(8, { includeCampaignHopper: false }), { timeoutMs: 150_000 }),
     runCronTask("sendablePrep", () => runExperimentSendablePrepTick(24, { requestOrigin }), {
       timeoutMs: 55_000,
     }),
@@ -55,13 +66,13 @@ async function handleTick(request: Request) {
     }),
     runCronTask("missions", () => runMissionTick(25), { timeoutMs: 45_000 }),
     runCronTask("leadrSync", () => runLeadrChannelSyncTick(8), { timeoutMs: 45_000 }),
+    runCronTask("brandActivation", () => runBrandActivationAutopilot(), {
+      timeoutMs: 105_000,
+    }),
+    runCronTask("campaignHopper", () => runCampaignHopperTick(3), {
+      timeoutMs: 120_000,
+    }),
   ]);
-  const brandActivation = await runCronTask("brandActivation", () => runBrandActivationAutopilot(), {
-    timeoutMs: 105_000,
-  });
-  const campaignHopper = await runCronTask("campaignHopper", () => runCampaignHopperTick(3), {
-    timeoutMs: 120_000,
-  });
 
   return NextResponse.json({
     ok:

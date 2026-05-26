@@ -16,6 +16,7 @@ import {
   Sparkles,
 } from "lucide-react";
 import { useEffect, useLayoutEffect, useMemo, useState } from "react";
+import { fetchOperatorAttention } from "@/lib/client-api";
 import { fetchBrandDirectory, readCachedBrandDirectory } from "@/lib/brand-directory-client";
 import { redirectToCanonicalLastB2bHost } from "@/lib/client-api-url";
 import { cn } from "@/lib/utils";
@@ -45,6 +46,15 @@ type MainNavItem = NavItem & {
 };
 
 const CHROMELESS_ROUTES = new Set(["/autoads", "/google-ads-review"]);
+
+function AttentionCount({ count }: { count: number }) {
+  if (!count) return null;
+  return (
+    <span className="ml-auto inline-flex min-h-5 min-w-5 shrink-0 items-center justify-center rounded-full bg-[color:var(--foreground)] px-1.5 text-[11px] font-medium leading-none text-[color:var(--background)]">
+      {count > 9 ? "9+" : count}
+    </span>
+  );
+}
 
 function prettySegment(value: string) {
   return value
@@ -106,6 +116,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   }));
   const [operatorOpen, setOperatorOpen] = useState(false);
   const [operatorRequest, setOperatorRequest] = useState<OperatorOpenRequest | null>(null);
+  const [operatorAttentionCount, setOperatorAttentionCount] = useState(0);
 
   useLayoutEffect(() => {
     redirectToCanonicalLastB2bHost();
@@ -192,6 +203,40 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     let cancelled = false;
+    if (chromeless || !activeBrandId) {
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    const loadAttention = async () => {
+      try {
+        const attention = await fetchOperatorAttention({
+          brandId: activeBrandId,
+          status: "open",
+          limit: 20,
+        });
+        if (!cancelled) setOperatorAttentionCount(attention.count);
+      } catch {
+        if (!cancelled) setOperatorAttentionCount(0);
+      }
+    };
+    const handleOperatorUpdated = () => {
+      void loadAttention();
+    };
+
+    void loadAttention();
+    window.addEventListener("lastb2b:operator-updated", handleOperatorUpdated);
+    const interval = window.setInterval(loadAttention, 60_000);
+    return () => {
+      cancelled = true;
+      window.removeEventListener("lastb2b:operator-updated", handleOperatorUpdated);
+      window.clearInterval(interval);
+    };
+  }, [activeBrandId, chromeless]);
+
+  useEffect(() => {
+    let cancelled = false;
     if (chromeless) {
       return () => {
         cancelled = true;
@@ -231,6 +276,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
 
   const hasActiveBrand = Boolean(activeBrandId);
   const brandRoot = hasActiveBrand ? `/brands/${activeBrandId}` : "/brands";
+  const visibleOperatorAttentionCount = activeBrandId ? operatorAttentionCount : 0;
 
   const mainItems = useMemo<MainNavItem[]>(
     () => [
@@ -327,14 +373,17 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
                       key={item.id}
                       href={item.href}
                       className={cn(
-                        "inline-flex items-center gap-3 rounded-[10px] px-2.5 py-2.5 text-sm transition-colors duration-150",
+                        "inline-flex w-full items-center justify-between gap-3 rounded-[10px] px-2.5 py-2.5 text-sm transition-colors duration-150",
                         active
                           ? "bg-[color:var(--surface-hover)] text-[color:var(--foreground)]"
                           : "text-[color:var(--foreground)] hover:bg-[color:var(--surface-hover)]"
                       )}
                     >
-                      <Icon className="h-4 w-4 shrink-0" />
-                      {item.label}
+                      <span className="inline-flex min-w-0 items-center gap-3">
+                        <Icon className="h-4 w-4 shrink-0" />
+                        <span className="truncate">{item.label}</span>
+                      </span>
+                      {item.id === "agent" ? <AttentionCount count={visibleOperatorAttentionCount} /> : null}
                     </Link>
                   );
                 })}
@@ -431,6 +480,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
                   >
                     <Sparkles className="h-3.5 w-3.5" />
                     Brand GPT
+                    <AttentionCount count={visibleOperatorAttentionCount} />
                   </button>
                 </div>
               </div>

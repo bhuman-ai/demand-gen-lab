@@ -127,6 +127,27 @@ function asStringArray(value: unknown) {
     .filter(Boolean);
 }
 
+function normalizeAttentionUrgency(value: unknown) {
+  const normalized = asString(value).toLowerCase();
+  if (normalized === "high") return "high";
+  if (normalized === "low") return "low";
+  return "normal";
+}
+
+function attentionSuggestedActions(value: unknown) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((entry) => {
+      const row = asRecord(entry);
+      return {
+        label: asString(row.label),
+        message: asString(row.message),
+      };
+    })
+    .filter((entry) => entry.label && entry.message)
+    .slice(0, 5);
+}
+
 function requireString(input: Record<string, unknown>, key: string) {
   const value = asString(input[key]);
   if (!value) {
@@ -1388,6 +1409,86 @@ const TOOL_SPECS: OperatorToolSpec[] = [
           ...payload,
           plainEnglish:
             "The agent has hit the edge of the available platform tools. Add or repair this capability before expecting the agent to complete the objective autonomously.",
+        },
+      } satisfies OperatorToolResult;
+    },
+  },
+  {
+    name: "request_user_attention",
+    riskLevel: "safe_write",
+    approvalMode: "none",
+    description:
+      "Create a proactive user-facing Brand GPT attention message when involving the user is the right next move. This is generic: input brandId, optional missionId, title, message, reason, urgency, attentionKind, suggestedActions [{label,message}], and evidence. Use it for any model-chosen reason, not just blockers.",
+    autonomyHint:
+      "Use whenever user attention genuinely helps: ask a strategic question, request setup or credentials, flag a risk, celebrate an achievement, ask for approval context, or explain a blocker. Do not use it for work you can complete with existing tools.",
+    previewTitle: "Request user attention",
+    buildPreview: (input) => ({
+      title: asString(input.title) || "Brand GPT needs attention",
+      summary: asString(input.message) || asString(input.reason) || "Brand GPT wants to notify or ask the user.",
+      urgency: normalizeAttentionUrgency(input.urgency),
+      attentionKind: asString(input.attentionKind) || asString(input.kind),
+    }),
+    run: async (input) => {
+      const brandId = requireString(input, "brandId");
+      const title = requireString(input, "title");
+      const message = requireString(input, "message");
+      const missionId = asString(input.missionId);
+      const reason = asString(input.reason);
+      const attentionKind = asString(input.attentionKind) || asString(input.kind);
+      const urgency = normalizeAttentionUrgency(input.urgency);
+      const suggestedActions = attentionSuggestedActions(input.suggestedActions);
+      const evidence = asStringArray(input.evidence).slice(0, 8);
+      const attentionRequest = {
+        id: createId("opatt"),
+        status: "open",
+        brandId,
+        missionId,
+        title,
+        message,
+        reason,
+        attentionKind,
+        urgency,
+        suggestedActions,
+        evidence,
+        createdAt: nowIso(),
+      };
+      const summaryParts = [`**${title}**`, message];
+      if (reason) summaryParts.push(`**Why:** ${reason}`);
+      if (suggestedActions.length) {
+        summaryParts.push(
+          `**Options:** ${suggestedActions.map((action) => action.label).join(", ")}`
+        );
+      }
+      const summary = summaryParts.join("\n\n");
+
+      if (missionId) {
+        await createMissionEvent({
+          missionId,
+          brandId,
+          eventType: "brand_gpt_user_attention_requested",
+          summary: `${title}: ${message}`,
+          payload: attentionRequest,
+        });
+      }
+
+      return {
+        summary,
+        result: {
+          brandId,
+          missionId,
+          attentionRequest,
+          plainEnglish:
+            "Brand GPT created an in-app attention request. The sidebar badge points the user back to this chat; external notifications are not sent by this tool.",
+        },
+        receipt: {
+          title: "Attention request created",
+          summary: title,
+          details: [
+            message,
+            reason ? `Reason: ${reason}` : "",
+            attentionKind ? `Kind: ${attentionKind}` : "",
+            `Urgency: ${urgency}`,
+          ].filter(Boolean),
         },
       } satisfies OperatorToolResult;
     },
